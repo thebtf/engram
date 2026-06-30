@@ -75,6 +75,7 @@ func TestHandleGetStateResumeReturnsBoundedPacket(t *testing.T) {
 	require.False(t, fakeStore.lastRequest.AllowFilesystemFallback)
 	require.Equal(t, "agent:developer", fakeStore.lastRequest.Principal)
 	require.Equal(t, "session-1", fakeStore.lastRequest.SessionID)
+	require.ElementsMatch(t, []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject}, fakeStore.lastRequest.Scopes)
 }
 
 func TestHandleGetStateResumeUsesAuthenticatedPrincipalOverQuery(t *testing.T) {
@@ -99,6 +100,7 @@ func TestHandleGetStateResumeUsesAuthenticatedPrincipalOverQuery(t *testing.T) {
 	require.Equal(t, "session-1", fakeStore.lastRequest.SessionID)
 	require.Equal(t, "goal-1", fakeStore.lastRequest.GoalID)
 	require.Equal(t, "task-1", fakeStore.lastRequest.TaskID)
+	require.ElementsMatch(t, []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject, cognitive.StateScopeGoal, cognitive.StateScopeTask}, fakeStore.lastRequest.Scopes)
 }
 
 func TestHandleGetStateResumeRejectsFilesystemFallbackOption(t *testing.T) {

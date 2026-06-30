@@ -1,6 +1,7 @@
 package cognitive
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -140,6 +141,34 @@ func TestStatePlane_FiveMethods(t *testing.T) {
 	want := []string{"ReadProjectState", "ReadResumePacket", "ReadSessionState", "WriteProjectState", "WriteSessionState"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("StatePlane method names: got %v, want %v", got, want)
+	}
+}
+
+func TestStatePlane_ReadResumePacketSignature(t *testing.T) {
+	typ := reflect.TypeOf((*StatePlane)(nil)).Elem()
+	method, ok := typ.MethodByName("ReadResumePacket")
+	if !ok {
+		t.Fatalf("StatePlane missing ReadResumePacket")
+	}
+
+	if got, want := method.Type.NumIn(), 2; got != want {
+		t.Fatalf("ReadResumePacket.NumIn: got %d, want %d", got, want)
+	}
+	if got, want := method.Type.In(0), reflect.TypeOf((*context.Context)(nil)).Elem(); got != want {
+		t.Fatalf("ReadResumePacket arg0: got %s, want %s", got, want)
+	}
+	if got, want := method.Type.In(1), reflect.TypeOf(ResumePacketRequest{}); got != want {
+		t.Fatalf("ReadResumePacket arg1: got %s, want %s", got, want)
+	}
+
+	if got, want := method.Type.NumOut(), 2; got != want {
+		t.Fatalf("ReadResumePacket.NumOut: got %d, want %d", got, want)
+	}
+	if got, want := method.Type.Out(0), reflect.TypeOf(ResumePacket{}); got != want {
+		t.Fatalf("ReadResumePacket result0: got %s, want %s", got, want)
+	}
+	if got, want := method.Type.Out(1), reflect.TypeOf((*error)(nil)).Elem(); got != want {
+		t.Fatalf("ReadResumePacket result1: got %s, want %s", got, want)
 	}
 }
 

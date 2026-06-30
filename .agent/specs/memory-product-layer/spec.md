@@ -12,7 +12,7 @@ superseded_by: ~
 split_from: ~
 merges: []
 aliases: [memory-product-layer, memory-governance-layer, principal-memory-product]
-open_crs: [CR-005]
+open_crs: []
 source_prd: prd.md
 ---
 

@@ -17,6 +17,20 @@ type statePlane interface {
 	cognitive.StatePlane
 }
 
+func resumeScopesFromFields(project, goalID, taskID string) []cognitive.StateScopeKind {
+	scopes := []cognitive.StateScopeKind{cognitive.StateScopeSession}
+	if strings.TrimSpace(project) != "" {
+		scopes = append(scopes, cognitive.StateScopeProject)
+	}
+	if strings.TrimSpace(goalID) != "" {
+		scopes = append(scopes, cognitive.StateScopeGoal)
+	}
+	if strings.TrimSpace(taskID) != "" {
+		scopes = append(scopes, cognitive.StateScopeTask)
+	}
+	return scopes
+}
+
 func (s *Service) handleGetStateSession(w http.ResponseWriter, r *http.Request) {
 	store := s.stateStore
 	if store == nil {
@@ -92,12 +106,16 @@ func (s *Service) handleGetStateResume(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "allow_filesystem_fallback is not supported on the server runtime state path", http.StatusBadRequest)
 		return
 	}
+	project := strings.TrimSpace(query.Get("project"))
+	goalID := strings.TrimSpace(query.Get("goal_id"))
+	taskID := strings.TrimSpace(query.Get("task_id"))
 	packet, err := store.ReadResumePacket(r.Context(), cognitive.ResumePacketRequest{
-		Project:   query.Get("project"),
+		Project:   project,
 		Principal: principal,
 		SessionID: sessionID,
-		GoalID:    query.Get("goal_id"),
-		TaskID:    query.Get("task_id"),
+		GoalID:    goalID,
+		TaskID:    taskID,
+		Scopes:    resumeScopesFromFields(project, goalID, taskID),
 	})
 	if err != nil {
 		writeStateReadError(w, err)

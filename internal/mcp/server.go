@@ -1092,9 +1092,10 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	if s.principalMemoryQuerySvc != nil {
 		tools = append(tools, principalMemoryQueryTool())
 	}
-	// get_state remains callable for direct internal compatibility, but is not
-	// advertised until the runtime exposes a matching native state write path.
-
+	// Native state-plane tools are advertised only when the runtime state store is wired.
+	if s.stateStore != nil {
+		tools = append(tools, stateTool(), setStateTool())
+	}
 	// Session outcome tool — only advertise when session store is available
 	if s.sessionStore != nil {
 		tools = append(tools,
@@ -1708,6 +1709,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleQueryPrincipalMemory(ctx, args)
 	case "get_state":
 		return s.handleGetState(ctx, args)
+	case "set_state":
+		return s.handleSetState(ctx, args)
 	case "rate_memory":
 		return s.handleRateMemory(ctx, args)
 	case "suppress_memory":

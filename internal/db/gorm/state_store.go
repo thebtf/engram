@@ -6,7 +6,6 @@ import (
 	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -215,10 +214,12 @@ func (s *StateStore) ReadProjectState(ctx context.Context, project string) (cogn
 
 // ReadResumePacket builds one bounded native resume packet from persisted state.
 func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.ResumePacketRequest) (cognitive.ResumePacket, error) {
-	request.Principal = strings.TrimSpace(request.Principal)
-	request.SessionID = strings.TrimSpace(request.SessionID)
+	request = normalizeStateStoreResumePacketRequest(request)
 	if request.Principal == "" {
 		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume: principal is required")
+	}
+	if err := validateStateStoreResumePacketRequest(request); err != nil {
+		return cognitive.ResumePacket{}, err
 	}
 	if request.SessionID == "" {
 		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume: session_id is required")
@@ -230,6 +231,11 @@ func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.Res
 	var row sessionStateRow
 	if err := s.db.WithContext(ctx).Where("session_id = ?", request.SessionID).First(&row).Error; err != nil {
 		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_session %q: %w", request.SessionID, err)
+	}
+	if hasStateStoreResumeScope(request.Scopes, cognitive.StateScopeProject) {
+		if _, err := s.ReadProjectState(ctx, request.Project); err != nil {
+			return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume project %q: %w", request.Project, err)
+		}
 	}
 	sessionState, err := sessionStateFromRow(row)
 	if err != nil {
@@ -244,21 +250,10 @@ func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.Res
 		return cognitive.ResumePacket{}, err
 	}
 
-	scopes := []cognitive.StateScopeKind{cognitive.StateScopeSession}
-	if request.Project != "" {
-		if _, err := s.ReadProjectState(ctx, request.Project); err != nil {
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				return cognitive.ResumePacket{}, err
-			}
-		} else {
-			scopes = append(scopes, cognitive.StateScopeProject)
-		}
-	}
-
 	now := time.Now().UTC()
 	stateVersion := stateVersionFromTime(row.UpdatedAt)
 	evidenceRefs := stateEvidenceRefsFromSlots(sessionState, request.SessionID, stateVersion)
-	return cognitive.ResumePacket{
+	packet := cognitive.ResumePacket{
 		PacketID:         resumePacketID(request, stateVersion),
 		Project:          request.Project,
 		Principal:        request.Principal,
@@ -274,8 +269,70 @@ func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.Res
 		EvidenceRefs:     evidenceRefs,
 		GoalID:           request.GoalID,
 		TaskID:           request.TaskID,
-		Scopes:           scopes,
-	}, nil
+		Scopes:           append([]cognitive.StateScopeKind(nil), request.Scopes...),
+	}
+	s.LogResumeReadAudit(ctx, request, packet, "read_resume_state", "native", "native resume packet returned")
+	return packet, nil
+}
+
+func normalizeStateStoreResumePacketRequest(request cognitive.ResumePacketRequest) cognitive.ResumePacketRequest {
+	request.Project = strings.TrimSpace(request.Project)
+	request.Principal = strings.TrimSpace(request.Principal)
+	request.SessionID = strings.TrimSpace(request.SessionID)
+	request.GoalID = strings.TrimSpace(request.GoalID)
+	request.TaskID = strings.TrimSpace(request.TaskID)
+	if len(request.Scopes) > 0 {
+		scopes := make([]cognitive.StateScopeKind, 0, len(request.Scopes))
+		seen := make(map[cognitive.StateScopeKind]struct{}, len(request.Scopes))
+		for _, scope := range request.Scopes {
+			normalized := cognitive.StateScopeKind(strings.TrimSpace(string(scope)))
+			if _, ok := seen[normalized]; ok {
+				continue
+			}
+			seen[normalized] = struct{}{}
+			scopes = append(scopes, normalized)
+		}
+		request.Scopes = scopes
+	}
+	return request
+}
+
+func validateStateStoreResumePacketRequest(request cognitive.ResumePacketRequest) error {
+	if len(request.Scopes) == 0 {
+		return fmt.Errorf("state_store read_resume: scopes is required")
+	}
+	for _, scope := range request.Scopes {
+		switch scope {
+		case cognitive.StateScopeSession:
+			if request.SessionID == "" {
+				return fmt.Errorf("state_store read_resume: session_id is required for session scope")
+			}
+		case cognitive.StateScopeProject:
+			if request.Project == "" {
+				return fmt.Errorf("state_store read_resume: project is required for project scope")
+			}
+		case cognitive.StateScopeGoal:
+			if request.GoalID == "" {
+				return fmt.Errorf("state_store read_resume: goal_id is required for goal scope")
+			}
+		case cognitive.StateScopeTask:
+			if request.TaskID == "" {
+				return fmt.Errorf("state_store read_resume: task_id is required for task scope")
+			}
+		default:
+			return fmt.Errorf("state_store read_resume: unsupported scope %q", scope)
+		}
+	}
+	return nil
+}
+
+func hasStateStoreResumeScope(scopes []cognitive.StateScopeKind, want cognitive.StateScopeKind) bool {
+	for _, scope := range scopes {
+		if scope == want {
+			return true
+		}
+	}
+	return false
 }
 
 func sessionStateFromRow(row sessionStateRow) (cognitive.SessionStateSlots, error) {
@@ -299,19 +356,22 @@ func sessionStateFromRow(row sessionStateRow) (cognitive.SessionStateSlots, erro
 }
 
 func resumePacketID(request cognitive.ResumePacketRequest, stateVersion string) string {
+	request = normalizeStateStoreResumePacketRequest(request)
 	identity := struct {
-		Project      string `json:"project"`
-		Principal    string `json:"principal"`
-		SessionID    string `json:"session_id"`
-		GoalID       string `json:"goal_id"`
-		TaskID       string `json:"task_id"`
-		StateVersion string `json:"state_version"`
+		Project      string                     `json:"project"`
+		Principal    string                     `json:"principal"`
+		SessionID    string                     `json:"session_id"`
+		GoalID       string                     `json:"goal_id"`
+		TaskID       string                     `json:"task_id"`
+		Scopes       []cognitive.StateScopeKind `json:"scopes"`
+		StateVersion string                     `json:"state_version"`
 	}{
-		Project:      strings.TrimSpace(request.Project),
-		Principal:    strings.TrimSpace(request.Principal),
-		SessionID:    strings.TrimSpace(request.SessionID),
-		GoalID:       strings.TrimSpace(request.GoalID),
-		TaskID:       strings.TrimSpace(request.TaskID),
+		Project:      request.Project,
+		Principal:    request.Principal,
+		SessionID:    request.SessionID,
+		GoalID:       request.GoalID,
+		TaskID:       request.TaskID,
+		Scopes:       append([]cognitive.StateScopeKind(nil), request.Scopes...),
 		StateVersion: strings.TrimSpace(stateVersion),
 	}
 	data, _ := json.Marshal(identity)
@@ -549,6 +609,85 @@ func unmarshalJSONObject(raw JSONObjectRaw) (map[string]interface{}, error) {
 		out = map[string]interface{}{}
 	}
 	return out, nil
+}
+
+type resumeReadAuditState struct {
+	Project                 string                      `json:"project,omitempty"`
+	Principal               string                      `json:"principal,omitempty"`
+	SessionID               string                      `json:"session_id,omitempty"`
+	GoalID                  string                      `json:"goal_id,omitempty"`
+	TaskID                  string                      `json:"task_id,omitempty"`
+	RequestedScopes         []cognitive.StateScopeKind  `json:"requested_scopes,omitempty"`
+	PacketScopes            []cognitive.StateScopeKind  `json:"packet_scopes,omitempty"`
+	AllowFilesystemFallback bool                        `json:"allow_filesystem_fallback"`
+	Source                  cognitive.StatePacketSource `json:"source"`
+	Result                  string                      `json:"result"`
+	PacketID                string                      `json:"packet_id,omitempty"`
+	StateVersion            string                      `json:"state_version,omitempty"`
+	FallbackUsed            bool                        `json:"fallback_used"`
+	FallbackPath            string                      `json:"fallback_path,omitempty"`
+	Freshness               cognitive.StateFreshness    `json:"freshness,omitempty"`
+	DriftKind               cognitive.StateDriftKind    `json:"drift_kind,omitempty"`
+	ConflictCount           int                         `json:"conflict_count"`
+	EvidenceRefs            []string                    `json:"evidence_refs,omitempty"`
+}
+
+// LogResumeReadAudit records the selected resume read source using audit_log conventions.
+func (s *StateStore) LogResumeReadAudit(_ context.Context, request cognitive.ResumePacketRequest, packet cognitive.ResumePacket, action, result, reason string) {
+	if action == "" {
+		action = "read_resume_state"
+	}
+	if result == "" {
+		result = string(packet.Source)
+	}
+	if reason == "" {
+		reason = "resume read source selected"
+	}
+	request = normalizeStateStoreResumePacketRequest(request)
+	actor := request.Principal
+	if actor == "" {
+		actor = strings.TrimSpace(packet.Principal)
+	}
+	sourceSessionID := request.SessionID
+	if sourceSessionID == "" {
+		sourceSessionID = strings.TrimSpace(packet.SessionID)
+	}
+	s.logAuditAsync(action, actor, sourceSessionID, reason, resumeReadAuditStateFrom(request, packet, result))
+}
+
+func resumeReadAuditStateFrom(request cognitive.ResumePacketRequest, packet cognitive.ResumePacket, result string) resumeReadAuditState {
+	requestedScopes := append([]cognitive.StateScopeKind(nil), request.Scopes...)
+	packetScopes := append([]cognitive.StateScopeKind(nil), packet.Scopes...)
+	evidenceRefs := append([]string(nil), packet.EvidenceRefs...)
+	return resumeReadAuditState{
+		Project:                 firstNonEmpty(request.Project, packet.Project),
+		Principal:               firstNonEmpty(request.Principal, packet.Principal),
+		SessionID:               firstNonEmpty(request.SessionID, packet.SessionID),
+		GoalID:                  firstNonEmpty(request.GoalID, packet.GoalID),
+		TaskID:                  firstNonEmpty(request.TaskID, packet.TaskID),
+		RequestedScopes:         requestedScopes,
+		PacketScopes:            packetScopes,
+		AllowFilesystemFallback: request.AllowFilesystemFallback,
+		Source:                  packet.Source,
+		Result:                  strings.TrimSpace(result),
+		PacketID:                strings.TrimSpace(packet.PacketID),
+		StateVersion:            strings.TrimSpace(packet.StateVersion),
+		FallbackUsed:            packet.FallbackUsed,
+		FallbackPath:            strings.TrimSpace(packet.FallbackPath),
+		Freshness:               packet.Freshness,
+		DriftKind:               packet.Drift.Kind,
+		ConflictCount:           len(packet.Drift.Conflicts),
+		EvidenceRefs:            evidenceRefs,
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func (s *StateStore) logAuditAsync(action, actor, sourceSessionID, reason string, afterState interface{}) {

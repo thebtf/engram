@@ -67,9 +67,9 @@ type StateWriter interface {
 
 // StatePlane is the agent-owned read/write surface for native handoff state.
 // StateWriter remains the narrower write-only subsystem contract used by CORE;
-// StatePlane is the product-facing state-plane contract introduced by ENG-MPL-1
-// so MCP/agent paths can read bounded resume packets without relying on
-// filesystem archaeology.
+// StatePlane is the product-facing state-plane contract for CR-006 so MCP/agent
+// paths can request bounded resume packets with explicit scopes, fallback
+// authority, drift/conflict, next-action, verification, and evidence refs.
 type StatePlane interface {
 	StateWriter
 
@@ -80,9 +80,9 @@ type StatePlane interface {
 	ReadProjectState(ctx context.Context, project string) (ProjectStateRecord, error)
 
 	// ReadResumePacket returns the bounded resume payload for request. The
-	// packet must expose deterministic identity, principal/session scope,
-	// state version/freshness, drift/conflict, next action, next verification,
-	// fallback authority, and evidence references without filesystem archaeology.
+	// request must name the principal and handoff scope; the packet must expose
+	// deterministic identity, state version/freshness, source/fallback authority,
+	// drift/conflict, next action, next verification, and evidence references.
 	ReadResumePacket(ctx context.Context, request ResumePacketRequest) (ResumePacket, error)
 }
 

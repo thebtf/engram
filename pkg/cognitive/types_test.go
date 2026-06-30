@@ -71,15 +71,20 @@ func TestHintSurfaceEnum(t *testing.T) {
 }
 
 func TestStatePacketSourceEnum(t *testing.T) {
-	if StatePacketSourceNative != StatePacketSource("native") {
-		t.Errorf("StatePacketSourceNative = %q, want %q", StatePacketSourceNative, "native")
+	cases := []struct {
+		want string
+		got  StatePacketSource
+	}{
+		{want: "native", got: StatePacketSourceNative},
+		{want: "filesystem_fallback", got: StatePacketSourceFilesystemFallback},
+		{want: "imported", got: StatePacketSourceImported},
+		{want: "mixed", got: StatePacketSourceMixed},
+		{want: "conflict", got: StatePacketSourceConflict},
 	}
-	if StatePacketSourceFilesystemFallback != StatePacketSource("filesystem_fallback") {
-		t.Errorf("StatePacketSourceFilesystemFallback = %q, want %q",
-			StatePacketSourceFilesystemFallback, "filesystem_fallback")
-	}
-	if StatePacketSourceConflict != StatePacketSource("conflict") {
-		t.Errorf("StatePacketSourceConflict = %q, want %q", StatePacketSourceConflict, "conflict")
+	for _, tt := range cases {
+		if string(tt.got) != tt.want {
+			t.Errorf("StatePacketSource value = %q, want %q", tt.got, tt.want)
+		}
 	}
 }
 
