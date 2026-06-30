@@ -218,11 +218,6 @@ func (s *Service) normalizeFallbackPacket(packet cognitive.ResumePacket, request
 		packet.Principal = request.Principal
 	}
 	now := s.clock()
-	// Synthesize GeneratedAt before anything else so StateVersion derivation
-	// can use it and fallback packets never carry the zero timestamp.
-	if packet.GeneratedAt.IsZero() {
-		packet.GeneratedAt = now
-	}
 	packet.Source = cognitive.StatePacketSourceFilesystemFallback
 	packet.FallbackPath = strings.TrimSpace(packet.FallbackPath)
 	if packet.Freshness == "" {
@@ -241,16 +236,6 @@ func (s *Service) normalizeFallbackPacket(packet cognitive.ResumePacket, request
 		}
 	} else {
 		packet.StateVersion = strings.TrimSpace(packet.StateVersion)
-	}
-	// F5: when state_version is present but generated_at is absent, synthesize
-	// GeneratedAt so clients get a valid timestamp. Both absent is still an error
-	// caught by validateFallbackPacket.
-	if packet.GeneratedAt.IsZero() && strings.TrimSpace(packet.StateVersion) != "" {
-		if parsed, err := time.Parse(time.RFC3339Nano, packet.StateVersion); err == nil {
-			packet.GeneratedAt = parsed.UTC()
-		} else {
-			packet.GeneratedAt = now
-		}
 	}
 	if packet.Project == "" {
 		packet.Project = request.Project
@@ -711,8 +696,11 @@ func validateFallbackPacket(packet cognitive.ResumePacket, request cognitive.Res
 	if !packet.FallbackUsed {
 		return fmt.Errorf("stateplane fallback: fallback_used must be true")
 	}
-	if packet.GeneratedAt.IsZero() && strings.TrimSpace(packet.StateVersion) == "" {
-		return fmt.Errorf("stateplane fallback: generated_at or state_version is required")
+	if packet.GeneratedAt.IsZero() {
+		return fmt.Errorf("stateplane fallback: generated_at is required")
+	}
+	if strings.TrimSpace(packet.StateVersion) == "" {
+		return fmt.Errorf("stateplane fallback: state_version is required")
 	}
 	if err := validateStateAction("stateplane fallback", packet.NextAction); err != nil {
 		return err

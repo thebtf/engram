@@ -17,16 +17,31 @@ type statePlane interface {
 	cognitive.StatePlane
 }
 
-func resumeScopesFromFields(project, goalID, taskID string) []cognitive.StateScopeKind {
-	scopes := []cognitive.StateScopeKind{cognitive.StateScopeSession}
-	if strings.TrimSpace(project) != "" {
-		scopes = append(scopes, cognitive.StateScopeProject)
+func resumeScopesFromFields(explicit []cognitive.StateScopeKind, sessionID, goalID, taskID string) []cognitive.StateScopeKind {
+	if len(explicit) > 0 {
+		return append([]cognitive.StateScopeKind(nil), explicit...)
+	}
+	scopes := make([]cognitive.StateScopeKind, 0, 3)
+	if strings.TrimSpace(sessionID) != "" {
+		scopes = append(scopes, cognitive.StateScopeSession)
 	}
 	if strings.TrimSpace(goalID) != "" {
 		scopes = append(scopes, cognitive.StateScopeGoal)
 	}
 	if strings.TrimSpace(taskID) != "" {
 		scopes = append(scopes, cognitive.StateScopeTask)
+	}
+	return scopes
+}
+
+func explicitResumeScopes(values ...string) []cognitive.StateScopeKind {
+	scopes := make([]cognitive.StateScopeKind, 0, len(values))
+	for _, value := range values {
+		for _, raw := range strings.Split(value, ",") {
+			if scope := strings.TrimSpace(raw); scope != "" {
+				scopes = append(scopes, cognitive.StateScopeKind(scope))
+			}
+		}
 	}
 	return scopes
 }
@@ -85,8 +100,13 @@ func (s *Service) handleGetStateResume(w http.ResponseWriter, r *http.Request) {
 	}
 	query := r.URL.Query()
 	sessionID := strings.TrimSpace(query.Get("session_id"))
-	if sessionID == "" {
-		http.Error(w, "session_id is required", http.StatusBadRequest)
+	explicitScopes := explicitResumeScopes(append(query["scope"], query["scopes"]...)...)
+	project := strings.TrimSpace(query.Get("project"))
+	goalID := strings.TrimSpace(query.Get("goal_id"))
+	taskID := strings.TrimSpace(query.Get("task_id"))
+	scopes := resumeScopesFromFields(explicitScopes, sessionID, goalID, taskID)
+	if len(scopes) == 0 {
+		http.Error(w, "session_id or scopes is required", http.StatusBadRequest)
 		return
 	}
 	principal := ""
@@ -106,16 +126,15 @@ func (s *Service) handleGetStateResume(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "allow_filesystem_fallback is not supported on the server runtime state path", http.StatusBadRequest)
 		return
 	}
-	project := strings.TrimSpace(query.Get("project"))
-	goalID := strings.TrimSpace(query.Get("goal_id"))
-	taskID := strings.TrimSpace(query.Get("task_id"))
+	// project/goal/task are request bindings; project scope is explicit through
+	// scope/scopes rather than inferred from merely naming a project.
 	packet, err := store.ReadResumePacket(r.Context(), cognitive.ResumePacketRequest{
 		Project:   project,
 		Principal: principal,
 		SessionID: sessionID,
 		GoalID:    goalID,
 		TaskID:    taskID,
-		Scopes:    resumeScopesFromFields(project, goalID, taskID),
+		Scopes:    scopes,
 	})
 	if err != nil {
 		writeStateReadError(w, err)
