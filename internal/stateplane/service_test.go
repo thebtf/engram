@@ -99,7 +99,7 @@ func TestServiceReadResumePacketExplicitFallbackMarkerOnNativeMiss(t *testing.T)
 	require.Equal(t, "fallback next", packet.NextAction.Description)
 	require.Equal(t, "agent:developer", packet.Principal)
 	require.True(t, packet.FallbackUsed)
-	require.NotEmpty(t, packet.EvidenceRefs)
+	require.Contains(t, packet.EvidenceRefs, "filesystem_fallback:"+fallbackPath)
 }
 
 func TestServiceReadResumePacketConflictWhenFallbackDisagrees(t *testing.T) {
@@ -123,7 +123,7 @@ func TestServiceReadResumePacketConflictWhenFallbackDisagrees(t *testing.T) {
 	require.NotEmpty(t, packet.Drift.Conflicts)
 	require.Equal(t, "agent:developer", packet.Principal)
 	require.True(t, packet.FallbackUsed)
-	require.NotEmpty(t, packet.EvidenceRefs)
+	require.Contains(t, packet.EvidenceRefs, "filesystem_fallback:"+fallbackPath)
 	require.Equal(t, "next_action", packet.Drift.Conflicts[0].Field)
 	require.Equal(t, "native_retained_until_resolved", packet.Drift.Conflicts[0].Resolution)
 }
@@ -137,6 +137,8 @@ func TestServiceReadResumePacketReportsNewerFallbackDriftWhenActionsMatch(t *tes
 		&fakeNativePlane{packet: native},
 		&countingFallbackReader{packet: fallback},
 	)
+	synthesizedAt := native.GeneratedAt.Add(2 * time.Hour)
+	service.now = func() time.Time { return synthesizedAt }
 
 	packet, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
 		Project:                 "engram",
@@ -152,7 +154,8 @@ func TestServiceReadResumePacketReportsNewerFallbackDriftWhenActionsMatch(t *tes
 	require.Equal(t, "fallback.json", packet.FallbackPath)
 	require.Equal(t, "agent:developer", packet.Principal)
 	require.True(t, packet.FallbackUsed)
-	require.NotEmpty(t, packet.EvidenceRefs)
+	require.Contains(t, packet.EvidenceRefs, "filesystem_fallback:fallback.json")
+	require.Equal(t, synthesizedAt, packet.GeneratedAt)
 	require.Equal(t, "native next", packet.NextAction.Description)
 }
 
@@ -268,6 +271,7 @@ func fallbackPacket(actionDescription, fallbackPath string) cognitive.ResumePack
 	packet.Drift = cognitive.StateDrift{Kind: cognitive.StateDriftUnknown, CheckedAt: packet.GeneratedAt}
 	packet.FallbackPath = fallbackPath
 	packet.FallbackUsed = true
+	packet.EvidenceRefs = nil
 	return packet
 }
 

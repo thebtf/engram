@@ -279,6 +279,7 @@ func (s *Service) fallbackNewerPacket(nativePacket, fallbackPacket cognitive.Res
 	packet.FallbackUsed = true
 	packet.FallbackPath = fallbackPacket.FallbackPath
 	packet.EvidenceRefs = combinedEvidenceRefs(nativePacket.EvidenceRefs, fallbackPacket.EvidenceRefs)
+	packet.GeneratedAt = now
 	packet.Drift = cognitive.StateDrift{
 		Kind:      cognitive.StateDriftFallbackNewer,
 		CheckedAt: now,

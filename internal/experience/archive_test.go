@@ -118,6 +118,36 @@ func TestServiceQueryExperienceAddsBoundedArchiveOnAllowedTrigger(t *testing.T) 
 	require.Equal(t, "explicit named archive trigger lookup", evidence[0].Reason)
 }
 
+func TestServiceArchiveEvidenceFiltersProjectBeforeAudit(t *testing.T) {
+	engramItem := archiveExperience("archive-engram", "rollback regression archive lesson")
+	otherProjectItem := archiveExperience("archive-other", "rollback regression archive lesson")
+	otherProjectItem.SourceAttribution[0].Project = "other"
+	otherProjectItem.SourceAttribution[0].SessionID = "other-session"
+	archive := &fakeArchiveSource{items: []cognitive.ExperienceResponse{otherProjectItem, engramItem}}
+	service := NewServiceWithArchive(nil, archive)
+
+	results, err := service.QueryExperience(context.Background(), cognitive.ExperienceQueryRequest{
+		Project:        "engram",
+		Principal:      "agent:developer",
+		Query:          "rollback regression archive lesson",
+		CurrentContext: "rollback investigation needs older regression context",
+		ArchiveTriggerClasses: []cognitive.ExperienceArchiveTriggerClass{
+			cognitive.ExperienceArchiveTriggerRegressionOrRollback,
+		},
+		Limit: 5,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "archive-engram", results[0].SourceAttribution[0].ID)
+	evidence := service.ArchiveEvidence()
+	require.Len(t, evidence, 1)
+	require.Equal(t, 1, evidence[0].Returned)
+	require.Equal(t, []string{"archive-session"}, evidence[0].SessionIDs)
+	require.Contains(t, evidence[0].EvidenceRefs, "archive:archive-engram")
+	require.NotContains(t, evidence[0].EvidenceRefs, "archive:archive-other")
+}
+
 func TestServiceArchiveEvidenceRecordsAntiApplicabilityBlock(t *testing.T) {
 	blocked := archiveExperience("archive-blocked", "PowerShell rollback archive lesson")
 	blocked.AntiApplicability = []cognitive.ExperienceAntiApplicability{

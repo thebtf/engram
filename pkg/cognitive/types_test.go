@@ -1,6 +1,7 @@
 package cognitive
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 )
@@ -121,6 +122,7 @@ func TestExperienceQueryRequestContract_RequiredFieldsBinaryDefined(t *testing.T
 		kind    reflect.Kind
 	}{
 		"Project":               {"project", reflect.String},
+		"Query":                 {"query", reflect.String},
 		"Principal":             {"principal,omitempty", reflect.String},
 		"Situation":             {"situation,omitempty", reflect.String},
 		"TimeSpan":              {"time_span,omitempty", reflect.Struct},
@@ -145,6 +147,16 @@ func TestExperienceQueryRequestContract_RequiredFieldsBinaryDefined(t *testing.T
 		if got := field.Type.Kind(); got != want.kind {
 			t.Fatalf("ExperienceQueryRequest.%s kind = %s, want %s", name, got, want.kind)
 		}
+	}
+}
+
+func TestExperienceTimeSpanZeroBoundsOmitted(t *testing.T) {
+	data, err := json.Marshal(ExperienceTimeSpan{})
+	if err != nil {
+		t.Fatalf("marshal ExperienceTimeSpan: %v", err)
+	}
+	if got := string(data); got != "{}" {
+		t.Fatalf("zero ExperienceTimeSpan JSON = %s, want {}", got)
 	}
 }
 

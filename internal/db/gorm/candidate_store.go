@@ -336,75 +336,137 @@ func (s *CandidateStore) PromoteWithMemory(
 	candidateID int64,
 	mem *models.Memory,
 ) (*models.CrystallizationCandidate, *models.Memory, error) {
-	if mem == nil {
-		return nil, nil, fmt.Errorf("promote_with_memory: memory must not be nil")
-	}
-	if err := validateMemoryForCreate(mem); err != nil {
-		return nil, nil, fmt.Errorf("promote_with_memory: invalid memory: %w", err)
+	if err := validatePromoteMemory(mem); err != nil {
+		return nil, nil, err
 	}
 
 	var updatedCandidate *models.CrystallizationCandidate
 	var createdMemory *models.Memory
-
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Step A: lock the candidate row to detect concurrent promotions.
-		var row candidateRow
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			First(&row, candidateID).Error; err != nil {
-			return fmt.Errorf("promote_with_memory lock %d: %w", candidateID, err)
-		}
-		current := models.CandidateStatus(row.Status)
-		if !validTransitions[current][models.CandidateStatusPromoted] {
-			return fmt.Errorf("%w: %s → promoted", ErrInvalidTransition, current)
-		}
-
-		// Step B: create the memory within the same transaction.
-		created, err := createMemoryWithLifecycleTx(ctx, tx, mem)
-		if err != nil {
-			return err
-		}
-		if created == nil {
-			return fmt.Errorf("promote_with_memory: createMemoryWithLifecycleTx returned nil")
-		}
-		createdMemory = created
-
-		// Step C: transition the candidate using the new memory ID.
-		updates := map[string]interface{}{
-			"status":             string(models.CandidateStatusPromoted),
-			"promoted_memory_id": created.ID,
-			"updated_at":         time.Now().UTC(),
-		}
-		if err := tx.Model(&candidateRow{}).Where("id = ?", candidateID).Updates(updates).Error; err != nil {
-			return fmt.Errorf("promote_with_memory update %d: %w", candidateID, err)
-		}
-		if err := tx.First(&row, candidateID).Error; err != nil {
-			return fmt.Errorf("promote_with_memory re-read %d: %w", candidateID, err)
-		}
-		updatedCandidate = toDomainCandidate(&row)
-		return nil
+		var err error
+		updatedCandidate, createdMemory, err = s.promoteWithMemoryTx(ctx, tx, candidateID, mem)
+		return err
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// Audit log asynchronously — same pattern as transitionStatus.
-	if s.auditStore != nil {
-		entry := AuditLogEntry{
-			Action:          "promote_candidate",
-			Actor:           "system",
-			SourceSessionID: updatedCandidate.SourceSessionID,
-			Reason:          fmt.Sprintf("candidate %d promoted to memory %d", candidateID, createdMemory.ID),
-		}
-		auditStore := s.auditStore
-		go func() {
-			defer func() { recover() }() //nolint:errcheck
-			auditCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			_ = auditStore.Log(auditCtx, entry)
-		}()
+	s.logPromoteAudit(candidateID, updatedCandidate, createdMemory)
+	return updatedCandidate, createdMemory, nil
+}
+
+// PromoteWithMemoryAndSnapshot creates the candidate-review snapshot, creates the
+// promoted memory, transitions the candidate, and amends the snapshot with the
+// promoted-memory delete entry in one DB transaction. Returning any error from the
+// transaction callback rolls back all four writes per GORM's transaction contract.
+func (s *CandidateStore) PromoteWithMemoryAndSnapshot(
+	ctx context.Context,
+	snapshotStore *SnapshotStore,
+	candidateID int64,
+	mem *models.Memory,
+	snapshot *models.BulkOpSnapshot,
+) (*models.CrystallizationCandidate, *models.Memory, *models.BulkOpSnapshot, error) {
+	if err := validatePromoteMemory(mem); err != nil {
+		return nil, nil, nil, err
+	}
+	if snapshot != nil && snapshotStore == nil {
+		return nil, nil, nil, fmt.Errorf("promote_with_memory_snapshot: snapshot store is required")
 	}
 
-	return updatedCandidate, createdMemory, nil
+	var updatedCandidate *models.CrystallizationCandidate
+	var createdMemory *models.Memory
+	var createdSnapshot *models.BulkOpSnapshot
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if snapshot != nil {
+			var err error
+			createdSnapshot, err = snapshotStore.createTx(ctx, tx, snapshot)
+			if err != nil {
+				return err
+			}
+		}
+
+		var err error
+		updatedCandidate, createdMemory, err = s.promoteWithMemoryTx(ctx, tx, candidateID, mem)
+		if err != nil {
+			return err
+		}
+
+		if createdSnapshot != nil && createdMemory.ID != 0 {
+			return snapshotStore.amendPromoteEntriesTx(ctx, tx, createdSnapshot.SnapshotID, []int64{createdMemory.ID})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	s.logPromoteAudit(candidateID, updatedCandidate, createdMemory)
+	return updatedCandidate, createdMemory, createdSnapshot, nil
+}
+
+func validatePromoteMemory(mem *models.Memory) error {
+	if mem == nil {
+		return fmt.Errorf("promote_with_memory: memory must not be nil")
+	}
+	if err := validateMemoryForCreate(mem); err != nil {
+		return fmt.Errorf("promote_with_memory: invalid memory: %w", err)
+	}
+	return nil
+}
+
+func (s *CandidateStore) promoteWithMemoryTx(ctx context.Context, tx *gorm.DB, candidateID int64, mem *models.Memory) (*models.CrystallizationCandidate, *models.Memory, error) {
+	// Step A: lock the candidate row to detect concurrent promotions.
+	var row candidateRow
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		First(&row, candidateID).Error; err != nil {
+		return nil, nil, fmt.Errorf("promote_with_memory lock %d: %w", candidateID, err)
+	}
+	current := models.CandidateStatus(row.Status)
+	if !validTransitions[current][models.CandidateStatusPromoted] {
+		return nil, nil, fmt.Errorf("%w: %s → promoted", ErrInvalidTransition, current)
+	}
+
+	// Step B: create the memory within the same transaction.
+	created, err := createMemoryWithLifecycleTx(ctx, tx, mem)
+	if err != nil {
+		return nil, nil, err
+	}
+	if created == nil {
+		return nil, nil, fmt.Errorf("promote_with_memory: createMemoryWithLifecycleTx returned nil")
+	}
+
+	// Step C: transition the candidate using the new memory ID.
+	updates := map[string]interface{}{
+		"status":             string(models.CandidateStatusPromoted),
+		"promoted_memory_id": created.ID,
+		"updated_at":         time.Now().UTC(),
+	}
+	if err := tx.WithContext(ctx).Model(&candidateRow{}).Where("id = ?", candidateID).Updates(updates).Error; err != nil {
+		return nil, nil, fmt.Errorf("promote_with_memory update %d: %w", candidateID, err)
+	}
+	if err := tx.WithContext(ctx).First(&row, candidateID).Error; err != nil {
+		return nil, nil, fmt.Errorf("promote_with_memory re-read %d: %w", candidateID, err)
+	}
+	return toDomainCandidate(&row), created, nil
+}
+
+func (s *CandidateStore) logPromoteAudit(candidateID int64, updatedCandidate *models.CrystallizationCandidate, createdMemory *models.Memory) {
+	if s.auditStore == nil || updatedCandidate == nil || createdMemory == nil {
+		return
+	}
+	entry := AuditLogEntry{
+		Action:          "promote_candidate",
+		Actor:           "system",
+		SourceSessionID: updatedCandidate.SourceSessionID,
+		Reason:          fmt.Sprintf("candidate %d promoted to memory %d", candidateID, createdMemory.ID),
+	}
+	auditStore := s.auditStore
+	go func() {
+		defer func() { recover() }() //nolint:errcheck
+		auditCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = auditStore.Log(auditCtx, entry)
+	}()
 }
 
 // TransitionToRejected transitions a pending candidate to rejected with a reason.

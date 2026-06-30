@@ -303,8 +303,8 @@ const (
 // ExperienceTimeSpan names the historical interval covered by an experience.
 // Zero values mean the projection source did not expose a bound for that side.
 type ExperienceTimeSpan struct {
-	StartedAt time.Time `json:"started_at,omitempty"`
-	EndedAt   time.Time `json:"ended_at,omitempty"`
+	StartedAt time.Time `json:"started_at,omitempty,omitzero"`
+	EndedAt   time.Time `json:"ended_at,omitempty,omitzero"`
 }
 
 // ExperienceApplicability carries the gate state and rationale for a returned

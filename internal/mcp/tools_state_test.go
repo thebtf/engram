@@ -50,6 +50,8 @@ func TestStateToolHiddenUntilNativeWritePathIsReachable(t *testing.T) {
 	schema := tool.InputSchema["properties"].(map[string]any)
 	require.NotContains(t, schema, "allow_filesystem_fallback")
 	require.Contains(t, schema, "principal")
+	required := tool.InputSchema["required"].([]string)
+	require.ElementsMatch(t, []string{"action", "principal"}, required)
 }
 
 func TestGetStateToolResumeReturnsNativePacket(t *testing.T) {

@@ -69,7 +69,7 @@ func (s *Service) handleGetStateResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	sessionID := query.Get("session_id")
+	sessionID := strings.TrimSpace(query.Get("session_id"))
 	if sessionID == "" {
 		http.Error(w, "session_id is required", http.StatusBadRequest)
 		return

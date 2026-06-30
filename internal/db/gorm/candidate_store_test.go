@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -403,6 +404,83 @@ func TestCandidateStore_PromoteWithMemory_AtomicRollback(t *testing.T) {
 	require.NoError(t, db.Model(&Memory{}).Count(&memCountAfter).Error)
 	require.Equal(t, memCountBefore, memCountAfter,
 		"transaction rollback must not leave an orphan memory row")
+}
+
+func TestCandidateStore_PromoteWithMemoryAndSnapshot_AmendFailureRollsBackPromotion(t *testing.T) {
+	db := openCandidateTestDB(t)
+	cs := NewCandidateStore(db, nil)
+	snapshotStore := NewSnapshotStore(db)
+	ctx := context.Background()
+
+	candidate, err := models.NewCrystallizationCandidate(
+		fmt.Sprintf("session-promote-snapshot-rollback-%d", time.Now().UnixNano()),
+		"content for snapshot amend rollback test",
+		"rule",
+		models.CandidateOptions{AffectedProjects: []string{"test-project"}},
+	)
+	require.NoError(t, err)
+	createdCandidate, err := cs.Create(ctx, candidate)
+	require.NoError(t, err)
+
+	var memCountBefore int64
+	require.NoError(t, db.Model(&Memory{}).Count(&memCountBefore).Error)
+
+	snapshot, err := models.NewBulkOpSnapshot(
+		fmt.Sprintf("candidate-promote-amend-failure-%d", time.Now().UnixNano()),
+		models.SnapshotOpCandidateReviewAction,
+		"system",
+		json.RawMessage(`{}`),
+	)
+	require.NoError(t, err)
+	snapshot.SourceSessionID = createdCandidate.SourceSessionID
+
+	suffix := time.Now().UnixNano()
+	triggerName := fmt.Sprintf("test_fail_snapshot_amend_%d", suffix)
+	functionName := fmt.Sprintf("test_fail_snapshot_amend_fn_%d", suffix)
+	require.NoError(t, db.Exec(fmt.Sprintf(`
+CREATE OR REPLACE FUNCTION %s() RETURNS trigger AS $$
+BEGIN
+	RAISE EXCEPTION 'forced snapshot amend failure';
+END;
+$$ LANGUAGE plpgsql`, functionName)).Error)
+	t.Cleanup(func() {
+		_ = db.Exec(fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON bulk_op_snapshots", triggerName)).Error
+		_ = db.Exec(fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", functionName)).Error
+	})
+	require.NoError(t, db.Exec(fmt.Sprintf(`
+CREATE TRIGGER %s
+BEFORE UPDATE ON bulk_op_snapshots
+FOR EACH ROW
+WHEN (OLD.snapshot_id = '%s')
+EXECUTE FUNCTION %s()`, triggerName, snapshot.SnapshotID, functionName)).Error)
+
+	mem := &models.Memory{
+		Content:       "content for snapshot amend rollback test",
+		Project:       "test-project",
+		EpistemicType: "decision",
+		Tier:          "episodic",
+		SourceAgent:   "crystallization",
+	}
+	_, _, _, err = cs.PromoteWithMemoryAndSnapshot(ctx, snapshotStore, createdCandidate.ID, mem, snapshot)
+	require.Error(t, err, "forced snapshot amend failure must occur after snapshot create and promotion")
+	require.Contains(t, err.Error(), "forced snapshot amend failure")
+
+	gotCandidate, err := cs.Get(ctx, createdCandidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusPending, gotCandidate.Status,
+		"snapshot amend failure must roll back the candidate promotion")
+	require.Nil(t, gotCandidate.PromotedMemoryID,
+		"snapshot amend failure must not leave a promoted memory pointer")
+
+	var memCountAfter int64
+	require.NoError(t, db.Model(&Memory{}).Count(&memCountAfter).Error)
+	require.Equal(t, memCountBefore, memCountAfter,
+		"snapshot amend failure must roll back the created memory row")
+
+	var snapshotCount int64
+	require.NoError(t, db.Model(&snapshotRow{}).Where("snapshot_id = ?", snapshot.SnapshotID).Count(&snapshotCount).Error)
+	require.Zero(t, snapshotCount,
+		"snapshot create must roll back with the failed promotion transaction")
 }
 
 // containsStr is a helper for checking error message content without importing strings.

@@ -48,6 +48,32 @@ func candidateItemFromDomain(c *models.CrystallizationCandidate) candidateItem {
 	}
 }
 
+func (s *Server) newCandidateReviewSnapshot(action string, candidate *models.CrystallizationCandidate) (*models.BulkOpSnapshot, error) {
+	packet := reviewpacket.FromCandidate(candidate)
+	if !packet.MutationRequirements.SnapshotRequired {
+		return nil, nil
+	}
+	return reviewpacket.NewCandidateReviewActionSnapshot(action, candidate, "system")
+}
+
+func (s *Server) recordCandidateReviewSnapshot(ctx context.Context, action string, candidate *models.CrystallizationCandidate) (*models.BulkOpSnapshot, error) {
+	snapshot, err := s.newCandidateReviewSnapshot(action, candidate)
+	if err != nil {
+		return nil, err
+	}
+	if snapshot == nil {
+		return nil, nil
+	}
+	if s.snapshotStore == nil {
+		return nil, fmt.Errorf("candidate review snapshot store is not configured")
+	}
+	created, err := s.snapshotStore.Create(ctx, snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("candidate review snapshot: %w", err)
+	}
+	return created, nil
+}
+
 // candidateTools returns the 5 crystallization candidate MCP tool definitions.
 // Only registered when ENGRAM_VNEXT_F_ENABLED=true.
 func candidateTools() []Tool {
@@ -278,6 +304,10 @@ func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessag
 	if err := reviewpacket.ValidateCandidateMutation(candidate); err != nil {
 		return "", fmt.Errorf("promote_candidate: %w", err)
 	}
+	snapshot, err := s.newCandidateReviewSnapshot("promote", candidate)
+	if err != nil {
+		return "", fmt.Errorf("promote_candidate: %w", err)
+	}
 
 	// Build a memory from the candidate's proposed content.
 	// epistemic_type="decision" per spec §FR-F4 promotion semantics.
@@ -296,11 +326,11 @@ func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessag
 		SourceAgent:   "crystallization",
 	}
 
-	// PromoteWithMemory creates the memory AND transitions the candidate within a single
-	// DB transaction — closing the partial-failure dual-write gap (TG4 MAJOR finding 2).
-	// A transient Step-B failure rolls back both writes; client retry is safe because
-	// TransitionToPromoted rejects an already-promoted candidate.
-	updated, created, err := s.candidateStore.PromoteWithMemory(ctx, id, mem)
+	// PromoteWithMemoryAndSnapshot creates the snapshot, creates the memory,
+	// transitions the candidate, and amends the snapshot in one DB transaction.
+	// A snapshot-amend failure rolls back the committed promotion as well, so the
+	// rollback snapshot cannot be left incomplete after an error.
+	updated, created, _, err := s.candidateStore.PromoteWithMemoryAndSnapshot(ctx, s.snapshotStore, id, mem, snapshot)
 	if err != nil {
 		if errors.Is(err, gormdb.ErrInvalidTransition) {
 			return "", fmt.Errorf("promote_candidate: %w", err)
@@ -348,6 +378,9 @@ func (s *Server) handleRejectCandidate(ctx context.Context, args json.RawMessage
 	if err := reviewpacket.ValidateCandidateMutation(candidate); err != nil {
 		return "", fmt.Errorf("reject_candidate: %w", err)
 	}
+	if _, err := s.recordCandidateReviewSnapshot(ctx, "reject", candidate); err != nil {
+		return "", fmt.Errorf("reject_candidate: %w", err)
+	}
 
 	updated, err := s.candidateStore.TransitionToRejected(ctx, id, reason)
 	if err != nil {
@@ -392,6 +425,9 @@ func (s *Server) handleSupersedeCandidate(ctx context.Context, args json.RawMess
 		return "", fmt.Errorf("supersede_candidate: candidate %d not found", id)
 	}
 	if err := reviewpacket.ValidateCandidateMutation(candidate); err != nil {
+		return "", fmt.Errorf("supersede_candidate: %w", err)
+	}
+	if _, err := s.recordCandidateReviewSnapshot(ctx, "supersede", candidate); err != nil {
 		return "", fmt.Errorf("supersede_candidate: %w", err)
 	}
 

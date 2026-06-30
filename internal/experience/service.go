@@ -112,20 +112,25 @@ func (s *Service) QueryExperience(ctx context.Context, request cognitive.Experie
 			if len(archiveItems) > archiveLimit {
 				archiveItems = archiveItems[:archiveLimit]
 			}
-			for i := range archiveItems {
-				archiveItems[i] = cloneResponse(archiveItems[i])
-				archiveItems[i].ArchiveTriggerClasses = append([]cognitive.ExperienceArchiveTriggerClass(nil), triggers...)
+			filteredArchiveItems := archiveItems[:0]
+			for _, archiveItem := range archiveItems {
+				item := cloneResponse(archiveItem)
+				item.ArchiveTriggerClasses = append([]cognitive.ExperienceArchiveTriggerClass(nil), triggers...)
+				if !projectMatches(request.Project, item.SourceAttribution) {
+					continue
+				}
+				filteredArchiveItems = append(filteredArchiveItems, item)
 			}
-			archiveEvidence.SessionIDs, archiveEvidence.EvidenceRefs = archiveEvidenceScope(archiveItems)
+			archiveEvidence.SessionIDs, archiveEvidence.EvidenceRefs = archiveEvidenceScope(filteredArchiveItems)
 			if len(archiveEvidence.EvidenceRefs) == 0 {
 				archiveEvidence.EvidenceRefs = archiveTriggerEvidenceRefs(triggers)
 			}
-			archiveEvidence.Returned = len(archiveItems)
+			archiveEvidence.Returned = len(filteredArchiveItems)
 			archiveEvidence.ExperienceRetrievalRan = true
-			archiveEvidence.AntiApplicabilityBlocked = archiveAntiApplicabilityBlocked(request, archiveItems)
+			archiveEvidence.AntiApplicabilityBlocked = archiveAntiApplicabilityBlocked(request, filteredArchiveItems)
 			archiveEvidence.Status = "archive_resurfaced"
 			archiveEvidence.Reason = "explicit named archive trigger lookup"
-			candidates = append(candidates, archiveItems...)
+			candidates = append(candidates, filteredArchiveItems...)
 		}
 		s.recordArchiveEvidence(archiveEvidence)
 	}

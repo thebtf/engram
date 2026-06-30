@@ -746,7 +746,7 @@ func TestMigration132_CrystallizationCandidates(t *testing.T) {
 //
 // Asserts:
 //   - bulk_op_snapshots table exists with all required columns
-//   - op_type CHECK constraint admits exactly the 4 valid values
+//   - op_type CHECK constraint admits exactly the 5 valid values
 //   - status CHECK constraint admits exactly the 3 valid values (preview/committed/rolled_back)
 //   - idx_bulk_op_snapshots_status_created index exists
 //   - idx_bulk_op_snapshots_snapshot_id index exists
@@ -802,8 +802,8 @@ func TestMigration133_BulkOpSnapshots(t *testing.T) {
 	// Pre-cleanup: remove any leftover rows from prior runs before inserting test data.
 	_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'test-snap-%'`).Error
 
-	// Assert all 4 valid op_type values accepted.
-	for _, opType := range []string{"ingest_doc", "bulk_promote", "bulk_delete", "bulk_supersede"} {
+	// Assert all 5 valid op_type values accepted.
+	for _, opType := range []string{"ingest_doc", "bulk_promote", "bulk_delete", "bulk_supersede", "candidate_review_action"} {
 		err := db.Exec(`
 			INSERT INTO bulk_op_snapshots (snapshot_id, op_type, actor, before_state)
 			VALUES (?, ?, ?, '{}')

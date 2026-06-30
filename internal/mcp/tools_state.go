@@ -30,7 +30,7 @@ func stateTool() Tool {
 		tier:        tierUseful,
 		InputSchema: map[string]any{
 			"type":     "object",
-			"required": []string{"action"},
+			"required": []string{"action", "principal"},
 			"properties": map[string]any{
 				"action":     map[string]any{"type": "string", "enum": []string{"session", "project", "resume"}, "description": "State read action"},
 				"project":    map[string]any{"type": "string", "description": "Project identifier for project/resume reads"},

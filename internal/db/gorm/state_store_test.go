@@ -172,7 +172,11 @@ func TestStateStore_ResumePacketNativeRoundTrip(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, packet.PacketID)
-	require.Contains(t, packet.PacketID, sessionID)
+	require.Len(t, packet.PacketID, len("resume:")+64)
+	require.NotEqual(t,
+		resumePacketID(cognitive.ResumePacketRequest{Project: "a", Principal: "b:c", SessionID: "d"}, "e"),
+		resumePacketID(cognitive.ResumePacketRequest{Project: "a:b", Principal: "c", SessionID: "d"}, "e"),
+	)
 	require.NotEmpty(t, packet.StateVersion)
 	require.Equal(t, project, packet.Project)
 	require.Equal(t, "agent:developer", packet.Principal)
@@ -283,7 +287,7 @@ func TestStateEvidenceRefsFromSlotsIncludesNativeAndSlotRefs(t *testing.T) {
 			"evidence_refs": "slot:execution",
 		},
 		Horizons: map[string]interface{}{
-			"evidence_refs": []interface{}{"slot:horizon", "slot:horizon"},
+			"evidence_refs": []interface{}{"slot:horizon", 42, true, map[string]interface{}{"bad": "ref"}, "slot:horizon"},
 		},
 	}, "session-1", "v2")
 

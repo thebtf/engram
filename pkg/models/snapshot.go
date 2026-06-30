@@ -20,13 +20,16 @@ const (
 	SnapshotOpBulkDelete SnapshotOpType = "bulk_delete"
 	// SnapshotOpBulkSupersede represents a bulk memory supersession.
 	SnapshotOpBulkSupersede SnapshotOpType = "bulk_supersede"
+	// SnapshotOpCandidateReviewAction represents a single candidate review action pre-mutation snapshot.
+	SnapshotOpCandidateReviewAction SnapshotOpType = "candidate_review_action"
 )
 
-// IsValid returns true iff s is one of the 4 legal SnapshotOpType values.
+// IsValid returns true iff s is one of the 5 legal SnapshotOpType values.
 func (s SnapshotOpType) IsValid() bool {
 	switch s {
 	case SnapshotOpIngestDoc, SnapshotOpBulkPromote,
-		SnapshotOpBulkDelete, SnapshotOpBulkSupersede:
+		SnapshotOpBulkDelete, SnapshotOpBulkSupersede,
+		SnapshotOpCandidateReviewAction:
 		return true
 	}
 	return false
@@ -75,7 +78,8 @@ type BulkOpSnapshot struct {
 	// AffectedMemoryIDs is the list of memory IDs affected by the op.
 	AffectedMemoryIDs []int64 `json:"affected_memory_ids"`
 	// BeforeState is the full JSONB snapshot of affected rows before the op.
-	// Structure: map[int64]json.RawMessage keyed by memory ID.
+	// Structure is operation-specific: legacy memory snapshots use numeric row-ID keys;
+	// candidate review snapshots may use entity-prefixed keys like "candidate:<id>" and "memory:<id>".
 	BeforeState json.RawMessage `json:"before_state"`
 	// Status tracks the snapshot lifecycle.
 	Status SnapshotStatus `json:"status"`
@@ -94,8 +98,9 @@ type BulkOpSnapshot struct {
 //
 // The kind is stored inline inside before_state JSONB so no schema migration is needed:
 //
-//	"<id>": {"kind": "restore", "before": <row JSON>}
-//	"<id>": {"kind": "delete"}
+//	"<id>":           {"kind": "restore", "before": <row JSON>}
+//	"memory:<id>":    {"kind": "delete"}
+//	"candidate:<id>": {"kind": "restore", "before": <candidate JSON>}
 type SnapshotEntryKind string
 
 const (

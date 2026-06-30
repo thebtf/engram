@@ -73,6 +73,7 @@ func TestHandleGetStateResumeReturnsBoundedPacket(t *testing.T) {
 	require.Empty(t, packet.FallbackPath)
 	require.False(t, fakeStore.lastRequest.AllowFilesystemFallback)
 	require.Equal(t, "agent:developer", fakeStore.lastRequest.Principal)
+	require.Equal(t, "session-1", fakeStore.lastRequest.SessionID)
 }
 
 func TestHandleGetStateResumeRejectsFilesystemFallbackOption(t *testing.T) {
@@ -95,6 +96,17 @@ func TestHandleGetStateResumeRequiresPrincipal(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "principal is required")
+}
+
+func TestHandleGetStateResumeRequiresNonBlankSessionID(t *testing.T) {
+	svc := &Service{stateStore: &fakeWorkerStatePlane{}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&principal=agent:developer&session_id=%20%20", nil)
+	rec := httptest.NewRecorder()
+	svc.handleGetStateResume(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "session_id is required")
 }
 
 func TestHandleGetStateResumeHidesInternalReadError(t *testing.T) {

@@ -2,7 +2,9 @@ package gorm
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql/driver"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -297,11 +299,20 @@ func sessionStateFromRow(row sessionStateRow) (cognitive.SessionStateSlots, erro
 }
 
 func resumePacketID(request cognitive.ResumePacketRequest, stateVersion string) string {
-	parts := []string{"resume", request.Project, request.Principal, request.SessionID, stateVersion}
-	for i, part := range parts {
-		parts[i] = strings.TrimSpace(part)
+	identity := struct {
+		Project      string `json:"project"`
+		Principal    string `json:"principal"`
+		SessionID    string `json:"session_id"`
+		StateVersion string `json:"state_version"`
+	}{
+		Project:      strings.TrimSpace(request.Project),
+		Principal:    strings.TrimSpace(request.Principal),
+		SessionID:    strings.TrimSpace(request.SessionID),
+		StateVersion: strings.TrimSpace(stateVersion),
 	}
-	return strings.Join(parts, ":")
+	data, _ := json.Marshal(identity)
+	sum := sha256.Sum256(data)
+	return "resume:" + hex.EncodeToString(sum[:])
 }
 
 func stateVersionFromTime(value time.Time) string {
@@ -338,7 +349,11 @@ func parseStateStringSlice(value interface{}) []string {
 	case []interface{}:
 		items := make([]string, 0, len(v))
 		for _, item := range v {
-			items = append(items, fmt.Sprint(item))
+			ref, ok := item.(string)
+			if !ok {
+				continue
+			}
+			items = append(items, ref)
 		}
 		return cleanStateStrings(items)
 	case string:
