@@ -240,7 +240,8 @@ function clonePrincipalScope(scope: PrincipalMemoryScope): PrincipalMemoryScope 
 function resolvePrincipalProject(project: string, currentProject = ''): string {
   const normalizedProject = project.trim()
   if (normalizedProject === PRINCIPAL_CURRENT_PROJECT) {
-    return clean(currentProject) || 'all'
+    const resolvedCurrentProject = clean(currentProject)
+    return resolvedCurrentProject && resolvedCurrentProject !== 'all' ? resolvedCurrentProject : ''
   }
   return normalizedProject
 }
@@ -609,6 +610,20 @@ export function useOperatorPrincipalMemorySurface(currentProject?: Ref<string>):
         queryEvidence,
         'principal-select',
         'Select a principal before issuing a scoped query.',
+        state.value.data || emptyPrincipalSummary(queryScope),
+      )
+      refreshBrief()
+      return
+    }
+
+    if (normalizedScope.project === PRINCIPAL_CURRENT_PROJECT && !queryScope.project) {
+      riskyConfirmation.value = false
+      state.value = gatedState(
+        endpointEvidence('/api/memories/principal', 'principal-memory-query', {
+          reason: 'Current project scope needs a concrete project before querying.',
+        }),
+        'project-scope',
+        'Select a concrete project before using current project scope.',
         state.value.data || emptyPrincipalSummary(queryScope),
       )
       refreshBrief()
