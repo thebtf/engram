@@ -443,6 +443,7 @@ func (s *Service) fallbackNewerPacket(nativePacket, fallbackPacket cognitive.Res
 	packet.GeneratedAt = now
 	packet.Drift = cognitive.StateDrift{
 		Kind:      cognitive.StateDriftFallbackNewer,
+		Conflicts: []cognitive.StateConflict{},
 		CheckedAt: now,
 	}
 	packet.PacketID = mixedResumePacketID(nativePacket, fallbackPacket, packet)
@@ -568,6 +569,11 @@ func validateStateAction(prefix string, action cognitive.StateAction) error {
 	if kind == "" {
 		return fmt.Errorf("%s: next_action.kind is required", prefix)
 	}
+	switch kind {
+	case cognitive.StateActionCommand, cognitive.StateActionInstruction, cognitive.StateActionReviewGate:
+	default:
+		return fmt.Errorf("%s: next_action.kind %q is not a recognized action kind", prefix, kind)
+	}
 	if strings.TrimSpace(action.Description) == "" {
 		return fmt.Errorf("%s: next_action.description is required", prefix)
 	}
@@ -594,6 +600,18 @@ func validateStateVerification(prefix string, verification cognitive.StateVerifi
 func validateNativePacket(packet cognitive.ResumePacket, request cognitive.ResumePacketRequest) error {
 	if err := validatePacketPrincipal("stateplane native", packet, request); err != nil {
 		return err
+	}
+	if request.Project != "" && packet.Project != request.Project {
+		return fmt.Errorf("stateplane native: project does not match resume request")
+	}
+	if request.SessionID != "" && packet.SessionID != request.SessionID {
+		return fmt.Errorf("stateplane native: session_id does not match resume request")
+	}
+	if request.GoalID != "" && packet.GoalID != request.GoalID {
+		return fmt.Errorf("stateplane native: goal_id does not match resume request")
+	}
+	if request.TaskID != "" && packet.TaskID != request.TaskID {
+		return fmt.Errorf("stateplane native: task_id does not match resume request")
 	}
 	if packet.Source != cognitive.StatePacketSourceNative {
 		return fmt.Errorf("stateplane native: source %q is not native", packet.Source)
