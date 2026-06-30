@@ -56,6 +56,13 @@ func (s *Server) newCandidateReviewSnapshot(action string, candidate *models.Cry
 	return reviewpacket.NewCandidateReviewActionSnapshot(action, candidate, "system")
 }
 
+func requireCandidateReviewSnapshot(operation string, snapshot *models.BulkOpSnapshot) error {
+	if snapshot == nil {
+		return fmt.Errorf("%s: candidate review snapshot is required", operation)
+	}
+	return nil
+}
+
 // candidateTools returns the 5 crystallization candidate MCP tool definitions.
 // Only registered when ENGRAM_VNEXT_F_ENABLED=true.
 func candidateTools() []Tool {
@@ -364,6 +371,9 @@ func (s *Server) handleRejectCandidate(ctx context.Context, args json.RawMessage
 	if err != nil {
 		return "", fmt.Errorf("reject_candidate: %w", err)
 	}
+	if err := requireCandidateReviewSnapshot("reject_candidate", snapshot); err != nil {
+		return "", err
+	}
 
 	updated, _, err := s.candidateStore.TransitionToRejectedWithSnapshot(ctx, s.snapshotStore, id, reason, snapshot, "system")
 	if err != nil {
@@ -413,6 +423,9 @@ func (s *Server) handleSupersedeCandidate(ctx context.Context, args json.RawMess
 	snapshot, err := s.newCandidateReviewSnapshot("supersede", candidate)
 	if err != nil {
 		return "", fmt.Errorf("supersede_candidate: %w", err)
+	}
+	if err := requireCandidateReviewSnapshot("supersede_candidate", snapshot); err != nil {
+		return "", err
 	}
 
 	updated, _, err := s.candidateStore.TransitionToSupersededWithSnapshot(ctx, s.snapshotStore, id, snapshot, "system")
