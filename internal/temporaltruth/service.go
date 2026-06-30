@@ -72,25 +72,27 @@ func (s *Service) QueryTemporalTruth(ctx context.Context, request cognitive.Temp
 		return matches[i].ValidFrom.Before(matches[j].ValidFrom)
 	})
 	queryClock := time.Now().UTC()
-	nowEntry, ok := currentEntry(matches, queryClock)
-	if !ok {
-		return cognitive.TemporalTruthResponse{
-			State: cognitive.TemporalTruthUnknown,
-			Scope: scopeFromRecord(matches[len(matches)-1], false, "selected fact has no current truth value"),
-		}, nil
-	}
 	visibleMatches := visibleRecordsAt(matches, queryClock)
 	history := entriesFromRecords(visibleMatches)
 	limit := normalizeLimit(request.Limit)
 	if len(history) > limit {
 		history = history[len(history)-limit:]
 	}
+	scopeRecord := matches[len(matches)-1]
+	if len(visibleMatches) > 0 {
+		scopeRecord = visibleMatches[len(visibleMatches)-1]
+	}
 	response := cognitive.TemporalTruthResponse{
-		Scope:           scopeFromRecord(visibleMatches[len(visibleMatches)-1], true, "selected high-value evolving fact"),
-		State:           cognitive.TemporalTruthFound,
-		TrueNow:         &nowEntry,
+		Scope:           scopeFromRecord(scopeRecord, true, "selected high-value evolving fact"),
+		State:           cognitive.TemporalTruthUnknown,
 		History:         history,
 		ProvenanceChain: provenanceChain(history),
+	}
+	if nowEntry, ok := currentEntry(visibleMatches, queryClock); ok {
+		response.State = cognitive.TemporalTruthFound
+		response.TrueNow = &nowEntry
+	} else {
+		response.Scope.Rationale = "selected fact has no current truth value"
 	}
 	if request.AsOf != nil {
 		if thenEntry, ok := entryAt(visibleMatches, *request.AsOf); ok {
