@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -226,6 +227,7 @@ func (s *Service) normalizeFallbackPacket(packet cognitive.ResumePacket, request
 	if packet.Drift.CheckedAt.IsZero() {
 		packet.Drift.CheckedAt = now
 	}
+	packet.Drift = normalizeStateDriftConflicts(packet.Drift)
 	if strings.TrimSpace(packet.StateVersion) == "" {
 		if !packet.GeneratedAt.IsZero() {
 			packet.StateVersion = fallbackStateVersion(packet.GeneratedAt)
@@ -253,6 +255,7 @@ func (s *Service) normalizeFallbackPacket(packet cognitive.ResumePacket, request
 	if len(packet.Scopes) == 0 && packet.SessionID != "" {
 		packet.Scopes = []cognitive.StateScopeKind{cognitive.StateScopeSession}
 	}
+	packet.Scopes = canonicalizeResumeScopes(packet.Scopes)
 	packet.FallbackUsed = true
 	packet.EvidenceRefs = packetEvidenceRefs(packet, request, true)
 	return packet
@@ -396,6 +399,7 @@ func (s *Service) normalizeNativePacket(packet cognitive.ResumePacket, request c
 	if packet.Drift.CheckedAt.IsZero() {
 		packet.Drift.CheckedAt = now
 	}
+	packet.Drift = normalizeStateDriftConflicts(packet.Drift)
 	if packet.Project == "" {
 		packet.Project = request.Project
 	}
@@ -411,6 +415,7 @@ func (s *Service) normalizeNativePacket(packet cognitive.ResumePacket, request c
 	if packet.TaskID == "" {
 		packet.TaskID = request.TaskID
 	}
+	packet.Scopes = canonicalizeResumeScopes(packet.Scopes)
 	return packet
 }
 
@@ -463,20 +468,49 @@ func normalizeResumePacketRequest(request cognitive.ResumePacketRequest) cogniti
 	request.SessionID = strings.TrimSpace(request.SessionID)
 	request.GoalID = strings.TrimSpace(request.GoalID)
 	request.TaskID = strings.TrimSpace(request.TaskID)
-	if len(request.Scopes) > 0 {
-		scopes := make([]cognitive.StateScopeKind, 0, len(request.Scopes))
-		seen := make(map[cognitive.StateScopeKind]struct{}, len(request.Scopes))
-		for _, scope := range request.Scopes {
-			normalized := cognitive.StateScopeKind(strings.TrimSpace(string(scope)))
-			if _, ok := seen[normalized]; ok {
-				continue
-			}
-			seen[normalized] = struct{}{}
-			scopes = append(scopes, normalized)
-		}
-		request.Scopes = scopes
-	}
+	request.Scopes = canonicalizeResumeScopes(request.Scopes)
 	return request
+}
+
+func canonicalizeResumeScopes(scopes []cognitive.StateScopeKind) []cognitive.StateScopeKind {
+	if len(scopes) == 0 {
+		return nil
+	}
+	seen := make(map[cognitive.StateScopeKind]struct{}, len(scopes))
+	for _, scope := range scopes {
+		seen[cognitive.StateScopeKind(strings.TrimSpace(string(scope)))] = struct{}{}
+	}
+	ordered := make([]cognitive.StateScopeKind, 0, len(seen))
+	for _, scope := range []cognitive.StateScopeKind{
+		cognitive.StateScopeSession,
+		cognitive.StateScopeProject,
+		cognitive.StateScopeGoal,
+		cognitive.StateScopeTask,
+	} {
+		if _, ok := seen[scope]; ok {
+			ordered = append(ordered, scope)
+			delete(seen, scope)
+		}
+	}
+	if len(seen) == 0 {
+		return ordered
+	}
+	extra := make([]string, 0, len(seen))
+	for scope := range seen {
+		extra = append(extra, string(scope))
+	}
+	sort.Strings(extra)
+	for _, scope := range extra {
+		ordered = append(ordered, cognitive.StateScopeKind(scope))
+	}
+	return ordered
+}
+
+func normalizeStateDriftConflicts(drift cognitive.StateDrift) cognitive.StateDrift {
+	if drift.Kind != cognitive.StateDriftConflict && drift.Conflicts == nil {
+		drift.Conflicts = []cognitive.StateConflict{}
+	}
+	return drift
 }
 
 func requireResumePrincipal(request cognitive.ResumePacketRequest) error {
@@ -587,6 +621,11 @@ func validateStateVerification(prefix string, verification cognitive.StateVerifi
 	kind := cognitive.StateVerificationKind(strings.TrimSpace(string(verification.Kind)))
 	if kind == "" {
 		return fmt.Errorf("%s: next_verification.kind is required", prefix)
+	}
+	switch kind {
+	case cognitive.StateVerificationCommand, cognitive.StateVerificationArtifact, cognitive.StateVerificationManual:
+	default:
+		return fmt.Errorf("%s: next_verification.kind %q is not a recognized verification kind", prefix, kind)
 	}
 	if strings.TrimSpace(verification.Description) == "" {
 		return fmt.Errorf("%s: next_verification.description is required", prefix)

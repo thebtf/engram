@@ -743,7 +743,7 @@ func nativePacket(actionDescription, verificationCommand string) cognitive.Resum
 		StateVersion:     now.Format(time.RFC3339Nano),
 		Source:           cognitive.StatePacketSourceNative,
 		Freshness:        cognitive.StateFreshnessFresh,
-		Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, CheckedAt: now},
+		Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, Conflicts: []cognitive.StateConflict{}, CheckedAt: now},
 		NextAction:       cognitive.StateAction{Kind: cognitive.StateActionCommand, Description: actionDescription, Command: "go test ./internal/stateplane"},
 		NextVerification: cognitive.StateVerification{Kind: cognitive.StateVerificationCommand, Description: "focused stateplane tests", Command: verificationCommand},
 		GeneratedAt:      now,

@@ -105,14 +105,28 @@ func setStateTool() Tool {
 						"properties": map[string]any{"action": map[string]any{"const": "session"}},
 						"required":   []string{"action"},
 					},
-					"then": map[string]any{"required": []string{"session_id"}},
+					"then": map[string]any{
+						"required": []string{"session_id"},
+						"properties": map[string]any{
+							"state": map[string]any{
+								"required": []string{"focus", "execution", "horizons"},
+							},
+						},
+					},
 				},
 				map[string]any{
 					"if": map[string]any{
 						"properties": map[string]any{"action": map[string]any{"const": "project"}},
 						"required":   []string{"action"},
 					},
-					"then": map[string]any{"required": []string{"project"}},
+					"then": map[string]any{
+						"required": []string{"project"},
+						"properties": map[string]any{
+							"state": map[string]any{
+								"required": []string{"phase", "deadline_date", "pressure", "updated_by"},
+							},
+						},
+					},
 				},
 			},
 		},

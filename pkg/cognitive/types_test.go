@@ -38,6 +38,35 @@ func TestTypesExported(t *testing.T) {
 	}
 }
 
+func TestResumePacketRequestContract_RequiredPrincipalAndScopes(t *testing.T) {
+	typ := reflect.TypeOf(ResumePacketRequest{})
+	required := map[string]struct {
+		jsonTag string
+		kind    reflect.Kind
+	}{
+		"Project":                 {"project", reflect.String},
+		"Principal":               {"principal", reflect.String},
+		"SessionID":               {"session_id,omitempty", reflect.String},
+		"GoalID":                  {"goal_id,omitempty", reflect.String},
+		"TaskID":                  {"task_id,omitempty", reflect.String},
+		"Scopes":                  {"scopes", reflect.Slice},
+		"AllowFilesystemFallback": {"allow_filesystem_fallback,omitempty", reflect.Bool},
+	}
+
+	for name, want := range required {
+		field, ok := typ.FieldByName(name)
+		if !ok {
+			t.Fatalf("ResumePacketRequest missing required field %s", name)
+		}
+		if got := field.Tag.Get("json"); got != want.jsonTag {
+			t.Fatalf("ResumePacketRequest.%s json tag = %q, want %q", name, got, want.jsonTag)
+		}
+		if got := field.Type.Kind(); got != want.kind {
+			t.Fatalf("ResumePacketRequest.%s kind = %s, want %s", name, got, want.kind)
+		}
+	}
+}
+
 // TestResolutionPolicyEnum asserts the ResolutionPolicy string enum and its
 // two canonical constants per spec FR-7 + Clarify C2.
 func TestResolutionPolicyEnum(t *testing.T) {

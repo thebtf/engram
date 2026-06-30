@@ -233,7 +233,7 @@ type StateDrift struct {
 // reported as native state by accident.
 type ResumePacketRequest struct {
 	Project                 string           `json:"project"`
-	Principal               string           `json:"principal,omitempty"`
+	Principal               string           `json:"principal"`
 	SessionID               string           `json:"session_id,omitempty"`
 	GoalID                  string           `json:"goal_id,omitempty"`
 	TaskID                  string           `json:"task_id,omitempty"`

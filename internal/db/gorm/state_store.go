@@ -245,15 +245,18 @@ func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.Res
 	var nextVerification cognitive.StateVerification
 	var stateVersion string
 	var evidenceRefs []string
+	var projectEvidenceRefs []string
 	if needsSessionState {
 		var row sessionStateRow
 		if err := s.db.WithContext(ctx).Where("session_id = ?", request.SessionID).First(&row).Error; err != nil {
 			return cognitive.ResumePacket{}, fmt.Errorf("state_store read_session %q: %w", request.SessionID, err)
 		}
 		if needsProjectState {
-			if _, err := s.readProjectStateRow(ctx, request.Project); err != nil {
+			projectRow, err := s.readProjectStateRow(ctx, request.Project)
+			if err != nil {
 				return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume project %q: %w", request.Project, err)
 			}
+			projectEvidenceRefs = stateEvidenceRefsFromProjectRow(projectRow, stateVersionFromTime(projectRow.UpdatedAt))
 		}
 		sessionState, err := sessionStateFromRow(row)
 		if err != nil {
@@ -269,6 +272,7 @@ func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.Res
 		}
 		stateVersion = stateVersionFromTime(row.UpdatedAt)
 		evidenceRefs = stateEvidenceRefsFromSlots(sessionState, request.SessionID, stateVersion)
+		evidenceRefs = appendUniqueStateEvidenceRefs(evidenceRefs, projectEvidenceRefs...)
 	} else {
 		if request.Project == "" {
 			return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume: project is required when session scope is not requested")
@@ -312,23 +316,42 @@ func normalizeStateStoreResumePacketRequest(request cognitive.ResumePacketReques
 	request.SessionID = strings.TrimSpace(request.SessionID)
 	request.GoalID = strings.TrimSpace(request.GoalID)
 	request.TaskID = strings.TrimSpace(request.TaskID)
-	if len(request.Scopes) > 0 {
-		scopes := make([]cognitive.StateScopeKind, 0, len(request.Scopes))
-		seen := make(map[cognitive.StateScopeKind]struct{}, len(request.Scopes))
-		for _, scope := range request.Scopes {
-			normalized := cognitive.StateScopeKind(strings.TrimSpace(string(scope)))
-			if _, ok := seen[normalized]; ok {
-				continue
-			}
-			seen[normalized] = struct{}{}
-			scopes = append(scopes, normalized)
-		}
-		sort.Slice(scopes, func(i, j int) bool {
-			return scopes[i] < scopes[j]
-		})
-		request.Scopes = scopes
-	}
+	request.Scopes = canonicalizeStateStoreResumeScopes(request.Scopes)
 	return request
+}
+
+func canonicalizeStateStoreResumeScopes(scopes []cognitive.StateScopeKind) []cognitive.StateScopeKind {
+	if len(scopes) == 0 {
+		return nil
+	}
+	seen := make(map[cognitive.StateScopeKind]struct{}, len(scopes))
+	for _, scope := range scopes {
+		seen[cognitive.StateScopeKind(strings.TrimSpace(string(scope)))] = struct{}{}
+	}
+	ordered := make([]cognitive.StateScopeKind, 0, len(seen))
+	for _, scope := range []cognitive.StateScopeKind{
+		cognitive.StateScopeSession,
+		cognitive.StateScopeProject,
+		cognitive.StateScopeGoal,
+		cognitive.StateScopeTask,
+	} {
+		if _, ok := seen[scope]; ok {
+			ordered = append(ordered, scope)
+			delete(seen, scope)
+		}
+	}
+	if len(seen) == 0 {
+		return ordered
+	}
+	extra := make([]string, 0, len(seen))
+	for scope := range seen {
+		extra = append(extra, string(scope))
+	}
+	sort.Strings(extra)
+	for _, scope := range extra {
+		ordered = append(ordered, cognitive.StateScopeKind(scope))
+	}
+	return ordered
 }
 
 func validateStateStoreResumePacketRequest(request cognitive.ResumePacketRequest) error {
@@ -442,6 +465,22 @@ func stateEvidenceRefsFromSlots(state cognitive.SessionStateSlots, sessionID, st
 
 func stateEvidenceRefsFromProjectRow(row projectStateRow, stateVersion string) []string {
 	return []string{fmt.Sprintf("agent_project_state:%s@%s", strings.TrimSpace(row.Project), strings.TrimSpace(stateVersion))}
+}
+
+func appendUniqueStateEvidenceRefs(refs []string, values ...string) []string {
+	seen := make(map[string]bool, len(refs)+len(values))
+	for _, ref := range refs {
+		seen[strings.TrimSpace(ref)] = true
+	}
+	for _, ref := range values {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		refs = append(refs, ref)
+	}
+	return refs
 }
 
 func stateActionFromProjectRow(row projectStateRow) cognitive.StateAction {

@@ -58,7 +58,7 @@ func TestResumePacketRequestContract_ExplicitScopeAndFallbackFields(t *testing.T
 		typ     reflect.Type
 	}{
 		"Project":                 {jsonTag: "project", typ: reflect.TypeOf("")},
-		"Principal":               {jsonTag: "principal,omitempty", typ: reflect.TypeOf("")},
+		"Principal":               {jsonTag: "principal", typ: reflect.TypeOf("")},
 		"SessionID":               {jsonTag: "session_id,omitempty", typ: reflect.TypeOf("")},
 		"GoalID":                  {jsonTag: "goal_id,omitempty", typ: reflect.TypeOf("")},
 		"TaskID":                  {jsonTag: "task_id,omitempty", typ: reflect.TypeOf("")},

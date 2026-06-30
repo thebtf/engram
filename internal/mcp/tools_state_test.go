@@ -118,6 +118,14 @@ func TestStateToolsAdvertisedOnlyWhenNativeStoreIsReachable(t *testing.T) {
 	require.Contains(t, writeSchema, "state")
 	writeRequired := writeTool.InputSchema["required"].([]string)
 	require.ElementsMatch(t, []string{"action", "state"}, writeRequired)
+	writeConditionals := writeTool.InputSchema["allOf"].([]any)
+	require.Len(t, writeConditionals, 2)
+	sessionThen := writeConditionals[0].(map[string]any)["then"].(map[string]any)
+	sessionState := sessionThen["properties"].(map[string]any)["state"].(map[string]any)
+	require.ElementsMatch(t, []string{"focus", "execution", "horizons"}, sessionState["required"].([]string))
+	projectThen := writeConditionals[1].(map[string]any)["then"].(map[string]any)
+	projectState := projectThen["properties"].(map[string]any)["state"].(map[string]any)
+	require.ElementsMatch(t, []string{"phase", "deadline_date", "pressure", "updated_by"}, projectState["required"].([]string))
 }
 
 func TestSetStateToolWritesNativeSessionAndProjectState(t *testing.T) {
