@@ -94,8 +94,9 @@ func (r JSONFileFallbackReader) ReadResumePacket(ctx context.Context, request co
 	if packet.TaskID == "" {
 		packet.TaskID = request.TaskID
 	}
-	if len(packet.Scopes) == 0 && packet.SessionID != "" {
-		packet.Scopes = []cognitive.StateScopeKind{cognitive.StateScopeSession}
+	if len(packet.Scopes) == 0 {
+		packet.Scopes = append([]cognitive.StateScopeKind(nil), request.Scopes...)
+		packet.PacketID = ""
 	}
 	packet.Scopes = canonicalizeResumeScopes(packet.Scopes)
 	packet.FallbackUsed = true

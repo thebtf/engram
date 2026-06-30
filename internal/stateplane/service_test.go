@@ -160,6 +160,36 @@ func TestServiceReadResumePacketSynthesizesFallbackIDWithRequestedScopes(t *test
 	require.Equal(t, []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject}, projectPacket.Scopes)
 }
 
+func TestServiceReadResumePacketDefaultsMissingJSONFallbackScopesToRequest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fallback-resume.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{
+		"source":"filesystem_fallback",
+		"freshness":"unknown",
+		"drift":{"kind":"unknown"},
+		"next_action":{"kind":"command","description":"fallback next","command":"go test ./internal/stateplane"},
+		"next_verification":{"kind":"command","description":"focused stateplane tests","command":"go test ./..."},
+		"generated_at":"2026-06-28T12:00:00Z",
+		"packet_id":"resume:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"project":"engram",
+		"session_id":"session-1"
+	}`), 0o600))
+	service := NewService(&fakeNativePlane{err: errors.New("native missing")}, JSONFileFallbackReader{Path: path})
+
+	packet, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:                 "engram",
+		Principal:               "agent:developer",
+		SessionID:               "session-1",
+		GoalID:                  "goal-1",
+		TaskID:                  "task-1",
+		Scopes:                  []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeGoal, cognitive.StateScopeTask},
+		AllowFilesystemFallback: true,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeGoal, cognitive.StateScopeTask}, packet.Scopes)
+	require.NotEqual(t, "resume:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", packet.PacketID)
+}
+
 func TestServiceReadResumePacketRejectsFallbackScopeMismatch(t *testing.T) {
 	fallback := fallbackPacket("fallback next", "fallback.json")
 	fallback.Scopes = []cognitive.StateScopeKind{cognitive.StateScopeProject}
