@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -403,6 +404,231 @@ func TestCandidateStore_PromoteWithMemory_AtomicRollback(t *testing.T) {
 	require.NoError(t, db.Model(&Memory{}).Count(&memCountAfter).Error)
 	require.Equal(t, memCountBefore, memCountAfter,
 		"transaction rollback must not leave an orphan memory row")
+}
+
+func TestCandidateStore_PromoteWithMemoryAndSnapshot_AmendFailureRollsBackPromotion(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	cs := NewCandidateStore(db, auditStore)
+	snapshotStore := NewSnapshotStore(db)
+	ctx := context.Background()
+
+	candidate, err := models.NewCrystallizationCandidate(
+		fmt.Sprintf("session-promote-snapshot-rollback-%d", time.Now().UnixNano()),
+		"content for snapshot amend rollback test",
+		"rule",
+		models.CandidateOptions{AffectedProjects: []string{"test-project"}},
+	)
+	require.NoError(t, err)
+	createdCandidate, err := cs.Create(ctx, candidate)
+	require.NoError(t, err)
+
+	var memCountBefore int64
+	require.NoError(t, db.Model(&Memory{}).Count(&memCountBefore).Error)
+
+	snapshot, err := models.NewBulkOpSnapshot(
+		fmt.Sprintf("candidate-promote-amend-failure-%d", time.Now().UnixNano()),
+		models.SnapshotOpCandidateReviewAction,
+		"system",
+		json.RawMessage(`{}`),
+	)
+	require.NoError(t, err)
+	snapshot.SourceSessionID = createdCandidate.SourceSessionID
+
+	suffix := time.Now().UnixNano()
+	triggerName := fmt.Sprintf("test_fail_snapshot_amend_%d", suffix)
+	functionName := fmt.Sprintf("test_fail_snapshot_amend_fn_%d", suffix)
+	require.NoError(t, db.Exec(fmt.Sprintf(`
+CREATE OR REPLACE FUNCTION %s() RETURNS trigger AS $$
+BEGIN
+	RAISE EXCEPTION 'forced snapshot amend failure';
+END;
+$$ LANGUAGE plpgsql`, functionName)).Error)
+	t.Cleanup(func() {
+		_ = db.Exec(fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON bulk_op_snapshots", triggerName)).Error
+		_ = db.Exec(fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", functionName)).Error
+	})
+	require.NoError(t, db.Exec(fmt.Sprintf(`
+CREATE TRIGGER %s
+BEFORE UPDATE ON bulk_op_snapshots
+FOR EACH ROW
+WHEN (OLD.snapshot_id = '%s')
+EXECUTE FUNCTION %s()`, triggerName, snapshot.SnapshotID, functionName)).Error)
+
+	mem := &models.Memory{
+		Content:       "content for snapshot amend rollback test",
+		Project:       "test-project",
+		EpistemicType: "decision",
+		Tier:          "episodic",
+		SourceAgent:   "crystallization",
+	}
+	_, _, _, err = cs.PromoteWithMemoryAndSnapshot(ctx, snapshotStore, createdCandidate.ID, mem, snapshot, "agent/tester")
+	require.Error(t, err, "forced snapshot amend failure must occur after snapshot create and promotion")
+	require.Contains(t, err.Error(), "forced snapshot amend failure")
+
+	gotCandidate, err := cs.Get(ctx, createdCandidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusPending, gotCandidate.Status,
+		"snapshot amend failure must roll back the candidate promotion")
+	require.Nil(t, gotCandidate.PromotedMemoryID,
+		"snapshot amend failure must not leave a promoted memory pointer")
+
+	var memCountAfter int64
+	require.NoError(t, db.Model(&Memory{}).Count(&memCountAfter).Error)
+	require.Equal(t, memCountBefore, memCountAfter,
+		"snapshot amend failure must roll back the created memory row")
+
+	var snapshotCount int64
+	require.NoError(t, db.Model(&snapshotRow{}).Where("snapshot_id = ?", snapshot.SnapshotID).Count(&snapshotCount).Error)
+	require.Zero(t, snapshotCount,
+		"snapshot create must roll back with the failed promotion transaction")
+}
+
+func TestCandidateStore_PromoteWithMemoryAndSnapshot_WritesCandidateReviewAudit(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	cs := NewCandidateStore(db, auditStore)
+	snapshotStore := NewSnapshotStore(db)
+	ctx := context.Background()
+
+	candidate := createCandidateReviewStoreTestCandidate(t, cs, ctx, "promote-audit")
+	snapshot := newCandidateReviewStoreTestSnapshot(t, candidate, "promote", "agent/promoter")
+	mem := &models.Memory{
+		Content:       candidate.ProposedContent,
+		Project:       "test-project",
+		EpistemicType: "decision",
+		Tier:          "episodic",
+		SourceAgent:   "crystallization",
+	}
+
+	updated, created, _, err := cs.PromoteWithMemoryAndSnapshot(ctx, snapshotStore, candidate.ID, mem, snapshot, "agent/promoter")
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusPromoted, updated.Status)
+	require.NotNil(t, created)
+
+	var entry AuditLogEntry
+	require.NoError(t, db.Where("action = ? AND actor = ? AND source_session_id = ?", "candidate_review", "agent/promoter", candidate.SourceSessionID).
+		Order("id DESC").
+		First(&entry).Error)
+	require.NotNil(t, entry.BeforeState)
+	require.NotNil(t, entry.AfterState)
+	require.Contains(t, entry.Reason, "review action promote")
+}
+
+func TestCandidateStore_TransitionToRejectedWithSnapshot_WritesCandidateReviewAudit(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	cs := NewCandidateStore(db, auditStore)
+	snapshotStore := NewSnapshotStore(db)
+	ctx := context.Background()
+
+	candidate := createCandidateReviewStoreTestCandidate(t, cs, ctx, "reject-audit")
+	snapshot := newCandidateReviewStoreTestSnapshot(t, candidate, "reject", "agent/reviewer")
+
+	updated, createdSnapshot, err := cs.TransitionToRejectedWithSnapshot(ctx, snapshotStore, candidate.ID, "not durable enough", snapshot, "agent/reviewer")
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusRejected, updated.Status)
+	require.NotNil(t, createdSnapshot)
+
+	var entry AuditLogEntry
+	require.NoError(t, db.Where("action = ? AND actor = ? AND source_session_id = ?", "candidate_review", "agent/reviewer", candidate.SourceSessionID).
+		Order("id DESC").
+		First(&entry).Error)
+	require.Contains(t, entry.Reason, "review action reject")
+	require.Contains(t, entry.Reason, "not durable enough")
+}
+
+func TestCandidateStore_TransitionWithSnapshotRequiresAuditStore(t *testing.T) {
+	db := openCandidateTestDB(t)
+	cs := NewCandidateStore(db, nil)
+	snapshotStore := NewSnapshotStore(db)
+	ctx := context.Background()
+
+	candidate := createCandidateReviewStoreTestCandidate(t, cs, ctx, "missing-audit")
+	snapshot := newCandidateReviewStoreTestSnapshot(t, candidate, "reject", "agent/reviewer")
+
+	_, _, err := cs.TransitionToRejectedWithSnapshot(ctx, snapshotStore, candidate.ID, "missing audit store", snapshot, "agent/reviewer")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "candidate_review audit store")
+
+	got, getErr := cs.Get(ctx, candidate.ID)
+	require.NoError(t, getErr)
+	require.Equal(t, models.CandidateStatusPending, got.Status)
+
+	var snapshotCount int64
+	require.NoError(t, db.Model(&snapshotRow{}).Where("snapshot_id = ?", snapshot.SnapshotID).Count(&snapshotCount).Error)
+	require.Zero(t, snapshotCount)
+}
+
+func TestCandidateStore_TransitionToSupersededWithSnapshot_AuditFailureRollsBack(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	cs := NewCandidateStore(db, auditStore)
+	snapshotStore := NewSnapshotStore(db)
+	ctx := context.Background()
+
+	candidate := createCandidateReviewStoreTestCandidate(t, cs, ctx, "supersede-audit-rollback")
+	snapshot := newCandidateReviewStoreTestSnapshot(t, candidate, "supersede", "agent/fail")
+
+	suffix := time.Now().UnixNano()
+	triggerName := fmt.Sprintf("test_fail_candidate_review_audit_%d", suffix)
+	functionName := fmt.Sprintf("test_fail_candidate_review_audit_fn_%d", suffix)
+	require.NoError(t, db.Exec(fmt.Sprintf(`
+CREATE OR REPLACE FUNCTION %s() RETURNS trigger AS $$
+BEGIN
+	RAISE EXCEPTION 'forced candidate_review audit failure';
+END;
+$$ LANGUAGE plpgsql`, functionName)).Error)
+	t.Cleanup(func() {
+		_ = db.Exec(fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON audit_log", triggerName)).Error
+		_ = db.Exec(fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", functionName)).Error
+	})
+	require.NoError(t, db.Exec(fmt.Sprintf(`
+CREATE TRIGGER %s
+BEFORE INSERT ON audit_log
+FOR EACH ROW
+WHEN (NEW.action = 'candidate_review' AND NEW.actor = 'agent/fail')
+EXECUTE FUNCTION %s()`, triggerName, functionName)).Error)
+
+	_, _, err := cs.TransitionToSupersededWithSnapshot(ctx, snapshotStore, candidate.ID, snapshot, "agent/fail")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "forced candidate_review audit failure")
+
+	got, getErr := cs.Get(ctx, candidate.ID)
+	require.NoError(t, getErr)
+	require.Equal(t, models.CandidateStatusPending, got.Status)
+
+	var snapshotCount int64
+	require.NoError(t, db.Model(&snapshotRow{}).Where("snapshot_id = ?", snapshot.SnapshotID).Count(&snapshotCount).Error)
+	require.Zero(t, snapshotCount)
+}
+
+func createCandidateReviewStoreTestCandidate(t *testing.T, cs *CandidateStore, ctx context.Context, suffix string) *models.CrystallizationCandidate {
+	t.Helper()
+	candidate, err := models.NewCrystallizationCandidate(
+		fmt.Sprintf("session-candidate-review-%s-%d", suffix, time.Now().UnixNano()),
+		"content for candidate review transaction test",
+		"rule",
+		models.CandidateOptions{AffectedProjects: []string{"test-project"}},
+	)
+	require.NoError(t, err)
+	candidate.PrivacyScope = "project"
+	created, err := cs.Create(ctx, candidate)
+	require.NoError(t, err)
+	return created
+}
+
+func newCandidateReviewStoreTestSnapshot(t *testing.T, candidate *models.CrystallizationCandidate, action string, actor string) *models.BulkOpSnapshot {
+	t.Helper()
+	snapshot, err := models.NewBulkOpSnapshot(
+		fmt.Sprintf("candidate-review-%s-%d", action, time.Now().UnixNano()),
+		models.SnapshotOpCandidateReviewAction,
+		actor,
+		json.RawMessage(`{}`),
+	)
+	require.NoError(t, err)
+	snapshot.SourceSessionID = candidate.SourceSessionID
+	return snapshot
 }
 
 // containsStr is a helper for checking error message content without importing strings.

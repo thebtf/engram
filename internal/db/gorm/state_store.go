@@ -2,7 +2,9 @@ package gorm
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql/driver"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -140,23 +142,11 @@ func (s *StateStore) ReadSessionState(ctx context.Context, sessionID string) (co
 	if err := s.db.WithContext(ctx).Where("session_id = ?", sessionID).First(&row).Error; err != nil {
 		return cognitive.SessionStateSlots{}, fmt.Errorf("state_store read_session %q: %w", sessionID, err)
 	}
-	focus, err := unmarshalJSONObject(row.Focus)
+	state, err := sessionStateFromRow(row)
 	if err != nil {
-		return cognitive.SessionStateSlots{}, fmt.Errorf("state_store read_session focus %q: %w", sessionID, err)
+		return cognitive.SessionStateSlots{}, fmt.Errorf("state_store read_session %q: %w", sessionID, err)
 	}
-	execution, err := unmarshalJSONObject(row.Execution)
-	if err != nil {
-		return cognitive.SessionStateSlots{}, fmt.Errorf("state_store read_session execution %q: %w", sessionID, err)
-	}
-	horizons, err := unmarshalJSONObject(row.Horizons)
-	if err != nil {
-		return cognitive.SessionStateSlots{}, fmt.Errorf("state_store read_session horizons %q: %w", sessionID, err)
-	}
-	return cognitive.SessionStateSlots{
-		Focus:     focus,
-		Execution: execution,
-		Horizons:  horizons,
-	}, nil
+	return state, nil
 }
 
 // WriteProjectState upserts the canonical native state for a project.
@@ -225,16 +215,25 @@ func (s *StateStore) ReadProjectState(ctx context.Context, project string) (cogn
 
 // ReadResumePacket builds one bounded native resume packet from persisted state.
 func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.ResumePacketRequest) (cognitive.ResumePacket, error) {
-	if err := s.requireDB(); err != nil {
-		return cognitive.ResumePacket{}, err
+	request.Principal = strings.TrimSpace(request.Principal)
+	request.SessionID = strings.TrimSpace(request.SessionID)
+	if request.Principal == "" {
+		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume: principal is required")
 	}
 	if request.SessionID == "" {
 		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume: session_id is required")
 	}
-
-	sessionState, err := s.ReadSessionState(ctx, request.SessionID)
-	if err != nil {
+	if err := s.requireDB(); err != nil {
 		return cognitive.ResumePacket{}, err
+	}
+
+	var row sessionStateRow
+	if err := s.db.WithContext(ctx).Where("session_id = ?", request.SessionID).First(&row).Error; err != nil {
+		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_session %q: %w", request.SessionID, err)
+	}
+	sessionState, err := sessionStateFromRow(row)
+	if err != nil {
+		return cognitive.ResumePacket{}, fmt.Errorf("state_store read_resume session %q: %w", request.SessionID, err)
 	}
 	nextAction, err := stateActionFromSlots(sessionState)
 	if err != nil {
@@ -257,19 +256,127 @@ func (s *StateStore) ReadResumePacket(ctx context.Context, request cognitive.Res
 	}
 
 	now := time.Now().UTC()
+	stateVersion := stateVersionFromTime(row.UpdatedAt)
+	evidenceRefs := stateEvidenceRefsFromSlots(sessionState, request.SessionID, stateVersion)
 	return cognitive.ResumePacket{
+		PacketID:         resumePacketID(request, stateVersion),
+		Project:          request.Project,
+		Principal:        request.Principal,
+		SessionID:        request.SessionID,
+		StateVersion:     stateVersion,
 		Source:           cognitive.StatePacketSourceNative,
+		FallbackUsed:     false,
 		Freshness:        cognitive.StateFreshnessFresh,
 		Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, CheckedAt: now},
 		NextAction:       nextAction,
 		NextVerification: nextVerification,
 		GeneratedAt:      now,
-		Project:          request.Project,
-		SessionID:        request.SessionID,
+		EvidenceRefs:     evidenceRefs,
 		GoalID:           request.GoalID,
 		TaskID:           request.TaskID,
 		Scopes:           scopes,
 	}, nil
+}
+
+func sessionStateFromRow(row sessionStateRow) (cognitive.SessionStateSlots, error) {
+	focus, err := unmarshalJSONObject(row.Focus)
+	if err != nil {
+		return cognitive.SessionStateSlots{}, fmt.Errorf("focus: %w", err)
+	}
+	execution, err := unmarshalJSONObject(row.Execution)
+	if err != nil {
+		return cognitive.SessionStateSlots{}, fmt.Errorf("execution: %w", err)
+	}
+	horizons, err := unmarshalJSONObject(row.Horizons)
+	if err != nil {
+		return cognitive.SessionStateSlots{}, fmt.Errorf("horizons: %w", err)
+	}
+	return cognitive.SessionStateSlots{
+		Focus:     focus,
+		Execution: execution,
+		Horizons:  horizons,
+	}, nil
+}
+
+func resumePacketID(request cognitive.ResumePacketRequest, stateVersion string) string {
+	identity := struct {
+		Project      string `json:"project"`
+		Principal    string `json:"principal"`
+		SessionID    string `json:"session_id"`
+		GoalID       string `json:"goal_id"`
+		TaskID       string `json:"task_id"`
+		StateVersion string `json:"state_version"`
+	}{
+		Project:      strings.TrimSpace(request.Project),
+		Principal:    strings.TrimSpace(request.Principal),
+		SessionID:    strings.TrimSpace(request.SessionID),
+		GoalID:       strings.TrimSpace(request.GoalID),
+		TaskID:       strings.TrimSpace(request.TaskID),
+		StateVersion: strings.TrimSpace(stateVersion),
+	}
+	data, _ := json.Marshal(identity)
+	sum := sha256.Sum256(data)
+	return "resume:" + hex.EncodeToString(sum[:])
+}
+
+func stateVersionFromTime(value time.Time) string {
+	if value.IsZero() {
+		return "unknown"
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func stateEvidenceRefsFromSlots(state cognitive.SessionStateSlots, sessionID, stateVersion string) []string {
+	refs := make([]string, 0, 8)
+	seen := make(map[string]bool, 8)
+	appendRef := func(ref string) {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || seen[ref] {
+			return
+		}
+		seen[ref] = true
+		refs = append(refs, ref)
+	}
+	appendRef(fmt.Sprintf("agent_session_state:%s@%s", strings.TrimSpace(sessionID), strings.TrimSpace(stateVersion)))
+	for _, values := range []map[string]interface{}{state.Horizons, state.Execution, state.Focus} {
+		for _, ref := range parseStateStringSlice(values["evidence_refs"]) {
+			appendRef(ref)
+		}
+	}
+	return refs
+}
+
+func parseStateStringSlice(value interface{}) []string {
+	switch v := value.(type) {
+	case []string:
+		return cleanStateStrings(v)
+	case []interface{}:
+		items := make([]string, 0, len(v))
+		for _, item := range v {
+			ref, ok := item.(string)
+			if !ok {
+				continue
+			}
+			items = append(items, ref)
+		}
+		return cleanStateStrings(items)
+	case string:
+		return cleanStateStrings([]string{v})
+	default:
+		return []string{}
+	}
+}
+
+func cleanStateStrings(values []string) []string {
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		cleaned = append(cleaned, value)
+	}
+	return cleaned
 }
 
 func (s *StateStore) requireDB() error {

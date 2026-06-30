@@ -13,29 +13,39 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authpkg "github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 )
 
 type fakeCandidateReviewStore struct {
-	listRows       []*models.CrystallizationCandidate
-	getRows        map[int64]*models.CrystallizationCandidate
-	transitionRows map[int64]*models.CrystallizationCandidate
-	listErr        error
-	getErr         error
-	promoteErr     error
-	rejectErr      error
-	supersedeErr   error
-	promotedMemory *models.Memory
-	promoteInput   *models.Memory
-	rejectReason   string
-	listProject    string
-	listStatus     models.CandidateStatus
-	listLimit      int
-	listCalls      int
-	promoteID      int64
-	rejectID       int64
-	supersedeID    int64
+	listRows               []*models.CrystallizationCandidate
+	getRows                map[int64]*models.CrystallizationCandidate
+	transitionRows         map[int64]*models.CrystallizationCandidate
+	listErr                error
+	getErr                 error
+	promoteErr             error
+	rejectErr              error
+	supersedeErr           error
+	promotedMemory         *models.Memory
+	promoteSnapshot        *models.BulkOpSnapshot
+	promoteSnapshotStore   *gormdb.SnapshotStore
+	promoteActor           string
+	rejectSnapshot         *models.BulkOpSnapshot
+	rejectSnapshotStore    *gormdb.SnapshotStore
+	rejectActor            string
+	supersedeSnapshot      *models.BulkOpSnapshot
+	supersedeSnapshotStore *gormdb.SnapshotStore
+	supersedeActor         string
+	promoteInput           *models.Memory
+	rejectReason           string
+	listProject            string
+	listStatus             models.CandidateStatus
+	listLimit              int
+	listCalls              int
+	promoteID              int64
+	rejectID               int64
+	supersedeID            int64
 }
 
 func (f *fakeCandidateReviewStore) ListByStatus(ctx context.Context, project string, status models.CandidateStatus, limit int) ([]*models.CrystallizationCandidate, error) {
@@ -76,6 +86,17 @@ func (f *fakeCandidateReviewStore) PromoteWithMemory(ctx context.Context, candid
 	return updated, created, nil
 }
 
+func (f *fakeCandidateReviewStore) PromoteWithMemoryAndSnapshot(ctx context.Context, snapshotStore *gormdb.SnapshotStore, candidateID int64, mem *models.Memory, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.Memory, *models.BulkOpSnapshot, error) {
+	f.promoteSnapshotStore = snapshotStore
+	f.promoteSnapshot = snapshot
+	f.promoteActor = actor
+	updated, created, err := f.PromoteWithMemory(ctx, candidateID, mem)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return updated, created, snapshot, nil
+}
+
 func (f *fakeCandidateReviewStore) TransitionToRejected(ctx context.Context, id int64, reason string) (*models.CrystallizationCandidate, error) {
 	f.rejectID = id
 	f.rejectReason = reason
@@ -89,6 +110,17 @@ func (f *fakeCandidateReviewStore) TransitionToRejected(ctx context.Context, id 
 	return updated, nil
 }
 
+func (f *fakeCandidateReviewStore) TransitionToRejectedWithSnapshot(ctx context.Context, snapshotStore *gormdb.SnapshotStore, id int64, reason string, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error) {
+	f.rejectSnapshotStore = snapshotStore
+	f.rejectSnapshot = snapshot
+	f.rejectActor = actor
+	updated, err := f.TransitionToRejected(ctx, id, reason)
+	if err != nil {
+		return nil, nil, err
+	}
+	return updated, snapshot, nil
+}
+
 func (f *fakeCandidateReviewStore) TransitionToSuperseded(ctx context.Context, id int64) (*models.CrystallizationCandidate, error) {
 	f.supersedeID = id
 	if f.supersedeErr != nil {
@@ -99,6 +131,42 @@ func (f *fakeCandidateReviewStore) TransitionToSuperseded(ctx context.Context, i
 		updated = &models.CrystallizationCandidate{ID: id, Status: models.CandidateStatusSuperseded}
 	}
 	return updated, nil
+}
+
+func (f *fakeCandidateReviewStore) TransitionToSupersededWithSnapshot(ctx context.Context, snapshotStore *gormdb.SnapshotStore, id int64, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error) {
+	f.supersedeSnapshotStore = snapshotStore
+	f.supersedeSnapshot = snapshot
+	f.supersedeActor = actor
+	updated, err := f.TransitionToSuperseded(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	return updated, snapshot, nil
+}
+
+type fakeCandidateReviewSnapshotStore struct {
+	snapshots                []*models.BulkOpSnapshot
+	amendedSnapshotID        string
+	amendedPromotedMemoryIDs []int64
+	err                      error
+	amendErr                 error
+}
+
+func (f *fakeCandidateReviewSnapshotStore) Create(ctx context.Context, snap *models.BulkOpSnapshot) (*models.BulkOpSnapshot, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.snapshots = append(f.snapshots, snap)
+	return snap, nil
+}
+
+func (f *fakeCandidateReviewSnapshotStore) AmendPromoteEntries(ctx context.Context, snapshotID string, promotedMemoryIDs []int64) error {
+	if f.amendErr != nil {
+		return f.amendErr
+	}
+	f.amendedSnapshotID = snapshotID
+	f.amendedPromotedMemoryIDs = append([]int64(nil), promotedMemoryIDs...)
+	return nil
 }
 
 func candidateActionRequest(method, path string, body []byte) (*httptest.ResponseRecorder, *http.Request, *chi.Mux) {
@@ -259,6 +327,9 @@ func TestHandlePromoteMemoryCandidate_BuildsDecisionMemory(t *testing.T) {
 				ProposedContent:         "ship the operator queue",
 				ProposedTier:            "semantic",
 				AffectedProjects:        []string{"engram"},
+				SourceSessionID:         "sess-42",
+				EvidenceHandles:         []string{"session:sess-42"},
+				PrivacyScope:            "project",
 				ProposedPromotionTarget: "semantic",
 			},
 		},
@@ -267,7 +338,8 @@ func TestHandlePromoteMemoryCandidate_BuildsDecisionMemory(t *testing.T) {
 		},
 		promotedMemory: &models.Memory{ID: promotedMemoryID},
 	}
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	snapshotStore := gormdb.NewSnapshotStore(nil)
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/promote", nil)
 	router.Post("/api/memory/candidates/{id}/promote", service.handlePromoteMemoryCandidate)
 
@@ -282,6 +354,9 @@ func TestHandlePromoteMemoryCandidate_BuildsDecisionMemory(t *testing.T) {
 	assert.Equal(t, "decision", store.promoteInput.EpistemicType)
 	assert.Equal(t, "crystallization", store.promoteInput.SourceAgent)
 	assert.ElementsMatch(t, []string{"candidate:42", "crystallized"}, store.promoteInput.Tags)
+	require.NotNil(t, store.promoteSnapshot)
+	assert.True(t, store.promoteSnapshotStore == snapshotStore)
+	assert.Equal(t, models.SnapshotOpCandidateReviewAction, store.promoteSnapshot.OpType)
 
 	var receipt candidateActionReceipt
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &receipt))
@@ -289,6 +364,71 @@ func TestHandlePromoteMemoryCandidate_BuildsDecisionMemory(t *testing.T) {
 	assert.Equal(t, int64(42), receipt.CandidateID)
 	assert.Equal(t, "promoted", receipt.CandidateStatus)
 	assert.Equal(t, promotedMemoryID, receipt.MemoryID)
+	assert.Equal(t, "system", store.promoteActor)
+}
+
+func TestHandleRejectMemoryCandidate_UsesContextPrincipalForSnapshotActor(t *testing.T) {
+	store := &fakeCandidateReviewStore{
+		getRows: map[int64]*models.CrystallizationCandidate{
+			42: {
+				ID:               42,
+				Status:           models.CandidateStatusPending,
+				SourceSessionID:  "sess-42",
+				EvidenceHandles:  []string{"session:sess-42"},
+				PrivacyScope:     "project",
+				AffectedProjects: []string{"engram"},
+			},
+		},
+		transitionRows: map[int64]*models.CrystallizationCandidate{
+			42: {ID: 42, Status: models.CandidateStatusRejected, SourceSessionID: "sess-42"},
+		},
+	}
+	snapshotStore := gormdb.NewSnapshotStore(nil)
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
+	body := []byte(`{"reason":"not durable enough"}`)
+	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/reject", body)
+	req = req.WithContext(authpkg.WithIdentity(req.Context(), authpkg.ClientWithPrincipal("read-write", "key-1", "agent/codex", authpkg.PrincipalKindAgent)))
+	router.Post("/api/memory/candidates/{id}/reject", service.handleRejectMemoryCandidate)
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, int64(42), store.rejectID)
+	assert.Equal(t, "not durable enough", store.rejectReason)
+	require.NotNil(t, store.rejectSnapshot)
+	assert.True(t, store.rejectSnapshotStore == snapshotStore)
+	assert.Equal(t, "agent/codex", store.rejectSnapshot.Actor)
+	assert.Equal(t, "agent/codex", store.rejectActor)
+}
+
+func TestHandleSupersedeMemoryCandidate_UsesAtomicSnapshotTransition(t *testing.T) {
+	store := &fakeCandidateReviewStore{
+		getRows: map[int64]*models.CrystallizationCandidate{
+			42: {
+				ID:               42,
+				Status:           models.CandidateStatusPending,
+				SourceSessionID:  "sess-42",
+				EvidenceHandles:  []string{"session:sess-42"},
+				PrivacyScope:     "project",
+				AffectedProjects: []string{"engram"},
+			},
+		},
+		transitionRows: map[int64]*models.CrystallizationCandidate{
+			42: {ID: 42, Status: models.CandidateStatusSuperseded, SourceSessionID: "sess-42"},
+		},
+	}
+	snapshotStore := gormdb.NewSnapshotStore(nil)
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
+	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/supersede", nil)
+	router.Post("/api/memory/candidates/{id}/supersede", service.handleSupersedeMemoryCandidate)
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, int64(42), store.supersedeID)
+	require.NotNil(t, store.supersedeSnapshot)
+	assert.True(t, store.supersedeSnapshotStore == snapshotStore)
+	assert.Equal(t, "system", store.supersedeActor)
 }
 
 func TestHandlePromoteMemoryCandidate_RejectsUnscopedPromotion(t *testing.T) {
@@ -299,6 +439,9 @@ func TestHandlePromoteMemoryCandidate_RejectsUnscopedPromotion(t *testing.T) {
 				Status:          models.CandidateStatusPending,
 				ProposedContent: "unscoped candidate must not create a projectless memory",
 				ProposedTier:    "semantic",
+				SourceSessionID: "sess-42",
+				EvidenceHandles: []string{"session:sess-42"},
+				PrivacyScope:    "project",
 			},
 		},
 	}
@@ -313,9 +456,38 @@ func TestHandlePromoteMemoryCandidate_RejectsUnscopedPromotion(t *testing.T) {
 	assert.Equal(t, int64(0), store.promoteID)
 }
 
-func TestHandleRejectMemoryCandidate_RejectsInvalidTransitionAsConflict(t *testing.T) {
-	store := &fakeCandidateReviewStore{rejectErr: fmt.Errorf("%w: promoted -> rejected", gormdb.ErrInvalidTransition)}
+func TestHandlePromoteMemoryCandidate_RejectsMissingPrivacyScopeBeforeMutation(t *testing.T) {
+	store := &fakeCandidateReviewStore{
+		getRows: map[int64]*models.CrystallizationCandidate{
+			42: {
+				ID:               42,
+				Status:           models.CandidateStatusPending,
+				ProposedContent:  "privacy scope must be validated before mutation",
+				ProposedTier:     "semantic",
+				AffectedProjects: []string{"engram"},
+			},
+		},
+	}
 	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/promote", nil)
+	router.Post("/api/memory/candidates/{id}/promote", service.handlePromoteMemoryCandidate)
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "privacy_scope")
+	assert.Equal(t, int64(0), store.promoteID)
+}
+
+func TestHandleRejectMemoryCandidate_RejectsInvalidTransitionAsConflict(t *testing.T) {
+	store := &fakeCandidateReviewStore{
+		getRows: map[int64]*models.CrystallizationCandidate{
+			42: {ID: 42, Status: models.CandidateStatusPending, PrivacyScope: "project"},
+		},
+		rejectErr: fmt.Errorf("%w: promoted -> rejected", gormdb.ErrInvalidTransition),
+	}
+	snapshotStore := gormdb.NewSnapshotStore(nil)
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
 	body := []byte(`{"reason":"not durable enough"}`)
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/reject", body)
 	router.Post("/api/memory/candidates/{id}/reject", service.handleRejectMemoryCandidate)
@@ -328,8 +500,14 @@ func TestHandleRejectMemoryCandidate_RejectsInvalidTransitionAsConflict(t *testi
 }
 
 func TestHandleRejectMemoryCandidate_ContextCanceledAsClientClosed(t *testing.T) {
-	store := &fakeCandidateReviewStore{rejectErr: context.Canceled}
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	store := &fakeCandidateReviewStore{
+		getRows: map[int64]*models.CrystallizationCandidate{
+			42: {ID: 42, Status: models.CandidateStatusPending, PrivacyScope: "project"},
+		},
+		rejectErr: context.Canceled,
+	}
+	snapshotStore := gormdb.NewSnapshotStore(nil)
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/reject", nil)
 	router.Post("/api/memory/candidates/{id}/reject", service.handleRejectMemoryCandidate)
 
@@ -340,8 +518,14 @@ func TestHandleRejectMemoryCandidate_ContextCanceledAsClientClosed(t *testing.T)
 }
 
 func TestHandleRejectMemoryCandidate_DeadlineExceededAsGatewayTimeout(t *testing.T) {
-	store := &fakeCandidateReviewStore{rejectErr: context.DeadlineExceeded}
-	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store}
+	store := &fakeCandidateReviewStore{
+		getRows: map[int64]*models.CrystallizationCandidate{
+			42: {ID: 42, Status: models.CandidateStatusPending, PrivacyScope: "project"},
+		},
+		rejectErr: context.DeadlineExceeded,
+	}
+	snapshotStore := gormdb.NewSnapshotStore(nil)
+	service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
 	w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/candidates/42/reject", nil)
 	router.Post("/api/memory/candidates/{id}/reject", service.handleRejectMemoryCandidate)
 

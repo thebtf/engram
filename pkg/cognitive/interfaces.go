@@ -80,7 +80,9 @@ type StatePlane interface {
 	ReadProjectState(ctx context.Context, project string) (ProjectStateRecord, error)
 
 	// ReadResumePacket returns the bounded resume payload for request. The
-	// implementation owns native-first and explicit-fallback semantics.
+	// packet must expose deterministic identity, principal/session scope,
+	// state version/freshness, drift/conflict, next action, next verification,
+	// fallback authority, and evidence references without filesystem archaeology.
 	ReadResumePacket(ctx context.Context, request ResumePacketRequest) (ResumePacket, error)
 }
 
@@ -89,7 +91,10 @@ type StatePlane interface {
 // callers receive bounded historical lessons with applicability and
 // anti-applicability evidence before reuse.
 type ExperienceProvider interface {
-	// QueryExperience returns bounded historical/causal lessons for request.
+	// QueryExperience returns bounded historical/causal lessons for request,
+	// including situation, time span, decision/action, outcome,
+	// revision/reversal, applicability, anti-applicability, provenance, and
+	// storage origin before reuse.
 	QueryExperience(ctx context.Context, request ExperienceQueryRequest) ([]ExperienceResponse, error)
 }
 

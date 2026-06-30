@@ -177,6 +177,10 @@ func NewSnapshotStore(db *gorm.DB) *SnapshotStore {
 // The full before_state JSONB row snapshot is stored per ADR-F-003.
 // Returns the stored snapshot with its DB-assigned ID and CreatedAt.
 func (s *SnapshotStore) Create(ctx context.Context, snap *models.BulkOpSnapshot) (*models.BulkOpSnapshot, error) {
+	return s.createTx(ctx, s.db, snap)
+}
+
+func (s *SnapshotStore) createTx(ctx context.Context, tx *gorm.DB, snap *models.BulkOpSnapshot) (*models.BulkOpSnapshot, error) {
 	if snap == nil {
 		return nil, fmt.Errorf("snapshot_store create: snapshot must not be nil")
 	}
@@ -184,7 +188,7 @@ func (s *SnapshotStore) Create(ctx context.Context, snap *models.BulkOpSnapshot)
 		return nil, fmt.Errorf("snapshot_store create: snapshot_id is required")
 	}
 	row := fromDomainSnapshot(snap)
-	result := s.db.WithContext(ctx).Create(row)
+	result := tx.WithContext(ctx).Create(row)
 	if result.Error != nil {
 		return nil, fmt.Errorf("snapshot_store create: %w", result.Error)
 	}
@@ -270,76 +274,89 @@ func (s *SnapshotStore) Pin(ctx context.Context, snapshotID string) error {
 }
 
 // AmendPromoteEntries adds EntryKindDelete typed entries for memory IDs that were
-// CREATED by a bulk_promote op. These entries tell rollback to hard-delete those rows
+// CREATED by a promotion. These entries tell rollback to hard-delete those rows
 // (they have no pre-op state to restore). The method reads the existing before_state,
 // merges the new delete entries, and writes back atomically.
 //
-// This must be called after TransitionToPromoted returns the promoted memory IDs so
-// the snapshot records the full picture needed for correct rollback.
+// Promotion callers should run this in the same transaction that creates the
+// snapshot and promoted memory so an amend error cannot commit a partial rollback snapshot.
 func (s *SnapshotStore) AmendPromoteEntries(ctx context.Context, snapshotID string, promotedMemoryIDs []int64) error {
 	if len(promotedMemoryIDs) == 0 {
 		return nil
 	}
 
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Lock the row for update to prevent concurrent amend races.
-		var row snapshotRow
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("snapshot_id = ?", snapshotID).
-			First(&row).Error; err != nil {
-			return fmt.Errorf("amend_promote_entries: get snapshot %q: %w", snapshotID, err)
-		}
-
-		// Decode existing before_state.
-		existing := make(map[string]json.RawMessage)
-		if len(row.BeforeState) > 0 && string(row.BeforeState) != "{}" {
-			if err := json.Unmarshal([]byte(row.BeforeState), &existing); err != nil {
-				return fmt.Errorf("amend_promote_entries: decode before_state: %w", err)
-			}
-		}
-
-		// Add delete entries for each promoted memory ID.
-		deleteEntry, _ := json.Marshal(map[string]string{"kind": "delete"})
-		for _, memID := range promotedMemoryIDs {
-			key := fmt.Sprintf("%d", memID)
-			existing[key] = json.RawMessage(deleteEntry)
-		}
-
-		// Merge promoted memory IDs into AffectedMemoryIDs as a set (no duplicates).
-		seen := make(map[int64]struct{}, len(row.AffectedMemoryIDs)+len(promotedMemoryIDs))
-		allMemoryIDs := make(Int64Array, 0, len(row.AffectedMemoryIDs)+len(promotedMemoryIDs))
-		for _, id := range row.AffectedMemoryIDs {
-			if _, ok := seen[id]; ok {
-				continue
-			}
-			seen[id] = struct{}{}
-			allMemoryIDs = append(allMemoryIDs, id)
-		}
-		for _, id := range promotedMemoryIDs {
-			if _, ok := seen[id]; ok {
-				continue
-			}
-			seen[id] = struct{}{}
-			allMemoryIDs = append(allMemoryIDs, id)
-		}
-
-		// Serialize and write back within the same transaction.
-		amended, err := json.Marshal(existing)
-		if err != nil {
-			return fmt.Errorf("amend_promote_entries: serialize: %w", err)
-		}
-
-		res := tx.Model(&snapshotRow{}).
-			Where("snapshot_id = ?", snapshotID).
-			Updates(map[string]any{
-				"before_state":        JSONRaw(amended),
-				"affected_memory_ids": allMemoryIDs,
-			})
-		if res.Error != nil {
-			return fmt.Errorf("amend_promote_entries: update snapshot %q: %w", snapshotID, res.Error)
-		}
-		return nil
+		return s.amendPromoteEntriesTx(ctx, tx, snapshotID, promotedMemoryIDs)
 	})
+}
+
+func (s *SnapshotStore) amendPromoteEntriesTx(ctx context.Context, tx *gorm.DB, snapshotID string, promotedMemoryIDs []int64) error {
+	if len(promotedMemoryIDs) == 0 {
+		return nil
+	}
+
+	// Lock the row for update to prevent concurrent amend races.
+	var row snapshotRow
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("snapshot_id = ?", snapshotID).
+		First(&row).Error; err != nil {
+		return fmt.Errorf("amend_promote_entries: get snapshot %q: %w", snapshotID, err)
+	}
+
+	// Decode existing before_state.
+	existing := make(map[string]json.RawMessage)
+	if len(row.BeforeState) > 0 && string(row.BeforeState) != "{}" {
+		if err := json.Unmarshal([]byte(row.BeforeState), &existing); err != nil {
+			return fmt.Errorf("amend_promote_entries: decode before_state: %w", err)
+		}
+	}
+
+	// Add delete entries for each promoted memory ID. candidate_review_action
+	// snapshots use entity-prefixed keys so a memory ID cannot overwrite the
+	// candidate restore entry when the two tables happen to allocate the same ID.
+	deleteEntry, _ := json.Marshal(models.SnapshotEntry{Kind: models.EntryKindDelete})
+	for _, memID := range promotedMemoryIDs {
+		key := fmt.Sprintf("%d", memID)
+		if row.OpType == string(models.SnapshotOpCandidateReviewAction) {
+			key = fmt.Sprintf("memory:%d", memID)
+		}
+		existing[key] = json.RawMessage(deleteEntry)
+	}
+
+	// Merge promoted memory IDs into AffectedMemoryIDs as a set (no duplicates).
+	seen := make(map[int64]struct{}, len(row.AffectedMemoryIDs)+len(promotedMemoryIDs))
+	allMemoryIDs := make(Int64Array, 0, len(row.AffectedMemoryIDs)+len(promotedMemoryIDs))
+	for _, id := range row.AffectedMemoryIDs {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		allMemoryIDs = append(allMemoryIDs, id)
+	}
+	for _, id := range promotedMemoryIDs {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		allMemoryIDs = append(allMemoryIDs, id)
+	}
+
+	// Serialize and write back within the same transaction.
+	amended, err := json.Marshal(existing)
+	if err != nil {
+		return fmt.Errorf("amend_promote_entries: serialize: %w", err)
+	}
+
+	res := tx.WithContext(ctx).Model(&snapshotRow{}).
+		Where("snapshot_id = ?", snapshotID).
+		Updates(map[string]any{
+			"before_state":        JSONRaw(amended),
+			"affected_memory_ids": allMemoryIDs,
+		})
+	if res.Error != nil {
+		return fmt.Errorf("amend_promote_entries: update snapshot %q: %w", snapshotID, res.Error)
+	}
+	return nil
 }
 
 // DeleteOlderThan deletes non-pinned snapshots older than the cutoff time.

@@ -42,6 +42,13 @@ func (s *AuditStore) Log(ctx context.Context, entry AuditLogEntry) error {
 	return nil
 }
 
+func (s *AuditStore) logTx(ctx context.Context, tx *gorm.DB, entry AuditLogEntry) error {
+	if err := tx.WithContext(ctx).Create(&entry).Error; err != nil {
+		return fmt.Errorf("audit log: %w", err)
+	}
+	return nil
+}
+
 // GetByMemory returns audit entries for a memory, newest first.
 func (s *AuditStore) GetByMemory(ctx context.Context, memoryID int64, limit int) ([]AuditLogEntry, error) {
 	if limit <= 0 {

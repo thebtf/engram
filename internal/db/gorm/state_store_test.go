@@ -156,6 +156,7 @@ func TestStateStore_ResumePacketNativeRoundTrip(t *testing.T) {
 				"description": "run full suite",
 				"command":     "go test ./...",
 			},
+			"evidence_refs": []interface{}{"state:evidence:resume", "audit:write_session_state"},
 		},
 	}))
 	require.NoError(t, store.WriteProjectState(ctx, project, cognitive.ProjectStateRecord{
@@ -166,10 +167,25 @@ func TestStateStore_ResumePacketNativeRoundTrip(t *testing.T) {
 
 	packet, err := store.ReadResumePacket(ctx, cognitive.ResumePacketRequest{
 		Project:   project,
+		Principal: "agent:developer",
 		SessionID: sessionID,
 	})
 	require.NoError(t, err)
+	require.NotEmpty(t, packet.PacketID)
+	require.Len(t, packet.PacketID, len("resume:")+64)
+	require.NotEqual(t,
+		resumePacketID(cognitive.ResumePacketRequest{Project: "a", Principal: "b:c", SessionID: "d"}, "e"),
+		resumePacketID(cognitive.ResumePacketRequest{Project: "a:b", Principal: "c", SessionID: "d"}, "e"),
+	)
+	require.NotEmpty(t, packet.StateVersion)
+	require.Equal(t, project, packet.Project)
+	require.Equal(t, "agent:developer", packet.Principal)
+	require.Equal(t, sessionID, packet.SessionID)
+	require.Equal(t, fmt.Sprintf("agent_session_state:%s@%s", sessionID, packet.StateVersion), packet.EvidenceRefs[0])
+	require.Contains(t, packet.EvidenceRefs, "state:evidence:resume")
+	require.Contains(t, packet.EvidenceRefs, "audit:write_session_state")
 	require.Equal(t, cognitive.StatePacketSourceNative, packet.Source)
+	require.False(t, packet.FallbackUsed)
 	require.Equal(t, cognitive.StateFreshnessFresh, packet.Freshness)
 	require.Equal(t, cognitive.StateDriftNone, packet.Drift.Kind)
 	require.Equal(t, cognitive.StateActionCommand, packet.NextAction.Kind)
@@ -179,6 +195,30 @@ func TestStateStore_ResumePacketNativeRoundTrip(t *testing.T) {
 	require.Equal(t, "run full suite", packet.NextVerification.Description)
 	require.Equal(t, "go test ./...", packet.NextVerification.Command)
 	require.NotContains(t, string(packet.Source), "filesystem")
+}
+
+func TestResumePacketIDIncludesGoalAndTaskBindings(t *testing.T) {
+	stateVersion := "2026-06-28T12:00:00Z"
+	base := cognitive.ResumePacketRequest{
+		Project:   "engram",
+		Principal: "agent:developer",
+		SessionID: "session-1",
+		GoalID:    "goal-a",
+		TaskID:    "task-a",
+	}
+
+	differentGoal := base
+	differentGoal.GoalID = "goal-b"
+	differentTask := base
+	differentTask.TaskID = "task-b"
+	spaced := base
+	spaced.GoalID = " goal-a "
+	spaced.TaskID = " task-a "
+
+	baseID := resumePacketID(base, stateVersion)
+	require.NotEqual(t, baseID, resumePacketID(differentGoal, stateVersion))
+	require.NotEqual(t, baseID, resumePacketID(differentTask, stateVersion))
+	require.Equal(t, baseID, resumePacketID(spaced, stateVersion))
 }
 
 func TestStateStore_ResumePacketDoesNotRequireProjectState(t *testing.T) {
@@ -207,6 +247,7 @@ func TestStateStore_ResumePacketDoesNotRequireProjectState(t *testing.T) {
 	packet, err := store.ReadResumePacket(ctx, cognitive.ResumePacketRequest{
 		Project:   project,
 		SessionID: sessionID,
+		Principal: "agent:developer",
 	})
 
 	require.NoError(t, err)
@@ -214,6 +255,70 @@ func TestStateStore_ResumePacketDoesNotRequireProjectState(t *testing.T) {
 	require.Equal(t, project, packet.Project)
 	require.Equal(t, sessionID, packet.SessionID)
 	require.Contains(t, packet.Scopes, cognitive.StateScopeSession)
+	require.Equal(t, "agent:developer", packet.Principal)
+	require.Equal(t, []string{fmt.Sprintf("agent_session_state:%s@%s", sessionID, packet.StateVersion)}, packet.EvidenceRefs)
+	require.False(t, packet.FallbackUsed)
 	require.NotContains(t, packet.Scopes, cognitive.StateScopeProject)
 	require.Equal(t, "continue from session-only state", packet.NextAction.Description)
+}
+
+func TestStateStore_ResumePacketRejectsMissingPrincipalBeforeDB(t *testing.T) {
+	store := &StateStore{}
+
+	_, err := store.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:   "state-resume-project",
+		SessionID: "session-1",
+	})
+
+	require.ErrorContains(t, err, "principal is required")
+}
+
+func TestStateStore_ResumePacketRejectsMissingPrincipal(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	store := NewStateStore(db, auditStore)
+	ctx := context.Background()
+
+	sessionID := fmt.Sprintf("state-resume-missing-principal-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM agent_session_state WHERE session_id = ?`, sessionID).Error
+		_ = db.Exec(`DELETE FROM audit_log WHERE source_session_id = ?`, sessionID).Error
+	})
+
+	require.NoError(t, store.WriteSessionState(ctx, sessionID, cognitive.SessionStateSlots{
+		Execution: map[string]interface{}{
+			"next_action": "continue from session state",
+		},
+		Horizons: map[string]interface{}{
+			"next_verification": "run focused state tests",
+		},
+	}))
+
+	_, err := store.ReadResumePacket(ctx, cognitive.ResumePacketRequest{
+		Project:   "state-resume-project",
+		SessionID: sessionID,
+	})
+
+	require.ErrorContains(t, err, "principal is required")
+}
+
+func TestStateEvidenceRefsFromSlotsIncludesNativeAndSlotRefs(t *testing.T) {
+	refs := stateEvidenceRefsFromSlots(cognitive.SessionStateSlots{
+		Focus: map[string]interface{}{
+			"evidence_refs": []string{"slot:focus"},
+		},
+		Execution: map[string]interface{}{
+			"evidence_refs": "slot:execution",
+		},
+		Horizons: map[string]interface{}{
+			"evidence_refs": []interface{}{"slot:horizon", 42, true, map[string]interface{}{"bad": "ref"}, "slot:horizon"},
+		},
+	}, "session-1", "v2")
+
+	require.Equal(t, []string{
+		"agent_session_state:session-1@v2",
+		"slot:horizon",
+		"slot:execution",
+		"slot:focus",
+	}, refs)
 }

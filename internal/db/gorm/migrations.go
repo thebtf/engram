@@ -4173,7 +4173,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 						id                  BIGSERIAL PRIMARY KEY,
 						snapshot_id         TEXT NOT NULL UNIQUE,
 						op_type             TEXT NOT NULL
-							CHECK (op_type IN ('ingest_doc','bulk_promote','bulk_delete','bulk_supersede')),
+							CHECK (op_type IN ('ingest_doc','bulk_promote','bulk_delete','bulk_supersede','candidate_review_action')),
 						actor               TEXT NOT NULL,
 						source_session_id   TEXT NOT NULL DEFAULT '',
 						parameters          JSONB NOT NULL DEFAULT '{}',
@@ -4781,10 +4781,57 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 		},
+		candidateReviewSnapshotOpTypeMigration153(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
 	}
 
 	return nil
+}
+
+func candidateReviewSnapshotOpTypeMigration153() *gormigrate.Migration {
+	return &gormigrate.Migration{
+		ID: "153_candidate_review_snapshot_op_type",
+		Migrate: func(tx *gorm.DB) error {
+			stmts := []string{
+				`ALTER TABLE bulk_op_snapshots DROP CONSTRAINT IF EXISTS bulk_op_snapshots_op_type_check`,
+				`ALTER TABLE bulk_op_snapshots
+					ADD CONSTRAINT bulk_op_snapshots_op_type_check
+					CHECK (op_type IN ('ingest_doc','bulk_promote','bulk_delete','bulk_supersede','candidate_review_action'))`,
+			}
+			for _, stmt := range stmts {
+				if err := tx.Exec(stmt).Error; err != nil {
+					return fmt.Errorf("migration 153: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Transaction(func(rollbackTx *gorm.DB) error {
+				var candidateReviewRows int64
+				if err := rollbackTx.Table("bulk_op_snapshots").
+					Where("op_type = ?", "candidate_review_action").
+					Count(&candidateReviewRows).Error; err != nil {
+					return fmt.Errorf("migration 153 rollback preflight: %w", err)
+				}
+				if candidateReviewRows > 0 {
+					return fmt.Errorf("migration 153 rollback blocked: %d candidate_review_action snapshot rows exist", candidateReviewRows)
+				}
+
+				stmts := []string{
+					`ALTER TABLE bulk_op_snapshots DROP CONSTRAINT IF EXISTS bulk_op_snapshots_op_type_check`,
+					`ALTER TABLE bulk_op_snapshots
+						ADD CONSTRAINT bulk_op_snapshots_op_type_check
+						CHECK (op_type IN ('ingest_doc','bulk_promote','bulk_delete','bulk_supersede'))`,
+				}
+				for _, stmt := range stmts {
+					if err := rollbackTx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 153 rollback: %w", err)
+					}
+				}
+				return nil
+			})
+		},
+	}
 }

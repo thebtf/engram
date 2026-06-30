@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 // nonNilCandidateStore returns a zero-value *gormdb.CandidateStore so that the
@@ -18,6 +19,21 @@ import (
 // return an error before any store method is invoked, so zero-value is safe here.
 func nonNilCandidateStore() *gormdb.CandidateStore {
 	return &gormdb.CandidateStore{}
+}
+
+func TestRequireCandidateReviewSnapshotRejectsNil(t *testing.T) {
+	for _, operation := range []string{"reject_candidate", "supersede_candidate"} {
+		t.Run(operation, func(t *testing.T) {
+			err := requireCandidateReviewSnapshot(operation, nil)
+			require.Error(t, err, "nil snapshot must fail before snapshot-based transition")
+			require.Contains(t, err.Error(), operation)
+			require.Contains(t, err.Error(), "candidate review snapshot is required")
+		})
+	}
+}
+
+func TestRequireCandidateReviewSnapshotAllowsNonNil(t *testing.T) {
+	require.NoError(t, requireCandidateReviewSnapshot("reject_candidate", &models.BulkOpSnapshot{}))
 }
 
 // TestHandleListCandidates_EmptyProjectReturnsError verifies MAJOR finding 3:

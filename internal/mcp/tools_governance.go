@@ -35,8 +35,8 @@ func governanceTools() []Tool {
 				"properties": map[string]any{
 					"op_type": map[string]any{
 						"type":        "string",
-						"description": "Filter by op_type (ingest_doc, bulk_promote, bulk_delete, bulk_supersede). Omit for all.",
-						"enum":        []string{"ingest_doc", "bulk_promote", "bulk_delete", "bulk_supersede"},
+						"description": "Filter by op_type (ingest_doc, bulk_promote, bulk_delete, bulk_supersede, candidate_review_action). Omit for all.",
+						"enum":        []string{"ingest_doc", "bulk_promote", "bulk_delete", "bulk_supersede", "candidate_review_action"},
 					},
 					"actor": map[string]any{
 						"type":        "string",

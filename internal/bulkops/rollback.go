@@ -17,8 +17,8 @@ import (
 	"strconv"
 	"time"
 
-	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/auth"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 	gormpkg "gorm.io/gorm"
 )
@@ -85,7 +85,7 @@ func Rollback(
 	actor := resolveActor(identity)
 
 	// Decode before_state. Supports two formats:
-	//  - Typed entries: map[id]{"kind":"restore"|"delete","before":<raw>} (bulk_promote fix)
+	//  - Typed entries: map[id-or-entity-key]{"kind":"restore"|"delete","before":<raw>}
 	//  - Legacy flat format: map[id]<memory JSON> (bulk_delete, bulk_supersede)
 	// decodeTypedBeforeState transparently handles both.
 	typedEntries, err := decodeTypedBeforeState(snap.BeforeState)
@@ -93,16 +93,15 @@ func Rollback(
 		return nil, fmt.Errorf("rollback: decode before_state: %w", err)
 	}
 
-	// Conflict check (EC-F3): for every affected memory ID, verify updated_at <= snapshot.created_at.
-	// AffectedMemoryIDs contains actual memory IDs (post-amend for bulk_promote), but IDs with
-	// EntryKindDelete were CREATED by the op (not pre-existing) and are expected to have
-	// updated_at > snapshot.created_at — exclude them from the conflict check. Only pre-existing
-	// rows (EntryKindRestore / legacy flat) need the timestamp guard.
+	// Conflict check (EC-F3): pre-existing rows conflict when updated after the snapshot.
+	// EntryKindDelete rows were created by the operation, so they use a different guard:
+	// rollback may hard-delete them only while updated_at still equals created_at.
 	var idsToCheck []int64
+	var createdIDsToCheck []int64
 	for _, id := range snap.AffectedMemoryIDs {
-		key := fmt.Sprintf("%d", id)
-		if entry, ok := typedEntries[key]; ok && entry.Kind == models.EntryKindDelete {
-			continue // op-created row; rollback will hard-delete it — no conflict possible
+		if entry, ok := snapshotEntryForMemoryID(typedEntries, id); ok && entry.Kind == models.EntryKindDelete {
+			createdIDsToCheck = append(createdIDsToCheck, id)
+			continue
 		}
 		idsToCheck = append(idsToCheck, id)
 	}
@@ -110,6 +109,11 @@ func Rollback(
 	if err != nil {
 		return nil, fmt.Errorf("rollback: conflict detection: %w", err)
 	}
+	createdConflictIDs, err := detectCreatedRowConflicts(ctx, memoryStore, createdIDsToCheck)
+	if err != nil {
+		return nil, fmt.Errorf("rollback: created-row conflict detection: %w", err)
+	}
+	conflictIDs = append(conflictIDs, createdConflictIDs...)
 	if len(conflictIDs) > 0 {
 		// Write conflict audit entry and return error — no restore occurs.
 		if auditStore != nil {
@@ -136,7 +140,7 @@ func Rollback(
 		var restored int
 
 		for key, entry := range typedEntries {
-			id, parseErr := strconv.ParseInt(key, 10, 64)
+			entity, id, parseErr := parseSnapshotEntryKey(key)
 			if parseErr != nil {
 				return fmt.Errorf("rollback: parse entry key %q: %w", key, parseErr)
 			}
@@ -154,12 +158,12 @@ func Rollback(
 					// Empty before-state: row didn't exist pre-op; skip (same as legacy skip).
 					continue
 				}
-				if snap.OpType == models.SnapshotOpBulkPromote {
-					// bulk_promote stores candidate JSON in restore entries.
+				if entity == snapshotEntryEntityCandidate || (entity == "" && (snap.OpType == models.SnapshotOpBulkPromote || snap.OpType == models.SnapshotOpCandidateReviewAction)) {
+					// bulk_promote and candidate_review_action store candidate JSON in restore entries.
 					// Rollback must revert the candidate row to its pre-op state (e.g., pending),
 					// NOT write candidate data into the memories table.
 					if candidateStore == nil {
-						return fmt.Errorf("rollback: candidateStore required to roll back bulk_promote candidate %d", id)
+						return fmt.Errorf("rollback: candidateStore required to roll back candidate %d", id)
 					}
 					var c models.CrystallizationCandidate
 					if unmarshalErr := json.Unmarshal(entry.Before, &c); unmarshalErr != nil {
@@ -223,6 +227,34 @@ func Rollback(
 	return result, nil
 }
 
+const (
+	snapshotEntryEntityCandidate = "candidate"
+	snapshotEntryEntityMemory    = "memory"
+)
+
+func parseSnapshotEntryKey(key string) (string, int64, error) {
+	const candidatePrefix = "candidate:"
+	const memoryPrefix = "memory:"
+	if len(key) > len(candidatePrefix) && key[:len(candidatePrefix)] == candidatePrefix {
+		id, err := strconv.ParseInt(key[len(candidatePrefix):], 10, 64)
+		return snapshotEntryEntityCandidate, id, err
+	}
+	if len(key) > len(memoryPrefix) && key[:len(memoryPrefix)] == memoryPrefix {
+		id, err := strconv.ParseInt(key[len(memoryPrefix):], 10, 64)
+		return snapshotEntryEntityMemory, id, err
+	}
+	id, err := strconv.ParseInt(key, 10, 64)
+	return "", id, err
+}
+
+func snapshotEntryForMemoryID(entries map[string]models.SnapshotEntry, id int64) (models.SnapshotEntry, bool) {
+	if entry, ok := entries[fmt.Sprintf("memory:%d", id)]; ok {
+		return entry, true
+	}
+	entry, ok := entries[fmt.Sprintf("%d", id)]
+	return entry, ok
+}
+
 // detectConflicts returns the IDs of memories modified after snapshotTime.
 // A memory's updated_at > snapshotTime indicates a post-snapshot modification (EC-F3).
 func detectConflicts(ctx context.Context, memoryStore *gormdb.MemoryStore, ids []int64, snapshotTime time.Time) ([]int64, error) {
@@ -246,10 +278,39 @@ func detectConflicts(ctx context.Context, memoryStore *gormdb.MemoryStore, ids [
 	return conflicts, nil
 }
 
+// detectCreatedRowConflicts returns op-created memory IDs that were modified after creation.
+// EntryKindDelete rollback hard-deletes rows that did not exist before the operation, so
+// snapshot.created_at is not a valid conflict boundary for them. Instead, the safe-delete
+// invariant is created_at == updated_at; any later update means rollback must refuse to
+// destroy user-visible edits.
+func detectCreatedRowConflicts(ctx context.Context, memoryStore *gormdb.MemoryStore, ids []int64) ([]int64, error) {
+	if memoryStore == nil || len(ids) == 0 {
+		return nil, nil
+	}
+	var conflicts []int64
+	for _, id := range ids {
+		var mem gormdb.Memory
+		err := memoryStore.GetDB().WithContext(ctx).
+			Unscoped().
+			Where("id = ?", id).
+			First(&mem).Error
+		if err != nil {
+			if errors.Is(err, gormpkg.ErrRecordNotFound) {
+				// Already hard-deleted rows have nothing left for rollback to destroy.
+				continue
+			}
+			return nil, fmt.Errorf("detectCreatedRowConflicts: get memory %d: %w", id, err)
+		}
+		if mem.UpdatedAt.After(mem.CreatedAt) {
+			conflicts = append(conflicts, id)
+		}
+	}
+	return conflicts, nil
+}
+
 // decodeTypedBeforeState parses the JSONB before_state into typed SnapshotEntry values.
 //
-// Supports two wire formats transparently:
-//  1. Typed: map[id]{"kind":"restore"|"delete","before":<raw>} — written by bulk_promote fix.
+//  1. Typed: map[id-or-entity-key]{"kind":"restore"|"delete","before":<raw>}.
 //  2. Legacy flat: map[id]<memory JSON object> — written by bulk_delete/bulk_supersede.
 //
 // The distinguishing heuristic: if the top-level value has a "kind" field that equals

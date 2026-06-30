@@ -20,7 +20,7 @@
 
 - [x] CHK007 - Is “deterministic resume packet” clarified with concrete required fields rather than vague resumability language? [Clarity, Spec §FR-2] — PASS: freshness marker, drift/conflict flags, next action, next verification are named.
 - [x] CHK008 - Is “exception surface” clarified well enough to distinguish it from raw moderation dumps? [Clarity, Spec §FR-4 §US2 §US6] — PASS: bounded queues/packets, risky escalation, and no row-centric default are explicit.
-- [ ] CHK009 - Is “first-class experience retrieval contract” clarified enough to separate mandatory behavior from optional storage shape? [Clarity, Ambiguity, Spec §FR-8] — OPEN: contract is clear, but the line between required retrieval behavior and acceptable V1 storage shortcuts still invites multiple readings.
+- [x] CHK009 - Is “first-class experience retrieval contract” clarified enough to separate mandatory behavior from optional storage shape? [Clarity, Ambiguity, Spec §FR-8 §FR-16, Contract §Experience Contract V1] — PASS: CR-005 contract hardening defines required experience fields, explicit `storage_origin`, and projection/materialization-first storage rule with dedicated tables evidence-gated.
 - [x] CHK010 - Is “designer-owned contract” clarified with specific required artifacts rather than just a role name? [Clarity, Spec §FR-11 §FR-12 §FR-13] — PASS: contract, wiring map, and branch scenarios are all spelled out.
 
 ## Requirement Consistency
@@ -64,5 +64,5 @@
 ## Ambiguities & Conflicts
 
 - [x] CHK031 - Is the distinction between state, memory, and experience explicit enough to avoid collapse into one generic store? [Ambiguities, Spec §Overview §FR-1 §FR-8] — PASS: conceptual separation is explicit.
-- [ ] CHK032 - Is the boundary between review loop and forgetting/consolidation clear enough to prevent duplicate tasking later? [Ambiguities, Spec §FR-4 §FR-9 §FR-10] — OPEN: review-loop and forgetting taxonomy are distinct, but handoff boundary between “queue decision” and “mutation implementation” could still split two ways.
+- [x] CHK032 - Is the boundary between review loop and forgetting/consolidation clear enough to prevent duplicate tasking later? [Ambiguities, Spec §FR-4 §FR-9 §FR-10 §FR-18, Contract §Review Packet / Mutation Boundary] — PASS: CR-005 separates review packets as preview/decision surfaces from mutation paths that apply/audit suppress/expire/archive/consolidate/destroy operations.
 - [x] CHK033 - Is the naming/numbering stable enough for downstream task generation? [Ambiguities, Spec §US1-§US7 §Edge Cases] — PASS: duplicate `US6` is removed and `## Edge Cases` heading is restored.

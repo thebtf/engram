@@ -34,6 +34,12 @@ func TestFromCandidate_PendingPacketCarriesDecisionEvidenceSnapshotAndAudit(t *t
 	require.Equal(t, "pre_action_required", packet.Snapshot.Status)
 	require.Equal(t, AuditStore, packet.Audit.Store)
 	require.Equal(t, "pending_on_action", packet.Audit.Status)
+	require.True(t, packet.ReadOnly)
+	require.True(t, packet.MutationRequirements.StructuralLossCheckRequired)
+	require.True(t, packet.MutationRequirements.PrivacyScopeRequired)
+	require.True(t, packet.MutationRequirements.AuditWriteRequired)
+	require.True(t, packet.MutationRequirements.SnapshotRequired)
+	require.NoError(t, ValidateMutationBoundary(packet))
 }
 
 func TestFromCandidate_TerminalPacketHasNoPendingActions(t *testing.T) {
@@ -46,4 +52,60 @@ func TestFromCandidate_TerminalPacketHasNoPendingActions(t *testing.T) {
 	require.False(t, packet.Snapshot.Required)
 	require.Equal(t, "not_required", packet.Snapshot.Status)
 	require.Equal(t, "terminal_record", packet.Audit.Status)
+}
+
+func TestValidateCandidateMutation_BlocksMissingPrivacyScope(t *testing.T) {
+	packet := FromCandidate(&models.CrystallizationCandidate{
+		ID:              42,
+		Status:          models.CandidateStatusPending,
+		EvidenceHandles: []string{"session:sess-42"},
+	})
+
+	require.ErrorContains(t, ValidateMutationBoundary(packet), "privacy_scope")
+}
+
+func TestValidateCandidateMutation_BlocksTerminalPacket(t *testing.T) {
+	packet := FromCandidate(&models.CrystallizationCandidate{
+		ID:           77,
+		Status:       models.CandidateStatusRejected,
+		PrivacyScope: "project",
+	})
+
+	require.ErrorContains(t, ValidateMutationBoundary(packet), "pending review packet")
+}
+
+func TestValidateCandidateMutation_BlocksManualBoundaryBypass(t *testing.T) {
+	packet := FromCandidate(&models.CrystallizationCandidate{
+		ID:           42,
+		Status:       models.CandidateStatusPending,
+		PrivacyScope: "project",
+	})
+	packet.ReadOnly = false
+	require.ErrorContains(t, ValidateMutationBoundary(packet), "read-only")
+
+	packet = FromCandidate(&models.CrystallizationCandidate{
+		ID:           42,
+		Status:       models.CandidateStatusPending,
+		PrivacyScope: "project",
+	})
+	packet.Status = string(models.CandidateStatusRejected)
+	require.ErrorContains(t, ValidateMutationBoundary(packet), "pending review packet")
+}
+
+func TestNewCandidateReviewActionSnapshot_CapturesCandidateBeforeState(t *testing.T) {
+	snapshot, err := NewCandidateReviewActionSnapshot("promote", &models.CrystallizationCandidate{
+		ID:              42,
+		Status:          models.CandidateStatusPending,
+		SourceSessionID: "sess-42",
+		Fingerprint:     "abc123",
+		PrivacyScope:    "project",
+	}, "agent:developer")
+
+	require.NoError(t, err)
+	require.Equal(t, models.SnapshotOpCandidateReviewAction, snapshot.OpType)
+	require.Equal(t, "agent:developer", snapshot.Actor)
+	require.Equal(t, "sess-42", snapshot.SourceSessionID)
+	require.Contains(t, string(snapshot.BeforeState), `"status":"pending"`)
+	require.Contains(t, string(snapshot.BeforeState), `"candidate:42"`)
+	require.Contains(t, string(snapshot.Parameters), `"operation":"candidate_review_action"`)
 }

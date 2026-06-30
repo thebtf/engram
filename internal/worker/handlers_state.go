@@ -3,6 +3,7 @@ package worker
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
@@ -68,9 +69,14 @@ func (s *Service) handleGetStateResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	sessionID := query.Get("session_id")
+	sessionID := strings.TrimSpace(query.Get("session_id"))
 	if sessionID == "" {
 		http.Error(w, "session_id is required", http.StatusBadRequest)
+		return
+	}
+	principal := strings.TrimSpace(query.Get("principal"))
+	if principal == "" {
+		http.Error(w, "principal is required", http.StatusBadRequest)
 		return
 	}
 	if raw := query.Get("allow_filesystem_fallback"); raw != "" {
@@ -79,6 +85,7 @@ func (s *Service) handleGetStateResume(w http.ResponseWriter, r *http.Request) {
 	}
 	packet, err := store.ReadResumePacket(r.Context(), cognitive.ResumePacketRequest{
 		Project:   query.Get("project"),
+		Principal: principal,
 		SessionID: sessionID,
 		GoalID:    query.Get("goal_id"),
 		TaskID:    query.Get("task_id"),

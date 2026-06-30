@@ -124,10 +124,15 @@ type ProjectStateRecord struct {
 // state in the deterministic resume path.
 type StatePacketSource string
 
-// Canonical StatePacketSource values.
+// Canonical StatePacketSource values. CR-005 contract-facing packets use
+// native, filesystem_fallback, imported, or mixed. StatePacketSourceConflict is
+// retained only as a legacy compatibility value for older callers that still
+// distinguish conflict in Source instead of Drift.Kind.
 const (
 	StatePacketSourceNative             StatePacketSource = "native"
 	StatePacketSourceFilesystemFallback StatePacketSource = "filesystem_fallback"
+	StatePacketSourceImported           StatePacketSource = "imported"
+	StatePacketSourceMixed              StatePacketSource = "mixed"
 	StatePacketSourceConflict           StatePacketSource = "conflict"
 )
 
@@ -219,12 +224,12 @@ type StateDrift struct {
 	CheckedAt time.Time       `json:"checked_at,omitempty"`
 }
 
-// ResumePacketRequest scopes a native resume read. AllowFilesystemFallback is
-// explicit: a caller that wants native-only behavior leaves it false and gets a
-// non-native packet only when the implementation can prove an intentional
-// conflict path.
+// ResumePacketRequest scopes a native resume read. Principal binds the read to
+// the caller identity, and AllowFilesystemFallback remains explicit so fallback
+// state can never be reported as native state by accident.
 type ResumePacketRequest struct {
 	Project                 string `json:"project"`
+	Principal               string `json:"principal,omitempty"`
 	SessionID               string `json:"session_id,omitempty"`
 	GoalID                  string `json:"goal_id,omitempty"`
 	TaskID                  string `json:"task_id,omitempty"`
@@ -232,19 +237,25 @@ type ResumePacketRequest struct {
 }
 
 // ResumePacket is the bounded deterministic resume payload for the native
-// state plane. The required fields are intentionally concrete: freshness,
-// drift/conflict, next action, and next verification are first-class fields,
+// state plane. The required fields are intentionally concrete: packet identity,
+// principal/session scope, state version, freshness, drift/conflict, next
+// action, next verification, and evidence references are first-class fields,
 // not opaque metadata inside SessionStateSlots.
 type ResumePacket struct {
+	PacketID         string            `json:"packet_id"`
+	Project          string            `json:"project"`
+	Principal        string            `json:"principal"`
+	SessionID        string            `json:"session_id"`
+	StateVersion     string            `json:"state_version"`
 	Source           StatePacketSource `json:"source"`
+	FallbackUsed     bool              `json:"fallback_used"`
 	Freshness        StateFreshness    `json:"freshness"`
 	Drift            StateDrift        `json:"drift"`
 	NextAction       StateAction       `json:"next_action"`
 	NextVerification StateVerification `json:"next_verification"`
 	GeneratedAt      time.Time         `json:"generated_at"`
+	EvidenceRefs     []string          `json:"evidence_refs"`
 
-	Project      string           `json:"project,omitempty"`
-	SessionID    string           `json:"session_id,omitempty"`
 	GoalID       string           `json:"goal_id,omitempty"`
 	TaskID       string           `json:"task_id,omitempty"`
 	FallbackPath string           `json:"fallback_path,omitempty"`
@@ -281,12 +292,20 @@ type ExperienceArchiveTriggerClass string
 
 // Canonical ExperienceArchiveTriggerClass values.
 const (
-	ExperienceArchiveTriggerWhyChanged         ExperienceArchiveTriggerClass = "why_changed"
-	ExperienceArchiveTriggerRegression         ExperienceArchiveTriggerClass = "regression"
-	ExperienceArchiveTriggerRollback           ExperienceArchiveTriggerClass = "rollback"
-	ExperienceArchiveTriggerOldDecisionRevisit ExperienceArchiveTriggerClass = "old_decision_revisit"
-	ExperienceArchiveTriggerSimilarFailure     ExperienceArchiveTriggerClass = "similar_prior_failure"
+	ExperienceArchiveTriggerHistoricalWhy        ExperienceArchiveTriggerClass = "historical_why"
+	ExperienceArchiveTriggerRegressionOrRollback ExperienceArchiveTriggerClass = "regression_or_rollback"
+	ExperienceArchiveTriggerRevisitOldDecision   ExperienceArchiveTriggerClass = "revisit_old_decision"
+	ExperienceArchiveTriggerSimilarPriorFailure  ExperienceArchiveTriggerClass = "similar_prior_failure"
+	ExperienceArchiveTriggerTemporalTruthChange  ExperienceArchiveTriggerClass = "temporal_truth_change"
+	ExperienceArchiveTriggerExplicitLookup       ExperienceArchiveTriggerClass = "explicit_archive_lookup"
 )
+
+// ExperienceTimeSpan names the historical interval covered by an experience.
+// Zero values mean the projection source did not expose a bound for that side.
+type ExperienceTimeSpan struct {
+	StartedAt time.Time `json:"started_at,omitempty,omitzero"`
+	EndedAt   time.Time `json:"ended_at,omitempty,omitzero"`
+}
 
 // ExperienceApplicability carries the gate state and rationale for a returned
 // experience. State is required; Rationale is required by contract even when the
@@ -322,18 +341,36 @@ type ExperienceQueryRequest struct {
 	Domain                string                          `json:"domain,omitempty"`
 	Query                 string                          `json:"query"`
 	CurrentContext        string                          `json:"current_context,omitempty"`
+	Situation             string                          `json:"situation,omitempty"`
+	TimeSpan              ExperienceTimeSpan              `json:"time_span,omitempty"`
+	Decision              string                          `json:"decision,omitempty"`
+	Action                string                          `json:"action,omitempty"`
+	Outcome               string                          `json:"outcome,omitempty"`
+	Revision              string                          `json:"revision,omitempty"`
+	Reversal              string                          `json:"reversal,omitempty"`
+	StorageOrigin         ExperienceSource                `json:"storage_origin,omitempty"`
 	ArchiveTriggerClasses []ExperienceArchiveTriggerClass `json:"archive_trigger_classes,omitempty"`
 	Limit                 int                             `json:"limit,omitempty"`
 }
 
 // ExperienceResponse is the bounded first-class payload for historical
-// experience retrieval. It carries lesson, applicability, anti-applicability,
-// and attribution before any caller may reuse the lesson.
+// experience retrieval. It carries situation, decision/action, outcome,
+// revision/reversal, lesson, applicability, anti-applicability, provenance,
+// and storage origin before any caller may reuse the lesson.
 type ExperienceResponse struct {
 	Source                ExperienceSource                `json:"source"`
+	StorageOrigin         ExperienceSource                `json:"storage_origin"`
+	Situation             string                          `json:"situation"`
+	TimeSpan              ExperienceTimeSpan              `json:"time_span"`
+	Decision              string                          `json:"decision"`
+	Action                string                          `json:"action"`
+	Outcome               string                          `json:"outcome"`
+	Revision              string                          `json:"revision"`
+	Reversal              string                          `json:"reversal"`
 	Lesson                string                          `json:"lesson"`
 	Applicability         ExperienceApplicability         `json:"applicability"`
 	AntiApplicability     []ExperienceAntiApplicability   `json:"anti_applicability"`
+	Provenance            []ExperienceSourceAttribution   `json:"provenance"`
 	SourceAttribution     []ExperienceSourceAttribution   `json:"source_attribution"`
 	ArchiveTriggerClasses []ExperienceArchiveTriggerClass `json:"archive_trigger_classes"`
 }

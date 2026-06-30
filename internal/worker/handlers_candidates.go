@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
+	authpkg "github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/reviewpacket"
 	"github.com/thebtf/engram/pkg/models"
@@ -30,6 +31,19 @@ type candidateReviewStore interface {
 	PromoteWithMemory(ctx context.Context, candidateID int64, mem *models.Memory) (*models.CrystallizationCandidate, *models.Memory, error)
 	TransitionToRejected(ctx context.Context, id int64, reason string) (*models.CrystallizationCandidate, error)
 	TransitionToSuperseded(ctx context.Context, id int64) (*models.CrystallizationCandidate, error)
+}
+
+type candidateReviewSnapshotStore interface {
+	Create(ctx context.Context, snap *models.BulkOpSnapshot) (*models.BulkOpSnapshot, error)
+}
+
+type candidateReviewAtomicPromotionStore interface {
+	PromoteWithMemoryAndSnapshot(ctx context.Context, snapshotStore *gormdb.SnapshotStore, candidateID int64, mem *models.Memory, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.Memory, *models.BulkOpSnapshot, error)
+}
+
+type candidateReviewAtomicTransitionStore interface {
+	TransitionToRejectedWithSnapshot(ctx context.Context, snapshotStore *gormdb.SnapshotStore, id int64, reason string, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error)
+	TransitionToSupersededWithSnapshot(ctx context.Context, snapshotStore *gormdb.SnapshotStore, id int64, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error)
 }
 
 type candidateListResponse struct {
@@ -92,6 +106,47 @@ func (s *Service) currentCandidateReviewStore() candidateReviewStore {
 		return nil
 	}
 	return s.candidateStore
+}
+
+func (s *Service) currentCandidateReviewSnapshotStore() candidateReviewSnapshotStore {
+	if s.candidateReviewSnapshotStoreSeam != nil {
+		return s.candidateReviewSnapshotStoreSeam
+	}
+
+	s.initMu.RLock()
+	defer s.initMu.RUnlock()
+	if s.snapshotStore == nil {
+		return nil
+	}
+	return s.snapshotStore
+}
+
+func (s *Service) newCandidateReviewSnapshot(action string, candidate *models.CrystallizationCandidate, actor string) (*models.BulkOpSnapshot, error) {
+	packet := reviewpacket.FromCandidate(candidate)
+	if !packet.MutationRequirements.SnapshotRequired {
+		return nil, nil
+	}
+	return reviewpacket.NewCandidateReviewActionSnapshot(action, candidate, actor)
+}
+
+func candidateReviewActorFromContext(ctx context.Context) string {
+	id, ok := authpkg.IdentityFrom(ctx)
+	if !ok {
+		return "system"
+	}
+	if principal, _, hasOwner := id.MemoryOwner(); hasOwner {
+		return principal
+	}
+	if id.KeycardID != "" {
+		return id.KeycardID
+	}
+	if id.Source == authpkg.SourceMaster {
+		return "master"
+	}
+	if id.Source != "" {
+		return string(id.Source)
+	}
+	return "system"
 }
 
 func candidateRFC3339(value time.Time) string {
@@ -376,9 +431,61 @@ func (s *Service) handlePromoteMemoryCandidate(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	if err := reviewpacket.ValidateCandidateMutation(candidate); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
 	memory, err := memoryFromCandidate(candidate)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	actor := candidateReviewActorFromContext(r.Context())
+	snapshot, err := s.newCandidateReviewSnapshot("promote", candidate, actor)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	if atomicStore, ok := store.(candidateReviewAtomicPromotionStore); ok {
+		var gormSnapshotStore *gormdb.SnapshotStore
+		if snapshot != nil {
+			snapshotStore, ok := s.currentCandidateReviewSnapshotStore().(*gormdb.SnapshotStore)
+			if !ok || snapshotStore == nil {
+				http.Error(w, "candidate review snapshot store is not configured", http.StatusServiceUnavailable)
+				return
+			}
+			gormSnapshotStore = snapshotStore
+		}
+
+		updated, created, _, err := atomicStore.PromoteWithMemoryAndSnapshot(r.Context(), gormSnapshotStore, id, memory, snapshot, actor)
+		if err != nil {
+			if strings.Contains(err.Error(), "snapshot_store") || strings.Contains(err.Error(), "amend_promote_entries") || strings.Contains(err.Error(), "snapshot store is required") || strings.Contains(err.Error(), "candidate_review audit store") {
+				http.Error(w, fmt.Sprintf("candidate review snapshot: %v", err), http.StatusServiceUnavailable)
+				return
+			}
+			writeCandidateStoreError(w, "promote_candidate", id, err)
+			return
+		}
+		if updated == nil || created == nil {
+			log.Error().Int64("candidate_id", id).Msg("candidate promotion returned nil payload")
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, candidateActionReceipt{
+			Action:           "promote",
+			CandidateID:      updated.ID,
+			CandidateStatus:  string(updated.Status),
+			MemoryID:         created.ID,
+			PromotedMemoryID: updated.PromotedMemoryID,
+		})
+		return
+	}
+
+	if snapshot != nil {
+		http.Error(w, "candidate review snapshot requires atomic promotion store", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -423,6 +530,58 @@ func (s *Service) handleRejectMemoryCandidate(w http.ResponseWriter, r *http.Req
 		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	candidate, err := store.Get(r.Context(), id)
+	if err != nil {
+		writeCandidateStoreError(w, "get_candidate_for_rejection", id, err)
+		return
+	}
+	if candidate == nil {
+		http.Error(w, "candidate not found", http.StatusNotFound)
+		return
+	}
+	if err := reviewpacket.ValidateCandidateMutation(candidate); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	actor := candidateReviewActorFromContext(r.Context())
+	snapshot, err := s.newCandidateReviewSnapshot("reject", candidate, actor)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if snapshot != nil {
+		atomicStore, ok := store.(candidateReviewAtomicTransitionStore)
+		if !ok {
+			http.Error(w, "candidate review snapshot requires atomic transition store", http.StatusServiceUnavailable)
+			return
+		}
+		snapshotStore, ok := s.currentCandidateReviewSnapshotStore().(*gormdb.SnapshotStore)
+		if !ok || snapshotStore == nil {
+			http.Error(w, "candidate review snapshot store is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		updated, _, err := atomicStore.TransitionToRejectedWithSnapshot(r.Context(), snapshotStore, id, req.Reason, snapshot, actor)
+		if err != nil {
+			if strings.Contains(err.Error(), "candidate review snapshot") || strings.Contains(err.Error(), "candidate_review audit store") {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+			writeCandidateStoreError(w, "reject_candidate", id, err)
+			return
+		}
+		if updated == nil {
+			log.Error().Int64("candidate_id", id).Msg("candidate rejection returned nil payload")
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, candidateActionReceipt{
+			Action:          "reject",
+			CandidateID:     updated.ID,
+			CandidateStatus: string(updated.Status),
+		})
+		return
+	}
 
 	updated, err := store.TransitionToRejected(r.Context(), id, req.Reason)
 	if err != nil {
@@ -455,6 +614,59 @@ func (s *Service) handleSupersedeMemoryCandidate(w http.ResponseWriter, r *http.
 	id, ok := candidateIDFromRequest(r)
 	if !ok {
 		http.Error(w, "invalid candidate id", http.StatusBadRequest)
+		return
+	}
+
+	candidate, err := store.Get(r.Context(), id)
+	if err != nil {
+		writeCandidateStoreError(w, "get_candidate_for_supersede", id, err)
+		return
+	}
+	if candidate == nil {
+		http.Error(w, "candidate not found", http.StatusNotFound)
+		return
+	}
+	if err := reviewpacket.ValidateCandidateMutation(candidate); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	actor := candidateReviewActorFromContext(r.Context())
+	snapshot, err := s.newCandidateReviewSnapshot("supersede", candidate, actor)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if snapshot != nil {
+		atomicStore, ok := store.(candidateReviewAtomicTransitionStore)
+		if !ok {
+			http.Error(w, "candidate review snapshot requires atomic transition store", http.StatusServiceUnavailable)
+			return
+		}
+		snapshotStore, ok := s.currentCandidateReviewSnapshotStore().(*gormdb.SnapshotStore)
+		if !ok || snapshotStore == nil {
+			http.Error(w, "candidate review snapshot store is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		updated, _, err := atomicStore.TransitionToSupersededWithSnapshot(r.Context(), snapshotStore, id, snapshot, actor)
+		if err != nil {
+			if strings.Contains(err.Error(), "candidate review snapshot") || strings.Contains(err.Error(), "candidate_review audit store") {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+			writeCandidateStoreError(w, "supersede_candidate", id, err)
+			return
+		}
+		if updated == nil {
+			log.Error().Int64("candidate_id", id).Msg("candidate supersede returned nil payload")
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, candidateActionReceipt{
+			Action:          "supersede",
+			CandidateID:     updated.ID,
+			CandidateStatus: string(updated.Status),
+		})
 		return
 	}
 
