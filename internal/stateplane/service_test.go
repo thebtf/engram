@@ -102,6 +102,35 @@ func TestServiceReadResumePacketExplicitFallbackMarkerOnNativeMiss(t *testing.T)
 	require.Contains(t, packet.EvidenceRefs, "filesystem_fallback:"+fallbackPath)
 }
 
+func TestServiceReadResumePacketSynthesizesLegacyFallbackIdentity(t *testing.T) {
+	fallbackPath := writeFallbackPacket(t, fallbackPacket("fallback next", ""))
+	service := NewService(
+		&fakeNativePlane{err: errors.New("native missing")},
+		JSONFileFallbackReader{Path: fallbackPath},
+	)
+	request := cognitive.ResumePacketRequest{
+		Project:                 "engram",
+		Principal:               "agent:developer",
+		SessionID:               "session-1",
+		GoalID:                  "goal-1",
+		TaskID:                  "task-1",
+		AllowFilesystemFallback: true,
+	}
+
+	packet, err := service.ReadResumePacket(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, "2026-06-28T12:00:00Z", packet.StateVersion)
+	require.NotEmpty(t, packet.PacketID)
+	require.Len(t, packet.PacketID, len("resume:")+64)
+	require.Equal(t, "goal-1", packet.GoalID)
+	require.Equal(t, "task-1", packet.TaskID)
+
+	again, err := service.ReadResumePacket(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, packet.StateVersion, again.StateVersion)
+	require.Equal(t, packet.PacketID, again.PacketID)
+}
+
 func TestServiceReadResumePacketConflictWhenFallbackDisagrees(t *testing.T) {
 	fallbackPath := writeFallbackPacket(t, fallbackPacket("fallback next", ""))
 	service := NewService(

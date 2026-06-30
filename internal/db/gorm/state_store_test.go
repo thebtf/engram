@@ -197,6 +197,30 @@ func TestStateStore_ResumePacketNativeRoundTrip(t *testing.T) {
 	require.NotContains(t, string(packet.Source), "filesystem")
 }
 
+func TestResumePacketIDIncludesGoalAndTaskBindings(t *testing.T) {
+	stateVersion := "2026-06-28T12:00:00Z"
+	base := cognitive.ResumePacketRequest{
+		Project:   "engram",
+		Principal: "agent:developer",
+		SessionID: "session-1",
+		GoalID:    "goal-a",
+		TaskID:    "task-a",
+	}
+
+	differentGoal := base
+	differentGoal.GoalID = "goal-b"
+	differentTask := base
+	differentTask.TaskID = "task-b"
+	spaced := base
+	spaced.GoalID = " goal-a "
+	spaced.TaskID = " task-a "
+
+	baseID := resumePacketID(base, stateVersion)
+	require.NotEqual(t, baseID, resumePacketID(differentGoal, stateVersion))
+	require.NotEqual(t, baseID, resumePacketID(differentTask, stateVersion))
+	require.Equal(t, baseID, resumePacketID(spaced, stateVersion))
+}
+
 func TestStateStore_ResumePacketDoesNotRequireProjectState(t *testing.T) {
 	db := openCandidateTestDB(t)
 	auditStore := NewAuditStore(db)

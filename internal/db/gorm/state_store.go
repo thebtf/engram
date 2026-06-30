@@ -303,11 +303,15 @@ func resumePacketID(request cognitive.ResumePacketRequest, stateVersion string) 
 		Project      string `json:"project"`
 		Principal    string `json:"principal"`
 		SessionID    string `json:"session_id"`
+		GoalID       string `json:"goal_id"`
+		TaskID       string `json:"task_id"`
 		StateVersion string `json:"state_version"`
 	}{
 		Project:      strings.TrimSpace(request.Project),
 		Principal:    strings.TrimSpace(request.Principal),
 		SessionID:    strings.TrimSpace(request.SessionID),
+		GoalID:       strings.TrimSpace(request.GoalID),
+		TaskID:       strings.TrimSpace(request.TaskID),
 		StateVersion: strings.TrimSpace(stateVersion),
 	}
 	data, _ := json.Marshal(identity)

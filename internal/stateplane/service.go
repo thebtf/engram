@@ -2,6 +2,8 @@ package stateplane
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -195,6 +197,11 @@ func (s *Service) normalizeFallbackPacket(packet cognitive.ResumePacket, request
 	if packet.GeneratedAt.IsZero() {
 		packet.GeneratedAt = now
 	}
+	if strings.TrimSpace(packet.StateVersion) == "" {
+		packet.StateVersion = fallbackStateVersion(packet.GeneratedAt)
+	} else {
+		packet.StateVersion = strings.TrimSpace(packet.StateVersion)
+	}
 	if packet.Project == "" {
 		packet.Project = request.Project
 	}
@@ -207,12 +214,61 @@ func (s *Service) normalizeFallbackPacket(packet cognitive.ResumePacket, request
 	if packet.TaskID == "" {
 		packet.TaskID = request.TaskID
 	}
+	if strings.TrimSpace(packet.PacketID) == "" {
+		packet.PacketID = fallbackResumePacketID(packet, request)
+	} else {
+		packet.PacketID = strings.TrimSpace(packet.PacketID)
+	}
 	if len(packet.Scopes) == 0 && packet.SessionID != "" {
 		packet.Scopes = []cognitive.StateScopeKind{cognitive.StateScopeSession}
 	}
 	packet.FallbackUsed = true
 	packet.EvidenceRefs = packetEvidenceRefs(packet, request, true)
 	return packet
+}
+
+func fallbackStateVersion(generatedAt time.Time) string {
+	if generatedAt.IsZero() {
+		return "unknown"
+	}
+	return generatedAt.UTC().Format(time.RFC3339Nano)
+}
+
+func fallbackResumePacketID(packet cognitive.ResumePacket, request cognitive.ResumePacketRequest) string {
+	identity := struct {
+		Source           cognitive.StatePacketSource `json:"source"`
+		FallbackPath     string                      `json:"fallback_path"`
+		PacketProject    string                      `json:"packet_project"`
+		PacketPrincipal  string                      `json:"packet_principal"`
+		PacketSessionID  string                      `json:"packet_session_id"`
+		PacketGoalID     string                      `json:"packet_goal_id"`
+		PacketTaskID     string                      `json:"packet_task_id"`
+		RequestProject   string                      `json:"request_project"`
+		RequestPrincipal string                      `json:"request_principal"`
+		RequestSessionID string                      `json:"request_session_id"`
+		RequestGoalID    string                      `json:"request_goal_id"`
+		RequestTaskID    string                      `json:"request_task_id"`
+		StateVersion     string                      `json:"state_version"`
+		GeneratedAt      string                      `json:"generated_at"`
+	}{
+		Source:           packet.Source,
+		FallbackPath:     strings.TrimSpace(packet.FallbackPath),
+		PacketProject:    strings.TrimSpace(packet.Project),
+		PacketPrincipal:  strings.TrimSpace(packet.Principal),
+		PacketSessionID:  strings.TrimSpace(packet.SessionID),
+		PacketGoalID:     strings.TrimSpace(packet.GoalID),
+		PacketTaskID:     strings.TrimSpace(packet.TaskID),
+		RequestProject:   strings.TrimSpace(request.Project),
+		RequestPrincipal: strings.TrimSpace(request.Principal),
+		RequestSessionID: strings.TrimSpace(request.SessionID),
+		RequestGoalID:    strings.TrimSpace(request.GoalID),
+		RequestTaskID:    strings.TrimSpace(request.TaskID),
+		StateVersion:     strings.TrimSpace(packet.StateVersion),
+		GeneratedAt:      fallbackStateVersion(packet.GeneratedAt),
+	}
+	data, _ := json.Marshal(identity)
+	sum := sha256.Sum256(data)
+	return "resume:" + hex.EncodeToString(sum[:])
 }
 
 func (s *Service) normalizeNativePacket(packet cognitive.ResumePacket, request cognitive.ResumePacketRequest) cognitive.ResumePacket {
