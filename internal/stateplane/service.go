@@ -704,6 +704,12 @@ func validateFallbackPacket(packet cognitive.ResumePacket, request cognitive.Res
 	if strings.TrimSpace(packet.StateVersion) == "" {
 		return fmt.Errorf("stateplane fallback: state_version is required")
 	}
+	if err := validatePacketScopes("stateplane fallback", packet.Scopes); err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(packet.Scopes, request.Scopes) {
+		return fmt.Errorf("stateplane fallback: scopes do not match resume request")
+	}
 	if err := validateStateAction("stateplane fallback", packet.NextAction); err != nil {
 		return err
 	}
