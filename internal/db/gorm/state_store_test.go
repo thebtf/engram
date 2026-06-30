@@ -586,28 +586,30 @@ func TestStateStore_ResumePacketRejectsUnscopedRequestBeforeDB(t *testing.T) {
 	require.ErrorContains(t, err, "scopes is required")
 }
 
-func TestStateStore_ResumePacketRejectsGoalOnlyScopeWithoutSessionOrProject(t *testing.T) {
+func TestStateStore_ResumePacketRejectsGoalOnlyScopeWithoutSession(t *testing.T) {
 	store := &StateStore{}
 
 	_, err := store.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:   "engram",
 		Principal: "agent:developer",
 		GoalID:    "goal-1",
-		Scopes:    []cognitive.StateScopeKind{cognitive.StateScopeGoal},
+		Scopes:    []cognitive.StateScopeKind{cognitive.StateScopeProject, cognitive.StateScopeGoal},
 	})
 
-	require.ErrorContains(t, err, "goal scope requires session or project scope")
+	require.ErrorContains(t, err, "goal scope requires session scope")
 }
 
-func TestStateStore_ResumePacketRejectsTaskOnlyScopeWithoutSessionOrProject(t *testing.T) {
+func TestStateStore_ResumePacketRejectsTaskOnlyScopeWithoutSession(t *testing.T) {
 	store := &StateStore{}
 
 	_, err := store.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+		Project:   "engram",
 		Principal: "agent:developer",
 		TaskID:    "task-1",
-		Scopes:    []cognitive.StateScopeKind{cognitive.StateScopeTask},
+		Scopes:    []cognitive.StateScopeKind{cognitive.StateScopeProject, cognitive.StateScopeTask},
 	})
 
-	require.ErrorContains(t, err, "task scope requires session or project scope")
+	require.ErrorContains(t, err, "task scope requires session scope")
 }
 
 func TestStateStore_ResumePacketRejectsScopeWithoutIdentifierBeforeDB(t *testing.T) {

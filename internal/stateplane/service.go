@@ -249,17 +249,17 @@ func (s *Service) normalizeFallbackPacket(packet cognitive.ResumePacket, request
 	if packet.TaskID == "" {
 		packet.TaskID = request.TaskID
 	}
+	// F6: default Scopes to request.Scopes before synthesizing identity so
+	// fallback packet IDs distinguish scope-distinct resume packets.
+	if len(packet.Scopes) == 0 {
+		packet.Scopes = append([]cognitive.StateScopeKind(nil), request.Scopes...)
+	}
+	packet.Scopes = canonicalizeResumeScopes(packet.Scopes)
 	if strings.TrimSpace(packet.PacketID) == "" {
 		packet.PacketID = fallbackResumePacketID(packet, request)
 	} else {
 		packet.PacketID = strings.TrimSpace(packet.PacketID)
 	}
-	// F6: default Scopes to request.Scopes so fallback packets always cover
-	// what the caller requested, regardless of packet.SessionID presence.
-	if len(packet.Scopes) == 0 {
-		packet.Scopes = append([]cognitive.StateScopeKind(nil), request.Scopes...)
-	}
-	packet.Scopes = canonicalizeResumeScopes(packet.Scopes)
 	packet.FallbackUsed = true
 	packet.EvidenceRefs = packetEvidenceRefs(packet, request, true)
 	return packet
@@ -286,6 +286,7 @@ func fallbackResumePacketID(packet cognitive.ResumePacket, request cognitive.Res
 		RequestSessionID string                      `json:"request_session_id"`
 		RequestGoalID    string                      `json:"request_goal_id"`
 		RequestTaskID    string                      `json:"request_task_id"`
+		Scopes           []cognitive.StateScopeKind  `json:"scopes"`
 		StateVersion     string                      `json:"state_version"`
 		GeneratedAt      string                      `json:"generated_at"`
 	}{
@@ -301,6 +302,7 @@ func fallbackResumePacketID(packet cognitive.ResumePacket, request cognitive.Res
 		RequestSessionID: strings.TrimSpace(request.SessionID),
 		RequestGoalID:    strings.TrimSpace(request.GoalID),
 		RequestTaskID:    strings.TrimSpace(request.TaskID),
+		Scopes:           append([]cognitive.StateScopeKind(nil), packet.Scopes...),
 		StateVersion:     strings.TrimSpace(packet.StateVersion),
 		GeneratedAt:      fallbackStateVersion(packet.GeneratedAt),
 	}
@@ -757,11 +759,35 @@ func fallbackIsNewer(nativePacket, fallbackPacket cognitive.ResumePacket) bool {
 
 func nativePersistedStateTime(packet cognitive.ResumePacket) (time.Time, bool) {
 	if stateVersion := strings.TrimSpace(packet.StateVersion); stateVersion != "" {
-		if parsed, err := time.Parse(time.RFC3339Nano, stateVersion); err == nil {
+		if parsed, ok := parseNativeStateVersionTime(stateVersion); ok {
 			return parsed, true
 		}
 	}
 	return packet.GeneratedAt, !packet.GeneratedAt.IsZero()
+}
+
+func parseNativeStateVersionTime(stateVersion string) (time.Time, bool) {
+	stateVersion = strings.TrimSpace(stateVersion)
+	if parsed, err := time.Parse(time.RFC3339Nano, stateVersion); err == nil {
+		return parsed, true
+	}
+	parts := strings.Split(stateVersion, "+project@")
+	if len(parts) != 2 {
+		return time.Time{}, false
+	}
+	latest := time.Time{}
+	for _, raw := range parts {
+		raw = strings.TrimPrefix(strings.TrimSpace(raw), "session:")
+		raw = strings.TrimPrefix(raw, "project:")
+		parsed, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return time.Time{}, false
+		}
+		if latest.IsZero() || parsed.After(latest) {
+			latest = parsed
+		}
+	}
+	return latest, true
 }
 
 func packetEvidenceRefs(packet cognitive.ResumePacket, request cognitive.ResumePacketRequest, fallback bool) []string {

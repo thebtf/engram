@@ -366,7 +366,6 @@ func validateStateStoreResumePacketRequest(request cognitive.ResumePacketRequest
 		return fmt.Errorf("state_store read_resume: scopes is required")
 	}
 	hasSession := hasStateStoreResumeScope(request.Scopes, cognitive.StateScopeSession)
-	hasProject := hasStateStoreResumeScope(request.Scopes, cognitive.StateScopeProject)
 	for _, scope := range request.Scopes {
 		switch scope {
 		case cognitive.StateScopeSession:
@@ -381,15 +380,15 @@ func validateStateStoreResumePacketRequest(request cognitive.ResumePacketRequest
 			if request.GoalID == "" {
 				return fmt.Errorf("state_store read_resume: goal_id is required for goal scope")
 			}
-			if !hasSession && !hasProject {
-				return fmt.Errorf("state_store read_resume: goal scope requires session or project scope")
+			if !hasSession {
+				return fmt.Errorf("state_store read_resume: goal scope requires session scope")
 			}
 		case cognitive.StateScopeTask:
 			if request.TaskID == "" {
 				return fmt.Errorf("state_store read_resume: task_id is required for task scope")
 			}
-			if !hasSession && !hasProject {
-				return fmt.Errorf("state_store read_resume: task scope requires session or project scope")
+			if !hasSession {
+				return fmt.Errorf("state_store read_resume: task scope requires session scope")
 			}
 		default:
 			return fmt.Errorf("state_store read_resume: unsupported scope %q", scope)
