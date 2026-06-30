@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.32.0] - 2026-07-01
+
+### Added
+
+- **CR-008 usefulness / noise review loop, MPL-3 (#388).** Added the packet-centric review-loop substrate over existing candidate/snapshot/audit seams: bounded review queue list/read with explicit empty/gated/error/sparse states, principal-attributed review packets with separate preview and apply paths, suppress/preserve actions that run through atomic snapshot+audit-backed mutation (never a silent partial mutation), and honest review metrics that label sparse telemetry as sparse instead of overclaiming a full backlog.
+
+### Fixed
+
+- **Review-loop contract consistency and audit integrity (#388).** The preserve mutation now requires a `candidate_review` snapshot before it can proceed (no audit-less preserve); the REST apply path switches on the normalized action so aliases/case cannot pass preview then fail apply; the MCP review queue rejects `limit > 100` instead of silently clamping (matching the REST 400); gated/error review queues normalize `limit <= 0` to the default like the live path; and `risky_only` queue reads preserve full-backlog metrics instead of reporting the filtered risky subset.
+
 ## [6.31.0] - 2026-07-01
 
 ### Added
