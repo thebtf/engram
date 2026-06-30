@@ -169,7 +169,7 @@ func ValidateCandidateMutation(candidate *models.CrystallizationCandidate) error
 }
 
 // NewCandidateReviewActionSnapshot builds the required pre-action snapshot for
-// a candidate mutation path before promote/reject/supersede changes state.
+// a candidate mutation path before promote/reject/supersede or CR-008 preserve/suppress changes state.
 func NewCandidateReviewActionSnapshot(action string, candidate *models.CrystallizationCandidate, actor string) (*models.BulkOpSnapshot, error) {
 	if candidate == nil {
 		return nil, fmt.Errorf("candidate review snapshot requires a candidate")
@@ -179,7 +179,7 @@ func NewCandidateReviewActionSnapshot(action string, candidate *models.Crystalli
 	}
 	action = strings.TrimSpace(action)
 	switch action {
-	case "promote", "reject", "supersede":
+	case "promote", "reject", "supersede", ReviewActionPreserve, ReviewActionSuppress:
 	default:
 		return nil, fmt.Errorf("candidate review snapshot: unsupported action %q", action)
 	}

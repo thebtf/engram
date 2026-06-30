@@ -1730,6 +1730,17 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleRejectCandidate(ctx, args)
 	case "supersede_candidate":
 		return s.handleSupersedeCandidate(ctx, args)
+	// CR-008 usefulness/noise review-loop tools.
+	case "review_metrics.read":
+		return s.handleReviewMetricsRead(ctx, args)
+	case "review_queue.read":
+		return s.handleReviewQueueRead(ctx, args)
+	case "review_packet.detail":
+		return s.handleReviewPacketDetail(ctx, args)
+	case "review_packet.preview_action":
+		return s.handleReviewPacketPreviewAction(ctx, args)
+	case "review_packet.apply_action":
+		return s.handleReviewPacketApplyAction(ctx, args)
 	// Governance tools (Milestone-F TG6 T043).
 	case "list_snapshots":
 		return s.handleListSnapshots(ctx, args)

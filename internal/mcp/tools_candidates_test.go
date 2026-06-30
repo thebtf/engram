@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/reviewpacket"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -87,4 +88,50 @@ func TestHandleGetCandidate_EmptyIDReturnsError(t *testing.T) {
 	require.True(t,
 		strings.Contains(callErr.Error(), "id is required"),
 		"error must mention 'id is required', got: %v", callErr)
+}
+
+func TestCandidateTools_ExposeCR008ReviewLoopContracts(t *testing.T) {
+	names := map[string]bool{}
+	for _, tool := range candidateTools() {
+		names[tool.Name] = true
+	}
+
+	for _, name := range []string{
+		"review_metrics.read",
+		"review_queue.read",
+		"review_packet.detail",
+		"review_packet.preview_action",
+		"review_packet.apply_action",
+	} {
+		require.True(t, names[name], "missing CR-008 MCP tool %s", name)
+	}
+}
+
+func TestHandleReviewQueueRead_UnsupportedPacketTypeReturnsGatedPayload(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	s := NewServer(ServerOptions{Version: "test"})
+	s.candidateStore = nonNilCandidateStore()
+	args, err := json.Marshal(map[string]any{"packet_type": "raw_memory", "limit": 7})
+	require.NoError(t, err)
+
+	result, err := s.handleReviewQueueRead(context.Background(), args)
+
+	require.NoError(t, err)
+	var queue reviewpacket.ReviewQueueRead
+	require.NoError(t, json.Unmarshal([]byte(result), &queue))
+	require.Equal(t, reviewpacket.ReviewStateGated, queue.State)
+	require.Contains(t, queue.Metrics.SparseReason, "unsupported packet_type")
+	require.Empty(t, queue.Packets)
+}
+
+func TestHandleReviewPacketPreviewAction_UnsupportedActionRejectedBeforeStoreMutation(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	s := NewServer(ServerOptions{Version: "test"})
+	s.candidateStore = nonNilCandidateStore()
+	args, err := json.Marshal(map[string]any{"packet_id": "candidate:42:abc123", "action_type": "destroy"})
+	require.NoError(t, err)
+
+	_, err = s.handleReviewPacketPreviewAction(context.Background(), args)
+
+	require.ErrorIs(t, err, reviewpacket.ErrUnsupportedReviewAction)
 }
