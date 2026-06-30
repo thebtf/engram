@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.31.0] - 2026-07-01
+
+### Added
+
+- **CR-006 native state plane, MPL-1 (#385).** Landed the Engram-native session/goal/task/project state plane so resume reads native state first with filesystem fallback/export, delivering the deterministic resume packet (freshness, drift/conflict flags, next action, next verification).
+- **CR-005 contract hardening (#383).** Hardened exact packet, schema, taxonomy, and boundary contracts for resume packets, experience contracts, applicability envelopes, archive trigger classes, review packets, and mutation execution boundaries ahead of further behavioral expansion.
+- **CR-007 principal memory explorer + briefs.** Closed by evidence: principal/domain/project explorer substrate (`PrincipalMemoryQueryService`, MCP `query_principal_memory`, REST `/api/memories/principal`) and principal-scoped `get_memory_brief` fields are live, bounded, privacy fail-closed, and audit-tagged; UI remains contract-gated.
+
+### Fixed
+
+- **Native state plane fallback scope preservation (#386, #387).** Fallback resume scopes are now validated and preserved instead of being silently dropped, keeping request-scoped state honest across the native state plane.
+- **Post-merge principal boundary preservation.** Restored principal boundary handling after the CR-006 merge so cross-principal isolation stays fail-closed.
+
 ## [6.30.0] - 2026-06-30
 
 ### Added
