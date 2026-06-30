@@ -395,6 +395,9 @@ func (s *CandidateStore) PreserveWithMemoryAndSnapshot(
 	snapshot *models.BulkOpSnapshot,
 	actor string,
 ) (*models.CrystallizationCandidate, *models.Memory, *models.BulkOpSnapshot, error) {
+	if !candidateReviewAuditRequired(snapshot) {
+		return nil, nil, nil, fmt.Errorf("preserve_with_memory_snapshot: candidate_review snapshot is required")
+	}
 	return s.promoteWithMemoryAndSnapshotAction(ctx, snapshotStore, candidateID, mem, snapshot, actor, "preserve", "preserve_with_memory_snapshot")
 }
 

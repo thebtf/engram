@@ -204,7 +204,7 @@ func parseReviewLoopReadArgs(args json.RawMessage) (string, models.CandidateStat
 		return "", "", 0, "", false, fmt.Errorf("review_loop: limit must be positive")
 	}
 	if limit > 100 {
-		limit = 100
+		return "", "", 0, "", false, fmt.Errorf("review_loop: limit must not exceed 100")
 	}
 	return project, status, limit, coerceString(m["packet_type"], ""), coerceBool(m["risky_only"], false), nil
 }

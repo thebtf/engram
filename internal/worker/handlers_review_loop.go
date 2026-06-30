@@ -42,7 +42,7 @@ func decodeReviewPacketActionRequest(r *http.Request) (reviewPacketActionRequest
 	if err != nil && !errors.Is(err, io.EOF) {
 		return req, err
 	}
-	req.ActionType = strings.TrimSpace(req.ActionType)
+	// Keep ActionType raw here; PreviewReviewAction owns action normalization so apply can switch on the previewed action.
 	req.Reason = strings.TrimSpace(req.Reason)
 	return req, nil
 }
@@ -214,12 +214,13 @@ func (s *Service) handleApplyMemoryReviewPacketAction(w http.ResponseWriter, r *
 		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := reviewpacket.PreviewReviewAction(candidate, packetID, req.ActionType, time.Now().UTC()); err != nil {
+	preview, err := reviewpacket.PreviewReviewAction(candidate, packetID, req.ActionType, time.Now().UTC())
+	if err != nil {
 		writeReviewActionError(w, err)
 		return
 	}
 
-	switch req.ActionType {
+	switch preview.ActionType {
 	case reviewpacket.ReviewActionPreserve:
 		s.applyPreserveReviewPacketAction(w, r, candidate, packetID)
 	case reviewpacket.ReviewActionSuppress:

@@ -188,6 +188,16 @@ func TestReviewMetrics_HonestGatedAndErrorStatesDoNotClaimLivePrecision(t *testi
 	require.Contains(t, failed.SparseReason, "store unavailable")
 }
 
+func TestReviewQueueStatePayloadsNormalizeDefaultLimit(t *testing.T) {
+	gated := GatedReviewQueue("flag disabled", 0, time.Time{})
+	require.Equal(t, 20, gated.Limit)
+	require.Equal(t, 20, gated.Backlog.Limit)
+
+	failed := ErrorReviewQueue(assertiveError("store unavailable"), -5, time.Time{})
+	require.Equal(t, 20, failed.Limit)
+	require.Equal(t, 20, failed.Backlog.Limit)
+}
+
 type assertiveError string
 
 func (e assertiveError) Error() string { return string(e) }

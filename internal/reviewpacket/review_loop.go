@@ -201,6 +201,7 @@ func ErrorReviewMetrics(err error, now time.Time) ReviewMetrics {
 }
 
 func GatedReviewQueue(reason string, limit int, now time.Time) ReviewQueueRead {
+	limit = normalizeQueueLimit(limit)
 	metrics := GatedReviewMetrics(reason, now)
 	return ReviewQueueRead{
 		Packets:   []ReviewPacketSummary{},
@@ -213,6 +214,7 @@ func GatedReviewQueue(reason string, limit int, now time.Time) ReviewQueueRead {
 }
 
 func ErrorReviewQueue(err error, limit int, now time.Time) ReviewQueueRead {
+	limit = normalizeQueueLimit(limit)
 	metrics := ErrorReviewMetrics(err, now)
 	return ReviewQueueRead{
 		Packets:   []ReviewPacketSummary{},
@@ -222,6 +224,13 @@ func ErrorReviewQueue(err error, limit int, now time.Time) ReviewQueueRead {
 		State:     ReviewStateError,
 		Limit:     limit,
 	}
+}
+
+func normalizeQueueLimit(limit int) int {
+	if limit <= 0 {
+		return 20
+	}
+	return limit
 }
 
 func PacketSummaryFromCandidate(candidate *models.CrystallizationCandidate, now time.Time) ReviewPacketSummary {

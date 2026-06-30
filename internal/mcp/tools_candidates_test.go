@@ -138,6 +138,19 @@ func TestHandleReviewQueueRead_UnsupportedPacketTypeReturnsGatedPayload(t *testi
 	require.Empty(t, queue.Packets)
 }
 
+func TestHandleReviewQueueRead_LimitOverMaxReturnsError(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	s := NewServer(ServerOptions{Version: "test"})
+	s.candidateStore = nonNilCandidateStore()
+	args, err := json.Marshal(map[string]any{"limit": 101})
+	require.NoError(t, err)
+
+	_, err = s.handleReviewQueueRead(context.Background(), args)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "limit must not exceed 100")
+}
+
 func TestHandleReviewQueueRead_RiskyOnlyKeepsUnfilteredMetricsAndBacklog(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
 	lister := &fakeReviewLoopCandidateLister{rows: []*models.CrystallizationCandidate{

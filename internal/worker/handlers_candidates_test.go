@@ -644,7 +644,7 @@ func TestHandleApplyMemoryReviewPacketAction_PreserveAndSuppressUseSnapshotBacke
 		}
 		snapshotStore := gormdb.NewSnapshotStore(nil)
 		service := &Service{candidateQueueEnabled: true, candidateReviewStoreSeam: store, snapshotStore: snapshotStore}
-		body := []byte(`{"action_type":"preserve"}`)
+		body := []byte(`{"action_type":" preserve "}`)
 		w, req, router := candidateActionRequest(http.MethodPost, "/api/memory/review-packets/candidate:42:abc123/apply", body)
 		router.Post("/api/memory/review-packets/{packetID}/apply", service.handleApplyMemoryReviewPacketAction)
 
