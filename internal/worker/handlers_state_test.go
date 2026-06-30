@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/pkg/cognitive"
 )
 
@@ -76,6 +77,30 @@ func TestHandleGetStateResumeReturnsBoundedPacket(t *testing.T) {
 	require.Equal(t, "session-1", fakeStore.lastRequest.SessionID)
 }
 
+func TestHandleGetStateResumeUsesAuthenticatedPrincipalOverQuery(t *testing.T) {
+	fakeStore := &fakeWorkerStatePlane{
+		packet: cognitive.ResumePacket{
+			Source:    cognitive.StatePacketSourceNative,
+			Project:   "engram",
+			Principal: "agent/alice",
+			SessionID: "session-1",
+		},
+	}
+	svc := &Service{stateStore: fakeStore}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&principal=agent/mallory&session_id=session-1&goal_id=goal-1&task_id=task-1", nil).
+		WithContext(auth.WithIdentity(context.Background(), auth.ClientWithPrincipal("read-write", "keycard-alice", "agent/alice", auth.PrincipalKindAgent)))
+	rec := httptest.NewRecorder()
+	svc.handleGetStateResume(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "agent/alice", fakeStore.lastRequest.Principal)
+	require.Equal(t, "engram", fakeStore.lastRequest.Project)
+	require.Equal(t, "session-1", fakeStore.lastRequest.SessionID)
+	require.Equal(t, "goal-1", fakeStore.lastRequest.GoalID)
+	require.Equal(t, "task-1", fakeStore.lastRequest.TaskID)
+}
+
 func TestHandleGetStateResumeRejectsFilesystemFallbackOption(t *testing.T) {
 	svc := &Service{stateStore: &fakeWorkerStatePlane{}}
 
@@ -87,7 +112,7 @@ func TestHandleGetStateResumeRejectsFilesystemFallbackOption(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "allow_filesystem_fallback is not supported")
 }
 
-func TestHandleGetStateResumeRequiresPrincipal(t *testing.T) {
+func TestHandleGetStateResumeRequiresPrincipalWithoutAuth(t *testing.T) {
 	svc := &Service{stateStore: &fakeWorkerStatePlane{}}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/state/resume?project=engram&session_id=session-1", nil)

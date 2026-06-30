@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 	gormlib "gorm.io/gorm"
 
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/pkg/cognitive"
 )
 
@@ -74,10 +75,18 @@ func (s *Service) handleGetStateResume(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session_id is required", http.StatusBadRequest)
 		return
 	}
-	principal := strings.TrimSpace(query.Get("principal"))
+	principal := ""
+	if id, ok := auth.IdentityFrom(r.Context()); ok {
+		if ownerPrincipal, _, hasOwner := id.MemoryOwner(); hasOwner {
+			principal = ownerPrincipal
+		}
+	}
 	if principal == "" {
-		http.Error(w, "principal is required", http.StatusBadRequest)
-		return
+		principal = strings.TrimSpace(query.Get("principal"))
+		if principal == "" {
+			http.Error(w, "principal is required", http.StatusBadRequest)
+			return
+		}
 	}
 	if raw := query.Get("allow_filesystem_fallback"); raw != "" {
 		http.Error(w, "allow_filesystem_fallback is not supported on the server runtime state path", http.StatusBadRequest)

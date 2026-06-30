@@ -451,6 +451,12 @@ func (s *CandidateStore) promoteWithMemoryTx(ctx context.Context, tx *gorm.DB, c
 	}
 	before := toDomainCandidate(&row)
 
+	if row.PrivacyScope != "" {
+		promotedMemory := *mem
+		promotedMemory.PrivacyScope = row.PrivacyScope
+		mem = &promotedMemory
+	}
+
 	// Step B: create the memory within the same transaction.
 	created, err := createMemoryWithLifecycleTx(ctx, tx, mem)
 	if err != nil {
