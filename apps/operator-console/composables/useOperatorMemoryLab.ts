@@ -201,7 +201,7 @@ function blankPrincipalScope(): PrincipalMemoryScope {
   return {
     principal: '',
     principalKind: 'agent',
-    project: PRINCIPAL_CURRENT_PROJECT,
+    project: 'all',
     domain: '',
     visibility: 'all',
     includePrivate: false,

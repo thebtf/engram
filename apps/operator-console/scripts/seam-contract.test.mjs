@@ -263,6 +263,7 @@ test('principal memory surface follows the approved T008 contract', () => {
   assert.match(memoryLabSource, /export interface PrincipalMemoryScope/, 'Principal memory scope must be a typed UI contract')
   assert.match(memoryLabSource, /export function principalMemoryQueryPath/, 'Principal memory query URL construction must be reusable and testable')
   assert.match(memoryLabSource, /PRINCIPAL_CURRENT_PROJECT\s*=\s*['"]current['"]/, 'Principal memory current-project scope must use a non-empty UI sentinel')
+  assert.match(memoryLabSource, /project:\s*['"]all['"]/, 'Principal memory default project scope must stay all; current requires a concrete page project')
   assert.match(memoryLabSource, /principalMemoryQueryPath\(scope: PrincipalMemoryScope,\s*currentProject = ['"]['"]\)/, 'Principal memory query path must accept the current page project for current-project scope')
   assert.doesNotMatch(memoryLabSource, /return clean\(currentProject\) \|\| ['"]all['"]/, 'Current-project scope must not silently widen to all when currentProject is empty')
   assert.match(memoryLabSource, /resolvedCurrentProject && resolvedCurrentProject !== ['"]all['"] \? resolvedCurrentProject : ['"]['"]/, 'Current-project scope must resolve only to a concrete project')
