@@ -406,6 +406,45 @@ func TestCandidateStore_PromoteWithMemory_AtomicRollback(t *testing.T) {
 		"transaction rollback must not leave an orphan memory row")
 }
 
+func TestCandidateStore_PromoteWithMemory_InheritsCandidatePrivacyScope(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	cs := NewCandidateStore(db, auditStore)
+	ctx := context.Background()
+
+	candidate, err := models.NewCrystallizationCandidate(
+		fmt.Sprintf("session-promote-private-%d", time.Now().UnixNano()),
+		"content for private candidate promotion test",
+		"rule",
+		models.CandidateOptions{
+			AffectedProjects: []string{"test-project"},
+			PrivacyScope:     "private",
+		},
+	)
+	require.NoError(t, err)
+	createdCandidate, err := cs.Create(ctx, candidate)
+	require.NoError(t, err)
+	require.Equal(t, "private", createdCandidate.PrivacyScope)
+
+	mem := &models.Memory{
+		Content:       candidate.ProposedContent,
+		Project:       "test-project",
+		EpistemicType: "decision",
+		Tier:          "episodic",
+		SourceAgent:   "crystallization",
+	}
+	updatedCandidate, promotedMemory, err := cs.PromoteWithMemory(ctx, createdCandidate.ID, mem)
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusPromoted, updatedCandidate.Status)
+	require.NotNil(t, promotedMemory)
+	require.NotZero(t, promotedMemory.ID)
+
+	var promotedRow Memory
+	require.NoError(t, db.First(&promotedRow, promotedMemory.ID).Error)
+	require.Equal(t, "private", promotedRow.PrivacyScope,
+		"promoted memory must inherit the locked candidate privacy_scope instead of defaulting to project")
+}
+
 func TestCandidateStore_PromoteWithMemoryAndSnapshot_AmendFailureRollsBackPromotion(t *testing.T) {
 	db := openCandidateTestDB(t)
 	auditStore := NewAuditStore(db)
