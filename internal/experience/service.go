@@ -120,7 +120,7 @@ func (s *Service) QueryExperience(ctx context.Context, request cognitive.Experie
 			for _, archiveItem := range archiveItems {
 				item := cloneResponse(archiveItem)
 				item.ArchiveTriggerClasses = append([]cognitive.ExperienceArchiveTriggerClass(nil), triggers...)
-				if !projectMatches(request.Project, item.SourceAttribution) {
+				if !projectMatches(request.Project, item.SourceAttribution, item.Provenance) {
 					continue
 				}
 				filteredArchiveItems = append(filteredArchiveItems, item)
@@ -142,7 +142,7 @@ func (s *Service) QueryExperience(ctx context.Context, request cognitive.Experie
 	}
 	scored := make([]scoredCandidate, 0, len(candidates))
 	for i, candidate := range candidates {
-		if !projectMatches(request.Project, candidate.SourceAttribution) {
+		if !projectMatches(request.Project, candidate.SourceAttribution, candidate.Provenance) {
 			continue
 		}
 		score := relevanceScore(terms, candidate)
@@ -369,6 +369,9 @@ func candidateSearchTermSet(candidate cognitive.ExperienceResponse) map[string]s
 	for _, attribution := range candidate.SourceAttribution {
 		parts = append(parts, attribution.Kind, attribution.ID, attribution.Project, attribution.SessionID)
 	}
+	for _, attribution := range candidate.Provenance {
+		parts = append(parts, attribution.Kind, attribution.ID, attribution.Project, attribution.SessionID)
+	}
 	for _, trigger := range candidate.ArchiveTriggerClasses {
 		parts = append(parts, string(trigger))
 	}
@@ -423,18 +426,20 @@ func antiApplicabilityMatches(condition string, request cognitive.ExperienceQuer
 	return true
 }
 
-func projectMatches(project string, attributions []cognitive.ExperienceSourceAttribution) bool {
+func projectMatches(project string, attributionGroups ...[]cognitive.ExperienceSourceAttribution) bool {
 	project = strings.TrimSpace(project)
 	if project == "" {
 		return true
 	}
-	for _, attribution := range attributions {
-		attrProject := strings.TrimSpace(attribution.Project)
-		if attrProject == "" {
-			continue
-		}
-		if attrProject == project {
-			return true
+	for _, attributions := range attributionGroups {
+		for _, attribution := range attributions {
+			attrProject := strings.TrimSpace(attribution.Project)
+			if attrProject == "" {
+				continue
+			}
+			if attrProject == project {
+				return true
+			}
 		}
 	}
 	return false

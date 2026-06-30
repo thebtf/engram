@@ -292,6 +292,67 @@ func TestServiceQueryExperienceUsesProvenanceWhenSourceAttributionIsEmpty(t *tes
 	require.Equal(t, results[0].Provenance, results[0].SourceAttribution)
 }
 
+func TestServiceQueryExperienceMatchesProjectFromProvenanceWhenSourceAttributionDiffers(t *testing.T) {
+	candidate := fixtureExperience("legacy-other", "Project-scoped OAuth evidence for engram.", "other", "legacy-session")
+	candidate.Provenance = []cognitive.ExperienceSourceAttribution{
+		{
+			Kind:      "session",
+			ID:        "canonical-engram",
+			Project:   "engram",
+			SessionID: "canonical-session",
+			CreatedAt: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+		},
+	}
+	service := NewService([]cognitive.ExperienceResponse{candidate})
+
+	results, err := service.QueryExperience(context.Background(), cognitive.ExperienceQueryRequest{
+		Project:        "engram",
+		Query:          "Project-scoped OAuth evidence",
+		CurrentContext: "investigating engram OAuth evidence",
+		Limit:          1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "legacy-other", results[0].SourceAttribution[0].ID)
+	require.Equal(t, "other", results[0].SourceAttribution[0].Project)
+	require.Equal(t, "canonical-engram", results[0].Provenance[0].ID)
+	require.Equal(t, "engram", results[0].Provenance[0].Project)
+}
+
+func TestServiceQueryExperienceMatchesProvenanceTermsWhenSourceAttributionIsPresent(t *testing.T) {
+	candidate := fixtureExperience("legacy-only", "historical baseline", "engram", "legacy-session")
+	candidate.Situation = ""
+	candidate.Decision = ""
+	candidate.Action = ""
+	candidate.Outcome = ""
+	candidate.Revision = ""
+	candidate.Reversal = ""
+	candidate.ArchiveTriggerClasses = nil
+	candidate.Provenance = []cognitive.ExperienceSourceAttribution{
+		{
+			Kind:      "session",
+			ID:        "canonicalmatch",
+			Project:   "canonical-project",
+			SessionID: "session777",
+			CreatedAt: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+		},
+	}
+	service := NewService([]cognitive.ExperienceResponse{candidate})
+
+	results, err := service.QueryExperience(context.Background(), cognitive.ExperienceQueryRequest{
+		Project:        "engram",
+		Query:          "canonicalmatch session777",
+		CurrentContext: "lookup tokens",
+		Limit:          1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "legacy-only", results[0].SourceAttribution[0].ID)
+	require.Equal(t, "canonicalmatch", results[0].Provenance[0].ID)
+}
+
 func fixtureExperience(id, lesson, project, sessionID string) cognitive.ExperienceResponse {
 	return cognitive.ExperienceResponse{
 		Source:        cognitive.ExperienceSourceProjection,
