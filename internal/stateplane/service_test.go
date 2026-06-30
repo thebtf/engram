@@ -784,7 +784,7 @@ func TestServiceReadResumePacketRejectsFallbackWithoutPathBeforeMixedPacket(t *t
 	require.ErrorContains(t, err, "fallback_path is required")
 }
 
-func TestServiceReadResumePacketSynthesizesTimestampOnFallbackMissingGeneratedAt(t *testing.T) {
+func TestServiceReadResumePacketRejectsFallbackMissingGeneratedAt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fallback-resume.json")
 	require.NoError(t, os.WriteFile(path, []byte(`{
 		"source":"filesystem_fallback",
@@ -794,16 +794,16 @@ func TestServiceReadResumePacketSynthesizesTimestampOnFallbackMissingGeneratedAt
 		"next_verification":{"kind":"command","description":"focused stateplane tests","command":"go test ./..."},
 		"project":"engram",
 		"session_id":"session-1",
+		"state_version":"2026-06-28T12:00:00Z",
 		"scopes":["session"]
 	}`), 0o600))
 	service := NewService(
 		&fakeNativePlane{err: errors.New("native missing")},
 		JSONFileFallbackReader{Path: path},
 	)
-	clockTime := time.Date(2026, 6, 28, 13, 0, 0, 0, time.UTC)
-	service.now = func() time.Time { return clockTime }
+	service.now = func() time.Time { return time.Date(2026, 6, 28, 13, 0, 0, 0, time.UTC) }
 
-	packet, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
+	_, err := service.ReadResumePacket(context.Background(), cognitive.ResumePacketRequest{
 		Project:                 "engram",
 		Principal:               "agent:developer",
 		SessionID:               "session-1",
@@ -811,13 +811,7 @@ func TestServiceReadResumePacketSynthesizesTimestampOnFallbackMissingGeneratedAt
 		AllowFilesystemFallback: true,
 	})
 
-	// normalizeFallbackPacket synthesizes GeneratedAt = now when absent so the
-	// packet is valid and reaches callers with a real timestamp instead of zero.
-	require.NoError(t, err)
-	require.Equal(t, cognitive.StatePacketSourceFilesystemFallback, packet.Source)
-	require.False(t, packet.GeneratedAt.IsZero(), "GeneratedAt must be synthesized from clock")
-	require.Equal(t, clockTime.UTC(), packet.GeneratedAt.UTC())
-	require.NotEmpty(t, packet.StateVersion)
+	require.ErrorContains(t, err, "generated_at is required")
 }
 
 func TestServiceReadResumePacketRejectsMissingPrincipalBeforeFallback(t *testing.T) {

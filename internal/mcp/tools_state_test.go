@@ -111,7 +111,9 @@ func TestStateToolsAdvertisedOnlyWhenNativeStoreIsReachable(t *testing.T) {
 	readConditionals := readTool.InputSchema["allOf"].([]any)
 	require.NotEmpty(t, readConditionals)
 	resumeThen := readConditionals[0].(map[string]any)["then"].(map[string]any)
-	require.ElementsMatch(t, []string{"principal", "session_id"}, resumeThen["required"].([]string))
+	require.ElementsMatch(t, []string{"principal"}, resumeThen["required"].([]string))
+	resumeScopes := readSchema["scopes"].(map[string]any)
+	require.Equal(t, "array", resumeScopes["type"])
 
 	writeTool := setStateTool()
 	writeSchema := writeTool.InputSchema["properties"].(map[string]any)
@@ -222,11 +224,11 @@ func TestSetStateThenGetStateResumeUsesServerCallPath(t *testing.T) {
 	require.Equal(t, "engram", packet.Project)
 	require.Equal(t, "agent:developer", packet.Principal)
 	require.Equal(t, "session-1", packet.SessionID)
-	require.ElementsMatch(t, []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject, cognitive.StateScopeGoal, cognitive.StateScopeTask}, packet.Scopes)
+	require.ElementsMatch(t, []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeGoal, cognitive.StateScopeTask}, packet.Scopes)
 	require.Equal(t, "agent:developer", fakeStore.lastRequest.Principal)
 	require.Equal(t, "engram", fakeStore.lastRequest.Project)
 	require.Equal(t, "session-1", fakeStore.lastRequest.SessionID)
-	require.ElementsMatch(t, []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject, cognitive.StateScopeGoal, cognitive.StateScopeTask}, fakeStore.lastRequest.Scopes)
+	require.ElementsMatch(t, []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeGoal, cognitive.StateScopeTask}, fakeStore.lastRequest.Scopes)
 }
 
 func TestGetStateToolSessionDoesNotRequirePrincipal(t *testing.T) {
@@ -296,7 +298,31 @@ func TestGetStateToolResumeReturnsNativePacket(t *testing.T) {
 	require.Equal(t, "session-1", fakeStore.lastRequest.SessionID)
 	require.Equal(t, "goal-1", fakeStore.lastRequest.GoalID)
 	require.Equal(t, "task-1", fakeStore.lastRequest.TaskID)
-	require.ElementsMatch(t, []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeProject, cognitive.StateScopeGoal, cognitive.StateScopeTask}, fakeStore.lastRequest.Scopes)
+	require.ElementsMatch(t, []cognitive.StateScopeKind{cognitive.StateScopeSession, cognitive.StateScopeGoal, cognitive.StateScopeTask}, fakeStore.lastRequest.Scopes)
+}
+
+func TestGetStateToolResumeSupportsExplicitProjectOnlyScope(t *testing.T) {
+	srv := NewServer(ServerOptions{Version: "test"})
+	fakeStore := &fakeStatePlane{
+		packet: cognitive.ResumePacket{
+			Source:           cognitive.StatePacketSourceNative,
+			Freshness:        cognitive.StateFreshnessFresh,
+			Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, Conflicts: []cognitive.StateConflict{}, CheckedAt: time.Now().UTC()},
+			NextAction:       cognitive.StateAction{Kind: cognitive.StateActionInstruction, Description: "continue project"},
+			NextVerification: cognitive.StateVerification{Kind: cognitive.StateVerificationManual, Description: "read project resume"},
+			GeneratedAt:      time.Now().UTC(),
+			Project:          "engram",
+			Principal:        "agent:developer",
+			Scopes:           []cognitive.StateScopeKind{cognitive.StateScopeProject},
+		},
+	}
+	srv.SetStateStore(fakeStore)
+
+	_, err := srv.callTool(context.Background(), "get_state", json.RawMessage(`{"action":"resume","project":"engram","principal":"agent:developer","scopes":["project"]}`))
+	require.NoError(t, err)
+	require.Equal(t, "engram", fakeStore.lastRequest.Project)
+	require.Empty(t, fakeStore.lastRequest.SessionID)
+	require.ElementsMatch(t, []cognitive.StateScopeKind{cognitive.StateScopeProject}, fakeStore.lastRequest.Scopes)
 }
 
 func TestGetStateToolRejectsFilesystemFallbackOption(t *testing.T) {
