@@ -198,3 +198,37 @@ func TestService_QueryTemporalTruthFutureOnlyFactIsUnknown(t *testing.T) {
 	require.Equal(t, cognitive.TemporalTruthUnknown, response.State)
 	require.Nil(t, response.TrueNow)
 }
+
+func TestService_QueryTemporalTruthPreservesTrueThenForExpiredSelectedFact(t *testing.T) {
+	now := time.Now().UTC()
+	validFrom := now.Add(-48 * time.Hour)
+	expiredAt := now.Add(-24 * time.Hour)
+	asOfThen := now.Add(-36 * time.Hour)
+	service := NewService([]Record{
+		{
+			FactID:     "release.supported_version",
+			FactClass:  "release_policy",
+			Project:    "engram",
+			Value:      "v7",
+			ValidFrom:  validFrom,
+			ValidUntil: &expiredAt,
+			Provenance: []cognitive.TemporalTruthProvenance{
+				{Kind: "release", ID: "release:v7", Project: "engram"},
+			},
+		},
+	})
+
+	response, err := service.QueryTemporalTruth(context.Background(), cognitive.TemporalTruthQueryRequest{
+		FactID:  "release.supported_version",
+		Project: "engram",
+		AsOf:    &asOfThen,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, cognitive.TemporalTruthUnknown, response.State)
+	require.Nil(t, response.TrueNow)
+	require.NotNil(t, response.TrueThen)
+	require.Equal(t, "v7", response.TrueThen.Value)
+	require.Len(t, response.History, 1)
+	require.Len(t, response.ProvenanceChain, 1)
+}
