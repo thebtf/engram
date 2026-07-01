@@ -33,6 +33,9 @@ Engram решает эту проблему, оставляя только те 
 
 | Версия | Основное изменение |
 |--------|-------------------|
+| **v6.32.0** | **Usefulness / Noise Review Loop (CR-008, MPL-3)** — packet-centric bounded review queue с явными empty/gated/error/sparse состояниями, раздельные preview/apply, атомарный snapshot+audit-backed suppress/preserve, честные метрики. |
+| **v6.31.0** | **Native State Plane + Principal Explorer (CR-006 + CR-007, MPL-1/2)** — Engram-native session/goal/task/project state plane с детерминированным resume packet; principal/domain/project memory explorer + principal-scoped briefs; hardening контракта CR-005. |
+| **v6.30.0** | **Agent Knowledge & Experience Layer foundations (ENG-MPL-1)** — native state plane, principal briefs, packet-centric review loop, first-class experience retrieval с applicability gates, forgetting taxonomy и selective temporal truth контракты. |
 | **v6.29.0** | **Rule Governance Telemetry (RG-3)** — lifecycle health, exception queues, transition controls, rollback-aware snapshots и usefulness telemetry поверх rule-governance milestones. |
 | **v5.0.0** | Cleaned Baseline — static-only storage, split observations, session-start gRPC + cache fallback |
 | **v4.4.0** | Loom tenant — background task execution и daemon-side project event bridge |
@@ -340,16 +343,21 @@ make install  # устанавливает плагин + запускает dae
 <!-- redoc:start:mcp-tools -->
 ## MCP-инструменты
 
-Engram предоставляет сокращённую static-first MCP surface для surviving entity model.
+Engram предоставляет static-first MCP surface для surviving entity model, расширенную по ходу v6-линии по мере выхода milestone'ов Memory Product Layer.
 
-Основные категории в v5:
+Static core (v5 baseline):
 - issues / issue comments
 - memories / behavioral rules
 - documents
 - credentials / vault
 - loom background tasks
 
-Старая dynamic search / graph / learning-oriented tool surface больше не является primary v5 path.
+Дополнения Memory Product Layer (v6.30–v6.32):
+- native state plane — session/goal/task/project resume packet (CR-006)
+- principal explorer + briefs — инспекция memory по principal/domain + bounded briefs (CR-007)
+- review loop — packet-centric candidate/suppress/preserve governance поверх candidate/snapshot/audit seams (CR-008)
+
+Старая dynamic search / graph / learning-oriented tool surface была вырезана в фазе v5 demolition; v6 Memory Product Layer перестраивает durable agent knowledge осознанно, а не воскрешает старый стек.
 
 ### `store` — Сохранение и организация
 

@@ -33,6 +33,9 @@ Engram 通过保留那些在生产中真正可靠的记忆原语来解决这个�
 
 | 版本 | 亮点 |
 |------|------|
+| **v6.32.0** | **Usefulness / Noise Review Loop (CR-008, MPL-3)** —— packet-centric bounded review queue，具备明确的 empty/gated/error/sparse 状态、独立的 preview/apply、atomic snapshot+audit-backed suppress/preserve，以及诚实的指标。 |
+| **v6.31.0** | **Native State Plane + Principal Explorer (CR-006 + CR-007, MPL-1/2)** —— Engram 原生的 session/goal/task/project state plane，带确定性 resume packet；principal/domain/project memory explorer + principal-scoped briefs；CR-005 契约加固。 |
+| **v6.30.0** | **Agent Knowledge & Experience Layer foundations (ENG-MPL-1)** —— native state plane、principal briefs、packet-centric review loop、带 applicability gates 的 first-class experience retrieval、forgetting taxonomy 以及 selective temporal truth 契约。 |
 | **v6.29.0** | **Rule Governance Telemetry (RG-3)** —— lifecycle health、exception queues、transition controls、rollback-aware snapshots，以及 usefulness telemetry。 |
 | **v5.0.0** | Cleaned Baseline — static-only storage、split observations、session-start gRPC + cache fallback |
 | **v4.4.0** | Loom tenant — background task execution 与 daemon-side project event bridge |
@@ -340,16 +343,21 @@ v6 的关键升级契约是把 workstation token flow 与 static core 之上的 
 <!-- redoc:start:mcp-tools -->
 ## MCP 工具
 
-Engram 在 v5 中提供缩减后的 static-first MCP surface，围绕 surviving entity model 展开。
+Engram 提供 static-first MCP surface，围绕 surviving entity model 展开，并随 v6 系列 Memory Product Layer milestone 的落地而扩展。
 
-主要类别：
+Static core（v5 基线）：
 - issues / issue comments
 - memories / behavioral rules
 - documents
 - credentials / vault
 - loom background tasks
 
-旧的 dynamic search / graph / learning-oriented tool surface 已不再是 primary v5 path。
+Memory Product Layer 新增（v6.30–v6.32）：
+- native state plane —— session/goal/task/project resume packet（CR-006）
+- principal explorer + briefs —— 按 principal/domain 检视 memory + bounded briefs（CR-007）
+- review loop —— 基于 candidate/snapshot/audit seams 的 packet-centric candidate/suppress/preserve governance（CR-008）
+
+旧的 dynamic search / graph / learning-oriented tool surface 在 v5 demolition 阶段被移除；v6 Memory Product Layer 有意识地重建 durable agent knowledge，而非复活旧栈。
 
 ### `store` — 保存与组织
 
