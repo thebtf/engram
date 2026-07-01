@@ -549,6 +549,74 @@ func TestReadHistoryDetailFindsExactIDBeyondRelevanceLimit(t *testing.T) {
 	require.Equal(t, targetID, detail.ExperienceDetail.ExperienceID)
 }
 
+func TestReadHistoryArchiveFilteringDoesNotMutateArchiveSource(t *testing.T) {
+	otherProject := archiveExperience("archive-other", "rollback regression archive lesson")
+	otherProject.SourceAttribution[0].Project = "other"
+	engramItem := archiveExperience("archive-engram", "rollback regression archive lesson")
+	archive := &cachingArchiveSource{items: []cognitive.ExperienceResponse{otherProject, engramItem}}
+	service := NewServiceWithArchive(nil, archive)
+
+	results, err := service.QueryExperience(context.Background(), cognitive.ExperienceQueryRequest{
+		Project:        "engram",
+		Query:          "rollback regression archive lesson",
+		CurrentContext: "needs rollback regression evidence",
+		ArchiveTriggerClasses: []cognitive.ExperienceArchiveTriggerClass{
+			cognitive.ExperienceArchiveTriggerRegressionOrRollback,
+		},
+		Limit: 5,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, 1, archive.calls)
+	require.Equal(t, "other", archive.items[0].SourceAttribution[0].Project)
+	require.Equal(t, "archive-other", archive.items[0].SourceAttribution[0].ID)
+}
+
+func TestReadHistoryDetailPassesExperienceIDToArchiveLookup(t *testing.T) {
+	archive := &cachingArchiveSource{
+		targetQuery: "archive:archive-target",
+		items: []cognitive.ExperienceResponse{
+			archiveExperience("archive-target", "detail archive lesson"),
+		},
+	}
+	service := NewServiceWithArchive(nil, archive)
+
+	detail, err := ReadHistoryDetail(context.Background(), service, HistoryDetailRequest{
+		Project:      "engram",
+		ExperienceID: "archive:archive-target",
+		ArchiveTriggerClasses: []cognitive.ExperienceArchiveTriggerClass{
+			cognitive.ExperienceArchiveTriggerExplicitLookup,
+		},
+	}, time.Date(2026, time.July, 1, 4, 10, 0, 0, time.UTC))
+
+	require.NoError(t, err)
+	require.Equal(t, 1, archive.calls)
+	require.Equal(t, "archive:archive-target", archive.lastQuery)
+	require.Equal(t, HistoryStateLive, detail.State)
+	require.NotNil(t, detail.ExperienceDetail)
+	require.Equal(t, "archive:archive-target", detail.ExperienceDetail.ExperienceID)
+}
+
+type cachingArchiveSource struct {
+	items       []cognitive.ExperienceResponse
+	targetQuery string
+	lastQuery   string
+	calls       int
+}
+
+func (c *cachingArchiveSource) QueryArchiveExperience(_ context.Context, request cognitive.ExperienceQueryRequest, _ []cognitive.ExperienceArchiveTriggerClass, limit int) ([]cognitive.ExperienceResponse, error) {
+	c.calls++
+	c.lastQuery = request.Query
+	if c.targetQuery != "" && request.Query != c.targetQuery {
+		return nil, nil
+	}
+	if len(c.items) > limit {
+		return c.items[:limit], nil
+	}
+	return c.items, nil
+}
+
 type perRequestTraceProvider struct {
 	items           []cognitive.ExperienceResponse
 	perCallEvidence []ArchiveEvidenceEntry

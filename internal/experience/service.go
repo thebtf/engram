@@ -104,6 +104,7 @@ func (s *Service) QueryExperienceDetail(ctx context.Context, request HistoryDeta
 		Project:               request.Project,
 		Principal:             request.Principal,
 		Domain:                request.Domain,
+		Query:                 request.ExperienceID,
 		CurrentContext:        request.CurrentContext,
 		ArchiveTriggerClasses: triggers,
 		Limit:                 MaxQueryLimit,
@@ -170,7 +171,7 @@ func (s *Service) QueryExperienceDetail(ctx context.Context, request HistoryDeta
 			if len(archiveItems) > archiveLimit {
 				archiveItems = archiveItems[:archiveLimit]
 			}
-			filteredArchiveItems := archiveItems[:0]
+			filteredArchiveItems := make([]cognitive.ExperienceResponse, 0, len(archiveItems))
 			for _, archiveItem := range archiveItems {
 				item := cloneResponse(archiveItem)
 				item.ArchiveTriggerClasses = append([]cognitive.ExperienceArchiveTriggerClass(nil), triggers...)
@@ -274,7 +275,7 @@ func (s *Service) queryExperience(ctx context.Context, request cognitive.Experie
 			if len(archiveItems) > archiveLimit {
 				archiveItems = archiveItems[:archiveLimit]
 			}
-			filteredArchiveItems := archiveItems[:0]
+			filteredArchiveItems := make([]cognitive.ExperienceResponse, 0, len(archiveItems))
 			for _, archiveItem := range archiveItems {
 				item := cloneResponse(archiveItem)
 				item.ArchiveTriggerClasses = append([]cognitive.ExperienceArchiveTriggerClass(nil), triggers...)
