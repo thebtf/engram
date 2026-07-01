@@ -129,6 +129,29 @@ func TestExperienceApplicabilityStateEnum(t *testing.T) {
 	}
 }
 
+func TestExperienceApplicabilityContract_EnvelopeFields(t *testing.T) {
+	typ := reflect.TypeOf(ExperienceApplicability{})
+	required := map[string]string{
+		"State":            "state",
+		"Rationale":        "rationale",
+		"AppliesWhen":      "applies_when,omitempty",
+		"DoesNotApplyWhen": "does_not_apply_when,omitempty",
+		"RequiredContext":  "required_context,omitempty",
+		"Confidence":       "confidence,omitempty",
+		"BlockReason":      "block_reason,omitempty",
+		"OverrideEvidence": "override_evidence,omitempty",
+	}
+	for name, wantTag := range required {
+		field, ok := typ.FieldByName(name)
+		if !ok {
+			t.Fatalf("ExperienceApplicability missing envelope field %s", name)
+		}
+		if got := field.Tag.Get("json"); got != wantTag {
+			t.Fatalf("ExperienceApplicability.%s json tag = %q, want %q", name, got, wantTag)
+		}
+	}
+}
+
 func TestExperienceArchiveTriggerTaxonomy_CR005BoundedClasses(t *testing.T) {
 	cases := map[ExperienceArchiveTriggerClass]string{
 		ExperienceArchiveTriggerHistoricalWhy:        "historical_why",

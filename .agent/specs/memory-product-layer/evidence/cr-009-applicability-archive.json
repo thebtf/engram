@@ -1,0 +1,50 @@
+{
+  "gate_id": "G002",
+  "artifact": ".agent/specs/memory-product-layer/evidence/cr-009-applicability-archive.json",
+  "status": "pm_verified_pass",
+  "observed_at": "2026-07-01T01:07:46Z",
+  "applicability_contract": {
+    "outcomes": ["applies", "uncertain", "blocked"],
+    "envelope_fields": ["applies_when", "does_not_apply_when", "required_context", "confidence", "block_reason", "override_evidence"],
+    "anti_applicability_rule": "strong anti-applicability matches set state=blocked, fill block_reason/override_evidence, and surface blocked_by_anti_applicability in archive_trace so callers cannot silently reuse the lesson."
+  },
+  "archive_contract": {
+    "allowed_trigger_classes": ["historical_why", "regression_or_rollback", "revisit_old_decision", "similar_prior_failure", "temporal_truth_change", "explicit_archive_lookup"],
+    "ordinary_hot_path": "No archive trigger classes means archive_trace.status=archive_skipped and ArchiveSource is not called.",
+    "triggered_path": "Named trigger classes are normalized, bounded by MaxArchiveResurfacingLimit=10, and recorded through ArchiveEvidenceEntry.",
+    "invalid_trigger_behavior": "Unknown trigger classes are rejected before archive source calls.",
+    "per_request_trace": "ReadHistory consumes per-call archive evidence returned by QueryExperienceWithArchiveEvidence; it no longer derives the current response from the process-wide ArchiveEvidence ring."
+  },
+  "implemented_files": [
+    "pkg/cognitive/types.go",
+    "internal/experience/service.go",
+    "internal/experience/history_surface.go",
+    "internal/mcp/tools_experience_history.go",
+    "internal/worker/handlers_experience_history.go"
+  ],
+  "focused_tests_added_or_updated": [
+    "internal/experience TestServiceQueryExperienceFillsApplicabilityEnvelope",
+    "internal/experience TestServiceQueryExperienceSkipsArchiveWithoutTrigger",
+    "internal/experience TestServiceQueryExperienceRejectsInvalidTriggerBeforeArchiveCall",
+    "internal/experience TestServiceArchiveEvidenceRecordsAntiApplicabilityBlock",
+    "internal/experience TestReadHistoryArchiveTraceUsesNamedTriggerAndReportsBlock",
+    "internal/experience TestReadHistoryUsesPerRequestArchiveTraceInsteadOfGlobalEvidence",
+    "internal/experience TestReadHistoryDetailFindsExactIDBeyondRelevanceLimit",
+    "internal/mcp TestHandleExperienceHistoryReadRejectsInvalidArchiveTrigger",
+    "internal/worker TestHandleExperienceHistoryReadRejectsUnnamedArchiveTrigger"
+  ],
+  "archive_trace_fields": ["trigger_classes", "archive_used", "result_cap", "surfaced_count", "blocked_by_anti_applicability", "evidence_refs", "status", "reason"],
+  "pm_verification": [
+    {
+      "command": "go test ./pkg/cognitive ./internal/experience ./internal/mcp ./internal/worker -run \"ExperienceApplicability|ExperienceResponse|ExperienceHistory|ReadHistory|Archive\" -count=1",
+      "result": "pass"
+    },
+    {"command": "go test ./...", "result": "pass"},
+    {"command": "go vet ./...", "result": "pass"},
+    {"command": "git diff --check", "result": "pass_with_line_ending_warnings_only"}
+  ],
+  "review": {
+    "initial": "CR009CodeReview BLOCKED on archive-trace race and non-exact detail lookup.",
+    "fix_review": "CR009FixReview APPROVE with no findings."
+  }
+}

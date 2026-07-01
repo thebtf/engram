@@ -313,11 +313,17 @@ type ExperienceTimeSpan struct {
 }
 
 // ExperienceApplicability carries the gate state and rationale for a returned
-// experience. State is required; Rationale is required by contract even when the
-// caller later renders it differently.
+// experience. The envelope fields make applicability and anti-applicability
+// explicit for read adapters so callers do not infer safe reuse from relevance.
 type ExperienceApplicability struct {
-	State     ExperienceApplicabilityState `json:"state"`
-	Rationale string                       `json:"rationale"`
+	State            ExperienceApplicabilityState `json:"state"`
+	Rationale        string                       `json:"rationale"`
+	AppliesWhen      []string                     `json:"applies_when,omitempty"`
+	DoesNotApplyWhen []string                     `json:"does_not_apply_when,omitempty"`
+	RequiredContext  []string                     `json:"required_context,omitempty"`
+	Confidence       string                       `json:"confidence,omitempty"`
+	BlockReason      string                       `json:"block_reason,omitempty"`
+	OverrideEvidence string                       `json:"override_evidence,omitempty"`
 }
 
 // ExperienceAntiApplicability records a condition under which a prior lesson

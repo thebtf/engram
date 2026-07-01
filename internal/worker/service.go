@@ -170,6 +170,7 @@ type Service struct {
 	memoryStore                 *gorm.MemoryStore
 	memoryStoreSeam             memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
 	stateStore                  statePlane
+	experienceProvider          experienceHistoryProvider
 	principalMemoryQueryService principalMemoryQueryService
 	domainOwnerStore            domainOwnerStore
 	domainRegistryService       domainRegistryService
@@ -607,6 +608,7 @@ func (s *Service) initializeAsync() {
 	stateStore := gorm.NewStateStore(store.GetDB(), auditStore)
 	statePlaneSvc := stateplane.NewService(stateStore, nil)
 	principalMemoryQuerySvc := principalmemory.NewPrincipalMemoryQueryService(memoryStore, auditStore)
+	experienceProvider := newMemoryExperienceProvider(principalMemoryQuerySvc)
 	domainOwnerStore := gorm.NewDomainOwnerStore(store)
 	domainRegistrySvc := principalmemory.NewDomainRegistryService(domainOwnerStore, auditStore)
 	wireStateStore(s, statePlaneSvc)
@@ -634,6 +636,7 @@ func (s *Service) initializeAsync() {
 	s.issueStore = issueStore
 	s.credentialStore = credentialStore
 	s.memoryStore = memoryStore
+	s.experienceProvider = experienceProvider
 	s.principalMemoryQueryService = principalMemoryQuerySvc
 	s.domainOwnerStore = domainOwnerStore
 	s.domainRegistryService = domainRegistrySvc
@@ -783,6 +786,7 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetDomainRegistryService(domainRegistrySvc)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
 	mcpServer.SetStateStore(statePlaneSvc)
+	mcpServer.SetExperienceProvider(experienceProvider)
 
 	// Wire the raw DB handle so handleGetMemoryStats can run injection_log /
 	// citation_log / memories-by-status raw SQL queries. Uses the same shared
@@ -1396,6 +1400,10 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/state/project/{project}", s.handleGetStateProject)
 		r.Get("/api/state/resume", s.handleGetStateResume)
 
+		// Experience/history read surface (CR-009) — read-only, bounded, archive-trigger-gated.
+		r.Get("/api/experience-history", s.handleExperienceHistoryRead)
+		r.Get("/api/experience-history/{experienceID}", s.handleExperienceHistoryDetail)
+
 		// Context injection
 		r.Get("/api/context/count", s.handleContextCount)
 		r.Post("/api/context/inject", s.handleContextInject)
@@ -1472,7 +1480,6 @@ func (s *Service) setupRoutes() {
 
 		// Token stats
 		r.Get("/api/auth/tokens/{id}/stats", s.handleGetTokenStats)
-
 	})
 
 	// Catch-all browser routes for the promoted operator-console surface.
