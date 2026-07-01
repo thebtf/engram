@@ -140,8 +140,12 @@ func NewForgettingReviewActionSnapshot(packet cognitive.ForgettingReviewPacket, 
 	if err != nil {
 		return nil, err
 	}
-	if packet.Preview.Action != "" && normalized != packet.Preview.Action {
-		return nil, fmt.Errorf("forgetting review snapshot action %q does not match approved preview action %q", normalized, packet.Preview.Action)
+	approvedAction := strings.TrimSpace(packet.Preview.Action)
+	if approvedAction == "" {
+		return nil, fmt.Errorf("forgetting review snapshot requires approved preview action")
+	}
+	if normalized != approvedAction {
+		return nil, fmt.Errorf("forgetting review snapshot action %q does not match approved preview action %q", normalized, approvedAction)
 	}
 	trimmed := strings.TrimSpace(string(beforeState))
 	if trimmed == "" || trimmed == "{}" {
@@ -208,8 +212,10 @@ func BuildAuditExportProof(decision cognitive.ForgettingDecision, receipt Action
 		actor = "system"
 	}
 	packetID := strings.TrimSpace(receipt.PacketID)
-	if packetID == "" && decision.Review.Packet.PacketID != "" {
+	if packetID == "" {
 		packetID = decision.Review.Packet.PacketID
+	} else if decision.Review.Packet.PacketID != "" && packetID != decision.Review.Packet.PacketID {
+		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting reviewed proof packet_id %q does not match review packet %q", packetID, decision.Review.Packet.PacketID)
 	}
 	if path == cognitive.ForgettingActionPathReviewed {
 		if !decision.Review.Required || strings.TrimSpace(packetID) == "" {
@@ -224,8 +230,7 @@ func BuildAuditExportProof(decision cognitive.ForgettingDecision, receipt Action
 		if result != cognitive.ForgettingActionResultBlocked && strings.TrimSpace(receipt.SnapshotID) == "" {
 			return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting reviewed proof requires snapshot_id")
 		}
-	}
-	if path == cognitive.ForgettingActionPathAutomatic {
+	} else {
 		if decision.Review.Required {
 			return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting automatic proof cannot satisfy review-required decision")
 		}
@@ -278,19 +283,22 @@ func AuditLogEntryFromProof(proof cognitive.ForgettingAuditExportProof) (gormdb.
 	}, nil
 }
 
-// ExportProofFromAuditLogEntry reconstructs CR-010 proof from audit_log.after_state.
 func ExportProofFromAuditLogEntry(entry gormdb.AuditLogEntry) (cognitive.ForgettingAuditExportProof, error) {
 	if entry.AfterState == nil || len(*entry.AfterState) == 0 {
 		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting audit proof missing after_state")
 	}
-
 	var proof cognitive.ForgettingAuditExportProof
 	if err := json.Unmarshal(*entry.AfterState, &proof); err != nil {
 		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting audit proof unmarshal: %w", err)
 	}
-
-	if proof.Operation == "" || proof.AuditAction == "" {
+	if proof.Operation == "" || proof.Action == "" || proof.Path == "" || proof.Actor == "" || proof.Result == "" || proof.AuditAction == "" {
 		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting audit proof incomplete")
+	}
+	if proof.Path == cognitive.ForgettingActionPathReviewed && proof.AuditAction != ForgettingReviewAuditAction {
+		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting audit proof path/action mismatch")
+	}
+	if proof.Path == cognitive.ForgettingActionPathAutomatic && proof.AuditAction != ForgettingAutomaticAuditAction {
+		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting audit proof path/action mismatch")
 	}
 	return proof, nil
 }
