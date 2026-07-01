@@ -94,6 +94,9 @@ func ValidateForgettingMutationBoundary(packet cognitive.ForgettingReviewPacket)
 	if packet.State == cognitive.ForgettingDecisionBlocked {
 		return fmt.Errorf("forgetting mutation blocked by structural/destructive guard")
 	}
+	if packet.Operation == cognitive.ForgettingOperationDestroy {
+		return fmt.Errorf("forgetting mutation blocked by destroy guardrail")
+	}
 	if len(packet.AllowedActions) == 0 {
 		return fmt.Errorf("forgetting mutation requires allowed review actions")
 	}
@@ -206,6 +209,9 @@ func BuildAuditExportProof(decision cognitive.ForgettingDecision, receipt Action
 		} else {
 			result = cognitive.ForgettingActionResultApplied
 		}
+	}
+	if decision.State == cognitive.ForgettingDecisionBlocked && result != cognitive.ForgettingActionResultBlocked {
+		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting blocked decision requires blocked result")
 	}
 	actor := strings.TrimSpace(receipt.Actor)
 	if actor == "" {

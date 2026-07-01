@@ -373,6 +373,9 @@ func TestValidateForgettingMutationBoundary_BlocksDestroyPacket(t *testing.T) {
 
 	err = ValidateForgettingMutationBoundary(decision.Review.Packet)
 	require.ErrorContains(t, err, "blocked")
+	tampered := decision.Review.Packet
+	tampered.State = cognitive.ForgettingDecisionReviewRequired
+	require.ErrorContains(t, ValidateForgettingMutationBoundary(tampered), "destroy guardrail")
 }
 
 func TestAuditExportProof_AutomaticAndReviewedActionsRoundTripFromAuditEntry(t *testing.T) {
@@ -449,6 +452,18 @@ func TestAuditExportProof_AutomaticAndReviewedActionsRoundTripFromAuditEntry(t *
 	_, err = BuildAuditExportProof(reviewed, ActionReceipt{Actor: "agent/reviewer", Action: "archive", Path: "reviewed packet"})
 	require.ErrorContains(t, err, "proof path")
 
-	_, err = BuildAuditExportProof(automatic, ActionReceipt{Actor: "agent/system", Action: "destroy", Result: cognitive.ForgettingActionResultApplied})
-	require.ErrorContains(t, err, "automatic proof")
+	destroyDecision, err := service.ClassifyForgetting(context.Background(), cognitive.ForgettingClassificationRequest{
+		Reason:       cognitive.ForgettingReasonOperatorDestroy,
+		MemoryID:     "memory-danger",
+		PrivacyScope: "project",
+	})
+	require.NoError(t, err)
+	_, err = BuildAuditExportProof(destroyDecision, ActionReceipt{
+		Actor:      "agent/reviewer",
+		Action:     "destroy",
+		Path:       cognitive.ForgettingActionPathReviewed,
+		Result:     cognitive.ForgettingActionResultApplied,
+		SnapshotID: "forgetting-review-snapshot-danger",
+	})
+	require.ErrorContains(t, err, "blocked result")
 }
