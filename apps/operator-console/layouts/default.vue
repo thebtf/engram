@@ -41,7 +41,6 @@ const NAV_ICONS: Record<string, string> = {
   projects: '<path d="M2 4.6 H6.2 L7.7 6.1 H14 V12.6 H2 Z"/>',
   secrets: '<circle cx="5.2" cy="5.4" r="2.7"/><path d="M7.1 7.3 L13 13.2 M11 11.2 V13.4 M13 13.2 H10.8"/>',
   documents: '<path d="M4 2.2 H10 L13 5.2 V14 H4 Z"/><path d="M9.6 2.4 V5.4 H12.6"/>',
-  collections: '<path d="M2.3 4 H13.7 V6.1 H2.3 Z"/><path d="M3.4 6.1 V13 H12.6 V6.1"/><path d="M6.4 9 H9.6"/>',
   access: '<path d="M8 2 L13 4.2 V8 C13 11 10.7 13.6 8 14.6 C5.3 13.6 3 11 3 8 V4.2 Z"/><path d="M6.2 8 L7.5 9.4 L10 6.5"/>',
   settings: '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.6 V3.3 M8 12.7 V14.4 M14.4 8 H12.7 M3.3 8 H1.6 M12.53 3.47 L11.3 4.7 M4.7 11.3 L3.47 12.53 M12.53 12.53 L11.3 11.3 M4.7 4.7 L3.47 3.47"/>',
   health: '<path d="M2 8.2 H5 L6.8 4 L9.2 12.4 L11 8.2 H14"/>',

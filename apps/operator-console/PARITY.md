@@ -43,9 +43,12 @@ what makes "follows" auditable instead of trust-based.
 
 ## Current state
 
-Run `npm run parity` for the live count. As of `design_version 2026.06.20`:
-**2 full · 4 interactive · 5 structural · 5 stub**, 35 named gaps. i18n readiness:
-**1 keyed · 15 hardcoded** (secrets + the shell are wired; the rest await keying). The
+Run `npm run parity` for the live count. As of `design_version 2026.06.21` (post `collections`
+removal 2026-07-01, section was `stale: search removed v5 — intentionally inert`, never built):
+**2 full · 9 interactive · 2 structural · 3 stub**, 30 named gaps. i18n readiness:
+**all sections keyed** (`shell`, `secrets`, and the other 14 pages all carry `i18n: "keyed"`
+in `PARITY.json`; the **Localization** section below still describes an older wiring-history
+snapshot where only `shell`/`secrets` were keyed — see the note there). The
 ledger IS the backlog — every gap is a concrete next task for the developer, ordered by
 section priority (`DEVELOPER-PLAYBOOK §7`).
 
@@ -94,9 +97,11 @@ the **localization seam**, exactly as `useMockData.ts` is the data seam.
   - `keyed` — every visible string resolves through `t()`; all 3 locales have the keys.
   - `partial` — some strings keyed, some still inline.
   - `hardcoded` — strings are literal in the template (the pre-i18n default).
-- **Exemplars wired so far:** the shell (`layouts/default.vue` + `useNav.ts`) and
-  `pages/secrets.vue` are `keyed`. The remaining 15 pages are `hardcoded` — keying them is
-  ordinary developer follow-the-mockup work, tracked per row.
+- **Status:** all 16 sections are `keyed` in `PARITY.json` as of `design_version 2026.06.21`
+  (verified against `9571af3d` and later wiring commits) — every page resolves visible
+  strings through `t()` with all 3 locales carrying the keys. This paragraph previously
+  described an earlier, stale snapshot ("only shell + secrets keyed, 15 pages hardcoded")
+  that lagged the actual wiring history; keying the remaining pages was closed by that work.
 - **Plurals are per-locale and registered in `i18n/i18n.config.ts`** (`pluralRules`):
   - **`ru`** — Slavic 3-form (one/few/many) with the 11–14 / 111–114 "teen" exception,
     `% 100`-correct (the canonical vue-i18n docs example is wrong past 100). Message:
