@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.33.0] - 2026-07-01
+
+### Added
+
+- **CR-009 experience + applicability layer, MPL-4 (#389).** Added a first-class experience/history retrieval surface distinct from hot-memory recall: `experience_history.read` / `experience_history.detail` MCP tools plus REST `GET /api/experience-history` and `GET /api/experience-history/{experienceID}`. Responses carry explicit applicability and anti-applicability envelopes (`applies_when` / `does_not_apply_when` / `required_context` with confidence + block reason), so a strong anti-applicability match downgrades or blocks silent auto-reuse instead of returning a bare lesson. Archive resurfacing is trigger-gated to the named CR-005 classes only, bounded, and logged with per-request `archive_trace` evidence (never searched on the ordinary hot path). Honest read states are surfaced distinctly (`live` / `empty_results` / `empty_archive` / `gated` / `blocked_applicability` / `error`). V1 storage stays projection-first over the existing `internal/experience` substrate — no dedicated `ExperienceRecord` table family.
+
+### Fixed
+
+- **Experience projection is principal-safe (#389).** The worker experience provider routes projection through `PrincipalMemoryQueryService` (caller identity + owner-principal-kind + admin + domain access-policy) instead of the raw memory store, so private principal memory (`agent_visibility=private`) can no longer leak into experience lessons for a caller that would not otherwise see it. Preserves the NFR-1 fail-closed privacy invariant that CR-007 established.
+- **Experience response cloning is fully defensive (#389).** Archive projection no longer filters in place over the archive source's backing array, exact-id detail lookups target the requested provenance id before relevance limiting, and `cloneResponse` deep-copies the nested applicability condition slices — so no caller can corrupt the service's internal candidates or another request's archive trace through a shared backing array.
+
+- **Version alignment across release surfaces.** `internal/version/version.go`, `plugin/engram/.claude-plugin/plugin.json`, and `plugin/engram/.codex-plugin/plugin.json` are realigned to the release version (they had drifted at `6.30.0` across the v6.31/v6.32 tags).
+
 ## [6.32.0] - 2026-07-01
 
 ### Added
