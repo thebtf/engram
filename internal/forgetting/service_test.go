@@ -348,13 +348,18 @@ func TestNewForgettingReviewActionSnapshot_BindsPacketToSnapshotOpType(t *testin
 	require.Contains(t, string(snapshot.Parameters), `"operation":"forgetting_review_action"`)
 	require.Contains(t, string(snapshot.Parameters), `"action":"archive"`)
 	require.Contains(t, string(snapshot.Parameters), decision.Review.Packet.PacketID)
-	require.Equal(t, []int64{101, 102}, snapshot.AffectedMemoryIDs)
+	require.Equal(t, []int64{101}, snapshot.AffectedMemoryIDs)
 
 	_, err = NewForgettingReviewActionSnapshot(decision.Review.Packet, "archive", "agent/reviewer", json.RawMessage(`{}`))
 	require.ErrorContains(t, err, "non-empty before_state")
 
 	_, err = NewForgettingReviewActionSnapshot(decision.Review.Packet, "consolidate", "agent/reviewer", json.RawMessage(`{"memory:101":{"kind":"restore","before":{"id":101}}}`))
 	require.ErrorContains(t, err, "does not match approved preview action")
+
+	tampered := decision.Review.Packet
+	tampered.Scope.MemoryIDs = []string{"memory-a"}
+	_, err = NewForgettingReviewActionSnapshot(tampered, "archive", "agent/reviewer", json.RawMessage(`{"memory-a":{"kind":"restore","before":{"id":"memory-a"}}}`))
+	require.ErrorContains(t, err, "before_state key")
 }
 
 func TestValidateForgettingMutationBoundary_BlocksDestroyPacket(t *testing.T) {
@@ -440,6 +445,9 @@ func TestAuditExportProof_AutomaticAndReviewedActionsRoundTripFromAuditEntry(t *
 
 	_, err = BuildAuditExportProof(reviewed, ActionReceipt{Actor: "agent/reviewer", Action: "archive", Path: cognitive.ForgettingActionPathReviewed})
 	require.ErrorContains(t, err, "snapshot_id")
+
+	_, err = BuildAuditExportProof(reviewed, ActionReceipt{Actor: "agent/reviewer", Action: "archive", Path: "reviewed packet"})
+	require.ErrorContains(t, err, "proof path")
 
 	_, err = BuildAuditExportProof(automatic, ActionReceipt{Actor: "agent/system", Action: "destroy", Result: cognitive.ForgettingActionResultApplied})
 	require.ErrorContains(t, err, "automatic proof")

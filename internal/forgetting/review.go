@@ -164,7 +164,10 @@ func NewForgettingReviewActionSnapshot(packet cognitive.ForgettingReviewPacket, 
 	if err != nil {
 		return nil, fmt.Errorf("forgetting review snapshot marshal parameters: %w", err)
 	}
-	snapshot.AffectedMemoryIDs = parseAffectedMemoryIDs(packet.Scope.MemoryIDs)
+	snapshot.AffectedMemoryIDs, err = parseAffectedMemoryIDs(beforeState, packet.Scope.MemoryIDs)
+	if err != nil {
+		return nil, err
+	}
 	snapshot.Parameters = params
 	return snapshot, nil
 }
@@ -180,13 +183,15 @@ func BuildAuditExportProof(decision cognitive.ForgettingDecision, receipt Action
 	if action == "" {
 		action = string(decision.Operation)
 	}
-	path := receipt.Path
+	path := cognitive.ForgettingActionPath(strings.TrimSpace(string(receipt.Path)))
 	if path == "" {
 		if decision.Review.Required {
 			path = cognitive.ForgettingActionPathReviewed
 		} else {
 			path = cognitive.ForgettingActionPathAutomatic
 		}
+	} else if path != cognitive.ForgettingActionPathReviewed && path != cognitive.ForgettingActionPathAutomatic {
+		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting proof path %q is invalid", path)
 	}
 	result := receipt.Result
 	if result == "" {
@@ -299,21 +304,35 @@ func allowedReviewAction(allowed []string, action string) bool {
 	return false
 }
 
-func parseAffectedMemoryIDs(memoryIDs []string) []int64 {
+func parseAffectedMemoryIDs(beforeState json.RawMessage, memoryIDs []string) ([]int64, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(beforeState, &raw); err == nil && len(raw) > 0 {
+		affected := make([]int64, 0, len(raw))
+		for key := range raw {
+			id := strings.TrimSpace(key)
+			id = strings.TrimPrefix(id, "memory:")
+			parsed, err := strconv.ParseInt(id, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("forgetting review snapshot before_state key %q is not a numeric memory id", key)
+			}
+			affected = append(affected, parsed)
+		}
+		return affected, nil
+	}
 	affected := make([]int64, 0, len(memoryIDs))
-	for _, raw := range memoryIDs {
-		id := strings.TrimSpace(raw)
+	for _, rawID := range memoryIDs {
+		id := strings.TrimSpace(rawID)
 		id = strings.TrimPrefix(id, "memory:")
 		if id == "" {
 			continue
 		}
 		parsed, err := strconv.ParseInt(id, 10, 64)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("forgetting review snapshot memory id %q is not numeric", rawID)
 		}
 		affected = append(affected, parsed)
 	}
-	return affected
+	return affected, nil
 }
 
 func validateReviewPacketIdentity(packet cognitive.ForgettingReviewPacket, packetID string) error {
