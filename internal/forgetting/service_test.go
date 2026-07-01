@@ -424,6 +424,17 @@ func TestAuditExportProof_AutomaticAndReviewedActionsRoundTripFromAuditEntry(t *
 	require.NoError(t, err)
 	require.Equal(t, reviewedProof, restoredReviewed)
 
+	reviewedAltProof, err := BuildAuditExportProof(reviewed, ActionReceipt{
+		Actor:      "agent/reviewer",
+		Action:     "consolidate",
+		Path:       cognitive.ForgettingActionPathReviewed,
+		Result:     cognitive.ForgettingActionResultApplied,
+		SnapshotID: "forgetting-review-snapshot-2",
+		AuditRef:   "forgetting_review:memory-a:consolidate",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "consolidate", reviewedAltProof.Action)
+
 	_, err = BuildAuditExportProof(reviewed, ActionReceipt{Actor: "agent/reviewer", Path: cognitive.ForgettingActionPathReviewed})
 	require.ErrorContains(t, err, "explicit action")
 

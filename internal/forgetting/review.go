@@ -216,9 +216,6 @@ func BuildAuditExportProof(decision cognitive.ForgettingDecision, receipt Action
 		if _, err := normalizePacketAction(decision.Review.Packet, action); err != nil {
 			return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting reviewed proof action: %w", err)
 		}
-		if decision.Review.Packet.Preview.Action != "" && action != decision.Review.Packet.Preview.Action {
-			return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting reviewed proof action %q does not match approved preview action %q", action, decision.Review.Packet.Preview.Action)
-		}
 		if result != cognitive.ForgettingActionResultBlocked && strings.TrimSpace(receipt.SnapshotID) == "" {
 			return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting reviewed proof requires snapshot_id")
 		}
