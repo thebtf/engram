@@ -33,6 +33,9 @@ Since then, the v6 line rebuilt governance on top of that stable core: per-works
 
 | Version | Highlight |
 |---------|-----------|
+| **v6.32.0** | **Usefulness / Noise Review Loop (CR-008, MPL-3)** — packet-centric bounded review queue with explicit empty/gated/error/sparse states, separate preview/apply, atomic snapshot+audit-backed suppress/preserve, honest metrics. |
+| **v6.31.0** | **Native State Plane + Principal Explorer (CR-006 + CR-007, MPL-1/2)** — Engram-native session/goal/task/project state plane with deterministic resume packet; principal/domain/project memory explorer + principal-scoped briefs; CR-005 contract hardening. |
+| **v6.30.0** | **Agent Knowledge & Experience Layer foundations (ENG-MPL-1)** — native state plane, principal briefs, packet-centric review loop, first-class experience retrieval with applicability gates, forgetting taxonomy, and selective temporal truth contracts. |
 | **v6.29.0** | **Rule Governance Telemetry (RG-3)** — lifecycle health, exception queues, transition controls, rollback-aware snapshots, and usefulness telemetry landed on top of the rule-governance milestones. |
 | **v6.0.0** | **BREAKING** — Two-tier token authentication: per-workstation keycards via dashboard `/tokens`, daemon fail-fast on missing token, issuance hardened to browser session. |
 | **v5.0.0** | Cleaned Baseline — static-only storage, observations split, session-start gRPC + cache fallback |
@@ -341,15 +344,21 @@ Upgrade steps:
 <!-- redoc:start:mcp-tools -->
 ## MCP Tools
 
-Engram exposes a reduced static-first MCP surface for the surviving entity model.
+Engram exposes a static-first MCP surface for the surviving entity model, extended across the v6 line as the Memory Product Layer milestones landed.
 
-Primary categories in v5:
+Static core (v5 baseline):
 - issues / issue comments
 - memories / behavioral rules
 - documents
 - credentials / vault
 - loom background tasks
-The old dynamic search / graph / learning-oriented tool surface was stripped in the v5 demolition phase and is being rebuilt incrementally across vnext milestones.
+
+Memory Product Layer additions (v6.30–v6.32):
+- native state plane — session/goal/task/project resume packet (CR-006)
+- principal explorer + briefs — principal/domain-scoped memory inspection and bounded briefs (CR-007)
+- review loop — packet-centric candidate/suppress/preserve governance over the candidate/snapshot/audit seams (CR-008)
+
+The old dynamic search / graph / learning-oriented tool surface was stripped in the v5 demolition phase; the v6 Memory Product Layer rebuilds durable agent knowledge deliberately rather than resurrecting that stack.
 
 ### `store` — Save and Organize
 
