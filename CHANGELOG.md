@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.34.0] - 2026-07-01
+
+### Added
+
+- **Policy-driven forgetting / consolidation classifier, MPL-5 (#391).** Adds distinct, auditable forgetting semantics for `suppress`, `expire`, `archive`, `consolidate`, and `destroy` over the existing CR-008 review-packet/snapshot/audit governance substrate. `ArchiveFirst` is hardcoded true and `DataDestructionByDefault` false across all five classified operations — `archive`/`suppress` always precede `destroy`/`consolidate` in `AllowedActions`, so low-value or stale knowledge shrinks without silent destructive loss by default. A structural-loss guard blocks `destroy` outright, and escalates other operations to `ReviewRequired`, when unique meaning, provenance, scope, or historical value would be lost. Risky consolidation/destructive cases route through the existing snapshot/audit stores (`bulk_op_snapshots`, `audit_log`) rather than mutating raw rows, keeping preview strictly separate from mutation execution. Two tamper paths surfaced in review are closed: a replayed `operator_destroy` packet with its `State` mutated away from `blocked` is now rejected independent of packet state (the hard-delete snapshot path stays blocked regardless), and a `blocked` decision can no longer carry a caller-supplied `receipt.Result=applied` into the audit/export proof — blocked decisions only ever emit a blocked result. `internal/forgetting` is classification/guardrail-only in this release: it performs no store access and creates no live mutation caller, so NFR-1 fail-closed routing through `PrincipalMemoryQueryService` is a required acceptance criterion for the forgetting-wiring CR that connects this classifier to an actual mutation path, not a concern in this slice.
+
 ## [6.33.1] - 2026-07-01
 
 ### Fixed
