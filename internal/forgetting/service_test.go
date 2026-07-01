@@ -376,6 +376,14 @@ func TestValidateForgettingMutationBoundary_BlocksDestroyPacket(t *testing.T) {
 	tampered := decision.Review.Packet
 	tampered.State = cognitive.ForgettingDecisionReviewRequired
 	require.ErrorContains(t, ValidateForgettingMutationBoundary(tampered), "destroy guardrail")
+
+	tamperedSnapshotPacket := decision.Review.Packet
+	tamperedSnapshotPacket.State = cognitive.ForgettingDecisionReviewRequired
+	tamperedSnapshotPacket.Operation = cognitive.ForgettingOperationArchive
+	tamperedSnapshotPacket.Preview.Action = string(cognitive.ForgettingOperationDestroy)
+	tamperedSnapshotPacket.AllowedActions = []string{string(cognitive.ForgettingOperationDestroy)}
+	_, err = NewForgettingReviewActionSnapshot(tamperedSnapshotPacket, "destroy", "agent/reviewer", json.RawMessage(`{"memory-danger":{"kind":"restore","before":{"id":"memory-danger"}}}`))
+	require.ErrorContains(t, err, "refuses destroy action")
 }
 
 func TestAuditExportProof_AutomaticAndReviewedActionsRoundTripFromAuditEntry(t *testing.T) {

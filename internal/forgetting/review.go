@@ -150,6 +150,9 @@ func NewForgettingReviewActionSnapshot(packet cognitive.ForgettingReviewPacket, 
 	if normalized != approvedAction {
 		return nil, fmt.Errorf("forgetting review snapshot action %q does not match approved preview action %q", normalized, approvedAction)
 	}
+	if normalized == string(cognitive.ForgettingOperationDestroy) {
+		return nil, fmt.Errorf("forgetting review snapshot refuses destroy action")
+	}
 	trimmed := strings.TrimSpace(string(beforeState))
 	if trimmed == "" || trimmed == "{}" {
 		return nil, fmt.Errorf("forgetting review snapshot requires non-empty before_state")
