@@ -6,7 +6,7 @@
   "applicability_contract": {
     "outcomes": ["applies", "uncertain", "blocked"],
     "envelope_fields": ["applies_when", "does_not_apply_when", "required_context", "confidence", "block_reason", "override_evidence"],
-    "anti_applicability_rule": "strong anti-applicability matches set state=blocked, fill block_reason/override_evidence, and surface blocked_applicability so callers cannot silently reuse the lesson."
+    "anti_applicability_rule": "strong anti-applicability matches set state=blocked, fill block_reason/override_evidence, and surface blocked_by_anti_applicability in archive_trace so callers cannot silently reuse the lesson."
   },
   "archive_contract": {
     "allowed_trigger_classes": ["historical_why", "regression_or_rollback", "revisit_old_decision", "similar_prior_failure", "temporal_truth_change", "explicit_archive_lookup"],

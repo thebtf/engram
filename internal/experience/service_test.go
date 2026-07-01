@@ -549,6 +549,24 @@ func TestReadHistoryDetailFindsExactIDBeyondRelevanceLimit(t *testing.T) {
 	require.Equal(t, targetID, detail.ExperienceDetail.ExperienceID)
 }
 
+func TestReadHistoryDetailCanonicalizesTopLevelExperienceID(t *testing.T) {
+	service := NewService([]cognitive.ExperienceResponse{
+		fixtureExperience("raw-detail", "detail canonical id lesson", "engram", "canonical-session"),
+	})
+
+	detail, err := ReadHistoryDetail(context.Background(), service, HistoryDetailRequest{
+		Project:        "engram",
+		ExperienceID:   "raw-detail",
+		CurrentContext: "detail lookup",
+	}, time.Date(2026, time.July, 1, 4, 7, 0, 0, time.UTC))
+
+	require.NoError(t, err)
+	require.Equal(t, HistoryStateLive, detail.State)
+	require.NotNil(t, detail.ExperienceDetail)
+	require.Equal(t, "session:raw-detail", detail.ExperienceID)
+	require.Equal(t, detail.ExperienceDetail.ExperienceID, detail.ExperienceID)
+}
+
 func TestReadHistoryArchiveFilteringDoesNotMutateArchiveSource(t *testing.T) {
 	otherProject := archiveExperience("archive-other", "rollback regression archive lesson")
 	otherProject.SourceAttribution[0].Project = "other"

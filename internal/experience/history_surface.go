@@ -226,6 +226,9 @@ func ReadHistoryDetail(ctx context.Context, provider cognitive.ExperienceProvide
 		if found {
 			result := historyResultFromExperience(item)
 			response.State = detailStateFor(result, response.ArchiveTrace)
+			if result.ExperienceID != "" {
+				response.ExperienceID = result.ExperienceID
+			}
 			response.ExperienceDetail = &result
 			response.ApplicabilityEvidence = result.Applicability
 			response.ProvenanceRefs = append([]string(nil), result.ProvenanceRefs...)
@@ -261,6 +264,9 @@ func ReadHistoryDetail(ctx context.Context, provider cognitive.ExperienceProvide
 		if historyResultMatchesID(result, request.ExperienceID) {
 			matched := result
 			response.State = detailStateFor(result, response.ArchiveTrace)
+			if result.ExperienceID != "" {
+				response.ExperienceID = result.ExperienceID
+			}
 			response.ExperienceDetail = &matched
 			response.ApplicabilityEvidence = result.Applicability
 			response.ProvenanceRefs = append([]string(nil), result.ProvenanceRefs...)

@@ -65,7 +65,7 @@
     "CR009FixReview": "APPROVE: fixes verified, no findings."
   },
   "known_residual_risk": [
-    "Production worker wires a default empty projection-backed experience provider; it makes the first-class surface live and honest, but future projection population from existing evidence may be needed for rich production results.",
+    "Production worker now projects existing memory rows into the CR-009 provider seam; richer experience quality still depends on the structure of those memory rows, but the default provider is no longer always empty.",
     "No UI implementation was added; operator-facing surface remains gated by D:/Dev/engram/.agent/specs/memory-product-layer/design-contracts/cr-009-experience-history-surface.md."
   ]
 }

@@ -34,7 +34,6 @@ import (
 	"github.com/thebtf/engram/internal/crypto"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
-	experiencehistory "github.com/thebtf/engram/internal/experience"
 	"github.com/thebtf/engram/internal/feedback"
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/grpcserver"
@@ -609,7 +608,7 @@ func (s *Service) initializeAsync() {
 	stateStore := gorm.NewStateStore(store.GetDB(), auditStore)
 	statePlaneSvc := stateplane.NewService(stateStore, nil)
 	principalMemoryQuerySvc := principalmemory.NewPrincipalMemoryQueryService(memoryStore, auditStore)
-	experienceProvider := experiencehistory.NewService(nil)
+	experienceProvider := newMemoryExperienceProvider(memoryStore)
 	domainOwnerStore := gorm.NewDomainOwnerStore(store)
 	domainRegistrySvc := principalmemory.NewDomainRegistryService(domainOwnerStore, auditStore)
 	wireStateStore(s, statePlaneSvc)
@@ -1481,7 +1480,6 @@ func (s *Service) setupRoutes() {
 
 		// Token stats
 		r.Get("/api/auth/tokens/{id}/stats", s.handleGetTokenStats)
-
 	})
 
 	// Catch-all browser routes for the promoted operator-console surface.

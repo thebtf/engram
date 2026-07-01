@@ -16,8 +16,8 @@ No dedicated `ExperienceRecord` table family, migration, GORM store, or archive/
 - `internal/experience.Service` remains projection-backed: it accepts bounded `[]cognitive.ExperienceResponse` candidates and optional trigger-gated `ArchiveSource` rather than owning a dedicated table.
 - `internal/experience/history_surface.go` wraps the existing provider into reusable read/detail response envelopes and echoes `storage_origin`; it does not create persistence.
 - `internal/mcp/tools_experience_history.go` and `internal/worker/handlers_experience_history.go` add adapter surfaces only. They call the provider; they do not create storage or hot-memory fallback paths.
-- `internal/worker/service.go` wires a default empty projection-backed `experience.NewService(nil)` so the adapter seam is live and honest (`empty_results`/`gated`), while real projection inputs can be supplied through the provider seam without schema change.
-- The targeted fix added per-request archive evidence and exact detail lookup without changing storage shape.
+- `internal/worker/service.go` now wires a memory-backed projection provider. An unconfigured seam is `gated`; a live query over projected memory rows that matches nothing is `empty_results`. The adapter remains storage-shape-safe because it projects existing memory rows into the CR-009 provider seam without adding a dedicated experience table.
+- The targeted fixes added per-request archive evidence, exact detail lookup, canonical detail IDs, and archive-source defensive filtering without changing storage shape.
 
 ## Rejected storage expansion
 
@@ -57,4 +57,4 @@ Targeted review:
 
 ## Residual risk
 
-The production worker currently wires an empty projection-backed provider by default. That is intentionally honest for this bounded adapter slice, but PM should decide whether a later CR should materialize provider candidates from existing memory/review/state evidence. CR-009 does **not** justify a dedicated table family yet.
+The production worker now projects existing memory rows into the CR-009 provider seam. Result richness still depends on how much structured context those rows carry, but CR-009 no longer ships an always-empty default provider and still does **not** justify a dedicated table family.
