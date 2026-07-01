@@ -1,0 +1,76 @@
+{
+  "surface": "forgetting-consolidation-governance",
+  "feature": "ENG-MPL-1",
+  "cr": "CR-010-forgetting-consolidation",
+  "task": "T006",
+  "status": "blocked-pending-designer-owned-contract-review",
+  "reviewed_at": null,
+  "ui_delivery_in_cr": false,
+  "controls": [
+    "forgetting-mode-filter",
+    "archive-first-default-indicator",
+    "structural-loss-risk-panel",
+    "risky-packet-open",
+    "preview-before-after",
+    "snapshot-required-confirmation",
+    "audit-export-proof-link",
+    "approve-consolidate-action",
+    "archive-instead-action",
+    "blocked-destroy-state"
+  ],
+  "flow": [
+    "policy or operator identifies suppress / expire / archive / consolidate / destroy candidate",
+    "backend classifier returns archive-first decision envelope",
+    "safe suppress / expire / archive actions show audit/export proof only when a future UI contract permits it",
+    "risky consolidate / destroy cases show a read-only review packet with preview, structural-loss rationale, snapshot policy, and audit policy",
+    "mutation controls remain disabled until designer-owned states and PM-reviewed action copy exist"
+  ],
+  "backend_bindings": {
+    "classifier": "internal/forgetting.Classifier.ClassifyForgetting",
+    "review_packet_kind": "forgetting_review",
+    "snapshot_op_type": "forgetting_review_action",
+    "audit_actions": ["forgetting_auto", "forgetting_review"],
+    "proof_readback": "internal/forgetting.ExportProofFromAuditLogEntry",
+    "mcp_snapshot_readback": "list_snapshots op_type=forgetting_review_action"
+  },
+  "scenario_branches": {
+    "safe_auto_archive_first": [
+      "low-risk low-value/expired/cold request arrives",
+      "classifier returns suppress/expire/archive with archive_first=true",
+      "no review packet is emitted",
+      "audit/export proof remains self-describing"
+    ],
+    "structural_loss_consolidation": [
+      "duplicate request carries unique/provenance/scope/historical loss",
+      "classifier escalates to forgetting_review packet",
+      "packet preview includes before refs, after plan, approval_required, mutation_separated",
+      "mutation boundary requires privacy scope, snapshot, and audit-before-mutate"
+    ],
+    "destructive_destroy": [
+      "operator destroy request arrives",
+      "classifier returns blocked state with archive listed before destroy",
+      "packet may be previewed but mutation boundary rejects blocked packet"
+    ],
+    "audit_export_readback": [
+      "automatic or reviewed action produces proof",
+      "proof is stored in audit_log.after_state",
+      "proof can be reconstructed without transcript archaeology"
+    ],
+    "ui_blocked": [
+      "operator-facing forgetting/consolidation surface is requested",
+      "surface remains blocked because this artifact is a stub, not a designer-approved contract",
+      "future UI work must provide visual states, copy, accessibility, and PM review before implementation"
+    ]
+  },
+  "explicit_blockers": [
+    "No operator-facing CR-010 UI is implemented in this CR.",
+    "Designer-owned visual contract and PM review are required before enabling forgetting/consolidation controls.",
+    "MPL-6 temporal truth and broad archive/history browser work remain out of scope."
+  ],
+  "pm_review": {
+    "result": "BLOCKED_FOR_DESIGN_CONTRACT",
+    "required_before_ui": true,
+    "backend_contract_only": true,
+    "notes": "This CR ships backend/domain/evidence semantics only; it names the future control map and blocker boundary without authorizing UI implementation."
+  }
+}

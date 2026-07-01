@@ -746,7 +746,7 @@ func TestMigration132_CrystallizationCandidates(t *testing.T) {
 //
 // Asserts:
 //   - bulk_op_snapshots table exists with all required columns
-//   - op_type CHECK constraint admits exactly the 5 valid values
+//   - op_type CHECK constraint admits exactly the 6 valid values
 //   - status CHECK constraint admits exactly the 3 valid values (preview/committed/rolled_back)
 //   - idx_bulk_op_snapshots_status_created index exists
 //   - idx_bulk_op_snapshots_snapshot_id index exists
@@ -802,8 +802,8 @@ func TestMigration133_BulkOpSnapshots(t *testing.T) {
 	// Pre-cleanup: remove any leftover rows from prior runs before inserting test data.
 	_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'test-snap-%'`).Error
 
-	// Assert all 5 valid op_type values accepted.
-	for _, opType := range []string{"ingest_doc", "bulk_promote", "bulk_delete", "bulk_supersede", "candidate_review_action"} {
+	// Assert all 6 valid op_type values accepted.
+	for _, opType := range []string{"ingest_doc", "bulk_promote", "bulk_delete", "bulk_supersede", "candidate_review_action", "forgetting_review_action"} {
 		err := db.Exec(`
 			INSERT INTO bulk_op_snapshots (snapshot_id, op_type, actor, before_state)
 			VALUES (?, ?, ?, '{}')
@@ -884,6 +884,43 @@ func TestMigration153Rollback_PreflightsCandidateReviewSnapshots(t *testing.T) {
 	invalidErr := db.Exec(`
 		INSERT INTO bulk_op_snapshots (snapshot_id, op_type, actor, before_state)
 		VALUES (?, 'invalid_op_after_blocked_rollback', 'test-actor', '{}')
+	`, snapshotID+"-invalid").Error
+	require.Error(t, invalidErr, "blocked rollback must leave op_type CHECK constraint in place")
+}
+
+func TestMigration154Rollback_PreflightsForgettingReviewSnapshots(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping integration test")
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
+	require.NoError(t, err)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	defer sqlDB.Close()
+	require.NoError(t, sqlDB.Ping())
+	require.NoError(t, runMigrations(db))
+
+	snapshotID := fmt.Sprintf("test-m154-forgetting-review-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id IN (?, ?)`, snapshotID, snapshotID+"-invalid").Error
+	})
+	require.NoError(t, db.Exec(`
+		INSERT INTO bulk_op_snapshots (snapshot_id, op_type, actor, before_state)
+		VALUES (?, 'forgetting_review_action', 'test-actor', '{}')
+	`, snapshotID).Error)
+
+	err = forgettingReviewSnapshotOpTypeMigration154().Rollback(db)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "forgetting_review_action snapshot rows exist")
+
+	invalidErr := db.Exec(`
+		INSERT INTO bulk_op_snapshots (snapshot_id, op_type, actor, before_state)
+		VALUES (?, 'invalid_op_after_blocked_forgetting_rollback', 'test-actor', '{}')
 	`, snapshotID+"-invalid").Error
 	require.Error(t, invalidErr, "blocked rollback must leave op_type CHECK constraint in place")
 }

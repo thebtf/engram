@@ -1,0 +1,43 @@
+{
+  "artifact": "cr-010-forgetting-taxonomy",
+  "cr": "CR-010-forgetting-consolidation",
+  "gate": "G001",
+  "status": "IMPLEMENTED_PENDING_MAIN_OMP_TEST_RUN",
+  "written_by": "CR010DeveloperMaker",
+  "scope": [
+    "T001 explicit suppress / expire / archive / consolidate / destroy taxonomy",
+    "T002 archive-first low-risk defaults"
+  ],
+  "proof_summary": {
+    "taxonomy": "pkg/cognitive/types.go defines five ForgettingOperation values and ForgettingReason inputs; internal/forgetting.Classifier maps each reason to a distinct operation/state envelope.",
+    "archive_first": "internal/forgetting.Classifier sets archive_first=true and orders archive before suppress/expire/consolidate/destroy in allowed actions so destructive paths never become the default shrink route.",
+    "audit_shape": "ForgettingDecision includes policy_owner, policy_boundary, audit store, snapshot store, export path, review policy, structural_loss, and data_destruction_by_default=false.",
+    "is_archived_guard": "No observations.is_archived write-path was added; archive semantics remain in the new classifier/proof layer rather than reusing the inert pre-v5 tombstone."
+  },
+  "code_refs": [
+    "pkg/cognitive/types.go:389-591",
+    "internal/forgetting/service.go:30-242",
+    "internal/forgetting/service_test.go:14-258",
+    "pkg/cognitive/types_test.go:257-387"
+  ],
+  "focused_tests_added_or_updated": [
+    "pkg/cognitive.TestForgettingOperationTaxonomy_ExplicitFiveClasses",
+    "pkg/cognitive.TestForgettingDecisionContract_RequiredAuditAndSafetyFields",
+    "pkg/cognitive.TestForgettingReviewPacketContract_NamesPreviewMutationAndReadOnlyBoundary",
+    "internal/forgetting.TestClassifier_ClassifiesFiveOperationsWithoutDestroyingByDefault",
+    "internal/forgetting.TestClassifier_ArchiveFirstAllowedActionsPrecedeDestructiveOrRiskyActions"
+  ],
+  "main_omp_command": "go test ./pkg/cognitive ./pkg/models ./internal/forgetting ./internal/mcp ./internal/db/gorm -run 'Test(Forgetting|Classifier|PreviewReviewAction|NewForgettingReviewActionSnapshot|ValidateForgettingMutationBoundary|AuditExportProof|SnapshotOpType|GovernanceTools_ListSnapshotsSchemaIncludesReviewActionOpTypes|Migration133_BulkOpSnapshots|Migration153Rollback_PreflightsCandidateReviewSnapshots|Migration154Rollback_PreflightsForgettingReviewSnapshots)'",
+  "worker_verification": {
+    "forbidden_go_tests_run": false,
+    "forbidden_gates_or_formatters_run": false,
+    "reason": "Assignment explicitly forbids gofmt/build/lint/go test/go vet/project-wide gates; Main OMP owns verification after handback.",
+    "static_parse_checks": [
+      "read structural summary: internal/forgetting/service.go",
+      "read structural summary: internal/forgetting/review.go",
+      "read structural summary: pkg/cognitive/types.go",
+      "read structural summary: pkg/models/snapshot.go",
+      "read structural summary: internal/forgetting/service_test.go"
+    ]
+  }
+}

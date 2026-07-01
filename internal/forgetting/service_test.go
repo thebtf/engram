@@ -2,10 +2,13 @@ package forgetting
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/pkg/cognitive"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 func TestClassifier_ClassifiesFiveOperationsWithoutDestroyingByDefault(t *testing.T) {
@@ -90,6 +93,9 @@ func TestClassifier_ClassifiesFiveOperationsWithoutDestroyingByDefault(t *testin
 			require.True(t, decision.Audit.Required)
 			require.Equal(t, "audit_log", decision.Audit.AuditStore)
 			require.Equal(t, "bulk_op_snapshots", decision.Audit.SnapshotStore)
+			require.True(t, decision.ArchiveFirst)
+			require.NotEmpty(t, decision.PolicyOwner)
+			require.Equal(t, ForgettingAuditExportPath, decision.Audit.ExportPath)
 			require.NotEmpty(t, decision.PolicyBoundary)
 			require.NotEmpty(t, decision.Rationale)
 		})
@@ -187,6 +193,12 @@ func TestClassifier_RiskyCasesEmitBoundedReviewPackets(t *testing.T) {
 	require.True(t, decision.Review.Packet.Snapshot.Required)
 	require.Equal(t, "bulk_op_snapshots", decision.Review.Packet.Snapshot.Store)
 	require.Equal(t, "audit_log", decision.Review.Packet.Audit.Store)
+	require.Equal(t, "forgetting_review_action", decision.Review.Packet.Snapshot.Operation)
+	require.Equal(t, "pending_on_action", decision.Review.Packet.Audit.Status)
+	require.True(t, decision.Review.Packet.Preview.MutationSeparated)
+	require.True(t, decision.Review.Packet.Preview.ApprovalRequired)
+	require.True(t, decision.Review.Packet.MutationRequirements.AuditWriteBeforeMutation)
+	require.True(t, decision.Review.Packet.ReadOnly)
 }
 
 func TestClassifier_SafeLowRiskActionsDoNotEmitPackets(t *testing.T) {
@@ -223,4 +235,164 @@ func TestClassifier_RiskyAutoResolvableActionsRouteToReviewPackets(t *testing.T)
 		require.NotEmpty(t, decision.Review.Packet.PacketID)
 		require.Contains(t, decision.Rationale, "risky")
 	}
+}
+
+func TestClassifier_ArchiveFirstAllowedActionsPrecedeDestructiveOrRiskyActions(t *testing.T) {
+	service := NewClassifier()
+	cases := []cognitive.ForgettingClassificationRequest{
+		{Reason: cognitive.ForgettingReasonLowValue, MemoryID: "low"},
+		{Reason: cognitive.ForgettingReasonRetentionExpired, MemoryID: "expired"},
+		{Reason: cognitive.ForgettingReasonColdStorage, MemoryID: "cold"},
+		{Reason: cognitive.ForgettingReasonDuplicate, MemoryID: "dup", RelatedIDs: []string{"dup-b"}, PrivacyScope: "project"},
+		{Reason: cognitive.ForgettingReasonOperatorDestroy, MemoryID: "destroy", PrivacyScope: "project"},
+	}
+
+	for _, request := range cases {
+		decision, err := service.ClassifyForgetting(context.Background(), request)
+		require.NoError(t, err)
+		require.True(t, decision.ArchiveFirst)
+		require.NotEmpty(t, decision.Review.AllowedActions)
+		require.Equal(t, "archive", decision.Review.AllowedActions[0], "archive must be considered before shrinking mode %s", decision.Operation)
+		require.False(t, decision.DataDestructionByDefault)
+	}
+}
+
+func TestClassifier_StructuralLossIncludesHistoricalValueWithoutRationale(t *testing.T) {
+	service := NewClassifier()
+
+	decision, err := service.ClassifyForgetting(context.Background(), cognitive.ForgettingClassificationRequest{
+		Reason:         cognitive.ForgettingReasonDuplicate,
+		MemoryID:       "memory-a",
+		RelatedIDs:     []string{"memory-b"},
+		StructuralLoss: cognitive.ForgettingStructuralLoss{HistoricalValue: true},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, cognitive.ForgettingDecisionReviewRequired, decision.State)
+	require.True(t, decision.StructuralLoss.HistoricalValue)
+	require.Contains(t, decision.Rationale, "historical value")
+	require.True(t, decision.Review.Required)
+}
+
+func TestPreviewReviewAction_DoesNotMutateAndRequiresBoundary(t *testing.T) {
+	service := NewClassifier()
+	decision, err := service.ClassifyForgetting(context.Background(), cognitive.ForgettingClassificationRequest{
+		Reason:       cognitive.ForgettingReasonDuplicate,
+		MemoryID:     "memory-a",
+		RelatedIDs:   []string{"memory-b"},
+		Project:      "engram",
+		PrivacyScope: "project",
+		StructuralLoss: cognitive.ForgettingStructuralLoss{
+			UniqueMeaning: true,
+			Rationale:     "would lose source caveat",
+		},
+	})
+	require.NoError(t, err)
+	packetID := decision.Review.Packet.PacketID
+
+	preview, err := PreviewReviewAction(decision, packetID, "archive", time.Time{})
+	require.NoError(t, err)
+	require.Equal(t, packetID, preview.PacketID)
+	require.Equal(t, "archive", preview.ActionType)
+	require.Equal(t, "archive", preview.ReviewPacket.Preview.Action)
+	require.Equal(t, "archive", preview.ReviewPacket.Preview.Recommendation)
+	require.Contains(t, preview.ReviewPacket.Preview.AfterPlan, "move memory out of hot retrieval")
+	require.Equal(t, cognitive.ForgettingDecisionReviewRequired, decision.State, "preview must not mutate the decision")
+	require.Contains(t, preview.AuditExpectation, "snapshot before archive mutation")
+	require.True(t, preview.ConfirmationRequired)
+	require.NoError(t, ValidateForgettingMutationBoundary(decision.Review.Packet))
+
+	tampered := decision.Review.Packet
+	tampered.ReadOnly = false
+	require.ErrorContains(t, ValidateForgettingMutationBoundary(tampered), "read-only")
+}
+
+func TestNewForgettingReviewActionSnapshot_BindsPacketToSnapshotOpType(t *testing.T) {
+	service := NewClassifier()
+	decision, err := service.ClassifyForgetting(context.Background(), cognitive.ForgettingClassificationRequest{
+		Reason:       cognitive.ForgettingReasonDuplicate,
+		MemoryID:     "101",
+		RelatedIDs:   []string{"102"},
+		PrivacyScope: "project",
+		StructuralLoss: cognitive.ForgettingStructuralLoss{
+			Provenance: true,
+			Rationale:  "source trace would disappear",
+		},
+	})
+	require.NoError(t, err)
+
+	snapshot, err := NewForgettingReviewActionSnapshot(decision.Review.Packet, "archive", "agent/reviewer", json.RawMessage(`{"memory:101":{"kind":"restore","before":{"id":101}}}`))
+	require.NoError(t, err)
+	require.Equal(t, models.SnapshotOpForgettingReviewAction, snapshot.OpType)
+	require.Equal(t, "agent/reviewer", snapshot.Actor)
+	require.Contains(t, string(snapshot.Parameters), `"operation":"forgetting_review_action"`)
+	require.Contains(t, string(snapshot.Parameters), `"action":"archive"`)
+	require.Contains(t, string(snapshot.Parameters), decision.Review.Packet.PacketID)
+}
+
+func TestValidateForgettingMutationBoundary_BlocksDestroyPacket(t *testing.T) {
+	service := NewClassifier()
+	decision, err := service.ClassifyForgetting(context.Background(), cognitive.ForgettingClassificationRequest{
+		Reason:       cognitive.ForgettingReasonOperatorDestroy,
+		MemoryID:     "memory-danger",
+		PrivacyScope: "project",
+	})
+	require.NoError(t, err)
+
+	err = ValidateForgettingMutationBoundary(decision.Review.Packet)
+	require.ErrorContains(t, err, "blocked")
+}
+
+func TestAuditExportProof_AutomaticAndReviewedActionsRoundTripFromAuditEntry(t *testing.T) {
+	service := NewClassifier()
+	automatic, err := service.ClassifyForgetting(context.Background(), cognitive.ForgettingClassificationRequest{
+		Reason:      cognitive.ForgettingReasonLowValue,
+		MemoryID:    "memory-low",
+		Evidence:    []string{"candidate:low"},
+		PolicyOwner: "retention-policy:v1",
+	})
+	require.NoError(t, err)
+
+	automaticProof, err := BuildAuditExportProof(automatic, ActionReceipt{Actor: "agent/system", Result: cognitive.ForgettingActionResultApplied, ExportRef: "cr-010:auto"})
+	require.NoError(t, err)
+	require.Equal(t, cognitive.ForgettingActionPathAutomatic, automaticProof.Path)
+	require.Equal(t, ForgettingAutomaticAuditAction, automaticProof.AuditAction)
+	require.Equal(t, "retention-policy:v1", automaticProof.PolicyOwner)
+	require.Contains(t, automaticProof.Evidence, "candidate:low")
+
+	automaticEntry, err := AuditLogEntryFromProof(automaticProof)
+	require.NoError(t, err)
+	require.Equal(t, ForgettingAutomaticAuditAction, automaticEntry.Action)
+	restoredAutomatic, err := ExportProofFromAuditLogEntry(automaticEntry)
+	require.NoError(t, err)
+	require.Equal(t, automaticProof, restoredAutomatic)
+
+	reviewed, err := service.ClassifyForgetting(context.Background(), cognitive.ForgettingClassificationRequest{
+		Reason:         cognitive.ForgettingReasonDuplicate,
+		MemoryID:       "memory-a",
+		RelatedIDs:     []string{"memory-b"},
+		PrivacyScope:   "project",
+		StructuralLoss: cognitive.ForgettingStructuralLoss{Provenance: true, Rationale: "source trace would disappear"},
+	})
+	require.NoError(t, err)
+	reviewedProof, err := BuildAuditExportProof(reviewed, ActionReceipt{
+		Actor:      "agent/reviewer",
+		Action:     "archive",
+		Path:       cognitive.ForgettingActionPathReviewed,
+		Result:     cognitive.ForgettingActionResultPreviewed,
+		SnapshotID: "forgetting-review-snapshot-1",
+		AuditRef:   "forgetting_review:memory-a",
+	})
+	require.NoError(t, err)
+	require.Equal(t, cognitive.ForgettingActionPathReviewed, reviewedProof.Path)
+	require.Equal(t, ForgettingReviewAuditAction, reviewedProof.AuditAction)
+	require.Equal(t, "archive", reviewedProof.Action)
+	require.Equal(t, reviewed.Review.Packet.PacketID, reviewedProof.PacketID)
+	require.Equal(t, "forgetting-review-snapshot-1", reviewedProof.SnapshotID)
+
+	reviewedEntry, err := AuditLogEntryFromProof(reviewedProof)
+	require.NoError(t, err)
+	restoredReviewed, err := ExportProofFromAuditLogEntry(reviewedEntry)
+	require.NoError(t, err)
+	require.Equal(t, reviewedProof, restoredReviewed)
 }

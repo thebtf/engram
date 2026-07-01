@@ -5,13 +5,13 @@ import (
 	"testing"
 )
 
-// TestSnapshotOpType_IsValid verifies all 5 op types and invalid rejection.
+// TestSnapshotOpType_IsValid verifies all 6 op types and invalid rejection.
 // Engram vNext Milestone F TG6 / T040.
 func TestSnapshotOpType_IsValid(t *testing.T) {
 	valid := []SnapshotOpType{
 		SnapshotOpIngestDoc, SnapshotOpBulkPromote,
 		SnapshotOpBulkDelete, SnapshotOpBulkSupersede,
-		SnapshotOpCandidateReviewAction,
+		SnapshotOpCandidateReviewAction, SnapshotOpForgettingReviewAction,
 	}
 	for _, op := range valid {
 		if !op.IsValid() {

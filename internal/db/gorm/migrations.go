@@ -4782,6 +4782,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 		},
 		candidateReviewSnapshotOpTypeMigration153(),
+		forgettingReviewSnapshotOpTypeMigration154(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -4828,6 +4829,52 @@ func candidateReviewSnapshotOpTypeMigration153() *gormigrate.Migration {
 				for _, stmt := range stmts {
 					if err := rollbackTx.Exec(stmt).Error; err != nil {
 						return fmt.Errorf("migration 153 rollback: %w", err)
+					}
+				}
+				return nil
+			})
+		},
+	}
+}
+
+func forgettingReviewSnapshotOpTypeMigration154() *gormigrate.Migration {
+	return &gormigrate.Migration{
+		ID: "154_forgetting_review_snapshot_op_type",
+		Migrate: func(tx *gorm.DB) error {
+			stmts := []string{
+				`ALTER TABLE bulk_op_snapshots DROP CONSTRAINT IF EXISTS bulk_op_snapshots_op_type_check`,
+				`ALTER TABLE bulk_op_snapshots
+					ADD CONSTRAINT bulk_op_snapshots_op_type_check
+					CHECK (op_type IN ('ingest_doc','bulk_promote','bulk_delete','bulk_supersede','candidate_review_action','forgetting_review_action'))`,
+			}
+			for _, stmt := range stmts {
+				if err := tx.Exec(stmt).Error; err != nil {
+					return fmt.Errorf("migration 154: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Transaction(func(rollbackTx *gorm.DB) error {
+				var forgettingReviewRows int64
+				if err := rollbackTx.Table("bulk_op_snapshots").
+					Where("op_type = ?", "forgetting_review_action").
+					Count(&forgettingReviewRows).Error; err != nil {
+					return fmt.Errorf("migration 154 rollback preflight: %w", err)
+				}
+				if forgettingReviewRows > 0 {
+					return fmt.Errorf("migration 154 rollback blocked: %d forgetting_review_action snapshot rows exist", forgettingReviewRows)
+				}
+
+				stmts := []string{
+					`ALTER TABLE bulk_op_snapshots DROP CONSTRAINT IF EXISTS bulk_op_snapshots_op_type_check`,
+					`ALTER TABLE bulk_op_snapshots
+						ADD CONSTRAINT bulk_op_snapshots_op_type_check
+						CHECK (op_type IN ('ingest_doc','bulk_promote','bulk_delete','bulk_supersede','candidate_review_action'))`,
+				}
+				for _, stmt := range stmts {
+					if err := rollbackTx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 154 rollback: %w", err)
 					}
 				}
 				return nil
