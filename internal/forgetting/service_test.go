@@ -301,6 +301,14 @@ func TestPreviewReviewAction_DoesNotMutateAndRequiresBoundary(t *testing.T) {
 	require.Contains(t, preview.AuditExpectation, "snapshot before archive mutation")
 	require.True(t, preview.ConfirmationRequired)
 	require.NoError(t, ValidateForgettingMutationBoundary(decision.Review.Packet))
+	preview.ReviewPacket.AllowedActions[0] = "mutated"
+	preview.ReviewPacket.Evidence = append(preview.ReviewPacket.Evidence, "preview-only")
+	preview.ReviewPacket.Scope.MemoryIDs[0] = "mutated-memory"
+	preview.ReviewPacket.Preview.BeforeRefs[0] = "mutated-before"
+	require.Equal(t, []string{"archive", "suppress", "consolidate"}, decision.Review.Packet.AllowedActions)
+	require.NotContains(t, decision.Review.Packet.Evidence, "preview-only")
+	require.Equal(t, "memory-a", decision.Review.Packet.Scope.MemoryIDs[0])
+	require.Equal(t, "memory-a", decision.Review.Packet.Preview.BeforeRefs[0])
 
 	tampered := decision.Review.Packet
 	tampered.ReadOnly = false
@@ -328,6 +336,7 @@ func TestNewForgettingReviewActionSnapshot_BindsPacketToSnapshotOpType(t *testin
 	require.Contains(t, string(snapshot.Parameters), `"operation":"forgetting_review_action"`)
 	require.Contains(t, string(snapshot.Parameters), `"action":"archive"`)
 	require.Contains(t, string(snapshot.Parameters), decision.Review.Packet.PacketID)
+	require.Equal(t, []int64{101, 102}, snapshot.AffectedMemoryIDs)
 }
 
 func TestValidateForgettingMutationBoundary_BlocksDestroyPacket(t *testing.T) {

@@ -3,6 +3,7 @@ package forgetting
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,8 +58,11 @@ func PreviewReviewAction(decision cognitive.ForgettingDecision, packetID string,
 	if hasStructuralLoss(decision.StructuralLoss) {
 		state = reviewpacket.ReviewStateRiskyConfirm
 	}
-	_ = now // kept for parity with review-loop previews and future stale checks.
 	previewPacket := packet
+	previewPacket.AllowedActions = append([]string(nil), packet.AllowedActions...)
+	previewPacket.Evidence = append([]string(nil), packet.Evidence...)
+	previewPacket.Scope.MemoryIDs = append([]string(nil), packet.Scope.MemoryIDs...)
+	previewPacket.Preview.BeforeRefs = append([]string(nil), packet.Preview.BeforeRefs...)
 	previewPacket.Preview.Action = normalized
 	previewPacket.Preview.Recommendation = normalized
 	previewPacket.Preview.AfterPlan = previewAfterPlan(cognitive.ForgettingOperation(normalized))
@@ -146,6 +150,7 @@ func NewForgettingReviewActionSnapshot(packet cognitive.ForgettingReviewPacket, 
 	if err != nil {
 		return nil, fmt.Errorf("forgetting review snapshot marshal parameters: %w", err)
 	}
+	snapshot.AffectedMemoryIDs = parseAffectedMemoryIDs(packet.Scope.MemoryIDs)
 	snapshot.Parameters = params
 	return snapshot, nil
 }
@@ -240,10 +245,28 @@ func ExportProofFromAuditLogEntry(entry gormdb.AuditLogEntry) (cognitive.Forgett
 	if err := json.Unmarshal(*entry.AfterState, &proof); err != nil {
 		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting audit proof unmarshal: %w", err)
 	}
+
 	if proof.Operation == "" || proof.AuditAction == "" {
 		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting audit proof incomplete")
 	}
 	return proof, nil
+}
+
+func parseAffectedMemoryIDs(memoryIDs []string) []int64 {
+	affected := make([]int64, 0, len(memoryIDs))
+	for _, raw := range memoryIDs {
+		id := strings.TrimSpace(raw)
+		id = strings.TrimPrefix(id, "memory:")
+		if id == "" {
+			continue
+		}
+		parsed, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			continue
+		}
+		affected = append(affected, parsed)
+	}
+	return affected
 }
 
 func validateReviewPacketIdentity(packet cognitive.ForgettingReviewPacket, packetID string) error {
