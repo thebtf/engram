@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,6 +61,7 @@ func TestMemoryExperienceProviderUsesPrincipalPolicyQuery(t *testing.T) {
 	require.Equal(t, "engram", store.project)
 	require.Equal(t, "auth", store.opts.Domain)
 	require.Equal(t, experienceProjectionFetchLimit+50, store.opts.Limit)
+	require.Empty(t, store.opts.ContentContains)
 	require.Equal(t, cognitive.ExperienceSourceProjection, results[0].StorageOrigin)
 	require.Equal(t, "OAuth retry once before cooldown prevented transient login failure.", results[0].Lesson)
 	require.Equal(t, "memory", results[0].SourceAttribution[0].Kind)
@@ -92,7 +94,7 @@ func TestMemoryExperienceProviderDetailUsesPrincipalQueryResult(t *testing.T) {
 	require.True(t, found)
 	require.Empty(t, evidence)
 	require.Equal(t, "engram", store.project)
-	require.Equal(t, "memory:7", store.opts.ContentContains)
+	require.Empty(t, store.opts.ContentContains)
 	require.Equal(t, "memory:7", detail.SourceAttribution[0].Kind+":"+detail.SourceAttribution[0].ID)
 	require.Equal(t, "detail-session", detail.SourceAttribution[0].SessionID)
 }
@@ -106,5 +108,14 @@ type fakeExperienceMemoryStore struct {
 func (f *fakeExperienceMemoryStore) ListPrincipalMemory(_ context.Context, project string, opts gormstore.ListOptions) ([]*models.Memory, error) {
 	f.project = project
 	f.opts = opts
-	return f.memories, nil
+	if opts.ContentContains == "" {
+		return f.memories, nil
+	}
+	filtered := make([]*models.Memory, 0, len(f.memories))
+	for _, memory := range f.memories {
+		if memory != nil && strings.Contains(strings.ToLower(memory.Content), strings.ToLower(opts.ContentContains)) {
+			filtered = append(filtered, memory)
+		}
+	}
+	return filtered, nil
 }

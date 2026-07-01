@@ -79,7 +79,7 @@ func (p *memoryExperienceProvider) serviceForRequest(ctx context.Context, reques
 		CallerIsAdmin:      callerIsAdmin,
 		OwnerPrincipal:     ownerPrincipal,
 		OwnerPrincipalKind: ownerKind,
-		Query:              strings.TrimSpace(request.Query),
+		Query:              "",
 		Domain:             strings.TrimSpace(request.Domain),
 		Limit:              experienceProjectionFetchLimit,
 	})
