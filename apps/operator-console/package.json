@@ -1,0 +1,24 @@
+{
+  "name": "engram-operator-console",
+  "private": true,
+  "type": "module",
+  "//": "Design-fidelity Nuxt scaffold. Owned by the design track (renders the .od contract with mock data + seams). The developer tunes deps/build and replaces mock composables with live useFetch. See README.md → Ownership.",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate && node scripts/copy-static-i18n.mjs",
+    "preview": "nuxt preview",
+    "parity": "node scripts/parity-check.repo.mjs",
+    "test:seam": "node --test scripts/seam-contract.test.mjs"
+  },
+  "devDependencies": {
+    "nuxt": "^3.13.0",
+    "typescript": "^5.5.0",
+    "vue": "^3.4.0"
+  },
+  "dependencies": {
+    "@nuxt/ui": "^3.0.0",
+    "@nuxtjs/color-mode": "^3.4.0",
+    "@nuxtjs/i18n": "^9.0.0"
+  }
+}

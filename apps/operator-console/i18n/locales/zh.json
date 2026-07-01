@@ -1,0 +1,644 @@
+{
+  "_note": "ZH (Simplified Chinese, zh-Hans) — third launch locale. Keys mirror ru.json exactly. A missing key falls back to ru (the contract) via i18n.config fallbackLocale, so a partial translation still renders. Chinese has ONE grammatical number form, so plural keys have a single slot (no pipes); the built-in plural rule handles it.",
+
+  "common": {
+    "show": "显示",
+    "hide": "隐藏",
+    "copy": "复制",
+    "change": "修改",
+    "enabled": "已启用",
+    "admin": "管理员",
+    "selectedCount": "已选择 {count} 项",
+    "clearSelection": "清除选择"
+  },
+
+  "shell": {
+    "brandHome": "返回首页 — 概览",
+    "collapseNav": "折叠导航",
+    "expandNav": "展开导航",
+    "mobileMenu": "菜单",
+    "searchPlaceholder": "在控制台中搜索…",
+    "density": "密度",
+    "densityComfortable": "宽松",
+    "densityCompact": "紧凑",
+    "themeToLight": "浅色主题",
+    "themeToDark": "深色主题",
+    "language": "语言",
+    "flag": "标记",
+    "identityTitle": "当前操作员",
+    "identityInitials": "OD",
+    "identityName": "Oleg Dobryakov",
+    "identityProvider": "Google",
+    "authDisabled": "认证已关闭",
+    "authAuthenticated": "会话已激活",
+    "authLocked": "需要登录",
+    "authUnknown": "会话未知",
+    "online": "在线",
+    "postgres": "PostgreSQL 17 · pgvector",
+    "statusDegradation": "降级",
+    "statusNoise": "噪声",
+    "records": "{count} 条记录",
+    "reviewQueue": "{count} 项待审核",
+    "uptime": "已运行 {value}"
+  },
+
+  "nav": {
+    "groups": {
+      "workspace": "工作区",
+      "memoryProduct": "记忆与产品",
+      "behaviorWork": "行为与工作",
+      "storage": "存储",
+      "administration": "管理"
+    },
+    "items": {
+      "overview": "概览",
+      "search": "搜索",
+      "memory": "记忆",
+      "queue": "待审核",
+      "noise": "噪声与价值",
+      "graph": "知识关联",
+      "books": "上下文书籍",
+      "rules": "行为规则",
+      "issues": "任务",
+      "projects": "项目与会话",
+      "secrets": "密钥",
+      "documents": "文档",
+      "collections": "旧集合",
+      "access": "访问控制",
+      "settings": "设置",
+      "health": "状态"
+    },
+    "evidence": {
+      "booksPipeline": "处理流水线"
+    }
+  },
+
+  "overview": {
+    "pageTitle": "概览",
+    "pageSubtitle": "跨记忆、产品和服务的总览。卡片会进入对应分区。",
+    "heroTitle": "engram · 概览",
+    "uptimePrefix": "运行",
+    "attentionTitle": "需要注意",
+    "attention": {
+      "model": "模型 “fallback/gpt-4-1-mini” 已降级",
+      "search": "相似搜索 — 子系统降级",
+      "queue": "{n} 个候选等待审核（受 VNEXT_F 控制）",
+      "queueGated": "审核队列已关闭（受 {flag} 控制）",
+      "books": "上下文书籍 — 服务器上还没有处理流水线",
+      "noise": "记忆噪声 {noise} — {n} 条记录标记为噪声",
+      "stateLink": "状态 →",
+      "queueLink": "待审核 →",
+      "booksLink": "书籍 →",
+      "noiseLink": "噪声与价值 →"
+    },
+    "tasks": {
+      "open": "打开",
+      "work": "进行中",
+      "resolved": "已解决",
+      "closed": "已关闭"
+    },
+    "viz": {
+      "memoryComposition": "记忆构成",
+      "tasksByStatus": "任务状态",
+      "modelHealth": "模型健康",
+      "memoryTrend": "记忆随时间增长需要每日历史 endpoint",
+      "modelTrend": "每日可用性和成本 —"
+    },
+    "recordsCount": "{n} 条记录",
+    "total": "总计",
+    "totalIssues": "共 {n}",
+    "snapshotOnly": "目前只是快照",
+    "badges": {
+      "vnext": "受 VNEXT_F 控制",
+      "aboveNorm": "高于阈值",
+      "mustBuild": "需要构建",
+      "mustBuildParen": "(must-build)",
+      "semanticCount": "semantic {n}",
+      "episodicCount": "episodic {n}",
+      "vaultLive": "vault ok"
+    },
+    "groups": {
+      "memoryProduct": "记忆与产品",
+      "behaviorWork": "行为与工作",
+      "service": "服务"
+    },
+    "cards": {
+      "memory": { "sub": "{active} 条活跃 · {noise} 条噪声" },
+      "queue": { "sub": "等待决策的记忆候选" },
+      "noise": { "sub": "噪声注入占比" },
+      "graph": { "sub": "概念图和转移关系" },
+      "books": { "sub": "作者领域和术语导入" },
+      "rules": { "sub": "操作员 always-inject 指令" },
+      "issues": {
+        "sub": "{open} 打开 · {work} 进行中 · 共 {total}",
+        "openBadge": "{n} 打开"
+      },
+      "projects": { "sub": "{n} 个活跃会话" },
+      "health": { "sub": "{ok} 个模型 ok · {degraded} 个降级" },
+      "secrets": { "sub": "密钥在 vault 中 · 加密已启用" },
+      "access": { "sub": "用户、登录提供方、角色" }
+    }
+  },
+
+  "memory": {
+    "title": "记忆",
+    "subtitle": "Engram 知识工作清单：哪些用于回答，哪些需要验证，哪些作为噪声移除。",
+    "legend": {
+      "active": "工作中",
+      "dormant": "关闭（受 flag 控制）",
+      "stale": "旧项（不要触碰）",
+      "mustBuild": "需要构建",
+      "used": "已使用",
+      "shownUnused": "展示过但未使用"
+    },
+    "actions": {
+      "selectAll": "全选",
+      "clearSelection": "清除选择",
+      "resetFilter": "重置过滤"
+    },
+    "countInFilter": "当前过滤中 {shown} / {total}",
+    "rowsLabel": "行数",
+    "pageRange": "{from}–{to} / {total}",
+    "filters": {
+      "allProjects": "所有项目",
+      "active": "工作项",
+      "flagged": "需要检查",
+      "stale": "30 天未使用",
+      "low": "低置信度",
+      "chain": "替换链"
+    },
+    "filterSummary": "{count} 条记录 · 噪声 {noise}",
+    "table": {
+      "record": "记录 · 用途 · 项目 · 年龄",
+      "value": "价值 / 展示"
+    },
+    "rowState": {
+      "active": "工作中",
+      "noise": "噪声",
+      "stale": "需要审核"
+    },
+    "empty": {
+      "title": "记忆为空",
+      "filtered": "当前过滤条件下没有记录。",
+      "noRows": "选定项目还没有保存的 memory notes。"
+    },
+    "state": {
+      "pending": "正在从服务器加载记忆…",
+      "error": "无法加载记忆：{message}",
+      "empty": "当前 surface 在服务器上没有记忆记录。",
+      "gated": "此分区被 {flag} 关闭。",
+      "retry": "重试"
+    },
+    "detail": {
+      "title": "记忆卡片",
+      "operatorQuestion": "操作员决策：",
+      "operatorText": "保留到提示词、降级为上下文、送去审核，或替换为新版本。",
+      "state": "状态",
+      "tier": "使用方式",
+      "type": "类别",
+      "project": "项目",
+      "age": "年龄",
+      "confidence": "置信度",
+      "tags": "标签",
+      "utility": "价值和噪声",
+      "utilityHelp": "引用 / 展示 · 置信度 {confidence}",
+      "noiseWarning": "看起来像噪声：代理经常看到这条记录，但从未在回答中使用。",
+      "audit": "审计",
+      "auditBody": "记忆审计日志",
+      "actions": {
+        "storeCopy": "保存副本",
+        "delete": "删除记录",
+        "hideNoise": "作为噪声隐藏",
+        "editText": "编辑文本",
+        "replace": "替换为新版本",
+        "flag": "标记"
+      }
+    },
+    "bulk": {
+      "hideNoise": "作为噪声隐藏",
+      "replace": "替换版本",
+      "moveProject": "移动项目…",
+      "note": "先做快照 · 再应用",
+      "mustBuildNote": "批量操作等待服务器 endpoints；当前选择可以清除"
+    }
+  },
+
+  "rules": {
+    "title": "行为规则",
+    "subtitle": "会注入到每个代理上下文的 always-inject 指令。优先级决定应用顺序。",
+    "state": {
+      "pending": "正在从服务器加载规则…",
+      "error": "无法加载规则：{message}",
+      "empty": "服务器上还没有行为规则。",
+      "retry": "重试"
+    },
+    "create": {
+      "title": "新规则",
+      "subtitle": "通过 POST /api/rules 创建 live rule；global 规则应用到所有项目。",
+      "contentPlaceholder": "例如：prod 没有明确 grant token 时只读。",
+      "project": "项目",
+      "global": "global",
+      "priority": "优先级",
+      "submit": "创建规则"
+    },
+    "list": {
+      "title": "活跃指令",
+      "count": "{count} 条规则"
+    },
+    "meta": {
+      "priority": "优先级 {priority}",
+      "project": "项目 {project}",
+      "updated": "更新于 {updated}"
+    },
+    "empty": {
+      "title": "没有规则",
+      "body": "通过上方表单添加第一条指令。"
+    },
+    "detail": {
+      "title": "规则 #{id}",
+      "content": "规则文本",
+      "project": "项目",
+      "priority": "优先级",
+      "enableTitle": "启用 / 禁用",
+      "enableBody": "当前服务器模型没有 behavioral rule 的 enabled 字段，因此 toggle 不可操作。",
+      "save": "保存",
+      "delete": "删除",
+      "enable": "切换"
+    }
+  },
+
+  "issues": {
+    "title": "任务",
+    "subtitle": "跨项目日志：bug、功能和代理之间的交接。",
+    "state": {
+      "pending": "正在从服务器加载任务…",
+      "error": "无法加载任务：{message}",
+      "empty": "服务器登记表中还没有任务。",
+      "retry": "重试"
+    },
+    "stats": {
+      "open": "打开",
+      "work": "进行中",
+      "done": "已关闭",
+      "total": "登记总数"
+    },
+    "create": {
+      "title": "新任务",
+      "subtitle": "通过 POST /api/issues 创建任务，并带 operator source_project。",
+      "titlePlaceholder": "简短任务主题",
+      "bodyPlaceholder": "上下文、验收标准、链接",
+      "targetProject": "项目",
+      "priority": "优先级",
+      "type": "类型",
+      "submit": "创建任务"
+    },
+    "list": {
+      "title": "任务日志",
+      "count": "{count} 个任务"
+    },
+    "meta": {
+      "comments": "{count} 条评论"
+    },
+    "empty": {
+      "title": "没有任务",
+      "body": "通过上方表单创建第一项任务。"
+    },
+    "detail": {
+      "title": "任务 #{id}",
+      "loading": "正在加载详情卡片…",
+      "error": "无法加载详情；编辑将使用列表行。",
+      "issueTitle": "标题",
+      "body": "正文",
+      "status": "状态",
+      "priority": "优先级",
+      "type": "类型",
+      "operatorComment": "operator-console update",
+      "save": "保存",
+      "acknowledge": "接手",
+      "delete": "删除",
+      "confirmDelete": "确认删除"
+    },
+    "status": {
+      "open": "打开",
+      "acknowledged": "进行中",
+      "reopened": "重新打开",
+      "resolved": "已解决",
+      "closed": "已关闭",
+      "rejected": "已拒绝"
+    },
+    "priority": {
+      "critical": "关键",
+      "high": "高",
+      "medium": "中",
+      "low": "低"
+    },
+    "type": {
+      "bug": "bug",
+      "feature": "功能",
+      "improvement": "改进",
+      "task": "任务"
+    }
+  },
+
+  "secrets": {
+    "title": "密钥",
+    "subtitle": "密钥与凭据：列表中不显示具体值，需显式操作才能查看。",
+    "vaultState": "保险库状态",
+    "encryption": "加密",
+    "fingerprint": "密钥指纹",
+    "count": "密钥数",
+    "countPlural": "没有密钥 | {n} 个密钥",
+    "nSecrets": "{n} 个密钥",
+    "fingerprintMasked": "•••• •••• •••• ••••",
+    "colKey": "密钥",
+    "colProject": "项目",
+    "colScope": "范围",
+    "colCreated": "创建时间",
+    "colActions": "操作",
+    "reveal": "👁 显示",
+    "delete": "删除",
+    "confirmDelete": "确认",
+    "vaultDisabled": "vault 已关闭",
+    "state": {
+      "pending": "正在从服务器加载 vault…",
+      "error": "无法加载 vault：{message}",
+      "empty": "vault 中还没有保存的密钥。",
+      "retry": "重试",
+      "vaultError": "vault 状态不可用。"
+    },
+    "create": {
+      "title": "新密钥",
+      "subtitle": "值会直接发送到 POST /api/vault/credentials，不会保存在界面中。",
+      "name": "键",
+      "project": "项目",
+      "value": "值",
+      "submit": "保存"
+    },
+    "rotation": {
+      "title": "vault 密钥轮换",
+      "body": "当前服务器没有安全轮换 endpoint，因此不显示可操作 modal。",
+      "action": "轮换密钥",
+      "cleanup": "删除 orphaned"
+    },
+    "revealTitle": "一次性显示 — 值不会保存",
+    "revealTimer": "{seconds} 秒后隐藏",
+    "copySecret": "复制",
+    "hideSecret": "隐藏"
+  },
+
+  "projects": {
+    "title": "项目与会话",
+    "subtitle": "此服务器上的项目、最近工作会话，以及当前可打开内容的真实边界。",
+    "actions": {
+      "refresh": "刷新",
+      "delete": "删除",
+      "confirmDelete": "确认"
+    },
+    "state": {
+      "pending": "正在从服务器加载项目和会话…",
+      "error": "无法加载项目或会话：{message}",
+      "emptyProjects": "服务器上还没有项目。",
+      "emptySessions": "所选项目在当前切片中没有会话。",
+      "retry": "重试",
+      "source": "来源"
+    },
+    "summary": {
+      "projects": "项目数",
+      "selected": "已选择",
+      "sessions": "切片中的会话",
+      "active": "活跃"
+    },
+    "list": {
+      "title": "项目",
+      "count": "{count} 个项目"
+    },
+    "meta": {
+      "sessions": "{count} 个会话",
+      "active": "{count} 个活跃",
+      "last": "活动 {value}",
+      "prompts": "{count} 个 prompt"
+    },
+    "sessions": {
+      "title": "所选项目的会话",
+      "emptyTitle": "没有会话",
+      "emptyBody": "请选择其他项目或刷新列表。"
+    },
+    "sessionsCount": "{n} 个会话",
+    "detail": {
+      "title": "会话详情",
+      "loading": "正在加载会话详情…",
+      "emptyTitle": "未选择会话",
+      "emptyBody": "选择一个会话行以打开服务器卡片。",
+      "project": "项目",
+      "status": "状态",
+      "prompts": "Prompts",
+      "worker": "Worker port",
+      "strategy": "策略",
+      "outcome": "结果"
+    },
+    "gaps": {
+      "transcript": "Transcript readback 尚未通过 REST endpoint 暴露。",
+      "strategy": "路由和 strategy 仍是服务器侧 must-build。",
+      "codeIntel": "code-intel 摘要目前只能通过工具 surface 使用。"
+    }
+  },
+
+  "health": {
+    "title": "状态",
+    "subtitle": "服务器实时快照：readiness、selfcheck、向量、vNext 指标和 update channel。",
+    "refresh": "刷新",
+    "overall": "总体状态",
+    "version": "版本",
+    "uptime": "运行时间",
+    "ready": "Readiness",
+    "readyOk": "就绪",
+    "readyError": "未就绪",
+    "components": "组件",
+    "embedding": "Embedding 覆盖率",
+    "vector": "pgvector",
+    "update": "Update channel",
+    "updateState": "Update 状态",
+    "updateAvailable": "有可用更新",
+    "noise": "噪声",
+    "emptyComponents": "selfcheck 组件尚未加载。",
+    "state": {
+      "pending": "正在加载服务器状态…",
+      "error": "无法加载状态：{message}",
+      "notLoaded": "数据尚未加载。"
+    },
+    "metrics": {
+      "chunk_count": "片段",
+      "with_vectors": "有向量",
+      "dimension": "维度",
+      "coverage": "覆盖率",
+      "noise_ratio": "噪声",
+      "model": "模型"
+    }
+  },
+
+  "settings": {
+    "title": "设置",
+    "subtitle": "只读 runtime config，以及需要操作员明确确认的动作。",
+    "refresh": "刷新",
+    "runtime": "Runtime flags",
+    "configSnapshot": "配置快照",
+    "state": {
+      "pending": "正在加载服务器设置…",
+      "error": "无法加载设置：{message}",
+      "restartRequired": "有更改等待 restart：它尚未 applied。"
+    },
+    "switches": {
+      "injectUnified": {
+        "title": "统一记忆注入",
+        "desc": "来自 /api/config 的当前值；修改需要服务器 save endpoint。"
+      },
+      "telemetry": {
+        "title": "Telemetry",
+        "desc": "runtime config 中 telemetry_enabled 的当前值。"
+      },
+      "sourceProject": {
+        "title": "Enforce source project",
+        "desc": "enforce_source_project 的当前值；没有 restart receipt 时不能视为 applied。"
+      }
+    },
+    "gaps": {
+      "configSave": "runtime config 保存尚无带 restart-required receipt 的 endpoint。",
+      "flags": "服务器尚未暴露完整 feature flags 映射。"
+    },
+    "restart": {
+      "title": "Restart / update",
+      "body": "两个动作都会影响 live 进程，因此需要第二次点击确认。",
+      "action": "重启服务器",
+      "confirm": "确认 restart",
+      "updateAction": "Update 后 restart",
+      "confirmUpdate": "确认 update restart",
+      "updateState": "update state",
+      "updateAvailable": "available"
+    }
+  },
+
+  "searchPage": {
+    "title": "搜索",
+    "subtitle": "对 Engram 服务器观察记录进行实时 context search，并显示 recent/analytics 遥测以及旧 collection search 的真实 tombstone。",
+    "placeholder": "输入 context 查询…",
+    "actions": {
+      "refresh": "刷新",
+      "search": "搜索"
+    },
+    "form": {
+      "project": "项目",
+      "query": "查询",
+      "noProjects": "没有项目"
+    },
+    "state": {
+      "pending": "正在加载搜索数据…",
+      "error": "无法加载搜索：{message}"
+    },
+    "results": {
+      "title": "Context search 结果",
+      "source": "来源：/api/context/search",
+      "emptyTitle": "请输入查询",
+      "emptyBody": "选择项目并执行搜索以查看服务器观察记录。",
+      "staleTitle": "来源已过期",
+      "noBody": "响应中没有描述。"
+    },
+    "recent": {
+      "title": "最近查询",
+      "empty": "暂无最近查询。"
+    },
+    "analytics": {
+      "title": "搜索分析",
+      "total": "总计",
+      "zeroRate": "零结果率"
+    },
+    "tombstone": {
+      "title": "Collection search tombstone",
+      "body": "Legacy search_collection 不作为可用 UI 搜索接入；它是已移除/过期 surface，仅作为 evidence 保留。"
+    }
+  },
+
+  "noisePage": {
+    "title": "噪声与有效性",
+    "subtitle": "实时 retrieval/search telemetry：展示给 agent 的内容、实际使用的内容，以及 sparse 或未记录的数据。",
+    "refresh": "刷新",
+    "state": {
+      "pending": "正在加载 retrieval telemetry…",
+      "error": "无法加载 telemetry：{message}"
+    },
+    "gauge": {
+      "label": "噪声比例"
+    },
+    "metrics": {
+      "noiseRatio": "噪声",
+      "shown": "已展示",
+      "used": "已使用",
+      "unused": "未使用",
+      "searchRequests": "Search",
+      "unrecorded": "无 outcome"
+    },
+    "analytics": {
+      "title": "搜索分析",
+      "total": "总计",
+      "today": "今日",
+      "latency": "Latency ms",
+      "errors": "错误"
+    },
+    "retrieval": {
+      "title": "Retrieval stats",
+      "requests": "请求",
+      "served": "已提供",
+      "stale": "已排除 stale",
+      "duplicates": "重复项"
+    },
+    "unrecorded": {
+      "title": "Sparse outcome state",
+      "body": "unrecorded outcome 比例较高表示 outcome weighting 大多处于中性运行。"
+    },
+    "trend": {
+      "title": "趋势",
+      "body": "服务器目前只暴露 snapshot，尚无噪声趋势图所需的 time-series endpoint。"
+    }
+  },
+
+  "sectionStub": {
+    "state": {
+      "live": "该分区已连接，但尚无扩展视图。",
+      "dormant": "该功能被 flag 关闭。",
+      "stale": "该 surface 已作为 tombstone 禁用。",
+      "mustbuild": "该分区仍需要构建。"
+    }
+  },
+
+  "deferred": {
+    "queue": {
+      "title": "待审核",
+      "lead": "记忆候选项应等待操作员决定：保留、延后或拒绝。",
+      "next": "队列需要服务器 flag VNEXT_F；在此之前该分区保持 dormant。"
+    },
+    "graph": {
+      "title": "知识图谱",
+      "lead": "概念与记忆链接图计划作为单独的交互组件实现。",
+      "next": "REST endpoint GET /api/graph 尚不存在，因此图谱不会假装可用。"
+    },
+    "books": {
+      "title": "书籍上下文",
+      "lead": "作者领域、术语和链接应通过专用服务器流水线进入记忆。",
+      "next": "需要 POST /api/books/ingest，并提供导入处理、状态和错误。"
+    },
+    "documents": {
+      "title": "文档",
+      "lead": "操作员文档和版本需要独立于 MCP docs tools 的 REST surface。",
+      "next": "GET /api/documents 尚不可用，因此该分区保持 must-build，而不是 fake-live。"
+    },
+    "collections": {
+      "title": "旧集合",
+      "lead": "v5 之前的遗留 surface 显示为禁用状态，避免被误认为可用搜索。",
+      "next": "search_collection 保持 stale evidence；可用 UI 搜索使用 context search。"
+    },
+    "access": {
+      "title": "访问",
+      "lead": "用户、登录提供方和角色属于未来 control-plane surface。",
+      "next": "GET /api/access/users 尚不存在，因此不会渲染假的用户和角色。"
+    }
+  }
+}

@@ -33,6 +33,9 @@ docs/package-lock.json
 
 # Node modules (will be installed fresh in Docker)
 ui/node_modules/
+apps/operator-console/node_modules/
+apps/operator-console/.nuxt/
+apps/operator-console/.output/
 
 # Test artifacts
 coverage.out
@@ -44,3 +47,7 @@ engram-marketplace/
 # Local data
 *.db
 *.sqlite
+
+# OpenDesign authoring workspace is not required for Docker builds; promoted
+# contract/runtime paths are copied explicitly from tracked repo locations.
+.od/

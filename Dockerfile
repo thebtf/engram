@@ -9,6 +9,20 @@ RUN npm ci
 COPY ui/ .
 RUN npm run build
 
+# --- Operator console build stage ---
+FROM node:22-bookworm-slim AS operator-console-build
+
+WORKDIR /workspace/apps/operator-console
+COPY apps/operator-console/package.json apps/operator-console/package-lock.json ./
+RUN npm ci
+COPY apps/operator-console/ ./
+COPY design/operator-console/contracts /workspace/design/operator-console/contracts
+RUN npm run parity && npm run build
+
+# --- Operator console static bundle for server embed ---
+FROM operator-console-build AS operator-console-static-build
+RUN npm run generate
+
 # --- Go build stage ---
 FROM golang:1.25-bookworm AS builder
 
@@ -26,8 +40,10 @@ RUN go mod download
 
 COPY . .
 
-# Copy built dashboard into static directory for go:embed
-COPY --from=dashboard /ui/dist/ internal/worker/static/
+# Copy generated operator-console static bundle into static/ for go:embed.
+# This replaces the legacy embedded dashboard root inside the server image while
+# keeping apps/operator-console as the single frontend source of truth.
+COPY --from=operator-console-static-build /workspace/apps/operator-console/.output/public/ internal/worker/static/
 
 # Inject version from git tags
 ARG VERSION=dev
@@ -57,3 +73,18 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:37777/health || exit 1
 
 ENTRYPOINT ["engram-server"]
+
+# --- Operator console image ---
+FROM node:22-bookworm-slim AS operator-console
+
+WORKDIR /app
+
+COPY --from=operator-console-build /workspace/apps/operator-console/.output ./.output
+
+ENV NITRO_HOST=0.0.0.0
+ENV NITRO_PORT=3000
+ENV NUXT_PUBLIC_API_BASE=/api
+
+EXPOSE 3000
+
+ENTRYPOINT ["node", ".output/server/index.mjs"]

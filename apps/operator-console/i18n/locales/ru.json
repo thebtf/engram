@@ -1,0 +1,644 @@
+{
+  "_note": "RU is the contract language — these strings mirror the .od/index.html mockup verbatim. This file is the localization seam (the i18n analogue of useMockData.ts): every visible string has a key here, components read it via t(). When the mockup changes a string, change it here and mark the section drifted in PARITY.json. Key convention: [area].[element], areas mirror nav section ids.",
+
+  "common": {
+    "show": "Показать",
+    "hide": "Скрыть",
+    "copy": "Скопировать",
+    "change": "Изменить",
+    "enabled": "включено",
+    "admin": "admin",
+    "selectedCount": "{count} выбрано",
+    "clearSelection": "Снять выбор"
+  },
+
+  "shell": {
+    "brandHome": "На главную — Обзор",
+    "collapseNav": "Свернуть меню",
+    "expandNav": "Развернуть меню",
+    "mobileMenu": "Меню",
+    "searchPlaceholder": "Поиск по консоли…",
+    "density": "Плотность",
+    "densityComfortable": "Комфорт",
+    "densityCompact": "Компактно",
+    "themeToLight": "Светлая тема",
+    "themeToDark": "Тёмная тема",
+    "language": "Язык",
+    "flag": "флаг",
+    "identityTitle": "Текущий оператор",
+    "identityInitials": "ОД",
+    "identityName": "Олег Добряков",
+    "identityProvider": "Google",
+    "authDisabled": "auth отключена",
+    "authAuthenticated": "сессия активна",
+    "authLocked": "требуется вход",
+    "authUnknown": "сессия неизвестна",
+    "online": "онлайн",
+    "postgres": "PostgreSQL 17 · pgvector",
+    "statusDegradation": "деградация",
+    "statusNoise": "шум",
+    "records": "{count} запись | {count} записи | {count} записей",
+    "reviewQueue": "на проверку {count} | на проверку {count} | на проверку {count}",
+    "uptime": "работает {value}"
+  },
+
+  "nav": {
+    "groups": {
+      "workspace": "Рабочее место",
+      "memoryProduct": "Память, продукт",
+      "behaviorWork": "Поведение и работа",
+      "storage": "Хранилище",
+      "administration": "Администрирование"
+    },
+    "items": {
+      "overview": "Обзор",
+      "search": "Поиск",
+      "memory": "Память",
+      "queue": "На проверку",
+      "noise": "Шум и польза",
+      "graph": "Связи знаний",
+      "books": "Книги-контекст",
+      "rules": "Правила поведения",
+      "issues": "Задачи",
+      "projects": "Проекты и сессии",
+      "secrets": "Секреты",
+      "documents": "Документы",
+      "collections": "Старые коллекции",
+      "access": "Доступ",
+      "settings": "Настройки",
+      "health": "Состояние"
+    },
+    "evidence": {
+      "booksPipeline": "конвейер обработки"
+    }
+  },
+
+  "overview": {
+    "pageTitle": "Обзор",
+    "pageSubtitle": "Сводка по всей памяти, продукту и сервису. Карточки ведут в свои разделы.",
+    "heroTitle": "engram · обзор",
+    "uptimePrefix": "работает",
+    "attentionTitle": "Требует внимания",
+    "attention": {
+      "model": "Модель «fallback/gpt-4-1-mini» деградирует",
+      "search": "Поиск похожего — деградация подсистемы",
+      "queue": "{n} кандидат(ов) ждут проверки (за флагом VNEXT_F)",
+      "queueGated": "Очередь проверки отключена (за флагом {flag})",
+      "books": "Книги-контекст — конвейера обработки ещё нет на сервере",
+      "noise": "Шум памяти {noise} — {n} запис(ей) помечены как шум",
+      "stateLink": "Состояние →",
+      "queueLink": "На проверку →",
+      "booksLink": "Книги →",
+      "noiseLink": "Шум и польза →"
+    },
+    "tasks": {
+      "open": "Открытые",
+      "work": "В работе",
+      "resolved": "Решённые",
+      "closed": "Закрытые"
+    },
+    "viz": {
+      "memoryComposition": "Состав памяти",
+      "tasksByStatus": "Задачи по статусу",
+      "modelHealth": "Здоровье моделей",
+      "memoryTrend": "Рост памяти во времени — нужен endpoint дневной истории",
+      "modelTrend": "Доступность и стоимость по дням —"
+    },
+    "recordsCount": "{n} записей",
+    "total": "всего",
+    "totalIssues": "{n} всего",
+    "snapshotOnly": "сейчас только срез",
+    "badges": {
+      "vnext": "за флагом VNEXT_F",
+      "aboveNorm": "выше нормы",
+      "mustBuild": "нужно построить",
+      "mustBuildParen": "(must-build)",
+      "semanticCount": "semantic {n}",
+      "episodicCount": "episodic {n}",
+      "vaultLive": "vault ok"
+    },
+    "groups": {
+      "memoryProduct": "Память и продукт",
+      "behaviorWork": "Поведение и работа",
+      "service": "Сервис"
+    },
+    "cards": {
+      "memory": { "sub": "{active} активных · {noise} в шуме" },
+      "queue": { "sub": "кандидаты в память, ждут решения" },
+      "noise": { "sub": "доля шумовых инъекций" },
+      "graph": { "sub": "граф концептов и переходов" },
+      "books": { "sub": "загрузка авторских доменов и терминов" },
+      "rules": { "sub": "always-inject директивы оператора" },
+      "issues": {
+        "sub": "{open} открытых · {work} в работе · {total} всего",
+        "openBadge": "{n} открыто"
+      },
+      "projects": { "sub": "{n} активных сесси(й)" },
+      "health": { "sub": "{ok} модел(и) ok · {degraded} деградирует" },
+      "secrets": { "sub": "ключи в vault · шифрование включено" },
+      "access": { "sub": "пользователи, провайдеры входа, роли" }
+    }
+  },
+
+  "memory": {
+    "title": "Память",
+    "subtitle": "Рабочий список знаний Engram: что использовать в ответах, что проверить, что убрать как шум.",
+    "legend": {
+      "active": "работает",
+      "dormant": "выключено (за флагом)",
+      "stale": "старое (не трогать)",
+      "mustBuild": "нужно построить",
+      "used": "использовали",
+      "shownUnused": "показывали, но не использовали"
+    },
+    "actions": {
+      "selectAll": "Выделить все",
+      "clearSelection": "Снять выбор",
+      "resetFilter": "Сбросить фильтр"
+    },
+    "countInFilter": "{shown} из {total} в текущем фильтре",
+    "rowsLabel": "Строк",
+    "pageRange": "{from}–{to} из {total}",
+    "filters": {
+      "allProjects": "Все проекты",
+      "active": "Рабочие",
+      "flagged": "Проверить",
+      "stale": "30 дней без пользы",
+      "low": "Низкая уверенность",
+      "chain": "Цепочка замен"
+    },
+    "filterSummary": "{count} записей · шум {noise}",
+    "table": {
+      "record": "Запись · назначение · проект · давность",
+      "value": "Польза / показы"
+    },
+    "rowState": {
+      "active": "рабочая",
+      "noise": "шум",
+      "stale": "требует проверки"
+    },
+    "empty": {
+      "title": "Память пуста",
+      "filtered": "Под текущие фильтры не попала ни одна запись.",
+      "noRows": "Для выбранного проекта пока нет сохранённых memory notes."
+    },
+    "state": {
+      "pending": "Загружаем память с сервера…",
+      "error": "Не удалось загрузить память: {message}",
+      "empty": "На сервере нет записей памяти для текущего surface.",
+      "gated": "Раздел отключён флагом {flag}.",
+      "retry": "Повторить"
+    },
+    "detail": {
+      "title": "Карточка памяти",
+      "operatorQuestion": "Что решает оператор:",
+      "operatorText": "оставить запись в подсказках, понизить до контекста, отправить на проверку или заменить новой версией.",
+      "state": "состояние",
+      "tier": "как использовать",
+      "type": "категория",
+      "project": "проект",
+      "age": "возраст",
+      "confidence": "уверенность",
+      "tags": "Метки",
+      "utility": "Польза и шум",
+      "utilityHelp": "цитировали / показывали · уверенность {confidence}",
+      "noiseWarning": "Похоже на шум: запись часто показывали агентам, но ни разу не использовали в ответе.",
+      "audit": "Аудит",
+      "auditBody": "Журнал аудита по памяти",
+      "actions": {
+        "storeCopy": "Сохранить копию",
+        "delete": "Удалить запись",
+        "hideNoise": "Скрыть как шум",
+        "editText": "Редактировать текст",
+        "replace": "Заменить новой версией",
+        "flag": "Пометить"
+      }
+    },
+    "bulk": {
+      "hideNoise": "Скрыть как шум",
+      "replace": "Заменить версией",
+      "moveProject": "Сменить проект…",
+      "note": "сначала снимок · затем применение",
+      "mustBuildNote": "bulk-действия ждут серверные endpoints; выбранные записи можно снять"
+    }
+  },
+
+  "rules": {
+    "title": "Правила поведения",
+    "subtitle": "Always-inject директивы, которые попадают в контекст агента. Приоритет задаёт порядок применения.",
+    "state": {
+      "pending": "Загружаем правила с сервера…",
+      "error": "Не удалось загрузить правила: {message}",
+      "empty": "На сервере пока нет правил поведения.",
+      "retry": "Повторить"
+    },
+    "create": {
+      "title": "Новое правило",
+      "subtitle": "Создаёт live rule через POST /api/rules; глобальное правило применяется ко всем проектам.",
+      "contentPlaceholder": "Например: prod read-only без явного грант-токена.",
+      "project": "Проект",
+      "global": "global",
+      "priority": "Приоритет",
+      "submit": "Создать правило"
+    },
+    "list": {
+      "title": "Активные директивы",
+      "count": "{count} правило | {count} правила | {count} правил"
+    },
+    "meta": {
+      "priority": "приоритет {priority}",
+      "project": "проект {project}",
+      "updated": "обновлено {updated}"
+    },
+    "empty": {
+      "title": "Правил нет",
+      "body": "Добавьте первую директиву через форму выше."
+    },
+    "detail": {
+      "title": "Правило #{id}",
+      "content": "Текст правила",
+      "project": "Проект",
+      "priority": "Приоритет",
+      "enableTitle": "Включение / отключение",
+      "enableBody": "На текущем сервере у behavioral rule нет поля enabled, поэтому toggle не делаем operable.",
+      "save": "Сохранить",
+      "delete": "Удалить",
+      "enable": "Переключить"
+    }
+  },
+
+  "issues": {
+    "title": "Задачи",
+    "subtitle": "Кросс-проектный журнал: баги, фичи и передачи между агентами.",
+    "state": {
+      "pending": "Загружаем задачи с сервера…",
+      "error": "Не удалось загрузить задачи: {message}",
+      "empty": "В серверном реестре пока нет задач.",
+      "retry": "Повторить"
+    },
+    "stats": {
+      "open": "открытые",
+      "work": "в работе",
+      "done": "закрытые",
+      "total": "в реестре"
+    },
+    "create": {
+      "title": "Новая задача",
+      "subtitle": "Создаёт задачу через POST /api/issues с операторским source_project.",
+      "titlePlaceholder": "Короткая тема задачи",
+      "bodyPlaceholder": "Контекст, критерии готовности, ссылки",
+      "targetProject": "Проект",
+      "priority": "Срочность",
+      "type": "Тип",
+      "submit": "Создать задачу"
+    },
+    "list": {
+      "title": "Журнал задач",
+      "count": "{count} задача | {count} задачи | {count} задач"
+    },
+    "meta": {
+      "comments": "{count} комм."
+    },
+    "empty": {
+      "title": "Задач нет",
+      "body": "Создайте первую задачу через форму выше."
+    },
+    "detail": {
+      "title": "Задача #{id}",
+      "loading": "Загружаем детальную карточку…",
+      "error": "Не удалось загрузить деталь; редактирование использует строку списка.",
+      "issueTitle": "Тема",
+      "body": "Описание",
+      "status": "Состояние",
+      "priority": "Срочность",
+      "type": "Тип",
+      "operatorComment": "operator-console update",
+      "save": "Сохранить",
+      "acknowledge": "Взять в работу",
+      "delete": "Удалить",
+      "confirmDelete": "Подтвердить удаление"
+    },
+    "status": {
+      "open": "открыта",
+      "acknowledged": "в работе",
+      "reopened": "переоткрыта",
+      "resolved": "решена",
+      "closed": "закрыта",
+      "rejected": "отклонена"
+    },
+    "priority": {
+      "critical": "критично",
+      "high": "высокий",
+      "medium": "средний",
+      "low": "низкий"
+    },
+    "type": {
+      "bug": "ошибка",
+      "feature": "возможность",
+      "improvement": "улучшение",
+      "task": "задача"
+    }
+  },
+
+  "secrets": {
+    "title": "Секреты",
+    "subtitle": "Ключи и доступы: значения не показываются в списке, раскрытие — явным действием.",
+    "vaultState": "Состояние vault",
+    "encryption": "Шифрование",
+    "fingerprint": "Отпечаток ключа",
+    "count": "Секретов",
+    "countPlural": "нет секретов | {n} секрет | {n} секрета | {n} секретов",
+    "nSecrets": "{n} секрет | {n} секрета | {n} секретов",
+    "fingerprintMasked": "•••• •••• •••• ••••",
+    "colKey": "Ключ",
+    "colProject": "Проект",
+    "colScope": "Область",
+    "colCreated": "Создан",
+    "colActions": "Действия",
+    "reveal": "👁 Показать",
+    "delete": "Удалить",
+    "confirmDelete": "Подтвердить",
+    "vaultDisabled": "vault выключен",
+    "state": {
+      "pending": "Загружаем vault с сервера…",
+      "error": "Не удалось загрузить vault: {message}",
+      "empty": "В vault пока нет сохранённых ключей.",
+      "retry": "Повторить",
+      "vaultError": "Статус vault недоступен."
+    },
+    "create": {
+      "title": "Новый секрет",
+      "subtitle": "Значение отправляется сразу в POST /api/vault/credentials и не сохраняется в интерфейсе.",
+      "name": "Ключ",
+      "project": "Проект",
+      "value": "Значение",
+      "submit": "Сохранить"
+    },
+    "rotation": {
+      "title": "Ротация ключа vault",
+      "body": "На текущем сервере нет endpoint для безопасной ротации; не показываем operable modal.",
+      "action": "Сменить ключ",
+      "cleanup": "Удалить orphaned"
+    },
+    "revealTitle": "Одноразовый показ — значение не сохраняется",
+    "revealTimer": "Скроется через {seconds} с",
+    "copySecret": "Скопировать",
+    "hideSecret": "Скрыть"
+  },
+
+  "projects": {
+    "title": "Проекты и сессии",
+    "subtitle": "Проекты на этом сервере, последние рабочие сессии и честные границы того, что можно открыть сейчас.",
+    "actions": {
+      "refresh": "Обновить",
+      "delete": "Удалить",
+      "confirmDelete": "Подтвердить"
+    },
+    "state": {
+      "pending": "Загружаем проекты и сессии с сервера…",
+      "error": "Не удалось загрузить проекты или сессии: {message}",
+      "emptyProjects": "На сервере пока нет проектов.",
+      "emptySessions": "Для выбранного проекта нет сессий в текущем срезе.",
+      "retry": "Повторить",
+      "source": "Источник"
+    },
+    "summary": {
+      "projects": "Проектов",
+      "selected": "Выбран",
+      "sessions": "Сессий в срезе",
+      "active": "Активных"
+    },
+    "list": {
+      "title": "Проекты",
+      "count": "{count} проект | {count} проекта | {count} проектов"
+    },
+    "meta": {
+      "sessions": "{count} сессий",
+      "active": "{count} активных",
+      "last": "активность {value}",
+      "prompts": "{count} prompt"
+    },
+    "sessions": {
+      "title": "Сессии выбранного проекта",
+      "emptyTitle": "Сессий нет",
+      "emptyBody": "Выберите другой проект или обновите список."
+    },
+    "sessionsCount": "нет сессий | {n} сессия | {n} сессии | {n} сессий",
+    "detail": {
+      "title": "Деталь сессии",
+      "loading": "Загружаем деталь сессии…",
+      "emptyTitle": "Сессия не выбрана",
+      "emptyBody": "Выберите строку сессии, чтобы открыть серверную карточку.",
+      "project": "Проект",
+      "status": "Статус",
+      "prompts": "Prompts",
+      "worker": "Worker port",
+      "strategy": "Стратегия",
+      "outcome": "Итог"
+    },
+    "gaps": {
+      "transcript": "Transcript readback пока не отдан REST endpoint’ом.",
+      "strategy": "Маршрут и strategy остаются серверным must-build.",
+      "codeIntel": "Сводка code-intel пока доступна только через инструментальную поверхность."
+    }
+  },
+
+  "health": {
+    "title": "Состояние",
+    "subtitle": "Живой срез сервера: readiness, selfcheck, векторы, vNext-метрики и update channel.",
+    "refresh": "Обновить",
+    "overall": "Общее состояние",
+    "version": "Версия",
+    "uptime": "Аптайм",
+    "ready": "Readiness",
+    "readyOk": "готов",
+    "readyError": "не готов",
+    "components": "Компоненты",
+    "embedding": "Покрытие эмбеддингами",
+    "vector": "pgvector",
+    "update": "Update channel",
+    "updateState": "Статус update",
+    "updateAvailable": "Доступно обновление",
+    "noise": "Шум",
+    "emptyComponents": "Компоненты selfcheck пока не загружены.",
+    "state": {
+      "pending": "Загружаем состояние сервера…",
+      "error": "Не удалось загрузить состояние: {message}",
+      "notLoaded": "Данные ещё не загружены."
+    },
+    "metrics": {
+      "chunk_count": "Фрагменты",
+      "with_vectors": "С векторами",
+      "dimension": "Размерность",
+      "coverage": "Покрытие",
+      "noise_ratio": "Шум",
+      "model": "Модель"
+    }
+  },
+
+  "settings": {
+    "title": "Настройки",
+    "subtitle": "Read-only runtime config и действия, которые требуют явного подтверждения оператора.",
+    "refresh": "Обновить",
+    "runtime": "Runtime flags",
+    "configSnapshot": "Снимок конфигурации",
+    "state": {
+      "pending": "Загружаем настройки сервера…",
+      "error": "Не удалось загрузить настройки: {message}",
+      "restartRequired": "Изменение ожидает restart: это ещё не applied."
+    },
+    "switches": {
+      "injectUnified": {
+        "title": "Единая инъекция памяти",
+        "desc": "Текущее значение из /api/config; изменение требует серверного save endpoint."
+      },
+      "telemetry": {
+        "title": "Telemetry",
+        "desc": "Текущее состояние telemetry_enabled из runtime config."
+      },
+      "sourceProject": {
+        "title": "Enforce source project",
+        "desc": "Текущее состояние enforce_source_project; изменение не считаем applied без restart receipt."
+      }
+    },
+    "gaps": {
+      "configSave": "Сохранение runtime config пока не имеет endpoint с restart-required receipt.",
+      "flags": "Полная карта feature flags пока не отдана сервером."
+    },
+    "restart": {
+      "title": "Restart / update",
+      "body": "Оба действия меняют живой процесс, поэтому запускаются только после второго клика-подтверждения.",
+      "action": "Перезапустить сервер",
+      "confirm": "Подтвердить restart",
+      "updateAction": "Restart после update",
+      "confirmUpdate": "Подтвердить update restart",
+      "updateState": "update state",
+      "updateAvailable": "available"
+    }
+  },
+
+  "searchPage": {
+    "title": "Поиск",
+    "subtitle": "Живой контекстный поиск по серверным наблюдениям Engram, с recent/analytics и честным надгробием старого collection search.",
+    "placeholder": "Введите запрос к контексту…",
+    "actions": {
+      "refresh": "Обновить",
+      "search": "Искать"
+    },
+    "form": {
+      "project": "Проект",
+      "query": "Запрос",
+      "noProjects": "Проектов нет"
+    },
+    "state": {
+      "pending": "Загружаем поисковые данные…",
+      "error": "Не удалось загрузить поиск: {message}"
+    },
+    "results": {
+      "title": "Результаты context search",
+      "source": "Источник: /api/context/search",
+      "emptyTitle": "Введите запрос",
+      "emptyBody": "Выберите проект и выполните поиск, чтобы увидеть серверные наблюдения.",
+      "staleTitle": "Источник устарел",
+      "noBody": "Описание не пришло в ответе."
+    },
+    "recent": {
+      "title": "Недавние запросы",
+      "empty": "Недавних запросов пока нет."
+    },
+    "analytics": {
+      "title": "Аналитика поиска",
+      "total": "Всего",
+      "zeroRate": "Нулевой результат"
+    },
+    "tombstone": {
+      "title": "Надгробие collection search",
+      "body": "Legacy search_collection не подключается как рабочий UI-поиск; это удалённая/старая поверхность, оставленная только как evidence."
+    }
+  },
+
+  "noisePage": {
+    "title": "Шум и польза",
+    "subtitle": "Живой срез retrieval/search telemetry: что показывали агентам, что реально использовали, где данные sparse или не записаны.",
+    "refresh": "Обновить",
+    "state": {
+      "pending": "Загружаем retrieval telemetry…",
+      "error": "Не удалось загрузить telemetry: {message}"
+    },
+    "gauge": {
+      "label": "доля шума"
+    },
+    "metrics": {
+      "noiseRatio": "Шум",
+      "shown": "Показали",
+      "used": "Использовали",
+      "unused": "Без пользы",
+      "searchRequests": "Search",
+      "unrecorded": "Без outcome"
+    },
+    "analytics": {
+      "title": "Search analytics",
+      "total": "Всего",
+      "today": "Сегодня",
+      "latency": "Latency ms",
+      "errors": "Ошибки"
+    },
+    "retrieval": {
+      "title": "Retrieval stats",
+      "requests": "Запросы",
+      "served": "Показано",
+      "stale": "Stale excluded",
+      "duplicates": "Дубликаты"
+    },
+    "unrecorded": {
+      "title": "Sparse outcome state",
+      "body": "Высокая доля unrecorded outcome означает, что outcome-weighting в основном работает нейтрально."
+    },
+    "trend": {
+      "title": "Trend",
+      "body": "Сейчас сервер отдаёт snapshot, но не отдаёт time-series для графика тренда шума."
+    }
+  },
+
+  "sectionStub": {
+    "state": {
+      "live": "Раздел подключён, но пока без расширенного представления.",
+      "dormant": "Функция выключена флагом.",
+      "stale": "Поверхность отключена как надгробие.",
+      "mustbuild": "Раздел нужно построить."
+    }
+  },
+
+  "deferred": {
+    "queue": {
+      "title": "На проверку",
+      "lead": "Кандидаты в память, которые должны ожидать решения оператора: сохранить, отложить или отклонить.",
+      "next": "Включение очереди требует серверного флага VNEXT_F; до этого раздел остаётся dormant."
+    },
+    "graph": {
+      "title": "Связи знаний",
+      "lead": "Граф концептов и переходов между записями памяти запланирован как отдельный интерактивный компонент.",
+      "next": "REST endpoint GET /api/graph пока отсутствует, поэтому карта не притворяется рабочей."
+    },
+    "books": {
+      "title": "Книги-контекст",
+      "lead": "Загрузка авторских доменов, терминов и связей в память должна идти через отдельный серверный конвейер.",
+      "next": "Нужен endpoint POST /api/books/ingest с обработкой, статусом и ошибками импорта."
+    },
+    "documents": {
+      "title": "Документы",
+      "lead": "Операторские документы и версии должны иметь REST-поверхность, отдельную от MCP docs tools.",
+      "next": "Пока GET /api/documents отсутствует, раздел остаётся mustbuild вместо fake-live списка."
+    },
+    "collections": {
+      "title": "Старые коллекции",
+      "lead": "Наследие до v5 показано как отключённая поверхность, чтобы не принять его за рабочий поиск.",
+      "next": "search_collection остаётся stale evidence; рабочий UI-поиск идёт через context search."
+    },
+    "access": {
+      "title": "Доступ",
+      "lead": "Пользователи, провайдеры входа и роли нужны для будущей control-plane поверхности.",
+      "next": "GET /api/access/users пока отсутствует, поэтому fake пользователи и роли не рендерятся."
+    }
+  }
+}

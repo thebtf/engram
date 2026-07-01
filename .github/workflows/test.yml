@@ -76,6 +76,14 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Operator console parity + build
+        if: runner.os == 'Linux'
+        working-directory: apps/operator-console
+        run: |
+          npm ci
+          npm run parity
+          npm run build
+
       - name: Vet
         run: go vet ./...
 

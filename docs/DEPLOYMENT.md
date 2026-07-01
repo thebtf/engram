@@ -1,8 +1,14 @@
 # Deployment Guide
 
-Engram uses a **client-server architecture**:
+Engram uses a **client-server architecture** with a separate promoted browser host for the
+new operator control plane:
 
 - **Server** (Docker on remote host): Worker (API + MCP) + PostgreSQL
+- **Operator Console** (Docker on remote host): promoted `apps/operator-console`
+  browser host, typically running as an internal upstream on `:3000`
+- **Public browser origin**: normally the worker origin itself (`:37777`) when
+  `ENGRAM_OPERATOR_CONSOLE_URL` is set and the worker proxies browser routes to
+  the promoted console upstream while keeping `/api/*` local
 - **Client** (local workstation): Claude Code plugin (hooks + HTTP MCP)
 
 ## Token Model (v6)
@@ -72,13 +78,33 @@ Services started:
 | Service | Port | Purpose |
 |---------|------|---------|
 | `postgres` | 5432 | PostgreSQL 17 + pgvector |
-| `server` | 37777 | Worker API + MCP SSE (hooks, dashboard, nia tools) |
+| `server` | 37777 | Worker API + MCP SSE + public browser origin when root proxy is enabled |
+| `operator-console` | 3000 | Internal promoted operator-console upstream (optional direct bind for debugging) |
 
 Verify:
 ```bash
 curl http://localhost:37777/health
 # {"status":"ok", ...}
+curl http://localhost:3000/
+# operator console HTML
 ```
+
+Local reproducible smoke for the promoted host path:
+
+```powershell
+pwsh -NoProfile -File scripts/smoke-operator-console.ps1
+```
+
+This script:
+
+- builds the current-source `server` and `operator-console` images
+- brings up `postgres + server + operator-console`
+- checks the dedicated browser host, the worker root proxy, and `/api`
+- validates issue mutation flow through the promoted host path
+
+For remote verification, use `scripts/smoke-operator-console-remote.ps1` with an
+explicit `-BaseUrl` for the actual deployed browser surface. Do not assume the
+local compose default `:3000` is the live public address on every server.
 
 ### Option B: Unraid
 
@@ -113,15 +139,26 @@ docker run -d --name cmplus-postgres \
 # 2. Build the server image
 docker build --target server -t engram-server .
 
+# 2b. Build the operator console image
+docker build --target operator-console -t engram-operator-console .
+
 # 3. Start server (worker + MCP SSE on single port)
 docker run -d --name engram-server \
   -e DATABASE_DSN="postgres://engram:change-me@host.docker.internal:5432/engram?sslmode=disable" \
   -e ENGRAM_API_TOKEN="your-secret-token" \
+  -e ENGRAM_OPERATOR_CONSOLE_URL="http://host.docker.internal:3000" \
   -e ENGRAM_EMBEDDING_PROVIDER=openai \
   -e ENGRAM_EMBEDDING_BASE_URL=http://host.docker.internal:4000/v1 \
   -e ENGRAM_EMBEDDING_DIMENSIONS=4096 \
   -p 37777:37777 \
   engram-server
+
+# 4. Start promoted operator console
+docker run -d --name engram-operator-console \
+  -e NUXT_OPERATOR_API_TARGET="http://host.docker.internal:37777" \
+  -e NUXT_PUBLIC_API_BASE="/api" \
+  -p 3000:3000 \
+  engram-operator-console
 ```
 
 ---

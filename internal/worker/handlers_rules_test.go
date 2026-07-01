@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -140,4 +141,133 @@ func TestHandleDeleteBehavioralRule_InvalidID(t *testing.T) {
 			require.Equal(t, http.StatusBadRequest, w.Code, "expected 400 for id=%q", badID)
 		})
 	}
+}
+
+func TestHandleListBehavioralRules_ProjectScope(t *testing.T) {
+	project := "test-rules-handler-list-project-scope"
+	svc, brs := newRulesTestService(t, project)
+
+	globalContent := "handler test: global rule"
+	projectContent := "handler test: project rule"
+	otherProject := "test-rules-handler-list-other-project"
+
+	globalRule, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Content:  globalContent,
+		Priority: 5,
+	})
+	require.NoError(t, err)
+
+	projectPtr := project
+	projectRule, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  projectContent,
+		Priority: 10,
+	})
+	require.NoError(t, err)
+
+	otherProjectPtr := otherProject
+	_, err = brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &otherProjectPtr,
+		Content:  "handler test: should not leak",
+		Priority: 20,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, brs.Delete(context.Background(), globalRule.ID))
+		require.NoError(t, storeDeleteRuleByProject(context.Background(), brs, otherProject))
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/rules?project="+project+"&limit=100", nil)
+	w := httptest.NewRecorder()
+	svc.handleListBehavioralRules(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var rows []models.BehavioralRule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
+	require.Len(t, rows, 2)
+	assert.Equal(t, projectRule.ID, rows[0].ID)
+	assert.Equal(t, globalRule.ID, rows[1].ID)
+}
+
+func TestHandleCreateBehavioralRule_Success(t *testing.T) {
+	project := "test-rules-handler-create-success"
+	svc, brs := newRulesTestService(t, project)
+
+	body := `{"project":"` + project + `","content":"handler test: created over HTTP","priority":12,"edited_by":"operator-console"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/rules", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	svc.handleCreateBehavioralRule(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created models.BehavioralRule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	require.Greater(t, created.ID, int64(0))
+	require.Equal(t, "handler test: created over HTTP", created.Content)
+	require.Equal(t, 12, created.Priority)
+	require.NotNil(t, created.Project)
+	require.Equal(t, project, *created.Project)
+
+	rows, err := brs.List(context.Background(), &project, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, created.ID, rows[0].ID)
+}
+
+func TestHandleUpdateBehavioralRule_PartialSuccess(t *testing.T) {
+	project := "test-rules-handler-update-success"
+	svc, brs := newRulesTestService(t, project)
+
+	projectPtr := project
+	created, err := brs.Create(context.Background(), &models.BehavioralRule{
+		Project:  &projectPtr,
+		Content:  "handler test: update me",
+		Priority: 1,
+		EditedBy: "seed",
+	})
+	require.NoError(t, err)
+
+	idStr := strconv.FormatInt(created.ID, 10)
+	req := newCHIRequest(http.MethodPatch, "/api/rules/"+idStr, "id", idStr)
+	req.Body = ioNopCloser(`{"priority":7,"edited_by":"operator-console"}`)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	svc.handleUpdateBehavioralRule(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var updated models.BehavioralRule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	assert.Equal(t, created.ID, updated.ID)
+	assert.Equal(t, created.Content, updated.Content)
+	assert.Equal(t, 7, updated.Priority)
+	assert.Equal(t, "operator-console", updated.EditedBy)
+	assert.Greater(t, updated.Version, created.Version)
+}
+
+func storeDeleteRuleByProject(ctx context.Context, brs *dbgorm.BehavioralRulesStore, project string) error {
+	rows, err := brs.List(ctx, &project, 200)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.Project != nil && *row.Project == project {
+			if deleteErr := brs.Delete(ctx, row.ID); deleteErr != nil {
+				return deleteErr
+			}
+		}
+	}
+	return nil
+}
+
+type nopReadCloser struct {
+	*strings.Reader
+}
+
+func (n nopReadCloser) Close() error { return nil }
+
+func ioNopCloser(body string) nopReadCloser {
+	return nopReadCloser{Reader: strings.NewReader(body)}
 }

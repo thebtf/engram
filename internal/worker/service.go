@@ -1200,6 +1200,7 @@ func (s *Service) setupMiddleware() {
 func (s *Service) setupRoutes() {
 	// Dashboard static assets served from the embedded filesystem.
 	s.router.Get("/", serveIndex)
+	s.router.Get("/_nuxt/*", serveAssets)
 	s.router.Get("/assets/*", serveAssets)
 	s.router.Get("/branding/*", serveAssets)
 	s.router.Get("/favicon.svg", serveAssets)
@@ -1386,6 +1387,9 @@ func (s *Service) setupRoutes() {
 		r.Delete("/api/memories/{id}", s.handleDeleteMemoryByID)
 
 		// Behavioral rules management
+		r.Get("/api/rules", s.handleListBehavioralRules)
+		r.Post("/api/rules", s.handleCreateBehavioralRule)
+		r.Patch("/api/rules/{id}", s.handleUpdateBehavioralRule)
 		r.Delete("/api/rules/{id}", s.handleDeleteBehavioralRule)
 
 		// Token stats
@@ -1394,6 +1398,12 @@ func (s *Service) setupRoutes() {
 		// Config
 		r.Get("/api/config", s.handleGetConfig)
 	})
+
+	// Catch-all browser routes for the promoted operator-console surface.
+	// With the promoted app embedded into static/, this serves the SPA shell for
+	// client-side routes such as /memory and /settings. If an explicit upstream
+	// proxy is configured, serveIndex will delegate there instead.
+	s.router.Get("/*", serveIndex)
 }
 
 // recordRetrievalStatsExtended accumulates per-project retrieval metrics atomically.

@@ -46,6 +46,7 @@ services:
       ENGRAM_WORKER_HOST: "0.0.0.0"
       ENGRAM_WORKER_PORT: "37777"
       ENGRAM_AUTH_ADMIN_TOKEN: "${ENGRAM_AUTH_ADMIN_TOKEN:-}"
+      ENGRAM_AUTH_DISABLED: "${ENGRAM_AUTH_DISABLED:-false}"
       ENGRAM_VAULT_KEY: "${ENGRAM_VAULT_KEY:-}"
       # Embedding (semantic memory). Empty URL = embedding disabled (FTS-only recall).
       ENGRAM_EMBEDDING_URL: "${ENGRAM_EMBEDDING_URL:-}"
@@ -59,6 +60,23 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
+
+  operator-console:
+    image: ghcr.io/thebtf/engram-operator-console:main
+    # To build locally instead: docker compose build operator-console
+    build:
+      context: .
+      target: operator-console
+    ports:
+      - "${OPERATOR_CONSOLE_PORT:-3000}:3000"
+    environment:
+      NUXT_OPERATOR_API_TARGET: "http://server:37777"
+      NUXT_PUBLIC_API_BASE: "/api"
+      NUXT_PUBLIC_API_DISPLAY_HOST: "${OPERATOR_CONSOLE_API_DISPLAY_HOST:-}"
+    depends_on:
+      server:
+        condition: service_started
     restart: unless-stopped
 
 volumes:
