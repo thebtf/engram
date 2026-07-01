@@ -48,6 +48,7 @@ type Server struct {
 	rerankClient                 *reranking.Client
 	memoryStore                  *gorm.MemoryStore
 	stateStore                   statePlane
+	experienceProvider           experienceProvider
 	principalMemoryQuerySvc      principalMemoryQueryService
 	domainRegistryService        domainRegistryService
 	behavioralRulesStore         *gorm.BehavioralRulesStore
@@ -1097,6 +1098,10 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	if s.stateStore != nil {
 		tools = append(tools, stateTool(), setStateTool())
 	}
+	// Experience/history read tools are advertised only when the CR-009 provider is wired.
+	if s.experienceProvider != nil {
+		tools = append(tools, experienceHistoryTools()...)
+	}
 	// Session outcome tool — only advertise when session store is available
 	if s.sessionStore != nil {
 		tools = append(tools,
@@ -1712,6 +1717,10 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleGetState(ctx, args)
 	case "set_state":
 		return s.handleSetState(ctx, args)
+	case "experience_history.read":
+		return s.handleExperienceHistoryRead(ctx, args)
+	case "experience_history.detail":
+		return s.handleExperienceHistoryDetail(ctx, args)
 	case "rate_memory":
 		return s.handleRateMemory(ctx, args)
 	case "suppress_memory":

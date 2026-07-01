@@ -1,0 +1,66 @@
+{
+  "gate_id": "G001",
+  "artifact": ".agent/specs/memory-product-layer/evidence/cr-009-experience-retrieval.json",
+  "status": "pm_verified_pass",
+  "observed_at": "2026-07-01T01:07:46Z",
+  "source_truth": [
+    "D:/Dev/engram/.agent/goals/2026-06-30-eng-mpl-cr009-experience-applicability-layer.md",
+    "D:/Dev/engram/.agent/specs/memory-product-layer/changes/CR-009-experience-applicability-layer/change.md",
+    "D:/Dev/engram/.agent/specs/memory-product-layer/changes/CR-009-experience-applicability-layer/tasks.md",
+    "D:/Dev/engram/.agent/specs/memory-product-layer/evidence/cr-009-recon-classification.json",
+    "D:/Dev/engram/.agent/specs/memory-product-layer/design-contracts/cr-009-experience-history-surface.md"
+  ],
+  "confirmed_start_state": {
+    "classification": "partial_live_substrate__developer_implementation_required",
+    "evidence": "PM recon showed pkg/cognitive + internal/experience substrate live while MCP/REST experience_history.read/detail adapters and CR-009 evidence were missing."
+  },
+  "implemented_read_surfaces": [
+    {
+      "surface": "MCP experience_history.read",
+      "files": ["internal/mcp/tools_experience_history.go", "internal/mcp/server.go"],
+      "shape": "project/principal/domain/query_text/current_context/facets/trigger_class/archive_trigger_classes/explicit_archive_lookup/limit -> state/query_echo/results/trigger_trace/archive_trace/freshness"
+    },
+    {
+      "surface": "MCP experience_history.detail",
+      "files": ["internal/mcp/tools_experience_history.go", "internal/mcp/server.go"],
+      "shape": "project/principal/domain/experience_id/current_context/trigger inputs -> experience_detail/applicability_evidence/provenance_refs/storage_origin/archive_trace/state"
+    },
+    {
+      "surface": "REST GET /api/experience-history",
+      "files": ["internal/worker/handlers_experience_history.go", "internal/worker/service.go"],
+      "shape": "same bounded read envelope as MCP; gated/error states map to HTTP status without fake empty results"
+    },
+    {
+      "surface": "REST GET /api/experience-history/{experienceID}",
+      "files": ["internal/worker/handlers_experience_history.go", "internal/worker/service.go"],
+      "shape": "same bounded detail envelope as MCP"
+    }
+  ],
+  "separation_from_hot_memory": {
+    "provider": "cognitive.ExperienceProvider / internal/experience.Service",
+    "proof": [
+      "internal/experience/history_surface.go calls provider.QueryExperience or the per-request evidence/detail extensions only; it does not call worker retrieval or memory recall paths.",
+      "internal/experience/service.go remains projection-backed and does not call hot-memory ranking/retrieval.",
+      "ordinary requests without archive triggers return archive_trace.status=archive_skipped and do not touch ArchiveSource."
+    ]
+  },
+  "bounded_contract_fields": {
+    "result_fields": [
+      "experience_id", "situation", "time_span", "decision", "action", "outcome", "revision", "reversal", "lesson", "applicability_outcome", "applicability", "anti_applicability", "provenance", "provenance_refs", "source_attribution", "storage_origin", "archive_trigger_classes"
+    ],
+    "states": ["live", "empty_results", "empty_archive", "gated", "blocked_applicability", "error"]
+  },
+  "pm_verification": [
+    {
+      "command": "go test ./pkg/cognitive ./internal/experience ./internal/mcp ./internal/worker -run \"ExperienceApplicability|ExperienceResponse|ExperienceHistory|ReadHistory|Archive\" -count=1",
+      "result": "pass"
+    },
+    {"command": "go test ./...", "result": "pass"},
+    {"command": "go vet ./...", "result": "pass"},
+    {"command": "git diff --check", "result": "pass_with_line_ending_warnings_only"}
+  ],
+  "review": {
+    "initial": "CR009CodeReview BLOCKED on per-request archive trace attribution and exact detail lookup beyond MaxQueryLimit.",
+    "fix_review": "CR009FixReview APPROVE with no findings."
+  }
+}

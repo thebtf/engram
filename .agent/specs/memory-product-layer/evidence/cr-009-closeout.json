@@ -1,0 +1,71 @@
+{
+  "gate_id": "G003",
+  "artifact": ".agent/specs/memory-product-layer/evidence/cr-009-closeout.json",
+  "status": "pm_verified_ready_for_pr",
+  "observed_at": "2026-07-01T01:07:46Z",
+  "scope_confirmed": {
+    "in_scope": [
+      "first-class bounded experience_history.read/detail adapters",
+      "applicability and anti-applicability envelope fields",
+      "named-trigger-only archive trace surface",
+      "projection/materialization-first storage proof",
+      "backend/adapters only; UI remains design-contract-gated"
+    ],
+    "out_of_scope_preserved": [
+      "MPL-5 forgetting/consolidation",
+      "MPL-6 temporal truth beyond trigger taxonomy hooks",
+      "broad operator-console redesign",
+      "free-form archive/history browser",
+      "dedicated ExperienceRecord table family"
+    ]
+  },
+  "tasks_and_gates": {
+    "T001_experience_contract": "pm_verified_pass",
+    "T002_separate_query_path": "pm_verified_pass",
+    "G001_experience_retrieval_proof": "pm_verified_pass",
+    "T003_applicability_anti_applicability": "pm_verified_pass",
+    "T004_archive_resurfacing_logging": "pm_verified_pass",
+    "G002_applicability_archive_proof": "pm_verified_pass",
+    "T005_storage_shape_proof": "pm_verified_pass",
+    "T006_design_contract_closeout": "design_contract_read_only_gate_preserved__pm_verified_pass",
+    "G003_cr_009_complete": "pm_verified_ready_for_pr"
+  },
+  "changed_files": [
+    "pkg/cognitive/types.go",
+    "pkg/cognitive/types_test.go",
+    "internal/experience/service.go",
+    "internal/experience/service_test.go",
+    "internal/experience/history_surface.go",
+    "internal/mcp/server.go",
+    "internal/mcp/tools_experience_history.go",
+    "internal/mcp/tools_experience_history_test.go",
+    "internal/worker/service.go",
+    "internal/worker/handlers_experience_history.go",
+    "internal/worker/handlers_experience_history_test.go",
+    ".agent/specs/memory-product-layer/evidence/cr-009-experience-retrieval.json",
+    ".agent/specs/memory-product-layer/evidence/cr-009-applicability-archive.json",
+    ".agent/specs/memory-product-layer/evidence/cr-009-storage-shape-proof.md",
+    ".agent/specs/memory-product-layer/evidence/cr-009-closeout.json"
+  ],
+  "pm_verification": [
+    {
+      "command": "gofmt -w pkg/cognitive/types.go pkg/cognitive/types_test.go internal/experience/service.go internal/experience/service_test.go internal/experience/history_surface.go internal/mcp/server.go internal/mcp/tools_experience_history.go internal/mcp/tools_experience_history_test.go internal/worker/service.go internal/worker/handlers_experience_history.go internal/worker/handlers_experience_history_test.go",
+      "result": "pass"
+    },
+    {
+      "command": "go test ./pkg/cognitive ./internal/experience ./internal/mcp ./internal/worker -run \"ExperienceApplicability|ExperienceResponse|ExperienceHistory|ReadHistory|Archive\" -count=1",
+      "result": "pass"
+    },
+    {"command": "go test ./...", "result": "pass"},
+    {"command": "go vet ./...", "result": "pass"},
+    {"command": "git diff --check", "result": "pass_with_line_ending_warnings_only"}
+  ],
+  "review": {
+    "CR009CodeReview": "BLOCK: per-request archive trace attribution and exact detail lookup beyond MaxQueryLimit were not safe enough.",
+    "CR009FixReview": "APPROVE: fixes verified, no findings."
+  },
+  "known_residual_risk": [
+    "Production worker wires a default empty projection-backed experience provider; it makes the first-class surface live and honest, but future projection population from existing evidence may be needed for rich production results.",
+    "No UI implementation was added; operator-facing surface remains gated by D:/Dev/engram/.agent/specs/memory-product-layer/design-contracts/cr-009-experience-history-surface.md."
+  ]
+}
