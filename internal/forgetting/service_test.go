@@ -316,6 +316,15 @@ func TestPreviewReviewAction_DoesNotMutateAndRequiresBoundary(t *testing.T) {
 	tampered := decision.Review.Packet
 	tampered.ReadOnly = false
 	require.ErrorContains(t, ValidateForgettingMutationBoundary(tampered), "read-only")
+	tampered = decision.Review.Packet
+	tampered.MutationRequirements.PrivacyScopeRequired = false
+	require.ErrorContains(t, ValidateForgettingMutationBoundary(tampered), "non-optional privacy_scope gate")
+	tampered = decision.Review.Packet
+	tampered.MutationRequirements.SnapshotRequired = false
+	require.ErrorContains(t, ValidateForgettingMutationBoundary(tampered), "non-optional snapshot gate")
+	tampered = decision.Review.Packet
+	tampered.MutationRequirements.ReviewApprovalRequired = false
+	require.ErrorContains(t, ValidateForgettingMutationBoundary(tampered), "explicit review approval requirement")
 }
 
 func TestNewForgettingReviewActionSnapshot_BindsPacketToSnapshotOpType(t *testing.T) {
@@ -343,6 +352,9 @@ func TestNewForgettingReviewActionSnapshot_BindsPacketToSnapshotOpType(t *testin
 
 	_, err = NewForgettingReviewActionSnapshot(decision.Review.Packet, "archive", "agent/reviewer", json.RawMessage(`{}`))
 	require.ErrorContains(t, err, "non-empty before_state")
+
+	_, err = NewForgettingReviewActionSnapshot(decision.Review.Packet, "consolidate", "agent/reviewer", json.RawMessage(`{"memory:101":{"kind":"restore","before":{"id":101}}}`))
+	require.ErrorContains(t, err, "does not match approved preview action")
 }
 
 func TestValidateForgettingMutationBoundary_BlocksDestroyPacket(t *testing.T) {
@@ -381,6 +393,7 @@ func TestAuditExportProof_AutomaticAndReviewedActionsRoundTripFromAuditEntry(t *
 	restoredAutomatic, err := ExportProofFromAuditLogEntry(automaticEntry)
 	require.NoError(t, err)
 	require.Equal(t, automaticProof, restoredAutomatic)
+	require.Equal(t, ForgettingAuditExportPath, "audit_log.after_state")
 
 	reviewed, err := service.ClassifyForgetting(context.Background(), cognitive.ForgettingClassificationRequest{
 		Reason:         cognitive.ForgettingReasonDuplicate,
@@ -416,4 +429,7 @@ func TestAuditExportProof_AutomaticAndReviewedActionsRoundTripFromAuditEntry(t *
 
 	_, err = BuildAuditExportProof(reviewed, ActionReceipt{Actor: "agent/reviewer", Action: "archive", Path: cognitive.ForgettingActionPathReviewed})
 	require.ErrorContains(t, err, "snapshot_id")
+
+	_, err = BuildAuditExportProof(automatic, ActionReceipt{Actor: "agent/system", Action: "destroy", Result: cognitive.ForgettingActionResultApplied})
+	require.ErrorContains(t, err, "automatic proof")
 }

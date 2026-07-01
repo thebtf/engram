@@ -101,22 +101,26 @@ func ValidateForgettingMutationBoundary(packet cognitive.ForgettingReviewPacket)
 	if !req.StructuralLossCheckRequired {
 		return fmt.Errorf("forgetting mutation requires structural-loss check")
 	}
-	if req.PrivacyScopeRequired && strings.TrimSpace(packet.Scope.PrivacyScope) == "" {
+	if !req.PrivacyScopeRequired {
+		return fmt.Errorf("forgetting mutation requires non-optional privacy_scope gate")
+	}
+	if strings.TrimSpace(packet.Scope.PrivacyScope) == "" {
 		return fmt.Errorf("forgetting mutation requires privacy_scope")
 	}
 	if !req.AuditWriteBeforeMutation {
 		return fmt.Errorf("forgetting mutation requires audit-before-mutate policy")
 	}
-	if req.SnapshotRequired {
-		if packet.Snapshot.Store != reviewpacket.SnapshotStore || packet.Snapshot.Operation != string(models.SnapshotOpForgettingReviewAction) || !packet.Snapshot.Required || packet.Snapshot.Status != "pre_action_required" {
-			return fmt.Errorf("forgetting mutation requires pre-action structural snapshot policy")
-		}
+	if !req.SnapshotRequired {
+		return fmt.Errorf("forgetting mutation requires non-optional snapshot gate")
+	}
+	if packet.Snapshot.Store != reviewpacket.SnapshotStore || packet.Snapshot.Operation != string(models.SnapshotOpForgettingReviewAction) || !packet.Snapshot.Required || packet.Snapshot.Status != "pre_action_required" {
+		return fmt.Errorf("forgetting mutation requires pre-action structural snapshot policy")
 	}
 	if packet.Audit.Store != reviewpacket.AuditStore || packet.Audit.Action != ForgettingReviewAuditAction || packet.Audit.Status != "pending_on_action" {
 		return fmt.Errorf("forgetting mutation requires pending forgetting audit policy")
 	}
-	if req.ReviewApprovalRequired && !packet.Preview.ApprovalRequired {
-		return fmt.Errorf("forgetting mutation requires explicit review approval gate")
+	if !req.ReviewApprovalRequired {
+		return fmt.Errorf("forgetting mutation requires explicit review approval requirement")
 	}
 	if !packet.Preview.MutationSeparated || !packet.Preview.ApprovalRequired {
 		return fmt.Errorf("forgetting mutation requires separate approved preview")
@@ -135,6 +139,9 @@ func NewForgettingReviewActionSnapshot(packet cognitive.ForgettingReviewPacket, 
 	normalized, err := normalizePacketAction(packet, action)
 	if err != nil {
 		return nil, err
+	}
+	if packet.Preview.Action != "" && normalized != packet.Preview.Action {
+		return nil, fmt.Errorf("forgetting review snapshot action %q does not match approved preview action %q", normalized, packet.Preview.Action)
 	}
 	trimmed := strings.TrimSpace(string(beforeState))
 	if trimmed == "" || trimmed == "{}" {
@@ -209,12 +216,20 @@ func BuildAuditExportProof(decision cognitive.ForgettingDecision, receipt Action
 		if _, err := normalizePacketAction(decision.Review.Packet, action); err != nil {
 			return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting reviewed proof action: %w", err)
 		}
+		if decision.Review.Packet.Preview.Action != "" && action != decision.Review.Packet.Preview.Action {
+			return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting reviewed proof action %q does not match approved preview action %q", action, decision.Review.Packet.Preview.Action)
+		}
 		if result != cognitive.ForgettingActionResultBlocked && strings.TrimSpace(receipt.SnapshotID) == "" {
 			return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting reviewed proof requires snapshot_id")
 		}
 	}
-	if path == cognitive.ForgettingActionPathAutomatic && decision.Review.Required {
-		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting automatic proof cannot satisfy review-required decision")
+	if path == cognitive.ForgettingActionPathAutomatic {
+		if decision.Review.Required {
+			return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting automatic proof cannot satisfy review-required decision")
+		}
+		if explicitAction && !allowedReviewAction(decision.Review.AllowedActions, action) {
+			return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting automatic proof action %q is not allowed", action)
+		}
 	}
 	auditAction := ForgettingAutomaticAuditAction
 	if path == cognitive.ForgettingActionPathReviewed {
@@ -266,6 +281,7 @@ func ExportProofFromAuditLogEntry(entry gormdb.AuditLogEntry) (cognitive.Forgett
 	if entry.AfterState == nil || len(*entry.AfterState) == 0 {
 		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting audit proof missing after_state")
 	}
+
 	var proof cognitive.ForgettingAuditExportProof
 	if err := json.Unmarshal(*entry.AfterState, &proof); err != nil {
 		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting audit proof unmarshal: %w", err)
@@ -275,6 +291,15 @@ func ExportProofFromAuditLogEntry(entry gormdb.AuditLogEntry) (cognitive.Forgett
 		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting audit proof incomplete")
 	}
 	return proof, nil
+}
+
+func allowedReviewAction(allowed []string, action string) bool {
+	for _, candidate := range allowed {
+		if strings.TrimSpace(candidate) == action {
+			return true
+		}
+	}
+	return false
 }
 
 func parseAffectedMemoryIDs(memoryIDs []string) []int64 {
