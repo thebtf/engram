@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.33.1] - 2026-07-01
+
+### Fixed
+
+- **Experience retrieval no longer drops older lessons or misses detail-by-id (#390).** The worker experience provider previously fetched only the newest 500 principal memories (`ORDER BY created_at DESC`) before the experience layer scored anything, so a relevant lesson outside that window — or a specific `memory:<id>` detail whose row was older than the window — was silently unreachable. The projection now (a) fetches a `memory:<id>` detail directly by id via an additive `id IN (...)` predicate, and (b) narrows a general query by ORed content terms (`ContentContainsAny`) instead of an all-or-nothing full-phrase prefilter, preserving recall without the recency cliff. All new predicates are additive `WHERE` clauses composed under the existing `PrincipalMemoryQueryService` access policy, so the NFR-1 fail-closed privacy invariant (owner / kind / visibility / domain per-row gating) is unchanged — private principal memory still cannot leak into experience lessons.
+
 ## [6.33.0] - 2026-07-01
 
 ### Added
