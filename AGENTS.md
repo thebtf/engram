@@ -38,6 +38,22 @@ Before building on ANY existing scaffold, classify it against the CURRENT code (
 
 **Tombstone tells** (signals a thing is stale, not a contract): a model field the write-path never populates (grep the write handler, not the struct); an env var with **zero `os.Getenv` reads** in `.go` (grep the reads, not the template/docs); a doc-comment whose handler body returns 501 or is FTS-only; a comment literally saying "removed in v5". When in doubt, grep the write-path and the actual `os.Getenv`/call sites — never trust the declaration alone.
 
+## DUAL-ROLE PM/DEVELOPER GOVERNANCE (read before running a PM or Developer session on this repo)
+
+This repo is developed under an NVMD dual-role loop: one session is PM (governance, review, release), a peer session is Developer (code). Role truth lives in `.agent/session-state/roles/_assignment.json`. Three failures recurred within a single 2026-07 session; each is now a durable guard so the next session inherits the lesson instead of repeating it.
+
+### CODE-REVIEW BEHAVIORAL-EDGE guard
+
+A PM code-review that passes because "the seams exist and tests are green" is **not** a real review. Structure-pass ≠ edge-pass. CR-008's PM review APPROVED a handback that AI-reviewers then flagged with 4 valid behavioral defects the structural pass missed: an audit-snapshot accepted with the **wrong type** (mutation proceeded audit-less), a switch on the **raw** request field instead of the **normalized** one, a **silent limit clamp** where the sibling path returned an error, and metrics computed over a **filtered subset** but presented as the whole. Before APPROVE, for EACH validation/mutation/filter/adapter path, check the edge — wrong type accepted, raw-vs-normalized value, silent clamp vs explicit error, filtered-vs-full counts, ordinary request must-NOT trigger a gated path — not merely that the seam is present. `existing-design-is-a-hypothesis` applies to per-path validation details, not just to the shape.
+
+### RELEASE-RACE guard (shared `.git` object store)
+
+Worktrees share one `.git` object store, so a local release commit is visible to the peer session the instant it exists. During v6.32.0 the peer pushed PM's release commit + created the tag before PM's own `git tag` ran (`fatal: tag already exists`). Release tagging is a **coordination point**, not a solo act. Before cutting a release: announce the exact release commit + tag intent in the PM oracle first, OR on `tag already exists` / `main already at my commit` treat it as a likely peer-push and **verify** consistency (local tag object == remote tag object, deref commit == the intended commit, parent chain correct) rather than force-moving or re-cutting. Never `--force` or re-cut a pushed release tag. `calibrated-doubt-for-irreversible-actions` governs the "tag exists" branch.
+
+### ROLE-STATE GOVERNANCE guard
+
+Role/assignment state is CONTROL-PLANE, not a last-writer-wins free-for-all. A Developer session writing `claude=<role>` into `_assignment.json`, or flipping the shared front-door `current.json` to its own session `mode`, is a **hallucinated self-promotion**, not a legitimate coordination write. Role truth comes ONLY from `_assignment.json` as maintained by the operator / `mode` skill; a subordinate Developer never authors it. The correct PM response is NOT capitulation ("don't war over the front-door") — it is: (1) hold the pm role from `_assignment.json` regardless of front-door churn; (2) restore the shared governance surface (front-door `mode=dual-role`) as PM-owned hygiene; (3) surface repeat role-state hallucination to the operator. Distinction: **content** oracles (`roles/developer/current.json` handoff detail) are peer-owned and fine to let the peer own; **role/assignment/front-door-mode** is control-plane and must not be self-authored by a subordinate role. Meta-lesson: do NOT enshrine an observed-but-illegitimate peer behavior as a rule just because it happened — that is how a hallucination becomes durable policy.
+
 ## CONVENTIONS
 
 - Language: Go 1.25+
