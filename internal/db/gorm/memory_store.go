@@ -397,6 +397,20 @@ type ListOptions struct {
 	// 0. This lets callers combine ListWithFilters with visibility backfill loops
 	// without falling back to the active-only ListWithOffset seam.
 	Offset int
+	// IDs, when non-empty, restricts rows to the given memory IDs via
+	// WHERE id IN (...). This is an ADDITIVE predicate: it composes with, and
+	// never replaces, the owner/kind/visibility/domain access-policy filters, so
+	// a by-id fetch still honours NFR-1 principal gating. Used by the experience
+	// detail-by-id path so a specific memory:<id> lookup fetches that exact row
+	// directly instead of scanning the newest-N projection.
+	IDs []int64
+	// ContentContainsAny, when non-empty, adds a grouped OR of case-insensitive
+	// content substring predicates (one LIKE per term). This narrows the DB set
+	// by relevance without the full-phrase ContentContains cliff (which dropped
+	// rows whose content did not contain the exact query phrase) and without the
+	// recency cliff of an unfiltered newest-N fetch. ADDITIVE: it never replaces
+	// access-policy predicates.
+	ContentContainsAny []string
 }
 
 // ListWithFilters returns memories for the given project with optional filters
@@ -486,6 +500,24 @@ func applyMemoryListOptions(q *gorm.DB, opts ListOptions) *gorm.DB {
 	}
 	if content := strings.TrimSpace(opts.ContentContains); content != "" {
 		q = q.Where("LOWER(content) LIKE ? ESCAPE '\\'", "%"+escapeSQLLike(strings.ToLower(content))+"%")
+	}
+	if len(opts.ContentContainsAny) > 0 {
+		terms := make([]string, 0, len(opts.ContentContainsAny))
+		args := make([]interface{}, 0, len(opts.ContentContainsAny))
+		for _, term := range opts.ContentContainsAny {
+			t := strings.TrimSpace(term)
+			if t == "" {
+				continue
+			}
+			terms = append(terms, "LOWER(content) LIKE ? ESCAPE '\\'")
+			args = append(args, "%"+escapeSQLLike(strings.ToLower(t))+"%")
+		}
+		if len(terms) > 0 {
+			q = q.Where(strings.Join(terms, " OR "), args...)
+		}
+	}
+	if len(opts.IDs) > 0 {
+		q = q.Where("id IN ?", opts.IDs)
 	}
 	if owner := strings.TrimSpace(opts.OwnerPrincipal); owner != "" {
 		q = q.Where("owner_principal = ?", owner)
