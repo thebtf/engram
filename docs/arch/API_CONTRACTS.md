@@ -4,10 +4,17 @@ MCP tools, HTTP endpoints, gRPC services, and hook interfaces for engram v6.
 
 ---
 
-## MCP Tools (39 total)
+## MCP Tools
 
-Registered in `internal/mcp/server.go`. The `engram` stdio daemon exposes these
-via JSON-RPC 2.0 over stdin/stdout.
+Registered in `internal/mcp/server.go` (plus `tools_*.go` for the conditional
+families). The `engram` stdio daemon exposes these via JSON-RPC 2.0 over
+stdin/stdout.
+
+The advertised tool set is **not a fixed count**: a stable core is always
+present, and additional families are advertised only when their store is wired
+and their feature flag is on (see "Conditional Tool Families" below). Do not
+treat any single total as canonical — inspect `ListTools()` on the running
+server for the live set.
 
 ### Primary Tools (7 consolidated)
 
@@ -24,7 +31,7 @@ that routes to the appropriate operation.
 | `admin` | stats, search_analytics, backfill_status | Administrative operations |
 | `issues` | create, list, get, update, comment, reopen, close | Cross-project issue tracker |
 
-### Compatibility Tools (31)
+### Compatibility Tools
 
 Legacy aliases from before tool consolidation. Each maps to a primary tool action.
 
@@ -51,6 +58,29 @@ Legacy aliases from before tool consolidation. Each maps to a primary tool actio
 
 **System:**
 `check_system_health`
+
+### Conditional Tool Families
+
+These are advertised only when their backing store is wired AND their gate is
+satisfied. Flag-off paths are byte-identical to before the family landed, so a
+default deployment sees only the core tools above plus whichever families are
+enabled.
+
+| Family | Tools | Advertised when | Since |
+|--------|-------|-----------------|-------|
+| Memory extras | `find_by_file`, `find_similar_observations`, `get_memory_stats`, `get_memory_brief`, `set_session_outcome`, `import_instincts` | memory/promotion stores wired | v5+ |
+| Lifecycle | `lifecycle` | memory + promotion store AND `ENGRAM_LIFECYCLE_ENABLED=true` | v6 |
+| Graph | `graph` | graph store AND `ENGRAM_GRAPH_ENABLED=true` | v6 |
+| Native state plane | `get_state`, `set_state` | state store wired | v6.30 (CR-006) |
+| Principal memory | `query_principal_memory` | principal-memory query service wired | v6.30 (CR-007) |
+| Review-loop candidates | `list_candidates`, `get_candidate`, `promote_candidate`, `reject_candidate`, `supersede_candidate` | `ENGRAM_VNEXT_F_ENABLED=true` AND candidate store wired | v6.32 (CR-008) |
+| Governance snapshots | `list_snapshots`, `rollback_snapshot`, `pin_snapshot`, `redaction_rules_status` | `ENGRAM_VNEXT_F_ENABLED=true` AND snapshot store wired | v6 (Milestone-F) |
+| Rule governance | `rule_governance_health`, `rule_governance_queue`, `rule_governance_snapshots`, `rule_governance_transition`, `rule_governance_pin_snapshot`, `rule_governance_rollback`, `rule_governance_usefulness` | rule-governance read store wired (`usefulness` needs injection telemetry) | v6.29 (RG-3) |
+| Bulk ops | `bulk_promote`, `bulk_delete`, `bulk_supersede` | `ENGRAM_VNEXT_F_ENABLED=true` | v6 (Milestone-F) |
+| Code intelligence | `codebase_search` | `ENGRAM_CODE_INTEL_ENABLED=true` AND code chunk store wired | v6.13 (CR-006 code-intel) |
+
+Admin-gated families (candidates, governance, bulk ops) are additionally
+enforced at the handler level regardless of advertisement.
 
 ---
 
