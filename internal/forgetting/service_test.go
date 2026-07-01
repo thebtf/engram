@@ -199,6 +199,9 @@ func TestClassifier_RiskyCasesEmitBoundedReviewPackets(t *testing.T) {
 	require.True(t, decision.Review.Packet.Preview.ApprovalRequired)
 	require.True(t, decision.Review.Packet.MutationRequirements.AuditWriteBeforeMutation)
 	require.True(t, decision.Review.Packet.ReadOnly)
+	require.Equal(t, "archive", decision.Review.Packet.Preview.Action)
+	require.Equal(t, "archive", decision.Review.Packet.Preview.Recommendation)
+	require.Contains(t, decision.Review.Packet.Preview.AfterPlan, "move memory out of hot retrieval")
 }
 
 func TestClassifier_SafeLowRiskActionsDoNotEmitPackets(t *testing.T) {
@@ -337,6 +340,9 @@ func TestNewForgettingReviewActionSnapshot_BindsPacketToSnapshotOpType(t *testin
 	require.Contains(t, string(snapshot.Parameters), `"action":"archive"`)
 	require.Contains(t, string(snapshot.Parameters), decision.Review.Packet.PacketID)
 	require.Equal(t, []int64{101, 102}, snapshot.AffectedMemoryIDs)
+
+	_, err = NewForgettingReviewActionSnapshot(decision.Review.Packet, "archive", "agent/reviewer", json.RawMessage(`{}`))
+	require.ErrorContains(t, err, "non-empty before_state")
 }
 
 func TestValidateForgettingMutationBoundary_BlocksDestroyPacket(t *testing.T) {
@@ -404,4 +410,10 @@ func TestAuditExportProof_AutomaticAndReviewedActionsRoundTripFromAuditEntry(t *
 	restoredReviewed, err := ExportProofFromAuditLogEntry(reviewedEntry)
 	require.NoError(t, err)
 	require.Equal(t, reviewedProof, restoredReviewed)
+
+	_, err = BuildAuditExportProof(reviewed, ActionReceipt{Actor: "agent/reviewer", Path: cognitive.ForgettingActionPathReviewed})
+	require.ErrorContains(t, err, "explicit action")
+
+	_, err = BuildAuditExportProof(reviewed, ActionReceipt{Actor: "agent/reviewer", Action: "archive", Path: cognitive.ForgettingActionPathReviewed})
+	require.ErrorContains(t, err, "snapshot_id")
 }

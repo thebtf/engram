@@ -115,6 +115,9 @@ func ValidateForgettingMutationBoundary(packet cognitive.ForgettingReviewPacket)
 	if packet.Audit.Store != reviewpacket.AuditStore || packet.Audit.Action != ForgettingReviewAuditAction || packet.Audit.Status != "pending_on_action" {
 		return fmt.Errorf("forgetting mutation requires pending forgetting audit policy")
 	}
+	if req.ReviewApprovalRequired && !packet.Preview.ApprovalRequired {
+		return fmt.Errorf("forgetting mutation requires explicit review approval gate")
+	}
 	if !packet.Preview.MutationSeparated || !packet.Preview.ApprovalRequired {
 		return fmt.Errorf("forgetting mutation requires separate approved preview")
 	}
@@ -132,6 +135,10 @@ func NewForgettingReviewActionSnapshot(packet cognitive.ForgettingReviewPacket, 
 	normalized, err := normalizePacketAction(packet, action)
 	if err != nil {
 		return nil, err
+	}
+	trimmed := strings.TrimSpace(string(beforeState))
+	if trimmed == "" || trimmed == "{}" {
+		return nil, fmt.Errorf("forgetting review snapshot requires non-empty before_state")
 	}
 	actor = strings.TrimSpace(actor)
 	if actor == "" {
@@ -162,6 +169,7 @@ func BuildAuditExportProof(decision cognitive.ForgettingDecision, receipt Action
 		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting export proof requires operation")
 	}
 	action := strings.TrimSpace(receipt.Action)
+	explicitAction := action != ""
 	if action == "" {
 		action = string(decision.Operation)
 	}
@@ -190,6 +198,23 @@ func BuildAuditExportProof(decision cognitive.ForgettingDecision, receipt Action
 	packetID := strings.TrimSpace(receipt.PacketID)
 	if packetID == "" && decision.Review.Packet.PacketID != "" {
 		packetID = decision.Review.Packet.PacketID
+	}
+	if path == cognitive.ForgettingActionPathReviewed {
+		if !decision.Review.Required || strings.TrimSpace(packetID) == "" {
+			return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting reviewed proof requires review packet")
+		}
+		if !explicitAction {
+			return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting reviewed proof requires explicit action")
+		}
+		if _, err := normalizePacketAction(decision.Review.Packet, action); err != nil {
+			return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting reviewed proof action: %w", err)
+		}
+		if result != cognitive.ForgettingActionResultBlocked && strings.TrimSpace(receipt.SnapshotID) == "" {
+			return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting reviewed proof requires snapshot_id")
+		}
+	}
+	if path == cognitive.ForgettingActionPathAutomatic && decision.Review.Required {
+		return cognitive.ForgettingAuditExportProof{}, fmt.Errorf("forgetting automatic proof cannot satisfy review-required decision")
 	}
 	auditAction := ForgettingAutomaticAuditAction
 	if path == cognitive.ForgettingActionPathReviewed {

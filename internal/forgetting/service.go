@@ -14,7 +14,7 @@ const (
 	ForgettingReviewPacketKind     = "forgetting_review"
 	ForgettingReviewAuditAction    = "forgetting_review"
 	ForgettingAutomaticAuditAction = "forgetting_auto"
-	ForgettingAuditExportPath      = "audit_log.after_state.forgetting_export_proof"
+	ForgettingAuditExportPath      = "audit_log.after_state"
 	maxPacketEvidence              = 5
 )
 
@@ -175,6 +175,10 @@ func buildReviewPacket(request cognitive.ForgettingClassificationRequest, decisi
 	}
 
 	previewAction := string(decision.Operation)
+	if len(decision.Review.AllowedActions) > 0 {
+		previewAction = decision.Review.AllowedActions[0]
+	}
+	previewOperation := cognitive.ForgettingOperation(previewAction)
 	return cognitive.ForgettingReviewPacket{
 		PacketID:       packetID(decision.Operation, request.MemoryID),
 		Kind:           ForgettingReviewPacketKind,
@@ -191,7 +195,7 @@ func buildReviewPacket(request cognitive.ForgettingClassificationRequest, decisi
 		Evidence: evidence,
 		Preview: cognitive.ForgettingPacketPreview{
 			BeforeRefs:        append([]string(nil), memoryIDs...),
-			AfterPlan:         previewAfterPlan(decision.Operation),
+			AfterPlan:         previewAfterPlan(previewOperation),
 			Recommendation:    previewAction,
 			Action:            previewAction,
 			ApprovalRequired:  true,
