@@ -402,6 +402,42 @@ func TestServiceQueryExperienceFillsApplicabilityEnvelope(t *testing.T) {
 	})
 }
 
+func TestServiceQueryExperienceClonesApplicabilitySlices(t *testing.T) {
+	candidate := fixtureExperience("clone-applicability", "Projected applicability slices must not alias service candidates.", "engram", "s1")
+	candidate.Applicability = cognitive.ExperienceApplicability{
+		State:            cognitive.ExperienceApplicabilityApplies,
+		Rationale:        "configured applicability",
+		AppliesWhen:      []string{"oauth transient failures"},
+		DoesNotApplyWhen: []string{"permanent auth failures"},
+		RequiredContext:  []string{"current_context"},
+	}
+	service := NewService([]cognitive.ExperienceResponse{candidate})
+
+	first, err := service.QueryExperience(context.Background(), cognitive.ExperienceQueryRequest{
+		Project:        "engram",
+		Query:          "Projected applicability slices",
+		CurrentContext: "current_context",
+		Limit:          1,
+	})
+	require.NoError(t, err)
+	require.Len(t, first, 1)
+	first[0].Applicability.AppliesWhen[0] = "mutated applies"
+	first[0].Applicability.DoesNotApplyWhen[0] = "mutated blocked"
+	first[0].Applicability.RequiredContext[0] = "mutated context"
+
+	second, err := service.QueryExperience(context.Background(), cognitive.ExperienceQueryRequest{
+		Project:        "engram",
+		Query:          "Projected applicability slices",
+		CurrentContext: "current_context",
+		Limit:          1,
+	})
+	require.NoError(t, err)
+	require.Len(t, second, 1)
+	require.Equal(t, "oauth transient failures", second[0].Applicability.AppliesWhen[0])
+	require.Equal(t, "permanent auth failures", second[0].Applicability.DoesNotApplyWhen[0])
+	require.Equal(t, "current_context", second[0].Applicability.RequiredContext[0])
+}
+
 func TestReadHistoryReturnsFirstClassReadEnvelopeWithoutArchiveHotPath(t *testing.T) {
 	archive := &fakeArchiveSource{
 		items: []cognitive.ExperienceResponse{

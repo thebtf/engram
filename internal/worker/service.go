@@ -608,7 +608,7 @@ func (s *Service) initializeAsync() {
 	stateStore := gorm.NewStateStore(store.GetDB(), auditStore)
 	statePlaneSvc := stateplane.NewService(stateStore, nil)
 	principalMemoryQuerySvc := principalmemory.NewPrincipalMemoryQueryService(memoryStore, auditStore)
-	experienceProvider := newMemoryExperienceProvider(memoryStore)
+	experienceProvider := newMemoryExperienceProvider(principalMemoryQuerySvc)
 	domainOwnerStore := gorm.NewDomainOwnerStore(store)
 	domainRegistrySvc := principalmemory.NewDomainRegistryService(domainOwnerStore, auditStore)
 	wireStateStore(s, statePlaneSvc)

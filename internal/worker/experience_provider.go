@@ -6,24 +6,25 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/auth"
 	experiencehistory "github.com/thebtf/engram/internal/experience"
+	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/pkg/cognitive"
 	"github.com/thebtf/engram/pkg/models"
 )
 
 const experienceProjectionFetchLimit = 500
 
-type experienceMemoryStore interface {
-	ListPrincipalMemory(ctx context.Context, project string, opts gorm.ListOptions) ([]*models.Memory, error)
+type experiencePrincipalQueryService interface {
+	Query(ctx context.Context, req principalmemory.PrincipalMemoryQueryRequest) (*principalmemory.PrincipalMemoryQueryResult, error)
 }
 
 type memoryExperienceProvider struct {
-	memoryStore experienceMemoryStore
+	querySvc experiencePrincipalQueryService
 }
 
-func newMemoryExperienceProvider(memoryStore experienceMemoryStore) *memoryExperienceProvider {
-	return &memoryExperienceProvider{memoryStore: memoryStore}
+func newMemoryExperienceProvider(querySvc experiencePrincipalQueryService) *memoryExperienceProvider {
+	return &memoryExperienceProvider{querySvc: querySvc}
 }
 
 func (p *memoryExperienceProvider) QueryExperience(ctx context.Context, request cognitive.ExperienceQueryRequest) ([]cognitive.ExperienceResponse, error) {
@@ -59,22 +60,59 @@ func (p *memoryExperienceProvider) QueryExperienceDetail(ctx context.Context, re
 }
 
 func (p *memoryExperienceProvider) serviceForRequest(ctx context.Context, request cognitive.ExperienceQueryRequest) (*experiencehistory.Service, error) {
-	if p == nil || p.memoryStore == nil {
-		return nil, fmt.Errorf("experience provider: memory store is not configured")
+	if p == nil || p.querySvc == nil {
+		return nil, fmt.Errorf("experience provider: principal memory query service is not configured")
 	}
 	project := strings.TrimSpace(request.Project)
 	if project == "" {
 		return experiencehistory.NewService(nil), nil
 	}
-	memories, err := p.memoryStore.ListPrincipalMemory(ctx, project, gorm.ListOptions{
-		OwnerPrincipal: strings.TrimSpace(request.Principal),
-		Domain:         strings.TrimSpace(request.Domain),
-		Limit:          experienceProjectionFetchLimit,
+	caller, callerIsAdmin := principalMemoryQueryCallerFromContext(ctx)
+	ownerPrincipal := strings.TrimSpace(request.Principal)
+	ownerKind := ""
+	if ownerPrincipal != "" && caller.Principal == ownerPrincipal {
+		ownerKind = caller.PrincipalKind
+	}
+	result, err := p.querySvc.Query(ctx, principalmemory.PrincipalMemoryQueryRequest{
+		Project:            project,
+		Caller:             caller,
+		CallerIsAdmin:      callerIsAdmin,
+		OwnerPrincipal:     ownerPrincipal,
+		OwnerPrincipalKind: ownerKind,
+		Query:              strings.TrimSpace(request.Query),
+		Domain:             strings.TrimSpace(request.Domain),
+		Limit:              experienceProjectionFetchLimit,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return experiencehistory.NewService(memoriesToExperienceResponses(memories)), nil
+	return experiencehistory.NewService(memoriesToExperienceResponses(principalQueryMemories(result))), nil
+}
+
+func principalMemoryQueryCallerFromContext(ctx context.Context) (principalmemory.PrincipalRef, bool) {
+	id, ok := auth.IdentityFrom(ctx)
+	if !ok {
+		return principalmemory.PrincipalRef{}, false
+	}
+	principal, kind, hasOwner := id.MemoryOwner()
+	if !hasOwner {
+		if id.IsAdmin() {
+			return principalmemory.PrincipalRef{Principal: "system", PrincipalKind: "service"}, true
+		}
+		return principalmemory.PrincipalRef{}, id.IsAdmin()
+	}
+	return principalmemory.PrincipalRef{Principal: principal, PrincipalKind: kind}, id.IsAdmin()
+}
+
+func principalQueryMemories(result *principalmemory.PrincipalMemoryQueryResult) []*models.Memory {
+	if result == nil || len(result.Items) == 0 {
+		return nil
+	}
+	memories := make([]*models.Memory, 0, len(result.Items))
+	for _, item := range result.Items {
+		memories = append(memories, item.Memory())
+	}
+	return memories
 }
 
 func memoriesToExperienceResponses(memories []*models.Memory) []cognitive.ExperienceResponse {

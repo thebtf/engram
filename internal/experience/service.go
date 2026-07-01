@@ -716,6 +716,9 @@ func cloneResponse(item cognitive.ExperienceResponse) cognitive.ExperienceRespon
 	if item.StorageOrigin == "" {
 		item.StorageOrigin = item.Source
 	}
+	item.Applicability.AppliesWhen = append([]string(nil), item.Applicability.AppliesWhen...)
+	item.Applicability.DoesNotApplyWhen = append([]string(nil), item.Applicability.DoesNotApplyWhen...)
+	item.Applicability.RequiredContext = append([]string(nil), item.Applicability.RequiredContext...)
 	item.AntiApplicability = append([]cognitive.ExperienceAntiApplicability(nil), item.AntiApplicability...)
 	sourceAttribution := append([]cognitive.ExperienceSourceAttribution(nil), item.SourceAttribution...)
 	provenance := append([]cognitive.ExperienceSourceAttribution(nil), item.Provenance...)
