@@ -1,0 +1,51 @@
+{
+  "artifact": "cr-010-structural-loss-packets",
+  "cr": "CR-010-forgetting-consolidation",
+  "gate": "G002",
+  "status": "IMPLEMENTED_PENDING_MAIN_OMP_TEST_RUN",
+  "written_by": "CR010DeveloperMaker",
+  "scope": [
+    "T003 structural-loss guard for consolidation/destructive forgetting",
+    "T004 risky review packets over existing snapshot/audit governance substrate"
+  ],
+  "proof_summary": {
+    "structural_loss_guard": "internal/forgetting.hasStructuralLoss now covers unique meaning, provenance, scope, historical value, and rationale; consolidation escalates to review_required and destroy remains blocked.",
+    "packet_preview_vs_mutation": "ForgettingReviewPacket carries preview.before_refs, preview.after_plan, approval_required, mutation_separated, read_only=true, and mutation_requirements; PreviewReviewAction returns a no-write preview while ValidateForgettingMutationBoundary enforces mutation gates separately.",
+    "snapshot_and_audit_substrate": "Risky forgetting packets use bulk_op_snapshots + audit_log and the new forgetting_review_action SnapshotOpType. Migration 154 and MCP list_snapshots enum expose the op type for readback.",
+    "audit_before_mutate": "Mutation requirements explicitly require AuditWriteBeforeMutation=true and SnapshotRequired=true; NewForgettingReviewActionSnapshot binds approved packets to migration-154 op_type before any later mutation path can apply.",
+    "destructive_guard": "Destroy packets are blocked by default and ValidateForgettingMutationBoundary rejects blocked packets. Archive is listed before destroy."
+  },
+  "code_refs": [
+    "internal/forgetting/service.go:126-219",
+    "internal/forgetting/review.go:43-142",
+    "pkg/models/snapshot.go:10-38",
+    "internal/db/gorm/migrations.go:4784-4884",
+    "internal/mcp/tools_governance.go:36-40",
+    "internal/forgetting/service_test.go:165-340",
+    "internal/db/gorm/migrations_integration_test.go:745-926",
+    "internal/mcp/tools_governance_test.go:119-137"
+  ],
+  "focused_tests_added_or_updated": [
+    "internal/forgetting.TestClassifier_StructuralLossEscalatesConsolidationWithRationale",
+    "internal/forgetting.TestClassifier_StructuralLossIncludesHistoricalValueWithoutRationale",
+    "internal/forgetting.TestClassifier_RiskyCasesEmitBoundedReviewPackets",
+    "internal/forgetting.TestPreviewReviewAction_DoesNotMutateAndRequiresBoundary",
+    "internal/forgetting.TestNewForgettingReviewActionSnapshot_BindsPacketToSnapshotOpType",
+    "internal/forgetting.TestValidateForgettingMutationBoundary_BlocksDestroyPacket",
+    "pkg/models.TestSnapshotOpType_IsValid",
+    "internal/db/gorm.TestMigration154Rollback_PreflightsForgettingReviewSnapshots",
+    "internal/mcp.TestGovernanceTools_ListSnapshotsSchemaIncludesReviewActionOpTypes"
+  ],
+  "main_omp_command": "go test ./pkg/cognitive ./pkg/models ./internal/forgetting ./internal/mcp ./internal/db/gorm -run 'Test(Forgetting|Classifier|PreviewReviewAction|NewForgettingReviewActionSnapshot|ValidateForgettingMutationBoundary|AuditExportProof|SnapshotOpType|GovernanceTools_ListSnapshotsSchemaIncludesReviewActionOpTypes|Migration133_BulkOpSnapshots|Migration153Rollback_PreflightsCandidateReviewSnapshots|Migration154Rollback_PreflightsForgettingReviewSnapshots)'",
+  "worker_verification": {
+    "forbidden_go_tests_run": false,
+    "forbidden_gates_or_formatters_run": false,
+    "reason": "Assignment explicitly forbids gofmt/build/lint/go test/go vet/project-wide gates; Main OMP owns verification after handback.",
+    "static_parse_checks": [
+      "read structural summary: internal/forgetting/review.go",
+      "read structural summary: internal/db/gorm/migrations.go",
+      "read structural summary: internal/db/gorm/migrations_integration_test.go",
+      "read structural summary: internal/mcp/tools_governance_test.go"
+    ]
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "artifact": "cr-010-closeout",
+  "cr": "CR-010-forgetting-consolidation",
+  "gate": "G003",
+  "status": "DONE_WITH_CONCERNS_PENDING_MAIN_OMP_TEST_RUN",
+  "written_by": "CR010DeveloperMaker",
+  "completed_scope": [
+    "Story Group 1: explicit forgetting taxonomy and archive-first defaults",
+    "Story Group 2: structural-loss guard and risky review-packet preview/mutation split",
+    "Story Group 3 backend/evidence: audit/export proof and design-contract gate stub"
+  ],
+  "task_status": {
+    "T001": "implemented",
+    "T002": "implemented",
+    "G001": "evidence written; focused tests added; command pending Main OMP",
+    "T003": "implemented",
+    "T004": "implemented",
+    "G002": "evidence written; focused tests added; command pending Main OMP",
+    "T005": "implemented via self-describing ForgettingAuditExportProof + AuditLogEntryFromProof + ExportProofFromAuditLogEntry",
+    "T006": "implemented as design-contract blocker stub only; no UI code",
+    "G003": "closeout evidence written; verification pending Main OMP due worker gate prohibition"
+  },
+  "proof_refs": {
+    "taxonomy": ".agent/specs/memory-product-layer/evidence/cr-010-forgetting-taxonomy.json",
+    "structural_loss_packets": ".agent/specs/memory-product-layer/evidence/cr-010-structural-loss-packets.json",
+    "design_contract_stub": ".agent/specs/memory-product-layer/design-contracts/cr-010-forgetting-consolidation.json"
+  },
+  "audit_export_proof": {
+    "automatic_path": "BuildAuditExportProof defaults safe non-review decisions to automatic_policy and forgetting_auto action; AuditLogEntryFromProof stores proof in audit_log.after_state.",
+    "reviewed_path": "BuildAuditExportProof carries packet_id, snapshot_id, audit_ref, structural_loss, policy_owner, policy_boundary, and evidence for reviewed_packet actions.",
+    "readback_surface": "ExportProofFromAuditLogEntry reconstructs the proof from audit_log.after_state; MCP list_snapshots schema now includes forgetting_review_action for snapshot readback."
+  },
+  "out_of_scope_confirmed": [
+    "No MPL-6 temporal truth execution was added.",
+    "No broad operator-console redesign or archive/history browser implementation was added.",
+    "No reaper/lifecycle sleep-cycle behavior was reused as CR-010 expire semantics.",
+    "No observations.is_archived write-path was added or treated as an already-working archive route."
+  ],
+  "changed_files": [
+    "internal/forgetting/service.go",
+    "internal/forgetting/review.go",
+    "internal/forgetting/service_test.go",
+    "pkg/cognitive/types.go",
+    "pkg/cognitive/types_test.go",
+    "pkg/models/snapshot.go",
+    "pkg/models/snapshot_test.go",
+    "internal/db/gorm/migrations.go",
+    "internal/db/gorm/migrations_integration_test.go",
+    "internal/mcp/tools_governance.go",
+    "internal/mcp/tools_governance_test.go",
+    ".agent/specs/memory-product-layer/design-contracts/cr-010-forgetting-consolidation.json",
+    ".agent/specs/memory-product-layer/evidence/cr-010-forgetting-taxonomy.json",
+    ".agent/specs/memory-product-layer/evidence/cr-010-structural-loss-packets.json",
+    ".agent/specs/memory-product-layer/evidence/cr-010-closeout.json"
+  ],
+  "main_omp_focused_test_command": "go test ./pkg/cognitive ./pkg/models ./internal/forgetting ./internal/mcp ./internal/db/gorm -run 'Test(Forgetting|Classifier|PreviewReviewAction|NewForgettingReviewActionSnapshot|ValidateForgettingMutationBoundary|AuditExportProof|SnapshotOpType|GovernanceTools_ListSnapshotsSchemaIncludesReviewActionOpTypes|Migration133_BulkOpSnapshots|Migration153Rollback_PreflightsCandidateReviewSnapshots|Migration154Rollback_PreflightsForgettingReviewSnapshots)'",
+  "worker_verification": {
+    "forbidden_go_tests_run": false,
+    "forbidden_gates_or_formatters_run": false,
+    "forbidden_commands_run": [],
+    "static_parse_checks": [
+      "read structural summary: internal/forgetting/service.go",
+      "read structural summary: internal/forgetting/review.go",
+      "read structural summary: internal/forgetting/service_test.go",
+      "read structural summary: pkg/cognitive/types.go",
+      "read structural summary: pkg/cognitive/types_test.go",
+      "read structural summary: pkg/models/snapshot.go",
+      "read structural summary: internal/db/gorm/migrations.go",
+      "read structural summary: internal/db/gorm/migrations_integration_test.go",
+      "read structural summary: internal/mcp/tools_governance_test.go"
+    ],
+    "not_run_reason": "Assignment prohibits gofmt, build, lint, go test, go vet, git diff --check, and project-wide gates in this worker lane."
+  },
+  "residual_risks": [
+    "Focused go test command was not executed by this worker due explicit prohibition; Main OMP must run it.",
+    "Migration integration tests require DATABASE_DSN to exercise PostgreSQL CHECK constraints; otherwise they will skip.",
+    "Operator-facing UI remains intentionally blocked until a real designer-owned and PM-reviewed CR-010 contract replaces the stub."
+  ]
+}

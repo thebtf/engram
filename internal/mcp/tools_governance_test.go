@@ -116,7 +116,7 @@ func TestGovernanceTools_RedactionRulesStatus_NoAdminRequired_WithAdmin(t *testi
 	assert.Equal(t, true, out["restart_required"], "restart_required must be true (EC-F9)")
 }
 
-func TestGovernanceTools_ListSnapshotsSchemaIncludesCandidateReviewAction(t *testing.T) {
+func TestGovernanceTools_ListSnapshotsSchemaIncludesReviewActionOpTypes(t *testing.T) {
 	tools := governanceTools()
 	var listSnapshots *Tool
 	for i := range tools {
@@ -133,5 +133,5 @@ func TestGovernanceTools_ListSnapshotsSchemaIncludesCandidateReviewAction(t *tes
 	require.True(t, ok)
 	enum, ok := opType["enum"].([]string)
 	require.True(t, ok)
-	assert.ElementsMatch(t, []string{"ingest_doc", "bulk_promote", "bulk_delete", "bulk_supersede", "candidate_review_action"}, enum)
+	assert.ElementsMatch(t, []string{"ingest_doc", "bulk_promote", "bulk_delete", "bulk_supersede", "candidate_review_action", "forgetting_review_action"}, enum)
 }

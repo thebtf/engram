@@ -433,6 +433,7 @@ type ForgettingClassificationRequest struct {
 	Evidence       []string                 `json:"evidence,omitempty"`
 	Project        string                   `json:"project,omitempty"`
 	PrivacyScope   string                   `json:"privacy_scope,omitempty"`
+	PolicyOwner    string                   `json:"policy_owner,omitempty"`
 	StructuralLoss ForgettingStructuralLoss `json:"structural_loss"`
 	Risky          bool                     `json:"risky,omitempty"`
 }
@@ -458,13 +459,15 @@ type ForgettingReviewPolicy struct {
 }
 
 // ForgettingStructuralLoss records whether a consolidation/destructive path
-// would lose meaning, provenance, or scope. T003 wires this from fixtures; T002
-// initializes the field so the safety contract is already explicit.
+// would lose meaning, provenance, scope, or historical value. The guard is
+// intentionally broader than similarity so policy cannot silently merge away
+// unique context.
 type ForgettingStructuralLoss struct {
-	UniqueMeaning bool   `json:"unique_meaning"`
-	Provenance    bool   `json:"provenance"`
-	Scope         bool   `json:"scope"`
-	Rationale     string `json:"rationale"`
+	UniqueMeaning   bool   `json:"unique_meaning"`
+	Provenance      bool   `json:"provenance"`
+	Scope           bool   `json:"scope"`
+	HistoricalValue bool   `json:"historical_value"`
+	Rationale       string `json:"rationale"`
 }
 
 // ForgettingPacketScope bounds the memory ids and scope carried by a review
@@ -492,20 +495,85 @@ type ForgettingAuditPolicy struct {
 	Status string `json:"status"`
 }
 
+// ForgettingPacketPreview names the read-only before/after recommendation that
+// a packet exposes before any mutation path is allowed to run.
+type ForgettingPacketPreview struct {
+	BeforeRefs        []string `json:"before_refs"`
+	AfterPlan         string   `json:"after_plan"`
+	Recommendation    string   `json:"recommendation"`
+	Action            string   `json:"action"`
+	ApprovalRequired  bool     `json:"approval_required"`
+	MutationSeparated bool     `json:"mutation_separated"`
+}
+
+// ForgettingMutationRequirements defines the hard gates a mutation path must
+// satisfy after a reviewed packet is approved.
+type ForgettingMutationRequirements struct {
+	StructuralLossCheckRequired bool `json:"structural_loss_check_required"`
+	PrivacyScopeRequired        bool `json:"privacy_scope_required"`
+	AuditWriteBeforeMutation    bool `json:"audit_write_before_mutation"`
+	SnapshotRequired            bool `json:"snapshot_required"`
+	ReviewApprovalRequired      bool `json:"review_approval_required"`
+}
+
 // ForgettingReviewPacket is the bounded exception payload emitted for risky or
 // destructive forgetting/consolidation decisions.
 type ForgettingReviewPacket struct {
-	PacketID       string                   `json:"packet_id"`
-	Kind           string                   `json:"kind"`
-	Operation      ForgettingOperation      `json:"operation"`
-	State          ForgettingDecisionState  `json:"state"`
-	Rationale      string                   `json:"rationale"`
-	AllowedActions []string                 `json:"allowed_actions"`
-	Scope          ForgettingPacketScope    `json:"scope"`
-	Evidence       []string                 `json:"evidence"`
-	Snapshot       ForgettingSnapshotPolicy `json:"snapshot"`
-	Audit          ForgettingAuditPolicy    `json:"audit"`
-	StructuralLoss ForgettingStructuralLoss `json:"structural_loss"`
+	PacketID             string                         `json:"packet_id"`
+	Kind                 string                         `json:"kind"`
+	Operation            ForgettingOperation            `json:"operation"`
+	State                ForgettingDecisionState        `json:"state"`
+	Rationale            string                         `json:"rationale"`
+	AllowedActions       []string                       `json:"allowed_actions"`
+	PolicyOwner          string                         `json:"policy_owner"`
+	Scope                ForgettingPacketScope          `json:"scope"`
+	Evidence             []string                       `json:"evidence"`
+	Preview              ForgettingPacketPreview        `json:"preview"`
+	Snapshot             ForgettingSnapshotPolicy       `json:"snapshot"`
+	Audit                ForgettingAuditPolicy          `json:"audit"`
+	MutationRequirements ForgettingMutationRequirements `json:"mutation_requirements"`
+	StructuralLoss       ForgettingStructuralLoss       `json:"structural_loss"`
+	ReadOnly             bool                           `json:"read_only"`
+}
+
+// ForgettingActionPath identifies whether evidence came from automatic policy
+// routing or an approved review packet.
+type ForgettingActionPath string
+
+const (
+	ForgettingActionPathAutomatic ForgettingActionPath = "automatic_policy"
+	ForgettingActionPathReviewed  ForgettingActionPath = "reviewed_packet"
+)
+
+// ForgettingActionResult names the lifecycle result captured by export proof.
+type ForgettingActionResult string
+
+const (
+	ForgettingActionResultClassified ForgettingActionResult = "classified"
+	ForgettingActionResultPreviewed  ForgettingActionResult = "previewed"
+	ForgettingActionResultApplied    ForgettingActionResult = "applied"
+	ForgettingActionResultBlocked    ForgettingActionResult = "blocked"
+)
+
+// ForgettingAuditExportProof is the self-describing export/readback payload for
+// automatic and reviewed forgetting actions.
+type ForgettingAuditExportProof struct {
+	Operation                ForgettingOperation      `json:"operation"`
+	Action                   string                   `json:"action"`
+	State                    ForgettingDecisionState  `json:"state"`
+	Path                     ForgettingActionPath     `json:"path"`
+	Actor                    string                   `json:"actor"`
+	Result                   ForgettingActionResult   `json:"result"`
+	PolicyOwner              string                   `json:"policy_owner"`
+	PolicyBoundary           string                   `json:"policy_boundary"`
+	PacketID                 string                   `json:"packet_id,omitempty"`
+	SnapshotID               string                   `json:"snapshot_id,omitempty"`
+	AuditAction              string                   `json:"audit_action"`
+	AuditRef                 string                   `json:"audit_ref,omitempty"`
+	ExportRef                string                   `json:"export_ref,omitempty"`
+	Evidence                 []string                 `json:"evidence"`
+	DataDestructionByDefault bool                     `json:"data_destruction_by_default"`
+	StructuralLoss           ForgettingStructuralLoss `json:"structural_loss"`
 }
 
 // ForgettingDecision is the bounded classifier output. It is a decision
@@ -515,7 +583,9 @@ type ForgettingDecision struct {
 	Operation                ForgettingOperation      `json:"operation"`
 	State                    ForgettingDecisionState  `json:"state"`
 	Rationale                string                   `json:"rationale"`
+	PolicyOwner              string                   `json:"policy_owner"`
 	PolicyBoundary           string                   `json:"policy_boundary"`
+	ArchiveFirst             bool                     `json:"archive_first"`
 	Audit                    ForgettingAuditSurface   `json:"audit"`
 	Review                   ForgettingReviewPolicy   `json:"review"`
 	StructuralLoss           ForgettingStructuralLoss `json:"structural_loss"`

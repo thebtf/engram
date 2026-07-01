@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// SnapshotOpType is the type of bulk operation that produced a snapshot.
-// Valid values are enforced by the migration 133 CHECK constraint.
+// SnapshotOpType is the type of bulk/review operation that produced a snapshot.
+// Valid values are enforced by the migrations 133/153/154 CHECK constraint chain.
 type SnapshotOpType string
 
 const (
@@ -22,14 +22,16 @@ const (
 	SnapshotOpBulkSupersede SnapshotOpType = "bulk_supersede"
 	// SnapshotOpCandidateReviewAction represents a single candidate review action pre-mutation snapshot.
 	SnapshotOpCandidateReviewAction SnapshotOpType = "candidate_review_action"
+	// SnapshotOpForgettingReviewAction represents a forgetting/consolidation review action pre-mutation snapshot.
+	SnapshotOpForgettingReviewAction SnapshotOpType = "forgetting_review_action"
 )
 
-// IsValid returns true iff s is one of the 5 legal SnapshotOpType values.
+// IsValid returns true iff s is one of the 6 legal SnapshotOpType values.
 func (s SnapshotOpType) IsValid() bool {
 	switch s {
 	case SnapshotOpIngestDoc, SnapshotOpBulkPromote,
 		SnapshotOpBulkDelete, SnapshotOpBulkSupersede,
-		SnapshotOpCandidateReviewAction:
+		SnapshotOpCandidateReviewAction, SnapshotOpForgettingReviewAction:
 		return true
 	}
 	return false

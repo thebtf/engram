@@ -282,7 +282,9 @@ func TestForgettingDecisionContract_RequiredAuditAndSafetyFields(t *testing.T) {
 		"Operation":                {"operation", reflect.String},
 		"State":                    {"state", reflect.String},
 		"Rationale":                {"rationale", reflect.String},
+		"PolicyOwner":              {"policy_owner", reflect.String},
 		"PolicyBoundary":           {"policy_boundary", reflect.String},
+		"ArchiveFirst":             {"archive_first", reflect.Bool},
 		"Audit":                    {"audit", reflect.Struct},
 		"Review":                   {"review", reflect.Struct},
 		"StructuralLoss":           {"structural_loss", reflect.Struct},
@@ -320,6 +322,66 @@ func TestForgettingAuditSurface_NamesSnapshotAuditAndExport(t *testing.T) {
 		}
 		if got := field.Tag.Get("json"); got != wantTag {
 			t.Fatalf("ForgettingAuditSurface.%s json tag = %q, want %q", name, got, wantTag)
+		}
+	}
+}
+
+func TestForgettingReviewPacketContract_NamesPreviewMutationAndReadOnlyBoundary(t *testing.T) {
+	typ := reflect.TypeOf(ForgettingReviewPacket{})
+	required := map[string]struct {
+		jsonTag string
+		kind    reflect.Kind
+	}{
+		"PacketID":             {"packet_id", reflect.String},
+		"Kind":                 {"kind", reflect.String},
+		"Operation":            {"operation", reflect.String},
+		"AllowedActions":       {"allowed_actions", reflect.Slice},
+		"PolicyOwner":          {"policy_owner", reflect.String},
+		"Preview":              {"preview", reflect.Struct},
+		"Snapshot":             {"snapshot", reflect.Struct},
+		"Audit":                {"audit", reflect.Struct},
+		"MutationRequirements": {"mutation_requirements", reflect.Struct},
+		"ReadOnly":             {"read_only", reflect.Bool},
+	}
+
+	for name, want := range required {
+		field, ok := typ.FieldByName(name)
+		if !ok {
+			t.Fatalf("ForgettingReviewPacket missing required field %s", name)
+		}
+		if got := field.Tag.Get("json"); got != want.jsonTag {
+			t.Fatalf("ForgettingReviewPacket.%s json tag = %q, want %q", name, got, want.jsonTag)
+		}
+		if got := field.Type.Kind(); got != want.kind {
+			t.Fatalf("ForgettingReviewPacket.%s kind = %s, want %s", name, got, want.kind)
+		}
+	}
+}
+
+func TestForgettingAuditExportProofContract_SelfDescribingReadbackFields(t *testing.T) {
+	typ := reflect.TypeOf(ForgettingAuditExportProof{})
+	required := map[string]string{
+		"Operation":      "operation",
+		"Path":           "path",
+		"Actor":          "actor",
+		"Result":         "result",
+		"PolicyOwner":    "policy_owner",
+		"PolicyBoundary": "policy_boundary",
+		"PacketID":       "packet_id,omitempty",
+		"SnapshotID":     "snapshot_id,omitempty",
+		"AuditAction":    "audit_action",
+		"AuditRef":       "audit_ref,omitempty",
+		"ExportRef":      "export_ref,omitempty",
+		"Evidence":       "evidence",
+	}
+
+	for name, wantTag := range required {
+		field, ok := typ.FieldByName(name)
+		if !ok {
+			t.Fatalf("ForgettingAuditExportProof missing required field %s", name)
+		}
+		if got := field.Tag.Get("json"); got != wantTag {
+			t.Fatalf("ForgettingAuditExportProof.%s json tag = %q, want %q", name, got, wantTag)
 		}
 	}
 }
