@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/thebtf/engram/internal/auth"
 	experiencehistory "github.com/thebtf/engram/internal/experience"
@@ -59,6 +60,60 @@ func (p *memoryExperienceProvider) QueryExperienceDetail(ctx context.Context, re
 	return service.QueryExperienceDetail(ctx, request)
 }
 
+// detailMemoryID extracts a numeric memory id from an experience detail id such
+// as "memory:7" or a bare "7". It returns (id, true) when the id addresses a
+// single stored memory, so the projection can fetch that exact row by id instead
+// of scanning the newest-N window. Any other shape returns (0, false) and the
+// caller falls back to the general term/bounded path.
+func detailMemoryID(experienceID string) (int64, bool) {
+	raw := strings.TrimSpace(experienceID)
+	if raw == "" {
+		return 0, false
+	}
+	raw = strings.TrimPrefix(raw, "memory:")
+	raw = strings.TrimSpace(raw)
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
+}
+
+// queryContentTerms splits a free-text experience query into significant lower-
+// cased content terms for OR-narrowing at the SQL layer. Tokens shorter than 3
+// runes and a small set of generic stopwords are dropped so the narrowing keeps
+// recall without collapsing to a full-phrase predicate. An empty result tells
+// serviceForRequest to fall back to the bounded newest-N fetch.
+func queryContentTerms(query string) []string {
+	fields := strings.FieldsFunc(query, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	terms := make([]string, 0, len(fields))
+	seen := make(map[string]struct{}, len(fields))
+	for _, f := range fields {
+		t := strings.ToLower(strings.TrimSpace(f))
+		if len([]rune(t)) < 3 {
+			continue
+		}
+		if _, stop := experienceQueryStopwords[t]; stop {
+			continue
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		terms = append(terms, t)
+	}
+	return terms
+}
+
+var experienceQueryStopwords = map[string]struct{}{
+	"the": {}, "and": {}, "for": {}, "with": {}, "that": {}, "this": {},
+	"from": {}, "into": {}, "was": {}, "are": {}, "were": {}, "has": {},
+	"have": {}, "had": {}, "not": {}, "but": {}, "any": {}, "all": {},
+	"can": {}, "will": {}, "should": {}, "would": {}, "when": {}, "what": {},
+}
+
 func (p *memoryExperienceProvider) serviceForRequest(ctx context.Context, request cognitive.ExperienceQueryRequest) (*experiencehistory.Service, error) {
 	if p == nil || p.querySvc == nil {
 		return nil, fmt.Errorf("experience provider: principal memory query service is not configured")
@@ -73,7 +128,7 @@ func (p *memoryExperienceProvider) serviceForRequest(ctx context.Context, reques
 	if ownerPrincipal != "" && caller.Principal == ownerPrincipal {
 		ownerKind = caller.PrincipalKind
 	}
-	result, err := p.querySvc.Query(ctx, principalmemory.PrincipalMemoryQueryRequest{
+	queryReq := principalmemory.PrincipalMemoryQueryRequest{
 		Project:            project,
 		Caller:             caller,
 		CallerIsAdmin:      callerIsAdmin,
@@ -82,7 +137,18 @@ func (p *memoryExperienceProvider) serviceForRequest(ctx context.Context, reques
 		Query:              "",
 		Domain:             strings.TrimSpace(request.Domain),
 		Limit:              experienceProjectionFetchLimit,
-	})
+	}
+	// Detail-by-id: a "memory:<id>" experience id fetches that exact row directly
+	// (under the same access-policy gating) instead of scanning the newest-N
+	// window, so a target older than the projection limit is still retrievable.
+	if id, ok := detailMemoryID(request.Query); ok {
+		queryReq.IDs = []int64{id}
+	} else if terms := queryContentTerms(request.Query); len(terms) > 0 {
+		// General query: narrow by ORed content terms (recall-preserving, no
+		// full-phrase cliff, no recency cliff) instead of an unfiltered fetch.
+		queryReq.QueryTerms = terms
+	}
+	result, err := p.querySvc.Query(ctx, queryReq)
 	if err != nil {
 		return nil, err
 	}

@@ -54,12 +54,48 @@ type PrincipalMemoryQueryRequest struct {
 	OwnerPrincipal     string
 	OwnerPrincipalKind string
 	Query              string
+	// QueryTerms, when non-empty, are ORed as case-insensitive content-substring
+	// predicates at the SQL layer (relevance narrowing without the full-phrase
+	// Query cliff or an unfiltered newest-N recency cliff). ADDITIVE to the
+	// access-policy filters. When empty the fetch stays bounded by Limit only.
+	QueryTerms []string
+	// IDs, when non-empty, restricts the projection to the given memory IDs via an
+	// additive WHERE id IN (...). Used by the experience detail-by-id path so a
+	// specific memory:<id> lookup fetches that exact row under the same
+	// owner/kind/visibility/domain access-policy gating (NFR-1 preserved).
+	IDs                []int64
 	AgentVisibility    string
 	IncludePrivate     bool
 	Domain             string
 	Limit              int
 	Offset             int
 	SourceSessionID    string
+}
+
+// normalizeQueryTerms trims, lower-cases, and de-duplicates OR-narrowing content
+// terms, dropping empties. Empty input (or all-empty terms) yields nil so the
+// store falls back to the bounded newest-N fetch instead of an empty OR clause.
+func normalizeQueryTerms(terms []string) []string {
+	if len(terms) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(terms))
+	seen := make(map[string]struct{}, len(terms))
+	for _, term := range terms {
+		t := strings.ToLower(strings.TrimSpace(term))
+		if t == "" {
+			continue
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 type PrincipalMemoryQueryResult struct {
@@ -145,6 +181,8 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 		OwnerPrincipal:     strings.TrimSpace(req.OwnerPrincipal),
 		OwnerPrincipalKind: strings.TrimSpace(strings.ToLower(req.OwnerPrincipalKind)),
 		ContentContains:    strings.TrimSpace(req.Query),
+		ContentContainsAny: normalizeQueryTerms(req.QueryTerms),
+		IDs:                req.IDs,
 		AgentVisibility:    strings.TrimSpace(req.AgentVisibility),
 		Domain:             strings.TrimSpace(req.Domain),
 		Limit:              principalQueryFetchLimit(limit),
