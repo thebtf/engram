@@ -43,9 +43,12 @@ what makes "follows" auditable instead of trust-based.
 
 ## Current state
 
-Run `npm run parity` for the live count. As of `design_version 2026.06.20`:
-**2 full · 4 interactive · 5 structural · 5 stub**, 35 named gaps. i18n readiness:
-**1 keyed · 15 hardcoded** (secrets + the shell are wired; the rest await keying). The
+Run `npm run parity` for the live count. As of `design_version 2026.06.21` (post `collections`
+removal 2026-07-01, section was `stale: search removed v5 — intentionally inert`, never built):
+**2 full · 9 interactive · 2 structural · 4 stub**, 31 named gaps. i18n readiness:
+**all sections keyed** (this line was itself stale — it lagged the wiring work in the
+git history through commit `9571af3d`; the `1 keyed · 15 hardcoded` reading above
+belonged to an earlier `design_version 2026.06.20` snapshot). The
 ledger IS the backlog — every gap is a concrete next task for the developer, ordered by
 section priority (`DEVELOPER-PLAYBOOK §7`).
 

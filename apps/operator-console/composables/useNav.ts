@@ -45,7 +45,6 @@ export const NAV: NavGroup[] = [
   { grpKey: 'storage', items: [
     { id: 'secrets',     labelKey: 'secrets',     to: '/secrets',     cls: 'live' },
     { id: 'documents',   labelKey: 'documents',   to: '/documents',   cls: 'live' },
-    { id: 'collections', labelKey: 'collections', to: '/collections', cls: 'stale' },
   ] },
   { grpKey: 'administration', items: [
     { id: 'access',   labelKey: 'access',   to: '/access',   cls: 'live', admin: true },
