@@ -134,6 +134,9 @@ func (f *fakeGraphNodeStore) Get(ctx context.Context, id int64, includePrivate b
 	if !ok {
 		return nil, fmt.Errorf("get knowledge_node %d: %w", id, gormlib.ErrRecordNotFound)
 	}
+	if !includePrivate && n.PrivacyScope == "private" {
+		return nil, fmt.Errorf("get knowledge_node %d: %w", id, gormlib.ErrRecordNotFound)
+	}
 	return n, nil
 }
 
@@ -198,6 +201,32 @@ func TestHandlersGraph_ListNodesFiltersPrivate(t *testing.T) {
 			t.Fatalf("private node %d must not be listed", privateNode.ID)
 		}
 	}
+}
+
+func TestHandlersGraph_ListEdgesFiltersPrivateEndpoints(t *testing.T) {
+	edges := newFakeGraphEdgeStore()
+	nodes := newFakeGraphNodeStore()
+	sharedID := mustNode(t, nodes, "skill", "shared-skill", "engram")
+	visibleTargetID := mustNode(t, nodes, "skill", "visible-target", "engram")
+	privateTarget, err := nodes.Create(context.Background(), &models.KnowledgeNode{NodeType: "skill", ExternalRef: "private-target", Project: "engram", PrivacyScope: "private"})
+	require.NoError(t, err)
+	shared, visible, hidden := sharedID, visibleTargetID, privateTarget.ID
+	_, err = edges.Create(context.Background(), &graph.Edge{SourceType: "node", TargetType: "node", NodeSourceID: &shared, NodeTargetID: &visible, EdgeType: graph.EdgeUses, Weight: 1.0})
+	require.NoError(t, err)
+	_, err = edges.Create(context.Background(), &graph.Edge{SourceType: "node", TargetType: "node", NodeSourceID: &shared, NodeTargetID: &hidden, EdgeType: graph.EdgeUses, Weight: 1.0})
+	require.NoError(t, err)
+	svc := newGraphTestService(edges, nodes)
+	router := graphRouter(svc)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/graph/edges?node_id=%d&direction=outgoing", sharedID), nil)
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var payload graphEdgesResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	require.Len(t, payload.Edges, 1)
+	require.NotNil(t, payload.Edges[0].NodeTargetID)
+	require.Equal(t, visibleTargetID, *payload.Edges[0].NodeTargetID)
+	assert.Equal(t, 1, payload.Count)
 }
 
 func mustNode(t *testing.T, nodes *fakeGraphNodeStore, nodeType, ref, project string) int64 {
@@ -338,6 +367,17 @@ func TestHandlersGraph_CreateAndDeleteEdge_Succeeds(t *testing.T) {
 	router.ServeHTTP(dnw, dnreq)
 	require.Equal(t, http.StatusOK, dnw.Code, dnw.Body.String())
 	assert.Len(t, nodes.nodes, 1)
+}
+
+func TestHandlersGraph_FindPathRejectsOverMaxDepth(t *testing.T) {
+	edges := newFakeGraphEdgeStore()
+	nodes := newFakeGraphNodeStore()
+	svc := newGraphTestService(edges, nodes)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/graph/path?source_id=1&target_id=2&max_depth=%d", graph.MaxTraverseDepth+1), nil)
+	svc.handleFindGraphPath(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), fmt.Sprintf("max depth is %d", graph.MaxTraverseDepth))
 }
 
 // TestHandlersGraph_GatedBeforeStore asserts write endpoints are rejected

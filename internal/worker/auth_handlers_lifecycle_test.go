@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -179,6 +180,31 @@ func TestAuthHandlersLifecycle_SessionRevokeWinsInFlightRequest(t *testing.T) {
 
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 	require.Contains(t, rec.Body.String(), "session revoked")
+}
+
+func TestAuthHandlersLifecycle_AccessCreateInvitationAcceptsAuthentikAdminWithoutDashboardCookie(t *testing.T) {
+	env := openAuthLifecycleEnv(t)
+	adminEmail := fmt.Sprintf("zz-access-authentik-admin-%d@example.com", time.Now().UnixNano())
+	inviteEmail := fmt.Sprintf("zz-access-authentik-invite-%d@example.com", time.Now().UnixNano())
+	admin, err := env.users.CreateUser(adminEmail, "hash", gormdb.DashboardRoleAdmin)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = env.store.DB.Exec(`DELETE FROM invitations WHERE email = ?`, inviteEmail).Error
+		_ = env.store.DB.Exec(`DELETE FROM users WHERE email = ?`, adminEmail).Error
+		_ = env.store.DB.Exec(`DELETE FROM audit_log WHERE action LIKE 'auth_%' AND actor = ?`, adminEmail).Error
+	})
+	req := requestWithRoute(http.MethodPost, "/api/access/invitations", []byte(fmt.Sprintf(`{"email":%q,"role":"operator"}`, inviteEmail)), authpkg.Session("admin"), nil)
+	req.Header.Set("X-Authentik-Email", adminEmail)
+	rec := httptest.NewRecorder()
+	env.handlers.handleAccessCreateInvitation(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var payload struct {
+		Invitation gormdb.AccessInvitationView `json:"invitation"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Equal(t, admin.ID, payload.Invitation.CreatedBy)
+	require.Equal(t, adminEmail, payload.Invitation.CreatedByEmail)
+	require.Equal(t, inviteEmail, payload.Invitation.Email)
 }
 
 func TestAuthHandlersLifecycle_LastAdminDemoteRaceLeavesOneAdmin(t *testing.T) {

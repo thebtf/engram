@@ -16,9 +16,11 @@ import (
 	gormlib "gorm.io/gorm"
 )
 
-const graphFeatureFlag = "ENGRAM_GRAPH_ENABLED"
-const defaultGraphListLimit = 80
-const maxGraphListLimit = 200
+const (
+	graphFeatureFlag      = "ENGRAM_GRAPH_ENABLED"
+	defaultGraphListLimit = 80
+	maxGraphListLimit     = 200
+)
 
 type graphEdgeStore interface {
 	Create(ctx context.Context, e *graph.Edge) (*graph.Edge, error)
@@ -681,6 +683,33 @@ func (s *Service) handleDeleteGraphNode(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, graphDeleteNodeResponse{Deleted: true, Cascade: cascade, NodeID: id, DeletedEdgeIDs: deleteIDs})
 }
 
+func filterVisibleGraphEdges(ctx context.Context, nodeStore graphNodeStore, edges []graph.Edge) ([]graph.Edge, error) {
+	if len(edges) == 0 {
+		return edges, nil
+	}
+	visible := make([]graph.Edge, 0, len(edges))
+	for _, edge := range edges {
+		if edge.NodeSourceID != nil {
+			if _, err := nodeStore.Get(ctx, *edge.NodeSourceID, false); err != nil {
+				if errors.Is(err, gormlib.ErrRecordNotFound) {
+					continue
+				}
+				return nil, err
+			}
+		}
+		if edge.NodeTargetID != nil {
+			if _, err := nodeStore.Get(ctx, *edge.NodeTargetID, false); err != nil {
+				if errors.Is(err, gormlib.ErrRecordNotFound) {
+					continue
+				}
+				return nil, err
+			}
+		}
+		visible = append(visible, edge)
+	}
+	return visible, nil
+}
+
 func (s *Service) handleGetGraphEdges(w http.ResponseWriter, r *http.Request) {
 	if s.rejectGraphDisabled(w) {
 		return
@@ -720,6 +749,16 @@ func (s *Service) handleGetGraphEdges(w http.ResponseWriter, r *http.Request) {
 	} else {
 		edges, err = store.ListByNode(r.Context(), nodeID, direction, edgeType)
 	}
+	if err != nil {
+		writeGraphError(w, http.StatusInternalServerError, "graph_read_failed", err.Error())
+		return
+	}
+	nodeStore := s.currentGraphNodeStore()
+	if nodeStore == nil {
+		writeGraphError(w, http.StatusServiceUnavailable, "graph_store_unavailable", "graph node store not available")
+		return
+	}
+	edges, err = filterVisibleGraphEdges(r.Context(), nodeStore, edges)
 	if err != nil {
 		writeGraphError(w, http.StatusInternalServerError, "graph_read_failed", err.Error())
 		return
@@ -786,6 +825,10 @@ func (s *Service) handleFindGraphPath(w http.ResponseWriter, r *http.Request) {
 	maxDepth, err := parseGraphIntQuery(r.URL.Query().Get("max_depth"), "max_depth", graph.MaxTraverseDepth)
 	if err != nil {
 		writeGraphError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if maxDepth > graph.MaxTraverseDepth {
+		writeGraphError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("max depth is %d", graph.MaxTraverseDepth))
 		return
 	}
 	path, err := store.FindPath(r.Context(), sourceID, targetID, maxDepth)

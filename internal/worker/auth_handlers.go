@@ -218,13 +218,42 @@ func (h *AuthHandlers) requireAccessSessionAdminRead(w http.ResponseWriter, r *h
 		_, _, ok := h.currentCookieSessionUser(w, r)
 		return ok
 	}
-	if cookie, err := r.Cookie(sessionCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
-		return true
-	}
-	if strings.TrimSpace(r.Header.Get("X-Authentik-Email")) != "" {
-		return true
-	}
 	return true
+}
+
+func (h *AuthHandlers) currentAccessSessionAdminUser(w http.ResponseWriter, r *http.Request) (*gormdb.AuthSession, *gormdb.User, bool) {
+	if cookie, err := r.Cookie(authSessionCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
+		if h.beforeAccessSessionCheck != nil {
+			h.beforeAccessSessionCheck()
+		}
+		sess, user, ok := h.currentCookieSessionUser(w, r)
+		if !ok {
+			return nil, nil, false
+		}
+		return sess, user, true
+	}
+	if !h.requireStores(w, true, false, false, false) {
+		return nil, nil, false
+	}
+	email := strings.TrimSpace(r.Header.Get("X-Authentik-Email"))
+	if email == "" {
+		writeAuthJSONError(w, http.StatusUnauthorized, "not authenticated")
+		return nil, nil, false
+	}
+	user, err := h.users.GetUserByEmail(email)
+	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			writeAuthJSONError(w, http.StatusUnauthorized, "not authenticated")
+		} else {
+			writeAuthJSONError(w, http.StatusInternalServerError, "failed to load session user")
+		}
+		return nil, nil, false
+	}
+	if user.Disabled {
+		writeAuthJSONError(w, http.StatusForbidden, "account disabled")
+		return nil, nil, false
+	}
+	return nil, user, true
 }
 
 func (h *AuthHandlers) requireAccessSessionAdmin(w http.ResponseWriter, r *http.Request) (*gormdb.AuthSession, *gormdb.User, bool) {
@@ -240,10 +269,7 @@ func (h *AuthHandlers) requireAccessSessionAdmin(w http.ResponseWriter, r *http.
 	if isAuthDisabled() {
 		return &gormdb.AuthSession{ID: "auth-disabled"}, &gormdb.User{ID: 0, Email: "auth-disabled", Role: gormdb.DashboardRoleAdmin}, true
 	}
-	if h.beforeAccessSessionCheck != nil {
-		h.beforeAccessSessionCheck()
-	}
-	sess, user, ok := h.currentCookieSessionUser(w, r)
+	sess, user, ok := h.currentAccessSessionAdminUser(w, r)
 	if !ok {
 		return nil, nil, false
 	}
@@ -252,6 +278,7 @@ func (h *AuthHandlers) requireAccessSessionAdmin(w http.ResponseWriter, r *http.
 		return nil, nil, false
 	}
 	return sess, user, true
+
 }
 
 func decodeOptionalJSON(r *http.Request, dst any) error {
