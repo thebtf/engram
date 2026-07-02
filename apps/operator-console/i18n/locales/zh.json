@@ -606,7 +606,7 @@
       "subtitle": "签发带过期时间的单次使用邀请，并在不删除审计轨迹的前提下撤销它们。",
       "form": {
         "email": "邀请邮箱",
-        "emailPlaceholder": "name@example.com",
+        "emailPlaceholder": "name{'@'}example.com",
         "role": "角色",
         "ttl": "有效期",
         "ttl24": "24 小时",
@@ -1864,7 +1864,7 @@
       "emptyBody": "请先在上方提交源内容，以创建 books job 并开始轮询其生命周期。",
       "pendingBody": "Job 已记录，正在等待流水线接手。",
       "processingBody": "流水线正在切块并写入文档。状态轮询会持续到 terminal state。",
-      "doneBody": "Job 已完成。生成的文档会通过可见的 books/jobs/<id>/ 前缀和 source_book_job_id 元数据进行标记。",
+      "doneBody": "Job 已完成。生成的文档会通过可见的 books/jobs/[job-id]/ 前缀和 source_book_job_id 元数据进行标记。",
       "failedBody": "Job 在文档完整生成前失败。请查看已保存的错误，并在修正内容或格式后重试。",
       "stateLabel": {
         "pending": "待处理",

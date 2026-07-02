@@ -606,7 +606,7 @@
       "subtitle": "Issue expiring single-use invites and revoke them without deleting the audit trail.",
       "form": {
         "email": "Invite email",
-        "emailPlaceholder": "name@example.com",
+        "emailPlaceholder": "name{'@'}example.com",
         "role": "Role",
         "ttl": "Expires in",
         "ttl24": "24 hours",
@@ -1864,7 +1864,7 @@
       "emptyBody": "Queue a source above to create a books job and start polling its lifecycle.",
       "pendingBody": "The job is recorded and waiting for the pipeline to take it.",
       "processingBody": "The pipeline is chunking and writing documents. Status polling stays live until a terminal state.",
-      "doneBody": "The job finished. Produced documents are tagged by the visible books/jobs/<id>/ path prefix and source_book_job_id metadata.",
+      "doneBody": "The job finished. Produced documents are tagged by the visible books/jobs/[job-id]/ path prefix and source_book_job_id metadata.",
       "failedBody": "The job failed before documents were fully produced. Read the stored error and retry with corrected source content or format.",
       "stateLabel": {
         "pending": "Pending",

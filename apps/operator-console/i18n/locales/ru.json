@@ -606,7 +606,7 @@
       "subtitle": "Выдавайте одноразовые приглашения с expiry и отзывайте их без удаления audit trail.",
       "form": {
         "email": "Email приглашения",
-        "emailPlaceholder": "name@example.com",
+        "emailPlaceholder": "name{'@'}example.com",
         "role": "Роль",
         "ttl": "Истекает через",
         "ttl24": "24 часа",
@@ -1864,7 +1864,7 @@
       "emptyBody": "Поставьте источник выше, чтобы создать books job и начать polling её жизненного цикла.",
       "pendingBody": "Job записана и ждёт, пока конвейер возьмёт её в работу.",
       "processingBody": "Конвейер режет текст на чанки и пишет документы. Polling статуса идёт до terminal state.",
-      "doneBody": "Job завершилась. Созданные документы помечены видимым префиксом books/jobs/<id>/ и метаданными source_book_job_id.",
+      "doneBody": "Job завершилась. Созданные документы помечены видимым префиксом books/jobs/[job-id]/ и метаданными source_book_job_id.",
       "failedBody": "Job упала до полного выпуска документов. Прочитайте сохранённую ошибку и повторите прогон с исправленным форматом или содержимым.",
       "stateLabel": {
         "pending": "Ожидает",
