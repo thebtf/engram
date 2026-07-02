@@ -1819,6 +1819,68 @@
     }
   },
 
+  "booksPage": {
+    "title": "Books as context",
+    "subtitle": "Upload or paste a source text, let the books pipeline chunk it through the markdown adapter, and track the job until produced documents land in Documents.",
+    "brief": {
+      "title": "Books stay a separate bounded context",
+      "body": "This milestone creates a books job, processes text through the markdown chunker adapter, and writes versioned documents with source_book_job_id provenance metadata."
+    },
+    "metrics": {
+      "status": "Current job status",
+      "source": "Source ref",
+      "prefix": "Documents tag"
+    },
+    "actions": {
+      "refresh": "Refresh status"
+    },
+    "form": {
+      "title": "Start a books job",
+      "lead": "Current TG5 intake is text/markdown content. Paste the source or load a text file; binary extractors remain outside this lane.",
+      "file": "Text source file",
+      "fileHint": "Accepted here: .md, .mdx, .markdown, .txt. PDF/EPUB extraction is not wired in this milestone.",
+      "sourceRef": "Source reference",
+      "sourceRefHint": "e.g. distributed-systems.md",
+      "project": "Project",
+      "author": "Actor",
+      "content": "Source content",
+      "contentHint": "Paste book or chapter text here. The pipeline will synthesize a heading if the source begins as plain text.",
+      "submit": "Queue ingest",
+      "submitting": "Queuing…",
+      "unsupportedFile": "This upload control currently accepts text/markdown sources only. Use pasted extracted text for binary books.",
+      "validation": "Source reference and source content are required.",
+      "loadedFile": "Loaded {name} into the source editor."
+    },
+    "job": {
+      "title": "Latest books job",
+      "status": "Status",
+      "source": "Source ref",
+      "prefix": "Documents path prefix",
+      "createdAt": "Created",
+      "updatedAt": "Updated",
+      "error": "Pipeline error",
+      "openDocuments": "Open produced documents",
+      "emptyTitle": "No books job yet",
+      "emptyBody": "Queue a source above to create a books job and start polling its lifecycle.",
+      "pendingBody": "The job is recorded and waiting for the pipeline to take it.",
+      "processingBody": "The pipeline is chunking and writing documents. Status polling stays live until a terminal state.",
+      "doneBody": "The job finished. Produced documents are tagged by the visible books/jobs/<id>/ path prefix and source_book_job_id metadata.",
+      "failedBody": "The job failed before documents were fully produced. Read the stored error and retry with corrected source content or format.",
+      "stateLabel": {
+        "pending": "Pending",
+        "processing": "Processing",
+        "done": "Done",
+        "failed": "Failed",
+        "idle": "Idle"
+      }
+    },
+    "notice": {
+      "queued": "Books job #{id} queued.",
+      "failed": "Books request failed: {message}",
+      "loadError": "Unknown books pipeline error"
+    }
+  },
+
   "sectionStub": {
     "state": {
       "live": "This section is connected but has no expanded view yet.",

@@ -1819,6 +1819,68 @@
     }
   },
 
+  "booksPage": {
+    "title": "书籍上下文",
+    "subtitle": "上传或粘贴源文本，让 books 流水线通过 markdown 适配器切块，并持续跟踪 job，直到生成的文档出现在 Documents 页面。",
+    "brief": {
+      "title": "Books 保持独立 bounded context",
+      "body": "这个 milestone 会创建 books job，通过 markdown chunker 适配器处理文本，并写入带有 source_book_job_id provenance 元数据的 versioned documents。"
+    },
+    "metrics": {
+      "status": "当前 job 状态",
+      "source": "源引用",
+      "prefix": "文档标签"
+    },
+    "actions": {
+      "refresh": "刷新状态"
+    },
+    "form": {
+      "title": "启动 books job",
+      "lead": "当前 TG5 intake 接受 text/markdown 内容。请粘贴源文本或加载文本文件；二进制 extractor 不在本 lane 范围内。",
+      "file": "文本源文件",
+      "fileHint": "这里接受 .md、.mdx、.markdown、.txt。PDF/EPUB 提取在本 milestone 中尚未接通。",
+      "sourceRef": "源引用",
+      "sourceRefHint": "例如 distributed-systems.md",
+      "project": "项目",
+      "author": "执行者",
+      "content": "源内容",
+      "contentHint": "在这里粘贴书籍或章节文本。如果源内容是 plain text，流水线会自动补一个 heading。",
+      "submit": "加入 ingest 队列",
+      "submitting": "正在入队…",
+      "unsupportedFile": "这个 upload control 目前只接受 text/markdown 源。对于二进制书籍，请粘贴已提取文本。",
+      "validation": "必须提供 source reference 和 source content。",
+      "loadedFile": "已将 {name} 载入源编辑器。"
+    },
+    "job": {
+      "title": "最新 books job",
+      "status": "状态",
+      "source": "源引用",
+      "prefix": "文档路径前缀",
+      "createdAt": "创建时间",
+      "updatedAt": "更新时间",
+      "error": "流水线错误",
+      "openDocuments": "打开生成的文档",
+      "emptyTitle": "还没有 books job",
+      "emptyBody": "请先在上方提交源内容，以创建 books job 并开始轮询其生命周期。",
+      "pendingBody": "Job 已记录，正在等待流水线接手。",
+      "processingBody": "流水线正在切块并写入文档。状态轮询会持续到 terminal state。",
+      "doneBody": "Job 已完成。生成的文档会通过可见的 books/jobs/<id>/ 前缀和 source_book_job_id 元数据进行标记。",
+      "failedBody": "Job 在文档完整生成前失败。请查看已保存的错误，并在修正内容或格式后重试。",
+      "stateLabel": {
+        "pending": "待处理",
+        "processing": "处理中",
+        "done": "完成",
+        "failed": "失败",
+        "idle": "空闲"
+      }
+    },
+    "notice": {
+      "queued": "Books job #{id} 已入队。",
+      "failed": "Books 请求失败：{message}",
+      "loadError": "未知 books 流水线错误"
+    }
+  },
+
   "sectionStub": {
     "state": {
       "live": "该分区已连接，但尚无扩展视图。",

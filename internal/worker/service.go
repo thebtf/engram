@@ -23,6 +23,7 @@ import (
 	httpSwagger "github.com/swaggo/http-swagger"
 
 	"github.com/thebtf/engram/internal/auth"
+	booksdomain "github.com/thebtf/engram/internal/books"
 	"github.com/thebtf/engram/internal/bulkops"
 	"github.com/thebtf/engram/internal/chunking"
 
@@ -172,6 +173,8 @@ type Service struct {
 	credentialStore             *gorm.CredentialStore
 	memoryStore                 *gorm.MemoryStore
 	documentStore               versionedDocumentStore
+	booksStore                  booksStore
+	booksPipeline               booksPipelineRunner
 	memoryStoreSeam             memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
 	stateStore                  statePlane
 	experienceProvider          experienceHistoryProvider
@@ -763,6 +766,8 @@ func (s *Service) initializeAsync() {
 
 	// Create versioned document store for collaborative document MCP tools (migration 051).
 	versionedDocumentStore := gorm.NewVersionedDocumentStore(store)
+	booksStore := gorm.NewBooksStore(store)
+	booksPipeline := booksdomain.NewPipeline(booksStore, versionedDocumentStore)
 
 	mcpServer := mcp.NewServer(mcp.ServerOptions{
 		Version:            s.version,
@@ -782,6 +787,8 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetVersionedDocumentStore(versionedDocumentStore)
 	s.initMu.Lock()
 	s.documentStore = versionedDocumentStore
+	s.booksStore = booksStore
+	s.booksPipeline = booksPipeline
 	s.initMu.Unlock()
 
 	mcpServer.SetIssueStore(issueStore)
@@ -1498,6 +1505,10 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/documents/history", s.handleDocumentHistory)
 		r.Get("/api/documents/comments", s.handleListDocumentComments)
 		r.Post("/api/documents/comment", s.handleAddDocumentComment)
+
+		// Books ingestion bridge (CR-002 books lane)
+		r.Post("/api/books", s.handleCreateBookJob)
+		r.Get("/api/books/{id}/status", s.handleGetBookJobStatus)
 
 		// Access administration bridge (CR-002 access lane)
 		r.Get("/api/access/providers", s.handleAccessProviders)

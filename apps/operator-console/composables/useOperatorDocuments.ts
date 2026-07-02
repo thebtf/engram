@@ -328,6 +328,7 @@ export function useOperatorDocuments(): {
   const primaryEvidence = endpointEvidence('/api/documents/read?path={path}&project={project}&version={version}', 'documents-read-primary')
   const secondaryEvidence = endpointEvidence('/api/documents/read?path={path}&project={project}&version={version}', 'documents-read-secondary')
   const commentsEvidence = endpointEvidence('/api/documents/comments?document_id={id}', 'documents-comments')
+  const route = useRoute()
 
   const projects = useState<string[]>('live:documents-page:projects', () => [DEFAULT_DOCUMENT_PROJECT])
   const documents = useState<OperatorDocumentSummary[]>('live:documents-page:documents', () => [])
@@ -534,12 +535,25 @@ export function useOperatorDocuments(): {
   }
 
   async function refreshDocuments() {
-    const project = (selectedProject.value || DEFAULT_DOCUMENT_PROJECT).trim() || DEFAULT_DOCUMENT_PROJECT
+    const routeProject = typeof route.query.project === 'string' ? route.query.project.trim() : ''
+    const project = (routeProject || selectedProject.value || DEFAULT_DOCUMENT_PROJECT).trim() || DEFAULT_DOCUMENT_PROJECT
     if (project !== selectedProject.value) {
       selectedProject.value = project
     }
+    const routePathPrefix = typeof route.query.pathPrefix === 'string'
+      ? route.query.pathPrefix.trim()
+      : typeof route.query.path_prefix === 'string'
+        ? route.query.path_prefix.trim()
+        : ''
+    const params = new URLSearchParams({
+      project,
+      limit: String(DOCUMENT_LIST_LIMIT),
+    })
+    if (routePathPrefix) {
+      params.set('path_prefix', routePathPrefix)
+    }
 
-    const endpoint = `/api/documents?project=${encodeURIComponent(project)}&limit=${DOCUMENT_LIST_LIMIT}`
+    const endpoint = `/api/documents?${params.toString()}`
     const evidence = endpointEvidence(endpoint, 'documents-list')
     documentsStateValue.value = pendingState(evidence, documents.value)
 

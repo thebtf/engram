@@ -1819,6 +1819,68 @@
     }
   },
 
+  "booksPage": {
+    "title": "Книги-контекст",
+    "subtitle": "Загрузите или вставьте текст источника, дайте books-конвейеру разбить его через markdown-адаптер и отслеживайте job, пока документы не появятся в разделе Documents.",
+    "brief": {
+      "title": "Books остаётся отдельным bounded context",
+      "body": "Этот milestone создаёт books job, прогоняет текст через адаптер markdown chunker и пишет versioned documents с provenance-метаданными source_book_job_id."
+    },
+    "metrics": {
+      "status": "Статус текущей job",
+      "source": "Ссылка на источник",
+      "prefix": "Тег документов"
+    },
+    "actions": {
+      "refresh": "Обновить статус"
+    },
+    "form": {
+      "title": "Запустить books job",
+      "lead": "Текущий TG5 intake принимает текст/markdown-контент. Вставьте источник или загрузите текстовый файл; бинарные extractors вне этого lane.",
+      "file": "Текстовый файл-источник",
+      "fileHint": "Здесь принимаются .md, .mdx, .markdown, .txt. Извлечение из PDF/EPUB в этот milestone не подключено.",
+      "sourceRef": "Ссылка на источник",
+      "sourceRefHint": "например, distributed-systems.md",
+      "project": "Проект",
+      "author": "Актор",
+      "content": "Содержимое источника",
+      "contentHint": "Вставьте сюда текст книги или главы. Если источник начинается как plain text, конвейер сам синтезирует heading.",
+      "submit": "Поставить в ingest",
+      "submitting": "Ставим в очередь…",
+      "unsupportedFile": "Сейчас этот upload control принимает только текстовые/markdown-источники. Для бинарных книг используйте вставленный извлечённый текст.",
+      "validation": "Нужны source reference и source content.",
+      "loadedFile": "Файл {name} загружен в редактор источника."
+    },
+    "job": {
+      "title": "Последняя books job",
+      "status": "Статус",
+      "source": "Ссылка на источник",
+      "prefix": "Префикс пути документов",
+      "createdAt": "Создана",
+      "updatedAt": "Обновлена",
+      "error": "Ошибка конвейера",
+      "openDocuments": "Открыть созданные документы",
+      "emptyTitle": "Books job ещё нет",
+      "emptyBody": "Поставьте источник выше, чтобы создать books job и начать polling её жизненного цикла.",
+      "pendingBody": "Job записана и ждёт, пока конвейер возьмёт её в работу.",
+      "processingBody": "Конвейер режет текст на чанки и пишет документы. Polling статуса идёт до terminal state.",
+      "doneBody": "Job завершилась. Созданные документы помечены видимым префиксом books/jobs/<id>/ и метаданными source_book_job_id.",
+      "failedBody": "Job упала до полного выпуска документов. Прочитайте сохранённую ошибку и повторите прогон с исправленным форматом или содержимым.",
+      "stateLabel": {
+        "pending": "Ожидает",
+        "processing": "Обрабатывается",
+        "done": "Готово",
+        "failed": "Ошибка",
+        "idle": "Нет job"
+      }
+    },
+    "notice": {
+      "queued": "Books job #{id} поставлена в очередь.",
+      "failed": "Books-запрос завершился ошибкой: {message}",
+      "loadError": "Неизвестная ошибка books-конвейера"
+    }
+  },
+
   "sectionStub": {
     "state": {
       "live": "Раздел подключён, но пока без расширенного представления.",
