@@ -34,18 +34,21 @@ code{background:#f5f5f5;padding:.1rem .3rem;border-radius:2px}
 <tr><td>2026-07-02T05:10Z</td><td class="decision">decision</td><td>Graph read paths were made honest for flag-off and empty-state scenarios: <code>useOperatorGraph.ts</code> now treats <code>null</code> traverse/path arrays as valid empty reads, and graph page traverse/path controls disable/short-circuit while gated so the UI does not degrade into 403-backed fake-live behavior.</td></tr>
 <tr><td>2026-07-02T05:35Z</td><td class="decision">decision</td><td>MCP graph writes were aligned with REST guardrails by routing <code>graphAddEdge</code> through <code>graphCreateEdgeWithGuards(...)</code> so duplicate-edge/orphan-edge checks and the write mutex apply consistently across exposed mutation surfaces.</td></tr>
 <tr><td>2026-07-02T05:55Z</td><td class="decision">decision</td><td>Documents comments were pinned to the latest/current version thread rather than whichever compare version was selected. Compare panes remain independently selectable, but comment load/post now stays on the current version to match the page copy and avoid cross-document version-number collisions.</td></tr>
+<tr><td>2026-07-02T06:20Z</td><td class="decision">decision</td><td>T016 migration-only checkpoint was verified separately from the queue/graph/documents bundle. <code>booksJobsMigration155()</code> is additive-only and registered in the migration chain, but it is not treated as closing G005 or authorizing books pipeline work yet.</td></tr>
 </table>
 
 <h2>Spec Gaps Discovered</h2>
 <table>
 <tr><th>Time</th><th>Gap</th><th>Resolution</th></tr>
 <tr><td>2026-07-02T04:00Z</td><td><code>handlers_documents_test.go</code> existed before the documents bridge and blocked package compilation for graph verification.</td><td>Resolved by splitting a parallel documents lane (T008-T010) instead of polluting graph scope. Shared-file sequencing was coordinated via IRC.</td></tr>
+<tr><td>2026-07-02T06:20Z</td><td><code>go run ./tools/gen-data-model</code> completed after T016, but <code>docs/arch/DATA_MODEL.md</code> showed no textual <code>books_jobs</code> diff in this worktree.</td><td>Recorded as a visible generator/parser discrepancy; the unchanged doc file was restored so the worktree stays honest. Books lane remains blocked on broader TG5 implementation, not on a fake doc diff.</td></tr>
 </table>
 
 <h2>Tradeoffs</h2>
 <table>
 <tr><th>Time</th><th>Tradeoff</th><th>Rationale</th></tr>
 <tr><td>2026-07-02T04:40Z</td><td>Hold graph commit until shared-file documents pass settled</td><td>Avoided committing mixed, partially-owned locale/service changes from the single worktree; documents handback was awaited before final combined lane acceptance.</td></tr>
+<tr><td>2026-07-02T06:20Z</td><td>Review/commit T016 before broader CR-002 UI lanes</td><td>Chosen to preserve the PM-issued checkpoint ordering while still allowing graph/documents verification to continue in parallel. Only the additive migration registration is in scope; no books pipeline/UI work is implied.</td></tr>
 </table>
 
 <h2>Changed Assumptions</h2>
@@ -59,6 +62,7 @@ code{background:#f5f5f5;padding:.1rem .3rem;border-radius:2px}
 <tr><th>Gate</th><th>Command</th><th>Result</th></tr>
 <tr><td>G002/G003</td><td><code>go test ./internal/worker/... -run "TestHandlers(Graph|Documents)"</code>; <code>go test ./internal/mcp/... -run TestGraphTool_T014</code>; <code>cd apps/operator-console; npm run parity</code></td><td>PASS — graph/docs focused backend checks and parity green after the final guardrail fixes.</td></tr>
 <tr><td>CR-002 bundle</td><td><code>go build ./...</code>; <code>go test ./...</code>; <code>git diff --check</code></td><td>PASS — full backend verification green after graph/docs patch loop. Warnings were CRLF-only.</td></tr>
+<tr><td>T016 checkpoint</td><td><code>go run ./tools/gen-data-model</code>; <code>go test ./internal/db/gorm/...</code>; <code>go build ./...</code>; <code>git diff --check</code></td><td>PASS — migration registration checkpoint green; `docs/arch/DATA_MODEL.md` produced no textual books_jobs diff and was restored.</td></tr>
 </table>
 
 <h2>Needs Amend Signals</h2>
