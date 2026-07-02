@@ -41,9 +41,11 @@ type Store interface {
 	UpdateStatus(ctx context.Context, id int64, status Status, errorMessage string) (*Job, error)
 }
 
-// DocumentWriter writes produced chunks into the existing VersionedDocumentStore.
+// DocumentWriter writes produced chunks into the existing VersionedDocumentStore
+// and can compensate partial writes by source_book_job_id.
 type DocumentWriter interface {
 	Create(ctx context.Context, path, project, content, docType, metadata, author string) (int64, error)
+	DeleteBySourceBookJobID(ctx context.Context, jobID int64) (int64, error)
 }
 
 // ProcessRequest carries the source material for one books job execution.
@@ -127,6 +129,9 @@ func (p *Pipeline) Process(ctx context.Context, req ProcessRequest) error {
 
 		path := buildDocumentPath(prefix, idx+1, chunk.Name)
 		if _, err := p.documents.Create(ctx, path, req.Project, chunk.Content, "markdown", metadata, req.Author); err != nil {
+			if cleanupErr := p.cleanupDocuments(ctx, req.JobID); cleanupErr != nil {
+				return p.failJob(ctx, req.JobID, fmt.Errorf("write document %d: %w (cleanup failed: %v)", idx+1, err, cleanupErr))
+			}
 			return p.failJob(ctx, req.JobID, fmt.Errorf("write document %d: %w", idx+1, err))
 		}
 	}
@@ -143,6 +148,14 @@ func (p *Pipeline) failJob(ctx context.Context, jobID int64, cause error) error 
 		return fmt.Errorf("%w (persist failed status: %v)", cause, err)
 	}
 	return cause
+}
+
+func (p *Pipeline) cleanupDocuments(ctx context.Context, jobID int64) error {
+	if p.documents == nil || jobID <= 0 {
+		return nil
+	}
+	_, err := p.documents.DeleteBySourceBookJobID(ctx, jobID)
+	return err
 }
 
 func (p *Pipeline) chunkMarkdown(ctx context.Context, virtualPath, content string) ([]chunking.Chunk, error) {
@@ -187,14 +200,17 @@ func normalizeBookContent(sourceRef, content string) (string, string, error) {
 }
 
 func startsWithMarkdownHeading(content string) bool {
-	for _, line := range strings.Split(content, "\n") {
+	for rest := content; ; {
+		line, next, found := strings.Cut(rest, "\n")
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
+		if trimmed != "" {
+			return strings.HasPrefix(trimmed, "#")
 		}
-		return strings.HasPrefix(trimmed, "#")
+		if !found {
+			return false
+		}
+		rest = next
 	}
-	return false
 }
 
 func virtualMarkdownPath(sourceRef string) string {

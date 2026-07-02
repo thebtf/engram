@@ -39,8 +39,11 @@ type AuthHandlers struct {
 	sessions    *gormdb.AuthSessionStore
 	access      *gormdb.DomainOwnerStore
 
-	// Rate limiting: IP -> mutex + []time.Time (last N attempts)
-	loginAttempts sync.Map
+	// Rate limiting: IP -> recent attempts in the last minute. Guarded by
+	// loginAttemptsMu; stale keys are pruned on each call so the structure does
+	// not grow without bound.
+	loginAttemptsMu sync.Mutex
+	loginAttempts   map[string][]time.Time
 
 	// beforeAccessSessionCheck is a test seam used by the lifecycle race tests.
 	beforeAccessSessionCheck func()
@@ -49,10 +52,11 @@ type AuthHandlers struct {
 // NewAuthHandlers creates AuthHandlers wired to the given stores.
 func NewAuthHandlers(users *gormdb.UserStore, invitations *gormdb.InvitationStore, sessions *gormdb.AuthSessionStore, access *gormdb.DomainOwnerStore) *AuthHandlers {
 	return &AuthHandlers{
-		users:       users,
-		invitations: invitations,
-		sessions:    sessions,
-		access:      access,
+		users:         users,
+		invitations:   invitations,
+		sessions:      sessions,
+		access:        access,
+		loginAttempts: make(map[string][]time.Time),
 	}
 }
 
@@ -194,6 +198,35 @@ func (h *AuthHandlers) currentCookieSessionUser(w http.ResponseWriter, r *http.R
 	return sess, user, true
 }
 
+func (h *AuthHandlers) requireAccessSessionAdminRead(w http.ResponseWriter, r *http.Request) bool {
+	id, ok := authpkg.IdentityFrom(r.Context())
+	if !ok {
+		writeAuthJSONError(w, http.StatusUnauthorized, "unauthorized")
+		return false
+	}
+	if !id.IsSessionAdmin() {
+		writeAuthJSONError(w, http.StatusForbidden, "access administration requires a browser admin session")
+		return false
+	}
+	if isAuthDisabled() {
+		return true
+	}
+	if cookie, err := r.Cookie(authSessionCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
+		if h.beforeAccessSessionCheck != nil {
+			h.beforeAccessSessionCheck()
+		}
+		_, _, ok := h.currentCookieSessionUser(w, r)
+		return ok
+	}
+	if cookie, err := r.Cookie(sessionCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
+		return true
+	}
+	if strings.TrimSpace(r.Header.Get("X-Authentik-Email")) != "" {
+		return true
+	}
+	return true
+}
+
 func (h *AuthHandlers) requireAccessSessionAdmin(w http.ResponseWriter, r *http.Request) (*gormdb.AuthSession, *gormdb.User, bool) {
 	id, ok := authpkg.IdentityFrom(r.Context())
 	if !ok {
@@ -233,9 +266,21 @@ func decodeOptionalJSON(r *http.Request, dst any) error {
 }
 
 func parseCreateInvitationRequest(r *http.Request) (string, string, time.Time, error) {
+	return parseCreateInvitationRequestWithEmailPolicy(r, false)
+}
+
+func parseAccessCreateInvitationRequest(r *http.Request) (string, string, time.Time, error) {
+	return parseCreateInvitationRequestWithEmailPolicy(r, true)
+}
+
+func parseCreateInvitationRequestWithEmailPolicy(r *http.Request, requireEmail bool) (string, string, time.Time, error) {
 	var req createInvitationRequest
 	if err := decodeOptionalJSON(r, &req); err != nil {
 		return "", "", time.Time{}, fmt.Errorf("invalid request")
+	}
+	email := strings.TrimSpace(req.Email)
+	if requireEmail && email == "" {
+		return "", "", time.Time{}, fmt.Errorf("email is required")
 	}
 	role, err := gormdb.NormalizeDashboardRole(req.Role)
 	if err != nil {
@@ -255,15 +300,18 @@ func parseCreateInvitationRequest(r *http.Request) (string, string, time.Time, e
 	if !expiresAt.After(time.Now().UTC()) {
 		return "", "", time.Time{}, fmt.Errorf("expires_at must be in the future")
 	}
-	return strings.TrimSpace(req.Email), role, expiresAt, nil
+	return email, role, expiresAt, nil
 }
 
-func parseRevokeReason(r *http.Request, fallback string) string {
+func parseRevokeReason(r *http.Request, fallback string) (string, error) {
 	var req revokeReasonRequest
-	if err := decodeOptionalJSON(r, &req); err == nil && strings.TrimSpace(req.Reason) != "" {
-		return strings.TrimSpace(req.Reason)
+	if err := decodeOptionalJSON(r, &req); err != nil {
+		return "", fmt.Errorf("invalid request")
 	}
-	return fallback
+	if strings.TrimSpace(req.Reason) != "" {
+		return strings.TrimSpace(req.Reason), nil
+	}
+	return fallback, nil
 }
 
 func accessLimit(r *http.Request, fallback int) int {
@@ -305,42 +353,29 @@ func (h *AuthHandlers) applyUserUpdate(id int64, req updateUserRequest, actorID 
 	}
 	updates := map[string]any{}
 	var reasonParts []string
+	var normalizedRole *string
 	if req.Disabled != nil {
+		updates["disabled"] = *req.Disabled
 		if *req.Disabled {
-			adminCount, err := h.users.CountAdmins()
-			if err != nil {
-				return nil, err
-			}
-			if before.Role == gormdb.DashboardRoleAdmin && adminCount <= 1 {
-				return nil, fmt.Errorf("cannot disable the last admin")
-			}
 			reasonParts = append(reasonParts, "disabled=true")
 		} else {
 			reasonParts = append(reasonParts, "disabled=false")
 		}
-		updates["disabled"] = *req.Disabled
 	}
 	if req.Role != nil {
 		role, err := gormdb.NormalizeDashboardRole(*req.Role)
 		if err != nil {
 			return nil, err
 		}
-		if role != gormdb.DashboardRoleAdmin {
-			adminCount, err := h.users.CountAdmins()
-			if err != nil {
-				return nil, err
-			}
-			if before.Role == gormdb.DashboardRoleAdmin && adminCount <= 1 {
-				return nil, fmt.Errorf("cannot demote the last admin")
-			}
-		}
+		normalizedRole = &role
 		updates["role"] = role
 		reasonParts = append(reasonParts, "role="+role)
 	}
 	if len(updates) == 0 {
 		return nil, fmt.Errorf("no updates provided")
 	}
-	if err := h.users.UpdateUser(id, updates); err != nil {
+	after, err := h.users.UpdateUserWithLastAdminGuard(id, normalizedRole, req.Disabled)
+	if err != nil {
 		return nil, err
 	}
 	if req.Disabled != nil && *req.Disabled {
@@ -351,10 +386,6 @@ func (h *AuthHandlers) applyUserUpdate(id int64, req updateUserRequest, actorID 
 		if err := h.sessions.DeleteUserSessions(id, actorID, reason); err != nil {
 			return nil, err
 		}
-	}
-	after, err := h.users.GetUserByID(id)
-	if err != nil {
-		return nil, err
 	}
 	if audit && h.access != nil {
 		action := "auth_user_updated"
@@ -635,31 +666,35 @@ func (h *AuthHandlers) handleRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 // checkRateLimit allows at most 5 login attempts per minute per IP.
-// Returns true when the attempt is permitted.
+// Returns true when the attempt is permitted while pruning stale IP entries so
+// the limiter map cannot grow forever.
 func (h *AuthHandlers) checkRateLimit(ip string) bool {
 	now := time.Now()
 	cutoff := now.Add(-time.Minute)
-	muKey := ip + ":mu"
-	muVal, _ := h.loginAttempts.LoadOrStore(muKey, &sync.Mutex{})
-	mu := muVal.(*sync.Mutex)
-	mu.Lock()
-	defer mu.Unlock()
 
-	attemptsKey := ip + ":attempts"
-	attemptsVal, _ := h.loginAttempts.LoadOrStore(attemptsKey, &[]time.Time{})
-	attempts := attemptsVal.(*[]time.Time)
+	h.loginAttemptsMu.Lock()
+	defer h.loginAttemptsMu.Unlock()
 
-	valid := (*attempts)[:0]
-	for _, t := range *attempts {
-		if t.After(cutoff) {
-			valid = append(valid, t)
+	for key, attempts := range h.loginAttempts {
+		valid := attempts[:0]
+		for _, t := range attempts {
+			if t.After(cutoff) {
+				valid = append(valid, t)
+			}
 		}
+		if len(valid) == 0 {
+			delete(h.loginAttempts, key)
+			continue
+		}
+		h.loginAttempts[key] = valid
 	}
-	if len(valid) >= 5 {
-		*attempts = valid
+
+	attempts := append([]time.Time(nil), h.loginAttempts[ip]...)
+	if len(attempts) >= 5 {
 		return false
 	}
-	*attempts = append(valid, now)
+	attempts = append(attempts, now)
+	h.loginAttempts[ip] = attempts
 	return true
 }
 
@@ -696,7 +731,7 @@ func (h *AuthHandlers) handleUpdateUser(w http.ResponseWriter, r *http.Request) 
 
 // handleAccessProviders returns the live auth-provider posture for the access page.
 func (h *AuthHandlers) handleAccessProviders(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := h.requireAccessSessionAdmin(w, r); !ok {
+	if !h.requireAccessSessionAdminRead(w, r) {
 		return
 	}
 	cfg := config.Get()
@@ -745,7 +780,7 @@ func (h *AuthHandlers) handleAccessCreateInvitation(w http.ResponseWriter, r *ht
 		writeAuthJSONError(w, http.StatusConflict, "invitation lifecycle is unavailable while auth is disabled")
 		return
 	}
-	email, role, expiresAt, err := parseCreateInvitationRequest(r)
+	email, role, expiresAt, err := parseAccessCreateInvitationRequest(r)
 	if err != nil {
 		writeAuthJSONError(w, http.StatusBadRequest, err.Error())
 		return
@@ -789,7 +824,7 @@ func (h *AuthHandlers) handleAccessCreateInvitation(w http.ResponseWriter, r *ht
 
 // handleAccessListInvitations returns lifecycle-managed invitations.
 func (h *AuthHandlers) handleAccessListInvitations(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := h.requireAccessSessionAdmin(w, r); !ok {
+	if !h.requireAccessSessionAdminRead(w, r) {
 		return
 	}
 	if !h.requireStores(w, false, false, false, true) {
@@ -827,7 +862,11 @@ func (h *AuthHandlers) handleAccessRevokeInvitation(w http.ResponseWriter, r *ht
 		}
 		return
 	}
-	reason := parseRevokeReason(r, "admin revoked invitation")
+	reason, err := parseRevokeReason(r, "admin revoked invitation")
+	if err != nil {
+		writeAuthJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	changed, err := h.invitations.RevokeInvitation(id, actorAuditID(actor), reason)
 	if err != nil {
 		switch {
@@ -856,7 +895,7 @@ func (h *AuthHandlers) handleAccessRevokeInvitation(w http.ResponseWriter, r *ht
 
 // handleAccessListUsers returns the access user table.
 func (h *AuthHandlers) handleAccessListUsers(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := h.requireAccessSessionAdmin(w, r); !ok {
+	if !h.requireAccessSessionAdminRead(w, r) {
 		return
 	}
 	if !h.requireStores(w, true, false, false, false) {
@@ -867,7 +906,7 @@ func (h *AuthHandlers) handleAccessListUsers(w http.ResponseWriter, r *http.Requ
 
 // handleAccessGetUserDrilldown returns the user detail side panel data.
 func (h *AuthHandlers) handleAccessGetUserDrilldown(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := h.requireAccessSessionAdmin(w, r); !ok {
+	if !h.requireAccessSessionAdminRead(w, r) {
 		return
 	}
 	if !h.requireStores(w, false, false, false, true) {
@@ -915,7 +954,7 @@ func (h *AuthHandlers) handleAccessUpdateUser(w http.ResponseWriter, r *http.Req
 
 // handleAccessListRoles returns the supported dashboard roles with live counts.
 func (h *AuthHandlers) handleAccessListRoles(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := h.requireAccessSessionAdmin(w, r); !ok {
+	if !h.requireAccessSessionAdminRead(w, r) {
 		return
 	}
 	if !h.requireStores(w, false, false, false, true) {
@@ -932,7 +971,7 @@ func (h *AuthHandlers) handleAccessListRoles(w http.ResponseWriter, r *http.Requ
 
 // handleAccessListSessions returns access sessions with lifecycle fields.
 func (h *AuthHandlers) handleAccessListSessions(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := h.requireAccessSessionAdmin(w, r); !ok {
+	if !h.requireAccessSessionAdminRead(w, r) {
 		return
 	}
 	if !h.requireStores(w, false, false, false, true) {
@@ -967,11 +1006,16 @@ func (h *AuthHandlers) handleAccessRevokeSession(w http.ResponseWriter, r *http.
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
 			writeAuthJSONError(w, http.StatusNotFound, "session not found")
 		} else {
+			log.Error().Err(err).Str("session_id", id).Msg("auth: failed to load session")
 			writeAuthJSONError(w, http.StatusInternalServerError, "failed to load session")
 		}
 		return
 	}
-	reason := parseRevokeReason(r, "admin revoked session")
+	reason, err := parseRevokeReason(r, "admin revoked session")
+	if err != nil {
+		writeAuthJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	changed, err := h.sessions.RevokeSession(id, actorAuditID(actor), reason)
 	if err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
@@ -997,7 +1041,7 @@ func (h *AuthHandlers) handleAccessRevokeSession(w http.ResponseWriter, r *http.
 
 // handleAccessListAudit returns the access/auth audit trail.
 func (h *AuthHandlers) handleAccessListAudit(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := h.requireAccessSessionAdmin(w, r); !ok {
+	if !h.requireAccessSessionAdminRead(w, r) {
 		return
 	}
 	if !h.requireStores(w, false, false, false, true) {

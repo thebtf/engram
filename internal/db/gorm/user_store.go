@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // UserStore provides CRUD operations for dashboard users.
@@ -86,4 +87,60 @@ func (s *UserStore) CountAdmins() (int64, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+// UpdateUserWithLastAdminGuard applies the requested role/disabled changes while
+// holding row locks on the target user and active admin set so concurrent
+// demote/disable operations cannot leave the system with zero active admins.
+func (s *UserStore) UpdateUserWithLastAdminGuard(id int64, role *string, disabled *bool) (*User, error) {
+	if id <= 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if role == nil && disabled == nil {
+		return nil, fmt.Errorf("no updates provided")
+	}
+	var updated User
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var adminIDs []int64
+		if err := tx.Model(&User{}).
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("role = ? AND disabled = false", DashboardRoleAdmin).
+			Order("id").
+			Pluck("id", &adminIDs).Error; err != nil {
+			return err
+		}
+
+		var current User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, id).Error; err != nil {
+			return err
+		}
+
+		revokingAdmin := !current.Disabled && current.Role == DashboardRoleAdmin && ((disabled != nil && *disabled) || (role != nil && *role != DashboardRoleAdmin))
+		if revokingAdmin && len(adminIDs) <= 1 {
+			if disabled != nil && *disabled {
+				return fmt.Errorf("cannot disable the last admin")
+			}
+			return fmt.Errorf("cannot demote the last admin")
+		}
+
+		updates := map[string]any{}
+		if disabled != nil {
+			updates["disabled"] = *disabled
+		}
+		if role != nil {
+			updates["role"] = *role
+		}
+		result := tx.Model(&User{}).Where("id = ?", id).Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return tx.First(&updated, id).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &updated, nil
 }

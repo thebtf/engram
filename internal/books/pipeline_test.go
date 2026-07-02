@@ -137,3 +137,52 @@ func TestPipeline_ProcessFailureMarksJobFailed(t *testing.T) {
 	require.NoError(t, docErr)
 	assert.Empty(t, docs, "failed extraction must not emit documents")
 }
+
+type fakeBooksStore struct {
+	statuses []booksdomain.Status
+	errors   []string
+}
+
+func (f *fakeBooksStore) Create(context.Context, string) (*booksdomain.Job, error) {
+	return &booksdomain.Job{ID: 1, Status: booksdomain.StatusPending}, nil
+}
+
+func (f *fakeBooksStore) GetStatus(context.Context, int64) (*booksdomain.Job, error) {
+	return &booksdomain.Job{ID: 1, Status: booksdomain.StatusPending}, nil
+}
+
+func (f *fakeBooksStore) UpdateStatus(_ context.Context, _ int64, status booksdomain.Status, errorMessage string) (*booksdomain.Job, error) {
+	f.statuses = append(f.statuses, status)
+	f.errors = append(f.errors, errorMessage)
+	return &booksdomain.Job{ID: 1, Status: status, Error: errorMessage}, nil
+}
+
+type fakeDocumentWriter struct {
+	creates      int
+	cleanupJobID int64
+	failAfter    int
+}
+
+func (f *fakeDocumentWriter) Create(context.Context, string, string, string, string, string, string) (int64, error) {
+	f.creates++
+	if f.failAfter > 0 && f.creates > f.failAfter {
+		return 0, fmt.Errorf("writer failure")
+	}
+	return int64(f.creates), nil
+}
+
+func (f *fakeDocumentWriter) DeleteBySourceBookJobID(_ context.Context, jobID int64) (int64, error) {
+	f.cleanupJobID = jobID
+	return int64(f.creates - 1), nil
+}
+
+func TestPipeline_ProcessFailureCleansPartialWrites(t *testing.T) {
+	store := &fakeBooksStore{}
+	writer := &fakeDocumentWriter{failAfter: 1}
+	pipeline := booksdomain.NewPipeline(store, writer)
+	content := "# Chapter 1\n\n" + strings.Repeat("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\n", 400) + "\n# Chapter 2\n\n" + strings.Repeat("nu xi omicron pi rho sigma tau upsilon phi chi psi omega\n", 400)
+	err := pipeline.Process(context.Background(), booksdomain.ProcessRequest{JobID: 7, SourceRef: "book.md", Content: content, Project: "engram", Author: "tester"})
+	require.Error(t, err)
+	require.Equal(t, int64(7), writer.cleanupJobID)
+	require.Contains(t, store.errors[len(store.errors)-1], "writer failure")
+}

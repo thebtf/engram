@@ -27,6 +27,46 @@ interface ApiBookJobResponse {
   documents_link?: string
 }
 
+function bookStatusEndpoint(jobID: string | number): string {
+  return `/api/books/${encodeURIComponent(String(jobID))}/status`
+}
+
+function jsonInit(method: 'POST', body?: unknown): RequestInit {
+  const init: RequestInit = { method }
+  if (body !== undefined) {
+    init.headers = { 'Content-Type': 'application/json' }
+    init.body = JSON.stringify(body)
+  }
+  return init
+}
+
+function parseBookJobPayload(
+  payload: ApiBookJobResponse,
+  path: string,
+  source: string,
+  method: 'GET' | 'POST',
+): OperatorBookJob {
+  if (!payload || typeof payload !== 'object' || (payload.id === undefined || payload.id === null)) {
+    throw new OperatorFetchError(`Invalid books payload from ${path}: expected job fields`, {
+      message: `Invalid books payload from ${path}: expected job fields`,
+      path,
+      method,
+      source,
+      retryable: false,
+    })
+  }
+  return {
+    id: String(payload.id),
+    status: typeof payload.status === 'string' ? payload.status : 'pending',
+    sourceRef: typeof payload.source_ref === 'string' ? payload.source_ref : '',
+    error: typeof payload.error === 'string' ? payload.error : '',
+    createdAt: typeof payload.created_at === 'string' ? payload.created_at : '',
+    updatedAt: typeof payload.updated_at === 'string' ? payload.updated_at : '',
+    documentsPathPrefix: typeof payload.documents_path_prefix === 'string' ? payload.documents_path_prefix : '',
+    documentsLink: typeof payload.documents_link === 'string' && payload.documents_link ? payload.documents_link : '/documents',
+  }
+}
+
 export interface CreateBookJobInput {
   sourceRef: string
   content: string
@@ -55,73 +95,17 @@ export interface OperatorBooksComposable {
   refreshJobStatus: () => Promise<void>
   ingestBook: (input: CreateBookJobInput) => Promise<OperatorMutationResult<OperatorBookJob>>
 }
-
-let booksPollTimer: number | null = null
-
-function jsonInit(method: 'POST', body?: unknown): RequestInit {
-  const init: RequestInit = { method }
-  if (body !== undefined) {
-    init.headers = { 'Content-Type': 'application/json' }
-    init.body = JSON.stringify(body)
-  }
-  return init
-}
-
-function bookStatusEndpoint(jobID: string) {
-  return `/api/books/${encodeURIComponent(jobID)}/status`
-}
-
-function mapBookJob(payload: ApiBookJobResponse): OperatorBookJob {
-  return {
-    id: String(payload.id ?? ''),
-    status: typeof payload.status === 'string' && payload.status.trim() ? payload.status : 'pending',
-    sourceRef: typeof payload.source_ref === 'string' ? payload.source_ref : '',
-    error: typeof payload.error === 'string' ? payload.error : '',
-    createdAt: typeof payload.created_at === 'string' ? payload.created_at : '',
-    updatedAt: typeof payload.updated_at === 'string' ? payload.updated_at : '',
-    documentsPathPrefix: typeof payload.documents_path_prefix === 'string' ? payload.documents_path_prefix : '',
-    documentsLink: typeof payload.documents_link === 'string' && payload.documents_link.trim() ? payload.documents_link : '/documents',
-  }
-}
-
-function parseBookJobPayload(
-  payload: ApiBookJobResponse,
-  path: string,
-  source: 'books-create' | 'books-status',
-  method: 'GET' | 'POST',
-): OperatorBookJob {
-  if (!payload || typeof payload !== 'object' || (payload.id === undefined || payload.id === null)) {
-    throw new OperatorFetchError(`Invalid books payload from ${path}: expected job fields`, {
-      message: `Invalid books payload from ${path}: expected job fields`,
-      source,
-      path,
-      method,
-      retryable: false,
-    })
-  }
-  const job = mapBookJob(payload)
-  if (!job.id) {
-    throw new OperatorFetchError(`Invalid books payload from ${path}: missing job id`, {
-      message: `Invalid books payload from ${path}: missing job id`,
-      source,
-      path,
-      method,
-      retryable: false,
-    })
-  }
-  return job
-}
-
-
-function clearBooksPollTimer() {
-  if (!import.meta.client) return
-  if (booksPollTimer !== null) {
-    window.clearTimeout(booksPollTimer)
-    booksPollTimer = null
-  }
-}
-
 export function useOperatorBooks(): OperatorBooksComposable {
+  let booksPollTimer: number | null = null
+
+  function clearBooksPollTimer() {
+    if (!import.meta.client) return
+    if (booksPollTimer !== null) {
+      window.clearTimeout(booksPollTimer)
+      booksPollTimer = null
+    }
+  }
+
   const createEvidence = endpointEvidence(BOOKS_CREATE_ENDPOINT, 'books-create')
   const currentJob = useState<OperatorBookJob | null>('live:books:current-job', () => null)
   const currentProject = useState<string>('live:books:current-project', () => DEFAULT_BOOKS_PROJECT)
@@ -150,6 +134,7 @@ export function useOperatorBooks(): OperatorBooksComposable {
     const query = params.toString()
     return query ? `${base}?${query}` : base
   })
+
 
   function statusEvidence(jobID: string) {
     return endpointEvidence(bookStatusEndpoint(jobID), 'books-status')

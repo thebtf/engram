@@ -137,6 +137,23 @@ func (f *fakeGraphNodeStore) Get(ctx context.Context, id int64, includePrivate b
 	return n, nil
 }
 
+func (f *fakeGraphNodeStore) ListByType(ctx context.Context, nodeType, project string, includePrivate bool) ([]models.KnowledgeNode, error) {
+	var out []models.KnowledgeNode
+	for _, node := range f.nodes {
+		if project != "" && node.Project != project {
+			continue
+		}
+		if nodeType != "" && node.NodeType != nodeType {
+			continue
+		}
+		if !includePrivate && node.PrivacyScope == "private" {
+			continue
+		}
+		out = append(out, *node)
+	}
+	return out, nil
+}
+
 func (f *fakeGraphNodeStore) SoftDelete(ctx context.Context, id int64) error {
 	if _, ok := f.nodes[id]; !ok {
 		return fmt.Errorf("knowledge_node %d not found", id)
@@ -161,6 +178,26 @@ func graphRouter(s *Service) *chi.Mux {
 	r.Delete("/api/graph/edges/{id}", s.handleDeleteGraphEdge)
 	r.Get("/api/graph/edges", s.handleGetGraphEdges)
 	return r
+}
+
+func TestHandlersGraph_ListNodesFiltersPrivate(t *testing.T) {
+	nodes := newFakeGraphNodeStore()
+	service := &Service{graphEnabled: true, graphNodeStoreSeam: nodes}
+	privateNode, err := nodes.Create(context.Background(), &models.KnowledgeNode{NodeType: "skill", ExternalRef: "private-skill", Project: "engram", PrivacyScope: "private"})
+	require.NoError(t, err)
+	_, err = nodes.Create(context.Background(), &models.KnowledgeNode{NodeType: "skill", ExternalRef: "shared-skill", Project: "engram", PrivacyScope: "project"})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodGet, "/api/graph/nodes?project=engram&node_type=skill", nil)
+	rec := httptest.NewRecorder()
+	service.handleGetGraphNodes(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var payload graphNodesResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	for _, node := range payload.Nodes {
+		if node.ID == privateNode.ID {
+			t.Fatalf("private node %d must not be listed", privateNode.ID)
+		}
+	}
 }
 
 func mustNode(t *testing.T, nodes *fakeGraphNodeStore, nodeType, ref, project string) int64 {

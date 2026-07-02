@@ -416,7 +416,7 @@ func (s *Service) handleGetGraphNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodes, err := store.ListByType(r.Context(), nodeType, project, true)
+	nodes, err := store.ListByType(r.Context(), nodeType, project, false)
 	if err != nil {
 		writeGraphError(w, http.StatusInternalServerError, "graph_read_failed", err.Error())
 		return

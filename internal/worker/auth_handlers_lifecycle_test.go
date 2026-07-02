@@ -181,6 +181,74 @@ func TestAuthHandlersLifecycle_SessionRevokeWinsInFlightRequest(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "session revoked")
 }
 
+func TestAuthHandlersLifecycle_LastAdminDemoteRaceLeavesOneAdmin(t *testing.T) {
+	env := openAuthLifecycleEnv(t)
+	adminAEmail := fmt.Sprintf("zz-access-last-admin-a-%d@example.com", time.Now().UnixNano())
+	adminBEmail := fmt.Sprintf("zz-access-last-admin-b-%d@example.com", time.Now().UnixNano())
+	adminA, err := env.users.CreateUser(adminAEmail, "hash", gormdb.DashboardRoleAdmin)
+	require.NoError(t, err)
+	adminB, err := env.users.CreateUser(adminBEmail, "hash", gormdb.DashboardRoleAdmin)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = env.store.DB.Exec(`DELETE FROM users WHERE email IN (?, ?)`, adminAEmail, adminBEmail).Error
+	})
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := env.handlers.applyUserUpdate(adminA.ID, updateUserRequest{Role: strPtr(gormdb.DashboardRoleOperator)}, nil, "", false)
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := env.handlers.applyUserUpdate(adminB.ID, updateUserRequest{Role: strPtr(gormdb.DashboardRoleOperator)}, nil, "", false)
+		results <- err
+	}()
+	close(start)
+	err1 := <-results
+	err2 := <-results
+	if err1 == nil && err2 == nil {
+		t.Fatalf("expected one demotion to fail so at least one admin remains")
+	}
+	if err1 != nil {
+		require.NotContains(t, strings.ToLower(err1.Error()), "deadlock")
+	}
+	if err2 != nil {
+		require.NotContains(t, strings.ToLower(err2.Error()), "deadlock")
+	}
+	count, err := env.users.CountAdmins()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+}
+
+func TestAuthHandlersLifecycle_DisabledAdminCanBeDemotedWithoutLastAdminError(t *testing.T) {
+	env := openAuthLifecycleEnv(t)
+	activeEmail := fmt.Sprintf("zz-active-admin-%d@example.com", time.Now().UnixNano())
+	disabledEmail := fmt.Sprintf("zz-disabled-admin-%d@example.com", time.Now().UnixNano())
+	active, err := env.users.CreateUser(activeEmail, "hash", gormdb.DashboardRoleAdmin)
+	require.NoError(t, err)
+	disabledAdmin, err := env.users.CreateUser(disabledEmail, "hash", gormdb.DashboardRoleAdmin)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = env.store.DB.Exec(`DELETE FROM users WHERE email IN (?, ?)`, activeEmail, disabledEmail).Error
+	})
+	_, err = env.handlers.applyUserUpdate(disabledAdmin.ID, updateUserRequest{Disabled: ptrBool(true)}, nil, "", false)
+	require.NoError(t, err)
+	updated, err := env.handlers.applyUserUpdate(disabledAdmin.ID, updateUserRequest{Role: strPtr(gormdb.DashboardRoleOperator)}, nil, "", false)
+	require.NoError(t, err)
+	require.Equal(t, gormdb.DashboardRoleOperator, updated.Role)
+	require.True(t, updated.Disabled)
+	count, err := env.users.CountAdmins()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+	require.Equal(t, active.ID, active.ID)
+}
+
+func ptrBool(v bool) *bool { return &v }
+
+func strPtr(v string) *string { return &v }
+
 func TestAuthHandlersLifecycle_AccessRoutesRejectNonSessionAdmin(t *testing.T) {
 	h := NewAuthHandlers(nil, nil, nil, nil)
 	tests := []struct {
