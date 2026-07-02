@@ -3,10 +3,12 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/pkg/models"
+	gormlib "gorm.io/gorm"
 )
 
 // nodesLister is the minimal NodesStore interface needed by filterEdgesByNodeType.
@@ -186,7 +188,8 @@ func (s *Server) graphAddEdge(ctx context.Context, a graphArgs) (string, error) 
 		NodeSourceID: nodeSourceID,
 		NodeTargetID: nodeTargetID,
 	}
-	created, err := s.graphStore.Create(ctx, edge)
+
+	created, err := graphCreateEdgeWithGuards(ctx, s.graphStore, s.nodesStore, s.memoryStore, edge)
 	if err != nil {
 		return "", err
 	}
@@ -208,6 +211,60 @@ func (s *Server) graphAddEdge(ctx context.Context, a graphArgs) (string, error) 
 		"edge_type":   created.EdgeType,
 		"message":     "edge created",
 	})
+}
+
+func (s *Server) mcpGraphEndpointExists(ctx context.Context, endpointType string, memoryID, nodeID int64) (bool, error) {
+	if endpointType == "node" {
+		if s.nodesStore == nil {
+			return false, fmt.Errorf("graph nodes store not available")
+		}
+		_, err := s.nodesStore.Get(ctx, nodeID, true)
+		if err != nil {
+			if errors.Is(err, gormlib.ErrRecordNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	}
+	if s.memoryStore == nil {
+		return false, fmt.Errorf("memory store not available")
+	}
+	_, err := s.memoryStore.Get(ctx, memoryID)
+	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Server) mcpGraphEdgeAlreadyExists(ctx context.Context, candidate graph.Edge) (bool, error) {
+	var (
+		existing []graph.Edge
+		err      error
+	)
+	if candidate.SourceType == "node" {
+		existing, err = s.graphStore.ListByNode(ctx, *candidate.NodeSourceID, graph.Outgoing, candidate.EdgeType)
+	} else {
+		existing, err = s.graphStore.ListByMemory(ctx, *candidate.SourceID, graph.Outgoing, candidate.EdgeType)
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, edge := range existing {
+		if edge.EdgeType == candidate.EdgeType && edge.SourceType == candidate.SourceType && edge.TargetType == candidate.TargetType {
+			sourceMatch := (edge.SourceID == nil && candidate.SourceID == nil) || (edge.SourceID != nil && candidate.SourceID != nil && *edge.SourceID == *candidate.SourceID)
+			targetMatch := (edge.TargetID == nil && candidate.TargetID == nil) || (edge.TargetID != nil && candidate.TargetID != nil && *edge.TargetID == *candidate.TargetID)
+			nodeSourceMatch := (edge.NodeSourceID == nil && candidate.NodeSourceID == nil) || (edge.NodeSourceID != nil && candidate.NodeSourceID != nil && *edge.NodeSourceID == *candidate.NodeSourceID)
+			nodeTargetMatch := (edge.NodeTargetID == nil && candidate.NodeTargetID == nil) || (edge.NodeTargetID != nil && candidate.NodeTargetID != nil && *edge.NodeTargetID == *candidate.NodeTargetID)
+			if sourceMatch && targetMatch && nodeSourceMatch && nodeTargetMatch {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // graphAddNode implements the add_node action (T014).
@@ -242,6 +299,8 @@ func (s *Server) graphAddNode(ctx context.Context, a graphArgs) (string, error) 
 		Project:      a.Project,
 		PrivacyScope: ps,
 	}
+	unlock := graph.LockWrites()
+	defer unlock()
 	created, err := s.nodesStore.Create(ctx, node)
 	if err != nil {
 		return "", fmt.Errorf("create node: %w", err)
@@ -259,6 +318,8 @@ func (s *Server) graphRemoveEdge(ctx context.Context, a graphArgs) (string, erro
 	if a.EdgeID == 0 {
 		return "", fmt.Errorf("edge_id required")
 	}
+	unlock := graph.LockWrites()
+	defer unlock()
 	if err := s.graphStore.SoftDelete(ctx, a.EdgeID); err != nil {
 		return "", err
 	}

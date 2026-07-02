@@ -451,6 +451,263 @@
       "unknownError": "unknown error"
     }
   },
+  "documents": {
+    "title": "Documents",
+    "subtitle": "Read live version history, compare revisions side by side, and keep operator comments on the current version thread.",
+    "filters": {
+      "project": "Project"
+    },
+    "actions": {
+      "refresh": "Refresh",
+      "selectedPath": "Selected path: {path}"
+    },
+    "state": {
+      "pending": "Loading documents…",
+      "error": "Could not load documents: {message}",
+      "empty": "The selected project has no versioned documents yet.",
+      "retry": "Retry"
+    },
+    "summary": {
+      "documents": "{count} document | {count} documents",
+      "versions": "{count} version | {count} versions",
+      "comments": "{count} comment | {count} comments",
+      "compareTitle": "Compare surface",
+      "compareEmpty": "Select a document to compare versions side by side.",
+      "compareSame": "Both compare panes currently show the same content hash.",
+      "compareDifferent": "Comparing version {left} against version {right}."
+    },
+    "list": {
+      "title": "Document paths",
+      "count": "{count} document | {count} documents",
+      "emptyTitle": "No documents",
+      "emptyBody": "Create or ingest a document to populate this project lane.",
+      "rowMeta": "v{version} · {docType} · {author} · {age}"
+    },
+    "history": {
+      "title": "Version history",
+      "count": "{count} version | {count} versions",
+      "noSelectionTitle": "No document selected",
+      "noSelectionBody": "Choose a document path to load live history.",
+      "pending": "Loading version history…",
+      "error": "Could not load version history: {message}",
+      "emptyTitle": "No history returned",
+      "emptyBody": "The document is listed, but the server returned no versions.",
+      "versionLabel": "Version {version}",
+      "versionMeta": "{author} · {age}",
+      "versionOption": "v{version} · {author}"
+    },
+    "compare": {
+      "title": "Compare",
+      "subtitle": "Two live reads from /api/documents/read rendered side by side.",
+      "noSelectionTitle": "No compare target",
+      "noSelectionBody": "Pick a document path first, then choose the two versions to inspect.",
+      "leftLabel": "Primary version",
+      "rightLabel": "Compared version",
+      "leftTitle": "Primary",
+      "rightTitle": "Compared",
+      "comparedVersion": "version {version}",
+      "pending": "Loading document content…",
+      "error": "Could not load document content: {message}",
+      "panelEmptyTitle": "Version not loaded",
+      "panelEmptyBody": "Choose a version from the history list.",
+      "metaVersion": "Version",
+      "metaAuthor": "Author",
+      "metaType": "Type",
+      "metaCreated": "Created",
+      "metaHash": "Hash"
+    },
+    "comments": {
+      "title": "Comments",
+      "count": "{count} comment | {count} comments",
+      "noSelectionTitle": "No comment thread",
+      "noSelectionBody": "Select a primary version to load its thread and add a new note.",
+      "threadFor": "Thread for version {version}",
+      "contentLabel": "Comment",
+      "contentPlaceholder": "What changed, what is risky, and what should the next operator verify?",
+      "lineStart": "Line start",
+      "lineEnd": "Line end",
+      "lineStartPlaceholder": "optional",
+      "lineEndPlaceholder": "optional",
+      "submit": "Add comment",
+      "submitting": "Adding comment…",
+      "pending": "Loading comments…",
+      "error": "Could not load comments: {message}",
+      "emptyTitle": "No comments yet",
+      "emptyBody": "Use the form above to anchor the first operator note to this version.",
+      "statusLabel": "status: {status}",
+      "lineRange": "lines {start}–{end}",
+      "invalidLine": "Line values must be positive integers.",
+      "invalidRange": "Line end must be greater than or equal to line start.",
+      "noticeSuccess": "Comment added to version {version}.",
+      "noticeError": "Could not add the comment: {message}",
+      "unknownError": "unknown error"
+    }
+  },
+  "graphPage": {
+    "title": "Knowledge graph",
+    "subtitle": "Inspect graph nodes and edges, create new links, and run live traverse/path reads from the operator console.",
+    "metrics": {
+      "nodes": "nodes in project",
+      "edges": "edges on selected node",
+      "selectedDegree": "selected degree"
+    },
+    "brief": {
+      "title": "Read + write graph bridge",
+      "body": "Mutations call the graph stores directly. Duplicate edges, orphan edges, and protected node deletes return typed errors instead of silent no-ops."
+    },
+    "filters": {
+      "project": "Graph project"
+    },
+    "state": {
+      "pending": "Loading graph data…",
+      "error": "Could not load graph data: {message}",
+      "empty": "This project has no graph nodes yet.",
+      "gated": "Graph is disabled by flag {flag}.",
+      "live": "Loaded {count} nodes from the live graph.",
+      "retry": "Retry"
+    },
+    "errors": {
+      "title": "Typed graph error",
+      "codes": {
+        "duplicate_edge": "An active edge with the same source, target, and type already exists.",
+        "node_has_live_in_edges": "This node still has live inbound edges. Enable cascade delete to remove the connected edges too.",
+        "orphan_edge": "The edge points at a node or memory that does not exist.",
+        "graph_disabled": "Graph writes are disabled because ENGRAM_GRAPH_ENABLED is off.",
+        "invalid_request": "Graph request is invalid: {message}",
+        "not_found": "The requested graph record was not found.",
+        "edge_create_failed": "Edge creation failed: {message}",
+        "edge_delete_failed": "Edge delete failed: {message}",
+        "node_create_failed": "Node creation failed: {message}",
+        "node_delete_failed": "Node delete failed: {message}",
+        "graph_lookup_failed": "Graph lookup failed: {message}",
+        "graph_read_failed": "Graph read failed: {message}"
+      }
+    },
+    "forms": {
+      "node": {
+        "title": "Create node",
+        "type": "Node type",
+        "externalRef": "External ref",
+        "externalRefPlaceholder": "skill name, file path, rule key…",
+        "privacy": "Privacy scope"
+      },
+      "edge": {
+        "title": "Create edge",
+        "source": "Source node ID",
+        "target": "Target node ID",
+        "nodeIdPlaceholder": "Enter a node ID from the project list",
+        "type": "Edge type",
+        "reasoning": "Reasoning",
+        "reasoningPlaceholder": "Why should this relation exist?"
+      },
+      "traverse": {
+        "title": "Traverse memory graph",
+        "memoryId": "Start memory ID",
+        "memoryPlaceholder": "Enter a memory row ID",
+        "depth": "Depth"
+      },
+      "path": {
+        "title": "Find memory path",
+        "sourceId": "Source memory ID",
+        "targetId": "Target memory ID",
+        "memoryPlaceholder": "Enter a memory row ID",
+        "maxDepth": "Max depth"
+      }
+    },
+    "actions": {
+      "refresh": "Refresh",
+      "createNode": "Create node",
+      "createEdge": "Create edge",
+      "deleteEdge": "Delete edge",
+      "confirmDeleteEdge": "Confirm edge delete",
+      "deleteNode": "Delete node",
+      "confirmDeleteNode": "Confirm node delete",
+      "deleteNodeCascade": "Cascade through connected edges",
+      "runTraverse": "Run traverse",
+      "findPath": "Find path",
+      "running": "Running…"
+    },
+    "sections": {
+      "nodes": "Project nodes",
+      "edges": "Connected edges",
+      "selected": "Selected node",
+      "traverse": "Traverse results",
+      "path": "Path results"
+    },
+    "empty": {
+      "nodesTitle": "No nodes yet",
+      "nodesBody": "Create a graph node for this project to begin linking knowledge.",
+      "edgesTitle": "No connected edges",
+      "edgesBody": "Pick a node or create a new edge to inspect the local graph shape.",
+      "traverseTitle": "No traverse results",
+      "traverseBody": "Run a memory traversal to inspect live graph hops.",
+      "pathTitle": "No path result",
+      "pathBody": "Run a path search between two memory IDs."
+    },
+    "detail": {
+      "nodeType": "node type",
+      "privacy": "privacy",
+      "updated": "updated"
+    },
+    "notices": {
+      "invalidNode": "Node type, project, and external ref are required.",
+      "nodeCreated": "Graph node created.",
+      "invalidEdge": "Both source and target node IDs are required.",
+      "edgeCreated": "Graph edge created.",
+      "edgeDeleted": "Graph edge deleted.",
+      "nodeDeleted": "Graph node deleted.",
+      "invalidTraverse": "A memory ID is required to run traversal.",
+      "invalidPath": "Both source and target memory IDs are required."
+    },
+    "nodeTypes": {
+      "project": "Project",
+      "repo": "Repo",
+      "skill": "Skill",
+      "agent": "Agent",
+      "rule": "Rule",
+      "hook": "Hook",
+      "session": "Session",
+      "file": "File",
+      "consumer": "Consumer",
+      "decision": "Decision",
+      "claim": "Claim",
+      "bug": "Bug",
+      "feature": "Feature"
+    },
+    "edgeTypes": {
+      "uses": "uses",
+      "depends_on": "depends on",
+      "supersedes": "supersedes",
+      "contradicts": "contradicts",
+      "caused": "caused",
+      "fixed_by": "fixed by",
+      "learned_from": "learned from",
+      "promoted_to": "promoted to",
+      "belongs_to": "belongs to",
+      "imports": "imports",
+      "modifies": "modifies",
+      "blocked_by": "blocked by",
+      "avoids": "avoids",
+      "succeeded_by": "succeeded by",
+      "synonym_of": "synonym of",
+      "same_concept_as": "same concept as"
+    },
+    "privacy": {
+      "private": "private",
+      "project": "project",
+      "shared": "shared",
+      "global": "global"
+    },
+    "selectedNode": "Selected: {node}",
+    "edgeNoReasoning": "No reasoning recorded",
+    "unknownNode": "unknown node #{id}",
+    "memoryRef": "memory #{id}",
+    "pathFound": "Path found with {hops} hops.",
+    "trace": {
+      "depth": "Depth {depth}",
+      "edge": "{source} — {type} → {target}"
+    }
+  },
 
   "rules": {
     "title": "Behavior rules",

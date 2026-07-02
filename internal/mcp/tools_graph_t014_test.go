@@ -9,6 +9,7 @@ import (
 
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/pkg/models"
+	gormlib "gorm.io/gorm"
 )
 
 // TestGraphTool_T014_AddEdgeAcceptsTypeParams verifies that the graphArgs struct
@@ -284,6 +285,203 @@ func TestGraphTool_T014_AddNodeOffline(t *testing.T) {
 		}
 		if resp == "" {
 			t.Error("expected non-empty JSON response")
+		}
+	})
+}
+
+type fakeGraphWriteStore struct {
+	edges       map[int64]*graph.Edge
+	nextID      int64
+	createCalls int
+}
+
+func newFakeGraphWriteStore() *fakeGraphWriteStore {
+	return &fakeGraphWriteStore{edges: map[int64]*graph.Edge{}}
+}
+
+func (f *fakeGraphWriteStore) Create(_ context.Context, edge *graph.Edge) (*graph.Edge, error) {
+	f.createCalls++
+	f.nextID++
+	cp := *edge
+	cp.ID = f.nextID
+	f.edges[cp.ID] = &cp
+	out := cp
+	return &out, nil
+}
+
+func (f *fakeGraphWriteStore) ListByMemory(_ context.Context, memoryID int64, dir graph.Direction, edgeType string) ([]graph.Edge, error) {
+	var out []graph.Edge
+	for _, edge := range f.edges {
+		sourceType := edge.SourceType
+		if sourceType == "" {
+			sourceType = "memory"
+		}
+		targetType := edge.TargetType
+		if targetType == "" {
+			targetType = "memory"
+		}
+		var match bool
+		switch dir {
+		case graph.Outgoing:
+			match = sourceType == "memory" && edge.SourceID != nil && *edge.SourceID == memoryID
+		case graph.Incoming:
+			match = targetType == "memory" && edge.TargetID != nil && *edge.TargetID == memoryID
+		default:
+			match = (sourceType == "memory" && edge.SourceID != nil && *edge.SourceID == memoryID) ||
+				(targetType == "memory" && edge.TargetID != nil && *edge.TargetID == memoryID)
+		}
+		if match && (edgeType == "" || edge.EdgeType == edgeType) {
+			out = append(out, *edge)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeGraphWriteStore) ListByNode(_ context.Context, nodeID int64, dir graph.Direction, edgeType string) ([]graph.Edge, error) {
+	var out []graph.Edge
+	for _, edge := range f.edges {
+		sourceType := edge.SourceType
+		if sourceType == "" {
+			sourceType = "memory"
+		}
+		targetType := edge.TargetType
+		if targetType == "" {
+			targetType = "memory"
+		}
+		var match bool
+		switch dir {
+		case graph.Outgoing:
+			match = sourceType == "node" && edge.NodeSourceID != nil && *edge.NodeSourceID == nodeID
+		case graph.Incoming:
+			match = targetType == "node" && edge.NodeTargetID != nil && *edge.NodeTargetID == nodeID
+		default:
+			match = (sourceType == "node" && edge.NodeSourceID != nil && *edge.NodeSourceID == nodeID) ||
+				(targetType == "node" && edge.NodeTargetID != nil && *edge.NodeTargetID == nodeID)
+		}
+		if match && (edgeType == "" || edge.EdgeType == edgeType) {
+			out = append(out, *edge)
+		}
+	}
+	return out, nil
+}
+
+type fakeGraphNodesLookup struct {
+	nodes map[int64]models.KnowledgeNode
+}
+
+func (f *fakeGraphNodesLookup) Create(_ context.Context, node *models.KnowledgeNode) (*models.KnowledgeNode, error) {
+	out := *node
+	if out.ID == 0 {
+		out.ID = int64(len(f.nodes) + 1)
+	}
+	if f.nodes == nil {
+		f.nodes = map[int64]models.KnowledgeNode{}
+	}
+	f.nodes[out.ID] = out
+	return &out, nil
+}
+
+func (f *fakeGraphNodesLookup) ListByType(_ context.Context, _, _ string, _ bool) ([]models.KnowledgeNode, error) {
+	return nil, nil
+}
+
+func (f *fakeGraphNodesLookup) Get(_ context.Context, id int64, _ bool) (*models.KnowledgeNode, error) {
+	if node, ok := f.nodes[id]; ok {
+		return &node, nil
+	}
+	return nil, fmt.Errorf("lookup node %d: %w", id, gormlib.ErrRecordNotFound)
+}
+
+type fakeGraphMemoryLookup struct {
+	memories map[int64]models.Memory
+}
+
+func (f *fakeGraphMemoryLookup) Get(_ context.Context, id int64) (*models.Memory, error) {
+	if memory, ok := f.memories[id]; ok {
+		return &memory, nil
+	}
+	return nil, fmt.Errorf("lookup memory %d: %w", id, gormlib.ErrRecordNotFound)
+}
+
+func TestGraphTool_T014_AddEdgeGuardsOffline(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("duplicate edge rejected before create", func(t *testing.T) {
+		sourceID, targetID := int64(10), int64(20)
+		edges := newFakeGraphWriteStore()
+		edges.edges[1] = &graph.Edge{ID: 1, SourceType: "node", TargetType: "node", NodeSourceID: &sourceID, NodeTargetID: &targetID, EdgeType: graph.EdgeUses, Weight: 1}
+		nodes := &fakeGraphNodesLookup{nodes: map[int64]models.KnowledgeNode{
+			sourceID: {ID: sourceID, NodeType: models.NodeTypeSkill},
+			targetID: {ID: targetID, NodeType: models.NodeTypeSkill},
+		}}
+
+		_, err := graphCreateEdgeWithGuards(ctx, edges, nodes, nil, &graph.Edge{SourceType: "node", TargetType: "node", NodeSourceID: &sourceID, NodeTargetID: &targetID, EdgeType: graph.EdgeUses, Weight: 1})
+		if err == nil {
+			t.Fatal("expected duplicate-edge error, got nil")
+		}
+		if !strings.Contains(err.Error(), "duplicate_edge") {
+			t.Fatalf("expected duplicate_edge error, got: %v", err)
+		}
+		if edges.createCalls != 0 {
+			t.Fatalf("duplicate edge must be rejected before Create; createCalls=%d", edges.createCalls)
+		}
+	})
+
+	t.Run("orphan edge rejected before create", func(t *testing.T) {
+		sourceID, targetID := int64(11), int64(99)
+		edges := newFakeGraphWriteStore()
+		nodes := &fakeGraphNodesLookup{nodes: map[int64]models.KnowledgeNode{
+			sourceID: {ID: sourceID, NodeType: models.NodeTypeSkill},
+		}}
+
+		_, err := graphCreateEdgeWithGuards(ctx, edges, nodes, nil, &graph.Edge{SourceType: "node", TargetType: "node", NodeSourceID: &sourceID, NodeTargetID: &targetID, EdgeType: graph.EdgeUses, Weight: 1})
+		if err == nil {
+			t.Fatal("expected orphan-edge error, got nil")
+		}
+		if !strings.Contains(err.Error(), "orphan_edge") {
+			t.Fatalf("expected orphan_edge error, got: %v", err)
+		}
+		if edges.createCalls != 0 {
+			t.Fatalf("orphan edge must be rejected before Create; createCalls=%d", edges.createCalls)
+		}
+	})
+
+	t.Run("memory orphan edge rejected before create", func(t *testing.T) {
+		sourceID, targetID := int64(31), int64(999)
+		edges := newFakeGraphWriteStore()
+		memories := &fakeGraphMemoryLookup{memories: map[int64]models.Memory{
+			sourceID: {ID: sourceID, Project: "test-project", Content: "source memory"},
+		}}
+
+		_, err := graphCreateEdgeWithGuards(ctx, edges, nil, memories, &graph.Edge{SourceType: "memory", TargetType: "memory", SourceID: &sourceID, TargetID: &targetID, EdgeType: graph.EdgeUses, Weight: 1})
+		if err == nil {
+			t.Fatal("expected orphan-edge error for missing memory target, got nil")
+		}
+		if !strings.Contains(err.Error(), "orphan_edge") {
+			t.Fatalf("expected orphan_edge error, got: %v", err)
+		}
+		if edges.createCalls != 0 {
+			t.Fatalf("orphan memory edge must be rejected before Create; createCalls=%d", edges.createCalls)
+		}
+	})
+
+	t.Run("valid edge creates exactly once", func(t *testing.T) {
+		sourceID, targetID := int64(21), int64(22)
+		edges := newFakeGraphWriteStore()
+		nodes := &fakeGraphNodesLookup{nodes: map[int64]models.KnowledgeNode{
+			sourceID: {ID: sourceID, NodeType: models.NodeTypeSkill},
+			targetID: {ID: targetID, NodeType: models.NodeTypeRule},
+		}}
+
+		created, err := graphCreateEdgeWithGuards(ctx, edges, nodes, nil, &graph.Edge{SourceType: "node", TargetType: "node", NodeSourceID: &sourceID, NodeTargetID: &targetID, EdgeType: graph.EdgeUses, Weight: 1})
+		if err != nil {
+			t.Fatalf("unexpected error creating valid edge: %v", err)
+		}
+		if created == nil || created.ID == 0 {
+			t.Fatalf("expected created edge with non-zero id, got %#v", created)
+		}
+		if edges.createCalls != 1 {
+			t.Fatalf("valid edge must call Create exactly once; createCalls=%d", edges.createCalls)
 		}
 	})
 }

@@ -451,6 +451,263 @@
       "unknownError": "未知错误"
     }
   },
+  "documents": {
+    "title": "文档",
+    "subtitle": "查看实时版本历史，左右并排比较两个修订，并为当前版本维护操作员评论线程。",
+    "filters": {
+      "project": "项目"
+    },
+    "actions": {
+      "refresh": "刷新",
+      "selectedPath": "当前路径：{path}"
+    },
+    "state": {
+      "pending": "正在加载文档…",
+      "error": "无法加载文档：{message}",
+      "empty": "当前所选项目还没有 versioned documents。",
+      "retry": "重试"
+    },
+    "summary": {
+      "documents": "{count} 个文档",
+      "versions": "{count} 个版本",
+      "comments": "{count} 条评论",
+      "compareTitle": "对比视图",
+      "compareEmpty": "先选择一个文档，再并排比较两个版本。",
+      "compareSame": "当前两个对比面板显示的是同一个内容 hash。",
+      "compareDifferent": "正在比较版本 {left} 与版本 {right}。"
+    },
+    "list": {
+      "title": "文档路径",
+      "count": "{count} 个文档",
+      "emptyTitle": "没有文档",
+      "emptyBody": "请创建或导入文档来填充这个项目分区。",
+      "rowMeta": "v{version} · {docType} · {author} · {age}"
+    },
+    "history": {
+      "title": "版本历史",
+      "count": "{count} 个版本",
+      "noSelectionTitle": "尚未选择文档",
+      "noSelectionBody": "请选择一个文档路径以加载实时历史。",
+      "pending": "正在加载版本历史…",
+      "error": "无法加载版本历史：{message}",
+      "emptyTitle": "没有返回历史",
+      "emptyBody": "列表中有该文档，但服务器没有返回任何版本。",
+      "versionLabel": "版本 {version}",
+      "versionMeta": "{author} · {age}",
+      "versionOption": "v{version} · {author}"
+    },
+    "compare": {
+      "title": "比较",
+      "subtitle": "从 /api/documents/read 读取两个实时版本并并排渲染。",
+      "noSelectionTitle": "没有可比较的目标",
+      "noSelectionBody": "先选择文档路径，再选择两个要检查的版本。",
+      "leftLabel": "主版本",
+      "rightLabel": "对比版本",
+      "leftTitle": "主版本",
+      "rightTitle": "对比版本",
+      "comparedVersion": "版本 {version}",
+      "pending": "正在加载文档内容…",
+      "error": "无法加载文档内容：{message}",
+      "panelEmptyTitle": "版本尚未加载",
+      "panelEmptyBody": "请从历史列表中选择一个版本。",
+      "metaVersion": "版本",
+      "metaAuthor": "作者",
+      "metaType": "类型",
+      "metaCreated": "创建时间",
+      "metaHash": "Hash"
+    },
+    "comments": {
+      "title": "评论",
+      "count": "{count} 条评论",
+      "noSelectionTitle": "没有评论线程",
+      "noSelectionBody": "选择主版本后，才能加载它的线程并添加新备注。",
+      "threadFor": "版本 {version} 的线程",
+      "contentLabel": "评论",
+      "contentPlaceholder": "这里改了什么、风险在哪里、下一个操作员需要验证什么？",
+      "lineStart": "起始行",
+      "lineEnd": "结束行",
+      "lineStartPlaceholder": "可选",
+      "lineEndPlaceholder": "可选",
+      "submit": "添加评论",
+      "submitting": "正在添加评论…",
+      "pending": "正在加载评论…",
+      "error": "无法加载评论：{message}",
+      "emptyTitle": "还没有评论",
+      "emptyBody": "使用上面的表单，把第一条操作员备注绑定到这个版本。",
+      "statusLabel": "状态：{status}",
+      "lineRange": "第 {start}–{end} 行",
+      "invalidLine": "行号必须是正整数。",
+      "invalidRange": "结束行必须大于或等于起始行。",
+      "noticeSuccess": "评论已添加到版本 {version}。",
+      "noticeError": "无法添加评论：{message}",
+      "unknownError": "未知错误"
+    }
+  },
+  "graphPage": {
+    "title": "知识图谱",
+    "subtitle": "在 operator console 中查看图节点与边，创建新关系，并运行实时 traverse/path 读取。",
+    "metrics": {
+      "nodes": "项目节点数",
+      "edges": "选中节点的边数",
+      "selectedDegree": "选中节点度数"
+    },
+    "brief": {
+      "title": "读写 REST 桥",
+      "body": "变更直接调用 graph stores。重复边、孤儿边、以及未级联的受保护节点删除都会返回 typed errors，而不是 silent no-op。"
+    },
+    "filters": {
+      "project": "图谱项目"
+    },
+    "state": {
+      "pending": "正在加载图谱数据…",
+      "error": "无法加载图谱数据：{message}",
+      "empty": "该项目还没有 graph nodes。",
+      "gated": "图谱被 flag {flag} 关闭。",
+      "live": "已从实时图谱加载 {count} 个节点。",
+      "retry": "重试"
+    },
+    "errors": {
+      "title": "类型化图谱错误",
+      "codes": {
+        "duplicate_edge": "相同 source、target 与 type 的活动边已经存在。",
+        "node_has_live_in_edges": "该节点仍有活动入边。若要同时删除相关边，请启用级联删除。",
+        "orphan_edge": "该边指向不存在的节点或 memory。",
+        "graph_disabled": "因 ENGRAM_GRAPH_ENABLED 关闭，图谱写入被禁用。",
+        "invalid_request": "图谱请求无效：{message}",
+        "not_found": "未找到请求的图谱记录。",
+        "edge_create_failed": "创建边失败：{message}",
+        "edge_delete_failed": "删除边失败：{message}",
+        "node_create_failed": "创建节点失败：{message}",
+        "node_delete_failed": "删除节点失败：{message}",
+        "graph_lookup_failed": "图谱查找失败：{message}",
+        "graph_read_failed": "图谱读取失败：{message}"
+      }
+    },
+    "forms": {
+      "node": {
+        "title": "创建节点",
+        "type": "节点类型",
+        "externalRef": "外部 ref",
+        "externalRefPlaceholder": "技能名、文件路径、规则键…",
+        "privacy": "隐私范围"
+      },
+      "edge": {
+        "title": "创建边",
+        "source": "源节点 ID",
+        "target": "目标节点 ID",
+        "nodeIdPlaceholder": "输入项目列表中的节点 ID",
+        "type": "边类型",
+        "reasoning": "理由",
+        "reasoningPlaceholder": "为什么这条关系应该存在？"
+      },
+      "traverse": {
+        "title": "遍历 memory 图谱",
+        "memoryId": "起始 memory ID",
+        "memoryPlaceholder": "输入 memory 行 ID",
+        "depth": "深度"
+      },
+      "path": {
+        "title": "查找 memory 路径",
+        "sourceId": "源 memory ID",
+        "targetId": "目标 memory ID",
+        "memoryPlaceholder": "输入 memory 行 ID",
+        "maxDepth": "最大深度"
+      }
+    },
+    "actions": {
+      "refresh": "刷新",
+      "createNode": "创建节点",
+      "createEdge": "创建边",
+      "deleteEdge": "删除边",
+      "confirmDeleteEdge": "确认删除边",
+      "deleteNode": "删除节点",
+      "confirmDeleteNode": "确认删除节点",
+      "deleteNodeCascade": "级联删除关联边",
+      "runTraverse": "运行 traverse",
+      "findPath": "查找路径",
+      "running": "执行中…"
+    },
+    "sections": {
+      "nodes": "项目节点",
+      "edges": "关联边",
+      "selected": "已选节点",
+      "traverse": "Traverse 结果",
+      "path": "路径结果"
+    },
+    "empty": {
+      "nodesTitle": "还没有节点",
+      "nodesBody": "请先为该项目创建 graph node，再开始连接知识。",
+      "edgesTitle": "还没有关联边",
+      "edgesBody": "选择一个节点，或先创建新边以查看局部图结构。",
+      "traverseTitle": "没有 traverse 结果",
+      "traverseBody": "运行 memory 遍历以查看实时图谱跳数。",
+      "pathTitle": "没有路径结果",
+      "pathBody": "在两个 memory ID 之间运行路径搜索。"
+    },
+    "detail": {
+      "nodeType": "节点类型",
+      "privacy": "隐私",
+      "updated": "更新时间"
+    },
+    "notices": {
+      "invalidNode": "必须提供节点类型、项目与外部 ref。",
+      "nodeCreated": "图节点已创建。",
+      "invalidEdge": "必须提供 source 与 target 节点 ID。",
+      "edgeCreated": "图边已创建。",
+      "edgeDeleted": "图边已删除。",
+      "nodeDeleted": "图节点已删除。",
+      "invalidTraverse": "运行 traverse 需要 memory ID。",
+      "invalidPath": "运行 path 需要 source 与 target memory IDs。"
+    },
+    "nodeTypes": {
+      "project": "项目",
+      "repo": "仓库",
+      "skill": "技能",
+      "agent": "代理",
+      "rule": "规则",
+      "hook": "钩子",
+      "session": "会话",
+      "file": "文件",
+      "consumer": "消费者",
+      "decision": "决策",
+      "claim": "断言",
+      "bug": "缺陷",
+      "feature": "功能"
+    },
+    "edgeTypes": {
+      "uses": "使用",
+      "depends_on": "依赖于",
+      "supersedes": "取代",
+      "contradicts": "矛盾于",
+      "caused": "导致",
+      "fixed_by": "由…修复",
+      "learned_from": "学习自",
+      "promoted_to": "提升到",
+      "belongs_to": "属于",
+      "imports": "导入",
+      "modifies": "修改",
+      "blocked_by": "被阻塞于",
+      "avoids": "避免",
+      "succeeded_by": "后继为",
+      "synonym_of": "同义于",
+      "same_concept_as": "同一概念"
+    },
+    "privacy": {
+      "private": "private",
+      "project": "project",
+      "shared": "shared",
+      "global": "global"
+    },
+    "selectedNode": "已选：{node}",
+    "edgeNoReasoning": "没有记录理由",
+    "unknownNode": "未知节点 #{id}",
+    "memoryRef": "memory #{id}",
+    "pathFound": "已找到路径，共 {hops} 跳。",
+    "trace": {
+      "depth": "深度 {depth}",
+      "edge": "{source} — {type} → {target}"
+    }
+  },
 
   "rules": {
     "title": "行为规则",

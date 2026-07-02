@@ -139,8 +139,11 @@ type Service struct {
 	injectionLogStore                *gorm.InjectionLogStore
 	candidateStore                   *gorm.CandidateStore         // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	candidateQueueEnabled            bool                         // cached at startup; handlers must not read env per request
+	graphEnabled                     bool                         // cached at startup; graph REST handlers must not read env per request
 	candidateReviewStoreSeam         candidateReviewStore         // test seam for REST candidate queue handlers
 	candidateReviewSnapshotStoreSeam candidateReviewSnapshotStore // test seam for candidate pre-action snapshots
+	graphEdgeStoreSeam               graphEdgeStore               // test seam for graph REST handlers
+	graphNodeStoreSeam               graphNodeStore               // test seam for graph REST handlers
 	snapshotStore                    *gorm.SnapshotStore          // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	writelintTokenStore              writelint.TokenStore         // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	redactionRules                   []redaction.CompiledRule     // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
@@ -168,6 +171,7 @@ type Service struct {
 	issueStore                  *gorm.IssueStore
 	credentialStore             *gorm.CredentialStore
 	memoryStore                 *gorm.MemoryStore
+	documentStore               versionedDocumentStore
 	memoryStoreSeam             memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
 	stateStore                  statePlane
 	experienceProvider          experienceHistoryProvider
@@ -186,6 +190,7 @@ type Service struct {
 	rerankClient                *reranking.Client
 	promotionStore              *gorm.PromotionStore
 	graphStore                  *graph.Store
+	graphNodeStore              *graph.NodesStore
 	vaultOnce                   sync.Once
 	vaultErr                    error
 	promptCache                 sync.Map // map[int64]promptCacheEntry — last user prompt per session
@@ -496,6 +501,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		backfillTracker:       newBackfillTracker(),
 		cachedObsCounts:       make(map[string]cachedCount),
 		candidateQueueEnabled: candidateQueueEnabledFromEnv(),
+		graphEnabled:          graphEnabledFromEnv(),
 		statsCacheTTL:         time.Minute,
 		mcpHealth:             mcp.NewMCPHealth(),
 		eventBus:              &projectevents.Bus{},
@@ -774,6 +780,9 @@ func (s *Service) initializeAsync() {
 
 	// Wire versioned document store into MCP server for collaborative document tools.
 	mcpServer.SetVersionedDocumentStore(versionedDocumentStore)
+	s.initMu.Lock()
+	s.documentStore = versionedDocumentStore
+	s.initMu.Unlock()
 
 	mcpServer.SetIssueStore(issueStore)
 
@@ -820,6 +829,7 @@ func (s *Service) initializeAsync() {
 	s.initMu.Lock()
 	s.promotionStore = promotionStore
 	s.graphStore = graphStore
+	s.graphNodeStore = nodesStore
 	s.initMu.Unlock()
 
 	// TG5: Wire write-lint orchestrator + redaction rules into MCP server.
@@ -1471,6 +1481,23 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/memories/{id}/suppress", s.handleSuppressMemoryByID)
 		r.Delete("/api/memories/{id}", s.handleDeleteMemoryByID)
 
+		// Knowledge graph bridge (CR-002 graph lane)
+		r.Get("/api/graph/nodes", s.handleGetGraphNodes)
+		r.Post("/api/graph/nodes", s.handleCreateGraphNode)
+		r.Delete("/api/graph/nodes/{id}", s.handleDeleteGraphNode)
+		r.Get("/api/graph/edges", s.handleGetGraphEdges)
+		r.Post("/api/graph/edges", s.handleCreateGraphEdge)
+		r.Delete("/api/graph/edges/{id}", s.handleDeleteGraphEdge)
+		r.Get("/api/graph/traverse", s.handleTraverseGraph)
+		r.Get("/api/graph/find-path", s.handleFindGraphPath)
+
+		// Versioned documents bridge (CR-002 documents lane)
+		r.Get("/api/documents", s.handleListDocuments)
+		r.Post("/api/documents", s.handleCreateDocument)
+		r.Get("/api/documents/read", s.handleReadDocument)
+		r.Get("/api/documents/history", s.handleDocumentHistory)
+		r.Get("/api/documents/comments", s.handleListDocumentComments)
+		r.Post("/api/documents/comment", s.handleAddDocumentComment)
 		// Behavioral rules management
 		r.Get("/api/rules", s.handleListBehavioralRules)
 		r.Post("/api/rules", s.handleCreateBehavioralRule)
@@ -2110,6 +2137,8 @@ type graphStoreAdapter struct {
 }
 
 func (a *graphStoreAdapter) CreateEdge(ctx context.Context, sourceID, targetID int64, edgeType, reasoning string) error {
+	unlock := graph.LockWrites()
+	defer unlock()
 	e := &graph.Edge{
 		SourceID:  &sourceID,
 		TargetID:  &targetID,

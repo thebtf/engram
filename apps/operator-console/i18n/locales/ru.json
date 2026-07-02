@@ -451,6 +451,263 @@
       "unknownError": "неизвестная ошибка"
     }
   },
+  "documents": {
+    "title": "Документы",
+    "subtitle": "Смотрите живую историю версий, сравнивайте редакции бок о бок и ведите операторские комментарии по текущей версии.",
+    "filters": {
+      "project": "Проект"
+    },
+    "actions": {
+      "refresh": "Обновить",
+      "selectedPath": "Выбранный путь: {path}"
+    },
+    "state": {
+      "pending": "Загружаем документы…",
+      "error": "Не удалось загрузить документы: {message}",
+      "empty": "Для выбранного проекта пока нет versioned documents.",
+      "retry": "Повторить"
+    },
+    "summary": {
+      "documents": "{count} документ | {count} документа | {count} документов",
+      "versions": "{count} версия | {count} версии | {count} версий",
+      "comments": "{count} комментарий | {count} комментария | {count} комментариев",
+      "compareTitle": "Поверхность сравнения",
+      "compareEmpty": "Выберите документ, чтобы сравнить версии бок о бок.",
+      "compareSame": "Обе панели сравнения сейчас показывают один и тот же content hash.",
+      "compareDifferent": "Сравниваем версию {left} с версией {right}."
+    },
+    "list": {
+      "title": "Пути документов",
+      "count": "{count} документ | {count} документа | {count} документов",
+      "emptyTitle": "Документов нет",
+      "emptyBody": "Создайте или загрузите документ, чтобы заполнить этот проектный поток.",
+      "rowMeta": "v{version} · {docType} · {author} · {age}"
+    },
+    "history": {
+      "title": "История версий",
+      "count": "{count} версия | {count} версии | {count} версий",
+      "noSelectionTitle": "Документ не выбран",
+      "noSelectionBody": "Выберите путь документа, чтобы загрузить живую историю.",
+      "pending": "Загружаем историю версий…",
+      "error": "Не удалось загрузить историю версий: {message}",
+      "emptyTitle": "История не вернулась",
+      "emptyBody": "Документ есть в списке, но сервер не вернул ни одной версии.",
+      "versionLabel": "Версия {version}",
+      "versionMeta": "{author} · {age}",
+      "versionOption": "v{version} · {author}"
+    },
+    "compare": {
+      "title": "Сравнение",
+      "subtitle": "Два live-read из /api/documents/read, показанные рядом.",
+      "noSelectionTitle": "Нет цели для сравнения",
+      "noSelectionBody": "Сначала выберите путь документа, затем две версии для проверки.",
+      "leftLabel": "Основная версия",
+      "rightLabel": "Сравниваемая версия",
+      "leftTitle": "Основная",
+      "rightTitle": "Сравниваемая",
+      "comparedVersion": "версия {version}",
+      "pending": "Загружаем содержимое документа…",
+      "error": "Не удалось загрузить содержимое документа: {message}",
+      "panelEmptyTitle": "Версия не загружена",
+      "panelEmptyBody": "Выберите версию из истории.",
+      "metaVersion": "Версия",
+      "metaAuthor": "Автор",
+      "metaType": "Тип",
+      "metaCreated": "Создано",
+      "metaHash": "Хеш"
+    },
+    "comments": {
+      "title": "Комментарии",
+      "count": "{count} комментарий | {count} комментария | {count} комментариев",
+      "noSelectionTitle": "Нет ветки комментариев",
+      "noSelectionBody": "Выберите основную версию, чтобы загрузить её ветку и добавить новую заметку.",
+      "threadFor": "Ветка для версии {version}",
+      "contentLabel": "Комментарий",
+      "contentPlaceholder": "Что изменилось, где риск, и что следующему оператору нужно проверить?",
+      "lineStart": "Начальная строка",
+      "lineEnd": "Конечная строка",
+      "lineStartPlaceholder": "необязательно",
+      "lineEndPlaceholder": "необязательно",
+      "submit": "Добавить комментарий",
+      "submitting": "Добавляем комментарий…",
+      "pending": "Загружаем комментарии…",
+      "error": "Не удалось загрузить комментарии: {message}",
+      "emptyTitle": "Комментариев пока нет",
+      "emptyBody": "Используйте форму выше, чтобы привязать первую операторскую заметку к этой версии.",
+      "statusLabel": "статус: {status}",
+      "lineRange": "строки {start}–{end}",
+      "invalidLine": "Номера строк должны быть положительными целыми числами.",
+      "invalidRange": "Конечная строка должна быть больше или равна начальной.",
+      "noticeSuccess": "Комментарий добавлен к версии {version}.",
+      "noticeError": "Не удалось добавить комментарий: {message}",
+      "unknownError": "неизвестная ошибка"
+    }
+  },
+  "graphPage": {
+    "title": "Граф знаний",
+    "subtitle": "Смотрите узлы и связи графа, создавайте новые ребра и запускайте live traverse/path прямо из operator console.",
+    "metrics": {
+      "nodes": "узлов в проекте",
+      "edges": "связей у выбранного узла",
+      "selectedDegree": "степень выбранного"
+    },
+    "brief": {
+      "title": "REST-мост чтения и записи",
+      "body": "Мутации идут напрямую в graph stores. Дубликаты ребер, orphan-edge и удаление узла с живыми входящими связями возвращают typed errors вместо silent no-op."
+    },
+    "filters": {
+      "project": "Проект графа"
+    },
+    "state": {
+      "pending": "Загружаем граф…",
+      "error": "Не удалось загрузить граф: {message}",
+      "empty": "В этом проекте пока нет graph nodes.",
+      "gated": "Граф отключен флагом {flag}.",
+      "live": "Из живого графа загружено {count} узлов.",
+      "retry": "Повторить"
+    },
+    "errors": {
+      "title": "Типизированная ошибка графа",
+      "codes": {
+        "duplicate_edge": "Активное ребро с таким source, target и type уже существует.",
+        "node_has_live_in_edges": "У узла есть живые входящие связи. Включите cascade delete, чтобы удалить и связанные ребра.",
+        "orphan_edge": "Ребро ссылается на несуществующий узел или memory.",
+        "graph_disabled": "Запись в граф отключена, потому что ENGRAM_GRAPH_ENABLED выключен.",
+        "invalid_request": "Некорректный запрос к графу: {message}",
+        "not_found": "Запрошенная запись графа не найдена.",
+        "edge_create_failed": "Не удалось создать ребро: {message}",
+        "edge_delete_failed": "Не удалось удалить ребро: {message}",
+        "node_create_failed": "Не удалось создать узел: {message}",
+        "node_delete_failed": "Не удалось удалить узел: {message}",
+        "graph_lookup_failed": "Ошибка поиска в графе: {message}",
+        "graph_read_failed": "Ошибка чтения графа: {message}"
+      }
+    },
+    "forms": {
+      "node": {
+        "title": "Создать узел",
+        "type": "Тип узла",
+        "externalRef": "Внешний ref",
+        "externalRefPlaceholder": "имя навыка, путь к файлу, ключ правила…",
+        "privacy": "Область приватности"
+      },
+      "edge": {
+        "title": "Создать ребро",
+        "source": "ID исходного узла",
+        "target": "ID целевого узла",
+        "nodeIdPlaceholder": "Введите ID узла из списка проекта",
+        "type": "Тип ребра",
+        "reasoning": "Обоснование",
+        "reasoningPlaceholder": "Почему эта связь должна существовать?"
+      },
+      "traverse": {
+        "title": "Traverse по memory",
+        "memoryId": "Стартовый memory ID",
+        "memoryPlaceholder": "Введите ID записи памяти",
+        "depth": "Глубина"
+      },
+      "path": {
+        "title": "Найти путь между memories",
+        "sourceId": "Source memory ID",
+        "targetId": "Target memory ID",
+        "memoryPlaceholder": "Введите ID записи памяти",
+        "maxDepth": "Макс. глубина"
+      }
+    },
+    "actions": {
+      "refresh": "Обновить",
+      "createNode": "Создать узел",
+      "createEdge": "Создать ребро",
+      "deleteEdge": "Удалить ребро",
+      "confirmDeleteEdge": "Подтвердить удаление ребра",
+      "deleteNode": "Удалить узел",
+      "confirmDeleteNode": "Подтвердить удаление узла",
+      "deleteNodeCascade": "Каскадно удалить связанные ребра",
+      "runTraverse": "Запустить traverse",
+      "findPath": "Найти путь",
+      "running": "Выполняем…"
+    },
+    "sections": {
+      "nodes": "Узлы проекта",
+      "edges": "Связанные ребра",
+      "selected": "Выбранный узел",
+      "traverse": "Результаты traverse",
+      "path": "Результаты path"
+    },
+    "empty": {
+      "nodesTitle": "Узлов пока нет",
+      "nodesBody": "Создайте graph node для этого проекта, чтобы начать связывать знания.",
+      "edgesTitle": "Связей пока нет",
+      "edgesBody": "Выберите узел или создайте новое ребро, чтобы увидеть локальную форму графа.",
+      "traverseTitle": "Нет результатов traverse",
+      "traverseBody": "Запустите обход по memory ID, чтобы увидеть live hops графа.",
+      "pathTitle": "Нет результата path",
+      "pathBody": "Запустите поиск пути между двумя memory IDs."
+    },
+    "detail": {
+      "nodeType": "тип узла",
+      "privacy": "приватность",
+      "updated": "обновлено"
+    },
+    "notices": {
+      "invalidNode": "Нужны тип узла, проект и внешний ref.",
+      "nodeCreated": "Узел графа создан.",
+      "invalidEdge": "Нужны source и target node IDs.",
+      "edgeCreated": "Ребро графа создано.",
+      "edgeDeleted": "Ребро графа удалено.",
+      "nodeDeleted": "Узел графа удален.",
+      "invalidTraverse": "Для traverse нужен memory ID.",
+      "invalidPath": "Для path нужны source и target memory IDs."
+    },
+    "nodeTypes": {
+      "project": "Проект",
+      "repo": "Репозиторий",
+      "skill": "Навык",
+      "agent": "Агент",
+      "rule": "Правило",
+      "hook": "Хук",
+      "session": "Сессия",
+      "file": "Файл",
+      "consumer": "Потребитель",
+      "decision": "Решение",
+      "claim": "Утверждение",
+      "bug": "Баг",
+      "feature": "Фича"
+    },
+    "edgeTypes": {
+      "uses": "использует",
+      "depends_on": "зависит от",
+      "supersedes": "заменяет",
+      "contradicts": "противоречит",
+      "caused": "вызвало",
+      "fixed_by": "исправлено через",
+      "learned_from": "извлечено из",
+      "promoted_to": "повышено до",
+      "belongs_to": "принадлежит",
+      "imports": "импортирует",
+      "modifies": "изменяет",
+      "blocked_by": "заблокировано",
+      "avoids": "избегает",
+      "succeeded_by": "заменено на",
+      "synonym_of": "синоним",
+      "same_concept_as": "тот же концепт"
+    },
+    "privacy": {
+      "private": "private",
+      "project": "project",
+      "shared": "shared",
+      "global": "global"
+    },
+    "selectedNode": "Выбрано: {node}",
+    "edgeNoReasoning": "Обоснование не записано",
+    "unknownNode": "неизвестный узел #{id}",
+    "memoryRef": "memory #{id}",
+    "pathFound": "Путь найден, переходов: {hops}.",
+    "trace": {
+      "depth": "Глубина {depth}",
+      "edge": "{source} — {type} → {target}"
+    }
+  },
 
   "rules": {
     "title": "Правила поведения",

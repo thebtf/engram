@@ -1,0 +1,97 @@
+{
+  "task_id": "G002",
+  "change_id": "CR-002-stub-milestone-1",
+  "task_group": "Task Group 2 - User Story 10 - Explore and Edit the Knowledge Graph",
+  "checked_at": "2026-07-02T02:04:59+00:00",
+  "worktree": "D:\\Dev\\engram\\.claude\\worktrees\\oc-cr002-stub-milestone-1",
+  "branch": "worktree-oc-cr002-stub-milestone-1",
+  "overall_status": "PASS_WITH_KNOWN_GAPS",
+  "ac_checks": [
+    {
+      "task_id": "T004",
+      "status": "PASS",
+      "checks": [
+        {"name": "graph handler regression draft exists", "status": "PASS", "evidence": "internal/worker/handlers_graph_test.go"},
+        {"name": "duplicate edge rejected", "status": "PASS", "evidence": "TestHandlersGraph_CreateEdge_RejectsDuplicate"},
+        {"name": "in-edge guarded delete rejected without cascade", "status": "PASS", "evidence": "TestHandlersGraph_DeleteNode_RejectsWithoutCascadeWhenInEdgesLive"},
+        {"name": "orphan edge rejected", "status": "PASS", "evidence": "TestHandlersGraph_CreateEdge_RejectsOrphanTarget"},
+        {"name": "valid create delete succeeds", "status": "PASS", "evidence": "TestHandlersGraph_CreateAndDeleteEdge_Succeeds"},
+        {"name": "flag-off gated before store", "status": "PASS", "evidence": "TestHandlersGraph_GatedBeforeStore"}
+      ]
+    },
+    {
+      "task_id": "T005",
+      "status": "PASS",
+      "checks": [
+        {"name": "docker compose passes ENGRAM_GRAPH_ENABLED", "status": "PASS", "evidence": "docker-compose.yml:55-60"},
+        {"name": "env example documents ENGRAM_GRAPH_ENABLED=false", "status": "PASS", "evidence": ".env.example:57-63"}
+      ]
+    },
+    {
+      "task_id": "T006",
+      "status": "PASS",
+      "checks": [
+        {"name": "REST graph handlers added", "status": "PASS", "evidence": "internal/worker/handlers_graph.go"},
+        {"name": "routes registered for nodes edges traverse path", "status": "PASS", "evidence": "internal/worker/service.go:1486-1494"},
+        {"name": "REST path calls graph stores directly", "status": "PASS", "evidence": "handlers_graph.go import block has internal/graph only; no internal/mcp import"},
+        {"name": "MCP graph add_edge uses graphCreateEdgeWithGuards", "status": "PASS", "evidence": "internal/mcp/tools_graph.go:180-203, internal/mcp/tools_graph_guards.go"},
+        {"name": "write serialization present", "status": "PASS", "evidence": "internal/graph/write_lock.go plus REST/MCP callers"}
+      ]
+    },
+    {
+      "task_id": "T007",
+      "status": "PASS",
+      "checks": [
+        {"name": "graph page no longer stub", "status": "PASS", "evidence": "apps/operator-console/pages/graph.vue replaces SectionStub with live graph workspace"},
+        {"name": "graph composable wired to /api/graph/*", "status": "PASS", "evidence": "apps/operator-console/composables/useOperatorGraph.ts"},
+        {"name": "typed graph errors surfaced to UI", "status": "PASS", "evidence": "graphErrorFromThrown + mutationErrorText + page notices"},
+        {"name": "gated graph state is honest", "status": "PASS", "evidence": "/api/flags preflight plus disabled/short-circuited traverse/path controls when gated"},
+        {"name": "graph parity row updated to interactive", "status": "PASS", "evidence": "apps/operator-console/PARITY.json:28"},
+        {"name": "graph i18n keys added in ru/en/zh", "status": "PASS", "evidence": "apps/operator-console/i18n/locales/{en,ru,zh}.json graphPage sections"}
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "name": "graph_handlers_tests",
+      "command": "go test ./internal/worker/... -run TestHandlersGraph",
+      "cwd": "D:\\Dev\\engram\\.claude\\worktrees\\oc-cr002-stub-milestone-1",
+      "exit_code": 0,
+      "stdout_summary": "ok github.com/thebtf/engram/internal/worker",
+      "stderr_summary": ""
+    },
+    {
+      "name": "graph_mcp_guard_tests",
+      "command": "go test ./internal/mcp/... -run TestGraphTool_T014",
+      "cwd": "D:\\Dev\\engram\\.claude\\worktrees\\oc-cr002-stub-milestone-1",
+      "exit_code": 0,
+      "stdout_summary": "ok github.com/thebtf/engram/internal/mcp",
+      "stderr_summary": ""
+    },
+    {
+      "name": "operator_parity",
+      "command": "npm run parity",
+      "cwd": "D:\\Dev\\engram\\.claude\\worktrees\\oc-cr002-stub-milestone-1\\apps\\operator-console",
+      "exit_code": 0,
+      "stdout_summary": "design_version in sync; graph parity row interactive; parity-check passed",
+      "stderr_summary": ""
+    },
+    {
+      "name": "full_backend_build_test",
+      "command": "go build ./... && go test ./... && git diff --check",
+      "cwd": "D:\\Dev\\engram\\.claude\\worktrees\\oc-cr002-stub-milestone-1",
+      "exit_code": 0,
+      "stdout_summary": "oc-cr002-full-backend-verification-ok",
+      "stderr_summary": "CRLF warnings only"
+    }
+  ],
+  "review": {
+    "graph_scout": "PASS - CR002GraphReviewPrep traps were applied during verification.",
+    "graph_local_review": "PASS - initial blockers (null empty graph reads and MCP orphan/duplicate bypass) were patched and re-inspected locally.",
+    "combined_graph_docs_review": "PENDING_FRESH_CONFIRMATION - earlier review found two blockers which were patched locally; current lane proceeds with local verification while awaiting refreshed reviewer confirmation."
+  },
+  "known_gaps": [
+    "No dedicated browser spec exists for graph yet; verification relied on backend tests, parity, and direct source inspection of honest gated/typed-error UI wiring.",
+    "If the deployment ever runs multiple worker processes against the same DB, duplicate-edge safety would still benefit from DB-level uniqueness or stronger transactional locking beyond the in-process mutex."
+  ]
+}
