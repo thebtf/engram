@@ -1,0 +1,75 @@
+{
+  "task_id": "G003",
+  "change_id": "CR-002-stub-milestone-1",
+  "task_group": "Task Group 3 - User Story 11 - Track Document Versions",
+  "checked_at": "2026-07-02T02:04:59+00:00",
+  "worktree": "D:\\Dev\\engram\\.claude\\worktrees\\oc-cr002-stub-milestone-1",
+  "branch": "worktree-oc-cr002-stub-milestone-1",
+  "overall_status": "PASS_WITH_KNOWN_GAPS",
+  "ac_checks": [
+    {
+      "task_id": "T008",
+      "status": "PASS",
+      "checks": [
+        {"name": "documents bridge regression draft exists", "status": "PASS", "evidence": "internal/worker/handlers_documents_test.go"},
+        {"name": "create/list/history/comment call store directly", "status": "PASS", "evidence": "TestHandlersDocuments_Create/List/History/AddComment and fakeDocumentStore call recording"},
+        {"name": "read/comments/store-unavailable support present", "status": "PASS", "evidence": "handlers_documents_test.go additional read/comments/unavailable coverage used by documents page"}
+      ]
+    },
+    {
+      "task_id": "T009",
+      "status": "PASS",
+      "checks": [
+        {"name": "REST document handlers implemented", "status": "PASS", "evidence": "internal/worker/handlers_documents.go"},
+        {"name": "routes registered under /api/documents/*", "status": "PASS", "evidence": "internal/worker/service.go:1496-1502"},
+        {"name": "REST path calls VersionedDocumentStore directly", "status": "PASS", "evidence": "handlers_documents.go import block has direct store use and no internal/mcp imports"}
+      ]
+    },
+    {
+      "task_id": "T010",
+      "status": "PASS",
+      "checks": [
+        {"name": "documents page no longer stub", "status": "PASS", "evidence": "apps/operator-console/pages/documents.vue replaces SectionStub with live documents workspace"},
+        {"name": "documents composable wired to /api/documents/*", "status": "PASS", "evidence": "apps/operator-console/composables/useOperatorDocuments.ts"},
+        {"name": "history compare and comment UI wired", "status": "PASS", "evidence": "documents.vue compare panes + comments form + composable addComment/read/history flow"},
+        {"name": "comments pinned to current version thread", "status": "PASS", "evidence": "useOperatorDocuments refreshHistory/openDocument/addComment + documents.vue thread label now bind comments to history[0] current version"},
+        {"name": "documents parity row updated to interactive", "status": "PASS", "evidence": "apps/operator-console/PARITY.json:34"},
+        {"name": "documents i18n keys added in ru/en/zh", "status": "PASS", "evidence": "apps/operator-console/i18n/locales/{en,ru,zh}.json documents sections"}
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "name": "documents_handlers_tests",
+      "command": "go test ./internal/worker/... -run TestHandlersDocuments",
+      "cwd": "D:\\Dev\\engram\\.claude\\worktrees\\oc-cr002-stub-milestone-1",
+      "exit_code": 0,
+      "stdout_summary": "ok github.com/thebtf/engram/internal/worker",
+      "stderr_summary": ""
+    },
+    {
+      "name": "operator_parity",
+      "command": "npm run parity",
+      "cwd": "D:\\Dev\\engram\\.claude\\worktrees\\oc-cr002-stub-milestone-1\\apps\\operator-console",
+      "exit_code": 0,
+      "stdout_summary": "design_version in sync; documents parity row interactive; parity-check passed",
+      "stderr_summary": ""
+    },
+    {
+      "name": "full_backend_build_test",
+      "command": "go build ./... && go test ./... && git diff --check",
+      "cwd": "D:\\Dev\\engram\\.claude\\worktrees\\oc-cr002-stub-milestone-1",
+      "exit_code": 0,
+      "stdout_summary": "oc-cr002-full-backend-verification-ok",
+      "stderr_summary": "CRLF warnings only"
+    }
+  ],
+  "review": {
+    "documents_local_review": "PASS - initial blocker (comments pinned to selected compare version) was patched and re-inspected locally.",
+    "combined_graph_docs_review": "PENDING_FRESH_CONFIRMATION - earlier review found graph/docs blockers which were patched locally; current lane proceeds with local verification while awaiting refreshed reviewer confirmation."
+  },
+  "known_gaps": [
+    "No dedicated browser spec exists for documents yet; verification relied on backend tests, parity, and direct source inspection of history/compare/comment wiring.",
+    "Create flow still uses direct REST payloads without a dedicated modal, and line-anchored comment edit/delete remains future surface as recorded in PARITY.json."
+  ]
+}

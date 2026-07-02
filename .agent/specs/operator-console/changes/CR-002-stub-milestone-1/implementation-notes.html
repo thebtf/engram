@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Implementation Notes — CR-002-stub-milestone-1 (operator-console)</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:960px;margin:2rem auto;padding:0 1rem;line-height:1.5}
+h1,h2{border-bottom:1px solid #ccc;padding-bottom:.3rem}
+table{border-collapse:collapse;width:100%;margin:1rem 0}
+th,td{border:1px solid #ccc;padding:.4rem .6rem;text-align:left;vertical-align:top}
+th{background:#f0f0f0}
+.tag{display:inline-block;padding:.1rem .5rem;border-radius:3px;font-size:.85em;font-weight:600}
+.decision{background:#dbeafe}
+.gap{background:#fef3c7}
+.tradeoff{background:#fce7f3}
+.evidence{background:#dcfce7}
+.needs-amend{background:#fecaca}
+code{background:#f5f5f5;padding:.1rem .3rem;border-radius:2px}
+</style>
+</head>
+<body>
+<h1>Implementation Notes — CR-002-stub-milestone-1</h1>
+<p><strong>Feature:</strong> ENG-OC-1 operator-console &middot; <strong>CR:</strong> CR-002-stub-milestone-1 &middot;
+<strong>Worktree:</strong> D:\Dev\engram\.claude\worktrees\oc-cr002-stub-milestone-1 &middot; <strong>Branch:</strong> worktree-oc-cr002-stub-milestone-1</p>
+<p><strong>Tasks:</strong> T001-T021, G001-G005 &middot; <strong>Order:</strong> queue &rarr; graph &rarr; documents &rarr; access &rarr; books</p>
+
+<h2>Live Log</h2>
+<table>
+<tr><th>Time</th><th>Tag</th><th>Note</th></tr>
+<tr><td>2026-07-02 start</td><td class="decision">decision</td><td>Worktree created via EnterWorktree tool (not manual <code>git worktree add</code>) — session-managed lifecycle, exit via ExitWorktree with keep/remove decision at handoff.</td></tr>
+<tr><td>2026-07-02T03:17:09+03:00</td><td class="gap">gap</td><td>Task Group 1 (queue) started with <code>apps/operator-console/pages/queue.vue</code>, <code>apps/operator-console/composables/useOperatorQueue.ts</code>, <code>apps/operator-console/PARITY.json</code>, and ru/en/zh queue locale sections already GREEN-implemented; T001 <code>scripts/operator-console-smoke/queue.ps1</code> was authored afterward as a static-assertion regression guard. This is tests-after coverage, not true TDD RED-before-GREEN, and remains recorded as a source-driven-development/tdd process gap.</td></tr>
+<tr><td>2026-07-02T04:00Z</td><td class="decision">decision</td><td>Task Group 2 (graph) and Task Group 3 (documents) were intentionally split into parallel makers. When <code>handlers_documents_test.go</code> blocked package compilation during graph integration, I kept graph scope isolated and spawned a separate documents lane instead of broadening graph ownership.</td></tr>
+<tr><td>2026-07-02T04:40Z</td><td class="tradeoff">tradeoff</td><td>Shared files (<code>internal/worker/service.go</code>, locale JSONs, PARITY) were allowed to settle under the documents lane before final graph commit sequencing. This favored correctness over early partial commits in the single shared worktree.</td></tr>
+<tr><td>2026-07-02T05:10Z</td><td class="decision">decision</td><td>Graph read paths were made honest for flag-off and empty-state scenarios: <code>useOperatorGraph.ts</code> now treats <code>null</code> traverse/path arrays as valid empty reads, and graph page traverse/path controls disable/short-circuit while gated so the UI does not degrade into 403-backed fake-live behavior.</td></tr>
+<tr><td>2026-07-02T05:35Z</td><td class="decision">decision</td><td>MCP graph writes were aligned with REST guardrails by routing <code>graphAddEdge</code> through <code>graphCreateEdgeWithGuards(...)</code> so duplicate-edge/orphan-edge checks and the write mutex apply consistently across exposed mutation surfaces.</td></tr>
+<tr><td>2026-07-02T05:55Z</td><td class="decision">decision</td><td>Documents comments were pinned to the latest/current version thread rather than whichever compare version was selected. Compare panes remain independently selectable, but comment load/post now stays on the current version to match the page copy and avoid cross-document version-number collisions.</td></tr>
+<tr><td>2026-07-02T06:20Z</td><td class="decision">decision</td><td>T016 migration-only checkpoint was verified separately from the queue/graph/documents bundle. <code>booksJobsMigration155()</code> is additive-only and registered in the migration chain, but it is not treated as closing G005 or authorizing books pipeline work yet.</td></tr>
+<tr><td>2026-07-02T07:10Z</td><td class="decision">decision</td><td>T015 books chunker spike completed with verdict <strong>PASS-WITH-ADAPTER</strong>. Books pipeline should reuse <code>internal/chunking/markdown.Chunker</code> through a thin books-side adapter, not the extension-driven manager path and not <code>internal/codeindex.ChunkFile</code> as the primary prose chunker.</td></tr>
+<tr><td>2026-07-02T08:20Z</td><td class="decision">decision</td><td>Access lane chose the <code>/api/access/*</code> route family as the operator-console surface while preserving the legacy <code>/api/admin/*</code> endpoints. The new bridge remains direct-to-store/domain and does not route through <code>internal/mcp</code> handlers.</td></tr>
+<tr><td>2026-07-02T08:35Z</td><td class="decision">decision</td><td>Invite consumption moved to one transaction in <code>DomainOwnerStore.RegisterUserFromInvitation</code>; revoke paths moved to soft-revoke + audit semantics, and duplicate revoke audit is suppressed by logging only when lifecycle state actually changes.</td></tr>
+<tr><td>2026-07-02T08:50Z</td><td class="decision">decision</td><td>Access UI now treats 401/403 lifecycle failures as a locked/auth-required state instead of a fake-live surface. Local auth lock stays latched until refresh returns clean, so revoked/expired browser sessions cannot keep live mutation controls on screen.</td></tr>
+</table>
+
+<h2>Spec Gaps Discovered</h2>
+<table>
+<tr><th>Time</th><th>Gap</th><th>Resolution</th></tr>
+<tr><td>2026-07-02T04:00Z</td><td><code>handlers_documents_test.go</code> existed before the documents bridge and blocked package compilation for graph verification.</td><td>Resolved by splitting a parallel documents lane (T008-T010) instead of polluting graph scope. Shared-file sequencing was coordinated via IRC.</td></tr>
+<tr><td>2026-07-02T06:20Z</td><td><code>go run ./tools/gen-data-model</code> completed after T016, but <code>docs/arch/DATA_MODEL.md</code> showed no textual <code>books_jobs</code> diff in this worktree.</td><td>Recorded as a visible generator/parser discrepancy; the unchanged doc file was restored so the worktree stays honest. Books lane remains blocked on broader TG5 implementation, not on a fake doc diff.</td></tr>
+<tr><td>2026-07-02T07:10Z</td><td>Whether books should fork a new chunker or reuse an existing one remained unresolved before TG5.</td><td>Resolved by the spike report at <code>.agent/specs/operator-console/changes/CR-002-stub-milestone-1/books-chunker-spike.md</code>: reuse the Markdown chunker with a thin adapter that normalizes extracted prose and guards the long-single-chapter case.</td></tr>
+<tr><td>2026-07-02T08:20Z</td><td>Access lane needed a new route family while the stub page still advertised <code>/api/access/users</code> and the backend only exposed legacy <code>/api/admin/*</code>.</td><td>Resolved by wiring a real <code>/api/access/*</code> bridge in <code>internal/worker/service.go</code> and keeping the page/composable on that same prefix.</td></tr>
+</table>
+
+<h2>Tradeoffs</h2>
+<table>
+<tr><th>Time</th><th>Tradeoff</th><th>Rationale</th></tr>
+<tr><td>2026-07-02T04:40Z</td><td>Hold graph commit until shared-file documents pass settled</td><td>Avoided committing mixed, partially-owned locale/service changes from the single worktree; documents handback was awaited before final combined lane acceptance.</td></tr>
+<tr><td>2026-07-02T06:20Z</td><td>Review/commit T016 before broader CR-002 UI lanes</td><td>Chosen to preserve the PM-issued checkpoint ordering while still allowing graph/documents verification to continue in parallel. Only the additive migration registration is in scope; no books pipeline/UI work is implied.</td></tr>
+<tr><td>2026-07-02T08:35Z</td><td>Keep legacy admin routes while adding access bridge</td><td>Chosen to preserve backward compatibility for old admin surfaces while shipping the new access console as the honest operator-facing route family.</td></tr>
+</table>
+
+<h2>Changed Assumptions</h2>
+<table>
+<tr><th>Time</th><th>Assumption</th><th>New evidence</th></tr>
+<tr><td>2026-07-02T05:10Z</td><td>Graph empty traverse/path reads would arrive as <code>null</code> arrays from the backend and the current frontend treated them as invalid payloads.</td><td>Frontend parse functions and gated controls were updated; focused graph tests, parity, and full backend verification then passed.</td></tr>
+<tr><td>2026-07-02T07:10Z</td><td>Books chunking might require a brand-new algorithm.</td><td>T015 reduced that assumption to PASS-WITH-ADAPTER: the reusable markdown chunker already preserves heading/paragraph boundaries, but caller-side adaptation is required because manager dispatch is extension-based and oversize chunks can be skipped.</td></tr>
+<tr><td>2026-07-02T08:50Z</td><td>Mutation failures could be treated as generic errors and leave stale live controls on screen.</td><td>Changed assumption after review: 401/403 must become a locked/auth-required UI state immediately, even before a follow-up refresh completes cleanly.</td></tr>
+</table>
+
+<h2>Verification Evidence</h2>
+<table>
+<tr><th>Gate</th><th>Command</th><th>Result</th></tr>
+<tr><td>G002/G003</td><td><code>go test ./internal/worker/... -run "TestHandlers(Graph|Documents)"</code>; <code>go test ./internal/mcp/... -run TestGraphTool_T014</code>; <code>cd apps/operator-console; npm run parity</code></td><td>PASS — graph/docs focused backend checks and parity green after the final guardrail fixes.</td></tr>
+<tr><td>CR-002 bundle</td><td><code>go build ./...</code>; <code>go test ./...</code>; <code>git diff --check</code></td><td>PASS — full backend verification green after graph/docs patch loop. Warnings were CRLF-only.</td></tr>
+<tr><td>T016 checkpoint</td><td><code>go run ./tools/gen-data-model</code>; <code>go test ./internal/db/gorm/...</code>; <code>go build ./...</code>; <code>git diff --check</code></td><td>PASS — migration registration checkpoint green; `docs/arch/DATA_MODEL.md` produced no textual books_jobs diff and was restored.</td></tr>
+<tr><td>T015 spike</td><td><code>books-chunker-spike.md</code> + provenance sidecar + task log</td><td>PASS-WITH-ADAPTER — no production code changed; verdict binds TG5 sequencing.</td></tr>
+<tr><td>G004</td><td><code>go run ./tools/gen-data-model</code>; <code>go test ./internal/db/gorm/... ./internal/worker/... -run "TestMigrations_AccessMilestone|TestAuthHandlersLifecycle" -count=3</code>; <code>cd apps/operator-console; npm run parity</code>; <code>go build ./...</code>; <code>go test ./...</code>; <code>git diff --check</code></td><td>PASS — access migration/store/handler/page/composable bundle verified after final auth-lock and idempotent revoke fixes.</td></tr>
+</table>
+
+<h2>Needs Amend Signals</h2>
+<table>
+<tr><th>Time</th><th>Signal</th><th>Status</th></tr>
+</table>
+
+</body>
+</html>

@@ -17,15 +17,15 @@ import (
 // It stores versioned document content for AI agent collaboration workflows.
 // Named VersionedDocument to avoid collision with the RAG Document model in models.go.
 type VersionedDocument struct {
-	ID          int64  `gorm:"primaryKey;autoIncrement"`
-	Path        string `gorm:"not null"`
-	Project     string `gorm:"not null"`
-	Version     int    `gorm:"not null;default:1"`
-	Content     string `gorm:"not null"`
-	ContentHash string `gorm:"column:content_hash;not null"`
-	DocType     string `gorm:"column:doc_type;not null;default:markdown"`
-	Metadata    string `gorm:"type:jsonb;default:'{}'"`
-	Author      string `gorm:"not null"`
+	ID          int64     `gorm:"primaryKey;autoIncrement"`
+	Path        string    `gorm:"not null"`
+	Project     string    `gorm:"not null"`
+	Version     int       `gorm:"not null;default:1"`
+	Content     string    `gorm:"not null"`
+	ContentHash string    `gorm:"column:content_hash;not null"`
+	DocType     string    `gorm:"column:doc_type;not null;default:markdown"`
+	Metadata    string    `gorm:"type:jsonb;default:'{}'"`
+	Author      string    `gorm:"not null"`
 	CreatedAt   time.Time `gorm:"column:created_at;not null;autoCreateTime"`
 }
 
@@ -34,13 +34,13 @@ func (VersionedDocument) TableName() string { return "versioned_documents" }
 
 // VersionedDocumentComment is the GORM model for the document_comments table.
 type VersionedDocumentComment struct {
-	ID         int64  `gorm:"primaryKey;autoIncrement"`
-	DocumentID int64  `gorm:"column:document_id;not null"`
-	Author     string `gorm:"not null"`
-	Content    string `gorm:"not null"`
-	LineStart  *int   `gorm:"column:line_start"`
-	LineEnd    *int   `gorm:"column:line_end"`
-	Status     string `gorm:"not null;default:open"`
+	ID         int64     `gorm:"primaryKey;autoIncrement"`
+	DocumentID int64     `gorm:"column:document_id;not null"`
+	Author     string    `gorm:"not null"`
+	Content    string    `gorm:"not null"`
+	LineStart  *int      `gorm:"column:line_start"`
+	LineEnd    *int      `gorm:"column:line_end"`
+	Status     string    `gorm:"not null;default:open"`
 	CreatedAt  time.Time `gorm:"column:created_at;not null;autoCreateTime"`
 }
 
@@ -173,6 +173,21 @@ func (s *VersionedDocumentStore) List(ctx context.Context, project, docType, pat
 		return nil, fmt.Errorf("versioned_document_store: list: %w", err)
 	}
 	return docs, nil
+}
+
+// DeleteBySourceBookJobID removes versioned documents whose metadata points at the given books job.
+func (s *VersionedDocumentStore) DeleteBySourceBookJobID(ctx context.Context, jobID int64) (int64, error) {
+	if jobID <= 0 {
+		return 0, fmt.Errorf("versioned_document_store: delete by source_book_job_id: invalid job id %d", jobID)
+	}
+	filter := fmt.Sprintf(`{"source_book_job_id":%d}`, jobID)
+	result := s.db.WithContext(ctx).
+		Where("metadata::jsonb @> ?::jsonb", filter).
+		Delete(&VersionedDocument{})
+	if result.Error != nil {
+		return 0, fmt.Errorf("versioned_document_store: delete by source_book_job_id: %w", result.Error)
+	}
+	return result.RowsAffected, nil
 }
 
 // versionedDocBuildListFilters returns the extra WHERE clause string and positional args

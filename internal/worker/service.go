@@ -23,6 +23,7 @@ import (
 	httpSwagger "github.com/swaggo/http-swagger"
 
 	"github.com/thebtf/engram/internal/auth"
+	booksdomain "github.com/thebtf/engram/internal/books"
 	"github.com/thebtf/engram/internal/bulkops"
 	"github.com/thebtf/engram/internal/chunking"
 
@@ -139,8 +140,11 @@ type Service struct {
 	injectionLogStore                *gorm.InjectionLogStore
 	candidateStore                   *gorm.CandidateStore         // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	candidateQueueEnabled            bool                         // cached at startup; handlers must not read env per request
+	graphEnabled                     bool                         // cached at startup; graph REST handlers must not read env per request
 	candidateReviewStoreSeam         candidateReviewStore         // test seam for REST candidate queue handlers
 	candidateReviewSnapshotStoreSeam candidateReviewSnapshotStore // test seam for candidate pre-action snapshots
+	graphEdgeStoreSeam               graphEdgeStore               // test seam for graph REST handlers
+	graphNodeStoreSeam               graphNodeStore               // test seam for graph REST handlers
 	snapshotStore                    *gorm.SnapshotStore          // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	writelintTokenStore              writelint.TokenStore         // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	redactionRules                   []redaction.CompiledRule     // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
@@ -168,6 +172,9 @@ type Service struct {
 	issueStore                  *gorm.IssueStore
 	credentialStore             *gorm.CredentialStore
 	memoryStore                 *gorm.MemoryStore
+	documentStore               versionedDocumentStore
+	booksStore                  booksStore
+	booksPipeline               booksPipelineRunner
 	memoryStoreSeam             memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
 	stateStore                  statePlane
 	experienceProvider          experienceHistoryProvider
@@ -186,6 +193,7 @@ type Service struct {
 	rerankClient                *reranking.Client
 	promotionStore              *gorm.PromotionStore
 	graphStore                  *graph.Store
+	graphNodeStore              *graph.NodesStore
 	vaultOnce                   sync.Once
 	vaultErr                    error
 	promptCache                 sync.Map // map[int64]promptCacheEntry — last user prompt per session
@@ -496,6 +504,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		backfillTracker:       newBackfillTracker(),
 		cachedObsCounts:       make(map[string]cachedCount),
 		candidateQueueEnabled: candidateQueueEnabledFromEnv(),
+		graphEnabled:          graphEnabledFromEnv(),
 		statsCacheTTL:         time.Minute,
 		mcpHealth:             mcp.NewMCPHealth(),
 		eventBus:              &projectevents.Bus{},
@@ -700,7 +709,7 @@ func (s *Service) initializeAsync() {
 	}
 
 	// Wire email/password auth stores into TokenAuth middleware and create AuthHandlers.
-	authHandlersInstance := NewAuthHandlers(userStore, invitationStore, authSessionStore)
+	authHandlersInstance := NewAuthHandlers(userStore, invitationStore, authSessionStore, domainOwnerStore)
 	s.initMu.Lock()
 	s.authHandlers = authHandlersInstance
 	s.initMu.Unlock()
@@ -757,6 +766,8 @@ func (s *Service) initializeAsync() {
 
 	// Create versioned document store for collaborative document MCP tools (migration 051).
 	versionedDocumentStore := gorm.NewVersionedDocumentStore(store)
+	booksStore := gorm.NewBooksStore(store)
+	booksPipeline := booksdomain.NewPipeline(booksStore, versionedDocumentStore)
 
 	mcpServer := mcp.NewServer(mcp.ServerOptions{
 		Version:            s.version,
@@ -774,6 +785,11 @@ func (s *Service) initializeAsync() {
 
 	// Wire versioned document store into MCP server for collaborative document tools.
 	mcpServer.SetVersionedDocumentStore(versionedDocumentStore)
+	s.initMu.Lock()
+	s.documentStore = versionedDocumentStore
+	s.booksStore = booksStore
+	s.booksPipeline = booksPipeline
+	s.initMu.Unlock()
 
 	mcpServer.SetIssueStore(issueStore)
 
@@ -820,6 +836,7 @@ func (s *Service) initializeAsync() {
 	s.initMu.Lock()
 	s.promotionStore = promotionStore
 	s.graphStore = graphStore
+	s.graphNodeStore = nodesStore
 	s.initMu.Unlock()
 
 	// TG5: Wire write-lint orchestrator + redaction rules into MCP server.
@@ -1471,6 +1488,40 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/memories/{id}/suppress", s.handleSuppressMemoryByID)
 		r.Delete("/api/memories/{id}", s.handleDeleteMemoryByID)
 
+		// Knowledge graph bridge (CR-002 graph lane)
+		r.Get("/api/graph/nodes", s.handleGetGraphNodes)
+		r.Post("/api/graph/nodes", s.handleCreateGraphNode)
+		r.Delete("/api/graph/nodes/{id}", s.handleDeleteGraphNode)
+		r.Get("/api/graph/edges", s.handleGetGraphEdges)
+		r.Post("/api/graph/edges", s.handleCreateGraphEdge)
+		r.Delete("/api/graph/edges/{id}", s.handleDeleteGraphEdge)
+		r.Get("/api/graph/traverse", s.handleTraverseGraph)
+		r.Get("/api/graph/find-path", s.handleFindGraphPath)
+
+		// Versioned documents bridge (CR-002 documents lane)
+		r.Get("/api/documents", s.handleListDocuments)
+		r.Post("/api/documents", s.handleCreateDocument)
+		r.Get("/api/documents/read", s.handleReadDocument)
+		r.Get("/api/documents/history", s.handleDocumentHistory)
+		r.Get("/api/documents/comments", s.handleListDocumentComments)
+		r.Post("/api/documents/comment", s.handleAddDocumentComment)
+
+		// Books ingestion bridge (CR-002 books lane)
+		r.Post("/api/books", s.handleCreateBookJob)
+		r.Get("/api/books/{id}/status", s.handleGetBookJobStatus)
+
+		// Access administration bridge (CR-002 access lane)
+		r.Get("/api/access/providers", s.handleAccessProviders)
+		r.Get("/api/access/invitations", s.handleAccessListInvitations)
+		r.Post("/api/access/invitations", s.handleAccessCreateInvitation)
+		r.Post("/api/access/invitations/{id}/revoke", s.handleAccessRevokeInvitation)
+		r.Get("/api/access/users", s.handleAccessListUsers)
+		r.Get("/api/access/users/{id}", s.handleAccessGetUserDrilldown)
+		r.Patch("/api/access/users/{id}", s.handleAccessUpdateUser)
+		r.Get("/api/access/roles", s.handleAccessListRoles)
+		r.Get("/api/access/sessions", s.handleAccessListSessions)
+		r.Post("/api/access/sessions/{id}/revoke", s.handleAccessRevokeSession)
+		r.Get("/api/access/log", s.handleAccessListAudit)
 		// Behavioral rules management
 		r.Get("/api/rules", s.handleListBehavioralRules)
 		r.Post("/api/rules", s.handleCreateBehavioralRule)
@@ -2110,6 +2161,8 @@ type graphStoreAdapter struct {
 }
 
 func (a *graphStoreAdapter) CreateEdge(ctx context.Context, sourceID, targetID int64, edgeType, reasoning string) error {
+	unlock := graph.LockWrites()
+	defer unlock()
 	e := &graph.Edge{
 		SourceID:  &sourceID,
 		TargetID:  &targetID,

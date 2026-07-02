@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -128,6 +129,44 @@ func TestRequireSessionAdmin_SourceGate(t *testing.T) {
 	}
 }
 
+func TestAccessProvidersAcceptSessionAdminWithoutDashboardCookie(t *testing.T) {
+	authHandlers := NewAuthHandlers(nil, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/access/providers", nil).WithContext(buildAuthCtx(context.Background(), authpkg.Session("admin")))
+	rec := httptest.NewRecorder()
+	authHandlers.handleAccessProviders(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("providers with session admin status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAccessProvidersRejectStaleDashboardCookieEvenWithHMACSession(t *testing.T) {
+	env := openAuthLifecycleEnv(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/access/providers", nil).WithContext(buildAuthCtx(context.Background(), authpkg.Session("admin")))
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "signed-admin"})
+	req.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: "stale-dashboard-session"})
+	rec := httptest.NewRecorder()
+	env.handlers.handleAccessProviders(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("providers with hmac session and stale dashboard cookie status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestParseAccessCreateInvitationRequestRejectsEmptyEmail(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/access/invitations", bytes.NewReader([]byte(`{"role":"operator"}`)))
+	_, _, _, err := parseAccessCreateInvitationRequest(req)
+	if err == nil || err.Error() != "email is required" {
+		t.Fatalf("parseAccessCreateInvitationRequest err=%v, want email is required", err)
+	}
+}
+
+func TestParseRevokeReasonRejectsMalformedJSON(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/access/invitations/1/revoke", bytes.NewReader([]byte(`{"reason":`)))
+	_, err := parseRevokeReason(req, "fallback")
+	if err == nil || err.Error() != "invalid request" {
+		t.Fatalf("parseRevokeReason err=%v, want invalid request", err)
+	}
+}
+
 func TestAuthDisabledTokenProbeReachesStoreReadiness(t *testing.T) {
 	t.Setenv("ENGRAM_AUTH_DISABLED", "true")
 
@@ -157,7 +196,7 @@ func TestAuthDisabledUsersProbeReachesStoreReadiness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTokenAuth: %v", err)
 	}
-	authHandlers := NewAuthHandlers(nil, nil, nil)
+	authHandlers := NewAuthHandlers(nil, nil, nil, nil)
 
 	h := ta.Middleware(http.HandlerFunc(authHandlers.handleListUsers))
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
@@ -173,7 +212,7 @@ func TestAuthDisabledUsersProbeReachesStoreReadiness(t *testing.T) {
 }
 
 func TestAuthOnUsersWithoutAdminRoleStillForbidden(t *testing.T) {
-	authHandlers := NewAuthHandlers(nil, nil, nil)
+	authHandlers := NewAuthHandlers(nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
 	rec := httptest.NewRecorder()
