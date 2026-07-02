@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.35.0] - 2026-07-02
+
+### Added
+
+- **Operator-console 5 stub sections implemented — queue, graph, documents, access, books, CR-002 (#393).** The queue, graph, documents, access, and books surfaces of the operator console move from placeholder stubs to working sections backed by real REST bridges over the existing domain stores (ADR-001 — bridges call domain stores directly, never `internal/mcp`). Graph gains read+write endpoints with three FR-20 write-rejection rules and a `graph.LockWrites` guard; documents and books gain full CRUD/list handlers. Books ships as a separate bounded context that ingests uploaded prose/markdown through a thin adapter over the existing markdown chunker (ADR-003) and writes the produced chunks INTO `VersionedDocumentStore` with explicit `source_book_job_id` provenance (ADR-002), rather than being a document specialization. Access adds an admin lifecycle console (invitations, role changes, user disable/enable, session revoke, audit) that extends the existing `IsSessionAdmin` auth substrate (ADR-004) and now resolves Authentik session-admin identities for both reads and mutations. Two additive migrations: 155 (`books_jobs`) and 156 (access milestone), both clean-DB verified. Graph endpoints are gated behind `ENGRAM_GRAPH_ENABLED` (ADR-005, default off).
+
+### Fixed
+
+- **Graph node-edge listing no longer leaks private-node edges (#393).** `GET /api/graph/edges` by node now filters returned edges through the node store with private visibility disabled (`filterVisibleGraphEdges`), so an edge to a `privacy_scope='private'` node — with its `node_source_id`/`node_target_id` and reasoning — is no longer returned to a caller who cannot see the node itself. This matches the hiding contract the node-list path already enforced.
+- **Graph find-path rejects over-limit depth explicitly (#393).** `GET /api/graph/find-path?max_depth>3` now returns `400 invalid_request` mirroring the sibling traverse handler, instead of silently clamping to `MaxTraverseDepth` and returning `found=false` for a path that exists beyond the clamp.
+- **Access mutations accept Authentik session admins (#393).** Create/revoke invitation, role change, and session revoke on `/api/access/*` now resolve the actor from the authenticated provider/user when no local `engram_auth` cookie exists, so an Authentik admin browser session is no longer rejected with 401 on mutations it is authorized for. A dead fail-open branch in the read gate was removed in the same pass.
+- **Invitation creation rejects empty email; login rate-limiter is bounded; books pipeline avoids partial-write orphans (#393).** Access invitation creation now trims and rejects an empty email; the login-attempt limiter no longer grows an unbounded `sync.Map`; the books pipeline cleans up or transactionally guards documents on mid-run failure; and locale placeholders escape a literal `@` so the operator-console i18n build no longer fails.
+
 ## [6.34.0] - 2026-07-01
 
 ### Added
