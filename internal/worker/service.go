@@ -706,7 +706,7 @@ func (s *Service) initializeAsync() {
 	}
 
 	// Wire email/password auth stores into TokenAuth middleware and create AuthHandlers.
-	authHandlersInstance := NewAuthHandlers(userStore, invitationStore, authSessionStore)
+	authHandlersInstance := NewAuthHandlers(userStore, invitationStore, authSessionStore, domainOwnerStore)
 	s.initMu.Lock()
 	s.authHandlers = authHandlersInstance
 	s.initMu.Unlock()
@@ -1498,6 +1498,19 @@ func (s *Service) setupRoutes() {
 		r.Get("/api/documents/history", s.handleDocumentHistory)
 		r.Get("/api/documents/comments", s.handleListDocumentComments)
 		r.Post("/api/documents/comment", s.handleAddDocumentComment)
+
+		// Access administration bridge (CR-002 access lane)
+		r.Get("/api/access/providers", s.handleAccessProviders)
+		r.Get("/api/access/invitations", s.handleAccessListInvitations)
+		r.Post("/api/access/invitations", s.handleAccessCreateInvitation)
+		r.Post("/api/access/invitations/{id}/revoke", s.handleAccessRevokeInvitation)
+		r.Get("/api/access/users", s.handleAccessListUsers)
+		r.Get("/api/access/users/{id}", s.handleAccessGetUserDrilldown)
+		r.Patch("/api/access/users/{id}", s.handleAccessUpdateUser)
+		r.Get("/api/access/roles", s.handleAccessListRoles)
+		r.Get("/api/access/sessions", s.handleAccessListSessions)
+		r.Post("/api/access/sessions/{id}/revoke", s.handleAccessRevokeSession)
+		r.Get("/api/access/log", s.handleAccessListAudit)
 		// Behavioral rules management
 		r.Get("/api/rules", s.handleListBehavioralRules)
 		r.Post("/api/rules", s.handleCreateBehavioralRule)

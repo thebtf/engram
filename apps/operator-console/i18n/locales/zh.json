@@ -543,6 +543,196 @@
       "unknownError": "未知错误"
     }
   },
+  "access": {
+    "title": "访问控制",
+    "subtitle": "在 operator console 中查看实时登录提供方、邀请、角色、会话与审计证据。",
+    "time": {
+      "justNow": "刚刚",
+      "minutesAgo": "{count} 分钟前",
+      "hoursAgo": "{count} 小时前",
+      "daysAgo": "{count} 天前"
+    },
+    "metrics": {
+      "providers": "已启用提供方",
+      "invites": "待处理邀请",
+      "admins": "管理员用户",
+      "sessions": "活跃会话"
+    },
+    "brief": {
+      "title": "生命周期安全的访问面板",
+      "body": "已配置的受信 OIDC 代理数量：{proxies}。邀请为单次使用，会话撤销是软撤销且带审计证据。"
+    },
+    "state": {
+      "pending": "正在加载访问面板…",
+      "error": "无法加载访问面板：{message}",
+      "forbiddenTitle": "需要管理员浏览器会话",
+      "forbiddenBody": "只有经过浏览器管理员会话认证的请求才能访问此面板，否则返回 403。",
+      "unauthorizedTitle": "需要浏览器会话",
+      "unauthorizedBody": "浏览器会话缺失、已过期或已被撤销。请重新登录后再使用此界面。",
+      "authDisabled": "当前处于 auth-disabled 模式。可查看当前状态，但邀请/会话生命周期变更会被有意限制。"
+    },
+    "actions": {
+      "refresh": "刷新",
+      "retry": "重试",
+      "revoke": "撤销",
+      "disable": "禁用",
+      "enable": "启用",
+      "makeAdmin": "设为管理员",
+      "makeOperator": "设为操作员",
+      "close": "关闭",
+      "working": "处理中…"
+    },
+    "providers": {
+      "title": "登录提供方",
+      "subtitle": "来自 /api/access/providers 的实时提供方状态。配置仍由服务端控制；页面只诚实展示当前状态。",
+      "kind": "类型：{kind}",
+      "fields": {
+        "evidence": "证据",
+        "operable": "可用"
+      },
+      "values": {
+        "yes": "是",
+        "no": "否"
+      },
+      "honesty": {
+        "live": "Live",
+        "dormant": "Dormant",
+        "mustbuild": "Must-build",
+        "muted": "Muted"
+      }
+    },
+    "invitations": {
+      "title": "邀请",
+      "subtitle": "签发带过期时间的单次使用邀请，并在不删除审计轨迹的前提下撤销它们。",
+      "form": {
+        "email": "邀请邮箱",
+        "emailPlaceholder": "name@example.com",
+        "role": "角色",
+        "ttl": "有效期",
+        "ttl24": "24 小时",
+        "ttl72": "72 小时",
+        "ttl168": "7 天",
+        "submit": "创建邀请"
+      },
+      "columns": {
+        "email": "邮箱 / 令牌",
+        "role": "角色",
+        "status": "状态",
+        "expires": "到期时间",
+        "issuedBy": "签发者",
+        "actions": "操作"
+      },
+      "status": {
+        "pending": "待使用",
+        "used": "已使用",
+        "expired": "已过期",
+        "revoked": "已撤销"
+      },
+      "empty": "暂时没有邀请记录。"
+    },
+    "users": {
+      "title": "用户",
+      "subtitle": "查看所有 dashboard 用户，切换 admin/operator 角色，并在保留历史证据的前提下禁用访问。",
+      "columns": {
+        "user": "用户",
+        "role": "角色",
+        "status": "状态",
+        "lastLogin": "最近登录",
+        "actions": "操作"
+      },
+      "status": {
+        "active": "活跃",
+        "disabled": "已禁用"
+      },
+      "empty": "未返回任何 dashboard 用户。"
+    },
+    "roles": {
+      "title": "角色阶梯",
+      "subtitle": "当前 dashboard 角色固定为服务端现有的访问控制基底。",
+      "labels": {
+        "admin": "管理员",
+        "operator": "操作员"
+      },
+      "descriptions": {
+        "admin": "可以签发邀请、管理用户，并从控制台撤销会话。",
+        "operator": "可以使用 operator surface，但不能管理访问生命周期。"
+      }
+    },
+    "sessions": {
+      "title": "会话",
+      "subtitle": "查看实时浏览器会话，并在不与当前认证检查竞争的前提下撤销它们。",
+      "columns": {
+        "user": "用户",
+        "status": "状态",
+        "started": "开始时间",
+        "expires": "到期时间",
+        "agent": "客户端",
+        "actions": "操作"
+      },
+      "status": {
+        "active": "活跃",
+        "expired": "已过期",
+        "revoked": "已撤销"
+      },
+      "empty": "未返回任何 dashboard 会话。"
+    },
+    "audit": {
+      "title": "访问日志",
+      "subtitle": "记录邀请、登录、会话撤销和角色变更生命周期写入的审计事件。",
+      "columns": {
+        "time": "时间",
+        "actor": "执行者",
+        "action": "动作",
+        "reason": "原因"
+      },
+      "empty": "还没有访问审计记录。",
+      "actions": {
+        "auth_login": "登录",
+        "auth_invitation_created": "创建邀请",
+        "auth_invitation_consumed": "使用邀请",
+        "auth_invitation_revoked": "撤销邀请",
+        "auth_session_revoked": "撤销会话",
+        "auth_user_updated": "更新用户",
+        "auth_user_role_updated": "更改角色",
+        "auth_user_disabled": "禁用用户",
+        "auth_user_enabled": "启用用户",
+        "auth_setup_completed": "完成初始化"
+      }
+    },
+    "drilldown": {
+      "title": "用户详情",
+      "loadingTitle": "正在加载用户详情",
+      "loadingBody": "正在刷新该用户的实时会话、邀请历史与审计引用。",
+      "errorTitle": "无法加载详情",
+      "errorBody": "加载用户详情失败：{message}",
+      "fields": {
+        "created": "创建时间",
+        "lastLogin": "最近登录",
+        "disabled": "是否禁用"
+      },
+      "sessionsTitle": "会话",
+      "emptySessions": "该用户没有会话记录。",
+      "invitesCreatedTitle": "签发的邀请",
+      "emptyInvitesCreated": "该用户尚未签发邀请。",
+      "invitesUsedTitle": "使用过的邀请",
+      "emptyInvitesUsed": "该用户尚未使用邀请。",
+      "auditTitle": "审计引用",
+      "emptyAudit": "该用户尚无认证审计记录。"
+    },
+    "notice": {
+      "inviteInvalid": "创建邀请前请先填写邮箱。",
+      "authDisabled": "auth-disabled 模式会绕过邀请/会话生命周期。在重新启用认证之前，此页保持以只读为主。",
+      "inviteCreated": "邀请已创建。",
+      "inviteRevokedReason": "操作员在访问页撤销了邀请",
+      "inviteRevoked": "已撤销 {email} 的邀请。",
+      "userRoleUpdated": "已将 {email} 的角色更新为 {role}。",
+      "userDisabled": "已禁用 {email}。",
+      "userEnabled": "已启用 {email}。",
+      "sessionRevokedReason": "操作员在访问页撤销了会话",
+      "sessionRevoked": "已撤销 {email} 的会话。",
+      "error": "操作失败：{message}"
+    }
+  },
   "graphPage": {
     "title": "知识图谱",
     "subtitle": "在 operator console 中查看图节点与边，创建新关系，并运行实时 traverse/path 读取。",

@@ -543,6 +543,196 @@
       "unknownError": "unknown error"
     }
   },
+  "access": {
+    "title": "Access",
+    "subtitle": "Review live login providers, invites, roles, sessions, and audit evidence from the operator console.",
+    "time": {
+      "justNow": "just now",
+      "minutesAgo": "{count} minute ago | {count} minutes ago",
+      "hoursAgo": "{count} hour ago | {count} hours ago",
+      "daysAgo": "{count} day ago | {count} days ago"
+    },
+    "metrics": {
+      "providers": "enabled providers",
+      "invites": "pending invites",
+      "admins": "admin users",
+      "sessions": "active sessions"
+    },
+    "brief": {
+      "title": "Lifecycle-safe access lane",
+      "body": "Trusted OIDC proxies configured: {proxies}. Invite use is single-use and session revoke is a soft, audited lifecycle event."
+    },
+    "state": {
+      "pending": "Loading access surface…",
+      "error": "Could not load access surface: {message}",
+      "forbiddenTitle": "Admin browser session required",
+      "forbiddenBody": "This surface returns 403 until the request is authenticated as a browser session admin.",
+      "unauthorizedTitle": "Browser session required",
+      "unauthorizedBody": "Your browser session is missing, expired, or revoked. Sign in again before using this surface.",
+      "authDisabled": "Auth-disabled mode is active. Read the current posture, but invite/session lifecycle mutations stay intentionally constrained."
+    },
+    "actions": {
+      "refresh": "Refresh",
+      "retry": "Retry",
+      "revoke": "Revoke",
+      "disable": "Disable",
+      "enable": "Enable",
+      "makeAdmin": "Make admin",
+      "makeOperator": "Make operator",
+      "close": "Close",
+      "working": "Working…"
+    },
+    "providers": {
+      "title": "Login providers",
+      "subtitle": "Live provider posture from /api/access/providers. Configuration remains server-owned; the page reports the current state honestly.",
+      "kind": "Kind: {kind}",
+      "fields": {
+        "evidence": "Evidence",
+        "operable": "Operable"
+      },
+      "values": {
+        "yes": "Yes",
+        "no": "No"
+      },
+      "honesty": {
+        "live": "Live",
+        "dormant": "Dormant",
+        "mustbuild": "Must-build",
+        "muted": "Muted"
+      }
+    },
+    "invitations": {
+      "title": "Invitations",
+      "subtitle": "Issue expiring single-use invites and revoke them without deleting the audit trail.",
+      "form": {
+        "email": "Invite email",
+        "emailPlaceholder": "name@example.com",
+        "role": "Role",
+        "ttl": "Expires in",
+        "ttl24": "24 hours",
+        "ttl72": "72 hours",
+        "ttl168": "7 days",
+        "submit": "Create invite"
+      },
+      "columns": {
+        "email": "Email / token",
+        "role": "Role",
+        "status": "Status",
+        "expires": "Expires",
+        "issuedBy": "Issued by",
+        "actions": "Actions"
+      },
+      "status": {
+        "pending": "Pending",
+        "used": "Used",
+        "expired": "Expired",
+        "revoked": "Revoked"
+      },
+      "empty": "No invitations recorded yet."
+    },
+    "users": {
+      "title": "Users",
+      "subtitle": "Review every dashboard user, flip the admin/operator role, and disable access without deleting historical evidence.",
+      "columns": {
+        "user": "User",
+        "role": "Role",
+        "status": "Status",
+        "lastLogin": "Last login",
+        "actions": "Actions"
+      },
+      "status": {
+        "active": "Active",
+        "disabled": "Disabled"
+      },
+      "empty": "No dashboard users returned."
+    },
+    "roles": {
+      "title": "Role ladder",
+      "subtitle": "Current dashboard roles are fixed to the access substrate already present in the server.",
+      "labels": {
+        "admin": "Admin",
+        "operator": "Operator"
+      },
+      "descriptions": {
+        "admin": "May issue invites, manage users, and revoke sessions from the console.",
+        "operator": "May use operator surfaces but cannot administer access lifecycle."
+      }
+    },
+    "sessions": {
+      "title": "Sessions",
+      "subtitle": "See live browser sessions and revoke them without racing the current auth check.",
+      "columns": {
+        "user": "User",
+        "status": "Status",
+        "started": "Started",
+        "expires": "Expires",
+        "agent": "Client",
+        "actions": "Actions"
+      },
+      "status": {
+        "active": "Active",
+        "expired": "Expired",
+        "revoked": "Revoked"
+      },
+      "empty": "No dashboard sessions returned."
+    },
+    "audit": {
+      "title": "Access log",
+      "subtitle": "Audit events written by the invite, login, session revoke, and role-change lifecycle paths.",
+      "columns": {
+        "time": "Time",
+        "actor": "Actor",
+        "action": "Action",
+        "reason": "Reason"
+      },
+      "empty": "No access audit entries yet.",
+      "actions": {
+        "auth_login": "Login",
+        "auth_invitation_created": "Invitation created",
+        "auth_invitation_consumed": "Invitation consumed",
+        "auth_invitation_revoked": "Invitation revoked",
+        "auth_session_revoked": "Session revoked",
+        "auth_user_updated": "User updated",
+        "auth_user_role_updated": "Role changed",
+        "auth_user_disabled": "User disabled",
+        "auth_user_enabled": "User enabled",
+        "auth_setup_completed": "Initial setup"
+      }
+    },
+    "drilldown": {
+      "title": "User drill-down",
+      "loadingTitle": "Loading user detail",
+      "loadingBody": "Refreshing live sessions, invite history, and audit references for the selected user.",
+      "errorTitle": "Could not load drill-down",
+      "errorBody": "User detail failed to load: {message}",
+      "fields": {
+        "created": "Created",
+        "lastLogin": "Last login",
+        "disabled": "Disabled"
+      },
+      "sessionsTitle": "Sessions",
+      "emptySessions": "No sessions recorded for this user.",
+      "invitesCreatedTitle": "Invitations issued",
+      "emptyInvitesCreated": "This user has not issued invitations.",
+      "invitesUsedTitle": "Invitations consumed",
+      "emptyInvitesUsed": "This user has not consumed an invitation.",
+      "auditTitle": "Audit references",
+      "emptyAudit": "No auth audit entries reference this user yet."
+    },
+    "notice": {
+      "inviteInvalid": "Provide an email before creating an invitation.",
+      "authDisabled": "Auth-disabled mode bypasses the invite/session lifecycle. This page stays read-oriented until auth is re-enabled.",
+      "inviteCreated": "Invitation created.",
+      "inviteRevokedReason": "operator revoked invitation from access page",
+      "inviteRevoked": "Invitation revoked for {email}.",
+      "userRoleUpdated": "Updated {email} to role {role}.",
+      "userDisabled": "Disabled {email}.",
+      "userEnabled": "Enabled {email}.",
+      "sessionRevokedReason": "operator revoked session from access page",
+      "sessionRevoked": "Revoked session for {email}.",
+      "error": "Operation failed: {message}"
+    }
+  },
   "graphPage": {
     "title": "Knowledge graph",
     "subtitle": "Inspect graph nodes and edges, create new links, and run live traverse/path reads from the operator console.",

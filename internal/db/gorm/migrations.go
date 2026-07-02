@@ -4784,6 +4784,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		candidateReviewSnapshotOpTypeMigration153(),
 		forgettingReviewSnapshotOpTypeMigration154(),
 		booksJobsMigration155(),
+		accessMilestoneMigration156(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

@@ -157,7 +157,7 @@ func TestAuthDisabledUsersProbeReachesStoreReadiness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTokenAuth: %v", err)
 	}
-	authHandlers := NewAuthHandlers(nil, nil, nil)
+	authHandlers := NewAuthHandlers(nil, nil, nil, nil)
 
 	h := ta.Middleware(http.HandlerFunc(authHandlers.handleListUsers))
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
@@ -173,7 +173,7 @@ func TestAuthDisabledUsersProbeReachesStoreReadiness(t *testing.T) {
 }
 
 func TestAuthOnUsersWithoutAdminRoleStillForbidden(t *testing.T) {
-	authHandlers := NewAuthHandlers(nil, nil, nil)
+	authHandlers := NewAuthHandlers(nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
 	rec := httptest.NewRecorder()

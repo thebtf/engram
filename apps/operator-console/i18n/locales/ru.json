@@ -543,6 +543,196 @@
       "unknownError": "неизвестная ошибка"
     }
   },
+  "access": {
+    "title": "Доступ",
+    "subtitle": "Смотрите live-провайдеры входа, приглашения, роли, сессии и audit evidence прямо из operator console.",
+    "time": {
+      "justNow": "только что",
+      "minutesAgo": "{count} минуту назад | {count} минуты назад | {count} минут назад",
+      "hoursAgo": "{count} час назад | {count} часа назад | {count} часов назад",
+      "daysAgo": "{count} день назад | {count} дня назад | {count} дней назад"
+    },
+    "metrics": {
+      "providers": "включённых провайдеров",
+      "invites": "ожидающих приглашений",
+      "admins": "админов",
+      "sessions": "активных сессий"
+    },
+    "brief": {
+      "title": "Lifecycle-safe поверхность доступа",
+      "body": "Доверенных OIDC-прокси настроено: {proxies}. Приглашение одноразовое, а revoke сессии остаётся мягким и аудируемым lifecycle-событием."
+    },
+    "state": {
+      "pending": "Загружаем поверхность доступа…",
+      "error": "Не удалось загрузить поверхность доступа: {message}",
+      "forbiddenTitle": "Нужна браузерная admin-сессия",
+      "forbiddenBody": "Эта поверхность возвращает 403, пока запрос не идёт из браузерной admin-сессии.",
+      "unauthorizedTitle": "Нужна браузерная сессия",
+      "unauthorizedBody": "Браузерная сессия отсутствует, истекла или была отозвана. Войдите снова, прежде чем пользоваться этой поверхностью.",
+      "authDisabled": "Режим auth-disabled активен. Текущее состояние видно, но мутации invite/session lifecycle намеренно ограничены."
+    },
+    "actions": {
+      "refresh": "Обновить",
+      "retry": "Повторить",
+      "revoke": "Отозвать",
+      "disable": "Отключить",
+      "enable": "Включить",
+      "makeAdmin": "Сделать admin",
+      "makeOperator": "Сделать operator",
+      "close": "Закрыть",
+      "working": "Выполняется…"
+    },
+    "providers": {
+      "title": "Провайдеры входа",
+      "subtitle": "Live-поза провайдеров из /api/access/providers. Настройка остаётся на стороне сервера; страница честно показывает текущее состояние.",
+      "kind": "Тип: {kind}",
+      "fields": {
+        "evidence": "Evidence",
+        "operable": "Операбельно"
+      },
+      "values": {
+        "yes": "Да",
+        "no": "Нет"
+      },
+      "honesty": {
+        "live": "Live",
+        "dormant": "Dormant",
+        "mustbuild": "Must-build",
+        "muted": "Muted"
+      }
+    },
+    "invitations": {
+      "title": "Приглашения",
+      "subtitle": "Выдавайте одноразовые приглашения с expiry и отзывайте их без удаления audit trail.",
+      "form": {
+        "email": "Email приглашения",
+        "emailPlaceholder": "name@example.com",
+        "role": "Роль",
+        "ttl": "Истекает через",
+        "ttl24": "24 часа",
+        "ttl72": "72 часа",
+        "ttl168": "7 дней",
+        "submit": "Создать приглашение"
+      },
+      "columns": {
+        "email": "Email / токен",
+        "role": "Роль",
+        "status": "Статус",
+        "expires": "Истекает",
+        "issuedBy": "Выдал",
+        "actions": "Действия"
+      },
+      "status": {
+        "pending": "Ожидает",
+        "used": "Использовано",
+        "expired": "Истекло",
+        "revoked": "Отозвано"
+      },
+      "empty": "Приглашений пока нет."
+    },
+    "users": {
+      "title": "Пользователи",
+      "subtitle": "Смотрите всех dashboard-пользователей, переключайте admin/operator и отключайте доступ без удаления исторического evidence.",
+      "columns": {
+        "user": "Пользователь",
+        "role": "Роль",
+        "status": "Статус",
+        "lastLogin": "Последний вход",
+        "actions": "Действия"
+      },
+      "status": {
+        "active": "Активен",
+        "disabled": "Отключён"
+      },
+      "empty": "Dashboard-пользователи не вернулись."
+    },
+    "roles": {
+      "title": "Лестница ролей",
+      "subtitle": "Текущие dashboard-роли фиксированы тем access-substrate, который уже живёт на сервере.",
+      "labels": {
+        "admin": "Admin",
+        "operator": "Operator"
+      },
+      "descriptions": {
+        "admin": "Может выдавать приглашения, управлять пользователями и отзывать сессии из консоли.",
+        "operator": "Может пользоваться operator-поверхностями, но не управляет access lifecycle."
+      }
+    },
+    "sessions": {
+      "title": "Сессии",
+      "subtitle": "Смотрите live-браузерные сессии и отзывайте их без гонки с текущей auth-проверкой.",
+      "columns": {
+        "user": "Пользователь",
+        "status": "Статус",
+        "started": "Начата",
+        "expires": "Истекает",
+        "agent": "Клиент",
+        "actions": "Действия"
+      },
+      "status": {
+        "active": "Активна",
+        "expired": "Истекла",
+        "revoked": "Отозвана"
+      },
+      "empty": "Dashboard-сессии не вернулись."
+    },
+    "audit": {
+      "title": "Журнал доступа",
+      "subtitle": "Audit-события, которые пишут lifecycle-пути приглашений, логина, revoke сессий и смены ролей.",
+      "columns": {
+        "time": "Время",
+        "actor": "Актор",
+        "action": "Событие",
+        "reason": "Причина"
+      },
+      "empty": "Записей журнала доступа пока нет.",
+      "actions": {
+        "auth_login": "Вход",
+        "auth_invitation_created": "Приглашение создано",
+        "auth_invitation_consumed": "Приглашение использовано",
+        "auth_invitation_revoked": "Приглашение отозвано",
+        "auth_session_revoked": "Сессия отозвана",
+        "auth_user_updated": "Пользователь обновлён",
+        "auth_user_role_updated": "Роль изменена",
+        "auth_user_disabled": "Пользователь отключён",
+        "auth_user_enabled": "Пользователь включён",
+        "auth_setup_completed": "Первичная настройка"
+      }
+    },
+    "drilldown": {
+      "title": "Детали пользователя",
+      "loadingTitle": "Загружаем детали пользователя",
+      "loadingBody": "Обновляем live-сессии, историю приглашений и audit refs для выбранного пользователя.",
+      "errorTitle": "Не удалось загрузить детали",
+      "errorBody": "Не удалось загрузить карточку пользователя: {message}",
+      "fields": {
+        "created": "Создан",
+        "lastLogin": "Последний вход",
+        "disabled": "Отключён"
+      },
+      "sessionsTitle": "Сессии",
+      "emptySessions": "Для этого пользователя сессий не найдено.",
+      "invitesCreatedTitle": "Выданные приглашения",
+      "emptyInvitesCreated": "Этот пользователь не выдавал приглашения.",
+      "invitesUsedTitle": "Использованные приглашения",
+      "emptyInvitesUsed": "Этот пользователь не использовал приглашение.",
+      "auditTitle": "Audit refs",
+      "emptyAudit": "Для этого пользователя пока нет auth audit-записей."
+    },
+    "notice": {
+      "inviteInvalid": "Перед созданием приглашения укажите email.",
+      "authDisabled": "Режим auth-disabled обходит invite/session lifecycle. Пока auth не включён обратно, страница остаётся в основном read-only.",
+      "inviteCreated": "Приглашение создано.",
+      "inviteRevokedReason": "operator revoked invitation from access page",
+      "inviteRevoked": "Приглашение для {email} отозвано.",
+      "userRoleUpdated": "Пользователь {email} переведён в роль {role}.",
+      "userDisabled": "Пользователь {email} отключён.",
+      "userEnabled": "Пользователь {email} включён.",
+      "sessionRevokedReason": "operator revoked session from access page",
+      "sessionRevoked": "Сессия пользователя {email} отозвана.",
+      "error": "Операция не выполнена: {message}"
+    }
+  },
   "graphPage": {
     "title": "Граф знаний",
     "subtitle": "Смотрите узлы и связи графа, создавайте новые ребра и запускайте live traverse/path прямо из operator console.",
