@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/thebtf/engram/internal/cognitive/core"
+	"github.com/thebtf/engram/internal/mcp"
+	"github.com/thebtf/engram/pkg/cognitive"
 )
 
 // TestServiceFields_All4CoreAccessible reflects on the Service struct and
@@ -64,6 +66,117 @@ func lastDotPart(s string) string {
 		}
 	}
 	return s
+}
+
+type fakeRegistryStateWriter struct {
+	sessionCalls int
+	lastSession  cognitive.SessionStateSlots
+	lastID       string
+}
+
+func (f *fakeRegistryStateWriter) WriteSessionState(_ context.Context, sessionID string, slots cognitive.SessionStateSlots) error {
+	f.sessionCalls++
+	f.lastID = sessionID
+	f.lastSession = slots
+	return nil
+}
+
+func (f *fakeRegistryStateWriter) WriteProjectState(_ context.Context, _ string, _ cognitive.ProjectStateRecord) error {
+	return nil
+}
+
+type fakeAdvertisedStatePlane struct{}
+
+func (fakeAdvertisedStatePlane) WriteSessionState(context.Context, string, cognitive.SessionStateSlots) error {
+	return nil
+}
+
+func (fakeAdvertisedStatePlane) WriteProjectState(context.Context, string, cognitive.ProjectStateRecord) error {
+	return nil
+}
+
+func (fakeAdvertisedStatePlane) ReadSessionState(context.Context, string) (cognitive.SessionStateSlots, error) {
+	return cognitive.SessionStateSlots{}, nil
+}
+
+func (fakeAdvertisedStatePlane) ReadProjectState(context.Context, string) (cognitive.ProjectStateRecord, error) {
+	return cognitive.ProjectStateRecord{UpdatedBy: "agent"}, nil
+}
+
+func (fakeAdvertisedStatePlane) ReadResumePacket(context.Context, cognitive.ResumePacketRequest) (cognitive.ResumePacket, error) {
+	return cognitive.ResumePacket{Source: cognitive.StatePacketSourceNative}, nil
+}
+
+func listedToolNames(tools []mcp.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	return names
+}
+
+func TestPlatformWiring_FlagOn_S1RealStateWriterDispatchesNonNoop(t *testing.T) {
+	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
+	t.Setenv("ENGRAM_V7_S1_STATE", "true")
+
+	cfg := core.LoadFlagConfigFromEnv()
+	registry := core.NewRegistry()
+	if err := core.RegisterNoOps(registry); err != nil {
+		t.Fatalf("RegisterNoOps: %v", err)
+	}
+	activateFromFlags(t, registry, cfg)
+
+	writer := &fakeRegistryStateWriter{}
+	if err := registerS1StateWriterSubsystem(registry, writer); err != nil {
+		t.Fatalf("registerS1StateWriterSubsystem: %v", err)
+	}
+
+	dispatcher := core.NewSubsystemDispatcher(registry, core.NewLocalMeter())
+	want := cognitive.SessionStateSlots{Execution: map[string]interface{}{"next_action": "resume from S1"}}
+	if err := core.Dispatch[cognitive.StateWriter](
+		context.Background(),
+		dispatcher,
+		"StateWriter",
+		func(w cognitive.StateWriter) error {
+			return w.WriteSessionState(context.Background(), "session-1", want)
+		},
+	); err != nil {
+		t.Fatalf("Dispatch(StateWriter): %v", err)
+	}
+	if writer.sessionCalls != 1 {
+		t.Fatalf("real StateWriter session calls: got %d, want 1", writer.sessionCalls)
+	}
+	if writer.lastID != "session-1" {
+		t.Fatalf("real StateWriter session id: got %q, want %q", writer.lastID, "session-1")
+	}
+	if !reflect.DeepEqual(writer.lastSession, want) {
+		t.Fatalf("real StateWriter slots: got %#v, want %#v", writer.lastSession, want)
+	}
+}
+
+func TestPlatformWiring_FlagOff_StateToolsRemainAdvertisedWhenNativeStoreExists(t *testing.T) {
+	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "")
+	t.Setenv("ENGRAM_V7_S1_STATE", "")
+
+	srv := mcp.NewServer(mcp.ServerOptions{Version: "test"})
+	srv.SetStateStore(fakeAdvertisedStatePlane{})
+	names := listedToolNames(srv.ListTools())
+
+	if !contains(names, "get_state") {
+		t.Fatalf("ListTools missing get_state with native state store wired and S1 flag off: %v", names)
+	}
+	if !contains(names, "set_state") {
+		t.Fatalf("ListTools missing set_state with native state store wired and S1 flag off: %v", names)
+	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // TestPlatformWiring_NoOpsRegisteredWithCanonicalNames exercises the wiring

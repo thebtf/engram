@@ -30,6 +30,7 @@ import (
 	gochunking "github.com/thebtf/engram/internal/chunking/golang"
 	mdchunking "github.com/thebtf/engram/internal/chunking/markdown"
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
+	"github.com/thebtf/engram/internal/cognitive/s1state"
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
@@ -55,6 +56,7 @@ import (
 	"github.com/thebtf/engram/internal/worker/session"
 	"github.com/thebtf/engram/internal/worker/sse"
 	"github.com/thebtf/engram/internal/writelint"
+	"github.com/thebtf/engram/pkg/cognitive"
 	"github.com/thebtf/engram/pkg/models"
 	googlegrpc "google.golang.org/grpc"
 )
@@ -292,6 +294,20 @@ func wireStateStore(s *Service, stateStore statePlane) {
 	s.initMu.Lock()
 	s.stateStore = stateStore
 	s.initMu.Unlock()
+}
+
+func registerS1StateWriterSubsystem(registry cognitivecore.SubsystemRegistry, writer cognitive.StateWriter) error {
+	if writer == nil {
+		return s1state.ErrNoWriter
+	}
+	subsystem := s1state.NewSubsystem(writer)
+	if err := registry.Register(subsystem); err != nil {
+		return err
+	}
+	if err := registry.Enable(subsystem.Name()); err != nil {
+		return err
+	}
+	return nil
 }
 
 // evictStalePrompts removes prompt cache entries older than 2 hours.
@@ -625,6 +641,12 @@ func (s *Service) initializeAsync() {
 	experienceProvider := newMemoryExperienceProvider(principalMemoryQuerySvc)
 	domainOwnerStore := gorm.NewDomainOwnerStore(store)
 	domainRegistrySvc := principalmemory.NewDomainRegistryService(domainOwnerStore, auditStore)
+	if s.flagConfig.IsPlugEnabled() && s.flagConfig.IsSubsystemEnabled("s1") {
+		if err := registerS1StateWriterSubsystem(s.cognitiveRegistry, statePlaneSvc); err != nil {
+			s.setInitError(fmt.Errorf("register real s1 state writer: %w", err))
+			return
+		}
+	}
 	wireStateStore(s, statePlaneSvc)
 
 	// Create purge store for Milestone D project-level hard deletion (T008).
