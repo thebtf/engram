@@ -479,7 +479,7 @@ func baseMemoryListQuery(q *gorm.DB) *gorm.DB {
 func basePrincipalMemoryQuery(q *gorm.DB, opts ListOptions) *gorm.DB {
 	q = q.Where("deleted_at IS NULL")
 	if opts.IncludeExpired && len(opts.IDs) > 0 {
-		return q
+		return q.Where("valid_from IS NULL OR valid_from <= NOW()")
 	}
 	return applyCurrentMemoryValidity(q)
 }

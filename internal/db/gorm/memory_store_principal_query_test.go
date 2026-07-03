@@ -90,6 +90,9 @@ func TestMemoryStore_ListPrincipalMemory_FiltersAndPagination(t *testing.T) {
 	aliceOtherProject := insertRow(projectB, "alice visible other project", "agent/alice", "agent", models.AgentVisibilityShared, domain, now.Add(time.Minute))
 	expiredAt := now.Add(-2 * time.Hour)
 	expiredVisible := insertRowWithOptions(projectA, "alice visible expired superseded", "agent/alice", "agent", models.AgentVisibilityShared, domain, "superseded", now.Add(-90*time.Minute), &expiredAt)
+	futureValidFrom := now.Add(2 * time.Hour)
+	futureVisible := insertRowWithOptions(projectA, "alice future valid superseded", "agent/alice", "agent", models.AgentVisibilityShared, domain, "superseded", now.Add(-30*time.Minute), nil)
+	require.NoError(t, db.Model(&Memory{}).Where("id = ?", futureVisible).Update("valid_from", futureValidFrom).Error)
 
 	t.Run("owner domain visibility predicates run before limit", func(t *testing.T) {
 		res, err := ms.ListPrincipalMemory(ctx, projectA, ListOptions{
@@ -160,24 +163,26 @@ func TestMemoryStore_ListPrincipalMemory_FiltersAndPagination(t *testing.T) {
 			OwnerPrincipalKind: "agent",
 			AgentVisibility:    models.AgentVisibilityShared,
 			Domain:             domain,
-			IDs:                []int64{expiredVisible},
+			IDs:                []int64{expiredVisible, futureVisible},
 			IncludeSuperseded:  true,
 			Limit:              10,
 		})
 		require.NoError(t, err)
 		assert.NotContains(t, collectIDs(res), expiredVisible)
+		assert.NotContains(t, collectIDs(res), futureVisible)
 
 		res, err = ms.ListPrincipalMemory(ctx, projectA, ListOptions{
 			OwnerPrincipal:     "agent/alice",
 			OwnerPrincipalKind: "agent",
 			AgentVisibility:    models.AgentVisibilityShared,
 			Domain:             domain,
-			IDs:                []int64{expiredVisible},
+			IDs:                []int64{expiredVisible, futureVisible},
 			IncludeSuperseded:  true,
 			IncludeExpired:     true,
 			Limit:              10,
 		})
 		require.NoError(t, err)
 		assert.Contains(t, collectIDs(res), expiredVisible)
+		assert.NotContains(t, collectIDs(res), futureVisible)
 	})
 }
