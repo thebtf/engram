@@ -2,7 +2,9 @@ package cognitive
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -64,6 +66,47 @@ func TestResumePacketRequestContract_RequiredPrincipalAndScopes(t *testing.T) {
 		if got := field.Type.Kind(); got != want.kind {
 			t.Fatalf("ResumePacketRequest.%s kind = %s, want %s", name, got, want.kind)
 		}
+	}
+}
+
+func TestValidateSessionStateSlotsBudget_AllowsBoundedPayload(t *testing.T) {
+	err := ValidateSessionStateSlotsBudget(SessionStateSlots{
+		Focus:     map[string]interface{}{"topic": "resume state"},
+		Execution: map[string]interface{}{"next_action": "run focused tests"},
+		Horizons:  map[string]interface{}{"next_verification": "go test ./pkg/cognitive"},
+	})
+	if err != nil {
+		t.Fatalf("ValidateSessionStateSlotsBudget returned error for bounded payload: %v", err)
+	}
+}
+
+func TestValidateSessionStateSlotsBudget_RejectsOversizedPayload(t *testing.T) {
+	oversized := strings.Repeat("x", 33*1024)
+	err := ValidateSessionStateSlotsBudget(SessionStateSlots{
+		Focus:     map[string]interface{}{"topic": oversized},
+		Execution: map[string]interface{}{"next_action": "reject oversized payload"},
+		Horizons:  map[string]interface{}{"next_verification": "go test ./pkg/cognitive"},
+	})
+	if !errors.Is(err, ErrSessionStatePayloadTooLarge) {
+		t.Fatalf("ValidateSessionStateSlotsBudget error = %v, want %v", err, ErrSessionStatePayloadTooLarge)
+	}
+}
+
+func TestValidateSessionStateSlotsBudget_RejectsUnmarshalableValue(t *testing.T) {
+	err := ValidateSessionStateSlotsBudget(SessionStateSlots{
+		Focus: map[string]interface{}{
+			"bad": func() {},
+		},
+	})
+	if err == nil {
+		t.Fatal("ValidateSessionStateSlotsBudget succeeded for unmarshalable payload")
+	}
+	if errors.Is(err, ErrSessionStatePayloadTooLarge) {
+		t.Fatalf("ValidateSessionStateSlotsBudget error = %v, want marshal failure", err)
+	}
+	var unsupportedType *json.UnsupportedTypeError
+	if !errors.As(err, &unsupportedType) {
+		t.Fatalf("ValidateSessionStateSlotsBudget error = %T %v, want json.UnsupportedTypeError", err, err)
 	}
 }
 

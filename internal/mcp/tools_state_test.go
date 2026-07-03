@@ -90,6 +90,33 @@ func callStateToolViaServer(t *testing.T, srv *Server, name string, args map[str
 	return text
 }
 
+func validNativeResumePacket() cognitive.ResumePacket {
+	return cognitive.ResumePacket{
+		Source:           cognitive.StatePacketSourceNative,
+		Freshness:        cognitive.StateFreshnessFresh,
+		Drift:            cognitive.StateDrift{Kind: cognitive.StateDriftNone, Conflicts: []cognitive.StateConflict{}, CheckedAt: time.Now().UTC()},
+		NextAction:       cognitive.StateAction{Kind: cognitive.StateActionCommand, Description: "run focused tests", Command: "go test ./internal/mcp"},
+		NextVerification: cognitive.StateVerification{Kind: cognitive.StateVerificationCommand, Description: "run full suite", Command: "go test ./..."},
+		GeneratedAt:      time.Now().UTC(),
+		Project:          "engram",
+		Principal:        "agent:developer",
+		SessionID:        "session-1",
+		GoalID:           "goal-1",
+		TaskID:           "task-1",
+		EvidenceRefs:     []string{"agent_session_state:session-1@native"},
+	}
+}
+
+func assertResumeToolError(t *testing.T, packet cognitive.ResumePacket, request string, want string) {
+	t.Helper()
+	srv := NewServer(ServerOptions{Version: "test"})
+	srv.SetStateStore(&fakeStatePlane{packet: packet})
+
+	_, err := srv.callTool(context.Background(), "get_state", json.RawMessage(request))
+	require.Error(t, err)
+	require.ErrorContains(t, err, want)
+}
+
 func TestStateToolsAdvertisedOnlyWhenNativeStoreIsReachable(t *testing.T) {
 	srv := NewServer(ServerOptions{Version: "test"})
 	require.NotContains(t, buildToolsList(srv), "get_state")
@@ -420,6 +447,88 @@ func TestGetStateToolResumeRejectsPacketIdentityMismatch(t *testing.T) {
 	_, err := srv.callTool(context.Background(), "get_state", json.RawMessage(`{"action":"resume","project":"engram","principal":"agent:developer","session_id":"session-1"}`))
 	require.Error(t, err)
 	require.ErrorContains(t, err, "native resume principal must match request")
+}
+
+func TestGetStateToolResumeRejectsAdditionalIdentityMismatches(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*cognitive.ResumePacket)
+		request string
+		want    string
+	}{
+		{
+			name: "project mismatch",
+			mutate: func(packet *cognitive.ResumePacket) {
+				packet.Project = "wrong-project"
+			},
+			request: `{"action":"resume","project":"engram","principal":"agent:developer","session_id":"session-1"}`,
+			want:    "native resume project must match request",
+		},
+		{
+			name: "session mismatch",
+			mutate: func(packet *cognitive.ResumePacket) {
+				packet.SessionID = "wrong-session"
+			},
+			request: `{"action":"resume","project":"engram","principal":"agent:developer","session_id":"session-1"}`,
+			want:    "native resume session_id must match request",
+		},
+		{
+			name: "goal mismatch",
+			mutate: func(packet *cognitive.ResumePacket) {
+				packet.GoalID = "wrong-goal"
+			},
+			request: `{"action":"resume","project":"engram","principal":"agent:developer","session_id":"session-1","goal_id":"goal-1"}`,
+			want:    "native resume goal_id must match request",
+		},
+		{
+			name: "task mismatch",
+			mutate: func(packet *cognitive.ResumePacket) {
+				packet.TaskID = "wrong-task"
+			},
+			request: `{"action":"resume","project":"engram","principal":"agent:developer","session_id":"session-1","task_id":"task-1"}`,
+			want:    "native resume task_id must match request",
+		},
+		{
+			name: "missing next action kind",
+			mutate: func(packet *cognitive.ResumePacket) {
+				packet.NextAction.Kind = ""
+			},
+			request: `{"action":"resume","project":"engram","principal":"agent:developer","session_id":"session-1"}`,
+			want:    "native resume next_action.kind is required",
+		},
+		{
+			name: "missing next action command",
+			mutate: func(packet *cognitive.ResumePacket) {
+				packet.NextAction.Command = ""
+			},
+			request: `{"action":"resume","project":"engram","principal":"agent:developer","session_id":"session-1"}`,
+			want:    "native resume next_action.command is required",
+		},
+		{
+			name: "missing next verification kind",
+			mutate: func(packet *cognitive.ResumePacket) {
+				packet.NextVerification.Kind = ""
+			},
+			request: `{"action":"resume","project":"engram","principal":"agent:developer","session_id":"session-1"}`,
+			want:    "native resume next_verification.kind is required",
+		},
+		{
+			name: "missing next verification command",
+			mutate: func(packet *cognitive.ResumePacket) {
+				packet.NextVerification.Command = ""
+			},
+			request: `{"action":"resume","project":"engram","principal":"agent:developer","session_id":"session-1"}`,
+			want:    "native resume next_verification.command is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			packet := validNativeResumePacket()
+			tt.mutate(&packet)
+			assertResumeToolError(t, packet, tt.request, tt.want)
+		})
+	}
 }
 
 func TestGetStateToolRejectsFilesystemFallbackOption(t *testing.T) {

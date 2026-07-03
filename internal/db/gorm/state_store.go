@@ -17,8 +17,6 @@ import (
 	"github.com/thebtf/engram/pkg/cognitive"
 )
 
-const maxSessionStatePayloadBytes = 32 * 1024
-
 // JSONObjectRaw stores one JSON object in a PostgreSQL JSONB column.
 type JSONObjectRaw []byte
 
@@ -724,14 +722,7 @@ func marshalJSONObject(value map[string]interface{}) (JSONObjectRaw, error) {
 }
 
 func validateSessionStateBudget(state cognitive.SessionStateSlots) error {
-	payload, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
-	if len(payload) > maxSessionStatePayloadBytes {
-		return fmt.Errorf("session state exceeds 32 KB budget")
-	}
-	return nil
+	return cognitive.ValidateSessionStateSlotsBudget(state)
 }
 
 func unmarshalJSONObject(raw JSONObjectRaw) (map[string]interface{}, error) {

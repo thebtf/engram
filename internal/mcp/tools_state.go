@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -30,8 +31,6 @@ type setStateToolArgs struct {
 	SessionID string          `json:"session_id"`
 	State     json.RawMessage `json:"state"`
 }
-
-const maxSessionStatePayloadBytes = 32 * 1024
 
 func resumeScopesFromFields(explicit []cognitive.StateScopeKind, sessionID, goalID, taskID string) []cognitive.StateScopeKind {
 	if len(explicit) > 0 {
@@ -291,14 +290,14 @@ func decodeSessionStateForWrite(raw json.RawMessage) (cognitive.SessionStateSlot
 }
 
 func validateSessionStateBudget(state cognitive.SessionStateSlots) error {
-	payload, err := json.Marshal(state)
-	if err != nil {
-		return fmt.Errorf("state must match session state shape: %w", err)
+	err := cognitive.ValidateSessionStateSlotsBudget(state)
+	if err == nil {
+		return nil
 	}
-	if len(payload) > maxSessionStatePayloadBytes {
-		return fmt.Errorf("session state exceeds 32 KB budget")
+	if errors.Is(err, cognitive.ErrSessionStatePayloadTooLarge) {
+		return err
 	}
-	return nil
+	return fmt.Errorf("state must match session state shape: %w", err)
 }
 
 func validateNativeResumePacket(packet cognitive.ResumePacket, request cognitive.ResumePacketRequest) error {

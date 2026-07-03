@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"runtime"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/thebtf/engram/internal/cognitive/core"
+	"github.com/thebtf/engram/internal/cognitive/s1state"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/pkg/cognitive"
 )
@@ -151,6 +153,42 @@ func TestPlatformWiring_FlagOn_S1RealStateWriterDispatchesNonNoop(t *testing.T) 
 	}
 	if !reflect.DeepEqual(writer.lastSession, want) {
 		t.Fatalf("real StateWriter slots: got %#v, want %#v", writer.lastSession, want)
+	}
+}
+
+func TestRegisterS1StateWriterSubsystemRejectsTypedNilWriter(t *testing.T) {
+	registry := core.NewRegistry()
+	var writer *fakeRegistryStateWriter
+
+	err := registerS1StateWriterSubsystem(registry, writer)
+	if !errors.Is(err, s1state.ErrNoWriter) {
+		t.Fatalf("registerS1StateWriterSubsystem error = %v, want %v", err, s1state.ErrNoWriter)
+	}
+}
+
+func TestShouldRegisterRealS1StateWriter(t *testing.T) {
+	tests := []struct {
+		name string
+		plug string
+		s1   string
+		want bool
+	}{
+		{name: "master off s1 off", plug: "", s1: "", want: false},
+		{name: "master off s1 on", plug: "", s1: "true", want: false},
+		{name: "master on s1 off", plug: "true", s1: "", want: false},
+		{name: "master on s1 on", plug: "true", s1: "true", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENGRAM_V7_PLUG_ENABLED", tt.plug)
+			t.Setenv("ENGRAM_V7_S1_STATE", tt.s1)
+
+			got := shouldRegisterRealS1StateWriter(core.LoadFlagConfigFromEnv())
+			if got != tt.want {
+				t.Fatalf("shouldRegisterRealS1StateWriter() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"sync"
@@ -296,8 +297,25 @@ func wireStateStore(s *Service, stateStore statePlane) {
 	s.initMu.Unlock()
 }
 
-func registerS1StateWriterSubsystem(registry cognitivecore.SubsystemRegistry, writer cognitive.StateWriter) error {
+func shouldRegisterRealS1StateWriter(flagCfg cognitivecore.FlagConfig) bool {
+	return flagCfg.IsPlugEnabled() && flagCfg.IsSubsystemEnabled("s1")
+}
+
+func hasEffectiveStateWriter(writer cognitive.StateWriter) bool {
 	if writer == nil {
+		return false
+	}
+	value := reflect.ValueOf(writer)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return !value.IsNil()
+	default:
+		return true
+	}
+}
+
+func registerS1StateWriterSubsystem(registry cognitivecore.SubsystemRegistry, writer cognitive.StateWriter) error {
+	if !hasEffectiveStateWriter(writer) {
 		return s1state.ErrNoWriter
 	}
 	subsystem := s1state.NewSubsystem(writer)
@@ -641,7 +659,7 @@ func (s *Service) initializeAsync() {
 	experienceProvider := newMemoryExperienceProvider(principalMemoryQuerySvc)
 	domainOwnerStore := gorm.NewDomainOwnerStore(store)
 	domainRegistrySvc := principalmemory.NewDomainRegistryService(domainOwnerStore, auditStore)
-	if s.flagConfig.IsPlugEnabled() && s.flagConfig.IsSubsystemEnabled("s1") {
+	if shouldRegisterRealS1StateWriter(s.flagConfig) {
 		if err := registerS1StateWriterSubsystem(s.cognitiveRegistry, statePlaneSvc); err != nil {
 			s.setInitError(fmt.Errorf("register real s1 state writer: %w", err))
 			return
