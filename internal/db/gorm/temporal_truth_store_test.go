@@ -87,6 +87,150 @@ func TestTemporalTruthStore_RefreshProjectAdmitsAllowlistedSupersessionChain(t *
 	require.Equal(t, fmt.Sprintf("memory:%d", first.ID), response.TrueThen.Provenance[0].ID)
 }
 
+func TestTemporalTruthStore_RefreshProjectCollapsesDuplicateValidFromRows(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewTemporalTruthStore(db)
+	ctx := context.Background()
+	project := fmt.Sprintf("temporal-duplicate-valid-from-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM temporal_truth_records WHERE project = ?`, project).Error
+		_ = db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error
+	})
+
+	validFromThen := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	duplicateValidFrom := time.Date(2026, time.June, 1, 0, 0, 0, 0, time.UTC)
+	first := insertTemporalTruthMemory(t, db, &Memory{
+		Project:       project,
+		Content:       "v6",
+		Status:        "active",
+		Tier:          "episodic",
+		EpistemicType: "decision",
+		Domain:        "release",
+		ValidFrom:     &validFromThen,
+		CreatedAt:     validFromThen,
+		UpdatedAt:     validFromThen,
+		Version:       1,
+	})
+	second := insertTemporalTruthMemory(t, db, &Memory{
+		Project:       project,
+		Content:       "v7",
+		Status:        "active",
+		Tier:          "episodic",
+		EpistemicType: "decision",
+		Domain:        "release",
+		SupersedesID:  &first.ID,
+		ValidFrom:     &duplicateValidFrom,
+		CreatedAt:     duplicateValidFrom,
+		UpdatedAt:     duplicateValidFrom,
+		Version:       1,
+	})
+	thirdCreatedAt := duplicateValidFrom.Add(time.Minute)
+	third := insertTemporalTruthMemory(t, db, &Memory{
+		Project:       project,
+		Content:       "v8",
+		Status:        "active",
+		Tier:          "episodic",
+		EpistemicType: "decision",
+		Domain:        "release",
+		SupersedesID:  &second.ID,
+		ValidFrom:     &duplicateValidFrom,
+		CreatedAt:     thirdCreatedAt,
+		UpdatedAt:     thirdCreatedAt,
+		Version:       1,
+	})
+	require.NoError(t, db.Model(&Memory{}).Where("id = ?", first.ID).Updates(map[string]any{
+		"status":        "superseded",
+		"superseded_by": second.ID,
+		"valid_until":   duplicateValidFrom,
+		"updated_at":    duplicateValidFrom,
+	}).Error)
+	require.NoError(t, db.Model(&Memory{}).Where("id = ?", second.ID).Updates(map[string]any{
+		"status":        "superseded",
+		"superseded_by": third.ID,
+		"valid_until":   duplicateValidFrom,
+		"updated_at":    thirdCreatedAt,
+	}).Error)
+
+	stats, err := store.RefreshProject(ctx, project)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.AdmittedFacts)
+	require.Equal(t, 2, stats.AdmittedRecords, "duplicate valid_from rows must collapse to the latest chain member for that timestamp")
+
+	service := temporaltruth.NewStoreBackedService(store)
+	response, err := service.QueryTemporalTruth(ctx, cognitive.TemporalTruthQueryRequest{
+		FactID:  strconv.FormatInt(first.ID, 10),
+		Project: project,
+		Limit:   5,
+	})
+	require.NoError(t, err)
+	require.Equal(t, cognitive.TemporalTruthFound, response.State)
+	require.NotNil(t, response.TrueNow)
+	require.Equal(t, "v8", response.TrueNow.Value)
+	require.Len(t, response.History, 2)
+	require.Equal(t, "v6", response.History[0].Value)
+	require.Equal(t, "v8", response.History[1].Value)
+}
+
+func TestTemporalTruthStore_RefreshProjectBoundsPredecessorFromSuccessorChain(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewTemporalTruthStore(db)
+	ctx := context.Background()
+	project := fmt.Sprintf("temporal-successor-chain-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM temporal_truth_records WHERE project = ?`, project).Error
+		_ = db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error
+	})
+
+	validFromThen := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	validFromNow := time.Date(2026, time.June, 1, 0, 0, 0, 0, time.UTC)
+	first := insertTemporalTruthMemory(t, db, &Memory{
+		Project:       project,
+		Content:       "v6",
+		Status:        "superseded",
+		Tier:          "episodic",
+		EpistemicType: "decision",
+		Domain:        "release",
+		ValidFrom:     &validFromThen,
+		CreatedAt:     validFromThen,
+		UpdatedAt:     validFromThen,
+		Version:       1,
+	})
+	second := insertTemporalTruthMemory(t, db, &Memory{
+		Project:       project,
+		Content:       "v7",
+		Status:        "active",
+		Tier:          "episodic",
+		EpistemicType: "decision",
+		Domain:        "release",
+		SupersedesID:  &first.ID,
+		ValidFrom:     &validFromNow,
+		CreatedAt:     validFromNow,
+		UpdatedAt:     validFromNow,
+		Version:       1,
+	})
+
+	stats, err := store.RefreshProject(ctx, project)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.AdmittedFacts)
+	require.Equal(t, 2, stats.AdmittedRecords)
+
+	service := temporaltruth.NewStoreBackedService(store)
+	response, err := service.QueryTemporalTruth(ctx, cognitive.TemporalTruthQueryRequest{
+		FactID:  strconv.FormatInt(first.ID, 10),
+		Project: project,
+		Limit:   5,
+	})
+	require.NoError(t, err)
+	require.Len(t, response.History, 2)
+	predecessor := response.History[0]
+	require.Equal(t, "v6", predecessor.Value)
+	require.NotNil(t, predecessor.ValidUntil)
+	require.Equal(t, validFromNow, predecessor.ValidUntil.UTC())
+	require.NotNil(t, predecessor.InvalidatedAt)
+	require.Equal(t, validFromNow, predecessor.InvalidatedAt.UTC())
+	require.Equal(t, fmt.Sprintf("superseded by memory %d", second.ID), predecessor.InvalidationRationale)
+}
+
 func TestTemporalTruthStore_RefreshProjectRejectsSingleWriteAndUnsupportedChains(t *testing.T) {
 	db := openCandidateTestDB(t)
 	store := NewTemporalTruthStore(db)

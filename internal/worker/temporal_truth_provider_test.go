@@ -12,6 +12,7 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/pkg/cognitive"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 type fakeTemporalTruthStore struct {
@@ -117,6 +118,121 @@ func TestMemoryTemporalTruthProviderReturnsNotSelectedWhenAllRowsHidden(t *testi
 
 	require.NoError(t, err)
 	require.Equal(t, cognitive.TemporalTruthNotSelected, response.State)
+}
+
+func TestMemoryTemporalTruthProviderIncludesSupersededVisibleProvenanceAndDropsDeniedRows(t *testing.T) {
+	validFromDenied := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	validFromVisible := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.UTC)
+	validFromCurrent := time.Date(2026, time.June, 1, 0, 0, 0, 0, time.UTC)
+	provider := newMemoryTemporalTruthProvider(&fakeTemporalTruthStore{rows: []gormdb.TemporalTruthStoredRecord{
+		{
+			FactID:          "42",
+			FactClass:       "release_policy",
+			Project:         "engram",
+			Value:           "denied private superseded value",
+			ValidFrom:       validFromDenied,
+			SourceMemoryIDs: []int64{10},
+		},
+		{
+			FactID:          "42",
+			FactClass:       "release_policy",
+			Project:         "engram",
+			Value:           "visible superseded value",
+			ValidFrom:       validFromVisible,
+			SourceMemoryIDs: []int64{11},
+		},
+		{
+			FactID:          "42",
+			FactClass:       "release_policy",
+			Project:         "engram",
+			Value:           "current value",
+			ValidFrom:       validFromCurrent,
+			SourceMemoryIDs: []int64{12},
+		},
+	}}, principalmemory.NewPrincipalMemoryQueryService(&filteringTemporalTruthPrincipalMemoryStore{rows: []*models.Memory{
+		{
+			ID:                 10,
+			Project:            "engram",
+			Content:            "denied private superseded value",
+			Status:             "superseded",
+			OwnerPrincipal:     "agent/alice",
+			OwnerPrincipalKind: "agent",
+			AgentVisibility:    models.AgentVisibilityPrivate,
+			Domain:             "release",
+			CreatedAt:          validFromDenied,
+		},
+		{
+			ID:                 11,
+			Project:            "engram",
+			Content:            "visible superseded value",
+			Status:             "superseded",
+			OwnerPrincipal:     "agent/omp",
+			OwnerPrincipalKind: "agent",
+			AgentVisibility:    models.AgentVisibilityShared,
+			Domain:             "release",
+			CreatedAt:          validFromVisible,
+		},
+		{
+			ID:                 12,
+			Project:            "engram",
+			Content:            "current value",
+			Status:             "active",
+			OwnerPrincipal:     "agent/omp",
+			OwnerPrincipalKind: "agent",
+			AgentVisibility:    models.AgentVisibilityShared,
+			Domain:             "release",
+			CreatedAt:          validFromCurrent,
+		},
+	}}, &fakeTemporalTruthAuditLogger{}))
+	ctx := auth.WithIdentity(context.Background(), auth.ClientWithPrincipal("read-write", "keycard-1", "agent/omp", auth.PrincipalKindAgent))
+
+	response, err := provider.QueryTemporalTruth(ctx, cognitive.TemporalTruthQueryRequest{FactID: "42", Project: "engram", Limit: 5})
+
+	require.NoError(t, err)
+	require.Equal(t, cognitive.TemporalTruthFound, response.State)
+	require.Len(t, response.History, 2)
+	require.Equal(t, "visible superseded value", response.History[0].Value)
+	require.Equal(t, "memory:11", response.History[0].Provenance[0].ID)
+	require.Equal(t, "current value", response.History[1].Value)
+	require.Equal(t, "memory:12", response.History[1].Provenance[0].ID)
+	require.Len(t, response.ProvenanceChain, 2)
+}
+
+type filteringTemporalTruthPrincipalMemoryStore struct {
+	rows []*models.Memory
+}
+
+func (f *filteringTemporalTruthPrincipalMemoryStore) ListPrincipalMemory(_ context.Context, project string, opts gormdb.ListOptions) ([]*models.Memory, error) {
+	idSet := make(map[int64]struct{}, len(opts.IDs))
+	for _, id := range opts.IDs {
+		idSet[id] = struct{}{}
+	}
+	result := make([]*models.Memory, 0, len(f.rows))
+	for _, row := range f.rows {
+		if row == nil || row.Project != project {
+			continue
+		}
+		if len(idSet) > 0 {
+			if _, ok := idSet[row.ID]; !ok {
+				continue
+			}
+		}
+		if opts.IncludeSuperseded {
+			if row.Status != "active" && row.Status != "superseded" {
+				continue
+			}
+		} else if row.Status != "active" {
+			continue
+		}
+		result = append(result, row)
+	}
+	return result, nil
+}
+
+type fakeTemporalTruthAuditLogger struct{}
+
+func (fakeTemporalTruthAuditLogger) Log(context.Context, gormdb.AuditLogEntry) error {
+	return nil
 }
 
 func TestMemoryTemporalTruthProviderReturnsStoreError(t *testing.T) {

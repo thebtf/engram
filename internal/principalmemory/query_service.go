@@ -59,17 +59,21 @@ type PrincipalMemoryQueryRequest struct {
 	// Query cliff or an unfiltered newest-N recency cliff). ADDITIVE to the
 	// access-policy filters. When empty the fetch stays bounded by Limit only.
 	QueryTerms []string
-	// IDs, when non-empty, restricts the projection to the given memory IDs via an
+	// IDs, when non-empty, restrict the projection to the given memory IDs via an
 	// additive WHERE id IN (...). Used by the experience detail-by-id path so a
 	// specific memory:<id> lookup fetches that exact row under the same
 	// owner/kind/visibility/domain access-policy gating (NFR-1 preserved).
-	IDs                []int64
-	AgentVisibility    string
-	IncludePrivate     bool
-	Domain             string
-	Limit              int
-	Offset             int
-	SourceSessionID    string
+	IDs []int64
+	// IncludeSuperseded widens the store status filter to include superseded rows
+	// under the same principal/domain/visibility gates. Default false preserves
+	// the legacy active-only read path.
+	IncludeSuperseded bool
+	AgentVisibility   string
+	IncludePrivate    bool
+	Domain            string
+	Limit             int
+	Offset            int
+	SourceSessionID   string
 }
 
 // normalizeQueryTerms trims, lower-cases, and de-duplicates OR-narrowing content
@@ -183,6 +187,7 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 		ContentContains:    strings.TrimSpace(req.Query),
 		ContentContainsAny: normalizeQueryTerms(req.QueryTerms),
 		IDs:                req.IDs,
+		IncludeSuperseded:  req.IncludeSuperseded,
 		AgentVisibility:    strings.TrimSpace(req.AgentVisibility),
 		Domain:             strings.TrimSpace(req.Domain),
 		Limit:              principalQueryFetchLimit(limit),

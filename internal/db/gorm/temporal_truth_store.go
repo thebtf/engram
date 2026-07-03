@@ -211,6 +211,7 @@ func buildTemporalTruthRows(memories []Memory, project string) ([]temporalTruthR
 			}
 			return chain[i].ID < chain[j].ID
 		})
+		chain = collapseTemporalTruthChainByValidFrom(chain)
 		if len(chain) < 2 {
 			result.ExcludedSingleWrite++
 			continue
@@ -221,12 +222,39 @@ func buildTemporalTruthRows(memories []Memory, project string) ([]temporalTruthR
 			continue
 		}
 		result.AdmittedFacts++
-		for _, memory := range chain {
-			rows = append(rows, temporalTruthRowFromMemory(memory, factClass, rootID))
+		for i, memory := range chain {
+			var successor *Memory
+			if i+1 < len(chain) {
+				successor = chain[i+1]
+			}
+			rows = append(rows, temporalTruthRowFromMemory(memory, successor, factClass, rootID))
 			result.AdmittedRecords++
 		}
 	}
 	return rows, result
+}
+
+func collapseTemporalTruthChainByValidFrom(chain []*Memory) []*Memory {
+	if len(chain) < 2 {
+		return chain
+	}
+	collapsed := make([]*Memory, 0, len(chain))
+	for i := 0; i < len(chain); {
+		chosen := chain[i]
+		validFrom := temporalTruthMemoryValidFrom(chosen)
+		j := i + 1
+		for j < len(chain) {
+			nextValidFrom := temporalTruthMemoryValidFrom(chain[j])
+			if !nextValidFrom.Equal(validFrom) {
+				break
+			}
+			chosen = chain[j]
+			j++
+		}
+		collapsed = append(collapsed, chosen)
+		i = j
+	}
+	return collapsed
 }
 
 func temporalTruthRootID(row *Memory, rowsByID map[int64]*Memory) int64 {
@@ -262,9 +290,9 @@ func temporalTruthMemoryValidFrom(row *Memory) time.Time {
 	return time.Unix(0, 0).UTC()
 }
 
-func temporalTruthRowFromMemory(row *Memory, factClass string, rootID int64) temporalTruthRecordRow {
-	validUntil := temporalTruthMemoryValidUntil(row)
-	invalidatedAt := temporalTruthInvalidatedAt(row, validUntil)
+func temporalTruthRowFromMemory(row *Memory, successor *Memory, factClass string, rootID int64) temporalTruthRecordRow {
+	validUntil := temporalTruthMemoryValidUntil(row, successor)
+	invalidatedAt := temporalTruthInvalidatedAt(row, successor, validUntil)
 	return temporalTruthRecordRow{
 		FactID:                strconv.FormatInt(rootID, 10),
 		FactClass:             factClass,
@@ -273,14 +301,18 @@ func temporalTruthRowFromMemory(row *Memory, factClass string, rootID int64) tem
 		ValidFrom:             temporalTruthMemoryValidFrom(row),
 		ValidUntil:            validUntil,
 		InvalidatedAt:         invalidatedAt,
-		InvalidationRationale: temporalTruthInvalidationRationale(row),
+		InvalidationRationale: temporalTruthInvalidationRationale(row, successor),
 		SourceMemoryIDs:       Int64Array{row.ID},
 	}
 }
 
-func temporalTruthMemoryValidUntil(row *Memory) *time.Time {
-	if row != nil && row.ValidUntil != nil && !row.ValidUntil.IsZero() && !isTemporalTruthOpenEnded(*row.ValidUntil) {
+func temporalTruthMemoryValidUntil(row *Memory, successor *Memory) *time.Time {
+	if temporalTruthHasExplicitValidUntil(row) {
 		value := row.ValidUntil.UTC()
+		return &value
+	}
+	if successor != nil {
+		value := temporalTruthMemoryValidFrom(successor)
 		return &value
 	}
 	if row != nil && row.SupersededBy != nil && !row.UpdatedAt.IsZero() {
@@ -291,19 +323,29 @@ func temporalTruthMemoryValidUntil(row *Memory) *time.Time {
 	return &value
 }
 
-func temporalTruthInvalidatedAt(row *Memory, validUntil *time.Time) *time.Time {
-	if row == nil || row.SupersededBy == nil || validUntil == nil || isTemporalTruthOpenEnded(*validUntil) {
+func temporalTruthHasExplicitValidUntil(row *Memory) bool {
+	return row != nil && row.ValidUntil != nil && !row.ValidUntil.IsZero() && !isTemporalTruthOpenEnded(*row.ValidUntil)
+}
+
+func temporalTruthInvalidatedAt(row *Memory, successor *Memory, validUntil *time.Time) *time.Time {
+	if validUntil == nil || isTemporalTruthOpenEnded(*validUntil) {
+		return nil
+	}
+	if (row == nil || row.SupersededBy == nil) && (successor == nil || temporalTruthHasExplicitValidUntil(row)) {
 		return nil
 	}
 	value := validUntil.UTC()
 	return &value
 }
 
-func temporalTruthInvalidationRationale(row *Memory) string {
-	if row == nil || row.SupersededBy == nil {
-		return ""
+func temporalTruthInvalidationRationale(row *Memory, successor *Memory) string {
+	if row != nil && row.SupersededBy != nil {
+		return fmt.Sprintf("superseded by memory %d", *row.SupersededBy)
 	}
-	return fmt.Sprintf("superseded by memory %d", *row.SupersededBy)
+	if successor != nil && !temporalTruthHasExplicitValidUntil(row) {
+		return fmt.Sprintf("superseded by memory %d", successor.ID)
+	}
+	return ""
 }
 
 func isTemporalTruthOpenEnded(value time.Time) bool {

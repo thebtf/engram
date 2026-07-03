@@ -60,7 +60,7 @@ func (s *Service) handleTemporalTruthRead(w http.ResponseWriter, r *http.Request
 	}
 	response, err := provider.QueryTemporalTruth(r.Context(), request)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, response)

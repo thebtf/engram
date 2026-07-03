@@ -79,11 +79,12 @@ func (p *memoryTemporalTruthProvider) projectVisibleRecords(ctx context.Context,
 	if len(ids) > 0 {
 		caller, callerIsAdmin := principalMemoryQueryCallerFromContext(ctx)
 		result, err := p.querySvc.Query(ctx, principalmemory.PrincipalMemoryQueryRequest{
-			Project:       project,
-			Caller:        caller,
-			CallerIsAdmin: callerIsAdmin,
-			IDs:           ids,
-			Limit:         len(ids),
+			Project:           project,
+			Caller:            caller,
+			CallerIsAdmin:     callerIsAdmin,
+			IDs:               ids,
+			IncludeSuperseded: true,
+			Limit:             len(ids),
 		})
 		if err != nil {
 			return nil, err

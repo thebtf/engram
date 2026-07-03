@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -192,4 +193,26 @@ func TestHandleTemporalTruthReadRejectsInvalidAsOf(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, w.Code)
 	require.Contains(t, w.Body.String(), "as_of must be RFC3339")
+}
+
+func TestHandleTemporalTruthReadMapsProviderFailureTo500AndMalformedRequestTo400(t *testing.T) {
+	provider := &fakeTemporalTruthProvider{err: errors.New("temporal store unavailable")}
+	service := &Service{temporalTruthEnabled: true, temporalTruthProvider: provider}
+	validReq := httptest.NewRequest(http.MethodGet, "/api/temporal-truth?project=engram&fact_id=42", nil)
+	validW := httptest.NewRecorder()
+
+	service.handleTemporalTruthRead(validW, validReq)
+
+	require.Equal(t, http.StatusInternalServerError, validW.Code)
+	require.Contains(t, validW.Body.String(), "temporal store unavailable")
+	require.Equal(t, 1, provider.queryCalls)
+
+	malformedReq := httptest.NewRequest(http.MethodGet, "/api/temporal-truth?project=engram&fact_id=42&as_of=nope", nil)
+	malformedW := httptest.NewRecorder()
+
+	service.handleTemporalTruthRead(malformedW, malformedReq)
+
+	require.Equal(t, http.StatusBadRequest, malformedW.Code)
+	require.Contains(t, malformedW.Body.String(), "as_of must be RFC3339")
+	require.Equal(t, 1, provider.queryCalls, "malformed client input must fail before provider dispatch")
 }

@@ -280,6 +280,66 @@ func TestPrincipalMemoryQueryService_IncludePrivateNonAdminCrossPrincipalFailsBe
 	assert.False(t, store.called, "include_private denial must happen before the store query")
 }
 
+
+func TestPrincipalMemoryQueryService_IDBoundedProjectionIncludesSupersededRows(t *testing.T) {
+	store := &statusFilteringPrincipalMemoryStore{rows: []*models.Memory{
+		{
+			ID:                 701,
+			Project:            "project-a",
+			Content:            "superseded provenance row",
+			Status:             "superseded",
+			OwnerPrincipal:     "agent/alice",
+			OwnerPrincipalKind: "agent",
+			AgentVisibility:    models.AgentVisibilityShared,
+			Domain:             "release",
+		},
+	}}
+	svc := NewPrincipalMemoryQueryService(store, &fakeAuditLogger{})
+
+	result, err := svc.Query(context.Background(), PrincipalMemoryQueryRequest{
+		Project:            "project-a",
+		Caller:             PrincipalRef{Principal: "agent/alice", PrincipalKind: "agent"},
+		IDs:                []int64{701},
+		IncludeSuperseded: true,
+		Limit:              1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+	assert.Equal(t, int64(701), result.Items[0].ID)
+}
+
+type statusFilteringPrincipalMemoryStore struct {
+	rows []*models.Memory
+}
+
+func (f *statusFilteringPrincipalMemoryStore) ListPrincipalMemory(_ context.Context, project string, opts gormdb.ListOptions) ([]*models.Memory, error) {
+	idSet := make(map[int64]struct{}, len(opts.IDs))
+	for _, id := range opts.IDs {
+		idSet[id] = struct{}{}
+	}
+	result := make([]*models.Memory, 0, len(f.rows))
+	for _, row := range f.rows {
+		if row == nil || row.Project != project {
+			continue
+		}
+		if len(idSet) > 0 {
+			if _, ok := idSet[row.ID]; !ok {
+				continue
+			}
+		}
+		if opts.IncludeSuperseded {
+			if row.Status != "active" && row.Status != "superseded" {
+				continue
+			}
+		} else if row.Status != "active" {
+			continue
+		}
+		result = append(result, row)
+	}
+	return result, nil
+}
+
 type fakePrincipalMemoryStore struct {
 	rows    []*models.Memory
 	batches [][]*models.Memory
