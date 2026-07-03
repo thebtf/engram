@@ -3535,9 +3535,11 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return nil
 			},
 			Rollback: func(tx *gorm.DB) error {
-				cols := []string{"tier", "epistemic_type", "confidence", "stability", "retrievability",
+				cols := []string{
+					"tier", "epistemic_type", "confidence", "stability", "retrievability",
 					"recurrence_count", "last_confirmed", "review_after", "defeasibility",
-					"superseded_by", "promotion_target"}
+					"superseded_by", "promotion_target",
+				}
 				for _, col := range cols {
 					if err := tx.Exec("ALTER TABLE memories DROP COLUMN IF EXISTS " + col).Error; err != nil {
 						return err
@@ -4097,7 +4099,6 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 				return tx.Exec(
 					`ALTER TABLE memories ALTER COLUMN tier SET DEFAULT 'semantic'`,
 				).Error
-
 			},
 		},
 		// 132_crystallization_candidates — Milestone F TG4 (T022).
@@ -4785,6 +4786,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		forgettingReviewSnapshotOpTypeMigration154(),
 		booksJobsMigration155(),
 		accessMilestoneMigration156(),
+		temporalTruthRecordsMigration157(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

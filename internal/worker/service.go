@@ -141,6 +141,7 @@ type Service struct {
 	candidateStore                   *gorm.CandidateStore         // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	candidateQueueEnabled            bool                         // cached at startup; handlers must not read env per request
 	graphEnabled                     bool                         // cached at startup; graph REST handlers must not read env per request
+	temporalTruthEnabled             bool                         // cached at startup; temporal truth REST handlers must not read env per request
 	candidateReviewStoreSeam         candidateReviewStore         // test seam for REST candidate queue handlers
 	candidateReviewSnapshotStoreSeam candidateReviewSnapshotStore // test seam for candidate pre-action snapshots
 	graphEdgeStoreSeam               graphEdgeStore               // test seam for graph REST handlers
@@ -178,6 +179,7 @@ type Service struct {
 	memoryStoreSeam             memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
 	stateStore                  statePlane
 	experienceProvider          experienceHistoryProvider
+	temporalTruthProvider       temporalTruthProvider
 	principalMemoryQueryService principalMemoryQueryService
 	domainOwnerStore            domainOwnerStore
 	domainRegistryService       domainRegistryService
@@ -505,6 +507,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		cachedObsCounts:       make(map[string]cachedCount),
 		candidateQueueEnabled: candidateQueueEnabledFromEnv(),
 		graphEnabled:          graphEnabledFromEnv(),
+		temporalTruthEnabled:  temporalTruthEnabledFromEnv(),
 		statsCacheTTL:         time.Minute,
 		mcpHealth:             mcp.NewMCPHealth(),
 		eventBus:              &projectevents.Bus{},
@@ -617,6 +620,8 @@ func (s *Service) initializeAsync() {
 	stateStore := gorm.NewStateStore(store.GetDB(), auditStore)
 	statePlaneSvc := stateplane.NewService(stateStore, nil)
 	principalMemoryQuerySvc := principalmemory.NewPrincipalMemoryQueryService(memoryStore, auditStore)
+	temporalTruthStore := gorm.NewTemporalTruthStore(store.GetDB())
+	temporalTruthProvider := newMemoryTemporalTruthProvider(temporalTruthStore, principalMemoryQuerySvc)
 	experienceProvider := newMemoryExperienceProvider(principalMemoryQuerySvc)
 	domainOwnerStore := gorm.NewDomainOwnerStore(store)
 	domainRegistrySvc := principalmemory.NewDomainRegistryService(domainOwnerStore, auditStore)
@@ -646,6 +651,7 @@ func (s *Service) initializeAsync() {
 	s.credentialStore = credentialStore
 	s.memoryStore = memoryStore
 	s.experienceProvider = experienceProvider
+	s.temporalTruthProvider = temporalTruthProvider
 	s.principalMemoryQueryService = principalMemoryQuerySvc
 	s.domainOwnerStore = domainOwnerStore
 	s.domainRegistryService = domainRegistrySvc
@@ -803,6 +809,7 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)
 	mcpServer.SetStateStore(statePlaneSvc)
 	mcpServer.SetExperienceProvider(experienceProvider)
+	mcpServer.SetTemporalTruthProvider(temporalTruthProvider)
 
 	// Wire the raw DB handle so handleGetMemoryStats can run injection_log /
 	// citation_log / memories-by-status raw SQL queries. Uses the same shared
@@ -1420,6 +1427,9 @@ func (s *Service) setupRoutes() {
 		// Experience/history read surface (CR-009) — read-only, bounded, archive-trigger-gated.
 		r.Get("/api/experience-history", s.handleExperienceHistoryRead)
 		r.Get("/api/experience-history/{experienceID}", s.handleExperienceHistoryDetail)
+		// Temporal truth read surface (CR-011) — bounded, provenance-first, flag-dark.
+		r.Post("/api/temporal-truth/refresh", s.handleTemporalTruthRefresh)
+		r.Get("/api/temporal-truth", s.handleTemporalTruthRead)
 
 		// Context injection
 		r.Get("/api/context/count", s.handleContextCount)

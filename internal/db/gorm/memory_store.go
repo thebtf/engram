@@ -380,6 +380,10 @@ type ListOptions struct {
 	// WHERE status IN ('active','superseded'). Default false means
 	// only 'active' rows are returned (same as legacy List).
 	IncludeSuperseded bool
+	// IncludeExpired relaxes the valid_until predicate only for explicit
+	// ID-bounded principal-memory projections so temporal provenance can include
+	// expired source memories without widening ordinary recall.
+	IncludeExpired bool
 	// OwnerPrincipal, when non-empty, restricts rows to memories attributed to
 	// the named principal before LIMIT/OFFSET are applied.
 	OwnerPrincipal string
@@ -443,13 +447,17 @@ func (s *MemoryStore) ListWithFilters(ctx context.Context, project string, opts 
 // ListPrincipalMemory returns rows using the principal-memory query seam.
 // Unlike ListWithFilters, project is optional so cross-project principal views
 // can be built without weakening the legacy ListWithFilters(project!="") guard.
+//
+// IncludeExpired is only honored for explicit ID-bounded projections
+// (opts.IncludeExpired && len(opts.IDs) > 0); ordinary principal-memory recall
+// stays on the current-validity predicate.
 func (s *MemoryStore) ListPrincipalMemory(ctx context.Context, project string, opts ListOptions) ([]*models.Memory, error) {
 	owner := strings.TrimSpace(opts.OwnerPrincipal)
 	if strings.TrimSpace(project) == "" && owner == "" {
 		return nil, fmt.Errorf("owner_principal must not be empty when project is empty")
 	}
 
-	q := baseMemoryListQuery(s.db.WithContext(ctx))
+	q := basePrincipalMemoryQuery(s.db.WithContext(ctx), opts)
 	if project = strings.TrimSpace(project); project != "" {
 		q = q.Where("project = ?", project)
 	}
@@ -465,8 +473,19 @@ func (s *MemoryStore) ListPrincipalMemory(ctx context.Context, project string, o
 }
 
 func baseMemoryListQuery(q *gorm.DB) *gorm.DB {
+	return applyCurrentMemoryValidity(q.Where("deleted_at IS NULL"))
+}
+
+func basePrincipalMemoryQuery(q *gorm.DB, opts ListOptions) *gorm.DB {
+	q = q.Where("deleted_at IS NULL")
+	if opts.IncludeExpired && len(opts.IDs) > 0 {
+		return q.Where("valid_from IS NULL OR valid_from <= NOW()")
+	}
+	return applyCurrentMemoryValidity(q)
+}
+
+func applyCurrentMemoryValidity(q *gorm.DB) *gorm.DB {
 	return q.
-		Where("deleted_at IS NULL").
 		Where("valid_from IS NULL OR valid_from <= NOW()").
 		Where("valid_until IS NULL OR valid_until >= NOW()")
 }

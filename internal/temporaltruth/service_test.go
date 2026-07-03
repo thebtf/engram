@@ -2,6 +2,7 @@ package temporaltruth
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -231,4 +232,52 @@ func TestService_QueryTemporalTruthPreservesTrueThenForExpiredSelectedFact(t *te
 	require.Equal(t, "v7", response.TrueThen.Value)
 	require.Len(t, response.History, 1)
 	require.Len(t, response.ProvenanceChain, 1)
+}
+
+type fakeRecordStore struct {
+	err     error
+	records []Record
+	lastReq cognitive.TemporalTruthQueryRequest
+}
+
+func (f *fakeRecordStore) LoadSelectedRecords(_ context.Context, request cognitive.TemporalTruthQueryRequest) ([]Record, error) {
+	f.lastReq = request
+	if f.err != nil {
+		return nil, f.err
+	}
+	return cloneRecords(f.records), nil
+}
+
+func TestService_QueryTemporalTruthLoadsRecordsFromStore(t *testing.T) {
+	store := &fakeRecordStore{records: []Record{{
+		FactID:    "release.supported_version",
+		FactClass: "release_policy",
+		Project:   "engram",
+		Value:     "v7",
+		ValidFrom: time.Date(2026, time.June, 1, 0, 0, 0, 0, time.UTC),
+	}}}
+	service := NewStoreBackedService(store)
+
+	response, err := service.QueryTemporalTruth(context.Background(), cognitive.TemporalTruthQueryRequest{
+		FactID:  "release.supported_version",
+		Project: "engram",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "release.supported_version", store.lastReq.FactID)
+	require.NotNil(t, response.TrueNow)
+	require.Equal(t, "v7", response.TrueNow.Value)
+	require.Equal(t, "release_policy", response.Scope.FactClass)
+}
+
+func TestService_QueryTemporalTruthReturnsStoreError(t *testing.T) {
+	service := NewStoreBackedService(&fakeRecordStore{err: errors.New("boom")})
+
+	_, err := service.QueryTemporalTruth(context.Background(), cognitive.TemporalTruthQueryRequest{
+		FactID: "release.supported_version",
+	})
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "temporal truth load_selected_records")
+	require.ErrorContains(t, err, "boom")
 }

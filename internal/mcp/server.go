@@ -9,9 +9,8 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
-
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/bulkops"
@@ -49,6 +48,7 @@ type Server struct {
 	memoryStore                  *gorm.MemoryStore
 	stateStore                   statePlane
 	experienceProvider           experienceProvider
+	temporalTruthProvider        temporalTruthProvider
 	principalMemoryQuerySvc      principalMemoryQueryService
 	domainRegistryService        domainRegistryService
 	behavioralRulesStore         *gorm.BehavioralRulesStore
@@ -1102,6 +1102,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	if s.experienceProvider != nil {
 		tools = append(tools, experienceHistoryTools()...)
 	}
+	if s.temporalTruthProvider != nil && temporalTruthEnabledFromEnv() {
+		tools = append(tools, temporalTruthTool(), temporalTruthRefreshTool())
+	}
 	// Session outcome tool — only advertise when session store is available
 	if s.sessionStore != nil {
 		tools = append(tools,
@@ -1721,6 +1724,10 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleExperienceHistoryRead(ctx, args)
 	case "experience_history.detail":
 		return s.handleExperienceHistoryDetail(ctx, args)
+	case "temporal_truth":
+		return s.handleTemporalTruth(ctx, args)
+	case "temporal_truth_refresh":
+		return s.handleTemporalTruthRefresh(ctx, args)
 	case "rate_memory":
 		return s.handleRateMemory(ctx, args)
 	case "suppress_memory":

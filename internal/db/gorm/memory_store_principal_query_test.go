@@ -37,18 +37,19 @@ func TestMemoryStore_ListPrincipalMemory_FiltersAndPagination(t *testing.T) {
 	ms := NewMemoryStore(&Store{DB: db})
 	now := time.Now().UTC()
 
-	insertRow := func(project, content, owner, kind, visibility, rowDomain string, createdAt time.Time) int64 {
+	insertRowWithOptions := func(project, content, owner, kind, visibility, rowDomain, status string, createdAt time.Time, validUntil *time.Time) int64 {
 		t.Helper()
 		row := &Memory{
 			Project:                  project,
 			Content:                  content,
-			Status:                   "active",
+			Status:                   status,
 			OwnerPrincipal:           owner,
 			OwnerPrincipalKind:       kind,
 			AgentVisibility:          visibility,
 			Domain:                   rowDomain,
 			CreatedAt:                createdAt,
 			UpdatedAt:                createdAt,
+			ValidUntil:               validUntil,
 			PrivacyScope:             "project",
 			ImportanceBase:           0.5,
 			TsAlpha:                  1.0,
@@ -77,6 +78,9 @@ func TestMemoryStore_ListPrincipalMemory_FiltersAndPagination(t *testing.T) {
 		require.NoError(t, db.Create(row).Error, "insert fixture row")
 		return row.ID
 	}
+	insertRow := func(project, content, owner, kind, visibility, rowDomain string, createdAt time.Time) int64 {
+		return insertRowWithOptions(project, content, owner, kind, visibility, rowDomain, "active", createdAt, nil)
+	}
 
 	hiddenWrongOwner := insertRow(projectA, "bob private newest", "agent/bob", "agent", models.AgentVisibilityPrivate, domain, now.Add(6*time.Minute))
 	hiddenWrongDomain := insertRow(projectA, "alice other domain newest", "agent/alice", "agent", models.AgentVisibilityShared, "other-domain", now.Add(5*time.Minute))
@@ -84,6 +88,11 @@ func TestMemoryStore_ListPrincipalMemory_FiltersAndPagination(t *testing.T) {
 	aliceSecond := insertRow(projectA, "alice visible second", "agent/alice", "agent", models.AgentVisibilityShared, domain, now.Add(3*time.Minute))
 	legacyNoPrincipal := insertRow(projectA, "legacy no-principal memory", "", "", "", domain, now.Add(2*time.Minute))
 	aliceOtherProject := insertRow(projectB, "alice visible other project", "agent/alice", "agent", models.AgentVisibilityShared, domain, now.Add(time.Minute))
+	expiredAt := now.Add(-2 * time.Hour)
+	expiredVisible := insertRowWithOptions(projectA, "alice visible expired superseded", "agent/alice", "agent", models.AgentVisibilityShared, domain, "superseded", now.Add(-90*time.Minute), &expiredAt)
+	futureValidFrom := now.Add(2 * time.Hour)
+	futureVisible := insertRowWithOptions(projectA, "alice future valid superseded", "agent/alice", "agent", models.AgentVisibilityShared, domain, "superseded", now.Add(-30*time.Minute), nil)
+	require.NoError(t, db.Model(&Memory{}).Where("id = ?", futureVisible).Update("valid_from", futureValidFrom).Error)
 
 	t.Run("owner domain visibility predicates run before limit", func(t *testing.T) {
 		res, err := ms.ListPrincipalMemory(ctx, projectA, ListOptions{
@@ -146,5 +155,34 @@ func TestMemoryStore_ListPrincipalMemory_FiltersAndPagination(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Contains(t, collectIDs(res), legacyNoPrincipal)
+	})
+
+	t.Run("include_expired is limited to id-bounded principal projections", func(t *testing.T) {
+		res, err := ms.ListPrincipalMemory(ctx, projectA, ListOptions{
+			OwnerPrincipal:     "agent/alice",
+			OwnerPrincipalKind: "agent",
+			AgentVisibility:    models.AgentVisibilityShared,
+			Domain:             domain,
+			IDs:                []int64{expiredVisible, futureVisible},
+			IncludeSuperseded:  true,
+			Limit:              10,
+		})
+		require.NoError(t, err)
+		assert.NotContains(t, collectIDs(res), expiredVisible)
+		assert.NotContains(t, collectIDs(res), futureVisible)
+
+		res, err = ms.ListPrincipalMemory(ctx, projectA, ListOptions{
+			OwnerPrincipal:     "agent/alice",
+			OwnerPrincipalKind: "agent",
+			AgentVisibility:    models.AgentVisibilityShared,
+			Domain:             domain,
+			IDs:                []int64{expiredVisible, futureVisible},
+			IncludeSuperseded:  true,
+			IncludeExpired:     true,
+			Limit:              10,
+		})
+		require.NoError(t, err)
+		assert.Contains(t, collectIDs(res), expiredVisible)
+		assert.NotContains(t, collectIDs(res), futureVisible)
 	})
 }

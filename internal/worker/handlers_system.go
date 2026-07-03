@@ -365,6 +365,7 @@ func buildRuntimeFlagsResponse(cfg *config.Config, flagCfg cognitivecore.FlagCon
 		envRuntimeFlag("ENGRAM_LIFECYCLE_ENABLED", "vnext", "Enables lifecycle tier promotion/demotion and tier_filter runtime behavior."),
 		envRuntimeFlag("ENGRAM_VNEXT_F_ENABLED", "vnext", "Milestone F gate for privacy scope, taxonomy, candidates, governance, and redaction paths."),
 		envRuntimeFlag("ENGRAM_GRAPH_ENABLED", "vnext", "Enables the PostgreSQL-backed knowledge graph subsystem."),
+		envRuntimeFlag("ENGRAM_TEMPORAL_TRUTH_ENABLED", "vnext", "Enables the bounded CR-011 temporal truth read surface."),
 		envRuntimeFlag("ENGRAM_ADAPTIVE_ENABLED", "vnext", "Enables adaptive memory segmentation and adaptive brief retrieval."),
 		envRuntimeFlag("ENGRAM_CRYSTALLIZATION_ENABLED", "vnext", "Enables the LLM-backed crystallization dream cycle."),
 		envRuntimeFlag("ENGRAM_CODE_INTEL_ENABLED", "code-intel", "Enables codebase_index, codebase_status, and codebase_search tools."),
