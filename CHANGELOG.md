@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.36.0] - 2026-07-03
+
+### Added
+
+- **Selective temporal truth, MPL-6 / CR-011 (#394).** Adds a flag-dark temporal truth read surface for selected high-value evolving facts: MCP `temporal_truth` / `temporal_truth_refresh`, REST temporal truth read/refresh bridges, a persisted `temporal_truth_records` projection, and a store-backed provider that answers true-now and true-then/as-of queries with provenance. Admission stays explicit and narrow over supersession chains, and provenance is projected through `PrincipalMemoryQueryService` so ordinary principal/domain/private visibility remains fail-closed.
+
+### Fixed
+
+- **Temporal truth review hardening (#394).** Refresh now collapses duplicate `valid_from` rows, derives invalidation from successor chains when `superseded_by` is absent, returns provider/storage failures as HTTP 500, preserves expired historical source provenance through an explicit ID-bounded projection mode, keeps future-dated source memories filtered, and excludes hidden memory statuses (`flagged`/`archived`) from temporal refresh admission.
+- **Release workflow toolchain and cache hardening (#394).** The release workflow now uses the nearest published `goreleaser-cross:v1.25.9` image while installing the exact Go version from `go.mod`, and disables Go module caching in the publishing release job to avoid cache-poisoning risk for release artifacts.
+
 ## [6.35.0] - 2026-07-02
 
 ### Added
