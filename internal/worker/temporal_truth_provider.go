@@ -84,6 +84,7 @@ func (p *memoryTemporalTruthProvider) projectVisibleRecords(ctx context.Context,
 			CallerIsAdmin:     callerIsAdmin,
 			IDs:               ids,
 			IncludeSuperseded: true,
+			IncludeExpired:    true,
 			Limit:             len(ids),
 		})
 		if err != nil {

@@ -24,8 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # goreleaser-cross bundles the CGO toolchains for all supported targets.
-      # The tag tracks the Go version used in go.mod.
-      image: ghcr.io/goreleaser/goreleaser-cross:v1.25.7
+      # The nearest published 1.25.x image provides the cross toolchains; the
+      # exact Go compiler version comes from actions/setup-go and go.mod below.
+      image: ghcr.io/goreleaser/goreleaser-cross:v1.25.9
     steps:
       - name: Install git-lfs
         run: apt-get update && apt-get install -y git-lfs
@@ -34,6 +35,12 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Fetch tags
         run: |

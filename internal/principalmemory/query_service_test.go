@@ -280,7 +280,6 @@ func TestPrincipalMemoryQueryService_IncludePrivateNonAdminCrossPrincipalFailsBe
 	assert.False(t, store.called, "include_private denial must happen before the store query")
 }
 
-
 func TestPrincipalMemoryQueryService_IDBoundedProjectionIncludesSupersededRows(t *testing.T) {
 	store := &statusFilteringPrincipalMemoryStore{rows: []*models.Memory{
 		{
@@ -297,16 +296,44 @@ func TestPrincipalMemoryQueryService_IDBoundedProjectionIncludesSupersededRows(t
 	svc := NewPrincipalMemoryQueryService(store, &fakeAuditLogger{})
 
 	result, err := svc.Query(context.Background(), PrincipalMemoryQueryRequest{
-		Project:            "project-a",
-		Caller:             PrincipalRef{Principal: "agent/alice", PrincipalKind: "agent"},
-		IDs:                []int64{701},
+		Project:           "project-a",
+		Caller:            PrincipalRef{Principal: "agent/alice", PrincipalKind: "agent"},
+		IDs:               []int64{701},
 		IncludeSuperseded: true,
-		Limit:              1,
+		Limit:             1,
 	})
 
 	require.NoError(t, err)
 	require.Len(t, result.Items, 1)
 	assert.Equal(t, int64(701), result.Items[0].ID)
+}
+
+func TestPrincipalMemoryQueryService_IDBoundedProjectionPassesIncludeExpired(t *testing.T) {
+	store := &fakePrincipalMemoryStore{rows: []*models.Memory{{
+		ID:                 702,
+		Project:            "project-a",
+		Content:            "expired provenance row",
+		Status:             "superseded",
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Domain:             "release",
+	}}}
+	svc := NewPrincipalMemoryQueryService(store, &fakeAuditLogger{})
+
+	result, err := svc.Query(context.Background(), PrincipalMemoryQueryRequest{
+		Project:           "project-a",
+		Caller:            PrincipalRef{Principal: "agent/alice", PrincipalKind: "agent"},
+		IDs:               []int64{702},
+		IncludeSuperseded: true,
+		IncludeExpired:    true,
+		Limit:             1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+	assert.True(t, store.called)
+	assert.True(t, store.opts.IncludeExpired)
 }
 
 type statusFilteringPrincipalMemoryStore struct {

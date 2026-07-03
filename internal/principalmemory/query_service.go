@@ -68,12 +68,16 @@ type PrincipalMemoryQueryRequest struct {
 	// under the same principal/domain/visibility gates. Default false preserves
 	// the legacy active-only read path.
 	IncludeSuperseded bool
-	AgentVisibility   string
-	IncludePrivate    bool
-	Domain            string
-	Limit             int
-	Offset            int
-	SourceSessionID   string
+	// IncludeExpired relaxes the valid_until predicate only for explicit
+	// ID-bounded projections so temporal provenance can surface expired source
+	// memories without widening ordinary principal-memory recall.
+	IncludeExpired  bool
+	AgentVisibility string
+	IncludePrivate  bool
+	Domain          string
+	Limit           int
+	Offset          int
+	SourceSessionID string
 }
 
 // normalizeQueryTerms trims, lower-cases, and de-duplicates OR-narrowing content
@@ -188,6 +192,7 @@ func (s *PrincipalMemoryQueryService) Query(ctx context.Context, req PrincipalMe
 		ContentContainsAny: normalizeQueryTerms(req.QueryTerms),
 		IDs:                req.IDs,
 		IncludeSuperseded:  req.IncludeSuperseded,
+		IncludeExpired:     req.IncludeExpired,
 		AgentVisibility:    strings.TrimSpace(req.AgentVisibility),
 		Domain:             strings.TrimSpace(req.Domain),
 		Limit:              principalQueryFetchLimit(limit),

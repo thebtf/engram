@@ -93,6 +93,7 @@ func TestMemoryTemporalTruthProviderUsesPrincipalQueryAndDropsHiddenRows(t *test
 	require.NoError(t, err)
 	require.True(t, querySvc.called)
 	require.Equal(t, []int64{10, 11}, querySvc.request.IDs)
+	require.True(t, querySvc.request.IncludeExpired)
 	require.Equal(t, "agent/omp", querySvc.request.Caller.Principal)
 	require.Equal(t, "42", store.query.FactID)
 	require.Equal(t, cognitive.TemporalTruthFound, response.State)
@@ -120,10 +121,11 @@ func TestMemoryTemporalTruthProviderReturnsNotSelectedWhenAllRowsHidden(t *testi
 	require.Equal(t, cognitive.TemporalTruthNotSelected, response.State)
 }
 
-func TestMemoryTemporalTruthProviderIncludesSupersededVisibleProvenanceAndDropsDeniedRows(t *testing.T) {
+func TestMemoryTemporalTruthProviderIncludesExpiredSupersededVisibleProvenanceAndDropsDeniedRows(t *testing.T) {
 	validFromDenied := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	validFromVisible := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.UTC)
 	validFromCurrent := time.Date(2026, time.June, 1, 0, 0, 0, 0, time.UTC)
+	expiredAt := time.Now().UTC().Add(-time.Hour)
 	provider := newMemoryTemporalTruthProvider(&fakeTemporalTruthStore{rows: []gormdb.TemporalTruthStoredRecord{
 		{
 			FactID:          "42",
@@ -160,6 +162,7 @@ func TestMemoryTemporalTruthProviderIncludesSupersededVisibleProvenanceAndDropsD
 			AgentVisibility:    models.AgentVisibilityPrivate,
 			Domain:             "release",
 			CreatedAt:          validFromDenied,
+			ValidUntil:         &expiredAt,
 		},
 		{
 			ID:                 11,
@@ -171,6 +174,7 @@ func TestMemoryTemporalTruthProviderIncludesSupersededVisibleProvenanceAndDropsD
 			AgentVisibility:    models.AgentVisibilityShared,
 			Domain:             "release",
 			CreatedAt:          validFromVisible,
+			ValidUntil:         &expiredAt,
 		},
 		{
 			ID:                 12,
@@ -207,6 +211,7 @@ func (f *filteringTemporalTruthPrincipalMemoryStore) ListPrincipalMemory(_ conte
 	for _, id := range opts.IDs {
 		idSet[id] = struct{}{}
 	}
+	now := time.Now().UTC()
 	result := make([]*models.Memory, 0, len(f.rows))
 	for _, row := range f.rows {
 		if row == nil || row.Project != project {
@@ -216,6 +221,9 @@ func (f *filteringTemporalTruthPrincipalMemoryStore) ListPrincipalMemory(_ conte
 			if _, ok := idSet[row.ID]; !ok {
 				continue
 			}
+		}
+		if !opts.IncludeExpired && row.ValidUntil != nil && row.ValidUntil.Before(now) {
+			continue
 		}
 		if opts.IncludeSuperseded {
 			if row.Status != "active" && row.Status != "superseded" {
