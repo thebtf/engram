@@ -87,6 +87,67 @@ func TestTemporalTruthStore_RefreshProjectAdmitsAllowlistedSupersessionChain(t *
 	require.Equal(t, fmt.Sprintf("memory:%d", first.ID), response.TrueThen.Provenance[0].ID)
 }
 
+func TestTemporalTruthStore_RefreshProjectExcludesHiddenStatuses(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewTemporalTruthStore(db)
+	ctx := context.Background()
+	project := fmt.Sprintf("temporal-refresh-hidden-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM temporal_truth_records WHERE project = ?`, project).Error
+		_ = db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error
+	})
+
+	validFromThen := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	hiddenFrom := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.UTC)
+	first := insertTemporalTruthMemory(t, db, &Memory{
+		Project:       project,
+		Content:       "v6",
+		Status:        "active",
+		Tier:          "episodic",
+		EpistemicType: "decision",
+		Domain:        "release",
+		ValidFrom:     &validFromThen,
+		CreatedAt:     validFromThen,
+		UpdatedAt:     validFromThen,
+		Version:       1,
+	})
+	hidden := insertTemporalTruthMemory(t, db, &Memory{
+		Project:       project,
+		Content:       "v7-hidden",
+		Status:        "flagged",
+		Tier:          "episodic",
+		EpistemicType: "decision",
+		Domain:        "release",
+		SupersedesID:  &first.ID,
+		ValidFrom:     &hiddenFrom,
+		CreatedAt:     hiddenFrom,
+		UpdatedAt:     hiddenFrom,
+		Version:       1,
+	})
+	require.NoError(t, db.Model(&Memory{}).Where("id = ?", first.ID).Updates(map[string]any{
+		"status":        "superseded",
+		"superseded_by": hidden.ID,
+		"valid_until":   hiddenFrom,
+		"updated_at":    hiddenFrom,
+	}).Error)
+
+	stats, err := store.RefreshProject(ctx, project)
+	require.NoError(t, err)
+	require.Equal(t, project, stats.Project)
+	require.Zero(t, stats.AdmittedFacts)
+	require.Zero(t, stats.AdmittedRecords)
+	require.Equal(t, 1, stats.ExcludedSingleWrite)
+
+	service := temporaltruth.NewStoreBackedService(store)
+	response, err := service.QueryTemporalTruth(ctx, cognitive.TemporalTruthQueryRequest{
+		FactID:  strconv.FormatInt(first.ID, 10),
+		Project: project,
+		Limit:   5,
+	})
+	require.NoError(t, err)
+	require.Equal(t, cognitive.TemporalTruthNotSelected, response.State)
+}
+
 func TestTemporalTruthStore_RefreshProjectCollapsesDuplicateValidFromRows(t *testing.T) {
 	db := openCandidateTestDB(t)
 	store := NewTemporalTruthStore(db)

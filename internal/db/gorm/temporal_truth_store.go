@@ -172,6 +172,7 @@ func (s *TemporalTruthStore) loadProjectMemories(ctx context.Context, project st
 	var rows []Memory
 	if err := s.db.WithContext(ctx).
 		Where("project = ? AND deleted_at IS NULL", project).
+		Where("status IN ('active','superseded')").
 		Order("created_at ASC, id ASC").
 		Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("temporal truth load_project_memories %q: %w", project, err)
