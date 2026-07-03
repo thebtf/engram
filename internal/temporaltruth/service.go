@@ -28,16 +28,28 @@ type Record struct {
 	ValidFrom             time.Time
 }
 
+// RecordStore loads selected temporal truth records for one bounded query.
+type RecordStore interface {
+	LoadSelectedRecords(ctx context.Context, request cognitive.TemporalTruthQueryRequest) ([]Record, error)
+}
+
 // Service answers temporal truth queries from explicit selected records.
 type Service struct {
 	records []Record
+	store   RecordStore
 }
 
 var _ cognitive.TemporalTruthProvider = (*Service)(nil)
 
-// NewService creates a selected-fact temporal truth provider.
+// NewService creates an in-memory selected-fact temporal truth provider.
 func NewService(records []Record) *Service {
 	return &Service{records: cloneRecords(records)}
+}
+
+// NewStoreBackedService creates a selected-fact temporal truth provider backed
+// by a record store.
+func NewStoreBackedService(store RecordStore) *Service {
+	return &Service{store: store}
 }
 
 // QueryTemporalTruth returns current truth plus bounded prior validity context
@@ -54,7 +66,10 @@ func (s *Service) QueryTemporalTruth(ctx context.Context, request cognitive.Temp
 		return cognitive.TemporalTruthResponse{}, fmt.Errorf("fact_id is required")
 	}
 
-	matches := s.selectedRecords(request)
+	matches, err := s.selectedRecords(ctx, request)
+	if err != nil {
+		return cognitive.TemporalTruthResponse{}, err
+	}
 	if len(matches) == 0 {
 		return cognitive.TemporalTruthResponse{
 			State: cognitive.TemporalTruthNotSelected,
@@ -102,12 +117,20 @@ func (s *Service) QueryTemporalTruth(ctx context.Context, request cognitive.Temp
 	return response, nil
 }
 
-func (s *Service) selectedRecords(request cognitive.TemporalTruthQueryRequest) []Record {
+func (s *Service) selectedRecords(ctx context.Context, request cognitive.TemporalTruthQueryRequest) ([]Record, error) {
+	source := s.records
+	if s.store != nil {
+		loaded, err := s.store.LoadSelectedRecords(ctx, request)
+		if err != nil {
+			return nil, fmt.Errorf("temporal truth load_selected_records: %w", err)
+		}
+		source = loaded
+	}
 	factID := strings.TrimSpace(request.FactID)
 	factClass := strings.TrimSpace(request.FactClass)
 	project := strings.TrimSpace(request.Project)
 	matches := make([]Record, 0)
-	for _, record := range s.records {
+	for _, record := range source {
 		if record.FactID != factID {
 			continue
 		}
@@ -119,7 +142,7 @@ func (s *Service) selectedRecords(request cognitive.TemporalTruthQueryRequest) [
 		}
 		matches = append(matches, cloneRecord(record))
 	}
-	return matches
+	return matches, nil
 }
 
 func currentEntry(records []Record, now time.Time) (cognitive.TemporalTruthEntry, bool) {
