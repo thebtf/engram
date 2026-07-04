@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/thebtf/engram/internal/cognitive/core"
-	"github.com/thebtf/engram/internal/cognitive/s4directives"
 	"github.com/thebtf/engram/internal/cognitive/s1state"
 	"github.com/thebtf/engram/internal/cognitive/s2meta"
+	"github.com/thebtf/engram/internal/cognitive/s4directives"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/pkg/cognitive"
@@ -535,7 +535,9 @@ func TestPlatformWiring_FlagOn_S2RealCandidateProposerReplacesNoOp(t *testing.T)
 		t.Fatalf("registerS2CandidateProposerSubsystem: %v", err)
 	}
 
-	resolver, ok := registry.(interface{ ResolveImpls(interfaceName string) []core.Subsystem })
+	resolver, ok := registry.(interface {
+		ResolveImpls(interfaceName string) []core.Subsystem
+	})
 	if !ok {
 		t.Fatalf("registry does not expose ResolveImpls")
 	}
@@ -590,7 +592,9 @@ func TestPlatformWiring_FlagOff_S2CandidateProposerStaysNoOp(t *testing.T) {
 	}
 	activateFromFlags(t, registry, cfg)
 
-	resolver, ok := registry.(interface{ ResolveImpls(interfaceName string) []core.Subsystem })
+	resolver, ok := registry.(interface {
+		ResolveImpls(interfaceName string) []core.Subsystem
+	})
 	if !ok {
 		t.Fatalf("registry does not expose ResolveImpls")
 	}
@@ -673,7 +677,9 @@ func TestPlatformWiring_T014_S2ToggleMatrixControlsRealProposerAndSiblings(t *te
 				}
 			}
 
-			resolver, ok := registry.(interface{ ResolveImpls(interfaceName string) []core.Subsystem })
+			resolver, ok := registry.(interface {
+				ResolveImpls(interfaceName string) []core.Subsystem
+			})
 			if !ok {
 				t.Fatalf("registry does not expose ResolveImpls")
 			}
@@ -789,7 +795,9 @@ func TestPlatformWiring_FlagOn_S4ARealDirectivesReplaceNoOps(t *testing.T) {
 		t.Fatalf("registerS4ADirectivesSubsystem: %v", err)
 	}
 
-	resolver, ok := registry.(interface{ ResolveImpls(interfaceName string) []core.Subsystem })
+	resolver, ok := registry.(interface {
+		ResolveImpls(interfaceName string) []core.Subsystem
+	})
 	if !ok {
 		t.Fatalf("registry does not expose ResolveImpls")
 	}
@@ -817,7 +825,7 @@ func TestPlatformWiring_FlagOn_S4ARealDirectivesReplaceNoOps(t *testing.T) {
 			return w.WriteAttentionEvent(context.Background(), cognitive.AttentionEventRecord{
 				Project:        "engram",
 				SessionID:      "session-1",
-				SourceTurnHash: "sha256:abc",
+				SourceTurnHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				DerivedIntent:  "keep release notes short",
 				AgentConfirmed: true,
 				Horizon:        "project",
@@ -839,7 +847,7 @@ func TestPlatformWiring_FlagOn_S4ARealDirectivesReplaceNoOps(t *testing.T) {
 			var err error
 			distilled, err = d.Distill(context.Background(), cognitive.RawSignal{
 				Text:       " keep release notes short ",
-				SourceHash: "sha256:abc",
+				SourceHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				Context: map[string]string{
 					"horizon":       "project",
 					"privacy_class": "internal",
@@ -872,7 +880,9 @@ func TestPlatformWiring_FlagOff_S4ADirectivesStayNoOp(t *testing.T) {
 	}
 	activateFromFlags(t, registry, cfg)
 
-	resolver, ok := registry.(interface{ ResolveImpls(interfaceName string) []core.Subsystem })
+	resolver, ok := registry.(interface {
+		ResolveImpls(interfaceName string) []core.Subsystem
+	})
 	if !ok {
 		t.Fatalf("registry does not expose ResolveImpls")
 	}

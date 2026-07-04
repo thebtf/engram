@@ -102,9 +102,15 @@ func attentionEventRowFromRecord(event cognitive.AttentionEventRecord) (*attenti
 	if sourceTurnHash == "" {
 		return nil, fmt.Errorf("attention_event_store create: source_turn_hash is required")
 	}
+	if !s4directives.IsCanonicalSourceTurnHash(sourceTurnHash) {
+		return nil, fmt.Errorf("attention_event_store create: invalid source_turn_hash")
+	}
 	derivedIntent := strings.TrimSpace(event.DerivedIntent)
 	if derivedIntent == "" {
 		return nil, fmt.Errorf("attention_event_store create: derived_intent is required")
+	}
+	if !event.AgentConfirmed {
+		return nil, fmt.Errorf("attention_event_store create: agent_confirmed must be true")
 	}
 	horizon := strings.TrimSpace(event.Horizon)
 	if !validAttentionEventHorizon(horizon) {
@@ -120,7 +126,7 @@ func attentionEventRowFromRecord(event cognitive.AttentionEventRecord) (*attenti
 		SessionID:      sessionID,
 		SourceTurnHash: sourceTurnHash,
 		DerivedIntent:  derivedIntent,
-		AgentConfirmed: event.AgentConfirmed,
+		AgentConfirmed: true,
 		Horizon:        horizon,
 		PrivacyClass:   privacyClass,
 		CreatedAt:      now,

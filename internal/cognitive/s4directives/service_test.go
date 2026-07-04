@@ -301,3 +301,54 @@ func TestRememberDirectiveStoreFailureDoesNotConsumeLimiterSlot(t *testing.T) {
 	require.Len(t, store.records, defaultRateLimitAccepted)
 	require.Equal(t, defaultRateLimitAccepted+1, distillCalls)
 }
+
+func TestWriteAttentionEventRejectsMissingOrInvalidSourceTurnHashBeforeWrite(t *testing.T) {
+	tests := []struct {
+		name    string
+		hash    string
+		wantErr error
+	}{
+		{name: "missing hash", hash: "", wantErr: ErrSourceTurnHashRequired},
+		{name: "raw text instead of hash", hash: "RAW_SOURCE_TURN_NEVER_STORE", wantErr: ErrInvalidSourceTurnHash},
+		{name: "non-canonical hash shape", hash: "sha256:abc", wantErr: ErrInvalidSourceTurnHash},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &recordingDirectiveStore{}
+			svc := NewService(store)
+
+			err := svc.WriteAttentionEvent(context.Background(), cognitive.AttentionEventRecord{
+				Project:        "engram",
+				SessionID:      "session-1",
+				SourceTurnHash: tt.hash,
+				DerivedIntent:  "keep release notes short",
+				AgentConfirmed: true,
+				Horizon:        "project",
+				PrivacyClass:   "internal",
+			})
+
+			require.ErrorIs(t, err, tt.wantErr)
+			require.Empty(t, store.records, "invalid source hashes must fail before persistence")
+		})
+	}
+}
+
+func TestWriteAttentionEventForcesAgentConfirmedTrue(t *testing.T) {
+	store := &recordingDirectiveStore{}
+	svc := NewService(store)
+
+	err := svc.WriteAttentionEvent(context.Background(), cognitive.AttentionEventRecord{
+		Project:        "engram",
+		SessionID:      "session-1",
+		SourceTurnHash: hashSourceMaterial("source turn", "keep release notes short"),
+		DerivedIntent:  "keep release notes short",
+		AgentConfirmed: false,
+		Horizon:        "project",
+		PrivacyClass:   "internal",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, store.records, 1)
+	require.True(t, store.records[0].AgentConfirmed, "service must persist agent_confirmed=true regardless of caller input")
+}

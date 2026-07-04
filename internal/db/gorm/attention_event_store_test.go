@@ -3,12 +3,17 @@ package gorm
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/pkg/cognitive"
 )
+
+func validAttentionHash(hexDigit string) string {
+	return "sha256:" + strings.Repeat(hexDigit, 64)
+}
 
 func TestAttentionEventStoreCreateGetListByProject(t *testing.T) {
 	db, cleanup := openTestDB(t)
@@ -20,11 +25,14 @@ func TestAttentionEventStoreCreateGetListByProject(t *testing.T) {
 
 	store := NewAttentionEventStore(db)
 	ctx := context.Background()
+	firstHash := validAttentionHash("a")
+	secondHash := validAttentionHash("b")
+	thirdHash := validAttentionHash("c")
 
 	first, err := store.Create(ctx, cognitive.AttentionEventRecord{
 		Project:        project,
 		SessionID:      "session-a",
-		SourceTurnHash: "sha256:first",
+		SourceTurnHash: firstHash,
 		DerivedIntent:  "keep release notes short",
 		AgentConfirmed: true,
 		Horizon:        "project",
@@ -36,7 +44,7 @@ func TestAttentionEventStoreCreateGetListByProject(t *testing.T) {
 	second, err := store.Create(ctx, cognitive.AttentionEventRecord{
 		Project:        project,
 		SessionID:      "session-b",
-		SourceTurnHash: "sha256:second",
+		SourceTurnHash: secondHash,
 		DerivedIntent:  "never include raw creator turns",
 		AgentConfirmed: true,
 		Horizon:        "permanent",
@@ -47,7 +55,7 @@ func TestAttentionEventStoreCreateGetListByProject(t *testing.T) {
 	_, err = store.Create(ctx, cognitive.AttentionEventRecord{
 		Project:        otherProject,
 		SessionID:      "session-c",
-		SourceTurnHash: "sha256:third",
+		SourceTurnHash: thirdHash,
 		DerivedIntent:  "other project directive",
 		AgentConfirmed: true,
 		Horizon:        "session",
@@ -64,7 +72,7 @@ func TestAttentionEventStoreCreateGetListByProject(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, project, got.Project)
 	require.Equal(t, "session-b", got.SessionID)
-	require.Equal(t, "sha256:second", got.SourceTurnHash)
+	require.Equal(t, secondHash, got.SourceTurnHash)
 	require.Equal(t, "never include raw creator turns", got.DerivedIntent)
 	require.True(t, got.AgentConfirmed)
 	require.Equal(t, "permanent", got.Horizon)
@@ -92,6 +100,7 @@ func TestAttentionEventStoreRejectsInvalidRowsBeforeInsert(t *testing.T) {
 	project := fmt.Sprintf("test-attention-event-invalid-%d", time.Now().UnixNano())
 	defer db.Exec(`DELETE FROM attention_events WHERE project = ?`, project)
 	store := NewAttentionEventStore(db)
+	validHash := validAttentionHash("d")
 
 	tests := []struct {
 		name   string
@@ -101,7 +110,7 @@ func TestAttentionEventStoreRejectsInvalidRowsBeforeInsert(t *testing.T) {
 			name: "missing project",
 			record: cognitive.AttentionEventRecord{
 				SessionID:      "session-a",
-				SourceTurnHash: "sha256:first",
+				SourceTurnHash: validHash,
 				DerivedIntent:  "keep release notes short",
 				AgentConfirmed: true,
 				Horizon:        "project",
@@ -120,11 +129,35 @@ func TestAttentionEventStoreRejectsInvalidRowsBeforeInsert(t *testing.T) {
 			},
 		},
 		{
+			name: "invalid source hash",
+			record: cognitive.AttentionEventRecord{
+				Project:        project,
+				SessionID:      "session-a",
+				SourceTurnHash: "RAW_SOURCE_TURN_NEVER_STORE",
+				DerivedIntent:  "keep release notes short",
+				AgentConfirmed: true,
+				Horizon:        "project",
+				PrivacyClass:   "internal",
+			},
+		},
+		{
+			name: "unconfirmed agent",
+			record: cognitive.AttentionEventRecord{
+				Project:        project,
+				SessionID:      "session-a",
+				SourceTurnHash: validHash,
+				DerivedIntent:  "keep release notes short",
+				AgentConfirmed: false,
+				Horizon:        "project",
+				PrivacyClass:   "internal",
+			},
+		},
+		{
 			name: "invalid horizon",
 			record: cognitive.AttentionEventRecord{
 				Project:        project,
 				SessionID:      "session-a",
-				SourceTurnHash: "sha256:first",
+				SourceTurnHash: validHash,
 				DerivedIntent:  "keep release notes short",
 				AgentConfirmed: true,
 				Horizon:        "forever",
@@ -136,7 +169,7 @@ func TestAttentionEventStoreRejectsInvalidRowsBeforeInsert(t *testing.T) {
 			record: cognitive.AttentionEventRecord{
 				Project:        project,
 				SessionID:      "session-a",
-				SourceTurnHash: "sha256:first",
+				SourceTurnHash: validHash,
 				DerivedIntent:  "keep release notes short",
 				AgentConfirmed: true,
 				Horizon:        "project",

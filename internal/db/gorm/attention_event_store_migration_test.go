@@ -45,19 +45,22 @@ func TestAttentionEventsMigrationCreatesBoundedTableAndIndexes(t *testing.T) {
 	require.Equal(t, 2, indexCount, "attention_events must have project/time and session/time indexes")
 }
 
-func TestAttentionEventsMigrationEnforcesHorizonAndPrivacyConstraints(t *testing.T) {
+func TestAttentionEventsMigrationEnforcesConfirmedHashHorizonAndPrivacyConstraints(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 	defer db.Exec(`DELETE FROM attention_events WHERE project = 'test-attention-constraint'`)
 
 	baseInsert := `
 		INSERT INTO attention_events (project, session_id, source_turn_hash, derived_intent, agent_confirmed, horizon, privacy_class)
-		VALUES (?, 'session-1', 'sha256:abc', 'bounded directive', true, ?, ?)
+		VALUES (?, 'session-1', ?, 'bounded directive', ?, ?, ?)
 	`
 
-	require.NoError(t, db.Exec(baseInsert, "test-attention-constraint", "project", "secret").Error)
-	require.Error(t, db.Exec(baseInsert, "test-attention-constraint", "forever", "secret").Error, "invalid horizon must be rejected by the database constraint")
-	require.Error(t, db.Exec(baseInsert, "test-attention-constraint", "project", "private-ish").Error, "invalid privacy class must be rejected by the database constraint")
+	validHash := validAttentionHash("a")
+	require.NoError(t, db.Exec(baseInsert, "test-attention-constraint", validHash, true, "project", "secret").Error)
+	require.Error(t, db.Exec(baseInsert, "test-attention-constraint", validHash, false, "project", "secret").Error, "agent_confirmed=false must be rejected by the database constraint")
+	require.Error(t, db.Exec(baseInsert, "test-attention-constraint", "RAW_SOURCE_TURN_NEVER_STORE", true, "project", "secret").Error, "non-canonical source_turn_hash must be rejected by the database constraint")
+	require.Error(t, db.Exec(baseInsert, "test-attention-constraint", validHash, true, "forever", "secret").Error, "invalid horizon must be rejected by the database constraint")
+	require.Error(t, db.Exec(baseInsert, "test-attention-constraint", validHash, true, "project", "private-ish").Error, "invalid privacy class must be rejected by the database constraint")
 }
 
 func TestAttentionEventsMigrationRollbackDropsTable(t *testing.T) {

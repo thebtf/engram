@@ -25,16 +25,19 @@ const (
 )
 
 var (
-	ErrNoStore              = errors.New("s4a attention event store not configured")
-	ErrProjectRequired      = errors.New("project_required")
-	ErrSessionRequired      = errors.New("session_required")
-	ErrTextRequired         = errors.New("text_required")
-	ErrTextTooLarge         = errors.New("text_too_large")
-	ErrSourceTurnTooLarge   = errors.New("source_turn_too_large")
-	ErrInvalidHorizon       = errors.New("invalid_horizon")
-	ErrInvalidPrivacyClass  = errors.New("invalid_privacy_class")
-	ErrDistillEmptyIntent   = errors.New("directive_distill_empty_intent")
-	ErrDistillLowConfidence = errors.New("directive_distill_low_confidence")
+	ErrNoStore                   = errors.New("s4a attention event store not configured")
+	ErrProjectRequired           = errors.New("project_required")
+	ErrSessionRequired           = errors.New("session_required")
+	ErrTextRequired              = errors.New("text_required")
+	ErrTextTooLarge              = errors.New("text_too_large")
+	ErrSourceTurnTooLarge        = errors.New("source_turn_too_large")
+	ErrSourceTurnHashRequired    = errors.New("source_turn_hash_required")
+	ErrInvalidSourceTurnHash     = errors.New("invalid_source_turn_hash")
+	ErrAgentConfirmationRequired = errors.New("agent_confirmation_required")
+	ErrInvalidHorizon            = errors.New("invalid_horizon")
+	ErrInvalidPrivacyClass       = errors.New("invalid_privacy_class")
+	ErrDistillEmptyIntent        = errors.New("directive_distill_empty_intent")
+	ErrDistillLowConfidence      = errors.New("directive_distill_low_confidence")
 )
 
 type Store interface {
@@ -206,7 +209,10 @@ func (s *Service) writeStoredEvent(ctx context.Context, event cognitive.Attentio
 	}
 	event.SourceTurnHash = strings.TrimSpace(event.SourceTurnHash)
 	if event.SourceTurnHash == "" {
-		event.SourceTurnHash = hashSourceMaterial("", event.DerivedIntent)
+		return nil, ErrSourceTurnHashRequired
+	}
+	if !IsCanonicalSourceTurnHash(event.SourceTurnHash) {
+		return nil, ErrInvalidSourceTurnHash
 	}
 	intent := boundIntent(event.DerivedIntent)
 	if intent == "" {
@@ -410,6 +416,19 @@ func hashSourceMaterial(sourceTurn, text string) string {
 	}
 	sum := sha256.Sum256([]byte(materialType + "\x00" + material))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func IsCanonicalSourceTurnHash(value string) bool {
+	const prefix = "sha256:"
+	if !strings.HasPrefix(value, prefix) || len(value) != len(prefix)+64 {
+		return false
+	}
+	for _, ch := range value[len(prefix):] {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) nowValue() time.Time {

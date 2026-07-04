@@ -20,7 +20,7 @@ func TestSubsystemDelegatesAttentionWriterAndDistillerToService(t *testing.T) {
 	err := subsystem.WriteAttentionEvent(context.Background(), cognitive.AttentionEventRecord{
 		Project:        "engram",
 		SessionID:      "session-1",
-		SourceTurnHash: "sha256:abc",
+		SourceTurnHash: hashSourceMaterial("", "remember typed decisions"),
 		DerivedIntent:  "remember typed decisions",
 		AgentConfirmed: true,
 		Horizon:        "project",
@@ -42,7 +42,7 @@ func TestSubsystemFailsClosedWhenServiceMissing(t *testing.T) {
 		err := subsystem.WriteAttentionEvent(context.Background(), cognitive.AttentionEventRecord{
 			Project:        "engram",
 			SessionID:      "session-1",
-			SourceTurnHash: "sha256:abc",
+			SourceTurnHash: hashSourceMaterial("", "remember typed decisions"),
 			DerivedIntent:  "remember typed decisions",
 			AgentConfirmed: true,
 			Horizon:        "project",
