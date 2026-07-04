@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.38.0] - 2026-07-04
+
+### Added
+
+- **Engram v7 Meta-memory discovery, ENG-V7-S2 / CR-001 (#396).** Adds the content-free `know_about` MCP tool behind `ENGRAM_V7_PLUG_ENABLED=true` and `ENGRAM_V7_S2_METAMEM=true`, backed by the real memory store's tag-prefix and FTS metadata projection. The returned packet exposes ids, titles, tags, timestamps, scores, reasons, aggregate top tags, date range, `memories`, and `total_candidates` without serializing memory body text.
+- **S2 CandidateProposer and session-start metadata (#396).** Wires the S2 meta-index proposer into the v7 plug subsystem and adds a `meta_summary` landscape to session-start responses so agents can inspect content-free memory availability before choosing whether to fetch details.
+
+### Fixed
+
+- **S2 patch-1 review hardening (#396).** A valid `know_about` topic with no real store matches now returns an empty content-free discovery packet instead of a store/tool error, and the response shape now follows the clarified C2 contract with canonical `memories` plus `total_candidates` rather than the pre-release `hits` field.
+- **S2 post-merge review hardening (#397).** Principal visibility is enforced before returning meta-memory hits; FTS and session-start meta-summary scans are bounded; hidden strict FTS matches can no longer suppress visible fallback results; tag slices are defensively cloned; and tag-prefix SQL LIKE input now escapes wildcard characters.
+
 ## [6.37.0] - 2026-07-04
 
 ### Added

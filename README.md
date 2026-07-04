@@ -33,6 +33,8 @@ Since then, the v6 line rebuilt governance on top of that stable core: per-works
 
 | Version | Highlight |
 |---------|-----------|
+| **v6.38.0** | **V7 Meta-memory Discovery (ENG-V7-S2)** — content-free `know_about` MCP tool, S2 `CandidateProposer`, and session-start `meta_summary` behind v7 flags. |
+| **v6.37.0** | **V7 State Subsystem (ENG-V7-S1)** — v7 `StateWriter` adapter and bounded native state resume hardening. |
 | **v6.32.0** | **Usefulness / Noise Review Loop (CR-008, MPL-3)** — packet-centric bounded review queue with explicit empty/gated/error/sparse states, separate preview/apply, atomic snapshot+audit-backed suppress/preserve, honest metrics. |
 | **v6.31.0** | **Native State Plane + Principal Explorer (CR-006 + CR-007, MPL-1/2)** — Engram-native session/goal/task/project state plane with deterministic resume packet; principal/domain/project memory explorer + principal-scoped briefs; CR-005 contract hardening. |
 | **v6.30.0** | **Agent Knowledge & Experience Layer foundations (ENG-MPL-1)** — native state plane, principal briefs, packet-centric review loop, first-class experience retrieval with applicability gates, forgetting taxonomy, and selective temporal truth contracts. |
@@ -353,10 +355,12 @@ Static core (v5 baseline):
 - credentials / vault
 - loom background tasks
 
-Memory Product Layer additions (v6.30–v6.32):
+Memory Product Layer additions (v6.30–v6.38):
 - native state plane — session/goal/task/project resume packet (CR-006)
 - principal explorer + briefs — principal/domain-scoped memory inspection and bounded briefs (CR-007)
 - review loop — packet-centric candidate/suppress/preserve governance over the candidate/snapshot/audit seams (CR-008)
+- v7 state subsystem — feature-flagged `StateWriter` adapter and stricter resume-packet validation (ENG-V7-S1)
+- v7 meta-memory discovery — feature-flagged `know_about`, S2 `CandidateProposer`, and session-start `meta_summary` (ENG-V7-S2)
 
 The old dynamic search / graph / learning-oriented tool surface was stripped in the v5 demolition phase; the v6 Memory Product Layer rebuilds durable agent knowledge deliberately rather than resurrecting that stack.
 
@@ -408,6 +412,16 @@ The old dynamic search / graph / learning-oriented tool surface was stripped in 
 ### `check_system_health` — System Health
 
 Reports status of all subsystems: database, embeddings, reranker, LLM, vault, graph, consolidation.
+
+### V7 conditional tools
+
+When `ENGRAM_V7_PLUG_ENABLED=true` and the slice flag is enabled:
+
+| Tool / surface | Flag | Description |
+|----------------|------|-------------|
+| `get_state` / `set_state` v7 adapter | `ENGRAM_V7_S1_STATE=true` | Routes native state writes through the v7 S1 subsystem while preserving the stable state-plane tools. |
+| `know_about` | `ENGRAM_V7_S2_METAMEM=true` | Returns a content-free discovery packet for a topic: `topic`, `project`, `count`, `total_candidates`, `top_tags`, `date_range`, and `memories`. Empty matches return an empty packet, not memory body text or a tool error. |
+| session-start `meta_summary` | `ENGRAM_V7_S2_METAMEM=true` | Adds aggregate project/count/tag/timestamp landscape data so agents can decide whether detail fetches are needed. |
 <!-- redoc:end:mcp-tools -->
 
 ---

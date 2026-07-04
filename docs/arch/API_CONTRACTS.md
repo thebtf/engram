@@ -78,9 +78,35 @@ enabled.
 | Rule governance | `rule_governance_health`, `rule_governance_queue`, `rule_governance_snapshots`, `rule_governance_transition`, `rule_governance_pin_snapshot`, `rule_governance_rollback`, `rule_governance_usefulness` | rule-governance read store wired (`usefulness` needs injection telemetry) | v6.29 (RG-3) |
 | Bulk ops | `bulk_promote`, `bulk_delete`, `bulk_supersede` | `ENGRAM_VNEXT_F_ENABLED=true` | v6 (Milestone-F) |
 | Code intelligence | `codebase_search` | `ENGRAM_CODE_INTEL_ENABLED=true` AND code chunk store wired | v6.13 (CR-006 code-intel) |
+| V7 state subsystem | existing `get_state`, `set_state` via v7 `StateWriter` adapter | `ENGRAM_V7_PLUG_ENABLED=true` AND `ENGRAM_V7_S1_STATE=true` AND state store wired | v6.37 (ENG-V7-S1) |
+| V7 meta-memory discovery | `know_about` plus session-start `meta_summary` | `ENGRAM_V7_PLUG_ENABLED=true` AND `ENGRAM_V7_S2_METAMEM=true` AND meta-memory index wired | v6.38 (ENG-V7-S2) |
 
 Admin-gated families (candidates, governance, bulk ops) are additionally
 enforced at the handler level regardless of advertisement.
+
+#### `know_about` Response Shape
+
+`know_about` is a content-free discovery tool. It accepts a required `topic`, an
+optional `project`, and a bounded `limit` up to 25. It returns JSON with this
+canonical shape:
+
+```json
+{
+  "topic": "handoff protocol",
+  "project": "engram",
+  "count": 0,
+  "total_candidates": 0,
+  "top_tags": [],
+  "date_range": {},
+  "memories": []
+}
+```
+
+Each entry in `memories` may include id, project, title, tags, created/updated
+timestamps, score, source, and reason. It must not include memory body text or
+content-bearing aliases such as `content`, `body`, `raw_content`, `narrative`,
+or `snippet`. A valid topic with no matches returns the empty packet above, not
+a tool error.
 
 ---
 

@@ -33,6 +33,8 @@ Engram решает эту проблему, оставляя только те 
 
 | Версия | Основное изменение |
 |--------|-------------------|
+| **v6.38.0** | **V7 Meta-memory Discovery (ENG-V7-S2)** — content-free MCP-инструмент `know_about`, S2 `CandidateProposer` и session-start `meta_summary` за v7-флагами. |
+| **v6.37.0** | **V7 State Subsystem (ENG-V7-S1)** — v7-адаптер `StateWriter` и усиленная проверка bounded native state resume. |
 | **v6.32.0** | **Usefulness / Noise Review Loop (CR-008, MPL-3)** — packet-centric bounded review queue с явными empty/gated/error/sparse состояниями, раздельные preview/apply, атомарный snapshot+audit-backed suppress/preserve, честные метрики. |
 | **v6.31.0** | **Native State Plane + Principal Explorer (CR-006 + CR-007, MPL-1/2)** — Engram-native session/goal/task/project state plane с детерминированным resume packet; principal/domain/project memory explorer + principal-scoped briefs; hardening контракта CR-005. |
 | **v6.30.0** | **Agent Knowledge & Experience Layer foundations (ENG-MPL-1)** — native state plane, principal briefs, packet-centric review loop, first-class experience retrieval с applicability gates, forgetting taxonomy и selective temporal truth контракты. |
@@ -352,10 +354,12 @@ Static core (v5 baseline):
 - credentials / vault
 - loom background tasks
 
-Дополнения Memory Product Layer (v6.30–v6.32):
+Дополнения Memory Product Layer (v6.30–v6.38):
 - native state plane — session/goal/task/project resume packet (CR-006)
 - principal explorer + briefs — инспекция memory по principal/domain + bounded briefs (CR-007)
 - review loop — packet-centric candidate/suppress/preserve governance поверх candidate/snapshot/audit seams (CR-008)
+- v7 state subsystem — feature-flagged `StateWriter` adapter и более строгая проверка resume packet (ENG-V7-S1)
+- v7 meta-memory discovery — feature-flagged `know_about`, S2 `CandidateProposer` и session-start `meta_summary` (ENG-V7-S2)
 
 Старая dynamic search / graph / learning-oriented tool surface была вырезана в фазе v5 demolition; v6 Memory Product Layer перестраивает durable agent knowledge осознанно, а не воскрешает старый стек.
 
@@ -407,6 +411,16 @@ Static core (v5 baseline):
 ### `check_system_health` — Здоровье системы
 
 Отчёт о состоянии всех подсистем: база данных, embeddings, reranker, LLM, хранилище, граф, консолидация.
+
+### Условные V7-инструменты
+
+Когда `ENGRAM_V7_PLUG_ENABLED=true` и включён флаг нужного среза:
+
+| Инструмент / surface | Флаг | Описание |
+|----------------------|------|----------|
+| v7-адаптер `get_state` / `set_state` | `ENGRAM_V7_S1_STATE=true` | Проводит native state writes через подсистему v7 S1, сохраняя стабильные state-plane tools. |
+| `know_about` | `ENGRAM_V7_S2_METAMEM=true` | Возвращает content-free discovery packet по теме: `topic`, `project`, `count`, `total_candidates`, `top_tags`, `date_range` и `memories`. Пустые совпадения возвращают пустой packet, а не body text памяти и не ошибку инструмента. |
+| session-start `meta_summary` | `ENGRAM_V7_S2_METAMEM=true` | Добавляет агрегированные project/count/tag/timestamp данные, чтобы агент мог решить, нужен ли detail fetch. |
 <!-- redoc:end:mcp-tools -->
 
 ---

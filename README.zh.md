@@ -33,6 +33,8 @@ Engram 通过保留那些在生产中真正可靠的记忆原语来解决这个�
 
 | 版本 | 亮点 |
 |------|------|
+| **v6.38.0** | **V7 Meta-memory Discovery (ENG-V7-S2)** —— content-free `know_about` MCP 工具、S2 `CandidateProposer`，以及由 v7 flags 控制的 session-start `meta_summary`。 |
+| **v6.37.0** | **V7 State Subsystem (ENG-V7-S1)** —— v7 `StateWriter` adapter 和 bounded native state resume 加固。 |
 | **v6.32.0** | **Usefulness / Noise Review Loop (CR-008, MPL-3)** —— packet-centric bounded review queue，具备明确的 empty/gated/error/sparse 状态、独立的 preview/apply、atomic snapshot+audit-backed suppress/preserve，以及诚实的指标。 |
 | **v6.31.0** | **Native State Plane + Principal Explorer (CR-006 + CR-007, MPL-1/2)** —— Engram 原生的 session/goal/task/project state plane，带确定性 resume packet；principal/domain/project memory explorer + principal-scoped briefs；CR-005 契约加固。 |
 | **v6.30.0** | **Agent Knowledge & Experience Layer foundations (ENG-MPL-1)** —— native state plane、principal briefs、packet-centric review loop、带 applicability gates 的 first-class experience retrieval、forgetting taxonomy 以及 selective temporal truth 契约。 |
@@ -352,10 +354,12 @@ Static core（v5 基线）：
 - credentials / vault
 - loom background tasks
 
-Memory Product Layer 新增（v6.30–v6.32）：
+Memory Product Layer 新增（v6.30–v6.38）：
 - native state plane —— session/goal/task/project resume packet（CR-006）
 - principal explorer + briefs —— 按 principal/domain 检视 memory + bounded briefs（CR-007）
 - review loop —— 基于 candidate/snapshot/audit seams 的 packet-centric candidate/suppress/preserve governance（CR-008）
+- v7 state subsystem —— feature-flagged `StateWriter` adapter 和更严格的 resume-packet validation（ENG-V7-S1）
+- v7 meta-memory discovery —— feature-flagged `know_about`、S2 `CandidateProposer` 和 session-start `meta_summary`（ENG-V7-S2）
 
 旧的 dynamic search / graph / learning-oriented tool surface 在 v5 demolition 阶段被移除；v6 Memory Product Layer 有意识地重建 durable agent knowledge，而非复活旧栈。
 
@@ -407,6 +411,16 @@ Memory Product Layer 新增（v6.30–v6.32）：
 ### `check_system_health` — 系统健康检查
 
 报告所有子系统的状态：数据库、嵌入、重排序器、LLM、保险库、图谱、整合。
+
+### V7 条件工具
+
+当 `ENGRAM_V7_PLUG_ENABLED=true` 且对应 slice flag 已启用时：
+
+| 工具 / surface | Flag | 说明 |
+|----------------|------|------|
+| `get_state` / `set_state` v7 adapter | `ENGRAM_V7_S1_STATE=true` | 通过 v7 S1 subsystem 处理 native state writes，同时保留稳定的 state-plane tools。 |
+| `know_about` | `ENGRAM_V7_S2_METAMEM=true` | 按主题返回 content-free discovery packet：`topic`、`project`、`count`、`total_candidates`、`top_tags`、`date_range` 和 `memories`。无匹配时返回空 packet，而不是 memory body text 或工具错误。 |
+| session-start `meta_summary` | `ENGRAM_V7_S2_METAMEM=true` | 添加聚合的 project/count/tag/timestamp landscape 数据，帮助代理判断是否需要 detail fetch。 |
 <!-- redoc:end:mcp-tools -->
 
 ---
