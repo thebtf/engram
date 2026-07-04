@@ -359,6 +359,29 @@ func TestMemoryStore_QueryMetaIndex_FTSVisibilityPagesUntilVisibleMatches(t *tes
 	require.Equal(t, []int64{visibleID}, metaIndexHitIDs(hits), "FTS paging must continue until a visible match is found behind hidden higher-ranked rows")
 }
 
+func TestMemoryStore_QueryMetaIndex_FTSFallbackIgnoresHiddenStrictVariant(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-fts-fallback-visibility'`)
+
+	ms := NewMemoryStore(&Store{DB: db})
+	ctx := context.Background()
+	const project = "test-s2-meta-index-fts-fallback-visibility"
+	base := time.Unix(1700002300, 0).UTC()
+	insertMetaIndexMemory(t, db, ms, ctx, project, "alpha beta hidden strict", []string{"s2:meta"}, "agent/bob", models.AgentVisibilityPrivate, base)
+	visibleID := insertMetaIndexMemory(t, db, ms, ctx, project, "alpha visible fallback", []string{"s2:meta"}, "agent/alice", models.AgentVisibilityShared, base.Add(-time.Minute))
+
+	hits, err := ms.QueryMetaIndex(ctx, MetaIndexQuery{
+		Project:            project,
+		Query:              "alpha beta",
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		Limit:              1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int64{visibleID}, metaIndexHitIDs(hits), "hidden strict matches must not suppress visible OR-fallback hits")
+}
+
 func TestMemoryStore_QueryMetaIndex_FTSVisibilityStopsAtScanBudget(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()

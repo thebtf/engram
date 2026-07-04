@@ -1247,7 +1247,7 @@ func (s *MemoryStore) SearchMetaMemoryFTSIDs(ctx context.Context, project, query
 	ids := make([]int64, 0, metaLimit)
 	variants := searchFTSQueryVariants(query)
 	for i, variant := range variants {
-		sawRows := false
+		addedVisibleIDs := false
 		for offset := 0; len(ids) < metaLimit && offset < scanBudget; {
 			pageLimit := batchLimit
 			if remaining := scanBudget - offset; remaining < pageLimit {
@@ -1263,12 +1263,12 @@ func (s *MemoryStore) SearchMetaMemoryFTSIDs(ctx context.Context, project, query
 			if len(batch) == 0 {
 				break
 			}
-			sawRows = true
 			for _, mem := range batch {
 				if !metaMemoryMatchesOptions(mem, opts) {
 					continue
 				}
 				ids = append(ids, mem.ID)
+				addedVisibleIDs = true
 				if len(ids) == metaLimit {
 					break
 				}
@@ -1278,7 +1278,7 @@ func (s *MemoryStore) SearchMetaMemoryFTSIDs(ctx context.Context, project, query
 			}
 			offset += len(batch)
 		}
-		if sawRows || i == len(variants)-1 {
+		if addedVisibleIDs || i == len(variants)-1 {
 			break
 		}
 	}
