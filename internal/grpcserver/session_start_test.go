@@ -147,6 +147,27 @@ func TestListVisibleSessionStartMemories_ReadBudgetUnderfills(t *testing.T) {
 	require.Empty(t, visible, "explicit read budget must stop the scan instead of walking the whole project")
 }
 
+func TestBuildSessionStartMetaSummary_ScanBudgetCapsLandscape(t *testing.T) {
+	t.Parallel()
+
+	oldest := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
+	middle := oldest.Add(time.Minute)
+	newest := middle.Add(time.Minute)
+	pager := fakeSessionStartMemoryPager{rows: []*models.Memory{
+		{ID: 1, Project: "project", Content: "visible newest", Tags: []string{"alpha"}, AgentVisibility: models.AgentVisibilityShared, CreatedAt: newest},
+		{ID: 2, Project: "project", Content: "visible middle", Tags: []string{"alpha", "beta"}, AgentVisibility: models.AgentVisibilityShared, CreatedAt: middle},
+		{ID: 3, Project: "project", Content: "visible oldest", Tags: []string{"gamma"}, AgentVisibility: models.AgentVisibilityShared, CreatedAt: oldest},
+	}}
+	caller := scope.KeycardContext{Principal: "agent/alice", PrincipalKind: "agent"}
+
+	summary, err := buildSessionStartMetaSummary(context.Background(), pager, "project", caller, scope.MemoryVisibilityOptions{}, newest, 2)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), requireMetaInt(t, summary.ProtoReflect(), "total_count"), "scan budget must cap the landscape summary instead of walking the entire project")
+	assert.Equal(t, []metaTagCount{{Tag: "alpha", Count: 2}, {Tag: "beta", Count: 1}}, requireMetaTopTags(t, summary.ProtoReflect()))
+	assert.Equal(t, middle, requireMetaTimestamp(t, summary.ProtoReflect(), "oldest_created_at"))
+	assert.Equal(t, newest, requireMetaTimestamp(t, summary.ProtoReflect(), "newest_created_at"))
+}
+
 func TestGetSessionStartContext_HappyPath(t *testing.T) {
 	db, cleanup := openSessionStartTestDB(t)
 	defer cleanup()
@@ -398,6 +419,42 @@ func TestGetSessionStartContext_MetaSummaryFlagOnDescribesMemoryLandscape(t *tes
 	assertMetaSummaryContentFree(t, summary, "raw alpha", "raw theta", "other project raw body", "must not leak")
 }
 
+func TestGetSessionStartContext_MetaSummaryCountsBeyondResponseCap(t *testing.T) {
+	db, cleanup := openSessionStartTestDB(t)
+	defer cleanup()
+
+	project := fmt.Sprintf("grpc-session-start-meta-summary-capped-%d", time.Now().UnixNano())
+	otherProject := project + "-other"
+	defer db.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, project, otherProject)
+	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
+	t.Setenv("ENGRAM_V7_S2_METAMEM", "true")
+
+	ctx := context.Background()
+	memoryStore := localgorm.NewMemoryStore(&localgorm.Store{DB: db})
+	oldest := time.Date(2026, 7, 2, 8, 0, 0, 0, time.UTC)
+	newest := oldest.Add(204 * time.Minute)
+	for i := range 205 {
+		tags := []string{"alpha"}
+		if i < 3 {
+			tags = append(tags, "beta")
+		}
+		insertSessionStartMetaSummaryMemory(t, db, memoryStore, project, fmt.Sprintf("visible summary row %03d body must not leak", i), tags, oldest.Add(time.Duration(i)*time.Minute))
+	}
+	insertSessionStartMetaSummaryMemory(t, db, memoryStore, otherProject, "other project body must not leak", []string{"other"}, newest.Add(time.Hour))
+
+	srv := &Server{db: db}
+	resp, err := srv.GetSessionStartContext(ctx, &pb.GetSessionStartContextRequest{Project: project, MemoriesLimit: 1})
+	require.NoError(t, err)
+	require.Len(t, resp.GetMemories(), 1, "response memories remain bounded while meta_summary scans the full visible project set")
+
+	summary := requireSessionStartMetaSummary(t, resp)
+	assert.Equal(t, int64(205), requireMetaInt(t, summary, "total_count"), "total_count must stay truthful beyond the 200-memory response cap")
+	assert.Equal(t, []metaTagCount{{Tag: "alpha", Count: 205}, {Tag: "beta", Count: 3}}, requireMetaTopTags(t, summary))
+	assert.Equal(t, oldest, requireMetaTimestamp(t, summary, "oldest_created_at"))
+	assert.Equal(t, newest, requireMetaTimestamp(t, summary, "newest_created_at"))
+	assertMetaSummaryContentFree(t, summary, "visible summary row", "other project body", "must not leak")
+}
+
 func TestGetSessionStartContext_MetaSummaryFlagOffOmitted(t *testing.T) {
 	db, cleanup := openSessionStartTestDB(t)
 	defer cleanup()
@@ -484,7 +541,6 @@ func TestGetSessionStartContext_T014_MetaSummaryRequiresMasterAndS2Flags(t *test
 		})
 	}
 }
-
 
 type metaTagCount struct {
 	Tag   string
@@ -579,7 +635,6 @@ func metaTimestampValue(t *testing.T, msg protoreflect.Message, name protoreflec
 	require.NotNil(t, nanosField, "meta_summary.%s must be a google.protobuf.Timestamp", name)
 	return time.Unix(msg.Get(secondsField).Int(), msg.Get(nanosField).Int()).UTC()
 }
-
 
 func assertMetaSummaryContentFree(t *testing.T, msg protoreflect.Message, forbidden ...string) {
 	t.Helper()

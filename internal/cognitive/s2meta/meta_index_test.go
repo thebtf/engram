@@ -16,10 +16,14 @@ import (
 
 type recordingMetaIndex struct {
 	queries []gormdb.MetaIndexQuery
+	hits    []gormdb.MetaIndexHit
 }
 
 func (r *recordingMetaIndex) QueryMetaIndex(ctx context.Context, query gormdb.MetaIndexQuery) ([]gormdb.MetaIndexHit, error) {
 	r.queries = append(r.queries, query)
+	if r.hits != nil {
+		return r.hits, nil
+	}
 
 	limit := query.Limit
 	if limit < 0 {
@@ -99,4 +103,38 @@ func TestMetaIndexProposer_EmitsContentFreeHintProposals(t *testing.T) {
 		require.NotEmpty(t, proposal.Title, "proposal must carry a bounded title instead of raw content")
 		require.Equal(t, "s2.meta_index", proposal.Source)
 	}
+}
+
+func TestMetaIndexProposer_ClonesHintProposalTags(t *testing.T) {
+	idx := &recordingMetaIndex{hits: []gormdb.MetaIndexHit{
+		{
+			ID:        1,
+			Project:   "project-s2-clone",
+			Title:     "tag clone",
+			Tags:      []string{"s2:meta"},
+			CreatedAt: time.Unix(1700000300, 0).UTC(),
+			Score:     0.9,
+			Source:    "s2.meta_index",
+		},
+		{
+			ID:        2,
+			Project:   "project-s2-clone",
+			Title:     "explicit empty tags",
+			Tags:      []string{},
+			CreatedAt: time.Unix(1700000301, 0).UTC(),
+			Score:     0.8,
+			Source:    "s2.meta_index",
+		},
+	}}
+	proposer := NewMetaIndexProposer(idx)
+	event := cognitive.AttentionEvent{Project: "project-s2-clone", Payload: map[string]interface{}{"text": "tag clone", "tags": []string{"s2:meta"}}}
+
+	proposals, err := proposer.Propose(context.Background(), event, 2)
+	require.NoError(t, err)
+	require.Len(t, proposals, 2)
+
+	proposals[0].Tags[0] = "mutated"
+	require.Equal(t, "s2:meta", idx.hits[0].Tags[0], "hint proposal tags must not alias the source meta-index hit backing array")
+	require.NotNil(t, proposals[1].Tags, "explicit empty tag slices should remain explicit after cloning")
+	require.Len(t, proposals[1].Tags, 0)
 }

@@ -81,7 +81,6 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 
 	memoryStore := dbgorm.NewMemoryStore(&dbgorm.Store{DB: s.db})
 	var memoryRows []*models.Memory
-	var summaryRows []*models.Memory
 	metaSummaryEnabled := os.Getenv("ENGRAM_V7_PLUG_ENABLED") == "true" && os.Getenv("ENGRAM_V7_S2_METAMEM") == "true"
 
 	// Build scope.KeycardContext once for both branches. ENGRAM_VNEXT_F_ENABLED
@@ -107,7 +106,7 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 			return nil, status.Error(codes.Internal, "failed to list session-start memories")
 		}
 		if metaSummaryEnabled {
-			summaryRows = allMemories
+			// Meta summary is built from a full visibility-aware scan after the main response rows are selected.
 		}
 		// Apply visibility before Thompson scoring so invisible rows are excluded
 		// from the candidate pool before they can consume the scored window.
@@ -125,10 +124,7 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 			return nil, status.Error(codes.Internal, "failed to list session-start memories")
 		}
 		if metaSummaryEnabled {
-			summaryRows, listErr = listVisibleSessionStartMemories(ctx, memoryStore, project, maxSessionStartMemoriesLimit, callerCtx, visibilityOpts, sessionStartVisibilityScanBudget)
-			if listErr != nil {
-				return nil, status.Error(codes.Internal, "failed to summarize session-start memories")
-			}
+			// Meta summary is built from a full visibility-aware scan after the main response rows are selected.
 		}
 	}
 
@@ -164,7 +160,11 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 		RuleRouter:  ruleRouter,
 	}
 	if metaSummaryEnabled {
-		response.MetaSummary = buildSessionStartMetaSummary(project, summaryRows, generatedAt)
+		summary, summaryErr := buildSessionStartMetaSummary(ctx, memoryStore, project, callerCtx, visibilityOpts, generatedAt, sessionStartVisibilityScanBudget)
+		if summaryErr != nil {
+			return nil, status.Error(codes.Internal, "failed to summarize session-start memories")
+		}
+		response.MetaSummary = summary
 	}
 	return response, nil
 }
@@ -432,36 +432,89 @@ func mapSessionStartMemories(rows []*models.Memory) []*pb.SessionStartMemory {
 	return memories
 }
 
-func buildSessionStartMetaSummary(project string, rows []*models.Memory, generatedAt time.Time) *pb.SessionStartMetaSummary {
+func buildSessionStartMetaSummary(ctx context.Context, store sessionStartMemoryPager, project string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions, generatedAt time.Time, scanBudget int) (*pb.SessionStartMetaSummary, error) {
 	summary := &pb.SessionStartMetaSummary{
 		Project:     strings.TrimSpace(project),
-		TopTags:     summarizeSessionStartTopTags(rows, 6),
 		GeneratedAt: timestamppb.New(generatedAt),
 	}
-	visible := make([]*models.Memory, 0, len(rows))
-	for _, row := range rows {
-		if row == nil {
-			continue
-		}
-		visible = append(visible, row)
+	counts := map[string]int64{}
+	var total int64
+	var oldest time.Time
+	var newest time.Time
+	haveVisible := false
+	if scanBudget <= 0 {
+		scanBudget = sessionStartVisibilityScanBudget
 	}
-	summary.TotalCount = int64(len(visible))
-	if len(visible) == 0 {
-		return summary
+	for offset := 0; offset < scanBudget; {
+		batchLimit := sessionStartMemoryBatchSize
+		if remaining := scanBudget - offset; remaining < batchLimit {
+			batchLimit = remaining
+		}
+		if batchLimit <= 0 {
+			break
+		}
+		batch, err := store.ListWithOffset(ctx, project, batchLimit, offset)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for _, row := range batch {
+			if row == nil || !scope.ResolveMemory(caller, row, opts) {
+				continue
+			}
+			total++
+			if !haveVisible {
+				oldest = row.CreatedAt
+				newest = row.CreatedAt
+				haveVisible = true
+			} else {
+				if row.CreatedAt.Before(oldest) {
+					oldest = row.CreatedAt
+				}
+				if row.CreatedAt.After(newest) {
+					newest = row.CreatedAt
+				}
+			}
+			for _, tag := range row.Tags {
+				tag = strings.TrimSpace(tag)
+				if tag == "" {
+					continue
+				}
+				counts[tag]++
+			}
+		}
+		offset += len(batch)
+		if len(batch) < batchLimit {
+			break
+		}
 	}
-	oldest := visible[0].CreatedAt
-	newest := visible[0].CreatedAt
-	for _, row := range visible[1:] {
-		if row.CreatedAt.Before(oldest) {
-			oldest = row.CreatedAt
-		}
-		if row.CreatedAt.After(newest) {
-			newest = row.CreatedAt
-		}
+	summary.TotalCount = total
+	summary.TopTags = summarizeSessionStartTopTagsFromCounts(counts, 6)
+	if !haveVisible {
+		return summary, nil
 	}
 	summary.OldestCreatedAt = timestamppb.New(oldest)
 	summary.NewestCreatedAt = timestamppb.New(newest)
-	return summary
+	return summary, nil
+}
+
+func summarizeSessionStartTopTagsFromCounts(counts map[string]int64, max int) []*pb.SessionStartMetaTagCount {
+	items := make([]*pb.SessionStartMetaTagCount, 0, len(counts))
+	for tag, count := range counts {
+		items = append(items, &pb.SessionStartMetaTagCount{Tag: tag, Count: count})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Count != items[j].Count {
+			return items[i].Count > items[j].Count
+		}
+		return items[i].Tag < items[j].Tag
+	})
+	if max <= 0 || max > len(items) {
+		max = len(items)
+	}
+	return items[:max]
 }
 
 func summarizeSessionStartTopTags(rows []*models.Memory, max int) []*pb.SessionStartMetaTagCount {
@@ -478,20 +531,7 @@ func summarizeSessionStartTopTags(rows []*models.Memory, max int) []*pb.SessionS
 			counts[tag]++
 		}
 	}
-	items := make([]*pb.SessionStartMetaTagCount, 0, len(counts))
-	for tag, count := range counts {
-		items = append(items, &pb.SessionStartMetaTagCount{Tag: tag, Count: count})
-	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].Count != items[j].Count {
-			return items[i].Count > items[j].Count
-		}
-		return items[i].Tag < items[j].Tag
-	})
-	if max <= 0 || max > len(items) {
-		max = len(items)
-	}
-	return items[:max]
+	return summarizeSessionStartTopTagsFromCounts(counts, max)
 }
 
 func timestampProto(ts *time.Time) *timestamppb.Timestamp {

@@ -70,12 +70,16 @@ func (s *Server) handleKnowAbout(ctx context.Context, args json.RawMessage) (str
 		Tags:    []string{topic},
 		Limit:   limit,
 	}
-	if id, ok := auth.IdentityFrom(ctx); ok {
-		if principal, kind, hasOwner := id.MemoryOwner(); hasOwner {
-			query.OwnerPrincipal = principal
-			query.OwnerPrincipalKind = kind
-		}
+	id, ok := auth.IdentityFrom(ctx)
+	if !ok {
+		return "", fmt.Errorf("know_about requires principal-scoped identity")
 	}
+	principal, kind, hasOwner := id.MemoryOwner()
+	if !hasOwner {
+		return "", fmt.Errorf("know_about requires principal-scoped identity")
+	}
+	query.OwnerPrincipal = principal
+	query.OwnerPrincipalKind = kind
 
 	hits, err := s.metaMemoryIndex.QueryMetaIndex(ctx, query)
 	if err != nil {

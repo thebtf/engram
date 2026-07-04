@@ -35,9 +35,10 @@ func NewMemoryStore(store *Store) *MemoryStore {
 }
 
 const (
-	defaultMetaMemoryLimit = 10
-	maxMetaMemoryLimit     = 25
-	metaMemoryProbeFactor  = 5
+	defaultMetaMemoryLimit      = 10
+	maxMetaMemoryLimit          = 25
+	metaMemoryProbeFactor       = 5
+	metaMemoryFTSScanPageBudget = 5
 )
 
 // MetaIndexQuery is the content-free S2 query contract shared by the store,
@@ -107,6 +108,10 @@ func normalizeMetaMemoryProbeLimit(limit int) int {
 	return probe
 }
 
+func normalizeMetaMemoryFTSScanBudget(limit int) int {
+	return normalizeMetaMemoryProbeLimit(limit) * metaMemoryFTSScanPageBudget
+}
+
 func sanitizeMetaText(value string, maxRunes int) string {
 	value = strings.Join(strings.Fields(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
@@ -133,6 +138,15 @@ func sanitizeMetaTags(tags []string) []string {
 		result = append(result, tag)
 	}
 	return result
+}
+
+func cloneMetaTags(tags []string) []string {
+	if tags == nil {
+		return nil
+	}
+	cloned := make([]string, len(tags))
+	copy(cloned, tags)
+	return cloned
 }
 
 func metaMemoryTitleFromLine(line string) string {
@@ -1199,13 +1213,13 @@ func (s *MemoryStore) SearchMetaMemoryTagPrefixIDs(ctx context.Context, project,
 	if prefix == "" {
 		return nil, fmt.Errorf("prefix must not be empty")
 	}
-	prefixPattern := strings.ToLower(prefix) + "%"
+	prefixPattern := escapeSQLLike(strings.ToLower(prefix)) + "%"
 	var ids []int64
 	err := applyMemoryListOptions(
 		basePrincipalMemoryQuery(s.db.WithContext(ctx).Model(&Memory{}), opts).Where("project = ?", project),
 		opts,
 	).
-		Where(`EXISTS (SELECT 1 FROM jsonb_array_elements_text(tags) AS tag WHERE LOWER(tag) LIKE ?)`, prefixPattern).
+		Where(`EXISTS (SELECT 1 FROM jsonb_array_elements_text(tags) AS tag WHERE LOWER(tag) LIKE ? ESCAPE '\')`, prefixPattern).
 		Order("created_at DESC, id DESC").
 		Limit(normalizeMetaMemoryLimit(limit)).
 		Pluck("id", &ids).Error
@@ -1227,17 +1241,44 @@ func (s *MemoryStore) SearchMetaMemoryFTSIDs(ctx context.Context, project, query
 	if query == "" {
 		return nil, fmt.Errorf("query must not be empty")
 	}
-	rows, err := s.SearchFTS(ctx, project, query, normalizeMetaMemoryProbeLimit(limit))
-	if err != nil {
-		return nil, fmt.Errorf("search meta-memory fts ids project=%q query=%q: %w", project, query, err)
-	}
-	ids := make([]int64, 0, normalizeMetaMemoryLimit(limit))
-	for _, mem := range rows {
-		if !metaMemoryMatchesOptions(mem, opts) {
-			continue
+	metaLimit := normalizeMetaMemoryLimit(limit)
+	batchLimit := normalizeMetaMemoryProbeLimit(limit)
+	scanBudget := normalizeMetaMemoryFTSScanBudget(limit)
+	ids := make([]int64, 0, metaLimit)
+	variants := searchFTSQueryVariants(query)
+	for i, variant := range variants {
+		addedVisibleIDs := false
+		for offset := 0; len(ids) < metaLimit && offset < scanBudget; {
+			pageLimit := batchLimit
+			if remaining := scanBudget - offset; remaining < pageLimit {
+				pageLimit = remaining
+			}
+			if pageLimit <= 0 {
+				break
+			}
+			batch, err := s.searchFTSPage(ctx, project, variant, pageLimit, offset)
+			if err != nil {
+				return nil, fmt.Errorf("search meta-memory fts ids project=%q query=%q: %w", project, query, err)
+			}
+			if len(batch) == 0 {
+				break
+			}
+			for _, mem := range batch {
+				if !metaMemoryMatchesOptions(mem, opts) {
+					continue
+				}
+				ids = append(ids, mem.ID)
+				addedVisibleIDs = true
+				if len(ids) == metaLimit {
+					break
+				}
+			}
+			if len(batch) < pageLimit {
+				break
+			}
+			offset += len(batch)
 		}
-		ids = append(ids, mem.ID)
-		if len(ids) == normalizeMetaMemoryLimit(limit) {
+		if addedVisibleIDs || i == len(variants)-1 {
 			break
 		}
 	}
@@ -1350,7 +1391,7 @@ func (s *MemoryStore) QueryMetaIndex(ctx context.Context, query MetaIndexQuery) 
 			ID:        record.ID,
 			Project:   project,
 			Title:     record.Title,
-			Tags:      record.Tags,
+			Tags:      cloneMetaTags(record.Tags),
 			CreatedAt: record.CreatedAt,
 			UpdatedAt: record.UpdatedAt,
 			Score:     float32(scores[record.ID]),
@@ -1519,20 +1560,56 @@ func (s *MemoryStore) SearchFTS(ctx context.Context, project, query string, limi
 	if query == "" {
 		return nil, fmt.Errorf("SearchFTS: query must not be empty")
 	}
+	limit = normalizeSearchFTSLimit(limit)
+	variants := searchFTSQueryVariants(query)
+	for i, variant := range variants {
+		rows, err := s.searchFTSPage(ctx, project, variant, limit, 0)
+		if err != nil {
+			if i > 0 {
+				return nil, fmt.Errorf("SearchFTS project=%q (OR fallback): %w", project, err)
+			}
+			return nil, fmt.Errorf("SearchFTS project=%q: %w", project, err)
+		}
+		if len(rows) > 0 || i == len(variants)-1 {
+			return rows, nil
+		}
+	}
+	return []*models.Memory{}, nil
+}
+
+func normalizeSearchFTSLimit(limit int) int {
 	if limit <= 0 {
-		limit = 20
+		return 20
 	}
 	if limit > 200 {
-		limit = 200
+		return 200
 	}
+	return limit
+}
 
-	// Try websearch_to_tsquery first; fall back to plainto_tsquery for
-	// stop-word-only inputs that yield an empty tsquery.
-	// Use SQL NOW() instead of a Go-side timestamp to avoid clock-skew where a
-	// Go-captured time pre-dates valid_from set by DB DEFAULT now() on freshly
-	// inserted rows (see ListWithOffset comment for full rationale).
-	// NULLIF comparison uses ''::tsquery cast — PostgreSQL has no implicit
-	// tsquery ↔ unknown conversion and raises "operator does not exist" otherwise.
+func searchFTSQueryVariants(query string) []string {
+	variants := []string{query}
+	terms := tokenizeFTSTerms(query)
+	if len(terms) >= 2 && !hasNegationTerm(terms) {
+		orQuery := strings.Join(terms, " OR ")
+		if orQuery != query {
+			variants = append(variants, orQuery)
+		}
+	}
+	return variants
+}
+
+func (s *MemoryStore) searchFTSPage(ctx context.Context, project, query string, limit int, offset int) ([]*models.Memory, error) {
+	if project == "" {
+		return nil, fmt.Errorf("SearchFTS: project must not be empty")
+	}
+	if query == "" {
+		return nil, fmt.Errorf("SearchFTS: query must not be empty")
+	}
+	limit = normalizeSearchFTSLimit(limit)
+	if offset < 0 {
+		offset = 0
+	}
 	const ftsQuerySQL = `
 		WITH parsed AS (
 			SELECT websearch_to_tsquery('english', ?) AS wsq,
@@ -1547,55 +1624,17 @@ func (s *MemoryStore) SearchFTS(ctx context.Context, project, query string, limi
 		AND   (m.valid_until IS NULL OR m.valid_until >= NOW())
 		AND    m.search_vector @@ COALESCE(NULLIF(parsed.wsq, ''::tsquery), parsed.ptq)
 		ORDER BY ts_rank_cd(m.search_vector,
-		             COALESCE(NULLIF(parsed.wsq, ''::tsquery), parsed.ptq)) DESC
+		             COALESCE(NULLIF(parsed.wsq, ''::tsquery), parsed.ptq)) DESC,
+		         m.created_at DESC,
+		         m.id DESC
 		LIMIT ?
+		OFFSET ?
 	`
-
-	// Precision-first pass: websearch_to_tsquery / plainto_tsquery both AND all
-	// terms together, so a multi-word query matches only memories whose content
-	// contains EVERY term. That is the precise result and is preferred when it
-	// returns anything.
 	var rows []Memory
-	err := s.db.WithContext(ctx).Raw(ftsQuerySQL, query, query, project, limit).Scan(&rows).Error
+	err := s.db.WithContext(ctx).Raw(ftsQuerySQL, query, query, project, limit, offset).Scan(&rows).Error
 	if err != nil {
-		return nil, fmt.Errorf("SearchFTS project=%q: %w", project, err)
+		return nil, err
 	}
-
-	// OR-fallback (issue #281): when the AND pass returns nothing AND the query
-	// has 2+ terms, retry with the terms OR-combined. Root cause of the empty-
-	// result bug: an over-specified multi-word query (e.g. "updated_deferred
-	// mcp-launcher install aimux") requires all terms in one memory's content;
-	// no single memory has them all, so the AND pass yields zero even when
-	// strongly-related memories exist. The OR pass surfaces partial matches,
-	// ranked by ts_rank_cd so the most-relevant (most terms matched) sort first.
-	// websearch_to_tsquery("a OR b OR c") parses to the OR tsquery `a | b | c`
-	// and never errors on bad syntax, so the OR string is injection-safe.
-	if len(rows) == 0 {
-		// tokenizeFTSTerms preserves "double quoted phrases" as single terms so
-		// the AND pass's phrase support is not silently broken by the fallback,
-		// and drops any literal OR the user already typed (PR #270 review: naive
-		// strings.Fields turns `"mcp launcher" install` into `"mcp`/`launcher"`
-		// and `a OR b` into `a OR OR OR b`).
-		terms := tokenizeFTSTerms(query)
-		// Negation guard (PR #270 review, codex+coderabbit): if any term is a
-		// websearch exclusion (`-term`), the OR-fallback is semantically invalid.
-		// `postgres -sqlite` would rewrite to `postgres OR -sqlite`, which
-		// websearch_to_tsquery parses as `'postgres' | !'sqlite'`; because AND
-		// binds tighter than OR, that matches every memory lacking "sqlite" —
-		// the exact inverse of the user's exclude intent. When the user typed an
-		// exclusion, the precise (possibly empty) result respects intent better
-		// than a loosened OR pass, so skip the fallback entirely for such queries.
-		if len(terms) >= 2 && !hasNegationTerm(terms) {
-			orQuery := strings.Join(terms, " OR ")
-			var orRows []Memory
-			orErr := s.db.WithContext(ctx).Raw(ftsQuerySQL, orQuery, orQuery, project, limit).Scan(&orRows).Error
-			if orErr != nil {
-				return nil, fmt.Errorf("SearchFTS project=%q (OR fallback): %w", project, orErr)
-			}
-			rows = orRows
-		}
-	}
-
 	result := make([]*models.Memory, len(rows))
 	for i := range rows {
 		result[i] = memoryRowToModel(&rows[i])

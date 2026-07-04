@@ -334,6 +334,80 @@ func TestMemoryStore_QueryMetaIndex_VisibilityBeforeLimit(t *testing.T) {
 	require.NotContains(t, metaIndexHitIDs(hits), newerPrivate)
 }
 
+func TestMemoryStore_QueryMetaIndex_FTSVisibilityPagesUntilVisibleMatches(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-fts-visibility'`)
+
+	ms := NewMemoryStore(&Store{DB: db})
+	ctx := context.Background()
+	const project = "test-s2-meta-index-fts-visibility"
+	base := time.Unix(1700002000, 0).UTC()
+	for i := range 30 {
+		insertMetaIndexMemory(t, db, ms, ctx, project, fmt.Sprintf("rarelexeme rarelexeme hidden %02d", i), []string{"s2:meta"}, "agent/bob", models.AgentVisibilityPrivate, base.Add(time.Duration(30-i)*time.Second))
+	}
+	visibleID := insertMetaIndexMemory(t, db, ms, ctx, project, "rarelexeme visible fallback", []string{"s2:meta"}, "agent/alice", models.AgentVisibilityShared, base.Add(-time.Minute))
+
+	hits, err := ms.QueryMetaIndex(ctx, MetaIndexQuery{
+		Project:            project,
+		Query:              "rarelexeme",
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		Limit:              1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int64{visibleID}, metaIndexHitIDs(hits), "FTS paging must continue until a visible match is found behind hidden higher-ranked rows")
+}
+
+func TestMemoryStore_QueryMetaIndex_FTSFallbackIgnoresHiddenStrictVariant(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-fts-fallback-visibility'`)
+
+	ms := NewMemoryStore(&Store{DB: db})
+	ctx := context.Background()
+	const project = "test-s2-meta-index-fts-fallback-visibility"
+	base := time.Unix(1700002300, 0).UTC()
+	insertMetaIndexMemory(t, db, ms, ctx, project, "alpha beta hidden strict", []string{"s2:meta"}, "agent/bob", models.AgentVisibilityPrivate, base)
+	visibleID := insertMetaIndexMemory(t, db, ms, ctx, project, "alpha visible fallback", []string{"s2:meta"}, "agent/alice", models.AgentVisibilityShared, base.Add(-time.Minute))
+
+	hits, err := ms.QueryMetaIndex(ctx, MetaIndexQuery{
+		Project:            project,
+		Query:              "alpha beta",
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		Limit:              1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int64{visibleID}, metaIndexHitIDs(hits), "hidden strict matches must not suppress visible OR-fallback hits")
+}
+
+func TestMemoryStore_QueryMetaIndex_FTSVisibilityStopsAtScanBudget(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-fts-budget'`)
+
+	ms := NewMemoryStore(&Store{DB: db})
+	ctx := context.Background()
+	const project = "test-s2-meta-index-fts-budget"
+	base := time.Unix(1700002600, 0).UTC()
+	hiddenRows := normalizeMetaMemoryFTSScanBudget(1)
+	for i := range hiddenRows {
+		insertMetaIndexMemory(t, db, ms, ctx, project, fmt.Sprintf("rarelexeme rarelexeme hidden budget %03d", i), []string{"s2:meta"}, "agent/bob", models.AgentVisibilityPrivate, base.Add(time.Duration(hiddenRows-i)*time.Second))
+	}
+	insertMetaIndexMemory(t, db, ms, ctx, project, "rarelexeme visible beyond budget", []string{"s2:meta"}, "agent/alice", models.AgentVisibilityShared, base.Add(-time.Minute))
+
+	hits, err := ms.QueryMetaIndex(ctx, MetaIndexQuery{
+		Project:            project,
+		Query:              "rarelexeme",
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		Limit:              1,
+	})
+	require.NoError(t, err)
+	require.Empty(t, hits, "FTS paging must stop once the scan budget is exhausted instead of walking the entire hidden result set")
+}
+
 func TestMemoryStore_QueryMetaIndex_LimitsTieOrderAndContentFreeOutput(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
@@ -385,6 +459,57 @@ func TestMemoryStore_QueryMetaIndex_LimitsTieOrderAndContentFreeOutput(t *testin
 	serialized := strings.ToLower(string(payload))
 	require.NotContains(t, serialized, "content", "serialized meta-index hits must not expose a content field")
 	require.NotContains(t, serialized, "forbidden-body-token", "serialized meta-index hits must not leak raw memory body text")
+}
+
+func TestMemoryStore_QueryMetaIndex_TagPrefixEscapesSQLWildcards(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-tag-escape'`)
+
+	ms := NewMemoryStore(&Store{DB: db})
+	ctx := context.Background()
+	const project = "test-s2-meta-index-tag-escape"
+	base := time.Unix(1700003000, 0).UTC()
+	percentID := insertMetaIndexMemory(t, db, ms, ctx, project, "literal percent tag", []string{"literal%tag", "s2:meta"}, "agent/alice", models.AgentVisibilityShared, base)
+	underscoreID := insertMetaIndexMemory(t, db, ms, ctx, project, "literal underscore tag", []string{"literal_tag", "s2:meta"}, "agent/alice", models.AgentVisibilityShared, base.Add(time.Second))
+	wildcardID := insertMetaIndexMemory(t, db, ms, ctx, project, "wildcard lookalike tag", []string{"literalXtag", "s2:meta"}, "agent/alice", models.AgentVisibilityShared, base.Add(2*time.Second))
+
+	percentHits, err := ms.QueryMetaIndex(ctx, MetaIndexQuery{
+		Project:            project,
+		Tags:               []string{"literal%"},
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		Limit:              10,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int64{percentID}, metaIndexHitIDs(percentHits), "literal percent prefixes must not widen into SQL wildcard matches")
+	require.NotContains(t, metaIndexHitIDs(percentHits), wildcardID)
+
+	underscoreHits, err := ms.QueryMetaIndex(ctx, MetaIndexQuery{
+		Project:            project,
+		Tags:               []string{"literal_"},
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		Limit:              10,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int64{underscoreID}, metaIndexHitIDs(underscoreHits), "literal underscore prefixes must not widen into SQL single-character wildcards")
+	require.NotContains(t, metaIndexHitIDs(underscoreHits), wildcardID)
+}
+
+func TestCloneMetaTags_PreservesIndependenceAndExplicitEmpty(t *testing.T) {
+	original := []string{"s2:meta"}
+	cloned := cloneMetaTags(original)
+	require.Equal(t, original, cloned)
+	cloned[0] = "mutated"
+	require.Equal(t, "s2:meta", original[0], "cloned tag slices must not alias the source backing array")
+
+	empty := cloneMetaTags([]string{})
+	require.NotNil(t, empty, "explicit empty tag slices should remain explicit after cloning")
+	require.Len(t, empty, 0)
+
+	var nilTags []string
+	require.Nil(t, cloneMetaTags(nilTags))
 }
 
 func insertMetaIndexMemory(t *testing.T, db *gorm.DB, ms *MemoryStore, ctx context.Context, project, content string, tags []string, owner, visibility string, createdAt time.Time) int64 {
