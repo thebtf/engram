@@ -58,10 +58,15 @@ func (p *MetaIndexProposer) Propose(ctx context.Context, event cognitive.Attenti
 
 	proposals := make([]cognitive.HintProposal, 0, len(hits))
 	for _, hit := range hits {
+		var tags []string
+		if hit.Tags != nil {
+			tags = make([]string, len(hit.Tags))
+			copy(tags, hit.Tags)
+		}
 		proposals = append(proposals, cognitive.HintProposal{
 			ID:        fmt.Sprintf("%d", hit.ID),
 			Title:     hit.Title,
-			Tags:      hit.Tags,
+			Tags:      tags,
 			CreatedAt: hit.CreatedAt,
 			Score:     hit.Score,
 			Source:    hit.Source,

@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -52,7 +53,7 @@ func TestKnowAbout_T005_PopulatedTopicReturnsContentFreeIndexHits(t *testing.T) 
 	require.Contains(t, props, "limit", "know_about must advertise bounded index reads")
 	require.NotContains(t, props, "content", "know_about is discovery-only and must not accept memory bodies")
 
-	payload := callT005KnowAbout(t, srv, context.Background(), map[string]any{
+	payload := callT005KnowAbout(t, srv, t005PrincipalContext(), map[string]any{
 		"topic":   "handoff protocol",
 		"project": "engram",
 		"limit":   2,
@@ -74,6 +75,8 @@ func TestKnowAbout_T005_PopulatedTopicReturnsContentFreeIndexHits(t *testing.T) 
 	require.Equal(t, "engram", idx.queries[0].Project)
 	require.Equal(t, "handoff protocol", idx.queries[0].Query)
 	require.Equal(t, 2, idx.queries[0].Limit)
+	require.Equal(t, "agent/alice", idx.queries[0].OwnerPrincipal)
+	require.Equal(t, "agent", idx.queries[0].OwnerPrincipalKind)
 	assertT005NoContentKeys(t, payload)
 }
 
@@ -81,7 +84,7 @@ func TestKnowAbout_T005_MissingTopicReturnsEmptyIndexPacket(t *testing.T) {
 	idx := &fakeT005MetaMemoryIndex{hits: []gormdb.MetaIndexHit{}}
 	srv := newT005KnowAboutServer(t, idx, true)
 
-	payload := callT005KnowAbout(t, srv, context.Background(), map[string]any{
+	payload := callT005KnowAbout(t, srv, t005PrincipalContext(), map[string]any{
 		"topic":   "topic-with-no-index-hits",
 		"project": "engram",
 		"limit":   3,
@@ -93,6 +96,8 @@ func TestKnowAbout_T005_MissingTopicReturnsEmptyIndexPacket(t *testing.T) {
 	require.Equal(t, float64(0), payload["total_candidates"])
 	require.Empty(t, requireT005Memories(t, payload), "missing topics must be an explicit empty result, not nil or a tool error")
 	require.Len(t, idx.queries, 1, "missing topics must still query the content-free S2 index")
+	require.Equal(t, "agent/alice", idx.queries[0].OwnerPrincipal)
+	require.Equal(t, "agent", idx.queries[0].OwnerPrincipalKind)
 	assertT005NoContentKeys(t, payload)
 }
 
@@ -108,10 +113,43 @@ func TestKnowAbout_T005_ProjectFallbackFailureRequiresProjectScope(t *testing.T)
 	require.ErrorContains(t, err, "project")
 }
 
+func TestKnowAbout_T005_RequiresPrincipalScopedIdentity(t *testing.T) {
+	idx := &fakeT005MetaMemoryIndex{}
+	srv := newT005KnowAboutServer(t, idx, true)
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+	}{
+		{
+			name: "master token without principal is rejected",
+			ctx:  auth.WithIdentity(context.Background(), auth.Identity{Role: auth.RoleAdmin, Source: auth.SourceMaster}),
+		},
+		{
+			name: "legacy client keycard without principal is rejected",
+			ctx:  auth.WithIdentity(context.Background(), auth.Identity{Role: auth.RoleReadWrite, Source: auth.SourceClient, KeycardID: "legacy-no-principal"}),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := srv.callTool(tt.ctx, "know_about", mustT005KnowAboutJSON(t, map[string]any{
+				"topic":   "handoff protocol",
+				"project": "engram",
+				"limit":   5,
+			}))
+
+			require.Error(t, err)
+			require.ErrorContains(t, err, "principal-scoped identity")
+		})
+	}
+	require.Empty(t, idx.queries, "unauthorized know_about requests must fail before the meta-index query executes")
+}
+
 func TestKnowAbout_T005_ContextProjectFallbackAndLimitClamp(t *testing.T) {
 	idx := &fakeT005MetaMemoryIndex{generateFromLimit: true}
 	srv := newT005KnowAboutServer(t, idx, true)
-	ctx := contextWithProject(context.Background(), "context-project")
+	ctx := auth.WithIdentity(contextWithProject(context.Background(), "context-project"), auth.ClientWithPrincipal("read-write", "keycard-t005-context", "agent/alice", auth.PrincipalKindAgent))
 
 	payload := callT005KnowAbout(t, srv, ctx, map[string]any{
 		"topic": "bounded discovery",
@@ -121,6 +159,8 @@ func TestKnowAbout_T005_ContextProjectFallbackAndLimitClamp(t *testing.T) {
 	require.Len(t, idx.queries, 1)
 	require.Equal(t, "context-project", idx.queries[0].Project, "project must fall back to MCP context before querying S2")
 	require.Equal(t, 25, idx.queries[0].Limit, "oversized know_about limits must clamp to the S2 meta-index maximum")
+	require.Equal(t, "agent/alice", idx.queries[0].OwnerPrincipal)
+	require.Equal(t, "agent", idx.queries[0].OwnerPrincipalKind)
 	require.Equal(t, float64(25), payload["count"])
 	require.Equal(t, float64(25), payload["total_candidates"])
 	require.Len(t, requireT005Memories(t, payload), 25, "response size must match the clamped S2 index limit")
@@ -133,8 +173,9 @@ func TestKnowAbout_T005_RealStoreCanonicalShapeAndMissingTopicEmptyPacket(t *tes
 	insertT005RealMetaMemory(t, idx, project, "handoff memory title\nthis body omits the lexical query marker", []string{"intent:handoff", "s2:meta"})
 
 	srv := newT005KnowAboutServer(t, idx, true)
+	ctx := t005PrincipalContext()
 
-	populated := callT005KnowAbout(t, srv, context.Background(), map[string]any{
+	populated := callT005KnowAbout(t, srv, ctx, map[string]any{
 		"topic":   "intent:handoff",
 		"project": project,
 		"limit":   5,
@@ -148,7 +189,7 @@ func TestKnowAbout_T005_RealStoreCanonicalShapeAndMissingTopicEmptyPacket(t *tes
 	require.Equal(t, "handoff memory title", memories[0]["title"])
 	assertT005NoContentKeys(t, populated)
 
-	empty := callT005KnowAbout(t, srv, context.Background(), map[string]any{
+	empty := callT005KnowAbout(t, srv, ctx, map[string]any{
 		"topic":   "topic-with-no-index-hits",
 		"project": project,
 		"limit":   5,
@@ -208,7 +249,7 @@ func TestKnowAbout_T005_IndexErrorsSurfaceAsToolErrors(t *testing.T) {
 	idx := &fakeT005MetaMemoryIndex{err: errors.New("meta index offline")}
 	srv := newT005KnowAboutServer(t, idx, true)
 
-	_, err := srv.callTool(context.Background(), "know_about", mustT005KnowAboutJSON(t, map[string]any{
+	_, err := srv.callTool(t005PrincipalContext(), "know_about", mustT005KnowAboutJSON(t, map[string]any{
 		"topic":   "handoff protocol",
 		"project": "engram",
 		"limit":   4,
@@ -235,7 +276,7 @@ func TestKnowAbout_T005_JSONNeverContainsContentKeysOrMemoryBodies(t *testing.T)
 	}
 	srv := newT005KnowAboutServer(t, idx, true)
 
-	result, err := srv.callTool(context.Background(), "know_about", mustT005KnowAboutJSON(t, map[string]any{
+	result, err := srv.callTool(t005PrincipalContext(), "know_about", mustT005KnowAboutJSON(t, map[string]any{
 		"topic":   "safe title",
 		"project": "engram",
 		"limit":   1,
@@ -298,6 +339,10 @@ func newT005KnowAboutServer(t *testing.T, idx metaMemoryIndex, s2Enabled bool) *
 		srv.SetMetaMemoryIndex(idx)
 	}
 	return srv
+}
+
+func t005PrincipalContext() context.Context {
+	return auth.WithIdentity(context.Background(), auth.ClientWithPrincipal("read-write", "keycard-t005", "agent/alice", auth.PrincipalKindAgent))
 }
 
 func findT005KnowAboutTool(t *testing.T, tools []Tool) *Tool {
