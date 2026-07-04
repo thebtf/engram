@@ -46,6 +46,7 @@ type Server struct {
 	embeddingStore               *embedding.Store
 	rerankClient                 *reranking.Client
 	memoryStore                  *gorm.MemoryStore
+	metaMemoryIndex              metaMemoryIndex
 	stateStore                   statePlane
 	experienceProvider           experienceProvider
 	temporalTruthProvider        temporalTruthProvider
@@ -114,6 +115,10 @@ type ServerOptions struct {
 	ChunkManager       *chunking.Manager
 }
 
+type metaMemoryIndex interface {
+	QueryMetaIndex(ctx context.Context, query gorm.MetaIndexQuery) ([]gorm.MetaIndexHit, error)
+}
+
 // NewServer creates a new MCP server.
 func NewServer(opts ServerOptions) *Server {
 	return &Server{
@@ -146,6 +151,11 @@ func (s *Server) SetIssueStore(is *gorm.IssueStore) {
 // SetMemoryStore sets the memory store for the memories table (US3 Commit C).
 func (s *Server) SetMemoryStore(ms *gorm.MemoryStore) {
 	s.memoryStore = ms
+}
+
+// SetMetaMemoryIndex wires the content-free S2 meta-memory query seam.
+func (s *Server) SetMetaMemoryIndex(idx metaMemoryIndex) {
+	s.metaMemoryIndex = idx
 }
 
 // SetStateStore sets the native state-plane read/write store.
@@ -1091,6 +1101,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 		)
 	}
+	if s2MetaMemoryEnabled() && s.metaMemoryIndex != nil {
+		tools = append(tools, knowAboutTool())
+	}
 	if s.principalMemoryQuerySvc != nil {
 		tools = append(tools, principalMemoryQueryTool())
 	}
@@ -1714,6 +1727,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleStoreMemory(ctx, args)
 	case "recall_memory":
 		return s.handleRecallMemory(ctx, args)
+	case "know_about":
+		return s.handleKnowAbout(ctx, args)
 	case "query_principal_memory":
 		return s.handleQueryPrincipalMemory(ctx, args)
 	case "get_state":

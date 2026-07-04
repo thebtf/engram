@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/lib/pq"
 	"gorm.io/gorm"
@@ -30,6 +32,163 @@ type MemoryStore struct {
 // NewMemoryStore creates a new MemoryStore backed by the given Store.
 func NewMemoryStore(store *Store) *MemoryStore {
 	return &MemoryStore{db: store.DB}
+}
+
+const (
+	defaultMetaMemoryLimit = 10
+	maxMetaMemoryLimit     = 25
+	metaMemoryProbeFactor  = 5
+)
+
+// MetaIndexQuery is the content-free S2 query contract shared by the store,
+// the S2 proposer, and later MCP/session-start adapters.
+type MetaIndexQuery struct {
+	Project            string
+	Query              string
+	Tags               []string
+	OwnerPrincipal     string
+	OwnerPrincipalKind string
+	AgentVisibility    string
+	Domain             string
+	Limit              int
+}
+
+// MetaIndexHit is the content-free result shape returned by S2 store queries.
+// It deliberately excludes memory body fields; callers expand by ID when they
+// explicitly need full memory content.
+type MetaIndexHit struct {
+	ID        int64     `json:"id"`
+	Project   string    `json:"project"`
+	Title     string    `json:"title"`
+	Tags      []string  `json:"tags,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Score     float32   `json:"score"`
+	Source    string    `json:"source"`
+	Reason    string    `json:"reason,omitempty"`
+}
+
+// MetaMemoryRecord is the content-free metadata row used internally by S2
+// meta-memory queries before score/source annotation is added.
+type MetaMemoryRecord struct {
+	ID        int64
+	Title     string
+	Tags      []string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type metaMemorySelectRow struct {
+	ID        int64                  `gorm:"column:id"`
+	Title     string                 `gorm:"column:title"`
+	Tags      models.JSONStringArray `gorm:"column:tags"`
+	CreatedAt time.Time              `gorm:"column:created_at"`
+	UpdatedAt time.Time              `gorm:"column:updated_at"`
+}
+
+func normalizeMetaMemoryLimit(limit int) int {
+	if limit <= 0 {
+		return defaultMetaMemoryLimit
+	}
+	if limit > maxMetaMemoryLimit {
+		return maxMetaMemoryLimit
+	}
+	return limit
+}
+
+func normalizeMetaMemoryProbeLimit(limit int) int {
+	probe := normalizeMetaMemoryLimit(limit) * metaMemoryProbeFactor
+	if probe < maxMetaMemoryLimit {
+		probe = maxMetaMemoryLimit
+	}
+	if probe > 200 {
+		probe = 200
+	}
+	return probe
+}
+
+func sanitizeMetaText(value string, maxRunes int) string {
+	value = strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value)), " ")
+	if maxRunes > 0 {
+		runes := []rune(value)
+		if len(runes) > maxRunes {
+			value = string(runes[:maxRunes])
+		}
+	}
+	return strings.TrimSpace(value)
+}
+
+func sanitizeMetaTags(tags []string) []string {
+	result := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = sanitizeMetaText(tag, 64)
+		if tag == "" {
+			continue
+		}
+		result = append(result, tag)
+	}
+	return result
+}
+
+func metaMemoryTitleFromLine(line string) string {
+	line = sanitizeMetaText(line, 80)
+	if line == "" {
+		return "untitled"
+	}
+	return line
+}
+
+func metaMemoryRowsToRecords(rows []metaMemorySelectRow) []MetaMemoryRecord {
+	result := make([]MetaMemoryRecord, len(rows))
+	for i := range rows {
+		result[i] = MetaMemoryRecord{
+			ID:        rows[i].ID,
+			Title:     metaMemoryTitleFromLine(rows[i].Title),
+			Tags:      sanitizeMetaTags([]string(rows[i].Tags)),
+			CreatedAt: rows[i].CreatedAt,
+			UpdatedAt: rows[i].UpdatedAt,
+		}
+	}
+	return result
+}
+
+func metaMemoryMatchesOptions(mem *models.Memory, opts ListOptions) bool {
+	if mem == nil {
+		return false
+	}
+	if owner := strings.TrimSpace(opts.OwnerPrincipal); owner != "" && mem.OwnerPrincipal != owner {
+		return false
+	}
+	if kind := strings.TrimSpace(strings.ToLower(opts.OwnerPrincipalKind)); kind != "" && strings.ToLower(strings.TrimSpace(mem.OwnerPrincipalKind)) != kind {
+		return false
+	}
+	if visibility := strings.TrimSpace(opts.AgentVisibility); visibility != "" && mem.AgentVisibility != visibility {
+		return false
+	}
+	if domain := strings.TrimSpace(opts.Domain); domain != "" && mem.Domain != domain {
+		return false
+	}
+	if opts.ConfidenceMin > 0 && mem.Confidence < opts.ConfidenceMin {
+		return false
+	}
+	if len(opts.IDs) > 0 {
+		matched := false
+		for _, id := range opts.IDs {
+			if mem.ID == id {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 func validateMemoryForCreate(mem *models.Memory) error {
@@ -1026,6 +1185,268 @@ func (s *MemoryStore) ListBySourceAgentAndTag(ctx context.Context, project, sour
 		result[i] = memoryRowToModel(&rows[i])
 	}
 	return result, nil
+}
+
+// SearchMetaMemoryTagPrefixIDs returns content-free candidate IDs for S2's tag-prefix leg.
+// The SQL predicates are applied before LIMIT so hidden/newer rows cannot truncate older
+// visible candidates.
+func (s *MemoryStore) SearchMetaMemoryTagPrefixIDs(ctx context.Context, project, prefix string, opts ListOptions, limit int) ([]int64, error) {
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return nil, fmt.Errorf("project must not be empty")
+	}
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return nil, fmt.Errorf("prefix must not be empty")
+	}
+	prefixPattern := strings.ToLower(prefix) + "%"
+	var ids []int64
+	err := applyMemoryListOptions(
+		basePrincipalMemoryQuery(s.db.WithContext(ctx).Model(&Memory{}), opts).Where("project = ?", project),
+		opts,
+	).
+		Where(`EXISTS (SELECT 1 FROM jsonb_array_elements_text(tags) AS tag WHERE LOWER(tag) LIKE ?)`, prefixPattern).
+		Order("created_at DESC, id DESC").
+		Limit(normalizeMetaMemoryLimit(limit)).
+		Pluck("id", &ids).Error
+	if err != nil {
+		return nil, fmt.Errorf("search meta-memory tag-prefix ids project=%q prefix=%q: %w", project, prefix, err)
+	}
+	return ids, nil
+}
+
+// SearchMetaMemoryFTSIDs returns content-free candidate IDs for S2's FTS leg.
+// It intentionally over-fetches from SearchFTS before applying principal/domain
+// filters so newer hidden rows do not truncate older visible matches.
+func (s *MemoryStore) SearchMetaMemoryFTSIDs(ctx context.Context, project, query string, opts ListOptions, limit int) ([]int64, error) {
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return nil, fmt.Errorf("project must not be empty")
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("query must not be empty")
+	}
+	rows, err := s.SearchFTS(ctx, project, query, normalizeMetaMemoryProbeLimit(limit))
+	if err != nil {
+		return nil, fmt.Errorf("search meta-memory fts ids project=%q query=%q: %w", project, query, err)
+	}
+	ids := make([]int64, 0, normalizeMetaMemoryLimit(limit))
+	for _, mem := range rows {
+		if !metaMemoryMatchesOptions(mem, opts) {
+			continue
+		}
+		ids = append(ids, mem.ID)
+		if len(ids) == normalizeMetaMemoryLimit(limit) {
+			break
+		}
+	}
+	return ids, nil
+}
+
+// GetMetaMemoryByIDs returns the content-free metadata projection for the given IDs,
+// preserving the caller's requested order.
+func (s *MemoryStore) GetMetaMemoryByIDs(ctx context.Context, project string, ids []int64) ([]MetaMemoryRecord, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return nil, fmt.Errorf("project must not be empty")
+	}
+	var rows []metaMemorySelectRow
+	err := s.db.WithContext(ctx).Raw(`
+		SELECT id,
+		       btrim(split_part(content, E'\n', 1)) AS title,
+		       tags,
+		       created_at,
+		       updated_at
+		FROM memories
+		WHERE id = ANY(?)
+		  AND project = ?
+		  AND status = 'active'
+		  AND deleted_at IS NULL
+		  AND (valid_from IS NULL OR valid_from <= NOW())
+		  AND (valid_until IS NULL OR valid_until >= NOW())
+	`, pq.Array(ids), project).Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("get meta-memory by ids project=%q: %w", project, err)
+	}
+	byID := make(map[int64]MetaMemoryRecord, len(rows))
+	for _, row := range metaMemoryRowsToRecords(rows) {
+		byID[row.ID] = row
+	}
+	result := make([]MetaMemoryRecord, 0, len(ids))
+	for _, id := range ids {
+		if row, ok := byID[id]; ok {
+			result = append(result, row)
+		}
+	}
+	return result, nil
+}
+
+// QueryMetaIndex runs the content-free S2 tag/FTS fusion query and returns
+// bounded metadata-only hits.
+func (s *MemoryStore) QueryMetaIndex(ctx context.Context, query MetaIndexQuery) ([]MetaIndexHit, error) {
+	project := strings.TrimSpace(query.Project)
+	if project == "" {
+		return nil, fmt.Errorf("project must not be empty")
+	}
+	limit := normalizeMetaMemoryLimit(query.Limit)
+	opts := ListOptions{
+		OwnerPrincipal:     query.OwnerPrincipal,
+		OwnerPrincipalKind: query.OwnerPrincipalKind,
+		AgentVisibility:    query.AgentVisibility,
+		Domain:             query.Domain,
+	}
+
+	tagIDs := make([]int64, 0, limit)
+	hasTagQuery := false
+	for _, tag := range query.Tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		hasTagQuery = true
+		ids, err := s.SearchMetaMemoryTagPrefixIDs(ctx, project, tag, opts, limit)
+		if err != nil {
+			return nil, err
+		}
+		tagIDs = appendUniqueMetaIDs(tagIDs, ids)
+	}
+
+	textQuery := strings.TrimSpace(query.Query)
+	hasTextQuery := textQuery != ""
+	ftsIDs := make([]int64, 0, limit)
+	if hasTextQuery {
+		ids, err := s.SearchMetaMemoryFTSIDs(ctx, project, textQuery, opts, limit)
+		if err != nil {
+			return nil, err
+		}
+		ftsIDs = appendUniqueMetaIDs(ftsIDs, ids)
+	}
+
+	if !hasTagQuery && !hasTextQuery {
+		return nil, fmt.Errorf("query or tags must not be empty")
+	}
+	if len(tagIDs) == 0 && len(ftsIDs) == 0 {
+		return []MetaIndexHit{}, nil
+	}
+
+	ordered := metaIndexRRF(tagIDs, ftsIDs, 60)
+	if len(ordered) > limit {
+		ordered = ordered[:limit]
+	}
+	records, err := s.GetMetaMemoryByIDs(ctx, project, ordered)
+	if err != nil {
+		return nil, err
+	}
+	scores := metaIndexScores(tagIDs, ftsIDs)
+	tagSet := metaIDSet(tagIDs)
+	ftsSet := metaIDSet(ftsIDs)
+	hits := make([]MetaIndexHit, 0, len(records))
+	for _, record := range records {
+		hits = append(hits, MetaIndexHit{
+			ID:        record.ID,
+			Project:   project,
+			Title:     record.Title,
+			Tags:      record.Tags,
+			CreatedAt: record.CreatedAt,
+			UpdatedAt: record.UpdatedAt,
+			Score:     float32(scores[record.ID]),
+			Source:    "s2.meta_index",
+			Reason:    metaIndexReason(record.ID, tagSet, ftsSet),
+		})
+	}
+	return hits, nil
+}
+
+func appendUniqueMetaIDs(dst, src []int64) []int64 {
+	seen := metaIDSet(dst)
+	for _, id := range src {
+		if seen[id] {
+			continue
+		}
+		dst = append(dst, id)
+		seen[id] = true
+	}
+	return dst
+}
+
+func metaIDSet(ids []int64) map[int64]bool {
+	set := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	return set
+}
+
+func metaIndexScores(tagIDs, ftsIDs []int64) map[int64]float64 {
+	scores := make(map[int64]float64, len(tagIDs)+len(ftsIDs))
+	for rank, id := range tagIDs {
+		scores[id] += 1.0 / float64(rank+61)
+	}
+	for rank, id := range ftsIDs {
+		scores[id] += 1.0 / float64(rank+61)
+	}
+	return scores
+}
+
+func metaIndexRRF(tagIDs, ftsIDs []int64, k int) []int64 {
+	if k <= 0 {
+		k = 60
+	}
+	type scoredID struct {
+		id    int64
+		score float64
+		best  int
+	}
+	scores := make(map[int64]float64, len(tagIDs)+len(ftsIDs))
+	bestRank := make(map[int64]int, len(tagIDs)+len(ftsIDs))
+	initBest := func(id int64, rank int) {
+		if best, ok := bestRank[id]; !ok || rank < best {
+			bestRank[id] = rank
+		}
+	}
+	for rank, id := range tagIDs {
+		scores[id] += 1.0 / float64(rank+k+1)
+		initBest(id, rank)
+	}
+	for rank, id := range ftsIDs {
+		scores[id] += 1.0 / float64(rank+k+1)
+		initBest(id, rank)
+	}
+	merged := make([]scoredID, 0, len(scores))
+	for id, score := range scores {
+		merged = append(merged, scoredID{id: id, score: score, best: bestRank[id]})
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		if merged[i].score != merged[j].score {
+			return merged[i].score > merged[j].score
+		}
+		if merged[i].best != merged[j].best {
+			return merged[i].best < merged[j].best
+		}
+		return merged[i].id < merged[j].id
+	})
+	ordered := make([]int64, len(merged))
+	for i := range merged {
+		ordered[i] = merged[i].id
+	}
+	return ordered
+}
+
+func metaIndexReason(id int64, inTags, inFTS map[int64]bool) string {
+	switch {
+	case inTags[id] && inFTS[id]:
+		return "tag_prefix+fts"
+	case inTags[id]:
+		return "tag_prefix"
+	case inFTS[id]:
+		return "fts"
+	default:
+		return "s2.meta_index"
+	}
 }
 
 // tokenizeFTSTerms splits an FTS query into terms for the OR-fallback while

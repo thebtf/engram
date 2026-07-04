@@ -3,6 +3,8 @@ package grpcserver
 import (
 	"context"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/thebtf/engram/internal/auth"
@@ -79,6 +81,8 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 
 	memoryStore := dbgorm.NewMemoryStore(&dbgorm.Store{DB: s.db})
 	var memoryRows []*models.Memory
+	var summaryRows []*models.Memory
+	metaSummaryEnabled := os.Getenv("ENGRAM_V7_PLUG_ENABLED") == "true" && os.Getenv("ENGRAM_V7_S2_METAMEM") == "true"
 
 	// Build scope.KeycardContext once for both branches. ENGRAM_VNEXT_F_ENABLED
 	// gates only legacy privacy_scope; principal-private rows are filtered
@@ -102,6 +106,9 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 		if listErr != nil {
 			return nil, status.Error(codes.Internal, "failed to list session-start memories")
 		}
+		if metaSummaryEnabled {
+			summaryRows = allMemories
+		}
 		// Apply visibility before Thompson scoring so invisible rows are excluded
 		// from the candidate pool before they can consume the scored window.
 		scored := injection.Score(allMemories, memoriesLimit)
@@ -116,6 +123,12 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 		memoryRows, listErr = listVisibleSessionStartMemories(ctx, memoryStore, project, memoriesLimit, callerCtx, visibilityOpts, sessionStartVisibilityScanBudget)
 		if listErr != nil {
 			return nil, status.Error(codes.Internal, "failed to list session-start memories")
+		}
+		if metaSummaryEnabled {
+			summaryRows, listErr = listVisibleSessionStartMemories(ctx, memoryStore, project, maxSessionStartMemoriesLimit, callerCtx, visibilityOpts, sessionStartVisibilityScanBudget)
+			if listErr != nil {
+				return nil, status.Error(codes.Internal, "failed to summarize session-start memories")
+			}
 		}
 	}
 
@@ -142,14 +155,18 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 		rules = mapSessionStartRules(ruleRows)
 	}
 
-	generatedAt := timestamppb.Now()
-	return &pb.GetSessionStartContextResponse{
+	generatedAt := time.Now().UTC()
+	response := &pb.GetSessionStartContextResponse{
 		Issues:      mapSessionStartIssues(issueRows),
 		Rules:       rules,
 		Memories:    mapSessionStartMemories(memoryRows),
-		GeneratedAt: generatedAt,
+		GeneratedAt: timestamppb.New(generatedAt),
 		RuleRouter:  ruleRouter,
-	}, nil
+	}
+	if metaSummaryEnabled {
+		response.MetaSummary = buildSessionStartMetaSummary(project, summaryRows, generatedAt)
+	}
+	return response, nil
 }
 
 func listVisibleSessionStartMemories(
@@ -413,6 +430,68 @@ func mapSessionStartMemories(rows []*models.Memory) []*pb.SessionStartMemory {
 		})
 	}
 	return memories
+}
+
+func buildSessionStartMetaSummary(project string, rows []*models.Memory, generatedAt time.Time) *pb.SessionStartMetaSummary {
+	summary := &pb.SessionStartMetaSummary{
+		Project:     strings.TrimSpace(project),
+		TopTags:     summarizeSessionStartTopTags(rows, 6),
+		GeneratedAt: timestamppb.New(generatedAt),
+	}
+	visible := make([]*models.Memory, 0, len(rows))
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		visible = append(visible, row)
+	}
+	summary.TotalCount = int64(len(visible))
+	if len(visible) == 0 {
+		return summary
+	}
+	oldest := visible[0].CreatedAt
+	newest := visible[0].CreatedAt
+	for _, row := range visible[1:] {
+		if row.CreatedAt.Before(oldest) {
+			oldest = row.CreatedAt
+		}
+		if row.CreatedAt.After(newest) {
+			newest = row.CreatedAt
+		}
+	}
+	summary.OldestCreatedAt = timestamppb.New(oldest)
+	summary.NewestCreatedAt = timestamppb.New(newest)
+	return summary
+}
+
+func summarizeSessionStartTopTags(rows []*models.Memory, max int) []*pb.SessionStartMetaTagCount {
+	counts := map[string]int64{}
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		for _, tag := range row.Tags {
+			tag = strings.TrimSpace(tag)
+			if tag == "" {
+				continue
+			}
+			counts[tag]++
+		}
+	}
+	items := make([]*pb.SessionStartMetaTagCount, 0, len(counts))
+	for tag, count := range counts {
+		items = append(items, &pb.SessionStartMetaTagCount{Tag: tag, Count: count})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Count != items[j].Count {
+			return items[i].Count > items[j].Count
+		}
+		return items[i].Tag < items[j].Tag
+	})
+	if max <= 0 || max > len(items) {
+		max = len(items)
+	}
+	return items[:max]
 }
 
 func timestampProto(ts *time.Time) *timestamppb.Timestamp {
