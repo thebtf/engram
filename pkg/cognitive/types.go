@@ -1,6 +1,10 @@
 package cognitive
 
-import "time"
+import (
+	"encoding/json"
+	"errors"
+	"time"
+)
 
 // ResolutionPolicy classifies how the SubsystemRegistry should resolve
 // multiple implementations registered against the same cross-subsystem
@@ -102,6 +106,27 @@ type SessionStateSlots struct {
 	Focus     map[string]interface{} `json:"focus,omitempty"`
 	Execution map[string]interface{} `json:"execution,omitempty"`
 	Horizons  map[string]interface{} `json:"horizons,omitempty"`
+}
+
+// MaxSessionStatePayloadBytes is the NFR-8 upper bound for the JSON-encoded
+// SessionStateSlots payload written through S1.
+const MaxSessionStatePayloadBytes = 32 * 1024
+
+// ErrSessionStatePayloadTooLarge reports that the JSON-encoded SessionStateSlots
+// payload exceeds the cross-layer 32 KB write budget.
+var ErrSessionStatePayloadTooLarge = errors.New("session state exceeds 32 KB budget")
+
+// ValidateSessionStateSlotsBudget marshals state and enforces the shared 32 KB
+// payload budget used by every native S1 write path.
+func ValidateSessionStateSlotsBudget(state SessionStateSlots) error {
+	payload, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	if len(payload) > MaxSessionStatePayloadBytes {
+		return ErrSessionStatePayloadTooLarge
+	}
+	return nil
 }
 
 // ProjectStateRecord is the cross-session canonical project state written

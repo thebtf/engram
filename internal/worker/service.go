@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"sync"
@@ -30,6 +31,7 @@ import (
 	gochunking "github.com/thebtf/engram/internal/chunking/golang"
 	mdchunking "github.com/thebtf/engram/internal/chunking/markdown"
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
+	"github.com/thebtf/engram/internal/cognitive/s1state"
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
@@ -55,6 +57,7 @@ import (
 	"github.com/thebtf/engram/internal/worker/session"
 	"github.com/thebtf/engram/internal/worker/sse"
 	"github.com/thebtf/engram/internal/writelint"
+	"github.com/thebtf/engram/pkg/cognitive"
 	"github.com/thebtf/engram/pkg/models"
 	googlegrpc "google.golang.org/grpc"
 )
@@ -292,6 +295,37 @@ func wireStateStore(s *Service, stateStore statePlane) {
 	s.initMu.Lock()
 	s.stateStore = stateStore
 	s.initMu.Unlock()
+}
+
+func shouldRegisterRealS1StateWriter(flagCfg cognitivecore.FlagConfig) bool {
+	return flagCfg.IsPlugEnabled() && flagCfg.IsSubsystemEnabled("s1")
+}
+
+func hasEffectiveStateWriter(writer cognitive.StateWriter) bool {
+	if writer == nil {
+		return false
+	}
+	value := reflect.ValueOf(writer)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return !value.IsNil()
+	default:
+		return true
+	}
+}
+
+func registerS1StateWriterSubsystem(registry cognitivecore.SubsystemRegistry, writer cognitive.StateWriter) error {
+	if !hasEffectiveStateWriter(writer) {
+		return s1state.ErrNoWriter
+	}
+	subsystem := s1state.NewSubsystem(writer)
+	if err := registry.Register(subsystem); err != nil {
+		return err
+	}
+	if err := registry.Enable(subsystem.Name()); err != nil {
+		return err
+	}
+	return nil
 }
 
 // evictStalePrompts removes prompt cache entries older than 2 hours.
@@ -625,6 +659,12 @@ func (s *Service) initializeAsync() {
 	experienceProvider := newMemoryExperienceProvider(principalMemoryQuerySvc)
 	domainOwnerStore := gorm.NewDomainOwnerStore(store)
 	domainRegistrySvc := principalmemory.NewDomainRegistryService(domainOwnerStore, auditStore)
+	if shouldRegisterRealS1StateWriter(s.flagConfig) {
+		if err := registerS1StateWriterSubsystem(s.cognitiveRegistry, statePlaneSvc); err != nil {
+			s.setInitError(fmt.Errorf("register real s1 state writer: %w", err))
+			return
+		}
+	}
 	wireStateStore(s, statePlaneSvc)
 
 	// Create purge store for Milestone D project-level hard deletion (T008).

@@ -92,6 +92,9 @@ func (s *StateStore) WriteSessionState(ctx context.Context, sessionID string, st
 	if sessionID == "" {
 		return fmt.Errorf("state_store write_session: session_id is required")
 	}
+	if err := validateSessionStateBudget(state); err != nil {
+		return fmt.Errorf("state_store write_session: %w", err)
+	}
 	focus, err := marshalJSONObject(state.Focus)
 	if err != nil {
 		return fmt.Errorf("state_store write_session focus: %w", err)
@@ -716,6 +719,10 @@ func marshalJSONObject(value map[string]interface{}) (JSONObjectRaw, error) {
 		return JSONObjectRaw(`{}`), nil
 	}
 	return JSONObjectRaw(data), nil
+}
+
+func validateSessionStateBudget(state cognitive.SessionStateSlots) error {
+	return cognitive.ValidateSessionStateSlotsBudget(state)
 }
 
 func unmarshalJSONObject(raw JSONObjectRaw) (map[string]interface{}, error) {

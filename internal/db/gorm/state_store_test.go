@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,6 +55,27 @@ func TestStateStore_SessionStateRoundTrip(t *testing.T) {
 	require.Equal(t, want.Focus, got.Focus)
 	require.Equal(t, want.Execution, got.Execution)
 	require.Equal(t, want.Horizons, got.Horizons)
+}
+
+func TestStateStore_WriteSessionStateRejectsPayloadOver32KB(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	store := NewStateStore(db, auditStore)
+	ctx := context.Background()
+
+	sessionID := fmt.Sprintf("oversized-session-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM agent_session_state WHERE session_id = ?`, sessionID).Error
+	})
+
+	oversized := strings.Repeat("x", 33*1024)
+	err := store.WriteSessionState(ctx, sessionID, cognitive.SessionStateSlots{
+		Focus:     map[string]interface{}{"topic": oversized},
+		Execution: map[string]interface{}{"next_action": "reject oversized payload"},
+		Horizons:  map[string]interface{}{"next_verification": "go test ./internal/db/gorm"},
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "32 KB")
 }
 
 func TestStateStore_ProjectStateRoundTrip(t *testing.T) {
@@ -423,6 +445,32 @@ func TestStateStore_ResumePacketProjectOnlyWithoutSessionID(t *testing.T) {
 	require.Equal(t, cognitive.StateVerificationManual, packet.NextVerification.Kind)
 	require.Equal(t, fmt.Sprintf("Verify project %s native project state remains current before continuing.", project), packet.NextVerification.Description)
 	require.Empty(t, packet.NextVerification.Command)
+}
+
+func TestStateStore_ReadResumePacketFailsWithoutExecutionNextAction(t *testing.T) {
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	store := NewStateStore(db, auditStore)
+	ctx := context.Background()
+
+	sessionID := fmt.Sprintf("state-resume-missing-action-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM agent_session_state WHERE session_id = ?`, sessionID).Error
+	})
+
+	require.NoError(t, store.WriteSessionState(ctx, sessionID, cognitive.SessionStateSlots{
+		Focus:     map[string]interface{}{"topic": "resume exactness"},
+		Execution: map[string]interface{}{},
+		Horizons:  map[string]interface{}{"next_verification": "go test ./internal/db/gorm"},
+	}))
+
+	_, err := store.ReadResumePacket(ctx, cognitive.ResumePacketRequest{
+		Principal: "agent:developer",
+		SessionID: sessionID,
+		Scopes:    []cognitive.StateScopeKind{cognitive.StateScopeSession},
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "execution.next_action is required")
 }
 
 func TestResumePacketIDIncludesGoalTaskAndCanonicalScopes(t *testing.T) {

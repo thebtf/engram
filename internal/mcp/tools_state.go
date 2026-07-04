@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -194,15 +195,19 @@ func (s *Server) handleGetState(ctx context.Context, args json.RawMessage) (stri
 		if a.AllowFilesystemFallback != nil {
 			return "", fmt.Errorf("allow_filesystem_fallback is not supported on the server runtime state path")
 		}
-		packet, err := s.stateStore.ReadResumePacket(ctx, cognitive.ResumePacketRequest{
+		request := cognitive.ResumePacketRequest{
 			Project:   a.Project,
 			Principal: a.Principal,
 			SessionID: a.SessionID,
 			GoalID:    a.GoalID,
 			TaskID:    a.TaskID,
 			Scopes:    scopes,
-		})
+		}
+		packet, err := s.stateStore.ReadResumePacket(ctx, request)
 		if err != nil {
+			return "", err
+		}
+		if err := validateNativeResumePacket(packet, request); err != nil {
 			return "", err
 		}
 		return marshalJSON(packet)
@@ -229,6 +234,9 @@ func (s *Server) handleSetState(ctx context.Context, args json.RawMessage) (stri
 		}
 		state, err := decodeSessionStateForWrite(a.State)
 		if err != nil {
+			return "", err
+		}
+		if err := validateSessionStateBudget(state); err != nil {
 			return "", err
 		}
 		if err := s.stateStore.WriteSessionState(ctx, a.SessionID, state); err != nil {
@@ -279,6 +287,63 @@ func decodeSessionStateForWrite(raw json.RawMessage) (cognitive.SessionStateSlot
 		return cognitive.SessionStateSlots{}, fmt.Errorf("state must match session state shape: %w", err)
 	}
 	return state, nil
+}
+
+func validateSessionStateBudget(state cognitive.SessionStateSlots) error {
+	err := cognitive.ValidateSessionStateSlotsBudget(state)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, cognitive.ErrSessionStatePayloadTooLarge) {
+		return err
+	}
+	return fmt.Errorf("state must match session state shape: %w", err)
+}
+
+func validateNativeResumePacket(packet cognitive.ResumePacket, request cognitive.ResumePacketRequest) error {
+	if packet.Source != cognitive.StatePacketSourceNative {
+		return fmt.Errorf("native resume source must be native")
+	}
+	if packet.FallbackUsed {
+		return fmt.Errorf("native resume packet must not report fallback_used")
+	}
+	if strings.TrimSpace(packet.Principal) != strings.TrimSpace(request.Principal) {
+		return fmt.Errorf("native resume principal must match request")
+	}
+	if request.Project != "" && strings.TrimSpace(packet.Project) != strings.TrimSpace(request.Project) {
+		return fmt.Errorf("native resume project must match request")
+	}
+	if request.SessionID != "" && strings.TrimSpace(packet.SessionID) != strings.TrimSpace(request.SessionID) {
+		return fmt.Errorf("native resume session_id must match request")
+	}
+	if request.GoalID != "" && strings.TrimSpace(packet.GoalID) != strings.TrimSpace(request.GoalID) {
+		return fmt.Errorf("native resume goal_id must match request")
+	}
+	if request.TaskID != "" && strings.TrimSpace(packet.TaskID) != strings.TrimSpace(request.TaskID) {
+		return fmt.Errorf("native resume task_id must match request")
+	}
+	if strings.TrimSpace(packet.NextAction.Description) == "" {
+		return fmt.Errorf("native resume next_action is required")
+	}
+	if packet.NextAction.Kind == "" {
+		return fmt.Errorf("native resume next_action.kind is required")
+	}
+	if packet.NextAction.Kind == cognitive.StateActionCommand && strings.TrimSpace(packet.NextAction.Command) == "" {
+		return fmt.Errorf("native resume next_action.command is required")
+	}
+	if strings.TrimSpace(packet.NextVerification.Description) == "" {
+		return fmt.Errorf("native resume next_verification is required")
+	}
+	if packet.NextVerification.Kind == "" {
+		return fmt.Errorf("native resume next_verification.kind is required")
+	}
+	if packet.NextVerification.Kind == cognitive.StateVerificationCommand && strings.TrimSpace(packet.NextVerification.Command) == "" {
+		return fmt.Errorf("native resume next_verification.command is required")
+	}
+	if len(packet.EvidenceRefs) == 0 {
+		return fmt.Errorf("native resume evidence refs are required")
+	}
+	return nil
 }
 
 func decodeProjectStateForWrite(raw json.RawMessage) (cognitive.ProjectStateRecord, error) {

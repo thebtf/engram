@@ -113,6 +113,47 @@ func TestSubsystems_SourceClient_Returns200WithList(t *testing.T) {
 	}
 }
 
+func TestSubsystems_SourceClient_ListsRealS1StateWriterWhenEnabled(t *testing.T) {
+	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
+	t.Setenv("ENGRAM_V7_S1_STATE", "true")
+
+	s := newServiceWithCognitive(t)
+	if err := core.RegisterNoOps(s.cognitiveRegistry); err != nil {
+		t.Fatalf("RegisterNoOps: %v", err)
+	}
+	activateFromFlags(t, s.cognitiveRegistry, core.LoadFlagConfigFromEnv())
+	if err := registerS1StateWriterSubsystem(s.cognitiveRegistry, &fakeRegistryStateWriter{}); err != nil {
+		t.Fatalf("registerS1StateWriterSubsystem: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	r := newRequestWithSource(http.MethodGet, "/api/stats/v7/subsystems", auth.SourceClient)
+	s.handleStatsV7Subsystems(w, r)
+
+	if got := w.Code; got != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", got)
+	}
+	var infos []core.SubsystemInfo
+	if err := json.NewDecoder(w.Body).Decode(&infos); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	found := false
+	for _, info := range infos {
+		if info.Name == "engram.s1.state_writer" {
+			found = true
+			if info.State != "enabled" {
+				t.Fatalf("engram.s1.state_writer state: got %q, want enabled", info.State)
+			}
+			if len(info.Implements) != 1 || info.Implements[0] != "StateWriter" {
+				t.Fatalf("engram.s1.state_writer implements: got %v, want [StateWriter]", info.Implements)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("engram.s1.state_writer missing from subsystem list: %v", infos)
+	}
+}
+
 func TestSubsystems_SourceMaster_Returns403(t *testing.T) {
 	s := newServiceWithCognitive(t)
 	w := httptest.NewRecorder()
