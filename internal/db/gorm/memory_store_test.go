@@ -359,6 +359,32 @@ func TestMemoryStore_QueryMetaIndex_FTSVisibilityPagesUntilVisibleMatches(t *tes
 	require.Equal(t, []int64{visibleID}, metaIndexHitIDs(hits), "FTS paging must continue until a visible match is found behind hidden higher-ranked rows")
 }
 
+func TestMemoryStore_QueryMetaIndex_FTSVisibilityStopsAtScanBudget(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-fts-budget'`)
+
+	ms := NewMemoryStore(&Store{DB: db})
+	ctx := context.Background()
+	const project = "test-s2-meta-index-fts-budget"
+	base := time.Unix(1700002600, 0).UTC()
+	hiddenRows := normalizeMetaMemoryFTSScanBudget(1)
+	for i := range hiddenRows {
+		insertMetaIndexMemory(t, db, ms, ctx, project, fmt.Sprintf("rarelexeme rarelexeme hidden budget %03d", i), []string{"s2:meta"}, "agent/bob", models.AgentVisibilityPrivate, base.Add(time.Duration(hiddenRows-i)*time.Second))
+	}
+	insertMetaIndexMemory(t, db, ms, ctx, project, "rarelexeme visible beyond budget", []string{"s2:meta"}, "agent/alice", models.AgentVisibilityShared, base.Add(-time.Minute))
+
+	hits, err := ms.QueryMetaIndex(ctx, MetaIndexQuery{
+		Project:            project,
+		Query:              "rarelexeme",
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		Limit:              1,
+	})
+	require.NoError(t, err)
+	require.Empty(t, hits, "FTS paging must stop once the scan budget is exhausted instead of walking the entire hidden result set")
+}
+
 func TestMemoryStore_QueryMetaIndex_LimitsTieOrderAndContentFreeOutput(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()

@@ -160,7 +160,7 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 		RuleRouter:  ruleRouter,
 	}
 	if metaSummaryEnabled {
-		summary, summaryErr := buildSessionStartMetaSummary(ctx, memoryStore, project, callerCtx, visibilityOpts, generatedAt)
+		summary, summaryErr := buildSessionStartMetaSummary(ctx, memoryStore, project, callerCtx, visibilityOpts, generatedAt, sessionStartVisibilityScanBudget)
 		if summaryErr != nil {
 			return nil, status.Error(codes.Internal, "failed to summarize session-start memories")
 		}
@@ -432,7 +432,7 @@ func mapSessionStartMemories(rows []*models.Memory) []*pb.SessionStartMemory {
 	return memories
 }
 
-func buildSessionStartMetaSummary(ctx context.Context, store sessionStartMemoryPager, project string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions, generatedAt time.Time) (*pb.SessionStartMetaSummary, error) {
+func buildSessionStartMetaSummary(ctx context.Context, store sessionStartMemoryPager, project string, caller scope.KeycardContext, opts scope.MemoryVisibilityOptions, generatedAt time.Time, scanBudget int) (*pb.SessionStartMetaSummary, error) {
 	summary := &pb.SessionStartMetaSummary{
 		Project:     strings.TrimSpace(project),
 		GeneratedAt: timestamppb.New(generatedAt),
@@ -442,8 +442,18 @@ func buildSessionStartMetaSummary(ctx context.Context, store sessionStartMemoryP
 	var oldest time.Time
 	var newest time.Time
 	haveVisible := false
-	for offset := 0; ; {
-		batch, err := store.ListWithOffset(ctx, project, sessionStartMemoryBatchSize, offset)
+	if scanBudget <= 0 {
+		scanBudget = sessionStartVisibilityScanBudget
+	}
+	for offset := 0; offset < scanBudget; {
+		batchLimit := sessionStartMemoryBatchSize
+		if remaining := scanBudget - offset; remaining < batchLimit {
+			batchLimit = remaining
+		}
+		if batchLimit <= 0 {
+			break
+		}
+		batch, err := store.ListWithOffset(ctx, project, batchLimit, offset)
 		if err != nil {
 			return nil, err
 		}
@@ -476,7 +486,7 @@ func buildSessionStartMetaSummary(ctx context.Context, store sessionStartMemoryP
 			}
 		}
 		offset += len(batch)
-		if len(batch) < sessionStartMemoryBatchSize {
+		if len(batch) < batchLimit {
 			break
 		}
 	}

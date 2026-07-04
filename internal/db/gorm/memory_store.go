@@ -35,9 +35,10 @@ func NewMemoryStore(store *Store) *MemoryStore {
 }
 
 const (
-	defaultMetaMemoryLimit = 10
-	maxMetaMemoryLimit     = 25
-	metaMemoryProbeFactor  = 5
+	defaultMetaMemoryLimit      = 10
+	maxMetaMemoryLimit          = 25
+	metaMemoryProbeFactor       = 5
+	metaMemoryFTSScanPageBudget = 5
 )
 
 // MetaIndexQuery is the content-free S2 query contract shared by the store,
@@ -105,6 +106,10 @@ func normalizeMetaMemoryProbeLimit(limit int) int {
 		probe = 200
 	}
 	return probe
+}
+
+func normalizeMetaMemoryFTSScanBudget(limit int) int {
+	return normalizeMetaMemoryProbeLimit(limit) * metaMemoryFTSScanPageBudget
 }
 
 func sanitizeMetaText(value string, maxRunes int) string {
@@ -1238,12 +1243,20 @@ func (s *MemoryStore) SearchMetaMemoryFTSIDs(ctx context.Context, project, query
 	}
 	metaLimit := normalizeMetaMemoryLimit(limit)
 	batchLimit := normalizeMetaMemoryProbeLimit(limit)
+	scanBudget := normalizeMetaMemoryFTSScanBudget(limit)
 	ids := make([]int64, 0, metaLimit)
 	variants := searchFTSQueryVariants(query)
 	for i, variant := range variants {
 		sawRows := false
-		for offset := 0; len(ids) < metaLimit; {
-			batch, err := s.searchFTSPage(ctx, project, variant, batchLimit, offset)
+		for offset := 0; len(ids) < metaLimit && offset < scanBudget; {
+			pageLimit := batchLimit
+			if remaining := scanBudget - offset; remaining < pageLimit {
+				pageLimit = remaining
+			}
+			if pageLimit <= 0 {
+				break
+			}
+			batch, err := s.searchFTSPage(ctx, project, variant, pageLimit, offset)
 			if err != nil {
 				return nil, fmt.Errorf("search meta-memory fts ids project=%q query=%q: %w", project, query, err)
 			}
@@ -1260,7 +1273,7 @@ func (s *MemoryStore) SearchMetaMemoryFTSIDs(ctx context.Context, project, query
 					break
 				}
 			}
-			if len(batch) < batchLimit {
+			if len(batch) < pageLimit {
 				break
 			}
 			offset += len(batch)

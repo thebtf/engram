@@ -147,6 +147,27 @@ func TestListVisibleSessionStartMemories_ReadBudgetUnderfills(t *testing.T) {
 	require.Empty(t, visible, "explicit read budget must stop the scan instead of walking the whole project")
 }
 
+func TestBuildSessionStartMetaSummary_ScanBudgetCapsLandscape(t *testing.T) {
+	t.Parallel()
+
+	oldest := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
+	middle := oldest.Add(time.Minute)
+	newest := middle.Add(time.Minute)
+	pager := fakeSessionStartMemoryPager{rows: []*models.Memory{
+		{ID: 1, Project: "project", Content: "visible newest", Tags: []string{"alpha"}, AgentVisibility: models.AgentVisibilityShared, CreatedAt: newest},
+		{ID: 2, Project: "project", Content: "visible middle", Tags: []string{"alpha", "beta"}, AgentVisibility: models.AgentVisibilityShared, CreatedAt: middle},
+		{ID: 3, Project: "project", Content: "visible oldest", Tags: []string{"gamma"}, AgentVisibility: models.AgentVisibilityShared, CreatedAt: oldest},
+	}}
+	caller := scope.KeycardContext{Principal: "agent/alice", PrincipalKind: "agent"}
+
+	summary, err := buildSessionStartMetaSummary(context.Background(), pager, "project", caller, scope.MemoryVisibilityOptions{}, newest, 2)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), requireMetaInt(t, summary.ProtoReflect(), "total_count"), "scan budget must cap the landscape summary instead of walking the entire project")
+	assert.Equal(t, []metaTagCount{{Tag: "alpha", Count: 2}, {Tag: "beta", Count: 1}}, requireMetaTopTags(t, summary.ProtoReflect()))
+	assert.Equal(t, middle, requireMetaTimestamp(t, summary.ProtoReflect(), "oldest_created_at"))
+	assert.Equal(t, newest, requireMetaTimestamp(t, summary.ProtoReflect(), "newest_created_at"))
+}
+
 func TestGetSessionStartContext_HappyPath(t *testing.T) {
 	db, cleanup := openSessionStartTestDB(t)
 	defer cleanup()
