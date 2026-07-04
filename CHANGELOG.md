@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.37.0] - 2026-07-04
+
+### Added
+
+- **Engram v7 State subsystem, ENG-V7-S1 / CR-001 (#395).** Adds the v7 S1 `StateWriter` subsystem adapter and registers it as `engram.s1.state_writer` when `ENGRAM_V7_PLUG_ENABLED=true` and `ENGRAM_V7_S1_STATE=true`, while preserving the already-live MPL `get_state` / `set_state` tools when the v7 S1 flag is off.
+- **Native state budget and resume hardening (#395).** Centralizes the 32 KB `SessionStateSlots` write budget in `pkg/cognitive`, applies it through both state-store and MCP write paths, and adds resume-packet boundary validation for native source, identity, exact next action, next verification, and evidence refs.
+
+### Fixed
+
+- **PR #395 review follow-up.** The review repair commit shares the session-state budget helper across packages, adds S1 flag predicate coverage, rejects typed-nil `StateWriter` registrations with `s1state.ErrNoWriter`, and expands MCP resume-validation negative tests for missing action/verification fields and identity mismatches.
+
 ## [6.36.0] - 2026-07-03
 
 ### Added
