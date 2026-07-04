@@ -334,7 +334,7 @@ func TestWriteAttentionEventRejectsMissingOrInvalidSourceTurnHashBeforeWrite(t *
 	}
 }
 
-func TestWriteAttentionEventForcesAgentConfirmedTrue(t *testing.T) {
+func TestWriteAttentionEventRejectsUnconfirmedAgentBeforeWrite(t *testing.T) {
 	store := &recordingDirectiveStore{}
 	svc := NewService(store)
 
@@ -348,7 +348,64 @@ func TestWriteAttentionEventForcesAgentConfirmedTrue(t *testing.T) {
 		PrivacyClass:   "internal",
 	})
 
+	require.ErrorIs(t, err, ErrAgentConfirmationRequired)
+	require.Empty(t, store.records, "unconfirmed writes must fail before persistence")
+}
+
+func TestRememberDirectiveFailsClosedWhenLimiterMissing(t *testing.T) {
+	store := &recordingDirectiveStore{}
+	svc := NewService(store)
+	svc.limiter = nil
+
+	_, err := svc.RememberDirective(context.Background(), "engram", "session-1", RememberDirectiveRequest{
+		Text:         "remember this",
+		Horizon:      "project",
+		PrivacyClass: "internal",
+	})
+
+	require.ErrorIs(t, err, ErrRateLimiterNotConfigured)
+	require.Empty(t, store.records)
+}
+
+func TestRememberDirectiveFailsClosedWhenDistillerMissing(t *testing.T) {
+	store := &recordingDirectiveStore{}
+	svc := NewService(store)
+	svc.distill = nil
+
+	_, err := svc.RememberDirective(context.Background(), "engram", "session-1", RememberDirectiveRequest{
+		Text:         "remember this",
+		Horizon:      "project",
+		PrivacyClass: "internal",
+	})
+
+	require.ErrorIs(t, err, ErrDistillerNotConfigured)
+	require.Empty(t, store.records)
+}
+
+func TestDistillFailsClosedWhenDistillerMissing(t *testing.T) {
+	svc := &Service{}
+
+	distilled, err := svc.Distill(context.Background(), cognitive.RawSignal{Text: "remember this"})
+
+	require.ErrorIs(t, err, ErrDistillerNotConfigured)
+	require.Equal(t, cognitive.Distilled{}, distilled)
+}
+
+func TestLimiterCommitKeepsAcceptedTimestampsSorted(t *testing.T) {
+	limiter := newSessionLimiter(time.Minute, defaultRateLimitAccepted, 2*time.Minute)
+	early := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	late := early.Add(10 * time.Second)
+
+	earlyReservation, err := limiter.Reserve("session-1", early)
 	require.NoError(t, err)
-	require.Len(t, store.records, 1)
-	require.True(t, store.records[0].AgentConfirmed, "service must persist agent_confirmed=true regardless of caller input")
+	lateReservation, err := limiter.Reserve("session-1", late)
+	require.NoError(t, err)
+
+	lateReservation.Commit()
+	earlyReservation.Commit()
+
+	entry := limiter.entries["session-1"]
+	require.Len(t, entry.accepted, 2)
+	require.Equal(t, early, entry.accepted[0])
+	require.Equal(t, late, entry.accepted[1])
 }

@@ -80,10 +80,10 @@ func TestRequest_Unmarshal_NullID(t *testing.T) {
 func TestResponse_Marshal_Table(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name     string
-		resp     Response
-		want     string
-		notWant  string
+		name    string
+		resp    Response
+		want    string
+		notWant string
 	}{
 		{
 			name:    "success result",
@@ -232,12 +232,12 @@ func TestTool_Marshal_RoundTrip(t *testing.T) {
 func TestTimelineParams_Unmarshal_Table(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name      string
-		raw       string
-		wantOK    bool
-		anchorID  int64
-		query     string
-		project   string
+		name     string
+		raw      string
+		wantOK   bool
+		anchorID int64
+		query    string
+		project  string
 	}{
 		{
 			name:     "anchor_id",
@@ -626,6 +626,27 @@ func TestHandleToolsCall_UnknownTool(t *testing.T) {
 	resp := s.handleToolsCall(context.Background(), req)
 	require.NotNil(t, resp.Error)
 	assert.Equal(t, -32000, resp.Error.Code)
+}
+
+func TestSanitizeToolCallArgs_RememberDirectiveRedactsRawLogArguments(t *testing.T) {
+	t.Parallel()
+	args := json.RawMessage(`{"text":"RAW_DIRECTIVE_NEVER_LOG","source_turn":"RAW_SOURCE_TURN_NEVER_LOG","privacy_class":"secret"}`)
+
+	got := sanitizeToolCallArgs("remember_directive", args)
+
+	assert.Equal(t, "<redacted>", got)
+	assert.NotContains(t, got, "RAW_DIRECTIVE_NEVER_LOG")
+	assert.NotContains(t, got, "RAW_SOURCE_TURN_NEVER_LOG")
+}
+
+func TestSanitizeToolCallArgs_OtherToolsStillRedactSecrets(t *testing.T) {
+	t.Parallel()
+	args := json.RawMessage(`{"content":"api_key=abc123def456ghi789jkl012mno345pqr678"}`)
+
+	got := sanitizeToolCallArgs("store_memory", args)
+
+	assert.NotContains(t, got, "abc123def456ghi789jkl012mno345pqr678")
+	assert.Contains(t, got, "[REDACTED:")
 }
 
 // ---------------------------------------------------------------------------

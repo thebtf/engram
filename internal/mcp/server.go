@@ -1599,12 +1599,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 
 	result, err := s.callTool(ctx, params.Name, params.Arguments)
 	if err != nil {
-		// Truncate and redact args before logging to avoid leaking secrets.
-		args := string(params.Arguments)
-		if len(args) > 200 {
-			args = args[:200] + "..."
-		}
-		args = privacy.RedactSecrets(args)
+		args := sanitizeToolCallArgs(params.Name, params.Arguments)
 		log.Error().Err(err).Str("tool", params.Name).Str("args", args).Msg("Tool call failed")
 		return &Response{
 			JSONRPC: "2.0",
@@ -1622,6 +1617,17 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 			},
 		},
 	}
+}
+
+func sanitizeToolCallArgs(tool string, args json.RawMessage) string {
+	if tool == "remember_directive" {
+		return "<redacted>"
+	}
+	value := string(args)
+	if len(value) > 200 {
+		value = value[:200] + "..."
+	}
+	return privacy.RedactSecrets(value)
 }
 
 // callTool dispatches to the appropriate tool handler.

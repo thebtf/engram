@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,8 @@ var (
 	ErrSourceTurnHashRequired    = errors.New("source_turn_hash_required")
 	ErrInvalidSourceTurnHash     = errors.New("invalid_source_turn_hash")
 	ErrAgentConfirmationRequired = errors.New("agent_confirmation_required")
+	ErrRateLimiterNotConfigured  = errors.New("directive_rate_limiter_not_configured")
+	ErrDistillerNotConfigured    = errors.New("directive_distiller_not_configured")
 	ErrInvalidHorizon            = errors.New("invalid_horizon")
 	ErrInvalidPrivacyClass       = errors.New("invalid_privacy_class")
 	ErrDistillEmptyIntent        = errors.New("directive_distill_empty_intent")
@@ -107,6 +110,9 @@ func NewService(store Store) *Service {
 func (s *Service) RememberDirective(ctx context.Context, project, sessionID string, req RememberDirectiveRequest) (*StoredAttentionEvent, error) {
 	if s == nil || s.store == nil {
 		return nil, ErrNoStore
+	}
+	if s.limiter == nil {
+		return nil, ErrRateLimiterNotConfigured
 	}
 	project = strings.TrimSpace(project)
 	if project == "" {
@@ -183,6 +189,9 @@ func (s *Service) Distill(ctx context.Context, raw cognitive.RawSignal) (cogniti
 	if s == nil {
 		return cognitive.Distilled{}, ErrNoStore
 	}
+	if s.distill == nil {
+		return cognitive.Distilled{}, ErrDistillerNotConfigured
+	}
 	text, err := normalizeRequiredText(raw.Text)
 	if err != nil {
 		return cognitive.Distilled{}, err
@@ -213,6 +222,9 @@ func (s *Service) writeStoredEvent(ctx context.Context, event cognitive.Attentio
 	}
 	if !IsCanonicalSourceTurnHash(event.SourceTurnHash) {
 		return nil, ErrInvalidSourceTurnHash
+	}
+	if !event.AgentConfirmed {
+		return nil, ErrAgentConfirmationRequired
 	}
 	intent := boundIntent(event.DerivedIntent)
 	if intent == "" {
@@ -509,6 +521,7 @@ func (r *limiterReservation) Commit() {
 			entry.inFlight--
 		}
 		entry.accepted = append(pruneAccepted(entry.accepted, r.acceptedAt, r.limiter.window), r.acceptedAt)
+		sort.Slice(entry.accepted, func(i, j int) bool { return entry.accepted[i].Before(entry.accepted[j]) })
 		entry.lastSeen = r.acceptedAt
 	})
 }

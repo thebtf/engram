@@ -54,6 +54,16 @@ func TestRememberDirectiveToolAdvertisedOnlyWhenS4AFlagAndServiceArePresent(t *t
 		require.False(t, names["remember_directive"])
 	})
 
+	t.Run("absent when master flag disabled even if s4a flag and service are present", func(t *testing.T) {
+		t.Setenv("ENGRAM_V7_PLUG_ENABLED", "false")
+		t.Setenv("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", "true")
+		srv := NewServer(ServerOptions{Version: "test"})
+		srv.SetDirectiveCaptureService(&fakeDirectiveCaptureService{})
+
+		names := listedToolNames(srv.ListTools())
+		require.False(t, names["remember_directive"])
+	})
+
 	t.Run("absent when service is missing even with flag enabled", func(t *testing.T) {
 		t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
 		t.Setenv("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", "true")
@@ -81,6 +91,19 @@ func TestRememberDirectiveDirectCallFailsClosedBeforeDelegation(t *testing.T) {
 	t.Run("flag disabled", func(t *testing.T) {
 		t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
 		t.Setenv("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", "false")
+		service := &fakeDirectiveCaptureService{}
+		srv := NewServer(ServerOptions{Version: "test"})
+		srv.SetDirectiveCaptureService(service)
+
+		_, err := srv.callTool(contextWithProject(contextWithSession(context.Background(), "session-1"), "engram"), "remember_directive", json.RawMessage(`{"text":"remember this"}`))
+
+		require.ErrorContains(t, err, "remember_directive feature flag required")
+		require.Zero(t, service.calls)
+	})
+
+	t.Run("master flag disabled even if s4a flag is enabled", func(t *testing.T) {
+		t.Setenv("ENGRAM_V7_PLUG_ENABLED", "false")
+		t.Setenv("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", "true")
 		service := &fakeDirectiveCaptureService{}
 		srv := NewServer(ServerOptions{Version: "test"})
 		srv.SetDirectiveCaptureService(service)
