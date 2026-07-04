@@ -33,6 +33,7 @@ import (
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/cognitive/s1state"
 	"github.com/thebtf/engram/internal/cognitive/s2meta"
+	"github.com/thebtf/engram/internal/cognitive/s4directives"
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
@@ -345,6 +346,30 @@ func registerS2CandidateProposerSubsystem(registry cognitivecore.SubsystemRegist
 		return err
 	}
 	if err := registry.Disable("core.noop.candidate_proposer"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func shouldRegisterRealS4ADirectives(flagCfg cognitivecore.FlagConfig) bool {
+	return flagCfg.IsPlugEnabled() && flagCfg.IsSubsystemEnabled("s4a")
+}
+
+func registerS4ADirectivesSubsystem(registry cognitivecore.SubsystemRegistry, service *s4directives.Service) error {
+	if service == nil {
+		return s4directives.ErrNoService
+	}
+	subsystem := s4directives.NewSubsystem(service)
+	if err := registry.Register(subsystem); err != nil {
+		return err
+	}
+	if err := registry.Enable(subsystem.Name()); err != nil {
+		return err
+	}
+	if err := registry.Disable("core.noop.attention_event_writer"); err != nil {
+		return err
+	}
+	if err := registry.Disable("core.noop.directive_distiller"); err != nil {
 		return err
 	}
 	return nil
@@ -694,6 +719,14 @@ func (s *Service) initializeAsync() {
 	experienceProvider := newMemoryExperienceProvider(principalMemoryQuerySvc)
 	domainOwnerStore := gorm.NewDomainOwnerStore(store)
 	domainRegistrySvc := principalmemory.NewDomainRegistryService(domainOwnerStore, auditStore)
+	attentionEventStore := gorm.NewAttentionEventStore(store.GetDB())
+	directiveCaptureSvc := s4directives.NewService(attentionEventStore)
+	if shouldRegisterRealS4ADirectives(s.flagConfig) {
+		if err := registerS4ADirectivesSubsystem(s.cognitiveRegistry, directiveCaptureSvc); err != nil {
+			s.setInitError(fmt.Errorf("register real s4a directives subsystem: %w", err))
+			return
+		}
+	}
 	if shouldRegisterRealS1StateWriter(s.flagConfig) {
 		if err := registerS1StateWriterSubsystem(s.cognitiveRegistry, statePlaneSvc); err != nil {
 			s.setInitError(fmt.Errorf("register real s1 state writer: %w", err))
@@ -886,6 +919,7 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetStateStore(statePlaneSvc)
 	mcpServer.SetExperienceProvider(experienceProvider)
 	mcpServer.SetTemporalTruthProvider(temporalTruthProvider)
+	mcpServer.SetDirectiveCaptureService(directiveCaptureSvc)
 
 	// Wire the raw DB handle so handleGetMemoryStats can run injection_log /
 	// citation_log / memories-by-status raw SQL queries. Uses the same shared
