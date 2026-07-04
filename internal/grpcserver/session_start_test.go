@@ -19,6 +19,8 @@ import (
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	gormpostgres "gorm.io/driver/postgres"
 	gormlib "gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -341,6 +343,254 @@ func TestGetSessionStartContext_PrincipalPrivateCrossPrincipalInvisible_FlagOff(
 
 	require.Len(t, resp.GetMemories(), 1)
 	assert.Equal(t, "shared bob startup memory", resp.GetMemories()[0].GetContent())
+}
+
+func TestGetSessionStartContext_MetaSummaryFlagOnDescribesMemoryLandscape(t *testing.T) {
+	db, cleanup := openSessionStartTestDB(t)
+	defer cleanup()
+
+	project := fmt.Sprintf("grpc-session-start-meta-summary-%d", time.Now().UnixNano())
+	otherProject := project + "-other"
+	defer db.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, project, otherProject)
+	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
+	t.Setenv("ENGRAM_V7_S2_METAMEM", "true")
+
+	ctx := context.Background()
+	memoryStore := localgorm.NewMemoryStore(&localgorm.Store{DB: db})
+	oldest := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
+	newest := oldest.Add(7 * time.Hour)
+	fixtures := []struct {
+		content   string
+		tags      []string
+		createdAt time.Time
+	}{
+		{"raw alpha beta gamma delta epsilon zeta eta body must not leak", []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"}, oldest},
+		{"raw alpha beta gamma delta epsilon zeta body must not leak", []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta"}, oldest.Add(1 * time.Hour)},
+		{"raw alpha beta gamma delta epsilon body must not leak", []string{"alpha", "beta", "gamma", "delta", "epsilon"}, oldest.Add(2 * time.Hour)},
+		{"raw alpha beta gamma delta body must not leak", []string{"alpha", "beta", "gamma", "delta"}, oldest.Add(3 * time.Hour)},
+		{"raw alpha beta gamma body must not leak", []string{"alpha", "beta", "gamma"}, oldest.Add(4 * time.Hour)},
+		{"raw alpha beta body must not leak", []string{"alpha", "beta"}, oldest.Add(5 * time.Hour)},
+		{"raw alpha body must not leak", []string{"alpha"}, oldest.Add(6 * time.Hour)},
+		{"raw theta newest body must not leak", []string{"theta"}, newest},
+	}
+	for _, fixture := range fixtures {
+		insertSessionStartMetaSummaryMemory(t, db, memoryStore, project, fixture.content, fixture.tags, fixture.createdAt)
+	}
+	insertSessionStartMetaSummaryMemory(t, db, memoryStore, otherProject, "other project raw body must not leak", []string{"other"}, newest.Add(24*time.Hour))
+
+	srv := &Server{db: db}
+	resp, err := srv.GetSessionStartContext(ctx, &pb.GetSessionStartContextRequest{Project: project, MemoriesLimit: 1})
+	require.NoError(t, err)
+	require.Len(t, resp.GetMemories(), 1, "memory list remains independently bounded while meta_summary describes the wider project landscape")
+
+	summary := requireSessionStartMetaSummary(t, resp)
+	assert.Equal(t, int64(len(fixtures)), requireMetaInt(t, summary, "total_count"), "total_count must derive from all visible project memories, not the bounded memories response")
+	assert.Equal(t, []metaTagCount{
+		{Tag: "alpha", Count: 7},
+		{Tag: "beta", Count: 6},
+		{Tag: "gamma", Count: 5},
+		{Tag: "delta", Count: 4},
+		{Tag: "epsilon", Count: 3},
+		{Tag: "zeta", Count: 2},
+	}, requireMetaTopTags(t, summary), "top_tags must be the top six project tag counts and must exclude lower-ranked tags")
+	assert.Equal(t, oldest, requireMetaTimestamp(t, summary, "oldest_created_at"))
+	assert.Equal(t, newest, requireMetaTimestamp(t, summary, "newest_created_at"))
+	assertMetaSummaryContentFree(t, summary, "raw alpha", "raw theta", "other project raw body", "must not leak")
+}
+
+func TestGetSessionStartContext_MetaSummaryFlagOffOmitted(t *testing.T) {
+	db, cleanup := openSessionStartTestDB(t)
+	defer cleanup()
+
+	project := fmt.Sprintf("grpc-session-start-meta-summary-off-%d", time.Now().UnixNano())
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
+	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "")
+	t.Setenv("ENGRAM_V7_S2_METAMEM", "")
+
+	memoryStore := localgorm.NewMemoryStore(&localgorm.Store{DB: db})
+	insertSessionStartMetaSummaryMemory(t, db, memoryStore, project, "baseline memory remains visible", []string{"baseline"}, time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC))
+
+	srv := &Server{db: db}
+	resp, err := srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: project, MemoriesLimit: 10})
+	require.NoError(t, err)
+	require.Len(t, resp.GetMemories(), 1)
+	assert.Equal(t, "baseline memory remains visible", resp.GetMemories()[0].GetContent())
+	assertSessionStartMetaSummaryAbsent(t, resp)
+}
+
+func TestGetSessionStartContext_MetaSummaryFlagOnEmptyProjectIsBoundedAndContentFree(t *testing.T) {
+	db, cleanup := openSessionStartTestDB(t)
+	defer cleanup()
+
+	project := fmt.Sprintf("grpc-session-start-meta-summary-empty-%d", time.Now().UnixNano())
+	defer db.Exec(`DELETE FROM memories WHERE project = ?`, project)
+	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
+	t.Setenv("ENGRAM_V7_S2_METAMEM", "true")
+
+	srv := &Server{db: db}
+	resp, err := srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: project, MemoriesLimit: 10})
+	require.NoError(t, err)
+	require.Empty(t, resp.GetMemories())
+
+	summary := requireSessionStartMetaSummary(t, resp)
+	assert.Equal(t, int64(0), requireMetaInt(t, summary, "total_count"))
+	assert.Empty(t, requireMetaTopTags(t, summary))
+	assertMetaTimestampAbsent(t, summary, "oldest_created_at")
+	assertMetaTimestampAbsent(t, summary, "newest_created_at")
+	assertMetaSummaryContentFree(t, summary, "content", "snippet")
+}
+
+func TestGetSessionStartContext_T014_MetaSummaryRequiresMasterAndS2Flags(t *testing.T) {
+	db, cleanup := openSessionStartTestDB(t)
+	defer cleanup()
+
+	projectPrefix := fmt.Sprintf("grpc-session-start-t014-toggle-%d", time.Now().UnixNano())
+	defer db.Exec(`DELETE FROM memories WHERE project LIKE ?`, projectPrefix+"%")
+	memoryStore := localgorm.NewMemoryStore(&localgorm.Store{DB: db})
+
+	tests := []struct {
+		name        string
+		masterFlag  string
+		s2Flag      string
+		wantSummary bool
+	}{
+		{name: "master and s2 enabled includes meta_summary", masterFlag: "true", s2Flag: "true", wantSummary: true},
+		{name: "master disabled omits meta_summary even when s2 flag is set", masterFlag: "false", s2Flag: "true", wantSummary: false},
+		{name: "s2 disabled omits meta_summary even when master is set", masterFlag: "true", s2Flag: "false", wantSummary: false},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENGRAM_V7_PLUG_ENABLED", tt.masterFlag)
+			t.Setenv("ENGRAM_V7_S2_METAMEM", tt.s2Flag)
+
+			project := fmt.Sprintf("%s-%d", projectPrefix, i)
+			content := fmt.Sprintf("baseline memory remains visible for T014 case %d", i)
+			insertSessionStartMetaSummaryMemory(t, db, memoryStore, project, content, []string{"t014", "s2-toggle"}, time.Date(2026, 7, 4, 8+i, 0, 0, 0, time.UTC))
+
+			srv := &Server{db: db}
+			resp, err := srv.GetSessionStartContext(context.Background(), &pb.GetSessionStartContextRequest{Project: project, MemoriesLimit: 10})
+			require.NoError(t, err)
+			require.Len(t, resp.GetMemories(), 1, "S2 flag toggling must not hide baseline session-start memories")
+			assert.Equal(t, content, resp.GetMemories()[0].GetContent())
+
+			if tt.wantSummary {
+				summary := requireSessionStartMetaSummary(t, resp)
+				assert.Equal(t, int64(1), requireMetaInt(t, summary, "total_count"), "enabled meta_summary must derive from visible project memories")
+				assertMetaSummaryContentFree(t, summary, content)
+			} else {
+				assertSessionStartMetaSummaryAbsent(t, resp)
+			}
+		})
+	}
+}
+
+
+type metaTagCount struct {
+	Tag   string
+	Count int64
+}
+
+func insertSessionStartMetaSummaryMemory(t *testing.T, db *gormlib.DB, store *localgorm.MemoryStore, project string, content string, tags []string, createdAt time.Time) *models.Memory {
+	t.Helper()
+
+	mem, err := store.Create(context.Background(), &models.Memory{
+		Project:     project,
+		Content:     content,
+		Tags:        tags,
+		SourceAgent: "test-agent",
+		EditedBy:    project,
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`UPDATE memories SET created_at = ?, updated_at = ? WHERE id = ?`, createdAt, createdAt, mem.ID).Error)
+	mem.CreatedAt = createdAt
+	mem.UpdatedAt = createdAt
+	return mem
+}
+
+func requireSessionStartMetaSummary(t *testing.T, resp *pb.GetSessionStartContextResponse) protoreflect.Message {
+	t.Helper()
+	require.NotNil(t, resp)
+	field := resp.ProtoReflect().Descriptor().Fields().ByName("meta_summary")
+	require.NotNil(t, field, "GetSessionStartContextResponse must declare meta_summary for S2 startup landscape")
+	require.True(t, resp.ProtoReflect().Has(field), "S2-enabled session-start response must include a derived meta_summary")
+	summary := resp.ProtoReflect().Get(field).Message()
+	require.True(t, summary.IsValid(), "S2-enabled session-start meta_summary must not be nil or empty")
+	return summary
+}
+
+func assertSessionStartMetaSummaryAbsent(t *testing.T, resp *pb.GetSessionStartContextResponse) {
+	t.Helper()
+	require.NotNil(t, resp)
+	field := resp.ProtoReflect().Descriptor().Fields().ByName("meta_summary")
+	if field == nil {
+		return
+	}
+	assert.False(t, resp.ProtoReflect().Has(field), "flag-off session-start response must remain baseline-compatible by omitting meta_summary")
+}
+
+func requireMetaInt(t *testing.T, msg protoreflect.Message, name protoreflect.Name) int64 {
+	t.Helper()
+	field := msg.Descriptor().Fields().ByName(name)
+	require.NotNil(t, field, "meta_summary must declare %s", name)
+	require.Contains(t, []protoreflect.Kind{protoreflect.Int32Kind, protoreflect.Int64Kind}, field.Kind(), "meta_summary.%s must be an integer", name)
+	return msg.Get(field).Int()
+}
+
+func requireMetaTopTags(t *testing.T, msg protoreflect.Message) []metaTagCount {
+	t.Helper()
+	field := msg.Descriptor().Fields().ByName("top_tags")
+	require.NotNil(t, field, "meta_summary must declare top_tags")
+	require.True(t, field.IsList(), "meta_summary.top_tags must be a repeated field")
+	list := msg.Get(field).List()
+	out := make([]metaTagCount, 0, list.Len())
+	for i := range list.Len() {
+		item := list.Get(i).Message()
+		tagField := item.Descriptor().Fields().ByName("tag")
+		countField := item.Descriptor().Fields().ByName("count")
+		require.NotNil(t, tagField, "meta_summary.top_tags entries must declare tag")
+		require.NotNil(t, countField, "meta_summary.top_tags entries must declare count")
+		out = append(out, metaTagCount{Tag: item.Get(tagField).String(), Count: item.Get(countField).Int()})
+	}
+	return out
+}
+
+func requireMetaTimestamp(t *testing.T, msg protoreflect.Message, name protoreflect.Name) time.Time {
+	t.Helper()
+	field := msg.Descriptor().Fields().ByName(name)
+	require.NotNil(t, field, "meta_summary must declare %s", name)
+	require.True(t, msg.Has(field), "meta_summary.%s must be set when memories exist", name)
+	return metaTimestampValue(t, msg.Get(field).Message(), name)
+}
+
+func assertMetaTimestampAbsent(t *testing.T, msg protoreflect.Message, name protoreflect.Name) {
+	t.Helper()
+	field := msg.Descriptor().Fields().ByName(name)
+	require.NotNil(t, field, "meta_summary must declare %s", name)
+	assert.False(t, msg.Has(field), "meta_summary.%s must be absent for an empty project", name)
+}
+
+func metaTimestampValue(t *testing.T, msg protoreflect.Message, name protoreflect.Name) time.Time {
+	t.Helper()
+	require.True(t, msg.IsValid(), "meta_summary.%s must be a valid timestamp", name)
+	secondsField := msg.Descriptor().Fields().ByName("seconds")
+	nanosField := msg.Descriptor().Fields().ByName("nanos")
+	require.NotNil(t, secondsField, "meta_summary.%s must be a google.protobuf.Timestamp", name)
+	require.NotNil(t, nanosField, "meta_summary.%s must be a google.protobuf.Timestamp", name)
+	return time.Unix(msg.Get(secondsField).Int(), msg.Get(nanosField).Int()).UTC()
+}
+
+
+func assertMetaSummaryContentFree(t *testing.T, msg protoreflect.Message, forbidden ...string) {
+	t.Helper()
+	raw, err := protojson.Marshal(msg.Interface())
+	require.NoError(t, err)
+	payload := string(raw)
+	assert.NotContains(t, payload, "content", "meta_summary must stay content-free")
+	assert.NotContains(t, payload, "snippet", "meta_summary must not expose raw snippets")
+	for _, value := range forbidden {
+		assert.NotContains(t, payload, value)
+	}
 }
 
 func TestGetSessionStartContext_RuleRouterEnabledPacketShape(t *testing.T) {

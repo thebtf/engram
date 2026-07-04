@@ -158,6 +158,8 @@ message GetSessionStartContextResponse {
   repeated SessionStartMemory memories = 3;
   google.protobuf.Timestamp generated_at = 4;
   SessionStartRuleRouter rule_router = 5;
+  SessionStartMetaSummary meta_summary = 6;
+
 }
 
 message SessionStartIssue {
@@ -229,6 +231,20 @@ message SessionStartMemory {
   int32 version = 7;
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp updated_at = 9;
+}
+
+message SessionStartMetaTagCount {
+  string tag = 1;
+  int64 count = 2;
+}
+
+message SessionStartMetaSummary {
+  string project = 1;
+  int64 total_count = 2;
+  repeated SessionStartMetaTagCount top_tags = 3;
+  google.protobuf.Timestamp oldest_created_at = 4;
+  google.protobuf.Timestamp newest_created_at = 5;
+  google.protobuf.Timestamp generated_at = 6;
 }
 
 // ---- Version negotiation messages ----------------------------------------

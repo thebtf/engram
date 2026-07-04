@@ -32,6 +32,7 @@ import (
 	mdchunking "github.com/thebtf/engram/internal/chunking/markdown"
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/cognitive/s1state"
+	"github.com/thebtf/engram/internal/cognitive/s2meta"
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
@@ -328,6 +329,27 @@ func registerS1StateWriterSubsystem(registry cognitivecore.SubsystemRegistry, wr
 	return nil
 }
 
+func shouldRegisterRealS2CandidateProposer(flagCfg cognitivecore.FlagConfig) bool {
+	return flagCfg.IsPlugEnabled() && flagCfg.IsSubsystemEnabled("s2")
+}
+
+func registerS2CandidateProposerSubsystem(registry cognitivecore.SubsystemRegistry, index s2meta.MetaIndex) error {
+	if index == nil {
+		return s2meta.ErrNoMetaIndex
+	}
+	subsystem := s2meta.NewSubsystem(index)
+	if err := registry.Register(subsystem); err != nil {
+		return err
+	}
+	if err := registry.Enable(subsystem.Name()); err != nil {
+		return err
+	}
+	if err := registry.Disable("core.noop.candidate_proposer"); err != nil {
+		return err
+	}
+	return nil
+}
+
 // evictStalePrompts removes prompt cache entries older than 2 hours.
 func (s *Service) evictStalePrompts() {
 	cutoff := time.Now().Add(-2 * time.Hour)
@@ -481,6 +503,13 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 	// semantics ("ENGRAM_V7_S2_METAMEM=true with master on → only S2's slot
 	// is enabled, others stay registered").
 	if flagCfg.IsPlugEnabled() {
+		// CandidateProposer is the single fan-out interface. Keep the CORE NoOp
+		// enabled as the safe fallback whenever the v7 master flag is on, then let
+		// a real S2 subsystem replace it during initializeAsync when S2 is enabled.
+		if err := cRegistry.Enable("core.noop.candidate_proposer"); err != nil {
+			cancel()
+			return nil, fmt.Errorf("enable core.noop.candidate_proposer fallback: %w", err)
+		}
 		noopsBySubsystem := map[string][]string{
 			"s1":  {"core.noop.state_writer"},
 			"s2":  {"core.noop.candidate_proposer"},
@@ -644,6 +673,12 @@ func (s *Service) initializeAsync() {
 	// All three stores are wired here (Commit E — T021).
 	memoryStore := gorm.NewMemoryStore(store)
 	behavioralRulesStore := gorm.NewBehavioralRulesStore(store)
+	if shouldRegisterRealS2CandidateProposer(s.flagConfig) {
+		if err := registerS2CandidateProposerSubsystem(s.cognitiveRegistry, memoryStore); err != nil {
+			s.setInitError(fmt.Errorf("register real s2 candidate proposer: %w", err))
+			return
+		}
+	}
 	credentialStore := gorm.NewCredentialStore(store)
 
 	// Create feedback updater for vNext Phase A closed-loop learning.
@@ -844,6 +879,7 @@ func (s *Service) initializeAsync() {
 	// will be used by Commit E when handleStoreMemory / handleRecall are
 	// switched from observations to memories/behavioral_rules.
 	mcpServer.SetMemoryStore(memoryStore)
+	mcpServer.SetMetaMemoryIndex(memoryStore)
 	mcpServer.SetPrincipalMemoryQueryService(principalMemoryQuerySvc)
 	mcpServer.SetDomainRegistryService(domainRegistrySvc)
 	mcpServer.SetBehavioralRulesStore(behavioralRulesStore)

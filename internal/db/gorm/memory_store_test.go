@@ -2,10 +2,16 @@ package gorm
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -227,6 +233,169 @@ func TestMemoryStore_SearchFTS_OrFallback(t *testing.T) {
 	require.NoError(t, err, "SearchFTS quoted-phrase OR fallback should not error")
 	require.GreaterOrEqual(t, len(phraseHits), 1,
 		"PR #270: quoted phrase + loose term must survive OR-fallback tokenization, not return empty")
+}
+
+func TestMemoryStore_QueryMetaIndex_TagOnlyAndFTSOnlyHits(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-hits'`)
+
+	store := &Store{DB: db}
+	ms := NewMemoryStore(store)
+	ctx := context.Background()
+
+	const project = "test-s2-meta-index-hits"
+	tagOnly := insertMetaIndexMemory(t, db, ms, ctx, project, "tag-only memory title\nthis body deliberately omits the lexical query marker", []string{"s2:meta", "intent:handoff"}, "agent/alice", models.AgentVisibilityShared, time.Unix(1700000100, 0).UTC())
+	ftsOnly := insertMetaIndexMemory(t, db, ms, ctx, project, "fts-only memory title\ncontains rarelexemetagless for retrieval without the requested tag", []string{"s2:meta"}, "agent/alice", models.AgentVisibilityShared, time.Unix(1700000200, 0).UTC())
+	insertMetaIndexMemory(t, db, ms, ctx, project, "distractor memory\nno matching tag or rare term", []string{"s2:other"}, "agent/alice", models.AgentVisibilityShared, time.Unix(1700000300, 0).UTC())
+
+	tagHits, err := ms.QueryMetaIndex(ctx, MetaIndexQuery{
+		Project:            project,
+		Tags:               []string{"intent:handoff"},
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Limit:              10,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int64{tagOnly}, metaIndexHitIDs(tagHits), "tag-only lookup must return rows even when there is no content query")
+
+	ftsHits, err := ms.QueryMetaIndex(ctx, MetaIndexQuery{
+		Project:            project,
+		Query:              "rarelexemetagless",
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Limit:              10,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int64{ftsOnly}, metaIndexHitIDs(ftsHits), "FTS-only lookup must return rows even when no tag filter is supplied")
+}
+
+func TestMemoryStore_QueryMetaIndex_EmptyProjectRejected(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	ms := NewMemoryStore(&Store{DB: db})
+	_, err := ms.QueryMetaIndex(context.Background(), MetaIndexQuery{
+		Tags:  []string{"s2:meta"},
+		Limit: 10,
+	})
+	require.Error(t, err, "content-free S2 index queries must stay project-scoped")
+	require.Contains(t, err.Error(), "project")
+}
+
+func TestMemoryStore_QueryMetaIndex_VisibilityBeforeLimit(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-visibility'`)
+
+	ms := NewMemoryStore(&Store{DB: db})
+	ctx := context.Background()
+	const project = "test-s2-meta-index-visibility"
+
+	newerPrivate := insertMetaIndexMemory(t, db, ms, ctx, project, "newer bob private handoff", []string{"s2:meta", "intent:handoff"}, "agent/bob", models.AgentVisibilityPrivate, time.Unix(1700000600, 0).UTC())
+	olderVisible := insertMetaIndexMemory(t, db, ms, ctx, project, "older alice visible handoff", []string{"s2:meta", "intent:handoff"}, "agent/alice", models.AgentVisibilityShared, time.Unix(1700000500, 0).UTC())
+
+	hits, err := ms.QueryMetaIndex(ctx, MetaIndexQuery{
+		Project:            project,
+		Tags:               []string{"intent:handoff"},
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Limit:              1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int64{olderVisible}, metaIndexHitIDs(hits), "visibility must be applied before LIMIT so a newer private row cannot hide the older visible row")
+	require.NotContains(t, metaIndexHitIDs(hits), newerPrivate)
+}
+
+func TestMemoryStore_QueryMetaIndex_LimitsTieOrderAndContentFreeOutput(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-limits'`)
+
+	ms := NewMemoryStore(&Store{DB: db})
+	ctx := context.Background()
+	const project = "test-s2-meta-index-limits"
+	base := time.Unix(1700001000, 0).UTC()
+	var ids []int64
+	for i := range 30 {
+		createdAt := base.Add(time.Duration(i/3) * time.Minute)
+		id := insertMetaIndexMemory(t, db, ms, ctx, project,
+			fmt.Sprintf("meta index title %02d\nforbidden-body-token-%02d must never be serialized in S2 index hits", i, i),
+			[]string{"s2:meta", "limit:case"},
+			"agent/alice",
+			models.AgentVisibilityShared,
+			createdAt,
+		)
+		ids = append(ids, id)
+	}
+
+	defaultHits, err := ms.QueryMetaIndex(ctx, MetaIndexQuery{
+		Project:            project,
+		Tags:               []string{"limit:case"},
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+	})
+	require.NoError(t, err)
+	require.Len(t, defaultHits, 10, "unspecified limit must return the bounded ten newest meta-index hits")
+	require.Equal(t, reverseInt64s(ids[20:30]), metaIndexHitIDs(defaultHits), "equal created_at rows must use id DESC as the deterministic tie-breaker")
+
+	cappedHits, err := ms.QueryMetaIndex(ctx, MetaIndexQuery{
+		Project:            project,
+		Tags:               []string{"limit:case"},
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Limit:              100,
+	})
+	require.NoError(t, err)
+	require.Len(t, cappedHits, 25, "oversized S2 index requests must cap at twenty-five hits")
+
+	_, hasContentField := reflect.TypeOf(MetaIndexHit{}).FieldByName("Content")
+	require.False(t, hasContentField, "MetaIndexHit must be content-free; callers expand by id when full memory content is needed")
+	payload, err := json.Marshal(cappedHits)
+	require.NoError(t, err)
+	serialized := strings.ToLower(string(payload))
+	require.NotContains(t, serialized, "content", "serialized meta-index hits must not expose a content field")
+	require.NotContains(t, serialized, "forbidden-body-token", "serialized meta-index hits must not leak raw memory body text")
+}
+
+func insertMetaIndexMemory(t *testing.T, db *gorm.DB, ms *MemoryStore, ctx context.Context, project, content string, tags []string, owner, visibility string, createdAt time.Time) int64 {
+	t.Helper()
+	created, err := ms.Create(ctx, &models.Memory{
+		Project:            project,
+		Content:            content,
+		Tags:               tags,
+		OwnerPrincipal:     owner,
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    visibility,
+		SourceAgent:        "s2-meta-index-test",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&Memory{}).Where("id = ?", created.ID).Updates(map[string]interface{}{
+		"created_at": createdAt,
+		"updated_at": createdAt,
+	}).Error)
+	return created.ID
+}
+
+func metaIndexHitIDs(hits []MetaIndexHit) []int64 {
+	ids := make([]int64, len(hits))
+	for i, hit := range hits {
+		ids[i] = hit.ID
+	}
+	return ids
+}
+
+func reverseInt64s(in []int64) []int64 {
+	out := make([]int64, len(in))
+	for i := range in {
+		out[i] = in[len(in)-1-i]
+	}
+	return out
 }
 
 // TestTokenizeFTSTerms is a pure unit test (no DB) for the OR-fallback tokenizer

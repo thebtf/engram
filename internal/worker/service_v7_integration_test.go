@@ -9,8 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/cognitive/s1state"
+	"github.com/thebtf/engram/internal/cognitive/s2meta"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/pkg/cognitive"
 )
@@ -322,14 +326,17 @@ func TestPlatformWiring_FlagOff_NoOpsRegisteredButDisabled(t *testing.T) {
 	}
 }
 
-// activateFromFlags mirrors the FR-5 per-subsystem gating logic implemented in
-// NewService. Tests use it to exercise the same decision table without
-// constructing a full Service. The mapping below MUST stay in sync with
-// service.go's noopsBySubsystem.
+// activateFromFlags mirrors the NewService flag-gated CORE fallback activation.
+// CandidateProposer keeps a CORE NoOp enabled whenever the v7 master flag is on;
+// real S2 later registers and disables that fallback when ENGRAM_V7_S2_METAMEM is on.
+// The remaining NoOps stay per-subsystem gated.
 func activateFromFlags(t *testing.T, registry core.SubsystemRegistry, cfg core.FlagConfig) {
 	t.Helper()
 	if !cfg.IsPlugEnabled() {
 		return
+	}
+	if err := registry.Enable("core.noop.candidate_proposer"); err != nil {
+		t.Fatalf("Enable(core.noop.candidate_proposer fallback): %v", err)
 	}
 	mapping := map[string][]string{
 		"s1":  {"core.noop.state_writer"},
@@ -458,4 +465,267 @@ func TestPlatformWiring_FlagOn_OnlyS2_OthersStayRegistered(t *testing.T) {
 			t.Errorf("ResolveImpls(%s): got %d, want 0 (its subsystem flag is unset)", iface, got)
 		}
 	}
+}
+
+type fakeS2MetaIndex struct {
+	queries []gormdb.MetaIndexQuery
+	hits    []gormdb.MetaIndexHit
+}
+
+var _ s2meta.MetaIndex = (*fakeS2MetaIndex)(nil)
+
+func (f *fakeS2MetaIndex) QueryMetaIndex(ctx context.Context, query gormdb.MetaIndexQuery) ([]gormdb.MetaIndexHit, error) {
+	f.queries = append(f.queries, query)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return append([]gormdb.MetaIndexHit(nil), f.hits...), nil
+}
+
+func TestShouldRegisterRealS2CandidateProposer(t *testing.T) {
+	tests := []struct {
+		name string
+		plug string
+		s2   string
+		want bool
+	}{
+		{name: "master off s2 off", plug: "", s2: "", want: false},
+		{name: "master off s2 on", plug: "", s2: "true", want: false},
+		{name: "master on s2 off", plug: "true", s2: "", want: false},
+		{name: "master on s2 on", plug: "true", s2: "true", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENGRAM_V7_PLUG_ENABLED", tt.plug)
+			t.Setenv("ENGRAM_V7_S2_METAMEM", tt.s2)
+
+			got := shouldRegisterRealS2CandidateProposer(core.LoadFlagConfigFromEnv())
+			if got != tt.want {
+				t.Fatalf("shouldRegisterRealS2CandidateProposer() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPlatformWiring_FlagOn_S2RealCandidateProposerReplacesNoOp(t *testing.T) {
+	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
+	t.Setenv("ENGRAM_V7_S2_METAMEM", "true")
+	t.Setenv("ENGRAM_V7_S1_STATE", "")
+	t.Setenv("ENGRAM_V7_S3_AMBIENT", "")
+	t.Setenv("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", "")
+
+	registry := core.NewRegistry()
+	if err := core.RegisterNoOps(registry); err != nil {
+		t.Fatalf("RegisterNoOps: %v", err)
+	}
+	activateFromFlags(t, registry, core.LoadFlagConfigFromEnv())
+
+	idx := &fakeS2MetaIndex{hits: []gormdb.MetaIndexHit{{
+		ID:        501,
+		Title:     "Ambient candidate handoff lesson",
+		Tags:      []string{"ambient", "handoff"},
+		CreatedAt: time.Unix(1700010000, 0).UTC(),
+		Score:     0.92,
+		Source:    "s2.meta_index",
+		Reason:    "tag:handoff",
+	}}}
+	if err := registerS2CandidateProposerSubsystem(registry, idx); err != nil {
+		t.Fatalf("registerS2CandidateProposerSubsystem: %v", err)
+	}
+
+	resolver, ok := registry.(interface{ ResolveImpls(interfaceName string) []core.Subsystem })
+	if !ok {
+		t.Fatalf("registry does not expose ResolveImpls")
+	}
+	impls := resolver.ResolveImpls("CandidateProposer")
+	if len(impls) != 1 {
+		t.Fatalf("ResolveImpls(CandidateProposer): got %d impls %v, want exactly the real S2 proposer", len(impls), namesOfSubsystems(impls))
+	}
+	if got := impls[0].Name(); got != "engram.s2.meta_memory" {
+		t.Fatalf("resolved CandidateProposer = %q, want real S2 proposer instead of CORE NoOp", got)
+	}
+
+	dispatcher := core.NewSubsystemDispatcher(registry, core.NewLocalMeter())
+	var proposals []cognitive.HintProposal
+	if err := core.Dispatch[cognitive.CandidateProposer](
+		context.Background(),
+		dispatcher,
+		"CandidateProposer",
+		func(p cognitive.CandidateProposer) error {
+			var err error
+			proposals, err = p.Propose(context.Background(), cognitive.AttentionEvent{
+				Type:    "user_prompt_submit",
+				Project: "engram",
+				Payload: map[string]interface{}{"text": "handoff lesson"},
+			}, 1)
+			return err
+		},
+	); err != nil {
+		t.Fatalf("Dispatch(CandidateProposer): %v", err)
+	}
+	if len(proposals) != 1 {
+		t.Fatalf("real S2 CandidateProposer returned %d proposals, want 1 meta-memory candidate", len(proposals))
+	}
+	if proposals[0].Title != "Ambient candidate handoff lesson" || proposals[0].Source != "s2.meta_index" {
+		t.Fatalf("proposal = %#v, want meta-index title/source from real S2 proposer", proposals[0])
+	}
+}
+
+func TestPlatformWiring_FlagOff_S2CandidateProposerStaysNoOp(t *testing.T) {
+	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
+	t.Setenv("ENGRAM_V7_S2_METAMEM", "")
+	t.Setenv("ENGRAM_V7_S1_STATE", "")
+	t.Setenv("ENGRAM_V7_S3_AMBIENT", "")
+	t.Setenv("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", "")
+
+	cfg := core.LoadFlagConfigFromEnv()
+	if shouldRegisterRealS2CandidateProposer(cfg) {
+		t.Fatalf("shouldRegisterRealS2CandidateProposer = true, want false when S2 flag is disabled")
+	}
+	registry := core.NewRegistry()
+	if err := core.RegisterNoOps(registry); err != nil {
+		t.Fatalf("RegisterNoOps: %v", err)
+	}
+	activateFromFlags(t, registry, cfg)
+
+	resolver, ok := registry.(interface{ ResolveImpls(interfaceName string) []core.Subsystem })
+	if !ok {
+		t.Fatalf("registry does not expose ResolveImpls")
+	}
+	impls := resolver.ResolveImpls("CandidateProposer")
+	if len(impls) != 1 {
+		t.Fatalf("ResolveImpls(CandidateProposer): got %d impls %v, want the CORE NoOp fallback when S2 is disabled", len(impls), namesOfSubsystems(impls))
+	}
+	if got := impls[0].Name(); got != "core.noop.candidate_proposer" {
+		t.Fatalf("resolved CandidateProposer = %q, want CORE NoOp fallback while S2 is disabled", got)
+	}
+}
+
+func TestPlatformWiring_T014_S2ToggleMatrixControlsRealProposerAndSiblings(t *testing.T) {
+	tests := []struct {
+		name               string
+		masterFlag         string
+		s2Flag             string
+		wantRealRegistered bool
+		wantCandidateNames []string
+		wantRealProposal   bool
+	}{
+		{
+			name:               "master disabled suppresses real s2 even when s2 flag is set",
+			masterFlag:         "false",
+			s2Flag:             "true",
+			wantRealRegistered: false,
+			wantCandidateNames: []string{},
+		},
+		{
+			name:               "s2 disabled keeps core candidate noop fallback",
+			masterFlag:         "true",
+			s2Flag:             "false",
+			wantRealRegistered: false,
+			wantCandidateNames: []string{"core.noop.candidate_proposer"},
+		},
+		{
+			name:               "master and s2 enabled replace noop with real proposer only",
+			masterFlag:         "true",
+			s2Flag:             "true",
+			wantRealRegistered: true,
+			wantCandidateNames: []string{"engram.s2.meta_memory"},
+			wantRealProposal:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENGRAM_V7_PLUG_ENABLED", tt.masterFlag)
+			t.Setenv("ENGRAM_V7_S2_METAMEM", tt.s2Flag)
+			t.Setenv("ENGRAM_V7_S1_STATE", "false")
+			t.Setenv("ENGRAM_V7_S3_AMBIENT", "false")
+			t.Setenv("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", "false")
+			t.Setenv("ENGRAM_V7_S4B_DIRECTIVES_SURFACING", "false")
+			t.Setenv("ENGRAM_V7_S5_TELEMETRY", "false")
+			t.Setenv("ENGRAM_V7_S6_OUTCOME", "false")
+
+			cfg := core.LoadFlagConfigFromEnv()
+			if got := shouldRegisterRealS2CandidateProposer(cfg); got != tt.wantRealRegistered {
+				t.Fatalf("shouldRegisterRealS2CandidateProposer() = %v, want %v", got, tt.wantRealRegistered)
+			}
+
+			registry := core.NewRegistry()
+			if err := core.RegisterNoOps(registry); err != nil {
+				t.Fatalf("RegisterNoOps: %v", err)
+			}
+			activateFromFlags(t, registry, cfg)
+
+			idx := &fakeS2MetaIndex{hits: []gormdb.MetaIndexHit{{
+				ID:        901,
+				Title:     "T014 real S2 proposer hit",
+				Tags:      []string{"t014", "s2"},
+				CreatedAt: time.Unix(1700020000, 0).UTC(),
+				Score:     0.99,
+				Source:    "s2.meta_index",
+				Reason:    "toggle contract",
+			}}}
+			if tt.wantRealRegistered {
+				if err := registerS2CandidateProposerSubsystem(registry, idx); err != nil {
+					t.Fatalf("registerS2CandidateProposerSubsystem: %v", err)
+				}
+			}
+
+			resolver, ok := registry.(interface{ ResolveImpls(interfaceName string) []core.Subsystem })
+			if !ok {
+				t.Fatalf("registry does not expose ResolveImpls")
+			}
+			candidateImpls := resolver.ResolveImpls("CandidateProposer")
+			if got := namesOfSubsystems(candidateImpls); !reflect.DeepEqual(got, tt.wantCandidateNames) {
+				t.Fatalf("ResolveImpls(CandidateProposer) = %v, want %v", got, tt.wantCandidateNames)
+			}
+			for _, iface := range []string{"HintEmitter", "StateWriter", "AttentionEventWriter", "DirectiveDistiller"} {
+				if got := resolver.ResolveImpls(iface); len(got) != 0 {
+					t.Fatalf("ResolveImpls(%s) = %v, want no sibling milestone activation from S2 flags", iface, namesOfSubsystems(got))
+				}
+			}
+
+			if len(candidateImpls) == 0 {
+				return
+			}
+			dispatcher := core.NewSubsystemDispatcher(registry, core.NewLocalMeter())
+			var proposals []cognitive.HintProposal
+			if err := core.Dispatch[cognitive.CandidateProposer](
+				context.Background(),
+				dispatcher,
+				"CandidateProposer",
+				func(p cognitive.CandidateProposer) error {
+					var err error
+					proposals, err = p.Propose(context.Background(), cognitive.AttentionEvent{
+						Type:    "user_prompt_submit",
+						Project: "engram",
+						Payload: map[string]interface{}{"text": "T014 real S2 proposer hit"},
+					}, 1)
+					return err
+				},
+			); err != nil {
+				t.Fatalf("Dispatch(CandidateProposer): %v", err)
+			}
+
+			if tt.wantRealProposal {
+				require.Len(t, proposals, 1, "real S2 proposer must return meta-index proposals, not a stubbed empty list")
+				require.Equal(t, "T014 real S2 proposer hit", proposals[0].Title)
+				require.Equal(t, "s2.meta_index", proposals[0].Source)
+				require.Len(t, idx.queries, 1, "real proposer must query the S2 meta index exactly once")
+			} else {
+				require.NotNil(t, proposals, "NoOp fallback must return an empty, iterable proposal slice")
+				require.Empty(t, proposals, "NoOp fallback must preserve baseline by returning no proposals")
+				require.Empty(t, idx.queries, "flag-off fallback must not query the real S2 meta index")
+			}
+		})
+	}
+}
+
+func namesOfSubsystems(impls []core.Subsystem) []string {
+	names := make([]string, 0, len(impls))
+	for _, impl := range impls {
+		names = append(names, impl.Name())
+	}
+	return names
 }
