@@ -86,16 +86,13 @@ func (s *Server) handleKnowAbout(ctx context.Context, args json.RawMessage) (str
 	}
 
 	response := map[string]any{
-		"topic":      topic,
-		"project":    project,
-		"count":      len(hits),
-		"source":     "s2_meta_index",
-		"top_tags":   summarizeMetaIndexTags(hits, 6),
-		"date_range": summarizeMetaIndexDateRange(hits),
-		"hits":       hits,
-	}
-	if len(hits) == 0 {
-		response["message"] = "no meta-memory hits found for topic"
+		"topic":            topic,
+		"project":          project,
+		"count":            len(hits),
+		"total_candidates": len(hits),
+		"top_tags":         summarizeMetaIndexTags(hits, 6),
+		"date_range":       summarizeMetaIndexDateRange(hits),
+		"memories":         hits,
 	}
 	return marshalJSON(response)
 }

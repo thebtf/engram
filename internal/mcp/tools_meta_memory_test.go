@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 func TestKnowAbout_T005_PopulatedTopicReturnsContentFreeIndexHits(t *testing.T) {
@@ -51,7 +53,7 @@ func TestKnowAbout_T005_PopulatedTopicReturnsContentFreeIndexHits(t *testing.T) 
 	require.NotContains(t, props, "content", "know_about is discovery-only and must not accept memory bodies")
 
 	payload := callT005KnowAbout(t, srv, context.Background(), map[string]any{
-		"topic":  "handoff protocol",
+		"topic":   "handoff protocol",
 		"project": "engram",
 		"limit":   2,
 	})
@@ -59,14 +61,14 @@ func TestKnowAbout_T005_PopulatedTopicReturnsContentFreeIndexHits(t *testing.T) 
 	require.Equal(t, "engram", payload["project"])
 	require.Equal(t, "handoff protocol", payload["topic"])
 	require.Equal(t, float64(2), payload["count"])
-	require.Equal(t, "s2_meta_index", payload["source"])
+	require.Equal(t, float64(2), payload["total_candidates"])
 
-	hits := requireT005Hits(t, payload)
-	require.Len(t, hits, 2, "populated topics must return the index hits; nil/empty stubs must fail here")
-	require.Equal(t, float64(101), hits[0]["id"])
-	require.Equal(t, "handoff protocol summary", hits[0]["title"])
-	require.Equal(t, []any{"intent:handoff", "s2:meta"}, hits[0]["tags"])
-	require.Equal(t, float64(102), hits[1]["id"])
+	memories := requireT005Memories(t, payload)
+	require.Len(t, memories, 2, "populated topics must return the canonical content-free memories list; nil/empty stubs must fail here")
+	require.Equal(t, float64(101), memories[0]["id"])
+	require.Equal(t, "handoff protocol summary", memories[0]["title"])
+	require.Equal(t, []any{"intent:handoff", "s2:meta"}, memories[0]["tags"])
+	require.Equal(t, float64(102), memories[1]["id"])
 
 	require.Len(t, idx.queries, 1)
 	require.Equal(t, "engram", idx.queries[0].Project)
@@ -80,7 +82,7 @@ func TestKnowAbout_T005_MissingTopicReturnsEmptyIndexPacket(t *testing.T) {
 	srv := newT005KnowAboutServer(t, idx, true)
 
 	payload := callT005KnowAbout(t, srv, context.Background(), map[string]any{
-		"topic":  "topic-with-no-index-hits",
+		"topic":   "topic-with-no-index-hits",
 		"project": "engram",
 		"limit":   3,
 	})
@@ -88,8 +90,8 @@ func TestKnowAbout_T005_MissingTopicReturnsEmptyIndexPacket(t *testing.T) {
 	require.Equal(t, "engram", payload["project"])
 	require.Equal(t, "topic-with-no-index-hits", payload["topic"])
 	require.Equal(t, float64(0), payload["count"])
-	require.Empty(t, requireT005Hits(t, payload), "missing topics must be an explicit empty result, not nil or a tool error")
-	require.Contains(t, strings.ToLower(fmt.Sprint(payload["message"])), "no")
+	require.Equal(t, float64(0), payload["total_candidates"])
+	require.Empty(t, requireT005Memories(t, payload), "missing topics must be an explicit empty result, not nil or a tool error")
 	require.Len(t, idx.queries, 1, "missing topics must still query the content-free S2 index")
 	assertT005NoContentKeys(t, payload)
 }
@@ -120,8 +122,43 @@ func TestKnowAbout_T005_ContextProjectFallbackAndLimitClamp(t *testing.T) {
 	require.Equal(t, "context-project", idx.queries[0].Project, "project must fall back to MCP context before querying S2")
 	require.Equal(t, 25, idx.queries[0].Limit, "oversized know_about limits must clamp to the S2 meta-index maximum")
 	require.Equal(t, float64(25), payload["count"])
-	require.Len(t, requireT005Hits(t, payload), 25, "response size must match the clamped S2 index limit")
+	require.Equal(t, float64(25), payload["total_candidates"])
+	require.Len(t, requireT005Memories(t, payload), 25, "response size must match the clamped S2 index limit")
 	assertT005NoContentKeys(t, payload)
+}
+
+func TestKnowAbout_T005_RealStoreCanonicalShapeAndMissingTopicEmptyPacket(t *testing.T) {
+	const project = "test-s2-meta-index-know-about-real"
+	idx := openT005RealMetaMemoryIndex(t, project)
+	insertT005RealMetaMemory(t, idx, project, "handoff memory title\nthis body omits the lexical query marker", []string{"intent:handoff", "s2:meta"})
+
+	srv := newT005KnowAboutServer(t, idx, true)
+
+	populated := callT005KnowAbout(t, srv, context.Background(), map[string]any{
+		"topic":   "intent:handoff",
+		"project": project,
+		"limit":   5,
+	})
+	require.Equal(t, project, populated["project"])
+	require.Equal(t, "intent:handoff", populated["topic"])
+	require.Equal(t, float64(1), populated["count"])
+	require.Equal(t, float64(1), populated["total_candidates"])
+	memories := requireT005Memories(t, populated)
+	require.Len(t, memories, 1)
+	require.Equal(t, "handoff memory title", memories[0]["title"])
+	assertT005NoContentKeys(t, populated)
+
+	empty := callT005KnowAbout(t, srv, context.Background(), map[string]any{
+		"topic":   "topic-with-no-index-hits",
+		"project": project,
+		"limit":   5,
+	})
+	require.Equal(t, project, empty["project"])
+	require.Equal(t, "topic-with-no-index-hits", empty["topic"])
+	require.Equal(t, float64(0), empty["count"])
+	require.Equal(t, float64(0), empty["total_candidates"])
+	require.Empty(t, requireT005Memories(t, empty), "real-store no-match queries must return an empty canonical packet, not a tool error")
+	assertT005NoContentKeys(t, empty)
 }
 
 func TestKnowAbout_T005_DisabledS2NotAdvertised(t *testing.T) {
@@ -172,7 +209,7 @@ func TestKnowAbout_T005_IndexErrorsSurfaceAsToolErrors(t *testing.T) {
 	srv := newT005KnowAboutServer(t, idx, true)
 
 	_, err := srv.callTool(context.Background(), "know_about", mustT005KnowAboutJSON(t, map[string]any{
-		"topic":  "handoff protocol",
+		"topic":   "handoff protocol",
 		"project": "engram",
 		"limit":   4,
 	}))
@@ -199,7 +236,7 @@ func TestKnowAbout_T005_JSONNeverContainsContentKeysOrMemoryBodies(t *testing.T)
 	srv := newT005KnowAboutServer(t, idx, true)
 
 	result, err := srv.callTool(context.Background(), "know_about", mustT005KnowAboutJSON(t, map[string]any{
-		"topic":  "safe title",
+		"topic":   "safe title",
 		"project": "engram",
 		"limit":   1,
 	}))
@@ -248,7 +285,7 @@ func (f *fakeT005MetaMemoryIndex) QueryMetaIndex(_ context.Context, query gormdb
 	return append([]gormdb.MetaIndexHit(nil), f.hits...), nil
 }
 
-func newT005KnowAboutServer(t *testing.T, idx *fakeT005MetaMemoryIndex, s2Enabled bool) *Server {
+func newT005KnowAboutServer(t *testing.T, idx metaMemoryIndex, s2Enabled bool) *Server {
 	t.Helper()
 	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
 	if s2Enabled {
@@ -257,7 +294,9 @@ func newT005KnowAboutServer(t *testing.T, idx *fakeT005MetaMemoryIndex, s2Enable
 		t.Setenv("ENGRAM_V7_S2_METAMEM", "")
 	}
 	srv := NewServer(ServerOptions{Version: "test"})
-	srv.SetMetaMemoryIndex(idx)
+	if idx != nil {
+		srv.SetMetaMemoryIndex(idx)
+	}
 	return srv
 }
 
@@ -289,17 +328,17 @@ func callT005KnowAbout(t *testing.T, srv *Server, ctx context.Context, args map[
 	return payload
 }
 
-func requireT005Hits(t *testing.T, payload map[string]any) []map[string]any {
+func requireT005Memories(t *testing.T, payload map[string]any) []map[string]any {
 	t.Helper()
-	raw, ok := payload["hits"].([]any)
-	require.True(t, ok, "know_about response must expose index entries under hits")
-	hits := make([]map[string]any, 0, len(raw))
+	raw, ok := payload["memories"].([]any)
+	require.True(t, ok, "know_about response must expose index entries under memories")
+	memories := make([]map[string]any, 0, len(raw))
 	for _, item := range raw {
-		hit, ok := item.(map[string]any)
-		require.True(t, ok, "each hit must be a JSON object")
-		hits = append(hits, hit)
+		memory, ok := item.(map[string]any)
+		require.True(t, ok, "each memory must be a JSON object")
+		memories = append(memories, memory)
 	}
-	return hits
+	return memories
 }
 
 func mustT005KnowAboutJSON(t *testing.T, v any) json.RawMessage {
@@ -334,4 +373,33 @@ func assertT005NoContentKeys(t *testing.T, v any) {
 		}
 	}
 	walk(v, "$USER")
+}
+
+func openT005RealMetaMemoryIndex(t *testing.T, project string) *gormdb.MemoryStore {
+	t.Helper()
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" || testing.Short() {
+		t.Skip("T005 real-store: DATABASE_DSN not set or -short; skipping DB-dependent assertion")
+	}
+	store, err := gormdb.NewStore(gormdb.Config{DSN: dsn, MaxConns: 2})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = store.DB.WithContext(context.Background()).Exec(`DELETE FROM memories WHERE project = ?`, project).Error
+		_ = store.Close()
+	})
+	return gormdb.NewMemoryStore(store)
+}
+
+func insertT005RealMetaMemory(t *testing.T, ms *gormdb.MemoryStore, project, content string, tags []string) {
+	t.Helper()
+	_, err := ms.Create(context.Background(), &models.Memory{
+		Project:            project,
+		Content:            content,
+		Tags:               tags,
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		SourceAgent:        "t005-real-store",
+	})
+	require.NoError(t, err)
 }

@@ -285,6 +285,30 @@ func TestMemoryStore_QueryMetaIndex_EmptyProjectRejected(t *testing.T) {
 	require.Contains(t, err.Error(), "project")
 }
 
+func TestMemoryStore_QueryMetaIndex_ValidQueryWithoutMatchesReturnsEmptySlice(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	defer db.Exec(`DELETE FROM memories WHERE project = 'test-s2-meta-index-empty'`)
+
+	ms := NewMemoryStore(&Store{DB: db})
+	ctx := context.Background()
+	const project = "test-s2-meta-index-empty"
+	insertMetaIndexMemory(t, db, ms, ctx, project, "unrelated memory title\nthis body deliberately omits the missing lexical query", []string{"s2:meta", "different:tag"}, "agent/alice", models.AgentVisibilityShared, time.Unix(1700000400, 0).UTC())
+
+	hits, err := ms.QueryMetaIndex(ctx, MetaIndexQuery{
+		Project:            project,
+		Query:              "topic-with-no-index-hits",
+		Tags:               []string{"topic-with-no-index-hits"},
+		OwnerPrincipal:     "agent/alice",
+		OwnerPrincipalKind: "agent",
+		AgentVisibility:    models.AgentVisibilityShared,
+		Limit:              10,
+	})
+	require.NoError(t, err, "valid non-empty meta-index queries must empty-success when no IDs match")
+	require.NotNil(t, hits)
+	require.Len(t, hits, 0)
+}
+
 func TestMemoryStore_QueryMetaIndex_VisibilityBeforeLimit(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()

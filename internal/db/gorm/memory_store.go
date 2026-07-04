@@ -1301,11 +1301,13 @@ func (s *MemoryStore) QueryMetaIndex(ctx context.Context, query MetaIndexQuery) 
 	}
 
 	tagIDs := make([]int64, 0, limit)
+	hasTagQuery := false
 	for _, tag := range query.Tags {
 		tag = strings.TrimSpace(tag)
 		if tag == "" {
 			continue
 		}
+		hasTagQuery = true
 		ids, err := s.SearchMetaMemoryTagPrefixIDs(ctx, project, tag, opts, limit)
 		if err != nil {
 			return nil, err
@@ -1313,17 +1315,22 @@ func (s *MemoryStore) QueryMetaIndex(ctx context.Context, query MetaIndexQuery) 
 		tagIDs = appendUniqueMetaIDs(tagIDs, ids)
 	}
 
+	textQuery := strings.TrimSpace(query.Query)
+	hasTextQuery := textQuery != ""
 	ftsIDs := make([]int64, 0, limit)
-	if text := strings.TrimSpace(query.Query); text != "" {
-		ids, err := s.SearchMetaMemoryFTSIDs(ctx, project, text, opts, limit)
+	if hasTextQuery {
+		ids, err := s.SearchMetaMemoryFTSIDs(ctx, project, textQuery, opts, limit)
 		if err != nil {
 			return nil, err
 		}
 		ftsIDs = appendUniqueMetaIDs(ftsIDs, ids)
 	}
 
-	if len(tagIDs) == 0 && len(ftsIDs) == 0 {
+	if !hasTagQuery && !hasTextQuery {
 		return nil, fmt.Errorf("query or tags must not be empty")
+	}
+	if len(tagIDs) == 0 && len(ftsIDs) == 0 {
+		return []MetaIndexHit{}, nil
 	}
 
 	ordered := metaIndexRRF(tagIDs, ftsIDs, 60)
