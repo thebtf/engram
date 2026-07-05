@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.40.0] - 2026-07-05
+
+### Added
+
+- **Engram v7 product metrics readiness, ENG-V7-S5 / CR-001 (#399).** Adds the S5 product metrics provider behind `ENGRAM_V7_PLUG_ENABLED=true` and `ENGRAM_V7_S5_TELEMETRY=true`, with additive `ProductMetricsSnapshot` readiness evidence for per-metric states, thresholds, sample counts, and observation windows.
+- **S5 default readiness thresholds (#399).** Applies S5-owned default thresholds on the ordinary production provider path: `hint_precision=30`, `accepted_hint_action=20`, and explicit threshold `0` deferral for the remaining CR-001 metrics until their source adapters land.
+
+### Fixed
+
+- **S5 review hardening (#399).** Keeps product metric keys, readiness states, and thresholds canonical in S5 while CORE remains generic, preserves the disabled `/api/stats/v7/product` `404` behavior, and tightens provider tests so output construction cannot satisfy canonical-metric coverage through helper-only references.
+
 ## [6.39.0] - 2026-07-05
 
 ### Added
