@@ -14,6 +14,7 @@ import (
 	"github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/cognitive/s1state"
 	"github.com/thebtf/engram/internal/cognitive/s2meta"
+	"github.com/thebtf/engram/internal/cognitive/s4directives"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/pkg/cognitive"
@@ -534,7 +535,9 @@ func TestPlatformWiring_FlagOn_S2RealCandidateProposerReplacesNoOp(t *testing.T)
 		t.Fatalf("registerS2CandidateProposerSubsystem: %v", err)
 	}
 
-	resolver, ok := registry.(interface{ ResolveImpls(interfaceName string) []core.Subsystem })
+	resolver, ok := registry.(interface {
+		ResolveImpls(interfaceName string) []core.Subsystem
+	})
 	if !ok {
 		t.Fatalf("registry does not expose ResolveImpls")
 	}
@@ -589,7 +592,9 @@ func TestPlatformWiring_FlagOff_S2CandidateProposerStaysNoOp(t *testing.T) {
 	}
 	activateFromFlags(t, registry, cfg)
 
-	resolver, ok := registry.(interface{ ResolveImpls(interfaceName string) []core.Subsystem })
+	resolver, ok := registry.(interface {
+		ResolveImpls(interfaceName string) []core.Subsystem
+	})
 	if !ok {
 		t.Fatalf("registry does not expose ResolveImpls")
 	}
@@ -672,7 +677,9 @@ func TestPlatformWiring_T014_S2ToggleMatrixControlsRealProposerAndSiblings(t *te
 				}
 			}
 
-			resolver, ok := registry.(interface{ ResolveImpls(interfaceName string) []core.Subsystem })
+			resolver, ok := registry.(interface {
+				ResolveImpls(interfaceName string) []core.Subsystem
+			})
 			if !ok {
 				t.Fatalf("registry does not expose ResolveImpls")
 			}
@@ -720,6 +727,180 @@ func TestPlatformWiring_T014_S2ToggleMatrixControlsRealProposerAndSiblings(t *te
 			}
 		})
 	}
+}
+
+type fakeS4ADirectiveStore struct {
+	records []cognitive.AttentionEventRecord
+}
+
+func (f *fakeS4ADirectiveStore) Create(_ context.Context, event cognitive.AttentionEventRecord) (*s4directives.StoredAttentionEvent, error) {
+	f.records = append(f.records, event)
+	return &s4directives.StoredAttentionEvent{
+		ID:             int64(len(f.records)),
+		Project:        event.Project,
+		SessionID:      event.SessionID,
+		SourceTurnHash: event.SourceTurnHash,
+		DerivedIntent:  event.DerivedIntent,
+		AgentConfirmed: event.AgentConfirmed,
+		Horizon:        event.Horizon,
+		PrivacyClass:   event.PrivacyClass,
+		CreatedAt:      time.Unix(1700030000, 0).UTC(),
+	}, nil
+}
+
+func TestShouldRegisterRealS4ADirectives(t *testing.T) {
+	tests := []struct {
+		name string
+		plug string
+		s4a  string
+		want bool
+	}{
+		{name: "master off s4a off", plug: "", s4a: "", want: false},
+		{name: "master off s4a on", plug: "", s4a: "true", want: false},
+		{name: "master on s4a off", plug: "true", s4a: "", want: false},
+		{name: "master on s4a on", plug: "true", s4a: "true", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENGRAM_V7_PLUG_ENABLED", tt.plug)
+			t.Setenv("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", tt.s4a)
+
+			got := shouldRegisterRealS4ADirectives(core.LoadFlagConfigFromEnv())
+			if got != tt.want {
+				t.Fatalf("shouldRegisterRealS4ADirectives() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPlatformWiring_FlagOn_S4ARealDirectivesReplaceNoOps(t *testing.T) {
+	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
+	t.Setenv("ENGRAM_V7_S1_STATE", "false")
+	t.Setenv("ENGRAM_V7_S2_METAMEM", "false")
+	t.Setenv("ENGRAM_V7_S3_AMBIENT", "false")
+	t.Setenv("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", "true")
+	t.Setenv("ENGRAM_V7_S4B_DIRECTIVES_SURFACING", "false")
+	t.Setenv("ENGRAM_V7_S5_TELEMETRY", "false")
+	t.Setenv("ENGRAM_V7_S6_OUTCOME", "false")
+
+	registry := core.NewRegistry()
+	if err := core.RegisterNoOps(registry); err != nil {
+		t.Fatalf("RegisterNoOps: %v", err)
+	}
+	activateFromFlags(t, registry, core.LoadFlagConfigFromEnv())
+
+	store := &fakeS4ADirectiveStore{}
+	if err := registerS4ADirectivesSubsystem(registry, s4directives.NewService(store)); err != nil {
+		t.Fatalf("registerS4ADirectivesSubsystem: %v", err)
+	}
+
+	resolver, ok := registry.(interface {
+		ResolveImpls(interfaceName string) []core.Subsystem
+	})
+	if !ok {
+		t.Fatalf("registry does not expose ResolveImpls")
+	}
+	for _, iface := range []string{"AttentionEventWriter", "DirectiveDistiller"} {
+		impls := resolver.ResolveImpls(iface)
+		if got := namesOfSubsystems(impls); !reflect.DeepEqual(got, []string{"engram.s4a.directives_capture"}) {
+			t.Fatalf("ResolveImpls(%s) = %v, want real S4a directive subsystem only", iface, got)
+		}
+	}
+	for _, iface := range []string{"StateWriter", "HintEmitter"} {
+		if got := resolver.ResolveImpls(iface); len(got) != 0 {
+			t.Fatalf("ResolveImpls(%s) = %v, want no sibling milestone activation from S4a flags", iface, namesOfSubsystems(got))
+		}
+	}
+	if got := namesOfSubsystems(resolver.ResolveImpls("CandidateProposer")); !reflect.DeepEqual(got, []string{"core.noop.candidate_proposer"}) {
+		t.Fatalf("ResolveImpls(CandidateProposer) = %v, want master-only CORE fallback without S2 real proposer", got)
+	}
+
+	dispatcher := core.NewSubsystemDispatcher(registry, core.NewLocalMeter())
+	if err := core.Dispatch[cognitive.AttentionEventWriter](
+		context.Background(),
+		dispatcher,
+		"AttentionEventWriter",
+		func(w cognitive.AttentionEventWriter) error {
+			return w.WriteAttentionEvent(context.Background(), cognitive.AttentionEventRecord{
+				Project:        "engram",
+				SessionID:      "session-1",
+				SourceTurnHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				DerivedIntent:  "keep release notes short",
+				AgentConfirmed: true,
+				Horizon:        "project",
+				PrivacyClass:   "internal",
+			})
+		},
+	); err != nil {
+		t.Fatalf("Dispatch(AttentionEventWriter): %v", err)
+	}
+	require.Len(t, store.records, 1, "real S4a writer must persist through the configured store")
+	require.Equal(t, "keep release notes short", store.records[0].DerivedIntent)
+
+	var distilled cognitive.Distilled
+	if err := core.Dispatch[cognitive.DirectiveDistiller](
+		context.Background(),
+		dispatcher,
+		"DirectiveDistiller",
+		func(d cognitive.DirectiveDistiller) error {
+			var err error
+			distilled, err = d.Distill(context.Background(), cognitive.RawSignal{
+				Text:       " keep release notes short ",
+				SourceHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				Context: map[string]string{
+					"horizon":       "project",
+					"privacy_class": "internal",
+				},
+			})
+			return err
+		},
+	); err != nil {
+		t.Fatalf("Dispatch(DirectiveDistiller): %v", err)
+	}
+	require.NotEmpty(t, distilled.Intent, "real S4a distiller must return a non-empty intent instead of the CORE NoOp zero value")
+	require.Equal(t, "project", distilled.Horizon)
+	require.Equal(t, "internal", distilled.Privacy)
+}
+
+func TestPlatformWiring_FlagOff_S4ADirectivesStayNoOp(t *testing.T) {
+	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
+	t.Setenv("ENGRAM_V7_S1_STATE", "false")
+	t.Setenv("ENGRAM_V7_S2_METAMEM", "false")
+	t.Setenv("ENGRAM_V7_S3_AMBIENT", "false")
+	t.Setenv("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", "false")
+
+	cfg := core.LoadFlagConfigFromEnv()
+	if shouldRegisterRealS4ADirectives(cfg) {
+		t.Fatalf("shouldRegisterRealS4ADirectives = true, want false when S4a flag is disabled")
+	}
+	registry := core.NewRegistry()
+	if err := core.RegisterNoOps(registry); err != nil {
+		t.Fatalf("RegisterNoOps: %v", err)
+	}
+	activateFromFlags(t, registry, cfg)
+
+	resolver, ok := registry.(interface {
+		ResolveImpls(interfaceName string) []core.Subsystem
+	})
+	if !ok {
+		t.Fatalf("registry does not expose ResolveImpls")
+	}
+	for _, iface := range []string{"AttentionEventWriter", "DirectiveDistiller"} {
+		if got := resolver.ResolveImpls(iface); len(got) != 0 {
+			t.Fatalf("ResolveImpls(%s) = %v, want no S4a implementation when the S4a flag is disabled", iface, namesOfSubsystems(got))
+		}
+	}
+}
+
+func TestRegisterS4ADirectivesSubsystemRejectsNilService(t *testing.T) {
+	registry := core.NewRegistry()
+	if err := core.RegisterNoOps(registry); err != nil {
+		t.Fatalf("RegisterNoOps: %v", err)
+	}
+
+	err := registerS4ADirectivesSubsystem(registry, nil)
+	require.ErrorIs(t, err, s4directives.ErrNoService)
 }
 
 func namesOfSubsystems(impls []core.Subsystem) []string {

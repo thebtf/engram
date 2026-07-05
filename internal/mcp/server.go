@@ -50,6 +50,7 @@ type Server struct {
 	stateStore                   statePlane
 	experienceProvider           experienceProvider
 	temporalTruthProvider        temporalTruthProvider
+	directiveCaptureService      directiveCaptureService
 	principalMemoryQuerySvc      principalMemoryQueryService
 	domainRegistryService        domainRegistryService
 	behavioralRulesStore         *gorm.BehavioralRulesStore
@@ -161,6 +162,11 @@ func (s *Server) SetMetaMemoryIndex(idx metaMemoryIndex) {
 // SetStateStore sets the native state-plane read/write store.
 func (s *Server) SetStateStore(store statePlane) {
 	s.stateStore = store
+}
+
+// SetDirectiveCaptureService wires the S4a remember_directive service seam.
+func (s *Server) SetDirectiveCaptureService(service directiveCaptureService) {
+	s.directiveCaptureService = service
 }
 
 // SetBehavioralRulesStore sets the behavioral rules store (US3 Commit C).
@@ -1118,6 +1124,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	if s.temporalTruthProvider != nil && temporalTruthEnabledFromEnv() {
 		tools = append(tools, temporalTruthTool(), temporalTruthRefreshTool())
 	}
+	if s.directiveCaptureService != nil && directivesCaptureEnabledFromEnv() {
+		tools = append(tools, rememberDirectiveTool())
+	}
 	// Session outcome tool — only advertise when session store is available
 	if s.sessionStore != nil {
 		tools = append(tools,
@@ -1590,12 +1599,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 
 	result, err := s.callTool(ctx, params.Name, params.Arguments)
 	if err != nil {
-		// Truncate and redact args before logging to avoid leaking secrets.
-		args := string(params.Arguments)
-		if len(args) > 200 {
-			args = args[:200] + "..."
-		}
-		args = privacy.RedactSecrets(args)
+		args := sanitizeToolCallArgs(params.Name, params.Arguments)
 		log.Error().Err(err).Str("tool", params.Name).Str("args", args).Msg("Tool call failed")
 		return &Response{
 			JSONRPC: "2.0",
@@ -1613,6 +1617,17 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 			},
 		},
 	}
+}
+
+func sanitizeToolCallArgs(tool string, args json.RawMessage) string {
+	if tool == "remember_directive" {
+		return "<redacted>"
+	}
+	value := string(args)
+	if len(value) > 200 {
+		value = value[:200] + "..."
+	}
+	return privacy.RedactSecrets(value)
 }
 
 // callTool dispatches to the appropriate tool handler.
@@ -1743,6 +1758,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleTemporalTruth(ctx, args)
 	case "temporal_truth_refresh":
 		return s.handleTemporalTruthRefresh(ctx, args)
+	case "remember_directive":
+		return s.handleRememberDirective(ctx, args)
 	case "rate_memory":
 		return s.handleRateMemory(ctx, args)
 	case "suppress_memory":

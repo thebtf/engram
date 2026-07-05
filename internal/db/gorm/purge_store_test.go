@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/pkg/cognitive"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -54,19 +55,21 @@ func TestPurgeStore_PurgeProject_TabWhitespace(t *testing.T) {
 // TestPurgeStore_PurgeProject_DeletesMemoriesAndRules seeds memories and behavioral rules
 // for a project, then verifies that purge hard-deletes them and returns correct counts.
 // Requires DATABASE_DSN; skips otherwise.
-func TestPurgeStore_PurgeProject_DeletesMemoriesAndRules(t *testing.T) {
+func TestPurgeStore_PurgeProject_DeletesMemoriesRulesAndAttentionEvents(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 
 	const purgeProj = "test-purge-store"
 
 	// Cleanup any leftover rows from a prior failed run.
+	db.Exec(`DELETE FROM attention_events WHERE project = ?`, purgeProj)
 	db.Exec(`DELETE FROM memories WHERE project = ?`, purgeProj)
 	db.Exec(`DELETE FROM behavioral_rules WHERE project = ?`, purgeProj)
 
 	store := &Store{DB: db}
 	ms := NewMemoryStore(store)
 	brs := NewBehavioralRulesStore(store)
+	aes := NewAttentionEventStore(db)
 	ps := NewPurgeStore(store)
 	ctx := context.Background()
 
@@ -89,6 +92,17 @@ func TestPurgeStore_PurgeProject_DeletesMemoriesAndRules(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	_, err := aes.Create(ctx, cognitive.AttentionEventRecord{
+		Project:        purgeProj,
+		SessionID:      "session-purge",
+		SourceTurnHash: validAttentionHash("a"),
+		DerivedIntent:  "directive policy reporting",
+		AgentConfirmed: true,
+		Horizon:        "project",
+		PrivacyClass:   "internal",
+	})
+	require.NoError(t, err)
+
 	// Purge.
 	receipt, err := ps.PurgeProject(ctx, purgeProj)
 	require.NoError(t, err)
@@ -96,6 +110,7 @@ func TestPurgeStore_PurgeProject_DeletesMemoriesAndRules(t *testing.T) {
 	assert.Equal(t, purgeProj, receipt.Project)
 	assert.Equal(t, int64(3), receipt.MemoryCount, "receipt must reflect pre-purge memory count")
 	assert.Equal(t, int64(2), receipt.RuleCount, "receipt must reflect pre-purge rule count")
+	assert.Equal(t, int64(1), receipt.AttentionEventCount, "receipt must count deleted attention_events rows")
 	assert.False(t, receipt.PurgedAt.IsZero(), "PurgedAt must be set")
 
 	// Verify memories are gone.
@@ -106,6 +121,10 @@ func TestPurgeStore_PurgeProject_DeletesMemoriesAndRules(t *testing.T) {
 	// Verify rules are gone.
 	db.Model(&BehavioralRule{}).Where("project = ?", purgeProj).Count(&count)
 	assert.Equal(t, int64(0), count, "all rules must be deleted after purge")
+
+	// Verify attention events are gone.
+	db.Table("attention_events").Where("project = ?", purgeProj).Count(&count)
+	assert.Equal(t, int64(0), count, "all attention_events rows must be deleted after purge")
 
 	// Verify purge audit row was written.
 	var auditCount int64
@@ -122,13 +141,16 @@ func TestPurgeStore_PurgeProject_DoesNotTouchOtherProject(t *testing.T) {
 	const purgeProj = "test-purge-isolation-a"
 	const safeProj = "test-purge-isolation-b"
 
+	db.Exec(`DELETE FROM attention_events WHERE project IN (?, ?)`, purgeProj, safeProj)
 	db.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, purgeProj, safeProj)
 	db.Exec(`DELETE FROM behavioral_rules WHERE project IN (?, ?)`, purgeProj, safeProj)
+	defer db.Exec(`DELETE FROM attention_events WHERE project IN (?, ?)`, purgeProj, safeProj)
 	defer db.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, purgeProj, safeProj)
 	defer db.Exec(`DELETE FROM behavioral_rules WHERE project IN (?, ?)`, purgeProj, safeProj)
 
 	store := &Store{DB: db}
 	ms := NewMemoryStore(store)
+	aes := NewAttentionEventStore(db)
 	ps := NewPurgeStore(store)
 	ctx := context.Background()
 
@@ -138,14 +160,42 @@ func TestPurgeStore_PurgeProject_DoesNotTouchOtherProject(t *testing.T) {
 	safe, err := ms.Create(ctx, &models.Memory{Project: safeProj, Content: "must survive"})
 	require.NoError(t, err)
 
-	// Purge only purgeProj.
-	_, err = ps.PurgeProject(ctx, purgeProj)
+	_, err = aes.Create(ctx, cognitive.AttentionEventRecord{
+		Project:        purgeProj,
+		SessionID:      "session-a",
+		SourceTurnHash: validAttentionHash("b"),
+		DerivedIntent:  "directive policy",
+		AgentConfirmed: true,
+		Horizon:        "project",
+		PrivacyClass:   "internal",
+	})
 	require.NoError(t, err)
+	_, err = aes.Create(ctx, cognitive.AttentionEventRecord{
+		Project:        safeProj,
+		SessionID:      "session-b",
+		SourceTurnHash: validAttentionHash("c"),
+		DerivedIntent:  "directive captured",
+		AgentConfirmed: true,
+		Horizon:        "project",
+		PrivacyClass:   "internal",
+	})
+	require.NoError(t, err)
+
+	// Purge only purgeProj.
+	receipt, err := ps.PurgeProject(ctx, purgeProj)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), receipt.AttentionEventCount, "purge receipt must only count purged project's attention_events")
 
 	// Safe project memory must still exist.
 	var count int64
 	db.Model(&Memory{}).Where("project = ?", safeProj).Count(&count)
 	assert.Equal(t, int64(1), count, "other project memories must not be deleted")
+
+	// Safe project attention events must still exist.
+	db.Table("attention_events").Where("project = ?", purgeProj).Count(&count)
+	assert.Equal(t, int64(0), count, "purged project's attention_events must be deleted")
+	db.Table("attention_events").Where("project = ?", safeProj).Count(&count)
+	assert.Equal(t, int64(1), count, "other project attention_events must not be deleted")
 
 	// Verify via Get too.
 	fetched, err := ms.Get(ctx, safe.ID)

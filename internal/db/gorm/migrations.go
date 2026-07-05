@@ -4787,6 +4787,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		booksJobsMigration155(),
 		accessMilestoneMigration156(),
 		temporalTruthRecordsMigration157(),
+		attentionEventsMigration158(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -4883,6 +4884,42 @@ func forgettingReviewSnapshotOpTypeMigration154() *gormigrate.Migration {
 				}
 				return nil
 			})
+		},
+	}
+}
+
+func attentionEventsMigration158() *gormigrate.Migration {
+	return &gormigrate.Migration{
+		ID: "158_attention_events",
+		Migrate: func(tx *gorm.DB) error {
+			stmts := []string{
+				`CREATE TABLE IF NOT EXISTS attention_events (
+					id BIGSERIAL PRIMARY KEY,
+					project TEXT NOT NULL,
+					session_id TEXT NOT NULL,
+					source_turn_hash TEXT NOT NULL CHECK (source_turn_hash ~ '^sha256:[0-9a-f]{64}$'),
+					derived_intent TEXT NOT NULL,
+					agent_confirmed BOOLEAN NOT NULL DEFAULT true CHECK (agent_confirmed = true),
+					horizon TEXT NOT NULL CHECK (horizon IN ('session','project','permanent')),
+					privacy_class TEXT NOT NULL CHECK (privacy_class IN ('public','internal','secret')),
+					created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_attention_events_project_created ON attention_events (project, created_at DESC)`,
+				`CREATE INDEX IF NOT EXISTS idx_attention_events_session_created ON attention_events (session_id, created_at DESC)`,
+			}
+			for _, stmt := range stmts {
+				if err := tx.Exec(stmt).Error; err != nil {
+					return fmt.Errorf("migration 158: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			if err := tx.Exec(`DROP TABLE IF EXISTS attention_events`).Error; err != nil {
+				return fmt.Errorf("migration 158 rollback: %w", err)
+			}
+			return nil
 		},
 	}
 }
