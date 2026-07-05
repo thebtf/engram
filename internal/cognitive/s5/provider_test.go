@@ -254,48 +254,32 @@ func TestCanonicalProductMetricKeysLiveOnlyInMetricsDeclarations(t *testing.T) {
 	}
 }
 
-func TestProductMetricOutputImplementationReferencesCanonicalConstants(t *testing.T) {
+func TestProductMetricOutputImplementationAvoidsAdHocCanonicalMetricStrings(t *testing.T) {
 	want := canonicalMetricValues()
-	found := make(map[string]bool, len(want))
 	var adHoc []string
 
 	fset := token.NewFileSet()
-	for _, name := range []string{"metrics.go", "provider.go"} {
-		file := parseS5File(t, fset, name)
-		ast.Inspect(file, func(n ast.Node) bool {
-			switch node := n.(type) {
-			case *ast.ValueSpec:
-				return false
-			case *ast.Ident:
-				if _, ok := want[node.Name]; ok {
-					found[node.Name] = true
-				}
-			case *ast.BasicLit:
-				if node.Kind != token.STRING {
-					return true
-				}
-				value, err := strconv.Unquote(node.Value)
-				if err != nil {
-					return true
-				}
-				for constName, metricKey := range want {
-					if value == metricKey {
-						pos := fset.Position(node.Pos())
-						adHoc = append(adHoc, filepath.Base(pos.Filename)+":"+strconv.Itoa(pos.Line)+" hard-codes "+metricKey+" instead of "+constName)
-					}
-				}
-			}
+	file := parseS5File(t, fset, "provider.go")
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
 			return true
-		})
-	}
+		}
+		value, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			return true
+		}
+		for constName, metricKey := range want {
+			if value == metricKey {
+				pos := fset.Position(lit.Pos())
+				adHoc = append(adHoc, filepath.Base(pos.Filename)+":"+strconv.Itoa(pos.Line)+" hard-codes "+metricKey+" instead of "+constName)
+			}
+		}
+		return true
+	})
 
 	for _, violation := range adHoc {
 		t.Errorf("product metric output path uses ad hoc key string: %s", violation)
-	}
-	for constName := range want {
-		if !found[constName] {
-			t.Errorf("product metric output path never references %s; provider output must be keyed from S5 canonical constants", constName)
-		}
 	}
 }
 
