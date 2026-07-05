@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.41.0] - 2026-07-05
+
+### Added
+
+- **Engram v7 outcome-policy advisory flow, ENG-V7-S6 / CR-001 (#400).** Adds the S6 candidate significance proposer and `rate_memory_significance` advisory MCP flow behind `ENGRAM_V7_PLUG_ENABLED=true` and `ENGRAM_V7_S6_OUTCOME=true`, keeping proposal/readback output content-free and flag-dark by default.
+- **S6 self-rating and readback evidence (#400).** Records Thompson-style significance observations through the bounded S6 path so agents can rate memory usefulness without re-enabling removed v5 `rate_memory` compatibility behavior.
+
+### Fixed
+
+- **S6 review hardening (#400).** Keeps `rate_memory_significance` advertisement and direct calls behind the S6 flag gate, persists S6 significance fields through the dedicated memory-significance store path, preserves nil/empty slice semantics in proposer cloning, and updates stale CORE NoOp worker comments/mapping.
+
 ## [6.40.0] - 2026-07-05
 
 ### Added
