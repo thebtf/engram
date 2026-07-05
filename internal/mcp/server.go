@@ -33,51 +33,52 @@ import (
 // Server is the MCP server that exposes engram tools.
 // Field order optimized for memory alignment (fieldalignment).
 type Server struct {
-	stdin                        io.Reader
-	stdout                       io.Writer
-	sessionStore                 *gorm.SessionStore
-	collectionRegistry           *collections.Registry
-	sessionIdxStore              *sessions.Store
-	documentStore                *gorm.DocumentStore
-	versionedDocumentStore       *gorm.VersionedDocumentStore
-	chunkManager                 *chunking.Manager
-	issueStore                   *gorm.IssueStore
-	embeddingClient              *embedding.Client
-	embeddingStore               *embedding.Store
-	rerankClient                 *reranking.Client
-	memoryStore                  *gorm.MemoryStore
-	metaMemoryIndex              metaMemoryIndex
-	stateStore                   statePlane
-	experienceProvider           experienceProvider
-	temporalTruthProvider        temporalTruthProvider
-	directiveCaptureService      directiveCaptureService
-	principalMemoryQuerySvc      principalMemoryQueryService
-	domainRegistryService        domainRegistryService
-	behavioralRulesStore         *gorm.BehavioralRulesStore
-	promotionStore               *gorm.PromotionStore
-	graphStore                   *graph.Store
-	nodesStore                   nodesStoreAPI // T014: Milestone F TG2 add_node action (*graph.NodesStore satisfies this interface)
-	auditStore                   *gorm.AuditStore
-	purgeStore                   *gorm.PurgeStore
-	candidateStore               *gorm.CandidateStore      // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	snapshotStore                *gorm.SnapshotStore       // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	reviewLoopCandidateStoreSeam reviewLoopCandidateLister // CR-008 test seam for review metrics/queue reads
-	codeChunkStore               *gorm.CodeChunkStore      // CR-006: non-nil when ENGRAM_CODE_INTEL_ENABLED=true
-	ruleGovernanceStore          ruleGovernanceCandidateWriter
-	ruleGovernanceReadStore      ruleGovernanceReadStore
-	ruleInjectionTelemetry       ruleInjectionTelemetryReader
-	settingsStoreWired           *gorm.SettingsStore // #259 CR-3: wired from the worker's open store so the settings tool reuses one pool (no per-call NewStore)
-	bulkFacade                   *bulkops.Facade     // Milestone-F TG6 T044: bulk_promote/delete/supersede with dry-run
-	testAuditWriter              auditWriter         // set only in tests via setTestAuditWriter
-	testMemoryEditor             memoryEditor        // set only in tests via setTestMemoryEditor
-	vault                        *crypto.Vault
-	vaultInitErr                 error
-	vaultOnce                    sync.Once
-	backfillStatusFunc           func() (any, error)
-	writeLint                    *writelint.Orchestrator  // T035: two-phase write-lint protocol (nil → legacy path)
-	redactionRules               []redaction.CompiledRule // T036: operator scrub layer, loaded once at startup
-	statsDB                      *gormlib.DB              // raw DB handle for stats raw-SQL queries; set via SetStatsDB
-	version                      string
+	stdin                         io.Reader
+	stdout                        io.Writer
+	sessionStore                  *gorm.SessionStore
+	collectionRegistry            *collections.Registry
+	sessionIdxStore               *sessions.Store
+	documentStore                 *gorm.DocumentStore
+	versionedDocumentStore        *gorm.VersionedDocumentStore
+	chunkManager                  *chunking.Manager
+	issueStore                    *gorm.IssueStore
+	embeddingClient               *embedding.Client
+	embeddingStore                *embedding.Store
+	rerankClient                  *reranking.Client
+	memoryStore                   *gorm.MemoryStore
+	metaMemoryIndex               metaMemoryIndex
+	stateStore                    statePlane
+	experienceProvider            experienceProvider
+	temporalTruthProvider         temporalTruthProvider
+	directiveCaptureService       directiveCaptureService
+	principalMemoryQuerySvc       principalMemoryQueryService
+	domainRegistryService         domainRegistryService
+	behavioralRulesStore          *gorm.BehavioralRulesStore
+	promotionStore                *gorm.PromotionStore
+	graphStore                    *graph.Store
+	nodesStore                    nodesStoreAPI // T014: Milestone F TG2 add_node action (*graph.NodesStore satisfies this interface)
+	auditStore                    *gorm.AuditStore
+	purgeStore                    *gorm.PurgeStore
+	candidateStore                *gorm.CandidateStore      // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	snapshotStore                 *gorm.SnapshotStore       // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	reviewLoopCandidateStoreSeam  reviewLoopCandidateLister // CR-008 test seam for review metrics/queue reads
+	codeChunkStore                *gorm.CodeChunkStore      // CR-006: non-nil when ENGRAM_CODE_INTEL_ENABLED=true
+	ruleGovernanceStore           ruleGovernanceCandidateWriter
+	ruleGovernanceReadStore       ruleGovernanceReadStore
+	ruleInjectionTelemetry        ruleInjectionTelemetryReader
+	settingsStoreWired            *gorm.SettingsStore       // #259 CR-3: wired from the worker's open store so the settings tool reuses one pool (no per-call NewStore)
+	bulkFacade                    *bulkops.Facade           // Milestone-F TG6 T044: bulk_promote/delete/supersede with dry-run
+	testAuditWriter               auditWriter               // set only in tests via setTestAuditWriter
+	testMemoryEditor              memoryEditor              // set only in tests via setTestMemoryEditor
+	testMemorySignificanceUpdater memorySignificanceUpdater // set only in tests via setTestMemorySignificanceUpdater
+	vault                         *crypto.Vault
+	vaultInitErr                  error
+	vaultOnce                     sync.Once
+	backfillStatusFunc            func() (any, error)
+	writeLint                     *writelint.Orchestrator  // T035: two-phase write-lint protocol (nil → legacy path)
+	redactionRules                []redaction.CompiledRule // T036: operator scrub layer, loaded once at startup
+	statsDB                       *gormlib.DB              // raw DB handle for stats raw-SQL queries; set via SetStatsDB
+	version                       string
 }
 
 type ruleGovernanceCandidateWriter interface {
@@ -237,6 +238,12 @@ func (s *Server) setTestAuditWriter(w auditWriter) {
 // Must only be called from _test.go files.
 func (s *Server) setTestMemoryEditor(me memoryEditor) {
 	s.testMemoryEditor = me
+}
+
+// setTestMemorySignificanceUpdater injects a mock memorySignificanceUpdater for unit tests.
+// Must only be called from _test.go files.
+func (s *Server) setTestMemorySignificanceUpdater(msu memorySignificanceUpdater) {
+	s.testMemorySignificanceUpdater = msu
 }
 
 // SetWriteLintOrchestrator wires the write-lint orchestrator for the two-phase
@@ -1107,6 +1114,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 		)
 	}
+	if s6OutcomeEnabledFromEnv() && s.effectiveMemorySignificanceUpdater() != nil {
+		tools = append(tools, rateMemorySignificanceTool())
+	}
 	if s2MetaMemoryEnabled() && s.metaMemoryIndex != nil {
 		tools = append(tools, knowAboutTool())
 	}
@@ -1762,6 +1772,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleRememberDirective(ctx, args)
 	case "rate_memory":
 		return s.handleRateMemory(ctx, args)
+	case "rate_memory_significance":
+		return s.handleRateMemorySignificance(ctx, args)
 	case "suppress_memory":
 		return s.handleSuppressMemory(ctx, args)
 	case "set_session_outcome":
