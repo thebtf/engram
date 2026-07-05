@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/cognitive/s1state"
 	"github.com/thebtf/engram/internal/cognitive/s2meta"
+	"github.com/thebtf/engram/internal/cognitive/s3ambient"
 	"github.com/thebtf/engram/internal/cognitive/s4directives"
 	"github.com/thebtf/engram/internal/cognitive/s5"
 	"github.com/thebtf/engram/internal/cognitive/s6"
@@ -1159,6 +1161,127 @@ func TestPlatformWiring_T005_S6FlagMatrixControlsOutcomeProposerAndSiblings(t *t
 			}
 		})
 	}
+}
+
+func TestPlatformWiring_T011_S3FlagMatrixControlsEmitterRouteAndSiblings(t *testing.T) {
+	tests := []struct {
+		name               string
+		masterFlag         string
+		s2Flag             string
+		s3Flag             string
+		wantCandidateNames []string
+		wantEmitterNames   []string
+		wantRouteStatus    int
+	}{
+		{
+			name:               "master disabled suppresses s3 even when s3 flag is set",
+			masterFlag:         "false",
+			s2Flag:             "false",
+			wantRouteStatus:    http.StatusMethodNotAllowed,
+			wantCandidateNames: []string{},
+			wantEmitterNames:   []string{},
+		},
+		{
+			name:               "s3 disabled keeps candidate noop fallback and hides route",
+			masterFlag:         "true",
+			wantRouteStatus:    http.StatusMethodNotAllowed,
+			s3Flag:             "false",
+			wantCandidateNames: []string{"core.noop.candidate_proposer"},
+			wantEmitterNames:   []string{},
+		},
+		{
+			name:               "master and s3 enabled register exactly one real emitter with s2 noop fallback",
+			masterFlag:         "true",
+			s2Flag:             "false",
+			s3Flag:             "true",
+			wantCandidateNames: []string{"core.noop.candidate_proposer"},
+			wantEmitterNames:   []string{"engram.s3.ambient"},
+			wantRouteStatus:    http.StatusServiceUnavailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newServiceWithV7FlagEnv(t, map[string]string{
+				"ENGRAM_V7_PLUG_ENABLED":             tt.masterFlag,
+				"ENGRAM_V7_S1_STATE":                 "false",
+				"ENGRAM_V7_S2_METAMEM":               tt.s2Flag,
+				"ENGRAM_V7_S3_AMBIENT":               tt.s3Flag,
+				"ENGRAM_V7_S4A_DIRECTIVES_CAPTURE":   "false",
+				"ENGRAM_V7_S4B_DIRECTIVES_SURFACING": "false",
+				"ENGRAM_V7_S5_TELEMETRY":             "false",
+				"ENGRAM_V7_S6_OUTCOME":               "false",
+			})
+
+			resolver, ok := svc.cognitiveRegistry.(interface {
+				ResolveImpls(interfaceName string) []core.Subsystem
+			})
+			if !ok {
+				t.Fatalf("registry does not expose ResolveImpls")
+			}
+
+			if got := namesOfSubsystems(resolver.ResolveImpls("CandidateProposer")); !reflect.DeepEqual(got, tt.wantCandidateNames) {
+				t.Fatalf("ResolveImpls(CandidateProposer) = %v, want %v", got, tt.wantCandidateNames)
+			}
+			if got := namesOfSubsystems(resolver.ResolveImpls("HintEmitter")); !reflect.DeepEqual(got, tt.wantEmitterNames) {
+				t.Fatalf("ResolveImpls(HintEmitter) = %v, want %v", got, tt.wantEmitterNames)
+			}
+			for _, iface := range []string{"StateWriter", "AttentionEventWriter", "DirectiveDistiller", "ProductMetricsProvider"} {
+				if got := resolver.ResolveImpls(iface); len(got) != 0 {
+					t.Fatalf("ResolveImpls(%s) = %v, want no sibling milestone activation from S3 flags", iface, namesOfSubsystems(got))
+				}
+			}
+
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/hooks/ambient-candidates", strings.NewReader(`{}`))
+			r.Header.Set("Content-Type", "application/json")
+			svc.router.ServeHTTP(w, r)
+			require.Equal(t, tt.wantRouteStatus, w.Code, "ambient route exposure must track the S3 flag boundary")
+		})
+	}
+}
+
+func TestPlatformWiring_T014_AmbientRouteDoesNotRequireAdaptiveSegmentSupport(t *testing.T) {
+	t.Setenv("ENGRAM_ADAPTIVE_ENABLED", "false")
+	svc := newServiceWithV7FlagEnv(t, map[string]string{
+		"ENGRAM_V7_PLUG_ENABLED":             "true",
+		"ENGRAM_V7_S1_STATE":                 "false",
+		"ENGRAM_V7_S2_METAMEM":               "false",
+		"ENGRAM_V7_S3_AMBIENT":               "true",
+		"ENGRAM_V7_S4A_DIRECTIVES_CAPTURE":   "false",
+		"ENGRAM_V7_S4B_DIRECTIVES_SURFACING": "false",
+		"ENGRAM_V7_S5_TELEMETRY":             "false",
+		"ENGRAM_V7_S6_OUTCOME":               "false",
+	})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/hooks/ambient-candidates", strings.NewReader(`{}`))
+	r.Header.Set("Content-Type", "application/json")
+	svc.router.ServeHTTP(w, r)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code, "ambient route must still be registered even when adaptive segment support is disabled")
+}
+
+func TestRegisterS3AmbientSubsystemRejectsTypedNilEmitter(t *testing.T) {
+	registry := core.NewRegistry()
+	if err := core.RegisterNoOps(registry); err != nil {
+		t.Fatalf("RegisterNoOps: %v", err)
+	}
+
+	var emitter *s3ambient.Emitter
+	err := registerS3AmbientSubsystem(registry, emitter)
+	require.ErrorIs(t, err, s3ambient.ErrNoEmitter)
+}
+
+func TestRegisterS3AmbientSubsystemRejectsDuplicateRegistration(t *testing.T) {
+	registry := core.NewRegistry()
+	if err := core.RegisterNoOps(registry); err != nil {
+		t.Fatalf("RegisterNoOps: %v", err)
+	}
+
+	require.NoError(t, registerS3AmbientSubsystem(registry, s3ambient.NewEmitter(true)))
+	err := registerS3AmbientSubsystem(registry, s3ambient.NewEmitter(true))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already registered")
 }
 
 func namesOfSubsystems(impls []core.Subsystem) []string {
