@@ -1114,7 +1114,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 		)
 	}
-	if s.effectiveMemorySignificanceUpdater() != nil {
+	if s6OutcomeEnabledFromEnv() && s.effectiveMemorySignificanceUpdater() != nil {
 		tools = append(tools, rateMemorySignificanceTool())
 	}
 	if s2MetaMemoryEnabled() && s.metaMemoryIndex != nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/cognitive/s6"
 )
 
@@ -23,11 +24,26 @@ func newMemoryEditorSignificanceUpdater(editor memoryEditor) memorySignificanceU
 	return &memoryEditorSignificanceUpdater{editor: editor}
 }
 
+func s6OutcomeEnabledFromEnv() bool {
+	return cognitivecore.LoadFlagConfigFromEnv().IsSubsystemEnabled("s6")
+}
+
 func (s *Server) effectiveMemorySignificanceUpdater() memorySignificanceUpdater {
 	if s.testMemorySignificanceUpdater != nil {
 		return s.testMemorySignificanceUpdater
 	}
 	return newMemoryEditorSignificanceUpdater(s.effectiveMemoryEditor())
+}
+
+func (s *Server) currentMemorySignificanceUpdater() (memorySignificanceUpdater, error) {
+	if !s6OutcomeEnabledFromEnv() {
+		return nil, fmt.Errorf("rate_memory_significance feature flag required")
+	}
+	updater := s.effectiveMemorySignificanceUpdater()
+	if updater == nil {
+		return nil, fmt.Errorf("memory significance updater not available")
+	}
+	return updater, nil
 }
 
 func rateMemorySignificanceTool() Tool {
@@ -50,9 +66,9 @@ func (s *Server) handleRateMemorySignificance(ctx context.Context, args json.Raw
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	updater := s.effectiveMemorySignificanceUpdater()
-	if updater == nil {
-		return "", fmt.Errorf("memory significance updater not available")
+	updater, err := s.currentMemorySignificanceUpdater()
+	if err != nil {
+		return "", err
 	}
 
 	m, err := parseArgs(args)

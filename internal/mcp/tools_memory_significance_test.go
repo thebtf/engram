@@ -24,8 +24,48 @@ func (f *fakeMemorySignificanceUpdater) RateMemorySignificance(_ context.Context
 	return f.err
 }
 
+func setS6OutcomeFlags(t *testing.T, masterEnabled, s6Enabled bool) {
+	t.Helper()
+	if masterEnabled {
+		t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
+	} else {
+		t.Setenv("ENGRAM_V7_PLUG_ENABLED", "false")
+	}
+	if s6Enabled {
+		t.Setenv("ENGRAM_V7_S6_OUTCOME", "true")
+	} else {
+		t.Setenv("ENGRAM_V7_S6_OUTCOME", "false")
+	}
+}
+
+func TestRateMemorySignificanceToolAdvertisedOnlyWhenS6FlagAndUpdaterArePresent(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		masterEnabled bool
+		s6Enabled     bool
+		withUpdater   bool
+		wantTool      bool
+	}{
+		{name: "master off s6 on updater present", masterEnabled: false, s6Enabled: true, withUpdater: true, wantTool: false},
+		{name: "master on s6 off updater present", masterEnabled: true, s6Enabled: false, withUpdater: true, wantTool: false},
+		{name: "master on s6 on updater missing", masterEnabled: true, s6Enabled: true, withUpdater: false, wantTool: false},
+		{name: "master on s6 on updater present", masterEnabled: true, s6Enabled: true, withUpdater: true, wantTool: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setS6OutcomeFlags(t, tc.masterEnabled, tc.s6Enabled)
+			srv := NewServer(ServerOptions{Version: "s6-red-test"})
+			if tc.withUpdater {
+				srv.setTestMemorySignificanceUpdater(&fakeMemorySignificanceUpdater{})
+			}
+
+			names := listedToolNames(srv.ListTools())
+			require.Equal(t, tc.wantTool, names["rate_memory_significance"])
+		})
+	}
+}
+
 func TestRateMemorySignificanceToolAdvertisedWithDedicatedSchema(t *testing.T) {
-	t.Parallel()
+	setS6OutcomeFlags(t, true, true)
 
 	srv := NewServer(ServerOptions{Version: "s6-red-test"})
 	srv.setTestMemorySignificanceUpdater(&fakeMemorySignificanceUpdater{})
@@ -56,8 +96,6 @@ func TestRateMemorySignificanceToolAdvertisedWithDedicatedSchema(t *testing.T) {
 }
 
 func TestRateMemorySignificanceToolCallUpdatesLearningForUsefulAndNotUseful(t *testing.T) {
-	t.Parallel()
-
 	for _, tc := range []struct {
 		name   string
 		rating string
@@ -66,7 +104,7 @@ func TestRateMemorySignificanceToolCallUpdatesLearningForUsefulAndNotUseful(t *t
 		{name: "not useful", rating: "not_useful"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+			setS6OutcomeFlags(t, true, true)
 
 			updater := &fakeMemorySignificanceUpdater{}
 			srv := NewServer(ServerOptions{Version: "s6-red-test"})
@@ -90,9 +128,34 @@ func TestRateMemorySignificanceToolCallUpdatesLearningForUsefulAndNotUseful(t *t
 	}
 }
 
-func TestRateMemorySignificanceRejectsInvalidIDWithoutWrite(t *testing.T) {
-	t.Parallel()
+func TestRateMemorySignificanceDirectCallFailsClosedWhenS6Disabled(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		masterEnabled bool
+		s6Enabled     bool
+	}{
+		{name: "master off s6 on updater present", masterEnabled: false, s6Enabled: true},
+		{name: "master on s6 off updater present", masterEnabled: true, s6Enabled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setS6OutcomeFlags(t, tc.masterEnabled, tc.s6Enabled)
 
+			updater := &fakeMemorySignificanceUpdater{}
+			srv := NewServer(ServerOptions{Version: "s6-red-test"})
+			srv.setTestMemorySignificanceUpdater(updater)
+
+			_, err := srv.callTool(context.Background(), "rate_memory_significance", mustJSON(t, map[string]any{
+				"id":     42,
+				"rating": "useful",
+			}))
+
+			require.ErrorContains(t, err, "rate_memory_significance feature flag required")
+			assert.Empty(t, updater.calls, "disabled S6 flag states must fail before any learning update")
+		})
+	}
+}
+
+func TestRateMemorySignificanceRejectsInvalidIDWithoutWrite(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -102,7 +165,7 @@ func TestRateMemorySignificanceRejectsInvalidIDWithoutWrite(t *testing.T) {
 		{name: "negative id", args: map[string]any{"id": -7, "rating": "useful"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+			setS6OutcomeFlags(t, true, true)
 
 			updater := &fakeMemorySignificanceUpdater{}
 			srv := NewServer(ServerOptions{Version: "s6-red-test"})
@@ -118,8 +181,6 @@ func TestRateMemorySignificanceRejectsInvalidIDWithoutWrite(t *testing.T) {
 }
 
 func TestRateMemorySignificanceRejectsInvalidRatingWithoutWrite(t *testing.T) {
-	t.Parallel()
-
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -129,7 +190,7 @@ func TestRateMemorySignificanceRejectsInvalidRatingWithoutWrite(t *testing.T) {
 		{name: "empty rating", args: map[string]any{"id": 42, "rating": ""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+			setS6OutcomeFlags(t, true, true)
 
 			updater := &fakeMemorySignificanceUpdater{}
 			srv := NewServer(ServerOptions{Version: "s6-red-test"})
@@ -145,7 +206,7 @@ func TestRateMemorySignificanceRejectsInvalidRatingWithoutWrite(t *testing.T) {
 }
 
 func TestRateMemorySignificanceMissingUpdaterFailsExplicitly(t *testing.T) {
-	t.Parallel()
+	setS6OutcomeFlags(t, true, true)
 
 	srv := NewServer(ServerOptions{Version: "s6-red-test"})
 
@@ -159,8 +220,6 @@ func TestRateMemorySignificanceMissingUpdaterFailsExplicitly(t *testing.T) {
 }
 
 func TestRateMemorySignificanceLegacyRatePathsRemainUnsupported(t *testing.T) {
-	t.Parallel()
-
 	for _, tc := range []struct {
 		name string
 		tool string
@@ -178,7 +237,7 @@ func TestRateMemorySignificanceLegacyRatePathsRemainUnsupported(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+			setS6OutcomeFlags(t, true, true)
 
 			updater := &fakeMemorySignificanceUpdater{}
 			srv := NewServer(ServerOptions{Version: "s6-red-test"})
