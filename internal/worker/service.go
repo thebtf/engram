@@ -34,6 +34,7 @@ import (
 	"github.com/thebtf/engram/internal/cognitive/s1state"
 	"github.com/thebtf/engram/internal/cognitive/s2meta"
 	"github.com/thebtf/engram/internal/cognitive/s4directives"
+	"github.com/thebtf/engram/internal/cognitive/s5"
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
@@ -375,6 +376,40 @@ func registerS4ADirectivesSubsystem(registry cognitivecore.SubsystemRegistry, se
 	return nil
 }
 
+func shouldRegisterRealS5ProductMetrics(flagCfg cognitivecore.FlagConfig) bool {
+	return flagCfg.IsPlugEnabled() && flagCfg.IsSubsystemEnabled("s5")
+}
+
+func hasEffectiveProductMetricsProvider(provider cognitivecore.ProductMetricsProvider) bool {
+	if provider == nil {
+		return false
+	}
+	value := reflect.ValueOf(provider)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return !value.IsNil()
+	default:
+		return true
+	}
+}
+
+func registerS5ProductMetricsSubsystem(registry cognitivecore.SubsystemRegistry, provider cognitivecore.ProductMetricsProvider) error {
+	if !hasEffectiveProductMetricsProvider(provider) {
+		return fmt.Errorf("s5 product metrics provider not configured")
+	}
+	subsystem, ok := provider.(cognitivecore.Subsystem)
+	if !ok {
+		return fmt.Errorf("registered ProductMetricsProvider does not satisfy core.Subsystem")
+	}
+	if err := registry.Register(subsystem); err != nil {
+		return err
+	}
+	if err := registry.Enable(subsystem.Name()); err != nil {
+		return err
+	}
+	return nil
+}
+
 // evictStalePrompts removes prompt cache entries older than 2 hours.
 func (s *Service) evictStalePrompts() {
 	cutoff := time.Now().Add(-2 * time.Hour)
@@ -559,6 +594,12 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 					return nil, fmt.Errorf("enable %s (for subsystem %s): %w", noopName, subName, err)
 				}
 			}
+		}
+	}
+	if shouldRegisterRealS5ProductMetrics(flagCfg) {
+		if err := registerS5ProductMetricsSubsystem(cRegistry, s5.NewProvider(s5.Dependencies{})); err != nil {
+			cancel()
+			return nil, fmt.Errorf("register real s5 product metrics provider: %w", err)
 		}
 	}
 

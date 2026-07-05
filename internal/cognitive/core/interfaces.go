@@ -280,12 +280,21 @@ type ProductMetricsWindow struct {
 	Until time.Time
 }
 
+// ProductMetricReadiness is generic readiness evidence for one product metric.
+// CORE owns only the shape; S5 owns the state vocabulary and threshold policy.
+type ProductMetricReadiness struct {
+	SampleN    uint64
+	ThresholdN uint64
+	State      string
+}
+
 // ProductMetricsSnapshot carries the aggregated product metric values for a
-// window. Metrics keys follow the canonical ADR-008 names; SampleN is the
-// observation count that contributed to the snapshot, available for
-// downstream confidence reporting.
+// window. Metrics keys follow the canonical ADR-008 names; SampleN is a
+// backward-compatible summary field, while Readiness carries per-metric sample
+// evidence for honest no-sample and below-threshold reporting.
 type ProductMetricsSnapshot struct {
-	Window  ProductMetricsWindow
-	Metrics map[string]float64
-	SampleN uint64
+	Window    ProductMetricsWindow
+	Metrics   map[string]float64
+	SampleN   uint64
+	Readiness map[string]ProductMetricReadiness
 }

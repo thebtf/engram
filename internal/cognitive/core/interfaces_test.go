@@ -23,7 +23,7 @@ var forbiddenCoreInternalIdents = map[string]struct{}{
 	"AttentionEventBus": {},
 	"HintQueue":         {},
 	"SubsystemMeter":    {},
-	// 8 named DTOs / supporting interface
+	// 9 named DTOs / supporting interface
 	"SubsystemInfo":          {},
 	"SubsystemHealth":        {},
 	"MetricsSnapshot":        {},
@@ -31,6 +31,7 @@ var forbiddenCoreInternalIdents = map[string]struct{}{
 	"QueueStats":             {},
 	"ProductMetricsProvider": {},
 	"ProductMetricsWindow":   {},
+	"ProductMetricReadiness": {},
 	"ProductMetricsSnapshot": {},
 	// Supporting types declared in ADR-010 alongside the interfaces; also
 	// must not leak across the package boundary.
