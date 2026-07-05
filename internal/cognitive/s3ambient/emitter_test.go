@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -60,6 +61,26 @@ func TestS3AmbientEmitter_MCPPollReturnsStructuredTopThreeHints(t *testing.T) {
 	require.LessOrEqual(t, len(delivery.Hints[2].Reason), 120, "structured MCP hints must bound reason length just like user-prompt delivery")
 	require.NotContains(t, delivery.Hints[2].Title, longTitle)
 	require.NotContains(t, delivery.Hints[2].Reason, longReason)
+}
+
+func TestS3AmbientEmitter_TruncatesMultibyteTextOnUTF8Boundaries(t *testing.T) {
+	longTitle := strings.Repeat("😀", 81)
+	longReason := strings.Repeat("🧠", 121)
+	hints := []cognitive.HintProposal{{
+		ID: "unicode", Title: longTitle, Reason: longReason, Score: 0.91, Source: "s2.meta_index", CreatedAt: time.Unix(1700030200, 0).UTC(),
+	}}
+
+	emitter := NewEmitter(true)
+	delivery, err := emitter.Render(context.Background(), cognitive.HintSurfaceMCPPoll, "session-s3-unicode", hints)
+
+	require.NoError(t, err)
+	require.Len(t, delivery.Hints, 1)
+	require.True(t, utf8.ValidString(delivery.Hints[0].Title), "truncated multi-byte title must remain valid UTF-8; got %q", delivery.Hints[0].Title)
+	require.True(t, utf8.ValidString(delivery.Hints[0].Reason), "truncated multi-byte reason must remain valid UTF-8; got %q", delivery.Hints[0].Reason)
+	require.NotContains(t, delivery.Hints[0].Title, string(utf8.RuneError), "truncated title must not contain Unicode replacement characters")
+	require.NotContains(t, delivery.Hints[0].Reason, string(utf8.RuneError), "truncated reason must not contain Unicode replacement characters")
+	require.NotEqual(t, utf8.RuneError, []rune(delivery.Hints[0].Title)[len([]rune(delivery.Hints[0].Title))-1], "truncated title must not end with the Unicode replacement character")
+	require.NotEqual(t, utf8.RuneError, []rune(delivery.Hints[0].Reason)[len([]rune(delivery.Hints[0].Reason))-1], "truncated reason must not end with the Unicode replacement character")
 }
 
 func TestS3AmbientEmitter_DisabledOrEmptyIsNoOp(t *testing.T) {

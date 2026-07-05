@@ -150,6 +150,22 @@ func TestS3AmbientFusion_RRFTopThreeAcrossEnabledProposers(t *testing.T) {
 	require.Equal(t, []string{"2", "1", "4"}, proposalIDs(proposals), "S3 must reciprocal-rank-fuse enabled proposer results and keep only the top three hints")
 }
 
+func TestS3AmbientFusion_RRFClonesWinningProposalTags(t *testing.T) {
+	proposerOwnedBacking := []string{"tag:owned", "source:s2", "owned-tail"}
+	proposerTags := proposerOwnedBacking[:2]
+	fused := reciprocalRankFuse([][]cognitive.HintProposal{{
+		{ID: "shared", Title: "winning hint", Score: 0.9, Source: "s2.meta_index", Tags: proposerTags},
+	}}, 3)
+
+	require.Len(t, fused, 1)
+	require.Equal(t, []string{"tag:owned", "source:s2"}, fused[0].Tags)
+
+	fused[0].Tags[0] = "tag:mutated-by-consumer"
+	fused[0].Tags = append(fused[0].Tags, "tag:fused-only")
+
+	require.Equal(t, []string{"tag:owned", "source:s2", "owned-tail"}, proposerOwnedBacking, "mutating fused proposal tags must not write through to proposer-owned tag slices or spare backing capacity")
+}
+
 func TestS3AmbientFusion_DeadlineExpiredBeforeFanoutReturnsContextError(t *testing.T) {
 	proposer := &recordingCandidateProposer{proposals: []cognitive.HintProposal{{ID: "late", Title: "late hint", Source: "s2.meta_index"}}}
 	fusion := NewFusion(true, []cognitive.CandidateProposer{proposer})

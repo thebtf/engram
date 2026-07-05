@@ -200,3 +200,47 @@ test('both endpoints unavailable still fail open to empty output', async () => {
     lib.requestPost = originalRequestPost;
   }
 });
+
+function hasLoneSurrogate(value) {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      i += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+test('formats multi-byte ambient hints without splitting code points during truncation', async () => {
+  const originalRequestPost = lib.requestPost;
+  lib.requestPost = async (endpoint) => {
+    if (endpoint === '/api/hooks/segment-check') {
+      return {};
+    }
+    if (endpoint === '/api/hooks/ambient-candidates') {
+      return {
+        hints: [
+          makeHint('unicode', '😀'.repeat(81), '🧠'.repeat(121), 0.91),
+        ],
+      };
+    }
+    throw new Error(`unexpected endpoint ${endpoint}`);
+  };
+
+  try {
+    const result = await userPrompt.handleUserPrompt(
+      { Project: 'engram', SessionID: 'session-hook-unicode' },
+      { user_message: 'Unicode ambient hints must truncate safely' },
+    );
+
+    assert.match(result, /Memory suggests \(you may ignore\)/);
+    assert.equal(hasLoneSurrogate(result), false, 'formatted hints must not contain split surrogate pairs after truncating multi-byte text');
+    assert.equal(Buffer.from(result, 'utf8').includes(Buffer.from('\uFFFD', 'utf8')), false, 'formatted UTF-8 output must not emit Unicode replacement characters');
+  } finally {
+    lib.requestPost = originalRequestPost;
+  }
+});

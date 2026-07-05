@@ -34,18 +34,20 @@ function normalizeInlineWhitespace(value) {
   return String(value || '').trim().split(/\s+/).filter(Boolean).join(' ');
 }
 
-function truncateASCII(value, limit) {
+function truncateText(value, limit) {
   if (limit <= 0) return '';
   if (value.length <= limit) return value;
-  if (limit <= 3) return value.slice(0, limit);
-  return `${value.slice(0, limit - 3)}...`;
+  const codePoints = Array.from(value);
+  if (codePoints.length <= limit) return value;
+  if (limit <= 3) return codePoints.slice(0, limit).join('');
+  return `${codePoints.slice(0, limit - 3).join('')}...`;
 }
 
 function sanitizeAmbientHint(hint) {
   if (!hint || typeof hint !== 'object' || Array.isArray(hint)) return null;
-  const title = truncateASCII(normalizeInlineWhitespace(hint.title), 80);
+  const title = truncateText(normalizeInlineWhitespace(hint.title), 80);
   if (!title) return null;
-  const reason = truncateASCII(normalizeInlineWhitespace(hint.reason), 120);
+  const reason = truncateText(normalizeInlineWhitespace(hint.reason), 120);
   const source = normalizeInlineWhitespace(hint.source);
   const score = Number(hint.score);
   return {

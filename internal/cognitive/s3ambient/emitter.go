@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/thebtf/engram/pkg/cognitive"
 )
@@ -75,13 +76,13 @@ func sanitizeHintProposal(hint cognitive.HintProposal) (cognitive.HintProposal, 
 	if hint.ID == "" {
 		return cognitive.HintProposal{}, false
 	}
-	title := truncateASCII(normalizeInlineWhitespace(hint.Title), maxTitleChars)
+	title := truncateText(normalizeInlineWhitespace(hint.Title), maxTitleChars)
 	if title == "" {
 		return cognitive.HintProposal{}, false
 	}
 	copyHint := hint
 	copyHint.Title = title
-	copyHint.Reason = truncateASCII(normalizeInlineWhitespace(hint.Reason), maxReasonChars)
+	copyHint.Reason = truncateText(normalizeInlineWhitespace(hint.Reason), maxReasonChars)
 	copyHint.Tags = append([]string(nil), hint.Tags...)
 	return copyHint, true
 }
@@ -113,15 +114,29 @@ func normalizeInlineWhitespace(value string) string {
 	return strings.Join(strings.Fields(value), " ")
 }
 
-func truncateASCII(value string, limit int) string {
+func truncateText(value string, limit int) string {
 	if limit <= 0 {
 		return ""
 	}
-	if len(value) <= limit {
+	if len(value) <= limit || utf8.RuneCountInString(value) <= limit {
 		return value
 	}
 	if limit <= 3 {
-		return value[:limit]
+		return firstRunes(value, limit)
 	}
-	return value[:limit-3] + "..."
+	return firstRunes(value, limit-3) + "..."
+}
+
+func firstRunes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	count := 0
+	for idx := range value {
+		if count == limit {
+			return value[:idx]
+		}
+		count++
+	}
+	return value
 }

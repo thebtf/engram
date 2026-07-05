@@ -118,7 +118,7 @@ func reciprocalRankFuse(lists [][]cognitive.HintProposal, limit int) []cognitive
 			score := float32(1.0 / float64(rrfK+rank+1))
 			entry, ok := seen[proposal.ID]
 			if !ok {
-				copyProposal := proposal
+				copyProposal := cloneHintProposal(proposal)
 				seen[proposal.ID] = &fusedProposal{
 					proposal:  copyProposal,
 					fused:     score,
@@ -130,7 +130,7 @@ func reciprocalRankFuse(lists [][]cognitive.HintProposal, limit int) []cognitive
 			}
 			entry.fused += score
 			if rank < entry.bestRank || (rank == entry.bestRank && proposal.Score > entry.proposal.Score) {
-				entry.proposal = proposal
+				entry.proposal = cloneHintProposal(proposal)
 				entry.bestRank = rank
 			}
 		}
@@ -161,6 +161,11 @@ func reciprocalRankFuse(lists [][]cognitive.HintProposal, limit int) []cognitive
 		out = append(out, proposal.proposal)
 	}
 	return out
+}
+
+func cloneHintProposal(proposal cognitive.HintProposal) cognitive.HintProposal {
+	proposal.Tags = append([]string(nil), proposal.Tags...)
+	return proposal
 }
 
 func normalizeHintLimit(limit int) int {
