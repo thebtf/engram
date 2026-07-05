@@ -33,6 +33,7 @@ import (
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/cognitive/s1state"
 	"github.com/thebtf/engram/internal/cognitive/s2meta"
+	"github.com/thebtf/engram/internal/cognitive/s3ambient"
 	"github.com/thebtf/engram/internal/cognitive/s4directives"
 	"github.com/thebtf/engram/internal/cognitive/s5"
 	"github.com/thebtf/engram/internal/cognitive/s6"
@@ -353,6 +354,40 @@ func registerS2CandidateProposerSubsystem(registry cognitivecore.SubsystemRegist
 	return nil
 }
 
+func shouldRegisterRealS3Ambient(flagCfg cognitivecore.FlagConfig) bool {
+	return flagCfg.IsPlugEnabled() && flagCfg.IsSubsystemEnabled("s3")
+}
+
+func hasEffectiveHintEmitter(emitter cognitive.HintEmitter) bool {
+	if emitter == nil {
+		return false
+	}
+	value := reflect.ValueOf(emitter)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return !value.IsNil()
+	default:
+		return true
+	}
+}
+
+func registerS3AmbientSubsystem(registry cognitivecore.SubsystemRegistry, emitter cognitive.HintEmitter) error {
+	if !hasEffectiveHintEmitter(emitter) {
+		return s3ambient.ErrNoEmitter
+	}
+	subsystem := s3ambient.NewSubsystem(emitter)
+	if err := registry.Register(subsystem); err != nil {
+		return err
+	}
+	if err := registry.Enable(subsystem.Name()); err != nil {
+		return err
+	}
+	if err := registry.Disable("core.noop.hint_emitter"); err != nil {
+		return err
+	}
+	return nil
+}
+
 func shouldRegisterRealS4ADirectives(flagCfg cognitivecore.FlagConfig) bool {
 	return flagCfg.IsPlugEnabled() && flagCfg.IsSubsystemEnabled("s4a")
 }
@@ -629,6 +664,12 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		if err := registerS5ProductMetricsSubsystem(cRegistry, s5.NewProvider(s5.Dependencies{})); err != nil {
 			cancel()
 			return nil, fmt.Errorf("register real s5 product metrics provider: %w", err)
+		}
+	}
+	if shouldRegisterRealS3Ambient(flagCfg) {
+		if err := registerS3AmbientSubsystem(cRegistry, s3ambient.NewEmitter(true)); err != nil {
+			cancel()
+			return nil, fmt.Errorf("register real s3 ambient subsystem: %w", err)
 		}
 	}
 
@@ -996,6 +1037,9 @@ func (s *Service) initializeAsync() {
 	mcpServer.SetExperienceProvider(experienceProvider)
 	mcpServer.SetTemporalTruthProvider(temporalTruthProvider)
 	mcpServer.SetDirectiveCaptureService(directiveCaptureSvc)
+	if shouldRegisterRealS3Ambient(s.flagConfig) {
+		mcpServer.SetHintQueue(s.cognitiveQueue)
+	}
 
 	// Wire the raw DB handle so handleGetMemoryStats can run injection_log /
 	// citation_log / memories-by-status raw SQL queries. Uses the same shared
@@ -1592,6 +1636,9 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/hooks/correction", s.handleCorrection)
 		r.Post("/api/hooks/code-extraction", s.handleCodeExtraction)
 		r.Post("/api/hooks/segment-check", s.handleSegmentCheck)
+		if shouldRegisterRealS3Ambient(s.flagConfig) {
+			r.Post("/api/hooks/ambient-candidates", s.handleAmbientCandidates)
+		}
 
 		// Event ingest (Level 0 deterministic pipeline)
 		r.Post("/api/events/ingest", s.handleIngestEvent)

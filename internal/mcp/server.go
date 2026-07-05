@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/bulkops"
 	"github.com/thebtf/engram/internal/chunking"
+	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
@@ -47,6 +48,7 @@ type Server struct {
 	rerankClient                  *reranking.Client
 	memoryStore                   *gorm.MemoryStore
 	metaMemoryIndex               metaMemoryIndex
+	hintQueue                     cognitivecore.HintQueue
 	stateStore                    statePlane
 	experienceProvider            experienceProvider
 	temporalTruthProvider         temporalTruthProvider
@@ -158,6 +160,11 @@ func (s *Server) SetMemoryStore(ms *gorm.MemoryStore) {
 // SetMetaMemoryIndex wires the content-free S2 meta-memory query seam.
 func (s *Server) SetMetaMemoryIndex(idx metaMemoryIndex) {
 	s.metaMemoryIndex = idx
+}
+
+// SetHintQueue wires the CORE ambient hint queue for get_ambient_hints fallback polling.
+func (s *Server) SetHintQueue(queue cognitivecore.HintQueue) {
+	s.hintQueue = queue
 }
 
 // SetStateStore sets the native state-plane read/write store.
@@ -1222,6 +1229,11 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools, codebaseSearchTool())
 	}
 
+	// Ambient fallback polling — advertise only when the S3 flag is on and the queue seam is wired.
+	if ambientHintsEnabledFromEnv() && s.hintQueue != nil {
+		tools = append(tools, ambientHintsTool())
+	}
+
 	// Credential vault tools — advertise only when credential persistence and vault keying are actually available.
 	if config.GetDatabaseDSN() != "" && crypto.VaultExists(config.Get()) {
 		tools = append(tools,
@@ -1780,6 +1792,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleSetSessionOutcome(ctx, args)
 	case "get_memory_brief":
 		return s.handleGetMemoryBrief(ctx, args)
+	case "get_ambient_hints":
+		return s.handleGetAmbientHints(ctx, args)
 	// Crystallization candidate tools (Milestone-F TG4 T026).
 	case "list_candidates":
 		return s.handleListCandidates(ctx, args)
