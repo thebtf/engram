@@ -20,9 +20,11 @@ import (
 	"github.com/thebtf/engram/internal/cognitive/s2meta"
 	"github.com/thebtf/engram/internal/cognitive/s4directives"
 	"github.com/thebtf/engram/internal/cognitive/s5"
+	"github.com/thebtf/engram/internal/cognitive/s6"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/pkg/cognitive"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 // TestServiceFields_All4CoreAccessible reflects on the Service struct and
@@ -332,33 +334,11 @@ func TestPlatformWiring_FlagOff_NoOpsRegisteredButDisabled(t *testing.T) {
 	}
 }
 
-// activateFromFlags mirrors the NewService flag-gated CORE fallback activation.
-// CandidateProposer keeps a CORE NoOp enabled whenever the v7 master flag is on;
-// real S2 later registers and disables that fallback when ENGRAM_V7_S2_METAMEM is on.
-// The remaining NoOps stay per-subsystem gated.
+// activateFromFlags mirrors the shared worker flag-gated CORE fallback activation.
 func activateFromFlags(t *testing.T, registry core.SubsystemRegistry, cfg core.FlagConfig) {
 	t.Helper()
-	if !cfg.IsPlugEnabled() {
-		return
-	}
-	if err := registry.Enable("core.noop.candidate_proposer"); err != nil {
-		t.Fatalf("Enable(core.noop.candidate_proposer fallback): %v", err)
-	}
-	mapping := map[string][]string{
-		"s1":  {"core.noop.state_writer"},
-		"s2":  {"core.noop.candidate_proposer"},
-		"s3":  {"core.noop.hint_emitter"},
-		"s4a": {"core.noop.attention_event_writer", "core.noop.directive_distiller"},
-	}
-	for subName, noops := range mapping {
-		if !cfg.IsSubsystemEnabled(subName) {
-			continue
-		}
-		for _, n := range noops {
-			if err := registry.Enable(n); err != nil {
-				t.Fatalf("Enable(%s) for subsystem %s: %v", n, subName, err)
-			}
-		}
+	if err := enableFlaggedCoreNoOps(registry, cfg); err != nil {
+		t.Fatalf("enableFlaggedCoreNoOps: %v", err)
 	}
 }
 
@@ -1010,6 +990,176 @@ func TestProductStats_S5OnlyFlagsReturnProductSnapshotWithoutSiblingSubsystems(t
 	require.Len(t, snap.Readiness, len(s5.CanonicalMetricKeys()), "S5-only route must expose readiness for every canonical metric")
 	require.Equal(t, uint64(30), snap.Readiness[s5.MetricHintPrecision].ThresholdN, "production path must apply S5-owned hint_precision default threshold")
 	require.Equal(t, uint64(20), snap.Readiness[s5.MetricAcceptedHintAction].ThresholdN, "production path must apply S5-owned accepted_hint_action default threshold")
+}
+
+type fakeS6OutcomeStore struct {
+	queries  []fakeS6OutcomeQuery
+	memories []*models.Memory
+}
+
+type fakeS6OutcomeQuery struct {
+	project string
+	limit   int
+}
+
+var _ s6.OutcomeStore = (*fakeS6OutcomeStore)(nil)
+
+func (f *fakeS6OutcomeStore) ListOutcomeCandidates(ctx context.Context, project string, limit int) ([]*models.Memory, error) {
+	f.queries = append(f.queries, fakeS6OutcomeQuery{project: project, limit: limit})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return append([]*models.Memory(nil), f.memories...), nil
+}
+
+func TestShouldRegisterRealS6OutcomeProposer(t *testing.T) {
+	tests := []struct {
+		name string
+		plug string
+		s6   string
+		want bool
+	}{
+		{name: "master off s6 off", plug: "", s6: "", want: false},
+		{name: "master off s6 on", plug: "", s6: "true", want: false},
+		{name: "master on s6 off", plug: "true", s6: "", want: false},
+		{name: "master on s6 on", plug: "true", s6: "true", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENGRAM_V7_PLUG_ENABLED", tt.plug)
+			t.Setenv("ENGRAM_V7_S6_OUTCOME", tt.s6)
+
+			got := shouldRegisterRealS6OutcomeProposer(core.LoadFlagConfigFromEnv())
+			if got != tt.want {
+				t.Fatalf("shouldRegisterRealS6OutcomeProposer() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPlatformWiring_T005_S6FlagMatrixControlsOutcomeProposerAndSiblings(t *testing.T) {
+	tests := []struct {
+		name               string
+		masterFlag         string
+		s6Flag             string
+		wantRealRegistered bool
+		wantCandidateNames []string
+		wantRealProposal   bool
+	}{
+		{
+			name:               "master disabled suppresses real s6 even when s6 flag is set",
+			masterFlag:         "false",
+			s6Flag:             "true",
+			wantRealRegistered: false,
+			wantCandidateNames: []string{},
+		},
+		{
+			name:               "s6 disabled keeps core candidate noop fallback",
+			masterFlag:         "true",
+			s6Flag:             "false",
+			wantRealRegistered: false,
+			wantCandidateNames: []string{"core.noop.candidate_proposer"},
+		},
+		{
+			name:               "master and s6 enabled replace noop with real outcome proposer only",
+			masterFlag:         "true",
+			s6Flag:             "true",
+			wantRealRegistered: true,
+			wantCandidateNames: []string{"engram.s6.outcome_policy"},
+			wantRealProposal:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENGRAM_V7_PLUG_ENABLED", tt.masterFlag)
+			t.Setenv("ENGRAM_V7_S1_STATE", "false")
+			t.Setenv("ENGRAM_V7_S2_METAMEM", "false")
+			t.Setenv("ENGRAM_V7_S3_AMBIENT", "false")
+			t.Setenv("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", "false")
+			t.Setenv("ENGRAM_V7_S4B_DIRECTIVES_SURFACING", "false")
+			t.Setenv("ENGRAM_V7_S5_TELEMETRY", "false")
+			t.Setenv("ENGRAM_V7_S6_OUTCOME", tt.s6Flag)
+
+			cfg := core.LoadFlagConfigFromEnv()
+			if got := shouldRegisterRealS6OutcomeProposer(cfg); got != tt.wantRealRegistered {
+				t.Fatalf("shouldRegisterRealS6OutcomeProposer() = %v, want %v", got, tt.wantRealRegistered)
+			}
+
+			registry := core.NewRegistry()
+			if err := core.RegisterNoOps(registry); err != nil {
+				t.Fatalf("RegisterNoOps: %v", err)
+			}
+			activateFromFlags(t, registry, cfg)
+
+			store := &fakeS6OutcomeStore{memories: []*models.Memory{{
+				ID:        601,
+				Project:   "engram",
+				Content:   "S6 outcome policy handoff\nFull memory body must stay out of the proposal.",
+				Tags:      []string{"s6", "outcome"},
+				CreatedAt: time.Unix(1700040000, 0).UTC(),
+				TsAlpha:   8,
+				TsBeta:    2,
+			}}}
+			if tt.wantRealRegistered {
+				if err := registerS6OutcomeProposerSubsystem(registry, store); err != nil {
+					t.Fatalf("registerS6OutcomeProposerSubsystem: %v", err)
+				}
+			}
+
+			resolver, ok := registry.(interface {
+				ResolveImpls(interfaceName string) []core.Subsystem
+			})
+			if !ok {
+				t.Fatalf("registry does not expose ResolveImpls")
+			}
+			candidateImpls := resolver.ResolveImpls("CandidateProposer")
+			if got := namesOfSubsystems(candidateImpls); !reflect.DeepEqual(got, tt.wantCandidateNames) {
+				t.Fatalf("ResolveImpls(CandidateProposer) = %v, want %v", got, tt.wantCandidateNames)
+			}
+			for _, iface := range []string{"HintEmitter", "StateWriter", "AttentionEventWriter", "DirectiveDistiller", "ProductMetricsProvider"} {
+				if got := resolver.ResolveImpls(iface); len(got) != 0 {
+					t.Fatalf("ResolveImpls(%s) = %v, want no sibling milestone activation from S6 flags", iface, namesOfSubsystems(got))
+				}
+			}
+
+			if len(candidateImpls) == 0 {
+				return
+			}
+			dispatcher := core.NewSubsystemDispatcher(registry, core.NewLocalMeter())
+			var proposals []cognitive.HintProposal
+			if err := core.Dispatch[cognitive.CandidateProposer](
+				context.Background(),
+				dispatcher,
+				"CandidateProposer",
+				func(p cognitive.CandidateProposer) error {
+					var err error
+					proposals, err = p.Propose(context.Background(), cognitive.AttentionEvent{
+						Type:    "user_prompt_submit",
+						Project: "engram",
+						Payload: map[string]interface{}{"text": "S6 outcome policy handoff"},
+					}, 1)
+					return err
+				},
+			); err != nil {
+				t.Fatalf("Dispatch(CandidateProposer): %v", err)
+			}
+
+			if tt.wantRealProposal {
+				require.Len(t, proposals, 1, "real S6 proposer must return outcome-ranked proposals, not a stubbed empty list")
+				require.Equal(t, "Memory 601", proposals[0].Title)
+				require.Equal(t, "s6.outcome_policy", proposals[0].Source)
+				require.Len(t, store.queries, 1, "real S6 proposer must query the outcome store exactly once")
+				require.Equal(t, "engram", store.queries[0].project)
+				require.Equal(t, 1, store.queries[0].limit)
+			} else {
+				require.NotNil(t, proposals, "NoOp fallback must return an empty, iterable proposal slice")
+				require.Empty(t, proposals, "flag-off fallback must preserve baseline by returning no proposals")
+				require.Empty(t, store.queries, "flag-off fallback must not query the S6 outcome store")
+			}
+		})
+	}
 }
 
 func namesOfSubsystems(impls []core.Subsystem) []string {

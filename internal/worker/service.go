@@ -35,6 +35,7 @@ import (
 	"github.com/thebtf/engram/internal/cognitive/s2meta"
 	"github.com/thebtf/engram/internal/cognitive/s4directives"
 	"github.com/thebtf/engram/internal/cognitive/s5"
+	"github.com/thebtf/engram/internal/cognitive/s6"
 	"github.com/thebtf/engram/internal/collections"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/crypto"
@@ -410,6 +411,65 @@ func registerS5ProductMetricsSubsystem(registry cognitivecore.SubsystemRegistry,
 	return nil
 }
 
+func shouldRegisterRealS6OutcomeProposer(flagCfg cognitivecore.FlagConfig) bool {
+	return flagCfg.IsPlugEnabled() && flagCfg.IsSubsystemEnabled("s6")
+}
+
+func registerS6OutcomeProposerSubsystem(registry cognitivecore.SubsystemRegistry, store s6.OutcomeStore) error {
+	if store == nil {
+		return fmt.Errorf("s6 outcome store is not configured")
+	}
+	subsystem := s6.NewSubsystem(store)
+	if err := registry.Register(subsystem); err != nil {
+		return err
+	}
+	if err := registry.Enable(subsystem.Name()); err != nil {
+		return err
+	}
+	if err := registry.Disable("core.noop.candidate_proposer"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func noopNamesBySubsystem() map[string][]string {
+	return map[string][]string{
+		"s1":  {"core.noop.state_writer"},
+		"s2":  {"core.noop.candidate_proposer"},
+		"s3":  {"core.noop.hint_emitter"},
+		"s4a": {"core.noop.attention_event_writer", "core.noop.directive_distiller"},
+		"s4b": {},
+		"s5":  {},
+		"s6":  {},
+	}
+}
+
+func enableFlaggedCoreNoOps(registry cognitivecore.SubsystemRegistry, flagCfg cognitivecore.FlagConfig) error {
+	if !flagCfg.IsPlugEnabled() {
+		return nil
+	}
+	if err := registry.Enable("core.noop.candidate_proposer"); err != nil {
+		return fmt.Errorf("enable core.noop.candidate_proposer fallback: %w", err)
+	}
+	noopsBySubsystem := noopNamesBySubsystem()
+	subsystemKeys := make([]string, 0, len(noopsBySubsystem))
+	for k := range noopsBySubsystem {
+		subsystemKeys = append(subsystemKeys, k)
+	}
+	sort.Strings(subsystemKeys)
+	for _, subName := range subsystemKeys {
+		if !flagCfg.IsSubsystemEnabled(subName) {
+			continue
+		}
+		for _, noopName := range noopsBySubsystem[subName] {
+			if err := registry.Enable(noopName); err != nil {
+				return fmt.Errorf("enable %s (for subsystem %s): %w", noopName, subName, err)
+			}
+		}
+	}
+	return nil
+}
+
 // evictStalePrompts removes prompt cache entries older than 2 hours.
 func (s *Service) evictStalePrompts() {
 	cutoff := time.Now().Add(-2 * time.Hour)
@@ -562,39 +622,9 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 	// returns nothing for their interfaces — exactly the FR-5 + US1
 	// semantics ("ENGRAM_V7_S2_METAMEM=true with master on → only S2's slot
 	// is enabled, others stay registered").
-	if flagCfg.IsPlugEnabled() {
-		// CandidateProposer is the single fan-out interface. Keep the CORE NoOp
-		// enabled as the safe fallback whenever the v7 master flag is on, then let
-		// a real S2 subsystem replace it during initializeAsync when S2 is enabled.
-		if err := cRegistry.Enable("core.noop.candidate_proposer"); err != nil {
-			cancel()
-			return nil, fmt.Errorf("enable core.noop.candidate_proposer fallback: %w", err)
-		}
-		noopsBySubsystem := map[string][]string{
-			"s1":  {"core.noop.state_writer"},
-			"s2":  {"core.noop.candidate_proposer"},
-			"s3":  {"core.noop.hint_emitter"},
-			"s4a": {"core.noop.attention_event_writer", "core.noop.directive_distiller"},
-		}
-		// Sort subsystem keys for deterministic activation order
-		// (registration order otherwise drives SinglePrimary; we want
-		// activation order stable across runs).
-		subsystemKeys := make([]string, 0, len(noopsBySubsystem))
-		for k := range noopsBySubsystem {
-			subsystemKeys = append(subsystemKeys, k)
-		}
-		sort.Strings(subsystemKeys)
-		for _, subName := range subsystemKeys {
-			if !flagCfg.IsSubsystemEnabled(subName) {
-				continue
-			}
-			for _, noopName := range noopsBySubsystem[subName] {
-				if err := cRegistry.Enable(noopName); err != nil {
-					cancel()
-					return nil, fmt.Errorf("enable %s (for subsystem %s): %w", noopName, subName, err)
-				}
-			}
-		}
+	if err := enableFlaggedCoreNoOps(cRegistry, flagCfg); err != nil {
+		cancel()
+		return nil, err
 	}
 	if shouldRegisterRealS5ProductMetrics(flagCfg) {
 		if err := registerS5ProductMetricsSubsystem(cRegistry, s5.NewProvider(s5.Dependencies{})); err != nil {
@@ -742,6 +772,12 @@ func (s *Service) initializeAsync() {
 	if shouldRegisterRealS2CandidateProposer(s.flagConfig) {
 		if err := registerS2CandidateProposerSubsystem(s.cognitiveRegistry, memoryStore); err != nil {
 			s.setInitError(fmt.Errorf("register real s2 candidate proposer: %w", err))
+			return
+		}
+	}
+	if shouldRegisterRealS6OutcomeProposer(s.flagConfig) {
+		if err := registerS6OutcomeProposerSubsystem(s.cognitiveRegistry, s6.NewMemoryStoreAdapter(memoryStore)); err != nil {
+			s.setInitError(fmt.Errorf("register real s6 outcome proposer: %w", err))
 			return
 		}
 	}
