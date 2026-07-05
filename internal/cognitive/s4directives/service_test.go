@@ -92,9 +92,29 @@ func TestRememberDirectiveDefaultDistillerDoesNotPersistVerbatimPrompt(t *testin
 
 	require.NoError(t, err)
 	require.Len(t, store.records, 1)
-	require.NotEqual(t, rawText, store.records[0].DerivedIntent, "default distillation must not persist the raw prompt verbatim")
+	require.Equal(t, "directive policy reporting release-ops risk-emphasis", store.records[0].DerivedIntent)
 	require.NotContains(t, store.records[0].SourceTurnHash, rawText)
+	require.Equal(t, store.records[0].DerivedIntent, stored.DerivedIntent, "response must expose sanitized distilled intent")
 	require.NotEqual(t, rawText, stored.DerivedIntent, "response must expose distilled intent, not raw prompt text")
+}
+
+func TestRememberDirectiveDefaultDistillerDoesNotPersistSecretLikeTokens(t *testing.T) {
+	store := &recordingDirectiveStore{}
+	svc := NewService(store)
+	rawText := "Remember this sk-abc123def456ghi789jkl012mno345pqr678 token must stay secret"
+
+	stored, err := svc.RememberDirective(context.Background(), "engram", "session-1", RememberDirectiveRequest{
+		Text:         rawText,
+		Horizon:      "project",
+		PrivacyClass: "secret",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, store.records, 1)
+	require.Equal(t, "directive policy sensitive-data", store.records[0].DerivedIntent)
+	require.NotContains(t, store.records[0].DerivedIntent, "sk-abc123def456ghi789jkl012mno345pqr678")
+	require.NotContains(t, stored.DerivedIntent, "sk-abc123def456ghi789jkl012mno345pqr678")
+	require.NotContains(t, stored.DerivedIntent, "token must stay secret")
 }
 
 func TestRememberDirectiveRejectsInvalidInputBeforeDistillOrWrite(t *testing.T) {

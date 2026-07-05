@@ -357,38 +357,19 @@ func boundIntent(raw string) string {
 	return strings.TrimSpace(string(runes[:MaxDerivedIntentRunes]))
 }
 
-var directiveStopwords = map[string]struct{}{
-	"a":        {},
-	"an":       {},
-	"and":      {},
-	"always":   {},
-	"as":       {},
-	"at":       {},
-	"be":       {},
-	"but":      {},
-	"by":       {},
-	"can":      {},
-	"for":      {},
-	"from":     {},
-	"if":       {},
-	"in":       {},
-	"into":     {},
-	"is":       {},
-	"it":       {},
-	"must":     {},
-	"of":       {},
-	"on":       {},
-	"or":       {},
-	"please":   {},
-	"remember": {},
-	"should":   {},
-	"that":     {},
-	"the":      {},
-	"this":     {},
-	"to":       {},
-	"with":     {},
-	"you":      {},
-	"your":     {},
+type intentCategory struct {
+	label string
+	terms []string
+}
+
+var defaultIntentCategories = []intentCategory{
+	{label: "policy", terms: []string{"always", "must", "never", "prefer", "required", "should"}},
+	{label: "reporting", terms: []string{"bullet", "bullets", "format", "note", "notes", "report", "reports", "summary", "summaries"}},
+	{label: "release-ops", terms: []string{"build", "deploy", "deployment", "metrics", "release", "releases", "rollback", "test", "tests"}},
+	{label: "sensitive-data", terms: []string{"api", "credential", "credentials", "key", "keys", "password", "secret", "secrets", "token", "tokens"}},
+	{label: "language-preference", terms: []string{"english", "language", "locale", "russian"}},
+	{label: "brevity", terms: []string{"brief", "compact", "concise", "short"}},
+	{label: "risk-emphasis", terms: []string{"risk", "risks"}},
 }
 
 func distilledIntentFromText(raw string) string {
@@ -399,24 +380,35 @@ func distilledIntentFromText(raw string) string {
 	tokens := strings.FieldsFunc(normalized, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
 	})
-	filtered := make([]string, 0, len(tokens))
+	if len(tokens) == 0 {
+		return "directive captured"
+	}
+	tokenSet := make(map[string]struct{}, len(tokens))
 	for _, token := range tokens {
-		if _, skip := directiveStopwords[token]; skip {
+		if token == "" {
 			continue
 		}
-		filtered = append(filtered, token)
+		tokenSet[token] = struct{}{}
 	}
-	if len(filtered) == 0 {
-		filtered = tokens
+	labels := []string{"directive"}
+	for _, category := range defaultIntentCategories {
+		if hasAnyIntentTerm(tokenSet, category.terms) {
+			labels = append(labels, category.label)
+		}
 	}
-	if len(filtered) > 16 {
-		filtered = filtered[:16]
+	if len(labels) == 1 {
+		labels = append(labels, "captured")
 	}
-	intent := strings.Join(filtered, " ")
-	if intent == normalized {
-		intent = "directive " + intent
+	return boundIntent(strings.Join(labels, " "))
+}
+
+func hasAnyIntentTerm(tokenSet map[string]struct{}, terms []string) bool {
+	for _, term := range terms {
+		if _, ok := tokenSet[term]; ok {
+			return true
+		}
 	}
-	return boundIntent(intent)
+	return false
 }
 
 func hashSourceMaterial(sourceTurn, text string) string {
