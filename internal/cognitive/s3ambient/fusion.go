@@ -2,6 +2,7 @@ package s3ambient
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/thebtf/engram/pkg/cognitive"
@@ -65,8 +66,16 @@ func (f *Fusion) Propose(ctx context.Context, event cognitive.AttentionEvent, li
 
 	for _, proposer := range activeProposers {
 		go func(p cognitive.CandidateProposer) {
+			result := proposerResult{}
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					result = proposerResult{err: fmt.Errorf("candidate proposer panic: %v", recovered)}
+				}
+				results <- result
+			}()
+
 			proposals, err := p.Propose(ctx, event, limit)
-			results <- proposerResult{proposals: proposals, err: err}
+			result = proposerResult{proposals: proposals, err: err}
 		}(proposer)
 	}
 

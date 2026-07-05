@@ -75,7 +75,9 @@ func (s *Service) handleAmbientCandidates(w http.ResponseWriter, r *http.Request
 		writeJSON(w, emptyAmbientHookResponse(false, ""))
 		return
 	}
-	_ = s3ambient.DrainQueuedProposals(s.cognitiveQueue, req.SessionID, time.Now().UTC())
+	if len(delivery.Hints) > 0 || delivery.AdditionalContext != "" {
+		_ = s3ambient.DrainQueuedProposals(s.cognitiveQueue, req.SessionID, time.Now().UTC())
+	}
 
 	writeJSON(w, ambientHookResponse{
 		Hints:             delivery.Hints,

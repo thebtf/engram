@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
+	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/pkg/cognitive"
 )
 
@@ -124,6 +125,68 @@ func decodeAmbientResponse(t *testing.T, rec *httptest.ResponseRecorder) ambient
 	var payload ambientCandidatesResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&payload), rec.Body.String())
 	return payload
+}
+
+type ambientMCPHintResult struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Reason string `json:"reason,omitempty"`
+	Source string `json:"source,omitempty"`
+}
+
+type ambientMCPHintsResponse struct {
+	Hints []ambientMCPHintResult `json:"hints,omitempty"`
+}
+
+func pollAmbientHintsViaMCP(t *testing.T, queue cognitivecore.HintQueue, sessionID string) ambientMCPHintsResponse {
+	t.Helper()
+	srv := mcp.NewServer(mcp.ServerOptions{Version: "s3-red-test"})
+	srv.SetHintQueue(queue)
+	paramsRaw, err := json.Marshal(map[string]any{
+		"name": "get_ambient_hints",
+		"arguments": map[string]any{
+			"session_id": sessionID,
+			"limit":      3,
+		},
+	})
+	require.NoError(t, err)
+
+	resp := srv.HandleRequest(context.Background(), &mcp.Request{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Method:  "tools/call",
+		Params:  json.RawMessage(paramsRaw),
+	})
+	require.NotNil(t, resp)
+	require.Nil(t, resp.Error)
+
+	var payload ambientMCPHintsResponse
+	text := ambientMCPResponseText(t, resp)
+	require.NoError(t, json.Unmarshal([]byte(text), &payload), text)
+	return payload
+}
+
+func ambientMCPResponseText(t *testing.T, resp *mcp.Response) string {
+	t.Helper()
+	result, ok := resp.Result.(map[string]any)
+	require.True(t, ok, "tools/call must return the standard MCP content envelope")
+	switch content := result["content"].(type) {
+	case []map[string]any:
+		require.Len(t, content, 1)
+		text, ok := content[0]["text"].(string)
+		require.True(t, ok)
+		return text
+	case []any:
+		require.Len(t, content, 1)
+		item, ok := content[0].(map[string]any)
+		require.True(t, ok)
+		text, ok := item["text"].(string)
+		require.True(t, ok)
+		return text
+	default:
+		t.Fatalf("MCP response content had unexpected type %T", result["content"])
+		return ""
+	}
 }
 
 func TestS3AmbientCandidates_EnabledReturnsTopThreeHints(t *testing.T) {
@@ -245,4 +308,36 @@ func TestS3AmbientCandidates_DrainsQueuedFallbackHintsAfterSuccessfulHookDeliver
 	require.Len(t, payload.Hints, 1)
 	require.Equal(t, 0, svc.cognitiveQueue.Stats("session-s3-queue-drain").QueuedNow, "same-turn hook delivery must clear queued fallback hints so MCP polling cannot replay them")
 	require.Empty(t, svc.cognitiveQueue.Drain("session-s3-queue-drain", 3))
+}
+
+func TestS3AmbientCandidates_EmptyHookDeliveryPreservesQueuedFallbackHintsForMCPPoll(t *testing.T) {
+	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
+	t.Setenv("ENGRAM_V7_S3_AMBIENT", "true")
+
+	svc := newAmbientHandlerService(t)
+	proposer := &candidateProposerStub{name: "test.s3.proposer.empty-hook"}
+	emitter := &hintEmitterStub{name: "test.s3.emitter.empty-hook"}
+	require.NoError(t, svc.cognitiveRegistry.Register(proposer))
+	require.NoError(t, svc.cognitiveRegistry.Register(emitter))
+	require.NoError(t, svc.cognitiveRegistry.Enable(proposer.Name()))
+	require.NoError(t, svc.cognitiveRegistry.Enable(emitter.Name()))
+	require.NoError(t, svc.cognitiveQueue.Enqueue(context.Background(), "session-s3-empty-hook", cognitivecore.HintProposalPayload{
+		ID: "queued-after-empty-hook", Title: "Queued fallback survives empty hook", Reason: "tag:fallback", Score: 0.74, Source: "s2.meta_index", CreatedAt: time.Now().UTC(),
+	}))
+
+	rec := postAmbientCandidates(t, svc, ambientCandidatesRequest{
+		SessionID:  "session-s3-empty-hook",
+		Project:    "engram",
+		PromptText: "Same-turn hook renders no ambient copy, so fallback polling still needs queued hints",
+	})
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	payload := decodeAmbientResponse(t, rec)
+	require.Empty(t, payload.Hints, "empty same-turn hook delivery must not synthesize structured hints")
+	require.Empty(t, payload.AdditionalContext, "empty same-turn hook delivery must not synthesize prompt context")
+
+	fallback := pollAmbientHintsViaMCP(t, svc.cognitiveQueue, "session-s3-empty-hook")
+	require.Len(t, fallback.Hints, 1, "empty same-turn hook delivery must not drain queued fallback hints before MCP polling can read them")
+	require.Equal(t, "queued-after-empty-hook", fallback.Hints[0].ID)
+	require.Equal(t, "Queued fallback survives empty hook", fallback.Hints[0].Title)
 }

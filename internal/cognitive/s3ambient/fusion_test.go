@@ -54,6 +54,12 @@ func (p *blockingCandidateProposer) Propose(_ context.Context, _ cognitive.Atten
 	return nil, nil
 }
 
+type panickingCandidateProposer struct{}
+
+func (p *panickingCandidateProposer) Propose(context.Context, cognitive.AttentionEvent, int) ([]cognitive.HintProposal, error) {
+	panic("candidate proposer panic should be isolated")
+}
+
 func TestS3AmbientFusion_ContextCancellationDoesNotWaitForBlockedProposer(t *testing.T) {
 	releaseBlocked := make(chan struct{})
 	blocked := &blockingCandidateProposer{
@@ -196,6 +202,22 @@ func TestS3AmbientFusion_ContinuesPastNonFatalProposerErrors(t *testing.T) {
 	require.Equal(t, []string{"9"}, proposalIDs(proposals))
 	require.Equal(t, 1, bad.calls)
 	require.Equal(t, 1, good.calls)
+}
+
+func TestS3AmbientFusion_RecoversPanickingProposerAndKeepsHealthyResult(t *testing.T) {
+	healthy := &recordingCandidateProposer{proposals: []cognitive.HintProposal{
+		{ID: "healthy", Title: "healthy proposer survives peer panic", Score: 0.91, Source: "s2.meta_index"},
+	}}
+	fusion := NewFusion(true, []cognitive.CandidateProposer{&panickingCandidateProposer{}, healthy})
+
+	proposals, err := fusion.Propose(context.Background(), cognitive.AttentionEvent{
+		Type:    "user_prompt_submit",
+		Project: "project-s3-panic-isolation",
+		Payload: map[string]interface{}{"text": "keep healthy ambient hints when one proposer panics"},
+	}, 3)
+
+	require.NoError(t, err, "a panicking proposer must be isolated like a failed proposer")
+	require.Equal(t, []string{"healthy"}, proposalIDs(proposals), "one panicking proposer must not crash or blank healthy proposer results")
 }
 
 func TestS3AmbientFusion_DisabledOrNoopReturnsEmptyHints(t *testing.T) {
