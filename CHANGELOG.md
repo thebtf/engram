@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.39.0] - 2026-07-05
+
+### Added
+
+- **Engram v7 directive capture, ENG-V7-S4A / CR-001 (#398).** Adds the `remember_directive` MCP tool behind `ENGRAM_V7_PLUG_ENABLED=true` and `ENGRAM_V7_S4A_DIRECTIVES=true`, backed by the new project-scoped `attention_events` table and `AttentionEventWriter` / `DirectiveDistiller` subsystem wiring. Captures store canonical source hashes, derived intent, horizon, privacy class, and explicit `agent_confirmed=true` without persisting raw directive text or raw source turns.
+- **S4A storage, migration, and purge coverage (#398).** Adds the `attention_events` GORM store, schema migration, data-model documentation, project/session indexes, and project purge integration so hard-delete flows remove S4A directive captures together with the rest of a project's scoped data.
+
+### Fixed
+
+- **S4A PR review hardening (#398).** Redacts `remember_directive` raw arguments from MCP error logs, rejects direct attention-event writes with unconfirmed agents, keeps the per-session limiter's accepted timestamps sorted, fails closed when manually constructed services lack a limiter or distiller, and bounds default distillation to finite category summaries so prompt-shaped raw text or secret-like tokens are not copied into `derived_intent`.
+
 ## [6.38.0] - 2026-07-04
 
 ### Added
