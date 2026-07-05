@@ -130,15 +130,14 @@ func (p *Provider) collectSamples(ctx context.Context, window core.ProductMetric
 }
 
 func cloneDependencies(deps Dependencies) Dependencies {
-	cloned := Dependencies{}
+	cloned := Dependencies{
+		ReadinessThresholds: canonicalReadinessThresholds(),
+	}
 	if len(deps.MetricSources) > 0 {
 		cloned.MetricSources = append([]MetricSource(nil), deps.MetricSources...)
 	}
-	if len(deps.ReadinessThresholds) > 0 {
-		cloned.ReadinessThresholds = make(map[string]uint64, len(deps.ReadinessThresholds))
-		for metric, threshold := range deps.ReadinessThresholds {
-			cloned.ReadinessThresholds[metric] = threshold
-		}
+	for metric, threshold := range deps.ReadinessThresholds {
+		cloned.ReadinessThresholds[metric] = threshold
 	}
 	return cloned
 }

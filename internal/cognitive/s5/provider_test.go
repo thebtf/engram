@@ -56,8 +56,8 @@ func TestProviderSampleReadiness_NoProducerDataOmitsMetricsAndReportsNoSample(t 
 	if len(snap.Metrics) != 0 {
 		t.Fatalf("Metrics: got %#v, want omitted metrics when producers are absent", snap.Metrics)
 	}
-	for _, metric := range CanonicalMetricKeys() {
-		assertMetricReadiness(t, snap, metric, 0, 0, "no_sample")
+	for metric, threshold := range canonicalReadinessThresholds() {
+		assertMetricReadiness(t, snap, metric, 0, threshold, "no_sample")
 	}
 }
 
@@ -65,12 +65,7 @@ func TestProviderSampleReadiness_PartialProducerDataOnlyReportsSampledMetrics(t 
 	source := &fixedMetricSource{samples: []MetricSample{
 		{Metric: MetricHintPrecision, Value: 0.75, SampleN: 30},
 	}}
-	provider := NewProvider(Dependencies{
-		MetricSources: []MetricSource{source},
-		ReadinessThresholds: map[string]uint64{
-			MetricHintPrecision: 30,
-		},
-	})
+	provider := NewProvider(Dependencies{MetricSources: []MetricSource{source}})
 
 	snap, err := provider.ProductMetrics(context.Background(), core.ProductMetricsWindow{})
 	if err != nil {
@@ -80,23 +75,23 @@ func TestProviderSampleReadiness_PartialProducerDataOnlyReportsSampledMetrics(t 
 	if got := snap.Metrics[MetricHintPrecision]; got != 0.75 {
 		t.Fatalf("%s: got %v, want measured value from sampled producer", MetricHintPrecision, got)
 	}
-	for _, absent := range []string{MetricAcceptedHintAction, MetricMissRate, MetricInterruptionBurden, MetricStateFreshness} {
-		if value, ok := snap.Metrics[absent]; ok {
-			t.Fatalf("%s: got measured value %v, want omitted because no producer sample exists", absent, value)
+	for metric, threshold := range canonicalReadinessThresholds() {
+		if metric == MetricHintPrecision {
+			continue
 		}
-		assertMetricReadiness(t, snap, absent, 0, 0, "no_sample")
+		if value, ok := snap.Metrics[metric]; ok {
+			t.Fatalf("%s: got measured value %v, want omitted because no producer sample exists", metric, value)
+		}
+		assertMetricReadiness(t, snap, metric, 0, threshold, "no_sample")
 	}
-	assertMetricReadiness(t, snap, MetricHintPrecision, 30, 30, "ready")
+	assertMetricReadiness(t, snap, MetricHintPrecision, 30, defaultThresholdHintPrecision, "ready")
 }
 
-func TestProviderSampleReadiness_BelowThresholdSampleIsNotMeasuredValue(t *testing.T) {
+func TestProviderSampleReadiness_DefaultHintPrecisionThresholdMakesTwentyNineBelowThreshold(t *testing.T) {
 	provider := NewProvider(Dependencies{
 		MetricSources: []MetricSource{&fixedMetricSource{samples: []MetricSample{
 			{Metric: MetricHintPrecision, Value: 0.10, SampleN: 29},
 		}}},
-		ReadinessThresholds: map[string]uint64{
-			MetricHintPrecision: 30,
-		},
 	})
 
 	snap, err := provider.ProductMetrics(context.Background(), core.ProductMetricsWindow{})
@@ -107,19 +102,32 @@ func TestProviderSampleReadiness_BelowThresholdSampleIsNotMeasuredValue(t *testi
 	if value, ok := snap.Metrics[MetricHintPrecision]; ok {
 		t.Fatalf("%s: got measured value %v, want omitted until sample threshold is met", MetricHintPrecision, value)
 	}
-	assertMetricReadiness(t, snap, MetricHintPrecision, 29, 30, "below_threshold")
+	assertMetricReadiness(t, snap, MetricHintPrecision, 29, defaultThresholdHintPrecision, "below_threshold")
+}
+
+func TestProviderSampleReadiness_DefaultAcceptedHintActionThresholdMakesNineteenBelowThreshold(t *testing.T) {
+	provider := NewProvider(Dependencies{
+		MetricSources: []MetricSource{&fixedMetricSource{samples: []MetricSample{
+			{Metric: MetricAcceptedHintAction, Value: 0.60, SampleN: 19},
+		}}},
+	})
+
+	snap, err := provider.ProductMetrics(context.Background(), core.ProductMetricsWindow{})
+	if err != nil {
+		t.Fatalf("ProductMetrics: %v", err)
+	}
+
+	if value, ok := snap.Metrics[MetricAcceptedHintAction]; ok {
+		t.Fatalf("%s: got measured value %v, want omitted until sample threshold is met", MetricAcceptedHintAction, value)
+	}
+	assertMetricReadiness(t, snap, MetricAcceptedHintAction, 19, defaultThresholdAcceptedHintAction, "below_threshold")
 }
 
 func TestProviderSampleReadiness_InvalidWindowRejectsBeforeSources(t *testing.T) {
 	source := &fixedMetricSource{samples: []MetricSample{
 		{Metric: MetricHintPrecision, Value: 0.75, SampleN: 30},
 	}}
-	provider := NewProvider(Dependencies{
-		MetricSources: []MetricSource{source},
-		ReadinessThresholds: map[string]uint64{
-			MetricHintPrecision: 30,
-		},
-	})
+	provider := NewProvider(Dependencies{MetricSources: []MetricSource{source}})
 	window := core.ProductMetricsWindow{
 		Since: time.Date(2026, 7, 5, 10, 5, 0, 0, time.UTC),
 		Until: time.Date(2026, 7, 5, 10, 0, 0, 0, time.UTC),
@@ -139,9 +147,6 @@ func TestProviderSampleReadiness_AbsentStateFreshnessSourceIsOmittedHonestly(t *
 		MetricSources: []MetricSource{&fixedMetricSource{samples: []MetricSample{
 			{Metric: MetricHintPrecision, Value: 0.80, SampleN: 30},
 		}}},
-		ReadinessThresholds: map[string]uint64{
-			MetricHintPrecision: 30,
-		},
 	})
 
 	snap, err := provider.ProductMetrics(context.Background(), core.ProductMetricsWindow{})
@@ -152,7 +157,7 @@ func TestProviderSampleReadiness_AbsentStateFreshnessSourceIsOmittedHonestly(t *
 	if _, ok := snap.Metrics[MetricStateFreshness]; ok {
 		t.Fatalf("%s: got measured value, want omitted when state freshness source is absent", MetricStateFreshness)
 	}
-	assertMetricReadiness(t, snap, MetricStateFreshness, 0, 0, "no_sample")
+	assertMetricReadiness(t, snap, MetricStateFreshness, 0, defaultThresholdStateFreshness, "no_sample")
 }
 
 type fixedMetricSource struct {

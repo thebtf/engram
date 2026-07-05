@@ -1008,6 +1008,8 @@ func TestProductStats_S5OnlyFlagsReturnProductSnapshotWithoutSiblingSubsystems(t
 	require.NotNil(t, snap.Metrics, "real S5 provider must return an explicit metrics map, even before product samples exist")
 	require.NotNil(t, snap.Readiness, "real S5 provider must return explicit readiness evidence even before product samples exist")
 	require.Len(t, snap.Readiness, len(s5.CanonicalMetricKeys()), "S5-only route must expose readiness for every canonical metric")
+	require.Equal(t, uint64(30), snap.Readiness[s5.MetricHintPrecision].ThresholdN, "production path must apply S5-owned hint_precision default threshold")
+	require.Equal(t, uint64(20), snap.Readiness[s5.MetricAcceptedHintAction].ThresholdN, "production path must apply S5-owned accepted_hint_action default threshold")
 }
 
 func namesOfSubsystems(impls []core.Subsystem) []string {

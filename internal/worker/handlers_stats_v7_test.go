@@ -273,8 +273,14 @@ func TestProduct_WithS5Provider_ReturnsNoSampleSnapshot(t *testing.T) {
 		if !ok {
 			t.Fatalf("Readiness[%s]: missing", metric)
 		}
-		if readiness.State != "no_sample" || readiness.SampleN != 0 || readiness.ThresholdN != 0 {
-			t.Fatalf("Readiness[%s]: got %+v, want no_sample with zero evidence for no-sample route", metric, readiness)
+		wantThreshold := uint64(0)
+		if metric == s5.MetricHintPrecision {
+			wantThreshold = 30
+		} else if metric == s5.MetricAcceptedHintAction {
+			wantThreshold = 20
+		}
+		if readiness.State != "no_sample" || readiness.SampleN != 0 || readiness.ThresholdN != wantThreshold {
+			t.Fatalf("Readiness[%s]: got %+v, want no_sample with threshold %d for no-sample route", metric, readiness, wantThreshold)
 		}
 	}
 }
