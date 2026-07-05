@@ -72,17 +72,18 @@ func (f *Fusion) Propose(ctx context.Context, event cognitive.AttentionEvent, li
 
 	merged := make([][]cognitive.HintProposal, 0, len(activeProposers))
 	for range len(activeProposers) {
-		result := <-results
-		if result.err != nil {
-			if ctx.Err() != nil {
+		select {
+		case result := <-results:
+			if result.err != nil {
 				continue
 			}
-			continue
+			if len(result.proposals) == 0 {
+				continue
+			}
+			merged = append(merged, result.proposals)
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
-		if len(result.proposals) == 0 {
-			continue
-		}
-		merged = append(merged, result.proposals)
 	}
 
 	if len(merged) == 0 {

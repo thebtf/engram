@@ -3,6 +3,7 @@ package s3ambient
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +38,89 @@ func (p *recordingCandidateProposer) Propose(ctx context.Context, _ cognitive.At
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+type blockingCandidateProposer struct {
+	started     chan struct{}
+	release     <-chan struct{}
+	finished    chan struct{}
+	startedOnce sync.Once
+}
+
+func (p *blockingCandidateProposer) Propose(_ context.Context, _ cognitive.AttentionEvent, _ int) ([]cognitive.HintProposal, error) {
+	p.startedOnce.Do(func() { close(p.started) })
+	<-p.release
+	close(p.finished)
+	return nil, nil
+}
+
+func TestS3AmbientFusion_ContextCancellationDoesNotWaitForBlockedProposer(t *testing.T) {
+	releaseBlocked := make(chan struct{})
+	blocked := &blockingCandidateProposer{
+		started:  make(chan struct{}),
+		release:  releaseBlocked,
+		finished: make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseBlocked) }) }
+	defer release()
+
+	cooperative := &recordingCandidateProposer{proposals: []cognitive.HintProposal{
+		{ID: "cooperative", Title: "usable hint before caller deadline", Score: 0.9, Source: "s2.meta_index"},
+	}}
+	fusion := NewFusion(true, []cognitive.CandidateProposer{blocked, cooperative})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+
+	type proposeResult struct {
+		proposals []cognitive.HintProposal
+		err       error
+		elapsed   time.Duration
+	}
+	done := make(chan proposeResult, 1)
+	startedAt := time.Now()
+	go func() {
+		proposals, err := fusion.Propose(ctx, cognitive.AttentionEvent{Project: "project-s3-blocked-proposer"}, 3)
+		done <- proposeResult{proposals: proposals, err: err, elapsed: time.Since(startedAt)}
+	}()
+
+	select {
+	case <-blocked.started:
+	case <-time.After(100 * time.Millisecond):
+		release()
+		t.Fatal("blocked proposer was not invoked; regression setup did not exercise fan-out cancellation")
+	}
+
+	select {
+	case result := <-done:
+		release()
+		t.Fatalf("Fusion.Propose returned before caller context cancellation: proposals=%v err=%v elapsed=%s", proposalIDs(result.proposals), result.err, result.elapsed)
+	case <-ctx.Done():
+	}
+
+	select {
+	case result := <-done:
+		release()
+		require.ErrorIs(t, result.err, context.DeadlineExceeded, "caller cancellation must surface as the request error instead of waiting for blocked proposer output")
+		require.Empty(t, result.proposals)
+		require.Less(t, result.elapsed, 250*time.Millisecond, "Fusion.Propose must return promptly after ctx.Done rather than waiting for every proposer")
+	case <-time.After(250 * time.Millisecond):
+		release()
+		select {
+		case result := <-done:
+			t.Fatalf("Fusion.Propose waited for a non-cooperative proposer after ctx.Done before returning proposals=%v err=%v elapsed=%s", proposalIDs(result.proposals), result.err, result.elapsed)
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("Fusion.Propose did not return even after the blocked proposer was released")
+		}
+	}
+
+	release()
+	select {
+	case <-blocked.finished:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("blocked proposer did not exit after test cleanup release")
+	}
 }
 
 func TestS3AmbientFusion_RRFTopThreeAcrossEnabledProposers(t *testing.T) {
