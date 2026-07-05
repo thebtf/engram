@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 type fakeMemorySignificanceUpdater struct {
@@ -22,6 +23,104 @@ type memorySignificanceUpdateCall struct {
 func (f *fakeMemorySignificanceUpdater) RateMemorySignificance(_ context.Context, id int64, rating string) error {
 	f.calls = append(f.calls, memorySignificanceUpdateCall{id: id, rating: rating})
 	return f.err
+}
+
+type fakeMemorySignificanceStore struct {
+	memory  *models.Memory
+	updates []memorySignificanceStoreUpdateCall
+	getErr  error
+	setErr  error
+}
+
+type memorySignificanceStoreUpdateCall struct {
+	id     int64
+	fields map[string]any
+}
+
+func (f *fakeMemorySignificanceStore) Get(_ context.Context, id int64) (*models.Memory, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	if f.memory == nil || f.memory.ID != id {
+		return nil, nil
+	}
+	clone := *f.memory
+	if f.memory.Tags != nil {
+		clone.Tags = append([]string(nil), f.memory.Tags...)
+	}
+	return &clone, nil
+}
+
+func (f *fakeMemorySignificanceStore) UpdateLifecycleFields(_ context.Context, id int64, fields map[string]any) error {
+	if f.setErr != nil {
+		return f.setErr
+	}
+	copyFields := make(map[string]any, len(fields))
+	for k, v := range fields {
+		copyFields[k] = v
+	}
+	f.updates = append(f.updates, memorySignificanceStoreUpdateCall{id: id, fields: copyFields})
+	if f.memory != nil && f.memory.ID == id {
+		if v, ok := fields["importance_base"].(float64); ok {
+			f.memory.ImportanceBase = v
+		}
+		if v, ok := fields["ts_alpha"].(float64); ok {
+			f.memory.TsAlpha = v
+		}
+		if v, ok := fields["ts_beta"].(float64); ok {
+			f.memory.TsBeta = v
+		}
+		if v, ok := fields["citation_count"].(int); ok {
+			f.memory.CitationCount = v
+		}
+		if v, ok := fields["consecutive_citation_count"].(int); ok {
+			f.memory.ConsecutiveCitationCount = v
+		}
+	}
+	return nil
+}
+
+func TestMemoryStoreSignificanceUpdaterPersistsChangedFields(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		rating        string
+		before        *models.Memory
+		wantAlpha     float64
+		wantBeta      float64
+		wantCitations int
+		wantStreak    int
+	}{
+		{
+			name:      "useful persists alpha citation and streak",
+			rating:    "useful",
+			before:    &models.Memory{ID: 42, Content: "fixture", ImportanceBase: 0.5, TsAlpha: 1, TsBeta: 1, CitationCount: 4, ConsecutiveCitationCount: 2},
+			wantAlpha: 2, wantBeta: 1, wantCitations: 5, wantStreak: 3,
+		},
+		{
+			name:      "not_useful persists beta and resets streak",
+			rating:    "not_useful",
+			before:    &models.Memory{ID: 43, Content: "fixture", ImportanceBase: 0.5, TsAlpha: 3, TsBeta: 2, CitationCount: 7, ConsecutiveCitationCount: 4},
+			wantAlpha: 3, wantBeta: 3, wantCitations: 7, wantStreak: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeMemorySignificanceStore{memory: tc.before}
+			updater := newMemoryStoreSignificanceUpdater(store)
+
+			err := updater.RateMemorySignificance(context.Background(), tc.before.ID, tc.rating)
+			require.NoError(t, err)
+			require.Len(t, store.updates, 1)
+			assert.Equal(t, tc.before.ID, store.updates[0].id)
+			assert.Equal(t, tc.wantAlpha, store.updates[0].fields["ts_alpha"])
+			assert.Equal(t, tc.wantBeta, store.updates[0].fields["ts_beta"])
+			assert.Equal(t, tc.wantCitations, store.updates[0].fields["citation_count"])
+			assert.Equal(t, tc.wantStreak, store.updates[0].fields["consecutive_citation_count"])
+			assert.Equal(t, tc.wantAlpha, store.memory.TsAlpha)
+			assert.Equal(t, tc.wantBeta, store.memory.TsBeta)
+			assert.Equal(t, tc.wantCitations, store.memory.CitationCount)
+			assert.Equal(t, tc.wantStreak, store.memory.ConsecutiveCitationCount)
+		})
+	}
 }
 
 func setS6OutcomeFlags(t *testing.T, masterEnabled, s6Enabled bool) {

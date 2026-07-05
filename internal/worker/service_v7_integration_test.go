@@ -394,10 +394,9 @@ func TestPlatformWiring_FlagOn_AllSubsystems_NoOpsActivated(t *testing.T) {
 }
 
 // TestPlatformWiring_FlagOn_OnlyS2_OthersStayRegistered pins the spec FR-5
-// per-subsystem invariant the previous PM review flagged: with master ON and
-// only ENGRAM_V7_S2_METAMEM=true, the S2-owned NoOp (candidate_proposer)
-// reaches "enabled" and ResolveImpls("CandidateProposer") returns it, but
-// the other 4 NoOps stay in "registered" state and ResolveImpls for their
+// invariant that with master ON and only ENGRAM_V7_S2_METAMEM=true, the shared
+// candidate_proposer CORE fallback remains the only enabled NoOp while the
+// other 4 NoOps stay in "registered" state and ResolveImpls for their
 // interfaces returns empty.
 func TestPlatformWiring_FlagOn_OnlyS2_OthersStayRegistered(t *testing.T) {
 	t.Setenv("ENGRAM_V7_PLUG_ENABLED", "true")
@@ -421,9 +420,9 @@ func TestPlatformWiring_FlagOn_OnlyS2_OthersStayRegistered(t *testing.T) {
 	for _, info := range registry.List() {
 		stateByName[info.Name] = info.State
 	}
-	// Only S2 NoOp (candidate_proposer) enabled.
+	// Only the shared candidate_proposer fallback is enabled.
 	if got := stateByName["core.noop.candidate_proposer"]; got != "enabled" {
-		t.Errorf("core.noop.candidate_proposer state: got %q, want %q (S2 flag is set)", got, "enabled")
+		t.Errorf("core.noop.candidate_proposer state: got %q, want %q (master fallback remains active)", got, "enabled")
 	}
 	for _, name := range []string{
 		"core.noop.hint_emitter",

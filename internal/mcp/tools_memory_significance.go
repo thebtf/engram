@@ -7,21 +7,27 @@ import (
 
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/cognitive/s6"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 type memorySignificanceUpdater interface {
 	RateMemorySignificance(ctx context.Context, id int64, rating string) error
 }
 
-type memoryEditorSignificanceUpdater struct {
-	editor memoryEditor
+type memorySignificanceStore interface {
+	Get(ctx context.Context, id int64) (*models.Memory, error)
+	UpdateLifecycleFields(ctx context.Context, id int64, fields map[string]any) error
 }
 
-func newMemoryEditorSignificanceUpdater(editor memoryEditor) memorySignificanceUpdater {
-	if editor == nil {
+type memoryStoreSignificanceUpdater struct {
+	store memorySignificanceStore
+}
+
+func newMemoryStoreSignificanceUpdater(store memorySignificanceStore) memorySignificanceUpdater {
+	if store == nil {
 		return nil
 	}
-	return &memoryEditorSignificanceUpdater{editor: editor}
+	return &memoryStoreSignificanceUpdater{store: store}
 }
 
 func s6OutcomeEnabledFromEnv() bool {
@@ -32,7 +38,10 @@ func (s *Server) effectiveMemorySignificanceUpdater() memorySignificanceUpdater 
 	if s.testMemorySignificanceUpdater != nil {
 		return s.testMemorySignificanceUpdater
 	}
-	return newMemoryEditorSignificanceUpdater(s.effectiveMemoryEditor())
+	if s == nil || s.memoryStore == nil {
+		return nil
+	}
+	return newMemoryStoreSignificanceUpdater(s.memoryStore)
 }
 
 func (s *Server) currentMemorySignificanceUpdater() (memorySignificanceUpdater, error) {
@@ -97,15 +106,15 @@ func (s *Server) handleRateMemorySignificance(ctx context.Context, args json.Raw
 	})
 }
 
-func (u *memoryEditorSignificanceUpdater) RateMemorySignificance(ctx context.Context, id int64, rating string) error {
-	if u == nil || u.editor == nil {
+func (u *memoryStoreSignificanceUpdater) RateMemorySignificance(ctx context.Context, id int64, rating string) error {
+	if u == nil || u.store == nil {
 		return fmt.Errorf("memory significance updater not available")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	before, err := u.editor.Get(ctx, id)
+	before, err := u.store.Get(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -117,6 +126,12 @@ func (u *memoryEditorSignificanceUpdater) RateMemorySignificance(ctx context.Con
 	if err := s6.ApplySignificanceRating(&updated, rating); err != nil {
 		return err
 	}
-	_, err = u.editor.Update(ctx, &updated)
-	return err
+
+	return u.store.UpdateLifecycleFields(ctx, id, map[string]any{
+		"importance_base":            updated.ImportanceBase,
+		"ts_alpha":                   updated.TsAlpha,
+		"ts_beta":                    updated.TsBeta,
+		"citation_count":             updated.CitationCount,
+		"consecutive_citation_count": updated.ConsecutiveCitationCount,
+	})
 }

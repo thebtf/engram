@@ -435,7 +435,6 @@ func registerS6OutcomeProposerSubsystem(registry cognitivecore.SubsystemRegistry
 func noopNamesBySubsystem() map[string][]string {
 	return map[string][]string{
 		"s1":  {"core.noop.state_writer"},
-		"s2":  {"core.noop.candidate_proposer"},
 		"s3":  {"core.noop.hint_emitter"},
 		"s4a": {"core.noop.attention_event_writer", "core.noop.directive_distiller"},
 		"s4b": {},
@@ -607,21 +606,21 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 	// Flag-gated activation (PM re-review finding 1 — spec FR-1 / FR-5 / US1).
 	//
 	// Spec FR-5 requires "subsystem enabled IFF master flag AND per-subsystem
-	// flag". The 5 NoOps registered by RegisterNoOps act as the CORE baseline
-	// for the subsystem slot that owns each cross-subsystem interface:
+	// flag". RegisterNoOps provides the shared CORE fallback surfaces; with the
+	// master flag on, `core.noop.candidate_proposer` is always enabled as the
+	// baseline CandidateProposer fallback, while the per-subsystem loop below only
+	// enables additional subsystem-scoped NoOps:
 	//
 	//	s1  (state)               → core.noop.state_writer
-	//	s2  (meta-memory)         → core.noop.candidate_proposer
 	//	s3  (ambient)             → core.noop.hint_emitter
 	//	s4a (directives-capture)  → core.noop.attention_event_writer
 	//	                          + core.noop.directive_distiller
-	//	(s4b / s5 / s6 have no CORE NoOp at this scope.)
+	//	(s2 / s4b / s5 / s6 have no extra CORE NoOp toggles at this scope.)
 	//
-	// Each per-subsystem flag gates whether ITS NoOp is enabled. Other
-	// subsystems' NoOps stay in the "registered" state and ResolveImpls
-	// returns nothing for their interfaces — exactly the FR-5 + US1
-	// semantics ("ENGRAM_V7_S2_METAMEM=true with master on → only S2's slot
-	// is enabled, others stay registered").
+	// Each per-subsystem flag gates whether its extra CORE NoOps are enabled.
+	// Other subsystems' NoOps stay in the "registered" state and ResolveImpls
+	// returns nothing for their interfaces; the shared candidate_proposer fallback
+	// remains active under the master flag until a real proposer replaces it.
 	if err := enableFlaggedCoreNoOps(cRegistry, flagCfg); err != nil {
 		cancel()
 		return nil, err
