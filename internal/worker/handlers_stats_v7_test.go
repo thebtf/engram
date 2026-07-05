@@ -10,6 +10,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/cognitive/core"
+	"github.com/thebtf/engram/internal/cognitive/s5"
 )
 
 // --- Mocks ------------------------------------------------------------------
@@ -29,23 +30,6 @@ func (m *mockSubsystemForHandlers) Start(ctx context.Context, deps core.Dependen
 }
 func (m *mockSubsystemForHandlers) Stop() error          { return nil }
 func (m *mockSubsystemForHandlers) Implements() []string { return m.impl }
-
-// stubProductMetricsProvider implements both core.Subsystem and
-// core.ProductMetricsProvider so we can register it via SubsystemRegistry and
-// have ResolveImpls("ProductMetricsProvider") return a value satisfying the
-// product-metrics interface.
-type stubProductMetricsProvider struct {
-	mockSubsystemForHandlers
-	snap core.ProductMetricsSnapshot
-	err  error
-}
-
-func (s *stubProductMetricsProvider) ProductMetrics(ctx context.Context, w core.ProductMetricsWindow) (core.ProductMetricsSnapshot, error) {
-	if s.err != nil {
-		return core.ProductMetricsSnapshot{}, s.err
-	}
-	return s.snap, nil
-}
 
 // newServiceWithCognitive builds a minimal *Service holding wired CORE
 // platform fields and nothing else. It is the substrate every handler test
@@ -234,7 +218,7 @@ func TestSubstrate_WithSubsystemName_FiltersSnapshot(t *testing.T) {
 
 // --- Product handler ---------------------------------------------------------
 
-func TestProduct_NoProvider_Returns404(t *testing.T) {
+func TestProduct_S5Disabled_Returns404NotEnabled(t *testing.T) {
 	s := newServiceWithCognitive(t)
 	w := httptest.NewRecorder()
 	r := newRequestWithSource(http.MethodGet, "/api/stats/v7/product", auth.SourceClient)
@@ -248,23 +232,14 @@ func TestProduct_NoProvider_Returns404(t *testing.T) {
 	}
 }
 
-func TestProduct_WithProvider_Delegates(t *testing.T) {
+func TestProduct_WithS5Provider_ReturnsNoSampleSnapshot(t *testing.T) {
 	s := newServiceWithCognitive(t)
-	provider := &stubProductMetricsProvider{
-		mockSubsystemForHandlers: mockSubsystemForHandlers{
-			name: "s5-stub",
-			impl: []string{"ProductMetricsProvider"},
-		},
-		snap: core.ProductMetricsSnapshot{
-			Metrics: map[string]float64{"some_metric": 0.42},
-			SampleN: 7,
-		},
-	}
+	provider := s5.NewProvider(s5.Dependencies{})
 	if err := s.cognitiveRegistry.Register(provider); err != nil {
-		t.Fatalf("register stub: %v", err)
+		t.Fatalf("register S5 provider: %v", err)
 	}
-	if err := s.cognitiveRegistry.Enable("s5-stub"); err != nil {
-		t.Fatalf("enable stub: %v", err)
+	if err := s.cognitiveRegistry.Enable(provider.Name()); err != nil {
+		t.Fatalf("enable S5 provider: %v", err)
 	}
 
 	w := httptest.NewRecorder()
@@ -278,8 +253,35 @@ func TestProduct_WithProvider_Delegates(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if snap.SampleN != 7 {
-		t.Errorf("SampleN: got %d, want 7", snap.SampleN)
+	if snap.SampleN != 0 {
+		t.Fatalf("SampleN: got %d, want 0 for no-sample S5 snapshot", snap.SampleN)
+	}
+	if snap.Metrics == nil {
+		t.Fatalf("Metrics: got nil, want explicit empty map for no-sample S5 snapshot")
+	}
+	if len(snap.Metrics) != 0 {
+		t.Fatalf("Metrics: got %#v, want no product metric values without samples", snap.Metrics)
+	}
+	if snap.Readiness == nil {
+		t.Fatalf("Readiness: got nil, want explicit per-metric no-sample evidence")
+	}
+	if len(snap.Readiness) != len(s5.CanonicalMetricKeys()) {
+		t.Fatalf("Readiness len: got %d, want %d canonical metrics", len(snap.Readiness), len(s5.CanonicalMetricKeys()))
+	}
+	for _, metric := range s5.CanonicalMetricKeys() {
+		readiness, ok := snap.Readiness[metric]
+		if !ok {
+			t.Fatalf("Readiness[%s]: missing", metric)
+		}
+		wantThreshold := uint64(0)
+		if metric == s5.MetricHintPrecision {
+			wantThreshold = 30
+		} else if metric == s5.MetricAcceptedHintAction {
+			wantThreshold = 20
+		}
+		if readiness.State != "no_sample" || readiness.SampleN != 0 || readiness.ThresholdN != wantThreshold {
+			t.Fatalf("Readiness[%s]: got %+v, want no_sample with threshold %d for no-sample route", metric, readiness, wantThreshold)
+		}
 	}
 }
 

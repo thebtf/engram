@@ -2,7 +2,10 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"runtime"
 	"sort"
@@ -11,10 +14,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/cognitive/s1state"
 	"github.com/thebtf/engram/internal/cognitive/s2meta"
 	"github.com/thebtf/engram/internal/cognitive/s4directives"
+	"github.com/thebtf/engram/internal/cognitive/s5"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/pkg/cognitive"
@@ -901,6 +906,110 @@ func TestRegisterS4ADirectivesSubsystemRejectsNilService(t *testing.T) {
 
 	err := registerS4ADirectivesSubsystem(registry, nil)
 	require.ErrorIs(t, err, s4directives.ErrNoService)
+}
+
+func newServiceWithV7FlagEnv(t *testing.T, flags map[string]string) *Service {
+	t.Helper()
+	t.Setenv("ENGRAM_AUTH_DISABLED", "true")
+	t.Setenv("ENGRAM_AUTH_ADMIN_TOKEN", "")
+	for _, envVar := range []string{
+		"ENGRAM_V7_PLUG_ENABLED",
+		"ENGRAM_V7_S1_STATE",
+		"ENGRAM_V7_S2_METAMEM",
+		"ENGRAM_V7_S3_AMBIENT",
+		"ENGRAM_V7_S4A_DIRECTIVES_CAPTURE",
+		"ENGRAM_V7_S4B_DIRECTIVES_SURFACING",
+		"ENGRAM_V7_S5_TELEMETRY",
+		"ENGRAM_V7_S6_OUTCOME",
+	} {
+		t.Setenv(envVar, "false")
+	}
+	for envVar, value := range flags {
+		t.Setenv(envVar, value)
+	}
+
+	svc, err := NewService("test-s5-red", nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		require.NoError(t, svc.Shutdown(ctx))
+	})
+	return svc
+}
+
+func resolvedProductMetricProviders(t *testing.T, registry core.SubsystemRegistry) []core.Subsystem {
+	t.Helper()
+	resolver, ok := registry.(interface {
+		ResolveImpls(interfaceName string) []core.Subsystem
+	})
+	if !ok {
+		t.Fatalf("registry does not expose ResolveImpls")
+	}
+	return resolver.ResolveImpls("ProductMetricsProvider")
+}
+
+func TestPlatformWiring_FlagOff_S5ProductMetricsProviderStaysAbsentAndEndpoint404(t *testing.T) {
+	svc := newServiceWithV7FlagEnv(t, map[string]string{
+		"ENGRAM_V7_PLUG_ENABLED":           "true",
+		"ENGRAM_V7_S5_TELEMETRY":           "false",
+		"ENGRAM_V7_S2_METAMEM":             "false",
+		"ENGRAM_V7_S4A_DIRECTIVES_CAPTURE": "false",
+	})
+
+	impls := resolvedProductMetricProviders(t, svc.cognitiveRegistry)
+	require.Empty(t, impls, "S5-disabled worker boot must preserve current no-provider registry behavior")
+
+	w := httptest.NewRecorder()
+	r := newRequestWithSource(http.MethodGet, "/api/stats/v7/product", auth.SourceClient)
+	svc.handleStatsV7Product(w, r)
+	require.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "s5-telemetry not enabled")
+}
+
+func TestPlatformWiring_FlagOn_S5RealProductMetricsProviderRegistersWithSiblingsOff(t *testing.T) {
+	svc := newServiceWithV7FlagEnv(t, map[string]string{
+		"ENGRAM_V7_PLUG_ENABLED":             "true",
+		"ENGRAM_V7_S1_STATE":                 "false",
+		"ENGRAM_V7_S2_METAMEM":               "false",
+		"ENGRAM_V7_S3_AMBIENT":               "false",
+		"ENGRAM_V7_S4A_DIRECTIVES_CAPTURE":   "false",
+		"ENGRAM_V7_S4B_DIRECTIVES_SURFACING": "false",
+		"ENGRAM_V7_S5_TELEMETRY":             "true",
+		"ENGRAM_V7_S6_OUTCOME":               "false",
+	})
+
+	impls := resolvedProductMetricProviders(t, svc.cognitiveRegistry)
+	require.Len(t, impls, 1, "master+S5 flags must register exactly one real ProductMetricsProvider without sibling subsystem flags")
+	require.Equal(t, []string{"engram.s5.product_metrics"}, namesOfSubsystems(impls))
+	_, ok := impls[0].(core.ProductMetricsProvider)
+	require.True(t, ok, "registered S5 subsystem must satisfy core.ProductMetricsProvider")
+}
+
+func TestProductStats_S5OnlyFlagsReturnProductSnapshotWithoutSiblingSubsystems(t *testing.T) {
+	svc := newServiceWithV7FlagEnv(t, map[string]string{
+		"ENGRAM_V7_PLUG_ENABLED":             "true",
+		"ENGRAM_V7_S1_STATE":                 "false",
+		"ENGRAM_V7_S2_METAMEM":               "false",
+		"ENGRAM_V7_S3_AMBIENT":               "false",
+		"ENGRAM_V7_S4A_DIRECTIVES_CAPTURE":   "false",
+		"ENGRAM_V7_S4B_DIRECTIVES_SURFACING": "false",
+		"ENGRAM_V7_S5_TELEMETRY":             "true",
+		"ENGRAM_V7_S6_OUTCOME":               "false",
+	})
+
+	w := httptest.NewRecorder()
+	r := newRequestWithSource(http.MethodGet, "/api/stats/v7/product", auth.SourceClient)
+	svc.handleStatsV7Product(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "S5-only enablement must not require S1/S2/S3/S4/S6 flags; body=%s", w.Body.String())
+
+	var snap core.ProductMetricsSnapshot
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&snap))
+	require.NotNil(t, snap.Metrics, "real S5 provider must return an explicit metrics map, even before product samples exist")
+	require.NotNil(t, snap.Readiness, "real S5 provider must return explicit readiness evidence even before product samples exist")
+	require.Len(t, snap.Readiness, len(s5.CanonicalMetricKeys()), "S5-only route must expose readiness for every canonical metric")
+	require.Equal(t, uint64(30), snap.Readiness[s5.MetricHintPrecision].ThresholdN, "production path must apply S5-owned hint_precision default threshold")
+	require.Equal(t, uint64(20), snap.Readiness[s5.MetricAcceptedHintAction].ThresholdN, "production path must apply S5-owned accepted_hint_action default threshold")
 }
 
 func namesOfSubsystems(impls []core.Subsystem) []string {

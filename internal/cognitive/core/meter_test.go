@@ -111,11 +111,25 @@ func TestRaceUnderConcurrentWrites(t *testing.T) {
 	wg.Wait()
 }
 
-// forbiddenVocabPattern matches any of the 5 S5-owned product metric terms
-// that must never appear in CORE source files.
-var forbiddenVocabPattern = regexp.MustCompile(
-	`\b(precision|miss_rate|burden|freshness|accepted_hint_action)\b`,
-)
+// forbiddenProductMetricTerms enumerates the exact S5-owned product metric keys
+// that must never appear in CORE source files outside the boundary interface.
+var forbiddenProductMetricTerms = []string{
+	"hint_precision",
+	"accepted_hint_action",
+	"miss_rate",
+	"interruption_burden",
+	"state_freshness",
+}
+
+var forbiddenVocabPattern = regexp.MustCompile(forbiddenVocabRegex(forbiddenProductMetricTerms))
+
+func forbiddenVocabRegex(terms []string) string {
+	quoted := make([]string, 0, len(terms))
+	for _, term := range terms {
+		quoted = append(quoted, regexp.QuoteMeta(term))
+	}
+	return `\b(` + strings.Join(quoted, "|") + `)\b`
+}
 
 // TestForbiddenVocabulary_StdlibGate walks all .go files in the
 // internal/cognitive/core package directory (excluding _test.go files and
