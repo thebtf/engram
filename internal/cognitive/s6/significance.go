@@ -15,7 +15,7 @@ const (
 // Thompson-learning fields used by S6 outcome policy.
 func ApplySignificanceRating(mem *models.Memory, rating string) error {
 	if mem == nil {
-		return fmt.Errorf("memory significance updater not available")
+		return fmt.Errorf("memory is nil")
 	}
 	if mem.TsAlpha <= 0 {
 		mem.TsAlpha = 1

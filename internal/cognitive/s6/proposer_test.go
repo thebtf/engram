@@ -158,6 +158,57 @@ func TestOutcomeProposerEmitsOnlyContentFreeHintFields(t *testing.T) {
 	}
 }
 
+func TestOutcomeProposerPreservesTagCloneSemantics(t *testing.T) {
+	t.Run("nil tags stay nil", func(t *testing.T) {
+		createdAt := time.Unix(1700010350, 0).UTC()
+		memory := outcomeCandidate(350, "project-s6-tags-nil", "nil tags", "nil tags body", 6, 2, createdAt)
+		memory.Tags = nil
+		proposer := NewOutcomeProposer(&recordingOutcomeStore{memories: []*models.Memory{memory}})
+
+		proposals, err := proposer.Propose(context.Background(), cognitive.AttentionEvent{
+			Type:    "assistant_plan",
+			Project: "project-s6-tags-nil",
+		}, 1)
+
+		require.NoError(t, err)
+		require.Len(t, proposals, 1)
+		require.Nil(t, proposals[0].Tags, "nil source tags should remain nil in the hint payload")
+	})
+
+	t.Run("empty non nil tags stay non nil", func(t *testing.T) {
+		createdAt := time.Unix(1700010351, 0).UTC()
+		memory := outcomeCandidate(351, "project-s6-tags-empty", "empty tags", "empty tags body", 6, 2, createdAt)
+		memory.Tags = make([]string, 0)
+		proposer := NewOutcomeProposer(&recordingOutcomeStore{memories: []*models.Memory{memory}})
+
+		proposals, err := proposer.Propose(context.Background(), cognitive.AttentionEvent{
+			Type:    "assistant_plan",
+			Project: "project-s6-tags-empty",
+		}, 1)
+
+		require.NoError(t, err)
+		require.Len(t, proposals, 1)
+		require.NotNil(t, proposals[0].Tags, "empty non-nil source tags must remain non-nil after cloning")
+		require.Empty(t, proposals[0].Tags)
+	})
+
+	t.Run("non empty tags use independent backing", func(t *testing.T) {
+		createdAt := time.Unix(1700010352, 0).UTC()
+		memory := outcomeCandidate(352, "project-s6-tags-clone", "clone tags", "clone tags body", 6, 2, createdAt)
+		proposer := NewOutcomeProposer(&recordingOutcomeStore{memories: []*models.Memory{memory}})
+
+		proposals, err := proposer.Propose(context.Background(), cognitive.AttentionEvent{
+			Type:    "assistant_plan",
+			Project: "project-s6-tags-clone",
+		}, 1)
+
+		require.NoError(t, err)
+		require.Len(t, proposals, 1)
+		proposals[0].Tags[0] = "mutated"
+		require.Equal(t, []string{"outcome", "policy"}, memory.Tags, "hint tag mutation must not write through to the memory row")
+	})
+}
+
 func TestOutcomeProposerFiltersByProjectScope(t *testing.T) {
 	createdAt := time.Unix(1700010400, 0).UTC()
 	store := &recordingOutcomeStore{memories: []*models.Memory{

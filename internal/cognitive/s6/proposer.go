@@ -3,6 +3,7 @@ package s6
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -78,7 +79,7 @@ func (p *OutcomeProposer) Propose(ctx context.Context, event cognitive.Attention
 		proposals = append(proposals, cognitive.HintProposal{
 			ID:        fmt.Sprintf("%d", candidate.memory.ID),
 			Title:     advisoryTitle(candidate.memory.ID),
-			Tags:      append([]string(nil), candidate.memory.Tags...),
+			Tags:      slices.Clone(candidate.memory.Tags),
 			CreatedAt: candidate.memory.CreatedAt,
 			Score:     float32(candidate.score),
 			Source:    proposalSource,
