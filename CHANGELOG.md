@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.42.0] - 2026-07-06
+
+### Added
+
+- **Engram v7 ambient attention, ENG-V7-S3 / CR-001 (#401).** Adds the S3 ambient hint lane behind the existing v7 plug gates: same-turn `UserPromptSubmit` hook delivery with a caller-owned 200 ms budget, bounded ambient-candidate fusion over the live `CandidateProposer` contract, and MCP fallback polling through `get_ambient_hints`. Delivery stays intentionally ignorable, bounded to three sanitized hints, and fails open when the daemon, flags, or proposer path cannot provide safe output.
+
+### Fixed
+
+- **S3 review hardening and follow-up repairs (#401).** The final PR review loop defensively clones fused hint tag slices, preserves UTF-8 boundaries while truncating hint titles/reasons in both Go and hook formatting, recovers panicking candidate proposers without taking down the worker, and keeps queued MCP fallback hints intact when same-turn hook delivery is empty.
+
 ## [6.41.0] - 2026-07-05
 
 ### Added
