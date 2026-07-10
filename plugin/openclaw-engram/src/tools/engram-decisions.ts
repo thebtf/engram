@@ -41,7 +41,12 @@ export function createEngramDecisionsTool(
       }
 
       const identity = resolveIdentity(ctx.agentId ?? '', ctx.workspaceDir);
-      const project = config.project ?? identity.projectId;
+      const selectedProject = config.project ?? identity.projectId;
+      const registration = await client.registerAndResolveProject(identity, selectedProject);
+      if (!registration.ok) {
+        return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
+      }
+      const project = registration.canonicalProject;
 
       const response = await client.searchDecisions({
         project,

@@ -1,0 +1,70 @@
+{
+  "change_request": "SECURITY-PROJECT-IDENTITY",
+  "phase": "RED",
+  "observed_at": "2026-07-10T14:46:40.7196462Z",
+  "base_commit": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+  "infrastructure_probe": {
+    "go_test_list": "pass",
+    "claude_node_baseline": "pass 5/5",
+    "openclaw_typecheck_build_baseline": "pass",
+    "openclaw_baseline_tests": "pass 15/15"
+  },
+  "gates": [
+    {
+      "command": "go test ./internal/proxy ./internal/handlers/engramcore ./internal/grpcserver ./internal/db/gorm ./internal/worker -run 'ProjectIdentityV2|RegisterAndResolve|IdentityOnly|AmbiguousLegacy|FirstCallBeforeHook|ProtoFieldNumbers' -count=1",
+      "result": "expected failure",
+      "evidence": [
+        "proxy.ProjectIdentityVersionV2/ProjectIdentityV2/ValidateProjectIdentityV2/ResolveProjectIdentityV2 undefined",
+        "gorm RegisterAndResolve and stable identity error contract undefined",
+        "protobuf ProjectIdentityV2, project_identity, canonical_project undefined",
+        "grpc Server.identityResolver undefined",
+        "worker stable identity error constants undefined"
+      ]
+    },
+    {
+      "command": "node --test project-identity-v2.test.js",
+      "result": "expected failure: 0 pass, 3 fail",
+      "evidence": [
+        "PROJECT_IDENTITY_VERSION_V2 undefined",
+        "resolveProjectIdentityV2 is not a function",
+        "registerProjectIdentityV2 is not a function"
+      ]
+    },
+    {
+      "command": "npm test",
+      "result": "expected failure: build passed; 15 baseline pass, 1 v2 module fail",
+      "evidence": [
+        "named export PROJECT_IDENTITY_VERSION_V2 not found from dist/identity.js"
+      ]
+    },
+    {
+      "command": "npm test after root-authorized OpenClaw transport amendment",
+      "result": "expected failure: build passed; 17 baseline/current identity pass, 5 transport fail",
+      "evidence": [
+        "EngramRestClient.registerAndResolveProject is not a function",
+        "session-start first operation is data rather than registration",
+        "session-start registration failure still permits a write",
+        "invalid-bearer short-circuit cannot be enforced without the barrier"
+      ]
+    },
+    {
+      "command": "edge-regression RED: go test ./internal/db/gorm ./internal/worker ./internal/grpcserver -run 'RawVsNormalized|SoftDeletedBinding|LegacyMetadataPreserves|DoesNotExposeDatabaseDiagnostics' -count=1",
+      "result": "expected failure",
+      "evidence": [
+        "raw selector and metadata normalization reached the unavailable-DB path instead of failing invalid before access",
+        "soft-deleted deterministic binding was silently accepted and mutated",
+        "legacy HTTP metadata returned the path alias as canonical instead of preserving the outer canonical selector",
+        "HTTP and gRPC responses exposed injected PostgreSQL diagnostics"
+      ]
+    },
+    {
+      "command": "edge-regression RED: Claude and OpenClaw project identity tests",
+      "result": "expected failure",
+      "evidence": [
+        "both JavaScript implementations accepted non-normalized metadata and unknown anchor-file fields",
+        "Claude had no explicit classifier separating transport-offline fallback from malformed reached-server responses"
+      ]
+    }
+  ],
+  "red_gate_conclusion": "The runners and baselines are healthy. The focused tests fail for the intended reason: the production Project Identity v2 API and transport fields do not exist yet. Product edits may begin."
+}

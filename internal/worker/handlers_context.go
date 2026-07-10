@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -756,26 +758,32 @@ func grpcCodeToHTTP(code codes.Code) int {
 // @Param project query string false "Project name (required)"
 // @Param agent_id query string false "Agent ID (acts as project scope if project empty)"
 // @Param format query string false "Response format: 'compact' for minimal payload"
-// @Param body body object false "POST body: {project, agent_id, cwd, legacy_project, git_remote, relative_path}"
+// @Param body body object false "POST body: {project, agent_id, cwd, legacy_project, project_identity, identity_only}"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "project required"
+// @Failure 409 {object} map[string]interface{} "ambiguous legacy project identity"
+// @Failure 503 {object} map[string]interface{} "project identity registration unavailable"
 // @Failure 500 {string} string "internal error"
 // @Router /api/context/inject [post]
 // @Router /api/context/inject [get]
 func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
-	var project, agentID, cwd, legacyProject, gitRemote, relativePath, sessionID string
+	var project, agentID, cwd, legacyProject, sessionID string
 	var filesBeingEdited []string
+	var projectIdentity *gorm.ProjectIdentityV2
+	var identityOnly bool
 
 	if r.Method == http.MethodPost {
 		var req struct {
-			Project          string   `json:"project"`
-			AgentID          string   `json:"agent_id"`
-			Cwd              string   `json:"cwd"`
-			LegacyProject    string   `json:"legacy_project"`
-			GitRemote        string   `json:"git_remote"`
-			RelativePath     string   `json:"relative_path"`
-			SessionID        string   `json:"session_id"`
-			FilesBeingEdited []string `json:"files_being_edited"`
+			Project          string                  `json:"project"`
+			AgentID          string                  `json:"agent_id"`
+			Cwd              string                  `json:"cwd"`
+			LegacyProject    string                  `json:"legacy_project"`
+			GitRemote        string                  `json:"git_remote"`
+			RelativePath     string                  `json:"relative_path"`
+			SessionID        string                  `json:"session_id"`
+			FilesBeingEdited []string                `json:"files_being_edited"`
+			ProjectIdentity  *gorm.ProjectIdentityV2 `json:"project_identity"`
+			IdentityOnly     bool                    `json:"identity_only"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -785,18 +793,16 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		agentID = req.AgentID
 		cwd = req.Cwd
 		legacyProject = req.LegacyProject
-		gitRemote = req.GitRemote
-		relativePath = req.RelativePath
 		sessionID = req.SessionID
 		filesBeingEdited = req.FilesBeingEdited
+		projectIdentity = req.ProjectIdentity
+		identityOnly = req.IdentityOnly
 	} else {
 		// GET (deprecated — use POST)
 		project = r.URL.Query().Get("project")
 		agentID = r.URL.Query().Get("agent_id")
 		cwd = r.URL.Query().Get("cwd")
 		legacyProject = r.URL.Query().Get("legacy_project")
-		gitRemote = r.URL.Query().Get("git_remote")
-		relativePath = r.URL.Query().Get("relative_path")
 		sessionID = r.URL.Query().Get("session_id")
 		filesBeingEdited = r.URL.Query()["files_being_edited"]
 	}
@@ -814,14 +820,51 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "project required", http.StatusBadRequest)
 		return
 	}
-
-	// Resolve project aliases: if the slug is a legacy ID, map it to the canonical one.
-	if s.store != nil {
-		project = gorm.ResolveProjectID(r.Context(), s.store.DB, project)
-	}
-
+	// Validate every raw selector and the complete v2 metadata before identity
+	// registration can create a project row or append an alias.
 	if err := ValidateProjectName(project); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if legacyProject != "" {
+		if err := gorm.ValidateProjectAliasV2(legacyProject); err != nil {
+			writeProjectIdentityHTTPError(w, err)
+			return
+		}
+	}
+	if projectIdentity != nil {
+		if err := gorm.ValidateProjectIdentityV2(*projectIdentity); err != nil {
+			writeProjectIdentityHTTPError(w, err)
+			return
+		}
+	}
+
+	// Resolve/register synchronously before any retrieval or tenant mutation.
+	// Identity metadata selects a namespace; bearer/principal authorization is
+	// still enforced independently by the HTTP middleware.
+	if s.store != nil {
+		resolution, resolveErr := gorm.RegisterAndResolve(r.Context(), s.store.DB, project, projectIdentity)
+		if resolveErr != nil {
+			writeProjectIdentityHTTPError(w, resolveErr)
+			return
+		}
+		project = resolution.CanonicalProjectID
+		// Preserve the old HTTP contract: project is the canonical outer selector
+		// and legacy_project is only an alias. Never reverse them on a fresh DB.
+		if projectIdentity == nil && legacyProject != "" && legacyProject != project {
+			if err := gorm.AttachLegacyAlias(r.Context(), s.store.DB, project, legacyProject); err != nil {
+				writeProjectIdentityHTTPError(w, err)
+				return
+			}
+		}
+	} else if identityOnly || projectIdentity != nil {
+		writeProjectIdentityHTTPError(w, &gorm.ProjectIdentityError{Code: gorm.ProjectIdentityUnavailable, UpgradeAction: gorm.UpgradeActionRetryProjectRegistration, Err: fmt.Errorf("project identity database is not ready")})
+		return
+	}
+
+	if identityOnly {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"canonical_project": project})
 		return
 	}
 
@@ -829,20 +872,6 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	// File mtime staleness checks are only meaningful on the client; the server has no
 	// access to client filesystems.
 	cwd = ""
-
-	// When a legacy project ID is provided alongside a canonical one, upsert the
-	// mapping so future requests using the legacy ID resolve correctly.
-	if legacyProject != "" && legacyProject != project {
-		displayName := project
-		if idx := strings.Index(project, "_"); idx > 0 {
-			displayName = project[:idx]
-		}
-		go func() {
-			if err := gorm.UpsertProject(context.Background(), s.store.DB, project, legacyProject, gitRemote, relativePath, displayName); err != nil {
-				log.Warn().Err(err).Str("project", project).Str("legacy", legacyProject).Msg("project upsert failed")
-			}
-		}()
-	}
 
 	// Observation limits come from config; fall back to constants when config is absent.
 	limit := s.config.ContextObservations
@@ -1290,6 +1319,33 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			"budget_trimmed":     budgetTrimmed,
 		})
 	}
+}
+
+func writeProjectIdentityHTTPError(w http.ResponseWriter, err error) {
+	statusCode := http.StatusServiceUnavailable
+	code := gorm.ProjectIdentityUnavailable
+	action := gorm.UpgradeActionRetryProjectRegistration
+	message := gorm.ProjectIdentityPublicMessage(err)
+	var identityErr *gorm.ProjectIdentityError
+	if errors.As(err, &identityErr) {
+		code = identityErr.Code
+		action = identityErr.UpgradeAction
+		switch identityErr.Code {
+		case gorm.ProjectIdentityInvalid:
+			statusCode = http.StatusBadRequest
+		case gorm.ProjectIdentityAmbiguous:
+			statusCode = http.StatusConflict
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]string{
+			"code":           code,
+			"message":        message,
+			"upgrade_action": action,
+		},
+	})
 }
 
 // handleSearchDecisions godoc

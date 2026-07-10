@@ -269,6 +269,8 @@ message CallToolRequest {
   string project = 3;
   // Claude session ID for tracking and outcome propagation.
   string session_id = 4;
+  // Full versioned identity metadata. Additive: old servers ignore it.
+  ProjectIdentityV2 project_identity = 5;
 }
 
 // CallToolResponse carries the result of an MCP tool call.
@@ -277,6 +279,8 @@ message CallToolResponse {
   bool is_error = 1;
   // Tool result as JSON bytes (MCP content array serialized).
   bytes content_json = 2;
+  // Server-resolved canonical selector used for this call.
+  string canonical_project = 3;
 }
 
 // InitializeRequest is the handshake from daemon to server.
@@ -284,6 +288,7 @@ message InitializeRequest {
   string client_name = 1;
   string client_version = 2;
   string project = 3;
+  ProjectIdentityV2 project_identity = 4;
 }
 
 // InitializeResponse carries server capabilities and tool definitions.
@@ -291,6 +296,7 @@ message InitializeResponse {
   string server_name = 1;
   string server_version = 2;
   repeated ToolDefinition tools = 3;
+  string canonical_project = 4;
 }
 
 // ToolDefinition describes a single MCP tool.
@@ -359,4 +365,20 @@ message CodeIndexUploadReceipt {
   int32           embedded = 1;
   int32           deleted  = 2;
   repeated string errors   = 3;
+}
+
+// ProjectIdentityV2 carries one complete identity source. Git identities use
+// git_remote+relative_path. Non-git identities use a 128-bit anchor and require
+// explicit anchor_shared presence. The selector remains on the outer request
+// for old-server compatibility; metadata is not an authentication credential.
+// Appended after the existing message declarations to minimize generated-code
+// churn while preserving every pre-v2 descriptor index.
+message ProjectIdentityV2 {
+  uint32 version = 1;
+  string legacy_project_id = 2;
+  string display_name = 3;
+  string git_remote = 4;
+  string relative_path = 5;
+  string non_git_anchor = 6;
+  optional bool anchor_shared = 7;
 }

@@ -74,7 +74,7 @@ graph TB
     end
 
     %% Hook → Server
-    H1 -->|GET /context/inject| HTTP
+    H1 -->|POST /context/inject| HTTP
     H2 -->|POST| HTTP
     H3 -->|POST| HTTP
     H5 -->|POST| HTTP
@@ -126,8 +126,12 @@ graph TB
 ```
 Claude Code starts session
   → session-start.js hook fires
-    → GET /api/context/inject?project=X&cwd=Y
-      → MemoryStore: retrieve always-inject + project-scoped memories
+    → resolve versioned project identity (git metadata or strict non-git anchor)
+    → POST /api/context/inject with identity_only=true
+      → transactionally RegisterAndResolve in the existing projects registry
+      → return canonical_project before any project-scoped data access
+    → POST /api/context/inject with canonical selector
+      → retrieve project-scoped context
       → Format as <engram-context>...</engram-context>
       → Return to Claude Code (injected into system prompt)
 ```
@@ -137,7 +141,8 @@ Claude Code starts session
 ```
 Agent calls store_memory / store MCP tool
   → engram daemon receives stdio JSON-RPC
-    → gRPC call to engram-server
+    → gRPC CallTool carries outer legacy selector + ProjectIdentityV2
+      → server transactionally resolves canonical project before dispatch
       → MemoryStore.Create(memory)
         → PostgreSQL INSERT into memories table
         → FTS tsvector auto-updated
@@ -148,7 +153,8 @@ Agent calls store_memory / store MCP tool
 ```
 Agent calls recall_memory / recall MCP tool
   → engram daemon receives stdio JSON-RPC
-    → gRPC call to engram-server
+    → gRPC CallTool carries outer legacy selector + ProjectIdentityV2
+      → server transactionally resolves canonical project before dispatch
       → Hybrid search: FTS (tsvector) + optional vector (pgvector)
       → Ranked results returned
 ```
@@ -162,6 +168,20 @@ Claude Code tool call / user prompt / session end
     → SSE event broadcast to dashboard
 ```
 
+### OpenClaw Project Access
+
+```
+OpenClaw hook / tool / command / file watcher resolves workspace identity
+  → EngramRestClient.registerAndResolveProject(identity, outer selector)
+    → POST /api/context/inject {project, project_identity, identity_only:true}
+    → await canonical_project (concurrent and late calls are deduplicated)
+  → only then issue the context/session/memory/issue/vault data request
+```
+
+Registration failure is a hard short-circuit: no downstream project request is
+sent. `config.project` remains the outer compatibility selector; it is not a
+credential and does not override bearer/principal authorization.
+
 ## Authentication Flow (v6)
 
 ```
@@ -172,6 +192,18 @@ Server starts with ENGRAM_AUTH_ADMIN_TOKEN
         → All MCP + hook traffic uses the worker keycard
           → Server validates token → resolves workstation identity
 ```
+
+Project identity is a routing and convergence contract, not authentication.
+Knowing or supplying a selector, git remote/path, or non-git anchor never grants
+access to private data. HTTP/gRPC bearer validation and principal visibility
+rules remain independent gates and run before tenant operations.
+
+`ProjectIdentityV2` is additive on the protobuf wire. Old clients continue with
+the outer selector only and succeed only while it resolves unambiguously; an
+ambiguous legacy selector fails closed with `PROJECT_IDENTITY_AMBIGUOUS` and the
+machine-readable action `send_project_identity_v2`. Non-git anchors are 16 random
+bytes encoded as 32 lowercase hexadecimal characters in
+`.engram-project-v2.json`; sharing is opt-in via an explicit boolean.
 
 ## Deployment
 

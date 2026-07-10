@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "task_id": "SECURITY-PROJECT-IDENTITY-R4",
+  "phase": "anti_stub_prove_it",
+  "immutable_target": "38344455754fe503acbd79d2134141f996adff7f",
+  "mutation": {
+    "committed": false,
+    "path": "internal/proxy/identity.go",
+    "description": "Temporarily replaced complete-temp-plus-hard-link publication with create-final/write-half/sync/delay/write-rest, recreating the R2 publish-before-complete window.",
+    "target_git_blob_before": "9ecbad17612e7dd4e2ce8c8fed10ee4e041e11c1",
+    "command": "go test ./internal/proxy -run '^TestResolveProjectIdentityV2_ChildProcessPublicationContract$' -count=1 -v",
+    "exit_code": 1,
+    "expected_result": "FAIL",
+    "observed_failure": "concurrent_first_use_publishes_only_complete_bytes",
+    "partial_or_unreadable_observations": 239,
+    "unaffected_preservation_subtests": [
+      "existing_valid_anchor_stays_byte_identical PASS",
+      "existing_malformed_anchor_fails_closed_and_stays_byte_identical PASS",
+      "open_delayed_partial_writer_fails_closed_and_is_not_replaced PASS"
+    ]
+  },
+  "restoration": {
+    "method": "exact inverse apply_patch before any commit",
+    "target_git_blob_after": "9ecbad17612e7dd4e2ce8c8fed10ee4e041e11c1",
+    "product_diff_after": "empty",
+    "green_command": "go test ./internal/proxy -run '^TestResolveProjectIdentityV2_ChildProcessPublicationContract$' -count=2 -v",
+    "green_result": "PASS (2/2 complete contract runs, zero partial observations)"
+  },
+  "final_test_contains_sleep_synchronization": false
+}

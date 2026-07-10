@@ -1,0 +1,58 @@
+{
+  "change_request": "SECURITY-PROJECT-IDENTITY",
+  "phase": "PROVE_IT",
+  "observed_date": "2026-07-10",
+  "mutations": [
+    {
+      "surface": "database binding key",
+      "mutation": "temporarily replaced the deterministic v2 binding key with one constant",
+      "expected_failure_observed": [
+        "contradictory full identities returned PROJECT_IDENTITY_AMBIGUOUS",
+        "copied unshared anchors converged when they must remain distinct"
+      ]
+    },
+    {
+      "surface": "Go non-git entropy",
+      "mutation": "zeroed the 16 random bytes before encoding",
+      "expected_failure_observed": "independent project anchors became equal"
+    },
+    {
+      "surface": "Claude non-git entropy",
+      "mutation": "replaced crypto.randomBytes output with zero bytes",
+      "expected_failure_observed": "independent project anchors became equal"
+    },
+    {
+      "surface": "OpenClaw non-git entropy",
+      "mutation": "replaced randomBytes output with zero bytes",
+      "expected_failure_observed": "independent project anchors became equal"
+    },
+    {
+      "surface": "OpenClaw registration barrier",
+      "mutation": "returned selector success before performing the registration HTTP request",
+      "expected_failure_observed": [
+        "request count was 0 instead of 1",
+        "stable 409 ambiguity was incorrectly reported as success",
+        "invalid bearer was incorrectly reported as success",
+        "three of five transport tests failed"
+      ]
+    },
+    {
+      "surface": "Claude registration barrier",
+      "mutation": "returned the legacy selector before invoking the registration request",
+      "expected_failure_observed": "canonical selector remained legacy-selector instead of canonical-v2"
+    },
+    {
+      "surface": "behavioral edge regressions",
+      "mutation": "added tests before fixes for raw-vs-normalized input, soft-deleted binding, legacy canonical direction, diagnostic leakage, strict anchor fields, and offline classification",
+      "expected_failure_observed": "all six defect classes failed for their intended reasons before implementation"
+    }
+  ],
+  "restoration": {
+    "sentinel_scan_matches": 0,
+    "full_go_suite": "pass",
+    "race_and_repeat": "pass",
+    "openclaw": "pass 23/23",
+    "claude_hooks": "pass 72/72",
+    "fresh_database_residue": 0
+  }
+}
