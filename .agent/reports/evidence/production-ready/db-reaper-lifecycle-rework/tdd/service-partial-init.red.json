@@ -1,0 +1,11 @@
+{
+  "task_id": "db-reaper-service-partial-init",
+  "observed_at": "2026-07-10T10:10:30.4712439Z",
+  "test_file": "internal/worker/service_reaper_lifecycle_test.go",
+  "test_name": "TestServiceShutdown_PartialInitIsNilSafeAndIdempotent",
+  "invariant": "Shutdown is safe when construction or async initialization has not populated optional lifecycle fields.",
+  "failure_reason": "Shutdown unconditionally invoked a nil cancel function and panicked.",
+  "runner_command": "go test ./internal/worker -run '^TestServiceShutdown_PartialInitIsNilSafeAndIdempotent$' -count=1 -v",
+  "runner_exit_code": 1,
+  "runner_stdout_excerpt": "panic: runtime error: invalid memory address or nil pointer dereference\nService.Shutdown service.go:2220\nTestServiceShutdown_PartialInitIsNilSafeAndIdempotent service_reaper_lifecycle_test.go:12"
+}

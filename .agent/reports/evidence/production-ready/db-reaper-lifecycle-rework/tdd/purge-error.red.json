@@ -1,0 +1,11 @@
+{
+  "task_id": "db-reaper-purge-error",
+  "observed_at": "2026-07-10T10:04:17.5190633Z",
+  "test_file": "internal/worker/reaper/reaper_test.go",
+  "test_name": "TestReaper_PurgeOnceReturnsQueryError",
+  "invariant": "The synchronous PurgeOnce API reports a failed DELETE to its caller instead of logging the failure and returning nil.",
+  "failure_reason": "purge logged sql: database is closed, but PurgeOnce returned nil.",
+  "runner_command": "$env:DATABASE_DSN='postgres://engram:engram@localhost:55432/engram_prc_reaper?sslmode=disable'; go test ./internal/worker/reaper -run '^TestReaper_PurgeOnceReturnsQueryError$' -count=1 -v",
+  "runner_exit_code": 1,
+  "runner_stdout_excerpt": "project reaper: purge query failed: sql: database is closed\nreaper_test.go:246: PurgeOnce returned nil after the database was closed\n--- FAIL: TestReaper_PurgeOnceReturnsQueryError"
+}

@@ -1,0 +1,11 @@
+{
+  "task_id": "db-reaper-concurrent-lifecycle",
+  "observed_at": "2026-07-10T10:08:29.3755547Z",
+  "test_file": "internal/worker/reaper/reaper_test.go",
+  "test_name": "TestReaper_ConcurrentStartIsIdempotent and lifecycle siblings",
+  "invariant": "Concurrent and repeated Start/Stop own at most one loop, join cancellation, stop every ticker exactly once, and leave no active goroutine.",
+  "failure_reason": "The production Reaper had no concurrency-safe lifecycle state or injectable ticker ownership seam.",
+  "runner_command": "go test ./internal/worker/reaper -run '^TestReaper_(ConcurrentStartIsIdempotent|ConcurrentStopJoinsSingleLoop|StopWaitsForTickerCleanup|ConcurrentStartStopLeavesNoLoopOrTicker|StopsOnContextCancel)$' -count=1 -v",
+  "runner_exit_code": 1,
+  "runner_stdout_excerpt": "reaper_test.go:290:53: undefined: reaperTicker\nreaper_test.go:333:4: r.newTicker undefined\nreaper_test.go:408:36: undefined: reaperTicker\nFAIL github.com/thebtf/engram/internal/worker/reaper [build failed]"
+}

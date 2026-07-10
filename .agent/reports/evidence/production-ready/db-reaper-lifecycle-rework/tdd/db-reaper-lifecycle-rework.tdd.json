@@ -1,0 +1,69 @@
+{
+  "task_id": "db-reaper-lifecycle-rework",
+  "stack": "GO",
+  "red": [
+    {
+      "observed_at": "2026-07-10T10:02:01.0213459Z",
+      "test": "TestParseRetentionConfig_ExplicitInvalidAndLargeBehavior",
+      "evidence": "retention-config.red.json"
+    },
+    {
+      "observed_at": "2026-07-10T10:04:17.5190633Z",
+      "test": "TestReaper_PurgeOnceReturnsQueryError",
+      "evidence": "purge-error.red.json"
+    },
+    {
+      "observed_at": "2026-07-10T10:05:50.1611201Z",
+      "test": "TestReaper_StopBeforeStartReturns",
+      "evidence": "stop-before-start.red.json"
+    },
+    {
+      "observed_at": "2026-07-10T10:08:29.3755547Z",
+      "test": "TestReaper_ConcurrentStartIsIdempotent and lifecycle siblings",
+      "evidence": "concurrent-lifecycle.red.json"
+    },
+    {
+      "observed_at": "2026-07-10T10:10:30.4712439Z",
+      "test": "TestServiceShutdown_PartialInitIsNilSafeAndIdempotent",
+      "evidence": "service-partial-init.red.json"
+    },
+    {
+      "observed_at": "2026-07-10T10:12:50.9687795Z",
+      "test": "TestServiceShutdown_ConcurrentCallsStopReaperOnce and shutdown-order siblings",
+      "evidence": "service-reaper-order.red.json"
+    }
+  ],
+  "green": {
+    "observed_at": "2026-07-10T10:23:33.1887949Z",
+    "focused_repeat": 20,
+    "reaper_race_repeat": 10,
+    "service_shutdown_race_repeat": 10,
+    "regressed_tests": 0,
+    "evidence": "../verification-summary.json"
+  },
+  "refactor": {
+    "applied": true,
+    "patterns": [
+      "replace shared close channels with a mutex-guarded lifecycle state machine",
+      "extract bounded retention parsing from environment access",
+      "split Shutdown once-wrapper from ordered shutdown implementation"
+    ],
+    "post_refactor_parity": true
+  },
+  "prove_it": {
+    "status": "PASS",
+    "failed_tests": 5,
+    "substituted_files": [
+      "internal/worker/reaper/reaper.go",
+      "internal/worker/service.go"
+    ],
+    "evidence": "prove-it.json",
+    "reverted_at": "2026-07-10T10:36:26.3898501Z"
+  },
+  "coverage": {
+    "percent": 87.6,
+    "threshold": 80,
+    "status": "PASS",
+    "profile": "../coverage/reaper.coverage.out"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "task_id": "db-reaper-retention-config",
+  "observed_at": "2026-07-10T10:02:01.0213459Z",
+  "test_file": "internal/worker/reaper/reaper_test.go",
+  "test_name": "TestParseRetentionConfig_ExplicitInvalidAndLargeBehavior",
+  "invariant": "Malformed, zero, and negative retention values use the documented default, while positive values beyond safe duration arithmetic skip the purge instead of wrapping into an over-delete cutoff.",
+  "failure_reason": "The production package had no bounded retention parser or maximum duration-safe retention constant.",
+  "runner_command": "$env:DATABASE_DSN='postgres://engram:engram@localhost:55432/engram_prc_reaper?sslmode=disable'; go test ./internal/worker/reaper -run '^(TestParseRetentionConfig_ExplicitInvalidAndLargeBehavior|TestReaper_InvalidRetentionFallsBack|TestReaper_LargeRetentionDoesNotWrapOrPurgeNewerRows)$' -count=1",
+  "runner_exit_code": 1,
+  "runner_stdout_excerpt": "internal\\worker\\reaper\\reaper_test.go:154:66: undefined: maxRetentionDays\ninternal\\worker\\reaper\\reaper_test.go:161:11: undefined: parseRetentionConfig\ninternal\\worker\\reaper\\reaper_test.go:208:62: undefined: maxRetentionDays\nFAIL github.com/thebtf/engram/internal/worker/reaper [build failed]"
+}

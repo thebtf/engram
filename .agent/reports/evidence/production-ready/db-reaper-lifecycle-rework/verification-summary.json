@@ -1,0 +1,86 @@
+{
+  "observed_at": "2026-07-10T10:23:33.1887949Z",
+  "database": "engram_prc_reaper_lifecycle_rework",
+  "results": [
+    {
+      "name": "focused_edge_matrix_repeat_20",
+      "command": "go test ./internal/worker/reaper -run <retention-error-lifecycle-matrix> -count=20",
+      "status": "PASS",
+      "output": "ok github.com/thebtf/engram/internal/worker/reaper 2.688s"
+    },
+    {
+      "name": "reaper_race_repeat_10",
+      "command": "go test -race ./internal/worker/reaper -count=10",
+      "status": "PASS",
+      "output": "ok github.com/thebtf/engram/internal/worker/reaper 3.788s"
+    },
+    {
+      "name": "service_shutdown_race_repeat_10",
+      "command": "go test -race ./internal/worker -run '^TestServiceShutdown_' -count=10",
+      "status": "PASS",
+      "output": "ok github.com/thebtf/engram/internal/worker 6.024s"
+    },
+    {
+      "name": "reaper_package_repeat_3",
+      "command": "go test ./internal/worker/reaper -count=3",
+      "status": "PASS",
+      "output": "ok github.com/thebtf/engram/internal/worker/reaper 0.522s"
+    },
+    {
+      "name": "worker_unit_baseline",
+      "command": "DATABASE_DSN unset; go test ./internal/worker -count=1",
+      "status": "PASS",
+      "output": "ok github.com/thebtf/engram/internal/worker 0.762s"
+    },
+    {
+      "name": "worker_tree_unit_baseline",
+      "command": "DATABASE_DSN unset; go test ./internal/worker/... -count=1",
+      "status": "PASS",
+      "output": "worker, projectevents, reaper, sdk, session, and sse packages passed"
+    },
+    {
+      "name": "repository_unit_baseline",
+      "command": "DATABASE_DSN unset; go test ./... -count=1",
+      "status": "PASS",
+      "output": "all repository packages passed; packages without tests were reported explicitly"
+    },
+    {
+      "name": "reaper_coverage",
+      "command": "go test ./internal/worker/reaper -coverprofile=reaper.coverage.out -count=1",
+      "status": "PASS",
+      "output": "87.6% statements"
+    },
+    {
+      "name": "vet",
+      "command": "go vet ./...",
+      "status": "PASS",
+      "output": "exit 0"
+    },
+    {
+      "name": "server_build",
+      "command": "go build -o .agent/tmp/db-reaper-lifecycle/engram-server.exe ./cmd/engram-server",
+      "status": "PASS",
+      "output": "48905728 bytes; SHA256 FCF19C377C32F86071052F6C1DCBB8DA53F5E360F65C1DBF0D12BC1DB74E7760"
+    },
+    {
+      "name": "diff_check",
+      "command": "git diff --check",
+      "status": "PASS",
+      "output": "exit 0"
+    }
+  ],
+  "discrepancies": [
+    {
+      "command": "DATABASE_DSN=engram_prc_reaper_lifecycle_rework; go test ./internal/worker -count=1",
+      "status": "FAIL_OUT_OF_SCOPE",
+      "failures": [
+        "TestAuthHandlersLifecycle_LastAdminDemoteRaceLeavesOneAdmin",
+        "TestAuthHandlersLifecycle_DisabledAdminCanBeDemotedWithoutLastAdminError",
+        "TestCrystallizationIntegration_DecisionsStoredWithCorrectFields",
+        "TestCrystallizationIntegration_PrivacyRedaction",
+        "TestCrystallizationIntegration_ConcurrentReplaySkipsDuplicateFingerprint"
+      ],
+      "classification": "No failing test touches the reaper/service lifecycle diff. The two auth failures belong to the separately assigned DB-AUTH isolation lane. The three crystallization tests assert demolished direct decision-memory behavior and are outside the DB-REAPER contract. The same worker package and full repository pass with DATABASE_DSN unset, while the DB-backed shutdown tests pass under repeat and race."
+    }
+  ]
+}
