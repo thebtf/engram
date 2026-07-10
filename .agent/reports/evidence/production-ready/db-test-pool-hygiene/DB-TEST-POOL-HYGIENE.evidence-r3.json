@@ -1,0 +1,65 @@
+{
+  "schema_version": 3,
+  "status": "READY_FOR_RECHECK",
+  "product_parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+  "product_candidate_sha": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
+  "evidence_revision_parent_sha": "68242c48aaad62ec087166eeb9ea32f14d189450",
+  "branch": "work/prc-db-test-pool-hygiene-evidence-r3",
+  "worktree": "D:\\Dev\\engram\\.w\\dbph-r3",
+  "scope": "evidence-only",
+  "product_or_test_paths_changed_by_revision": [],
+  "whole_delta_base_sha": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
+  "whole_delta_changed_paths": 16,
+  "whole_delta_directly_manifest_bound_paths": 14,
+  "exact_self_exclusions": {
+    "manifest_entries": [
+      ".agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json",
+      ".agent/reports/evidence/production-ready/db-test-pool-hygiene/SHA256SUMS.txt"
+    ],
+    "outer_checksum": [
+      ".agent/reports/evidence/production-ready/db-test-pool-hygiene/SHA256SUMS.txt"
+    ]
+  },
+  "dynamic_proofs_directly_bound": [
+    ".agent/reports/evidence/production-ready/db-test-pool-hygiene/adversarial-proof.json",
+    ".agent/reports/evidence/production-ready/db-test-pool-hygiene/verifier-proof.json"
+  ],
+  "product_test_blob": {
+    "path": "internal/db/gorm/candidate_store_test.go",
+    "git_blob_oid": "7337f1bd8da4fb315de842eea2e3cce5476250a3",
+    "sha256": "62260c1a2e0705b065295322dd23fcf9b17fd47cb5ebc64134630788e2d23e09",
+    "byte_identical_to_product_candidate": true
+  },
+  "inventory": {
+    "parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+    "call_sites": 83,
+    "files": 8
+  },
+  "verification": {
+    "baseline": "PASS",
+    "manifest_entries": 30,
+    "checksum_entries": 31,
+    "inventory_call_sites": 83,
+    "inventory_files": 8,
+    "adversarial_cases": 12,
+    "adversarial_status": "PASS",
+    "adversarial_case_names": [
+      "baseline",
+      "missing_changed_path",
+      "unsorted_manifest_and_sums",
+      "duplicate_manifest_and_sums",
+      "wrong_type_representation_id_array",
+      "null_representation_id",
+      "wrong_type_exclusions_scalar",
+      "wrong_type_inventory_numeric_strings",
+      "null_inventory_count",
+      "crlf_raw_representation",
+      "incorrect_representation_contract",
+      "false_inventory_76_6"
+    ],
+    "git_diff_check": "PASS",
+    "gitleaks_reports_scan": "PASS",
+    "gitleaks_version": "8.30.0"
+  },
+  "handoff_commit": "REPORTED_OUT_OF_BAND_TO_AVOID_SELF_REFERENCE"
+}

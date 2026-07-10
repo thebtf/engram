@@ -1,29 +1,42 @@
 {
-  "schema_version": 2,
-  "generated_utc": "2026-07-10T14:10:39.8450122Z",
-  "status": "READY_FOR_RECHECK",
+  "schema_version": 3,
+  "generated_utc": "2026-07-10T23:46:22.1600511Z",
+  "status": "READY_FOR_RECHECK_EVIDENCE_R3",
   "product_parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
   "product_candidate_sha": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
-  "evidence_revision_base_sha": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
-  "evidence_revision_head_sha": null,
-  "evidence_revision_head_reason": "reported after the atomic commit because a commit cannot embed its own hash",
+  "evidence_revision_parent_sha": "68242c48aaad62ec087166eeb9ea32f14d189450",
+  "evidence_revision_target": "GitIndex",
+  "evidence_delta": {
+    "comparison": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9..GitIndex",
+    "changed_path_count": 16,
+    "directly_manifest_bound_count": 14,
+    "product_or_test_paths_changed": [],
+    "manifest_entry_self_excluded_paths": [
+      ".agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json",
+      ".agent/reports/evidence/production-ready/db-test-pool-hygiene/SHA256SUMS.txt"
+    ],
+    "checksum_self_excluded_paths": [
+      ".agent/reports/evidence/production-ready/db-test-pool-hygiene/SHA256SUMS.txt"
+    ]
+  },
   "representation_contract": {
     "id": "git-blob-bytes-v1",
     "digest": "SHA-256",
     "object_type": "blob",
-    "path_binding": "each path at the verified Git index/revision must resolve to git_blob_oid",
+    "path_binding": "each path at the verified Git index/revision resolves to git_blob_oid",
     "contract_bytes": "git cat-file blob <git_blob_oid> exact stdout bytes",
-    "working_tree_bytes": "excluded; raw CRLF checkout bytes are expected to fail",
+    "working_tree_bytes": "excluded; raw CRLF checkout bytes fail verification",
     "text_git_blob_line_endings": "LF",
-    "manifest_self_reference": "excluded",
+    "manifest_self_reference": "excluded-from-manifest-entries-bound-by-outer-checksum",
     "outer_checksum_path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/SHA256SUMS.txt",
     "outer_checksum_generation_order": "manifest-first-checksum-second",
-    "outer_checksum_self_reference": "excluded",
-    "dynamic_attestations_excluded": [
-      ".agent/reports/evidence/production-ready/db-test-pool-hygiene/adversarial-proof.json",
-      ".agent/reports/evidence/production-ready/db-test-pool-hygiene/verifier-proof.json"
-    ],
-    "exclusion_reason": "dynamic run attestations are anchored by the final Git commit; including them would require rewriting checksums after verification"
+    "outer_checksum_self_reference": "excluded"
+  },
+  "product_test_blob": {
+    "path": "internal/db/gorm/candidate_store_test.go",
+    "git_blob_oid": "7337f1bd8da4fb315de842eea2e3cce5476250a3",
+    "sha256": "62260c1a2e0705b065295322dd23fcf9b17fd47cb5ebc64134630788e2d23e09",
+    "byte_identical_to_product_candidate": true
   },
   "inventory": {
     "parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
@@ -31,7 +44,14 @@
     "required_files": 8,
     "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json"
   },
+  "entry_count": 30,
   "entries": [
+    {
+      "path": ".agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md",
+      "git_blob_oid": "88960a7d51986a1c0de49ac4b8d4e447f0866bac",
+      "bytes": 5303,
+      "sha256": "86a843700a146ad46dfcb6e8c7cb9b8433312dcd755383761e2313d3b13c72dc"
+    },
     {
       "path": ".agent/reports/2026-07-10-db-test-pool-hygiene-maker.md",
       "git_blob_oid": "d951bf50086e78699edbcc59be2a7126461e9f80",
@@ -39,10 +59,10 @@
       "sha256": "51c95f8471312f6fd81e1ba2d58f206d7bb368032079c47b55bd0e7147cd8001"
     },
     {
-      "path": ".agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md",
-      "git_blob_oid": "88960a7d51986a1c0de49ac4b8d4e447f0866bac",
-      "bytes": 5303,
-      "sha256": "86a843700a146ad46dfcb6e8c7cb9b8433312dcd755383761e2313d3b13c72dc"
+      "path": ".agent/reports/2026-07-11-db-test-pool-hygiene-evidence-revision3-maker.md",
+      "git_blob_oid": "d860880d0466e77c152bda3946352bd0387a3e59",
+      "bytes": 3008,
+      "sha256": "7fcc3759c36bc91b7fd0e04dc3d9309df3b8b8c56585ed562e73bb362002ba34"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/01-parent-broad.summary.log",
@@ -135,16 +155,28 @@
       "sha256": "6b74e1f64b909f8ffe0042fbc7d2dc6d8310752f2c7398352a395d6d6362b677"
     },
     {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/Build-DBPoolHygieneEvidence.ps1",
+      "git_blob_oid": "e6d8d7c599743ef5cf73259ae441d527b503ba78",
+      "bytes": 8339,
+      "sha256": "57557b01f087ab8040747fb1183a965582b80a1c4b58b743ed2606f9bbe45339"
+    },
+    {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r2.json",
       "git_blob_oid": "73438a1ea8917c62666d779a356e09eaa7768a85",
       "bytes": 2711,
       "sha256": "c4fdaad603d5c03954cd1026afc9a9c01c0e0963c367390247a795b5382584e1"
     },
     {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r3.json",
+      "git_blob_oid": "15fa98aae65c4e32b423a8785465b32f0921c900",
+      "bytes": 2438,
+      "sha256": "69439533993845249230a227189e1a7ffc63d4f0819218da2d0ecceb782c3c6c"
+    },
+    {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.final.json",
-      "git_blob_oid": "49fdd939d5b3af05cedc9a2dc1c0a2845ce9d421",
-      "bytes": 1742,
-      "sha256": "91d76ab5a76e0ad0758aa3ba6962e0e93b8d912ac2a8166f438976d63a7c7918"
+      "git_blob_oid": "cfed381f2a57336cb8d7b7c448f13b9b07642cfb",
+      "bytes": 2045,
+      "sha256": "8acb07220208e4d73f3915ee545db5978026bad6730fee2f4ab7cfa97515c6d5"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.red.json",
@@ -166,15 +198,27 @@
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/Test-DBPoolHygieneEvidenceAdversarial.ps1",
-      "git_blob_oid": "cd6754d9bf926aaabda85dfe775f5e7fa716b3dc",
-      "bytes": 9341,
-      "sha256": "d82926f353a9f3924c6047a279eb22dfb201da59fe190098d3fef4a6c058a502"
+      "git_blob_oid": "5e179a6127283405fd30bfacde29165e7bf17734",
+      "bytes": 14938,
+      "sha256": "1217a0a5b94e6c4c99bfdb3be28152de980c581c61aeab3242f8088339df50e6"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/Verify-DBPoolHygieneEvidence.ps1",
-      "git_blob_oid": "1a83d15c370cc74e3eed7b41316c7dac11f175c5",
-      "bytes": 12657,
-      "sha256": "56b807d244df9c0f8ac2f8405d2eb6bfec90a6198ae8f9a695a97e71a3d16632"
+      "git_blob_oid": "45da5886276d41c2d7a5bc5a19097e49c3c4e4b0",
+      "bytes": 30427,
+      "sha256": "3ca48c3ff8765164a4a4ad26554180e0ea8bc778f65fe8818bc3b850e1828393"
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/adversarial-proof.json",
+      "git_blob_oid": "a13f6471c2c6ea9a14efd6e5346880ad7c742e6c",
+      "bytes": 19900,
+      "sha256": "d96e7bcf50a711eed43d16868ad275d9a942e8d998e35f71bef2cf066a9abc51"
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/verifier-proof.json",
+      "git_blob_oid": "5730d460cfbbd20e8a1f284311962a4ef3b83c48",
+      "bytes": 404,
+      "sha256": "10f4078c1d6044450fd022ae2e7cc777d2f059121bda0923d395566007e01928"
     },
     {
       "path": "internal/db/gorm/candidate_store_test.go",

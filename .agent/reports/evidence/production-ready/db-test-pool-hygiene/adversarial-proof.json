@@ -1,5 +1,5 @@
 {
-  "generated_utc": "2026-07-10T14:11:53.6332739Z",
+  "schema_version": 3,
   "status": "PASS",
   "source_mode": "GitIndex",
   "revision": "INDEX",
@@ -14,14 +14,158 @@
       "pass": true
     },
     {
-      "name": "stale_manifest_entry",
+      "name": "missing_changed_path",
       "expected_exit": "nonzero",
       "actual_exit": 1,
       "verifier_status": "FAIL",
-      "expected_failure": "manifest SHA-256 mismatch",
+      "expected_failure": "manifest missing changed path",
+      "observed_failures": "manifest missing changed path: .agent/reports/evidence/production-ready/db-test-pool-hygiene/14-evidence-r2-focused.log",
+      "pass": true
+    },
+    {
+      "name": "unsorted_manifest_and_sums",
+      "expected_exit": "nonzero",
+      "actual_exit": 1,
+      "verifier_status": "FAIL",
+      "expected_failure": "not canonical ordinal order",
       "observed_failures": [
-        "manifest SHA-256 mismatch: .agent/reports/2026-07-10-db-test-pool-hygiene-maker.md",
+        "manifest paths are not canonical ordinal order: internal/db/gorm/candidate_store_test.go before .agent/reports/evidence/production-ready/db-test-pool-hygiene/verifier-proof.json",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/verifier-proof.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/adversarial-proof.json",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/adversarial-proof.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/Verify-DBPoolHygieneEvidence.ps1",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/Verify-DBPoolHygieneEvidence.ps1 before .agent/reports/evidence/production-ready/db-test-pool-hygiene/Test-DBPoolHygieneEvidenceAdversarial.ps1",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/Test-DBPoolHygieneEvidenceAdversarial.ps1 before .agent/reports/evidence/production-ready/db-test-pool-hygiene/Invoke-DBPoolHygieneGo.ps1",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/Invoke-DBPoolHygieneGo.ps1 before .agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.red.json",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.red.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.final.json",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.final.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r3.json",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r3.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r2.json",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r2.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/Build-DBPoolHygieneEvidence.ps1",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/Build-DBPoolHygieneEvidence.ps1 before .agent/reports/evidence/production-ready/db-test-pool-hygiene/15-evidence-r2-static.txt",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/15-evidence-r2-static.txt before .agent/reports/evidence/production-ready/db-test-pool-hygiene/14-evidence-r2-focused.log",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/14-evidence-r2-focused.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/13-final-residue.log",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/13-final-residue.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/12-static-gates.txt",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/12-static-gates.txt before .agent/reports/evidence/production-ready/db-test-pool-hygiene/11-parent-successor-comparison.txt",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/11-parent-successor-comparison.txt before .agent/reports/evidence/production-ready/db-test-pool-hygiene/10-candidate-race.log",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/10-candidate-race.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/09-candidate-repeat5.log",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/09-candidate-repeat5.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/08-successor-broad.summary.log",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/08-successor-broad.summary.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/07-race.log",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/07-race.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/06-repeat20.log",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/06-repeat20.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/05-post-prove-green.log",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/05-post-prove-green.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/04-prove-it.log",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/04-prove-it.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/03-green-focused.log",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/03-green-focused.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/02-parent-red.log",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/02-parent-red.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/01-parent-broad.summary.log",
+        "manifest paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/01-parent-broad.summary.log before .agent/reports/2026-07-11-db-test-pool-hygiene-evidence-revision3-maker.md",
+        "manifest paths are not canonical ordinal order: .agent/reports/2026-07-11-db-test-pool-hygiene-evidence-revision3-maker.md before .agent/reports/2026-07-10-db-test-pool-hygiene-maker.md",
+        "manifest paths are not canonical ordinal order: .agent/reports/2026-07-10-db-test-pool-hygiene-maker.md before .agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md",
+        "checksum paths are not canonical ordinal order: internal/db/gorm/candidate_store_test.go before .agent/reports/evidence/production-ready/db-test-pool-hygiene/verifier-proof.json",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/verifier-proof.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/adversarial-proof.json",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/adversarial-proof.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/Verify-DBPoolHygieneEvidence.ps1",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/Verify-DBPoolHygieneEvidence.ps1 before .agent/reports/evidence/production-ready/db-test-pool-hygiene/Test-DBPoolHygieneEvidenceAdversarial.ps1",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/Test-DBPoolHygieneEvidenceAdversarial.ps1 before .agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/Invoke-DBPoolHygieneGo.ps1",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/Invoke-DBPoolHygieneGo.ps1 before .agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.red.json",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.red.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.final.json",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.final.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r3.json",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r3.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r2.json",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r2.json before .agent/reports/evidence/production-ready/db-test-pool-hygiene/Build-DBPoolHygieneEvidence.ps1",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/Build-DBPoolHygieneEvidence.ps1 before .agent/reports/evidence/production-ready/db-test-pool-hygiene/15-evidence-r2-static.txt",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/15-evidence-r2-static.txt before .agent/reports/evidence/production-ready/db-test-pool-hygiene/14-evidence-r2-focused.log",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/14-evidence-r2-focused.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/13-final-residue.log",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/13-final-residue.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/12-static-gates.txt",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/12-static-gates.txt before .agent/reports/evidence/production-ready/db-test-pool-hygiene/11-parent-successor-comparison.txt",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/11-parent-successor-comparison.txt before .agent/reports/evidence/production-ready/db-test-pool-hygiene/10-candidate-race.log",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/10-candidate-race.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/09-candidate-repeat5.log",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/09-candidate-repeat5.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/08-successor-broad.summary.log",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/08-successor-broad.summary.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/07-race.log",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/07-race.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/06-repeat20.log",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/06-repeat20.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/05-post-prove-green.log",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/05-post-prove-green.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/04-prove-it.log",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/04-prove-it.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/03-green-focused.log",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/03-green-focused.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/02-parent-red.log",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/02-parent-red.log before .agent/reports/evidence/production-ready/db-test-pool-hygiene/01-parent-broad.summary.log",
+        "checksum paths are not canonical ordinal order: .agent/reports/evidence/production-ready/db-test-pool-hygiene/01-parent-broad.summary.log before .agent/reports/2026-07-11-db-test-pool-hygiene-evidence-revision3-maker.md",
+        "checksum paths are not canonical ordinal order: .agent/reports/2026-07-11-db-test-pool-hygiene-evidence-revision3-maker.md before .agent/reports/2026-07-10-db-test-pool-hygiene-maker.md",
+        "checksum paths are not canonical ordinal order: .agent/reports/2026-07-10-db-test-pool-hygiene-maker.md before .agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md"
+      ],
+      "pass": true
+    },
+    {
+      "name": "duplicate_manifest_and_sums",
+      "expected_exit": "nonzero",
+      "actual_exit": 1,
+      "verifier_status": "FAIL",
+      "expected_failure": "duplicate manifest path",
+      "observed_failures": [
+        "duplicate manifest path: .agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md",
+        "manifest paths are not canonical ordinal order: internal/db/gorm/candidate_store_test.go before .agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md",
+        "duplicate checksum path: .agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md",
+        "checksum paths are not canonical ordinal order: internal/db/gorm/candidate_store_test.go before .agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md"
+      ],
+      "pass": true
+    },
+    {
+      "name": "wrong_type_representation_id_array",
+      "expected_exit": "nonzero",
+      "actual_exit": 1,
+      "verifier_status": "FAIL",
+      "expected_failure": "must be JSON string, got array",
+      "observed_failures": [
+        "manifest.representation_contract.id must be JSON string, got array",
         "outer checksum mismatch: .agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json"
+      ],
+      "pass": true
+    },
+    {
+      "name": "null_representation_id",
+      "expected_exit": "nonzero",
+      "actual_exit": 1,
+      "verifier_status": "FAIL",
+      "expected_failure": "must be JSON string, got null",
+      "observed_failures": [
+        "manifest.representation_contract.id must be JSON string, got null",
+        "unsupported representation contract: ",
+        "outer checksum mismatch: .agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json"
+      ],
+      "pass": true
+    },
+    {
+      "name": "wrong_type_exclusions_scalar",
+      "expected_exit": "nonzero",
+      "actual_exit": 1,
+      "verifier_status": "FAIL",
+      "expected_failure": "must be JSON array, got string",
+      "observed_failures": [
+        "manifest.evidence_delta.manifest_entry_self_excluded_paths must be JSON array, got string",
+        "manifest entry self exclusions must contain exactly 2 item(s)",
+        "outer checksum mismatch: .agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json"
+      ],
+      "pass": true
+    },
+    {
+      "name": "wrong_type_inventory_numeric_strings",
+      "expected_exit": "nonzero",
+      "actual_exit": 1,
+      "verifier_status": "FAIL",
+      "expected_failure": "must be JSON number, got string",
+      "observed_failures": [
+        "inventory.required_call_sites must be JSON number, got string",
+        "inventory.required_files must be JSON number, got string",
+        "outer checksum mismatch: .agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json"
+      ],
+      "pass": true
+    },
+    {
+      "name": "null_inventory_count",
+      "expected_exit": "nonzero",
+      "actual_exit": 1,
+      "verifier_status": "FAIL",
+      "expected_failure": "must be JSON number, got null",
+      "observed_failures": [
+        "inventory.required_call_sites must be JSON number, got null",
+        "inventory acceptance constants must be 83/8, got /8",
+        "outer checksum mismatch: .agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json"
       ],
       "pass": true
     },
@@ -30,7 +174,7 @@
       "expected_exit": "nonzero",
       "actual_exit": 1,
       "verifier_status": "FAIL",
-      "expected_failure": "outer checksum mismatch",
+      "expected_failure": "manifest bytes contain CR",
       "observed_failures": [
         "manifest bytes contain CR; LF Git blob bytes are required",
         "outer checksum mismatch: .agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json"
@@ -66,5 +210,5 @@
     }
   ],
   "temp_root_removed": true,
-  "cleanup_error": null
+  "cleanup": "PASS"
 }

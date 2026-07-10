@@ -1,8 +1,8 @@
 {
-  "status": "READY_FOR_RECHECK_EVIDENCE_R2",
+  "status": "READY_FOR_RECHECK_EVIDENCE_R3",
   "parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
   "product_candidate_sha": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
-  "branch": "work/prc-db-test-pool-hygiene-evidence-r2",
+  "branch": "work/prc-db-test-pool-hygiene-evidence-r3",
   "changed_implementation_paths": [
     "internal/db/gorm/candidate_store_test.go"
   ],
@@ -42,8 +42,13 @@
   },
   "evidence_contract": {
     "representation": "git-blob-bytes-v1",
-    "manifest_self_reference": "excluded",
+    "whole_delta_base_sha": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
+    "manifest_self_reference": "excluded from manifest entries and bound by outer checksum",
     "outer_checksum_generation_order": "final manifest first; outer checksum second",
+    "outer_checksum_self_reference": "excluded",
+    "dynamic_proofs_directly_bound": true,
+    "canonical_path_order": "StringComparer.Ordinal",
+    "strict_raw_json_types": true,
     "inventory_parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
     "inventory_required_call_sites": 83,
     "inventory_required_files": 8
