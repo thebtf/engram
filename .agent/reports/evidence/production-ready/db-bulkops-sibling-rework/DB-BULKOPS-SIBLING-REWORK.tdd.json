@@ -1,0 +1,103 @@
+{
+  "task_id": "DB-BULKOPS-SIBLING-REWORK",
+  "stack": "GO",
+  "base_commit": "6ea10496aa127fba7fdb194875044e770d0a1d8c",
+  "findings": [
+    "H1 candidate_review_action snapshots omitted the exact candidate After state",
+    "M1 nil-facade MCP dry-run did not share facade ID normalization",
+    "M2 all-row bulk-promote failure wrote a success-shaped bulk_promote audit"
+  ],
+  "red_evidence": [
+    {
+      "finding": "H1",
+      "artifact": "H1-candidate-review-after.red.json",
+      "result": "RED",
+      "observed": "promote, preserve, reject, supersede, and suppress all persisted empty candidate SnapshotEntry.After values"
+    },
+    {
+      "finding": "M1",
+      "artifact": "M1-nil-facade-normalization.red.json",
+      "result": "RED",
+      "observed": "nil-facade preview returned 4 instead of 2 for duplicate IDs after zero coercion"
+    },
+    {
+      "finding": "M2",
+      "artifact": "M2-all-row-failure-audit.red.json",
+      "result": "RED",
+      "observed": "zero-success execution wrote one action=bulk_promote audit row"
+    }
+  ],
+  "green_evidence": {
+    "H1": {
+      "database": "engram_prc_bulkops_sibling_green_20260710_095039575",
+      "result": "PASS",
+      "coverage": "real public snapshot constructor plus real promote, preserve, reject, supersede, and suppress store methods; persisted After exactly matched the authoritative returned candidate and rollback restored pending without fixture SQL amendment"
+    },
+    "M1": {
+      "observed_at": "2026-07-10T06:49:01Z",
+      "result": "PASS",
+      "coverage": "nil-facade MCP duplicate and zero input normalized to two candidate IDs"
+    },
+    "M2": {
+      "database": "engram_prc_bulkops_sibling_green_20260710_095039575",
+      "result": "PASS",
+      "coverage": "zero-success execution created no snapshot, no bulk_promote success audit, and one bulk_promote_failed audit with attempted, affected, and failed counts"
+    },
+    "database_cleanup": {
+      "sessions_before_drop": 0,
+      "residue_after_drop": 0
+    }
+  },
+  "prove_it": [
+    {
+      "sentinel": "panic in promoteWithMemoryAndSnapshotAction",
+      "permanent_test_failed": "public candidate-review promote regression",
+      "post_restore": "PASS"
+    },
+    {
+      "sentinel": "panic in transitionWithSnapshot",
+      "permanent_test_failed": "public candidate-review reject regression",
+      "post_restore": "PASS"
+    },
+    {
+      "sentinel": "panic in amendCandidateReviewAfterTx",
+      "permanent_test_failed": "public candidate-review promote regression",
+      "post_restore": "PASS"
+    },
+    {
+      "sentinel": "panic in NormalizeCandidateIDs",
+      "permanent_test_failed": "nil-facade MCP dry-run regression",
+      "post_restore": "PASS"
+    },
+    {
+      "sentinel": "panic in handleBulkPromote",
+      "permanent_test_failed": "nil-facade MCP dry-run regression",
+      "post_restore": "PASS"
+    },
+    {
+      "sentinel": "panic in executeBulkPromote",
+      "permanent_test_failed": "all-row failure audit regression",
+      "post_restore": "PASS"
+    }
+  ],
+  "repeat": {
+    "database": "engram_prc_bulkops_sibling_repeat20_20260710_100246118",
+    "command": "go test -p=1 ./internal/bulkops ./internal/mcp -run '^(TestRollback_PublicCandidateReview(PromotePersistsAfterAndRestoresPending|PreservePersistsAfterAndRestoresPending|NonMemoryActionsPersistAfterAndRestorePending)|TestFacade_BulkPromote_AllRowsFailWritesExplicitFailureAudit|TestBulkPromote_DryRun_NilFacade)$' -count=20",
+    "result": "PASS",
+    "scenario_executions": 140,
+    "bulkops_duration": "27.940s",
+    "mcp_duration": "0.095s",
+    "database_cleanup": {
+      "sessions_before_drop": 0,
+      "residue_after_drop": 0
+    }
+  },
+  "refactor": {
+    "applied": false,
+    "reason": "The minimum production change already centralizes normalization and snapshot amendment; further extraction would expand the checker-bounded rework without improving the verified contract."
+  },
+  "discarded_harness_runs": [
+    "The first H1 RED attempt was discarded because the new test did not compile until its auth import was added; only the subsequent behavior failure is recorded as RED.",
+    "One post-fix fixture run was discarded because PowerShell parsed $db?sslmode as a variable name and produced database '=disable'; the exact test database was still dropped with zero residue, and the corrected ${db} DSN run passed."
+  ]
+}

@@ -5,7 +5,7 @@
 // previews per spec §FR-F6.b.
 //
 // Dry-run nil-safe seam (TG5 absent): when bulkFacade is nil AND dry_run=true,
-// the handler computes would_affect from the input array length and returns
+// the handler computes would_affect from normalized candidate IDs and returns
 // immediately — no DB read, no write. When dry_run=false and facade is nil,
 // an error is returned (operation not available).
 package mcp
@@ -90,8 +90,8 @@ func bulkOpsTools() []Tool {
 // handleBulkPromote promotes a list of crystallization candidates to memories.
 //
 // Admin gate: non-admin callers receive admin_required error.
-// Dry-run nil-safe seam: when bulkFacade is nil and dry_run=true, returns
-// would_affect from len(candidate_ids) — zero DB reads or writes.
+// Dry-run nil-safe seam: when bulkFacade is nil and dry_run=true, returns the
+// same sorted unique non-zero candidate count as the facade — zero DB reads or writes.
 func (s *Server) handleBulkPromote(ctx context.Context, args json.RawMessage) (string, error) {
 	if !vnextFEnabled() {
 		return "", fmt.Errorf("bulk_promote: requires ENGRAM_VNEXT_F_ENABLED=true")
@@ -106,16 +106,16 @@ func (s *Server) handleBulkPromote(ctx context.Context, args json.RawMessage) (s
 		return "", err
 	}
 
-	candidateIDs := coerceInt64Slice(m["candidate_ids"])
+	candidateIDs := bulkops.NormalizeCandidateIDs(coerceInt64Slice(m["candidate_ids"]))
 	dryRun := coerceBool(m["dry_run"], false)
 
 	// Nil-safe TG5-absent dry-run seam: when facade is nil and dry_run=true,
-	// return a preview using the input array length — no DB access.
+	// return a preview using the facade's normalized ID contract — no DB access.
 	if dryRun && s.bulkFacade == nil {
 		out := map[string]any{
-			"dry_run":     true,
+			"dry_run":      true,
 			"would_affect": len(candidateIDs),
-			"note":        "bulk_promote preview (facade not wired — would_affect from input only)",
+			"note":         "bulk_promote preview (facade not wired — normalized input only)",
 		}
 		return marshalJSON(out)
 	}
@@ -136,12 +136,12 @@ func (s *Server) handleBulkPromote(ctx context.Context, args json.RawMessage) (s
 	}
 
 	out := map[string]any{
-		"dry_run":       result.DryRun,
-		"would_affect":  result.WouldAffect,
+		"dry_run":        result.DryRun,
+		"would_affect":   result.WouldAffect,
 		"affected_count": result.AffectedCount,
-		"snapshot_id":   result.SnapshotID,
-		"promoted":      result.Promoted,
-		"errors":        result.Errors,
+		"snapshot_id":    result.SnapshotID,
+		"promoted":       result.Promoted,
+		"errors":         result.Errors,
 	}
 	return marshalJSON(out)
 }

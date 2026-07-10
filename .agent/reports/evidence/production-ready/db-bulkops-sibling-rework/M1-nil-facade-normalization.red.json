@@ -1,0 +1,10 @@
+{
+  "task_id": "DB-BULKOPS-SIBLING-M1",
+  "stack": "GO",
+  "observed_at": "2026-07-10T06:46:33.4325051Z",
+  "test_file": "internal/mcp/tools_dryrun_test.go",
+  "test_name": "TestBulkPromote_DryRun_NilFacade",
+  "command": "go test ./internal/mcp -run '^TestBulkPromote_DryRun_NilFacade$' -count=1",
+  "failure_reason": "The nil-facade MCP seam removed zero IDs but retained duplicates, returning 4 instead of the facade-normalized 2.",
+  "runner_stdout_excerpt": "expected: 2; actual: 4; TEST_EXIT=1"
+}

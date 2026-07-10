@@ -15,6 +15,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/thebtf/engram/internal/reviewpacket"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -672,14 +673,8 @@ func createCandidateReviewStoreTestCandidate(t *testing.T, cs *CandidateStore, c
 
 func newCandidateReviewStoreTestSnapshot(t *testing.T, candidate *models.CrystallizationCandidate, action string, actor string) *models.BulkOpSnapshot {
 	t.Helper()
-	snapshot, err := models.NewBulkOpSnapshot(
-		fmt.Sprintf("candidate-review-%s-%d", action, time.Now().UnixNano()),
-		models.SnapshotOpCandidateReviewAction,
-		actor,
-		json.RawMessage(`{}`),
-	)
+	snapshot, err := reviewpacket.NewCandidateReviewActionSnapshot(action, candidate, actor)
 	require.NoError(t, err)
-	snapshot.SourceSessionID = candidate.SourceSessionID
 	return snapshot
 }
 

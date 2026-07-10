@@ -96,7 +96,7 @@ func TestBulkPromote_DryRun_NilFacade(t *testing.T) {
 	adminID := auth.Identity{Role: auth.RoleAdmin, Source: auth.SourceMaster}
 	ctx := auth.WithIdentity(context.Background(), adminID)
 
-	args := json.RawMessage(`{"candidate_ids": [1, 2, 3], "dry_run": true}`)
+	args := json.RawMessage(`{"candidate_ids": [2, 0, 1, 2, 1, 0], "dry_run": true}`)
 
 	result, err := s.handleBulkPromote(ctx, args)
 	require.NoError(t, err, "bulk_promote dry_run with nil facade must not error")
@@ -105,7 +105,8 @@ func TestBulkPromote_DryRun_NilFacade(t *testing.T) {
 	var out map[string]any
 	require.NoError(t, json.Unmarshal([]byte(result), &out))
 	assert.Equal(t, true, out["dry_run"])
-	assert.Equal(t, float64(3), out["would_affect"], "would_affect must equal len(candidate_ids)")
+	assert.Equal(t, float64(2), out["would_affect"],
+		"nil-facade preview must use the facade's sorted unique non-zero candidate-ID contract")
 }
 
 // TestBulkDelete_DryRun_NilFacade verifies bulk_delete dry_run=true

@@ -1021,3 +1021,55 @@ func TestFacade_BulkPromote_CandidateInsertedAfterLockedCaptureIsNotPromoted(t *
 	require.Equal(t, models.CandidateStatusPending, lateCandidate.Status)
 	require.Nil(t, lateCandidate.PromotedMemoryID)
 }
+
+func TestFacade_BulkPromote_AllRowsFailWritesExplicitFailureAudit(t *testing.T) {
+	db, store := openTestDB(t)
+	ctx := context.Background()
+	memStore := gormdb.NewMemoryStore(store)
+	snapshotStore := gormdb.NewSnapshotStore(db)
+	auditStore := gormdb.NewAuditStore(db)
+	candidateStore := gormdb.NewCandidateStore(db, nil)
+	facade := NewFacade(snapshotStore, candidateStore, memStore, auditStore)
+	suffix := fmt.Sprintf("all-fail-audit-%d", time.Now().UnixNano())
+	actor := "agent/" + suffix
+	candidate := createBulkPromoteCandidate(t, candidateStore, suffix)
+	rejected, err := candidateStore.TransitionToRejected(ctx, candidate.ID, "fixture rejects promotion")
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusRejected, rejected.Status)
+	missingID := candidate.ID + 1_000_000_000
+
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM audit_log WHERE actor = ?", actor).Error
+		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
+		_ = db.Unscoped().Exec("DELETE FROM memories WHERE project = ?", "bulk-promote-"+suffix).Error
+	})
+
+	result, err := facade.Execute(ctx, auth.Identity{
+		Role:      auth.RoleAdmin,
+		Source:    auth.SourceMaster,
+		KeycardID: actor,
+	}, BulkOp{
+		Type:         models.SnapshotOpBulkPromote,
+		CandidateIDs: []int64{candidate.ID, missingID},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Zero(t, result.AffectedCount)
+	require.Empty(t, result.SnapshotID)
+	require.Len(t, result.Errors, 2)
+
+	var successAuditCount int64
+	require.NoError(t, db.Table("audit_log").
+		Where("action = ? AND actor = ?", "bulk_promote", actor).
+		Count(&successAuditCount).Error)
+	require.Zero(t, successAuditCount, "all-row failure must not emit a success-shaped bulk_promote audit")
+
+	var failureAudits []gormdb.AuditLogEntry
+	require.NoError(t, db.Table("audit_log").
+		Where("action = ? AND actor = ?", "bulk_promote_failed", actor).
+		Find(&failureAudits).Error)
+	require.Len(t, failureAudits, 1, "all-row failure must emit one explicit failed outcome")
+	require.Contains(t, failureAudits[0].Reason, "attempted=2")
+	require.Contains(t, failureAudits[0].Reason, "affected=0")
+	require.Contains(t, failureAudits[0].Reason, "failed=2")
+}

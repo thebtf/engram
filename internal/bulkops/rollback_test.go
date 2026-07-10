@@ -21,7 +21,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/reviewpacket"
 	"github.com/thebtf/engram/pkg/models"
 	"gorm.io/gorm"
 )
@@ -739,4 +741,245 @@ func TestRollback_CandidateReviewPromoteEditedMemoryConflicts(t *testing.T) {
 	stillCommitted, err := snapStore.Get(ctx, createdSnap.SnapshotID)
 	require.NoError(t, err)
 	assert.Equal(t, models.SnapshotStatusCommitted, stillCommitted.Status)
+}
+
+func createPublicCandidateReviewRollbackCandidate(
+	t *testing.T,
+	candidateStore *gormdb.CandidateStore,
+	suffix string,
+	project string,
+) *models.CrystallizationCandidate {
+	t.Helper()
+	candidate, err := candidateStore.Create(context.Background(), &models.CrystallizationCandidate{
+		SourceSessionID:         "public-candidate-review-" + suffix,
+		ProposedContent:         "public candidate review " + suffix,
+		ProposedTier:            "semantic",
+		ProposedEpistemicType:   "decision",
+		ProposedPromotionTarget: "semantic",
+		EvidenceHandles:         []string{"session:public-candidate-review-" + suffix},
+		PrivacyScope:            "project",
+		Status:                  models.CandidateStatusPending,
+		Fingerprint:             fmt.Sprintf("public-candidate-review-%s-%d", suffix, time.Now().UnixNano()),
+		AffectedProjects:        []string{project},
+		Confidence:              0.9,
+		RecurrenceCount:         2,
+	})
+	require.NoError(t, err)
+	return candidate
+}
+
+func publicCandidateReviewMemory(candidate *models.CrystallizationCandidate, project string) *models.Memory {
+	return &models.Memory{
+		Content:       candidate.ProposedContent,
+		Project:       project,
+		Tier:          candidate.ProposedTier,
+		EpistemicType: candidate.ProposedEpistemicType,
+		Tags:          []string{fmt.Sprintf("candidate:%d", candidate.ID), "crystallized"},
+		SourceAgent:   "crystallization",
+	}
+}
+
+func requirePersistedCandidateReviewAfter(
+	t *testing.T,
+	ctx context.Context,
+	snapshotStore *gormdb.SnapshotStore,
+	snapshotID string,
+	want *models.CrystallizationCandidate,
+) {
+	t.Helper()
+	persisted, err := snapshotStore.Get(ctx, snapshotID)
+	require.NoError(t, err)
+	var entries map[string]models.SnapshotEntry
+	require.NoError(t, json.Unmarshal(persisted.BeforeState, &entries))
+	entry, ok := entries[fmt.Sprintf("candidate:%d", want.ID)]
+	require.True(t, ok, "candidate restore entry must be persisted")
+	require.NotEmpty(t, entry.After, "live candidate_review_action must persist its authoritative after-state")
+	wantJSON, err := json.Marshal(want)
+	require.NoError(t, err)
+	require.JSONEq(t, string(wantJSON), string(entry.After),
+		"SnapshotEntry.After must exactly match the authoritative post-mutation candidate")
+}
+
+func cleanupPublicCandidateReviewRollback(
+	t *testing.T,
+	db *gorm.DB,
+	candidate *models.CrystallizationCandidate,
+	project string,
+	actor string,
+) {
+	t.Helper()
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM audit_log WHERE actor = ? OR source_session_id = ?", actor, candidate.SourceSessionID).Error
+		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE source_session_id = ?", candidate.SourceSessionID).Error
+		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
+		_ = db.Unscoped().Exec("DELETE FROM memories WHERE project = ?", project).Error
+	})
+}
+
+func TestRollback_PublicCandidateReviewPromotePersistsAfterAndRestoresPending(t *testing.T) {
+	db, store := openRollbackTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapshotStore := gormdb.NewSnapshotStore(db)
+	auditStore := gormdb.NewAuditStore(db)
+	candidateStore := gormdb.NewCandidateStore(db, auditStore)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("promote-%d", time.Now().UnixNano())
+	project := "candidate-review-" + suffix
+	actor := "agent/" + suffix
+	candidate := createPublicCandidateReviewRollbackCandidate(t, candidateStore, suffix, project)
+	cleanupPublicCandidateReviewRollback(t, db, candidate, project, actor)
+
+	snapshot, err := reviewpacket.NewCandidateReviewActionSnapshot("promote", candidate, actor)
+	require.NoError(t, err)
+	updated, createdMemory, createdSnapshot, err := candidateStore.PromoteWithMemoryAndSnapshot(
+		ctx,
+		snapshotStore,
+		candidate.ID,
+		publicCandidateReviewMemory(candidate, project),
+		snapshot,
+		actor,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, createdSnapshot)
+	require.NotNil(t, createdMemory)
+	require.Equal(t, models.CandidateStatusPromoted, updated.Status)
+	requirePersistedCandidateReviewAfter(t, ctx, snapshotStore, createdSnapshot.SnapshotID, updated)
+
+	result, err := Rollback(
+		ctx,
+		auth.Identity{Role: auth.RoleAdmin, Source: auth.SourceMaster, KeycardID: actor},
+		createdSnapshot.SnapshotID,
+		snapshotStore,
+		memStore,
+		auditStore,
+		candidateStore,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.RestoredCount)
+	restored, err := candidateStore.Get(ctx, candidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusPending, restored.Status)
+	require.Nil(t, restored.PromotedMemoryID)
+	var memoryCount int64
+	require.NoError(t, db.Unscoped().Model(&gormdb.Memory{}).Where("id = ?", createdMemory.ID).Count(&memoryCount).Error)
+	require.Zero(t, memoryCount)
+}
+
+func TestRollback_PublicCandidateReviewPreservePersistsAfterAndRestoresPending(t *testing.T) {
+	db, store := openRollbackTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapshotStore := gormdb.NewSnapshotStore(db)
+	auditStore := gormdb.NewAuditStore(db)
+	candidateStore := gormdb.NewCandidateStore(db, auditStore)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("preserve-%d", time.Now().UnixNano())
+	project := "candidate-review-" + suffix
+	actor := "agent/" + suffix
+	candidate := createPublicCandidateReviewRollbackCandidate(t, candidateStore, suffix, project)
+	cleanupPublicCandidateReviewRollback(t, db, candidate, project, actor)
+
+	snapshot, err := reviewpacket.NewCandidateReviewActionSnapshot(reviewpacket.ReviewActionPreserve, candidate, actor)
+	require.NoError(t, err)
+	updated, createdMemory, createdSnapshot, err := candidateStore.PreserveWithMemoryAndSnapshot(
+		ctx,
+		snapshotStore,
+		candidate.ID,
+		publicCandidateReviewMemory(candidate, project),
+		snapshot,
+		actor,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, createdSnapshot)
+	require.NotNil(t, createdMemory)
+	require.Equal(t, models.CandidateStatusPromoted, updated.Status)
+	requirePersistedCandidateReviewAfter(t, ctx, snapshotStore, createdSnapshot.SnapshotID, updated)
+
+	result, err := Rollback(
+		ctx,
+		auth.Identity{Role: auth.RoleAdmin, Source: auth.SourceMaster, KeycardID: actor},
+		createdSnapshot.SnapshotID,
+		snapshotStore,
+		memStore,
+		auditStore,
+		candidateStore,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.RestoredCount)
+	restored, err := candidateStore.Get(ctx, candidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusPending, restored.Status)
+	require.Nil(t, restored.PromotedMemoryID)
+}
+
+func TestRollback_PublicCandidateReviewNonMemoryActionsPersistAfterAndRestorePending(t *testing.T) {
+	tests := []struct {
+		name           string
+		action         string
+		expectedStatus models.CandidateStatus
+		apply          func(context.Context, *gormdb.CandidateStore, *gormdb.SnapshotStore, int64, *models.BulkOpSnapshot, string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error)
+	}{
+		{
+			name:           "reject",
+			action:         "reject",
+			expectedStatus: models.CandidateStatusRejected,
+			apply: func(ctx context.Context, store *gormdb.CandidateStore, snapshots *gormdb.SnapshotStore, id int64, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error) {
+				return store.TransitionToRejectedWithSnapshot(ctx, snapshots, id, "not durable enough", snapshot, actor)
+			},
+		},
+		{
+			name:           "supersede",
+			action:         "supersede",
+			expectedStatus: models.CandidateStatusSuperseded,
+			apply: func(ctx context.Context, store *gormdb.CandidateStore, snapshots *gormdb.SnapshotStore, id int64, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error) {
+				return store.TransitionToSupersededWithSnapshot(ctx, snapshots, id, snapshot, actor)
+			},
+		},
+		{
+			name:           "suppress",
+			action:         reviewpacket.ReviewActionSuppress,
+			expectedStatus: models.CandidateStatusRejected,
+			apply: func(ctx context.Context, store *gormdb.CandidateStore, snapshots *gormdb.SnapshotStore, id int64, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error) {
+				return store.TransitionToSuppressedWithSnapshot(ctx, snapshots, id, "suppress noise", snapshot, actor)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db, store := openRollbackTestDB(t)
+			memStore := gormdb.NewMemoryStore(store)
+			snapshotStore := gormdb.NewSnapshotStore(db)
+			auditStore := gormdb.NewAuditStore(db)
+			candidateStore := gormdb.NewCandidateStore(db, auditStore)
+			ctx := context.Background()
+			suffix := fmt.Sprintf("%s-%d", tc.name, time.Now().UnixNano())
+			project := "candidate-review-" + suffix
+			actor := "agent/" + suffix
+			candidate := createPublicCandidateReviewRollbackCandidate(t, candidateStore, suffix, project)
+			cleanupPublicCandidateReviewRollback(t, db, candidate, project, actor)
+
+			snapshot, err := reviewpacket.NewCandidateReviewActionSnapshot(tc.action, candidate, actor)
+			require.NoError(t, err)
+			updated, createdSnapshot, err := tc.apply(ctx, candidateStore, snapshotStore, candidate.ID, snapshot, actor)
+			require.NoError(t, err)
+			require.NotNil(t, createdSnapshot)
+			require.Equal(t, tc.expectedStatus, updated.Status)
+			requirePersistedCandidateReviewAfter(t, ctx, snapshotStore, createdSnapshot.SnapshotID, updated)
+
+			result, err := Rollback(
+				ctx,
+				auth.Identity{Role: auth.RoleAdmin, Source: auth.SourceMaster, KeycardID: actor},
+				createdSnapshot.SnapshotID,
+				snapshotStore,
+				memStore,
+				auditStore,
+				candidateStore,
+			)
+			require.NoError(t, err)
+			require.Equal(t, 1, result.RestoredCount)
+			restored, err := candidateStore.Get(ctx, candidate.ID)
+			require.NoError(t, err)
+			require.Equal(t, models.CandidateStatusPending, restored.Status)
+		})
+	}
 }

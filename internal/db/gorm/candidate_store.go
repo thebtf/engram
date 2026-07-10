@@ -454,6 +454,11 @@ func (s *CandidateStore) promoteWithMemoryAndSnapshotAction(
 			}
 		}
 		if candidateReviewAuditRequired(snapshot) {
+			amendedBeforeState, err := amendCandidateReviewAfterTx(ctx, tx, createdSnapshot.SnapshotID, updatedCandidate)
+			if err != nil {
+				return err
+			}
+			createdSnapshot.BeforeState = amendedBeforeState
 			return s.logCandidateReviewAuditTx(ctx, tx, reviewAction, actor, "", beforeCandidate, updatedCandidate)
 		}
 		return nil
@@ -680,12 +685,73 @@ func (s *CandidateStore) transitionWithSnapshot(
 			return err
 		}
 		updatedCandidate = afterCandidate
+		amendedBeforeState, err := amendCandidateReviewAfterTx(ctx, tx, createdSnapshot.SnapshotID, afterCandidate)
+		if err != nil {
+			return err
+		}
+		createdSnapshot.BeforeState = amendedBeforeState
 		return s.logCandidateReviewAuditTx(ctx, tx, action, actor, detail, beforeCandidate, afterCandidate)
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 	return updatedCandidate, createdSnapshot, nil
+}
+
+func amendCandidateReviewAfterTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	snapshotID string,
+	afterCandidate *models.CrystallizationCandidate,
+) (json.RawMessage, error) {
+	if afterCandidate == nil || afterCandidate.ID <= 0 {
+		return nil, fmt.Errorf("amend_candidate_review_after: authoritative candidate is required")
+	}
+
+	var row snapshotRow
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("snapshot_id = ?", snapshotID).
+		First(&row).Error; err != nil {
+		return nil, fmt.Errorf("amend_candidate_review_after: get snapshot %q: %w", snapshotID, err)
+	}
+	if row.OpType != string(models.SnapshotOpCandidateReviewAction) {
+		return nil, fmt.Errorf("amend_candidate_review_after: snapshot %q has op_type %q", snapshotID, row.OpType)
+	}
+
+	entries := make(map[string]models.SnapshotEntry)
+	if err := json.Unmarshal([]byte(row.BeforeState), &entries); err != nil {
+		return nil, fmt.Errorf("amend_candidate_review_after: decode before_state: %w", err)
+	}
+	key := fmt.Sprintf("candidate:%d", afterCandidate.ID)
+	entry, ok := entries[key]
+	if !ok {
+		return nil, fmt.Errorf("amend_candidate_review_after: snapshot %q missing entry %q", snapshotID, key)
+	}
+	if entry.Kind != models.EntryKindRestore {
+		return nil, fmt.Errorf("amend_candidate_review_after: entry %q has kind %q", key, entry.Kind)
+	}
+
+	afterJSON, err := json.Marshal(afterCandidate)
+	if err != nil {
+		return nil, fmt.Errorf("amend_candidate_review_after: serialize candidate %d: %w", afterCandidate.ID, err)
+	}
+	entry.After = afterJSON
+	entries[key] = entry
+	amended, err := json.Marshal(entries)
+	if err != nil {
+		return nil, fmt.Errorf("amend_candidate_review_after: serialize before_state: %w", err)
+	}
+
+	result := tx.WithContext(ctx).Model(&snapshotRow{}).
+		Where("snapshot_id = ?", snapshotID).
+		Update("before_state", JSONRaw(amended))
+	if result.Error != nil {
+		return nil, fmt.Errorf("amend_candidate_review_after: update snapshot %q: %w", snapshotID, result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return nil, fmt.Errorf("amend_candidate_review_after: update snapshot %q affected %d rows", snapshotID, result.RowsAffected)
+	}
+	return json.RawMessage(amended), nil
 }
 
 // TransitionToSuperseded transitions a pending candidate to superseded.

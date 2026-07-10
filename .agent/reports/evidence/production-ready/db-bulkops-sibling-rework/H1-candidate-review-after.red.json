@@ -1,0 +1,21 @@
+{
+  "task_id": "DB-BULKOPS-SIBLING-H1",
+  "stack": "GO",
+  "observed_at": "2026-07-10T06:44:57Z",
+  "database": "engram_prc_bulkops_sibling_h1_red_20260710_094450099",
+  "test_file": "internal/bulkops/rollback_test.go",
+  "test_names": [
+    "TestRollback_PublicCandidateReviewPromotePersistsAfterAndRestoresPending",
+    "TestRollback_PublicCandidateReviewPreservePersistsAfterAndRestoresPending",
+    "TestRollback_PublicCandidateReviewNonMemoryActionsPersistAfterAndRestorePending/reject",
+    "TestRollback_PublicCandidateReviewNonMemoryActionsPersistAfterAndRestorePending/supersede",
+    "TestRollback_PublicCandidateReviewNonMemoryActionsPersistAfterAndRestorePending/suppress"
+  ],
+  "command": "go test ./internal/bulkops -run '^TestRollback_PublicCandidateReview(PromotePersistsAfterAndRestoresPending|PreservePersistsAfterAndRestoresPending|NonMemoryActionsPersistAfterAndRestorePending)$' -count=1",
+  "failure_reason": "All five live candidate_review_action paths persisted an empty SnapshotEntry.After.",
+  "runner_stdout_excerpt": "Should NOT be empty, but was []; live candidate_review_action must persist its authoritative after-state; TEST_EXIT=1",
+  "database_cleanup": {
+    "sessions_before_drop": 0,
+    "residue_after_drop": 0
+  }
+}

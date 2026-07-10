@@ -1,0 +1,98 @@
+{
+  "task_id": "DB-BULKOPS-SIBLING-REWORK",
+  "observed_at": "2026-07-10T07:19:54.2639416Z",
+  "status": "READY_FOR_INDEPENDENT_CHECK",
+  "base_commit": "6ea10496aa127fba7fdb194875044e770d0a1d8c",
+  "verification": [
+    {
+      "gate": "high-risk repeat",
+      "database": "engram_prc_bulkops_sibling_repeat20_20260710_100246118",
+      "result": "PASS",
+      "detail": "7 scenarios x 20 = 140 executions"
+    },
+    {
+      "gate": "candidate-store fixture compatibility",
+      "database": "engram_prc_bulkops_sibling_fixture_20260710_100935627",
+      "result": "PASS",
+      "detail": "4/4 candidate-review store tests, including audit-failure rollback"
+    },
+    {
+      "gate": "scoped package tests and coverage",
+      "database": "engram_prc_bulkops_sibling_scoped_20260710_101019337",
+      "result": "PASS",
+      "packages": {
+        "internal/bulkops": "PASS, 78.1% statements",
+        "internal/db/gorm focused": "PASS, 5.4% package statements",
+        "internal/mcp focused": "PASS, 2.1% package statements",
+        "internal/reviewpacket": "PASS",
+        "pkg/models": "PASS"
+      }
+    },
+    {
+      "gate": "race",
+      "database": "engram_prc_bulkops_sibling_race_20260710_101104510",
+      "result": "PASS",
+      "packages": [
+        "internal/bulkops full",
+        "internal/db/gorm focused candidate-review paths",
+        "internal/mcp focused bulk-promote paths"
+      ]
+    },
+    {
+      "gate": "go vet",
+      "result": "PASS",
+      "command": "go vet ./internal/bulkops ./internal/db/gorm ./internal/mcp ./internal/reviewpacket ./pkg/models"
+    },
+    {
+      "gate": "Serena diagnostics",
+      "result": "PASS",
+      "detail": "no warnings or errors in all seven changed Go files"
+    },
+    {
+      "gate": "database hygiene",
+      "result": "PASS",
+      "detail": "databases and active sessions matching engram_prc_bulkops_sibling_% both equal zero"
+    }
+  ],
+  "coverage": {
+    "package_internal_bulkops": "78.1% WARN below informational 80% threshold",
+    "NormalizeCandidateIDs": "100.0%",
+    "executeBulkPromote": "86.2%",
+    "promoteWithMemoryAndSnapshotAction": "77.5% in focused gorm profile",
+    "transitionWithSnapshot": "85.7% in focused gorm profile",
+    "amendCandidateReviewAfterTx": "66.7% in focused gorm profile",
+    "handleBulkPromote": "52.4% in focused MCP profile"
+  },
+  "full_package_baseline": {
+    "internal/db/gorm": {
+      "database": "engram_prc_bulkops_sibling_fullgorm_20260710_101402648",
+      "result": "FAIL_OUTSIDE_REWORK_SCOPE",
+      "failures": [
+        "TestRuleGovernanceStore_AnnotatedCandidateWaitsUntilReviewAfter",
+        "TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables",
+        "TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectScopedReads",
+        "TestMigration144_RuleGovernanceRollbackAndReapply",
+        "TestMigration144_RuleGovernanceEscapeConstraints",
+        "TestMigration144_RuleGovernanceSnapshotStatusesAcceptExtendedStates"
+      ],
+      "rework_note": "The candidate-review store tests that failed before the fixture correction are absent from this failure list."
+    },
+    "internal/mcp": {
+      "database": "engram_prc_bulkops_sibling_fullmcp_20260710_101520646",
+      "result": "FAIL_OUTSIDE_REWORK_SCOPE",
+      "failures": [
+        "TestHybridTG3_ConfidenceMin_FloorEnforced_T022",
+        "TestEC_F1_TagDerivedBackfill_T007"
+      ]
+    },
+    "database_cleanup": {
+      "sessions_before_drop": 0,
+      "residue_after_drop": 0
+    }
+  },
+  "warnings": [
+    "Package-level internal/bulkops coverage is 78.1%, below the informational 80% threshold.",
+    "Existing candidate-review audit writes remain transaction-fatal, while the bulk facade post-transaction summary audit remains best-effort by prior design; this rework changes only zero-success action semantics.",
+    "Fresh migrations continue to log non-fatal stale-index, absent observation_vectors, and unavailable vectorscale warnings."
+  ]
+}

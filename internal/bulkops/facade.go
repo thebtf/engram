@@ -65,6 +65,12 @@ type ExecuteResult struct {
 	Errors []string `json:"errors,omitempty"`
 }
 
+// NormalizeCandidateIDs applies the candidate-ID contract shared by facade
+// execution and public dry-run adapters: remove zeroes, de-duplicate, and sort.
+func NormalizeCandidateIDs(ids []int64) []int64 {
+	return sortedUniqueIDs(ids)
+}
+
 // Facade provides admin-only bulk operations with snapshot capture.
 type Facade struct {
 	snapshotStore  *gormdb.SnapshotStore
@@ -129,7 +135,7 @@ func (f *Facade) Execute(ctx context.Context, identity auth.Identity, op BulkOp)
 // --- bulk_promote ---
 
 func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity, op BulkOp) (*ExecuteResult, error) {
-	ids := sortedUniqueIDs(op.CandidateIDs)
+	ids := NormalizeCandidateIDs(op.CandidateIDs)
 
 	if op.DryRun {
 		return &ExecuteResult{
@@ -290,11 +296,20 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 		for _, entry := range promotionAudits {
 			_ = f.auditStore.Log(ctx, entry)
 		}
-		_ = f.auditStore.Log(ctx, gormdb.AuditLogEntry{
+		bulkAudit := gormdb.AuditLogEntry{
 			Action: "bulk_promote",
 			Actor:  actor,
 			Reason: fmt.Sprintf("bulk_promote snapshot=%s affected=%d", result.SnapshotID, result.AffectedCount),
-		})
+		}
+		if result.AffectedCount == 0 && len(result.Errors) > 0 {
+			bulkAudit.Action = "bulk_promote_failed"
+			bulkAudit.Reason = fmt.Sprintf(
+				"bulk_promote attempted=%d affected=0 failed=%d",
+				len(ids),
+				len(result.Errors),
+			)
+		}
+		_ = f.auditStore.Log(ctx, bulkAudit)
 	}
 
 	return result, nil
