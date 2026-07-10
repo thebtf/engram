@@ -1,7 +1,0 @@
-    i New version 1.23.1 available (installed version is 1.18.3) at https://github.com/docker/scout-cli
-    ...Storing image for indexing
-    v Image stored for indexing
-    ...Indexing
-    v Indexed 202 packages
-    x Detected 3 vulnerable packages with a total of 13 vulnerabilities
-    v Report written to D:\Dev\engram\.agent\worktrees\prc-release-gates\.agent\reports\evidence\production-ready\release-gates-foundation-revision-3\dev-stand-runtime\maker-runtime-1\nested\dev-stand\maker-runtime-1-scan\docker-scout-server.sarif.json

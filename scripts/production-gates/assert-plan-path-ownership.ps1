@@ -11,6 +11,7 @@ param(
     [string]$EvidenceNamespace,
     [string]$ReportNamespace,
     [string]$Artifact = '.agent/reports/evidence/production-ready/ownership/path-ledger.json',
+    [switch]$PrintCanonicalPlanSha256,
     [switch]$SelfTest,
     [switch]$Help
 )
@@ -25,9 +26,10 @@ assert-plan-path-ownership.ps1
 Ledger mode parses the production-ready master-plan ownership matrix. Only
 literal repository paths and explicit directory/** prefixes are accepted.
 Cross-owner exact and exact/prefix overlap requires one ownership epoch whose
-ordered owner sequence exactly matches the effective owners. Prefix/prefix
-overlap always fails. The tracked ownership-state JSON must match the challenged
-plan hash and every ordered epoch.
+ordered owner sequence exactly matches the effective owners. An explicitly
+tracked single-owner exact path may use an em dash in the Next epoch column.
+Prefix/prefix overlap always fails. The tracked ownership-state JSON must match
+the challenged canonical UTF-8/LF plan hash and every ordered epoch.
 
 Diff mode additionally enumerates git diff --name-status Base..Head and proves
 that every changed path belongs to the named slice or to its validated evidence
@@ -48,6 +50,9 @@ Usage:
     -EvidenceNamespace '.agent/specs/production-ready-db-bulkops/evidence/**' `
     -ReportNamespace .agent/reports/db-bulkops-maker.md -Plan <plan> `
     -ExpectedPlanSha256 <64-hex-sha256> -State <ownership-state.json> -Artifact <json>
+
+  pwsh ./scripts/production-gates/assert-plan-path-ownership.ps1 `
+    -Plan <plan> -PrintCanonicalPlanSha256
 '@ | Write-Output
 }
 
@@ -64,6 +69,16 @@ function Write-Utf8NoBom {
         $Content,
         [System.Text.UTF8Encoding]::new($false)
     )
+}
+
+function Get-CanonicalUtf8LfFileSha256 {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $text = [System.IO.File]::ReadAllText($fullPath)
+    $canonicalText = ($text -replace "`r`n", "`n") -replace "`r", "`n"
+    $canonicalBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($canonicalText)
+    return [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($canonicalBytes)).ToLowerInvariant()
 }
 
 function Split-MarkdownRow {
@@ -387,12 +402,15 @@ function Invoke-OwnershipAudit {
             $next = ($row.cells[2].Trim() -replace '`', '')
             $chain = [System.Collections.Generic.List[string]]::new()
             if (-not [string]::IsNullOrWhiteSpace($current)) { $chain.Add($current) }
-            foreach ($owner in ($next -split '\s*->\s*')) {
-                $trimmedOwner = $owner.Trim()
-                if (-not [string]::IsNullOrWhiteSpace($trimmedOwner)) { $chain.Add($trimmedOwner) }
+            $hasSuccessor = $next -notmatch '^(?:—|–|-|none|n/?a)$'
+            if ($hasSuccessor) {
+                foreach ($owner in ($next -split '\s*->\s*')) {
+                    $trimmedOwner = $owner.Trim()
+                    if (-not [string]::IsNullOrWhiteSpace($trimmedOwner)) { $chain.Add($trimmedOwner) }
+                }
             }
-            if ($chain.Count -lt 2) {
-                $errors.Add("line $($row.line_number): epoch chain must contain at least two owners")
+            if ($chain.Count -lt 1) {
+                $errors.Add("line $($row.line_number): epoch chain must contain a current owner")
             }
             if (@($chain | Select-Object -Unique).Count -ne $chain.Count) {
                 $errors.Add("line $($row.line_number): epoch chain contains a duplicate owner")
@@ -498,7 +516,15 @@ function Invoke-OwnershipAudit {
 
             if ($effectiveOwners.Count -lt 2) {
                 if ($matchingEpoch.Count -gt 0) {
-                    $errors.Add("declared epoch '$path' is not an actual repeated exact or exact/prefix path")
+                    if ($effectiveOwners.Count -eq 1 -and $matchingEpoch.Count -eq 1) {
+                        $epochOwners = @($matchingEpoch[0].owners)
+                        if (-not (Test-SameStringSequence $effectiveOwners $epochOwners)) {
+                            $errors.Add("single-owner epoch '$path' differs: effective=$($effectiveOwners -join ' -> '), epoch=$($epochOwners -join ' -> ')")
+                        }
+                    }
+                    else {
+                        $errors.Add("declared epoch '$path' is not an actual exact ownership declaration")
+                    }
                 }
                 continue
             }
@@ -736,7 +762,7 @@ function Get-EpochEvidenceErrors {
     $ownerCount = @($owners).Count
     $predecessorCount = @($predecessors).Count
 
-    if ($ownerCount -lt 2) { $errors.Add("state epoch '$path' must contain at least two ordered owners") }
+    if ($ownerCount -lt 1) { $errors.Add("state epoch '$path' must contain at least one ordered owner") }
     if (@($owners | Select-Object -Unique).Count -ne $ownerCount) { $errors.Add("state epoch '$path' contains duplicate owners") }
     if ($currentIndex -lt 0) { $errors.Add("state epoch '$path' current owner '$currentOwner' is not in its ordered owners") }
     if ($transitionKind -notin @('integration', 'rework')) { $errors.Add("state epoch '$path' has unsupported transition_kind '$transitionKind'") }
@@ -960,6 +986,30 @@ function New-SyntheticOwnershipState {
 }
 
 function Invoke-SelfTest {
+    $singleOwnerEpoch = New-SyntheticPlan -Rows '| SOLO | `work/solo` | `src/single.go` | none | proof |' -EpochRows '| `src/single.go` | SOLO | — | SOLO checker and post-review PASS, commit integrated before any successor |'
+    $singleOwnerResult = Invoke-OwnershipAudit $singleOwnerEpoch 'selftest-single-owner-epoch'
+    Assert-SelfTestCondition ($singleOwnerResult.verdict -eq 'PASS') ("single-owner tracked epoch was rejected: " + ($singleOwnerResult.errors -join '; '))
+
+    $hashFixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("engram-plan-hash-selftest-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $hashFixtureRoot -Force | Out-Null
+    try {
+        $lfFixture = Join-Path $hashFixtureRoot 'plan-lf.md'
+        $crlfFixture = Join-Path $hashFixtureRoot 'plan-crlf.md'
+        $semanticFixture = Join-Path $hashFixtureRoot 'plan-semantic.md'
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($lfFixture, "alpha`nbeta`n", $utf8NoBom)
+        [System.IO.File]::WriteAllText($crlfFixture, "alpha`r`nbeta`r`n", $utf8NoBom)
+        [System.IO.File]::WriteAllText($semanticFixture, "alpha`ngamma`n", $utf8NoBom)
+        $lfHash = Get-CanonicalUtf8LfFileSha256 -Path $lfFixture
+        $crlfHash = Get-CanonicalUtf8LfFileSha256 -Path $crlfFixture
+        $semanticHash = Get-CanonicalUtf8LfFileSha256 -Path $semanticFixture
+        Assert-SelfTestCondition ($lfHash -ceq $crlfHash) 'canonical authority hash differs between LF and CRLF checkout forms'
+        Assert-SelfTestCondition ($lfHash -cne $semanticHash) 'canonical authority hash accepted a semantic mutation'
+    }
+    finally {
+        Remove-Item -LiteralPath $hashFixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     $reorderedEpoch = New-SyntheticPlan -Rows "| A | ``work/a`` | ``src/shared.go`` | none | proof |`n| B | ``work/b`` | ``src/shared.go`` | A integrated | proof |" -EpochRows '| `src/shared.go` | B | A | B checker and post-review PASS, commit integrated, A rebased |'
     $reorderedResult = Invoke-OwnershipAudit $reorderedEpoch 'selftest-reordered-epoch'
     Assert-SelfTestCondition ($reorderedResult.verdict -eq 'FAIL') 'reversed epoch order was accepted'
@@ -980,6 +1030,11 @@ function Invoke-SelfTest {
         completed_predecessors = @(); required_successor_base_sha = $null
     }
     Assert-SelfTestCondition (@(Get-EpochEvidenceErrors $firstOwnerState).Count -eq 0) 'first owner with an empty predecessor list was rejected or raised under StrictMode'
+    $singleOwnerState = [pscustomobject][ordered]@{
+        path = 'src/single.go'; ordered_owners = @('SOLO'); current_owner = 'SOLO'; transition_kind = 'integration'
+        completed_predecessors = @(); required_successor_base_sha = $null
+    }
+    Assert-SelfTestCondition (@(Get-EpochEvidenceErrors $singleOwnerState).Count -eq 0) 'single-owner state epoch was rejected'
     $reworkEpoch = [pscustomobject][ordered]@{
         path = 'src/shared.go'; ordered_owners = @('A', 'B'); current_owner = 'B'; transition_kind = 'rework'
         completed_predecessors = @([pscustomobject][ordered]@{
@@ -1083,6 +1138,11 @@ function Invoke-SelfTest {
 
 if ($Help) { Show-Help; exit 0 }
 if ($SelfTest) { Invoke-SelfTest; exit 0 }
+if ($PrintCanonicalPlanSha256) {
+    if (-not (Test-Path -LiteralPath $Plan -PathType Leaf)) { throw "ownership plan does not exist: $Plan" }
+    Write-Output (Get-CanonicalUtf8LfFileSha256 -Path $Plan)
+    exit 0
+}
 
 $startedAt = [DateTimeOffset]::UtcNow
 $planHash = $null
@@ -1098,9 +1158,9 @@ try {
     if (-not (Test-Path -LiteralPath $Plan -PathType Leaf)) { throw "ownership plan does not exist: $Plan" }
     if ([string]::IsNullOrWhiteSpace($ExpectedPlanSha256) -or $ExpectedPlanSha256 -notmatch '^[0-9A-Fa-f]{64}$') { throw '-ExpectedPlanSha256 is required and must be a full 64-hex SHA256' }
     if (-not (Test-Path -LiteralPath $State -PathType Leaf)) { throw "ownership state does not exist: $State" }
-    $planHash = (Get-FileHash -LiteralPath $Plan -Algorithm SHA256).Hash.ToLowerInvariant()
-    $stateHash = (Get-FileHash -LiteralPath $State -Algorithm SHA256).Hash.ToLowerInvariant()
-    $text = Get-Content -LiteralPath $Plan -Raw
+    $planHash = Get-CanonicalUtf8LfFileSha256 -Path $Plan
+    $stateHash = Get-CanonicalUtf8LfFileSha256 -Path $State
+    $text = [System.IO.File]::ReadAllText([System.IO.Path]::GetFullPath($Plan))
     $ledger = Invoke-OwnershipAudit $text $planPath
     try { $stateObject = Get-Content -LiteralPath $State -Raw | ConvertFrom-Json -Depth 100 }
     catch { throw "ownership state is invalid JSON: $($_.Exception.Message)" }

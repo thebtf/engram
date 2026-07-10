@@ -1,2 +1,0 @@
-dev-stand action=Scan verdict=FAIL child_commands=10 nonzero_children=3
-summary=D:\Dev\engram\.agent\worktrees\prc-release-gates\.agent\reports\evidence\production-ready\release-gates-foundation-revision-3\dev-stand-runtime\maker-runtime-1\nested\dev-stand\maker-runtime-1-scan\summary.json

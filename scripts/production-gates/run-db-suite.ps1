@@ -374,13 +374,41 @@ function Get-NativeCommandPath {
     throw "required native command was not found: $($Names -join ', ')"
 }
 
-function Test-ExactDevStandInventory {
-    param([Parameter(Mandatory)][hashtable]$ActualImages)
-    $expectedImages = [ordered]@{
+function Get-DevStandImageTargets {
+    return [ordered]@{
         postgres = 'pgvector/pgvector:pg17'
         server = 'ghcr.io/thebtf/engram:main'
         'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main'
     }
+}
+
+function Get-MapStringValue {
+    param(
+        [AllowNull()]$Map,
+        [Parameter(Mandatory)][string]$Key
+    )
+
+    if ($null -eq $Map) { return $null }
+    if ($Map -is [System.Collections.IDictionary]) {
+        if (-not $Map.Contains($Key)) { return $null }
+        return [string]$Map[$Key]
+    }
+    $property = $Map.PSObject.Properties[$Key]
+    if ($null -eq $property) { return $null }
+    return [string]$property.Value
+}
+
+function Test-StrictBoolean {
+    param(
+        [AllowNull()]$Value,
+        [Parameter(Mandatory)][bool]$Expected
+    )
+    return ($Value -is [bool]) -and ($Value -ceq $Expected)
+}
+
+function Test-ExactDevStandInventory {
+    param([Parameter(Mandatory)][hashtable]$ActualImages)
+    $expectedImages = Get-DevStandImageTargets
     $errors = [System.Collections.Generic.List[string]]::new()
     foreach ($entry in $expectedImages.GetEnumerator()) {
         if (-not $ActualImages.ContainsKey($entry.Key)) { $errors.Add("compose service '$($entry.Key)' is missing from the project inventory"); continue }
@@ -446,7 +474,16 @@ function Invoke-DevStandContract {
     $actualImages = @{}
     $actualImageIds = @{}
     $tagImageIds = @{}
+    $prelaunchImageIds = @{}
     $imageIdentityPass = $true
+    $prelaunchToRunningImageIdentity = $false
+    $sourceRepository = $null
+    $sourceCommit = $null
+    $sourceTrackedClean = $false
+    $composeBuildCompleted = $false
+    $postgresPullCompleted = $false
+    $launchNoBuild = $false
+    $upProvenanceSummary = $null
     $vulnerabilityScans = [System.Collections.Generic.List[object]]::new()
     $credentialsGenerated = $false
     $postgresPassword = $null
@@ -463,12 +500,48 @@ function Invoke-DevStandContract {
     $residualResourcesZero = $null
     $connection = [pscustomobject]@{ Original = ''; Password = ''; Uri = $null; User = ''; Host = ''; Port = 0; Database = ''; SslMode = $null }
     $dockerPath = Get-NativeCommandPath @('docker.exe', 'docker')
+    $gitPath = $null
     $curlPath = $null
     if ($Action -in @('Up', 'Ready')) { $curlPath = Get-NativeCommandPath @('curl.exe', 'curl') }
     $standDsn = $null
     $sensitiveValues = [System.Collections.Generic.List[string]]::new()
 
     try {
+        if ($Action -in @('Up', 'Ready', 'Scan')) {
+            $gitPath = Get-NativeCommandPath @('git.exe', 'git')
+            $composeFilePath = [System.IO.Path]::GetFullPath($File)
+            $composeDirectory = Split-Path -Parent $composeFilePath
+            $sourceRoot = Invoke-CapturedProcess 'dev-stand-source-root' $gitPath @('-C', $composeDirectory, 'rev-parse', '--show-toplevel') @{} (Join-Path $actionDirectory 'source-root.stdout.log') (Join-Path $actionDirectory 'source-root.stderr.log') $connection @() 30
+            if ($sourceRoot.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($sourceRoot.Stdout)) { throw 'challenged source repository root could not be resolved' }
+            $sourceRepository = $sourceRoot.Stdout.Trim()
+            $sourceHead = Invoke-CapturedProcess 'dev-stand-source-commit' $gitPath @('-C', $sourceRepository, 'rev-parse', '--verify', 'HEAD^{commit}') @{} (Join-Path $actionDirectory 'source-commit.stdout.log') (Join-Path $actionDirectory 'source-commit.stderr.log') $connection @() 30
+            if ($sourceHead.ExitCode -ne 0) { throw "challenged source commit could not be resolved (exit=$($sourceHead.ExitCode))" }
+            $sourceCommit = $sourceHead.Stdout.Trim().ToLowerInvariant()
+            if ($sourceCommit -notmatch '^[a-f0-9]{40}$') { throw "challenged source commit is malformed: '$sourceCommit'" }
+            $sourceStatus = Invoke-CapturedProcess 'dev-stand-source-tracked-status' $gitPath @('-C', $sourceRepository, 'status', '--porcelain=v1', '--untracked-files=all') @{} (Join-Path $actionDirectory 'source-tracked-status.stdout.log') (Join-Path $actionDirectory 'source-tracked-status.stderr.log') $connection @() 30
+            if ($sourceStatus.ExitCode -ne 0) { throw "challenged source tracked-status check failed (exit=$($sourceStatus.ExitCode))" }
+            $sourceTrackedClean = [string]::IsNullOrWhiteSpace($sourceStatus.Stdout)
+            if (-not $sourceTrackedClean) { throw 'challenged source has tracked modifications; image provenance is not commit-exact' }
+
+            if ($Action -in @('Ready', 'Scan')) {
+                $upSummaryPath = Join-Path (Join-Path (Join-Path $EvidenceRoot 'dev-stand') "$RequestedRunId-up") 'summary.json'
+                if (-not (Test-Path -LiteralPath $upSummaryPath -PathType Leaf)) { throw "Up provenance summary is missing: $upSummaryPath" }
+                try { $upProvenanceSummary = Get-Content -LiteralPath $upSummaryPath -Raw | ConvertFrom-Json -Depth 100 }
+                catch { throw "Up provenance summary is invalid: $($_.Exception.Message)" }
+                if ([string]$upProvenanceSummary.action -cne 'Up' -or [string]$upProvenanceSummary.verdict -cne 'PASS') { throw 'Ready/Scan requires a passing Up provenance summary' }
+                if ([string]$upProvenanceSummary.source_commit -cne $sourceCommit -or -not (Test-StrictBoolean $upProvenanceSummary.source_tracked_clean $true)) { throw 'Ready/Scan source identity differs from the passing Up build source' }
+                $composeBuildCompleted = Test-StrictBoolean $upProvenanceSummary.compose_build_completed $true
+                $postgresPullCompleted = Test-StrictBoolean $upProvenanceSummary.postgres_pull_completed $true
+                $launchNoBuild = Test-StrictBoolean $upProvenanceSummary.launch_no_build $true
+                if (-not $composeBuildCompleted -or -not $postgresPullCompleted -or -not $launchNoBuild -or -not (Test-StrictBoolean $upProvenanceSummary.prelaunch_to_running_image_identity $true)) { throw 'passing Up summary lacks complete prelaunch build/image provenance' }
+                foreach ($target in (Get-DevStandImageTargets).GetEnumerator()) {
+                    $prelaunchId = Get-MapStringValue -Map $upProvenanceSummary.prelaunch_image_ids -Key $target.Key
+                    if ($prelaunchId -notmatch '^sha256:[a-f0-9]{64}$') { throw "Up prelaunch image ID is missing or malformed for '$($target.Key)'" }
+                    $prelaunchImageIds[$target.Key] = $prelaunchId
+                }
+            }
+        }
+
         if ($Action -eq 'Up') {
             $postgresPassword = New-CryptographicSecret
             $adminToken = New-CryptographicSecret
@@ -489,8 +562,26 @@ services:
       ENGRAM_AUTH_BOOTSTRAP_CAPABILITY: "${ENGRAM_AUTH_BOOTSTRAP_CAPABILITY:?required by production dev-stand}"
 '@
             $composeArgs = @('compose', '-p', $Project, '-f', $File, '-f', $composeOverridePath)
-            $up = Invoke-CapturedProcess 'dev-stand-up' $dockerPath (@($composeArgs) + @('up', '-d', '--build', '--wait')) $standEnvironment (Join-Path $actionDirectory 'compose-up.stdout.log') (Join-Path $actionDirectory 'compose-up.stderr.log') $connection @($sensitiveValues) 600
+            $build = Invoke-CapturedProcess 'dev-stand-compose-build' $dockerPath (@($composeArgs) + @('build', '--pull', 'server', 'operator-console')) $standEnvironment (Join-Path $actionDirectory 'compose-build.stdout.log') (Join-Path $actionDirectory 'compose-build.stderr.log') $connection @($sensitiveValues) 900
+            if ($build.ExitCode -ne 0) { throw "compose source build failed with exit $($build.ExitCode)" }
+            $composeBuildCompleted = $true
+            $pull = Invoke-CapturedProcess 'dev-stand-postgres-pull' $dockerPath (@($composeArgs) + @('pull', 'postgres')) $standEnvironment (Join-Path $actionDirectory 'compose-pull-postgres.stdout.log') (Join-Path $actionDirectory 'compose-pull-postgres.stderr.log') $connection @($sensitiveValues) 600
+            if ($pull.ExitCode -ne 0) { throw "compose PostgreSQL pull failed with exit $($pull.ExitCode)" }
+            $postgresPullCompleted = $true
+            $postBuildHead = Invoke-CapturedProcess 'dev-stand-source-commit-post-build' $gitPath @('-C', $sourceRepository, 'rev-parse', '--verify', 'HEAD^{commit}') @{} (Join-Path $actionDirectory 'source-commit-post-build.stdout.log') (Join-Path $actionDirectory 'source-commit-post-build.stderr.log') $connection @() 30
+            if ($postBuildHead.ExitCode -ne 0 -or $postBuildHead.Stdout.Trim().ToLowerInvariant() -cne $sourceCommit) { throw 'source HEAD changed during compose build/pull' }
+            $postBuildStatus = Invoke-CapturedProcess 'dev-stand-source-tracked-status-post-build' $gitPath @('-C', $sourceRepository, 'status', '--porcelain=v1', '--untracked-files=all') @{} (Join-Path $actionDirectory 'source-tracked-status-post-build.stdout.log') (Join-Path $actionDirectory 'source-tracked-status-post-build.stderr.log') $connection @() 30
+            if ($postBuildStatus.ExitCode -ne 0 -or -not [string]::IsNullOrWhiteSpace($postBuildStatus.Stdout)) { throw 'source tree changed during compose build/pull' }
+            foreach ($target in (Get-DevStandImageTargets).GetEnumerator()) {
+                $prelaunchInspect = Invoke-CapturedProcess "dev-stand-prelaunch-image-inspect-$($target.Key)" $dockerPath @('image', 'inspect', $target.Value, '--format', '{{.Id}}') @{} (Join-Path $actionDirectory "prelaunch-image-inspect-$($target.Key).stdout.log") (Join-Path $actionDirectory "prelaunch-image-inspect-$($target.Key).stderr.log") $connection @() 30
+                if ($prelaunchInspect.ExitCode -ne 0) { throw "prelaunch image '$($target.Value)' is unavailable for service '$($target.Key)'" }
+                $prelaunchId = $prelaunchInspect.Stdout.Trim()
+                if ($prelaunchId -notmatch '^sha256:[a-f0-9]{64}$') { throw "prelaunch image ID is malformed for service '$($target.Key)': '$prelaunchId'" }
+                $prelaunchImageIds[$target.Key] = $prelaunchId
+            }
+            $up = Invoke-CapturedProcess 'dev-stand-up' $dockerPath (@($composeArgs) + @('up', '-d', '--no-build', '--pull', 'never', '--wait')) $standEnvironment (Join-Path $actionDirectory 'compose-up.stdout.log') (Join-Path $actionDirectory 'compose-up.stderr.log') $connection @($sensitiveValues) 600
             if ($up.ExitCode -ne 0) { throw "compose up failed with exit $($up.ExitCode)" }
+            $launchNoBuild = $true
 
             $postgresContainer = Invoke-CapturedProcess 'dev-stand-postgres-container-id' $dockerPath (@($composeArgs) + @('ps', '-q', 'postgres')) $standEnvironment (Join-Path $actionDirectory 'postgres-container-id.stdout.log') (Join-Path $actionDirectory 'postgres-container-id.stderr.log') $connection @($sensitiveValues) 30
             if ($postgresContainer.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($postgresContainer.Stdout)) { throw 'running postgres container ID could not be resolved for credential proof' }
@@ -555,12 +646,22 @@ services:
             }
             $inventoryAssertion = Test-ExactDevStandInventory $actualImages
             foreach ($inventoryError in $inventoryAssertion.Errors) { $errors.Add($inventoryError) }
+            $prelaunchToRunningImageIdentity = $inventoryAssertion.Pass -and $prelaunchImageIds.Count -eq 3
+            foreach ($target in (Get-DevStandImageTargets).GetEnumerator()) {
+                $prelaunchId = Get-MapStringValue -Map $prelaunchImageIds -Key $target.Key
+                $runningId = Get-MapStringValue -Map $actualImageIds -Key $target.Key
+                if ($prelaunchId -notmatch '^sha256:[a-f0-9]{64}$' -or $runningId -notmatch '^sha256:[a-f0-9]{64}$' -or -not [string]::Equals($prelaunchId, $runningId, [System.StringComparison]::Ordinal)) {
+                    $prelaunchToRunningImageIdentity = $false
+                    $errors.Add("prelaunch image ID does not equal running image ID for service '$($target.Key)'")
+                }
+            }
 
-            if ($Action -eq 'Scan' -and $inventoryAssertion.Pass -and $imageIdentityPass) {
+            if ($Action -eq 'Scan' -and $inventoryAssertion.Pass -and $imageIdentityPass -and $prelaunchToRunningImageIdentity) {
                 foreach ($entry in @($actualImages.GetEnumerator() | Sort-Object Key)) {
                     $sarifPath = [System.IO.Path]::GetFullPath((Join-Path $actionDirectory ("docker-scout-$($entry.Key).sarif.json")))
                     $imageId = $actualImageIds[$entry.Key]
-                    $scan = Invoke-CapturedProcess "dev-stand-vulnerability-scan-$($entry.Key)" $dockerPath @('scout', 'cves', '--exit-code', '--only-severity', 'critical,high', '--format', 'sarif', '--output', $sarifPath, "local://$($entry.Value)") @{} (Join-Path $actionDirectory "docker-scout-$($entry.Key).stdout.log") (Join-Path $actionDirectory "docker-scout-$($entry.Key).stderr.log") $connection @() 600
+                    $scanReference = "local://$imageId"
+                    $scan = Invoke-CapturedProcess "dev-stand-vulnerability-scan-$($entry.Key)" $dockerPath @('scout', 'cves', '--exit-code', '--only-severity', 'critical,high', '--format', 'sarif', '--output', $sarifPath, $scanReference) @{} (Join-Path $actionDirectory "docker-scout-$($entry.Key).stdout.log") (Join-Path $actionDirectory "docker-scout-$($entry.Key).stderr.log") $connection @() 600
                     $vulnerabilityCount = $null
                     $scanParseError = $null
                     if (Test-Path -LiteralPath $sarifPath -PathType Leaf) {
@@ -573,7 +674,7 @@ services:
                     else { $scanParseError = "Docker Scout did not produce SARIF for '$($entry.Value)'"; $errors.Add($scanParseError) }
 
                     $vulnerabilityScans.Add([pscustomobject][ordered]@{
-                        service = $entry.Key; image = $entry.Value; image_id = $imageId; scanner = 'docker scout cves'
+                        service = $entry.Key; image = $entry.Value; image_id = $imageId; scanned_reference = $scanReference; scanner = 'docker scout cves'
                         severities = @('critical', 'high'); exit_code = $scan.ExitCode
                         vulnerability_count = $vulnerabilityCount; sarif = $sarifPath; parse_error = $scanParseError
                     })
@@ -638,7 +739,15 @@ services:
         ephemeral_postgres_password_persisted = $credentialValuesPersisted
         ephemeral_admin_token_persisted = $credentialValuesPersisted
         ephemeral_bootstrap_capability_persisted = $credentialValuesPersisted
-        exact_image_targets = [ordered]@{ postgres = 'pgvector/pgvector:pg17'; server = 'ghcr.io/thebtf/engram:main'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
+        source_repository = $sourceRepository
+        source_commit = $sourceCommit
+        source_tracked_clean = $sourceTrackedClean
+        compose_build_completed = $composeBuildCompleted
+        postgres_pull_completed = $postgresPullCompleted
+        launch_no_build = $launchNoBuild
+        prelaunch_to_running_image_identity = $prelaunchToRunningImageIdentity
+        exact_image_targets = Get-DevStandImageTargets
+        prelaunch_image_ids = $prelaunchImageIds
         actual_images = $actualImages; actual_image_ids = $actualImageIds; tag_image_ids = $tagImageIds
         liveness_endpoints = @($endpointResults | Where-Object contract_kind -ceq 'liveness')
         semantic_ready_endpoints = @($endpointResults | Where-Object contract_kind -ceq 'readiness')
@@ -669,6 +778,9 @@ function Invoke-SelfTest {
         Assert-SelfTestCondition ($succeeded.ExitCode -eq 0) 'later success did not execute'
         Assert-SelfTestCondition $aggregateFailed 'later success masked the earlier failure'
         Assert-SelfTestCondition ($missingProcess.ExitCode -eq 127 -and $missingProcess.Stderr -match 'PROCESS_START_OR_CAPTURE_ERROR') 'process start failure did not produce captured raw evidence and exit 127'
+        Assert-SelfTestCondition (Test-StrictBoolean $true $true) 'strict Boolean helper rejected true'
+        Assert-SelfTestCondition (Test-StrictBoolean $false $false) 'strict Boolean helper rejected false'
+        foreach ($coercedTrue in @('true', 1, '1')) { Assert-SelfTestCondition (-not (Test-StrictBoolean $coercedTrue $true)) "strict Boolean helper accepted wrong-type true '$coercedTrue'" }
         $targetDsn = New-DatabaseDsn $connection.Original 'engram_prc_rg_selftest' 'engram-prc-selftest'
         $redacted = Protect-Text "DATABASE_DSN=$targetDsn" $connection @($targetDsn)
         Assert-SelfTestCondition (-not $redacted.Contains('s3cr3t') -and -not $redacted.Contains('engram_prc_rg_selftest')) 'generated DATABASE_DSN was not fully redacted'

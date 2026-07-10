@@ -163,11 +163,20 @@ function Test-ExactImageMaps {
         $imageProperty = $Summary.actual_images.PSObject.Properties[$entry.Key]
         $runningProperty = $Summary.actual_image_ids.PSObject.Properties[$entry.Key]
         $tagProperty = $Summary.tag_image_ids.PSObject.Properties[$entry.Key]
-        if ($null -eq $imageProperty -or [string]$imageProperty.Value -cne $entry.Value -or $null -eq $runningProperty -or $null -eq $tagProperty) { return $false }
-        $runningId = [string]$runningProperty.Value; $tagId = [string]$tagProperty.Value
-        if ($runningId -notmatch '^sha256:[a-f0-9]{64}$' -or $runningId -cne $tagId) { return $false }
+        $prelaunchProperty = $Summary.prelaunch_image_ids.PSObject.Properties[$entry.Key]
+        if ($null -eq $imageProperty -or [string]$imageProperty.Value -cne $entry.Value -or $null -eq $runningProperty -or $null -eq $tagProperty -or $null -eq $prelaunchProperty) { return $false }
+        $runningId = [string]$runningProperty.Value; $tagId = [string]$tagProperty.Value; $prelaunchId = [string]$prelaunchProperty.Value
+        if ($runningId -notmatch '^sha256:[a-f0-9]{64}$' -or $runningId -cne $tagId -or $runningId -cne $prelaunchId) { return $false }
     }
-    return @($Summary.actual_images.PSObject.Properties).Count -eq 3
+    return @($Summary.actual_images.PSObject.Properties).Count -eq 3 -and @($Summary.prelaunch_image_ids.PSObject.Properties).Count -eq 3
+}
+
+function Test-StrictBoolean {
+    param(
+        [AllowNull()]$Value,
+        [Parameter(Mandatory)][bool]$Expected
+    )
+    return ($Value -is [bool]) -and ($Value -ceq $Expected)
 }
 
 function Read-ActionSummary {
@@ -182,28 +191,49 @@ function Read-ActionSummary {
     $expectedVerdict = if ($ChildExit -eq 0) { 'PASS' } else { 'FAIL' }
     if ($summary.verdict -cne $expectedVerdict) { throw "$Action exit/verdict mismatch: exit=$ChildExit verdict=$($summary.verdict)" }
     if ($Action -in @('Up', 'Ready', 'Scan') -and -not (Test-ExactImageMaps $summary)) { throw "$Action did not prove exact tag-to-running-image identity" }
+    if ($Action -in @('Up', 'Ready', 'Scan')) {
+        if ([string]$summary.source_commit -notmatch '^[a-f0-9]{40}$' -or -not (Test-StrictBoolean $summary.source_tracked_clean $true)) { throw "$Action did not prove a clean exact source commit" }
+        foreach ($field in @('compose_build_completed', 'postgres_pull_completed', 'launch_no_build', 'prelaunch_to_running_image_identity')) {
+            if (-not (Test-StrictBoolean $summary.$field $true)) { throw "$Action did not preserve strict-Boolean source-build/prelaunch/running image provenance for '$field'" }
+        }
+    }
     if ($Action -eq 'Up') {
-        if (-not $summary.ephemeral_postgres_password_generated -or -not $summary.ephemeral_admin_token_generated -or -not $summary.ephemeral_bootstrap_capability_generated) { throw 'Up did not prove all three ephemeral credentials were generated' }
-        if (-not $summary.ephemeral_credentials_distinct_and_nondefault) { throw 'Up did not prove credentials are distinct and reject defaults' }
-        if (-not $summary.ephemeral_credentials_runtime_injected) { throw 'Up did not prove exact credentials reached the running compose services' }
-        if ($summary.ephemeral_postgres_password_persisted -or $summary.ephemeral_admin_token_persisted -or $summary.ephemeral_bootstrap_capability_persisted) { throw 'Up persisted an ephemeral credential in evidence' }
+        foreach ($field in @('ephemeral_postgres_password_generated', 'ephemeral_admin_token_generated', 'ephemeral_bootstrap_capability_generated', 'ephemeral_credentials_distinct_and_nondefault', 'ephemeral_credentials_runtime_injected')) {
+            if (-not (Test-StrictBoolean $summary.$field $true)) { throw "Up lacks strict true credential proof '$field'" }
+        }
+        foreach ($field in @('ephemeral_postgres_password_persisted', 'ephemeral_admin_token_persisted', 'ephemeral_bootstrap_capability_persisted')) {
+            if (-not (Test-StrictBoolean $summary.$field $false)) { throw "Up credential persistence proof '$field' is not strict false" }
+        }
         $commands = Get-Content -LiteralPath $summary.commands -Raw | ConvertFrom-Json -Depth 100
-        foreach ($name in @('dev-stand-postgres-container-id', 'dev-stand-postgres-credential-injection', 'dev-stand-server-container-id', 'dev-stand-server-credential-injection', 'dev-stand-postgres-ready', 'dev-stand-health', 'dev-stand-api-ready', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready')) { if (@($commands | Where-Object name -eq $name).Count -ne 1) { throw "Up did not execute '$name' exactly once" } }
+        foreach ($name in @('dev-stand-source-root', 'dev-stand-source-commit', 'dev-stand-source-tracked-status', 'dev-stand-compose-build', 'dev-stand-postgres-pull', 'dev-stand-prelaunch-image-inspect-postgres', 'dev-stand-prelaunch-image-inspect-server', 'dev-stand-prelaunch-image-inspect-operator-console', 'dev-stand-up', 'dev-stand-postgres-container-id', 'dev-stand-postgres-credential-injection', 'dev-stand-server-container-id', 'dev-stand-server-credential-injection', 'dev-stand-postgres-ready', 'dev-stand-health', 'dev-stand-api-ready', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready')) { if (@($commands | Where-Object name -eq $name).Count -ne 1) { throw "Up did not execute '$name' exactly once" } }
     }
     elseif ($Action -eq 'Ready') {
         $commands = Get-Content -LiteralPath $summary.commands -Raw | ConvertFrom-Json -Depth 100
-        foreach ($name in @('dev-stand-postgres-ready', 'dev-stand-health', 'dev-stand-api-ready', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready')) { if (@($commands | Where-Object name -eq $name).Count -ne 1) { throw "Ready did not execute '$name' exactly once" } }
+        foreach ($name in @('dev-stand-source-root', 'dev-stand-source-commit', 'dev-stand-source-tracked-status', 'dev-stand-postgres-ready', 'dev-stand-health', 'dev-stand-api-ready', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready')) { if (@($commands | Where-Object name -eq $name).Count -ne 1) { throw "Ready did not execute '$name' exactly once" } }
     }
     elseif ($Action -eq 'Scan') {
+        $commands = Get-Content -LiteralPath $summary.commands -Raw | ConvertFrom-Json -Depth 100
+        foreach ($name in @('dev-stand-source-root', 'dev-stand-source-commit', 'dev-stand-source-tracked-status', 'dev-stand-image-inventory', 'dev-stand-vulnerability-scan-postgres', 'dev-stand-vulnerability-scan-server', 'dev-stand-vulnerability-scan-operator-console')) { if (@($commands | Where-Object name -eq $name).Count -ne 1) { throw "Scan did not execute '$name' exactly once" } }
         $scans = @($summary.vulnerability_scan.scans)
         if ($scans.Count -ne 3) { throw "Scan must emit three exact image results; found $($scans.Count)" }
-        foreach ($scan in $scans) {
-            if ($scan.image -notin @('pgvector/pgvector:pg17', 'ghcr.io/thebtf/engram:main', 'ghcr.io/thebtf/engram-operator-console:main')) { throw "Scan used untracked image '$($scan.image)'" }
+        $expectedScans = [ordered]@{ postgres = 'pgvector/pgvector:pg17'; server = 'ghcr.io/thebtf/engram:main'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
+        foreach ($entry in $expectedScans.GetEnumerator()) {
+            $matches = @($scans | Where-Object { [string]$_.service -ceq $entry.Key })
+            if ($matches.Count -ne 1) { throw "Scan must contain exactly one result for service '$($entry.Key)'; found $($matches.Count)" }
+            $scan = $matches[0]
+            $actualId = [string]$summary.actual_image_ids.PSObject.Properties[$entry.Key].Value
+            $prelaunchId = [string]$summary.prelaunch_image_ids.PSObject.Properties[$entry.Key].Value
+            if ([string]$scan.image -cne $entry.Value) { throw "Scan image mismatch for service '$($entry.Key)'" }
+            if ([string]$scan.image_id -notmatch '^sha256:[a-f0-9]{64}$' -or [string]$scan.image_id -cne $actualId -or [string]$scan.image_id -cne $prelaunchId) { throw "Scan image ID is not the exact prelaunch/running ID for service '$($entry.Key)'" }
+            if ([string]$scan.scanned_reference -cne "local://$($scan.image_id)") { throw "Scan did not target the exact running image ID for '$($scan.image)'" }
+            $command = @($commands | Where-Object { [string]$_.name -ceq "dev-stand-vulnerability-scan-$($entry.Key)" })[0]
+            $arguments = @($command.arguments | ForEach-Object { [string]$_ })
+            if ($arguments.Count -eq 0 -or $arguments[-1] -cne [string]$scan.scanned_reference) { throw "Scan command arguments do not end in the recorded immutable reference for service '$($entry.Key)'" }
             if (-not (Test-Path -LiteralPath $scan.sarif -PathType Leaf)) { throw "Scan SARIF is missing for '$($scan.image)'" }
         }
     }
     elseif ($Action -eq 'Down') {
-        if (-not $summary.residual_checks_performed -or $summary.residual_resources_zero -ne $true) { throw 'Down did not prove zero residual containers, volumes, and networks' }
+        if (-not (Test-StrictBoolean $summary.residual_checks_performed $true) -or -not (Test-StrictBoolean $summary.residual_resources_zero $true)) { throw 'Down did not prove strict-Boolean zero residual containers, volumes, and networks' }
     }
     return $summary
 }
@@ -216,6 +246,8 @@ function Invoke-SelfTest {
     try {
         if (-not (Test-Path -LiteralPath $Config -PathType Leaf)) { throw "SELFTEST FAIL: config fixture does not exist: $Config" }
         $base = Get-Content -LiteralPath $Config -Raw
+        Assert-SelfTestCondition (Test-StrictBoolean $true $true) 'strict Boolean helper rejected true'
+        foreach ($coercedTrue in @('true', 1, '1')) { Assert-SelfTestCondition (-not (Test-StrictBoolean $coercedTrue $true)) "strict Boolean helper accepted wrong-type true '$coercedTrue'" }
         Assert-DevStandConfigCredentialPolicy $base
         $validPath = Join-Path $root 'valid.yaml'; Write-Utf8NoBom $validPath $base
         $parsed = Read-DevStandConfig $validPath; Assert-SelfTestCondition ($parsed.Commands.Count -eq 4) 'valid lifecycle config was rejected'

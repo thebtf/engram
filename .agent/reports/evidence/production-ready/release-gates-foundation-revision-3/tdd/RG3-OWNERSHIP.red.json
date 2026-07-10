@@ -1,9 +1,0 @@
-{
-  "task_id": "RG3-OWNERSHIP",
-  "observed_at": "2026-07-10T08:29:56.4884843Z",
-  "test_file": "scripts/production-gates/assert-plan-path-ownership.ps1",
-  "test_name": "reversed epoch, current owner, predecessor evidence, and successor-base authority",
-  "invariant": "A slice may change an epoch path only when it is the current owner and its base descends from every independently accepted, post-reviewed, integrated predecessor; challenged plan bytes must match the expected SHA256.",
-  "failure_reason": "The existing set-only ledger accepted the reversed B -> A epoch.",
-  "runner_stdout_excerpt": "SELFTEST FAIL: reversed epoch order was accepted"
-}

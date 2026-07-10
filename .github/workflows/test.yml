@@ -68,6 +68,10 @@ jobs:
         shell: pwsh
         run: ./scripts/production-gates/assert-plan-path-ownership.ps1 -SelfTest
 
+      - name: Self-test Windows tracked path budget
+        shell: pwsh
+        run: ./scripts/production-gates/assert-windows-path-budget.ps1 -SelfTest
+
       - name: Self-test OpenClaw node release matrix
         shell: pwsh
         run: ./scripts/production-gates/run-node-matrix.ps1 -SelfTest
@@ -78,9 +82,13 @@ jobs:
           ./scripts/production-gates/assert-plan-path-ownership.ps1
           -Mode Ledger
           -Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md
-          -ExpectedPlanSha256 d371e94dff1ea12767b9d0832240cb6caf52c6c3bbe2209fe4280159c4f03c52
+          -ExpectedPlanSha256 d7bcfd122e456d9b764595524292d53b0c99447b7f716a1be0707341e4681bf9
           -State .agent/plans/2026-07-10-engram-production-ready-ownership-state.json
-          -Artifact .agent/reports/evidence/production-ready/release-gates-foundation-revision-3/ownership/ci-ledger.json
+          -Artifact .agent/e/rg4/ci-ledger.json
+
+      - name: Assert Windows tracked path budget
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/production-gates/assert-windows-path-budget.ps1 -Repository . -Ref HEAD -CheckoutPrefixLength 66 -MaximumCombinedPathLength 240 -Artifact .agent/e/rg4/ci-path-budget.json
 
       - name: Assert tracked gate / CI conformance
         shell: pwsh
@@ -93,10 +101,11 @@ jobs:
           $criticalRunner = Get-Content -Raw 'scripts/production-gates/run-critical-suite.ps1'
           $devStandRunner = Get-Content -Raw 'scripts/production-gates/run-dev-stand.ps1'
           $ownershipRunner = Get-Content -Raw 'scripts/production-gates/assert-plan-path-ownership.ps1'
+          $pathBudgetRunner = Get-Content -Raw 'scripts/production-gates/assert-windows-path-budget.ps1'
           $nodeRunner = Get-Content -Raw 'scripts/production-gates/run-node-matrix.ps1'
           $ownershipState = Get-Content -Raw '.agent/plans/2026-07-10-engram-production-ready-ownership-state.json'
-          $expectedPlanSha = 'd371e94dff1ea12767b9d0832240cb6caf52c6c3bbe2209fe4280159c4f03c52'
-          $observedPlanSha = (Get-FileHash -Algorithm SHA256 -LiteralPath '.agent/plans/2026-07-10-engram-production-ready-master-plan.md').Hash.ToLowerInvariant()
+          $expectedPlanSha = 'd7bcfd122e456d9b764595524292d53b0c99447b7f716a1be0707341e4681bf9'
+          $observedPlanSha = ([string](& pwsh -NoProfile -File scripts/production-gates/assert-plan-path-ownership.ps1 -Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md -PrintCanonicalPlanSha256)).Trim()
           $rejectedBulkHead = '68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef'
           $rejectedBulkChecker = '.agent/worktrees/prc-db-bulkops/.agent/reviews/2026-07-10-db-bulkops-sibling-rework-check.md'
           $rejectedBulkCheckerSha = 'EB9EB227363A27EA058C6654BD7E38EED1088252F79F837E377B2A3CBC1FAFB7'
@@ -104,6 +113,7 @@ jobs:
           $trackedDatabaseCommand = 'pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -FreshDatabase -Package ./... -Race -FailOnUnexpectedSkip'
           $trackedCriticalWrapper = 'pwsh -NoProfile -File scripts/production-gates/run-critical-suite.ps1 -Config .agent/critical-suite.config.yaml'
           $trackedDevStandWrapper = 'pwsh -NoProfile -File scripts/production-gates/run-dev-stand.ps1 -Config .agent/dev-stand.config.yaml'
+          $trackedPathBudgetWrapper = 'pwsh -NoProfile -File scripts/production-gates/assert-windows-path-budget.ps1 -Repository . -Ref HEAD -CheckoutPrefixLength 66 -MaximumCombinedPathLength 240 -Artifact .agent/e/rg4/ci-path-budget.json'
 
           function Remove-ConformanceStep([string]$text) {
             return [regex]::Replace($text, '(?ms)^      - name: Assert tracked gate / CI conformance\r?\n.*?(?=^      - name: |\z)', '')
@@ -113,6 +123,16 @@ jobs:
             $match = [regex]::Match($text, ('(?ms)^      - name: ' + [regex]::Escape($name) + '\r?\n(?<body>.*?)(?=^      - name: |\z)'))
             if (-not $match.Success) { throw "workflow step '$name' is missing" }
             return $match.Groups['body'].Value
+          }
+
+          function Assert-TokenOrder([string]$text, [string[]]$tokens) {
+            $previous = -1
+            foreach ($token in $tokens) {
+              $index = $text.IndexOf($token, [System.StringComparison]::Ordinal)
+              if ($index -lt 0) { throw "ordered contract token is missing '$token'" }
+              if ($index -le $previous) { throw "ordered contract token '$token' appears out of order" }
+              $previous = $index
+            }
           }
 
           function Assert-WorkflowContract(
@@ -147,15 +167,26 @@ jobs:
             if ($criticalText -notmatch ('(?m)^\s{2}command:\s*"' + [regex]::Escape($trackedDatabaseCommand) + '"\s*$')) { throw 'tracked full fresh-DB runner command drifted' }
 
             $ledgerStep = Get-StepBody $execution 'Assert tracked production-ready ownership ledger'
-            foreach ($required in @('-Mode Ledger', '-Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md', "-ExpectedPlanSha256 $expectedPlanSha", '-State .agent/plans/2026-07-10-engram-production-ready-ownership-state.json', '-Artifact .agent/reports/evidence/production-ready/release-gates-foundation-revision-3/ownership/ci-ledger.json')) {
+            foreach ($required in @('-Mode Ledger', '-Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md', "-ExpectedPlanSha256 $expectedPlanSha", '-State .agent/plans/2026-07-10-engram-production-ready-ownership-state.json', '-Artifact .agent/e/rg4/ci-ledger.json')) {
               if (-not $ledgerStep.Contains($required)) { throw "tracked ownership Ledger step is missing '$required'" }
+            }
+            $pathBudgetSelfTest = Get-StepBody $execution 'Self-test Windows tracked path budget'
+            if (-not $pathBudgetSelfTest.Contains('assert-windows-path-budget.ps1 -SelfTest')) { throw 'workflow does not self-test the Windows path-budget gate' }
+            $pathBudgetStep = Get-StepBody $execution 'Assert Windows tracked path budget'
+            if (-not $pathBudgetStep.Contains("run: $trackedPathBudgetWrapper")) { throw 'workflow does not execute the tracked Windows path-budget gate exactly' }
+            foreach ($required in @('Measure-TrackedPathBudget', 'CheckoutPrefixLength = 66', 'MaximumCombinedPathLength = 240', 'git -c core.quotepath=false', 'ls-tree -r --name-only --full-tree')) {
+              if (-not $pathBudgetRunner.Contains($required)) { throw "Windows path-budget runner implementation is missing '$required'" }
             }
             $nodeSelfTest = Get-StepBody $execution 'Self-test OpenClaw node release matrix'
             if (-not $nodeSelfTest.Contains('run-node-matrix.ps1 -SelfTest')) { throw 'workflow does not self-test the OpenClaw node release matrix' }
 
-            foreach ($required in @('Test-SameStringSequence', "current owner is '`$currentOwner', not '`$Slice'", 'lacks exact rejected-checker evidence', 'must equal rejected predecessor', 'does not descend from predecessor integration')) {
+            foreach ($required in @('Get-CanonicalUtf8LfFileSha256', 'PrintCanonicalPlanSha256', 'Test-SameStringSequence', "current owner is '`$currentOwner', not '`$Slice'", 'lacks exact rejected-checker evidence', 'must equal rejected predecessor', 'does not descend from predecessor integration')) {
               if (-not $ownershipRunnerText.Contains($required)) { throw "ownership runner implementation is missing '$required'" }
             }
+            foreach ($required in @('Test-StrictBoolean', '--untracked-files=all', 'dev-stand-source-commit', 'dev-stand-source-commit-post-build', 'dev-stand-source-tracked-status-post-build', 'dev-stand-compose-build', "@('build', '--pull', 'server', 'operator-console')", 'dev-stand-postgres-pull', "@('pull', 'postgres')", "@('up', '-d', '--no-build', '--pull', 'never', '--wait')", 'source_commit = $sourceCommit', 'source_tracked_clean = $sourceTrackedClean', 'prelaunch_image_ids = $prelaunchImageIds', 'prelaunch_to_running_image_identity = $prelaunchToRunningImageIdentity', 'scanned_reference = $scanReference')) {
+              if (-not $dbRunnerText.Contains($required)) { throw "dev-stand source/build provenance contract is missing '$required'" }
+            }
+            Assert-TokenOrder $dbRunnerText @("Invoke-CapturedProcess 'dev-stand-source-tracked-status'", "Invoke-CapturedProcess 'dev-stand-compose-build'", "Invoke-CapturedProcess 'dev-stand-postgres-pull'", 'dev-stand-source-tracked-status-post-build', 'dev-stand-prelaunch-image-inspect-', "Invoke-CapturedProcess 'dev-stand-up'")
             foreach ($required in @('openclaw-lock-non-ignored', "@('check-ignore', '--no-index', '--quiet'", 'npm pack contains forbidden path', 'dist/index.js', 'dist/index.d.ts', 'scripts/install.sh', 'npm-ci -> npm-typecheck -> npm-test -> npm-audit-high -> npm-pack-dry-run')) {
               if (-not $nodeRunnerText.Contains($required)) { throw "node release runner implementation is missing '$required'" }
             }
@@ -194,7 +225,7 @@ jobs:
 
             $devStandStep = Get-StepBody $execution 'Run tracked dev-stand lifecycle runner'
             if (-not $devStandStep.Contains("run: $trackedDevStandWrapper")) { throw 'workflow does not execute the tracked dev-stand wrapper exactly' }
-            foreach ($required in @("foreach (`$action in @('Up', 'Ready', 'Scan'))", 'if ($upAttempted)', "Read-ActionSummary 'Down'", 'residual_resources_zero', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready')) {
+            foreach ($required in @("foreach (`$action in @('Up', 'Ready', 'Scan'))", 'if ($upAttempted)', "Read-ActionSummary 'Down'", 'residual_resources_zero', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready', 'Test-StrictBoolean', 'source_commit', 'source_tracked_clean', 'prelaunch_image_ids', 'dev-stand-compose-build', 'dev-stand-postgres-pull', 'Scan image ID is not the exact prelaunch/running ID', 'Scan command arguments do not end in the recorded immutable reference')) {
               if (-not $devStandRunnerText.Contains($required)) { throw "dev-stand runner implementation is missing '$required'" }
             }
 
@@ -212,12 +243,32 @@ jobs:
           }
 
           Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner
+          $canonicalFixtureRoot = Join-Path $env:RUNNER_TEMP ('plan-authority-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $canonicalFixtureRoot -Force | Out-Null
+          try {
+            $planText = [System.IO.File]::ReadAllText((Resolve-Path '.agent/plans/2026-07-10-engram-production-ready-master-plan.md'))
+            $lfText = ($planText -replace "`r`n", "`n") -replace "`r", "`n"
+            $crlfText = $lfText -replace "`n", "`r`n"
+            $semanticText = $lfText.Replace('Revision: 4', 'Revision: 5')
+            if ($semanticText -ceq $lfText) { throw 'semantic plan mutation fixture did not change the plan' }
+            $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+            $lfPath = Join-Path $canonicalFixtureRoot 'plan-lf.md'; [System.IO.File]::WriteAllText($lfPath, $lfText, $utf8NoBom)
+            $crlfPath = Join-Path $canonicalFixtureRoot 'plan-crlf.md'; [System.IO.File]::WriteAllText($crlfPath, $crlfText, $utf8NoBom)
+            $semanticPath = Join-Path $canonicalFixtureRoot 'plan-semantic.md'; [System.IO.File]::WriteAllText($semanticPath, $semanticText, $utf8NoBom)
+            $lfHash = ([string](& pwsh -NoProfile -File scripts/production-gates/assert-plan-path-ownership.ps1 -Plan $lfPath -PrintCanonicalPlanSha256)).Trim()
+            $crlfHash = ([string](& pwsh -NoProfile -File scripts/production-gates/assert-plan-path-ownership.ps1 -Plan $crlfPath -PrintCanonicalPlanSha256)).Trim()
+            $semanticHash = ([string](& pwsh -NoProfile -File scripts/production-gates/assert-plan-path-ownership.ps1 -Plan $semanticPath -PrintCanonicalPlanSha256)).Trim()
+            if ($lfHash -cne $expectedPlanSha -or $crlfHash -cne $expectedPlanSha) { throw 'LF/CRLF canonical plan authority hashes diverged' }
+            if ($semanticHash -ceq $expectedPlanSha) { throw 'semantic plan mutation preserved the authority hash' }
+          }
+          finally { Remove-Item -LiteralPath $canonicalFixtureRoot -Recurse -Force -ErrorAction SilentlyContinue }
           foreach ($mutation in @(
             @{ name = 'remove fresh database'; token = '-FreshDatabase' },
             @{ name = 'remove database race'; token = '-Race' },
             @{ name = 'remove skip enforcement'; token = '-FailOnUnexpectedSkip' },
             @{ name = 'remove critical wrapper'; token = $trackedCriticalWrapper },
             @{ name = 'remove dev-stand wrapper'; token = $trackedDevStandWrapper },
+            @{ name = 'remove Windows path-budget wrapper'; token = $trackedPathBudgetWrapper },
             @{ name = 'remove full JSON mode'; token = "'-json'" }
           )) {
             $mutated = $workflow.Replace($mutation.token, '')
@@ -233,6 +284,10 @@ jobs:
           Assert-MutationRejected 'remove wrapper proxied operator validation' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner ($devStandRunner.Replace('dev-stand-operator-api-health', '')) }
           Assert-MutationRejected 'remove dev-stand Scan action' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner ($devStandRunner.Replace("@('Up', 'Ready', 'Scan')", "@('Up', 'Ready')")) }
           Assert-MutationRejected 'remove unconditional Down validation' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner ($devStandRunner.Replace("Read-ActionSummary 'Down'", '')) }
+          Assert-MutationRejected 'remove prelaunch compose build' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("@('build', '--pull', 'server', 'operator-console')", "@('config')")) $criticalRunner $devStandRunner }
+          $lateBuildRunner = $dbRunner.Replace("Invoke-CapturedProcess 'dev-stand-compose-build'", "Invoke-CapturedProcess 'dev-stand-compose-build-placeholder'") + "`n# Invoke-CapturedProcess 'dev-stand-compose-build'"
+          Assert-MutationRejected 'move prelaunch compose build after launch' { Assert-WorkflowContract $workflow $critical $stand $lateBuildRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'remove no-build launch lock' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("'--no-build'", "'--renew-anon-volumes'")) $criticalRunner $devStandRunner }
           Assert-MutationRejected 'narrow compatibility full package' { Assert-WorkflowContract ($workflow.Replace("`$arguments.Add('./...')", "`$arguments.Add('./internal/...')")) $critical $stand $dbRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'change count semantics' { Assert-WorkflowContract ($workflow.Replace("'-count=1'", "'-count=2'")) $critical $stand $dbRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'change coverage mode' { Assert-WorkflowContract ($workflow.Replace("'-covermode=atomic'", "'-covermode=set'")) $critical $stand $dbRunner $criticalRunner $devStandRunner }
@@ -244,7 +299,7 @@ jobs:
           Assert-MutationRejected 'change ownership current owner' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace('"current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"', '"current_owner": "DB-BULKOPS"')) }
           Assert-MutationRejected 'remove rejected predecessor evidence' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace($rejectedBulkCheckerSha, '')) }
           Assert-MutationRejected 'change exact rejected successor base' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace($rejectedBulkHead, ('1' * 40))) }
-          Write-Output 'CONFORMANCE PASS: exact wrappers, ownership hash/state, node matrix, readiness, cleanup, and full/race semantics match; 26 mutations rejected'
+          Write-Output 'CONFORMANCE PASS: canonical LF/CRLF authority, exact wrappers, path budget, ordered source-built image provenance, ownership state, node matrix, readiness, cleanup, and full/race semantics match; 30 mutations rejected'
 
       - name: Resolve PostgreSQL service identity
         shell: pwsh
@@ -279,7 +334,7 @@ jobs:
           name: release-gates-foundation
           path: |
             .agent/reports/evidence/production-ready/release-gates-foundation/
-            .agent/reports/evidence/production-ready/release-gates-foundation-revision-3/
+            .agent/e/rg4/
           if-no-files-found: error
 
   test:
