@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "gate": "r8-scope-map-parity",
+  "checked_at": "2026-07-10T23:07:40.2283397+03:00",
+  "verdict": "PASS",
+  "register_freeze": {
+    "path": "D:\\Dev\\engram\\.agent\\reports\\production-readiness-evidence-register.json",
+    "sha256": "ab5f882fa110ca823a317061ecbca0c62516702735325893a56206f9e7a29415",
+    "updated_at": "2026-07-10T22:46:01.2938194+03:00",
+    "rows": 67,
+    "unique_slices": 67,
+    "goal_status": "USER_RESUMED_TOOL_STATUS_BLOCKED"
+  },
+  "scope_map": {
+    "path": ".agent/plans/2026-07-10-engram-production-ready-scope-map.json",
+    "sha256": "81093184036672008d6b85dfa88a431998ef70b587ab11475aa2b315f03ddf79",
+    "rows": 67,
+    "unique_slices": 67,
+    "slice_set_matches_register": true,
+    "snapshot_status_head_matches_register": true,
+    "missing_plan_owners": [],
+    "classification_counts": {
+      "maker": 56,
+      "checker-evidence": 4,
+      "meta-fold": 4,
+      "historical": 1,
+      "root-integration": 2
+    }
+  },
+  "meta_folds": {
+    "CUSTOMER-MODE": ["CRITICAL-HARNESS", "INTEGRATION-RELEASE"],
+    "MASTER-PLAN": ["PLAN-GOVERNANCE"],
+    "OPERATIONS": ["DEPLOYMENT-ROLLBACK", "RECOVERY-DATA", "OBSERVABILITY-OTLP", "PRIVACY-BOUNDARIES", "CORE-PUBLIC-TRUTH", "FINAL-PUBLIC-TRUTH"],
+    "OPERATOR-CONSOLE": ["IMAGE-REMEDIATION", "OC-INTEGRATION"]
+  },
+  "load_bearing_rejected_heads": {
+    "DB-BULKOPS": ["68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef"],
+    "DB-EMBEDDING-EVIDENCE-TRANSPORT": ["369951b61ee07cb0c405558e0f677cd1c9e90362"],
+    "RELEASE-GATES": ["144eeefa003c3e1c0009c4264f41236ee3453b65"],
+    "SECURITY-PROJECT-IDENTITY": ["9e2ce4e58a5cded69660ca9ac532d2167f315bb2"]
+  },
+  "snapshot_only_fields": [
+    "register_snapshot.sha256",
+    "register_snapshot.updated_at",
+    "register_status",
+    "register_head",
+    "register_notes"
+  ],
+  "ordinary_same_lane_progress_may_drift": true,
+  "errors": []
+}

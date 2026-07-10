@@ -2,7 +2,11 @@
   "schema_version": 1,
   "plan": {
     "path": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
-    "sha256": "d7bcfd122e456d9b764595524292d53b0c99447b7f716a1be0707341e4681bf9"
+    "sha256": "fd2b223a9a62848efc39e1c33bf739bada191508bccb7ba9a73140185638e43d"
+  },
+  "scope_map": {
+    "path": ".agent/plans/2026-07-10-engram-production-ready-scope-map.json",
+    "sha256": "81093184036672008d6b85dfa88a431998ef70b587ab11475aa2b315f03ddf79"
   },
   "path_epochs": [
     {
@@ -27,13 +31,16 @@
           "integration_sha": null
         }
       ],
-      "required_successor_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef"
+      "required_successor_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+      "current_owner_head_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+      "current_owner_status": "PASS_WITH_CONCERNS_NOT_INTEGRATED"
     },
     {
       "path": "internal/db/gorm/candidate_store_test.go",
       "ordered_owners": [
         "DB-BULKOPS",
         "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "DB-TEST-POOL-HYGIENE",
         "DB-GOVERNANCE",
         "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
       ],
@@ -51,7 +58,15 @@
           "integration_sha": null
         }
       ],
-      "required_successor_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef"
+      "required_successor_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+      "current_owner_head_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+      "current_owner_status": "PASS_WITH_CONCERNS_NOT_INTEGRATED",
+      "pending_transition": {
+        "owner": "DB-TEST-POOL-HYGIENE",
+        "product_sha": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
+        "evidence_sha": "68242c48aaad62ec087166eeb9ea32f14d189450",
+        "status": "READY_FOR_CHECK_NOT_CURRENT_AUTHORITY"
+      }
     },
     {
       "path": "internal/mcp/tools_bulkops.go",
@@ -73,7 +88,9 @@
           "integration_sha": null
         }
       ],
-      "required_successor_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef"
+      "required_successor_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+      "current_owner_head_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+      "current_owner_status": "PASS_WITH_CONCERNS_NOT_INTEGRATED"
     },
     {
       "path": "internal/mcp/tools_dryrun_test.go",
@@ -95,7 +112,9 @@
           "integration_sha": null
         }
       ],
-      "required_successor_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef"
+      "required_successor_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+      "current_owner_head_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+      "current_owner_status": "PASS_WITH_CONCERNS_NOT_INTEGRATED"
     },
     {
       "path": "internal/bulkops/facade.go",
@@ -170,6 +189,7 @@
       "path": "internal/worker/service.go",
       "ordered_owners": [
         "AUTH-BOOTSTRAP-SECURITY",
+        "REDACTION-LIVE-CONTRACT",
         "V7-RUNTIME-WIRING"
       ],
       "current_owner": "AUTH-BOOTSTRAP-SECURITY",
@@ -406,6 +426,28 @@
         "FINAL-PUBLIC-TRUTH"
       ],
       "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "internal/mcp/tools_memory.go",
+      "ordered_owners": [
+        "MCP-STRUCTURED-INPUT-VALIDATION",
+        "REDACTION-LIVE-CONTRACT"
+      ],
+      "current_owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "docs/operating-engram.md",
+      "ordered_owners": [
+        "REDACTION-LIVE-CONTRACT",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "REDACTION-LIVE-CONTRACT",
       "transition_kind": "integration",
       "completed_predecessors": [],
       "required_successor_base_sha": null
