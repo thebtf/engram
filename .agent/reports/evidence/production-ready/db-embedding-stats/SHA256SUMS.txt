@@ -1,3 +1,10 @@
+# manifest-version=1
+# algorithm=sha256
+# representation=git-blob-content
+# source-commit=38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df
+# contract=.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json
+# verifier=.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs
+# checkout-equivalence=crlf-to-lf-with-no-bare-cr
 7bfb06dfc0dda792147d5e2df9d2fe68b59edaac55d2396dece1b8a8a09eee5f  internal/embedding/store.go
 a35a234eb167c58bf201afc50954e43926a69ba2294536f2d0fabf4e015b12a4  internal/embedding/store_stats_test.go
 12adb14f118dbf821ee1eabb569f6bbcae831875d3b8a7fb5928c18a4b323a56  .agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json

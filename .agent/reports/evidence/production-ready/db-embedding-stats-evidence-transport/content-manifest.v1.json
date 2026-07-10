@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+  "algorithm": "sha256",
+  "representation": {
+    "kind": "git-blob-content",
+    "source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+    "checkout_equivalence": {
+      "transform": "replace each CRLF byte pair with LF",
+      "bare_cr": "reject",
+      "required_result": "byte-identical to the source commit Git blob"
+    }
+  },
+  "legacy_manifest": ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
+  "verifier": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+  "entries": [
+    {
+      "path": "internal/embedding/store.go",
+      "git_blob_oid": "1abaee96b07583f9fd824ed03c40b043c490b567",
+      "byte_length": 10934,
+      "sha256": "7bfb06dfc0dda792147d5e2df9d2fe68b59edaac55d2396dece1b8a8a09eee5f"
+    },
+    {
+      "path": "internal/embedding/store_stats_test.go",
+      "git_blob_oid": "d381643deadbb42e8a9a07fc9375a6cdfedbdccc",
+      "byte_length": 9189,
+      "sha256": "a35a234eb167c58bf201afc50954e43926a69ba2294536f2d0fabf4e015b12a4"
+    },
+    {
+      "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+      "git_blob_oid": "48db3052d1ff53fa7cd5f61d0371dd1be0e780bd",
+      "byte_length": 577,
+      "sha256": "12adb14f118dbf821ee1eabb569f6bbcae831875d3b8a7fb5928c18a4b323a56"
+    },
+    {
+      "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+      "git_blob_oid": "4d94a57de67a41b718073e403cd894843dcffa0d",
+      "byte_length": 1429,
+      "sha256": "56022d4fb07816ca0ed3f841770605dc212a4cb39fcb9682c75a753f73c7776b"
+    },
+    {
+      "path": ".agent/specs/db-embedding-stats/evidence/coverage.out",
+      "git_blob_oid": "457c38e08408c534032a7a962969c762fa1fad8c",
+      "byte_length": 17413,
+      "sha256": "edd5fb10fe7a7d7aaddd2bfd96ea220fe42f94561d386712951eb70eabffb735"
+    },
+    {
+      "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+      "git_blob_oid": "8a3d45057e7c869e3eec8925a25a341158209f01",
+      "byte_length": 3054,
+      "sha256": "efad310616efa0878628e6af946f06349b16f0c7817432cbb3614ff5c74de025"
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json",
+      "git_blob_oid": "1fa3cb6c4dc1fba849f50f33a42a3f2d1f2b23fd",
+      "byte_length": 1592,
+      "sha256": "a82aa7d911935e1327893faa266d49df97018a182fbe8498dc3e4976c59d9ada"
+    }
+  ]
+}
