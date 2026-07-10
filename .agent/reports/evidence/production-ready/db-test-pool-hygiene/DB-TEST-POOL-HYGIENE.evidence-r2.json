@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "generated_utc": "2026-07-10T13:50:06.3759908Z",
+  "status": "READY_FOR_RECHECK",
+  "product_parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+  "product_candidate_sha": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
+  "evidence_revision_base_sha": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
+  "evidence_revision_head_sha": null,
+  "evidence_revision_head_reason": "reported after the atomic commit because a commit cannot embed its own hash",
+  "branch": "work/prc-db-test-pool-hygiene-evidence-r2",
+  "worktree": "D:\\Dev\\engram\\.agent\\worktrees\\dbph-evidence-r2",
+  "product_or_test_paths_changed_by_revision": [],
+  "product_test_blob": {
+    "path": "internal/db/gorm/candidate_store_test.go",
+    "git_blob_oid": "7337f1bd8da4fb315de842eea2e3cce5476250a3",
+    "sha256": "62260c1a2e0705b065295322dd23fcf9b17fd47cb5ebc64134630788e2d23e09",
+    "byte_identical_to_product_candidate": true
+  },
+  "inventory": {
+    "parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+    "call_sites": 83,
+    "files": 8,
+    "artifact": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json"
+  },
+  "runtime_evidence": {
+    "max_connections": 100,
+    "parent_semantic_failures": 6,
+    "parent_secondary_exhaustion_failures": 6,
+    "parent_too_many_clients_records": 9,
+    "candidate_semantic_failures": 6,
+    "candidate_secondary_exhaustion_failures": 0,
+    "candidate_too_many_clients_records": 0,
+    "focused_repeat20_exit": 0,
+    "focused_race_exit": 0,
+    "candidate_repeat5_exit": 0,
+    "candidate_race_exit": 0,
+    "go_vet_all_exit": 0,
+    "go_build_all_exit": 0,
+    "revision2_focused_count": 3,
+    "revision2_focused_exit": 0,
+    "revision2_go_vet_all_exit": 0,
+    "revision2_go_build_all_exit": 0,
+    "database_residue": 0,
+    "postgres_session_residue": 0
+  },
+  "representation_contract": {
+    "id": "git-blob-bytes-v1",
+    "digest": "SHA-256",
+    "path_binding": "Git blob OID plus SHA-256 plus byte count",
+    "working_tree_bytes_are_not_contract_bytes": true,
+    "manifest_generation_order": "final MANIFEST.json first, SHA256SUMS.txt second",
+    "manifest_self_reference": "excluded",
+    "outer_checksum_self_reference": "excluded"
+  },
+  "adversarial_cases_required": [
+    "stale_manifest_entry",
+    "crlf_raw_representation",
+    "incorrect_representation_contract",
+    "false_inventory_76_6"
+  ],
+  "evidence_verification": {
+    "source_mode": "GitIndex",
+    "verifier_exit": 0,
+    "verifier_status": "PASS",
+    "adversarial_harness_exit": 0,
+    "baseline_exit": 0,
+    "mutation_exits": [1, 1, 1, 1],
+    "adversarial_temp_root_removed": true,
+    "runtime_worktree_removed_and_unregistered": true
+  }
+}

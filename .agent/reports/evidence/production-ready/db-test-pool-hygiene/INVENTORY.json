@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+  "symbol": "openCandidateTestDB",
+  "definition": "internal/db/gorm/candidate_store_test.go:23",
+  "method": "enumerate every internal/db/gorm/*_test.go Git blob at parent_sha; count lines containing openCandidateTestDB( except the func definition",
+  "required_call_sites": 83,
+  "required_files": 8,
+  "actual_call_sites": 83,
+  "actual_files": 8,
+  "entries": [
+    {
+      "path": "internal/db/gorm/candidate_store_test.go",
+      "count": 19,
+      "lines": [43, 88, 165, 193, 236, 262, 290, 325, 367, 411, 450, 522, 566, 589, 611, 742, 870, 907, 1022]
+    },
+    {
+      "path": "internal/db/gorm/rule_arbiter_store_test.go",
+      "count": 8,
+      "lines": [15, 23, 37, 92, 120, 153, 199, 234]
+    },
+    {
+      "path": "internal/db/gorm/rule_governance_rg3_store_test.go",
+      "count": 9,
+      "lines": [16, 103, 133, 223, 268, 331, 364, 392, 427]
+    },
+    {
+      "path": "internal/db/gorm/rule_governance_store_test.go",
+      "count": 21,
+      "lines": [20, 25, 39, 116, 152, 187, 228, 258, 318, 334, 371, 394, 443, 460, 489, 536, 561, 581, 606, 723, 745]
+    },
+    {
+      "path": "internal/db/gorm/rule_injection_event_store_test.go",
+      "count": 5,
+      "lines": [15, 40, 99, 167, 184]
+    },
+    {
+      "path": "internal/db/gorm/state_store_test.go",
+      "count": 14,
+      "lines": [28, 61, 82, 113, 135, 167, 201, 251, 309, 407, 451, 511, 553, 598]
+    },
+    {
+      "path": "internal/db/gorm/temporal_truth_store_migration_test.go",
+      "count": 1,
+      "lines": [10]
+    },
+    {
+      "path": "internal/db/gorm/temporal_truth_store_test.go",
+      "count": 6,
+      "lines": [18, 91, 152, 236, 296, 377]
+    }
+  ]
+}

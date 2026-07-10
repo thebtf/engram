@@ -1,0 +1,11 @@
+product_candidate_sha=276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9
+runtime_worktree=D:\Dev\engram\.agent\worktrees\dbph-evidence-r2-runtime
+go_vet_command=go vet ./...
+go_vet_exit=0
+go_build_command=go build ./...
+go_build_exit=0
+focused_command=go test -p=1 ./internal/db/gorm -run ^TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose$ -count=3
+focused_exit=0
+focused_database=engram_chk_dbph_evr2_focus_a
+focused_database_residue=0
+focused_activity_residue=0

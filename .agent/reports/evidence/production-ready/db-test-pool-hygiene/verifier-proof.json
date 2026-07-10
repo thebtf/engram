@@ -1,0 +1,12 @@
+{
+  "generated_utc": "2026-07-10T14:11:02.4273083Z",
+  "status": "PASS",
+  "source_mode": "GitIndex",
+  "revision": "INDEX",
+  "representation_contract": "git-blob-bytes-v1",
+  "manifest_entries": 25,
+  "checksum_entries": 26,
+  "inventory_call_sites": 83,
+  "inventory_files": 8,
+  "failures": []
+}
