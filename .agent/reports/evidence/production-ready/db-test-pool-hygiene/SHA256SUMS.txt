@@ -1,4 +1,8 @@
-937c4b815e8a96d72ca514a1e0fd36bbc46f6e2c20be360604b9c5acdb92cab6  .agent/reports/2026-07-10-db-test-pool-hygiene-maker.md
+# representation_contract=git-blob-bytes-v1
+# manifest_generation_order=manifest-first-checksum-second
+# checksum_self_reference=excluded
+51c95f8471312f6fd81e1ba2d58f206d7bb368032079c47b55bd0e7147cd8001  .agent/reports/2026-07-10-db-test-pool-hygiene-maker.md
+86a843700a146ad46dfcb6e8c7cb9b8433312dcd755383761e2313d3b13c72dc  .agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md
 d1aa9c7a603a140be74bccc1170e78bfa2007f8aca0e48473c5b5a749a97c435  .agent/reports/evidence/production-ready/db-test-pool-hygiene/01-parent-broad.summary.log
 765e7e93a5b9a2384d0417199cdd66dc816f97e178219473d18b7b0a93cd31a7  .agent/reports/evidence/production-ready/db-test-pool-hygiene/02-parent-red.log
 9fbe284df01cece683d0dc6938b370dabbea030af3e39047f382e9e3c3cd4d9b  .agent/reports/evidence/production-ready/db-test-pool-hygiene/03-green-focused.log
@@ -12,8 +16,14 @@ b9acc25599272b3942beaaaabd5a042c86128765e3d8b1b9ad142b6b0d1fc20f  .agent/reports
 1137da3adb9e75c178072ae942fadd1c23c56721388e202c942d56901ea17db1  .agent/reports/evidence/production-ready/db-test-pool-hygiene/11-parent-successor-comparison.txt
 94ca19b3d51903449acefc41241e8c397198453f4c6674bed1a2dc61ea49b5f4  .agent/reports/evidence/production-ready/db-test-pool-hygiene/12-static-gates.txt
 31b07bacde4ad835c55a4aa85e09f01edd2dfeb0887011547b4b17d4f686b40e  .agent/reports/evidence/production-ready/db-test-pool-hygiene/13-final-residue.log
-1c0d9251885329624a470bb2872feabe4f1c5e09c8434d8784561da92a13a645  .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.final.json
+4c544c5ea7e5e0f7d6518f3af222054589bd258e6aa373c833789ec2532f7a2d  .agent/reports/evidence/production-ready/db-test-pool-hygiene/14-evidence-r2-focused.log
+6b74e1f64b909f8ffe0042fbc7d2dc6d8310752f2c7398352a395d6d6362b677  .agent/reports/evidence/production-ready/db-test-pool-hygiene/15-evidence-r2-static.txt
+c4fdaad603d5c03954cd1026afc9a9c01c0e0963c367390247a795b5382584e1  .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r2.json
+91d76ab5a76e0ad0758aa3ba6962e0e93b8d912ac2a8166f438976d63a7c7918  .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.final.json
 98398e3e46628fd0f3f08ca54b1baa1b96f70554ac7316712a4e1906d96e0cb0  .agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.red.json
+64a1b454068b5480af0aa512d5157222a4760798f4e9689aa9887643939ccb10  .agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json
 fb886ee1749c7b2d45adf9bd43ac2a1434cab24c9ce35bb548f1751bd9e71861  .agent/reports/evidence/production-ready/db-test-pool-hygiene/Invoke-DBPoolHygieneGo.ps1
-9af2a11b4a9aeea2ac0fc8466eb0a0070b4f832df8106043823a5cc5ddb289f2  .agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json
+d82926f353a9f3924c6047a279eb22dfb201da59fe190098d3fef4a6c058a502  .agent/reports/evidence/production-ready/db-test-pool-hygiene/Test-DBPoolHygieneEvidenceAdversarial.ps1
+56b807d244df9c0f8ac2f8405d2eb6bfec90a6198ae8f9a695a97e71a3d16632  .agent/reports/evidence/production-ready/db-test-pool-hygiene/Verify-DBPoolHygieneEvidence.ps1
 62260c1a2e0705b065295322dd23fcf9b17fd47cb5ebc64134630788e2d23e09  internal/db/gorm/candidate_store_test.go
+9c208ea68ebff542e14b937f69fce785dce75abaadadabe8c80a4b018b76206b  .agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json

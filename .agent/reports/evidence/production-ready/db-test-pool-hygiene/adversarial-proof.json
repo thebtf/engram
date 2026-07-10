@@ -1,0 +1,70 @@
+{
+  "generated_utc": "2026-07-10T14:11:53.6332739Z",
+  "status": "PASS",
+  "source_mode": "GitIndex",
+  "revision": "INDEX",
+  "cases": [
+    {
+      "name": "baseline",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "verifier_status": "PASS",
+      "expected_failure": "",
+      "observed_failures": null,
+      "pass": true
+    },
+    {
+      "name": "stale_manifest_entry",
+      "expected_exit": "nonzero",
+      "actual_exit": 1,
+      "verifier_status": "FAIL",
+      "expected_failure": "manifest SHA-256 mismatch",
+      "observed_failures": [
+        "manifest SHA-256 mismatch: .agent/reports/2026-07-10-db-test-pool-hygiene-maker.md",
+        "outer checksum mismatch: .agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json"
+      ],
+      "pass": true
+    },
+    {
+      "name": "crlf_raw_representation",
+      "expected_exit": "nonzero",
+      "actual_exit": 1,
+      "verifier_status": "FAIL",
+      "expected_failure": "outer checksum mismatch",
+      "observed_failures": [
+        "manifest bytes contain CR; LF Git blob bytes are required",
+        "outer checksum mismatch: .agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json"
+      ],
+      "pass": true
+    },
+    {
+      "name": "incorrect_representation_contract",
+      "expected_exit": "nonzero",
+      "actual_exit": 1,
+      "verifier_status": "FAIL",
+      "expected_failure": "unsupported representation contract",
+      "observed_failures": [
+        "unsupported representation contract: raw-checkout-bytes-v1",
+        "outer checksum mismatch: .agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json"
+      ],
+      "pass": true
+    },
+    {
+      "name": "false_inventory_76_6",
+      "expected_exit": "nonzero",
+      "actual_exit": 1,
+      "verifier_status": "FAIL",
+      "expected_failure": "inventory acceptance constants must be 83/8",
+      "observed_failures": [
+        "inventory acceptance constants must be 83/8, got 76/6",
+        "inventory total mismatch: declared 76/6, actual 83/8",
+        "inventory missing path: internal/db/gorm/temporal_truth_store_migration_test.go",
+        "inventory missing path: internal/db/gorm/temporal_truth_store_test.go",
+        "outer checksum mismatch: .agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json"
+      ],
+      "pass": true
+    }
+  ],
+  "temp_root_removed": true,
+  "cleanup_error": null
+}
