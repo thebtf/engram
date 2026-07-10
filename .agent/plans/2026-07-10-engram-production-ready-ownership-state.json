@@ -1,0 +1,414 @@
+{
+  "schema_version": 1,
+  "plan": {
+    "path": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+    "sha256": "d371e94dff1ea12767b9d0832240cb6caf52c6c3bbe2209fe4280159c4f03c52"
+  },
+  "path_epochs": [
+    {
+      "path": "internal/db/gorm/candidate_store.go",
+      "ordered_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "DB-GOVERNANCE",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ],
+      "current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "transition_kind": "rework",
+      "completed_predecessors": [
+        {
+          "owner": "DB-BULKOPS",
+          "checker_verdict": "FAIL",
+          "checker_artifact": ".agent/worktrees/prc-db-bulkops/.agent/reviews/2026-07-10-db-bulkops-sibling-rework-check.md",
+          "checker_sha256": "EB9EB227363A27EA058C6654BD7E38EED1088252F79F837E377B2A3CBC1FAFB7",
+          "rejected_head_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+          "post_review_verdict": null,
+          "post_review_artifact": null,
+          "integration_sha": null
+        }
+      ],
+      "required_successor_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef"
+    },
+    {
+      "path": "internal/db/gorm/candidate_store_test.go",
+      "ordered_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "DB-GOVERNANCE",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ],
+      "current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "transition_kind": "rework",
+      "completed_predecessors": [
+        {
+          "owner": "DB-BULKOPS",
+          "checker_verdict": "FAIL",
+          "checker_artifact": ".agent/worktrees/prc-db-bulkops/.agent/reviews/2026-07-10-db-bulkops-sibling-rework-check.md",
+          "checker_sha256": "EB9EB227363A27EA058C6654BD7E38EED1088252F79F837E377B2A3CBC1FAFB7",
+          "rejected_head_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+          "post_review_verdict": null,
+          "post_review_artifact": null,
+          "integration_sha": null
+        }
+      ],
+      "required_successor_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef"
+    },
+    {
+      "path": "internal/mcp/tools_bulkops.go",
+      "ordered_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"
+      ],
+      "current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "transition_kind": "rework",
+      "completed_predecessors": [
+        {
+          "owner": "DB-BULKOPS",
+          "checker_verdict": "FAIL",
+          "checker_artifact": ".agent/worktrees/prc-db-bulkops/.agent/reviews/2026-07-10-db-bulkops-sibling-rework-check.md",
+          "checker_sha256": "EB9EB227363A27EA058C6654BD7E38EED1088252F79F837E377B2A3CBC1FAFB7",
+          "rejected_head_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+          "post_review_verdict": null,
+          "post_review_artifact": null,
+          "integration_sha": null
+        }
+      ],
+      "required_successor_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef"
+    },
+    {
+      "path": "internal/mcp/tools_dryrun_test.go",
+      "ordered_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"
+      ],
+      "current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "transition_kind": "rework",
+      "completed_predecessors": [
+        {
+          "owner": "DB-BULKOPS",
+          "checker_verdict": "FAIL",
+          "checker_artifact": ".agent/worktrees/prc-db-bulkops/.agent/reviews/2026-07-10-db-bulkops-sibling-rework-check.md",
+          "checker_sha256": "EB9EB227363A27EA058C6654BD7E38EED1088252F79F837E377B2A3CBC1FAFB7",
+          "rejected_head_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+          "post_review_verdict": null,
+          "post_review_artifact": null,
+          "integration_sha": null
+        }
+      ],
+      "required_successor_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef"
+    },
+    {
+      "path": "internal/bulkops/facade.go",
+      "ordered_owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ],
+      "current_owner": "DB-BULKOPS",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "internal/bulkops/facade_test.go",
+      "ordered_owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION"
+      ],
+      "current_owner": "DB-BULKOPS",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "internal/bulkops/rollback_test.go",
+      "ordered_owners": [
+        "DB-BULKOPS",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ],
+      "current_owner": "DB-BULKOPS",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "pkg/models/snapshot.go",
+      "ordered_owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION"
+      ],
+      "current_owner": "DB-BULKOPS",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "internal/db/gorm/user_store.go",
+      "ordered_owners": [
+        "DB-AUTH",
+        "AUTH-BOOTSTRAP-SECURITY",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ],
+      "current_owner": "DB-AUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "internal/worker/auth_handlers.go",
+      "ordered_owners": [
+        "DB-AUTH",
+        "AUTH-BOOTSTRAP-SECURITY",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ],
+      "current_owner": "DB-AUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "internal/worker/service.go",
+      "ordered_owners": [
+        "AUTH-BOOTSTRAP-SECURITY",
+        "V7-RUNTIME-WIRING"
+      ],
+      "current_owner": "AUTH-BOOTSTRAP-SECURITY",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "Dockerfile",
+      "ordered_owners": [
+        "SECURITY-TOOLCHAIN",
+        "IMAGE-REMEDIATION"
+      ],
+      "current_owner": "SECURITY-TOOLCHAIN",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "ordered_owners": [
+        "RELEASE-GATES",
+        "IMAGE-REMEDIATION"
+      ],
+      "current_owner": "RELEASE-GATES",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "docker-compose.yml",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION",
+        "DEPLOYMENT-ROLLBACK"
+      ],
+      "current_owner": "IMAGE-REMEDIATION",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "deploy/docker-compose.runtime.yml",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION",
+        "DEPLOYMENT-ROLLBACK"
+      ],
+      "current_owner": "IMAGE-REMEDIATION",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "apps/operator-console/package.json",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION",
+        "OC-INTEGRATION"
+      ],
+      "current_owner": "IMAGE-REMEDIATION",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "apps/operator-console/package-lock.json",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION",
+        "OC-INTEGRATION"
+      ],
+      "current_owner": "IMAGE-REMEDIATION",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "docs/DEPLOYMENT.md",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION",
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "IMAGE-REMEDIATION",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "docs/PRODUCTION-TESTING-PLAYBOOK.md",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION",
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "IMAGE-REMEDIATION",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "README.md",
+      "ordered_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "README.ru.md",
+      "ordered_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "README.zh.md",
+      "ordered_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "ordered_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "CHANGELOG.md",
+      "ordered_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "Makefile",
+      "ordered_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": ".env.example",
+      "ordered_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "docs/MIGRATION.md",
+      "ordered_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "docs/arch/CONFIGURATION.md",
+      "ordered_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "docs/arch/QUICKSTART.md",
+      "ordered_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "docs/public/engram.jpg",
+      "ordered_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "plugin/engram/commands/setup.md",
+      "ordered_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "plugin/engram/commands/doctor.md",
+      "ordered_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    }
+  ]
+}
