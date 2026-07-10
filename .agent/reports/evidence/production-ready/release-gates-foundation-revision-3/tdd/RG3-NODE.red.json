@@ -1,0 +1,9 @@
+{
+  "task_id": "RG3-NODE",
+  "observed_at": "2026-07-10T08:29:56.4884843Z",
+  "test_file": "scripts/production-gates/run-node-matrix.ps1",
+  "test_name": "clean OpenClaw locked-install and package matrix",
+  "invariant": "A clean checkout with no node_modules proves manifest/lock/plugin parity and runs npm ci, typecheck, tests, high-severity audit, and package dry-run in that exact order with unconditional cleanup.",
+  "failure_reason": "The new foundation runner had tests but no manifest-parity implementation.",
+  "runner_stdout_excerpt": "The term 'Test-OpenClawManifestParity' is not recognized"
+}

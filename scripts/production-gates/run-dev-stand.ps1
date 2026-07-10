@@ -82,6 +82,30 @@ function Assert-ContainsExactLine {
     if ($count -ne 1) { throw "dev-stand config $Name must appear exactly once; found $count" }
 }
 
+function Assert-DevStandConfigCredentialPolicy {
+    param([Parameter(Mandatory)][string]$Text)
+
+    foreach ($sensitiveEnvKey in @('POSTGRES_PASSWORD', 'DATABASE_DSN', 'ENGRAM_AUTH_ADMIN_TOKEN', 'ENGRAM_AUTH_BOOTSTRAP_CAPABILITY')) {
+        if ($Text -cmatch ("(?m)^\s+" + [regex]::Escape($sensitiveEnvKey) + ':')) {
+            throw "dev-stand config must not persist sensitive env key '$sensitiveEnvKey'"
+        }
+    }
+    $required = [ordered]@{
+        'generation scope' = '  generation_scope: "three independent cryptographic 256-bit values generated inside the Up runner process"'
+        'PostgreSQL password generation' = '  postgres_password: "generated cryptographically inside the Up runner process"'
+        'admin token generation' = '  admin_token: "generated cryptographically inside the Up runner process"'
+        'bootstrap capability generation' = '  bootstrap_capability: "generated cryptographically inside the Up runner process"'
+        'PostgreSQL runtime interface' = '  postgres_runtime_interface: "POSTGRES_PASSWORD plus generated DATABASE_DSN"'
+        'admin runtime interface' = '  admin_runtime_interface: "ENGRAM_AUTH_ADMIN_TOKEN"'
+        'bootstrap runtime interface' = '  bootstrap_runtime_interface: "ENGRAM_AUTH_BOOTSTRAP_CAPABILITY via ephemeral compose override"'
+        'credential distinctness' = '  required_distinct: true'
+        'credential forbidden defaults' = '  forbidden_defaults: ["engram", "password", "changeme", "change-me", "change-me-in-production", "default", "admin"]'
+        'credential persistence policy' = '  persistence: "never written to raw logs, machine summaries, config, or caller environment"'
+        'credential fallback policy' = '  auth_disabled_fallback: false'
+    }
+    foreach ($entry in $required.GetEnumerator()) { Assert-ContainsExactLine $Text $entry.Value $entry.Key }
+}
+
 function Read-DevStandConfig {
     param([Parameter(Mandatory)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "dev-stand config does not exist: $Path" }
@@ -106,15 +130,10 @@ function Read-DevStandConfig {
         'PostgreSQL port' = '  POSTGRES_PORT: "55433"'
         'worker port' = '  WORKER_PORT: "37778"'
         'operator port' = '  OPERATOR_CONSOLE_PORT: "3001"'
-        'PostgreSQL password' = '  POSTGRES_PASSWORD: "engram"'
-        'database DSN' = '  DATABASE_DSN: "postgres://engram:engram@postgres:5432/engram?sslmode=disable"'
         'stand API URL' = '  STAND_API_URL: "http://localhost:37778"'
         'stand operator URL' = '  STAND_OPERATOR_URL: "http://localhost:3001"'
         'operator-console API proxy target' = '  NUXT_OPERATOR_API_TARGET: "http://server:37777"'
         'auth-disabled policy' = '  ENGRAM_AUTH_DISABLED: "false"'
-        'credential generation policy' = '  admin_token: "generated cryptographically inside the Up runner process"'
-        'credential persistence policy' = '  persistence: "never written to raw logs, machine summaries, config, or caller environment"'
-        'credential fallback policy' = '  auth_disabled_fallback: false'
         'image discovery' = '  discovery: "docker service inventory filtered by com.docker.compose.project=engram-critical-stand"'
         'image scanner' = '  scanner: "docker scout cves"'
         'image scan severities' = '  severities: ["critical", "high"]'
@@ -130,6 +149,7 @@ function Read-DevStandConfig {
     foreach ($requiredLine in $requiredExactLines.GetEnumerator()) {
         Assert-ContainsExactLine $text $requiredLine.Value $requiredLine.Key
     }
+    Assert-DevStandConfigCredentialPolicy $text
     if ($text -match '(?m)^\s+NUXT_ENGRAM_API_TARGET:') { throw 'dev-stand config must not use stale NUXT_ENGRAM_API_TARGET' }
     if ($text -match '(?m)^\s+ENGRAM_AUTH_ADMIN_TOKEN:') { throw 'dev-stand config must not persist an admin token' }
     foreach ($requiredSection in @('up:', 'down:', 'logs:', 'env:', 'credential_policy:', 'image_scan:', 'database_evidence:')) { Assert-ContainsExactLine $text $requiredSection "section $requiredSection" }
@@ -163,9 +183,12 @@ function Read-ActionSummary {
     if ($summary.verdict -cne $expectedVerdict) { throw "$Action exit/verdict mismatch: exit=$ChildExit verdict=$($summary.verdict)" }
     if ($Action -in @('Up', 'Ready', 'Scan') -and -not (Test-ExactImageMaps $summary)) { throw "$Action did not prove exact tag-to-running-image identity" }
     if ($Action -eq 'Up') {
-        if (-not $summary.ephemeral_admin_token_generated -or $summary.ephemeral_admin_token_persisted) { throw 'Up did not prove generated, non-persisted admin credentials' }
+        if (-not $summary.ephemeral_postgres_password_generated -or -not $summary.ephemeral_admin_token_generated -or -not $summary.ephemeral_bootstrap_capability_generated) { throw 'Up did not prove all three ephemeral credentials were generated' }
+        if (-not $summary.ephemeral_credentials_distinct_and_nondefault) { throw 'Up did not prove credentials are distinct and reject defaults' }
+        if (-not $summary.ephemeral_credentials_runtime_injected) { throw 'Up did not prove exact credentials reached the running compose services' }
+        if ($summary.ephemeral_postgres_password_persisted -or $summary.ephemeral_admin_token_persisted -or $summary.ephemeral_bootstrap_capability_persisted) { throw 'Up persisted an ephemeral credential in evidence' }
         $commands = Get-Content -LiteralPath $summary.commands -Raw | ConvertFrom-Json -Depth 100
-        foreach ($name in @('dev-stand-postgres-ready', 'dev-stand-health', 'dev-stand-api-ready', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready')) { if (@($commands | Where-Object name -eq $name).Count -ne 1) { throw "Up did not execute '$name' exactly once" } }
+        foreach ($name in @('dev-stand-postgres-container-id', 'dev-stand-postgres-credential-injection', 'dev-stand-server-container-id', 'dev-stand-server-credential-injection', 'dev-stand-postgres-ready', 'dev-stand-health', 'dev-stand-api-ready', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready')) { if (@($commands | Where-Object name -eq $name).Count -ne 1) { throw "Up did not execute '$name' exactly once" } }
     }
     elseif ($Action -eq 'Ready') {
         $commands = Get-Content -LiteralPath $summary.commands -Raw | ConvertFrom-Json -Depth 100
@@ -193,6 +216,7 @@ function Invoke-SelfTest {
     try {
         if (-not (Test-Path -LiteralPath $Config -PathType Leaf)) { throw "SELFTEST FAIL: config fixture does not exist: $Config" }
         $base = Get-Content -LiteralPath $Config -Raw
+        Assert-DevStandConfigCredentialPolicy $base
         $validPath = Join-Path $root 'valid.yaml'; Write-Utf8NoBom $validPath $base
         $parsed = Read-DevStandConfig $validPath; Assert-SelfTestCondition ($parsed.Commands.Count -eq 4) 'valid lifecycle config was rejected'
         $mutations = @(
@@ -201,6 +225,12 @@ function Invoke-SelfTest {
             @{ name = 'wrong operator port'; text = $base.Replace('OPERATOR_CONSOLE_PORT: "3001"', 'OPERATOR_CONSOLE_PORT: "3002"') },
             @{ name = 'weaken up timeout'; text = $base.Replace('timeout_seconds: 600', 'timeout_seconds: 60') },
             @{ name = 'static credential'; text = $base.Replace('generated cryptographically inside the Up runner process', 'static-token') },
+            @{ name = 'blank postgres credential policy'; text = $base.Replace('  postgres_password: "generated cryptographically inside the Up runner process"', '  postgres_password: ""') },
+            @{ name = 'default admin credential policy'; text = $base.Replace('  admin_token: "generated cryptographically inside the Up runner process"', '  admin_token: "engram"') },
+            @{ name = 'missing bootstrap credential policy'; text = $base.Replace('  bootstrap_capability: "generated cryptographically inside the Up runner process"', '') },
+            @{ name = 'reused runtime interface'; text = $base.Replace('  bootstrap_runtime_interface: "ENGRAM_AUTH_BOOTSTRAP_CAPABILITY via ephemeral compose override"', '  bootstrap_runtime_interface: "ENGRAM_AUTH_ADMIN_TOKEN"') },
+            @{ name = 'distinct credentials disabled'; text = $base.Replace('  required_distinct: true', '  required_distinct: false') },
+            @{ name = 'persisted postgres env'; text = $base.Replace('  POSTGRES_PORT: "55433"', "  POSTGRES_PORT: `"55433`"`n  POSTGRES_PASSWORD: `"engram`"") },
             @{ name = 'remove scan'; text = $base.Replace('-DevStandAction Scan', '-DevStandAction Ready') },
             @{ name = 'wrong image'; text = $base.Replace('ghcr.io/thebtf/engram:main', 'engram:prc-candidate') },
             @{ name = 'allow findings'; text = $base.Replace('fail_on_findings: true', 'fail_on_findings: false') },

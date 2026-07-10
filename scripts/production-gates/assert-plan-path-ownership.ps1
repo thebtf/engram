@@ -6,6 +6,8 @@ param(
     [string]$Base,
     [string]$Head,
     [string]$Plan = '.agent/plans/2026-07-10-engram-production-ready-master-plan.md',
+    [string]$ExpectedPlanSha256,
+    [string]$State = '.agent/plans/2026-07-10-engram-production-ready-ownership-state.json',
     [string]$EvidenceNamespace,
     [string]$ReportNamespace,
     [string]$Artifact = '.agent/reports/evidence/production-ready/ownership/path-ledger.json',
@@ -23,22 +25,29 @@ assert-plan-path-ownership.ps1
 Ledger mode parses the production-ready master-plan ownership matrix. Only
 literal repository paths and explicit directory/** prefixes are accepted.
 Cross-owner exact and exact/prefix overlap requires one ownership epoch whose
-owner set exactly matches the effective owners. Prefix/prefix overlap always
-fails.
+ordered owner sequence exactly matches the effective owners. Prefix/prefix
+overlap always fails. The tracked ownership-state JSON must match the challenged
+plan hash and every ordered epoch.
 
 Diff mode additionally enumerates git diff --name-status Base..Head and proves
 that every changed path belongs to the named slice or to its validated evidence
-or maker-report namespace. Base and Head must be full commit object IDs.
+or maker-report namespace. For repeated paths the slice must be the state-file
+current owner; ordinary successor bases must descend from the exact independently
+checked, post-reviewed, integrated predecessor SHA. Base and Head must be full
+commit object IDs.
 
 Usage:
   pwsh ./scripts/production-gates/assert-plan-path-ownership.ps1 -Mode Ledger `
     -Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md `
+    -ExpectedPlanSha256 <64-hex-sha256> `
+    -State .agent/plans/2026-07-10-engram-production-ready-ownership-state.json `
     -Artifact .agent/reports/evidence/production-ready/ownership/path-ledger.json
 
   pwsh ./scripts/production-gates/assert-plan-path-ownership.ps1 -Mode Diff `
     -Slice DB-BULKOPS -Base <40-hex-commit> -Head <40-hex-commit> `
     -EvidenceNamespace '.agent/specs/production-ready-db-bulkops/evidence/**' `
-    -ReportNamespace .agent/reports/db-bulkops-maker.md -Plan <plan> -Artifact <json>
+    -ReportNamespace .agent/reports/db-bulkops-maker.md -Plan <plan> `
+    -ExpectedPlanSha256 <64-hex-sha256> -State <ownership-state.json> -Artifact <json>
 '@ | Write-Output
 }
 
@@ -217,6 +226,29 @@ function Test-SameStringSet {
     foreach ($item in $Left) { [void]$leftSet.Add([string]$item) }
     foreach ($item in $Right) { [void]$rightSet.Add([string]$item) }
     return $leftSet.SetEquals($rightSet)
+}
+
+function Test-SameStringSequence {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Left,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Right
+    )
+
+    if ($Left.Count -ne $Right.Count) { return $false }
+    for ($index = 0; $index -lt $Left.Count; $index++) {
+        if (-not [string]::Equals([string]$Left[$index], [string]$Right[$index], [System.StringComparison]::Ordinal)) { return $false }
+    }
+    return $true
+}
+
+function Test-ExpectedPlanHash {
+    param(
+        [Parameter(Mandatory)][string]$ObservedSha256,
+        [Parameter(Mandatory)][string]$ExpectedSha256
+    )
+
+    if ($ObservedSha256 -notmatch '^[0-9A-Fa-f]{64}$' -or $ExpectedSha256 -notmatch '^[0-9A-Fa-f]{64}$') { return $false }
+    return [string]::Equals($ObservedSha256, $ExpectedSha256, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
 function Get-UniqueOwnersForExactPath {
@@ -486,8 +518,8 @@ function Invoke-OwnershipAudit {
                 continue
             }
             $epochOwners = @($matchingEpoch[0].owners)
-            if (-not (Test-SameStringSet $effectiveOwners $epochOwners)) {
-                $errors.Add("epoch '$path' owner set differs: effective=$($effectiveOwners -join ', '), epoch=$($epochOwners -join ' -> ')")
+            if (-not (Test-SameStringSequence $effectiveOwners $epochOwners)) {
+                $errors.Add("epoch '$path' owner order differs: effective=$($effectiveOwners -join ' -> '), epoch=$($epochOwners -join ' -> ')")
             }
         }
 
@@ -679,6 +711,196 @@ function Resolve-ExactCommit {
     return $resolved
 }
 
+function Get-PropertyValue {
+    param(
+        [AllowNull()]$Object,
+        [Parameter(Mandatory)][string]$Name
+    )
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Get-EpochEvidenceErrors {
+    param([Parameter(Mandatory)]$Epoch)
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $path = [string](Get-PropertyValue $Epoch 'path')
+    [object[]]$owners = @((Get-PropertyValue $Epoch 'ordered_owners') | ForEach-Object { [string]$_ })
+    $currentOwner = [string](Get-PropertyValue $Epoch 'current_owner')
+    $transitionKind = [string](Get-PropertyValue $Epoch 'transition_kind')
+    [object[]]$predecessors = @((Get-PropertyValue $Epoch 'completed_predecessors'))
+    $requiredBase = [string](Get-PropertyValue $Epoch 'required_successor_base_sha')
+    $currentIndex = [array]::IndexOf($owners, $currentOwner)
+    $ownerCount = @($owners).Count
+    $predecessorCount = @($predecessors).Count
+
+    if ($ownerCount -lt 2) { $errors.Add("state epoch '$path' must contain at least two ordered owners") }
+    if (@($owners | Select-Object -Unique).Count -ne $ownerCount) { $errors.Add("state epoch '$path' contains duplicate owners") }
+    if ($currentIndex -lt 0) { $errors.Add("state epoch '$path' current owner '$currentOwner' is not in its ordered owners") }
+    if ($transitionKind -notin @('integration', 'rework')) { $errors.Add("state epoch '$path' has unsupported transition_kind '$transitionKind'") }
+
+    if ($transitionKind -eq 'integration' -and $currentIndex -ge 0) {
+        [object[]]$expectedPredecessors = if ($currentIndex -eq 0) { @() } else { @($owners[0..($currentIndex - 1)]) }
+        $expectedPredecessorCount = $currentIndex
+        if ($predecessorCount -ne $expectedPredecessorCount) {
+            $errors.Add("state epoch '$path' predecessor evidence count is $predecessorCount, expected $expectedPredecessorCount")
+        }
+        $integrationShas = [System.Collections.Generic.List[string]]::new()
+        foreach ($expectedOwner in $expectedPredecessors) {
+            $matches = @($predecessors | Where-Object { [string](Get-PropertyValue $_ 'owner') -ceq $expectedOwner })
+            if ($matches.Count -ne 1) {
+                $errors.Add("state epoch '$path' predecessor '$expectedOwner' evidence count is $($matches.Count), expected 1")
+                continue
+            }
+            $entry = $matches[0]
+            $checkerVerdict = [string](Get-PropertyValue $entry 'checker_verdict')
+            $checkerArtifact = [string](Get-PropertyValue $entry 'checker_artifact')
+            $postReviewVerdict = [string](Get-PropertyValue $entry 'post_review_verdict')
+            $postReviewArtifact = [string](Get-PropertyValue $entry 'post_review_artifact')
+            $integrationSha = [string](Get-PropertyValue $entry 'integration_sha')
+            if ($checkerVerdict -cne 'PASS' -or [string]::IsNullOrWhiteSpace($checkerArtifact)) { $errors.Add("state epoch '$path' predecessor '$expectedOwner' lacks checker PASS evidence") }
+            if ($postReviewVerdict -cne 'PASS' -or [string]::IsNullOrWhiteSpace($postReviewArtifact)) { $errors.Add("state epoch '$path' predecessor '$expectedOwner' lacks post-review PASS evidence") }
+            if ($integrationSha -notmatch '^[0-9a-fA-F]{40}$') { $errors.Add("state epoch '$path' predecessor '$expectedOwner' lacks a full integration SHA") }
+            else { $integrationShas.Add($integrationSha.ToLowerInvariant()) }
+        }
+        if ($expectedPredecessorCount -eq 0) {
+            if (-not [string]::IsNullOrWhiteSpace($requiredBase)) { $errors.Add("state epoch '$path' first owner must not require a predecessor base") }
+        }
+        elseif ($requiredBase -notmatch '^[0-9a-fA-F]{40}$') {
+            $errors.Add("state epoch '$path' successor base requirement is missing or not a full SHA")
+        }
+        elseif ($integrationShas.Count -eq $expectedPredecessorCount -and -not [string]::Equals($requiredBase, $integrationShas[$integrationShas.Count - 1], [System.StringComparison]::OrdinalIgnoreCase)) {
+            $errors.Add("state epoch '$path' successor base '$requiredBase' does not equal the latest predecessor integration '$($integrationShas[$integrationShas.Count - 1])'")
+        }
+    }
+    elseif ($transitionKind -eq 'rework' -and $currentIndex -ge 0) {
+        if ($currentIndex -eq 0) { $errors.Add("state epoch '$path' rework transition has no rejected predecessor") }
+        if ($requiredBase -notmatch '^[0-9a-fA-F]{40}$') { $errors.Add("state epoch '$path' rework base must be a full SHA") }
+        if ($predecessorCount -ne $currentIndex) { $errors.Add("state epoch '$path' rework predecessor evidence count is $predecessorCount, expected $currentIndex") }
+        $immediateOwner = if ($currentIndex -gt 0) { $owners[$currentIndex - 1] } else { $null }
+        for ($ownerIndex = 0; $ownerIndex -lt [math]::Max(0, $currentIndex - 1); $ownerIndex++) {
+            $acceptedOwner = $owners[$ownerIndex]
+            $acceptedMatches = @($predecessors | Where-Object { [string](Get-PropertyValue $_ 'owner') -ceq $acceptedOwner })
+            if ($acceptedMatches.Count -ne 1) { $errors.Add("state epoch '$path' accepted predecessor '$acceptedOwner' evidence count is $($acceptedMatches.Count), expected 1"); continue }
+            $accepted = $acceptedMatches[0]
+            if ([string](Get-PropertyValue $accepted 'checker_verdict') -cne 'PASS' -or [string]::IsNullOrWhiteSpace([string](Get-PropertyValue $accepted 'checker_artifact'))) { $errors.Add("state epoch '$path' accepted predecessor '$acceptedOwner' lacks checker PASS evidence") }
+            if ([string](Get-PropertyValue $accepted 'post_review_verdict') -cne 'PASS' -or [string]::IsNullOrWhiteSpace([string](Get-PropertyValue $accepted 'post_review_artifact'))) { $errors.Add("state epoch '$path' accepted predecessor '$acceptedOwner' lacks post-review PASS evidence") }
+            if ([string](Get-PropertyValue $accepted 'integration_sha') -notmatch '^[0-9a-fA-F]{40}$') { $errors.Add("state epoch '$path' accepted predecessor '$acceptedOwner' lacks a full integration SHA") }
+        }
+        $matches = @($predecessors | Where-Object { [string](Get-PropertyValue $_ 'owner') -ceq $immediateOwner })
+        if ($matches.Count -ne 1) { $errors.Add("state epoch '$path' rework predecessor '$immediateOwner' evidence count is $($matches.Count), expected 1") }
+        else {
+            $entry = $matches[0]
+            $checkerVerdict = [string](Get-PropertyValue $entry 'checker_verdict')
+            $checkerArtifact = [string](Get-PropertyValue $entry 'checker_artifact')
+            $checkerSha = [string](Get-PropertyValue $entry 'checker_sha256')
+            $rejectedHead = [string](Get-PropertyValue $entry 'rejected_head_sha')
+            $integrationSha = [string](Get-PropertyValue $entry 'integration_sha')
+            if ($checkerVerdict -notin @('FAIL', 'REVISE_HOLD') -or [string]::IsNullOrWhiteSpace($checkerArtifact) -or $checkerSha -notmatch '^[0-9a-fA-F]{64}$') {
+                $errors.Add("state epoch '$path' rework predecessor '$immediateOwner' lacks exact rejected-checker evidence")
+            }
+            if ($rejectedHead -notmatch '^[0-9a-fA-F]{40}$' -or -not [string]::Equals($rejectedHead, $requiredBase, [System.StringComparison]::OrdinalIgnoreCase)) { $errors.Add("state epoch '$path' rework base does not equal the rejected predecessor head") }
+            if (-not [string]::IsNullOrWhiteSpace($integrationSha)) { $errors.Add("state epoch '$path' rejected rework predecessor '$immediateOwner' must not claim integration") }
+        }
+    }
+
+    return @($errors)
+}
+
+function Invoke-StateContractAudit {
+    param(
+        [Parameter(Mandatory)]$StateObject,
+        [Parameter(Mandatory)]$Ledger,
+        [Parameter(Mandatory)][string]$ObservedPlanSha256,
+        [Parameter(Mandatory)][string]$ExpectedPlanSha256
+    )
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+    if ((Get-PropertyValue $StateObject 'schema_version') -ne 1) { $errors.Add('ownership state schema_version must be 1') }
+    $statePlan = Get-PropertyValue $StateObject 'plan'
+    $statePlanPath = [string](Get-PropertyValue $statePlan 'path')
+    $statePlanSha = [string](Get-PropertyValue $statePlan 'sha256')
+    if ($statePlanPath -cne '.agent/plans/2026-07-10-engram-production-ready-master-plan.md') { $errors.Add("ownership state plan path '$statePlanPath' is not the canonical tracked master plan") }
+    if (-not (Test-ExpectedPlanHash -ObservedSha256 $ObservedPlanSha256 -ExpectedSha256 $ExpectedPlanSha256)) { $errors.Add("observed plan SHA256 '$ObservedPlanSha256' does not match expected '$ExpectedPlanSha256'") }
+    if (-not (Test-ExpectedPlanHash -ObservedSha256 $statePlanSha -ExpectedSha256 $ExpectedPlanSha256)) { $errors.Add("ownership state plan SHA256 '$statePlanSha' does not match expected '$ExpectedPlanSha256'") }
+
+    [object[]]$stateEpochs = @((Get-PropertyValue $StateObject 'path_epochs'))
+    $seenPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($stateEpoch in $stateEpochs) {
+        $statePath = [string](Get-PropertyValue $stateEpoch 'path')
+        try {
+            $normalized = Normalize-OwnershipPath $statePath
+            if ($normalized.kind -ne 'exact' -or $normalized.path -cne $statePath) { throw "state epoch path must be normalized exact path: '$statePath'" }
+        }
+        catch { $errors.Add($_.Exception.Message); continue }
+        if (-not $seenPaths.Add($statePath)) { $errors.Add("ownership state repeats path '$statePath'") }
+        $ledgerMatches = @($Ledger.epochs | Where-Object { $_.path -ceq $statePath })
+        if ($ledgerMatches.Count -ne 1) { $errors.Add("ownership state path '$statePath' has $($ledgerMatches.Count) matching plan epochs, expected 1") }
+        else {
+            $stateOwners = @((Get-PropertyValue $stateEpoch 'ordered_owners') | ForEach-Object { [string]$_ })
+            if (-not (Test-SameStringSequence $ledgerMatches[0].owners $stateOwners)) {
+                $errors.Add("ownership state path '$statePath' order differs from plan: plan=$($ledgerMatches[0].owners -join ' -> '), state=$($stateOwners -join ' -> ')")
+            }
+        }
+        foreach ($evidenceError in @(Get-EpochEvidenceErrors $stateEpoch)) { $errors.Add($evidenceError) }
+    }
+    foreach ($planEpoch in $Ledger.epochs) {
+        if (-not $seenPaths.Contains($planEpoch.path)) { $errors.Add("plan epoch '$($planEpoch.path)' is missing from ownership state") }
+    }
+
+    return [pscustomobject][ordered]@{
+        schema_version = 1
+        verdict = if ($errors.Count -eq 0) { 'PASS' } else { 'FAIL' }
+        plan_sha256 = $statePlanSha
+        path_epochs = $stateEpochs
+        errors = @($errors)
+    }
+}
+
+function Invoke-DiffEpochAuthority {
+    param(
+        [Parameter(Mandatory)][string]$Slice,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$ChangedPaths,
+        [Parameter(Mandatory)]$State,
+        [Parameter(Mandatory)][string]$Repository,
+        [Parameter(Mandatory)][string]$BaseResolved
+    )
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $evaluated = [System.Collections.Generic.List[object]]::new()
+    [object[]]$stateEpochs = @((Get-PropertyValue $State 'path_epochs'))
+    foreach ($path in @($ChangedPaths | Sort-Object -Unique)) {
+        $matches = @($stateEpochs | Where-Object { [string](Get-PropertyValue $_ 'path') -ceq [string]$path })
+        if ($matches.Count -eq 0) { continue }
+        if ($matches.Count -ne 1) { $errors.Add("changed epoch path '$path' has $($matches.Count) state records"); continue }
+        $epoch = $matches[0]
+        foreach ($evidenceError in @(Get-EpochEvidenceErrors $epoch)) { $errors.Add($evidenceError) }
+        $currentOwner = [string](Get-PropertyValue $epoch 'current_owner')
+        $transitionKind = [string](Get-PropertyValue $epoch 'transition_kind')
+        $requiredBase = [string](Get-PropertyValue $epoch 'required_successor_base_sha')
+        $ownerPass = $currentOwner -ceq $Slice
+        if (-not $ownerPass) { $errors.Add("changed epoch path '$path' current owner is '$currentOwner', not '$Slice'") }
+        $basePass = if ($ownerPass) { $true } else { $null }
+        if ($ownerPass -and -not [string]::IsNullOrWhiteSpace($requiredBase)) {
+            if ($transitionKind -eq 'rework') {
+                $basePass = [string]::Equals($requiredBase, $BaseResolved, [System.StringComparison]::OrdinalIgnoreCase)
+                if (-not $basePass) { $errors.Add("rework slice '$Slice' base '$BaseResolved' must equal rejected predecessor '$requiredBase' for '$path'") }
+            }
+            else {
+                & git -C $Repository merge-base --is-ancestor $requiredBase $BaseResolved 2>$null
+                $ancestorExit = $LASTEXITCODE
+                $basePass = $ancestorExit -eq 0
+                if ($ancestorExit -eq 1) { $errors.Add("slice '$Slice' base '$BaseResolved' does not descend from predecessor integration '$requiredBase' for '$path'") }
+                elseif ($ancestorExit -ne 0) { $errors.Add("predecessor ancestry check failed with exit $ancestorExit for '$path'") }
+            }
+        }
+        $evaluated.Add([pscustomobject][ordered]@{ path = $path; current_owner = $currentOwner; owner_pass = $ownerPass; transition_kind = $transitionKind; required_base_sha = $requiredBase; base_pass = $basePass })
+    }
+    return [pscustomobject][ordered]@{ verdict = if ($errors.Count -eq 0) { 'PASS' } else { 'FAIL' }; evaluated = @($evaluated); errors = @($errors) }
+}
+
 function New-SyntheticPlan {
     param(
         [Parameter(Mandatory)][string]$Rows,
@@ -706,10 +928,80 @@ function Assert-SelfTestCondition {
     if (-not $Condition) { throw "SELFTEST FAIL: $Message" }
 }
 
+function New-SyntheticOwnershipState {
+    param(
+        [Parameter(Mandatory)][string]$PlanSha256,
+        [Parameter(Mandatory)][string]$RequiredIntegrationSha,
+        [switch]$MissingPredecessorEvidence
+    )
+
+    $predecessors = if ($MissingPredecessorEvidence) { @() } else {
+        @([pscustomobject][ordered]@{
+            owner = 'A'
+            checker_verdict = 'PASS'
+            checker_artifact = '.agent/reviews/a-check.md'
+            post_review_verdict = 'PASS'
+            post_review_artifact = '.agent/reviews/a-post-review.md'
+            integration_sha = $RequiredIntegrationSha
+        })
+    }
+    return [pscustomobject][ordered]@{
+        schema_version = 1
+        plan = [pscustomobject][ordered]@{ path = '.agent/plans/synthetic.md'; sha256 = $PlanSha256 }
+        path_epochs = @([pscustomobject][ordered]@{
+            path = 'src/shared.go'
+            ordered_owners = @('A', 'B')
+            current_owner = 'B'
+            transition_kind = 'integration'
+            completed_predecessors = $predecessors
+            required_successor_base_sha = $RequiredIntegrationSha
+        })
+    }
+}
+
 function Invoke-SelfTest {
     $reorderedEpoch = New-SyntheticPlan -Rows "| A | ``work/a`` | ``src/shared.go`` | none | proof |`n| B | ``work/b`` | ``src/shared.go`` | A integrated | proof |" -EpochRows '| `src/shared.go` | B | A | B checker and post-review PASS, commit integrated, A rebased |'
     $reorderedResult = Invoke-OwnershipAudit $reorderedEpoch 'selftest-reordered-epoch'
-    Assert-SelfTestCondition ($reorderedResult.verdict -eq 'PASS') ("epoch owner set fixture failed: " + ($reorderedResult.errors -join '; '))
+    Assert-SelfTestCondition ($reorderedResult.verdict -eq 'FAIL') 'reversed epoch order was accepted'
+
+    $orderedEpoch = New-SyntheticPlan -Rows "| A | ``work/a`` | ``src/shared.go`` | none | proof |`n| B | ``work/b`` | ``src/shared.go`` | A integrated | proof |" -EpochRows '| `src/shared.go` | A | B | A checker and post-review PASS, commit integrated, B rebased |'
+    $orderedResult = Invoke-OwnershipAudit $orderedEpoch 'selftest-ordered-epoch'
+    Assert-SelfTestCondition ($orderedResult.verdict -eq 'PASS') ("correct epoch order was rejected: " + ($orderedResult.errors -join '; '))
+
+    $repository = ([string]@(& git rev-parse --show-toplevel 2>&1)[-1]).Trim()
+    $positiveBase = ([string]@(& git -C $repository rev-parse HEAD 2>&1)[-1]).Trim().ToLowerInvariant()
+    $requiredIntegration = ([string]@(& git -C $repository rev-parse HEAD^ 2>&1)[-1]).Trim().ToLowerInvariant()
+    $wrongBase = ([string]@(& git -C $repository rev-list --max-parents=0 HEAD 2>&1)[0]).Trim().ToLowerInvariant()
+    $syntheticPlanHash = ('a' * 64)
+    $state = New-SyntheticOwnershipState -PlanSha256 $syntheticPlanHash -RequiredIntegrationSha $requiredIntegration
+    $missingEvidenceState = New-SyntheticOwnershipState -PlanSha256 $syntheticPlanHash -RequiredIntegrationSha $requiredIntegration -MissingPredecessorEvidence
+    $firstOwnerState = [pscustomobject][ordered]@{
+        path = 'src/shared.go'; ordered_owners = @('A', 'B'); current_owner = 'A'; transition_kind = 'integration'
+        completed_predecessors = @(); required_successor_base_sha = $null
+    }
+    Assert-SelfTestCondition (@(Get-EpochEvidenceErrors $firstOwnerState).Count -eq 0) 'first owner with an empty predecessor list was rejected or raised under StrictMode'
+    $reworkEpoch = [pscustomobject][ordered]@{
+        path = 'src/shared.go'; ordered_owners = @('A', 'B'); current_owner = 'B'; transition_kind = 'rework'
+        completed_predecessors = @([pscustomobject][ordered]@{
+            owner = 'A'; checker_verdict = 'FAIL'; checker_artifact = '.agent/reviews/a-check.md'
+            checker_sha256 = ('c' * 64); rejected_head_sha = $requiredIntegration; integration_sha = $null
+        })
+        required_successor_base_sha = $requiredIntegration
+    }
+    Assert-SelfTestCondition (@(Get-EpochEvidenceErrors $reworkEpoch).Count -eq 0) 'valid rejected-head rework evidence was rejected'
+    $reworkWrongHead = $reworkEpoch.PSObject.Copy(); $reworkWrongHead.completed_predecessors = @($reworkEpoch.completed_predecessors | ForEach-Object { $_.PSObject.Copy() }); $reworkWrongHead.completed_predecessors[0].rejected_head_sha = $wrongBase
+    Assert-SelfTestCondition (@(Get-EpochEvidenceErrors $reworkWrongHead).Count -gt 0) 'rework state whose required base differs from the rejected head was accepted'
+    Assert-SelfTestCondition (Test-ExpectedPlanHash -ObservedSha256 $syntheticPlanHash -ExpectedSha256 $syntheticPlanHash) 'matching expected plan hash was rejected'
+    Assert-SelfTestCondition (-not (Test-ExpectedPlanHash -ObservedSha256 $syntheticPlanHash -ExpectedSha256 ('b' * 64))) 'mismatched expected plan hash was accepted'
+    $nonCurrentOwner = Invoke-DiffEpochAuthority -Slice A -ChangedPaths @('src/shared.go') -State $state -Repository $repository -BaseResolved $positiveBase
+    Assert-SelfTestCondition ($nonCurrentOwner.verdict -eq 'FAIL') 'non-current epoch owner was accepted'
+    Assert-SelfTestCondition (@($nonCurrentOwner.errors).Count -eq 1 -and $null -eq $nonCurrentOwner.evaluated[0].base_pass) 'non-current owner incorrectly evaluated the current successor base contract'
+    $missingEvidence = Invoke-DiffEpochAuthority -Slice B -ChangedPaths @('src/shared.go') -State $missingEvidenceState -Repository $repository -BaseResolved $positiveBase
+    Assert-SelfTestCondition ($missingEvidence.verdict -eq 'FAIL') 'successor without checker/post-review/integration evidence was accepted'
+    $wrongBaseResult = Invoke-DiffEpochAuthority -Slice B -ChangedPaths @('src/shared.go') -State $state -Repository $repository -BaseResolved $wrongBase
+    Assert-SelfTestCondition ($wrongBaseResult.verdict -eq 'FAIL') 'correct owner on a base that omits the predecessor integration was accepted'
+    $descendantBaseResult = Invoke-DiffEpochAuthority -Slice B -ChangedPaths @('src/shared.go') -State $state -Repository $repository -BaseResolved $positiveBase
+    Assert-SelfTestCondition ($descendantBaseResult.verdict -eq 'PASS') ("descendant successor base was rejected: " + ($descendantBaseResult.errors -join '; '))
 
     $undeclared = New-SyntheticPlan -Rows "| A | ``work/a`` | ``src/shared.go`` | none | proof |`n| B | ``work/b`` | ``src/shared.go`` | none | proof |" -EpochRows ''
     Assert-SelfTestCondition ((Invoke-OwnershipAudit $undeclared 'selftest-undeclared').verdict -eq 'FAIL') 'undeclared exact overlap was accepted'
@@ -795,39 +1087,63 @@ if ($SelfTest) { Invoke-SelfTest; exit 0 }
 $startedAt = [DateTimeOffset]::UtcNow
 $planHash = $null
 $planPath = if (Test-Path -LiteralPath $Plan) { [System.IO.Path]::GetFullPath($Plan) } else { $Plan }
+$stateHash = $null
+$statePath = if (Test-Path -LiteralPath $State) { [System.IO.Path]::GetFullPath($State) } else { $State }
+$stateObject = $null
+$stateAudit = $null
 $artifactObject = $null
 $exitCode = 1
 
 try {
     if (-not (Test-Path -LiteralPath $Plan -PathType Leaf)) { throw "ownership plan does not exist: $Plan" }
+    if ([string]::IsNullOrWhiteSpace($ExpectedPlanSha256) -or $ExpectedPlanSha256 -notmatch '^[0-9A-Fa-f]{64}$') { throw '-ExpectedPlanSha256 is required and must be a full 64-hex SHA256' }
+    if (-not (Test-Path -LiteralPath $State -PathType Leaf)) { throw "ownership state does not exist: $State" }
     $planHash = (Get-FileHash -LiteralPath $Plan -Algorithm SHA256).Hash.ToLowerInvariant()
+    $stateHash = (Get-FileHash -LiteralPath $State -Algorithm SHA256).Hash.ToLowerInvariant()
     $text = Get-Content -LiteralPath $Plan -Raw
     $ledger = Invoke-OwnershipAudit $text $planPath
+    try { $stateObject = Get-Content -LiteralPath $State -Raw | ConvertFrom-Json -Depth 100 }
+    catch { throw "ownership state is invalid JSON: $($_.Exception.Message)" }
+    $stateAudit = Invoke-StateContractAudit -StateObject $stateObject -Ledger $ledger -ObservedPlanSha256 $planHash -ExpectedPlanSha256 $ExpectedPlanSha256
 
     if ($Mode -eq 'Ledger') {
+        $authorityErrors = @($ledger.errors) + @($stateAudit.errors)
         $finishedAt = [DateTimeOffset]::UtcNow
         $artifactObject = [ordered]@{
             schema_version = 2
             gate = 'plan-path-ownership'
             mode = 'Ledger'
-            verdict = $ledger.verdict
+            verdict = if ($authorityErrors.Count -eq 0) { 'PASS' } else { 'FAIL' }
             started_at = $startedAt.ToString('O')
             finished_at = $finishedAt.ToString('O')
             duration_seconds = [math]::Round(($finishedAt - $startedAt).TotalSeconds, 3)
-            plan = [ordered]@{ path = $planPath; sha256 = $planHash }
-            counts = $ledger.counts
+            plan = [ordered]@{ path = $planPath; expected_sha256 = $ExpectedPlanSha256.ToLowerInvariant(); observed_sha256 = $planHash; hash_match = (Test-ExpectedPlanHash $planHash $ExpectedPlanSha256) }
+            state = [ordered]@{ path = $statePath; sha256 = $stateHash; verdict = $stateAudit.verdict; plan_sha256 = $stateAudit.plan_sha256 }
+            counts = [ordered]@{
+                maker_slices = $ledger.counts.maker_slices
+                declarations = $ledger.counts.declarations
+                exact_paths = $ledger.counts.exact_paths
+                prefixes = $ledger.counts.prefixes
+                repeated_exact_paths = $ledger.counts.repeated_exact_paths
+                prefix_intersections = $ledger.counts.prefix_intersections
+                undeclared_prefix_intersections = $ledger.counts.undeclared_prefix_intersections
+                declared_epochs = $ledger.counts.declared_epochs
+                state_epochs = @($stateAudit.path_epochs).Count
+                errors = $authorityErrors.Count
+            }
             slices = $ledger.slices
             declarations = $ledger.declarations
             repeated_exact_paths = $ledger.repeated_exact_paths
             prefix_intersections = $ledger.prefix_intersections
             epochs = $ledger.epochs
-            errors = $ledger.errors
+            errors = $authorityErrors
         }
-        $exitCode = if ($ledger.verdict -eq 'PASS') { 0 } else { 1 }
+        $exitCode = if ($authorityErrors.Count -eq 0) { 0 } else { 1 }
     }
     else {
         $errors = [System.Collections.Generic.List[string]]::new()
         foreach ($ledgerError in $ledger.errors) { $errors.Add("ledger: $ledgerError") }
+        foreach ($stateError in $stateAudit.errors) { $errors.Add("state: $stateError") }
         if ([string]::IsNullOrWhiteSpace($Slice)) { $errors.Add('Diff mode requires -Slice') }
         if ([string]::IsNullOrWhiteSpace($Base)) { $errors.Add('Diff mode requires -Base') }
         if ([string]::IsNullOrWhiteSpace($Head)) { $errors.Add('Diff mode requires -Head') }
@@ -890,6 +1206,12 @@ try {
             }
         }
 
+        $epochAuthority = [pscustomobject][ordered]@{ verdict = 'FAIL'; evaluated = @(); errors = @('epoch authority was not evaluated') }
+        if ($repoRoot -and $baseResolved -and $stateObject -and $parsedDiff.errors.Count -eq 0) {
+            $epochAuthority = Invoke-DiffEpochAuthority -Slice $Slice -ChangedPaths @($diffAudit.changed_paths | ForEach-Object path) -State $stateObject -Repository $repoRoot -BaseResolved $baseResolved
+            foreach ($epochError in $epochAuthority.errors) { $errors.Add("epoch: $epochError") }
+        }
+
         $finishedAt = [DateTimeOffset]::UtcNow
         $verdict = if ($errors.Count -eq 0) { 'PASS' } else { 'FAIL' }
         $artifactObject = [ordered]@{
@@ -900,7 +1222,8 @@ try {
             started_at = $startedAt.ToString('O')
             finished_at = $finishedAt.ToString('O')
             duration_seconds = [math]::Round(($finishedAt - $startedAt).TotalSeconds, 3)
-            plan = [ordered]@{ path = $planPath; sha256 = $planHash; ledger_verdict = $ledger.verdict }
+            plan = [ordered]@{ path = $planPath; expected_sha256 = $ExpectedPlanSha256.ToLowerInvariant(); observed_sha256 = $planHash; hash_match = (Test-ExpectedPlanHash $planHash $ExpectedPlanSha256); ledger_verdict = $ledger.verdict }
+            state = [ordered]@{ path = $statePath; sha256 = $stateHash; verdict = $stateAudit.verdict; plan_sha256 = $stateAudit.plan_sha256 }
             slice = [ordered]@{
                 name = $Slice
                 row_count = $sliceRows.Count
@@ -927,6 +1250,7 @@ try {
             diff_entries = @($parsedDiff.entries)
             changed_paths = @($diffAudit.changed_paths)
             violations = @($diffAudit.violations)
+            epoch_authority = $epochAuthority
             errors = @($errors)
         }
         $exitCode = if ($verdict -eq 'PASS') { 0 } else { 1 }
@@ -942,7 +1266,8 @@ catch {
         started_at = $startedAt.ToString('O')
         finished_at = $finishedAt.ToString('O')
         duration_seconds = [math]::Round(($finishedAt - $startedAt).TotalSeconds, 3)
-        plan = [ordered]@{ path = $planPath; sha256 = $planHash }
+        plan = [ordered]@{ path = $planPath; expected_sha256 = $ExpectedPlanSha256; observed_sha256 = $planHash }
+        state = [ordered]@{ path = $statePath; sha256 = $stateHash }
         errors = @($_.Exception.Message)
     }
     $exitCode = 1

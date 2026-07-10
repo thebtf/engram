@@ -1,0 +1,4121 @@
+{
+  "schema_version": 2,
+  "gate": "plan-path-ownership",
+  "mode": "Ledger",
+  "verdict": "PASS",
+  "started_at": "2026-07-10T09:48:18.8335376+00:00",
+  "finished_at": "2026-07-10T09:48:22.5071934+00:00",
+  "duration_seconds": 3.674,
+  "plan": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\plans\\2026-07-10-engram-production-ready-master-plan.md",
+    "expected_sha256": "d371e94dff1ea12767b9d0832240cb6caf52c6c3bbe2209fe4280159c4f03c52",
+    "observed_sha256": "d371e94dff1ea12767b9d0832240cb6caf52c6c3bbe2209fe4280159c4f03c52",
+    "hash_match": true
+  },
+  "state": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\plans\\2026-07-10-engram-production-ready-ownership-state.json",
+    "sha256": "1419e2f7e5236e21dd9a2d8c3271ced2def16dc0a798435ad5a9401fe522d55b",
+    "verdict": "PASS",
+    "plan_sha256": "d371e94dff1ea12767b9d0832240cb6caf52c6c3bbe2209fe4280159c4f03c52"
+  },
+  "counts": {
+    "maker_slices": 47,
+    "declarations": 318,
+    "exact_paths": 310,
+    "prefixes": 8,
+    "repeated_exact_paths": 32,
+    "prefix_intersections": 2,
+    "undeclared_prefix_intersections": 0,
+    "declared_epochs": 32,
+    "state_epochs": 32,
+    "errors": 0
+  },
+  "slices": [
+    {
+      "slice": "PLAN-GOVERNANCE",
+      "branch": "work/prc-release-gates",
+      "paths": [
+        ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+        ".agent/plans/2026-07-10-engram-production-ready-ownership-state.json"
+      ],
+      "line": 6
+    },
+    {
+      "slice": "DB-BULKOPS",
+      "branch": "work/prc-db-bulkops",
+      "paths": [
+        "internal/bulkops/facade.go",
+        "internal/bulkops/facade_test.go",
+        "internal/bulkops/rollback.go",
+        "internal/bulkops/rollback_test.go",
+        "internal/db/gorm/candidate_store.go",
+        "internal/db/gorm/candidate_store_test.go",
+        "internal/mcp/tools_bulkops.go",
+        "internal/mcp/tools_dryrun_test.go",
+        "pkg/models/snapshot.go",
+        ".agent/reports/2026-07-10-db-bulkops-capture-lock-rework-maker.md",
+        ".agent/reports/2026-07-10-db-bulkops-sibling-rework-maker.md",
+        ".agent/specs/production-ready-db-bulkops/evidence/**",
+        ".agent/reports/evidence/production-ready/db-bulkops-sibling-rework/**"
+      ],
+      "line": 7
+    },
+    {
+      "slice": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "branch": "work/prc-db-bulkops-behavioral-edge-rework",
+      "paths": [
+        "internal/db/gorm/candidate_store.go",
+        "internal/db/gorm/candidate_store_test.go",
+        "internal/mcp/tools_bulkops.go",
+        "internal/mcp/tools_dryrun_test.go",
+        ".agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md",
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ],
+      "line": 8
+    },
+    {
+      "slice": "DB-GOVERNANCE",
+      "branch": "work/prc-db-governance",
+      "paths": [
+        "internal/db/gorm/candidate_store.go",
+        "internal/db/gorm/candidate_store_test.go",
+        "internal/db/gorm/rule_arbiter_store_test.go",
+        "internal/db/gorm/rule_governance_store.go",
+        "internal/db/gorm/rule_governance_store_test.go",
+        "internal/db/gorm/rule_governance_rg3_store_test.go",
+        "internal/db/gorm/migration_rule_governance.go",
+        "internal/db/gorm/migration_rule_arbiter.go",
+        "internal/db/gorm/migration_rule_governance_snapshot_statuses.go"
+      ],
+      "line": 9
+    },
+    {
+      "slice": "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK",
+      "branch": "work/prc-candidate-review-snapshot-rollback",
+      "paths": [
+        "internal/reviewpacket/candidate.go",
+        "internal/reviewpacket/candidate_test.go",
+        "internal/db/gorm/candidate_store.go",
+        "internal/db/gorm/candidate_store_test.go",
+        "internal/db/gorm/snapshot_store.go",
+        "internal/db/gorm/snapshot_store_test.go",
+        "internal/bulkops/rollback_test.go",
+        "tests/critical/candidate_review/candidate_review_snapshot_rollback_test.go"
+      ],
+      "line": 10
+    },
+    {
+      "slice": "INGEST-DOC-SNAPSHOT-DEMOLITION",
+      "branch": "work/prc-ingest-doc-snapshot-demolition",
+      "paths": [
+        "internal/bulkops/facade.go",
+        "internal/bulkops/facade_test.go",
+        "pkg/models/snapshot.go",
+        "pkg/models/snapshot_test.go",
+        "internal/mcp/ingest_snapshot_contract_test.go"
+      ],
+      "line": 12
+    },
+    {
+      "slice": "DB-AUTH",
+      "branch": "work/prc-db-auth",
+      "paths": [
+        "internal/db/gorm/user_store.go",
+        "internal/db/gorm/user_store_test.go",
+        "internal/worker/auth_handlers.go",
+        "internal/worker/auth_handlers_lifecycle_test.go"
+      ],
+      "line": 13
+    },
+    {
+      "slice": "AUTH-BOOTSTRAP-SECURITY",
+      "branch": "work/prc-auth-bootstrap-security",
+      "paths": [
+        "internal/config/config.go",
+        "internal/config/config_test.go",
+        "internal/config/envnames.go",
+        "internal/db/gorm/user_store.go",
+        "internal/worker/middleware.go",
+        "internal/worker/middleware_test.go",
+        "internal/worker/auth_handlers.go",
+        "internal/worker/auth_bootstrap_limiter.go",
+        "internal/worker/auth_bootstrap_limiter_test.go",
+        "internal/worker/auth_bootstrap_security_test.go",
+        "internal/worker/service.go",
+        "tests/critical/auth_bootstrap/first_admin_bootstrap_test.go",
+        "scripts/production-smoke/customer/run-auth-bootstrap-adversary.ps1"
+      ],
+      "line": 14
+    },
+    {
+      "slice": "DURABLE-AUDIT-BOUNDARIES",
+      "branch": "work/prc-durable-audit-boundaries",
+      "paths": [
+        "internal/db/gorm/domain_owner_store.go",
+        "internal/db/gorm/domain_owner_store_test.go",
+        "internal/db/gorm/user_store.go",
+        "internal/worker/auth_handlers.go",
+        "internal/worker/auth_audit_durability_test.go",
+        "internal/bulkops/facade.go",
+        "internal/bulkops/audit_durability_test.go",
+        "scripts/production-smoke/customer/run-durable-audit-faults.ps1"
+      ],
+      "line": 15
+    },
+    {
+      "slice": "DB-CRYSTALLIZATION",
+      "branch": "work/prc-db-crystallization",
+      "paths": [
+        "internal/worker/handlers_hooks_crystallization_integration_test.go"
+      ],
+      "line": 16
+    },
+    {
+      "slice": "DB-EMBEDDING-STATS",
+      "branch": "work/prc-db-embedding-stats",
+      "paths": [
+        "internal/embedding/store.go",
+        "internal/embedding/store_stats_test.go"
+      ],
+      "line": 17
+    },
+    {
+      "slice": "DB-REAPER",
+      "branch": "work/prc-db-reaper",
+      "paths": [
+        "internal/worker/reaper/reaper.go",
+        "internal/worker/reaper/reaper_test.go"
+      ],
+      "line": 18
+    },
+    {
+      "slice": "SECURITY-TOOLCHAIN",
+      "branch": "work/prc-security-toolchain",
+      "paths": [
+        "go.mod",
+        "go.sum",
+        "Dockerfile"
+      ],
+      "line": 19
+    },
+    {
+      "slice": "RELEASE-GATES",
+      "branch": "work/prc-release-gates",
+      "paths": [
+        ".agent/critical-suite.config.yaml",
+        ".agent/dev-stand.config.yaml",
+        ".github/workflows/test.yml",
+        "scripts/production-gates/assert-coverage.ps1",
+        "scripts/production-gates/assert-go-test-json.ps1",
+        "scripts/production-gates/assert-plan-path-ownership.ps1",
+        "scripts/production-gates/cleanup-db-sessions.ps1",
+        "scripts/production-gates/run-critical-suite.ps1",
+        "scripts/production-gates/run-db-suite.ps1",
+        "scripts/production-gates/run-dev-stand.ps1",
+        "scripts/production-gates/run-node-matrix.ps1",
+        ".agent/reports/2026-07-10-release-gates-foundation-revision-3-maker.md",
+        ".agent/reports/evidence/production-ready/release-gates-foundation-revision-3/**"
+      ],
+      "line": 20
+    },
+    {
+      "slice": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "paths": [
+        "Dockerfile",
+        "cmd/engram-healthcheck/main.go",
+        "cmd/engram-healthcheck/main_test.go",
+        "apps/operator-console/package.json",
+        "apps/operator-console/package-lock.json",
+        "deploy/postgres/Dockerfile",
+        "docker-compose.yml",
+        "deploy/docker-compose.runtime.yml",
+        "docs/DEPLOYMENT.md",
+        "docs/PRODUCTION-TESTING-PLAYBOOK.md",
+        ".github/workflows/test.yml",
+        ".github/workflows/docker.yaml",
+        ".github/workflows/docker-publish.yml",
+        "scripts/production-gates/build-and-scan-images.ps1",
+        "tests/critical/runtime/image_runtime_contract_test.go",
+        "tests/critical/runtime/postgres_image_contract_test.go"
+      ],
+      "line": 21
+    },
+    {
+      "slice": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "paths": [
+        "internal/proxy/identity.go",
+        "internal/proxy/identity_test.go",
+        "internal/handlers/engramcore/tools.go",
+        "internal/handlers/engramcore/project_identity_v2_test.go",
+        "proto/engram/v1/engram.proto",
+        "proto/engram/v1/engram.pb.go",
+        "proto/engram/v1/engram_grpc.pb.go",
+        "internal/grpcserver/server.go",
+        "internal/grpcserver/project_identity_v2_test.go",
+        "internal/db/gorm/project_store.go",
+        "internal/db/gorm/project_store_test.go",
+        "internal/worker/handlers_context.go",
+        "internal/worker/project_identity_v2_test.go",
+        "plugin/engram/hooks/lib.js",
+        "plugin/engram/hooks/lib.test.js",
+        "plugin/engram/hooks/project-identity-v2.test.js",
+        "plugin/openclaw-engram/src/identity.ts",
+        "plugin/openclaw-engram/src/identity.test.ts",
+        "docs/arch/architecture.md"
+      ],
+      "line": 22
+    },
+    {
+      "slice": "OPENCLAW-RELEASE",
+      "branch": "work/prc-openclaw-release",
+      "paths": [
+        "plugin/openclaw-engram/.gitignore",
+        "plugin/openclaw-engram/package.json",
+        "plugin/openclaw-engram/package-lock.json",
+        "plugin/openclaw-engram/openclaw.plugin.json",
+        "plugin/openclaw-engram/README.md",
+        ".github/workflows/plugin-publish.yml",
+        "docs/RELEASE-PROTOCOL.md"
+      ],
+      "line": 23
+    },
+    {
+      "slice": "UPDATE-LIFECYCLE",
+      "branch": "work/prc-security-updater",
+      "paths": [
+        "internal/update/update.go",
+        "internal/update/update_test.go",
+        "internal/worker/handlers_update.go",
+        "internal/worker/handlers_update_test.go",
+        "scripts/install.sh",
+        "scripts/install.ps1",
+        ".goreleaser.yaml",
+        ".github/workflows/release.yaml",
+        "plugin/engram/hooks/hook-cli.test.js"
+      ],
+      "line": 24
+    },
+    {
+      "slice": "DOCUMENT-INGEST-PUBLIC-TRUTH",
+      "branch": "work/prc-document-ingest-public-truth",
+      "paths": [
+        "internal/mcp/server.go",
+        "internal/mcp/ingest_document_description_test.go"
+      ],
+      "line": 26
+    },
+    {
+      "slice": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "paths": [
+        "internal/mcp/coerce.go",
+        "internal/mcp/coerce_test.go",
+        "internal/mcp/tools_candidates.go",
+        "internal/mcp/tools_candidates_test.go",
+        "internal/mcp/tools_memory.go",
+        "internal/mcp/tools_memory_edit_test.go",
+        "internal/mcp/tools_memory_significance.go",
+        "internal/mcp/tools_memory_significance_test.go",
+        "internal/mcp/tools_store_consolidated.go",
+        "internal/mcp/tools_settings.go",
+        "internal/mcp/tools_settings_test.go",
+        "internal/mcp/tools_documents_v2.go",
+        "internal/mcp/tools_rule_governance.go",
+        "internal/mcp/tools_rule_governance_test.go",
+        "internal/mcp/structured_input_validation_test.go"
+      ],
+      "line": 28
+    },
+    {
+      "slice": "T007-COMPAT-DEMOLITION-CLASSIFICATION",
+      "branch": "work/prc-t007-compat-classification",
+      "paths": [
+        "internal/mcp/store_memory_compat_t007_test.go"
+      ],
+      "line": 30
+    },
+    {
+      "slice": "DB-RULES-ISOLATION",
+      "branch": "work/prc-db-rules-isolation",
+      "paths": [
+        "internal/worker/handlers_rules_test.go",
+        "scripts/production-gates/run-db-rules-isolation.ps1"
+      ],
+      "line": 31
+    },
+    {
+      "slice": "COVERAGE-WORKER",
+      "branch": "work/prc-coverage-worker",
+      "paths": [
+        "internal/worker/production_readiness_coverage_test.go"
+      ],
+      "line": 32
+    },
+    {
+      "slice": "COVERAGE-MCP",
+      "branch": "work/prc-coverage-mcp",
+      "paths": [
+        "internal/mcp/production_readiness_coverage_test.go"
+      ],
+      "line": 33
+    },
+    {
+      "slice": "COVERAGE-GORM",
+      "branch": "work/prc-coverage-gorm",
+      "paths": [
+        "internal/db/gorm/production_readiness_coverage_test.go"
+      ],
+      "line": 34
+    },
+    {
+      "slice": "COVERAGE-LOOM",
+      "branch": "work/prc-coverage-loom",
+      "paths": [
+        "internal/handlers/loom/production_readiness_coverage_test.go"
+      ],
+      "line": 35
+    },
+    {
+      "slice": "DEPLOYMENT-ROLLBACK",
+      "branch": "work/prc-deployment-rollback",
+      "paths": [
+        "docker-compose.yml",
+        "deploy/docker-compose.runtime.yml",
+        "deploy/docker-compose.operator-web-standalone.yml",
+        "deploy/entrypoint-server.sh",
+        "deploy/healthcheck-server.sh",
+        "deploy/verify-rollback.ps1",
+        "deploy/verify-runtime-policy.ps1"
+      ],
+      "line": 36
+    },
+    {
+      "slice": "RECOVERY-DATA",
+      "branch": "work/prc-recovery-data",
+      "paths": [
+        "scripts/recovery/start-disposable-postgres.ps1",
+        "scripts/recovery/verify-postgres-roundtrip.ps1",
+        "scripts/recovery/seed-recovery-fixture.ps1",
+        "scripts/recovery/assert-recovery-fixture.ps1",
+        "tests/critical/recovery/postgres_roundtrip_test.go"
+      ],
+      "line": 37
+    },
+    {
+      "slice": "OBSERVABILITY-OTLP",
+      "branch": "work/prc-observability-otlp",
+      "paths": [
+        "internal/module/obs/logging.go",
+        "internal/module/obs/logging_test.go",
+        "internal/module/obs/meter.go",
+        "internal/module/obs/meter_test.go",
+        "internal/module/obs/metrics.go",
+        "internal/module/obs/metrics_test.go",
+        "cmd/engram-server/main.go",
+        "cmd/engram-server/main_test.go",
+        "scripts/production-smoke/verify-otlp.ps1"
+      ],
+      "line": 38
+    },
+    {
+      "slice": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "paths": [
+        "internal/scope/domain_policy.go",
+        "internal/scope/domain_policy_test.go",
+        "internal/scope/filter.go",
+        "internal/scope/filter_test.go",
+        "internal/scope/filter_principal_test.go",
+        "internal/scope/filter_w4_test.go",
+        "internal/principalmemory/access_policy.go",
+        "internal/principalmemory/access_policy_test.go",
+        "internal/principalmemory/domain_registry.go",
+        "internal/principalmemory/domain_registry_test.go",
+        "internal/principalmemory/query_service.go",
+        "internal/principalmemory/query_service_test.go",
+        "internal/mcp/tools_principal_memory.go",
+        "internal/mcp/tools_principal_memory_test.go",
+        "internal/mcp/tools_recall_principal_test.go",
+        "internal/mcp/recall_visibility_backfill_test.go",
+        "internal/mcp/store_memory_principal_test.go",
+        "internal/worker/handlers_principal_memory.go",
+        "internal/worker/handlers_principal_memory_test.go",
+        "internal/worker/scope_bypass_w4_test.go",
+        "internal/worker/retention.go",
+        "internal/worker/retention_test.go",
+        "internal/db/gorm/memory_store.go",
+        "internal/db/gorm/memory_store_principal_test.go",
+        "internal/db/gorm/memory_store_principal_query_test.go",
+        "internal/db/gorm/purge_store_test.go",
+        "tests/critical/data_boundaries/principal_project_retention_test.go"
+      ],
+      "line": 39
+    },
+    {
+      "slice": "CRITICAL-HARNESS",
+      "branch": "work/prc-critical-harness",
+      "paths": [
+        "tests/critical/customer_mode/customer_mode_test.go",
+        "tests/critical/customer_mode/compatibility_test.go",
+        "tests/critical/customer_mode/cross_agent_test.go",
+        "scripts/production-smoke/customer/run-customer-mode.ps1",
+        "scripts/production-smoke/customer/run-client-compatibility.ps1",
+        "scripts/production-smoke/customer/run-cross-agent.ps1",
+        "scripts/production-smoke/customer/run-diagnostic-matrix.ps1",
+        "scripts/production-smoke/customer/assert-product-works.ps1"
+      ],
+      "line": 40
+    },
+    {
+      "slice": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "paths": [
+        "README.md",
+        "README.ru.md",
+        "README.zh.md",
+        "CONTRIBUTING.md",
+        "CHANGELOG.md",
+        "Makefile",
+        ".env.example",
+        "docs/DEPLOYMENT.md",
+        "docs/MIGRATION.md",
+        "docs/PRODUCTION-TESTING-PLAYBOOK.md",
+        "docs/arch/CONFIGURATION.md",
+        "docs/arch/QUICKSTART.md",
+        "docs/release-notes/v6.43.0.md",
+        "docs/public/engram.jpg",
+        "plugin/engram/commands/setup.md",
+        "plugin/engram/commands/doctor.md"
+      ],
+      "line": 41
+    },
+    {
+      "slice": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "paths": [
+        "README.md",
+        "README.ru.md",
+        "README.zh.md",
+        "CONTRIBUTING.md",
+        "CHANGELOG.md",
+        "Makefile",
+        ".env.example",
+        "docs/DEPLOYMENT.md",
+        "docs/MIGRATION.md",
+        "docs/PRODUCTION-TESTING-PLAYBOOK.md",
+        "docs/arch/CONFIGURATION.md",
+        "docs/arch/QUICKSTART.md",
+        "docs/public/engram.jpg",
+        "plugin/engram/commands/setup.md",
+        "plugin/engram/commands/doctor.md"
+      ],
+      "line": 42
+    },
+    {
+      "slice": "LAUNCHER-FIRST-RUN",
+      "branch": "work/prc-launcher-first-run",
+      "paths": [
+        "cmd/engram/main.go",
+        "cmd/engram/main_test.go",
+        "cmd/engram/wiring.go",
+        "cmd/engram/exec_windows.go",
+        "cmd/engram/exec_unix.go",
+        "plugin/engram/.engram-project",
+        "plugin/engram/scripts/run-engram.js",
+        "plugin/engram/scripts/run-engram.test.js",
+        "plugin/engram/scripts/ensure-binary.js",
+        "plugin/engram/scripts/ensure-binary.test.js"
+      ],
+      "line": 43
+    },
+    {
+      "slice": "OC-INTEGRATION",
+      "branch": "work/prc-operator-console-integration",
+      "paths": [
+        "apps/operator-console/**"
+      ],
+      "line": 44
+    },
+    {
+      "slice": "S4B-CONTRACT",
+      "branch": "work/prc-s4b-contract",
+      "paths": [
+        ".agent/specs/engram-v7-directives-surfacing/**"
+      ],
+      "line": 45
+    },
+    {
+      "slice": "V7-S4B-BACKEND",
+      "branch": "work/prc-v7-s4b-backend",
+      "paths": [
+        "internal/cognitive/s4bsurfacing/**"
+      ],
+      "line": 46
+    },
+    {
+      "slice": "V7-CORE-CALLPATH",
+      "branch": "work/prc-v7-core-callpath",
+      "paths": [
+        "internal/cognitive/core/event_bus.go",
+        "internal/cognitive/core/event_bus_test.go",
+        "internal/cognitive/core/hint_queue.go",
+        "internal/cognitive/core/hint_queue_test.go",
+        "internal/cognitive/s3ambient/queue.go",
+        "internal/cognitive/s3ambient/subsystem.go"
+      ],
+      "line": 47
+    },
+    {
+      "slice": "V7-RUNTIME-WIRING",
+      "branch": "work/prc-v7-runtime-wiring",
+      "paths": [
+        "internal/worker/service.go",
+        "internal/worker/service_v7_integration_test.go",
+        "internal/worker/handlers_stats_v7.go",
+        "internal/worker/handlers_stats_v7_test.go"
+      ],
+      "line": 48
+    },
+    {
+      "slice": "V7-TELEMETRY-WIRING",
+      "branch": "work/prc-v7-telemetry-wiring",
+      "paths": [
+        "internal/cognitive/s5/metrics.go",
+        "internal/cognitive/s5/provider.go",
+        "internal/cognitive/s5/provider_test.go",
+        "internal/cognitive/s5/source_adapter.go",
+        "internal/cognitive/s5/source_adapter_test.go"
+      ],
+      "line": 49
+    },
+    {
+      "slice": "ROADMAP-RECONCILIATION",
+      "branch": "work/prc-roadmap-reconciliation",
+      "paths": [
+        ".agent/specs/roadmap.md",
+        ".agent/specs/ui-surface-ledger.md",
+        ".agent/specs/operator-console-production-integration/**",
+        ".agent/specs/engram-v7-ambient/spec.md",
+        ".agent/specs/engram-v7-ambient/plan.md",
+        ".agent/specs/engram-v7-ambient/checklists/general.md",
+        ".agent/specs/engram-v7-ambient/changes/CR-001-initial-scope/change.md",
+        ".agent/specs/engram-v7-ambient/changes/CR-001-initial-scope/tasks.md"
+      ],
+      "line": 50
+    },
+    {
+      "slice": "NORTHSTAR-CI-A-CONTRACTS",
+      "branch": "work/prc-northstar-ci-a-contracts",
+      "paths": [
+        ".agent/specs/engram-absorption/ci-a-dense-vector/spec.md",
+        ".agent/specs/engram-absorption/ci-a-dense-vector/plan.md",
+        ".agent/specs/engram-absorption/ci-a-dense-vector/checklists/general.md",
+        ".agent/specs/engram-absorption/ci-a-dense-vector/changes/CR-001-initial-scope/change.md",
+        ".agent/specs/engram-absorption/ci-a-dense-vector/changes/CR-001-initial-scope/tasks.md"
+      ],
+      "line": 51
+    },
+    {
+      "slice": "NORTHSTAR-CI-B-CONTRACTS",
+      "branch": "work/prc-northstar-ci-b-contracts",
+      "paths": [
+        ".agent/specs/engram-absorption/ci-b-graph-watcher-context/spec.md",
+        ".agent/specs/engram-absorption/ci-b-graph-watcher-context/plan.md",
+        ".agent/specs/engram-absorption/ci-b-graph-watcher-context/checklists/general.md",
+        ".agent/specs/engram-absorption/ci-b-graph-watcher-context/changes/CR-001-initial-scope/change.md",
+        ".agent/specs/engram-absorption/ci-b-graph-watcher-context/changes/CR-001-initial-scope/tasks.md"
+      ],
+      "line": 52
+    },
+    {
+      "slice": "NORTHSTAR-BOOK-CONTRACTS",
+      "branch": "work/prc-northstar-book-contracts",
+      "paths": [
+        ".agent/specs/engram-absorption/book/prd.md",
+        ".agent/specs/engram-absorption/book/spec.md",
+        ".agent/specs/engram-absorption/book/plan.md",
+        ".agent/specs/engram-absorption/book/checklists/general.md",
+        ".agent/specs/engram-absorption/book/changes/CR-001-initial-scope/change.md",
+        ".agent/specs/engram-absorption/book/changes/CR-001-initial-scope/tasks.md"
+      ],
+      "line": 53
+    },
+    {
+      "slice": "NORTHSTAR-MEM-CONTRACTS",
+      "branch": "work/prc-northstar-mem-contracts",
+      "paths": [
+        ".agent/specs/engram-absorption/mem-residual/spec.md",
+        ".agent/specs/engram-absorption/mem-residual/plan.md",
+        ".agent/specs/engram-absorption/mem-residual/checklists/general.md",
+        ".agent/specs/engram-absorption/mem-residual/changes/CR-001-initial-scope/change.md",
+        ".agent/specs/engram-absorption/mem-residual/changes/CR-001-initial-scope/tasks.md"
+      ],
+      "line": 54
+    },
+    {
+      "slice": "NORTHSTAR-EFFECTIVENESS-CONTRACTS",
+      "branch": "work/prc-northstar-effectiveness-contracts",
+      "paths": [
+        ".agent/specs/engram-effectiveness/production-ready-residual/spec.md",
+        ".agent/specs/engram-effectiveness/production-ready-residual/plan.md",
+        ".agent/specs/engram-effectiveness/production-ready-residual/checklists/general.md",
+        ".agent/specs/engram-effectiveness/production-ready-residual/changes/CR-001-initial-scope/change.md",
+        ".agent/specs/engram-effectiveness/production-ready-residual/changes/CR-001-initial-scope/tasks.md"
+      ],
+      "line": 55
+    },
+    {
+      "slice": "NORTHSTAR-SETTINGS-CONTRACTS",
+      "branch": "work/prc-northstar-settings-contracts",
+      "paths": [
+        ".agent/specs/settings-store/production-ready-residual/spec.md",
+        ".agent/specs/settings-store/production-ready-residual/plan.md",
+        ".agent/specs/settings-store/production-ready-residual/checklists/general.md",
+        ".agent/specs/settings-store/production-ready-residual/changes/CR-001-initial-scope/change.md",
+        ".agent/specs/settings-store/production-ready-residual/changes/CR-001-initial-scope/tasks.md"
+      ],
+      "line": 56
+    }
+  ],
+  "declarations": [
+    {
+      "owner": "PLAN-GOVERNANCE",
+      "branch": "work/prc-release-gates",
+      "path": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+      "display": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+      "kind": "exact",
+      "line": 6
+    },
+    {
+      "owner": "PLAN-GOVERNANCE",
+      "branch": "work/prc-release-gates",
+      "path": ".agent/plans/2026-07-10-engram-production-ready-ownership-state.json",
+      "display": ".agent/plans/2026-07-10-engram-production-ready-ownership-state.json",
+      "kind": "exact",
+      "line": 6
+    },
+    {
+      "owner": "DB-BULKOPS",
+      "branch": "work/prc-db-bulkops",
+      "path": "internal/bulkops/facade.go",
+      "display": "internal/bulkops/facade.go",
+      "kind": "exact",
+      "line": 7
+    },
+    {
+      "owner": "DB-BULKOPS",
+      "branch": "work/prc-db-bulkops",
+      "path": "internal/bulkops/facade_test.go",
+      "display": "internal/bulkops/facade_test.go",
+      "kind": "exact",
+      "line": 7
+    },
+    {
+      "owner": "DB-BULKOPS",
+      "branch": "work/prc-db-bulkops",
+      "path": "internal/bulkops/rollback.go",
+      "display": "internal/bulkops/rollback.go",
+      "kind": "exact",
+      "line": 7
+    },
+    {
+      "owner": "DB-BULKOPS",
+      "branch": "work/prc-db-bulkops",
+      "path": "internal/bulkops/rollback_test.go",
+      "display": "internal/bulkops/rollback_test.go",
+      "kind": "exact",
+      "line": 7
+    },
+    {
+      "owner": "DB-BULKOPS",
+      "branch": "work/prc-db-bulkops",
+      "path": "internal/db/gorm/candidate_store.go",
+      "display": "internal/db/gorm/candidate_store.go",
+      "kind": "exact",
+      "line": 7
+    },
+    {
+      "owner": "DB-BULKOPS",
+      "branch": "work/prc-db-bulkops",
+      "path": "internal/db/gorm/candidate_store_test.go",
+      "display": "internal/db/gorm/candidate_store_test.go",
+      "kind": "exact",
+      "line": 7
+    },
+    {
+      "owner": "DB-BULKOPS",
+      "branch": "work/prc-db-bulkops",
+      "path": "internal/mcp/tools_bulkops.go",
+      "display": "internal/mcp/tools_bulkops.go",
+      "kind": "exact",
+      "line": 7
+    },
+    {
+      "owner": "DB-BULKOPS",
+      "branch": "work/prc-db-bulkops",
+      "path": "internal/mcp/tools_dryrun_test.go",
+      "display": "internal/mcp/tools_dryrun_test.go",
+      "kind": "exact",
+      "line": 7
+    },
+    {
+      "owner": "DB-BULKOPS",
+      "branch": "work/prc-db-bulkops",
+      "path": "pkg/models/snapshot.go",
+      "display": "pkg/models/snapshot.go",
+      "kind": "exact",
+      "line": 7
+    },
+    {
+      "owner": "DB-BULKOPS",
+      "branch": "work/prc-db-bulkops",
+      "path": ".agent/reports/2026-07-10-db-bulkops-capture-lock-rework-maker.md",
+      "display": ".agent/reports/2026-07-10-db-bulkops-capture-lock-rework-maker.md",
+      "kind": "exact",
+      "line": 7
+    },
+    {
+      "owner": "DB-BULKOPS",
+      "branch": "work/prc-db-bulkops",
+      "path": ".agent/reports/2026-07-10-db-bulkops-sibling-rework-maker.md",
+      "display": ".agent/reports/2026-07-10-db-bulkops-sibling-rework-maker.md",
+      "kind": "exact",
+      "line": 7
+    },
+    {
+      "owner": "DB-BULKOPS",
+      "branch": "work/prc-db-bulkops",
+      "path": ".agent/specs/production-ready-db-bulkops/evidence",
+      "display": ".agent/specs/production-ready-db-bulkops/evidence/**",
+      "kind": "prefix",
+      "line": 7
+    },
+    {
+      "owner": "DB-BULKOPS",
+      "branch": "work/prc-db-bulkops",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-sibling-rework",
+      "display": ".agent/reports/evidence/production-ready/db-bulkops-sibling-rework/**",
+      "kind": "prefix",
+      "line": 7
+    },
+    {
+      "owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "branch": "work/prc-db-bulkops-behavioral-edge-rework",
+      "path": "internal/db/gorm/candidate_store.go",
+      "display": "internal/db/gorm/candidate_store.go",
+      "kind": "exact",
+      "line": 8
+    },
+    {
+      "owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "branch": "work/prc-db-bulkops-behavioral-edge-rework",
+      "path": "internal/db/gorm/candidate_store_test.go",
+      "display": "internal/db/gorm/candidate_store_test.go",
+      "kind": "exact",
+      "line": 8
+    },
+    {
+      "owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "branch": "work/prc-db-bulkops-behavioral-edge-rework",
+      "path": "internal/mcp/tools_bulkops.go",
+      "display": "internal/mcp/tools_bulkops.go",
+      "kind": "exact",
+      "line": 8
+    },
+    {
+      "owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "branch": "work/prc-db-bulkops-behavioral-edge-rework",
+      "path": "internal/mcp/tools_dryrun_test.go",
+      "display": "internal/mcp/tools_dryrun_test.go",
+      "kind": "exact",
+      "line": 8
+    },
+    {
+      "owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "branch": "work/prc-db-bulkops-behavioral-edge-rework",
+      "path": ".agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md",
+      "display": ".agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md",
+      "kind": "exact",
+      "line": 8
+    },
+    {
+      "owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "branch": "work/prc-db-bulkops-behavioral-edge-rework",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework",
+      "display": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**",
+      "kind": "prefix",
+      "line": 8
+    },
+    {
+      "owner": "DB-GOVERNANCE",
+      "branch": "work/prc-db-governance",
+      "path": "internal/db/gorm/candidate_store.go",
+      "display": "internal/db/gorm/candidate_store.go",
+      "kind": "exact",
+      "line": 9
+    },
+    {
+      "owner": "DB-GOVERNANCE",
+      "branch": "work/prc-db-governance",
+      "path": "internal/db/gorm/candidate_store_test.go",
+      "display": "internal/db/gorm/candidate_store_test.go",
+      "kind": "exact",
+      "line": 9
+    },
+    {
+      "owner": "DB-GOVERNANCE",
+      "branch": "work/prc-db-governance",
+      "path": "internal/db/gorm/rule_arbiter_store_test.go",
+      "display": "internal/db/gorm/rule_arbiter_store_test.go",
+      "kind": "exact",
+      "line": 9
+    },
+    {
+      "owner": "DB-GOVERNANCE",
+      "branch": "work/prc-db-governance",
+      "path": "internal/db/gorm/rule_governance_store.go",
+      "display": "internal/db/gorm/rule_governance_store.go",
+      "kind": "exact",
+      "line": 9
+    },
+    {
+      "owner": "DB-GOVERNANCE",
+      "branch": "work/prc-db-governance",
+      "path": "internal/db/gorm/rule_governance_store_test.go",
+      "display": "internal/db/gorm/rule_governance_store_test.go",
+      "kind": "exact",
+      "line": 9
+    },
+    {
+      "owner": "DB-GOVERNANCE",
+      "branch": "work/prc-db-governance",
+      "path": "internal/db/gorm/rule_governance_rg3_store_test.go",
+      "display": "internal/db/gorm/rule_governance_rg3_store_test.go",
+      "kind": "exact",
+      "line": 9
+    },
+    {
+      "owner": "DB-GOVERNANCE",
+      "branch": "work/prc-db-governance",
+      "path": "internal/db/gorm/migration_rule_governance.go",
+      "display": "internal/db/gorm/migration_rule_governance.go",
+      "kind": "exact",
+      "line": 9
+    },
+    {
+      "owner": "DB-GOVERNANCE",
+      "branch": "work/prc-db-governance",
+      "path": "internal/db/gorm/migration_rule_arbiter.go",
+      "display": "internal/db/gorm/migration_rule_arbiter.go",
+      "kind": "exact",
+      "line": 9
+    },
+    {
+      "owner": "DB-GOVERNANCE",
+      "branch": "work/prc-db-governance",
+      "path": "internal/db/gorm/migration_rule_governance_snapshot_statuses.go",
+      "display": "internal/db/gorm/migration_rule_governance_snapshot_statuses.go",
+      "kind": "exact",
+      "line": 9
+    },
+    {
+      "owner": "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK",
+      "branch": "work/prc-candidate-review-snapshot-rollback",
+      "path": "internal/reviewpacket/candidate.go",
+      "display": "internal/reviewpacket/candidate.go",
+      "kind": "exact",
+      "line": 10
+    },
+    {
+      "owner": "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK",
+      "branch": "work/prc-candidate-review-snapshot-rollback",
+      "path": "internal/reviewpacket/candidate_test.go",
+      "display": "internal/reviewpacket/candidate_test.go",
+      "kind": "exact",
+      "line": 10
+    },
+    {
+      "owner": "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK",
+      "branch": "work/prc-candidate-review-snapshot-rollback",
+      "path": "internal/db/gorm/candidate_store.go",
+      "display": "internal/db/gorm/candidate_store.go",
+      "kind": "exact",
+      "line": 10
+    },
+    {
+      "owner": "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK",
+      "branch": "work/prc-candidate-review-snapshot-rollback",
+      "path": "internal/db/gorm/candidate_store_test.go",
+      "display": "internal/db/gorm/candidate_store_test.go",
+      "kind": "exact",
+      "line": 10
+    },
+    {
+      "owner": "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK",
+      "branch": "work/prc-candidate-review-snapshot-rollback",
+      "path": "internal/db/gorm/snapshot_store.go",
+      "display": "internal/db/gorm/snapshot_store.go",
+      "kind": "exact",
+      "line": 10
+    },
+    {
+      "owner": "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK",
+      "branch": "work/prc-candidate-review-snapshot-rollback",
+      "path": "internal/db/gorm/snapshot_store_test.go",
+      "display": "internal/db/gorm/snapshot_store_test.go",
+      "kind": "exact",
+      "line": 10
+    },
+    {
+      "owner": "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK",
+      "branch": "work/prc-candidate-review-snapshot-rollback",
+      "path": "internal/bulkops/rollback_test.go",
+      "display": "internal/bulkops/rollback_test.go",
+      "kind": "exact",
+      "line": 10
+    },
+    {
+      "owner": "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK",
+      "branch": "work/prc-candidate-review-snapshot-rollback",
+      "path": "tests/critical/candidate_review/candidate_review_snapshot_rollback_test.go",
+      "display": "tests/critical/candidate_review/candidate_review_snapshot_rollback_test.go",
+      "kind": "exact",
+      "line": 10
+    },
+    {
+      "owner": "INGEST-DOC-SNAPSHOT-DEMOLITION",
+      "branch": "work/prc-ingest-doc-snapshot-demolition",
+      "path": "internal/bulkops/facade.go",
+      "display": "internal/bulkops/facade.go",
+      "kind": "exact",
+      "line": 12
+    },
+    {
+      "owner": "INGEST-DOC-SNAPSHOT-DEMOLITION",
+      "branch": "work/prc-ingest-doc-snapshot-demolition",
+      "path": "internal/bulkops/facade_test.go",
+      "display": "internal/bulkops/facade_test.go",
+      "kind": "exact",
+      "line": 12
+    },
+    {
+      "owner": "INGEST-DOC-SNAPSHOT-DEMOLITION",
+      "branch": "work/prc-ingest-doc-snapshot-demolition",
+      "path": "pkg/models/snapshot.go",
+      "display": "pkg/models/snapshot.go",
+      "kind": "exact",
+      "line": 12
+    },
+    {
+      "owner": "INGEST-DOC-SNAPSHOT-DEMOLITION",
+      "branch": "work/prc-ingest-doc-snapshot-demolition",
+      "path": "pkg/models/snapshot_test.go",
+      "display": "pkg/models/snapshot_test.go",
+      "kind": "exact",
+      "line": 12
+    },
+    {
+      "owner": "INGEST-DOC-SNAPSHOT-DEMOLITION",
+      "branch": "work/prc-ingest-doc-snapshot-demolition",
+      "path": "internal/mcp/ingest_snapshot_contract_test.go",
+      "display": "internal/mcp/ingest_snapshot_contract_test.go",
+      "kind": "exact",
+      "line": 12
+    },
+    {
+      "owner": "DB-AUTH",
+      "branch": "work/prc-db-auth",
+      "path": "internal/db/gorm/user_store.go",
+      "display": "internal/db/gorm/user_store.go",
+      "kind": "exact",
+      "line": 13
+    },
+    {
+      "owner": "DB-AUTH",
+      "branch": "work/prc-db-auth",
+      "path": "internal/db/gorm/user_store_test.go",
+      "display": "internal/db/gorm/user_store_test.go",
+      "kind": "exact",
+      "line": 13
+    },
+    {
+      "owner": "DB-AUTH",
+      "branch": "work/prc-db-auth",
+      "path": "internal/worker/auth_handlers.go",
+      "display": "internal/worker/auth_handlers.go",
+      "kind": "exact",
+      "line": 13
+    },
+    {
+      "owner": "DB-AUTH",
+      "branch": "work/prc-db-auth",
+      "path": "internal/worker/auth_handlers_lifecycle_test.go",
+      "display": "internal/worker/auth_handlers_lifecycle_test.go",
+      "kind": "exact",
+      "line": 13
+    },
+    {
+      "owner": "AUTH-BOOTSTRAP-SECURITY",
+      "branch": "work/prc-auth-bootstrap-security",
+      "path": "internal/config/config.go",
+      "display": "internal/config/config.go",
+      "kind": "exact",
+      "line": 14
+    },
+    {
+      "owner": "AUTH-BOOTSTRAP-SECURITY",
+      "branch": "work/prc-auth-bootstrap-security",
+      "path": "internal/config/config_test.go",
+      "display": "internal/config/config_test.go",
+      "kind": "exact",
+      "line": 14
+    },
+    {
+      "owner": "AUTH-BOOTSTRAP-SECURITY",
+      "branch": "work/prc-auth-bootstrap-security",
+      "path": "internal/config/envnames.go",
+      "display": "internal/config/envnames.go",
+      "kind": "exact",
+      "line": 14
+    },
+    {
+      "owner": "AUTH-BOOTSTRAP-SECURITY",
+      "branch": "work/prc-auth-bootstrap-security",
+      "path": "internal/db/gorm/user_store.go",
+      "display": "internal/db/gorm/user_store.go",
+      "kind": "exact",
+      "line": 14
+    },
+    {
+      "owner": "AUTH-BOOTSTRAP-SECURITY",
+      "branch": "work/prc-auth-bootstrap-security",
+      "path": "internal/worker/middleware.go",
+      "display": "internal/worker/middleware.go",
+      "kind": "exact",
+      "line": 14
+    },
+    {
+      "owner": "AUTH-BOOTSTRAP-SECURITY",
+      "branch": "work/prc-auth-bootstrap-security",
+      "path": "internal/worker/middleware_test.go",
+      "display": "internal/worker/middleware_test.go",
+      "kind": "exact",
+      "line": 14
+    },
+    {
+      "owner": "AUTH-BOOTSTRAP-SECURITY",
+      "branch": "work/prc-auth-bootstrap-security",
+      "path": "internal/worker/auth_handlers.go",
+      "display": "internal/worker/auth_handlers.go",
+      "kind": "exact",
+      "line": 14
+    },
+    {
+      "owner": "AUTH-BOOTSTRAP-SECURITY",
+      "branch": "work/prc-auth-bootstrap-security",
+      "path": "internal/worker/auth_bootstrap_limiter.go",
+      "display": "internal/worker/auth_bootstrap_limiter.go",
+      "kind": "exact",
+      "line": 14
+    },
+    {
+      "owner": "AUTH-BOOTSTRAP-SECURITY",
+      "branch": "work/prc-auth-bootstrap-security",
+      "path": "internal/worker/auth_bootstrap_limiter_test.go",
+      "display": "internal/worker/auth_bootstrap_limiter_test.go",
+      "kind": "exact",
+      "line": 14
+    },
+    {
+      "owner": "AUTH-BOOTSTRAP-SECURITY",
+      "branch": "work/prc-auth-bootstrap-security",
+      "path": "internal/worker/auth_bootstrap_security_test.go",
+      "display": "internal/worker/auth_bootstrap_security_test.go",
+      "kind": "exact",
+      "line": 14
+    },
+    {
+      "owner": "AUTH-BOOTSTRAP-SECURITY",
+      "branch": "work/prc-auth-bootstrap-security",
+      "path": "internal/worker/service.go",
+      "display": "internal/worker/service.go",
+      "kind": "exact",
+      "line": 14
+    },
+    {
+      "owner": "AUTH-BOOTSTRAP-SECURITY",
+      "branch": "work/prc-auth-bootstrap-security",
+      "path": "tests/critical/auth_bootstrap/first_admin_bootstrap_test.go",
+      "display": "tests/critical/auth_bootstrap/first_admin_bootstrap_test.go",
+      "kind": "exact",
+      "line": 14
+    },
+    {
+      "owner": "AUTH-BOOTSTRAP-SECURITY",
+      "branch": "work/prc-auth-bootstrap-security",
+      "path": "scripts/production-smoke/customer/run-auth-bootstrap-adversary.ps1",
+      "display": "scripts/production-smoke/customer/run-auth-bootstrap-adversary.ps1",
+      "kind": "exact",
+      "line": 14
+    },
+    {
+      "owner": "DURABLE-AUDIT-BOUNDARIES",
+      "branch": "work/prc-durable-audit-boundaries",
+      "path": "internal/db/gorm/domain_owner_store.go",
+      "display": "internal/db/gorm/domain_owner_store.go",
+      "kind": "exact",
+      "line": 15
+    },
+    {
+      "owner": "DURABLE-AUDIT-BOUNDARIES",
+      "branch": "work/prc-durable-audit-boundaries",
+      "path": "internal/db/gorm/domain_owner_store_test.go",
+      "display": "internal/db/gorm/domain_owner_store_test.go",
+      "kind": "exact",
+      "line": 15
+    },
+    {
+      "owner": "DURABLE-AUDIT-BOUNDARIES",
+      "branch": "work/prc-durable-audit-boundaries",
+      "path": "internal/db/gorm/user_store.go",
+      "display": "internal/db/gorm/user_store.go",
+      "kind": "exact",
+      "line": 15
+    },
+    {
+      "owner": "DURABLE-AUDIT-BOUNDARIES",
+      "branch": "work/prc-durable-audit-boundaries",
+      "path": "internal/worker/auth_handlers.go",
+      "display": "internal/worker/auth_handlers.go",
+      "kind": "exact",
+      "line": 15
+    },
+    {
+      "owner": "DURABLE-AUDIT-BOUNDARIES",
+      "branch": "work/prc-durable-audit-boundaries",
+      "path": "internal/worker/auth_audit_durability_test.go",
+      "display": "internal/worker/auth_audit_durability_test.go",
+      "kind": "exact",
+      "line": 15
+    },
+    {
+      "owner": "DURABLE-AUDIT-BOUNDARIES",
+      "branch": "work/prc-durable-audit-boundaries",
+      "path": "internal/bulkops/facade.go",
+      "display": "internal/bulkops/facade.go",
+      "kind": "exact",
+      "line": 15
+    },
+    {
+      "owner": "DURABLE-AUDIT-BOUNDARIES",
+      "branch": "work/prc-durable-audit-boundaries",
+      "path": "internal/bulkops/audit_durability_test.go",
+      "display": "internal/bulkops/audit_durability_test.go",
+      "kind": "exact",
+      "line": 15
+    },
+    {
+      "owner": "DURABLE-AUDIT-BOUNDARIES",
+      "branch": "work/prc-durable-audit-boundaries",
+      "path": "scripts/production-smoke/customer/run-durable-audit-faults.ps1",
+      "display": "scripts/production-smoke/customer/run-durable-audit-faults.ps1",
+      "kind": "exact",
+      "line": 15
+    },
+    {
+      "owner": "DB-CRYSTALLIZATION",
+      "branch": "work/prc-db-crystallization",
+      "path": "internal/worker/handlers_hooks_crystallization_integration_test.go",
+      "display": "internal/worker/handlers_hooks_crystallization_integration_test.go",
+      "kind": "exact",
+      "line": 16
+    },
+    {
+      "owner": "DB-EMBEDDING-STATS",
+      "branch": "work/prc-db-embedding-stats",
+      "path": "internal/embedding/store.go",
+      "display": "internal/embedding/store.go",
+      "kind": "exact",
+      "line": 17
+    },
+    {
+      "owner": "DB-EMBEDDING-STATS",
+      "branch": "work/prc-db-embedding-stats",
+      "path": "internal/embedding/store_stats_test.go",
+      "display": "internal/embedding/store_stats_test.go",
+      "kind": "exact",
+      "line": 17
+    },
+    {
+      "owner": "DB-REAPER",
+      "branch": "work/prc-db-reaper",
+      "path": "internal/worker/reaper/reaper.go",
+      "display": "internal/worker/reaper/reaper.go",
+      "kind": "exact",
+      "line": 18
+    },
+    {
+      "owner": "DB-REAPER",
+      "branch": "work/prc-db-reaper",
+      "path": "internal/worker/reaper/reaper_test.go",
+      "display": "internal/worker/reaper/reaper_test.go",
+      "kind": "exact",
+      "line": 18
+    },
+    {
+      "owner": "SECURITY-TOOLCHAIN",
+      "branch": "work/prc-security-toolchain",
+      "path": "go.mod",
+      "display": "go.mod",
+      "kind": "exact",
+      "line": 19
+    },
+    {
+      "owner": "SECURITY-TOOLCHAIN",
+      "branch": "work/prc-security-toolchain",
+      "path": "go.sum",
+      "display": "go.sum",
+      "kind": "exact",
+      "line": 19
+    },
+    {
+      "owner": "SECURITY-TOOLCHAIN",
+      "branch": "work/prc-security-toolchain",
+      "path": "Dockerfile",
+      "display": "Dockerfile",
+      "kind": "exact",
+      "line": 19
+    },
+    {
+      "owner": "RELEASE-GATES",
+      "branch": "work/prc-release-gates",
+      "path": ".agent/critical-suite.config.yaml",
+      "display": ".agent/critical-suite.config.yaml",
+      "kind": "exact",
+      "line": 20
+    },
+    {
+      "owner": "RELEASE-GATES",
+      "branch": "work/prc-release-gates",
+      "path": ".agent/dev-stand.config.yaml",
+      "display": ".agent/dev-stand.config.yaml",
+      "kind": "exact",
+      "line": 20
+    },
+    {
+      "owner": "RELEASE-GATES",
+      "branch": "work/prc-release-gates",
+      "path": ".github/workflows/test.yml",
+      "display": ".github/workflows/test.yml",
+      "kind": "exact",
+      "line": 20
+    },
+    {
+      "owner": "RELEASE-GATES",
+      "branch": "work/prc-release-gates",
+      "path": "scripts/production-gates/assert-coverage.ps1",
+      "display": "scripts/production-gates/assert-coverage.ps1",
+      "kind": "exact",
+      "line": 20
+    },
+    {
+      "owner": "RELEASE-GATES",
+      "branch": "work/prc-release-gates",
+      "path": "scripts/production-gates/assert-go-test-json.ps1",
+      "display": "scripts/production-gates/assert-go-test-json.ps1",
+      "kind": "exact",
+      "line": 20
+    },
+    {
+      "owner": "RELEASE-GATES",
+      "branch": "work/prc-release-gates",
+      "path": "scripts/production-gates/assert-plan-path-ownership.ps1",
+      "display": "scripts/production-gates/assert-plan-path-ownership.ps1",
+      "kind": "exact",
+      "line": 20
+    },
+    {
+      "owner": "RELEASE-GATES",
+      "branch": "work/prc-release-gates",
+      "path": "scripts/production-gates/cleanup-db-sessions.ps1",
+      "display": "scripts/production-gates/cleanup-db-sessions.ps1",
+      "kind": "exact",
+      "line": 20
+    },
+    {
+      "owner": "RELEASE-GATES",
+      "branch": "work/prc-release-gates",
+      "path": "scripts/production-gates/run-critical-suite.ps1",
+      "display": "scripts/production-gates/run-critical-suite.ps1",
+      "kind": "exact",
+      "line": 20
+    },
+    {
+      "owner": "RELEASE-GATES",
+      "branch": "work/prc-release-gates",
+      "path": "scripts/production-gates/run-db-suite.ps1",
+      "display": "scripts/production-gates/run-db-suite.ps1",
+      "kind": "exact",
+      "line": 20
+    },
+    {
+      "owner": "RELEASE-GATES",
+      "branch": "work/prc-release-gates",
+      "path": "scripts/production-gates/run-dev-stand.ps1",
+      "display": "scripts/production-gates/run-dev-stand.ps1",
+      "kind": "exact",
+      "line": 20
+    },
+    {
+      "owner": "RELEASE-GATES",
+      "branch": "work/prc-release-gates",
+      "path": "scripts/production-gates/run-node-matrix.ps1",
+      "display": "scripts/production-gates/run-node-matrix.ps1",
+      "kind": "exact",
+      "line": 20
+    },
+    {
+      "owner": "RELEASE-GATES",
+      "branch": "work/prc-release-gates",
+      "path": ".agent/reports/2026-07-10-release-gates-foundation-revision-3-maker.md",
+      "display": ".agent/reports/2026-07-10-release-gates-foundation-revision-3-maker.md",
+      "kind": "exact",
+      "line": 20
+    },
+    {
+      "owner": "RELEASE-GATES",
+      "branch": "work/prc-release-gates",
+      "path": ".agent/reports/evidence/production-ready/release-gates-foundation-revision-3",
+      "display": ".agent/reports/evidence/production-ready/release-gates-foundation-revision-3/**",
+      "kind": "prefix",
+      "line": 20
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": "Dockerfile",
+      "display": "Dockerfile",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": "cmd/engram-healthcheck/main.go",
+      "display": "cmd/engram-healthcheck/main.go",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": "cmd/engram-healthcheck/main_test.go",
+      "display": "cmd/engram-healthcheck/main_test.go",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": "apps/operator-console/package.json",
+      "display": "apps/operator-console/package.json",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": "apps/operator-console/package-lock.json",
+      "display": "apps/operator-console/package-lock.json",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": "deploy/postgres/Dockerfile",
+      "display": "deploy/postgres/Dockerfile",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": "docker-compose.yml",
+      "display": "docker-compose.yml",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": "deploy/docker-compose.runtime.yml",
+      "display": "deploy/docker-compose.runtime.yml",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": "docs/DEPLOYMENT.md",
+      "display": "docs/DEPLOYMENT.md",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": "docs/PRODUCTION-TESTING-PLAYBOOK.md",
+      "display": "docs/PRODUCTION-TESTING-PLAYBOOK.md",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": ".github/workflows/test.yml",
+      "display": ".github/workflows/test.yml",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": ".github/workflows/docker.yaml",
+      "display": ".github/workflows/docker.yaml",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": ".github/workflows/docker-publish.yml",
+      "display": ".github/workflows/docker-publish.yml",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": "scripts/production-gates/build-and-scan-images.ps1",
+      "display": "scripts/production-gates/build-and-scan-images.ps1",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": "tests/critical/runtime/image_runtime_contract_test.go",
+      "display": "tests/critical/runtime/image_runtime_contract_test.go",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "IMAGE-REMEDIATION",
+      "branch": "work/prc-image-remediation",
+      "path": "tests/critical/runtime/postgres_image_contract_test.go",
+      "display": "tests/critical/runtime/postgres_image_contract_test.go",
+      "kind": "exact",
+      "line": 21
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "internal/proxy/identity.go",
+      "display": "internal/proxy/identity.go",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "internal/proxy/identity_test.go",
+      "display": "internal/proxy/identity_test.go",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "internal/handlers/engramcore/tools.go",
+      "display": "internal/handlers/engramcore/tools.go",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "internal/handlers/engramcore/project_identity_v2_test.go",
+      "display": "internal/handlers/engramcore/project_identity_v2_test.go",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "proto/engram/v1/engram.proto",
+      "display": "proto/engram/v1/engram.proto",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "proto/engram/v1/engram.pb.go",
+      "display": "proto/engram/v1/engram.pb.go",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "proto/engram/v1/engram_grpc.pb.go",
+      "display": "proto/engram/v1/engram_grpc.pb.go",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "internal/grpcserver/server.go",
+      "display": "internal/grpcserver/server.go",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "internal/grpcserver/project_identity_v2_test.go",
+      "display": "internal/grpcserver/project_identity_v2_test.go",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "internal/db/gorm/project_store.go",
+      "display": "internal/db/gorm/project_store.go",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "internal/db/gorm/project_store_test.go",
+      "display": "internal/db/gorm/project_store_test.go",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "internal/worker/handlers_context.go",
+      "display": "internal/worker/handlers_context.go",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "internal/worker/project_identity_v2_test.go",
+      "display": "internal/worker/project_identity_v2_test.go",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "plugin/engram/hooks/lib.js",
+      "display": "plugin/engram/hooks/lib.js",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "plugin/engram/hooks/lib.test.js",
+      "display": "plugin/engram/hooks/lib.test.js",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "plugin/engram/hooks/project-identity-v2.test.js",
+      "display": "plugin/engram/hooks/project-identity-v2.test.js",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "plugin/openclaw-engram/src/identity.ts",
+      "display": "plugin/openclaw-engram/src/identity.ts",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "plugin/openclaw-engram/src/identity.test.ts",
+      "display": "plugin/openclaw-engram/src/identity.test.ts",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity",
+      "path": "docs/arch/architecture.md",
+      "display": "docs/arch/architecture.md",
+      "kind": "exact",
+      "line": 22
+    },
+    {
+      "owner": "OPENCLAW-RELEASE",
+      "branch": "work/prc-openclaw-release",
+      "path": "plugin/openclaw-engram/.gitignore",
+      "display": "plugin/openclaw-engram/.gitignore",
+      "kind": "exact",
+      "line": 23
+    },
+    {
+      "owner": "OPENCLAW-RELEASE",
+      "branch": "work/prc-openclaw-release",
+      "path": "plugin/openclaw-engram/package.json",
+      "display": "plugin/openclaw-engram/package.json",
+      "kind": "exact",
+      "line": 23
+    },
+    {
+      "owner": "OPENCLAW-RELEASE",
+      "branch": "work/prc-openclaw-release",
+      "path": "plugin/openclaw-engram/package-lock.json",
+      "display": "plugin/openclaw-engram/package-lock.json",
+      "kind": "exact",
+      "line": 23
+    },
+    {
+      "owner": "OPENCLAW-RELEASE",
+      "branch": "work/prc-openclaw-release",
+      "path": "plugin/openclaw-engram/openclaw.plugin.json",
+      "display": "plugin/openclaw-engram/openclaw.plugin.json",
+      "kind": "exact",
+      "line": 23
+    },
+    {
+      "owner": "OPENCLAW-RELEASE",
+      "branch": "work/prc-openclaw-release",
+      "path": "plugin/openclaw-engram/README.md",
+      "display": "plugin/openclaw-engram/README.md",
+      "kind": "exact",
+      "line": 23
+    },
+    {
+      "owner": "OPENCLAW-RELEASE",
+      "branch": "work/prc-openclaw-release",
+      "path": ".github/workflows/plugin-publish.yml",
+      "display": ".github/workflows/plugin-publish.yml",
+      "kind": "exact",
+      "line": 23
+    },
+    {
+      "owner": "OPENCLAW-RELEASE",
+      "branch": "work/prc-openclaw-release",
+      "path": "docs/RELEASE-PROTOCOL.md",
+      "display": "docs/RELEASE-PROTOCOL.md",
+      "kind": "exact",
+      "line": 23
+    },
+    {
+      "owner": "UPDATE-LIFECYCLE",
+      "branch": "work/prc-security-updater",
+      "path": "internal/update/update.go",
+      "display": "internal/update/update.go",
+      "kind": "exact",
+      "line": 24
+    },
+    {
+      "owner": "UPDATE-LIFECYCLE",
+      "branch": "work/prc-security-updater",
+      "path": "internal/update/update_test.go",
+      "display": "internal/update/update_test.go",
+      "kind": "exact",
+      "line": 24
+    },
+    {
+      "owner": "UPDATE-LIFECYCLE",
+      "branch": "work/prc-security-updater",
+      "path": "internal/worker/handlers_update.go",
+      "display": "internal/worker/handlers_update.go",
+      "kind": "exact",
+      "line": 24
+    },
+    {
+      "owner": "UPDATE-LIFECYCLE",
+      "branch": "work/prc-security-updater",
+      "path": "internal/worker/handlers_update_test.go",
+      "display": "internal/worker/handlers_update_test.go",
+      "kind": "exact",
+      "line": 24
+    },
+    {
+      "owner": "UPDATE-LIFECYCLE",
+      "branch": "work/prc-security-updater",
+      "path": "scripts/install.sh",
+      "display": "scripts/install.sh",
+      "kind": "exact",
+      "line": 24
+    },
+    {
+      "owner": "UPDATE-LIFECYCLE",
+      "branch": "work/prc-security-updater",
+      "path": "scripts/install.ps1",
+      "display": "scripts/install.ps1",
+      "kind": "exact",
+      "line": 24
+    },
+    {
+      "owner": "UPDATE-LIFECYCLE",
+      "branch": "work/prc-security-updater",
+      "path": ".goreleaser.yaml",
+      "display": ".goreleaser.yaml",
+      "kind": "exact",
+      "line": 24
+    },
+    {
+      "owner": "UPDATE-LIFECYCLE",
+      "branch": "work/prc-security-updater",
+      "path": ".github/workflows/release.yaml",
+      "display": ".github/workflows/release.yaml",
+      "kind": "exact",
+      "line": 24
+    },
+    {
+      "owner": "UPDATE-LIFECYCLE",
+      "branch": "work/prc-security-updater",
+      "path": "plugin/engram/hooks/hook-cli.test.js",
+      "display": "plugin/engram/hooks/hook-cli.test.js",
+      "kind": "exact",
+      "line": 24
+    },
+    {
+      "owner": "DOCUMENT-INGEST-PUBLIC-TRUTH",
+      "branch": "work/prc-document-ingest-public-truth",
+      "path": "internal/mcp/server.go",
+      "display": "internal/mcp/server.go",
+      "kind": "exact",
+      "line": 26
+    },
+    {
+      "owner": "DOCUMENT-INGEST-PUBLIC-TRUTH",
+      "branch": "work/prc-document-ingest-public-truth",
+      "path": "internal/mcp/ingest_document_description_test.go",
+      "display": "internal/mcp/ingest_document_description_test.go",
+      "kind": "exact",
+      "line": 26
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/coerce.go",
+      "display": "internal/mcp/coerce.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/coerce_test.go",
+      "display": "internal/mcp/coerce_test.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/tools_candidates.go",
+      "display": "internal/mcp/tools_candidates.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/tools_candidates_test.go",
+      "display": "internal/mcp/tools_candidates_test.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/tools_memory.go",
+      "display": "internal/mcp/tools_memory.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/tools_memory_edit_test.go",
+      "display": "internal/mcp/tools_memory_edit_test.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/tools_memory_significance.go",
+      "display": "internal/mcp/tools_memory_significance.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/tools_memory_significance_test.go",
+      "display": "internal/mcp/tools_memory_significance_test.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/tools_store_consolidated.go",
+      "display": "internal/mcp/tools_store_consolidated.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/tools_settings.go",
+      "display": "internal/mcp/tools_settings.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/tools_settings_test.go",
+      "display": "internal/mcp/tools_settings_test.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/tools_documents_v2.go",
+      "display": "internal/mcp/tools_documents_v2.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/tools_rule_governance.go",
+      "display": "internal/mcp/tools_rule_governance.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/tools_rule_governance_test.go",
+      "display": "internal/mcp/tools_rule_governance_test.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "MCP-STRUCTURED-INPUT-VALIDATION",
+      "branch": "work/prc-mcp-structured-input-validation",
+      "path": "internal/mcp/structured_input_validation_test.go",
+      "display": "internal/mcp/structured_input_validation_test.go",
+      "kind": "exact",
+      "line": 28
+    },
+    {
+      "owner": "T007-COMPAT-DEMOLITION-CLASSIFICATION",
+      "branch": "work/prc-t007-compat-classification",
+      "path": "internal/mcp/store_memory_compat_t007_test.go",
+      "display": "internal/mcp/store_memory_compat_t007_test.go",
+      "kind": "exact",
+      "line": 30
+    },
+    {
+      "owner": "DB-RULES-ISOLATION",
+      "branch": "work/prc-db-rules-isolation",
+      "path": "internal/worker/handlers_rules_test.go",
+      "display": "internal/worker/handlers_rules_test.go",
+      "kind": "exact",
+      "line": 31
+    },
+    {
+      "owner": "DB-RULES-ISOLATION",
+      "branch": "work/prc-db-rules-isolation",
+      "path": "scripts/production-gates/run-db-rules-isolation.ps1",
+      "display": "scripts/production-gates/run-db-rules-isolation.ps1",
+      "kind": "exact",
+      "line": 31
+    },
+    {
+      "owner": "COVERAGE-WORKER",
+      "branch": "work/prc-coverage-worker",
+      "path": "internal/worker/production_readiness_coverage_test.go",
+      "display": "internal/worker/production_readiness_coverage_test.go",
+      "kind": "exact",
+      "line": 32
+    },
+    {
+      "owner": "COVERAGE-MCP",
+      "branch": "work/prc-coverage-mcp",
+      "path": "internal/mcp/production_readiness_coverage_test.go",
+      "display": "internal/mcp/production_readiness_coverage_test.go",
+      "kind": "exact",
+      "line": 33
+    },
+    {
+      "owner": "COVERAGE-GORM",
+      "branch": "work/prc-coverage-gorm",
+      "path": "internal/db/gorm/production_readiness_coverage_test.go",
+      "display": "internal/db/gorm/production_readiness_coverage_test.go",
+      "kind": "exact",
+      "line": 34
+    },
+    {
+      "owner": "COVERAGE-LOOM",
+      "branch": "work/prc-coverage-loom",
+      "path": "internal/handlers/loom/production_readiness_coverage_test.go",
+      "display": "internal/handlers/loom/production_readiness_coverage_test.go",
+      "kind": "exact",
+      "line": 35
+    },
+    {
+      "owner": "DEPLOYMENT-ROLLBACK",
+      "branch": "work/prc-deployment-rollback",
+      "path": "docker-compose.yml",
+      "display": "docker-compose.yml",
+      "kind": "exact",
+      "line": 36
+    },
+    {
+      "owner": "DEPLOYMENT-ROLLBACK",
+      "branch": "work/prc-deployment-rollback",
+      "path": "deploy/docker-compose.runtime.yml",
+      "display": "deploy/docker-compose.runtime.yml",
+      "kind": "exact",
+      "line": 36
+    },
+    {
+      "owner": "DEPLOYMENT-ROLLBACK",
+      "branch": "work/prc-deployment-rollback",
+      "path": "deploy/docker-compose.operator-web-standalone.yml",
+      "display": "deploy/docker-compose.operator-web-standalone.yml",
+      "kind": "exact",
+      "line": 36
+    },
+    {
+      "owner": "DEPLOYMENT-ROLLBACK",
+      "branch": "work/prc-deployment-rollback",
+      "path": "deploy/entrypoint-server.sh",
+      "display": "deploy/entrypoint-server.sh",
+      "kind": "exact",
+      "line": 36
+    },
+    {
+      "owner": "DEPLOYMENT-ROLLBACK",
+      "branch": "work/prc-deployment-rollback",
+      "path": "deploy/healthcheck-server.sh",
+      "display": "deploy/healthcheck-server.sh",
+      "kind": "exact",
+      "line": 36
+    },
+    {
+      "owner": "DEPLOYMENT-ROLLBACK",
+      "branch": "work/prc-deployment-rollback",
+      "path": "deploy/verify-rollback.ps1",
+      "display": "deploy/verify-rollback.ps1",
+      "kind": "exact",
+      "line": 36
+    },
+    {
+      "owner": "DEPLOYMENT-ROLLBACK",
+      "branch": "work/prc-deployment-rollback",
+      "path": "deploy/verify-runtime-policy.ps1",
+      "display": "deploy/verify-runtime-policy.ps1",
+      "kind": "exact",
+      "line": 36
+    },
+    {
+      "owner": "RECOVERY-DATA",
+      "branch": "work/prc-recovery-data",
+      "path": "scripts/recovery/start-disposable-postgres.ps1",
+      "display": "scripts/recovery/start-disposable-postgres.ps1",
+      "kind": "exact",
+      "line": 37
+    },
+    {
+      "owner": "RECOVERY-DATA",
+      "branch": "work/prc-recovery-data",
+      "path": "scripts/recovery/verify-postgres-roundtrip.ps1",
+      "display": "scripts/recovery/verify-postgres-roundtrip.ps1",
+      "kind": "exact",
+      "line": 37
+    },
+    {
+      "owner": "RECOVERY-DATA",
+      "branch": "work/prc-recovery-data",
+      "path": "scripts/recovery/seed-recovery-fixture.ps1",
+      "display": "scripts/recovery/seed-recovery-fixture.ps1",
+      "kind": "exact",
+      "line": 37
+    },
+    {
+      "owner": "RECOVERY-DATA",
+      "branch": "work/prc-recovery-data",
+      "path": "scripts/recovery/assert-recovery-fixture.ps1",
+      "display": "scripts/recovery/assert-recovery-fixture.ps1",
+      "kind": "exact",
+      "line": 37
+    },
+    {
+      "owner": "RECOVERY-DATA",
+      "branch": "work/prc-recovery-data",
+      "path": "tests/critical/recovery/postgres_roundtrip_test.go",
+      "display": "tests/critical/recovery/postgres_roundtrip_test.go",
+      "kind": "exact",
+      "line": 37
+    },
+    {
+      "owner": "OBSERVABILITY-OTLP",
+      "branch": "work/prc-observability-otlp",
+      "path": "internal/module/obs/logging.go",
+      "display": "internal/module/obs/logging.go",
+      "kind": "exact",
+      "line": 38
+    },
+    {
+      "owner": "OBSERVABILITY-OTLP",
+      "branch": "work/prc-observability-otlp",
+      "path": "internal/module/obs/logging_test.go",
+      "display": "internal/module/obs/logging_test.go",
+      "kind": "exact",
+      "line": 38
+    },
+    {
+      "owner": "OBSERVABILITY-OTLP",
+      "branch": "work/prc-observability-otlp",
+      "path": "internal/module/obs/meter.go",
+      "display": "internal/module/obs/meter.go",
+      "kind": "exact",
+      "line": 38
+    },
+    {
+      "owner": "OBSERVABILITY-OTLP",
+      "branch": "work/prc-observability-otlp",
+      "path": "internal/module/obs/meter_test.go",
+      "display": "internal/module/obs/meter_test.go",
+      "kind": "exact",
+      "line": 38
+    },
+    {
+      "owner": "OBSERVABILITY-OTLP",
+      "branch": "work/prc-observability-otlp",
+      "path": "internal/module/obs/metrics.go",
+      "display": "internal/module/obs/metrics.go",
+      "kind": "exact",
+      "line": 38
+    },
+    {
+      "owner": "OBSERVABILITY-OTLP",
+      "branch": "work/prc-observability-otlp",
+      "path": "internal/module/obs/metrics_test.go",
+      "display": "internal/module/obs/metrics_test.go",
+      "kind": "exact",
+      "line": 38
+    },
+    {
+      "owner": "OBSERVABILITY-OTLP",
+      "branch": "work/prc-observability-otlp",
+      "path": "cmd/engram-server/main.go",
+      "display": "cmd/engram-server/main.go",
+      "kind": "exact",
+      "line": 38
+    },
+    {
+      "owner": "OBSERVABILITY-OTLP",
+      "branch": "work/prc-observability-otlp",
+      "path": "cmd/engram-server/main_test.go",
+      "display": "cmd/engram-server/main_test.go",
+      "kind": "exact",
+      "line": 38
+    },
+    {
+      "owner": "OBSERVABILITY-OTLP",
+      "branch": "work/prc-observability-otlp",
+      "path": "scripts/production-smoke/verify-otlp.ps1",
+      "display": "scripts/production-smoke/verify-otlp.ps1",
+      "kind": "exact",
+      "line": 38
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/scope/domain_policy.go",
+      "display": "internal/scope/domain_policy.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/scope/domain_policy_test.go",
+      "display": "internal/scope/domain_policy_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/scope/filter.go",
+      "display": "internal/scope/filter.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/scope/filter_test.go",
+      "display": "internal/scope/filter_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/scope/filter_principal_test.go",
+      "display": "internal/scope/filter_principal_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/scope/filter_w4_test.go",
+      "display": "internal/scope/filter_w4_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/principalmemory/access_policy.go",
+      "display": "internal/principalmemory/access_policy.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/principalmemory/access_policy_test.go",
+      "display": "internal/principalmemory/access_policy_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/principalmemory/domain_registry.go",
+      "display": "internal/principalmemory/domain_registry.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/principalmemory/domain_registry_test.go",
+      "display": "internal/principalmemory/domain_registry_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/principalmemory/query_service.go",
+      "display": "internal/principalmemory/query_service.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/principalmemory/query_service_test.go",
+      "display": "internal/principalmemory/query_service_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/mcp/tools_principal_memory.go",
+      "display": "internal/mcp/tools_principal_memory.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/mcp/tools_principal_memory_test.go",
+      "display": "internal/mcp/tools_principal_memory_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/mcp/tools_recall_principal_test.go",
+      "display": "internal/mcp/tools_recall_principal_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/mcp/recall_visibility_backfill_test.go",
+      "display": "internal/mcp/recall_visibility_backfill_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/mcp/store_memory_principal_test.go",
+      "display": "internal/mcp/store_memory_principal_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/worker/handlers_principal_memory.go",
+      "display": "internal/worker/handlers_principal_memory.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/worker/handlers_principal_memory_test.go",
+      "display": "internal/worker/handlers_principal_memory_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/worker/scope_bypass_w4_test.go",
+      "display": "internal/worker/scope_bypass_w4_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/worker/retention.go",
+      "display": "internal/worker/retention.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/worker/retention_test.go",
+      "display": "internal/worker/retention_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/db/gorm/memory_store.go",
+      "display": "internal/db/gorm/memory_store.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/db/gorm/memory_store_principal_test.go",
+      "display": "internal/db/gorm/memory_store_principal_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/db/gorm/memory_store_principal_query_test.go",
+      "display": "internal/db/gorm/memory_store_principal_query_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "internal/db/gorm/purge_store_test.go",
+      "display": "internal/db/gorm/purge_store_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "PRIVACY-BOUNDARIES",
+      "branch": "work/prc-privacy-boundaries",
+      "path": "tests/critical/data_boundaries/principal_project_retention_test.go",
+      "display": "tests/critical/data_boundaries/principal_project_retention_test.go",
+      "kind": "exact",
+      "line": 39
+    },
+    {
+      "owner": "CRITICAL-HARNESS",
+      "branch": "work/prc-critical-harness",
+      "path": "tests/critical/customer_mode/customer_mode_test.go",
+      "display": "tests/critical/customer_mode/customer_mode_test.go",
+      "kind": "exact",
+      "line": 40
+    },
+    {
+      "owner": "CRITICAL-HARNESS",
+      "branch": "work/prc-critical-harness",
+      "path": "tests/critical/customer_mode/compatibility_test.go",
+      "display": "tests/critical/customer_mode/compatibility_test.go",
+      "kind": "exact",
+      "line": 40
+    },
+    {
+      "owner": "CRITICAL-HARNESS",
+      "branch": "work/prc-critical-harness",
+      "path": "tests/critical/customer_mode/cross_agent_test.go",
+      "display": "tests/critical/customer_mode/cross_agent_test.go",
+      "kind": "exact",
+      "line": 40
+    },
+    {
+      "owner": "CRITICAL-HARNESS",
+      "branch": "work/prc-critical-harness",
+      "path": "scripts/production-smoke/customer/run-customer-mode.ps1",
+      "display": "scripts/production-smoke/customer/run-customer-mode.ps1",
+      "kind": "exact",
+      "line": 40
+    },
+    {
+      "owner": "CRITICAL-HARNESS",
+      "branch": "work/prc-critical-harness",
+      "path": "scripts/production-smoke/customer/run-client-compatibility.ps1",
+      "display": "scripts/production-smoke/customer/run-client-compatibility.ps1",
+      "kind": "exact",
+      "line": 40
+    },
+    {
+      "owner": "CRITICAL-HARNESS",
+      "branch": "work/prc-critical-harness",
+      "path": "scripts/production-smoke/customer/run-cross-agent.ps1",
+      "display": "scripts/production-smoke/customer/run-cross-agent.ps1",
+      "kind": "exact",
+      "line": 40
+    },
+    {
+      "owner": "CRITICAL-HARNESS",
+      "branch": "work/prc-critical-harness",
+      "path": "scripts/production-smoke/customer/run-diagnostic-matrix.ps1",
+      "display": "scripts/production-smoke/customer/run-diagnostic-matrix.ps1",
+      "kind": "exact",
+      "line": 40
+    },
+    {
+      "owner": "CRITICAL-HARNESS",
+      "branch": "work/prc-critical-harness",
+      "path": "scripts/production-smoke/customer/assert-product-works.ps1",
+      "display": "scripts/production-smoke/customer/assert-product-works.ps1",
+      "kind": "exact",
+      "line": 40
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "README.md",
+      "display": "README.md",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "README.ru.md",
+      "display": "README.ru.md",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "README.zh.md",
+      "display": "README.zh.md",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "CONTRIBUTING.md",
+      "display": "CONTRIBUTING.md",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "CHANGELOG.md",
+      "display": "CHANGELOG.md",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "Makefile",
+      "display": "Makefile",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": ".env.example",
+      "display": ".env.example",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "docs/DEPLOYMENT.md",
+      "display": "docs/DEPLOYMENT.md",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "docs/MIGRATION.md",
+      "display": "docs/MIGRATION.md",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "docs/PRODUCTION-TESTING-PLAYBOOK.md",
+      "display": "docs/PRODUCTION-TESTING-PLAYBOOK.md",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "docs/arch/CONFIGURATION.md",
+      "display": "docs/arch/CONFIGURATION.md",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "docs/arch/QUICKSTART.md",
+      "display": "docs/arch/QUICKSTART.md",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "docs/release-notes/v6.43.0.md",
+      "display": "docs/release-notes/v6.43.0.md",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "docs/public/engram.jpg",
+      "display": "docs/public/engram.jpg",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "plugin/engram/commands/setup.md",
+      "display": "plugin/engram/commands/setup.md",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "CORE-PUBLIC-TRUTH",
+      "branch": "work/prc-core-public-truth",
+      "path": "plugin/engram/commands/doctor.md",
+      "display": "plugin/engram/commands/doctor.md",
+      "kind": "exact",
+      "line": 41
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": "README.md",
+      "display": "README.md",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": "README.ru.md",
+      "display": "README.ru.md",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": "README.zh.md",
+      "display": "README.zh.md",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": "CONTRIBUTING.md",
+      "display": "CONTRIBUTING.md",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": "CHANGELOG.md",
+      "display": "CHANGELOG.md",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": "Makefile",
+      "display": "Makefile",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": ".env.example",
+      "display": ".env.example",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": "docs/DEPLOYMENT.md",
+      "display": "docs/DEPLOYMENT.md",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": "docs/MIGRATION.md",
+      "display": "docs/MIGRATION.md",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": "docs/PRODUCTION-TESTING-PLAYBOOK.md",
+      "display": "docs/PRODUCTION-TESTING-PLAYBOOK.md",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": "docs/arch/CONFIGURATION.md",
+      "display": "docs/arch/CONFIGURATION.md",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": "docs/arch/QUICKSTART.md",
+      "display": "docs/arch/QUICKSTART.md",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": "docs/public/engram.jpg",
+      "display": "docs/public/engram.jpg",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": "plugin/engram/commands/setup.md",
+      "display": "plugin/engram/commands/setup.md",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "FINAL-PUBLIC-TRUTH",
+      "branch": "work/prc-final-public-truth",
+      "path": "plugin/engram/commands/doctor.md",
+      "display": "plugin/engram/commands/doctor.md",
+      "kind": "exact",
+      "line": 42
+    },
+    {
+      "owner": "LAUNCHER-FIRST-RUN",
+      "branch": "work/prc-launcher-first-run",
+      "path": "cmd/engram/main.go",
+      "display": "cmd/engram/main.go",
+      "kind": "exact",
+      "line": 43
+    },
+    {
+      "owner": "LAUNCHER-FIRST-RUN",
+      "branch": "work/prc-launcher-first-run",
+      "path": "cmd/engram/main_test.go",
+      "display": "cmd/engram/main_test.go",
+      "kind": "exact",
+      "line": 43
+    },
+    {
+      "owner": "LAUNCHER-FIRST-RUN",
+      "branch": "work/prc-launcher-first-run",
+      "path": "cmd/engram/wiring.go",
+      "display": "cmd/engram/wiring.go",
+      "kind": "exact",
+      "line": 43
+    },
+    {
+      "owner": "LAUNCHER-FIRST-RUN",
+      "branch": "work/prc-launcher-first-run",
+      "path": "cmd/engram/exec_windows.go",
+      "display": "cmd/engram/exec_windows.go",
+      "kind": "exact",
+      "line": 43
+    },
+    {
+      "owner": "LAUNCHER-FIRST-RUN",
+      "branch": "work/prc-launcher-first-run",
+      "path": "cmd/engram/exec_unix.go",
+      "display": "cmd/engram/exec_unix.go",
+      "kind": "exact",
+      "line": 43
+    },
+    {
+      "owner": "LAUNCHER-FIRST-RUN",
+      "branch": "work/prc-launcher-first-run",
+      "path": "plugin/engram/.engram-project",
+      "display": "plugin/engram/.engram-project",
+      "kind": "exact",
+      "line": 43
+    },
+    {
+      "owner": "LAUNCHER-FIRST-RUN",
+      "branch": "work/prc-launcher-first-run",
+      "path": "plugin/engram/scripts/run-engram.js",
+      "display": "plugin/engram/scripts/run-engram.js",
+      "kind": "exact",
+      "line": 43
+    },
+    {
+      "owner": "LAUNCHER-FIRST-RUN",
+      "branch": "work/prc-launcher-first-run",
+      "path": "plugin/engram/scripts/run-engram.test.js",
+      "display": "plugin/engram/scripts/run-engram.test.js",
+      "kind": "exact",
+      "line": 43
+    },
+    {
+      "owner": "LAUNCHER-FIRST-RUN",
+      "branch": "work/prc-launcher-first-run",
+      "path": "plugin/engram/scripts/ensure-binary.js",
+      "display": "plugin/engram/scripts/ensure-binary.js",
+      "kind": "exact",
+      "line": 43
+    },
+    {
+      "owner": "LAUNCHER-FIRST-RUN",
+      "branch": "work/prc-launcher-first-run",
+      "path": "plugin/engram/scripts/ensure-binary.test.js",
+      "display": "plugin/engram/scripts/ensure-binary.test.js",
+      "kind": "exact",
+      "line": 43
+    },
+    {
+      "owner": "OC-INTEGRATION",
+      "branch": "work/prc-operator-console-integration",
+      "path": "apps/operator-console",
+      "display": "apps/operator-console/**",
+      "kind": "prefix",
+      "line": 44
+    },
+    {
+      "owner": "S4B-CONTRACT",
+      "branch": "work/prc-s4b-contract",
+      "path": ".agent/specs/engram-v7-directives-surfacing",
+      "display": ".agent/specs/engram-v7-directives-surfacing/**",
+      "kind": "prefix",
+      "line": 45
+    },
+    {
+      "owner": "V7-S4B-BACKEND",
+      "branch": "work/prc-v7-s4b-backend",
+      "path": "internal/cognitive/s4bsurfacing",
+      "display": "internal/cognitive/s4bsurfacing/**",
+      "kind": "prefix",
+      "line": 46
+    },
+    {
+      "owner": "V7-CORE-CALLPATH",
+      "branch": "work/prc-v7-core-callpath",
+      "path": "internal/cognitive/core/event_bus.go",
+      "display": "internal/cognitive/core/event_bus.go",
+      "kind": "exact",
+      "line": 47
+    },
+    {
+      "owner": "V7-CORE-CALLPATH",
+      "branch": "work/prc-v7-core-callpath",
+      "path": "internal/cognitive/core/event_bus_test.go",
+      "display": "internal/cognitive/core/event_bus_test.go",
+      "kind": "exact",
+      "line": 47
+    },
+    {
+      "owner": "V7-CORE-CALLPATH",
+      "branch": "work/prc-v7-core-callpath",
+      "path": "internal/cognitive/core/hint_queue.go",
+      "display": "internal/cognitive/core/hint_queue.go",
+      "kind": "exact",
+      "line": 47
+    },
+    {
+      "owner": "V7-CORE-CALLPATH",
+      "branch": "work/prc-v7-core-callpath",
+      "path": "internal/cognitive/core/hint_queue_test.go",
+      "display": "internal/cognitive/core/hint_queue_test.go",
+      "kind": "exact",
+      "line": 47
+    },
+    {
+      "owner": "V7-CORE-CALLPATH",
+      "branch": "work/prc-v7-core-callpath",
+      "path": "internal/cognitive/s3ambient/queue.go",
+      "display": "internal/cognitive/s3ambient/queue.go",
+      "kind": "exact",
+      "line": 47
+    },
+    {
+      "owner": "V7-CORE-CALLPATH",
+      "branch": "work/prc-v7-core-callpath",
+      "path": "internal/cognitive/s3ambient/subsystem.go",
+      "display": "internal/cognitive/s3ambient/subsystem.go",
+      "kind": "exact",
+      "line": 47
+    },
+    {
+      "owner": "V7-RUNTIME-WIRING",
+      "branch": "work/prc-v7-runtime-wiring",
+      "path": "internal/worker/service.go",
+      "display": "internal/worker/service.go",
+      "kind": "exact",
+      "line": 48
+    },
+    {
+      "owner": "V7-RUNTIME-WIRING",
+      "branch": "work/prc-v7-runtime-wiring",
+      "path": "internal/worker/service_v7_integration_test.go",
+      "display": "internal/worker/service_v7_integration_test.go",
+      "kind": "exact",
+      "line": 48
+    },
+    {
+      "owner": "V7-RUNTIME-WIRING",
+      "branch": "work/prc-v7-runtime-wiring",
+      "path": "internal/worker/handlers_stats_v7.go",
+      "display": "internal/worker/handlers_stats_v7.go",
+      "kind": "exact",
+      "line": 48
+    },
+    {
+      "owner": "V7-RUNTIME-WIRING",
+      "branch": "work/prc-v7-runtime-wiring",
+      "path": "internal/worker/handlers_stats_v7_test.go",
+      "display": "internal/worker/handlers_stats_v7_test.go",
+      "kind": "exact",
+      "line": 48
+    },
+    {
+      "owner": "V7-TELEMETRY-WIRING",
+      "branch": "work/prc-v7-telemetry-wiring",
+      "path": "internal/cognitive/s5/metrics.go",
+      "display": "internal/cognitive/s5/metrics.go",
+      "kind": "exact",
+      "line": 49
+    },
+    {
+      "owner": "V7-TELEMETRY-WIRING",
+      "branch": "work/prc-v7-telemetry-wiring",
+      "path": "internal/cognitive/s5/provider.go",
+      "display": "internal/cognitive/s5/provider.go",
+      "kind": "exact",
+      "line": 49
+    },
+    {
+      "owner": "V7-TELEMETRY-WIRING",
+      "branch": "work/prc-v7-telemetry-wiring",
+      "path": "internal/cognitive/s5/provider_test.go",
+      "display": "internal/cognitive/s5/provider_test.go",
+      "kind": "exact",
+      "line": 49
+    },
+    {
+      "owner": "V7-TELEMETRY-WIRING",
+      "branch": "work/prc-v7-telemetry-wiring",
+      "path": "internal/cognitive/s5/source_adapter.go",
+      "display": "internal/cognitive/s5/source_adapter.go",
+      "kind": "exact",
+      "line": 49
+    },
+    {
+      "owner": "V7-TELEMETRY-WIRING",
+      "branch": "work/prc-v7-telemetry-wiring",
+      "path": "internal/cognitive/s5/source_adapter_test.go",
+      "display": "internal/cognitive/s5/source_adapter_test.go",
+      "kind": "exact",
+      "line": 49
+    },
+    {
+      "owner": "ROADMAP-RECONCILIATION",
+      "branch": "work/prc-roadmap-reconciliation",
+      "path": ".agent/specs/roadmap.md",
+      "display": ".agent/specs/roadmap.md",
+      "kind": "exact",
+      "line": 50
+    },
+    {
+      "owner": "ROADMAP-RECONCILIATION",
+      "branch": "work/prc-roadmap-reconciliation",
+      "path": ".agent/specs/ui-surface-ledger.md",
+      "display": ".agent/specs/ui-surface-ledger.md",
+      "kind": "exact",
+      "line": 50
+    },
+    {
+      "owner": "ROADMAP-RECONCILIATION",
+      "branch": "work/prc-roadmap-reconciliation",
+      "path": ".agent/specs/operator-console-production-integration",
+      "display": ".agent/specs/operator-console-production-integration/**",
+      "kind": "prefix",
+      "line": 50
+    },
+    {
+      "owner": "ROADMAP-RECONCILIATION",
+      "branch": "work/prc-roadmap-reconciliation",
+      "path": ".agent/specs/engram-v7-ambient/spec.md",
+      "display": ".agent/specs/engram-v7-ambient/spec.md",
+      "kind": "exact",
+      "line": 50
+    },
+    {
+      "owner": "ROADMAP-RECONCILIATION",
+      "branch": "work/prc-roadmap-reconciliation",
+      "path": ".agent/specs/engram-v7-ambient/plan.md",
+      "display": ".agent/specs/engram-v7-ambient/plan.md",
+      "kind": "exact",
+      "line": 50
+    },
+    {
+      "owner": "ROADMAP-RECONCILIATION",
+      "branch": "work/prc-roadmap-reconciliation",
+      "path": ".agent/specs/engram-v7-ambient/checklists/general.md",
+      "display": ".agent/specs/engram-v7-ambient/checklists/general.md",
+      "kind": "exact",
+      "line": 50
+    },
+    {
+      "owner": "ROADMAP-RECONCILIATION",
+      "branch": "work/prc-roadmap-reconciliation",
+      "path": ".agent/specs/engram-v7-ambient/changes/CR-001-initial-scope/change.md",
+      "display": ".agent/specs/engram-v7-ambient/changes/CR-001-initial-scope/change.md",
+      "kind": "exact",
+      "line": 50
+    },
+    {
+      "owner": "ROADMAP-RECONCILIATION",
+      "branch": "work/prc-roadmap-reconciliation",
+      "path": ".agent/specs/engram-v7-ambient/changes/CR-001-initial-scope/tasks.md",
+      "display": ".agent/specs/engram-v7-ambient/changes/CR-001-initial-scope/tasks.md",
+      "kind": "exact",
+      "line": 50
+    },
+    {
+      "owner": "NORTHSTAR-CI-A-CONTRACTS",
+      "branch": "work/prc-northstar-ci-a-contracts",
+      "path": ".agent/specs/engram-absorption/ci-a-dense-vector/spec.md",
+      "display": ".agent/specs/engram-absorption/ci-a-dense-vector/spec.md",
+      "kind": "exact",
+      "line": 51
+    },
+    {
+      "owner": "NORTHSTAR-CI-A-CONTRACTS",
+      "branch": "work/prc-northstar-ci-a-contracts",
+      "path": ".agent/specs/engram-absorption/ci-a-dense-vector/plan.md",
+      "display": ".agent/specs/engram-absorption/ci-a-dense-vector/plan.md",
+      "kind": "exact",
+      "line": 51
+    },
+    {
+      "owner": "NORTHSTAR-CI-A-CONTRACTS",
+      "branch": "work/prc-northstar-ci-a-contracts",
+      "path": ".agent/specs/engram-absorption/ci-a-dense-vector/checklists/general.md",
+      "display": ".agent/specs/engram-absorption/ci-a-dense-vector/checklists/general.md",
+      "kind": "exact",
+      "line": 51
+    },
+    {
+      "owner": "NORTHSTAR-CI-A-CONTRACTS",
+      "branch": "work/prc-northstar-ci-a-contracts",
+      "path": ".agent/specs/engram-absorption/ci-a-dense-vector/changes/CR-001-initial-scope/change.md",
+      "display": ".agent/specs/engram-absorption/ci-a-dense-vector/changes/CR-001-initial-scope/change.md",
+      "kind": "exact",
+      "line": 51
+    },
+    {
+      "owner": "NORTHSTAR-CI-A-CONTRACTS",
+      "branch": "work/prc-northstar-ci-a-contracts",
+      "path": ".agent/specs/engram-absorption/ci-a-dense-vector/changes/CR-001-initial-scope/tasks.md",
+      "display": ".agent/specs/engram-absorption/ci-a-dense-vector/changes/CR-001-initial-scope/tasks.md",
+      "kind": "exact",
+      "line": 51
+    },
+    {
+      "owner": "NORTHSTAR-CI-B-CONTRACTS",
+      "branch": "work/prc-northstar-ci-b-contracts",
+      "path": ".agent/specs/engram-absorption/ci-b-graph-watcher-context/spec.md",
+      "display": ".agent/specs/engram-absorption/ci-b-graph-watcher-context/spec.md",
+      "kind": "exact",
+      "line": 52
+    },
+    {
+      "owner": "NORTHSTAR-CI-B-CONTRACTS",
+      "branch": "work/prc-northstar-ci-b-contracts",
+      "path": ".agent/specs/engram-absorption/ci-b-graph-watcher-context/plan.md",
+      "display": ".agent/specs/engram-absorption/ci-b-graph-watcher-context/plan.md",
+      "kind": "exact",
+      "line": 52
+    },
+    {
+      "owner": "NORTHSTAR-CI-B-CONTRACTS",
+      "branch": "work/prc-northstar-ci-b-contracts",
+      "path": ".agent/specs/engram-absorption/ci-b-graph-watcher-context/checklists/general.md",
+      "display": ".agent/specs/engram-absorption/ci-b-graph-watcher-context/checklists/general.md",
+      "kind": "exact",
+      "line": 52
+    },
+    {
+      "owner": "NORTHSTAR-CI-B-CONTRACTS",
+      "branch": "work/prc-northstar-ci-b-contracts",
+      "path": ".agent/specs/engram-absorption/ci-b-graph-watcher-context/changes/CR-001-initial-scope/change.md",
+      "display": ".agent/specs/engram-absorption/ci-b-graph-watcher-context/changes/CR-001-initial-scope/change.md",
+      "kind": "exact",
+      "line": 52
+    },
+    {
+      "owner": "NORTHSTAR-CI-B-CONTRACTS",
+      "branch": "work/prc-northstar-ci-b-contracts",
+      "path": ".agent/specs/engram-absorption/ci-b-graph-watcher-context/changes/CR-001-initial-scope/tasks.md",
+      "display": ".agent/specs/engram-absorption/ci-b-graph-watcher-context/changes/CR-001-initial-scope/tasks.md",
+      "kind": "exact",
+      "line": 52
+    },
+    {
+      "owner": "NORTHSTAR-BOOK-CONTRACTS",
+      "branch": "work/prc-northstar-book-contracts",
+      "path": ".agent/specs/engram-absorption/book/prd.md",
+      "display": ".agent/specs/engram-absorption/book/prd.md",
+      "kind": "exact",
+      "line": 53
+    },
+    {
+      "owner": "NORTHSTAR-BOOK-CONTRACTS",
+      "branch": "work/prc-northstar-book-contracts",
+      "path": ".agent/specs/engram-absorption/book/spec.md",
+      "display": ".agent/specs/engram-absorption/book/spec.md",
+      "kind": "exact",
+      "line": 53
+    },
+    {
+      "owner": "NORTHSTAR-BOOK-CONTRACTS",
+      "branch": "work/prc-northstar-book-contracts",
+      "path": ".agent/specs/engram-absorption/book/plan.md",
+      "display": ".agent/specs/engram-absorption/book/plan.md",
+      "kind": "exact",
+      "line": 53
+    },
+    {
+      "owner": "NORTHSTAR-BOOK-CONTRACTS",
+      "branch": "work/prc-northstar-book-contracts",
+      "path": ".agent/specs/engram-absorption/book/checklists/general.md",
+      "display": ".agent/specs/engram-absorption/book/checklists/general.md",
+      "kind": "exact",
+      "line": 53
+    },
+    {
+      "owner": "NORTHSTAR-BOOK-CONTRACTS",
+      "branch": "work/prc-northstar-book-contracts",
+      "path": ".agent/specs/engram-absorption/book/changes/CR-001-initial-scope/change.md",
+      "display": ".agent/specs/engram-absorption/book/changes/CR-001-initial-scope/change.md",
+      "kind": "exact",
+      "line": 53
+    },
+    {
+      "owner": "NORTHSTAR-BOOK-CONTRACTS",
+      "branch": "work/prc-northstar-book-contracts",
+      "path": ".agent/specs/engram-absorption/book/changes/CR-001-initial-scope/tasks.md",
+      "display": ".agent/specs/engram-absorption/book/changes/CR-001-initial-scope/tasks.md",
+      "kind": "exact",
+      "line": 53
+    },
+    {
+      "owner": "NORTHSTAR-MEM-CONTRACTS",
+      "branch": "work/prc-northstar-mem-contracts",
+      "path": ".agent/specs/engram-absorption/mem-residual/spec.md",
+      "display": ".agent/specs/engram-absorption/mem-residual/spec.md",
+      "kind": "exact",
+      "line": 54
+    },
+    {
+      "owner": "NORTHSTAR-MEM-CONTRACTS",
+      "branch": "work/prc-northstar-mem-contracts",
+      "path": ".agent/specs/engram-absorption/mem-residual/plan.md",
+      "display": ".agent/specs/engram-absorption/mem-residual/plan.md",
+      "kind": "exact",
+      "line": 54
+    },
+    {
+      "owner": "NORTHSTAR-MEM-CONTRACTS",
+      "branch": "work/prc-northstar-mem-contracts",
+      "path": ".agent/specs/engram-absorption/mem-residual/checklists/general.md",
+      "display": ".agent/specs/engram-absorption/mem-residual/checklists/general.md",
+      "kind": "exact",
+      "line": 54
+    },
+    {
+      "owner": "NORTHSTAR-MEM-CONTRACTS",
+      "branch": "work/prc-northstar-mem-contracts",
+      "path": ".agent/specs/engram-absorption/mem-residual/changes/CR-001-initial-scope/change.md",
+      "display": ".agent/specs/engram-absorption/mem-residual/changes/CR-001-initial-scope/change.md",
+      "kind": "exact",
+      "line": 54
+    },
+    {
+      "owner": "NORTHSTAR-MEM-CONTRACTS",
+      "branch": "work/prc-northstar-mem-contracts",
+      "path": ".agent/specs/engram-absorption/mem-residual/changes/CR-001-initial-scope/tasks.md",
+      "display": ".agent/specs/engram-absorption/mem-residual/changes/CR-001-initial-scope/tasks.md",
+      "kind": "exact",
+      "line": 54
+    },
+    {
+      "owner": "NORTHSTAR-EFFECTIVENESS-CONTRACTS",
+      "branch": "work/prc-northstar-effectiveness-contracts",
+      "path": ".agent/specs/engram-effectiveness/production-ready-residual/spec.md",
+      "display": ".agent/specs/engram-effectiveness/production-ready-residual/spec.md",
+      "kind": "exact",
+      "line": 55
+    },
+    {
+      "owner": "NORTHSTAR-EFFECTIVENESS-CONTRACTS",
+      "branch": "work/prc-northstar-effectiveness-contracts",
+      "path": ".agent/specs/engram-effectiveness/production-ready-residual/plan.md",
+      "display": ".agent/specs/engram-effectiveness/production-ready-residual/plan.md",
+      "kind": "exact",
+      "line": 55
+    },
+    {
+      "owner": "NORTHSTAR-EFFECTIVENESS-CONTRACTS",
+      "branch": "work/prc-northstar-effectiveness-contracts",
+      "path": ".agent/specs/engram-effectiveness/production-ready-residual/checklists/general.md",
+      "display": ".agent/specs/engram-effectiveness/production-ready-residual/checklists/general.md",
+      "kind": "exact",
+      "line": 55
+    },
+    {
+      "owner": "NORTHSTAR-EFFECTIVENESS-CONTRACTS",
+      "branch": "work/prc-northstar-effectiveness-contracts",
+      "path": ".agent/specs/engram-effectiveness/production-ready-residual/changes/CR-001-initial-scope/change.md",
+      "display": ".agent/specs/engram-effectiveness/production-ready-residual/changes/CR-001-initial-scope/change.md",
+      "kind": "exact",
+      "line": 55
+    },
+    {
+      "owner": "NORTHSTAR-EFFECTIVENESS-CONTRACTS",
+      "branch": "work/prc-northstar-effectiveness-contracts",
+      "path": ".agent/specs/engram-effectiveness/production-ready-residual/changes/CR-001-initial-scope/tasks.md",
+      "display": ".agent/specs/engram-effectiveness/production-ready-residual/changes/CR-001-initial-scope/tasks.md",
+      "kind": "exact",
+      "line": 55
+    },
+    {
+      "owner": "NORTHSTAR-SETTINGS-CONTRACTS",
+      "branch": "work/prc-northstar-settings-contracts",
+      "path": ".agent/specs/settings-store/production-ready-residual/spec.md",
+      "display": ".agent/specs/settings-store/production-ready-residual/spec.md",
+      "kind": "exact",
+      "line": 56
+    },
+    {
+      "owner": "NORTHSTAR-SETTINGS-CONTRACTS",
+      "branch": "work/prc-northstar-settings-contracts",
+      "path": ".agent/specs/settings-store/production-ready-residual/plan.md",
+      "display": ".agent/specs/settings-store/production-ready-residual/plan.md",
+      "kind": "exact",
+      "line": 56
+    },
+    {
+      "owner": "NORTHSTAR-SETTINGS-CONTRACTS",
+      "branch": "work/prc-northstar-settings-contracts",
+      "path": ".agent/specs/settings-store/production-ready-residual/checklists/general.md",
+      "display": ".agent/specs/settings-store/production-ready-residual/checklists/general.md",
+      "kind": "exact",
+      "line": 56
+    },
+    {
+      "owner": "NORTHSTAR-SETTINGS-CONTRACTS",
+      "branch": "work/prc-northstar-settings-contracts",
+      "path": ".agent/specs/settings-store/production-ready-residual/changes/CR-001-initial-scope/change.md",
+      "display": ".agent/specs/settings-store/production-ready-residual/changes/CR-001-initial-scope/change.md",
+      "kind": "exact",
+      "line": 56
+    },
+    {
+      "owner": "NORTHSTAR-SETTINGS-CONTRACTS",
+      "branch": "work/prc-northstar-settings-contracts",
+      "path": ".agent/specs/settings-store/production-ready-residual/changes/CR-001-initial-scope/tasks.md",
+      "display": ".agent/specs/settings-store/production-ready-residual/changes/CR-001-initial-scope/tasks.md",
+      "kind": "exact",
+      "line": 56
+    }
+  ],
+  "repeated_exact_paths": [
+    {
+      "path": ".env.example",
+      "exact_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "exact_owners": [
+        "RELEASE-GATES",
+        "IMAGE-REMEDIATION"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "RELEASE-GATES",
+        "IMAGE-REMEDIATION"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "RELEASE-GATES",
+        "IMAGE-REMEDIATION"
+      ]
+    },
+    {
+      "path": "apps/operator-console/package-lock.json",
+      "exact_owners": [
+        "IMAGE-REMEDIATION"
+      ],
+      "prefix_owners": [
+        "OC-INTEGRATION"
+      ],
+      "effective_owners": [
+        "IMAGE-REMEDIATION",
+        "OC-INTEGRATION"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "IMAGE-REMEDIATION",
+        "OC-INTEGRATION"
+      ]
+    },
+    {
+      "path": "apps/operator-console/package.json",
+      "exact_owners": [
+        "IMAGE-REMEDIATION"
+      ],
+      "prefix_owners": [
+        "OC-INTEGRATION"
+      ],
+      "effective_owners": [
+        "IMAGE-REMEDIATION",
+        "OC-INTEGRATION"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "IMAGE-REMEDIATION",
+        "OC-INTEGRATION"
+      ]
+    },
+    {
+      "path": "CHANGELOG.md",
+      "exact_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "exact_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    },
+    {
+      "path": "deploy/docker-compose.runtime.yml",
+      "exact_owners": [
+        "IMAGE-REMEDIATION",
+        "DEPLOYMENT-ROLLBACK"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "IMAGE-REMEDIATION",
+        "DEPLOYMENT-ROLLBACK"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "IMAGE-REMEDIATION",
+        "DEPLOYMENT-ROLLBACK"
+      ]
+    },
+    {
+      "path": "docker-compose.yml",
+      "exact_owners": [
+        "IMAGE-REMEDIATION",
+        "DEPLOYMENT-ROLLBACK"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "IMAGE-REMEDIATION",
+        "DEPLOYMENT-ROLLBACK"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "IMAGE-REMEDIATION",
+        "DEPLOYMENT-ROLLBACK"
+      ]
+    },
+    {
+      "path": "Dockerfile",
+      "exact_owners": [
+        "SECURITY-TOOLCHAIN",
+        "IMAGE-REMEDIATION"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "SECURITY-TOOLCHAIN",
+        "IMAGE-REMEDIATION"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "SECURITY-TOOLCHAIN",
+        "IMAGE-REMEDIATION"
+      ]
+    },
+    {
+      "path": "docs/arch/CONFIGURATION.md",
+      "exact_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    },
+    {
+      "path": "docs/arch/QUICKSTART.md",
+      "exact_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    },
+    {
+      "path": "docs/DEPLOYMENT.md",
+      "exact_owners": [
+        "IMAGE-REMEDIATION",
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "IMAGE-REMEDIATION",
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "IMAGE-REMEDIATION",
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    },
+    {
+      "path": "docs/MIGRATION.md",
+      "exact_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    },
+    {
+      "path": "docs/PRODUCTION-TESTING-PLAYBOOK.md",
+      "exact_owners": [
+        "IMAGE-REMEDIATION",
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "IMAGE-REMEDIATION",
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "IMAGE-REMEDIATION",
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    },
+    {
+      "path": "docs/public/engram.jpg",
+      "exact_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    },
+    {
+      "path": "internal/bulkops/facade_test.go",
+      "exact_owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION"
+      ]
+    },
+    {
+      "path": "internal/bulkops/facade.go",
+      "exact_owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ]
+    },
+    {
+      "path": "internal/bulkops/rollback_test.go",
+      "exact_owners": [
+        "DB-BULKOPS",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "DB-BULKOPS",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "DB-BULKOPS",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ]
+    },
+    {
+      "path": "internal/db/gorm/candidate_store_test.go",
+      "exact_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "DB-GOVERNANCE",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "DB-GOVERNANCE",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "DB-GOVERNANCE",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ]
+    },
+    {
+      "path": "internal/db/gorm/candidate_store.go",
+      "exact_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "DB-GOVERNANCE",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "DB-GOVERNANCE",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "DB-GOVERNANCE",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ]
+    },
+    {
+      "path": "internal/db/gorm/user_store.go",
+      "exact_owners": [
+        "DB-AUTH",
+        "AUTH-BOOTSTRAP-SECURITY",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "DB-AUTH",
+        "AUTH-BOOTSTRAP-SECURITY",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "DB-AUTH",
+        "AUTH-BOOTSTRAP-SECURITY",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ]
+    },
+    {
+      "path": "internal/mcp/tools_bulkops.go",
+      "exact_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"
+      ]
+    },
+    {
+      "path": "internal/mcp/tools_dryrun_test.go",
+      "exact_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"
+      ]
+    },
+    {
+      "path": "internal/worker/auth_handlers.go",
+      "exact_owners": [
+        "DB-AUTH",
+        "AUTH-BOOTSTRAP-SECURITY",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "DB-AUTH",
+        "AUTH-BOOTSTRAP-SECURITY",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "DB-AUTH",
+        "AUTH-BOOTSTRAP-SECURITY",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ]
+    },
+    {
+      "path": "internal/worker/service.go",
+      "exact_owners": [
+        "AUTH-BOOTSTRAP-SECURITY",
+        "V7-RUNTIME-WIRING"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "AUTH-BOOTSTRAP-SECURITY",
+        "V7-RUNTIME-WIRING"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "AUTH-BOOTSTRAP-SECURITY",
+        "V7-RUNTIME-WIRING"
+      ]
+    },
+    {
+      "path": "Makefile",
+      "exact_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    },
+    {
+      "path": "pkg/models/snapshot.go",
+      "exact_owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION"
+      ]
+    },
+    {
+      "path": "plugin/engram/commands/doctor.md",
+      "exact_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    },
+    {
+      "path": "plugin/engram/commands/setup.md",
+      "exact_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    },
+    {
+      "path": "README.md",
+      "exact_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    },
+    {
+      "path": "README.ru.md",
+      "exact_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    },
+    {
+      "path": "README.zh.md",
+      "exact_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "prefix_owners": [],
+      "effective_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "declared_epoch": true,
+      "epoch_owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ]
+    }
+  ],
+  "prefix_intersections": [
+    {
+      "left_owner": "IMAGE-REMEDIATION",
+      "left": "apps/operator-console/package.json",
+      "right_owner": "OC-INTEGRATION",
+      "right": "apps/operator-console/**",
+      "exact_path": "apps/operator-console/package.json",
+      "declared_epoch": true
+    },
+    {
+      "left_owner": "IMAGE-REMEDIATION",
+      "left": "apps/operator-console/package-lock.json",
+      "right_owner": "OC-INTEGRATION",
+      "right": "apps/operator-console/**",
+      "exact_path": "apps/operator-console/package-lock.json",
+      "declared_epoch": true
+    }
+  ],
+  "epochs": [
+    {
+      "path": "internal/db/gorm/candidate_store.go",
+      "owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "DB-GOVERNANCE",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ],
+      "transfer_gate": "rejected predecessor checker/hash recorded; rework uses exact base `68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef`; each accepted successor requires checker PASS, post-review PASS, integration SHA, and exact rebase before edit",
+      "line": 6
+    },
+    {
+      "path": "internal/db/gorm/candidate_store_test.go",
+      "owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "DB-GOVERNANCE",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ],
+      "transfer_gate": "rejected predecessor checker/hash recorded; rework uses exact base `68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef`; each accepted successor requires checker PASS, post-review PASS, integration SHA, and exact rebase before edit",
+      "line": 6
+    },
+    {
+      "path": "internal/mcp/tools_bulkops.go",
+      "owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"
+      ],
+      "transfer_gate": "rejected predecessor checker/hash recorded; rework base is exact rejected head; checker and post-review PASS plus integration SHA close the transfer",
+      "line": 7
+    },
+    {
+      "path": "internal/mcp/tools_dryrun_test.go",
+      "owners": [
+        "DB-BULKOPS",
+        "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"
+      ],
+      "transfer_gate": "rejected predecessor checker/hash recorded; rework base is exact rejected head; checker and post-review PASS plus integration SHA close the transfer",
+      "line": 7
+    },
+    {
+      "path": "internal/bulkops/facade.go",
+      "owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ],
+      "transfer_gate": "behavioral-edge composite checker and post-review PASS; exact integration SHA recorded; demolition rebased before edit; historical ingest guard green before durable-audit fault work",
+      "line": 8
+    },
+    {
+      "path": "internal/bulkops/facade_test.go",
+      "owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION"
+      ],
+      "transfer_gate": "accepted behavioral-edge composite integrated; demolition worktree rebased; focused historical-only regressions PASS before integration",
+      "line": 9
+    },
+    {
+      "path": "internal/bulkops/rollback_test.go",
+      "owners": [
+        "DB-BULKOPS",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
+      ],
+      "transfer_gate": "accepted behavioral-edge composite and DB-GOVERNANCE integrated; candidate-review successor rebased; combined checker and post-review PASS",
+      "line": 10
+    },
+    {
+      "path": "pkg/models/snapshot.go",
+      "owners": [
+        "DB-BULKOPS",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION"
+      ],
+      "transfer_gate": "accepted behavioral-edge composite integrated; demolition successor rebased; persistence-compatibility and non-executable regressions PASS",
+      "line": 11
+    },
+    {
+      "path": "internal/db/gorm/user_store.go",
+      "owners": [
+        "DB-AUTH",
+        "AUTH-BOOTSTRAP-SECURITY",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ],
+      "transfer_gate": "each predecessor checker and post-review PASS, integration SHA recorded, successor rebased; no simultaneous writer",
+      "line": 12
+    },
+    {
+      "path": "internal/worker/auth_handlers.go",
+      "owners": [
+        "DB-AUTH",
+        "AUTH-BOOTSTRAP-SECURITY",
+        "DURABLE-AUDIT-BOUNDARIES"
+      ],
+      "transfer_gate": "each predecessor checker and post-review PASS, integration SHA recorded, successor rebased; no simultaneous writer",
+      "line": 13
+    },
+    {
+      "path": "internal/worker/service.go",
+      "owners": [
+        "AUTH-BOOTSTRAP-SECURITY",
+        "V7-RUNTIME-WIRING"
+      ],
+      "transfer_gate": "auth bootstrap checker and post-review PASS, commit integrated, V7 worktree rebased, auth route regression rerun",
+      "line": 14
+    },
+    {
+      "path": "Dockerfile",
+      "owners": [
+        "SECURITY-TOOLCHAIN",
+        "IMAGE-REMEDIATION"
+      ],
+      "transfer_gate": "toolchain checker and post-review PASS, commit integrated, image worktree rebased, zero-finding rebuild and scan before successor integration",
+      "line": 15
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "owners": [
+        "RELEASE-GATES",
+        "IMAGE-REMEDIATION"
+      ],
+      "transfer_gate": "release-gates checker and post-review PASS, commit integrated, image worktree rebased before workflow image-identity changes",
+      "line": 16
+    },
+    {
+      "path": "docker-compose.yml",
+      "owners": [
+        "IMAGE-REMEDIATION",
+        "DEPLOYMENT-ROLLBACK"
+      ],
+      "transfer_gate": "image checker and post-review PASS, `final-image-set.json` recorded, deployment worktree rebased, fresh scan after edits",
+      "line": 17
+    },
+    {
+      "path": "deploy/docker-compose.runtime.yml",
+      "owners": [
+        "IMAGE-REMEDIATION",
+        "DEPLOYMENT-ROLLBACK"
+      ],
+      "transfer_gate": "image checker and post-review PASS, `final-image-set.json` recorded, deployment worktree rebased, fresh scan after edits",
+      "line": 17
+    },
+    {
+      "path": "apps/operator-console/package.json",
+      "owners": [
+        "IMAGE-REMEDIATION",
+        "OC-INTEGRATION"
+      ],
+      "transfer_gate": "image checker and post-review PASS, OC worktree rebased, any later dependency edit reruns audit/build/browser/image scan",
+      "line": 18
+    },
+    {
+      "path": "apps/operator-console/package-lock.json",
+      "owners": [
+        "IMAGE-REMEDIATION",
+        "OC-INTEGRATION"
+      ],
+      "transfer_gate": "image checker and post-review PASS, OC worktree rebased, any later dependency edit reruns audit/build/browser/image scan",
+      "line": 18
+    },
+    {
+      "path": "docs/DEPLOYMENT.md",
+      "owners": [
+        "IMAGE-REMEDIATION",
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "image proof integrated; CORE rebased for M5; FINAL rebased to exact M6 integration and final-version artifact before edit",
+      "line": 19
+    },
+    {
+      "path": "docs/PRODUCTION-TESTING-PLAYBOOK.md",
+      "owners": [
+        "IMAGE-REMEDIATION",
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "image proof integrated; CORE rebased for M5; FINAL rebased to exact M6 integration and final-version artifact before edit",
+      "line": 19
+    },
+    {
+      "path": "README.md",
+      "owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "M5 release published and proved; FINAL worktree rebased to exact M6 integration; final version artifact and exact release-note path recorded before edit",
+      "line": 20
+    },
+    {
+      "path": "README.ru.md",
+      "owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "M5 release published and proved; FINAL worktree rebased to exact M6 integration; final version artifact and exact release-note path recorded before edit",
+      "line": 20
+    },
+    {
+      "path": "README.zh.md",
+      "owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "M5 release published and proved; FINAL worktree rebased to exact M6 integration; final version artifact and exact release-note path recorded before edit",
+      "line": 20
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "M5 release published and proved; FINAL worktree rebased to exact M6 integration; final version artifact and exact release-note path recorded before edit",
+      "line": 20
+    },
+    {
+      "path": "CHANGELOG.md",
+      "owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "M5 release published and proved; FINAL worktree rebased to exact M6 integration; final version artifact and exact release-note path recorded before edit",
+      "line": 20
+    },
+    {
+      "path": "Makefile",
+      "owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "M5 release published and proved; FINAL worktree rebased to exact M6 integration; final version artifact and exact release-note path recorded before edit",
+      "line": 20
+    },
+    {
+      "path": ".env.example",
+      "owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "M5 release published and proved; FINAL worktree rebased to exact M6 integration; final version artifact and exact release-note path recorded before edit",
+      "line": 20
+    },
+    {
+      "path": "docs/MIGRATION.md",
+      "owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "M5 release published and proved; FINAL worktree rebased to exact M6 integration; final version artifact and exact release-note path recorded before edit",
+      "line": 20
+    },
+    {
+      "path": "docs/arch/CONFIGURATION.md",
+      "owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "M5 release published and proved; FINAL worktree rebased to exact M6 integration; final version artifact and exact release-note path recorded before edit",
+      "line": 20
+    },
+    {
+      "path": "docs/arch/QUICKSTART.md",
+      "owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "M5 release published and proved; FINAL worktree rebased to exact M6 integration; final version artifact and exact release-note path recorded before edit",
+      "line": 20
+    },
+    {
+      "path": "docs/public/engram.jpg",
+      "owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "M5 release published and proved; FINAL worktree rebased to exact M6 integration; final version artifact and exact release-note path recorded before edit",
+      "line": 20
+    },
+    {
+      "path": "plugin/engram/commands/setup.md",
+      "owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "M5 release published and proved; FINAL worktree rebased to exact M6 integration; final version artifact and exact release-note path recorded before edit",
+      "line": 20
+    },
+    {
+      "path": "plugin/engram/commands/doctor.md",
+      "owners": [
+        "CORE-PUBLIC-TRUTH",
+        "FINAL-PUBLIC-TRUTH"
+      ],
+      "transfer_gate": "M5 release published and proved; FINAL worktree rebased to exact M6 integration; final version artifact and exact release-note path recorded before edit",
+      "line": 20
+    }
+  ],
+  "errors": []
+}

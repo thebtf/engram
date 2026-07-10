@@ -68,6 +68,20 @@ jobs:
         shell: pwsh
         run: ./scripts/production-gates/assert-plan-path-ownership.ps1 -SelfTest
 
+      - name: Self-test OpenClaw node release matrix
+        shell: pwsh
+        run: ./scripts/production-gates/run-node-matrix.ps1 -SelfTest
+
+      - name: Assert tracked production-ready ownership ledger
+        shell: pwsh
+        run: >-
+          ./scripts/production-gates/assert-plan-path-ownership.ps1
+          -Mode Ledger
+          -Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md
+          -ExpectedPlanSha256 d371e94dff1ea12767b9d0832240cb6caf52c6c3bbe2209fe4280159c4f03c52
+          -State .agent/plans/2026-07-10-engram-production-ready-ownership-state.json
+          -Artifact .agent/reports/evidence/production-ready/release-gates-foundation-revision-3/ownership/ci-ledger.json
+
       - name: Assert tracked gate / CI conformance
         shell: pwsh
         run: |
@@ -78,6 +92,14 @@ jobs:
           $dbRunner = Get-Content -Raw 'scripts/production-gates/run-db-suite.ps1'
           $criticalRunner = Get-Content -Raw 'scripts/production-gates/run-critical-suite.ps1'
           $devStandRunner = Get-Content -Raw 'scripts/production-gates/run-dev-stand.ps1'
+          $ownershipRunner = Get-Content -Raw 'scripts/production-gates/assert-plan-path-ownership.ps1'
+          $nodeRunner = Get-Content -Raw 'scripts/production-gates/run-node-matrix.ps1'
+          $ownershipState = Get-Content -Raw '.agent/plans/2026-07-10-engram-production-ready-ownership-state.json'
+          $expectedPlanSha = 'd371e94dff1ea12767b9d0832240cb6caf52c6c3bbe2209fe4280159c4f03c52'
+          $observedPlanSha = (Get-FileHash -Algorithm SHA256 -LiteralPath '.agent/plans/2026-07-10-engram-production-ready-master-plan.md').Hash.ToLowerInvariant()
+          $rejectedBulkHead = '68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef'
+          $rejectedBulkChecker = '.agent/worktrees/prc-db-bulkops/.agent/reviews/2026-07-10-db-bulkops-sibling-rework-check.md'
+          $rejectedBulkCheckerSha = 'EB9EB227363A27EA058C6654BD7E38EED1088252F79F837E377B2A3CBC1FAFB7'
           $trackedCriticalCommand = 'go test -tags=critical -json ./tests/critical/... -count=1'
           $trackedDatabaseCommand = 'pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -FreshDatabase -Package ./... -Race -FailOnUnexpectedSkip'
           $trackedCriticalWrapper = 'pwsh -NoProfile -File scripts/production-gates/run-critical-suite.ps1 -Config .agent/critical-suite.config.yaml'
@@ -99,20 +121,57 @@ jobs:
             [string]$standText,
             [string]$dbRunnerText,
             [string]$criticalRunnerText,
-            [string]$devStandRunnerText
+            [string]$devStandRunnerText,
+            [string]$ownershipRunnerText = $ownershipRunner,
+            [string]$nodeRunnerText = $nodeRunner,
+            [string]$stateText = $ownershipState
           ) {
             $execution = Remove-ConformanceStep $workflowText
+            if ($observedPlanSha -cne $expectedPlanSha) { throw "tracked production-ready plan hash drifted: expected=$expectedPlanSha observed=$observedPlanSha" }
             $repeatToken = '(?i)(?<![A-Za-z0-9_])-Repeat(?:\s+|=)\d+'
             if ($criticalText -match $repeatToken) { throw 'repeat count is duplicated in critical-suite config' }
             if ($execution -match $repeatToken) { throw 'repeat count is duplicated in executable workflow; run-db-suite default is the source of truth' }
             if ($dbRunnerText -notmatch '\[ValidateRange\(1, 20\)\]\[int\]\$Repeat\s*=\s*3\b') { throw 'run-db-suite default Repeat=3 source is missing' }
-            if (-not $dbRunnerText.Contains('Test-ReadyStatusPayload $http.Stdout')) { throw 'dev-stand readiness is HTTP-only instead of semantic status=ready' }
+            foreach ($requiredHttpContract in @('function Test-LivenessStatusPayload', 'function Test-ReadyStatusPayload', 'Get-HttpJsonContractResult -CapturedOutput $http.Stdout -ContractKind $endpoint.contract_kind', "@('starting', 'ready', 'error')")) {
+              if (-not $dbRunnerText.Contains($requiredHttpContract)) { throw "dev-stand HTTP liveness/readiness contract is missing '$requiredHttpContract'" }
+            }
+            foreach ($requiredCredentialContract in @('New-CryptographicSecret', 'Assert-DevStandCredentials $credentials', 'Test-RedactedContainerEnvironment', 'postgres_password = $postgresPassword', 'admin_token = $adminToken', 'bootstrap_capability = $bootstrapCapability', 'dev-stand-postgres-credential-injection', 'dev-stand-server-credential-injection', "@('inspect', `$serverContainer.Stdout.Trim(), '--format', '{{json .Config.Env}}')")) {
+              if (-not $dbRunnerText.Contains($requiredCredentialContract)) { throw "dev-stand credential contract is missing '$requiredCredentialContract'" }
+            }
+            if ($dbRunnerText.Contains('EXPECTED_BOOTSTRAP_CAPABILITY=') -or $dbRunnerText.Contains("'server', 'sh', '-ec'")) { throw 'dev-stand credential proof depends on a shell inside the runtime image' }
             if (-not $standText.Contains('NUXT_OPERATOR_API_TARGET: "http://server:37777"') -or $standText.Contains('NUXT_ENGRAM_API_TARGET:')) { throw 'tracked dev-stand uses the wrong operator-console API target variable' }
             foreach ($requiredProxyProof in @('operator-api-health', 'http://localhost:3001/api/health', 'operator-api-ready', 'http://localhost:3001/api/ready')) {
               if (-not $dbRunnerText.Contains($requiredProxyProof)) { throw "dev-stand runner is missing proxied semantic proof '$requiredProxyProof'" }
             }
             if ($criticalText -notmatch ('(?m)^\s{2}command:\s*"' + [regex]::Escape($trackedCriticalCommand) + '"\s*$')) { throw 'tracked critical runner command drifted' }
             if ($criticalText -notmatch ('(?m)^\s{2}command:\s*"' + [regex]::Escape($trackedDatabaseCommand) + '"\s*$')) { throw 'tracked full fresh-DB runner command drifted' }
+
+            $ledgerStep = Get-StepBody $execution 'Assert tracked production-ready ownership ledger'
+            foreach ($required in @('-Mode Ledger', '-Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md', "-ExpectedPlanSha256 $expectedPlanSha", '-State .agent/plans/2026-07-10-engram-production-ready-ownership-state.json', '-Artifact .agent/reports/evidence/production-ready/release-gates-foundation-revision-3/ownership/ci-ledger.json')) {
+              if (-not $ledgerStep.Contains($required)) { throw "tracked ownership Ledger step is missing '$required'" }
+            }
+            $nodeSelfTest = Get-StepBody $execution 'Self-test OpenClaw node release matrix'
+            if (-not $nodeSelfTest.Contains('run-node-matrix.ps1 -SelfTest')) { throw 'workflow does not self-test the OpenClaw node release matrix' }
+
+            foreach ($required in @('Test-SameStringSequence', "current owner is '`$currentOwner', not '`$Slice'", 'lacks exact rejected-checker evidence', 'must equal rejected predecessor', 'does not descend from predecessor integration')) {
+              if (-not $ownershipRunnerText.Contains($required)) { throw "ownership runner implementation is missing '$required'" }
+            }
+            foreach ($required in @('openclaw-lock-non-ignored', "@('check-ignore', '--no-index', '--quiet'", 'npm pack contains forbidden path', 'dist/index.js', 'dist/index.d.ts', 'scripts/install.sh', 'npm-ci -> npm-typecheck -> npm-test -> npm-audit-high -> npm-pack-dry-run')) {
+              if (-not $nodeRunnerText.Contains($required)) { throw "node release runner implementation is missing '$required'" }
+            }
+
+            $stateObject = $stateText | ConvertFrom-Json -Depth 100
+            if ([string]$stateObject.plan.sha256 -cne $expectedPlanSha) { throw 'ownership state is not bound to the exact challenged plan hash' }
+            foreach ($path in @('internal/db/gorm/candidate_store.go', 'internal/db/gorm/candidate_store_test.go', 'internal/mcp/tools_bulkops.go', 'internal/mcp/tools_dryrun_test.go')) {
+              $epoch = @($stateObject.path_epochs | Where-Object path -CEQ $path)
+              if ($epoch.Count -ne 1) { throw "ownership state must contain exactly one rework epoch for '$path'" }
+              if ([string]$epoch[0].current_owner -cne 'DB-BULKOPS-BEHAVIORAL-EDGE-REWORK' -or [string]$epoch[0].transition_kind -cne 'rework') { throw "ownership state current owner/transition drifted for '$path'" }
+              if ([string]$epoch[0].required_successor_base_sha -cne $rejectedBulkHead) { throw "ownership state rejected-base lock drifted for '$path'" }
+              $predecessor = @($epoch[0].completed_predecessors)
+              if ($predecessor.Count -ne 1 -or [string]$predecessor[0].owner -cne 'DB-BULKOPS' -or [string]$predecessor[0].checker_verdict -cne 'FAIL' -or [string]$predecessor[0].checker_artifact -cne $rejectedBulkChecker -or [string]$predecessor[0].checker_sha256 -cne $rejectedBulkCheckerSha -or [string]$predecessor[0].rejected_head_sha -cne $rejectedBulkHead -or -not [string]::IsNullOrWhiteSpace([string]$predecessor[0].integration_sha)) {
+                throw "ownership state rejected-predecessor evidence drifted for '$path'"
+              }
+            }
 
             $trackedCommands = [regex]::Matches($standText, '(?m)^\s+(?:command|readiness_check):\s+"([^"]*run-db-suite\.ps1 -DevStandAction [^"]+)"\s*$')
             if ($trackedCommands.Count -ne 4) { throw "tracked dev-stand contract must declare Up, Ready, Scan, Down exactly once; found $($trackedCommands.Count)" }
@@ -168,7 +227,7 @@ jobs:
           Assert-MutationRejected 'narrow canonical full package' { Assert-WorkflowContract ($workflow.Replace('-Package ./...', '-Package ./internal/db/gorm')) $critical $stand $dbRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'narrow critical package' { Assert-WorkflowContract $workflow ($critical.Replace('./tests/critical/...', './tests/critical/auth/...')) $stand $dbRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'remove critical parser execution' { Assert-WorkflowContract $workflow $critical $stand $dbRunner ($criticalRunner.Replace("Invoke-CapturedProcess 'critical-json-parser'", '')) $devStandRunner }
-          Assert-MutationRejected 'remove semantic readiness validation' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace('Test-ReadyStatusPayload $http.Stdout', '$true')) $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'remove semantic readiness validation' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace('Get-HttpJsonContractResult -CapturedOutput $http.Stdout -ContractKind $endpoint.contract_kind', '$true')) $criticalRunner $devStandRunner }
           Assert-MutationRejected 'use stale operator target variable' { Assert-WorkflowContract $workflow $critical ($stand.Replace('NUXT_OPERATOR_API_TARGET', 'NUXT_ENGRAM_API_TARGET')) $dbRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'remove proxied operator health proof' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace('http://localhost:3001/api/health', '')) $criticalRunner $devStandRunner }
           Assert-MutationRejected 'remove wrapper proxied operator validation' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner ($devStandRunner.Replace('dev-stand-operator-api-health', '')) }
@@ -181,7 +240,11 @@ jobs:
           Assert-MutationRejected 'change timeout' { Assert-WorkflowContract ($workflow.Replace("'-timeout=30m'", "'-timeout=5m'")) $critical $stand $dbRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'change race policy' { Assert-WorkflowContract ($workflow.Replace("RUNNER_OS -ne 'Windows'", "RUNNER_OS -eq 'Linux'")) $critical $stand $dbRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'inject Repeat1' { Assert-WorkflowContract ($workflow.Replace('-Race', '-Race -Repeat 1')) $critical $stand $dbRunner $criticalRunner $devStandRunner }
-          Write-Output 'CONFORMANCE PASS: exact wrappers, direct/proxied semantic readiness, cleanup, and full/race semantics match; 22 mutations rejected'
+          Assert-MutationRejected 'change expected challenged plan hash' { Assert-WorkflowContract ($workflow.Replace($expectedPlanSha, ('0' * 64))) $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'change ownership current owner' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace('"current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"', '"current_owner": "DB-BULKOPS"')) }
+          Assert-MutationRejected 'remove rejected predecessor evidence' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace($rejectedBulkCheckerSha, '')) }
+          Assert-MutationRejected 'change exact rejected successor base' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace($rejectedBulkHead, ('1' * 40))) }
+          Write-Output 'CONFORMANCE PASS: exact wrappers, ownership hash/state, node matrix, readiness, cleanup, and full/race semantics match; 26 mutations rejected'
 
       - name: Resolve PostgreSQL service identity
         shell: pwsh
@@ -214,7 +277,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-gates-foundation
-          path: .agent/reports/evidence/production-ready/release-gates-foundation/
+          path: |
+            .agent/reports/evidence/production-ready/release-gates-foundation/
+            .agent/reports/evidence/production-ready/release-gates-foundation-revision-3/
           if-no-files-found: error
 
   test:

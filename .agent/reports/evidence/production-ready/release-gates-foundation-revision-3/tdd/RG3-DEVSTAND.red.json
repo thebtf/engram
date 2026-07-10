@@ -1,0 +1,9 @@
+{
+  "task_id": "RG3-DEVSTAND",
+  "observed_at": "2026-07-10T08:29:56.4884843Z",
+  "test_file": "scripts/production-gates/run-db-suite.ps1",
+  "test_name": "liveness/readiness separation and three distinct generated credentials",
+  "invariant": "HTTP-200 liveness accepts only starting, ready, or error; readiness accepts only exact ready; PostgreSQL, admin, and bootstrap credentials are random, non-default, distinct, runtime-injected, and absent from evidence.",
+  "failure_reason": "The implementation had no liveness predicate and hard-coded the PostgreSQL password.",
+  "runner_stdout_excerpt": "The term 'Test-LivenessStatusPayload' is not recognized"
+}

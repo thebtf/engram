@@ -19,15 +19,21 @@ env:
   POSTGRES_PORT: "55433"
   WORKER_PORT: "37778"
   OPERATOR_CONSOLE_PORT: "3001"
-  POSTGRES_PASSWORD: "engram"
-  DATABASE_DSN: "postgres://engram:engram@postgres:5432/engram?sslmode=disable"
   STAND_API_URL: "http://localhost:37778"
   STAND_OPERATOR_URL: "http://localhost:3001"
   NUXT_OPERATOR_API_TARGET: "http://server:37777"
   ENGRAM_AUTH_DISABLED: "false"
 
 credential_policy:
+  generation_scope: "three independent cryptographic 256-bit values generated inside the Up runner process"
+  postgres_password: "generated cryptographically inside the Up runner process"
   admin_token: "generated cryptographically inside the Up runner process"
+  bootstrap_capability: "generated cryptographically inside the Up runner process"
+  postgres_runtime_interface: "POSTGRES_PASSWORD plus generated DATABASE_DSN"
+  admin_runtime_interface: "ENGRAM_AUTH_ADMIN_TOKEN"
+  bootstrap_runtime_interface: "ENGRAM_AUTH_BOOTSTRAP_CAPABILITY via ephemeral compose override"
+  required_distinct: true
+  forbidden_defaults: ["engram", "password", "changeme", "change-me", "change-me-in-production", "default", "admin"]
   persistence: "never written to raw logs, machine summaries, config, or caller environment"
   auth_disabled_fallback: false
 

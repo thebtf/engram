@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "gate": "dev-stand-contract",
+  "action": "Up",
+  "run_id": "maker-runtime-1",
+  "started_at": "2026-07-10T09:41:15.2280294+00:00",
+  "finished_at": "2026-07-10T09:42:08.3896392+00:00",
+  "duration_seconds": 53.162,
+  "verdict": "PASS",
+  "compose_project": "engram-critical-stand",
+  "compose_file": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\docker-compose.yml",
+  "ephemeral_postgres_password_generated": true,
+  "ephemeral_admin_token_generated": true,
+  "ephemeral_bootstrap_capability_generated": true,
+  "ephemeral_credentials_distinct_and_nondefault": true,
+  "ephemeral_credentials_runtime_injected": true,
+  "ephemeral_postgres_password_persisted": false,
+  "ephemeral_admin_token_persisted": false,
+  "ephemeral_bootstrap_capability_persisted": false,
+  "exact_image_targets": {
+    "postgres": "pgvector/pgvector:pg17",
+    "server": "ghcr.io/thebtf/engram:main",
+    "operator-console": "ghcr.io/thebtf/engram-operator-console:main"
+  },
+  "actual_images": {
+    "postgres": "pgvector/pgvector:pg17",
+    "operator-console": "ghcr.io/thebtf/engram-operator-console:main",
+    "server": "ghcr.io/thebtf/engram:main"
+  },
+  "actual_image_ids": {
+    "postgres": "sha256:feb68f4f15446397d8cac7f4fe48fe4586de83160d1fc48b46283312d1a33966",
+    "operator-console": "sha256:74d7c0db215c0a40d716c24f0326a487d7822ec94d0d0edc74b5fcf014face18",
+    "server": "sha256:a6e55d692ddf31a94b0a1d29a4e615ff509c6dac19eccafca4bda3e51147b38f"
+  },
+  "tag_image_ids": {
+    "postgres": "sha256:feb68f4f15446397d8cac7f4fe48fe4586de83160d1fc48b46283312d1a33966",
+    "operator-console": "sha256:74d7c0db215c0a40d716c24f0326a487d7822ec94d0d0edc74b5fcf014face18",
+    "server": "sha256:a6e55d692ddf31a94b0a1d29a4e615ff509c6dac19eccafca4bda3e51147b38f"
+  },
+  "liveness_endpoints": [
+    {
+      "name": "health",
+      "url": "http://localhost:37778/health",
+      "path_kind": "direct-server",
+      "contract_kind": "liveness",
+      "http_status": "200",
+      "semantic_contract_pass": true
+    },
+    {
+      "name": "operator-api-health",
+      "url": "http://localhost:3001/api/health",
+      "path_kind": "operator-console-proxy",
+      "contract_kind": "liveness",
+      "http_status": "200",
+      "semantic_contract_pass": true
+    }
+  ],
+  "semantic_ready_endpoints": [
+    {
+      "name": "api-ready",
+      "url": "http://localhost:37778/api/ready",
+      "path_kind": "direct-server",
+      "contract_kind": "readiness",
+      "http_status": "200",
+      "semantic_contract_pass": true
+    },
+    {
+      "name": "operator-api-ready",
+      "url": "http://localhost:3001/api/ready",
+      "path_kind": "operator-console-proxy",
+      "contract_kind": "readiness",
+      "http_status": "200",
+      "semantic_contract_pass": true
+    }
+  ],
+  "vulnerability_scan": {
+    "scanner": "docker scout cves",
+    "severity_gate": [
+      "critical",
+      "high"
+    ],
+    "scans": []
+  },
+  "automatic_failure_cleanup": false,
+  "residual_checks_performed": false,
+  "residual_resources_zero": null,
+  "child_commands": 17,
+  "nonzero_child_commands": 0,
+  "commands": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-up\\commands.json",
+  "errors": [],
+  "artifact_directory": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-up"
+}

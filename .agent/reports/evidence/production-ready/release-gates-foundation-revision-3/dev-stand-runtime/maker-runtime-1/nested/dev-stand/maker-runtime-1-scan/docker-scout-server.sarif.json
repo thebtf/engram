@@ -1,0 +1,731 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "fullName": "Docker Scout",
+          "informationUri": "https://docker.com/products/docker-scout",
+          "name": "docker scout",
+          "rules": [
+            {
+              "id": "CVE-2026-48962",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-48962"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-48962?s=debian&n=perl&ns=debian&t=deb&osn=debian&osv=12&vr=%3E0",
+              "help": {
+                "text": "IO::Compress versions before 2.220 for Perl can execute arbitrary code in File::GlobMapper via an attacker-controlled output glob.  _parseOutputGlob() wraps the caller-supplied output glob string in double quotes and stores it in the parser state; _getFiles() then runs the stored expression through eval STRING. A literal double quote in the output glob closes the dquote wrapper, and the characters that follow are evaluated as Perl.  Arbitrary Perl in the output glob executes at the calling process's privilege.\n\n---\n- libio-compress-perl 2.220-1 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138055)\n[trixie] - libio-compress-perl <no-dsa> (Minor issue)\n- perl 5.40.1-8 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138854)\nhttps://lists.security.metacpan.org/cve-announce/msg/40434385/\nFixed by: https://github.com/pmqs/IO-Compress/commit/f2db247bf90d4cc7ee2710be384946081f3b4610 (v2.220)\n",
+                "markdown": "> IO::Compress versions before 2.220 for Perl can execute arbitrary code in File::GlobMapper via an attacker-controlled output glob.  _parseOutputGlob() wraps the caller-supplied output glob string in double quotes and stores it in the parser state; _getFiles() then runs the stored expression through eval STRING. A literal double quote in the output glob closes the dquote wrapper, and the characters that follow are evaluated as Perl.  Arbitrary Perl in the output glob executes at the calling process's privilege.\n\n---\n- libio-compress-perl 2.220-1 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138055)\n[trixie] - libio-compress-perl <no-dsa> (Minor issue)\n- perl 5.40.1-8 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138854)\nhttps://lists.security.metacpan.org/cve-announce/msg/40434385/\nFixed by: https://github.com/pmqs/IO-Compress/commit/f2db247bf90d4cc7ee2710be384946081f3b4610 (v2.220)\n\n|                |                                                                                        |\n|----------------|----------------------------------------------------------------------------------------|\n| Package        | pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12 |\n| Affected range | >0                                                                                     |\n| Fixed version  | not fixed                                                                              |\n"
+              },
+              "properties": {
+                "affected_version": ">0",
+                "cvssV3_severity": "HIGH",
+                "fixed_version": "not fixed",
+                "purls": [
+                  "pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12"
+                ],
+                "security-severity": "7.3",
+                "tags": [
+                  "HIGH"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-39829",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-39829: Improper Validation of Specified Quantity in Input"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-39829?s=github&n=crypto&ns=golang.org%2Fx&t=golang&vr=%3C0.52.0",
+              "help": {
+                "text": "The RSA and DSA public key parsers did not enforce size limits on key parameters. A crafted public key with an excessively large modulus or DSA parameter could cause several minutes of CPU consumption during signature verification. This could be triggered by unauthenticated clients during public key authentication. RSA moduli are now limited to 8192 bits, and DSA parameters are validated per FIPS 186-2.\n",
+                "markdown": "> The RSA and DSA public key parsers did not enforce size limits on key parameters. A crafted public key with an excessively large modulus or DSA parameter could cause several minutes of CPU consumption during signature verification. This could be triggered by unauthenticated clients during public key authentication. RSA moduli are now limited to 8192 bits, and DSA parameters are validated per FIPS 186-2.\n\n|                |                                              |\n|----------------|----------------------------------------------|\n| Package        | pkg:golang/golang.org/x/crypto@0.50.0        |\n| Affected range | <0.52.0                                      |\n| Fixed version  | 0.52.0                                       |\n| CVSS Score     |                                          7.5 |\n| CVSS Vector    | CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H |\n"
+              },
+              "properties": {
+                "affected_version": "<0.52.0",
+                "cvssV3": 7.5,
+                "cvssV3_severity": "HIGH",
+                "cvssV3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+                "fixed_version": "0.52.0",
+                "purls": [
+                  "pkg:golang/golang.org/x/crypto@0.50.0"
+                ],
+                "security-severity": "7.5",
+                "tags": [
+                  "HIGH"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-46597",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-46597: Incorrect Type Conversion or Cast"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-46597?s=github&n=crypto&ns=golang.org%2Fx&t=golang&vr=%3C0.52.0",
+              "help": {
+                "text": "An incorrectly placed cast from bytes to int allowed for server-side panic in the AES-GCM packet decoder for well-crafted inputs.\n",
+                "markdown": "> An incorrectly placed cast from bytes to int allowed for server-side panic in the AES-GCM packet decoder for well-crafted inputs.\n\n|                |                                              |\n|----------------|----------------------------------------------|\n| Package        | pkg:golang/golang.org/x/crypto@0.50.0        |\n| Affected range | <0.52.0                                      |\n| Fixed version  | 0.52.0                                       |\n| CVSS Score     |                                          7.5 |\n| CVSS Vector    | CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H |\n"
+              },
+              "properties": {
+                "affected_version": "<0.52.0",
+                "cvssV3": 7.5,
+                "cvssV3_severity": "HIGH",
+                "cvssV3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+                "fixed_version": "0.52.0",
+                "purls": [
+                  "pkg:golang/golang.org/x/crypto@0.50.0"
+                ],
+                "security-severity": "7.5",
+                "tags": [
+                  "HIGH"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-48959",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-48959"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-48959?s=debian&n=perl&ns=debian&t=deb&osn=debian&osv=12&vr=%3E0",
+              "help": {
+                "text": "IO::Uncompress::Unzip versions before 2.220 for Perl allow CPU exhaustion via per-byte read loop in fastForward.  fastForward() compares length $offset (the digit count of the offset, 1 to 19) against the chunk size $c instead of $offset itself, so $c shrinks from 16 KiB to 1-19 bytes per iteration.  Extracting a named entry from an attacker supplied zip via IO::Uncompress::Unzip->new($zip, Name => $target) drives a per-byte read loop scaling with the entry's compressed size, up to the non-Zip64 4 GiB cap.\n\n---\n- libio-compress-perl 2.220-1 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138051)\n[trixie] - libio-compress-perl <no-dsa> (Minor issue)\n- perl 5.40.1-8 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138856)\nhttps://lists.security.metacpan.org/cve-announce/msg/40434381/\nFixed by: https://github.com/pmqs/IO-Compress/commit/68db44076f4c1a86a2ffe53a958eac6cabaf72e2 (v2.220)\n",
+                "markdown": "> IO::Uncompress::Unzip versions before 2.220 for Perl allow CPU exhaustion via per-byte read loop in fastForward.  fastForward() compares length $offset (the digit count of the offset, 1 to 19) against the chunk size $c instead of $offset itself, so $c shrinks from 16 KiB to 1-19 bytes per iteration.  Extracting a named entry from an attacker supplied zip via IO::Uncompress::Unzip->new($zip, Name => $target) drives a per-byte read loop scaling with the entry's compressed size, up to the non-Zip64 4 GiB cap.\n\n---\n- libio-compress-perl 2.220-1 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138051)\n[trixie] - libio-compress-perl <no-dsa> (Minor issue)\n- perl 5.40.1-8 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138856)\nhttps://lists.security.metacpan.org/cve-announce/msg/40434381/\nFixed by: https://github.com/pmqs/IO-Compress/commit/68db44076f4c1a86a2ffe53a958eac6cabaf72e2 (v2.220)\n\n|                |                                                                                        |\n|----------------|----------------------------------------------------------------------------------------|\n| Package        | pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12 |\n| Affected range | >0                                                                                     |\n| Fixed version  | not fixed                                                                              |\n"
+              },
+              "properties": {
+                "affected_version": ">0",
+                "cvssV3_severity": "HIGH",
+                "fixed_version": "not fixed",
+                "purls": [
+                  "pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12"
+                ],
+                "security-severity": "7.5",
+                "tags": [
+                  "HIGH"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-12087",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-12087"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-12087?s=debian&n=perl&ns=debian&t=deb&osn=debian&osv=12&vr=%3E0",
+              "help": {
+                "text": "Socket versions before 2.041 for Perl have an out-of-bounds heap read.  In Socket.xs, pack_ip_mreq_source() checks the length of its source argument before the argument is read, so the check tests the byte length carried over from the preceding multiaddr argument instead. Both addresses occupy a 4-byte field, so a valid multiaddr lets a source of any length pass the check, and the source is then copied into the 4-byte imr_sourceaddr field with a fixed-size copy. A source shorter than 4 bytes is not rejected, and the copy reads up to 3 bytes past the end of its buffer.  Calling pack_ip_mreq_source() with a source value shorter than 4 bytes copies adjacent heap memory into the returned packed structure.\n\n---\n- libsocket-perl 2.041-1\n[trixie] - libsocket-perl <no-dsa> (Minor issue)\n- perl <unfixed> (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1140152)\nhttps://lists.security.metacpan.org/cve-announce/msg/41020451/\nFixed by: https://github.com/Perl/perl5/commit/de19a0b0ad1900fef976c5c1400bd8f11ec6c6cb (v5.43.11)\n",
+                "markdown": "> Socket versions before 2.041 for Perl have an out-of-bounds heap read.  In Socket.xs, pack_ip_mreq_source() checks the length of its source argument before the argument is read, so the check tests the byte length carried over from the preceding multiaddr argument instead. Both addresses occupy a 4-byte field, so a valid multiaddr lets a source of any length pass the check, and the source is then copied into the 4-byte imr_sourceaddr field with a fixed-size copy. A source shorter than 4 bytes is not rejected, and the copy reads up to 3 bytes past the end of its buffer.  Calling pack_ip_mreq_source() with a source value shorter than 4 bytes copies adjacent heap memory into the returned packed structure.\n\n---\n- libsocket-perl 2.041-1\n[trixie] - libsocket-perl <no-dsa> (Minor issue)\n- perl <unfixed> (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1140152)\nhttps://lists.security.metacpan.org/cve-announce/msg/41020451/\nFixed by: https://github.com/Perl/perl5/commit/de19a0b0ad1900fef976c5c1400bd8f11ec6c6cb (v5.43.11)\n\n|                |                                                                                        |\n|----------------|----------------------------------------------------------------------------------------|\n| Package        | pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12 |\n| Affected range | >0                                                                                     |\n| Fixed version  | not fixed                                                                              |\n"
+              },
+              "properties": {
+                "affected_version": ">0",
+                "cvssV3_severity": "CRITICAL",
+                "fixed_version": "not fixed",
+                "purls": [
+                  "pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12"
+                ],
+                "security-severity": "9.1",
+                "tags": [
+                  "CRITICAL"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-39830",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-39830: Improper Restriction of Operations within the Bounds of a Memory Buffer"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-39830?s=github&n=crypto&ns=golang.org%2Fx&t=golang&vr=%3C0.52.0",
+              "help": {
+                "text": "A malicious SSH peer could send unsolicited global request responses to fill an internal buffer, blocking the connection's read loop. The blocked goroutine could not be released by calling Close(), resulting in a resource leak per connection. Unsolicited global responses are now discarded.\n",
+                "markdown": "> A malicious SSH peer could send unsolicited global request responses to fill an internal buffer, blocking the connection's read loop. The blocked goroutine could not be released by calling Close(), resulting in a resource leak per connection. Unsolicited global responses are now discarded.\n\n|                |                                              |\n|----------------|----------------------------------------------|\n| Package        | pkg:golang/golang.org/x/crypto@0.50.0        |\n| Affected range | <0.52.0                                      |\n| Fixed version  | 0.52.0                                       |\n| CVSS Score     |                                          9.1 |\n| CVSS Vector    | CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:H |\n"
+              },
+              "properties": {
+                "affected_version": "<0.52.0",
+                "cvssV3": 9.1,
+                "cvssV3_severity": "CRITICAL",
+                "cvssV3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:H",
+                "fixed_version": "0.52.0",
+                "purls": [
+                  "pkg:golang/golang.org/x/crypto@0.50.0"
+                ],
+                "security-severity": "9.1",
+                "tags": [
+                  "CRITICAL"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-39831",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-39831: Missing Authorization"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-39831?s=github&n=crypto&ns=golang.org%2Fx&t=golang&vr=%3C0.52.0",
+              "help": {
+                "text": "The Verify() method for FIDO/U2F security key types (sk-ecdsa-sha2-nistp256@openssh.com, sk-ssh-ed25519@openssh.com) did not check the User Presence flag. Signatures generated without physical touch were accepted, allowing unattended use of a hardware security key. To restore the previous behavior, return a \"no-touch-required\" extension in Permissions.Extensions from PublicKeyCallback.\n",
+                "markdown": "> The Verify() method for FIDO/U2F security key types (sk-ecdsa-sha2-nistp256@openssh.com, sk-ssh-ed25519@openssh.com) did not check the User Presence flag. Signatures generated without physical touch were accepted, allowing unattended use of a hardware security key. To restore the previous behavior, return a \"no-touch-required\" extension in Permissions.Extensions from PublicKeyCallback.\n\n|                |                                              |\n|----------------|----------------------------------------------|\n| Package        | pkg:golang/golang.org/x/crypto@0.50.0        |\n| Affected range | <0.52.0                                      |\n| Fixed version  | 0.52.0                                       |\n| CVSS Score     |                                          9.1 |\n| CVSS Vector    | CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N |\n"
+              },
+              "properties": {
+                "affected_version": "<0.52.0",
+                "cvssV3": 9.1,
+                "cvssV3_severity": "CRITICAL",
+                "cvssV3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+                "fixed_version": "0.52.0",
+                "purls": [
+                  "pkg:golang/golang.org/x/crypto@0.50.0"
+                ],
+                "security-severity": "9.1",
+                "tags": [
+                  "CRITICAL"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-39832",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-39832: Improper Preservation of Permissions"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-39832?s=github&n=crypto&ns=golang.org%2Fx&t=golang&vr=%3C0.52.0",
+              "help": {
+                "text": "When adding a key to a remote agent constraint extensions such as restrict-destination-v00@openssh.com were not serialized in the request. Destination restrictions were silently stripped when forwarding keys, allowing unrestricted use of the key on the remote host. The client now serializes all constraint extensions. Additionally, the in-memory keyring returned by NewKeyring() now rejects keys with unsupported constraint extensions instead of silently ignoring them.\n",
+                "markdown": "> When adding a key to a remote agent constraint extensions such as restrict-destination-v00@openssh.com were not serialized in the request. Destination restrictions were silently stripped when forwarding keys, allowing unrestricted use of the key on the remote host. The client now serializes all constraint extensions. Additionally, the in-memory keyring returned by NewKeyring() now rejects keys with unsupported constraint extensions instead of silently ignoring them.\n\n|                |                                              |\n|----------------|----------------------------------------------|\n| Package        | pkg:golang/golang.org/x/crypto@0.50.0        |\n| Affected range | <0.52.0                                      |\n| Fixed version  | 0.52.0                                       |\n| CVSS Score     |                                          9.1 |\n| CVSS Vector    | CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N |\n"
+              },
+              "properties": {
+                "affected_version": "<0.52.0",
+                "cvssV3": 9.1,
+                "cvssV3_severity": "CRITICAL",
+                "cvssV3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+                "fixed_version": "0.52.0",
+                "purls": [
+                  "pkg:golang/golang.org/x/crypto@0.50.0"
+                ],
+                "security-severity": "9.1",
+                "tags": [
+                  "CRITICAL"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-39833",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-39833: Missing Authorization"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-39833?s=github&n=crypto&ns=golang.org%2Fx&t=golang&vr=%3C0.52.0",
+              "help": {
+                "text": "The in-memory keyring returned by NewKeyring() silently accepted keys with the ConfirmBeforeUse constraint but never enforced it. The key would sign without any confirmation prompt, with no indication to the caller that the constraint was not in effect. NewKeyring() now returns an error when unsupported constraints are requested.\n",
+                "markdown": "> The in-memory keyring returned by NewKeyring() silently accepted keys with the ConfirmBeforeUse constraint but never enforced it. The key would sign without any confirmation prompt, with no indication to the caller that the constraint was not in effect. NewKeyring() now returns an error when unsupported constraints are requested.\n\n|                |                                              |\n|----------------|----------------------------------------------|\n| Package        | pkg:golang/golang.org/x/crypto@0.50.0        |\n| Affected range | <0.52.0                                      |\n| Fixed version  | 0.52.0                                       |\n| CVSS Score     |                                          9.1 |\n| CVSS Vector    | CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N |\n"
+              },
+              "properties": {
+                "affected_version": "<0.52.0",
+                "cvssV3": 9.1,
+                "cvssV3_severity": "CRITICAL",
+                "cvssV3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+                "fixed_version": "0.52.0",
+                "purls": [
+                  "pkg:golang/golang.org/x/crypto@0.50.0"
+                ],
+                "security-severity": "9.1",
+                "tags": [
+                  "CRITICAL"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-39834",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-39834: Integer Overflow or Wraparound"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-39834?s=github&n=crypto&ns=golang.org%2Fx&t=golang&vr=%3C0.52.0",
+              "help": {
+                "text": "When writing data larger than 4GB in a single Write call on an SSH channel, an integer overflow in the internal payload size calculation caused the write loop to spin indefinitely, sending empty packets without making progress. The size comparison now uses int64 to prevent truncation.\n",
+                "markdown": "> When writing data larger than 4GB in a single Write call on an SSH channel, an integer overflow in the internal payload size calculation caused the write loop to spin indefinitely, sending empty packets without making progress. The size comparison now uses int64 to prevent truncation.\n\n|                |                                              |\n|----------------|----------------------------------------------|\n| Package        | pkg:golang/golang.org/x/crypto@0.50.0        |\n| Affected range | <0.52.0                                      |\n| Fixed version  | 0.52.0                                       |\n| CVSS Score     |                                          9.1 |\n| CVSS Vector    | CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H |\n"
+              },
+              "properties": {
+                "affected_version": "<0.52.0",
+                "cvssV3": 9.1,
+                "cvssV3_severity": "CRITICAL",
+                "cvssV3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H",
+                "fixed_version": "0.52.0",
+                "purls": [
+                  "pkg:golang/golang.org/x/crypto@0.50.0"
+                ],
+                "security-severity": "9.1",
+                "tags": [
+                  "CRITICAL"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-42508",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-42508: Improper Certificate Validation"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-42508?s=github&n=crypto&ns=golang.org%2Fx&t=golang&vr=%3C0.52.0",
+              "help": {
+                "text": "Previously, a revoked 'SignatureKey' belonging to a CA was not correctly checked for revocation. Now, both the 'key' and 'key.SignatureKey' are checked for @revoked.\n",
+                "markdown": "> Previously, a revoked 'SignatureKey' belonging to a CA was not correctly checked for revocation. Now, both the 'key' and 'key.SignatureKey' are checked for @revoked.\n\n|                |                                              |\n|----------------|----------------------------------------------|\n| Package        | pkg:golang/golang.org/x/crypto@0.50.0        |\n| Affected range | <0.52.0                                      |\n| Fixed version  | 0.52.0                                       |\n| CVSS Score     |                                          9.1 |\n| CVSS Vector    | CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N |\n"
+              },
+              "properties": {
+                "affected_version": "<0.52.0",
+                "cvssV3": 9.1,
+                "cvssV3_severity": "CRITICAL",
+                "cvssV3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+                "fixed_version": "0.52.0",
+                "purls": [
+                  "pkg:golang/golang.org/x/crypto@0.50.0"
+                ],
+                "security-severity": "9.1",
+                "tags": [
+                  "CRITICAL"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-39821",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-39821"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-39821?s=golang&n=net&ns=golang.org%2Fx&t=golang&vr=%3C0.55.0",
+              "help": {
+                "text": "The ToASCII and ToUnicode functions incorrectly accept Punycode-encoded labels that decode to an ASCII-only label. For example, ToUnicode(\"xn--example-.com\") incorrectly returns the name \"example.com\" rather than an error.\n\nThis behavior can lead to privilege escalation in programs using the idna package. For example, a program which performs privilege checks on the ASCII hostname may reject \"example.com\" but permit \"xn--example-.com\". If that program subsequently converts the ASCII hostname to Unicode, it will inadvertently permits access to the Unicode name \"example.com\".\n",
+                "markdown": "> The ToASCII and ToUnicode functions incorrectly accept Punycode-encoded labels that decode to an ASCII-only label. For example, ToUnicode(\"xn--example-.com\") incorrectly returns the name \"example.com\" rather than an error.\n\nThis behavior can lead to privilege escalation in programs using the idna package. For example, a program which performs privilege checks on the ASCII hostname may reject \"example.com\" but permit \"xn--example-.com\". If that program subsequently converts the ASCII hostname to Unicode, it will inadvertently permits access to the Unicode name \"example.com\".\n\n|                |                                    |\n|----------------|------------------------------------|\n| Package        | pkg:golang/golang.org/x/net@0.53.0 |\n| Affected range | <0.55.0                            |\n| Fixed version  | 0.55.0                             |\n"
+              },
+              "properties": {
+                "affected_version": "<0.55.0",
+                "cvssV3_severity": "CRITICAL",
+                "fixed_version": "0.55.0",
+                "purls": [
+                  "pkg:golang/golang.org/x/net@0.53.0"
+                ],
+                "security-severity": "9.6",
+                "tags": [
+                  "CRITICAL"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-46595",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-46595: Incorrect Implementation of Authentication Algorithm"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-46595?s=github&n=crypto&ns=golang.org%2Fx&t=golang&vr=%3C0.52.0",
+              "help": {
+                "text": "Previously, CVE-2024-45337 fixed an authorization bypass for misused ssh server configurations; if any other type of callback is passed other than public key, then the source-address validation would be skipped.\n",
+                "markdown": "> Previously, CVE-2024-45337 fixed an authorization bypass for misused ssh server configurations; if any other type of callback is passed other than public key, then the source-address validation would be skipped.\n\n|                |                                              |\n|----------------|----------------------------------------------|\n| Package        | pkg:golang/golang.org/x/crypto@0.50.0        |\n| Affected range | <0.52.0                                      |\n| Fixed version  | 0.52.0                                       |\n| CVSS Score     |                                         10.0 |\n| CVSS Vector    | CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:L |\n"
+              },
+              "properties": {
+                "affected_version": "<0.52.0",
+                "cvssV3": 10,
+                "cvssV3_severity": "CRITICAL",
+                "cvssV3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:L",
+                "fixed_version": "0.52.0",
+                "purls": [
+                  "pkg:golang/golang.org/x/crypto@0.50.0"
+                ],
+                "security-severity": "10.0",
+                "tags": [
+                  "CRITICAL"
+                ]
+              }
+            }
+          ],
+          "version": "1.18.3"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "CVE-2026-48962",
+          "ruleIndex": 0,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-48962                                                                          \n  Severity        : HIGH                                                                                    \n  Package         : pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12  \n  Affected range  : >0                                                                                      \n  Fixed version   : not fixed                                                                               \n  EPSS Score      : 0.002920                                                                                \n  EPSS Percentile : 0.209720                                                                                \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/share/doc/perl-base/copyright"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.list"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.md5sums"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.postinst"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.postrm"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.preinst"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.prerm"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/status"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-39829",
+          "ruleIndex": 1,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-39829                                \n  Severity        : HIGH                                          \n  Package         : pkg:golang/golang.org/x/crypto@0.50.0         \n  Affected range  : <0.52.0                                       \n  Fixed version   : 0.52.0                                        \n  CVSS Score      : 7.5                                           \n  CVSS Vector     : CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H  \n  EPSS Score      : 0.004150                                      \n  EPSS Percentile : 0.334980                                      \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/local/bin/engram-server"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-46597",
+          "ruleIndex": 2,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-46597                                \n  Severity        : HIGH                                          \n  Package         : pkg:golang/golang.org/x/crypto@0.50.0         \n  Affected range  : <0.52.0                                       \n  Fixed version   : 0.52.0                                        \n  CVSS Score      : 7.5                                           \n  CVSS Vector     : CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H  \n  EPSS Score      : 0.003590                                      \n  EPSS Percentile : 0.280070                                      \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/local/bin/engram-server"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-48959",
+          "ruleIndex": 3,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-48959                                                                          \n  Severity        : HIGH                                                                                    \n  Package         : pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12  \n  Affected range  : >0                                                                                      \n  Fixed version   : not fixed                                                                               \n  EPSS Score      : 0.003730                                                                                \n  EPSS Percentile : 0.294000                                                                                \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/share/doc/perl-base/copyright"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.list"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.md5sums"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.postinst"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.postrm"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.preinst"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.prerm"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/status"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-12087",
+          "ruleIndex": 4,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-12087                                                                          \n  Severity        : CRITICAL                                                                                \n  Package         : pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12  \n  Affected range  : >0                                                                                      \n  Fixed version   : not fixed                                                                               \n  EPSS Score      : 0.003890                                                                                \n  EPSS Percentile : 0.309730                                                                                \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/share/doc/perl-base/copyright"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.list"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.md5sums"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.postinst"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.postrm"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.preinst"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.prerm"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/status"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-39830",
+          "ruleIndex": 5,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-39830                                \n  Severity        : CRITICAL                                      \n  Package         : pkg:golang/golang.org/x/crypto@0.50.0         \n  Affected range  : <0.52.0                                       \n  Fixed version   : 0.52.0                                        \n  CVSS Score      : 9.1                                           \n  CVSS Vector     : CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:H  \n  EPSS Score      : 0.005330                                      \n  EPSS Percentile : 0.411710                                      \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/local/bin/engram-server"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-39831",
+          "ruleIndex": 6,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-39831                                \n  Severity        : CRITICAL                                      \n  Package         : pkg:golang/golang.org/x/crypto@0.50.0         \n  Affected range  : <0.52.0                                       \n  Fixed version   : 0.52.0                                        \n  CVSS Score      : 9.1                                           \n  CVSS Vector     : CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N  \n  EPSS Score      : 0.003730                                      \n  EPSS Percentile : 0.293870                                      \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/local/bin/engram-server"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-39832",
+          "ruleIndex": 7,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-39832                                \n  Severity        : CRITICAL                                      \n  Package         : pkg:golang/golang.org/x/crypto@0.50.0         \n  Affected range  : <0.52.0                                       \n  Fixed version   : 0.52.0                                        \n  CVSS Score      : 9.1                                           \n  CVSS Vector     : CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N  \n  EPSS Score      : 0.004030                                      \n  EPSS Percentile : 0.324260                                      \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/local/bin/engram-server"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-39833",
+          "ruleIndex": 8,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-39833                                \n  Severity        : CRITICAL                                      \n  Package         : pkg:golang/golang.org/x/crypto@0.50.0         \n  Affected range  : <0.52.0                                       \n  Fixed version   : 0.52.0                                        \n  CVSS Score      : 9.1                                           \n  CVSS Vector     : CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N  \n  EPSS Score      : 0.003600                                      \n  EPSS Percentile : 0.281200                                      \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/local/bin/engram-server"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-39834",
+          "ruleIndex": 9,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-39834                                \n  Severity        : CRITICAL                                      \n  Package         : pkg:golang/golang.org/x/crypto@0.50.0         \n  Affected range  : <0.52.0                                       \n  Fixed version   : 0.52.0                                        \n  CVSS Score      : 9.1                                           \n  CVSS Vector     : CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H  \n  EPSS Score      : 0.004660                                      \n  EPSS Percentile : 0.371630                                      \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/local/bin/engram-server"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-42508",
+          "ruleIndex": 10,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-42508                                \n  Severity        : CRITICAL                                      \n  Package         : pkg:golang/golang.org/x/crypto@0.50.0         \n  Affected range  : <0.52.0                                       \n  Fixed version   : 0.52.0                                        \n  CVSS Score      : 9.1                                           \n  CVSS Vector     : CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N  \n  EPSS Score      : 0.004870                                      \n  EPSS Percentile : 0.385310                                      \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/local/bin/engram-server"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-39821",
+          "ruleIndex": 11,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-39821                      \n  Severity        : CRITICAL                            \n  Package         : pkg:golang/golang.org/x/net@0.53.0  \n  Affected range  : <0.55.0                             \n  Fixed version   : 0.55.0                              \n  EPSS Score      : 0.004780                            \n  EPSS Percentile : 0.379210                            \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/local/bin/engram-server"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-46595",
+          "ruleIndex": 12,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-46595                                \n  Severity        : CRITICAL                                      \n  Package         : pkg:golang/golang.org/x/crypto@0.50.0         \n  Affected range  : <0.52.0                                       \n  Fixed version   : 0.52.0                                        \n  CVSS Score      : 10.0                                          \n  CVSS Vector     : CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:L  \n  EPSS Score      : 0.004400                                      \n  EPSS Percentile : 0.354330                                      \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/local/bin/engram-server"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

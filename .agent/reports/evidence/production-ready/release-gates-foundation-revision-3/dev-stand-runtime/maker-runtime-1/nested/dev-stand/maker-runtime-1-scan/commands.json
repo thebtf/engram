@@ -1,0 +1,214 @@
+[
+  {
+    "name": "dev-stand-image-inventory",
+    "executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+    "arguments": [
+      "ps",
+      "--filter",
+      "label=com.docker.compose.project=engram-critical-stand",
+      "--format",
+      "{{.ID}}|{{.Label \"com.docker.compose.service\"}}"
+    ],
+    "environment_keys": [],
+    "command": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe ps --filter label=com.docker.compose.project=engram-critical-stand --format {{.ID}}|{{.Label \"com.docker.compose.service\"}}",
+    "started_at": "2026-07-10T09:42:11.9439324+00:00",
+    "finished_at": "2026-07-10T09:42:12.1985114+00:00",
+    "duration_seconds": 0.255,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\image-inventory.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\image-inventory.stderr.log"
+  },
+  {
+    "name": "dev-stand-image-inspect-operator-console",
+    "executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+    "arguments": [
+      "inspect",
+      "1f9e23d5284a",
+      "--format",
+      "{{.Config.Image}}|{{.Image}}"
+    ],
+    "environment_keys": [],
+    "command": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe inspect 1f9e23d5284a --format {{.Config.Image}}|{{.Image}}",
+    "started_at": "2026-07-10T09:42:12.2532773+00:00",
+    "finished_at": "2026-07-10T09:42:12.4206208+00:00",
+    "duration_seconds": 0.167,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\image-inspect-operator-console.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\image-inspect-operator-console.stderr.log"
+  },
+  {
+    "name": "dev-stand-image-tag-inspect-operator-console",
+    "executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+    "arguments": [
+      "image",
+      "inspect",
+      "ghcr.io/thebtf/engram-operator-console:main",
+      "--format",
+      "{{.Id}}"
+    ],
+    "environment_keys": [],
+    "command": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe image inspect ghcr.io/thebtf/engram-operator-console:main --format {{.Id}}",
+    "started_at": "2026-07-10T09:42:12.4229507+00:00",
+    "finished_at": "2026-07-10T09:42:12.6118876+00:00",
+    "duration_seconds": 0.189,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\image-tag-inspect-operator-console.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\image-tag-inspect-operator-console.stderr.log"
+  },
+  {
+    "name": "dev-stand-image-inspect-server",
+    "executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+    "arguments": [
+      "inspect",
+      "e6d119b206fa",
+      "--format",
+      "{{.Config.Image}}|{{.Image}}"
+    ],
+    "environment_keys": [],
+    "command": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe inspect e6d119b206fa --format {{.Config.Image}}|{{.Image}}",
+    "started_at": "2026-07-10T09:42:12.6144738+00:00",
+    "finished_at": "2026-07-10T09:42:12.8085464+00:00",
+    "duration_seconds": 0.194,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\image-inspect-server.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\image-inspect-server.stderr.log"
+  },
+  {
+    "name": "dev-stand-image-tag-inspect-server",
+    "executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+    "arguments": [
+      "image",
+      "inspect",
+      "ghcr.io/thebtf/engram:main",
+      "--format",
+      "{{.Id}}"
+    ],
+    "environment_keys": [],
+    "command": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe image inspect ghcr.io/thebtf/engram:main --format {{.Id}}",
+    "started_at": "2026-07-10T09:42:12.8096304+00:00",
+    "finished_at": "2026-07-10T09:42:13.0177443+00:00",
+    "duration_seconds": 0.208,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\image-tag-inspect-server.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\image-tag-inspect-server.stderr.log"
+  },
+  {
+    "name": "dev-stand-image-inspect-postgres",
+    "executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+    "arguments": [
+      "inspect",
+      "a230a1d63fb3",
+      "--format",
+      "{{.Config.Image}}|{{.Image}}"
+    ],
+    "environment_keys": [],
+    "command": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe inspect a230a1d63fb3 --format {{.Config.Image}}|{{.Image}}",
+    "started_at": "2026-07-10T09:42:13.0187988+00:00",
+    "finished_at": "2026-07-10T09:42:13.2135401+00:00",
+    "duration_seconds": 0.195,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\image-inspect-postgres.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\image-inspect-postgres.stderr.log"
+  },
+  {
+    "name": "dev-stand-image-tag-inspect-postgres",
+    "executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+    "arguments": [
+      "image",
+      "inspect",
+      "pgvector/pgvector:pg17",
+      "--format",
+      "{{.Id}}"
+    ],
+    "environment_keys": [],
+    "command": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe image inspect pgvector/pgvector:pg17 --format {{.Id}}",
+    "started_at": "2026-07-10T09:42:13.2142470+00:00",
+    "finished_at": "2026-07-10T09:42:13.4476094+00:00",
+    "duration_seconds": 0.233,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\image-tag-inspect-postgres.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\image-tag-inspect-postgres.stderr.log"
+  },
+  {
+    "name": "dev-stand-vulnerability-scan-operator-console",
+    "executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+    "arguments": [
+      "scout",
+      "cves",
+      "--exit-code",
+      "--only-severity",
+      "critical,high",
+      "--format",
+      "sarif",
+      "--output",
+      "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\docker-scout-operator-console.sarif.json",
+      "local://ghcr.io/thebtf/engram-operator-console:main"
+    ],
+    "environment_keys": [],
+    "command": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe scout cves --exit-code --only-severity critical,high --format sarif --output D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\docker-scout-operator-console.sarif.json local://ghcr.io/thebtf/engram-operator-console:main",
+    "started_at": "2026-07-10T09:42:13.4622964+00:00",
+    "finished_at": "2026-07-10T09:42:26.5093394+00:00",
+    "duration_seconds": 13.047,
+    "exit_code": 2,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\docker-scout-operator-console.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\docker-scout-operator-console.stderr.log"
+  },
+  {
+    "name": "dev-stand-vulnerability-scan-postgres",
+    "executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+    "arguments": [
+      "scout",
+      "cves",
+      "--exit-code",
+      "--only-severity",
+      "critical,high",
+      "--format",
+      "sarif",
+      "--output",
+      "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\docker-scout-postgres.sarif.json",
+      "local://pgvector/pgvector:pg17"
+    ],
+    "environment_keys": [],
+    "command": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe scout cves --exit-code --only-severity critical,high --format sarif --output D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\docker-scout-postgres.sarif.json local://pgvector/pgvector:pg17",
+    "started_at": "2026-07-10T09:42:26.5410737+00:00",
+    "finished_at": "2026-07-10T09:42:29.9949837+00:00",
+    "duration_seconds": 3.454,
+    "exit_code": 2,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\docker-scout-postgres.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\docker-scout-postgres.stderr.log"
+  },
+  {
+    "name": "dev-stand-vulnerability-scan-server",
+    "executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+    "arguments": [
+      "scout",
+      "cves",
+      "--exit-code",
+      "--only-severity",
+      "critical,high",
+      "--format",
+      "sarif",
+      "--output",
+      "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\docker-scout-server.sarif.json",
+      "local://ghcr.io/thebtf/engram:main"
+    ],
+    "environment_keys": [],
+    "command": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe scout cves --exit-code --only-severity critical,high --format sarif --output D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\docker-scout-server.sarif.json local://ghcr.io/thebtf/engram:main",
+    "started_at": "2026-07-10T09:42:30.0019572+00:00",
+    "finished_at": "2026-07-10T09:42:38.3902556+00:00",
+    "duration_seconds": 8.388,
+    "exit_code": 2,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\docker-scout-server.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-scan\\docker-scout-server.stderr.log"
+  }
+]

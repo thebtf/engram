@@ -1,0 +1,4 @@
+    i New version 1.23.1 available (installed version is 1.18.3) at https://github.com/docker/scout-cli
+    v SBOM of image already cached, 223 packages indexed
+    x Detected 7 vulnerable packages with a total of 38 vulnerabilities
+    v Report written to D:\Dev\engram\.agent\worktrees\prc-release-gates\.agent\reports\evidence\production-ready\release-gates-foundation-revision-3\dev-stand-runtime\maker-runtime-1\nested\dev-stand\maker-runtime-1-scan\docker-scout-postgres.sarif.json

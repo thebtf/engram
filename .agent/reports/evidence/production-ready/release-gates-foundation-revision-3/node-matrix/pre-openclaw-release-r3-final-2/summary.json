@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "gate": "node-release-matrix",
+  "surface": "openclaw",
+  "run_id": "pre-openclaw-release-r3-final-2",
+  "started_at": "2026-07-10T09:44:06.1284027+00:00",
+  "finished_at": "2026-07-10T09:44:06.4387660+00:00",
+  "duration_seconds": 0.31,
+  "verdict": "FAIL",
+  "surface_root": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\plugin\\openclaw-engram",
+  "pre_surface_clean": true,
+  "post_surface_clean": true,
+  "manifests_tracked_and_present": false,
+  "lock_non_ignored": false,
+  "manifest_parity": false,
+  "manifest_hashes": {},
+  "required_sequence": [
+    "npm-ci",
+    "npm-typecheck",
+    "npm-test",
+    "npm-audit-high",
+    "npm-pack-dry-run"
+  ],
+  "planned_sequence": [
+    "npm-ci",
+    "npm-typecheck",
+    "npm-test",
+    "npm-audit-high",
+    "npm-pack-dry-run"
+  ],
+  "executed_sequence": [],
+  "audit_level": "high",
+  "package_dry_run": false,
+  "package_contents_valid": false,
+  "package_files": null,
+  "cleanup": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\node-matrix\\pre-openclaw-release-r3-final-2\\cleanup.json",
+  "commands": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\node-matrix\\pre-openclaw-release-r3-final-2\\commands.json",
+  "errors": [
+    "required OpenClaw manifest is missing: D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\plugin\\openclaw-engram\\package-lock.json"
+  ],
+  "artifact_directory": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\node-matrix\\pre-openclaw-release-r3-final-2"
+}

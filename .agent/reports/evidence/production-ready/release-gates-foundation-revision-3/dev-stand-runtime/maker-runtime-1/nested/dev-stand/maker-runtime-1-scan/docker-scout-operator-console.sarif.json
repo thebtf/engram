@@ -1,0 +1,381 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "fullName": "Docker Scout",
+          "informationUri": "https://docker.com/products/docker-scout",
+          "name": "docker scout",
+          "rules": [
+            {
+              "id": "CVE-2026-48962",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-48962"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-48962?s=debian&n=perl&ns=debian&t=deb&osn=debian&osv=12&vr=%3E0",
+              "help": {
+                "text": "IO::Compress versions before 2.220 for Perl can execute arbitrary code in File::GlobMapper via an attacker-controlled output glob.  _parseOutputGlob() wraps the caller-supplied output glob string in double quotes and stores it in the parser state; _getFiles() then runs the stored expression through eval STRING. A literal double quote in the output glob closes the dquote wrapper, and the characters that follow are evaluated as Perl.  Arbitrary Perl in the output glob executes at the calling process's privilege.\n\n---\n- libio-compress-perl 2.220-1 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138055)\n[trixie] - libio-compress-perl <no-dsa> (Minor issue)\n- perl 5.40.1-8 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138854)\nhttps://lists.security.metacpan.org/cve-announce/msg/40434385/\nFixed by: https://github.com/pmqs/IO-Compress/commit/f2db247bf90d4cc7ee2710be384946081f3b4610 (v2.220)\n",
+                "markdown": "> IO::Compress versions before 2.220 for Perl can execute arbitrary code in File::GlobMapper via an attacker-controlled output glob.  _parseOutputGlob() wraps the caller-supplied output glob string in double quotes and stores it in the parser state; _getFiles() then runs the stored expression through eval STRING. A literal double quote in the output glob closes the dquote wrapper, and the characters that follow are evaluated as Perl.  Arbitrary Perl in the output glob executes at the calling process's privilege.\n\n---\n- libio-compress-perl 2.220-1 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138055)\n[trixie] - libio-compress-perl <no-dsa> (Minor issue)\n- perl 5.40.1-8 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138854)\nhttps://lists.security.metacpan.org/cve-announce/msg/40434385/\nFixed by: https://github.com/pmqs/IO-Compress/commit/f2db247bf90d4cc7ee2710be384946081f3b4610 (v2.220)\n\n|                |                                                                                        |\n|----------------|----------------------------------------------------------------------------------------|\n| Package        | pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12 |\n| Affected range | >0                                                                                     |\n| Fixed version  | not fixed                                                                              |\n"
+              },
+              "properties": {
+                "affected_version": ">0",
+                "cvssV3_severity": "HIGH",
+                "fixed_version": "not fixed",
+                "purls": [
+                  "pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12"
+                ],
+                "security-severity": "7.3",
+                "tags": [
+                  "HIGH"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-33671",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-33671: Inefficient Regular Expression Complexity"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-33671?s=github&n=picomatch&t=npm&vr=%3E%3D4.0.0%2C%3C4.0.4",
+              "help": {
+                "text": "### Impact\n`picomatch` is vulnerable to Regular Expression Denial of Service (ReDoS) when processing crafted extglob patterns. Certain patterns using extglob quantifiers such as `+()` and `*()`, especially when combined with overlapping alternatives or nested extglobs, are compiled into regular expressions that can exhibit catastrophic backtracking on non-matching input.\n\nExamples of problematic patterns include `+(a|aa)`, `+(*|?)`, `+(+(a))`, `*(+(a))`, and `+(+(+(a)))`. In local reproduction, these patterns caused multi-second event-loop blocking with relatively short inputs. For example, `+(a|aa)` compiled to `^(?:(?=.)(?:a|aa)+)$` and took about 2 seconds to reject a 41-character non-matching input, while nested patterns such as `+(+(a))` and `*(+(a))` took around 29 seconds to reject a 33-character input on a modern M1 MacBook.\n\nApplications are impacted when they allow untrusted users to supply glob patterns that are passed to `picomatch` for compilation or matching. In those cases, an attacker can cause excessive CPU consumption and block the Node.js event loop, resulting in a denial of service. Applications that only use trusted, developer-controlled glob patterns are much less likely to be exposed in a security-relevant way.\n\n### Patches\nThis issue is fixed in picomatch 4.0.4, 3.0.2 and 2.3.2.\n\nUsers should upgrade to one of these versions or later, depending on their supported release line.\n\n### Workarounds\nIf upgrading is not immediately possible, avoid passing untrusted glob patterns to `picomatch`.\n\nPossible mitigations include:\n- disable extglob support for untrusted patterns by using `noextglob: true`\n- reject or sanitize patterns containing nested extglobs or extglob quantifiers such as `+()` and `*()`\n- enforce strict allowlists for accepted pattern syntax\n- run matching in an isolated worker or separate process with time and resource limits\n- apply application-level request throttling and input validation for any endpoint that accepts glob patterns\n\n### Resources\n- Picomatch repository: https://github.com/micromatch/picomatch\n- `lib/parse.js` and `lib/constants.js` are involved in generating the vulnerable regex forms\n- Comparable ReDoS precedent: CVE-2024-4067 (`micromatch`)\n- Comparable generated-regex precedent: CVE-2024-45296 (`path-to-regexp`)\n",
+                "markdown": "> ### Impact\n`picomatch` is vulnerable to Regular Expression Denial of Service (ReDoS) when processing crafted extglob patterns. Certain patterns using extglob quantifiers such as `+()` and `*()`, especially when combined with overlapping alternatives or nested extglobs, are compiled into regular expressions that can exhibit catastrophic backtracking on non-matching input.\n\nExamples of problematic patterns include `+(a|aa)`, `+(*|?)`, `+(+(a))`, `*(+(a))`, and `+(+(+(a)))`. In local reproduction, these patterns caused multi-second event-loop blocking with relatively short inputs. For example, `+(a|aa)` compiled to `^(?:(?=.)(?:a|aa)+)$` and took about 2 seconds to reject a 41-character non-matching input, while nested patterns such as `+(+(a))` and `*(+(a))` took around 29 seconds to reject a 33-character input on a modern M1 MacBook.\n\nApplications are impacted when they allow untrusted users to supply glob patterns that are passed to `picomatch` for compilation or matching. In those cases, an attacker can cause excessive CPU consumption and block the Node.js event loop, resulting in a denial of service. Applications that only use trusted, developer-controlled glob patterns are much less likely to be exposed in a security-relevant way.\n\n### Patches\nThis issue is fixed in picomatch 4.0.4, 3.0.2 and 2.3.2.\n\nUsers should upgrade to one of these versions or later, depending on their supported release line.\n\n### Workarounds\nIf upgrading is not immediately possible, avoid passing untrusted glob patterns to `picomatch`.\n\nPossible mitigations include:\n- disable extglob support for untrusted patterns by using `noextglob: true`\n- reject or sanitize patterns containing nested extglobs or extglob quantifiers such as `+()` and `*()`\n- enforce strict allowlists for accepted pattern syntax\n- run matching in an isolated worker or separate process with time and resource limits\n- apply application-level request throttling and input validation for any endpoint that accepts glob patterns\n\n### Resources\n- Picomatch repository: https://github.com/micromatch/picomatch\n- `lib/parse.js` and `lib/constants.js` are involved in generating the vulnerable regex forms\n- Comparable ReDoS precedent: CVE-2024-4067 (`micromatch`)\n- Comparable generated-regex precedent: CVE-2024-45296 (`path-to-regexp`)\n\n|                |                                              |\n|----------------|----------------------------------------------|\n| Package        | pkg:npm/picomatch@4.0.3                      |\n| Affected range | >=4.0.0,<4.0.4                               |\n| Fixed version  | 4.0.4                                        |\n| CVSS Score     |                                          7.5 |\n| CVSS Vector    | CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H |\n"
+              },
+              "properties": {
+                "affected_version": ">=4.0.0,<4.0.4",
+                "cvssV3": 7.5,
+                "cvssV3_severity": "HIGH",
+                "cvssV3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+                "fixed_version": "4.0.4",
+                "purls": [
+                  "pkg:npm/picomatch@4.0.3"
+                ],
+                "security-severity": "7.5",
+                "tags": [
+                  "HIGH"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-48815",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-48815: Improper Verification of Cryptographic Signature"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-48815?s=github&n=sigstore&t=npm&vr=%3C%3D4.1.0",
+              "help": {
+                "text": "### Summary\n\nThe documented `certificateOIDs` option in `sigstore.verify()` is accepted by the public API but discarded before verification, so required certificate extension OIDs are never checked.\n\n### Details\n\nThe public verify options include `certificateOIDs` and the documentation says those OID/value pairs “must be present in the certificate’s extension list.” The policy-construction path used by `sigstore.verify()` and `createVerifier()` only copies the SAN and issuer settings into the verification policy and completely ignores `certificateOIDs`.\n\nAs a result, callers can believe they are constraining verification to certificates carrying specific Fulcio or workload-identifying OIDs, while the actual verifier never receives those constraints. Any bundle that satisfies the remaining checks is accepted even if the required OID extensions are absent or mismatched.\n\nThis is reachable from supported usage through the documented `certificateOIDs` verify option.\n\n### PoC\n\n```javascript\nconst { createVerificationPolicy } = require(\"sigstore/dist/config\");\n\nconst policy = createVerificationPolicy({\n  certificateIssuer: \"https://issuer.example\",\n  certificateIdentityEmail: \"victim@example.com\",\n  certificateOIDs: {\n    \"1.2.3.4\": \"required-value\",\n  },\n});\n\nconsole.log(\"certificateOIDs\" in policy, JSON.stringify(policy));\n// false {\"subjectAlternativeName\":\"victim@example.com\",\"extensions\":{\"issuer\":\"https://issuer.example\"}}\n```\n\n### Impact\n\nApplications that rely on `certificateOIDs` to restrict which certificates may sign artifacts receive no such protection. Unauthorized certificates that should be rejected on extension policy can be accepted as long as they satisfy the remaining verification checks.\n",
+                "markdown": "> ### Summary\n\nThe documented `certificateOIDs` option in `sigstore.verify()` is accepted by the public API but discarded before verification, so required certificate extension OIDs are never checked.\n\n### Details\n\nThe public verify options include `certificateOIDs` and the documentation says those OID/value pairs “must be present in the certificate’s extension list.” The policy-construction path used by `sigstore.verify()` and `createVerifier()` only copies the SAN and issuer settings into the verification policy and completely ignores `certificateOIDs`.\n\nAs a result, callers can believe they are constraining verification to certificates carrying specific Fulcio or workload-identifying OIDs, while the actual verifier never receives those constraints. Any bundle that satisfies the remaining checks is accepted even if the required OID extensions are absent or mismatched.\n\nThis is reachable from supported usage through the documented `certificateOIDs` verify option.\n\n### PoC\n\n```javascript\nconst { createVerificationPolicy } = require(\"sigstore/dist/config\");\n\nconst policy = createVerificationPolicy({\n  certificateIssuer: \"https://issuer.example\",\n  certificateIdentityEmail: \"victim@example.com\",\n  certificateOIDs: {\n    \"1.2.3.4\": \"required-value\",\n  },\n});\n\nconsole.log(\"certificateOIDs\" in policy, JSON.stringify(policy));\n// false {\"subjectAlternativeName\":\"victim@example.com\",\"extensions\":{\"issuer\":\"https://issuer.example\"}}\n```\n\n### Impact\n\nApplications that rely on `certificateOIDs` to restrict which certificates may sign artifacts receive no such protection. Unauthorized certificates that should be rejected on extension policy can be accepted as long as they satisfy the remaining verification checks.\n\n|                |                                              |\n|----------------|----------------------------------------------|\n| Package        | pkg:npm/sigstore@3.1.0                       |\n| Affected range | <=4.1.0                                      |\n| Fixed version  | 4.1.1                                        |\n| CVSS Score     |                                          7.5 |\n| CVSS Vector    | CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N |\n"
+              },
+              "properties": {
+                "affected_version": "<=4.1.0",
+                "cvssV3": 7.5,
+                "cvssV3_severity": "HIGH",
+                "cvssV3_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N",
+                "fixed_version": "4.1.1",
+                "purls": [
+                  "pkg:npm/sigstore@3.1.0"
+                ],
+                "security-severity": "7.5",
+                "tags": [
+                  "HIGH"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-48959",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-48959"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-48959?s=debian&n=perl&ns=debian&t=deb&osn=debian&osv=12&vr=%3E0",
+              "help": {
+                "text": "IO::Uncompress::Unzip versions before 2.220 for Perl allow CPU exhaustion via per-byte read loop in fastForward.  fastForward() compares length $offset (the digit count of the offset, 1 to 19) against the chunk size $c instead of $offset itself, so $c shrinks from 16 KiB to 1-19 bytes per iteration.  Extracting a named entry from an attacker supplied zip via IO::Uncompress::Unzip->new($zip, Name => $target) drives a per-byte read loop scaling with the entry's compressed size, up to the non-Zip64 4 GiB cap.\n\n---\n- libio-compress-perl 2.220-1 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138051)\n[trixie] - libio-compress-perl <no-dsa> (Minor issue)\n- perl 5.40.1-8 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138856)\nhttps://lists.security.metacpan.org/cve-announce/msg/40434381/\nFixed by: https://github.com/pmqs/IO-Compress/commit/68db44076f4c1a86a2ffe53a958eac6cabaf72e2 (v2.220)\n",
+                "markdown": "> IO::Uncompress::Unzip versions before 2.220 for Perl allow CPU exhaustion via per-byte read loop in fastForward.  fastForward() compares length $offset (the digit count of the offset, 1 to 19) against the chunk size $c instead of $offset itself, so $c shrinks from 16 KiB to 1-19 bytes per iteration.  Extracting a named entry from an attacker supplied zip via IO::Uncompress::Unzip->new($zip, Name => $target) drives a per-byte read loop scaling with the entry's compressed size, up to the non-Zip64 4 GiB cap.\n\n---\n- libio-compress-perl 2.220-1 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138051)\n[trixie] - libio-compress-perl <no-dsa> (Minor issue)\n- perl 5.40.1-8 (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1138856)\nhttps://lists.security.metacpan.org/cve-announce/msg/40434381/\nFixed by: https://github.com/pmqs/IO-Compress/commit/68db44076f4c1a86a2ffe53a958eac6cabaf72e2 (v2.220)\n\n|                |                                                                                        |\n|----------------|----------------------------------------------------------------------------------------|\n| Package        | pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12 |\n| Affected range | >0                                                                                     |\n| Fixed version  | not fixed                                                                              |\n"
+              },
+              "properties": {
+                "affected_version": ">0",
+                "cvssV3_severity": "HIGH",
+                "fixed_version": "not fixed",
+                "purls": [
+                  "pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12"
+                ],
+                "security-severity": "7.5",
+                "tags": [
+                  "HIGH"
+                ]
+              }
+            },
+            {
+              "id": "CVE-2026-12087",
+              "name": "OsPackageVulnerability",
+              "shortDescription": {
+                "text": "CVE-2026-12087"
+              },
+              "helpUri": "https://scout.docker.com/v/CVE-2026-12087?s=debian&n=perl&ns=debian&t=deb&osn=debian&osv=12&vr=%3E0",
+              "help": {
+                "text": "Socket versions before 2.041 for Perl have an out-of-bounds heap read.  In Socket.xs, pack_ip_mreq_source() checks the length of its source argument before the argument is read, so the check tests the byte length carried over from the preceding multiaddr argument instead. Both addresses occupy a 4-byte field, so a valid multiaddr lets a source of any length pass the check, and the source is then copied into the 4-byte imr_sourceaddr field with a fixed-size copy. A source shorter than 4 bytes is not rejected, and the copy reads up to 3 bytes past the end of its buffer.  Calling pack_ip_mreq_source() with a source value shorter than 4 bytes copies adjacent heap memory into the returned packed structure.\n\n---\n- libsocket-perl 2.041-1\n[trixie] - libsocket-perl <no-dsa> (Minor issue)\n- perl <unfixed> (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1140152)\nhttps://lists.security.metacpan.org/cve-announce/msg/41020451/\nFixed by: https://github.com/Perl/perl5/commit/de19a0b0ad1900fef976c5c1400bd8f11ec6c6cb (v5.43.11)\n",
+                "markdown": "> Socket versions before 2.041 for Perl have an out-of-bounds heap read.  In Socket.xs, pack_ip_mreq_source() checks the length of its source argument before the argument is read, so the check tests the byte length carried over from the preceding multiaddr argument instead. Both addresses occupy a 4-byte field, so a valid multiaddr lets a source of any length pass the check, and the source is then copied into the 4-byte imr_sourceaddr field with a fixed-size copy. A source shorter than 4 bytes is not rejected, and the copy reads up to 3 bytes past the end of its buffer.  Calling pack_ip_mreq_source() with a source value shorter than 4 bytes copies adjacent heap memory into the returned packed structure.\n\n---\n- libsocket-perl 2.041-1\n[trixie] - libsocket-perl <no-dsa> (Minor issue)\n- perl <unfixed> (bug https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1140152)\nhttps://lists.security.metacpan.org/cve-announce/msg/41020451/\nFixed by: https://github.com/Perl/perl5/commit/de19a0b0ad1900fef976c5c1400bd8f11ec6c6cb (v5.43.11)\n\n|                |                                                                                        |\n|----------------|----------------------------------------------------------------------------------------|\n| Package        | pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12 |\n| Affected range | >0                                                                                     |\n| Fixed version  | not fixed                                                                              |\n"
+              },
+              "properties": {
+                "affected_version": ">0",
+                "cvssV3_severity": "CRITICAL",
+                "fixed_version": "not fixed",
+                "purls": [
+                  "pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12"
+                ],
+                "security-severity": "9.1",
+                "tags": [
+                  "CRITICAL"
+                ]
+              }
+            }
+          ],
+          "version": "1.18.3"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "CVE-2026-48962",
+          "ruleIndex": 0,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-48962                                                                          \n  Severity        : HIGH                                                                                    \n  Package         : pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12  \n  Affected range  : >0                                                                                      \n  Fixed version   : not fixed                                                                               \n  EPSS Score      : 0.002920                                                                                \n  EPSS Percentile : 0.209720                                                                                \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/share/doc/perl-base/copyright"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.list"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.md5sums"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.postinst"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.postrm"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.preinst"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.prerm"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/status"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-33671",
+          "ruleIndex": 1,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-33671                                \n  Severity        : HIGH                                          \n  Package         : pkg:npm/picomatch@4.0.3                       \n  Affected range  : >=4.0.0,<4.0.4                                \n  Fixed version   : 4.0.4                                         \n  CVSS Score      : 7.5                                           \n  CVSS Vector     : CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H  \n  EPSS Score      : 0.004120                                      \n  EPSS Percentile : 0.331630                                      \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/local/lib/node_modules/npm/node_modules/picomatch/package.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-48815",
+          "ruleIndex": 2,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability  : CVE-2026-48815                                \n  Severity       : HIGH                                          \n  Package        : pkg:npm/sigstore@3.1.0                        \n  Affected range : <=4.1.0                                       \n  Fixed version  : 4.1.1                                         \n  CVSS Score     : 7.5                                           \n  CVSS Vector    : CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N  \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/local/lib/node_modules/npm/node_modules/sigstore/package.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-48959",
+          "ruleIndex": 3,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-48959                                                                          \n  Severity        : HIGH                                                                                    \n  Package         : pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12  \n  Affected range  : >0                                                                                      \n  Fixed version   : not fixed                                                                               \n  EPSS Score      : 0.003730                                                                                \n  EPSS Percentile : 0.294000                                                                                \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/share/doc/perl-base/copyright"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.list"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.md5sums"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.postinst"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.postrm"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.preinst"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.prerm"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/status"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2026-12087",
+          "ruleIndex": 4,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "  Vulnerability   : CVE-2026-12087                                                                          \n  Severity        : CRITICAL                                                                                \n  Package         : pkg:deb/debian/perl@5.36.0-7%2Bdeb12u3?os_distro=bookworm&os_name=debian&os_version=12  \n  Affected range  : >0                                                                                      \n  Fixed version   : not fixed                                                                               \n  EPSS Score      : 0.003890                                                                                \n  EPSS Percentile : 0.309730                                                                                \n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/usr/share/doc/perl-base/copyright"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.list"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.md5sums"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.postinst"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.postrm"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.preinst"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/info/perl-base.prerm"
+                }
+              }
+            },
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/var/lib/dpkg/status"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

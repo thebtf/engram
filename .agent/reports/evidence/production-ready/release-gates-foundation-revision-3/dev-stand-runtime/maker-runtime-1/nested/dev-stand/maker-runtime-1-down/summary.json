@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "gate": "dev-stand-contract",
+  "action": "Down",
+  "run_id": "maker-runtime-1",
+  "started_at": "2026-07-10T09:42:39.1050055+00:00",
+  "finished_at": "2026-07-10T09:42:43.1727975+00:00",
+  "duration_seconds": 4.068,
+  "verdict": "PASS",
+  "compose_project": "engram-critical-stand",
+  "compose_file": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\docker-compose.yml",
+  "ephemeral_postgres_password_generated": false,
+  "ephemeral_admin_token_generated": false,
+  "ephemeral_bootstrap_capability_generated": false,
+  "ephemeral_credentials_distinct_and_nondefault": false,
+  "ephemeral_credentials_runtime_injected": false,
+  "ephemeral_postgres_password_persisted": false,
+  "ephemeral_admin_token_persisted": false,
+  "ephemeral_bootstrap_capability_persisted": false,
+  "exact_image_targets": {
+    "postgres": "pgvector/pgvector:pg17",
+    "server": "ghcr.io/thebtf/engram:main",
+    "operator-console": "ghcr.io/thebtf/engram-operator-console:main"
+  },
+  "actual_images": {},
+  "actual_image_ids": {},
+  "tag_image_ids": {},
+  "liveness_endpoints": [],
+  "semantic_ready_endpoints": [],
+  "vulnerability_scan": {
+    "scanner": "docker scout cves",
+    "severity_gate": [
+      "critical",
+      "high"
+    ],
+    "scans": []
+  },
+  "automatic_failure_cleanup": false,
+  "residual_checks_performed": true,
+  "residual_resources_zero": true,
+  "child_commands": 4,
+  "nonzero_child_commands": 0,
+  "commands": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-down\\commands.json",
+  "errors": [],
+  "artifact_directory": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-down"
+}

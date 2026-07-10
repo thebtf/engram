@@ -1,0 +1,84 @@
+[
+  {
+    "name": "dev-stand-down",
+    "executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+    "arguments": [
+      "compose",
+      "-p",
+      "engram-critical-stand",
+      "-f",
+      "docker-compose.yml",
+      "down",
+      "-v",
+      "--remove-orphans"
+    ],
+    "environment_keys": [],
+    "command": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe compose -p engram-critical-stand -f docker-compose.yml down -v --remove-orphans",
+    "started_at": "2026-07-10T09:42:39.1363285+00:00",
+    "finished_at": "2026-07-10T09:42:42.5926281+00:00",
+    "duration_seconds": 3.456,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-down\\compose-down.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-down\\compose-down.stderr.log"
+  },
+  {
+    "name": "dev-stand-residual-containers",
+    "executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+    "arguments": [
+      "ps",
+      "-aq",
+      "--filter",
+      "label=com.docker.compose.project=engram-critical-stand"
+    ],
+    "environment_keys": [],
+    "command": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe ps -aq --filter label=com.docker.compose.project=engram-critical-stand",
+    "started_at": "2026-07-10T09:42:42.6511628+00:00",
+    "finished_at": "2026-07-10T09:42:42.8095250+00:00",
+    "duration_seconds": 0.158,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-down\\dev-stand-residual-containers.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-down\\dev-stand-residual-containers.stderr.log"
+  },
+  {
+    "name": "dev-stand-residual-volumes",
+    "executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+    "arguments": [
+      "volume",
+      "ls",
+      "-q",
+      "--filter",
+      "label=com.docker.compose.project=engram-critical-stand"
+    ],
+    "environment_keys": [],
+    "command": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe volume ls -q --filter label=com.docker.compose.project=engram-critical-stand",
+    "started_at": "2026-07-10T09:42:42.8109038+00:00",
+    "finished_at": "2026-07-10T09:42:42.9756446+00:00",
+    "duration_seconds": 0.165,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-down\\dev-stand-residual-volumes.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-down\\dev-stand-residual-volumes.stderr.log"
+  },
+  {
+    "name": "dev-stand-residual-networks",
+    "executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+    "arguments": [
+      "network",
+      "ls",
+      "-q",
+      "--filter",
+      "label=com.docker.compose.project=engram-critical-stand"
+    ],
+    "environment_keys": [],
+    "command": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe network ls -q --filter label=com.docker.compose.project=engram-critical-stand",
+    "started_at": "2026-07-10T09:42:42.9762783+00:00",
+    "finished_at": "2026-07-10T09:42:43.1721199+00:00",
+    "duration_seconds": 0.196,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-down\\dev-stand-residual-networks.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation-revision-3\\dev-stand-runtime\\maker-runtime-1\\nested\\dev-stand\\maker-runtime-1-down\\dev-stand-residual-networks.stderr.log"
+  }
+]

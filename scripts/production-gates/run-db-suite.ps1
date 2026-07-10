@@ -72,9 +72,10 @@ Options:
   -AdminDsn                Admin URL or ENGRAM_TEST_ADMIN_DSN; always redacted.
   -PostgresContainer       Use psql through docker exec; else host psql.
   -DevStandAction          Execute the tracked isolated stand lifecycle. Up
-                           generates a process-local cryptographic admin token,
+                           generates three distinct process-local cryptographic
+                           PostgreSQL/admin/bootstrap credentials,
                            validates exact compose service/image labels, and
-                           proves /health + /api/ready without persisting token.
+                           proves /health + /api/ready without persisting them.
                            Scan runs Docker Scout against the exact running tags
                            and fails on any HIGH or CRITICAL vulnerability.
   -ComposeProject          Exact isolated compose project label.
@@ -259,33 +260,107 @@ function Test-ReadyStatusPayload {
     return $null -ne $statusProperty -and [string]$statusProperty.Value -ceq 'ready'
 }
 
+function Test-LivenessStatusPayload {
+    param([AllowNull()][AllowEmptyString()][string]$Payload)
+    if ([string]::IsNullOrWhiteSpace($Payload)) { return $false }
+    try { $parsed = $Payload | ConvertFrom-Json -Depth 20 } catch { return $false }
+    $statusProperty = $parsed.PSObject.Properties['status']
+    return $null -ne $statusProperty -and [string]$statusProperty.Value -cin @('starting', 'ready', 'error') -and [string]$statusProperty.Value -ceq ([string]$statusProperty.Value).ToLowerInvariant()
+}
+
+function Get-HttpJsonContractResult {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$CapturedOutput,
+        [Parameter(Mandatory)][ValidateSet('liveness', 'readiness')][string]$ContractKind
+    )
+
+    $normalized = $CapturedOutput.TrimEnd("`r", "`n")
+    $lastNewline = $normalized.LastIndexOf("`n")
+    if ($lastNewline -lt 0) {
+        return [pscustomobject]@{ Pass = $false; StatusCode = $null; Payload = $normalized; Error = 'curl output did not contain a trailing HTTP status line' }
+    }
+    $payload = $normalized.Substring(0, $lastNewline).TrimEnd("`r")
+    $statusCode = $normalized.Substring($lastNewline + 1).Trim()
+    if ($statusCode -cne '200') {
+        return [pscustomobject]@{ Pass = $false; StatusCode = $statusCode; Payload = $payload; Error = "expected HTTP 200, got '$statusCode'" }
+    }
+    $semanticPass = if ($ContractKind -ceq 'liveness') { Test-LivenessStatusPayload $payload } else { Test-ReadyStatusPayload $payload }
+    $required = if ($ContractKind -ceq 'liveness') { 'starting|ready|error' } else { 'ready' }
+    return [pscustomobject]@{
+        Pass = $semanticPass; StatusCode = $statusCode; Payload = $payload
+        Error = if ($semanticPass) { $null } else { "HTTP 200 payload did not satisfy $ContractKind status contract '$required'" }
+    }
+}
+
 function Get-DevStandReadyEndpoints {
     return @(
-        [pscustomobject][ordered]@{ name = 'health'; url = 'http://localhost:37778/health'; path_kind = 'direct-server' },
-        [pscustomobject][ordered]@{ name = 'api-ready'; url = 'http://localhost:37778/api/ready'; path_kind = 'direct-server' },
-        [pscustomobject][ordered]@{ name = 'operator-api-health'; url = 'http://localhost:3001/api/health'; path_kind = 'operator-console-proxy' },
-        [pscustomobject][ordered]@{ name = 'operator-api-ready'; url = 'http://localhost:3001/api/ready'; path_kind = 'operator-console-proxy' }
+        [pscustomobject][ordered]@{ name = 'health'; url = 'http://localhost:37778/health'; path_kind = 'direct-server'; contract_kind = 'liveness' },
+        [pscustomobject][ordered]@{ name = 'api-ready'; url = 'http://localhost:37778/api/ready'; path_kind = 'direct-server'; contract_kind = 'readiness' },
+        [pscustomobject][ordered]@{ name = 'operator-api-health'; url = 'http://localhost:3001/api/health'; path_kind = 'operator-console-proxy'; contract_kind = 'liveness' },
+        [pscustomobject][ordered]@{ name = 'operator-api-ready'; url = 'http://localhost:3001/api/ready'; path_kind = 'operator-console-proxy'; contract_kind = 'readiness' }
     )
+}
+
+function New-CryptographicSecret {
+    $bytes = [System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
+    return [Convert]::ToHexString($bytes).ToLowerInvariant()
+}
+
+function Assert-DevStandCredentials {
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Credentials)
+
+    $required = @('postgres_password', 'admin_token', 'bootstrap_capability')
+    $values = [System.Collections.Generic.List[string]]::new()
+    $forbidden = @('engram', 'password', 'changeme', 'change-me', 'change-me-in-production', 'default', 'admin')
+    foreach ($name in $required) {
+        if (-not $Credentials.Contains($name)) { throw "dev-stand credential '$name' is missing" }
+        $value = [string]$Credentials[$name]
+        if ([string]::IsNullOrWhiteSpace($value)) { throw "dev-stand credential '$name' is blank" }
+        if ($value.Length -lt 16) { throw "dev-stand credential '$name' is too short to be cryptographically generated" }
+        if ($value.ToLowerInvariant() -in $forbidden) { throw "dev-stand credential '$name' uses a forbidden default" }
+        $values.Add($value)
+    }
+    if (@($values | Select-Object -Unique).Count -ne $values.Count) { throw 'dev-stand PostgreSQL, admin, and bootstrap credentials must be distinct' }
+}
+
+function Test-RedactedContainerEnvironment {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$CapturedJson,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$RequiredNames
+    )
+    try { $entries = @(ConvertFrom-Json -InputObject $CapturedJson -Depth 20) } catch { return $false }
+    foreach ($name in $RequiredNames) {
+        if ($name -notmatch '^[A-Z][A-Z0-9_]*$') { return $false }
+        if ($entries -cnotcontains "$name=REDACTED_SENSITIVE_VALUE") { return $false }
+    }
+    return $true
 }
 
 function Get-DevStandEnvironment {
     param(
         [Parameter(Mandatory)][string]$Project,
+        [Parameter(Mandatory)][string]$PostgresPassword,
         [Parameter(Mandatory)][string]$AdminToken,
-        [Parameter(Mandatory)][string]$DatabaseDsn
+        [Parameter(Mandatory)][string]$BootstrapCapability
     )
+
+    $credentials = [ordered]@{ postgres_password = $PostgresPassword; admin_token = $AdminToken; bootstrap_capability = $BootstrapCapability }
+    Assert-DevStandCredentials $credentials
+    $escapedPassword = [uri]::EscapeDataString($PostgresPassword)
+    $databaseDsn = "postgres://engram:$escapedPassword@postgres:5432/engram?sslmode=disable"
 
     return @{
         COMPOSE_PROJECT_NAME = $Project
         POSTGRES_PORT = '55433'
         WORKER_PORT = '37778'
         OPERATOR_CONSOLE_PORT = '3001'
-        POSTGRES_PASSWORD = 'engram'
-        DATABASE_DSN = $DatabaseDsn
+        POSTGRES_PASSWORD = $PostgresPassword
+        DATABASE_DSN = $databaseDsn
         STAND_API_URL = 'http://localhost:37778'
         STAND_OPERATOR_URL = 'http://localhost:3001'
         NUXT_OPERATOR_API_TARGET = 'http://server:37777'
         ENGRAM_AUTH_ADMIN_TOKEN = $AdminToken
+        ENGRAM_AUTH_BOOTSTRAP_CAPABILITY = $BootstrapCapability
         ENGRAM_AUTH_DISABLED = 'false'
     }
 }
@@ -373,9 +448,16 @@ function Invoke-DevStandContract {
     $tagImageIds = @{}
     $imageIdentityPass = $true
     $vulnerabilityScans = [System.Collections.Generic.List[object]]::new()
-    $tokenGenerated = $false
-    $ephemeralToken = $null
-    $tokenPersisted = $false
+    $credentialsGenerated = $false
+    $postgresPassword = $null
+    $adminToken = $null
+    $bootstrapCapability = $null
+    $credentialValuesPersisted = $false
+    $credentialPolicyPass = $false
+    $credentialRuntimeInjectionPass = $false
+    $endpointResults = [System.Collections.Generic.List[object]]::new()
+    $composeOverridePath = $null
+    $standEnvironment = @{}
     $automaticFailureCleanup = $false
     $residualChecksPerformed = $false
     $residualResourcesZero = $null
@@ -383,26 +465,57 @@ function Invoke-DevStandContract {
     $dockerPath = Get-NativeCommandPath @('docker.exe', 'docker')
     $curlPath = $null
     if ($Action -in @('Up', 'Ready')) { $curlPath = Get-NativeCommandPath @('curl.exe', 'curl') }
-    $standDsn = 'postgres://engram:engram@postgres:5432/engram?sslmode=disable'
-    $sensitiveValues = [System.Collections.Generic.List[string]]::new(); $sensitiveValues.Add($standDsn)
+    $standDsn = $null
+    $sensitiveValues = [System.Collections.Generic.List[string]]::new()
 
     try {
         if ($Action -eq 'Up') {
-            $tokenBytes = [System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
-            $ephemeralToken = [Convert]::ToHexString($tokenBytes).ToLowerInvariant()
-            $tokenGenerated = $true; $sensitiveValues.Add($ephemeralToken)
-            $standEnvironment = Get-DevStandEnvironment -Project $Project -AdminToken $ephemeralToken -DatabaseDsn $standDsn
-            $up = Invoke-CapturedProcess 'dev-stand-up' $dockerPath @('compose', '-p', $Project, '-f', $File, 'up', '-d', '--build', '--wait') $standEnvironment (Join-Path $actionDirectory 'compose-up.stdout.log') (Join-Path $actionDirectory 'compose-up.stderr.log') $connection @($sensitiveValues) 600
+            $postgresPassword = New-CryptographicSecret
+            $adminToken = New-CryptographicSecret
+            $bootstrapCapability = New-CryptographicSecret
+            $credentials = [ordered]@{ postgres_password = $postgresPassword; admin_token = $adminToken; bootstrap_capability = $bootstrapCapability }
+            Assert-DevStandCredentials $credentials
+            $credentialPolicyPass = $true
+            $credentialsGenerated = $true
+            $standEnvironment = Get-DevStandEnvironment -Project $Project -PostgresPassword $postgresPassword -AdminToken $adminToken -BootstrapCapability $bootstrapCapability
+            $standDsn = [string]$standEnvironment.DATABASE_DSN
+            foreach ($secret in @($postgresPassword, $adminToken, $bootstrapCapability, $standDsn)) { $sensitiveValues.Add($secret) }
+
+            $composeOverridePath = Join-Path $actionDirectory 'ephemeral-credential-injection.compose.yaml'
+            Write-Utf8NoBom $composeOverridePath @'
+services:
+  server:
+    environment:
+      ENGRAM_AUTH_BOOTSTRAP_CAPABILITY: "${ENGRAM_AUTH_BOOTSTRAP_CAPABILITY:?required by production dev-stand}"
+'@
+            $composeArgs = @('compose', '-p', $Project, '-f', $File, '-f', $composeOverridePath)
+            $up = Invoke-CapturedProcess 'dev-stand-up' $dockerPath (@($composeArgs) + @('up', '-d', '--build', '--wait')) $standEnvironment (Join-Path $actionDirectory 'compose-up.stdout.log') (Join-Path $actionDirectory 'compose-up.stderr.log') $connection @($sensitiveValues) 600
             if ($up.ExitCode -ne 0) { throw "compose up failed with exit $($up.ExitCode)" }
+
+            $postgresContainer = Invoke-CapturedProcess 'dev-stand-postgres-container-id' $dockerPath (@($composeArgs) + @('ps', '-q', 'postgres')) $standEnvironment (Join-Path $actionDirectory 'postgres-container-id.stdout.log') (Join-Path $actionDirectory 'postgres-container-id.stderr.log') $connection @($sensitiveValues) 30
+            if ($postgresContainer.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($postgresContainer.Stdout)) { throw 'running postgres container ID could not be resolved for credential proof' }
+            $postgresCredential = Invoke-CapturedProcess 'dev-stand-postgres-credential-injection' $dockerPath @('inspect', $postgresContainer.Stdout.Trim(), '--format', '{{json .Config.Env}}') @{} (Join-Path $actionDirectory 'postgres-credential-injection.stdout.log') (Join-Path $actionDirectory 'postgres-credential-injection.stderr.log') $connection @($sensitiveValues) 30
+            if ($postgresCredential.ExitCode -ne 0 -or -not (Test-RedactedContainerEnvironment $postgresCredential.Stdout @('POSTGRES_PASSWORD'))) { throw 'generated PostgreSQL password did not reach the running postgres service exactly' }
+
+            $serverContainer = Invoke-CapturedProcess 'dev-stand-server-container-id' $dockerPath (@($composeArgs) + @('ps', '-q', 'server')) $standEnvironment (Join-Path $actionDirectory 'server-container-id.stdout.log') (Join-Path $actionDirectory 'server-container-id.stderr.log') $connection @($sensitiveValues) 30
+            if ($serverContainer.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($serverContainer.Stdout)) { throw 'running server container ID could not be resolved for credential proof' }
+            $serverCredential = Invoke-CapturedProcess 'dev-stand-server-credential-injection' $dockerPath @('inspect', $serverContainer.Stdout.Trim(), '--format', '{{json .Config.Env}}') @{} (Join-Path $actionDirectory 'server-credential-injection.stdout.log') (Join-Path $actionDirectory 'server-credential-injection.stderr.log') $connection @($sensitiveValues) 30
+            if ($serverCredential.ExitCode -ne 0 -or -not (Test-RedactedContainerEnvironment $serverCredential.Stdout @('ENGRAM_AUTH_ADMIN_TOKEN', 'ENGRAM_AUTH_BOOTSTRAP_CAPABILITY'))) { throw 'generated admin token/bootstrap capability did not reach the running server service exactly' }
+            $credentialRuntimeInjectionPass = $true
         }
 
         if ($Action -in @('Up', 'Ready')) {
             $pgReady = Invoke-CapturedProcess 'dev-stand-postgres-ready' $dockerPath @('compose', '-p', $Project, '-f', $File, 'exec', '-T', 'postgres', 'pg_isready', '-U', 'engram', '-d', 'engram') @{} (Join-Path $actionDirectory 'postgres-ready.stdout.log') (Join-Path $actionDirectory 'postgres-ready.stderr.log') $connection @($sensitiveValues) 30
             if ($pgReady.ExitCode -ne 0) { throw "PostgreSQL readiness failed with exit $($pgReady.ExitCode)" }
             foreach ($endpoint in @(Get-DevStandReadyEndpoints)) {
-                $http = Invoke-CapturedProcess "dev-stand-$($endpoint.name)" $curlPath @('-fsS', '--max-time', '15', $endpoint.url) @{} (Join-Path $actionDirectory "$($endpoint.name).stdout.log") (Join-Path $actionDirectory "$($endpoint.name).stderr.log") $connection @($sensitiveValues) 30
+                $http = Invoke-CapturedProcess "dev-stand-$($endpoint.name)" $curlPath @('-sS', '--max-time', '15', '--write-out', '\n%{http_code}', $endpoint.url) @{} (Join-Path $actionDirectory "$($endpoint.name).stdout.log") (Join-Path $actionDirectory "$($endpoint.name).stderr.log") $connection @($sensitiveValues) 30
                 if ($http.ExitCode -ne 0) { throw "$($endpoint.url) failed with exit $($http.ExitCode)" }
-                if (-not (Test-ReadyStatusPayload $http.Stdout)) { throw "$($endpoint.url) returned HTTP success without semantic status=ready" }
+                $httpContract = Get-HttpJsonContractResult -CapturedOutput $http.Stdout -ContractKind $endpoint.contract_kind
+                $endpointResults.Add([pscustomobject][ordered]@{
+                    name = $endpoint.name; url = $endpoint.url; path_kind = $endpoint.path_kind; contract_kind = $endpoint.contract_kind
+                    http_status = $httpContract.StatusCode; semantic_contract_pass = $httpContract.Pass
+                })
+                if (-not $httpContract.Pass) { throw "$($endpoint.url) failed contract: $($httpContract.Error)" }
             }
         }
 
@@ -483,7 +596,9 @@ function Invoke-DevStandContract {
     finally {
         if ($Action -eq 'Up' -and $errors.Count -gt 0) {
             $automaticFailureCleanup = $true
-            $failureDown = Invoke-CapturedProcess 'dev-stand-failure-cleanup' $dockerPath @('compose', '-p', $Project, '-f', $File, 'down', '-v', '--remove-orphans') @{} (Join-Path $actionDirectory 'failure-cleanup.stdout.log') (Join-Path $actionDirectory 'failure-cleanup.stderr.log') $connection @($sensitiveValues) 180
+            $failureComposeArgs = @('compose', '-p', $Project, '-f', $File)
+            if ($composeOverridePath -and (Test-Path -LiteralPath $composeOverridePath -PathType Leaf)) { $failureComposeArgs += @('-f', $composeOverridePath) }
+            $failureDown = Invoke-CapturedProcess 'dev-stand-failure-cleanup' $dockerPath (@($failureComposeArgs) + @('down', '-v', '--remove-orphans')) $standEnvironment (Join-Path $actionDirectory 'failure-cleanup.stdout.log') (Join-Path $actionDirectory 'failure-cleanup.stderr.log') $connection @($sensitiveValues) 180
             if ($failureDown.ExitCode -ne 0) { $errors.Add("automatic failure cleanup failed with exit $($failureDown.ExitCode)") }
             $residualChecksPerformed = $true
             $residualResourcesZero = Invoke-DevStandResidualChecks -NamePrefix 'dev-stand-failure-residual' -DockerPath $dockerPath -Project $Project -ActionDirectory $actionDirectory -Connection $connection -Errors $errors
@@ -493,11 +608,18 @@ function Invoke-DevStandContract {
     $finishedAt = [DateTimeOffset]::UtcNow
     $commandsPath = Join-Path $actionDirectory 'commands.json'
     Write-Utf8NoBom $commandsPath ((ConvertTo-Json -InputObject @($script:CommandRecords.ToArray()) -Depth 10) + "`n")
-    if ($tokenGenerated -and -not [string]::IsNullOrWhiteSpace($ephemeralToken)) {
+    if ($composeOverridePath -and (Test-Path -LiteralPath $composeOverridePath)) {
+        Remove-Item -LiteralPath $composeOverridePath -Force -ErrorAction SilentlyContinue
+    }
+    if ($credentialsGenerated) {
         foreach ($evidenceFile in Get-ChildItem -LiteralPath $actionDirectory -Recurse -File) {
             try {
-                if ([System.IO.File]::ReadAllText($evidenceFile.FullName).Contains($ephemeralToken)) {
-                    $tokenPersisted = $true; $errors.Add("ephemeral admin token persisted in evidence file '$($evidenceFile.FullName)'")
+                $evidenceText = [System.IO.File]::ReadAllText($evidenceFile.FullName)
+                foreach ($credential in @($postgresPassword, $adminToken, $bootstrapCapability)) {
+                    if (-not [string]::IsNullOrWhiteSpace($credential) -and $evidenceText.Contains($credential)) {
+                        $credentialValuesPersisted = $true; $errors.Add("ephemeral dev-stand credential persisted in evidence file '$($evidenceFile.FullName)'")
+                        break
+                    }
                 }
             }
             catch { $errors.Add("could not secret-scan evidence file '$($evidenceFile.FullName)': $($_.Exception.Message)") }
@@ -508,10 +630,18 @@ function Invoke-DevStandContract {
         started_at = $startedAt.ToString('O'); finished_at = $finishedAt.ToString('O'); duration_seconds = [math]::Round(($finishedAt - $startedAt).TotalSeconds, 3)
         verdict = if ($errors.Count -eq 0) { 'PASS' } else { 'FAIL' }
         compose_project = $Project; compose_file = [System.IO.Path]::GetFullPath($File)
-        ephemeral_admin_token_generated = $tokenGenerated; ephemeral_admin_token_persisted = $tokenPersisted
+        ephemeral_postgres_password_generated = $credentialsGenerated
+        ephemeral_admin_token_generated = $credentialsGenerated
+        ephemeral_bootstrap_capability_generated = $credentialsGenerated
+        ephemeral_credentials_distinct_and_nondefault = $credentialPolicyPass
+        ephemeral_credentials_runtime_injected = $credentialRuntimeInjectionPass
+        ephemeral_postgres_password_persisted = $credentialValuesPersisted
+        ephemeral_admin_token_persisted = $credentialValuesPersisted
+        ephemeral_bootstrap_capability_persisted = $credentialValuesPersisted
         exact_image_targets = [ordered]@{ postgres = 'pgvector/pgvector:pg17'; server = 'ghcr.io/thebtf/engram:main'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
         actual_images = $actualImages; actual_image_ids = $actualImageIds; tag_image_ids = $tagImageIds
-        semantic_ready_endpoints = if ($Action -in @('Up', 'Ready')) { @(Get-DevStandReadyEndpoints | ForEach-Object { [ordered]@{ name = $_.name; url = $_.url; path_kind = $_.path_kind; required_status = 'ready' } }) } else { @() }
+        liveness_endpoints = @($endpointResults | Where-Object contract_kind -ceq 'liveness')
+        semantic_ready_endpoints = @($endpointResults | Where-Object contract_kind -ceq 'readiness')
         vulnerability_scan = [ordered]@{ scanner = 'docker scout cves'; severity_gate = @('critical', 'high'); scans = @($vulnerabilityScans) }
         automatic_failure_cleanup = $automaticFailureCleanup; residual_checks_performed = $residualChecksPerformed; residual_resources_zero = $residualResourcesZero
         child_commands = $script:CommandRecords.Count; nonzero_child_commands = @($script:CommandRecords | Where-Object exit_code -ne 0).Count
@@ -555,13 +685,40 @@ function Invoke-SelfTest {
         Assert-SelfTestCondition (-not (Test-NoResidualRunSessions 1)) 'a residual post-test session was accepted within the pool budget'
         Assert-SelfTestCondition (Test-ReadyStatusPayload '{"status":"ready","version":"dev"}') 'semantic ready payload was rejected'
         foreach ($badPayload in @('{"status":"error"}', '{"status":"Ready"}', '{"version":"dev"}', 'not-json', '')) { Assert-SelfTestCondition (-not (Test-ReadyStatusPayload $badPayload)) "false-ready payload '$badPayload' was accepted" }
+        foreach ($liveStatus in @('starting', 'ready', 'error')) { Assert-SelfTestCondition (Test-LivenessStatusPayload ("{`"status`":`"$liveStatus`"}")) "valid liveness status '$liveStatus' was rejected" }
+        foreach ($badPayload in @('{"status":"Ready"}', '{"status":"degraded"}', '{"version":"dev"}', 'not-json', '')) { Assert-SelfTestCondition (-not (Test-LivenessStatusPayload $badPayload)) "invalid liveness payload '$badPayload' was accepted" }
+        Assert-SelfTestCondition (Get-HttpJsonContractResult -CapturedOutput "{`"status`":`"starting`"}`n200" -ContractKind liveness).Pass 'HTTP 200 liveness payload was rejected'
+        Assert-SelfTestCondition (Get-HttpJsonContractResult -CapturedOutput "{`"status`":`"ready`"}`n200" -ContractKind readiness).Pass 'HTTP 200 readiness payload was rejected'
+        Assert-SelfTestCondition (-not (Get-HttpJsonContractResult -CapturedOutput "{`"status`":`"ready`"}`n204" -ContractKind readiness).Pass) 'non-200 readiness response was accepted'
+        Assert-SelfTestCondition (-not (Get-HttpJsonContractResult -CapturedOutput "{`"status`":`"error`"}`n200" -ContractKind readiness).Pass) 'liveness-only error status was accepted as readiness'
         $readyEndpoints = @(Get-DevStandReadyEndpoints)
         Assert-SelfTestCondition ($readyEndpoints.Count -eq 4) 'dev stand does not require both direct and operator-proxied semantic endpoints'
-        Assert-SelfTestCondition (@($readyEndpoints | Where-Object { $_.name -eq 'operator-api-health' -and $_.url -eq 'http://localhost:3001/api/health' -and $_.path_kind -eq 'operator-console-proxy' }).Count -eq 1) 'operator-console proxied /api/health proof is missing'
-        Assert-SelfTestCondition (@($readyEndpoints | Where-Object { $_.name -eq 'operator-api-ready' -and $_.url -eq 'http://localhost:3001/api/ready' -and $_.path_kind -eq 'operator-console-proxy' }).Count -eq 1) 'operator-console proxied /api/ready proof is missing'
-        $standEnvironment = Get-DevStandEnvironment -Project 'engram-critical-stand' -AdminToken 'selftest-token' -DatabaseDsn 'postgres://engram:engram@postgres:5432/engram?sslmode=disable'
+        Assert-SelfTestCondition (@($readyEndpoints | Where-Object { $_.name -eq 'health' -and $_.contract_kind -eq 'liveness' }).Count -eq 1) 'direct /health is not classified as liveness'
+        Assert-SelfTestCondition (@($readyEndpoints | Where-Object { $_.name -eq 'api-ready' -and $_.contract_kind -eq 'readiness' }).Count -eq 1) 'direct /api/ready is not classified as readiness'
+        Assert-SelfTestCondition (@($readyEndpoints | Where-Object { $_.name -eq 'operator-api-health' -and $_.url -eq 'http://localhost:3001/api/health' -and $_.path_kind -eq 'operator-console-proxy' -and $_.contract_kind -eq 'liveness' }).Count -eq 1) 'operator-console proxied /api/health liveness proof is missing'
+        Assert-SelfTestCondition (@($readyEndpoints | Where-Object { $_.name -eq 'operator-api-ready' -and $_.url -eq 'http://localhost:3001/api/ready' -and $_.path_kind -eq 'operator-console-proxy' -and $_.contract_kind -eq 'readiness' }).Count -eq 1) 'operator-console proxied /api/ready readiness proof is missing'
+        $credentials = [ordered]@{ postgres_password = 'random-postgres-selftest'; admin_token = 'random-admin-selftest'; bootstrap_capability = 'random-bootstrap-selftest' }
+        Assert-DevStandCredentials $credentials
+        foreach ($invalidCredentials in @(
+            [ordered]@{ postgres_password = ''; admin_token = 'valid-admin-secret-0001'; bootstrap_capability = 'valid-bootstrap-secret-0001' },
+            [ordered]@{ postgres_password = 'engram'; admin_token = 'valid-admin-secret-0002'; bootstrap_capability = 'valid-bootstrap-secret-0002' },
+            [ordered]@{ postgres_password = 'valid-postgres-secret-0003'; admin_token = 'valid-admin-secret-0003' },
+            [ordered]@{ postgres_password = 'same-valid-secret-0004'; admin_token = 'same-valid-secret-0004'; bootstrap_capability = 'same-valid-secret-0004' }
+        )) {
+            $rejected = $false
+            try { Assert-DevStandCredentials $invalidCredentials } catch { $rejected = $true }
+            Assert-SelfTestCondition $rejected 'blank/default/missing/reused dev-stand credentials were accepted'
+        }
+        $standEnvironment = Get-DevStandEnvironment -Project 'engram-critical-stand' -PostgresPassword $credentials.postgres_password -AdminToken $credentials.admin_token -BootstrapCapability $credentials.bootstrap_capability
         Assert-SelfTestCondition ($standEnvironment.NUXT_OPERATOR_API_TARGET -ceq 'http://server:37777') 'dev stand uses the wrong Nuxt operator API target variable or value'
         Assert-SelfTestCondition (-not $standEnvironment.ContainsKey('NUXT_ENGRAM_API_TARGET')) 'stale NUXT_ENGRAM_API_TARGET was accepted into the dev stand environment'
+        Assert-SelfTestCondition ($standEnvironment.POSTGRES_PASSWORD -ceq $credentials.postgres_password) 'generated PostgreSQL password did not reach the compose environment'
+        Assert-SelfTestCondition ($standEnvironment.ENGRAM_AUTH_ADMIN_TOKEN -ceq $credentials.admin_token) 'generated admin token did not reach the compose environment'
+        Assert-SelfTestCondition ($standEnvironment.ENGRAM_AUTH_BOOTSTRAP_CAPABILITY -ceq $credentials.bootstrap_capability) 'generated bootstrap capability did not reach the compose environment'
+        Assert-SelfTestCondition ($standEnvironment.DATABASE_DSN -match '^postgres://engram:[^@]+@postgres:5432/engram\?sslmode=disable$' -and -not $standEnvironment.DATABASE_DSN.Contains(':engram@')) 'generated PostgreSQL password did not reach DATABASE_DSN'
+        Assert-SelfTestCondition (Test-RedactedContainerEnvironment '["POSTGRES_PASSWORD=REDACTED_SENSITIVE_VALUE","OTHER=value"]' @('POSTGRES_PASSWORD')) 'redacted exact container environment proof was rejected'
+        Assert-SelfTestCondition (-not (Test-RedactedContainerEnvironment '["POSTGRES_PASSWORD=wrong"]' @('POSTGRES_PASSWORD'))) 'wrong runtime credential value was accepted'
+        Assert-SelfTestCondition (-not (Test-RedactedContainerEnvironment '["ENGRAM_AUTH_ADMIN_TOKEN=REDACTED_SENSITIVE_VALUE"]' @('ENGRAM_AUTH_ADMIN_TOKEN','ENGRAM_AUTH_BOOTSTRAP_CAPABILITY'))) 'missing runtime bootstrap capability was accepted'
         $validInventory = Test-ExactDevStandInventory @{ postgres = 'pgvector/pgvector:pg17'; server = 'ghcr.io/thebtf/engram:main'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
         Assert-SelfTestCondition $validInventory.Pass 'exact compose service/image inventory was rejected'
         $invalidInventory = Test-ExactDevStandInventory @{ postgres = 'pgvector/pgvector:pg17'; server = 'engram:prc-candidate'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
