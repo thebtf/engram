@@ -265,6 +265,47 @@ jobs:
             }
           }
 
+          function Assert-ExactRequiredSessionStartInventory([System.Management.Automation.Language.ScriptBlockAst]$ast) {
+            $expectedPackage = 'github.com/thebtf/engram/internal/grpcserver'
+            $expectedNames = @(
+              'TestEC_F1_P1_GRPCSessionStart_FlagOff_ByteIdentity',
+              'TestEC_F1_P1_GRPCSessionStart_FlagOn_PrivateCrossWorkstationInvisible',
+              'TestEC_F1_P1_GRPCSessionStart_FlagOn_NoCallerIdentity_PrivateInvisible',
+              'TestGetSessionStartContext_HappyPath',
+              'TestGetSessionStartContext_PrincipalPrivateCrossPrincipalInvisible_FlagOff',
+              'TestGetSessionStartContext_MetaSummaryFlagOnDescribesMemoryLandscape',
+              'TestGetSessionStartContext_MetaSummaryCountsBeyondResponseCap',
+              'TestGetSessionStartContext_MetaSummaryFlagOffOmitted',
+              'TestGetSessionStartContext_MetaSummaryFlagOnEmptyProjectIsBoundedAndContentFree',
+              'TestGetSessionStartContext_T014_MetaSummaryRequiresMasterAndS2Flags',
+              'TestGetSessionStartContext_RuleRouterEnabledPacketShape',
+              'TestGetSessionStartContext_DefaultLimits'
+            )
+
+            $inventoryFunctions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-RequiredSessionStartTestNames' }, $true))
+            if ($inventoryFunctions.Count -ne 1) { throw "Get-RequiredSessionStartTestNames cardinality must be exactly 1; found $($inventoryFunctions.Count)" }
+            $actualNames = @($inventoryFunctions[0].Body.FindAll({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true) | ForEach-Object Value)
+            if ($actualNames.Count -ne $expectedNames.Count) { throw "required session-start identity cardinality must be exactly 12; found $($actualNames.Count)" }
+            for ($identityIndex = 0; $identityIndex -lt $expectedNames.Count; $identityIndex++) {
+              if ([string]$actualNames[$identityIndex] -cne $expectedNames[$identityIndex]) { throw "required session-start identity drifted at index ${identityIndex}: '$([string]$actualNames[$identityIndex])'" }
+            }
+
+            $proofFunctions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-RequiredSessionStartExecutionProof' }, $true))
+            if ($proofFunctions.Count -ne 1) { throw "Get-RequiredSessionStartExecutionProof cardinality must be exactly 1; found $($proofFunctions.Count)" }
+            $packageAssignments = @($proofFunctions[0].Body.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$package' -and
+                (ConvertTo-AstShape $node.Right.Extent.Text) -ceq (ConvertTo-AstShape ("'" + $expectedPackage + "'"))
+            }, $true))
+            if ($packageAssignments.Count -ne 1) { throw "required session-start package must be exactly '$expectedPackage'" }
+            $inventoryAssignments = @($proofFunctions[0].Body.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$expectedNames' -and
+                (ConvertTo-AstShape $node.Right.Extent.Text) -ceq (ConvertTo-AstShape '@(Get-RequiredSessionStartTestNames)')
+            }, $true))
+            if ($inventoryAssignments.Count -ne 1) { throw 'execution proof does not consume the pinned required session-start identity inventory exactly once' }
+          }
+
           function Get-ExactRuntimeAssignment(
             [System.Management.Automation.Language.ScriptBlockAst]$ast,
             [string]$left,
@@ -292,6 +333,7 @@ jobs:
           }
 
           function Assert-LiveSessionStartExecutionContract([System.Management.Automation.Language.ScriptBlockAst]$ast) {
+            Assert-ExactRequiredSessionStartInventory $ast
             $nameFunctions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'New-RunDatabaseName' }, $true))
             if ($nameFunctions.Count -ne 1) { throw "New-RunDatabaseName cardinality must be exactly 1; found $($nameFunctions.Count)" }
             $nameAssignments = @($nameFunctions[0].Body.FindAll({
@@ -606,6 +648,8 @@ jobs:
           $deadProofReplacement = $proofIndent + '# ' + $proofLine.TrimStart() + "`n" + $proofIndent + '$sessionStartExecutionProof = [pscustomobject]@{ verdict = ''PASS''; executed = 12; skipped = 0; missing = 0 }'
           $deadProofRunner = $dbRunner.Replace($proofLine, $deadProofReplacement)
           Assert-MutationRejected 'comment-only session-start execution proof' { Assert-WorkflowContract $workflow $critical $stand $deadProofRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'substitute one required session-start identity' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("'TestEC_F1_P1_GRPCSessionStart_FlagOff_ByteIdentity'", "'TestCredentialDecryptRoundTripAfterMigration'")) $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'substitute required session-start package' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("'github.com/thebtf/engram/internal/grpcserver'", "'github.com/thebtf/engram/internal/mcp'")) $criticalRunner $devStandRunner }
           Assert-MutationRejected 'remove literal-test database identity' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace('$databaseName = New-RunDatabaseName -RequestedRunId $RunId -RepeatIndex $repeatIndex', '$databaseName = "engram_prc_rg_${safeRunToken}_r$repeatIndex"')) $criticalRunner $devStandRunner }
           Assert-MutationRejected 'bypass required session-start execution proof' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace('$sessionStartExecutionProof = Get-RequiredSessionStartExecutionProof $goTestSummary', '$sessionStartExecutionProof = [pscustomobject]@{ verdict = ''PASS''; executed = 12; skipped = 0; missing = 0 }')) $criticalRunner $devStandRunner }
           Assert-MutationRejected 'remove no-build launch lock' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("'--no-build'", "'--renew-anon-volumes'")) $criticalRunner $devStandRunner }
@@ -620,7 +664,7 @@ jobs:
           Assert-MutationRejected 'change ownership current owner' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace('"current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"', '"current_owner": "DB-BULKOPS"')) }
           Assert-MutationRejected 'remove rejected predecessor evidence' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace($rejectedBulkCheckerSha, '')) }
           Assert-MutationRejected 'change exact rejected successor base' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace($rejectedBulkHead, ('1' * 40))) }
-          Write-Output 'CONFORMANCE PASS: canonical LF/CRLF authority, exact wrappers, path budget, AST-validated reachable exactly-once source-built image provenance and Scout, 12-test zero-skip DB execution proof, ownership state, node matrix, readiness, cleanup, and full/race semantics match; 42 mutations rejected'
+          Write-Output 'CONFORMANCE PASS: canonical LF/CRLF authority, exact wrappers, path budget, AST-validated reachable exactly-once source-built image provenance and Scout, immutable package plus 12-test zero-skip DB execution proof, ownership state, node matrix, readiness, cleanup, and full/race semantics match; 44 mutations rejected'
 
       - name: Resolve PostgreSQL service identity
         shell: pwsh

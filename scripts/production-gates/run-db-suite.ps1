@@ -935,8 +935,25 @@ function Invoke-SelfTest {
         Assert-SelfTestCondition ($testOnlyDatabase -match '^engram_prc_rg_test_[a-f0-9]{16}_r20$') 'fresh database name is not an unambiguous literal-test identity'
         Assert-SelfTestCondition ($testOnlyDatabase -notmatch '(?i)prod|production|staging') 'operator run id leaked a production-like token into the test database name'
         $requiredPackage = 'github.com/thebtf/engram/internal/grpcserver'
+        $pinnedRequiredTests = @(
+            'TestEC_F1_P1_GRPCSessionStart_FlagOff_ByteIdentity',
+            'TestEC_F1_P1_GRPCSessionStart_FlagOn_PrivateCrossWorkstationInvisible',
+            'TestEC_F1_P1_GRPCSessionStart_FlagOn_NoCallerIdentity_PrivateInvisible',
+            'TestGetSessionStartContext_HappyPath',
+            'TestGetSessionStartContext_PrincipalPrivateCrossPrincipalInvisible_FlagOff',
+            'TestGetSessionStartContext_MetaSummaryFlagOnDescribesMemoryLandscape',
+            'TestGetSessionStartContext_MetaSummaryCountsBeyondResponseCap',
+            'TestGetSessionStartContext_MetaSummaryFlagOffOmitted',
+            'TestGetSessionStartContext_MetaSummaryFlagOnEmptyProjectIsBoundedAndContentFree',
+            'TestGetSessionStartContext_T014_MetaSummaryRequiresMasterAndS2Flags',
+            'TestGetSessionStartContext_RuleRouterEnabledPacketShape',
+            'TestGetSessionStartContext_DefaultLimits'
+        )
         $requiredTests = @(Get-RequiredSessionStartTestNames)
         Assert-SelfTestCondition ($requiredTests.Count -eq 12) 'required session-start execution inventory is not exactly 12 tests'
+        for ($requiredIndex = 0; $requiredIndex -lt $pinnedRequiredTests.Count; $requiredIndex++) {
+            Assert-SelfTestCondition ($requiredTests[$requiredIndex] -ceq $pinnedRequiredTests[$requiredIndex]) "required session-start identity drifted at index $requiredIndex"
+        }
         $passingEvents = @($requiredTests | ForEach-Object { [pscustomobject]@{ package = $requiredPackage; test = $_; outcome = 'pass' } })
         $passingProof = Get-RequiredSessionStartExecutionProof ([pscustomobject]@{ tests = $passingEvents })
         Assert-SelfTestCondition ($passingProof.verdict -eq 'PASS' -and $passingProof.executed -eq 12 -and $passingProof.skipped -eq 0) '12/12 executed session-start tests were rejected'
