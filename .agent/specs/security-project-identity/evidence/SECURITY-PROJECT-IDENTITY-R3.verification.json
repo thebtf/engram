@@ -1,0 +1,57 @@
+{
+  "task_id": "SECURITY-PROJECT-IDENTITY-R3",
+  "base_commit": "9e2ce4e58a5cded69660ca9ac532d2167f315bb2",
+  "checker_commit_reviewed": "774047a3dfcd94de78c9e471fdcf05097aeff532",
+  "checker_is_ancestor": false,
+  "branch": "work/prc-security-project-identity-r3",
+  "observed_at": "2026-07-10T20:44:36.1761574Z",
+  "verdict": "PASS_PENDING_COMMIT_OBJECT_AND_FRESH_CHECKER",
+  "findings_closed": {
+    "SPI-R2-CHK-001": "strict store-local outer-selector validation now precedes metadata and database access; default gRPC maps it to InvalidArgument",
+    "SPI-R2-CHK-002": "Go, Claude, and OpenClaw publish complete synced same-directory temporary files through atomic no-replace hard links"
+  },
+  "compatibility": {
+    "outer_selectors_preserved": ["colon", "backslash", "slash", "dot", "dash", "underscore"],
+    "legacy_alias_internal_whitespace": "preserved",
+    "existing_valid_anchor": "byte-identical after concurrent resolution",
+    "existing_malformed_anchor": "PROJECT_IDENTITY_INVALID and byte-identical; never regenerated"
+  },
+  "gates": {
+    "focused_store_grpc_proxy": "PASS",
+    "go_anchor_ordinary_count_30": "PASS",
+    "go_anchor_race_count_30": "PASS",
+    "claude_child_process_count_30": "PASS",
+    "openclaw_child_process_count_30": "PASS",
+    "linux_go_anchor_mode_and_publication": "PASS in golang:1.25-bookworm",
+    "linux_claude_anchor_mode_and_publication": "PASS in node:22.17.0-bookworm-slim",
+    "linux_openclaw_anchor_mode_and_publication": "PASS in node:22.17.0-bookworm-slim",
+    "postgresql": "PostgreSQL 17.10 isolated DB; identity race count=10 PASS; matching prc-* rows 0; database dropped",
+    "go_full": "go test ./... -count=1 PASS",
+    "go_vet": "go vet ./... PASS",
+    "claude_hooks": "76/76 PASS with ENGRAM_URL/TOKEN/QUIET removed",
+    "openclaw": "npm test 27/27 PASS; npm run typecheck PASS",
+    "prove_it": "four production files mutated; zero surviving mutations",
+    "gitleaks": "staged scan PASS; 40.60 KB; no leaks",
+    "diff_check": "PASS",
+    "proto_parity": "PASS; zero changed proto paths",
+    "request_path_ddl_guard": "PASS; zero added product hits",
+    "v5_demolition_guard": "PASS; zero added product hits",
+    "exact_path_parity": "PASS; 14 changed paths"
+  },
+  "scope": {
+    "changed_path_count": 14,
+    "changed_paths_sha256_lf_sorted": "341175c6056cfc424a252f7c47bc049b14f393bf419bd095df9a79c6ea77fed1",
+    "owned_product_test_paths": 9,
+    "other_paths": "existing evidence namespaces plus one maker report"
+  },
+  "database_cleanup": {
+    "database": "prc_spi_r3_20260710",
+    "matching_project_rows_before_drop": 0,
+    "database_remaining": 0
+  },
+  "security": {
+    "classification": "S2",
+    "verdict": "PASS",
+    "open_findings": 0
+  }
+}

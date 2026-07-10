@@ -1,0 +1,35 @@
+{
+  "task_id": "SECURITY-PROJECT-IDENTITY-R3",
+  "stack": "GO+JAVASCRIPT+TYPESCRIPT",
+  "observed_at": "2026-07-10T20:26:15.4217526Z",
+  "test_file": "internal/db/gorm/project_identity_v2_test.go",
+  "test_name": "TestRegisterAndResolve_StrictOuterSelectorRejectsBeforeDatabaseAccess",
+  "failure_reason": "The store and default gRPC resolver misclassified malformed selectors before database access, while the existing publish-before-complete Go anchor path exposed EOF under race repetition.",
+  "runner_stdout_excerpt": "selector a b: PROJECT_IDENTITY_UNAVAILABLE; selector ../x: PROJECT_IDENTITY_UNAVAILABLE; default gRPC: Unavailable; proxy race: PROJECT_IDENTITY_INVALID decode .engram-project-v2.json: EOF",
+  "additional_red_observations": [
+    {
+      "test_file": "internal/grpcserver/project_identity_v2_test.go",
+      "test_name": "TestCallTool_DefaultResolverRejectsMalformedSelectorsBeforeHandler",
+      "failure": "a b and ../x returned Unavailable instead of InvalidArgument"
+    },
+    {
+      "test_file": "internal/proxy/identity_test.go",
+      "test_name": "TestResolveProjectIdentityV2_ConcurrentFirstUseConverges",
+      "runner": "go test -race ./internal/proxy -run ^TestResolveProjectIdentityV2_(ConcurrentFirstUseConverges|PreExistingAnchorsAreNeverReplaced)$ -count=30 -v",
+      "failure": "Two repetitions observed a losing reader decode the creator-owned final file as EOF"
+    },
+    {
+      "test_file": "plugin/engram/hooks/project-identity-v2.test.js",
+      "test_name": "non-git v2 anchor is strict, high-entropy, stable, and child-process concurrent-safe",
+      "runner": "30 child-process rounds against the exact base",
+      "failure": "Round 30 returned at least one PROJECT_IDENTITY_INVALID child result from a partial final file"
+    },
+    {
+      "test_file": "plugin/openclaw-engram/test/project-identity-v2.test.mjs",
+      "test_name": "OpenClaw non-git identity is stable and child-process concurrent-safe, never the agent id",
+      "runner": "30 child-process rounds against the exact base",
+      "failure": "Round 6 returned at least one PROJECT_IDENTITY_INVALID child result from a partial final file"
+    }
+  ],
+  "environment_note": "Windows reports writable regular-file permission bits as 0666; the 0600 assertion is enforced on POSIX and separately verified in the Linux acceptance rail."
+}

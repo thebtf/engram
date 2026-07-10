@@ -10,6 +10,7 @@ import (
 	"github.com/thebtf/engram/internal/auth"
 	localgorm "github.com/thebtf/engram/internal/db/gorm"
 	pb "github.com/thebtf/engram/proto/engram/v1"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -124,5 +125,32 @@ func TestProjectIdentityUnavailable_DoesNotExposeDatabaseDiagnostics(t *testing.
 	}
 	if strings.Contains(err.Error(), "do-not-leak") || strings.Contains(err.Error(), "relation projects") {
 		t.Fatalf("database diagnostics leaked: %v", err)
+	}
+}
+
+func TestCallTool_DefaultResolverRejectsMalformedSelectorsBeforeHandler(t *testing.T) {
+	for _, selector := range []string{"a b", "../x"} {
+		t.Run(selector, func(t *testing.T) {
+			steps := []string{}
+			srv := &Server{handler: identityOrderHandler{steps: &steps}}
+			_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: "recall", Project: selector})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("status=%v error=%v, want InvalidArgument", status.Code(err), err)
+			}
+			st, ok := status.FromError(err)
+			if !ok || len(st.Details()) != 1 {
+				t.Fatalf("stable machine-readable detail missing: %#v", st.Details())
+			}
+			detail, ok := st.Details()[0].(*errdetails.ErrorInfo)
+			if !ok {
+				t.Fatalf("detail=%T, want ErrorInfo", st.Details()[0])
+			}
+			if detail.Reason != localgorm.ProjectIdentityInvalid || detail.Domain != "engram.project_identity" || detail.Metadata["upgrade_action"] != localgorm.UpgradeActionRegenerateProjectIdentityV2 {
+				t.Fatalf("detail=%#v", detail)
+			}
+			if len(steps) != 0 {
+				t.Fatalf("handler ran before selector rejection: %v", steps)
+			}
+		})
 	}
 }

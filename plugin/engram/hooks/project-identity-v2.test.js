@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -8,6 +9,83 @@ const lib = require('./lib');
 
 const vectorsPath = path.resolve(__dirname, '../../../.agent/specs/security-project-identity/evidence/project-identity-v2-vectors.json');
 const vectors = JSON.parse(fs.readFileSync(vectorsPath, 'utf8'));
+
+const claudeIdentityChild = String.raw`
+const fs = require('node:fs');
+const path = require('node:path');
+const [modulePath, workspace, barrier, id] = process.argv.slice(1);
+fs.writeFileSync(path.join(barrier, 'ready-' + id), '');
+const wait = new Int32Array(new SharedArrayBuffer(4));
+while (!fs.existsSync(path.join(barrier, 'go'))) Atomics.wait(wait, 0, 0, 5);
+try {
+  const lib = require(modulePath);
+  process.stdout.write(JSON.stringify({ ok: true, value: lib.resolveProjectIdentityV2(workspace) }));
+} catch (error) {
+  process.stdout.write(JSON.stringify({ ok: false, error: String(error && error.message || error) }));
+}
+`;
+
+async function resolveClaudeIdentityInChildProcesses(workspace, count) {
+  const barrier = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-barrier-'));
+  const modulePath = require.resolve('./lib');
+  const children = [];
+  try {
+    for (let id = 0; id < count; id++) {
+      const child = spawn(process.execPath, ['-e', claudeIdentityChild, modulePath, workspace, barrier, String(id)], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+      let stdout = '';
+      let stderr = '';
+      const result = new Promise((resolve, reject) => {
+        child.stdout.setEncoding('utf8');
+        child.stderr.setEncoding('utf8');
+        child.stdout.on('data', (chunk) => { stdout += chunk; });
+        child.stderr.on('data', (chunk) => { stderr += chunk; });
+        child.once('error', reject);
+        child.once('close', (code) => {
+          if (code !== 0) {
+            reject(new Error(`identity child ${id} exited ${code}: ${stderr}`));
+            return;
+          }
+          try { resolve(JSON.parse(stdout)); } catch (error) {
+            reject(new Error(`identity child ${id} returned invalid JSON: ${stdout}\n${stderr}`, { cause: error }));
+          }
+        });
+      });
+      children.push({ child, result });
+    }
+
+    const deadline = Date.now() + 15000;
+    while (fs.readdirSync(barrier).filter((name) => name.startsWith('ready-')).length !== count) {
+      if (Date.now() >= deadline) throw new Error('identity children did not reach the concurrency barrier');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    fs.writeFileSync(path.join(barrier, 'go'), '');
+    return await Promise.all(children.map(({ result }) => result));
+  } finally {
+    for (const { child } of children) {
+      if (child.exitCode === null) child.kill();
+    }
+    fs.rmSync(barrier, { recursive: true, force: true });
+  }
+}
+
+function assertCompleteAnchorPublication(workspace, expectedAnchor) {
+  const anchorPath = path.join(workspace, '.engram-project-v2.json');
+  const parsed = JSON.parse(fs.readFileSync(anchorPath, 'utf8'));
+  assert.deepEqual(Object.keys(parsed).sort(), ['anchor', 'shared', 'version']);
+  assert.equal(parsed.version, 2);
+  assert.equal(parsed.anchor, expectedAnchor);
+  assert.equal(parsed.shared, false);
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(anchorPath).mode & 0o777, 0o600);
+  }
+  assert.deepEqual(
+    fs.readdirSync(workspace).filter((name) => name.startsWith('.engram-project-v2.json.tmp-')),
+    [],
+  );
+}
 
 test('project identity v2 consumes the repository-wide vectors', () => {
   assert.equal(vectors.identity_version, lib.PROJECT_IDENTITY_VERSION_V2);
@@ -23,16 +101,26 @@ test('project identity v2 consumes the repository-wide vectors', () => {
   }
 });
 
-test('non-git v2 anchor is strict, high-entropy, stable, and concurrent-safe', async (t) => {
+test('non-git v2 anchor is strict, high-entropy, stable, and child-process concurrent-safe', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
-  const identities = await Promise.all(Array.from({ length: 16 }, () =>
-    lib.resolveProjectIdentityV2(dir)));
+  const firstRun = await resolveClaudeIdentityInChildProcesses(dir, 16);
+  assert.ok(firstRun.every((result) => result.ok), JSON.stringify(firstRun));
+  const identities = firstRun.map((result) => result.value);
   const anchors = new Set(identities.map((identity) => identity.non_git_anchor));
   assert.equal(anchors.size, 1);
   assert.match(identities[0].non_git_anchor, /^[0-9a-f]{32}$/);
   assert.equal(identities[0].anchor_shared, false);
+  assertCompleteAnchorPublication(dir, identities[0].non_git_anchor);
+
+  const anchorPath = path.join(dir, '.engram-project-v2.json');
+  const originalBytes = fs.readFileSync(anchorPath);
+  const secondRun = await resolveClaudeIdentityInChildProcesses(dir, 8);
+  assert.ok(secondRun.every((result) => result.ok), JSON.stringify(secondRun));
+  assert.ok(secondRun.every((result) => result.value.non_git_anchor === identities[0].non_git_anchor));
+  assert.deepEqual(fs.readFileSync(anchorPath), originalBytes, 'an existing anchor must remain byte-identical');
+  assertCompleteAnchorPublication(dir, identities[0].non_git_anchor);
 
   const otherDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-other-'));
   t.after(() => fs.rmSync(otherDir, { recursive: true, force: true }));
@@ -44,7 +132,7 @@ test('non-git v2 anchor is strict, high-entropy, stable, and concurrent-safe', a
   assert.throws(() => lib.validateProjectIdentityV2(bad), /PROJECT_IDENTITY_INVALID/);
 });
 
-test('v2 metadata and anchor files reject non-normalized or unknown input', (t) => {
+test('v2 metadata and anchor files reject non-normalized or unknown input without replacement', async (t) => {
   const malformed = lib.buildProjectIdentityV2({
     legacy_project_id: ' selector ',
     display_name: 'fixture',
@@ -55,13 +143,19 @@ test('v2 metadata and anchor files reject non-normalized or unknown input', (t) 
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-extra-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(dir, '.engram-project-v2.json'), JSON.stringify({
+  const anchorPath = path.join(dir, '.engram-project-v2.json');
+  const malformedBytes = Buffer.from(JSON.stringify({
     version: 2,
     anchor: '00112233445566778899aabbccddeeff',
     shared: false,
     unexpected: true,
   }));
+  fs.writeFileSync(anchorPath, malformedBytes, { mode: 0o600 });
   assert.throws(() => lib.resolveProjectIdentityV2(dir), /PROJECT_IDENTITY_INVALID/);
+  const concurrent = await resolveClaudeIdentityInChildProcesses(dir, 8);
+  assert.ok(concurrent.every((result) => !result.ok && /PROJECT_IDENTITY_INVALID/.test(result.error)), JSON.stringify(concurrent));
+  assert.deepEqual(fs.readFileSync(anchorPath), malformedBytes, 'malformed existing bytes must never be regenerated');
+  assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('.engram-project-v2.json.tmp-')), []);
 });
 
 test('shared invalid vectors and wrong-type anchor sharing are rejected exactly', () => {

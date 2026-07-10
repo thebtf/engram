@@ -67,6 +67,28 @@
       "anchor_shared": null
     },
     {
+      "name": "selector-internal-whitespace",
+      "invalid_target": "selector",
+      "selector": "configured selector",
+      "display_name": "core",
+      "legacy_project_id": "core_18f246",
+      "git_remote": "https://example.invalid/acme/mono.git",
+      "relative_path": "packages/core/",
+      "non_git_anchor": "",
+      "anchor_shared": null
+    },
+    {
+      "name": "selector-traversal",
+      "invalid_target": "selector",
+      "selector": "../configured-selector",
+      "display_name": "core",
+      "legacy_project_id": "core_18f246",
+      "git_remote": "https://example.invalid/acme/mono.git",
+      "relative_path": "packages/core/",
+      "non_git_anchor": "",
+      "anchor_shared": null
+    },
+    {
       "name": "display-leading-whitespace",
       "invalid_target": "identity",
       "selector": "configured-selector",
