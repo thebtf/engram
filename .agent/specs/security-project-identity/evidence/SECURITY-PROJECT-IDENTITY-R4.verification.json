@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "task_id": "SECURITY-PROJECT-IDENTITY-R4",
+  "role": "maker",
+  "generated_at": "2026-07-11T00:53:48.3829071+03:00",
+  "verdict": "PASS",
+  "immutable_base": "38344455754fe503acbd79d2134141f996adff7f",
+  "blocking_finding_closed": "SPI-R3-CHK-001",
+  "scope": {
+    "product_source_changes": 0,
+    "new_permanent_test_paths": [
+      "internal/proxy/identity_process_test.go"
+    ],
+    "existing_goroutine_test_preserved": true,
+    "auth_changes": 0,
+    "database_changes": 0,
+    "protobuf_changes": 0,
+    "dependency_changes": 0,
+    "v5_demolished_path_changes": 0
+  },
+  "product_parity": {
+    "path": "internal/proxy/identity.go",
+    "base_git_blob": "9ecbad17612e7dd4e2ce8c8fed10ee4e041e11c1",
+    "final_git_blob": "9ecbad17612e7dd4e2ce8c8fed10ee4e041e11c1",
+    "base_to_final_diff": "empty"
+  },
+  "per_invocation_process_contract": {
+    "children_per_wave": 12,
+    "fresh_waves": 3,
+    "existing_valid_waves": 2,
+    "existing_malformed_waves": 1,
+    "open_delayed_partial_writer_waves": 1,
+    "total_child_processes": 84,
+    "barrier": "Every child emits READY and blocks on stdin; after all READY lines are observed, parent closes one in-process release gate and concurrent goroutines write G to every child pipe.",
+    "sleep_based_synchronization": false,
+    "distinct_pid_assertion": true,
+    "parent_complete_file_monitor": true,
+    "temp_prefixes_checked": [
+      ".engram-project-v2.json.tmp-",
+      ".engram-project.tmp-"
+    ]
+  },
+  "final_windows_race_repeat": {
+    "command": "go test -race ./internal/proxy -run '^TestResolveProjectIdentityV2_ChildProcessPublicationContract$' -count=2 -v",
+    "go_version": "go1.25.11 windows/amd64",
+    "result": "PASS",
+    "contract_invocations": 2,
+    "child_processes": 168,
+    "fresh_complete_observations": [
+      21377,
+      19801
+    ],
+    "partial_or_unreadable_observations": 0,
+    "valid_anchor_byte_preservation": true,
+    "malformed_anchor_byte_preservation": true,
+    "open_writer_byte_preservation": true,
+    "temp_residue": 0
+  },
+  "final_linux_repeat": {
+    "image": "golang:1.25-bookworm",
+    "image_digest": "sha256:b96f24a8d7d010ea0acb9c3ba99064740f02b6b984612b28bd3c9c5ab9453e38",
+    "command": "docker run --rm -v ${PWD}:/src -w /src golang:1.25-bookworm sh -c /usr/local/go/bin/go test ./internal/proxy -run '^TestResolveProjectIdentityV2_ChildProcessPublicationContract$' -count=2 -v",
+    "go_version": "go1.25.11 linux/amd64",
+    "result": "PASS",
+    "contract_invocations": 2,
+    "child_processes": 168,
+    "fresh_complete_observations": [
+      2092,
+      2367
+    ],
+    "partial_or_unreadable_observations": 0,
+    "fresh_anchor_mode_each_round": "0600",
+    "valid_anchor_byte_preservation": true,
+    "malformed_anchor_byte_preservation": true,
+    "open_writer_byte_preservation": true,
+    "temp_residue": 0
+  },
+  "prove_it": {
+    "result": "PASS",
+    "mutation_test_exit_code": 1,
+    "partial_or_unreadable_observations": 239,
+    "mutation_committed": false,
+    "product_blob_restored": true
+  },
+  "gates": [
+    {
+      "command": "go test ./internal/proxy -count=1",
+      "result": "PASS"
+    },
+    {
+      "command": "go test ./... -count=1 with DATABASE_DSN, TEST_DATABASE_DSN, ENGRAM_TEST_DATABASE_DSN unset",
+      "result": "PASS"
+    },
+    {
+      "command": "go vet ./...",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS"
+    },
+    {
+      "command": "go test ./internal/db/gorm -run '^TestRegisterAndResolve_(StrictOuterSelectorRejectsBeforeDatabaseAccess|StrictOuterSelectorPreservesCompatibility)$' -count=1 -v",
+      "result": "PASS; colon, backslash, slash, dot, dash, and underscore compatibility retained"
+    },
+    {
+      "command": "go test ./internal/grpcserver -run '^TestCallTool_DefaultResolverRejectsMalformedSelectorsBeforeHandler$' -count=1 -v",
+      "result": "PASS; traversal and internal whitespace fail before handler"
+    }
+  ],
+  "phase_zero": {
+    "classification": "CODE_PATH_COVERED",
+    "user_facing_tests": 0,
+    "critical_suite_gap_introduced": false
+  },
+  "discrepancies": [
+    {
+      "kind": "container_invocation",
+      "observed": "bash -lc reset PATH in the local image and returned go: command not found",
+      "resolution": "reran the same immutable image with /usr/local/go/bin/go; all Linux gates passed",
+      "product_impact": "none"
+    }
+  ]
+}
