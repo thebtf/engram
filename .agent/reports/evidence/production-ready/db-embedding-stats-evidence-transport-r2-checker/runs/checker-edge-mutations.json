@@ -1,0 +1,607 @@
+{
+  "schema_version": 1,
+  "checker": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R2",
+  "target": "db2cf891dd9c6315fd17220ffe2d02302bea8844",
+  "source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "alternate_ancestor": "580b0cd0ff38bb55a5195a8004e60234a824b7a8",
+  "status": "FAIL",
+  "total": 8,
+  "passed": 5,
+  "failed": 3,
+  "false_pass_cases": [
+    "content_manifest_rejects_six_of_seven_when_legacy_agrees",
+    "content_manifest_rejects_wrong_path_with_same_cardinality",
+    "representation_rejects_alternate_ancestor_source_commit"
+  ],
+  "worktree_residue": "",
+  "cases": [
+    {
+      "name": "baseline_git_object",
+      "expectation": "accept",
+      "pass": true,
+      "exit_code": 0,
+      "status": "PASS",
+      "total": 7,
+      "matched": 7,
+      "structural_errors": [],
+      "entries": [
+        {
+          "path": "internal/embedding/store.go",
+          "git_blob_oid": "1abaee96b07583f9fd824ed03c40b043c490b567",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 287,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": "internal/embedding/store_stats_test.go",
+          "git_blob_oid": "d381643deadbb42e8a9a07fc9375a6cdfedbdccc",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 268,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+          "git_blob_oid": "48db3052d1ff53fa7cd5f61d0371dd1be0e780bd",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 8,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+          "git_blob_oid": "4d94a57de67a41b718073e403cd894843dcffa0d",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 35,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/coverage.out",
+          "git_blob_oid": "457c38e08408c534032a7a962969c762fa1fad8c",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 240,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+          "git_blob_oid": "8a3d45057e7c869e3eec8925a25a341158209f01",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 52,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json",
+          "git_blob_oid": "1fa3cb6c4dc1fba849f50f33a42a3f2d1f2b23fd",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 42,
+          "bare_carriage_returns": 0
+        }
+      ],
+      "stderr": ""
+    },
+    {
+      "name": "content_manifest_rejects_six_of_seven_when_legacy_agrees",
+      "expectation": "reject",
+      "pass": false,
+      "exit_code": 0,
+      "status": "PASS",
+      "total": 6,
+      "matched": 6,
+      "structural_errors": [],
+      "entries": [
+        {
+          "path": "internal/embedding/store.go",
+          "git_blob_oid": "1abaee96b07583f9fd824ed03c40b043c490b567",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 287,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": "internal/embedding/store_stats_test.go",
+          "git_blob_oid": "d381643deadbb42e8a9a07fc9375a6cdfedbdccc",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 268,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+          "git_blob_oid": "48db3052d1ff53fa7cd5f61d0371dd1be0e780bd",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 8,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+          "git_blob_oid": "4d94a57de67a41b718073e403cd894843dcffa0d",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 35,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/coverage.out",
+          "git_blob_oid": "457c38e08408c534032a7a962969c762fa1fad8c",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 240,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+          "git_blob_oid": "8a3d45057e7c869e3eec8925a25a341158209f01",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 52,
+          "bare_carriage_returns": 0
+        }
+      ],
+      "stderr": ""
+    },
+    {
+      "name": "content_manifest_rejects_wrong_path_with_same_cardinality",
+      "expectation": "reject",
+      "pass": false,
+      "exit_code": 0,
+      "status": "PASS",
+      "total": 7,
+      "matched": 7,
+      "structural_errors": [],
+      "entries": [
+        {
+          "path": "internal/embedding/store.go",
+          "git_blob_oid": "1abaee96b07583f9fd824ed03c40b043c490b567",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 287,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": "internal/embedding/store_stats_test.go",
+          "git_blob_oid": "d381643deadbb42e8a9a07fc9375a6cdfedbdccc",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 268,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+          "git_blob_oid": "48db3052d1ff53fa7cd5f61d0371dd1be0e780bd",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 8,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+          "git_blob_oid": "4d94a57de67a41b718073e403cd894843dcffa0d",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 35,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/coverage.out",
+          "git_blob_oid": "457c38e08408c534032a7a962969c762fa1fad8c",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 240,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+          "git_blob_oid": "8a3d45057e7c869e3eec8925a25a341158209f01",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 52,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": "go.mod",
+          "git_blob_oid": "84086897cde6f9205ffd9dcab48fc62a9a2a7af5",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 72,
+          "bare_carriage_returns": 0
+        }
+      ],
+      "stderr": ""
+    },
+    {
+      "name": "representation_rejects_alternate_ancestor_source_commit",
+      "expectation": "reject",
+      "pass": false,
+      "exit_code": 0,
+      "status": "PASS",
+      "total": 7,
+      "matched": 7,
+      "structural_errors": [],
+      "entries": [
+        {
+          "path": "internal/embedding/store.go",
+          "git_blob_oid": "1abaee96b07583f9fd824ed03c40b043c490b567",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 287,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": "internal/embedding/store_stats_test.go",
+          "git_blob_oid": "d381643deadbb42e8a9a07fc9375a6cdfedbdccc",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 268,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+          "git_blob_oid": "48db3052d1ff53fa7cd5f61d0371dd1be0e780bd",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 8,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+          "git_blob_oid": "4d94a57de67a41b718073e403cd894843dcffa0d",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 35,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/coverage.out",
+          "git_blob_oid": "457c38e08408c534032a7a962969c762fa1fad8c",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 240,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+          "git_blob_oid": "8a3d45057e7c869e3eec8925a25a341158209f01",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 52,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json",
+          "git_blob_oid": "1fa3cb6c4dc1fba849f50f33a42a3f2d1f2b23fd",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 42,
+          "bare_carriage_returns": 0
+        }
+      ],
+      "stderr": ""
+    },
+    {
+      "name": "content_manifest_rejects_duplicate_canonical_path",
+      "expectation": "reject",
+      "pass": true,
+      "exit_code": 1,
+      "status": "FAIL",
+      "total": 7,
+      "matched": 7,
+      "structural_errors": [
+        "contract paths must be unique canonical paths"
+      ],
+      "entries": [
+        {
+          "path": "internal/embedding/store.go",
+          "git_blob_oid": "1abaee96b07583f9fd824ed03c40b043c490b567",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 287,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": "internal/embedding/store.go",
+          "git_blob_oid": "1abaee96b07583f9fd824ed03c40b043c490b567",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 287,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+          "git_blob_oid": "48db3052d1ff53fa7cd5f61d0371dd1be0e780bd",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 8,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+          "git_blob_oid": "4d94a57de67a41b718073e403cd894843dcffa0d",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 35,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/coverage.out",
+          "git_blob_oid": "457c38e08408c534032a7a962969c762fa1fad8c",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 240,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+          "git_blob_oid": "8a3d45057e7c869e3eec8925a25a341158209f01",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 52,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json",
+          "git_blob_oid": "1fa3cb6c4dc1fba849f50f33a42a3f2d1f2b23fd",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 42,
+          "bare_carriage_returns": 0
+        }
+      ],
+      "stderr": ""
+    },
+    {
+      "name": "checkout_lf_rejects_real_bare_cr_byte",
+      "expectation": "reject",
+      "pass": true,
+      "exit_code": 1,
+      "status": "FAIL",
+      "total": 7,
+      "matched": 6,
+      "structural_errors": [],
+      "entries": [
+        {
+          "path": "internal/embedding/store.go",
+          "git_blob_oid": "1abaee96b07583f9fd824ed03c40b043c490b567",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": false,
+          "checkout_eol": "bare-cr-present",
+          "crlf_pairs": 287,
+          "bare_carriage_returns": 1
+        },
+        {
+          "path": "internal/embedding/store_stats_test.go",
+          "git_blob_oid": "d381643deadbb42e8a9a07fc9375a6cdfedbdccc",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 268,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+          "git_blob_oid": "48db3052d1ff53fa7cd5f61d0371dd1be0e780bd",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 8,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+          "git_blob_oid": "4d94a57de67a41b718073e403cd894843dcffa0d",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 35,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/coverage.out",
+          "git_blob_oid": "457c38e08408c534032a7a962969c762fa1fad8c",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 240,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+          "git_blob_oid": "8a3d45057e7c869e3eec8925a25a341158209f01",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 52,
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json",
+          "git_blob_oid": "1fa3cb6c4dc1fba849f50f33a42a3f2d1f2b23fd",
+          "git_object_match": true,
+          "raw_checkout_match": false,
+          "checkout_lf_match": true,
+          "checkout_eol": "crlf",
+          "crlf_pairs": 42,
+          "bare_carriage_returns": 0
+        }
+      ],
+      "stderr": ""
+    },
+    {
+      "name": "artifact_manifest_rejects_representation_drift",
+      "expectation": "reject",
+      "pass": true,
+      "exit_code": 1,
+      "status": "FAIL",
+      "total": 5,
+      "matched": 5,
+      "structural_errors": [
+        "artifact representation must be canonical-lf-files"
+      ],
+      "entries": [
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
+          "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
+          "match": true,
+          "checkout_eol": "crlf",
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json",
+          "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json",
+          "match": true,
+          "checkout_eol": "crlf",
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+          "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+          "match": true,
+          "checkout_eol": "crlf",
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json",
+          "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json",
+          "match": true,
+          "checkout_eol": "crlf",
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md",
+          "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md",
+          "match": true,
+          "checkout_eol": "crlf",
+          "bare_carriage_returns": 0
+        }
+      ],
+      "stderr": ""
+    },
+    {
+      "name": "artifact_files_reject_real_bare_cr_byte",
+      "expectation": "reject",
+      "pass": true,
+      "exit_code": 1,
+      "status": "FAIL",
+      "total": 5,
+      "matched": 4,
+      "structural_errors": [],
+      "entries": [
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
+          "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
+          "match": true,
+          "checkout_eol": "crlf",
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json",
+          "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json",
+          "match": true,
+          "checkout_eol": "crlf",
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+          "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+          "match": true,
+          "checkout_eol": "crlf",
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json",
+          "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json",
+          "match": true,
+          "checkout_eol": "crlf",
+          "bare_carriage_returns": 0
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md",
+          "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md",
+          "match": false,
+          "checkout_eol": "bare-cr-present",
+          "bare_carriage_returns": 1
+        }
+      ],
+      "stderr": ""
+    }
+  ]
+}

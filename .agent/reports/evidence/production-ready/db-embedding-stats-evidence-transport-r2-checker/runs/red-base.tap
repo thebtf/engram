@@ -1,0 +1,284 @@
+✖ artifact manifest rejects a header-only zero-entry set (416.1425ms)
+✖ artifact manifest rejects a missing required entry (243.163ms)
+✖ artifact manifest rejects an extra entry (219.7015ms)
+✔ artifact manifest rejects a duplicate entry (276.0339ms)
+✖ artifact manifest rejects dot-segment traversal outside the evidence namespace (248.3367ms)
+✖ artifact manifest rejects a non-canonical dot-segment alias (267.0129ms)
+▶ artifact manifest rejects absolute and backslash-separated paths
+  ✖ absolute path (253.4442ms)
+  ✖ backslash-separated path (214.5218ms)
+✖ artifact manifest rejects absolute and backslash-separated paths (468.4208ms)
+▶ contract rejects unsupported checkout-equivalence policy values
+  ✖ bare_cr (1040.6159ms)
+  ✖ transform (1013.1123ms)
+  ✖ required_result (974.4161ms)
+✖ contract rejects unsupported checkout-equivalence policy values (3028.4907ms)
+▶ contract rejects unknown schema keys
+  ✖ top-level (1009.0265ms)
+  ✖ representation (923.5985ms)
+  ✖ checkout-equivalence (945.77ms)
+  ✖ entry (943.6975ms)
+✖ contract rejects unknown schema keys (3822.4337ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 1
+ℹ fail 17
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9266.2928
+
+✖ failing tests:
+
+test at .agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:124:1
+✖ artifact manifest rejects a header-only zero-entry set (416.1425ms)
+  AssertionError [ERR_ASSERTION]: mutation must return a non-zero exit code
+      at expectFailClosed (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:69:10)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:132:3)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.start (node:internal/test_runner/test:959:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:332:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 0,
+    operator: 'notStrictEqual'
+  }
+
+test at .agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:135:1
+✖ artifact manifest rejects a missing required entry (243.163ms)
+  AssertionError [ERR_ASSERTION]: mutation must return a non-zero exit code
+      at expectFailClosed (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:69:10)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:145:3)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+      at Test.postRun (node:internal/test_runner/test:1191:19)
+      at Test.run (node:internal/test_runner/test:1119:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:332:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 0,
+    operator: 'notStrictEqual'
+  }
+
+test at .agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:148:1
+✖ artifact manifest rejects an extra entry (219.7015ms)
+  AssertionError [ERR_ASSERTION]: mutation must return a non-zero exit code
+      at expectFailClosed (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:69:10)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:158:3)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+      at Test.postRun (node:internal/test_runner/test:1191:19)
+      at Test.run (node:internal/test_runner/test:1119:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 0,
+    operator: 'notStrictEqual'
+  }
+
+test at .agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:174:1
+✖ artifact manifest rejects dot-segment traversal outside the evidence namespace (248.3367ms)
+  AssertionError [ERR_ASSERTION]: mutation must return a non-zero exit code
+      at expectFailClosed (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:69:10)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:188:3)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+      at Test.postRun (node:internal/test_runner/test:1191:19)
+      at Test.run (node:internal/test_runner/test:1119:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 0,
+    operator: 'notStrictEqual'
+  }
+
+test at .agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:191:1
+✖ artifact manifest rejects a non-canonical dot-segment alias (267.0129ms)
+  AssertionError [ERR_ASSERTION]: mutation must return a non-zero exit code
+      at expectFailClosed (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:69:10)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:204:3)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+      at Test.postRun (node:internal/test_runner/test:1191:19)
+      at Test.run (node:internal/test_runner/test:1119:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 0,
+    operator: 'notStrictEqual'
+  }
+
+test at .agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:208:11
+✖ absolute path (253.4442ms)
+  AssertionError [ERR_ASSERTION]: mutation must emit at least one structural error
+      at expectFailClosed (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:71:10)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:221:5)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.start (node:internal/test_runner/test:959:17)
+      at TestContext.test (node:internal/test_runner/test:373:13)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:208:11)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '=='
+  }
+
+test at .agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:224:11
+✖ backslash-separated path (214.5218ms)
+  AssertionError [ERR_ASSERTION]: mutation must emit at least one structural error
+      at expectFailClosed (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:71:10)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:234:5)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+      at Test.postRun (node:internal/test_runner/test:1191:19)
+      at Test.run (node:internal/test_runner/test:1119:12) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '=='
+  }
+
+test at .agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:247:13
+✖ bare_cr (1040.6159ms)
+  AssertionError [ERR_ASSERTION]: mutation must return a non-zero exit code
+      at expectFailClosed (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:69:10)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:253:7)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.start (node:internal/test_runner/test:959:17)
+      at TestContext.test (node:internal/test_runner/test:373:13)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:247:13)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 0,
+    operator: 'notStrictEqual'
+  }
+
+test at .agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:247:13
+✖ transform (1013.1123ms)
+  AssertionError [ERR_ASSERTION]: mutation must return a non-zero exit code
+      at expectFailClosed (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:69:10)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:253:7)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+      at Test.postRun (node:internal/test_runner/test:1191:19)
+      at Test.run (node:internal/test_runner/test:1119:12) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 0,
+    operator: 'notStrictEqual'
+  }
+
+test at .agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:247:13
+✖ required_result (974.4161ms)
+  AssertionError [ERR_ASSERTION]: mutation must return a non-zero exit code
+      at expectFailClosed (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:69:10)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:253:7)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+      at Test.postRun (node:internal/test_runner/test:1191:19)
+      at Test.run (node:internal/test_runner/test:1119:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 0,
+    operator: 'notStrictEqual'
+  }
+
+test at .agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:268:13
+✖ top-level (1009.0265ms)
+  AssertionError [ERR_ASSERTION]: mutation must return a non-zero exit code
+      at expectFailClosed (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:69:10)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:274:7)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.start (node:internal/test_runner/test:959:17)
+      at TestContext.test (node:internal/test_runner/test:373:13)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:268:13)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 0,
+    operator: 'notStrictEqual'
+  }
+
+test at .agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:268:13
+✖ representation (923.5985ms)
+  AssertionError [ERR_ASSERTION]: mutation must return a non-zero exit code
+      at expectFailClosed (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:69:10)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:274:7)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+      at Test.postRun (node:internal/test_runner/test:1191:19)
+      at Test.run (node:internal/test_runner/test:1119:12) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 0,
+    operator: 'notStrictEqual'
+  }
+
+test at .agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:268:13
+✖ checkout-equivalence (945.77ms)
+  AssertionError [ERR_ASSERTION]: mutation must return a non-zero exit code
+      at expectFailClosed (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:69:10)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:274:7)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+      at Test.postRun (node:internal/test_runner/test:1191:19)
+      at Test.run (node:internal/test_runner/test:1119:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 0,
+    operator: 'notStrictEqual'
+  }
+
+test at .agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:268:13
+✖ entry (943.6975ms)
+  AssertionError [ERR_ASSERTION]: mutation must return a non-zero exit code
+      at expectFailClosed (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:69:10)
+      at TestContext.<anonymous> (D:\Dev\engram\.agent\worktrees\db-embedding-evidence-r2-checker-red\.agent\reports\evidence\production-ready\db-embedding-stats-evidence-transport\verify-manifest.test.cjs:274:7)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1062:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:752:18)
+      at Test.postRun (node:internal/test_runner/test:1191:19)
+      at Test.run (node:internal/test_runner/test:1119:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:752:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 0,
+    operator: 'notStrictEqual'
+  }
