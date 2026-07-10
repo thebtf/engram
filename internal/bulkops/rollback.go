@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -105,7 +107,7 @@ func Rollback(
 		}
 		idsToCheck = append(idsToCheck, id)
 	}
-	conflictIDs, err := detectConflicts(ctx, memoryStore, idsToCheck, snap.CreatedAt)
+	conflictIDs, err := detectConflicts(ctx, memoryStore, idsToCheck, snap.CreatedAt, snap.OpType, typedEntries)
 	if err != nil {
 		return nil, fmt.Errorf("rollback: conflict detection: %w", err)
 	}
@@ -257,25 +259,94 @@ func snapshotEntryForMemoryID(entries map[string]models.SnapshotEntry, id int64)
 
 // detectConflicts returns the IDs of memories modified after snapshotTime.
 // A memory's updated_at > snapshotTime indicates a post-snapshot modification (EC-F3).
-func detectConflicts(ctx context.Context, memoryStore *gormdb.MemoryStore, ids []int64, snapshotTime time.Time) ([]int64, error) {
+func detectConflicts(
+	ctx context.Context,
+	memoryStore *gormdb.MemoryStore,
+	ids []int64,
+	snapshotTime time.Time,
+	opType models.SnapshotOpType,
+	entries map[string]models.SnapshotEntry,
+) ([]int64, error) {
 	if memoryStore == nil || len(ids) == 0 {
 		return nil, nil
 	}
 	var conflicts []int64
 	for _, id := range ids {
-		mem, err := memoryStore.Get(ctx, id)
+		var mem gormdb.Memory
+		err := memoryStore.GetDB().WithContext(ctx).
+			Unscoped().
+			Where("id = ?", id).
+			First(&mem).Error
 		if err != nil {
 			if errors.Is(err, gormpkg.ErrRecordNotFound) {
-				// Deleted memories don't conflict — skip.
+				// A hard-deleted row has nothing left to restore or overwrite.
 				continue
 			}
 			return nil, fmt.Errorf("detectConflicts: get memory %d: %w", id, err)
+		}
+		if entry, ok := snapshotEntryForMemoryID(entries, id); ok {
+			expected, matchErr := matchesExpectedOperationMutation(opType, entry, &mem)
+			if matchErr != nil {
+				return nil, fmt.Errorf("detectConflicts: memory %d: %w", id, matchErr)
+			}
+			if expected {
+				continue
+			}
 		}
 		if mem.UpdatedAt.After(snapshotTime) {
 			conflicts = append(conflicts, id)
 		}
 	}
 	return conflicts, nil
+}
+
+// matchesExpectedOperationMutation separates the bulk operation's own write
+// from a later conflicting edit. A plain updated_at > snapshot comparison
+// misclassifies every successful delete/supersede as a conflict because those
+// operations intentionally update updated_at after capturing before_state.
+func matchesExpectedOperationMutation(opType models.SnapshotOpType, entry models.SnapshotEntry, currentRow *gormdb.Memory) (bool, error) {
+	if currentRow == nil || len(entry.Before) == 0 || string(entry.Before) == "null" {
+		return false, nil
+	}
+
+	var before models.Memory
+	if err := json.Unmarshal(entry.Before, &before); err != nil {
+		return false, fmt.Errorf("unmarshal memory before_state: %w", err)
+	}
+	currentJSON, err := marshalMemoryRowSnapshot(currentRow)
+	if err != nil {
+		return false, fmt.Errorf("marshal current memory state: %w", err)
+	}
+	var current models.Memory
+	if err := json.Unmarshal(currentJSON, &current); err != nil {
+		return false, fmt.Errorf("unmarshal current memory state: %w", err)
+	}
+
+	expected := before
+	switch opType {
+	case models.SnapshotOpBulkDelete:
+		if current.DeletedAt == nil || !current.UpdatedAt.Equal(*current.DeletedAt) {
+			return false, nil
+		}
+		expected.DeletedAt = current.DeletedAt
+		expected.UpdatedAt = current.UpdatedAt
+
+	case models.SnapshotOpBulkSupersede:
+		if current.DeletedAt != nil || current.Status != "superseded" {
+			return false, nil
+		}
+		if math.Abs(current.ImportanceBase-before.ImportanceBase*0.1) > 0.000001 {
+			return false, nil
+		}
+		expected.Status = current.Status
+		expected.ImportanceBase = current.ImportanceBase
+		expected.UpdatedAt = current.UpdatedAt
+
+	default:
+		return false, nil
+	}
+
+	return reflect.DeepEqual(expected, current), nil
 }
 
 // detectCreatedRowConflicts returns op-created memory IDs that were modified after creation.

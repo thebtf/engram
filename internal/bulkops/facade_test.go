@@ -15,15 +15,41 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/auth"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func TestMarshalMemoryRowSnapshot_NormalizesDatabaseSentinelToUTC(t *testing.T) {
+	local := time.FixedZone("UTC+3", 3*60*60)
+	validUntil := time.Date(10000, time.January, 1, 2, 59, 59, 0, local)
+	require.Equal(t, 9999, validUntil.UTC().Year(), "fixture must represent a JSON-safe UTC instant")
+
+	mem := &gormdb.Memory{
+		ID:         42,
+		Project:    "snapshot-time-normalization",
+		Content:    "preserve temporal semantics",
+		CreatedAt:  time.Date(2026, time.July, 10, 2, 0, 0, 0, local),
+		UpdatedAt:  time.Date(2026, time.July, 10, 2, 1, 0, 0, local),
+		ValidUntil: &validUntil,
+	}
+
+	raw, err := marshalMemoryRowSnapshot(mem)
+	require.NoError(t, err)
+
+	var restored models.Memory
+	require.NoError(t, json.Unmarshal(raw, &restored))
+	require.NotNil(t, restored.ValidUntil)
+	assert.Equal(t, validUntil.UTC(), restored.ValidUntil.UTC())
+	assert.Equal(t, mem.CreatedAt.UTC(), restored.CreatedAt)
+	assert.Equal(t, mem.UpdatedAt.UTC(), restored.UpdatedAt)
+}
 
 // --- helpers ---
 
@@ -72,8 +98,8 @@ func TestFacade_NonAdmin_ReturnsErrAdminRequired(t *testing.T) {
 		for _, opType := range opTypes {
 			t.Run(nc.name+"/"+string(opType), func(t *testing.T) {
 				_, err := f.Execute(ctx, nc.identity, BulkOp{
-					Type:     opType,
-					DryRun:   false,
+					Type:      opType,
+					DryRun:    false,
 					MemoryIDs: []int64{1},
 				})
 				require.ErrorIs(t, err, ErrAdminRequired,
@@ -95,10 +121,10 @@ func TestFacade_DryRun_AllOpTypes(t *testing.T) {
 	admin := adminIdentity()
 
 	cases := []struct {
-		opType      BulkOpType
+		opType       BulkOpType
 		candidateIDs []int64
-		memoryIDs   []int64
-		wantAffect  int
+		memoryIDs    []int64
+		wantAffect   int
 	}{
 		{models.SnapshotOpBulkPromote, []int64{10, 20, 30}, nil, 3},
 		{models.SnapshotOpBulkDelete, nil, []int64{11, 22}, 2},
@@ -175,10 +201,10 @@ func TestFacade_BulkDelete_Committed_AuditLogWritten(t *testing.T) {
 	})
 
 	op := BulkOp{
-		Type:        models.SnapshotOpBulkDelete,
-		MemoryIDs:   []int64{created.ID},
-		DryRun:      false,
-		Parameters:  json.RawMessage(`{"test":"bulk_delete_committed"}`),
+		Type:       models.SnapshotOpBulkDelete,
+		MemoryIDs:  []int64{created.ID},
+		DryRun:     false,
+		Parameters: json.RawMessage(`{"test":"bulk_delete_committed"}`),
 	}
 
 	// Capture audit count BEFORE Execute to avoid false pass from historical records (§FR-F5).

@@ -17,9 +17,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/auth"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
+	gormpkg "gorm.io/gorm"
 )
 
 // ErrAdminRequired is returned when a non-admin caller attempts a bulk operation.
@@ -450,15 +451,25 @@ func (f *Facade) capturePromoteBeforeState(ctx context.Context, candidateIDs []i
 // captureMemoryBeforeState fetches memory rows and serializes them as JSONB.
 func (f *Facade) captureMemoryBeforeState(ctx context.Context, ids []int64) (string, json.RawMessage, error) {
 	snapshotID := uuid.New().String()
-	state := make(map[string]any, len(ids))
+	state := make(map[string]json.RawMessage, len(ids))
 	if f.memoryStore != nil {
 		for _, id := range ids {
-			mem, err := f.memoryStore.Get(ctx, id)
+			var row gormdb.Memory
+			err := f.memoryStore.GetDB().WithContext(ctx).
+				Where("id = ? AND deleted_at IS NULL", id).
+				First(&row).Error
 			if err != nil {
-				state[fmt.Sprintf("%d", id)] = nil
-				continue
+				if errors.Is(err, gormpkg.ErrRecordNotFound) {
+					state[fmt.Sprintf("%d", id)] = json.RawMessage("null")
+					continue
+				}
+				return "", nil, fmt.Errorf("load memory %d before_state: %w", id, err)
 			}
-			state[fmt.Sprintf("%d", id)] = mem
+			before, marshalErr := marshalMemoryRowSnapshot(&row)
+			if marshalErr != nil {
+				return "", nil, fmt.Errorf("serialize memory %d before_state: %w", id, marshalErr)
+			}
+			state[fmt.Sprintf("%d", id)] = before
 		}
 	}
 	bs, err := json.Marshal(state)
@@ -466,6 +477,40 @@ func (f *Facade) captureMemoryBeforeState(ctx context.Context, ids []int64) (str
 		return "", nil, fmt.Errorf("serialize memory before_state: %w", err)
 	}
 	return snapshotID, json.RawMessage(bs), nil
+}
+
+// marshalMemoryRowSnapshot converts timestamp fields to UTC before JSON encoding.
+// PostgreSQL timestamptz values are instants, but a driver may materialize the
+// 9999-12-31 sentinel in a positive local offset as local year 10000. The same
+// instant is JSON-safe in UTC, and rollback must preserve that instant exactly.
+func marshalMemoryRowSnapshot(row *gormdb.Memory) (json.RawMessage, error) {
+	if row == nil {
+		return json.RawMessage("null"), nil
+	}
+
+	snapshot := *row
+	snapshot.CreatedAt = snapshot.CreatedAt.UTC()
+	snapshot.UpdatedAt = snapshot.UpdatedAt.UTC()
+	snapshot.DeletedAt = utcTimePtr(snapshot.DeletedAt)
+	snapshot.LastRetrievedAt = utcTimePtr(snapshot.LastRetrievedAt)
+	snapshot.LastConfirmed = utcTimePtr(snapshot.LastConfirmed)
+	snapshot.ReviewAfter = utcTimePtr(snapshot.ReviewAfter)
+	snapshot.ValidFrom = utcTimePtr(snapshot.ValidFrom)
+	snapshot.ValidUntil = utcTimePtr(snapshot.ValidUntil)
+
+	encoded, err := json.Marshal(&snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(encoded), nil
+}
+
+func utcTimePtr(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	normalized := value.UTC()
+	return &normalized
 }
 
 func candidateIDsToInt64(ids []int64) []int64 {
