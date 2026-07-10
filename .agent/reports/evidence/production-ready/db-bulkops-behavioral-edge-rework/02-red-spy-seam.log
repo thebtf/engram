@@ -1,0 +1,19 @@
+base_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+head_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+database=engram_mkr_bedge_red_spy_20260710a
+command=go test -p=1 ./internal/mcp -run ^(TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade|TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun)$ -count=1 -v
+started_utc=2026-07-10T08:29:46.9910221Z
+# github.com/thebtf/engram/internal/mcp [github.com/thebtf/engram/internal/mcp.test]
+internal\mcp\tools_dryrun_test.go:295:21: undefined: executeBulkFacade
+internal\mcp\tools_dryrun_test.go:296:21: undefined: executeBulkFacade
+internal\mcp\tools_dryrun_test.go:299:2: undefined: executeBulkFacade
+internal\mcp\tools_dryrun_test.go:372:21: undefined: executeBulkFacade
+internal\mcp\tools_dryrun_test.go:373:21: undefined: executeBulkFacade
+internal\mcp\tools_dryrun_test.go:397:6: undefined: executeBulkFacade
+FAIL    github.com/thebtf/engram/internal/mcp [build failed]
+FAIL
+test_exit=1
+active_sessions_before_terminate=0
+database_residue=0
+activity_residue=0
+finished_utc=2026-07-10T08:29:50.2378967Z

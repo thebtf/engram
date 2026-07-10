@@ -1,0 +1,12 @@
+base_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+head_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+database=engram_mkr_bedge_race_focus_20260710a
+command=go test -race -p=1 ./internal/db/gorm ./internal/mcp -run ^(TestCandidateStore_PromoteWithMemoryAndSnapshot_AmendFailureRollsBackPromotion|TestCandidateStore_PreserveWithMemoryAndSnapshot_RequiresCandidateReviewSnapshotBeforeMutation|TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites|TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit|TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs|TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization|TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade|TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun)$ -count=1
+started_utc=2026-07-10T08:44:42.8875943Z
+ok      github.com/thebtf/engram/internal/db/gorm    5.425s
+ok      github.com/thebtf/engram/internal/mcp    1.093s
+test_exit=0
+active_sessions_before_terminate=0
+database_residue=0
+activity_residue=0
+finished_utc=2026-07-10T08:45:11.3676002Z

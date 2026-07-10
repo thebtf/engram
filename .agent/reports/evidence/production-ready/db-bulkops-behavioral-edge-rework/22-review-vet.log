@@ -1,0 +1,10 @@
+base_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+head_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+database=engram_mkr_bedge_review_vet_20260710a
+command=go vet ./internal/db/gorm ./internal/mcp
+started_utc=2026-07-10T09:05:52.8410044Z
+test_exit=0
+active_sessions_before_terminate=0
+database_residue=0
+activity_residue=0
+finished_utc=2026-07-10T09:05:55.4729862Z

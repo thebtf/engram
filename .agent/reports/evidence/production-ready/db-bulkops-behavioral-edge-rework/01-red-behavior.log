@@ -1,0 +1,771 @@
+base_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+head_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+database=engram_mkr_bedge_red_behavior_20260710a
+command=go test -p=1 ./internal/db/gorm ./internal/mcp -run ^(TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites|TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit|TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs|TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization)$ -count=1 -v
+started_utc=2026-07-10T08:27:52.8928902Z
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites
+
+2026/07/10 11:27:56 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations.go:483 [35;1mERROR: column "is_deprecated" does not exist (SQLSTATE 42703)
+[0m[33m[2.418ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS idx_patterns_frequency
+                     ON patterns(frequency DESC, last_seen_at_epoch DESC)
+                     WHERE is_deprecated = 0
+
+2026/07/10 11:27:56 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations.go:578 [35;1mERROR: column "is_deprecated" does not exist (SQLSTATE 42703)
+[0m[33m[1.004ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS idx_patterns_type_project
+                     ON patterns(type, project, frequency DESC)
+                     WHERE is_deprecated = 0
+
+2026/07/10 11:27:56 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations.go:578 [35;1mERROR: column "source_observation_id" does not exist (SQLSTATE 42703)
+[0m[33m[0.997ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS idx_relations_source_type
+                     ON observation_relations(source_observation_id, relation_type)
+
+2026/07/10 11:27:56 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations.go:578 [35;1mERROR: column "target_observation_id" does not exist (SQLSTATE 42703)
+[0m[33m[0.500ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS idx_relations_target_type
+                     ON observation_relations(target_observation_id, relation_type)
+
+2026/07/10 11:27:56 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations.go:670 [35;1mERROR: column "source_observation_id" does not exist (SQLSTATE 42703)
+[0m[33m[0.500ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS idx_relations_source_type_target
+                     ON observation_relations(source_observation_id, relation_type, target_observation_id)
+
+2026/07/10 11:27:56 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations.go:670 [35;1mERROR: column "target_observation_id" does not exist (SQLSTATE 42703)
+[0m[33m[1.000ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS idx_relations_target_type_source
+                     ON observation_relations(target_observation_id, relation_type, source_observation_id)
+
+2026/07/10 11:27:56 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations.go:1447 [35;1mERROR: relation "observation_vectors" does not exist (SQLSTATE 42P01)
+[0m[33m[1.001ms] [34;1m[rows:0][0m
+                DELETE FROM observation_vectors
+                WHERE id IN (
+                    SELECT ov.id FROM observation_vectors ov
+                    LEFT JOIN observations o ON ov.metadata->>'sqlite_id' = o.id::text
+                    WHERE o.id IS NULL
+                )
+
+{"level":"warn","error":"ERROR: relation \"observation_vectors\" does not exist (SQLSTATE 42P01)","time":"2026-07-10T11:27:56+03:00","message":"migration 040: orphan vector cleanup failed (non-fatal)"}
+{"level":"info","garbage_deleted":0,"orphan_vectors_deleted":0,"time":"2026-07-10T11:27:56+03:00","message":"migration 040: garbage cleanup complete"}
+{"level":"info","orphan_vectors_deleted":0,"time":"2026-07-10T11:27:56+03:00","message":"migration 041: orphan vector purge complete"}
+{"level":"info","patterns_deleted":0,"time":"2026-07-10T11:27:56+03:00","message":"migration 042: low-quality pattern purge complete"}
+{"level":"info","total_deleted":0,"time":"2026-07-10T11:27:56+03:00","message":"migration 043: radical observation cleanup complete"}
+
+2026/07/10 11:27:57 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations.go:3502 [35;1mERROR: extension "vectorscale" is not available (SQLSTATE 0A000)
+[0m[33m[1.000ms] [34;1m[rows:0][0m CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE
+{"level":"warn","error":"ERROR: extension \"vectorscale\" is not available (SQLSTATE 0A000)","time":"2026-07-10T11:27:57+03:00","message":"migration 109: vectorscale extension not available, skipping DiskANN index"}
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/nil_snapshot
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/nil_snapshot
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/nil_snapshot_store
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/nil_audit_store
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_op_type
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_op_type
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_operation_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_operation_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_action_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_action_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_candidate_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_candidate_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_actor
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_actor
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_before_key
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_before_payload_id
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_before_payload_id
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/prepopulated_after
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/prepopulated_after
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/extra_before_entry
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/extra_before_entry
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/prepopulated_affected_memory_ids
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/prepopulated_affected_memory_ids
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_source_session
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_source_session
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/nil_snapshot
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/nil_snapshot_store
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/nil_audit_store
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_op_type
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_operation_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_operation_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_action_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_action_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_candidate_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_candidate_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_actor
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_actor
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_before_key
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_before_payload_id
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_before_payload_id
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/prepopulated_after
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/prepopulated_after
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/extra_before_entry
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/extra_before_entry
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/prepopulated_affected_memory_ids
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/prepopulated_affected_memory_ids
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_source_session
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_source_session
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/nil_snapshot
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/nil_snapshot_store
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/nil_audit_store
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_op_type
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_operation_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_operation_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_action_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_action_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_candidate_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_candidate_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_actor
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_actor
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_before_key
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_before_payload_id
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_before_payload_id
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/prepopulated_after
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/prepopulated_after
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/extra_before_entry
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/extra_before_entry
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/prepopulated_affected_memory_ids
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/prepopulated_affected_memory_ids
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_source_session
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_source_session
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/nil_snapshot
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/nil_snapshot_store
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/nil_audit_store
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_op_type
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_operation_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_operation_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_action_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_action_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_candidate_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_candidate_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_actor
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_actor
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_before_key
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_before_payload_id
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_before_payload_id
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/prepopulated_after
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/prepopulated_after
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/extra_before_entry
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/extra_before_entry
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/prepopulated_affected_memory_ids
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/prepopulated_affected_memory_ids
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_source_session
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_source_session
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/nil_snapshot
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/nil_snapshot_store
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/nil_audit_store
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_op_type
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_operation_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_operation_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_action_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_action_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_candidate_parameter
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_candidate_parameter
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_actor
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_actor
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_before_key
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_before_payload_id
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_before_payload_id
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/prepopulated_after
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/prepopulated_after
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/extra_before_entry
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/extra_before_entry
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/prepopulated_affected_memory_ids
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/prepopulated_affected_memory_ids
+            Messages:       invalid candidate-review snapshot binding must fail closed
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_source_session
+    candidate_store_test.go:851:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:851
+            Error:          An error is expected but got nil.
+            Test:           TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_source_session
+            Messages:       invalid candidate-review snapshot binding must fail closed
+--- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites (4.57s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/nil_snapshot (0.04s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/nil_snapshot_store (0.01s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/nil_audit_store (0.01s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_op_type (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_operation_parameter (0.03s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_action_parameter (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_candidate_parameter (0.03s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_actor (0.03s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_before_key (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_before_payload_id (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/prepopulated_after (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/extra_before_entry (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/prepopulated_affected_memory_ids (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/promote/wrong_source_session (0.02s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/nil_snapshot (0.01s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/nil_snapshot_store (0.01s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/nil_audit_store (0.01s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_op_type (0.01s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_operation_parameter (0.03s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_action_parameter (0.04s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_candidate_parameter (0.03s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_actor (0.03s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_before_key (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_before_payload_id (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/prepopulated_after (0.03s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/extra_before_entry (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/prepopulated_affected_memory_ids (0.03s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/preserve/wrong_source_session (0.02s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/nil_snapshot (0.01s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/nil_snapshot_store (0.01s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/nil_audit_store (0.01s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_op_type (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_operation_parameter (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_action_parameter (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_candidate_parameter (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_actor (0.02s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_before_key (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_before_payload_id (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/prepopulated_after (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/extra_before_entry (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/prepopulated_affected_memory_ids (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/reject/wrong_source_session (0.02s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/nil_snapshot (0.01s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/nil_snapshot_store (0.01s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/nil_audit_store (0.01s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_op_type (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_operation_parameter (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_action_parameter (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_candidate_parameter (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_actor (0.02s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_before_key (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_before_payload_id (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/prepopulated_after (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/extra_before_entry (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/prepopulated_affected_memory_ids (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/suppress/wrong_source_session (0.02s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/nil_snapshot (0.01s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/nil_snapshot_store (0.01s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/nil_audit_store (0.01s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_op_type (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_operation_parameter (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_action_parameter (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_candidate_parameter (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_actor (0.02s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_before_key (0.01s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_before_payload_id (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/prepopulated_after (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/extra_before_entry (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/prepopulated_affected_memory_ids (0.02s)
+    --- FAIL: TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites/supersede/wrong_source_session (0.02s)
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit/promote
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit/preserve
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit/reject
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit/suppress
+=== RUN   TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit/supersede
+--- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit (0.26s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit/promote (0.05s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit/preserve (0.03s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit/reject (0.02s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit/suppress (0.02s)
+    --- PASS: TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit/supersede (0.02s)
+FAIL
+FAIL    github.com/thebtf/engram/internal/db/gorm    4.928s
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/missing_id_field
+    tools_dryrun_test.go:239:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:239
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/missing_id_field
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_null
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_null
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_top_level_string
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_top_level_string
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_string_member
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_string_member
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_boolean_member
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_boolean_member
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_object_member
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_object_member
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_nested_array
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_nested_array
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_fraction
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_fraction
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_positive_overflow
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_positive_overflow
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_negative_overflow
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_negative_overflow
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_mixed_invalid
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_mixed_invalid
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_string
+    tools_dryrun_test.go:262:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:262
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_string
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_number
+    tools_dryrun_test.go:262:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:262
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_number
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_null
+    tools_dryrun_test.go:263:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:263
+            Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_null
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_object
+    tools_dryrun_test.go:263:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:263
+            Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_object
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_array
+    tools_dryrun_test.go:263:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:263
+            Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_array
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/missing_id_field
+    tools_dryrun_test.go:239:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:239
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/missing_id_field
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_null
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_null
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_top_level_string
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_top_level_string
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_string_member
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_string_member
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_boolean_member
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_boolean_member
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_object_member
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_object_member
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_nested_array
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_nested_array
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_fraction
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_fraction
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_positive_overflow
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_positive_overflow
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_negative_overflow
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_negative_overflow
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_mixed_invalid
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_mixed_invalid
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_string
+    tools_dryrun_test.go:262:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:262
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_string
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_number
+    tools_dryrun_test.go:262:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:262
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_number
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_null
+    tools_dryrun_test.go:263:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:263
+            Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_null
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_object
+    tools_dryrun_test.go:263:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:263
+            Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_object
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_array
+    tools_dryrun_test.go:263:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:263
+            Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_array
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/missing_id_field
+    tools_dryrun_test.go:239:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:239
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/missing_id_field
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_null
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_null
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_top_level_string
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_top_level_string
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_string_member
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_string_member
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_boolean_member
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_boolean_member
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_object_member
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_object_member
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_nested_array
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_nested_array
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_fraction
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_fraction
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_positive_overflow
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_positive_overflow
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_negative_overflow
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_negative_overflow
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_mixed_invalid
+    tools_dryrun_test.go:250:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:250
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_mixed_invalid
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_string
+    tools_dryrun_test.go:262:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:262
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_string
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_number
+    tools_dryrun_test.go:262:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:262
+            Error:          An error is expected but got nil.
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_number
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_null
+    tools_dryrun_test.go:263:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:263
+            Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_null
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_object
+    tools_dryrun_test.go:263:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:263
+            Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_object
+=== RUN   TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_array
+    tools_dryrun_test.go:263:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:263
+            Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+            Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_array
+--- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs (0.00s)
+    --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/missing_id_field (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_null (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_top_level_string (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_string_member (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_boolean_member (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_object_member (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_nested_array (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_fraction (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_positive_overflow (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_negative_overflow (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_mixed_invalid (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_string (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_number (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_null (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_object (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_array (0.00s)
+    --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/missing_id_field (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_null (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_top_level_string (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_string_member (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_boolean_member (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_object_member (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_nested_array (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_fraction (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_positive_overflow (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_negative_overflow (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_mixed_invalid (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_string (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_number (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_null (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_object (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_array (0.00s)
+    --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/missing_id_field (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_null (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_top_level_string (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_string_member (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_boolean_member (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_object_member (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_nested_array (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_fraction (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_positive_overflow (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_negative_overflow (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_mixed_invalid (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_string (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_number (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_null (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_object (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_array (0.00s)
+=== RUN   TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization
+=== RUN   TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_promote
+    tools_dryrun_test.go:286:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:286
+            Error:          Not equal:
+                            expected: 5
+                            actual  : 3
+            Test:           TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_promote
+=== RUN   TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_delete
+    tools_dryrun_test.go:286:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:286
+            Error:          Not equal:
+                            expected: 5
+                            actual  : 7
+            Test:           TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_delete
+=== RUN   TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_supersede
+    tools_dryrun_test.go:286:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:286
+            Error:          Not equal:
+                            expected: 5
+                            actual  : 7
+            Test:           TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_supersede
+--- FAIL: TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization (0.00s)
+    --- FAIL: TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_promote (0.00s)
+    --- FAIL: TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_delete (0.00s)
+    --- FAIL: TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_supersede (0.00s)
+FAIL
+FAIL    github.com/thebtf/engram/internal/mcp    0.113s
+FAIL
+test_exit=1
+active_sessions_before_terminate=0
+database_residue=0
+activity_residue=0
+finished_utc=2026-07-10T08:28:04.4170941Z

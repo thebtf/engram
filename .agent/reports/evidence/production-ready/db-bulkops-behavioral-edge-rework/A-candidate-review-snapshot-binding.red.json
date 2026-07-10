@@ -1,0 +1,14 @@
+{
+  "phase": "RED",
+  "observed_at_utc": "2026-07-10T08:28:04.4170941Z",
+  "base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+  "database": "engram_mkr_bedge_red_behavior_20260710a",
+  "command": "go test -p=1 ./internal/db/gorm ./internal/mcp -run ^(TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites|TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit|TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs|TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization)$ -count=1 -v",
+  "exit_code": 1,
+  "test": "TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites",
+  "observed_failure": "Public candidate-review snapshot seams accepted invalid bindings, including nil or wrong-op snapshots on promote and mismatched operation, action, candidate, actor, before-state, affected-memory, and source-session fields.",
+  "representative_excerpt": "invalid candidate-review snapshot binding must fail closed: An error is expected but got nil",
+  "database_residue": 0,
+  "activity_residue": 0,
+  "raw_log": "01-red-behavior.log"
+}
