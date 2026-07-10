@@ -115,8 +115,8 @@ func containsProjectIdentityControl(value string) bool {
 
 // ResolveProjectIdentityV2 builds full metadata for cwd. Git projects are
 // content-addressed by normalized remote+relative path. Non-git projects use a
-// strict additive anchor file created with O_EXCL so concurrent first use
-// converges without overwriting another process's identity.
+// strict additive anchor file published atomically without replacing an
+// existing identity, so concurrent first use never exposes partial JSON.
 func ResolveProjectIdentityV2(cwd string) (ProjectIdentityV2, error) {
 	resolved, err := filepath.Abs(cwd)
 	if err != nil {
@@ -164,52 +164,117 @@ func ResolveProjectIdentityV2(cwd string) (ProjectIdentityV2, error) {
 func readOrCreateProjectAnchorV2(dir string) (projectAnchorV2, error) {
 	anchorPath := filepath.Join(dir, projectIdentityV2File)
 	for {
-		data, err := os.ReadFile(anchorPath)
+		anchor, err := readProjectAnchorV2(anchorPath)
 		if err == nil {
-			var anchor projectAnchorV2
-			decoder := json.NewDecoder(bytes.NewReader(data))
-			decoder.DisallowUnknownFields()
-			if decodeErr := decoder.Decode(&anchor); decodeErr != nil {
-				return projectAnchorV2{}, fmt.Errorf("PROJECT_IDENTITY_INVALID: decode %s: %w", projectIdentityV2File, decodeErr)
-			}
-			if trailingErr := decoder.Decode(&struct{}{}); trailingErr != io.EOF {
-				return projectAnchorV2{}, fmt.Errorf("PROJECT_IDENTITY_INVALID: trailing data in %s", projectIdentityV2File)
-			}
-			if anchor.Version != ProjectIdentityVersionV2 || !strictAnchorV2.MatchString(anchor.Anchor) {
-				return projectAnchorV2{}, fmt.Errorf("PROJECT_IDENTITY_INVALID: malformed %s", projectIdentityV2File)
-			}
 			return anchor, nil
 		}
 		if !os.IsNotExist(err) {
-			return projectAnchorV2{}, fmt.Errorf("read %s: %w", projectIdentityV2File, err)
+			return projectAnchorV2{}, err
 		}
 
 		random := make([]byte, 16)
 		if _, err := rand.Read(random); err != nil {
 			return projectAnchorV2{}, fmt.Errorf("generate project anchor: %w", err)
 		}
-		anchor := projectAnchorV2{Version: ProjectIdentityVersionV2, Anchor: hex.EncodeToString(random), Shared: false}
-		data, err = json.MarshalIndent(anchor, "", "  ")
+		anchor = projectAnchorV2{Version: ProjectIdentityVersionV2, Anchor: hex.EncodeToString(random), Shared: false}
+		published, err := publishProjectAnchorV2(dir, anchorPath, anchor)
 		if err != nil {
-			return projectAnchorV2{}, fmt.Errorf("encode project anchor: %w", err)
+			return projectAnchorV2{}, err
 		}
-		file, err := os.OpenFile(anchorPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-		if os.IsExist(err) {
-			continue
+		if published {
+			return anchor, nil
 		}
-		if err != nil {
-			return projectAnchorV2{}, fmt.Errorf("create %s: %w", projectIdentityV2File, err)
-		}
-		_, writeErr := file.Write(append(data, '\n'))
-		closeErr := file.Close()
-		if writeErr != nil {
-			return projectAnchorV2{}, fmt.Errorf("write %s: %w", projectIdentityV2File, writeErr)
-		}
-		if closeErr != nil {
-			return projectAnchorV2{}, fmt.Errorf("close %s: %w", projectIdentityV2File, closeErr)
-		}
-		return anchor, nil
 	}
+}
+
+func readProjectAnchorV2(anchorPath string) (projectAnchorV2, error) {
+	data, err := os.ReadFile(anchorPath)
+	if err != nil {
+		return projectAnchorV2{}, err
+	}
+	anchor, err := decodeProjectAnchorV2(data)
+	if err != nil {
+		return projectAnchorV2{}, fmt.Errorf("PROJECT_IDENTITY_INVALID: %w", err)
+	}
+	return anchor, nil
+}
+
+func decodeProjectAnchorV2(data []byte) (projectAnchorV2, error) {
+	var anchor projectAnchorV2
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&anchor); err != nil {
+		return projectAnchorV2{}, fmt.Errorf("decode %s: %w", projectIdentityV2File, err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return projectAnchorV2{}, fmt.Errorf("trailing data in %s", projectIdentityV2File)
+	}
+	if anchor.Version != ProjectIdentityVersionV2 || !strictAnchorV2.MatchString(anchor.Anchor) {
+		return projectAnchorV2{}, fmt.Errorf("malformed %s", projectIdentityV2File)
+	}
+	return anchor, nil
+}
+
+func publishProjectAnchorV2(dir, anchorPath string, anchor projectAnchorV2) (bool, error) {
+	data, err := json.MarshalIndent(anchor, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("encode project anchor: %w", err)
+	}
+	data = append(data, '\n')
+	if _, err := decodeProjectAnchorV2(data); err != nil {
+		return false, fmt.Errorf("validate encoded project anchor: %w", err)
+	}
+
+	temp, err := os.CreateTemp(dir, projectIdentityV2File+".tmp-")
+	if err != nil {
+		return false, fmt.Errorf("create temporary %s: %w", projectIdentityV2File, err)
+	}
+	tempPath := temp.Name()
+	fail := func(stage string, cause error, closeFile bool) (bool, error) {
+		if closeFile {
+			if closeErr := temp.Close(); closeErr != nil {
+				cause = fmt.Errorf("%v; close temporary %s: %w", cause, projectIdentityV2File, closeErr)
+			}
+		}
+		if cleanupErr := os.Remove(tempPath); cleanupErr != nil && !os.IsNotExist(cleanupErr) {
+			cause = fmt.Errorf("%v; cleanup temporary %s: %w", cause, projectIdentityV2File, cleanupErr)
+		}
+		return false, fmt.Errorf("%s %s: %w", stage, projectIdentityV2File, cause)
+	}
+
+	if err := temp.Chmod(0600); err != nil {
+		return fail("chmod temporary", err, true)
+	}
+	n, err := temp.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return fail("write temporary", err, true)
+	}
+	if err := temp.Sync(); err != nil {
+		return fail("sync temporary", err, true)
+	}
+	if err := temp.Close(); err != nil {
+		return fail("close temporary", err, false)
+	}
+
+	// A same-filesystem hard link makes the complete inode visible atomically
+	// and fails rather than replacing an existing final name.
+	if err := os.Link(tempPath, anchorPath); err != nil {
+		cleanupErr := os.Remove(tempPath)
+		if cleanupErr != nil && !os.IsNotExist(cleanupErr) {
+			return false, fmt.Errorf("publish %s: %v; cleanup temporary %s: %w", projectIdentityV2File, err, projectIdentityV2File, cleanupErr)
+		}
+		if os.IsExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("publish %s: %w", projectIdentityV2File, err)
+	}
+	if err := os.Remove(tempPath); err != nil {
+		return false, fmt.Errorf("cleanup published temporary %s: %w", projectIdentityV2File, err)
+	}
+	return true, nil
 }
 
 // ResolveProjectSlug computes a stable, cross-platform project identity for the

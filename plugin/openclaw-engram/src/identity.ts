@@ -13,7 +13,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { execSync } from 'node:child_process';
-import { closeSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, fsyncSync, linkSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
 
 // Module-level memoization cache — keyed by resolved cwd path
@@ -123,33 +123,79 @@ function readOrCreateProjectAnchorV2(workspaceDir: string): { version: 2; anchor
   const anchorPath = resolve(workspaceDir, projectIdentityV2File);
   for (;;) {
     try {
-      const parsed = JSON.parse(readFileSync(anchorPath, 'utf8')) as unknown;
-      const keys = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.keys(parsed).sort() : [];
-      const anchor = parsed as { version?: number; anchor?: string; shared?: boolean };
-      if (keys.length !== projectAnchorV2Keys.length || keys.some((key, index) => key !== projectAnchorV2Keys[index]) ||
-          anchor.version !== PROJECT_IDENTITY_VERSION_V2 || typeof anchor.anchor !== 'string' || !strictAnchorV2.test(anchor.anchor) || typeof anchor.shared !== 'boolean') {
-        invalidAnchorFile();
-      }
-      return { version: 2, anchor: anchor.anchor, shared: anchor.shared };
+      return decodeProjectAnchorV2(readFileSync(anchorPath, 'utf8'));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
 
     const anchor = { version: PROJECT_IDENTITY_VERSION_V2, anchor: randomBytes(16).toString('hex'), shared: false };
-    let descriptor: number | undefined;
-    try {
-      descriptor = openSync(anchorPath, 'wx', 0o600);
-      writeFileSync(descriptor, `${JSON.stringify(anchor, null, 2)}\n`, 'utf8');
-      closeSync(descriptor);
+    const payload = `${JSON.stringify(anchor, null, 2)}\n`;
+    decodeProjectAnchorV2(payload);
+    if (publishProjectAnchorV2(anchorPath, payload)) {
       return anchor;
-    } catch (error) {
-      if (descriptor !== undefined) {
-        try { closeSync(descriptor); } catch { /* best effort */ }
-      }
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
-      throw error;
     }
   }
+}
+
+function decodeProjectAnchorV2(data: string): { version: 2; anchor: string; shared: boolean } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data) as unknown;
+  } catch {
+    invalidAnchorFile();
+  }
+  const keys = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.keys(parsed).sort() : [];
+  const anchor = parsed as { version?: number; anchor?: string; shared?: boolean };
+  if (keys.length !== projectAnchorV2Keys.length || keys.some((key, index) => key !== projectAnchorV2Keys[index]) ||
+      anchor.version !== PROJECT_IDENTITY_VERSION_V2 || typeof anchor.anchor !== 'string' || !strictAnchorV2.test(anchor.anchor) || typeof anchor.shared !== 'boolean') {
+    invalidAnchorFile();
+  }
+  return { version: 2, anchor: anchor.anchor, shared: anchor.shared };
+}
+
+function publishProjectAnchorV2(anchorPath: string, payload: string): boolean {
+  const tempPath = `${anchorPath}.tmp-${process.pid}-${randomBytes(16).toString('hex')}`;
+  let descriptor: number | undefined;
+  let phase: 'create' | 'write' | 'sync' | 'close' | 'publish' = 'create';
+  let primaryError: unknown;
+  try {
+    descriptor = openSync(tempPath, 'wx', 0o600);
+    phase = 'write';
+    writeFileSync(descriptor, payload, 'utf8');
+    phase = 'sync';
+    fsyncSync(descriptor);
+    phase = 'close';
+    closeSync(descriptor);
+    descriptor = undefined;
+    phase = 'publish';
+    // Hard-link publication is atomic and refuses to replace an existing name.
+    linkSync(tempPath, anchorPath);
+  } catch (error) {
+    primaryError = error;
+  }
+
+  if (descriptor === undefined && phase === 'create' && primaryError) throw primaryError;
+  let closeError: unknown;
+  if (descriptor !== undefined) {
+    try { closeSync(descriptor); } catch (error) { closeError = error; }
+  }
+  let cleanupError: unknown;
+  try { unlinkSync(tempPath); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') cleanupError = error;
+  }
+  if (cleanupError) throw projectAnchorPublicationError(primaryError, closeError, cleanupError);
+  if (primaryError) {
+    if (phase === 'publish' && (primaryError as NodeJS.ErrnoException).code === 'EEXIST' && !closeError) return false;
+    throw projectAnchorPublicationError(primaryError, closeError);
+  }
+  if (closeError) throw projectAnchorPublicationError(closeError);
+  return true;
+}
+
+function projectAnchorPublicationError(...errors: unknown[]): Error {
+  const present = errors.filter((error) => error != null);
+  if (present.length === 1 && present[0] instanceof Error) return present[0];
+  return new Error(present.map((error) => error instanceof Error ? error.message : String(error)).join('; '));
 }
 
 function invalidAnchorFile(): never {

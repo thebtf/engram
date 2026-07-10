@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -145,6 +146,114 @@ func TestResolveProjectIdentityV2_ConcurrentFirstUseConverges(t *testing.T) {
 		}
 		if identities[i].NonGitAnchor != identities[0].NonGitAnchor {
 			t.Fatalf("caller %d got divergent anchor %q != %q", i, identities[i].NonGitAnchor, identities[0].NonGitAnchor)
+		}
+	}
+	assertCompleteProjectAnchorV2(t, dir, identities[0].NonGitAnchor)
+}
+
+func TestResolveProjectIdentityV2_PreExistingAnchorsAreNeverReplaced(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
+		dir := t.TempDir()
+		anchorPath := filepath.Join(dir, ".engram-project-v2.json")
+		original := []byte("{\n  \"version\": 2,\n  \"anchor\": \"00112233445566778899aabbccddeeff\",\n  \"shared\": false\n}\n")
+		if err := os.WriteFile(anchorPath, original, 0600); err != nil {
+			t.Fatal(err)
+		}
+		const callers = 16
+		var wg sync.WaitGroup
+		errs := make([]error, callers)
+		for i := range callers {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				identity, err := proxy.ResolveProjectIdentityV2(dir)
+				errs[i] = err
+				if err == nil && identity.NonGitAnchor != "00112233445566778899aabbccddeeff" {
+					errs[i] = &identityTestError{message: "pre-existing anchor changed"}
+				}
+			}(i)
+		}
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("caller %d: %v", i, err)
+			}
+		}
+		got, err := os.ReadFile(anchorPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(original) {
+			t.Fatalf("pre-existing valid anchor bytes changed:\n%s", got)
+		}
+		assertNoProjectAnchorTempFiles(t, dir)
+	})
+
+	t.Run("malformed", func(t *testing.T) {
+		dir := t.TempDir()
+		anchorPath := filepath.Join(dir, ".engram-project-v2.json")
+		original := []byte(`{"version":2`)
+		if err := os.WriteFile(anchorPath, original, 0600); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 8; i++ {
+			_, err := proxy.ResolveProjectIdentityV2(dir)
+			if err == nil || !strings.Contains(err.Error(), "PROJECT_IDENTITY_INVALID") {
+				t.Fatalf("attempt %d error=%v, want fail-closed invalid", i, err)
+			}
+		}
+		got, err := os.ReadFile(anchorPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(original) {
+			t.Fatalf("malformed anchor was replaced: %q", got)
+		}
+		assertNoProjectAnchorTempFiles(t, dir)
+	})
+}
+
+type identityTestError struct{ message string }
+
+func (e *identityTestError) Error() string { return e.message }
+
+func assertCompleteProjectAnchorV2(t *testing.T, dir, expectedAnchor string) {
+	t.Helper()
+	anchorPath := filepath.Join(dir, ".engram-project-v2.json")
+	data, err := os.ReadFile(anchorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var anchor struct {
+		Version uint32 `json:"version"`
+		Anchor  string `json:"anchor"`
+		Shared  bool   `json:"shared"`
+	}
+	if err := json.Unmarshal(data, &anchor); err != nil {
+		t.Fatalf("anchor is not complete JSON: %v\n%s", err, data)
+	}
+	if anchor.Version != 2 || anchor.Anchor != expectedAnchor || anchor.Shared {
+		t.Fatalf("anchor=%#v", anchor)
+	}
+	info, err := os.Stat(anchorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+		t.Fatalf("anchor mode=%#o, want 0600", info.Mode().Perm())
+	}
+	assertNoProjectAnchorTempFiles(t, dir)
+}
+
+func assertNoProjectAnchorTempFiles(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".engram-project-v2.json.tmp-") {
+			t.Fatalf("temporary anchor residue: %s", entry.Name())
 		}
 	}
 }

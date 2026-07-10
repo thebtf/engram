@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -101,6 +102,56 @@ func TestRegisterAndResolve_RejectsRawVsNormalizedSelectorsAndMetadata(t *testin
 				t.Fatalf("error=%T %v, want PROJECT_IDENTITY_INVALID before DB access", err, err)
 			}
 		})
+	}
+}
+
+func TestRegisterAndResolve_StrictOuterSelectorRejectsBeforeDatabaseAccess(t *testing.T) {
+	tests := []struct {
+		name     string
+		selector string
+	}{
+		{name: "empty", selector: ""},
+		{name: "internal whitespace", selector: "a b"},
+		{name: "traversal", selector: "../x"},
+		{name: "illegal punctuation", selector: "repo?segment"},
+		{name: "control", selector: "repo\u0001segment"},
+		{name: "edge whitespace", selector: " repo"},
+		{name: "over 256 bytes", selector: strings.Repeat("a", 257)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := RegisterAndResolve(context.Background(), nil, tt.selector, nil)
+			var identityErr *ProjectIdentityError
+			if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityInvalid || identityErr.UpgradeAction != UpgradeActionRegenerateProjectIdentityV2 {
+				t.Fatalf("error=%T %v, want PROJECT_IDENTITY_INVALID before DB access", err, err)
+			}
+		})
+	}
+}
+
+func TestRegisterAndResolve_StrictOuterSelectorPreservesCompatibility(t *testing.T) {
+	selectors := []string{
+		"repo:segment",
+		`repo\segment`,
+		"repo/segment",
+		"repo.segment",
+		"repo-segment",
+		"repo_segment",
+	}
+	for _, selector := range selectors {
+		t.Run(selector, func(t *testing.T) {
+			_, err := RegisterAndResolve(context.Background(), nil, selector, nil)
+			var identityErr *ProjectIdentityError
+			if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityUnavailable {
+				t.Fatalf("error=%T %v, want selector accepted through nil-DB seam", err, err)
+			}
+		})
+	}
+
+	_, err := RegisterAndResolve(context.Background(), nil, "repo:segment", gitIdentityV2("legacy alias", "https://example.invalid/acme/mono.git"))
+	var identityErr *ProjectIdentityError
+	if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityUnavailable {
+		t.Fatalf("legacy alias with internal whitespace was globally tightened: %T %v", err, err)
 	}
 }
 

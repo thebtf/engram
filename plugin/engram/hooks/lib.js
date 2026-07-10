@@ -444,13 +444,7 @@ function readOrCreateProjectAnchorV2(cwd) {
   const anchorPath = path.join(path.resolve(cwd || ''), PROJECT_IDENTITY_V2_FILE);
   for (;;) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(anchorPath, 'utf8'));
-      const keys = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.keys(parsed).sort() : [];
-      if (keys.length !== PROJECT_ANCHOR_V2_KEYS.length || keys.some((key, index) => key !== PROJECT_ANCHOR_V2_KEYS[index]) ||
-          parsed.version !== PROJECT_IDENTITY_VERSION_V2 || !STRICT_ANCHOR_V2.test(parsed.anchor) || typeof parsed.shared !== 'boolean') {
-        throw new Error(`PROJECT_IDENTITY_INVALID: malformed ${PROJECT_IDENTITY_V2_FILE}`);
-      }
-      return parsed;
+      return decodeProjectAnchorV2(fs.readFileSync(anchorPath, 'utf8'));
     } catch (error) {
       if (error && error.code !== 'ENOENT') throw error;
     }
@@ -460,20 +454,74 @@ function readOrCreateProjectAnchorV2(cwd) {
       anchor: crypto.randomBytes(16).toString('hex'),
       shared: false,
     };
-    let fd;
-    try {
-      fd = fs.openSync(anchorPath, 'wx', 0o600);
-      fs.writeFileSync(fd, `${JSON.stringify(anchor, null, 2)}\n`, 'utf8');
-      fs.closeSync(fd);
+    const payload = `${JSON.stringify(anchor, null, 2)}\n`;
+    decodeProjectAnchorV2(payload);
+    if (publishProjectAnchorV2(anchorPath, payload)) {
       return anchor;
-    } catch (error) {
-      if (fd !== undefined) {
-        try { fs.closeSync(fd); } catch (_) {}
-      }
-      if (error && error.code === 'EEXIST') continue;
-      throw error;
     }
   }
+}
+
+function decodeProjectAnchorV2(data) {
+  let parsed;
+  try {
+    parsed = JSON.parse(data);
+  } catch (error) {
+    throw projectIdentityInvalid(`decode ${PROJECT_IDENTITY_V2_FILE}: ${error.message}`);
+  }
+  const keys = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.keys(parsed).sort() : [];
+  if (keys.length !== PROJECT_ANCHOR_V2_KEYS.length || keys.some((key, index) => key !== PROJECT_ANCHOR_V2_KEYS[index]) ||
+      parsed.version !== PROJECT_IDENTITY_VERSION_V2 || !STRICT_ANCHOR_V2.test(parsed.anchor) || typeof parsed.shared !== 'boolean') {
+    throw projectIdentityInvalid(`malformed ${PROJECT_IDENTITY_V2_FILE}`);
+  }
+  return parsed;
+}
+
+function publishProjectAnchorV2(anchorPath, payload) {
+  const tempPath = `${anchorPath}.tmp-${process.pid}-${crypto.randomBytes(16).toString('hex')}`;
+  let fd;
+  let phase = 'create';
+  let primaryError;
+  try {
+    fd = fs.openSync(tempPath, 'wx', 0o600);
+    phase = 'write';
+    fs.writeFileSync(fd, payload, 'utf8');
+    phase = 'sync';
+    fs.fsyncSync(fd);
+    phase = 'close';
+    fs.closeSync(fd);
+    fd = undefined;
+    phase = 'publish';
+    // Hard-link publication is atomic and refuses to replace an existing name.
+    fs.linkSync(tempPath, anchorPath);
+  } catch (error) {
+    primaryError = error;
+  }
+
+  if (fd === undefined && phase === 'create' && primaryError) {
+    throw primaryError;
+  }
+  let closeError;
+  if (fd !== undefined) {
+    try { fs.closeSync(fd); } catch (error) { closeError = error; }
+  }
+  let cleanupError;
+  try { fs.unlinkSync(tempPath); } catch (error) {
+    if (!error || error.code !== 'ENOENT') cleanupError = error;
+  }
+  if (cleanupError) throw projectAnchorPublicationError(primaryError, closeError, cleanupError);
+  if (primaryError) {
+    if (phase === 'publish' && primaryError.code === 'EEXIST' && !closeError) return false;
+    throw projectAnchorPublicationError(primaryError, closeError);
+  }
+  if (closeError) throw projectAnchorPublicationError(closeError);
+  return true;
+}
+
+function projectAnchorPublicationError(...errors) {
+  const present = errors.filter(Boolean);
+  if (present.length === 1) return present[0];
+  return new Error(present.map((error) => error.message || String(error)).join('; '));
 }
 
 function resolveProjectIdentityV2(cwd) {

@@ -28,7 +28,10 @@ const (
 	UpgradeActionRetryProjectRegistration    = "retry_project_identity_registration"
 )
 
-var strictProjectAnchorV2 = regexp.MustCompile(`^[0-9a-f]{32}$`)
+var (
+	strictProjectAnchorV2   = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	strictProjectSelectorV2 = regexp.MustCompile(`^[A-Za-z0-9_.\\/:-]+$`)
+)
 
 // ProjectIdentityV2 mirrors the additive protobuf/HTTP contract at the store
 // boundary without coupling persistence to either transport package.
@@ -97,8 +100,8 @@ func ProjectIdentityPublicMessage(err error) string {
 // tenant data access. It deliberately uses only the existing projects table:
 // schema changes remain governed by gormigrate, never request-path DDL.
 func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, identity *ProjectIdentityV2) (ProjectIdentityResolution, error) {
-	if selector == "" || len(selector) > 256 || strings.TrimSpace(selector) != selector || containsProjectIdentityControl(selector) {
-		return ProjectIdentityResolution{}, invalidProjectIdentity("project selector is empty or malformed")
+	if err := validateProjectSelectorV2(selector); err != nil {
+		return ProjectIdentityResolution{}, err
 	}
 	if identity != nil {
 		if err := ValidateProjectIdentityV2(*identity); err != nil {
@@ -230,6 +233,18 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 		return ProjectIdentityResolution{}, err
 	}
 	return resolution, nil
+}
+
+// validateProjectSelectorV2 owns the strict transport-independent outer
+// selector contract. Legacy alias metadata intentionally remains governed by
+// ValidateProjectAliasV2 so established aliases may retain internal spaces.
+func validateProjectSelectorV2(selector string) error {
+	if selector == "" || len(selector) > 256 || strings.TrimSpace(selector) != selector ||
+		strings.Contains(selector, "..") || containsProjectIdentityControl(selector) ||
+		!strictProjectSelectorV2.MatchString(selector) {
+		return invalidProjectIdentity("project selector is empty or malformed")
+	}
+	return nil
 }
 
 // AttachLegacyAlias adds an old-client selector only when it is absent or

@@ -1,0 +1,50 @@
+{
+  "task_id": "SECURITY-PROJECT-IDENTITY-R3",
+  "stack": "GO+JAVASCRIPT+TYPESCRIPT",
+  "base_commit": "9e2ce4e58a5cded69660ca9ac532d2167f315bb2",
+  "red": {
+    "observed_at": "2026-07-10T20:26:15.4217526Z",
+    "evidence_file": "SECURITY-PROJECT-IDENTITY-R3.red.json",
+    "signals": [
+      "store returned PROJECT_IDENTITY_UNAVAILABLE for malformed outer selectors",
+      "default gRPC returned Unavailable instead of InvalidArgument",
+      "Go race repetition observed partial-final-file EOF",
+      "Claude and OpenClaw child-process stress each observed a losing reader failure"
+    ]
+  },
+  "green": {
+    "observed_at": "2026-07-10T20:44:36.1761574Z",
+    "passed_tests": 1,
+    "regressed_tests": 0,
+    "runner_stdout_excerpt": "focused store/gRPC/proxy PASS; Go ordinary and -race repetition PASS; Claude 76/76 PASS; OpenClaw 27/27 PASS"
+  },
+  "refactor": {
+    "applied": false,
+    "reason": "The GREEN implementation is localized to the existing validation and anchor-publication seams; additional abstraction would not reduce the cross-language contract."
+  },
+  "prove_it": {
+    "observed_at": "2026-07-10T20:44:36.1761574Z",
+    "substituted_files": [
+      "internal/db/gorm/project_store.go",
+      "internal/proxy/identity.go",
+      "plugin/engram/hooks/lib.js",
+      "plugin/openclaw-engram/src/identity.ts"
+    ],
+    "failed_tests": 11,
+    "survived_mutations": 0,
+    "runner_stdout_excerpt": "selector validator bypass failed 7 store and 2 gRPC cases; Go and Claude publication sentinels failed one focused test each; OpenClaw publication sentinel failed TypeScript compilation",
+    "restoration": "Each controlled mutation was restored from the staged GREEN snapshot and its focused GREEN test reran successfully."
+  },
+  "coverage": {
+    "command": "go test ./internal/db/gorm ./internal/proxy ./internal/grpcserver -run identity-r3-focused-regex -cover -count=1",
+    "percent_by_package": {
+      "internal/db/gorm": 0.6,
+      "internal/proxy": 63.4,
+      "internal/grpcserver": 4.2
+    },
+    "threshold": 80,
+    "status": "WARN",
+    "mode": "informational",
+    "note": "Cross-package package-wide coverage is diluted by unrelated stores and handlers; exact behavioral, race, child-process, full-suite, and Prove-It gates are authoritative for this bounded patch."
+  }
+}
