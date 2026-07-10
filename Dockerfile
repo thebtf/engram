@@ -24,7 +24,7 @@ FROM operator-console-build AS operator-console-static-build
 RUN npm run generate
 
 # --- Go build stage ---
-FROM golang:1.25-bookworm AS builder
+FROM golang:1.25.12-bookworm AS builder
 
 WORKDIR /src
 
