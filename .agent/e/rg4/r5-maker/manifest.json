@@ -9,29 +9,31 @@
   },
   "authority": {
     "base": "4812589b9920c187a92a03d210d2e9d5eb53862f",
-    "implementation_commit": "eb44a8e694c60856176c93c64080002231648b4b",
-    "implementation_parent": "4812589b9920c187a92a03d210d2e9d5eb53862f",
+    "primary_implementation_commit": "eb44a8e694c60856176c93c64080002231648b4b",
+    "superseded_evidence_commit": "135e4a0a180f112906e89c211f976ce519212347",
+    "effective_implementation_commit": "5dd3e3c4e2f87a52a44465d8a3a63d3b68a55f65",
+    "effective_implementation_parent": "135e4a0a180f112906e89c211f976ce519212347",
     "final_evidence_commit": "SUPPLIED_OUT_OF_BAND_AFTER_COMMIT",
-    "final_evidence_parent_required": "eb44a8e694c60856176c93c64080002231648b4b"
+    "final_evidence_parent_required": "5dd3e3c4e2f87a52a44465d8a3a63d3b68a55f65"
   },
   "entries": [
     {
       "path": ".github/workflows/test.yml",
-      "commit": "eb44a8e694c60856176c93c64080002231648b4b",
+      "commit": "5dd3e3c4e2f87a52a44465d8a3a63d3b68a55f65",
       "representation": "git-blob-lf",
-      "git_blob_oid_sha1": "ce38dd8676c8b8113b5a8cfe7eebc3b01d0d4d90",
-      "sha256": "3291F5D40C7E00FC4A60E7546FE0D43EACF5721C87918CADF995A42AA51354AD",
-      "bytes": 65789,
+      "git_blob_oid_sha1": "c460afae38da5ee9c008b5273f4808fc961d91cf",
+      "sha256": "5AEABA51399575B1E12B13C4260BDA7BC476D36313D9ED1AFDC499D5013E3A50",
+      "bytes": 70106,
       "cr_bytes": 0,
       "utf8_bom": false
     },
     {
       "path": "scripts/production-gates/run-db-suite.ps1",
-      "commit": "eb44a8e694c60856176c93c64080002231648b4b",
+      "commit": "5dd3e3c4e2f87a52a44465d8a3a63d3b68a55f65",
       "representation": "git-blob-lf",
-      "git_blob_oid_sha1": "b9212620920aaf1cba28029f80e108735033a5cb",
-      "sha256": "312D2C690951E0645AA0168312C50BFF26DF21D56F2AE9EC5A88829BCCCA2E58",
-      "bytes": 94835,
+      "git_blob_oid_sha1": "5740f1f0db48ad5299cc8649395ef77e3d5bcf6c",
+      "sha256": "61DC18574F07E45C573302D4D938C082D29E10876E2E56EEC51F20B3DA4902BD",
+      "bytes": 96079,
       "cr_bytes": 0,
       "utf8_bom": false
     },
@@ -39,9 +41,9 @@
       "path": ".agent/e/rg4/r5-maker/report.md",
       "commit": "FINAL_EVIDENCE_COMMIT",
       "representation": "git-blob-lf",
-      "git_blob_oid_sha1": "0921168175b0551ce3fc96318113d59187a33423",
-      "sha256": "12B183D6B1B65C83D991F29BC91787F41CC971E9F10D39D82EE583DE204109EF",
-      "bytes": 7337,
+      "git_blob_oid_sha1": "50fc17b9a18eb8eaa6422f175d549a2000b49697",
+      "sha256": "D4E24193A128FEC73731D436493FB1B3383A7D207C38091E8ED2592C7D28EBC1",
+      "bytes": 8364,
       "cr_bytes": 0,
       "utf8_bom": false
     },
@@ -49,9 +51,9 @@
       "path": ".agent/e/rg4/r5-maker/proof.json",
       "commit": "FINAL_EVIDENCE_COMMIT",
       "representation": "git-blob-lf",
-      "git_blob_oid_sha1": "d79b4bb4e43be6ee9a5582e09ede6ff0df888ce6",
-      "sha256": "2E1EAD4AEAC35762319EE508FE9D1DE3CEDBAE17D0A9020DB5E23115CD699FED",
-      "bytes": 6792,
+      "git_blob_oid_sha1": "6519b85899e7580dcb9efc5ed74e75b329034fd2",
+      "sha256": "9BC8EF996EB63E31FA1AA0C85B5A706150D9DE07804DC12B5300156C60667535",
+      "bytes": 8160,
       "cr_bytes": 0,
       "utf8_bom": false
     },
@@ -59,9 +61,9 @@
       "path": ".agent/e/rg4/r5-maker/fail.json",
       "commit": "FINAL_EVIDENCE_COMMIT",
       "representation": "git-blob-lf",
-      "git_blob_oid_sha1": "9606f12f3ffb64bfb30fccf718c6f14cb50ac180",
-      "sha256": "AFBAA86743F852D49B46B05BC687EC50C5176B85B94B9477A9E71A43C41D11CF",
-      "bytes": 5336,
+      "git_blob_oid_sha1": "2ed33d01dbf08f25584377fa3d7c7cb3ca632dbd",
+      "sha256": "D8038B65FE07AFDB4826CCC30617025B7114C9083E9BB492BE0112CBC4BF80B1",
+      "bytes": 6871,
       "cr_bytes": 0,
       "utf8_bom": false
     }

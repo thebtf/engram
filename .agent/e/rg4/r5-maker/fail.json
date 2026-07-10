@@ -3,7 +3,9 @@
   "gate": "revision-5-truthful-project-red",
   "verdict": "BLOCKED",
   "full_project_gate": {
-    "repeat_test_failures": [29, 30, 29],
+    "repeat_test_counts": [3516, 3516, 3516],
+    "repeat_passed": [3472, 3471, 3473],
+    "repeat_failed": [30, 29, 30],
     "stable_failed_tests": [
       "internal/bulkops::TestEC_F3_ConflictDetected_Integration",
       "internal/bulkops::TestFacade_BulkDelete_Committed_AuditLogWritten",
@@ -35,7 +37,16 @@
       "internal/worker::TestHandleSetBehavioralRuleEnabled_Success",
       "internal/worker/reaper::TestReaper_RespectsRetentionEnvVar"
     ],
-    "repeat_2_only_failure": "internal/bulkops::TestRollback_Conflict_EC_F3",
+    "intermittent_failure": {
+      "test": "internal/bulkops::TestRollback_Conflict_EC_F3",
+      "failed_repeats": [1, 3],
+      "passed_repeat": 2
+    },
+    "incomplete_terminal_records": [
+      { "repeat": 1, "count": 1, "tests": ["internal/worker/reaper::TestReaper_StopsOnContextCancel"] },
+      { "repeat": 2, "count": 3, "tests": ["internal/worker/reaper::TestReaper_PreservesUnexpired", "internal/worker/reaper::TestReaper_PurgesExpired", "internal/worker/reaper::TestReaper_StopsOnContextCancel"] },
+      { "repeat": 3, "count": 0, "tests": [] }
+    ],
     "unexpected_skips_each_repeat": 13,
     "unexpected_skip_inventory": [
       "internal/db/gorm::TestMigrationsIntegration_AddsCommandsRunColumn",
@@ -53,41 +64,48 @@
       "internal/worker::TestStaticEmbedIncludesUnderscoreNuxtChunks"
     ],
     "required_session_start_tests": {
+      "package": "github.com/thebtf/engram/internal/grpcserver",
       "expected_each_repeat": 12,
+      "observed_each_repeat": 12,
       "executed_each_repeat": 12,
       "skipped_each_repeat": 0,
       "missing_each_repeat": 0,
+      "duplicate_each_repeat": 0,
+      "incomplete_each_repeat": 0,
       "failed_product_assertions_each_repeat": [
         "internal/grpcserver::TestGetSessionStartContext_HappyPath",
         "internal/grpcserver::TestGetSessionStartContext_RuleRouterEnabledPacketShape"
       ]
     },
     "coverage": {
-      "overall_percent": [53.35, 53.35, 53.35],
+      "overall_percent": [53.33, 53.35, 53.35],
       "overall_floor": 60.0,
       "failed_package_floors": {
-        "internal/handlers/loom": "64.77 < 70",
-        "cmd/engram": "6.39 < 10",
-        "cmd/engram-server": "0 < 10",
-        "internal/update": "0 < 20",
-        "internal/worker": "46.77 < 55",
-        "internal/mcp": "46.23 < 55",
-        "internal/db/gorm": "49.17 < 55"
+        "internal/handlers/loom": { "actual": [64.77, 64.77, 64.77], "floor": 70.0 },
+        "cmd/engram": { "actual": [6.39, 6.39, 6.39], "floor": 10.0 },
+        "cmd/engram-server": { "actual": [0.0, 0.0, 0.0], "floor": 10.0 },
+        "internal/update": { "actual": [0.0, 0.0, 0.0], "floor": 20.0 },
+        "internal/worker": { "actual": [46.77, 46.77, 46.77], "floor": 55.0 },
+        "internal/mcp": { "actual": [46.23, 46.23, 46.23], "floor": 55.0 },
+        "internal/db/gorm": { "actual": [49.10, 49.17, 49.17], "floor": 55.0 }
       }
     },
     "cleanup": {
       "repeat_cleanup_exit_codes": [0, 0, 0],
       "direct_sql_residual_databases": 0,
       "direct_sql_residual_sessions": 0,
+      "compose_containers": 0,
+      "compose_volumes": 0,
+      "compose_networks": 0,
       "shared_postgres_container_left_running": true
     }
   },
   "image_scan": {
     "verdict": "FAIL_FINDINGS",
-    "exact_immutable_image_findings": {
-      "operator-console": 5,
-      "postgres": 20,
-      "server": 13
+    "exact_immutable_images": {
+      "operator-console": { "id": "sha256:d701b9ace90ed8b689f45b90fbdf87ed1c9b2a81b7a237fa5d7fd909405df9f9", "findings": 5 },
+      "postgres": { "id": "sha256:d2ef61f42ef767baa5a1475393303cc235bcd92febd9d7014eddb48b41f3bad0", "findings": 20 },
+      "server": { "id": "sha256:c75d6cd0fd5fd5a569d1c5c4eca0200e4c9de3374dbf7d316390c064af9e4bf0", "findings": 13 }
     },
     "down_cleanup": "PASS",
     "residual_resources_zero": true
@@ -95,13 +113,17 @@
   "openclaw": {
     "verdict": "FAIL_MISSING_TRACKED_LOCK",
     "executed_steps": 0,
+    "pre_surface_clean": true,
+    "post_surface_clean": true,
     "cleanup": "PASS"
   },
   "gitleaks_diagnostic": {
-    "implementation_patch_findings": 0,
-    "working_tree_no_git_findings": 30,
-    "working_tree_breakdown": "16 ignored raw runtime-evidence hits plus 14 existing tracked fixture/doc/script hits",
-    "routing": "Project-wide secret-negative classification remains release work; revision 5 introduced no patch finding."
+    "implementation_diff_findings": 0,
+    "working_tree_no_git_findings": 62,
+    "ignored_runtime_evidence_findings": 48,
+    "existing_tracked_fixture_doc_script_findings": 14,
+    "redacted_report_sha256": "60FC8185A4E4207129D6076AF27C2E6E58922D34720A0E19C266C6BC7A3D6F42",
+    "routing": "Project-wide secret-negative classification remains release work; revision 5 introduced no implementation-diff finding."
   },
-  "routing": "Existing master-plan lanes own product/test/coverage/image/OpenClaw/secret blockers. RELEASE-GATES does not allowlist, suppress, threshold-reduce, or patch them. v5-demolished graph paths remain classification-only."
+  "routing": "Existing master-plan lanes own product/test/incomplete/coverage/image/OpenClaw/secret blockers. RELEASE-GATES does not allowlist, suppress, threshold-reduce, or patch them. v5-demolished graph paths remain classification-only."
 }

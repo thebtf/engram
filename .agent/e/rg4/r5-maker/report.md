@@ -1,48 +1,51 @@
-# RELEASE-GATES Foundation Revision 5 — Maker Handoff
+# RELEASE-GATES Revision 5 Maker Evidence
 
-Status: `REVIEW_REQUIRED`
-Foundation verdict: `READY_FOR_INDEPENDENT_CHECK`
-Project-wide production verdict: `BLOCKED`
-Exact revision-4 candidate/base: `4812589b9920c187a92a03d210d2e9d5eb53862f`
-Revision-4 checker evidence commit: `bd6af3dcd1fa0c2675102a1b91e7c59c8c7c85df`
-Revision-4 checker report blob: `27519369cc3e5b79d5188eaf07026cb7076cec13`
-Revision-5 implementation commit: `eb44a8e694c60856176c93c64080002231648b4b`
-Canonical UTF-8/LF plan SHA256: `d7bcfd122e456d9b764595524292d53b0c99447b7f716a1be0707341e4681bf9`
+Maker verdict: `READY_FOR_INDEPENDENT_CHECK` for the release-gate foundation only.
 
-## Outcome
+Project release verdict: `BLOCKED`. The gate now reports the current failures, skips, coverage deficits, image vulnerabilities, OpenClaw lock defect, and secret-scan classifications without converting them into success.
 
-Revision 5 closes both release-gate false-green classes found by the independent revision-4 checker.
+## Authority
 
-1. Workflow conformance now parses the actual PowerShell AST. It binds exact executable/argument/assignment/function/branch/loop shapes, rejects parse errors, requires one reachable live Docker build and one reachable live Docker Scout command, and rejects comments, dead strings, unreachable branches, duplicate canonical calls, and renamed duplicate calls. The live source/build/pull/post-build/image/launch/scan order and exact image map remain locked.
-2. Fresh database identities are now `engram_prc_rg_test_<sha256-prefix>_rN`. The caller run ID is hashed so operator-controlled `prod`, `production`, or `staging` text cannot poison the test-only guard. Every unfiltered canonical `./...` repeat emits a fail-closed proof for the exact 12 required gRPC session-start tests. Pass and fail are both executed terminal outcomes; skip, missing, duplicate, or incomplete is fatal.
+- Challenged revision-4 candidate/base: `4812589b9920c187a92a03d210d2e9d5eb53862f` (tree `764fd987cc606754f037de0647f8a10e7080adc2`).
+- Revision-4 independent checker: commit `bd6af3dcd1fa0c2675102a1b91e7c59c8c7c85df`, report blob `27519369cc3e5b79d5188eaf07026cb7076cec13`.
+- Primary revision-5 implementation: `eb44a8e694c60856176c93c64080002231648b4b`, direct parent `4812589b9920c187a92a03d210d2e9d5eb53862f`.
+- Superseded evidence commit: `135e4a0a180f112906e89c211f976ce519212347`. Its evidence predates the static pre-review correction and is not final authority.
+- Static pre-review correction and effective implementation head: `5dd3e3c4e2f87a52a44465d8a3a63d3b68a55f65`, direct parent `135e4a0a180f112906e89c211f976ce519212347`, tree `5f6465deaebcd0899e27af231550726f2adc37f6`.
+- Canonical plan SHA256: `d7bcfd122e456d9b764595524292d53b0c99447b7f716a1be0707341e4681bf9`.
 
-The conformance suite rejects 42 permanent mutations. New revision-5 mutations cover comment-only, dead-string, and unreachable build calls; duplicate and renamed-duplicate live build calls; unreachable, duplicate, and renamed-duplicate Scout calls; comment-only/unsafe database assignment; comment-only/bypassed session-start proof; and removal of the literal-test identity.
+The branch is `work/prc-release-gates-revision5-maker` in `D:/Dev/engram/.agent/worktrees/prc-release-gates-r5-maker`. No merge, push, tag, release, or primary-worktree write was performed.
 
-No product code, product tests, plan/state authority, or v5-demolished graph/rerank/composite-scoring/SDK-extraction/server-HTTP-MCP path was changed.
+## Closed false-green classes
 
-## Verification
+1. The workflow conformance gate now parses the PowerShell AST and proves the source-built compose invocation and each exact-image Docker Scout invocation are reachable, structurally correct, and present exactly once. Text in comments, strings, or unreachable blocks cannot satisfy the contract.
+2. Fresh databases use an unambiguous test-only identity, `engram_prc_rg_test_<16-lower-hex>_rN`. Every repeat emits an exact execution proof for the required session-start package and rejects skip, missing, duplicate, incomplete, wrong-package, or substituted-test inventory.
+3. Root static pre-review found that the first revision-5 self-test derived synthetic events from the same mutable inventory it challenged. Commit `5dd3e3c4...` fixed this by independently pinning the exact package and ordered 12-test list in both the runner self-test and workflow conformance. Permanent mutations now substitute one test identity and the package; both are rejected.
+
+No product failure, skip, coverage floor, vulnerability, or OpenClaw precondition was allowlisted or suppressed. No v5-demolished graph/rerank/scoring behavior was restored.
+
+## Foundation verification at effective implementation head
 
 | Gate | Exit | Result |
 |---|---:|---|
-| Nine production-gate self-tests | 0 | PASS, 9/9 |
-| Extracted workflow conformance block | 0 | PASS, 42/42 mutations rejected |
-| PowerShell parser | 0 | PASS |
-| `actionlint .github/workflows/test.yml` | 0 | PASS |
-| `git diff --check` | 0 | PASS |
+| Nine production-gate self-tests | 0 | PASS 9/9 |
+| Extracted workflow conformance | 0 | PASS; PowerShell AST; 44 mutations rejected |
+| PowerShell parse: DB runner + extracted conformance block | 0 | PASS |
+| actionlint | 0 | PASS |
+| `git diff --check 4812589b...5dd3e3c4` | 0 | PASS |
 | `go vet ./...` | 0 | PASS |
-| Critical suite | 0 | PASS, 7/7, skip=0 |
-| RELEASE-GATES Ledger | 0 | PASS, 48 slices / 325 declarations |
-| RELEASE-GATES implementation Diff | 0 | PASS, 2 changed paths / 0 violations |
-| Windows path budget at implementation commit | 0 | PASS, 1,405 paths, longest 166, ceiling 240 |
-| Actual 66-character fresh detached checkout | 0 | PASS, exact implementation HEAD, `core.longpaths=UNSET`, clean; worktree removed |
-| R5 implementation patch gitleaks scan | 0 | PASS, no leak found |
-| OpenClaw node matrix | 1 | Expected fail-closed: tracked `package-lock.json` absent; 0 npm steps, pre/post clean, cleanup PASS |
-| Canonical full fresh-DB/race/repeat-3 gate | 1 | Expected project RED; foundation invariants below all passed |
-| Exact-head dev stand lifecycle | 1 | Up/Ready/Down PASS; Scan correctly failed on exact-image findings; residue zero |
+| `go build ./...` | 0 | PASS |
+| gitleaks over both implementation files, base through effective head | 0 | PASS; 0 findings |
+| Critical suite | 0 | PASS 7/7; skip=0 |
+| Ownership Ledger | 0 | PASS; 48 slices, 325 declarations |
+| Ownership Diff at code head | 0 | PASS; RELEASE-GATES; 7 changed paths, 0 violations |
+| Windows tracked path budget | 0 | PASS; 1,410 paths, longest=166, ceiling=240 |
+| Actual 66-character fresh checkout | 0 | PASS; exact head, clean, `core.longpaths=UNSET`, removed |
 
-## Exact 12-test execution proof
+Critical-suite raw summary SHA256: `C696FEDF8898460DADC89871905AD73F69A0360E8764526584B80BFB4554754E`.
 
-The canonical command used the shared `engram-prc-postgres` PostgreSQL 17 + pgvector service without stopping or removing it:
+## Canonical full fresh-DB race proof
+
+The shared `engram-prc-postgres` PostgreSQL 17 + pgvector service was used without stopping or removing it:
 
 ```powershell
 $env:ENGRAM_TEST_ADMIN_DSN = 'postgres://<redacted>@127.0.0.1:55432/postgres?sslmode=disable'
@@ -52,50 +55,49 @@ pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 `
   -PostgresContainer engram-prc-postgres `
   -PostgresImage pgvector/pgvector:pg17 `
   -ArtifactRoot .agent/e/rg4/r5-maker/runtime `
-  -RunId canonical-full-race-repeat3
+  -RunId canonical-full-race-repeat3-r5-inventory-pin
 ```
 
-All three repeats produced the same required-test proof:
+The command exited 1 because the project is red, not because the release gate lost execution proof.
 
-- expected=12, observed=12, executed=12;
-- passed=10, failed=2, skipped=0;
-- missing=0, duplicate=0, incomplete=0;
-- proof verdict `PASS`;
-- generated identities ended in `_r1`, `_r2`, `_r3` and all contained the literal `test` marker;
-- sessions_before=0, sessions_after=0, cleanup exit=0 and cleanup verdict `PASS` in every repeat.
+- Required package: `github.com/thebtf/engram/internal/grpcserver`.
+- Each repeat: expected=12, observed=12, executed=12, passed=10, failed=2, skipped=0, missing=0, duplicate=0, incomplete=0, proof verdict `PASS`.
+- The two executed product failures were `TestGetSessionStartContext_HappyPath` and `TestGetSessionStartContext_RuleRouterEnabledPacketShape`.
+- Fresh identities were `engram_prc_rg_test_fc4f603aeda0760d_r1`, `_r2`, and `_r3`.
+- Tests observed: 3,516 / 3,516 / 3,516.
+- Passed: 3,472 / 3,471 / 3,473.
+- Failed: 30 / 29 / 30. Twenty-nine were stable; `internal/bulkops::TestRollback_Conflict_EC_F3` additionally failed in repeats 1 and 3.
+- Unexpected skips: 13 / 13 / 13.
+- General incomplete terminal records: 1 / 3 / 0; their exact identities are retained in `fail.json`.
+- Overall coverage: 53.33% / 53.35% / 53.35%, below the immutable 60% floor. Seven package floors remain red.
+- Cleanup exit: 0 / 0 / 0; targeted sessions before/after: 0 / 0 / 0.
 
-The two required tests that reached a real failing terminal outcome were `TestGetSessionStartContext_HappyPath` and `TestGetSessionStartContext_RuleRouterEnabledPacketShape`. They remain visible product blockers; they were not converted to skips or treated as successful product behavior.
+Direct post-run checks found zero `engram_prc_rg_test_%` databases, zero matching PostgreSQL sessions, and zero `engram-critical-stand` containers, volumes, or networks. The shared service remained `/engram-prc-postgres|pgvector/pgvector:pg17|true`.
 
-## Truthful project-wide RED
-
-The full gate returned FAIL in all three repetitions, as required by the current project state:
-
-- failing tests: 29 / 30 / 29;
-- unexpected skips: 13 / 13 / 13;
-- overall coverage: 53.35% / 53.35% / 53.35%, below 60%;
-- seven package floors remain below contract;
-- cleanup exit: 0 / 0 / 0;
-- direct SQL after the run found zero `engram_prc_rg_test_%` databases and zero matching sessions;
-- shared container remained `/engram-prc-postgres|pgvector/pgvector:pg17|true`.
-
-The stable test/skip inventory and coverage floors are in `fail.json`. Graph T015/T016 failures are recorded as demolition-classification work, not repaired or resurrected by this slice.
+Canonical summary SHA256: `4B98F3D1E296440DFDC1A6023D4EDAE3B6D4B5255083DB666CC0B8CC8339BE15`. Each required-execution proof has SHA256 `0AF9EBDF4B242ED394D13CE4AB410F7A94E7A0A367B66BB0ABBF1C177DDD0316`.
 
 ## Exact-head dev stand
 
-The lifecycle challenged clean commit `eb44a8e694c60856176c93c64080002231648b4b`:
+The lifecycle challenged clean source commit `5dd3e3c4e2f87a52a44465d8a3a63d3b68a55f65`.
 
-- Up PASS: source clean, compose build PASS, PostgreSQL pull PASS, launch used `--no-build --pull never`, all three prelaunch image IDs equalled running IDs, three cryptographic credentials were distinct/runtime-injected/not persisted.
+- Up PASS: compose build and PostgreSQL pull completed; launch used no build/pull; all prelaunch, tag, running, and scanned IDs matched; three generated credentials were distinct, runtime-injected, and not persisted.
 - Ready PASS: direct and operator-proxied liveness/readiness endpoints returned HTTP 200 with the required semantic payloads.
-- Scan FAIL as expected: immutable `local://sha256:...` references found operator-console=5, PostgreSQL=20, server=13 HIGH/CRITICAL findings.
-- Down PASS: zero compose containers, volumes, or networks remained.
+- Scan correctly failed on immutable local image IDs: operator-console `sha256:d701b9ace90ed8b689f45b90fbdf87ed1c9b2a81b7a237fa5d7fd909405df9f9` = 5 findings; PostgreSQL `sha256:d2ef61f42ef767baa5a1475393303cc235bcd92febd9d7014eddb48b41f3bad0` = 20; server `sha256:c75d6cd0fd5fd5a569d1c5c4eca0200e4c9de3374dbf7d316390c064af9e4bf0` = 13.
+- Down PASS: residual compose resources were zero.
 
-## Evidence integrity
+Lifecycle/up/ready/scan/down SHA256 values are recorded in `proof.json`.
 
-`manifest.json` uses the explicit `git-blob-lf` representation. Source entries bind the exact implementation commit, Git blob OID, SHA256 of the raw Git blob bytes, zero CR bytes, and no UTF-8 BOM. This avoids ambiguity from the Windows checkout's `core.autocrlf=true` working-tree representation.
+## Other release blockers
 
-The manifest deliberately excludes itself and `SHA256SUMS`. `SHA256SUMS` hashes `report.md`, `proof.json`, `fail.json`, and `manifest.json`, and deliberately excludes itself. There is no self-hash or manifest/checksum cycle. The final evidence commit cannot name its own commit ID; its exact final candidate SHA is supplied out of band after commit and must have implementation commit `eb44a8e6...` as its direct parent.
+- OpenClaw matrix exited 1 before npm execution because tracked `plugin/openclaw-engram/package-lock.json` is absent. Pre/post surfaces were clean and cleanup passed.
+- Current whole-working-tree gitleaks diagnostic reports 62 findings: 48 in ignored raw runtime evidence from the two canonical diagnostic runs and 14 in existing tracked fixtures/docs/scripts. Its redacted report SHA256 is `60FC8185A4E4207129D6076AF27C2E6E58922D34720A0E19C266C6BC7A3D6F42`. This is release classification work; the revision-5 implementation diff itself has zero findings.
+- Product failures, skips, incomplete records, coverage floors, image findings, OpenClaw lock, and secret classifications remain routed to their declared master-plan lanes. This maker did not repair or reclassify them.
 
-## Changed paths
+## Evidence integrity and changed paths
+
+`manifest.json` uses exact `git-blob-lf` bytes for both source files and the three compact evidence files. The manifest excludes itself and `SHA256SUMS`; `SHA256SUMS` hashes the finalized report, proof, fail inventory, and manifest while excluding itself. The final evidence commit cannot contain its own commit ID, so its exact SHA is supplied out of band and must have `5dd3e3c4...` as direct parent.
+
+Changed paths relative to the challenged base:
 
 - `.github/workflows/test.yml`
 - `scripts/production-gates/run-db-suite.ps1`
@@ -105,4 +107,4 @@ The manifest deliberately excludes itself and `SHA256SUMS`. `SHA256SUMS` hashes 
 - `.agent/e/rg4/r5-maker/manifest.json`
 - `.agent/e/rg4/r5-maker/SHA256SUMS`
 
-Maker position: `READY_FOR_INDEPENDENT_CHECK` for the release-gate foundation. Independent checker and post-review remain mandatory. Project-wide readiness remains `BLOCKED` by the exact failures, skips, coverage deficits, image findings, existing tracked-tree gitleaks classifications, and missing OpenClaw lock recorded in compact evidence.
+Independent checker and post-review remain mandatory. This maker handoff does not claim project production readiness.
