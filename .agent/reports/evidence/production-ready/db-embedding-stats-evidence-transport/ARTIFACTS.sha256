@@ -1,0 +1,10 @@
+# manifest-version=1
+# algorithm=sha256
+# representation=canonical-lf-files
+# checkout-equivalence=crlf-to-lf-with-no-bare-cr
+# self-entry=excluded-to-avoid-recursion
+5d932e6acf104bf9eff291409b50961007512e09e91d78401257a018fcb780f4  .agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt
+e3e9fd6250d4ead502a01ec81bb7901ad658d74845184a10b6f153276a1bd12f  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json
+e0a397c8002a1722ad5d8b4b251316dc4b2edd456f37ec0827c97ccf126dccad  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs
+a6d16bdc957c16906491b071c4d7e6b9995070c8a8b5e4309a22c3bce0bafe7c  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json
+d53b54055b08069a897f372fcd70e150ab24e4da9838630deef4e4e219955b8c  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md

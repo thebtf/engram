@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const allowedModes = new Set(['git-object', 'checkout-lf', 'legacy-raw-audit']);
+const allowedModes = new Set(['git-object', 'checkout-lf', 'legacy-raw-audit', 'artifact-files']);
 const modeArgument = process.argv.find((argument) => argument.startsWith('--mode='));
 const mode = modeArgument ? modeArgument.slice('--mode='.length) : 'git-object';
 
@@ -136,8 +136,95 @@ function isAncestor(repoRoot, ancestor, descendant) {
   throw new Error(`git merge-base --is-ancestor failed (${result.status})`);
 }
 
+function verifyArtifactFiles(repoRoot, scriptDirectory, sourceCommit, sourceCommitIsAncestor, inheritedErrors) {
+  const artifactManifestPath = path.join(scriptDirectory, 'ARTIFACTS.sha256');
+  const manifest = parseAnnotatedManifest(artifactManifestPath);
+  const structuralErrors = [...inheritedErrors];
+
+  if (manifest.metadata['manifest-version'] !== '1') {
+    structuralErrors.push('artifact manifest-version must be 1');
+  }
+  if (manifest.metadata.algorithm !== 'sha256') {
+    structuralErrors.push('artifact algorithm must be sha256');
+  }
+  if (manifest.metadata.representation !== 'canonical-lf-files') {
+    structuralErrors.push('artifact representation must be canonical-lf-files');
+  }
+  if (manifest.metadata['checkout-equivalence'] !== 'crlf-to-lf-with-no-bare-cr') {
+    structuralErrors.push('artifact checkout equivalence must reject bare CR');
+  }
+  if (manifest.metadata['self-entry'] !== 'excluded-to-avoid-recursion') {
+    structuralErrors.push('artifact manifest must explicitly declare self exclusion');
+  }
+  if (new Set(manifest.entries.map((entry) => entry.path)).size !== manifest.entries.length) {
+    structuralErrors.push('artifact manifest paths must be unique');
+  }
+
+  const artifactManifestRelativePath = path.relative(repoRoot, artifactManifestPath).split(path.sep).join('/');
+  const allowedExactPath = '.agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt';
+  const allowedPrefix = '.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/';
+  const entryResults = manifest.entries.map((entry) => {
+    const entryPath = path.resolve(repoRoot, ...entry.path.split('/'));
+    const relativeEntryPath = path.relative(repoRoot, entryPath);
+    const insideRepository =
+      relativeEntryPath.length > 0 &&
+      !relativeEntryPath.startsWith(`..${path.sep}`) &&
+      relativeEntryPath !== '..' &&
+      !path.isAbsolute(relativeEntryPath);
+    const insideOwnedNamespace = entry.path === allowedExactPath || entry.path.startsWith(allowedPrefix);
+    if (!insideRepository || !insideOwnedNamespace || entry.path === artifactManifestRelativePath) {
+      return {
+        path: entry.path,
+        match: false,
+        checkout_eol: 'not-read-outside-boundary',
+        bare_carriage_returns: null,
+      };
+    }
+    const canonical = canonicalizeCheckout(fs.readFileSync(entryPath));
+    const actualHash = sha256(canonical.bytes);
+    const matches =
+      canonical.bare_carriage_returns === 0 &&
+      actualHash === entry.sha256;
+
+    return {
+      path: entry.path,
+      match: matches,
+      checkout_eol: eolStyle(canonical),
+      bare_carriage_returns: canonical.bare_carriage_returns,
+    };
+  });
+
+  const matched = entryResults.filter((entry) => entry.match).length;
+  const eolCounts = entryResults.reduce((counts, entry) => {
+    counts[entry.checkout_eol] = (counts[entry.checkout_eol] || 0) + 1;
+    return counts;
+  }, {});
+  const status = structuralErrors.length === 0 && matched === entryResults.length ? 'PASS' : 'FAIL';
+  const result = {
+    schema_version: 1,
+    slice: 'DB-EMBEDDING-EVIDENCE-TRANSPORT',
+    mode: 'artifact-files',
+    status,
+    source_commit: sourceCommit,
+    source_commit_is_ancestor: sourceCommitIsAncestor,
+    algorithm: 'sha256',
+    representation: 'canonical-lf-files',
+    total: entryResults.length,
+    matched,
+    checkout: {
+      core_autocrlf: getCoreAutocrlf(repoRoot),
+      eol_counts: eolCounts,
+    },
+    structural_errors: structuralErrors,
+    entries: entryResults,
+  };
+
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  if (status === 'FAIL') process.exit(1);
+}
+
 function main() {
-  const repoRoot = runGit(['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+  const repoRoot = path.resolve(runGit(['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim());
   const scriptDirectory = __dirname;
   const contractPath = path.join(scriptDirectory, 'content-manifest.v1.json');
   const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
@@ -182,6 +269,16 @@ function main() {
   const sourceCommitIsAncestor = isAncestor(repoRoot, sourceCommit, 'HEAD');
   if (!sourceCommitIsAncestor) {
     structuralErrors.push('source commit is not an ancestor of the executing checkout HEAD');
+  }
+  if (mode === 'artifact-files') {
+    verifyArtifactFiles(
+      repoRoot,
+      scriptDirectory,
+      sourceCommit,
+      sourceCommitIsAncestor,
+      structuralErrors,
+    );
+    return;
   }
   const entryResults = contract.entries.map((entry) => {
     const objectSpec = `${sourceCommit}:${entry.path}`;

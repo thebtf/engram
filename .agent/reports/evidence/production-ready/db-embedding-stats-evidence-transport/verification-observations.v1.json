@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+  "source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "contract_implementation_commit": "462c97dd889b4afbc84d1ddc07613d748604afee",
+  "raw_checkout_bytes_are_not_the_contract": true,
+  "observations": [
+    {
+      "checkout": "windows-autocrlf-true",
+      "materialization": "git worktree add -b work/prc-db-embedding-evidence-transport .agent/worktrees/db-embedding-evidence-transport 38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+      "core_autocrlf": "true",
+      "tracked_eol_counts": {
+        "crlf": 7
+      },
+      "command": "node .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs --mode=legacy-raw-audit",
+      "exit_code": 0,
+      "status": "AMBIGUOUS_RAW_CHECKOUT_CONFIRMED",
+      "total": 7,
+      "raw_checkout_matches": 0,
+      "git_object_matches": 7,
+      "checkout_lf_matches": 7,
+      "structural_errors": 0
+    },
+    {
+      "checkout": "windows-autocrlf-true",
+      "core_autocrlf": "true",
+      "tracked_eol_counts": {
+        "crlf": 7
+      },
+      "command": "node .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs --mode=git-object",
+      "exit_code": 0,
+      "status": "PASS",
+      "total": 7,
+      "matched": 7,
+      "git_object_matches": 7,
+      "source_commit_is_ancestor": true,
+      "structural_errors": 0
+    },
+    {
+      "checkout": "windows-autocrlf-true",
+      "core_autocrlf": "true",
+      "tracked_eol_counts": {
+        "crlf": 7
+      },
+      "command": "node .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs --mode=checkout-lf",
+      "exit_code": 0,
+      "status": "PASS",
+      "total": 7,
+      "matched": 7,
+      "checkout_lf_matches": 7,
+      "bare_carriage_returns": 0,
+      "source_commit_is_ancestor": true,
+      "structural_errors": 0
+    },
+    {
+      "checkout": "lf-materialized",
+      "materialization": "git -c core.autocrlf=false worktree add --detach .agent/worktrees/db-embedding-evidence-lf-proof 462c97dd889b4afbc84d1ddc07613d748604afee",
+      "tracked_eol_counts": {
+        "lf": 7
+      },
+      "command": "node .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs --mode=git-object",
+      "exit_code": 0,
+      "status": "PASS",
+      "total": 7,
+      "matched": 7,
+      "git_object_matches": 7,
+      "raw_checkout_matches": 7,
+      "checkout_lf_matches": 7,
+      "source_commit_is_ancestor": true,
+      "structural_errors": 0
+    },
+    {
+      "checkout": "lf-materialized",
+      "tracked_eol_counts": {
+        "lf": 7
+      },
+      "command": "node .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs --mode=checkout-lf",
+      "exit_code": 0,
+      "status": "PASS",
+      "total": 7,
+      "matched": 7,
+      "git_object_matches": 7,
+      "raw_checkout_matches": 7,
+      "checkout_lf_matches": 7,
+      "bare_carriage_returns": 0,
+      "source_commit_is_ancestor": true,
+      "structural_errors": 0
+    }
+  ],
+  "temporary_lf_worktree_cleanup": {
+    "path": "D:/Dev/engram/.agent/worktrees/db-embedding-evidence-lf-proof",
+    "clean_before_remove": true,
+    "path_removed": true,
+    "registration_removed": true
+  }
+}
