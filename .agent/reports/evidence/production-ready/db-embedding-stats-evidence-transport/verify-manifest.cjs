@@ -10,6 +10,66 @@ const allowedModes = new Set(['git-object', 'checkout-lf', 'legacy-raw-audit', '
 const modeArgument = process.argv.find((argument) => argument.startsWith('--mode='));
 const mode = modeArgument ? modeArgument.slice('--mode='.length) : 'git-object';
 
+const SLICE = 'DB-EMBEDDING-EVIDENCE-TRANSPORT';
+const LEGACY_MANIFEST_PATH =
+  '.agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt';
+const VERIFIER_PATH =
+  '.agent/reports/evidence/production-ready/' +
+  'db-embedding-stats-evidence-transport/verify-manifest.cjs';
+const CONTRACT_PATH =
+  '.agent/reports/evidence/production-ready/' +
+  'db-embedding-stats-evidence-transport/content-manifest.v1.json';
+const REQUIRED_ARTIFACT_PATHS = Object.freeze([
+  LEGACY_MANIFEST_PATH,
+  CONTRACT_PATH,
+  VERIFIER_PATH,
+  '.agent/reports/evidence/production-ready/' +
+    'db-embedding-stats-evidence-transport/verification-observations.v1.json',
+  '.agent/reports/evidence/production-ready/' +
+    'db-embedding-stats-evidence-transport/maker-report.md',
+]);
+const CONTRACT_TOP_LEVEL_KEYS = Object.freeze([
+  'schema_version',
+  'slice',
+  'algorithm',
+  'representation',
+  'legacy_manifest',
+  'verifier',
+  'entries',
+]);
+const REPRESENTATION_KEYS = Object.freeze([
+  'kind',
+  'source_commit',
+  'checkout_equivalence',
+]);
+const CHECKOUT_EQUIVALENCE_KEYS = Object.freeze([
+  'transform',
+  'bare_cr',
+  'required_result',
+]);
+const CONTRACT_ENTRY_KEYS = Object.freeze([
+  'path',
+  'git_blob_oid',
+  'byte_length',
+  'sha256',
+]);
+const LEGACY_METADATA_KEYS = Object.freeze([
+  'manifest-version',
+  'algorithm',
+  'representation',
+  'source-commit',
+  'contract',
+  'verifier',
+  'checkout-equivalence',
+]);
+const ARTIFACT_METADATA_KEYS = Object.freeze([
+  'manifest-version',
+  'algorithm',
+  'representation',
+  'checkout-equivalence',
+  'self-entry',
+]);
+
 if (!allowedModes.has(mode)) {
   process.stderr.write(`unsupported mode: ${mode}\n`);
   process.exit(2);
@@ -89,10 +149,15 @@ function parseAnnotatedManifest(manifestPath) {
     if (!line) continue;
     const metadataMatch = line.match(/^# ([a-z0-9-]+)=(.+)$/);
     if (metadataMatch) {
+      if (Object.hasOwn(metadata, metadataMatch[1])) {
+        throw new Error(`duplicate manifest metadata key: ${metadataMatch[1]}`);
+      }
       metadata[metadataMatch[1]] = metadataMatch[2];
       continue;
     }
-    if (line.startsWith('#')) continue;
+    if (line.startsWith('#')) {
+      throw new Error(`invalid manifest metadata line: ${line}`);
+    }
 
     const entryMatch = line.match(/^([0-9a-f]{64})  (.+)$/);
     if (!entryMatch) {
@@ -110,6 +175,168 @@ function compareEntryShape(contractEntries, manifestEntries) {
     entry.path === manifestEntries[index].path &&
     entry.sha256 === manifestEntries[index].sha256,
   );
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validateExactKeys(value, requiredKeys, label, structuralErrors) {
+  if (!isPlainObject(value)) {
+    structuralErrors.push(`${label} must be an object`);
+    return false;
+  }
+  const required = new Set(requiredKeys);
+  for (const key of requiredKeys) {
+    if (!Object.hasOwn(value, key)) {
+      structuralErrors.push(`${label} is missing required key: ${key}`);
+    }
+  }
+  for (const key of Object.keys(value)) {
+    if (!required.has(key)) {
+      structuralErrors.push(`${label} contains unknown key: ${key}`);
+    }
+  }
+  return true;
+}
+
+function analyzeRepositoryRelativePath(repoRoot, rawPath) {
+  const errors = [];
+  if (typeof rawPath !== 'string' || rawPath.length === 0) {
+    errors.push('path must be a non-empty string');
+    return { errors, absolute_path: null, normalized_path: null };
+  }
+  if (rawPath.includes('\\')) errors.push('path must use POSIX separators');
+  if (rawPath.includes('\0')) errors.push('path must not contain NUL');
+  if (path.posix.isAbsolute(rawPath) || path.win32.isAbsolute(rawPath)) {
+    errors.push('path must be repository-relative');
+  }
+
+  const segments = rawPath.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    errors.push('path must not contain empty, dot, or dot-dot segments');
+  }
+  if (segments.some((segment) => segment.includes(':'))) {
+    errors.push('path must not contain a drive or URI separator');
+  }
+
+  const normalizedPath = path.posix.normalize(rawPath);
+  if (normalizedPath !== rawPath) errors.push('path must already be POSIX-normalized');
+
+  const absolutePath = path.resolve(repoRoot, ...segments);
+  const relativePath = path.relative(repoRoot, absolutePath);
+  const relativePosix = relativePath.split(path.sep).join('/');
+  const insideRepository =
+    relativePath.length > 0 &&
+    relativePath !== '..' &&
+    !relativePath.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativePath);
+  if (!insideRepository || relativePosix !== rawPath) {
+    errors.push('path must resolve to the same repository-relative path');
+  }
+
+  return {
+    errors,
+    absolute_path: errors.length === 0 ? absolutePath : null,
+    normalized_path: errors.length === 0 ? normalizedPath : null,
+  };
+}
+
+function validateContractSchema(contract, repoRoot) {
+  const structuralErrors = [];
+  const topLevelIsObject = validateExactKeys(
+    contract,
+    CONTRACT_TOP_LEVEL_KEYS,
+    'contract',
+    structuralErrors,
+  );
+  if (!topLevelIsObject) return structuralErrors;
+
+  if (contract.schema_version !== 1) structuralErrors.push('schema_version must be 1');
+  if (contract.slice !== SLICE) structuralErrors.push(`slice must be ${SLICE}`);
+  if (contract.algorithm !== 'sha256') structuralErrors.push('algorithm must be sha256');
+  if (contract.legacy_manifest !== LEGACY_MANIFEST_PATH) {
+    structuralErrors.push(`legacy_manifest must be ${LEGACY_MANIFEST_PATH}`);
+  }
+  if (contract.verifier !== VERIFIER_PATH) {
+    structuralErrors.push(`verifier must be ${VERIFIER_PATH}`);
+  }
+
+  const representationIsObject = validateExactKeys(
+    contract.representation,
+    REPRESENTATION_KEYS,
+    'contract.representation',
+    structuralErrors,
+  );
+  if (representationIsObject) {
+    if (contract.representation.kind !== 'git-blob-content') {
+      structuralErrors.push('representation.kind must be git-blob-content');
+    }
+    if (!/^[0-9a-f]{40}$/.test(contract.representation.source_commit || '')) {
+      structuralErrors.push('representation.source_commit must be a full Git commit SHA');
+    }
+    const checkoutEquivalenceIsObject = validateExactKeys(
+      contract.representation.checkout_equivalence,
+      CHECKOUT_EQUIVALENCE_KEYS,
+      'contract.representation.checkout_equivalence',
+      structuralErrors,
+    );
+    if (checkoutEquivalenceIsObject) {
+      const equivalence = contract.representation.checkout_equivalence;
+      if (equivalence.transform !== 'replace each CRLF byte pair with LF') {
+        structuralErrors.push(
+          'checkout_equivalence.transform must be replace each CRLF byte pair with LF',
+        );
+      }
+      if (equivalence.bare_cr !== 'reject') {
+        structuralErrors.push('checkout_equivalence.bare_cr must be reject');
+      }
+      if (equivalence.required_result !== 'byte-identical to the source commit Git blob') {
+        structuralErrors.push(
+          'checkout_equivalence.required_result must bind to the source commit Git blob',
+        );
+      }
+    }
+  }
+
+  if (!Array.isArray(contract.entries) || contract.entries.length === 0) {
+    structuralErrors.push('entries must be a non-empty array');
+    return structuralErrors;
+  }
+
+  const canonicalPaths = [];
+  contract.entries.forEach((entry, index) => {
+    const label = `contract.entries[${index}]`;
+    const entryIsObject = validateExactKeys(
+      entry,
+      CONTRACT_ENTRY_KEYS,
+      label,
+      structuralErrors,
+    );
+    if (!entryIsObject) return;
+
+    const pathAnalysis = analyzeRepositoryRelativePath(repoRoot, entry.path);
+    for (const error of pathAnalysis.errors) structuralErrors.push(`${label}.path ${error}`);
+    if (pathAnalysis.normalized_path) canonicalPaths.push(pathAnalysis.normalized_path);
+    if (!/^[0-9a-f]{40}$/.test(entry.git_blob_oid || '')) {
+      structuralErrors.push(`${label}.git_blob_oid must be a full Git blob OID`);
+    }
+    if (!Number.isSafeInteger(entry.byte_length) || entry.byte_length < 0) {
+      structuralErrors.push(`${label}.byte_length must be a non-negative safe integer`);
+    }
+    if (!/^[0-9a-f]{64}$/.test(entry.sha256 || '')) {
+      structuralErrors.push(`${label}.sha256 must be a lowercase SHA-256`);
+    }
+  });
+
+  if (new Set(canonicalPaths).size !== contract.entries.length) {
+    structuralErrors.push('contract paths must be unique canonical paths');
+  }
+  return structuralErrors;
+}
+
+function validateManifestMetadata(metadata, requiredKeys, label, structuralErrors) {
+  validateExactKeys(metadata, requiredKeys, label, structuralErrors);
 }
 
 function getCoreAutocrlf(repoRoot) {
@@ -141,6 +368,12 @@ function verifyArtifactFiles(repoRoot, scriptDirectory, sourceCommit, sourceComm
   const manifest = parseAnnotatedManifest(artifactManifestPath);
   const structuralErrors = [...inheritedErrors];
 
+  validateManifestMetadata(
+    manifest.metadata,
+    ARTIFACT_METADATA_KEYS,
+    'artifact manifest metadata',
+    structuralErrors,
+  );
   if (manifest.metadata['manifest-version'] !== '1') {
     structuralErrors.push('artifact manifest-version must be 1');
   }
@@ -156,31 +389,49 @@ function verifyArtifactFiles(repoRoot, scriptDirectory, sourceCommit, sourceComm
   if (manifest.metadata['self-entry'] !== 'excluded-to-avoid-recursion') {
     structuralErrors.push('artifact manifest must explicitly declare self exclusion');
   }
-  if (new Set(manifest.entries.map((entry) => entry.path)).size !== manifest.entries.length) {
-    structuralErrors.push('artifact manifest paths must be unique');
+  if (manifest.entries.length !== REQUIRED_ARTIFACT_PATHS.length) {
+    structuralErrors.push(
+      `artifact manifest must contain exactly ${REQUIRED_ARTIFACT_PATHS.length} entries`,
+    );
   }
 
-  const artifactManifestRelativePath = path.relative(repoRoot, artifactManifestPath).split(path.sep).join('/');
-  const allowedExactPath = '.agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt';
-  const allowedPrefix = '.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/';
+  const requiredPaths = new Set(REQUIRED_ARTIFACT_PATHS);
+  const canonicalPaths = [];
   const entryResults = manifest.entries.map((entry) => {
-    const entryPath = path.resolve(repoRoot, ...entry.path.split('/'));
-    const relativeEntryPath = path.relative(repoRoot, entryPath);
-    const insideRepository =
-      relativeEntryPath.length > 0 &&
-      !relativeEntryPath.startsWith(`..${path.sep}`) &&
-      relativeEntryPath !== '..' &&
-      !path.isAbsolute(relativeEntryPath);
-    const insideOwnedNamespace = entry.path === allowedExactPath || entry.path.startsWith(allowedPrefix);
-    if (!insideRepository || !insideOwnedNamespace || entry.path === artifactManifestRelativePath) {
+    const pathAnalysis = analyzeRepositoryRelativePath(repoRoot, entry.path);
+    for (const error of pathAnalysis.errors) {
+      structuralErrors.push(`artifact manifest entry ${entry.path}: ${error}`);
+    }
+    if (pathAnalysis.normalized_path) canonicalPaths.push(pathAnalysis.normalized_path);
+
+    const isRequiredPath =
+      pathAnalysis.normalized_path !== null &&
+      requiredPaths.has(pathAnalysis.normalized_path);
+    if (!isRequiredPath) {
       return {
         path: entry.path,
+        normalized_path: pathAnalysis.normalized_path,
         match: false,
         checkout_eol: 'not-read-outside-boundary',
         bare_carriage_returns: null,
       };
     }
-    const canonical = canonicalizeCheckout(fs.readFileSync(entryPath));
+
+    let checkoutBytes;
+    try {
+      checkoutBytes = fs.readFileSync(pathAnalysis.absolute_path);
+    } catch (error) {
+      structuralErrors.push(`artifact file is not readable: ${entry.path}: ${error.code || error.message}`);
+      return {
+        path: entry.path,
+        normalized_path: pathAnalysis.normalized_path,
+        match: false,
+        checkout_eol: 'not-readable',
+        bare_carriage_returns: null,
+      };
+    }
+
+    const canonical = canonicalizeCheckout(checkoutBytes);
     const actualHash = sha256(canonical.bytes);
     const matches =
       canonical.bare_carriage_returns === 0 &&
@@ -188,11 +439,25 @@ function verifyArtifactFiles(repoRoot, scriptDirectory, sourceCommit, sourceComm
 
     return {
       path: entry.path,
+      normalized_path: pathAnalysis.normalized_path,
       match: matches,
       checkout_eol: eolStyle(canonical),
       bare_carriage_returns: canonical.bare_carriage_returns,
     };
   });
+
+  const canonicalPathSet = new Set(canonicalPaths);
+  if (canonicalPathSet.size !== canonicalPaths.length) {
+    structuralErrors.push('artifact manifest paths must be unique canonical paths');
+  }
+  const missingPaths = REQUIRED_ARTIFACT_PATHS.filter((entryPath) => !canonicalPathSet.has(entryPath));
+  const extraPaths = [...canonicalPathSet].filter((entryPath) => !requiredPaths.has(entryPath));
+  if (missingPaths.length > 0) {
+    structuralErrors.push(`artifact manifest missing required paths: ${missingPaths.join(', ')}`);
+  }
+  if (extraPaths.length > 0) {
+    structuralErrors.push(`artifact manifest contains extra paths: ${extraPaths.join(', ')}`);
+  }
 
   const matched = entryResults.filter((entry) => entry.match).length;
   const eolCounts = entryResults.reduce((counts, entry) => {
@@ -202,7 +467,7 @@ function verifyArtifactFiles(repoRoot, scriptDirectory, sourceCommit, sourceComm
   const status = structuralErrors.length === 0 && matched === entryResults.length ? 'PASS' : 'FAIL';
   const result = {
     schema_version: 1,
-    slice: 'DB-EMBEDDING-EVIDENCE-TRANSPORT',
+    slice: SLICE,
     mode: 'artifact-files',
     status,
     source_commit: sourceCommit,
@@ -228,18 +493,16 @@ function main() {
   const scriptDirectory = __dirname;
   const contractPath = path.join(scriptDirectory, 'content-manifest.v1.json');
   const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
-  const legacyManifestPath = path.join(repoRoot, ...contract.legacy_manifest.split('/'));
+  const structuralErrors = validateContractSchema(contract, repoRoot);
+  const legacyManifestPath = path.join(repoRoot, ...LEGACY_MANIFEST_PATH.split('/'));
   const manifest = parseAnnotatedManifest(legacyManifestPath);
 
-  const structuralErrors = [];
-  if (contract.schema_version !== 1) structuralErrors.push('schema_version must be 1');
-  if (contract.algorithm !== 'sha256') structuralErrors.push('algorithm must be sha256');
-  if (contract.representation?.kind !== 'git-blob-content') {
-    structuralErrors.push('representation.kind must be git-blob-content');
-  }
-  if (!/^[0-9a-f]{40}$/.test(contract.representation?.source_commit || '')) {
-    structuralErrors.push('representation.source_commit must be a full Git commit SHA');
-  }
+  validateManifestMetadata(
+    manifest.metadata,
+    LEGACY_METADATA_KEYS,
+    'legacy manifest metadata',
+    structuralErrors,
+  );
   if (manifest.metadata['manifest-version'] !== '1') {
     structuralErrors.push('legacy manifest annotation manifest-version=1 missing');
   }
@@ -258,15 +521,18 @@ function main() {
   if (manifest.metadata.verifier !== path.relative(repoRoot, __filename).split(path.sep).join('/')) {
     structuralErrors.push('legacy manifest verifier path annotation disagrees with executing verifier');
   }
-  if (!compareEntryShape(contract.entries, manifest.entries)) {
+  if (manifest.metadata['checkout-equivalence'] !== 'crlf-to-lf-with-no-bare-cr') {
+    structuralErrors.push('legacy manifest checkout equivalence must reject bare CR');
+  }
+  const contractEntries = Array.isArray(contract.entries) ? contract.entries : [];
+  if (!compareEntryShape(contractEntries, manifest.entries)) {
     structuralErrors.push('legacy manifest entries disagree with contract entries or order');
   }
-  if (new Set(contract.entries.map((entry) => entry.path)).size !== contract.entries.length) {
-    structuralErrors.push('contract paths must be unique');
-  }
 
-  const sourceCommit = contract.representation.source_commit;
-  const sourceCommitIsAncestor = isAncestor(repoRoot, sourceCommit, 'HEAD');
+  const sourceCommit = contract.representation?.source_commit || '';
+  const sourceCommitIsAncestor =
+    /^[0-9a-f]{40}$/.test(sourceCommit || '') &&
+    isAncestor(repoRoot, sourceCommit, 'HEAD');
   if (!sourceCommitIsAncestor) {
     structuralErrors.push('source commit is not an ancestor of the executing checkout HEAD');
   }
@@ -280,7 +546,7 @@ function main() {
     );
     return;
   }
-  const entryResults = contract.entries.map((entry) => {
+  const entryResults = contractEntries.map((entry) => {
     const objectSpec = `${sourceCommit}:${entry.path}`;
     const blob = runGit(['cat-file', 'blob', objectSpec], { cwd: repoRoot });
     const blobOid = runGit(['rev-parse', objectSpec], { cwd: repoRoot, encoding: 'utf8' }).trim();
