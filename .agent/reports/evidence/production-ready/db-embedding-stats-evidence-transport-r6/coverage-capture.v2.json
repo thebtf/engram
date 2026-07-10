@@ -1,0 +1,106 @@
+{
+  "schema_version": 2,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R6",
+  "target_base": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+  "source_head": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+  "execution_index_tree": "8564887bc0df75b74b3e22b112f20a86c034fdc6",
+  "node_version": "v24.2.0",
+  "command": {
+    "executable": "C:\\nvm4w\\nodejs\\node.exe",
+    "executable_basename": "node.exe",
+    "argv": [
+      "--test",
+      "--test-concurrency=1",
+      "--experimental-test-coverage",
+      ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs"
+    ],
+    "cwd": "."
+  },
+  "representation": {
+    "checkout_observation": {
+      "core_autocrlf": "false",
+      "files": [
+        {
+          "role": "verifier",
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+          "classification": "lf-exact",
+          "filesystem_sha256": "a55e59dd870659330add8f840272aa1e8829f8161779db3e9be9e6e014cf1ba4",
+          "byte_length": 25465,
+          "crlf_pairs": 0,
+          "lone_lf": 718,
+          "bare_carriage_returns": 0
+        },
+        {
+          "role": "test_harness",
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+          "classification": "lf-exact",
+          "filesystem_sha256": "d04b8bc050182f2806972c9d30aaa7d6349ef2f56f15b3ef21f7005459bb86cc",
+          "byte_length": 24229,
+          "crlf_pairs": 0,
+          "lone_lf": 726,
+          "bare_carriage_returns": 0
+        }
+      ]
+    },
+    "canonical_execution": {
+      "materialization": "temporary independent Git clone materialized from the exact index tree",
+      "repository_topology": "git-directory",
+      "core_autocrlf": "false",
+      "line_endings": "lf-only",
+      "files": [
+        {
+          "role": "verifier",
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+          "git_blob_oid": "75bec9c41eb5abc435f13d90848074f6608f7fce",
+          "git_blob_sha256": "a55e59dd870659330add8f840272aa1e8829f8161779db3e9be9e6e014cf1ba4",
+          "byte_length": 25465,
+          "crlf_pairs": 0,
+          "lone_lf": 718,
+          "bare_carriage_returns": 0
+        },
+        {
+          "role": "test_harness",
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+          "git_blob_oid": "caca5ec75f47c03698ac270b549a432b0de04cfe",
+          "git_blob_sha256": "d04b8bc050182f2806972c9d30aaa7d6349ef2f56f15b3ef21f7005459bb86cc",
+          "byte_length": 24229,
+          "crlf_pairs": 0,
+          "lone_lf": 726,
+          "bare_carriage_returns": 0
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "role": "verifier",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+      "git_blob_oid": "75bec9c41eb5abc435f13d90848074f6608f7fce",
+      "git_blob_sha256": "a55e59dd870659330add8f840272aa1e8829f8161779db3e9be9e6e014cf1ba4",
+      "byte_length": 25465,
+      "crlf_pairs": 0,
+      "lone_lf": 718,
+      "bare_carriage_returns": 0
+    },
+    {
+      "role": "test_harness",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+      "git_blob_oid": "caca5ec75f47c03698ac270b549a432b0de04cfe",
+      "git_blob_sha256": "d04b8bc050182f2806972c9d30aaa7d6349ef2f56f15b3ef21f7005459bb86cc",
+      "byte_length": 24229,
+      "crlf_pairs": 0,
+      "lone_lf": 726,
+      "bare_carriage_returns": 0
+    },
+    {
+      "role": "capture_wrapper",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/capture-coverage-run.cjs",
+      "git_blob_oid": "adf25a38e0e969d33a12fdd2721907c1fee8bd31",
+      "git_blob_sha256": "d10b2cfa0c8230ea26db4c22058e7d06324c5a5282ffa6105c8f4ace7fc27c20",
+      "byte_length": 13604,
+      "crlf_pairs": 0,
+      "lone_lf": 408,
+      "bare_carriage_returns": 0
+    }
+  ]
+}

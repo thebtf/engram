@@ -1,0 +1,79 @@
+{
+  "schema_version": 2,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R6",
+  "role": "maker",
+  "status": "READY_FOR_ATOMIC_COMMIT_AND_FRESH_CHECKER",
+  "target_base": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+  "checker_commit_is_ancestor": false,
+  "closed_findings": ["ET-R5-001", "ET-R5-002", "ET-R5-003"],
+  "product_delta": {
+    "changed": false,
+    "accepted_source_parity": "7/7",
+    "artifact_parity": "5/5",
+    "postgresql_touched": false
+  },
+  "final_source_blobs": {
+    "verifier": {
+      "oid": "75bec9c41eb5abc435f13d90848074f6608f7fce",
+      "sha256": "a55e59dd870659330add8f840272aa1e8829f8161779db3e9be9e6e014cf1ba4"
+    },
+    "test": {
+      "oid": "caca5ec75f47c03698ac270b549a432b0de04cfe",
+      "sha256": "d04b8bc050182f2806972c9d30aaa7d6349ef2f56f15b3ef21f7005459bb86cc"
+    },
+    "capture_wrapper": {
+      "oid": "adf25a38e0e969d33a12fdd2721907c1fee8bd31",
+      "sha256": "d10b2cfa0c8230ea26db4c22058e7d06324c5a5282ffa6105c8f4ace7fc27c20"
+    }
+  },
+  "execution_index_tree": "8564887bc0df75b74b3e22b112f20a86c034fdc6",
+  "coverage": {
+    "real_process_runs": 2,
+    "exit_codes": [0, 0],
+    "stderr_byte_lengths": [0, 0],
+    "tests": [24, 24],
+    "passed": [24, 24],
+    "failed": [0, 0],
+    "metrics_identical": true,
+    "aggregate": { "line_percent": 89.96, "branch_percent": 75.86, "functions_percent": 95.8 },
+    "verifier": { "line_percent": 80.08, "branch_percent": 55.91, "functions_percent": 81.82 },
+    "test_harness": { "line_percent": 99.72, "branch_percent": 94.78, "functions_percent": 100 },
+    "normative_floor": {
+      "dimension": "aggregate.line_percent",
+      "observed_percent": 89.96,
+      "floor_percent": 80,
+      "margin_percent": 9.96,
+      "status": "PASS"
+    },
+    "other_dimensions": "observed and machine-bound; normative=false, floor=null, margin=null"
+  },
+  "checksum_diff_coverage": {
+    "changed_paths": 32,
+    "directly_checksummed_changed_paths": 30,
+    "self_excluded_changed_paths": 2,
+    "load_bearing_unchanged_paths": 1,
+    "missing_path_mutation": "nonzero FAIL"
+  },
+  "permanent_suites": {
+    "base": "24/24 exit 0",
+    "r6_tamper": "12/12 exit 0",
+    "fresh_lf_required": true,
+    "fresh_core_autocrlf_true_required": true
+  },
+  "prove_it": {
+    "validateContractSchema": "9 pass / 15 fail / exit 1",
+    "verifyArtifactFiles": "15 pass / 9 fail / exit 1",
+    "r6_status_gate": "0 pass / 12 fail / exit 1",
+    "post_restore": "24/24 and 12/12; zero residue"
+  },
+  "final_commit_attestation": {
+    "self_reference_policy": "commit/tree/path digest are emitted after commit, never guessed inside their own tree",
+    "verifier": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/verify-final-commit-replay.cjs",
+    "requires_direct_parent": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+    "requires_exact_captured_source_blobs": true,
+    "requires_replay_24_of_24": true,
+    "requires_canonical_independent_clone": true,
+    "requires_zero_tracked_residue": true
+  },
+  "residual_risk": "Fresh LF, fresh core.autocrlf=true, and immutable final-commit replay remain mandatory checker gates."
+}

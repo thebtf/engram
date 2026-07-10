@@ -1,0 +1,120 @@
+{
+  "schema_version": 2,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R6",
+  "run": 2,
+  "capture_manifest": {
+    "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-capture.v2.json",
+    "sha256": "28b5286a025794bae2c24535fe31f35e23c8d940698ab9c561aa5a0c1fd178c8"
+  },
+  "source": {
+    "head_commit": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+    "index_tree": "8564887bc0df75b74b3e22b112f20a86c034fdc6",
+    "files": [
+      {
+        "role": "verifier",
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+        "git_blob_oid": "75bec9c41eb5abc435f13d90848074f6608f7fce",
+        "git_blob_sha256": "a55e59dd870659330add8f840272aa1e8829f8161779db3e9be9e6e014cf1ba4",
+        "byte_length": 25465,
+        "crlf_pairs": 0,
+        "lone_lf": 718,
+        "bare_carriage_returns": 0
+      },
+      {
+        "role": "test_harness",
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+        "git_blob_oid": "caca5ec75f47c03698ac270b549a432b0de04cfe",
+        "git_blob_sha256": "d04b8bc050182f2806972c9d30aaa7d6349ef2f56f15b3ef21f7005459bb86cc",
+        "byte_length": 24229,
+        "crlf_pairs": 0,
+        "lone_lf": 726,
+        "bare_carriage_returns": 0
+      },
+      {
+        "role": "capture_wrapper",
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/capture-coverage-run.cjs",
+        "git_blob_oid": "adf25a38e0e969d33a12fdd2721907c1fee8bd31",
+        "git_blob_sha256": "d10b2cfa0c8230ea26db4c22058e7d06324c5a5282ffa6105c8f4ace7fc27c20",
+        "byte_length": 13604,
+        "crlf_pairs": 0,
+        "lone_lf": 408,
+        "bare_carriage_returns": 0
+      }
+    ]
+  },
+  "process": {
+    "executable": "C:\\nvm4w\\nodejs\\node.exe",
+    "argv": [
+      "--test",
+      "--test-concurrency=1",
+      "--experimental-test-coverage",
+      ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs"
+    ],
+    "cwd": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-r6c-tkf1iz",
+    "started_at_utc": "2026-07-10T22:56:22.811Z",
+    "finished_at_utc": "2026-07-10T22:56:29.820Z",
+    "duration_ms": 7009,
+    "exit_code": 0,
+    "signal": null,
+    "spawn_error": null
+  },
+  "artifacts": {
+    "stdout": {
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-run-2.stdout.bin",
+      "sha256": "8c6d8ae30614624a979c2423ab7c36f9f6f6c029bc4f9e1a4c91fda035164d95",
+      "byte_length": 4420
+    },
+    "stderr": {
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-run-2.stderr.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "byte_length": 0
+    },
+    "transcript": {
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-run-2.tap",
+      "sha256": "7e56b583cb602dd1ac6f156edfd5f18380991126bbb5ef42995fd5ea2089df21",
+      "byte_length": 4414
+    }
+  },
+  "normalization": {
+    "name": "crlf-to-lf plus coverage-table trailing-padding trim",
+    "raw_crlf_pairs_replaced": 0,
+    "table_trailing_padding_bytes_removed": 6,
+    "semantic_content_changes": 0
+  },
+  "parse_error": null,
+  "derived_results": {
+    "exit_code": 0,
+    "tests": 24,
+    "passed": 24,
+    "failed": 0,
+    "aggregate": {
+      "line_percent": 89.96,
+      "branch_percent": 75.86,
+      "functions_percent": 95.8
+    },
+    "verifier": {
+      "line_percent": 80.08,
+      "branch_percent": 55.91,
+      "functions_percent": 81.82
+    },
+    "test_harness": {
+      "line_percent": 99.72,
+      "branch_percent": 94.78,
+      "functions_percent": 100
+    }
+  },
+  "restoration": [
+    {
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+      "before_sha256": "a55e59dd870659330add8f840272aa1e8829f8161779db3e9be9e6e014cf1ba4",
+      "after_sha256": "a55e59dd870659330add8f840272aa1e8829f8161779db3e9be9e6e014cf1ba4",
+      "restored": true
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+      "before_sha256": "d04b8bc050182f2806972c9d30aaa7d6349ef2f56f15b3ef21f7005459bb86cc",
+      "after_sha256": "d04b8bc050182f2806972c9d30aaa7d6349ef2f56f15b3ef21f7005459bb86cc",
+      "restored": true
+    }
+  ]
+}

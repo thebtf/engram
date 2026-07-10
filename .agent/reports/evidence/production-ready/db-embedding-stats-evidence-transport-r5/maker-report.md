@@ -1,8 +1,16 @@
-# DB-EMBEDDING-EVIDENCE-TRANSPORT R5 maker summary
+# DB-EMBEDDING-EVIDENCE-TRANSPORT R5 maker summary (rejected historical snapshot)
+
+This packet was rejected and is superseded by R6. Every hash, count, and
+coverage value below is scoped to the captured R5 blobs; none is a claim about
+the final R6 verifier or test blob.
+
+The executable R5 `coverage-evidence` mode now fails closed because the historical
+packet has no operating-system process-status envelope. Its strict
+`materialization` mode remains available to the permanent portability suite.
 
 R5 closes checker finding ET-R4-001 without changing product code. The covered
 R4 verifier remains exact blob `75bec9c41eb5abc435f13d90848074f6608f7fce`.
-The final test blob is `8e814737c8d5f4437aeb2a97dc52220e115cba0b`.
+The rejected R5 captured test blob is `8e814737c8d5f4437aeb2a97dc52220e115cba0b`.
 Both are bound to LF-only Git-index and filesystem hashes by
 `coverage-capture.v1.json`.
 

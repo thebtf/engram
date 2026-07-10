@@ -44,10 +44,9 @@ const coverageCaptureDirectory = path.join(
   'production-ready',
   'db-embedding-stats-evidence-transport-r5',
 );
-const coverageCapturePath = path.join(coverageCaptureDirectory, 'coverage-capture.v1.json');
-const coverageCaptureVerifierWrapperPath = path.join(
+const coverageCaptureVerifierPath = path.join(
   coverageCaptureDirectory,
-  'run-coverage-capture-verifier.cmd',
+  'verify-coverage-capture.cjs',
 );
 const legacyManifestPath = path.join(
   repoRoot,
@@ -190,21 +189,112 @@ function runVerifier(mode, options = {}) {
   };
 }
 
-function runCoverageCaptureVerifier(mode) {
-  const result = spawnSync(
-    'cmd.exe',
-    ['/d', '/c', coverageCaptureVerifierWrapperPath, `--mode=${mode}`],
-    {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      windowsHide: true,
-    },
-  );
+function runCoverageCaptureVerifier(mode, fixture) {
+  const result = spawnSync(process.execPath, [fixture.verifier_path, `--mode=${mode}`], {
+    cwd: fixture.repo_root,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
   return {
     exit_code: result.status,
     output: result.stdout.trim() ? JSON.parse(result.stdout) : null,
     stderr: result.stderr.trim(),
   };
+}
+
+function runGitAt(cwd, args, encoding = 'utf8') {
+  const result = spawnSync('git', args, {
+    cwd,
+    encoding,
+    windowsHide: true,
+  });
+  const stderr = Buffer.isBuffer(result.stderr)
+    ? result.stderr.toString('utf8')
+    : String(result.stderr || '');
+  assert.equal(result.status, 0, stderr || `git ${args.join(' ')} failed`);
+  return result.stdout;
+}
+
+function writeRelative(root, relativePath, bytes) {
+  const absolutePath = path.join(root, ...relativePath.split('/'));
+  fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+  fs.writeFileSync(absolutePath, bytes);
+  return absolutePath;
+}
+
+function withCanonicalLfCoverageFixture(verify) {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'engram-embedding-evidence-lf-fixture-'),
+  );
+  const verifierRelative =
+    '.agent/reports/evidence/production-ready/' +
+    'db-embedding-stats-evidence-transport/verify-manifest.cjs';
+  const testRelative =
+    '.agent/reports/evidence/production-ready/' +
+    'db-embedding-stats-evidence-transport/verify-manifest.test.cjs';
+  const captureRelative =
+    '.agent/reports/evidence/production-ready/' +
+    'db-embedding-stats-evidence-transport-r5/coverage-capture.v1.json';
+  const captureVerifierRelative =
+    '.agent/reports/evidence/production-ready/' +
+    'db-embedding-stats-evidence-transport-r5/verify-coverage-capture.cjs';
+  try {
+    runGitAt(fixtureRoot, ['init', '--quiet']);
+    runGitAt(fixtureRoot, ['config', 'core.longpaths', 'true']);
+    runGitAt(fixtureRoot, ['config', 'core.autocrlf', 'false']);
+
+    const files = [
+      { role: 'verifier', relative_path: verifierRelative },
+      { role: 'test_harness', relative_path: testRelative },
+    ].map((entry) => {
+      const indexBytes = gitBytes(['show', `:${entry.relative_path}`]);
+      const absolutePath = writeRelative(fixtureRoot, entry.relative_path, indexBytes);
+      return { ...entry, absolute_path: absolutePath, bytes: indexBytes };
+    });
+    runGitAt(fixtureRoot, ['add', '--', verifierRelative, testRelative]);
+
+    const fixtureVerifierPath = writeRelative(
+      fixtureRoot,
+      captureVerifierRelative,
+      canonicalLf(fs.readFileSync(coverageCaptureVerifierPath)),
+    );
+    const capture = {
+      schema_version: 1,
+      slice: 'DB-EMBEDDING-EVIDENCE-TRANSPORT-R5',
+      materialization: 'fresh-core-autocrlf-false-lf',
+      base_commit: '369951b61ee07cb0c405558e0f677cd1c9e90362',
+      core_autocrlf: 'false',
+      tracked_eol: '2/2 i/lf w/lf',
+      line_endings: 'lf-only',
+      files: files.map((entry) => ({
+        role: entry.role,
+        path: entry.relative_path,
+        git_blob_oid: String(
+          runGitAt(fixtureRoot, ['rev-parse', `:${entry.relative_path}`]),
+        ).trim(),
+        git_blob_sha256: sha256(entry.bytes),
+        filesystem_sha256: sha256(fs.readFileSync(entry.absolute_path)),
+        byte_length: entry.bytes.length,
+        crlf_pairs: 0,
+        lone_lf: entry.bytes.reduce((count, byte) => count + (byte === 10 ? 1 : 0), 0),
+        bare_carriage_returns: 0,
+      })),
+    };
+    const fixtureCapturePath = writeRelative(
+      fixtureRoot,
+      captureRelative,
+      Buffer.from(`${JSON.stringify(capture, null, 2)}\n`, 'utf8'),
+    );
+
+    return verify({
+      repo_root: fixtureRoot,
+      verifier_path: fixtureVerifierPath,
+      capture_path: fixtureCapturePath,
+      covered_verifier_path: files[0].absolute_path,
+    });
+  } finally {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
 }
 
 function expectFailClosed(result) {
@@ -329,37 +419,39 @@ test('evidence manifests reject incomplete sets and undeclared or mixed coverage
   );
   expectFailClosed(result);
 
-  const baseline = runCoverageCaptureVerifier('materialization');
-  assert.equal(baseline.exit_code, 0, baseline.stderr || JSON.stringify(baseline.output));
-  assert.equal(baseline.output?.status, 'PASS');
+  withCanonicalLfCoverageFixture((fixture) => {
+    const baseline = runCoverageCaptureVerifier('materialization', fixture);
+    assert.equal(baseline.exit_code, 0, baseline.stderr || JSON.stringify(baseline.output));
+    assert.equal(baseline.output?.status, 'PASS');
 
-  const undeclared = withMutation(
-    coverageCapturePath,
-    mutateJson((coverage) => {
-      delete coverage.materialization;
-    }),
-    () => runCoverageCaptureVerifier('materialization'),
-  );
-  expectFailClosed(undeclared);
-  assert.ok(
-    undeclared.output.structural_errors.includes(
-      'capture is missing required key: materialization',
-    ),
-  );
+    const undeclared = withMutation(
+      fixture.capture_path,
+      mutateJson((coverage) => {
+        delete coverage.materialization;
+      }),
+      () => runCoverageCaptureVerifier('materialization', fixture),
+    );
+    expectFailClosed(undeclared);
+    assert.ok(
+      undeclared.output.structural_errors.includes(
+        'capture is missing required key: materialization',
+      ),
+    );
 
-  const mixed = withMutation(
-    verifierPath,
-    makeMixedLineEndings,
-    () => runCoverageCaptureVerifier('materialization'),
-  );
-  expectFailClosed(mixed);
-  assert.ok(
-    mixed.output.structural_errors.includes(
-      'coverage file must be LF-only and byte-identical to the Git index: ' +
-        '.agent/reports/evidence/production-ready/' +
-        'db-embedding-stats-evidence-transport/verify-manifest.cjs',
-    ),
-  );
+    const mixed = withMutation(
+      fixture.covered_verifier_path,
+      makeMixedLineEndings,
+      () => runCoverageCaptureVerifier('materialization', fixture),
+    );
+    expectFailClosed(mixed);
+    assert.ok(
+      mixed.output.structural_errors.includes(
+        'coverage file must be LF-only and byte-identical to the Git index: ' +
+          '.agent/reports/evidence/production-ready/' +
+          'db-embedding-stats-evidence-transport/verify-manifest.cjs',
+      ),
+    );
+  });
 });
 
 test('artifact manifest rejects a missing required entry', () => {

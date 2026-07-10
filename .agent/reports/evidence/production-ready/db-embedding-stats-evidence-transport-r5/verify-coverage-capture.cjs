@@ -268,7 +268,7 @@ function parseCoverageTranscript(bytes) {
     return Number(match[1]);
   };
   return {
-    exit_code: 0,
+    exit_code: null,
     tests: count('tests'),
     passed: count('pass'),
     failed: count('fail'),
@@ -288,6 +288,9 @@ function validateMetricObject(value, label, errors) {
 }
 
 function verifyCoverageEvidence(repoRoot, errors) {
+  errors.push(
+    'R5 coverage evidence is rejected: canonical TAP is not bound to a real process-status envelope; use R6',
+  );
   const coverage = readJson(repoRoot, COVERAGE_PATH);
   const coverageIsObject = validateExactKeys(coverage, COVERAGE_KEYS, 'coverage', errors);
   if (coverageIsObject) {
