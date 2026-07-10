@@ -1,177 +1,120 @@
-# DB-EMBEDDING-EVIDENCE-TRANSPORT Revision Maker Report
+# DB-EMBEDDING-EVIDENCE-TRANSPORT R3 maker report
 
 Date: 2026-07-10
 Role: revision maker
 Finish state: **READY_FOR_CHECK**
 
-## Exact boundary
+## Immutable boundary
 
-- Accepted product source commit: `38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df`
-- Rejected evidence candidate and exact revision base:
-  `580b0cd0ff38bb55a5195a8004e60234a824b7a8`
-- Pre-packet verification checkpoint:
-  `53b2ef1931c534e27183126a1aad2d46b3a854b2`
-- Branch: `work/prc-db-embedding-evidence-transport-r2`
+- Accepted product source: `38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df`.
+- Rejected R2 target: `db2cf891dd9c6315fd17220ffe2d02302bea8844`.
+- Independent R2 checker and exact R3 parent:
+  `8dac7910de52d2744fcf67f79a0a1597beebac72`.
+- Branch: `work/prc-db-embedding-evidence-transport-r3`.
 - Worktree:
-  `D:/Dev/engram/.agent/worktrees/db-embedding-evidence-transport-r2`
-- Allowed writes: this evidence verifier, its permanent self-test, and
-  DB-EMBEDDING-EVIDENCE-TRANSPORT evidence/report artifacts.
-- Forbidden writes honored: product/source/test bytes, primary and integration
-  worktrees, canonical production-readiness register/Markdown/HTML, and
-  protected role/session/oracle state.
+  `D:/Dev/engram/.agent/worktrees/db-embedding-evidence-r3-maker`.
+- Product/source/test code is byte-identical to the accepted product source.
+- The R2 checker directory is inherited unchanged. This maker does not merge,
+  push, edit the root readiness report, or self-accept.
 
-The revision is based directly on the rejected evidence candidate, not on the
-independent checker commit. It changes no product behavior and does not
-self-accept.
+## Checker findings reproduced before repair
 
-## Reproduced failure
+The existing `18/18` R2 suite passed first. Four permanent tests were then
+added while the R2 verifier remained unchanged. The RED run was `18 pass / 4
+fail`, exit `1`:
 
-A permanent Node self-test was written before the verifier changed. Against the
-exact rejected candidate it executed 18 test/subtest cases:
+1. deleting one required source and the matching legacy line false-PASSED `6/6`;
+2. replacing a required source with the valid `go.mod` blob false-PASSED `7/7`;
+3. rebinding both source-commit declarations to ancestor `580b0cd0...`
+   false-PASSED `7/7`;
+4. an invalid raw path reached `git cat-file` instead of returning a structured
+   pre-access rejection.
 
-- pass: `1`;
-- fail: `17`;
-- skipped: `0`;
-- process exit: `1`.
-
-The rejected verifier returned exit `0` for header-only zero entries, missing
-and extra entries, namespace traversal, a non-canonical dot alias, invalid
-`checkout_equivalence` values, and unknown schema keys. The existing duplicate
-entry rejection was the single passing RED case.
-
-RED evidence:
-`.agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R2.red.json`.
+The same new test bytes against exact parent verifier blob
+`9f8424f1ea8ed5accac11ff6f019efdad9573cf9` reproduced `18 pass / 4 fail`.
 
 ## Repair
 
-### Exact artifact set
+The executable verifier now pins:
 
-`artifact-files` now requires exactly these five canonical paths:
+- `EXPECTED_SOURCE_COMMIT` exactly to
+  `38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df`;
+- exact cardinality `7`;
+- exactly the seven accepted source paths declared in
+  `content-manifest.v1.json` and the legacy manifest.
 
-1. `.agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt`
-2. `.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json`
-3. `.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs`
-4. `.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json`
-5. `.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md`
+Schema validation produces canonical contained paths and absolute paths as one
+validated record set. Source Git object lookup and checkout-file reads consume
+only that validated set. Any schema, source-lock, metadata, or shape error
+leaves the validated set empty and returns `FAIL` with
+`source_accesses.git_objects=0`, `source_accesses.checkout_files=0`, and no
+verified entries. Raw contract paths never reach source Git or filesystem APIs.
 
-Zero, missing, extra, replaced, and duplicate canonical paths are structural
-errors before a PASS can be computed.
-
-### Canonical path boundary
-
-Every manifest path is validated before filesystem access. Paths must be
-non-empty repository-relative POSIX paths that are already normalized. Absolute
-paths, backslashes, drive/URI separators, empty segments, `.`, `..`, NUL,
-normalization changes, repository escapes, and raw/resolved disagreement are
-rejected. Exact-set and containment decisions use the validated normalized path,
-never a raw prefix.
-
-### Strict schema and semantics
-
-The JSON contract now rejects missing and unknown keys at the top level,
-`representation`, `checkout_equivalence`, and each entry. It pins:
-
-- `schema_version=1`;
-- `slice=DB-EMBEDDING-EVIDENCE-TRANSPORT`;
-- `algorithm=sha256`;
-- `representation.kind=git-blob-content`;
-- full source commit and blob OIDs;
-- exact legacy-manifest and verifier paths;
-- `checkout_equivalence.transform=replace each CRLF byte pair with LF`;
-- `checkout_equivalence.bare_cr=reject`;
-- the exact source-Git-blob result contract.
-
-Legacy and artifact annotated manifests also reject duplicate, missing, and
-unknown metadata keys and invalid semantic values.
-
-## Permanent adversarial suite
+## Permanent adversarial suite and TDD
 
 Command:
 
 `node --test --test-concurrency=1 .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs`
 
-GREEN result in the normal Windows checkout:
+- GREEN and post-restore: `22/22`, exit `0`.
+- Exact-parent RED: `18 pass / 4 fail`, exit `1`.
+- `validateContractSchema` sentinel: `10 pass / 12 fail`, exit `1`.
+- `verifyArtifactFiles` sentinel: `13 pass / 9 fail`, exit `1`.
+- Both sentinels restored byte-identically; post-restore `22/22`.
 
-- tests: `18`;
-- pass: `18`;
-- fail/skipped/cancelled/todo: `0`;
-- exit: `0`.
+Two fresh Node `v24.2.0` coverage runs were identical:
 
-The suite covers header-only zero entries, missing, extra, duplicate, traversal,
-dot alias, absolute path, backslash separator, all three checkout-equivalence
-values, and unknown keys at every contract object level. Every mutation is
-limited to the maker worktree and restored byte-for-byte in `finally` plus a
-process-level cleanup hook.
+| Scope | Line | Branch | Functions |
+| --- | ---: | ---: | ---: |
+| aggregate | `87.27%` | `71.75%` | `94.87%` |
+| verifier | `79.55%` | `51.59%` | `81.82%` |
+| test harness | `100.00%` | `97.94%` | `100.00%` |
 
-## Positive representation rails
+The `80%` TDD threshold is explicitly evaluated against aggregate line
+coverage. No verifier-only or aggregate metric is relabeled as another scope.
 
-### Normal Windows CRLF checkout
+## Representation rails
 
-`git ls-files --eol` reported `i/lf w/crlf` for all seven declared source
-records.
-
-| Mode | Exit | Status | Result |
-| --- | ---: | --- | --- |
-| `legacy-raw-audit` | 0 | `AMBIGUOUS_RAW_CHECKOUT_CONFIRMED` | raw `0/7`, Git object `7/7`, checkout-LF `7/7` |
-| `git-object` | 0 | `PASS` | `7/7`, structural errors `0` |
-| `checkout-lf` | 0 | `PASS` | `7/7`, bare CR `0`, structural errors `0` |
-| `artifact-files` | 0 | `PASS` | exact required set `5/5`, structural errors `0` |
-
-### Fresh LF materialization
-
-Materialization:
-
-`git -c core.autocrlf=false worktree add --detach
-D:/Dev/engram/.agent/worktrees/db-embedding-evidence-transport-r2-lf-proof
-53b2ef1931c534e27183126a1aad2d46b3a854b2`
-
-`git ls-files --eol` reported `i/lf w/lf` for all seven source records.
+In the normal Windows checkout, all seven source records are `i/lf w/crlf`:
 
 | Mode | Exit | Status | Result |
 | --- | ---: | --- | --- |
-| `legacy-raw-audit` | 0 | `RAW_CHECKOUT_HAPPENS_TO_MATCH` | raw/Git-object/checkout-LF `7/7` |
-| `git-object` | 0 | `PASS` | `7/7` |
+| `legacy-raw-audit` | 0 | `AMBIGUOUS_RAW_CHECKOUT_CONFIRMED` | raw `0/7`, Git `7/7`, LF `7/7` |
+| `git-object` | 0 | `PASS` | `7/7`, source accesses `7/7`, errors `0` |
+| `checkout-lf` | 0 | `PASS` | `7/7`, bare CR `0`, errors `0` |
+| `artifact-files` | 0 | `PASS` | exact required artifacts `5/5` |
+
+In a fresh `core.autocrlf=false` materialization, all seven records are
+`i/lf w/lf`:
+
+| Mode | Exit | Status | Result |
+| --- | ---: | --- | --- |
+| `legacy-raw-audit` | 0 | `RAW_CHECKOUT_HAPPENS_TO_MATCH` | raw/Git/LF `7/7` |
+| `git-object` | 0 | `PASS` | `7/7`, errors `0` |
 | `checkout-lf` | 0 | `PASS` | `7/7`, bare CR `0` |
-| `artifact-files` | 0 | `PASS` | exact required set `5/5` |
-| permanent adversarial suite | 0 | `PASS` | `18/18` |
+| `artifact-files` | 0 | `PASS` | exact required artifacts `5/5` |
+| permanent suite | 0 | `PASS` | `22/22` |
 
-The LF proof worktree was clean before removal; its filesystem path and Git
-registration were removed.
+All temporary RED, Prove-It, and LF worktrees were restored/clean before
+removal; their paths and Git registrations were removed.
 
-## TDD and Prove-It evidence
+## Integrity and product preservation
 
-- RED: `18` total, `1` pass, `17` fail, exit `1`.
-- GREEN: `18/18`, exit `0`.
-- Prove-It, `validateContractSchema` sentinel: `18` failures, exit `1`.
-- Prove-It, `verifyArtifactFiles` sentinel: `9` failures, exit `1`.
-- Both sentinels were restored from the clean checkpoint.
-- Post-restore: `18/18`, exit `0`.
-- Node experimental coverage: all files line `88.89%` and branch `65.33%`;
-  verifier line `84.46%`; functions `100%`; exit `0`.
-
-Full TDD evidence:
-`.agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R2.tdd.json`.
-
-## No-product-change proof
-
-`git diff --exit-code 38d6a4fb... -- cmd internal plugin tests scripts go.mod
-go.sum Makefile Dockerfile docker-compose.yml` exits `0`. In particular:
-
+- The legacy source manifest remains seven Git-blob records from the accepted
+  source commit.
+- The artifact manifest remains an exact five-path canonical-LF set and
+  explicitly excludes itself to avoid recursion.
 - `internal/embedding/store.go` remains blob
-  `1abaee96b07583f9fd824ed03c40b043c490b567`;
+  `1abaee96b07583f9fd824ed03c40b043c490b567`.
 - `internal/embedding/store_stats_test.go` remains blob
   `d381643deadbb42e8a9a07fc9375a6cdfedbdccc`.
+- Node syntax checks, JSON parsing, checksum/self-reference checks, diff checks,
+  and process/worktree/DB/session residue checks pass.
 
-No Go product test, PostgreSQL statement, container mutation, integration,
-push, tag, release, or protected state write is part of this evidence-only
-revision.
+The compact R3 packet is under
+`.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/`.
+The final commit, tree, and packet hashes are reported out-of-band after the
+single evidence-only commit to avoid self-reference.
 
-## Handoff
-
-The compact summary and revision checksum manifest live under
-`.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r2/`.
-The containing commit and artifact hashes are reported by the maker handoff
-after commit, avoiding a self-hash or self-commit paradox.
-
-Finish state: **READY_FOR_CHECK**. A fresh independent checker must reproduce
-the adversarial and CRLF/LF rails before post-review or integration.
+Finish state: **READY_FOR_CHECK**. A fresh independent checker must replay all
+four repaired false-PASS classes and both EOL materializations.

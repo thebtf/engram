@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R3",
+  "parent": "8dac7910de52d2744fcf67f79a0a1597beebac72",
+  "accepted_product_source": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "rails": {
+    "source_commit_exact_equality": "PASS",
+    "required_source_set_exact_7": "PASS",
+    "canonical_source_access_only": "PASS",
+    "schema_invalid_source_access_zero": "PASS",
+    "windows_crlf": {
+      "tracked_eol": "7/7 i/lf w/crlf",
+      "legacy_raw_audit": {
+        "exit_code": 0,
+        "status": "AMBIGUOUS_RAW_CHECKOUT_CONFIRMED",
+        "raw": 0,
+        "git_object": 7,
+        "checkout_lf": 7
+      },
+      "git_object": {
+        "exit_code": 0,
+        "matched": 7,
+        "total": 7
+      },
+      "checkout_lf": {
+        "exit_code": 0,
+        "matched": 7,
+        "total": 7,
+        "bare_cr": 0
+      },
+      "artifact_files": {
+        "exit_code": 0,
+        "matched": 5,
+        "total": 5
+      },
+      "permanent_suite": {
+        "exit_code": 0,
+        "passed": 22,
+        "total": 22
+      }
+    },
+    "fresh_lf": {
+      "tracked_eol": "7/7 i/lf w/lf",
+      "legacy_raw_audit": {
+        "exit_code": 0,
+        "status": "RAW_CHECKOUT_HAPPENS_TO_MATCH",
+        "raw": 7,
+        "git_object": 7,
+        "checkout_lf": 7
+      },
+      "git_object": {
+        "exit_code": 0,
+        "matched": 7,
+        "total": 7
+      },
+      "checkout_lf": {
+        "exit_code": 0,
+        "matched": 7,
+        "total": 7,
+        "bare_cr": 0
+      },
+      "artifact_files": {
+        "exit_code": 0,
+        "matched": 5,
+        "total": 5
+      },
+      "permanent_suite": {
+        "exit_code": 0,
+        "passed": 22,
+        "total": 22
+      }
+    },
+    "exact_parent_red": {
+      "exit_code": 1,
+      "passed": 18,
+      "failed": 4,
+      "total": 22
+    },
+    "prove_it": {
+      "validate_contract_schema_failed": 12,
+      "verify_artifact_files_failed": 9,
+      "post_restore_passed": 22,
+      "post_restore_exit_code": 0
+    },
+    "coverage_repeat_identical": "PASS",
+    "node_syntax": "PASS",
+    "json_parse": "PASS",
+    "diff_check": "PASS",
+    "product_source_test_delta": 0,
+    "temporary_worktree_residue": 0,
+    "maker_node_process_residue": 0,
+    "matching_postgresql_database_residue": 0,
+    "matching_postgresql_session_residue": 0
+  }
+}
