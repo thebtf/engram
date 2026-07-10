@@ -1,12 +1,31 @@
 package gorm
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+const (
+	initialAdminSetupLockNamespace int32 = 0x454e4752 // "ENGR"
+	initialAdminSetupLockOperation int32 = 0x41444d49 // "ADMI"
+)
+
+// InitialAdminSetupAlreadyCompletedError reports that first-user setup lost
+// the serialized zero-user check because another process completed it first.
+type InitialAdminSetupAlreadyCompletedError struct{}
+
+func (*InitialAdminSetupAlreadyCompletedError) Error() string {
+	return "setup already completed"
+}
+
+// ErrInitialAdminSetupAlreadyCompleted is returned when an initial admin
+// already exists by the time the cross-process setup lock is acquired.
+var ErrInitialAdminSetupAlreadyCompleted = &InitialAdminSetupAlreadyCompletedError{}
 
 // UserStore provides CRUD operations for dashboard users.
 type UserStore struct {
@@ -28,6 +47,43 @@ func (s *UserStore) CreateUser(email, passwordHash, role string) (*User, error) 
 	}
 	if err := s.db.Create(user).Error; err != nil {
 		return nil, fmt.Errorf("create user: %w", err)
+	}
+	return user, nil
+}
+
+// CreateInitialAdmin atomically creates the first user as an administrator.
+// PostgreSQL transaction-scoped advisory locking serializes setup across all
+// server processes connected to the same database.
+func (s *UserStore) CreateInitialAdmin(ctx context.Context, email, passwordHash string) (*User, error) {
+	user := &User{
+		Email:        email,
+		PasswordHash: passwordHash,
+		Role:         DashboardRoleAdmin,
+		CreatedAt:    time.Now(),
+	}
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(
+			"SELECT pg_advisory_xact_lock(?, ?)",
+			initialAdminSetupLockNamespace,
+			initialAdminSetupLockOperation,
+		).Error; err != nil {
+			return fmt.Errorf("lock initial admin setup: %w", err)
+		}
+
+		var count int64
+		if err := tx.Model(&User{}).Count(&count).Error; err != nil {
+			return fmt.Errorf("count users for initial admin setup: %w", err)
+		}
+		if count > 0 {
+			return ErrInitialAdminSetupAlreadyCompleted
+		}
+		if err := tx.Create(user).Error; err != nil {
+			return fmt.Errorf("create initial admin: %w", err)
+		}
+		return nil
+	}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return nil, err
 	}
 	return user, nil
 }
