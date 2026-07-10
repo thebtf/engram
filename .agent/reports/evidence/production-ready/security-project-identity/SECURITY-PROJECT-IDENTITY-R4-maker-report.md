@@ -1,11 +1,17 @@
 # SECURITY-PROJECT-IDENTITY R4 maker report
 
-Verdict: **READY FOR FRESH CHECKER**.
+Verdict: **READY FOR FRESH CHECKER AFTER AUTHORITY CORRECTION**.
 
 R4 closes `SPI-R3-CHK-001` with a permanent Go OS-child acceptance rail. The
 revision is test/evidence-only: `internal/proxy/identity.go` remains the exact
 target blob `9ecbad17612e7dd4e2ce8c8fed10ee4e041e11c1`, its base-to-R4 diff is empty,
 and the useful R3 goroutine tests remain intact.
+
+Successor note: independent checker
+`7d9a771f114c482b174fc240106228dbb2b3b25c` passed the product and permanent
+test rail, but returned `REVISE` on `SPI-R4-CHK-001` because the prior target
+included one undeclared `.agent/testing/**` path. This direct-child successor
+removes that redundant path without changing product, test, or spec evidence.
 
 ## Immutable target and scope
 
@@ -15,8 +21,6 @@ and the useful R3 goroutine tests remain intact.
 - New permanent test: `internal/proxy/identity_process_test.go`.
 - Product, auth, database, protobuf, dependency, release, and v5-demolished
   paths are unchanged.
-- Phase 0 classification is `CODE_PATH_COVERED`: this is an internal
-  process/filesystem contract, not a new user-facing feature.
 
 ## Permanent process contract
 
@@ -79,21 +83,19 @@ Detailed machine-readable evidence:
 - `.agent/specs/security-project-identity/evidence/SECURITY-PROJECT-IDENTITY-R4.red.json`
 - `.agent/specs/security-project-identity/evidence/SECURITY-PROJECT-IDENTITY-R4.prove-it.json`
 - `.agent/specs/security-project-identity/evidence/SECURITY-PROJECT-IDENTITY-R4.verification.json`
-- `.agent/testing/SECURITY-PROJECT-IDENTITY-R4/behavior-signal.md`
 
 ## Artifact hashes
 
 | Artifact | SHA-256 | Git blob |
 | --- | --- | --- |
 | `internal/proxy/identity_process_test.go` | `cb85e74ca6b4394b6fd0009418ef765b88dbf8eb1e0376f43ae848e7b18714db` | `6e04140eaf4ce6eff91c3a40010e99ff56460773` |
-| `.agent/testing/SECURITY-PROJECT-IDENTITY-R4/behavior-signal.md` | `9f66b18bf2992dd27381f2438711569460b2d564101e71896ef99d8650e482c7` | `c4d80978955130bdee737df06fa8609f340cd2d9` |
 | `SECURITY-PROJECT-IDENTITY-R4.red.json` | `18d0cde079ab3613d58a77e77b8012ba895c94d3e6b6bee87d2d144047d4d8a9` | `becfba41abcb5bdc1137667f641cad61f154c8b1` |
 | `SECURITY-PROJECT-IDENTITY-R4.prove-it.json` | `53dd6b5b79ef1899b0ae3fecc9c180739b808e8fdaf14c0fca2b8c8d98097089` | `408ce7f5c14fb5b127e9b2ff24c5170a97f55849` |
 | `SECURITY-PROJECT-IDENTITY-R4.verification.json` | `b45038d290ed8d5c8f5e2b6f1c49d9ca7ff68fa24181a3e6b1608bec08342628` | `453970a0c56002bb94160b8eb898db702b56ec91` |
 
-The exact staged scope contains six paths. Its LF-sorted, LF-terminated path
-list has SHA-256
-`bd1ce5c203c1381759c4e8aa69c462b8a50c096699d56d442f9d3e5c2c99bb77`.
+The exact cumulative base-to-successor scope contains five paths. Its
+LF-sorted, LF-terminated path list has SHA-256
+`ff2385aa04e726c653db0c70a525f3e3957bc91e6bda1e6526fdd63afe5b5b7d`.
 `internal/proxy/identity.go` is absent from that list.
 
 No merge, push, tag, release, database mutation, browser action, or worktree
