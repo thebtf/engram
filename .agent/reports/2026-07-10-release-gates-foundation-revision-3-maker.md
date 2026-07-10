@@ -12,6 +12,9 @@ Starting head: `2b3ef3e33bd19e630f8f67d07a9e2521cb98537f`
 Plan-governance commit:
 `a1653abf5a1088f45df2c58487a74a886666adf1`
 
+Release-gates implementation/evidence commit:
+`badc408937dd6fad0e1dc7ee9fc573505aa617b2`
+
 ## Outcome
 
 Revision 3 implements the release-gate foundation corrections required by the
@@ -93,6 +96,8 @@ GREEN/fail-closed verification:
 | PowerShell AST parse | PASS, 8 scripts, 0 errors |
 | deterministic script self-tests | PASS, 8/8 |
 | revision-3 ownership Ledger | PASS, 47 slices, 318 declarations, 32 repeated exact paths, 2 declared prefix intersections, 32 state epochs, 0 errors |
+| plan-governance commit Diff | PASS, 2 changed paths, 0 violations, 0 errors; SHA256 `EE67CB0DF9ECB298F1E2DF7DAF6993B1111D126C6E34AC80904389D113B861C2` |
+| RELEASE-GATES commit Diff | PASS, 134 changed paths, 0 violations, 0 errors; SHA256 `354EF8D59E693445CE7EC921CB62EEDD1B5E9B40DA86E5ACE43408E58FD406ED` |
 | rejected DB head Diff | expected FAIL, exit 1, 22 changed paths, 0 path violations, exactly 4 current-owner errors |
 | workflow/config/runner conformance | PASS, 26 semantic mutations rejected |
 | `actionlint` | PASS, v1.7.12 |

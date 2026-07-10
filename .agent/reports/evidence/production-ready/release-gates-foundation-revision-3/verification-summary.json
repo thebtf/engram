@@ -6,6 +6,7 @@
   "verified_at_utc": "2026-07-10T09:52:27.8798155Z",
   "repository_head": "2b3ef3e33bd19e630f8f67d07a9e2521cb98537f",
   "plan_governance_commit": "a1653abf5a1088f45df2c58487a74a886666adf1",
+  "release_gates_commit": "badc408937dd6fad0e1dc7ee9fc573505aa617b2",
   "plan": {
     "path": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
     "sha256": "d371e94dff1ea12767b9d0832240cb6caf52c6c3bbe2209fe4280159c4f03c52"
@@ -43,6 +44,26 @@
       "errors": 0,
       "artifact": ".agent/reports/evidence/production-ready/release-gates-foundation-revision-3/ownership/ledger-final.json",
       "sha256": "39d3572086d4690def49d3cc56f2870384ba8c44bf52bf0e27b93a6b39976d57"
+    },
+    "plan_governance_commit_diff": {
+      "verdict": "PASS",
+      "base": "2b3ef3e33bd19e630f8f67d07a9e2521cb98537f",
+      "head": "a1653abf5a1088f45df2c58487a74a886666adf1",
+      "changed_paths": 2,
+      "ownership_violations": 0,
+      "errors": 0,
+      "artifact": ".agent/reports/evidence/production-ready/release-gates-foundation-revision-3/ownership/plan-governance-commit-diff.json",
+      "sha256": "ee67cb0df9ecb298f1e2df7daf6993b1111d126c6e34ac80904389d113b861c2"
+    },
+    "release_gates_commit_diff": {
+      "verdict": "PASS",
+      "base": "a1653abf5a1088f45df2c58487a74a886666adf1",
+      "head": "badc408937dd6fad0e1dc7ee9fc573505aa617b2",
+      "changed_paths": 134,
+      "ownership_violations": 0,
+      "errors": 0,
+      "artifact": ".agent/reports/evidence/production-ready/release-gates-foundation-revision-3/ownership/release-gates-commit-diff.json",
+      "sha256": "354ef8d59e693445ce7ec921cb62eedd1b5e9b40da86e5ace43408e58fd406ed"
     },
     "rejected_db_bulkops_negative": {
       "verdict": "EXPECTED_FAIL",
