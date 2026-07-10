@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+  "role": "revision-maker",
+  "generated_at": "2026-07-10T17:00:14.1820935+03:00",
+  "exact_base": "580b0cd0ff38bb55a5195a8004e60234a824b7a8",
+  "product_source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "revision_checkpoint_commit": "53b2ef1931c534e27183126a1aad2d46b3a854b2",
+  "commit_binding": "containing commit; exact SHA is reported by the handoff to avoid self-reference",
+  "branch": "work/prc-db-embedding-evidence-transport-r2",
+  "worktree": "D:/Dev/engram/.agent/worktrees/db-embedding-evidence-transport-r2",
+  "finish_state": "READY_FOR_CHECK",
+  "acceptance": {
+    "canonical_path_validation": "PASS",
+    "exact_artifact_set_5": "PASS",
+    "strict_schema_and_semantics": "PASS",
+    "permanent_adversarial_tests": "18/18",
+    "crlf_git_object": "7/7",
+    "crlf_checkout_lf": "7/7",
+    "crlf_raw": "0/7",
+    "crlf_artifacts": "5/5",
+    "lf_git_object": "7/7",
+    "lf_checkout_lf": "7/7",
+    "lf_raw": "7/7",
+    "lf_artifacts": "5/5",
+    "lf_adversarial_tests": "18/18",
+    "product_source_test_delta": 0,
+    "coverage_line_percent": 88.89,
+    "prove_it_failed_tests": 27
+  },
+  "temporary_cleanup": {
+    "lf_path_removed": true,
+    "lf_registration_removed": true,
+    "manifest_mutations_restored": true
+  },
+  "forbidden_mutations": {
+    "primary": 0,
+    "integration": 0,
+    "canonical_register_markdown_html": 0,
+    "role_session_oracle": 0,
+    "database": 0,
+    "container": 0,
+    "product_source_test": 0
+  },
+  "next_gate": "fresh independent checker"
+}

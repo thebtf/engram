@@ -1,18 +1,64 @@
 {
   "schema_version": 1,
   "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
-  "source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
-  "contract_implementation_commit": "462c97dd889b4afbc84d1ddc07613d748604afee",
+  "role": "revision-maker",
+  "product_source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "rejected_candidate_commit": "580b0cd0ff38bb55a5195a8004e60234a824b7a8",
+  "revision_checkpoint_commit": "53b2ef1931c534e27183126a1aad2d46b3a854b2",
   "raw_checkout_bytes_are_not_the_contract": true,
+  "required_artifact_paths": [
+    ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
+    ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json",
+    ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+    ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json",
+    ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md"
+  ],
+  "tdd": {
+    "red": {
+      "exit_code": 1,
+      "tests": 18,
+      "passed": 1,
+      "failed": 17
+    },
+    "green": {
+      "exit_code": 0,
+      "tests": 18,
+      "passed": 18,
+      "failed": 0
+    },
+    "prove_it": [
+      {
+        "sentinel_function": "validateContractSchema",
+        "exit_code": 1,
+        "failed_tests": 18
+      },
+      {
+        "sentinel_function": "verifyArtifactFiles",
+        "exit_code": 1,
+        "failed_tests": 9
+      }
+    ],
+    "post_restore": {
+      "exit_code": 0,
+      "tests": 18,
+      "passed": 18,
+      "failed": 0
+    },
+    "coverage": {
+      "exit_code": 0,
+      "all_files_line_percent": 88.89,
+      "verifier_line_percent": 84.46,
+      "branch_percent": 65.33,
+      "functions_percent": 100.0
+    }
+  },
   "observations": [
     {
       "checkout": "windows-autocrlf-true",
-      "materialization": "git worktree add -b work/prc-db-embedding-evidence-transport .agent/worktrees/db-embedding-evidence-transport 38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
-      "core_autocrlf": "true",
       "tracked_eol_counts": {
         "crlf": 7
       },
-      "command": "node .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs --mode=legacy-raw-audit",
+      "mode": "legacy-raw-audit",
       "exit_code": 0,
       "status": "AMBIGUOUS_RAW_CHECKOUT_CONFIRMED",
       "total": 7,
@@ -23,50 +69,30 @@
     },
     {
       "checkout": "windows-autocrlf-true",
-      "core_autocrlf": "true",
-      "tracked_eol_counts": {
-        "crlf": 7
-      },
-      "command": "node .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs --mode=git-object",
+      "mode": "git-object",
       "exit_code": 0,
       "status": "PASS",
-      "total": 7,
       "matched": 7,
-      "git_object_matches": 7,
-      "source_commit_is_ancestor": true,
+      "total": 7,
       "structural_errors": 0
     },
     {
       "checkout": "windows-autocrlf-true",
-      "core_autocrlf": "true",
-      "tracked_eol_counts": {
-        "crlf": 7
-      },
-      "command": "node .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs --mode=checkout-lf",
+      "mode": "checkout-lf",
       "exit_code": 0,
       "status": "PASS",
-      "total": 7,
       "matched": 7,
-      "checkout_lf_matches": 7,
+      "total": 7,
       "bare_carriage_returns": 0,
-      "source_commit_is_ancestor": true,
       "structural_errors": 0
     },
     {
-      "checkout": "lf-materialized",
-      "materialization": "git -c core.autocrlf=false worktree add --detach .agent/worktrees/db-embedding-evidence-lf-proof 462c97dd889b4afbc84d1ddc07613d748604afee",
-      "tracked_eol_counts": {
-        "lf": 7
-      },
-      "command": "node .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs --mode=git-object",
+      "checkout": "windows-autocrlf-true",
+      "mode": "artifact-files",
       "exit_code": 0,
       "status": "PASS",
-      "total": 7,
-      "matched": 7,
-      "git_object_matches": 7,
-      "raw_checkout_matches": 7,
-      "checkout_lf_matches": 7,
-      "source_commit_is_ancestor": true,
+      "matched": 5,
+      "total": 5,
       "structural_errors": 0
     },
     {
@@ -74,23 +100,58 @@
       "tracked_eol_counts": {
         "lf": 7
       },
-      "command": "node .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs --mode=checkout-lf",
+      "mode": "legacy-raw-audit",
+      "exit_code": 0,
+      "status": "RAW_CHECKOUT_HAPPENS_TO_MATCH",
+      "total": 7,
+      "raw_checkout_matches": 7,
+      "git_object_matches": 7,
+      "checkout_lf_matches": 7,
+      "structural_errors": 0
+    },
+    {
+      "checkout": "lf-materialized",
+      "mode": "git-object",
       "exit_code": 0,
       "status": "PASS",
-      "total": 7,
       "matched": 7,
-      "git_object_matches": 7,
-      "raw_checkout_matches": 7,
-      "checkout_lf_matches": 7,
-      "bare_carriage_returns": 0,
-      "source_commit_is_ancestor": true,
+      "total": 7,
       "structural_errors": 0
+    },
+    {
+      "checkout": "lf-materialized",
+      "mode": "checkout-lf",
+      "exit_code": 0,
+      "status": "PASS",
+      "matched": 7,
+      "total": 7,
+      "bare_carriage_returns": 0,
+      "structural_errors": 0
+    },
+    {
+      "checkout": "lf-materialized",
+      "mode": "artifact-files",
+      "exit_code": 0,
+      "status": "PASS",
+      "matched": 5,
+      "total": 5,
+      "structural_errors": 0
+    },
+    {
+      "checkout": "lf-materialized",
+      "mode": "permanent-adversarial-self-test",
+      "exit_code": 0,
+      "status": "PASS",
+      "matched": 18,
+      "total": 18
     }
   ],
   "temporary_lf_worktree_cleanup": {
-    "path": "D:/Dev/engram/.agent/worktrees/db-embedding-evidence-lf-proof",
+    "path": "D:/Dev/engram/.agent/worktrees/db-embedding-evidence-transport-r2-lf-proof",
     "clean_before_remove": true,
     "path_removed": true,
     "registration_removed": true
-  }
+  },
+  "product_source_test_delta": 0,
+  "finish_state": "READY_FOR_CHECK"
 }
