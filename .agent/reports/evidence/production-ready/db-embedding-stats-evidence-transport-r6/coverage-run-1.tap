@@ -1,0 +1,50 @@
+✔ evidence manifests reject incomplete sets and undeclared or mixed coverage capture (2461.7793ms)
+✔ artifact manifest rejects a missing required entry (260.3039ms)
+✔ artifact manifest rejects an extra entry (240.6092ms)
+✔ artifact manifest rejects a duplicate entry (284.5441ms)
+✔ artifact manifest rejects dot-segment traversal outside the evidence namespace (232.877ms)
+✔ artifact manifest rejects a non-canonical dot-segment alias (236.5781ms)
+▶ artifact manifest rejects absolute and backslash-separated paths
+  ✔ absolute path (245.0073ms)
+  ✔ backslash-separated path (271.6047ms)
+✔ artifact manifest rejects absolute and backslash-separated paths (516.9948ms)
+▶ contract rejects unsupported checkout-equivalence policy values
+  ✔ bare_cr (177.1393ms)
+  ✔ transform (270.7538ms)
+  ✔ required_result (189.1099ms)
+✔ contract rejects unsupported checkout-equivalence policy values (637.3275ms)
+▶ contract rejects unknown schema keys
+  ✔ top-level (183.6318ms)
+  ✔ representation (213.0434ms)
+  ✔ checkout-equivalence (193.5777ms)
+  ✔ entry (373.6922ms)
+✔ contract rejects unknown schema keys (964.3901ms)
+✔ contract rejects deleting one required source when the legacy manifest agrees (215.4699ms)
+✔ contract rejects a valid go.mod substitution that preserves cardinality (401.4912ms)
+✔ contract rejects rebinding source commit and legacy metadata to an ancestor (180.8376ms)
+✔ contract rejects an invalid raw source path before source access (179.1013ms)
+✔ contract rejects null representation with structured FAIL before actual source access (172.5208ms)
+✔ contract rejects a null entry with structured FAIL before actual source access (178.8782ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 24
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7310.6107
+ℹ start of coverage report
+ℹ -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ℹ file                                       | line % | branch % | funcs % | uncovered lines
+ℹ -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ℹ .agent                                     |        |          |         |
+ℹ  reports                                   |        |          |         |
+ℹ   evidence                                 |        |          |         |
+ℹ    production-ready                        |        |          |         |
+ℹ     db-embedding-stats-evidence-transport  |        |          |         |
+ℹ      verify-manifest.cjs                   |  80.08 |    55.91 |   81.82 | 84-86 97-98 100-104 121-129 150 163-164 169-170 174-175 203-204 217-219 266-267 273-274 276-277 287-288 319-321 350-351 353-354 356-357 361-362 396-397 408-409 424-425 427-428 430-431 433-434 436-437 470-478 561-562 564-565 573-574 576-577 579-580 591-592 611-648 656-657 669-675 698-705 716-718
+ℹ      verify-manifest.test.cjs              |  99.72 |    94.78 |  100.00 | 356-357
+ℹ -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ℹ all files                                  |  89.96 |    75.86 |   95.80 |
+ℹ -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ℹ end of coverage report

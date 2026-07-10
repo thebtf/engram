@@ -1,6 +1,8 @@
 {
   "schema_version": 1,
   "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R5",
+  "status": "REJECTED_SUPERSEDED_BY_R6",
+  "snapshot_scope": "Historical R5 observations only; current/final claims live in the R6 packet.",
   "base": "369951b61ee07cb0c405558e0f677cd1c9e90362",
   "accepted_product_source": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
   "rails": {

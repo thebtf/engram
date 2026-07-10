@@ -1,5 +1,7 @@
 {
   "task_id": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R5",
+  "evidence_status": "REJECTED_SUPERSEDED_BY_R6",
+  "correction_note": "R5 values are a historical rejected snapshot; the validateContractSchema sentinel was re-run against the exact R5 final test blob and corrected from 9/15 to 8/16.",
   "stack": "GO repository with Node.js evidence verifiers",
   "base_commit": "369951b61ee07cb0c405558e0f677cd1c9e90362",
   "node_version": "v24.2.0",
@@ -47,8 +49,8 @@
   "prove_it": {
     "validateContractSchema": {
       "sentinel": "discard structural errors and release validated subsets",
-      "passed_tests": 9,
-      "failed_tests": 15,
+      "passed_tests": 8,
+      "failed_tests": 16,
       "exit_code": 1
     },
     "verifyArtifactFiles": {
@@ -71,6 +73,7 @@
     }
   },
   "coverage": {
+    "historical_r5_snapshot": true,
     "command": "node.exe --test --test-concurrency=1 --experimental-test-coverage .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
     "capture_manifest": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-capture.v1.json",
     "transcript_representation": "canonical-lf-tap-trim-trailing-table-padding",

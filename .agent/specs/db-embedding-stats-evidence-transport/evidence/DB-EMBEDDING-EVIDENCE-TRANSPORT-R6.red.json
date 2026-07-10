@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "task_id": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R6",
+  "phase": "RED",
+  "observed_at_utc": "2026-07-10T21:28:56.4495986Z",
+  "target_commit": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+  "node_version": "v24.2.0",
+  "platform": "win32-x64",
+  "reproducer": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/red-reproduction.cjs",
+  "blockers": {
+    "ET-R5-001": {
+      "reproduced": true,
+      "malicious_process_exit_code": 7,
+      "malicious_stdout_sha256": "52a871ca44112dc2d4e7540f7e9548079a05619f967b4c4d9445b999d7a42daf",
+      "committed_transcript_sha256": "52a871ca44112dc2d4e7540f7e9548079a05619f967b4c4d9445b999d7a42daf",
+      "stdout_matches_committed_transcript": true,
+      "r5_verifier_exit_code": 0,
+      "r5_verifier_status": "PASS",
+      "r5_synthetic_parsed_exit_code": 0
+    },
+    "ET-R5-002": {
+      "reproduced": true,
+      "checkout_core_autocrlf": "true",
+      "checkout_eol": [
+        "i/lf    w/crlf  attr/                 \t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+        "i/lf    w/crlf  attr/                 \t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs"
+      ],
+      "suite_exit_code": 1,
+      "tests": 24,
+      "passed": 23,
+      "failed": 1
+    },
+    "ET-R5-003": {
+      "reproduced": true,
+      "exact_final_r5_test_blob": "8e814737c8d5f4437aeb2a97dc52220e115cba0b",
+      "sentinel": "discard structural errors and release validated subsets",
+      "suite_exit_code": 1,
+      "tests": 24,
+      "passed": 8,
+      "failed": 16,
+      "stale_claim": {
+        "passed": 9,
+        "failed": 15
+      }
+    }
+  },
+  "review_red": {
+    "prefix_collision": {
+      "observed_before_fix": true,
+      "staged_replay_blob_oid": "87cdcd95e2863967e44bc51c91cb5df26ee850b6",
+      "allow_prefix": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport",
+      "collision_probe": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-evil/payload.cjs",
+      "old_starts_with_result": true,
+      "expected_result": false,
+      "finding": "unbounded startsWith prefix accepted a sibling namespace"
+    },
+    "checksum_diff_completeness": {
+      "observed_before_fix": true,
+      "observed_commit": "42ff7ff264a62c2d573eac1658cb61468075bf84",
+      "changed_path_count": 32,
+      "self_excluded_changed_paths": 2,
+      "expected_directly_checksummed_changed_paths": 30,
+      "old_manifest_entry_count": 30,
+      "missing_changed_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verify-coverage-capture.cjs",
+      "unexpected_unchanged_extra": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+      "old_verifier_exit_code": 0,
+      "old_verifier_status": "PASS",
+      "finding": "the checksum packet counted an unchanged load-bearing source while omitting one directly changed R5 verifier"
+    },
+    "checkout_topology_variance": {
+      "observed_before_fix": true,
+      "observed_commit": "42ff7ff264a62c2d573eac1658cb61468075bf84",
+      "fresh_clone_topology": "git-directory",
+      "fresh_lf_suite": { "tests": 24, "passed": 24, "failed": 0, "exit_code": 0 },
+      "fresh_crlf_suite": { "tests": 24, "passed": 24, "failed": 0, "exit_code": 0 },
+      "fresh_lf_aggregate": { "line_percent": 89.96, "branch_percent": 75.86, "functions_percent": 95.8 },
+      "fresh_crlf_aggregate": { "line_percent": 90.3, "branch_percent": 76.81, "functions_percent": 95.8 },
+      "old_linked_worktree_packet_aggregate": { "line_percent": 90.51, "branch_percent": 77.36, "functions_percent": 95.8 },
+      "old_fresh_clone_replay_exit_code": 1,
+      "old_fresh_clone_replay_error": "final replay aggregate metrics differ from committed real-run packet",
+      "finding": "the measured harness inherited host checkout topology and EOL branches instead of using one canonical execution repository"
+    }
+  },
+  "temp_residue_after_reproduction": false
+}

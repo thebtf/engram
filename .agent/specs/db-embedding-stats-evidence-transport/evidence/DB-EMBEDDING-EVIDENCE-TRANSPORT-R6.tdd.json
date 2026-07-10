@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "task_id": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R6",
+  "stack": "Go repository with Node.js evidence verifiers",
+  "target_base": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+  "node_version": "v24.2.0",
+  "recorded_at_utc": "2026-07-10T23:20:32.8654914Z",
+  "red": {
+    "artifact": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R6.red.json",
+    "blockers_reproduced_before_implementation": [
+      "ET-R5-001: exit-7 process emitted byte-identical TAP while R5 verifier synthesized exit_code=0 and passed",
+      "ET-R5-002: core.autocrlf=true checkout produced 23/24 exit 1",
+      "ET-R5-003: exact R5 test blob produced 8/16, not the stale 9/15 claim"
+    ],
+    "review_prefix_collision": {
+      "staged_replay_blob_oid": "87cdcd95e2863967e44bc51c91cb5df26ee850b6",
+      "collision_probe": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-evil/payload.cjs",
+      "old_starts_with_result": true,
+      "expected_result": false
+    },
+    "review_checksum_completeness": {
+      "observed_commit": "42ff7ff264a62c2d573eac1658cb61468075bf84",
+      "old_verifier_status": "PASS",
+      "missing_changed_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verify-coverage-capture.cjs",
+      "unexpected_unchanged_extra": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs"
+    },
+    "review_topology_variance": {
+      "observed_commit": "42ff7ff264a62c2d573eac1658cb61468075bf84",
+      "ordinary_clone_suite": "LF 24/24; CRLF 24/24",
+      "old_clone_replay": "exit 1: aggregate metrics differ from committed real-run packet"
+    }
+  },
+  "green": {
+    "base_suite": { "tests": 24, "passed": 24, "failed": 0, "exit_code": 0 },
+    "r6_tamper_suite": { "tests": 12, "passed": 12, "failed": 0, "exit_code": 0 },
+    "process_envelopes": 2,
+    "real_exit_codes": [0, 0],
+    "raw_stderr_bytes": [0, 0],
+    "product_parity": "git-object 7/7; checkout-lf 7/7; artifact-files 5/5",
+    "prefix_boundary_self_test": {
+      "exit_code": 0,
+      "status": "PASS",
+      "rejected_collision_probes": 4,
+      "r5_namespace_required_by_final_diff": true
+    },
+    "checksum_diff_completeness": {
+      "changed_paths": 32,
+      "directly_checksummed_changed_paths": 30,
+      "self_excluded_changed_paths": 2,
+      "load_bearing_unchanged_paths": 1,
+      "missing_changed_path_mutation": "nonzero FAIL"
+    }
+  },
+  "refactor": {
+    "applied": true,
+    "patterns": [
+      "strict LF materialization moved into an isolated Git fixture built from index blobs",
+      "checkout representation classification separated from canonical execution bytes",
+      "coverage capture split into raw streams, canonical transcript, real process envelope, and independent verifier",
+      "coverage execution materialized in an independent git-directory clone from the exact tree",
+      "every base-to-candidate changed path directly checksummed except two declared self-exclusions",
+      "final-commit replay gate separated from pre-commit capture to avoid self-referential commit identity"
+    ],
+    "post_refactor_parity": true
+  },
+  "exact_final_source_blobs": {
+    "covered_verifier": {
+      "git_blob_oid": "75bec9c41eb5abc435f13d90848074f6608f7fce",
+      "sha256": "a55e59dd870659330add8f840272aa1e8829f8161779db3e9be9e6e014cf1ba4"
+    },
+    "covered_test": {
+      "git_blob_oid": "caca5ec75f47c03698ac270b549a432b0de04cfe",
+      "sha256": "d04b8bc050182f2806972c9d30aaa7d6349ef2f56f15b3ef21f7005459bb86cc"
+    },
+    "r6_verifier": {
+      "git_blob_oid": "f81ca4b1616a58049327b52adee5b9e9ab844eac",
+      "sha256": "eae5cf24991cf3122a85488ac57e986f589002d071d407a6228a0e6dc235481c"
+    },
+    "r6_test": {
+      "git_blob_oid": "39ccc3463292a11975bda90271b3b2f169472b64",
+      "sha256": "d49a5b28894fd4308cf463f1d99f6fd0d58b7d389b7a717dcb5da94561872a72"
+    }
+  },
+  "coverage": {
+    "capture_manifest_sha256": "28b5286a025794bae2c24535fe31f35e23c8d940698ab9c561aa5a0c1fd178c8",
+    "runs": [
+      {
+        "run": 1,
+        "exit_code": 0,
+        "stdout_sha256": "4fa07b262ea52975cdeb007bf3f7ce15787dc801731cf274f82af19007a6921b",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "transcript_sha256": "dcb71f918832c790b93f9f01564e247a69ff623c50a303aa1979f61ab12cfc18"
+      },
+      {
+        "run": 2,
+        "exit_code": 0,
+        "stdout_sha256": "8c6d8ae30614624a979c2423ab7c36f9f6f6c029bc4f9e1a4c91fda035164d95",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "transcript_sha256": "7e56b583cb602dd1ac6f156edfd5f18380991126bbb5ef42995fd5ea2089df21"
+      }
+    ],
+    "metrics_identical": true,
+    "aggregate": { "line_percent": 89.96, "branch_percent": 75.86, "functions_percent": 95.8 },
+    "verifier": { "line_percent": 80.08, "branch_percent": 55.91, "functions_percent": 81.82 },
+    "test_harness": { "line_percent": 99.72, "branch_percent": 94.78, "functions_percent": 100 },
+    "normative_floor": {
+      "dimension": "aggregate.line_percent",
+      "observed_percent": 89.96,
+      "floor_percent": 80,
+      "margin_percent": 9.96,
+      "status": "PASS"
+    },
+    "non_normative_dimensions": 8
+  },
+  "prove_it": {
+    "validateContractSchema": {
+      "tests": 24,
+      "passed": 9,
+      "failed": 15,
+      "exit_code": 1,
+      "stdout_sha256": "95d250957aa82fd9dc2a8e052c8d9dcc4280e02f2f98ae27ebe1b2c4c6113b1a"
+    },
+    "verifyArtifactFiles": {
+      "tests": 24,
+      "passed": 15,
+      "failed": 9,
+      "exit_code": 1,
+      "stdout_sha256": "9a50ed4fb0297e1543d39d12700c3319f506eadf5f7fa4be15c1949230db8943"
+    },
+    "r6_status_gate": {
+      "tests": 12,
+      "passed": 0,
+      "failed": 12,
+      "exit_code": 1,
+      "stdout_sha256": "cb8619fdbc922197cce23599b1c32759db2ffe300d4087a2515ff57922aa9e0e"
+    },
+    "post_restore": {
+      "base_suite": { "tests": 24, "passed": 24, "failed": 0, "exit_code": 0 },
+      "r6_tamper_suite": { "tests": 12, "passed": 12, "failed": 0, "exit_code": 0 },
+      "residue": false
+    }
+  },
+  "final_commit_replay": {
+    "verifier": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/verify-final-commit-replay.cjs",
+    "required_after_atomic_commit": true,
+    "contracts": [
+      "exactly one parent equal to target_base",
+      "final committed verifier/test/wrapper blobs equal captured execution blobs",
+      "changed paths remain inside the authorized evidence namespaces",
+      "all changed paths are directly checksummed except the two declared checksum self-exclusions",
+      "fresh replay exits 0 with empty stderr and 24/24",
+      "replay uses the canonical independent clone and all nine dimensions equal both real-run envelopes",
+      "only aggregate.line_percent has a normative 80 floor; observed margin is machine-bound",
+      "exact final commit, tree, changed-path digest, and zero tracked residue are emitted"
+    ]
+  }
+}
