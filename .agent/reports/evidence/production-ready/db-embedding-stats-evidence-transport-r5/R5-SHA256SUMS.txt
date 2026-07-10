@@ -2,10 +2,10 @@
 # algorithm=sha256
 # representation=canonical-lf-files
 # checkout-equivalence=crlf-to-lf-with-no-bare-cr
-# base=d650df5c4271cdb50aa1f443d2f95b2f4b672541
+# base=369951b61ee07cb0c405558e0f677cd1c9e90362
 # accepted-product-source=38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df
-# status=superseded-by-r5
-# refreshed-on-base=369951b61ee07cb0c405558e0f677cd1c9e90362
+# closed-finding=ET-R4-001
+# coverage-materialization=core.autocrlf=false; index=lf; filesystem=lf
 # maker-commit=reported-out-of-band-after-commit
 # self-entry=excluded-to-avoid-recursion
 5d932e6acf104bf9eff291409b50961007512e09e91d78401257a018fcb780f4  .agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt
@@ -28,3 +28,15 @@ bdc69720f8bab1c4f2f446202e21917c6db475824fcdac17ca2b0f668f052c90  .agent/specs/d
 4eb5199000a011e4e685900daa07d98773770d78753032db6b152147ac50aaf8  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/verification-matrix.v1.json
 afea6437d06ee2ff4d2eb1574464184c31e9c7441aa07f4a2ac6258b11039cfd  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/maker-summary.v1.json
 78500814f2918040c5c8c0e3a9f26cdc858bf33027a07e51e782e02ea88329f6  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/maker-report.md
+ee566e63906c1a4fe4ce665501c293f8d155935d7f65b24e5095477c3dd6c7ce  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/R4-SHA256SUMS.txt
+3fa766468f339d100a825879182cfeb9ffe3c1be59214dd06913124db6050e3f  .agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R5.red.json
+9c91222e6f1ffcb4fffeac777a8c98586ff9bae6e5e7579bec8ffbfabd2422db  .agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R5.tdd.json
+2da06a50cd5cd808f471aecd21450d6211f58d66330dbc1d85cb1889b6730913  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-capture.v1.json
+b6211a4dc4ffea14b6a08fe07a1cf99516ee5bd066daa4ade0b6c241d955560b  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-repeat.v1.json
+52a871ca44112dc2d4e7540f7e9548079a05619f967b4c4d9445b999d7a42daf  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-1.tap
+d88556d5e8e437eba50505db6ac200e52910353ced62ad4eafbf6195147387a5  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-2.tap
+1450b253c9058d5bc36886a4c5d6d6969c29dbc5e85efb06b506bb6c20a33fea  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/maker-report.md
+77ae62452d6e02f2164a9c0471700aac13b3c3a1a200e0f45c4ca13f4daf6cec  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/maker-summary.v1.json
+04010949acbef7a0427751be7c96aedcb4e6aa2e0d76c22c662e55693dae5082  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/run-coverage-capture-verifier.cmd
+f01b0b254c054297aa2452177a0a137f9ecc430957daf986054a0087f4ff34c5  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verification-matrix.v1.json
+55aa4498ca2247ce4fbe1ed660966a907358b6d842af1bd9e88b3dba9bbb0a48  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verify-coverage-capture.cjs

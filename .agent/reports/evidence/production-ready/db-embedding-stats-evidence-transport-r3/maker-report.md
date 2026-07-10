@@ -9,8 +9,8 @@ The independent R3 checker reproduced all behavioral rails but did not
 reproduce the committed coverage values. Those numeric claims have therefore
 been removed instead of being repeated as current evidence.
 
-The exact R4 reruns, coverage scopes, fail-closed null regressions, checksums,
+The exact R5 reruns, coverage scopes, fail-closed null regressions, checksums,
 and current readiness packet are under
-`.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/`.
+`.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/`.
 
-Status: **SUPERSEDED_BY_R4**.
+Status: **SUPERSEDED_BY_R5**.
