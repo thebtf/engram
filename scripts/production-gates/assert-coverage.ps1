@@ -14,7 +14,21 @@ $RequiredPackageThresholds = [ordered]@{
     'internal/module/'             = 75.0
     'internal/handlers/engramcore' = 60.0
     'internal/handlers/loom'       = 70.0
-    'cmd/engram/'                  = 0.0
+    'cmd/engram/'                  = 10.0
+    'cmd/engram-server/'           = 10.0
+    'internal/update/'             = 20.0
+    'internal/worker/'             = 55.0
+    'internal/mcp/'                = 55.0
+    'internal/db/gorm/'            = 55.0
+}
+
+$CriticalPathLabels = @{
+    'cmd/engram/'        = 'launcher'
+    'cmd/engram-server/' = 'server'
+    'internal/update/'   = 'update'
+    'internal/worker/'   = 'worker'
+    'internal/mcp/'      = 'mcp'
+    'internal/db/gorm/'  = 'database'
 }
 
 function Show-Help {
@@ -28,7 +42,12 @@ overall statement coverage, and the historical package gates remain mandatory:
   internal/module/              >= 75%
   internal/handlers/engramcore  >= 60%
   internal/handlers/loom        >= 70%
-  cmd/engram/                   >= 0% (presence is still required)
+  cmd/engram/                   >= 10% (launcher critical path)
+  cmd/engram-server/            >= 10% (server critical path)
+  internal/update/              >= 20% (update critical path)
+  internal/worker/              >= 55% (worker critical path)
+  internal/mcp/                 >= 55% (MCP critical path)
+  internal/db/gorm/             >= 55% (database critical path)
 
 Usage:
   pwsh ./scripts/production-gates/assert-coverage.ps1 \
@@ -111,7 +130,12 @@ function Get-CoverageSummary {
         $pass = $present -and $exactPercent -ge [double]$entry.Value
         if (-not $present) { $errors.Add("required package coverage is missing: $($entry.Key)") }
         elseif (-not $pass) { $errors.Add(("package coverage below threshold: {0} {1:N2}% < {2:N2}%" -f $entry.Key, $percent, [double]$entry.Value)) }
-        $required.Add([pscustomobject]@{ package_prefix = $entry.Key; covered_statements = $covered; total_statements = $total; percent = $percent; threshold = [double]$entry.Value; present = $present; pass = $pass })
+        $criticalPath = $CriticalPathLabels.ContainsKey($entry.Key)
+        $required.Add([pscustomobject]@{
+            package_prefix = $entry.Key; covered_statements = $covered; total_statements = $total
+            percent = $percent; threshold = [double]$entry.Value; present = $present; pass = $pass
+            critical_path = $criticalPath; critical_path_label = if ($criticalPath) { $CriticalPathLabels[$entry.Key] } else { $null }
+        })
     }
 
     $overallExactPercent = if ($overallTotal -gt 0) { ($overallCovered / $overallTotal) * 100.0 } else { 0.0 }
@@ -130,7 +154,7 @@ function Get-CoverageSummary {
 function Assert-SelfTest { param([bool]$Condition, [string]$Message); if (-not $Condition) { throw "SELFTEST FAIL: $Message" } }
 
 function New-SyntheticProfile {
-    param([Parameter(Mandatory)][string]$Path, [int]$EngramCoreCovered = 6, [int]$OtherCovered = 10, [switch]$OmitLoom)
+    param([Parameter(Mandatory)][string]$Path, [int]$EngramCoreCovered = 6, [int]$OtherCovered = 100, [switch]$OmitLoom)
     $lines = [System.Collections.Generic.List[string]]::new()
     $lines.Add('mode: set')
     $lines.Add('github.com/thebtf/engram/internal/module/a.go:1.1,2.1 10 1')
@@ -140,9 +164,14 @@ function New-SyntheticProfile {
         $lines.Add('github.com/thebtf/engram/internal/handlers/loom/a.go:1.1,2.1 7 1')
         $lines.Add('github.com/thebtf/engram/internal/handlers/loom/b.go:1.1,2.1 3 0')
     }
-    $lines.Add('github.com/thebtf/engram/cmd/engram/main.go:1.1,2.1 10 0')
+    $lines.Add('github.com/thebtf/engram/cmd/engram/main.go:1.1,2.1 10 1')
+    $lines.Add('github.com/thebtf/engram/cmd/engram-server/main.go:1.1,2.1 10 1')
+    $lines.Add('github.com/thebtf/engram/internal/update/update.go:1.1,2.1 10 1')
+    $lines.Add('github.com/thebtf/engram/internal/worker/service.go:1.1,2.1 10 1')
+    $lines.Add('github.com/thebtf/engram/internal/mcp/server.go:1.1,2.1 10 1')
+    $lines.Add('github.com/thebtf/engram/internal/db/gorm/store.go:1.1,2.1 10 1')
     if ($OtherCovered -gt 0) { $lines.Add("github.com/thebtf/engram/internal/other/a.go:1.1,2.1 $OtherCovered 1") }
-    if ($OtherCovered -lt 10) { $lines.Add("github.com/thebtf/engram/internal/other/b.go:1.1,2.1 $(10 - $OtherCovered) 0") }
+    if ($OtherCovered -lt 100) { $lines.Add("github.com/thebtf/engram/internal/other/b.go:1.1,2.1 $(100 - $OtherCovered) 0") }
     Write-Utf8NoBom $Path (($lines -join "`n") + "`n")
 }
 
@@ -229,7 +258,7 @@ try {
     Write-Utf8NoBom $SummaryPath (($summary | ConvertTo-Json -Depth 10) + "`n")
     Write-Output ("coverage verdict={0} overall={1:N2}% threshold={2:N2}% statements={3}/{4}" -f $summary.verdict, $summary.overall.percent, $summary.overall.threshold, $summary.overall.covered_statements, $summary.overall.total_statements)
     foreach ($package in $summary.required_packages) {
-        Write-Output ("coverage package={0} percent={1:N2}% threshold={2:N2}% present={3} pass={4}" -f $package.package_prefix, $package.percent, $package.threshold, $package.present, $package.pass)
+        Write-Output ("coverage package={0} critical_path={1} percent={2:N2}% threshold={3:N2}% present={4} pass={5}" -f $package.package_prefix, $package.critical_path_label, $package.percent, $package.threshold, $package.present, $package.pass)
     }
     Write-Output "summary=$([System.IO.Path]::GetFullPath($SummaryPath))"
     if ($summary.verdict -ne 'PASS') { exit 1 }

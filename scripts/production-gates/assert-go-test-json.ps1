@@ -3,7 +3,7 @@ param(
     [string]$InputPath,
     [string]$SummaryPath,
     [switch]$FailOnUnexpectedSkip,
-    [string[]]$AllowedSkipPattern = @(),
+    [Alias('AllowedSkipPattern')][string[]]$AllowedSkipIdentity = @(),
     [switch]$Help,
     [switch]$SelfTest
 )
@@ -25,7 +25,7 @@ Usage:
     -InputPath <go-test.jsonl> \
     -SummaryPath <summary.json> \
     [-FailOnUnexpectedSkip] \
-    [-AllowedSkipPattern <regex>[,<regex>...]]
+    [-AllowedSkipIdentity <exact-package-or-package/test>[,...]]
 
 Options:
   -Help                    Print this help and exit 0.
@@ -33,7 +33,8 @@ Options:
   -InputPath               Raw stdout produced by `go test -json`.
   -SummaryPath             JSON summary destination. Defaults beside input.
   -FailOnUnexpectedSkip    Make any non-allowlisted test/package skip fatal.
-  -AllowedSkipPattern      Regex matched against `package/test` and skip output.
+  -AllowedSkipIdentity     Exact case-sensitive package or package/test identity.
+                           Regex, wildcard, output-only, and broad matches are rejected.
 
 Exit codes:
   0  Transcript is structurally complete and all enabled assertions pass.
@@ -48,12 +49,19 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText([System.IO.Path]::GetFullPath($Path), $Content, [System.Text.UTF8Encoding]::new($false))
 }
 
+function Test-IsValidAllowedSkipIdentity {
+    param([string]$Identity)
+    if ([string]::IsNullOrWhiteSpace($Identity)) { return $false }
+    if ($Identity.Length -gt 512) { return $false }
+    if ($Identity -match '[\x00-\x1F\x7F]') { return $false }
+    if ($Identity.Contains('*') -or $Identity.Contains('?')) { return $false }
+    return $true
+}
+
 function Test-MatchesAllowedSkip {
-    param([Parameter(Mandatory)][string]$Identity, [string]$Output, [string[]]$Patterns)
-    foreach ($pattern in $Patterns) {
-        if ([string]::IsNullOrWhiteSpace($pattern)) { continue }
-        if ([regex]::IsMatch($Identity, $pattern) -or
-            (-not [string]::IsNullOrEmpty($Output) -and [regex]::IsMatch($Output, $pattern))) { return $true }
+    param([Parameter(Mandatory)][string]$Identity, [string[]]$AllowedIdentities)
+    foreach ($allowedIdentity in $AllowedIdentities) {
+        if ([string]::Equals($Identity, $allowedIdentity, [System.StringComparison]::Ordinal)) { return $true }
     }
     return $false
 }
@@ -62,30 +70,35 @@ function Read-GoTestTranscript {
     param(
         [Parameter(Mandatory)][string]$Path,
         [bool]$EnforceUnexpectedSkip,
-        [string[]]$AllowedPatterns
+        [string[]]$AllowedIdentities
     )
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         return [pscustomobject]@{
             schema_version = 1; verdict = 'FAIL'; input_path = [System.IO.Path]::GetFullPath($Path)
-            fail_on_unexpected_skip = $EnforceUnexpectedSkip; allowed_skip_patterns = @($AllowedPatterns)
+            fail_on_unexpected_skip = $EnforceUnexpectedSkip; allowed_skip_identities = @($AllowedIdentities)
             counts = [ordered]@{ packages = 0; tests = 0; passed = 0; failed = 0; skipped = 0; no_tests = 0; zero_tests = 1; incomplete = 0; unexpected_skips = 0; malformed_lines = 0 }
             packages = @(); tests = @(); unexpected_skips = @(); errors = @("input transcript does not exist: $Path")
         }
     }
 
-    $patternErrors = [System.Collections.Generic.List[string]]::new()
-    foreach ($pattern in $AllowedPatterns) {
-        if ([string]::IsNullOrWhiteSpace($pattern)) { continue }
-        try { [void][regex]::new($pattern) }
-        catch { $patternErrors.Add("invalid allowed-skip regex '$pattern': $($_.Exception.Message)") }
+    $identityErrors = [System.Collections.Generic.List[string]]::new()
+    $seenIdentities = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($allowedIdentity in $AllowedIdentities) {
+        if (-not (Test-IsValidAllowedSkipIdentity $allowedIdentity)) {
+            $identityErrors.Add("invalid allowed-skip identity '$allowedIdentity': identities must be non-empty exact values without wildcards or control characters")
+            continue
+        }
+        if (-not $seenIdentities.Add($allowedIdentity)) {
+            $identityErrors.Add("duplicate allowed-skip identity '$allowedIdentity'")
+        }
     }
-    if ($patternErrors.Count -gt 0) {
+    if ($identityErrors.Count -gt 0) {
         return [pscustomobject]@{
             schema_version = 1; verdict = 'FAIL'; input_path = [System.IO.Path]::GetFullPath($Path)
-            fail_on_unexpected_skip = $EnforceUnexpectedSkip; allowed_skip_patterns = @($AllowedPatterns)
+            fail_on_unexpected_skip = $EnforceUnexpectedSkip; allowed_skip_identities = @($AllowedIdentities)
             counts = [ordered]@{ packages = 0; tests = 0; passed = 0; failed = 0; skipped = 0; no_tests = 0; zero_tests = 1; incomplete = 0; unexpected_skips = 0; malformed_lines = 0 }
-            packages = @(); tests = @(); unexpected_skips = @(); errors = @($patternErrors)
+            packages = @(); tests = @(); unexpected_skips = @(); errors = @($identityErrors)
         }
     }
 
@@ -139,7 +152,7 @@ function Read-GoTestTranscript {
             $testState.outcome = $action
             $testState.elapsed_seconds = $elapsed
             if ($action -eq 'skip') {
-                $testState.skip_allowed = Test-MatchesAllowedSkip -Identity "$packageName/$testName" -Output $testState.last_output -Patterns $AllowedPatterns
+                $testState.skip_allowed = Test-MatchesAllowedSkip -Identity "$packageName/$testName" -AllowedIdentities $AllowedIdentities
             }
         }
     }
@@ -154,7 +167,7 @@ function Read-GoTestTranscript {
             }
         }
         foreach ($package in $packages) {
-            if ($package.outcome -eq 'skip' -and -not (Test-MatchesAllowedSkip -Identity $package.package -Output $package.last_output -Patterns $AllowedPatterns)) {
+            if ($package.outcome -eq 'skip' -and -not (Test-MatchesAllowedSkip -Identity $package.package -AllowedIdentities $AllowedIdentities)) {
                 $unexpectedSkips.Add([pscustomobject]@{ package = $package.package; test = $null; output = $package.last_output })
             }
         }
@@ -171,7 +184,7 @@ function Read-GoTestTranscript {
         verdict = $verdict
         input_path = [System.IO.Path]::GetFullPath($Path)
         fail_on_unexpected_skip = $EnforceUnexpectedSkip
-        allowed_skip_patterns = @($AllowedPatterns)
+        allowed_skip_identities = @($AllowedIdentities)
         counts = [ordered]@{
             packages = $packages.Count; tests = $tests.Count
             passed = @($tests | Where-Object outcome -eq 'pass').Count
@@ -213,10 +226,18 @@ function Invoke-SelfTest {
         ) -join "`n") + "`n")
         $skip = Read-GoTestTranscript $skipPath $true @()
         Assert-SelfTest ($skip.verdict -eq 'FAIL' -and $skip.counts.unexpected_skips -eq 1) 'unexpected skip did not fail'
-        $allowed = Read-GoTestTranscript $skipPath $true @('TestNeedsDB$')
+        $allowed = Read-GoTestTranscript $skipPath $true @('example/skip/TestNeedsDB')
         Assert-SelfTest ($allowed.verdict -eq 'PASS') 'allowlisted skip did not pass'
-        $invalidPattern = Read-GoTestTranscript $skipPath $true @('[')
-        Assert-SelfTest ($invalidPattern.verdict -eq 'FAIL' -and @($invalidPattern.errors | Where-Object { $_ -match 'invalid allowed-skip regex' }).Count -eq 1) 'invalid allowlist regex did not produce a machine failure summary'
+        $sibling = Read-GoTestTranscript $skipPath $true @('example/skip/TestNeeds')
+        Assert-SelfTest ($sibling.verdict -eq 'FAIL' -and $sibling.counts.unexpected_skips -eq 1) 'sibling-prefix allowlist overmatched the skipped test'
+        $outputOnly = Read-GoTestTranscript $skipPath $true @('DATABASE_DSN not set')
+        Assert-SelfTest ($outputOnly.verdict -eq 'FAIL' -and $outputOnly.counts.unexpected_skips -eq 1) 'skip output was accepted as an identity allowlist'
+        foreach ($broadIdentity in @('', '.*', '^.*$', 'example/skip/Test*')) {
+            $broad = Read-GoTestTranscript $skipPath $true @($broadIdentity)
+            Assert-SelfTest ($broad.verdict -eq 'FAIL' -and @($broad.errors | Where-Object { $_ -match 'invalid allowed-skip identity' }).Count -eq 1) "broad allowlist '$broadIdentity' was accepted"
+        }
+        $duplicate = Read-GoTestTranscript $skipPath $true @('example/skip/TestNeedsDB', 'example/skip/TestNeedsDB')
+        Assert-SelfTest ($duplicate.verdict -eq 'FAIL' -and @($duplicate.errors | Where-Object { $_ -match 'duplicate allowed-skip identity' }).Count -eq 1) 'duplicate allowlist identity was accepted'
 
         $noTestsPath = Join-Path $root 'no-tests.jsonl'
         Write-Utf8NoBom $noTestsPath ((@(
@@ -242,7 +263,7 @@ if ([string]::IsNullOrWhiteSpace($InputPath)) { Write-Error '-InputPath is requi
 if ([string]::IsNullOrWhiteSpace($SummaryPath)) { $SummaryPath = "$InputPath.summary.json" }
 
 try {
-    $summary = Read-GoTestTranscript $InputPath ([bool]$FailOnUnexpectedSkip) $AllowedSkipPattern
+    $summary = Read-GoTestTranscript $InputPath ([bool]$FailOnUnexpectedSkip) $AllowedSkipIdentity
     Write-Utf8NoBom $SummaryPath (($summary | ConvertTo-Json -Depth 12) + "`n")
     Write-Output ("go test JSON verdict={0} packages={1} tests={2} passed={3} failed={4} skipped={5} unexpected_skips={6} malformed={7}" -f $summary.verdict, $summary.counts.packages, $summary.counts.tests, $summary.counts.passed, $summary.counts.failed, $summary.counts.skipped, $summary.counts.unexpected_skips, $summary.counts.malformed_lines)
     Write-Output "summary=$([System.IO.Path]::GetFullPath($SummaryPath))"

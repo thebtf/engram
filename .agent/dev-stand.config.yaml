@@ -5,12 +5,12 @@ shape: docker-compose
 # name and non-default host ports. The critical-suite runner exports the env
 # below before invoking the lifecycle commands.
 up:
-  command: "docker compose -p engram-critical-stand -f docker-compose.yml up -d --build --wait"
-  readiness_check: "docker compose -p engram-critical-stand -f docker-compose.yml exec -T postgres pg_isready -U engram -d engram && curl -fsS http://localhost:37778/health"
-  timeout_seconds: 300
+  command: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -DevStandAction Up -ComposeProject engram-critical-stand -ComposeFile docker-compose.yml"
+  readiness_check: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -DevStandAction Ready -ComposeProject engram-critical-stand -ComposeFile docker-compose.yml"
+  timeout_seconds: 600
 down:
-  command: "docker compose -p engram-critical-stand -f docker-compose.yml down -v --remove-orphans"
-  timeout_seconds: 120
+  command: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -DevStandAction Down -ComposeProject engram-critical-stand -ComposeFile docker-compose.yml"
+  timeout_seconds: 180
 logs:
   command: "docker compose -p engram-critical-stand -f docker-compose.yml logs --no-color --tail=300"
 
@@ -23,6 +23,27 @@ env:
   DATABASE_DSN: "postgres://engram:engram@postgres:5432/engram?sslmode=disable"
   STAND_API_URL: "http://localhost:37778"
   STAND_OPERATOR_URL: "http://localhost:3001"
+  NUXT_OPERATOR_API_TARGET: "http://server:37777"
+  ENGRAM_AUTH_DISABLED: "false"
+
+credential_policy:
+  admin_token: "generated cryptographically inside the Up runner process"
+  persistence: "never written to raw logs, machine summaries, config, or caller environment"
+  auth_disabled_fallback: false
+
+image_scan:
+  command: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -DevStandAction Scan -ComposeProject engram-critical-stand -ComposeFile docker-compose.yml"
+  discovery: "docker service inventory filtered by com.docker.compose.project=engram-critical-stand"
+  scanner: "docker scout cves"
+  severities: ["critical", "high"]
+  fail_on_findings: true
+  machine_evidence: "dev-stand/<run-id>-scan/docker-scout-*.sarif.json plus summary.json"
+  exact_service_images:
+    postgres: "pgvector/pgvector:pg17"
+    server: "ghcr.io/thebtf/engram:main"
+    operator-console: "ghcr.io/thebtf/engram-operator-console:main"
+  forbidden_synthetic_tags:
+    - "engram:prc-candidate"
 
 database_evidence:
   runner: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1"

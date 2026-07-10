@@ -170,6 +170,14 @@ function Invoke-Psql {
 
 function Assert-SelfTest { param([bool]$Condition, [string]$Message); if (-not $Condition) { throw "SELFTEST FAIL: $Message" } }
 
+function Get-CleanupStatus {
+    param([Parameter(Mandatory)][string]$Verdict, [AllowNull()]$DatabaseExistedBefore, [Parameter(Mandatory)][int]$Remaining)
+    if ($Verdict -ne 'PASS') { return 'FAIL' }
+    if ($DatabaseExistedBefore -eq $true -and $Remaining -eq 0) { return 'PASS' }
+    if ($DatabaseExistedBefore -eq $false -and $Remaining -eq 0) { return 'NOT_APPLICABLE' }
+    return 'FAIL'
+}
+
 function Invoke-SelfTest {
     Assert-SafeDatabaseName 'engram_prc_rg_20260710_abcd1234_r1' 'engram_prc_rg_'
     $unsafeRejected = $false; try { Assert-SafeDatabaseName 'engram' 'engram_prc_rg_' } catch { $unsafeRejected = $true }
@@ -178,6 +186,9 @@ function Invoke-SelfTest {
     Assert-SelfTest ($connection.User -eq 'release_user' -and $connection.Port -eq 55432 -and $connection.SslMode -eq 'disable') 'DSN parsing failed'
     $protected = Protect-Text 'dsn=postgres://release_user:s3cr3t@localhost:55432/postgres?sslmode=disable password=s3cr3t' $connection
     Assert-SelfTest (-not $protected.Contains('s3cr3t')) 'DSN/password redaction failed'
+    Assert-SelfTest ((Get-CleanupStatus 'PASS' $true 0) -eq 'PASS') 'existing database cleanup status was not PASS'
+    Assert-SelfTest ((Get-CleanupStatus 'PASS' $false 0) -eq 'NOT_APPLICABLE') 'absent database cleanup status was not NOT_APPLICABLE'
+    Assert-SelfTest ((Get-CleanupStatus 'PASS' $false 1) -eq 'FAIL') 'non-zero absence proof was accepted'
     Write-Output 'SELFTEST PASS: cleanup-db-sessions.ps1'
 }
 
@@ -189,21 +200,31 @@ if ([string]::IsNullOrWhiteSpace($RunId)) { $RunId = 'cleanup-' + [DateTimeOffse
 
 $cleanupDirectory = Join-Path $ArtifactRoot 'cleanup'; New-Item -ItemType Directory -Path $cleanupDirectory -Force | Out-Null
 $summaryPath = Join-Path $cleanupDirectory 'cleanup.json'
-$connection = $null; $verdict = 'FAIL'; [int]$remaining = -1; $terminated = $null
+$connection = $null; $verdict = 'FAIL'; [int]$remaining = -1; $terminated = $null; $databaseExistedBefore = $null
 $errors = [System.Collections.Generic.List[string]]::new()
 
 try {
     Assert-SafeDatabaseName $DatabaseName $ExpectedPrefix
     if ($SchemaName -notmatch '^[a-z][a-z0-9_]{0,62}$') { throw "schema '$SchemaName' is not a safe PostgreSQL identifier" }
     $connection = Get-ConnectionInfo $AdminDsn
+    # Cleanup never trusts the database component of the caller's DSN. An early
+    # create/start/capture failure may have used an invalid or now-missing
+    # database, while the run-owned database can still exist. PostgreSQL's
+    # maintenance database is the stable control-plane connection for DROP.
+    $maintenanceDatabase = 'postgres'
     $quotedDb = '"' + $DatabaseName.Replace('"', '""') + '"'
     $literalDb = $DatabaseName.Replace("'", "''")
+    $existsBefore = Invoke-Psql 'database-exists-before-cleanup' "SELECT count(*) FROM pg_database WHERE datname = '$literalDb';" $maintenanceDatabase (Join-Path $cleanupDirectory 'database-exists-before') $connection $PostgresContainer
+    [int]$existsBeforeCount = -1
+    if ($existsBefore.ExitCode -ne 0) { $errors.Add("database existence check failed with exit $($existsBefore.ExitCode)") }
+    elseif (-not [int]::TryParse($existsBefore.Stdout.Trim(), [ref]$existsBeforeCount)) { $errors.Add("database existence check returned non-integer '$($existsBefore.Stdout.Trim())'") }
+    else { $databaseExistedBefore = $existsBeforeCount -gt 0 }
     $snapshotSql = "SELECT COALESCE(json_agg(row_to_json(s)), '[]'::json)::text FROM (SELECT pid, usename, datname, state, backend_type, application_name, client_addr::text AS client_addr, wait_event_type, wait_event, query_start FROM pg_stat_activity WHERE datname = '$literalDb' ORDER BY pid) AS s;"
-    $before = Invoke-Psql 'pg-stat-activity-before-cleanup' $snapshotSql $connection.Database (Join-Path $cleanupDirectory 'pg-stat-activity-before') $connection $PostgresContainer
+    $before = Invoke-Psql 'pg-stat-activity-before-cleanup' $snapshotSql $maintenanceDatabase (Join-Path $cleanupDirectory 'pg-stat-activity-before') $connection $PostgresContainer
     if ($before.ExitCode -ne 0) { $errors.Add("pg_stat_activity snapshot failed with exit $($before.ExitCode)") }
 
     $terminateSql = "SELECT COALESCE(json_agg(row_to_json(s)), '[]'::json)::text FROM (SELECT pid, pg_terminate_backend(pid) AS terminated FROM pg_stat_activity WHERE datname = '$literalDb' AND pid <> pg_backend_pid() ORDER BY pid) AS s;"
-    $terminate = Invoke-Psql 'terminate-database-sessions' $terminateSql $connection.Database (Join-Path $cleanupDirectory 'terminate-sessions') $connection $PostgresContainer
+    $terminate = Invoke-Psql 'terminate-database-sessions' $terminateSql $maintenanceDatabase (Join-Path $cleanupDirectory 'terminate-sessions') $connection $PostgresContainer
     if ($terminate.ExitCode -ne 0) { $errors.Add("session termination failed with exit $($terminate.ExitCode)") }
     else {
         try {
@@ -215,9 +236,9 @@ try {
         catch { $errors.Add("could not parse termination result: $($_.Exception.Message)") }
     }
 
-    $drop = Invoke-Psql 'drop-fresh-database' "DROP DATABASE IF EXISTS $quotedDb WITH (FORCE);" $connection.Database (Join-Path $cleanupDirectory 'drop-database') $connection $PostgresContainer
+    $drop = Invoke-Psql 'drop-fresh-database' "DROP DATABASE IF EXISTS $quotedDb WITH (FORCE);" $maintenanceDatabase (Join-Path $cleanupDirectory 'drop-database') $connection $PostgresContainer
     if ($drop.ExitCode -ne 0) { $errors.Add("database drop failed with exit $($drop.ExitCode)") }
-    $verify = Invoke-Psql 'verify-database-absent' "SELECT count(*) FROM pg_database WHERE datname = '$literalDb';" $connection.Database (Join-Path $cleanupDirectory 'verify-database-absent') $connection $PostgresContainer
+    $verify = Invoke-Psql 'verify-database-absent' "SELECT count(*) FROM pg_database WHERE datname = '$literalDb';" $maintenanceDatabase (Join-Path $cleanupDirectory 'verify-database-absent') $connection $PostgresContainer
     if ($verify.ExitCode -ne 0) { $errors.Add("database absence verification failed with exit $($verify.ExitCode)") }
     elseif (-not [int]::TryParse($verify.Stdout.Trim(), [ref]$remaining)) { $errors.Add("database absence verification returned non-integer '$($verify.Stdout.Trim())'") }
     elseif ($remaining -ne 0) { $errors.Add('database still exists after cleanup') }
@@ -225,11 +246,14 @@ try {
 }
 catch { $errors.Add($_.Exception.Message) }
 finally {
+    $cleanupStatus = Get-CleanupStatus $verdict $databaseExistedBefore $remaining
     $summary = [pscustomobject]@{
         schema_version = 1; run_id = $RunId; timestamp = [DateTimeOffset]::UtcNow.ToString('O'); verdict = $verdict
         database = $DatabaseName; schema = $SchemaName; database_schema_identity = "$DatabaseName.$SchemaName"
         admin_dsn = if ($null -ne $connection) { Get-RedactedDsn $AdminDsn } else { 'REDACTED' }
         postgres_container = if ([string]::IsNullOrWhiteSpace($PostgresContainer)) { $null } else { $PostgresContainer }
+        cleanup_status = $cleanupStatus; cleanup_attempted = $script:CommandRecords.Count -gt 0; database_existed_before = $databaseExistedBefore
+        absence_verified = $remaining -eq 0
         terminated_sessions = $terminated; remaining_database_count = $remaining
         commands = @($script:CommandRecords); errors = @($errors)
     }
