@@ -1,0 +1,25 @@
+format=compact status/failure extraction from complete go test output
+full_output_captured=true
+filter=run metadata, top-level failures, client-exhaustion records, package result, exit and residue
+base_sha=bd68c05baf4b7250096dd84f56bebea2aa555970
+head_sha=bd68c05baf4b7250096dd84f56bebea2aa555970
+database=engram_mkr_dbph_successor_broad_a
+command=go test -p=1 ./internal/db/gorm -count=1 -v
+max_connections=100
+superuser_reserved_connections=3
+started_utc=2026-07-10T12:46:28.7916082Z
+activity_before_test=0
+--- FAIL: TestRuleGovernanceStore_AnnotatedCandidateWaitsUntilReviewAfter (0.20s)
+--- FAIL: TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables (0.21s)
+--- FAIL: TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectScopedReads (0.14s)
+--- FAIL: TestMigration144_RuleGovernanceRollbackAndReapply (0.16s)
+--- FAIL: TestMigration144_RuleGovernanceEscapeConstraints (0.16s)
+--- FAIL: TestMigration144_RuleGovernanceSnapshotStatusesAcceptExtendedStates (0.17s)
+FAIL
+FAIL    github.com/thebtf/engram/internal/db/gorm    35.530s
+FAIL
+test_exit=1
+activity_after_test_process=0
+database_residue=0
+activity_residue=0
+finished_utc=2026-07-10T12:47:07.4812942Z

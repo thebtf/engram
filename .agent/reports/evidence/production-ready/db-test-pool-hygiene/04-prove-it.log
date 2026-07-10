@@ -1,0 +1,87 @@
+base_sha=bd68c05baf4b7250096dd84f56bebea2aa555970
+head_sha=bd68c05baf4b7250096dd84f56bebea2aa555970
+database=engram_mkr_dbph_prove_it_a
+command=go test -p=1 ./internal/db/gorm -run ^TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose$ -count=1 -v
+max_connections=100
+superuser_reserved_connections=3
+started_utc=2026-07-10T12:44:13.6263569Z
+activity_before_test=0
+=== RUN   TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose
+
+2026/07/10 15:44:16 [31;1mD:/Dev/engram/.agent/worktrees/dbph/internal/db/gorm/migrations.go:483 [35;1mERROR: column "is_deprecated" does not exist (SQLSTATE 42703)
+[0m[33m[0.999ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS idx_patterns_frequency
+                     ON patterns(frequency DESC, last_seen_at_epoch DESC)
+                     WHERE is_deprecated = 0
+
+2026/07/10 15:44:16 [31;1mD:/Dev/engram/.agent/worktrees/dbph/internal/db/gorm/migrations.go:578 [35;1mERROR: column "is_deprecated" does not exist (SQLSTATE 42703)
+[0m[33m[0.500ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS idx_patterns_type_project
+                     ON patterns(type, project, frequency DESC)
+                     WHERE is_deprecated = 0
+
+2026/07/10 15:44:16 [31;1mD:/Dev/engram/.agent/worktrees/dbph/internal/db/gorm/migrations.go:578 [35;1mERROR: column "source_observation_id" does not exist (SQLSTATE 42703)
+[0m[33m[0.497ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS idx_relations_source_type
+                     ON observation_relations(source_observation_id, relation_type)
+
+2026/07/10 15:44:16 [31;1mD:/Dev/engram/.agent/worktrees/dbph/internal/db/gorm/migrations.go:578 [35;1mERROR: column "target_observation_id" does not exist (SQLSTATE 42703)
+[0m[33m[1.002ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS idx_relations_target_type
+                     ON observation_relations(target_observation_id, relation_type)
+
+2026/07/10 15:44:16 [31;1mD:/Dev/engram/.agent/worktrees/dbph/internal/db/gorm/migrations.go:670 [35;1mERROR: column "source_observation_id" does not exist (SQLSTATE 42703)
+[0m[33m[0.501ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS idx_relations_source_type_target
+                     ON observation_relations(source_observation_id, relation_type, target_observation_id)
+
+2026/07/10 15:44:16 [31;1mD:/Dev/engram/.agent/worktrees/dbph/internal/db/gorm/migrations.go:670 [35;1mERROR: column "target_observation_id" does not exist (SQLSTATE 42703)
+[0m[33m[1.000ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS idx_relations_target_type_source
+                     ON observation_relations(target_observation_id, relation_type, source_observation_id)
+
+2026/07/10 15:44:16 [31;1mD:/Dev/engram/.agent/worktrees/dbph/internal/db/gorm/migrations.go:1447 [35;1mERROR: relation "observation_vectors" does not exist (SQLSTATE 42P01)
+[0m[33m[1.001ms] [34;1m[rows:0][0m
+                DELETE FROM observation_vectors
+                WHERE id IN (
+                    SELECT ov.id FROM observation_vectors ov
+                    LEFT JOIN observations o ON ov.metadata->>'sqlite_id' = o.id::text
+                    WHERE o.id IS NULL
+                )
+
+{"level":"warn","error":"ERROR: relation \"observation_vectors\" does not exist (SQLSTATE 42P01)","time":"2026-07-10T15:44:16+03:00","message":"migration 040: orphan vector cleanup failed (non-fatal)"}
+{"level":"info","garbage_deleted":0,"orphan_vectors_deleted":0,"time":"2026-07-10T15:44:16+03:00","message":"migration 040: garbage cleanup complete"}
+{"level":"info","orphan_vectors_deleted":0,"time":"2026-07-10T15:44:16+03:00","message":"migration 041: orphan vector purge complete"}
+{"level":"info","patterns_deleted":0,"time":"2026-07-10T15:44:16+03:00","message":"migration 042: low-quality pattern purge complete"}
+{"level":"info","total_deleted":0,"time":"2026-07-10T15:44:17+03:00","message":"migration 043: radical observation cleanup complete"}
+
+2026/07/10 15:44:17 [31;1mD:/Dev/engram/.agent/worktrees/dbph/internal/db/gorm/migrations.go:3502 [35;1mERROR: extension "vectorscale" is not available (SQLSTATE 0A000)
+[0m[33m[0.500ms] [34;1m[rows:0][0m CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE
+{"level":"warn","error":"ERROR: extension \"vectorscale\" is not available (SQLSTATE 0A000)","time":"2026-07-10T15:44:17+03:00","message":"migration 109: vectorscale extension not available, skipping DiskANN index"}
+=== RUN   TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose/owner-0
+    candidate_store_test.go:58: baseline_sessions=0 child_live_sessions=1
+=== NAME  TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose
+    candidate_store_test.go:68: baseline_sessions=0 sessions_after_owner_cleanup=1
+    candidate_store_test.go:70: child pool leaked past owner cleanup: baseline=0 after=1
+=== RUN   TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose/owner-1
+    candidate_store_test.go:58: baseline_sessions=0 child_live_sessions=2
+=== NAME  TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose
+    candidate_store_test.go:68: baseline_sessions=0 sessions_after_owner_cleanup=2
+    candidate_store_test.go:70: child pool leaked past owner cleanup: baseline=0 after=2
+=== RUN   TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose/owner-2
+    candidate_store_test.go:58: baseline_sessions=0 child_live_sessions=3
+=== NAME  TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose
+    candidate_store_test.go:68: baseline_sessions=0 sessions_after_owner_cleanup=3
+    candidate_store_test.go:70: child pool leaked past owner cleanup: baseline=0 after=3
+=== RUN   TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose/owner-3
+    candidate_store_test.go:58: baseline_sessions=0 child_live_sessions=4
+=== NAME  TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose
+    candidate_store_test.go:68: baseline_sessions=0 sessions_after_owner_cleanup=4
+    candidate_store_test.go:70: child pool leaked past owner cleanup: baseline=0 after=4
+--- FAIL: TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose (7.20s)
+    --- PASS: TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose/owner-0 (0.10s)
+    --- PASS: TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose/owner-1 (0.11s)
+    --- PASS: TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose/owner-2 (0.11s)
+    --- PASS: TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose/owner-3 (0.11s)
+FAIL
+FAIL    github.com/thebtf/engram/internal/db/gorm    7.356s
+FAIL
+test_exit=1
+activity_after_test_process=0
+database_residue=0
+activity_residue=0
+finished_utc=2026-07-10T12:44:24.7787771Z

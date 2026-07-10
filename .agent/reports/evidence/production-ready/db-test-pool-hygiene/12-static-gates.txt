@@ -1,0 +1,8 @@
+go_version=go1.25.11 windows/amd64
+command=go vet ./...
+exit_code=0
+command=go build ./...
+exit_code=0
+command=git diff --check
+exit_code=0
+coverage=N/A: only *_test.go infrastructure changed; Go production coverage does not instrument test helpers
