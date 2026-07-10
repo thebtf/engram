@@ -1516,14 +1516,19 @@ try {
         if ([string]::IsNullOrWhiteSpace($EvidenceNamespace)) { $errors.Add('Diff mode requires -EvidenceNamespace') }
         if ([string]::IsNullOrWhiteSpace($ReportNamespace)) { $errors.Add('Diff mode requires -ReportNamespace') }
 
-        $sliceRows = if ([string]::IsNullOrWhiteSpace($Slice)) { @() } else { @($ledger.slices | Where-Object slice -ceq $Slice) }
+        [object[]]$sliceRows = @(
+            if (-not [string]::IsNullOrWhiteSpace($Slice)) {
+                $ledger.slices | Where-Object slice -ceq $Slice
+            }
+        )
         if ($sliceRows.Count -ne 1) {
             $errors.Add("Diff mode requires exactly one maker row for slice '$Slice'; found $($sliceRows.Count)")
         }
-        $sliceDeclarations = if ($sliceRows.Count -eq 1) {
-            @($ledger.declarations | Where-Object owner -ceq $Slice)
-        }
-        else { @() }
+        [object[]]$sliceDeclarations = @(
+            if ($sliceRows.Count -eq 1) {
+                $ledger.declarations | Where-Object owner -ceq $Slice
+            }
+        )
 
         $evidence = $null
         $report = $null

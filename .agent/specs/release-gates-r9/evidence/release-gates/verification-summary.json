@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "slice": "RELEASE-GATES-R9",
+  "lineage": {
+    "rejected_r8_head": "406fe952c143eb8aaf5895427c568a41d4cec225",
+    "commit_a": "8cb810095b2bea77ab9812832d9ab8a99c928d18",
+    "commit_a_parent": "406fe952c143eb8aaf5895427c568a41d4cec225"
+  },
+  "authority": {
+    "plan_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f",
+    "scope_map_sha256": "fb170d59f3072117489402fd347cd1432c40adbc842811f92227498bcbc92693",
+    "active_diff_contract_sha256": "d8e7818d84831f047d30a8493f9c7d2a8cea288d5c381735960d11dd02988ae5",
+    "r8_scope_provenance_sha256": "ab5f882fa110ca823a317061ecbca0c62516702735325893a56206f9e7a29415",
+    "mutable_register_read": false,
+    "source_snapshot_use": "HISTORICAL_DISCOVERY_ONLY"
+  },
+  "checks": [
+    {"name":"active authority self-test","exit_code":0,"verdict":"PASS"},
+    {"name":"active authority frozen audit","exit_code":0,"verdict":"PASS","candidates":9,"paths":123,"pending_contracts":2,"errors":0},
+    {"name":"active authority full Git replay","exit_code":0,"verdict":"PASS","git_verified":9},
+    {"name":"R4 ffd pending probe","exit_code":1,"verdict":"EXPECTED_FAIL","violations":1,"only_violation":".agent/testing/SECURITY-PROJECT-IDENTITY-R4/behavior-signal.md"},
+    {"name":"DEMOLITION zero-row diff","exit_code":1,"verdict":"EXPECTED_FAIL","diff_entries":7,"maker_rows":0,"internal_count_error":false},
+    {"name":"plan ownership self-test","exit_code":0,"verdict":"PASS"},
+    {"name":"plan ownership static Ledger","exit_code":0,"verdict":"PASS","maker_rows":57,"declarations":351,"repeated_exact_paths":34,"epochs":36},
+    {"name":"SECURITY-PROJECT-IDENTITY R3 replay","exit_code":0,"verdict":"PASS","paths":14,"violations":0},
+    {"name":"DB embedding R5 path replay","exit_code":0,"verdict":"PASS_PATH_AUTHORITY_ONLY_REMAINS_REJECTED","paths":28,"violations":0},
+    {"name":"actionlint","exit_code":0,"verdict":"PASS"},
+    {"name":"workflow conformance","exit_code":0,"verdict":"PASS","mutations_rejected":70},
+    {"name":"synthesized staged-tree RELEASE-GATES exact Diff","exit_code":0,"verdict":"PASS","paths":24,"violations":0},
+    {"name":"run-db-suite self-test","exit_code":0,"verdict":"PASS"},
+    {"name":"critical suite","exit_code":0,"verdict":"PASS","passed":7,"failed":0,"skipped":0},
+    {"name":"go test ./...","exit_code":0,"verdict":"PASS"},
+    {"name":"go vet ./...","exit_code":0,"verdict":"PASS"},
+    {"name":"go build ./...","exit_code":0,"verdict":"PASS"},
+    {"name":"exact staged diff gitleaks","exit_code":0,"verdict":"PASS","findings":0},
+    {"name":"native BOM scan over exact staged paths","exit_code":0,"verdict":"PASS","paths":24,"findings":0},
+    {"name":"git diff --cached --check","exit_code":0,"verdict":"PASS"}
+  ],
+  "discrepancies": [
+    {
+      "name": "repository BOM helper absent",
+      "command": "node tools/check-bom.cjs",
+      "exit_code": 1,
+      "observed": "MODULE_NOT_FOUND",
+      "resolution": "use an exact commit-B native byte-prefix scan; do not claim the missing helper as proof"
+    },
+    {
+      "name": "whole-directory gitleaks baseline",
+      "findings": 14,
+      "files": ["docs/DEPLOYMENT.md","internal/grpcserver/credential_migration_test.go","internal/mcp/server_test.go","internal/privacy/secrets_test.go","scripts/production-gates/run-db-suite.ps1"],
+      "scope_relation": "all findings are pre-existing and outside commit-B changed paths",
+      "resolution": "require a clean exact staged/committed commit-B scan"
+    }
+  ],
+  "verdict": "PASS_WITH_EXPLICIT_BASELINE_DISCREPANCIES"
+}

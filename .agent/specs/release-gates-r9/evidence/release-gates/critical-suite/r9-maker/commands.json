@@ -1,0 +1,43 @@
+[
+  {
+    "name": "critical-go-test",
+    "executable": "C:\\Program Files\\Go\\bin\\go.exe",
+    "arguments": [
+      "test",
+      "-tags=critical",
+      "-json",
+      "./tests/critical/...",
+      "-count=1"
+    ],
+    "command": "\"C:\\Program Files\\Go\\bin\\go.exe\" test -tags=critical -json ./tests/critical/... -count=1",
+    "started_at": "2026-07-10T22:24:40.8464328+00:00",
+    "finished_at": "2026-07-10T22:24:46.4502611+00:00",
+    "duration_seconds": 5.604,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\specs\\release-gates-r9\\evidence\\release-gates\\critical-suite\\r9-maker\\go-test.stdout.jsonl",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\specs\\release-gates-r9\\evidence\\release-gates\\critical-suite\\r9-maker\\go-test.stderr.log"
+  },
+  {
+    "name": "critical-json-parser",
+    "executable": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+    "arguments": [
+      "-NoProfile",
+      "-File",
+      "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\scripts\\production-gates\\assert-go-test-json.ps1",
+      "-InputPath",
+      ".agent\\specs\\release-gates-r9\\evidence\\release-gates\\critical-suite\\r9-maker\\go-test.stdout.jsonl",
+      "-SummaryPath",
+      ".agent\\specs\\release-gates-r9\\evidence\\release-gates\\critical-suite\\r9-maker\\go-test-summary.json",
+      "-FailOnUnexpectedSkip"
+    ],
+    "command": "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -File \"D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\scripts\\production-gates\\assert-go-test-json.ps1\" -InputPath \".agent\\specs\\release-gates-r9\\evidence\\release-gates\\critical-suite\\r9-maker\\go-test.stdout.jsonl\" -SummaryPath \".agent\\specs\\release-gates-r9\\evidence\\release-gates\\critical-suite\\r9-maker\\go-test-summary.json\" -FailOnUnexpectedSkip",
+    "started_at": "2026-07-10T22:24:46.4644807+00:00",
+    "finished_at": "2026-07-10T22:24:46.9765300+00:00",
+    "duration_seconds": 0.512,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\specs\\release-gates-r9\\evidence\\release-gates\\critical-suite\\r9-maker\\json-parser.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\specs\\release-gates-r9\\evidence\\release-gates\\critical-suite\\r9-maker\\json-parser.stderr.log"
+  }
+]

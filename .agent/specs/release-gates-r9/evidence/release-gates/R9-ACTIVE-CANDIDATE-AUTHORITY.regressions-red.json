@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "slice": "RELEASE-GATES-R9",
+  "phase": "RED",
+  "command": "pwsh -NoProfile -File scripts/production-gates/assert-active-candidate-path-authority.ps1 -SelfTest",
+  "cases": [
+    {
+      "name": "prefix-only pending null normalization",
+      "exit_code": 1,
+      "observed_failure": "SELFTEST FAIL: prefix-only pending contract serialized a null exact-path declaration",
+      "required_green": "prefix-only pending serializes allowed_exact_paths as [] and accepts valid paths from the full bounded plan-owned .agent surface"
+    },
+    {
+      "name": "pending probe exact base anchor",
+      "exit_code": 1,
+      "observed_failure": "SELFTEST FAIL: pending probe accepted or obscured a non-anchor base",
+      "required_green": "probe base equals the frozen pending base_anchor and is an ancestor of head"
+    },
+    {
+      "name": "load-bearing R9 metadata",
+      "exit_code": 1,
+      "observed_failure": "SELFTEST FAIL: R9 profile accepted a wrong rejected R8 head",
+      "required_green": "exact rejected R8 head, AB5F scope provenance, discovery-only source audit, and digest serialization/case mutations all fail"
+    }
+  ],
+  "verdict": "EXPECTED_RED"
+}

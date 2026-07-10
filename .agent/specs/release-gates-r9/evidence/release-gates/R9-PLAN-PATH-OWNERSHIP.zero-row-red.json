@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "slice": "RELEASE-GATES-R9",
+  "phase": "RED",
+  "gate": "plan-path-ownership",
+  "mode": "Diff",
+  "candidate_slice": "DEMOLITION-SKIP-CLASSIFICATION",
+  "base": "4812589b9920c187a92a03d210d2e9d5eb53862f",
+  "head": "d59d1605969b1f567506e96ded524dfd1e4be08a",
+  "diff_entries": 7,
+  "exit_code": 1,
+  "observed_failure": "The property 'Count' cannot be found on this object. Verify that the property exists.",
+  "required_green": "a deterministic zero-maker-row failure that preserves the seven non-empty diff entries and contains no internal scalar Count exception",
+  "verdict": "EXPECTED_RED"
+}

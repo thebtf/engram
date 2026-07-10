@@ -1,0 +1,2 @@
+go test JSON verdict=PASS packages=1 tests=7 passed=7 failed=0 skipped=0 unexpected_skips=0 malformed=0
+summary=D:\Dev\engram\.agent\worktrees\prc-release-gates-r9-maker\.agent\specs\release-gates-r9\evidence\release-gates\critical-suite\r9-maker\go-test-summary.json

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "slice": "RELEASE-GATES-R9",
+  "phase": "RED",
+  "command": "pwsh -NoProfile -File .agent/specs/release-gates-r9/evidence/release-gates/test-r9-active-candidate-path-authority.ps1",
+  "exit_code": 1,
+  "expected_failure": "R9 active-candidate authority gate is missing",
+  "observed_failure": "R9 active-candidate authority gate is missing: scripts/production-gates/assert-active-candidate-path-authority.ps1",
+  "production_script_existed": false,
+  "verdict": "EXPECTED_RED"
+}

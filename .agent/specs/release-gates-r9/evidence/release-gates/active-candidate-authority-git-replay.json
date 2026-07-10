@@ -1,0 +1,216 @@
+{
+  "schema_version": 1,
+  "gate": "active-candidate-path-authority",
+  "verdict": "PASS",
+  "started_at": "2026-07-10T22:29:55.8609380+00:00",
+  "finished_at": "2026-07-10T22:29:57.8527428+00:00",
+  "duration_seconds": 1.992,
+  "contract": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\plans\\2026-07-10-engram-production-ready-active-diff-contracts.json",
+    "expected_sha256": "d8e7818d84831f047d30a8493f9c7d2a8cea288d5c381735960d11dd02988ae5",
+    "observed_sha256": "d8e7818d84831f047d30a8493f9c7d2a8cea288d5c381735960d11dd02988ae5",
+    "hash_match": true
+  },
+  "plan": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\plans\\2026-07-10-engram-production-ready-master-plan.md",
+    "expected_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f",
+    "observed_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f",
+    "hash_match": true
+  },
+  "source_snapshot": {
+    "freshness": "HISTORICAL_DISCOVERY_ONLY",
+    "used_for_acceptance": false,
+    "mutable_register_read": false,
+    "observed_sha256": "29865adc048cb3f64ec7d133b3bd901c95115e4ae5b95c98927607de889f77d4"
+  },
+  "counts": {
+    "candidates": 9,
+    "paths": 123.0,
+    "pending_contracts": 2,
+    "current_candidates": 6,
+    "rejected_candidates": 3,
+    "git_verified": 9,
+    "errors": 0
+  },
+  "candidates": [
+    {
+      "slice": "DB-AUTH",
+      "status_class": "current-ready",
+      "branch": "work/prc-db-auth",
+      "base": "b0c4ab4c07a4c6f512728da52b2e132bacd0289c",
+      "head": "da97c88be6753703bac112be8431dc373e4d9dda",
+      "path_count": 5,
+      "paths_sha256": "7a678254366c2bdcf5feba8e25ce1151a69ae0a0240d68e3af3cd15ffa1b9d9e"
+    },
+    {
+      "slice": "DB-EMBEDDING-STATS",
+      "status_class": "current-checker-active",
+      "branch": "work/prc-db-embedding-stats",
+      "base": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+      "head": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+      "path_count": 8,
+      "paths_sha256": "b4d1c8176810630268759cedc909cd1042b063b81a14a01175b1a36f174d5c0f"
+    },
+    {
+      "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+      "status_class": "rejected-evidence-revision",
+      "branch": "work/prc-db-embedding-evidence-transport-r5",
+      "base": "369951b61ee07cb0c405558e0f677cd1c9e90362",
+      "head": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+      "path_count": 28,
+      "paths_sha256": "a9e3eb9762bc3d597ac277c653ad30d10149cb10443fb0b0fc3edd21093c8217"
+    },
+    {
+      "slice": "DB-BULKOPS",
+      "status_class": "rejected-historical",
+      "branch": "work/prc-db-bulkops",
+      "base": "6ea10496aa127fba7fdb194875044e770d0a1d8c",
+      "head": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+      "path_count": 13,
+      "paths_sha256": "1c53f8aed2d97d91f9103a21d214856c5bb0f59dce6dcc0264e1ce04693c869a"
+    },
+    {
+      "slice": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "status_class": "current-ready-with-concerns",
+      "branch": "work/prc-db-bulkops",
+      "base": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+      "head": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+      "path_count": 38,
+      "paths_sha256": "39a32b36dfac7f1148649ca092abc23320fda34e2535a828778e228aa8c0230d"
+    },
+    {
+      "slice": "DB-CRYSTALLIZATION",
+      "status_class": "current-ready-with-concerns",
+      "branch": "work/prc-db-crystallization",
+      "base": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+      "head": "2ab6211494e51aeb7b787a99e78cff8bf2d5694a",
+      "path_count": 1,
+      "paths_sha256": "8428c4f86e06bdab5367fd6678decdb49b8aa23a41f593b246b7e541ec84ab23"
+    },
+    {
+      "slice": "SECURITY-TOOLCHAIN",
+      "status_class": "current-ready",
+      "branch": "work/prc-security-toolchain",
+      "base": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+      "head": "b0955dfd61b4ea7364f6d400579247b475a1a680",
+      "path_count": 3,
+      "paths_sha256": "5e49ddf6f66cc54d25f31cecd2fae96554d760f8c722f1c113a9d8e695468143"
+    },
+    {
+      "slice": "SECURITY-PROJECT-IDENTITY",
+      "status_class": "rejected-security-r3",
+      "branch": "work/prc-security-project-identity-r3",
+      "base": "9e2ce4e58a5cded69660ca9ac532d2167f315bb2",
+      "head": "38344455754fe503acbd79d2134141f996adff7f",
+      "path_count": 14,
+      "paths_sha256": "046360929bec61f3cbda420754aaab7056badf467d5e5c2c2e2fce68e2f5e21f"
+    },
+    {
+      "slice": "DB-TEST-POOL-HYGIENE",
+      "status_class": "current-ready-for-check",
+      "branch": "work/prc-db-test-pool-hygiene-evidence-r2",
+      "base": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
+      "head": "68242c48aaad62ec087166eeb9ea32f14d189450",
+      "path_count": 13,
+      "paths_sha256": "5b30cedca485ce89ce38bdb665413be59a3e2639e01e04c600172e68e503f3a0"
+    }
+  ],
+  "pending_contracts": [
+    {
+      "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+      "branch": "work/prc-db-embedding-evidence-transport-r6",
+      "base_anchor": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+      "allowed_exact_paths": [],
+      "effective_agent_declarations": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/**",
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/**",
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/**",
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/**",
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/**",
+        ".agent/specs/db-embedding-stats-evidence-transport/evidence/**"
+      ],
+      "requires_final_exact_diff_contract": true
+    },
+    {
+      "slice": "SECURITY-PROJECT-IDENTITY",
+      "branch": "work/prc-security-project-identity-r4",
+      "base_anchor": "38344455754fe503acbd79d2134141f996adff7f",
+      "allowed_exact_paths": [
+        "internal/proxy/identity_process_test.go",
+        "internal/proxy/identity_test.go"
+      ],
+      "effective_agent_declarations": [
+        ".agent/specs/security-project-identity/evidence/**",
+        ".agent/reports/evidence/production-ready/security-project-identity/**"
+      ],
+      "requires_final_exact_diff_contract": true
+    }
+  ],
+  "git_verification": [
+    {
+      "slice": "DB-AUTH",
+      "available": true,
+      "verified": true,
+      "path_count": 5,
+      "paths_sha256": "7a678254366c2bdcf5feba8e25ce1151a69ae0a0240d68e3af3cd15ffa1b9d9e"
+    },
+    {
+      "slice": "DB-EMBEDDING-STATS",
+      "available": true,
+      "verified": true,
+      "path_count": 8,
+      "paths_sha256": "b4d1c8176810630268759cedc909cd1042b063b81a14a01175b1a36f174d5c0f"
+    },
+    {
+      "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+      "available": true,
+      "verified": true,
+      "path_count": 28,
+      "paths_sha256": "a9e3eb9762bc3d597ac277c653ad30d10149cb10443fb0b0fc3edd21093c8217"
+    },
+    {
+      "slice": "DB-BULKOPS",
+      "available": true,
+      "verified": true,
+      "path_count": 13,
+      "paths_sha256": "1c53f8aed2d97d91f9103a21d214856c5bb0f59dce6dcc0264e1ce04693c869a"
+    },
+    {
+      "slice": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "available": true,
+      "verified": true,
+      "path_count": 38,
+      "paths_sha256": "39a32b36dfac7f1148649ca092abc23320fda34e2535a828778e228aa8c0230d"
+    },
+    {
+      "slice": "DB-CRYSTALLIZATION",
+      "available": true,
+      "verified": true,
+      "path_count": 1,
+      "paths_sha256": "8428c4f86e06bdab5367fd6678decdb49b8aa23a41f593b246b7e541ec84ab23"
+    },
+    {
+      "slice": "SECURITY-TOOLCHAIN",
+      "available": true,
+      "verified": true,
+      "path_count": 3,
+      "paths_sha256": "5e49ddf6f66cc54d25f31cecd2fae96554d760f8c722f1c113a9d8e695468143"
+    },
+    {
+      "slice": "SECURITY-PROJECT-IDENTITY",
+      "available": true,
+      "verified": true,
+      "path_count": 14,
+      "paths_sha256": "046360929bec61f3cbda420754aaab7056badf467d5e5c2c2e2fce68e2f5e21f"
+    },
+    {
+      "slice": "DB-TEST-POOL-HYGIENE",
+      "available": true,
+      "verified": true,
+      "path_count": 13,
+      "paths_sha256": "5b30cedca485ce89ce38bdb665413be59a3e2639e01e04c600172e68e503f3a0"
+    }
+  ],
+  "pending_probe": null,
+  "errors": []
+}
