@@ -1,0 +1,13 @@
+37A2A6EFB4EC5E12C4DCC8A462DD5F3A03322CACBA5B5DEB8E32A066D00F1D04  .agent/reports/2026-07-10-db-reaper-lifecycle-rework-maker.md
+424ED42B68C0CAF8B02D3592E7B18B2EE8205547033A3D08B44D73FA577D62E4  .agent/reports/evidence/production-ready/db-reaper-lifecycle-rework/coverage/reaper.coverage.out
+8EF31C549A50EABAD58F51616EC7874ABC6BED9CA745F5778FFE6D36FF1AC7C1  .agent/reports/evidence/production-ready/db-reaper-lifecycle-rework/final.json
+F9FEB83770D10C646FB5B877941C2E9CC76F0ABD7A8EBD763C63BF043B7E8D66  .agent/reports/evidence/production-ready/db-reaper-lifecycle-rework/residue-cleanup.json
+144823F3B6AEBA10C4F04043C2E74A5F500C5B254AF2BBE2E849C185A44DA9BC  .agent/reports/evidence/production-ready/db-reaper-lifecycle-rework/tdd/concurrent-lifecycle.red.json
+C56EBA731C0740D08AF4CC0F69A08889E36921B4DC79B1A9954B11392555D5A3  .agent/reports/evidence/production-ready/db-reaper-lifecycle-rework/tdd/db-reaper-lifecycle-rework.tdd.json
+B10CE4F2AD36A32D15CA5F540ED79CBD1C83045482995BB5E5B20941ABFB8F62  .agent/reports/evidence/production-ready/db-reaper-lifecycle-rework/tdd/prove-it.json
+738CA64FA27CCD511E5E115DF71C588F9A47DA7DCDA225F2F57131C9821768BB  .agent/reports/evidence/production-ready/db-reaper-lifecycle-rework/tdd/purge-error.red.json
+EA18394C21C6B2CC9CCAC027ACADDF5BC876E23398910F2B7219B1D490A7E4F6  .agent/reports/evidence/production-ready/db-reaper-lifecycle-rework/tdd/retention-config.red.json
+57766E202AA0CEF3DB57BA227EEFD674A8B08A3E3BD1FB033089DDC6180D0373  .agent/reports/evidence/production-ready/db-reaper-lifecycle-rework/tdd/service-partial-init.red.json
+82415413CF0183AC2D3D5E5F3BCDAFEF4C652E96679503671852ECDE0C07B80D  .agent/reports/evidence/production-ready/db-reaper-lifecycle-rework/tdd/service-reaper-order.red.json
+7B7F3B2E304463E385C4D5DA5E33AF4D2C2962891041001A95A87F8C3EFFC946  .agent/reports/evidence/production-ready/db-reaper-lifecycle-rework/tdd/stop-before-start.red.json
+1F936F8F94C854B4F84CE8D5E7F5E5A733A3F4ECC98BCECC4ACC72D9DEFCD135  .agent/reports/evidence/production-ready/db-reaper-lifecycle-rework/verification-summary.json

@@ -1,0 +1,50 @@
+{
+  "observed_at": "2026-07-10T10:36:26.3898501Z",
+  "snapshot_commit_before_amend": "d60b35be",
+  "substituted_files": [
+    "internal/worker/reaper/reaper.go",
+    "internal/worker/service.go"
+  ],
+  "failed_tests": 5,
+  "mutations": [
+    {
+      "symbol": "parseRetentionConfig",
+      "sentinel": "return retentionConfig{}",
+      "result": "FAIL",
+      "evidence": "All eight parser cases failed; invalid fallback purged the recent row; oversized retention purged the protected row."
+    },
+    {
+      "symbol": "PurgeOnce",
+      "sentinel": "return nil",
+      "result": "FAIL",
+      "evidence": "TestReaper_PurgeOnceReturnsQueryError failed: PurgeOnce returned nil after the database was closed."
+    },
+    {
+      "symbol": "Stop",
+      "sentinel": "return",
+      "result": "FAIL",
+      "evidence": "TestReaper_ConcurrentStopJoinsSingleLoop observed started:1 stopped:0 active:1 instead of 1/1/0."
+    },
+    {
+      "symbol": "run",
+      "sentinel": "panic(\"not implemented\")",
+      "result": "FAIL",
+      "evidence": "TestReaper_ConcurrentStartIsIdempotent failed with the sentinel panic from Reaper.run."
+    },
+    {
+      "symbol": "Service.Shutdown once-wrapper and shutdown body",
+      "sentinel": "bypass sync.Once, then return nil from shutdown",
+      "result": "FAIL",
+      "evidence": "Bypassing the body produced 0 reaper stops; bypassing sync.Once produced 32 reaper stops instead of 1."
+    }
+  ],
+  "restore": {
+    "method": "git restore --source=HEAD on only the substituted production file after each run",
+    "post_restore_tests": [
+      "ok github.com/thebtf/engram/internal/worker/reaper 0.168s",
+      "ok github.com/thebtf/engram/internal/worker 0.262s"
+    ],
+    "reverted_at": "2026-07-10T10:36:26.3898501Z",
+    "status": "GREEN"
+  }
+}

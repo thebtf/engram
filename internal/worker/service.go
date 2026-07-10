@@ -168,6 +168,9 @@ type Service struct {
 	version                     string
 	recentQueriesBuf            [maxRecentQueries]RecentSearchQuery
 	wg                          sync.WaitGroup
+	initWG                      sync.WaitGroup
+	shutdownOnce                sync.Once
+	shutdownErr                 error
 	recentQueriesLen            int
 	recentQueriesHead           int
 	statsCacheTTL               time.Duration
@@ -208,7 +211,7 @@ type Service struct {
 	vaultErr                    error
 	promptCache                 sync.Map // map[int64]promptCacheEntry — last user prompt per session
 	eventBus                    *projectevents.Bus
-	projectReaper               *reaper.Reaper
+	projectReaper               projectReaperLifecycle
 	// lastRequestAt tracks the Unix nanosecond timestamp of the most recent
 	// MCP/REST request handled by this server. Updated atomically in
 	// requestActivityMiddleware on every request.
@@ -267,6 +270,10 @@ type lifecycleQueue interface {
 	cognitivecore.HintQueue
 	Start(ctx context.Context) error
 	Stop() error
+}
+
+type projectReaperLifecycle interface {
+	Stop()
 }
 
 // promptCacheEntry stores a user prompt with a timestamp for eviction.
@@ -737,7 +744,11 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 
 	// Kick off heavy initialization in the background. The service is already
 	// accepting requests at this point; data-plane routes gate on s.ready.
-	go svc.initializeAsync()
+	svc.initWG.Add(1)
+	go func() {
+		defer svc.initWG.Done()
+		svc.initializeAsync()
+	}()
 
 	return svc, nil
 }
@@ -757,6 +768,10 @@ func (s *Service) createChunkManager() *chunking.Manager {
 // On any fatal error it calls setInitError which surfaces through /api/health.
 func (s *Service) initializeAsync() {
 	log.Info().Msg("background init: starting")
+	if s.ctx != nil && s.ctx.Err() != nil {
+		log.Info().Msg("background init: cancelled before database initialization")
+		return
+	}
 
 	// Verify data directory layout and settings file presence before the first DB dial.
 	if err := config.EnsureAll(); err != nil {
@@ -1231,6 +1246,11 @@ func (s *Service) initializeAsync() {
 	s.retrievalStatsLogStore = retrievalStatsLogStore
 	s.initMu.Unlock()
 
+	if s.ctx != nil && s.ctx.Err() != nil {
+		log.Info().Msg("background init: cancelled before background workers started")
+		return
+	}
+
 	// All stores are wired. Flip the ready flag so /api/ready and requireReady
 	// middleware start passing requests through to the data-plane handlers.
 	s.ready.Store(true)
@@ -1238,7 +1258,9 @@ func (s *Service) initializeAsync() {
 
 	// Start project reaper (hourly cleanup of hard-expired soft-deleted projects).
 	projectReaper := reaper.New(store.DB)
+	s.initMu.Lock()
 	s.projectReaper = projectReaper
+	s.initMu.Unlock()
 	projectReaper.Start(s.ctx)
 
 	// Start retention cron for injection_log and citation_log cleanup.
@@ -2202,22 +2224,40 @@ func (s *Service) processAllSessions() {
 // The phased sequence is:
 //
 //  1. Cancel root context  — signals all goroutines to stop accepting new work
-//  2. HTTP + gRPC servers  — stop accepting new connections (in-flight requests drain)
-//  3. Config watcher       — avoid spurious hot-reload during teardown
-//  4. Background workers   — cognitive queue, write-lint janitor
-//  5. Session manager      — flush pending observation/summary messages
-//  6. WaitGroup drain      — wait up to the caller-supplied context deadline
-//  7. Database             — closed last because components above may still read it
+//  2. Initialization join  — prevent partially initialized workers appearing later
+//  3. HTTP + gRPC servers  — stop accepting new connections (in-flight requests drain)
+//  4. Config watcher       — avoid spurious hot-reload during teardown
+//  5. Background workers   — project reaper, cognitive queue, write-lint janitor
+//  6. Session manager      — flush pending observation/summary messages
+//  7. WaitGroup drain      — wait up to the caller-supplied context deadline
+//  8. Database             — closed last because components above may still read it
 //
 // The caller supplies the deadline via ctx. If the deadline fires before the
 // WaitGroup drains, teardown continues and a warning is logged. The first
 // component error (if any) is returned; subsequent errors are only logged.
 func (s *Service) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.shutdownOnce.Do(func() {
+		s.shutdownErr = s.shutdown(ctx)
+	})
+	return s.shutdownErr
+}
+
+func (s *Service) shutdown(ctx context.Context) error {
 	log.Info().Msg("graceful shutdown: starting")
 	start := time.Now()
 
 	// Signal all background goroutines.
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
+
+	// initializeAsync owns construction of the database-backed workers. Join it
+	// before taking shutdown snapshots so a late project reaper cannot appear
+	// after teardown has already passed the worker phase.
+	s.initWG.Wait()
 
 	var shutdownErrors []error
 	var errMu sync.Mutex
@@ -2248,6 +2288,12 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 	// Phase 3: stop background workers.
 	log.Debug().Msg("shutdown phase 3: background workers")
+	s.initMu.RLock()
+	projectReaper := s.projectReaper
+	s.initMu.RUnlock()
+	if projectReaper != nil {
+		projectReaper.Stop()
+	}
 	if s.cognitiveQueueLifecycle != nil {
 		collectError("cognitive_hint_queue", s.cognitiveQueueLifecycle.Stop())
 	}

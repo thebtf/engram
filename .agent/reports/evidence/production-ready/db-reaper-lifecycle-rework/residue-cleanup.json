@@ -1,0 +1,24 @@
+{
+  "observed_at": "2026-07-10T10:41:07.3899959Z",
+  "postgresql": {
+    "databases_checked": [
+      "engram_prc_reaper",
+      "engram_prc_reaper_lifecycle_rework"
+    ],
+    "remaining_databases": 0,
+    "remaining_sessions": 0,
+    "container_retained": "engram-prc-postgres"
+  },
+  "processes": {
+    "worktree_commandline_matches_excluding_probe": 0
+  },
+  "build_artifacts": {
+    "temporary_server_binary_exists": false,
+    "temporary_build_directory_exists": false
+  },
+  "semantic_index": {
+    "worktree_index_removed": true,
+    "post_cleanup_status": "No index found for project"
+  },
+  "status": "CLEAN"
+}

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "status": "READY_FOR_INDEPENDENT_CHECK",
+  "role": "MAKER",
+  "self_approved": false,
+  "integration_authorized": false,
+  "branch": "work/prc-db-reaper",
+  "base_sha": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+  "rejected_predecessor_sha": "88f6bbb58c228b843dc30aa00bd05d3e775f3558",
+  "final_commit_sha": "reported out-of-band because this JSON is contained by that commit",
+  "prior_checker_report_sha256": "45584C1A632801BDFC2F85B013FB681B4B37080CE2AA5C83D35D92E1DBB26B6E",
+  "report": ".agent/reports/2026-07-10-db-reaper-lifecycle-rework-maker.md",
+  "evidence_root": ".agent/reports/evidence/production-ready/db-reaper-lifecycle-rework",
+  "verification": {
+    "focused_edge_repeat": 20,
+    "reaper_race_repeat": 10,
+    "service_shutdown_race_repeat": 10,
+    "reaper_coverage_percent": 87.6,
+    "worker_unit_baseline": "PASS",
+    "repository_unit_baseline": "PASS",
+    "vet": "PASS",
+    "server_build": "PASS",
+    "diff_check": "PASS",
+    "prove_it": "PASS",
+    "residue_cleanup": "CLEAN"
+  },
+  "discrepancy": {
+    "broad_db_worker_run": "FAIL_OUT_OF_SCOPE",
+    "details": "verification-summary.json"
+  }
+}

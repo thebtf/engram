@@ -1,0 +1,11 @@
+{
+  "task_id": "db-reaper-service-shutdown-order",
+  "observed_at": "2026-07-10T10:12:50.9687795Z",
+  "test_file": "internal/worker/service_reaper_lifecycle_test.go",
+  "test_name": "TestServiceShutdown_ConcurrentCallsStopReaperOnce and shutdown-order siblings",
+  "invariant": "Service shutdown runs once, joins partial initialization, joins the project reaper, and only then closes the database.",
+  "failure_reason": "Service exposed only a concrete reaper pointer, had no initialization join, and had no testable shutdown lifecycle contract.",
+  "runner_command": "$env:DATABASE_DSN='postgres://engram:engram@localhost:55432/engram_prc_reaper?sslmode=disable'; go test ./internal/worker -run '^TestServiceShutdown_(ConcurrentCallsStopReaperOnce|WaitsForPartialInitializationBeforeReaperStop|WaitsForReaperBeforeClosingDatabase)$' -count=1 -v",
+  "runner_exit_code": 1,
+  "runner_stdout_excerpt": "cannot use *blockingProjectReaper as *reaper.Reaper\nsvc.initWG undefined\nFAIL github.com/thebtf/engram/internal/worker [build failed]"
+}

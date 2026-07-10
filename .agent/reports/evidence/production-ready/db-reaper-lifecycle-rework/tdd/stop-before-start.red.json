@@ -1,0 +1,11 @@
+{
+  "task_id": "db-reaper-stop-before-start",
+  "observed_at": "2026-07-10T10:05:50.1611201Z",
+  "test_file": "internal/worker/reaper/reaper_test.go",
+  "test_name": "TestReaper_StopBeforeStartReturns",
+  "invariant": "Stop is a safe idempotent no-op before the first Start.",
+  "failure_reason": "Stop closed the stop channel and waited forever on a done channel that no goroutine could close.",
+  "runner_command": "go test ./internal/worker/reaper -run '^TestReaper_StopBeforeStartReturns$' -count=1 -v",
+  "runner_exit_code": 1,
+  "runner_stdout_excerpt": "reaper_test.go:265: Stop blocked before Start\n--- FAIL: TestReaper_StopBeforeStartReturns (0.50s)"
+}
