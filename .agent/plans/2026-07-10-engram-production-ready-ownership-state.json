@@ -2,7 +2,7 @@
   "schema_version": 1,
   "plan": {
     "path": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
-    "sha256": "d371e94dff1ea12767b9d0832240cb6caf52c6c3bbe2209fe4280159c4f03c52"
+    "sha256": "d7bcfd122e456d9b764595524292d53b0c99447b7f716a1be0707341e4681bf9"
   },
   "path_epochs": [
     {
@@ -406,6 +406,26 @@
         "FINAL-PUBLIC-TRUTH"
       ],
       "current_owner": "CORE-PUBLIC-TRUTH",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "internal/worker/dream_cycle.go",
+      "ordered_owners": [
+        "CRYSTALLIZATION-DREAM-CYCLE-CORRECTNESS"
+      ],
+      "current_owner": "CRYSTALLIZATION-DREAM-CYCLE-CORRECTNESS",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "internal/worker/dream_cycle_test.go",
+      "ordered_owners": [
+        "CRYSTALLIZATION-DREAM-CYCLE-CORRECTNESS"
+      ],
+      "current_owner": "CRYSTALLIZATION-DREAM-CYCLE-CORRECTNESS",
       "transition_kind": "integration",
       "completed_predecessors": [],
       "required_successor_base_sha": null
