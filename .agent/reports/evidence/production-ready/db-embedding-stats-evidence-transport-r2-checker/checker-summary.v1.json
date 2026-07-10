@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R2",
+  "role": "independent-checker",
+  "generated_at": "2026-07-10T14:42:22.0608356Z",
+  "status": "DONE_WITH_CONCERNS",
+  "verdict": "REVISE",
+  "readiness": "NOT_READY",
+  "target": "db2cf891dd9c6315fd17220ffe2d02302bea8844",
+  "target_tree": "6a450d3f0b83ce2afd95910da1516411a2134514",
+  "base": "580b0cd0ff38bb55a5195a8004e60234a824b7a8",
+  "accepted_product_source": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "checker_branch": "review/prc-db-embedding-evidence-r2-checker",
+  "checker_worktree": "D:/Dev/engram/.agent/worktrees/db-embedding-evidence-r2-checker",
+  "checker_head": null,
+  "checker_head_reason": "reported after the evidence-only commit to avoid self-reference",
+  "target_contract": {
+    "parent_exact": true,
+    "base_to_target_commits": 1,
+    "changed_paths": 9,
+    "changed_paths_outside_agent": 0,
+    "product_source_test_delta_vs_source": 0,
+    "product_source_test_delta_vs_base": 0
+  },
+  "findings": [
+    {
+      "id": "ETR2-C001",
+      "severity": "HIGH",
+      "blocking": true,
+      "class": "false-pass-exact-source-set",
+      "evidence": [
+        "six synchronized entries: exit 0, PASS 6/6",
+        "go.mod substitution at cardinality seven: exit 0, PASS 7/7"
+      ]
+    },
+    {
+      "id": "ETR2-C002",
+      "severity": "HIGH",
+      "blocking": true,
+      "class": "false-pass-source-commit-rebind",
+      "evidence": "alternate ancestor 580b0cd0: exit 0, PASS 7/7"
+    },
+    {
+      "id": "ETR2-C003",
+      "severity": "HIGH",
+      "blocking": true,
+      "class": "raw-path-access-after-validation-error",
+      "evidence": "source modes use raw entry.path at verify-manifest.cjs:549-553"
+    },
+    {
+      "id": "ETR2-C004",
+      "severity": "MEDIUM",
+      "blocking": false,
+      "class": "coverage-evidence-drift",
+      "evidence": "two fresh runs 89.10 line / 66.50 branch versus committed 88.89 / 65.33"
+    }
+  ],
+  "positive_rails": {
+    "windows_raw_git_checkout_lf": "0/7,7/7,7/7",
+    "windows_artifacts": "5/5",
+    "windows_adversarial": "18/18",
+    "fresh_lf_raw_git_checkout_lf": "7/7,7/7,7/7",
+    "fresh_lf_artifacts": "5/5",
+    "fresh_lf_adversarial": "18/18",
+    "red_base": "exit 1; pass 1; fail 17",
+    "prove_it_validate_contract_schema": "exit 1; fail 18",
+    "prove_it_verify_artifact_files": "exit 1; pass 9; fail 9",
+    "prove_it_post_restore": "exit 0; pass 18; byte-identical",
+    "outer_artifact_legacy_checksums": "9/9,5/5,7/7",
+    "checksum_self_reference": "excluded",
+    "node_syntax": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "fresh_coverage": {
+    "runs": 2,
+    "node_version": "v24.2.0",
+    "all_files_line_percent": 89.10,
+    "all_files_branch_percent": 66.50,
+    "verifier_line_percent": 84.46,
+    "verifier_branch_percent": 50.38,
+    "functions_percent": 100.0,
+    "committed_all_files_line_percent": 88.89,
+    "committed_all_files_branch_percent": 65.33
+  },
+  "extra_behavioral_edges": {
+    "total": 8,
+    "expected_outcomes": 5,
+    "false_passes": 3,
+    "content_duplicate_rejected": true,
+    "real_checkout_bare_cr_rejected": true,
+    "artifact_representation_drift_rejected": true,
+    "real_artifact_bare_cr_rejected": true
+  },
+  "residue": {
+    "temporary_worktree_paths": 0,
+    "temporary_worktree_registrations": 0,
+    "checker_node_processes": 0,
+    "matching_databases": 0,
+    "matching_postgres_sessions": 0,
+    "shared_postgres_container_running": true
+  },
+  "evidence": {
+    "target_audit": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r2-checker/target-audit.json",
+    "checksum_audit": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r2-checker/checksum-audit.json",
+    "edge_mutations": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r2-checker/runs/checker-edge-mutations.json",
+    "runs": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r2-checker/runs/"
+  },
+  "next_gate": "maker revision then fresh independent checker"
+}

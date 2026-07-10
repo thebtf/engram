@@ -1,0 +1,29 @@
+✔ artifact manifest rejects a header-only zero-entry set (204.7241ms)
+✔ artifact manifest rejects a missing required entry (206.2446ms)
+✔ artifact manifest rejects an extra entry (249.4738ms)
+✔ artifact manifest rejects a duplicate entry (295.9448ms)
+✔ artifact manifest rejects dot-segment traversal outside the evidence namespace (229.5158ms)
+✔ artifact manifest rejects a non-canonical dot-segment alias (271.7093ms)
+▶ artifact manifest rejects absolute and backslash-separated paths
+  ✔ absolute path (234.0029ms)
+  ✔ backslash-separated path (270.4852ms)
+✔ artifact manifest rejects absolute and backslash-separated paths (504.8722ms)
+▶ contract rejects unsupported checkout-equivalence policy values
+  ✔ bare_cr (1081.7052ms)
+  ✔ transform (965.7797ms)
+  ✔ required_result (1094.4142ms)
+✔ contract rejects unsupported checkout-equivalence policy values (3142.2364ms)
+▶ contract rejects unknown schema keys
+  ✔ top-level (1160.8405ms)
+  ✔ representation (1060.4887ms)
+  ✔ checkout-equivalence (1058.3076ms)
+  ✔ entry (995.6682ms)
+✔ contract rejects unknown schema keys (4275.7094ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 18
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9495.3843

@@ -1,0 +1,330 @@
+{
+  "schema_version": 1,
+  "target": "db2cf891dd9c6315fd17220ffe2d02302bea8844",
+  "source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "status": "PASS",
+  "outer_manifest": {
+    "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r2/SHA256SUMS.txt",
+    "commit": "db2cf891dd9c6315fd17220ffe2d02302bea8844",
+    "entry_count": 9,
+    "expected_count": 9,
+    "self_excluded": true,
+    "duplicates": [],
+    "errors": [],
+    "entries": [
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/ARTIFACTS.sha256",
+        "expected_sha256": "a08508ce15f5ba89c60971536bd6ef0aa5127b102c52560bcda1c3a829f7fecb",
+        "git_blob_oid": "92585baa7da8767348794394d63e63ff35de37be",
+        "git_blob_sha256": "a08508ce15f5ba89c60971536bd6ef0aa5127b102c52560bcda1c3a829f7fecb",
+        "canonical_checkout_sha256": "a08508ce15f5ba89c60971536bd6ef0aa5127b102c52560bcda1c3a829f7fecb",
+        "raw_checkout_sha256": "556681fa01c803d0fd61e28cd95d55e451b729c25cfe264771755a7f38913e2e",
+        "crlf_pairs": 10,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json",
+        "expected_sha256": "e3e9fd6250d4ead502a01ec81bb7901ad658d74845184a10b6f153276a1bd12f",
+        "git_blob_oid": "3742010a65ac00015ff7b297c3c9b520052985d1",
+        "git_blob_sha256": "e3e9fd6250d4ead502a01ec81bb7901ad658d74845184a10b6f153276a1bd12f",
+        "canonical_checkout_sha256": "e3e9fd6250d4ead502a01ec81bb7901ad658d74845184a10b6f153276a1bd12f",
+        "raw_checkout_sha256": "d93b48f02204375ef50e4a936f7927cee02a3459a925cfd3395538c474901496",
+        "crlf_pairs": 60,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+        "expected_sha256": "4f46e0f020fd7aae39b327adac7a9070d744f66fa26124f652d25470fa409114",
+        "git_blob_oid": "9f8424f1ea8ed5accac11ff6f019efdad9573cf9",
+        "git_blob_sha256": "4f46e0f020fd7aae39b327adac7a9070d744f66fa26124f652d25470fa409114",
+        "canonical_checkout_sha256": "4f46e0f020fd7aae39b327adac7a9070d744f66fa26124f652d25470fa409114",
+        "raw_checkout_sha256": "3cac528efa0b61046c58b6dea6eeaa5d3a12de0e07dc607c27a55c0058280f42",
+        "crlf_pairs": 650,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+        "expected_sha256": "d0fc0a8b57a3dc1f31210a69ec0b85443995883c41ea8ba818e8d95837b315b3",
+        "git_blob_oid": "c9c08dd99095190cc316479eb04c28154fb1ffce",
+        "git_blob_sha256": "d0fc0a8b57a3dc1f31210a69ec0b85443995883c41ea8ba818e8d95837b315b3",
+        "canonical_checkout_sha256": "d0fc0a8b57a3dc1f31210a69ec0b85443995883c41ea8ba818e8d95837b315b3",
+        "raw_checkout_sha256": "65276da409abc83a4a5a2323d58bde38253f023989ae7d137dbe3a66b6f0513c",
+        "crlf_pairs": 277,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json",
+        "expected_sha256": "d99f3499b2e5c371ababdffc84410e1dcc8b028373ae00483136ae0eb6bf509a",
+        "git_blob_oid": "c73fa547cb74c7b6d33a88f98bf5cd5f6805053f",
+        "git_blob_sha256": "d99f3499b2e5c371ababdffc84410e1dcc8b028373ae00483136ae0eb6bf509a",
+        "canonical_checkout_sha256": "d99f3499b2e5c371ababdffc84410e1dcc8b028373ae00483136ae0eb6bf509a",
+        "raw_checkout_sha256": "efbd1f5f4d28b061ea0c137c95ef94fd986a15a215635086c92cf75b636f4180",
+        "crlf_pairs": 157,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md",
+        "expected_sha256": "3b7f5ad0abcccd39f0d5ce9349fceb8cca4794e1bf537943e4b38ce629357dbb",
+        "git_blob_oid": "c827109915a379df03f943af58853bb3459d5866",
+        "git_blob_sha256": "3b7f5ad0abcccd39f0d5ce9349fceb8cca4794e1bf537943e4b38ce629357dbb",
+        "canonical_checkout_sha256": "3b7f5ad0abcccd39f0d5ce9349fceb8cca4794e1bf537943e4b38ce629357dbb",
+        "raw_checkout_sha256": "1634caaaf23da2c9f4a2aa542caf538154d160bde01b3f76cf2f3ceec4814d1e",
+        "crlf_pairs": 177,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R2.red.json",
+        "expected_sha256": "5a01028809f642d299891de75148170fa2ade1d2e3e949b86f45a5aa92423249",
+        "git_blob_oid": "8c8d439d0bcb448242a05bfef7b0175489f99305",
+        "git_blob_sha256": "5a01028809f642d299891de75148170fa2ade1d2e3e949b86f45a5aa92423249",
+        "canonical_checkout_sha256": "5a01028809f642d299891de75148170fa2ade1d2e3e949b86f45a5aa92423249",
+        "raw_checkout_sha256": "5b43e6bf93bbe63e55c758d4852e6acfc9a8ae2a5b21d6610c5eea2f85ae5e55",
+        "crlf_pairs": 9,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R2.tdd.json",
+        "expected_sha256": "ca517588d678f59b86b627a109bdbc0bd8fc1b49cdd5df4a605ec6cb57da206c",
+        "git_blob_oid": "73f3aa076a2572302cf7717923f35c663e705ba5",
+        "git_blob_sha256": "ca517588d678f59b86b627a109bdbc0bd8fc1b49cdd5df4a605ec6cb57da206c",
+        "canonical_checkout_sha256": "ca517588d678f59b86b627a109bdbc0bd8fc1b49cdd5df4a605ec6cb57da206c",
+        "raw_checkout_sha256": "2e60b51da392ae72517a3dc403b82d75c5d31cab68f6af94340c2ce90a7d52b6",
+        "crlf_pairs": 56,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r2/maker-summary.v1.json",
+        "expected_sha256": "5e6271fe6eaa8361247221263ac640af426e25be01c88f558e2d85a84773fd65",
+        "git_blob_oid": "1e2b57092c1f6129d708f0dd1c37da79307f58cd",
+        "git_blob_sha256": "5e6271fe6eaa8361247221263ac640af426e25be01c88f558e2d85a84773fd65",
+        "canonical_checkout_sha256": "5e6271fe6eaa8361247221263ac640af426e25be01c88f558e2d85a84773fd65",
+        "raw_checkout_sha256": "06167411f9dc0c77525cae52554ebd032d7283b317997cc3eb9263c057aeef5e",
+        "crlf_pairs": 46,
+        "bare_cr": 0,
+        "match": true
+      }
+    ]
+  },
+  "outer_manifest_self": {
+    "git_blob_oid": "6fbef4d23f5a647952d694549d3d3f55cf6ab034",
+    "sha256": "a723782459ee52b40db3c3105a138347a62354b48f1ec7fab4c3378a58617780",
+    "self_entry_excluded": true
+  },
+  "artifact_manifest": {
+    "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/ARTIFACTS.sha256",
+    "commit": "db2cf891dd9c6315fd17220ffe2d02302bea8844",
+    "entry_count": 5,
+    "expected_count": 5,
+    "self_excluded": true,
+    "duplicates": [],
+    "errors": [],
+    "entries": [
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
+        "expected_sha256": "5d932e6acf104bf9eff291409b50961007512e09e91d78401257a018fcb780f4",
+        "git_blob_oid": "0ab8f31ebd44aac4cd2884e6de7531d0e578bd83",
+        "git_blob_sha256": "5d932e6acf104bf9eff291409b50961007512e09e91d78401257a018fcb780f4",
+        "canonical_checkout_sha256": "5d932e6acf104bf9eff291409b50961007512e09e91d78401257a018fcb780f4",
+        "raw_checkout_sha256": "129d0a37b20658f0d53e00afc76d5f9c2b0aeaaa035a1a683fe6cbc9f3051956",
+        "crlf_pairs": 14,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json",
+        "expected_sha256": "e3e9fd6250d4ead502a01ec81bb7901ad658d74845184a10b6f153276a1bd12f",
+        "git_blob_oid": "3742010a65ac00015ff7b297c3c9b520052985d1",
+        "git_blob_sha256": "e3e9fd6250d4ead502a01ec81bb7901ad658d74845184a10b6f153276a1bd12f",
+        "canonical_checkout_sha256": "e3e9fd6250d4ead502a01ec81bb7901ad658d74845184a10b6f153276a1bd12f",
+        "raw_checkout_sha256": "d93b48f02204375ef50e4a936f7927cee02a3459a925cfd3395538c474901496",
+        "crlf_pairs": 60,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+        "expected_sha256": "4f46e0f020fd7aae39b327adac7a9070d744f66fa26124f652d25470fa409114",
+        "git_blob_oid": "9f8424f1ea8ed5accac11ff6f019efdad9573cf9",
+        "git_blob_sha256": "4f46e0f020fd7aae39b327adac7a9070d744f66fa26124f652d25470fa409114",
+        "canonical_checkout_sha256": "4f46e0f020fd7aae39b327adac7a9070d744f66fa26124f652d25470fa409114",
+        "raw_checkout_sha256": "3cac528efa0b61046c58b6dea6eeaa5d3a12de0e07dc607c27a55c0058280f42",
+        "crlf_pairs": 650,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json",
+        "expected_sha256": "d99f3499b2e5c371ababdffc84410e1dcc8b028373ae00483136ae0eb6bf509a",
+        "git_blob_oid": "c73fa547cb74c7b6d33a88f98bf5cd5f6805053f",
+        "git_blob_sha256": "d99f3499b2e5c371ababdffc84410e1dcc8b028373ae00483136ae0eb6bf509a",
+        "canonical_checkout_sha256": "d99f3499b2e5c371ababdffc84410e1dcc8b028373ae00483136ae0eb6bf509a",
+        "raw_checkout_sha256": "efbd1f5f4d28b061ea0c137c95ef94fd986a15a215635086c92cf75b636f4180",
+        "crlf_pairs": 157,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md",
+        "expected_sha256": "3b7f5ad0abcccd39f0d5ce9349fceb8cca4794e1bf537943e4b38ce629357dbb",
+        "git_blob_oid": "c827109915a379df03f943af58853bb3459d5866",
+        "git_blob_sha256": "3b7f5ad0abcccd39f0d5ce9349fceb8cca4794e1bf537943e4b38ce629357dbb",
+        "canonical_checkout_sha256": "3b7f5ad0abcccd39f0d5ce9349fceb8cca4794e1bf537943e4b38ce629357dbb",
+        "raw_checkout_sha256": "1634caaaf23da2c9f4a2aa542caf538154d160bde01b3f76cf2f3ceec4814d1e",
+        "crlf_pairs": 177,
+        "bare_cr": 0,
+        "match": true
+      }
+    ]
+  },
+  "legacy_manifest": {
+    "path": ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
+    "commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+    "entry_count": 7,
+    "expected_count": 7,
+    "self_excluded": true,
+    "duplicates": [],
+    "errors": [],
+    "entries": [
+      {
+        "path": "internal/embedding/store.go",
+        "expected_sha256": "7bfb06dfc0dda792147d5e2df9d2fe68b59edaac55d2396dece1b8a8a09eee5f",
+        "git_blob_oid": "1abaee96b07583f9fd824ed03c40b043c490b567",
+        "git_blob_sha256": "7bfb06dfc0dda792147d5e2df9d2fe68b59edaac55d2396dece1b8a8a09eee5f",
+        "canonical_checkout_sha256": "7bfb06dfc0dda792147d5e2df9d2fe68b59edaac55d2396dece1b8a8a09eee5f",
+        "raw_checkout_sha256": "fa0086be3074d0fa7bbf21986382fdc4b3fd82a00215939d445bd2624319017d",
+        "crlf_pairs": 287,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": "internal/embedding/store_stats_test.go",
+        "expected_sha256": "a35a234eb167c58bf201afc50954e43926a69ba2294536f2d0fabf4e015b12a4",
+        "git_blob_oid": "d381643deadbb42e8a9a07fc9375a6cdfedbdccc",
+        "git_blob_sha256": "a35a234eb167c58bf201afc50954e43926a69ba2294536f2d0fabf4e015b12a4",
+        "canonical_checkout_sha256": "a35a234eb167c58bf201afc50954e43926a69ba2294536f2d0fabf4e015b12a4",
+        "raw_checkout_sha256": "56a351c380232cb8ec11826c2b41e7da3e9495999278aacbfdaee8d9cab267c9",
+        "crlf_pairs": 268,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+        "expected_sha256": "12adb14f118dbf821ee1eabb569f6bbcae831875d3b8a7fb5928c18a4b323a56",
+        "git_blob_oid": "48db3052d1ff53fa7cd5f61d0371dd1be0e780bd",
+        "git_blob_sha256": "12adb14f118dbf821ee1eabb569f6bbcae831875d3b8a7fb5928c18a4b323a56",
+        "canonical_checkout_sha256": "12adb14f118dbf821ee1eabb569f6bbcae831875d3b8a7fb5928c18a4b323a56",
+        "raw_checkout_sha256": "ee6931d853b7b7daca7ce3f1d9e6b2b2964d50264cb824a417b74f4ba56482d0",
+        "crlf_pairs": 8,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+        "expected_sha256": "56022d4fb07816ca0ed3f841770605dc212a4cb39fcb9682c75a753f73c7776b",
+        "git_blob_oid": "4d94a57de67a41b718073e403cd894843dcffa0d",
+        "git_blob_sha256": "56022d4fb07816ca0ed3f841770605dc212a4cb39fcb9682c75a753f73c7776b",
+        "canonical_checkout_sha256": "56022d4fb07816ca0ed3f841770605dc212a4cb39fcb9682c75a753f73c7776b",
+        "raw_checkout_sha256": "944392172735231a45141fbc4ccfa0e02f44c0c4b1ac4ed78923fde4fb032c63",
+        "crlf_pairs": 35,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/specs/db-embedding-stats/evidence/coverage.out",
+        "expected_sha256": "edd5fb10fe7a7d7aaddd2bfd96ea220fe42f94561d386712951eb70eabffb735",
+        "git_blob_oid": "457c38e08408c534032a7a962969c762fa1fad8c",
+        "git_blob_sha256": "edd5fb10fe7a7d7aaddd2bfd96ea220fe42f94561d386712951eb70eabffb735",
+        "canonical_checkout_sha256": "edd5fb10fe7a7d7aaddd2bfd96ea220fe42f94561d386712951eb70eabffb735",
+        "raw_checkout_sha256": "e046f339ff8fdeae86e7dc435bb0eb2832837199f68f08721206e19c06e9533e",
+        "crlf_pairs": 240,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+        "expected_sha256": "efad310616efa0878628e6af946f06349b16f0c7817432cbb3614ff5c74de025",
+        "git_blob_oid": "8a3d45057e7c869e3eec8925a25a341158209f01",
+        "git_blob_sha256": "efad310616efa0878628e6af946f06349b16f0c7817432cbb3614ff5c74de025",
+        "canonical_checkout_sha256": "efad310616efa0878628e6af946f06349b16f0c7817432cbb3614ff5c74de025",
+        "raw_checkout_sha256": "abf5a30d77153dd2d822d151a03ee03eb3160a27d6649dcd79f99c4280276be0",
+        "crlf_pairs": 52,
+        "bare_cr": 0,
+        "match": true
+      },
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json",
+        "expected_sha256": "a82aa7d911935e1327893faa266d49df97018a182fbe8498dc3e4976c59d9ada",
+        "git_blob_oid": "1fa3cb6c4dc1fba849f50f33a42a3f2d1f2b23fd",
+        "git_blob_sha256": "a82aa7d911935e1327893faa266d49df97018a182fbe8498dc3e4976c59d9ada",
+        "canonical_checkout_sha256": "a82aa7d911935e1327893faa266d49df97018a182fbe8498dc3e4976c59d9ada",
+        "raw_checkout_sha256": "c2e54992c982edb42510d8f4374fc551b4985bf25bd1543e93b9b881f40614ae",
+        "crlf_pairs": 42,
+        "bare_cr": 0,
+        "match": true
+      }
+    ]
+  },
+  "contract": {
+    "entry_count": 7,
+    "errors": [],
+    "entries": [
+      {
+        "path": "internal/embedding/store.go",
+        "git_blob_oid": "1abaee96b07583f9fd824ed03c40b043c490b567",
+        "byte_length": 10934,
+        "sha256": "7bfb06dfc0dda792147d5e2df9d2fe68b59edaac55d2396dece1b8a8a09eee5f",
+        "match": true
+      },
+      {
+        "path": "internal/embedding/store_stats_test.go",
+        "git_blob_oid": "d381643deadbb42e8a9a07fc9375a6cdfedbdccc",
+        "byte_length": 9189,
+        "sha256": "a35a234eb167c58bf201afc50954e43926a69ba2294536f2d0fabf4e015b12a4",
+        "match": true
+      },
+      {
+        "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+        "git_blob_oid": "48db3052d1ff53fa7cd5f61d0371dd1be0e780bd",
+        "byte_length": 577,
+        "sha256": "12adb14f118dbf821ee1eabb569f6bbcae831875d3b8a7fb5928c18a4b323a56",
+        "match": true
+      },
+      {
+        "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+        "git_blob_oid": "4d94a57de67a41b718073e403cd894843dcffa0d",
+        "byte_length": 1429,
+        "sha256": "56022d4fb07816ca0ed3f841770605dc212a4cb39fcb9682c75a753f73c7776b",
+        "match": true
+      },
+      {
+        "path": ".agent/specs/db-embedding-stats/evidence/coverage.out",
+        "git_blob_oid": "457c38e08408c534032a7a962969c762fa1fad8c",
+        "byte_length": 17413,
+        "sha256": "edd5fb10fe7a7d7aaddd2bfd96ea220fe42f94561d386712951eb70eabffb735",
+        "match": true
+      },
+      {
+        "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+        "git_blob_oid": "8a3d45057e7c869e3eec8925a25a341158209f01",
+        "byte_length": 3054,
+        "sha256": "efad310616efa0878628e6af946f06349b16f0c7817432cbb3614ff5c74de025",
+        "match": true
+      },
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json",
+        "git_blob_oid": "1fa3cb6c4dc1fba849f50f33a42a3f2d1f2b23fd",
+        "byte_length": 1592,
+        "sha256": "a82aa7d911935e1327893faa266d49df97018a182fbe8498dc3e4976c59d9ada",
+        "match": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+  "mode": "artifact-files",
+  "status": "PASS",
+  "source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "source_commit_is_ancestor": true,
+  "algorithm": "sha256",
+  "representation": "canonical-lf-files",
+  "total": 5,
+  "matched": 5,
+  "checkout": {
+    "core_autocrlf": "true",
+    "eol_counts": {
+      "lf": 5
+    }
+  },
+  "structural_errors": [],
+  "entries": [
+    {
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
+      "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
+      "match": true,
+      "checkout_eol": "lf",
+      "bare_carriage_returns": 0
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json",
+      "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json",
+      "match": true,
+      "checkout_eol": "lf",
+      "bare_carriage_returns": 0
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+      "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+      "match": true,
+      "checkout_eol": "lf",
+      "bare_carriage_returns": 0
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json",
+      "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json",
+      "match": true,
+      "checkout_eol": "lf",
+      "bare_carriage_returns": 0
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md",
+      "normalized_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md",
+      "match": true,
+      "checkout_eol": "lf",
+      "bare_carriage_returns": 0
+    }
+  ]
+}

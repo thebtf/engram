@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "target": "db2cf891dd9c6315fd17220ffe2d02302bea8844",
+  "target_tree": "6a450d3f0b83ce2afd95910da1516411a2134514",
+  "parent": "580b0cd0ff38bb55a5195a8004e60234a824b7a8",
+  "base": "580b0cd0ff38bb55a5195a8004e60234a824b7a8",
+  "base_to_target_commit_count": 1,
+  "source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "source_is_ancestor": true,
+  "checkpoint": "53b2ef1931c534e27183126a1aad2d46b3a854b2",
+  "checkpoint_is_ancestor": false,
+  "changed_path_count": 9,
+  "changed_paths": [
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r2/SHA256SUMS.txt",
+      "git_blob_oid": "6fbef4d23f5a647952d694549d3d3f55cf6ab034",
+      "sha256": "a723782459ee52b40db3c3105a138347a62354b48f1ec7fab4c3378a58617780",
+      "bytes": 1677
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r2/maker-summary.v1.json",
+      "git_blob_oid": "1e2b57092c1f6129d708f0dd1c37da79307f58cd",
+      "sha256": "5e6271fe6eaa8361247221263ac640af426e25be01c88f558e2d85a84773fd65",
+      "bytes": 1583
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/ARTIFACTS.sha256",
+      "git_blob_oid": "92585baa7da8767348794394d63e63ff35de37be",
+      "sha256": "a08508ce15f5ba89c60971536bd6ef0aa5127b102c52560bcda1c3a829f7fecb",
+      "bytes": 983
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md",
+      "git_blob_oid": "c827109915a379df03f943af58853bb3459d5866",
+      "sha256": "3b7f5ad0abcccd39f0d5ce9349fceb8cca4794e1bf537943e4b38ce629357dbb",
+      "bytes": 7029
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json",
+      "git_blob_oid": "c73fa547cb74c7b6d33a88f98bf5cd5f6805053f",
+      "sha256": "d99f3499b2e5c371ababdffc84410e1dcc8b028373ae00483136ae0eb6bf509a",
+      "bytes": 4168
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+      "git_blob_oid": "9f8424f1ea8ed5accac11ff6f019efdad9573cf9",
+      "sha256": "4f46e0f020fd7aae39b327adac7a9070d744f66fa26124f652d25470fa409114",
+      "bytes": 22901
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+      "git_blob_oid": "c9c08dd99095190cc316479eb04c28154fb1ffce",
+      "sha256": "d0fc0a8b57a3dc1f31210a69ec0b85443995883c41ea8ba818e8d95837b315b3",
+      "bytes": 8910
+    },
+    {
+      "status": "A",
+      "path": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R2.red.json",
+      "git_blob_oid": "8c8d439d0bcb448242a05bfef7b0175489f99305",
+      "sha256": "5a01028809f642d299891de75148170fa2ade1d2e3e949b86f45a5aa92423249",
+      "bytes": 625
+    },
+    {
+      "status": "A",
+      "path": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R2.tdd.json",
+      "git_blob_oid": "73f3aa076a2572302cf7717923f35c663e705ba5",
+      "sha256": "ca517588d678f59b86b627a109bdbc0bd8fc1b49cdd5df4a605ec6cb57da206c",
+      "bytes": 2219
+    }
+  ],
+  "product_source_test_delta_vs_source": [],
+  "product_source_test_delta_vs_base": []
+}
