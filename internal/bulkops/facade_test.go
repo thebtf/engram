@@ -13,6 +13,7 @@ package bulkops
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -329,4 +330,173 @@ func TestCaptureMemoryBeforeState_ReturnsPersistedAuthoritativeBoundary(t *testi
 	require.NoError(t, err)
 	require.True(t, persisted.CreatedAt.Equal(capturedAt),
 		"the exact capture boundary returned with before_state must be persisted")
+}
+
+func createBulkPromoteCandidate(t *testing.T, candidateStore *gormdb.CandidateStore, suffix string) *models.CrystallizationCandidate {
+	t.Helper()
+	candidate, err := candidateStore.Create(context.Background(), &models.CrystallizationCandidate{
+		SourceSessionID:         "bulk-promote-" + suffix,
+		ProposedContent:         "bulk promote " + suffix,
+		ProposedTier:            "semantic",
+		ProposedEpistemicType:   "decision",
+		ProposedPromotionTarget: "semantic",
+		EvidenceHandles:         []string{"session:bulk-promote-" + suffix},
+		PrivacyScope:            "project",
+		Status:                  models.CandidateStatusPending,
+		Fingerprint:             fmt.Sprintf("bulk-promote-%s-%d", suffix, time.Now().UnixNano()),
+		AffectedProjects:        []string{"bulk-promote-" + suffix},
+		Confidence:              0.9,
+		RecurrenceCount:         2,
+	})
+	require.NoError(t, err)
+	return candidate
+}
+
+func reserveEqualCandidateAndMemoryID(t *testing.T, db *gorm.DB) int64 {
+	t.Helper()
+	var target int64
+	require.NoError(t, db.Raw(`
+		SELECT GREATEST(
+			COALESCE((SELECT MAX(id) FROM memories), 0),
+			COALESCE((SELECT MAX(id) FROM crystallization_candidates), 0),
+			(SELECT last_value FROM memories_id_seq),
+			(SELECT last_value FROM crystallization_candidates_id_seq)
+		) + 1000
+	`).Scan(&target).Error)
+	require.NoError(t, db.Exec("SELECT setval('memories_id_seq', ?, true)", target-1).Error)
+	require.NoError(t, db.Exec("SELECT setval('crystallization_candidates_id_seq', ?, true)", target-1).Error)
+	return target
+}
+
+func TestFacade_BulkPromote_EqualCandidateAndMemoryIDsRemainDomainDisjointAndRollbackable(t *testing.T) {
+	db, store := openTestDB(t)
+	ctx := context.Background()
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	candidateStore := gormdb.NewCandidateStore(db, nil)
+	facade := NewFacade(snapStore, candidateStore, memStore, nil)
+
+	targetID := reserveEqualCandidateAndMemoryID(t, db)
+	candidate := createBulkPromoteCandidate(t, candidateStore, "id-collision")
+	require.Equal(t, targetID, candidate.ID)
+
+	result, err := facade.Execute(ctx, adminIdentity(), BulkOp{
+		Type:            models.SnapshotOpBulkPromote,
+		CandidateIDs:    []int64{candidate.ID},
+		SourceSessionID: "bulk-promote-id-collision",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Promoted, 1)
+	require.Equal(t, candidate.ID, result.Promoted[0],
+		"fresh aligned independent sequences must exercise the equal-ID collision")
+
+	persisted, err := snapStore.Get(ctx, result.SnapshotID)
+	require.NoError(t, err)
+	var entries map[string]models.SnapshotEntry
+	require.NoError(t, json.Unmarshal(persisted.BeforeState, &entries))
+	require.Len(t, entries, 2)
+	require.Equal(t, models.EntryKindRestore, entries[fmt.Sprintf("candidate:%d", candidate.ID)].Kind)
+	require.NotEmpty(t, entries[fmt.Sprintf("candidate:%d", candidate.ID)].Before)
+	require.Equal(t, models.EntryKindDelete, entries[fmt.Sprintf("%d", result.Promoted[0])].Kind)
+
+	rollbackResult, err := Rollback(ctx, adminIdentity(), result.SnapshotID, snapStore, memStore, nil, candidateStore)
+	require.NoError(t, err)
+	require.Equal(t, 1, rollbackResult.RestoredCount)
+
+	restoredCandidate, err := candidateStore.Get(ctx, candidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusPending, restoredCandidate.Status)
+	require.Nil(t, restoredCandidate.PromotedMemoryID)
+	var memoryCount int64
+	require.NoError(t, db.Unscoped().Model(&gormdb.Memory{}).
+		Where("id = ?", result.Promoted[0]).Count(&memoryCount).Error)
+	require.Zero(t, memoryCount)
+}
+
+func TestFacade_BulkPromote_AmendFailureRollsBackAndRetryRemainsSafe(t *testing.T) {
+	db, store := openTestDB(t)
+	ctx := context.Background()
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	candidateStore := gormdb.NewCandidateStore(db, nil)
+	facade := NewFacade(snapStore, candidateStore, memStore, nil)
+	suffix := fmt.Sprintf("amend-failure-%d", time.Now().UnixNano())
+	sourceSessionID := "bulk-promote-" + suffix
+
+	_, err := memStore.Create(ctx, &models.Memory{
+		Content:     "bulk promote sequence spacer",
+		Project:     "bulk-promote-sequence-spacer",
+		SourceAgent: "test",
+	})
+	require.NoError(t, err)
+	candidate := createBulkPromoteCandidate(t, candidateStore, suffix)
+
+	require.NoError(t, db.Exec(`
+		CREATE OR REPLACE FUNCTION test_reject_bulk_promote_snapshot_update() RETURNS trigger
+		LANGUAGE plpgsql AS $$
+		BEGIN
+			RAISE EXCEPTION 'forced AmendPromoteEntries failure';
+		END
+		$$
+	`).Error)
+	require.NoError(t, db.Exec(fmt.Sprintf(`
+		CREATE TRIGGER test_reject_bulk_promote_snapshot_update
+		BEFORE UPDATE ON bulk_op_snapshots
+		FOR EACH ROW
+		WHEN (OLD.op_type = 'bulk_promote' AND OLD.source_session_id = '%s')
+		EXECUTE FUNCTION test_reject_bulk_promote_snapshot_update()
+	`, sourceSessionID)).Error)
+	triggerInstalled := true
+	t.Cleanup(func() {
+		if triggerInstalled {
+			_ = db.Exec("DROP TRIGGER IF EXISTS test_reject_bulk_promote_snapshot_update ON bulk_op_snapshots").Error
+		}
+		_ = db.Exec("DROP FUNCTION IF EXISTS test_reject_bulk_promote_snapshot_update()").Error
+	})
+
+	op := BulkOp{
+		Type:            models.SnapshotOpBulkPromote,
+		CandidateIDs:    []int64{candidate.ID},
+		SourceSessionID: sourceSessionID,
+	}
+	result, executeErr := facade.Execute(ctx, adminIdentity(), op)
+	require.Error(t, executeErr)
+	require.Nil(t, result)
+
+	unchangedCandidate, err := candidateStore.Get(ctx, candidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusPending, unchangedCandidate.Status)
+	require.Nil(t, unchangedCandidate.PromotedMemoryID)
+	var promotedMemoryCount int64
+	require.NoError(t, db.Unscoped().Model(&gormdb.Memory{}).
+		Where("content = ?", candidate.ProposedContent).Count(&promotedMemoryCount).Error)
+	require.Zero(t, promotedMemoryCount)
+	var snapshotCount int64
+	require.NoError(t, db.Table("bulk_op_snapshots").
+		Where("source_session_id = ?", sourceSessionID).Count(&snapshotCount).Error)
+	require.Zero(t, snapshotCount)
+
+	require.NoError(t, db.Exec("DROP TRIGGER test_reject_bulk_promote_snapshot_update ON bulk_op_snapshots").Error)
+	triggerInstalled = false
+	require.NoError(t, db.Exec("DROP FUNCTION test_reject_bulk_promote_snapshot_update()").Error)
+
+	retryResult, err := facade.Execute(ctx, adminIdentity(), op)
+	require.NoError(t, err)
+	require.Len(t, retryResult.Promoted, 1)
+	require.NoError(t, db.Unscoped().Model(&gormdb.Memory{}).
+		Where("content = ?", candidate.ProposedContent).Count(&promotedMemoryCount).Error)
+	require.Equal(t, int64(1), promotedMemoryCount)
+
+	_, err = Rollback(ctx, adminIdentity(), retryResult.SnapshotID, snapStore, memStore, nil, candidateStore)
+	require.NoError(t, err)
+	restoredCandidate, err := candidateStore.Get(ctx, candidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusPending, restoredCandidate.Status)
+	require.Nil(t, restoredCandidate.PromotedMemoryID)
+	require.NoError(t, db.Unscoped().Model(&gormdb.Memory{}).
+		Where("content = ?", candidate.ProposedContent).Count(&promotedMemoryCount).Error)
+	require.Zero(t, promotedMemoryCount)
+
+	_, err = Rollback(ctx, adminIdentity(), retryResult.SnapshotID, snapStore, memStore, nil, candidateStore)
+	require.ErrorIs(t, err, ErrSnapshotNotRollbackable)
 }
