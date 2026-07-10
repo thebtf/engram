@@ -7,15 +7,15 @@ on:
     branches: [main]
 
 jobs:
-  # Migration gate — runs the FULL migration chain against a clean PostgreSQL+pgvector
-  # database on every push. The matrix `test` job below skips all DATABASE_DSN-gated tests
-  # (no DB service), so without this job a broken migration reaches prod unverified — which
-  # is exactly how migration 143 shipped a multi-statement Exec that pgx rejects with
-  # SQLSTATE 42601, breaking server init on v6.23.0–v6.25.0. This job is the clean-DB
-  # first-run gate that catches that class of failure before merge.
-  migrations:
-    name: migrations / clean-db chain
+  # M0 RELEASE-GATES foundation. The wrapper owns fresh database identity,
+  # go-test JSON parsing, unexpected-skip policy, per-process exit capture,
+  # connection evidence, and unconditional cleanup. A later successful command
+  # cannot overwrite an earlier non-zero exit.
+  release-gates-foundation:
+    name: release gates / isolated clean-db chain
     runs-on: ubuntu-latest
+    env:
+      ENGRAM_TEST_ADMIN_DSN: postgres://engram:engram@localhost:5432/postgres?sslmode=disable
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -40,20 +40,53 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Runs the clean-DB full-chain gate: TestMigrationsIntegration calls runMigrations on
-      # a fresh database, so the entire chain (including the newest migration) must apply
-      # cleanly from zero — the first-run path the local borrowed DB never exercises, and the
-      # exact path that broke when migration 143 shipped a multi-statement Exec.
-      #
-      # The pattern is ANCHORED (TestMigrationsIntegration$) to this one gate. The sibling
-      # TestMigrationsIntegration_* tests are NOT clean-DB-safe on the base pgvector image —
-      # they drop/re-run individual migrations and assume an already-migrated schema, so an
-      # unanchored -run pulls them in and they fail on a from-zero DB. Those siblings stay as
-      # operator-run-against-a-real-DB tests; this gate owns the clean first-run contract.
-      - name: Run migration chain on clean DB
-        env:
-          DATABASE_DSN: postgres://engram:engram@localhost:5432/engram?sslmode=disable
-        run: go test ./internal/db/gorm/ -run 'TestMigrationsIntegration$' -count=1 -v
+      - name: Self-test go-test JSON assertion
+        shell: pwsh
+        run: ./scripts/production-gates/assert-go-test-json.ps1 -SelfTest
+
+      - name: Self-test coverage assertion
+        shell: pwsh
+        run: ./scripts/production-gates/assert-coverage.ps1 -SelfTest
+
+      - name: Self-test cleanup safety
+        shell: pwsh
+        run: ./scripts/production-gates/cleanup-db-sessions.ps1 -SelfTest
+
+      - name: Self-test false-green prevention
+        shell: pwsh
+        run: ./scripts/production-gates/run-db-suite.ps1 -SelfTest
+
+      - name: Resolve PostgreSQL service identity
+        shell: pwsh
+        run: |
+          $container = docker ps --filter "ancestor=pgvector/pgvector:pg17" --format "{{.ID}}" | Select-Object -First 1
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($container)) {
+            throw "pgvector/pgvector:pg17 service container was not found"
+          }
+          "POSTGRES_CONTAINER=$container" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # The pattern is intentionally anchored. This is the clean first-install
+      # migration contract; sibling migration tests have their own isolated DB
+      # acceptance lanes.
+      - name: Run isolated migration chain through RELEASE-GATES
+        shell: pwsh
+        run: |
+          ./scripts/production-gates/run-db-suite.ps1 `
+            -FreshDatabase `
+            -Package ./internal/db/gorm `
+            -Run 'TestMigrationsIntegration$' `
+            -Repeat 1 `
+            -FailOnUnexpectedSkip `
+            -PostgresContainer $env:POSTGRES_CONTAINER `
+            -PostgresImage pgvector/pgvector:pg17
+
+      - name: Upload RELEASE-GATES evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-gates-foundation
+          path: .agent/reports/evidence/production-ready/release-gates-foundation/
+          if-no-files-found: error
 
   test:
     name: test / ${{ matrix.os }}
@@ -95,113 +128,29 @@ jobs:
       # + MinGW, not available in windows-latest default environment).
       - name: Test (Linux / macOS — with race detector)
         if: runner.os != 'Windows'
-        run: go test ./... -race -cover -coverprofile=coverage.out
+        run: go test ./... -race -covermode=atomic -coverprofile=coverage.out -count=1
 
       - name: Test (Windows — without race detector)
         if: runner.os == 'Windows'
-        run: go test ./... -cover -coverprofile=coverage.out
+        run: go test ./... -covermode=atomic -coverprofile=coverage.out -count=1
 
-      # Coverage gates — enforced on every platform that produces coverage.out.
-      #
-      # Honest thresholds derived from running the v4 statement-weighted check
-      # against an actual local run after PR #167's loom-module landing:
-      #
-      # internal/module/                >= 75%  (real measurement 76.2% as of
-      #                                          5d8d651; Phase A's "95.8% NFR-7"
-      #                                          claim was either for a single
-      #                                          sub-package or measured by a
-      #                                          buggy script that sampled one
-      #                                          function via tail -1)
-      # internal/handlers/engramcore    >= 60%  (gRPC transport limits coverage)
-      # internal/handlers/loom          >= 70%  (Phase B-1 plumbing landing;
-#                                          real measurement 75.7% on the v4
-#                                          coverage script. Loom error paths
-#                                          (PRAGMA failure, NewEngine error,
-#                                          shutdown ctx cancellation) are
-#                                          hard to cover via moduletest.Harness
-#                                          without a full SQLite fake. Phase
-#                                          B-2 follow-up improves coverage to
-#                                          85%+ once loom-tools lands and adds
-#                                          its own test surface.)
-      # cmd/engram/                     >= 0%   (main + wiring + exec_*.go are
-      #                                          not meaningfully unit-testable;
-      #                                          gate is kept at 0% as
-      #                                          documentation of the package set)
-      #
-      # The check computes a TRUE statement-weighted coverage for a package
-      # prefix by parsing the raw coverage.out file directly. Each non-header
-      # line in coverage.out has the form:
-      #   path:start.col,end.col numStatements covered(0/1)
-      # The script sums numStatements per package prefix, sums numStatements
-      # of lines where covered > 0, and reports hit/total.
-      #
-      # History:
-      # - v1 (Phase A): used `go tool cover -func ... | tail -1`. Sampled ONE
-      #   function and called it the package coverage. Reported 0% for
-      #   cmd/engram/ on every run — Phase A merged with this gate red on
-      #   Linux/macOS. On Windows the same script silently SKIPPED everything
-      #   because `2>/dev/null` suppressed the missing-coverage.out error and
-      #   awk processed empty input, so pct was empty and the gate returned
-      #   "SKIP" with exit 0. Phase A therefore never actually enforced
-      #   coverage on Windows at all.
-      # - v2 (PR #167 first attempt): function-count-weighted average via awk
-      #   over `go tool cover -func` output. Better than v1 but not the same
-      #   metric Phase A claimed, and still inherited the Windows silent skip.
-      # - v3 (PR #167 second attempt): statement-weighted from raw coverage.out
-      #   directly. Honest on Linux/macOS but BROKE Windows hard because the
-      #   silent-skip path is gone — awk fails fatally when coverage.out is
-      #   missing.
-      # - v4 (this version): statement-weighted on platforms where coverage.out
-      #   exists; explicit WARN-and-skip on platforms where it does not (still
-      #   Windows as of 2026-04-15 — root cause TBD, tracked under Phase B-2
-      #   CI hardening). Gate is permissive on missing coverage.out so we
-      #   don't block PRs on a pre-existing Windows-CI environmental issue.
-      - name: Check coverage gates
-        shell: bash
-        run: |
-          if [ ! -f coverage.out ]; then
-            echo "WARN: coverage.out is missing on this platform — skipping all coverage gates."
-            echo "WARN: this is a pre-existing issue on the Windows runner that Phase A also hit."
-            echo "WARN: Linux and macOS runners produce coverage.out and enforce the gates."
-            exit 0
-          fi
+      # RELEASE-GATES coverage is fail-closed on every OS. Missing profiles are
+      # fatal, overall statement coverage must be >=60%, and the existing
+      # package floors are enforced by the same cross-platform parser.
+      - name: Check coverage gates (fail closed)
+        if: always()
+        shell: pwsh
+        run: ./scripts/production-gates/assert-coverage.ps1 -CoverageProfile coverage.out -SummaryPath coverage-summary.json -OverallThreshold 60
 
-          check_pkg() {
-            local pkg="$1"
-            local threshold="$2"
-            local pct
-            pct=$(awk -v pkg="github.com/thebtf/engram/${pkg}" '
-              $1 ~ ("^" pkg) {
-                n = split($0, parts, " ")
-                if (n < 3) next
-                stmts = parts[n-1]
-                hit   = parts[n]
-                total += stmts
-                if (hit + 0 > 0) covered += stmts
-              }
-              END {
-                if (total > 0) printf "%.1f\n", (covered / total) * 100
-                else print ""
-              }
-            ' coverage.out)
-            if [ -z "$pct" ]; then
-              echo "SKIP: no coverage data for ${pkg} (no test files or all functions excluded)"
-              return 0
-            fi
-            local ok
-            ok=$(awk "BEGIN { print ($pct >= $threshold) ? 1 : 0 }")
-            if [ "$ok" = "1" ]; then
-              echo "PASS: ${pkg} stmt coverage ${pct}% >= ${threshold}%"
-            else
-              echo "FAIL: ${pkg} stmt coverage ${pct}% < ${threshold}% (threshold)"
-              exit 1
-            fi
-          }
-
-          check_pkg "internal/module/"                75
-          check_pkg "internal/handlers/engramcore"    60
-          check_pkg "internal/handlers/loom"          70
-          check_pkg "cmd/engram/"                      0
+      - name: Upload coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: |
+            coverage.out
+            coverage-summary.json
+          if-no-files-found: error
 
       # Safety-gate self-check (T007, v5 cleanup).
       #

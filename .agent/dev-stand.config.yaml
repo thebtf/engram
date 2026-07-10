@@ -1,0 +1,31 @@
+version: 1
+shape: docker-compose
+
+# The critical stand is isolated from ordinary local compose state by project
+# name and non-default host ports. The critical-suite runner exports the env
+# below before invoking the lifecycle commands.
+up:
+  command: "docker compose -p engram-critical-stand -f docker-compose.yml up -d --build --wait"
+  readiness_check: "docker compose -p engram-critical-stand -f docker-compose.yml exec -T postgres pg_isready -U engram -d engram && curl -fsS http://localhost:37778/health"
+  timeout_seconds: 300
+down:
+  command: "docker compose -p engram-critical-stand -f docker-compose.yml down -v --remove-orphans"
+  timeout_seconds: 120
+logs:
+  command: "docker compose -p engram-critical-stand -f docker-compose.yml logs --no-color --tail=300"
+
+env:
+  COMPOSE_PROJECT_NAME: "engram-critical-stand"
+  POSTGRES_PORT: "55433"
+  WORKER_PORT: "37778"
+  OPERATOR_CONSOLE_PORT: "3001"
+  POSTGRES_PASSWORD: "engram"
+  DATABASE_DSN: "postgres://engram:engram@postgres:5432/engram?sslmode=disable"
+  STAND_API_URL: "http://localhost:37778"
+  STAND_OPERATOR_URL: "http://localhost:3001"
+
+database_evidence:
+  runner: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1"
+  postgres_image: "pgvector/pgvector:pg17"
+  database_lifecycle: "fresh unique database per repetition; cleanup owns only engram_prc_rg_* databases"
+  shared_service_policy: "Never stop or remove an operator-owned PostgreSQL container; only terminate/drop the current run database."
