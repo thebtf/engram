@@ -47,6 +47,9 @@ type AuthHandlers struct {
 
 	// beforeAccessSessionCheck is a test seam used by the lifecycle race tests.
 	beforeAccessSessionCheck func()
+	// beforeInitialAdminCreate is a test seam used to align concurrent setup
+	// requests after bcrypt but before the authoritative database operation.
+	beforeInitialAdminCreate func()
 }
 
 // NewAuthHandlers creates AuthHandlers wired to the given stores.
@@ -458,6 +461,9 @@ func (h *AuthHandlers) handleSetup(w http.ResponseWriter, r *http.Request) {
 	if !h.requireStores(w, true, false, false, false) {
 		return
 	}
+	// Keep the cheap preflight so a completed public setup endpoint cannot be
+	// used as a bcrypt work amplifier. CreateInitialAdmin repeats this check
+	// under the cross-process transaction lock and remains authoritative.
 	count, err := h.users.CountUsers()
 	if err != nil {
 		log.Error().Err(err).Msg("auth: failed to count users during setup")
@@ -484,9 +490,16 @@ func (h *AuthHandlers) handleSetup(w http.ResponseWriter, r *http.Request) {
 		writeAuthJSONError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	if h.beforeInitialAdminCreate != nil {
+		h.beforeInitialAdminCreate()
+	}
 
-	user, err := h.users.CreateUser(strings.TrimSpace(req.Email), string(hash), gormdb.DashboardRoleAdmin)
+	user, err := h.users.CreateInitialAdmin(r.Context(), strings.TrimSpace(req.Email), string(hash))
 	if err != nil {
+		if errors.Is(err, gormdb.ErrInitialAdminSetupAlreadyCompleted) {
+			writeAuthJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
 		log.Error().Err(err).Str("email", req.Email).Msg("auth: failed to create admin user during setup")
 		writeAuthJSONError(w, http.StatusInternalServerError, "failed to create user")
 		return

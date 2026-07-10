@@ -55,6 +55,198 @@ func openIsolatedUserStore(t *testing.T) (*UserStore, *gormio.DB) {
 	return NewUserStore(db), db
 }
 
+func openIsolatedUserStorePair(t *testing.T) (*UserStore, *UserStore, *gormio.DB) {
+	t.Helper()
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping user store integration test")
+	}
+
+	schema := fmt.Sprintf("initial_admin_test_%d", time.Now().UnixNano())
+	rootDB, err := gormio.Open(postgres.Open(dsn), &gormio.Config{})
+	require.NoError(t, err)
+	rootSQLDB, err := rootDB.DB()
+	require.NoError(t, err)
+	rootSQLDB.SetMaxOpenConns(1)
+	rootSQLDB.SetMaxIdleConns(1)
+	require.NoError(t, rootDB.Exec(fmt.Sprintf(`CREATE SCHEMA %q`, schema)).Error)
+	t.Cleanup(func() {
+		require.NoError(t, rootDB.Exec(fmt.Sprintf(`DROP SCHEMA %q CASCADE`, schema)).Error)
+		_ = rootSQLDB.Close()
+	})
+
+	parsedDSN, err := url.Parse(dsn)
+	require.NoError(t, err)
+	query := parsedDSN.Query()
+	query.Set("search_path", schema)
+	parsedDSN.RawQuery = query.Encode()
+	schemaDSN := parsedDSN.String()
+
+	dbA, err := gormio.Open(postgres.Open(schemaDSN), &gormio.Config{})
+	require.NoError(t, err)
+	sqlDBA, err := dbA.DB()
+	require.NoError(t, err)
+	sqlDBA.SetMaxOpenConns(2)
+	sqlDBA.SetMaxIdleConns(1)
+	t.Cleanup(func() { _ = sqlDBA.Close() })
+
+	dbB, err := gormio.Open(postgres.Open(schemaDSN), &gormio.Config{})
+	require.NoError(t, err)
+	sqlDBB, err := dbB.DB()
+	require.NoError(t, err)
+	sqlDBB.SetMaxOpenConns(2)
+	sqlDBB.SetMaxIdleConns(1)
+	t.Cleanup(func() { _ = sqlDBB.Close() })
+
+	require.NoError(t, dbA.AutoMigrate(&User{}))
+	return NewUserStore(dbA), NewUserStore(dbB), dbA
+}
+
+func TestUserStore_CreateInitialAdmin_ConcurrentIndependentConnectionsExactlyOne(t *testing.T) {
+	storeA, storeB, db := openIsolatedUserStorePair(t)
+
+	type result struct {
+		user *User
+		err  error
+	}
+	for iteration := 0; iteration < 20; iteration++ {
+		require.NoError(t, db.Exec("DELETE FROM users").Error)
+		start := make(chan struct{})
+		results := make(chan result, 2)
+		for index, store := range []*UserStore{storeA, storeB} {
+			go func(index int, store *UserStore) {
+				<-start
+				user, createErr := store.CreateInitialAdmin(
+					context.Background(),
+					fmt.Sprintf("initial-%d-%d@example.com", iteration, index),
+					"hash",
+				)
+				results <- result{user: user, err: createErr}
+			}(index, store)
+		}
+		close(start)
+
+		successes := 0
+		alreadyCompleted := 0
+		for range 2 {
+			got := <-results
+			if got.err == nil {
+				successes++
+				require.NotNil(t, got.user)
+				require.Equal(t, DashboardRoleAdmin, got.user.Role)
+				require.False(t, got.user.Disabled)
+				continue
+			}
+			require.ErrorIs(t, got.err, ErrInitialAdminSetupAlreadyCompleted)
+			alreadyCompleted++
+			require.Nil(t, got.user)
+		}
+		require.Equal(t, 1, successes, "iteration %d", iteration)
+		require.Equal(t, 1, alreadyCompleted, "iteration %d", iteration)
+
+		count, err := storeA.CountUsers()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), count, "iteration %d", iteration)
+		count, err = storeA.CountAdmins()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), count, "iteration %d", iteration)
+	}
+}
+
+func TestUserStore_CreateInitialAdmin_AlreadyCompletedReturnsTypedError(t *testing.T) {
+	storeA, storeB, _ := openIsolatedUserStorePair(t)
+
+	created, err := storeA.CreateInitialAdmin(context.Background(), "first@example.com", "hash")
+	require.NoError(t, err)
+	require.NotNil(t, created)
+
+	duplicate, err := storeB.CreateInitialAdmin(context.Background(), "second@example.com", "hash")
+	require.ErrorIs(t, err, ErrInitialAdminSetupAlreadyCompleted)
+	require.Nil(t, duplicate)
+
+	count, err := storeA.CountUsers()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+}
+
+func TestUserStore_CreateInitialAdmin_ConcurrentDuplicateEmailFailsSafely(t *testing.T) {
+	storeA, storeB, db := openIsolatedUserStorePair(t)
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, store := range []*UserStore{storeA, storeB} {
+		go func(store *UserStore) {
+			<-start
+			_, createErr := store.CreateInitialAdmin(context.Background(), "same@example.com", "hash")
+			results <- createErr
+		}(store)
+	}
+	close(start)
+
+	successes := 0
+	alreadyCompleted := 0
+	for range 2 {
+		createErr := <-results
+		if createErr == nil {
+			successes++
+			continue
+		}
+		require.ErrorIs(t, createErr, ErrInitialAdminSetupAlreadyCompleted)
+		alreadyCompleted++
+	}
+	require.Equal(t, 1, successes)
+	require.Equal(t, 1, alreadyCompleted)
+
+	var count int64
+	require.NoError(t, db.Model(&User{}).Where("email = ?", "same@example.com").Count(&count).Error)
+	require.Equal(t, int64(1), count)
+}
+
+func TestUserStore_CreateInitialAdmin_ContextCancellationLeavesSetupRetryable(t *testing.T) {
+	_, storeB, db := openIsolatedUserStorePair(t)
+	lockTx := db.Begin()
+	require.NoError(t, lockTx.Error)
+	require.NoError(t, lockTx.Exec(
+		"SELECT pg_advisory_xact_lock(?, ?)",
+		initialAdminSetupLockNamespace,
+		initialAdminSetupLockOperation,
+	).Error)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	created, err := storeB.CreateInitialAdmin(ctx, "cancelled@example.com", "hash")
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, created)
+	require.NoError(t, lockTx.Rollback().Error)
+
+	count, err := storeB.CountUsers()
+	require.NoError(t, err)
+	require.Zero(t, count)
+	created, err = storeB.CreateInitialAdmin(context.Background(), "retry@example.com", "hash")
+	require.NoError(t, err)
+	require.NotNil(t, created)
+}
+
+func TestUserStore_CreateInitialAdmin_InsertFailureRollsBackAndLeavesSetupRetryable(t *testing.T) {
+	storeA, _, _ := openIsolatedUserStorePair(t)
+
+	created, err := storeA.CreateInitialAdmin(
+		context.Background(),
+		"too-long-hash@example.com",
+		strings.Repeat("x", 256),
+	)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrInitialAdminSetupAlreadyCompleted)
+	require.Nil(t, created)
+
+	count, err := storeA.CountUsers()
+	require.NoError(t, err)
+	require.Zero(t, count)
+	created, err = storeA.CreateInitialAdmin(context.Background(), "retry@example.com", "hash")
+	require.NoError(t, err)
+	require.NotNil(t, created)
+}
+
 func TestUserStore_UpdateUserWithLastAdminGuard_ConcurrentDemoteDisableLeavesOneAdmin(t *testing.T) {
 	users, db := openIsolatedUserStore(t)
 
