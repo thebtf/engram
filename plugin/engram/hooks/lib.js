@@ -356,17 +356,42 @@ const PROJECT_IDENTITY_VERSION_V2 = 2;
 const PROJECT_IDENTITY_V2_FILE = '.engram-project-v2.json';
 const STRICT_ANCHOR_V2 = /^[0-9a-f]{32}$/;
 const PROJECT_IDENTITY_CONTROL = /[\u0000-\u001f\u007f]/;
+const PROJECT_SELECTOR_V2 = /^[A-Za-z0-9_.\/:\\-]+$/;
 const PROJECT_ANCHOR_V2_KEYS = ['anchor', 'shared', 'version'];
 
+function projectIdentityInvalid(reason) {
+  return new Error(`PROJECT_IDENTITY_INVALID: ${reason}`);
+}
+
+function validateProjectSelectorV2(selector) {
+  if (typeof selector !== 'string' || selector === '' || selector.length > 256 ||
+      selector.trim() !== selector || selector.includes('..') ||
+      PROJECT_IDENTITY_CONTROL.test(selector) || !PROJECT_SELECTOR_V2.test(selector)) {
+    throw projectIdentityInvalid('project selector is empty or malformed');
+  }
+  return selector;
+}
+
 function buildProjectIdentityV2(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw projectIdentityInvalid('identity metadata must be an object');
+  }
+  for (const field of ['legacy_project_id', 'display_name', 'git_remote', 'relative_path', 'non_git_anchor']) {
+    if (value[field] != null && typeof value[field] !== 'string') {
+      throw projectIdentityInvalid(`${field} must be a string`);
+    }
+  }
+  if (value.anchor_shared != null && typeof value.anchor_shared !== 'boolean') {
+    throw projectIdentityInvalid('anchor_shared must be a JSON boolean or null');
+  }
   return {
     version: PROJECT_IDENTITY_VERSION_V2,
-    legacy_project_id: String(value.legacy_project_id || ''),
-    display_name: String(value.display_name || ''),
-    git_remote: String(value.git_remote || ''),
-    relative_path: String(value.relative_path || ''),
-    non_git_anchor: String(value.non_git_anchor || ''),
-    anchor_shared: value.anchor_shared == null ? null : Boolean(value.anchor_shared),
+    legacy_project_id: value.legacy_project_id || '',
+    display_name: value.display_name || '',
+    git_remote: value.git_remote || '',
+    relative_path: value.relative_path || '',
+    non_git_anchor: value.non_git_anchor || '',
+    anchor_shared: value.anchor_shared == null ? null : value.anchor_shared,
   };
 }
 
@@ -377,10 +402,17 @@ function validateProjectIdentityV2(identity) {
   if (!identity || identity.version !== PROJECT_IDENTITY_VERSION_V2) {
     invalid('unsupported version');
   }
+  for (const field of ['legacy_project_id', 'display_name', 'git_remote', 'relative_path', 'non_git_anchor']) {
+    if (typeof identity[field] !== 'string') invalid(`${field} must be a string`);
+  }
+  if (identity.anchor_shared !== null && typeof identity.anchor_shared !== 'boolean') {
+    invalid('anchor_shared must be a JSON boolean or null');
+  }
   if (identity.legacy_project_id.length > 256 || identity.display_name.length > 256 ||
       identity.legacy_project_id.trim() !== identity.legacy_project_id ||
+      identity.display_name.trim() !== identity.display_name ||
       PROJECT_IDENTITY_CONTROL.test(identity.legacy_project_id) || PROJECT_IDENTITY_CONTROL.test(identity.display_name)) {
-    invalid('selector or display name too long');
+    invalid('selector or display name is malformed');
   }
   const hasGit = identity.git_remote !== '' || identity.relative_path !== '';
   const hasAnchor = identity.non_git_anchor !== '' || identity.anchor_shared !== null;
@@ -389,11 +421,8 @@ function validateProjectIdentityV2(identity) {
     if (!identity.git_remote || identity.git_remote.length > 2048 || identity.git_remote.trim() !== identity.git_remote || PROJECT_IDENTITY_CONTROL.test(identity.git_remote)) {
       invalid('git_remote is missing or malformed');
     }
-    if (identity.relative_path.length > 4096 || identity.relative_path.startsWith('/') || identity.relative_path.includes('\\') || PROJECT_IDENTITY_CONTROL.test(identity.relative_path)) {
+    if (!normalizedProjectRelativePathV2(identity.relative_path)) {
       invalid('relative_path is not normalized');
-    }
-    if (identity.relative_path.split('/').some((part) => part === '.' || part === '..')) {
-      invalid('relative_path contains traversal');
     }
   } else {
     if (!STRICT_ANCHOR_V2.test(identity.non_git_anchor) || typeof identity.anchor_shared !== 'boolean') {
@@ -401,6 +430,14 @@ function validateProjectIdentityV2(identity) {
     }
   }
   return identity;
+}
+
+function normalizedProjectRelativePathV2(value) {
+  if (value === '') return true;
+  if (value.length > 4096 || value.trim() !== value || value.startsWith('/') ||
+      !value.endsWith('/') || value.includes('\\') || PROJECT_IDENTITY_CONTROL.test(value)) return false;
+  return value.slice(0, -1).split('/').every((part) =>
+    part !== '' && part !== '.' && part !== '..' && part.trim() === part);
 }
 
 function readOrCreateProjectAnchorV2(cwd) {
@@ -462,17 +499,23 @@ async function registerProjectIdentityV2(context, requestFn = request) {
   if (!context || !context.ProjectIdentityV2) {
     throw new Error('PROJECT_IDENTITY_INVALID: hook context has no v2 identity');
   }
+  const selector = validateProjectSelectorV2(context.Project);
+  validateProjectIdentityV2(context.ProjectIdentityV2);
   const response = await requestFn('POST', '/api/context/inject', {
-    project: context.Project,
+    project: selector,
     legacy_project: context.LegacyProject,
     git_remote: context.GitRemote,
     relative_path: context.RelativePath,
     project_identity: context.ProjectIdentityV2,
     identity_only: true,
   });
-  if (response && typeof response.canonical_project === 'string' && response.canonical_project !== '') {
-    context.Project = response.canonical_project;
+  let canonical;
+  try {
+    canonical = validateProjectSelectorV2(response && response.canonical_project);
+  } catch {
+    throw new Error('PROJECT_IDENTITY_UNAVAILABLE: project identity registration response is malformed');
   }
+  context.Project = canonical;
   return context.Project;
 }
 
@@ -1039,6 +1082,7 @@ module.exports = {
   PROJECT_IDENTITY_VERSION_V2,
   buildProjectIdentityV2,
   validateProjectIdentityV2,
+  validateProjectSelectorV2,
   resolveProjectIdentityV2,
   registerProjectIdentityV2,
   isProjectIdentityTransportOffline,

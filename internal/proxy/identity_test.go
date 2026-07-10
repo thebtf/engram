@@ -16,10 +16,12 @@ import (
 type identityVectorFile struct {
 	IdentityVersion uint32           `json:"identity_version"`
 	Vectors         []identityVector `json:"vectors"`
+	InvalidVectors  []identityVector `json:"invalid_vectors"`
 }
 
 type identityVector struct {
 	Name            string `json:"name"`
+	InvalidTarget   string `json:"invalid_target"`
 	Selector        string `json:"selector"`
 	DisplayName     string `json:"display_name"`
 	LegacyProjectID string `json:"legacy_project_id"`
@@ -27,6 +29,30 @@ type identityVector struct {
 	RelativePath    string `json:"relative_path"`
 	NonGitAnchor    string `json:"non_git_anchor"`
 	AnchorShared    *bool  `json:"anchor_shared"`
+}
+
+func TestProjectIdentityV2_RejectsSharedInvalidMetadataVectors(t *testing.T) {
+	vectors := loadIdentityVectors(t)
+	for _, vector := range vectors.InvalidVectors {
+		if vector.InvalidTarget != "identity" {
+			continue
+		}
+		vector := vector
+		t.Run(vector.Name, func(t *testing.T) {
+			err := proxy.ValidateProjectIdentityV2(proxy.ProjectIdentityV2{
+				Version:         vectors.IdentityVersion,
+				LegacyProjectID: vector.LegacyProjectID,
+				DisplayName:     vector.DisplayName,
+				GitRemote:       vector.GitRemote,
+				RelativePath:    vector.RelativePath,
+				NonGitAnchor:    vector.NonGitAnchor,
+				AnchorShared:    vector.AnchorShared,
+			})
+			if err == nil || !strings.Contains(err.Error(), "PROJECT_IDENTITY_INVALID") {
+				t.Fatalf("invalid shared vector accepted: %v", err)
+			}
+		})
+	}
 }
 
 func loadIdentityVectors(t *testing.T) identityVectorFile {

@@ -101,7 +101,7 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 		return ProjectIdentityResolution{}, invalidProjectIdentity("project selector is empty or malformed")
 	}
 	if identity != nil {
-		if err := validateStoredProjectIdentityV2(*identity); err != nil {
+		if err := ValidateProjectIdentityV2(*identity); err != nil {
 			return ProjectIdentityResolution{}, err
 		}
 	}
@@ -235,10 +235,11 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 // AttachLegacyAlias adds an old-client selector only when it is absent or
 // already points to canonical. A conflicting alias fails before mutation.
 func AttachLegacyAlias(ctx context.Context, db *gorm.DB, canonical, alias string) error {
-	if canonical == "" || alias == "" || len(canonical) > 256 || len(alias) > 256 ||
-		strings.TrimSpace(canonical) != canonical || strings.TrimSpace(alias) != alias ||
-		containsProjectIdentityControl(canonical) || containsProjectIdentityControl(alias) {
-		return invalidProjectIdentity("canonical project or alias is malformed")
+	if err := ValidateProjectAliasV2(canonical); err != nil {
+		return err
+	}
+	if err := ValidateProjectAliasV2(alias); err != nil {
+		return err
 	}
 	if db == nil {
 		return unavailableProjectIdentity(fmt.Errorf("project identity database is not ready"))
@@ -272,14 +273,29 @@ func AttachLegacyAlias(ctx context.Context, db *gorm.DB, canonical, alias string
 	})
 }
 
-func validateStoredProjectIdentityV2(identity ProjectIdentityV2) error {
+// ValidateProjectAliasV2 validates a legacy selector without applying the
+// stricter canonical selector character allow-list. Legacy directory-derived
+// identifiers may contain internal spaces, but never edge whitespace,
+// controls, or values too large for the projects identity columns.
+func ValidateProjectAliasV2(alias string) error {
+	if alias == "" || len(alias) > 256 || strings.TrimSpace(alias) != alias || containsProjectIdentityControl(alias) {
+		return invalidProjectIdentity("project alias is malformed")
+	}
+	return nil
+}
+
+// ValidateProjectIdentityV2 validates the complete transport metadata without
+// opening a transaction. HTTP callers use it before any registration write;
+// RegisterAndResolve repeats it to keep every transport fail-closed.
+func ValidateProjectIdentityV2(identity ProjectIdentityV2) error {
 	if identity.Version != ProjectIdentityVersionV2 {
 		return invalidProjectIdentity("unsupported identity version")
 	}
 	if len(identity.LegacyProjectID) > 256 || len(identity.DisplayName) > 256 ||
 		strings.TrimSpace(identity.LegacyProjectID) != identity.LegacyProjectID ||
+		strings.TrimSpace(identity.DisplayName) != identity.DisplayName ||
 		containsProjectIdentityControl(identity.LegacyProjectID) || containsProjectIdentityControl(identity.DisplayName) {
-		return invalidProjectIdentity("identity metadata is too long")
+		return invalidProjectIdentity("identity selector or display name is malformed")
 	}
 	hasGit := identity.GitRemote != "" || identity.RelativePath != ""
 	hasAnchor := identity.NonGitAnchor != "" || identity.AnchorShared != nil
@@ -290,13 +306,8 @@ func validateStoredProjectIdentityV2(identity ProjectIdentityV2) error {
 		if identity.GitRemote == "" || len(identity.GitRemote) > 2048 || strings.TrimSpace(identity.GitRemote) != identity.GitRemote || containsProjectIdentityControl(identity.GitRemote) {
 			return invalidProjectIdentity("git_remote is missing or malformed")
 		}
-		if len(identity.RelativePath) > 4096 || strings.HasPrefix(identity.RelativePath, "/") || strings.Contains(identity.RelativePath, "\\") || containsProjectIdentityControl(identity.RelativePath) {
+		if !normalizedProjectRelativePathV2(identity.RelativePath) {
 			return invalidProjectIdentity("relative_path is not normalized")
-		}
-		for _, part := range strings.Split(identity.RelativePath, "/") {
-			if part == "." || part == ".." {
-				return invalidProjectIdentity("relative_path contains traversal")
-			}
 		}
 		if identity.NonGitAnchor != "" || identity.AnchorShared != nil {
 			return invalidProjectIdentity("git identity carries non-git fields")
@@ -307,6 +318,23 @@ func validateStoredProjectIdentityV2(identity ProjectIdentityV2) error {
 		return invalidProjectIdentity("non-git anchor must be 128-bit lowercase hex with explicit sharing")
 	}
 	return nil
+}
+
+func normalizedProjectRelativePathV2(value string) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) > 4096 || strings.TrimSpace(value) != value ||
+		strings.HasPrefix(value, "/") || !strings.HasSuffix(value, "/") ||
+		strings.Contains(value, "\\") || containsProjectIdentityControl(value) {
+		return false
+	}
+	for _, part := range strings.Split(strings.TrimSuffix(value, "/"), "/") {
+		if part == "" || part == "." || part == ".." || strings.TrimSpace(part) != part {
+			return false
+		}
+	}
+	return true
 }
 
 func projectIdentityBindingKey(selector string, identity ProjectIdentityV2) string {
@@ -391,8 +419,18 @@ func createProjectIdentityRow(ctx context.Context, tx *gorm.DB, id, remote, rela
 		RelativePath: sql.NullString{String: relativePath, Valid: remote != ""},
 		DisplayName:  sql.NullString{String: displayName, Valid: displayName != ""},
 	}
-	if err := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&project).Error; err != nil {
-		return fmt.Errorf("create project identity %s: %w", id, err)
+	result := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&project)
+	if result.Error != nil {
+		return fmt.Errorf("create project identity %s: %w", id, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		var active int64
+		if err := tx.WithContext(ctx).Model(&Project{}).Where("id = ? AND removed_at IS NULL", id).Count(&active).Error; err != nil {
+			return fmt.Errorf("verify project identity %s: %w", id, err)
+		}
+		if active != 1 {
+			return fmt.Errorf("canonical project %s is unavailable", id)
+		}
 	}
 	return appendProjectAliases(ctx, tx, id, aliases...)
 }

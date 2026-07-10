@@ -2,13 +2,43 @@ package gorm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	gormio "gorm.io/gorm"
 )
+
+type invalidIdentityVector struct {
+	Name            string `json:"name"`
+	InvalidTarget   string `json:"invalid_target"`
+	Selector        string `json:"selector"`
+	DisplayName     string `json:"display_name"`
+	LegacyProjectID string `json:"legacy_project_id"`
+	GitRemote       string `json:"git_remote"`
+	RelativePath    string `json:"relative_path"`
+	NonGitAnchor    string `json:"non_git_anchor"`
+	AnchorShared    *bool  `json:"anchor_shared"`
+}
+
+func loadInvalidIdentityVectors(t *testing.T) []invalidIdentityVector {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".agent", "specs", "security-project-identity", "evidence", "project-identity-v2-vectors.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corpus struct {
+		Invalid []invalidIdentityVector `json:"invalid_vectors"`
+	}
+	if err := json.Unmarshal(data, &corpus); err != nil {
+		t.Fatal(err)
+	}
+	return corpus.Invalid
+}
 
 func gitIdentityV2(legacy, remote string) *ProjectIdentityV2 {
 	return &ProjectIdentityV2{
@@ -48,6 +78,24 @@ func TestRegisterAndResolve_RejectsRawVsNormalizedSelectorsAndMetadata(t *testin
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := RegisterAndResolve(context.Background(), nil, tt.selector, tt.identity)
+			var identityErr *ProjectIdentityError
+			if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityInvalid {
+				t.Fatalf("error=%T %v, want PROJECT_IDENTITY_INVALID before DB access", err, err)
+			}
+		})
+	}
+	for _, vector := range loadInvalidIdentityVectors(t) {
+		vector := vector
+		t.Run("shared-vector/"+vector.Name, func(t *testing.T) {
+			_, err := RegisterAndResolve(context.Background(), nil, vector.Selector, &ProjectIdentityV2{
+				Version:         ProjectIdentityVersionV2,
+				LegacyProjectID: vector.LegacyProjectID,
+				DisplayName:     vector.DisplayName,
+				GitRemote:       vector.GitRemote,
+				RelativePath:    vector.RelativePath,
+				NonGitAnchor:    vector.NonGitAnchor,
+				AnchorShared:    vector.AnchorShared,
+			})
 			var identityErr *ProjectIdentityError
 			if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityInvalid {
 				t.Fatalf("error=%T %v, want PROJECT_IDENTITY_INVALID before DB access", err, err)
@@ -210,5 +258,35 @@ func TestRegisterAndResolve_FailsClosedOnSoftDeletedBindingCollision(t *testing.
 	}
 	if len(persisted.LegacyIDs) != 0 {
 		t.Fatalf("registration mutated removed binding aliases: %#v", persisted.LegacyIDs)
+	}
+}
+
+func TestRegisterAndResolve_LegacyOnlySoftDeletedCanonicalFailsWithoutMutation(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	selector := "prc-v2-r2-removed-legacy"
+	now := time.Now().UTC()
+	db.Unscoped().Exec(`DELETE FROM projects WHERE id = ?`, selector)
+	defer db.Unscoped().Exec(`DELETE FROM projects WHERE id = ?`, selector)
+	seed := Project{ID: selector, LegacyIDs: []string{"preserve-existing-alias"}, RemovedAt: &now}
+	if err := db.Create(&seed).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := RegisterAndResolve(context.Background(), db, selector, nil)
+	var identityErr *ProjectIdentityError
+	if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityUnavailable || identityErr.UpgradeAction != UpgradeActionRetryProjectRegistration {
+		t.Fatalf("error=%T %v, want stable PROJECT_IDENTITY_UNAVAILABLE", err, err)
+	}
+
+	var rows []Project
+	if err := db.Unscoped().Where("id = ?", selector).Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].RemovedAt == nil {
+		t.Fatalf("soft-deleted canonical changed: %#v", rows)
+	}
+	if len(rows[0].LegacyIDs) != 1 || rows[0].LegacyIDs[0] != "preserve-existing-alias" {
+		t.Fatalf("aliases mutated: %#v", rows[0].LegacyIDs)
 	}
 }

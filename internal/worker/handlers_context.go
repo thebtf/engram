@@ -820,6 +820,24 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "project required", http.StatusBadRequest)
 		return
 	}
+	// Validate every raw selector and the complete v2 metadata before identity
+	// registration can create a project row or append an alias.
+	if err := ValidateProjectName(project); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if legacyProject != "" {
+		if err := gorm.ValidateProjectAliasV2(legacyProject); err != nil {
+			writeProjectIdentityHTTPError(w, err)
+			return
+		}
+	}
+	if projectIdentity != nil {
+		if err := gorm.ValidateProjectIdentityV2(*projectIdentity); err != nil {
+			writeProjectIdentityHTTPError(w, err)
+			return
+		}
+	}
 
 	// Resolve/register synchronously before any retrieval or tenant mutation.
 	// Identity metadata selects a namespace; bearer/principal authorization is
@@ -844,10 +862,6 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := ValidateProjectName(project); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
 	if identityOnly {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"canonical_project": project})

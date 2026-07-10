@@ -56,7 +56,17 @@ interface ProjectIdentityV2Input {
 const projectIdentityV2File = '.engram-project-v2.json';
 const strictAnchorV2 = /^[0-9a-f]{32}$/;
 const projectIdentityControl = /[\u0000-\u001f\u007f]/;
+const projectSelectorV2 = /^[A-Za-z0-9_.\/:\\-]+$/;
 const projectAnchorV2Keys = ['anchor', 'shared', 'version'];
+
+export function validateProjectSelectorV2(selector: unknown): string {
+  if (typeof selector !== 'string' || selector === '' || selector.length > 256 ||
+      selector.trim() !== selector || selector.includes('..') ||
+      projectIdentityControl.test(selector) || !projectSelectorV2.test(selector)) {
+    throw new Error('PROJECT_IDENTITY_INVALID: project selector is empty or malformed');
+  }
+  return selector;
+}
 
 export function buildProjectIdentityV2(input: ProjectIdentityV2Input): ProjectIdentityV2 {
   return {
@@ -74,11 +84,16 @@ export function validateProjectIdentityV2(identity: ProjectIdentityV2): ProjectI
   const invalid = (reason: string): never => {
     throw new Error(`PROJECT_IDENTITY_INVALID: ${reason}`);
   };
-  if (identity.version !== PROJECT_IDENTITY_VERSION_V2) invalid('unsupported version');
+  if (!identity || typeof identity !== 'object' || identity.version !== PROJECT_IDENTITY_VERSION_V2) invalid('unsupported version');
+  for (const field of ['legacy_project_id', 'display_name', 'git_remote', 'relative_path', 'non_git_anchor'] as const) {
+    if (typeof identity[field] !== 'string') invalid(`${field} must be a string`);
+  }
+  if (identity.anchor_shared !== null && typeof identity.anchor_shared !== 'boolean') invalid('anchor_shared must be a JSON boolean or null');
   if (identity.legacy_project_id.length > 256 || identity.display_name.length > 256 ||
       identity.legacy_project_id.trim() !== identity.legacy_project_id ||
+      identity.display_name.trim() !== identity.display_name ||
       projectIdentityControl.test(identity.legacy_project_id) || projectIdentityControl.test(identity.display_name)) {
-    invalid('selector or display name too long');
+    invalid('selector or display name is malformed');
   }
   const hasGit = identity.git_remote !== '' || identity.relative_path !== '';
   const hasAnchor = identity.non_git_anchor !== '' || identity.anchor_shared !== null;
@@ -87,14 +102,21 @@ export function validateProjectIdentityV2(identity: ProjectIdentityV2): ProjectI
     if (!identity.git_remote || identity.git_remote.length > 2048 || identity.git_remote.trim() !== identity.git_remote || projectIdentityControl.test(identity.git_remote)) {
       invalid('git_remote is missing or malformed');
     }
-    if (identity.relative_path.length > 4096 || identity.relative_path.startsWith('/') || identity.relative_path.includes('\\') || projectIdentityControl.test(identity.relative_path)) {
+    if (!normalizedProjectRelativePathV2(identity.relative_path)) {
       invalid('relative_path is not normalized');
     }
-    if (identity.relative_path.split('/').some((part) => part === '.' || part === '..')) invalid('relative_path contains traversal');
   } else if (!strictAnchorV2.test(identity.non_git_anchor) || typeof identity.anchor_shared !== 'boolean') {
     invalid('non-git anchor must be 128-bit lowercase hex with explicit sharing');
   }
   return identity;
+}
+
+function normalizedProjectRelativePathV2(value: string): boolean {
+  if (value === '') return true;
+  if (value.length > 4096 || value.trim() !== value || value.startsWith('/') ||
+      !value.endsWith('/') || value.includes('\\') || projectIdentityControl.test(value)) return false;
+  return value.slice(0, -1).split('/').every((part) =>
+    part !== '' && part !== '.' && part !== '..' && part.trim() === part);
 }
 
 function readOrCreateProjectAnchorV2(workspaceDir: string): { version: 2; anchor: string; shared: boolean } {

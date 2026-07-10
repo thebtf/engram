@@ -1,0 +1,50 @@
+{
+  "task_id": "SECURITY-PROJECT-IDENTITY-R2",
+  "base_commit": "d22ebb9fe1914f514eaf9250e092dcd3b396f9cc",
+  "branch": "work/prc-security-project-identity-r2",
+  "observed_at": "2026-07-10T17:31:35.9604105Z",
+  "verdict": "PASS",
+  "findings_closed": {
+    "C1": "soft-deleted legacy-only canonical collision returns stable unavailable and mutates zero rows",
+    "C2": "HTTP validates raw project, legacy alias, and full v2 metadata before registration writes",
+    "C3": "Claude requires an exact JSON boolean or null for anchor_shared",
+    "C4": "Claude and OpenClaw reject malformed 2xx canonical_project responses without raw fallback, cache, or downstream access",
+    "C5": "Go, Claude, and OpenClaw reject shared raw-vs-normalized invalid vectors"
+  },
+  "compatibility_review": [
+    "legacy aliases retain established support for internal whitespace while edge whitespace and controls fail closed",
+    "Claude and OpenClaw retain colon and backslash selector characters already accepted by the HTTP boundary"
+  ],
+  "gates": {
+    "postgresql": "17.10 isolated DB; race + repeat count=10 PASS for DB/HTTP/proxy identity paths",
+    "go_full": "go test ./... -count=1 PASS",
+    "go_vet": "go vet ./... PASS",
+    "claude_hooks": "76/76 PASS with external ENGRAM_URL/TOKEN/QUIET removed from runner environment",
+    "openclaw": "27/27 PASS; npm run typecheck PASS",
+    "gitleaks": "staged scan PASS, no leaks",
+    "diff_check": "PASS",
+    "proto_parity": "zero proto diff from exact base",
+    "request_path_ddl": "zero added AutoMigrate/CREATE TABLE/ALTER TABLE/gormigrate calls",
+    "v5_demolition_guard": "zero added demolished scoring or server-side MCP HTTP references"
+  },
+  "scope": {
+    "owned_product_test_paths": 12,
+    "owned_product_test_parity": true,
+    "index_ts_changed": false,
+    "other_changes": "evidence namespace only"
+  },
+  "database_residue": {
+    "matching_project_rows": 0,
+    "query_scope": "all prc-* ids and aliases in isolated R2 database"
+  },
+  "prove_it": {
+    "mutation_groups": 3,
+    "survived_mutations": 0
+  },
+  "changed_code_review": {
+    "axes": ["correctness", "validation completeness", "readability", "architecture", "security", "performance"],
+    "behavioral_edges": ["wrong type", "raw versus normalized", "zero mutation", "malformed 2xx", "no cache", "no downstream", "authorization independence", "compatibility"],
+    "open_findings": 0,
+    "verdict": "PASS"
+  }
+}

@@ -64,6 +64,20 @@ test('v2 metadata and anchor files reject non-normalized or unknown input', (t) 
   assert.throws(() => lib.resolveProjectIdentityV2(dir), /PROJECT_IDENTITY_INVALID/);
 });
 
+test('shared invalid vectors and wrong-type anchor sharing are rejected exactly', () => {
+  for (const vector of vectors.invalid_vectors) {
+    if (vector.invalid_target !== 'identity') continue;
+    const identity = lib.buildProjectIdentityV2(vector);
+    assert.throws(() => lib.validateProjectIdentityV2(identity), /PROJECT_IDENTITY_INVALID/, vector.name);
+  }
+  assert.throws(() => lib.buildProjectIdentityV2({
+    legacy_project_id: 'workspace',
+    display_name: 'workspace',
+    non_git_anchor: '00112233445566778899aabbccddeeff',
+    anchor_shared: 'false',
+  }), /PROJECT_IDENTITY_INVALID/);
+});
+
 test('registration offline fallback distinguishes transport failure from malformed reached-server response', () => {
   const offline = new TypeError('fetch failed', { cause: Object.assign(new Error('connect'), { code: 'ECONNREFUSED' }) });
   assert.equal(lib.isProjectIdentityTransportOffline(offline), true);
@@ -96,4 +110,78 @@ test('registration is synchronous, idempotent, and updates the hook canonical se
   assert.equal(calls.length, 2);
   assert.equal(calls[0].endpoint, '/api/context/inject');
   assert.equal(calls[0].body.identity_only, true);
+});
+
+test('registration rejects shared invalid selectors before transport', async () => {
+  for (const vector of vectors.invalid_vectors) {
+    if (vector.invalid_target !== 'selector') continue;
+    let requests = 0;
+    const context = {
+      Project: vector.selector,
+      ProjectIdentityV2: lib.buildProjectIdentityV2(vector),
+    };
+    await assert.rejects(
+      () => lib.registerProjectIdentityV2(context, async () => {
+        requests++;
+        return { canonical_project: 'must-not-run' };
+      }),
+      /PROJECT_IDENTITY_INVALID/,
+      vector.name,
+    );
+    assert.equal(requests, 0, vector.name);
+  }
+});
+
+test('registration preserves legacy selector characters accepted by the HTTP boundary', async () => {
+  const selector = 'legacy:C\\workspace';
+  const context = {
+    Project: selector,
+    ProjectIdentityV2: {
+      version: 2,
+      legacy_project_id: selector,
+      display_name: 'workspace',
+      git_remote: 'https://example.invalid/acme/mono.git',
+      relative_path: 'packages/core/',
+      non_git_anchor: '',
+      anchor_shared: null,
+    },
+  };
+  let sentSelector = '';
+  await lib.registerProjectIdentityV2(context, async (_method, _endpoint, body) => {
+    sentSelector = body.project;
+    return { canonical_project: selector };
+  });
+  assert.equal(sentSelector, selector);
+  assert.equal(context.Project, selector);
+});
+
+test('registration fails closed on malformed canonical responses without raw fallback', async () => {
+  const payloads = [
+    {},
+    { canonical_project: '' },
+    { canonical_project: 42 },
+    { canonical_project: ' invalid-canonical ' },
+    { canonical_project: '../private' },
+  ];
+  for (const payload of payloads) {
+    const context = {
+      Project: 'legacy-selector',
+      ProjectIdentityV2: {
+        version: 2,
+        legacy_project_id: 'legacy-selector',
+        display_name: 'fixture',
+        git_remote: 'https://example.invalid/acme/mono.git',
+        relative_path: 'packages/core/',
+        non_git_anchor: '',
+        anchor_shared: null,
+      },
+    };
+    let downstream = 0;
+    await assert.rejects(async () => {
+      await lib.registerProjectIdentityV2(context, async () => payload);
+      downstream++;
+    }, /PROJECT_IDENTITY_UNAVAILABLE/);
+    assert.equal(context.Project, 'legacy-selector');
+    assert.equal(downstream, 0);
+  }
 });
