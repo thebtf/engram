@@ -11,6 +11,7 @@ const modeArgument = process.argv.find((argument) => argument.startsWith('--mode
 const mode = modeArgument ? modeArgument.slice('--mode='.length) : 'git-object';
 
 const SLICE = 'DB-EMBEDDING-EVIDENCE-TRANSPORT';
+const EXPECTED_SOURCE_COMMIT = '38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df';
 const LEGACY_MANIFEST_PATH =
   '.agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt';
 const VERIFIER_PATH =
@@ -19,6 +20,15 @@ const VERIFIER_PATH =
 const CONTRACT_PATH =
   '.agent/reports/evidence/production-ready/' +
   'db-embedding-stats-evidence-transport/content-manifest.v1.json';
+const REQUIRED_SOURCE_PATHS = Object.freeze([
+  'internal/embedding/store.go',
+  'internal/embedding/store_stats_test.go',
+  '.agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json',
+  '.agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json',
+  '.agent/specs/db-embedding-stats/evidence/coverage.out',
+  '.agent/reports/2026-07-10-db-embedding-stats-maker.md',
+  '.agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json',
+]);
 const REQUIRED_ARTIFACT_PATHS = Object.freeze([
   LEGACY_MANIFEST_PATH,
   CONTRACT_PATH,
@@ -244,13 +254,16 @@ function analyzeRepositoryRelativePath(repoRoot, rawPath) {
 
 function validateContractSchema(contract, repoRoot) {
   const structuralErrors = [];
+  const validatedEntries = [];
   const topLevelIsObject = validateExactKeys(
     contract,
     CONTRACT_TOP_LEVEL_KEYS,
     'contract',
     structuralErrors,
   );
-  if (!topLevelIsObject) return structuralErrors;
+  if (!topLevelIsObject) {
+    return { structural_errors: structuralErrors, validated_entries: validatedEntries };
+  }
 
   if (contract.schema_version !== 1) structuralErrors.push('schema_version must be 1');
   if (contract.slice !== SLICE) structuralErrors.push(`slice must be ${SLICE}`);
@@ -272,8 +285,10 @@ function validateContractSchema(contract, repoRoot) {
     if (contract.representation.kind !== 'git-blob-content') {
       structuralErrors.push('representation.kind must be git-blob-content');
     }
-    if (!/^[0-9a-f]{40}$/.test(contract.representation.source_commit || '')) {
-      structuralErrors.push('representation.source_commit must be a full Git commit SHA');
+    if (contract.representation.source_commit !== EXPECTED_SOURCE_COMMIT) {
+      structuralErrors.push(
+        `representation.source_commit must equal accepted source ${EXPECTED_SOURCE_COMMIT}`,
+      );
     }
     const checkoutEquivalenceIsObject = validateExactKeys(
       contract.representation.checkout_equivalence,
@@ -299,9 +314,14 @@ function validateContractSchema(contract, repoRoot) {
     }
   }
 
-  if (!Array.isArray(contract.entries) || contract.entries.length === 0) {
-    structuralErrors.push('entries must be a non-empty array');
-    return structuralErrors;
+  if (!Array.isArray(contract.entries)) {
+    structuralErrors.push('entries must be an array');
+    return { structural_errors: structuralErrors, validated_entries: validatedEntries };
+  }
+  if (contract.entries.length !== REQUIRED_SOURCE_PATHS.length) {
+    structuralErrors.push(
+      `entries must contain exactly ${REQUIRED_SOURCE_PATHS.length} required source paths`,
+    );
   }
 
   const canonicalPaths = [];
@@ -317,7 +337,14 @@ function validateContractSchema(contract, repoRoot) {
 
     const pathAnalysis = analyzeRepositoryRelativePath(repoRoot, entry.path);
     for (const error of pathAnalysis.errors) structuralErrors.push(`${label}.path ${error}`);
-    if (pathAnalysis.normalized_path) canonicalPaths.push(pathAnalysis.normalized_path);
+    if (pathAnalysis.normalized_path) {
+      canonicalPaths.push(pathAnalysis.normalized_path);
+      validatedEntries.push({
+        ...entry,
+        path: pathAnalysis.normalized_path,
+        absolute_path: pathAnalysis.absolute_path,
+      });
+    }
     if (!/^[0-9a-f]{40}$/.test(entry.git_blob_oid || '')) {
       structuralErrors.push(`${label}.git_blob_oid must be a full Git blob OID`);
     }
@@ -329,10 +356,28 @@ function validateContractSchema(contract, repoRoot) {
     }
   });
 
-  if (new Set(canonicalPaths).size !== contract.entries.length) {
+  if (new Set(canonicalPaths).size !== canonicalPaths.length) {
     structuralErrors.push('contract paths must be unique canonical paths');
   }
-  return structuralErrors;
+  const canonicalPathSet = new Set(canonicalPaths);
+  const requiredPathSet = new Set(REQUIRED_SOURCE_PATHS);
+  const missingPaths = REQUIRED_SOURCE_PATHS.filter(
+    (entryPath) => !canonicalPathSet.has(entryPath),
+  );
+  const extraPaths = [...canonicalPathSet].filter(
+    (entryPath) => !requiredPathSet.has(entryPath),
+  );
+  if (missingPaths.length > 0) {
+    structuralErrors.push(`contract missing required source paths: ${missingPaths.join(', ')}`);
+  }
+  if (extraPaths.length > 0) {
+    structuralErrors.push(`contract contains non-required source paths: ${extraPaths.join(', ')}`);
+  }
+
+  return {
+    structural_errors: structuralErrors,
+    validated_entries: structuralErrors.length === 0 ? validatedEntries : [],
+  };
 }
 
 function validateManifestMetadata(metadata, requiredKeys, label, structuralErrors) {
@@ -476,6 +521,10 @@ function verifyArtifactFiles(repoRoot, scriptDirectory, sourceCommit, sourceComm
     representation: 'canonical-lf-files',
     total: entryResults.length,
     matched,
+    source_accesses: {
+      git_objects: 0,
+      checkout_files: 0,
+    },
     checkout: {
       core_autocrlf: getCoreAutocrlf(repoRoot),
       eol_counts: eolCounts,
@@ -493,7 +542,8 @@ function main() {
   const scriptDirectory = __dirname;
   const contractPath = path.join(scriptDirectory, 'content-manifest.v1.json');
   const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
-  const structuralErrors = validateContractSchema(contract, repoRoot);
+  const contractValidation = validateContractSchema(contract, repoRoot);
+  const structuralErrors = [...contractValidation.structural_errors];
   const legacyManifestPath = path.join(repoRoot, ...LEGACY_MANIFEST_PATH.split('/'));
   const manifest = parseAnnotatedManifest(legacyManifestPath);
 
@@ -524,17 +574,18 @@ function main() {
   if (manifest.metadata['checkout-equivalence'] !== 'crlf-to-lf-with-no-bare-cr') {
     structuralErrors.push('legacy manifest checkout equivalence must reject bare CR');
   }
-  const contractEntries = Array.isArray(contract.entries) ? contract.entries : [];
-  if (!compareEntryShape(contractEntries, manifest.entries)) {
+  const rawContractEntries = Array.isArray(contract.entries) ? contract.entries : [];
+  if (!compareEntryShape(rawContractEntries, manifest.entries)) {
     structuralErrors.push('legacy manifest entries disagree with contract entries or order');
   }
 
   const sourceCommit = contract.representation?.source_commit || '';
-  const sourceCommitIsAncestor =
-    /^[0-9a-f]{40}$/.test(sourceCommit || '') &&
-    isAncestor(repoRoot, sourceCommit, 'HEAD');
-  if (!sourceCommitIsAncestor) {
-    structuralErrors.push('source commit is not an ancestor of the executing checkout HEAD');
+  let sourceCommitIsAncestor = false;
+  if (sourceCommit === EXPECTED_SOURCE_COMMIT && structuralErrors.length === 0) {
+    sourceCommitIsAncestor = isAncestor(repoRoot, sourceCommit, 'HEAD');
+    if (!sourceCommitIsAncestor) {
+      structuralErrors.push('source commit is not an ancestor of the executing checkout HEAD');
+    }
   }
   if (mode === 'artifact-files') {
     verifyArtifactFiles(
@@ -546,42 +597,54 @@ function main() {
     );
     return;
   }
-  const entryResults = contractEntries.map((entry) => {
-    const objectSpec = `${sourceCommit}:${entry.path}`;
-    const blob = runGit(['cat-file', 'blob', objectSpec], { cwd: repoRoot });
-    const blobOid = runGit(['rev-parse', objectSpec], { cwd: repoRoot, encoding: 'utf8' }).trim();
-    const checkout = fs.readFileSync(path.join(repoRoot, ...entry.path.split('/')));
-    const canonical = canonicalizeCheckout(checkout);
-    const rawHash = sha256(checkout);
-    const canonicalHash = sha256(canonical.bytes);
-    const objectHash = sha256(blob);
-    const objectChecks =
-      blobOid === entry.git_blob_oid &&
-      blob.length === entry.byte_length &&
-      objectHash === entry.sha256;
-    const checkoutLfChecks =
-      canonical.bare_carriage_returns === 0 &&
-      canonical.bytes.equals(blob) &&
-      canonical.bytes.length === entry.byte_length &&
-      canonicalHash === entry.sha256;
 
-    return {
-      path: entry.path,
-      git_blob_oid: blobOid,
-      expected_sha256: entry.sha256,
-      git_object_sha256: objectHash,
-      raw_checkout_sha256: rawHash,
-      checkout_lf_sha256: canonicalHash,
-      git_object_match: objectChecks,
-      raw_checkout_match: rawHash === entry.sha256 && checkout.length === entry.byte_length,
-      checkout_lf_match: checkoutLfChecks,
-      checkout_eol: eolStyle(canonical),
-      crlf_pairs: canonical.crlf_pairs,
-      bare_carriage_returns: canonical.bare_carriage_returns,
-    };
-  });
+  const sourceAccesses = {
+    git_objects: 0,
+    checkout_files: 0,
+  };
+  const entryResults = structuralErrors.length === 0
+    ? contractValidation.validated_entries.map((entry) => {
+        const objectSpec = `${sourceCommit}:${entry.path}`;
+        sourceAccesses.git_objects += 1;
+        const blob = runGit(['cat-file', 'blob', objectSpec], { cwd: repoRoot });
+        const blobOid = runGit(
+          ['rev-parse', objectSpec],
+          { cwd: repoRoot, encoding: 'utf8' },
+        ).trim();
+        sourceAccesses.checkout_files += 1;
+        const checkout = fs.readFileSync(entry.absolute_path);
+        const canonical = canonicalizeCheckout(checkout);
+        const rawHash = sha256(checkout);
+        const canonicalHash = sha256(canonical.bytes);
+        const objectHash = sha256(blob);
+        const objectChecks =
+          blobOid === entry.git_blob_oid &&
+          blob.length === entry.byte_length &&
+          objectHash === entry.sha256;
+        const checkoutLfChecks =
+          canonical.bare_carriage_returns === 0 &&
+          canonical.bytes.equals(blob) &&
+          canonical.bytes.length === entry.byte_length &&
+          canonicalHash === entry.sha256;
 
-  const total = entryResults.length;
+        return {
+          path: entry.path,
+          git_blob_oid: blobOid,
+          expected_sha256: entry.sha256,
+          git_object_sha256: objectHash,
+          raw_checkout_sha256: rawHash,
+          checkout_lf_sha256: canonicalHash,
+          git_object_match: objectChecks,
+          raw_checkout_match: rawHash === entry.sha256 && checkout.length === entry.byte_length,
+          checkout_lf_match: checkoutLfChecks,
+          checkout_eol: eolStyle(canonical),
+          crlf_pairs: canonical.crlf_pairs,
+          bare_carriage_returns: canonical.bare_carriage_returns,
+        };
+      })
+    : [];
+
+  const total = REQUIRED_SOURCE_PATHS.length;
   const gitObjectMatches = entryResults.filter((entry) => entry.git_object_match).length;
   const rawCheckoutMatches = entryResults.filter((entry) => entry.raw_checkout_match).length;
   const checkoutLfMatches = entryResults.filter((entry) => entry.checkout_lf_match).length;
@@ -618,6 +681,7 @@ function main() {
     representation: contract.representation.kind,
     total,
     matched,
+    source_accesses: sourceAccesses,
     git_object_matches: gitObjectMatches,
     raw_checkout_matches: rawCheckoutMatches,
     checkout_lf_matches: checkoutLfMatches,

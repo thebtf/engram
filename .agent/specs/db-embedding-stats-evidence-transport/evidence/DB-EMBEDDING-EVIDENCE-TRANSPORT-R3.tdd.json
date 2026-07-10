@@ -1,0 +1,86 @@
+{
+  "task_id": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R3",
+  "stack": "GO repository with Node.js evidence verifier",
+  "red": {
+    "observed_at": "2026-07-10T14:57:31.2279610Z",
+    "test_file": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+    "test_name": "R2 checker false-PASS regressions fail closed before source access",
+    "baseline_passed_tests": 18,
+    "passed_tests": 18,
+    "failed_tests": 4,
+    "exit_code": 1,
+    "runner_stdout_excerpt": "tests 22; pass 18; fail 4; three verifier false PASS results plus one raw-path source-access violation"
+  },
+  "green": {
+    "observed_at": "2026-07-10T15:13:31.3066559Z",
+    "passed_tests": 22,
+    "failed_tests": 0,
+    "skipped_tests": 0,
+    "regressed_tests": 0,
+    "exit_code": 0,
+    "runner_stdout_excerpt": "tests 22; pass 22; fail 0; captured_exit=0"
+  },
+  "refactor": {
+    "applied": false,
+    "reason": "The GREEN implementation is a bounded source-lock allowlist and one pre-access gate; no behavior-preserving extraction was needed."
+  },
+  "prove_it": {
+    "substituted_files": [
+      ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs"
+    ],
+    "substituted_functions": [
+      "validateContractSchema",
+      "verifyArtifactFiles"
+    ],
+    "runs": [
+      {
+        "sentinel_function": "validateContractSchema",
+        "exit_code": 1,
+        "passed_tests": 10,
+        "failed_tests": 12
+      },
+      {
+        "sentinel_function": "verifyArtifactFiles",
+        "exit_code": 1,
+        "passed_tests": 13,
+        "failed_tests": 9
+      }
+    ],
+    "failed_tests": 21,
+    "post_restore_passed_tests": 22,
+    "post_restore_failed_tests": 0,
+    "post_restore_exit_code": 0,
+    "restored_byte_identical": true
+  },
+  "coverage": {
+    "runner": "node --test --test-concurrency=1 --experimental-test-coverage",
+    "repeat_count": 2,
+    "reproducible": true,
+    "aggregate": {
+      "line_percent": 87.27,
+      "branch_percent": 71.75,
+      "functions_percent": 94.87
+    },
+    "verifier": {
+      "line_percent": 79.55,
+      "branch_percent": 51.59,
+      "functions_percent": 81.82
+    },
+    "test_harness": {
+      "line_percent": 100.0,
+      "branch_percent": 97.94,
+      "functions_percent": 100.0
+    },
+    "threshold_basis": "aggregate line coverage",
+    "threshold": 80,
+    "status": "PASS",
+    "exit_code": 0
+  },
+  "behavioral_signal": {
+    "name": "release-evidence-false-pass-rate",
+    "measurement_window": "each verifier self-test run",
+    "target": "0 false PASS results across 22 permanent mutation cases",
+    "measurement_method": "Node built-in test runner executes verifier subprocesses against byte-restored contract and manifest mutations",
+    "evidence_source": "independent checker findings ETR2-C001, ETR2-C002, and ETR2-C003"
+  }
+}

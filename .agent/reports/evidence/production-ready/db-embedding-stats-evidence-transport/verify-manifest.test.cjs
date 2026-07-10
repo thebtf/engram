@@ -17,6 +17,17 @@ const verifierPath = path.join(scriptDirectory, 'verify-manifest.cjs');
 const artifactManifestPath = path.join(scriptDirectory, 'ARTIFACTS.sha256');
 const contractPath = path.join(scriptDirectory, 'content-manifest.v1.json');
 const testPath = __filename;
+const ACCEPTED_SOURCE_COMMIT = '38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df';
+const ALTERNATE_ANCESTOR = '580b0cd0ff38bb55a5195a8004e60234a824b7a8';
+const REQUIRED_SOURCE_PATHS = Object.freeze([
+  'internal/embedding/store.go',
+  'internal/embedding/store_stats_test.go',
+  '.agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json',
+  '.agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json',
+  '.agent/specs/db-embedding-stats/evidence/coverage.out',
+  '.agent/reports/2026-07-10-db-embedding-stats-maker.md',
+  '.agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json',
+]);
 const repoRoot = path.resolve(
   spawnSync('git', ['rev-parse', '--show-toplevel'], {
     cwd: scriptDirectory,
@@ -24,10 +35,20 @@ const repoRoot = path.resolve(
     windowsHide: true,
   }).stdout.trim(),
 );
+const legacyManifestPath = path.join(
+  repoRoot,
+  '.agent',
+  'reports',
+  'evidence',
+  'production-ready',
+  'db-embedding-stats',
+  'SHA256SUMS.txt',
+);
 
 const originalBytes = new Map([
   [artifactManifestPath, fs.readFileSync(artifactManifestPath)],
   [contractPath, fs.readFileSync(contractPath)],
+  [legacyManifestPath, fs.readFileSync(legacyManifestPath)],
 ]);
 
 function restoreOriginals() {
@@ -45,6 +66,19 @@ function withMutation(filePath, mutate, verify) {
     return verify();
   } finally {
     fs.writeFileSync(filePath, original);
+  }
+}
+
+function withReplacements(replacements, verify) {
+  const originals = new Map();
+  try {
+    for (const [filePath, bytes] of replacements) {
+      originals.set(filePath, fs.readFileSync(filePath));
+      fs.writeFileSync(filePath, bytes);
+    }
+    return verify();
+  } finally {
+    for (const [filePath, bytes] of originals) fs.writeFileSync(filePath, bytes);
   }
 }
 
@@ -73,6 +107,16 @@ function expectFailClosed(result) {
       result.output.structural_errors.length > 0,
     'mutation must emit at least one structural error',
   );
+}
+
+function expectFailClosedBeforeSourceAccess(result) {
+  expectFailClosed(result);
+  assert.deepEqual(
+    result.output?.source_accesses,
+    { git_objects: 0, checkout_files: 0 },
+    'schema-invalid source paths must be rejected before Git or filesystem source access',
+  );
+  assert.deepEqual(result.output?.entries, [], 'schema-invalid source paths must not be verified');
 }
 
 function mutateArtifactManifest(mutator) {
@@ -109,6 +153,20 @@ function canonicalLf(bytes) {
 
 function sha256(bytes) {
   return crypto.createHash('sha256').update(bytes).digest('hex');
+}
+
+function gitBytes(args) {
+  const result = spawnSync('git', args, {
+    cwd: repoRoot,
+    encoding: null,
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr.toString('utf8'));
+  return result.stdout;
+}
+
+function gitText(args) {
+  return gitBytes(args).toString('utf8').trim();
 }
 
 function mutateContract(mutator) {
@@ -274,4 +332,102 @@ test('contract rejects unknown schema keys', async (t) => {
       expectFailClosed(result);
     });
   }
+});
+
+test('contract rejects deleting one required source when the legacy manifest agrees', () => {
+  const removedPath = REQUIRED_SOURCE_PATHS.at(-1);
+  const contractBytes = mutateContract((contract) => {
+    contract.entries = contract.entries.filter((entry) => entry.path !== removedPath);
+  })(fs.readFileSync(contractPath));
+  const legacyBytes = mutateArtifactManifest((lines) => {
+    const index = lines.findIndex((line) => line.endsWith(`  ${removedPath}`));
+    assert.notEqual(index, -1);
+    lines.splice(index, 1);
+  })(fs.readFileSync(legacyManifestPath));
+
+  const result = withReplacements(
+    [
+      [contractPath, contractBytes],
+      [legacyManifestPath, legacyBytes],
+    ],
+    () => runVerifier('git-object'),
+  );
+  expectFailClosed(result);
+});
+
+test('contract rejects a valid go.mod substitution that preserves cardinality', () => {
+  const replacedPath = REQUIRED_SOURCE_PATHS.at(-1);
+  const substitutePath = 'go.mod';
+  const substituteBytes = gitBytes([
+    'cat-file',
+    'blob',
+    `${ACCEPTED_SOURCE_COMMIT}:${substitutePath}`,
+  ]);
+  const substitute = {
+    path: substitutePath,
+    git_blob_oid: gitText(['rev-parse', `${ACCEPTED_SOURCE_COMMIT}:${substitutePath}`]),
+    byte_length: substituteBytes.length,
+    sha256: sha256(substituteBytes),
+  };
+  const contractBytes = mutateContract((contract) => {
+    const index = contract.entries.findIndex((entry) => entry.path === replacedPath);
+    assert.notEqual(index, -1);
+    contract.entries[index] = substitute;
+  })(fs.readFileSync(contractPath));
+  const legacyBytes = mutateArtifactManifest((lines) => {
+    const index = lines.findIndex((line) => line.endsWith(`  ${replacedPath}`));
+    assert.notEqual(index, -1);
+    lines[index] = `${substitute.sha256}  ${substitute.path}`;
+  })(fs.readFileSync(legacyManifestPath));
+
+  const result = withReplacements(
+    [
+      [contractPath, contractBytes],
+      [legacyManifestPath, legacyBytes],
+    ],
+    () => runVerifier('git-object'),
+  );
+  expectFailClosed(result);
+});
+
+test('contract rejects rebinding source commit and legacy metadata to an ancestor', () => {
+  const contractBytes = mutateContract((contract) => {
+    contract.representation.source_commit = ALTERNATE_ANCESTOR;
+  })(fs.readFileSync(contractPath));
+  const legacyBytes = mutateArtifactManifest((lines) => {
+    const index = lines.findIndex((line) => line.startsWith('# source-commit='));
+    assert.notEqual(index, -1);
+    lines[index] = `# source-commit=${ALTERNATE_ANCESTOR}`;
+  })(fs.readFileSync(legacyManifestPath));
+
+  const result = withReplacements(
+    [
+      [contractPath, contractBytes],
+      [legacyManifestPath, legacyBytes],
+    ],
+    () => runVerifier('git-object'),
+  );
+  expectFailClosed(result);
+});
+
+test('contract rejects an invalid raw source path before source access', () => {
+  const invalidPath = 'internal/embedding/../embedding/store.go';
+  const originalPath = REQUIRED_SOURCE_PATHS[0];
+  const contractBytes = mutateContract((contract) => {
+    contract.entries[0].path = invalidPath;
+  })(fs.readFileSync(contractPath));
+  const legacyBytes = mutateArtifactManifest((lines) => {
+    const index = lines.findIndex((line) => line.endsWith(`  ${originalPath}`));
+    assert.notEqual(index, -1);
+    lines[index] = lines[index].replace(originalPath, invalidPath);
+  })(fs.readFileSync(legacyManifestPath));
+
+  const result = withReplacements(
+    [
+      [contractPath, contractBytes],
+      [legacyManifestPath, legacyBytes],
+    ],
+    () => runVerifier('git-object'),
+  );
+  expectFailClosedBeforeSourceAccess(result);
 });

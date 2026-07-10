@@ -1,11 +1,21 @@
 {
   "schema_version": 1,
-  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R3",
   "role": "revision-maker",
   "product_source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
-  "rejected_candidate_commit": "580b0cd0ff38bb55a5195a8004e60234a824b7a8",
-  "revision_checkpoint_commit": "53b2ef1931c534e27183126a1aad2d46b3a854b2",
+  "rejected_r2_commit": "db2cf891dd9c6315fd17220ffe2d02302bea8844",
+  "parent_checker_commit": "8dac7910de52d2744fcf67f79a0a1597beebac72",
   "raw_checkout_bytes_are_not_the_contract": true,
+  "source_lock": {
+    "expected_source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+    "required_cardinality": 7,
+    "exact_required_set": true,
+    "validated_canonical_paths_only": true,
+    "schema_invalid_source_accesses": {
+      "git_objects": 0,
+      "checkout_files": 0
+    }
+  },
   "required_artifact_paths": [
     ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
     ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json",
@@ -14,42 +24,68 @@
     ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md"
   ],
   "tdd": {
-    "red": {
-      "exit_code": 1,
-      "tests": 18,
-      "passed": 1,
-      "failed": 17
-    },
-    "green": {
+    "baseline": {
       "exit_code": 0,
       "tests": 18,
       "passed": 18,
+      "failed": 0
+    },
+    "red": {
+      "exit_code": 1,
+      "tests": 22,
+      "passed": 18,
+      "failed": 4
+    },
+    "green": {
+      "exit_code": 0,
+      "tests": 22,
+      "passed": 22,
       "failed": 0
     },
     "prove_it": [
       {
         "sentinel_function": "validateContractSchema",
         "exit_code": 1,
-        "failed_tests": 18
+        "passed_tests": 10,
+        "failed_tests": 12
       },
       {
         "sentinel_function": "verifyArtifactFiles",
         "exit_code": 1,
+        "passed_tests": 13,
         "failed_tests": 9
       }
     ],
     "post_restore": {
       "exit_code": 0,
-      "tests": 18,
-      "passed": 18,
-      "failed": 0
+      "tests": 22,
+      "passed": 22,
+      "failed": 0,
+      "verifier_byte_identical": true
     },
     "coverage": {
-      "exit_code": 0,
-      "all_files_line_percent": 88.89,
-      "verifier_line_percent": 84.46,
-      "branch_percent": 65.33,
-      "functions_percent": 100.0
+      "node_version": "v24.2.0",
+      "repeat_count": 2,
+      "reproducible": true,
+      "aggregate": {
+        "line_percent": 87.27,
+        "branch_percent": 71.75,
+        "functions_percent": 94.87
+      },
+      "verifier": {
+        "line_percent": 79.55,
+        "branch_percent": 51.59,
+        "functions_percent": 81.82
+      },
+      "test_harness": {
+        "line_percent": 100.0,
+        "branch_percent": 97.94,
+        "functions_percent": 100.0
+      },
+      "threshold_basis": "aggregate line coverage",
+      "threshold_percent": 80,
+      "status": "PASS",
+      "exit_code": 0
     }
   },
   "observations": [
@@ -65,6 +101,8 @@
       "raw_checkout_matches": 0,
       "git_object_matches": 7,
       "checkout_lf_matches": 7,
+      "source_git_accesses": 7,
+      "source_checkout_accesses": 7,
       "structural_errors": 0
     },
     {
@@ -142,15 +180,26 @@
       "mode": "permanent-adversarial-self-test",
       "exit_code": 0,
       "status": "PASS",
-      "matched": 18,
-      "total": 18
+      "matched": 22,
+      "total": 22
     }
   ],
-  "temporary_lf_worktree_cleanup": {
-    "path": "D:/Dev/engram/.agent/worktrees/db-embedding-evidence-transport-r2-lf-proof",
-    "clean_before_remove": true,
-    "path_removed": true,
-    "registration_removed": true
+  "temporary_worktree_cleanup": {
+    "red": {
+      "clean_before_remove": true,
+      "path_removed": true,
+      "registration_removed": true
+    },
+    "prove_it": {
+      "clean_before_remove": true,
+      "path_removed": true,
+      "registration_removed": true
+    },
+    "lf": {
+      "clean_before_remove": true,
+      "path_removed": true,
+      "registration_removed": true
+    }
   },
   "product_source_test_delta": 0,
   "finish_state": "READY_FOR_CHECK"
