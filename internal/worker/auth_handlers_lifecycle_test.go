@@ -209,6 +209,8 @@ func TestAuthHandlersLifecycle_AccessCreateInvitationAcceptsAuthentikAdminWithou
 
 func TestAuthHandlersLifecycle_LastAdminDemoteRaceLeavesOneAdmin(t *testing.T) {
 	env := openAuthLifecycleEnv(t)
+	baselineAdmins, err := env.users.CountAdmins()
+	require.NoError(t, err)
 	adminAEmail := fmt.Sprintf("zz-access-last-admin-a-%d@example.com", time.Now().UnixNano())
 	adminBEmail := fmt.Sprintf("zz-access-last-admin-b-%d@example.com", time.Now().UnixNano())
 	adminA, err := env.users.CreateUser(adminAEmail, "hash", gormdb.DashboardRoleAdmin)
@@ -234,22 +236,49 @@ func TestAuthHandlersLifecycle_LastAdminDemoteRaceLeavesOneAdmin(t *testing.T) {
 	close(start)
 	err1 := <-results
 	err2 := <-results
-	if err1 == nil && err2 == nil {
-		t.Fatalf("expected one demotion to fail so at least one admin remains")
+	successes := 0
+	errorsSeen := 0
+	expectedSuccesses := 2
+	if baselineAdmins == 0 {
+		expectedSuccesses = 1
 	}
-	if err1 != nil {
-		require.NotContains(t, strings.ToLower(err1.Error()), "deadlock")
+	for _, updateErr := range []error{err1, err2} {
+		if updateErr == nil {
+			successes++
+			continue
+		}
+		errorsSeen++
+		require.EqualError(t, updateErr, "cannot demote the last admin")
+		require.NotContains(t, strings.ToLower(updateErr.Error()), "deadlock")
 	}
-	if err2 != nil {
-		require.NotContains(t, strings.ToLower(err2.Error()), "deadlock")
-	}
+	require.Equal(t, expectedSuccesses, successes)
+	require.Equal(t, 2-expectedSuccesses, errorsSeen)
 	count, err := env.users.CountAdmins()
 	require.NoError(t, err)
-	require.Equal(t, int64(1), count)
+	expectedAdmins := baselineAdmins
+	expectedPairAdmins := 0
+	if expectedAdmins == 0 {
+		expectedAdmins = 1
+		expectedPairAdmins = 1
+	}
+	require.Equal(t, expectedAdmins, count)
+	adminA, err = env.users.GetUserByID(adminA.ID)
+	require.NoError(t, err)
+	adminB, err = env.users.GetUserByID(adminB.ID)
+	require.NoError(t, err)
+	activePairAdmins := 0
+	for _, admin := range []*gormdb.User{adminA, adminB} {
+		if admin.Role == gormdb.DashboardRoleAdmin && !admin.Disabled {
+			activePairAdmins++
+		}
+	}
+	require.Equal(t, expectedPairAdmins, activePairAdmins)
 }
 
 func TestAuthHandlersLifecycle_DisabledAdminCanBeDemotedWithoutLastAdminError(t *testing.T) {
 	env := openAuthLifecycleEnv(t)
+	baselineAdmins, err := env.users.CountAdmins()
+	require.NoError(t, err)
 	activeEmail := fmt.Sprintf("zz-active-admin-%d@example.com", time.Now().UnixNano())
 	disabledEmail := fmt.Sprintf("zz-disabled-admin-%d@example.com", time.Now().UnixNano())
 	active, err := env.users.CreateUser(activeEmail, "hash", gormdb.DashboardRoleAdmin)
@@ -267,8 +296,11 @@ func TestAuthHandlersLifecycle_DisabledAdminCanBeDemotedWithoutLastAdminError(t 
 	require.True(t, updated.Disabled)
 	count, err := env.users.CountAdmins()
 	require.NoError(t, err)
-	require.Equal(t, int64(1), count)
-	require.Equal(t, active.ID, active.ID)
+	require.Equal(t, baselineAdmins+1, count)
+	active, err = env.users.GetUserByID(active.ID)
+	require.NoError(t, err)
+	require.Equal(t, gormdb.DashboardRoleAdmin, active.Role)
+	require.False(t, active.Disabled)
 }
 
 func ptrBool(v bool) *bool { return &v }
