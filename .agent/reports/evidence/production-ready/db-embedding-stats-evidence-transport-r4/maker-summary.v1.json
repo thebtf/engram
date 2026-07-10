@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R4",
+  "role": "maker",
+  "status": "READY_FOR_CHECK",
+  "base": "d650df5c4271cdb50aa1f443d2f95b2f4b672541",
+  "branch": "work/prc-db-embedding-evidence-transport-r4",
+  "worktree": "D:/Dev/engram/.agent/worktrees/db-embedding-evidence-r4-maker",
+  "accepted_product_source": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "repairs": [
+    "representation=null now emits stable structured FAIL",
+    "entries[n]=null now emits stable structured FAIL",
+    "both null cases fail before reported and actual source access",
+    "coverage claims refreshed from two identical Node v24.2.0 runs on final verifier and test bytes",
+    "unreproduced historical coverage claims removed from duplicate R3 surfaces"
+  ],
+  "tests": {
+    "exact_base_red": "22 pass / 2 fail",
+    "green": "24/24 PASS",
+    "independent_attacks": "15/15 cases PASS",
+    "prove_it_validateContractSchema": "15 failed",
+    "prove_it_verifyArtifactFiles": "9 failed",
+    "post_restore": "24/24 PASS"
+  },
+  "coverage": {
+    "repeat_identical": true,
+    "aggregate": { "line_percent": 89.23, "branch_percent": 76.61, "functions_percent": 95.35 },
+    "verifier": { "line_percent": 80.92, "branch_percent": 58.02, "functions_percent": 81.82 },
+    "test_harness": { "line_percent": 100.0, "branch_percent": 97.44, "functions_percent": 100.0 },
+    "threshold_basis": "aggregate line coverage",
+    "threshold_percent": 80,
+    "status": "PASS"
+  },
+  "product_source_test_delta": 0,
+  "commit": null,
+  "commit_reason": "reported out-of-band after the single commit to avoid self-reference",
+  "next_action": "fresh R4 checker; no maker self-acceptance"
+}

@@ -2,63 +2,18 @@
   "schema_version": 1,
   "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R3",
   "role": "maker",
-  "status": "READY_FOR_CHECK",
+  "status": "SUPERSEDED_BY_R4",
   "parent": "8dac7910de52d2744fcf67f79a0a1597beebac72",
-  "rejected_r2_target": "db2cf891dd9c6315fd17220ffe2d02302bea8844",
   "accepted_product_source": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
-  "branch": "work/prc-db-embedding-evidence-transport-r3",
-  "worktree": "D:/Dev/engram/.agent/worktrees/db-embedding-evidence-r3-maker",
-  "commit": null,
-  "commit_reason": "reported out-of-band after the atomic commit to avoid self-reference",
-  "repairs": [
-    {
-      "finding": "ETR2-C001",
-      "result": "exact seven-path source set and cardinality enforced"
-    },
-    {
-      "finding": "ETR2-C002",
-      "result": "source commit pinned by exact equality to the accepted product source"
-    },
-    {
-      "finding": "ETR2-C003",
-      "result": "all source Git and filesystem access consumes only validated canonical paths after a zero-error gate"
-    },
-    {
-      "finding": "ETR2-C004",
-      "result": "two reproducible coverage runs recorded with aggregate, verifier, and harness scopes labeled separately"
-    }
+  "preserved_repairs": [
+    "exact seven-path source lock",
+    "exact accepted source commit lock",
+    "validated canonical source paths before source access",
+    "Windows and fresh-LF representation proof"
   ],
-  "tests": {
-    "baseline": "18/18 PASS",
-    "red": "18 pass / 4 fail, exit 1",
-    "green": "22/22 PASS",
-    "prove_it_validate_contract_schema": "12 failed, exit 1",
-    "prove_it_verify_artifact_files": "9 failed, exit 1",
-    "post_restore": "22/22 PASS"
+  "coverage_claim": {
+    "status": "REMOVED_AS_NOT_REPRODUCIBLE",
+    "replacement": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/coverage-repeat.v1.json"
   },
-  "representation": {
-    "windows": "raw 0/7, Git 7/7, checkout-LF 7/7, artifacts 5/5",
-    "fresh_lf": "raw/Git/checkout-LF 7/7, artifacts 5/5, suite 22/22"
-  },
-  "coverage": {
-    "repeat_identical": true,
-    "aggregate_line_percent": 87.27,
-    "aggregate_branch_percent": 71.75,
-    "aggregate_functions_percent": 94.87,
-    "verifier_line_percent": 79.55,
-    "verifier_branch_percent": 51.59,
-    "verifier_functions_percent": 81.82,
-    "threshold_basis": "aggregate line coverage",
-    "threshold_percent": 80,
-    "status": "PASS"
-  },
-  "product_source_test_delta": 0,
-  "residue": {
-    "temporary_worktrees": 0,
-    "maker_node_processes": 0,
-    "matching_postgresql_databases": 0,
-    "matching_postgresql_sessions": 0
-  },
-  "checksum_manifest": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/R3-SHA256SUMS.txt",
-  "next_action": "fresh independent checker; no maker self-acceptance"
+  "next_action": "Use the R4 packet and a fresh independent checker."
 }
