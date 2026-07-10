@@ -1,0 +1,35 @@
+{
+  "task_id": "DB-EMBEDDING-STATS",
+  "stack": "GO",
+  "red": {
+    "observed_at": "2026-07-10T09:26:11.3028869Z",
+    "test_file": "internal/embedding/store_stats_test.go",
+    "test_name": "TestStoreStats_EmptyPhysicalTableReturnsZeroValue",
+    "failure_reason": "PostgreSQL max(created_at) returned NULL for an empty content_chunks table and GORM attempted to scan it into *time.Time.",
+    "runner_stdout_excerpt": "unsupported Scan, storing driver.Value type <nil> into type *time.Time"
+  },
+  "green": {
+    "observed_at": "2026-07-10T09:28:32.6987371Z",
+    "passed_tests": 28,
+    "regressed_tests": 0,
+    "runner_stdout_excerpt": "focused PASS; repeat-20 PASS; race repeat-3 PASS; internal/embedding package PASS against full-schema PostgreSQL"
+  },
+  "refactor": {
+    "applied": false,
+    "reason": "The minimal sql.NullTime conversion is already idiomatic and introduces no duplication."
+  },
+  "prove_it": {
+    "substituted_files": [
+      "internal/embedding/store.go"
+    ],
+    "failed_tests": 1,
+    "runner_stdout_excerpt": "TestStoreStats_EmptyPhysicalTableReturnsZeroValue failed with panic: not implemented after substituting Store.Stats.",
+    "reverted_at": "2026-07-10T09:31:25.3811023Z"
+  },
+  "coverage": {
+    "percent": 47.8,
+    "threshold": 80,
+    "status": "WARN",
+    "notes": "Package-wide informational coverage is below the default gate; the touched Stats function measured 76.2%."
+  }
+}

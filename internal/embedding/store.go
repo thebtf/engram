@@ -2,6 +2,7 @@ package embedding
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -41,13 +42,15 @@ func (s *Store) Stats(ctx context.Context) (EmbeddingStats, error) {
 	}
 
 	// Most-recent chunk timestamp (nullable — NULL when table is empty).
-	var lastAt *time.Time
+	var lastAt sql.NullTime
 	if err := s.db.WithContext(ctx).
 		Raw(`SELECT max(created_at) FROM content_chunks`).
 		Scan(&lastAt).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return EmbeddingStats{}, fmt.Errorf("embedding stats: last chunk at: %w", err)
 	}
-	stats.LastChunkAt = lastAt
+	if lastAt.Valid {
+		stats.LastChunkAt = &lastAt.Time
+	}
 
 	// Most recently used model (empty string when table is empty).
 	var model *string

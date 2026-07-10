@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-STATS",
+  "status": "READY_FOR_INDEPENDENT_CHECK",
+  "base": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+  "classification": "live",
+  "root_cause": "PostgreSQL max(created_at) returns SQL NULL on an empty content_chunks table, which the production GORM path attempted to scan into *time.Time.",
+  "changed_paths": [
+    "internal/embedding/store.go",
+    "internal/embedding/store_stats_test.go",
+    ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+    ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+    ".agent/specs/db-embedding-stats/evidence/coverage.out",
+    ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+    ".agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json",
+    ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt"
+  ],
+  "gates": {
+    "red_observed": true,
+    "focused_green": true,
+    "repeat_20": true,
+    "package_repeat_3": true,
+    "focused_race_repeat_3": true,
+    "full_package_race": true,
+    "vet": true,
+    "prove_it_failed_against_sentinel": true,
+    "diff_check": true
+  },
+  "coverage": {
+    "package_percent": 47.8,
+    "stats_function_percent": 76.2,
+    "threshold": 80,
+    "status": "WARN"
+  },
+  "cleanup": {
+    "dedicated_database": "engram_prc_embedding_stats",
+    "active_sessions_before_drop": 0,
+    "database_count_after_drop": 0
+  },
+  "demolition_guard": "No v5-demolished path restored.",
+  "next_gate": "fresh independent checker, then root post-run code review"
+}
