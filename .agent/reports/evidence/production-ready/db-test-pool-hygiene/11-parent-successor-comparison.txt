@@ -1,0 +1,34 @@
+base_sha=bd68c05baf4b7250096dd84f56bebea2aa555970
+parent_command=go test -p=1 ./internal/db/gorm -count=1 -v
+successor_command=go test -p=1 ./internal/db/gorm -count=1 -v
+max_connections=100
+superuser_reserved_connections=3
+
+parent_semantic_failures=6
+successor_semantic_failures=6
+shared_semantic_failure_set:
+- TestMigration144_RuleGovernanceEscapeConstraints
+- TestMigration144_RuleGovernanceRollbackAndReapply
+- TestMigration144_RuleGovernanceSnapshotStatusesAcceptExtendedStates
+- TestRuleGovernanceStore_AnnotatedCandidateWaitsUntilReviewAfter
+- TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables
+- TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectScopedReads
+
+parent_secondary_client_exhaustion_failures=6
+parent_only_failure_set:
+- TestTemporalTruthStore_LoadSelectedRecordsUsesDBNowForValidFrom
+- TestTemporalTruthStore_RefreshProjectBoundsPredecessorFromSuccessorChain
+- TestTemporalTruthStore_RefreshProjectRejectsSingleWriteAndUnsupportedChains
+- TestTokenStore_CreateWithPrincipalRejectsKindWithoutPrincipal
+- TestTokenStore_CreateWithPrincipalRoundTrip
+- TestTranscriptStore_Lifecycle
+
+successor_only_failure_set=none
+parent_too_many_clients_occurrences=9
+successor_too_many_clients_occurrences=0
+parent_database_residue=0
+parent_activity_residue=0
+successor_database_residue=0
+successor_activity_residue=0
+
+verdict=client-exhaustion class removed; the exact six unrelated governance/migration failures remain visible and unchanged

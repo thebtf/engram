@@ -1,0 +1,43 @@
+{
+  "status": "READY_FOR_CHECK",
+  "parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+  "branch": "work/prc-db-test-pool-hygiene",
+  "changed_implementation_paths": [
+    "internal/db/gorm/candidate_store_test.go"
+  ],
+  "preexisting_helper_call_sites_closed": 76,
+  "parent_red": {
+    "session_baseline": 0,
+    "sessions_after_child_owners": [1, 2, 3, 4],
+    "exit_code": 1
+  },
+  "successor_green": {
+    "child_live_sessions": 1,
+    "sessions_after_owner_cleanup": 0,
+    "repeat_count": 20,
+    "focused_race_exit": 0,
+    "candidate_repeat_count": 5,
+    "candidate_race_exit": 0
+  },
+  "broad_comparison": {
+    "max_connections": 100,
+    "parent_semantic_failures": 6,
+    "successor_semantic_failures": 6,
+    "parent_secondary_client_exhaustion_failures": 6,
+    "parent_too_many_clients_occurrences": 9,
+    "successor_too_many_clients_occurrences": 0
+  },
+  "static_gates": {
+    "go_vet_all": 0,
+    "go_build_all": 0,
+    "git_diff_check": 0,
+    "coverage": null,
+    "coverage_reason": "only *_test.go infrastructure changed"
+  },
+  "residue": {
+    "database": 0,
+    "postgres_sessions": 0
+  },
+  "handoff_sha": null,
+  "handoff_sha_reason": "reported after the single commit because a commit cannot contain its own hash"
+}

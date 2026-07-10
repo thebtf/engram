@@ -30,11 +30,63 @@ func openCandidateTestDB(t *testing.T) *gorm.DB {
 
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close candidate test DB pool: %v", err)
+		}
+	})
 	require.NoError(t, sqlDB.Ping())
 
 	// Ensure migration chain is applied.
 	require.NoError(t, runMigrations(db), "runMigrations")
 	return db
+}
+
+// TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose protects
+// the test-process connection budget. Each child owns the pool it opens: the
+// pool must remain usable for the child's body, then disappear before t.Run
+// returns control to the parent.
+func TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose(t *testing.T) {
+	observer := openCandidateTestDB(t)
+	baseline := candidateTestDBOtherSessionCount(t, observer)
+
+	for i := 0; i < 4; i++ {
+		t.Run(fmt.Sprintf("owner-%d", i), func(t *testing.T) {
+			child := openCandidateTestDB(t)
+
+			var one int
+			require.NoError(t, child.Raw("SELECT 1").Scan(&one).Error)
+			require.Equal(t, 1, one, "owner pool must remain usable during the subtest")
+
+			live := candidateTestDBOtherSessionCount(t, observer)
+			t.Logf("baseline_sessions=%d child_live_sessions=%d", baseline, live)
+			require.Greater(t, live, baseline, "child pool must be observable before owner cleanup")
+		})
+
+		deadline := time.Now().Add(time.Second)
+		after := candidateTestDBOtherSessionCount(t, observer)
+		for after != baseline && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			after = candidateTestDBOtherSessionCount(t, observer)
+		}
+		t.Logf("baseline_sessions=%d sessions_after_owner_cleanup=%d", baseline, after)
+		if after != baseline {
+			t.Errorf("child pool leaked past owner cleanup: baseline=%d after=%d", baseline, after)
+		}
+	}
+}
+
+func candidateTestDBOtherSessionCount(t *testing.T, observer *gorm.DB) int64 {
+	t.Helper()
+
+	var count int64
+	require.NoError(t, observer.Raw(`
+		SELECT count(*)
+		FROM pg_stat_activity
+		WHERE datname = current_database()
+		  AND pid <> pg_backend_pid()
+	`).Scan(&count).Error)
+	return count
 }
 
 // TestCandidateStore_CRUDRoundtrip creates, retrieves, and lists a candidate.

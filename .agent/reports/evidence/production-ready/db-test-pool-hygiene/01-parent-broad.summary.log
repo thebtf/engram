@@ -1,0 +1,40 @@
+format=compact status/failure extraction from complete go test output
+full_output_captured=true
+filter=run metadata, top-level failures, client-exhaustion records, package result, exit and residue
+base_sha=bd68c05baf4b7250096dd84f56bebea2aa555970
+head_sha=bd68c05baf4b7250096dd84f56bebea2aa555970
+database=engram_mkr_dbph_parent_broad_a
+command=go test -p=1 ./internal/db/gorm -count=1 -v
+max_connections=100
+superuser_reserved_connections=3
+started_utc=2026-07-10T12:39:54.7843328Z
+activity_before_test=0
+--- FAIL: TestRuleGovernanceStore_AnnotatedCandidateWaitsUntilReviewAfter (0.16s)
+--- FAIL: TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables (0.18s)
+--- FAIL: TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectScopedReads (0.12s)
+--- FAIL: TestMigration144_RuleGovernanceRollbackAndReapply (0.14s)
+--- FAIL: TestMigration144_RuleGovernanceEscapeConstraints (0.13s)
+--- FAIL: TestMigration144_RuleGovernanceSnapshotStatusesAcceptExtendedStates (0.13s)
+[0m[31m[error] [0mfailed to initialize database, got error failed to connect to `user=engram database=engram_mkr_dbph_parent_broad_a`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+                            failed to connect to `user=engram database=engram_mkr_dbph_parent_broad_a`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+--- FAIL: TestTemporalTruthStore_RefreshProjectBoundsPredecessorFromSuccessorChain (0.00s)
+[0m[31m[error] [0mfailed to initialize database, got error failed to connect to `user=engram database=engram_mkr_dbph_parent_broad_a`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+                            failed to connect to `user=engram database=engram_mkr_dbph_parent_broad_a`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+--- FAIL: TestTemporalTruthStore_RefreshProjectRejectsSingleWriteAndUnsupportedChains (0.00s)
+[0m[31m[error] [0mfailed to initialize database, got error failed to connect to `user=engram database=engram_mkr_dbph_parent_broad_a`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+                            failed to connect to `user=engram database=engram_mkr_dbph_parent_broad_a`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+--- FAIL: TestTemporalTruthStore_LoadSelectedRecordsUsesDBNowForValidFrom (0.00s)
+                            failed to connect to `user=engram database=engram_mkr_dbph_parent_broad_a`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+--- FAIL: TestTokenStore_CreateWithPrincipalRoundTrip (0.00s)
+                            failed to connect to `user=engram database=engram_mkr_dbph_parent_broad_a`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+--- FAIL: TestTokenStore_CreateWithPrincipalRejectsKindWithoutPrincipal (0.00s)
+    transcript_store_test.go:64: open test db: failed to connect to `user=engram database=engram_mkr_dbph_parent_broad_a`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+--- FAIL: TestTranscriptStore_Lifecycle (0.00s)
+FAIL
+FAIL    github.com/thebtf/engram/internal/db/gorm    32.929s
+FAIL
+test_exit=1
+activity_after_test_process=0
+database_residue=0
+activity_residue=0
+finished_utc=2026-07-10T12:40:30.7792674Z
