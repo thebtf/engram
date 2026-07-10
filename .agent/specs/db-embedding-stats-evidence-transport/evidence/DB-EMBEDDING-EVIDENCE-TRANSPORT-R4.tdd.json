@@ -57,31 +57,9 @@
     }
   },
   "coverage": {
-    "command": "node.exe --test --test-concurrency=1 --experimental-test-coverage .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
-    "repeat_count": 2,
-    "reproducible": true,
-    "covered_git_blob_oids": {
-      "verifier": "75bec9c41eb5abc435f13d90848074f6608f7fce",
-      "test_harness": "35d5015c51e78130b7293e0b09ad6494ab3a4f1a"
-    },
-    "aggregate": {
-      "line_percent": 89.23,
-      "branch_percent": 76.61,
-      "functions_percent": 95.35
-    },
-    "verifier": {
-      "line_percent": 80.92,
-      "branch_percent": 58.02,
-      "functions_percent": 81.82
-    },
-    "test_harness": {
-      "line_percent": 100.0,
-      "branch_percent": 97.44,
-      "functions_percent": 100.0
-    },
-    "threshold_basis": "aggregate line coverage",
-    "threshold_percent": 80,
-    "status": "PASS"
+    "status": "REMOVED_AS_MIXED_EOL_MATERIALIZATION",
+    "checker_finding": "The recorded exact values were tied to maker-only mixed EOL working-tree bytes rather than the committed target representation.",
+    "replacement": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R5.tdd.json"
   },
   "behavioral_signal": {
     "name": "release-evidence-false-pass-rate",

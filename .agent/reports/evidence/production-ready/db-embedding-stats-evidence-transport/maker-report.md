@@ -1,102 +1,93 @@
-# DB-EMBEDDING-EVIDENCE-TRANSPORT R4 maker report
+# DB-EMBEDDING-EVIDENCE-TRANSPORT R5 maker report
 
-Date: 2026-07-10
-Role: revision maker
-Finish state: **READY_FOR_CHECK**
+R5 starts from exact R4 target
+`369951b61ee07cb0c405558e0f677cd1c9e90362`. The R4 checker commit
+`24bf45cb773dfbe4e42d662b3c35bd0a65b51f45` is not an ancestor. Product,
+source, and product-test blobs remain exact to accepted source
+`38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df` (`7/7`).
 
-## Immutable boundary
+## ET-R4-001 closure
 
-- Exact base and future commit parent:
-  `d650df5c4271cdb50aa1f443d2f95b2f4b672541`.
-- Accepted product source:
-  `38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df`.
-- Branch: `work/prc-db-embedding-evidence-transport-r4`.
-- Worktree:
-  `D:/Dev/engram/.agent/worktrees/db-embedding-evidence-r4-maker`.
-- Product/source/test blobs remain identical to the accepted source: `7/7`.
-- The R3 checker commit is not an ancestor and is not included.
+The covered R4 verifier is preserved exactly:
 
-## Reproduced defects and repair
+- Git blob OID: `75bec9c41eb5abc435f13d90848074f6608f7fce`
+- LF-byte SHA-256: `a55e59dd870659330add8f840272aa1e8829f8161779db3e9be9e6e014cf1ba4`
+- bytes / LF / CR: `25465 / 718 / 0`
 
-Final test bytes over exact base reproduced `22 pass / 2 fail`, exit `1`:
+The final R5 test harness is captured as:
 
-1. `representation=null` escaped as raw `TypeError` while reading `kind`.
-2. `entries[0]=null` escaped as raw `TypeError` while reading `path`.
+- Git blob OID: `8e814737c8d5f4437aeb2a97dc52220e115cba0b`
+- LF-byte SHA-256: `970a7a4a322b8aa5a0ed434d68ef5ce41c5085c986007f15aadf34d69c0172aa`
+- bytes / LF / CR: `20692 / 634 / 0`
 
-The production change is limited to safe shape consumption after schema
-validation: entry comparison requires a plain object before dereference, and
-representation reads use a validated safe object. Both cases now emit stable
-structured `FAIL` JSON with their exact schema error, empty entries, and no raw
-exception.
+`coverage-capture.v1.json` binds both exact Git-index blobs to their filesystem
+bytes and declares `core.autocrlf=false`, `2/2 i/lf w/lf`, and LF-only
+materialization. `verify-coverage-capture.cjs` rejects missing/unknown capture
+fields, mixed EOL, CRLF, bare CR, index/filesystem disagreement, wrong hashes,
+and a coverage JSON that disagrees with either canonical transcript. The permanent
+24-case suite now proves both undeclared capture and a real mixed-EOL mutation
+fail closed. The R5 verifier is launched through a small environment-clearing
+wrapper, so it is not included in the coverage target.
 
-The permanent tests generate a preload observer that records real
-`child_process.spawnSync` and `fs.readFileSync` calls. For both null cases:
+## TDD and attack rails
 
-- reported Git/source-file accesses: `0/0`;
-- observed `git cat-file blob`/required-source-file reads: `0/0`.
-
-## Tests, attacks, and mutation proof
-
-Command:
-
-`node.exe --test --test-concurrency=1 .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs`
-
+- R5 RED over exact R4 target: `23 pass / 1 fail`, exit `1`; the new mode did
+  not exist.
+- Historical exact-base RED over
+  `d650df5c4271cdb50aa1f443d2f95b2f4b672541` with the R4 final test blob:
+  `22 pass / 2 fail`, exit `1`.
 - GREEN and post-restore: `24/24`, exit `0`.
-- Exact-base RED: `22 pass / 2 fail`, exit `1`.
-- Independent checker attack cases: `15/15` pass.
-- `validateContractSchema` fail-open sentinel: `9 pass / 15 fail`, exit `1`.
-- forced artifact-PASS sentinel: `15 pass / 9 fail`, exit `1`.
-- verifier restored to SHA-256
-  `525a9cd937e26fb7f38b8b51792f3af0e95eafdbdb2670fa7aee7a15fa914673`;
-  post-restore suite `24/24`.
+- Permanent top-level attack cases: `15/15`.
+- `representation=null` and `entries[0]=null`: structured `FAIL`, empty stderr,
+  empty entries, reported source access `0/0`, preload-observed Git/source-file
+  access `0/0`.
+- Prove-It `validateContractSchema`: `9 pass / 15 fail`, exit `1`.
+- Prove-It `verifyArtifactFiles`: `15 pass / 9 fail`, exit `1`.
+- Prove-It R5 capture verifier forced-PASS sentinel: `23 pass / 1 fail`, exit
+  `1`; restored script passes syntax and evidence verification.
 
-## Reproducible coverage on final verifier/test content
+## Transcript-backed final LF coverage
 
-Both Node `v24.2.0` runs were identical:
+Exact command, run twice after final staged covered bytes stopped changing:
 
-| Scope | Line | Branch | Functions |
+```text
+node.exe --test --test-concurrency=1 --experimental-test-coverage .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs
+```
+
+Both runs are `24/24`, exit `0`, with identical metrics:
+
+| Scope | Lines | Branches | Functions |
 | --- | ---: | ---: | ---: |
-| aggregate | `89.23%` | `76.61%` | `95.35%` |
-| verifier | `80.92%` | `58.02%` | `81.82%` |
-| test harness | `100.00%` | `97.44%` | `100.00%` |
+| aggregate | `89.28%` | `75.30%` | `95.59%` |
+| verifier | `80.08%` | `55.91%` | `81.82%` |
+| test harness | `99.68%` | `95.16%` | `100.00%` |
 
-The hard threshold is aggregate line coverage: `89.23% >= 80%`, PASS. The
-unreproduced historical coverage values were removed from every duplicate R3
-claim surface rather than retained as current evidence.
+The aggregate line floor is `89.28% >= 80%`, PASS. Canonical transcript SHA-256
+(LF TAP; only non-semantic coverage-table trailing padding trimmed):
 
-## Representation rails
+- run 1: `52a871ca44112dc2d4e7540f7e9548079a05619f967b4c4d9445b999d7a42daf`
+- run 2: `d88556d5e8e437eba50505db6ac200e52910353ced62ad4eafbf6195147387a5`
 
-Windows `core.autocrlf=true`, all seven source files `i/lf w/crlf`:
+The evidence-side verifier parses the two canonical tables itself, verifies both
+transcript hashes, and compares the parsed values exactly with
+`coverage-repeat.v1.json`. No maker-only mixed materialization is accepted.
 
-| Mode | Exit | Status | Result |
-| --- | ---: | --- | --- |
-| `legacy-raw-audit` | 0 | `AMBIGUOUS_RAW_CHECKOUT_CONFIRMED` | raw `0/7`, Git `7/7`, LF `7/7` |
-| `git-object` | 0 | `PASS` | `7/7` |
-| `checkout-lf` | 0 | `PASS` | `7/7`, bare CR `0` |
-| `artifact-files` | 0 | `PASS` | exact artifacts `5/5` |
-| permanent suite | 0 | `PASS` | `24/24` |
+## Representation, checksum, and cleanup rails
 
-Fresh `core.autocrlf=false`, all seven source files `i/lf w/lf`:
+- Fresh LF source modes: raw/Git/checkout-LF `7/7`, bare CR `0`.
+- Windows CRLF source modes: raw `0/7`, Git `7/7`, checkout-LF `7/7`, bare CR
+  `0`.
+- Canonical artifact mode: `5/5` in LF and Windows materializations.
+- Layered checksum manifests exclude themselves and verify `5/5`, `13/13`,
+  `20/20`, and R5 `32/32` using canonical LF bytes.
+- Temporary worktrees, task-owned Node processes, access-spy directories,
+  matching PostgreSQL databases, and matching PostgreSQL sessions: `0` at
+  handoff.
 
-| Mode | Exit | Status | Result |
-| --- | ---: | --- | --- |
-| `legacy-raw-audit` | 0 | `RAW_CHECKOUT_HAPPENS_TO_MATCH` | raw/Git/LF `7/7` |
-| `git-object` | 0 | `PASS` | `7/7` |
-| `checkout-lf` | 0 | `PASS` | `7/7`, bare CR `0` |
-| `artifact-files` | 0 | `PASS` | exact artifacts `5/5` |
-| permanent suite | 0 | `PASS` | `24/24` |
+## Handoff
 
-## Integrity and handoff
-
-- Artifact checksum set remains exactly five files and excludes itself.
-- Compact R4 packet checksum excludes itself and covers the source manifest,
-  executable verifier/test, R4 TDD evidence, reports, and artifact manifest.
-- Temporary RED, Prove-It, and LF worktrees are removed.
-- Maker Node, matching PostgreSQL database, and matching PostgreSQL session
-  residue are zero.
-- No merge, push, tag, release, root-report edit, or self-acceptance occurred.
-
-The final commit/tree/checksum identifiers are reported out-of-band after the
-single commit to avoid self-reference. A fresh R4 checker must replay the null
-attacks, exact-base RED, coverage, representation rails, artifact checksums,
-and residue checks.
+The maker commit is intentionally reported out-of-band after commit to avoid
+self-reference. No merge, push, tag, primary-worktree edit, or integration edit
+is part of this slice. A fresh checker must independently parse the transcripts,
+recompute coverage, replay the mutations, verify all checksum layers, and audit
+the exact evidence-only path inventory before acceptance.

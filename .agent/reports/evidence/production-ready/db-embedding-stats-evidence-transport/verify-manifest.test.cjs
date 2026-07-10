@@ -36,6 +36,19 @@ const repoRoot = path.resolve(
     windowsHide: true,
   }).stdout.trim(),
 );
+const coverageCaptureDirectory = path.join(
+  repoRoot,
+  '.agent',
+  'reports',
+  'evidence',
+  'production-ready',
+  'db-embedding-stats-evidence-transport-r5',
+);
+const coverageCapturePath = path.join(coverageCaptureDirectory, 'coverage-capture.v1.json');
+const coverageCaptureVerifierWrapperPath = path.join(
+  coverageCaptureDirectory,
+  'run-coverage-capture-verifier.cmd',
+);
 const legacyManifestPath = path.join(
   repoRoot,
   '.agent',
@@ -177,6 +190,23 @@ function runVerifier(mode, options = {}) {
   };
 }
 
+function runCoverageCaptureVerifier(mode) {
+  const result = spawnSync(
+    'cmd.exe',
+    ['/d', '/c', coverageCaptureVerifierWrapperPath, `--mode=${mode}`],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      windowsHide: true,
+    },
+  );
+  return {
+    exit_code: result.status,
+    output: result.stdout.trim() ? JSON.parse(result.stdout) : null,
+    stderr: result.stderr.trim(),
+  };
+}
+
 function expectFailClosed(result) {
   assert.notEqual(result.exit_code, 0, 'mutation must return a non-zero exit code');
   assert.equal(result.output?.status, 'FAIL', result.stderr || 'mutation must emit FAIL');
@@ -271,7 +301,25 @@ function mutateContract(mutator) {
   };
 }
 
-test('artifact manifest rejects a header-only zero-entry set', () => {
+function mutateJson(mutator) {
+  return (bytes) => {
+    const value = JSON.parse(bytes.toString('utf8'));
+    mutator(value);
+    return Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  };
+}
+
+function makeMixedLineEndings(bytes) {
+  const firstLf = bytes.indexOf(10);
+  assert.notEqual(firstLf, -1, 'fixture must contain an LF');
+  return Buffer.concat([
+    bytes.subarray(0, firstLf),
+    Buffer.from('\r\n', 'utf8'),
+    bytes.subarray(firstLf + 1),
+  ]);
+}
+
+test('evidence manifests reject incomplete sets and undeclared or mixed coverage capture', () => {
   const result = withMutation(
     artifactManifestPath,
     mutateArtifactManifest((lines) => {
@@ -280,6 +328,38 @@ test('artifact manifest rejects a header-only zero-entry set', () => {
     () => runVerifier('artifact-files'),
   );
   expectFailClosed(result);
+
+  const baseline = runCoverageCaptureVerifier('materialization');
+  assert.equal(baseline.exit_code, 0, baseline.stderr || JSON.stringify(baseline.output));
+  assert.equal(baseline.output?.status, 'PASS');
+
+  const undeclared = withMutation(
+    coverageCapturePath,
+    mutateJson((coverage) => {
+      delete coverage.materialization;
+    }),
+    () => runCoverageCaptureVerifier('materialization'),
+  );
+  expectFailClosed(undeclared);
+  assert.ok(
+    undeclared.output.structural_errors.includes(
+      'capture is missing required key: materialization',
+    ),
+  );
+
+  const mixed = withMutation(
+    verifierPath,
+    makeMixedLineEndings,
+    () => runCoverageCaptureVerifier('materialization'),
+  );
+  expectFailClosed(mixed);
+  assert.ok(
+    mixed.output.structural_errors.includes(
+      'coverage file must be LF-only and byte-identical to the Git index: ' +
+        '.agent/reports/evidence/production-ready/' +
+        'db-embedding-stats-evidence-transport/verify-manifest.cjs',
+    ),
+  );
 });
 
 test('artifact manifest rejects a missing required entry', () => {

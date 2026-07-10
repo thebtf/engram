@@ -1,0 +1,101 @@
+{
+  "task_id": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R5",
+  "stack": "GO repository with Node.js evidence verifiers",
+  "base_commit": "369951b61ee07cb0c405558e0f677cd1c9e90362",
+  "node_version": "v24.2.0",
+  "red": {
+    "observed_at_utc": "2026-07-10T19:18:54.3616699Z",
+    "test_name": "evidence manifests reject incomplete sets and undeclared or mixed coverage capture",
+    "passed_tests": 23,
+    "failed_tests": 1,
+    "exit_code": 1,
+    "failure": "coverage materialization verifier was absent"
+  },
+  "exact_base_red": {
+    "base_commit": "d650df5c4271cdb50aa1f443d2f95b2f4b672541",
+    "r4_final_test_blob_overlaid": true,
+    "passed_tests": 22,
+    "failed_tests": 2,
+    "exit_code": 1,
+    "failures": [
+      "representation=null escaped as raw TypeError",
+      "entries[0]=null escaped as raw TypeError"
+    ]
+  },
+  "green": {
+    "passed_tests": 24,
+    "failed_tests": 0,
+    "exit_code": 0,
+    "permanent_attack_cases": 15,
+    "undeclared_capture_structured_fail": true,
+    "mixed_eol_capture_structured_fail": true,
+    "null_representation_structured_fail": true,
+    "null_entry_structured_fail": true,
+    "null_reported_and_preload_source_access_zero": true
+  },
+  "refactor": {
+    "applied": true,
+    "patterns": [
+      "preserve covered R4 verifier unchanged",
+      "isolate representation and transcript validation in evidence-side verifier",
+      "clear Node coverage environment in wrapper before evidence-side verifier launch"
+    ],
+    "post_refactor_parity": true,
+    "tests_before": 24,
+    "tests_after": 24
+  },
+  "prove_it": {
+    "validateContractSchema": {
+      "sentinel": "discard structural errors and release validated subsets",
+      "passed_tests": 9,
+      "failed_tests": 15,
+      "exit_code": 1
+    },
+    "verifyArtifactFiles": {
+      "sentinel": "force artifact status PASS",
+      "passed_tests": 15,
+      "failed_tests": 9,
+      "exit_code": 1
+    },
+    "verifyCoverageCapture": {
+      "sentinel": "force evidence-side verifier status PASS",
+      "passed_tests": 23,
+      "failed_tests": 1,
+      "exit_code": 1
+    },
+    "post_restore": {
+      "passed_tests": 24,
+      "failed_tests": 0,
+      "exit_code": 0,
+      "r4_verifier_git_blob_oid": "75bec9c41eb5abc435f13d90848074f6608f7fce"
+    }
+  },
+  "coverage": {
+    "command": "node.exe --test --test-concurrency=1 --experimental-test-coverage .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+    "capture_manifest": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-capture.v1.json",
+    "transcript_representation": "canonical-lf-tap-trim-trailing-table-padding",
+    "transcripts": [
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-1.tap",
+        "sha256": "52a871ca44112dc2d4e7540f7e9548079a05619f967b4c4d9445b999d7a42daf"
+      },
+      {
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-2.tap",
+        "sha256": "d88556d5e8e437eba50505db6ac200e52910353ced62ad4eafbf6195147387a5"
+      }
+    ],
+    "repeat_count": 2,
+    "metrics_identical": true,
+    "aggregate": { "line_percent": 89.28, "branch_percent": 75.30, "functions_percent": 95.59 },
+    "verifier": { "line_percent": 80.08, "branch_percent": 55.91, "functions_percent": 81.82 },
+    "test_harness": { "line_percent": 99.68, "branch_percent": 95.16, "functions_percent": 100.00 },
+    "threshold_basis": "aggregate line coverage",
+    "threshold_percent": 80,
+    "status": "PASS"
+  },
+  "behavioral_signal": {
+    "name": "release-evidence-false-pass-rate",
+    "target": "0 false PASS results across 15 top-level attacks and 24 Node test cases",
+    "measurement_method": "permanent mutation suite, preload source-access spy, LF/index capture verifier, and canonical transcript parser"
+  }
+}

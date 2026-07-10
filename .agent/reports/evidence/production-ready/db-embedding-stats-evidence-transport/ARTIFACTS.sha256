@@ -6,5 +6,5 @@
 5d932e6acf104bf9eff291409b50961007512e09e91d78401257a018fcb780f4  .agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt
 e3e9fd6250d4ead502a01ec81bb7901ad658d74845184a10b6f153276a1bd12f  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json
 a55e59dd870659330add8f840272aa1e8829f8161779db3e9be9e6e014cf1ba4  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs
-fd16ab3f6135a3af584a8f3589e9137c6bfcb62f474093492d15020db21ee3fc  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json
-cb73530f2c204f2c7e4110928971ffaac6c3cb172b59c72cf8047cecf610ab65  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md
+4f62630b651d6805ffe894e643159dfdef41176081878f303de12a64a56dca52  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json
+5d7a49dd716c25679e133c9aa2c0b59fd40525fb0540cc8b4556429df1d37fc6  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md

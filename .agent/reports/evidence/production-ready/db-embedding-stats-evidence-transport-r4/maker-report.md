@@ -1,39 +1,19 @@
-# DB-EMBEDDING-EVIDENCE-TRANSPORT R4 maker summary
+# DB-EMBEDDING-EVIDENCE-TRANSPORT R4 supersession note
 
-R4 starts from exact base `d650df5c4271cdb50aa1f443d2f95b2f4b672541`
-and preserves the accepted product source
-`38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df` byte-for-byte.
+R4 remains the historical repair that closed the two raw-exception findings:
+`representation=null` and `entries[0]=null` now produce structured `FAIL`, empty
+stderr, empty entries, and zero reported plus preload-observed source access.
+Its exact-base RED `22/2`, GREEN `24/24`, permanent attacks, Prove-It mutations,
+Windows/fresh-LF source rails, and product parity remain valid.
 
-Two new permanent regressions reproduce the checker findings on the exact base:
-`representation=null` escaped through a raw `TypeError` reading `kind`, and a
-null entry escaped through a raw `TypeError` reading `path`. Exact-base RED was
-`22 pass / 2 fail`; GREEN and post-restore are `24/24`.
+The independent R4 checker found one evidence-integrity defect: the exact
+coverage values were reproduced only from the maker worktree's mixed EOL raw
+files. They were not reproducible from the committed target in either a fresh
+CRLF or fresh LF checkout. The numeric coverage claim has therefore been
+removed rather than preserved as history.
 
-The repair is deliberately narrow. Entry-shape comparison now rejects a
-non-object before dereference, and the already-validated representation is read
-through a safe object. Both mutations now return stable JSON `status=FAIL`, a
-specific structural error, empty entries, reported source accesses `0/0`, and
-preload-observed `git cat-file` plus source-file reads `0/0`.
+The authoritative LF capture, raw transcripts, parsed metrics, exact staged
+blob/filesystem hashes, and current checksum packet are under
+`.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/`.
 
-Independent checker attacks remain `15/15` at the case level. Prove-It mutation
-made `validateContractSchema` lose 15 tests and forced artifact PASS lost 9
-tests; restoration returned byte-identically to `24/24`.
-
-Node `v24.2.0` coverage was run twice against the final verifier/test blobs and
-was identical on both runs:
-
-| Scope | Line | Branch | Functions |
-| --- | ---: | ---: | ---: |
-| aggregate | `89.23%` | `76.61%` | `95.35%` |
-| verifier | `80.92%` | `58.02%` | `81.82%` |
-| test harness | `100.00%` | `97.44%` | `100.00%` |
-
-The hard gate is aggregate line coverage: `89.23% >= 80%`.
-
-Windows materialization remains raw/Git/LF `0/7`, `7/7`, `7/7`; fresh LF is
-`7/7` in all three views. Both materializations pass `git-object`,
-`checkout-lf`, the `24/24` permanent suite, and the exact five-file artifact
-set. Product/source/test delta and temporary worktree, Node, PostgreSQL database,
-and PostgreSQL session residue are all zero.
-
-Status: **READY_FOR_CHECK**. The maker does not merge, push, tag, or self-accept.
+Status: **SUPERSEDED_BY_R5**.
