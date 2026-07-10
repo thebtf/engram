@@ -56,7 +56,12 @@ export function createMemoryGetTool(
         const content = localFile.content;
         if (parsed.data.store && client.isAvailable()) {
           const identity = resolveIdentity(ctx.agentId ?? '', ctx.workspaceDir);
-          const project = config.project ?? identity.projectId;
+          const selectedProject = config.project ?? identity.projectId;
+          const registration = await client.registerAndResolveProject(identity, selectedProject);
+          if (!registration.ok) {
+            return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
+          }
+          const project = registration.canonicalProject;
           const title = parsed.data.path.replace(/.*[/\\]/, '').replace(/\.(md|markdown)$/i, '');
           await client.bulkImport([{
             title,
@@ -132,7 +137,12 @@ async function searchEngram(
   }
 
   const identity = resolveIdentity(ctx.agentId ?? '', ctx.workspaceDir);
-  const project = config.project ?? identity.projectId;
+  const selectedProject = config.project ?? identity.projectId;
+  const registration = await client.registerAndResolveProject(identity, selectedProject);
+  if (!registration.ok) {
+    return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
+  }
+  const project = registration.canonicalProject;
 
   const response = await client.searchContext({
     project,

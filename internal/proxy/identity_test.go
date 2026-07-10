@@ -7,10 +7,121 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/thebtf/engram/internal/proxy"
 )
+
+type identityVectorFile struct {
+	IdentityVersion uint32           `json:"identity_version"`
+	Vectors         []identityVector `json:"vectors"`
+}
+
+type identityVector struct {
+	Name            string `json:"name"`
+	Selector        string `json:"selector"`
+	DisplayName     string `json:"display_name"`
+	LegacyProjectID string `json:"legacy_project_id"`
+	GitRemote       string `json:"git_remote"`
+	RelativePath    string `json:"relative_path"`
+	NonGitAnchor    string `json:"non_git_anchor"`
+	AnchorShared    *bool  `json:"anchor_shared"`
+}
+
+func loadIdentityVectors(t *testing.T) identityVectorFile {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", ".agent", "specs", "security-project-identity", "evidence", "project-identity-v2-vectors.json"))
+	if err != nil {
+		t.Fatalf("read shared identity vectors: %v", err)
+	}
+	var vectors identityVectorFile
+	if err := json.Unmarshal(data, &vectors); err != nil {
+		t.Fatalf("decode shared identity vectors: %v", err)
+	}
+	return vectors
+}
+
+func TestProjectIdentityV2_SharedVectors(t *testing.T) {
+	vectors := loadIdentityVectors(t)
+	if vectors.IdentityVersion != proxy.ProjectIdentityVersionV2 {
+		t.Fatalf("vector identity version=%d, implementation=%d", vectors.IdentityVersion, proxy.ProjectIdentityVersionV2)
+	}
+	for _, vector := range vectors.Vectors {
+		vector := vector
+		t.Run(vector.Name, func(t *testing.T) {
+			identity := proxy.ProjectIdentityV2{
+				Version:         vectors.IdentityVersion,
+				LegacyProjectID: vector.LegacyProjectID,
+				DisplayName:     vector.DisplayName,
+				GitRemote:       vector.GitRemote,
+				RelativePath:    vector.RelativePath,
+				NonGitAnchor:    vector.NonGitAnchor,
+				AnchorShared:    vector.AnchorShared,
+			}
+			if err := proxy.ValidateProjectIdentityV2(identity); err != nil {
+				t.Fatalf("shared vector rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestResolveProjectIdentityV2_NonGitAnchorStrictAndStable(t *testing.T) {
+	dir := t.TempDir()
+	first, err := proxy.ResolveProjectIdentityV2(dir)
+	if err != nil {
+		t.Fatalf("first resolve: %v", err)
+	}
+	second, err := proxy.ResolveProjectIdentityV2(dir)
+	if err != nil {
+		t.Fatalf("second resolve: %v", err)
+	}
+	if first.NonGitAnchor != second.NonGitAnchor {
+		t.Fatalf("anchor changed: %q != %q", first.NonGitAnchor, second.NonGitAnchor)
+	}
+	if matched, _ := regexp.MatchString(`^[0-9a-f]{32}$`, first.NonGitAnchor); !matched {
+		t.Fatalf("anchor %q is not a strict 128-bit lowercase hex value", first.NonGitAnchor)
+	}
+	if first.AnchorShared == nil || *first.AnchorShared {
+		t.Fatalf("new anchor must explicitly default to unshared: %#v", first.AnchorShared)
+	}
+	other, err := proxy.ResolveProjectIdentityV2(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve independent project: %v", err)
+	}
+	if other.NonGitAnchor == first.NonGitAnchor {
+		t.Fatal("independent projects received the same anchor; generator is not high entropy")
+	}
+	bad := first
+	bad.NonGitAnchor = "path-derived"
+	if err := proxy.ValidateProjectIdentityV2(bad); err == nil || !strings.Contains(err.Error(), "PROJECT_IDENTITY_INVALID") {
+		t.Fatalf("invalid anchor error=%v", err)
+	}
+}
+
+func TestResolveProjectIdentityV2_ConcurrentFirstUseConverges(t *testing.T) {
+	dir := t.TempDir()
+	const callers = 24
+	identities := make([]proxy.ProjectIdentityV2, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := range callers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			identities[i], errs[i] = proxy.ResolveProjectIdentityV2(dir)
+		}(i)
+	}
+	wg.Wait()
+	for i := range callers {
+		if errs[i] != nil {
+			t.Fatalf("caller %d: %v", i, errs[i])
+		}
+		if identities[i].NonGitAnchor != identities[0].NonGitAnchor {
+			t.Fatalf("caller %d got divergent anchor %q != %q", i, identities[i].NonGitAnchor, identities[0].NonGitAnchor)
+		}
+	}
+}
 
 // findRealRepoRoot returns the absolute path of the current git repository
 // root. It exists solely for TestResolveProjectSlug_WorktreeMatchesMain,

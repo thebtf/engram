@@ -1,0 +1,89 @@
+{
+  "change_request": "SECURITY-PROJECT-IDENTITY",
+  "phase": "GREEN",
+  "observed_at": "2026-07-10T15:47:34.8541692Z",
+  "base_commit": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+  "branch": "work/prc-security-project-identity",
+  "toolchain": {
+    "go": "go1.25.11 windows/amd64",
+    "node": "v24.2.0",
+    "npm": "11.7.0",
+    "protoc": "34.0",
+    "protoc_gen_go": "v1.36.11",
+    "protoc_gen_go_grpc": "v1.6.1",
+    "postgres_image": "pgvector/pgvector:pg17"
+  },
+  "gates": [
+    {
+      "command": "go test ./... -count=1",
+      "result": "pass",
+      "scope": "all Go packages and tests/smoke"
+    },
+    {
+      "command": "go vet ./...",
+      "result": "pass"
+    },
+    {
+      "command": "DATABASE_DSN=<test-db> go test -race ./internal/proxy ./internal/handlers/engramcore ./internal/grpcserver ./internal/db/gorm ./internal/worker -run <identity-pattern> -count=1",
+      "result": "pass"
+    },
+    {
+      "command": "DATABASE_DSN=<test-db> go test ./internal/proxy ./internal/handlers/engramcore ./internal/grpcserver ./internal/db/gorm ./internal/worker -run <identity-pattern> -count=10",
+      "result": "pass",
+      "residue": 0
+    },
+    {
+      "command": "DATABASE_DSN=<test-db> go test <identity-packages> -run <identity-pattern> -cover -count=1",
+      "result": "pass",
+      "coverage_percent": {
+        "internal/proxy": 68.0,
+        "internal/handlers/engramcore": 46.5,
+        "internal/grpcserver": 7.1,
+        "internal/db/gorm": 2.8,
+        "internal/worker": 0.8
+      },
+      "note": "package-wide percentages are informational; no project threshold is configured"
+    },
+    {
+      "command": "npm run build && npm test",
+      "cwd": "plugin/openclaw-engram",
+      "result": "pass 23/23"
+    },
+    {
+      "command": "node --test hook-cli.test.js lib.test.js pre-compact.test.js pre-tool-use.test.js project-identity-v2.test.js session-start.test.js stop.test.js user-prompt.test.js",
+      "cwd": "plugin/engram/hooks",
+      "result": "pass 72/72"
+    },
+    {
+      "command": "fresh PostgreSQL database -> run migrations -> focused identity DB/HTTP tests -> residue query -> drop database",
+      "result": "pass",
+      "table": "projects",
+      "residue": 0,
+      "database_removed": true,
+      "non_blocking_existing_migration_warnings": [
+        "historical migration 040 logged missing observation_vectors after the v5 demolition",
+        "migration 109 skipped optional vectorscale because the test image provides pgvector only"
+      ]
+    },
+    {
+      "command": "protoc regeneration and SHA-256 comparison",
+      "result": "byte-identical",
+      "hashes": {
+        "proto/engram/v1/engram.pb.go": "5D8F6B93125D393F938A96E8F13B737266F01E9E4FC67A19CB6B7060C4E9E9F5",
+        "proto/engram/v1/engram_grpc.pb.go": "D45A8333BAE5B954C5E8A628C95FC5A7F908312B7B7F1C49D66B9835F8758858"
+      }
+    }
+  ],
+  "contract_proofs": {
+    "openclaw_consumer_files": 20,
+    "openclaw_resolve_calls": 22,
+    "openclaw_awaited_registration_barriers": 22,
+    "new_identity_schema_matches": 0,
+    "raw_anchor_sql_write_matches": 0,
+    "prove_it_sentinel_matches": 0,
+    "added_secret_matches": 0,
+    "demolished_path_added_matches": 0,
+    "git_diff_check": "pass"
+  },
+  "conclusion": "Maker GREEN is complete and ready for an independent checker. No merge, push, release, or primary-worktree write was performed."
+}

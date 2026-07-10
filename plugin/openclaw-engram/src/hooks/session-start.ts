@@ -36,7 +36,13 @@ export async function handleSessionStart(
 
     const agentId = ctx.agentId ?? '';
     const identity = resolveIdentity(agentId, ctx.workspaceDir);
-    const project = config.project ?? identity.projectId;
+    const selectedProject = config.project ?? identity.projectId;
+    const registration = await client.registerAndResolveProject(identity, selectedProject);
+    if (!registration.ok) {
+      (logger ?? console).warn(`[engram] session-start: project registration failed: ${registration.error.code}`);
+      return;
+    }
+    const project = registration.canonicalProject;
 
     const claudeSessionId = ctx.sessionId ?? agentId;
     if (!claudeSessionId) {
@@ -46,7 +52,7 @@ export async function handleSessionStart(
       return;
     }
 
-    // Initialize session tracking (fire-and-forget)
+    // Registration is awaited above; the data write may now be fire-and-forget.
     void client.initSession({
       claudeSessionId,
       project,

@@ -7,6 +7,7 @@ import (
 
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/module"
+	"github.com/thebtf/engram/internal/proxy"
 	"github.com/thebtf/engram/internal/version"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
@@ -29,6 +30,10 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 	}
 	token := m.envFor(p, config.EnvWorkstationToken)
 	project := m.cache.Resolve(p)
+	projectIdentity, err := resolveProjectIdentityV2(p.Cwd)
+	if err != nil {
+		return nil, fmt.Errorf("project identity v2: %w", err)
+	}
 
 	conn, err := m.pool.getOrDialGRPC(serverURL, token)
 	if err != nil {
@@ -37,9 +42,10 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 	client := pb.NewEngramServiceClient(conn)
 
 	resp, err := client.Initialize(ctx, &pb.InitializeRequest{
-		ClientName:    "engram-daemon",
-		ClientVersion: daemonClientVersion,
-		Project:       project,
+		ClientName:      "engram-daemon",
+		ClientVersion:   daemonClientVersion,
+		Project:         project,
+		ProjectIdentity: projectIdentity,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("gRPC Initialize: %w", err)
@@ -83,6 +89,10 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 	}
 	token := m.envFor(p, config.EnvWorkstationToken)
 	project := m.cache.Resolve(p)
+	projectIdentity, err := resolveProjectIdentityV2(p.Cwd)
+	if err != nil {
+		return nil, fmt.Errorf("project identity v2: %w", err)
+	}
 
 	conn, err := m.pool.getOrDialGRPC(serverURL, token)
 	if err != nil {
@@ -98,10 +108,11 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 	// when SessionId is non-empty (grpcserver/server.go).
 	sessionID := m.envFor(p, config.EnvClaudeSessionID)
 	resp, err := client.CallTool(ctx, &pb.CallToolRequest{
-		ToolName:      name,
-		ArgumentsJson: args,
-		Project:       project,
-		SessionId:     sessionID,
+		ToolName:        name,
+		ArgumentsJson:   args,
+		Project:         project,
+		SessionId:       sessionID,
+		ProjectIdentity: projectIdentity,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("gRPC CallTool: %w", err)
@@ -140,3 +151,19 @@ func buildInnerBlock(contentJSON []byte) (json.RawMessage, error) {
 // daemonClientVersion is the ClientVersion string sent in gRPC
 // InitializeRequest. Bumped alongside Constitution §15 unified version.
 var daemonClientVersion = version.Daemon
+
+func resolveProjectIdentityV2(cwd string) (*pb.ProjectIdentityV2, error) {
+	identity, err := proxy.ResolveProjectIdentityV2(cwd)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.ProjectIdentityV2{
+		Version:         identity.Version,
+		LegacyProjectId: identity.LegacyProjectID,
+		DisplayName:     identity.DisplayName,
+		GitRemote:       identity.GitRemote,
+		RelativePath:    identity.RelativePath,
+		NonGitAnchor:    identity.NonGitAnchor,
+		AnchorShared:    identity.AnchorShared,
+	}, nil
+}

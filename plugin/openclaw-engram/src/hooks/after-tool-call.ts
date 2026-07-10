@@ -40,13 +40,13 @@ const HEARTBEAT_TOOL_NAMES = new Set([
  * @param client - Shared engram REST client.
  * @param config - Resolved plugin config.
  */
-export function handleAfterToolCall(
+export async function handleAfterToolCall(
   event: AfterToolCallEvent,
   ctx: PluginHookContext,
   client: EngramRestClient,
   config: PluginConfig,
   logger?: PluginLogger,
-): void {
+): Promise<void> {
   if (!client.isAvailable()) return;
   if (!config.autoExtract) return;
 
@@ -72,7 +72,13 @@ export function handleAfterToolCall(
   const sessionId = ctx.sessionId ?? ctx.sessionKey ?? agentId;
   if (!sessionId?.trim()) return; // no session identity available — skip
   const identity = resolveIdentity(agentId, ctx.workspaceDir);
-  const project = config.project ?? identity.projectId;
+  const selectedProject = config.project ?? identity.projectId;
+  const registration = await client.registerAndResolveProject(identity, selectedProject);
+  if (!registration.ok) {
+    (logger ?? console).warn(`[engram] after-tool-call: project registration failed: ${registration.error.code}`);
+    return;
+  }
+  const project = registration.canonicalProject;
 
   let toolInput: string;
   let toolResult: string;
@@ -84,7 +90,7 @@ export function handleAfterToolCall(
     toolResult = '[unserializable]';
   }
 
-  // Fire-and-forget — do not await
+  // Registration is awaited above; the data write may now be fire-and-forget.
   void client.ingestEvent({
     session_id: sessionId,
     project,

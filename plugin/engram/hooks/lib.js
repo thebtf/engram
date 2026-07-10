@@ -352,6 +352,140 @@ function ProjectIDWithName(cwd) {
   return hash.slice(0, 6);
 }
 
+const PROJECT_IDENTITY_VERSION_V2 = 2;
+const PROJECT_IDENTITY_V2_FILE = '.engram-project-v2.json';
+const STRICT_ANCHOR_V2 = /^[0-9a-f]{32}$/;
+const PROJECT_IDENTITY_CONTROL = /[\u0000-\u001f\u007f]/;
+const PROJECT_ANCHOR_V2_KEYS = ['anchor', 'shared', 'version'];
+
+function buildProjectIdentityV2(value) {
+  return {
+    version: PROJECT_IDENTITY_VERSION_V2,
+    legacy_project_id: String(value.legacy_project_id || ''),
+    display_name: String(value.display_name || ''),
+    git_remote: String(value.git_remote || ''),
+    relative_path: String(value.relative_path || ''),
+    non_git_anchor: String(value.non_git_anchor || ''),
+    anchor_shared: value.anchor_shared == null ? null : Boolean(value.anchor_shared),
+  };
+}
+
+function validateProjectIdentityV2(identity) {
+  const invalid = (reason) => {
+    throw new Error(`PROJECT_IDENTITY_INVALID: ${reason}`);
+  };
+  if (!identity || identity.version !== PROJECT_IDENTITY_VERSION_V2) {
+    invalid('unsupported version');
+  }
+  if (identity.legacy_project_id.length > 256 || identity.display_name.length > 256 ||
+      identity.legacy_project_id.trim() !== identity.legacy_project_id ||
+      PROJECT_IDENTITY_CONTROL.test(identity.legacy_project_id) || PROJECT_IDENTITY_CONTROL.test(identity.display_name)) {
+    invalid('selector or display name too long');
+  }
+  const hasGit = identity.git_remote !== '' || identity.relative_path !== '';
+  const hasAnchor = identity.non_git_anchor !== '' || identity.anchor_shared !== null;
+  if (hasGit === hasAnchor) invalid('exactly one identity source is required');
+  if (hasGit) {
+    if (!identity.git_remote || identity.git_remote.length > 2048 || identity.git_remote.trim() !== identity.git_remote || PROJECT_IDENTITY_CONTROL.test(identity.git_remote)) {
+      invalid('git_remote is missing or malformed');
+    }
+    if (identity.relative_path.length > 4096 || identity.relative_path.startsWith('/') || identity.relative_path.includes('\\') || PROJECT_IDENTITY_CONTROL.test(identity.relative_path)) {
+      invalid('relative_path is not normalized');
+    }
+    if (identity.relative_path.split('/').some((part) => part === '.' || part === '..')) {
+      invalid('relative_path contains traversal');
+    }
+  } else {
+    if (!STRICT_ANCHOR_V2.test(identity.non_git_anchor) || typeof identity.anchor_shared !== 'boolean') {
+      invalid('non-git anchor must be 128-bit lowercase hex with explicit sharing');
+    }
+  }
+  return identity;
+}
+
+function readOrCreateProjectAnchorV2(cwd) {
+  const anchorPath = path.join(path.resolve(cwd || ''), PROJECT_IDENTITY_V2_FILE);
+  for (;;) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(anchorPath, 'utf8'));
+      const keys = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.keys(parsed).sort() : [];
+      if (keys.length !== PROJECT_ANCHOR_V2_KEYS.length || keys.some((key, index) => key !== PROJECT_ANCHOR_V2_KEYS[index]) ||
+          parsed.version !== PROJECT_IDENTITY_VERSION_V2 || !STRICT_ANCHOR_V2.test(parsed.anchor) || typeof parsed.shared !== 'boolean') {
+        throw new Error(`PROJECT_IDENTITY_INVALID: malformed ${PROJECT_IDENTITY_V2_FILE}`);
+      }
+      return parsed;
+    } catch (error) {
+      if (error && error.code !== 'ENOENT') throw error;
+    }
+
+    const anchor = {
+      version: PROJECT_IDENTITY_VERSION_V2,
+      anchor: crypto.randomBytes(16).toString('hex'),
+      shared: false,
+    };
+    let fd;
+    try {
+      fd = fs.openSync(anchorPath, 'wx', 0o600);
+      fs.writeFileSync(fd, `${JSON.stringify(anchor, null, 2)}\n`, 'utf8');
+      fs.closeSync(fd);
+      return anchor;
+    } catch (error) {
+      if (fd !== undefined) {
+        try { fs.closeSync(fd); } catch (_) {}
+      }
+      if (error && error.code === 'EEXIST') continue;
+      throw error;
+    }
+  }
+}
+
+function resolveProjectIdentityV2(cwd) {
+  const resolved = path.resolve(cwd || '');
+  const git = getGitRemoteID(resolved);
+  const base = {
+    legacy_project_id: LegacyProjectID(resolved),
+    display_name: path.basename(resolved),
+    git_remote: git ? git.gitRemote : '',
+    relative_path: git ? git.relativePath.replace(/\\/g, '/') : '',
+    non_git_anchor: '',
+    anchor_shared: null,
+  };
+  if (!git) {
+    const anchor = readOrCreateProjectAnchorV2(resolved);
+    base.non_git_anchor = anchor.anchor;
+    base.anchor_shared = anchor.shared;
+  }
+  return validateProjectIdentityV2(buildProjectIdentityV2(base));
+}
+
+async function registerProjectIdentityV2(context, requestFn = request) {
+  if (!context || !context.ProjectIdentityV2) {
+    throw new Error('PROJECT_IDENTITY_INVALID: hook context has no v2 identity');
+  }
+  const response = await requestFn('POST', '/api/context/inject', {
+    project: context.Project,
+    legacy_project: context.LegacyProject,
+    git_remote: context.GitRemote,
+    relative_path: context.RelativePath,
+    project_identity: context.ProjectIdentityV2,
+    identity_only: true,
+  });
+  if (response && typeof response.canonical_project === 'string' && response.canonical_project !== '') {
+    context.Project = response.canonical_project;
+  }
+  return context.Project;
+}
+
+function isProjectIdentityTransportOffline(error) {
+  if (!error || typeof error !== 'object') return false;
+  if (error.name === 'AbortError') return true;
+  const code = error.code || (error.cause && error.cause.code);
+  if (['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH'].includes(code)) {
+    return true;
+  }
+  return error instanceof TypeError && /fetch failed|network/i.test(String(error.message || ''));
+}
+
 function buildRequestHeaders(includeJsonBody = false) {
   const headers = {};
   const token = configuredPluginEnv(
@@ -613,10 +747,22 @@ async function RunHook(hookName, handler) {
     LegacyProject: LegacyProjectID(cwd),
     GitRemote: gitResult ? gitResult.gitRemote : '',
     RelativePath: gitResult ? gitResult.relativePath : '',
+    ProjectIdentityV2: resolveProjectIdentityV2(cwd),
     RawInput: rawInput,
   };
 
   try {
+    try {
+      await registerProjectIdentityV2(context);
+    } catch (registrationError) {
+      // A reached server that rejects registration (4xx/5xx) is a hard barrier:
+      // do not let the handler issue project-scoped requests. A transport-level
+      // offline failure cannot have performed data access, so preserve the
+      // hook's established local/offline fallback behavior.
+      const message = registrationError instanceof Error ? registrationError.message : String(registrationError);
+      if (!isProjectIdentityTransportOffline(registrationError)) throw registrationError;
+      console.error(`[engram] ${hookName} identity registration offline: ${message}`);
+    }
     const additionalContext =
       typeof handler === 'function' ? await handler(context, input) : '';
     writeResponse(hookName, additionalContext);
@@ -890,6 +1036,12 @@ module.exports = {
   writeJSONFile,
   ProjectIDWithName,
   LegacyProjectID,
+  PROJECT_IDENTITY_VERSION_V2,
+  buildProjectIdentityV2,
+  validateProjectIdentityV2,
+  resolveProjectIdentityV2,
+  registerProjectIdentityV2,
+  isProjectIdentityTransportOffline,
   requestGet,
   requestPost,
   RunHook,
