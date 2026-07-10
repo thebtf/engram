@@ -1,11 +1,14 @@
 {
-  "generated_utc": "2026-07-10T14:11:02.4273083Z",
+  "schema_version": 3,
   "status": "PASS",
   "source_mode": "GitIndex",
   "revision": "INDEX",
+  "product_candidate_sha": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
   "representation_contract": "git-blob-bytes-v1",
-  "manifest_entries": 25,
-  "checksum_entries": 26,
+  "changed_paths": 16,
+  "directly_bound_changed_paths": 14,
+  "manifest_entries": 30,
+  "checksum_entries": 31,
   "inventory_call_sites": 83,
   "inventory_files": 8,
   "failures": []
