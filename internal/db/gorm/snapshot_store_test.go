@@ -3,6 +3,7 @@ package gorm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -143,6 +144,38 @@ func TestSnapshotStore_NilSnapshot(t *testing.T) {
 	store := NewSnapshotStore(db)
 	_, err = store.Create(context.Background(), nil)
 	require.Error(t, err, "Create with nil must return error")
+}
+
+func TestSnapshotStore_Create_PreservesAuthoritativeCaptureTimestamp(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	store := NewSnapshotStore(db)
+	ctx := context.Background()
+	capturedAt := time.Date(2025, 7, 8, 9, 10, 11, 123456000, time.UTC)
+	snapshotID := fmt.Sprintf("test-store-authoritative-capture-time-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = ?", snapshotID).Error
+	})
+
+	snap, err := models.NewBulkOpSnapshot(
+		snapshotID,
+		models.SnapshotOpBulkDelete,
+		"test-actor",
+		json.RawMessage(`{}`),
+	)
+	require.NoError(t, err)
+	snap.CreatedAt = capturedAt
+
+	created, err := store.Create(ctx, snap)
+	require.NoError(t, err)
+	require.True(t, created.CreatedAt.Equal(capturedAt),
+		"the DB row must use the caller's authoritative capture boundary, not a second clock read")
+
+	loaded, err := store.Get(ctx, snapshotID)
+	require.NoError(t, err)
+	require.True(t, loaded.CreatedAt.Equal(capturedAt),
+		"the authoritative capture timestamp must round-trip exactly")
 }
 
 // TestInt64Array_Roundtrip verifies the Int64Array Value/Scan cycle.

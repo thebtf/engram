@@ -1,0 +1,424 @@
+base_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+head_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+database=engram_mkr_bedge_full_packages_20260710a
+command=go test -p=1 ./internal/db/gorm ./internal/mcp -count=1
+started_utc=2026-07-10T08:39:24.7238176Z
+{"level":"warn","error":"ERROR: relation \"observation_vectors\" does not exist (SQLSTATE 42P01)","time":"2026-07-10T11:39:27+03:00","message":"migration 040: orphan vector cleanup failed (non-fatal)"}
+{"level":"info","garbage_deleted":0,"orphan_vectors_deleted":0,"time":"2026-07-10T11:39:27+03:00","message":"migration 040: garbage cleanup complete"}
+{"level":"info","orphan_vectors_deleted":0,"time":"2026-07-10T11:39:27+03:00","message":"migration 041: orphan vector purge complete"}
+{"level":"info","patterns_deleted":0,"time":"2026-07-10T11:39:27+03:00","message":"migration 042: low-quality pattern purge complete"}
+{"level":"info","total_deleted":0,"time":"2026-07-10T11:39:27+03:00","message":"migration 043: radical observation cleanup complete"}
+{"level":"warn","error":"ERROR: extension \"vectorscale\" is not available (SQLSTATE 0A000)","time":"2026-07-10T11:39:28+03:00","message":"migration 109: vectorscale extension not available, skipping DiskANN index"}
+
+2026/07/10 11:39:30 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store.go:151 [35;1mERROR: duplicate key value violates unique constraint "idx_candidates_fingerprint_pending" (SQLSTATE 23505)
+[0m[33m[2.502ms] [34;1m[rows:0][0m INSERT INTO "crystallization_candidates" ("created_at","updated_at","review_after","source_session_id","proposed_content","proposed_tier","proposed_epistemic_type","proposed_promotion_target","evidence_handles","privacy_scope","status","fingerprint","affected_projects","promoted_memory_id","confidence","recurrence_count") VALUES ('2026-07-10 11:39:30.921','2026-07-10 11:39:30.921','2026-07-17 08:39:30.92','session-fp-1783672770914798700','idempotent content','episodic','observation','rule','[]','project','pending','a4638b783aed09e6','{}',NULL,0.5,1) RETURNING "id"
+--- FAIL: TestCandidateStore_PromoteWithMemoryAndSnapshot_AmendFailureRollsBackPromotion (0.13s)
+    candidate_store_test.go:507:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:507
+            Error:          "promote_with_memory_snapshot: snapshot actor does not match review actor" does not contain "forced snapshot amend failure"
+            Test:           TestCandidateStore_PromoteWithMemoryAndSnapshot_AmendFailureRollsBackPromotion
+--- FAIL: TestCandidateStore_PreserveWithMemoryAndSnapshot_RequiresCandidateReviewSnapshotBeforeMutation (0.00s)
+    candidate_store_test.go:565:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:565
+            Error:          "preserve_with_memory_snapshot: candidate review snapshot is required" does not contain "candidate_review snapshot is required"
+            Test:           TestCandidateStore_PreserveWithMemoryAndSnapshot_RequiresCandidateReviewSnapshotBeforeMutation
+
+2026/07/10 11:39:32 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/audit_store.go:46 [35;1mERROR: forced candidate_review audit failure (SQLSTATE P0001)
+[0m[33m[2.000ms] [34;1m[rows:0][0m INSERT INTO "audit_log" ("memory_id","action","actor","source_session_id","before_state","after_state","reason") VALUES (NULL,'candidate_review','agent/fail','session-candidate-review-supersede-audit-rollback-1783672772251471800','{"created_at":"2026-07-10T11:39:32.252471+03:00","updated_at":"2026-07-10T11:39:32.252471+03:00","review_after":"2026-07-17T11:39:32.251471+03:00","source_session_id":"session-candidate-review-supersede-audit-rollback-1783672772251471800","proposed_content":"content for candidate review transaction test","proposed_tier":"episodic","proposed_epistemic_type":"observation","proposed_promotion_target":"rule","privacy_scope":"project","status":"pending","fingerprint":"9a2e9f2cccee1e21","affected_projects":["test-project"],"id":20,"confidence":0.5,"recurrence_count":1}','{"created_at":"2026-07-10T11:39:32.252471+03:00","updated_at":"2026-07-10T11:39:32.271015+03:00","review_after":"2026-07-17T11:39:32.251471+03:00","source_session_id":"session-candidate-review-supersede-audit-rollback-1783672772251471800","proposed_content":"content for candidate review transaction test","proposed_tier":"episodic","proposed_epistemic_type":"observation","proposed_promotion_target":"rule","privacy_scope":"project","status":"superseded","fingerprint":"9a2e9f2cccee1e21","affected_projects":["test-project"],"id":20,"confidence":0.5,"recurrence_count":1}','candidate 20 review action supersede') RETURNING "id","created_at"
+{"level":"debug","connections":2,"time":"2026-07-10T11:39:37+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":2,"time":"2026-07-10T11:39:37+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":2,"time":"2026-07-10T11:39:37+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":2,"time":"2026-07-10T11:39:37+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":2,"time":"2026-07-10T11:39:38+03:00","message":"Connection pool warmed"}
+{"level":"info","time":"2026-07-10T11:39:38+03:00","message":"Starting database optimization"}
+{"level":"info","duration":160.7167,"time":"2026-07-10T11:39:38+03:00","message":"Database optimization complete"}
+{"level":"debug","connections":2,"time":"2026-07-10T11:39:38+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":2,"time":"2026-07-10T11:39:38+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":2,"time":"2026-07-10T11:39:38+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":2,"time":"2026-07-10T11:39:38+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":2,"time":"2026-07-10T11:39:38+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":2,"time":"2026-07-10T11:39:39+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":2,"time":"2026-07-10T11:39:39+03:00","message":"Connection pool warmed"}
+
+2026/07/10 11:39:45 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:214 [35;1mERROR: new row for relation "memories" violates check constraint "memories_privacy_scope_chk" (SQLSTATE 23514)
+[0m[33m[0.500ms] [34;1m[rows:0][0m INSERT INTO memories (project, content, privacy_scope) VALUES ('t001-test', 'T001 invalid fixture', 'invalid_scope')
+
+2026/07/10 11:39:45 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:175 [35;1msql: database is closed
+[0m[33m[0.000ms] [34;1m[rows:0][0m DELETE FROM memories WHERE project = 't001-test'
+
+2026/07/10 11:39:45 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:260 [35;1msql: database is closed
+[0m[33m[0.000ms] [34;1m[rows:0][0m DELETE FROM memories WHERE project = 't006-backfill-test'
+
+2026/07/10 11:39:45 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:379 [35;1msql: database is closed
+[0m[33m[0.000ms] [34;1m[rows:0][0m DELETE FROM memories WHERE project = 't001b-test'
+
+2026/07/10 11:39:45 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:479 [35;1mERROR: new row for relation "knowledge_nodes" violates check constraint "knowledge_nodes_type_chk" (SQLSTATE 23514)
+[0m[33m[0.502ms] [34;1m[rows:0][0m INSERT INTO knowledge_nodes (node_type, external_ref, project) VALUES ('invalid_node_type', 'ref-invalid', 't009-test')
+
+2026/07/10 11:39:45 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:490 [35;1mERROR: duplicate key value violates unique constraint "idx_knowledge_nodes_type_ref_active" (SQLSTATE 23505)
+[0m[33m[1.001ms] [34;1m[rows:0][0m INSERT INTO knowledge_nodes (node_type, external_ref, project) VALUES ('skill', 'unique-test-skill', 't009-test')
+
+2026/07/10 11:39:45 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:444 [35;1msql: database is closed
+[0m[33m[0.000ms] [34;1m[rows:0][0m DELETE FROM knowledge_nodes WHERE project = 't009-test'
+
+2026/07/10 11:39:45 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:573 [35;1msql: database is closed
+[0m[33m[0.000ms] [34;1m[rows:0][0m DELETE FROM memories WHERE project = 't010-test'
+
+2026/07/10 11:39:45 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:574 [35;1msql: database is closed
+[0m[33m[0.000ms] [34;1m[rows:0][0m DELETE FROM knowledge_edges WHERE source_session_id = 't010-test'
+
+2026/07/10 11:39:45 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:531 [35;1msql: database is closed
+[0m[33m[0.000ms] [34;1m[rows:0][0m DELETE FROM knowledge_nodes WHERE project = 't010-test'
+
+2026/07/10 11:39:45 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:695 [35;1mERROR: new row for relation "crystallization_candidates" violates check constraint "crystallization_candidates_status_check" (SQLSTATE 23514)
+[0m[33m[1.007ms] [34;1m[rows:0][0m
+        INSERT INTO crystallization_candidates (proposed_content, status)
+        VALUES ('test', 'invalid_status')
+
+
+2026/07/10 11:39:45 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:823 [35;1mERROR: new row for relation "bulk_op_snapshots" violates check constraint "bulk_op_snapshots_op_type_check" (SQLSTATE 23514)
+[0m[33m[0.500ms] [34;1m[rows:0][0m
+        INSERT INTO bulk_op_snapshots (snapshot_id, op_type, actor, before_state)
+        VALUES ('test-snap-invalid', 'invalid_op', 'test-actor', '{}')
+
+
+2026/07/10 11:39:45 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:780 [35;1msql: database is closed
+[0m[33m[0.000ms] [34;1m[rows:0][0m DELETE FROM bulk_op_snapshots WHERE snapshot_id LIKE 'test-snap-%'
+
+2026/07/10 11:39:46 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:884 [35;1mERROR: new row for relation "bulk_op_snapshots" violates check constraint "bulk_op_snapshots_op_type_check" (SQLSTATE 23514)
+[0m[33m[1.541ms] [34;1m[rows:0][0m
+        INSERT INTO bulk_op_snapshots (snapshot_id, op_type, actor, before_state)
+        VALUES ('test-m153-candidate-review-1783672786003038400-invalid', 'invalid_op_after_blocked_rollback', 'test-actor', '{}')
+
+
+2026/07/10 11:39:46 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:873 [35;1msql: database is closed
+[0m[33m[0.000ms] [34;1m[rows:0][0m DELETE FROM bulk_op_snapshots WHERE snapshot_id IN ('test-m153-candidate-review-1783672786003038400', 'test-m153-candidate-review-1783672786003038400-invalid')
+
+2026/07/10 11:39:46 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:921 [35;1mERROR: new row for relation "bulk_op_snapshots" violates check constraint "bulk_op_snapshots_op_type_check" (SQLSTATE 23514)
+[0m[33m[1.500ms] [34;1m[rows:0][0m
+        INSERT INTO bulk_op_snapshots (snapshot_id, op_type, actor, before_state)
+        VALUES ('test-m154-forgetting-review-1783672786114199700-invalid', 'invalid_op_after_blocked_forgetting_rollback', 'test-actor', '{}')
+
+
+2026/07/10 11:39:46 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:910 [35;1msql: database is closed
+[0m[33m[0.000ms] [34;1m[rows:0][0m DELETE FROM bulk_op_snapshots WHERE snapshot_id IN ('test-m154-forgetting-review-1783672786114199700', 'test-m154-forgetting-review-1783672786114199700-invalid')
+
+2026/07/10 11:39:46 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:947 [35;1msql: database is closed
+[0m[33m[0.000ms] [34;1m[rows:0][0m DELETE FROM rule_governance_snapshots WHERE snapshot_id = 'test-rg-snap-1783672786226258900'
+
+2026/07/10 11:39:46 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:1034 [35;1mERROR: new row for relation "api_tokens" violates check constraint "api_tokens_principal_kind_chk" (SQLSTATE 23514)
+[0m[33m[1.504ms] [34;1m[rows:0][0m
+        INSERT INTO api_tokens (name, token_hash, token_prefix, scope, principal, principal_kind)
+        VALUES ('test-principal-1783672786339758700-invalid', 'hash-invalid', 'p148bad0', 'read-write', 'principal/bad', 'daemon')
+
+
+2026/07/10 11:39:46 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migrations_integration_test.go:981 [35;1msql: database is closed
+[0m[33m[0.000ms] [34;1m[rows:0][0m DELETE FROM api_tokens WHERE name LIKE 'test-principal-1783672786339758700%'
+
+2026/07/10 11:39:48 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[1.999ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-arbiter-annotation-1783672788230078600' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:48 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[2.000ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-arbiter-terminal-run-1783672788379132700' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:48 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[2.000ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-arbiter-annotation-mismatch-1783672788511731300' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:48 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[0.500ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-arbiter-annotation-other-1783672788519731700' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:48 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:627 [35;1mrecord not found
+[0m[33m[0.999ms] [34;1m[rows:0][0m SELECT * FROM "rule_arbiter_evaluations" WHERE id = 2 AND candidate_id = 3 AND run_id = 3 AND action = 'hold' ORDER BY "rule_arbiter_evaluations"."id" LIMIT 1
+
+2026/07/10 11:39:48 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[2.005ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-arbiter-requeue-1783672788652256200' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+--- FAIL: TestRuleGovernanceStore_AnnotatedCandidateWaitsUntilReviewAfter (0.18s)
+    rule_arbiter_store_test.go:195:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_arbiter_store_test.go:195
+            Error:          []int64{1} does not contain 5
+            Test:           TestRuleGovernanceStore_AnnotatedCandidateWaitsUntilReviewAfter
+
+2026/07/10 11:39:48 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[3.000ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-arbiter-claim-race-1783672788826969800' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:48 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[2.500ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-arbiter-confidence-1783672788987584700' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:49 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[2.000ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-rg3-health-1783672789116093000-pending-1783672789116093000' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:49 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[1.000ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-rg3-health-1783672789116093000-rejected-1783672789123593700' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+--- FAIL: TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables (0.18s)
+    rule_governance_rg3_store_test.go:93:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_rg3_store_test.go:93
+            Error:          Not equal:
+                            expected: 1
+                            actual  : 5
+            Test:           TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables
+--- FAIL: TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectScopedReads (0.12s)
+    rule_governance_rg3_store_test.go:128:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_rg3_store_test.go:128
+            Error:          Not equal:
+                            expected: 1
+                            actual  : 6
+            Test:           TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectScopedReads
+
+2026/07/10 11:39:49 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[2.000ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-rg3-queue-1783672789417649200-global-1783672789417649200' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:49 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[0.500ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-rg3-queue-1783672789417649200-conflict-1783672789425149100' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:49 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[0.999ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-rg3-queue-1783672789417649200-hold-1783672789429650100' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:49 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[0.500ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-rg3-queue-1783672789417649200-unclear-1783672789434648900' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:49 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[1.502ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-rg3-queue-filter-1783672789558522500-live-conflict-1783672789558522500' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:49 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[0.500ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-rg3-queue-filter-1783672789558522500-resolved-conflict-1783672789571520300' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:49 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[0.999ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-rg3-queue-filter-1783672789558522500-noise-0-1783672789587022100' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:49 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[0.500ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-rg3-queue-filter-1783672789558522500-noise-1-1783672789592521600' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:49 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[1.000ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-rg3-queue-filter-1783672789558522500-noise-2-1783672789597021400' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:50 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migration_rule_governance.go:196 [35;1mERROR: cannot drop table rule_versions because other objects depend on it (SQLSTATE 2BP01)
+[0m[33m[1.501ms] [34;1m[rows:0][0m DROP TABLE IF EXISTS rule_versions
+--- FAIL: TestMigration144_RuleGovernanceRollbackAndReapply (0.13s)
+    rule_governance_store_test.go:32:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store_test.go:32
+            Error:          Received unexpected error:
+                            ERROR: cannot drop table rule_versions because other objects depend on it (SQLSTATE 2BP01)
+            Test:           TestMigration144_RuleGovernanceRollbackAndReapply
+
+2026/07/10 11:39:50 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migration_rule_governance.go:196 [35;1mERROR: cannot drop table rule_versions because other objects depend on it (SQLSTATE 2BP01)
+[0m[33m[1.005ms] [34;1m[rows:0][0m DROP TABLE IF EXISTS rule_versions
+--- FAIL: TestMigration144_RuleGovernanceEscapeConstraints (0.13s)
+    rule_governance_store_test.go:45:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store_test.go:45
+            Error:          Received unexpected error:
+                            ERROR: cannot drop table rule_versions because other objects depend on it (SQLSTATE 2BP01)
+            Test:           TestMigration144_RuleGovernanceEscapeConstraints
+
+2026/07/10 11:39:50 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[2.000ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-idempotent-fingerprint' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[1.999ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-draft-fingerprint' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:1625 [35;1mrecord not found
+[0m[33m[2.000ms] [34;1m[rows:0][0m SELECT * FROM "rule_versions" WHERE source_candidate_id = 21 ORDER BY "rule_versions"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[2.501ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-unknown-actor-kind-1783672791536984100' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:1625 [35;1mrecord not found
+[0m[33m[2.002ms] [34;1m[rows:0][0m SELECT * FROM "rule_versions" WHERE source_candidate_id = 22 ORDER BY "rule_versions"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[2.001ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-blank-transition-actor-1783672791658360100' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:1625 [35;1mrecord not found
+[0m[33m[1.498ms] [34;1m[rows:0][0m SELECT * FROM "rule_versions" WHERE source_candidate_id = 23 ORDER BY "rule_versions"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[0.999ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-blank-transition-actor kind-1783672791670860700' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:1625 [35;1mrecord not found
+[0m[33m[0.999ms] [34;1m[rows:0][0m SELECT * FROM "rule_versions" WHERE source_candidate_id = 24 ORDER BY "rule_versions"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[0.498ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-blank-transition-reason-1783672791679862500' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:1625 [35;1mrecord not found
+[0m[33m[1.000ms] [34;1m[rows:0][0m SELECT * FROM "rule_versions" WHERE source_candidate_id = 25 ORDER BY "rule_versions"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[1.004ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-blank-transition-evidence handle-1783672791687860000' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:1625 [35;1mrecord not found
+[0m[33m[1.001ms] [34;1m[rows:0][0m SELECT * FROM "rule_versions" WHERE source_candidate_id = 26 ORDER BY "rule_versions"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[2.500ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-snapshot-required-1783672791812232600' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:1625 [35;1mrecord not found
+[0m[33m[1.500ms] [34;1m[rows:0][0m SELECT * FROM "rule_versions" WHERE source_candidate_id = 27 ORDER BY "rule_versions"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[2.265ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-snapshot-log-1783672791968604100' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:51 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:1625 [35;1mrecord not found
+[0m[33m[1.755ms] [34;1m[rows:0][0m SELECT * FROM "rule_versions" WHERE source_candidate_id = 28 ORDER BY "rule_versions"."id" LIMIT 1
+
+2026/07/10 11:39:52 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[2.498ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-authority-1783672792240952400' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:52 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:1625 [35;1mrecord not found
+[0m[33m[2.004ms] [34;1m[rows:0][0m SELECT * FROM "rule_versions" WHERE source_candidate_id = 29 ORDER BY "rule_versions"."id" LIMIT 1
+
+2026/07/10 11:39:52 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[2.000ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-log-rollback-1783672792412023100' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:52 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:1625 [35;1mrecord not found
+[0m[33m[2.003ms] [34;1m[rows:0][0m SELECT * FROM "rule_versions" WHERE source_candidate_id = 30 ORDER BY "rule_versions"."id" LIMIT 1
+
+2026/07/10 11:39:52 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:1664 [35;1mERROR: new row for relation "rule_transition_log" violates check constraint "rg0_transition_log_fail_test" (SQLSTATE 23514)
+[0m[33m[0.498ms] [34;1m[rows:0][0m INSERT INTO "rule_transition_log" ("created_at","rule_version_id","candidate_id","actor","actor_kind","action","from_state","to_state","reason","evidence_handles_json","snapshot_id") VALUES ('2026-07-10 11:39:52.452',22,30,'codex','agent','rule_version_transition','shadow','canary','force-log-fail','["evidence:rg0-transition"]','') RETURNING "id"
+
+2026/07/10 11:39:52 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:323 [35;1mrecord not found
+[0m[33m[2.500ms] [34;1m[rows:0][0m SELECT * FROM "rule_candidates" WHERE fingerprint = 'rg0-snapshot-rollback-1783672792568063700' AND status IN ('pending','drafted') ORDER BY created_at ASC,"rule_candidates"."id" LIMIT 1
+
+2026/07/10 11:39:52 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:1625 [35;1mrecord not found
+[0m[33m[2.029ms] [34;1m[rows:0][0m SELECT * FROM "rule_versions" WHERE source_candidate_id = 31 ORDER BY "rule_versions"."id" LIMIT 1
+
+2026/07/10 11:39:52 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store.go:1692 [35;1mERROR: duplicate key value violates unique constraint "rule_governance_snapshots_snapshot_id_key" (SQLSTATE 23505)
+[0m[33m[0.998ms] [34;1m[rows:0][0m INSERT INTO "rule_governance_snapshots" ("created_at","rolled_back_at","snapshot_id","op_type","actor","before_state_json","after_state_json","status","pinned") VALUES ('2026-07-10 11:39:52.615',NULL,'rg0-duplicate-1783672792608596200','rule_transition','codex','{"project":"rg0-project","rule_versions":[{"state":"canary","id":23}]}','{"project":"rg0-project","rule_versions":[{"state":"active_project","id":23}]}','committed',false) RETURNING "id"
+
+2026/07/10 11:39:52 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/migration_rule_governance.go:196 [35;1mERROR: cannot drop table rule_versions because other objects depend on it (SQLSTATE 2BP01)
+[0m[33m[1.502ms] [34;1m[rows:0][0m DROP TABLE IF EXISTS rule_versions
+--- FAIL: TestMigration144_RuleGovernanceSnapshotStatusesAcceptExtendedStates (0.16s)
+    rule_governance_store_test.go:729:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_governance_store_test.go:729
+            Error:          Received unexpected error:
+                            ERROR: cannot drop table rule_versions because other objects depend on it (SQLSTATE 2BP01)
+            Test:           TestMigration144_RuleGovernanceSnapshotStatusesAcceptExtendedStates
+
+2026/07/10 11:39:53 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/rule_injection_event_store_test.go:32 [35;1mERROR: new row for relation "rule_injection_events" violates check constraint "rule_injection_events_type_chk" (SQLSTATE 23514)
+[0m[33m[1.500ms] [34;1m[rows:0][0m
+        INSERT INTO rule_injection_events (session_id, project, surface, event_type)
+        VALUES ('rg2-invalid-session', 'rg2-project', 'session-start', 'invalid_event')
+
+
+2026/07/10 11:39:58 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/state_store_test.go:188 [35;1mrecord not found
+[0m[33m[2.268ms] [34;1m[rows:0][0m SELECT * FROM "audit_log" WHERE action = 'write_project_state' AND actor = 'agent' AND reason LIKE '%state-audit-project-1783672798727582100%' ORDER BY id DESC,"audit_log"."id" LIMIT 1
+
+2026/07/10 11:39:59 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/state_store_test.go:397 [35;1mrecord not found
+[0m[33m[1.500ms] [34;1m[rows:0][0m SELECT * FROM "audit_log" WHERE action = 'read_resume_state' AND actor = 'agent:developer' AND source_session_id = 'state-resume-session-1783672799194955600' ORDER BY id DESC,"audit_log"."id" LIMIT 1
+
+2026/07/10 11:39:59 [31;1mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/state_store.go:216 [35;1mrecord not found
+[0m[33m[1.999ms] [34;1m[rows:0][0m SELECT * FROM "agent_project_state" WHERE project = 'state-resume-project-scope-missing-1783672799755699600' ORDER BY "agent_project_state"."id" LIMIT 1
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:00+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:00+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:00+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:00+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:00+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:00+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:00+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:00+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:00+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:01+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:01+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:01+03:00","message":"Connection pool warmed"}
+{"level":"info","time":"2026-07-10T11:40:01+03:00","message":"Starting database optimization"}
+{"level":"info","duration":192.0614,"time":"2026-07-10T11:40:01+03:00","message":"Database optimization complete"}
+
+2026/07/10 11:40:02 [35mD:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:29
+[0m[31m[error] [0mfailed to initialize database, got error failed to connect to `user=engram database=engram_mkr_bedge_full_packages_20260710a`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+--- FAIL: TestTemporalTruthStore_LoadSelectedRecordsUsesDBNowForValidFrom (0.01s)
+    temporal_truth_store_test.go:377:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/candidate_store_test.go:30
+                                        D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/temporal_truth_store_test.go:377
+            Error:          Received unexpected error:
+                            failed to connect to `user=engram database=engram_mkr_bedge_full_packages_20260710a`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+            Test:           TestTemporalTruthStore_LoadSelectedRecordsUsesDBNowForValidFrom
+            Messages:       open test DB
+--- FAIL: TestTokenStore_CreateWithPrincipalRoundTrip (0.00s)
+    token_store_test.go:14:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/credential_store_test.go:29
+                                        D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/token_store_test.go:14
+            Error:          Received unexpected error:
+                            failed to connect to `user=engram database=engram_mkr_bedge_full_packages_20260710a`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+            Test:           TestTokenStore_CreateWithPrincipalRoundTrip
+            Messages:       open test db
+--- FAIL: TestTokenStore_CreateWithPrincipalRejectsKindWithoutPrincipal (0.00s)
+    token_store_test.go:51:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/credential_store_test.go:29
+                                        D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/db/gorm/token_store_test.go:51
+            Error:          Received unexpected error:
+                            failed to connect to `user=engram database=engram_mkr_bedge_full_packages_20260710a`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+            Test:           TestTokenStore_CreateWithPrincipalRejectsKindWithoutPrincipal
+            Messages:       open test db
+--- FAIL: TestTranscriptStore_Lifecycle (0.00s)
+    transcript_store_test.go:64: open test db: failed to connect to `user=engram database=engram_mkr_bedge_full_packages_20260710a`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+FAIL
+FAIL    github.com/thebtf/engram/internal/db/gorm    35.866s
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:03+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:03+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:03+03:00","message":"Connection pool warmed"}
+--- FAIL: TestHybridTG3_ConfidenceMin_FloorEnforced_T022 (0.13s)
+    integration_tg3_hybrid_test.go:83:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/integration_tg3_hybrid_test.go:83
+            Error:          Received unexpected error:
+                            json: cannot unmarshal array into Go value of type map[string]interface {}
+            Test:           TestHybridTG3_ConfidenceMin_FloorEnforced_T022
+            Messages:       response must be valid JSON
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:03+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:03+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:03+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:03+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:04+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:04+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:04+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:04+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:04+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:04+03:00","message":"Connection pool warmed"}
+--- FAIL: TestEC_F1_TagDerivedBackfill_T007 (0.13s)
+    store_memory_compat_t007_test.go:157:
+            Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/store_memory_compat_t007_test.go:157
+            Error:          Should be true
+            Test:           TestEC_F1_TagDerivedBackfill_T007
+            Messages:       global-scoped row must be returned by MemoryStore.List within its own project
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:04+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:04+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:05+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:05+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:05+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:05+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:05+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:05+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:06+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:06+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:06+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:06+03:00","message":"Connection pool warmed"}
+{"level":"debug","soft_limit":1000,"time":"2026-07-10T11:40:06+03:00","message":"edit_memory: content truncated to soft limit"}
+{"level":"warn","time":"2026-07-10T11:40:06+03:00","message":"edit_memory: content contains secrets — redacting before storage"}
+{"level":"error","audit_label":"test-panic","memory_id":99,"panic":"simulated audit panic","time":"2026-07-10T11:40:06+03:00","message":"audit: goroutine panic recovered"}
+{"level":"error","error":"simulated db error","audit_label":"test-error","memory_id":88,"time":"2026-07-10T11:40:06+03:00","message":"audit: async write failed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:06+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:06+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:06+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:07+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:07+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:07+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:07+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:07+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":1,"time":"2026-07-10T11:40:07+03:00","message":"Connection pool warmed"}
+{"level":"error","error":"temporal truth feature flag required","tool":"temporal_truth","args":"{\"fact_id\":\"42\",\"project\":\"engram\"}","time":"2026-07-10T11:40:07+03:00","message":"Tool call failed"}
+{"level":"error","error":"temporal truth provider not configured","tool":"temporal_truth","args":"{\"fact_id\":\"42\",\"project\":\"engram\"}","time":"2026-07-10T11:40:07+03:00","message":"Tool call failed"}
+{"level":"error","error":"temporal truth feature flag required","tool":"temporal_truth_refresh","args":"{\"project\":\"engram\"}","time":"2026-07-10T11:40:07+03:00","message":"Tool call failed"}
+{"level":"error","error":"temporal truth provider not configured","tool":"temporal_truth_refresh","args":"{\"project\":\"engram\"}","time":"2026-07-10T11:40:07+03:00","message":"Tool call failed"}
+{"level":"error","error":"codebase_search requires ENGRAM_CODE_INTEL_ENABLED=true","tool":"codebase_search","args":"{\"query\":\"hello\",\"project\":\"test\"}","time":"2026-07-10T11:40:07+03:00","message":"Tool call failed"}
+{"level":"error","error":"unknown tool: ","tool":"","args":"","time":"2026-07-10T11:40:07+03:00","message":"Tool call failed"}
+{"level":"debug","method":"initialized","time":"2026-07-10T11:40:07+03:00","message":"MCP client initialized"}
+{"level":"error","error":"unknown tool: no_such_tool","tool":"no_such_tool","args":"{}","time":"2026-07-10T11:40:07+03:00","message":"Tool call failed"}
+{"level":"debug","method":"initialized","time":"2026-07-10T11:40:07+03:00","message":"MCP client initialized"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:07+03:00","message":"Connection pool warmed"}
+{"level":"debug","connections":5,"time":"2026-07-10T11:40:07+03:00","message":"Connection pool warmed"}
+FAIL
+FAIL    github.com/thebtf/engram/internal/mcp    4.890s
+FAIL
+test_exit=1
+active_sessions_before_terminate=0
+database_residue=0
+activity_residue=0
+finished_utc=2026-07-10T08:40:09.4600013Z

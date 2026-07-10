@@ -1,0 +1,12 @@
+base_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+head_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+database=engram_mkr_bedge_coverage_20260710a
+command=go test -p=1 ./internal/db/gorm ./internal/mcp -run ^(TestCandidateStore_PromoteWithMemoryAndSnapshot_AmendFailureRollsBackPromotion|TestCandidateStore_PreserveWithMemoryAndSnapshot_RequiresCandidateReviewSnapshotBeforeMutation|TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites|TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit|TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs|TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization|TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade|TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun)$ -count=1 -covermode=atomic -coverprofile=.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/coverage.out
+started_utc=2026-07-10T08:46:07.1620949Z
+ok      github.com/thebtf/engram/internal/db/gorm    3.880s    coverage: 14.9% of statements
+ok      github.com/thebtf/engram/internal/mcp    0.157s    coverage: 1.8% of statements
+test_exit=0
+active_sessions_before_terminate=0
+database_residue=0
+activity_residue=0
+finished_utc=2026-07-10T08:46:18.9633242Z

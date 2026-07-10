@@ -15,18 +15,31 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/reviewpacket"
 	"github.com/thebtf/engram/pkg/models"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
+
+func memoryBeforeStateJSON(t *testing.T, db *gorm.DB, memoryID int64) json.RawMessage {
+	t.Helper()
+	var row gormdb.Memory
+	require.NoError(t, db.Where("id = ?", memoryID).First(&row).Error)
+	before, err := marshalMemoryRowSnapshot(&row)
+	require.NoError(t, err)
+	encoded, err := json.Marshal(map[string]json.RawMessage{
+		fmt.Sprintf("%d", memoryID): before,
+	})
+	require.NoError(t, err)
+	return json.RawMessage(encoded)
+}
 
 // --- Unit: decodeBeforeState ---
 
@@ -67,19 +80,7 @@ func TestRollback_NonAdmin_ReturnsErrAdminRequired(t *testing.T) {
 
 func openRollbackTestDB(t *testing.T) (*gorm.DB, *gormdb.Store) {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping integration test")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
-	require.NoError(t, err)
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	require.NoError(t, sqlDB.Ping())
-	return db, &gormdb.Store{DB: db}
+	return openTestDB(t)
 }
 
 // TestRollback_HappyPath verifies that a committed snapshot can be rolled back:
@@ -109,14 +110,10 @@ func TestRollback_HappyPath(t *testing.T) {
 	})
 
 	// Capture before_state manually (simulating what facade.Execute would do).
-	beforeStateMap := map[string]any{
-		fmt.Sprintf("%d", created.ID): created,
-	}
-	beforeStateBytes, err := json.Marshal(beforeStateMap)
-	require.NoError(t, err)
+	beforeStateBytes := memoryBeforeStateJSON(t, db, created.ID)
 
 	// Create a snapshot with created_at slightly in the past.
-	snap, err := models.NewBulkOpSnapshot("rollback-test-001", models.SnapshotOpBulkDelete, "master", json.RawMessage(beforeStateBytes))
+	snap, err := models.NewBulkOpSnapshot("rollback-test-001", models.SnapshotOpBulkDelete, "master", beforeStateBytes)
 	require.NoError(t, err)
 	snap.AffectedMemoryIDs = []int64{created.ID}
 	// Force created_at to be in the past so the memory's updated_at is before it.
@@ -173,13 +170,10 @@ func TestRollback_Conflict_EC_F3(t *testing.T) {
 	})
 
 	// Build before_state capturing the original memory.
-	beforeStateMap := map[string]any{
-		fmt.Sprintf("%d", created.ID): created,
-	}
-	beforeStateBytes, _ := json.Marshal(beforeStateMap)
+	beforeStateBytes := memoryBeforeStateJSON(t, db, created.ID)
 
 	// Create a snapshot with created_at in the PAST (memory's updated_at will be after this).
-	snap, err := models.NewBulkOpSnapshot("rollback-conflict-001", models.SnapshotOpBulkDelete, "master", json.RawMessage(beforeStateBytes))
+	snap, err := models.NewBulkOpSnapshot("rollback-conflict-001", models.SnapshotOpBulkDelete, "master", beforeStateBytes)
 	require.NoError(t, err)
 	snap.AffectedMemoryIDs = []int64{created.ID}
 	snap.CreatedAt = time.Now().UTC().Add(-2 * time.Second) // snapshot is OLD
@@ -188,8 +182,8 @@ func TestRollback_Conflict_EC_F3(t *testing.T) {
 
 	// Simulate a post-snapshot modification: update the memory's updated_at to be after snapshot.created_at.
 	require.NoError(t, db.Exec(
-		`UPDATE memories SET updated_at = NOW(), content = 'post-snapshot modification' WHERE id = ?`,
-		created.ID,
+		`UPDATE memories SET updated_at = ?, content = 'post-snapshot modification' WHERE id = ?`,
+		createdSnap.CreatedAt.Add(time.Second), created.ID,
 	).Error)
 
 	// Rollback must fail with ErrRollbackConflict (EC-F3).
@@ -216,6 +210,327 @@ func TestRollback_Conflict_EC_F3(t *testing.T) {
 		Where("action = ? AND actor = ?", "rollback_attempted_with_conflict", "master").
 		Count(&count)
 	assert.GreaterOrEqual(t, count, int64(1))
+}
+
+func TestRollback_Conflict_EC_F3_IncludesSoftDeletedRows(t *testing.T) {
+	db, store := openRollbackTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	auditStore := gormdb.NewAuditStore(db)
+	ctx := context.Background()
+
+	created, err := memStore.Create(ctx, &models.Memory{
+		Content:     "original soft-deleted content",
+		Project:     "tg6-soft-delete-conflict",
+		SourceAgent: "claude-code",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM memories WHERE id = ?", created.ID).Error
+		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = 'rollback-soft-delete-conflict'").Error
+	})
+
+	snap, err := models.NewBulkOpSnapshot(
+		"rollback-soft-delete-conflict",
+		models.SnapshotOpBulkDelete,
+		"master",
+		memoryBeforeStateJSON(t, db, created.ID),
+	)
+	require.NoError(t, err)
+	snap.AffectedMemoryIDs = []int64{created.ID}
+	createdSnap, err := snapStore.Create(ctx, snap)
+	require.NoError(t, err)
+
+	require.NoError(t, memStore.Delete(ctx, created.ID))
+	require.NoError(t, db.Exec(
+		`UPDATE memories SET updated_at = ? WHERE id = ?`,
+		createdSnap.CreatedAt.Add(time.Second), created.ID,
+	).Error)
+
+	result, rollbackErr := Rollback(ctx, adminIdentity(), createdSnap.SnapshotID, snapStore, memStore, auditStore, nil)
+	require.ErrorIs(t, rollbackErr, ErrRollbackConflict)
+	require.NotNil(t, result)
+	assert.Contains(t, result.ConflictIDs, created.ID)
+
+	var persisted struct {
+		Content   string
+		DeletedAt *time.Time
+	}
+	require.NoError(t, db.Table("memories").Select("content", "deleted_at").Where("id = ?", created.ID).Take(&persisted).Error)
+	assert.Equal(t, "original soft-deleted content", persisted.Content)
+	require.NotNil(t, persisted.DeletedAt, "conflict refusal must preserve the bulk-delete state")
+}
+
+func TestRollback_BulkSupersedeOwnMutationDoesNotConflict(t *testing.T) {
+	db, store := openRollbackTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	auditStore := gormdb.NewAuditStore(db)
+	ctx := context.Background()
+
+	created, err := memStore.Create(ctx, &models.Memory{
+		Content:        "supersede then rollback",
+		Project:        "tg6-supersede-rollback",
+		SourceAgent:    "claude-code",
+		ImportanceBase: 0.8,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM memories WHERE id = ?", created.ID).Error
+		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE op_type = 'bulk_supersede' AND actor = 'master'").Error
+	})
+
+	facade := NewFacade(snapStore, nil, memStore, auditStore)
+	executed, err := facade.Execute(ctx, adminIdentity(), BulkOp{
+		Type:      models.SnapshotOpBulkSupersede,
+		MemoryIDs: []int64{created.ID},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, executed.AffectedCount)
+
+	result, rollbackErr := Rollback(ctx, adminIdentity(), executed.SnapshotID, snapStore, memStore, auditStore, nil)
+	require.NoError(t, rollbackErr)
+	require.NotNil(t, result)
+	assert.Equal(t, 1, result.RestoredCount)
+
+	restored, err := memStore.Get(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "active", restored.Status)
+	assert.InDelta(t, 0.8, restored.ImportanceBase, 0.000001)
+}
+
+func TestRollback_WrongTypeBeforeStateIsAtomic(t *testing.T) {
+	db, store := openRollbackTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	ctx := context.Background()
+
+	created, err := memStore.Create(ctx, &models.Memory{
+		Content:     "must survive malformed rollback",
+		Project:     "tg6-wrong-type-rollback",
+		SourceAgent: "claude-code",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM memories WHERE id = ?", created.ID).Error
+		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = 'rollback-wrong-type'").Error
+	})
+
+	beforeState := json.RawMessage(fmt.Sprintf(
+		`{"%d":{"kind":"restore","before":"not-a-memory-object"}}`,
+		created.ID,
+	))
+	snap, err := models.NewBulkOpSnapshot("rollback-wrong-type", models.SnapshotOpBulkDelete, "master", beforeState)
+	require.NoError(t, err)
+	snap.AffectedMemoryIDs = []int64{created.ID}
+	createdSnap, err := snapStore.Create(ctx, snap)
+	require.NoError(t, err)
+
+	result, rollbackErr := Rollback(ctx, adminIdentity(), createdSnap.SnapshotID, snapStore, memStore, nil, nil)
+	require.Error(t, rollbackErr)
+	assert.Nil(t, result)
+	assert.Contains(t, rollbackErr.Error(), "unmarshal memory")
+
+	after, err := memStore.Get(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "must survive malformed rollback", after.Content)
+	storedSnap, err := snapStore.Get(ctx, createdSnap.SnapshotID)
+	require.NoError(t, err)
+	assert.Equal(t, models.SnapshotStatusCommitted, storedSnap.Status)
+}
+
+func TestRollback_ConcurrentOnlyOneCommitWins(t *testing.T) {
+	db, store := openRollbackTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	ctx := context.Background()
+
+	created, err := memStore.Create(ctx, &models.Memory{
+		Content:     "concurrent rollback original",
+		Project:     "tg6-concurrent-rollback",
+		SourceAgent: "claude-code",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM memories WHERE id = ?", created.ID).Error
+		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = 'rollback-concurrent'").Error
+	})
+
+	snap, err := models.NewBulkOpSnapshot(
+		"rollback-concurrent",
+		models.SnapshotOpBulkDelete,
+		"master",
+		memoryBeforeStateJSON(t, db, created.ID),
+	)
+	require.NoError(t, err)
+	snap.AffectedMemoryIDs = []int64{created.ID}
+	createdSnap, err := snapStore.Create(ctx, snap)
+	require.NoError(t, err)
+	require.NoError(t, memStore.Delete(ctx, created.ID))
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, rollbackErr := Rollback(ctx, adminIdentity(), createdSnap.SnapshotID, snapStore, memStore, nil, nil)
+			errs <- rollbackErr
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	var successes, failures int
+	var observed []error
+	for rollbackErr := range errs {
+		observed = append(observed, rollbackErr)
+		if rollbackErr == nil {
+			successes++
+		} else {
+			failures++
+		}
+	}
+	assert.Equal(t, 1, successes, "rollback results: %v", observed)
+	assert.Equal(t, 1, failures, "rollback results: %v", observed)
+
+	storedSnap, err := snapStore.Get(ctx, createdSnap.SnapshotID)
+	require.NoError(t, err)
+	assert.Equal(t, models.SnapshotStatusRolledBack, storedSnap.Status)
+}
+
+func TestRollback_LaterMutationWaitsAndIsNotOverwritten(t *testing.T) {
+	db, store := openRollbackTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	ctx := context.Background()
+
+	created, err := memStore.Create(ctx, &models.Memory{
+		Content:     "rollback race original",
+		Project:     "tg6-rollback-mutation-race",
+		SourceAgent: "claude-code",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM memories WHERE id = ?", created.ID).Error
+		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = 'rollback-mutation-race'").Error
+	})
+
+	snap, err := models.NewBulkOpSnapshot(
+		"rollback-mutation-race",
+		models.SnapshotOpBulkDelete,
+		"master",
+		memoryBeforeStateJSON(t, db, created.ID),
+	)
+	require.NoError(t, err)
+	snap.AffectedMemoryIDs = []int64{created.ID}
+	snap.CreatedAt = time.Now().UTC()
+	createdSnap, err := snapStore.Create(ctx, snap)
+	require.NoError(t, err)
+
+	type rollbackPauseKey struct{}
+	pauseCtx := context.WithValue(ctx, rollbackPauseKey{}, true)
+	restoreReached := make(chan struct{})
+	releaseRestore := make(chan struct{})
+	var restorePauseOnce sync.Once
+	var releaseOnce sync.Once
+	callbackName := fmt.Sprintf("bulkops:test_pause_restore_%d", created.ID)
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "memories" || tx.Statement.Context.Value(rollbackPauseKey{}) != true {
+			return
+		}
+		restorePauseOnce.Do(func() {
+			close(restoreReached)
+			<-releaseRestore
+		})
+	}))
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseRestore) })
+		_ = db.Callback().Update().Remove(callbackName)
+	})
+
+	rollbackDone := make(chan error, 1)
+	go func() {
+		_, rollbackErr := Rollback(pauseCtx, adminIdentity(), createdSnap.SnapshotID, snapStore, memStore, nil, nil)
+		rollbackDone <- rollbackErr
+	}()
+
+	select {
+	case <-restoreReached:
+	case rollbackErr := <-rollbackDone:
+		require.NoError(t, rollbackErr, "rollback must reach the restore mutation")
+		t.Fatal("rollback completed before the restore pause callback")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for rollback to reach restore")
+	}
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	mutationConn, err := sqlDB.Conn(ctx)
+	require.NoError(t, err)
+	defer mutationConn.Close()
+
+	var mutationPID int
+	require.NoError(t, mutationConn.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&mutationPID))
+	mutationDone := make(chan error, 1)
+	go func() {
+		_, mutationErr := mutationConn.ExecContext(context.Background(),
+			`UPDATE memories SET content = 'later mutation', updated_at = NOW() WHERE id = $1`,
+			created.ID,
+		)
+		mutationDone <- mutationErr
+	}()
+
+	locked := false
+	mutationCompletedBeforeRelease := false
+	var mutationErr error
+	deadline := time.NewTimer(5 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer deadline.Stop()
+	defer ticker.Stop()
+
+	for !locked && !mutationCompletedBeforeRelease {
+		select {
+		case mutationErr = <-mutationDone:
+			mutationCompletedBeforeRelease = true
+		case <-ticker.C:
+			var waitEventType string
+			queryErr := db.Raw(
+				`SELECT COALESCE(wait_event_type, '') FROM pg_stat_activity WHERE pid = ?`,
+				mutationPID,
+			).Scan(&waitEventType).Error
+			require.NoError(t, queryErr)
+			locked = waitEventType == "Lock"
+		case <-deadline.C:
+			t.Fatal("timed out waiting for the later mutation to block on rollback's row lock")
+		}
+	}
+
+	releaseOnce.Do(func() { close(releaseRestore) })
+	require.NoError(t, <-rollbackDone)
+	if !mutationCompletedBeforeRelease {
+		select {
+		case mutationErr = <-mutationDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("later mutation did not complete after rollback released its row lock")
+		}
+	}
+
+	require.NoError(t, mutationErr)
+	assert.False(t, mutationCompletedBeforeRelease,
+		"later mutation must wait until rollback commits instead of being overwritten")
+
+	var finalRow gormdb.Memory
+	require.NoError(t, db.Unscoped().Where("id = ?", created.ID).First(&finalRow).Error)
+	assert.Equal(t, "later mutation", finalRow.Content,
+		"a mutation that starts after conflict evaluation must win after rollback commits")
+
+	storedSnap, err := snapStore.Get(ctx, createdSnap.SnapshotID)
+	require.NoError(t, err)
+	assert.Equal(t, models.SnapshotStatusRolledBack, storedSnap.Status)
 }
 
 func TestRollback_CandidateReviewPromoteDeletesMemoryAndRestoresPending(t *testing.T) {
@@ -283,6 +598,21 @@ func TestRollback_CandidateReviewPromoteDeletesMemoryAndRestoresPending(t *testi
 	require.Equal(t, models.CandidateStatusPromoted, updatedCandidate.Status)
 	require.NotNil(t, updatedCandidate.PromotedMemoryID)
 	require.Equal(t, createdMemory.ID, *updatedCandidate.PromotedMemoryID)
+	candidateAfter, err := json.Marshal(updatedCandidate)
+	require.NoError(t, err)
+	beforeState, err = json.Marshal(map[string]models.SnapshotEntry{
+		fmt.Sprintf("candidate:%d", candidate.ID): {
+			Kind:   models.EntryKindRestore,
+			Before: candidateBefore,
+			After:  candidateAfter,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(
+		"UPDATE bulk_op_snapshots SET before_state = CAST(? AS jsonb) WHERE snapshot_id = ?",
+		string(beforeState),
+		createdSnap.SnapshotID,
+	).Error)
 	require.NoError(t, snapStore.AmendPromoteEntries(ctx, createdSnap.SnapshotID, []int64{createdMemory.ID}))
 	assert.True(t, createdMemory.CreatedAt.After(createdSnap.CreatedAt), "fixture must create promoted memory after snapshot")
 	assert.True(t, createdMemory.UpdatedAt.After(createdSnap.CreatedAt), "fixture must create promoted memory updated timestamp after snapshot")
@@ -368,6 +698,21 @@ func TestRollback_CandidateReviewPromoteEditedMemoryConflicts(t *testing.T) {
 	require.Equal(t, models.CandidateStatusPromoted, updatedCandidate.Status)
 	require.NotNil(t, updatedCandidate.PromotedMemoryID)
 	require.Equal(t, createdMemory.ID, *updatedCandidate.PromotedMemoryID)
+	candidateAfter, err := json.Marshal(updatedCandidate)
+	require.NoError(t, err)
+	beforeState, err = json.Marshal(map[string]models.SnapshotEntry{
+		fmt.Sprintf("candidate:%d", candidate.ID): {
+			Kind:   models.EntryKindRestore,
+			Before: candidateBefore,
+			After:  candidateAfter,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(
+		"UPDATE bulk_op_snapshots SET before_state = CAST(? AS jsonb) WHERE snapshot_id = ?",
+		string(beforeState),
+		createdSnap.SnapshotID,
+	).Error)
 	require.NoError(t, snapStore.AmendPromoteEntries(ctx, createdSnap.SnapshotID, []int64{createdMemory.ID}))
 
 	editedAt := createdMemory.CreatedAt.Add(2 * time.Second)
@@ -396,4 +741,245 @@ func TestRollback_CandidateReviewPromoteEditedMemoryConflicts(t *testing.T) {
 	stillCommitted, err := snapStore.Get(ctx, createdSnap.SnapshotID)
 	require.NoError(t, err)
 	assert.Equal(t, models.SnapshotStatusCommitted, stillCommitted.Status)
+}
+
+func createPublicCandidateReviewRollbackCandidate(
+	t *testing.T,
+	candidateStore *gormdb.CandidateStore,
+	suffix string,
+	project string,
+) *models.CrystallizationCandidate {
+	t.Helper()
+	candidate, err := candidateStore.Create(context.Background(), &models.CrystallizationCandidate{
+		SourceSessionID:         "public-candidate-review-" + suffix,
+		ProposedContent:         "public candidate review " + suffix,
+		ProposedTier:            "semantic",
+		ProposedEpistemicType:   "decision",
+		ProposedPromotionTarget: "semantic",
+		EvidenceHandles:         []string{"session:public-candidate-review-" + suffix},
+		PrivacyScope:            "project",
+		Status:                  models.CandidateStatusPending,
+		Fingerprint:             fmt.Sprintf("public-candidate-review-%s-%d", suffix, time.Now().UnixNano()),
+		AffectedProjects:        []string{project},
+		Confidence:              0.9,
+		RecurrenceCount:         2,
+	})
+	require.NoError(t, err)
+	return candidate
+}
+
+func publicCandidateReviewMemory(candidate *models.CrystallizationCandidate, project string) *models.Memory {
+	return &models.Memory{
+		Content:       candidate.ProposedContent,
+		Project:       project,
+		Tier:          candidate.ProposedTier,
+		EpistemicType: candidate.ProposedEpistemicType,
+		Tags:          []string{fmt.Sprintf("candidate:%d", candidate.ID), "crystallized"},
+		SourceAgent:   "crystallization",
+	}
+}
+
+func requirePersistedCandidateReviewAfter(
+	t *testing.T,
+	ctx context.Context,
+	snapshotStore *gormdb.SnapshotStore,
+	snapshotID string,
+	want *models.CrystallizationCandidate,
+) {
+	t.Helper()
+	persisted, err := snapshotStore.Get(ctx, snapshotID)
+	require.NoError(t, err)
+	var entries map[string]models.SnapshotEntry
+	require.NoError(t, json.Unmarshal(persisted.BeforeState, &entries))
+	entry, ok := entries[fmt.Sprintf("candidate:%d", want.ID)]
+	require.True(t, ok, "candidate restore entry must be persisted")
+	require.NotEmpty(t, entry.After, "live candidate_review_action must persist its authoritative after-state")
+	wantJSON, err := json.Marshal(want)
+	require.NoError(t, err)
+	require.JSONEq(t, string(wantJSON), string(entry.After),
+		"SnapshotEntry.After must exactly match the authoritative post-mutation candidate")
+}
+
+func cleanupPublicCandidateReviewRollback(
+	t *testing.T,
+	db *gorm.DB,
+	candidate *models.CrystallizationCandidate,
+	project string,
+	actor string,
+) {
+	t.Helper()
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM audit_log WHERE actor = ? OR source_session_id = ?", actor, candidate.SourceSessionID).Error
+		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE source_session_id = ?", candidate.SourceSessionID).Error
+		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
+		_ = db.Unscoped().Exec("DELETE FROM memories WHERE project = ?", project).Error
+	})
+}
+
+func TestRollback_PublicCandidateReviewPromotePersistsAfterAndRestoresPending(t *testing.T) {
+	db, store := openRollbackTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapshotStore := gormdb.NewSnapshotStore(db)
+	auditStore := gormdb.NewAuditStore(db)
+	candidateStore := gormdb.NewCandidateStore(db, auditStore)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("promote-%d", time.Now().UnixNano())
+	project := "candidate-review-" + suffix
+	actor := "agent/" + suffix
+	candidate := createPublicCandidateReviewRollbackCandidate(t, candidateStore, suffix, project)
+	cleanupPublicCandidateReviewRollback(t, db, candidate, project, actor)
+
+	snapshot, err := reviewpacket.NewCandidateReviewActionSnapshot("promote", candidate, actor)
+	require.NoError(t, err)
+	updated, createdMemory, createdSnapshot, err := candidateStore.PromoteWithMemoryAndSnapshot(
+		ctx,
+		snapshotStore,
+		candidate.ID,
+		publicCandidateReviewMemory(candidate, project),
+		snapshot,
+		actor,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, createdSnapshot)
+	require.NotNil(t, createdMemory)
+	require.Equal(t, models.CandidateStatusPromoted, updated.Status)
+	requirePersistedCandidateReviewAfter(t, ctx, snapshotStore, createdSnapshot.SnapshotID, updated)
+
+	result, err := Rollback(
+		ctx,
+		auth.Identity{Role: auth.RoleAdmin, Source: auth.SourceMaster, KeycardID: actor},
+		createdSnapshot.SnapshotID,
+		snapshotStore,
+		memStore,
+		auditStore,
+		candidateStore,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.RestoredCount)
+	restored, err := candidateStore.Get(ctx, candidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusPending, restored.Status)
+	require.Nil(t, restored.PromotedMemoryID)
+	var memoryCount int64
+	require.NoError(t, db.Unscoped().Model(&gormdb.Memory{}).Where("id = ?", createdMemory.ID).Count(&memoryCount).Error)
+	require.Zero(t, memoryCount)
+}
+
+func TestRollback_PublicCandidateReviewPreservePersistsAfterAndRestoresPending(t *testing.T) {
+	db, store := openRollbackTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapshotStore := gormdb.NewSnapshotStore(db)
+	auditStore := gormdb.NewAuditStore(db)
+	candidateStore := gormdb.NewCandidateStore(db, auditStore)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("preserve-%d", time.Now().UnixNano())
+	project := "candidate-review-" + suffix
+	actor := "agent/" + suffix
+	candidate := createPublicCandidateReviewRollbackCandidate(t, candidateStore, suffix, project)
+	cleanupPublicCandidateReviewRollback(t, db, candidate, project, actor)
+
+	snapshot, err := reviewpacket.NewCandidateReviewActionSnapshot(reviewpacket.ReviewActionPreserve, candidate, actor)
+	require.NoError(t, err)
+	updated, createdMemory, createdSnapshot, err := candidateStore.PreserveWithMemoryAndSnapshot(
+		ctx,
+		snapshotStore,
+		candidate.ID,
+		publicCandidateReviewMemory(candidate, project),
+		snapshot,
+		actor,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, createdSnapshot)
+	require.NotNil(t, createdMemory)
+	require.Equal(t, models.CandidateStatusPromoted, updated.Status)
+	requirePersistedCandidateReviewAfter(t, ctx, snapshotStore, createdSnapshot.SnapshotID, updated)
+
+	result, err := Rollback(
+		ctx,
+		auth.Identity{Role: auth.RoleAdmin, Source: auth.SourceMaster, KeycardID: actor},
+		createdSnapshot.SnapshotID,
+		snapshotStore,
+		memStore,
+		auditStore,
+		candidateStore,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.RestoredCount)
+	restored, err := candidateStore.Get(ctx, candidate.ID)
+	require.NoError(t, err)
+	require.Equal(t, models.CandidateStatusPending, restored.Status)
+	require.Nil(t, restored.PromotedMemoryID)
+}
+
+func TestRollback_PublicCandidateReviewNonMemoryActionsPersistAfterAndRestorePending(t *testing.T) {
+	tests := []struct {
+		name           string
+		action         string
+		expectedStatus models.CandidateStatus
+		apply          func(context.Context, *gormdb.CandidateStore, *gormdb.SnapshotStore, int64, *models.BulkOpSnapshot, string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error)
+	}{
+		{
+			name:           "reject",
+			action:         "reject",
+			expectedStatus: models.CandidateStatusRejected,
+			apply: func(ctx context.Context, store *gormdb.CandidateStore, snapshots *gormdb.SnapshotStore, id int64, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error) {
+				return store.TransitionToRejectedWithSnapshot(ctx, snapshots, id, "not durable enough", snapshot, actor)
+			},
+		},
+		{
+			name:           "supersede",
+			action:         "supersede",
+			expectedStatus: models.CandidateStatusSuperseded,
+			apply: func(ctx context.Context, store *gormdb.CandidateStore, snapshots *gormdb.SnapshotStore, id int64, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error) {
+				return store.TransitionToSupersededWithSnapshot(ctx, snapshots, id, snapshot, actor)
+			},
+		},
+		{
+			name:           "suppress",
+			action:         reviewpacket.ReviewActionSuppress,
+			expectedStatus: models.CandidateStatusRejected,
+			apply: func(ctx context.Context, store *gormdb.CandidateStore, snapshots *gormdb.SnapshotStore, id int64, snapshot *models.BulkOpSnapshot, actor string) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error) {
+				return store.TransitionToSuppressedWithSnapshot(ctx, snapshots, id, "suppress noise", snapshot, actor)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db, store := openRollbackTestDB(t)
+			memStore := gormdb.NewMemoryStore(store)
+			snapshotStore := gormdb.NewSnapshotStore(db)
+			auditStore := gormdb.NewAuditStore(db)
+			candidateStore := gormdb.NewCandidateStore(db, auditStore)
+			ctx := context.Background()
+			suffix := fmt.Sprintf("%s-%d", tc.name, time.Now().UnixNano())
+			project := "candidate-review-" + suffix
+			actor := "agent/" + suffix
+			candidate := createPublicCandidateReviewRollbackCandidate(t, candidateStore, suffix, project)
+			cleanupPublicCandidateReviewRollback(t, db, candidate, project, actor)
+
+			snapshot, err := reviewpacket.NewCandidateReviewActionSnapshot(tc.action, candidate, actor)
+			require.NoError(t, err)
+			updated, createdSnapshot, err := tc.apply(ctx, candidateStore, snapshotStore, candidate.ID, snapshot, actor)
+			require.NoError(t, err)
+			require.NotNil(t, createdSnapshot)
+			require.Equal(t, tc.expectedStatus, updated.Status)
+			requirePersistedCandidateReviewAfter(t, ctx, snapshotStore, createdSnapshot.SnapshotID, updated)
+
+			result, err := Rollback(
+				ctx,
+				auth.Identity{Role: auth.RoleAdmin, Source: auth.SourceMaster, KeycardID: actor},
+				createdSnapshot.SnapshotID,
+				snapshotStore,
+				memStore,
+				auditStore,
+				candidateStore,
+			)
+			require.NoError(t, err)
+			require.Equal(t, 1, result.RestoredCount)
+			restored, err := candidateStore.Get(ctx, candidate.ID)
+			require.NoError(t, err)
+			require.Equal(t, models.CandidateStatusPending, restored.Status)
+		})
+	}
 }

@@ -1,0 +1,11 @@
+{
+  "task_id": "DB-BULKOPS-DRY-RUN-NORMALIZATION",
+  "observed_at": "2026-07-10T05:20:12Z",
+  "stack": "GO",
+  "test_file": "internal/bulkops/facade_test.go",
+  "test_name": "TestFacade_BulkPromote_DryRunNormalizesDuplicateAndZeroIDs",
+  "database": "engram_prc_bulkops_edges_red_20260710_081930",
+  "failure_reason": "bulk_promote dry-run counted the raw six-element input while execution consumed two sorted unique non-zero candidate IDs.",
+  "runner_exit_code": 1,
+  "runner_stdout_excerpt": "preview WouldAffect expected 2, actual 6; execution AffectedCount actual 2"
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "DB-TEST-POOL-HYGIENE",
+  "parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+  "observed_at": "2026-07-10T12:41:38.9724244Z",
+  "test_file": "internal/db/gorm/candidate_store_test.go",
+  "test_name": "TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose",
+  "invariant": "a child-owned candidate test DB pool remains usable inside the subtest and is closed before t.Run returns to its parent",
+  "failure_reason": "four sequential child subtests accumulated four PostgreSQL sessions instead of returning to the zero-session baseline",
+  "runner_stdout_excerpt": "baseline_sessions=0 child_live_sessions=1; sessions_after_owner_cleanup=1 ... child_live_sessions=4; sessions_after_owner_cleanup=4",
+  "evidence_log": "02-parent-red.log",
+  "exit_code": 1,
+  "database_residue": 0,
+  "activity_residue": 0
+}

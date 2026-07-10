@@ -1,0 +1,12 @@
+base_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+head_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+database=engram_mkr_bedge_review_coverfunc_20260710a
+command=go tool cover -func= .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/coverage.out
+started_utc=2026-07-10T09:06:50.4458404Z
+too many options
+For usage information, run "go tool cover -help"
+test_exit=2
+active_sessions_before_terminate=0
+database_residue=0
+activity_residue=0
+finished_utc=2026-07-10T09:06:52.3834483Z

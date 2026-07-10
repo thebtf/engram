@@ -1,0 +1,228 @@
+{
+  "task": "DB-BULKOPS behavioral-edge rework",
+  "base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+  "status": "READY_FOR_INDEPENDENT_CHECK",
+  "formal_acceptance": false,
+  "scope": {
+    "product_and_test_paths": [
+      "internal/db/gorm/candidate_store.go",
+      "internal/db/gorm/candidate_store_test.go",
+      "internal/mcp/tools_bulkops.go",
+      "internal/mcp/tools_dryrun_test.go"
+    ],
+    "evidence_namespace": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/",
+    "maker_report": ".agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md"
+  },
+  "source_sha256": {
+    "internal/db/gorm/candidate_store.go": "e5102fc82df34cc85e2039cf62ce96155b725d3728518a196476eb2351b458c2",
+    "internal/db/gorm/candidate_store_test.go": "8fb5258f01557ca7991b5a211f51107e69e4acd5740c5b254e63308f8969e4ff",
+    "internal/mcp/tools_bulkops.go": "89ca7932ccafe7fa52c79099d6ecbca20a04aa7faff94ff5ec92c9d68dc7cefa",
+    "internal/mcp/tools_dryrun_test.go": "2a4fbe5e29548b3df2eb45f16ab8e08e7938e9e95a8604e4a6f7cfeac05d0a90"
+  },
+  "cause_closure": {
+    "candidate_review": {
+      "class": "All public candidate-review WithSnapshot mutation seams previously trusted partially self-consistent snapshots instead of enforcing one complete binding invariant.",
+      "closed_invariant": [
+        "promote, preserve, reject, suppress, and supersede route through the same fail-closed validator",
+        "snapshot, snapshot store, and audit store are required",
+        "op_type, parameters.operation, parameters.action, parameters.candidate_id, and normalized actor are bound",
+        "initial affected_memory_ids is empty",
+        "BeforeState contains exactly one candidate:<id> restore entry with nonempty Before and empty After",
+        "the embedded payload ID and source session are bound",
+        "inside the same mutation transaction, SELECT FOR UPDATE loads the authoritative candidate before any snapshot or mutation write",
+        "the complete rollback-relevant payload is compared to the authoritative row, allowing only sub-microsecond PostgreSQL timestamp precision differences",
+        "invalid bindings produce zero candidate, memory, snapshot, and candidate_review audit writes",
+        "valid seams commit exactly one synchronous candidate_review audit"
+      ]
+    },
+    "bulk_structured_input": {
+      "class": "Public bulk tools previously used lossy any/float64 coercion, allowing wrong types and losing exact IDs.",
+      "closed_invariant": [
+        "bulk_promote, bulk_delete, and bulk_supersede parse raw json.RawMessage before facade invocation",
+        "ID fields must be arrays of exact integral int64 JSON numbers",
+        "1.0, 1e0, 9007199254740993, MinInt64, and MaxInt64 preserve exact identity",
+        "fractional, overflow, string, boolean, object, nested-array, null, malformed, and non-object inputs fail before the facade",
+        "present dry_run accepts only JSON true or false; missing dry_run defaults false",
+        "zero removal, deduplication, and sorting occur only after exact parsing",
+        "nil-facade dry-run and wired non-dry paths use the same normalized IDs"
+      ]
+    }
+  },
+  "tdd": {
+    "red": [
+      {
+        "log": "01-red-behavior.log",
+        "command": "go test -p=1 ./internal/db/gorm ./internal/mcp -run ^(TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites|TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit|TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs|TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization)$ -count=1 -v",
+        "exit_code": 1,
+        "database": "engram_mkr_bedge_red_behavior_20260710a",
+        "residue": "0/0"
+      },
+      {
+        "log": "02-red-spy-seam.log",
+        "command": "go test -p=1 ./internal/mcp -run ^(TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade|TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun)$ -count=1 -v",
+        "exit_code": 1,
+        "database": "engram_mkr_bedge_red_spy_20260710a",
+        "residue": "0/0"
+      },
+      {
+        "log": "05-prove-it-candidate.log",
+        "command": "go test -p=1 ./internal/db/gorm -run ^(TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites|TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit)$ -count=1",
+        "exit_code": 1,
+        "mutation": "temporarily bypassed the candidate-review validator",
+        "residue": "0/0"
+      },
+      {
+        "log": "06-prove-it-parser.log",
+        "command": "go test -p=1 ./internal/mcp -run ^(TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs|TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization|TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade|TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun)$ -count=1",
+        "exit_code": 1,
+        "mutation": "temporarily bypassed the strict parser",
+        "residue": "0/0"
+      },
+      {
+        "log": "17-review-red-authoritative-binding.log",
+        "command": "go test -p=1 ./internal/db/gorm -run ^TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites$ -count=1",
+        "exit_code": 1,
+        "database": "engram_mkr_bedge_review_red_auth_20260710a",
+        "observed": "A forged Before payload plus matching forged snapshot source session was accepted by all five public seams.",
+        "residue": "0/0"
+      }
+    ],
+    "final_green": [
+      {
+        "log": "19-review-green-authoritative-binding.log",
+        "command": "go test -p=1 ./internal/db/gorm ./internal/mcp -run ^(TestCandidateStore_PromoteWithMemoryAndSnapshot_AmendFailureRollsBackPromotion|TestCandidateStore_PreserveWithMemoryAndSnapshot_RequiresCandidateReviewSnapshotBeforeMutation|TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites|TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit|TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs|TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization|TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade|TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun)$ -count=1",
+        "exit_code": 0,
+        "database": "engram_mkr_bedge_review_green_auth_20260710b",
+        "residue": "0/0"
+      },
+      {
+        "log": "20-review-repeat20.log",
+        "command": "go test -p=1 ./internal/db/gorm ./internal/mcp -run ^(TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites|TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit|TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs|TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization|TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade|TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun)$ -count=20",
+        "exit_code": 0,
+        "database": "engram_mkr_bedge_review_repeat20_20260710a",
+        "residue": "0/0"
+      },
+      {
+        "log": "21-review-race-focused.log",
+        "command": "go test -race -p=1 ./internal/db/gorm ./internal/mcp -run ^(TestCandidateStore_PromoteWithMemoryAndSnapshot_AmendFailureRollsBackPromotion|TestCandidateStore_PreserveWithMemoryAndSnapshot_RequiresCandidateReviewSnapshotBeforeMutation|TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites|TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit|TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs|TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization|TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade|TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun)$ -count=1",
+        "exit_code": 0,
+        "database": "engram_mkr_bedge_review_race_20260710a",
+        "residue": "0/0"
+      },
+      {
+        "log": "22-review-vet.log",
+        "command": "go vet ./internal/db/gorm ./internal/mcp",
+        "exit_code": 0,
+        "database": "engram_mkr_bedge_review_vet_20260710a",
+        "residue": "0/0"
+      },
+      {
+        "log": "23-review-coverage.log",
+        "command": "go test -p=1 ./internal/db/gorm ./internal/mcp -run ^(TestCandidateStore_PromoteWithMemoryAndSnapshot_AmendFailureRollsBackPromotion|TestCandidateStore_PreserveWithMemoryAndSnapshot_RequiresCandidateReviewSnapshotBeforeMutation|TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites|TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit|TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs|TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization|TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade|TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun)$ -count=1 -covermode=atomic -coverprofile=.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/coverage.out",
+        "exit_code": 0,
+        "database": "engram_mkr_bedge_review_coverage_20260710a",
+        "residue": "0/0"
+      },
+      {
+        "log": "25-review-cover-functions.log",
+        "command": "go tool cover -func=.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/coverage.out",
+        "exit_code": 0,
+        "database": "engram_mkr_bedge_review_coverfunc_20260710b",
+        "residue": "0/0"
+      }
+    ]
+  },
+  "coverage": {
+    "gorm_package": "15.4%",
+    "mcp_package": "1.8%",
+    "validateCandidateReviewSnapshotBinding": "87.0%",
+    "candidateReviewPayloadMatchesAuthoritative": "75.0%",
+    "promoteWithMemoryAndSnapshotAction": "80.6%",
+    "transitionWithSnapshot": "63.6%",
+    "parseBulkStructuredArgs": "100.0%",
+    "handleBulkPromote": "80.0%",
+    "handleBulkDelete": "80.0%",
+    "handleBulkSupersede": "80.0%"
+  },
+  "full_package_gates": [
+    {
+      "log": "26-review-full-gorm.log",
+      "command": "go test -p=1 ./internal/db/gorm -count=1",
+      "exit_code": 1,
+      "classification": "documented unrelated baseline plus PostgreSQL max-client cascade; no candidate-review test failed",
+      "known_baseline_failures": [
+        "TestRuleGovernanceStore_AnnotatedCandidateWaitsUntilReviewAfter",
+        "TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables",
+        "TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectScopedReads",
+        "TestMigration144_RuleGovernanceRollbackAndReapply",
+        "TestMigration144_RuleGovernanceEscapeConstraints",
+        "TestMigration144_RuleGovernanceSnapshotStatusesAcceptExtendedStates"
+      ],
+      "max_client_cascade": [
+        "TestTemporalTruthStore_LoadSelectedRecordsUsesDBNowForValidFrom",
+        "TestTokenStore_CreateWithPrincipalRoundTrip",
+        "TestTokenStore_CreateWithPrincipalRejectsKindWithoutPrincipal",
+        "TestTranscriptStore_Lifecycle"
+      ],
+      "residue": "0/0"
+    },
+    {
+      "log": "27-review-full-mcp.log",
+      "command": "go test -p=1 ./internal/mcp -count=1",
+      "exit_code": 1,
+      "classification": "documented unrelated baseline; no bulk structured-input test failed",
+      "known_baseline_failures": [
+        "TestHybridTG3_ConfidenceMin_FloorEnforced_T022",
+        "TestEC_F1_TagDerivedBackfill_T007"
+      ],
+      "residue": "0/0"
+    }
+  ],
+  "precommit_review": {
+    "role": "maker-side hardening only; not formal independent acceptance",
+    "initial_verdict": "REVISE/BLOCK",
+    "finding": "Snapshot validation was self-consistent but not bound to the locked authoritative candidate.",
+    "resolution": "Added transaction-bound SELECT FOR UPDATE, complete payload comparison, and the forged payload plus forged source-session sibling case across all five seams.",
+    "formal_checker": "required after this commit"
+  },
+  "diagnostics": {
+    "errors": 0,
+    "warnings": 0,
+    "notes": "Serena reported only pre-existing or non-blocking modernize hints (interface{} to any, maps.Copy, and Go 1.22 loop-copy hints)."
+  },
+  "discrepancies": [
+    {
+      "log": "08-full-packages.log",
+      "issue": "The first full-package run exposed an old amend-rollback fixture with an invalid snapshot and a preserve error-string compatibility mismatch.",
+      "resolution": "Updated the fixture to use the canonical reviewpacket snapshot and preserved the legacy candidate_review wording; 09-legacy-compat.log passed."
+    },
+    {
+      "log": "18-review-green-authoritative-binding.log",
+      "issue": "The first authoritative-binding implementation compared raw timestamp JSON exactly and moved all validation inside the transaction, rejecting a legitimate sub-microsecond timestamp representation and panicking in a legacy nil-DB preflight test.",
+      "resolution": "Restored structural preflight before DB access, repeated validation inside the transaction, and limited timestamp tolerance to PostgreSQL precision while comparing every other candidate field exactly; 19, 20, and 21 passed."
+    },
+    {
+      "log": "24-review-cover-functions.log",
+      "issue": "PowerShell argument binding split -func=<path> and go tool cover exited 2.",
+      "resolution": "Reran with an explicit GoArgs array; 25-review-cover-functions.log exited 0."
+    },
+    {
+      "issue": "Captured Go/GORM logs contained trailing spaces and tab-indented test output that failed the staged git diff whitespace check.",
+      "resolution": "Mechanically replaced tabs with spaces and removed only end-of-line whitespace in evidence *.log files before final hashing; command/output text, exit codes, and timestamps were otherwise preserved."
+    }
+  ],
+  "out_of_scope_audit_node": {
+    "id": "MCP-STRUCTURED-INPUT-VALIDATION",
+    "path": "store_memory.supersedes",
+    "finding": "The public handler still reaches lossy coercion without explicit raw structured-input type validation.",
+    "action": "Reported only. No edits were made to coerce.go or tools_memory.go under this task's strict scope."
+  },
+  "cleanup": {
+    "log": "16-final-residue.log",
+    "checked_utc": "2026-07-10T09:10:54.3826001Z",
+    "database_prefix": "engram_mkr_bedge_%",
+    "database_residue": 0,
+    "activity_residue": 0,
+    "exit_code": 0
+  }
+}

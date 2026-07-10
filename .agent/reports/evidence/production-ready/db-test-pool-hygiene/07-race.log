@@ -1,0 +1,14 @@
+base_sha=bd68c05baf4b7250096dd84f56bebea2aa555970
+head_sha=bd68c05baf4b7250096dd84f56bebea2aa555970
+database=engram_mkr_dbph_race_a
+command=go test -race -p=1 ./internal/db/gorm -run ^TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose$ -count=1
+max_connections=100
+superuser_reserved_connections=3
+started_utc=2026-07-10T12:45:51.8676905Z
+activity_before_test=0
+ok      github.com/thebtf/engram/internal/db/gorm    4.711s
+test_exit=0
+activity_after_test_process=0
+database_residue=0
+activity_residue=0
+finished_utc=2026-07-10T12:46:04.8094754Z

@@ -5,7 +5,7 @@
 // previews per spec §FR-F6.b.
 //
 // Dry-run nil-safe seam (TG5 absent): when bulkFacade is nil AND dry_run=true,
-// the handler computes would_affect from the input array length and returns
+// the handler computes would_affect from normalized candidate IDs and returns
 // immediately — no DB read, no write. When dry_run=false and facade is nil,
 // an error is returned (operation not available).
 package mcp
@@ -14,11 +14,55 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
+	"strings"
 
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/bulkops"
 	"github.com/thebtf/engram/pkg/models"
 )
+
+var executeBulkFacade = func(facade *bulkops.Facade, ctx context.Context, identity auth.Identity, op bulkops.BulkOp) (*bulkops.ExecuteResult, error) {
+	return facade.Execute(ctx, identity, op)
+}
+
+func parseBulkStructuredArgs(args json.RawMessage, idField string, operation string) ([]int64, bool, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(args, &fields); err != nil || fields == nil {
+		return nil, false, fmt.Errorf("%s: arguments must be a JSON object", operation)
+	}
+
+	rawIDs, ok := fields[idField]
+	if !ok {
+		return nil, false, fmt.Errorf("%s: %s is required", operation, idField)
+	}
+	var encodedIDs []json.RawMessage
+	if err := json.Unmarshal(rawIDs, &encodedIDs); err != nil || encodedIDs == nil {
+		return nil, false, fmt.Errorf("%s: %s must be an array of integral int64 JSON numbers", operation, idField)
+	}
+	ids := make([]int64, 0, len(encodedIDs))
+	for index, encodedID := range encodedIDs {
+		numberText := strings.TrimSpace(string(encodedID))
+		var exact big.Rat
+		if _, ok := exact.SetString(numberText); !ok || !exact.IsInt() || !exact.Num().IsInt64() {
+			return nil, false, fmt.Errorf("%s: %s[%d] must be an integral int64 JSON number", operation, idField, index)
+		}
+		ids = append(ids, exact.Num().Int64())
+	}
+
+	dryRun := false
+	if rawDryRun, ok := fields["dry_run"]; ok {
+		switch strings.TrimSpace(string(rawDryRun)) {
+		case "true":
+			dryRun = true
+		case "false":
+			dryRun = false
+		default:
+			return nil, false, fmt.Errorf("%s: dry_run must be a JSON boolean", operation)
+		}
+	}
+	return ids, dryRun, nil
+}
 
 // bulkOpsTools returns MCP tool definitions for bulk_promote, bulk_delete, bulk_supersede.
 // These are admin-only tools advertised only when ENGRAM_VNEXT_F_ENABLED=true.
@@ -90,8 +134,8 @@ func bulkOpsTools() []Tool {
 // handleBulkPromote promotes a list of crystallization candidates to memories.
 //
 // Admin gate: non-admin callers receive admin_required error.
-// Dry-run nil-safe seam: when bulkFacade is nil and dry_run=true, returns
-// would_affect from len(candidate_ids) — zero DB reads or writes.
+// Dry-run nil-safe seam: when bulkFacade is nil and dry_run=true, returns the
+// same sorted unique non-zero candidate count as the facade — zero DB reads or writes.
 func (s *Server) handleBulkPromote(ctx context.Context, args json.RawMessage) (string, error) {
 	if !vnextFEnabled() {
 		return "", fmt.Errorf("bulk_promote: requires ENGRAM_VNEXT_F_ENABLED=true")
@@ -101,21 +145,19 @@ func (s *Server) handleBulkPromote(ctx context.Context, args json.RawMessage) (s
 		return "", fmt.Errorf("admin_required: bulk_promote requires admin identity")
 	}
 
-	m, err := parseArgs(args)
+	candidateIDs, dryRun, err := parseBulkStructuredArgs(args, "candidate_ids", "bulk_promote")
 	if err != nil {
 		return "", err
 	}
-
-	candidateIDs := coerceInt64Slice(m["candidate_ids"])
-	dryRun := coerceBool(m["dry_run"], false)
+	candidateIDs = bulkops.NormalizeCandidateIDs(candidateIDs)
 
 	// Nil-safe TG5-absent dry-run seam: when facade is nil and dry_run=true,
-	// return a preview using the input array length — no DB access.
+	// return a preview using the facade's normalized ID contract — no DB access.
 	if dryRun && s.bulkFacade == nil {
 		out := map[string]any{
-			"dry_run":     true,
+			"dry_run":      true,
 			"would_affect": len(candidateIDs),
-			"note":        "bulk_promote preview (facade not wired — would_affect from input only)",
+			"note":         "bulk_promote preview (facade not wired — normalized input only)",
 		}
 		return marshalJSON(out)
 	}
@@ -130,18 +172,18 @@ func (s *Server) handleBulkPromote(ctx context.Context, args json.RawMessage) (s
 		DryRun:       dryRun,
 		Actor:        resolveGovernanceActor(identity),
 	}
-	result, err := s.bulkFacade.Execute(ctx, identity, op)
+	result, err := executeBulkFacade(s.bulkFacade, ctx, identity, op)
 	if err != nil {
 		return "", fmt.Errorf("bulk_promote: %w", err)
 	}
 
 	out := map[string]any{
-		"dry_run":       result.DryRun,
-		"would_affect":  result.WouldAffect,
+		"dry_run":        result.DryRun,
+		"would_affect":   result.WouldAffect,
 		"affected_count": result.AffectedCount,
-		"snapshot_id":   result.SnapshotID,
-		"promoted":      result.Promoted,
-		"errors":        result.Errors,
+		"snapshot_id":    result.SnapshotID,
+		"promoted":       result.Promoted,
+		"errors":         result.Errors,
 	}
 	return marshalJSON(out)
 }
@@ -160,20 +202,18 @@ func (s *Server) handleBulkDelete(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("admin_required: bulk_delete requires admin identity")
 	}
 
-	m, err := parseArgs(args)
+	memoryIDs, dryRun, err := parseBulkStructuredArgs(args, "memory_ids", "bulk_delete")
 	if err != nil {
 		return "", err
 	}
-
-	memoryIDs := coerceInt64Slice(m["memory_ids"])
-	dryRun := coerceBool(m["dry_run"], false)
+	memoryIDs = bulkops.NormalizeCandidateIDs(memoryIDs)
 
 	// Nil-safe TG5-absent dry-run seam.
 	if dryRun && s.bulkFacade == nil {
 		out := map[string]any{
 			"dry_run":      true,
 			"would_affect": len(memoryIDs),
-			"note":         "bulk_delete preview (facade not wired — would_affect from input only)",
+			"note":         "bulk_delete preview (facade not wired — normalized input only)",
 		}
 		return marshalJSON(out)
 	}
@@ -188,7 +228,7 @@ func (s *Server) handleBulkDelete(ctx context.Context, args json.RawMessage) (st
 		DryRun:    dryRun,
 		Actor:     resolveGovernanceActor(identity),
 	}
-	result, err := s.bulkFacade.Execute(ctx, identity, op)
+	result, err := executeBulkFacade(s.bulkFacade, ctx, identity, op)
 	if err != nil {
 		return "", fmt.Errorf("bulk_delete: %w", err)
 	}
@@ -217,20 +257,18 @@ func (s *Server) handleBulkSupersede(ctx context.Context, args json.RawMessage) 
 		return "", fmt.Errorf("admin_required: bulk_supersede requires admin identity")
 	}
 
-	m, err := parseArgs(args)
+	memoryIDs, dryRun, err := parseBulkStructuredArgs(args, "memory_ids", "bulk_supersede")
 	if err != nil {
 		return "", err
 	}
-
-	memoryIDs := coerceInt64Slice(m["memory_ids"])
-	dryRun := coerceBool(m["dry_run"], false)
+	memoryIDs = bulkops.NormalizeCandidateIDs(memoryIDs)
 
 	// Nil-safe TG5-absent dry-run seam.
 	if dryRun && s.bulkFacade == nil {
 		out := map[string]any{
 			"dry_run":      true,
 			"would_affect": len(memoryIDs),
-			"note":         "bulk_supersede preview (facade not wired — would_affect from input only)",
+			"note":         "bulk_supersede preview (facade not wired — normalized input only)",
 		}
 		return marshalJSON(out)
 	}
@@ -245,7 +283,7 @@ func (s *Server) handleBulkSupersede(ctx context.Context, args json.RawMessage) 
 		DryRun:    dryRun,
 		Actor:     resolveGovernanceActor(identity),
 	}
-	result, err := s.bulkFacade.Execute(ctx, identity, op)
+	result, err := executeBulkFacade(s.bulkFacade, ctx, identity, op)
 	if err != nil {
 		return "", fmt.Errorf("bulk_supersede: %w", err)
 	}

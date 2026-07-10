@@ -1,0 +1,11 @@
+{
+  "task_id": "DB-BULKOPS-LEGACY-CANDIDATE-NO-AFTER",
+  "observed_at": "2026-07-10T05:26:00Z",
+  "stack": "GO",
+  "test_file": "internal/bulkops/facade_test.go",
+  "test_name": "TestFacade_BulkPromote_LegacySnapshotWithoutAfterFailsClosedAndPreservesCandidate",
+  "database": "engram_prc_bulkops_edges_green_20260710_082347",
+  "failure_reason": "A legacy candidate restore entry without an exact after-state was treated as safe; rollback overwrote concurrent candidate content, reset status to pending, and deleted the promoted memory.",
+  "runner_exit_code": 1,
+  "runner_stdout_excerpt": "expected rollback_conflict, got nil; concurrent-C overwritten; promoted changed to pending"
+}

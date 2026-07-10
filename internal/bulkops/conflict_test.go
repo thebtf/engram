@@ -12,10 +12,7 @@ package bulkops
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -24,9 +21,7 @@ import (
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 // --- Unit: detectConflicts via rollback admin gate (no DB) ---
@@ -76,19 +71,7 @@ func TestEC_F3_ErrRollbackConflict_IsDistinct(t *testing.T) {
 
 func openConflictTestDB(t *testing.T) (*gorm.DB, *gormdb.Store) {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set — skipping EC-F3 integration test")
-	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
-	require.NoError(t, err)
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	require.NoError(t, sqlDB.Ping())
-	return db, &gormdb.Store{DB: db}
+	return openTestDB(t)
 }
 
 // TestEC_F3_ConflictDetected_Integration is the primary EC-F3 acceptance test.
@@ -127,17 +110,13 @@ func TestEC_F3_ConflictDetected_Integration(t *testing.T) {
 
 	// Step 2: Capture before_state with snapshot created_at = 2 seconds ago.
 	snapshotTime := time.Now().UTC().Add(-2 * time.Second)
-	beforeStateMap := map[string]any{
-		fmt.Sprintf("%d", created.ID): created,
-	}
-	beforeStateBytes, err := json.Marshal(beforeStateMap)
-	require.NoError(t, err)
+	beforeStateBytes := memoryBeforeStateJSON(t, db, created.ID)
 
 	snap, err := models.NewBulkOpSnapshot(
 		"ec-f3-test-001",
 		models.SnapshotOpBulkDelete,
 		"master",
-		json.RawMessage(beforeStateBytes),
+		beforeStateBytes,
 	)
 	require.NoError(t, err)
 	snap.AffectedMemoryIDs = []int64{created.ID}
@@ -147,8 +126,8 @@ func TestEC_F3_ConflictDetected_Integration(t *testing.T) {
 
 	// Step 3: Simulate post-snapshot modification.
 	require.NoError(t, db.Exec(
-		`UPDATE memories SET updated_at = NOW(), content = 'post-snapshot edit' WHERE id = ?`,
-		created.ID,
+		`UPDATE memories SET updated_at = ?, content = 'post-snapshot edit' WHERE id = ?`,
+		createdSnap.CreatedAt.Add(time.Second), created.ID,
 	).Error)
 
 	// Step 4: Rollback → must return ErrRollbackConflict.
@@ -195,7 +174,7 @@ func TestEC_F3_ConflictDetected_Integration(t *testing.T) {
 		"ec-f3-test-002",
 		models.SnapshotOpBulkDelete,
 		"master",
-		json.RawMessage(beforeStateBytes),
+		beforeStateBytes,
 	)
 	require.NoError(t, err)
 	snap2.AffectedMemoryIDs = []int64{created.ID}

@@ -1,0 +1,15 @@
+{
+  "task_id": "DB-BULKOPS-SIBLING-M2",
+  "stack": "GO",
+  "observed_at": "2026-07-10T06:45:33Z",
+  "database": "engram_prc_bulkops_sibling_m2_red_20260710_094528088",
+  "test_file": "internal/bulkops/facade_test.go",
+  "test_name": "TestFacade_BulkPromote_AllRowsFailWritesExplicitFailureAudit",
+  "command": "go test ./internal/bulkops -run '^TestFacade_BulkPromote_AllRowsFailWritesExplicitFailureAudit$' -count=1",
+  "failure_reason": "A zero-success execution wrote one action=bulk_promote success-shaped audit row.",
+  "runner_stdout_excerpt": "Should be zero, but was 1; all-row failure must not emit a success-shaped bulk_promote audit; TEST_EXIT=1",
+  "database_cleanup": {
+    "sessions_before_drop": 0,
+    "residue_after_drop": 0
+  }
+}

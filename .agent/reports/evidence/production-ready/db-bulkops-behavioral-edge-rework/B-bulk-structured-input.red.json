@@ -1,0 +1,32 @@
+{
+  "phase": "RED",
+  "observed_at_utc": "2026-07-10T08:29:50.2378967Z",
+  "base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+  "databases": [
+    "engram_mkr_bedge_red_behavior_20260710a",
+    "engram_mkr_bedge_red_spy_20260710a"
+  ],
+  "behavior_command_exit_code": 1,
+  "spy_command_exit_code": 1,
+  "tests": [
+    "TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs",
+    "TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization",
+    "TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade",
+    "TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun"
+  ],
+  "observed_failures": [
+    "Lossy coercion accepted strings, booleans, objects, nested arrays, fractions, overflows, and wrong dry_run types instead of rejecting the public request.",
+    "Numbers above 2^53 lost identity and delete/supersede previews did not normalize IDs.",
+    "The facade-spy test failed to compile because the pre-change handler had no executeBulkFacade seam, proving the required pre-facade invocation assertion was not yet expressible."
+  ],
+  "representative_excerpts": [
+    "TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_promote: expected 5, actual 3",
+    "internal\\mcp\\tools_dryrun_test.go:295:21: undefined: executeBulkFacade"
+  ],
+  "database_residue": 0,
+  "activity_residue": 0,
+  "raw_logs": [
+    "01-red-behavior.log",
+    "02-red-spy-seam.log"
+  ]
+}

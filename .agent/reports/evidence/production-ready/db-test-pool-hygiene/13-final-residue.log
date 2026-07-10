@@ -1,0 +1,11 @@
+checked_utc=2026-07-10T13:00:03.1981568Z
+database_prefix=engram_mkr_dbph_
+database_residue=0
+activity_residue=0
+go_or_test_process_residue=0
+socraticode_index_residue=0
+socraticode_watcher_residue=0
+serena_generated_dir_exists=false
+temporary_worktree_residue=0
+maker_worktree_entries=1
+maker_worktree_note=the single assigned dbph worktree is intentionally retained for checker handoff

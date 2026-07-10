@@ -2,6 +2,7 @@
 package gorm
 
 import (
+	"bytes"
 	"context"
 	"database/sql/driver"
 	"encoding/json"
@@ -395,9 +396,6 @@ func (s *CandidateStore) PreserveWithMemoryAndSnapshot(
 	snapshot *models.BulkOpSnapshot,
 	actor string,
 ) (*models.CrystallizationCandidate, *models.Memory, *models.BulkOpSnapshot, error) {
-	if !candidateReviewAuditRequired(snapshot) {
-		return nil, nil, nil, fmt.Errorf("preserve_with_memory_snapshot: candidate_review snapshot is required")
-	}
 	return s.promoteWithMemoryAndSnapshotAction(ctx, snapshotStore, candidateID, mem, snapshot, actor, "preserve", "preserve_with_memory_snapshot")
 }
 
@@ -422,41 +420,40 @@ func (s *CandidateStore) promoteWithMemoryAndSnapshotAction(
 	if operation == "" {
 		operation = "promote_with_memory_snapshot"
 	}
-	if snapshot != nil && snapshotStore == nil {
-		return nil, nil, nil, fmt.Errorf("%s: snapshot store is required", operation)
+	if err := s.validateCandidateReviewSnapshotBinding(ctx, nil, snapshotStore, snapshot, reviewAction, candidateID, actor, operation); err != nil {
+		return nil, nil, nil, err
 	}
-	if candidateReviewAuditRequired(snapshot) && s.auditStore == nil {
-		return nil, nil, nil, fmt.Errorf("%s: candidate_review audit store is required", operation)
-	}
-
 	var beforeCandidate *models.CrystallizationCandidate
 	var updatedCandidate *models.CrystallizationCandidate
 	var createdMemory *models.Memory
 	var createdSnapshot *models.BulkOpSnapshot
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if snapshot != nil {
-			var err error
-			createdSnapshot, err = snapshotStore.createTx(ctx, tx, snapshot)
-			if err != nil {
-				return err
-			}
+		if err := s.validateCandidateReviewSnapshotBinding(ctx, tx, snapshotStore, snapshot, reviewAction, candidateID, actor, operation); err != nil {
+			return err
 		}
 
 		var err error
+		createdSnapshot, err = s.createCandidateReviewSnapshotTx(ctx, tx, snapshotStore, snapshot, operation)
+		if err != nil {
+			return err
+		}
+
 		beforeCandidate, updatedCandidate, createdMemory, err = s.promoteWithMemoryTx(ctx, tx, candidateID, mem)
 		if err != nil {
 			return err
 		}
 
-		if createdSnapshot != nil && createdMemory.ID != 0 {
+		if createdMemory.ID != 0 {
 			if err := snapshotStore.amendPromoteEntriesTx(ctx, tx, createdSnapshot.SnapshotID, []int64{createdMemory.ID}); err != nil {
 				return err
 			}
 		}
-		if candidateReviewAuditRequired(snapshot) {
-			return s.logCandidateReviewAuditTx(ctx, tx, reviewAction, actor, "", beforeCandidate, updatedCandidate)
+		amendedBeforeState, err := amendCandidateReviewAfterTx(ctx, tx, createdSnapshot.SnapshotID, updatedCandidate)
+		if err != nil {
+			return err
 		}
-		return nil
+		createdSnapshot.BeforeState = amendedBeforeState
+		return s.logCandidateReviewAuditTx(ctx, tx, reviewAction, actor, "", beforeCandidate, updatedCandidate)
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -538,16 +535,187 @@ func (s *CandidateStore) logPromoteAudit(candidateID int64, updatedCandidate *mo
 	}()
 }
 
-func candidateReviewAuditRequired(snapshot *models.BulkOpSnapshot) bool {
-	return snapshot != nil && snapshot.OpType == models.SnapshotOpCandidateReviewAction
-}
-
 func normalizeCandidateReviewActor(actor string) string {
 	actor = strings.TrimSpace(actor)
 	if actor == "" {
 		return "system"
 	}
 	return actor
+}
+
+func (s *CandidateStore) validateCandidateReviewSnapshotBinding(
+	ctx context.Context,
+	tx *gorm.DB,
+	snapshotStore *SnapshotStore,
+	snapshot *models.BulkOpSnapshot,
+	expectedAction string,
+	candidateID int64,
+	actor string,
+	operation string,
+) error {
+	if snapshot == nil {
+		return fmt.Errorf("%s: candidate_review snapshot is required", operation)
+	}
+	if snapshotStore == nil {
+		return fmt.Errorf("%s: candidate review snapshot store is required", operation)
+	}
+	if s.auditStore == nil {
+		return fmt.Errorf("%s: candidate_review audit store is required", operation)
+	}
+	// Candidate-review mutations accept only a constructor-shaped snapshot that
+	// has never been persisted or entered another lifecycle state. Empty status
+	// is rejected here instead of relying on SnapshotStore's legacy empty-to-
+	// committed normalization, so both preflight and transactional revalidation
+	// enforce one explicit rollback contract.
+	if strings.TrimSpace(snapshot.SnapshotID) == "" {
+		return fmt.Errorf("%s: candidate review snapshot_id is required", operation)
+	}
+	if snapshot.ID != 0 {
+		return fmt.Errorf("%s: candidate review snapshot must not have a database id before mutation", operation)
+	}
+	if snapshot.Status != models.SnapshotStatusCommitted {
+		return fmt.Errorf("%s: candidate review snapshot status must be %q", operation, models.SnapshotStatusCommitted)
+	}
+	if snapshot.RolledBackAt != nil {
+		return fmt.Errorf("%s: candidate review snapshot rolled_back_at must be nil before mutation", operation)
+	}
+	if snapshot.Pinned {
+		return fmt.Errorf("%s: candidate review snapshot must not be pinned before mutation", operation)
+	}
+	if snapshot.CreatedAt.IsZero() {
+		return fmt.Errorf("%s: candidate review snapshot created_at is required", operation)
+	}
+	if snapshot.OpType != models.SnapshotOpCandidateReviewAction {
+		return fmt.Errorf("%s: snapshot op_type must be %q", operation, models.SnapshotOpCandidateReviewAction)
+	}
+	expectedAction = strings.TrimSpace(expectedAction)
+	if snapshot.Actor != normalizeCandidateReviewActor(actor) {
+		return fmt.Errorf("%s: snapshot actor does not match review actor", operation)
+	}
+	if len(snapshot.AffectedMemoryIDs) != 0 {
+		return fmt.Errorf("%s: candidate review snapshot must not have affected memory ids before mutation", operation)
+	}
+
+	var parameters map[string]json.RawMessage
+	if err := json.Unmarshal(snapshot.Parameters, &parameters); err != nil || parameters == nil {
+		return fmt.Errorf("%s: invalid candidate review snapshot parameters", operation)
+	}
+	var parameterOperation string
+	if err := json.Unmarshal(parameters["operation"], &parameterOperation); err != nil || parameterOperation != "candidate_review_action" {
+		return fmt.Errorf("%s: snapshot parameters.operation must be %q", operation, "candidate_review_action")
+	}
+	var parameterAction string
+	if err := json.Unmarshal(parameters["action"], &parameterAction); err != nil || parameterAction != expectedAction {
+		return fmt.Errorf("%s: snapshot parameters.action must be %q", operation, expectedAction)
+	}
+	var parameterCandidateID int64
+	if err := json.Unmarshal(parameters["candidate_id"], &parameterCandidateID); err != nil || parameterCandidateID != candidateID {
+		return fmt.Errorf("%s: snapshot parameters.candidate_id must be %d", operation, candidateID)
+	}
+
+	var entries map[string]models.SnapshotEntry
+	if err := json.Unmarshal(snapshot.BeforeState, &entries); err != nil || entries == nil {
+		return fmt.Errorf("%s: invalid candidate review snapshot before_state", operation)
+	}
+	if len(entries) != 1 {
+		return fmt.Errorf("%s: candidate review snapshot before_state must contain exactly one candidate entry", operation)
+	}
+	expectedKey := fmt.Sprintf("candidate:%d", candidateID)
+	entry, ok := entries[expectedKey]
+	if !ok {
+		return fmt.Errorf("%s: candidate review snapshot before_state must contain %q", operation, expectedKey)
+	}
+	if entry.Kind != models.EntryKindRestore || len(entry.Before) == 0 || len(entry.After) != 0 {
+		return fmt.Errorf("%s: candidate review snapshot entry %q must be an unamended restore entry", operation, expectedKey)
+	}
+	var beforeCandidate models.CrystallizationCandidate
+	if err := json.Unmarshal(entry.Before, &beforeCandidate); err != nil {
+		return fmt.Errorf("%s: candidate review snapshot entry %q has invalid before payload", operation, expectedKey)
+	}
+	if beforeCandidate.ID != candidateID {
+		return fmt.Errorf("%s: candidate review snapshot entry %q has candidate id %d", operation, expectedKey, beforeCandidate.ID)
+	}
+	if snapshot.SourceSessionID != beforeCandidate.SourceSessionID {
+		return fmt.Errorf("%s: candidate review snapshot source session does not match candidate payload", operation)
+	}
+	if tx == nil {
+		return nil
+	}
+
+	var authoritativeRow candidateRow
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&authoritativeRow, candidateID).Error; err != nil {
+		return fmt.Errorf("%s: load authoritative candidate %d: %w", operation, candidateID, err)
+	}
+	authoritativeCandidate := toDomainCandidate(&authoritativeRow)
+	if snapshot.SourceSessionID != authoritativeCandidate.SourceSessionID {
+		return fmt.Errorf("%s: candidate review snapshot source session does not match authoritative candidate", operation)
+	}
+	matches, err := candidateReviewPayloadMatchesAuthoritative(&beforeCandidate, authoritativeCandidate)
+	if err != nil {
+		return fmt.Errorf("%s: compare candidate review snapshot payload: %w", operation, err)
+	}
+	if !matches {
+		return fmt.Errorf("%s: candidate review snapshot before payload does not match authoritative candidate", operation)
+	}
+	return nil
+}
+
+func candidateReviewPayloadMatchesAuthoritative(snapshotCandidate, authoritativeCandidate *models.CrystallizationCandidate) (bool, error) {
+	if snapshotCandidate == nil || authoritativeCandidate == nil {
+		return false, nil
+	}
+	if !candidateReviewTimestampsMatchPostgresPrecision(snapshotCandidate.CreatedAt, authoritativeCandidate.CreatedAt) ||
+		!candidateReviewTimestampsMatchPostgresPrecision(snapshotCandidate.UpdatedAt, authoritativeCandidate.UpdatedAt) {
+		return false, nil
+	}
+	if (snapshotCandidate.ReviewAfter == nil) != (authoritativeCandidate.ReviewAfter == nil) {
+		return false, nil
+	}
+	if snapshotCandidate.ReviewAfter != nil && !candidateReviewTimestampsMatchPostgresPrecision(*snapshotCandidate.ReviewAfter, *authoritativeCandidate.ReviewAfter) {
+		return false, nil
+	}
+
+	snapshotCopy := *snapshotCandidate
+	authoritativeCopy := *authoritativeCandidate
+	snapshotCopy.CreatedAt = time.Time{}
+	snapshotCopy.UpdatedAt = time.Time{}
+	snapshotCopy.ReviewAfter = nil
+	authoritativeCopy.CreatedAt = time.Time{}
+	authoritativeCopy.UpdatedAt = time.Time{}
+	authoritativeCopy.ReviewAfter = nil
+	snapshotJSON, err := json.Marshal(&snapshotCopy)
+	if err != nil {
+		return false, err
+	}
+	authoritativeJSON, err := json.Marshal(&authoritativeCopy)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(snapshotJSON, authoritativeJSON), nil
+}
+
+func candidateReviewTimestampsMatchPostgresPrecision(left, right time.Time) bool {
+	leftSeconds, rightSeconds := left.Unix(), right.Unix()
+	leftNanos, rightNanos := int64(left.Nanosecond()), int64(right.Nanosecond())
+	precision := int64(time.Microsecond)
+
+	switch {
+	case leftSeconds == rightSeconds:
+		if leftNanos < rightNanos {
+			return rightNanos-leftNanos < precision
+		}
+		return leftNanos-rightNanos < precision
+	case leftSeconds < rightSeconds:
+		if leftSeconds != rightSeconds-1 {
+			return false
+		}
+		return int64(time.Second)-leftNanos+rightNanos < precision
+	default:
+		if rightSeconds != leftSeconds-1 {
+			return false
+		}
+		return int64(time.Second)-rightNanos+leftNanos < precision
+	}
 }
 
 func (s *CandidateStore) logCandidateReviewAuditTx(
@@ -662,15 +830,19 @@ func (s *CandidateStore) transitionWithSnapshot(
 	snapshot *models.BulkOpSnapshot,
 	actor string,
 ) (*models.CrystallizationCandidate, *models.BulkOpSnapshot, error) {
-	if s.auditStore == nil {
-		return nil, nil, fmt.Errorf("%s_with_snapshot: candidate_review audit store is required", action)
+	operation := action + "_with_snapshot"
+	if err := s.validateCandidateReviewSnapshotBinding(ctx, nil, snapshotStore, snapshot, action, id, actor, operation); err != nil {
+		return nil, nil, err
 	}
-
 	var updatedCandidate *models.CrystallizationCandidate
 	var createdSnapshot *models.BulkOpSnapshot
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.validateCandidateReviewSnapshotBinding(ctx, tx, snapshotStore, snapshot, action, id, actor, operation); err != nil {
+			return err
+		}
+
 		var err error
-		createdSnapshot, err = s.createCandidateReviewSnapshotTx(ctx, tx, snapshotStore, snapshot, action+"_with_snapshot")
+		createdSnapshot, err = s.createCandidateReviewSnapshotTx(ctx, tx, snapshotStore, snapshot, operation)
 		if err != nil {
 			return err
 		}
@@ -680,12 +852,73 @@ func (s *CandidateStore) transitionWithSnapshot(
 			return err
 		}
 		updatedCandidate = afterCandidate
+		amendedBeforeState, err := amendCandidateReviewAfterTx(ctx, tx, createdSnapshot.SnapshotID, afterCandidate)
+		if err != nil {
+			return err
+		}
+		createdSnapshot.BeforeState = amendedBeforeState
 		return s.logCandidateReviewAuditTx(ctx, tx, action, actor, detail, beforeCandidate, afterCandidate)
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 	return updatedCandidate, createdSnapshot, nil
+}
+
+func amendCandidateReviewAfterTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	snapshotID string,
+	afterCandidate *models.CrystallizationCandidate,
+) (json.RawMessage, error) {
+	if afterCandidate == nil || afterCandidate.ID <= 0 {
+		return nil, fmt.Errorf("amend_candidate_review_after: authoritative candidate is required")
+	}
+
+	var row snapshotRow
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("snapshot_id = ?", snapshotID).
+		First(&row).Error; err != nil {
+		return nil, fmt.Errorf("amend_candidate_review_after: get snapshot %q: %w", snapshotID, err)
+	}
+	if row.OpType != string(models.SnapshotOpCandidateReviewAction) {
+		return nil, fmt.Errorf("amend_candidate_review_after: snapshot %q has op_type %q", snapshotID, row.OpType)
+	}
+
+	entries := make(map[string]models.SnapshotEntry)
+	if err := json.Unmarshal([]byte(row.BeforeState), &entries); err != nil {
+		return nil, fmt.Errorf("amend_candidate_review_after: decode before_state: %w", err)
+	}
+	key := fmt.Sprintf("candidate:%d", afterCandidate.ID)
+	entry, ok := entries[key]
+	if !ok {
+		return nil, fmt.Errorf("amend_candidate_review_after: snapshot %q missing entry %q", snapshotID, key)
+	}
+	if entry.Kind != models.EntryKindRestore {
+		return nil, fmt.Errorf("amend_candidate_review_after: entry %q has kind %q", key, entry.Kind)
+	}
+
+	afterJSON, err := json.Marshal(afterCandidate)
+	if err != nil {
+		return nil, fmt.Errorf("amend_candidate_review_after: serialize candidate %d: %w", afterCandidate.ID, err)
+	}
+	entry.After = afterJSON
+	entries[key] = entry
+	amended, err := json.Marshal(entries)
+	if err != nil {
+		return nil, fmt.Errorf("amend_candidate_review_after: serialize before_state: %w", err)
+	}
+
+	result := tx.WithContext(ctx).Model(&snapshotRow{}).
+		Where("snapshot_id = ?", snapshotID).
+		Update("before_state", JSONRaw(amended))
+	if result.Error != nil {
+		return nil, fmt.Errorf("amend_candidate_review_after: update snapshot %q: %w", snapshotID, result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return nil, fmt.Errorf("amend_candidate_review_after: update snapshot %q affected %d rows", snapshotID, result.RowsAffected)
+	}
+	return json.RawMessage(amended), nil
 }
 
 // TransitionToSuperseded transitions a pending candidate to superseded.

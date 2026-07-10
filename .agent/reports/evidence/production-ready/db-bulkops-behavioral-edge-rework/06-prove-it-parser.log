@@ -1,0 +1,842 @@
+base_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+head_sha=68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef
+database=engram_mkr_bedge_prove_parser_20260710a
+command=go test -p=1 ./internal/mcp -run ^(TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs|TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization|TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade|TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun)$ -count=1
+started_utc=2026-07-10T08:38:14.4065370Z
+--- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs (0.00s)
+    --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/null_arguments (0.00s)
+            tools_dryrun_test.go:251:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:251
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "arguments"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/null_arguments
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/array_arguments (0.00s)
+            tools_dryrun_test.go:251:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:251
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "arguments"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/array_arguments
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/string_arguments (0.00s)
+            tools_dryrun_test.go:251:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:251
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "arguments"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/string_arguments
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/malformed_arguments (0.00s)
+            tools_dryrun_test.go:251:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:251
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "arguments"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/malformed_arguments
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/missing_id_field (0.00s)
+            tools_dryrun_test.go:260:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:260
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "candidate_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/missing_id_field
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_null (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "candidate_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_null
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_top_level_string (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "candidate_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_top_level_string
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_string_member (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "candidate_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_string_member
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_boolean_member (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "candidate_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_boolean_member
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_object_member (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "candidate_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_object_member
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_nested_array (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "candidate_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_nested_array
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_fraction (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "candidate_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_fraction
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_positive_overflow (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "candidate_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_positive_overflow
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_negative_overflow (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "candidate_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_negative_overflow
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_mixed_invalid (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "candidate_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/ids_mixed_invalid
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_string (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_string
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_number (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_number
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_null (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_null
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_object (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_object
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_array (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_promote/dry_run_array
+    --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/null_arguments (0.00s)
+            tools_dryrun_test.go:251:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:251
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "arguments"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/null_arguments
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/array_arguments (0.00s)
+            tools_dryrun_test.go:251:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:251
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "arguments"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/array_arguments
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/string_arguments (0.00s)
+            tools_dryrun_test.go:251:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:251
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "arguments"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/string_arguments
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/malformed_arguments (0.00s)
+            tools_dryrun_test.go:251:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:251
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "arguments"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/malformed_arguments
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/missing_id_field (0.00s)
+            tools_dryrun_test.go:260:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:260
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/missing_id_field
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_null (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_null
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_top_level_string (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_top_level_string
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_string_member (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_string_member
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_boolean_member (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_boolean_member
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_object_member (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_object_member
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_nested_array (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_nested_array
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_fraction (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_fraction
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_positive_overflow (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_positive_overflow
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_negative_overflow (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_negative_overflow
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_mixed_invalid (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/ids_mixed_invalid
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_string (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_string
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_number (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_number
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_null (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_null
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_object (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_object
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_array (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_delete/dry_run_array
+    --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede (0.00s)
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/null_arguments (0.00s)
+            tools_dryrun_test.go:251:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:251
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "arguments"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/null_arguments
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/array_arguments (0.00s)
+            tools_dryrun_test.go:251:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:251
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "arguments"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/array_arguments
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/string_arguments (0.00s)
+            tools_dryrun_test.go:251:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:251
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "arguments"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/string_arguments
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/malformed_arguments (0.00s)
+            tools_dryrun_test.go:251:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:251
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "arguments"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/malformed_arguments
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/missing_id_field (0.00s)
+            tools_dryrun_test.go:260:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:260
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/missing_id_field
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_null (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_null
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_top_level_string (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_top_level_string
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_string_member (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_string_member
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_boolean_member (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_boolean_member
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_object_member (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_object_member
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_nested_array (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_nested_array
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_fraction (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_fraction
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_positive_overflow (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_positive_overflow
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_negative_overflow (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_negative_overflow
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_mixed_invalid (0.00s)
+            tools_dryrun_test.go:271:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:271
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "memory_ids"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/ids_mixed_invalid
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_string (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_string
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_number (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_number
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_null (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_null
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_object (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_object
+        --- FAIL: TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_array (0.00s)
+            tools_dryrun_test.go:283:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:283
+                    Error:          "bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores" does not contain "dry_run"
+                    Test:           TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs/bulk_supersede/dry_run_array
+--- FAIL: TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization (0.00s)
+    --- FAIL: TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_promote (0.00s)
+        tools_dryrun_test.go:301:
+                Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:301
+                Error:          Received unexpected error:
+                                bulk_promote: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores
+                Test:           TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_promote
+    --- FAIL: TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_delete (0.00s)
+        tools_dryrun_test.go:301:
+                Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:301
+                Error:          Received unexpected error:
+                                bulk_delete: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores
+                Test:           TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_delete
+    --- FAIL: TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_supersede (0.00s)
+        tools_dryrun_test.go:301:
+                Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:301
+                Error:          Received unexpected error:
+                                bulk_supersede: facade not available — set ENGRAM_VNEXT_F_ENABLED=true and wire stores
+                Test:           TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization/bulk_supersede
+--- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade (0.00s)
+    --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote (0.00s)
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/missing_id_field (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/missing_id_field
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/null_arguments (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/null_arguments
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/array_arguments (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/array_arguments
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/string_arguments (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/string_arguments
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/malformed_arguments (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/malformed_arguments
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_0 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_0
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_1 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_1
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_2 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_2
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_3 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_3
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_4 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_4
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_5 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_5
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_6 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_6
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_7 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_7
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_8 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_8
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_9 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_ids_9
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_dry_run_0 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_dry_run_0
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_dry_run_1 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_dry_run_1
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_dry_run_2 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_dry_run_2
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_dry_run_3 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_dry_run_3
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_dry_run_4 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_promote/invalid_dry_run_4
+    --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete (0.00s)
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/missing_id_field (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/missing_id_field
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/null_arguments (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/null_arguments
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/array_arguments (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/array_arguments
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/string_arguments (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/string_arguments
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/malformed_arguments (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/malformed_arguments
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_0 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_0
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_1 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_1
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_2 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_2
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_3 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_3
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_4 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_4
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_5 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_5
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_6 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_6
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_7 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_7
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_8 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_8
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_9 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_ids_9
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_dry_run_0 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_dry_run_0
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_dry_run_1 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_dry_run_1
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_dry_run_2 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_dry_run_2
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_dry_run_3 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_dry_run_3
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_dry_run_4 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_delete/invalid_dry_run_4
+    --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede (0.00s)
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/missing_id_field (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/missing_id_field
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/null_arguments (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/null_arguments
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/array_arguments (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/array_arguments
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/string_arguments (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/string_arguments
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/malformed_arguments (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/malformed_arguments
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_0 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_0
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_1 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_1
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_2 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_2
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_3 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_3
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_4 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_4
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_5 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_5
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_6 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_6
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_7 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_7
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_8 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_8
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_9 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_ids_9
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_dry_run_0 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_dry_run_0
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_dry_run_1 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_dry_run_1
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_dry_run_2 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_dry_run_2
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_dry_run_3 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_dry_run_3
+        --- FAIL: TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_dry_run_4 (0.00s)
+            tools_dryrun_test.go:382:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:382
+                    Error:          An error is expected but got nil.
+                    Test:           TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade/bulk_supersede/invalid_dry_run_4
+--- FAIL: TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun (0.00s)
+    --- FAIL: TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_promote (0.00s)
+        --- FAIL: TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_promote/missing (0.00s)
+            tools_dryrun_test.go:438:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:438
+                    Error:          Not equal:
+                                    expected: []int64{-9223372036854775808, 1, 9007199254740992, 9007199254740993, 9223372036854775807}
+                                    actual  : []int64{}
+
+                                    Diff:
+                                    --- Expected
+                                    +++ Actual
+                                    @@ -1,7 +1,2 @@
+                                    -([]int64) (len=5) {
+                                    - (int64) -9223372036854775808,
+                                    - (int64) 1,
+                                    - (int64) 9007199254740992,
+                                    - (int64) 9007199254740993,
+                                    - (int64) 9223372036854775807
+                                    +([]int64) {
+                                     }
+                    Test:           TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_promote/missing
+        --- FAIL: TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_promote/false (0.00s)
+            tools_dryrun_test.go:438:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:438
+                    Error:          Not equal:
+                                    expected: []int64{-9223372036854775808, 1, 9007199254740992, 9007199254740993, 9223372036854775807}
+                                    actual  : []int64{}
+
+                                    Diff:
+                                    --- Expected
+                                    +++ Actual
+                                    @@ -1,7 +1,2 @@
+                                    -([]int64) (len=5) {
+                                    - (int64) -9223372036854775808,
+                                    - (int64) 1,
+                                    - (int64) 9007199254740992,
+                                    - (int64) 9007199254740993,
+                                    - (int64) 9223372036854775807
+                                    +([]int64) {
+                                     }
+                    Test:           TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_promote/false
+        --- FAIL: TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_promote/true (0.00s)
+            tools_dryrun_test.go:435:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:435
+                    Error:          Not equal:
+                                    expected: true
+                                    actual  : false
+                    Test:           TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_promote/true
+            tools_dryrun_test.go:438:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:438
+                    Error:          Not equal:
+                                    expected: []int64{-9223372036854775808, 1, 9007199254740992, 9007199254740993, 9223372036854775807}
+                                    actual  : []int64{}
+
+                                    Diff:
+                                    --- Expected
+                                    +++ Actual
+                                    @@ -1,7 +1,2 @@
+                                    -([]int64) (len=5) {
+                                    - (int64) -9223372036854775808,
+                                    - (int64) 1,
+                                    - (int64) 9007199254740992,
+                                    - (int64) 9007199254740993,
+                                    - (int64) 9223372036854775807
+                                    +([]int64) {
+                                     }
+                    Test:           TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_promote/true
+    --- FAIL: TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_delete (0.00s)
+        --- FAIL: TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_delete/missing (0.00s)
+            tools_dryrun_test.go:441:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:441
+                    Error:          Not equal:
+                                    expected: []int64{-9223372036854775808, 1, 9007199254740992, 9007199254740993, 9223372036854775807}
+                                    actual  : []int64{}
+
+                                    Diff:
+                                    --- Expected
+                                    +++ Actual
+                                    @@ -1,7 +1,2 @@
+                                    -([]int64) (len=5) {
+                                    - (int64) -9223372036854775808,
+                                    - (int64) 1,
+                                    - (int64) 9007199254740992,
+                                    - (int64) 9007199254740993,
+                                    - (int64) 9223372036854775807
+                                    +([]int64) {
+                                     }
+                    Test:           TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_delete/missing
+        --- FAIL: TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_delete/false (0.00s)
+            tools_dryrun_test.go:441:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:441
+                    Error:          Not equal:
+                                    expected: []int64{-9223372036854775808, 1, 9007199254740992, 9007199254740993, 9223372036854775807}
+                                    actual  : []int64{}
+
+                                    Diff:
+                                    --- Expected
+                                    +++ Actual
+                                    @@ -1,7 +1,2 @@
+                                    -([]int64) (len=5) {
+                                    - (int64) -9223372036854775808,
+                                    - (int64) 1,
+                                    - (int64) 9007199254740992,
+                                    - (int64) 9007199254740993,
+                                    - (int64) 9223372036854775807
+                                    +([]int64) {
+                                     }
+                    Test:           TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_delete/false
+        --- FAIL: TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_delete/true (0.00s)
+            tools_dryrun_test.go:435:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:435
+                    Error:          Not equal:
+                                    expected: true
+                                    actual  : false
+                    Test:           TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_delete/true
+            tools_dryrun_test.go:441:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:441
+                    Error:          Not equal:
+                                    expected: []int64{-9223372036854775808, 1, 9007199254740992, 9007199254740993, 9223372036854775807}
+                                    actual  : []int64{}
+
+                                    Diff:
+                                    --- Expected
+                                    +++ Actual
+                                    @@ -1,7 +1,2 @@
+                                    -([]int64) (len=5) {
+                                    - (int64) -9223372036854775808,
+                                    - (int64) 1,
+                                    - (int64) 9007199254740992,
+                                    - (int64) 9007199254740993,
+                                    - (int64) 9223372036854775807
+                                    +([]int64) {
+                                     }
+                    Test:           TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_delete/true
+    --- FAIL: TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_supersede (0.00s)
+        --- FAIL: TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_supersede/missing (0.00s)
+            tools_dryrun_test.go:441:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:441
+                    Error:          Not equal:
+                                    expected: []int64{-9223372036854775808, 1, 9007199254740992, 9007199254740993, 9223372036854775807}
+                                    actual  : []int64{}
+
+                                    Diff:
+                                    --- Expected
+                                    +++ Actual
+                                    @@ -1,7 +1,2 @@
+                                    -([]int64) (len=5) {
+                                    - (int64) -9223372036854775808,
+                                    - (int64) 1,
+                                    - (int64) 9007199254740992,
+                                    - (int64) 9007199254740993,
+                                    - (int64) 9223372036854775807
+                                    +([]int64) {
+                                     }
+                    Test:           TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_supersede/missing
+        --- FAIL: TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_supersede/false (0.00s)
+            tools_dryrun_test.go:441:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:441
+                    Error:          Not equal:
+                                    expected: []int64{-9223372036854775808, 1, 9007199254740992, 9007199254740993, 9223372036854775807}
+                                    actual  : []int64{}
+
+                                    Diff:
+                                    --- Expected
+                                    +++ Actual
+                                    @@ -1,7 +1,2 @@
+                                    -([]int64) (len=5) {
+                                    - (int64) -9223372036854775808,
+                                    - (int64) 1,
+                                    - (int64) 9007199254740992,
+                                    - (int64) 9007199254740993,
+                                    - (int64) 9223372036854775807
+                                    +([]int64) {
+                                     }
+                    Test:           TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_supersede/false
+        --- FAIL: TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_supersede/true (0.00s)
+            tools_dryrun_test.go:435:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:435
+                    Error:          Not equal:
+                                    expected: true
+                                    actual  : false
+                    Test:           TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_supersede/true
+            tools_dryrun_test.go:441:
+                    Error Trace:    D:/Dev/engram/.agent/worktrees/prc-db-bulkops/internal/mcp/tools_dryrun_test.go:441
+                    Error:          Not equal:
+                                    expected: []int64{-9223372036854775808, 1, 9007199254740992, 9007199254740993, 9223372036854775807}
+                                    actual  : []int64{}
+
+                                    Diff:
+                                    --- Expected
+                                    +++ Actual
+                                    @@ -1,7 +1,2 @@
+                                    -([]int64) (len=5) {
+                                    - (int64) -9223372036854775808,
+                                    - (int64) 1,
+                                    - (int64) 9007199254740992,
+                                    - (int64) 9007199254740993,
+                                    - (int64) 9223372036854775807
+                                    +([]int64) {
+                                     }
+                    Test:           TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun/bulk_supersede/true
+FAIL
+FAIL    github.com/thebtf/engram/internal/mcp    0.139s
+FAIL
+test_exit=1
+active_sessions_before_terminate=0
+database_residue=0
+activity_residue=0
+finished_utc=2026-07-10T08:38:19.0298344Z

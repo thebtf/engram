@@ -15,6 +15,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/thebtf/engram/internal/reviewpacket"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -30,11 +31,63 @@ func openCandidateTestDB(t *testing.T) *gorm.DB {
 
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close candidate test DB pool: %v", err)
+		}
+	})
 	require.NoError(t, sqlDB.Ping())
 
 	// Ensure migration chain is applied.
 	require.NoError(t, runMigrations(db), "runMigrations")
 	return db
+}
+
+// TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose protects
+// the test-process connection budget. Each child owns the pool it opens: the
+// pool must remain usable for the child's body, then disappear before t.Run
+// returns control to the parent.
+func TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose(t *testing.T) {
+	observer := openCandidateTestDB(t)
+	baseline := candidateTestDBOtherSessionCount(t, observer)
+
+	for i := 0; i < 4; i++ {
+		t.Run(fmt.Sprintf("owner-%d", i), func(t *testing.T) {
+			child := openCandidateTestDB(t)
+
+			var one int
+			require.NoError(t, child.Raw("SELECT 1").Scan(&one).Error)
+			require.Equal(t, 1, one, "owner pool must remain usable during the subtest")
+
+			live := candidateTestDBOtherSessionCount(t, observer)
+			t.Logf("baseline_sessions=%d child_live_sessions=%d", baseline, live)
+			require.Greater(t, live, baseline, "child pool must be observable before owner cleanup")
+		})
+
+		deadline := time.Now().Add(time.Second)
+		after := candidateTestDBOtherSessionCount(t, observer)
+		for after != baseline && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			after = candidateTestDBOtherSessionCount(t, observer)
+		}
+		t.Logf("baseline_sessions=%d sessions_after_owner_cleanup=%d", baseline, after)
+		if after != baseline {
+			t.Errorf("child pool leaked past owner cleanup: baseline=%d after=%d", baseline, after)
+		}
+	}
+}
+
+func candidateTestDBOtherSessionCount(t *testing.T, observer *gorm.DB) int64 {
+	t.Helper()
+
+	var count int64
+	require.NoError(t, observer.Raw(`
+		SELECT count(*)
+		FROM pg_stat_activity
+		WHERE datname = current_database()
+		  AND pid <> pg_backend_pid()
+	`).Scan(&count).Error)
+	return count
 }
 
 // TestCandidateStore_CRUDRoundtrip creates, retrieves, and lists a candidate.
@@ -465,14 +518,8 @@ func TestCandidateStore_PromoteWithMemoryAndSnapshot_AmendFailureRollsBackPromot
 	var memCountBefore int64
 	require.NoError(t, db.Model(&Memory{}).Count(&memCountBefore).Error)
 
-	snapshot, err := models.NewBulkOpSnapshot(
-		fmt.Sprintf("candidate-promote-amend-failure-%d", time.Now().UnixNano()),
-		models.SnapshotOpCandidateReviewAction,
-		"system",
-		json.RawMessage(`{}`),
-	)
+	snapshot, err := reviewpacket.NewCandidateReviewActionSnapshot("promote", createdCandidate, "agent/tester")
 	require.NoError(t, err)
-	snapshot.SourceSessionID = createdCandidate.SourceSessionID
 
 	suffix := time.Now().UnixNano()
 	triggerName := fmt.Sprintf("test_fail_snapshot_amend_%d", suffix)
@@ -655,6 +702,451 @@ EXECUTE FUNCTION %s()`, triggerName, functionName)).Error)
 	require.Zero(t, snapshotCount)
 }
 
+type candidateReviewSnapshotSeamCase struct {
+	name          string
+	action        string
+	wantStatus    models.CandidateStatus
+	createsMemory bool
+}
+
+func candidateReviewSnapshotSeamCases() []candidateReviewSnapshotSeamCase {
+	return []candidateReviewSnapshotSeamCase{
+		{name: "promote", action: "promote", wantStatus: models.CandidateStatusPromoted, createsMemory: true},
+		{name: "preserve", action: "preserve", wantStatus: models.CandidateStatusPromoted, createsMemory: true},
+		{name: "reject", action: "reject", wantStatus: models.CandidateStatusRejected},
+		{name: "suppress", action: "suppress", wantStatus: models.CandidateStatusRejected},
+		{name: "supersede", action: "supersede", wantStatus: models.CandidateStatusSuperseded},
+	}
+}
+
+func candidateReviewStoreTestMemory(candidate *models.CrystallizationCandidate) *models.Memory {
+	return &models.Memory{
+		Content:       candidate.ProposedContent,
+		Project:       "test-project",
+		EpistemicType: "decision",
+		Tier:          "episodic",
+		SourceAgent:   "crystallization",
+	}
+}
+
+func callCandidateReviewSnapshotSeam(
+	ctx context.Context,
+	cs *CandidateStore,
+	snapshotStore *SnapshotStore,
+	seam candidateReviewSnapshotSeamCase,
+	candidate *models.CrystallizationCandidate,
+	snapshot *models.BulkOpSnapshot,
+	actor string,
+) error {
+	switch seam.name {
+	case "promote":
+		_, _, _, err := cs.PromoteWithMemoryAndSnapshot(ctx, snapshotStore, candidate.ID, candidateReviewStoreTestMemory(candidate), snapshot, actor)
+		return err
+	case "preserve":
+		_, _, _, err := cs.PreserveWithMemoryAndSnapshot(ctx, snapshotStore, candidate.ID, candidateReviewStoreTestMemory(candidate), snapshot, actor)
+		return err
+	case "reject":
+		_, _, err := cs.TransitionToRejectedWithSnapshot(ctx, snapshotStore, candidate.ID, "not durable enough", snapshot, actor)
+		return err
+	case "suppress":
+		_, _, err := cs.TransitionToSuppressedWithSnapshot(ctx, snapshotStore, candidate.ID, "too noisy", snapshot, actor)
+		return err
+	case "supersede":
+		_, _, err := cs.TransitionToSupersededWithSnapshot(ctx, snapshotStore, candidate.ID, snapshot, actor)
+		return err
+	default:
+		return fmt.Errorf("unknown candidate-review seam %q", seam.name)
+	}
+}
+
+func setCandidateReviewSnapshotParameter(t *testing.T, snapshot *models.BulkOpSnapshot, key string, value any) {
+	t.Helper()
+	var parameters map[string]any
+	require.NoError(t, json.Unmarshal(snapshot.Parameters, &parameters))
+	parameters[key] = value
+	updated, err := json.Marshal(parameters)
+	require.NoError(t, err)
+	snapshot.Parameters = updated
+}
+
+func candidateReviewSnapshotEntries(t *testing.T, snapshot *models.BulkOpSnapshot) map[string]models.SnapshotEntry {
+	t.Helper()
+	var entries map[string]models.SnapshotEntry
+	require.NoError(t, json.Unmarshal(snapshot.BeforeState, &entries))
+	return entries
+}
+
+func setCandidateReviewSnapshotEntries(t *testing.T, snapshot *models.BulkOpSnapshot, entries map[string]models.SnapshotEntry) {
+	t.Helper()
+	updated, err := json.Marshal(entries)
+	require.NoError(t, err)
+	snapshot.BeforeState = updated
+}
+
+func countCandidateReviewTestRows(t *testing.T, db *gorm.DB) (memories int64, snapshots int64) {
+	t.Helper()
+	require.NoError(t, db.Model(&Memory{}).Count(&memories).Error)
+	require.NoError(t, db.Model(&snapshotRow{}).Count(&snapshots).Error)
+	return memories, snapshots
+}
+
+func TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectInvalidBindingsWithoutWrites(t *testing.T) {
+	db := openCandidateTestDB(t)
+	ctx := context.Background()
+
+	invalidCases := []string{
+		"nil_snapshot",
+		"nil_snapshot_store",
+		"nil_audit_store",
+		"wrong_op_type",
+		"wrong_operation_parameter",
+		"wrong_action_parameter",
+		"wrong_candidate_parameter",
+		"wrong_actor",
+		"wrong_before_key",
+		"wrong_before_payload_id",
+		"prepopulated_after",
+		"extra_before_entry",
+		"prepopulated_affected_memory_ids",
+		"wrong_source_session",
+		"forged_payload_and_source_session",
+	}
+
+	for _, seam := range candidateReviewSnapshotSeamCases() {
+		seam := seam
+		for _, invalidCase := range invalidCases {
+			invalidCase := invalidCase
+			t.Run(seam.name+"/"+invalidCase, func(t *testing.T) {
+				auditStore := NewAuditStore(db)
+				candidateStore := NewCandidateStore(db, auditStore)
+				snapshotStore := NewSnapshotStore(db)
+				candidate := createCandidateReviewStoreTestCandidate(t, candidateStore, ctx, seam.name+"-"+invalidCase)
+				actor := "agent/tester"
+				snapshot := newCandidateReviewStoreTestSnapshot(t, candidate, seam.action, actor)
+
+				invokeStore := candidateStore
+				invokeSnapshotStore := snapshotStore
+				invokeSnapshot := snapshot
+				invokeActor := actor
+
+				switch invalidCase {
+				case "nil_snapshot":
+					invokeSnapshot = nil
+				case "nil_snapshot_store":
+					invokeSnapshotStore = nil
+				case "nil_audit_store":
+					invokeStore = NewCandidateStore(db, nil)
+				case "wrong_op_type":
+					snapshot.OpType = models.SnapshotOpBulkPromote
+				case "wrong_operation_parameter":
+					setCandidateReviewSnapshotParameter(t, snapshot, "operation", "bulk_promote")
+				case "wrong_action_parameter":
+					wrongAction := "reject"
+					if seam.action == wrongAction {
+						wrongAction = "promote"
+					}
+					setCandidateReviewSnapshotParameter(t, snapshot, "action", wrongAction)
+				case "wrong_candidate_parameter":
+					setCandidateReviewSnapshotParameter(t, snapshot, "candidate_id", candidate.ID+1)
+				case "wrong_actor":
+					snapshot.Actor = "agent/other"
+				case "wrong_before_key":
+					entries := candidateReviewSnapshotEntries(t, snapshot)
+					entry := entries[fmt.Sprintf("candidate:%d", candidate.ID)]
+					delete(entries, fmt.Sprintf("candidate:%d", candidate.ID))
+					entries[fmt.Sprintf("candidate:%d", candidate.ID+1)] = entry
+					setCandidateReviewSnapshotEntries(t, snapshot, entries)
+				case "wrong_before_payload_id":
+					entries := candidateReviewSnapshotEntries(t, snapshot)
+					key := fmt.Sprintf("candidate:%d", candidate.ID)
+					entry := entries[key]
+					var beforeCandidate models.CrystallizationCandidate
+					require.NoError(t, json.Unmarshal(entry.Before, &beforeCandidate))
+					beforeCandidate.ID++
+					entry.Before, _ = json.Marshal(&beforeCandidate)
+					entries[key] = entry
+					setCandidateReviewSnapshotEntries(t, snapshot, entries)
+				case "prepopulated_after":
+					entries := candidateReviewSnapshotEntries(t, snapshot)
+					key := fmt.Sprintf("candidate:%d", candidate.ID)
+					entry := entries[key]
+					entry.After = append(json.RawMessage(nil), entry.Before...)
+					entries[key] = entry
+					setCandidateReviewSnapshotEntries(t, snapshot, entries)
+				case "extra_before_entry":
+					entries := candidateReviewSnapshotEntries(t, snapshot)
+					entries["memory:999"] = models.SnapshotEntry{Kind: models.EntryKindDelete}
+					setCandidateReviewSnapshotEntries(t, snapshot, entries)
+				case "prepopulated_affected_memory_ids":
+					snapshot.AffectedMemoryIDs = []int64{999}
+				case "wrong_source_session":
+					snapshot.SourceSessionID = "session-for-another-candidate"
+				case "forged_payload_and_source_session":
+					entries := candidateReviewSnapshotEntries(t, snapshot)
+					key := fmt.Sprintf("candidate:%d", candidate.ID)
+					entry := entries[key]
+					var beforeCandidate models.CrystallizationCandidate
+					require.NoError(t, json.Unmarshal(entry.Before, &beforeCandidate))
+					beforeCandidate.ProposedContent = "forged rollback content"
+					beforeCandidate.SourceSessionID = "forged-source-session"
+					entry.Before, _ = json.Marshal(&beforeCandidate)
+					entries[key] = entry
+					setCandidateReviewSnapshotEntries(t, snapshot, entries)
+					snapshot.SourceSessionID = beforeCandidate.SourceSessionID
+				default:
+					t.Fatalf("unhandled invalid case %q", invalidCase)
+				}
+
+				memoriesBefore, snapshotsBefore := countCandidateReviewTestRows(t, db)
+				auditsBefore := countAuditRows(t, db, "candidate_review")
+
+				err := callCandidateReviewSnapshotSeam(ctx, invokeStore, invokeSnapshotStore, seam, candidate, invokeSnapshot, invokeActor)
+
+				memoriesAfter, snapshotsAfter := countCandidateReviewTestRows(t, db)
+				auditsAfter := countAuditRows(t, db, "candidate_review")
+				storedCandidate, getErr := candidateStore.Get(ctx, candidate.ID)
+				require.NoError(t, getErr)
+
+				require.Error(t, err, "invalid candidate-review snapshot binding must fail closed")
+				require.Equal(t, models.CandidateStatusPending, storedCandidate.Status)
+				require.Nil(t, storedCandidate.PromotedMemoryID)
+				require.Equal(t, memoriesBefore, memoriesAfter, "invalid binding must not create memory rows")
+				require.Equal(t, snapshotsBefore, snapshotsAfter, "invalid binding must not create snapshot rows")
+				require.Equal(t, auditsBefore, auditsAfter, "invalid binding must not create candidate_review audit rows")
+			})
+		}
+	}
+}
+
+func TestCandidateStore_AllCandidateReviewSnapshotSeamsCommitExactlyOneAudit(t *testing.T) {
+	db := openCandidateTestDB(t)
+	ctx := context.Background()
+	auditStore := NewAuditStore(db)
+	candidateStore := NewCandidateStore(db, auditStore)
+	snapshotStore := NewSnapshotStore(db)
+
+	for _, seam := range candidateReviewSnapshotSeamCases() {
+		seam := seam
+		t.Run(seam.name, func(t *testing.T) {
+			candidate := createCandidateReviewStoreTestCandidate(t, candidateStore, ctx, "valid-"+seam.name)
+			actor := "  agent/tester  "
+			snapshot := newCandidateReviewStoreTestSnapshot(t, candidate, seam.action, actor)
+			memoriesBefore, snapshotsBefore := countCandidateReviewTestRows(t, db)
+			auditsBefore := countAuditRows(t, db, "candidate_review")
+
+			err := callCandidateReviewSnapshotSeam(ctx, candidateStore, snapshotStore, seam, candidate, snapshot, actor)
+
+			require.NoError(t, err)
+			storedCandidate, getErr := candidateStore.Get(ctx, candidate.ID)
+			require.NoError(t, getErr)
+			require.Equal(t, seam.wantStatus, storedCandidate.Status)
+			memoriesAfter, snapshotsAfter := countCandidateReviewTestRows(t, db)
+			auditsAfter := countAuditRows(t, db, "candidate_review")
+			require.Equal(t, snapshotsBefore+1, snapshotsAfter)
+			require.Equal(t, auditsBefore+1, auditsAfter, "valid candidate-review seam must write exactly one synchronous audit row")
+			if seam.createsMemory {
+				require.Equal(t, memoriesBefore+1, memoriesAfter)
+				require.NotNil(t, storedCandidate.PromotedMemoryID)
+			} else {
+				require.Equal(t, memoriesBefore, memoriesAfter)
+				require.Nil(t, storedCandidate.PromotedMemoryID)
+			}
+		})
+	}
+}
+
+func TestCandidateStore_AllCandidateReviewSnapshotSeamsRejectTimestampDurationOverflowWithoutWrites(t *testing.T) {
+	db := openCandidateTestDB(t)
+	ctx := context.Background()
+	auditStore := NewAuditStore(db)
+	candidateStore := NewCandidateStore(db, auditStore)
+	snapshotStore := NewSnapshotStore(db)
+
+	for _, seam := range candidateReviewSnapshotSeamCases() {
+		seam := seam
+		t.Run(seam.name, func(t *testing.T) {
+			candidate := createCandidateReviewStoreTestCandidate(t, candidateStore, ctx, "timestamp-overflow-"+seam.name)
+			actor := "agent/tester"
+			snapshot := newCandidateReviewStoreTestSnapshot(t, candidate, seam.action, actor)
+
+			entries := candidateReviewSnapshotEntries(t, snapshot)
+			key := fmt.Sprintf("candidate:%d", candidate.ID)
+			entry := entries[key]
+			var forgedCandidate models.CrystallizationCandidate
+			require.NoError(t, json.Unmarshal(entry.Before, &forgedCandidate))
+			forgedCandidate.CreatedAt = time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC)
+			forgedCandidate.UpdatedAt = forgedCandidate.CreatedAt
+			var err error
+			entry.Before, err = json.Marshal(&forgedCandidate)
+			require.NoError(t, err)
+			entries[key] = entry
+			setCandidateReviewSnapshotEntries(t, snapshot, entries)
+
+			persistedBefore, err := candidateStore.Get(ctx, candidate.ID)
+			require.NoError(t, err)
+			memoriesBefore, snapshotsBefore := countCandidateReviewTestRows(t, db)
+			auditsBefore := countAuditRows(t, db, "candidate_review")
+
+			err = callCandidateReviewSnapshotSeam(ctx, candidateStore, snapshotStore, seam, candidate, snapshot, actor)
+
+			memoriesAfter, snapshotsAfter := countCandidateReviewTestRows(t, db)
+			auditsAfter := countAuditRows(t, db, "candidate_review")
+			storedCandidate, getErr := candidateStore.Get(ctx, candidate.ID)
+			require.NoError(t, getErr)
+
+			require.Error(t, err, "timestamp values outside time.Duration range must fail closed")
+			require.Equal(t, persistedBefore, storedCandidate, "rejected snapshot must leave the candidate unchanged")
+			require.Equal(t, memoriesBefore, memoriesAfter, "rejected snapshot must not create memory rows")
+			require.Equal(t, snapshotsBefore, snapshotsAfter, "rejected snapshot must not create snapshot rows")
+			require.Equal(t, auditsBefore, auditsAfter, "rejected snapshot must not create candidate_review audit rows")
+		})
+	}
+}
+
+type candidateReviewInvalidInitialSnapshotCase struct {
+	name   string
+	mutate func(*models.BulkOpSnapshot)
+}
+
+func candidateReviewInvalidInitialSnapshotCases() []candidateReviewInvalidInitialSnapshotCase {
+	return []candidateReviewInvalidInitialSnapshotCase{
+		{name: "empty_status", mutate: func(snapshot *models.BulkOpSnapshot) {
+			snapshot.Status = ""
+		}},
+		{name: "preview_status", mutate: func(snapshot *models.BulkOpSnapshot) {
+			snapshot.Status = models.SnapshotStatusPreview
+		}},
+		{name: "rolled_back_status", mutate: func(snapshot *models.BulkOpSnapshot) {
+			snapshot.Status = models.SnapshotStatusRolledBack
+		}},
+		{name: "rolled_back_at_set", mutate: func(snapshot *models.BulkOpSnapshot) {
+			rolledBackAt := time.Now().UTC().Add(-time.Minute)
+			snapshot.RolledBackAt = &rolledBackAt
+		}},
+		{name: "pinned", mutate: func(snapshot *models.BulkOpSnapshot) {
+			snapshot.Pinned = true
+		}},
+		{name: "zero_created_at", mutate: func(snapshot *models.BulkOpSnapshot) {
+			snapshot.CreatedAt = time.Time{}
+		}},
+		{name: "persisted_id", mutate: func(snapshot *models.BulkOpSnapshot) {
+			snapshot.ID = 99
+		}},
+		{name: "blank_snapshot_id", mutate: func(snapshot *models.BulkOpSnapshot) {
+			snapshot.SnapshotID = "   "
+		}},
+	}
+}
+
+func TestCandidateStore_CandidateReviewInitialSnapshotShapeIsRejectedAtEveryValidationBoundary(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("before_database_access", func(t *testing.T) {
+		candidate, err := models.NewCrystallizationCandidate(
+			"session-initial-shape-preflight",
+			"candidate snapshot shape must fail before database access",
+			"rule",
+			models.CandidateOptions{AffectedProjects: []string{"test-project"}},
+		)
+		require.NoError(t, err)
+		candidate.ID = 42
+		candidateStore := NewCandidateStore(nil, NewAuditStore(nil))
+		snapshotStore := NewSnapshotStore(nil)
+
+		for _, seam := range candidateReviewSnapshotSeamCases() {
+			seam := seam
+			for _, invalidCase := range candidateReviewInvalidInitialSnapshotCases() {
+				invalidCase := invalidCase
+				t.Run(seam.name+"/"+invalidCase.name, func(t *testing.T) {
+					actor := "agent/tester"
+					snapshot := newCandidateReviewStoreTestSnapshot(t, candidate, seam.action, actor)
+					invalidCase.mutate(snapshot)
+					var callErr error
+					require.NotPanics(t, func() {
+						callErr = callCandidateReviewSnapshotSeam(ctx, candidateStore, snapshotStore, seam, candidate, snapshot, actor)
+					}, "invalid initial snapshot shape must be rejected before dereferencing the database")
+					require.Error(t, callErr)
+				})
+			}
+		}
+	})
+
+	db := openCandidateTestDB(t)
+	auditStore := NewAuditStore(db)
+	candidateStore := NewCandidateStore(db, auditStore)
+	snapshotStore := NewSnapshotStore(db)
+
+	t.Run("public_seams_without_writes", func(t *testing.T) {
+		for _, seam := range candidateReviewSnapshotSeamCases() {
+			seam := seam
+			for _, invalidCase := range candidateReviewInvalidInitialSnapshotCases() {
+				invalidCase := invalidCase
+				t.Run(seam.name+"/"+invalidCase.name, func(t *testing.T) {
+					candidate := createCandidateReviewStoreTestCandidate(t, candidateStore, ctx, "initial-shape-"+seam.name+"-"+invalidCase.name)
+					actor := "agent/tester"
+					snapshot := newCandidateReviewStoreTestSnapshot(t, candidate, seam.action, actor)
+					invalidCase.mutate(snapshot)
+
+					persistedBefore, err := candidateStore.Get(ctx, candidate.ID)
+					require.NoError(t, err)
+					memoriesBefore, snapshotsBefore := countCandidateReviewTestRows(t, db)
+					auditsBefore := countAuditRows(t, db, "candidate_review")
+
+					err = callCandidateReviewSnapshotSeam(ctx, candidateStore, snapshotStore, seam, candidate, snapshot, actor)
+
+					memoriesAfter, snapshotsAfter := countCandidateReviewTestRows(t, db)
+					auditsAfter := countAuditRows(t, db, "candidate_review")
+					storedCandidate, getErr := candidateStore.Get(ctx, candidate.ID)
+					require.NoError(t, getErr)
+
+					require.Error(t, err, "non-canonical initial candidate-review snapshots must fail closed")
+					require.Equal(t, persistedBefore, storedCandidate, "rejected snapshot must leave the candidate unchanged")
+					require.Equal(t, memoriesBefore, memoriesAfter, "rejected snapshot must not create memory rows")
+					require.Equal(t, snapshotsBefore, snapshotsAfter, "rejected snapshot must not create snapshot rows")
+					require.Equal(t, auditsBefore, auditsAfter, "rejected snapshot must not create candidate_review audit rows")
+				})
+			}
+		}
+	})
+
+	t.Run("transaction_revalidation", func(t *testing.T) {
+		for _, seam := range candidateReviewSnapshotSeamCases() {
+			seam := seam
+			for _, invalidCase := range candidateReviewInvalidInitialSnapshotCases() {
+				invalidCase := invalidCase
+				t.Run(seam.name+"/"+invalidCase.name, func(t *testing.T) {
+					candidate := createCandidateReviewStoreTestCandidate(t, candidateStore, ctx, "tx-revalidation-"+seam.name+"-"+invalidCase.name)
+					actor := "agent/tester"
+					snapshot := newCandidateReviewStoreTestSnapshot(t, candidate, seam.action, actor)
+					operation := seam.action + "_with_snapshot"
+					require.NoError(t, candidateStore.validateCandidateReviewSnapshotBinding(ctx, nil, snapshotStore, snapshot, seam.action, candidate.ID, actor, operation))
+					invalidCase.mutate(snapshot)
+
+					persistedBefore, err := candidateStore.Get(ctx, candidate.ID)
+					require.NoError(t, err)
+					memoriesBefore, snapshotsBefore := countCandidateReviewTestRows(t, db)
+					auditsBefore := countAuditRows(t, db, "candidate_review")
+
+					err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+						return candidateStore.validateCandidateReviewSnapshotBinding(ctx, tx, snapshotStore, snapshot, seam.action, candidate.ID, actor, operation)
+					})
+
+					memoriesAfter, snapshotsAfter := countCandidateReviewTestRows(t, db)
+					auditsAfter := countAuditRows(t, db, "candidate_review")
+					storedCandidate, getErr := candidateStore.Get(ctx, candidate.ID)
+					require.NoError(t, getErr)
+
+					require.Error(t, err, "transaction-bound validation must reject shape drift after preflight")
+					require.Equal(t, persistedBefore, storedCandidate, "transaction revalidation must leave the candidate unchanged")
+					require.Equal(t, memoriesBefore, memoriesAfter)
+					require.Equal(t, snapshotsBefore, snapshotsAfter)
+					require.Equal(t, auditsBefore, auditsAfter)
+				})
+			}
+		}
+	})
+}
+
 func createCandidateReviewStoreTestCandidate(t *testing.T, cs *CandidateStore, ctx context.Context, suffix string) *models.CrystallizationCandidate {
 	t.Helper()
 	candidate, err := models.NewCrystallizationCandidate(
@@ -672,14 +1164,8 @@ func createCandidateReviewStoreTestCandidate(t *testing.T, cs *CandidateStore, c
 
 func newCandidateReviewStoreTestSnapshot(t *testing.T, candidate *models.CrystallizationCandidate, action string, actor string) *models.BulkOpSnapshot {
 	t.Helper()
-	snapshot, err := models.NewBulkOpSnapshot(
-		fmt.Sprintf("candidate-review-%s-%d", action, time.Now().UnixNano()),
-		models.SnapshotOpCandidateReviewAction,
-		actor,
-		json.RawMessage(`{}`),
-	)
+	snapshot, err := reviewpacket.NewCandidateReviewActionSnapshot(action, candidate, actor)
 	require.NoError(t, err)
-	snapshot.SourceSessionID = candidate.SourceSessionID
 	return snapshot
 }
 

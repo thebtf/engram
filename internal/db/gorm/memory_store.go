@@ -16,6 +16,7 @@ import (
 
 	"github.com/lib/pq"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/thebtf/engram/pkg/models"
 )
@@ -1709,6 +1710,96 @@ func (s *MemoryStore) MaxActiveID(ctx context.Context) (int64, error) {
 	return maxID, nil
 }
 
+// LockRawByIDsTx loads and row-locks raw memory rows inside tx.
+// IDs are de-duplicated and sorted so overlapping rollback transactions acquire
+// locks in a stable order instead of introducing an avoidable deadlock cycle.
+func (s *MemoryStore) LockRawByIDsTx(ctx context.Context, tx *gorm.DB, ids []int64) (map[int64]*Memory, error) {
+	rowsByID := make(map[int64]*Memory)
+	if len(ids) == 0 {
+		return rowsByID, nil
+	}
+	if tx == nil {
+		return nil, fmt.Errorf("lockRawByIDsTx: transaction must not be nil")
+	}
+
+	seen := make(map[int64]struct{}, len(ids))
+	orderedIDs := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		orderedIDs = append(orderedIDs, id)
+	}
+	sort.Slice(orderedIDs, func(i, j int) bool { return orderedIDs[i] < orderedIDs[j] })
+	if len(orderedIDs) == 0 {
+		return rowsByID, nil
+	}
+
+	var rows []Memory
+	if err := tx.WithContext(ctx).
+		Unscoped().
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id IN ?", orderedIDs).
+		Order("id ASC").
+		Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("lockRawByIDsTx: %w", err)
+	}
+	for i := range rows {
+		rowsByID[rows[i].ID] = &rows[i]
+	}
+	return rowsByID, nil
+}
+
+func rawMemoryRestoreUpdates(mem *models.Memory) map[string]any {
+	return map[string]any{
+		"project":                    mem.Project,
+		"content":                    mem.Content,
+		"tags":                       models.JSONStringArray(mem.Tags),
+		"source_agent":               mem.SourceAgent,
+		"edited_by":                  mem.EditedBy,
+		"status":                     mem.Status,
+		"tier":                       mem.Tier,
+		"epistemic_type":             mem.EpistemicType,
+		"defeasibility":              mem.Defeasibility,
+		"promotion_target":           mem.PromotionTarget,
+		"privacy_scope":              mem.PrivacyScope,
+		"source_workstation_id":      mem.SourceWorkstationID,
+		"source_sessions":            pq.StringArray(mem.SourceSessions),
+		"owner_principal":            mem.OwnerPrincipal,
+		"owner_principal_kind":       mem.OwnerPrincipalKind,
+		"agent_visibility":           mem.AgentVisibility,
+		"domain":                     mem.Domain,
+		"created_at":                 mem.CreatedAt,
+		"updated_at":                 mem.UpdatedAt,
+		"deleted_at":                 mem.DeletedAt,
+		"last_retrieved_at":          mem.LastRetrievedAt,
+		"last_confirmed":             mem.LastConfirmed,
+		"review_after":               mem.ReviewAfter,
+		"valid_from":                 mem.ValidFrom,
+		"valid_until":                mem.ValidUntil,
+		"supersedes_id":              mem.SupersedesID,
+		"superseded_by":              mem.SupersededBy,
+		"importance_base":            mem.ImportanceBase,
+		"ts_alpha":                   mem.TsAlpha,
+		"ts_beta":                    mem.TsBeta,
+		"confidence":                 mem.Confidence,
+		"stability":                  mem.Stability,
+		"retrievability":             mem.Retrievability,
+		"citation_count":             mem.CitationCount,
+		"injection_count":            mem.InjectionCount,
+		"access_count":               mem.AccessCount,
+		"recurrence_count":           mem.RecurrenceCount,
+		"consecutive_citation_count": mem.ConsecutiveCitationCount,
+		// version is the sole persisted-field exception. It is an optimistic-
+		// concurrency generation, not historical row content; restoring an older
+		// value would create an ABA window for stale version-checked writers.
+	}
+}
+
 // RestoreRaw performs a full field restore of a memory row for rollback operations.
 //
 // Unlike Update (which only touches 4 fields and bumps version), RestoreRaw writes
@@ -1725,34 +1816,11 @@ func (s *MemoryStore) RestoreRaw(ctx context.Context, mem *models.Memory) error 
 	if mem.ID == 0 {
 		return fmt.Errorf("restoreRaw: memory ID must be non-zero")
 	}
-	updates := map[string]any{
-		"content":          mem.Content,
-		"tags":             models.JSONStringArray(mem.Tags),
-		"source_agent":     mem.SourceAgent,
-		"edited_by":        mem.EditedBy,
-		"status":           mem.Status,
-		"tier":             mem.Tier,
-		"epistemic_type":   mem.EpistemicType,
-		"defeasibility":    mem.Defeasibility,
-		"promotion_target": mem.PromotionTarget,
-		"privacy_scope":    mem.PrivacyScope,
-		"importance_base":  mem.ImportanceBase,
-		"ts_alpha":         mem.TsAlpha,
-		"ts_beta":          mem.TsBeta,
-		"confidence":       mem.Confidence,
-		"stability":        mem.Stability,
-		"retrievability":   mem.Retrievability,
-		"supersedes_id":    mem.SupersedesID,
-		"superseded_by":    mem.SupersededBy,
-		"deleted_at":       mem.DeletedAt,
-		"updated_at":       mem.UpdatedAt,
-		// version is deliberately not restored — keep current row version so conflicts are auditable.
-	}
 	result := s.db.WithContext(ctx).
 		Unscoped().
 		Model(&Memory{}).
 		Where("id = ?", mem.ID).
-		Updates(updates)
+		Updates(rawMemoryRestoreUpdates(mem))
 	if result.Error != nil {
 		return fmt.Errorf("restoreRaw memory id=%d: %w", mem.ID, result.Error)
 	}
@@ -1772,33 +1840,11 @@ func (s *MemoryStore) RestoreRawTx(ctx context.Context, tx *gorm.DB, mem *models
 	if mem.ID == 0 {
 		return fmt.Errorf("restoreRawTx: memory ID must be non-zero")
 	}
-	updates := map[string]any{
-		"content":          mem.Content,
-		"tags":             models.JSONStringArray(mem.Tags),
-		"source_agent":     mem.SourceAgent,
-		"edited_by":        mem.EditedBy,
-		"status":           mem.Status,
-		"tier":             mem.Tier,
-		"epistemic_type":   mem.EpistemicType,
-		"defeasibility":    mem.Defeasibility,
-		"promotion_target": mem.PromotionTarget,
-		"privacy_scope":    mem.PrivacyScope,
-		"importance_base":  mem.ImportanceBase,
-		"ts_alpha":         mem.TsAlpha,
-		"ts_beta":          mem.TsBeta,
-		"confidence":       mem.Confidence,
-		"stability":        mem.Stability,
-		"retrievability":   mem.Retrievability,
-		"supersedes_id":    mem.SupersedesID,
-		"superseded_by":    mem.SupersededBy,
-		"deleted_at":       mem.DeletedAt,
-		"updated_at":       mem.UpdatedAt,
-	}
 	result := tx.WithContext(ctx).
 		Unscoped().
 		Model(&Memory{}).
 		Where("id = ?", mem.ID).
-		Updates(updates)
+		Updates(rawMemoryRestoreUpdates(mem))
 	if result.Error != nil {
 		return fmt.Errorf("restoreRawTx memory id=%d: %w", mem.ID, result.Error)
 	}

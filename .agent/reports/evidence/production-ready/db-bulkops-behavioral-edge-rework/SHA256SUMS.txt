@@ -1,0 +1,40 @@
+SHA-256 manifest for DB-BULKOPS behavioral-edge rework.
+The manifest intentionally excludes itself.
+
+e5102fc82df34cc85e2039cf62ce96155b725d3728518a196476eb2351b458c2  internal/db/gorm/candidate_store.go
+8fb5258f01557ca7991b5a211f51107e69e4acd5740c5b254e63308f8969e4ff  internal/db/gorm/candidate_store_test.go
+89ca7932ccafe7fa52c79099d6ecbca20a04aa7faff94ff5ec92c9d68dc7cefa  internal/mcp/tools_bulkops.go
+2a4fbe5e29548b3df2eb45f16ab8e08e7938e9e95a8604e4a6f7cfeac05d0a90  internal/mcp/tools_dryrun_test.go
+c240b459475b6adf82c21156e691a0c33b547e0d84ce5dcd5acbfad72a9e1d90  .agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md
+2a28984547833010d88ea54984a0019671b015a3cb0e4b0021a1b9061653dd3f  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/01-red-behavior.log
+85498937b436c88dcfe5b90f90a973fa981aea83d54e247b7482bf774d8ba8fb  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/02-red-spy-seam.log
+b1d8800aaeaafe788888afcb06d9a7aff8f0d9daf49ed81dd508da3398ca60c4  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/03-green-focused.log
+abefd3e0fb0f54ddafb5a66c94e62add263919303c29080d8cbb17a9fecdb8c2  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/04-green-repeat20.log
+579c484a1582b02bf3f889f6a78ad72561ff4183fa1a1f000bd4334834c65fd6  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/05-prove-it-candidate.log
+830a038c705670a169263d6e7a6e1a9cf205678685c1d9627fccb36eb6039f2a  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/06-prove-it-parser.log
+cbe28b1a1f1c5d70fa52719963f80479d3ffe48694f2680cfc933b5e57d65bd0  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/07-post-prove-green.log
+0194a116302b6c52dcb6afe6c2ba6cca157c71bdfd3808e0264345ac5c5996ae  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/08-full-packages.log
+98439330ddbb90c42e84b48eeed5e38b37844f6ca4cb450780aa9a3ab2b8d24b  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/09-legacy-compat.log
+11e1dc2b378a381480f122023bdb3f488c89911862fac8d567870aa768d428c9  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/10-full-gorm.log
+a2de0f9f45b61b0bea7e8af9e09beb1b6f8b0a01e666c4fe0ebe5eeb98718a8c  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/11-full-mcp.log
+89c1378677eac6666d80271d911922abd3fa06173b0b4f8729aca47e8c247cf3  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/12-race-focused.log
+bb715715ce14a1828b24c20e4a7e5d6ad5e51dc2f90a68dbd55ed63157189593  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/13-vet.log
+db9bb770a062b9e6642dd8c6d6fea31e6a29a26638a5bb6ba6add062d0ffab90  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/14-coverage.log
+0bcbb3cbdbc5923b1f23e9a0db6c0e63a14ed373f4261cc74476874fdcaf13f3  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/15-cover-functions.log
+9dd91963763500496146c6d0ab0e066dd10c5c7ad16c1a751baeddcaa9956937  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/16-final-residue.log
+0b783aacd7d74680a1df4cae7a17d25004330b18afaec4b64b1352f7e84609c3  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/17-review-red-authoritative-binding.log
+07e5498ffeced631f856062ffb625bf2d66bb704dd0ef2351c149a80da8fd24f  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/18-review-green-authoritative-binding.log
+1602588251c80c486ba19f964735c616df26c4146e1bcfb828a75f9c76d2e183  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/19-review-green-authoritative-binding.log
+a3104b089b02ceda788990ddb7ec9a2da375f1f6ece88126162435e6a1dea22b  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/20-review-repeat20.log
+49aa5a6cb698c8508529d1267fec2a674591939b4ef1600a059e95fe0f7b773d  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/21-review-race-focused.log
+01d417c93f189f6847e1f859930823053b93876038a6e75aee839bca5ea74260  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/22-review-vet.log
+bb02a4e743d4d4d135c5b98461ad68dea8871f0f73afd48aadf15bf0f5fe4045  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/23-review-coverage.log
+b3ff6f175364824a81801a4c00d45c4710fd5b6c24cfa2f7b9402b759eea8c3d  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/24-review-cover-functions.log
+3c7ea6ce11279100e6d566f6ec7006e8344b6625660d19be4a6cc0b5cb49402b  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/25-review-cover-functions.log
+a84299a00aa34d222761f70d5df62689afc07870590e23f0a097dc510dee5d30  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/26-review-full-gorm.log
+3873bfb6896c9aede28079372c51c16011b307b880174b560a615fc9ba5c0b70  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/27-review-full-mcp.log
+84914266ac9e2aae449eae713d8f0e5558fe4cdeb01ce119f6ef26e9f3418b1b  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/A-candidate-review-snapshot-binding.red.json
+21fdf6d0e388db9209e3598c3c7b29021bf7e5a0f5a9dc738159d95de10933a9  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/B-bulk-structured-input.red.json
+807341616e0e93827c970bc166598157778d58d664d6c0e6a4a504706f0dce5f  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/coverage.out
+1dc790ebb00bd2a33c2569fe72792f03963bd9613b2190a8f636873707eb5008  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/DB-BULKOPS-BEHAVIORAL-EDGE-REWORK.final.json
+f49e485bb531dae52b6de24c481e58ea68baccdc9744fd79e906ca29828b3a5f  .agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/Invoke-MakerGo.ps1

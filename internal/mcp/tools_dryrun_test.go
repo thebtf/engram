@@ -9,12 +9,14 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/bulkops"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -96,7 +98,7 @@ func TestBulkPromote_DryRun_NilFacade(t *testing.T) {
 	adminID := auth.Identity{Role: auth.RoleAdmin, Source: auth.SourceMaster}
 	ctx := auth.WithIdentity(context.Background(), adminID)
 
-	args := json.RawMessage(`{"candidate_ids": [1, 2, 3], "dry_run": true}`)
+	args := json.RawMessage(`{"candidate_ids": [2, 0, 1, 2, 1, 0], "dry_run": true}`)
 
 	result, err := s.handleBulkPromote(ctx, args)
 	require.NoError(t, err, "bulk_promote dry_run with nil facade must not error")
@@ -105,7 +107,8 @@ func TestBulkPromote_DryRun_NilFacade(t *testing.T) {
 	var out map[string]any
 	require.NoError(t, json.Unmarshal([]byte(result), &out))
 	assert.Equal(t, true, out["dry_run"])
-	assert.Equal(t, float64(3), out["would_affect"], "would_affect must equal len(candidate_ids)")
+	assert.Equal(t, float64(2), out["would_affect"],
+		"nil-facade preview must use the facade's sorted unique non-zero candidate-ID contract")
 }
 
 // TestBulkDelete_DryRun_NilFacade verifies bulk_delete dry_run=true
@@ -176,6 +179,271 @@ func TestBulkOps_FlagOff_NotAdvertised(t *testing.T) {
 		assert.NotEqual(t, "bulk_promote", tool.Name)
 		assert.NotEqual(t, "bulk_delete", tool.Name)
 		assert.NotEqual(t, "bulk_supersede", tool.Name)
+	}
+}
+
+type bulkStructuredInputToolCase struct {
+	name    string
+	idField string
+}
+
+func bulkStructuredInputToolCases() []bulkStructuredInputToolCase {
+	return []bulkStructuredInputToolCase{
+		{name: "bulk_promote", idField: "candidate_ids"},
+		{name: "bulk_delete", idField: "memory_ids"},
+		{name: "bulk_supersede", idField: "memory_ids"},
+	}
+}
+
+func bulkToolAdminContext() context.Context {
+	return auth.WithIdentity(context.Background(), auth.Identity{
+		Role:   auth.RoleAdmin,
+		Source: auth.SourceMaster,
+	})
+}
+
+func TestBulkOps_PublicDispatchRejectsInvalidStructuredInputs(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+
+	idCases := []struct {
+		name  string
+		value string
+	}{
+		{name: "null", value: "null"},
+		{name: "top_level_string", value: `"1"`},
+		{name: "string_member", value: `[1,"2"]`},
+		{name: "boolean_member", value: `[1,true]`},
+		{name: "object_member", value: `[1,{"id":2}]`},
+		{name: "nested_array", value: `[1,[2]]`},
+		{name: "fraction", value: `[1,1.5]`},
+		{name: "positive_overflow", value: `[9223372036854775808]`},
+		{name: "negative_overflow", value: `[-9223372036854775809]`},
+		{name: "mixed_invalid", value: `[1,9007199254740993,"2",3]`},
+	}
+	dryRunCases := []struct {
+		name  string
+		value string
+	}{
+		{name: "string", value: `"true"`},
+		{name: "number", value: `1`},
+		{name: "null", value: `null`},
+		{name: "object", value: `{}`},
+		{name: "array", value: `[]`},
+	}
+
+	for _, toolCase := range bulkStructuredInputToolCases() {
+		toolCase := toolCase
+		t.Run(toolCase.name, func(t *testing.T) {
+			for _, topLevelCase := range []struct {
+				name string
+				args json.RawMessage
+			}{
+				{name: "null_arguments", args: json.RawMessage(`null`)},
+				{name: "array_arguments", args: json.RawMessage(`[]`)},
+				{name: "string_arguments", args: json.RawMessage(`"invalid"`)},
+				{name: "malformed_arguments", args: json.RawMessage(`{`)},
+			} {
+				topLevelCase := topLevelCase
+				t.Run(topLevelCase.name, func(t *testing.T) {
+					s := NewServer(ServerOptions{Version: "test"})
+					result, err := s.callTool(bulkToolAdminContext(), toolCase.name, topLevelCase.args)
+					require.Error(t, err)
+					assert.Contains(t, err.Error(), "arguments")
+					assert.Empty(t, result)
+				})
+			}
+
+			t.Run("missing_id_field", func(t *testing.T) {
+				s := NewServer(ServerOptions{Version: "test"})
+				result, err := s.callTool(bulkToolAdminContext(), toolCase.name, json.RawMessage(`{"dry_run":true}`))
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), toolCase.idField)
+				assert.Empty(t, result)
+			})
+
+			for _, inputCase := range idCases {
+				inputCase := inputCase
+				t.Run("ids_"+inputCase.name, func(t *testing.T) {
+					s := NewServer(ServerOptions{Version: "test"})
+					args := json.RawMessage(fmt.Sprintf(`{"%s":%s,"dry_run":true}`, toolCase.idField, inputCase.value))
+					result, err := s.callTool(bulkToolAdminContext(), toolCase.name, args)
+					require.Error(t, err)
+					assert.Contains(t, err.Error(), toolCase.idField)
+					assert.Empty(t, result)
+				})
+			}
+
+			for _, inputCase := range dryRunCases {
+				inputCase := inputCase
+				t.Run("dry_run_"+inputCase.name, func(t *testing.T) {
+					s := NewServer(ServerOptions{Version: "test"})
+					args := json.RawMessage(fmt.Sprintf(`{"%s":[1],"dry_run":%s}`, toolCase.idField, inputCase.value))
+					result, err := s.callTool(bulkToolAdminContext(), toolCase.name, args)
+					require.Error(t, err)
+					assert.Contains(t, err.Error(), "dry_run")
+					assert.Empty(t, result)
+				})
+			}
+		})
+	}
+}
+
+func TestBulkOps_PublicDispatchPreservesExactIntegralIDsBeforeNormalization(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+
+	const exactIDs = `[1.0,1e0,9007199254740992,9007199254740993,9223372036854775807,-9223372036854775808,0,9007199254740993]`
+	for _, toolCase := range bulkStructuredInputToolCases() {
+		toolCase := toolCase
+		t.Run(toolCase.name, func(t *testing.T) {
+			s := NewServer(ServerOptions{Version: "test"})
+			args := json.RawMessage(fmt.Sprintf(`{"%s":%s,"dry_run":true}`, toolCase.idField, exactIDs))
+			result, err := s.callTool(bulkToolAdminContext(), toolCase.name, args)
+			require.NoError(t, err)
+
+			var out map[string]any
+			require.NoError(t, json.Unmarshal([]byte(result), &out))
+			assert.Equal(t, true, out["dry_run"])
+			assert.Equal(t, float64(5), out["would_affect"])
+		})
+	}
+}
+
+func TestBulkOps_InvalidStructuredInputsDoNotInvokeWiredFacade(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+
+	originalExecute := executeBulkFacade
+	t.Cleanup(func() { executeBulkFacade = originalExecute })
+
+	invocations := 0
+	executeBulkFacade = func(_ *bulkops.Facade, _ context.Context, _ auth.Identity, _ bulkops.BulkOp) (*bulkops.ExecuteResult, error) {
+		invocations++
+		return &bulkops.ExecuteResult{}, nil
+	}
+
+	idValues := []string{
+		"null",
+		`"1"`,
+		`[1,"2"]`,
+		`[1,true]`,
+		`[1,{"id":2}]`,
+		`[1,[2]]`,
+		`[1,1.5]`,
+		`[9223372036854775808]`,
+		`[-9223372036854775809]`,
+		`[1,9007199254740993,"2",3]`,
+	}
+	dryRunValues := []string{`"true"`, `1`, `null`, `{}`, `[]`}
+
+	for _, toolCase := range bulkStructuredInputToolCases() {
+		toolCase := toolCase
+		t.Run(toolCase.name, func(t *testing.T) {
+			s := NewServer(ServerOptions{Version: "test"})
+			s.bulkFacade = bulkops.NewFacade(nil, nil, nil, nil)
+
+			requests := []struct {
+				name          string
+				args          json.RawMessage
+				expectedField string
+			}{
+				{name: "missing_id_field", args: json.RawMessage(`{}`), expectedField: toolCase.idField},
+				{name: "null_arguments", args: json.RawMessage(`null`), expectedField: "arguments"},
+				{name: "array_arguments", args: json.RawMessage(`[]`), expectedField: "arguments"},
+				{name: "string_arguments", args: json.RawMessage(`"invalid"`), expectedField: "arguments"},
+				{name: "malformed_arguments", args: json.RawMessage(`{`), expectedField: "arguments"},
+			}
+			for i, value := range idValues {
+				requests = append(requests, struct {
+					name          string
+					args          json.RawMessage
+					expectedField string
+				}{
+					name:          fmt.Sprintf("invalid_ids_%d", i),
+					args:          json.RawMessage(fmt.Sprintf(`{"%s":%s}`, toolCase.idField, value)),
+					expectedField: toolCase.idField,
+				})
+			}
+			for i, value := range dryRunValues {
+				requests = append(requests, struct {
+					name          string
+					args          json.RawMessage
+					expectedField string
+				}{
+					name:          fmt.Sprintf("invalid_dry_run_%d", i),
+					args:          json.RawMessage(fmt.Sprintf(`{"%s":[1],"dry_run":%s}`, toolCase.idField, value)),
+					expectedField: "dry_run",
+				})
+			}
+
+			for _, request := range requests {
+				request := request
+				t.Run(request.name, func(t *testing.T) {
+					invocations = 0
+					result, err := s.callTool(bulkToolAdminContext(), toolCase.name, request.args)
+					require.Error(t, err)
+					assert.Contains(t, err.Error(), request.expectedField)
+					assert.Empty(t, result)
+					assert.Zero(t, invocations, "invalid public input must be rejected before facade invocation")
+				})
+			}
+		})
+	}
+}
+
+func TestBulkOps_WiredFacadeReceivesExactNormalizedIDsAndStrictDryRun(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+
+	originalExecute := executeBulkFacade
+	t.Cleanup(func() { executeBulkFacade = originalExecute })
+
+	const exactIDs = `[1.0,1e0,9007199254740992,9007199254740993,9223372036854775807,-9223372036854775808,0,9007199254740993]`
+	expectedIDs := []int64{-9223372036854775808, 1, 9007199254740992, 9007199254740993, 9223372036854775807}
+
+	for _, toolCase := range bulkStructuredInputToolCases() {
+		toolCase := toolCase
+		t.Run(toolCase.name, func(t *testing.T) {
+			s := NewServer(ServerOptions{Version: "test"})
+			s.bulkFacade = bulkops.NewFacade(nil, nil, nil, nil)
+
+			for _, dryRunCase := range []struct {
+				name  string
+				raw   string
+				value bool
+			}{
+				{name: "missing", value: false},
+				{name: "false", raw: `,"dry_run":false`, value: false},
+				{name: "true", raw: `,"dry_run":true`, value: true},
+			} {
+				dryRunCase := dryRunCase
+				t.Run(dryRunCase.name, func(t *testing.T) {
+					invocations := 0
+					var captured bulkops.BulkOp
+					executeBulkFacade = func(_ *bulkops.Facade, _ context.Context, _ auth.Identity, op bulkops.BulkOp) (*bulkops.ExecuteResult, error) {
+						invocations++
+						captured = op
+						return &bulkops.ExecuteResult{
+							DryRun:        op.DryRun,
+							WouldAffect:   len(op.CandidateIDs) + len(op.MemoryIDs),
+							AffectedCount: len(op.CandidateIDs) + len(op.MemoryIDs),
+						}, nil
+					}
+
+					args := json.RawMessage(fmt.Sprintf(`{"%s":%s%s}`, toolCase.idField, exactIDs, dryRunCase.raw))
+					result, err := s.callTool(bulkToolAdminContext(), toolCase.name, args)
+					require.NoError(t, err)
+					assert.NotEmpty(t, result)
+					assert.Equal(t, 1, invocations)
+					assert.Equal(t, dryRunCase.value, captured.DryRun)
+
+					if toolCase.name == "bulk_promote" {
+						assert.Equal(t, expectedIDs, captured.CandidateIDs)
+						assert.Empty(t, captured.MemoryIDs)
+					} else {
+						assert.Equal(t, expectedIDs, captured.MemoryIDs)
+						assert.Empty(t, captured.CandidateIDs)
+					}
+				})
+			}
+		})
 	}
 }
 
