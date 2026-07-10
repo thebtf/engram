@@ -146,6 +146,7 @@ func fromDomainSnapshot(s *models.BulkOpSnapshot) *snapshotRow {
 		bs = JSONRaw(`{}`)
 	}
 	r := &snapshotRow{
+		CreatedAt:         s.CreatedAt.UTC(),
 		SnapshotID:        s.SnapshotID,
 		OpType:            string(s.OpType),
 		Actor:             s.Actor,
@@ -205,6 +206,23 @@ func (s *SnapshotStore) Get(ctx context.Context, snapshotID string) (*models.Bul
 	return toDomainSnapshot(&row), nil
 }
 
+// GetForUpdateTx retrieves and locks a snapshot row inside tx. Rollback uses
+// this as its first lock so concurrent attempts cannot both evaluate a
+// committed snapshot and proceed toward restore.
+func (s *SnapshotStore) GetForUpdateTx(ctx context.Context, tx *gorm.DB, snapshotID string) (*models.BulkOpSnapshot, error) {
+	if tx == nil {
+		return nil, fmt.Errorf("snapshot_store get_for_update %q: transaction must not be nil", snapshotID)
+	}
+	var row snapshotRow
+	if err := tx.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("snapshot_id = ?", snapshotID).
+		First(&row).Error; err != nil {
+		return nil, fmt.Errorf("snapshot_store get_for_update %q: %w", snapshotID, err)
+	}
+	return toDomainSnapshot(&row), nil
+}
+
 // GetByID retrieves a snapshot by its numeric primary key.
 // Returns gorm.ErrRecordNotFound if absent.
 func (s *SnapshotStore) GetByID(ctx context.Context, id int64) (*models.BulkOpSnapshot, error) {
@@ -241,13 +259,22 @@ func (s *SnapshotStore) List(ctx context.Context, opType models.SnapshotOpType, 
 
 // MarkRolledBack transitions the snapshot status to rolled_back and sets rolled_back_at.
 func (s *SnapshotStore) MarkRolledBack(ctx context.Context, snapshotID string) error {
-	now := time.Now().UTC()
-	res := s.db.WithContext(ctx).
+	return s.MarkRolledBackTx(ctx, s.db, snapshotID, time.Now().UTC())
+}
+
+// MarkRolledBackTx performs the committed -> rolled_back compare-and-set on tx.
+// The caller supplies the timestamp so the status transition can be part of a
+// larger atomic rollback transaction.
+func (s *SnapshotStore) MarkRolledBackTx(ctx context.Context, tx *gorm.DB, snapshotID string, rolledBackAt time.Time) error {
+	if tx == nil {
+		return fmt.Errorf("snapshot_store mark_rolled_back %q: transaction must not be nil", snapshotID)
+	}
+	res := tx.WithContext(ctx).
 		Model(&snapshotRow{}).
 		Where("snapshot_id = ? AND status = 'committed'", snapshotID).
 		Updates(map[string]any{
 			"status":         string(models.SnapshotStatusRolledBack),
-			"rolled_back_at": now,
+			"rolled_back_at": rolledBackAt.UTC(),
 		})
 	if res.Error != nil {
 		return fmt.Errorf("snapshot_store mark_rolled_back %q: %w", snapshotID, res.Error)

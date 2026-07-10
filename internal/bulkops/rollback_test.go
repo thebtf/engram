@@ -400,6 +400,137 @@ func TestRollback_ConcurrentOnlyOneCommitWins(t *testing.T) {
 	assert.Equal(t, models.SnapshotStatusRolledBack, storedSnap.Status)
 }
 
+func TestRollback_LaterMutationWaitsAndIsNotOverwritten(t *testing.T) {
+	db, store := openRollbackTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	ctx := context.Background()
+
+	created, err := memStore.Create(ctx, &models.Memory{
+		Content:     "rollback race original",
+		Project:     "tg6-rollback-mutation-race",
+		SourceAgent: "claude-code",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM memories WHERE id = ?", created.ID).Error
+		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = 'rollback-mutation-race'").Error
+	})
+
+	snap, err := models.NewBulkOpSnapshot(
+		"rollback-mutation-race",
+		models.SnapshotOpBulkDelete,
+		"master",
+		memoryBeforeStateJSON(t, db, created.ID),
+	)
+	require.NoError(t, err)
+	snap.AffectedMemoryIDs = []int64{created.ID}
+	snap.CreatedAt = time.Now().UTC()
+	createdSnap, err := snapStore.Create(ctx, snap)
+	require.NoError(t, err)
+
+	type rollbackPauseKey struct{}
+	pauseCtx := context.WithValue(ctx, rollbackPauseKey{}, true)
+	restoreReached := make(chan struct{})
+	releaseRestore := make(chan struct{})
+	var restorePauseOnce sync.Once
+	var releaseOnce sync.Once
+	callbackName := fmt.Sprintf("bulkops:test_pause_restore_%d", created.ID)
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table != "memories" || tx.Statement.Context.Value(rollbackPauseKey{}) != true {
+			return
+		}
+		restorePauseOnce.Do(func() {
+			close(restoreReached)
+			<-releaseRestore
+		})
+	}))
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseRestore) })
+		_ = db.Callback().Update().Remove(callbackName)
+	})
+
+	rollbackDone := make(chan error, 1)
+	go func() {
+		_, rollbackErr := Rollback(pauseCtx, adminIdentity(), createdSnap.SnapshotID, snapStore, memStore, nil, nil)
+		rollbackDone <- rollbackErr
+	}()
+
+	select {
+	case <-restoreReached:
+	case rollbackErr := <-rollbackDone:
+		require.NoError(t, rollbackErr, "rollback must reach the restore mutation")
+		t.Fatal("rollback completed before the restore pause callback")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for rollback to reach restore")
+	}
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	mutationConn, err := sqlDB.Conn(ctx)
+	require.NoError(t, err)
+	defer mutationConn.Close()
+
+	var mutationPID int
+	require.NoError(t, mutationConn.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&mutationPID))
+	mutationDone := make(chan error, 1)
+	go func() {
+		_, mutationErr := mutationConn.ExecContext(context.Background(),
+			`UPDATE memories SET content = 'later mutation', updated_at = NOW() WHERE id = $1`,
+			created.ID,
+		)
+		mutationDone <- mutationErr
+	}()
+
+	locked := false
+	mutationCompletedBeforeRelease := false
+	var mutationErr error
+	deadline := time.NewTimer(5 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer deadline.Stop()
+	defer ticker.Stop()
+
+	for !locked && !mutationCompletedBeforeRelease {
+		select {
+		case mutationErr = <-mutationDone:
+			mutationCompletedBeforeRelease = true
+		case <-ticker.C:
+			var waitEventType string
+			queryErr := db.Raw(
+				`SELECT COALESCE(wait_event_type, '') FROM pg_stat_activity WHERE pid = ?`,
+				mutationPID,
+			).Scan(&waitEventType).Error
+			require.NoError(t, queryErr)
+			locked = waitEventType == "Lock"
+		case <-deadline.C:
+			t.Fatal("timed out waiting for the later mutation to block on rollback's row lock")
+		}
+	}
+
+	releaseOnce.Do(func() { close(releaseRestore) })
+	require.NoError(t, <-rollbackDone)
+	if !mutationCompletedBeforeRelease {
+		select {
+		case mutationErr = <-mutationDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("later mutation did not complete after rollback released its row lock")
+		}
+	}
+
+	require.NoError(t, mutationErr)
+	assert.False(t, mutationCompletedBeforeRelease,
+		"later mutation must wait until rollback commits instead of being overwritten")
+
+	var finalRow gormdb.Memory
+	require.NoError(t, db.Unscoped().Where("id = ?", created.ID).First(&finalRow).Error)
+	assert.Equal(t, "later mutation", finalRow.Content,
+		"a mutation that starts after conflict evaluation must win after rollback commits")
+
+	storedSnap, err := snapStore.Get(ctx, createdSnap.SnapshotID)
+	require.NoError(t, err)
+	assert.Equal(t, models.SnapshotStatusRolledBack, storedSnap.Status)
+}
+
 func TestRollback_CandidateReviewPromoteDeletesMemoryAndRestoresPending(t *testing.T) {
 	db, store := openRollbackTestDB(t)
 	memStore := gormdb.NewMemoryStore(store)

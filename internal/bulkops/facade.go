@@ -155,7 +155,7 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 	// This fixes the rollback bug where AffectedMemoryIDs contained candidate IDs,
 	// memoryStore.Get() returned not-found for them, and promoted memory rows survived.
 	actor := resolveActor(identity)
-	snapshotID, beforeState, err := f.capturePromoteBeforeState(ctx, ids)
+	snapshotID, beforeState, capturedAt, err := f.capturePromoteBeforeState(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("bulk_promote snapshot capture: %w", err)
 	}
@@ -168,6 +168,7 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 	if err != nil {
 		return nil, fmt.Errorf("bulk_promote new_snapshot: %w", err)
 	}
+	snap.CreatedAt = capturedAt
 	// AffectedMemoryIDs for bulk_promote tracks the CANDIDATE ids at this point
 	// (before promotions run). After promotions, we amend it with the promoted memory IDs
 	// so conflict detection can check the actual memory rows. The before_state typed entries
@@ -262,7 +263,7 @@ func (f *Facade) executeBulkDelete(ctx context.Context, identity auth.Identity, 
 	}
 
 	actor := resolveActor(identity)
-	snapshotID, beforeState, err := f.captureMemoryBeforeState(ctx, ids)
+	snapshotID, beforeState, capturedAt, err := f.captureMemoryBeforeState(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("bulk_delete snapshot capture: %w", err)
 	}
@@ -275,6 +276,7 @@ func (f *Facade) executeBulkDelete(ctx context.Context, identity auth.Identity, 
 	if err != nil {
 		return nil, fmt.Errorf("bulk_delete new_snapshot: %w", err)
 	}
+	snap.CreatedAt = capturedAt
 	snap.AffectedMemoryIDs = ids
 	snap.SourceSessionID = op.SourceSessionID
 	snap.Parameters = params
@@ -322,7 +324,7 @@ func (f *Facade) executeBulkSupersede(ctx context.Context, identity auth.Identit
 	}
 
 	actor := resolveActor(identity)
-	snapshotID, beforeState, err := f.captureMemoryBeforeState(ctx, ids)
+	snapshotID, beforeState, capturedAt, err := f.captureMemoryBeforeState(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("bulk_supersede snapshot capture: %w", err)
 	}
@@ -335,6 +337,7 @@ func (f *Facade) executeBulkSupersede(ctx context.Context, identity auth.Identit
 	if err != nil {
 		return nil, fmt.Errorf("bulk_supersede new_snapshot: %w", err)
 	}
+	snap.CreatedAt = capturedAt
 	snap.AffectedMemoryIDs = ids
 	snap.SourceSessionID = op.SourceSessionID
 	snap.Parameters = params
@@ -425,8 +428,12 @@ func (f *Facade) captureCandidateBeforeState(ctx context.Context, ids []int64) (
 // Each candidate ID is stored as EntryKindRestore with the candidate body as Before data.
 // Promoted memory IDs (created by the op) are added later via AmendPromoteEntries as
 // EntryKindDelete (no before needed — they did not exist pre-op).
-func (f *Facade) capturePromoteBeforeState(ctx context.Context, candidateIDs []int64) (string, json.RawMessage, error) {
+func (f *Facade) capturePromoteBeforeState(ctx context.Context, candidateIDs []int64) (string, json.RawMessage, time.Time, error) {
 	snapshotID := uuid.New().String()
+	capturedAt, err := f.authoritativeCaptureTime(ctx)
+	if err != nil {
+		return "", nil, time.Time{}, err
+	}
 	state := make(map[string]models.SnapshotEntry, len(candidateIDs))
 	for _, id := range candidateIDs {
 		c, err := f.candidateStore.Get(ctx, id)
@@ -437,20 +444,24 @@ func (f *Facade) capturePromoteBeforeState(ctx context.Context, candidateIDs []i
 		}
 		before, marshalErr := json.Marshal(c)
 		if marshalErr != nil {
-			return "", nil, fmt.Errorf("capturePromoteBeforeState: marshal candidate %d: %w", id, marshalErr)
+			return "", nil, time.Time{}, fmt.Errorf("capturePromoteBeforeState: marshal candidate %d: %w", id, marshalErr)
 		}
 		state[fmt.Sprintf("%d", id)] = models.SnapshotEntry{Kind: models.EntryKindRestore, Before: json.RawMessage(before)}
 	}
 	bs, err := json.Marshal(state)
 	if err != nil {
-		return "", nil, fmt.Errorf("capturePromoteBeforeState: serialize: %w", err)
+		return "", nil, time.Time{}, fmt.Errorf("capturePromoteBeforeState: serialize: %w", err)
 	}
-	return snapshotID, json.RawMessage(bs), nil
+	return snapshotID, json.RawMessage(bs), capturedAt, nil
 }
 
 // captureMemoryBeforeState fetches memory rows and serializes them as JSONB.
-func (f *Facade) captureMemoryBeforeState(ctx context.Context, ids []int64) (string, json.RawMessage, error) {
+func (f *Facade) captureMemoryBeforeState(ctx context.Context, ids []int64) (string, json.RawMessage, time.Time, error) {
 	snapshotID := uuid.New().String()
+	capturedAt, err := f.authoritativeCaptureTime(ctx)
+	if err != nil {
+		return "", nil, time.Time{}, err
+	}
 	state := make(map[string]json.RawMessage, len(ids))
 	if f.memoryStore != nil {
 		for _, id := range ids {
@@ -463,20 +474,37 @@ func (f *Facade) captureMemoryBeforeState(ctx context.Context, ids []int64) (str
 					state[fmt.Sprintf("%d", id)] = json.RawMessage("null")
 					continue
 				}
-				return "", nil, fmt.Errorf("load memory %d before_state: %w", id, err)
+				return "", nil, time.Time{}, fmt.Errorf("load memory %d before_state: %w", id, err)
 			}
 			before, marshalErr := marshalMemoryRowSnapshot(&row)
 			if marshalErr != nil {
-				return "", nil, fmt.Errorf("serialize memory %d before_state: %w", id, marshalErr)
+				return "", nil, time.Time{}, fmt.Errorf("serialize memory %d before_state: %w", id, marshalErr)
 			}
 			state[fmt.Sprintf("%d", id)] = before
 		}
 	}
 	bs, err := json.Marshal(state)
 	if err != nil {
-		return "", nil, fmt.Errorf("serialize memory before_state: %w", err)
+		return "", nil, time.Time{}, fmt.Errorf("serialize memory before_state: %w", err)
 	}
-	return snapshotID, json.RawMessage(bs), nil
+	return snapshotID, json.RawMessage(bs), capturedAt, nil
+}
+
+// authoritativeCaptureTime returns one database-sourced boundary before any
+// before-state row is read. The exact value is carried with that state and
+// persisted as bulk_op_snapshots.created_at, avoiding application/DB clock skew
+// and the read-to-insert timestamp gap.
+func (f *Facade) authoritativeCaptureTime(ctx context.Context) (time.Time, error) {
+	if f.memoryStore == nil {
+		return time.Now().UTC(), nil
+	}
+	var capturedAt time.Time
+	if err := f.memoryStore.GetDB().WithContext(ctx).
+		Raw("SELECT clock_timestamp()").
+		Scan(&capturedAt).Error; err != nil {
+		return time.Time{}, fmt.Errorf("capture authoritative snapshot time: %w", err)
+	}
+	return capturedAt.UTC(), nil
 }
 
 // marshalMemoryRowSnapshot converts timestamp fields to UTC before JSON encoding.
@@ -513,12 +541,4 @@ func utcTimePtr(value *time.Time) *time.Time {
 	return &normalized
 }
 
-func candidateIDsToInt64(ids []int64) []int64 {
-	return ids
-}
-
-// captureCandidateBeforeStateAt is a timestamp-capturing variant used by rollback.
-// Returns the snapshot time so rollback can compare updated_at values.
-func SnapshotTime() time.Time {
-	return time.Now().UTC()
-}
+func candidateIDsToInt64(ids []int64) []int64 { return ids }

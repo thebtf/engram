@@ -287,3 +287,46 @@ func TestFacade_BulkSupersede_Committed_AuditLogWritten(t *testing.T) {
 	assert.GreaterOrEqual(t, auditCountAfter-auditCountBefore, int64(1),
 		"audit log must have at least 1 new bulk_supersede entry from this Execute call")
 }
+
+func TestCaptureMemoryBeforeState_ReturnsPersistedAuthoritativeBoundary(t *testing.T) {
+	db, store := openTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	f := NewFacade(snapStore, nil, memStore, nil)
+	ctx := context.Background()
+
+	created, err := memStore.Create(ctx, &models.Memory{
+		Content:     "authoritative capture boundary",
+		Project:     "tg6-capture-boundary",
+		SourceAgent: "claude-code",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM memories WHERE id = ?", created.ID).Error
+		_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE actor = 'capture-boundary-test'").Error
+	})
+
+	var startedAt time.Time
+	require.NoError(t, db.Raw("SELECT clock_timestamp()").Scan(&startedAt).Error)
+	snapshotID, beforeState, capturedAt, err := f.captureMemoryBeforeState(ctx, []int64{created.ID})
+	var finishedAt time.Time
+	require.NoError(t, db.Raw("SELECT clock_timestamp()").Scan(&finishedAt).Error)
+	require.NoError(t, err)
+	require.False(t, capturedAt.Before(startedAt))
+	require.False(t, capturedAt.After(finishedAt))
+
+	snap, err := models.NewBulkOpSnapshot(
+		snapshotID,
+		models.SnapshotOpBulkDelete,
+		"capture-boundary-test",
+		beforeState,
+	)
+	require.NoError(t, err)
+	snap.AffectedMemoryIDs = []int64{created.ID}
+	snap.CreatedAt = capturedAt
+
+	persisted, err := snapStore.Create(ctx, snap)
+	require.NoError(t, err)
+	require.True(t, persisted.CreatedAt.Equal(capturedAt),
+		"the exact capture boundary returned with before_state must be persisted")
+}
