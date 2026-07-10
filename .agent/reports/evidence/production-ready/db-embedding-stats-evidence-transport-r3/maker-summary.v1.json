@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R3",
+  "role": "maker",
+  "status": "SUPERSEDED_BY_R5",
+  "parent": "8dac7910de52d2744fcf67f79a0a1597beebac72",
+  "accepted_product_source": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "preserved_repairs": [
+    "exact seven-path source lock",
+    "exact accepted source commit lock",
+    "validated canonical source paths before source access",
+    "Windows and fresh-LF representation proof"
+  ],
+  "coverage_claim": {
+    "status": "REMOVED_AS_NOT_REPRODUCIBLE",
+    "replacement": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-repeat.v1.json"
+  },
+  "next_action": "Use the R5 packet and its transcript-parsing verifier."
+}

@@ -1,0 +1,11 @@
+{
+  "task_id": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R5",
+  "observed_at": "2026-07-10T19:18:54.3616699Z",
+  "test_file": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+  "test_name": "evidence manifests reject incomplete sets and undeclared or mixed coverage capture",
+  "failure_reason": "R4 verifier rejected the new coverage-evidence mode as unsupported, so it could not prove the declared materialization or reject mixed working-tree bytes.",
+  "runner_stdout_excerpt": "tests 24; pass 23; fail 1; AssertionError: unsupported mode: coverage-evidence",
+  "exit_code": 1,
+  "passed_tests": 23,
+  "failed_tests": 1
+}

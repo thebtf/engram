@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R5",
+  "materialization": "fresh-core-autocrlf-false-lf",
+  "base_commit": "369951b61ee07cb0c405558e0f677cd1c9e90362",
+  "core_autocrlf": "false",
+  "tracked_eol": "2/2 i/lf w/lf",
+  "line_endings": "lf-only",
+  "files": [
+    {
+      "role": "verifier",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
+      "git_blob_oid": "75bec9c41eb5abc435f13d90848074f6608f7fce",
+      "git_blob_sha256": "a55e59dd870659330add8f840272aa1e8829f8161779db3e9be9e6e014cf1ba4",
+      "filesystem_sha256": "a55e59dd870659330add8f840272aa1e8829f8161779db3e9be9e6e014cf1ba4",
+      "byte_length": 25465,
+      "crlf_pairs": 0,
+      "lone_lf": 718,
+      "bare_carriage_returns": 0
+    },
+    {
+      "role": "test_harness",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+      "git_blob_oid": "8e814737c8d5f4437aeb2a97dc52220e115cba0b",
+      "git_blob_sha256": "970a7a4a322b8aa5a0ed434d68ef5ce41c5085c986007f15aadf34d69c0172aa",
+      "filesystem_sha256": "970a7a4a322b8aa5a0ed434d68ef5ce41c5085c986007f15aadf34d69c0172aa",
+      "byte_length": 20692,
+      "crlf_pairs": 0,
+      "lone_lf": 634,
+      "bare_carriage_returns": 0
+    }
+  ]
+}

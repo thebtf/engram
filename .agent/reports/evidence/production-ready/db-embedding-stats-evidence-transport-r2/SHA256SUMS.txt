@@ -1,0 +1,14 @@
+# manifest-version=1
+# slice=DB-EMBEDDING-EVIDENCE-TRANSPORT-R2
+# algorithm=sha256
+# representation=canonical-lf-files
+# self-entry=excluded-to-avoid-recursion
+a08508ce15f5ba89c60971536bd6ef0aa5127b102c52560bcda1c3a829f7fecb  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/ARTIFACTS.sha256
+e3e9fd6250d4ead502a01ec81bb7901ad658d74845184a10b6f153276a1bd12f  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json
+4f46e0f020fd7aae39b327adac7a9070d744f66fa26124f652d25470fa409114  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs
+d0fc0a8b57a3dc1f31210a69ec0b85443995883c41ea8ba818e8d95837b315b3  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs
+d99f3499b2e5c371ababdffc84410e1dcc8b028373ae00483136ae0eb6bf509a  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json
+3b7f5ad0abcccd39f0d5ce9349fceb8cca4794e1bf537943e4b38ce629357dbb  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md
+5a01028809f642d299891de75148170fa2ade1d2e3e949b86f45a5aa92423249  .agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R2.red.json
+ca517588d678f59b86b627a109bdbc0bd8fc1b49cdd5df4a605ec6cb57da206c  .agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R2.tdd.json
+5e6271fe6eaa8361247221263ac640af426e25be01c88f558e2d85a84773fd65  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r2/maker-summary.v1.json

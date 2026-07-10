@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R4",
+  "status": "SUPERSEDED_BY_R5",
+  "superseded_reason": "Independent R4 checker proved that the recorded exact values were produced from maker-only mixed EOL working-tree bytes, not from the committed Git blob bytes in a fresh checkout.",
+  "historical_numeric_claims_removed": true,
+  "replacement": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-repeat.v1.json",
+  "checker_report": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4-checker/checker-report.md"
+}

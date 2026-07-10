@@ -1,0 +1,25 @@
+{
+  "task_id": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R3",
+  "stack": "GO repository with Node.js evidence verifier",
+  "status": "SUPERSEDED_BY_R5",
+  "red": {
+    "passed_tests": 18,
+    "failed_tests": 4,
+    "exit_code": 1
+  },
+  "green": {
+    "passed_tests": 22,
+    "failed_tests": 0,
+    "exit_code": 0
+  },
+  "prove_it": {
+    "validateContractSchema_failed_tests": 12,
+    "verifyArtifactFiles_failed_tests": 9,
+    "post_restore_passed_tests": 22,
+    "restored_byte_identical": true
+  },
+  "coverage": {
+    "status": "REMOVED_AS_NOT_REPRODUCIBLE",
+    "replacement": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R5.tdd.json"
+  }
+}

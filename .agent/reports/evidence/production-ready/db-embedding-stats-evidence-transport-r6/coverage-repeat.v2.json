@@ -1,0 +1,158 @@
+{
+  "schema_version": 2,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R6",
+  "capture_manifest": {
+    "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-capture.v2.json",
+    "sha256": "28b5286a025794bae2c24535fe31f35e23c8d940698ab9c561aa5a0c1fd178c8"
+  },
+  "envelopes": [
+    {
+      "run": 1,
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-run-1.envelope.v2.json",
+      "sha256": "b4271dba88bbd81df2b2e8a541dd35d21cca2637cd53016ff30c15d305f4b384"
+    },
+    {
+      "run": 2,
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-run-2.envelope.v2.json",
+      "sha256": "88c6eb1450b828cdad7657a6e69138cf52ed36984e267cafd5989734e4ca7419"
+    }
+  ],
+  "runs": [
+    {
+      "run": 1,
+      "envelope_exit_code": 0,
+      "exit_code": 0,
+      "tests": 24,
+      "passed": 24,
+      "failed": 0,
+      "aggregate": {
+        "line_percent": 89.96,
+        "branch_percent": 75.86,
+        "functions_percent": 95.8
+      },
+      "verifier": {
+        "line_percent": 80.08,
+        "branch_percent": 55.91,
+        "functions_percent": 81.82
+      },
+      "test_harness": {
+        "line_percent": 99.72,
+        "branch_percent": 94.78,
+        "functions_percent": 100
+      }
+    },
+    {
+      "run": 2,
+      "envelope_exit_code": 0,
+      "exit_code": 0,
+      "tests": 24,
+      "passed": 24,
+      "failed": 0,
+      "aggregate": {
+        "line_percent": 89.96,
+        "branch_percent": 75.86,
+        "functions_percent": 95.8
+      },
+      "verifier": {
+        "line_percent": 80.08,
+        "branch_percent": 55.91,
+        "functions_percent": 81.82
+      },
+      "test_harness": {
+        "line_percent": 99.72,
+        "branch_percent": 94.78,
+        "functions_percent": 100
+      }
+    }
+  ],
+  "reproducible": true,
+  "dimensions": [
+    {
+      "scope": "aggregate",
+      "metric": "line_percent",
+      "observed_percent": 89.96,
+      "normative": true,
+      "floor_percent": 80,
+      "margin_percent": 9.96,
+      "status": "PASS"
+    },
+    {
+      "scope": "aggregate",
+      "metric": "branch_percent",
+      "observed_percent": 75.86,
+      "normative": false,
+      "floor_percent": null,
+      "margin_percent": null,
+      "status": "OBSERVED_NON_NORMATIVE"
+    },
+    {
+      "scope": "aggregate",
+      "metric": "functions_percent",
+      "observed_percent": 95.8,
+      "normative": false,
+      "floor_percent": null,
+      "margin_percent": null,
+      "status": "OBSERVED_NON_NORMATIVE"
+    },
+    {
+      "scope": "verifier",
+      "metric": "line_percent",
+      "observed_percent": 80.08,
+      "normative": false,
+      "floor_percent": null,
+      "margin_percent": null,
+      "status": "OBSERVED_NON_NORMATIVE"
+    },
+    {
+      "scope": "verifier",
+      "metric": "branch_percent",
+      "observed_percent": 55.91,
+      "normative": false,
+      "floor_percent": null,
+      "margin_percent": null,
+      "status": "OBSERVED_NON_NORMATIVE"
+    },
+    {
+      "scope": "verifier",
+      "metric": "functions_percent",
+      "observed_percent": 81.82,
+      "normative": false,
+      "floor_percent": null,
+      "margin_percent": null,
+      "status": "OBSERVED_NON_NORMATIVE"
+    },
+    {
+      "scope": "test_harness",
+      "metric": "line_percent",
+      "observed_percent": 99.72,
+      "normative": false,
+      "floor_percent": null,
+      "margin_percent": null,
+      "status": "OBSERVED_NON_NORMATIVE"
+    },
+    {
+      "scope": "test_harness",
+      "metric": "branch_percent",
+      "observed_percent": 94.78,
+      "normative": false,
+      "floor_percent": null,
+      "margin_percent": null,
+      "status": "OBSERVED_NON_NORMATIVE"
+    },
+    {
+      "scope": "test_harness",
+      "metric": "functions_percent",
+      "observed_percent": 100,
+      "normative": false,
+      "floor_percent": null,
+      "margin_percent": null,
+      "status": "OBSERVED_NON_NORMATIVE"
+    }
+  ],
+  "threshold": {
+    "percent": 80,
+    "basis": "aggregate line coverage",
+    "observed_percent": 89.96,
+    "status": "PASS"
+  }
+}

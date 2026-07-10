@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R3",
+  "status": "SUPERSEDED_BY_R5",
+  "superseded_reason": "R3 values were not reproducible and the R4 replacement was later found to depend on maker-only mixed EOL bytes.",
+  "historical_numeric_claims_removed": true,
+  "replacement": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-repeat.v1.json"
+}

@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R5",
+  "role": "revision-maker",
+  "base_commit": "369951b61ee07cb0c405558e0f677cd1c9e90362",
+  "r4_checker_commit_is_ancestor": false,
+  "product_source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "source_lock": {
+    "required_cardinality": 7,
+    "exact_required_set": true,
+    "product_source_blobs_match": 7,
+    "product_source_test_delta": 0
+  },
+  "coverage_capture": {
+    "materialization": "fresh-core-autocrlf-false-lf",
+    "tracked_eol": "2/2 i/lf w/lf",
+    "line_endings": "lf-only",
+    "verifier_git_blob_oid": "75bec9c41eb5abc435f13d90848074f6608f7fce",
+    "verifier_sha256": "a55e59dd870659330add8f840272aa1e8829f8161779db3e9be9e6e014cf1ba4",
+    "test_harness_git_blob_oid": "8e814737c8d5f4437aeb2a97dc52220e115cba0b",
+    "test_harness_sha256": "970a7a4a322b8aa5a0ed434d68ef5ce41c5085c986007f15aadf34d69c0172aa",
+    "undeclared_capture_rejected": true,
+    "mixed_eol_capture_rejected": true,
+    "transcript_parser_status": "PASS"
+  },
+  "tdd": {
+    "r5_red": { "exit_code": 1, "tests": 24, "passed": 23, "failed": 1 },
+    "exact_base_red": { "exit_code": 1, "tests": 24, "passed": 22, "failed": 2 },
+    "green": { "exit_code": 0, "tests": 24, "passed": 24, "failed": 0 },
+    "independent_attack_cases": { "passed": 15, "failed": 0, "total": 15 },
+    "prove_it": [
+      { "sentinel": "discard schema structural errors", "passed": 9, "failed": 15, "exit_code": 1 },
+      { "sentinel": "force artifact status PASS", "passed": 15, "failed": 9, "exit_code": 1 },
+      { "sentinel": "force R5 capture verifier status PASS", "passed": 23, "failed": 1, "exit_code": 1 }
+    ],
+    "post_restore": { "exit_code": 0, "tests": 24, "passed": 24, "failed": 0 }
+  },
+  "coverage": {
+    "node_version": "v24.2.0",
+    "repeat_count": 2,
+    "canonical_lf_transcripts_committed": true,
+    "transcript_representation": "canonical-lf-tap-trim-trailing-table-padding",
+    "transcript_hashes_verified": true,
+    "metrics_parsed_from_transcripts": true,
+    "metrics_identical": true,
+    "aggregate": { "line_percent": 89.28, "branch_percent": 75.30, "functions_percent": 95.59 },
+    "verifier": { "line_percent": 80.08, "branch_percent": 55.91, "functions_percent": 81.82 },
+    "test_harness": { "line_percent": 99.68, "branch_percent": 95.16, "functions_percent": 100.00 },
+    "threshold_basis": "aggregate line coverage",
+    "threshold_percent": 80,
+    "status": "PASS"
+  },
+  "observations": [
+    {
+      "checkout": "windows-autocrlf-true",
+      "tracked_eol": "7/7 i/lf w/crlf",
+      "legacy_raw_audit": { "status": "AMBIGUOUS_RAW_CHECKOUT_CONFIRMED", "raw": 0, "git_object": 7, "checkout_lf": 7 },
+      "git_object": { "matched": 7, "total": 7 },
+      "checkout_lf": { "matched": 7, "total": 7, "bare_carriage_returns": 0 },
+      "artifact_files": { "matched": 5, "total": 5 }
+    },
+    {
+      "checkout": "fresh-core-autocrlf-false-lf",
+      "tracked_eol": "7/7 i/lf w/lf",
+      "legacy_raw_audit": { "status": "RAW_CHECKOUT_HAPPENS_TO_MATCH", "raw": 7, "git_object": 7, "checkout_lf": 7 },
+      "git_object": { "matched": 7, "total": 7 },
+      "checkout_lf": { "matched": 7, "total": 7, "bare_carriage_returns": 0 },
+      "artifact_files": { "matched": 5, "total": 5 },
+      "permanent_suite": { "passed": 24, "total": 24 }
+    }
+  ],
+  "checksums": {
+    "artifact_layer": "5/5",
+    "r3_layer": "13/13",
+    "r4_layer": "20/20",
+    "r5_layer": "32/32"
+  },
+  "residue": {
+    "temporary_worktrees": 0,
+    "task_node_processes": 0,
+    "access_spy_directories": 0,
+    "matching_postgresql_databases": 0,
+    "matching_postgresql_sessions": 0
+  },
+  "finish_state": "READY_FOR_CHECK"
+}

@@ -1,0 +1,69 @@
+{
+  "task_id": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R4",
+  "stack": "GO repository with Node.js evidence verifier",
+  "base_commit": "d650df5c4271cdb50aa1f443d2f95b2f4b672541",
+  "node_version": "v24.2.0",
+  "red": {
+    "observed_at_utc": "2026-07-10T16:40:11.4799120+00:00",
+    "passed_tests": 22,
+    "failed_tests": 2,
+    "exit_code": 1,
+    "failures": [
+      "representation=null escaped as a raw TypeError reading kind",
+      "entries[0]=null escaped as a raw TypeError reading path"
+    ]
+  },
+  "exact_base_red": {
+    "observed_at_utc": "2026-07-10T16:42:42.2695231+00:00",
+    "base_commit": "d650df5c4271cdb50aa1f443d2f95b2f4b672541",
+    "final_test_bytes_overlaid": true,
+    "passed_tests": 22,
+    "failed_tests": 2,
+    "exit_code": 1
+  },
+  "green": {
+    "observed_at_utc": "2026-07-10T16:41:31.7931552+00:00",
+    "passed_tests": 24,
+    "failed_tests": 0,
+    "exit_code": 0,
+    "preload_spy": {
+      "null_representation_git_cat_file_reads": 0,
+      "null_representation_source_file_reads": 0,
+      "null_entry_git_cat_file_reads": 0,
+      "null_entry_source_file_reads": 0
+    }
+  },
+  "prove_it": {
+    "validateContractSchema": {
+      "observed_at_utc": "2026-07-10T16:45:55.4146451+00:00",
+      "sentinel": "discard structural errors and release validated subsets",
+      "passed_tests": 9,
+      "failed_tests": 15,
+      "exit_code": 1
+    },
+    "verifyArtifactFiles": {
+      "observed_at_utc": "2026-07-10T16:48:49.6474087+00:00",
+      "sentinel": "force artifact status PASS",
+      "passed_tests": 15,
+      "failed_tests": 9,
+      "exit_code": 1
+    },
+    "post_restore": {
+      "observed_at_utc": "2026-07-10T16:49:23.1957280+00:00",
+      "passed_tests": 24,
+      "failed_tests": 0,
+      "exit_code": 0,
+      "verifier_sha256_before_and_after": "525a9cd937e26fb7f38b8b51792f3af0e95eafdbdb2670fa7aee7a15fa914673"
+    }
+  },
+  "coverage": {
+    "status": "REMOVED_AS_MIXED_EOL_MATERIALIZATION",
+    "checker_finding": "The recorded exact values were tied to maker-only mixed EOL working-tree bytes rather than the committed target representation.",
+    "replacement": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R5.tdd.json"
+  },
+  "behavioral_signal": {
+    "name": "release-evidence-false-pass-rate",
+    "target": "0 false PASS results across 24 permanent mutation cases",
+    "measurement_method": "Node test runner plus preload observation of actual Git cat-file and source-file reads"
+  }
+}

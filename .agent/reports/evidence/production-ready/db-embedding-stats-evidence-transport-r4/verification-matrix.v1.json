@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R4",
+  "status": "SUPERSEDED_BY_R5",
+  "base": "d650df5c4271cdb50aa1f443d2f95b2f4b672541",
+  "accepted_product_source": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "preserved_evidence": {
+    "exact_base_red": "22 pass / 2 fail",
+    "green": "24/24 pass",
+    "independent_attack_cases": "15/15 pass",
+    "null_representation_structured_fail": "PASS",
+    "null_entry_structured_fail": "PASS",
+    "preload_spy_actual_source_access_zero": "PASS",
+    "prove_it": "validateContractSchema 15 failed; verifyArtifactFiles 9 failed",
+    "windows": "raw 0/7; Git 7/7; checkout-LF 7/7; artifacts 5/5",
+    "fresh_lf": "raw/Git/checkout-LF 7/7; artifacts 5/5; suite 24/24",
+    "product_source_test_delta": 0
+  },
+  "coverage": {
+    "status": "REMOVED_AS_MIXED_EOL_MATERIALIZATION",
+    "replacement": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-repeat.v1.json"
+  }
+}

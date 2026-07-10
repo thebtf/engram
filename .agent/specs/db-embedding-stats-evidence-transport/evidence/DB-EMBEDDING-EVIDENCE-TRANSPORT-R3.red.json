@@ -1,0 +1,23 @@
+{
+  "task_id": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R3",
+  "stack": "GO repository with Node.js evidence verifier",
+  "observed_at": "2026-07-10T14:57:31.2279610Z",
+  "test_file": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+  "test_name": "R2 checker false-PASS regressions fail closed before source access",
+  "failure_reason": "The R2 verifier false-PASSED delete-one, valid go.mod substitution, and alternate-ancestor rebind mutations, and attempted Git access for a schema-invalid raw path.",
+  "baseline": {
+    "exit_code": 0,
+    "tests": 18,
+    "passed": 18,
+    "failed": 0
+  },
+  "red": {
+    "exit_code": 1,
+    "tests": 22,
+    "passed": 18,
+    "failed": 4,
+    "false_pass_failures": 3,
+    "pre_access_gate_failures": 1
+  },
+  "runner_stdout_excerpt": "tests 22; pass 18; fail 4; delete-one, go.mod substitution, and source rebind returned exit 0; invalid raw path reached git cat-file and emitted no structured FAIL"
+}

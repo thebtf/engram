@@ -1,0 +1,8 @@
+{
+  "task_id": "DB-EMBEDDING-STATS",
+  "observed_at": "2026-07-10T09:26:11.3028869Z",
+  "test_file": "internal/embedding/store_stats_test.go",
+  "test_name": "TestStoreStats_EmptyPhysicalTableReturnsZeroValue",
+  "failure_reason": "PostgreSQL max(created_at) returned NULL for an empty content_chunks table and GORM attempted to scan it into *time.Time.",
+  "runner_stdout_excerpt": "Stats on physically empty content_chunks: embedding stats: last chunk at: sql: Scan error on column index 0, name max: unsupported Scan, storing driver.Value type <nil> into type *time.Time"
+}

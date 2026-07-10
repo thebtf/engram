@@ -1,0 +1,56 @@
+{
+  "task_id": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R2",
+  "stack": "GO repository with Node.js evidence verifier",
+  "red": {
+    "observed_at": "2026-07-10T13:49:08.1979550Z",
+    "test_file": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+    "test_name": "artifact-set and contract-schema mutations fail closed",
+    "failure_reason": "Rejected verifier returned exit 0 for fail-closed mutations.",
+    "passed_tests": 1,
+    "failed_tests": 17,
+    "runner_stdout_excerpt": "tests 18; pass 1; fail 17; captured_exit=1"
+  },
+  "green": {
+    "observed_at": "2026-07-10T14:00:14.1815032Z",
+    "passed_tests": 18,
+    "failed_tests": 0,
+    "skipped_tests": 0,
+    "regressed_tests": 0,
+    "runner_stdout_excerpt": "tests 18; pass 18; fail 0; captured_exit=0"
+  },
+  "refactor": {
+    "applied": false,
+    "reason": "GREEN implementation already separates schema, canonical-path, and artifact-set validation without duplicated behavior."
+  },
+  "prove_it": {
+    "substituted_files": [
+      ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs"
+    ],
+    "substituted_functions": [
+      "validateContractSchema",
+      "verifyArtifactFiles"
+    ],
+    "failed_tests": 27,
+    "runner_stdout_excerpt": "validateContractSchema sentinel: 18 failed; verifyArtifactFiles sentinel: 9 failed; both exits 1",
+    "reverted_at": "2026-07-10T14:00:14.1815032Z",
+    "post_restore_passed_tests": 18,
+    "post_restore_exit_code": 0
+  },
+  "coverage": {
+    "runner": "node --test --experimental-test-coverage",
+    "all_files_line_percent": 88.89,
+    "verifier_line_percent": 84.46,
+    "branch_percent": 65.33,
+    "functions_percent": 100.0,
+    "threshold": 80,
+    "status": "PASS",
+    "exit_code": 0
+  },
+  "behavioral_signal": {
+    "name": "release-evidence-false-pass-rate",
+    "measurement_window": "each verifier self-test run",
+    "target": "0 false PASS results across the permanent mutation set",
+    "measurement_method": "Node built-in test runner executes verifier subprocesses against byte-restored manifest mutations",
+    "evidence_source": "independent checker findings ET-001 and ET-002"
+  }
+}

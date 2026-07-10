@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+  "mode": "legacy-raw-audit",
+  "status": "RAW_CHECKOUT_HAPPENS_TO_MATCH",
+  "source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "source_commit_is_ancestor": true,
+  "algorithm": "sha256",
+  "representation": "git-blob-content",
+  "total": 7,
+  "matched": 7,
+  "git_object_matches": 7,
+  "raw_checkout_matches": 7,
+  "checkout_lf_matches": 7,
+  "checkout": {
+    "core_autocrlf": "true",
+    "eol_counts": {
+      "lf": 7
+    }
+  },
+  "structural_errors": [],
+  "entries": [
+    {
+      "path": "internal/embedding/store.go",
+      "git_blob_oid": "1abaee96b07583f9fd824ed03c40b043c490b567",
+      "git_object_match": true,
+      "raw_checkout_match": true,
+      "checkout_lf_match": true,
+      "checkout_eol": "lf",
+      "crlf_pairs": 0,
+      "bare_carriage_returns": 0
+    },
+    {
+      "path": "internal/embedding/store_stats_test.go",
+      "git_blob_oid": "d381643deadbb42e8a9a07fc9375a6cdfedbdccc",
+      "git_object_match": true,
+      "raw_checkout_match": true,
+      "checkout_lf_match": true,
+      "checkout_eol": "lf",
+      "crlf_pairs": 0,
+      "bare_carriage_returns": 0
+    },
+    {
+      "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+      "git_blob_oid": "48db3052d1ff53fa7cd5f61d0371dd1be0e780bd",
+      "git_object_match": true,
+      "raw_checkout_match": true,
+      "checkout_lf_match": true,
+      "checkout_eol": "lf",
+      "crlf_pairs": 0,
+      "bare_carriage_returns": 0
+    },
+    {
+      "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+      "git_blob_oid": "4d94a57de67a41b718073e403cd894843dcffa0d",
+      "git_object_match": true,
+      "raw_checkout_match": true,
+      "checkout_lf_match": true,
+      "checkout_eol": "lf",
+      "crlf_pairs": 0,
+      "bare_carriage_returns": 0
+    },
+    {
+      "path": ".agent/specs/db-embedding-stats/evidence/coverage.out",
+      "git_blob_oid": "457c38e08408c534032a7a962969c762fa1fad8c",
+      "git_object_match": true,
+      "raw_checkout_match": true,
+      "checkout_lf_match": true,
+      "checkout_eol": "lf",
+      "crlf_pairs": 0,
+      "bare_carriage_returns": 0
+    },
+    {
+      "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+      "git_blob_oid": "8a3d45057e7c869e3eec8925a25a341158209f01",
+      "git_object_match": true,
+      "raw_checkout_match": true,
+      "checkout_lf_match": true,
+      "checkout_eol": "lf",
+      "crlf_pairs": 0,
+      "bare_carriage_returns": 0
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json",
+      "git_blob_oid": "1fa3cb6c4dc1fba849f50f33a42a3f2d1f2b23fd",
+      "git_object_match": true,
+      "raw_checkout_match": true,
+      "checkout_lf_match": true,
+      "checkout_eol": "lf",
+      "crlf_pairs": 0,
+      "bare_carriage_returns": 0
+    }
+  ]
+}

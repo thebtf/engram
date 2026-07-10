@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R5",
+  "node_version": "v24.2.0",
+  "command": "node.exe --test --test-concurrency=1 --experimental-test-coverage .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+  "capture_manifest_path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-capture.v1.json",
+  "capture_manifest_sha256": "2da06a50cd5cd808f471aecd21450d6211f58d66330dbc1d85cb1889b6730913",
+  "transcript_representation": "canonical-lf-tap-trim-trailing-table-padding",
+  "transcripts": [
+    {
+      "run": 1,
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-1.tap",
+      "sha256": "52a871ca44112dc2d4e7540f7e9548079a05619f967b4c4d9445b999d7a42daf"
+    },
+    {
+      "run": 2,
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-2.tap",
+      "sha256": "d88556d5e8e437eba50505db6ac200e52910353ced62ad4eafbf6195147387a5"
+    }
+  ],
+  "runs": [
+    {
+      "run": 1,
+      "exit_code": 0,
+      "tests": 24,
+      "passed": 24,
+      "failed": 0,
+      "aggregate": { "line_percent": 89.28, "branch_percent": 75.30, "functions_percent": 95.59 },
+      "verifier": { "line_percent": 80.08, "branch_percent": 55.91, "functions_percent": 81.82 },
+      "test_harness": { "line_percent": 99.68, "branch_percent": 95.16, "functions_percent": 100.00 }
+    },
+    {
+      "run": 2,
+      "exit_code": 0,
+      "tests": 24,
+      "passed": 24,
+      "failed": 0,
+      "aggregate": { "line_percent": 89.28, "branch_percent": 75.30, "functions_percent": 95.59 },
+      "verifier": { "line_percent": 80.08, "branch_percent": 55.91, "functions_percent": 81.82 },
+      "test_harness": { "line_percent": 99.68, "branch_percent": 95.16, "functions_percent": 100.00 }
+    }
+  ],
+  "reproducible": true,
+  "threshold": {
+    "percent": 80,
+    "basis": "aggregate line coverage",
+    "observed_percent": 89.28,
+    "status": "PASS"
+  }
+}

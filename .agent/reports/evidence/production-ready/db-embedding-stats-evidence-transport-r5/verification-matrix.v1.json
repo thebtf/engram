@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R5",
+  "status": "REJECTED_SUPERSEDED_BY_R6",
+  "snapshot_scope": "Historical R5 observations only; current/final claims live in the R6 packet.",
+  "base": "369951b61ee07cb0c405558e0f677cd1c9e90362",
+  "accepted_product_source": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+  "rails": {
+    "r4_verifier_preserved": "75bec9c41eb5abc435f13d90848074f6608f7fce PASS",
+    "capture_materialization": "core.autocrlf=false; 2/2 i/lf w/lf; LF-only PASS",
+    "undeclared_capture_rejection": "PASS",
+    "mixed_eol_capture_rejection": "PASS",
+    "transcript_hashes": "2/2 PASS",
+    "transcript_metrics_parse": "2/2 exact PASS",
+    "coverage_repeat": "24/24 twice; metrics identical PASS",
+    "coverage_floor": "89.28 >= 80 PASS",
+    "exact_base_red": "22/2 exit 1 PASS",
+    "r5_red": "23/1 exit 1 PASS",
+    "green": "24/24 exit 0 PASS",
+    "attacks": "15/15 PASS",
+    "null_fail_closed": "structured FAIL; empty stderr; reported/preload source access 0 PASS",
+    "prove_it": "15 + 9 + 1 failures PASS",
+    "windows": "raw 0/7; Git 7/7; checkout-LF 7/7; artifacts 5/5 PASS",
+    "fresh_lf": "raw/Git/checkout-LF 7/7; artifacts 5/5; suite 24/24 PASS",
+    "checksums": "5/5 + 13/13 + 20/20 + 32/32 PASS",
+    "product_blobs": "7/7 exact accepted source PASS",
+    "residue": "0 PASS"
+  }
+}

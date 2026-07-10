@@ -1,0 +1,9 @@
+{
+  "task_id": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R2",
+  "stack": "GO repository with Node.js evidence verifier",
+  "observed_at": "2026-07-10T13:49:08.1979550Z",
+  "test_file": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+  "test_name": "artifact-set and contract-schema mutations fail closed",
+  "failure_reason": "The rejected verifier returned exit 0 for empty, missing, extra, traversal, dot-alias, and invalid contract-policy mutations.",
+  "runner_stdout_excerpt": "tests 18; pass 1; fail 17; captured_exit=1; false-pass assertions observed actual exit 0"
+}
