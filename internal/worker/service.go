@@ -170,6 +170,7 @@ type Service struct {
 	wg                          sync.WaitGroup
 	initWG                      sync.WaitGroup
 	shutdownOnce                sync.Once
+	shutdownDone                chan struct{}
 	shutdownErr                 error
 	recentQueriesLen            int
 	recentQueriesHead           int
@@ -2232,17 +2233,40 @@ func (s *Service) processAllSessions() {
 //  7. WaitGroup drain      — wait up to the caller-supplied context deadline
 //  8. Database             — closed last because components above may still read it
 //
-// The caller supplies the deadline via ctx. If the deadline fires before the
-// WaitGroup drains, teardown continues and a warning is logged. The first
-// component error (if any) is returned; subsequent errors are only logged.
+// The caller supplies the deadline via ctx. Shutdown returns ctx.Err when that
+// deadline fires, while the single shutdown coordinator retains ownership and
+// continues the ordered teardown once initialization releases. This prevents a
+// late initializer from publishing workers after teardown without allowing the
+// initialization join to hold callers past their deadline. The first component
+// error (if any) is returned to callers that wait for coordinator completion;
+// subsequent errors are only logged.
 func (s *Service) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	s.shutdownOnce.Do(func() {
-		s.shutdownErr = s.shutdown(ctx)
+		s.shutdownDone = make(chan struct{})
+		go func() {
+			s.shutdownErr = s.shutdown(ctx)
+			close(s.shutdownDone)
+		}()
 	})
-	return s.shutdownErr
+
+	// The shutdown coordinator keeps ownership of initialization and teardown
+	// even when this caller's deadline expires. This preserves the critical
+	// init-before-reaper-before-database ordering without making a blocked
+	// initializer capable of holding every Shutdown caller past ctx.Done().
+	select {
+	case <-s.shutdownDone:
+		return s.shutdownErr
+	default:
+	}
+	select {
+	case <-s.shutdownDone:
+		return s.shutdownErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Service) shutdown(ctx context.Context) error {

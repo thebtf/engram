@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -123,6 +124,59 @@ func TestServiceShutdown_WaitsForPartialInitializationBeforeReaperStop(t *testin
 	}
 	if err := <-shutdownDone; err != nil {
 		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
+func TestServiceShutdown_PartialInitializationHonorsCallerDeadline(t *testing.T) {
+	stopStarted := make(chan struct{})
+	reaper := &blockingProjectReaper{stopStarted: stopStarted}
+	svc := &Service{
+		cancel:        func() {},
+		projectReaper: reaper,
+	}
+	svc.initWG.Add(1)
+	var releaseOnce sync.Once
+	releaseInit := func() { releaseOnce.Do(svc.initWG.Done) }
+	defer releaseInit()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	result := make(chan error, 1)
+	go func() { result <- svc.Shutdown(ctx) }()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Shutdown error = %v, want context deadline exceeded", err)
+		}
+		if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+			t.Fatalf("Shutdown returned after %v, want <= 250ms", elapsed)
+		}
+	case <-time.After(250 * time.Millisecond):
+		releaseInit()
+		err := <-result
+		t.Fatalf("Shutdown ignored caller deadline while joining initialization; eventual error = %v", err)
+	}
+
+	select {
+	case <-stopStarted:
+		t.Fatal("reaper Stop ran before partial initialization joined")
+	default:
+	}
+
+	releaseInit()
+	select {
+	case <-stopStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown coordinator did not resume after initialization joined")
+	}
+	if err := svc.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown after coordinator completion: %v", err)
+	}
+	if got := reaper.stopCalls.Load(); got != 1 {
+		t.Fatalf("reaper Stop calls = %d, want 1", got)
 	}
 }
 
