@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "scope": "RELEASE-GATES revision 4 maker evidence",
+  "authority": {
+    "rejected_base": "586b39df3465fb51779cf9225deaedbc212e4f9f",
+    "plan_commit": "f987ce16ee1a0777793bc95113edd2885b19e202",
+    "implementation_commit": "46ccf27968055a670f2b89907cc6da4478ac04fd",
+    "canonical_plan_sha256": "d7bcfd122e456d9b764595524292d53b0c99447b7f716a1be0707341e4681bf9",
+    "ownership_state_plan_sha256": "d7bcfd122e456d9b764595524292d53b0c99447b7f716a1be0707341e4681bf9",
+    "revision_3_checker_sha256": "E2B399BAA66C463D3301DBC9F7775ABF357D2411C74EBDBFDB11CD1A020619E0",
+    "openclaw_ingest_source_lock_sha256": "A095E9D7B69DC95CAC4022EB97D2EA9B403D5132F5602FDD85E7D3A93092F5D4"
+  },
+  "tdd": {
+    "ownership_red": "single-owner tracked epoch rejected; raw LF and CRLF SHA256 values differed",
+    "ownership_green": "canonical UTF-8/LF hash, semantic-mutation inequality, singleton plan/state epoch accepted",
+    "path_budget_red": {
+      "commit": "f987ce16ee1a0777793bc95113edd2885b19e202",
+      "longest_combined_length": 262,
+      "ceiling": 240,
+      "violations": 73
+    },
+    "path_budget_green": {
+      "commit": "46ccf27968055a670f2b89907cc6da4478ac04fd",
+      "tracked_paths": 1402,
+      "longest_combined_length": 166,
+      "ceiling": 240,
+      "violations": 0
+    },
+    "conformance_red": "missing dev-stand-source-commit/source-build provenance contract",
+    "conformance_green": "LF/CRLF equality plus 30 adversarial mutations rejected, including removed/late build and removed --no-build"
+  },
+  "foundation_gates": {
+    "selftests": {
+      "verdict": "PASS",
+      "count": 9,
+      "names": [
+        "assert-coverage",
+        "assert-go-test-json",
+        "assert-plan-path-ownership",
+        "assert-windows-path-budget",
+        "cleanup-db-sessions",
+        "run-critical-suite",
+        "run-db-suite",
+        "run-dev-stand",
+        "run-node-matrix"
+      ]
+    },
+    "powershell_parse": "PASS",
+    "actionlint": "PASS",
+    "workflow_conformance": {
+      "verdict": "PASS",
+      "mutations_rejected": 30
+    },
+    "ownership": {
+      "ledger": "PASS",
+      "maker_slices": 48,
+      "declarations": 325,
+      "declared_epochs": 34,
+      "plan_governance_diff": {
+        "verdict": "PASS",
+        "changed_paths": 2,
+        "violations": 0
+      },
+      "release_gates_diff": {
+        "verdict": "PASS",
+        "changed_paths": 135,
+        "violations": 0
+      }
+    },
+    "critical_suite": {
+      "verdict": "PASS",
+      "tests": 7,
+      "passed": 7,
+      "failed": 0,
+      "unexpected_skips": 0,
+      "raw_summary_sha256": "0D866822CD951FBD25CF4078BA8EA1C11BD4BDFE2B9C78B66B8E8C72371C5C7F"
+    }
+  },
+  "runtime": {
+    "dev_stand": {
+      "overall_verdict": "EXPECTED_NEGATIVE",
+      "up": "PASS",
+      "ready": "PASS",
+      "scan": "FAIL_FINDINGS",
+      "down": "PASS",
+      "cleanup": "PASS",
+      "residual_resources_zero": true,
+      "source_commit": "46ccf27968055a670f2b89907cc6da4478ac04fd",
+      "source_tracked_clean": true,
+      "compose_build_completed": true,
+      "postgres_pull_completed": true,
+      "launch_no_build": true,
+      "prelaunch_running_scan_identity": true,
+      "raw_summary_sha256": "EE8EF87AD2207B73EA9CDD50811484183DE3E5C96E7728CE24F18CD9A0524D1C",
+      "scan_results": [
+        {
+          "service": "operator-console",
+          "image_id": "sha256:96e2cd855b10543df86e6c9c040186d0cc3631f1bc9015f1de2936e17af45c82",
+          "high_critical_findings": 5,
+          "sarif_sha256": "06309B2CE48D82004B46A5E8535AB7A657ECC0D7D367170708E4C204C311A69B"
+        },
+        {
+          "service": "postgres",
+          "image_id": "sha256:d2ef61f42ef767baa5a1475393303cc235bcd92febd9d7014eddb48b41f3bad0",
+          "high_critical_findings": 20,
+          "sarif_sha256": "5ED64C4E1917921AF7D4FD53D404A8580F869DB29D5411E686553A9347F2F0F4"
+        },
+        {
+          "service": "server",
+          "image_id": "sha256:cc352864b145278ce98e1d601775e8be0b2d05fae7385704cc7d6d3aeb93418c",
+          "high_critical_findings": 13,
+          "sarif_sha256": "91D0F44AAA530066E04E859720462E1E8FA8B20DE9BC7890B5321E95FBA60FD3"
+        }
+      ]
+    },
+    "openclaw_matrix": {
+      "verdict": "EXPECTED_NEGATIVE",
+      "executed_steps": 0,
+      "reason": "required plugin/openclaw-engram/package-lock.json is absent",
+      "pre_surface_clean": true,
+      "post_surface_clean": true,
+      "cleanup": true,
+      "raw_summary_sha256": "DAD1420859061D457F9CA9255DAEC177949EDC9EE7D143EDED9D7049FAEDBB04"
+    }
+  },
+  "project_wide_gate": {
+    "verdict": "BLOCKED",
+    "command_scope": "./... with race, fresh database, repeat 3, JSON assertion, skip enforcement, coverage floors",
+    "repeat_failures": [27, 28, 27],
+    "unexpected_skips_each_repeat": 25,
+    "coverage_percent": [53.0, 52.99, 52.99],
+    "cleanup_exit_zero_each_repeat": true,
+    "direct_sql_residual_databases": 0,
+    "direct_sql_residual_sessions": 0,
+    "shared_postgres_left_running": true,
+    "raw_summary_sha256": "7F0D634D6C0D4FC46D4F2B929D5AEF3564502A2D3DE5EDE19FC4B35B976A607F",
+    "inventory": ".agent/e/rg4/fail.json"
+  },
+  "environment": {
+    "os": "windows/amd64",
+    "go": "1.25.11",
+    "powershell": "7.6.1",
+    "git": "2.51.1.windows.1",
+    "core_autocrlf": true,
+    "core_longpaths": "unset",
+    "docker_client": "29.1.3",
+    "docker_server": "29.1.3",
+    "docker_compose": "2.40.3-desktop.1",
+    "actionlint": "1.7.12"
+  },
+  "maker_handoff": "READY_FOR_INDEPENDENT_CHECK",
+  "project_release_readiness": "BLOCKED"
+}
