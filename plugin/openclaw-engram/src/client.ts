@@ -7,7 +7,7 @@
 
 import { AvailabilityTracker } from './availability.js';
 import type { PluginConfig } from './config.js';
-import type { ProjectIdentity } from './identity.js';
+import { validateProjectSelectorV2, type ProjectIdentity } from './identity.js';
 
 // ---------------------------------------------------------------------------
 // Response types
@@ -230,26 +230,28 @@ export class EngramRestClient {
     identity: ProjectIdentity,
     selector: string,
   ): Promise<ProjectRegistrationResult> {
-    const normalizedSelector = selector.trim();
-    if (!normalizedSelector) {
+    let validatedSelector: string;
+    try {
+      validatedSelector = validateProjectSelectorV2(selector);
+    } catch {
       return {
         ok: false,
         error: {
           code: 'PROJECT_IDENTITY_INVALID',
-          message: 'project selector is empty',
+          message: 'project selector is empty or malformed',
           upgradeAction: 'regenerate_project_identity_v2',
           httpStatus: 400,
         },
       };
     }
 
-    const key = JSON.stringify([normalizedSelector, identity.projectIdentityV2 ?? null]);
+    const key = JSON.stringify([validatedSelector, identity.projectIdentityV2 ?? null]);
     const completed = this.completedProjectRegistrations.get(key);
     if (completed) return completed;
     const inFlight = this.inFlightProjectRegistrations.get(key);
     if (inFlight) return inFlight;
 
-    const registration = this.performProjectRegistration(identity, normalizedSelector);
+    const registration = this.performProjectRegistration(identity, validatedSelector);
     this.inFlightProjectRegistrations.set(key, registration);
     try {
       const result = await registration;
@@ -307,8 +309,17 @@ export class EngramRestClient {
         return projectRegistrationFailure(parsed.code, parsed.message, parsed.upgradeAction, response.status);
       }
 
+      const canonical = readCanonicalProject(payload);
+      if (!canonical) {
+        this.availability.recordFailure();
+        return projectRegistrationFailure(
+          'PROJECT_IDENTITY_UNAVAILABLE',
+          'project identity registration response is malformed',
+          'retry_project_identity_registration',
+          503,
+        );
+      }
       this.availability.recordSuccess();
-      const canonical = readCanonicalProject(payload) || selector;
       return { ok: true, canonicalProject: canonical };
     } catch (err: unknown) {
       this.availability.recordFailure();
@@ -784,7 +795,11 @@ function projectRegistrationFailure(
 function readCanonicalProject(payload: unknown): string {
   if (!payload || typeof payload !== 'object') return '';
   const value = (payload as { canonical_project?: unknown }).canonical_project;
-  return typeof value === 'string' ? value : '';
+  try {
+    return validateProjectSelectorV2(value);
+  } catch {
+    return '';
+  }
 }
 
 function parseProjectRegistrationError(

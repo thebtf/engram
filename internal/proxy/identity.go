@@ -56,8 +56,9 @@ func ValidateProjectIdentityV2(identity ProjectIdentityV2) error {
 	}
 	if len(identity.LegacyProjectID) > 256 || len(identity.DisplayName) > 256 ||
 		strings.TrimSpace(identity.LegacyProjectID) != identity.LegacyProjectID ||
+		strings.TrimSpace(identity.DisplayName) != identity.DisplayName ||
 		containsProjectIdentityControl(identity.LegacyProjectID) || containsProjectIdentityControl(identity.DisplayName) {
-		return invalid("selector or display name too long")
+		return invalid("selector or display name is malformed")
 	}
 	hasGit := identity.GitRemote != "" || identity.RelativePath != ""
 	hasAnchor := identity.NonGitAnchor != "" || identity.AnchorShared != nil
@@ -74,13 +75,8 @@ func ValidateProjectIdentityV2(identity ProjectIdentityV2) error {
 		if identity.NonGitAnchor != "" || identity.AnchorShared != nil {
 			return invalid("git identity cannot carry an anchor")
 		}
-		if len(identity.RelativePath) > 4096 || strings.Contains(identity.RelativePath, "\\") || strings.HasPrefix(identity.RelativePath, "/") || containsProjectIdentityControl(identity.RelativePath) {
+		if !normalizedProjectRelativePathV2(identity.RelativePath) {
 			return invalid("relative_path is not normalized POSIX relative form")
-		}
-		for _, part := range strings.Split(identity.RelativePath, "/") {
-			if part == ".." || part == "." {
-				return invalid("relative_path contains traversal")
-			}
 		}
 		return nil
 	}
@@ -94,6 +90,23 @@ func ValidateProjectIdentityV2(identity ProjectIdentityV2) error {
 		return invalid("non-git identity cannot carry git metadata")
 	}
 	return nil
+}
+
+func normalizedProjectRelativePathV2(value string) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) > 4096 || strings.TrimSpace(value) != value ||
+		strings.HasPrefix(value, "/") || !strings.HasSuffix(value, "/") ||
+		strings.Contains(value, "\\") || containsProjectIdentityControl(value) {
+		return false
+	}
+	for _, part := range strings.Split(strings.TrimSuffix(value, "/"), "/") {
+		if part == "" || part == "." || part == ".." || strings.TrimSpace(part) != part {
+			return false
+		}
+	}
+	return true
 }
 
 func containsProjectIdentityControl(value string) bool {

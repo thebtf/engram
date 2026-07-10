@@ -1,8 +1,17 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { EngramRestClient } from '../dist/client.js';
 import { handleSessionStart } from '../dist/hooks/session-start.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const vectors = JSON.parse(fs.readFileSync(
+  path.resolve(here, '../../../.agent/specs/security-project-identity/evidence/project-identity-v2-vectors.json'),
+  'utf8',
+));
 
 function gitIdentity() {
   return {
@@ -157,4 +166,84 @@ test('invalid bearer plus a known selector never reaches private data access', a
   assert.equal(result.ok, false);
   assert.equal(requests.length, 1);
   assert.equal(requests[0].authorization, 'Bearer invalid-bearer');
+});
+
+test('registration rejects shared invalid selectors before fetch and never trims them', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  for (const vector of vectors.invalid_vectors) {
+    if (vector.invalid_target !== 'selector') continue;
+    let requests = 0;
+    globalThis.fetch = async () => {
+      requests++;
+      return new Response(JSON.stringify({ canonical_project: 'must-not-run' }), { status: 200 });
+    };
+    const client = new EngramRestClient(clientConfig());
+    const result = await client.registerAndResolveProject(gitIdentity(), vector.selector);
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: 'PROJECT_IDENTITY_INVALID',
+        message: 'project selector is empty or malformed',
+        upgradeAction: 'regenerate_project_identity_v2',
+        httpStatus: 400,
+      },
+    }, vector.name);
+    assert.equal(requests, 0, vector.name);
+  }
+});
+
+test('registration preserves legacy selector characters accepted by the HTTP boundary', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const selector = 'legacy:C\\workspace';
+  let sentSelector = '';
+  globalThis.fetch = async (_url, init) => {
+    sentSelector = JSON.parse(String(init?.body)).project;
+    return new Response(JSON.stringify({ canonical_project: selector }), { status: 200 });
+  };
+  const client = new EngramRestClient(clientConfig());
+  const result = await client.registerAndResolveProject(gitIdentity(), selector);
+  assert.deepEqual(result, { ok: true, canonicalProject: selector });
+  assert.equal(sentSelector, selector);
+});
+
+test('2xx malformed canonical response is not cached and cannot reach downstream data', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const payloads = [
+    {},
+    { canonical_project: '' },
+    { canonical_project: 42 },
+    { canonical_project: ' invalid-canonical ' },
+    { canonical_project: '../private' },
+  ];
+  for (const payload of payloads) {
+    const paths = [];
+    globalThis.fetch = async (url) => {
+      paths.push(new URL(String(url)).pathname);
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    const client = new EngramRestClient(clientConfig());
+    const first = await client.registerAndResolveProject(gitIdentity(), 'legacy-selector');
+    if (first.ok) {
+      await client.searchContext({ project: first.canonicalProject, query: 'must-not-run' });
+    }
+    const second = await client.registerAndResolveProject(gitIdentity(), 'legacy-selector');
+    const expected = {
+      ok: false,
+      error: {
+        code: 'PROJECT_IDENTITY_UNAVAILABLE',
+        message: 'project identity registration response is malformed',
+        upgradeAction: 'retry_project_identity_registration',
+        httpStatus: 503,
+      },
+    };
+    assert.deepEqual(first, expected);
+    assert.deepEqual(second, expected);
+    assert.deepEqual(paths, ['/api/context/inject', '/api/context/inject']);
+  }
 });

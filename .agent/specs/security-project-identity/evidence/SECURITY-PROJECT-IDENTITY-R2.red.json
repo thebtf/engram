@@ -1,0 +1,58 @@
+{
+  "task_id": "SECURITY-PROJECT-IDENTITY-R2",
+  "change_request": "SECURITY-PROJECT-IDENTITY",
+  "phase": "RED",
+  "observed_at": "2026-07-10T16:57:23.6354439Z",
+  "base_commit": "d22ebb9fe1914f514eaf9250e092dcd3b396f9cc",
+  "infrastructure": {
+    "go": "go1.25.11; go test -list passed",
+    "node": "v24.2.0; node:test invocable",
+    "typescript": "typescript 5.9.3 installed; tsc build passed",
+    "postgresql": "17.10 on isolated database engram_prc_identity_r2_maker_d22"
+  },
+  "red_cases": [
+    {
+      "finding": "C1",
+      "test": "TestRegisterAndResolve_LegacyOnlySoftDeletedCanonicalFailsWithoutMutation",
+      "result": "FAIL",
+      "failure_reason": "legacy-only registration returned nil error for a soft-deleted canonical collision"
+    },
+    {
+      "finding": "C2",
+      "test": "TestContextInject_RejectsRawSelectorAndMetadataBeforeProjectMutation",
+      "result": "FAIL 3/3 subtests",
+      "failure_reason": "invalid outer selector persisted one row; invalid display and relative metadata returned HTTP 200"
+    },
+    {
+      "finding": "C3",
+      "test": "shared invalid vectors and wrong-type anchor sharing are rejected exactly",
+      "result": "FAIL",
+      "failure_reason": "Claude accepted display whitespace and Boolean-coerced wrong-type anchor_shared"
+    },
+    {
+      "finding": "C4",
+      "test": "registration fails closed on malformed canonical responses without raw fallback / 2xx malformed canonical response is not cached",
+      "result": "FAIL in Claude and OpenClaw",
+      "failure_reason": "missing canonical_project returned raw-selector success and OpenClaw cached it"
+    },
+    {
+      "finding": "C5",
+      "test": "shared invalid metadata vectors across store, proxy, Claude, and OpenClaw",
+      "result": "FAIL",
+      "failure_reason": "display whitespace and noncanonical relative path forms reached storage or passed validation; OpenClaw trimmed invalid selectors"
+    },
+    {
+      "finding": "SELF-REVIEW-COMPAT-1",
+      "test": "TestContextInject_LegacyAliasWithInternalWhitespaceRemainsCompatible",
+      "result": "FAIL",
+      "failure_reason": "legacy alias with internal whitespace was rejected by the stricter canonical-selector validator"
+    },
+    {
+      "finding": "SELF-REVIEW-COMPAT-2",
+      "test": "Claude and OpenClaw preserve legacy selector characters accepted by the HTTP boundary",
+      "result": "FAIL in both consumers",
+      "failure_reason": "the first selector allow-list rejected colon and backslash even though the established HTTP boundary accepts them"
+    }
+  ],
+  "red_gate_conclusion": "Runners were healthy; C1-C5 and both self-review compatibility regressions failed for the intended behavioral reasons before their fixes."
+}

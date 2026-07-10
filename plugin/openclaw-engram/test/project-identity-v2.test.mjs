@@ -67,3 +67,18 @@ test('OpenClaw rejects non-normalized metadata and unknown anchor-file fields', 
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+test('OpenClaw rejects every shared invalid metadata vector', () => {
+  for (const vector of vectors.invalid_vectors) {
+    if (vector.invalid_target !== 'identity') continue;
+    const identity = buildProjectIdentityV2(vector);
+    assert.throws(() => validateProjectIdentityV2(identity), /PROJECT_IDENTITY_INVALID/, vector.name);
+  }
+  const wrongBoolean = buildProjectIdentityV2({
+    legacy_project_id: 'workspace',
+    display_name: 'workspace',
+    non_git_anchor: '00112233445566778899aabbccddeeff',
+    anchor_shared: 'false',
+  });
+  assert.throws(() => validateProjectIdentityV2(wrongBoolean), /PROJECT_IDENTITY_INVALID/);
+});
