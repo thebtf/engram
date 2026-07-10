@@ -102,7 +102,7 @@ type BulkOpSnapshot struct {
 //
 //	"<id>":           {"kind": "restore", "before": <row JSON>}
 //	"memory:<id>":    {"kind": "delete"}
-//	"candidate:<id>": {"kind": "restore", "before": <candidate JSON>}
+//	"candidate:<id>": {"kind": "restore", "before": <candidate JSON>, "after": <candidate JSON>}
 type SnapshotEntryKind string
 
 const (
@@ -115,6 +115,7 @@ const (
 type SnapshotEntry struct {
 	Kind   SnapshotEntryKind `json:"kind"`
 	Before json.RawMessage   `json:"before,omitempty"` // populated only for EntryKindRestore
+	After  json.RawMessage   `json:"after,omitempty"`  // expected operation-owned post-state for conflict detection
 }
 
 // NewBulkOpSnapshot constructs a BulkOpSnapshot with validation.

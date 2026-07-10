@@ -1,0 +1,11 @@
+{
+  "task_id": "DB-BULKOPS-ROLLBACK-CANDIDATE-CONFLICT",
+  "observed_at": "2026-07-10T05:20:12Z",
+  "stack": "GO",
+  "test_file": "internal/bulkops/facade_test.go",
+  "test_name": "TestFacade_BulkPromote_CandidateChangedAfterExecuteConflictsAndPreservesCurrent",
+  "database": "engram_prc_bulkops_edges_red_20260710_081930",
+  "failure_reason": "Rollback did not detect that the promoted candidate changed after Execute committed; it returned success, overwrote concurrent content C with captured content B, reset status to pending, and deleted the promoted memory.",
+  "runner_exit_code": 1,
+  "runner_stdout_excerpt": "expected rollback_conflict, got nil; expected concurrent-C, got pre-update content; expected promoted, got pending"
+}

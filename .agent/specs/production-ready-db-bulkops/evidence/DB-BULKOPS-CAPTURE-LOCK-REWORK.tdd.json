@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "completed_at_utc": "2026-07-10T05:45:01Z",
+  "implementation_parent": "2b085de663d5ba9dfa97adf9ee58de062ee0997c",
+  "scope": "bulk_promote capture locking, exact candidate rollback conflict detection, legacy fail-closed behavior, and normalized dry-run semantics",
+  "infrastructure_probe": {
+    "command": "go test ./internal/bulkops -list '^TestFacade_BulkPromote'",
+    "exit_code": 0
+  },
+  "red": [
+    {
+      "database": "engram_prc_bulkops_capture_red_20260710_080234",
+      "test": "TestFacade_BulkPromote_ConcurrentCommittedUpdateIsCapturedPromotedAndRollbackable",
+      "exit_code": 1,
+      "observed": "Execute captured stale candidate A before waiting for the row lock, promoted memory A after candidate B committed, and rollback erased B.",
+      "artifact": "DB-BULKOPS-CAPTURE-LOCK-REWORK.red.json"
+    },
+    {
+      "database": "engram_prc_bulkops_edges_red_20260710_081930",
+      "test": "TestFacade_BulkPromote_CandidateChangedAfterExecuteConflictsAndPreservesCurrent",
+      "exit_code": 1,
+      "observed": "Rollback returned success, overwrote post-Execute candidate C with B, reset status to pending, and deleted the promoted memory.",
+      "artifact": "DB-BULKOPS-ROLLBACK-CANDIDATE-CONFLICT.red.json"
+    },
+    {
+      "database": "engram_prc_bulkops_edges_red_20260710_081930",
+      "test": "TestFacade_BulkPromote_DryRunNormalizesDuplicateAndZeroIDs",
+      "exit_code": 1,
+      "observed": "Dry-run counted six raw IDs while execution consumed two sorted unique non-zero IDs.",
+      "artifact": "DB-BULKOPS-DRY-RUN-NORMALIZATION.red.json"
+    },
+    {
+      "database": "engram_prc_bulkops_edges_green_20260710_082347",
+      "test": "TestFacade_BulkPromote_LegacySnapshotWithoutAfterFailsClosedAndPreservesCandidate",
+      "exit_code": 1,
+      "observed": "A candidate restore entry without After was accepted and rollback silently overwrote a later candidate edit.",
+      "artifact": "DB-BULKOPS-LEGACY-CANDIDATE-NO-AFTER.red.json"
+    }
+  ],
+  "green": {
+    "focused_repeat_database": "engram_prc_bulkops_final_focus_20260710_082852",
+    "command": "go test ./internal/bulkops -run '<nine high-risk bulk-promote and candidate-rollback regressions>' -count=20",
+    "exit_code": 0,
+    "observed": "PASS: 180/180 executions in 41.437s"
+  },
+  "refactor": {
+    "changes": [
+      "removed tautological nil checks after enforcing a non-nil promoted candidate result",
+      "normalized time locations and nil versus empty candidate slices before exact after-state comparison",
+      "updated rollback contract comments to cover both memory and candidate conflicts"
+    ],
+    "verification": "targeted restored GREEN, full package, race, vet, diagnostics, and diff checks passed"
+  },
+  "prove_it": {
+    "database": "engram_prc_bulkops_proveit_20260710_083420",
+    "sentinels": [
+      "temporarily restored raw len(op.CandidateIDs) dry-run counting",
+      "temporarily accepted every exact candidate after-state comparison",
+      "temporarily accepted legacy candidate entries missing After"
+    ],
+    "exit_codes": [1, 1, 1],
+    "observed": "Each corresponding permanent regression failed and exposed the destructive behavior; all three passed after sentinel removal."
+  },
+  "final_verification": {
+    "full_database": "engram_prc_bulkops_final_postprove_20260710_083859",
+    "full_package": "PASS: go test ./internal/bulkops -count=1 -coverprofile DB-BULKOPS-FINAL.cover.out, exit 0, package 3.901s",
+    "race_database": "engram_prc_bulkops_final_postprove_race_20260710_084223",
+    "race": "PASS: go test -race ./internal/bulkops -count=1, exit 0, package 9.538s",
+    "models": "PASS: go test ./pkg/models -count=1, exit 0",
+    "vet": "PASS: go vet ./internal/bulkops ./internal/db/gorm ./pkg/models, exit 0",
+    "diagnostics": "PASS: no warnings or errors in facade.go, rollback.go, facade_test.go, rollback_test.go, snapshot.go",
+    "diff_check": "PASS: git diff --check, exit 0"
+  },
+  "coverage": {
+    "artifact": "DB-BULKOPS-FINAL.cover.out",
+    "package_statements_percent": 76.8,
+    "executeBulkPromote_percent": 80.0,
+    "lockPromoteCandidatesTx_percent": 81.8,
+    "Rollback_percent": 79.6,
+    "lockCandidateRowsForRollbackTx_percent": 84.2,
+    "detectCandidateConflicts_percent": 81.2,
+    "matchesExpectedCandidateState_percent": 87.5,
+    "threshold_percent": 80,
+    "status": "WARN",
+    "note": "Package coverage is informationally below 80%; every load-bearing new branch has deterministic PostgreSQL regression, repeat-20, race, and mutation/prove-it evidence."
+  },
+  "database_cleanup": {
+    "maker_owned_databases": "all dropped after pg_stat_activity returned zero sessions",
+    "orphan_database": "engram_prc_bulkops_check safely classified and dropped after zero-session verification",
+    "final_bulk_database_count": 0,
+    "final_bulk_session_count": 0
+  },
+  "status": "PASS_WITH_COVERAGE_WARNING"
+}

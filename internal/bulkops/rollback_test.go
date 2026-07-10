@@ -596,6 +596,21 @@ func TestRollback_CandidateReviewPromoteDeletesMemoryAndRestoresPending(t *testi
 	require.Equal(t, models.CandidateStatusPromoted, updatedCandidate.Status)
 	require.NotNil(t, updatedCandidate.PromotedMemoryID)
 	require.Equal(t, createdMemory.ID, *updatedCandidate.PromotedMemoryID)
+	candidateAfter, err := json.Marshal(updatedCandidate)
+	require.NoError(t, err)
+	beforeState, err = json.Marshal(map[string]models.SnapshotEntry{
+		fmt.Sprintf("candidate:%d", candidate.ID): {
+			Kind:   models.EntryKindRestore,
+			Before: candidateBefore,
+			After:  candidateAfter,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(
+		"UPDATE bulk_op_snapshots SET before_state = CAST(? AS jsonb) WHERE snapshot_id = ?",
+		string(beforeState),
+		createdSnap.SnapshotID,
+	).Error)
 	require.NoError(t, snapStore.AmendPromoteEntries(ctx, createdSnap.SnapshotID, []int64{createdMemory.ID}))
 	assert.True(t, createdMemory.CreatedAt.After(createdSnap.CreatedAt), "fixture must create promoted memory after snapshot")
 	assert.True(t, createdMemory.UpdatedAt.After(createdSnap.CreatedAt), "fixture must create promoted memory updated timestamp after snapshot")
@@ -681,6 +696,21 @@ func TestRollback_CandidateReviewPromoteEditedMemoryConflicts(t *testing.T) {
 	require.Equal(t, models.CandidateStatusPromoted, updatedCandidate.Status)
 	require.NotNil(t, updatedCandidate.PromotedMemoryID)
 	require.Equal(t, createdMemory.ID, *updatedCandidate.PromotedMemoryID)
+	candidateAfter, err := json.Marshal(updatedCandidate)
+	require.NoError(t, err)
+	beforeState, err = json.Marshal(map[string]models.SnapshotEntry{
+		fmt.Sprintf("candidate:%d", candidate.ID): {
+			Kind:   models.EntryKindRestore,
+			Before: candidateBefore,
+			After:  candidateAfter,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(
+		"UPDATE bulk_op_snapshots SET before_state = CAST(? AS jsonb) WHERE snapshot_id = ?",
+		string(beforeState),
+		createdSnap.SnapshotID,
+	).Error)
 	require.NoError(t, snapStore.AmendPromoteEntries(ctx, createdSnap.SnapshotID, []int64{createdMemory.ID}))
 
 	editedAt := createdMemory.CreatedAt.Add(2 * time.Second)

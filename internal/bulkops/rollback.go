@@ -1,9 +1,11 @@
 // Package bulkops — rollback.go implements snapshot rollback with conflict detection.
 //
-// Rollback restores the before_state of a bulk_op_snapshot to the memories table.
-// Per spec EC-F3: if any affected memory's updated_at > snapshot.created_at, the
-// rollback is refused (not partially applied). The caller receives ErrRollbackConflict
-// and an audit entry with action='rollback_attempted_with_conflict'.
+// Rollback restores the before_state of a bulk_op_snapshot to memories and, for
+// candidate operations, crystallization candidates. Per spec EC-F3, rollback is
+// refused atomically when a memory changed after the operation or a candidate no
+// longer exactly matches the persisted operation-owned after-state. The caller
+// receives ErrRollbackConflict and an audit entry with
+// action='rollback_attempted_with_conflict'.
 //
 // Successful rollback writes action='rollback' to the audit log and marks the snapshot
 // status='rolled_back' via SnapshotStore.MarkRolledBack.
@@ -24,10 +26,11 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 	gormpkg "gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-// ErrRollbackConflict is returned when at least one affected memory has been modified
-// after the snapshot was captured. Per spec EC-F3.
+// ErrRollbackConflict is returned when at least one affected memory or candidate no
+// longer matches the state owned by the snapshot operation. Per spec EC-F3.
 var ErrRollbackConflict = errors.New("rollback_conflict")
 
 // ErrSnapshotNotRollbackable is returned when the snapshot status is not 'committed'
@@ -40,16 +43,16 @@ type RollbackResult struct {
 	SnapshotID string `json:"snapshot_id"`
 	// RestoredCount is the number of memory rows restored.
 	RestoredCount int `json:"restored_count"`
-	// ConflictIDs contains memory IDs that were modified after the snapshot (populated
-	// when ErrRollbackConflict is returned).
+	// ConflictIDs contains memory or candidate IDs whose current state no longer
+	// matches the operation-owned post-state (populated when ErrRollbackConflict is returned).
 	ConflictIDs []int64 `json:"conflict_ids,omitempty"`
 }
 
 // Rollback rolls back a committed bulk_op_snapshot.
 //
 // Admin gate: identity.Role must be auth.RoleAdmin.
-// Conflict check (EC-F3): if any affected memory's current updated_at > snapshot.created_at,
-// the rollback is refused atomically (no partial restore). An audit entry with
+// Conflict check (EC-F3): memory changes and exact candidate after-state mismatches
+// refuse rollback atomically (no partial restore). An audit entry with
 // action='rollback_attempted_with_conflict' is written.
 // On success: memory rows are restored, audit action='rollback' is written, snapshot
 // status is set to 'rolled_back'.
@@ -77,9 +80,10 @@ func Rollback(
 	var conflictIDs []int64
 
 	txErr := db.WithContext(ctx).Transaction(func(tx *gormpkg.DB) error {
-		// Lock order is deliberate: snapshot first, then all affected memory rows
-		// in sorted ID order. The conflict decision, restore, and status CAS therefore
-		// observe one transactional state with no read-to-write TOCTOU window.
+		// Lock order is deliberate: snapshot first, then candidate rows, then memory
+		// rows, with each entity class locked in sorted ID order. The conflict decision,
+		// restore, and status CAS therefore observe one transactional state with no
+		// read-to-write TOCTOU window.
 		snap, err := snapshotStore.GetForUpdateTx(ctx, tx, snapshotID)
 		if err != nil {
 			if errors.Is(err, gormpkg.ErrRecordNotFound) {
@@ -105,6 +109,8 @@ func Rollback(
 		// restore entry if metadata drifts.
 		var idsToCheck []int64
 		var createdIDsToCheck []int64
+		var candidateIDsToLock []int64
+		candidateEntriesToCheck := make(map[int64]models.SnapshotEntry)
 		for key, entry := range typedEntries {
 			entity, id, parseErr := parseSnapshotEntryKey(key)
 			if parseErr != nil {
@@ -116,12 +122,30 @@ func Rollback(
 			}
 			if entity == snapshotEntryEntityCandidate ||
 				(entity == "" && (snap.OpType == models.SnapshotOpBulkPromote || snap.OpType == models.SnapshotOpCandidateReviewAction)) {
+				candidateIDsToLock = append(candidateIDsToLock, id)
+				// Candidate rollback is safe only when the snapshot persists the exact
+				// operation-owned post-state. Legacy entries without After are still
+				// locked, but detectCandidateConflicts fails them closed instead of
+				// guessing from snapshot timestamps and overwriting a later edit.
+				candidateEntriesToCheck[id] = entry
 				continue
 			}
 			idsToCheck = append(idsToCheck, id)
 		}
+		candidateIDsToLock = sortedUniqueIDs(candidateIDsToLock)
 		idsToCheck = sortedUniqueIDs(idsToCheck)
 		createdIDsToCheck = sortedUniqueIDs(createdIDsToCheck)
+		if len(candidateIDsToLock) > 0 && candidateStore == nil {
+			return fmt.Errorf("rollback: candidateStore required to roll back candidates %v", candidateIDsToLock)
+		}
+		lockedCandidates, err := lockCandidateRowsForRollbackTx(ctx, tx, candidateIDsToLock)
+		if err != nil {
+			return fmt.Errorf("rollback: lock affected candidates: %w", err)
+		}
+		candidateConflicts, err := detectCandidateConflicts(lockedCandidates, candidateEntriesToCheck)
+		if err != nil {
+			return fmt.Errorf("rollback: candidate conflict detection: %w", err)
+		}
 		allMemoryIDs := make([]int64, 0, len(idsToCheck)+len(createdIDsToCheck))
 		allMemoryIDs = append(allMemoryIDs, idsToCheck...)
 		allMemoryIDs = append(allMemoryIDs, createdIDsToCheck...)
@@ -130,11 +154,14 @@ func Rollback(
 			return fmt.Errorf("rollback: lock affected memories: %w", err)
 		}
 
-		conflictIDs, err = detectConflicts(lockedRows, idsToCheck, snap.CreatedAt, snap.OpType, typedEntries)
+		conflictIDs = append(conflictIDs, candidateConflicts...)
+		memoryConflicts, err := detectConflicts(lockedRows, idsToCheck, snap.CreatedAt, snap.OpType, typedEntries)
 		if err != nil {
 			return fmt.Errorf("rollback: conflict detection: %w", err)
 		}
+		conflictIDs = append(conflictIDs, memoryConflicts...)
 		conflictIDs = append(conflictIDs, detectCreatedRowConflicts(lockedRows, createdIDsToCheck)...)
+		conflictIDs = sortedUniqueIDs(conflictIDs)
 		if len(conflictIDs) > 0 {
 			return ErrRollbackConflict
 		}
@@ -272,6 +299,106 @@ func sortedUniqueIDs(ids []int64) []int64 {
 	}
 	sort.Slice(unique, func(i, j int) bool { return unique[i] < unique[j] })
 	return unique
+}
+
+func lockCandidateRowsForRollbackTx(
+	ctx context.Context,
+	tx *gormpkg.DB,
+	ids []int64,
+) (map[int64]*models.CrystallizationCandidate, error) {
+	ids = sortedUniqueIDs(ids)
+	locked := make(map[int64]*models.CrystallizationCandidate, len(ids))
+	if len(ids) == 0 {
+		return locked, nil
+	}
+
+	var rows []struct {
+		ID int64
+	}
+	if err := tx.WithContext(ctx).
+		Table("crystallization_candidates").
+		Select("id").
+		Where("id IN ?", ids).
+		Order("id ASC").
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	found := make(map[int64]struct{}, len(rows))
+	for _, row := range rows {
+		found[row.ID] = struct{}{}
+	}
+	txCandidateStore := gormdb.NewCandidateStore(tx, nil)
+	for _, id := range ids {
+		if _, ok := found[id]; !ok {
+			continue
+		}
+		candidate, err := txCandidateStore.Get(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("read locked candidate %d: %w", id, err)
+		}
+		locked[id] = candidate
+	}
+	return locked, nil
+}
+
+func detectCandidateConflicts(
+	currentByID map[int64]*models.CrystallizationCandidate,
+	entries map[int64]models.SnapshotEntry,
+) ([]int64, error) {
+	ids := make([]int64, 0, len(entries))
+	for id := range entries {
+		ids = append(ids, id)
+	}
+	ids = sortedUniqueIDs(ids)
+
+	var conflicts []int64
+	for _, id := range ids {
+		current, exists := currentByID[id]
+		if !exists {
+			conflicts = append(conflicts, id)
+			continue
+		}
+		matches, err := matchesExpectedCandidateState(entries[id], current)
+		if err != nil {
+			return nil, fmt.Errorf("candidate %d: %w", id, err)
+		}
+		if !matches {
+			conflicts = append(conflicts, id)
+		}
+	}
+	return conflicts, nil
+}
+
+func matchesExpectedCandidateState(entry models.SnapshotEntry, current *models.CrystallizationCandidate) (bool, error) {
+	if current == nil || len(entry.After) == 0 || string(entry.After) == "null" {
+		return false, nil
+	}
+
+	var expected models.CrystallizationCandidate
+	if err := json.Unmarshal(entry.After, &expected); err != nil {
+		return false, fmt.Errorf("unmarshal expected candidate after-state: %w", err)
+	}
+	expected = normalizedCandidateState(expected)
+	currentNormalized := normalizedCandidateState(*current)
+	return reflect.DeepEqual(expected, currentNormalized), nil
+}
+
+func normalizedCandidateState(candidate models.CrystallizationCandidate) models.CrystallizationCandidate {
+	candidate.CreatedAt = candidate.CreatedAt.UTC()
+	candidate.UpdatedAt = candidate.UpdatedAt.UTC()
+	if candidate.ReviewAfter != nil {
+		reviewAfter := candidate.ReviewAfter.UTC()
+		candidate.ReviewAfter = &reviewAfter
+	}
+	if len(candidate.EvidenceHandles) == 0 {
+		candidate.EvidenceHandles = nil
+	}
+	if len(candidate.AffectedProjects) == 0 {
+		candidate.AffectedProjects = nil
+	}
+	return candidate
 }
 
 // detectConflicts returns the IDs of memories modified after snapshotTime.

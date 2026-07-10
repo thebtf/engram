@@ -21,6 +21,7 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 	gormpkg "gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ErrAdminRequired is returned when a non-admin caller attempts a bulk operation.
@@ -128,7 +129,7 @@ func (f *Facade) Execute(ctx context.Context, identity auth.Identity, op BulkOp)
 // --- bulk_promote ---
 
 func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity, op BulkOp) (*ExecuteResult, error) {
-	ids := op.CandidateIDs
+	ids := sortedUniqueIDs(op.CandidateIDs)
 
 	if op.DryRun {
 		return &ExecuteResult{
@@ -148,68 +149,51 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 	if f.memoryStore == nil {
 		return nil, fmt.Errorf("bulk_promote: memory store not available")
 	}
-
-	// Capture before-state using typed entries (MAJOR fix: distinguish restore vs delete).
-	//
-	// The before_state JSONB uses SnapshotEntry{Kind, Before} per row:
-	//   - Candidates (by candidate:<id>): EntryKindRestore — rollback restores them to pending.
-	//   - Promoted memory rows (by numeric memory ID): EntryKindDelete — rollback hard-deletes them.
-	//
-	// The entity-prefixed candidate key remains distinct even when the independent
-	// candidate and memory sequences allocate the same numeric ID. Numeric restore
-	// keys from older bulk_promote snapshots remain backward-compatible in rollback.
-	actor := resolveActor(identity)
-	snapshotID, beforeState, capturedAt, err := f.capturePromoteBeforeState(ctx, ids)
-	if err != nil {
-		return nil, fmt.Errorf("bulk_promote snapshot capture: %w", err)
+	if f.snapshotStore == nil {
+		return nil, fmt.Errorf("bulk_promote: snapshot store not available")
 	}
 
+	actor := resolveActor(identity)
 	params := op.Parameters
 	if len(params) == 0 {
 		params, _ = json.Marshal(map[string]any{"candidate_ids": ids})
 	}
-	snap, err := models.NewBulkOpSnapshot(snapshotID, models.SnapshotOpBulkPromote, actor, beforeState)
-	if err != nil {
-		return nil, fmt.Errorf("bulk_promote new_snapshot: %w", err)
-	}
-	snap.CreatedAt = capturedAt
-	// AffectedMemoryIDs for bulk_promote tracks the CANDIDATE ids at this point
-	// (before promotions run). After promotions, we amend it with the promoted memory IDs
-	// so conflict detection can check the actual memory rows. The before_state typed entries
-	// are the rollback source of truth — AffectedMemoryIDs is only used for conflict detection.
-	snap.AffectedMemoryIDs = ids // candidate IDs pre-op; amended below with memory IDs
-	snap.SourceSessionID = op.SourceSessionID
-	snap.Parameters = params
 
 	var result *ExecuteResult
 	promotionAudits := make([]gormdb.AuditLogEntry, 0, len(ids))
 	txErr := f.memoryStore.GetDB().WithContext(ctx).Transaction(func(tx *gormpkg.DB) error {
-		// Snapshot creation, every successful candidate promotion, and the final
-		// promoted-memory amendment form one commit unit. The store methods may
-		// create nested savepoints, but all writes remain owned by this transaction.
 		txSnapshotStore := gormdb.NewSnapshotStore(tx)
 		txCandidateStore := gormdb.NewCandidateStore(tx, nil)
 
-		createdSnapshot, createErr := txSnapshotStore.Create(ctx, snap)
-		if createErr != nil {
-			return fmt.Errorf("store_snapshot: %w", createErr)
+		// Lock all existing candidates in one deterministic order before reading
+		// any before-state. Under PostgreSQL READ COMMITTED, a row update that
+		// commits while this SELECT waits becomes the locked/current row version.
+		// The captured candidate, promoted memory input, and rollback snapshot
+		// therefore describe the same committed state.
+		captures, lockedIDs, capturedAt, captureErr := lockPromoteCandidatesTx(ctx, tx, txCandidateStore, ids)
+		if captureErr != nil {
+			return fmt.Errorf("capture locked candidates: %w", captureErr)
 		}
 
 		txResult := &ExecuteResult{
-			SnapshotID: createdSnapshot.SnapshotID,
-			DryRun:     false,
-			Promoted:   []int64{},
+			DryRun:   false,
+			Promoted: []int64{},
+		}
+		lockedSet := make(map[int64]struct{}, len(lockedIDs))
+		for _, id := range lockedIDs {
+			lockedSet[id] = struct{}{}
 		}
 		for _, id := range ids {
-			// Load the candidate through the transaction so the promotion observes
-			// the same database state as snapshot creation and amendment.
-			candidate, cErr := txCandidateStore.Get(ctx, id)
-			if cErr != nil {
-				txResult.Errors = append(txResult.Errors, fmt.Sprintf("candidate %d: get: %v", id, cErr))
-				log.Warn().Err(cErr).Int64("candidate_id", id).Msg("bulk_promote: get candidate failed")
-				continue
+			if _, ok := lockedSet[id]; !ok {
+				txResult.Errors = append(txResult.Errors, fmt.Sprintf("candidate %d: get: %v", id, gormpkg.ErrRecordNotFound))
 			}
-			// Build memory from candidate — same logic as promote_candidate MCP tool.
+		}
+
+		successEntries := make(map[string]models.SnapshotEntry, len(lockedIDs))
+		successfulCandidateIDs := make([]int64, 0, len(lockedIDs))
+		for _, id := range lockedIDs {
+			capture := captures[id]
+			candidate := capture.Candidate
 			project := ""
 			if len(candidate.AffectedProjects) > 0 {
 				project = candidate.AffectedProjects[0]
@@ -222,23 +206,37 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 				Tags:          []string{fmt.Sprintf("candidate:%d", id), "crystallized"},
 				SourceAgent:   "crystallization",
 			}
-			// PromoteWithMemory uses a nested transaction/savepoint on tx. Its audit
-			// dependency is deliberately nil: audit rows are emitted only after the
-			// outer transaction commits, so a failed amendment cannot leave a false
-			// promotion audit behind.
 			promoted, createdMemory, promErr := txCandidateStore.PromoteWithMemory(ctx, id, mem)
 			if promErr != nil {
 				txResult.Errors = append(txResult.Errors, fmt.Sprintf("candidate %d: %v", id, promErr))
 				log.Warn().Err(promErr).Int64("candidate_id", id).Msg("bulk_promote: candidate promotion failed")
 				continue
 			}
-			txResult.AffectedCount++
-			if promoted != nil && promoted.PromotedMemoryID != nil {
-				txResult.Promoted = append(txResult.Promoted, *promoted.PromotedMemoryID)
-			} else if createdMemory != nil {
-				txResult.Promoted = append(txResult.Promoted, createdMemory.ID)
+			if promoted == nil {
+				return fmt.Errorf("candidate %d promotion returned no post-promotion candidate state", id)
 			}
-			if promoted != nil && createdMemory != nil {
+			promotedAfter, marshalErr := json.Marshal(promoted)
+			if marshalErr != nil {
+				return fmt.Errorf("serialize promoted candidate %d after-state: %w", id, marshalErr)
+			}
+			txResult.AffectedCount++
+			var promotedMemoryID int64
+			if promoted.PromotedMemoryID != nil {
+				promotedMemoryID = *promoted.PromotedMemoryID
+			} else if createdMemory != nil {
+				promotedMemoryID = createdMemory.ID
+			}
+			if promotedMemoryID == 0 {
+				return fmt.Errorf("candidate %d promotion returned no memory ID", id)
+			}
+			txResult.Promoted = append(txResult.Promoted, promotedMemoryID)
+			successEntries[fmt.Sprintf("candidate:%d", id)] = models.SnapshotEntry{
+				Kind:   models.EntryKindRestore,
+				Before: capture.Before,
+				After:  promotedAfter,
+			}
+			successfulCandidateIDs = append(successfulCandidateIDs, id)
+			if createdMemory != nil {
 				promotionAudits = append(promotionAudits, gormdb.AuditLogEntry{
 					Action:          "promote_candidate",
 					Actor:           "system",
@@ -248,13 +246,36 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 			}
 		}
 
-		// The amendment is part of the same commit unit. Any error aborts snapshot
-		// creation and all successful promotions instead of returning an unusable
-		// rollback contract.
-		if len(txResult.Promoted) > 0 {
-			if amendErr := txSnapshotStore.AmendPromoteEntries(ctx, createdSnapshot.SnapshotID, txResult.Promoted); amendErr != nil {
-				return fmt.Errorf("amend snapshot entries: %w", amendErr)
-			}
+		if len(txResult.Promoted) == 0 {
+			result = txResult
+			return nil
+		}
+
+		beforeState, marshalErr := json.Marshal(successEntries)
+		if marshalErr != nil {
+			return fmt.Errorf("serialize promote before_state: %w", marshalErr)
+		}
+		snap, snapshotErr := models.NewBulkOpSnapshot(
+			uuid.New().String(),
+			models.SnapshotOpBulkPromote,
+			actor,
+			json.RawMessage(beforeState),
+		)
+		if snapshotErr != nil {
+			return fmt.Errorf("new_snapshot: %w", snapshotErr)
+		}
+		snap.CreatedAt = capturedAt
+		snap.AffectedMemoryIDs = successfulCandidateIDs
+		snap.SourceSessionID = op.SourceSessionID
+		snap.Parameters = params
+
+		createdSnapshot, createErr := txSnapshotStore.Create(ctx, snap)
+		if createErr != nil {
+			return fmt.Errorf("store_snapshot: %w", createErr)
+		}
+		txResult.SnapshotID = createdSnapshot.SnapshotID
+		if amendErr := txSnapshotStore.AmendPromoteEntries(ctx, createdSnapshot.SnapshotID, txResult.Promoted); amendErr != nil {
+			return fmt.Errorf("amend snapshot entries: %w", amendErr)
 		}
 
 		result = txResult
@@ -458,35 +479,65 @@ func (f *Facade) captureCandidateBeforeState(ctx context.Context, ids []int64) (
 	return snapshotID, json.RawMessage(bs), nil
 }
 
-// capturePromoteBeforeState captures candidate before-state as typed SnapshotEntry rows.
-// Each candidate ID is stored as EntryKindRestore with the candidate body as Before data.
-// Promoted memory IDs (created by the op) are added later via AmendPromoteEntries as
-// EntryKindDelete (no before needed — they did not exist pre-op).
-func (f *Facade) capturePromoteBeforeState(ctx context.Context, candidateIDs []int64) (string, json.RawMessage, time.Time, error) {
-	snapshotID := uuid.New().String()
-	capturedAt, err := f.authoritativeCaptureTime(ctx)
-	if err != nil {
-		return "", nil, time.Time{}, err
+type promoteCandidateCapture struct {
+	Candidate *models.CrystallizationCandidate
+	Before    json.RawMessage
+}
+
+// lockPromoteCandidatesTx locks all currently existing requested candidates in
+// ascending ID order, then captures their current committed state from the same
+// transaction. Missing IDs are intentionally absent from the result: an insert
+// that races after this locked capture is not owned by the bulk operation and
+// must not be promoted or included in its rollback snapshot.
+func lockPromoteCandidatesTx(
+	ctx context.Context,
+	tx *gormpkg.DB,
+	candidateStore *gormdb.CandidateStore,
+	candidateIDs []int64,
+) (map[int64]promoteCandidateCapture, []int64, time.Time, error) {
+	ids := sortedUniqueIDs(candidateIDs)
+	type candidateIDRow struct {
+		ID int64
 	}
-	state := make(map[string]models.SnapshotEntry, len(candidateIDs))
-	for _, id := range candidateIDs {
-		c, err := f.candidateStore.Get(ctx, id)
+	rows := make([]candidateIDRow, 0, len(ids))
+	if len(ids) > 0 {
+		if err := tx.WithContext(ctx).
+			Table("crystallization_candidates").
+			Select("id").
+			Where("id IN ?", ids).
+			Order("id ASC").
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Find(&rows).Error; err != nil {
+			return nil, nil, time.Time{}, fmt.Errorf("lock candidates: %w", err)
+		}
+	}
+
+	var capturedAt time.Time
+	if err := tx.WithContext(ctx).
+		Raw("SELECT clock_timestamp()").
+		Scan(&capturedAt).Error; err != nil {
+		return nil, nil, time.Time{}, fmt.Errorf("capture authoritative snapshot time: %w", err)
+	}
+	capturedAt = capturedAt.UTC()
+
+	captures := make(map[int64]promoteCandidateCapture, len(rows))
+	lockedIDs := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		candidate, err := candidateStore.Get(ctx, row.ID)
 		if err != nil {
-			// Missing candidate: still record a restore entry with empty Before.
-			state[fmt.Sprintf("candidate:%d", id)] = models.SnapshotEntry{Kind: models.EntryKindRestore}
-			continue
+			return nil, nil, time.Time{}, fmt.Errorf("load locked candidate %d: %w", row.ID, err)
 		}
-		before, marshalErr := json.Marshal(c)
-		if marshalErr != nil {
-			return "", nil, time.Time{}, fmt.Errorf("capturePromoteBeforeState: marshal candidate %d: %w", id, marshalErr)
+		before, err := json.Marshal(candidate)
+		if err != nil {
+			return nil, nil, time.Time{}, fmt.Errorf("serialize locked candidate %d: %w", row.ID, err)
 		}
-		state[fmt.Sprintf("candidate:%d", id)] = models.SnapshotEntry{Kind: models.EntryKindRestore, Before: json.RawMessage(before)}
+		captures[row.ID] = promoteCandidateCapture{
+			Candidate: candidate,
+			Before:    json.RawMessage(before),
+		}
+		lockedIDs = append(lockedIDs, row.ID)
 	}
-	bs, err := json.Marshal(state)
-	if err != nil {
-		return "", nil, time.Time{}, fmt.Errorf("capturePromoteBeforeState: serialize: %w", err)
-	}
-	return snapshotID, json.RawMessage(bs), capturedAt, nil
+	return captures, lockedIDs, capturedAt, nil
 }
 
 // captureMemoryBeforeState fetches memory rows and serializes them as JSONB.

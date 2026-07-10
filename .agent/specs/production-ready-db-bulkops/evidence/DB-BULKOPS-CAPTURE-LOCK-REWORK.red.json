@@ -1,0 +1,11 @@
+{
+  "task_id": "DB-BULKOPS-CAPTURE-LOCK-REWORK",
+  "observed_at": "2026-07-10T05:03:25.7586634Z",
+  "stack": "GO",
+  "test_file": "internal/bulkops/facade_test.go",
+  "test_name": "TestFacade_BulkPromote_ConcurrentCommittedUpdateIsCapturedPromotedAndRollbackable",
+  "database": "engram_prc_bulkops_capture_red_20260710_080234",
+  "failure_reason": "bulk_promote captured and promoted stale candidate A while concurrent candidate B committed before row-lock acquisition; rollback restored stale A.",
+  "runner_exit_code": 1,
+  "runner_stdout_excerpt": "promoted memory expected committed-B, actual stale A; snapshot expected committed-B, actual stale A; rollback expected committed-B, actual stale A"
+}
