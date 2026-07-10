@@ -562,6 +562,29 @@ func (s *CandidateStore) validateCandidateReviewSnapshotBinding(
 	if s.auditStore == nil {
 		return fmt.Errorf("%s: candidate_review audit store is required", operation)
 	}
+	// Candidate-review mutations accept only a constructor-shaped snapshot that
+	// has never been persisted or entered another lifecycle state. Empty status
+	// is rejected here instead of relying on SnapshotStore's legacy empty-to-
+	// committed normalization, so both preflight and transactional revalidation
+	// enforce one explicit rollback contract.
+	if strings.TrimSpace(snapshot.SnapshotID) == "" {
+		return fmt.Errorf("%s: candidate review snapshot_id is required", operation)
+	}
+	if snapshot.ID != 0 {
+		return fmt.Errorf("%s: candidate review snapshot must not have a database id before mutation", operation)
+	}
+	if snapshot.Status != models.SnapshotStatusCommitted {
+		return fmt.Errorf("%s: candidate review snapshot status must be %q", operation, models.SnapshotStatusCommitted)
+	}
+	if snapshot.RolledBackAt != nil {
+		return fmt.Errorf("%s: candidate review snapshot rolled_back_at must be nil before mutation", operation)
+	}
+	if snapshot.Pinned {
+		return fmt.Errorf("%s: candidate review snapshot must not be pinned before mutation", operation)
+	}
+	if snapshot.CreatedAt.IsZero() {
+		return fmt.Errorf("%s: candidate review snapshot created_at is required", operation)
+	}
 	if snapshot.OpType != models.SnapshotOpCandidateReviewAction {
 		return fmt.Errorf("%s: snapshot op_type must be %q", operation, models.SnapshotOpCandidateReviewAction)
 	}
@@ -641,21 +664,14 @@ func candidateReviewPayloadMatchesAuthoritative(snapshotCandidate, authoritative
 	if snapshotCandidate == nil || authoritativeCandidate == nil {
 		return false, nil
 	}
-	withinPostgresPrecision := func(left, right time.Time) bool {
-		delta := left.Sub(right)
-		if delta < 0 {
-			delta = -delta
-		}
-		return delta < time.Microsecond
-	}
-	if !withinPostgresPrecision(snapshotCandidate.CreatedAt, authoritativeCandidate.CreatedAt) ||
-		!withinPostgresPrecision(snapshotCandidate.UpdatedAt, authoritativeCandidate.UpdatedAt) {
+	if !candidateReviewTimestampsMatchPostgresPrecision(snapshotCandidate.CreatedAt, authoritativeCandidate.CreatedAt) ||
+		!candidateReviewTimestampsMatchPostgresPrecision(snapshotCandidate.UpdatedAt, authoritativeCandidate.UpdatedAt) {
 		return false, nil
 	}
 	if (snapshotCandidate.ReviewAfter == nil) != (authoritativeCandidate.ReviewAfter == nil) {
 		return false, nil
 	}
-	if snapshotCandidate.ReviewAfter != nil && !withinPostgresPrecision(*snapshotCandidate.ReviewAfter, *authoritativeCandidate.ReviewAfter) {
+	if snapshotCandidate.ReviewAfter != nil && !candidateReviewTimestampsMatchPostgresPrecision(*snapshotCandidate.ReviewAfter, *authoritativeCandidate.ReviewAfter) {
 		return false, nil
 	}
 
@@ -676,6 +692,30 @@ func candidateReviewPayloadMatchesAuthoritative(snapshotCandidate, authoritative
 		return false, err
 	}
 	return bytes.Equal(snapshotJSON, authoritativeJSON), nil
+}
+
+func candidateReviewTimestampsMatchPostgresPrecision(left, right time.Time) bool {
+	leftSeconds, rightSeconds := left.Unix(), right.Unix()
+	leftNanos, rightNanos := int64(left.Nanosecond()), int64(right.Nanosecond())
+	precision := int64(time.Microsecond)
+
+	switch {
+	case leftSeconds == rightSeconds:
+		if leftNanos < rightNanos {
+			return rightNanos-leftNanos < precision
+		}
+		return leftNanos-rightNanos < precision
+	case leftSeconds < rightSeconds:
+		if leftSeconds != rightSeconds-1 {
+			return false
+		}
+		return int64(time.Second)-leftNanos+rightNanos < precision
+	default:
+		if rightSeconds != leftSeconds-1 {
+			return false
+		}
+		return int64(time.Second)-rightNanos+leftNanos < precision
+	}
 }
 
 func (s *CandidateStore) logCandidateReviewAuditTx(
