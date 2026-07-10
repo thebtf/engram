@@ -58,7 +58,13 @@ export async function handleBeforePromptBuild(
 
     const agentId = ctx.agentId ?? '';
     const identity = resolveIdentity(agentId, ctx.workspaceDir);
-    const project = config.project ?? identity.projectId;
+    const selectedProject = config.project ?? identity.projectId;
+    const registration = await client.registerAndResolveProject(identity, selectedProject);
+    if (!registration.ok) {
+      (logger ?? console).warn(`[engram] before-prompt-build: project registration failed: ${registration.error.code}`);
+      return;
+    }
+    const project = registration.canonicalProject;
 
     let response;
     try {

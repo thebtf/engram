@@ -11,8 +11,9 @@
  * observations can be shared across agents working in the same repository.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { execSync } from 'node:child_process';
+import { closeSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
 
 // Module-level memoization cache — keyed by resolved cwd path
@@ -27,6 +28,110 @@ export interface ProjectIdentity {
   gitRemote?: string;
   /** Relative path within the git repo, if applicable. */
   relativePath?: string;
+  /** Full metadata for v2-aware transports. Never derived from agentId. */
+  projectIdentityV2?: ProjectIdentityV2;
+}
+
+export const PROJECT_IDENTITY_VERSION_V2 = 2 as const;
+
+export interface ProjectIdentityV2 {
+  version: 2;
+  legacy_project_id: string;
+  display_name: string;
+  git_remote: string;
+  relative_path: string;
+  non_git_anchor: string;
+  anchor_shared: boolean | null;
+}
+
+interface ProjectIdentityV2Input {
+  legacy_project_id?: string;
+  display_name?: string;
+  git_remote?: string;
+  relative_path?: string;
+  non_git_anchor?: string;
+  anchor_shared?: boolean | null;
+}
+
+const projectIdentityV2File = '.engram-project-v2.json';
+const strictAnchorV2 = /^[0-9a-f]{32}$/;
+const projectIdentityControl = /[\u0000-\u001f\u007f]/;
+const projectAnchorV2Keys = ['anchor', 'shared', 'version'];
+
+export function buildProjectIdentityV2(input: ProjectIdentityV2Input): ProjectIdentityV2 {
+  return {
+    version: PROJECT_IDENTITY_VERSION_V2,
+    legacy_project_id: input.legacy_project_id ?? '',
+    display_name: input.display_name ?? '',
+    git_remote: input.git_remote ?? '',
+    relative_path: input.relative_path ?? '',
+    non_git_anchor: input.non_git_anchor ?? '',
+    anchor_shared: input.anchor_shared ?? null,
+  };
+}
+
+export function validateProjectIdentityV2(identity: ProjectIdentityV2): ProjectIdentityV2 {
+  const invalid = (reason: string): never => {
+    throw new Error(`PROJECT_IDENTITY_INVALID: ${reason}`);
+  };
+  if (identity.version !== PROJECT_IDENTITY_VERSION_V2) invalid('unsupported version');
+  if (identity.legacy_project_id.length > 256 || identity.display_name.length > 256 ||
+      identity.legacy_project_id.trim() !== identity.legacy_project_id ||
+      projectIdentityControl.test(identity.legacy_project_id) || projectIdentityControl.test(identity.display_name)) {
+    invalid('selector or display name too long');
+  }
+  const hasGit = identity.git_remote !== '' || identity.relative_path !== '';
+  const hasAnchor = identity.non_git_anchor !== '' || identity.anchor_shared !== null;
+  if (hasGit === hasAnchor) invalid('exactly one identity source is required');
+  if (hasGit) {
+    if (!identity.git_remote || identity.git_remote.length > 2048 || identity.git_remote.trim() !== identity.git_remote || projectIdentityControl.test(identity.git_remote)) {
+      invalid('git_remote is missing or malformed');
+    }
+    if (identity.relative_path.length > 4096 || identity.relative_path.startsWith('/') || identity.relative_path.includes('\\') || projectIdentityControl.test(identity.relative_path)) {
+      invalid('relative_path is not normalized');
+    }
+    if (identity.relative_path.split('/').some((part) => part === '.' || part === '..')) invalid('relative_path contains traversal');
+  } else if (!strictAnchorV2.test(identity.non_git_anchor) || typeof identity.anchor_shared !== 'boolean') {
+    invalid('non-git anchor must be 128-bit lowercase hex with explicit sharing');
+  }
+  return identity;
+}
+
+function readOrCreateProjectAnchorV2(workspaceDir: string): { version: 2; anchor: string; shared: boolean } {
+  const anchorPath = resolve(workspaceDir, projectIdentityV2File);
+  for (;;) {
+    try {
+      const parsed = JSON.parse(readFileSync(anchorPath, 'utf8')) as unknown;
+      const keys = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.keys(parsed).sort() : [];
+      const anchor = parsed as { version?: number; anchor?: string; shared?: boolean };
+      if (keys.length !== projectAnchorV2Keys.length || keys.some((key, index) => key !== projectAnchorV2Keys[index]) ||
+          anchor.version !== PROJECT_IDENTITY_VERSION_V2 || typeof anchor.anchor !== 'string' || !strictAnchorV2.test(anchor.anchor) || typeof anchor.shared !== 'boolean') {
+        invalidAnchorFile();
+      }
+      return { version: 2, anchor: anchor.anchor, shared: anchor.shared };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+
+    const anchor = { version: PROJECT_IDENTITY_VERSION_V2, anchor: randomBytes(16).toString('hex'), shared: false };
+    let descriptor: number | undefined;
+    try {
+      descriptor = openSync(anchorPath, 'wx', 0o600);
+      writeFileSync(descriptor, `${JSON.stringify(anchor, null, 2)}\n`, 'utf8');
+      closeSync(descriptor);
+      return anchor;
+    } catch (error) {
+      if (descriptor !== undefined) {
+        try { closeSync(descriptor); } catch { /* best effort */ }
+      }
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
+      throw error;
+    }
+  }
+}
+
+function invalidAnchorFile(): never {
+  throw new Error(`PROJECT_IDENTITY_INVALID: malformed ${projectIdentityV2File}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -119,16 +224,30 @@ export function resolveIdentity(
 
   const gitResult = getGitRemoteID(workspaceDir);
   if (gitResult) {
+    const projectIdentityV2 = validateProjectIdentityV2(buildProjectIdentityV2({
+      legacy_project_id: legacyProjectID(workspaceDir),
+      display_name: basename(resolve(workspaceDir)),
+      git_remote: gitResult.gitRemote,
+      relative_path: gitResult.relativePath.replace(/\\/g, '/'),
+    }));
     return {
       projectId: gitResult.projectId,
       agentId,
       gitRemote: gitResult.gitRemote,
       relativePath: gitResult.relativePath,
+      projectIdentityV2,
     };
   }
 
+  const anchor = readOrCreateProjectAnchorV2(workspaceDir);
   return {
     projectId: legacyProjectID(workspaceDir),
     agentId,
+    projectIdentityV2: validateProjectIdentityV2(buildProjectIdentityV2({
+      legacy_project_id: legacyProjectID(workspaceDir),
+      display_name: basename(resolve(workspaceDir)),
+      non_git_anchor: anchor.anchor,
+      anchor_shared: anchor.shared,
+    })),
   };
 }

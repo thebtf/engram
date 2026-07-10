@@ -29,7 +29,8 @@ class FileWatcherService implements OpenClawPluginService {
   private readonly debounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private readonly inFlight: Set<string> = new Set();
   private stopped = false;
-  private readonly projectId: string;
+  private projectId: string;
+  private readonly identity: ReturnType<typeof resolveIdentity>;
 
   constructor(
     private readonly workspaceDir: string,
@@ -37,11 +38,17 @@ class FileWatcherService implements OpenClawPluginService {
     private readonly config: PluginConfig,
     private readonly logger: PluginLogger,
   ) {
-    const identity = resolveIdentity('file-watcher', workspaceDir);
-    this.projectId = config.project ?? identity.projectId;
+    this.identity = resolveIdentity('file-watcher', workspaceDir);
+    this.projectId = config.project ?? this.identity.projectId;
   }
 
   async start(_ctx: OpenClawPluginServiceContext): Promise<void> {
+    const registration = await this.client.registerAndResolveProject(this.identity, this.projectId);
+    if (!registration.ok) {
+      this.logger.warn(`[file-watcher] project registration failed: ${registration.error.code}`);
+      return;
+    }
+    this.projectId = registration.canonicalProject;
     // Lazy-load chokidar to avoid blocking plugin discovery with native module init
     const chokidar = await import('chokidar');
     const watchPaths = [

@@ -36,7 +36,12 @@ export function buildRememberCommand(
       }
 
       const identity = resolveIdentity('', config.workspaceDir ?? process.cwd());
-      const project = config.project ?? identity.projectId;
+      const selectedProject = config.project ?? identity.projectId;
+      const registration = await client.registerAndResolveProject(identity, selectedProject);
+      if (!registration.ok) {
+        return { text: `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})` };
+      }
+      const project = registration.canonicalProject;
 
       // Use the first sentence (up to 80 chars) as the title
       const firstSentence = text.split(/[.!?]/)[0]?.trim() ?? text;

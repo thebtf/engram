@@ -60,19 +60,25 @@ function detectOutcome(messages: ConversationMessage[]): { outcome: string; reas
  * @param client - Shared engram REST client.
  * @param config - Resolved plugin config.
  */
-export function handleSessionEnd(
+export async function handleSessionEnd(
   event: SessionEndEvent,
   ctx: PluginHookContext,
   client: EngramRestClient,
   config: PluginConfig,
   logger?: PluginLogger,
-): void {
+): Promise<void> {
   try {
     if (!client.isAvailable()) return;
 
     const agentId = ctx.agentId ?? '';
     const identity = resolveIdentity(agentId, ctx.workspaceDir);
-    const project = config.project ?? identity.projectId;
+    const selectedProject = config.project ?? identity.projectId;
+    const registration = await client.registerAndResolveProject(identity, selectedProject);
+    if (!registration.ok) {
+      (logger ?? console).warn(`[engram] session-end: project registration failed: ${registration.error.code}`);
+      return;
+    }
+    const project = registration.canonicalProject;
 
     const messages: ConversationMessage[] = Array.isArray(event.messages) ? event.messages : [];
     const sessionId = ctx.sessionId ?? ctx.sessionKey ?? agentId;

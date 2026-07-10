@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "identity_version": 2,
+  "vectors": [
+    {
+      "name": "git-monorepo-core",
+      "selector": "784f6804",
+      "display_name": "core",
+      "legacy_project_id": "core_18f246",
+      "git_remote": "https://example.invalid/acme/mono.git",
+      "relative_path": "packages/core/",
+      "non_git_anchor": "",
+      "anchor_shared": null
+    },
+    {
+      "name": "git-contradictory-remote",
+      "selector": "784f6804",
+      "display_name": "core",
+      "legacy_project_id": "core_18f246",
+      "git_remote": "https://example.invalid/acme/other.git",
+      "relative_path": "packages/core/",
+      "non_git_anchor": "",
+      "anchor_shared": null
+    },
+    {
+      "name": "non-git-unshared",
+      "selector": "workspace_a1b2c3",
+      "display_name": "workspace",
+      "legacy_project_id": "workspace_a1b2c3",
+      "git_remote": "",
+      "relative_path": "",
+      "non_git_anchor": "00112233445566778899aabbccddeeff",
+      "anchor_shared": false
+    },
+    {
+      "name": "non-git-explicit-shared",
+      "selector": "workspace_d4e5f6",
+      "display_name": "workspace-copy",
+      "legacy_project_id": "workspace_d4e5f6",
+      "git_remote": "",
+      "relative_path": "",
+      "non_git_anchor": "00112233445566778899aabbccddeeff",
+      "anchor_shared": true
+    }
+  ]
+}

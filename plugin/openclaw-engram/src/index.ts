@@ -191,8 +191,14 @@ const plugin: OpenClawPluginDefinition = {
     .argument('<query>', 'Search query')
     .action(async (query: unknown) => {
      const identity = resolveIdentity('', process.cwd());
+     const selectedProject = config.project ?? identity.projectId;
+     const registration = await client.registerAndResolveProject(identity, selectedProject);
+     if (!registration.ok) {
+      console.error(`Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`);
+      return;
+     }
      const response = await client.searchContext({
-      project: config.project ?? identity.projectId,
+      project: registration.canonicalProject,
       query: String(query),
      });
      const obs = response?.observations ?? [];
@@ -214,11 +220,17 @@ const plugin: OpenClawPluginDefinition = {
      const textStr = String(text);
      const title = textStr.length > 80 ? textStr.slice(0, 77) + '...' : textStr;
      const storeIdentity = resolveIdentity('', process.cwd());
+     const selectedProject = config.project ?? storeIdentity.projectId;
+     const registration = await client.registerAndResolveProject(storeIdentity, selectedProject);
+     if (!registration.ok) {
+      console.error(`Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`);
+      return;
+     }
      const response = await client.bulkImport([{
       title,
       content: textStr.slice(0, 900),
       type: 'change',
-      project: config.project ?? storeIdentity.projectId,
+      project: registration.canonicalProject,
       scope: 'project',
      }]);
      if (response && response.imported > 0) {

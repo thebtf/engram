@@ -23,13 +23,13 @@ const MAX_MESSAGES = 20;
  * @param client - Shared engram REST client.
  * @param config - Resolved plugin config.
  */
-export function handleBeforeCompaction(
+export async function handleBeforeCompaction(
   event: BeforeCompactionEvent,
   ctx: PluginHookContext,
   client: EngramRestClient,
   config: PluginConfig,
   logger?: PluginLogger,
-): void {
+): Promise<void> {
   try {
     if (!client.isAvailable()) return;
     if (!config.autoExtract) return;
@@ -38,7 +38,13 @@ export function handleBeforeCompaction(
     const sessionId = ctx.sessionId ?? ctx.sessionKey ?? agentId;
     if (!sessionId?.trim()) return; // no session identity available — skip
     const identity = resolveIdentity(agentId, ctx.workspaceDir);
-    const project = config.project ?? identity.projectId;
+    const selectedProject = config.project ?? identity.projectId;
+    const registration = await client.registerAndResolveProject(identity, selectedProject);
+    if (!registration.ok) {
+      (logger ?? console).warn(`[engram] before-compaction: project registration failed: ${registration.error.code}`);
+      return;
+    }
+    const project = registration.canonicalProject;
 
     const messages = Array.isArray(event.messages) ? event.messages : [];
     const recent = messages.slice(-MAX_MESSAGES);
@@ -47,7 +53,7 @@ export function handleBeforeCompaction(
 
     const truncated = normalizeEngramContent(content);
 
-    // Fire-and-forget — do not await
+    // Registration is awaited above; the data write may now be fire-and-forget.
     void client.backfillSession({
       session_id: sessionId,
       project,

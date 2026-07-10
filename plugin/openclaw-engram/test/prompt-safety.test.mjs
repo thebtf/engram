@@ -127,6 +127,7 @@ test('rule router formatter renders routed packets without legacy always-active 
 test('before-prompt-build prefers router packets over legacy always-inject wording', async () => {
   const client = {
     isAvailable: () => true,
+    registerAndResolveProject: async (_identity, selector) => ({ ok: true, canonicalProject: selector }),
     searchContext: async () => ({
       observations: [],
       always_inject: [
@@ -181,6 +182,7 @@ test('before-prompt-build prefers router packets over legacy always-inject wordi
 test('before-agent-start renders router-only context payloads', async () => {
   const client = {
     isAvailable: () => true,
+    registerAndResolveProject: async (_identity, selector) => ({ ok: true, canonicalProject: selector }),
     getContextInject: async () => ({
       observations: [],
       rule_router: {
@@ -226,6 +228,7 @@ test('before-prompt-build keeps legacy always-inject when search observations ar
   let trackedMiss = false;
   const client = {
     isAvailable: () => true,
+    registerAndResolveProject: async (_identity, selector) => ({ ok: true, canonicalProject: selector }),
     searchContext: async () => ({
       observations: [],
       always_inject: [
