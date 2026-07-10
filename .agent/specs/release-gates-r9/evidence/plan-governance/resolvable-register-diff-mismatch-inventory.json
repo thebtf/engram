@@ -1,0 +1,814 @@
+{
+  "schema_version": 1,
+  "kind": "production-ready-resolvable-register-diff-mismatch-inventory",
+  "revision": 9,
+  "observed_register": {
+    "path": ".agent/reports/production-readiness-evidence-register.json",
+    "sha256": "29865adc048cb3f64ec7d133b3bd901c95115e4ae5b95c98927607de889f77d4",
+    "role": "mutable discovery input only"
+  },
+  "challenged_authority": {
+    "rejected_r8_head": "406fe952c143eb8aaf5895427c568a41d4cec225",
+    "plan_sha256": "fd2b223a9a62848efc39e1c33bf739bada191508bccb7ba9a73140185638e43d",
+    "scope_map_sha256": "81093184036672008d6b85dfa88a431998ef70b587ab11475aa2b315f03ddf79"
+  },
+  "summary": {
+    "register_rows": 67,
+    "resolvable_base_head_rows": 14,
+    "nonempty_resolvable_rows": 10,
+    "empty_in_progress_rows": 4,
+    "exact_high_signal_failures": {
+      "security_project_identity_r3": "11 undeclared of 14",
+      "db_embedding_evidence_transport_r5": "10 undeclared of 28",
+      "db_auth": "1 undeclared of 5",
+      "db_embedding_stats": "4 undeclared of 8",
+      "db_reaper": "2 undeclared of 2 plus 1 epoch-owner conflict",
+      "db_bulkops": "4 current-owner conflicts",
+      "db_bulkops_behavioral_edge_rework": "2 rejected-predecessor base conflicts",
+      "demolition_skip_classification": "7 misbound R5 release-gate paths plus a scalar Count internal error"
+    }
+  },
+  "policy": "Historical/rejected or classification-only diffs remain non-acceptance evidence. Current frozen candidates must be path-authorized exactly; conflicting DB-REAPER is rejected instead of granting simultaneous ownership.",
+  "subsequent_transitions": [
+    {
+      "slice": "SECURITY-PROJECT-IDENTITY",
+      "product_head": "38344455754fe503acbd79d2134141f996adff7f",
+      "checker_only_commit": "0d84047c280a873dd21baae2ecbf83ec422d497f",
+      "checker_verdict": "REVISE_HIGH_GOROUTINE_ONLY_PERMANENT_TEST",
+      "successor_branch": "work/prc-security-project-identity-r4",
+      "successor_base": "38344455754fe503acbd79d2134141f996adff7f",
+      "successor_surface": [
+        "internal/proxy/identity_process_test.go",
+        "internal/proxy/identity_test.go",
+        ".agent/specs/security-project-identity/evidence/**",
+        ".agent/reports/evidence/production-ready/security-project-identity/**"
+      ],
+      "forbidden_final_path": "internal/proxy/identity.go"
+    }
+  ],
+  "rows": [
+    {
+      "criterion": "PR-1",
+      "slice": "MASTER-PLAN",
+      "observed_status": "R9_MAKER_ACTIVE_ON_REJECTED_R8_BASE",
+      "observed_branch": "work/prc-release-gates-revision9-maker",
+      "base": "406fe952c143eb8aaf5895427c568a41d4cec225",
+      "head": "406fe952c143eb8aaf5895427c568a41d4cec225",
+      "disposition": "in-progress-empty-diff",
+      "changed_paths": [],
+      "baseline_r8_authority_audit": {
+        "verdict": "NOT_EVALUATED_EMPTY_IN_PROGRESS",
+        "changed_path_count": 0,
+        "undeclared_path_count": 0,
+        "epoch_verdict": "NOT_APPLICABLE",
+        "violations": [],
+        "epoch_errors": [],
+        "source_artifact": "fresh exact git diff audit"
+      },
+      "r9_resolution": "R9 self row; commit A does not yet exist in the observed mutable register"
+    },
+    {
+      "criterion": "PR-2",
+      "slice": "RELEASE-GATES",
+      "observed_status": "R9_MAKER_ACTIVE_BLOCKED_PENDING_SUCCESSOR_COMMITS",
+      "observed_branch": "work/prc-release-gates-revision9-maker",
+      "base": "406fe952c143eb8aaf5895427c568a41d4cec225",
+      "head": "406fe952c143eb8aaf5895427c568a41d4cec225",
+      "disposition": "in-progress-empty-diff",
+      "changed_paths": [],
+      "baseline_r8_authority_audit": {
+        "verdict": "NOT_EVALUATED_EMPTY_IN_PROGRESS",
+        "changed_path_count": 0,
+        "undeclared_path_count": 0,
+        "epoch_verdict": "NOT_APPLICABLE",
+        "violations": [],
+        "epoch_errors": [],
+        "source_artifact": "fresh exact git diff audit"
+      },
+      "r9_resolution": "R9 self row; commit B does not yet exist in the observed mutable register"
+    },
+    {
+      "criterion": "PR-2",
+      "slice": "DEMOLITION-SKIP-CLASSIFICATION",
+      "observed_status": "ALL_25_CLASSIFIED_OWNER_LANES_ACTIVE",
+      "observed_branch": "work/prc-release-gates-revision5-maker",
+      "base": "4812589b9920c187a92a03d210d2e9d5eb53862f",
+      "head": "d59d1605969b1f567506e96ded524dfd1e4be08a",
+      "disposition": "checker-classification-not-maker",
+      "changed_paths": [
+        {
+          "status": "A",
+          "path": ".agent/e/rg4/r5-maker/SHA256SUMS"
+        },
+        {
+          "status": "A",
+          "path": ".agent/e/rg4/r5-maker/fail.json"
+        },
+        {
+          "status": "A",
+          "path": ".agent/e/rg4/r5-maker/manifest.json"
+        },
+        {
+          "status": "A",
+          "path": ".agent/e/rg4/r5-maker/proof.json"
+        },
+        {
+          "status": "A",
+          "path": ".agent/e/rg4/r5-maker/report.md"
+        },
+        {
+          "status": "M",
+          "path": ".github/workflows/test.yml"
+        },
+        {
+          "status": "M",
+          "path": "scripts/production-gates/run-db-suite.ps1"
+        }
+      ],
+      "baseline_r8_authority_audit": {
+        "verdict": "FAIL_CLASSIFICATION_ONLY",
+        "changed_path_count": 7,
+        "undeclared_path_count": 7,
+        "epoch_verdict": "NOT_APPLICABLE",
+        "violations": [
+          {
+            "status": "A",
+            "path": ".agent/e/rg4/r5-maker/SHA256SUMS",
+            "reason": "no maker row; classification provenance only"
+          },
+          {
+            "status": "A",
+            "path": ".agent/e/rg4/r5-maker/fail.json",
+            "reason": "no maker row; classification provenance only"
+          },
+          {
+            "status": "A",
+            "path": ".agent/e/rg4/r5-maker/manifest.json",
+            "reason": "no maker row; classification provenance only"
+          },
+          {
+            "status": "A",
+            "path": ".agent/e/rg4/r5-maker/proof.json",
+            "reason": "no maker row; classification provenance only"
+          },
+          {
+            "status": "A",
+            "path": ".agent/e/rg4/r5-maker/report.md",
+            "reason": "no maker row; classification provenance only"
+          },
+          {
+            "status": "M",
+            "path": ".github/workflows/test.yml",
+            "reason": "no maker row; classification provenance only"
+          },
+          {
+            "status": "M",
+            "path": "scripts/production-gates/run-db-suite.ps1",
+            "reason": "no maker row; classification provenance only"
+          }
+        ],
+        "epoch_errors": [],
+        "source_artifact": "engram-r8-audit-demolition-skip-classification.json",
+        "r8_internal_error": "The property 'Count' cannot be found on this object. Verify that the property exists."
+      },
+      "r9_resolution": "Reject the misbound register head; all seven paths are R5 release-gate work outside a DEMOLITION maker row. Diff mode must return a clear zero-declarations/non-empty-diff failure, never an internal Count error."
+    },
+    {
+      "criterion": "PR-4",
+      "slice": "DB-BULKOPS",
+      "observed_status": "REVISE_HOLD",
+      "observed_branch": "work/prc-db-bulkops",
+      "base": "6ea10496aa127fba7fdb194875044e770d0a1d8c",
+      "head": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+      "disposition": "rejected-historical-current-owner-conflict",
+      "changed_paths": [
+        {
+          "status": "A",
+          "path": ".agent/reports/2026-07-10-db-bulkops-sibling-rework-maker.md"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-sibling-rework/DB-BULKOPS-SIBLING-REWORK.final.json"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-sibling-rework/DB-BULKOPS-SIBLING-REWORK.tdd.json"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-sibling-rework/H1-candidate-review-after.red.json"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-sibling-rework/M1-nil-facade-normalization.red.json"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-sibling-rework/M2-all-row-failure-audit.red.json"
+        },
+        {
+          "status": "M",
+          "path": "internal/bulkops/facade.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/bulkops/facade_test.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/bulkops/rollback_test.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/db/gorm/candidate_store.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/db/gorm/candidate_store_test.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/mcp/tools_bulkops.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/mcp/tools_dryrun_test.go"
+        }
+      ],
+      "baseline_r8_authority_audit": {
+        "verdict": "FAIL",
+        "changed_path_count": 13,
+        "undeclared_path_count": 0,
+        "epoch_verdict": "FAIL",
+        "violations": [],
+        "epoch_errors": [
+          "changed epoch path 'internal/db/gorm/candidate_store_test.go' current owner is 'DB-BULKOPS-BEHAVIORAL-EDGE-REWORK', not 'DB-BULKOPS'",
+          "changed epoch path 'internal/db/gorm/candidate_store.go' current owner is 'DB-BULKOPS-BEHAVIORAL-EDGE-REWORK', not 'DB-BULKOPS'",
+          "changed epoch path 'internal/mcp/tools_bulkops.go' current owner is 'DB-BULKOPS-BEHAVIORAL-EDGE-REWORK', not 'DB-BULKOPS'",
+          "changed epoch path 'internal/mcp/tools_dryrun_test.go' current owner is 'DB-BULKOPS-BEHAVIORAL-EDGE-REWORK', not 'DB-BULKOPS'"
+        ],
+        "source_artifact": "engram-r8-audit-db-bulkops.json"
+      },
+      "r9_resolution": "The four repeated product paths now belong to DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"
+    },
+    {
+      "criterion": "PR-4",
+      "slice": "DB-AUTH",
+      "observed_status": "READY_FOR_INTEGRATION",
+      "observed_branch": "work/prc-db-auth",
+      "base": "b0c4ab4c07a4c6f512728da52b2e132bacd0289c",
+      "head": "da97c88be6753703bac112be8431dc373e4d9dda",
+      "disposition": "current-plan-declaration-drift",
+      "changed_paths": [
+        {
+          "status": "A",
+          "path": ".agent/reports/db-auth-rework-maker-2026-07-10.md"
+        },
+        {
+          "status": "M",
+          "path": "internal/db/gorm/user_store.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/db/gorm/user_store_test.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/worker/auth_handlers.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/worker/auth_handlers_lifecycle_test.go"
+        }
+      ],
+      "baseline_r8_authority_audit": {
+        "verdict": "FAIL",
+        "changed_path_count": 5,
+        "undeclared_path_count": 1,
+        "epoch_verdict": "PASS",
+        "violations": [
+          {
+            "status": "A",
+            "path": ".agent/reports/db-auth-rework-maker-2026-07-10.md",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          }
+        ],
+        "epoch_errors": [],
+        "source_artifact": "engram-r8-audit-db-auth.json"
+      },
+      "r9_resolution": "Add the exact maker report path"
+    },
+    {
+      "criterion": "PR-4",
+      "slice": "DB-EMBEDDING-STATS",
+      "observed_status": "PRODUCT_ACCEPTED_EVIDENCE_R3_CHECKER_ACTIVE",
+      "observed_branch": "work/prc-db-embedding-stats",
+      "base": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+      "head": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+      "disposition": "current-plan-declaration-drift",
+      "changed_paths": [
+        {
+          "status": "A",
+          "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt"
+        },
+        {
+          "status": "A",
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json"
+        },
+        {
+          "status": "A",
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json"
+        },
+        {
+          "status": "A",
+          "path": ".agent/specs/db-embedding-stats/evidence/coverage.out"
+        },
+        {
+          "status": "M",
+          "path": "internal/embedding/store.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/embedding/store_stats_test.go"
+        }
+      ],
+      "baseline_r8_authority_audit": {
+        "verdict": "FAIL",
+        "changed_path_count": 8,
+        "undeclared_path_count": 4,
+        "epoch_verdict": "PASS",
+        "violations": [
+          {
+            "status": "A",
+            "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "A",
+            "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "A",
+            "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "A",
+            "path": ".agent/specs/db-embedding-stats/evidence/coverage.out",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          }
+        ],
+        "epoch_errors": [],
+        "source_artifact": "engram-r8-audit-db-embedding-stats.json"
+      },
+      "r9_resolution": "Add the exact maker report and both bounded evidence families"
+    },
+    {
+      "criterion": "PR-0",
+      "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+      "observed_status": "R6_MAKER_ACTIVE_ON_EXACT_R5_BASE",
+      "observed_branch": "work/prc-db-embedding-evidence-transport-r6",
+      "base": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+      "head": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+      "disposition": "current-maker-empty-diff-plus-rejected-r5",
+      "changed_paths": [],
+      "baseline_r8_authority_audit": {
+        "verdict": "NOT_EVALUATED_EMPTY_IN_PROGRESS",
+        "changed_path_count": 0,
+        "undeclared_path_count": 0,
+        "epoch_verdict": "NOT_APPLICABLE",
+        "violations": [],
+        "epoch_errors": [],
+        "source_artifact": "fresh exact git diff audit"
+      },
+      "r9_resolution": "R6 has no commit yet; freeze R5 rejected diff and authorize only the literal R6 evidence family",
+      "rejected_r5_audit": {
+        "base": "369951b61ee07cb0c405558e0f677cd1c9e90362",
+        "head": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+        "verdict": "FAIL",
+        "changed_path_count": 28,
+        "undeclared_path_count": 10,
+        "violations": [
+          {
+            "status": "A",
+            "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/R5-SHA256SUMS.txt",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "A",
+            "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-capture.v1.json",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "A",
+            "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-repeat.v1.json",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "A",
+            "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-1.tap",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "A",
+            "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-2.tap",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "A",
+            "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/maker-report.md",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "A",
+            "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/maker-summary.v1.json",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "A",
+            "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/run-coverage-capture-verifier.cmd",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "A",
+            "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verification-matrix.v1.json",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "A",
+            "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verify-coverage-capture.cjs",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          }
+        ],
+        "source_artifact": "engram-r8-root-r5-diff.json"
+      }
+    },
+    {
+      "criterion": "PR-4",
+      "slice": "DB-REAPER",
+      "observed_status": "READY_FOR_INTEGRATION_WITH_CONCERNS",
+      "observed_branch": "work/prc-db-reaper-shutdown-r4",
+      "base": "0f79e925c4ba537c5358cca64e2546bce914ff96",
+      "head": "0d5cfa5c67ddbc331d7e812f98679742541b32ca",
+      "disposition": "rejected-path-authority-conflict",
+      "changed_paths": [
+        {
+          "status": "M",
+          "path": "internal/worker/service.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/worker/service_reaper_lifecycle_test.go"
+        }
+      ],
+      "baseline_r8_authority_audit": {
+        "verdict": "FAIL",
+        "changed_path_count": 2,
+        "undeclared_path_count": 2,
+        "epoch_verdict": "FAIL",
+        "violations": [
+          {
+            "status": "M",
+            "path": "internal/worker/service.go",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "M",
+            "path": "internal/worker/service_reaper_lifecycle_test.go",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          }
+        ],
+        "epoch_errors": [
+          "changed epoch path 'internal/worker/service.go' current owner is 'AUTH-BOOTSTRAP-SECURITY', not 'DB-REAPER'"
+        ],
+        "source_artifact": "engram-r8-audit-db-reaper.json"
+      },
+      "r9_resolution": "Do not grant service.go concurrently; require a fresh epoch-safe amendment/candidate"
+    },
+    {
+      "criterion": "PR-4",
+      "slice": "DB-CRYSTALLIZATION",
+      "observed_status": "READY_FOR_INTEGRATION_WITH_CONCERNS",
+      "observed_branch": "work/prc-db-crystallization",
+      "base": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+      "head": "2ab6211494e51aeb7b787a99e78cff8bf2d5694a",
+      "disposition": "current-path-authority-pass",
+      "changed_paths": [
+        {
+          "status": "M",
+          "path": "internal/worker/handlers_hooks_crystallization_integration_test.go"
+        }
+      ],
+      "baseline_r8_authority_audit": {
+        "verdict": "PASS",
+        "changed_path_count": 1,
+        "undeclared_path_count": 0,
+        "epoch_verdict": "PASS",
+        "violations": [],
+        "epoch_errors": [],
+        "source_artifact": "engram-r8-audit-db-crystallization.json"
+      },
+      "r9_resolution": "No correction required"
+    },
+    {
+      "criterion": "PR-5",
+      "slice": "SECURITY-TOOLCHAIN",
+      "observed_status": "READY_FOR_INTEGRATION",
+      "observed_branch": "work/prc-security-toolchain",
+      "base": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+      "head": "b0955dfd61b4ea7364f6d400579247b475a1a680",
+      "disposition": "current-path-authority-pass",
+      "changed_paths": [
+        {
+          "status": "M",
+          "path": "Dockerfile"
+        },
+        {
+          "status": "M",
+          "path": "go.mod"
+        },
+        {
+          "status": "M",
+          "path": "go.sum"
+        }
+      ],
+      "baseline_r8_authority_audit": {
+        "verdict": "PASS",
+        "changed_path_count": 3,
+        "undeclared_path_count": 0,
+        "epoch_verdict": "PASS",
+        "violations": [],
+        "epoch_errors": [],
+        "source_artifact": "engram-r8-audit-security-toolchain.json"
+      },
+      "r9_resolution": "No correction required"
+    },
+    {
+      "criterion": "PR-5",
+      "slice": "SECURITY-PROJECT-IDENTITY",
+      "observed_status": "R3_MAKER_COMMIT_READY_CHECKER_ACTIVE",
+      "observed_branch": "work/prc-security-project-identity-r3",
+      "base": "9e2ce4e58a5cded69660ca9ac532d2167f315bb2",
+      "head": "38344455754fe503acbd79d2134141f996adff7f",
+      "disposition": "current-cross-consumer-declaration-drift",
+      "changed_paths": [
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/security-project-identity/SECURITY-PROJECT-IDENTITY-R3-maker-report.md"
+        },
+        {
+          "status": "A",
+          "path": ".agent/specs/security-project-identity/evidence/SECURITY-PROJECT-IDENTITY-R3.red.json"
+        },
+        {
+          "status": "A",
+          "path": ".agent/specs/security-project-identity/evidence/SECURITY-PROJECT-IDENTITY-R3.tdd.json"
+        },
+        {
+          "status": "A",
+          "path": ".agent/specs/security-project-identity/evidence/SECURITY-PROJECT-IDENTITY-R3.verification.json"
+        },
+        {
+          "status": "M",
+          "path": ".agent/specs/security-project-identity/evidence/project-identity-v2-vectors.json"
+        },
+        {
+          "status": "M",
+          "path": "internal/db/gorm/project_identity_v2_test.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/db/gorm/project_store.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/grpcserver/project_identity_v2_test.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/proxy/identity.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/proxy/identity_test.go"
+        },
+        {
+          "status": "M",
+          "path": "plugin/engram/hooks/lib.js"
+        },
+        {
+          "status": "M",
+          "path": "plugin/engram/hooks/project-identity-v2.test.js"
+        },
+        {
+          "status": "M",
+          "path": "plugin/openclaw-engram/src/identity.ts"
+        },
+        {
+          "status": "M",
+          "path": "plugin/openclaw-engram/test/project-identity-v2.test.mjs"
+        }
+      ],
+      "baseline_r8_authority_audit": {
+        "verdict": "FAIL",
+        "changed_path_count": 14,
+        "undeclared_path_count": 11,
+        "epoch_verdict": "PASS",
+        "violations": [
+          {
+            "status": "A",
+            "path": ".agent/specs/security-project-identity/evidence/SECURITY-PROJECT-IDENTITY-R3.red.json",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "A",
+            "path": ".agent/specs/security-project-identity/evidence/SECURITY-PROJECT-IDENTITY-R3.tdd.json",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "A",
+            "path": ".agent/specs/security-project-identity/evidence/SECURITY-PROJECT-IDENTITY-R3.verification.json",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "M",
+            "path": ".agent/specs/security-project-identity/evidence/project-identity-v2-vectors.json",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "M",
+            "path": "internal/db/gorm/project_identity_v2_test.go",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "M",
+            "path": "internal/proxy/identity.go",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "M",
+            "path": "internal/proxy/identity_test.go",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "M",
+            "path": "plugin/engram/hooks/lib.js",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "M",
+            "path": "plugin/engram/hooks/project-identity-v2.test.js",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "M",
+            "path": "plugin/openclaw-engram/src/identity.ts",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          },
+          {
+            "status": "M",
+            "path": "plugin/openclaw-engram/test/project-identity-v2.test.mjs",
+            "reason": "changed path is outside the named slice and validated evidence/report namespaces"
+          }
+        ],
+        "epoch_errors": [],
+        "source_artifact": "engram-r8-root-security-r3-diff-canonical.json"
+      },
+      "r9_resolution": "Replace the wrong test declaration and own the exact 14-path R3 diff"
+    },
+    {
+      "criterion": "PR-0",
+      "slice": "PLAN-GOVERNANCE",
+      "observed_status": "R9_MAKER_ACTIVE_FULL_DIFF_AUTHORITY_AUDIT",
+      "observed_branch": "work/prc-release-gates-revision9-maker",
+      "base": "406fe952c143eb8aaf5895427c568a41d4cec225",
+      "head": "406fe952c143eb8aaf5895427c568a41d4cec225",
+      "disposition": "in-progress-empty-diff",
+      "changed_paths": [],
+      "baseline_r8_authority_audit": {
+        "verdict": "NOT_EVALUATED_EMPTY_IN_PROGRESS",
+        "changed_path_count": 0,
+        "undeclared_path_count": 0,
+        "epoch_verdict": "NOT_APPLICABLE",
+        "violations": [],
+        "epoch_errors": [],
+        "source_artifact": "fresh exact git diff audit"
+      },
+      "r9_resolution": "R9 self row; commit A does not yet exist in the observed mutable register"
+    },
+    {
+      "criterion": "PR-4",
+      "slice": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "observed_status": "READY_FOR_INTEGRATION_WITH_CONCERNS",
+      "observed_branch": "work/prc-db-bulkops",
+      "base": "cd098397764e13388aef3b4da9448172c7092fdb",
+      "head": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+      "disposition": "current-register-partial-base",
+      "changed_paths": [
+        {
+          "status": "M",
+          "path": "internal/db/gorm/candidate_store.go"
+        },
+        {
+          "status": "M",
+          "path": "internal/db/gorm/candidate_store_test.go"
+        }
+      ],
+      "baseline_r8_authority_audit": {
+        "verdict": "FAIL",
+        "changed_path_count": 2,
+        "undeclared_path_count": 0,
+        "epoch_verdict": "FAIL",
+        "violations": [],
+        "epoch_errors": [
+          "rework slice 'DB-BULKOPS-BEHAVIORAL-EDGE-REWORK' base 'cd098397764e13388aef3b4da9448172c7092fdb' must equal rejected predecessor '68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef' for 'internal/db/gorm/candidate_store_test.go'",
+          "rework slice 'DB-BULKOPS-BEHAVIORAL-EDGE-REWORK' base 'cd098397764e13388aef3b4da9448172c7092fdb' must equal rejected predecessor '68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef' for 'internal/db/gorm/candidate_store.go'"
+        ],
+        "source_artifact": "engram-r8-audit-db-bulkops-behavioral-edge-rework.json"
+      },
+      "r9_resolution": "Freeze the full candidate from rejected predecessor 68b2ce58, not partial cd098397..bd68c05b"
+    },
+    {
+      "criterion": "PR-2",
+      "slice": "DB-TEST-POOL-HYGIENE",
+      "observed_status": "READY_FOR_CHECK",
+      "observed_branch": "work/prc-db-test-pool-hygiene-evidence-r2",
+      "base": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
+      "head": "68242c48aaad62ec087166eeb9ea32f14d189450",
+      "disposition": "current-path-authority-pass",
+      "changed_paths": [
+        {
+          "status": "A",
+          "path": ".agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md"
+        },
+        {
+          "status": "M",
+          "path": ".agent/reports/2026-07-10-db-test-pool-hygiene-maker.md"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/14-evidence-r2-focused.log"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/15-evidence-r2-static.txt"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r2.json"
+        },
+        {
+          "status": "M",
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.final.json"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json"
+        },
+        {
+          "status": "M",
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json"
+        },
+        {
+          "status": "M",
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/SHA256SUMS.txt"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/Test-DBPoolHygieneEvidenceAdversarial.ps1"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/Verify-DBPoolHygieneEvidence.ps1"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/adversarial-proof.json"
+        },
+        {
+          "status": "A",
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/verifier-proof.json"
+        }
+      ],
+      "baseline_r8_authority_audit": {
+        "verdict": "PASS",
+        "changed_path_count": 13,
+        "undeclared_path_count": 0,
+        "epoch_verdict": "PASS",
+        "violations": [],
+        "epoch_errors": [],
+        "source_artifact": "engram-r8-audit-db-test-pool-hygiene.json"
+      },
+      "r9_resolution": "No correction required"
+    }
+  ]
+}

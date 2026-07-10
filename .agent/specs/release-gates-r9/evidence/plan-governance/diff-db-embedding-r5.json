@@ -1,0 +1,685 @@
+{
+  "schema_version": 2,
+  "gate": "plan-path-ownership",
+  "mode": "Diff",
+  "verdict": "PASS",
+  "started_at": "2026-07-10T21:53:21.1644869+00:00",
+  "finished_at": "2026-07-10T21:53:27.5317713+00:00",
+  "duration_seconds": 6.367,
+  "plan": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\plans\\2026-07-10-engram-production-ready-master-plan.md",
+    "expected_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f",
+    "observed_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f",
+    "hash_match": true,
+    "ledger_verdict": "PASS"
+  },
+  "state": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\plans\\2026-07-10-engram-production-ready-ownership-state.json",
+    "sha256": "e41f52fbafa317eb1571c76a7d1de9add543da38a1b2471dbe587a849b21c032",
+    "verdict": "PASS",
+    "plan_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f"
+  },
+  "scope_map": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\plans\\2026-07-10-engram-production-ready-scope-map.json",
+    "expected_sha256": "fb170d59f3072117489402fd347cd1432c40adbc842811f92227498bcbc92693",
+    "observed_sha256": "fb170d59f3072117489402fd347cd1432c40adbc842811f92227498bcbc92693",
+    "verdict": "PASS",
+    "entries": 67,
+    "unique_slices": 67
+  },
+  "live_register": {
+    "supplied": false,
+    "path": "",
+    "sha256": null,
+    "checked": false,
+    "rows": 0
+  },
+  "slice": {
+    "name": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+    "row_count": 1,
+    "declarations": [
+      {
+        "owner": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+        "branch": "work/prc-db-embedding-evidence-transport-r6",
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport",
+        "display": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/**",
+        "kind": "prefix",
+        "line": 20
+      },
+      {
+        "owner": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+        "branch": "work/prc-db-embedding-evidence-transport-r6",
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3",
+        "display": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/**",
+        "kind": "prefix",
+        "line": 20
+      },
+      {
+        "owner": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+        "branch": "work/prc-db-embedding-evidence-transport-r6",
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4",
+        "display": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/**",
+        "kind": "prefix",
+        "line": 20
+      },
+      {
+        "owner": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+        "branch": "work/prc-db-embedding-evidence-transport-r6",
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5",
+        "display": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/**",
+        "kind": "prefix",
+        "line": 20
+      },
+      {
+        "owner": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+        "branch": "work/prc-db-embedding-evidence-transport-r6",
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6",
+        "display": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/**",
+        "kind": "prefix",
+        "line": 20
+      },
+      {
+        "owner": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+        "branch": "work/prc-db-embedding-evidence-transport-r6",
+        "path": ".agent/specs/db-embedding-stats-evidence-transport/evidence",
+        "display": ".agent/specs/db-embedding-stats-evidence-transport/evidence/**",
+        "kind": "prefix",
+        "line": 20
+      }
+    ],
+    "evidence_namespace": {
+      "kind": "evidence",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5",
+      "display": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/**",
+      "match_kind": "prefix",
+      "policy": "literal-row-exception"
+    },
+    "report_namespace": {
+      "kind": "report",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5",
+      "display": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/**",
+      "match_kind": "prefix",
+      "policy": "literal-row-exception"
+    }
+  },
+  "git": {
+    "repository": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker",
+    "requested_base": "369951b61ee07cb0c405558e0f677cd1c9e90362",
+    "resolved_base": "369951b61ee07cb0c405558e0f677cd1c9e90362",
+    "requested_head": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+    "resolved_head": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+    "base_is_ancestor": true,
+    "name_status_command": "git -c core.quotepath=false diff --name-status --find-renames --find-copies 369951b61ee07cb0c405558e0f677cd1c9e90362..a538f6224ef31f612152470a4ecd45e78ff9d0f2 --",
+    "raw_name_status": [
+      "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/R3-SHA256SUMS.txt",
+      "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/coverage-repeat.v1.json",
+      "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/maker-report.md",
+      "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/maker-summary.v1.json",
+      "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/verification-matrix.v1.json",
+      "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/R4-SHA256SUMS.txt",
+      "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/coverage-repeat.v1.json",
+      "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/maker-report.md",
+      "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/maker-summary.v1.json",
+      "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/verification-matrix.v1.json",
+      "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/R5-SHA256SUMS.txt",
+      "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-capture.v1.json",
+      "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-repeat.v1.json",
+      "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-1.tap",
+      "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-2.tap",
+      "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/maker-report.md",
+      "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/maker-summary.v1.json",
+      "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/run-coverage-capture-verifier.cmd",
+      "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verification-matrix.v1.json",
+      "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verify-coverage-capture.cjs",
+      "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/ARTIFACTS.sha256",
+      "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md",
+      "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json",
+      "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+      "M\t.agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R3.tdd.json",
+      "M\t.agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R4.tdd.json",
+      "A\t.agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R5.red.json",
+      "A\t.agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R5.tdd.json"
+    ]
+  },
+  "counts": {
+    "diff_entries": 28,
+    "changed_paths": 28,
+    "violations": 0,
+    "errors": 0
+  },
+  "diff_entries": [
+    {
+      "status": "M",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/R3-SHA256SUMS.txt"
+      ],
+      "raw": "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/R3-SHA256SUMS.txt"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/coverage-repeat.v1.json"
+      ],
+      "raw": "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/coverage-repeat.v1.json"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/maker-report.md"
+      ],
+      "raw": "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/maker-report.md"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/maker-summary.v1.json"
+      ],
+      "raw": "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/maker-summary.v1.json"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/verification-matrix.v1.json"
+      ],
+      "raw": "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/verification-matrix.v1.json"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/R4-SHA256SUMS.txt"
+      ],
+      "raw": "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/R4-SHA256SUMS.txt"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/coverage-repeat.v1.json"
+      ],
+      "raw": "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/coverage-repeat.v1.json"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/maker-report.md"
+      ],
+      "raw": "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/maker-report.md"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/maker-summary.v1.json"
+      ],
+      "raw": "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/maker-summary.v1.json"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/verification-matrix.v1.json"
+      ],
+      "raw": "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/verification-matrix.v1.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/R5-SHA256SUMS.txt"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/R5-SHA256SUMS.txt"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-capture.v1.json"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-capture.v1.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-repeat.v1.json"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-repeat.v1.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-1.tap"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-1.tap"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-2.tap"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-2.tap"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/maker-report.md"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/maker-report.md"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/maker-summary.v1.json"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/maker-summary.v1.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/run-coverage-capture-verifier.cmd"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/run-coverage-capture-verifier.cmd"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verification-matrix.v1.json"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verification-matrix.v1.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verify-coverage-capture.cjs"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verify-coverage-capture.cjs"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/ARTIFACTS.sha256"
+      ],
+      "raw": "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/ARTIFACTS.sha256"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md"
+      ],
+      "raw": "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json"
+      ],
+      "raw": "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs"
+      ],
+      "raw": "M\t.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R3.tdd.json"
+      ],
+      "raw": "M\t.agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R3.tdd.json"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R4.tdd.json"
+      ],
+      "raw": "M\t.agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R4.tdd.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R5.red.json"
+      ],
+      "raw": "A\t.agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R5.red.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R5.tdd.json"
+      ],
+      "raw": "A\t.agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R5.tdd.json"
+    }
+  ],
+  "changed_paths": [
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/R3-SHA256SUMS.txt",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/coverage-repeat.v1.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/maker-report.md",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/maker-summary.v1.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/verification-matrix.v1.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/R4-SHA256SUMS.txt",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/coverage-repeat.v1.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/maker-report.md",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/maker-summary.v1.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/verification-matrix.v1.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/R5-SHA256SUMS.txt",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace",
+        "report-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-capture.v1.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace",
+        "report-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-repeat.v1.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace",
+        "report-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-1.tap",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace",
+        "report-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/coverage-run-2.tap",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace",
+        "report-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/maker-report.md",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace",
+        "report-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/maker-summary.v1.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace",
+        "report-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/run-coverage-capture-verifier.cmd",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace",
+        "report-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verification-matrix.v1.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace",
+        "report-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verify-coverage-capture.cjs",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace",
+        "report-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/ARTIFACTS.sha256",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R3.tdd.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/specs/db-embedding-stats-evidence-transport/evidence/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R4.tdd.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/specs/db-embedding-stats-evidence-transport/evidence/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R5.red.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/specs/db-embedding-stats-evidence-transport/evidence/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R5.tdd.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/specs/db-embedding-stats-evidence-transport/evidence/**"
+      ]
+    }
+  ],
+  "violations": [],
+  "epoch_authority": {
+    "verdict": "PASS",
+    "evaluated": [],
+    "errors": []
+  },
+  "errors": []
+}

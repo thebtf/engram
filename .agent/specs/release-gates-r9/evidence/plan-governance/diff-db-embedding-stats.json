@@ -1,0 +1,281 @@
+{
+  "schema_version": 2,
+  "gate": "plan-path-ownership",
+  "mode": "Diff",
+  "verdict": "PASS",
+  "started_at": "2026-07-10T21:53:21.3766571+00:00",
+  "finished_at": "2026-07-10T21:53:28.0818140+00:00",
+  "duration_seconds": 6.705,
+  "plan": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\plans\\2026-07-10-engram-production-ready-master-plan.md",
+    "expected_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f",
+    "observed_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f",
+    "hash_match": true,
+    "ledger_verdict": "PASS"
+  },
+  "state": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\plans\\2026-07-10-engram-production-ready-ownership-state.json",
+    "sha256": "e41f52fbafa317eb1571c76a7d1de9add543da38a1b2471dbe587a849b21c032",
+    "verdict": "PASS",
+    "plan_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f"
+  },
+  "scope_map": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\plans\\2026-07-10-engram-production-ready-scope-map.json",
+    "expected_sha256": "fb170d59f3072117489402fd347cd1432c40adbc842811f92227498bcbc92693",
+    "observed_sha256": "fb170d59f3072117489402fd347cd1432c40adbc842811f92227498bcbc92693",
+    "verdict": "PASS",
+    "entries": 67,
+    "unique_slices": 67
+  },
+  "live_register": {
+    "supplied": false,
+    "path": "",
+    "sha256": null,
+    "checked": false,
+    "rows": 0
+  },
+  "slice": {
+    "name": "DB-EMBEDDING-STATS",
+    "row_count": 1,
+    "declarations": [
+      {
+        "owner": "DB-EMBEDDING-STATS",
+        "branch": "work/prc-db-embedding-stats",
+        "path": "internal/embedding/store.go",
+        "display": "internal/embedding/store.go",
+        "kind": "exact",
+        "line": 19
+      },
+      {
+        "owner": "DB-EMBEDDING-STATS",
+        "branch": "work/prc-db-embedding-stats",
+        "path": "internal/embedding/store_stats_test.go",
+        "display": "internal/embedding/store_stats_test.go",
+        "kind": "exact",
+        "line": 19
+      },
+      {
+        "owner": "DB-EMBEDDING-STATS",
+        "branch": "work/prc-db-embedding-stats",
+        "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+        "display": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+        "kind": "exact",
+        "line": 19
+      },
+      {
+        "owner": "DB-EMBEDDING-STATS",
+        "branch": "work/prc-db-embedding-stats",
+        "path": ".agent/reports/evidence/production-ready/db-embedding-stats",
+        "display": ".agent/reports/evidence/production-ready/db-embedding-stats/**",
+        "kind": "prefix",
+        "line": 19
+      },
+      {
+        "owner": "DB-EMBEDDING-STATS",
+        "branch": "work/prc-db-embedding-stats",
+        "path": ".agent/specs/db-embedding-stats/evidence",
+        "display": ".agent/specs/db-embedding-stats/evidence/**",
+        "kind": "prefix",
+        "line": 19
+      }
+    ],
+    "evidence_namespace": {
+      "kind": "evidence",
+      "path": ".agent/specs/db-embedding-stats/evidence",
+      "display": ".agent/specs/db-embedding-stats/evidence/**",
+      "match_kind": "prefix",
+      "policy": "literal-row-exception"
+    },
+    "report_namespace": {
+      "kind": "report",
+      "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+      "display": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+      "match_kind": "exact",
+      "policy": "literal-row-exception"
+    }
+  },
+  "git": {
+    "repository": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker",
+    "requested_base": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+    "resolved_base": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+    "requested_head": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+    "resolved_head": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+    "base_is_ancestor": true,
+    "name_status_command": "git -c core.quotepath=false diff --name-status --find-renames --find-copies dc891b2d72b1fd63b83e4a630a249241fc389151..38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df --",
+    "raw_name_status": [
+      "A\t.agent/reports/2026-07-10-db-embedding-stats-maker.md",
+      "A\t.agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json",
+      "A\t.agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
+      "A\t.agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+      "A\t.agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+      "A\t.agent/specs/db-embedding-stats/evidence/coverage.out",
+      "M\tinternal/embedding/store.go",
+      "M\tinternal/embedding/store_stats_test.go"
+    ]
+  },
+  "counts": {
+    "diff_entries": 8,
+    "changed_paths": 8,
+    "violations": 0,
+    "errors": 0
+  },
+  "diff_entries": [
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/2026-07-10-db-embedding-stats-maker.md"
+      ],
+      "raw": "A\t.agent/reports/2026-07-10-db-embedding-stats-maker.md"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json"
+      ],
+      "raw": "A\t.agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json"
+      ],
+      "raw": "A\t.agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/specs/db-embedding-stats/evidence/coverage.out"
+      ],
+      "raw": "A\t.agent/specs/db-embedding-stats/evidence/coverage.out"
+    },
+    {
+      "status": "M",
+      "paths": [
+        "internal/embedding/store.go"
+      ],
+      "raw": "M\tinternal/embedding/store.go"
+    },
+    {
+      "status": "M",
+      "paths": [
+        "internal/embedding/store_stats_test.go"
+      ],
+      "raw": "M\tinternal/embedding/store_stats_test.go"
+    }
+  ],
+  "changed_paths": [
+    {
+      "status": "A",
+      "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "report-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/2026-07-10-db-embedding-stats-maker.md"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-embedding-stats/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/specs/db-embedding-stats/evidence/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/specs/db-embedding-stats/evidence/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/specs/db-embedding-stats/evidence/coverage.out",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/specs/db-embedding-stats/evidence/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": "internal/embedding/store.go",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        "internal/embedding/store.go"
+      ]
+    },
+    {
+      "status": "M",
+      "path": "internal/embedding/store_stats_test.go",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        "internal/embedding/store_stats_test.go"
+      ]
+    }
+  ],
+  "violations": [],
+  "epoch_authority": {
+    "verdict": "PASS",
+    "evaluated": [],
+    "errors": []
+  },
+  "errors": []
+}
