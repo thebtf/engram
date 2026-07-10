@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "label": "final-green",
+  "live_package_binding_disabled": false,
+  "observed_at": "2026-07-10T20:32:55.6737846+00:00",
+  "exit_code": 0,
+  "workflow_sha256": "eacb67531d1b96862812273d41a605b5c10b5b26a99f9b8f4a0445f02ff51452",
+  "runner_sha256": "910e78011381e6bbfcf2fb15a97d61f54c2f399528b87ec02c6d30191701a8b4",
+  "extracted_script_sha256": "b1e06ccef81627ef19ca1ad64035e418291197e776f60cc49dbadcb576457b60",
+  "stdout_tail": [
+    "CONFORMANCE PASS: canonical LF/CRLF plan and structural scope authority, exact wrappers, path budget, AST-validated reachable exactly-once source-built image provenance and Scout, immutable live package-plus-test 12-test zero-skip DB execution proof, ownership state, node matrix, readiness, cleanup, and full/race semantics match; 51 mutations rejected"
+  ],
+  "stderr_tail": []
+}

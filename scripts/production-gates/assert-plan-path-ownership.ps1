@@ -8,6 +8,9 @@ param(
     [string]$Plan = '.agent/plans/2026-07-10-engram-production-ready-master-plan.md',
     [string]$ExpectedPlanSha256,
     [string]$State = '.agent/plans/2026-07-10-engram-production-ready-ownership-state.json',
+    [string]$ScopeMap = '.agent/plans/2026-07-10-engram-production-ready-scope-map.json',
+    [string]$ExpectedScopeMapSha256,
+    [string]$Register,
     [string]$EvidenceNamespace,
     [string]$ReportNamespace,
     [string]$Artifact = '.agent/reports/evidence/production-ready/ownership/path-ledger.json',
@@ -43,13 +46,18 @@ Usage:
     -Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md `
     -ExpectedPlanSha256 <64-hex-sha256> `
     -State .agent/plans/2026-07-10-engram-production-ready-ownership-state.json `
+    -ScopeMap .agent/plans/2026-07-10-engram-production-ready-scope-map.json `
+    -ExpectedScopeMapSha256 <64-hex-sha256> `
+    -Register <optional-live-evidence-register.json> `
     -Artifact .agent/reports/evidence/production-ready/ownership/path-ledger.json
 
   pwsh ./scripts/production-gates/assert-plan-path-ownership.ps1 -Mode Diff `
     -Slice DB-BULKOPS -Base <40-hex-commit> -Head <40-hex-commit> `
     -EvidenceNamespace '.agent/specs/production-ready-db-bulkops/evidence/**' `
     -ReportNamespace .agent/reports/db-bulkops-maker.md -Plan <plan> `
-    -ExpectedPlanSha256 <64-hex-sha256> -State <ownership-state.json> -Artifact <json>
+    -ExpectedPlanSha256 <64-hex-sha256> -State <ownership-state.json> `
+    -ScopeMap <scope-map.json> -ExpectedScopeMapSha256 <64-hex-sha256> `
+    -Register <optional-live-evidence-register.json> -Artifact <json>
 
   pwsh ./scripts/production-gates/assert-plan-path-ownership.ps1 `
     -Plan <plan> -PrintCanonicalPlanSha256
@@ -1133,7 +1141,283 @@ function Invoke-SelfTest {
     $parsedAgentPath = ConvertFrom-GitNameStatusLines @("A`t.agent/specs/db-x/evidence/proof.json")
     Assert-SelfTestCondition ($parsedAgentPath.errors.Count -eq 0 -and $parsedAgentPath.entries[0].paths[0] -eq '.agent/specs/db-x/evidence/proof.json') '.agent path normalization stripped its leading dot'
 
+    $scopeSha = ('d' * 64)
+    $rejectedHead = ('e' * 40)
+    $scopePlan = New-SyntheticPlan -Rows "| A | ``work/a`` | ``src/shared.go`` | none | proof |`n| B | ``work/b`` | ``src/shared.go`` | A integrated | proof |`n| ROOT | root-owned | ``.agent/root/**`` only | A and B accepted | proof |" -EpochRows '| `src/shared.go` | A | B | A checker and post-review PASS, commit integrated, B rebased |'
+    $scopeState = [pscustomobject][ordered]@{
+        schema_version = 1
+        scope_map = [pscustomobject][ordered]@{ path = '.agent/plans/2026-07-10-engram-production-ready-scope-map.json'; sha256 = $scopeSha }
+        path_epochs = @()
+    }
+    $scopeFixture = [pscustomobject][ordered]@{
+        schema_version = 1
+        kind = 'production-ready-scope-map'
+        plan_path = '.agent/plans/2026-07-10-engram-production-ready-master-plan.md'
+        ownership_state_path = '.agent/plans/2026-07-10-engram-production-ready-ownership-state.json'
+        register_snapshot = [pscustomobject][ordered]@{ source_path = '.agent/reports/register.json'; sha256 = ('f' * 64); updated_at = '2026-07-10T00:00:00Z'; row_count = 5; unique_slice_count = 5; goal_status = 'ACTIVE' }
+        allowed_classifications = @('maker', 'checker-evidence', 'meta-fold', 'historical', 'root-integration')
+        live_conformance_policy = [pscustomobject][ordered]@{
+            mode = 'structural-projection'
+            exact_fields = @('slice', 'classification', 'plan_owners')
+            snapshot_only_fields = @('register_snapshot.sha256', 'register_snapshot.updated_at', 'register_status', 'register_head', 'register_notes')
+            load_bearing_entry_field = 'load_bearing'
+            acceptance_tokens = @('PASS', 'READY_FOR_INTEGRATION', 'PRODUCT_ACCEPTED', 'ACCEPTED', 'INTEGRATED', 'COMPLETE')
+            rejection_tokens = @('REVISE', 'REJECT', 'FAIL', 'DIAGNOSTIC', 'HOLD', 'BLOCKED', 'PENDING', 'UNACCEPTED', 'NOT_ACCEPTED')
+        }
+        entries = @(
+            [pscustomobject][ordered]@{ slice = 'A'; classification = 'maker'; plan_owners = @('A'); register_status = 'PENDING'; register_head = '' },
+            [pscustomobject][ordered]@{ slice = 'B'; classification = 'checker-evidence'; plan_owners = @('B'); register_status = 'PENDING'; register_head = '' },
+            [pscustomobject][ordered]@{ slice = 'META'; classification = 'meta-fold'; plan_owners = @('A', 'B'); register_status = 'PENDING'; register_head = '' },
+            [pscustomobject][ordered]@{ slice = 'OLD'; classification = 'historical'; plan_owners = @('A'); register_status = 'REVISE_HOLD'; register_head = $rejectedHead; load_bearing = [pscustomobject][ordered]@{ policy = 'rejected_heads_must_not_be_accepted'; rejected_heads = @($rejectedHead) } },
+            [pscustomobject][ordered]@{ slice = 'ROOT'; classification = 'root-integration'; plan_owners = @('ROOT'); register_status = 'BLOCKED'; register_head = '' }
+        )
+    }
+    $registerFixture = [pscustomobject][ordered]@{
+        updated_at = '2026-07-10T01:00:00Z'
+        criteria = @(
+            [pscustomobject][ordered]@{ slice = 'A'; status = 'PENDING'; head = ''; notes = 'mutable' },
+            [pscustomobject][ordered]@{ slice = 'B'; status = 'PENDING'; head = ''; notes = 'mutable' },
+            [pscustomobject][ordered]@{ slice = 'META'; status = 'PENDING'; head = ''; notes = 'mutable' },
+            [pscustomobject][ordered]@{ slice = 'OLD'; status = 'REVISE_HOLD'; head = $rejectedHead; notes = 'mutable' },
+            [pscustomobject][ordered]@{ slice = 'ROOT'; status = 'BLOCKED'; head = ''; notes = 'mutable' }
+        )
+    }
+    $validScope = Invoke-ScopeContractAudit -ScopeMapObject $scopeFixture -ObservedScopeMapSha256 $scopeSha -ExpectedScopeMapSha256 $scopeSha -StateObject $scopeState -PlanText $scopePlan -RegisterObject $registerFixture
+    Assert-SelfTestCondition ($validScope.verdict -eq 'PASS') ("valid structural scope fixture was rejected: " + ($validScope.errors -join '; '))
+
+    $deletedPlanAndEpoch = New-SyntheticPlan -Rows '| A | `work/a` | `src/shared.go` | none | proof |' -EpochRows ''
+    $deletedState = $scopeState | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+    $deletedState.path_epochs = @()
+    $deletedScopeResult = Invoke-ScopeContractAudit -ScopeMapObject $scopeFixture -ObservedScopeMapSha256 $scopeSha -ExpectedScopeMapSha256 $scopeSha -StateObject $deletedState -PlanText $deletedPlanAndEpoch -RegisterObject $registerFixture
+    Assert-SelfTestCondition ($deletedScopeResult.verdict -eq 'FAIL') 'plan row plus state epoch deletion was accepted while the frozen scope still required its owner'
+
+    $missingEntry = $scopeFixture | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+    $missingEntry.entries = @($missingEntry.entries | Where-Object slice -CNE 'B')
+    $missingEntry.register_snapshot.row_count = 4
+    $missingEntry.register_snapshot.unique_slice_count = 4
+    $missingEntryResult = Invoke-ScopeContractAudit -ScopeMapObject $missingEntry -ObservedScopeMapSha256 $scopeSha -ExpectedScopeMapSha256 $scopeSha -StateObject $scopeState -PlanText $scopePlan -RegisterObject $registerFixture
+    Assert-SelfTestCondition ($missingEntryResult.verdict -eq 'FAIL') 'live register slice missing from the scope map was accepted'
+
+    $missingFoldOwner = $scopeFixture | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+    @($missingFoldOwner.entries | Where-Object slice -CEQ 'META')[0].plan_owners = @('A', 'MISSING')
+    $missingFoldResult = Invoke-ScopeContractAudit -ScopeMapObject $missingFoldOwner -ObservedScopeMapSha256 $scopeSha -ExpectedScopeMapSha256 $scopeSha -StateObject $scopeState -PlanText $scopePlan -RegisterObject $registerFixture
+    Assert-SelfTestCondition ($missingFoldResult.verdict -eq 'FAIL') 'fold targeting a missing owner was accepted'
+
+    $staleAcceptedRegister = $registerFixture | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+    @($staleAcceptedRegister.criteria | Where-Object slice -CEQ 'OLD')[0].status = 'READY_FOR_INTEGRATION'
+    $staleAcceptedResult = Invoke-ScopeContractAudit -ScopeMapObject $scopeFixture -ObservedScopeMapSha256 $scopeSha -ExpectedScopeMapSha256 $scopeSha -StateObject $scopeState -PlanText $scopePlan -RegisterObject $staleAcceptedRegister
+    Assert-SelfTestCondition ($staleAcceptedResult.verdict -eq 'FAIL') 'explicitly rejected historical head was accepted as current'
+
+    $ordinaryProgressRegister = $registerFixture | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+    $ordinaryProgressRegister.updated_at = '2026-07-10T02:00:00Z'
+    $progressRow = @($ordinaryProgressRegister.criteria | Where-Object slice -CEQ 'B')[0]
+    $progressRow.status = 'READY_FOR_INTEGRATION'
+    $progressRow.head = ('1' * 40)
+    $progressRow.notes = 'ordinary same-lane progress changed evidence text'
+    $ordinaryProgressResult = Invoke-ScopeContractAudit -ScopeMapObject $scopeFixture -ObservedScopeMapSha256 $scopeSha -ExpectedScopeMapSha256 $scopeSha -StateObject $scopeState -PlanText $scopePlan -RegisterObject $ordinaryProgressRegister
+    Assert-SelfTestCondition ($ordinaryProgressResult.verdict -eq 'PASS') ("ordinary same-lane register progress was rejected: " + ($ordinaryProgressResult.errors -join '; '))
+
+    $newRegisterSlice = $registerFixture | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+    $newRegisterSlice.criteria = @($newRegisterSlice.criteria) + [pscustomobject][ordered]@{ slice = 'NEW'; status = 'PENDING'; head = ''; notes = '' }
+    $newRegisterResult = Invoke-ScopeContractAudit -ScopeMapObject $scopeFixture -ObservedScopeMapSha256 $scopeSha -ExpectedScopeMapSha256 $scopeSha -StateObject $scopeState -PlanText $scopePlan -RegisterObject $newRegisterSlice
+    Assert-SelfTestCondition ($newRegisterResult.verdict -eq 'FAIL') 'new live register slice without a refreshed scope map was accepted'
+
+    $scopeHashMismatch = Invoke-ScopeContractAudit -ScopeMapObject $scopeFixture -ObservedScopeMapSha256 ('0' * 64) -ExpectedScopeMapSha256 $scopeSha -StateObject $scopeState -PlanText $scopePlan -RegisterObject $registerFixture
+    Assert-SelfTestCondition ($scopeHashMismatch.verdict -eq 'FAIL') 'scope map hash mismatch was accepted'
+
     Write-Output 'SELFTEST PASS: assert-plan-path-ownership.ps1'
+}
+
+function Get-PlanRowNames {
+    param([Parameter(Mandatory)][string]$Text)
+
+    $matrixSection = Get-MarkdownSection $Text '^## 4\. Worktree and Ownership Matrix\s*$' '^### 4\.1\s+'
+    $matrixRows = @(Get-TableRows $matrixSection 'Slice')
+    $names = [System.Collections.Generic.List[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($row in $matrixRows) {
+        if ($row.cells.Count -lt 5) { throw "line $($row.line_number): ownership row has $($row.cells.Count) cells, expected at least 5" }
+        $name = $row.cells[0].Trim().Trim('`')
+        if ($name -notmatch '^[A-Z0-9][A-Z0-9-]*$') { throw "line $($row.line_number): plan row identity '$name' is not canonical" }
+        if (-not $seen.Add($name)) { throw "plan row identity '$name' appears more than once" }
+        $names.Add($name)
+    }
+    return @($names)
+}
+
+function Test-StatusContainsPolicyToken {
+    param(
+        [Parameter(Mandatory)][string]$Status,
+        [Parameter(Mandatory)][string]$Token
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Status) -or [string]::IsNullOrWhiteSpace($Token)) { return $false }
+    return [regex]::IsMatch(
+        $Status,
+        '(^|_)' + [regex]::Escape($Token) + '(_|$)',
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+    )
+}
+
+function Test-RegisterStatusAccepted {
+    param(
+        [Parameter(Mandatory)][string]$Status,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$AcceptanceTokens,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$RejectionTokens
+    )
+
+    $accepted = @($AcceptanceTokens | Where-Object { Test-StatusContainsPolicyToken -Status $Status -Token ([string]$_) }).Count -gt 0
+    $rejected = @($RejectionTokens | Where-Object { Test-StatusContainsPolicyToken -Status $Status -Token ([string]$_) }).Count -gt 0
+    return $accepted -and -not $rejected
+}
+
+function Invoke-ScopeContractAudit {
+    param(
+        [Parameter(Mandatory)]$ScopeMapObject,
+        [Parameter(Mandatory)][string]$ObservedScopeMapSha256,
+        [Parameter(Mandatory)][string]$ExpectedScopeMapSha256,
+        [Parameter(Mandatory)]$StateObject,
+        [Parameter(Mandatory)][string]$PlanText,
+        [AllowNull()]$RegisterObject = $null
+    )
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $expectedClassifications = @('maker', 'checker-evidence', 'meta-fold', 'historical', 'root-integration')
+    $expectedExactFields = @('slice', 'classification', 'plan_owners')
+    $expectedSnapshotFields = @('register_snapshot.sha256', 'register_snapshot.updated_at', 'register_status', 'register_head', 'register_notes')
+    $expectedScopePath = '.agent/plans/2026-07-10-engram-production-ready-scope-map.json'
+
+    if (-not (Test-ExpectedPlanHash -ObservedSha256 $ObservedScopeMapSha256 -ExpectedSha256 $ExpectedScopeMapSha256)) {
+        $errors.Add("observed scope-map SHA256 '$ObservedScopeMapSha256' does not match expected '$ExpectedScopeMapSha256'")
+    }
+
+    $stateScope = Get-PropertyValue $StateObject 'scope_map'
+    $stateScopePath = [string](Get-PropertyValue $stateScope 'path')
+    $stateScopeSha = [string](Get-PropertyValue $stateScope 'sha256')
+    if ($stateScopePath -cne $expectedScopePath) { $errors.Add("ownership state scope-map path '$stateScopePath' is not canonical") }
+    if (-not (Test-ExpectedPlanHash -ObservedSha256 $stateScopeSha -ExpectedSha256 $ExpectedScopeMapSha256)) {
+        $errors.Add("ownership state scope-map SHA256 '$stateScopeSha' does not match expected '$ExpectedScopeMapSha256'")
+    }
+
+    if ((Get-PropertyValue $ScopeMapObject 'schema_version') -ne 1) { $errors.Add('scope map schema_version must be 1') }
+    if ([string](Get-PropertyValue $ScopeMapObject 'kind') -cne 'production-ready-scope-map') { $errors.Add('scope map kind must be production-ready-scope-map') }
+    $scopePlanPath = [string](Get-PropertyValue $ScopeMapObject 'plan_path')
+    $scopeStatePath = [string](Get-PropertyValue $ScopeMapObject 'ownership_state_path')
+    if ($scopePlanPath -cne '.agent/plans/2026-07-10-engram-production-ready-master-plan.md') { $errors.Add("scope map plan_path '$scopePlanPath' is not canonical") }
+    if ($scopeStatePath -cne '.agent/plans/2026-07-10-engram-production-ready-ownership-state.json') { $errors.Add("scope map ownership_state_path '$scopeStatePath' is not canonical") }
+
+    [object[]]$allowedClassifications = @((Get-PropertyValue $ScopeMapObject 'allowed_classifications') | ForEach-Object { [string]$_ })
+    if (-not (Test-SameStringSequence $expectedClassifications $allowedClassifications)) { $errors.Add('scope map allowed_classifications drifted') }
+
+    $policy = Get-PropertyValue $ScopeMapObject 'live_conformance_policy'
+    if ([string](Get-PropertyValue $policy 'mode') -cne 'structural-projection') { $errors.Add('scope map live policy must use structural-projection mode') }
+    [object[]]$exactFields = @((Get-PropertyValue $policy 'exact_fields') | ForEach-Object { [string]$_ })
+    [object[]]$snapshotFields = @((Get-PropertyValue $policy 'snapshot_only_fields') | ForEach-Object { [string]$_ })
+    [object[]]$acceptanceTokens = @((Get-PropertyValue $policy 'acceptance_tokens') | ForEach-Object { [string]$_ })
+    [object[]]$rejectionTokens = @((Get-PropertyValue $policy 'rejection_tokens') | ForEach-Object { [string]$_ })
+    if (-not (Test-SameStringSequence $expectedExactFields $exactFields)) { $errors.Add('scope map exact structural fields drifted') }
+    if (-not (Test-SameStringSequence $expectedSnapshotFields $snapshotFields)) { $errors.Add('scope map snapshot-only fields drifted') }
+    if ([string](Get-PropertyValue $policy 'load_bearing_entry_field') -cne 'load_bearing') { $errors.Add('scope map load-bearing field name drifted') }
+    if ($acceptanceTokens.Count -lt 1 -or @($acceptanceTokens | Select-Object -Unique).Count -ne $acceptanceTokens.Count) { $errors.Add('scope map acceptance tokens are empty or duplicated') }
+    if ($rejectionTokens.Count -lt 1 -or @($rejectionTokens | Select-Object -Unique).Count -ne $rejectionTokens.Count) { $errors.Add('scope map rejection tokens are empty or duplicated') }
+
+    $snapshot = Get-PropertyValue $ScopeMapObject 'register_snapshot'
+    $snapshotSha = [string](Get-PropertyValue $snapshot 'sha256')
+    $snapshotUpdatedAt = [string](Get-PropertyValue $snapshot 'updated_at')
+    $snapshotRowCount = [int](Get-PropertyValue $snapshot 'row_count')
+    $snapshotUniqueCount = [int](Get-PropertyValue $snapshot 'unique_slice_count')
+    if ($snapshotSha -notmatch '^[0-9A-Fa-f]{64}$') { $errors.Add('scope map register freeze SHA256 is missing or invalid') }
+    if ([string]::IsNullOrWhiteSpace($snapshotUpdatedAt)) { $errors.Add('scope map register freeze updated_at is missing') }
+    if ($snapshotRowCount -lt 1 -or $snapshotUniqueCount -lt 1 -or $snapshotRowCount -ne $snapshotUniqueCount) { $errors.Add('scope map register freeze row/unique counts are invalid') }
+
+    $planRows = @()
+    try { $planRows = @(Get-PlanRowNames -Text $PlanText) }
+    catch { $errors.Add($_.Exception.Message) }
+    $planRowSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($planRow in $planRows) { [void]$planRowSet.Add([string]$planRow) }
+
+    [object[]]$entries = @((Get-PropertyValue $ScopeMapObject 'entries'))
+    $entryBySlice = @{}
+    foreach ($entry in $entries) {
+        $slice = [string](Get-PropertyValue $entry 'slice')
+        $classification = [string](Get-PropertyValue $entry 'classification')
+        [object[]]$owners = @((Get-PropertyValue $entry 'plan_owners') | ForEach-Object { [string]$_ })
+        if ($slice -notmatch '^[A-Z0-9][A-Z0-9-]*$') { $errors.Add("scope entry slice '$slice' is blank or non-canonical") }
+        elseif ($entryBySlice.ContainsKey($slice)) { $errors.Add("scope map repeats slice '$slice'") }
+        else { $entryBySlice[$slice] = $entry }
+        if ($classification -notin $expectedClassifications) { $errors.Add("scope entry '$slice' has unsupported classification '$classification'") }
+        if ($owners.Count -lt 1 -or @($owners | Select-Object -Unique).Count -ne $owners.Count) { $errors.Add("scope entry '$slice' has empty or duplicate plan owners") }
+        if ($classification -in @('maker', 'checker-evidence', 'root-integration') -and ($owners.Count -ne 1 -or $owners[0] -cne $slice)) {
+            $errors.Add("scope entry '$slice' classification '$classification' must map directly to its same-named plan row")
+        }
+        if ($classification -in @('meta-fold', 'historical') -and $planRowSet.Contains($slice)) {
+            $errors.Add("scope entry '$slice' classification '$classification' must not masquerade as a direct plan row")
+        }
+        foreach ($owner in $owners) {
+            if (-not $planRowSet.Contains($owner)) { $errors.Add("scope entry '$slice' points to missing plan owner '$owner'") }
+        }
+
+        $statusProperty = $entry.PSObject.Properties['register_status']
+        $headProperty = $entry.PSObject.Properties['register_head']
+        if ($null -eq $statusProperty -or $null -eq $headProperty) { $errors.Add("scope entry '$slice' omits frozen register status/head facts") }
+        $snapshotEntryHead = [string](Get-PropertyValue $entry 'register_head')
+        if (-not [string]::IsNullOrWhiteSpace($snapshotEntryHead) -and $snapshotEntryHead -notmatch '^[0-9A-Fa-f]{40}$') { $errors.Add("scope entry '$slice' has invalid frozen register head '$snapshotEntryHead'") }
+
+        $loadBearing = Get-PropertyValue $entry 'load_bearing'
+        if ($null -ne $loadBearing) {
+            if ([string](Get-PropertyValue $loadBearing 'policy') -cne 'rejected_heads_must_not_be_accepted') { $errors.Add("scope entry '$slice' has unsupported load-bearing policy") }
+            [object[]]$rejectedHeads = @((Get-PropertyValue $loadBearing 'rejected_heads') | ForEach-Object { [string]$_ })
+            if ($rejectedHeads.Count -lt 1 -or @($rejectedHeads | Select-Object -Unique).Count -ne $rejectedHeads.Count -or @($rejectedHeads | Where-Object { $_ -notmatch '^[0-9A-Fa-f]{40}$' }).Count -gt 0) {
+                $errors.Add("scope entry '$slice' has invalid rejected-head policy data")
+            }
+        }
+    }
+    if ($entries.Count -ne $snapshotRowCount -or $entryBySlice.Count -ne $snapshotUniqueCount) {
+        $errors.Add("scope map entry cardinality $($entries.Count)/$($entryBySlice.Count) does not match frozen $snapshotRowCount/$snapshotUniqueCount")
+    }
+
+    $liveRows = @()
+    if ($null -ne $RegisterObject) {
+        [object[]]$liveRows = @((Get-PropertyValue $RegisterObject 'criteria'))
+        $liveBySlice = @{}
+        foreach ($row in $liveRows) {
+            $slice = [string](Get-PropertyValue $row 'slice')
+            if ($slice -notmatch '^[A-Z0-9][A-Z0-9-]*$') { $errors.Add("live register slice '$slice' is blank or non-canonical"); continue }
+            if ($liveBySlice.ContainsKey($slice)) { $errors.Add("live register repeats slice '$slice'"); continue }
+            $liveBySlice[$slice] = $row
+        }
+        if ($liveRows.Count -ne $liveBySlice.Count) { $errors.Add("live register row/unique counts differ: $($liveRows.Count)/$($liveBySlice.Count)") }
+        if (-not (Test-SameStringSet @($entryBySlice.Keys) @($liveBySlice.Keys))) { $errors.Add('live register unique slice set differs from the frozen scope map') }
+
+        foreach ($slice in $entryBySlice.Keys) {
+            if (-not $liveBySlice.ContainsKey($slice)) { continue }
+            $entry = $entryBySlice[$slice]
+            $loadBearing = Get-PropertyValue $entry 'load_bearing'
+            if ($null -eq $loadBearing) { continue }
+            $liveRow = $liveBySlice[$slice]
+            $liveHead = [string](Get-PropertyValue $liveRow 'head')
+            $liveStatus = [string](Get-PropertyValue $liveRow 'status')
+            [object[]]$rejectedHeads = @((Get-PropertyValue $loadBearing 'rejected_heads') | ForEach-Object { [string]$_ })
+            if ($liveHead -in $rejectedHeads -and (Test-RegisterStatusAccepted -Status $liveStatus -AcceptanceTokens $acceptanceTokens -RejectionTokens $rejectionTokens)) {
+                $errors.Add("live register slice '$slice' presents rejected head '$liveHead' as accepted with status '$liveStatus'")
+            }
+        }
+    }
+
+    return [pscustomobject][ordered]@{
+        schema_version = 1
+        verdict = if ($errors.Count -eq 0) { 'PASS' } else { 'FAIL' }
+        observed_sha256 = $ObservedScopeMapSha256
+        expected_sha256 = $ExpectedScopeMapSha256
+        snapshot_sha256 = $snapshotSha
+        snapshot_updated_at = $snapshotUpdatedAt
+        entries = $entries.Count
+        unique_slices = $entryBySlice.Count
+        plan_rows = $planRows.Count
+        live_register_checked = $null -ne $RegisterObject
+        live_rows = $liveRows.Count
+        errors = @($errors)
+    }
 }
 
 if ($Help) { Show-Help; exit 0 }
@@ -1151,6 +1435,13 @@ $stateHash = $null
 $statePath = if (Test-Path -LiteralPath $State) { [System.IO.Path]::GetFullPath($State) } else { $State }
 $stateObject = $null
 $stateAudit = $null
+$scopeMapHash = $null
+$scopeMapPath = if (Test-Path -LiteralPath $ScopeMap) { [System.IO.Path]::GetFullPath($ScopeMap) } else { $ScopeMap }
+$scopeMapObject = $null
+$scopeAudit = $null
+$registerHash = $null
+$registerPath = if (-not [string]::IsNullOrWhiteSpace($Register) -and (Test-Path -LiteralPath $Register)) { [System.IO.Path]::GetFullPath($Register) } else { $Register }
+$registerObject = $null
 $artifactObject = $null
 $exitCode = 1
 
@@ -1158,16 +1449,28 @@ try {
     if (-not (Test-Path -LiteralPath $Plan -PathType Leaf)) { throw "ownership plan does not exist: $Plan" }
     if ([string]::IsNullOrWhiteSpace($ExpectedPlanSha256) -or $ExpectedPlanSha256 -notmatch '^[0-9A-Fa-f]{64}$') { throw '-ExpectedPlanSha256 is required and must be a full 64-hex SHA256' }
     if (-not (Test-Path -LiteralPath $State -PathType Leaf)) { throw "ownership state does not exist: $State" }
+    if (-not (Test-Path -LiteralPath $ScopeMap -PathType Leaf)) { throw "scope map does not exist: $ScopeMap" }
+    if ([string]::IsNullOrWhiteSpace($ExpectedScopeMapSha256) -or $ExpectedScopeMapSha256 -notmatch '^[0-9A-Fa-f]{64}$') { throw '-ExpectedScopeMapSha256 is required and must be a full 64-hex SHA256' }
+    if (-not [string]::IsNullOrWhiteSpace($Register) -and -not (Test-Path -LiteralPath $Register -PathType Leaf)) { throw "live register does not exist: $Register" }
     $planHash = Get-CanonicalUtf8LfFileSha256 -Path $Plan
     $stateHash = Get-CanonicalUtf8LfFileSha256 -Path $State
+    $scopeMapHash = Get-CanonicalUtf8LfFileSha256 -Path $ScopeMap
     $text = [System.IO.File]::ReadAllText([System.IO.Path]::GetFullPath($Plan))
     $ledger = Invoke-OwnershipAudit $text $planPath
     try { $stateObject = Get-Content -LiteralPath $State -Raw | ConvertFrom-Json -Depth 100 }
     catch { throw "ownership state is invalid JSON: $($_.Exception.Message)" }
+    try { $scopeMapObject = Get-Content -LiteralPath $ScopeMap -Raw | ConvertFrom-Json -Depth 100 }
+    catch { throw "scope map is invalid JSON: $($_.Exception.Message)" }
+    if (-not [string]::IsNullOrWhiteSpace($Register)) {
+        $registerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Register).Hash.ToLowerInvariant()
+        try { $registerObject = Get-Content -LiteralPath $Register -Raw | ConvertFrom-Json -Depth 100 }
+        catch { throw "live register is invalid JSON: $($_.Exception.Message)" }
+    }
     $stateAudit = Invoke-StateContractAudit -StateObject $stateObject -Ledger $ledger -ObservedPlanSha256 $planHash -ExpectedPlanSha256 $ExpectedPlanSha256
+    $scopeAudit = Invoke-ScopeContractAudit -ScopeMapObject $scopeMapObject -ObservedScopeMapSha256 $scopeMapHash -ExpectedScopeMapSha256 $ExpectedScopeMapSha256 -StateObject $stateObject -PlanText $text -RegisterObject $registerObject
 
     if ($Mode -eq 'Ledger') {
-        $authorityErrors = @($ledger.errors) + @($stateAudit.errors)
+        $authorityErrors = @($ledger.errors) + @($stateAudit.errors) + @($scopeAudit.errors)
         $finishedAt = [DateTimeOffset]::UtcNow
         $artifactObject = [ordered]@{
             schema_version = 2
@@ -1179,6 +1482,8 @@ try {
             duration_seconds = [math]::Round(($finishedAt - $startedAt).TotalSeconds, 3)
             plan = [ordered]@{ path = $planPath; expected_sha256 = $ExpectedPlanSha256.ToLowerInvariant(); observed_sha256 = $planHash; hash_match = (Test-ExpectedPlanHash $planHash $ExpectedPlanSha256) }
             state = [ordered]@{ path = $statePath; sha256 = $stateHash; verdict = $stateAudit.verdict; plan_sha256 = $stateAudit.plan_sha256 }
+            scope_map = [ordered]@{ path = $scopeMapPath; expected_sha256 = $ExpectedScopeMapSha256.ToLowerInvariant(); observed_sha256 = $scopeMapHash; verdict = $scopeAudit.verdict; entries = $scopeAudit.entries; unique_slices = $scopeAudit.unique_slices }
+            live_register = [ordered]@{ supplied = -not [string]::IsNullOrWhiteSpace($Register); path = $registerPath; sha256 = $registerHash; checked = $scopeAudit.live_register_checked; rows = $scopeAudit.live_rows }
             counts = [ordered]@{
                 maker_slices = $ledger.counts.maker_slices
                 declarations = $ledger.counts.declarations
@@ -1204,6 +1509,7 @@ try {
         $errors = [System.Collections.Generic.List[string]]::new()
         foreach ($ledgerError in $ledger.errors) { $errors.Add("ledger: $ledgerError") }
         foreach ($stateError in $stateAudit.errors) { $errors.Add("state: $stateError") }
+        foreach ($scopeError in $scopeAudit.errors) { $errors.Add("scope: $scopeError") }
         if ([string]::IsNullOrWhiteSpace($Slice)) { $errors.Add('Diff mode requires -Slice') }
         if ([string]::IsNullOrWhiteSpace($Base)) { $errors.Add('Diff mode requires -Base') }
         if ([string]::IsNullOrWhiteSpace($Head)) { $errors.Add('Diff mode requires -Head') }
@@ -1284,6 +1590,8 @@ try {
             duration_seconds = [math]::Round(($finishedAt - $startedAt).TotalSeconds, 3)
             plan = [ordered]@{ path = $planPath; expected_sha256 = $ExpectedPlanSha256.ToLowerInvariant(); observed_sha256 = $planHash; hash_match = (Test-ExpectedPlanHash $planHash $ExpectedPlanSha256); ledger_verdict = $ledger.verdict }
             state = [ordered]@{ path = $statePath; sha256 = $stateHash; verdict = $stateAudit.verdict; plan_sha256 = $stateAudit.plan_sha256 }
+            scope_map = [ordered]@{ path = $scopeMapPath; expected_sha256 = $ExpectedScopeMapSha256.ToLowerInvariant(); observed_sha256 = $scopeMapHash; verdict = $scopeAudit.verdict; entries = $scopeAudit.entries; unique_slices = $scopeAudit.unique_slices }
+            live_register = [ordered]@{ supplied = -not [string]::IsNullOrWhiteSpace($Register); path = $registerPath; sha256 = $registerHash; checked = $scopeAudit.live_register_checked; rows = $scopeAudit.live_rows }
             slice = [ordered]@{
                 name = $Slice
                 row_count = $sliceRows.Count
@@ -1328,6 +1636,8 @@ catch {
         duration_seconds = [math]::Round(($finishedAt - $startedAt).TotalSeconds, 3)
         plan = [ordered]@{ path = $planPath; expected_sha256 = $ExpectedPlanSha256; observed_sha256 = $planHash }
         state = [ordered]@{ path = $statePath; sha256 = $stateHash }
+        scope_map = [ordered]@{ path = $scopeMapPath; expected_sha256 = $ExpectedScopeMapSha256; observed_sha256 = $scopeMapHash }
+        live_register = [ordered]@{ supplied = -not [string]::IsNullOrWhiteSpace($Register); path = $registerPath; sha256 = $registerHash }
         errors = @($_.Exception.Message)
     }
     $exitCode = 1

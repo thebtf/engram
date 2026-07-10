@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "label": "prove-it-scope-final",
+  "mutation": "disable live unique-slice-set enforcement",
+  "observed_at": "2026-07-10T20:34:51.0681677+00:00",
+  "exit_code": 1,
+  "source_sha256": "3e82ac89be0888d31b58b9046395fe14aa7c673d8706ae95779bb5d9c231111a",
+  "mutated_sha256": "f4150f31285d43b76e42850fe14d092d26c7d9b0cf2cc4b8e33b5919334c1cd4",
+  "stdout_tail": [],
+  "stderr_tail": [
+    "Exception: D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r8-maker\\.agent\\specs\\release-gates-r8\\evidence\\release-gates\\prove-it-scope-final.assert-plan-path-ownership.ps1:962",
+    "Line |",
+    " 962 |      if (-not $Condition) { throw \"SELFTEST FAIL: $Message\" }",
+    "     |                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+    "     | SELFTEST FAIL: live register slice missing from the scope map was accepted"
+  ]
+}

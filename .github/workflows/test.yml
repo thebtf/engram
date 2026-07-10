@@ -82,8 +82,10 @@ jobs:
           ./scripts/production-gates/assert-plan-path-ownership.ps1
           -Mode Ledger
           -Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md
-          -ExpectedPlanSha256 d7bcfd122e456d9b764595524292d53b0c99447b7f716a1be0707341e4681bf9
+          -ExpectedPlanSha256 fd2b223a9a62848efc39e1c33bf739bada191508bccb7ba9a73140185638e43d
           -State .agent/plans/2026-07-10-engram-production-ready-ownership-state.json
+          -ScopeMap .agent/plans/2026-07-10-engram-production-ready-scope-map.json
+          -ExpectedScopeMapSha256 81093184036672008d6b85dfa88a431998ef70b587ab11475aa2b315f03ddf79
           -Artifact .agent/e/rg4/ci-ledger.json
 
       - name: Assert Windows tracked path budget
@@ -94,6 +96,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          function Get-CanonicalTextSha256([string]$text) {
+            $canonical = ($text -replace "`r`n", "`n") -replace "`r", "`n"
+            $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($canonical)
+            return [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+          }
           $critical = Get-Content -Raw '.agent/critical-suite.config.yaml'
           $stand = Get-Content -Raw '.agent/dev-stand.config.yaml'
           $workflow = Get-Content -Raw '.github/workflows/test.yml'
@@ -104,8 +111,12 @@ jobs:
           $pathBudgetRunner = Get-Content -Raw 'scripts/production-gates/assert-windows-path-budget.ps1'
           $nodeRunner = Get-Content -Raw 'scripts/production-gates/run-node-matrix.ps1'
           $ownershipState = Get-Content -Raw '.agent/plans/2026-07-10-engram-production-ready-ownership-state.json'
-          $expectedPlanSha = 'd7bcfd122e456d9b764595524292d53b0c99447b7f716a1be0707341e4681bf9'
+          $masterPlan = Get-Content -Raw '.agent/plans/2026-07-10-engram-production-ready-master-plan.md'
+          $scopeMap = Get-Content -Raw '.agent/plans/2026-07-10-engram-production-ready-scope-map.json'
+          $expectedPlanSha = 'fd2b223a9a62848efc39e1c33bf739bada191508bccb7ba9a73140185638e43d'
+          $expectedScopeMapSha = '81093184036672008d6b85dfa88a431998ef70b587ab11475aa2b315f03ddf79'
           $observedPlanSha = ([string](& pwsh -NoProfile -File scripts/production-gates/assert-plan-path-ownership.ps1 -Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md -PrintCanonicalPlanSha256)).Trim()
+          $observedScopeMapSha = Get-CanonicalTextSha256 $scopeMap
           $rejectedBulkHead = '68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef'
           $rejectedBulkChecker = '.agent/worktrees/prc-db-bulkops/.agent/reviews/2026-07-10-db-bulkops-sibling-rework-check.md'
           $rejectedBulkCheckerSha = 'EB9EB227363A27EA058C6654BD7E38EED1088252F79F837E377B2A3CBC1FAFB7'
@@ -292,18 +303,45 @@ jobs:
 
             $proofFunctions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-RequiredSessionStartExecutionProof' }, $true))
             if ($proofFunctions.Count -ne 1) { throw "Get-RequiredSessionStartExecutionProof cardinality must be exactly 1; found $($proofFunctions.Count)" }
+            $allPackageAssignments = @($proofFunctions[0].Body.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$package'
+            }, $true))
+            if ($allPackageAssignments.Count -ne 1) { throw "required session-start package assignment cardinality must be exactly 1; found $($allPackageAssignments.Count)" }
             $packageAssignments = @($proofFunctions[0].Body.FindAll({
               param($node)
               $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$package' -and
                 (ConvertTo-AstShape $node.Right.Extent.Text) -ceq (ConvertTo-AstShape ("'" + $expectedPackage + "'"))
             }, $true))
-            if ($packageAssignments.Count -ne 1) { throw "required session-start package must be exactly '$expectedPackage'" }
+            if ($packageAssignments.Count -ne 1 -or $packageAssignments[0].Extent.StartOffset -ne $allPackageAssignments[0].Extent.StartOffset) { throw "required session-start package must be assigned exactly once to '$expectedPackage'" }
             $inventoryAssignments = @($proofFunctions[0].Body.FindAll({
               param($node)
               $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$expectedNames' -and
                 (ConvertTo-AstShape $node.Right.Extent.Text) -ceq (ConvertTo-AstShape '@(Get-RequiredSessionStartTestNames)')
             }, $true))
             if ($inventoryAssignments.Count -ne 1) { throw 'execution proof does not consume the pinned required session-start identity inventory exactly once' }
+
+            $consumerLoops = @($proofFunctions[0].Body.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.ForEachStatementAst] -and
+                $node.Variable.Extent.Text -ceq '$name' -and
+                (ConvertTo-AstShape $node.Condition.Extent.Text) -ceq (ConvertTo-AstShape '$expectedNames')
+            }, $true))
+            if ($consumerLoops.Count -ne 1) { throw "required session-start consumer loop cardinality must be exactly 1; found $($consumerLoops.Count)" }
+            $matchesAssignments = @($proofFunctions[0].Body.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$matches'
+            }, $true))
+            if ($matchesAssignments.Count -ne 1) { throw "required session-start live matches assignment cardinality must be exactly 1; found $($matchesAssignments.Count)" }
+            $liveMatchesAssignment = $consumerLoops[0].Body.Statements[0]
+            $expectedMatchesExpression = '@($allTests | Where-Object { [string]$_.package -ceq $package -and [string]$_.test -ceq $name })'
+            if ($liveMatchesAssignment -isnot [System.Management.Automation.Language.AssignmentStatementAst] -or
+                $liveMatchesAssignment.Left.Extent.Text -cne '$matches' -or
+                $liveMatchesAssignment.Extent.StartOffset -ne $matchesAssignments[0].Extent.StartOffset -or
+                $packageAssignments[0].Extent.StartOffset -ge $liveMatchesAssignment.Extent.StartOffset -or
+                (ConvertTo-AstShape $liveMatchesAssignment.Right.Extent.Text) -cne (ConvertTo-AstShape $expectedMatchesExpression)) {
+              throw 'required session-start live consumer does not bind exact case-sensitive package plus test identity at the point of consumption'
+            }
           }
 
           function Get-ExactRuntimeAssignment(
@@ -460,11 +498,15 @@ jobs:
             [string]$devStandRunnerText,
             [string]$ownershipRunnerText = $ownershipRunner,
             [string]$nodeRunnerText = $nodeRunner,
-            [string]$stateText = $ownershipState
+            [string]$stateText = $ownershipState,
+            [string]$planText = $masterPlan,
+            [string]$scopeText = $scopeMap
           ) {
             $execution = Remove-ConformanceStep $workflowText
             Assert-LiveDevStandInvocationContract $dbRunnerText
             if ($observedPlanSha -cne $expectedPlanSha) { throw "tracked production-ready plan hash drifted: expected=$expectedPlanSha observed=$observedPlanSha" }
+            if ((Get-CanonicalTextSha256 $planText) -cne $expectedPlanSha) { throw 'challenged plan text is not the exact canonical R8 authority' }
+            if ($observedScopeMapSha -cne $expectedScopeMapSha -or (Get-CanonicalTextSha256 $scopeText) -cne $expectedScopeMapSha) { throw "tracked R8 scope-map hash drifted: expected=$expectedScopeMapSha observed=$observedScopeMapSha" }
             $repeatToken = '(?i)(?<![A-Za-z0-9_])-Repeat(?:\s+|=)\d+'
             if ($criticalText -match $repeatToken) { throw 'repeat count is duplicated in critical-suite config' }
             if ($execution -match $repeatToken) { throw 'repeat count is duplicated in executable workflow; run-db-suite default is the source of truth' }
@@ -484,7 +526,7 @@ jobs:
             if ($criticalText -notmatch ('(?m)^\s{2}command:\s*"' + [regex]::Escape($trackedDatabaseCommand) + '"\s*$')) { throw 'tracked full fresh-DB runner command drifted' }
 
             $ledgerStep = Get-StepBody $execution 'Assert tracked production-ready ownership ledger'
-            foreach ($required in @('-Mode Ledger', '-Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md', "-ExpectedPlanSha256 $expectedPlanSha", '-State .agent/plans/2026-07-10-engram-production-ready-ownership-state.json', '-Artifact .agent/e/rg4/ci-ledger.json')) {
+            foreach ($required in @('-Mode Ledger', '-Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md', "-ExpectedPlanSha256 $expectedPlanSha", '-State .agent/plans/2026-07-10-engram-production-ready-ownership-state.json', '-ScopeMap .agent/plans/2026-07-10-engram-production-ready-scope-map.json', "-ExpectedScopeMapSha256 $expectedScopeMapSha", '-Artifact .agent/e/rg4/ci-ledger.json')) {
               if (-not $ledgerStep.Contains($required)) { throw "tracked ownership Ledger step is missing '$required'" }
             }
             $pathBudgetSelfTest = Get-StepBody $execution 'Self-test Windows tracked path budget'
@@ -497,7 +539,7 @@ jobs:
             $nodeSelfTest = Get-StepBody $execution 'Self-test OpenClaw node release matrix'
             if (-not $nodeSelfTest.Contains('run-node-matrix.ps1 -SelfTest')) { throw 'workflow does not self-test the OpenClaw node release matrix' }
 
-            foreach ($required in @('Get-CanonicalUtf8LfFileSha256', 'PrintCanonicalPlanSha256', 'Test-SameStringSequence', "current owner is '`$currentOwner', not '`$Slice'", 'lacks exact rejected-checker evidence', 'must equal rejected predecessor', 'does not descend from predecessor integration')) {
+            foreach ($required in @('Get-CanonicalUtf8LfFileSha256', 'PrintCanonicalPlanSha256', 'Test-SameStringSequence', 'Invoke-ScopeContractAudit', 'structural-projection', 'plan row plus state epoch deletion was accepted', 'live register unique slice set differs from the frozen scope map', 'explicitly rejected historical head was accepted as current', 'ordinary same-lane register progress was rejected', 'new live register slice without a refreshed scope map was accepted', "current owner is '`$currentOwner', not '`$Slice'", 'lacks exact rejected-checker evidence', 'must equal rejected predecessor', 'does not descend from predecessor integration')) {
               if (-not $ownershipRunnerText.Contains($required)) { throw "ownership runner implementation is missing '$required'" }
             }
             foreach ($required in @('Test-StrictBoolean', '--untracked-files=all', 'dev-stand-source-commit', 'dev-stand-source-commit-post-build', 'dev-stand-source-tracked-status-post-build', 'dev-stand-compose-build', "@('build', '--pull', 'server', 'operator-console')", 'dev-stand-postgres-pull', "@('pull', 'postgres')", "@('up', '-d', '--no-build', '--pull', 'never', '--wait')", 'source_commit = $sourceCommit', 'source_tracked_clean = $sourceTrackedClean', 'prelaunch_image_ids = $prelaunchImageIds', 'prelaunch_to_running_image_identity = $prelaunchToRunningImageIdentity', 'scanned_reference = $scanReference', '$databaseName = New-RunDatabaseName -RequestedRunId $RunId -RepeatIndex $repeatIndex', 'engram_prc_rg_test_${runHash}_r$RepeatIndex', 'Get-RequiredSessionStartExecutionProof', '$sessionStartExecutionProof = Get-RequiredSessionStartExecutionProof $goTestSummary', 'required-session-start-execution.json', 'required_session_start_execution = $sessionStartExecutionProof')) {
@@ -509,6 +551,34 @@ jobs:
 
             $stateObject = $stateText | ConvertFrom-Json -Depth 100
             if ([string]$stateObject.plan.sha256 -cne $expectedPlanSha) { throw 'ownership state is not bound to the exact challenged plan hash' }
+            if ([string]$stateObject.scope_map.path -cne '.agent/plans/2026-07-10-engram-production-ready-scope-map.json' -or [string]$stateObject.scope_map.sha256 -cne $expectedScopeMapSha) { throw 'ownership state is not bound to the exact R8 scope map' }
+            $scopeObject = $scopeText | ConvertFrom-Json -Depth 100
+            $scopeEntries = @($scopeObject.entries)
+            $uniqueScopeSlices = @($scopeEntries.slice | Sort-Object -Unique)
+            if ($scopeEntries.Count -ne 67 -or $uniqueScopeSlices.Count -ne 67 -or [int]$scopeObject.register_snapshot.row_count -ne 67 -or [int]$scopeObject.register_snapshot.unique_slice_count -ne 67) { throw 'R8 scope map must preserve the frozen 67/67 structural slice set' }
+            $expectedClassifications = @('maker', 'checker-evidence', 'meta-fold', 'historical', 'root-integration')
+            if ((@($scopeObject.allowed_classifications) -join "`n") -cne ($expectedClassifications -join "`n")) { throw 'R8 scope-map classifications drifted' }
+            $expectedClassificationCounts = [ordered]@{ maker = 56; 'checker-evidence' = 4; 'meta-fold' = 4; historical = 1; 'root-integration' = 2 }
+            foreach ($classification in $expectedClassificationCounts.Keys) {
+              $observedCount = @($scopeEntries | Where-Object classification -CEQ $classification).Count
+              if ($observedCount -ne [int]$expectedClassificationCounts[$classification]) { throw "R8 scope classification '$classification' count drifted: expected=$([int]$expectedClassificationCounts[$classification]) observed=$observedCount" }
+            }
+            $planRows = @([regex]::Matches($planText, '(?m)^\| ([A-Z0-9][A-Z0-9-]+) \|') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+            foreach ($entry in $scopeEntries) {
+              foreach ($owner in @($entry.plan_owners)) {
+                if ([string]$owner -cnotin $planRows) { throw "scope slice '$([string]$entry.slice)' points to missing plan owner '$([string]$owner)'" }
+              }
+            }
+            $expectedFolds = [ordered]@{
+              'CUSTOMER-MODE' = @('CRITICAL-HARNESS', 'INTEGRATION-RELEASE')
+              'MASTER-PLAN' = @('PLAN-GOVERNANCE')
+              'OPERATIONS' = @('DEPLOYMENT-ROLLBACK', 'RECOVERY-DATA', 'OBSERVABILITY-OTLP', 'PRIVACY-BOUNDARIES', 'CORE-PUBLIC-TRUTH', 'FINAL-PUBLIC-TRUTH')
+              'OPERATOR-CONSOLE' = @('IMAGE-REMEDIATION', 'OC-INTEGRATION')
+            }
+            foreach ($foldName in $expectedFolds.Keys) {
+              $fold = @($scopeEntries | Where-Object slice -CEQ $foldName)
+              if ($fold.Count -ne 1 -or [string]$fold[0].classification -cne 'meta-fold' -or (@($fold[0].plan_owners) -join "`n") -cne (@($expectedFolds[$foldName]) -join "`n")) { throw "R8 scope fold '$foldName' drifted" }
+            }
             foreach ($path in @('internal/db/gorm/candidate_store.go', 'internal/db/gorm/candidate_store_test.go', 'internal/mcp/tools_bulkops.go', 'internal/mcp/tools_dryrun_test.go')) {
               $epoch = @($stateObject.path_epochs | Where-Object path -CEQ $path)
               if ($epoch.Count -ne 1) { throw "ownership state must contain exactly one rework epoch for '$path'" }
@@ -565,7 +635,7 @@ jobs:
             $planText = [System.IO.File]::ReadAllText((Resolve-Path '.agent/plans/2026-07-10-engram-production-ready-master-plan.md'))
             $lfText = ($planText -replace "`r`n", "`n") -replace "`r", "`n"
             $crlfText = $lfText -replace "`n", "`r`n"
-            $semanticText = $lfText.Replace('Revision: 4', 'Revision: 5')
+            $semanticText = $lfText.Replace('Revision: 8', 'Revision: 9')
             if ($semanticText -ceq $lfText) { throw 'semantic plan mutation fixture did not change the plan' }
             $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
             $lfPath = Join-Path $canonicalFixtureRoot 'plan-lf.md'; [System.IO.File]::WriteAllText($lfPath, $lfText, $utf8NoBom)
@@ -650,6 +720,17 @@ jobs:
           Assert-MutationRejected 'comment-only session-start execution proof' { Assert-WorkflowContract $workflow $critical $stand $deadProofRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'substitute one required session-start identity' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("'TestEC_F1_P1_GRPCSessionStart_FlagOff_ByteIdentity'", "'TestCredentialDecryptRoundTripAfterMigration'")) $criticalRunner $devStandRunner }
           Assert-MutationRejected 'substitute required session-start package' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("'github.com/thebtf/engram/internal/grpcserver'", "'github.com/thebtf/engram/internal/mcp'")) $criticalRunner $devStandRunner }
+          $packageAssignmentLines = @($dbRunner -split "`r?`n" | Where-Object { $_.Trim() -ceq '$package = ''github.com/thebtf/engram/internal/grpcserver''' })
+          if ($packageAssignmentLines.Count -ne 1) { throw "canonical package assignment fixture must resolve exactly one line; found $($packageAssignmentLines.Count)" }
+          $packageAssignmentLine = $packageAssignmentLines[0]
+          $packageAssignmentIndent = [regex]::Match($packageAssignmentLine, '^\s*').Value
+          $packageReassignmentRunner = $dbRunner.Replace($packageAssignmentLine, ($packageAssignmentLine + "`n" + $packageAssignmentIndent + '$package = ''github.com/thebtf/engram/internal/mcp'''))
+          Assert-MutationRejected 'reassign required session-start package before live consumer' { Assert-WorkflowContract $workflow $critical $stand $packageReassignmentRunner $criticalRunner $devStandRunner }
+          $livePackagePredicate = '[string]$_.package -ceq $package -and [string]$_.test -ceq $name'
+          $livePackagePredicateCount = ([regex]::Matches($dbRunner, [regex]::Escape($livePackagePredicate))).Count
+          if ($livePackagePredicateCount -ne 1) { throw "canonical live package-plus-test predicate fixture must occur exactly once; found $livePackagePredicateCount" }
+          $packagePredicateBypassRunner = $dbRunner.Replace($livePackagePredicate, '[string]$_.test -ceq $name')
+          Assert-MutationRejected 'remove live session-start package predicate' { Assert-WorkflowContract $workflow $critical $stand $packagePredicateBypassRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'remove literal-test database identity' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace('$databaseName = New-RunDatabaseName -RequestedRunId $RunId -RepeatIndex $repeatIndex', '$databaseName = "engram_prc_rg_${safeRunToken}_r$repeatIndex"')) $criticalRunner $devStandRunner }
           Assert-MutationRejected 'bypass required session-start execution proof' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace('$sessionStartExecutionProof = Get-RequiredSessionStartExecutionProof $goTestSummary', '$sessionStartExecutionProof = [pscustomobject]@{ verdict = ''PASS''; executed = 12; skipped = 0; missing = 0 }')) $criticalRunner $devStandRunner }
           Assert-MutationRejected 'remove no-build launch lock' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("'--no-build'", "'--renew-anon-volumes'")) $criticalRunner $devStandRunner }
@@ -661,10 +742,23 @@ jobs:
           Assert-MutationRejected 'change race policy' { Assert-WorkflowContract ($workflow.Replace("RUNNER_OS -ne 'Windows'", "RUNNER_OS -eq 'Linux'")) $critical $stand $dbRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'inject Repeat1' { Assert-WorkflowContract ($workflow.Replace('-Race', '-Race -Repeat 1')) $critical $stand $dbRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'change expected challenged plan hash' { Assert-WorkflowContract ($workflow.Replace($expectedPlanSha, ('0' * 64))) $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'change expected R8 scope-map hash' { Assert-WorkflowContract ($workflow.Replace($expectedScopeMapSha, ('0' * 64))) $critical $stand $dbRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'change ownership current owner' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace('"current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"', '"current_owner": "DB-BULKOPS"')) }
           Assert-MutationRejected 'remove rejected predecessor evidence' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace($rejectedBulkCheckerSha, '')) }
           Assert-MutationRejected 'change exact rejected successor base' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace($rejectedBulkHead, ('1' * 40))) }
-          Write-Output 'CONFORMANCE PASS: canonical LF/CRLF authority, exact wrappers, path budget, AST-validated reachable exactly-once source-built image provenance and Scout, immutable package plus 12-test zero-skip DB execution proof, ownership state, node matrix, readiness, cleanup, and full/race semantics match; 44 mutations rejected'
+          Assert-MutationRejected 'change ownership scope-map binding' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace($expectedScopeMapSha, ('2' * 64))) }
+          $missingScopeEntry = $scopeMap | ConvertFrom-Json -Depth 100
+          $missingScopeEntry.entries = @($missingScopeEntry.entries | Select-Object -Skip 1)
+          Assert-MutationRejected 'remove frozen scope-map entry' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -scopeText ($missingScopeEntry | ConvertTo-Json -Depth 100) }
+          $brokenFoldScope = $scopeMap | ConvertFrom-Json -Depth 100
+          @($brokenFoldScope.entries | Where-Object slice -CEQ 'MASTER-PLAN')[0].plan_owners = @('MISSING')
+          Assert-MutationRejected 'point scope fold to missing owner' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -scopeText ($brokenFoldScope | ConvertTo-Json -Depth 100) }
+          $deletedPlanAndEpoch = [regex]::Replace($masterPlan, '(?m)^\| DB-TEST-POOL-HYGIENE \|.*\r?\n', '').Replace(' -> DB-TEST-POOL-HYGIENE', '')
+          $deletedPlanState = $ownershipState | ConvertFrom-Json -Depth 100
+          $deletedPlanEpoch = @($deletedPlanState.path_epochs | Where-Object path -CEQ 'internal/db/gorm/candidate_store_test.go')[0]
+          $deletedPlanEpoch.ordered_owners = @($deletedPlanEpoch.ordered_owners | Where-Object { [string]$_ -CNE 'DB-TEST-POOL-HYGIENE' })
+          Assert-MutationRejected 'delete required plan row plus epoch owner together' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($deletedPlanState | ConvertTo-Json -Depth 100) -planText $deletedPlanAndEpoch }
+          Write-Output 'CONFORMANCE PASS: canonical LF/CRLF plan and structural scope authority, exact wrappers, path budget, AST-validated reachable exactly-once source-built image provenance and Scout, immutable live package-plus-test 12-test zero-skip DB execution proof, ownership state, node matrix, readiness, cleanup, and full/race semantics match; 51 mutations rejected'
 
       - name: Resolve PostgreSQL service identity
         shell: pwsh

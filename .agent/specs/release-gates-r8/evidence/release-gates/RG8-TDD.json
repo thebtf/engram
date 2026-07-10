@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "slice": "RELEASE-GATES",
+  "recorded_at": "2026-07-10T23:38:40.7151525+03:00",
+  "direct_parent": "37d185b33b8f9411564fda49cf8b0d58321b62fd",
+  "contract": [
+    "reject exact required test names reported only by the wrong Go package",
+    "reject a required plan row and its ownership epoch disappearing together",
+    "reject a missing scope entry, missing owner or fold target, a new live register slice, and an explicitly rejected head presented as accepted",
+    "allow ordinary same-lane status and head progress plus timestamp, command, artifact, and notes drift"
+  ],
+  "red": [
+    {
+      "surface": "scope contract",
+      "command": "pwsh -NoProfile -File scripts/production-gates/assert-plan-path-ownership.ps1 -SelfTest",
+      "expected_exit_code": 1,
+      "observed_exit_code": 1,
+      "observed_failure": "Invoke-ScopeContractAudit was not recognized before the implementation existed"
+    }
+  ],
+  "green": [
+    {
+      "surface": "ownership and structural scope self-test",
+      "command": "pwsh -NoProfile -File scripts/production-gates/assert-plan-path-ownership.ps1 -SelfTest",
+      "exit_code": 0,
+      "result": "SELFTEST PASS: assert-plan-path-ownership.ps1"
+    },
+    {
+      "surface": "database execution-proof self-test",
+      "command": "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -SelfTest",
+      "exit_code": 0,
+      "result": "SELFTEST PASS including exact package-plus-test rejection and 12-test zero-skip proof"
+    },
+    {
+      "surface": "extracted live CI conformance block",
+      "command": "pwsh -NoProfile -File .agent/specs/release-gates-r8/evidence/release-gates/verify-workflow-conformance.ps1 -Repository . -Label final-green",
+      "exit_code": 0,
+      "mutations_rejected": 51,
+      "artifact": ".agent/specs/release-gates-r8/evidence/release-gates/final-green.workflow-conformance.json"
+    }
+  ],
+  "prove_it": [
+    {
+      "surface": "live package-plus-test predicate",
+      "mutation": "disable the CI conformance enforcement that rejects removal of the live package predicate",
+      "expected_exit_code": 1,
+      "observed_exit_code": 1,
+      "observed_failure": "conformance mutation 'remove live session-start package predicate' was accepted",
+      "artifact": ".agent/specs/release-gates-r8/evidence/release-gates/prove-it-package-final.workflow-conformance.json"
+    },
+    {
+      "surface": "live register structural slice set",
+      "mutation": "disable live unique-slice-set enforcement in the ownership runner",
+      "expected_exit_code": 1,
+      "observed_exit_code": 1,
+      "observed_failure": "SELFTEST FAIL: live register slice missing from the scope map was accepted",
+      "artifact": ".agent/specs/release-gates-r8/evidence/release-gates/prove-it-scope-final.json"
+    }
+  ],
+  "verdict": "PASS_PENDING_INDEPENDENT_CHECKER"
+}

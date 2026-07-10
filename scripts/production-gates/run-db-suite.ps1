@@ -957,6 +957,31 @@ function Invoke-SelfTest {
         $passingEvents = @($requiredTests | ForEach-Object { [pscustomobject]@{ package = $requiredPackage; test = $_; outcome = 'pass' } })
         $passingProof = Get-RequiredSessionStartExecutionProof ([pscustomobject]@{ tests = $passingEvents })
         Assert-SelfTestCondition ($passingProof.verdict -eq 'PASS' -and $passingProof.executed -eq 12 -and $passingProof.skipped -eq 0) '12/12 executed session-start tests were rejected'
+        $wrongPackage = 'github.com/thebtf/engram/internal/mcp'
+        $wrongPackageEvents = @($requiredTests | ForEach-Object { [pscustomobject]@{ package = $wrongPackage; test = $_; outcome = 'pass' } })
+        $wrongPackageProof = Get-RequiredSessionStartExecutionProof ([pscustomobject]@{ tests = $wrongPackageEvents })
+        $wrongPackageRejectedTests = @($wrongPackageProof.tests | Where-Object { $_.outcome -ceq 'missing' -and $_.executed -eq $false })
+        $wrongPackageExpectedResults = @($requiredTests | ForEach-Object { "$requiredPackage|$_|missing|False" })
+        $wrongPackageObservedResults = @($wrongPackageProof.tests | ForEach-Object { "{0}|{1}|{2}|{3}" -f $_.package, $_.test, $_.outcome, ([bool]$_.executed) })
+        $wrongPackageExpectedErrors = @($requiredTests | ForEach-Object { "required session-start test was not observed: $requiredPackage/$_" })
+        Assert-SelfTestCondition (
+            $wrongPackageProof.verdict -ceq 'FAIL' -and
+            $wrongPackageProof.package -ceq $requiredPackage -and
+            $wrongPackageProof.expected -eq 12 -and
+            $wrongPackageProof.observed -eq 0 -and
+            $wrongPackageProof.executed -eq 0 -and
+            $wrongPackageProof.passed -eq 0 -and
+            $wrongPackageProof.failed -eq 0 -and
+            $wrongPackageProof.skipped -eq 0 -and
+            $wrongPackageProof.missing -eq 12 -and
+            $wrongPackageProof.duplicate -eq 0 -and
+            $wrongPackageProof.incomplete -eq 0 -and
+            $wrongPackageRejectedTests.Count -eq 12 -and
+            @($wrongPackageProof.tests).Count -eq 12 -and
+            @($wrongPackageProof.errors).Count -eq 12 -and
+            ($wrongPackageObservedResults -join "`n") -ceq ($wrongPackageExpectedResults -join "`n") -and
+            (@($wrongPackageProof.errors) -join "`n") -ceq ($wrongPackageExpectedErrors -join "`n")
+        ) 'twelve exact names from the wrong package were accepted by the required session-start execution proof'
         $skipEvents = @($passingEvents | ForEach-Object { [pscustomobject]@{ package = $_.package; test = $_.test; outcome = $_.outcome } })
         $skipEvents[0].outcome = 'skip'
         $skipProof = Get-RequiredSessionStartExecutionProof ([pscustomobject]@{ tests = $skipEvents })
@@ -968,7 +993,7 @@ function Invoke-SelfTest {
         $failingProof = Get-RequiredSessionStartExecutionProof ([pscustomobject]@{ tests = $failingEvents })
         Assert-SelfTestCondition ($failingProof.verdict -eq 'PASS' -and $failingProof.executed -eq 12 -and $failingProof.failed -eq 1) 'an executed product failure was misclassified as a naming/skip defect'
         Assert-SelfTestCondition ($Repeat -eq 3) 'default release repetition count is not 3'
-        Write-Output 'SELFTEST PASS: run-db-suite.ps1 (exit aggregation, test-only database identity, and 12-test zero-skip execution proof)'
+        Write-Output 'SELFTEST PASS: run-db-suite.ps1 (exit aggregation, test-only database identity, exact package-plus-test rejection, and 12-test zero-skip execution proof)'
     }
     finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
