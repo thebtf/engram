@@ -125,14 +125,288 @@ jobs:
             return $match.Groups['body'].Value
           }
 
-          function Assert-TokenOrder([string]$text, [string[]]$tokens) {
-            $previous = -1
-            foreach ($token in $tokens) {
-              $index = $text.IndexOf($token, [System.StringComparison]::Ordinal)
-              if ($index -lt 0) { throw "ordered contract token is missing '$token'" }
-              if ($index -le $previous) { throw "ordered contract token '$token' appears out of order" }
-              $previous = $index
+          function ConvertTo-AstShape([string]$text) {
+            return [regex]::Replace($text, '\s+', '')
+          }
+
+          function Get-PowerShellAst([string]$text) {
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$tokens, [ref]$parseErrors)
+            if ($parseErrors.Count -ne 0) {
+              throw "PowerShell source has $($parseErrors.Count) parse error(s): $([string]::Join('; ', @($parseErrors | ForEach-Object Message)))"
             }
+            return $ast
+          }
+
+          function Get-Ancestor([System.Management.Automation.Language.Ast]$node, [type]$type) {
+            $cursor = $node.Parent
+            while ($null -ne $cursor) {
+              if ($cursor -is $type) { return $cursor }
+              $cursor = $cursor.Parent
+            }
+            return $null
+          }
+
+          function Test-InExactIfClause([System.Management.Automation.Language.Ast]$node, [string]$expectedCondition) {
+            $expectedShape = ConvertTo-AstShape $expectedCondition
+            $cursor = $node.Parent
+            while ($null -ne $cursor) {
+              if ($cursor -is [System.Management.Automation.Language.IfStatementAst]) {
+                foreach ($clause in $cursor.Clauses) {
+                  $body = $clause.Item2
+                  if ($node.Extent.StartOffset -ge $body.Extent.StartOffset -and $node.Extent.EndOffset -le $body.Extent.EndOffset -and (ConvertTo-AstShape $clause.Item1.Extent.Text) -ceq $expectedShape) {
+                    return $true
+                  }
+                }
+              }
+              $cursor = $cursor.Parent
+            }
+            return $false
+          }
+
+          function Assert-ExactCommandControlFlow(
+            [System.Management.Automation.Language.CommandAst]$node,
+            [string[]]$expectedIfConditions,
+            [string[]]$expectedLoopConditions
+          ) {
+            $actualIfConditions = [System.Collections.Generic.List[string]]::new()
+            $actualLoopConditions = [System.Collections.Generic.List[string]]::new()
+            $cursor = $node.Parent
+            while ($null -ne $cursor -and $cursor -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) {
+              if ($cursor -is [System.Management.Automation.Language.IfStatementAst]) {
+                $matchedClause = $false
+                foreach ($clause in $cursor.Clauses) {
+                  if ($node.Extent.StartOffset -ge $clause.Item2.Extent.StartOffset -and $node.Extent.EndOffset -le $clause.Item2.Extent.EndOffset) {
+                    $actualIfConditions.Add((ConvertTo-AstShape $clause.Item1.Extent.Text))
+                    $matchedClause = $true
+                    break
+                  }
+                }
+                if (-not $matchedClause) {
+                  $clauseShapes = @($cursor.Clauses | ForEach-Object { ConvertTo-AstShape $_.Item1.Extent.Text })
+                  $actualIfConditions.Add(('<else:' + ($clauseShapes -join ',') + '>'))
+                }
+              }
+              elseif ($cursor -is [System.Management.Automation.Language.ForEachStatementAst]) {
+                $actualLoopConditions.Add(('foreach:' + (ConvertTo-AstShape $cursor.Condition.Extent.Text)))
+              }
+              elseif ($cursor -is [System.Management.Automation.Language.ForStatementAst]) {
+                $actualLoopConditions.Add(('for:' + (ConvertTo-AstShape $cursor.Condition.Extent.Text)))
+              }
+              elseif ($cursor -is [System.Management.Automation.Language.LoopStatementAst] -or
+                      $cursor -is [System.Management.Automation.Language.SwitchStatementAst] -or
+                      $cursor -is [System.Management.Automation.Language.TrapStatementAst] -or
+                      $cursor -is [System.Management.Automation.Language.DataStatementAst] -or
+                      $cursor -is [System.Management.Automation.Language.ScriptBlockExpressionAst]) {
+                throw "live invocation '$([string]$node.CommandElements[1].Value)' is hidden in unsupported or potentially unreachable control flow '$($cursor.GetType().Name)'"
+              }
+              $cursor = $cursor.Parent
+            }
+
+            $expectedIfShapes = @($expectedIfConditions | ForEach-Object { ConvertTo-AstShape $_ })
+            $expectedLoopShapes = @($expectedLoopConditions | ForEach-Object { ConvertTo-AstShape $_ })
+            if ($actualIfConditions.Count -ne $expectedIfShapes.Count) {
+              throw "live invocation '$([string]$node.CommandElements[1].Value)' has $($actualIfConditions.Count) if-branch ancestor(s), expected $($expectedIfShapes.Count)"
+            }
+            foreach ($condition in $expectedIfShapes) {
+              if (-not $actualIfConditions.Contains($condition)) { throw "live invocation '$([string]$node.CommandElements[1].Value)' is missing exact live if-branch '$condition'" }
+            }
+            if ($actualLoopConditions.Count -ne $expectedLoopShapes.Count) {
+              throw "live invocation '$([string]$node.CommandElements[1].Value)' has $($actualLoopConditions.Count) loop ancestor(s), expected $($expectedLoopShapes.Count)"
+            }
+            foreach ($condition in $expectedLoopShapes) {
+              if (-not $actualLoopConditions.Contains($condition)) { throw "live invocation '$([string]$node.CommandElements[1].Value)' is missing exact live loop '$condition'" }
+            }
+          }
+
+          function Get-ExactCapturedInvocation(
+            [System.Management.Automation.Language.ScriptBlockAst]$ast,
+            [string]$name,
+            [string]$expectedExecutable,
+            [string]$expectedArguments,
+            [string]$expectedAssignment,
+            [string]$expectedIfCondition
+          ) {
+            $commands = @($ast.FindAll({
+              param($node)
+              if ($node -isnot [System.Management.Automation.Language.CommandAst] -or $node.GetCommandName() -cne 'Invoke-CapturedProcess' -or $node.CommandElements.Count -lt 2) { return $false }
+              $nameNode = $node.CommandElements[1]
+              return ($nameNode -is [System.Management.Automation.Language.StringConstantExpressionAst] -or $nameNode -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) -and [string]$nameNode.Value -ceq $name
+            }, $true))
+            if ($commands.Count -ne 1) { throw "live Invoke-CapturedProcess '$name' cardinality must be exactly 1; found $($commands.Count)" }
+            $command = $commands[0]
+            if ($command.CommandElements.Count -ne 10) { throw "live invocation '$name' argument cardinality drifted: found $($command.CommandElements.Count - 1), expected 9" }
+            if ($command.CommandElements[2].Extent.Text -cne $expectedExecutable) { throw "live invocation '$name' executable drifted: '$($command.CommandElements[2].Extent.Text)'" }
+            if ((ConvertTo-AstShape $command.CommandElements[3].Extent.Text) -cne (ConvertTo-AstShape $expectedArguments)) { throw "live invocation '$name' command arguments drifted: '$($command.CommandElements[3].Extent.Text)'" }
+            $assignment = Get-Ancestor $command ([System.Management.Automation.Language.AssignmentStatementAst])
+            if ($null -eq $assignment -or $assignment.Left.Extent.Text -cne $expectedAssignment) { throw "live invocation '$name' is not assigned to $expectedAssignment" }
+            $function = Get-Ancestor $command ([System.Management.Automation.Language.FunctionDefinitionAst])
+            if ($null -eq $function -or $function.Name -cne 'Invoke-DevStandContract') { throw "live invocation '$name' is outside Invoke-DevStandContract" }
+            if (-not (Test-InExactIfClause $command $expectedIfCondition)) { throw "live invocation '$name' is outside the required branch '$expectedIfCondition'" }
+            return $command
+          }
+
+          function Assert-ExactImageTargetMap([System.Management.Automation.Language.ScriptBlockAst]$ast) {
+            $functions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-DevStandImageTargets' }, $true))
+            if ($functions.Count -ne 1) { throw "Get-DevStandImageTargets cardinality must be exactly 1; found $($functions.Count)" }
+            $maps = @($functions[0].Body.FindAll({ param($node) $node -is [System.Management.Automation.Language.HashtableAst] }, $true))
+            if ($maps.Count -ne 1) { throw "Get-DevStandImageTargets must contain exactly one live hashtable; found $($maps.Count)" }
+            $expected = [ordered]@{ postgres = "'pgvector/pgvector:pg17'"; server = "'ghcr.io/thebtf/engram:main'"; 'operator-console' = "'ghcr.io/thebtf/engram-operator-console:main'" }
+            if ($maps[0].KeyValuePairs.Count -ne $expected.Count) { throw "exact image target map must contain 3 services; found $($maps[0].KeyValuePairs.Count)" }
+            $actual = @{}
+            foreach ($pair in $maps[0].KeyValuePairs) {
+              $key = $pair.Item1.Extent.Text.Trim("'", '"')
+              if ($actual.ContainsKey($key)) { throw "duplicate exact image target '$key'" }
+              $actual[$key] = ConvertTo-AstShape $pair.Item2.Extent.Text
+            }
+            foreach ($entry in $expected.GetEnumerator()) {
+              if (-not $actual.ContainsKey($entry.Key) -or $actual[$entry.Key] -cne (ConvertTo-AstShape $entry.Value)) { throw "exact image target '$($entry.Key)' drifted" }
+            }
+          }
+
+          function Get-ExactRuntimeAssignment(
+            [System.Management.Automation.Language.ScriptBlockAst]$ast,
+            [string]$left,
+            [string]$right
+          ) {
+            $rightShape = ConvertTo-AstShape $right
+            $assignments = @($ast.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                $node.Left.Extent.Text -ceq $left -and
+                (ConvertTo-AstShape $node.Right.Extent.Text) -ceq $rightShape
+            }, $true) | Where-Object { $null -eq (Get-Ancestor $_ ([System.Management.Automation.Language.FunctionDefinitionAst])) })
+            if ($assignments.Count -ne 1) { throw "live runtime assignment '$left = $right' cardinality must be exactly 1; found $($assignments.Count)" }
+            return $assignments[0]
+          }
+
+          function Assert-ExactRepeatLoop([System.Management.Automation.Language.Ast]$node) {
+            $loop = Get-Ancestor $node ([System.Management.Automation.Language.ForStatementAst])
+            if ($null -eq $loop -or
+                (ConvertTo-AstShape $loop.Initializer.Extent.Text) -cne (ConvertTo-AstShape '$repeatIndex = 1') -or
+                (ConvertTo-AstShape $loop.Condition.Extent.Text) -cne (ConvertTo-AstShape '$repeatIndex -le $Repeat') -or
+                (ConvertTo-AstShape $loop.Iterator.Extent.Text) -cne (ConvertTo-AstShape '$repeatIndex++')) {
+              throw 'runtime release proof is not inside the exact 1..Repeat execution loop'
+            }
+          }
+
+          function Assert-LiveSessionStartExecutionContract([System.Management.Automation.Language.ScriptBlockAst]$ast) {
+            $nameFunctions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'New-RunDatabaseName' }, $true))
+            if ($nameFunctions.Count -ne 1) { throw "New-RunDatabaseName cardinality must be exactly 1; found $($nameFunctions.Count)" }
+            $nameAssignments = @($nameFunctions[0].Body.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$name' -and
+                (ConvertTo-AstShape $node.Right.Extent.Text) -ceq (ConvertTo-AstShape '"engram_prc_rg_test_${runHash}_r$RepeatIndex"')
+            }, $true))
+            if ($nameAssignments.Count -ne 1) { throw 'live fresh-database naming does not contain the exact literal-test identity' }
+
+            [void](Get-ExactRuntimeAssignment $ast '$requireSessionStartExecution' "[string]::IsNullOrWhiteSpace(`$Run) -and `$packages.Count -eq 1 -and `$packages[0] -ceq './...'")
+            $databaseAssignment = Get-ExactRuntimeAssignment $ast '$databaseName' 'New-RunDatabaseName -RequestedRunId $RunId -RepeatIndex $repeatIndex'
+            Assert-ExactRepeatLoop $databaseAssignment
+            $databaseCommands = @($databaseAssignment.Right.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'New-RunDatabaseName' }, $true))
+            if ($databaseCommands.Count -ne 1) { throw 'fresh-database identity assignment is not one live New-RunDatabaseName invocation' }
+            Assert-ExactCommandControlFlow -node $databaseCommands[0] -expectedIfConditions @() -expectedLoopConditions @('for:$repeatIndex -le $Repeat')
+
+            $proofAssignment = Get-ExactRuntimeAssignment $ast '$sessionStartExecutionProof' 'Get-RequiredSessionStartExecutionProof $goTestSummary'
+            Assert-ExactRepeatLoop $proofAssignment
+            $proofCommands = @($proofAssignment.Right.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Get-RequiredSessionStartExecutionProof' }, $true))
+            if ($proofCommands.Count -ne 1) { throw 'parsed go-test summary is not consumed by one live session-start execution proof invocation' }
+            $missingSummaryBranch = '-not (Test-Path -LiteralPath $goTestSummaryPath -PathType Leaf)'
+            Assert-ExactCommandControlFlow -node $proofCommands[0] -expectedIfConditions @('$requireSessionStartExecution', "<else:$missingSummaryBranch>") -expectedLoopConditions @('for:$repeatIndex -le $Repeat')
+
+            $proofWrites = @($ast.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Write-Utf8NoBom' -and $node.CommandElements.Count -ge 2 -and
+                (ConvertTo-AstShape $node.CommandElements[1].Extent.Text) -ceq (ConvertTo-AstShape "(Join-Path `$repeatDirectory 'required-session-start-execution.json')")
+            }, $true) | Where-Object { $null -eq (Get-Ancestor $_ ([System.Management.Automation.Language.FunctionDefinitionAst])) })
+            if ($proofWrites.Count -ne 1) { throw "required session-start proof artifact write cardinality must be exactly 1; found $($proofWrites.Count)" }
+            Assert-ExactRepeatLoop $proofWrites[0]
+            Assert-ExactCommandControlFlow -node $proofWrites[0] -expectedIfConditions @('$requireSessionStartExecution') -expectedLoopConditions @('for:$repeatIndex -le $Repeat')
+
+            $verdictIfs = @($ast.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.IfStatementAst] -and $node.Clauses.Count -eq 1 -and
+                (ConvertTo-AstShape $node.Clauses[0].Item1.Extent.Text) -ceq (ConvertTo-AstShape "`$sessionStartExecutionProof.verdict -ne 'PASS'")
+            }, $true) | Where-Object { $null -eq (Get-Ancestor $_ ([System.Management.Automation.Language.FunctionDefinitionAst])) })
+            if ($verdictIfs.Count -ne 1) { throw "required session-start fail-closed verdict branch cardinality must be exactly 1; found $($verdictIfs.Count)" }
+            $verdictIf = $verdictIfs[0]
+            Assert-ExactRepeatLoop $verdictIf
+            if (-not (Test-InExactIfClause $verdictIf '$requireSessionStartExecution')) { throw 'required session-start fail-closed verdict is outside its canonical runtime gate' }
+            $failAssignments = @($verdictIf.Clauses[0].Item2.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$repeatFailed' -and $node.Right.Extent.Text -ceq '$true'
+            }, $true))
+            $errorAdds = @($verdictIf.Clauses[0].Item2.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $node.Expression.Extent.Text -ceq '$repeatErrors' -and $node.Member.Extent.Text -ceq 'Add'
+            }, $true))
+            if ($failAssignments.Count -ne 1 -or $errorAdds.Count -ne 1) { throw 'required session-start proof failure does not fail the repeat and retain one error' }
+
+            $proofSummaryPairs = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.HashtableAst] }, $true) | ForEach-Object { $_.KeyValuePairs } | Where-Object {
+              $_.Item1.Extent.Text.Trim("'", '"') -ceq 'required_session_start_execution' -and $_.Item2.Extent.Text -ceq '$sessionStartExecutionProof'
+            })
+            if ($proofSummaryPairs.Count -ne 1) { throw "repeat summary must bind the live required session-start proof exactly once; found $($proofSummaryPairs.Count)" }
+          }
+
+          function Assert-LiveDevStandInvocationContract([string]$dbRunnerText) {
+            $ast = Get-PowerShellAst $dbRunnerText
+            Assert-ExactImageTargetMap $ast
+            Assert-LiveSessionStartExecutionContract $ast
+            $outerBranch = "`$Action -in @('Up', 'Ready', 'Scan')"
+            $upBranch = "`$Action -eq 'Up'"
+            $scanBranch = "`$Action -eq 'Scan' -and `$inventoryAssertion.Pass -and `$imageIdentityPass -and `$prelaunchToRunningImageIdentity"
+            $sourceRoot = Get-ExactCapturedInvocation $ast 'dev-stand-source-root' '$gitPath' "@('-C', `$composeDirectory, 'rev-parse', '--show-toplevel')" '$sourceRoot' $outerBranch
+            $sourceCommit = Get-ExactCapturedInvocation $ast 'dev-stand-source-commit' '$gitPath' "@('-C', `$sourceRepository, 'rev-parse', '--verify', 'HEAD^{commit}')" '$sourceHead' $outerBranch
+            $sourceStatus = Get-ExactCapturedInvocation $ast 'dev-stand-source-tracked-status' '$gitPath' "@('-C', `$sourceRepository, 'status', '--porcelain=v1', '--untracked-files=all')" '$sourceStatus' $outerBranch
+            $build = Get-ExactCapturedInvocation $ast 'dev-stand-compose-build' '$dockerPath' "(@(`$composeArgs) + @('build', '--pull', 'server', 'operator-console'))" '$build' $upBranch
+            $pull = Get-ExactCapturedInvocation $ast 'dev-stand-postgres-pull' '$dockerPath' "(@(`$composeArgs) + @('pull', 'postgres'))" '$pull' $upBranch
+            $postHead = Get-ExactCapturedInvocation $ast 'dev-stand-source-commit-post-build' '$gitPath' "@('-C', `$sourceRepository, 'rev-parse', '--verify', 'HEAD^{commit}')" '$postBuildHead' $upBranch
+            $postStatus = Get-ExactCapturedInvocation $ast 'dev-stand-source-tracked-status-post-build' '$gitPath' "@('-C', `$sourceRepository, 'status', '--porcelain=v1', '--untracked-files=all')" '$postBuildStatus' $upBranch
+            $prelaunch = Get-ExactCapturedInvocation $ast 'dev-stand-prelaunch-image-inspect-$($target.Key)' '$dockerPath' "@('image', 'inspect', `$target.Value, '--format', '{{.Id}}')" '$prelaunchInspect' $upBranch
+            $up = Get-ExactCapturedInvocation $ast 'dev-stand-up' '$dockerPath' "(@(`$composeArgs) + @('up', '-d', '--no-build', '--pull', 'never', '--wait'))" '$up' $upBranch
+            $scan = Get-ExactCapturedInvocation $ast 'dev-stand-vulnerability-scan-$($entry.Key)' '$dockerPath' "@('scout', 'cves', '--exit-code', '--only-severity', 'critical,high', '--format', 'sarif', '--output', `$sarifPath, `$scanReference)" '$scan' $scanBranch
+
+            foreach ($command in @($sourceRoot, $sourceCommit, $sourceStatus)) {
+              Assert-ExactCommandControlFlow -node $command -expectedIfConditions @($outerBranch) -expectedLoopConditions @()
+            }
+            foreach ($command in @($build, $pull, $postHead, $postStatus, $up)) {
+              Assert-ExactCommandControlFlow -node $command -expectedIfConditions @($upBranch) -expectedLoopConditions @()
+            }
+            Assert-ExactCommandControlFlow -node $prelaunch -expectedIfConditions @($upBranch) -expectedLoopConditions @('foreach:(Get-DevStandImageTargets).GetEnumerator()')
+            Assert-ExactCommandControlFlow -node $scan -expectedIfConditions @($outerBranch, $scanBranch) -expectedLoopConditions @('foreach:@($actualImages.GetEnumerator() | Sort-Object Key)')
+
+            $capturedInContract = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Invoke-CapturedProcess' -and $node.CommandElements.Count -ge 4 }, $true) | Where-Object {
+              $owner = Get-Ancestor $_ ([System.Management.Automation.Language.FunctionDefinitionAst])
+              $null -ne $owner -and $owner.Name -ceq 'Invoke-DevStandContract' -and $_.CommandElements[2].Extent.Text -ceq '$dockerPath'
+            })
+            $liveBuilds = @($capturedInContract | Where-Object {
+              $literals = @($_.CommandElements[3].FindAll({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true) | ForEach-Object Value)
+              $literals -ccontains 'build'
+            })
+            if ($liveBuilds.Count -ne 1 -or $liveBuilds[0].Extent.StartOffset -ne $build.Extent.StartOffset) { throw "live Docker build invocation cardinality must be exactly 1; found $($liveBuilds.Count)" }
+            $liveScouts = @($capturedInContract | Where-Object {
+              $literals = @($_.CommandElements[3].FindAll({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true) | ForEach-Object Value)
+              $literals -ccontains 'scout' -and $literals -ccontains 'cves'
+            })
+            if ($liveScouts.Count -ne 1 -or $liveScouts[0].Extent.StartOffset -ne $scan.Extent.StartOffset) { throw "live Docker Scout invocation cardinality must be exactly 1; found $($liveScouts.Count)" }
+
+            $ordered = @($sourceRoot, $sourceCommit, $sourceStatus, $build, $pull, $postHead, $postStatus, $prelaunch, $up)
+            for ($i = 1; $i -lt $ordered.Count; $i++) {
+              if ($ordered[$i].Extent.StartOffset -le $ordered[$i - 1].Extent.StartOffset) { throw "live dev-stand invocation order is invalid at '$([string]$ordered[$i].CommandElements[1].Value)'" }
+            }
+
+            $targetLoop = Get-Ancestor $prelaunch ([System.Management.Automation.Language.ForEachStatementAst])
+            if ($null -eq $targetLoop -or $targetLoop.Variable.Extent.Text -cne '$target' -or (ConvertTo-AstShape $targetLoop.Condition.Extent.Text) -cne (ConvertTo-AstShape '(Get-DevStandImageTargets).GetEnumerator()')) { throw 'prelaunch inspect does not iterate the exact image target map' }
+            $scanLoop = Get-Ancestor $scan ([System.Management.Automation.Language.ForEachStatementAst])
+            if ($null -eq $scanLoop -or $scanLoop.Variable.Extent.Text -cne '$entry' -or (ConvertTo-AstShape $scanLoop.Condition.Extent.Text) -cne (ConvertTo-AstShape '@($actualImages.GetEnumerator() | Sort-Object Key)')) { throw 'Scout does not iterate the exact running image inventory' }
+            $scanReferences = @($scanLoop.Body.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$scanReference' }, $true))
+            if ($scanReferences.Count -ne 1 -or (ConvertTo-AstShape $scanReferences[0].Right.Extent.Text) -cne (ConvertTo-AstShape '"local://$imageId"') -or $scanReferences[0].Extent.StartOffset -ge $scan.Extent.StartOffset) { throw 'Scout reference is not exactly one live immutable local:// image-ID assignment before the scan' }
+            $inventoryAssertions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Test-ExactDevStandInventory' }, $true) | Where-Object {
+              $owner = Get-Ancestor $_ ([System.Management.Automation.Language.FunctionDefinitionAst])
+              $null -ne $owner -and $owner.Name -ceq 'Invoke-DevStandContract'
+            })
+            if ($inventoryAssertions.Count -ne 1 -or $inventoryAssertions[0].CommandElements.Count -ne 2 -or $inventoryAssertions[0].CommandElements[1].Extent.Text -cne '$actualImages' -or $inventoryAssertions[0].Extent.StartOffset -ge $scan.Extent.StartOffset) { throw 'exact running image inventory assertion must execute exactly once before Scout' }
           }
 
           function Assert-WorkflowContract(
@@ -147,6 +421,7 @@ jobs:
             [string]$stateText = $ownershipState
           ) {
             $execution = Remove-ConformanceStep $workflowText
+            Assert-LiveDevStandInvocationContract $dbRunnerText
             if ($observedPlanSha -cne $expectedPlanSha) { throw "tracked production-ready plan hash drifted: expected=$expectedPlanSha observed=$observedPlanSha" }
             $repeatToken = '(?i)(?<![A-Za-z0-9_])-Repeat(?:\s+|=)\d+'
             if ($criticalText -match $repeatToken) { throw 'repeat count is duplicated in critical-suite config' }
@@ -183,10 +458,9 @@ jobs:
             foreach ($required in @('Get-CanonicalUtf8LfFileSha256', 'PrintCanonicalPlanSha256', 'Test-SameStringSequence', "current owner is '`$currentOwner', not '`$Slice'", 'lacks exact rejected-checker evidence', 'must equal rejected predecessor', 'does not descend from predecessor integration')) {
               if (-not $ownershipRunnerText.Contains($required)) { throw "ownership runner implementation is missing '$required'" }
             }
-            foreach ($required in @('Test-StrictBoolean', '--untracked-files=all', 'dev-stand-source-commit', 'dev-stand-source-commit-post-build', 'dev-stand-source-tracked-status-post-build', 'dev-stand-compose-build', "@('build', '--pull', 'server', 'operator-console')", 'dev-stand-postgres-pull', "@('pull', 'postgres')", "@('up', '-d', '--no-build', '--pull', 'never', '--wait')", 'source_commit = $sourceCommit', 'source_tracked_clean = $sourceTrackedClean', 'prelaunch_image_ids = $prelaunchImageIds', 'prelaunch_to_running_image_identity = $prelaunchToRunningImageIdentity', 'scanned_reference = $scanReference')) {
+            foreach ($required in @('Test-StrictBoolean', '--untracked-files=all', 'dev-stand-source-commit', 'dev-stand-source-commit-post-build', 'dev-stand-source-tracked-status-post-build', 'dev-stand-compose-build', "@('build', '--pull', 'server', 'operator-console')", 'dev-stand-postgres-pull', "@('pull', 'postgres')", "@('up', '-d', '--no-build', '--pull', 'never', '--wait')", 'source_commit = $sourceCommit', 'source_tracked_clean = $sourceTrackedClean', 'prelaunch_image_ids = $prelaunchImageIds', 'prelaunch_to_running_image_identity = $prelaunchToRunningImageIdentity', 'scanned_reference = $scanReference', '$databaseName = New-RunDatabaseName -RequestedRunId $RunId -RepeatIndex $repeatIndex', 'engram_prc_rg_test_${runHash}_r$RepeatIndex', 'Get-RequiredSessionStartExecutionProof', '$sessionStartExecutionProof = Get-RequiredSessionStartExecutionProof $goTestSummary', 'required-session-start-execution.json', 'required_session_start_execution = $sessionStartExecutionProof')) {
               if (-not $dbRunnerText.Contains($required)) { throw "dev-stand source/build provenance contract is missing '$required'" }
             }
-            Assert-TokenOrder $dbRunnerText @("Invoke-CapturedProcess 'dev-stand-source-tracked-status'", "Invoke-CapturedProcess 'dev-stand-compose-build'", "Invoke-CapturedProcess 'dev-stand-postgres-pull'", 'dev-stand-source-tracked-status-post-build', 'dev-stand-prelaunch-image-inspect-', "Invoke-CapturedProcess 'dev-stand-up'")
             foreach ($required in @('openclaw-lock-non-ignored', "@('check-ignore', '--no-index', '--quiet'", 'npm pack contains forbidden path', 'dist/index.js', 'dist/index.d.ts', 'scripts/install.sh', 'npm-ci -> npm-typecheck -> npm-test -> npm-audit-high -> npm-pack-dry-run')) {
               if (-not $nodeRunnerText.Contains($required)) { throw "node release runner implementation is missing '$required'" }
             }
@@ -287,6 +561,53 @@ jobs:
           Assert-MutationRejected 'remove prelaunch compose build' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("@('build', '--pull', 'server', 'operator-console')", "@('config')")) $criticalRunner $devStandRunner }
           $lateBuildRunner = $dbRunner.Replace("Invoke-CapturedProcess 'dev-stand-compose-build'", "Invoke-CapturedProcess 'dev-stand-compose-build-placeholder'") + "`n# Invoke-CapturedProcess 'dev-stand-compose-build'"
           Assert-MutationRejected 'move prelaunch compose build after launch' { Assert-WorkflowContract $workflow $critical $stand $lateBuildRunner $criticalRunner $devStandRunner }
+          $buildLines = @($dbRunner -split "`r?`n" | Where-Object { $_.Contains('$build = Invoke-CapturedProcess ''dev-stand-compose-build''') })
+          if ($buildLines.Count -ne 1) { throw "canonical build fixture must resolve exactly one line; found $($buildLines.Count)" }
+          $buildLine = $buildLines[0]
+          $buildIndent = [regex]::Match($buildLine, '^\s*').Value
+          $deadBuildReplacement = $buildIndent + '# ' + $buildLine.TrimStart() + "`n" + $buildIndent + '$build = [pscustomobject]@{ ExitCode = 0 }'
+          $deadBuildRunner = $dbRunner.Replace($buildLine, $deadBuildReplacement)
+          Assert-MutationRejected 'dead/comment-only build invocation' { Assert-WorkflowContract $workflow $critical $stand $deadBuildRunner $criticalRunner $devStandRunner }
+          $quotedBuildLine = "'" + $buildLine.Replace("'", "''") + "'"
+          $deadStringBuildReplacement = $buildIndent + '$deadBuildInvocation = ' + $quotedBuildLine + "`n" + $buildIndent + '$build = [pscustomobject]@{ ExitCode = 0 }'
+          $deadStringBuildRunner = $dbRunner.Replace($buildLine, $deadStringBuildReplacement)
+          Assert-MutationRejected 'dead string-only build invocation' { Assert-WorkflowContract $workflow $critical $stand $deadStringBuildRunner $criticalRunner $devStandRunner }
+          $unreachableBuildReplacement = $buildIndent + 'if ($false) {' + "`n" + $buildIndent + '    ' + $buildLine.TrimStart() + "`n" + $buildIndent + '}' + "`n" + $buildIndent + '$build = [pscustomobject]@{ ExitCode = 0 }'
+          $unreachableBuildRunner = $dbRunner.Replace($buildLine, $unreachableBuildReplacement)
+          Assert-MutationRejected 'unreachable live build invocation' { Assert-WorkflowContract $workflow $critical $stand $unreachableBuildRunner $criticalRunner $devStandRunner }
+          $duplicateBuildRunner = $dbRunner.Replace($buildLine, ($buildLine + "`n" + $buildLine))
+          Assert-MutationRejected 'duplicate live build invocation' { Assert-WorkflowContract $workflow $critical $stand $duplicateBuildRunner $criticalRunner $devStandRunner }
+          $renamedDuplicateBuildLine = $buildLine.Replace("'dev-stand-compose-build'", "'dev-stand-compose-build-shadow'")
+          $renamedDuplicateBuildRunner = $dbRunner.Replace($buildLine, ($buildLine + "`n" + $renamedDuplicateBuildLine))
+          Assert-MutationRejected 'renamed duplicate live build invocation' { Assert-WorkflowContract $workflow $critical $stand $renamedDuplicateBuildRunner $criticalRunner $devStandRunner }
+          $scanLines = @($dbRunner -split "`r?`n" | Where-Object { $_.Contains('$scan = Invoke-CapturedProcess "dev-stand-vulnerability-scan-$($entry.Key)"') })
+          if ($scanLines.Count -ne 1) { throw "canonical Scout fixture must resolve exactly one line; found $($scanLines.Count)" }
+          $scanLine = $scanLines[0]
+          $scanIndent = [regex]::Match($scanLine, '^\s*').Value
+          $unreachableScoutReplacement = $scanIndent + 'if ($false) {' + "`n" + $scanIndent + '    ' + $scanLine.TrimStart() + "`n" + $scanIndent + '}'
+          $unreachableScoutRunner = $dbRunner.Replace($scanLine, $unreachableScoutReplacement)
+          Assert-MutationRejected 'unreachable live Scout invocation' { Assert-WorkflowContract $workflow $critical $stand $unreachableScoutRunner $criticalRunner $devStandRunner }
+          $duplicateScoutRunner = $dbRunner.Replace($scanLine, ($scanLine + "`n" + $scanLine))
+          Assert-MutationRejected 'duplicate live Scout invocation' { Assert-WorkflowContract $workflow $critical $stand $duplicateScoutRunner $criticalRunner $devStandRunner }
+          $renamedDuplicateScoutLine = $scanLine.Replace('dev-stand-vulnerability-scan-$($entry.Key)', 'dev-stand-vulnerability-scan-shadow-$($entry.Key)')
+          $renamedDuplicateScoutRunner = $dbRunner.Replace($scanLine, ($scanLine + "`n" + $renamedDuplicateScoutLine))
+          Assert-MutationRejected 'renamed duplicate live Scout invocation' { Assert-WorkflowContract $workflow $critical $stand $renamedDuplicateScoutRunner $criticalRunner $devStandRunner }
+          $databaseLines = @($dbRunner -split "`r?`n" | Where-Object { $_.Contains('$databaseName = New-RunDatabaseName -RequestedRunId $RunId -RepeatIndex $repeatIndex') })
+          if ($databaseLines.Count -ne 1) { throw "canonical fresh-database assignment fixture must resolve exactly one line; found $($databaseLines.Count)" }
+          $databaseLine = $databaseLines[0]
+          $databaseIndent = [regex]::Match($databaseLine, '^\s*').Value
+          $deadDatabaseReplacement = $databaseIndent + '# ' + $databaseLine.TrimStart() + "`n" + $databaseIndent + '$databaseName = "engram_prc_rg_unsafe_r$repeatIndex"; $schemaName = ''public''; $applicationName = "engram-prc-$safeRunToken-r$repeatIndex"'
+          $deadDatabaseRunner = $dbRunner.Replace($databaseLine, $deadDatabaseReplacement)
+          Assert-MutationRejected 'comment-only literal-test database assignment' { Assert-WorkflowContract $workflow $critical $stand $deadDatabaseRunner $criticalRunner $devStandRunner }
+          $proofLines = @($dbRunner -split "`r?`n" | Where-Object { $_.Contains('$sessionStartExecutionProof = Get-RequiredSessionStartExecutionProof $goTestSummary') })
+          if ($proofLines.Count -ne 1) { throw "canonical session-start proof fixture must resolve exactly one line; found $($proofLines.Count)" }
+          $proofLine = $proofLines[0]
+          $proofIndent = [regex]::Match($proofLine, '^\s*').Value
+          $deadProofReplacement = $proofIndent + '# ' + $proofLine.TrimStart() + "`n" + $proofIndent + '$sessionStartExecutionProof = [pscustomobject]@{ verdict = ''PASS''; executed = 12; skipped = 0; missing = 0 }'
+          $deadProofRunner = $dbRunner.Replace($proofLine, $deadProofReplacement)
+          Assert-MutationRejected 'comment-only session-start execution proof' { Assert-WorkflowContract $workflow $critical $stand $deadProofRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'remove literal-test database identity' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace('$databaseName = New-RunDatabaseName -RequestedRunId $RunId -RepeatIndex $repeatIndex', '$databaseName = "engram_prc_rg_${safeRunToken}_r$repeatIndex"')) $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'bypass required session-start execution proof' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace('$sessionStartExecutionProof = Get-RequiredSessionStartExecutionProof $goTestSummary', '$sessionStartExecutionProof = [pscustomobject]@{ verdict = ''PASS''; executed = 12; skipped = 0; missing = 0 }')) $criticalRunner $devStandRunner }
           Assert-MutationRejected 'remove no-build launch lock' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("'--no-build'", "'--renew-anon-volumes'")) $criticalRunner $devStandRunner }
           Assert-MutationRejected 'narrow compatibility full package' { Assert-WorkflowContract ($workflow.Replace("`$arguments.Add('./...')", "`$arguments.Add('./internal/...')")) $critical $stand $dbRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'change count semantics' { Assert-WorkflowContract ($workflow.Replace("'-count=1'", "'-count=2'")) $critical $stand $dbRunner $criticalRunner $devStandRunner }
@@ -299,7 +620,7 @@ jobs:
           Assert-MutationRejected 'change ownership current owner' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace('"current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"', '"current_owner": "DB-BULKOPS"')) }
           Assert-MutationRejected 'remove rejected predecessor evidence' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace($rejectedBulkCheckerSha, '')) }
           Assert-MutationRejected 'change exact rejected successor base' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace($rejectedBulkHead, ('1' * 40))) }
-          Write-Output 'CONFORMANCE PASS: canonical LF/CRLF authority, exact wrappers, path budget, ordered source-built image provenance, ownership state, node matrix, readiness, cleanup, and full/race semantics match; 30 mutations rejected'
+          Write-Output 'CONFORMANCE PASS: canonical LF/CRLF authority, exact wrappers, path budget, AST-validated reachable exactly-once source-built image provenance and Scout, 12-test zero-skip DB execution proof, ownership state, node matrix, readiness, cleanup, and full/race semantics match; 42 mutations rejected'
 
       - name: Resolve PostgreSQL service identity
         shell: pwsh

@@ -48,13 +48,16 @@ Usage:
 
 Required behavior:
   * -FreshDatabase is mandatory.
-  * Each repeat creates a unique `<database>.public` identity.
+  * Each repeat creates a unique `engram_prc_rg_test_<hash>_rN.public`
+    identity that is test-only regardless of the caller-supplied run id.
   * `go test` runs with `-json -p 1 -parallel 1 -count=1`.
   * Missing coverage is fatal. Full `./...` runs enforce >=60% overall and the
     historical package floors. Scoped runs retain mandatory targeted coverage.
   * pg_stat_activity and server headroom are captured before/after tests. Pool
     capacity is bounded by -ConnectionBudget; post-test run-DB sessions must be
     exactly zero before cleanup. Cleanup still terminates/drops after failure.
+  * An unfiltered canonical ./... run proves all 12 required gRPC session-start
+    tests reached pass/fail (executed) outcomes with zero skip/missing entries.
 
 Options:
   -Help                    Print this help and exit 0.
@@ -250,6 +253,99 @@ function Test-ConnectionBudgetFits {
 function Test-NoResidualRunSessions {
     param([Parameter(Mandatory)][int]$SessionCount)
     return $SessionCount -eq 0
+}
+
+function New-RunDatabaseName {
+    param(
+        [Parameter(Mandatory)][string]$RequestedRunId,
+        [Parameter(Mandatory)][ValidateRange(1, 20)][int]$RepeatIndex
+    )
+
+    # session_start_test.go intentionally refuses a DATABASE_DSN that is not
+    # unmistakably test-only. Hash the operator-supplied run id so even values
+    # containing "prod"/"production"/"staging" cannot poison that guard, and
+    # retain a literal test marker plus the cleanup-owned prefix.
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($RequestedRunId))
+    }
+    finally { $sha256.Dispose() }
+    $runHash = ([System.BitConverter]::ToString($digest).Replace('-', '').ToLowerInvariant()).Substring(0, 16)
+    $name = "engram_prc_rg_test_${runHash}_r$RepeatIndex"
+    if ($name -notmatch '^engram_prc_rg_test_[a-f0-9]{16}_r(?:[1-9]|1\d|20)$') {
+        throw "generated release-gate database name is malformed: '$name'"
+    }
+    return $name
+}
+
+function Get-RequiredSessionStartTestNames {
+    return @(
+        'TestEC_F1_P1_GRPCSessionStart_FlagOff_ByteIdentity',
+        'TestEC_F1_P1_GRPCSessionStart_FlagOn_PrivateCrossWorkstationInvisible',
+        'TestEC_F1_P1_GRPCSessionStart_FlagOn_NoCallerIdentity_PrivateInvisible',
+        'TestGetSessionStartContext_HappyPath',
+        'TestGetSessionStartContext_PrincipalPrivateCrossPrincipalInvisible_FlagOff',
+        'TestGetSessionStartContext_MetaSummaryFlagOnDescribesMemoryLandscape',
+        'TestGetSessionStartContext_MetaSummaryCountsBeyondResponseCap',
+        'TestGetSessionStartContext_MetaSummaryFlagOffOmitted',
+        'TestGetSessionStartContext_MetaSummaryFlagOnEmptyProjectIsBoundedAndContentFree',
+        'TestGetSessionStartContext_T014_MetaSummaryRequiresMasterAndS2Flags',
+        'TestGetSessionStartContext_RuleRouterEnabledPacketShape',
+        'TestGetSessionStartContext_DefaultLimits'
+    )
+}
+
+function Get-RequiredSessionStartExecutionProof {
+    param([AllowNull()]$GoTestSummary)
+
+    $package = 'github.com/thebtf/engram/internal/grpcserver'
+    $expectedNames = @(Get-RequiredSessionStartTestNames)
+    $results = [System.Collections.Generic.List[object]]::new()
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $passed = 0; $failed = 0; $skipped = 0; $incomplete = 0; $missing = 0; $duplicate = 0
+    $allTests = if ($null -ne $GoTestSummary -and $null -ne $GoTestSummary.PSObject.Properties['tests']) { @($GoTestSummary.tests) } else { @() }
+
+    foreach ($name in $expectedNames) {
+        $matches = @($allTests | Where-Object { [string]$_.package -ceq $package -and [string]$_.test -ceq $name })
+        if ($matches.Count -eq 0) {
+            $missing++
+            $errors.Add("required session-start test was not observed: $package/$name")
+            $results.Add([pscustomobject]@{ package = $package; test = $name; outcome = 'missing'; executed = $false })
+            continue
+        }
+        if ($matches.Count -ne 1) {
+            $duplicate += $matches.Count - 1
+            $errors.Add("required session-start test appeared $($matches.Count) times: $package/$name")
+            $results.Add([pscustomobject]@{ package = $package; test = $name; outcome = 'duplicate'; executed = $false })
+            continue
+        }
+        $outcome = [string]$matches[0].outcome
+        switch -CaseSensitive ($outcome) {
+            'pass' { $passed++ }
+            'fail' { $failed++ }
+            'skip' { $skipped++; $errors.Add("required session-start test skipped: $package/$name") }
+            default { $incomplete++; $errors.Add("required session-start test has non-terminal outcome '$outcome': $package/$name") }
+        }
+        $results.Add([pscustomobject]@{ package = $package; test = $name; outcome = $outcome; executed = $outcome -in @('pass', 'fail') })
+    }
+
+    $executed = $passed + $failed
+    [pscustomobject][ordered]@{
+        schema_version = 1
+        verdict = if ($expectedNames.Count -eq 12 -and $executed -eq 12 -and $skipped -eq 0 -and $missing -eq 0 -and $duplicate -eq 0 -and $incomplete -eq 0) { 'PASS' } else { 'FAIL' }
+        package = $package
+        expected = $expectedNames.Count
+        observed = $expectedNames.Count - $missing
+        executed = $executed
+        passed = $passed
+        failed = $failed
+        skipped = $skipped
+        missing = $missing
+        duplicate = $duplicate
+        incomplete = $incomplete
+        tests = @($results)
+        errors = @($errors)
+    }
 }
 
 function Test-ReadyStatusPayload {
@@ -835,8 +931,27 @@ function Invoke-SelfTest {
         Assert-SelfTestCondition $validInventory.Pass 'exact compose service/image inventory was rejected'
         $invalidInventory = Test-ExactDevStandInventory @{ postgres = 'pgvector/pgvector:pg17'; server = 'engram:prc-candidate'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
         Assert-SelfTestCondition (-not $invalidInventory.Pass) 'non-produced engram:prc-candidate image was accepted'
+        $testOnlyDatabase = New-RunDatabaseName -RequestedRunId 'prod-production-staging-is-operator-controlled' -RepeatIndex 20
+        Assert-SelfTestCondition ($testOnlyDatabase -match '^engram_prc_rg_test_[a-f0-9]{16}_r20$') 'fresh database name is not an unambiguous literal-test identity'
+        Assert-SelfTestCondition ($testOnlyDatabase -notmatch '(?i)prod|production|staging') 'operator run id leaked a production-like token into the test database name'
+        $requiredPackage = 'github.com/thebtf/engram/internal/grpcserver'
+        $requiredTests = @(Get-RequiredSessionStartTestNames)
+        Assert-SelfTestCondition ($requiredTests.Count -eq 12) 'required session-start execution inventory is not exactly 12 tests'
+        $passingEvents = @($requiredTests | ForEach-Object { [pscustomobject]@{ package = $requiredPackage; test = $_; outcome = 'pass' } })
+        $passingProof = Get-RequiredSessionStartExecutionProof ([pscustomobject]@{ tests = $passingEvents })
+        Assert-SelfTestCondition ($passingProof.verdict -eq 'PASS' -and $passingProof.executed -eq 12 -and $passingProof.skipped -eq 0) '12/12 executed session-start tests were rejected'
+        $skipEvents = @($passingEvents | ForEach-Object { [pscustomobject]@{ package = $_.package; test = $_.test; outcome = $_.outcome } })
+        $skipEvents[0].outcome = 'skip'
+        $skipProof = Get-RequiredSessionStartExecutionProof ([pscustomobject]@{ tests = $skipEvents })
+        Assert-SelfTestCondition ($skipProof.verdict -eq 'FAIL' -and $skipProof.executed -eq 11 -and $skipProof.skipped -eq 1) 'one required session-start skip did not fail the execution proof'
+        $missingProof = Get-RequiredSessionStartExecutionProof ([pscustomobject]@{ tests = @($passingEvents | Select-Object -Skip 1) })
+        Assert-SelfTestCondition ($missingProof.verdict -eq 'FAIL' -and $missingProof.missing -eq 1) 'one missing required session-start test did not fail the execution proof'
+        $failingEvents = @($passingEvents | ForEach-Object { [pscustomobject]@{ package = $_.package; test = $_.test; outcome = $_.outcome } })
+        $failingEvents[0].outcome = 'fail'
+        $failingProof = Get-RequiredSessionStartExecutionProof ([pscustomobject]@{ tests = $failingEvents })
+        Assert-SelfTestCondition ($failingProof.verdict -eq 'PASS' -and $failingProof.executed -eq 12 -and $failingProof.failed -eq 1) 'an executed product failure was misclassified as a naming/skip defect'
         Assert-SelfTestCondition ($Repeat -eq 3) 'default release repetition count is not 3'
-        Write-Output 'SELFTEST PASS: run-db-suite.ps1 (earlier exit 7 remained fatal after later exit 0)'
+        Write-Output 'SELFTEST PASS: run-db-suite.ps1 (exit aggregation, test-only database identity, and 12-test zero-skip execution proof)'
     }
     finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
 }
@@ -853,6 +968,7 @@ if ([string]::IsNullOrWhiteSpace($AdminDsn)) { Write-Error '-AdminDsn or ENGRAM_
 
 [string[]]$packages = @(Get-NormalizedPackages $Package)
 $effectiveCoverage = Get-EffectiveCoveragePolicy $CoveragePolicy $packages
+$requireSessionStartExecution = [string]::IsNullOrWhiteSpace($Run) -and $packages.Count -eq 1 -and $packages[0] -ceq './...'
 $connection = Get-ConnectionInfo $AdminDsn
 $safeRunToken = [guid]::NewGuid().ToString('N').Substring(0, 10)
 if ([string]::IsNullOrWhiteSpace($RunId)) { $RunId = [DateTimeOffset]::UtcNow.ToString('yyyyMMddTHHmmssZ') + '-' + $safeRunToken }
@@ -913,10 +1029,11 @@ if ($null -ne $serverIdentityObject) {
 
 for ($repeatIndex = 1; $repeatIndex -le $Repeat; $repeatIndex++) {
     $repeatDirectory = Join-Path $runDirectory ("repeat-{0:D2}" -f $repeatIndex); New-Item -ItemType Directory -Path $repeatDirectory -Force | Out-Null
-    $databaseName = "engram_prc_rg_${safeRunToken}_r$repeatIndex"; $schemaName = 'public'; $applicationName = "engram-prc-$safeRunToken-r$repeatIndex"
+    $databaseName = New-RunDatabaseName -RequestedRunId $RunId -RepeatIndex $repeatIndex; $schemaName = 'public'; $applicationName = "engram-prc-$safeRunToken-r$repeatIndex"
     $targetDsn = New-DatabaseDsn $AdminDsn $databaseName $applicationName
     $repeatErrors = [System.Collections.Generic.List[string]]::new(); $repeatFailed = $false; $databaseCreated = $false
     $goTestExit = $null; $parserExit = $null; $coverageExit = $null; $cleanupExit = $null; $cleanupStatus = $null; $sessionsBefore = $null; $sessionsAfter = $null; $serverSessionsBefore = $null; $serverSessionsAfter = $null
+    $sessionStartExecutionProof = [pscustomobject][ordered]@{ schema_version = 1; verdict = 'NOT_APPLICABLE'; reason = 'only an unfiltered canonical ./... run requires the 12-test session-start execution proof' }
     $cleanupSummaryPath = Join-Path $repeatDirectory 'cleanup/cleanup.json'
 
     try {
@@ -961,6 +1078,27 @@ for ($repeatIndex = 1; $repeatIndex -le $Repeat; $repeatIndex++) {
         if ($AllowedSkipIdentity.Count -gt 0) { $parserArguments.Add('-AllowedSkipIdentity'); foreach ($identity in $AllowedSkipIdentity) { $parserArguments.Add($identity) } }
         $parser = Invoke-CapturedProcess "repeat-$repeatIndex-assert-go-test-json" $pwshPath @($parserArguments) @{} (Join-Path $repeatDirectory 'assert-go-test-json.stdout.log') (Join-Path $repeatDirectory 'assert-go-test-json.stderr.log') $connection @($targetDsn) 120
         $parserExit = $parser.ExitCode; if ($parserExit -ne 0) { $repeatFailed = $true; $repeatErrors.Add("go test JSON assertion failed with exit $parserExit") }
+        if ($requireSessionStartExecution) {
+            $goTestSummaryPath = Join-Path $repeatDirectory 'go-test-summary.json'
+            if (-not (Test-Path -LiteralPath $goTestSummaryPath -PathType Leaf)) {
+                $sessionStartExecutionProof = Get-RequiredSessionStartExecutionProof $null
+            }
+            else {
+                try {
+                    $goTestSummary = Get-Content -Raw -LiteralPath $goTestSummaryPath | ConvertFrom-Json -Depth 100
+                    $sessionStartExecutionProof = Get-RequiredSessionStartExecutionProof $goTestSummary
+                }
+                catch {
+                    $sessionStartExecutionProof = Get-RequiredSessionStartExecutionProof $null
+                    $sessionStartExecutionProof.errors = @(@($sessionStartExecutionProof.errors) + "go-test summary could not be read for required session-start proof: $($_.Exception.Message)")
+                }
+            }
+            Write-Utf8NoBom (Join-Path $repeatDirectory 'required-session-start-execution.json') (($sessionStartExecutionProof | ConvertTo-Json -Depth 12) + "`n")
+            if ($sessionStartExecutionProof.verdict -ne 'PASS') {
+                $repeatFailed = $true
+                $repeatErrors.Add("required session-start execution proof failed: executed=$($sessionStartExecutionProof.executed)/12 skipped=$($sessionStartExecutionProof.skipped) missing=$($sessionStartExecutionProof.missing)")
+            }
+        }
 
         if ($effectiveCoverage -eq 'Full') {
             $coverage = Invoke-CapturedProcess "repeat-$repeatIndex-assert-coverage" $pwshPath @('-NoProfile', '-File', $coverageAssertionScript, '-CoverageProfile', $coveragePath, '-SummaryPath', (Join-Path $repeatDirectory 'coverage-summary.json'), '-OverallThreshold', '60') @{} (Join-Path $repeatDirectory 'assert-coverage.stdout.log') (Join-Path $repeatDirectory 'assert-coverage.stderr.log') $connection @($targetDsn) 120
@@ -1016,6 +1154,7 @@ for ($repeatIndex = 1; $repeatIndex -le $Repeat; $repeatIndex++) {
             database_create_confirmed = $databaseCreated; sequential_execution = [ordered]@{ package_parallelism = 1; test_parallelism = 1 }; race = [bool]$Race
             connection_budget = $ConnectionBudget; server_sessions_before = $serverSessionsBefore; server_sessions_after = $serverSessionsAfter; sessions_before = $sessionsBefore; sessions_after = $sessionsAfter
             go_test_exit = $goTestExit; json_parser_exit = $parserExit; coverage_policy = $effectiveCoverage; coverage_exit = $coverageExit; cleanup_exit = $cleanupExit; cleanup_status = $cleanupStatus
+            required_session_start_execution = $sessionStartExecutionProof
             cleanup_summary = if (Test-Path -LiteralPath $cleanupSummaryPath) { [System.IO.Path]::GetFullPath($cleanupSummaryPath) } else { $null }
             errors = @($repeatErrors); artifact_directory = [System.IO.Path]::GetFullPath($repeatDirectory)
         }
@@ -1031,6 +1170,7 @@ $environmentSummary = [pscustomobject]@{
     packages = $packages; run_pattern = if ($Run) { $Run } else { $null }; repeat = $Repeat
     fail_on_unexpected_skip = [bool]$FailOnUnexpectedSkip; allowed_skip_identities = @($AllowedSkipIdentity)
     coverage_policy = $effectiveCoverage; connection_budget = $ConnectionBudget; race = [bool]$Race
+    require_session_start_execution = $requireSessionStartExecution; required_session_start_test_count = 12
     sequential_execution = [ordered]@{ go_package_parallelism = 1; go_test_parallelism = 1; database_max_connections = $ConnectionBudget }
     govulncheck_policy = [ordered]@{ authoritative = @('source scan with tests', 'unstripped binary scan'); non_authoritative = 'stripped binary scan (module-level fallback when symbols are absent)' }
 }
