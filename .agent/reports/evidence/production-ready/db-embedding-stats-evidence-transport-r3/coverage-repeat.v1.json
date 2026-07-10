@@ -1,58 +1,8 @@
 {
   "schema_version": 1,
   "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R3",
-  "node_version": "v24.2.0",
-  "command": "node --test --test-concurrency=1 --experimental-test-coverage .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
-  "runs": [
-    {
-      "run": 1,
-      "exit_code": 0,
-      "tests": 22,
-      "passed": 22,
-      "failed": 0,
-      "aggregate": {
-        "line_percent": 87.27,
-        "branch_percent": 71.75,
-        "functions_percent": 94.87
-      },
-      "verifier": {
-        "line_percent": 79.55,
-        "branch_percent": 51.59,
-        "functions_percent": 81.82
-      },
-      "test_harness": {
-        "line_percent": 100.0,
-        "branch_percent": 97.94,
-        "functions_percent": 100.0
-      }
-    },
-    {
-      "run": 2,
-      "exit_code": 0,
-      "tests": 22,
-      "passed": 22,
-      "failed": 0,
-      "aggregate": {
-        "line_percent": 87.27,
-        "branch_percent": 71.75,
-        "functions_percent": 94.87
-      },
-      "verifier": {
-        "line_percent": 79.55,
-        "branch_percent": 51.59,
-        "functions_percent": 81.82
-      },
-      "test_harness": {
-        "line_percent": 100.0,
-        "branch_percent": 97.94,
-        "functions_percent": 100.0
-      }
-    }
-  ],
-  "reproducible": true,
-  "threshold": {
-    "percent": 80,
-    "basis": "aggregate line coverage",
-    "status": "PASS"
-  }
+  "status": "SUPERSEDED_BY_R4",
+  "superseded_reason": "Independent checker reruns on Node v24.2.0 did not reproduce the committed R3 coverage values.",
+  "historical_numeric_claims_removed": true,
+  "replacement": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/coverage-repeat.v1.json"
 }

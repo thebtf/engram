@@ -182,6 +182,7 @@ function parseAnnotatedManifest(manifestPath) {
 function compareEntryShape(contractEntries, manifestEntries) {
   if (contractEntries.length !== manifestEntries.length) return false;
   return contractEntries.every((entry, index) =>
+    isPlainObject(entry) &&
     entry.path === manifestEntries[index].path &&
     entry.sha256 === manifestEntries[index].sha256,
   );
@@ -544,6 +545,9 @@ function main() {
   const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
   const contractValidation = validateContractSchema(contract, repoRoot);
   const structuralErrors = [...contractValidation.structural_errors];
+  const contractRepresentation = isPlainObject(contract.representation)
+    ? contract.representation
+    : {};
   const legacyManifestPath = path.join(repoRoot, ...LEGACY_MANIFEST_PATH.split('/'));
   const manifest = parseAnnotatedManifest(legacyManifestPath);
 
@@ -559,10 +563,10 @@ function main() {
   if (manifest.metadata.algorithm !== contract.algorithm) {
     structuralErrors.push('legacy manifest algorithm annotation disagrees with contract');
   }
-  if (manifest.metadata.representation !== contract.representation.kind) {
+  if (manifest.metadata.representation !== contractRepresentation.kind) {
     structuralErrors.push('legacy manifest representation annotation disagrees with contract');
   }
-  if (manifest.metadata['source-commit'] !== contract.representation.source_commit) {
+  if (manifest.metadata['source-commit'] !== contractRepresentation.source_commit) {
     structuralErrors.push('legacy manifest source-commit annotation disagrees with contract');
   }
   if (manifest.metadata.contract !== path.relative(repoRoot, contractPath).split(path.sep).join('/')) {
@@ -579,7 +583,7 @@ function main() {
     structuralErrors.push('legacy manifest entries disagree with contract entries or order');
   }
 
-  const sourceCommit = contract.representation?.source_commit || '';
+  const sourceCommit = contractRepresentation.source_commit || '';
   let sourceCommitIsAncestor = false;
   if (sourceCommit === EXPECTED_SOURCE_COMMIT && structuralErrors.length === 0) {
     sourceCommitIsAncestor = isAncestor(repoRoot, sourceCommit, 'HEAD');
@@ -678,7 +682,7 @@ function main() {
     source_commit: sourceCommit,
     source_commit_is_ancestor: sourceCommitIsAncestor,
     algorithm: contract.algorithm,
-    representation: contract.representation.kind,
+    representation: contractRepresentation.kind ?? null,
     total,
     matched,
     source_accesses: sourceAccesses,

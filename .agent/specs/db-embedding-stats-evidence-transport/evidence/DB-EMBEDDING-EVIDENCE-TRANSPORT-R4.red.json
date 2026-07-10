@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R4",
+  "phase": "RED",
+  "observed_at_utc": "2026-07-10T16:40:11.4799120+00:00",
+  "base_commit": "d650df5c4271cdb50aa1f443d2f95b2f4b672541",
+  "node_version": "v24.2.0",
+  "command": "node.exe --test --test-concurrency=1 .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+  "exit_code": 1,
+  "tests": {
+    "total": 24,
+    "passed": 22,
+    "failed": 2
+  },
+  "failing_tests": [
+    {
+      "name": "contract rejects null representation with structured FAIL before actual source access",
+      "observed_failure": "verifier emitted no FAIL JSON and escaped through TypeError: Cannot read properties of null (reading 'kind') at verify-manifest.cjs:562"
+    },
+    {
+      "name": "contract rejects a null entry with structured FAIL before actual source access",
+      "observed_failure": "verifier emitted no FAIL JSON and escaped through TypeError: Cannot read properties of null (reading 'path') at verify-manifest.cjs:185"
+    }
+  ],
+  "preload_spy_contract": {
+    "instrumented_actual_accesses": [
+      "child_process.spawnSync git cat-file blob",
+      "fs.readFileSync for every required source path"
+    ],
+    "green_requirement": "both mutations must emit stable structured FAIL with reported and observed source accesses equal to zero"
+  },
+  "exact_base_replay": {
+    "observed_at_utc": "2026-07-10T16:42:42.2695231+00:00",
+    "base_commit": "d650df5c4271cdb50aa1f443d2f95b2f4b672541",
+    "final_test_bytes_overlaid": true,
+    "exit_code": 1,
+    "tests": {
+      "total": 24,
+      "passed": 22,
+      "failed": 2
+    },
+    "same_failures": true
+  }
+}

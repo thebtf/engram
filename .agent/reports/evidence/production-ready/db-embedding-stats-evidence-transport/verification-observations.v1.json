@@ -1,65 +1,51 @@
 {
   "schema_version": 1,
-  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R3",
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R4",
   "role": "revision-maker",
+  "base_commit": "d650df5c4271cdb50aa1f443d2f95b2f4b672541",
   "product_source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
-  "rejected_r2_commit": "db2cf891dd9c6315fd17220ffe2d02302bea8844",
-  "parent_checker_commit": "8dac7910de52d2744fcf67f79a0a1597beebac72",
   "raw_checkout_bytes_are_not_the_contract": true,
   "source_lock": {
     "expected_source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
     "required_cardinality": 7,
     "exact_required_set": true,
-    "validated_canonical_paths_only": true,
-    "schema_invalid_source_accesses": {
-      "git_objects": 0,
-      "checkout_files": 0
-    }
+    "product_source_blobs_match": 7,
+    "product_source_test_delta": 0
   },
-  "required_artifact_paths": [
-    ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
-    ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json",
-    ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs",
-    ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json",
-    ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md"
+  "fail_closed_null_contracts": [
+    {
+      "mutation": "representation=null",
+      "exit_code": 1,
+      "status": "FAIL",
+      "stable_error": "contract.representation must be an object",
+      "reported_source_accesses": { "git_objects": 0, "checkout_files": 0 },
+      "preload_observed_source_accesses": { "git_cat_file": 0, "source_files": 0 },
+      "entries": 0,
+      "stderr": ""
+    },
+    {
+      "mutation": "entries[0]=null",
+      "exit_code": 1,
+      "status": "FAIL",
+      "stable_error": "contract.entries[0] must be an object",
+      "reported_source_accesses": { "git_objects": 0, "checkout_files": 0 },
+      "preload_observed_source_accesses": { "git_cat_file": 0, "source_files": 0 },
+      "entries": 0,
+      "stderr": ""
+    }
   ],
   "tdd": {
-    "baseline": {
-      "exit_code": 0,
-      "tests": 18,
-      "passed": 18,
-      "failed": 0
-    },
-    "red": {
-      "exit_code": 1,
-      "tests": 22,
-      "passed": 18,
-      "failed": 4
-    },
-    "green": {
-      "exit_code": 0,
-      "tests": 22,
-      "passed": 22,
-      "failed": 0
-    },
+    "exact_base_red": { "exit_code": 1, "tests": 24, "passed": 22, "failed": 2 },
+    "green": { "exit_code": 0, "tests": 24, "passed": 24, "failed": 0 },
+    "independent_attack_cases": { "passed": 15, "failed": 0, "total": 15 },
     "prove_it": [
-      {
-        "sentinel_function": "validateContractSchema",
-        "exit_code": 1,
-        "passed_tests": 10,
-        "failed_tests": 12
-      },
-      {
-        "sentinel_function": "verifyArtifactFiles",
-        "exit_code": 1,
-        "passed_tests": 13,
-        "failed_tests": 9
-      }
+      { "sentinel_function": "validateContractSchema", "exit_code": 1, "passed_tests": 9, "failed_tests": 15 },
+      { "sentinel_function": "verifyArtifactFiles", "exit_code": 1, "passed_tests": 15, "failed_tests": 9 }
     ],
     "post_restore": {
       "exit_code": 0,
-      "tests": 22,
-      "passed": 22,
+      "tests": 24,
+      "passed": 24,
       "failed": 0,
       "verifier_byte_identical": true
     },
@@ -67,140 +53,39 @@
       "node_version": "v24.2.0",
       "repeat_count": 2,
       "reproducible": true,
-      "aggregate": {
-        "line_percent": 87.27,
-        "branch_percent": 71.75,
-        "functions_percent": 94.87
-      },
-      "verifier": {
-        "line_percent": 79.55,
-        "branch_percent": 51.59,
-        "functions_percent": 81.82
-      },
-      "test_harness": {
-        "line_percent": 100.0,
-        "branch_percent": 97.94,
-        "functions_percent": 100.0
-      },
+      "aggregate": { "line_percent": 89.23, "branch_percent": 76.61, "functions_percent": 95.35 },
+      "verifier": { "line_percent": 80.92, "branch_percent": 58.02, "functions_percent": 81.82 },
+      "test_harness": { "line_percent": 100.0, "branch_percent": 97.44, "functions_percent": 100.0 },
       "threshold_basis": "aggregate line coverage",
       "threshold_percent": 80,
-      "status": "PASS",
-      "exit_code": 0
+      "status": "PASS"
     }
   },
   "observations": [
     {
       "checkout": "windows-autocrlf-true",
-      "tracked_eol_counts": {
-        "crlf": 7
-      },
-      "mode": "legacy-raw-audit",
-      "exit_code": 0,
-      "status": "AMBIGUOUS_RAW_CHECKOUT_CONFIRMED",
-      "total": 7,
-      "raw_checkout_matches": 0,
-      "git_object_matches": 7,
-      "checkout_lf_matches": 7,
-      "source_git_accesses": 7,
-      "source_checkout_accesses": 7,
-      "structural_errors": 0
-    },
-    {
-      "checkout": "windows-autocrlf-true",
-      "mode": "git-object",
-      "exit_code": 0,
-      "status": "PASS",
-      "matched": 7,
-      "total": 7,
-      "structural_errors": 0
-    },
-    {
-      "checkout": "windows-autocrlf-true",
-      "mode": "checkout-lf",
-      "exit_code": 0,
-      "status": "PASS",
-      "matched": 7,
-      "total": 7,
-      "bare_carriage_returns": 0,
-      "structural_errors": 0
-    },
-    {
-      "checkout": "windows-autocrlf-true",
-      "mode": "artifact-files",
-      "exit_code": 0,
-      "status": "PASS",
-      "matched": 5,
-      "total": 5,
-      "structural_errors": 0
+      "tracked_eol": "7/7 i/lf w/crlf",
+      "legacy_raw_audit": { "exit_code": 0, "status": "AMBIGUOUS_RAW_CHECKOUT_CONFIRMED", "raw": 0, "git_object": 7, "checkout_lf": 7 },
+      "git_object": { "exit_code": 0, "matched": 7, "total": 7 },
+      "checkout_lf": { "exit_code": 0, "matched": 7, "total": 7, "bare_carriage_returns": 0 },
+      "artifact_files": { "exit_code": 0, "matched": 5, "total": 5 },
+      "permanent_suite": { "exit_code": 0, "passed": 24, "total": 24 }
     },
     {
       "checkout": "lf-materialized",
-      "tracked_eol_counts": {
-        "lf": 7
-      },
-      "mode": "legacy-raw-audit",
-      "exit_code": 0,
-      "status": "RAW_CHECKOUT_HAPPENS_TO_MATCH",
-      "total": 7,
-      "raw_checkout_matches": 7,
-      "git_object_matches": 7,
-      "checkout_lf_matches": 7,
-      "structural_errors": 0
-    },
-    {
-      "checkout": "lf-materialized",
-      "mode": "git-object",
-      "exit_code": 0,
-      "status": "PASS",
-      "matched": 7,
-      "total": 7,
-      "structural_errors": 0
-    },
-    {
-      "checkout": "lf-materialized",
-      "mode": "checkout-lf",
-      "exit_code": 0,
-      "status": "PASS",
-      "matched": 7,
-      "total": 7,
-      "bare_carriage_returns": 0,
-      "structural_errors": 0
-    },
-    {
-      "checkout": "lf-materialized",
-      "mode": "artifact-files",
-      "exit_code": 0,
-      "status": "PASS",
-      "matched": 5,
-      "total": 5,
-      "structural_errors": 0
-    },
-    {
-      "checkout": "lf-materialized",
-      "mode": "permanent-adversarial-self-test",
-      "exit_code": 0,
-      "status": "PASS",
-      "matched": 22,
-      "total": 22
+      "tracked_eol": "7/7 i/lf w/lf",
+      "legacy_raw_audit": { "exit_code": 0, "status": "RAW_CHECKOUT_HAPPENS_TO_MATCH", "raw": 7, "git_object": 7, "checkout_lf": 7 },
+      "git_object": { "exit_code": 0, "matched": 7, "total": 7 },
+      "checkout_lf": { "exit_code": 0, "matched": 7, "total": 7, "bare_carriage_returns": 0 },
+      "artifact_files": { "exit_code": 0, "matched": 5, "total": 5 },
+      "permanent_suite": { "exit_code": 0, "passed": 24, "total": 24 }
     }
   ],
-  "temporary_worktree_cleanup": {
-    "red": {
-      "clean_before_remove": true,
-      "path_removed": true,
-      "registration_removed": true
-    },
-    "prove_it": {
-      "clean_before_remove": true,
-      "path_removed": true,
-      "registration_removed": true
-    },
-    "lf": {
-      "clean_before_remove": true,
-      "path_removed": true,
-      "registration_removed": true
-    }
+  "residue": {
+    "temporary_worktrees": 0,
+    "maker_node_processes": 0,
+    "matching_postgresql_databases": 0,
+    "matching_postgresql_sessions": 0
   },
-  "product_source_test_delta": 0,
   "finish_state": "READY_FOR_CHECK"
 }

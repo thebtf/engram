@@ -8,6 +8,7 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { after, test } = require('node:test');
@@ -44,6 +45,47 @@ const legacyManifestPath = path.join(
   'db-embedding-stats',
   'SHA256SUMS.txt',
 );
+const sourceAbsolutePaths = new Set(
+  REQUIRED_SOURCE_PATHS.map((entryPath) => path.resolve(repoRoot, ...entryPath.split('/'))),
+);
+const accessSpyDirectory = fs.mkdtempSync(
+  path.join(os.tmpdir(), 'engram-embedding-evidence-access-spy-'),
+);
+const accessSpyPath = path.join(accessSpyDirectory, 'access-spy.cjs');
+fs.writeFileSync(
+  accessSpyPath,
+  `'use strict';
+
+const fs = require('node:fs');
+const childProcess = require('node:child_process');
+
+const logPath = process.env.EMBEDDING_EVIDENCE_ACCESS_LOG;
+const originalReadFileSync = fs.readFileSync;
+const originalSpawnSync = childProcess.spawnSync;
+
+function append(record) {
+  if (logPath) fs.appendFileSync(logPath, \`${'${JSON.stringify(record)}'}\\n\`, 'utf8');
+}
+
+fs.readFileSync = function observedReadFileSync(filePath, ...args) {
+  append({
+    kind: 'fs.readFileSync',
+    path: Buffer.isBuffer(filePath) ? filePath.toString('utf8') : String(filePath),
+  });
+  return originalReadFileSync.call(this, filePath, ...args);
+};
+
+childProcess.spawnSync = function observedSpawnSync(command, args, options) {
+  append({
+    kind: 'child_process.spawnSync',
+    command: String(command),
+    args: Array.isArray(args) ? args.map(String) : [],
+  });
+  return originalSpawnSync.call(this, command, args, options);
+};
+`,
+  'utf8',
+);
 
 const originalBytes = new Map([
   [artifactManifestPath, fs.readFileSync(artifactManifestPath)],
@@ -55,6 +97,7 @@ function restoreOriginals() {
   for (const [filePath, bytes] of originalBytes) {
     fs.writeFileSync(filePath, bytes);
   }
+  fs.rmSync(accessSpyDirectory, { recursive: true, force: true });
 }
 
 after(restoreOriginals);
@@ -82,20 +125,55 @@ function withReplacements(replacements, verify) {
   }
 }
 
-function runVerifier(mode) {
+let accessSpyRun = 0;
+
+function parseAccessLog(logPath) {
+  if (!logPath || !fs.existsSync(logPath)) return [];
+  return fs.readFileSync(logPath, 'utf8')
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+function runVerifier(mode, options = {}) {
+  let accessLogPath = null;
+  const env = { ...process.env };
+  if (options.preloadSpy) {
+    accessSpyRun += 1;
+    accessLogPath = path.join(accessSpyDirectory, `access-${accessSpyRun}.jsonl`);
+    env.EMBEDDING_EVIDENCE_ACCESS_LOG = accessLogPath;
+    env.NODE_OPTIONS = [process.env.NODE_OPTIONS, `--require=${accessSpyPath}`]
+      .filter(Boolean)
+      .join(' ');
+  }
   const result = spawnSync(process.execPath, [verifierPath, `--mode=${mode}`], {
     cwd: repoRoot,
     encoding: 'utf8',
+    env,
     windowsHide: true,
   });
   let output = null;
   if (result.stdout.trim()) {
     output = JSON.parse(result.stdout);
   }
+  const accessLog = parseAccessLog(accessLogPath);
+  const actualSourceAccesses = {
+    git_cat_file: accessLog.filter((record) =>
+      record.kind === 'child_process.spawnSync' &&
+      path.basename(record.command).toLowerCase().startsWith('git') &&
+      record.args[0] === 'cat-file' &&
+      record.args[1] === 'blob',
+    ),
+    source_files: accessLog.filter((record) =>
+      record.kind === 'fs.readFileSync' &&
+      sourceAbsolutePaths.has(path.resolve(record.path)),
+    ),
+  };
   return {
     exit_code: result.status,
     output,
     stderr: result.stderr.trim(),
+    actual_source_accesses: actualSourceAccesses,
   };
 }
 
@@ -117,6 +195,20 @@ function expectFailClosedBeforeSourceAccess(result) {
     'schema-invalid source paths must be rejected before Git or filesystem source access',
   );
   assert.deepEqual(result.output?.entries, [], 'schema-invalid source paths must not be verified');
+}
+
+function expectStableFailClosedBeforeActualSourceAccess(result, expectedStructuralError) {
+  expectFailClosedBeforeSourceAccess(result);
+  assert.equal(result.stderr, '', 'schema rejection must not escape as a raw runtime exception');
+  assert.ok(
+    result.output.structural_errors.includes(expectedStructuralError),
+    `missing stable structural error: ${expectedStructuralError}`,
+  );
+  assert.deepEqual(
+    result.actual_source_accesses,
+    { git_cat_file: [], source_files: [] },
+    'preload spy observed source access before schema rejection',
+  );
 }
 
 function mutateArtifactManifest(mutator) {
@@ -430,4 +522,33 @@ test('contract rejects an invalid raw source path before source access', () => {
     () => runVerifier('git-object'),
   );
   expectFailClosedBeforeSourceAccess(result);
+});
+
+test('contract rejects null representation with structured FAIL before actual source access', () => {
+  const result = withMutation(
+    contractPath,
+    mutateContract((contract) => {
+      contract.representation = null;
+    }),
+    () => runVerifier('git-object', { preloadSpy: true }),
+  );
+  expectStableFailClosedBeforeActualSourceAccess(
+    result,
+    'contract.representation must be an object',
+  );
+  assert.equal(result.output.representation, null);
+});
+
+test('contract rejects a null entry with structured FAIL before actual source access', () => {
+  const result = withMutation(
+    contractPath,
+    mutateContract((contract) => {
+      contract.entries[0] = null;
+    }),
+    () => runVerifier('git-object', { preloadSpy: true }),
+  );
+  expectStableFailClosedBeforeActualSourceAccess(
+    result,
+    'contract.entries[0] must be an object',
+  );
 });

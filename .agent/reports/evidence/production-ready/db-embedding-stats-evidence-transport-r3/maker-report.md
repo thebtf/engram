@@ -1,30 +1,16 @@
-# DB-EMBEDDING-EVIDENCE-TRANSPORT R3 compact handoff
+# DB-EMBEDDING-EVIDENCE-TRANSPORT R3 supersession note
 
-Status: **READY_FOR_CHECK**
+R3 remains the historical repair that established the exact seven-path source
+lock, exact accepted source commit, canonical pre-access validation, permanent
+attack suite, Windows CRLF proof, fresh-LF proof, and zero product/source/test
+delta.
 
-R3 is based on the immutable independent checker commit `8dac7910...` and
-preserves accepted product commit `38d6a4fb...` byte-for-byte. It repairs all
-four blocking checker reproductions: exact source commit, exact seven-source
-set, valid-substitution rejection, and canonical-path pre-access gating.
+The independent R3 checker reproduced all behavioral rails but did not
+reproduce the committed coverage values. Those numeric claims have therefore
+been removed instead of being repeated as current evidence.
 
-Evidence summary:
+The exact R4 reruns, coverage scopes, fail-closed null regressions, checksums,
+and current readiness packet are under
+`.agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/`.
 
-- exact-parent RED: `18 pass / 4 fail`, exit `1`;
-- GREEN and post-restore: `22/22`, exit `0`;
-- Prove-It sentinels: `12` and `9` failed tests, both exit `1`;
-- Windows: raw/Git/LF `0/7`, `7/7`, `7/7`; artifacts `5/5`;
-- fresh LF: raw/Git/LF `7/7`; artifacts `5/5`; suite `22/22`;
-- coverage repeated identically twice: aggregate line `87.27%`, branch
-  `71.75%`, functions `94.87%`; verifier-only metrics are separately labeled;
-- product/source/test delta, temporary worktree residue, maker Node residue,
-  matching PostgreSQL databases, and matching PostgreSQL sessions are zero.
-
-One diagnostic discrepancy was surfaced rather than hidden: the first
-read-only residue query assumed a nonexistent PostgreSQL role `postgres` and
-failed authentication. Container configuration identified the actual role and
-database as `engram` / `engram_test`; the corrected read-only query returned
-database residue `0` and session residue `0`.
-
-The packet checksum manifest excludes itself. Final commit/tree identity and
-the manifest's own hash are reported after commit. A fresh independent checker
-must replay the four repaired mutations; this maker does not self-accept.
+Status: **SUPERSEDED_BY_R4**.

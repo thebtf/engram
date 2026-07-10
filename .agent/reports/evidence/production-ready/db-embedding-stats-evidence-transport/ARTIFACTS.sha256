@@ -5,6 +5,6 @@
 # self-entry=excluded-to-avoid-recursion
 5d932e6acf104bf9eff291409b50961007512e09e91d78401257a018fcb780f4  .agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt
 e3e9fd6250d4ead502a01ec81bb7901ad658d74845184a10b6f153276a1bd12f  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/content-manifest.v1.json
-2b70221b41b570db6d4e245de7f73bba5b1c2d65af1c00d025946a2fb0af9463  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs
-6c392da36f0a1eb54425cfddb08d8dab9164434f1c8a294aef451c822eea419d  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json
-1de9db676a8ca4618fd44892b8a26e68fd569f5524219514458cdc9039828014  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md
+a55e59dd870659330add8f840272aa1e8829f8161779db3e9be9e6e014cf1ba4  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.cjs
+fd16ab3f6135a3af584a8f3589e9137c6bfcb62f474093492d15020db21ee3fc  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verification-observations.v1.json
+cb73530f2c204f2c7e4110928971ffaac6c3cb172b59c72cf8047cecf610ab65  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/maker-report.md

@@ -2,10 +2,8 @@
 # algorithm=sha256
 # representation=canonical-lf-files
 # checkout-equivalence=crlf-to-lf-with-no-bare-cr
-# parent=8dac7910de52d2744fcf67f79a0a1597beebac72
+# base=d650df5c4271cdb50aa1f443d2f95b2f4b672541
 # accepted-product-source=38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df
-# status=superseded-by-r4
-# refreshed-on-base=d650df5c4271cdb50aa1f443d2f95b2f4b672541
 # maker-commit=reported-out-of-band-after-commit
 # self-entry=excluded-to-avoid-recursion
 5d932e6acf104bf9eff291409b50961007512e09e91d78401257a018fcb780f4  .agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt
@@ -21,3 +19,10 @@ cb73530f2c204f2c7e4110928971ffaac6c3cb172b59c72cf8047cecf610ab65  .agent/reports
 a829bdb938afb219fd1e3321b1ea3a8c1960e24d0d74fa304e008e3c6fe50aad  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/verification-matrix.v1.json
 091286d8afe4f4b8a9ff4b556f875113620c318ebc613c5bbc3df16194d2832c  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/maker-summary.v1.json
 14739f0a3deb055cd1ee6bda8799fcb6c964f2be527cb0230dc8c429225addd9  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/maker-report.md
+7ba5fa9698b6ab898df6e88d625c267cbf0262ed0b3db0aa5b190f6395028349  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r3/R3-SHA256SUMS.txt
+0f5054c4e312b2159edd821700ebe665b8715dfdd3d3bc0ba7cc2c48c22ef7de  .agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R4.red.json
+08490a98a56d7843e923749bb04a6802cbd067a0a82175efa0f223ed8adbb45a  .agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R4.tdd.json
+d3ac6ef44dbde20d8a68d18b6bd3577170063b2117082b892689db7640052cb7  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/coverage-repeat.v1.json
+178716ab97ee5046ab4701e1749f9c1e5b4772ea9d189daa1122dfe1e481c04d  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/verification-matrix.v1.json
+2b79818f816a29f4d8c011f7d1ff824d3b13f0c77da0c1e6af28908055f48268  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/maker-summary.v1.json
+37f818d971287cb757bfeea44e9fd40f268b60fb0c9149a0772c9adac57d6daa  .agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r4/maker-report.md
