@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "target": {
+    "commit": "a1a3bfeb6546d1f3f24192b1c9f057402b6249a2",
+    "parent": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+    "tree": "f723f22cd8c740b6efb52e169b0875ccc8274a9c",
+    "changed_paths": 32,
+    "changed_path_digest_sha256": "4921b53b82c00536f052436567aa198ddceced1e507aa2207c53c2d0c8ea5089"
+  },
+  "lineage": {
+    "direct_parent": true,
+    "prior_checker_is_ancestor": false,
+    "non_agent_paths": 0
+  },
+  "baseline": {
+    "verifier": "PASS",
+    "base_suite": { "tests": 24, "passed": 24, "failed": 0, "exit_code": 0 },
+    "r6_suite": { "tests": 12, "passed": 12, "failed": 0, "exit_code": 0 }
+  },
+  "prove_it": {
+    "schema": { "tests": 24, "passed": 9, "failed": 15, "exit_code": 1 },
+    "artifact": { "tests": 24, "passed": 15, "failed": 9, "exit_code": 1 },
+    "r6_status": { "tests": 12, "passed": 0, "failed": 12, "exit_code": 1 },
+    "post_restore_base": { "tests": 24, "passed": 24, "failed": 0, "exit_code": 0 },
+    "post_restore_r6": { "tests": 12, "passed": 12, "failed": 0, "exit_code": 0 },
+    "residue": false
+  },
+  "replays": [
+    {
+      "environment": "checker-worktree",
+      "host_representation": "crlf-equivalent",
+      "exit_code": 0,
+      "stderr_bytes": 0,
+      "tests": 24,
+      "passed": 24,
+      "failed": 0
+    },
+    {
+      "environment": "ordinary-clone",
+      "core_autocrlf": false,
+      "git_topology": "git-directory",
+      "base_suite": "24/24",
+      "replay": "24/24",
+      "exit_code": 0,
+      "stderr_bytes": 0,
+      "tracked_residue": false
+    },
+    {
+      "environment": "ordinary-clone",
+      "core_autocrlf": true,
+      "git_topology": "git-directory",
+      "base_suite": "24/24",
+      "replay": "24/24",
+      "exit_code": 0,
+      "stderr_bytes": 0,
+      "tracked_residue": false
+    }
+  ],
+  "metrics": {
+    "aggregate": [89.96, 75.86, 95.8],
+    "verifier": [80.08, 55.91, 81.82],
+    "test_harness": [99.72, 94.78, 100],
+    "normative": ["aggregate.line_percent"],
+    "non_normative_count": 8
+  },
+  "checksum_rebuild": {
+    "runs": 2,
+    "manifest_sha256": [
+      "14e119a072a9e4122f18f62d8a2259b7dfa817234e218ed1b0e5ccb89bc4532d",
+      "14e119a072a9e4122f18f62d8a2259b7dfa817234e218ed1b0e5ccb89bc4532d"
+    ],
+    "sums_sha256": [
+      "164dd625ebb5c6c60a60d1d4a416a5e90d1496dcf2bf3792eaafc9363bc97edf",
+      "164dd625ebb5c6c60a60d1d4a416a5e90d1496dcf2bf3792eaafc9363bc97edf"
+    ],
+    "tracked_residue": false
+  },
+  "adversarial": {
+    "total": 15,
+    "rejected": 15,
+    "structured_failures": 15,
+    "names": [
+      "capture.command.argv scalar",
+      "capture.representation null",
+      "capture stale source blob",
+      "process exit_code string coercion",
+      "process signal synthetic",
+      "parse_error synthetic object",
+      "stderr forged with refreshed artifact and envelope hashes",
+      "repeat.dimensions null",
+      "repeat numeric count string coercion",
+      "checksum self_exclusion null",
+      "checksum entries scalar object",
+      "checksum duplicate entry",
+      "checksum unknown entry key",
+      "coherent changed-path omission",
+      "coherent forged two-run metrics/transcripts/envelopes"
+    ],
+    "post_restore": "PASS",
+    "tracked_residue": false
+  },
+  "prefix_probes": {
+    "collision": "REJECT",
+    "backslash": "REJECT",
+    "case_change": "REJECT",
+    "raw_dot_segment": "ACCEPT_BY_HELPER",
+    "git_dot_segment_producer": "REJECT exit 128 Invalid path",
+    "reachable_authority_widening": false
+  },
+  "process_security": {
+    "shell_used": false,
+    "fixed_argv": true,
+    "bounded_temp_root": true,
+    "cleanup_on_success": true,
+    "cleanup_on_forced_error": true,
+    "forced_error_exit_code": 1,
+    "temp_residue_before": 0,
+    "temp_residue_after": 0
+  },
+  "static": {
+    "node_version": "v24.2.0",
+    "changed_cjs_checked": 10,
+    "changed_json_parsed": 11,
+    "diff_check": "PASS",
+    "gitleaks_version": "8.30.0",
+    "gitleaks_commits_scanned": 1,
+    "gitleaks_findings": 0
+  },
+  "hygiene": {
+    "matching_node_processes": 0,
+    "temporary_directories": 0,
+    "tracked_residue": false
+  }
+}

@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT-R6",
+  "role": "fresh-independent-checker",
+  "verdict": "ACCEPT",
+  "observed_at_utc": "2026-07-11T00:01:03.1426481Z",
+  "target_commit": "a1a3bfeb6546d1f3f24192b1c9f057402b6249a2",
+  "required_parent": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+  "target_tree": "f723f22cd8c740b6efb52e169b0875ccc8274a9c",
+  "prior_checker_commit": "3c2912d93c657a22db2e0fa54ad3b42532c8fd2f",
+  "prior_checker_is_ancestor": false,
+  "changed_path_count": 32,
+  "changed_path_digest_sha256": "4921b53b82c00536f052436567aa198ddceced1e507aa2207c53c2d0c8ea5089",
+  "non_agent_changed_path_count": 0,
+  "checksum_closure": {
+    "direct_changed_entries": 30,
+    "exact_self_exclusions": 2,
+    "load_bearing_unchanged_entries": 1,
+    "path_digest_sha256": "5560d68cff17499f55d71a9abfedaa4d1b10821c3b33faa294f1cad72cd7b4d4",
+    "missing": 0,
+    "extra": 0,
+    "duplicates": 0,
+    "order_failures": 0,
+    "deterministic_rebuild": true
+  },
+  "product": {
+    "changed": false,
+    "accepted_source_commit": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+    "accepted_source_blob_parity": "7/7",
+    "git_object_parity": "7/7",
+    "checkout_lf_parity": "7/7",
+    "artifact_parity": "5/5"
+  },
+  "mandatory_gates": {
+    "direct_verifier": "PASS",
+    "base_suite": "24/24 exit 0",
+    "r6_tamper_suite": "12/12 exit 0",
+    "prove_it_schema": "9/15 exit 1",
+    "prove_it_artifact": "15/9 exit 1",
+    "prove_it_r6_status": "0/12 exit 1",
+    "prove_it_post_restore": "24/24 and 12/12 PASS; zero residue",
+    "checker_worktree_replay": "24/24 exit 0 stderr 0",
+    "ordinary_lf_clone": "base 24/24; replay 24/24; stderr 0",
+    "ordinary_crlf_clone": "base 24/24; replay 24/24; stderr 0",
+    "adversarial_probes": "15/15 rejected; post-restore PASS",
+    "cleanup_on_error": "PASS",
+    "syntax": "PASS",
+    "json": "PASS",
+    "diff_check": "PASS",
+    "gitleaks": "PASS",
+    "hygiene": "PASS"
+  },
+  "coverage": {
+    "tests": 24,
+    "passed": 24,
+    "failed": 0,
+    "aggregate": {
+      "line_percent": 89.96,
+      "branch_percent": 75.86,
+      "functions_percent": 95.8
+    },
+    "verifier": {
+      "line_percent": 80.08,
+      "branch_percent": 55.91,
+      "functions_percent": 81.82
+    },
+    "test_harness": {
+      "line_percent": 99.72,
+      "branch_percent": 94.78,
+      "functions_percent": 100
+    },
+    "normative_floor": {
+      "dimension": "aggregate.line_percent",
+      "floor_percent": 80,
+      "observed_percent": 89.96,
+      "margin_percent": 9.96,
+      "status": "PASS"
+    },
+    "non_normative_dimensions": 8
+  },
+  "findings": [
+    {
+      "id": "ET-R6-OBS-001",
+      "severity": "MEDIUM",
+      "blocking": false,
+      "summary": "Final replay executes in cloneRoot but emits repoRoot in command.cwd; canonical_execution.cwd remains correct."
+    }
+  ],
+  "defense_in_depth": [
+    {
+      "severity": "INFO",
+      "summary": "Raw prefix helper accepts a textual dot-segment path, but Git rejects that path before it can enter the diff-tree input contract."
+    }
+  ],
+  "reusability": {
+    "candidate": false,
+    "classification": "deliberate independent verification duplication",
+    "reason": "Sharing producer/verifier canonicalization would increase common-mode failure risk."
+  },
+  "checker_commit": null,
+  "checker_commit_policy": "Emitted after commit to avoid self-reference.",
+  "report_path": ".agent/reviews/db-embedding-evidence-r6-fresh-checker/report.md"
+}
