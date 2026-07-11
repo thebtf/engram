@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "verdict": "PASS",
+  "input_path": "D:\\Dev\\engram\\.w\\t007-r1-checker\\.agent\\reviews\\t007-r1-fresh-checker\\evidence\\focused-repeat3\\repeat-03\\go-test.stdout.jsonl",
+  "fail_on_unexpected_skip": true,
+  "allowed_skip_identities": [],
+  "counts": {
+    "packages": 1,
+    "tests": 1,
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "no_tests": 0,
+    "zero_tests": 0,
+    "incomplete": 0,
+    "unexpected_skips": 0,
+    "malformed_lines": 0
+  },
+  "packages": [
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "outcome": "pass",
+      "elapsed_seconds": 4.758,
+      "last_output": "ok  \tgithub.com/thebtf/engram/internal/mcp\t4.746s\tcoverage: 0.1% of statements",
+      "tests_observed": 1
+    }
+  ],
+  "tests": [
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEC_F1_TagDerivedBackfill_T007",
+      "outcome": "pass",
+      "elapsed_seconds": 4.45,
+      "last_output": "--- PASS: TestEC_F1_TagDerivedBackfill_T007 (4.45s)",
+      "skip_allowed": false
+    }
+  ],
+  "unexpected_skips": [],
+  "errors": []
+}
