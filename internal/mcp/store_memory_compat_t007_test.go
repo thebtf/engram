@@ -80,6 +80,7 @@ func newMemoryServerForT007(t *testing.T, project string) t007TestEnv {
 // `scope:global` assertion — that row would default to 'project' incorrectly.
 func TestEC_F1_TagDerivedBackfill_T007(t *testing.T) {
 	project := "t007-ec-f1-" + uuid.NewString()
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 	env := newMemoryServerForT007(t, project)
 	db := env.store.DB
 
@@ -120,18 +121,20 @@ func TestEC_F1_TagDerivedBackfill_T007(t *testing.T) {
 
 	// Read back the three rows and assert privacy_scope per AC.
 	type row struct {
+		ID           int64
 		Content      string
 		PrivacyScope string
 		Tags         string
 	}
 	var rows []row
 	require.NoError(t, db.Raw(
-		`SELECT content, privacy_scope, tags::text AS tags
+		`SELECT id, content, privacy_scope, tags::text AS tags
 			FROM memories WHERE project = ? ORDER BY id`,
 		project,
 	).Scan(&rows).Error)
 	require.Len(t, rows, 3, "expected 3 fixture rows")
 
+	require.NotZero(t, rows[0].ID, "global-tagged fixture must have a durable database ID")
 	require.Equal(t, "global", rows[0].PrivacyScope, "row with scope:global tag -> privacy_scope='global'")
 	require.True(t, strings.Contains(rows[0].Tags, "scope:global"))
 
@@ -147,15 +150,19 @@ func TestEC_F1_TagDerivedBackfill_T007(t *testing.T) {
 	mems, err := env.srv.memoryStore.List(context.Background(), project, 10)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(mems), 3, "all 3 fixture rows must be returned by MemoryStore.List")
-	var foundGlobal bool
+	globalFixtureID := rows[0].ID
+	globalFixtureContent := rows[0].Content
+	var foundGlobalFixture bool
 	for _, m := range mems {
-		if m.PrivacyScope == "global" {
-			foundGlobal = true
+		if m.ID == globalFixtureID {
+			require.Equal(t, globalFixtureContent, m.Content,
+				"MemoryStore.List must return the exact global-tagged fixture content")
+			foundGlobalFixture = true
 			break
 		}
 	}
-	require.True(t, foundGlobal,
-		"global-scoped row must be returned by MemoryStore.List within its own project")
+	require.True(t, foundGlobalFixture,
+		"global-scoped fixture id=%d must be returned by MemoryStore.List within its own project", globalFixtureID)
 }
 
 // TestEC_F1_HandleRecallSearch_FlagOff_BackwardCompat_T007 verifies that the

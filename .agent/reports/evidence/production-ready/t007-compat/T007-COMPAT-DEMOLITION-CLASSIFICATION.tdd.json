@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "task_id": "T007-COMPAT-DEMOLITION-CLASSIFICATION",
+  "test_file": "internal/mcp/store_memory_compat_t007_test.go",
+  "test_name": "TestEC_F1_TagDerivedBackfill_T007",
+  "red": {
+    "observed_at": "2026-07-11T00:32:41.9518209Z",
+    "evidence": "T007-COMPAT-DEMOLITION-CLASSIFICATION.red.json",
+    "exit_code": 1,
+    "failed_tests": 1,
+    "skipped_tests": 0,
+    "database": "engram_prc_t007_test_red_a4f9c3.public",
+    "sessions_before_drop": 0,
+    "remaining_database_count": 0,
+    "failure_reason": "The old assertion required PrivacyScope on the flag-off model projection."
+  },
+  "green": {
+    "focused_repeat3": {
+      "evidence": "t007-maker-focused-repeat3/summary.json",
+      "verdict": "PASS",
+      "requested_repeats": 3,
+      "passed_repeats": 3,
+      "failed_repeats": 0,
+      "nonzero_child_commands": 0
+    },
+    "post_prove_it": {
+      "evidence": "t007-maker-post-prove-green/summary.json",
+      "verdict": "PASS",
+      "passed_repeats": 1,
+      "failed_repeats": 0
+    },
+    "race": {
+      "evidence": "t007-maker-focused-race/summary.json",
+      "verdict": "PASS",
+      "race": true,
+      "passed_repeats": 1,
+      "failed_repeats": 0
+    }
+  },
+  "refactor": {
+    "applied": false,
+    "reason": "The accepted correction is already the minimal test-contract change; production code is forbidden and no structural refactor is warranted."
+  },
+  "prove_it": {
+    "method": "Temporarily restore the old PrivacyScope-based assertion while retaining explicit flag-off execution",
+    "evidence": "t007-maker-prove-it-old-assertion/summary.json",
+    "failed_tests": 1,
+    "skipped_tests": 0,
+    "cleanup_verdict": "PASS",
+    "terminated_sessions": 0,
+    "remaining_database_count": 0,
+    "intended_file_sha256_before_mutation": "B223366204385AFC4D4F6A4899777C2D6530A5B6420D6869683B6CBF65F4EC21",
+    "restored_file_sha256": "B223366204385AFC4D4F6A4899777C2D6530A5B6420D6869683B6CBF65F4EC21",
+    "post_restore_green": true
+  }
+}
