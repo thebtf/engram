@@ -1,0 +1,34 @@
+{
+  "schema_version": 4,
+  "status": "READY_FOR_RECHECK",
+  "product_parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+  "product_candidate_sha": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
+  "evidence_revision_parent_sha": "331b5b195a967e7f27dca94038a3480c9afcc84f",
+  "branch": "work/prc-db-test-pool-hygiene-evidence-r4",
+  "worktree": "D:\\Dev\\engram\\.w\\dbph-r4",
+  "scope": "evidence-only",
+  "product_or_test_paths_changed_by_revision": [],
+  "whole_delta_base_sha": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
+  "whole_delta_changed_paths": 21,
+  "whole_delta_directly_manifest_bound_paths": 19,
+  "manifest_entries": 35,
+  "checksum_entries": 36,
+  "exact_json_schema": true,
+  "semantic_dynamic_proof_validation": true,
+  "alternate_index_adversarial_cases": 35,
+  "legacy_adversarial_cases_retained": 12,
+  "deterministic_fixed_point": "PASS",
+  "adversarial_proof_sha256": "f4113547697cf1c87c7d260d8f04c27d82149e34d78bb941c3da1a4ec663b1c8",
+  "verifier_proof_sha256": "839e1bcb76f4eddc118eeeee47c65385513f97a4b615d25654ad129bd935ce2f",
+  "inventory": {
+    "parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+    "call_sites": 83,
+    "files": 8
+  },
+  "cleanup": {
+    "database_residue": 0,
+    "activity_residue": 0,
+    "alternate_index_temp_roots": 0
+  },
+  "handoff_commit": "REPORTED_OUT_OF_BAND_TO_AVOID_SELF_REFERENCE"
+}

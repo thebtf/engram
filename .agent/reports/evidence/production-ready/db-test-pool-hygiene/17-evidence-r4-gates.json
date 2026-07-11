@@ -1,0 +1,96 @@
+{
+  "schema_version": 4,
+  "status": "PASS",
+  "source_mode": "GitIndex",
+  "revision": "INDEX",
+  "gates": [
+    {
+      "name": "strict_verifier",
+      "status": "PASS",
+      "changed_paths": 21,
+      "directly_bound_changed_paths": 19,
+      "manifest_entries": 35,
+      "checksum_entries": 36,
+      "inventory_call_sites": 83,
+      "inventory_files": 8
+    },
+    {
+      "name": "alternate_index_adversarial",
+      "status": "PASS",
+      "cases": 35,
+      "legacy_cases_retained": 12,
+      "all_cases_pass": true,
+      "temp_root_removed": true,
+      "proof_sha256": "f4113547697cf1c87c7d260d8f04c27d82149e34d78bb941c3da1a4ec663b1c8"
+    },
+    {
+      "name": "adversarial_determinism",
+      "status": "PASS",
+      "repeat_sha256": "f4113547697cf1c87c7d260d8f04c27d82149e34d78bb941c3da1a4ec663b1c8",
+      "byte_identical": true
+    },
+    {
+      "name": "builder_determinism",
+      "status": "PASS",
+      "iterations": 2,
+      "manifest_byte_identical": true,
+      "outer_checksum_byte_identical": true,
+      "seed_phase_status": "SEEDED_DYNAMIC_PROOFS",
+      "seed_phase_leaves_manifest_and_checksum_unchanged": true,
+      "self_hashes": "reported_out_of_band_to_avoid_self_reference"
+    },
+    {
+      "name": "verifier_proof",
+      "status": "PASS",
+      "proof_sha256": "839e1bcb76f4eddc118eeeee47c65385513f97a4b615d25654ad129bd935ce2f",
+      "failures": []
+    },
+    {
+      "name": "product_test_blob",
+      "status": "PASS",
+      "git_blob_oid": "7337f1bd8da4fb315de842eea2e3cce5476250a3",
+      "sha256": "62260c1a2e0705b065295322dd23fcf9b17fd47cb5ebc64134630788e2d23e09",
+      "byte_identical_to_product_candidate": true
+    },
+    {
+      "name": "go_vet_all",
+      "status": "PASS",
+      "exit_code": 0
+    },
+    {
+      "name": "go_build_all",
+      "status": "PASS",
+      "exit_code": 0
+    },
+    {
+      "name": "focused_database_regression",
+      "status": "PASS",
+      "command": "go test -p=1 ./internal/db/gorm -run ^TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose$ -count=3",
+      "database": "engram_mkr_dbph_r4_f49932f29f5f",
+      "exit_code": 0,
+      "database_residue": 0,
+      "activity_residue": 0
+    },
+    {
+      "name": "powershell_parse",
+      "status": "PASS",
+      "scripts": 5
+    },
+    {
+      "name": "gitleaks_staged",
+      "status": "PASS",
+      "version": "8.30.0",
+      "leaks": 0
+    },
+    {
+      "name": "scope_and_diff",
+      "status": "PASS",
+      "product_or_test_paths_changed": [],
+      "git_diff_check_exit": 0
+    }
+  ],
+  "cleanup": "PASS",
+  "database_residue": 0,
+  "activity_residue": 0,
+  "alternate_index_temp_roots": 0
+}

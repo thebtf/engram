@@ -1,0 +1,14 @@
+head_sha=276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9
+worktree=D:\Dev\engram\.agent\worktrees\dbph-evidence-r2-runtime
+database=engram_chk_dbph_evr2_focus_a
+command=go test -p=1 ./internal/db/gorm -run ^TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose$ -count=3
+max_connections=100
+superuser_reserved_connections=3
+started_utc=2026-07-10T13:56:26.7004264Z
+activity_before_test=0
+ok  	github.com/thebtf/engram/internal/db/gorm	5.014s
+test_exit=0
+activity_after_test_process=0
+database_residue=0
+activity_residue=0
+finished_utc=2026-07-10T13:56:38.3299151Z

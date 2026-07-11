@@ -1,96 +1,257 @@
 {
-  "generated_utc": "2026-07-10T13:06:01.5072722Z",
-  "parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
-  "branch": "work/prc-db-test-pool-hygiene",
-  "status": "READY_FOR_CHECK",
+  "schema_version": 4,
+  "status": "READY_FOR_RECHECK_EVIDENCE_R4",
+  "product_parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+  "product_candidate_sha": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
+  "evidence_revision_parent_sha": "331b5b195a967e7f27dca94038a3480c9afcc84f",
+  "evidence_revision_target": "GitIndex",
+  "evidence_delta": {
+    "comparison": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9..GitIndex",
+    "changed_path_count": 21,
+    "directly_manifest_bound_count": 19,
+    "product_or_test_paths_changed": [],
+    "manifest_entry_self_excluded_paths": [
+      ".agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json",
+      ".agent/reports/evidence/production-ready/db-test-pool-hygiene/SHA256SUMS.txt"
+    ],
+    "checksum_self_excluded_paths": [
+      ".agent/reports/evidence/production-ready/db-test-pool-hygiene/SHA256SUMS.txt"
+    ]
+  },
+  "representation_contract": {
+    "id": "git-blob-bytes-v1",
+    "digest": "SHA-256",
+    "object_type": "blob",
+    "path_binding": "each path at the verified Git index/revision resolves to git_blob_oid",
+    "contract_bytes": "git cat-file blob <git_blob_oid> exact stdout bytes",
+    "working_tree_bytes": "excluded; raw CRLF checkout bytes fail verification",
+    "text_git_blob_line_endings": "LF",
+    "manifest_self_reference": "excluded-from-manifest-entries-bound-by-outer-checksum",
+    "outer_checksum_path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/SHA256SUMS.txt",
+    "outer_checksum_generation_order": "manifest-first-checksum-second",
+    "outer_checksum_self_reference": "excluded"
+  },
+  "product_test_blob": {
+    "path": "internal/db/gorm/candidate_store_test.go",
+    "git_blob_oid": "7337f1bd8da4fb315de842eea2e3cce5476250a3",
+    "sha256": "62260c1a2e0705b065295322dd23fcf9b17fd47cb5ebc64134630788e2d23e09",
+    "byte_identical_to_product_candidate": true
+  },
+  "inventory": {
+    "parent_sha": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+    "required_call_sites": 83,
+    "required_files": 8,
+    "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json"
+  },
+  "entry_count": 35,
   "entries": [
     {
+      "path": ".agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md",
+      "git_blob_oid": "88960a7d51986a1c0de49ac4b8d4e447f0866bac",
+      "bytes": 5303,
+      "sha256": "86a843700a146ad46dfcb6e8c7cb9b8433312dcd755383761e2313d3b13c72dc"
+    },
+    {
       "path": ".agent/reports/2026-07-10-db-test-pool-hygiene-maker.md",
-      "bytes": 5908,
-      "sha256": "937c4b815e8a96d72ca514a1e0fd36bbc46f6e2c20be360604b9c5acdb92cab6"
+      "git_blob_oid": "d951bf50086e78699edbcc59be2a7126461e9f80",
+      "bytes": 7008,
+      "sha256": "51c95f8471312f6fd81e1ba2d58f206d7bb368032079c47b55bd0e7147cd8001"
+    },
+    {
+      "path": ".agent/reports/2026-07-11-db-test-pool-hygiene-evidence-revision3-maker.md",
+      "git_blob_oid": "d860880d0466e77c152bda3946352bd0387a3e59",
+      "bytes": 3008,
+      "sha256": "7fcc3759c36bc91b7fd0e04dc3d9309df3b8b8c56585ed562e73bb362002ba34"
+    },
+    {
+      "path": ".agent/reports/2026-07-11-db-test-pool-hygiene-evidence-revision4-maker.md",
+      "git_blob_oid": "d3da8921af57ddcfdc3fdf1d1081f6128b0e4094",
+      "bytes": 3900,
+      "sha256": "583a8d9b46142ea99a8a1cc701807d157b1767c0f265eaa9684cbf02bb5355da"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/01-parent-broad.summary.log",
+      "git_blob_oid": "95738976368ef9ca6efc765fc93107d7ea1085e8",
       "bytes": 3598,
       "sha256": "d1aa9c7a603a140be74bccc1170e78bfa2007f8aca0e48473c5b5a749a97c435"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/02-parent-red.log",
+      "git_blob_oid": "75147bf5cf8eb415b060777125753122910bc063",
       "bytes": 6718,
       "sha256": "765e7e93a5b9a2384d0417199cdd66dc816f97e178219473d18b7b0a93cd31a7"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/03-green-focused.log",
+      "git_blob_oid": "af10330dc3ce95ca785f9fc686a7266bc36ea80c",
       "bytes": 6358,
       "sha256": "9fbe284df01cece683d0dc6938b370dabbea030af3e39047f382e9e3c3cd4d9b"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/04-prove-it.log",
+      "git_blob_oid": "476eb561d1700cf5e41f82a6e15f266de03e585e",
       "bytes": 6716,
       "sha256": "b9acc25599272b3942beaaaabd5a042c86128765e3d8b1b9ad142b6b0d1fc20f"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/05-post-prove-green.log",
+      "git_blob_oid": "fc72ec588c82340927d61aa81b83e1685eddd520",
       "bytes": 561,
       "sha256": "053f89d836427c51e34214ea20d708f6cca16b5078034f08263a9af2caec0f9c"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/06-repeat20.log",
+      "git_blob_oid": "e7c7bbaf80c6f85101883f4087a74ccb7fb0997c",
       "bytes": 559,
       "sha256": "27f91058ef2f24c18445f0757373e27040f0004154ef93ad4017b612c830eca9"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/07-race.log",
+      "git_blob_oid": "b985980b1e82e4db302090b650ac2c5d30004b99",
       "bytes": 561,
       "sha256": "3d1b59a1852b5cb6709b3a2997c34f6b0d940dfd0bec18984776363b0a027a5f"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/08-successor-broad.summary.log",
+      "git_blob_oid": "3de11652d1d4bd86d3229f5f6282a4a001276bff",
       "bytes": 1196,
       "sha256": "69486af589b72b841163a134b26ae21396156be6b737f9750ffc1c17c1151db2"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/09-candidate-repeat5.log",
+      "git_blob_oid": "c97977d6093c39ebd4c817f150883bd49cfb7ee1",
       "bytes": 546,
       "sha256": "432f97671e9a9b0c3a37f25a54cc9ea8b623e4904f69c846c0fffa70c3557e49"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/10-candidate-race.log",
+      "git_blob_oid": "164fd019b9d72797b621fbe5bbb93d0679fd33af",
       "bytes": 549,
       "sha256": "57a31b83602ce023094fd05bdbcea11dee6cc4c5cca0b21df25b70010bfd224b"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/11-parent-successor-comparison.txt",
+      "git_blob_oid": "736ee7c69b7cfd77cc2ca8fe36a879f6ae645eeb",
       "bytes": 1489,
       "sha256": "1137da3adb9e75c178072ae942fadd1c23c56721388e202c942d56901ea17db1"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/12-static-gates.txt",
+      "git_blob_oid": "184376c2504810ff20f4a0728ce0044cffc0089a",
       "bytes": 249,
       "sha256": "94ca19b3d51903449acefc41241e8c397198453f4c6674bed1a2dc61ea49b5f4"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/13-final-residue.log",
+      "git_blob_oid": "8e13b980d7323c64a2a51b54f218a601f468a7be",
       "bytes": 387,
       "sha256": "31b07bacde4ad835c55a4aa85e09f01edd2dfeb0887011547b4b17d4f686b40e"
     },
     {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/14-evidence-r2-focused.log",
+      "git_blob_oid": "5aa37f3b16a497ae035fe1f885790f72cd274f50",
+      "bytes": 570,
+      "sha256": "4c544c5ea7e5e0f7d6518f3af222054589bd258e6aa373c833789ec2532f7a2d"
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/15-evidence-r2-static.txt",
+      "git_blob_oid": "bad863bb9df549f69dd5df0910232b45df588611",
+      "bytes": 473,
+      "sha256": "6b74e1f64b909f8ffe0042fbc7d2dc6d8310752f2c7398352a395d6d6362b677"
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/16-evidence-r4-red.json",
+      "git_blob_oid": "707ff9ceb7c7d24acf3265f60b2797f619721ed7",
+      "bytes": 1657,
+      "sha256": "c2dd430033d42ca2c65f4b67428358abfaf337f53892daeadae660c4752ab1b3"
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/17-evidence-r4-gates.json",
+      "git_blob_oid": "f1e22f5ce5b31477b206343faa7c493ca04b1245",
+      "bytes": 2656,
+      "sha256": "8c48dca9178c5c2628bc17616f93d1f2de256ffd87855750e8bc5886939071fd"
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/Build-DBPoolHygieneEvidence.ps1",
+      "git_blob_oid": "10984e03ef984e497291b471388ca86443560a60",
+      "bytes": 10148,
+      "sha256": "e8d93a96bb8e98bbb81bfccc6a4172b77edc8a8b8f42ba472032499064cce52f"
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r2.json",
+      "git_blob_oid": "73438a1ea8917c62666d779a356e09eaa7768a85",
+      "bytes": 2711,
+      "sha256": "c4fdaad603d5c03954cd1026afc9a9c01c0e0963c367390247a795b5382584e1"
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r3.json",
+      "git_blob_oid": "15fa98aae65c4e32b423a8785465b32f0921c900",
+      "bytes": 2438,
+      "sha256": "69439533993845249230a227189e1a7ffc63d4f0819218da2d0ecceb782c3c6c"
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r4.json",
+      "git_blob_oid": "815157312854f438d67bb4b9a9ec55884db489d9",
+      "bytes": 1357,
+      "sha256": "5435562e8c914452aacf1b42fbdd46a296931ad61fd7734b3685c0f57622b9cf"
+    },
+    {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.final.json",
-      "bytes": 1253,
-      "sha256": "1c0d9251885329624a470bb2872feabe4f1c5e09c8434d8784561da92a13a645"
+      "git_blob_oid": "4d30b24f723bf0a1f9dc1bbee5a6ae561c003d52",
+      "bytes": 2368,
+      "sha256": "84cc07d88d06e33c0b4136465bc5930bdd5dcc6d17878d1ae24f2e2d39fa7d4b"
     },
     {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.red.json",
+      "git_blob_oid": "145b3e367a1509f4a663d57e94eea29081afa533",
       "bytes": 842,
       "sha256": "98398e3e46628fd0f3f08ca54b1baa1b96f70554ac7316712a4e1906d96e0cb0"
     },
     {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DBPoolHygieneEvidenceContract.ps1",
+      "git_blob_oid": "584375adf635076b2ae50410e05512a719763419",
+      "bytes": 9322,
+      "sha256": "1ae5fad5582af4f4a4193753dc5c530c3e622fade5dfa4d4d9afd49fa2cf55f7"
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json",
+      "git_blob_oid": "6c63468628a1501bc5188ae1067448b9e89a9d73",
+      "bytes": 1742,
+      "sha256": "64a1b454068b5480af0aa512d5157222a4760798f4e9689aa9887643939ccb10"
+    },
+    {
       "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/Invoke-DBPoolHygieneGo.ps1",
+      "git_blob_oid": "9f3d063e9e60307818f45ef6e4f0939a8a286315",
       "bytes": 4848,
       "sha256": "fb886ee1749c7b2d45adf9bd43ac2a1434cab24c9ce35bb548f1751bd9e71861"
     },
     {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/Test-DBPoolHygieneEvidenceAdversarial.ps1",
+      "git_blob_oid": "ce9084627e1dda7d7ffa838b22c271eb869ea5bc",
+      "bytes": 29273,
+      "sha256": "7165a1a38565292270f34fd3a2c07b815ae3e3fc504d30fc0eda48a735b24162"
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/Verify-DBPoolHygieneEvidence.ps1",
+      "git_blob_oid": "c436cebb13ccf7cea619ce3cbe835c4d9d70e9f4",
+      "bytes": 46077,
+      "sha256": "bc605cf7c2f6066cbc0c5fc890707def0159f519adbc853afaf59d6d2ba7a247"
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/adversarial-proof.json",
+      "git_blob_oid": "c1c09b6dfe84edae9616066af8fbd536d930b869",
+      "bytes": 29410,
+      "sha256": "f4113547697cf1c87c7d260d8f04c27d82149e34d78bb941c3da1a4ec663b1c8"
+    },
+    {
+      "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/verifier-proof.json",
+      "git_blob_oid": "2659915a3f44ff789bc2e6e7747bcf9ec5fd87fb",
+      "bytes": 404,
+      "sha256": "839e1bcb76f4eddc118eeeee47c65385513f97a4b615d25654ad129bd935ce2f"
+    },
+    {
       "path": "internal/db/gorm/candidate_store_test.go",
+      "git_blob_oid": "7337f1bd8da4fb315de842eea2e3cce5476250a3",
       "bytes": 47016,
       "sha256": "62260c1a2e0705b065295322dd23fcf9b17fd47cb5ebc64134630788e2d23e09"
     }

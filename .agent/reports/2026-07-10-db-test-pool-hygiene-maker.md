@@ -1,6 +1,6 @@
 # DB-TEST-POOL-HYGIENE maker report
 
-Status: **READY_FOR_CHECK**
+Status: **READY_FOR_RECHECK — EVIDENCE REVISION 2**
 
 This is a maker handoff, not a PASS/acceptance verdict. A fresh checker must
 review the successor before integration.
@@ -8,9 +8,12 @@ review the successor before integration.
 ## Boundary
 
 - Exact parent: `bd68c05baf4b7250096dd84f56bebea2aa555970`
-- Branch: `work/prc-db-test-pool-hygiene`
-- Worktree: `D:\Dev\engram\.agent\worktrees\dbph`
+- Product/evidence candidate: `276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9`
+- Evidence revision branch: `work/prc-db-test-pool-hygiene-evidence-r2`
+- Evidence revision worktree: `D:\Dev\engram\.agent\worktrees\dbph-evidence-r2`
 - Product scope: none; only `internal/db/gorm/candidate_store_test.go` changed.
+- Revision-2 scope: evidence/report/verifier bytes only. The product/test file is
+  byte-identical to the candidate (`62260c1a...`).
 - Forbidden canonical register/Markdown/HTML, integration, tag, remote, and
   unrelated product paths were not changed.
 - Exact handoff SHA is supplied by the maker handoff after the single commit;
@@ -20,7 +23,7 @@ review the successor before integration.
 
 `openCandidateTestDB` created a GORM/`database/sql` PostgreSQL pool but never
 closed it. It is a package-wide test owner, not a two-test local helper: exact
-current-source reference counting found 76 pre-existing call sites across six
+exact-parent mechanical inventory found 83 pre-existing call sites across eight
 `*_test.go` files. Sequential top-level tests therefore retained idle pools for
 the lifetime of one `go test` process and exhausted PostgreSQL's
 `max_connections=100` budget.
@@ -112,8 +115,19 @@ FAIL/WARN, not green or allowlisted.
    metadata/failure/package-result summaries for the tracked packet. The
    summaries retain every top-level failure, every client-exhaustion record,
    command/limit metadata, exit code, and residue result.
+7. Independent checking found that the first packet omitted seven exact-parent
+   call sites in the two temporal-truth test files, advertised 76/6 instead of
+   83/8, and wrote a stale outer checksum for the final manifest. Revision 2
+   closes those audit defects without changing product/test implementation.
+8. Revision 2 uses the machine-explicit `git-blob-bytes-v1` representation.
+   `MANIFEST.json` excludes itself and the outer sums file; the outer sums file
+   is generated only after the final manifest and includes the manifest. This
+   avoids a self-hash paradox. The permanent verifier rejects CRLF/raw-file
+   substitution, stale manifest entries, and false 76/6 inventory.
 
 ## Finish state
 
-`review-needed`: one clean successor commit is handed to a fresh checker. No
+`review-needed`: one clean evidence-only successor commit is handed to a fresh
+checker. The exact revision commit is reported after commit creation because a
+commit cannot embed its own hash. No
 integration, release, tag, push, or self-acceptance action was taken.
