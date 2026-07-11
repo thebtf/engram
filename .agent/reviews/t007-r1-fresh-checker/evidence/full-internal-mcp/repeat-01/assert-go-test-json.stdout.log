@@ -1,0 +1,2 @@
+go test JSON verdict=FAIL packages=1 tests=488 passed=487 failed=1 skipped=0 unexpected_skips=0 malformed=0
+summary=D:\Dev\engram\.w\t007-r1-checker\.agent\reviews\t007-r1-fresh-checker\evidence\full-internal-mcp\repeat-01\go-test-summary.json
