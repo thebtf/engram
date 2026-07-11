@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-11",
+  "gate": "ValidatePayload immutable commit identity",
+  "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_immutable_commit_identity",
+  "observed_failure": "Read-AndValidatePayload rejected the canonical sha-<40 lowercase hex> identity that BuildAndScan emits for audited commit builds.",
+  "failure": "Release payload validation requires canonical SemVer.",
+  "remediation": "ValidatePayload and LoadPayload accept either canonical identity already admitted by Assert-CanonicalVersion; PlanPublication and Publish remain SemVer-only.",
+  "result": "RED_REPRODUCED_BEFORE_FIX"
+}

@@ -1,151 +1,114 @@
-# Production Testing Playbook — engram
+# Production Testing Playbook — Engram Images
 
-**Purpose:** Customer-mode walkthrough of the engram product. Run before every
-release. The agent (or human reviewer) walks through the scenarios pretending
-to be a user with no internal knowledge — the public docs and this playbook
-are the only allowed inputs.
-
-**Bootstrap version:** v6.29.0 — refreshed for the split runtime stack
-(`server` + `operator-web`). Future releases extend the scenario list.
-
-## Scope
-
-The playbook covers the following surfaces:
-
-| # | Surface | Binary / Component |
-|---|---------|--------------------|
-| 1 | Server | `cmd/engram-server` — HTTP API + gRPC authority on :37777 |
-| 2 | CLI client | `cmd/engram` — stdio MCP proxy invoked by Claude Code |
-| 3 | Operator Web | `apps/operator-web` — Nuxt control plane on :3000 proxying `/api/*` to the server |
-| 4 | Claude Code plugin | `plugin/engram` — installed via `/plugin marketplace add thebtf/engram-marketplace` |
-
-Out of scope for this bootstrap: `cmd/engram-import`, full Unraid deployment
-flow (covered separately by `docs/DEPLOYMENT.md`), backup/restore, and full
-legacy-dashboard removal. If a scenario still requires the legacy dashboard,
-record that as a cutover gap rather than silently treating it as canonical.
+Run this playbook before image publication. It validates the same three-image
+contract customers deploy: `postgres`, `server`, and `operator-console`.
+This is the image acceptance lane, not a substitute for the repository-wide
+critical suite or customer-mode release emulation.
 
 ## Prerequisites
 
-- Go 1.25+ (`go version`)
-- Docker (for postgres dependency in scenario S2)
-- Node 22+ (for building `apps/operator-web` in scenario S1)
-- A running engram runtime stack for scenarios S2/S3/S4:
-  - server at `http://<host>:37777`
-  - operator web at `http://<host>:3000`
-- Claude Code CLI installed (for scenario S4)
+- Docker Engine and Compose v2
+- Docker Scout
+- Go 1.25.12+
+- Node.js 22+
+- PowerShell 7+
 
-## Canonical scenarios
+All disposable resources must use a unique prefix. A passing run ends with zero
+matching containers, volumes, and networks.
 
-### S1 — Build the current runtime artifacts from source
+## S1 — Build and scan the exact candidates
 
-**As a user, I clone the repo and build the current server, client, and operator UI artifacts.**
+Run:
 
-Steps:
-1. From repo root run `go build -o /tmp/engram-server ./cmd/engram-server`
-2. From repo root run `go build -o /tmp/engram ./cmd/engram`
-3. From `apps/operator-web/` run `npm ci` and `npm run build`
-4. Stronger runtime proof: run `pwsh -NoProfile -File scripts/smoke-operator-web.ps1`
-5. Run the built binaries with `--help` (or no args) and observe usage output
-
-Expected:
-- Both `go build` invocations exit 0 with no compiler errors
-- `apps/operator-web` production build exits 0
-- If the smoke script is run, it exits 0 and proves operator-web login +
-  proxied issue mutations through the runtime stack
-- Both binaries print usage / startup banner without crashing
-
-Failure signals:
-- `undefined: <symbol>` errors — auth refactor incomplete
-- `package not found` — module path drift
-- `apps/operator-web` build fails — operator-facing UI is not release-ready
-- `scripts/smoke-operator-web.ps1` fails — the split runtime stack is not
-  release-ready even if isolated builds pass
-- Binary panics on `--help`
-
-### S2 — Server starts cleanly with required env vars
-
-**As an operator, I start the server with the current admin-token env var.**
-
-Steps:
-1. Set `ENGRAM_AUTH_ADMIN_TOKEN=test-operator-key`
-2. Set `DATABASE_DSN=...` (the canonical name read by `internal/config/config.go`;
-   the production-candidate path requires PostgreSQL)
-3. Run `engram-server.exe`
-4. Observe startup logs
+```powershell
+pwsh ./scripts/production-gates/build-and-scan-images.ps1 `
+  -Mode BuildAndScan `
+  -ServerTag engram:prc-server `
+  -OperatorTag engram:prc-operator-console `
+  -PostgresTag engram:prc-postgres `
+  -Platform linux/amd64 `
+  -ArtifactRoot .agent/reports/evidence/production-ready/image-remediation-r2 `
+  -Version sha-<full-40-hex-candidate-commit> `
+  -NoAllowlist
+```
 
 Expected:
-- Server listens on `:37777` (or the configured worker port)
-- No `panic`, no `FATAL` lines
-- HTTP `GET /health` returns 200
 
-Failure signals:
-- Server exits during startup citing missing env var -> FR-4 violated
-- Server exits because `DATABASE_DSN` is omitted -> the release smoke is not
-  configured for the current PostgreSQL-backed runtime path
-- Logs or docs still steer workstations toward the server-host-only
-  `ENGRAM_AUTH_ADMIN_TOKEN` instead of `ENGRAM_TOKEN`
-- gRPC bind fails
+- every build uses `--pull --no-cache`;
+- the Docker build context is produced by `git archive HEAD`, contains tracked
+  files only, and contains no `.git` metadata or checkout credentials;
+- the manifest records the Dockerfile hashes, pinned bases, package versions,
+  exact image IDs, and SARIF hashes;
+- each accepted image records OCI source, full revision, and version labels;
+- every exact-ID scan has zero HIGH and zero CRITICAL findings;
+- no scanner allowlist, ignore, suppression, or exception input exists;
+- the operator lock audit has no HIGH/CRITICAL or picomatch/sigstore finding.
 
-### S3 — Operator web loads, authenticates, and reaches the MVP surfaces
+## S2 — Positive three-image runtime
 
-**As an operator, I open the new control plane, complete first-run setup if needed, log in, and verify the real MVP surfaces.**
+The gate and permanent critical tests must prove:
 
-Steps:
-1. With the runtime stack running, open `http://localhost:3000/login`
-2. If this is a fresh database, call the first-run setup flow and create the
-   first admin account through the operator web app
-3. Log in with that admin account; setup does not create an authenticated
-   browser session by itself
-4. Navigate through the MVP operator surfaces:
-   - `/projects`
-   - `/rules`
-   - `/issues`
-   - `/vault`
-   - `/system`
-   - `/settings`
-   - `/memories`
-5. If the release also claims full UI cutover for workstation onboarding,
-   verify where keycard issuance lives. If that still requires the legacy
-   dashboard, record it as a cutover gap instead of silently accepting it.
+1. PostgreSQL becomes healthy as UID/GID 70 on a read-only root filesystem.
+2. The server becomes healthy as UID/GID 65532 with a persistent writable
+   `/var/lib/engram` volume and read-only root filesystem everywhere else.
+3. The operator console becomes healthy as UID/GID 65532 and proxies to the
+   exact `NUXT_OPERATOR_API_TARGET=http://server:37777` backend.
+4. The PostgreSQL and server volume roots retain their required owner and mode:
+   `70:70:700` and `65532:65532:700` respectively.
+5. The server-created `.engram/settings.json` remains `65532:65532:600` and
+   byte-identical across container restart.
+6. Server `/health` is reachable as liveness.
+7. Direct and proxied `/api/ready` both return exact `{"status":"ready"}`.
+8. The operator root references generated Nuxt assets and at least one asset is
+   retrievable.
+9. Server and operator recover after restart.
+
+Root HTTP 200 alone is never acceptance.
+
+## S3 — PostgreSQL version, migration, and durability
 
 Expected:
-- Login/setup shell loads at `:3000`
-- Authenticated operator routes render without severe console errors
-- Proxied API calls succeed from the operator web app
-- MVP mutation surfaces remain honest about what is backed today
-- Unauthenticated `GET /api/auth/me` 401 responses before login are expected
 
-Failure signals:
-- 404 on `/login` or a named MVP route
-- Post-login operator routes fall back to the legacy dashboard to complete a
-  claimed MVP flow
-- Browser must use `:37777` dashboard pages for ordinary operator work while
-  docs claim `:3000` is canonical
-- Proxied rules/issues/vault flows fail after successful login
+- `SHOW server_version` is exactly `17.10`;
+- `CREATE EXTENSION vector` succeeds and its version is exactly `0.8.1`;
+- server startup creates the application schema;
+- a vector-bearing marker survives removal of the first PostgreSQL container
+  and creation of a second container on the same named volume;
+- an existing UID `999:999` volume fails closed before the documented bounded
+  ownership migration, then starts as UID `70:70` without losing the marker;
+- `pg_dump` plus restore into a fresh database preserves the marker;
+- a tmpfs-only PGDATA fixture demonstrably loses the marker and is rejected as
+  a deployment pattern;
+- `LANG=en_US.UTF-8` never reaches ready, while the image contract remains
+  `LANG=C.UTF-8` and `LC_ALL=C.UTF-8`.
 
-### S4 — Plugin installs in Claude Code and exposes MCP tools
+## S4 — Server fail-closed matrix
 
-**As a Claude Code user, I install the engram plugin and use it.**
+Each fixture must remain non-healthy:
 
-Real Claude Code plugin installation mutates the operator's consumer home. In
-automated release emulation, prefer an isolated disposable home with the plugin
-wrapper pointed at the release-candidate `cmd/engram` binary. Run the real
-consumer-home path only when the operator explicitly authorizes that mutation.
+- missing persistent HOME volume under a read-only root filesystem;
+- empty HOME override;
+- root-owned mode-0500 HOME volume;
+- injected database initialization failure.
 
-Steps:
-1. Start the runtime stack with PostgreSQL and create a workstation keycard
-   through the currently supported operator flow. If keycard issuance still
-   depends on the legacy dashboard, record that explicitly as a cutover gap.
-2. In an isolated disposable consumer home, install or symlink the release
-   plugin wrapper
-3. Configure plugin/user settings:
-   - `server_url=http://unleashed.lan:37777` (or local)
-   - `api_token=<keycard issued via S3>`
-4. Start the MCP client/proxy through the same wrapper path a consumer uses
-5. Verify `tools/list` and run at least one harmless health/read tool
-6. If explicitly authorized for a real Claude Code smoke, install via
-   `/plugin marketplace add thebtf/engram-marketplace`, restart Claude Code,
-   and ask "what engram tools do I have?"
+For initialization failure, `/health` may intentionally remain HTTP 200 with
+`status:error`; Docker health must still fail because it uses `/api/ready`.
+
+## S5 — Operator backend fail-closed matrix
+
+Each fixture must remain non-healthy:
+
+- a stale legacy target variable is set but the canonical target is wrong;
+- canonical target is missing/empty;
+- backend is unreachable;
+- backend times out;
+- `/api/ready` returns malformed JSON;
+- `/api/ready` returns HTTP 200 with `{"status":"error"}`;
+- backend root returns HTTP 200/ready but `/api/ready` is absent.
+
+This matrix proves that a rendered root page cannot mask a broken API target.
+
+## S6 — Compose and immutable publication identity
 
 Expected:
 - Isolated plugin smoke starts without errors
@@ -153,32 +116,66 @@ Expected:
   e.g., `mcp__engram__store`, `mcp__engram__issues`,
   `mcp__engram__vault`, etc.
 - The token field maps to the `ENGRAM_TOKEN` env var (FR-3)
+Validate both compose files with explicit `ENGRAM_SERVER_IMAGE`,
+`ENGRAM_OPERATOR_IMAGE`, and `ENGRAM_POSTGRES_IMAGE` values from one release
+manifest. Parsing must fail when any of the three is missing. Production has no
+`:main`, `latest`, branch, major, or minor default.
 
-Failure signals (the bug this release fixes):
-- Only `loom_*` tools visible → plugin auth wiring broken
-- `engram MCP server failed to initialize` in logs
-- Daemon exits with `ENGRAM_TOKEN required` despite token being configured
+The release workflow must prove:
 
-## Failure-mode catalog
+- main and manual dispatch are verification-only and have no package-write,
+  registry-login, or push path;
+- publication runs only for a strict canonical `vMAJOR.MINOR.PATCH` tag with an
+  optional valid prerelease and never from manual dispatch;
+- the tag peels to the workflow commit and exactly one active no-bypass tag
+  ruleset protects `refs/tags/v*` from deletion and non-fast-forward updates;
+- protected `main` has exactly one active strict ruleset requiring
+  `authority-guard` from `integration_id: 15368`, plus exactly one recovery
+  bypass (`User` ID `7106373`, `pull_request` mode); same-name spoof checks,
+  missing integration IDs, and zero/duplicate/wrong bypass actors fail;
+- raw Git/ref/context values never enter inline shell source;
+- all actions are pinned to full commit SHAs and every checkout has
+  `persist-credentials: false`;
+- candidate build/test/runtime and package publication occur on different fresh
+  runners. The prepare job is `contents: read` only; only the publisher has
+  `actions: read` plus `packages: write`, and it never checks out or executes
+  candidate code, tests, workflow files, scripts, actions, or containers;
+- prepare uploads exactly one immutable, uniquely named five-file payload for
+  the current publisher workflow run and exports its artifact ID and SHA-256
+  digest. Publish REST-censuses the current run before download and rejects a
+  missing, extra, duplicate, expired, wrong-run, wrong-ID, or wrong-digest
+  artifact; download is by artifact ID only;
+- trusted code rejects payload directories, extra files, symlink/reparse
+  entries, path traversal, archive checksum/size drift, manifest drift, and any
+  image identity not bound to the revalidated release commit and version;
+- all six destinations (full version plus `sha-<full commit>` for each image)
+  are absent or already bound to the exact scanned config digest before the
+  first push; one mismatch fails the run without a write;
+- after any writes, all six destinations are read back and recorded with their
+  manifest digests;
+- the Docker registry credential lives in a unique `RUNNER_TEMP` directory,
+  is logged out and erased before the exact trusted evidence envelope is
+  validated and uploaded. No post-login path is under the candidate checkout.
 
-| Signal | Likely cause | Where to look |
-|---|---|---|
-| Only `loom_*` tools in Claude Code | Plugin env var name mismatch | `plugin/engram/.mcp.json` `env` block |
-| Server starts but `/api/auth/tokens` 500 | Validator wiring drift | `internal/grpcserver/server.go` SetValidator |
-| gRPC accepts master, rejects keycard | FR-2 regression (PR #203 class) | This is exactly what `tests/critical/auth_two_tier_test.go` catches |
-| Operator web `/login` or MVP pages 404 | `operator-web` image/build or route wiring broken | `apps/operator-web`, `docker-compose.yml`, `deploy/docker-compose.runtime.yml` |
-| Plugin smoke still requires the legacy dashboard for keycard issuance | UI cutover incomplete | `docs/DEPLOYMENT.md`, operator-web route inventory, legacy dashboard compatibility path |
-| Daemon exits silently on first launch | `ENGRAM_URL` set, `ENGRAM_TOKEN` empty (FR-4 startup gate) | check exit code, stderr |
+GitHub Container Registry is not claimed to provide atomic tag compare-and-swap.
+The remaining package-admin/PAT mutation path is an explicit external
+operational trust boundary.
 
-## Verdict template
+## Evidence and verdict
 
-After running each scenario, the agent fills in the per-scenario row and
-overall verdict per `references/customer-mode-protocol.md`. Verdict report
-is written to `.agent/reports/emulation-playbook-run-<date>.md`.
+Required evidence root:
 
-## Maintenance
+```text
+.agent/reports/evidence/production-ready/image-remediation-r2/
+```
 
-- Add a new scenario whenever a user-visible feature ships (`/emulation-playbook --add <slug>`)
-- Re-run the playbook before every release — see `/release --push` Step 5d
-- Promote stable scenarios into `tests/critical/` over time
-- Keep the playbook under 500 LOC; if it grows, split by surface
+The run is PASS only when `final-image-set.json` reports:
+
+- `status: PASS`;
+- exact IDs for all three images;
+- zero HIGH/CRITICAL results for all three SARIF files;
+- every runtime proof field true;
+- cleanup status PASS with empty container, volume, and network arrays.
+
+Any missing artifact, unexpected skip, retained probe resource, or scanner
+exception is a release blocker.

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-11",
+  "contract": "candidate execution and packages:write publication occur on distinct fresh runners",
+  "proof": {
+    "prepare_permissions": ["contents:read"],
+    "publisher_permissions": ["contents:read", "actions:read", "packages:write"],
+    "candidate_checkout_in_publisher": false,
+    "candidate_execution_in_publisher": false,
+    "artifact_count_before_download": 1,
+    "artifact_download_selector": "artifact-id",
+    "payload_regular_files": 5,
+    "credential_erasure_before_evidence_upload": true
+  },
+  "negative_matrix": [
+    "extra-or-duplicate-artifact",
+    "wrong-artifact-id-name-digest-run",
+    "expired-artifact",
+    "extra-payload-file",
+    "filesystem-symlink-or-reparse",
+    "bundle-path-traversal",
+    "archive-path-traversal",
+    "archive-link-entry",
+    "archive-hash-or-size-drift",
+    "manifest-commit-drift"
+  ],
+  "command": "go test -tags=critical ./tests/critical/runtime -run ^TestDockerReleaseRefFreshnessGuard$ -count=1",
+  "result": "PASS"
+}
