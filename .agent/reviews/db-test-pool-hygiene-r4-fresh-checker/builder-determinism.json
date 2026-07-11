@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "target": "ce6a40d72fc39932ccbc4b949647f321b91f70c3",
+  "target_tree": "20a69d7a83e0100de7e3e73e670fe02feadada2d",
+  "status": "PASS",
+  "checks": {
+    "seed_status_run1": true,
+    "seed_status_run2": true,
+    "seed_adversarial_byte_deterministic": true,
+    "seed_verifier_byte_deterministic": true,
+    "seed_manifest_unchanged": true,
+    "seed_checksum_unchanged": true,
+    "build_status_run1": true,
+    "build_status_run2": true,
+    "build_manifest_matches_committed": true,
+    "build_checksum_matches_committed": true,
+    "build_manifest_byte_deterministic": true,
+    "build_checksum_byte_deterministic": true
+  },
+  "failed_checks": [],
+  "hashes": {
+    "seed_adversarial": "f55c3d9fa7623a2a6a19d3af86e93fd0a14b3c885e3a2600f0d30c428ab5a2a2",
+    "seed_verifier": "839e1bcb76f4eddc118eeeee47c65385513f97a4b615d25654ad129bd935ce2f",
+    "committed_manifest": "b0b63988722207186805712b1f32d80ee81afaacffa57e54144d5bd82c5dcb6c",
+    "committed_checksum": "e8e2bcc519b9488b0b84628e62931175a2e210cac3ca57b2e2e999aa07538043",
+    "built_manifest": "b0b63988722207186805712b1f32d80ee81afaacffa57e54144d5bd82c5dcb6c",
+    "built_checksum": "e8e2bcc519b9488b0b84628e62931175a2e210cac3ca57b2e2e999aa07538043"
+  },
+  "fatal_error": null,
+  "temp_root_removed": true,
+  "cleanup_error": null
+}

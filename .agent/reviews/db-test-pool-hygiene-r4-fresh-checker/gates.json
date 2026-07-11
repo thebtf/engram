@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "status": "PASS",
+  "checked_utc": "2026-07-11T03:47:52.1012415Z",
+  "target": "ce6a40d72fc39932ccbc4b949647f321b91f70c3",
+  "parent": "331b5b195a967e7f27dca94038a3480c9afcc84f",
+  "tree": "20a69d7a83e0100de7e3e73e670fe02feadada2d",
+  "boundary": {
+    "maker_path_count": 13,
+    "maker_path_list_ordinal_lf_sha256": "8385cf487753e79ef3419a66e58a0bac1592bdaca2fc1d4d9022a0946eeb8f5a",
+    "maker_paths_all_regular_blobs": true,
+    "maker_boundary_clean": true,
+    "scope": "evidence-only"
+  },
+  "gates": [
+    {
+      "name": "verifier_git_revision_head",
+      "status": "PASS",
+      "exit_code": 0,
+      "changed_paths": 21,
+      "directly_bound_changed_paths": 19,
+      "manifest_entries": 35,
+      "checksum_entries": 36,
+      "inventory_call_sites": 83,
+      "inventory_files": 8
+    },
+    {
+      "name": "verifier_git_index",
+      "status": "PASS",
+      "exit_code": 0,
+      "changed_paths": 21,
+      "directly_bound_changed_paths": 19,
+      "manifest_entries": 35,
+      "checksum_entries": 36,
+      "inventory_call_sites": 83,
+      "inventory_files": 8
+    },
+    {
+      "name": "maker_adversarial_replay",
+      "status": "PASS",
+      "exit_code": 0,
+      "cases": 35,
+      "failed_cases": [],
+      "case_order_sha256": "0fcc7c53259982de592100e249bc323efd4406cc9b7905627afa963b771099f8",
+      "temp_root_removed": true,
+      "cleanup": "PASS"
+    },
+    {
+      "name": "checker_independent_alternate_indexes",
+      "status": "PASS",
+      "exit_code": 0,
+      "cases": 28,
+      "failed_cases": [],
+      "exact_r3_false_green_cases_rejected": [
+        "unknown_manifest_key",
+        "unknown_inventory_key",
+        "inventory_schema_99",
+        "stale_adversarial_proof",
+        "stale_verifier_proof"
+      ],
+      "additional_classes": [
+        "key_case",
+        "schema",
+        "type",
+        "array",
+        "count",
+        "digest",
+        "inventory",
+        "path_traversal",
+        "foreign_index",
+        "incomplete_checksum",
+        "unbound_checksum",
+        "product_blob_mutation"
+      ],
+      "temp_root_removed": true,
+      "cleanup": "PASS"
+    },
+    {
+      "name": "builder_and_seed_determinism",
+      "status": "PASS",
+      "checks": 12,
+      "failed_checks": [],
+      "seed_adversarial_sha256": "f55c3d9fa7623a2a6a19d3af86e93fd0a14b3c885e3a2600f0d30c428ab5a2a2",
+      "seed_verifier_sha256": "839e1bcb76f4eddc118eeeee47c65385513f97a4b615d25654ad129bd935ce2f",
+      "committed_and_built_manifest_sha256": "b0b63988722207186805712b1f32d80ee81afaacffa57e54144d5bd82c5dcb6c",
+      "committed_and_built_checksum_sha256": "e8e2bcc519b9488b0b84628e62931175a2e210cac3ca57b2e2e999aa07538043",
+      "temp_root_removed": true
+    },
+    {
+      "name": "product_blob_identity",
+      "status": "PASS",
+      "git_blob_oid": "7337f1bd8da4fb315de842eea2e3cce5476250a3",
+      "bytes": 47016,
+      "sha256": "62260c1a2e0705b065295322dd23fcf9b17fd47cb5ebc64134630788e2d23e09"
+    },
+    {
+      "name": "powershell_parse",
+      "status": "PASS",
+      "scripts": 7,
+      "parse_errors": 0
+    },
+    {
+      "name": "git_diff_check",
+      "status": "PASS",
+      "exit_code": 0
+    },
+    {
+      "name": "gitleaks_exact_maker_commit",
+      "status": "PASS",
+      "version": "8.30.0",
+      "commits_scanned": 1,
+      "leaks": 0,
+      "exit_code": 0
+    },
+    {
+      "name": "go_build_all",
+      "status": "PASS",
+      "exit_code": 0
+    },
+    {
+      "name": "go_vet_all",
+      "status": "PASS",
+      "exit_code": 0
+    },
+    {
+      "name": "focused_database_regression_repeat",
+      "status": "PASS",
+      "database": "engram_chk_dbph_r4_adb0a21686af",
+      "command": "go test -p=1 ./internal/db/gorm -run ^TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose$ -count=5 -v",
+      "exit_code": 0,
+      "activity_after_process": 0
+    },
+    {
+      "name": "focused_database_regression_race",
+      "status": "PASS",
+      "database": "engram_chk_dbph_r4_adb0a21686af",
+      "command": "go test -race -p=1 ./internal/db/gorm -run ^TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose$ -count=1 -v",
+      "exit_code": 0,
+      "activity_after_process": 0
+    }
+  ],
+  "residue": {
+    "checker_database_matches": [],
+    "checker_database_sessions": 0,
+    "adversarial_temp_matches": [],
+    "independent_temp_matches": [],
+    "builder_temp_matches": []
+  },
+  "checker_artifacts": {
+    "Invoke-IndependentAttacks.ps1": "4b6e33b0a847c98534b24053e4fc319fc7d6dab37199021c7ebf212f243294f4",
+    "independent-attacks.json": "d88fede0b711ef970f68cb435b37b9de3953fbaa97ca533f69c6a9f96f9d0463",
+    "Invoke-BuilderDeterminism.ps1": "9f73e80938982805b7da9d650b55a9be8b5a8008251905e53183a77b7dda4277",
+    "builder-determinism.json": "fbab16a74143ac703394b24023ad77aeda3b670c0866564665751a0baf36bde7"
+  },
+  "execution_corrections": [
+    "The first checker case-variant fixture uppercased a leading dot and made no mutation; the fixture was corrected and the complete 28-case batch reran from zero to PASS.",
+    "The first database command interpolated $db?sslmode incorrectly; that unique database was dropped with zero database/activity residue, and the complete runtime gate reran on a new unique database to PASS."
+  ],
+  "non_blocking_concerns": [
+    "A fresh database migration emits pre-existing non-fatal legacy-index and unavailable-vectorscale warnings; the focused pool-ownership invariant still passes repeatedly and under the race detector.",
+    "The full 35-case maker harness and 28-case independent harness are deliberately expensive because each case starts a fresh repository and verifier process."
+  ]
+}
