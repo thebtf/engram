@@ -1,85 +1,94 @@
-# Engram — Server Stack
-#
-# Provides: PostgreSQL + pgvector, Engram Server (API + MCP SSE on single port)
-# Client (hooks + MCP proxy) runs locally on each workstation.
-#
-# Usage:
-#   cp .env.example .env   # edit with your settings
-#   docker compose up -d
-#
-# See docs/DEPLOYMENT.md for full setup instructions.
-
+# Engram production-shaped local stack.
+# PostgreSQL is intentionally internal-only; expose it explicitly only for a
+# bounded maintenance session. Server and operator state survive recreation in
+# named volumes owned by the non-root image users.
 services:
   postgres:
-    image: pgvector/pgvector:pg17
+    image: ${ENGRAM_POSTGRES_IMAGE:?set ENGRAM_POSTGRES_IMAGE from the immutable release manifest}
+    build:
+      context: .
+      dockerfile: deploy/postgres/Dockerfile
+    user: "70:70"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=70,gid=70,mode=0700,size=64m
+      - /var/run/postgresql:rw,noexec,nosuid,nodev,uid=70,gid=70,mode=0775,size=16m
     environment:
       POSTGRES_DB: engram
       POSTGRES_USER: engram
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-engram}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U engram -d engram"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
     restart: unless-stopped
 
-  # Worker with integrated MCP SSE (single port, single process)
   server:
-    image: ghcr.io/thebtf/engram:main
-    # To build locally instead: docker compose build server
+    image: ${ENGRAM_SERVER_IMAGE:?set ENGRAM_SERVER_IMAGE from the immutable release manifest}
     build:
       context: .
       target: server
+      args:
+        VERSION: ${ENGRAM_BUILD_VERSION:?set ENGRAM_BUILD_VERSION to vMAJOR.MINOR.PATCH[-prerelease] or sha-<full commit>}
+    user: "65532:65532"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=65532,gid=65532,mode=0700,size=64m
     ports:
-      - "${WORKER_PORT:-37777}:37777"
+      - "${WORKER_BIND:-0.0.0.0}:${WORKER_PORT:-37777}:37777"
     environment:
-      # Names below match exactly what the Go server reads. Do not reintroduce
-      # legacy names (ENGRAM_API_TOKEN, ENGRAM_EMBEDDING_BASE_URL/MODEL_NAME,
-      # ENGRAM_LLM_*, ENGRAM_FALKORDB_*) — the code ignores them.
-      # Defaults to the bundled postgres service; set DATABASE_DSN in .env to
-      # point at an external database instead.
-      DATABASE_DSN: "${DATABASE_DSN:-postgres://engram:${POSTGRES_PASSWORD:-engram}@postgres:5432/engram?sslmode=disable}"
+      HOME: /var/lib/engram
+      DATABASE_DSN: "${DATABASE_DSN:-postgres://engram:${POSTGRES_PASSWORD}@postgres:5432/engram?sslmode=disable}"
       ENGRAM_WORKER_HOST: "0.0.0.0"
       ENGRAM_WORKER_PORT: "37777"
       ENGRAM_AUTH_ADMIN_TOKEN: "${ENGRAM_AUTH_ADMIN_TOKEN:-}"
       ENGRAM_AUTH_DISABLED: "${ENGRAM_AUTH_DISABLED:-false}"
       ENGRAM_VAULT_KEY: "${ENGRAM_VAULT_KEY:-}"
-      # Embedding (semantic memory). Empty URL = embedding disabled (FTS-only recall).
       ENGRAM_EMBEDDING_URL: "${ENGRAM_EMBEDDING_URL:-}"
       ENGRAM_EMBEDDING_MODEL: "${ENGRAM_EMBEDDING_MODEL:-text-embedding}"
       ENGRAM_EMBEDDING_API_KEY: "${ENGRAM_EMBEDDING_API_KEY:-}"
-      # vNext feature flags (all default OFF; flag-OFF == v6.4.15 byte-identical).
       ENGRAM_VNEXT_ENABLED: "${ENGRAM_VNEXT_ENABLED:-false}"
       ENGRAM_LIFECYCLE_ENABLED: "${ENGRAM_LIFECYCLE_ENABLED:-false}"
       ENGRAM_VNEXT_F_ENABLED: "${ENGRAM_VNEXT_F_ENABLED:-false}"
       ENGRAM_GRAPH_ENABLED: "${ENGRAM_GRAPH_ENABLED:-false}"
       ENGRAM_TEMPORAL_TRUTH_ENABLED: "${ENGRAM_TEMPORAL_TRUTH_ENABLED:-false}"
       ENGRAM_CRYSTALLIZATION_ENABLED: "${ENGRAM_CRYSTALLIZATION_ENABLED:-false}"
+    volumes:
+      - engramdata:/var/lib/engram
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
 
   operator-console:
-    image: ghcr.io/thebtf/engram-operator-console:main
-    # To build locally instead: docker compose build operator-console
+    image: ${ENGRAM_OPERATOR_IMAGE:?set ENGRAM_OPERATOR_IMAGE from the immutable release manifest}
     build:
       context: .
       target: operator-console
+    user: "65532:65532"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=65532,gid=65532,mode=0700,size=64m
     ports:
-      - "${OPERATOR_CONSOLE_PORT:-3000}:3000"
+      - "${OPERATOR_CONSOLE_BIND:-0.0.0.0}:${OPERATOR_CONSOLE_PORT:-3000}:3000"
     environment:
       NUXT_OPERATOR_API_TARGET: "http://server:37777"
       NUXT_PUBLIC_API_BASE: "/api"
       NUXT_PUBLIC_API_DISPLAY_HOST: "${OPERATOR_CONSOLE_API_DISPLAY_HOST:-}"
     depends_on:
       server:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   pgdata:
+  engramdata:

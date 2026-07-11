@@ -1,0 +1,10 @@
+{
+  "task_id": "IMAGE-HEALTHCHECK-RUNNER",
+  "stack": "GO",
+  "observed_at": "2026-07-11T07:42:00Z",
+  "test_file": "cmd/engram-healthcheck/main_test.go",
+  "test_name": "TestRun_UsageAndReadinessExitCodes",
+  "invariant": "The shell-free probe exposes deterministic usage, ready, and not-ready exit codes through a testable runner.",
+  "failure_reason": "The R1 baseline called os.Exit directly and had no testable run function.",
+  "runner_stdout_excerpt": "main_test.go: undefined: run (three call sites)"
+}

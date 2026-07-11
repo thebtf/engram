@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-07-11",
+  "repository": "thebtf/engram",
+  "rulesets": [
+    {
+      "id": 13610955,
+      "name": "main",
+      "target": "branch",
+      "enforcement": "active",
+      "include": [],
+      "exclude": [],
+      "rules": ["deletion", "non_fast_forward"],
+      "bypass_actors": []
+    }
+  ],
+  "required_but_missing": [
+    "exact refs/tags/v* deletion plus non_fast_forward no-bypass ruleset",
+    "exact refs/heads/main strict required authority-guard status from integration_id 15368",
+    "exact User 7106373 pull_request recovery bypass"
+  ],
+  "effect": "release publication remains fail-closed before package login"
+}
