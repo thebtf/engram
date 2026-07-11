@@ -15,6 +15,10 @@ param(
 
     [string]$InventoryPath = '.agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json',
 
+    [string]$AdversarialProofPath = '.agent/reports/evidence/production-ready/db-test-pool-hygiene/adversarial-proof.json',
+
+    [string]$VerifierProofPath = '.agent/reports/evidence/production-ready/db-test-pool-hygiene/verifier-proof.json',
+
     [string]$ManifestOverridePath,
 
     [string]$SumsOverridePath,
@@ -31,15 +35,23 @@ $utf8Strict = [Text.UTF8Encoding]::new($false, $true)
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
 $ordinal = [StringComparer]::Ordinal
 $failures = [Collections.Generic.List[string]]::new()
-$expectedProductParentSHA = 'bd68c05baf4b7250096dd84f56bebea2aa555970'
-$expectedProductBlobPath = 'internal/db/gorm/candidate_store_test.go'
-$expectedProductBlobOID = '7337f1bd8da4fb315de842eea2e3cce5476250a3'
-$expectedProductBlobSHA256 = '62260c1a2e0705b065295322dd23fcf9b17fd47cb5ebc64134630788e2d23e09'
+$contractPath = Join-Path $PSScriptRoot 'DBPoolHygieneEvidenceContract.ps1'
+if (-not (Test-Path -LiteralPath $contractPath)) {
+    throw "evidence contract not found: $contractPath"
+}
+. $contractPath
+if ($ProductCandidateSHA -cne $DBPHProductCandidateSHA) {
+    throw "unsupported product candidate: $ProductCandidateSHA"
+}
+$expectedProductParentSHA = $DBPHProductParentSHA
+$expectedProductBlobPath = $DBPHProductBlobPath
+$expectedProductBlobOID = $DBPHProductBlobOID
+$expectedProductBlobSHA256 = $DBPHProductBlobSHA256
 $expectedManifestExclusions = @($ManifestPath, $SumsPath)
 $expectedChecksumExclusions = @($SumsPath)
 $requiredDynamicProofPaths = @(
-    '.agent/reports/evidence/production-ready/db-test-pool-hygiene/adversarial-proof.json',
-    '.agent/reports/evidence/production-ready/db-test-pool-hygiene/verifier-proof.json'
+    $AdversarialProofPath,
+    $VerifierProofPath
 )
 $resolvedRepository = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 
@@ -239,12 +251,41 @@ function Test-NoDuplicateJsonProperties {
     }
 }
 
+function Test-ExactJsonProperties {
+    param(
+        [Parameter(Mandatory = $true)][Text.Json.JsonElement]$Element,
+        [Parameter(Mandatory = $true)][string]$Schema,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    if ($Element.ValueKind -ne [Text.Json.JsonValueKind]::Object) { return }
+    $expected = [Collections.Generic.HashSet[string]]::new($ordinal)
+    foreach ($name in (Get-DBPHExactJsonProperties -Schema $Schema)) { $expected.Add($name) | Out-Null }
+    foreach ($property in $Element.EnumerateObject()) {
+        if (-not $expected.Contains($property.Name)) {
+            Add-Failure "$Label has unknown JSON property: $($property.Name)"
+        }
+    }
+}
+
+function Test-JsonBoolean {
+    param($Element, [Parameter(Mandatory = $true)][string]$Label)
+    if ($null -eq $Element) { return $false }
+    if ($Element.ValueKind -ne [Text.Json.JsonValueKind]::True -and
+        $Element.ValueKind -ne [Text.Json.JsonValueKind]::False) {
+        Add-Failure "$Label must be JSON boolean, got $($Element.ValueKind.ToString().ToLowerInvariant())"
+        return $false
+    }
+    return $true
+}
+
 function Test-ManifestRawSchema {
     param([Parameter(Mandatory = $true)][Text.Json.JsonDocument]$Document)
 
     $root = $Document.RootElement
     if (-not (Test-JsonKind -Element $root -Expected ([Text.Json.JsonValueKind]::Object) -Label 'manifest')) { return }
     Test-NoDuplicateJsonProperties -Element $root -Label 'manifest'
+    Test-ExactJsonProperties -Element $root -Schema 'manifest' -Label 'manifest'
 
     foreach ($name in @('schema_version', 'entry_count')) {
         Test-JsonInteger -Element (Get-RequiredJsonProperty -Object $root -Name $name -Label 'manifest') -Label "manifest.$name" | Out-Null
@@ -255,6 +296,7 @@ function Test-ManifestRawSchema {
 
     $delta = Get-RequiredJsonProperty -Object $root -Name 'evidence_delta' -Label 'manifest'
     if (Test-JsonKind -Element $delta -Expected ([Text.Json.JsonValueKind]::Object) -Label 'manifest.evidence_delta') {
+        Test-ExactJsonProperties -Element $delta -Schema 'manifest.evidence_delta' -Label 'manifest.evidence_delta'
         Test-JsonKind -Element (Get-RequiredJsonProperty -Object $delta -Name 'comparison' -Label 'manifest.evidence_delta') -Expected ([Text.Json.JsonValueKind]::String) -Label 'manifest.evidence_delta.comparison' | Out-Null
         foreach ($name in @('changed_path_count', 'directly_manifest_bound_count')) {
             Test-JsonInteger -Element (Get-RequiredJsonProperty -Object $delta -Name $name -Label 'manifest.evidence_delta') -Label "manifest.evidence_delta.$name" | Out-Null
@@ -273,6 +315,7 @@ function Test-ManifestRawSchema {
 
     $representation = Get-RequiredJsonProperty -Object $root -Name 'representation_contract' -Label 'manifest'
     if (Test-JsonKind -Element $representation -Expected ([Text.Json.JsonValueKind]::Object) -Label 'manifest.representation_contract') {
+        Test-ExactJsonProperties -Element $representation -Schema 'manifest.representation_contract' -Label 'manifest.representation_contract'
         foreach ($name in @('id', 'digest', 'object_type', 'path_binding', 'contract_bytes', 'working_tree_bytes', 'text_git_blob_line_endings', 'manifest_self_reference', 'outer_checksum_path', 'outer_checksum_generation_order', 'outer_checksum_self_reference')) {
             Test-JsonKind -Element (Get-RequiredJsonProperty -Object $representation -Name $name -Label 'manifest.representation_contract') -Expected ([Text.Json.JsonValueKind]::String) -Label "manifest.representation_contract.$name" | Out-Null
         }
@@ -280,6 +323,7 @@ function Test-ManifestRawSchema {
 
     $productBlob = Get-RequiredJsonProperty -Object $root -Name 'product_test_blob' -Label 'manifest'
     if (Test-JsonKind -Element $productBlob -Expected ([Text.Json.JsonValueKind]::Object) -Label 'manifest.product_test_blob') {
+        Test-ExactJsonProperties -Element $productBlob -Schema 'manifest.product_test_blob' -Label 'manifest.product_test_blob'
         foreach ($name in @('path', 'git_blob_oid', 'sha256')) {
             Test-JsonKind -Element (Get-RequiredJsonProperty -Object $productBlob -Name $name -Label 'manifest.product_test_blob') -Expected ([Text.Json.JsonValueKind]::String) -Label "manifest.product_test_blob.$name" | Out-Null
         }
@@ -288,6 +332,7 @@ function Test-ManifestRawSchema {
 
     $inventory = Get-RequiredJsonProperty -Object $root -Name 'inventory' -Label 'manifest'
     if (Test-JsonKind -Element $inventory -Expected ([Text.Json.JsonValueKind]::Object) -Label 'manifest.inventory') {
+        Test-ExactJsonProperties -Element $inventory -Schema 'manifest.inventory' -Label 'manifest.inventory'
         foreach ($name in @('parent_sha', 'path')) {
             Test-JsonKind -Element (Get-RequiredJsonProperty -Object $inventory -Name $name -Label 'manifest.inventory') -Expected ([Text.Json.JsonValueKind]::String) -Label "manifest.inventory.$name" | Out-Null
         }
@@ -301,6 +346,7 @@ function Test-ManifestRawSchema {
         $index = 0
         foreach ($entry in $entries.EnumerateArray()) {
             if (Test-JsonKind -Element $entry -Expected ([Text.Json.JsonValueKind]::Object) -Label "manifest.entries[$index]") {
+                Test-ExactJsonProperties -Element $entry -Schema 'manifest.entry' -Label "manifest.entries[$index]"
                 foreach ($name in @('path', 'git_blob_oid', 'sha256')) {
                     Test-JsonKind -Element (Get-RequiredJsonProperty -Object $entry -Name $name -Label "manifest.entries[$index]") -Expected ([Text.Json.JsonValueKind]::String) -Label "manifest.entries[$index].$name" | Out-Null
                 }
@@ -317,6 +363,7 @@ function Test-InventoryRawSchema {
     $root = $Document.RootElement
     if (-not (Test-JsonKind -Element $root -Expected ([Text.Json.JsonValueKind]::Object) -Label 'inventory')) { return }
     Test-NoDuplicateJsonProperties -Element $root -Label 'inventory'
+    Test-ExactJsonProperties -Element $root -Schema 'inventory' -Label 'inventory'
     foreach ($name in @('schema_version', 'required_call_sites', 'required_files', 'actual_call_sites', 'actual_files')) {
         Test-JsonInteger -Element (Get-RequiredJsonProperty -Object $root -Name $name -Label 'inventory') -Label "inventory.$name" | Out-Null
     }
@@ -328,6 +375,7 @@ function Test-InventoryRawSchema {
         $index = 0
         foreach ($entry in $entries.EnumerateArray()) {
             if (Test-JsonKind -Element $entry -Expected ([Text.Json.JsonValueKind]::Object) -Label "inventory.entries[$index]") {
+                Test-ExactJsonProperties -Element $entry -Schema 'inventory.entry' -Label "inventory.entries[$index]"
                 Test-JsonKind -Element (Get-RequiredJsonProperty -Object $entry -Name 'path' -Label "inventory.entries[$index]") -Expected ([Text.Json.JsonValueKind]::String) -Label "inventory.entries[$index].path" | Out-Null
                 Test-JsonInteger -Element (Get-RequiredJsonProperty -Object $entry -Name 'count' -Label "inventory.entries[$index]") -Label "inventory.entries[$index].count" | Out-Null
                 $lines = Get-RequiredJsonProperty -Object $entry -Name 'lines' -Label "inventory.entries[$index]"
@@ -338,6 +386,76 @@ function Test-InventoryRawSchema {
                         $lineIndex++
                     }
                 }
+            }
+            $index++
+        }
+    }
+}
+
+function Test-VerifierProofRawSchema {
+    param([Parameter(Mandatory = $true)][Text.Json.JsonDocument]$Document)
+
+    $root = $Document.RootElement
+    if (-not (Test-JsonKind -Element $root -Expected ([Text.Json.JsonValueKind]::Object) -Label 'verifier proof')) { return }
+    Test-NoDuplicateJsonProperties -Element $root -Label 'verifier proof'
+    Test-ExactJsonProperties -Element $root -Schema 'verifier-proof' -Label 'verifier proof'
+    foreach ($name in @(
+        'schema_version', 'changed_paths', 'directly_bound_changed_paths',
+        'manifest_entries', 'checksum_entries', 'inventory_call_sites', 'inventory_files'
+    )) {
+        Test-JsonInteger -Element (Get-RequiredJsonProperty -Object $root -Name $name -Label 'verifier proof') -Label "verifier proof.$name" | Out-Null
+    }
+    foreach ($name in @('status', 'source_mode', 'revision', 'product_candidate_sha', 'representation_contract')) {
+        Test-JsonKind -Element (Get-RequiredJsonProperty -Object $root -Name $name -Label 'verifier proof') -Expected ([Text.Json.JsonValueKind]::String) -Label "verifier proof.$name" | Out-Null
+    }
+    $proofFailures = Get-RequiredJsonProperty -Object $root -Name 'failures' -Label 'verifier proof'
+    if (Test-JsonKind -Element $proofFailures -Expected ([Text.Json.JsonValueKind]::Array) -Label 'verifier proof.failures') {
+        $index = 0
+        foreach ($item in $proofFailures.EnumerateArray()) {
+            Test-JsonKind -Element $item -Expected ([Text.Json.JsonValueKind]::String) -Label "verifier proof.failures[$index]" | Out-Null
+            $index++
+        }
+    }
+}
+
+function Test-AdversarialProofRawSchema {
+    param([Parameter(Mandatory = $true)][Text.Json.JsonDocument]$Document)
+
+    $root = $Document.RootElement
+    if (-not (Test-JsonKind -Element $root -Expected ([Text.Json.JsonValueKind]::Object) -Label 'adversarial proof')) { return }
+    Test-NoDuplicateJsonProperties -Element $root -Label 'adversarial proof'
+    Test-ExactJsonProperties -Element $root -Schema 'adversarial-proof' -Label 'adversarial proof'
+    Test-JsonInteger -Element (Get-RequiredJsonProperty -Object $root -Name 'schema_version' -Label 'adversarial proof') -Label 'adversarial proof.schema_version' | Out-Null
+    foreach ($name in @('status', 'source_mode', 'revision', 'cleanup')) {
+        Test-JsonKind -Element (Get-RequiredJsonProperty -Object $root -Name $name -Label 'adversarial proof') -Expected ([Text.Json.JsonValueKind]::String) -Label "adversarial proof.$name" | Out-Null
+    }
+    Test-JsonBoolean -Element (Get-RequiredJsonProperty -Object $root -Name 'temp_root_removed' -Label 'adversarial proof') -Label 'adversarial proof.temp_root_removed' | Out-Null
+    $proofCases = Get-RequiredJsonProperty -Object $root -Name 'cases' -Label 'adversarial proof'
+    if (Test-JsonKind -Element $proofCases -Expected ([Text.Json.JsonValueKind]::Array) -Label 'adversarial proof.cases') {
+        $index = 0
+        foreach ($proofCase in $proofCases.EnumerateArray()) {
+            $label = "adversarial proof.cases[$index]"
+            if (Test-JsonKind -Element $proofCase -Expected ([Text.Json.JsonValueKind]::Object) -Label $label) {
+                Test-ExactJsonProperties -Element $proofCase -Schema 'adversarial-proof.case' -Label $label
+                foreach ($name in @('name', 'verifier_status', 'expected_failure')) {
+                    Test-JsonKind -Element (Get-RequiredJsonProperty -Object $proofCase -Name $name -Label $label) -Expected ([Text.Json.JsonValueKind]::String) -Label "$label.$name" | Out-Null
+                }
+                Test-JsonInteger -Element (Get-RequiredJsonProperty -Object $proofCase -Name 'actual_exit' -Label $label) -Label "$label.actual_exit" | Out-Null
+                $expectedExit = Get-RequiredJsonProperty -Object $proofCase -Name 'expected_exit' -Label $label
+                if ($null -ne $expectedExit -and
+                    $expectedExit.ValueKind -ne [Text.Json.JsonValueKind]::Number -and
+                    $expectedExit.ValueKind -ne [Text.Json.JsonValueKind]::String) {
+                    Add-Failure "$label.expected_exit must be JSON number or string"
+                }
+                $observedFailures = Get-RequiredJsonProperty -Object $proofCase -Name 'observed_failures' -Label $label
+                if (Test-JsonKind -Element $observedFailures -Expected ([Text.Json.JsonValueKind]::Array) -Label "$label.observed_failures") {
+                    $failureIndex = 0
+                    foreach ($failure in $observedFailures.EnumerateArray()) {
+                        Test-JsonKind -Element $failure -Expected ([Text.Json.JsonValueKind]::String) -Label "$label.observed_failures[$failureIndex]" | Out-Null
+                        $failureIndex++
+                    }
+                }
+                Test-JsonBoolean -Element (Get-RequiredJsonProperty -Object $proofCase -Name 'pass' -Label $label) -Label "$label.pass" | Out-Null
             }
             $index++
         }
@@ -371,6 +489,91 @@ function Test-StrictOrdinalOrder {
             Add-Failure "duplicate $Label path: $($Paths[$index])"
         } elseif ($comparison -gt 0) {
             Add-Failure "$Label paths are not canonical ordinal order: $($Paths[$index - 1]) before $($Paths[$index])"
+        }
+    }
+}
+
+function Test-CanonicalDynamicProofs {
+    param(
+        [Parameter(Mandatory = $true)][int64]$ChangedPaths,
+        [Parameter(Mandatory = $true)][int64]$DirectlyBoundChangedPaths,
+        [Parameter(Mandatory = $true)][int64]$ManifestEntries,
+        [Parameter(Mandatory = $true)][int64]$ChecksumEntries,
+        [Parameter(Mandatory = $true)][int64]$InventoryCallSites,
+        [Parameter(Mandatory = $true)][int64]$InventoryFiles
+    )
+
+    $verifierBytes = Get-SourceBytes -Path $VerifierProofPath
+    if (Test-ContainsCarriageReturn -Bytes $verifierBytes) { Add-Failure 'verifier proof bytes contain CR; LF Git blob bytes are required' }
+    $verifierDocument = Open-JsonDocument -Bytes $verifierBytes -Label $VerifierProofPath
+    try { Test-VerifierProofRawSchema -Document $verifierDocument } finally { $verifierDocument.Dispose() }
+    $verifierProof = Convert-JsonBytes -Bytes $verifierBytes -Label $VerifierProofPath
+    if ([int64]$verifierProof.schema_version -ne $DBPHVerifierProofSchemaVersion) { Add-Failure "verifier proof schema_version must be $DBPHVerifierProofSchemaVersion" }
+    if ([string]$verifierProof.status -cne 'PASS') { Add-Failure 'verifier proof status must be PASS' }
+    if ([string]$verifierProof.source_mode -cne 'GitIndex' -or [string]$verifierProof.revision -cne 'INDEX') {
+        Add-Failure 'verifier proof source/revision contract mismatch'
+    }
+    if ([string]$verifierProof.product_candidate_sha -cne $ProductCandidateSHA) { Add-Failure 'verifier proof product_candidate_sha mismatch' }
+    if ([string]$verifierProof.representation_contract -cne $DBPHRepresentationContract) { Add-Failure 'verifier proof representation_contract mismatch' }
+    foreach ($count in @(
+        [pscustomobject]@{ name = 'changed_paths'; expected = $ChangedPaths },
+        [pscustomobject]@{ name = 'directly_bound_changed_paths'; expected = $DirectlyBoundChangedPaths },
+        [pscustomobject]@{ name = 'manifest_entries'; expected = $ManifestEntries },
+        [pscustomobject]@{ name = 'checksum_entries'; expected = $ChecksumEntries },
+        [pscustomobject]@{ name = 'inventory_call_sites'; expected = $InventoryCallSites },
+        [pscustomobject]@{ name = 'inventory_files'; expected = $InventoryFiles }
+    )) {
+        if ([int64]$verifierProof.($count.name) -ne [int64]$count.expected) {
+            Add-Failure "verifier proof $($count.name) mismatch: declared $($verifierProof.($count.name)), actual $($count.expected)"
+        }
+    }
+    if (@($verifierProof.failures).Count -ne 0) { Add-Failure 'verifier proof failures must be an empty JSON array' }
+
+    $adversarialBytes = Get-SourceBytes -Path $AdversarialProofPath
+    if (Test-ContainsCarriageReturn -Bytes $adversarialBytes) { Add-Failure 'adversarial proof bytes contain CR; LF Git blob bytes are required' }
+    $adversarialDocument = Open-JsonDocument -Bytes $adversarialBytes -Label $AdversarialProofPath
+    try { Test-AdversarialProofRawSchema -Document $adversarialDocument } finally { $adversarialDocument.Dispose() }
+    $adversarialProof = Convert-JsonBytes -Bytes $adversarialBytes -Label $AdversarialProofPath
+    if ([int64]$adversarialProof.schema_version -ne $DBPHAdversarialProofSchemaVersion) { Add-Failure "adversarial proof schema_version must be $DBPHAdversarialProofSchemaVersion" }
+    if ([string]$adversarialProof.status -cne 'PASS') { Add-Failure 'adversarial proof status must be PASS' }
+    if ([string]$adversarialProof.source_mode -cne 'GitIndex' -or [string]$adversarialProof.revision -cne 'INDEX') {
+        Add-Failure 'adversarial proof source/revision contract mismatch'
+    }
+    if ($adversarialProof.temp_root_removed -ne $true) { Add-Failure 'adversarial proof temp_root_removed must be true' }
+    if ([string]$adversarialProof.cleanup -cne 'PASS') { Add-Failure 'adversarial proof cleanup must be PASS' }
+
+    $specs = @(Get-DBPHAdversarialCaseSpecs)
+    $proofCases = @($adversarialProof.cases)
+    if ($proofCases.Count -ne $specs.Count) {
+        Add-Failure "adversarial proof case count mismatch: declared $($proofCases.Count), required $($specs.Count)"
+    }
+    $caseCount = [Math]::Min($proofCases.Count, $specs.Count)
+    for ($index = 0; $index -lt $caseCount; $index++) {
+        $proofCase = $proofCases[$index]
+        $spec = $specs[$index]
+        if ([string]$proofCase.name -cne [string]$spec.name) {
+            Add-Failure "adversarial proof case order mismatch at index ${index}: declared $($proofCase.name), required $($spec.name)"
+            continue
+        }
+        $isBaseline = -not [bool]$spec.expect_nonzero
+        $expectedExitMatches = if ($isBaseline) { $proofCase.expected_exit -is [ValueType] -and [int64]$proofCase.expected_exit -eq 0 } else { [string]$proofCase.expected_exit -ceq 'nonzero' }
+        $actualExitMatches = if ($isBaseline) { [int64]$proofCase.actual_exit -eq 0 } else { [int64]$proofCase.actual_exit -ne 0 }
+        $statusMatches = [string]$proofCase.verifier_status -ceq $(if ($isBaseline) { 'PASS' } else { 'FAIL' })
+        if (-not $expectedExitMatches -or -not $actualExitMatches -or -not $statusMatches -or $proofCase.pass -ne $true) {
+            Add-Failure "adversarial proof case result mismatch: $($spec.name)"
+        }
+        if ([string]$proofCase.expected_failure -cne [string]$spec.expected_failure) {
+            Add-Failure "adversarial proof expected diagnostic mismatch: $($spec.name)"
+        }
+        $observed = @($proofCase.observed_failures)
+        if ($isBaseline) {
+            if ($observed.Count -ne 0) { Add-Failure 'adversarial proof baseline observed_failures must be an empty JSON array' }
+        } else {
+            $found = $false
+            foreach ($failure in $observed) {
+                if (([string]$failure).Contains([string]$spec.expected_failure, [StringComparison]::Ordinal)) { $found = $true; break }
+            }
+            if (-not $found) { Add-Failure "adversarial proof case missing required diagnostic: $($spec.name)" }
         }
     }
 }
@@ -414,13 +617,22 @@ try {
     try { Test-ManifestRawSchema -Document $manifestDocument } finally { $manifestDocument.Dispose() }
     $manifest = Convert-JsonBytes -Bytes $manifestBytes -Label $ManifestPath
 
-    if ([int64]$manifest.schema_version -ne 3) { Add-Failure 'manifest schema_version must be 3' }
+    if ([int64]$manifest.schema_version -ne $DBPHManifestSchemaVersion) { Add-Failure "manifest schema_version must be $DBPHManifestSchemaVersion" }
+    if ([string]$manifest.status -cne 'READY_FOR_RECHECK_EVIDENCE_R4') { Add-Failure 'manifest status must be READY_FOR_RECHECK_EVIDENCE_R4' }
     if ($manifest.product_parent_sha -cne $expectedProductParentSHA) { Add-Failure 'manifest product_parent_sha mismatch' }
     if ($manifest.product_candidate_sha -cne $ProductCandidateSHA) { Add-Failure 'manifest product_candidate_sha mismatch' }
-    if ($manifest.representation_contract.id -cne 'git-blob-bytes-v1') { Add-Failure "unsupported representation contract: $($manifest.representation_contract.id)" }
+    if ($manifest.evidence_revision_parent_sha -cne $DBPHEvidenceParentSHA) { Add-Failure 'manifest evidence_revision_parent_sha mismatch' }
+    if ($manifest.evidence_revision_target -cne 'GitIndex') { Add-Failure 'manifest evidence_revision_target must be GitIndex' }
+    if ($manifest.evidence_delta.comparison -cne "$ProductCandidateSHA..GitIndex") { Add-Failure 'manifest evidence_delta.comparison mismatch' }
+    if ($manifest.representation_contract.id -cne $DBPHRepresentationContract) { Add-Failure "unsupported representation contract: $($manifest.representation_contract.id)" }
     if ($manifest.representation_contract.digest -cne 'SHA-256') { Add-Failure "unsupported digest: $($manifest.representation_contract.digest)" }
+    if ($manifest.representation_contract.object_type -cne 'blob') { Add-Failure 'representation object_type must be blob' }
+    if ($manifest.representation_contract.path_binding -cne 'each path at the verified Git index/revision resolves to git_blob_oid') { Add-Failure 'representation path_binding mismatch' }
+    if ($manifest.representation_contract.contract_bytes -cne 'git cat-file blob <git_blob_oid> exact stdout bytes') { Add-Failure 'representation contract_bytes mismatch' }
+    if ($manifest.representation_contract.working_tree_bytes -cne 'excluded; raw CRLF checkout bytes fail verification') { Add-Failure 'representation working_tree_bytes mismatch' }
     if ($manifest.representation_contract.text_git_blob_line_endings -cne 'LF') { Add-Failure 'unsupported Git blob line-ending contract' }
     if ($manifest.representation_contract.manifest_self_reference -cne 'excluded-from-manifest-entries-bound-by-outer-checksum') { Add-Failure 'manifest self-reference contract mismatch' }
+    if ($manifest.representation_contract.outer_checksum_path -cne $SumsPath) { Add-Failure 'outer checksum path mismatch' }
     if ($manifest.representation_contract.outer_checksum_generation_order -cne 'manifest-first-checksum-second') { Add-Failure 'outer checksum generation order mismatch' }
     if ($manifest.representation_contract.outer_checksum_self_reference -cne 'excluded') { Add-Failure 'outer checksum self-reference contract mismatch' }
     Test-ExactStringArray -Actual @($manifest.evidence_delta.manifest_entry_self_excluded_paths) -Expected $expectedManifestExclusions -Label 'manifest entry self exclusions'
@@ -497,12 +709,17 @@ try {
     $inventoryDocument = Open-JsonDocument -Bytes $inventoryBytes -Label $InventoryPath
     try { Test-InventoryRawSchema -Document $inventoryDocument } finally { $inventoryDocument.Dispose() }
     $inventory = Convert-JsonBytes -Bytes $inventoryBytes -Label $InventoryPath
+    if ([int64]$inventory.schema_version -ne $DBPHInventorySchemaVersion) { Add-Failure "inventory schema_version must be $DBPHInventorySchemaVersion" }
     if ($inventory.parent_sha -cne $expectedProductParentSHA) { Add-Failure 'inventory parent_sha mismatch' }
     $actualInventory = Get-ParentInventory -ParentSHA $expectedProductParentSHA
     $actualInventoryCount = [int](($actualInventory | Measure-Object count -Sum).Sum)
     $actualInventoryFiles = $actualInventory.Count
     if ([int64]$inventory.required_call_sites -ne 83 -or [int64]$inventory.required_files -ne 8) {
         Add-Failure "inventory acceptance constants must be 83/8, got $($inventory.required_call_sites)/$($inventory.required_files)"
+    }
+    if ([int64]$manifest.inventory.required_call_sites -ne 83 -or [int64]$manifest.inventory.required_files -ne 8 -or
+        [string]$manifest.inventory.parent_sha -cne $expectedProductParentSHA -or [string]$manifest.inventory.path -cne $InventoryPath) {
+        Add-Failure 'manifest inventory contract mismatch'
     }
     if ([int64]$inventory.actual_call_sites -ne $actualInventoryCount -or [int64]$inventory.actual_files -ne $actualInventoryFiles) {
         Add-Failure "inventory total mismatch: declared $($inventory.actual_call_sites)/$($inventory.actual_files), actual $actualInventoryCount/$actualInventoryFiles"
@@ -586,18 +803,26 @@ try {
     foreach ($path in $sumMap.Keys) {
         if (-not $requiredSumPaths.Contains($path)) { Add-Failure "outer checksum contains unbound extra path: $path" }
     }
+
+    Test-CanonicalDynamicProofs `
+        -ChangedPaths ([int64]$changedPathCount) `
+        -DirectlyBoundChangedPaths ([int64]$directlyBoundChangedPathCount) `
+        -ManifestEntries ([int64]$manifestEntryCount) `
+        -ChecksumEntries ([int64]$sumEntryCount) `
+        -InventoryCallSites ([int64]$actualInventoryCount) `
+        -InventoryFiles ([int64]$actualInventoryFiles)
 }
 catch {
     Add-Failure "verifier exception: $($_.Exception.Message)"
 }
 
 $result = [ordered]@{
-    schema_version = 3
+    schema_version = $DBPHVerifierProofSchemaVersion
     status = if ($failures.Count -eq 0) { 'PASS' } else { 'FAIL' }
     source_mode = $SourceMode
     revision = if ($SourceMode -eq 'GitIndex') { 'INDEX' } else { $Revision }
     product_candidate_sha = $ProductCandidateSHA
-    representation_contract = 'git-blob-bytes-v1'
+    representation_contract = $DBPHRepresentationContract
     changed_paths = $changedPathCount
     directly_bound_changed_paths = $directlyBoundChangedPathCount
     manifest_entries = $manifestEntryCount
