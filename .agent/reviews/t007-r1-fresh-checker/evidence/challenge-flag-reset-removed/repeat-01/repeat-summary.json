@@ -1,0 +1,36 @@
+{
+  "repeat": 1,
+  "verdict": "FAIL",
+  "database": "engram_prc_rg_test_c987bdd5db898557_r1",
+  "schema": "public",
+  "database_schema_identity": "engram_prc_rg_test_c987bdd5db898557_r1.public",
+  "database_dsn": "REDACTED_DATABASE_DSN",
+  "database_create_confirmed": true,
+  "sequential_execution": {
+    "package_parallelism": 1,
+    "test_parallelism": 1
+  },
+  "race": false,
+  "connection_budget": 20,
+  "server_sessions_before": 6,
+  "server_sessions_after": 6,
+  "sessions_before": 0,
+  "sessions_after": 0,
+  "go_test_exit": 1,
+  "json_parser_exit": 1,
+  "coverage_policy": "Targeted",
+  "coverage_exit": 0,
+  "cleanup_exit": 0,
+  "cleanup_status": "PASS",
+  "required_session_start_execution": {
+    "schema_version": 1,
+    "verdict": "NOT_APPLICABLE",
+    "reason": "only an unfiltered canonical ./... run requires the 12-test session-start execution proof"
+  },
+  "cleanup_summary": "D:\\Dev\\engram\\.w\\t007-r1-checker\\.agent\\reviews\\t007-r1-fresh-checker\\evidence\\challenge-flag-reset-removed\\repeat-01\\cleanup\\cleanup.json",
+  "errors": [
+    "go test failed with exit 1",
+    "go test JSON assertion failed with exit 1"
+  ],
+  "artifact_directory": "D:\\Dev\\engram\\.w\\t007-r1-checker\\.agent\\reviews\\t007-r1-fresh-checker\\evidence\\challenge-flag-reset-removed\\repeat-01"
+}

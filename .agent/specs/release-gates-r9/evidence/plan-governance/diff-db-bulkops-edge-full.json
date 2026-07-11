@@ -1,0 +1,930 @@
+{
+  "schema_version": 2,
+  "gate": "plan-path-ownership",
+  "mode": "Diff",
+  "verdict": "PASS",
+  "started_at": "2026-07-10T21:53:20.8974458+00:00",
+  "finished_at": "2026-07-10T21:53:28.1616101+00:00",
+  "duration_seconds": 7.264,
+  "plan": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\plans\\2026-07-10-engram-production-ready-master-plan.md",
+    "expected_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f",
+    "observed_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f",
+    "hash_match": true,
+    "ledger_verdict": "PASS"
+  },
+  "state": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\plans\\2026-07-10-engram-production-ready-ownership-state.json",
+    "sha256": "e41f52fbafa317eb1571c76a7d1de9add543da38a1b2471dbe587a849b21c032",
+    "verdict": "PASS",
+    "plan_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f"
+  },
+  "scope_map": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\plans\\2026-07-10-engram-production-ready-scope-map.json",
+    "expected_sha256": "fb170d59f3072117489402fd347cd1432c40adbc842811f92227498bcbc92693",
+    "observed_sha256": "fb170d59f3072117489402fd347cd1432c40adbc842811f92227498bcbc92693",
+    "verdict": "PASS",
+    "entries": 67,
+    "unique_slices": 67
+  },
+  "live_register": {
+    "supplied": false,
+    "path": "",
+    "sha256": null,
+    "checked": false,
+    "rows": 0
+  },
+  "slice": {
+    "name": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+    "row_count": 1,
+    "declarations": [
+      {
+        "owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "branch": "work/prc-db-bulkops",
+        "path": "internal/db/gorm/candidate_store.go",
+        "display": "internal/db/gorm/candidate_store.go",
+        "kind": "exact",
+        "line": 8
+      },
+      {
+        "owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "branch": "work/prc-db-bulkops",
+        "path": "internal/db/gorm/candidate_store_test.go",
+        "display": "internal/db/gorm/candidate_store_test.go",
+        "kind": "exact",
+        "line": 8
+      },
+      {
+        "owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "branch": "work/prc-db-bulkops",
+        "path": "internal/mcp/tools_bulkops.go",
+        "display": "internal/mcp/tools_bulkops.go",
+        "kind": "exact",
+        "line": 8
+      },
+      {
+        "owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "branch": "work/prc-db-bulkops",
+        "path": "internal/mcp/tools_dryrun_test.go",
+        "display": "internal/mcp/tools_dryrun_test.go",
+        "kind": "exact",
+        "line": 8
+      },
+      {
+        "owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "branch": "work/prc-db-bulkops",
+        "path": ".agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md",
+        "display": ".agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md",
+        "kind": "exact",
+        "line": 8
+      },
+      {
+        "owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "branch": "work/prc-db-bulkops",
+        "path": ".agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker-3.md",
+        "display": ".agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker-3.md",
+        "kind": "exact",
+        "line": 8
+      },
+      {
+        "owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "branch": "work/prc-db-bulkops",
+        "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework",
+        "display": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**",
+        "kind": "prefix",
+        "line": 8
+      }
+    ],
+    "evidence_namespace": {
+      "kind": "evidence",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework",
+      "display": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**",
+      "match_kind": "prefix",
+      "policy": "canonical-derived-default"
+    },
+    "report_namespace": {
+      "kind": "report",
+      "path": ".agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md",
+      "display": ".agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md",
+      "match_kind": "exact",
+      "policy": "literal-row-exception"
+    }
+  },
+  "git": {
+    "repository": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker",
+    "requested_base": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+    "resolved_base": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+    "requested_head": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+    "resolved_head": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+    "base_is_ancestor": true,
+    "name_status_command": "git -c core.quotepath=false diff --name-status --find-renames --find-copies 68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef..bd68c05baf4b7250096dd84f56bebea2aa555970 --",
+    "raw_name_status": [
+      "A\t.agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/01-red-behavior.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/02-red-spy-seam.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/03-green-focused.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/04-green-repeat20.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/05-prove-it-candidate.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/06-prove-it-parser.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/07-post-prove-green.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/08-full-packages.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/09-legacy-compat.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/10-full-gorm.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/11-full-mcp.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/12-race-focused.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/13-vet.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/14-coverage.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/15-cover-functions.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/16-final-residue.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/17-review-red-authoritative-binding.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/18-review-green-authoritative-binding.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/19-review-green-authoritative-binding.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/20-review-repeat20.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/21-review-race-focused.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/22-review-vet.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/23-review-coverage.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/24-review-cover-functions.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/25-review-cover-functions.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/26-review-full-gorm.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/27-review-full-mcp.log",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/A-candidate-review-snapshot-binding.red.json",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/B-bulk-structured-input.red.json",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/DB-BULKOPS-BEHAVIORAL-EDGE-REWORK.final.json",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/Invoke-MakerGo.ps1",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/SHA256SUMS.txt",
+      "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/coverage.out",
+      "M\tinternal/db/gorm/candidate_store.go",
+      "M\tinternal/db/gorm/candidate_store_test.go",
+      "M\tinternal/mcp/tools_bulkops.go",
+      "M\tinternal/mcp/tools_dryrun_test.go"
+    ]
+  },
+  "counts": {
+    "diff_entries": 38,
+    "changed_paths": 38,
+    "violations": 0,
+    "errors": 0
+  },
+  "diff_entries": [
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md"
+      ],
+      "raw": "A\t.agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/01-red-behavior.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/01-red-behavior.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/02-red-spy-seam.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/02-red-spy-seam.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/03-green-focused.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/03-green-focused.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/04-green-repeat20.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/04-green-repeat20.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/05-prove-it-candidate.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/05-prove-it-candidate.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/06-prove-it-parser.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/06-prove-it-parser.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/07-post-prove-green.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/07-post-prove-green.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/08-full-packages.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/08-full-packages.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/09-legacy-compat.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/09-legacy-compat.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/10-full-gorm.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/10-full-gorm.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/11-full-mcp.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/11-full-mcp.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/12-race-focused.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/12-race-focused.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/13-vet.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/13-vet.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/14-coverage.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/14-coverage.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/15-cover-functions.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/15-cover-functions.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/16-final-residue.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/16-final-residue.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/17-review-red-authoritative-binding.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/17-review-red-authoritative-binding.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/18-review-green-authoritative-binding.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/18-review-green-authoritative-binding.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/19-review-green-authoritative-binding.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/19-review-green-authoritative-binding.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/20-review-repeat20.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/20-review-repeat20.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/21-review-race-focused.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/21-review-race-focused.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/22-review-vet.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/22-review-vet.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/23-review-coverage.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/23-review-coverage.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/24-review-cover-functions.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/24-review-cover-functions.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/25-review-cover-functions.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/25-review-cover-functions.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/26-review-full-gorm.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/26-review-full-gorm.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/27-review-full-mcp.log"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/27-review-full-mcp.log"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/A-candidate-review-snapshot-binding.red.json"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/A-candidate-review-snapshot-binding.red.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/B-bulk-structured-input.red.json"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/B-bulk-structured-input.red.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/DB-BULKOPS-BEHAVIORAL-EDGE-REWORK.final.json"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/DB-BULKOPS-BEHAVIORAL-EDGE-REWORK.final.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/Invoke-MakerGo.ps1"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/Invoke-MakerGo.ps1"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/SHA256SUMS.txt"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/SHA256SUMS.txt"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/coverage.out"
+      ],
+      "raw": "A\t.agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/coverage.out"
+    },
+    {
+      "status": "M",
+      "paths": [
+        "internal/db/gorm/candidate_store.go"
+      ],
+      "raw": "M\tinternal/db/gorm/candidate_store.go"
+    },
+    {
+      "status": "M",
+      "paths": [
+        "internal/db/gorm/candidate_store_test.go"
+      ],
+      "raw": "M\tinternal/db/gorm/candidate_store_test.go"
+    },
+    {
+      "status": "M",
+      "paths": [
+        "internal/mcp/tools_bulkops.go"
+      ],
+      "raw": "M\tinternal/mcp/tools_bulkops.go"
+    },
+    {
+      "status": "M",
+      "paths": [
+        "internal/mcp/tools_dryrun_test.go"
+      ],
+      "raw": "M\tinternal/mcp/tools_dryrun_test.go"
+    }
+  ],
+  "changed_paths": [
+    {
+      "status": "A",
+      "path": ".agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "report-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/01-red-behavior.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/02-red-spy-seam.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/03-green-focused.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/04-green-repeat20.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/05-prove-it-candidate.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/06-prove-it-parser.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/07-post-prove-green.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/08-full-packages.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/09-legacy-compat.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/10-full-gorm.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/11-full-mcp.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/12-race-focused.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/13-vet.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/14-coverage.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/15-cover-functions.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/16-final-residue.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/17-review-red-authoritative-binding.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/18-review-green-authoritative-binding.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/19-review-green-authoritative-binding.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/20-review-repeat20.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/21-review-race-focused.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/22-review-vet.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/23-review-coverage.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/24-review-cover-functions.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/25-review-cover-functions.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/26-review-full-gorm.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/27-review-full-mcp.log",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/A-candidate-review-snapshot-binding.red.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/B-bulk-structured-input.red.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/DB-BULKOPS-BEHAVIORAL-EDGE-REWORK.final.json",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/Invoke-MakerGo.ps1",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/SHA256SUMS.txt",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "A",
+      "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/coverage.out",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration",
+        "evidence-namespace"
+      ],
+      "ownership_matches": [
+        ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/**"
+      ]
+    },
+    {
+      "status": "M",
+      "path": "internal/db/gorm/candidate_store.go",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        "internal/db/gorm/candidate_store.go"
+      ]
+    },
+    {
+      "status": "M",
+      "path": "internal/db/gorm/candidate_store_test.go",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        "internal/db/gorm/candidate_store_test.go"
+      ]
+    },
+    {
+      "status": "M",
+      "path": "internal/mcp/tools_bulkops.go",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        "internal/mcp/tools_bulkops.go"
+      ]
+    },
+    {
+      "status": "M",
+      "path": "internal/mcp/tools_dryrun_test.go",
+      "allowed": true,
+      "allowed_by": [
+        "slice-declaration"
+      ],
+      "ownership_matches": [
+        "internal/mcp/tools_dryrun_test.go"
+      ]
+    }
+  ],
+  "violations": [],
+  "epoch_authority": {
+    "verdict": "PASS",
+    "evaluated": [
+      {
+        "path": "internal/db/gorm/candidate_store_test.go",
+        "current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "owner_pass": true,
+        "transition_kind": "rework",
+        "required_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+        "base_pass": true
+      },
+      {
+        "path": "internal/db/gorm/candidate_store.go",
+        "current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "owner_pass": true,
+        "transition_kind": "rework",
+        "required_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+        "base_pass": true
+      },
+      {
+        "path": "internal/mcp/tools_bulkops.go",
+        "current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "owner_pass": true,
+        "transition_kind": "rework",
+        "required_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+        "base_pass": true
+      },
+      {
+        "path": "internal/mcp/tools_dryrun_test.go",
+        "current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+        "owner_pass": true,
+        "transition_kind": "rework",
+        "required_base_sha": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+        "base_pass": true
+      }
+    ],
+    "errors": []
+  },
+  "errors": []
+}

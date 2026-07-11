@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "verdict": "PASS",
+  "input_path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\specs\\release-gates-r9\\evidence\\release-gates\\critical-suite\\r9-maker\\go-test.stdout.jsonl",
+  "fail_on_unexpected_skip": true,
+  "allowed_skip_identities": [],
+  "counts": {
+    "packages": 1,
+    "tests": 7,
+    "passed": 7,
+    "failed": 0,
+    "skipped": 0,
+    "no_tests": 0,
+    "zero_tests": 0,
+    "incomplete": 0,
+    "unexpected_skips": 0,
+    "malformed_lines": 0
+  },
+  "packages": [
+    {
+      "package": "github.com/thebtf/engram/tests/critical",
+      "outcome": "pass",
+      "elapsed_seconds": 0.164,
+      "last_output": "ok  \tgithub.com/thebtf/engram/tests/critical\t0.164s",
+      "tests_observed": 7
+    }
+  ],
+  "tests": [
+    {
+      "package": "github.com/thebtf/engram/tests/critical",
+      "test": "TestCritical_AuthTwoTier",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestCritical_AuthTwoTier (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/tests/critical",
+      "test": "TestCritical_AuthTwoTier/anti-stub:_stubbed_validator_flips_success_assertions",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCritical_AuthTwoTier/anti-stub:_stubbed_validator_flips_success_assertions (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/tests/critical",
+      "test": "TestCritical_AuthTwoTier/gRPC_accepts_dashboard-issued_keycard",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCritical_AuthTwoTier/gRPC_accepts_dashboard-issued_keycard (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/tests/critical",
+      "test": "TestCritical_AuthTwoTier/gRPC_accepts_operator_key",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCritical_AuthTwoTier/gRPC_accepts_operator_key (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/tests/critical",
+      "test": "TestCritical_AuthTwoTier/gRPC_rejects_garbage_bearer",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCritical_AuthTwoTier/gRPC_rejects_garbage_bearer (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/tests/critical",
+      "test": "TestCritical_AuthTwoTier/gRPC_rejects_missing_bearer",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCritical_AuthTwoTier/gRPC_rejects_missing_bearer (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/tests/critical",
+      "test": "TestCritical_AuthTwoTier/HTTP_bearer_arm:_master_+_keycard_accepted,_garbage_rejected",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestCritical_AuthTwoTier/HTTP_bearer_arm:_master_+_keycard_accepted,_garbage_rejected (0.01s)",
+      "skip_allowed": false
+    }
+  ],
+  "unexpected_skips": [],
+  "errors": []
+}

@@ -1,0 +1,58 @@
+version: 1
+shape: docker-compose
+
+# The critical stand is isolated from ordinary local compose state by project
+# name and non-default host ports. The critical-suite runner exports the env
+# below before invoking the lifecycle commands.
+up:
+  command: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -DevStandAction Up -ComposeProject engram-critical-stand -ComposeFile docker-compose.yml"
+  readiness_check: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -DevStandAction Ready -ComposeProject engram-critical-stand -ComposeFile docker-compose.yml"
+  timeout_seconds: 600
+down:
+  command: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -DevStandAction Down -ComposeProject engram-critical-stand -ComposeFile docker-compose.yml"
+  timeout_seconds: 180
+logs:
+  command: "docker compose -p engram-critical-stand -f docker-compose.yml logs --no-color --tail=300"
+
+env:
+  COMPOSE_PROJECT_NAME: "engram-critical-stand"
+  POSTGRES_PORT: "55433"
+  WORKER_PORT: "37778"
+  OPERATOR_CONSOLE_PORT: "3001"
+  STAND_API_URL: "http://localhost:37778"
+  STAND_OPERATOR_URL: "http://localhost:3001"
+  NUXT_OPERATOR_API_TARGET: "http://server:37777"
+  ENGRAM_AUTH_DISABLED: "false"
+
+credential_policy:
+  generation_scope: "three independent cryptographic 256-bit values generated inside the Up runner process"
+  postgres_password: "generated cryptographically inside the Up runner process"
+  admin_token: "generated cryptographically inside the Up runner process"
+  bootstrap_capability: "generated cryptographically inside the Up runner process"
+  postgres_runtime_interface: "POSTGRES_PASSWORD plus generated DATABASE_DSN"
+  admin_runtime_interface: "ENGRAM_AUTH_ADMIN_TOKEN"
+  bootstrap_runtime_interface: "ENGRAM_AUTH_BOOTSTRAP_CAPABILITY via ephemeral compose override"
+  required_distinct: true
+  forbidden_defaults: ["engram", "password", "changeme", "change-me", "change-me-in-production", "default", "admin"]
+  persistence: "never written to raw logs, machine summaries, config, or caller environment"
+  auth_disabled_fallback: false
+
+image_scan:
+  command: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -DevStandAction Scan -ComposeProject engram-critical-stand -ComposeFile docker-compose.yml"
+  discovery: "docker service inventory filtered by com.docker.compose.project=engram-critical-stand"
+  scanner: "docker scout cves"
+  severities: ["critical", "high"]
+  fail_on_findings: true
+  machine_evidence: "dev-stand/<run-id>-scan/docker-scout-*.sarif.json plus summary.json"
+  exact_service_images:
+    postgres: "pgvector/pgvector:pg17"
+    server: "ghcr.io/thebtf/engram:main"
+    operator-console: "ghcr.io/thebtf/engram-operator-console:main"
+  forbidden_synthetic_tags:
+    - "engram:prc-candidate"
+
+database_evidence:
+  runner: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1"
+  postgres_image: "pgvector/pgvector:pg17"
+  database_lifecycle: "fresh unique database per repetition; cleanup owns only engram_prc_rg_* databases"
+  shared_service_policy: "Never stop or remove an operator-owned PostgreSQL container; only terminate/drop the current run database."

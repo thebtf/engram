@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "gate": "r8-plan-governance-authority",
+  "checked_at": "2026-07-10T23:07:40.2283397+03:00",
+  "verdict": "PASS",
+  "reconstruction_base": "d59d1605969b1f567506e96ded524dfd1e4be08a",
+  "rejected_r7_plan": "a99ce0dfe4d415f90c0f192cbf96bd88710a48f5",
+  "diagnostic_r7_release_gates": "144eeefa003c3e1c0009c4264f41236ee3453b65",
+  "r7_checker": "d8ba52d29f1c7f2169e3f76576248ab32d3b6646",
+  "plan": {
+    "path": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+    "canonical_utf8_lf_sha256": "fd2b223a9a62848efc39e1c33bf739bada191508bccb7ba9a73140185638e43d"
+  },
+  "ownership_state": {
+    "path": ".agent/plans/2026-07-10-engram-production-ready-ownership-state.json",
+    "canonical_utf8_lf_sha256": "c14eaba5a9615af7196af913aedf8bb3c6e51e05880d47d391e8d07e4367a192",
+    "epochs": 36
+  },
+  "scope_map": {
+    "path": ".agent/plans/2026-07-10-engram-production-ready-scope-map.json",
+    "sha256": "81093184036672008d6b85dfa88a431998ef70b587ab11475aa2b315f03ddf79",
+    "register_freeze_sha256": "ab5f882fa110ca823a317061ecbca0c62516702735325893a56206f9e7a29415"
+  },
+  "ledger": {
+    "path": ".agent/specs/release-gates-r8/evidence/plan-governance/ledger.json",
+    "verdict": "PASS",
+    "maker_slices": 57,
+    "declarations": 333,
+    "repeated_exact_paths": 34,
+    "declared_epochs": 36,
+    "state_epochs": 36,
+    "errors": 0
+  },
+  "restored_predecessor_rows": [
+    "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+    "INGEST-DOC-CLASSIFICATION",
+    "INGEST-DOC-SNAPSHOT-DEMOLITION",
+    "CRYSTALLIZATION-DREAM-CYCLE-CORRECTNESS",
+    "OPENCLAW-RELEASE",
+    "DOCUMENT-INGEST-PUBLIC-TRUTH",
+    "MCP-STRUCTURED-INPUT-CLASSIFICATION",
+    "MCP-STRUCTURED-INPUT-VALIDATION"
+  ],
+  "plan_only_authority_rows": ["MCP-STRUCTURED-INPUT-CLASSIFICATION", "SECURITY-REVIEW"],
+  "errors": []
+}

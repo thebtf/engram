@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "gate": "full-project-fresh-db-race-repeat-3",
+  "verdict": "FAIL",
+  "repeat_test_failures": [27, 28, 27],
+  "stable_failed_tests": {
+    "internal/bulkops": [
+      "TestEC_F3_ConflictDetected_Integration",
+      "TestFacade_BulkDelete_Committed_AuditLogWritten",
+      "TestFacade_BulkSupersede_Committed_AuditLogWritten",
+      "TestRollback_HappyPath"
+    ],
+    "internal/db/gorm": [
+      "TestMigration144_RuleGovernanceEscapeConstraints",
+      "TestMigration144_RuleGovernanceRollbackAndReapply",
+      "TestMigration144_RuleGovernanceSnapshotStatusesAcceptExtendedStates",
+      "TestRuleGovernanceStore_AnnotatedCandidateWaitsUntilReviewAfter",
+      "TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables",
+      "TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectScopedReads"
+    ],
+    "internal/embedding": [
+      "TestStatsWithCoverage_NoActiveMemories",
+      "TestStoreStats_Empty"
+    ],
+    "internal/graph": [
+      "TestDangling_T016_DanglingEdgeReturnsFlag",
+      "TestPathC_T015_NodeCreatedAtTimestamp",
+      "TestPathC_T015_NodeTypedEdgeListFilter",
+      "TestPathC_T015_SkillNodeEdgeRoundtrip"
+    ],
+    "internal/mcp": [
+      "TestEC_F1_TagDerivedBackfill_T007",
+      "TestHybridTG3_ConfidenceMin_FloorEnforced_T022"
+    ],
+    "internal/worker": [
+      "TestAuthHandlersLifecycle_DisabledAdminCanBeDemotedWithoutLastAdminError",
+      "TestAuthHandlersLifecycle_LastAdminDemoteRaceLeavesOneAdmin",
+      "TestCrystallizationIntegration_ConcurrentReplaySkipsDuplicateFingerprint",
+      "TestCrystallizationIntegration_DecisionsStoredWithCorrectFields",
+      "TestCrystallizationIntegration_PrivacyRedaction",
+      "TestHandleCreateBehavioralRule_Success",
+      "TestHandleListBehavioralRules_ProjectScope",
+      "TestHandleSetBehavioralRuleEnabled_Success"
+    ],
+    "internal/worker/reaper": [
+      "TestReaper_RespectsRetentionEnvVar: panic because t.Setenv is used under t.Parallel"
+    ]
+  },
+  "repeat_2_only_failure": "internal/bulkops::TestRollback_Conflict_EC_F3",
+  "unexpected_skips_each_repeat": 25,
+  "unexpected_skip_inventory": [
+    "internal/db/gorm::TestMigrationsIntegration_AddsCommandsRunColumn",
+    "internal/grpcserver::TestCredentialDecryptRoundTripAfterMigration",
+    "internal/grpcserver::TestEC_F1_P1_GRPCSessionStart_FlagOff_ByteIdentity",
+    "internal/grpcserver::TestEC_F1_P1_GRPCSessionStart_FlagOn_NoCallerIdentity_PrivateInvisible",
+    "internal/grpcserver::TestEC_F1_P1_GRPCSessionStart_FlagOn_PrivateCrossWorkstationInvisible",
+    "internal/grpcserver::TestGetSessionStartContext_DefaultLimits",
+    "internal/grpcserver::TestGetSessionStartContext_HappyPath",
+    "internal/grpcserver::TestGetSessionStartContext_MetaSummaryCountsBeyondResponseCap",
+    "internal/grpcserver::TestGetSessionStartContext_MetaSummaryFlagOffOmitted",
+    "internal/grpcserver::TestGetSessionStartContext_MetaSummaryFlagOnDescribesMemoryLandscape",
+    "internal/grpcserver::TestGetSessionStartContext_MetaSummaryFlagOnEmptyProjectIsBoundedAndContentFree",
+    "internal/grpcserver::TestGetSessionStartContext_PrincipalPrivateCrossPrincipalInvisible_FlagOff",
+    "internal/grpcserver::TestGetSessionStartContext_RuleRouterEnabledPacketShape",
+    "internal/grpcserver::TestGetSessionStartContext_T014_MetaSummaryRequiresMasterAndS2Flags",
+    "internal/handlers/loom::TestCliWorker_ContextCancellation",
+    "internal/handlers/loom::TestCliWorker_EmptyStdoutTriggersRetry",
+    "internal/handlers/loom::TestCliWorker_EnvMerge",
+    "internal/handlers/loom::TestCliWorker_HappyPath",
+    "internal/handlers/loom::TestCliWorker_InvalidEnvKey",
+    "internal/handlers/loom::TestCliWorker_StderrCapture",
+    "internal/handlers/loom::TestCliWorker_Timeout",
+    "internal/redaction::TestEC_F5_FullRedactionRejected",
+    "internal/redaction::TestEC_F9_HotReloadNotSupported",
+    "internal/retrieval::TestIntegration_HybridWithVector",
+    "internal/worker::TestStaticEmbedIncludesUnderscoreNuxtChunks"
+  ],
+  "coverage": {
+    "overall_percent": [53.0, 52.99, 52.99],
+    "overall_floor": 60.0,
+    "failed_package_floors": {
+      "internal/handlers/loom": "64.77 < 70",
+      "cmd/engram": "6.39 < 10",
+      "cmd/engram-server": "0 < 10",
+      "internal/update": "0 < 20",
+      "internal/worker": "46.77 < 55",
+      "internal/mcp": "46.23 < 55",
+      "internal/db/gorm": "49.10 < 55"
+    }
+  },
+  "cleanup": {
+    "repeat_cleanup_exit_codes": [0, 0, 0],
+    "direct_sql_residual_databases": 0,
+    "direct_sql_residual_sessions": 0,
+    "shared_postgres_container_left_running": true
+  },
+  "routing": "Existing master-plan lanes own these product/test/coverage blockers. RELEASE-GATES does not allowlist, suppress, or patch them."
+}

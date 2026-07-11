@@ -7,15 +7,15 @@ on:
     branches: [main]
 
 jobs:
-  # Migration gate — runs the FULL migration chain against a clean PostgreSQL+pgvector
-  # database on every push. The matrix `test` job below skips all DATABASE_DSN-gated tests
-  # (no DB service), so without this job a broken migration reaches prod unverified — which
-  # is exactly how migration 143 shipped a multi-statement Exec that pgx rejects with
-  # SQLSTATE 42601, breaking server init on v6.23.0–v6.25.0. This job is the clean-DB
-  # first-run gate that catches that class of failure before merge.
-  migrations:
-    name: migrations / clean-db chain
+  # M0 RELEASE-GATES foundation. The wrapper owns fresh database identity,
+  # go-test JSON parsing, unexpected-skip policy, per-process exit capture,
+  # connection evidence, and unconditional cleanup. A later successful command
+  # cannot overwrite an earlier non-zero exit.
+  release-gates-foundation:
+    name: release gates / isolated clean-db chain
     runs-on: ubuntu-latest
+    env:
+      ENGRAM_TEST_ADMIN_DSN: postgres://engram:engram@localhost:5432/postgres?sslmode=disable
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -40,20 +40,816 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Runs the clean-DB full-chain gate: TestMigrationsIntegration calls runMigrations on
-      # a fresh database, so the entire chain (including the newest migration) must apply
-      # cleanly from zero — the first-run path the local borrowed DB never exercises, and the
-      # exact path that broke when migration 143 shipped a multi-statement Exec.
-      #
-      # The pattern is ANCHORED (TestMigrationsIntegration$) to this one gate. The sibling
-      # TestMigrationsIntegration_* tests are NOT clean-DB-safe on the base pgvector image —
-      # they drop/re-run individual migrations and assume an already-migrated schema, so an
-      # unanchored -run pulls them in and they fail on a from-zero DB. Those siblings stay as
-      # operator-run-against-a-real-DB tests; this gate owns the clean first-run contract.
-      - name: Run migration chain on clean DB
-        env:
-          DATABASE_DSN: postgres://engram:engram@localhost:5432/engram?sslmode=disable
-        run: go test ./internal/db/gorm/ -run 'TestMigrationsIntegration$' -count=1 -v
+      - name: Self-test go-test JSON assertion
+        shell: pwsh
+        run: ./scripts/production-gates/assert-go-test-json.ps1 -SelfTest
+
+      - name: Self-test coverage assertion
+        shell: pwsh
+        run: ./scripts/production-gates/assert-coverage.ps1 -SelfTest
+
+      - name: Self-test cleanup safety
+        shell: pwsh
+        run: ./scripts/production-gates/cleanup-db-sessions.ps1 -SelfTest
+
+      - name: Self-test false-green prevention
+        shell: pwsh
+        run: ./scripts/production-gates/run-db-suite.ps1 -SelfTest
+
+      - name: Self-test tracked critical runner
+        shell: pwsh
+        run: ./scripts/production-gates/run-critical-suite.ps1 -Config .agent/critical-suite.config.yaml -SelfTest
+
+      - name: Self-test tracked dev-stand runner
+        shell: pwsh
+        run: ./scripts/production-gates/run-dev-stand.ps1 -Config .agent/dev-stand.config.yaml -SelfTest
+
+      - name: Self-test plan path ownership gate
+        shell: pwsh
+        run: ./scripts/production-gates/assert-plan-path-ownership.ps1 -SelfTest
+
+      - name: Self-test active candidate path authority gate
+        shell: pwsh
+        run: ./scripts/production-gates/assert-active-candidate-path-authority.ps1 -SelfTest
+
+      - name: Self-test Windows tracked path budget
+        shell: pwsh
+        run: ./scripts/production-gates/assert-windows-path-budget.ps1 -SelfTest
+
+      - name: Self-test OpenClaw node release matrix
+        shell: pwsh
+        run: ./scripts/production-gates/run-node-matrix.ps1 -SelfTest
+
+      - name: Assert tracked production-ready ownership ledger
+        shell: pwsh
+        run: >-
+          ./scripts/production-gates/assert-plan-path-ownership.ps1
+          -Mode Ledger
+          -Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md
+          -ExpectedPlanSha256 4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f
+          -State .agent/plans/2026-07-10-engram-production-ready-ownership-state.json
+          -ScopeMap .agent/plans/2026-07-10-engram-production-ready-scope-map.json
+          -ExpectedScopeMapSha256 fb170d59f3072117489402fd347cd1432c40adbc842811f92227498bcbc92693
+          -Artifact .agent/e/rg4/ci-ledger.json
+
+      - name: Assert frozen active candidate path authority
+        shell: pwsh
+        run: >-
+          ./scripts/production-gates/assert-active-candidate-path-authority.ps1
+          -Contract .agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json
+          -ExpectedContractSha256 d8e7818d84831f047d30a8493f9c7d2a8cea288d5c381735960d11dd02988ae5
+          -Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md
+          -ExpectedPlanSha256 4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f
+          -Artifact .agent/e/rg9/ci-active-candidate-authority.json
+
+      - name: Assert Windows tracked path budget
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/production-gates/assert-windows-path-budget.ps1 -Repository . -Ref HEAD -CheckoutPrefixLength 66 -MaximumCombinedPathLength 240 -Artifact .agent/e/rg4/ci-path-budget.json
+
+      - name: Assert tracked gate / CI conformance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Get-CanonicalTextSha256([string]$text) {
+            $canonical = ($text -replace "`r`n", "`n") -replace "`r", "`n"
+            $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($canonical)
+            return [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+          }
+          $critical = Get-Content -Raw '.agent/critical-suite.config.yaml'
+          $stand = Get-Content -Raw '.agent/dev-stand.config.yaml'
+          $workflow = Get-Content -Raw '.github/workflows/test.yml'
+          $dbRunner = Get-Content -Raw 'scripts/production-gates/run-db-suite.ps1'
+          $criticalRunner = Get-Content -Raw 'scripts/production-gates/run-critical-suite.ps1'
+          $devStandRunner = Get-Content -Raw 'scripts/production-gates/run-dev-stand.ps1'
+          $ownershipRunner = Get-Content -Raw 'scripts/production-gates/assert-plan-path-ownership.ps1'
+          $activeAuthorityRunner = Get-Content -Raw 'scripts/production-gates/assert-active-candidate-path-authority.ps1'
+          $pathBudgetRunner = Get-Content -Raw 'scripts/production-gates/assert-windows-path-budget.ps1'
+          $nodeRunner = Get-Content -Raw 'scripts/production-gates/run-node-matrix.ps1'
+          $ownershipState = Get-Content -Raw '.agent/plans/2026-07-10-engram-production-ready-ownership-state.json'
+          $masterPlan = Get-Content -Raw '.agent/plans/2026-07-10-engram-production-ready-master-plan.md'
+          $scopeMap = Get-Content -Raw '.agent/plans/2026-07-10-engram-production-ready-scope-map.json'
+          $activeDiffContracts = Get-Content -Raw '.agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json'
+          $expectedPlanSha = '4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f'
+          $expectedScopeMapSha = 'fb170d59f3072117489402fd347cd1432c40adbc842811f92227498bcbc92693'
+          $expectedActiveDiffContractSha = 'd8e7818d84831f047d30a8493f9c7d2a8cea288d5c381735960d11dd02988ae5'
+          $observedPlanSha = ([string](& pwsh -NoProfile -File scripts/production-gates/assert-plan-path-ownership.ps1 -Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md -PrintCanonicalPlanSha256)).Trim()
+          $observedScopeMapSha = Get-CanonicalTextSha256 $scopeMap
+          $rejectedBulkHead = '68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef'
+          $rejectedBulkChecker = '.agent/worktrees/prc-db-bulkops/.agent/reviews/2026-07-10-db-bulkops-sibling-rework-check.md'
+          $rejectedBulkCheckerSha = 'EB9EB227363A27EA058C6654BD7E38EED1088252F79F837E377B2A3CBC1FAFB7'
+          $trackedCriticalCommand = 'go test -tags=critical -json ./tests/critical/... -count=1'
+          $trackedDatabaseCommand = 'pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -FreshDatabase -Package ./... -Race -FailOnUnexpectedSkip'
+          $trackedCriticalWrapper = 'pwsh -NoProfile -File scripts/production-gates/run-critical-suite.ps1 -Config .agent/critical-suite.config.yaml'
+          $trackedDevStandWrapper = 'pwsh -NoProfile -File scripts/production-gates/run-dev-stand.ps1 -Config .agent/dev-stand.config.yaml'
+          $trackedPathBudgetWrapper = 'pwsh -NoProfile -File scripts/production-gates/assert-windows-path-budget.ps1 -Repository . -Ref HEAD -CheckoutPrefixLength 66 -MaximumCombinedPathLength 240 -Artifact .agent/e/rg4/ci-path-budget.json'
+
+          function Remove-ConformanceStep([string]$text) {
+            return [regex]::Replace($text, '(?ms)^      - name: Assert tracked gate / CI conformance\r?\n.*?(?=^      - name: |\z)', '')
+          }
+
+          function Get-StepBody([string]$text, [string]$name) {
+            $match = [regex]::Match($text, ('(?ms)^      - name: ' + [regex]::Escape($name) + '\r?\n(?<body>.*?)(?=^      - name: |\z)'))
+            if (-not $match.Success) { throw "workflow step '$name' is missing" }
+            return $match.Groups['body'].Value
+          }
+
+          function ConvertTo-AstShape([string]$text) {
+            return [regex]::Replace($text, '\s+', '')
+          }
+
+          function Get-PowerShellAst([string]$text) {
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$tokens, [ref]$parseErrors)
+            if ($parseErrors.Count -ne 0) {
+              throw "PowerShell source has $($parseErrors.Count) parse error(s): $([string]::Join('; ', @($parseErrors | ForEach-Object Message)))"
+            }
+            return $ast
+          }
+
+          function Get-Ancestor([System.Management.Automation.Language.Ast]$node, [type]$type) {
+            $cursor = $node.Parent
+            while ($null -ne $cursor) {
+              if ($cursor -is $type) { return $cursor }
+              $cursor = $cursor.Parent
+            }
+            return $null
+          }
+
+          function Test-InExactIfClause([System.Management.Automation.Language.Ast]$node, [string]$expectedCondition) {
+            $expectedShape = ConvertTo-AstShape $expectedCondition
+            $cursor = $node.Parent
+            while ($null -ne $cursor) {
+              if ($cursor -is [System.Management.Automation.Language.IfStatementAst]) {
+                foreach ($clause in $cursor.Clauses) {
+                  $body = $clause.Item2
+                  if ($node.Extent.StartOffset -ge $body.Extent.StartOffset -and $node.Extent.EndOffset -le $body.Extent.EndOffset -and (ConvertTo-AstShape $clause.Item1.Extent.Text) -ceq $expectedShape) {
+                    return $true
+                  }
+                }
+              }
+              $cursor = $cursor.Parent
+            }
+            return $false
+          }
+
+          function Assert-ExactCommandControlFlow(
+            [System.Management.Automation.Language.CommandAst]$node,
+            [string[]]$expectedIfConditions,
+            [string[]]$expectedLoopConditions
+          ) {
+            $actualIfConditions = [System.Collections.Generic.List[string]]::new()
+            $actualLoopConditions = [System.Collections.Generic.List[string]]::new()
+            $cursor = $node.Parent
+            while ($null -ne $cursor -and $cursor -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) {
+              if ($cursor -is [System.Management.Automation.Language.IfStatementAst]) {
+                $matchedClause = $false
+                foreach ($clause in $cursor.Clauses) {
+                  if ($node.Extent.StartOffset -ge $clause.Item2.Extent.StartOffset -and $node.Extent.EndOffset -le $clause.Item2.Extent.EndOffset) {
+                    $actualIfConditions.Add((ConvertTo-AstShape $clause.Item1.Extent.Text))
+                    $matchedClause = $true
+                    break
+                  }
+                }
+                if (-not $matchedClause) {
+                  $clauseShapes = @($cursor.Clauses | ForEach-Object { ConvertTo-AstShape $_.Item1.Extent.Text })
+                  $actualIfConditions.Add(('<else:' + ($clauseShapes -join ',') + '>'))
+                }
+              }
+              elseif ($cursor -is [System.Management.Automation.Language.ForEachStatementAst]) {
+                $actualLoopConditions.Add(('foreach:' + (ConvertTo-AstShape $cursor.Condition.Extent.Text)))
+              }
+              elseif ($cursor -is [System.Management.Automation.Language.ForStatementAst]) {
+                $actualLoopConditions.Add(('for:' + (ConvertTo-AstShape $cursor.Condition.Extent.Text)))
+              }
+              elseif ($cursor -is [System.Management.Automation.Language.LoopStatementAst] -or
+                      $cursor -is [System.Management.Automation.Language.SwitchStatementAst] -or
+                      $cursor -is [System.Management.Automation.Language.TrapStatementAst] -or
+                      $cursor -is [System.Management.Automation.Language.DataStatementAst] -or
+                      $cursor -is [System.Management.Automation.Language.ScriptBlockExpressionAst]) {
+                throw "live invocation '$([string]$node.CommandElements[1].Value)' is hidden in unsupported or potentially unreachable control flow '$($cursor.GetType().Name)'"
+              }
+              $cursor = $cursor.Parent
+            }
+
+            $expectedIfShapes = @($expectedIfConditions | ForEach-Object { ConvertTo-AstShape $_ })
+            $expectedLoopShapes = @($expectedLoopConditions | ForEach-Object { ConvertTo-AstShape $_ })
+            if ($actualIfConditions.Count -ne $expectedIfShapes.Count) {
+              throw "live invocation '$([string]$node.CommandElements[1].Value)' has $($actualIfConditions.Count) if-branch ancestor(s), expected $($expectedIfShapes.Count)"
+            }
+            foreach ($condition in $expectedIfShapes) {
+              if (-not $actualIfConditions.Contains($condition)) { throw "live invocation '$([string]$node.CommandElements[1].Value)' is missing exact live if-branch '$condition'" }
+            }
+            if ($actualLoopConditions.Count -ne $expectedLoopShapes.Count) {
+              throw "live invocation '$([string]$node.CommandElements[1].Value)' has $($actualLoopConditions.Count) loop ancestor(s), expected $($expectedLoopShapes.Count)"
+            }
+            foreach ($condition in $expectedLoopShapes) {
+              if (-not $actualLoopConditions.Contains($condition)) { throw "live invocation '$([string]$node.CommandElements[1].Value)' is missing exact live loop '$condition'" }
+            }
+          }
+
+          function Get-ExactCapturedInvocation(
+            [System.Management.Automation.Language.ScriptBlockAst]$ast,
+            [string]$name,
+            [string]$expectedExecutable,
+            [string]$expectedArguments,
+            [string]$expectedAssignment,
+            [string]$expectedIfCondition
+          ) {
+            $commands = @($ast.FindAll({
+              param($node)
+              if ($node -isnot [System.Management.Automation.Language.CommandAst] -or $node.GetCommandName() -cne 'Invoke-CapturedProcess' -or $node.CommandElements.Count -lt 2) { return $false }
+              $nameNode = $node.CommandElements[1]
+              return ($nameNode -is [System.Management.Automation.Language.StringConstantExpressionAst] -or $nameNode -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) -and [string]$nameNode.Value -ceq $name
+            }, $true))
+            if ($commands.Count -ne 1) { throw "live Invoke-CapturedProcess '$name' cardinality must be exactly 1; found $($commands.Count)" }
+            $command = $commands[0]
+            if ($command.CommandElements.Count -ne 10) { throw "live invocation '$name' argument cardinality drifted: found $($command.CommandElements.Count - 1), expected 9" }
+            if ($command.CommandElements[2].Extent.Text -cne $expectedExecutable) { throw "live invocation '$name' executable drifted: '$($command.CommandElements[2].Extent.Text)'" }
+            if ((ConvertTo-AstShape $command.CommandElements[3].Extent.Text) -cne (ConvertTo-AstShape $expectedArguments)) { throw "live invocation '$name' command arguments drifted: '$($command.CommandElements[3].Extent.Text)'" }
+            $assignment = Get-Ancestor $command ([System.Management.Automation.Language.AssignmentStatementAst])
+            if ($null -eq $assignment -or $assignment.Left.Extent.Text -cne $expectedAssignment) { throw "live invocation '$name' is not assigned to $expectedAssignment" }
+            $function = Get-Ancestor $command ([System.Management.Automation.Language.FunctionDefinitionAst])
+            if ($null -eq $function -or $function.Name -cne 'Invoke-DevStandContract') { throw "live invocation '$name' is outside Invoke-DevStandContract" }
+            if (-not (Test-InExactIfClause $command $expectedIfCondition)) { throw "live invocation '$name' is outside the required branch '$expectedIfCondition'" }
+            return $command
+          }
+
+          function Assert-ExactImageTargetMap([System.Management.Automation.Language.ScriptBlockAst]$ast) {
+            $functions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-DevStandImageTargets' }, $true))
+            if ($functions.Count -ne 1) { throw "Get-DevStandImageTargets cardinality must be exactly 1; found $($functions.Count)" }
+            $maps = @($functions[0].Body.FindAll({ param($node) $node -is [System.Management.Automation.Language.HashtableAst] }, $true))
+            if ($maps.Count -ne 1) { throw "Get-DevStandImageTargets must contain exactly one live hashtable; found $($maps.Count)" }
+            $expected = [ordered]@{ postgres = "'pgvector/pgvector:pg17'"; server = "'ghcr.io/thebtf/engram:main'"; 'operator-console' = "'ghcr.io/thebtf/engram-operator-console:main'" }
+            if ($maps[0].KeyValuePairs.Count -ne $expected.Count) { throw "exact image target map must contain 3 services; found $($maps[0].KeyValuePairs.Count)" }
+            $actual = @{}
+            foreach ($pair in $maps[0].KeyValuePairs) {
+              $key = $pair.Item1.Extent.Text.Trim("'", '"')
+              if ($actual.ContainsKey($key)) { throw "duplicate exact image target '$key'" }
+              $actual[$key] = ConvertTo-AstShape $pair.Item2.Extent.Text
+            }
+            foreach ($entry in $expected.GetEnumerator()) {
+              if (-not $actual.ContainsKey($entry.Key) -or $actual[$entry.Key] -cne (ConvertTo-AstShape $entry.Value)) { throw "exact image target '$($entry.Key)' drifted" }
+            }
+          }
+
+          function Assert-ExactRequiredSessionStartInventory([System.Management.Automation.Language.ScriptBlockAst]$ast) {
+            $expectedPackage = 'github.com/thebtf/engram/internal/grpcserver'
+            $expectedNames = @(
+              'TestEC_F1_P1_GRPCSessionStart_FlagOff_ByteIdentity',
+              'TestEC_F1_P1_GRPCSessionStart_FlagOn_PrivateCrossWorkstationInvisible',
+              'TestEC_F1_P1_GRPCSessionStart_FlagOn_NoCallerIdentity_PrivateInvisible',
+              'TestGetSessionStartContext_HappyPath',
+              'TestGetSessionStartContext_PrincipalPrivateCrossPrincipalInvisible_FlagOff',
+              'TestGetSessionStartContext_MetaSummaryFlagOnDescribesMemoryLandscape',
+              'TestGetSessionStartContext_MetaSummaryCountsBeyondResponseCap',
+              'TestGetSessionStartContext_MetaSummaryFlagOffOmitted',
+              'TestGetSessionStartContext_MetaSummaryFlagOnEmptyProjectIsBoundedAndContentFree',
+              'TestGetSessionStartContext_T014_MetaSummaryRequiresMasterAndS2Flags',
+              'TestGetSessionStartContext_RuleRouterEnabledPacketShape',
+              'TestGetSessionStartContext_DefaultLimits'
+            )
+
+            $inventoryFunctions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-RequiredSessionStartTestNames' }, $true))
+            if ($inventoryFunctions.Count -ne 1) { throw "Get-RequiredSessionStartTestNames cardinality must be exactly 1; found $($inventoryFunctions.Count)" }
+            $actualNames = @($inventoryFunctions[0].Body.FindAll({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true) | ForEach-Object Value)
+            if ($actualNames.Count -ne $expectedNames.Count) { throw "required session-start identity cardinality must be exactly 12; found $($actualNames.Count)" }
+            for ($identityIndex = 0; $identityIndex -lt $expectedNames.Count; $identityIndex++) {
+              if ([string]$actualNames[$identityIndex] -cne $expectedNames[$identityIndex]) { throw "required session-start identity drifted at index ${identityIndex}: '$([string]$actualNames[$identityIndex])'" }
+            }
+
+            $proofFunctions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Get-RequiredSessionStartExecutionProof' }, $true))
+            if ($proofFunctions.Count -ne 1) { throw "Get-RequiredSessionStartExecutionProof cardinality must be exactly 1; found $($proofFunctions.Count)" }
+            $allPackageAssignments = @($proofFunctions[0].Body.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$package'
+            }, $true))
+            if ($allPackageAssignments.Count -ne 1) { throw "required session-start package assignment cardinality must be exactly 1; found $($allPackageAssignments.Count)" }
+            $packageAssignments = @($proofFunctions[0].Body.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$package' -and
+                (ConvertTo-AstShape $node.Right.Extent.Text) -ceq (ConvertTo-AstShape ("'" + $expectedPackage + "'"))
+            }, $true))
+            if ($packageAssignments.Count -ne 1 -or $packageAssignments[0].Extent.StartOffset -ne $allPackageAssignments[0].Extent.StartOffset) { throw "required session-start package must be assigned exactly once to '$expectedPackage'" }
+            $inventoryAssignments = @($proofFunctions[0].Body.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$expectedNames' -and
+                (ConvertTo-AstShape $node.Right.Extent.Text) -ceq (ConvertTo-AstShape '@(Get-RequiredSessionStartTestNames)')
+            }, $true))
+            if ($inventoryAssignments.Count -ne 1) { throw 'execution proof does not consume the pinned required session-start identity inventory exactly once' }
+
+            $consumerLoops = @($proofFunctions[0].Body.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.ForEachStatementAst] -and
+                $node.Variable.Extent.Text -ceq '$name' -and
+                (ConvertTo-AstShape $node.Condition.Extent.Text) -ceq (ConvertTo-AstShape '$expectedNames')
+            }, $true))
+            if ($consumerLoops.Count -ne 1) { throw "required session-start consumer loop cardinality must be exactly 1; found $($consumerLoops.Count)" }
+            $matchesAssignments = @($proofFunctions[0].Body.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$matches'
+            }, $true))
+            if ($matchesAssignments.Count -ne 1) { throw "required session-start live matches assignment cardinality must be exactly 1; found $($matchesAssignments.Count)" }
+            $liveMatchesAssignment = $consumerLoops[0].Body.Statements[0]
+            $expectedMatchesExpression = '@($allTests | Where-Object { [string]$_.package -ceq $package -and [string]$_.test -ceq $name })'
+            if ($liveMatchesAssignment -isnot [System.Management.Automation.Language.AssignmentStatementAst] -or
+                $liveMatchesAssignment.Left.Extent.Text -cne '$matches' -or
+                $liveMatchesAssignment.Extent.StartOffset -ne $matchesAssignments[0].Extent.StartOffset -or
+                $packageAssignments[0].Extent.StartOffset -ge $liveMatchesAssignment.Extent.StartOffset -or
+                (ConvertTo-AstShape $liveMatchesAssignment.Right.Extent.Text) -cne (ConvertTo-AstShape $expectedMatchesExpression)) {
+              throw 'required session-start live consumer does not bind exact case-sensitive package plus test identity at the point of consumption'
+            }
+          }
+
+          function Get-ExactRuntimeAssignment(
+            [System.Management.Automation.Language.ScriptBlockAst]$ast,
+            [string]$left,
+            [string]$right
+          ) {
+            $rightShape = ConvertTo-AstShape $right
+            $assignments = @($ast.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                $node.Left.Extent.Text -ceq $left -and
+                (ConvertTo-AstShape $node.Right.Extent.Text) -ceq $rightShape
+            }, $true) | Where-Object { $null -eq (Get-Ancestor $_ ([System.Management.Automation.Language.FunctionDefinitionAst])) })
+            if ($assignments.Count -ne 1) { throw "live runtime assignment '$left = $right' cardinality must be exactly 1; found $($assignments.Count)" }
+            return $assignments[0]
+          }
+
+          function Assert-ExactRepeatLoop([System.Management.Automation.Language.Ast]$node) {
+            $loop = Get-Ancestor $node ([System.Management.Automation.Language.ForStatementAst])
+            if ($null -eq $loop -or
+                (ConvertTo-AstShape $loop.Initializer.Extent.Text) -cne (ConvertTo-AstShape '$repeatIndex = 1') -or
+                (ConvertTo-AstShape $loop.Condition.Extent.Text) -cne (ConvertTo-AstShape '$repeatIndex -le $Repeat') -or
+                (ConvertTo-AstShape $loop.Iterator.Extent.Text) -cne (ConvertTo-AstShape '$repeatIndex++')) {
+              throw 'runtime release proof is not inside the exact 1..Repeat execution loop'
+            }
+          }
+
+          function Assert-LiveSessionStartExecutionContract([System.Management.Automation.Language.ScriptBlockAst]$ast) {
+            Assert-ExactRequiredSessionStartInventory $ast
+            $nameFunctions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'New-RunDatabaseName' }, $true))
+            if ($nameFunctions.Count -ne 1) { throw "New-RunDatabaseName cardinality must be exactly 1; found $($nameFunctions.Count)" }
+            $nameAssignments = @($nameFunctions[0].Body.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$name' -and
+                (ConvertTo-AstShape $node.Right.Extent.Text) -ceq (ConvertTo-AstShape '"engram_prc_rg_test_${runHash}_r$RepeatIndex"')
+            }, $true))
+            if ($nameAssignments.Count -ne 1) { throw 'live fresh-database naming does not contain the exact literal-test identity' }
+
+            [void](Get-ExactRuntimeAssignment $ast '$requireSessionStartExecution' "[string]::IsNullOrWhiteSpace(`$Run) -and `$packages.Count -eq 1 -and `$packages[0] -ceq './...'")
+            $databaseAssignment = Get-ExactRuntimeAssignment $ast '$databaseName' 'New-RunDatabaseName -RequestedRunId $RunId -RepeatIndex $repeatIndex'
+            Assert-ExactRepeatLoop $databaseAssignment
+            $databaseCommands = @($databaseAssignment.Right.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'New-RunDatabaseName' }, $true))
+            if ($databaseCommands.Count -ne 1) { throw 'fresh-database identity assignment is not one live New-RunDatabaseName invocation' }
+            Assert-ExactCommandControlFlow -node $databaseCommands[0] -expectedIfConditions @() -expectedLoopConditions @('for:$repeatIndex -le $Repeat')
+
+            $proofAssignment = Get-ExactRuntimeAssignment $ast '$sessionStartExecutionProof' 'Get-RequiredSessionStartExecutionProof $goTestSummary'
+            Assert-ExactRepeatLoop $proofAssignment
+            $proofCommands = @($proofAssignment.Right.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Get-RequiredSessionStartExecutionProof' }, $true))
+            if ($proofCommands.Count -ne 1) { throw 'parsed go-test summary is not consumed by one live session-start execution proof invocation' }
+            $missingSummaryBranch = '-not (Test-Path -LiteralPath $goTestSummaryPath -PathType Leaf)'
+            Assert-ExactCommandControlFlow -node $proofCommands[0] -expectedIfConditions @('$requireSessionStartExecution', "<else:$missingSummaryBranch>") -expectedLoopConditions @('for:$repeatIndex -le $Repeat')
+
+            $proofWrites = @($ast.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Write-Utf8NoBom' -and $node.CommandElements.Count -ge 2 -and
+                (ConvertTo-AstShape $node.CommandElements[1].Extent.Text) -ceq (ConvertTo-AstShape "(Join-Path `$repeatDirectory 'required-session-start-execution.json')")
+            }, $true) | Where-Object { $null -eq (Get-Ancestor $_ ([System.Management.Automation.Language.FunctionDefinitionAst])) })
+            if ($proofWrites.Count -ne 1) { throw "required session-start proof artifact write cardinality must be exactly 1; found $($proofWrites.Count)" }
+            Assert-ExactRepeatLoop $proofWrites[0]
+            Assert-ExactCommandControlFlow -node $proofWrites[0] -expectedIfConditions @('$requireSessionStartExecution') -expectedLoopConditions @('for:$repeatIndex -le $Repeat')
+
+            $verdictIfs = @($ast.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.IfStatementAst] -and $node.Clauses.Count -eq 1 -and
+                (ConvertTo-AstShape $node.Clauses[0].Item1.Extent.Text) -ceq (ConvertTo-AstShape "`$sessionStartExecutionProof.verdict -ne 'PASS'")
+            }, $true) | Where-Object { $null -eq (Get-Ancestor $_ ([System.Management.Automation.Language.FunctionDefinitionAst])) })
+            if ($verdictIfs.Count -ne 1) { throw "required session-start fail-closed verdict branch cardinality must be exactly 1; found $($verdictIfs.Count)" }
+            $verdictIf = $verdictIfs[0]
+            Assert-ExactRepeatLoop $verdictIf
+            if (-not (Test-InExactIfClause $verdictIf '$requireSessionStartExecution')) { throw 'required session-start fail-closed verdict is outside its canonical runtime gate' }
+            $failAssignments = @($verdictIf.Clauses[0].Item2.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$repeatFailed' -and $node.Right.Extent.Text -ceq '$true'
+            }, $true))
+            $errorAdds = @($verdictIf.Clauses[0].Item2.FindAll({
+              param($node)
+              $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $node.Expression.Extent.Text -ceq '$repeatErrors' -and $node.Member.Extent.Text -ceq 'Add'
+            }, $true))
+            if ($failAssignments.Count -ne 1 -or $errorAdds.Count -ne 1) { throw 'required session-start proof failure does not fail the repeat and retain one error' }
+
+            $proofSummaryPairs = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.HashtableAst] }, $true) | ForEach-Object { $_.KeyValuePairs } | Where-Object {
+              $_.Item1.Extent.Text.Trim("'", '"') -ceq 'required_session_start_execution' -and $_.Item2.Extent.Text -ceq '$sessionStartExecutionProof'
+            })
+            if ($proofSummaryPairs.Count -ne 1) { throw "repeat summary must bind the live required session-start proof exactly once; found $($proofSummaryPairs.Count)" }
+          }
+
+          function Assert-LiveDevStandInvocationContract([string]$dbRunnerText) {
+            $ast = Get-PowerShellAst $dbRunnerText
+            Assert-ExactImageTargetMap $ast
+            Assert-LiveSessionStartExecutionContract $ast
+            $outerBranch = "`$Action -in @('Up', 'Ready', 'Scan')"
+            $upBranch = "`$Action -eq 'Up'"
+            $scanBranch = "`$Action -eq 'Scan' -and `$inventoryAssertion.Pass -and `$imageIdentityPass -and `$prelaunchToRunningImageIdentity"
+            $sourceRoot = Get-ExactCapturedInvocation $ast 'dev-stand-source-root' '$gitPath' "@('-C', `$composeDirectory, 'rev-parse', '--show-toplevel')" '$sourceRoot' $outerBranch
+            $sourceCommit = Get-ExactCapturedInvocation $ast 'dev-stand-source-commit' '$gitPath' "@('-C', `$sourceRepository, 'rev-parse', '--verify', 'HEAD^{commit}')" '$sourceHead' $outerBranch
+            $sourceStatus = Get-ExactCapturedInvocation $ast 'dev-stand-source-tracked-status' '$gitPath' "@('-C', `$sourceRepository, 'status', '--porcelain=v1', '--untracked-files=all')" '$sourceStatus' $outerBranch
+            $build = Get-ExactCapturedInvocation $ast 'dev-stand-compose-build' '$dockerPath' "(@(`$composeArgs) + @('build', '--pull', 'server', 'operator-console'))" '$build' $upBranch
+            $pull = Get-ExactCapturedInvocation $ast 'dev-stand-postgres-pull' '$dockerPath' "(@(`$composeArgs) + @('pull', 'postgres'))" '$pull' $upBranch
+            $postHead = Get-ExactCapturedInvocation $ast 'dev-stand-source-commit-post-build' '$gitPath' "@('-C', `$sourceRepository, 'rev-parse', '--verify', 'HEAD^{commit}')" '$postBuildHead' $upBranch
+            $postStatus = Get-ExactCapturedInvocation $ast 'dev-stand-source-tracked-status-post-build' '$gitPath' "@('-C', `$sourceRepository, 'status', '--porcelain=v1', '--untracked-files=all')" '$postBuildStatus' $upBranch
+            $prelaunch = Get-ExactCapturedInvocation $ast 'dev-stand-prelaunch-image-inspect-$($target.Key)' '$dockerPath' "@('image', 'inspect', `$target.Value, '--format', '{{.Id}}')" '$prelaunchInspect' $upBranch
+            $up = Get-ExactCapturedInvocation $ast 'dev-stand-up' '$dockerPath' "(@(`$composeArgs) + @('up', '-d', '--no-build', '--pull', 'never', '--wait'))" '$up' $upBranch
+            $scan = Get-ExactCapturedInvocation $ast 'dev-stand-vulnerability-scan-$($entry.Key)' '$dockerPath' "@('scout', 'cves', '--exit-code', '--only-severity', 'critical,high', '--format', 'sarif', '--output', `$sarifPath, `$scanReference)" '$scan' $scanBranch
+
+            foreach ($command in @($sourceRoot, $sourceCommit, $sourceStatus)) {
+              Assert-ExactCommandControlFlow -node $command -expectedIfConditions @($outerBranch) -expectedLoopConditions @()
+            }
+            foreach ($command in @($build, $pull, $postHead, $postStatus, $up)) {
+              Assert-ExactCommandControlFlow -node $command -expectedIfConditions @($upBranch) -expectedLoopConditions @()
+            }
+            Assert-ExactCommandControlFlow -node $prelaunch -expectedIfConditions @($upBranch) -expectedLoopConditions @('foreach:(Get-DevStandImageTargets).GetEnumerator()')
+            Assert-ExactCommandControlFlow -node $scan -expectedIfConditions @($outerBranch, $scanBranch) -expectedLoopConditions @('foreach:@($actualImages.GetEnumerator() | Sort-Object Key)')
+
+            $capturedInContract = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Invoke-CapturedProcess' -and $node.CommandElements.Count -ge 4 }, $true) | Where-Object {
+              $owner = Get-Ancestor $_ ([System.Management.Automation.Language.FunctionDefinitionAst])
+              $null -ne $owner -and $owner.Name -ceq 'Invoke-DevStandContract' -and $_.CommandElements[2].Extent.Text -ceq '$dockerPath'
+            })
+            $liveBuilds = @($capturedInContract | Where-Object {
+              $literals = @($_.CommandElements[3].FindAll({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true) | ForEach-Object Value)
+              $literals -ccontains 'build'
+            })
+            if ($liveBuilds.Count -ne 1 -or $liveBuilds[0].Extent.StartOffset -ne $build.Extent.StartOffset) { throw "live Docker build invocation cardinality must be exactly 1; found $($liveBuilds.Count)" }
+            $liveScouts = @($capturedInContract | Where-Object {
+              $literals = @($_.CommandElements[3].FindAll({ param($node) $node -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true) | ForEach-Object Value)
+              $literals -ccontains 'scout' -and $literals -ccontains 'cves'
+            })
+            if ($liveScouts.Count -ne 1 -or $liveScouts[0].Extent.StartOffset -ne $scan.Extent.StartOffset) { throw "live Docker Scout invocation cardinality must be exactly 1; found $($liveScouts.Count)" }
+
+            $ordered = @($sourceRoot, $sourceCommit, $sourceStatus, $build, $pull, $postHead, $postStatus, $prelaunch, $up)
+            for ($i = 1; $i -lt $ordered.Count; $i++) {
+              if ($ordered[$i].Extent.StartOffset -le $ordered[$i - 1].Extent.StartOffset) { throw "live dev-stand invocation order is invalid at '$([string]$ordered[$i].CommandElements[1].Value)'" }
+            }
+
+            $targetLoop = Get-Ancestor $prelaunch ([System.Management.Automation.Language.ForEachStatementAst])
+            if ($null -eq $targetLoop -or $targetLoop.Variable.Extent.Text -cne '$target' -or (ConvertTo-AstShape $targetLoop.Condition.Extent.Text) -cne (ConvertTo-AstShape '(Get-DevStandImageTargets).GetEnumerator()')) { throw 'prelaunch inspect does not iterate the exact image target map' }
+            $scanLoop = Get-Ancestor $scan ([System.Management.Automation.Language.ForEachStatementAst])
+            if ($null -eq $scanLoop -or $scanLoop.Variable.Extent.Text -cne '$entry' -or (ConvertTo-AstShape $scanLoop.Condition.Extent.Text) -cne (ConvertTo-AstShape '@($actualImages.GetEnumerator() | Sort-Object Key)')) { throw 'Scout does not iterate the exact running image inventory' }
+            $scanReferences = @($scanLoop.Body.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$scanReference' }, $true))
+            if ($scanReferences.Count -ne 1 -or (ConvertTo-AstShape $scanReferences[0].Right.Extent.Text) -cne (ConvertTo-AstShape '"local://$imageId"') -or $scanReferences[0].Extent.StartOffset -ge $scan.Extent.StartOffset) { throw 'Scout reference is not exactly one live immutable local:// image-ID assignment before the scan' }
+            $inventoryAssertions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -ceq 'Test-ExactDevStandInventory' }, $true) | Where-Object {
+              $owner = Get-Ancestor $_ ([System.Management.Automation.Language.FunctionDefinitionAst])
+              $null -ne $owner -and $owner.Name -ceq 'Invoke-DevStandContract'
+            })
+            if ($inventoryAssertions.Count -ne 1 -or $inventoryAssertions[0].CommandElements.Count -ne 2 -or $inventoryAssertions[0].CommandElements[1].Extent.Text -cne '$actualImages' -or $inventoryAssertions[0].Extent.StartOffset -ge $scan.Extent.StartOffset) { throw 'exact running image inventory assertion must execute exactly once before Scout' }
+          }
+
+          function Assert-WorkflowContract(
+            [string]$workflowText,
+            [string]$criticalText,
+            [string]$standText,
+            [string]$dbRunnerText,
+            [string]$criticalRunnerText,
+            [string]$devStandRunnerText,
+            [string]$ownershipRunnerText = $ownershipRunner,
+            [string]$activeAuthorityRunnerText = $activeAuthorityRunner,
+            [string]$nodeRunnerText = $nodeRunner,
+            [string]$stateText = $ownershipState,
+            [string]$planText = $masterPlan,
+            [string]$scopeText = $scopeMap,
+            [string]$activeDiffContractsText = $activeDiffContracts
+          ) {
+            $execution = Remove-ConformanceStep $workflowText
+            Assert-LiveDevStandInvocationContract $dbRunnerText
+            if ($observedPlanSha -cne $expectedPlanSha) { throw "tracked production-ready plan hash drifted: expected=$expectedPlanSha observed=$observedPlanSha" }
+            if ((Get-CanonicalTextSha256 $planText) -cne $expectedPlanSha) { throw 'challenged plan text is not the exact canonical R9 authority' }
+            if ($observedScopeMapSha -cne $expectedScopeMapSha -or (Get-CanonicalTextSha256 $scopeText) -cne $expectedScopeMapSha) { throw "tracked R9 scope-map hash drifted: expected=$expectedScopeMapSha observed=$observedScopeMapSha" }
+            if ((Get-CanonicalTextSha256 $activeDiffContractsText) -cne $expectedActiveDiffContractSha) { throw 'tracked R9 active-diff contract hash drifted' }
+            $repeatToken = '(?i)(?<![A-Za-z0-9_])-Repeat(?:\s+|=)\d+'
+            if ($criticalText -match $repeatToken) { throw 'repeat count is duplicated in critical-suite config' }
+            if ($execution -match $repeatToken) { throw 'repeat count is duplicated in executable workflow; run-db-suite default is the source of truth' }
+            if ($dbRunnerText -notmatch '\[ValidateRange\(1, 20\)\]\[int\]\$Repeat\s*=\s*3\b') { throw 'run-db-suite default Repeat=3 source is missing' }
+            foreach ($requiredHttpContract in @('function Test-LivenessStatusPayload', 'function Test-ReadyStatusPayload', 'Get-HttpJsonContractResult -CapturedOutput $http.Stdout -ContractKind $endpoint.contract_kind', "@('starting', 'ready', 'error')")) {
+              if (-not $dbRunnerText.Contains($requiredHttpContract)) { throw "dev-stand HTTP liveness/readiness contract is missing '$requiredHttpContract'" }
+            }
+            foreach ($requiredCredentialContract in @('New-CryptographicSecret', 'Assert-DevStandCredentials $credentials', 'Test-RedactedContainerEnvironment', 'postgres_password = $postgresPassword', 'admin_token = $adminToken', 'bootstrap_capability = $bootstrapCapability', 'dev-stand-postgres-credential-injection', 'dev-stand-server-credential-injection', "@('inspect', `$serverContainer.Stdout.Trim(), '--format', '{{json .Config.Env}}')")) {
+              if (-not $dbRunnerText.Contains($requiredCredentialContract)) { throw "dev-stand credential contract is missing '$requiredCredentialContract'" }
+            }
+            if ($dbRunnerText.Contains('EXPECTED_BOOTSTRAP_CAPABILITY=') -or $dbRunnerText.Contains("'server', 'sh', '-ec'")) { throw 'dev-stand credential proof depends on a shell inside the runtime image' }
+            if (-not $standText.Contains('NUXT_OPERATOR_API_TARGET: "http://server:37777"') -or $standText.Contains('NUXT_ENGRAM_API_TARGET:')) { throw 'tracked dev-stand uses the wrong operator-console API target variable' }
+            foreach ($requiredProxyProof in @('operator-api-health', 'http://localhost:3001/api/health', 'operator-api-ready', 'http://localhost:3001/api/ready')) {
+              if (-not $dbRunnerText.Contains($requiredProxyProof)) { throw "dev-stand runner is missing proxied semantic proof '$requiredProxyProof'" }
+            }
+            if ($criticalText -notmatch ('(?m)^\s{2}command:\s*"' + [regex]::Escape($trackedCriticalCommand) + '"\s*$')) { throw 'tracked critical runner command drifted' }
+            if ($criticalText -notmatch ('(?m)^\s{2}command:\s*"' + [regex]::Escape($trackedDatabaseCommand) + '"\s*$')) { throw 'tracked full fresh-DB runner command drifted' }
+
+            $ledgerStep = Get-StepBody $execution 'Assert tracked production-ready ownership ledger'
+            foreach ($required in @('-Mode Ledger', '-Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md', "-ExpectedPlanSha256 $expectedPlanSha", '-State .agent/plans/2026-07-10-engram-production-ready-ownership-state.json', '-ScopeMap .agent/plans/2026-07-10-engram-production-ready-scope-map.json', "-ExpectedScopeMapSha256 $expectedScopeMapSha", '-Artifact .agent/e/rg4/ci-ledger.json')) {
+              if (-not $ledgerStep.Contains($required)) { throw "tracked ownership Ledger step is missing '$required'" }
+            }
+            $activeAuthoritySelfTest = Get-StepBody $execution 'Self-test active candidate path authority gate'
+            if (-not $activeAuthoritySelfTest.Contains('assert-active-candidate-path-authority.ps1 -SelfTest')) { throw 'workflow does not self-test active-candidate path authority' }
+            $activeAuthorityStep = Get-StepBody $execution 'Assert frozen active candidate path authority'
+            foreach ($required in @('-Contract .agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json', "-ExpectedContractSha256 $expectedActiveDiffContractSha", '-Plan .agent/plans/2026-07-10-engram-production-ready-master-plan.md', "-ExpectedPlanSha256 $expectedPlanSha", '-Artifact .agent/e/rg9/ci-active-candidate-authority.json')) {
+              if (-not $activeAuthorityStep.Contains($required)) { throw "tracked active-candidate authority step is missing '$required'" }
+            }
+            if ($activeAuthorityStep.Contains('production-readiness-evidence-register.json') -or $activeAuthorityStep.Contains('-VerifyAvailableGit') -or $activeAuthorityStep.Contains('-RequireGitObjects')) { throw 'frozen CI authority must not depend on the mutable register or unavailable historical Git objects' }
+            $pathBudgetSelfTest = Get-StepBody $execution 'Self-test Windows tracked path budget'
+            if (-not $pathBudgetSelfTest.Contains('assert-windows-path-budget.ps1 -SelfTest')) { throw 'workflow does not self-test the Windows path-budget gate' }
+            $pathBudgetStep = Get-StepBody $execution 'Assert Windows tracked path budget'
+            if (-not $pathBudgetStep.Contains("run: $trackedPathBudgetWrapper")) { throw 'workflow does not execute the tracked Windows path-budget gate exactly' }
+            foreach ($required in @('Measure-TrackedPathBudget', 'CheckoutPrefixLength = 66', 'MaximumCombinedPathLength = 240', 'git -c core.quotepath=false', 'ls-tree -r --name-only --full-tree')) {
+              if (-not $pathBudgetRunner.Contains($required)) { throw "Windows path-budget runner implementation is missing '$required'" }
+            }
+            $nodeSelfTest = Get-StepBody $execution 'Self-test OpenClaw node release matrix'
+            if (-not $nodeSelfTest.Contains('run-node-matrix.ps1 -SelfTest')) { throw 'workflow does not self-test the OpenClaw node release matrix' }
+
+            foreach ($required in @('Get-CanonicalUtf8LfFileSha256', 'PrintCanonicalPlanSha256', 'Test-SameStringSequence', 'Invoke-ScopeContractAudit', 'structural-projection', 'plan row plus state epoch deletion was accepted', 'live register unique slice set differs from the frozen scope map', 'explicitly rejected historical head was accepted as current', 'ordinary same-lane register progress was rejected', 'new live register slice without a refreshed scope map was accepted', "current owner is '`$currentOwner', not '`$Slice'", 'lacks exact rejected-checker evidence', 'must equal rejected predecessor', 'does not descend from predecessor integration')) {
+              if (-not $ownershipRunnerText.Contains($required)) { throw "ownership runner implementation is missing '$required'" }
+            }
+            foreach ($required in @('Invoke-R9ProfileAudit', "freshness = 'HISTORICAL_DISCOVERY_ONLY'", 'used_for_acceptance = $false', 'mutable_register_read = $false', 'authority rejected_r8_head drifted', 'authority r8_scope_provenance_sha256 drifted', 'source_audit use must remain discovery-only and never acceptance authority', 'digest serialization drifted', 'digest path_case drifted', 'missing frozen path was accepted', 'extra frozen path was accepted', "`$wrongOwner.candidates[0].plan_owner = 'NO-PATHS'", 'zero-declaration non-empty candidate did not fail clearly', 'wrong test name was accepted', 'stale evidence namespace was accepted', 'undeclared pending .agent/testing path was accepted', 'explicitly forbidden pending path was accepted', 'prefix-only pending contract serialized a null exact-path declaration', 'prefix-only pending full plan-owned evidence surface failed', 'pending probe accepted or obscured a non-anchor base', 'R9 profile accepted a wrong rejected R8 head', 'R9 profile accepted wrong AB5F scope provenance', 'R9 profile accepted the mutable register as authority', 'R9 profile accepted wrong digest serialization', 'R9 profile accepted wrong digest path-case semantics')) {
+              if (-not $activeAuthorityRunnerText.Contains($required)) { throw "active-candidate authority runner is missing '$required'" }
+            }
+            foreach ($required in @('Test-StrictBoolean', '--untracked-files=all', 'dev-stand-source-commit', 'dev-stand-source-commit-post-build', 'dev-stand-source-tracked-status-post-build', 'dev-stand-compose-build', "@('build', '--pull', 'server', 'operator-console')", 'dev-stand-postgres-pull', "@('pull', 'postgres')", "@('up', '-d', '--no-build', '--pull', 'never', '--wait')", 'source_commit = $sourceCommit', 'source_tracked_clean = $sourceTrackedClean', 'prelaunch_image_ids = $prelaunchImageIds', 'prelaunch_to_running_image_identity = $prelaunchToRunningImageIdentity', 'scanned_reference = $scanReference', '$databaseName = New-RunDatabaseName -RequestedRunId $RunId -RepeatIndex $repeatIndex', 'engram_prc_rg_test_${runHash}_r$RepeatIndex', 'Get-RequiredSessionStartExecutionProof', '$sessionStartExecutionProof = Get-RequiredSessionStartExecutionProof $goTestSummary', 'required-session-start-execution.json', 'required_session_start_execution = $sessionStartExecutionProof')) {
+              if (-not $dbRunnerText.Contains($required)) { throw "dev-stand source/build provenance contract is missing '$required'" }
+            }
+            foreach ($required in @('openclaw-lock-non-ignored', "@('check-ignore', '--no-index', '--quiet'", 'npm pack contains forbidden path', 'dist/index.js', 'dist/index.d.ts', 'scripts/install.sh', 'npm-ci -> npm-typecheck -> npm-test -> npm-audit-high -> npm-pack-dry-run')) {
+              if (-not $nodeRunnerText.Contains($required)) { throw "node release runner implementation is missing '$required'" }
+            }
+
+            $stateObject = $stateText | ConvertFrom-Json -Depth 100
+            if ([string]$stateObject.plan.sha256 -cne $expectedPlanSha) { throw 'ownership state is not bound to the exact challenged plan hash' }
+            if ([string]$stateObject.scope_map.path -cne '.agent/plans/2026-07-10-engram-production-ready-scope-map.json' -or [string]$stateObject.scope_map.sha256 -cne $expectedScopeMapSha) { throw 'ownership state is not bound to the exact R9 scope map' }
+            $scopeObject = $scopeText | ConvertFrom-Json -Depth 100
+            $scopeEntries = @($scopeObject.entries)
+            $uniqueScopeSlices = @($scopeEntries.slice | Sort-Object -Unique)
+            if ($scopeEntries.Count -ne 67 -or $uniqueScopeSlices.Count -ne 67 -or [int]$scopeObject.register_snapshot.row_count -ne 67 -or [int]$scopeObject.register_snapshot.unique_slice_count -ne 67) { throw 'R9 scope map must preserve the frozen 67/67 structural slice set' }
+            $expectedClassifications = @('maker', 'checker-evidence', 'meta-fold', 'historical', 'root-integration')
+            if ((@($scopeObject.allowed_classifications) -join "`n") -cne ($expectedClassifications -join "`n")) { throw 'R9 scope-map classifications drifted' }
+            $expectedClassificationCounts = [ordered]@{ maker = 56; 'checker-evidence' = 4; 'meta-fold' = 4; historical = 1; 'root-integration' = 2 }
+            foreach ($classification in $expectedClassificationCounts.Keys) {
+              $observedCount = @($scopeEntries | Where-Object classification -CEQ $classification).Count
+              if ($observedCount -ne [int]$expectedClassificationCounts[$classification]) { throw "R9 scope classification '$classification' count drifted: expected=$([int]$expectedClassificationCounts[$classification]) observed=$observedCount" }
+            }
+            $planRows = @([regex]::Matches($planText, '(?m)^\| ([A-Z0-9][A-Z0-9-]+) \|') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+            foreach ($entry in $scopeEntries) {
+              foreach ($owner in @($entry.plan_owners)) {
+                if ([string]$owner -cnotin $planRows) { throw "scope slice '$([string]$entry.slice)' points to missing plan owner '$([string]$owner)'" }
+              }
+            }
+            $expectedFolds = [ordered]@{
+              'CUSTOMER-MODE' = @('CRITICAL-HARNESS', 'INTEGRATION-RELEASE')
+              'MASTER-PLAN' = @('PLAN-GOVERNANCE')
+              'OPERATIONS' = @('DEPLOYMENT-ROLLBACK', 'RECOVERY-DATA', 'OBSERVABILITY-OTLP', 'PRIVACY-BOUNDARIES', 'CORE-PUBLIC-TRUTH', 'FINAL-PUBLIC-TRUTH')
+              'OPERATOR-CONSOLE' = @('IMAGE-REMEDIATION', 'OC-INTEGRATION')
+            }
+            foreach ($foldName in $expectedFolds.Keys) {
+              $fold = @($scopeEntries | Where-Object slice -CEQ $foldName)
+              if ($fold.Count -ne 1 -or [string]$fold[0].classification -cne 'meta-fold' -or (@($fold[0].plan_owners) -join "`n") -cne (@($expectedFolds[$foldName]) -join "`n")) { throw "R9 scope fold '$foldName' drifted" }
+            }
+            foreach ($path in @('internal/db/gorm/candidate_store.go', 'internal/db/gorm/candidate_store_test.go', 'internal/mcp/tools_bulkops.go', 'internal/mcp/tools_dryrun_test.go')) {
+              $epoch = @($stateObject.path_epochs | Where-Object path -CEQ $path)
+              if ($epoch.Count -ne 1) { throw "ownership state must contain exactly one rework epoch for '$path'" }
+              if ([string]$epoch[0].current_owner -cne 'DB-BULKOPS-BEHAVIORAL-EDGE-REWORK' -or [string]$epoch[0].transition_kind -cne 'rework') { throw "ownership state current owner/transition drifted for '$path'" }
+              if ([string]$epoch[0].required_successor_base_sha -cne $rejectedBulkHead) { throw "ownership state rejected-base lock drifted for '$path'" }
+              $predecessor = @($epoch[0].completed_predecessors)
+              if ($predecessor.Count -ne 1 -or [string]$predecessor[0].owner -cne 'DB-BULKOPS' -or [string]$predecessor[0].checker_verdict -cne 'FAIL' -or [string]$predecessor[0].checker_artifact -cne $rejectedBulkChecker -or [string]$predecessor[0].checker_sha256 -cne $rejectedBulkCheckerSha -or [string]$predecessor[0].rejected_head_sha -cne $rejectedBulkHead -or -not [string]::IsNullOrWhiteSpace([string]$predecessor[0].integration_sha)) {
+                throw "ownership state rejected-predecessor evidence drifted for '$path'"
+              }
+            }
+
+            $trackedCommands = [regex]::Matches($standText, '(?m)^\s+(?:command|readiness_check):\s+"([^"]*run-db-suite\.ps1 -DevStandAction [^"]+)"\s*$')
+            if ($trackedCommands.Count -ne 4) { throw "tracked dev-stand contract must declare Up, Ready, Scan, Down exactly once; found $($trackedCommands.Count)" }
+            foreach ($match in $trackedCommands) {
+              if (-not $devStandRunnerText.Contains($match.Groups[1].Value)) { throw "dev-stand runner does not validate tracked command: $($match.Groups[1].Value)" }
+            }
+
+            $database = Get-StepBody $execution 'Run full project through fresh-DB RELEASE-GATES'
+            if (-not $database.Contains($trackedDatabaseCommand)) { throw 'full fresh-DB step does not execute the tracked command exactly' }
+            if (-not $database.Contains('-PostgresContainer $env:POSTGRES_CONTAINER -PostgresImage pgvector/pgvector:pg17')) { throw 'full fresh-DB step does not bind the proven PostgreSQL 17 service identity' }
+            if ($database -match '(?i)(?<![A-Za-z0-9_])-Run\b') { throw 'full fresh-DB step narrows tests with -Run' }
+            $packageTokens = [regex]::Matches($database, '(?i)(?<![A-Za-z0-9_])-Package\s+\S+')
+            if ($packageTokens.Count -ne 1 -or $packageTokens[0].Value -cne '-Package ./...') { throw 'full fresh-DB step package must be exactly ./...' }
+
+            $criticalStep = Get-StepBody $execution 'Run tracked critical suite runner'
+            if (-not $criticalStep.Contains("run: $trackedCriticalWrapper")) { throw 'workflow does not execute the tracked critical wrapper exactly' }
+            foreach ($required in @("foreach (`$argument in @('test', '-tags=critical', '-json'))", "foreach (`$argument in @('./tests/critical/...', '-count=1'))", "Invoke-CapturedProcess 'critical-json-parser'", 'assert-go-test-json.ps1', '-FailOnUnexpectedSkip', 'AllowedSkipIdentity')) {
+              if (-not $criticalRunnerText.Contains($required)) { throw "critical runner implementation is missing '$required'" }
+            }
+
+            $devStandStep = Get-StepBody $execution 'Run tracked dev-stand lifecycle runner'
+            if (-not $devStandStep.Contains("run: $trackedDevStandWrapper")) { throw 'workflow does not execute the tracked dev-stand wrapper exactly' }
+            foreach ($required in @("foreach (`$action in @('Up', 'Ready', 'Scan'))", 'if ($upAttempted)', "Read-ActionSummary 'Down'", 'residual_resources_zero', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready', 'Test-StrictBoolean', 'source_commit', 'source_tracked_clean', 'prelaunch_image_ids', 'dev-stand-compose-build', 'dev-stand-postgres-pull', 'Scan image ID is not the exact prelaunch/running ID', 'Scan command arguments do not end in the recorded immutable reference')) {
+              if (-not $devStandRunnerText.Contains($required)) { throw "dev-stand runner implementation is missing '$required'" }
+            }
+
+            $fullStep = Get-StepBody $execution 'Test with raw JSON assertion (race on Linux / macOS)'
+            $fullArguments = "foreach (`$argument in @('test', '-json', '-covermode=atomic', '-coverprofile=coverage.out', '-count=1', '-timeout=30m'))"
+            foreach ($required in @($fullArguments, "`$arguments.Add('./...')", "if (`$env:RUNNER_OS -ne 'Windows') { `$arguments.Add('-race') }", 'assert-go-test-json.ps1', '-FailOnUnexpectedSkip', 'exit-summary.json')) {
+              if (-not $fullStep.Contains($required)) { throw "full/race transcript step is missing '$required'" }
+            }
+          }
+
+          function Assert-MutationRejected([string]$name, [scriptblock]$assertion) {
+            $rejected = $false
+            try { & $assertion } catch { $rejected = $true }
+            if (-not $rejected) { throw "conformance mutation '$name' was accepted" }
+          }
+
+          Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner
+          $canonicalFixtureRoot = Join-Path $env:RUNNER_TEMP ('plan-authority-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $canonicalFixtureRoot -Force | Out-Null
+          try {
+            $planText = [System.IO.File]::ReadAllText((Resolve-Path '.agent/plans/2026-07-10-engram-production-ready-master-plan.md'))
+            $lfText = ($planText -replace "`r`n", "`n") -replace "`r", "`n"
+            $crlfText = $lfText -replace "`n", "`r`n"
+            $semanticText = $lfText.Replace('Revision: 9', 'Revision: 10')
+            if ($semanticText -ceq $lfText) { throw 'semantic plan mutation fixture did not change the plan' }
+            $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+            $lfPath = Join-Path $canonicalFixtureRoot 'plan-lf.md'; [System.IO.File]::WriteAllText($lfPath, $lfText, $utf8NoBom)
+            $crlfPath = Join-Path $canonicalFixtureRoot 'plan-crlf.md'; [System.IO.File]::WriteAllText($crlfPath, $crlfText, $utf8NoBom)
+            $semanticPath = Join-Path $canonicalFixtureRoot 'plan-semantic.md'; [System.IO.File]::WriteAllText($semanticPath, $semanticText, $utf8NoBom)
+            $lfHash = ([string](& pwsh -NoProfile -File scripts/production-gates/assert-plan-path-ownership.ps1 -Plan $lfPath -PrintCanonicalPlanSha256)).Trim()
+            $crlfHash = ([string](& pwsh -NoProfile -File scripts/production-gates/assert-plan-path-ownership.ps1 -Plan $crlfPath -PrintCanonicalPlanSha256)).Trim()
+            $semanticHash = ([string](& pwsh -NoProfile -File scripts/production-gates/assert-plan-path-ownership.ps1 -Plan $semanticPath -PrintCanonicalPlanSha256)).Trim()
+            if ($lfHash -cne $expectedPlanSha -or $crlfHash -cne $expectedPlanSha) { throw 'LF/CRLF canonical plan authority hashes diverged' }
+            if ($semanticHash -ceq $expectedPlanSha) { throw 'semantic plan mutation preserved the authority hash' }
+          }
+          finally { Remove-Item -LiteralPath $canonicalFixtureRoot -Recurse -Force -ErrorAction SilentlyContinue }
+          foreach ($mutation in @(
+            @{ name = 'remove fresh database'; token = '-FreshDatabase' },
+            @{ name = 'remove database race'; token = '-Race' },
+            @{ name = 'remove skip enforcement'; token = '-FailOnUnexpectedSkip' },
+            @{ name = 'remove critical wrapper'; token = $trackedCriticalWrapper },
+            @{ name = 'remove dev-stand wrapper'; token = $trackedDevStandWrapper },
+            @{ name = 'remove Windows path-budget wrapper'; token = $trackedPathBudgetWrapper },
+            @{ name = 'remove active-candidate authority self-test'; token = './scripts/production-gates/assert-active-candidate-path-authority.ps1 -SelfTest' },
+            @{ name = 'remove full JSON mode'; token = "'-json'" }
+          )) {
+            $mutated = $workflow.Replace($mutation.token, '')
+            if ($mutated -eq $workflow) { throw "mutation token '$($mutation.token)' was not present" }
+            Assert-MutationRejected $mutation.name { Assert-WorkflowContract $mutated $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          }
+          Assert-MutationRejected 'narrow canonical full package' { Assert-WorkflowContract ($workflow.Replace('-Package ./...', '-Package ./internal/db/gorm')) $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'narrow critical package' { Assert-WorkflowContract $workflow ($critical.Replace('./tests/critical/...', './tests/critical/auth/...')) $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'remove critical parser execution' { Assert-WorkflowContract $workflow $critical $stand $dbRunner ($criticalRunner.Replace("Invoke-CapturedProcess 'critical-json-parser'", '')) $devStandRunner }
+          Assert-MutationRejected 'remove semantic readiness validation' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace('Get-HttpJsonContractResult -CapturedOutput $http.Stdout -ContractKind $endpoint.contract_kind', '$true')) $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'use stale operator target variable' { Assert-WorkflowContract $workflow $critical ($stand.Replace('NUXT_OPERATOR_API_TARGET', 'NUXT_ENGRAM_API_TARGET')) $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'remove proxied operator health proof' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace('http://localhost:3001/api/health', '')) $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'remove wrapper proxied operator validation' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner ($devStandRunner.Replace('dev-stand-operator-api-health', '')) }
+          Assert-MutationRejected 'remove dev-stand Scan action' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner ($devStandRunner.Replace("@('Up', 'Ready', 'Scan')", "@('Up', 'Ready')")) }
+          Assert-MutationRejected 'remove unconditional Down validation' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner ($devStandRunner.Replace("Read-ActionSummary 'Down'", '')) }
+          Assert-MutationRejected 'remove prelaunch compose build' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("@('build', '--pull', 'server', 'operator-console')", "@('config')")) $criticalRunner $devStandRunner }
+          $lateBuildRunner = $dbRunner.Replace("Invoke-CapturedProcess 'dev-stand-compose-build'", "Invoke-CapturedProcess 'dev-stand-compose-build-placeholder'") + "`n# Invoke-CapturedProcess 'dev-stand-compose-build'"
+          Assert-MutationRejected 'move prelaunch compose build after launch' { Assert-WorkflowContract $workflow $critical $stand $lateBuildRunner $criticalRunner $devStandRunner }
+          $buildLines = @($dbRunner -split "`r?`n" | Where-Object { $_.Contains('$build = Invoke-CapturedProcess ''dev-stand-compose-build''') })
+          if ($buildLines.Count -ne 1) { throw "canonical build fixture must resolve exactly one line; found $($buildLines.Count)" }
+          $buildLine = $buildLines[0]
+          $buildIndent = [regex]::Match($buildLine, '^\s*').Value
+          $deadBuildReplacement = $buildIndent + '# ' + $buildLine.TrimStart() + "`n" + $buildIndent + '$build = [pscustomobject]@{ ExitCode = 0 }'
+          $deadBuildRunner = $dbRunner.Replace($buildLine, $deadBuildReplacement)
+          Assert-MutationRejected 'dead/comment-only build invocation' { Assert-WorkflowContract $workflow $critical $stand $deadBuildRunner $criticalRunner $devStandRunner }
+          $quotedBuildLine = "'" + $buildLine.Replace("'", "''") + "'"
+          $deadStringBuildReplacement = $buildIndent + '$deadBuildInvocation = ' + $quotedBuildLine + "`n" + $buildIndent + '$build = [pscustomobject]@{ ExitCode = 0 }'
+          $deadStringBuildRunner = $dbRunner.Replace($buildLine, $deadStringBuildReplacement)
+          Assert-MutationRejected 'dead string-only build invocation' { Assert-WorkflowContract $workflow $critical $stand $deadStringBuildRunner $criticalRunner $devStandRunner }
+          $unreachableBuildReplacement = $buildIndent + 'if ($false) {' + "`n" + $buildIndent + '    ' + $buildLine.TrimStart() + "`n" + $buildIndent + '}' + "`n" + $buildIndent + '$build = [pscustomobject]@{ ExitCode = 0 }'
+          $unreachableBuildRunner = $dbRunner.Replace($buildLine, $unreachableBuildReplacement)
+          Assert-MutationRejected 'unreachable live build invocation' { Assert-WorkflowContract $workflow $critical $stand $unreachableBuildRunner $criticalRunner $devStandRunner }
+          $duplicateBuildRunner = $dbRunner.Replace($buildLine, ($buildLine + "`n" + $buildLine))
+          Assert-MutationRejected 'duplicate live build invocation' { Assert-WorkflowContract $workflow $critical $stand $duplicateBuildRunner $criticalRunner $devStandRunner }
+          $renamedDuplicateBuildLine = $buildLine.Replace("'dev-stand-compose-build'", "'dev-stand-compose-build-shadow'")
+          $renamedDuplicateBuildRunner = $dbRunner.Replace($buildLine, ($buildLine + "`n" + $renamedDuplicateBuildLine))
+          Assert-MutationRejected 'renamed duplicate live build invocation' { Assert-WorkflowContract $workflow $critical $stand $renamedDuplicateBuildRunner $criticalRunner $devStandRunner }
+          $scanLines = @($dbRunner -split "`r?`n" | Where-Object { $_.Contains('$scan = Invoke-CapturedProcess "dev-stand-vulnerability-scan-$($entry.Key)"') })
+          if ($scanLines.Count -ne 1) { throw "canonical Scout fixture must resolve exactly one line; found $($scanLines.Count)" }
+          $scanLine = $scanLines[0]
+          $scanIndent = [regex]::Match($scanLine, '^\s*').Value
+          $unreachableScoutReplacement = $scanIndent + 'if ($false) {' + "`n" + $scanIndent + '    ' + $scanLine.TrimStart() + "`n" + $scanIndent + '}'
+          $unreachableScoutRunner = $dbRunner.Replace($scanLine, $unreachableScoutReplacement)
+          Assert-MutationRejected 'unreachable live Scout invocation' { Assert-WorkflowContract $workflow $critical $stand $unreachableScoutRunner $criticalRunner $devStandRunner }
+          $duplicateScoutRunner = $dbRunner.Replace($scanLine, ($scanLine + "`n" + $scanLine))
+          Assert-MutationRejected 'duplicate live Scout invocation' { Assert-WorkflowContract $workflow $critical $stand $duplicateScoutRunner $criticalRunner $devStandRunner }
+          $renamedDuplicateScoutLine = $scanLine.Replace('dev-stand-vulnerability-scan-$($entry.Key)', 'dev-stand-vulnerability-scan-shadow-$($entry.Key)')
+          $renamedDuplicateScoutRunner = $dbRunner.Replace($scanLine, ($scanLine + "`n" + $renamedDuplicateScoutLine))
+          Assert-MutationRejected 'renamed duplicate live Scout invocation' { Assert-WorkflowContract $workflow $critical $stand $renamedDuplicateScoutRunner $criticalRunner $devStandRunner }
+          $databaseLines = @($dbRunner -split "`r?`n" | Where-Object { $_.Contains('$databaseName = New-RunDatabaseName -RequestedRunId $RunId -RepeatIndex $repeatIndex') })
+          if ($databaseLines.Count -ne 1) { throw "canonical fresh-database assignment fixture must resolve exactly one line; found $($databaseLines.Count)" }
+          $databaseLine = $databaseLines[0]
+          $databaseIndent = [regex]::Match($databaseLine, '^\s*').Value
+          $deadDatabaseReplacement = $databaseIndent + '# ' + $databaseLine.TrimStart() + "`n" + $databaseIndent + '$databaseName = "engram_prc_rg_unsafe_r$repeatIndex"; $schemaName = ''public''; $applicationName = "engram-prc-$safeRunToken-r$repeatIndex"'
+          $deadDatabaseRunner = $dbRunner.Replace($databaseLine, $deadDatabaseReplacement)
+          Assert-MutationRejected 'comment-only literal-test database assignment' { Assert-WorkflowContract $workflow $critical $stand $deadDatabaseRunner $criticalRunner $devStandRunner }
+          $proofLines = @($dbRunner -split "`r?`n" | Where-Object { $_.Contains('$sessionStartExecutionProof = Get-RequiredSessionStartExecutionProof $goTestSummary') })
+          if ($proofLines.Count -ne 1) { throw "canonical session-start proof fixture must resolve exactly one line; found $($proofLines.Count)" }
+          $proofLine = $proofLines[0]
+          $proofIndent = [regex]::Match($proofLine, '^\s*').Value
+          $deadProofReplacement = $proofIndent + '# ' + $proofLine.TrimStart() + "`n" + $proofIndent + '$sessionStartExecutionProof = [pscustomobject]@{ verdict = ''PASS''; executed = 12; skipped = 0; missing = 0 }'
+          $deadProofRunner = $dbRunner.Replace($proofLine, $deadProofReplacement)
+          Assert-MutationRejected 'comment-only session-start execution proof' { Assert-WorkflowContract $workflow $critical $stand $deadProofRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'substitute one required session-start identity' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("'TestEC_F1_P1_GRPCSessionStart_FlagOff_ByteIdentity'", "'TestCredentialDecryptRoundTripAfterMigration'")) $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'substitute required session-start package' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("'github.com/thebtf/engram/internal/grpcserver'", "'github.com/thebtf/engram/internal/mcp'")) $criticalRunner $devStandRunner }
+          $packageAssignmentLines = @($dbRunner -split "`r?`n" | Where-Object { $_.Trim() -ceq '$package = ''github.com/thebtf/engram/internal/grpcserver''' })
+          if ($packageAssignmentLines.Count -ne 1) { throw "canonical package assignment fixture must resolve exactly one line; found $($packageAssignmentLines.Count)" }
+          $packageAssignmentLine = $packageAssignmentLines[0]
+          $packageAssignmentIndent = [regex]::Match($packageAssignmentLine, '^\s*').Value
+          $packageReassignmentRunner = $dbRunner.Replace($packageAssignmentLine, ($packageAssignmentLine + "`n" + $packageAssignmentIndent + '$package = ''github.com/thebtf/engram/internal/mcp'''))
+          Assert-MutationRejected 'reassign required session-start package before live consumer' { Assert-WorkflowContract $workflow $critical $stand $packageReassignmentRunner $criticalRunner $devStandRunner }
+          $livePackagePredicate = '[string]$_.package -ceq $package -and [string]$_.test -ceq $name'
+          $livePackagePredicateCount = ([regex]::Matches($dbRunner, [regex]::Escape($livePackagePredicate))).Count
+          if ($livePackagePredicateCount -ne 1) { throw "canonical live package-plus-test predicate fixture must occur exactly once; found $livePackagePredicateCount" }
+          $packagePredicateBypassRunner = $dbRunner.Replace($livePackagePredicate, '[string]$_.test -ceq $name')
+          Assert-MutationRejected 'remove live session-start package predicate' { Assert-WorkflowContract $workflow $critical $stand $packagePredicateBypassRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'remove literal-test database identity' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace('$databaseName = New-RunDatabaseName -RequestedRunId $RunId -RepeatIndex $repeatIndex', '$databaseName = "engram_prc_rg_${safeRunToken}_r$repeatIndex"')) $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'bypass required session-start execution proof' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace('$sessionStartExecutionProof = Get-RequiredSessionStartExecutionProof $goTestSummary', '$sessionStartExecutionProof = [pscustomobject]@{ verdict = ''PASS''; executed = 12; skipped = 0; missing = 0 }')) $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'remove no-build launch lock' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("'--no-build'", "'--renew-anon-volumes'")) $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'narrow compatibility full package' { Assert-WorkflowContract ($workflow.Replace("`$arguments.Add('./...')", "`$arguments.Add('./internal/...')")) $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'change count semantics' { Assert-WorkflowContract ($workflow.Replace("'-count=1'", "'-count=2'")) $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'change coverage mode' { Assert-WorkflowContract ($workflow.Replace("'-covermode=atomic'", "'-covermode=set'")) $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'change coverage profile' { Assert-WorkflowContract ($workflow.Replace("'-coverprofile=coverage.out'", "'-coverprofile=partial.out'")) $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'change timeout' { Assert-WorkflowContract ($workflow.Replace("'-timeout=30m'", "'-timeout=5m'")) $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'change race policy' { Assert-WorkflowContract ($workflow.Replace("RUNNER_OS -ne 'Windows'", "RUNNER_OS -eq 'Linux'")) $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'inject Repeat1' { Assert-WorkflowContract ($workflow.Replace('-Race', '-Race -Repeat 1')) $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'change expected challenged plan hash' { Assert-WorkflowContract ($workflow.Replace($expectedPlanSha, ('0' * 64))) $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'change expected R9 scope-map hash' { Assert-WorkflowContract ($workflow.Replace($expectedScopeMapSha, ('0' * 64))) $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'change expected R9 active-diff contract hash' { Assert-WorkflowContract ($workflow.Replace($expectedActiveDiffContractSha, ('3' * 64))) $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'remove frozen active-diff candidate' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -activeDiffContractsText ($activeDiffContracts.Replace('"path_count": 5', '"path_count": 4')) }
+          foreach ($activeAuthorityMutation in @(
+            'missing frozen path was accepted',
+            'extra frozen path was accepted',
+            "`$wrongOwner.candidates[0].plan_owner = 'NO-PATHS'",
+            'zero-declaration non-empty candidate did not fail clearly',
+            'wrong test name was accepted',
+            'stale evidence namespace was accepted',
+            'undeclared pending .agent/testing path was accepted',
+            'explicitly forbidden pending path was accepted',
+            'prefix-only pending contract serialized a null exact-path declaration',
+            'prefix-only pending full plan-owned evidence surface failed',
+            'pending probe accepted or obscured a non-anchor base',
+            'R9 profile accepted a wrong rejected R8 head',
+            'R9 profile accepted wrong AB5F scope provenance',
+            'R9 profile accepted the mutable register as authority',
+            'R9 profile accepted wrong digest serialization',
+            'R9 profile accepted wrong digest path-case semantics'
+          )) {
+            $mutatedAuthorityRunner = $activeAuthorityRunner.Replace($activeAuthorityMutation, 'MUTATED-AUTHORITY-SIGNAL')
+            if ($mutatedAuthorityRunner -ceq $activeAuthorityRunner) { throw "active-authority mutation token '$activeAuthorityMutation' was not present" }
+            Assert-MutationRejected "active authority: $activeAuthorityMutation" { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -activeAuthorityRunnerText $mutatedAuthorityRunner }
+          }
+          Assert-MutationRejected 'change ownership current owner' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace('"current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK"', '"current_owner": "DB-BULKOPS"')) }
+          Assert-MutationRejected 'remove rejected predecessor evidence' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace($rejectedBulkCheckerSha, '')) }
+          Assert-MutationRejected 'change exact rejected successor base' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace($rejectedBulkHead, ('1' * 40))) }
+          Assert-MutationRejected 'change ownership scope-map binding' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($ownershipState.Replace($expectedScopeMapSha, ('2' * 64))) }
+          $missingScopeEntry = $scopeMap | ConvertFrom-Json -Depth 100
+          $missingScopeEntry.entries = @($missingScopeEntry.entries | Select-Object -Skip 1)
+          Assert-MutationRejected 'remove frozen scope-map entry' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -scopeText ($missingScopeEntry | ConvertTo-Json -Depth 100) }
+          $brokenFoldScope = $scopeMap | ConvertFrom-Json -Depth 100
+          @($brokenFoldScope.entries | Where-Object slice -CEQ 'MASTER-PLAN')[0].plan_owners = @('MISSING')
+          Assert-MutationRejected 'point scope fold to missing owner' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -scopeText ($brokenFoldScope | ConvertTo-Json -Depth 100) }
+          $deletedPlanAndEpoch = [regex]::Replace($masterPlan, '(?m)^\| DB-TEST-POOL-HYGIENE \|.*\r?\n', '').Replace(' -> DB-TEST-POOL-HYGIENE', '')
+          $deletedPlanState = $ownershipState | ConvertFrom-Json -Depth 100
+          $deletedPlanEpoch = @($deletedPlanState.path_epochs | Where-Object path -CEQ 'internal/db/gorm/candidate_store_test.go')[0]
+          $deletedPlanEpoch.ordered_owners = @($deletedPlanEpoch.ordered_owners | Where-Object { [string]$_ -CNE 'DB-TEST-POOL-HYGIENE' })
+          Assert-MutationRejected 'delete required plan row plus epoch owner together' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($deletedPlanState | ConvertTo-Json -Depth 100) -planText $deletedPlanAndEpoch }
+          Write-Output 'CONFORMANCE PASS: canonical LF/CRLF R9 plan/scope/active-candidate authority, exact wrappers, path budget, AST-validated reachable exactly-once source-built image provenance and Scout, immutable live package-plus-test 12-test zero-skip DB execution proof, ownership state, node matrix, readiness, cleanup, and full/race semantics match; 70 mutations rejected'
+
+      - name: Resolve PostgreSQL service identity
+        shell: pwsh
+        run: |
+          $container = docker ps --filter "ancestor=pgvector/pgvector:pg17" --format "{{.ID}}" | Select-Object -First 1
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($container)) {
+            throw "pgvector/pgvector:pg17 service container was not found"
+          }
+          "POSTGRES_CONTAINER=$container" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # This is the canonical release gate: three full-project repetitions from
+      # the runner default, each with a new PostgreSQL 17 database, race mode,
+      # raw JSON parsing, coverage enforcement, session proof, and cleanup.
+      - name: Run full project through fresh-DB RELEASE-GATES
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -FreshDatabase -Package ./... -Race -FailOnUnexpectedSkip -PostgresContainer $env:POSTGRES_CONTAINER -PostgresImage pgvector/pgvector:pg17
+
+      - name: Run tracked critical suite runner
+        if: always()
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/production-gates/run-critical-suite.ps1 -Config .agent/critical-suite.config.yaml
+
+      - name: Run tracked dev-stand lifecycle runner
+        if: always()
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/production-gates/run-dev-stand.ps1 -Config .agent/dev-stand.config.yaml
+
+      - name: Upload RELEASE-GATES evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-gates-foundation
+          path: |
+            .agent/reports/evidence/production-ready/release-gates-foundation/
+            .agent/e/rg4/
+          if-no-files-found: error
 
   test:
     name: test / ${{ matrix.os }}
@@ -93,115 +889,54 @@ jobs:
       # Linux and macOS: race detector enabled (requires CGO + gcc, available
       # on these platforms). Windows: race detector disabled (requires CGO
       # + MinGW, not available in windows-latest default environment).
-      - name: Test (Linux / macOS — with race detector)
-        if: runner.os != 'Windows'
-        run: go test ./... -race -cover -coverprofile=coverage.out
-
-      - name: Test (Windows — without race detector)
-        if: runner.os == 'Windows'
-        run: go test ./... -cover -coverprofile=coverage.out
-
-      # Coverage gates — enforced on every platform that produces coverage.out.
-      #
-      # Honest thresholds derived from running the v4 statement-weighted check
-      # against an actual local run after PR #167's loom-module landing:
-      #
-      # internal/module/                >= 75%  (real measurement 76.2% as of
-      #                                          5d8d651; Phase A's "95.8% NFR-7"
-      #                                          claim was either for a single
-      #                                          sub-package or measured by a
-      #                                          buggy script that sampled one
-      #                                          function via tail -1)
-      # internal/handlers/engramcore    >= 60%  (gRPC transport limits coverage)
-      # internal/handlers/loom          >= 70%  (Phase B-1 plumbing landing;
-#                                          real measurement 75.7% on the v4
-#                                          coverage script. Loom error paths
-#                                          (PRAGMA failure, NewEngine error,
-#                                          shutdown ctx cancellation) are
-#                                          hard to cover via moduletest.Harness
-#                                          without a full SQLite fake. Phase
-#                                          B-2 follow-up improves coverage to
-#                                          85%+ once loom-tools lands and adds
-#                                          its own test surface.)
-      # cmd/engram/                     >= 0%   (main + wiring + exec_*.go are
-      #                                          not meaningfully unit-testable;
-      #                                          gate is kept at 0% as
-      #                                          documentation of the package set)
-      #
-      # The check computes a TRUE statement-weighted coverage for a package
-      # prefix by parsing the raw coverage.out file directly. Each non-header
-      # line in coverage.out has the form:
-      #   path:start.col,end.col numStatements covered(0/1)
-      # The script sums numStatements per package prefix, sums numStatements
-      # of lines where covered > 0, and reports hit/total.
-      #
-      # History:
-      # - v1 (Phase A): used `go tool cover -func ... | tail -1`. Sampled ONE
-      #   function and called it the package coverage. Reported 0% for
-      #   cmd/engram/ on every run — Phase A merged with this gate red on
-      #   Linux/macOS. On Windows the same script silently SKIPPED everything
-      #   because `2>/dev/null` suppressed the missing-coverage.out error and
-      #   awk processed empty input, so pct was empty and the gate returned
-      #   "SKIP" with exit 0. Phase A therefore never actually enforced
-      #   coverage on Windows at all.
-      # - v2 (PR #167 first attempt): function-count-weighted average via awk
-      #   over `go tool cover -func` output. Better than v1 but not the same
-      #   metric Phase A claimed, and still inherited the Windows silent skip.
-      # - v3 (PR #167 second attempt): statement-weighted from raw coverage.out
-      #   directly. Honest on Linux/macOS but BROKE Windows hard because the
-      #   silent-skip path is gone — awk fails fatally when coverage.out is
-      #   missing.
-      # - v4 (this version): statement-weighted on platforms where coverage.out
-      #   exists; explicit WARN-and-skip on platforms where it does not (still
-      #   Windows as of 2026-04-15 — root cause TBD, tracked under Phase B-2
-      #   CI hardening). Gate is permissive on missing coverage.out so we
-      #   don't block PRs on a pre-existing Windows-CI environmental issue.
-      - name: Check coverage gates
-        shell: bash
+      - name: Test with raw JSON assertion (race on Linux / macOS)
+        shell: pwsh
         run: |
-          if [ ! -f coverage.out ]; then
-            echo "WARN: coverage.out is missing on this platform — skipping all coverage gates."
-            echo "WARN: this is a pre-existing issue on the Windows runner that Phase A also hit."
-            echo "WARN: Linux and macOS runners produce coverage.out and enforce the gates."
-            exit 0
-          fi
+          $ErrorActionPreference = 'Stop'
+          $artifact = '.agent/reports/evidence/production-ready/release-gates-foundation/full-matrix'
+          New-Item -ItemType Directory -Path $artifact -Force | Out-Null
+          $stdout = Join-Path $artifact 'go-test.stdout.jsonl'
+          $stderr = Join-Path $artifact 'go-test.stderr.log'
+          $arguments = [System.Collections.Generic.List[string]]::new()
+          foreach ($argument in @('test', '-json', '-covermode=atomic', '-coverprofile=coverage.out', '-count=1', '-timeout=30m')) { $arguments.Add($argument) }
+          if ($env:RUNNER_OS -ne 'Windows') { $arguments.Add('-race') }
+          $arguments.Add('./...')
+          $go = (Get-Command go -ErrorAction Stop).Source
+          $process = Start-Process -FilePath $go `
+            -ArgumentList @($arguments) `
+            -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $goExit = $process.ExitCode
+          ./scripts/production-gates/assert-go-test-json.ps1 `
+            -InputPath $stdout `
+            -SummaryPath (Join-Path $artifact 'go-test-summary.json') `
+            -FailOnUnexpectedSkip
+          $parserExit = $LASTEXITCODE
+          [System.IO.File]::WriteAllText(
+            (Join-Path $artifact 'exit-summary.json'),
+            (([ordered]@{ go_test_exit = $goExit; json_parser_exit = $parserExit; race = $env:RUNNER_OS -ne 'Windows' } | ConvertTo-Json) + "`n"),
+            [System.Text.UTF8Encoding]::new($false)
+          )
+          if ($goExit -ne 0 -or $parserExit -ne 0) { exit 1 }
 
-          check_pkg() {
-            local pkg="$1"
-            local threshold="$2"
-            local pct
-            pct=$(awk -v pkg="github.com/thebtf/engram/${pkg}" '
-              $1 ~ ("^" pkg) {
-                n = split($0, parts, " ")
-                if (n < 3) next
-                stmts = parts[n-1]
-                hit   = parts[n]
-                total += stmts
-                if (hit + 0 > 0) covered += stmts
-              }
-              END {
-                if (total > 0) printf "%.1f\n", (covered / total) * 100
-                else print ""
-              }
-            ' coverage.out)
-            if [ -z "$pct" ]; then
-              echo "SKIP: no coverage data for ${pkg} (no test files or all functions excluded)"
-              return 0
-            fi
-            local ok
-            ok=$(awk "BEGIN { print ($pct >= $threshold) ? 1 : 0 }")
-            if [ "$ok" = "1" ]; then
-              echo "PASS: ${pkg} stmt coverage ${pct}% >= ${threshold}%"
-            else
-              echo "FAIL: ${pkg} stmt coverage ${pct}% < ${threshold}% (threshold)"
-              exit 1
-            fi
-          }
+      # RELEASE-GATES coverage is fail-closed on every OS. Missing profiles are
+      # fatal, overall statement coverage must be >=60%, and the existing
+      # package floors are enforced by the same cross-platform parser.
+      - name: Check coverage gates (fail closed)
+        if: always()
+        shell: pwsh
+        run: ./scripts/production-gates/assert-coverage.ps1 -CoverageProfile coverage.out -SummaryPath coverage-summary.json -OverallThreshold 60
 
-          check_pkg "internal/module/"                75
-          check_pkg "internal/handlers/engramcore"    60
-          check_pkg "internal/handlers/loom"          70
-          check_pkg "cmd/engram/"                      0
+      - name: Upload coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: |
+            coverage.out
+            coverage-summary.json
+            .agent/reports/evidence/production-ready/release-gates-foundation/full-matrix/
+          if-no-files-found: error
 
       # Safety-gate self-check (T007, v5 cleanup).
       #

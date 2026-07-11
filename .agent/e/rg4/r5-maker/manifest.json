@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "scope": "RELEASE-GATES revision 5 compact evidence",
+  "representation_contract": {
+    "name": "git-blob-lf",
+    "definition": "Exact bytes returned by git cat-file blob for the recorded object ID; LF line endings, no CR bytes, UTF-8 without BOM.",
+    "verification": "Resolve commit:path to the recorded blob OID, read the raw blob bytes, assert SHA256/byte count/zero CR/no BOM.",
+    "working_tree_bytes_are_not_authority": true
+  },
+  "authority": {
+    "base": "4812589b9920c187a92a03d210d2e9d5eb53862f",
+    "primary_implementation_commit": "eb44a8e694c60856176c93c64080002231648b4b",
+    "superseded_evidence_commit": "135e4a0a180f112906e89c211f976ce519212347",
+    "effective_implementation_commit": "5dd3e3c4e2f87a52a44465d8a3a63d3b68a55f65",
+    "effective_implementation_parent": "135e4a0a180f112906e89c211f976ce519212347",
+    "final_evidence_commit": "SUPPLIED_OUT_OF_BAND_AFTER_COMMIT",
+    "final_evidence_parent_required": "5dd3e3c4e2f87a52a44465d8a3a63d3b68a55f65"
+  },
+  "entries": [
+    {
+      "path": ".github/workflows/test.yml",
+      "commit": "5dd3e3c4e2f87a52a44465d8a3a63d3b68a55f65",
+      "representation": "git-blob-lf",
+      "git_blob_oid_sha1": "c460afae38da5ee9c008b5273f4808fc961d91cf",
+      "sha256": "5AEABA51399575B1E12B13C4260BDA7BC476D36313D9ED1AFDC499D5013E3A50",
+      "bytes": 70106,
+      "cr_bytes": 0,
+      "utf8_bom": false
+    },
+    {
+      "path": "scripts/production-gates/run-db-suite.ps1",
+      "commit": "5dd3e3c4e2f87a52a44465d8a3a63d3b68a55f65",
+      "representation": "git-blob-lf",
+      "git_blob_oid_sha1": "5740f1f0db48ad5299cc8649395ef77e3d5bcf6c",
+      "sha256": "61DC18574F07E45C573302D4D938C082D29E10876E2E56EEC51F20B3DA4902BD",
+      "bytes": 96079,
+      "cr_bytes": 0,
+      "utf8_bom": false
+    },
+    {
+      "path": ".agent/e/rg4/r5-maker/report.md",
+      "commit": "FINAL_EVIDENCE_COMMIT",
+      "representation": "git-blob-lf",
+      "git_blob_oid_sha1": "50fc17b9a18eb8eaa6422f175d549a2000b49697",
+      "sha256": "D4E24193A128FEC73731D436493FB1B3383A7D207C38091E8ED2592C7D28EBC1",
+      "bytes": 8364,
+      "cr_bytes": 0,
+      "utf8_bom": false
+    },
+    {
+      "path": ".agent/e/rg4/r5-maker/proof.json",
+      "commit": "FINAL_EVIDENCE_COMMIT",
+      "representation": "git-blob-lf",
+      "git_blob_oid_sha1": "6519b85899e7580dcb9efc5ed74e75b329034fd2",
+      "sha256": "9BC8EF996EB63E31FA1AA0C85B5A706150D9DE07804DC12B5300156C60667535",
+      "bytes": 8160,
+      "cr_bytes": 0,
+      "utf8_bom": false
+    },
+    {
+      "path": ".agent/e/rg4/r5-maker/fail.json",
+      "commit": "FINAL_EVIDENCE_COMMIT",
+      "representation": "git-blob-lf",
+      "git_blob_oid_sha1": "2ed33d01dbf08f25584377fa3d7c7cb3ca632dbd",
+      "sha256": "D8038B65FE07AFDB4826CCC30617025B7114C9083E9BB492BE0112CBC4BF80B1",
+      "bytes": 6871,
+      "cr_bytes": 0,
+      "utf8_bom": false
+    }
+  ],
+  "entry_count": 5,
+  "excluded_from_manifest_entries": [
+    {
+      "path": ".agent/e/rg4/r5-maker/manifest.json",
+      "reason": "A manifest cannot contain its own stable digest or blob OID."
+    },
+    {
+      "path": ".agent/e/rg4/r5-maker/SHA256SUMS",
+      "reason": "SHA256SUMS hashes the finalized manifest and excludes itself, avoiding a checksum cycle."
+    }
+  ],
+  "self_hash_paradox": false
+}

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "label": "prove-it-package-final",
+  "live_package_binding_disabled": true,
+  "observed_at": "2026-07-10T20:35:16.7297899+00:00",
+  "exit_code": 1,
+  "workflow_sha256": "eacb67531d1b96862812273d41a605b5c10b5b26a99f9b8f4a0445f02ff51452",
+  "runner_sha256": "910e78011381e6bbfcf2fb15a97d61f54c2f399528b87ec02c6d30191701a8b4",
+  "extracted_script_sha256": "f75d539325743785360542cd058757f8fd1cddcfb669ac5a6c76846865e9247c",
+  "stdout_tail": [],
+  "stderr_tail": [
+    "Exception: D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r8-maker\\.agent\\specs\\release-gates-r8\\evidence\\release-gates\\prove-it-package-final.workflow-conformance.ps1:531",
+    "Line |",
+    " 531 |  … -not $rejected) { throw \"conformance mutation '$name' was accepted\" }",
+    "     |                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+    "     | conformance mutation 'remove live session-start package predicate' was accepted"
+  ]
+}

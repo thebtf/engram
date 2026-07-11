@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "slice": "T007-COMPAT-DEMOLITION-CLASSIFICATION",
+  "classified_at": "2026-07-11T00:41:04.2538562Z",
+  "base_sha": "af1ed63536829916e0477be719a30a57a8d9227a",
+  "classification": "CURRENT_CONTRACT_TEST_CORRECTION",
+  "production_change_authorized": false,
+  "production_change_required": false,
+  "test_change_authorized": true,
+  "evidence": {
+    "test": "internal/mcp/store_memory_compat_t007_test.go: TestEC_F1_TagDerivedBackfill_T007",
+    "store_path": "internal/db/gorm/memory_store.go: MemoryStore.List -> ListWithFilters -> memoryRowToModel",
+    "flag_contract": "memoryRowToModel copies PrivacyScope only when ENGRAM_VNEXT_F_ENABLED=true; flag-off intentionally leaves the model field empty for v6.4 response byte identity",
+    "database_contract": "The test already proves privacy_scope='global' by raw SQL before checking MemoryStore.List visibility",
+    "invalid_assertion": "The old List assertion searched the flag-off models.Memory projection for PrivacyScope='global', a field intentionally hidden in that mode",
+    "accepted_correction": "Identify the SQL-proven global fixture in the List result by its exact durable database ID and require its exact content"
+  },
+  "demolition_guard": {
+    "graph_stage_restored": false,
+    "cross_encoder_rerank_restored": false,
+    "internal_search_scoring_restored": false,
+    "sdk_observation_extraction_restored": false,
+    "server_http_mcp_transport_restored": false
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "slice": "RELEASE-GATES",
+  "observed_at": "2026-07-10T23:43:48.0976027+03:00",
+  "authority": {
+    "reconstruction_base": "d59d1605969b1f567506e96ded524dfd1e4be08a",
+    "plan_governance_commit": "37d185b33b8f9411564fda49cf8b0d58321b62fd",
+    "plan_sha256": "fd2b223a9a62848efc39e1c33bf739bada191508bccb7ba9a73140185638e43d",
+    "scope_map_sha256": "81093184036672008d6b85dfa88a431998ef70b587ab11475aa2b315f03ddf79",
+    "register_freeze_sha256": "ab5f882fa110ca823a317061ecbca0c62516702735325893a56206f9e7a29415",
+    "register_freeze_updated_at": "2026-07-10T22:46:01.2938194+03:00"
+  },
+  "source_hashes": {
+    ".github/workflows/test.yml": "eacb67531d1b96862812273d41a605b5c10b5b26a99f9b8f4a0445f02ff51452",
+    "scripts/production-gates/assert-plan-path-ownership.ps1": "3e82ac89be0888d31b58b9046395fe14aa7c673d8706ae95779bb5d9c231111a",
+    "scripts/production-gates/run-db-suite.ps1": "910e78011381e6bbfcf2fb15a97d61f54c2f399528b87ec02c6d30191701a8b4"
+  },
+  "checks": {
+    "actionlint": {
+      "command": "actionlint .github/workflows/test.yml",
+      "exit_code": 0
+    },
+    "ownership_self_test": {
+      "command": "pwsh -NoProfile -File scripts/production-gates/assert-plan-path-ownership.ps1 -SelfTest",
+      "exit_code": 0
+    },
+    "database_runner_self_test": {
+      "command": "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -SelfTest",
+      "exit_code": 0
+    },
+    "workflow_conformance": {
+      "command": "pwsh -NoProfile -File .agent/specs/release-gates-r8/evidence/release-gates/verify-workflow-conformance.ps1 -Repository . -Label final-green",
+      "exit_code": 0,
+      "mutations_rejected": 51,
+      "artifact": ".agent/specs/release-gates-r8/evidence/release-gates/final-green.workflow-conformance.json"
+    },
+    "live_structural_ledger": {
+      "exit_code": 0,
+      "verdict": "PASS",
+      "live_register_sha256": "22f2af0817f1a525ea4436e95326353617294e02ccf2cdaed1a9c94adc1997fc",
+      "live_register_rows": 67,
+      "scope_entries": 67,
+      "maker_slices": 57,
+      "declarations": 333,
+      "repeated_exact_paths": 34,
+      "declared_epochs": 36,
+      "state_epochs": 36,
+      "errors": 0,
+      "artifact": ".agent/specs/release-gates-r8/evidence/release-gates/ledger-live-register.final.json",
+      "artifact_sha256": "70ac624ea18f08f95bd6195707a15c77522fa07b2dbe105f05ea42d66a8765b5"
+    }
+  },
+  "progress_drift_proof": {
+    "freeze_sha256": "ab5f882fa110ca823a317061ecbca0c62516702735325893a56206f9e7a29415",
+    "observed_live_sha256_sequence": [
+      "8f099b7564fde5655541e04e7a075b3441f460fd1a2058afbee771736d9f83e0",
+      "22f2af0817f1a525ea4436e95326353617294e02ccf2cdaed1a9c94adc1997fc"
+    ],
+    "live_sha256": "22f2af0817f1a525ea4436e95326353617294e02ccf2cdaed1a9c94adc1997fc",
+    "same_sha": false,
+    "structural_verdict": "PASS",
+    "meaning": "normal register progress changed mutable bytes while the exact 67-slice structure and load-bearing rejected-head policies remained conformant"
+  },
+  "not_run_in_maker": [
+    "full fresh-database repeat-3/race suite",
+    "Docker dev-stand build, readiness, Scout scan, and cleanup"
+  ],
+  "review": {
+    "local_six_axis_review": "PASS",
+    "independent_checker": "REQUIRED",
+    "root_post_review": "REQUIRED",
+    "cross_model_review": "UNAVAILABLE_DURING_MAKER_DUE_TO_NATIVE_AGENT_SLOT_SATURATION"
+  },
+  "verdict": "PASS_PENDING_INDEPENDENT_CHECKER_AND_ROOT_POST_REVIEW"
+}

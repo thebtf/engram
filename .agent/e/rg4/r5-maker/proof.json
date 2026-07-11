@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "scope": "RELEASE-GATES revision 5 maker evidence",
+  "authority": {
+    "base": "4812589b9920c187a92a03d210d2e9d5eb53862f",
+    "base_tree": "764fd987cc606754f037de0647f8a10e7080adc2",
+    "revision_4_checker_commit": "bd6af3dcd1fa0c2675102a1b91e7c59c8c7c85df",
+    "revision_4_checker_report_blob": "27519369cc3e5b79d5188eaf07026cb7076cec13",
+    "primary_implementation_commit": "eb44a8e694c60856176c93c64080002231648b4b",
+    "primary_implementation_parent": "4812589b9920c187a92a03d210d2e9d5eb53862f",
+    "superseded_evidence_commit": "135e4a0a180f112906e89c211f976ce519212347",
+    "effective_implementation_commit": "5dd3e3c4e2f87a52a44465d8a3a63d3b68a55f65",
+    "effective_implementation_parent": "135e4a0a180f112906e89c211f976ce519212347",
+    "effective_implementation_tree": "5f6465deaebcd0899e27af231550726f2adc37f6",
+    "canonical_plan_sha256": "d7bcfd122e456d9b764595524292d53b0c99447b7f716a1be0707341e4681bf9",
+    "branch": "work/prc-release-gates-revision5-maker",
+    "worktree": "D:/Dev/engram/.agent/worktrees/prc-release-gates-r5-maker"
+  },
+  "implementation": {
+    "changed_paths": [
+      ".github/workflows/test.yml",
+      "scripts/production-gates/run-db-suite.ps1"
+    ],
+    "workflow": {
+      "git_blob_oid": "c460afae38da5ee9c008b5273f4808fc961d91cf",
+      "representation": "git-blob-lf",
+      "sha256": "5AEABA51399575B1E12B13C4260BDA7BC476D36313D9ED1AFDC499D5013E3A50",
+      "bytes": 70106,
+      "cr_bytes": 0,
+      "utf8_bom": false
+    },
+    "db_runner": {
+      "git_blob_oid": "5740f1f0db48ad5299cc8649395ef77e3d5bcf6c",
+      "representation": "git-blob-lf",
+      "sha256": "61DC18574F07E45C573302D4D938C082D29E10876E2E56EEC51F20B3DA4902BD",
+      "bytes": 96079,
+      "cr_bytes": 0,
+      "utf8_bom": false
+    }
+  },
+  "foundation_gates": {
+    "selftests": { "command_exit": 0, "verdict": "PASS", "count": 9 },
+    "workflow_conformance": { "command_exit": 0, "verdict": "PASS", "mutations_rejected": 44, "parser": "PowerShell AST" },
+    "powershell_parse": { "command_exit": 0, "verdict": "PASS", "scope": "DB runner and extracted workflow conformance block" },
+    "actionlint": { "command_exit": 0, "verdict": "PASS" },
+    "diff_check": { "command_exit": 0, "verdict": "PASS" },
+    "go_vet": { "command": "go vet ./...", "command_exit": 0, "verdict": "PASS" },
+    "go_build": { "command": "go build ./...", "command_exit": 0, "verdict": "PASS" },
+    "gitleaks_implementation_diff": { "command_exit": 0, "verdict": "PASS", "findings": 0, "base": "4812589b9920c187a92a03d210d2e9d5eb53862f", "head": "5dd3e3c4e2f87a52a44465d8a3a63d3b68a55f65" },
+    "critical_suite": {
+      "command_exit": 0,
+      "verdict": "PASS",
+      "tests": 7,
+      "passed": 7,
+      "failed": 0,
+      "skipped": 0,
+      "raw_summary_sha256": "C696FEDF8898460DADC89871905AD73F69A0360E8764526584B80BFB4554754E"
+    },
+    "ownership": {
+      "ledger": { "command_exit": 0, "verdict": "PASS", "slices": 48, "declarations": 325, "raw_sha256": "1711F32FE49412F5ED887952EE9ED84E8E62E655724F01B70F325170C775CB20" },
+      "implementation_diff": { "command_exit": 0, "verdict": "PASS", "changed_paths": 7, "violations": 0, "raw_sha256": "2F1BDDD39288C8F6B929AF4F268E692E9F206AC8FADE28E51C12ECCF68B502D4" }
+    },
+    "path_budget": {
+      "command_exit": 0,
+      "verdict": "PASS",
+      "tracked_paths": 1410,
+      "longest_combined_length": 166,
+      "ceiling": 240,
+      "violations": 0,
+      "raw_sha256": "F3BECD4CCDB0F08D9613CF2895E00B92BAC655F64DA0CCA70BB8AD39BE1638C5",
+      "fresh_checkout": { "root_length": 66, "core_longpaths": "UNSET", "head_exact": true, "clean": true, "cleanup": true }
+    }
+  },
+  "database_gate": {
+    "run_id": "canonical-full-race-repeat3-r5-inventory-pin",
+    "command_exit": 1,
+    "verdict": "EXPECTED_PROJECT_RED",
+    "command_scope": "./... fresh database race repeat 3 fail-on-unexpected-skip full coverage",
+    "database_name_pattern": "engram_prc_rg_test_<16-lower-hex>_rN",
+    "required_package": "github.com/thebtf/engram/internal/grpcserver",
+    "required_session_start_execution": [
+      { "repeat": 1, "verdict": "PASS", "expected": 12, "observed": 12, "executed": 12, "passed": 10, "failed": 2, "skipped": 0, "missing": 0, "duplicate": 0, "incomplete": 0, "raw_sha256": "0AF9EBDF4B242ED394D13CE4AB410F7A94E7A0A367B66BB0ABBF1C177DDD0316" },
+      { "repeat": 2, "verdict": "PASS", "expected": 12, "observed": 12, "executed": 12, "passed": 10, "failed": 2, "skipped": 0, "missing": 0, "duplicate": 0, "incomplete": 0, "raw_sha256": "0AF9EBDF4B242ED394D13CE4AB410F7A94E7A0A367B66BB0ABBF1C177DDD0316" },
+      { "repeat": 3, "verdict": "PASS", "expected": 12, "observed": 12, "executed": 12, "passed": 10, "failed": 2, "skipped": 0, "missing": 0, "duplicate": 0, "incomplete": 0, "raw_sha256": "0AF9EBDF4B242ED394D13CE4AB410F7A94E7A0A367B66BB0ABBF1C177DDD0316" }
+    ],
+    "project_results": {
+      "tests": [3516, 3516, 3516],
+      "passed": [3472, 3471, 3473],
+      "failed": [30, 29, 30],
+      "unexpected_skips": [13, 13, 13],
+      "incomplete": [1, 3, 0],
+      "coverage_percent": [53.33, 53.35, 53.35],
+      "overall_floor": 60.0,
+      "cleanup_exit": [0, 0, 0],
+      "sessions_before": [0, 0, 0],
+      "sessions_after": [0, 0, 0]
+    },
+    "direct_residue": { "databases": 0, "sessions": 0, "compose_containers": 0, "compose_volumes": 0, "compose_networks": 0, "shared_postgres": "/engram-prc-postgres|pgvector/pgvector:pg17|true" },
+    "raw_summary_sha256": "4B98F3D1E296440DFDC1A6023D4EDAE3B6D4B5255083DB666CC0B8CC8339BE15"
+  },
+  "runtime": {
+    "dev_stand": {
+      "command_exit": 1,
+      "overall_verdict": "EXPECTED_SCAN_RED",
+      "source_commit": "5dd3e3c4e2f87a52a44465d8a3a63d3b68a55f65",
+      "source_tracked_clean": true,
+      "up": "PASS",
+      "ready": "PASS",
+      "scan": "FAIL_FINDINGS",
+      "down": "PASS",
+      "compose_build_completed": true,
+      "postgres_pull_completed": true,
+      "launch_no_build": true,
+      "prelaunch_running_scan_identity": true,
+      "credentials_distinct_injected_not_persisted": true,
+      "residual_resources_zero": true,
+      "images": {
+        "operator-console": { "id": "sha256:d701b9ace90ed8b689f45b90fbdf87ed1c9b2a81b7a237fa5d7fd909405df9f9", "findings": 5 },
+        "postgres": { "id": "sha256:d2ef61f42ef767baa5a1475393303cc235bcd92febd9d7014eddb48b41f3bad0", "findings": 20 },
+        "server": { "id": "sha256:c75d6cd0fd5fd5a569d1c5c4eca0200e4c9de3374dbf7d316390c064af9e4bf0", "findings": 13 }
+      },
+      "raw_summary_sha256": "C76843F17D36BBF42427C86FE0A8CDD43F192C3F744EC03D8AAE3A84BF58D067",
+      "action_sha256": {
+        "up": "E67D4DC6FA06281E245680D1B3C34243BABF39E7BA4036AE767DE25D4A513A67",
+        "ready": "240F3D588C37D39B6C4F7AF60F3AEA5F5DE12D730355AC377A07A8CDCB4D84A5",
+        "scan": "7AA1CDBE7076E5E85D8A4AA798088029B9F6F29B79234B1B94AE2C9B2D8E24C8",
+        "down": "32F23A2587252A5AFB8BECCAAD0147AB8469C133564F748C1D0DC3BE936F3D17"
+      }
+    },
+    "openclaw_matrix": {
+      "command_exit": 1,
+      "verdict": "EXPECTED_NEGATIVE",
+      "reason": "required plugin/openclaw-engram/package-lock.json is absent",
+      "executed_steps": 0,
+      "pre_surface_clean": true,
+      "post_surface_clean": true,
+      "cleanup": true,
+      "raw_summary_sha256": "5449C64632EF3B3A79EB3603CEA8B051DA52B25A861F2759F6B6DF3E61A745CE"
+    }
+  },
+  "secret_diagnostic": {
+    "implementation_diff_findings": 0,
+    "working_tree_no_git_exit": 1,
+    "working_tree_no_git_findings": 62,
+    "ignored_runtime_findings": 48,
+    "existing_tracked_findings": 14,
+    "redacted_report_sha256": "60FC8185A4E4207129D6076AF27C2E6E58922D34720A0E19C266C6BC7A3D6F42"
+  },
+  "environment": {
+    "os": "Microsoft Windows 10.0.26200",
+    "arch": "X64",
+    "go": "1.25.11 windows/amd64",
+    "powershell": "7.6.1",
+    "git": "2.51.1.windows.1",
+    "actionlint": "1.7.12",
+    "docker_client": "29.1.3",
+    "docker_server": "29.1.3",
+    "docker_compose": "2.40.3-desktop.1",
+    "core_autocrlf": true,
+    "core_longpaths": "UNSET"
+  },
+  "maker_handoff": "READY_FOR_INDEPENDENT_CHECK",
+  "project_release_readiness": "BLOCKED"
+}

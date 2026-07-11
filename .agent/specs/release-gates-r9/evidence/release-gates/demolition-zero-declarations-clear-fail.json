@@ -1,0 +1,129 @@
+{
+  "schema_version": 2,
+  "gate": "plan-path-ownership",
+  "mode": "Diff",
+  "verdict": "FAIL",
+  "started_at": "2026-07-10T22:32:03.9019051+00:00",
+  "finished_at": "2026-07-10T22:32:08.9051704+00:00",
+  "duration_seconds": 5.003,
+  "plan": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\plans\\2026-07-10-engram-production-ready-master-plan.md",
+    "expected_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f",
+    "observed_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f",
+    "hash_match": true,
+    "ledger_verdict": "PASS"
+  },
+  "state": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\plans\\2026-07-10-engram-production-ready-ownership-state.json",
+    "sha256": "e41f52fbafa317eb1571c76a7d1de9add543da38a1b2471dbe587a849b21c032",
+    "verdict": "PASS",
+    "plan_sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f"
+  },
+  "scope_map": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker\\.agent\\plans\\2026-07-10-engram-production-ready-scope-map.json",
+    "expected_sha256": "fb170d59f3072117489402fd347cd1432c40adbc842811f92227498bcbc92693",
+    "observed_sha256": "fb170d59f3072117489402fd347cd1432c40adbc842811f92227498bcbc92693",
+    "verdict": "PASS",
+    "entries": 67,
+    "unique_slices": 67
+  },
+  "live_register": {
+    "supplied": false,
+    "path": "",
+    "sha256": null,
+    "checked": false,
+    "rows": 0
+  },
+  "slice": {
+    "name": "DEMOLITION-SKIP-CLASSIFICATION",
+    "row_count": 0,
+    "declarations": [],
+    "evidence_namespace": null,
+    "report_namespace": null
+  },
+  "git": {
+    "repository": "D:\\Dev\\engram\\.agent\\worktrees\\prc-release-gates-r9-maker",
+    "requested_base": "4812589b9920c187a92a03d210d2e9d5eb53862f",
+    "resolved_base": "4812589b9920c187a92a03d210d2e9d5eb53862f",
+    "requested_head": "d59d1605969b1f567506e96ded524dfd1e4be08a",
+    "resolved_head": "d59d1605969b1f567506e96ded524dfd1e4be08a",
+    "base_is_ancestor": true,
+    "name_status_command": "git -c core.quotepath=false diff --name-status --find-renames --find-copies 4812589b9920c187a92a03d210d2e9d5eb53862f..d59d1605969b1f567506e96ded524dfd1e4be08a --",
+    "raw_name_status": [
+      "A\t.agent/e/rg4/r5-maker/SHA256SUMS",
+      "A\t.agent/e/rg4/r5-maker/fail.json",
+      "A\t.agent/e/rg4/r5-maker/manifest.json",
+      "A\t.agent/e/rg4/r5-maker/proof.json",
+      "A\t.agent/e/rg4/r5-maker/report.md",
+      "M\t.github/workflows/test.yml",
+      "M\tscripts/production-gates/run-db-suite.ps1"
+    ]
+  },
+  "counts": {
+    "diff_entries": 7,
+    "changed_paths": 0,
+    "violations": 0,
+    "errors": 1
+  },
+  "diff_entries": [
+    {
+      "status": "A",
+      "paths": [
+        ".agent/e/rg4/r5-maker/SHA256SUMS"
+      ],
+      "raw": "A\t.agent/e/rg4/r5-maker/SHA256SUMS"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/e/rg4/r5-maker/fail.json"
+      ],
+      "raw": "A\t.agent/e/rg4/r5-maker/fail.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/e/rg4/r5-maker/manifest.json"
+      ],
+      "raw": "A\t.agent/e/rg4/r5-maker/manifest.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/e/rg4/r5-maker/proof.json"
+      ],
+      "raw": "A\t.agent/e/rg4/r5-maker/proof.json"
+    },
+    {
+      "status": "A",
+      "paths": [
+        ".agent/e/rg4/r5-maker/report.md"
+      ],
+      "raw": "A\t.agent/e/rg4/r5-maker/report.md"
+    },
+    {
+      "status": "M",
+      "paths": [
+        ".github/workflows/test.yml"
+      ],
+      "raw": "M\t.github/workflows/test.yml"
+    },
+    {
+      "status": "M",
+      "paths": [
+        "scripts/production-gates/run-db-suite.ps1"
+      ],
+      "raw": "M\tscripts/production-gates/run-db-suite.ps1"
+    }
+  ],
+  "changed_paths": [],
+  "violations": [],
+  "epoch_authority": {
+    "verdict": "PASS",
+    "evaluated": [],
+    "errors": []
+  },
+  "errors": [
+    "Diff mode requires exactly one maker row for slice 'DEMOLITION-SKIP-CLASSIFICATION'; found 0"
+  ]
+}

@@ -1,0 +1,904 @@
+{
+  "schema_version": 1,
+  "kind": "production-ready-active-diff-contracts",
+  "revision": 10,
+  "authority": {
+    "plan_path": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+    "scope_map_path": ".agent/plans/2026-07-10-engram-production-ready-scope-map.json",
+    "ownership_state_path": ".agent/plans/2026-07-10-engram-production-ready-ownership-state.json",
+    "rejected_r8_head": "406fe952c143eb8aaf5895427c568a41d4cec225",
+    "r8_scope_provenance_sha256": "ab5f882fa110ca823a317061ecbca0c62516702735325893a56206f9e7a29415",
+    "rejected_r9_plan_head": "8cb810095b2bea77ab9812832d9ab8a99c928d18",
+    "rejected_r9_release_head": "f11a77cce88f013839e22662458a3318670445e9",
+    "r9_checker_commit": "0354362c427d99eb2993e5acddeb9d5bcd561df7",
+    "r9_checker_verdict": "REVISE_2_HIGH_1_MED",
+    "r9_disposition": "PRESERVE_PLAN_GOVERNANCE_A_AND_RELEASE_GATES_B_AS_REJECTED_HISTORY"
+  },
+  "source_audit": {
+    "mutable_register_path": ".agent/reports/production-readiness-evidence-register.json",
+    "observed_sha256": "29865adc048cb3f64ec7d133b3bd901c95115e4ae5b95c98927607de889f77d4",
+    "observed_updated_at": "2026-07-11T00:23:18.8583196+03:00",
+    "use": "discovery-only; never required by the frozen CI gate"
+  },
+  "digest_contract": {
+    "algorithm": "SHA-256",
+    "serialization": "ordinally sorted normalized repository paths, one UTF-8 path plus LF per entry",
+    "path_case": "ordinal-case-sensitive"
+  },
+  "external_enforcement": {
+    "repository": "thebtf/engram",
+    "owner_type": "User",
+    "visibility": "PUBLIC",
+    "default_branch": "main",
+    "observed_ruleset_id": 13610955,
+    "observed_ruleset_enforcement": "active",
+    "observed_rules": [
+      "deletion",
+      "non_fast_forward"
+    ],
+    "required_status_activation": "PENDING_POST_BOOTSTRAP_TRANSITION",
+    "bootstrap_contract": "merge the independently accepted R10 A/B chain onto main, observe one successful authority-guard status on an ordinary authorized PR, then amend ruleset 13610955 to require that exact status; capture pre/post ruleset JSON and a blocked protected-path PR as external evidence"
+  },
+  "release_blockers": {
+    "db_repeat3": "BLOCKED_0_OF_3",
+    "image_scans": "BLOCKED_SERVER_5_POSTGRES_20_OPERATOR_13_HIGH_OR_CRITICAL"
+  },
+  "demolition_guard": {
+    "disposition": "PRESERVE_V5_EXCLUSIONS",
+    "excluded_systems": [
+      "graph stage",
+      "cross-encoder rerank",
+      "internal/search scoring passes",
+      "SDK observation extraction",
+      "server-side MCP HTTP transports"
+    ]
+  },
+  "status_classes": {
+    "current": [
+      "current-checker-active",
+      "current-ready",
+      "current-ready-for-check",
+      "current-ready-with-concerns"
+    ],
+    "rejected": [
+      "rejected-evidence-revision",
+      "rejected-historical",
+      "rejected-release-gates-r9",
+      "rejected-security-r3"
+    ],
+    "pending": [
+      "current-candidate-pending-checker",
+      "current-maker-in-progress"
+    ]
+  },
+  "pending_namespaces": [
+    {
+      "slice": "DB-TEST-POOL-HYGIENE",
+      "plan_owner": "DB-TEST-POOL-HYGIENE",
+      "status_class": "current-candidate-pending-checker",
+      "branch": "work/prc-db-test-pool-hygiene-evidence-r3",
+      "base_anchor": "68242c48aaad62ec087166eeb9ea32f14d189450",
+      "forbidden_base": "a7b2d36b3f0a4514b51dddf341877f5b4b9721d9",
+      "candidate_head": "331b5b195a967e7f27dca94038a3480c9afcc84f",
+      "candidate_tree": "12674bf76404a0e021a22d3dc7aa4d5ed3763ee0",
+      "candidate_state": "IMMUTABLE_PENDING_CHECKER_AND_ROOT_ACCEPTANCE",
+      "exact_paths": [
+        ".agent/reports/2026-07-11-db-test-pool-hygiene-evidence-revision3-maker.md",
+        ".agent/reports/evidence/production-ready/db-test-pool-hygiene/Build-DBPoolHygieneEvidence.ps1",
+        ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r3.json",
+        ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.final.json",
+        ".agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json",
+        ".agent/reports/evidence/production-ready/db-test-pool-hygiene/SHA256SUMS.txt",
+        ".agent/reports/evidence/production-ready/db-test-pool-hygiene/Test-DBPoolHygieneEvidenceAdversarial.ps1",
+        ".agent/reports/evidence/production-ready/db-test-pool-hygiene/Verify-DBPoolHygieneEvidence.ps1",
+        ".agent/reports/evidence/production-ready/db-test-pool-hygiene/adversarial-proof.json",
+        ".agent/reports/evidence/production-ready/db-test-pool-hygiene/verifier-proof.json"
+      ],
+      "release_accepted": false
+    },
+    {
+      "slice": "RELEASE-GATES",
+      "plan_owner": "RELEASE-GATES",
+      "status_class": "current-maker-in-progress",
+      "branch": "work/prc-release-gates-revision10-maker",
+      "base_anchor": "f11a77cce88f013839e22662458a3318670445e9",
+      "forbidden_base": "0354362c427d99eb2993e5acddeb9d5bcd561df7",
+      "exact_paths": [
+        ".agent/reports/2026-07-11-release-gates-r10-maker.md",
+        ".agent/specs/release-gates-r10/evidence/release-gates/R10-AUTHORITY-GUARD.red.json",
+        ".agent/specs/release-gates-r10/evidence/release-gates/authority-guard-simulation.json",
+        ".agent/specs/release-gates-r10/evidence/release-gates/security-review.md",
+        ".agent/specs/release-gates-r10/evidence/release-gates/strict-schema-regressions.json",
+        ".agent/specs/release-gates-r10/evidence/release-gates/test-r10-authority-guard.ps1",
+        ".agent/specs/release-gates-r10/evidence/release-gates/verification-summary.json",
+        ".agent/specs/release-gates-r10/evidence/release-gates/workflow-conformance.json",
+        ".github/workflows/authority-guard.yml",
+        ".github/workflows/test.yml",
+        "scripts/production-gates/assert-active-candidate-path-authority.ps1",
+        "scripts/production-gates/assert-pr-authority-guard.ps1"
+      ],
+      "release_accepted": false
+    }
+  ],
+  "excluded_resolvable_rows": [
+    {
+      "slice": "MASTER-PLAN",
+      "disposition": "in-progress-empty-diff",
+      "reason": "R10 A/B chain is pending; A owns governance and B owns the exact trusted guard envelope"
+    },
+    {
+      "slice": "PLAN-GOVERNANCE",
+      "disposition": "in-progress-empty-diff",
+      "reason": "R10 PLAN-GOVERNANCE A is the direct child of rejected R9 release head f11a77cc"
+    },
+    {
+      "slice": "RELEASE-GATES",
+      "disposition": "in-progress-empty-diff",
+      "reason": "R10 RELEASE-GATES B must be the direct child of A and cannot use checker commit 0354362c as a base"
+    },
+    {
+      "slice": "DEMOLITION-SKIP-CLASSIFICATION",
+      "disposition": "checker-classification",
+      "reason": "not a maker candidate and intentionally has no maker row"
+    },
+    {
+      "slice": "DB-REAPER",
+      "disposition": "rejected-path-authority-conflict",
+      "reason": "actual service.go path is owned by AUTH-BOOTSTRAP-SECURITY and cannot be granted to DB-REAPER concurrently"
+    }
+  ],
+  "candidates": [
+    {
+      "slice": "DB-AUTH",
+      "status_class": "current-ready",
+      "branch": "work/prc-db-auth",
+      "base": "b0c4ab4c07a4c6f512728da52b2e132bacd0289c",
+      "head": "da97c88be6753703bac112be8431dc373e4d9dda",
+      "path_count": 5,
+      "paths_sha256": "7a678254366c2bdcf5feba8e25ce1151a69ae0a0240d68e3af3cd15ffa1b9d9e",
+      "paths": [
+        {
+          "path": ".agent/reports/db-auth-rework-maker-2026-07-10.md",
+          "git_status": "A",
+          "classification": "report"
+        },
+        {
+          "path": "internal/db/gorm/user_store.go",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "internal/db/gorm/user_store_test.go",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "internal/worker/auth_handlers.go",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "internal/worker/auth_handlers_lifecycle_test.go",
+          "git_status": "M",
+          "classification": "product"
+        }
+      ],
+      "plan_owner": "DB-AUTH",
+      "path_authority_eligible": true,
+      "release_accepted": false,
+      "lineage": {
+        "kind": "exact-live-register"
+      }
+    },
+    {
+      "slice": "DB-EMBEDDING-STATS",
+      "status_class": "current-checker-active",
+      "branch": "work/prc-db-embedding-stats",
+      "base": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+      "head": "38d6a4fb7ff5f5ae3b6c0066c0a1b806421137df",
+      "path_count": 8,
+      "paths_sha256": "b4d1c8176810630268759cedc909cd1042b063b81a14a01175b1a36f174d5c0f",
+      "paths": [
+        {
+          "path": ".agent/reports/2026-07-10-db-embedding-stats-maker.md",
+          "git_status": "A",
+          "classification": "report"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats/DB-EMBEDDING-STATS.final.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats/SHA256SUMS.txt",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.red.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/DB-EMBEDDING-STATS.tdd.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats/evidence/coverage.out",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": "internal/embedding/store.go",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "internal/embedding/store_stats_test.go",
+          "git_status": "M",
+          "classification": "product"
+        }
+      ],
+      "plan_owner": "DB-EMBEDDING-STATS",
+      "path_authority_eligible": true,
+      "release_accepted": false,
+      "lineage": {
+        "kind": "exact-live-register"
+      }
+    },
+    {
+      "slice": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+      "status_class": "current-ready-for-check",
+      "branch": "work/prc-db-embedding-evidence-transport-r6",
+      "base": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+      "head": "a1a3bfeb6546d1f3f24192b1c9f057402b6249a2",
+      "path_count": 32,
+      "paths_sha256": "2fb294913b315bd908adf227f28600e5b2b80753a20dd6b9606cb7ae3d907948",
+      "paths": [
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/R5-SHA256SUMS.txt",
+          "git_status": "M",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/maker-report.md",
+          "git_status": "M",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/maker-summary.v1.json",
+          "git_status": "M",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verification-matrix.v1.json",
+          "git_status": "M",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r5/verify-coverage-capture.cjs",
+          "git_status": "M",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/.gitattributes",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/R6-SHA256SUMS.txt",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/assemble-coverage-repeat.cjs",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/build-checksums.cjs",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/capture-coverage-run.cjs",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/checksum-layers.v1.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-capture.v2.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-repeat.v2.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-run-1.envelope.v2.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-run-1.stderr.bin",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-run-1.stdout.bin",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-run-1.tap",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-run-2.envelope.v2.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-run-2.stderr.bin",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-run-2.stdout.bin",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/coverage-run-2.tap",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/maker-report.md",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/maker-summary.v2.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/prove-it.cjs",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/red-reproduction.cjs",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/verify-evidence.cjs",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/verify-evidence.test.cjs",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport-r6/verify-final-commit-replay.cjs",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-embedding-stats-evidence-transport/verify-manifest.test.cjs",
+          "git_status": "M",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R5.tdd.json",
+          "git_status": "M",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R6.red.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/specs/db-embedding-stats-evidence-transport/evidence/DB-EMBEDDING-EVIDENCE-TRANSPORT-R6.tdd.json",
+          "git_status": "A",
+          "classification": "evidence"
+        }
+      ],
+      "plan_owner": "DB-EMBEDDING-EVIDENCE-TRANSPORT",
+      "path_authority_eligible": true,
+      "release_accepted": false,
+      "lineage": {
+        "kind": "exact-successor-of-rejected",
+        "required_rejected_predecessor_base": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+        "checker_verdict": "PENDING"
+      }
+    },
+    {
+      "slice": "DB-BULKOPS",
+      "status_class": "rejected-historical",
+      "branch": "work/prc-db-bulkops",
+      "base": "6ea10496aa127fba7fdb194875044e770d0a1d8c",
+      "head": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+      "path_count": 13,
+      "paths_sha256": "1c53f8aed2d97d91f9103a21d214856c5bb0f59dce6dcc0264e1ce04693c869a",
+      "paths": [
+        {
+          "path": ".agent/reports/2026-07-10-db-bulkops-sibling-rework-maker.md",
+          "git_status": "A",
+          "classification": "report"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-sibling-rework/DB-BULKOPS-SIBLING-REWORK.final.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-sibling-rework/DB-BULKOPS-SIBLING-REWORK.tdd.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-sibling-rework/H1-candidate-review-after.red.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-sibling-rework/M1-nil-facade-normalization.red.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-sibling-rework/M2-all-row-failure-audit.red.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": "internal/bulkops/facade.go",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "internal/bulkops/facade_test.go",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "internal/bulkops/rollback_test.go",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "internal/db/gorm/candidate_store.go",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "internal/db/gorm/candidate_store_test.go",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "internal/mcp/tools_bulkops.go",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "internal/mcp/tools_dryrun_test.go",
+          "git_status": "M",
+          "classification": "product"
+        }
+      ],
+      "plan_owner": "DB-BULKOPS",
+      "path_authority_eligible": true,
+      "release_accepted": false,
+      "lineage": {
+        "kind": "historical-rejected"
+      }
+    },
+    {
+      "slice": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "status_class": "current-ready-with-concerns",
+      "branch": "work/prc-db-bulkops",
+      "base": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef",
+      "head": "bd68c05baf4b7250096dd84f56bebea2aa555970",
+      "path_count": 38,
+      "paths_sha256": "39a32b36dfac7f1148649ca092abc23320fda34e2535a828778e228aa8c0230d",
+      "paths": [
+        {
+          "path": ".agent/reports/2026-07-10-db-bulkops-behavioral-edge-rework-maker.md",
+          "git_status": "A",
+          "classification": "report"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/01-red-behavior.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/02-red-spy-seam.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/03-green-focused.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/04-green-repeat20.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/05-prove-it-candidate.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/06-prove-it-parser.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/07-post-prove-green.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/08-full-packages.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/09-legacy-compat.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/10-full-gorm.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/11-full-mcp.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/12-race-focused.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/13-vet.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/14-coverage.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/15-cover-functions.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/16-final-residue.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/17-review-red-authoritative-binding.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/18-review-green-authoritative-binding.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/19-review-green-authoritative-binding.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/20-review-repeat20.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/21-review-race-focused.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/22-review-vet.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/23-review-coverage.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/24-review-cover-functions.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/25-review-cover-functions.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/26-review-full-gorm.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/27-review-full-mcp.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/A-candidate-review-snapshot-binding.red.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/B-bulk-structured-input.red.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/DB-BULKOPS-BEHAVIORAL-EDGE-REWORK.final.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/Invoke-MakerGo.ps1",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/SHA256SUMS.txt",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-bulkops-behavioral-edge-rework/coverage.out",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": "internal/db/gorm/candidate_store.go",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "internal/db/gorm/candidate_store_test.go",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "internal/mcp/tools_bulkops.go",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "internal/mcp/tools_dryrun_test.go",
+          "git_status": "M",
+          "classification": "product"
+        }
+      ],
+      "plan_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
+      "path_authority_eligible": true,
+      "release_accepted": false,
+      "lineage": {
+        "kind": "corrected-full-candidate",
+        "register_partial_base": "cd098397764e13388aef3b4da9448172c7092fdb",
+        "required_rejected_predecessor_base": "68b2ce5835c7c6efdf1c68da9eedcb8d9c3837ef"
+      }
+    },
+    {
+      "slice": "DB-CRYSTALLIZATION",
+      "status_class": "current-ready-with-concerns",
+      "branch": "work/prc-db-crystallization",
+      "base": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+      "head": "2ab6211494e51aeb7b787a99e78cff8bf2d5694a",
+      "path_count": 1,
+      "paths_sha256": "8428c4f86e06bdab5367fd6678decdb49b8aa23a41f593b246b7e541ec84ab23",
+      "paths": [
+        {
+          "path": "internal/worker/handlers_hooks_crystallization_integration_test.go",
+          "git_status": "M",
+          "classification": "product"
+        }
+      ],
+      "plan_owner": "DB-CRYSTALLIZATION",
+      "path_authority_eligible": true,
+      "release_accepted": false,
+      "lineage": {
+        "kind": "exact-live-register"
+      }
+    },
+    {
+      "slice": "SECURITY-TOOLCHAIN",
+      "status_class": "current-ready",
+      "branch": "work/prc-security-toolchain",
+      "base": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+      "head": "b0955dfd61b4ea7364f6d400579247b475a1a680",
+      "path_count": 3,
+      "paths_sha256": "5e49ddf6f66cc54d25f31cecd2fae96554d760f8c722f1c113a9d8e695468143",
+      "paths": [
+        {
+          "path": "Dockerfile",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "go.mod",
+          "git_status": "M",
+          "classification": "product"
+        },
+        {
+          "path": "go.sum",
+          "git_status": "M",
+          "classification": "product"
+        }
+      ],
+      "plan_owner": "SECURITY-TOOLCHAIN",
+      "path_authority_eligible": true,
+      "release_accepted": false,
+      "lineage": {
+        "kind": "exact-live-register"
+      }
+    },
+    {
+      "slice": "SECURITY-PROJECT-IDENTITY",
+      "status_class": "current-ready",
+      "branch": "work/prc-security-project-identity-r4",
+      "base": "38344455754fe503acbd79d2134141f996adff7f",
+      "head": "320f1d806729085f56e91b505b738444408639e1",
+      "path_count": 5,
+      "paths_sha256": "ff2385aa04e726c653db0c70a525f3e3957bc91e6bda1e6526fdd63afe5b5b7d",
+      "paths": [
+        {
+          "path": ".agent/reports/evidence/production-ready/security-project-identity/SECURITY-PROJECT-IDENTITY-R4-maker-report.md",
+          "git_status": "A",
+          "classification": "report"
+        },
+        {
+          "path": ".agent/specs/security-project-identity/evidence/SECURITY-PROJECT-IDENTITY-R4.prove-it.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/specs/security-project-identity/evidence/SECURITY-PROJECT-IDENTITY-R4.red.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/specs/security-project-identity/evidence/SECURITY-PROJECT-IDENTITY-R4.verification.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": "internal/proxy/identity_process_test.go",
+          "git_status": "A",
+          "classification": "product"
+        }
+      ],
+      "plan_owner": "SECURITY-PROJECT-IDENTITY",
+      "path_authority_eligible": true,
+      "release_accepted": false,
+      "lineage": {
+        "kind": "checker-accepted-successor",
+        "required_rejected_predecessor_base": "38344455754fe503acbd79d2134141f996adff7f",
+        "checker_only_commit": "3aa11399b2c7fa8f2188f35f68c110b1c33a1ef4",
+        "checker_verdict": "ACCEPT"
+      }
+    },
+    {
+      "slice": "DB-TEST-POOL-HYGIENE",
+      "status_class": "rejected-evidence-revision",
+      "branch": "work/prc-db-test-pool-hygiene-evidence-r2",
+      "base": "276337b3e96aa5af6d2e7dd9a0002ff957e5ffc9",
+      "head": "68242c48aaad62ec087166eeb9ea32f14d189450",
+      "path_count": 13,
+      "paths_sha256": "5b30cedca485ce89ce38bdb665413be59a3e2639e01e04c600172e68e503f3a0",
+      "paths": [
+        {
+          "path": ".agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md",
+          "git_status": "A",
+          "classification": "report"
+        },
+        {
+          "path": ".agent/reports/2026-07-10-db-test-pool-hygiene-maker.md",
+          "git_status": "M",
+          "classification": "report"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/14-evidence-r2-focused.log",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/15-evidence-r2-static.txt",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.evidence-r2.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/DB-TEST-POOL-HYGIENE.final.json",
+          "git_status": "M",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json",
+          "git_status": "M",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/SHA256SUMS.txt",
+          "git_status": "M",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/Test-DBPoolHygieneEvidenceAdversarial.ps1",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/Verify-DBPoolHygieneEvidence.ps1",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/adversarial-proof.json",
+          "git_status": "A",
+          "classification": "evidence"
+        },
+        {
+          "path": ".agent/reports/evidence/production-ready/db-test-pool-hygiene/verifier-proof.json",
+          "git_status": "A",
+          "classification": "evidence"
+        }
+      ],
+      "plan_owner": "DB-TEST-POOL-HYGIENE",
+      "path_authority_eligible": true,
+      "release_accepted": false,
+      "lineage": {
+        "kind": "historical-rejected",
+        "checker_only_commit": "a7b2d36b3f0a4514b51dddf341877f5b4b9721d9",
+        "checker_verdict": "REVISE_4_HIGH_EVIDENCE_GATE"
+      }
+    }
+  ]
+}

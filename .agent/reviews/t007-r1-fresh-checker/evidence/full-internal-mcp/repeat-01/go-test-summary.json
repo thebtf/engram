@@ -1,0 +1,3936 @@
+{
+  "schema_version": 1,
+  "verdict": "FAIL",
+  "input_path": "D:\\Dev\\engram\\.w\\t007-r1-checker\\.agent\\reviews\\t007-r1-fresh-checker\\evidence\\full-internal-mcp\\repeat-01\\go-test.stdout.jsonl",
+  "fail_on_unexpected_skip": true,
+  "allowed_skip_identities": [],
+  "counts": {
+    "packages": 1,
+    "tests": 488,
+    "passed": 487,
+    "failed": 1,
+    "skipped": 0,
+    "no_tests": 0,
+    "zero_tests": 0,
+    "incomplete": 0,
+    "unexpected_skips": 0,
+    "malformed_lines": 0
+  },
+  "packages": [
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "outcome": "fail",
+      "elapsed_seconds": 8.921,
+      "last_output": "FAIL\tgithub.com/thebtf/engram/internal/mcp\t8.912s",
+      "tests_observed": 488
+    }
+  ],
+  "tests": [
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAdminPurge_ActionInAdminActions",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestAdminPurge_ActionInAdminActions (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAdminPurge_AdminAllowed",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestAdminPurge_AdminAllowed (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAdminPurge_FlagOff_RejectsAsUnknown",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestAdminPurge_FlagOff_RejectsAsUnknown (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAdminPurge_FlagOff_SchemaLacksConfirm",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestAdminPurge_FlagOff_SchemaLacksConfirm (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAdminPurge_FlagOn_SchemaHasConfirm",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestAdminPurge_FlagOn_SchemaHasConfirm (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAdminPurge_MismatchedConfirm",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestAdminPurge_MismatchedConfirm (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAdminPurge_MissingConfirm",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestAdminPurge_MissingConfirm (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAdminPurge_MissingProject",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestAdminPurge_MissingProject (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAdminPurge_NilStore",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestAdminPurge_NilStore (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAdminPurge_NoIdentityDenied",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestAdminPurge_NoIdentityDenied (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAdminPurge_NonAdminDenied",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestAdminPurge_NonAdminDenied (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAdminPurge_SetPurgeStore_Wiring",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestAdminPurge_SetPurgeStore_Wiring (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAdminPurge_WhitespaceProject",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestAdminPurge_WhitespaceProject (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAuditCreate_LogCalledOnSuccess",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestAuditCreate_LogCalledOnSuccess (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAuditCreate_SkippedWhenAuditStoreNil",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestAuditCreate_SkippedWhenAuditStoreNil (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAuditCreate_SkippedWhenFlagOff",
+      "outcome": "pass",
+      "elapsed_seconds": 0.03,
+      "last_output": "--- PASS: TestAuditCreate_SkippedWhenFlagOff (0.03s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAuditDelete_LogCalledWithBeforeState",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestAuditDelete_LogCalledWithBeforeState (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAuditDelete_SkippedWhenFlagOff",
+      "outcome": "pass",
+      "elapsed_seconds": 0.03,
+      "last_output": "--- PASS: TestAuditDelete_SkippedWhenFlagOff (0.03s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAuditEdit_LogCalledWithBeforeAndAfterState",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestAuditEdit_LogCalledWithBeforeAndAfterState (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAuditEdit_SkippedWhenFlagOff",
+      "outcome": "pass",
+      "elapsed_seconds": 0.03,
+      "last_output": "--- PASS: TestAuditEdit_SkippedWhenFlagOff (0.03s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAuditSupersede_LogCalledWithSupersededID",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestAuditSupersede_LogCalledWithSupersededID (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestAuditSupersede_SkippedWhenFlagOff",
+      "outcome": "pass",
+      "elapsed_seconds": 0.03,
+      "last_output": "--- PASS: TestAuditSupersede_SkippedWhenFlagOff (0.03s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestBulkDelete_DryRun_NilFacade",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestBulkDelete_DryRun_NilFacade (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestBulkOps_FlagOff_NotAdvertised",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestBulkOps_FlagOff_NotAdvertised (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestBulkPromote_DryRun_NilFacade",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestBulkPromote_DryRun_NilFacade (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestBulkPromote_NonAdmin_ReturnsAdminRequired",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestBulkPromote_NonAdmin_ReturnsAdminRequired (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestBulkSupersede_DryRun_NilFacade",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestBulkSupersede_DryRun_NilFacade (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCallTool_CheckSystemHealth_NilStores",
+      "outcome": "pass",
+      "elapsed_seconds": 0.14,
+      "last_output": "--- PASS: TestCallTool_CheckSystemHealth_NilStores (0.14s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCallTool_FindByFile_Removed",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCallTool_FindByFile_Removed (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCallTool_GetMemoryStats_NilStores",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCallTool_GetMemoryStats_NilStores (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCallTool_ParameterValidation_Table",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCallTool_ParameterValidation_Table (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCallTool_ParameterValidation_Table/analyze_search_patterns/{invalid",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCallTool_ParameterValidation_Table/analyze_search_patterns/{invalid (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCallTool_ParameterValidation_Table/find_similar_observations/{}",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCallTool_ParameterValidation_Table/find_similar_observations/{} (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCallTool_ParameterValidation_Table/find_similar_observations/{invalid",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCallTool_ParameterValidation_Table/find_similar_observations/{invalid (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCallTool_UnknownToolNames_Table",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCallTool_UnknownToolNames_Table (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCallTool_UnknownToolNames_Table/invalid_tool",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCallTool_UnknownToolNames_Table/invalid_tool (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCallTool_UnknownToolNames_Table/nonexistent",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCallTool_UnknownToolNames_Table/nonexistent (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCallTool_UnknownToolNames_Table/search_v2",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCallTool_UnknownToolNames_Table/search_v2 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCallTool_UnknownToolNames_Table/timeline_x",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCallTool_UnknownToolNames_Table/timeline_x (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCallTool_UnknownToolReturnsError",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCallTool_UnknownToolReturnsError (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCandidateTools_ExposeCR008ReviewLoopContracts",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCandidateTools_ExposeCR008ReviewLoopContracts (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCheckSystemHealth_VectorSubsystem",
+      "outcome": "pass",
+      "elapsed_seconds": 0.25,
+      "last_output": "--- PASS: TestCheckSystemHealth_VectorSubsystem (0.25s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCheckSystemHealth_VectorSubsystem/vnext_disabled",
+      "outcome": "pass",
+      "elapsed_seconds": 0.13,
+      "last_output": "--- PASS: TestCheckSystemHealth_VectorSubsystem/vnext_disabled (0.13s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCheckSystemHealth_VectorSubsystem/vnext_enabled",
+      "outcome": "pass",
+      "elapsed_seconds": 0.12,
+      "last_output": "--- PASS: TestCheckSystemHealth_VectorSubsystem/vnext_enabled (0.12s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCodebaseSearch_FlagOff_ReturnsError",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCodebaseSearch_FlagOff_ReturnsError (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCodeIntelFlag_Off_ToolsAbsentFromList",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCodeIntelFlag_Off_ToolsAbsentFromList (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCodeIntelFlag_On_ServerAdvertisesSearchNotStatus",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCodeIntelFlag_On_ServerAdvertisesSearchNotStatus (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCodeIntelFlag_On_StoreNil_ToolsAbsentFromList",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCodeIntelFlag_On_StoreNil_ToolsAbsentFromList (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceBool",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceBool (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceBool/false",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceBool/false (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceBool/float_0",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceBool/float_0 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceBool/float_1",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceBool/float_1 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceBool/invalid_string",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceBool/invalid_string (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceBool/nil",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceBool/nil (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceBool/string_false",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceBool/string_false (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceBool/string_true",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceBool/string_true (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceBool/true",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceBool/true (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceFloat64",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceFloat64 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceFloat64/float64",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceFloat64/float64 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceFloat64/integer_string",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceFloat64/integer_string (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceFloat64/invalid_string",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceFloat64/invalid_string (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceFloat64/json.Number",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceFloat64/json.Number (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceFloat64/nil",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceFloat64/nil (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceFloat64/string",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceFloat64/string (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/bool",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/bool (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/float64",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/float64 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/float64_with_decimal",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/float64_with_decimal (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/Inf",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/Inf (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/json.Number_float",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/json.Number_float (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/json.Number_int",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/json.Number_int (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/NaN",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/NaN (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/negative_float",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/negative_float (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/negative_overflow",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/negative_overflow (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/nil",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/nil (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/overflow_float64",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/overflow_float64 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/string_float",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/string_float (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/string_int",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/string_int (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/string_non-numeric",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/string_non-numeric (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt/zero",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt/zero (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64/float64",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64/float64 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64/invalid_string",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64/invalid_string (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64/json.Number",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64/json.Number (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64/json.Number_float",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64/json.Number_float (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64/nil",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64/nil (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64/string",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64/string (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64/string_float",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64/string_float (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64Slice",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64Slice (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64Slice/float64_array",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64Slice/float64_array (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64Slice/mixed_array",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64Slice/mixed_array (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64Slice/nil",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64Slice/nil (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64Slice/not_array",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64Slice/not_array (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64Slice/string_array",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64Slice/string_array (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceInt64Slice/with_zeros",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceInt64Slice/with_zeros (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceString",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceString (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceString/bool",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceString/bool (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceString/float64",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceString/float64 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceString/json.Number",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceString/json.Number (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceString/nil",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceString/nil (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceString/string",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceString/string (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceString/wrong_type",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceString/wrong_type (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceStringSlice",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceStringSlice (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceStringSlice/array_of_strings",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceStringSlice/array_of_strings (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceStringSlice/empty_string",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceStringSlice/empty_string (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceStringSlice/mixed_array",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceStringSlice/mixed_array (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceStringSlice/nil",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceStringSlice/nil (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestCoerceStringSlice/single_string",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestCoerceStringSlice/single_string (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestDryRun_Integration_StoreMemory_ZeroSideEffects",
+      "outcome": "pass",
+      "elapsed_seconds": 0.12,
+      "last_output": "--- PASS: TestDryRun_Integration_StoreMemory_ZeroSideEffects (0.12s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEC_F1_HandleRecallSearch_FlagOff_BackwardCompat_T007",
+      "outcome": "pass",
+      "elapsed_seconds": 0.12,
+      "last_output": "--- PASS: TestEC_F1_HandleRecallSearch_FlagOff_BackwardCompat_T007 (0.12s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEC_F1_TagDerivedBackfill_T007",
+      "outcome": "pass",
+      "elapsed_seconds": 0.15,
+      "last_output": "--- PASS: TestEC_F1_TagDerivedBackfill_T007 (0.15s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEditMemory_AuditSourceSessionIDEmptyWhenNoSession",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestEditMemory_AuditSourceSessionIDEmptyWhenNoSession (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEditMemory_AuditSourceSessionIDFromContext",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestEditMemory_AuditSourceSessionIDFromContext (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEditMemory_CrossProjectAllowedWhenEnforcementOff",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestEditMemory_CrossProjectAllowedWhenEnforcementOff (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEditMemory_CrossProjectDenied",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestEditMemory_CrossProjectDenied (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEditMemory_DomainOwnedCrossPrincipalDenied",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestEditMemory_DomainOwnedCrossPrincipalDenied (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEditMemory_EmptyProjectContextDeniedWhenEnforced",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestEditMemory_EmptyProjectContextDeniedWhenEnforced (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEditMemory_HardLimitRejected",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestEditMemory_HardLimitRejected (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEditMemory_SameProjectAllowed",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestEditMemory_SameProjectAllowed (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEditMemory_SecretRedacted",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestEditMemory_SecretRedacted (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEditMemory_SoftLimitTruncates",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestEditMemory_SoftLimitTruncates (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEditMemory_TagsAbsent_KeepsExisting",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestEditMemory_TagsAbsent_KeepsExisting (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEditMemory_TagsExplicitEmpty_ClearsTags",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestEditMemory_TagsExplicitEmpty_ClearsTags (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEditMemory_TagsNonEmpty_ReplacesTags",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestEditMemory_TagsNonEmpty_ReplacesTags (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestError_Marshal_Table",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestError_Marshal_Table (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestError_Marshal_Table/method_not_found",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestError_Marshal_Table/method_not_found (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestError_Marshal_Table/nil_data_omitted",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestError_Marshal_Table/nil_data_omitted (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestError_Marshal_Table/parse_error",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestError_Marshal_Table/parse_error (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestError_Marshal_Table/with_data",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestError_Marshal_Table/with_data (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestError_NilData_NotInOutput",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestError_NilData_NotInOutput (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestExperienceHistoryToolsAdvertisedWhenProviderWired",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestExperienceHistoryToolsAdvertisedWhenProviderWired (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestExtractProjectFromHeader",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestExtractProjectFromHeader (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestExtractProjectFromHeader_Missing",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestExtractProjectFromHeader_Missing (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetAmbientHintsDrainsBoundedSafeHints",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetAmbientHintsDrainsBoundedSafeHints (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetAmbientHintsReturnsEmptyForDisabledStaleAndEmptyQueue",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetAmbientHintsReturnsEmptyForDisabledStaleAndEmptyQueue (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetAmbientHintsReturnsEmptyForDisabledStaleAndEmptyQueue/disabled_flag",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetAmbientHintsReturnsEmptyForDisabledStaleAndEmptyQueue/disabled_flag (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetAmbientHintsReturnsEmptyForDisabledStaleAndEmptyQueue/empty_queue",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetAmbientHintsReturnsEmptyForDisabledStaleAndEmptyQueue/empty_queue (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetAmbientHintsReturnsEmptyForDisabledStaleAndEmptyQueue/stale_queue",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetAmbientHintsReturnsEmptyForDisabledStaleAndEmptyQueue/stale_queue (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetAmbientHintsToolAdvertisedOnlyWhenS3FlagAndQueuePresent",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetAmbientHintsToolAdvertisedOnlyWhenS3FlagAndQueuePresent (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetAmbientHintsToolAdvertisedOnlyWhenS3FlagAndQueuePresent/master_off_hides_tool",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetAmbientHintsToolAdvertisedOnlyWhenS3FlagAndQueuePresent/master_off_hides_tool (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetAmbientHintsToolAdvertisedOnlyWhenS3FlagAndQueuePresent/master+s3+queue_advertises_tool",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetAmbientHintsToolAdvertisedOnlyWhenS3FlagAndQueuePresent/master+s3+queue_advertises_tool (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetAmbientHintsToolAdvertisedOnlyWhenS3FlagAndQueuePresent/missing_queue_hides_tool",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetAmbientHintsToolAdvertisedOnlyWhenS3FlagAndQueuePresent/missing_queue_hides_tool (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetAmbientHintsToolAdvertisedOnlyWhenS3FlagAndQueuePresent/s3_off_hides_tool",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetAmbientHintsToolAdvertisedOnlyWhenS3FlagAndQueuePresent/s3_off_hides_tool (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetMemoryBrief_PrincipalScopedResponseAndRequest",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetMemoryBrief_PrincipalScopedResponseAndRequest (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetMemoryBrief_PrincipalScopeRequiresQueryService",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetMemoryBrief_PrincipalScopeRequiresQueryService (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetMemoryBrief_PrincipalScopeSchemaAdvertised",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetMemoryBrief_PrincipalScopeSchemaAdvertised (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetMemoryStats_NilDB_NoMemoryOrVnextSections",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetMemoryStats_NilDB_NoMemoryOrVnextSections (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolProjectDoesNotRequirePrincipal",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolProjectDoesNotRequirePrincipal (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolRejectsFilesystemFallbackOption",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolRejectsFilesystemFallbackOption (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeDoesNotInjectContextProjectWhenOmitted",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeDoesNotInjectContextProjectWhenOmitted (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeRejectsAdditionalIdentityMismatches",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeRejectsAdditionalIdentityMismatches (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeRejectsAdditionalIdentityMismatches/goal_mismatch",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeRejectsAdditionalIdentityMismatches/goal_mismatch (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeRejectsAdditionalIdentityMismatches/missing_next_action_command",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeRejectsAdditionalIdentityMismatches/missing_next_action_command (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeRejectsAdditionalIdentityMismatches/missing_next_action_kind",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeRejectsAdditionalIdentityMismatches/missing_next_action_kind (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeRejectsAdditionalIdentityMismatches/missing_next_verification_command",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeRejectsAdditionalIdentityMismatches/missing_next_verification_command (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeRejectsAdditionalIdentityMismatches/missing_next_verification_kind",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeRejectsAdditionalIdentityMismatches/missing_next_verification_kind (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeRejectsAdditionalIdentityMismatches/project_mismatch",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeRejectsAdditionalIdentityMismatches/project_mismatch (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeRejectsAdditionalIdentityMismatches/session_mismatch",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeRejectsAdditionalIdentityMismatches/session_mismatch (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeRejectsAdditionalIdentityMismatches/task_mismatch",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeRejectsAdditionalIdentityMismatches/task_mismatch (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeRejectsFallbackMasqueradingAsNative",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeRejectsFallbackMasqueradingAsNative (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeRejectsMissingEvidenceRefs",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeRejectsMissingEvidenceRefs (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeRejectsPacketIdentityMismatch",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeRejectsPacketIdentityMismatch (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeRequiresPrincipal",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeRequiresPrincipal (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeReturnsNativePacket",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeReturnsNativePacket (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolResumeSupportsExplicitProjectOnlyScope",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolResumeSupportsExplicitProjectOnlyScope (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGetStateToolSessionDoesNotRequirePrincipal",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGetStateToolSessionDoesNotRequirePrincipal (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGovernanceTools_AdminGate_NoIdentity",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestGovernanceTools_AdminGate_NoIdentity (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGovernanceTools_AdminGate_NoIdentity/list_snapshots",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGovernanceTools_AdminGate_NoIdentity/list_snapshots (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGovernanceTools_AdminGate_NoIdentity/pin_snapshot",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGovernanceTools_AdminGate_NoIdentity/pin_snapshot (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGovernanceTools_AdminGate_NoIdentity/redaction_rules_status",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGovernanceTools_AdminGate_NoIdentity/redaction_rules_status (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGovernanceTools_AdminGate_NoIdentity/rollback_snapshot",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGovernanceTools_AdminGate_NoIdentity/rollback_snapshot (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGovernanceTools_AdminGate_ReadOnlyCaller",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestGovernanceTools_AdminGate_ReadOnlyCaller (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGovernanceTools_ListSnapshotsSchemaIncludesReviewActionOpTypes",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGovernanceTools_ListSnapshotsSchemaIncludesReviewActionOpTypes (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGovernanceTools_NotAdvertisedWhenFlagOff",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGovernanceTools_NotAdvertisedWhenFlagOff (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGovernanceTools_RedactionRulesStatus_NoAdminRequired_WithAdmin",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGovernanceTools_RedactionRulesStatus_NoAdminRequired_WithAdmin (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_AddEdgeGuardsOffline",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_AddEdgeGuardsOffline (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_AddEdgeGuardsOffline/duplicate_edge_rejected_before_create",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_AddEdgeGuardsOffline/duplicate_edge_rejected_before_create (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_AddEdgeGuardsOffline/memory_orphan_edge_rejected_before_create",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_AddEdgeGuardsOffline/memory_orphan_edge_rejected_before_create (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_AddEdgeGuardsOffline/orphan_edge_rejected_before_create",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_AddEdgeGuardsOffline/orphan_edge_rejected_before_create (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_AddEdgeGuardsOffline/valid_edge_creates_exactly_once",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_AddEdgeGuardsOffline/valid_edge_creates_exactly_once (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_AddNodeAction",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_AddNodeAction (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_AddNodeOffline",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_AddNodeOffline (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_AddNodeOffline/empty_external_ref_returns_error",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_AddNodeOffline/empty_external_ref_returns_error (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_AddNodeOffline/empty_project_returns_error",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_AddNodeOffline/empty_project_returns_error (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_AddNodeOffline/invalid_node_type_returns_error_containing_invalid_node_type:",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_AddNodeOffline/invalid_node_type_returns_error_containing_invalid_node_type: (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_AddNodeOffline/valid_input_store_receives_correct_node",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_AddNodeOffline/valid_input_store_receives_correct_node (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_ArgsShape",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_ArgsShape (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_GetEdgesNodeTypeFilter",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_GetEdgesNodeTypeFilter (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_InvalidNodeTypeRejects",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_InvalidNodeTypeRejects (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestGraphTool_T014_NodeTypeFilterOffline",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestGraphTool_T014_NodeTypeFilterOffline (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleAnalyzeSearchPatterns_InvalidJSON",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleAnalyzeSearchPatterns_InvalidJSON (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleCheckSystemHealth_NilStores_StructuredResponse",
+      "outcome": "pass",
+      "elapsed_seconds": 0.13,
+      "last_output": "--- PASS: TestHandleCheckSystemHealth_NilStores_StructuredResponse (0.13s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleExperienceHistoryReadRejectsInvalidArchiveTrigger",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleExperienceHistoryReadRejectsInvalidArchiveTrigger (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleExperienceHistoryReadReturnsBlockedApplicabilityEnvelope",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleExperienceHistoryReadReturnsBlockedApplicabilityEnvelope (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleFindSimilarObservations_EmptyResultInV5",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleFindSimilarObservations_EmptyResultInV5 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleFindSimilarObservations_Validation",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleFindSimilarObservations_Validation (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleGetCandidate_EmptyIDReturnsError",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleGetCandidate_EmptyIDReturnsError (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleGetMemoryStats_NilStores_ValidJSON",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleGetMemoryStats_NilStores_ValidJSON (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleInitialize_CapabilitiesPresent",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleInitialize_CapabilitiesPresent (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleInitialize_IDEchoed",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleInitialize_IDEchoed (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleInitialize_ProtocolAndVersion",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleInitialize_ProtocolAndVersion (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleIssueCloseAcceptsExplicitLegacySourceProject",
+      "outcome": "pass",
+      "elapsed_seconds": 0.15,
+      "last_output": "--- PASS: TestHandleIssueCloseAcceptsExplicitLegacySourceProject (0.15s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleIssueCloseDoesNotLetExplicitDashboardBypassContext",
+      "outcome": "pass",
+      "elapsed_seconds": 0.14,
+      "last_output": "--- PASS: TestHandleIssueCloseDoesNotLetExplicitDashboardBypassContext (0.14s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleListCandidates_EmptyProjectReturnsError",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleListCandidates_EmptyProjectReturnsError (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleListCandidates_FlagOffReturnsError",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleListCandidates_FlagOffReturnsError (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleRequest_CapabilityStubs",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleRequest_CapabilityStubs (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleRequest_CapabilityStubs/completion/complete",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleRequest_CapabilityStubs/completion/complete (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleRequest_CapabilityStubs/prompts/list",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleRequest_CapabilityStubs/prompts/list (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleRequest_CapabilityStubs/resources/list",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleRequest_CapabilityStubs/resources/list (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleRequest_CapabilityStubs/resources/templates/list",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleRequest_CapabilityStubs/resources/templates/list (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleRequest_GetAmbientHintsDispatchesThroughToolsCall",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleRequest_GetAmbientHintsDispatchesThroughToolsCall (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleRequest_GetAmbientHintsUnknownToolRegressionGuard",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleRequest_GetAmbientHintsUnknownToolRegressionGuard (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleRequest_InitializeRoute",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleRequest_InitializeRoute (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleRequest_NotificationReturnsNil",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleRequest_NotificationReturnsNil (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleRequest_ToolsListRoute",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleRequest_ToolsListRoute (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleRequest_UnknownMethodError",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleRequest_UnknownMethodError (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleReviewPacketPreviewAction_UnsupportedActionRejectedBeforeStoreMutation",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleReviewPacketPreviewAction_UnsupportedActionRejectedBeforeStoreMutation (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleReviewQueueRead_LimitOverMaxReturnsError",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleReviewQueueRead_LimitOverMaxReturnsError (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleReviewQueueRead_RiskyOnlyKeepsUnfilteredMetricsAndBacklog",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleReviewQueueRead_RiskyOnlyKeepsUnfilteredMetricsAndBacklog (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleReviewQueueRead_UnsupportedPacketTypeReturnsGatedPayload",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleReviewQueueRead_UnsupportedPacketTypeReturnsGatedPayload (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleTemporalTruthRefreshRequiresProject",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleTemporalTruthRefreshRequiresProject (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleTemporalTruthRefreshReturnsAdmissionResult",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleTemporalTruthRefreshReturnsAdmissionResult (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleTemporalTruthRejectsInvalidAsOf",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleTemporalTruthRejectsInvalidAsOf (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleTemporalTruthRequiresProject",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleTemporalTruthRequiresProject (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleTemporalTruthRequiresProject/blank_project",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleTemporalTruthRequiresProject/blank_project (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleTemporalTruthRequiresProject/missing_project",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleTemporalTruthRequiresProject/missing_project (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleTemporalTruthReturnsBoundedResponse",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleTemporalTruthReturnsBoundedResponse (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleToolsCall_EmptyParams",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleToolsCall_EmptyParams (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleToolsCall_InvalidParamsJSON",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleToolsCall_InvalidParamsJSON (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleToolsCall_UnknownTool",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleToolsCall_UnknownTool (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleToolsList_AllToolSchemasHaveTypeAndProperties",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleToolsList_AllToolSchemasHaveTypeAndProperties (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleToolsList_DefaultCountMatchesPrimary",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleToolsList_DefaultCountMatchesPrimary (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleToolsList_FeedbackSchemaCorrect",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleToolsList_FeedbackSchemaCorrect (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleToolsList_IncludeAllContainsLegacy",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleToolsList_IncludeAllContainsLegacy (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleToolsList_IncludeAllReturnsMore",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleToolsList_IncludeAllReturnsMore (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleToolsList_PrimaryToolsPresent",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleToolsList_PrimaryToolsPresent (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleToolsList_RemovedToolsAbsent",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleToolsList_RemovedToolsAbsent (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleToolsList_SchemaCompliance_NoForbiddenTopLevelKeys",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleToolsList_SchemaCompliance_NoForbiddenTopLevelKeys (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHandleToolsList_StoreTypeEnumCorrect",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHandleToolsList_StoreTypeEnumCorrect (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHybridTG3_ConfidenceMin_FloorEnforced_T022",
+      "outcome": "fail",
+      "elapsed_seconds": 0.14,
+      "last_output": "--- FAIL: TestHybridTG3_ConfidenceMin_FloorEnforced_T022 (0.14s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHybridTG3_IncludeSuperseded_False_NoError_T022c",
+      "outcome": "pass",
+      "elapsed_seconds": 0.12,
+      "last_output": "--- PASS: TestHybridTG3_IncludeSuperseded_False_NoError_T022c (0.12s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestHybridTG3_IncludeSuperseded_StructuredError_T022b",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestHybridTG3_IncludeSuperseded_StructuredError_T022b (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestIsSecretSettingKey",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestIsSecretSettingKey (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestJSONRPCErrorCodes_Table",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestJSONRPCErrorCodes_Table (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestJSONRPCErrorCodes_Table/Internal_error",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestJSONRPCErrorCodes_Table/Internal_error (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestJSONRPCErrorCodes_Table/Invalid_params",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestJSONRPCErrorCodes_Table/Invalid_params (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestJSONRPCErrorCodes_Table/Invalid_Request",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestJSONRPCErrorCodes_Table/Invalid_Request (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestJSONRPCErrorCodes_Table/Method_not_found",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestJSONRPCErrorCodes_Table/Method_not_found (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestJSONRPCErrorCodes_Table/Parse_error",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestJSONRPCErrorCodes_Table/Parse_error (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T005_ContextProjectFallbackAndLimitClamp",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestKnowAbout_T005_ContextProjectFallbackAndLimitClamp (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T005_DisabledS2NotAdvertised",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestKnowAbout_T005_DisabledS2NotAdvertised (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T005_IndexErrorsSurfaceAsToolErrors",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestKnowAbout_T005_IndexErrorsSurfaceAsToolErrors (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T005_JSONNeverContainsContentKeysOrMemoryBodies",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestKnowAbout_T005_JSONNeverContainsContentKeysOrMemoryBodies (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T005_MissingTopicReturnsEmptyIndexPacket",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestKnowAbout_T005_MissingTopicReturnsEmptyIndexPacket (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T005_PopulatedTopicReturnsContentFreeIndexHits",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestKnowAbout_T005_PopulatedTopicReturnsContentFreeIndexHits (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T005_ProjectFallbackFailureRequiresProjectScope",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestKnowAbout_T005_ProjectFallbackFailureRequiresProjectScope (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T005_RealStoreCanonicalShapeAndMissingTopicEmptyPacket",
+      "outcome": "pass",
+      "elapsed_seconds": 0.14,
+      "last_output": "--- PASS: TestKnowAbout_T005_RealStoreCanonicalShapeAndMissingTopicEmptyPacket (0.14s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T005_RequiresPrincipalScopedIdentity",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestKnowAbout_T005_RequiresPrincipalScopedIdentity (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T005_RequiresPrincipalScopedIdentity/legacy_client_keycard_without_principal_is_rejected",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestKnowAbout_T005_RequiresPrincipalScopedIdentity/legacy_client_keycard_without_principal_is_rejected (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T005_RequiresPrincipalScopedIdentity/master_token_without_principal_is_rejected",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestKnowAbout_T005_RequiresPrincipalScopedIdentity/master_token_without_principal_is_rejected (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T014_ToolListRequiresMasterAndS2Flags",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestKnowAbout_T014_ToolListRequiresMasterAndS2Flags (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T014_ToolListRequiresMasterAndS2Flags/master_and_s2_enabled_advertises_know_about",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestKnowAbout_T014_ToolListRequiresMasterAndS2Flags/master_and_s2_enabled_advertises_know_about (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T014_ToolListRequiresMasterAndS2Flags/master_disabled_suppresses_know_about_even_when_s2_flag_is_set",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestKnowAbout_T014_ToolListRequiresMasterAndS2Flags/master_disabled_suppresses_know_about_even_when_s2_flag_is_set (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestKnowAbout_T014_ToolListRequiresMasterAndS2Flags/s2_disabled_suppresses_know_about_even_when_master_is_set",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestKnowAbout_T014_ToolListRequiresMasterAndS2Flags/s2_disabled_suppresses_know_about_even_when_master_is_set (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestLegacyWriteGateDomainPolicy_DomainOwnedCandidateHidden",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestLegacyWriteGateDomainPolicy_DomainOwnedCandidateHidden (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestMemoryStoreSignificanceUpdaterPersistsChangedFields",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestMemoryStoreSignificanceUpdaterPersistsChangedFields (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestMemoryStoreSignificanceUpdaterPersistsChangedFields/not_useful_persists_beta_and_resets_streak",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestMemoryStoreSignificanceUpdaterPersistsChangedFields/not_useful_persists_beta_and_resets_streak (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestMemoryStoreSignificanceUpdaterPersistsChangedFields/useful_persists_alpha_citation_and_streak",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestMemoryStoreSignificanceUpdaterPersistsChangedFields/useful_persists_alpha_citation_and_streak (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestNewServer_CreatesWithVersion",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestNewServer_CreatesWithVersion (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestNewServer_HasStdinStdout",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestNewServer_HasStdinStdout (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestParseArgs",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestParseArgs (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestParseArgs/empty_bytes",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestParseArgs/empty_bytes (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestParseArgs/empty_object",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestParseArgs/empty_object (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestParseArgs/invalid_json",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestParseArgs/invalid_json (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestParseArgs/nil_args",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestParseArgs/nil_args (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestParseArgs/valid_object",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestParseArgs/valid_object (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestProjectFromContext_Empty",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestProjectFromContext_Empty (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestProjectFromContext_RoundTrip",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestProjectFromContext_RoundTrip (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestPromoteCandidate_DryRun_NilStore",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestPromoteCandidate_DryRun_NilStore (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestQueryPrincipalMemory_ResponseAndValidation",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestQueryPrincipalMemory_ResponseAndValidation (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestQueryPrincipalMemory_ResponseAndValidation/rejects_invalid_principal_kind",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestQueryPrincipalMemory_ResponseAndValidation/rejects_invalid_principal_kind (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestQueryPrincipalMemory_ResponseAndValidation/rejects_non-admin_cross-principal_private_widening",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestQueryPrincipalMemory_ResponseAndValidation/rejects_non-admin_cross-principal_private_widening (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestQueryPrincipalMemory_ResponseAndValidation/rejects_oversized_limit_clearly",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestQueryPrincipalMemory_ResponseAndValidation/rejects_oversized_limit_clearly (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestQueryPrincipalMemory_ResponseAndValidation/returns_attributed_bounded_principal_memory_response",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestQueryPrincipalMemory_ResponseAndValidation/returns_attributed_bounded_principal_memory_response (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestQueryPrincipalMemory_ServiceErrorsPropagate",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestQueryPrincipalMemory_ServiceErrorsPropagate (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestQueryPrincipalMemory_ToolSchemaAdvertised",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestQueryPrincipalMemory_ToolSchemaAdvertised (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceDirectCallFailsClosedWhenS6Disabled",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceDirectCallFailsClosedWhenS6Disabled (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceDirectCallFailsClosedWhenS6Disabled/master_off_s6_on_updater_present",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceDirectCallFailsClosedWhenS6Disabled/master_off_s6_on_updater_present (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceDirectCallFailsClosedWhenS6Disabled/master_on_s6_off_updater_present",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceDirectCallFailsClosedWhenS6Disabled/master_on_s6_off_updater_present (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceLegacyRatePathsRemainUnsupported",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceLegacyRatePathsRemainUnsupported (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceLegacyRatePathsRemainUnsupported/consolidated_feedback_rate_action",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceLegacyRatePathsRemainUnsupported/consolidated_feedback_rate_action (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceLegacyRatePathsRemainUnsupported/legacy_rate_memory_tool",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceLegacyRatePathsRemainUnsupported/legacy_rate_memory_tool (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceMissingUpdaterFailsExplicitly",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceMissingUpdaterFailsExplicitly (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceRejectsInvalidIDWithoutWrite",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceRejectsInvalidIDWithoutWrite (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceRejectsInvalidIDWithoutWrite/missing_id",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceRejectsInvalidIDWithoutWrite/missing_id (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceRejectsInvalidIDWithoutWrite/negative_id",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceRejectsInvalidIDWithoutWrite/negative_id (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceRejectsInvalidIDWithoutWrite/zero_id",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceRejectsInvalidIDWithoutWrite/zero_id (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceRejectsInvalidRatingWithoutWrite",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceRejectsInvalidRatingWithoutWrite (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceRejectsInvalidRatingWithoutWrite/empty_rating",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceRejectsInvalidRatingWithoutWrite/empty_rating (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceRejectsInvalidRatingWithoutWrite/missing_rating",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceRejectsInvalidRatingWithoutWrite/missing_rating (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceRejectsInvalidRatingWithoutWrite/unknown_rating",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceRejectsInvalidRatingWithoutWrite/unknown_rating (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceToolAdvertisedOnlyWhenS6FlagAndUpdaterArePresent",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceToolAdvertisedOnlyWhenS6FlagAndUpdaterArePresent (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceToolAdvertisedOnlyWhenS6FlagAndUpdaterArePresent/master_off_s6_on_updater_present",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceToolAdvertisedOnlyWhenS6FlagAndUpdaterArePresent/master_off_s6_on_updater_present (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceToolAdvertisedOnlyWhenS6FlagAndUpdaterArePresent/master_on_s6_off_updater_present",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceToolAdvertisedOnlyWhenS6FlagAndUpdaterArePresent/master_on_s6_off_updater_present (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceToolAdvertisedOnlyWhenS6FlagAndUpdaterArePresent/master_on_s6_on_updater_missing",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceToolAdvertisedOnlyWhenS6FlagAndUpdaterArePresent/master_on_s6_on_updater_missing (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceToolAdvertisedOnlyWhenS6FlagAndUpdaterArePresent/master_on_s6_on_updater_present",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceToolAdvertisedOnlyWhenS6FlagAndUpdaterArePresent/master_on_s6_on_updater_present (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceToolAdvertisedWithDedicatedSchema",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceToolAdvertisedWithDedicatedSchema (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceToolCallUpdatesLearningForUsefulAndNotUseful",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceToolCallUpdatesLearningForUsefulAndNotUseful (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceToolCallUpdatesLearningForUsefulAndNotUseful/not_useful",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceToolCallUpdatesLearningForUsefulAndNotUseful/not_useful (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRateMemorySignificanceToolCallUpdatesLearningForUsefulAndNotUseful/useful",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRateMemorySignificanceToolCallUpdatesLearningForUsefulAndNotUseful/useful (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecall_FlagOFF_TombstoneStrings_Explain",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecall_FlagOFF_TombstoneStrings_Explain (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecall_FlagOFF_TombstoneStrings_Similar",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecall_FlagOFF_TombstoneStrings_Similar (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecall_PrincipalPrivateInvisibleNewestDoNotTruncate_FlagOff",
+      "outcome": "pass",
+      "elapsed_seconds": 0.14,
+      "last_output": "--- PASS: TestRecall_PrincipalPrivateInvisibleNewestDoNotTruncate_FlagOff (0.14s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecall_ScopeInvisibleNewestDoNotTruncate_CodexP1Cycle3",
+      "outcome": "pass",
+      "elapsed_seconds": 0.15,
+      "last_output": "--- PASS: TestRecall_ScopeInvisibleNewestDoNotTruncate_CodexP1Cycle3 (0.15s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_CompatV3_VnextFEnabled_ZeroTG3Params_T021b",
+      "outcome": "pass",
+      "elapsed_seconds": 3.77,
+      "last_output": "--- PASS: TestRecallMemory_CompatV3_VnextFEnabled_ZeroTG3Params_T021b (3.77s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_CompatV3_VnextFEnabled_ZeroTG3Params_T021b/runtime_zero_tg3_params_vnext_f_on_vnext_off_no_rationale",
+      "outcome": "pass",
+      "elapsed_seconds": 3.76,
+      "last_output": "--- PASS: TestRecallMemory_CompatV3_VnextFEnabled_ZeroTG3Params_T021b/runtime_zero_tg3_params_vnext_f_on_vnext_off_no_rationale (3.76s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_CompatV3_VnextFEnabled_ZeroTG3Params_T021b/schema_with_vnext_f_on_and_vnext_off_zero_tg3_params",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemory_CompatV3_VnextFEnabled_ZeroTG3Params_T021b/schema_with_vnext_f_on_and_vnext_off_zero_tg3_params (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_CompatV3_ZeroFlagsShape_T021",
+      "outcome": "pass",
+      "elapsed_seconds": 0.14,
+      "last_output": "--- PASS: TestRecallMemory_CompatV3_ZeroFlagsShape_T021 (0.14s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_CompatV3_ZeroFlagsShape_T021/runtime_no_ranking_rationale_key_when_flags_at_default",
+      "outcome": "pass",
+      "elapsed_seconds": 0.14,
+      "last_output": "--- PASS: TestRecallMemory_CompatV3_ZeroFlagsShape_T021/runtime_no_ranking_rationale_key_when_flags_at_default (0.14s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_CompatV3_ZeroFlagsShape_T021/schema_unconditional_tg3_params_present",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemory_CompatV3_ZeroFlagsShape_T021/schema_unconditional_tg3_params_present (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_DomainOwnedInvisibleNewestDoNotTruncate_FlagOff",
+      "outcome": "pass",
+      "elapsed_seconds": 0.14,
+      "last_output": "--- PASS: TestRecallMemory_DomainOwnedInvisibleNewestDoNotTruncate_FlagOff (0.14s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_FlagMatrix_BothEnabled_SchemaCombinesParams",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemory_FlagMatrix_BothEnabled_SchemaCombinesParams (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_FlagMatrix_FEnabled_SchemaHasScopeParams",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemory_FlagMatrix_FEnabled_SchemaHasScopeParams (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_FlagOFF_BehaviorIdentity",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemory_FlagOFF_BehaviorIdentity (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_FlagOFF_SchemaNoVnextParams",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemory_FlagOFF_SchemaNoVnextParams (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_FlagON_SchemaHasVnextParams",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemory_FlagON_SchemaHasVnextParams (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_IncludeSupersededFlagOffIgnoredInHybrid",
+      "outcome": "pass",
+      "elapsed_seconds": 0.12,
+      "last_output": "--- PASS: TestRecallMemory_IncludeSupersededFlagOffIgnoredInHybrid (0.12s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_InvalidIncludeScopes_StructuredError",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemory_InvalidIncludeScopes_StructuredError (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_PrincipalPrivateInvisibleAndSharedAttributed_FlagOff",
+      "outcome": "pass",
+      "elapsed_seconds": 0.13,
+      "last_output": "--- PASS: TestRecallMemory_PrincipalPrivateInvisibleAndSharedAttributed_FlagOff (0.13s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemory_TG3IncludeSupersededLegacyPath",
+      "outcome": "pass",
+      "elapsed_seconds": 0.14,
+      "last_output": "--- PASS: TestRecallMemory_TG3IncludeSupersededLegacyPath (0.14s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryDomainPolicy_DomainOwnedRowHiddenFromMismatchedPrincipal",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemoryDomainPolicy_DomainOwnedRowHiddenFromMismatchedPrincipal (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryDomainPolicy_DomainOwnedRowVisibleToOwner",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemoryDomainPolicy_DomainOwnedRowVisibleToOwner (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryIncludePrincipals_SchemaAdvertised",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemoryIncludePrincipals_SchemaAdvertised (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryIncludePrincipals_ValidationAndPrivacy",
+      "outcome": "pass",
+      "elapsed_seconds": 0.92,
+      "last_output": "--- PASS: TestRecallMemoryIncludePrincipals_ValidationAndPrivacy (0.92s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/admin_cross-private_include_reapplies_recall_filters",
+      "outcome": "pass",
+      "elapsed_seconds": 0.17,
+      "last_output": "--- PASS: TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/admin_cross-private_include_reapplies_recall_filters (0.17s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/admin_cross-private_include_writes_durable_audit_before_returning_private_row",
+      "outcome": "pass",
+      "elapsed_seconds": 0.15,
+      "last_output": "--- PASS: TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/admin_cross-private_include_writes_durable_audit_before_returning_private_row (0.15s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/empty_include_list_is_treated_as_absent",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/empty_include_list_is_treated_as_absent (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/non-admin_cross-principal_include_appends_shared_rows",
+      "outcome": "pass",
+      "elapsed_seconds": 0.13,
+      "last_output": "--- PASS: TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/non-admin_cross-principal_include_appends_shared_rows (0.13s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/non-admin_cross-principal_include_skips_private_rows",
+      "outcome": "pass",
+      "elapsed_seconds": 0.13,
+      "last_output": "--- PASS: TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/non-admin_cross-principal_include_skips_private_rows (0.13s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/rejects_blank_and_invalid_principals_clearly",
+      "outcome": "pass",
+      "elapsed_seconds": 0.11,
+      "last_output": "--- PASS: TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/rejects_blank_and_invalid_principals_clearly (0.11s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/rejects_duplicate_principals",
+      "outcome": "pass",
+      "elapsed_seconds": 0.12,
+      "last_output": "--- PASS: TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/rejects_duplicate_principals (0.12s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/self_include_is_allowed_and_deduplicated",
+      "outcome": "pass",
+      "elapsed_seconds": 0.12,
+      "last_output": "--- PASS: TestRecallMemoryIncludePrincipals_ValidationAndPrivacy/self_include_is_allowed_and_deduplicated (0.12s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryPrincipalDefault_OwnSharedLegacyVisibleOtherPrivateHidden",
+      "outcome": "pass",
+      "elapsed_seconds": 0.15,
+      "last_output": "--- PASS: TestRecallMemoryPrincipalDefault_OwnSharedLegacyVisibleOtherPrivateHidden (0.15s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryTierFilter_FlagOff_SchemaAbsent_B4",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemoryTierFilter_FlagOff_SchemaAbsent_B4 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryTierFilter_InvalidTier_B4",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemoryTierFilter_InvalidTier_B4 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryToolSchema_B4_HasTierFilter",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemoryToolSchema_B4_HasTierFilter (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRecallMemoryToolSchema_T005",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRecallMemoryToolSchema_T005 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRememberDirectiveDirectCallDelegatesContextAndReturnsSanitizedRecord",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRememberDirectiveDirectCallDelegatesContextAndReturnsSanitizedRecord (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRememberDirectiveDirectCallFailsClosedBeforeDelegation",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRememberDirectiveDirectCallFailsClosedBeforeDelegation (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRememberDirectiveDirectCallFailsClosedBeforeDelegation/flag_disabled",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRememberDirectiveDirectCallFailsClosedBeforeDelegation/flag_disabled (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRememberDirectiveDirectCallFailsClosedBeforeDelegation/master_flag_disabled_even_if_s4a_flag_is_enabled",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRememberDirectiveDirectCallFailsClosedBeforeDelegation/master_flag_disabled_even_if_s4a_flag_is_enabled (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRememberDirectiveDirectCallFailsClosedBeforeDelegation/project_context_missing",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRememberDirectiveDirectCallFailsClosedBeforeDelegation/project_context_missing (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRememberDirectiveDirectCallFailsClosedBeforeDelegation/service_missing",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRememberDirectiveDirectCallFailsClosedBeforeDelegation/service_missing (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRememberDirectiveDirectCallFailsClosedBeforeDelegation/session_context_missing",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRememberDirectiveDirectCallFailsClosedBeforeDelegation/session_context_missing (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRememberDirectiveToolAdvertisedOnlyWhenS4AFlagAndServiceArePresent",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRememberDirectiveToolAdvertisedOnlyWhenS4AFlagAndServiceArePresent (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRememberDirectiveToolAdvertisedOnlyWhenS4AFlagAndServiceArePresent/absent_when_flag_disabled_even_with_service",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRememberDirectiveToolAdvertisedOnlyWhenS4AFlagAndServiceArePresent/absent_when_flag_disabled_even_with_service (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRememberDirectiveToolAdvertisedOnlyWhenS4AFlagAndServiceArePresent/absent_when_master_flag_disabled_even_if_s4a_flag_and_service_are_present",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRememberDirectiveToolAdvertisedOnlyWhenS4AFlagAndServiceArePresent/absent_when_master_flag_disabled_even_if_s4a_flag_and_service_are_present (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRememberDirectiveToolAdvertisedOnlyWhenS4AFlagAndServiceArePresent/absent_when_service_is_missing_even_with_flag_enabled",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRememberDirectiveToolAdvertisedOnlyWhenS4AFlagAndServiceArePresent/absent_when_service_is_missing_even_with_flag_enabled (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRememberDirectiveToolAdvertisedOnlyWhenS4AFlagAndServiceArePresent/advertised_with_bounded_input_schema_when_flag_and_service_are_present",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRememberDirectiveToolAdvertisedOnlyWhenS4AFlagAndServiceArePresent/advertised_with_bounded_input_schema_when_flag_and_service_are_present (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRequest_Marshal_Table",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRequest_Marshal_Table (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRequest_Marshal_Table/initialize",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRequest_Marshal_Table/initialize (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRequest_Marshal_Table/null_id",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRequest_Marshal_Table/null_id (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRequest_Marshal_Table/string_id",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRequest_Marshal_Table/string_id (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRequest_Marshal_Table/with_params",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRequest_Marshal_Table/with_params (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRequest_Unmarshal_NullID",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRequest_Unmarshal_NullID (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRequest_Unmarshal_RoundTrip",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRequest_Unmarshal_RoundTrip (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRequireAdmin",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRequireAdmin (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRequireCandidateReviewSnapshotAllowsNonNil",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRequireCandidateReviewSnapshotAllowsNonNil (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRequireCandidateReviewSnapshotRejectsNil",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRequireCandidateReviewSnapshotRejectsNil (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRequireCandidateReviewSnapshotRejectsNil/reject_candidate",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRequireCandidateReviewSnapshotRejectsNil/reject_candidate (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRequireCandidateReviewSnapshotRejectsNil/supersede_candidate",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRequireCandidateReviewSnapshotRejectsNil/supersede_candidate (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestResponse_Marshal_Table",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestResponse_Marshal_Table (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestResponse_Marshal_Table/error_response",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestResponse_Marshal_Table/error_response (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestResponse_Marshal_Table/error_with_data",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestResponse_Marshal_Table/error_with_data (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestResponse_Marshal_Table/nil_id",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestResponse_Marshal_Table/nil_id (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestResponse_Marshal_Table/success_result",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestResponse_Marshal_Table/success_result (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRI_F2_DualFieldResponse_FlagOff_LegacyOnly_T008",
+      "outcome": "pass",
+      "elapsed_seconds": 0.13,
+      "last_output": "--- PASS: TestRI_F2_DualFieldResponse_FlagOff_LegacyOnly_T008 (0.13s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRI_F2_DualFieldResponse_FlagOn_T008",
+      "outcome": "pass",
+      "elapsed_seconds": 0.13,
+      "last_output": "--- PASS: TestRI_F2_DualFieldResponse_FlagOn_T008 (0.13s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRI_F2_DualFieldResponse_FlagOn_T008/explicit_privacy_scope=shared_overrides_legacy",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestRI_F2_DualFieldResponse_FlagOn_T008/explicit_privacy_scope=shared_overrides_legacy (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRI_F2_DualFieldResponse_FlagOn_T008/legacy_scope=global,_no_privacy_scope_->_dual_global",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestRI_F2_DualFieldResponse_FlagOn_T008/legacy_scope=global,_no_privacy_scope_->_dual_global (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRI_F2_DualFieldResponse_FlagOn_T008/legacy_scope=project,_no_privacy_scope_->_dual_project",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestRI_F2_DualFieldResponse_FlagOn_T008/legacy_scope=project,_no_privacy_scope_->_dual_project (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRI_F2_InvalidPrivacyScope_StillStructuredErrorUnderFlagOn_T008",
+      "outcome": "pass",
+      "elapsed_seconds": 0.12,
+      "last_output": "--- PASS: TestRI_F2_InvalidPrivacyScope_StillStructuredErrorUnderFlagOn_T008 (0.12s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRuleGovernanceHealthReadOnlyCallerGetsNoData",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRuleGovernanceHealthReadOnlyCallerGetsNoData (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRuleGovernanceMutationToolsRequireAdmin",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRuleGovernanceMutationToolsRequireAdmin (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRuleGovernancePinSnapshotAndRollbackUseRuleGovernanceSnapshots",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRuleGovernancePinSnapshotAndRollbackUseRuleGovernanceSnapshots (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRuleGovernanceQueueAndSnapshotsReadModels",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRuleGovernanceQueueAndSnapshotsReadModels (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRuleGovernanceReadToolsAdvertisedWhenStoresWired",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRuleGovernanceReadToolsAdvertisedWhenStoresWired (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRuleGovernanceReadToolsHiddenWhenStoreMissing",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRuleGovernanceReadToolsHiddenWhenStoreMissing (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRuleGovernanceReadToolsNilStoreErrors",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRuleGovernanceReadToolsNilStoreErrors (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRuleGovernanceReadToolsRejectZeroIdentity",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRuleGovernanceReadToolsRejectZeroIdentity (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRuleGovernanceReadToolsRequireIdentityWhenAuthEnabled",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRuleGovernanceReadToolsRequireIdentityWhenAuthEnabled (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRuleGovernanceReadToolsRequireProjectForNonAdminAllProjectReads",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRuleGovernanceReadToolsRequireProjectForNonAdminAllProjectReads (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRuleGovernanceRollbackReturnsStructuredConflictResult",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRuleGovernanceRollbackReturnsStructuredConflictResult (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRuleGovernanceTransitionToolUsesStateMachineStore",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRuleGovernanceTransitionToolUsesStateMachineStore (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRuleGovernanceUsefulnessNoDataAndProjectGuard",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRuleGovernanceUsefulnessNoDataAndProjectGuard (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRun_EmptyLinesSkipped",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRun_EmptyLinesSkipped (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRun_MixedValidAndInvalid",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRun_MixedValidAndInvalid (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRun_MultipleRequests",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRun_MultipleRequests (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRun_NotificationNoResponse",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRun_NotificationNoResponse (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRun_ParseError",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRun_ParseError (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRun_ValidInitialize",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestRun_ValidInitialize (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRunAuditAsync_ErrorLogged",
+      "outcome": "pass",
+      "elapsed_seconds": 0.05,
+      "last_output": "--- PASS: TestRunAuditAsync_ErrorLogged (0.05s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestRunAuditAsync_PanicRecovered",
+      "outcome": "pass",
+      "elapsed_seconds": 0.05,
+      "last_output": "--- PASS: TestRunAuditAsync_PanicRecovered (0.05s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSanitizeToolCallArgs_OtherToolsStillRedactSecrets",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSanitizeToolCallArgs_OtherToolsStillRedactSecrets (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSanitizeToolCallArgs_RememberDirectiveRedactsRawLogArguments",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSanitizeToolCallArgs_RememberDirectiveRedactsRawLogArguments (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSendError_OutputShape",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSendError_OutputShape (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSendResponse_ContainsJSONRPC",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSendResponse_ContainsJSONRPC (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSendResponse_ErrorResponse",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSendResponse_ErrorResponse (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSendResponse_NilID",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSendResponse_NilID (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSendResponse_VariousIDTypes",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSendResponse_VariousIDTypes (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestServer_FieldsInjected",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestServer_FieldsInjected (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestServerSetAuditStoreAssignsField",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestServerSetAuditStoreAssignsField (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSetStateThenGetStateResumeUsesServerCallPath",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSetStateThenGetStateResumeUsesServerCallPath (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSetStateToolRejectsNonAgentProjectWriter",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSetStateToolRejectsNonAgentProjectWriter (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSetStateToolRejectsNonObjectSessionSlots",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSetStateToolRejectsNonObjectSessionSlots (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSetStateToolRejectsSessionPayloadOver32KB",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSetStateToolRejectsSessionPayloadOver32KB (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSetStateToolWritesNativeSessionAndProjectState",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSetStateToolWritesNativeSessionAndProjectState (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSettings_DeleteRequiresAdmin",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSettings_DeleteRequiresAdmin (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSettings_SetMissingArgs",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSettings_SetMissingArgs (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSettings_SetRequiresAdmin",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSettings_SetRequiresAdmin (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestSettings_UnknownAction",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestSettings_UnknownAction (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStateToolsAdvertisedOnlyWhenNativeStoreIsReachable",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStateToolsAdvertisedOnlyWhenNativeStoreIsReachable (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemory_DryRun_NilStore",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreMemory_DryRun_NilStore (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemory_DryRun_RequiresContent",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreMemory_DryRun_RequiresContent (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemory_InvalidPrivacyScope_StructuredError",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreMemory_InvalidPrivacyScope_StructuredError (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemory_PrincipalOwnerDerivedFromIdentity",
+      "outcome": "pass",
+      "elapsed_seconds": 0.12,
+      "last_output": "--- PASS: TestStoreMemory_PrincipalOwnerDerivedFromIdentity (0.12s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryAlwaysInject_FlagOffDoesNotUseRuleGovernance",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreMemoryAlwaysInject_FlagOffDoesNotUseRuleGovernance (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryAlwaysInject_GovernanceFlagCreatesRuleCandidate",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreMemoryAlwaysInject_GovernanceFlagCreatesRuleCandidate (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryDomainPolicy_EmptyDomainLegacyCompatible",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreMemoryDomainPolicy_EmptyDomainLegacyCompatible (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryDomainPolicy_NonEmptyDomainAllowsPrincipalIdentity",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreMemoryDomainPolicy_NonEmptyDomainAllowsPrincipalIdentity (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryDomainPolicy_NonEmptyDomainRejectsInvalidPrincipalKind",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreMemoryDomainPolicy_NonEmptyDomainRejectsInvalidPrincipalKind (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryDomainPolicy_NonEmptyDomainRequiresPrincipal",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreMemoryDomainPolicy_NonEmptyDomainRequiresPrincipal (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryDomainRegistry_AuditFailureBlocksBeforePersistence",
+      "outcome": "pass",
+      "elapsed_seconds": 0.11,
+      "last_output": "--- PASS: TestStoreMemoryDomainRegistry_AuditFailureBlocksBeforePersistence (0.11s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryDomainRegistry_InvalidWriterKindRejectsBeforePersistence",
+      "outcome": "pass",
+      "elapsed_seconds": 0.12,
+      "last_output": "--- PASS: TestStoreMemoryDomainRegistry_InvalidWriterKindRejectsBeforePersistence (0.12s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryDomainRegistry_RejectionRunsBeforeSupersedeMutation",
+      "outcome": "pass",
+      "elapsed_seconds": 0.15,
+      "last_output": "--- PASS: TestStoreMemoryDomainRegistry_RejectionRunsBeforeSupersedeMutation (0.15s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility",
+      "outcome": "pass",
+      "elapsed_seconds": 0.2,
+      "last_output": "--- PASS: TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility (0.20s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility/missing_row_preserves_current_behavior",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility/missing_row_preserves_current_behavior (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility/off_allows_cross_owner",
+      "outcome": "pass",
+      "elapsed_seconds": 0.02,
+      "last_output": "--- PASS: TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility/off_allows_cross_owner (0.02s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility/reject_denies_before_persistence",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility/reject_denies_before_persistence (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility/same_owner_allows_without_warning",
+      "outcome": "pass",
+      "elapsed_seconds": 0.01,
+      "last_output": "--- PASS: TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility/same_owner_allows_without_warning (0.01s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility/warn_allows_with_structured_warning",
+      "outcome": "pass",
+      "elapsed_seconds": 0.02,
+      "last_output": "--- PASS: TestStoreMemoryDomainRegistry_WarnRejectAndCompatibility/warn_allows_with_structured_warning (0.02s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryDryRunValidatesPrincipalMetadata",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreMemoryDryRunValidatesPrincipalMetadata (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryToolSchema_FlagOff_HasNewProperties_ButRuntimeIgnores",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreMemoryToolSchema_FlagOff_HasNewProperties_ButRuntimeIgnores (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreMemoryToolSchema_T005",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreMemoryToolSchema_T005 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreRule_FlagOffDoesNotUseRuleGovernance",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreRule_FlagOffDoesNotUseRuleGovernance (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreRule_GovernanceFlagCreatesRuleCandidate",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreRule_GovernanceFlagCreatesRuleCandidate (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreRule_GovernanceFlagPreservesGlobalIntentWithContextProject",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreRule_GovernanceFlagPreservesGlobalIntentWithContextProject (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestStoreRule_GovernanceFlagRedactsCandidateContent",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestStoreRule_GovernanceFlagRedactsCandidateContent (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestTemporalTruthDirectCallFailsClosedWhenFeatureGateUnsatisfied",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestTemporalTruthDirectCallFailsClosedWhenFeatureGateUnsatisfied (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestTemporalTruthRefreshDirectCallFailsClosedWhenFeatureGateUnsatisfied",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestTemporalTruthRefreshDirectCallFailsClosedWhenFeatureGateUnsatisfied (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestTemporalTruthRefreshToolAdvertisedWhenProviderWiredAndFlagOn",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestTemporalTruthRefreshToolAdvertisedWhenProviderWiredAndFlagOn (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestTemporalTruthToolAdvertisedWhenProviderWiredAndFlagOn",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestTemporalTruthToolAdvertisedWhenProviderWiredAndFlagOn (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestTemporalTruthToolsAbsentWhenFlagOff",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestTemporalTruthToolsAbsentWhenFlagOff (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestTierConstants",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestTierConstants (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestTimelineParams_AllFields",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestTimelineParams_AllFields (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestTimelineParams_Unmarshal_Table",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestTimelineParams_Unmarshal_Table (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestTimelineParams_Unmarshal_Table/anchor_id",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestTimelineParams_Unmarshal_Table/anchor_id (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestTimelineParams_Unmarshal_Table/empty_object_valid",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestTimelineParams_Unmarshal_Table/empty_object_valid (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestTimelineParams_Unmarshal_Table/invalid_json",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestTimelineParams_Unmarshal_Table/invalid_json (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestTimelineParams_Unmarshal_Table/query_only",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestTimelineParams_Unmarshal_Table/query_only (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestTool_Marshal_RoundTrip",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestTool_Marshal_RoundTrip (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestToolCallParams_ComplexArgs",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestToolCallParams_ComplexArgs (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestToolCallParams_Unmarshal",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestToolCallParams_Unmarshal (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestToolCallParams_Unmarshal/no-args",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestToolCallParams_Unmarshal/no-args (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestToolCallParams_Unmarshal/recall",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestToolCallParams_Unmarshal/recall (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestToolCallParams_Unmarshal/store",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestToolCallParams_Unmarshal/store (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestVersion_ReturnsVersion",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestVersion_ReturnsVersion (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWiring_BothToolsOff_FlagsUnset",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWiring_BothToolsOff_FlagsUnset (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWiring_GraphTool_AbsentWhenFlagOff",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWiring_GraphTool_AbsentWhenFlagOff (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWiring_GraphTool_AbsentWhenStoreNil",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWiring_GraphTool_AbsentWhenStoreNil (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWiring_GraphTool_AppearsWhenStoreSetAndFlagOn",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWiring_GraphTool_AppearsWhenStoreSetAndFlagOn (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWiring_LifecycleTool_AbsentWhenFlagOff",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWiring_LifecycleTool_AbsentWhenFlagOff (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWiring_LifecycleTool_AbsentWhenStoresNil",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWiring_LifecycleTool_AbsentWhenStoresNil (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWiring_LifecycleTool_AppearsWhenStoresSetAndFlagOn",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWiring_LifecycleTool_AppearsWhenStoresSetAndFlagOn (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWriteLint_DomainOwnedCandidateHiddenWithOrchestratorStoreFallback",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWriteLint_DomainOwnedCandidateHiddenWithOrchestratorStoreFallback (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWriteLint_DomainOwnedTargetHiddenWithOrchestratorStoreFallback",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWriteLint_DomainOwnedTargetHiddenWithOrchestratorStoreFallback (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWriteLint_PrincipalPrivateCandidatesHiddenFromPhase1",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWriteLint_PrincipalPrivateCandidatesHiddenFromPhase1 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWriteLint_PrincipalPrivateTargetHiddenFromPhase2",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWriteLint_PrincipalPrivateTargetHiddenFromPhase2 (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWriteLint_T035_FlagOff_LegacyPath",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWriteLint_T035_FlagOff_LegacyPath (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWriteLint_T035_ForceBypass",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWriteLint_T035_ForceBypass (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWriteLint_T035_Phase1_NoSignal_Stored",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWriteLint_T035_Phase1_NoSignal_Stored (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWriteLint_T035_Phase1_SignalsReturned",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWriteLint_T035_Phase1_SignalsReturned (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWriteLint_T035_Phase2_MergeWith",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWriteLint_T035_Phase2_MergeWith (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWriteLint_T035_PrivateScope_NoWorkstation_Rejected",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWriteLint_T035_PrivateScope_NoWorkstation_Rejected (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWriteLint_T035_PrivateScope_WithWorkstation_Allowed",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWriteLint_T035_PrivateScope_WithWorkstation_Allowed (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWriteLint_T035_TokenExpired",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWriteLint_T035_TokenExpired (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWriteLintDomainPolicy_DomainOwnedCandidateHidden",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWriteLintDomainPolicy_DomainOwnedCandidateHidden (0.00s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestWriteLintDomainPolicy_DomainOwnedTargetHidden",
+      "outcome": "pass",
+      "elapsed_seconds": 0.0,
+      "last_output": "--- PASS: TestWriteLintDomainPolicy_DomainOwnedTargetHidden (0.00s)",
+      "skip_allowed": false
+    }
+  ],
+  "unexpected_skips": [],
+  "errors": []
+}

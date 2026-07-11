@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "slice": "T007-COMPAT-DEMOLITION-CLASSIFICATION",
+  "recorded_at": "2026-07-11T00:41:04.2538562Z",
+  "base_sha": "af1ed63536829916e0477be719a30a57a8d9227a",
+  "scope": {
+    "production_test_paths": [
+      "internal/mcp/store_memory_compat_t007_test.go"
+    ],
+    "evidence_namespace": ".agent/reports/evidence/production-ready/t007-compat/**",
+    "maker_report_namespace": ".agent/reports/production-ready/t007-compat-demolition-classification/**",
+    "production_code_changed": false
+  },
+  "gates": {
+    "go_runner_discovery": "PASS",
+    "valid_red": "PASS",
+    "focused_fresh_database_repeat3": "PASS",
+    "focused_race_fresh_database": "PASS",
+    "prove_it_old_assertion_red": "PASS",
+    "post_prove_it_fresh_database_green": "PASS",
+    "go_vet_all": "PASS",
+    "go_build_all": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "full_internal_mcp": {
+    "evidence": "t007-maker-full-mcp/summary.json",
+    "fresh_database": true,
+    "total_tests": 488,
+    "passed_tests": 487,
+    "failed_tests": 1,
+    "skipped_tests": 0,
+    "t007_tests": {
+      "TestEC_F1_TagDerivedBackfill_T007": "PASS",
+      "TestEC_F1_HandleRecallSearch_FlagOff_BackwardCompat_T007": "PASS"
+    },
+    "out_of_scope_failure": {
+      "test": "TestHybridTG3_ConfidenceMin_FloorEnforced_T022",
+      "owner": "DEMOLITION-SKIP-CLASSIFICATION",
+      "source": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+      "t007_edit_authorized": false
+    },
+    "sessions_after": 0,
+    "cleanup_verdict": "PASS",
+    "remaining_database_count": 0
+  },
+  "post_commit_gates": [
+    "gitleaks exact commit",
+    "synthesis-preview merge-tree compatibility",
+    "exact parent/tree/path digest handoff"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "slice": "RELEASE-GATES-R9",
+  "checks": [
+    {
+      "command": "actionlint .github/workflows/test.yml",
+      "exit_code": 0,
+      "verdict": "PASS"
+    },
+    {
+      "command": "execute the Assert tracked gate / CI conformance PowerShell block with RUNNER_TEMP set",
+      "exit_code": 0,
+      "mutations_rejected": 70,
+      "verdict": "PASS"
+    }
+  ],
+  "preserved_contract": "all predecessor R8 workflow predicates plus R9 plan/scope/active-candidate authority, pending-surface, exact-base, metadata, and digest rails",
+  "verdict": "PASS"
+}

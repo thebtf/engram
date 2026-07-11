@@ -1,0 +1,83 @@
+version: 1
+
+test_glob: "tests/critical/**/*.{go,py,ts,js,rs,cs,sh}"
+categories:
+  - smoke
+  - behavioral
+  - data-consistency
+dev_stand_required: true
+fail_on_missing: error
+timeout_minutes: 30
+
+runner:
+  command: "go test -tags=critical -json ./tests/critical/... -count=1"
+  transcript_parser: "pwsh -NoProfile -File scripts/production-gates/assert-go-test-json.ps1 -FailOnUnexpectedSkip"
+  fail_on_unexpected_skip: true
+  allowed_skip_identities: []
+
+database_gate:
+  command: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -FreshDatabase -Package ./... -Race -FailOnUnexpectedSkip"
+  postgres_image: "pgvector/pgvector:pg17"
+  repeat_source: "run-db-suite.ps1 default (3); callers do not duplicate the value"
+  fresh_database_per_repeat: true
+  schema: "public"
+  package_parallelism: 1
+  test_parallelism: 1
+  race_detector: true
+  connection_budget: 20
+  post_test_sessions_required: 0
+  cleanup_required: true
+
+coverage:
+  profile_required_on_all_operating_systems: true
+  overall_statement_minimum_percent: 60
+  assertion_command: "pwsh -NoProfile -File scripts/production-gates/assert-coverage.ps1 -CoverageProfile coverage.out -OverallThreshold 60"
+  package_statement_minimum_percent:
+    "internal/module/": 75
+    "internal/handlers/engramcore": 60
+    "internal/handlers/loom": 70
+    "cmd/engram/": 10
+    "cmd/engram-server/": 10
+    "internal/update/": 20
+    "internal/worker/": 55
+    "internal/mcp/": 55
+    "internal/db/gorm/": 55
+  critical_path_mapping:
+    launcher: "cmd/engram/"
+    server: "cmd/engram-server/"
+    update: "internal/update/"
+    worker: "internal/worker/"
+    mcp: "internal/mcp/"
+    database: "internal/db/gorm/"
+
+evidence:
+  root: ".agent/reports/evidence/production-ready/release-gates-foundation"
+  require_raw_stdout: true
+  require_raw_stderr: true
+  require_machine_summary: true
+  require_child_exit_codes: true
+  require_database_schema_identity: true
+  require_pg_stat_activity: true
+  require_cleanup_result: true
+
+security:
+  image_scan:
+    command: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -DevStandAction Scan -ComposeProject engram-critical-stand -ComposeFile docker-compose.yml"
+    discovery: "compose labels for project engram-critical-stand"
+    scanner: "docker scout cves"
+    severities: ["critical", "high"]
+    fail_on_findings: true
+    machine_evidence: "dev-stand/<run-id>-scan/docker-scout-*.sarif.json plus summary.json"
+    exact_service_images:
+      postgres: "pgvector/pgvector:pg17"
+      server: "ghcr.io/thebtf/engram:main"
+      operator-console: "ghcr.io/thebtf/engram-operator-console:main"
+    forbidden_synthetic_tags:
+      - "engram:prc-candidate"
+  govulncheck:
+    authoritative_modes:
+      - "source scan with tests: govulncheck -test ./..."
+      - "unstripped binary scan before -ldflags=-s -w"
+    non_authoritative_modes:
+      - "stripped binary scan: absence of symbols forces module-level fallback"
+    rule: "A stripped-binary finding cannot override source/test or unstripped-binary reachability evidence."
