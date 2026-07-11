@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "decided_at": "2026-07-11T06:16:55.2789291+03:00",
+  "authority_file": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+  "authority_sha256": "60e3b3cbf2491af8adc91f8f18a394404d68c811618fbf7ba98cc664a898591f",
+  "preflight_file": ".agent/reports/evidence/production-ready/demolition-portability/preflight-baseline.json",
+  "preflight_sha256": "a98389e8be76fd139418eceea908441b0d44557bdcc7e8dd0179dfa9c9a939b3",
+  "decision": "TRANSFER_COVERAGE_LOOM_AND_CURRENT_CONTRACT_CORRECTIONS_TO_DEMOLITION_PORTABILITY",
+  "reason": "The cross-platform helper exposed a production Writer-contract defect: a child write crossing maxOutputBytes returned a truncated count and caused exec.Cmd to fail with short write. Product ownership was expanded before editing workers.go.",
+  "owned_paths": [
+    "internal/graph/dangling_test.go",
+    "internal/graph/integration_test.go",
+    "internal/graph/nodes_store.go",
+    "internal/mcp/integration_tg3_hybrid_test.go",
+    "internal/handlers/loom/workers.go",
+    "internal/handlers/loom/workers_test.go",
+    "internal/handlers/loom/limited_writer_test.go",
+    "internal/handlers/loom/testdata/clihelper/main.go",
+    "internal/handlers/loom/production_readiness_coverage_test.go",
+    ".agent/reports/2026-07-11-demolition-portability-r1-maker.md",
+    ".agent/reports/evidence/production-ready/demolition-portability-r1/**"
+  ],
+  "parallel_non_overlap": [
+    "RELEASE-GATES R10 replacement",
+    "DB-TEST-POOL-HYGIENE R4 checker",
+    "IMAGE-REMEDIATION",
+    "T007 accepted candidate",
+    "PUBLIC-CONTRACTS prepared batch"
+  ],
+  "forbidden": [
+    "graph retrieval stage",
+    "cross-encoder rerank",
+    "ApplyCompositeScoring or sibling composite scoring passes",
+    "SDK observation extraction",
+    "server-side HTTP MCP transports"
+  ]
+}

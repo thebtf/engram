@@ -8,11 +8,38 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func openGraphTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping graph integration test")
+	}
+
+	store, err := gormdb.NewStore(gormdb.Config{
+		DSN:      dsn,
+		MaxConns: 2,
+		LogLevel: logger.Warn,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, store.Close())
+	})
+	return store.GetDB()
+}
+
+func cleanupGraphFixture(t *testing.T, db *gorm.DB, project, session string) {
+	t.Helper()
+	require.NoError(t, db.Exec(`DELETE FROM knowledge_edges WHERE source_session_id = ?`, session).Error)
+	require.NoError(t, db.Exec(`DELETE FROM knowledge_nodes WHERE project = ?`, project).Error)
+	require.NoError(t, db.Exec(`DELETE FROM memories WHERE project = ?`, project).Error)
+}
 
 // TestPathC_T015_SkillNodeEdgeRoundtrip verifies the full TG2 Path C roundtrip:
 //  1. Create a skill knowledge_node via NodesStore.
@@ -27,19 +54,11 @@ import (
 //
 // Engram vNext Milestone F TG2 / T015.
 func TestPathC_T015_SkillNodeEdgeRoundtrip(t *testing.T) {
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping T015 integration test")
-	}
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
+	db := openGraphTestDB(t)
+	cleanupGraphFixture(t, db, "t015-test", "t015-test")
+	t.Cleanup(func() {
+		cleanupGraphFixture(t, db, "t015-test", "t015-test")
 	})
-	require.NoError(t, err)
-
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	defer sqlDB.Close()
 
 	ctx := context.Background()
 	ns := NewNodesStore(db)
@@ -50,11 +69,6 @@ func TestPathC_T015_SkillNodeEdgeRoundtrip(t *testing.T) {
 	require.NoError(t, db.Raw(
 		`INSERT INTO memories (project, content) VALUES ('t015-test', 'roundtrip target') RETURNING id`,
 	).Row().Scan(&memID))
-	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM memories WHERE project = 't015-test'`).Error
-		_ = db.Exec(`DELETE FROM knowledge_nodes WHERE project = 't015-test'`).Error
-		_ = db.Exec(`DELETE FROM knowledge_edges WHERE source_session_id = 't015-test'`).Error
-	})
 
 	// Step 1: Create a skill node.
 	node, err := ns.Create(ctx, &models.KnowledgeNode{
@@ -66,6 +80,7 @@ func TestPathC_T015_SkillNodeEdgeRoundtrip(t *testing.T) {
 	require.NotZero(t, node.ID)
 	assert.Equal(t, models.NodeTypeSkill, node.NodeType)
 	assert.Equal(t, "project", node.PrivacyScope) // default
+	require.JSONEq(t, `{}`, string(node.Metadata), "omitted metadata must persist as an empty JSON object")
 
 	// Step 2: Create edge skill→memory (source_type='node', target_type='memory').
 	// TargetID is *int64 (nullable); set via pointer for memory-typed endpoint.
@@ -108,19 +123,11 @@ func TestPathC_T015_SkillNodeEdgeRoundtrip(t *testing.T) {
 // TestPathC_T015_NodeTypedEdgeListFilter verifies that get_edges by node_id
 // returns the correct subset when multiple edges exist.
 func TestPathC_T015_NodeTypedEdgeListFilter(t *testing.T) {
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping T015 integration test")
-	}
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
+	db := openGraphTestDB(t)
+	cleanupGraphFixture(t, db, "t015b-test", "t015b-test")
+	t.Cleanup(func() {
+		cleanupGraphFixture(t, db, "t015b-test", "t015b-test")
 	})
-	require.NoError(t, err)
-
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	defer sqlDB.Close()
 
 	ctx := context.Background()
 	ns := NewNodesStore(db)
@@ -134,11 +141,6 @@ func TestPathC_T015_NodeTypedEdgeListFilter(t *testing.T) {
 	require.NoError(t, db.Raw(
 		`INSERT INTO memories (project, content) VALUES ('t015b-test', 'mem2') RETURNING id`,
 	).Row().Scan(&mem2))
-	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM memories WHERE project = 't015b-test'`).Error
-		_ = db.Exec(`DELETE FROM knowledge_nodes WHERE project = 't015b-test'`).Error
-		_ = db.Exec(`DELETE FROM knowledge_edges WHERE source_session_id = 't015b-test'`).Error
-	})
 
 	node, err := ns.Create(ctx, &models.KnowledgeNode{
 		NodeType:    models.NodeTypeAgent,
@@ -155,7 +157,7 @@ func TestPathC_T015_NodeTypedEdgeListFilter(t *testing.T) {
 			TargetType:      "memory",
 			TargetID:        &id,
 			NodeSourceID:    &node.ID,
-			EdgeType:        "references",
+			EdgeType:        EdgeDependsOn,
 			Weight:          1.0,
 			SourceSessionID: "t015b-test",
 		})
@@ -190,26 +192,14 @@ func TestPathC_T015_NodeTypedEdgeListFilter(t *testing.T) {
 // TestPathC_T015_NodeCreatedAtTimestamp verifies that knowledge_nodes
 // get sensible timestamps after creation.
 func TestPathC_T015_NodeCreatedAtTimestamp(t *testing.T) {
-	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping T015 integration test")
-	}
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
+	db := openGraphTestDB(t)
+	cleanupGraphFixture(t, db, "t015c-test", "t015c-test")
+	t.Cleanup(func() {
+		cleanupGraphFixture(t, db, "t015c-test", "t015c-test")
 	})
-	require.NoError(t, err)
-
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	defer sqlDB.Close()
 
 	ctx := context.Background()
 	ns := NewNodesStore(db)
-
-	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM knowledge_nodes WHERE project = 't015c-test'`).Error
-	})
 
 	before := time.Now().UTC().Add(-time.Second)
 	node, err := ns.Create(ctx, &models.KnowledgeNode{
@@ -222,4 +212,35 @@ func TestPathC_T015_NodeCreatedAtTimestamp(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, node.CreatedAt.After(before), "CreatedAt must be after %v, got %v", before, node.CreatedAt)
 	assert.True(t, node.CreatedAt.Before(after), "CreatedAt must be before %v, got %v", after, node.CreatedAt)
+}
+
+// TestPathC_T015_UpdateOmittedMetadataDefaultsEmptyObject closes the same
+// NOT NULL contract for the update path as for create. Callers may omit the
+// optional metadata field, but the persisted JSONB value must remain valid.
+func TestPathC_T015_UpdateOmittedMetadataDefaultsEmptyObject(t *testing.T) {
+	db := openGraphTestDB(t)
+	cleanupGraphFixture(t, db, "t015d-test", "t015d-test")
+	t.Cleanup(func() {
+		cleanupGraphFixture(t, db, "t015d-test", "t015d-test")
+	})
+
+	ctx := context.Background()
+	ns := NewNodesStore(db)
+	node, err := ns.Create(ctx, &models.KnowledgeNode{
+		NodeType:    models.NodeTypeRule,
+		ExternalRef: "metadata-default-create",
+		Project:     "t015d-test",
+		Metadata:    []byte(`{"phase":"create"}`),
+	})
+	require.NoError(t, err)
+
+	node.ExternalRef = "metadata-default-update"
+	node.Metadata = nil
+	updated, err := ns.Update(ctx, node)
+	require.NoError(t, err)
+	require.JSONEq(t, `{}`, string(updated.Metadata))
+
+	reloaded, err := ns.Get(ctx, node.ID, true)
+	require.NoError(t, err)
+	require.JSONEq(t, `{}`, string(reloaded.Metadata), "omitted update metadata must persist as an empty JSON object")
 }

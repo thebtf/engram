@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "classification": {
+    "knowledge_node_metadata": "dormant-flag-gated current-contract product defect",
+    "dangling_edge_test": "pre-current-schema stale expectation",
+    "graph_boot_and_cleanup": "test setup/lifecycle defect",
+    "T022_parser": "current-contract test correction",
+    "Loom_shell_skips": "cross-platform test portability defect",
+    "Loom_limited_writer": "live production Writer-contract defect discovered by the portable helper"
+  },
+  "production_delta": [
+    "default omitted KnowledgeNode metadata to an empty JSON object on Create and Update",
+    "make limitedWriter consume intentionally discarded overflow without returning io.ErrShortWrite while preserving real writer failures"
+  ],
+  "explicitly_not_built": [
+    "automated graph retrieval",
+    "cross-encoder rerank",
+    "composite scoring passes",
+    "SDK observation extraction",
+    "server-side HTTP MCP transports"
+  ],
+  "verdict": "NO_V5_DEMOLISHED_BEHAVIOR_RESURRECTED"
+}
