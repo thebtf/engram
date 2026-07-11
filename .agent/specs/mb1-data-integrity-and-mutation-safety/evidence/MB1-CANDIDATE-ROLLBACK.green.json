@@ -1,0 +1,28 @@
+{
+  "slice": "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK",
+  "disposition": "accepted implementation already present in source candidate fef455bcf640f849c2d40c9bc26a459b5593e10a; macro batch adds fresh independent execution proof instead of duplicating code",
+  "contracts": [
+    "all public candidate-review actions persist authoritative before and after candidate state in the committed snapshot",
+    "immediate rollback restores the pending candidate state",
+    "promote rollback deletes the operation-owned promoted memory",
+    "a later edit to the promoted memory produces rollback_conflict and retains both the committed snapshot and the later state"
+  ],
+  "command": "$env:DATABASE_DSN='postgres://engram:engram@127.0.0.1:55432/engram_test?sslmode=disable'; go test -p=1 ./internal/bulkops -run 'TestRollback_(PublicCandidateReview|CandidateReviewPromoteEditedMemoryConflicts)' -count=1",
+  "result": "PASS",
+  "database_port": 55432,
+  "database_port_5432_used": false,
+  "test_count": 5,
+  "covered_actions": [
+    "promote",
+    "preserve",
+    "reject",
+    "supersede",
+    "suppress"
+  ],
+  "source_tests": [
+    "internal/bulkops/rollback_test.go:TestRollback_PublicCandidateReviewPromotePersistsAfterAndRestoresPending",
+    "internal/bulkops/rollback_test.go:TestRollback_PublicCandidateReviewPreservePersistsAfterAndRestoresPending",
+    "internal/bulkops/rollback_test.go:TestRollback_PublicCandidateReviewNonMemoryActionsPersistAfterAndRestorePending",
+    "internal/bulkops/rollback_test.go:TestRollback_CandidateReviewPromoteEditedMemoryConflicts"
+  ]
+}
