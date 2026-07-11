@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "branch": "work/prc-release-gates-revision10-maker",
+  "required_base": "f11a77cce88f013839e22662458a3318670445e9",
+  "forbidden_base": "0354362c427d99eb2993e5acddeb9d5bcd561df7",
+  "commit_a10": {
+    "role": "governance",
+    "required_parent": "f11a77cce88f013839e22662458a3318670445e9",
+    "paths": [
+      ".agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json",
+      ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+      ".agent/plans/2026-07-10-engram-production-ready-ownership-state.json",
+      ".agent/plans/2026-07-10-engram-production-ready-scope-map.json",
+      ".agent/reports/2026-07-11-release-gates-r10-plan-governance.md",
+      ".agent/specs/release-gates-r10/evidence/plan-governance/authority-snapshot.json",
+      ".agent/specs/release-gates-r10/evidence/plan-governance/external-enforcement-snapshot.json",
+      ".agent/specs/release-gates-r10/evidence/plan-governance/path-envelope.json"
+    ]
+  },
+  "commit_b10": {
+    "role": "implementation",
+    "required_parent": "COMMIT_A10",
+    "paths": [
+      ".agent/reports/2026-07-11-release-gates-r10-maker.md",
+      ".agent/specs/release-gates-r10/evidence/release-gates/R10-AUTHORITY-GUARD.red.json",
+      ".agent/specs/release-gates-r10/evidence/release-gates/authority-guard-simulation.json",
+      ".agent/specs/release-gates-r10/evidence/release-gates/security-review.md",
+      ".agent/specs/release-gates-r10/evidence/release-gates/strict-schema-regressions.json",
+      ".agent/specs/release-gates-r10/evidence/release-gates/test-r10-authority-guard.ps1",
+      ".agent/specs/release-gates-r10/evidence/release-gates/verification-summary.json",
+      ".agent/specs/release-gates-r10/evidence/release-gates/workflow-conformance.json",
+      ".github/workflows/authority-guard.yml",
+      ".github/workflows/test.yml",
+      "scripts/production-gates/assert-active-candidate-path-authority.ps1",
+      "scripts/production-gates/assert-pr-authority-guard.ps1"
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-11T02:50:24.9271186+03:00",
+  "source": "GitHub REST API and gh repo view",
+  "repository": "thebtf/engram",
+  "owner_login": "thebtf",
+  "owner_type": "User",
+  "visibility": "PUBLIC",
+  "default_branch": "main",
+  "ruleset": {
+    "id": 13610955,
+    "name": "main",
+    "target": "branch",
+    "enforcement": "active",
+    "rules": [
+      "deletion",
+      "non_fast_forward"
+    ],
+    "required_status_checks_present": false
+  },
+  "authority_guard_status_enforced": false,
+  "classification": "PENDING_POST_BOOTSTRAP_TRANSITION",
+  "bootstrap_proof_plan": [
+    "independently accept and integrate the exact R10 A/B chain onto main",
+    "observe one successful authority-guard status on an ordinary authorized pull request",
+    "amend ruleset 13610955 to require that exact status without weakening existing rules",
+    "capture before and after ruleset JSON",
+    "prove an ordinary authorized pull request remains eligible",
+    "prove a protected-path pull request is blocked by the required status"
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-11T02:50:24.9271186+03:00",
+  "base": "f11a77cce88f013839e22662458a3318670445e9",
+  "base_parent": "8cb810095b2bea77ab9812832d9ab8a99c928d18",
+  "base_tree": "f710b36b0155162d47ccc0956c29227daa74306f",
+  "r9": {
+    "plan_governance_a": "8cb810095b2bea77ab9812832d9ab8a99c928d18",
+    "release_gates_b": "f11a77cce88f013839e22662458a3318670445e9",
+    "checker": "0354362c427d99eb2993e5acddeb9d5bcd561df7",
+    "checker_parent": "f11a77cce88f013839e22662458a3318670445e9",
+    "checker_tree": "4e1c048577975c47e27e97cc5cc4dfe85a91dd81",
+    "verdict": "REVISE",
+    "high_findings": 2,
+    "medium_findings": 1,
+    "disposition": "preserve A and B as rejected history"
+  },
+  "security_project_identity_r4": {
+    "maker": "320f1d806729085f56e91b505b738444408639e1",
+    "checker": "3aa11399b2c7fa8f2188f35f68c110b1c33a1ef4",
+    "checker_verdict": "ACCEPT",
+    "path_count": 5,
+    "paths_sha256_lf": "ff2385aa04e726c653db0c70a525f3e3957bc91e6bda1e6526fdd63afe5b5b7d",
+    "integration": "PENDING"
+  },
+  "db_test_pool_hygiene": {
+    "r2": "68242c48aaad62ec087166eeb9ea32f14d189450",
+    "r2_checker": "a7b2d36b3f0a4514b51dddf341877f5b4b9721d9",
+    "r2_checker_verdict": "REVISE_4_HIGH",
+    "r3": "331b5b195a967e7f27dca94038a3480c9afcc84f",
+    "r3_parent": "68242c48aaad62ec087166eeb9ea32f14d189450",
+    "r3_tree": "12674bf76404a0e021a22d3dc7aa4d5ed3763ee0",
+    "r3_state": "IMMUTABLE_PENDING_CHECKER_AND_ROOT_ACCEPTANCE",
+    "r3_maker_verification": "PASS_GIT_REVISION_ADVERSARIAL_12_OF_12_DIFF_CHECK_GITLEAKS",
+    "r3_non_report_paths_from_product_base": 0
+  },
+  "db_embedding_evidence_transport_r6": {
+    "candidate": "a1a3bfeb6546d1f3f24192b1c9f057402b6249a2",
+    "parent": "a538f6224ef31f612152470a4ecd45e78ff9d0f2",
+    "tree": "f723f22cd8c740b6efb52e169b0875ccc8274a9c",
+    "checker": "PENDING"
+  },
+  "release_blockers": {
+    "db_repeat3": "FAIL_0_OF_3",
+    "image_high_or_critical": {
+      "server": 5,
+      "postgres": 20,
+      "operator": 13
+    }
+  },
+  "demolition_exclusions_preserved": true
+}

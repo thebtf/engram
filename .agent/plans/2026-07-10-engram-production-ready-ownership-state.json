@@ -2,11 +2,11 @@
   "schema_version": 1,
   "plan": {
     "path": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
-    "sha256": "4388337722e57b48e93515008e4220d6cd2c83de695c4c449387f071c59fb96f"
+    "sha256": "084b4780386b22c5c7d941543c6e6a8f28fc1345bef67802b1b64f2160dacaae"
   },
   "scope_map": {
     "path": ".agent/plans/2026-07-10-engram-production-ready-scope-map.json",
-    "sha256": "fb170d59f3072117489402fd347cd1432c40adbc842811f92227498bcbc92693"
+    "sha256": "7c50b3d81095e7246aebea31d2f1f185117ea960402211854685a85a199d9fbf"
   },
   "path_epochs": [
     {
@@ -213,6 +213,116 @@
       "ordered_owners": [
         "RELEASE-GATES",
         "IMAGE-REMEDIATION"
+      ],
+      "current_owner": "RELEASE-GATES",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": ".github/workflows/authority-guard.yml",
+      "ordered_owners": [
+        "RELEASE-GATES"
+      ],
+      "current_owner": "RELEASE-GATES",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "scripts/production-gates/assert-active-candidate-path-authority.ps1",
+      "ordered_owners": [
+        "RELEASE-GATES"
+      ],
+      "current_owner": "RELEASE-GATES",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "scripts/production-gates/assert-pr-authority-guard.ps1",
+      "ordered_owners": [
+        "RELEASE-GATES"
+      ],
+      "current_owner": "RELEASE-GATES",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": ".agent/specs/release-gates-r10/evidence/release-gates/test-r10-authority-guard.ps1",
+      "ordered_owners": [
+        "RELEASE-GATES"
+      ],
+      "current_owner": "RELEASE-GATES",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": ".agent/specs/release-gates-r10/evidence/release-gates/R10-AUTHORITY-GUARD.red.json",
+      "ordered_owners": [
+        "RELEASE-GATES"
+      ],
+      "current_owner": "RELEASE-GATES",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": ".agent/specs/release-gates-r10/evidence/release-gates/authority-guard-simulation.json",
+      "ordered_owners": [
+        "RELEASE-GATES"
+      ],
+      "current_owner": "RELEASE-GATES",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": ".agent/specs/release-gates-r10/evidence/release-gates/strict-schema-regressions.json",
+      "ordered_owners": [
+        "RELEASE-GATES"
+      ],
+      "current_owner": "RELEASE-GATES",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": ".agent/specs/release-gates-r10/evidence/release-gates/workflow-conformance.json",
+      "ordered_owners": [
+        "RELEASE-GATES"
+      ],
+      "current_owner": "RELEASE-GATES",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": ".agent/specs/release-gates-r10/evidence/release-gates/verification-summary.json",
+      "ordered_owners": [
+        "RELEASE-GATES"
+      ],
+      "current_owner": "RELEASE-GATES",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": ".agent/specs/release-gates-r10/evidence/release-gates/security-review.md",
+      "ordered_owners": [
+        "RELEASE-GATES"
+      ],
+      "current_owner": "RELEASE-GATES",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": ".agent/reports/2026-07-11-release-gates-r10-maker.md",
+      "ordered_owners": [
+        "RELEASE-GATES"
       ],
       "current_owner": "RELEASE-GATES",
       "transition_kind": "integration",
