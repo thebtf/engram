@@ -1,0 +1,347 @@
+{
+  "schema_version": 1,
+  "target": "ce6a40d72fc39932ccbc4b949647f321b91f70c3",
+  "target_tree": "20a69d7a83e0100de7e3e73e670fe02feadada2d",
+  "method": "checker-owned fresh repository and alternate Git index per case",
+  "status": "PASS",
+  "case_count": 28,
+  "cases": [
+    {
+      "name": "baseline",
+      "expected": "PASS",
+      "expected_failure": "",
+      "actual_exit": 0,
+      "actual_status": "PASS",
+      "failures": [],
+      "pass": true
+    },
+    {
+      "name": "unknown_manifest_key",
+      "expected": "REJECT",
+      "expected_failure": "manifest has unknown JSON property",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "manifest has unknown JSON property: checker_unknown"
+      ],
+      "pass": true
+    },
+    {
+      "name": "unknown_inventory_key",
+      "expected": "REJECT",
+      "expected_failure": "inventory has unknown JSON property",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "inventory has unknown JSON property: checker_unknown"
+      ],
+      "pass": true
+    },
+    {
+      "name": "inventory_schema_99",
+      "expected": "REJECT",
+      "expected_failure": "inventory schema_version must be 1",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "inventory schema_version must be 1"
+      ],
+      "pass": true
+    },
+    {
+      "name": "stale_adversarial_proof",
+      "expected": "REJECT",
+      "expected_failure": "adversarial proof case count mismatch",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "adversarial proof case count mismatch: declared 34, required 35"
+      ],
+      "pass": true
+    },
+    {
+      "name": "stale_verifier_proof",
+      "expected": "REJECT",
+      "expected_failure": "verifier proof changed_paths mismatch",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "verifier proof changed_paths mismatch: declared 20, actual 21"
+      ],
+      "pass": true
+    },
+    {
+      "name": "case_variant_manifest_status",
+      "expected": "REJECT",
+      "expected_failure": "manifest has unknown JSON property",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "manifest has unknown JSON property: Status",
+        "manifest.status is required"
+      ],
+      "pass": true
+    },
+    {
+      "name": "manifest_schema_string",
+      "expected": "REJECT",
+      "expected_failure": "manifest.schema_version must be JSON number",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "manifest.schema_version must be JSON number, got string"
+      ],
+      "pass": true
+    },
+    {
+      "name": "inventory_entries_scalar",
+      "expected": "REJECT",
+      "expected_failure": "inventory.entries must be JSON array",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "inventory.entries must be JSON array, got object",
+        "inventory missing path: internal/db/gorm/rule_arbiter_store_test.go",
+        "inventory missing path: internal/db/gorm/rule_governance_rg3_store_test.go",
+        "inventory missing path: internal/db/gorm/rule_governance_store_test.go",
+        "inventory missing path: internal/db/gorm/rule_injection_event_store_test.go",
+        "inventory missing path: internal/db/gorm/state_store_test.go",
+        "inventory missing path: internal/db/gorm/temporal_truth_store_migration_test.go",
+        "inventory missing path: internal/db/gorm/temporal_truth_store_test.go"
+      ],
+      "pass": true
+    },
+    {
+      "name": "adversarial_cases_scalar",
+      "expected": "REJECT",
+      "expected_failure": "adversarial proof.cases must be JSON array",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "adversarial proof.cases must be JSON array, got object",
+        "adversarial proof case count mismatch: declared 1, required 35"
+      ],
+      "pass": true
+    },
+    {
+      "name": "manifest_entry_count_mismatch",
+      "expected": "REJECT",
+      "expected_failure": "manifest entry_count mismatch",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "manifest entry_count mismatch"
+      ],
+      "pass": true
+    },
+    {
+      "name": "inventory_actual_count_mismatch",
+      "expected": "REJECT",
+      "expected_failure": "inventory total mismatch",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "inventory total mismatch: declared 84/8, actual 83/8"
+      ],
+      "pass": true
+    },
+    {
+      "name": "verifier_checksum_count_mismatch",
+      "expected": "REJECT",
+      "expected_failure": "verifier proof checksum_entries mismatch",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "verifier proof checksum_entries mismatch: declared 37, actual 36"
+      ],
+      "pass": true
+    },
+    {
+      "name": "manifest_entry_digest_mismatch",
+      "expected": "REJECT",
+      "expected_failure": "manifest SHA-256 mismatch",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "manifest SHA-256 mismatch: .agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md",
+        "outer checksum mismatch: .agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md"
+      ],
+      "pass": true
+    },
+    {
+      "name": "outer_checksum_digest_mismatch",
+      "expected": "REJECT",
+      "expected_failure": "outer checksum mismatch",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "outer checksum mismatch: .agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md"
+      ],
+      "pass": true
+    },
+    {
+      "name": "inventory_line_mismatch",
+      "expected": "REJECT",
+      "expected_failure": "inventory site list mismatch",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "inventory site list mismatch: internal/db/gorm/candidate_store_test.go"
+      ],
+      "pass": true
+    },
+    {
+      "name": "inventory_case_duplicate_path",
+      "expected": "REJECT",
+      "expected_failure": "duplicate inventory path",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "duplicate inventory path: Internal/db/gorm/candidate_store_test.go",
+        "inventory paths are not canonical ordinal order: internal/db/gorm/temporal_truth_store_test.go before Internal/db/gorm/candidate_store_test.go"
+      ],
+      "pass": true
+    },
+    {
+      "name": "manifest_path_traversal",
+      "expected": "REJECT",
+      "expected_failure": "manifest entry unreadable",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "manifest entry unreadable: ../checker-escape: git rev-parse :../checker-escape failed: fatal: '../checker-escape' is outside repository at 'C:/Users/btf/AppData/Local/Temp/engram-dbph-r4-independent-116c3d38753a4f259efc72d5ee8b4f9c/case-18-manifest_path_traversal'\n",
+        "manifest missing changed path: .agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md",
+        "checksum path unreadable: ../checker-escape: git show :../checker-escape failed: fatal: '../checker-escape' is outside repository at 'C:/Users/btf/AppData/Local/Temp/engram-dbph-r4-independent-116c3d38753a4f259efc72d5ee8b4f9c/case-18-manifest_path_traversal'\n"
+      ],
+      "pass": true
+    },
+    {
+      "name": "foreign_index_path",
+      "expected": "REJECT",
+      "expected_failure": "evidence revision changes product/test paths",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "changed path count mismatch: declared 21, actual 22",
+        "evidence revision changes product/test paths: README.md",
+        "directly_manifest_bound_count mismatch",
+        "manifest missing changed path: README.md",
+        "verifier proof changed_paths mismatch: declared 21, actual 22",
+        "verifier proof directly_bound_changed_paths mismatch: declared 19, actual 20"
+      ],
+      "pass": true
+    },
+    {
+      "name": "incomplete_checksum",
+      "expected": "REJECT",
+      "expected_failure": "outer checksum missing manifest-bound path",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "outer checksum missing manifest-bound path: .agent/reports/2026-07-10-db-test-pool-hygiene-evidence-revision-maker.md",
+        "verifier proof checksum_entries mismatch: declared 36, actual 35"
+      ],
+      "pass": true
+    },
+    {
+      "name": "unknown_inventory_entry_key",
+      "expected": "REJECT",
+      "expected_failure": "inventory.entries[0] has unknown JSON property",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "inventory.entries[0] has unknown JSON property: checker_unknown"
+      ],
+      "pass": true
+    },
+    {
+      "name": "duplicate_json_property",
+      "expected": "REJECT",
+      "expected_failure": "duplicate JSON property",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "duplicate JSON property: manifest.schema_version"
+      ],
+      "pass": true
+    },
+    {
+      "name": "manifest_inventory_path_case",
+      "expected": "REJECT",
+      "expected_failure": "manifest inventory contract mismatch",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "manifest inventory contract mismatch"
+      ],
+      "pass": true
+    },
+    {
+      "name": "verifier_failures_nonempty",
+      "expected": "REJECT",
+      "expected_failure": "verifier proof failures must be an empty JSON array",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "verifier proof failures must be an empty JSON array"
+      ],
+      "pass": true
+    },
+    {
+      "name": "adversarial_case_pass_false",
+      "expected": "REJECT",
+      "expected_failure": "adversarial proof case result mismatch",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "adversarial proof case result mismatch: missing_changed_path"
+      ],
+      "pass": true
+    },
+    {
+      "name": "adversarial_observed_failures_scalar",
+      "expected": "REJECT",
+      "expected_failure": "observed_failures must be JSON array",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "adversarial proof.cases[1].observed_failures must be JSON array, got string",
+        "adversarial proof case missing required diagnostic: missing_changed_path"
+      ],
+      "pass": true
+    },
+    {
+      "name": "product_blob_mutation",
+      "expected": "REJECT",
+      "expected_failure": "product test blob differs from accepted product candidate",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "changed path count mismatch: declared 21, actual 22",
+        "evidence revision changes product/test paths: internal/db/gorm/candidate_store_test.go",
+        "manifest path/blob binding mismatch: internal/db/gorm/candidate_store_test.go",
+        "directly_manifest_bound_count mismatch",
+        "product test blob differs from accepted product candidate",
+        "outer checksum mismatch: internal/db/gorm/candidate_store_test.go",
+        "verifier proof changed_paths mismatch: declared 21, actual 22",
+        "verifier proof directly_bound_changed_paths mismatch: declared 19, actual 20"
+      ],
+      "pass": true
+    },
+    {
+      "name": "checksum_unbound_extra_path",
+      "expected": "REJECT",
+      "expected_failure": "outer checksum contains unbound extra path",
+      "actual_exit": 1,
+      "actual_status": "FAIL",
+      "failures": [
+        "outer checksum contains unbound extra path: README.md",
+        "verifier proof checksum_entries mismatch: declared 36, actual 37"
+      ],
+      "pass": true
+    }
+  ],
+  "fatal_error": null,
+  "temp_root_removed": true,
+  "cleanup_error": null
+}
