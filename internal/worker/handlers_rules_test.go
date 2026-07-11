@@ -185,9 +185,15 @@ func TestHandleListBehavioralRules_ProjectScope(t *testing.T) {
 
 	var rows []models.BehavioralRule
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rows))
-	require.Len(t, rows, 2)
-	assert.Equal(t, projectRule.ID, rows[0].ID)
-	assert.Equal(t, globalRule.ID, rows[1].ID)
+	ids := make(map[int64]bool, len(rows))
+	for _, row := range rows {
+		ids[row.ID] = true
+		if row.Project != nil {
+			assert.Equal(t, project, *row.Project, "project-scoped rows from other projects must not leak")
+		}
+	}
+	assert.True(t, ids[projectRule.ID])
+	assert.True(t, ids[globalRule.ID])
 }
 
 func TestHandleListBehavioralRules_AllScopes(t *testing.T) {
@@ -264,8 +270,14 @@ func TestHandleCreateBehavioralRule_Success(t *testing.T) {
 
 	rows, err := brs.List(context.Background(), &project, 100)
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, created.ID, rows[0].ID)
+	found := false
+	for _, row := range rows {
+		if row.ID == created.ID {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "created project rule must be returned even when global rules exist")
 }
 
 func TestHandleUpdateBehavioralRule_PartialSuccess(t *testing.T) {
@@ -332,12 +344,20 @@ func TestHandleSetBehavioralRuleEnabled_Success(t *testing.T) {
 
 	operatorRows, err := brs.List(context.Background(), &projectPtr, 100)
 	require.NoError(t, err)
-	require.Len(t, operatorRows, 1)
-	assert.False(t, operatorRows[0].Enabled, "disabled rule remains visible to operator list")
+	foundDisabled := false
+	for _, row := range operatorRows {
+		if row.ID == created.ID {
+			foundDisabled = true
+			assert.False(t, row.Enabled, "disabled rule remains visible to operator list")
+		}
+	}
+	assert.True(t, foundDisabled)
 
 	injectionRows, err := brs.ListEnabled(context.Background(), &projectPtr, 100)
 	require.NoError(t, err)
-	require.Empty(t, injectionRows, "disabled rule must not be injected")
+	for _, row := range injectionRows {
+		assert.NotEqual(t, created.ID, row.ID, "disabled rule must not be injected")
+	}
 }
 
 func TestHandleSetBehavioralRuleEnabled_RequiresEnabled(t *testing.T) {

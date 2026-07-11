@@ -131,13 +131,13 @@ func (s *IssueStore) ListIssuesEx(ctx context.Context, params IssueListParams) (
 	// Query "mcp-mux_e54050" matches issues with target_project="mcp-mux_e54050" AND "mcp-mux".
 	if params.TargetProject != "" {
 		bare := projectBareName(params.TargetProject)
-		query = query.Where("target_project = ? OR target_project = ? OR target_project LIKE ?",
-			params.TargetProject, bare, bare+"_%")
+		query = query.Where(`target_project = ? OR target_project = ? OR target_project LIKE ? ESCAPE '\'`,
+			params.TargetProject, bare, escapeSQLLike(bare)+`\_%`)
 	}
 	if params.SourceProject != "" {
 		bare := projectBareName(params.SourceProject)
-		query = query.Where("source_project = ? OR source_project = ? OR source_project LIKE ?",
-			params.SourceProject, bare, bare+"_%")
+		query = query.Where(`source_project = ? OR source_project = ? OR source_project LIKE ? ESCAPE '\'`,
+			params.SourceProject, bare, escapeSQLLike(bare)+`\_%`)
 	}
 	if len(params.Statuses) > 0 {
 		query = query.Where("status IN ?", params.Statuses)
