@@ -3,7 +3,7 @@
 //
 // Unit tests cover:
 //   - Non-admin callers receive ErrAdminRequired (no DB required — auth gate fires first)
-//   - Dry-run paths for all 4 op_types return a preview without any DB writes (no DB required)
+//   - Dry-run paths for all 3 executable op_types return a preview without any DB writes (no DB required)
 //
 // Integration tests (skip when DATABASE_DSN is absent) cover:
 //   - Committed paths for bulk_delete and bulk_supersede
@@ -112,7 +112,7 @@ func TestFacade_NonAdmin_ReturnsErrAdminRequired(t *testing.T) {
 
 // --- Unit: dry-run paths (no DB required) ---
 
-// TestFacade_DryRun_AllOpTypes verifies every op_type returns a preview with DryRun=true
+// TestFacade_DryRun_AllOpTypes verifies every executable op_type returns a preview with DryRun=true
 // and no DB mutations (facade has nil stores — any store call would panic).
 func TestFacade_DryRun_AllOpTypes(t *testing.T) {
 	// snapshotStore must not be nil for non-dryrun paths, but for dryrun all paths
@@ -130,7 +130,6 @@ func TestFacade_DryRun_AllOpTypes(t *testing.T) {
 		{models.SnapshotOpBulkPromote, []int64{10, 20, 30}, nil, 3},
 		{models.SnapshotOpBulkDelete, nil, []int64{11, 22}, 2},
 		{models.SnapshotOpBulkSupersede, nil, []int64{13, 14, 15}, 3},
-		{models.SnapshotOpIngestDoc, nil, nil, 0},
 	}
 
 	for _, c := range cases {
@@ -151,6 +150,33 @@ func TestFacade_DryRun_AllOpTypes(t *testing.T) {
 			assert.Equal(t, c.wantAffect, result.WouldAffect, "WouldAffect must equal input length for op %q", c.opType)
 		})
 	}
+}
+
+func TestFacade_Execute_IngestDocHistoricalOnly_NoSnapshot(t *testing.T) {
+	db, _ := openTestDB(t)
+	facade := NewFacade(gormdb.NewSnapshotStore(db), nil, nil, gormdb.NewAuditStore(db))
+	ctx := context.Background()
+
+	var beforeSnapshots, beforeAudits int64
+	require.NoError(t, db.Table("bulk_op_snapshots").Count(&beforeSnapshots).Error)
+	require.NoError(t, db.Table("audit_log").Count(&beforeAudits).Error)
+
+	for _, dryRun := range []bool{true, false} {
+		result, err := facade.Execute(ctx, adminIdentity(), BulkOp{
+			Type:       models.SnapshotOpIngestDoc,
+			DryRun:     dryRun,
+			Parameters: json.RawMessage(`{"document":"must-not-execute"}`),
+		})
+		require.Error(t, err)
+		require.Nil(t, result)
+		require.Contains(t, err.Error(), "historical-only")
+	}
+
+	var afterSnapshots, afterAudits int64
+	require.NoError(t, db.Table("bulk_op_snapshots").Count(&afterSnapshots).Error)
+	require.NoError(t, db.Table("audit_log").Count(&afterAudits).Error)
+	require.Equal(t, beforeSnapshots, afterSnapshots)
+	require.Equal(t, beforeAudits, afterAudits)
 }
 
 func TestFacade_BulkPromote_DryRunNormalizesDuplicateAndZeroIDs(t *testing.T) {

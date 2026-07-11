@@ -26,6 +26,25 @@ func TestSnapshotOpType_IsValid(t *testing.T) {
 	}
 }
 
+func TestSnapshotOpIngestDoc_PersistedButNotExecutable(t *testing.T) {
+	if !SnapshotOpIngestDoc.IsValid() {
+		t.Fatal("historical ingest_doc rows must remain readable")
+	}
+	if SnapshotOpIngestDoc.IsExecutable() {
+		t.Fatal("historical ingest_doc discriminator must never be executable")
+	}
+	for _, op := range []SnapshotOpType{SnapshotOpBulkPromote, SnapshotOpBulkDelete, SnapshotOpBulkSupersede} {
+		if !op.IsExecutable() {
+			t.Fatalf("retained bulk operation %q must remain executable", op)
+		}
+	}
+	for _, op := range []SnapshotOpType{SnapshotOpCandidateReviewAction, SnapshotOpForgettingReviewAction} {
+		if op.IsExecutable() {
+			t.Fatalf("review discriminator %q is not a Facade.Execute operation", op)
+		}
+	}
+}
+
 // TestSnapshotStatus_IsValid verifies all 3 statuses and invalid rejection.
 func TestSnapshotStatus_IsValid(t *testing.T) {
 	valid := []SnapshotStatus{

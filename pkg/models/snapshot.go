@@ -37,6 +37,17 @@ func (s SnapshotOpType) IsValid() bool {
 	return false
 }
 
+// IsExecutable reports whether Facade.Execute may run this operation. Historical
+// and review snapshot discriminators remain valid for persisted-row compatibility
+// but are never generic bulk-operation entry points.
+func (s SnapshotOpType) IsExecutable() bool {
+	switch s {
+	case SnapshotOpBulkPromote, SnapshotOpBulkDelete, SnapshotOpBulkSupersede:
+		return true
+	}
+	return false
+}
+
 // SnapshotStatus is the lifecycle state of a bulk_op_snapshot row.
 type SnapshotStatus string
 
