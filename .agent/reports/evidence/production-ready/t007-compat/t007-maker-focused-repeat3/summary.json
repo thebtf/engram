@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "gate": "release-gates-foundation",
+  "run_id": "t007-maker-focused-repeat3",
+  "started_at": "2026-07-11T00:34:31.5901586+00:00",
+  "finished_at": "2026-07-11T00:35:21.4155778+00:00",
+  "duration_seconds": 49.825,
+  "verdict": "PASS",
+  "counts": {
+    "requested_repeats": 3,
+    "completed_repeats": 3,
+    "passed_repeats": 3,
+    "failed_repeats": 0,
+    "child_commands": 42,
+    "nonzero_child_commands": 0
+  },
+  "packages": [
+    "./internal/mcp"
+  ],
+  "run_pattern": "^TestEC_F1_TagDerivedBackfill_T007$",
+  "coverage_policy": "Targeted",
+  "connection_budget": 20,
+  "race": false,
+  "database_dsn": "REDACTED_DATABASE_DSN",
+  "environment": "D:\\Dev\\engram\\.w\\t007-current-contract\\.agent\\reports\\evidence\\production-ready\\t007-compat\\t007-maker-focused-repeat3\\environment.json",
+  "commands": "D:\\Dev\\engram\\.w\\t007-current-contract\\.agent\\reports\\evidence\\production-ready\\t007-compat\\t007-maker-focused-repeat3\\commands.json",
+  "repeats": [
+    {
+      "repeat": 1,
+      "verdict": "PASS",
+      "database": "engram_prc_rg_test_8b1d3112a7a95fbb_r1",
+      "schema": "public",
+      "database_schema_identity": "engram_prc_rg_test_8b1d3112a7a95fbb_r1.public",
+      "database_dsn": "REDACTED_DATABASE_DSN",
+      "database_create_confirmed": true,
+      "sequential_execution": {
+        "package_parallelism": 1,
+        "test_parallelism": 1
+      },
+      "race": false,
+      "connection_budget": 20,
+      "server_sessions_before": 6,
+      "server_sessions_after": 6,
+      "sessions_before": 0,
+      "sessions_after": 0,
+      "go_test_exit": 0,
+      "json_parser_exit": 0,
+      "coverage_policy": "Targeted",
+      "coverage_exit": 0,
+      "cleanup_exit": 0,
+      "cleanup_status": "PASS",
+      "required_session_start_execution": {
+        "schema_version": 1,
+        "verdict": "NOT_APPLICABLE",
+        "reason": "only an unfiltered canonical ./... run requires the 12-test session-start execution proof"
+      },
+      "cleanup_summary": "D:\\Dev\\engram\\.w\\t007-current-contract\\.agent\\reports\\evidence\\production-ready\\t007-compat\\t007-maker-focused-repeat3\\repeat-01\\cleanup\\cleanup.json",
+      "errors": [],
+      "artifact_directory": "D:\\Dev\\engram\\.w\\t007-current-contract\\.agent\\reports\\evidence\\production-ready\\t007-compat\\t007-maker-focused-repeat3\\repeat-01"
+    },
+    {
+      "repeat": 2,
+      "verdict": "PASS",
+      "database": "engram_prc_rg_test_8b1d3112a7a95fbb_r2",
+      "schema": "public",
+      "database_schema_identity": "engram_prc_rg_test_8b1d3112a7a95fbb_r2.public",
+      "database_dsn": "REDACTED_DATABASE_DSN",
+      "database_create_confirmed": true,
+      "sequential_execution": {
+        "package_parallelism": 1,
+        "test_parallelism": 1
+      },
+      "race": false,
+      "connection_budget": 20,
+      "server_sessions_before": 6,
+      "server_sessions_after": 6,
+      "sessions_before": 0,
+      "sessions_after": 0,
+      "go_test_exit": 0,
+      "json_parser_exit": 0,
+      "coverage_policy": "Targeted",
+      "coverage_exit": 0,
+      "cleanup_exit": 0,
+      "cleanup_status": "PASS",
+      "required_session_start_execution": {
+        "schema_version": 1,
+        "verdict": "NOT_APPLICABLE",
+        "reason": "only an unfiltered canonical ./... run requires the 12-test session-start execution proof"
+      },
+      "cleanup_summary": "D:\\Dev\\engram\\.w\\t007-current-contract\\.agent\\reports\\evidence\\production-ready\\t007-compat\\t007-maker-focused-repeat3\\repeat-02\\cleanup\\cleanup.json",
+      "errors": [],
+      "artifact_directory": "D:\\Dev\\engram\\.w\\t007-current-contract\\.agent\\reports\\evidence\\production-ready\\t007-compat\\t007-maker-focused-repeat3\\repeat-02"
+    },
+    {
+      "repeat": 3,
+      "verdict": "PASS",
+      "database": "engram_prc_rg_test_8b1d3112a7a95fbb_r3",
+      "schema": "public",
+      "database_schema_identity": "engram_prc_rg_test_8b1d3112a7a95fbb_r3.public",
+      "database_dsn": "REDACTED_DATABASE_DSN",
+      "database_create_confirmed": true,
+      "sequential_execution": {
+        "package_parallelism": 1,
+        "test_parallelism": 1
+      },
+      "race": false,
+      "connection_budget": 20,
+      "server_sessions_before": 6,
+      "server_sessions_after": 6,
+      "sessions_before": 0,
+      "sessions_after": 0,
+      "go_test_exit": 0,
+      "json_parser_exit": 0,
+      "coverage_policy": "Targeted",
+      "coverage_exit": 0,
+      "cleanup_exit": 0,
+      "cleanup_status": "PASS",
+      "required_session_start_execution": {
+        "schema_version": 1,
+        "verdict": "NOT_APPLICABLE",
+        "reason": "only an unfiltered canonical ./... run requires the 12-test session-start execution proof"
+      },
+      "cleanup_summary": "D:\\Dev\\engram\\.w\\t007-current-contract\\.agent\\reports\\evidence\\production-ready\\t007-compat\\t007-maker-focused-repeat3\\repeat-03\\cleanup\\cleanup.json",
+      "errors": [],
+      "artifact_directory": "D:\\Dev\\engram\\.w\\t007-current-contract\\.agent\\reports\\evidence\\production-ready\\t007-compat\\t007-maker-focused-repeat3\\repeat-03"
+    }
+  ],
+  "errors": [],
+  "artifact_directory": "D:\\Dev\\engram\\.w\\t007-current-contract\\.agent\\reports\\evidence\\production-ready\\t007-compat\\t007-maker-focused-repeat3"
+}

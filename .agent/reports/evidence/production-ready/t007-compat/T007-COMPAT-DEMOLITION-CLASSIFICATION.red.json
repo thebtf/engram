@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "task_id": "T007-COMPAT-DEMOLITION-CLASSIFICATION",
+  "observed_at": "2026-07-11T00:32:41.9518209Z",
+  "base_sha": "af1ed63536829916e0477be719a30a57a8d9227a",
+  "test_file": "internal/mcp/store_memory_compat_t007_test.go",
+  "test_name": "TestEC_F1_TagDerivedBackfill_T007",
+  "classification": "CURRENT_CONTRACT_TEST_CORRECTION",
+  "database": {
+    "identity": "engram_prc_t007_test_red_a4f9c3.public",
+    "postgres_version": "17.10",
+    "fresh_database": true,
+    "sessions_before_drop": 0,
+    "remaining_database_count": 0
+  },
+  "environment": {
+    "ENGRAM_VNEXT_F_ENABLED": ""
+  },
+  "runner": {
+    "command": "go test -v -p 1 -parallel 1 -count=1 -run '^TestEC_F1_TagDerivedBackfill_T007$' ./internal/mcp",
+    "exit_code": 1,
+    "skipped_tests": 0
+  },
+  "failure_reason": "The SQL assertions proved privacy_scope='global', but the MemoryStore.List assertion searched the flag-off model projection for PrivacyScope='global'; memoryRowToModel intentionally omits that field when ENGRAM_VNEXT_F_ENABLED is not true.",
+  "runner_stdout_excerpt": [
+    "=== RUN   TestEC_F1_TagDerivedBackfill_T007",
+    "Error Trace: store_memory_compat_t007_test.go:157",
+    "Error: Should be true",
+    "Messages: global-scoped row must be returned by MemoryStore.List within its own project",
+    "--- FAIL: TestEC_F1_TagDerivedBackfill_T007 (4.32s)",
+    "FAIL github.com/thebtf/engram/internal/mcp"
+  ],
+  "invalid_preflight_attempt": {
+    "counted_as_red": false,
+    "reason": "A malformed PowerShell-interpolated DSN caused a DATABASE_DSN-not-reachable skip; the disposable database was removed with zero sessions and zero residue before this valid RED run."
+  }
+}
