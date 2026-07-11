@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "task_id": "DBPH-R4-EVIDENCE-STRICTNESS",
+  "phase": "RED",
+  "observed_at": "2026-07-11T01:51:59.4209935Z",
+  "runner": "PowerShell 7.6.1",
+  "base_target": "331b5b195a967e7f27dca94038a3480c9afcc84f",
+  "checker_commit": "c83536a8fa2f57bde8a194fa49b7b24271a51c03",
+  "checker_artifact": ".agent/reviews/db-test-pool-hygiene-r3-checker/alternate-index-proof.json",
+  "checker_artifact_sha256": "9e7383dcb3929e749f0a53ac44d9b4acb1e726ed146ddab673ab5c2d9af4cf65",
+  "protected_invariant": "Every evidence document must match its exact schema and current semantic proof contract; cryptographically coherent stale or extended JSON must fail closed.",
+  "failure_reason": "Five internally coherent invalid evidence packets returned exit 0 and PASS before the R4 verifier repair.",
+  "cases": [
+    {
+      "name": "unknown_manifest_key",
+      "expected": "REJECT",
+      "actual_exit": 0,
+      "actual_status": "PASS"
+    },
+    {
+      "name": "unknown_inventory_key",
+      "expected": "REJECT",
+      "actual_exit": 0,
+      "actual_status": "PASS"
+    },
+    {
+      "name": "inventory_schema_99",
+      "expected": "REJECT",
+      "actual_exit": 0,
+      "actual_status": "PASS"
+    },
+    {
+      "name": "stale_adversarial_proof",
+      "expected": "REJECT",
+      "actual_exit": 0,
+      "actual_status": "PASS"
+    },
+    {
+      "name": "stale_verifier_proof",
+      "expected": "REJECT",
+      "actual_exit": 0,
+      "actual_status": "PASS"
+    }
+  ],
+  "scope_override": "The operator forbids .agent/specs changes for this evidence-only revision, so RED/GREEN/prove-it records live in the authorized evidence packet."
+}

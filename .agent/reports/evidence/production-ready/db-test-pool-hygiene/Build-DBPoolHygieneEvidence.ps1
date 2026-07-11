@@ -6,7 +6,13 @@ param(
 
     [string]$ManifestPath = '.agent/reports/evidence/production-ready/db-test-pool-hygiene/MANIFEST.json',
 
-    [string]$SumsPath = '.agent/reports/evidence/production-ready/db-test-pool-hygiene/SHA256SUMS.txt'
+    [string]$SumsPath = '.agent/reports/evidence/production-ready/db-test-pool-hygiene/SHA256SUMS.txt',
+
+    [string]$AdversarialProofPath = '.agent/reports/evidence/production-ready/db-test-pool-hygiene/adversarial-proof.json',
+
+    [string]$VerifierProofPath = '.agent/reports/evidence/production-ready/db-test-pool-hygiene/verifier-proof.json',
+
+    [switch]$SeedDynamicProofs
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,7 +21,15 @@ $utf8NoBom = [Text.UTF8Encoding]::new($false)
 $ordinal = [StringComparer]::Ordinal
 $resolvedRepository = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 $evidencePrefix = '.agent/reports/evidence/production-ready/db-test-pool-hygiene/'
-$productBlobPath = 'internal/db/gorm/candidate_store_test.go'
+$contractPath = Join-Path $PSScriptRoot 'DBPoolHygieneEvidenceContract.ps1'
+if (-not (Test-Path -LiteralPath $contractPath)) {
+    throw "evidence contract not found: $contractPath"
+}
+. $contractPath
+if ($ProductCandidateSHA -cne $DBPHProductCandidateSHA) {
+    throw "unsupported product candidate: $ProductCandidateSHA"
+}
+$productBlobPath = $DBPHProductBlobPath
 $manifestExclusions = @($ManifestPath, $SumsPath)
 $checksumExclusions = @($SumsPath)
 
@@ -100,6 +114,41 @@ $entryPaths = @($trackedPaths | Where-Object {
 })
 $entryPaths = Sort-Ordinal -Values $entryPaths
 
+$directChangedPaths = @($changedPaths | Where-Object { -not $manifestExclusions.Contains($_) })
+$missingChangedPaths = @($directChangedPaths | Where-Object { -not $entryPaths.Contains($_) })
+if ($missingChangedPaths.Count -ne 0) {
+    throw "builder selection omits changed evidence paths: $($missingChangedPaths -join ', ')"
+}
+
+if ($SeedDynamicProofs) {
+    $adversarialProof = New-DBPHSeedAdversarialProof
+    $verifierProof = New-DBPHSeedVerifierProof `
+        -ChangedPaths ([int64]$changedPaths.Count) `
+        -DirectlyBoundChangedPaths ([int64]$directChangedPaths.Count) `
+        -ManifestEntries ([int64]$entryPaths.Count) `
+        -ChecksumEntries ([int64]($entryPaths.Count + 1))
+    foreach ($proof in @(
+        [pscustomobject]@{ path = $AdversarialProofPath; value = $adversarialProof },
+        [pscustomobject]@{ path = $VerifierProofPath; value = $verifierProof }
+    )) {
+        $proofJson = (($proof.value | ConvertTo-Json -Depth 20) -replace "`r`n", "`n") + "`n"
+        if ($utf8NoBom.GetBytes($proofJson) -contains [byte]0x0D) {
+            throw "generated dynamic proof contains CR: $($proof.path)"
+        }
+        [IO.File]::WriteAllText((Join-Path $resolvedRepository $proof.path), $proofJson, $utf8NoBom)
+    }
+    [ordered]@{
+        status = 'SEEDED_DYNAMIC_PROOFS'
+        source_mode = 'GitIndex'
+        changed_path_count = $changedPaths.Count
+        directly_bound_changed_path_count = $directChangedPaths.Count
+        manifest_entries = $entryPaths.Count
+        checksum_entries = $entryPaths.Count + 1
+        next_action = 'stage both proof files, then rerun builder without -SeedDynamicProofs'
+    } | ConvertTo-Json -Depth 4
+    return
+}
+
 $entries = [Collections.Generic.List[object]]::new()
 $entryHashes = @{}
 foreach ($path in $entryPaths) {
@@ -113,17 +162,10 @@ foreach ($path in $entryPaths) {
     })
 }
 
-$directChangedPaths = @($changedPaths | Where-Object { -not $manifestExclusions.Contains($_) })
-$missingChangedPaths = @($directChangedPaths | Where-Object { -not $entryPaths.Contains($_) })
-if ($missingChangedPaths.Count -ne 0) {
-    throw "builder selection omits changed evidence paths: $($missingChangedPaths -join ', ')"
-}
-
 $manifest = [ordered]@{
-    schema_version = 3
-    generated_utc = [DateTime]::UtcNow.ToString('o')
-    status = 'READY_FOR_RECHECK_EVIDENCE_R3'
-    product_parent_sha = 'bd68c05baf4b7250096dd84f56bebea2aa555970'
+    schema_version = $DBPHManifestSchemaVersion
+    status = 'READY_FOR_RECHECK_EVIDENCE_R4'
+    product_parent_sha = $DBPHProductParentSHA
     product_candidate_sha = $ProductCandidateSHA
     evidence_revision_parent_sha = $head
     evidence_revision_target = 'GitIndex'
@@ -136,7 +178,7 @@ $manifest = [ordered]@{
         checksum_self_excluded_paths = $checksumExclusions
     }
     representation_contract = [ordered]@{
-        id = 'git-blob-bytes-v1'
+        id = $DBPHRepresentationContract
         digest = 'SHA-256'
         object_type = 'blob'
         path_binding = 'each path at the verified Git index/revision resolves to git_blob_oid'
@@ -150,12 +192,12 @@ $manifest = [ordered]@{
     }
     product_test_blob = [ordered]@{
         path = $productBlobPath
-        git_blob_oid = '7337f1bd8da4fb315de842eea2e3cce5476250a3'
-        sha256 = '62260c1a2e0705b065295322dd23fcf9b17fd47cb5ebc64134630788e2d23e09'
+        git_blob_oid = $DBPHProductBlobOID
+        sha256 = $DBPHProductBlobSHA256
         byte_identical_to_product_candidate = $true
     }
     inventory = [ordered]@{
-        parent_sha = 'bd68c05baf4b7250096dd84f56bebea2aa555970'
+        parent_sha = $DBPHProductParentSHA
         required_call_sites = [int64]83
         required_files = [int64]8
         path = '.agent/reports/evidence/production-ready/db-test-pool-hygiene/INVENTORY.json'
