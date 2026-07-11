@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "verdict": "ACCEPT",
+  "maker": {
+    "head": "2c88fed68e0da04b4686940b81f55579a8260919",
+    "parent": "0c6269908aa810a2248f2bfaf3fca4f9f5791359",
+    "tree": "56454175025fe2f599b1ac9a14b5dc8361b76453",
+    "path_count": 15,
+    "ordinal_lf_name_digest": "996b153680df782d4247b6ef72120fba36bfc7cf3fb1015385817e1035ce700f",
+    "ordinal_lf_status_name_digest": "4761d8020de2f6ba49841291eca5996f7ae928559a69228c383f3ede5df71b18",
+    "all_path_modes": "100644",
+    "initial_worktree_clean": true
+  },
+  "scope": {
+    "product_delta": [
+      "internal/graph/nodes_store.go",
+      "internal/handlers/loom/workers.go"
+    ],
+    "retrieval_source": "internal/mcp/tools_memory.go",
+    "retrieval_base_blob": "18ba2c5e4e798567bd4d0f9a0f62ff9fc893f2b2",
+    "retrieval_head_blob": "18ba2c5e4e798567bd4d0f9a0f62ff9fc893f2b2"
+  },
+  "database": {
+    "name": "engram_dp_chk_0711_0715_c7e5",
+    "server_version": "17.10 (Debian 17.10-1.pgdg12+1)",
+    "graph_repeat3": {"pass_events": 18, "fail_events": 0, "skip_events": 0},
+    "t022_repeat3": {"pass_events": 9, "fail_events": 0, "skip_events": 0},
+    "probe": {
+      "nil_and_empty_create_update_normalize_to_object": true,
+      "invalid_create_rejected": true,
+      "invalid_update_rejected_and_persisted_value_preserved": true,
+      "closed_db_error_observed_after_input_metadata_default": true,
+      "foreign_key_sqlstate": "23503",
+      "foreign_key_constraint": "knowledge_edges_target_id_fkey",
+      "foreign_key_definition": "FOREIGN KEY (target_id) REFERENCES memories(id) ON DELETE CASCADE",
+      "rejected_dangling_rows": 0,
+      "resolve_dangling_detected": true,
+      "resolve_valid_source_preserved": true,
+      "live_depends_on_accepted": true,
+      "stale_references_rejected": true
+    },
+    "owned_rows_before_drop": {"memories": 0, "nodes": 0, "edges": 0},
+    "active_sessions_before_drop": 0,
+    "database_count_after_drop": 0
+  },
+  "loom": {
+    "windows_repeat3": "PASS",
+    "windows_race": "PASS",
+    "windows_json": {"pass_events": 47, "fail_events": 0, "skip_events": 0},
+    "windows_statement_coverage_percent": 86.9,
+    "ubuntu_wsl_repeat3": "PASS",
+    "ubuntu_wsl_json": {"pass_events": 47, "fail_events": 0, "skip_events": 0},
+    "ubuntu_wsl_statement_coverage_percent": 86.9,
+    "ubuntu_go": "go1.25.12 linux/amd64",
+    "environment_warning": "WSL could not translate U:\\Library\\Software\\Scripts\\nvmdtranscoder; tests and coverage still exited 0",
+    "parent_path_lookup_after_tests": "absent",
+    "temp_helper_residue": 0
+  },
+  "prove_it": {
+    "method": "Go build overlays backed by temporary checker-only copies; product files were never edited",
+    "graph_parent": "both current Create and Update omitted-metadata tests failed SQLSTATE 23502",
+    "loom_parent": "direct writer test returned 5 instead of 7 and the unaligned end-to-end test failed with short write",
+    "t022_disabled_filters": "low beta returned and the corrected confidence-floor assertion failed",
+    "restored_product_blobs": {
+      "internal/graph/nodes_store.go": "f18a0daaa1971d0c477be86a89cd7dbc31ea86b2",
+      "internal/handlers/loom/workers.go": "bfa5996c7637fcdea1c4d249b4c500548494d7a4",
+      "internal/mcp/tools_memory.go": "18ba2c5e4e798567bd4d0f9a0f62ff9fc893f2b2"
+    },
+    "current_focused_replay_after_overlays": "PASS"
+  },
+  "static_gates": {
+    "go_build_all": "PASS",
+    "go_vet_all": "PASS",
+    "git_diff_check": "PASS",
+    "gitleaks": "8.30.0; one exact commit; 26.34 KB; no leaks",
+    "demolished_symbol_delta_matches": 0,
+    "loom_skip_markers": 0
+  },
+  "broad_suite": {
+    "command": "go test -json ./... -count=1",
+    "exit": 1,
+    "failed_test_events": 13,
+    "failed_packages": [
+      "github.com/thebtf/engram/internal/db/gorm",
+      "github.com/thebtf/engram/internal/mcp"
+    ],
+    "owned_failures": 0,
+    "skip_events": 20,
+    "classification": "DB pool/governance candidate failures and the separately accepted T007 candidate are absent from this isolated maker base"
+  },
+  "findings": [
+    {
+      "severity": "LOW",
+      "title": "Resolve dangling behavior lost permanent integration coverage",
+      "detail": "The rewritten T016 test correctly proves the live FK, but the committed suite now checks only FK rejection plus ErrDangling sentinel shape. Store.Resolve on a missing endpoint is not called by a permanent test, while store.go:98 and nodes_store_test.go:149 still describe the removed acceptance test. The checker probe directly verified the current behavior, so this is not a current product defect or an ACCEPT blocker."
+    }
+  ],
+  "blocking_findings": 0,
+  "execution_corrections": [
+    "The first status digest attempt used culture-sensitive Sort-Object; rerunning with StringComparer.Ordinal reproduced the maker digest exactly.",
+    "The first overlay invocation passed an unevaluated PowerShell expression as a package argument; rerunning with an explicit absolute -overlay argument produced the expected RED evidence.",
+    "The first Windows coverprofile argument created a literal $coverage file; it was removed and coverage was rerun with an explicit absolute argument, producing loom-windows.cover."
+  ],
+  "reusability_candidates": []
+}

@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-11T06:25:02.1011804+03:00",
+  "environment": {
+    "windows_go": "go1.25.4 windows/amd64",
+    "linux_go": "go1.25.12 linux/amd64 via Ubuntu WSL",
+    "database": "disposable PostgreSQL 17.10 database engram_demo_root_0522"
+  },
+  "gates": [
+    {"name":"graph focused repeat3","result":"PASS","detail":"6 tests/subtests per run, zero skip"},
+    {"name":"T022 focused repeat3","result":"PASS","detail":"T022, T022b and T022c, zero skip"},
+    {"name":"Loom Windows repeat3","result":"PASS","detail":"86.9 percent statement coverage"},
+    {"name":"Loom Windows race","result":"PASS"},
+    {"name":"Loom Windows JSON","result":"PASS","detail":"47 test/subtest pass events, 0 fail, 0 skip"},
+    {"name":"Loom Ubuntu WSL","result":"PASS","detail":"86.9 percent statement coverage; no t.Skip call remains in the package"},
+    {"name":"go build ./...","result":"PASS"},
+    {"name":"go vet ./...","result":"PASS"},
+    {"name":"git diff --check","result":"PASS"},
+    {"name":"demolished-symbol delta scan","result":"PASS","detail":"no added graph retrieval, rerank, composite scoring, SDK extraction, or HTTP MCP transport symbols"},
+    {"name":"owned fixture residue before drop","result":"PASS","detail":"memories=0 nodes=0 edges=0 active_sessions=0"},
+    {"name":"disposable database cleanup","result":"PASS","detail":"database count after drop=0"}
+  ],
+  "broad_suite": {
+    "command": "go test -json ./... -count=1",
+    "actual_exit": 1,
+    "failed_test_events": 34,
+    "failed_packages": [
+      "internal/db/gorm",
+      "internal/bulkops",
+      "internal/mcp"
+    ],
+    "owned_slice_failures": 0,
+    "known_external_failures": {
+      "T007": "accepted separately at 1418796e55e8b5bfbb216ffbf5a3fba9fa620922 but intentionally absent from this disjoint base",
+      "DB_pool_and_candidate_governance": "active DB-TEST-POOL-HYGIENE R4 checker and later synthesis own these failures",
+      "bulkops": "accepted/reviewed stack is not part of this isolated base"
+    },
+    "skipped_test_events": 20,
+    "skip_owners": [
+      "historical upgrade fixture",
+      "grpc session-start exact fresh-DB lane",
+      "retrieval embedding prerequisite lane",
+      "redaction live-contract lane",
+      "current migration-order lane",
+      "static-embed image lane"
+    ]
+  },
+  "post_stage_gates": [
+    {
+      "name": "staged path closure",
+      "result": "PASS",
+      "path_count": 15,
+      "ordinal_lf_path_digest": "996b153680df782d4247b6ef72120fba36bfc7cf3fb1015385817e1035ce700f",
+      "ordinal_lf_status_path_digest": "4761d8020de2f6ba49841291eca5996f7ae928559a69228c383f3ede5df71b18"
+    },
+    {
+      "name": "gitleaks staged candidate",
+      "result": "PASS",
+      "tool": "gitleaks 8.30.0",
+      "detail": "staged candidate scanned; no leaks found"
+    },
+    {
+      "name": "staged diff check",
+      "result": "PASS"
+    }
+  ]
+}

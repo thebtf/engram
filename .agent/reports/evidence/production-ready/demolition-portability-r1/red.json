@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "base": "0c6269908aa810a2248f2bfaf3fca4f9f5791359",
+  "cycles": [
+    {
+      "slice": "GRAPH-CURRENT-SCHEMA",
+      "result": "RED",
+      "observed": [
+        "three ordinary NodesStore.Create calls with omitted metadata failed SQLSTATE 23502 against the live NOT NULL metadata column",
+        "the stale dangling-edge fixture was rejected by knowledge_edges_target_id_fkey with SQLSTATE 23503",
+        "the stale edge type references was rejected by the current enum",
+        "deferred sql.DB close ran before row cleanup and produced database-is-closed cleanup errors"
+      ]
+    },
+    {
+      "slice": "GRAPH-UPDATE-METADATA",
+      "result": "RED",
+      "command": "go test ./internal/graph -run TestPathC_T015_UpdateOmittedMetadataDefaultsEmptyObject -count=1 -v",
+      "exit_code": 1,
+      "failure": "NodesStore.Update wrote SQL NULL metadata and failed SQLSTATE 23502"
+    },
+    {
+      "slice": "T022-CURRENT-ITEMS-SHAPE",
+      "result": "RED",
+      "command": "go test ./internal/mcp -run TestHybridTG3_ConfidenceMin_FloorEnforced_T022 -count=1 -v",
+      "exit_code": 1,
+      "failure": "json cannot unmarshal the live top-level array into map[string]interface{} before the confidence assertion"
+    },
+    {
+      "slice": "LOOM-PORTABILITY",
+      "result": "RED_BY_SKIP",
+      "baseline": {
+        "passed": 32,
+        "failed": 0,
+        "skipped": 7
+      },
+      "failure": "Windows tests depended on cat, sh, echo, or POSIX-only commands"
+    },
+    {
+      "slice": "LOOM-OUTPUT-CAP-WRITER-CONTRACT",
+      "result": "RED",
+      "command": "go test ./internal/handlers/loom -run TestCliWorker_ProductionReadinessOutputLimitUnalignedWrite -count=1 -v",
+      "exit_code": 1,
+      "failure": "loom: cli worker: run engram-loom-cli-helper.exe: short write",
+      "root_cause": "limitedWriter sliced p at the remaining cap and then returned len(p), which was the retained prefix rather than the original input length"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "mutations": [
+    {
+      "slice": "GRAPH-METADATA",
+      "mutation": "normalizeNodeMetadata returned input unchanged",
+      "expected_failure": "Create and Update omitted-metadata tests both fail SQLSTATE 23502",
+      "observed": "PASS",
+      "restoration": "exact normalizer restored; both tests pass"
+    },
+    {
+      "slice": "T022-CONFIDENCE-FLOOR",
+      "mutation": "both live confidence_min filters were temporarily disabled",
+      "expected_failure": "low-confidence fixture appears and the corrected T022 test fails",
+      "observed": "PASS: low beta was returned and rejected",
+      "restoration": "both filters restored byte-for-byte; T022/T022b/T022c pass"
+    },
+    {
+      "slice": "LOOM-OUTPUT-CAP",
+      "mutation": "maxOutputBytes was temporarily changed to a non-buffer-aligned 1024-byte cap",
+      "expected_failure": "existing limitedWriter returns a short count",
+      "observed": "PASS: exec.Cmd returned short write",
+      "follow_up": "a permanent non-aligned end-to-end RED was added before the class fix",
+      "restoration": "10 MiB constant restored byte-for-byte; Writer implementation fixed instead"
+    }
+  ],
+  "temporary_product_files_restored": [
+    "internal/mcp/tools_memory.go",
+    "internal/handlers/loom/workers.go before the authorized class fix"
+  ]
+}
