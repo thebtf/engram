@@ -3113,7 +3113,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 					  AND title IS NOT NULL AND title != ''
 					  AND is_suppressed = false
 					  AND COALESCE(is_archived, 0) = 0
-					  AND is_superseded IS NOT TRUE
+					  AND COALESCE(is_superseded, 0) = 0
 				`).Error; err != nil {
 					return fmt.Errorf("migration 090_observations_to_static_entities: credentials INSERT: %w", err)
 				}
@@ -3139,7 +3139,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 					  AND COALESCE(NULLIF(TRIM(narrative), ''), NULLIF(TRIM(title), '')) IS NOT NULL
 					  AND is_suppressed = false
 					  AND COALESCE(is_archived, 0) = 0
-					  AND is_superseded IS NOT TRUE
+					  AND COALESCE(is_superseded, 0) = 0
 				`).Error; err != nil {
 					return fmt.Errorf("migration 090_observations_to_static_entities: behavioral_rules INSERT: %w", err)
 				}
@@ -3162,7 +3162,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 					  AND COALESCE(NULLIF(TRIM(narrative), ''), NULLIF(TRIM(title), '')) IS NOT NULL
 					  AND is_suppressed = false
 					  AND COALESCE(is_archived, 0) = 0
-					  AND is_superseded IS NOT TRUE
+					  AND COALESCE(is_superseded, 0) = 0
 				`).Error; err != nil {
 					return fmt.Errorf("migration 090_observations_to_static_entities: memories INSERT: %w", err)
 				}
@@ -3183,7 +3183,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 						FROM observations
 						WHERE is_suppressed = false
 						  AND COALESCE(is_archived, 0) = 0
-						  AND is_superseded IS NOT TRUE;
+						  AND COALESCE(is_superseded, 0) = 0;
 
 						SELECT (SELECT COUNT(*) FROM credentials)
 							 + (SELECT COUNT(*) FROM memories)
@@ -3203,7 +3203,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 						  AND title IS NOT NULL AND title != ''
 						  AND is_suppressed = false
 						  AND COALESCE(is_archived, 0) = 0
-						  AND is_superseded IS NOT TRUE;
+						  AND COALESCE(is_superseded, 0) = 0;
 
 						IF cred_count != cred_live_count THEN
 							RAISE EXCEPTION 'migration 090 credential invariant FAILED: credentials=% != live observations WHERE type=''credential''=% — every vault credential MUST migrate byte-for-byte',

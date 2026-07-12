@@ -1,0 +1,11 @@
+{
+  "source_tag": "v4.5.0",
+  "tag_object": "e9e31476503a40415f6e22899c1d3483ef65d739",
+  "source_commit": "648ae097a005a42e05c14c78eca667e413bf9daf",
+  "source_migrations_blob": "f8fb09cf907834c43a36c41588b171a20331ec77",
+  "last_migration": "082_projects_lifecycle",
+  "migration_count": 82,
+  "source_migrations_sha256": "f72b5111595b0a8b04770c26849a91b4c949ea3a620961e30882ae13d4c0738c",
+  "fixture": "engram-v4.5.0.sql",
+  "fixture_sha256": "fd452892eeb3edc255132b63baced7c7dbed22e3bc0592d8e7aa84fbf9ac5452"
+}

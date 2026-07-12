@@ -97,7 +97,7 @@ func TestMigrationsIntegration_PatternsDropped(t *testing.T) {
 	}
 }
 
-func TestMigrationsIntegration_AddsCommandsRunColumn(t *testing.T) {
+func TestMigration074_HistoricalOrderingAndFinalSchema(t *testing.T) {
 	dsn := os.Getenv("DATABASE_DSN")
 	if dsn == "" {
 		t.Skip("DATABASE_DSN not set, skipping integration test")
@@ -116,22 +116,22 @@ func TestMigrationsIntegration_AddsCommandsRunColumn(t *testing.T) {
 	const dims = 2000
 	require.NoError(t, runMigrations(db))
 
-	if !db.Migrator().HasTable("observations") {
-		t.Skip("observations table not present after v5 cleanup; migration 074 is historical-only")
+	var positions struct {
+		Migration074 int
+		Migration090 int
+		Migration099 int
 	}
-
-	require.NoError(t, db.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS commands_run`).Error)
-	require.NoError(t, db.Exec(`DELETE FROM migrations WHERE id = ?`, "074_observations_commands_run").Error)
-	require.NoError(t, runMigrations(db))
-
-	var dataType string
-	err = db.Raw(`
-		SELECT data_type
-		FROM information_schema.columns
-		WHERE table_name = 'observations' AND column_name = 'commands_run'
-	`).Row().Scan(&dataType)
-	require.NoError(t, err)
-	require.Equal(t, "jsonb", dataType)
+	require.NoError(t, db.Raw(`
+		SELECT
+			COALESCE(array_position(array_agg(id ORDER BY id), '074_observations_commands_run'), 0) AS migration074,
+			COALESCE(array_position(array_agg(id ORDER BY id), '090_observations_to_static_entities'), 0) AS migration090,
+			COALESCE(array_position(array_agg(id ORDER BY id), '099_drop_observations'), 0) AS migration099
+		FROM migrations
+	`).Scan(&positions).Error)
+	require.Positive(t, positions.Migration074)
+	require.Greater(t, positions.Migration090, positions.Migration074)
+	require.Greater(t, positions.Migration099, positions.Migration090)
+	require.False(t, db.Migrator().HasTable("observations"), "fresh current schema must not recreate the v5-demolished observations table")
 }
 
 // TestMigration125_AddPrivacyScope verifies migration 125_privacy_scope_addition
