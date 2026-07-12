@@ -3,13 +3,17 @@
 package recovery_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 )
 
 // @critical
@@ -17,11 +21,7 @@ import (
 // @features: [pre-v5-upgrade]
 // @dev_stand: required
 func TestPreV5UpgradeFixtureProvenance(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test source")
-	}
-	repo := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	repo := criticalRepoRoot(t)
 	type fixtureManifest struct {
 		SourceTag      string `json:"source_tag"`
 		SourceCommit   string `json:"source_commit"`
@@ -49,4 +49,36 @@ func TestPreV5UpgradeFixtureProvenance(t *testing.T) {
 	if got := hex.EncodeToString(digest[:]); got != manifest.FixtureSHA256 {
 		t.Fatalf("pre-v5 fixture checksum = %s, want %s", got, manifest.FixtureSHA256)
 	}
+}
+
+// @critical
+// @category: data-consistency
+// @features: [pre-v5-upgrade]
+// @dev_stand: required
+func TestPreV5UpgradeBehavior(t *testing.T) {
+	repo := criticalRepoRoot(t)
+	pwsh, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Fatalf("pwsh is required for the pre-v5 behavior gate: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, pwsh, "-NoProfile", "-File", filepath.Join(repo, "scripts", "production-smoke", "customer", "run-pre-v5-upgrade.ps1"))
+	cmd.Dir = repo
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("pre-v5 behavior gate failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "PRE_V5_UPGRADE_PASS") {
+		t.Fatalf("pre-v5 behavior gate did not emit its success marker:\n%s", output)
+	}
+}
+
+func criticalRepoRoot(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 }
