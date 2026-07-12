@@ -14,12 +14,28 @@ services:
     environment:
       POSTGRES_DB: engram
       POSTGRES_USER: engram
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
+    secrets:
+      - postgres_password
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "engram", "-d", "engram"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 256
+    stop_grace_period: 60s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   server:
     image: ${ENGRAM_SERVER_IMAGE:?set ENGRAM_SERVER_IMAGE from the immutable release manifest}
@@ -34,12 +50,12 @@ services:
       - "${WORKER_BIND:-0.0.0.0}:${WORKER_PORT:-37777}:37777"
     environment:
       HOME: /var/lib/engram
-      DATABASE_DSN: "${DATABASE_DSN:-postgres://engram:${POSTGRES_PASSWORD}@postgres:5432/engram?sslmode=disable}"
+      DATABASE_DSN: "${DATABASE_DSN:?set DATABASE_DSN explicitly; do not derive credentials in Compose}"
       ENGRAM_WORKER_HOST: "0.0.0.0"
       ENGRAM_WORKER_PORT: "37777"
-      ENGRAM_AUTH_ADMIN_TOKEN: "${ENGRAM_AUTH_ADMIN_TOKEN:-}"
-      ENGRAM_AUTH_DISABLED: "${ENGRAM_AUTH_DISABLED:-false}"
-      ENGRAM_VAULT_KEY: "${ENGRAM_VAULT_KEY:-}"
+      ENGRAM_AUTH_ADMIN_TOKEN: "${ENGRAM_AUTH_ADMIN_TOKEN:?set ENGRAM_AUTH_ADMIN_TOKEN to a production secret}"
+      ENGRAM_AUTH_DISABLED: "false"
+      ENGRAM_ENCRYPTION_KEY_FILE: /run/secrets/vault_key
       ENGRAM_EMBEDDING_URL: "${ENGRAM_EMBEDDING_URL:-}"
       ENGRAM_EMBEDDING_MODEL: "${ENGRAM_EMBEDDING_MODEL:-text-embedding}"
       ENGRAM_EMBEDDING_API_KEY: "${ENGRAM_EMBEDDING_API_KEY:-}"
@@ -51,10 +67,26 @@ services:
       ENGRAM_CRYSTALLIZATION_ENABLED: "${ENGRAM_CRYSTALLIZATION_ENABLED:-false}"
     volumes:
       - engramdata:/var/lib/engram
+    secrets:
+      - vault_key
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/engram-healthcheck", "http://127.0.0.1:37777/api/ready"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 256
+    stop_grace_period: 60s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   operator-console:
     image: ${ENGRAM_OPERATOR_IMAGE:?set ENGRAM_OPERATOR_IMAGE from the immutable release manifest}
@@ -75,6 +107,26 @@ services:
       server:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/engram-healthcheck", "http://127.0.0.1:3000/api/ready"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+    stop_grace_period: 30s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+secrets:
+  postgres_password:
+    file: ${ENGRAM_POSTGRES_PASSWORD_SECRET_FILE:?set ENGRAM_POSTGRES_PASSWORD_SECRET_FILE}
+  vault_key:
+    file: ${ENGRAM_VAULT_KEY_SECRET_FILE:?set ENGRAM_VAULT_KEY_SECRET_FILE}
 
 volumes:
   pgdata:

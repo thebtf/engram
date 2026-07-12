@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "current": {
+    "revision": "65837cc735e469e7afc973347e943d3af6ec8ebd",
+    "server_digest": "cf0090ef9915ba5b3f8675cf9bb0fb273497d6f6ffb72b0860219a14b7c43664",
+    "operator_digest": "bf959a088be3e607d483b3d64b1747f7e65f91ea9dfbc90baa3029544e728400",
+    "postgres_digest": "78780f7a04ce28fcdd33ff9fcd3b4de400bc510e39a06ff3223a164dbdb4eee7"
+  },
+  "previous": {
+    "revision": "76cfb56cac0e410256b719417d4307d45c10f69b",
+    "server_digest": "b9ecd67cdc4a6f3ea952ce11abb7ffc0d2cae0b6e47ea3ad84c33fd45436b4a3",
+    "operator_digest": "7ebac00425f4da75453bc8d08ecbc0b9c351f87ce80ee586bba816207cf1080a",
+    "postgres_digest": "950df543598a125b8bbcb551c5513718974c9ff73230685a35173b53e6d090bd"
+  },
+  "postgres_major": 17,
+  "application_schema": "byte-identical",
+  "application_schema_evidence": "git diff --name-only 76cfb56cac0e410256b719417d4307d45c10f69b..65837cc735e469e7afc973347e943d3af6ec8ebd contains no product, model, or migration path",
+  "customer_replay_evidence": "deploy/rollback/evidence/OPS-DEPLOY-ROLLBACK-E1.replay.json"
+}
