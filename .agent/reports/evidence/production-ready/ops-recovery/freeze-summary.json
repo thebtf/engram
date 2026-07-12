@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "slice": "OPS-RECOVERY-DATA-R1",
+  "role": "maker",
+  "observed_at": "2026-07-12T22:22:03.1960978Z",
+  "base": "fef455bcf640f849c2d40c9bc26a459b5593e10a",
+  "baseline_release": {
+    "ref": "v6.42.0",
+    "commit": "668eead36e3e75e1923cdd08acbc538ccbe42025"
+  },
+  "postgres": {
+    "major": 17,
+    "image": "engram:r2-accepted-65837cc7-postgres",
+    "image_id": "sha256:78780f7a04ce28fcdd33ff9fcd3b4de400bc510e39a06ff3223a164dbdb4eee7"
+  },
+  "behavioral_result": "BEHAVIOR_VERIFIED",
+  "scenarios": {
+    "v6_42_to_candidate_migrations": "PASS",
+    "custom_pg_dump_and_single_transaction_restore": "PASS",
+    "globals_roles_and_grants": "PASS",
+    "memory_customer_recall": "PASS",
+    "behavioral_rule_readback": "PASS",
+    "credential_decrypt": "PASS",
+    "issue_readback": "PASS",
+    "document_content_readback": "PASS",
+    "code_index_search": "PASS",
+    "corrupt_archive_rejected": "PASS",
+    "wrong_vault_key_rejected": "PASS",
+    "interrupted_restore_atomic_and_retryable": "PASS",
+    "nonempty_target_rejected": "PASS",
+    "clean_retry_idempotent": "PASS",
+    "missing_dependency_rejected": "PASS",
+    "success_and_failure_cleanup": "PASS"
+  },
+  "gates": [
+    {
+      "command": "go test -tags=critical ./tests/critical/recovery -run '^TestOperatorCanRestorePostgresBackup_RecoversDurableEngramDataAndRejectsUnsafeRestores$' -count=1 -v -timeout=30m",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "elapsed": "77.171s"
+    },
+    {
+      "command": "PowerShell parser; go test fixture; go vet fixture and critical package",
+      "status": "PASS"
+    },
+    {
+      "command": "gitleaks detect --no-git --source <each owned source/test root> --redact",
+      "status": "PASS",
+      "findings": 0
+    },
+    {
+      "command": "GOFLAGS=-tags=critical govulncheck ./tests/critical/recovery ./tests/fixtures/recovery/fixture",
+      "status": "PASS",
+      "reachable_vulnerabilities": 0
+    },
+    {
+      "command": "Docker prefix residue inventory",
+      "status": "PASS",
+      "containers": 0,
+      "volumes": 0,
+      "networks": 0
+    }
+  ],
+  "current_sources": [
+    "https://www.postgresql.org/docs/17/app-pgdump.html",
+    "https://www.postgresql.org/docs/17/app-pgrestore.html",
+    "https://www.postgresql.org/docs/17/app-pg-dumpall.html"
+  ],
+  "toolchain": {
+    "go": "go1.25.12 windows/amd64",
+    "powershell": "7.6.1",
+    "docker_server": "29.1.3",
+    "gitleaks": "8.30.0",
+    "govulncheck": "v1.2.0",
+    "govulndb_updated": "2026-07-08T17:05:00Z"
+  },
+  "finish_state": "review-needed"
+}

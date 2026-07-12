@@ -20,6 +20,20 @@
     "applied": false,
     "reason": "The GREEN implementation is already the minimum single-orchestrator shape; no concrete duplication justifies another abstraction."
   },
+  "prove_it": {
+    "substituted_files": [
+      "scripts/recovery/verify-postgres-backup-restore.ps1"
+    ],
+    "substituted_function": "Restore-Database",
+    "failed_tests": 1,
+    "runner_stdout_excerpt": "non-empty target was not rejected; FAIL; package exit 1",
+    "reverted_at": "2026-07-12T22:18:47.2876176Z",
+    "post_revert_green": "PASS; 1 passed, 0 failed, 0 skipped; 56.305s"
+  },
+  "coverage": {
+    "status": "NOT_APPLICABLE",
+    "reason": "The protected implementation is a PowerShell/Docker integration harness; Go statement coverage has no production statements in this test-only package. Behavioral and anti-stub proof are the load-bearing gates."
+  },
   "current_sources": [
     "https://www.postgresql.org/docs/17/app-pgdump.html",
     "https://www.postgresql.org/docs/17/app-pgrestore.html",

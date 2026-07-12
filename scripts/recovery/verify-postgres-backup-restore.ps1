@@ -13,12 +13,27 @@ $runID = [Guid]::NewGuid().ToString("N").Substring(0, 10)
 $prefix = "engram-recovery-$runID"
 $network = "$prefix-net"
 $password = "recovery-${runID}-password"
-$vaultKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-$wrongVaultKey = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 $containers = [System.Collections.Generic.List[string]]::new()
 $volumes = [System.Collections.Generic.List[string]]::new()
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) $prefix
-$successMarker = Join-Path $tempRoot "SUCCESS"
+
+function New-RandomHexKey {
+    $bytes = [byte[]]::new(32)
+    [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    [Convert]::ToHexString($bytes).ToLowerInvariant()
+}
+
+$vaultKey = New-RandomHexKey
+$wrongVaultKey = New-RandomHexKey
+
+function Protect-RecoveryOutput {
+    param([AllowEmptyString()][string]$Text)
+    $redacted = $Text
+    foreach ($secret in @($password, $vaultKey, $wrongVaultKey)) {
+        if ($secret) { $redacted = $redacted.Replace($secret, "<redacted>") }
+    }
+    $redacted
+}
 
 function Require-Command {
     param([Parameter(Mandatory)][string]$Name)
@@ -36,7 +51,8 @@ function Invoke-Native {
     $output = & $FilePath @Arguments 2>&1
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0 -and -not $AllowFailure) {
-        throw "$FilePath $($Arguments -join ' ') failed with exit code ${exitCode}: $($output -join [Environment]::NewLine)"
+        $failure = "$FilePath $($Arguments -join ' ') failed with exit code ${exitCode}: $($output -join [Environment]::NewLine)"
+        throw (Protect-RecoveryOutput -Text $failure)
     }
     [pscustomobject]@{ ExitCode = $exitCode; Output = ($output -join [Environment]::NewLine) }
 }
@@ -279,7 +295,6 @@ try {
     [void](Restore-Database -Name $target -User "target_admin" -Archive (Join-Path $tempRoot "engram.dump") -Clean)
     [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert" -DSN $targetDSN -Key $vaultKey)
 
-    Set-Content -LiteralPath $successMarker -Value "pass" -NoNewline
     $completed = $true
 } finally {
     Remove-RecoveryResources
