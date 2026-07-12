@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "suite": "R12 plan-governance TDD RED",
+  "observed_at": "2026-07-11T10:48:00.1215092Z",
+  "base_head": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+  "branch": "work/prc-release-gates-r12-authority-db-isolation",
+  "command": "pwsh -NoProfile -File .agent/specs/release-gates-r12/evidence/plan-governance/test-r12-plan-governance.ps1",
+  "exit_code": 64,
+  "expected": "non-zero before the R12 governance validator exists",
+  "observed": "The R12 governance validator script does not exist",
+  "first_missing_fixture": ".agent/specs/release-gates-r12/evidence/plan-governance/test-r12-plan-governance.ps1",
+  "verdict": "RED_CONFIRMED",
+  "r15_closed_world_regression": {
+    "observed_at": "2026-07-12T23:06:25.4740727+00:00",
+    "candidate": "cf85a59894150bdb122067c7bb2c421b3929f1e6",
+    "command": "pwsh -NoProfile -File .agent/reviews/release-gates-r14-fresh-checker/hostile-probes.ps1 -Output $env:TEMP/engram-a15-red-hostile-probes.json",
+    "total_cases": 65,
+    "expectations_met": 54,
+    "false_green_count": 11,
+    "invariant": "every release-authority field, nested object, array cardinality/order, and source binding must be validated as one closed-world contract",
+    "failure_reason": "partial authority validation accepted 11 invalid sibling contracts",
+    "verdict": "RED_CONFIRMED"
+  }
+}
