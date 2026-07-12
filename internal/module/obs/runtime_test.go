@@ -480,3 +480,43 @@ func TestRuntimeOwnershipIsIdempotentAndReinitializable(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRepeatedLifecycleWhileRecording(t *testing.T) {
+	clearOTLPEnv(t)
+	receiver := &metricReceiver{}
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", startMetricReceiver(t, receiver))
+
+	stop := make(chan struct{})
+	var recorder sync.WaitGroup
+	recorder.Add(1)
+	go func() {
+		defer recorder.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				RecordRuntimeEvent(context.Background(), "runtime", "repeated")
+			}
+		}
+	}()
+
+	for range 10 {
+		runtime, err := Init(context.Background(), "repeated")
+		if err != nil {
+			t.Fatal(err)
+		}
+		RecordRuntimeEvent(context.Background(), "runtime", "owned")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		err = runtime.Shutdown(ctx)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(stop)
+	recorder.Wait()
+	if len(receiver.snapshot()) == 0 {
+		t.Fatal("repeated runtime ownership exported no metrics")
+	}
+}
