@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	collector "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -395,5 +396,87 @@ func TestEndpointCredentialsAreRejectedWithoutEcho(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secret) {
 		t.Fatal("validation error echoed endpoint credentials")
+	}
+}
+
+func TestConcurrentInitRecordShutdown(t *testing.T) {
+	clearOTLPEnv(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", startMetricReceiver(t, &metricReceiver{}))
+
+	const callers = 4
+	start := make(chan struct{})
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			runtime, err := Init(context.Background(), "concurrent")
+			if err != nil {
+				errs <- err
+				return
+			}
+			RecordRuntimeEvent(context.Background(), "runtime", "concurrent")
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			errs <- runtime.Shutdown(ctx)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRuntimeOwnershipIsIdempotentAndReinitializable(t *testing.T) {
+	clearOTLPEnv(t)
+	receiver := &metricReceiver{}
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", startMetricReceiver(t, receiver))
+
+	previous := otel.GetMeterProvider()
+	first, err := Init(context.Background(), "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Init(context.Background(), "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.state != second.state {
+		t.Fatal("concurrent owners must share the process-wide metrics pipeline")
+	}
+	if otel.GetMeterProvider() != previous {
+		t.Fatal("Engram runtime must not replace the process-global meter provider")
+	}
+	if err := first.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if otel.GetMeterProvider() != previous {
+		t.Fatal("non-final owner shutdown changed the process-global provider")
+	}
+	if err := first.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if otel.GetMeterProvider() != previous {
+		t.Fatal("final owner shutdown changed the process-global provider")
+	}
+
+	third, err := Init(context.Background(), "third")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.state == first.state {
+		t.Fatal("re-init after final shutdown reused a closed pipeline")
+	}
+	if err := third.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

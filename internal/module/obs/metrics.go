@@ -4,8 +4,9 @@
 // typed helper functions.
 //
 // Default behaviour: when neither OTEL_EXPORTER_OTLP_ENDPOINT nor
-// OTEL_EXPORTER_OTLP_METRICS_ENDPOINT is set, Init leaves the global meter
-// provider as a no-op. Recording metrics is therefore safe and cheap.
+// OTEL_EXPORTER_OTLP_METRICS_ENDPOINT is set, recording uses the process-global
+// meter provider. Init never replaces that provider; an enabled Runtime routes
+// only Engram's instruments to its owned exporter.
 //
 // Framework rule: no code outside this package may call otel.GetMeterProvider()
 // or construct meters directly. This guarantees a single place to add caching,
@@ -36,6 +37,9 @@ const scopeName = "github.com/thebtf/engram/internal/module"
 // wrapper so that later T064+ work can swap in caching or instrumentation-
 // version labels at one seam instead of every call site.
 func meter() metric.Meter {
+	if instrumentProvider != nil {
+		return instrumentProvider.Meter(scopeName)
+	}
 	return otel.GetMeterProvider().Meter(scopeName)
 }
 
@@ -78,7 +82,11 @@ type instruments struct {
 
 // global is the process-wide instrument set. It is intentionally unexported
 // so all callers go through the typed helper functions below.
-var global instruments
+var (
+	global             instruments
+	instrumentsMu      sync.RWMutex
+	instrumentProvider metric.MeterProvider
+)
 
 // ---------------------------------------------------------------------------
 // RecordHandleTool — engram_handletool_duration_ms
@@ -96,6 +104,8 @@ var global instruments
 // Metric emission never returns an error to the caller. Any instrument
 // creation failure is logged once via slog and silently swallowed thereafter.
 func RecordHandleTool(ctx context.Context, module, tool, status string, durationMs int64) {
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
 	global.handleToolDurationMsOnce.Do(func() {
 		h, err := meter().Int64Histogram(
 			"engram_handletool_duration_ms",
@@ -136,6 +146,8 @@ func RecordHandleTool(ctx context.Context, module, tool, status string, duration
 // This is called in addition to RecordHandleTool (not instead of it) so that
 // dashboards can build error-rate panels by joining both metrics.
 func RecordHandleToolError(ctx context.Context, module, tool, errorCode string) {
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
 	global.handleToolErrorsTotalOnce.Do(func() {
 		c, err := meter().Int64Counter(
 			"engram_handletool_errors_total",
@@ -170,6 +182,8 @@ func RecordHandleToolError(ctx context.Context, module, tool, errorCode string) 
 //   - module: the module name as returned by EngramModule.Name().
 //   - durationMs: elapsed milliseconds for the Init call.
 func RecordModuleInit(ctx context.Context, module string, durationMs int64) {
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
 	global.moduleInitDurationMsOnce.Do(func() {
 		h, err := meter().Int64Histogram(
 			"engram_module_init_duration_ms",
@@ -203,6 +217,8 @@ func RecordModuleInit(ctx context.Context, module string, durationMs int64) {
 // per-project granularity is needed in the future, add a project_id label
 // behind a feature flag.
 func IncrementActiveSessions(ctx context.Context) {
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
 	global.activeSessionsOnce.Do(func() {
 		g, err := meter().Int64UpDownCounter(
 			"engram_active_sessions",
@@ -223,6 +239,8 @@ func IncrementActiveSessions(ctx context.Context) {
 // DecrementActiveSessions decrements the active-sessions gauge by 1.
 // Called by the dispatcher's OnProjectDisconnect handler.
 func DecrementActiveSessions(ctx context.Context) {
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
 	global.activeSessionsOnce.Do(func() {
 		g, err := meter().Int64UpDownCounter(
 			"engram_active_sessions",
@@ -243,6 +261,8 @@ func DecrementActiveSessions(ctx context.Context) {
 // RecordRuntimeEvent records one bounded-cardinality lifecycle diagnostic.
 // component and outcome must be fixed program values, never request data.
 func RecordRuntimeEvent(ctx context.Context, component, outcome string) {
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
 	global.runtimeEventsOnce.Do(func() {
 		c, err := meter().Int64Counter(
 			"engram_runtime_events_total",
@@ -277,5 +297,11 @@ func RecordRuntimeEvent(ctx context.Context, component, outcome string) {
 // support the dispatcher benchmark test (T069) which needs to measure
 // recording overhead with two different providers in the same test binary.
 func ResetInstrumentsForTesting() {
+	instrumentsMu.Lock()
+	defer instrumentsMu.Unlock()
+	resetInstrumentsLocked()
+}
+
+func resetInstrumentsLocked() {
 	global = instruments{}
 }
