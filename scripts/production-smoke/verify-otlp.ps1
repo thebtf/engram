@@ -35,7 +35,9 @@ try {
         "TestTransientCollectorFailureRetriesWithinCallerDeadline",
         "TestExporterOutageAndTLSMismatchAreBounded",
         "TestShutdownFlushesPendingMetric",
-        "TestEndpointCredentialsAreRejectedWithoutEcho"
+        "TestEndpointCredentialsAreRejectedWithoutEcho",
+        "TestConcurrentInitRecordShutdown",
+        "TestRuntimeOwnershipIsIdempotentAndReinitializable"
     )
     $passedTests = @($events | Where-Object { $_.Action -eq "pass" -and $_.Test } | Select-Object -ExpandProperty Test -Unique)
     $missing = @($required | Where-Object { $_ -notin $passedTests })
