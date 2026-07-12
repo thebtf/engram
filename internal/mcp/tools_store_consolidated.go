@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // handleStoreConsolidated routes store tool actions to the appropriate handler.
@@ -13,7 +14,27 @@ func (s *Server) handleStoreConsolidated(ctx context.Context, args json.RawMessa
 		return "", err
 	}
 
-	action := coerceString(m["action"], "create")
+	action, present, err := optionalStringArg(m, "action")
+	if err != nil {
+		return "", err
+	}
+	if !present || action == "" {
+		action = "create"
+	}
+	if tags, ok := m["tags"].(string); ok {
+		parts := strings.Split(tags, ",")
+		normalized := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if part = strings.TrimSpace(part); part != "" {
+				normalized = append(normalized, part)
+			}
+		}
+		m["tags"] = normalized
+		args, err = json.Marshal(m)
+		if err != nil {
+			return "", fmt.Errorf("normalize store tags: %w", err)
+		}
+	}
 
 	switch action {
 	case "create":
@@ -28,4 +49,3 @@ func (s *Server) handleStoreConsolidated(ctx context.Context, args json.RawMessa
 		return "", fmt.Errorf("unknown store action: %q (valid: create, edit, merge, import)", action)
 	}
 }
-

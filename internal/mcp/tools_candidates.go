@@ -120,6 +120,10 @@ func candidateTools() []Tool {
 						"type":        "integer",
 						"description": "REQUIRED. Candidate ID to promote.",
 					},
+					"dry_run": map[string]any{
+						"type":        "boolean",
+						"description": "When true, return a preview without mutating candidate, memory, snapshot, or audit state.",
+					},
 				},
 			},
 		},
@@ -244,15 +248,21 @@ func (s *Server) handlePromoteCandidate(ctx context.Context, args json.RawMessag
 	if err != nil {
 		return "", err
 	}
-	id := coerceInt64(m["id"], 0)
+	id, err := requireInt64Arg(m, "id")
+	if err != nil {
+		return "", fmt.Errorf("promote_candidate: %w", err)
+	}
 	if id <= 0 {
-		return "", fmt.Errorf("promote_candidate: id is required")
+		return "", fmt.Errorf("promote_candidate: id must be > 0")
 	}
 
 	// T044 dry-run early return (FR-F6.b): before any DB access.
 	// When candidateStore is nil, dry_run returns a preview with the id only
 	// (TG5-absent nil-safe seam — no live candidate data available).
-	dryRun := coerceBool(m["dry_run"], false)
+	dryRun, _, err := optionalBoolArg(m, "dry_run")
+	if err != nil {
+		return "", fmt.Errorf("promote_candidate: %w", err)
+	}
 	if dryRun {
 		preview := map[string]any{
 			"dry_run":      true,
@@ -353,11 +363,17 @@ func (s *Server) handleRejectCandidate(ctx context.Context, args json.RawMessage
 	if err != nil {
 		return "", err
 	}
-	id := coerceInt64(m["id"], 0)
-	if id <= 0 {
-		return "", fmt.Errorf("reject_candidate: id is required")
+	id, err := requireInt64Arg(m, "id")
+	if err != nil {
+		return "", fmt.Errorf("reject_candidate: %w", err)
 	}
-	reason := coerceString(m["reason"], "")
+	if id <= 0 {
+		return "", fmt.Errorf("reject_candidate: id must be > 0")
+	}
+	reason, _, err := optionalStringArg(m, "reason")
+	if err != nil {
+		return "", fmt.Errorf("reject_candidate: %w", err)
+	}
 	candidate, err := s.candidateStore.Get(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("reject_candidate get %d: %w", id, err)
@@ -407,9 +423,12 @@ func (s *Server) handleSupersedeCandidate(ctx context.Context, args json.RawMess
 	if err != nil {
 		return "", err
 	}
-	id := coerceInt64(m["id"], 0)
+	id, err := requireInt64Arg(m, "id")
+	if err != nil {
+		return "", fmt.Errorf("supersede_candidate: %w", err)
+	}
 	if id <= 0 {
-		return "", fmt.Errorf("supersede_candidate: id is required")
+		return "", fmt.Errorf("supersede_candidate: id must be > 0")
 	}
 	candidate, err := s.candidateStore.Get(ctx, id)
 	if err != nil {

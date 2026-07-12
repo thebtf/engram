@@ -279,6 +279,56 @@ func TestRateMemorySignificanceRejectsInvalidIDWithoutWrite(t *testing.T) {
 	}
 }
 
+func TestRateMemorySignificanceRejectsLossySelectorsWithoutWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "null", raw: `{"id":null,"rating":"useful"}`},
+		{name: "numeric string", raw: `{"id":"42","rating":"useful"}`},
+		{name: "fraction", raw: `{"id":42.5,"rating":"useful"}`},
+		{name: "exponent", raw: `{"id":1e3,"rating":"useful"}`},
+		{name: "overflow", raw: `{"id":9223372036854775808,"rating":"useful"}`},
+		{name: "wrong rating type", raw: `{"id":42,"rating":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setS6OutcomeFlags(t, true, true)
+			updater := &fakeMemorySignificanceUpdater{}
+			srv := NewServer(ServerOptions{Version: "strict-significance"})
+			srv.setTestMemorySignificanceUpdater(updater)
+
+			_, err := srv.callTool(context.Background(), "rate_memory_significance", json.RawMessage(tc.raw))
+
+			require.Error(t, err)
+			assert.Empty(t, updater.calls)
+		})
+	}
+}
+
+func TestRateMemorySignificancePreservesExactLargeIntegerSelectors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want int64
+	}{
+		{name: "above float exactness", raw: `{"id":9007199254740993,"rating":"useful"}`, want: 9007199254740993},
+		{name: "max int64", raw: `{"id":9223372036854775807,"rating":"not_useful"}`, want: 9223372036854775807},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setS6OutcomeFlags(t, true, true)
+			updater := &fakeMemorySignificanceUpdater{}
+			srv := NewServer(ServerOptions{Version: "strict-significance"})
+			srv.setTestMemorySignificanceUpdater(updater)
+
+			_, err := srv.callTool(context.Background(), "rate_memory_significance", json.RawMessage(tc.raw))
+
+			require.NoError(t, err)
+			require.Len(t, updater.calls, 1)
+			assert.Equal(t, tc.want, updater.calls[0].id)
+		})
+	}
+}
+
 func TestRateMemorySignificanceRejectsInvalidRatingWithoutWrite(t *testing.T) {
 	for _, tc := range []struct {
 		name string

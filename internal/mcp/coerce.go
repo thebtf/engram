@@ -1,8 +1,10 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"strconv"
 )
@@ -32,13 +34,135 @@ func parseArgs(args json.RawMessage) (map[string]any, error) {
 		return make(map[string]any), nil
 	}
 	var m map[string]any
-	if err := json.Unmarshal(args, &m); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(args))
+	decoder.UseNumber()
+	if err := decoder.Decode(&m); err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("invalid arguments: multiple JSON values")
+		}
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 	if m == nil {
 		m = make(map[string]any)
 	}
 	return m, nil
+}
+
+// requireInt64Arg parses a load-bearing mutation selector without float64
+// conversion, numeric strings, fractions, exponent notation, or overflow.
+func requireInt64Arg(m map[string]any, key string) (int64, error) {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return 0, fmt.Errorf("%s is required and must be an integer", key)
+	}
+	n, ok := v.(json.Number)
+	if !ok {
+		return 0, fmt.Errorf("%s must be an integer", key)
+	}
+	i, err := n.Int64()
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an in-range integer: %w", key, err)
+	}
+	return i, nil
+}
+
+func optionalInt64Arg(m map[string]any, key string) (int64, bool, error) {
+	v, ok := m[key]
+	if !ok {
+		return 0, false, nil
+	}
+	if v == nil {
+		return 0, true, fmt.Errorf("%s must be an integer when present", key)
+	}
+	i, err := requireInt64Arg(m, key)
+	return i, true, err
+}
+
+func optionalBoolArg(m map[string]any, key string) (bool, bool, error) {
+	v, ok := m[key]
+	if !ok {
+		return false, false, nil
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return false, true, fmt.Errorf("%s must be a boolean when present", key)
+	}
+	return b, true, nil
+}
+
+func optionalStringArg(m map[string]any, key string) (string, bool, error) {
+	v, ok := m[key]
+	if !ok {
+		return "", false, nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", true, fmt.Errorf("%s must be a string when present", key)
+	}
+	return s, true, nil
+}
+
+func optionalFloat64Arg(m map[string]any, key string) (float64, bool, error) {
+	v, ok := m[key]
+	if !ok {
+		return 0, false, nil
+	}
+	n, ok := v.(json.Number)
+	if !ok {
+		return 0, true, fmt.Errorf("%s must be a number when present", key)
+	}
+	f, err := n.Float64()
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, true, fmt.Errorf("%s must be a finite number", key)
+	}
+	return f, true, nil
+}
+
+func optionalStringSliceArg(m map[string]any, key string) ([]string, bool, error) {
+	v, ok := m[key]
+	if !ok {
+		return nil, false, nil
+	}
+	items, ok := v.([]any)
+	if !ok {
+		return nil, true, fmt.Errorf("%s must be an array of strings when present", key)
+	}
+	out := make([]string, len(items))
+	for i, item := range items {
+		s, ok := item.(string)
+		if !ok {
+			return nil, true, fmt.Errorf("%s[%d] must be a string", key, i)
+		}
+		out[i] = s
+	}
+	return out, true, nil
+}
+
+func optionalInt64SliceArg(m map[string]any, key string) ([]int64, bool, error) {
+	v, ok := m[key]
+	if !ok {
+		return nil, false, nil
+	}
+	items, ok := v.([]any)
+	if !ok {
+		return nil, true, fmt.Errorf("%s must be an array of integers when present", key)
+	}
+	out := make([]int64, len(items))
+	for i, item := range items {
+		n, ok := item.(json.Number)
+		if !ok {
+			return nil, true, fmt.Errorf("%s[%d] must be an integer", key, i)
+		}
+		value, err := n.Int64()
+		if err != nil {
+			return nil, true, fmt.Errorf("%s[%d] must be an in-range integer: %w", key, i, err)
+		}
+		out[i] = value
+	}
+	return out, true, nil
 }
 
 // coerceString extracts a string from a JSON any value.

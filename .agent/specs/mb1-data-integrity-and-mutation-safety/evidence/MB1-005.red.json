@@ -1,0 +1,8 @@
+{
+  "task_id": "MB1-005",
+  "observed_at": "2026-07-11T22:48:01Z",
+  "test_file": "internal/mcp/coerce_test.go",
+  "test_name": "TestParseArgsPreservesExactJSONNumbers; TestStrictMutationArgumentsRejectLossyOrPartialValues",
+  "failure_reason": "Public mutation decoding had no exact integer, strict boolean, or atomic array parsers and parseArgs decoded durable IDs through float64.",
+  "runner_stdout_excerpt": "requireInt64Arg, optionalBoolArg, optionalStringSliceArg, and optionalInt64SliceArg undefined."
+}

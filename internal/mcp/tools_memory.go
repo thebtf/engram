@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"unicode/utf8"
@@ -362,6 +363,62 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	if err != nil {
 		return "", err
 	}
+	for _, key := range []string{
+		"content", "title", "type", "scope", "privacy_scope", "session_id",
+		"agent_visibility", "domain", "project", "agent_source", "resolution_token", "option",
+	} {
+		if _, _, fieldErr := optionalStringArg(m, key); fieldErr != nil {
+			return "", fmt.Errorf("store_memory: %w", fieldErr)
+		}
+	}
+	inputTags, _, err := optionalStringSliceArg(m, "tags")
+	if err != nil {
+		return "", fmt.Errorf("store_memory: %w", err)
+	}
+	inputRejected, _, err := optionalStringSliceArg(m, "rejected")
+	if err != nil {
+		return "", fmt.Errorf("store_memory: %w", err)
+	}
+	inputSupersedes, supersedesPresent, err := optionalInt64SliceArg(m, "supersedes")
+	if err != nil {
+		return "", fmt.Errorf("store_memory: %w", err)
+	}
+	if supersedesPresent {
+		for i, id := range inputSupersedes {
+			if id <= 0 {
+				return "", fmt.Errorf("store_memory: supersedes[%d] must be > 0", i)
+			}
+		}
+	}
+	alwaysInject, _, err := optionalBoolArg(m, "always_inject")
+	if err != nil {
+		return "", fmt.Errorf("store_memory: %w", err)
+	}
+	dryRun, _, err := optionalBoolArg(m, "dry_run")
+	if err != nil {
+		return "", fmt.Errorf("store_memory: %w", err)
+	}
+	if _, _, err = optionalBoolArg(m, "force"); err != nil {
+		return "", fmt.Errorf("store_memory: %w", err)
+	}
+	importance, importancePresent, err := optionalFloat64Arg(m, "importance")
+	if err != nil {
+		return "", fmt.Errorf("store_memory: %w", err)
+	}
+	inputTTLDays, ttlPresent, err := optionalInt64Arg(m, "ttl_days")
+	if err != nil {
+		return "", fmt.Errorf("store_memory: %w", err)
+	}
+	if ttlPresent && (inputTTLDays <= 0 || inputTTLDays > int64(math.MaxInt)) {
+		return "", fmt.Errorf("store_memory: ttl_days must be an in-range positive integer")
+	}
+	targetMemoryID, targetPresent, err := optionalInt64Arg(m, "target_memory_id")
+	if err != nil {
+		return "", fmt.Errorf("store_memory: %w", err)
+	}
+	if targetPresent && targetMemoryID <= 0 {
+		return "", fmt.Errorf("store_memory: target_memory_id must be > 0")
+	}
 
 	var params struct {
 		Tags            []string
@@ -382,9 +439,9 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		AlwaysInject    bool
 		DryRun          bool // T044 — FR-F6.b dry-run preview
 	}
-	params.Tags = coerceStringSlice(m["tags"])
-	params.Rejected = coerceStringSlice(m["rejected"])
-	params.Supersedes = coerceInt64Slice(m["supersedes"])
+	params.Tags = inputTags
+	params.Rejected = inputRejected
+	params.Supersedes = inputSupersedes
 	params.Content = coerceString(m["content"], "")
 	params.Title = coerceString(m["title"], "")
 	params.Type = coerceString(m["type"], "")
@@ -402,17 +459,14 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	} else {
 		params.Project = coerceString(m["project"], "")
 	}
-	params.AlwaysInject = coerceBool(m["always_inject"], false)
-	params.DryRun = coerceBool(m["dry_run"], false)
-	if v, ok := m["importance"]; ok && v != nil {
-		f := coerceFloat64(v, 0)
-		params.Importance = &f
+	params.AlwaysInject = alwaysInject
+	params.DryRun = dryRun
+	if importancePresent {
+		params.Importance = &importance
 	}
-	if v, ok := m["ttl_days"]; ok && v != nil {
-		d := coerceInt(v, 0)
-		if d > 0 {
-			params.TtlDays = &d
-		}
+	if ttlPresent {
+		d := int(inputTTLDays)
+		params.TtlDays = &d
 	}
 	if params.Content == "" {
 		return "", fmt.Errorf("content is required for store_memory")
@@ -1119,12 +1173,21 @@ func (s *Server) handleEditMemory(ctx context.Context, args json.RawMessage) (st
 		return "", err
 	}
 
-	id := coerceInt64(m["id"], 0)
-	if id == 0 {
+	id, err := requireInt64Arg(m, "id")
+	if err != nil {
+		return "", fmt.Errorf("edit_memory: %w", err)
+	}
+	if id <= 0 {
 		return "", fmt.Errorf("id required for store_memory action=edit")
 	}
-	narrative := coerceString(m["narrative"], "")
-	tags := coerceStringSlice(m["tags"])
+	narrative, _, err := optionalStringArg(m, "narrative")
+	if err != nil {
+		return "", fmt.Errorf("edit_memory: %w", err)
+	}
+	tags, _, err := optionalStringSliceArg(m, "tags")
+	if err != nil {
+		return "", fmt.Errorf("edit_memory: %w", err)
+	}
 
 	// Read before-state.
 	before, err := ms.Get(ctx, id)
@@ -2255,11 +2318,19 @@ func (s *Server) handleRateMemory(ctx context.Context, args json.RawMessage) (st
 		return "", err
 	}
 
-	id := coerceInt64(m["id"], 0)
-	rating := coerceString(m["rating"], "")
+	id, err := requireInt64Arg(m, "id")
+	if err != nil {
+		return "", err
+	}
+	rating, _, err := optionalStringArg(m, "rating")
+	if err != nil {
+		return "", err
+	}
 	if rating == "" {
-		if usefulRaw, ok := m["useful"]; ok && usefulRaw != nil {
-			if coerceBool(usefulRaw, false) {
+		if useful, present, parseErr := optionalBoolArg(m, "useful"); parseErr != nil {
+			return "", parseErr
+		} else if present {
+			if useful {
 				rating = "useful"
 			} else {
 				rating = "not_useful"
@@ -2288,8 +2359,11 @@ func (s *Server) handleSuppressMemory(ctx context.Context, args json.RawMessage)
 		return "", err
 	}
 
-	id := coerceInt64(m["id"], 0)
-	if id == 0 {
+	id, err := requireInt64Arg(m, "id")
+	if err != nil {
+		return "", fmt.Errorf("suppress_memory: %w", err)
+	}
+	if id <= 0 {
 		return "", fmt.Errorf("id required")
 	}
 

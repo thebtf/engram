@@ -81,6 +81,37 @@ func TestSettings_UnknownAction(t *testing.T) {
 	assert.Contains(t, err.Error(), "action required")
 }
 
+func TestSettings_StrictMutationInputFailsBeforeStore(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		raw   string
+		field string
+	}{
+		{name: "wrong action type", raw: `{"action":7}`, field: "action"},
+		{name: "null key", raw: `{"action":"set","key":null,"value":"v"}`, field: "key"},
+		{name: "wrong key type", raw: `{"action":"set","key":7,"value":"v"}`, field: "key"},
+		{name: "null value", raw: `{"action":"set","key":"strict.test","value":null}`, field: "value"},
+		{name: "wrong value type", raw: `{"action":"set","key":"strict.test","value":7}`, field: "value"},
+		{name: "null encrypt", raw: `{"action":"set","key":"strict.test","value":"v","encrypt":null}`, field: "encrypt"},
+		{name: "string encrypt", raw: `{"action":"set","key":"strict.test","value":"v","encrypt":"false"}`, field: "encrypt"},
+		{name: "numeric encrypt", raw: `{"action":"set","key":"strict.test","value":"v","encrypt":1}`, field: "encrypt"},
+		{name: "wrong description type", raw: `{"action":"set","key":"strict.test","value":"v","description":true}`, field: "description"},
+		{name: "wrong delete key type", raw: `{"action":"delete","key":9}`, field: "key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := NewServer(ServerOptions{Version: "strict-settings"})
+
+			out, err := srv.handleSettingsConsolidated(adminCtx(), json.RawMessage(tc.raw))
+
+			require.Error(t, err)
+			assert.Empty(t, out)
+			assert.Contains(t, err.Error(), tc.field)
+			assert.NotContains(t, err.Error(), "settings store not available",
+				"malformed present input must fail before resolving the durable store")
+		})
+	}
+}
+
 // TestIsSecretSettingKey pins the secret-classification convention: only keys ending in
 // ".api_key" are secrets. URLs and model names are plaintext config.
 func TestIsSecretSettingKey(t *testing.T) {
