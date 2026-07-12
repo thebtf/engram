@@ -68,8 +68,17 @@ const deleteCascade = ref(false)
 
 const selectedNode = computed(() => nodes.find((node) => node.id === selectedNodeID.value) || null)
 const nodeIndex = computed<Record<string, OperatorGraphNode>>(() => Object.fromEntries(nodes.map((node) => [node.id, node])))
-const graphHonesty = computed(() => nodesState.value.kind === 'gated' ? 'dormant' : 'live')
-const graphDisabled = computed(() => nodesState.value.kind === 'gated' || nodesState.value.kind === 'pending')
+const graphHonesty = computed(() => {
+  if (nodesState.value.kind === 'gated') return 'dormant'
+  if (nodesState.value.kind === 'live' || nodesState.value.kind === 'empty') return 'live'
+  return 'stale'
+})
+const graphHonestyLabel = computed(() => {
+  if (nodesState.value.kind === 'pending') return t('graphPage.honesty.pending')
+  if (nodesState.value.kind === 'error') return t('graphPage.honesty.error')
+  return undefined
+})
+const graphDisabled = computed(() => nodesState.value.kind !== 'live' && nodesState.value.kind !== 'empty')
 const writeDisabled = graphDisabled
 const selectedDegree = computed(() => connectedEdges.length)
 const typedError = computed(() => lastMutationError.value)
@@ -238,7 +247,7 @@ async function runFindPath() {
         <h1>{{ t('graphPage.title') }}</h1>
         <p>{{ t('graphPage.subtitle') }}</p>
       </div>
-      <HonestyBadge :cls="graphHonesty" :evidence="nodesState.kind === 'gated' ? 'ENGRAM_GRAPH_ENABLED' : '/api/graph/*'" />
+      <HonestyBadge :cls="graphHonesty" :label="graphHonestyLabel" :evidence="nodesState.kind === 'gated' ? 'ENGRAM_GRAPH_ENABLED' : '/api/graph/*'" />
     </header>
 
     <section class="graph-brief">
@@ -262,9 +271,9 @@ async function runFindPath() {
 
     <div class="ops">
       <div class="ops-left">
-        <label>
+        <label for="graph-project-filter">
           <span>{{ t('graphPage.filters.project') }}</span>
-          <select v-model="selectedProject" class="select">
+          <select id="graph-project-filter" v-model="selectedProject" name="graph-project-filter" class="select" :disabled="graphDisabled">
             <option v-for="project in projectOptions" :key="project" :value="project">{{ project }}</option>
           </select>
         </label>
@@ -274,17 +283,17 @@ async function runFindPath() {
       </div>
     </div>
 
-    <div class="statebar" :data-state="nodesState.kind">
+    <div class="statebar" :data-state="nodesState.kind" role="status" aria-live="polite" aria-atomic="true">
       <span>{{ stateMessage() }}</span>
       <button v-if="nodesState.kind === 'error'" class="tbtn" @click="refresh">{{ t('graphPage.state.retry') }}</button>
     </div>
 
-    <div v-if="notice" class="notice" :data-kind="notice.kind">
+    <div v-if="notice" class="notice" :data-kind="notice.kind" role="status" aria-live="polite" aria-atomic="true">
       <span>{{ notice.text }}</span>
-      <button class="notice-close" @click="notice = null">×</button>
+      <button class="notice-close" :aria-label="t('graphPage.actions.closeNotice')" @click="notice = null">×</button>
     </div>
 
-    <div v-if="typedError" class="typed-error">
+    <div v-if="typedError" class="typed-error" role="alert">
       <HonestyBadge cls="mustbuild" :evidence="typedError.code" />
       <div>
         <strong>{{ t('graphPage.errors.title') }}</strong>
@@ -297,19 +306,19 @@ async function runFindPath() {
         <header class="panel-head">
           <h2>{{ t('graphPage.forms.node.title') }}</h2>
         </header>
-        <label>
+        <label for="graph-node-type">
           <span>{{ t('graphPage.forms.node.type') }}</span>
-          <select v-model="nodeForm.nodeType" class="select" :disabled="writeDisabled">
+          <select id="graph-node-type" v-model="nodeForm.nodeType" name="graph-node-type" class="select" :disabled="writeDisabled">
             <option v-for="nodeType in GRAPH_NODE_TYPES" :key="nodeType" :value="nodeType">{{ enumLabel('nodeTypes', nodeType) }}</option>
           </select>
         </label>
-        <label>
+        <label for="graph-node-external-ref">
           <span>{{ t('graphPage.forms.node.externalRef') }}</span>
-          <input v-model="nodeForm.externalRef" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.node.externalRefPlaceholder')" />
+          <input id="graph-node-external-ref" v-model="nodeForm.externalRef" name="graph-node-external-ref" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.node.externalRefPlaceholder')" />
         </label>
-        <label>
+        <label for="graph-node-privacy">
           <span>{{ t('graphPage.forms.node.privacy') }}</span>
-          <select v-model="nodeForm.privacyScope" class="select" :disabled="writeDisabled">
+          <select id="graph-node-privacy" v-model="nodeForm.privacyScope" name="graph-node-privacy" class="select" :disabled="writeDisabled">
             <option value="project">{{ enumLabel('privacy', 'project') }}</option>
             <option value="private">{{ enumLabel('privacy', 'private') }}</option>
             <option value="shared">{{ enumLabel('privacy', 'shared') }}</option>
@@ -323,23 +332,23 @@ async function runFindPath() {
         <header class="panel-head">
           <h2>{{ t('graphPage.forms.edge.title') }}</h2>
         </header>
-        <label>
+        <label for="graph-edge-source-node">
           <span>{{ t('graphPage.forms.edge.source') }}</span>
-          <input v-model="edgeForm.sourceNodeID" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.edge.nodeIdPlaceholder')" list="graph-node-ids" />
+          <input id="graph-edge-source-node" v-model="edgeForm.sourceNodeID" name="graph-edge-source-node" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.edge.nodeIdPlaceholder')" list="graph-node-ids" />
         </label>
-        <label>
+        <label for="graph-edge-target-node">
           <span>{{ t('graphPage.forms.edge.target') }}</span>
-          <input v-model="edgeForm.targetNodeID" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.edge.nodeIdPlaceholder')" list="graph-node-ids" />
+          <input id="graph-edge-target-node" v-model="edgeForm.targetNodeID" name="graph-edge-target-node" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.edge.nodeIdPlaceholder')" list="graph-node-ids" />
         </label>
-        <label>
+        <label for="graph-edge-type">
           <span>{{ t('graphPage.forms.edge.type') }}</span>
-          <select v-model="edgeForm.edgeType" class="select" :disabled="writeDisabled">
+          <select id="graph-edge-type" v-model="edgeForm.edgeType" name="graph-edge-type" class="select" :disabled="writeDisabled">
             <option v-for="edgeType in GRAPH_EDGE_TYPES" :key="edgeType" :value="edgeType">{{ enumLabel('edgeTypes', edgeType) }}</option>
           </select>
         </label>
-        <label>
+        <label for="graph-edge-reasoning">
           <span>{{ t('graphPage.forms.edge.reasoning') }}</span>
-          <input v-model="edgeForm.reasoning" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.edge.reasoningPlaceholder')" />
+          <input id="graph-edge-reasoning" v-model="edgeForm.reasoning" name="graph-edge-reasoning" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.edge.reasoningPlaceholder')" />
         </label>
         <button class="act primary" :disabled="writeDisabled" @click="submitCreateEdge">{{ t('graphPage.actions.createEdge') }}</button>
         <datalist id="graph-node-ids">
@@ -351,13 +360,13 @@ async function runFindPath() {
         <header class="panel-head">
           <h2>{{ t('graphPage.forms.traverse.title') }}</h2>
         </header>
-        <label>
+        <label for="graph-traverse-memory-id">
           <span>{{ t('graphPage.forms.traverse.memoryId') }}</span>
-          <input v-model="traverseForm.memoryID" class="input" :disabled="graphDisabled" :placeholder="t('graphPage.forms.traverse.memoryPlaceholder')" />
+          <input id="graph-traverse-memory-id" v-model="traverseForm.memoryID" name="graph-traverse-memory-id" class="input" :disabled="graphDisabled" :placeholder="t('graphPage.forms.traverse.memoryPlaceholder')" />
         </label>
-        <label>
+        <label for="graph-traverse-depth">
           <span>{{ t('graphPage.forms.traverse.depth') }}</span>
-          <input v-model.number="traverseForm.depth" class="input" :disabled="graphDisabled" type="number" min="1" max="3" />
+          <input id="graph-traverse-depth" v-model.number="traverseForm.depth" name="graph-traverse-depth" class="input" :disabled="graphDisabled" type="number" min="1" max="3" />
         </label>
         <button class="act primary" :disabled="traverseBusy || graphDisabled" @click="runTraverse">{{ traverseBusy ? t('graphPage.actions.running') : t('graphPage.actions.runTraverse') }}</button>
       </article>
@@ -366,17 +375,17 @@ async function runFindPath() {
         <header class="panel-head">
           <h2>{{ t('graphPage.forms.path.title') }}</h2>
         </header>
-        <label>
+        <label for="graph-path-source-id">
           <span>{{ t('graphPage.forms.path.sourceId') }}</span>
-          <input v-model="pathForm.sourceID" class="input" :disabled="graphDisabled" :placeholder="t('graphPage.forms.path.memoryPlaceholder')" />
+          <input id="graph-path-source-id" v-model="pathForm.sourceID" name="graph-path-source-id" class="input" :disabled="graphDisabled" :placeholder="t('graphPage.forms.path.memoryPlaceholder')" />
         </label>
-        <label>
+        <label for="graph-path-target-id">
           <span>{{ t('graphPage.forms.path.targetId') }}</span>
-          <input v-model="pathForm.targetID" class="input" :disabled="graphDisabled" :placeholder="t('graphPage.forms.path.memoryPlaceholder')" />
+          <input id="graph-path-target-id" v-model="pathForm.targetID" name="graph-path-target-id" class="input" :disabled="graphDisabled" :placeholder="t('graphPage.forms.path.memoryPlaceholder')" />
         </label>
-        <label>
+        <label for="graph-path-max-depth">
           <span>{{ t('graphPage.forms.path.maxDepth') }}</span>
-          <input v-model.number="pathForm.maxDepth" class="input" :disabled="graphDisabled" type="number" min="1" max="3" />
+          <input id="graph-path-max-depth" v-model.number="pathForm.maxDepth" name="graph-path-max-depth" class="input" :disabled="graphDisabled" type="number" min="1" max="3" />
         </label>
         <button class="act primary" :disabled="pathBusy || graphDisabled" @click="runFindPath">{{ pathBusy ? t('graphPage.actions.running') : t('graphPage.actions.findPath') }}</button>
       </article>
@@ -436,7 +445,7 @@ async function runFindPath() {
       <article v-if="selectedNode" class="panel detail-panel">
         <header class="panel-head">
           <h2>{{ t('graphPage.sections.selected') }}</h2>
-          <HonestyBadge cls="live" />
+          <HonestyBadge :cls="graphHonesty" :label="graphHonestyLabel" :evidence="nodesState.kind === 'gated' ? 'ENGRAM_GRAPH_ENABLED' : undefined" />
         </header>
         <div class="detail-copy">
           <b>{{ nodeDisplay(selectedNode) }}</b>
@@ -450,8 +459,8 @@ async function runFindPath() {
           <dt>{{ t('graphPage.detail.updated') }}</dt>
           <dd>{{ selectedNode.updatedAt || '—' }}</dd>
         </dl>
-        <label class="cascade-toggle">
-          <input v-model="deleteCascade" type="checkbox" :disabled="writeDisabled" />
+        <label for="graph-delete-cascade" class="cascade-toggle">
+          <input id="graph-delete-cascade" v-model="deleteCascade" name="graph-delete-cascade" type="checkbox" :disabled="writeDisabled" />
           <span>{{ t('graphPage.actions.deleteNodeCascade') }}</span>
         </label>
         <button class="act danger" :disabled="writeDisabled" @click="requestDeleteNode">

@@ -180,7 +180,12 @@
       "memory": { "sub": "{active} 条活跃 · {noise} 条噪声" },
       "queue": { "sub": "等待决策的记忆候选" },
       "noise": { "sub": "噪声注入占比" },
-      "graph": { "sub": "概念图和转移关系" },
+      "graph": {
+        "sub": "概念图和转移关系",
+        "disabled": "已禁用",
+        "pending": "正在检查 flag",
+        "error": "不可用"
+      },
       "books": { "sub": "作者领域和术语导入" },
       "rules": { "sub": "操作员 always-inject 指令" },
       "issues": {
@@ -748,6 +753,10 @@
     "filters": {
       "project": "图谱项目"
     },
+    "honesty": {
+      "pending": "正在检查",
+      "error": "不可用"
+    },
     "state": {
       "pending": "正在加载图谱数据…",
       "error": "无法加载图谱数据：{message}",
@@ -815,7 +824,8 @@
       "deleteNodeCascade": "级联删除关联边",
       "runTraverse": "运行 traverse",
       "findPath": "查找路径",
-      "running": "执行中…"
+      "running": "执行中…",
+      "closeNotice": "关闭通知"
     },
     "sections": {
       "nodes": "项目节点",
