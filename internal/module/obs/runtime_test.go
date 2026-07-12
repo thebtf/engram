@@ -2,7 +2,15 @@ package obs
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +19,7 @@ import (
 	collector "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -79,6 +88,57 @@ func startMetricReceiver(t *testing.T, receiver *metricReceiver) string {
 		_ = listener.Close()
 	})
 	return "http://" + listener.Addr().String()
+}
+
+func startTLSMetricReceiver(t *testing.T, receiver *metricReceiver) (string, string) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		DNSNames:     []string{"localhost"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IsCA:         true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	serverCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPath := t.TempDir() + "/collector-ca.pem"
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		MinVersion:   tls.VersionTLS12,
+	})))
+	collector.RegisterMetricsServiceServer(server, receiver)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "https://localhost:" + port, certPath
 }
 
 func clearOTLPEnv(t *testing.T) {
@@ -160,6 +220,31 @@ func TestOTLPExportsStableMetricsAndKeepsHeaderOutOfPayload(t *testing.T) {
 		if !strings.Contains(string(wire), name) {
 			t.Fatalf("OTLP payload missing stable metric %q", name)
 		}
+	}
+}
+
+func TestOTLPTLSWithExplicitTrustRoot(t *testing.T) {
+	clearOTLPEnv(t)
+	receiver := &metricReceiver{}
+	endpoint, certPath := startTLSMetricReceiver(t, receiver)
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", endpoint)
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE", certPath)
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_TIMEOUT", "1000")
+	runtime, err := Init(context.Background(), "vtest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	RecordRuntimeEvent(context.Background(), "startup", "tls_probe")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := runtime.ForceFlush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(receiver.snapshot()) == 0 {
+		t.Fatal("TLS collector received no metric export")
 	}
 }
 

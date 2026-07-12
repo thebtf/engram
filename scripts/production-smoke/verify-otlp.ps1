@@ -29,6 +29,7 @@ try {
     $required = @(
         "TestInitNoEndpointIsNoop",
         "TestOTLPExportsStableMetricsAndKeepsHeaderOutOfPayload",
+        "TestOTLPTLSWithExplicitTrustRoot",
         "TestCollectorAuthFailureIsBoundedAndSecretFree",
         "TestCollectorBackpressureHonorsDeadline",
         "TestTransientCollectorFailureRetriesWithinCallerDeadline",
