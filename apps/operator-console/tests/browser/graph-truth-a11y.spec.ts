@@ -382,6 +382,37 @@ test('late mutation failure cannot overwrite the newer successful action notice'
   await expect(page.locator('.notice[data-kind="success"]')).toBeVisible()
 })
 
+test('late mutation success cannot overwrite a newer local validation error', async ({ page }) => {
+  let releaseOld!: () => void
+  let postCalls = 0
+  const oldWait = new Promise<void>((resolve) => { releaseOld = resolve })
+  await page.route('**/api/flags', (route) => fulfillFlags(route, 'true'))
+  await routeGraph(page)
+  await page.route('**/api/graph/nodes', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback()
+      return
+    }
+    postCalls += 1
+    await oldWait
+    await route.fulfill({ json: { id: 9, node_type: 'skill', external_ref: 'older', project: 'operator-console', privacy_scope: 'project' } })
+  })
+  await page.goto('/graph')
+  await expect(page.locator('.statebar')).toContainText('Из живого графа загружено 1')
+  await page.getByLabel('Внешний ref').fill('older')
+  await page.getByRole('button', { name: 'Создать узел' }).click()
+  await expect.poll(() => postCalls).toBe(1)
+  await page.getByLabel('Внешний ref').fill('')
+  await page.getByRole('button', { name: 'Создать узел' }).click()
+  const validationNotice = page.locator('.notice[data-kind="error"] span')
+  await expect(validationNotice).toBeVisible()
+  const validationText = await validationNotice.innerText()
+  releaseOld()
+  await page.waitForTimeout(100)
+  await expect(validationNotice).toHaveText(validationText)
+  await expect(page.locator('.notice[data-kind="success"]')).toHaveCount(0)
+})
+
 for (const failure of ['500', 'malformed'] as const) {
   test(`graph node ${failure} response stays non-live and retry recovers`, async ({ page }) => {
     let failing = true

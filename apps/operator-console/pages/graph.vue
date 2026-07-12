@@ -156,12 +156,17 @@ function clearNotice() {
   notice.value = null
 }
 
+function dismissNotice() {
+  actionGeneration += 1
+  clearNotice()
+}
+
 async function submitCreateNode() {
+  const run = ++actionGeneration
   if (!selectedProject.value || !nodeForm.externalRef.trim()) {
     notice.value = { kind: 'error', text: t('graphPage.notices.invalidNode') }
     return
   }
-  const run = ++actionGeneration
   const result = await createNode({
     nodeType: nodeForm.nodeType,
     externalRef: nodeForm.externalRef.trim(),
@@ -178,11 +183,11 @@ async function submitCreateNode() {
 }
 
 async function submitCreateEdge() {
+  const run = ++actionGeneration
   if (!edgeForm.sourceNodeID || !edgeForm.targetNodeID) {
     notice.value = { kind: 'error', text: t('graphPage.notices.invalidEdge') }
     return
   }
-  const run = ++actionGeneration
   const result = await createEdge({
     sourceNodeID: edgeForm.sourceNodeID,
     targetNodeID: edgeForm.targetNodeID,
@@ -200,12 +205,12 @@ async function submitCreateEdge() {
 }
 
 async function requestDeleteEdge(edgeID: string) {
+  const run = ++actionGeneration
   if (confirmDeleteEdgeID.value !== edgeID) {
     confirmDeleteEdgeID.value = edgeID
     notice.value = null
     return
   }
-  const run = ++actionGeneration
   const result = await deleteEdge(edgeID)
   if (run !== actionGeneration) return
   confirmDeleteEdgeID.value = null
@@ -217,13 +222,13 @@ async function requestDeleteEdge(edgeID: string) {
 }
 
 async function requestDeleteNode() {
+  const run = ++actionGeneration
   if (!selectedNode.value) return
   if (!confirmDeleteNode.value) {
     confirmDeleteNode.value = true
     notice.value = null
     return
   }
-  const run = ++actionGeneration
   const result = await deleteNode({ nodeID: selectedNode.value.id, cascade: deleteCascade.value })
   if (run !== actionGeneration) return
   confirmDeleteNode.value = false
@@ -235,6 +240,7 @@ async function requestDeleteNode() {
 }
 
 async function runTraverse() {
+  actionGeneration += 1
   if (!traverseForm.memoryID.trim()) {
     notice.value = { kind: 'error', text: t('graphPage.notices.invalidTraverse') }
     return
@@ -244,6 +250,7 @@ async function runTraverse() {
 }
 
 async function runFindPath() {
+  actionGeneration += 1
   if (!pathForm.sourceID.trim() || !pathForm.targetID.trim()) {
     notice.value = { kind: 'error', text: t('graphPage.notices.invalidPath') }
     return
@@ -303,7 +310,7 @@ async function runFindPath() {
 
     <div v-if="notice" class="notice" :data-kind="notice.kind" role="status" aria-live="polite" aria-atomic="true">
       <span>{{ notice.text }}</span>
-      <button class="notice-close" :aria-label="t('graphPage.actions.closeNotice')" @click="notice = null">×</button>
+      <button class="notice-close" :aria-label="t('graphPage.actions.closeNotice')" @click="dismissNotice">×</button>
     </div>
 
     <div v-if="typedError" class="typed-error" role="alert">
