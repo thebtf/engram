@@ -30,21 +30,31 @@ const (
 
 func main() {
 	action := flag.String("action", "assert", "seed or assert")
-	dsn := flag.String("dsn", "", "PostgreSQL DSN")
-	key := flag.String("key", "", "64-hex-character AES-256 vault key")
+	dsnFile := flag.String("dsn-file", "", "path to a private file containing the PostgreSQL DSN")
+	keyFile := flag.String("key-file", "", "path to a private file containing the AES-256 vault key")
 	flag.Parse()
 
-	if *dsn == "" || *key == "" {
-		fatalf("-dsn and -key are required")
+	if *dsnFile == "" || *keyFile == "" {
+		fatalf("-dsn-file and -key-file are required")
 	}
+	dsnBytes, err := os.ReadFile(*dsnFile)
+	if err != nil {
+		fatalf("read DSN file: %v", err)
+	}
+	keyBytes, err := os.ReadFile(*keyFile)
+	if err != nil {
+		fatalf("read vault-key file: %v", err)
+	}
+	dsn := strings.TrimSpace(string(dsnBytes))
+	key := strings.TrimSpace(string(keyBytes))
 
-	store, err := engramgorm.NewStore(engramgorm.Config{DSN: *dsn, MaxConns: 2, LogLevel: logger.Silent})
+	store, err := engramgorm.NewStore(engramgorm.Config{DSN: dsn, MaxConns: 2, LogLevel: logger.Silent})
 	if err != nil {
 		fatalf("open migrated Engram store: %v", err)
 	}
 	defer func() { _ = store.Close() }()
 
-	vault, err := engramcrypto.NewVault(&config.Config{EncryptionKey: *key})
+	vault, err := engramcrypto.NewVault(&config.Config{EncryptionKey: key})
 	if err != nil {
 		fatalf("open vault: %v", err)
 	}

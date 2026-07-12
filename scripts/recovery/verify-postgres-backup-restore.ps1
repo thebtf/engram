@@ -16,6 +16,11 @@ $password = "recovery-${runID}-password"
 $containers = [System.Collections.Generic.List[string]]::new()
 $volumes = [System.Collections.Generic.List[string]]::new()
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) $prefix
+$dockerReady = $false
+$passwordFile = $null
+$vaultKeyFile = $null
+$wrongVaultKeyFile = $null
+$securitySamples = [System.Collections.Generic.List[string]]::new()
 
 function New-RandomHexKey {
     $bytes = [byte[]]::new(32)
@@ -42,6 +47,52 @@ function Require-Command {
     }
 }
 
+function Protect-PrivatePath {
+    param([Parameter(Mandatory)][string]$Path, [switch]$Directory)
+    if ($IsWindows) {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent().User
+        if ($Directory) {
+            $acl = [Security.AccessControl.DirectorySecurity]::new()
+            $acl.SetAccessRuleProtection($true, $false)
+            $inherit = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+            $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+                $identity,
+                [Security.AccessControl.FileSystemRights]::FullControl,
+                $inherit,
+                [Security.AccessControl.PropagationFlags]::None,
+                [Security.AccessControl.AccessControlType]::Allow
+            )
+            [void]$acl.AddAccessRule($rule)
+            [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($Path), $acl)
+        } else {
+            $acl = [Security.AccessControl.FileSecurity]::new()
+            $acl.SetAccessRuleProtection($true, $false)
+            $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+                $identity,
+                [Security.AccessControl.FileSystemRights]::FullControl,
+                [Security.AccessControl.AccessControlType]::Allow
+            )
+            [void]$acl.AddAccessRule($rule)
+            [IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($Path), $acl)
+        }
+        return
+    }
+
+    if ($Directory) {
+        [IO.Directory]::SetUnixFileMode($Path, [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite -bor [IO.UnixFileMode]::UserExecute)
+    } else {
+        [IO.File]::SetUnixFileMode($Path, [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite)
+    }
+}
+
+function New-SecretFile {
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Value)
+    $path = Join-Path $tempRoot $Name
+    [IO.File]::WriteAllText($path, $Value, [Text.UTF8Encoding]::new($false))
+    Protect-PrivatePath -Path $path
+    $path
+}
+
 function Invoke-Native {
     param(
         [Parameter(Mandatory)][string]$FilePath,
@@ -62,18 +113,102 @@ function Invoke-Docker {
     Invoke-Native -FilePath $DockerCommand -Arguments $Arguments -AllowFailure:$AllowFailure
 }
 
+function Invoke-NativeWithInput {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$InputText,
+        [switch]$AllowFailure
+    )
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FilePath
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) { [void]$startInfo.ArgumentList.Add($argument) }
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    [void]$process.Start()
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $process.StandardInput.WriteLine($InputText)
+    $process.StandardInput.Close()
+    $process.WaitForExit()
+    $output = (($stdout.Result, $stderr.Result) -join [Environment]::NewLine).Trim()
+    if ($process.ExitCode -ne 0 -and -not $AllowFailure) {
+        throw (Protect-RecoveryOutput -Text "$FilePath failed with exit code $($process.ExitCode): $output")
+    }
+    [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output }
+}
+
+function Get-ProcessCommandLines {
+    if ($IsWindows) {
+        @(Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object { $_.CommandLine }) -join "`n"
+        return
+    }
+    $lines = foreach ($entry in Get-ChildItem -Path "/proc" -Directory -ErrorAction SilentlyContinue) {
+        if ($entry.Name -notmatch '^\d+$') { continue }
+        $cmdline = Join-Path $entry.FullName "cmdline"
+        try {
+            $bytes = [IO.File]::ReadAllBytes($cmdline)
+            for ($index = 0; $index -lt $bytes.Length; $index++) {
+                if ($bytes[$index] -eq 0) { $bytes[$index] = 32 }
+            }
+            [Text.Encoding]::UTF8.GetString($bytes)
+        } catch { }
+    }
+    $lines -join "`n"
+}
+
+function Assert-NoSecretExposure {
+    param([Parameter(Mandatory)][string]$Phase, [string[]]$AdditionalSecrets = @())
+    $secrets = @($password, $vaultKey, $wrongVaultKey) + $AdditionalSecrets | Where-Object { $_ }
+    $processInventory = Get-ProcessCommandLines
+    foreach ($secret in $secrets) {
+        if ($processInventory.Contains($secret, [StringComparison]::Ordinal)) {
+            throw "secret exposure detected in process arguments during $Phase"
+        }
+    }
+
+    if ($containers.Count -gt 0) {
+        $inspect = (Invoke-Docker -Arguments (@("inspect") + @($containers)) -AllowFailure).Output
+        $logs = ($containers | ForEach-Object { (Invoke-Docker -Arguments @("logs", $_) -AllowFailure).Output }) -join "`n"
+        foreach ($secret in $secrets) {
+            if ($inspect.Contains($secret, [StringComparison]::Ordinal)) {
+                throw "secret exposure detected in Docker metadata during $Phase"
+            }
+            if ($logs.Contains($secret, [StringComparison]::Ordinal)) {
+                throw "secret exposure detected in Docker logs during $Phase"
+            }
+        }
+        if ($inspect -match 'POSTGRES_PASSWORD=') {
+            throw "direct POSTGRES_PASSWORD exposure detected in Docker metadata during $Phase"
+        }
+    }
+    $securitySamples.Add($Phase)
+    Write-Output "RECOVERY SECURITY NEGATIVE: phase=$Phase process_args=clean docker_metadata=clean logs=clean samples=$($securitySamples -join ',')"
+}
+
 function Wait-Postgres {
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$User)
     foreach ($attempt in 1..90) {
-        $probe = Invoke-Docker -Arguments @("exec", "-e", "PGPASSWORD=$password", $Name, "pg_isready", "-U", $User, "-d", "engram") -AllowFailure
+        $probe = Invoke-Docker -Arguments @("exec", $Name, "pg_isready", "-U", $User, "-d", "engram") -AllowFailure
         if ($probe.ExitCode -eq 0) {
             Start-Sleep -Milliseconds 500
-            $stable = Invoke-Docker -Arguments @("exec", "-e", "PGPASSWORD=$password", $Name, "pg_isready", "-U", $User, "-d", "engram") -AllowFailure
+            $stable = Invoke-Docker -Arguments @("exec", $Name, "pg_isready", "-U", $User, "-d", "engram") -AllowFailure
             if ($stable.ExitCode -eq 0) { return }
         }
         Start-Sleep -Milliseconds 500
     }
     throw "PostgreSQL did not become ready: $Name"
+}
+
+function Set-ContainerPgPass {
+    param([Parameter(Mandatory)][string]$Name)
+    [void](Invoke-NativeWithInput -FilePath $DockerCommand -Arguments @(
+        "exec", "--interactive", $Name, "sh", "-c", "umask 077; cat > /tmp/engram-recovery.pgpass"
+    ) -InputText "*:*:*:*:$password")
 }
 
 function Remove-Postgres {
@@ -91,12 +226,14 @@ function Start-Postgres {
     [void](Invoke-Docker -Arguments @(
         "run", "--detach", "--name", $name, "--network", $network,
         "--publish", "127.0.0.1::5432",
-        "--env", "POSTGRES_USER=$User", "--env", "POSTGRES_PASSWORD=$password", "--env", "POSTGRES_DB=engram",
+        "--env", "POSTGRES_USER=$User", "--env", "POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password", "--env", "POSTGRES_DB=engram",
+        "--mount", "type=bind,source=$passwordFile,target=/run/secrets/postgres-password,readonly",
         "--volume", "${volume}:/var/lib/postgresql/data",
         $PostgresImage
     ))
     $containers.Add($name)
     Wait-Postgres -Name $name -User $User
+    Set-ContainerPgPass -Name $name
     $name
 }
 
@@ -111,34 +248,71 @@ function Invoke-Fixture {
     param(
         [Parameter(Mandatory)][string]$SourceRoot,
         [Parameter(Mandatory)][ValidateSet("seed", "assert")][string]$Action,
-        [Parameter(Mandatory)][string]$DSN,
-        [Parameter(Mandatory)][string]$Key
+        [Parameter(Mandatory)][string]$DSNFile,
+        [Parameter(Mandatory)][string]$KeyFile
     )
-    Push-Location $SourceRoot
-    try {
-        Invoke-Native -FilePath "go" -Arguments @(
-            "run", "./tests/fixtures/recovery/fixture", "-action", $Action, "-dsn", $DSN, "-key", $Key
-        )
-    } finally {
-        Pop-Location
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = "go"
+    $startInfo.WorkingDirectory = $SourceRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in @(
+        "run", "./tests/fixtures/recovery/fixture", "-action", $Action,
+        "-dsn-file", $DSNFile, "-key-file", $KeyFile
+    )) { [void]$startInfo.ArgumentList.Add($argument) }
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    [void]$process.Start()
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    Assert-NoSecretExposure -Phase "fixture-$Action"
+    $process.WaitForExit()
+    $output = (($stdout.Result, $stderr.Result) -join [Environment]::NewLine).Trim()
+    if ($process.ExitCode -ne 0) {
+        throw (Protect-RecoveryOutput -Text "recovery fixture $Action failed with exit code $($process.ExitCode): $output")
     }
+    [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $output }
 }
 
 function Assert-DatabaseEmpty {
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$User)
     $query = "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S');"
     $count = (Invoke-Docker -Arguments @(
-        "exec", "-e", "PGPASSWORD=$password", $Name, "psql", "-X", "-At", "-v", "ON_ERROR_STOP=1", "-U", $User, "-d", "engram", "-c", $query
+        "exec", "--env", "PGPASSFILE=/tmp/engram-recovery.pgpass", $Name, "psql", "-X", "-At", "-v", "ON_ERROR_STOP=1", "-U", $User, "-d", "engram", "-c", $query
     )).Output.Trim()
     if ($count -ne "0") { throw "restore target must be empty; found $count user objects" }
 }
 
 function Restore-Globals {
-    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$User)
-    [void](Invoke-Docker -Arguments @("cp", (Join-Path $tempRoot "globals.sql"), "${Name}:/tmp/globals.sql"))
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$User,
+        [string]$GlobalsPath = (Join-Path $tempRoot "globals.sql")
+    )
+    $sourceText = [IO.File]::ReadAllText($GlobalsPath)
+    if ($sourceText -match '(?im)^\s*(CREATE|ALTER|DROP)\s+TABLESPACE\b') {
+        throw "unsupported globals object: recovery accepts roles and role memberships only"
+    }
+
+    $existingRoles = (Invoke-Docker -Arguments @(
+        "exec", "--env", "PGPASSFILE=/tmp/engram-recovery.pgpass", $Name,
+        "psql", "-X", "-At", "-v", "ON_ERROR_STOP=1", "-U", $User, "-d", "postgres",
+        "-c", "SELECT quote_ident(rolname) FROM pg_roles ORDER BY 1"
+    )).Output -split "`r?`n"
+    $existing = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($role in $existingRoles) { if ($role) { [void]$existing.Add($role.Trim()) } }
+
+    $filtered = Join-Path $tempRoot ("globals-{0}.sql" -f [Guid]::NewGuid().ToString("N"))
+    $lines = foreach ($line in [IO.File]::ReadAllLines($GlobalsPath)) {
+        if ($line -match '^CREATE ROLE (?<role>.+);$' -and $existing.Contains($Matches.role)) { continue }
+        $line
+    }
+    [IO.File]::WriteAllLines($filtered, $lines, [Text.UTF8Encoding]::new($false))
+    [void](Invoke-Docker -Arguments @("cp", $filtered, "${Name}:/tmp/globals.sql"))
     [void](Invoke-Docker -Arguments @(
-        "exec", "-e", "PGPASSWORD=$password", $Name,
-        "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", $User, "-d", "postgres", "-f", "/tmp/globals.sql"
+        "exec", "--env", "PGPASSFILE=/tmp/engram-recovery.pgpass", $Name,
+        "psql", "-X", "--single-transaction", "-v", "ON_ERROR_STOP=1", "-U", $User, "-d", "postgres", "-f", "/tmp/globals.sql"
     ))
 }
 
@@ -152,7 +326,7 @@ function Restore-Database {
     if (-not $Clean) { Assert-DatabaseEmpty -Name $Name -User $User }
     [void](Invoke-Docker -Arguments @("cp", $Archive, "${Name}:/tmp/engram.dump"))
     $arguments = @(
-        "exec", "-e", "PGPASSWORD=$password", $Name,
+        "exec", "--env", "PGPASSFILE=/tmp/engram-recovery.pgpass", $Name,
         "pg_restore", "--exit-on-error", "--single-transaction"
     )
     if ($Clean) { $arguments += @("--clean", "--if-exists") }
@@ -187,6 +361,7 @@ $completed = $false
 try {
     Write-Output "RECOVERY STAGE dependency-preflight"
     Require-Command -Name $DockerCommand
+    $dockerReady = $true
     Require-Command -Name "git"
     Require-Command -Name "go"
     Require-Command -Name "tar"
@@ -202,11 +377,16 @@ try {
     if ($major -notmatch "PostgreSQL\) 17\.") { throw "recovery requires PostgreSQL 17, got: $major" }
 
     New-Item -ItemType Directory -Path $tempRoot | Out-Null
+    Protect-PrivatePath -Path $tempRoot -Directory
+    $passwordFile = New-SecretFile -Name "postgres-password" -Value $password
+    $vaultKeyFile = New-SecretFile -Name "vault-key" -Value $vaultKey
+    $wrongVaultKeyFile = New-SecretFile -Name "wrong-vault-key" -Value $wrongVaultKey
     [void](Invoke-Docker -Arguments @("network", "create", $network))
 
     Write-Output "RECOVERY STAGE baseline-upgrade-seed"
     $source = Start-Postgres -Suffix "source" -User "source_admin"
     $sourceDSN = Get-DSN -Name $source -User "source_admin"
+    $sourceDSNFile = New-SecretFile -Name "source-dsn" -Value $sourceDSN
 
     $legacyRoot = Join-Path $tempRoot "baseline-source"
     New-Item -ItemType Directory -Path $legacyRoot | Out-Null
@@ -217,19 +397,19 @@ try {
     New-Item -ItemType Directory -Path $legacyFixture -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $repoRoot "tests\fixtures\recovery\fixture\main.go") -Destination $legacyFixture
 
-    [void](Invoke-Fixture -SourceRoot $legacyRoot -Action "seed" -DSN $sourceDSN -Key $vaultKey)
+    [void](Invoke-Fixture -SourceRoot $legacyRoot -Action "seed" -DSNFile $sourceDSNFile -KeyFile $vaultKeyFile)
     # Opening with the candidate source runs all pending migrations and proves the
     # supported v6.42.0 -> candidate upgrade before the backup is taken.
-    [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert" -DSN $sourceDSN -Key $vaultKey)
+    [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert" -DSNFile $sourceDSNFile -KeyFile $vaultKeyFile)
 
     Write-Output "RECOVERY STAGE logical-backup"
     [void](Invoke-Docker -Arguments @(
-        "exec", "-e", "PGPASSWORD=$password", $source,
+        "exec", "--env", "PGPASSFILE=/tmp/engram-recovery.pgpass", $source,
         "pg_dump", "-U", "source_admin", "-d", "engram", "--format=custom", "--file=/tmp/engram.dump"
     ))
     [void](Invoke-Docker -Arguments @(
-        "exec", "-e", "PGPASSWORD=$password", $source,
-        "pg_dumpall", "-U", "source_admin", "--globals-only", "--no-role-passwords", "--file=/tmp/globals.sql"
+        "exec", "--env", "PGPASSFILE=/tmp/engram-recovery.pgpass", $source,
+        "pg_dumpall", "-U", "source_admin", "--roles-only", "--no-role-passwords", "--file=/tmp/globals.sql"
     ))
     [void](Invoke-Docker -Arguments @("cp", "${source}:/tmp/engram.dump", (Join-Path $tempRoot "engram.dump")))
     [void](Invoke-Docker -Arguments @("cp", "${source}:/tmp/globals.sql", (Join-Path $tempRoot "globals.sql")))
@@ -247,7 +427,7 @@ try {
     $nonEmpty = Start-Postgres -Suffix "nonempty" -User "target_admin"
     Restore-Globals -Name $nonEmpty -User "target_admin"
     [void](Invoke-Docker -Arguments @(
-        "exec", "-e", "PGPASSWORD=$password", $nonEmpty,
+        "exec", "--env", "PGPASSFILE=/tmp/engram-recovery.pgpass", $nonEmpty,
         "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "target_admin", "-d", "engram", "-c", "CREATE TABLE must_block_restore(id integer);"
     ))
     $nonEmptyRejected = $false
@@ -270,7 +450,7 @@ try {
     [void](Invoke-Docker -Arguments @("cp", (Join-Path $tempRoot "engram.dump"), "${target}:/tmp/engram.dump"))
 
     $restoreArgs = @(
-        "exec", "-e", "PGPASSWORD=$password", $target,
+        "exec", "--env", "PGPASSFILE=/tmp/engram-recovery.pgpass", $target,
         "pg_restore", "--exit-on-error", "--single-transaction", "-U", "target_admin", "-d", "engram", "/tmp/engram.dump"
     )
     $restoreProcess = Start-Process -FilePath $DockerCommand -ArgumentList $restoreArgs -PassThru -NoNewWindow
@@ -285,19 +465,43 @@ try {
     Write-Output "RECOVERY STAGE clean-restore-readback"
     [void](Restore-Database -Name $target -User "target_admin" -Archive (Join-Path $tempRoot "engram.dump"))
     $targetDSN = Get-DSN -Name $target -User "target_admin"
-    [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert" -DSN $targetDSN -Key $vaultKey)
+    $targetDSNFile = New-SecretFile -Name "target-dsn" -Value $targetDSN
+    [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert" -DSNFile $targetDSNFile -KeyFile $vaultKeyFile)
 
     $wrongKeyRejected = $false
-    try { [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert" -DSN $targetDSN -Key $wrongVaultKey) } catch { $wrongKeyRejected = $true }
+    try { [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert" -DSNFile $targetDSNFile -KeyFile $wrongVaultKeyFile) } catch { $wrongKeyRejected = $true }
     if (-not $wrongKeyRejected) { throw "wrong vault key was accepted" }
 
-    Write-Output "RECOVERY STAGE idempotent-clean-retry"
+    Write-Output "RECOVERY STAGE atomic-globals-negative"
+    $hostileGlobals = Join-Path $tempRoot "globals-hostile.sql"
+    [IO.File]::WriteAllText(
+        $hostileGlobals,
+        ([IO.File]::ReadAllText((Join-Path $tempRoot "globals.sql")) + "`nCREATE ROLE engram_recovery_atomic_probe NOLOGIN;`nSELECT * FROM engram_recovery_deliberately_missing;`n"),
+        [Text.UTF8Encoding]::new($false)
+    )
+    $hostileGlobalsRejected = $false
+    try { Restore-Globals -Name $target -User "target_admin" -GlobalsPath $hostileGlobals } catch { $hostileGlobalsRejected = $true }
+    if (-not $hostileGlobalsRejected) { throw "hostile globals script was accepted" }
+    $partialRole = (Invoke-Docker -Arguments @(
+        "exec", "--env", "PGPASSFILE=/tmp/engram-recovery.pgpass", $target,
+        "psql", "-X", "-At", "-v", "ON_ERROR_STOP=1", "-U", "target_admin", "-d", "postgres",
+        "-c", "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='engram_recovery_atomic_probe')"
+    )).Output.Trim()
+    if ($partialRole -ne "f") { throw "failed globals transaction left a partial role" }
+
+    Write-Output "RECOVERY STAGE idempotent-whole-recovery-retry"
+    Restore-Globals -Name $target -User "target_admin"
     [void](Restore-Database -Name $target -User "target_admin" -Archive (Join-Path $tempRoot "engram.dump") -Clean)
-    [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert" -DSN $targetDSN -Key $vaultKey)
+    [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert" -DSNFile $targetDSNFile -KeyFile $vaultKeyFile)
+    Assert-NoSecretExposure -Phase "final" -AdditionalSecrets @($sourceDSN, $targetDSN)
 
     $completed = $true
 } finally {
-    Remove-RecoveryResources
+    if ($dockerReady) {
+        Remove-RecoveryResources
+    } elseif (Test-Path $tempRoot) {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force
+    }
 }
 
 if (-not $completed) { throw "recovery flow did not reach success" }
