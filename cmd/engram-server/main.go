@@ -63,6 +63,7 @@ func main() {
 	svc, err := worker.NewService(Version, logRing)
 	if err != nil {
 		obs.RecordRuntimeEvent(context.Background(), "worker", "initialization_error")
+		flushTelemetry(telemetry)
 		log.Fatal().Err(err).Msg("Failed to create service")
 	}
 	obs.RecordRuntimeEvent(context.Background(), "worker", "initialized")
@@ -70,6 +71,7 @@ func main() {
 	// Bring up listeners and background workers.
 	if err := svc.Start(); err != nil {
 		obs.RecordRuntimeEvent(context.Background(), "server", "start_error")
+		flushTelemetry(telemetry)
 		log.Fatal().Err(err).Msg("Failed to start service")
 	}
 	obs.RecordRuntimeEvent(context.Background(), "server", "started")
@@ -99,4 +101,12 @@ func main() {
 	}
 
 	log.Info().Msg("Worker shutdown complete")
+}
+
+func flushTelemetry(telemetry *obs.Runtime) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := telemetry.ForceFlush(ctx); err != nil {
+		log.Warn().Msg("Observability flush failed; check collector availability")
+	}
 }
