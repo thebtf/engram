@@ -2,6 +2,7 @@ package datamodel
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -28,6 +29,14 @@ func DeriveFromMigrationsFile(path string) (Derivation, error) {
 	return DeriveFromSchema(schema), nil
 }
 
+func DeriveFromMigrationsPackage(path string) (Derivation, error) {
+	schema, err := migrationmeta.ParsePackageDir(filepath.Dir(path))
+	if err != nil {
+		return Derivation{}, err
+	}
+	return DeriveFromSchema(schema), nil
+}
+
 func DeriveFromSchema(schema *migrationmeta.Schema) Derivation {
 	tables := schema.LiveTables()
 	sort.Slice(tables, func(i, j int) bool {
@@ -40,7 +49,7 @@ func DeriveFromSchema(schema *migrationmeta.Schema) Derivation {
 	var b strings.Builder
 	b.WriteString(BeginGeneratedTables)
 	b.WriteString("\n")
-	b.WriteString("Generated from `internal/db/gorm/migrations.go`.\n\n")
+	b.WriteString("Generated from the registered migration sources in `internal/db/gorm`.\n\n")
 	fmt.Fprintf(&b, "Migration count: **%d**.\n\n", len(schema.Migrations))
 	fmt.Fprintf(&b, "Live table count: **%d**.\n\n", len(tables))
 	b.WriteString("| Table | Creating migration |\n")

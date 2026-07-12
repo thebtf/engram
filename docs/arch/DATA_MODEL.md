@@ -51,11 +51,11 @@ irreversible by design — rollback requires manual SQL or a backup restore.
 The list below is generated. Do not edit it by hand; run `go run ./tools/gen-data-model`.
 
 <!-- BEGIN GENERATED TABLES -->
-Generated from `internal/db/gorm/migrations.go`.
+Generated from the registered migration sources in `internal/db/gorm`.
 
-Migration count: **136**.
+Migration count: **148**.
 
-Live table count: **36**.
+Live table count: **47**.
 
 | Table | Creating migration |
 | --- | --- |
@@ -92,7 +92,18 @@ Live table count: **36**.
 | `code_chunks` | `139_code_chunks` |
 | `code_index_sessions` | `140_code_index_sessions` |
 | `model_settings` | `143_model_settings` |
+| `rule_candidates` | `144_rule_governance_core` |
+| `rule_families` | `144_rule_governance_core` |
+| `rule_governance_snapshots` | `144_rule_governance_core` |
+| `rule_transition_log` | `144_rule_governance_core` |
+| `rule_versions` | `144_rule_governance_core` |
+| `rule_arbiter_evaluations` | `145_rule_arbiter_background` |
+| `rule_arbiter_runs` | `145_rule_arbiter_background` |
+| `rule_injection_events` | `146_rule_injection_events` |
+| `memory_domain_owners` | `150_memory_domain_owners` |
 | `agent_project_state` | `152_agent_state_plane` |
 | `agent_session_state` | `152_agent_state_plane` |
+| `books_jobs` | `155_books_jobs` |
+| `temporal_truth_records` | `157_temporal_truth_records` |
 | `attention_events` | `158_attention_events` |
 <!-- END GENERATED TABLES -->

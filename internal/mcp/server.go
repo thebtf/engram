@@ -857,7 +857,7 @@ func (s *Server) primaryTools() []Tool {
 				"required": []string{"action"},
 				"properties": map[string]any{
 					"action":     map[string]any{"type": "string", "enum": []string{"rate", "suppress", "outcome"}, "description": "Action to perform (required)"},
-					"id":         map[string]any{"type": "number", "description": "Observation ID (for rate, suppress)"},
+					"id":         map[string]any{"type": "integer", "description": "Observation ID (for rate, suppress)"},
 					"rating":     map[string]any{"type": "string", "enum": []string{"useful", "not_useful"}, "description": "Rating value for action=rate"},
 					"session_id": map[string]any{"type": "string", "description": "Claude session ID string (required for action=outcome)"},
 					"outcome":    map[string]any{"type": "string", "enum": []string{"success", "partial", "failure", "abandoned"}, "description": "Session outcome (for action=outcome)"},
