@@ -2,7 +2,8 @@
 param(
     [string]$DockerCommand = "docker",
     [string]$PostgresImage = $(if ($env:ENGRAM_RECOVERY_POSTGRES_IMAGE) { $env:ENGRAM_RECOVERY_POSTGRES_IMAGE } else { "engram:r2-accepted-65837cc7-postgres" }),
-    [string]$BaselineRef = "v6.42.0"
+    [string]$BaselineRef = "v6.42.0",
+    [switch]$ScavengeOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,6 +22,8 @@ $passwordFile = $null
 $vaultKeyFile = $null
 $wrongVaultKeyFile = $null
 $securitySamples = [System.Collections.Generic.List[string]]::new()
+$ownerLabel = "engram.recovery.owner"
+$ownerMarkerName = ".engram-recovery-owner.json"
 
 function New-RandomHexKey {
     $bytes = [byte[]]::new(32)
@@ -111,6 +114,66 @@ function Invoke-Native {
 function Invoke-Docker {
     param([Parameter(Mandatory)][string[]]$Arguments, [switch]$AllowFailure)
     Invoke-Native -FilePath $DockerCommand -Arguments $Arguments -AllowFailure:$AllowFailure
+}
+
+function Get-DockerResultLines {
+    param([Parameter(Mandatory)]$Result)
+    if ($Result.ExitCode -ne 0) { throw "Docker ownership query failed: $($Result.Output)" }
+    @($Result.Output -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+
+function Test-RecoveryOwnerActive {
+    param([Parameter(Mandatory)]$Marker)
+    try {
+        $ownerPID = [int]$Marker.pid
+        $ownerTicks = [int64]$Marker.process_start_time_utc_ticks
+        if ($ownerPID -le 0 -or $ownerTicks -le 0) { return $false }
+        $owner = Get-Process -Id $ownerPID -ErrorAction SilentlyContinue
+        if ($null -eq $owner) { return $false }
+        return $owner.StartTime.ToUniversalTime().Ticks -eq $ownerTicks
+    } catch {
+        # An unreadable live process is not evidence that its recovery run is stale.
+        return $true
+    }
+}
+
+function Remove-StaleRecoveryRuns {
+    $mutex = [Threading.Mutex]::new($false, "EngramRecoveryCleanup")
+    $locked = $false
+    try {
+        try {
+            $locked = $mutex.WaitOne([TimeSpan]::FromSeconds(30))
+        } catch [Threading.AbandonedMutexException] {
+            # WaitOne grants ownership when reporting an abandoned mutex.
+            $locked = $true
+        }
+        if (-not $locked) { throw "timed out waiting for recovery cleanup ownership" }
+        foreach ($directory in Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Directory -Filter "engram-recovery-*" -ErrorAction SilentlyContinue) {
+            if ($directory.Name -cnotmatch '^engram-recovery-[0-9a-f]{10}$') { continue }
+            $markerPath = Join-Path $directory.FullName $ownerMarkerName
+            if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { continue }
+            try {
+                $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json -Depth 8
+            } catch {
+                continue
+            }
+            if ([int]$marker.schema_version -ne 1 -or [string]$marker.prefix -cne $directory.Name) { continue }
+            if (Test-RecoveryOwnerActive -Marker $marker) { continue }
+
+            $filter = "label=$ownerLabel=$($directory.Name)"
+            $containerIDs = Get-DockerResultLines (Invoke-Docker -Arguments @("ps", "--all", "--quiet", "--filter", $filter) -AllowFailure)
+            foreach ($id in $containerIDs) { [void](Invoke-Docker -Arguments @("rm", "--force", "--volumes", $id)) }
+            $volumeIDs = Get-DockerResultLines (Invoke-Docker -Arguments @("volume", "ls", "--quiet", "--filter", $filter) -AllowFailure)
+            foreach ($id in $volumeIDs) { [void](Invoke-Docker -Arguments @("volume", "rm", "--force", $id)) }
+            $networkIDs = Get-DockerResultLines (Invoke-Docker -Arguments @("network", "ls", "--quiet", "--filter", $filter) -AllowFailure)
+            foreach ($id in $networkIDs) { [void](Invoke-Docker -Arguments @("network", "rm", $id)) }
+            Remove-Item -LiteralPath $directory.FullName -Recurse -Force
+            Write-Output "RECOVERY STALE CLEANUP: owner=$($directory.Name) status=removed"
+        }
+    } finally {
+        if ($locked) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
+    }
 }
 
 function Invoke-NativeWithInput {
@@ -221,10 +284,10 @@ function Start-Postgres {
     param([Parameter(Mandatory)][string]$Suffix, [Parameter(Mandatory)][string]$User)
     $name = "$prefix-$Suffix"
     $volume = "$name-data"
-    [void](Invoke-Docker -Arguments @("volume", "create", $volume))
+    [void](Invoke-Docker -Arguments @("volume", "create", "--label", "$ownerLabel=$prefix", $volume))
     $volumes.Add($volume)
     [void](Invoke-Docker -Arguments @(
-        "run", "--detach", "--name", $name, "--network", $network,
+        "run", "--detach", "--name", $name, "--network", $network, "--label", "$ownerLabel=$prefix",
         "--publish", "127.0.0.1::5432",
         "--env", "POSTGRES_USER=$User", "--env", "POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password", "--env", "POSTGRES_DB=engram",
         "--mount", "type=bind,source=$passwordFile,target=/run/secrets/postgres-password,readonly",
@@ -362,6 +425,12 @@ try {
     Write-Output "RECOVERY STAGE dependency-preflight"
     Require-Command -Name $DockerCommand
     $dockerReady = $true
+    Remove-StaleRecoveryRuns
+    if ($ScavengeOnly) {
+        $completed = $true
+        Write-Output "RECOVERY STALE CLEANUP PASS"
+        return
+    }
     Require-Command -Name "git"
     Require-Command -Name "go"
     Require-Command -Name "tar"
@@ -378,10 +447,20 @@ try {
 
     New-Item -ItemType Directory -Path $tempRoot | Out-Null
     Protect-PrivatePath -Path $tempRoot -Directory
+    $ownerProcess = Get-Process -Id $PID
+    $ownerMarker = [ordered]@{
+        schema_version = 1
+        prefix = $prefix
+        pid = $PID
+        process_start_time_utc_ticks = $ownerProcess.StartTime.ToUniversalTime().Ticks
+    } | ConvertTo-Json -Compress
+    $ownerMarkerPath = Join-Path $tempRoot $ownerMarkerName
+    [IO.File]::WriteAllText($ownerMarkerPath, $ownerMarker, [Text.UTF8Encoding]::new($false))
+    Protect-PrivatePath -Path $ownerMarkerPath
     $passwordFile = New-SecretFile -Name "postgres-password" -Value $password
     $vaultKeyFile = New-SecretFile -Name "vault-key" -Value $vaultKey
     $wrongVaultKeyFile = New-SecretFile -Name "wrong-vault-key" -Value $wrongVaultKey
-    [void](Invoke-Docker -Arguments @("network", "create", $network))
+    [void](Invoke-Docker -Arguments @("network", "create", "--label", "$ownerLabel=$prefix", $network))
 
     Write-Output "RECOVERY STAGE baseline-upgrade-seed"
     $source = Start-Postgres -Suffix "source" -User "source_admin"
