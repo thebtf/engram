@@ -1,0 +1,26 @@
+{
+  "task": "OPS-DEPLOY-ROLLBACK-E1",
+  "checked_at": "2026-07-13",
+  "parallel": {
+    "status": "PASS",
+    "search_ids": [
+      "search_af59c3ffc7184fe99a7a699e3b12c927",
+      "search_f8ebe7a9756247a780ab0892a6a428a8"
+    ],
+    "official_sources": [
+      "https://docs.docker.com/reference/compose-file/services/",
+      "https://docs.docker.com/compose/how-tos/use-secrets/",
+      "https://www.postgresql.org/support/versioning/"
+    ],
+    "applied_findings": [
+      "Compose image references support @digest and service_healthy waits on healthcheck state.",
+      "Compose secrets are granted per service and mounted under /run/secrets.",
+      "PostgreSQL major releases require dump/restore or pg_upgrade; minor upgrades retain the data directory."
+    ]
+  },
+  "tavily": {
+    "status": "BLOCKED",
+    "reason": "monthly_cap_reached_bonus_eligible",
+    "fallback": "Parallel returned current official Docker and PostgreSQL sources; no training-memory claim was used."
+  }
+}
