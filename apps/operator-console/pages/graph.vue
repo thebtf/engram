@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import {
   GRAPH_DEFAULT_PATH_DEPTH,
   GRAPH_DEFAULT_TRAVERSE_DEPTH,
@@ -65,6 +65,11 @@ const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
 const confirmDeleteEdgeID = ref<string | null>(null)
 const confirmDeleteNode = ref(false)
 const deleteCascade = ref(false)
+let actionGeneration = 0
+
+onBeforeUnmount(() => {
+  actionGeneration += 1
+})
 
 const selectedNode = computed(() => nodes.find((node) => node.id === selectedNodeID.value) || null)
 const nodeIndex = computed<Record<string, OperatorGraphNode>>(() => Object.fromEntries(nodes.map((node) => [node.id, node])))
@@ -156,12 +161,14 @@ async function submitCreateNode() {
     notice.value = { kind: 'error', text: t('graphPage.notices.invalidNode') }
     return
   }
+  const run = ++actionGeneration
   const result = await createNode({
     nodeType: nodeForm.nodeType,
     externalRef: nodeForm.externalRef.trim(),
     project: selectedProject.value,
     privacyScope: nodeForm.privacyScope,
   })
+  if (run !== actionGeneration) return
   if (result.ok) {
     nodeForm.externalRef = ''
     notice.value = { kind: 'success', text: t('graphPage.notices.nodeCreated') }
@@ -175,12 +182,14 @@ async function submitCreateEdge() {
     notice.value = { kind: 'error', text: t('graphPage.notices.invalidEdge') }
     return
   }
+  const run = ++actionGeneration
   const result = await createEdge({
     sourceNodeID: edgeForm.sourceNodeID,
     targetNodeID: edgeForm.targetNodeID,
     edgeType: edgeForm.edgeType,
     reasoning: edgeForm.reasoning.trim(),
   })
+  if (run !== actionGeneration) return
   if (result.ok) {
     edgeForm.targetNodeID = ''
     edgeForm.reasoning = ''
@@ -196,7 +205,9 @@ async function requestDeleteEdge(edgeID: string) {
     notice.value = null
     return
   }
+  const run = ++actionGeneration
   const result = await deleteEdge(edgeID)
+  if (run !== actionGeneration) return
   confirmDeleteEdgeID.value = null
   if (result.ok) {
     notice.value = { kind: 'success', text: t('graphPage.notices.edgeDeleted') }
@@ -212,7 +223,9 @@ async function requestDeleteNode() {
     notice.value = null
     return
   }
+  const run = ++actionGeneration
   const result = await deleteNode({ nodeID: selectedNode.value.id, cascade: deleteCascade.value })
+  if (run !== actionGeneration) return
   confirmDeleteNode.value = false
   if (result.ok) {
     notice.value = { kind: 'success', text: t('graphPage.notices.nodeDeleted') }
