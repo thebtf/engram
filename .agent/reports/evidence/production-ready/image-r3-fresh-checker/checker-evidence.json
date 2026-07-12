@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "verdict": "ACCEPT",
+  "recorded_at": "2026-07-13T01:18:22.4513635+03:00",
+  "reviewer_role": "maker-distinct-checker",
+  "candidate": {
+    "base": "65837cc735e469e7afc973347e943d3af6ec8ebd",
+    "head": "a6a88b8836c580324b864ae87b55b94e1cc012cf",
+    "tree": "28a93c5634316a24446a8deb3ab4e2c9daacc948",
+    "status": "clean",
+    "changed_paths": [
+      "M\t.github/workflows/docker-publish.yml",
+      "M\ttests/critical/runtime/image_runtime_contract_test.go"
+    ],
+    "path_digest_sha256": "aa44a33f32ec31f52d181cf75d587d0d4c807466e9451b241be315fd71fdeade",
+    "status_digest_sha256": "1cf6a669c7a822119e27bc7c6448cb587c19b7e250f50a89b07e3fb886e959f8",
+    "patch_digest_sha256": "313f0fa382a0b270ecfc26fa2c5179e35ab07cc96023a63a76d853ed4c22ff0d"
+  },
+  "external_current_sources": {
+    "parallel_search_id": "search_6ef6d6389684453fb99c8d96cff7bfcc",
+    "parallel_extract_id": "extract_7020ec0cfc394ed5886dc0e5986387e7",
+    "official_urls": [
+      "https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#workflow_run",
+      "https://docs.github.com/en/webhooks/webhook-events-and-payloads#workflow_run",
+      "https://docs.github.com/en/actions/reference/security/secure-use"
+    ],
+    "tavily": "BLOCKED: monthly keyless cap reached; no Tavily claim was used"
+  },
+  "live_read_only_evidence": {
+    "repository": "thebtf/engram",
+    "default_branch": "main",
+    "release_tag_run": {
+      "id": 28757833445,
+      "event": "push",
+      "head_branch": "v6.42.0",
+      "head_sha": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+      "conclusion": "success"
+    },
+    "main_run": {
+      "id": 28757820662,
+      "event": "push",
+      "head_branch": "main",
+      "head_sha": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+      "conclusion": "success"
+    },
+    "pull_request_shape_run": {
+      "id": 28755117108,
+      "event": "pull_request",
+      "head_branch": "work/eng-v7-s3-cr001-ambient",
+      "conclusion": "success"
+    }
+  },
+  "gates": [
+    {
+      "command": "go test -v -tags=critical ./tests/critical/runtime -run '^TestDockerReleaseRefFreshnessGuard$' -count=1",
+      "result": "PASS",
+      "duration_seconds": 92.964
+    },
+    {
+      "command": "go test -tags=critical ./tests/critical/runtime -run '^TestDockerReleaseRefFreshnessGuard$/^workflow_run_publisher_selector_matrix$' -count=20",
+      "result": "PASS"
+    },
+    {
+      "command": "actionlint -format '{{json .}}' .github/workflows/docker-publish.yml",
+      "result": "PASS: []"
+    },
+    {
+      "command": "go build ./...",
+      "result": "PASS"
+    },
+    {
+      "command": "go vet ./...",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check 65837cc735e469e7afc973347e943d3af6ec8ebd..a6a88b8836c580324b864ae87b55b94e1cc012cf",
+      "result": "PASS"
+    },
+    {
+      "command": "gitleaks git --log-opts='65837cc735e469e7afc973347e943d3af6ec8ebd..a6a88b8836c580324b864ae87b55b94e1cc012cf' --no-banner --redact --verbose",
+      "result": "PASS: one commit, no leaks"
+    }
+  ],
+  "security_and_behavior": {
+    "successful_release_tag_push": "enters unprivileged prepare-release then requires canonical preflight",
+    "pull_request": "skipped",
+    "main_push": "skipped",
+    "workflow_dispatch": "skipped because event != push",
+    "failure_or_cancel": "skipped because conclusion != success",
+    "hostile_tag_lookalike": "cannot reach publish without canonical SemVer, same-repository workflow identity, tag peel to head SHA, protected-main ancestry, and exact no-bypass rulesets",
+    "fork_or_untrusted_artifact": "fails closed before privileged publication; trusted default-branch code and immutable same-run artifact census remain unchanged",
+    "permissions_and_concurrency": "unchanged from accepted R2; top-level contents:read, prepare contents:read, publisher packages:write only after needs, commit-keyed non-cancelling concurrency"
+  },
+  "r2_runtime_ui_reuse": {
+    "reason": "R3 changes only the workflow selector and its contract test; no Dockerfile, Compose, build script, application, image, or UI runtime path changed",
+    "checker_report": "D:/Dev/engram/.agent/worktrees/image-r2-fresh-checker/.agent/reports/2026-07-13-image-r2-fresh-checker.md",
+    "checker_report_sha256": "53cd7095fab2fa441b4922d33d9932eabd3a2004b58429b7b76086d8c5499909",
+    "final_image_set_sha256": "2456e01550bb937e777553d35f4d2b7e80597be5323df3de5de39c85c331a652",
+    "r2_checker_commit": "c8ac8b216f052745d7fdce9797937e8625f660d4"
+  },
+  "mutations": {
+    "candidate": false,
+    "main": false,
+    "github_rulesets": false,
+    "registry": false,
+    "release_or_tag": false
+  }
+}
