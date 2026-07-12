@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "verdict": "PASS_R15_CLOSED_WORLD_AUTHORITY_READY_FOR_FRESH_CHECKER",
+  "successor_base": "cf85a59894150bdb122067c7bb2c421b3929f1e6",
+  "required_parent": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+  "gates": {
+    "r12_plan_governance_with_r15_closed_world_selftest": "PASS",
+    "independent_checker_hostile_matrix_65_cases": "PASS_65_OF_65_ZERO_FALSE_GREEN",
+    "generative_missing_unknown_scalar_array_permutation_selftest": "PASS",
+    "raw_duplicate_and_case_alias_json_rejection": "PASS",
+    "prove_it_strict_authority_schema_return_true": "PASS_FAILED_AS_REQUIRED_UNKNOWN_MANIFEST_ALIAS",
+    "fixed_point_lf_crlf_canonical_equivalence": "PASS",
+    "fresh_windows_autocrlf_checkout": "PASS",
+    "nested_json_type_rejection": "PASS",
+    "epoch_approval_time_lifecycle_rejection": "PASS",
+    "all_macro_and_collision_source_bindings": "PASS_IMMUTABLE_PARENT_BLOB",
+    "active_candidate_authority_selftest": "PASS",
+    "plan_path_ownership_selftest": "PASS",
+    "json_parse": "PASS",
+    "diff_check": "PASS",
+    "go_build_all": "PASS",
+    "go_vet_all": "PASS"
+  },
+  "external_source_refresh": {
+    "convert_from_json_duplicate_behavior": "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/convertfrom-json?view=powershell-7.5",
+    "finding": "ConvertFrom-Json keeps only the last duplicate key, so duplicate rejection must occur before object conversion"
+  },
+  "canonical_sha256": {
+    "master_plan": "5103adaced04e624f2e1fc9d5d69e7efdccb23830aecfac9010b2b66b484427e",
+    "scope_map": "832ffd41e4b70280a335ae4a3f82cc5486e0ded6b1156f186ec3d2c4bd62886d",
+    "ownership_state": "6233b92dbf3472c44b42af105e2b503b398e40f91008e90f97caa816f8a98c12",
+    "active_contracts": "6665a80d30c2b45319b8c8adce05430c6f6e3913ded92313c4ebbb381f11c9f6"
+  },
+  "fixed_point_proof_sha256": "bb5826b71a6d4fc5b30894825423b001a399c88b1a0b263e36552a7ee828ee4b",
+  "legacy_ledger_red": {
+    "verdict": "FAIL_EXPECTED",
+    "error_count": 12,
+    "only_failure_class": "current validator does not support explicit replacement transition_kind",
+    "closure_owner": "B12 scripts/production-gates/assert-plan-path-ownership.ps1",
+    "artifact_sha256": "8f93bf32b048aabd37eb2eff7294d1cb8ee7d73bb6f6e16b8100524c9144e632"
+  },
+  "document_r3": {
+    "head": "9ea95b6adc3a838a459bf78e3ba7a0292153960f",
+    "tree": "c15a731de8ca8acac09bce8b209e2a27dd6303cb",
+    "exact_path_count": 6,
+    "checker_state": "PENDING_FRESH",
+    "release_accepted": false
+  },
+  "scope": {
+    "rows": 69,
+    "unique_slices": 69,
+    "macro_grouped_rows": 43,
+    "macro_batches": 4
+  },
+  "github_mutation": false,
+  "product_implementation_in_a12": false
+}

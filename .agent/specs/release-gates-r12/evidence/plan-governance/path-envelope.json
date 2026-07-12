@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "branch": "work/prc-release-gates-r15-closed-world-authority",
+  "required_parent": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+  "rejected_predecessor": {
+    "head": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+    "verdict": "REJECT_HOLD_COMMITTED_MANIFEST_FIXED_POINT",
+    "b11_commit_exists": false
+  },
+  "commit_a12": {
+    "role": "governance",
+    "required_parent": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+    "paths": [
+      ".agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json",
+      ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+      ".agent/plans/2026-07-10-engram-production-ready-ownership-state.json",
+      ".agent/plans/2026-07-10-engram-production-ready-scope-map.json",
+      ".agent/reports/2026-07-11-release-gates-r12-plan-governance.md",
+      ".agent/specs/release-gates-r12/evidence/plan-governance/R12-PLAN-GOVERNANCE.red.json",
+      ".agent/specs/release-gates-r12/evidence/plan-governance/authority-snapshot.json",
+      ".agent/specs/release-gates-r12/evidence/plan-governance/boundary.json",
+      ".agent/specs/release-gates-r12/evidence/plan-governance/challenge-report.json",
+      ".agent/specs/release-gates-r12/evidence/plan-governance/fixed-point-proof.json",
+      ".agent/specs/release-gates-r12/evidence/plan-governance/gates-summary.json",
+      ".agent/specs/release-gates-r12/evidence/plan-governance/ledger.json",
+      ".agent/specs/release-gates-r12/evidence/plan-governance/path-envelope.json",
+      ".agent/specs/release-gates-r12/evidence/plan-governance/test-r12-plan-governance.ps1",
+      ".agent/specs/release-gates-r12/evidence/plan-governance/verification-summary.json"
+    ]
+  },
+  "successor_a13": {
+    "role": "authority-validation hardening",
+    "required_base": "3c7286ea155ed94fb42aa5225580edb320886fbc",
+    "changed_paths_must_remain_within_commit_a12_paths": true,
+    "exact_parent_envelope_path_count": 15,
+    "finding_classes": [
+      "canonical LF/CRLF-stable fixed-point hashing",
+      "strict nested JSON types",
+      "epoch approval time lifecycle and stale-loser invariants",
+      "complete MB1 through MB4 branch member dependency predecessor and path-count bindings",
+      "complete collision order and nonzero diagnostic-source bindings",
+      "hostile inverse must fail closed for every checker finding"
+    ]
+  },
+  "successor_a14": {
+    "role": "authority false-green closure",
+    "required_base": "69b4b871911a84f82ba5050d4d567bdac39a8767",
+    "changed_paths_must_remain_within_commit_a12_paths": true,
+    "exact_parent_envelope_path_count": 15,
+    "finding_classes": [
+      "strict required-status integration identity type and value",
+      "exact active epoch time window approval actor and authorized changes",
+      "immutable tracked macro source path candidate and canonical bytes",
+      "nonempty unique exact macro maker identities",
+      "thirty-case hostile matrix with zero false-greens"
+    ]
+  },
+  "successor_a15": {
+    "role": "closed-world authority validation",
+    "required_base": "cf85a59894150bdb122067c7bb2c421b3929f1e6",
+    "changed_paths_must_remain_within_commit_a12_paths": true,
+    "exact_parent_envelope_path_count": 15,
+    "finding_classes": [
+      "one immutable-source-bound recursive validator for every authority property type value and nested object",
+      "missing unknown alias duplicate and direct-bypass shapes fail closed",
+      "authoritative arrays require exact cardinality order and uniqueness including collision paths",
+      "raw duplicate and case-alias JSON properties are rejected before ConvertFrom-Json",
+      "generative property and permutation selftests plus sixty-five-case hostile matrix with zero false-greens"
+    ]
+  },
+  "commit_b12": {
+    "role": "implementation",
+    "required_parent": "COMMIT_A12",
+    "paths": [
+      ".agent/reports/2026-07-11-release-gates-r12-maker.md",
+      ".agent/specs/release-gates-r12/evidence/release-gates/R12-AUTHORITY-MAINTENANCE.red.json",
+      ".agent/specs/release-gates-r12/evidence/release-gates/R12-AUTHORITY-MAINTENANCE.tdd.json",
+      ".agent/specs/release-gates-r12/evidence/release-gates/critical-suite-summary.json",
+      ".agent/specs/release-gates-r12/evidence/release-gates/fresh-clones.json",
+      ".agent/specs/release-gates-r12/evidence/release-gates/gates-summary.json",
+      ".agent/specs/release-gates-r12/evidence/release-gates/linux-harness.json",
+      ".agent/specs/release-gates-r12/evidence/release-gates/maintenance-simulation.json",
+      ".agent/specs/release-gates-r12/evidence/release-gates/path-budget.json",
+      ".agent/specs/release-gates-r12/evidence/release-gates/prove-it.json",
+      ".agent/specs/release-gates-r12/evidence/release-gates/ruleset-model.json",
+      ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md",
+      ".agent/specs/release-gates-r12/evidence/release-gates/test-r12-authority-maintenance.ps1",
+      ".agent/specs/release-gates-r12/evidence/release-gates/verification-summary.json",
+      ".agent/specs/release-gates-r12/evidence/release-gates/windows-harness.json",
+      ".agent/specs/release-gates-r12/evidence/release-gates/workflow-conformance.json",
+      ".github/workflows/authority-guard.yml",
+      ".github/workflows/test.yml",
+      "scripts/production-gates/assert-active-candidate-path-authority.ps1",
+      "scripts/production-gates/assert-pr-authority-guard.ps1",
+      "scripts/production-gates/assert-pr-authority-maintenance.ps1"
+    ]
+  },
+  "db_shared_batch": {
+    "branch": "work/prc-data-integrity-macro-batch",
+    "external_base": "fef455bcf640f849c2d40c9bc26a459b5593e10a",
+    "same_branch_two_exact_non_overlapping_owners": true,
+    "implementation_is_outside_a12": true,
+    "superseded_pre_macro_branch": "work/prc-db-governance-project-isolation-r2-long-batch"
+  },
+  "document_r3_successor": {
+    "slice": "DOCUMENT-INGEST-PUBLIC-TRUTH-R3",
+    "branch": "work/prc-public-contracts-r3-atomic-remove",
+    "required_base": "efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0",
+    "immutable_head": "9ea95b6adc3a838a459bf78e3ba7a0292153960f",
+    "immutable_tree": "c15a731de8ca8acac09bce8b209e2a27dd6303cb",
+    "checker_state": "PENDING_FRESH",
+    "forbidden_ancestors": [
+      "26938199ccdc682295211d16dd736430419cf4ab",
+      "f3bba8815c97cf2000e46fdb2fbe1414d61a6264"
+    ],
+    "exact_paths": [
+      ".agent/reports/evidence/production-ready/document-r3-atomic-remove-20260712-0142/summary.json",
+      ".agent/specs/production-ready-document-r3-atomic-remove/evidence/DOCUMENT-R3-ATOMIC-REMOVE.red.json",
+      ".agent/specs/production-ready-document-r3-atomic-remove/evidence/DOCUMENT-R3-ATOMIC-REMOVE.tdd.json",
+      "internal/db/gorm/document_store.go",
+      "internal/mcp/document_public_truth_contract_test.go",
+      "internal/mcp/tools_documents.go"
+    ],
+    "scope_slot_replacement": true,
+    "scope_cardinality_after": 69
+  },
+  "macro_batch_source": {
+    "path": ".agent/specs/release-gates-r12/evidence/plan-governance/challenge-report.json",
+    "artifact_candidate": "69b4b871911a84f82ba5050d4d567bdac39a8767",
+    "source_candidate": "fef455bcf640f849c2d40c9bc26a459b5593e10a",
+    "canonical_sha256": "645bfc6817fe0f723df11398ee048bb1cfac004264cfa045d444289c51681e06",
+    "slice_cardinality_before": 69,
+    "slice_cardinality_after_required": 69
+  }
+}

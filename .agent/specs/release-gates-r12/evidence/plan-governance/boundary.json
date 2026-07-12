@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "repo_root": "D:/Dev/engram",
+  "worktree_path": "D:/Dev/engram/.agent/worktrees/release-gates-r15-closed-world-authority",
+  "branch": "work/prc-release-gates-r15-closed-world-authority",
+  "required_parent": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+  "work_mode": "worktree-required",
+  "foreign_repo_policy": "no foreign repository writes",
+  "github_mutation_authorized": false,
+  "r11_draft_policy": "preserve parked dirty draft; do not commit, merge, clean, or use as acceptance evidence",
+  "successor_base": "cf85a59894150bdb122067c7bb2c421b3929f1e6",
+  "successor_purpose": "R15 replaces recurring partial authority checks with one immutable-source-bound closed-world schema validator without expanding the 15-path parent envelope",
+  "allowed_paths_source": ".agent/specs/release-gates-r12/evidence/plan-governance/path-envelope.json",
+  "forbidden": [
+    "primary checkout edits",
+    "R11 B11 draft commit",
+    "live ruleset mutation",
+    "tag or release mutation",
+    "DB product implementation in the governance worktree"
+  ]
+}
