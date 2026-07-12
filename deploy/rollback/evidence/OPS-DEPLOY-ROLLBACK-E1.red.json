@@ -1,0 +1,10 @@
+{
+  "task_id": "OPS-DEPLOY-ROLLBACK-E1",
+  "stack": "POWERSHELL_COMPOSE",
+  "observed_at": "2026-07-13T01:47:43.3238965+03:00",
+  "test_file": "deploy/rollback/tests/contract.tests.ps1",
+  "test_name": "deployment and rollback contract tests",
+  "invariant": "Production compose must fail closed on secrets and mutable image references, expose semantic readiness, and provide a guarded rollback path.",
+  "failure_reason": "runtime health preflight helper is missing",
+  "status": "RED"
+}
