@@ -8,12 +8,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	_ "github.com/thebtf/engram/docs"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/logbuf"
+	"github.com/thebtf/engram/internal/module/obs"
 	"github.com/thebtf/engram/internal/worker"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 var Version = "dev"
@@ -50,16 +51,28 @@ func main() {
 		Str("version", Version).
 		Msg("Starting engram server")
 
+	telemetryCtx, telemetryCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	telemetry, err := obs.Init(telemetryCtx, Version)
+	telemetryCancel()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize observability")
+	}
+	obs.RecordRuntimeEvent(context.Background(), "startup", "started")
+
 	// Create service with version and log buffer
 	svc, err := worker.NewService(Version, logRing)
 	if err != nil {
+		obs.RecordRuntimeEvent(context.Background(), "worker", "initialization_error")
 		log.Fatal().Err(err).Msg("Failed to create service")
 	}
+	obs.RecordRuntimeEvent(context.Background(), "worker", "initialized")
 
 	// Bring up listeners and background workers.
 	if err := svc.Start(); err != nil {
+		obs.RecordRuntimeEvent(context.Background(), "server", "start_error")
 		log.Fatal().Err(err).Msg("Failed to start service")
 	}
+	obs.RecordRuntimeEvent(context.Background(), "server", "started")
 
 	// Block until the OS delivers SIGINT or SIGTERM.
 	quit := make(chan os.Signal, 1)
@@ -73,7 +86,16 @@ func main() {
 	defer cancel()
 
 	if err := svc.Shutdown(ctx); err != nil {
+		obs.RecordRuntimeEvent(ctx, "worker", "shutdown_error")
 		log.Error().Err(err).Msg("Shutdown error")
+	} else {
+		obs.RecordRuntimeEvent(ctx, "worker", "shutdown_complete")
+	}
+
+	telemetryCtx, telemetryCancel = context.WithTimeout(context.Background(), 5*time.Second)
+	defer telemetryCancel()
+	if err := telemetry.Shutdown(telemetryCtx); err != nil {
+		log.Error().Msg("Observability shutdown failed; check collector availability")
 	}
 
 	log.Info().Msg("Worker shutdown complete")
