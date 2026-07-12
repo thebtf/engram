@@ -1,0 +1,8 @@
+{
+  "task_id": "MB1-006",
+  "observed_at": "2026-07-11T22:58:44Z",
+  "test_file": "internal/worker/dream_cycle_test.go",
+  "test_name": "TestDreamCycle_FlagOffNoCandidates; TestDreamCycle_CandidatePersistenceUnavailableDoesNotExtractOrMark; TestDreamCycle_RouteFailurePreservesUnprocessedBatch; TestDreamCycle_GroupsExactProjectAndSessionProvenance",
+  "failure_reason": "Dream-cycle extracted and marked work without a live candidate path, marked failed routes processed, advanced the watermark, and combined different project/session provenance into one digest.",
+  "runner_stdout_excerpt": "F-off and nil-writer cases extracted, marked, and advanced; route failure marked transcript 92; two provenance groups produced one candidate."
+}

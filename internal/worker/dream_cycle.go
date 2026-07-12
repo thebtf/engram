@@ -3,6 +3,8 @@ package worker
 import (
 	"context"
 	"errors"
+	"os"
+	"sort"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -50,22 +52,25 @@ type dreamCandidateWriter interface {
 // marks transcripts processed, and advances an in-process time watermark.
 //
 // Safe defaults:
+//   - crystallization flag off, candidate flag off, or candidate store unavailable → return before reading transcripts.
 //   - No LLM configured (ErrLLMDisabled) → debug log, return; zero side-effects.
 //   - transcriptStore nil → debug log, return.
 //   - Zero transcripts since watermark → debug log, return.
 //   - LLM extraction error → warn log, return WITHOUT advancing watermark (retry next tick).
 //
-// RouteDecision returns (nil, nil) when ENGRAM_VNEXT_F_ENABLED is not set or
-// candidateStore is nil. In that case the dream-cycle logs a debug note and
-// skips the decision — the candidate path requires the F flag. This is by design:
-// the dream-cycle targets the candidate path only; legacy memory writes from the
-// per-session crystallization hook cover the flag-off scenario.
+// The candidate path is the only durable output. There is intentionally no
+// direct-memory fallback: consuming a transcript without a created-or-duplicate
+// candidate would lose work and would resurrect the demolished v5 path.
 func (s *Service) runDreamCrystallization(ctx context.Context) {
-	// -------------------------------------------------------------------------
-	// Step 1: Resolve transcript store — prefer test override, fall back to real.
-	// The dreamTranscriptStoreOverride field is set only in unit tests; in
-	// production it is always nil and the real transcriptStore is used.
-	// -------------------------------------------------------------------------
+	if !isCrystallizationEnabled() {
+		log.Debug().Msg("dream-cycle: crystallization disabled, no-op")
+		return
+	}
+	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") != "true" {
+		log.Debug().Msg("dream-cycle: candidate path disabled, no-op")
+		return
+	}
+
 	var ts dreamTranscriptStore
 	if s.dreamTranscriptStoreOverride != nil {
 		ts = s.dreamTranscriptStoreOverride
@@ -80,9 +85,6 @@ func (s *Service) runDreamCrystallization(ctx context.Context) {
 		ts = realTS
 	}
 
-	// Resolve candidate writer — prefer test seam, fall back to real store.
-	// dreamCandidateWriter is a worker-local interface mirror of crystallization.CandidateWriter
-	// so service.go need not import the crystallization package.
 	var candidateWriter dreamCandidateWriter
 	if s.dreamCandidateStoreOverride != nil {
 		candidateWriter = s.dreamCandidateStoreOverride
@@ -93,12 +95,11 @@ func (s *Service) runDreamCrystallization(ctx context.Context) {
 		}
 		s.initMu.RUnlock()
 	}
+	if candidateWriter == nil {
+		log.Debug().Msg("dream-cycle: candidate store not ready, no-op")
+		return
+	}
 
-	// Capture memory store for RouteDecision fingerprint check.
-	// Use a typed-nil guard: RouteDecision accepts a MemoryFingerprintChecker interface,
-	// and passing a (*gorm.MemoryStore)(nil) would be a non-nil interface with a nil
-	// concrete pointer, causing a panic inside RouteDecision. Assign to the interface
-	// only when the concrete pointer is non-nil.
 	s.initMu.RLock()
 	rawMemStore := s.memoryStore
 	s.initMu.RUnlock()
@@ -107,9 +108,6 @@ func (s *Service) runDreamCrystallization(ctx context.Context) {
 		memChecker = rawMemStore
 	}
 
-	// -------------------------------------------------------------------------
-	// Step 2: Resolve extractor — test seam or real LLM client.
-	// -------------------------------------------------------------------------
 	var extractFn dreamExtractFunc
 	if s.dreamExtractorFunc != nil {
 		extractFn = s.dreamExtractorFunc
@@ -127,16 +125,8 @@ func (s *Service) runDreamCrystallization(ctx context.Context) {
 		extractFn = extractor.Extract
 	}
 
-	// -------------------------------------------------------------------------
-	// Step 3: Determine transcript watermark (time-based, in-process).
-	// Reads the atomic dreamWatermark field; zero = time.Unix(0,0) = epoch start.
-	// -------------------------------------------------------------------------
 	watermarkNano := s.dreamWatermark.Load()
 	watermark := time.Unix(0, watermarkNano)
-
-	// -------------------------------------------------------------------------
-	// Step 4: List unprocessed transcripts since the watermark.
-	// -------------------------------------------------------------------------
 	transcripts, err := ts.ListUnprocessedSince(ctx, watermark)
 	if err != nil {
 		log.Warn().Err(err).Msg("dream-cycle: failed to list unprocessed transcripts, skipping")
@@ -147,119 +137,93 @@ func (s *Service) runDreamCrystallization(ctx context.Context) {
 		return
 	}
 
-	// -------------------------------------------------------------------------
-	// Step 5: Adaptive digest — compute mode and build the digest string.
-	// -------------------------------------------------------------------------
-	sessionSet := make(map[string]struct{}, len(transcripts))
-	projectSet := make(map[string]struct{}, len(transcripts))
-	var minCreated, maxCreated time.Time
+	type groupKey struct {
+		project   string
+		sessionID string
+	}
+	groups := make(map[groupKey][]gorm.SessionTranscript)
+	keys := make([]groupKey, 0)
+	var maxCreated time.Time
 	for _, t := range transcripts {
-		sessionSet[t.SessionID] = struct{}{}
-		projectSet[t.Project] = struct{}{}
-		if minCreated.IsZero() || t.CreatedAt.Before(minCreated) {
-			minCreated = t.CreatedAt
+		key := groupKey{project: t.Project, sessionID: t.SessionID}
+		if _, ok := groups[key]; !ok {
+			keys = append(keys, key)
 		}
+		groups[key] = append(groups[key], t)
 		if t.CreatedAt.After(maxCreated) {
 			maxCreated = t.CreatedAt
 		}
 	}
-	sessionCount := len(sessionSet)
-	span := maxCreated.Sub(minCreated)
-	// sharedProject is true only when transcripts span MORE THAN ONE distinct
-	// project — a single-project batch is NOT "shared". A single session from one
-	// project (sessionCount==1, one project) therefore stays per-session for a
-	// short span, instead of being forced to per-batch by a degenerate flag.
-	sharedProject := len(projectSet) > 1
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].project == keys[j].project {
+			return keys[i].sessionID < keys[j].sessionID
+		}
+		return keys[i].project < keys[j].project
+	})
 
-	mode := crystallization.SelectMode(sessionCount, span, sharedProject)
-	contents := make([]string, len(transcripts))
-	for i, t := range transcripts {
-		contents[i] = t.Content
-	}
-	digest := crystallization.BuildDigest(contents, mode)
-
-	// -------------------------------------------------------------------------
-	// Step 6: Extract decisions via LLM.
-	// Errors here do NOT advance the watermark — retry on next tick.
-	// -------------------------------------------------------------------------
-	decisions, err := extractFn(ctx, digest)
-	if err != nil {
-		log.Warn().Err(err).
-			Int("transcripts", len(transcripts)).
-			Msg("dream-cycle: extraction failed, watermark not advanced (will retry)")
-		return
-	}
-
-	// -------------------------------------------------------------------------
-	// Step 7: Route each decision to a candidate via RouteDecision.
-	//
-	// Provenance: for per-batch mode there is no single canonical SessionID, so
-	// we use the first transcript's SessionID and Project as batch provenance.
-	// This is documented as the chosen convention; an empty "" was considered but
-	// ruled out because RouteDecision passes sessionID into models.NewCrystallizationCandidate
-	// which uses it for fingerprinting — a non-empty value yields a stable fingerprint.
-	//
-	// DetectLoss: applies to the supersede/update path where an existing candidate
-	// would be overwritten with a lossy replacement. The dream-cycle only CREATES
-	// new candidates (RouteDecision handles idempotency via fingerprint checks).
-	// DetectLoss is therefore not wired here.
-	// TODO(crystal): wire DetectLoss in a future supersede path that updates an
-	// existing candidate's text/evidence fields — see loss.go for the contract.
-	//
-	// RouteDecision returns (nil, nil) when ENGRAM_VNEXT_F_ENABLED is unset or
-	// candidateStore is nil. Candidates require the F flag; the legacy memory path
-	// in the per-session crystallization hook covers the flag-off scenario.
-	// -------------------------------------------------------------------------
-	provenanceSessionID := transcripts[0].SessionID
-	provenanceProject := transcripts[0].Project
-
+	allSucceeded := true
+	decisionsExtracted := 0
 	candidatesCreated := 0
-	for _, decision := range decisions {
-		result, routeErr := crystallization.RouteDecision(
-			ctx,
-			decision,
-			provenanceSessionID,
-			provenanceProject,
-			candidateWriter,
-			memChecker,
-		)
-		if routeErr != nil {
-			log.Warn().Err(routeErr).
-				Str("text_prefix", dreamTruncate(decision.Text, 80)).
-				Msg("dream-cycle: route decision failed, skipping this decision")
+	processedTranscripts := 0
+	digestMode := "per-session"
+	for _, key := range keys {
+		batch := groups[key]
+		sort.Slice(batch, func(i, j int) bool {
+			if batch[i].CreatedAt.Equal(batch[j].CreatedAt) {
+				return batch[i].ID < batch[j].ID
+			}
+			return batch[i].CreatedAt.Before(batch[j].CreatedAt)
+		})
+		contents := make([]string, len(batch))
+		for i := range batch {
+			contents[i] = batch[i].Content
+		}
+		span := batch[len(batch)-1].CreatedAt.Sub(batch[0].CreatedAt)
+		mode := crystallization.SelectMode(1, span, false)
+		digestMode = string(mode)
+		decisions, extractErr := extractFn(ctx, crystallization.BuildDigest(contents, mode))
+		if extractErr != nil {
+			allSucceeded = false
+			log.Warn().Err(extractErr).
+				Str("project", key.project).
+				Str("session_id", key.sessionID).
+				Msg("dream-cycle: extraction failed, group retained for retry")
 			continue
 		}
-		if result == nil {
-			// F flag off or candidateStore nil — candidates require ENGRAM_VNEXT_F_ENABLED=true.
-			log.Debug().Msg("dream-cycle: RouteDecision returned nil (F-flag off or candidateStore nil) — candidate path inactive")
+		decisionsExtracted += len(decisions)
+		groupSucceeded := true
+		for _, decision := range decisions {
+			result, routeErr := crystallization.RouteDecision(ctx, decision, key.sessionID, key.project, candidateWriter, memChecker)
+			if routeErr != nil || result == nil {
+				allSucceeded = false
+				groupSucceeded = false
+				log.Warn().Err(routeErr).
+					Str("project", key.project).
+					Str("session_id", key.sessionID).
+					Str("text_prefix", dreamTruncate(decision.Text, 80)).
+					Msg("dream-cycle: route failed, group retained for fingerprint-safe retry")
+				break
+			}
+			if !result.Duplicate && result.CandidateID > 0 {
+				candidatesCreated++
+			}
+		}
+		if !groupSucceeded {
 			continue
 		}
-		if result.Duplicate {
-			log.Debug().
-				Str("text_prefix", dreamTruncate(decision.Text, 80)).
-				Msg("dream-cycle: duplicate decision fingerprint, skipping")
+		ids := make([]int64, len(batch))
+		for i := range batch {
+			ids[i] = batch[i].ID
+		}
+		if markErr := ts.MarkProcessed(ctx, ids); markErr != nil {
+			allSucceeded = false
+			log.Warn().Err(markErr).
+				Str("project", key.project).
+				Str("session_id", key.sessionID).
+				Msg("dream-cycle: mark failed, group retained for fingerprint-safe retry")
 			continue
 		}
-		if result.CandidateID > 0 {
-			candidatesCreated++
-		}
-	}
-
-	// -------------------------------------------------------------------------
-	// Step 8: Mark transcripts processed and prune.
-	// MarkProcessed failure is non-fatal: we still attempt prune and watermark
-	// advance so the batch is not permanently stuck.
-	// -------------------------------------------------------------------------
-	ids := make([]int64, len(transcripts))
-	for i, t := range transcripts {
-		ids[i] = t.ID
-	}
-	if markErr := ts.MarkProcessed(ctx, ids); markErr != nil {
-		// MarkProcessed failure is a hard stop: without the processed_at stamp the
-		// watermark must not advance, or these transcripts fall behind the watermark
-		// with processed_at=NULL and are silently lost from future runs.
-		log.Warn().Err(markErr).Msg("dream-cycle: failed to mark transcripts processed, watermark not advanced (will retry)")
-		return
+		processedTranscripts += len(batch)
 	}
 
 	pruned, pruneErr := ts.PruneProcessed(ctx)
@@ -267,36 +231,31 @@ func (s *Service) runDreamCrystallization(ctx context.Context) {
 		log.Warn().Err(pruneErr).Msg("dream-cycle: failed to prune processed transcripts")
 	}
 
-	// Prune stale unprocessed transcripts using the configured retention window.
-	// s.config.TranscriptRetentionDays == 0 (the default) is a documented no-op in
-	// TranscriptStore.PruneUnprocessedOlderThan, so no special-casing is needed.
-	// Env: ENGRAM_TRANSCRIPT_RETENTION_DAYS (parsed by config.Load).
-	retentionDays := 0
-	if s.config != nil {
-		retentionDays = s.config.TranscriptRetentionDays
-	}
-	pruneOldCount, pruneOldErr := ts.PruneUnprocessedOlderThan(ctx, retentionDays)
-	if pruneOldErr != nil {
-		log.Warn().Err(pruneOldErr).Msg("dream-cycle: failed to prune old unprocessed transcripts")
+	var pruneOldCount int64
+	if allSucceeded {
+		retentionDays := 0
+		if s.config != nil {
+			retentionDays = s.config.TranscriptRetentionDays
+		}
+		var pruneOldErr error
+		pruneOldCount, pruneOldErr = ts.PruneUnprocessedOlderThan(ctx, retentionDays)
+		if pruneOldErr != nil {
+			log.Warn().Err(pruneOldErr).Msg("dream-cycle: failed to prune old unprocessed transcripts")
+		}
+		s.dreamWatermark.Store(maxCreated.UnixNano())
 	}
 
-	// -------------------------------------------------------------------------
-	// Step 9: Advance watermark to the max created_at of the batch.
-	// Only reached when extraction succeeded.
-	// -------------------------------------------------------------------------
-	s.dreamWatermark.Store(maxCreated.UnixNano())
-
-	// -------------------------------------------------------------------------
-	// Step 10: Structured log of counts.
-	// -------------------------------------------------------------------------
 	log.Info().
 		Int("transcripts_read", len(transcripts)).
-		Int("decisions_extracted", len(decisions)).
+		Int("transcripts_processed", processedTranscripts).
+		Int("decisions_extracted", decisionsExtracted).
 		Int("candidates_created", candidatesCreated).
 		Int64("transcripts_pruned", pruned).
 		Int64("old_unprocessed_pruned", pruneOldCount).
-		Str("digest_mode", string(mode)).
-		Time("new_watermark", maxCreated).
+		Str("digest_mode", digestMode).
+		Bool("all_groups_succeeded", allSucceeded).
+		Int("provenance_groups", len(keys)).
+		Time("new_watermark", time.Unix(0, s.dreamWatermark.Load())).
 		Msg("dream-cycle: crystallization complete")
 }
 
@@ -315,15 +274,18 @@ func dreamTruncate(text string, n int) string {
 // ---------------------------------------------------------------------------
 
 type fakeTranscriptStore struct {
-	rows        []gorm.SessionTranscript
-	marked      []int64
-	prunedCount int64
+	rows         []gorm.SessionTranscript
+	marked       []int64
+	processed    map[int64]bool
+	markFailures int
+	markErr      error
+	prunedCount  int64
 }
 
 func (f *fakeTranscriptStore) ListUnprocessedSince(_ context.Context, watermark time.Time) ([]gorm.SessionTranscript, error) {
 	var out []gorm.SessionTranscript
 	for _, r := range f.rows {
-		if !r.CreatedAt.Before(watermark) {
+		if !f.processed[r.ID] && !r.CreatedAt.Before(watermark) {
 			out = append(out, r)
 		}
 	}
@@ -331,7 +293,20 @@ func (f *fakeTranscriptStore) ListUnprocessedSince(_ context.Context, watermark 
 }
 
 func (f *fakeTranscriptStore) MarkProcessed(_ context.Context, ids []int64) error {
+	if f.markFailures > 0 {
+		f.markFailures--
+		if f.markErr != nil {
+			return f.markErr
+		}
+		return errors.New("injected mark failure")
+	}
 	f.marked = append(f.marked, ids...)
+	if f.processed == nil {
+		f.processed = make(map[int64]bool)
+	}
+	for _, id := range ids {
+		f.processed[id] = true
+	}
 	return nil
 }
 
