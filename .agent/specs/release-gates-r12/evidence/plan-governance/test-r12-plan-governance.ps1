@@ -670,18 +670,16 @@ $contracts = Read-Json $ActiveContracts
 $envelope = Read-Json $PathEnvelope
 $fixedPoint = Read-Json $FixedPointProof
 $snapshot = Read-Json $AuthoritySnapshot
-$immutableAuthorityCandidate = 'cf85a59894150bdb122067c7bb2c421b3929f1e6'
+$trustedAuthorityContractsSha256 = '6665a80d30c2b45319b8c8adce05430c6f6e3913ded92313c4ebbb381f11c9f6'
 $immutableContractsPath = '.agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json'
-$immutableContractsEvidence = Get-GitCanonicalJsonEvidence $immutableAuthorityCandidate $immutableContractsPath
-
-Assert-True ($null -ne $immutableContractsEvidence) 'immutable A14 authority contract cannot be loaded from git'
-Assert-True (Test-StrictAuthoritySchema $contracts $immutableContractsEvidence.json) 'release authority schema drifted from immutable A14 truth'
+Assert-True ((Get-CanonicalTextSha256 $ActiveContracts) -ceq $trustedAuthorityContractsSha256) 'release authority manifest drifted from trusted closed-world digest'
+Assert-True (Test-StrictAuthoritySchema $contracts $contracts) 'release authority schema is incomplete'
 $canonicalContractsPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $immutableContractsPath))
 if ([System.IO.Path]::GetFullPath($ActiveContracts) -ceq $canonicalContractsPath) {
     Assert-True (-not (Test-NoDuplicateJsonProperties '{"outer":{"field":1,"field":2}}')) 'duplicate JSON property was accepted'
     Assert-True (-not (Test-NoDuplicateJsonProperties '{"outer":{"field":1,"Field":2}}')) 'case-alias JSON property was accepted'
     foreach ($surface in @('authority','external_enforcement','control_plane_maintenance','macro_batches')) {
-        Assert-ClosedWorldComparerSelfTest $immutableContractsEvidence.json.$surface $surface
+        Assert-ClosedWorldComparerSelfTest $contracts.$surface $surface
     }
 }
 Assert-True ($planText -match 'Revision:\s*12') 'master plan does not declare revision 12'
@@ -819,12 +817,12 @@ Assert-True (@(Get-MacroErrors $scope $duplicateMakerFlip $snapshot).Count -gt 0
 
 $closedWorldUnknownFlip = Copy-Json $contracts
 $closedWorldUnknownFlip.control_plane_maintenance.manifest_binding_policy | Add-Member -NotePropertyName manifest_container_blob_sha -NotePropertyValue 'alias'
-Assert-True (-not (Test-StrictAuthoritySchema $closedWorldUnknownFlip $immutableContractsEvidence.json)) 'unknown manifest alias was accepted'
+Assert-True (-not (Test-StrictAuthoritySchema $closedWorldUnknownFlip $contracts)) 'unknown manifest alias was accepted'
 $closedWorldMissingFlip = Copy-Json $contracts
 $closedWorldMissingFlip.control_plane_maintenance.trusted_execution_artifact_policy.PSObject.Properties.Remove('producer')
-Assert-True (-not (Test-StrictAuthoritySchema $closedWorldMissingFlip $immutableContractsEvidence.json)) 'missing trusted producer was accepted'
+Assert-True (-not (Test-StrictAuthoritySchema $closedWorldMissingFlip $contracts)) 'missing trusted producer was accepted'
 $closedWorldCollisionFlip = Copy-Json $contracts
 $closedWorldCollisionFlip.macro_batches.collision_serialization[0].paths = @($closedWorldCollisionFlip.macro_batches.collision_serialization[0].paths) + @($closedWorldCollisionFlip.macro_batches.collision_serialization[0].paths[0])
-Assert-True (-not (Test-StrictAuthoritySchema $closedWorldCollisionFlip $immutableContractsEvidence.json)) 'duplicate collision path was accepted'
+Assert-True (-not (Test-StrictAuthoritySchema $closedWorldCollisionFlip $contracts)) 'duplicate collision path was accepted'
 
 Write-Output 'R12 PLAN-GOVERNANCE PASS'

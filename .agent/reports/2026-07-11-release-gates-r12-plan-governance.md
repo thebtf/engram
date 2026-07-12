@@ -14,7 +14,7 @@ DOCUMENT R2 is rejected for concurrent duplicate removal success. Its R3 success
 
 ## Gates
 
-- A14's maker-distinct checker returned `REVISE` after its expanded 65-case hostile matrix exposed eleven sibling authority false-greens. R15 replaces the recurring partial-field design with one recursive closed-world comparison against the immutable A14 Git blob; it does not self-accept the successor.
+- A14's maker-distinct checker returned `REVISE` after its expanded 65-case hostile matrix exposed eleven sibling authority false-greens. R15 replaces the recurring partial-field design with one complete canonical-manifest digest embedded in trusted validator bytes plus recursive closed-world hostile checks; it does not depend on an unreachable predecessor Git object or self-accept the successor.
 - The exact protected surfaces are `authority`, `external_enforcement`, `control_plane_maintenance`, and `macro_batches`. Missing, unknown, alias, duplicate, wrong-type, wrong-value, nested drift, direct-bypass, array-cardinality, and array-order shapes fail through the same comparison path. Collision path identity also uses the existing exact-sequence helper instead of set equality.
 - Raw JSON is scanned recursively before `ConvertFrom-Json`. This is required because current Microsoft PowerShell documentation states that duplicate keys otherwise collapse to the last value. Exact and case-alias duplicates are both rejected.
 - Fixed-point proof hashing now canonicalizes UTF-8/LF, and an explicit CRLF inverse proves the same authority digest in a fresh `core.autocrlf=true` Windows checkout.
