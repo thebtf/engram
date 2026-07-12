@@ -667,7 +667,6 @@ func TestGetSessionStartContext_RuleRouterEnabledPacketShape(t *testing.T) {
 	kernelID := insertSessionStartRuleVersion(t, db, project+"-kernel", models.RuleStateKernel, "developer", 1000003, map[string]any{})
 	activeProjectID := insertSessionStartRuleVersion(t, db, project+"-active", models.RuleStateActiveProject, "developer", 1000002, map[string]any{"project": project})
 	suppressedID := insertSessionStartRuleVersion(t, db, project+"-other", models.RuleStateActiveProject, "developer", 1000001, map[string]any{"project": otherProject})
-	_ = suppressedID
 
 	ruleStore := localgorm.NewBehavioralRulesStore(&localgorm.Store{DB: db})
 	legacyRule, err := ruleStore.Create(ctx, &models.BehavioralRule{
@@ -695,7 +694,12 @@ func TestGetSessionStartContext_RuleRouterEnabledPacketShape(t *testing.T) {
 	require.Equal(t, "router", resp.RuleRouter.Mode)
 	require.Equal(t, int32(1), resp.RuleRouter.KernelCount)
 	require.Equal(t, int32(2), resp.RuleRouter.ContextualCount)
-	require.Equal(t, int32(1), resp.RuleRouter.SuppressedCount)
+	require.Equal(t, int32(len(resp.RuleRouter.Suppressed)), resp.RuleRouter.SuppressedCount)
+	suppressedByVersion := map[int64]*pb.SessionStartRulePacket{}
+	for _, packet := range resp.RuleRouter.Suppressed {
+		suppressedByVersion[packet.RuleVersionId] = packet
+	}
+	require.Contains(t, suppressedByVersion, suppressedID)
 	require.Equal(t, "within_budget", resp.RuleRouter.BudgetOutcome)
 
 	require.Len(t, resp.RuleRouter.Kernel, 1)
