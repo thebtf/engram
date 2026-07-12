@@ -67,7 +67,6 @@ func (s *Server) handleListDocuments(ctx context.Context, args json.RawMessage) 
 	if err != nil {
 		return "", err
 	}
-
 	var params struct {
 		Collection string
 	}
@@ -127,7 +126,6 @@ func (s *Server) handleGetDocument(ctx context.Context, args json.RawMessage) (s
 	if err != nil {
 		return "", err
 	}
-
 	var params struct {
 		Collection string
 		Path       string
@@ -171,6 +169,11 @@ func (s *Server) handleRemoveDocument(ctx context.Context, args json.RawMessage)
 	if err != nil {
 		return "", err
 	}
+	for _, key := range []string{"collection", "path"} {
+		if _, _, fieldErr := optionalStringArg(m, key); fieldErr != nil {
+			return "", fmt.Errorf("remove_document: %w", fieldErr)
+		}
+	}
 
 	var params struct {
 		Collection string
@@ -202,6 +205,11 @@ func (s *Server) handleIngestDocument(ctx context.Context, args json.RawMessage)
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
+	}
+	for _, key := range []string{"collection", "path", "content", "title"} {
+		if _, _, fieldErr := optionalStringArg(m, key); fieldErr != nil {
+			return "", fmt.Errorf("ingest_document: %w", fieldErr)
+		}
 	}
 
 	var params struct {

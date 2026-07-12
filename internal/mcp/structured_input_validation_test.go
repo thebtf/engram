@@ -17,15 +17,18 @@ import (
 )
 
 type structuredMutationHarness struct {
-	server       *Server
-	store        *gormdb.Store
-	rules        *fakeRuleGovernanceStore
-	significance *fakeMemorySignificanceUpdater
-	editor       *mockMemoryEditor
-	ctx          context.Context
-	marker       string
-	documentID   int64
-	suppressID   int64
+	server        *Server
+	store         *gormdb.Store
+	rules         *fakeRuleGovernanceStore
+	significance  *fakeMemorySignificanceUpdater
+	editor        *mockMemoryEditor
+	ctx           context.Context
+	marker        string
+	documentID    int64
+	suppressID    int64
+	ragCollection string
+	ragPath       string
+	ragHash       string
 }
 
 func newStructuredMutationHarness(t *testing.T) *structuredMutationHarness {
@@ -48,6 +51,12 @@ func newStructuredMutationHarness(t *testing.T) *structuredMutationHarness {
 		context.Background(), marker+".md", marker, "fixture", "markdown", "{}", marker,
 	)
 	require.NoError(t, err)
+	documentStore := gormdb.NewDocumentStore(store)
+	ragCollection := marker + "-collection"
+	ragPath := marker + ".txt"
+	ragDocument, err := documentStore.UpsertDocument(context.Background(), ragCollection, ragPath, marker, marker+"-body")
+	require.NoError(t, err)
+	require.True(t, ragDocument.Hash.Valid)
 
 	rules := &fakeRuleGovernanceStore{}
 	significance := &fakeMemorySignificanceUpdater{}
@@ -58,7 +67,7 @@ func newStructuredMutationHarness(t *testing.T) *structuredMutationHarness {
 		Project: marker, Content: "suppress-fixture-" + marker, SourceAgent: "mb1-strict",
 	})
 	require.NoError(t, err)
-	server := NewServer(ServerOptions{Version: "mb1-structured-input"})
+	server := NewServer(ServerOptions{Version: "mb1-structured-input", DocumentStore: documentStore})
 	server.SetMemoryStore(memoryStore)
 	server.SetAuditStore(auditStore)
 	server.SetCandidateStore(gormdb.NewCandidateStore(store.DB, auditStore))
@@ -76,6 +85,8 @@ func newStructuredMutationHarness(t *testing.T) *structuredMutationHarness {
 	t.Cleanup(func() {
 		_ = store.DB.Exec("DELETE FROM versioned_document_comments WHERE document_id = ?", documentID).Error
 		_ = store.DB.Exec("DELETE FROM versioned_documents WHERE id = ?", documentID).Error
+		_ = store.DB.Exec("DELETE FROM documents WHERE collection = ? AND path = ?", ragCollection, ragPath).Error
+		_ = store.DB.Exec("DELETE FROM content WHERE hash = ?", ragDocument.Hash.String).Error
 		_ = store.DB.Unscoped().Exec("DELETE FROM memories WHERE project = ? OR content LIKE ?", marker, marker+"%").Error
 		_ = store.DB.Exec("DELETE FROM audit_log WHERE actor = ? OR source_session_id = ?", marker, marker).Error
 		_ = store.DB.Exec("DELETE FROM bulk_op_snapshots WHERE actor = ? OR source_session_id = ?", marker, marker).Error
@@ -84,15 +95,18 @@ func newStructuredMutationHarness(t *testing.T) *structuredMutationHarness {
 	})
 
 	return &structuredMutationHarness{
-		server:       server,
-		store:        store,
-		rules:        rules,
-		significance: significance,
-		editor:       editor,
-		ctx:          ctx,
-		marker:       marker,
-		documentID:   documentID,
-		suppressID:   suppressFixture.ID,
+		server:        server,
+		store:         store,
+		rules:         rules,
+		significance:  significance,
+		editor:        editor,
+		ctx:           ctx,
+		marker:        marker,
+		documentID:    documentID,
+		suppressID:    suppressFixture.ID,
+		ragCollection: ragCollection,
+		ragPath:       ragPath,
+		ragHash:       ragDocument.Hash.String,
 	}
 }
 
@@ -119,6 +133,12 @@ func (h *structuredMutationHarness) requireZeroDurableDelta(t *testing.T) {
 		"SELECT count(*) FROM memories WHERE id = ? AND deleted_at IS NULL", h.suppressID,
 	).Scan(&activeSuppressFixture).Error)
 	require.EqualValues(t, 1, activeSuppressFixture, "malformed suppress selector deleted the durable row")
+	var activeDocument int64
+	require.NoError(t, h.store.DB.Raw(
+		"SELECT count(*) FROM documents WHERE collection = ? AND path = ? AND active = true AND hash = ?",
+		h.ragCollection, h.ragPath, h.ragHash,
+	).Scan(&activeDocument).Error)
+	require.EqualValues(t, 1, activeDocument, "malformed document mutation changed the durable document")
 	require.Zero(t, h.rules.transitionID)
 	require.Empty(t, h.rules.pinSnapshotID)
 	require.Empty(t, h.rules.rollbackID)
@@ -163,6 +183,12 @@ func TestStructuredMutationSchemasMatchStrictHandlers(t *testing.T) {
 		{tool: "doc_comment", property: "document_id", typeName: "integer"},
 		{tool: "doc_comment", property: "line_start", typeName: "integer"},
 		{tool: "doc_comment", property: "line_end", typeName: "integer"},
+		{tool: "remove_document", property: "collection", typeName: "string"},
+		{tool: "remove_document", property: "path", typeName: "string"},
+		{tool: "ingest_document", property: "collection", typeName: "string"},
+		{tool: "ingest_document", property: "path", typeName: "string"},
+		{tool: "ingest_document", property: "content", typeName: "string"},
+		{tool: "ingest_document", property: "title", typeName: "string"},
 		{tool: "rule_governance_transition", property: "rule_version_id", typeName: "integer"},
 		{tool: "rule_governance_pin_snapshot", property: "pinned", typeName: "boolean"},
 		{tool: "rate_memory_significance", property: "id", typeName: "integer"},
@@ -223,6 +249,36 @@ func TestStructuredMutationInputsRejectWithoutDurableDelta(t *testing.T) {
 			name: "document comment numeric string line",
 			call: func() (string, error) {
 				return h.server.handleDocComment(h.ctx, json.RawMessage(fmt.Sprintf(`{"document_id":%d,"content":%q,"author":%q,"line_start":"1"}`, h.documentID, h.marker+"-comment", h.marker)))
+			},
+		},
+		{
+			name: "document remove coerced collection and path",
+			call: func() (string, error) {
+				return h.server.handleRemoveDocument(h.ctx, json.RawMessage(`{"collection":123,"path":true}`))
+			},
+		},
+		{
+			name: "document ingest numeric collection",
+			call: func() (string, error) {
+				return h.server.handleIngestDocument(h.ctx, json.RawMessage(fmt.Sprintf(`{"collection":123,"path":%q,"content":"replacement","title":"title"}`, h.ragPath)))
+			},
+		},
+		{
+			name: "document ingest boolean path",
+			call: func() (string, error) {
+				return h.server.handleIngestDocument(h.ctx, json.RawMessage(fmt.Sprintf(`{"collection":%q,"path":true,"content":"replacement","title":"title"}`, h.ragCollection)))
+			},
+		},
+		{
+			name: "document ingest numeric content",
+			call: func() (string, error) {
+				return h.server.handleIngestDocument(h.ctx, json.RawMessage(fmt.Sprintf(`{"collection":%q,"path":%q,"content":123,"title":"title"}`, h.ragCollection, h.ragPath)))
+			},
+		},
+		{
+			name: "document ingest boolean title",
+			call: func() (string, error) {
+				return h.server.handleIngestDocument(h.ctx, json.RawMessage(fmt.Sprintf(`{"collection":%q,"path":%q,"content":"replacement","title":true}`, h.ragCollection, h.ragPath)))
 			},
 		},
 		{
