@@ -505,6 +505,9 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 	t.Run("workflow_run provenance and protected-main authority matrix", func(t *testing.T) {
 		testWorkflowRunTrustMatrix(t, repo)
 	})
+	t.Run("workflow_run publisher selector matrix", func(t *testing.T) {
+		testWorkflowRunPublisherSelector(t, publisher, repo)
+	})
 	t.Run("same-run immutable artifact bridge matrix", func(t *testing.T) {
 		testArtifactBridgeMatrix(t, repo)
 	})
@@ -516,6 +519,48 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 	})
 	t.Run("movement before and after old guard", func(t *testing.T) {
 		testImmutableTagMovement(t, repo)
+	})
+}
+
+func testWorkflowRunPublisherSelector(t *testing.T, publisher, repo string) {
+	t.Helper()
+	const selector = "if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'v')"
+	if !strings.Contains(strings.ReplaceAll(publisher, "\r\n", "\n"), selector) {
+		t.Fatalf("publisher does not gate preflight with the exact successful push/tag-shaped selector %q", selector)
+	}
+
+	shouldEnterPreflight := func(conclusion, event, headBranch string) bool {
+		return conclusion == "success" && event == "push" && strings.HasPrefix(headBranch, "v")
+	}
+	for _, test := range []struct {
+		name                          string
+		conclusion, event, headBranch string
+		want                          bool
+	}{
+		{name: "successful pull request skips", conclusion: "success", event: "pull_request", headBranch: "feature/image", want: false},
+		{name: "successful main push skips", conclusion: "success", event: "push", headBranch: "main", want: false},
+		{name: "successful tag-shaped push enters", conclusion: "success", event: "push", headBranch: "v6.43.0", want: true},
+		{name: "failed tag push skips", conclusion: "failure", event: "push", headBranch: "v6.43.0", want: false},
+		{name: "cancelled tag push skips", conclusion: "cancelled", event: "push", headBranch: "v6.43.0", want: false},
+		{name: "hostile pull request lookalike skips", conclusion: "success", event: "pull_request", headBranch: "v6.43.0", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := shouldEnterPreflight(test.conclusion, test.event, test.headBranch); got != test.want {
+				t.Fatalf("selector decision = %v, want %v", got, test.want)
+			}
+		})
+	}
+
+	t.Run("hostile tag-shaped push still fails closed in preflight", func(t *testing.T) {
+		fixtureValue := workflowRunFixture(strings.Repeat("a", 40), "v1$(printf${IFS}INJECTED)")
+		fixture := writeJSONFixture(t, fixtureValue)
+		output := runImageGate(t, repo, false,
+			"-Mode", "ValidateWorkflowRun",
+			"-WorkflowRunFixturePath", fixture,
+			"-Repository", "thebtf/engram")
+		if strings.Contains(output, "value=v1INJECTED") {
+			t.Fatalf("hostile workflow_run ref was evaluated as shell source: %s", output)
+		}
 	})
 }
 
