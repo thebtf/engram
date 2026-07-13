@@ -1,9 +1,10 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-07-13T13:02:41.0943011Z",
+  "captured_at": "2026-07-13T14:55:10.3462226Z",
   "batch": "RELEASE-CI-R1 fresh-runner prerequisites and Unix permission API",
   "base_commit": "cac31c23857821df302afb6eb68d015598892d74",
-  "verdict": "PASS_LOCAL_PENDING_EXACT_HEAD_IMAGE_GATE_AND_REMOTE_CI",
+  "exact_candidate_before_service_id_repair": "8230a3941fa54dac928a71ac79661b8fc072d1ec",
+  "verdict": "PASS_LOCAL_EXACT_HEAD_IMAGE_GATE_REMOTE_SERVICE_ID_REPAIR_PENDING_REPLAY",
   "red": ".agent/specs/release-ci-r1/evidence/RELEASE-CI-R1.red.json",
   "implementation": {
     "unix_mode_api": "reuse System.IO.File.Set/GetUnixFileMode for both file and directory paths, per the official .NET API",
@@ -15,14 +16,15 @@
       "engram:prc-postgres"
     ],
     "recovery_image": "ENGRAM_RECOVERY_POSTGRES_IMAGE=engram:prc-postgres",
-    "crlf_hostile_fixture": "workflow-level write-permission mutation accepts LF and CRLF bytes and must change exactly one block"
+    "crlf_hostile_fixture": "workflow-level write-permission mutation accepts LF and CRLF bytes and must change exactly one block",
+    "service_container_identity": "bind POSTGRES_CONTAINER to the official GitHub job.services.postgres.id context, verify that exact ID with docker inspect, and forbid mutable image/tag discovery"
   },
   "green": {
     "powershell_ast": "PASS",
     "windows_acl_selftest": "PASS owner+LocalSystem",
     "linux_container_selftest": "PASS directory_mode=700 file_mode=644",
     "actionlint": "PASS",
-    "workflow_conformance": "PASS 71 hostile mutations rejected",
+    "workflow_conformance": "PASS 72 hostile mutations rejected",
     "authority_replay": {
       "verdict": "PASS",
       "runs": 2,
@@ -34,19 +36,32 @@
         ".agent/specs/release-ci-r1/evidence/authority-run2.json"
       ]
     },
-    "exact_head_build_and_scan": "PENDING",
-    "critical_suite": "PENDING",
-    "dev_stand": "PENDING",
-    "remote_release_job": "PENDING"
+    "exact_head_build_and_scan": {
+      "verdict": "PASS",
+      "source_commit": "8230a3941fa54dac928a71ac79661b8fc072d1ec",
+      "artifact": ".agent/e/release-ci-r1/image-gate-8230a394-root1/final-image-set.json",
+      "artifact_sha256": "6b6841c7f58501b37eb3fadb0823967d70c73d1abd9b15d13a83ca16a334e7ee",
+      "no_allowlist": true,
+      "high_critical_findings": 0,
+      "critical_runtime_seconds": 203.922,
+      "compose_recreation": "PASS",
+      "cleanup": "PASS"
+    },
+    "critical_suite": "PENDING_EXACT_HEAD_AFTER_SERVICE_ID_REPAIR",
+    "dev_stand": "PENDING_EXACT_HEAD_AFTER_SERVICE_ID_REPAIR",
+    "remote_os_matrix": "PASS_UBUNTU_WINDOWS_MACOS_AT_8230A394",
+    "remote_release_job": "FAIL_AT_8230A394_SERVICE_CONTAINER_ANCESTOR_DISCOVERY_RETURNED_EMPTY; ROOT_CAUSE_REPAIRED_PENDING_EXACT_HEAD_REPLAY",
+    "remote_run": "https://github.com/thebtf/engram/actions/runs/29258547103"
   },
   "external_sources": {
     "context7": "current .NET corpus consulted; related APIs are File.SetUnixFileMode and FileSystemInfo.UnixFileMode",
     "parallel": "official Microsoft File.SetUnixFileMode and actions/checkout full-history contracts consulted",
+    "github_docs": "official contexts reference confirms job.services.<service_id>.id is the service container ID",
     "tavily": "BLOCKED_OAUTH_AUTHORIZATION_REQUIRED",
     "training_memory_substituted": false
   },
   "sha256": {
-    ".github/workflows/test.yml": "24c907ede5c555dea41bfd0a650712bf3a3f358bf36245334bef6df6d45e0482",
+    ".github/workflows/test.yml": "4f21e6512117026a2f10f7a84144aeaee0ea078f8c2ff23ad4a1bf0a37bec302",
     "@unix_mode_impl": "01929a5e65ab757dce16719b562b72f4a193c1acb43ecec12454cd19d708a2cc",
     "@unix_mode_selftest": "1696cb206f6c8b03b27a54c431e3311af02f4a6eeed2ac646ffe6322e5affbf4",
     "scripts/recovery/verify-postgres-backup-restore.ps1": "46fda0092225990fdc6e4f0c0fc73089fa57414d402fe64a39acbacbec4098e6",

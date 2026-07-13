@@ -189,6 +189,7 @@ jobs:
           $trackedCriticalWrapper = 'pwsh -NoProfile -File scripts/production-gates/run-critical-suite.ps1 -Config .agent/critical-suite.config.yaml'
           $trackedDevStandWrapper = 'pwsh -NoProfile -File scripts/production-gates/run-dev-stand.ps1 -Config .agent/dev-stand.config.yaml'
           $trackedPathBudgetWrapper = 'pwsh -NoProfile -File scripts/production-gates/assert-windows-path-budget.ps1 -Repository . -Ref HEAD -CheckoutPrefixLength 66 -MaximumCombinedPathLength 240 -Artifact .agent/e/rg4/ci-path-budget.json'
+          $postgresServiceContext = 'POSTGRES_CONTAINER: $' + '{{ job.services.postgres.id }}'
 
           function Remove-ConformanceStep([string]$text) {
             return [regex]::Replace($text, '(?ms)^      - name: Assert tracked gate / CI conformance\r?\n.*?(?=^      - name: |\z)', '')
@@ -686,6 +687,11 @@ jobs:
             $packageTokens = [regex]::Matches($database, '(?i)(?<![A-Za-z0-9_])-Package\s+\S+')
             if ($packageTokens.Count -ne 1 -or $packageTokens[0].Value -cne '-Package ./...') { throw 'full fresh-DB step package must be exactly ./...' }
 
+            $postgresIdentityStep = Get-StepBody $execution 'Resolve PostgreSQL service identity'
+            if (-not $postgresIdentityStep.Contains($postgresServiceContext)) { throw 'PostgreSQL service identity must come from the official GitHub job service context' }
+            if (-not $postgresIdentityStep.Contains('docker inspect --type container --format "{{.Id}}" $container')) { throw 'PostgreSQL service identity must be verified against the running Docker container' }
+            if ($postgresIdentityStep.Contains('docker ps --filter')) { throw 'PostgreSQL service identity must not be rediscovered by mutable image/tag filters' }
+
             $criticalStep = Get-StepBody $execution 'Run tracked critical suite runner'
             if (-not $criticalStep.Contains("run: $trackedCriticalWrapper")) { throw 'workflow does not execute the tracked critical wrapper exactly' }
             foreach ($required in @("foreach (`$argument in @('test', '-tags=critical', '-json'))", "foreach (`$argument in @('./tests/critical/...', '-count=1'))", "Invoke-CapturedProcess 'critical-json-parser'", 'assert-go-test-json.ps1', '-FailOnUnexpectedSkip', 'AllowedSkipIdentity')) {
@@ -830,6 +836,7 @@ jobs:
           Assert-MutationRejected 'remove dynamic scope-map hash' { Assert-WorkflowContract ($workflow.Replace('$scopeSha = [Convert]::ToHexString', '$scopeSha = ''0'' #')) $critical $stand $dbRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'remove dynamic active-contract hash' { Assert-WorkflowContract ($workflow.Replace('-PrintCanonicalContractSha256', '-SelfTest')) $critical $stand $dbRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'remove unprivileged authority simulation' { Assert-WorkflowContract ($workflow.Replace('./.agent/specs/release-gates-r12/evidence/release-gates/test-r12-authority-maintenance.ps1', './.agent/specs/release-gates-r12/evidence/release-gates/missing.ps1')) $critical $stand $dbRunner $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'replace official PostgreSQL service identity' { Assert-WorkflowContract ($workflow.Replace($postgresServiceContext, 'POSTGRES_CONTAINER: ""')) $critical $stand $dbRunner $criticalRunner $devStandRunner }
           Assert-MutationRejected 'remove frozen active-diff candidate' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -activeDiffContractsText ($activeDiffContracts.Replace('"path_count": 5', '"path_count": 4')) }
           foreach ($activeAuthorityMutation in @(
             'missing frozen path was accepted',
@@ -868,14 +875,20 @@ jobs:
           $deletedPlanEpoch = @($deletedPlanState.path_epochs | Where-Object path -CEQ 'internal/db/gorm/candidate_store_test.go')[0]
           $deletedPlanEpoch.ordered_owners = @($deletedPlanEpoch.ordered_owners | Where-Object { [string]$_ -CNE 'DB-TEST-POOL-HYGIENE' })
           Assert-MutationRejected 'delete required plan row plus epoch owner together' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner $devStandRunner -stateText ($deletedPlanState | ConvertTo-Json -Depth 100) -planText $deletedPlanAndEpoch }
-          Write-Output 'CONFORMANCE PASS: canonical LF/CRLF R12 plan/scope/active-candidate authority, exact wrappers, path budget, source-built image provenance and Scout, immutable live package-plus-test zero-skip DB execution proof, ownership state, node matrix, readiness, cleanup, unprivileged authority simulation, and cross-platform semantics match; 71 mutations rejected'
+          Write-Output 'CONFORMANCE PASS: canonical LF/CRLF R12 plan/scope/active-candidate authority, exact wrappers, path budget, source-built image provenance and Scout, immutable live package-plus-test zero-skip DB execution proof, ownership state, node matrix, readiness, cleanup, unprivileged authority simulation, and cross-platform semantics match; 72 mutations rejected'
 
       - name: Resolve PostgreSQL service identity
         shell: pwsh
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
         run: |
-          $container = docker ps --filter "ancestor=pgvector/pgvector:pg17" --format "{{.ID}}" | Select-Object -First 1
-          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($container)) {
-            throw "pgvector/pgvector:pg17 service container was not found"
+          $container = [string]$env:POSTGRES_CONTAINER
+          if ($container -cnotmatch '^[0-9a-f]{64}$') {
+            throw "GitHub job.services.postgres.id is missing or non-canonical"
+          }
+          $observedContainer = [string](docker inspect --type container --format "{{.Id}}" $container)
+          if ($LASTEXITCODE -ne 0 -or $observedContainer.Trim() -cne $container) {
+            throw "GitHub PostgreSQL service container identity could not be verified"
           }
           "POSTGRES_CONTAINER=$container" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
