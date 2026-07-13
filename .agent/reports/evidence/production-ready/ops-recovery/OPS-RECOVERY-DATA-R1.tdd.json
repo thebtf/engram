@@ -1,0 +1,42 @@
+{
+  "task_id": "OPS-RECOVERY-DATA-R1",
+  "stack": "GO_AND_POWERSHELL",
+  "red": {
+    "observed_at": "2026-07-12T22:01:50.0009515Z",
+    "test_file": "tests/critical/recovery/postgres_backup_restore_test.go",
+    "test_name": "TestOperatorCanRestorePostgresBackup_RecoversDurableEngramDataAndRejectsUnsafeRestores",
+    "failure_reason": "Recovery harness absent",
+    "runner_stdout_excerpt": "verify-postgres-backup-restore.ps1 is not recognized as a script file; FAIL"
+  },
+  "green": {
+    "observed_at": "2026-07-12T22:15:28.6678909Z",
+    "passed_tests": 1,
+    "failed_tests": 0,
+    "skipped_tests": 0,
+    "regressed_tests": 0,
+    "runner_stdout_excerpt": "PASS; ok github.com/thebtf/engram/tests/critical/recovery 65.258s"
+  },
+  "refactor": {
+    "applied": false,
+    "reason": "The GREEN implementation is already the minimum single-orchestrator shape; no concrete duplication justifies another abstraction."
+  },
+  "prove_it": {
+    "substituted_files": [
+      "scripts/recovery/verify-postgres-backup-restore.ps1"
+    ],
+    "substituted_function": "Restore-Database",
+    "failed_tests": 1,
+    "runner_stdout_excerpt": "non-empty target was not rejected; FAIL; package exit 1",
+    "reverted_at": "2026-07-12T22:18:47.2876176Z",
+    "post_revert_green": "PASS; 1 passed, 0 failed, 0 skipped; 56.305s"
+  },
+  "coverage": {
+    "status": "NOT_APPLICABLE",
+    "reason": "The protected implementation is a PowerShell/Docker integration harness; Go statement coverage has no production statements in this test-only package. Behavioral and anti-stub proof are the load-bearing gates."
+  },
+  "current_sources": [
+    "https://www.postgresql.org/docs/17/app-pgdump.html",
+    "https://www.postgresql.org/docs/17/app-pgrestore.html",
+    "https://www.postgresql.org/docs/17/app-pg-dumpall.html"
+  ]
+}

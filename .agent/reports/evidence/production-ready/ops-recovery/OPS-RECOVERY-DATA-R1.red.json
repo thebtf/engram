@@ -1,0 +1,8 @@
+{
+  "task_id": "OPS-RECOVERY-DATA-R1",
+  "observed_at": "2026-07-12T22:01:50.0009515Z",
+  "test_file": "tests/critical/recovery/postgres_backup_restore_test.go",
+  "test_name": "TestOperatorCanRestorePostgresBackup_RecoversDurableEngramDataAndRejectsUnsafeRestores",
+  "failure_reason": "The critical user-flow test failed because the recovery harness did not yet exist.",
+  "runner_stdout_excerpt": "operator recovery flow failed: exit status 64; verify-postgres-backup-restore.ps1 is not recognized as a script file; --- FAIL"
+}

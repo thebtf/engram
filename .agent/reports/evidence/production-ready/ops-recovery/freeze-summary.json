@@ -1,0 +1,121 @@
+{
+  "schema_version": 2,
+  "slice": "OPS-RECOVERY-DATA-R2",
+  "role": "maker",
+  "observed_at": "2026-07-12T23:03:22.9912983Z",
+  "base": "f121f903d7005b9150b9b6dfb918d5d0ccc9ca9e",
+  "code_commit": "f8e2921b6caa0e932b0b3bd71e0cc07b4d26eb94",
+  "baseline_release": {
+    "ref": "v6.42.0",
+    "commit": "668eead36e3e75e1923cdd08acbc538ccbe42025"
+  },
+  "postgres": {
+    "major": 17,
+    "image": "engram:r2-accepted-65837cc7-postgres",
+    "image_id": "sha256:78780f7a04ce28fcdd33ff9fcd3b4de400bc510e39a06ff3223a164dbdb4eee7"
+  },
+  "behavioral_result": "BEHAVIOR_VERIFIED_PENDING_INDEPENDENT_CHECKER",
+  "supported_globals_boundary": "roles_and_role_memberships_only; tablespaces rejected",
+  "scenarios": {
+    "v6_42_to_candidate_migrations": "PASS",
+    "custom_pg_dump_and_single_transaction_restore": "PASS",
+    "role_globals_atomic_transaction": "PASS",
+    "role_globals_mid_script_failure_leaves_no_partial_role": "PASS",
+    "whole_globals_and_database_retry_idempotent": "PASS",
+    "memory_customer_recall": "PASS",
+    "behavioral_rule_readback": "PASS",
+    "credential_decrypt": "PASS",
+    "issue_readback": "PASS",
+    "document_content_readback": "PASS",
+    "code_index_search": "PASS",
+    "corrupt_archive_rejected": "PASS",
+    "wrong_vault_key_rejected": "PASS",
+    "interrupted_restore_atomic_and_retryable": "PASS",
+    "nonempty_target_rejected": "PASS",
+    "missing_docker_dependency_error_preserved": "PASS",
+    "secret_values_absent_from_process_argv_docker_inspect_and_logs": "PASS",
+    "success_and_failure_cleanup": "PASS"
+  },
+  "runtime_replays": [
+    {
+      "command": "pwsh -NoLogo -NoProfile -File scripts/recovery/verify-postgres-backup-restore.ps1",
+      "candidate": "f8e2921b6caa0e932b0b3bd71e0cc07b4d26eb94",
+      "status": "PASS",
+      "elapsed": "78.3s",
+      "security_samples": [
+        "fixture-seed",
+        "fixture-assert",
+        "fixture-assert",
+        "fixture-assert",
+        "fixture-assert",
+        "final"
+      ]
+    },
+    {
+      "command": "go test -v -tags=critical ./tests/critical/recovery -count=1",
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "elapsed": "96.7s"
+    }
+  ],
+  "gates": [
+    {
+      "command": "PowerShell parser; focused missing-Docker critical regression; fixture compile",
+      "status": "PASS"
+    },
+    {
+      "command": "Docker recovery-prefix residue inventory",
+      "status": "PASS",
+      "containers": 0,
+      "volumes": 0,
+      "networks": 0,
+      "temporary_directories": 0
+    },
+    {
+      "command": "PowerShell parser; go build ./...; go vet ./...",
+      "status": "PASS"
+    },
+    {
+      "command": "GOFLAGS=-tags=critical govulncheck ./tests/critical/recovery ./tests/fixtures/recovery/fixture",
+      "status": "PASS",
+      "reachable_vulnerabilities": 0
+    },
+    {
+      "command": "gitleaks detect --no-git --source <each owned source/test/evidence root> --redact",
+      "status": "PASS",
+      "findings": 0
+    },
+    {
+      "command": "go test -tags=critical ./tests/critical/... -count=1 -timeout 60m",
+      "status": "INHERITED_RED",
+      "recovery_package": "PASS",
+      "unrelated_failures": [
+        "TestCritical_AuthTwoTier/gRPC_accepts_operator_key",
+        "TestCritical_AuthTwoTier/gRPC_accepts_dashboard-issued_keycard"
+      ],
+      "base_reproduction": "go test -tags=critical ./tests/critical -run TestCritical_AuthTwoTier -count=1 at f121f903 reproduced the same project identity metadata invalid failures"
+    }
+  ],
+  "current_sources": [
+    "https://www.postgresql.org/docs/17/app-pgdump.html",
+    "https://www.postgresql.org/docs/17/app-pgrestore.html",
+    "https://www.postgresql.org/docs/17/app-pg-dumpall.html",
+    "https://www.postgresql.org/docs/17/app-psql.html"
+  ],
+  "toolchain": {
+    "go": "go1.25.12 windows/amd64",
+    "powershell": "7.6.1",
+    "docker_server": "29.1.3",
+    "gitleaks": "8.30.0",
+    "govulncheck": "v1.2.0",
+    "govulndb_updated": "2026-07-08T17:05:00Z"
+  },
+  "security": {
+    "classification": "S3",
+    "maker_verdict": "PASS_PENDING_INDEPENDENT_CHECKER",
+    "secret_channel": "ACL or mode restricted ephemeral files, Docker POSTGRES_PASSWORD_FILE, pgpass content over stdin",
+    "residual_risk": "independent checker must repeat process and Docker metadata sampling"
+  },
+  "finish_state": "review-needed"
+}
