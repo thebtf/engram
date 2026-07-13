@@ -20,6 +20,7 @@ jobs:
     env:
       ENGRAM_TEST_ADMIN_DSN: postgres://engram:engram@localhost:5432/postgres?sslmode=disable
       DATABASE_DSN: postgres://engram:engram@localhost:5432/engram_critical_test?sslmode=disable
+      ENGRAM_RECOVERY_POSTGRES_IMAGE: engram:prc-postgres
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -39,12 +40,30 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Install pinned Docker Scout CLI
+        shell: bash
+        env:
+          DOCKER_SCOUT_LINUX_AMD64_SHA256: "0f778f9d833f28bc6cccff95e33039849c0afcecafa38d9f46fe74bfd0915714"
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/docker-scout_1.23.1_linux_amd64.tar.gz"
+          binary="$RUNNER_TEMP/docker-scout"
+          curl --fail --silent --show-error --location \
+            "https://github.com/docker/scout-cli/releases/download/v1.23.1/docker-scout_1.23.1_linux_amd64.tar.gz" \
+            --output "$archive"
+          printf '%s  %s\n' "$DOCKER_SCOUT_LINUX_AMD64_SHA256" "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" docker-scout
+          install --directory --mode 0755 "$HOME/.docker/cli-plugins"
+          install --mode 0755 "$binary" "$HOME/.docker/cli-plugins/docker-scout"
+          docker scout version
 
       - name: Self-test go-test JSON assertion
         shell: pwsh
@@ -859,6 +878,22 @@ jobs:
             throw "pgvector/pgvector:pg17 service container was not found"
           }
           "POSTGRES_CONTAINER=$container" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build, scan, and exercise exact release-test images
+        shell: pwsh
+        env:
+          IMAGE_VERSION: sha-${{ github.sha }}
+          EVIDENCE_ROOT: .agent/reports/evidence/production-ready/release-gates-foundation/image-gate/${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          pwsh ./scripts/production-gates/build-and-scan-images.ps1 `
+            -Mode BuildAndScan `
+            -ServerTag engram:prc-server `
+            -OperatorTag engram:prc-operator-console `
+            -PostgresTag engram:prc-postgres `
+            -Platform linux/amd64 `
+            -ArtifactRoot $env:EVIDENCE_ROOT `
+            -Version $env:IMAGE_VERSION `
+            -NoAllowlist
 
       # This is the canonical release gate: three full-project repetitions from
       # the runner default, each with a new PostgreSQL 17 database, race mode,

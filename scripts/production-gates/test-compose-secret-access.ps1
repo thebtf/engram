@@ -17,7 +17,7 @@ try {
     if ($IsWindows) {
         Write-Output 'compose-secret-access self-test=PASS platform=windows acl=owner+LocalSystem'
     } else {
-        $directoryMode = [Convert]::ToString([int][System.IO.Directory]::GetUnixFileMode($root), 8)
+        $directoryMode = [Convert]::ToString([int][System.IO.File]::GetUnixFileMode($root), 8)
         $fileMode = [Convert]::ToString([int][System.IO.File]::GetUnixFileMode($file), 8)
         Write-Output "compose-secret-access self-test=PASS platform=unix directory_mode=$directoryMode file_mode=$fileMode"
     }

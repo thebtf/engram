@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-13T13:02:41.0943011Z",
+  "batch": "RELEASE-CI-R1 fresh-runner prerequisites and Unix permission API",
+  "base_commit": "cac31c23857821df302afb6eb68d015598892d74",
+  "verdict": "PASS_LOCAL_PENDING_EXACT_HEAD_IMAGE_GATE_AND_REMOTE_CI",
+  "red": ".agent/specs/release-ci-r1/evidence/RELEASE-CI-R1.red.json",
+  "implementation": {
+    "unix_mode_api": "reuse System.IO.File.Set/GetUnixFileMode for both file and directory paths, per the official .NET API",
+    "checkout": "release job fetch-depth 0 supplies the v4.5.0 and v6.42.0 provenance tags",
+    "scanner": "reuse the hash-pinned Docker Scout v1.23.1 install block already shipped in docker.yaml",
+    "images": [
+      "engram:prc-server",
+      "engram:prc-operator-console",
+      "engram:prc-postgres"
+    ],
+    "recovery_image": "ENGRAM_RECOVERY_POSTGRES_IMAGE=engram:prc-postgres",
+    "crlf_hostile_fixture": "workflow-level write-permission mutation accepts LF and CRLF bytes and must change exactly one block"
+  },
+  "green": {
+    "powershell_ast": "PASS",
+    "windows_acl_selftest": "PASS owner+LocalSystem",
+    "linux_container_selftest": "PASS directory_mode=700 file_mode=644",
+    "actionlint": "PASS",
+    "workflow_conformance": "PASS 71 hostile mutations rejected",
+    "authority_replay": {
+      "verdict": "PASS",
+      "runs": 2,
+      "scenarios_per_run": 24,
+      "expected_accepts": 4,
+      "expected_rejects": 20,
+      "artifacts": [
+        ".agent/specs/release-ci-r1/evidence/authority-run1.json",
+        ".agent/specs/release-ci-r1/evidence/authority-run2.json"
+      ]
+    },
+    "exact_head_build_and_scan": "PENDING",
+    "critical_suite": "PENDING",
+    "dev_stand": "PENDING",
+    "remote_release_job": "PENDING"
+  },
+  "external_sources": {
+    "context7": "current .NET corpus consulted; related APIs are File.SetUnixFileMode and FileSystemInfo.UnixFileMode",
+    "parallel": "official Microsoft File.SetUnixFileMode and actions/checkout full-history contracts consulted",
+    "tavily": "BLOCKED_OAUTH_AUTHORIZATION_REQUIRED",
+    "training_memory_substituted": false
+  },
+  "sha256": {
+    ".github/workflows/test.yml": "24c907ede5c555dea41bfd0a650712bf3a3f358bf36245334bef6df6d45e0482",
+    "@unix_mode_impl": "01929a5e65ab757dce16719b562b72f4a193c1acb43ecec12454cd19d708a2cc",
+    "@unix_mode_selftest": "1696cb206f6c8b03b27a54c431e3311af02f4a6eeed2ac646ffe6322e5affbf4",
+    "scripts/recovery/verify-postgres-backup-restore.ps1": "46fda0092225990fdc6e4f0c0fc73089fa57414d402fe64a39acbacbec4098e6",
+    ".agent/specs/release-gates-r12/evidence/release-gates/test-r12-authority-maintenance.ps1": "72305198bd95294506f57552ac17f4227656ed954d93f4561076dcec55e1b64c",
+    ".agent/specs/release-ci-r1/evidence/authority-run1.json": "9afc322fe1d730f4ded365e75a8f44a0979bf6b15bb239f729ad746276ac2050",
+    ".agent/specs/release-ci-r1/evidence/authority-run2.json": "c17d01c239cf6bd5c7efaa1341d56951eade1c1cc36904d1dd263d52f4bfa4d3"
+  },
+  "sha256_aliases": {
+    "@unix_mode_impl": "scripts/production-gates/compose-secret-access.ps1",
+    "@unix_mode_selftest": "scripts/production-gates/test-compose-secret-access.ps1"
+  }
+}

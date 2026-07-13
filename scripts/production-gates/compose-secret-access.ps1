@@ -41,7 +41,7 @@ function Assert-ComposeSecretPathAccess {
     } else {
         [System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite -bor [System.IO.UnixFileMode]::GroupRead -bor [System.IO.UnixFileMode]::OtherRead
     }
-    $actual = if ($Directory) { [System.IO.Directory]::GetUnixFileMode($Path) } else { [System.IO.File]::GetUnixFileMode($Path) }
+    $actual = [System.IO.File]::GetUnixFileMode($Path)
     if ($actual -ne $expected) {
         throw "compose secret path mode is '$actual', expected '$expected': $Path"
     }
@@ -89,7 +89,7 @@ function Set-ComposeSecretPathAccess {
             [System.IO.FileSystemAclExtensions]::SetAccessControl([System.IO.FileInfo]::new($Path), $acl)
         }
     } elseif ($Directory) {
-        [System.IO.Directory]::SetUnixFileMode(
+        [System.IO.File]::SetUnixFileMode(
             $Path,
             [System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite -bor [System.IO.UnixFileMode]::UserExecute
         )

@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-13T12:46:12.0237382Z",
+  "batch": "RELEASE-CI-R1 fresh-runner prerequisites and Unix permission API",
+  "verdict": "RED_REPRODUCED_REMOTE",
+  "remote_runs": [
+    {
+      "run_id": 29247692027,
+      "head": "cc247402f2309b53285c88367d9ca33696ff278f",
+      "release_job": "FAIL",
+      "evidence": [
+        "dev-stand failed because System.IO.Directory has no SetUnixFileMode method",
+        "critical suite failed 8 of 18 executed tests after the same preflight failure",
+        "engram:prc-server, engram:prc-operator-console, and engram:prc-postgres were absent",
+        "v4.5.0 was absent from the shallow checkout"
+      ]
+    },
+    {
+      "run_id": 29245630994,
+      "head": "c0637aaad88fbc32b9a306c1077e3f7612427891",
+      "release_job": "FAIL",
+      "evidence": [
+        "fresh runner failed before image prerequisites were materialized",
+        "all three ordinary OS matrices had go_test_exit 0, proving their red status was parser/coverage ownership rather than a Go test failure"
+      ]
+    }
+  ],
+  "local_control_plane_red": {
+    "verdict": "FAIL",
+    "scenario_count_before_abort": 14,
+    "error": "fixture did not mutate the workflow-level permissions block",
+    "cause": "the hostile regex accepted LF between lines but not the CR before the final line anchor in a CRLF checkout",
+    "impact": "the claimed write-permission rejection was not exercised on Windows-form workflow bytes"
+  },
+  "root_cause": {
+    "primary": "live PowerShell called nonexistent Directory.Set/GetUnixFileMode APIs on Unix",
+    "cascade": "the release job invoked image-dependent critical and recovery tests without first building the exact local images and without fetching historical tags",
+    "false_green_source": "prior local critical evidence inherited prebuilt images and complete Git tags from the operator workstation"
+  }
+}

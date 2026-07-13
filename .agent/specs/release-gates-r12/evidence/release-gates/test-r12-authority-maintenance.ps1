@@ -472,7 +472,7 @@ try {
         param($repository)
         $path = Join-Path $repository '.github/workflows/test.yml'
         $text = [System.IO.File]::ReadAllText($path)
-        $mutated = [regex]::Replace($text, '(?m)^permissions:\r?\n  contents: read$', 'permissions: write-all', 1)
+        $mutated = [regex]::Replace($text, '(?m)^permissions:\r?\n  contents: read[ \t]*\r?$', 'permissions: write-all', 1)
         if ($mutated -ceq $text) { throw 'fixture did not mutate the workflow-level permissions block' }
         Write-Utf8NoBom $path $mutated
     }
