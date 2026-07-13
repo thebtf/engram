@@ -104,22 +104,5 @@
     "finding_ids": ["A12-001", "A12-002", "A12-003", "A12-004"],
     "scope_expansion": false,
     "external_mutation": false
-  },
-  "a14_checker_rework": {
-    "source_checker_head": "ab98525b3c6b152a4c05a53421daf398f3cbaccd",
-    "source_candidate": "69b4b871911a84f82ba5050d4d567bdac39a8767",
-    "source_verdict": "REVISE",
-    "disposition": "Close all seven false-green cases as one authority-validation batch while preserving the 15-path A12 envelope and expected 12-error B12-owned legacy transition class.",
-    "false_green_classes": [
-      "required status integration ID JSON string",
-      "future epoch not-before",
-      "approval actor identity drift",
-      "active epoch exact-change drift",
-      "coordinated bogus source hash",
-      "coordinated missing source path",
-      "duplicate MB2 maker"
-    ],
-    "scope_expansion": false,
-    "external_mutation": false
   }
 }

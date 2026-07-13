@@ -225,44 +225,14 @@ function Test-ExactStringSequence {
     return $true
 }
 
-function Get-GitCanonicalJsonEvidence {
-    param([string]$Candidate, [string]$Path)
-    if ($Candidate -cnotmatch '^[0-9a-f]{40}$' -or
-        -not (Test-JsonString $Path) -or
+function Get-CanonicalJsonEvidence {
+    param([string]$Path)
+    if (-not (Test-JsonString $Path) -or
         [System.IO.Path]::IsPathRooted($Path) -or
         $Path -match '(^|/|\\)\.\.($|/|\\)') { return $null }
-
-    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = 'git'
-    $startInfo.UseShellExecute = $false
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    $startInfo.ArgumentList.Add('cat-file')
-    $startInfo.ArgumentList.Add('blob')
-    $startInfo.ArgumentList.Add("${Candidate}:$Path")
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $startInfo
     try {
-        if (-not $process.Start()) { return $null }
-        $stream = [System.IO.MemoryStream]::new()
-        try {
-            $process.StandardOutput.BaseStream.CopyTo($stream)
-            $stderr = $process.StandardError.ReadToEnd()
-            $process.WaitForExit()
-            if ($process.ExitCode -ne 0) { return $null }
-            try {
-                $text = [System.Text.UTF8Encoding]::new($false, $true).GetString($stream.ToArray())
-            } catch {
-                return $null
-            }
-        } finally {
-            $stream.Dispose()
-        }
-    } finally {
-        $process.Dispose()
-    }
-    $canonical = $text.Replace("`r`n", "`n").Replace("`r", "`n")
-    try {
+        $fullPath = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+        $canonical = [System.IO.File]::ReadAllText($fullPath).Replace("`r`n", "`n").Replace("`r", "`n")
         if (-not (Test-NoDuplicateJsonProperties $canonical)) { return $null }
         $json = $canonical | ConvertFrom-Json -Depth 100
     } catch {
@@ -527,7 +497,7 @@ function Get-MacroErrors {
     $expectedArtifactCandidate = '69b4b871911a84f82ba5050d4d567bdac39a8767'
     $expectedSourceCandidate = 'fef455bcf640f849c2d40c9bc26a459b5593e10a'
     $expectedSourceSha256 = '645bfc6817fe0f723df11398ee048bb1cfac004264cfa045d444289c51681e06'
-    $sourceEvidence = Get-GitCanonicalJsonEvidence $expectedArtifactCandidate $expectedSourcePath
+    $sourceEvidence = Get-CanonicalJsonEvidence $expectedSourcePath
     if (-not (Test-HasProperties $macroContract.source @('path','sha256','artifact_candidate','source_candidate','verdict')) -or
         -not (Test-JsonString $macroContract.source.path) -or
         -not (Test-JsonString $macroContract.source.sha256) -or
