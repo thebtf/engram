@@ -6,8 +6,8 @@
   "allowed_skip_identities": [],
   "counts": {
     "packages": 3,
-    "tests": 199,
-    "passed": 199,
+    "tests": 201,
+    "passed": 201,
     "failed": 0,
     "skipped": 0,
     "no_tests": 0,
@@ -20,23 +20,23 @@
     {
       "package": "github.com/thebtf/engram/tests/critical",
       "outcome": "pass",
-      "elapsed_seconds": 4.185,
-      "last_output": "ok  \tgithub.com/thebtf/engram/tests/critical\t4.185s",
+      "elapsed_seconds": 3.856,
+      "last_output": "ok  \tgithub.com/thebtf/engram/tests/critical\t3.856s",
       "tests_observed": 8
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/recovery",
       "outcome": "pass",
-      "elapsed_seconds": 112.709,
-      "last_output": "ok  \tgithub.com/thebtf/engram/tests/critical/recovery\t112.709s",
+      "elapsed_seconds": 102.81,
+      "last_output": "ok  \tgithub.com/thebtf/engram/tests/critical/recovery\t102.810s",
       "tests_observed": 5
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "outcome": "pass",
-      "elapsed_seconds": 236.479,
-      "last_output": "ok  \tgithub.com/thebtf/engram/tests/critical/runtime\t236.479s",
-      "tests_observed": 186
+      "elapsed_seconds": 238.666,
+      "last_output": "ok  \tgithub.com/thebtf/engram/tests/critical/runtime\t238.666s",
+      "tests_observed": 188
     }
   ],
   "tests": [
@@ -100,40 +100,40 @@
       "package": "github.com/thebtf/engram/tests/critical",
       "test": "TestSessionStartAndDocumentQueries_DoNotExposeSiblingProjectsOrPaths",
       "outcome": "pass",
-      "elapsed_seconds": 4.08,
-      "last_output": "--- PASS: TestSessionStartAndDocumentQueries_DoNotExposeSiblingProjectsOrPaths (4.08s)",
+      "elapsed_seconds": 3.76,
+      "last_output": "--- PASS: TestSessionStartAndDocumentQueries_DoNotExposeSiblingProjectsOrPaths (3.76s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/recovery",
       "test": "TestOperatorCanRestorePostgresBackup_RecoversDurableEngramDataAndRejectsUnsafeRestores",
       "outcome": "pass",
-      "elapsed_seconds": 85.51,
-      "last_output": "--- PASS: TestOperatorCanRestorePostgresBackup_RecoversDurableEngramDataAndRejectsUnsafeRestores (85.51s)",
+      "elapsed_seconds": 78.95,
+      "last_output": "--- PASS: TestOperatorCanRestorePostgresBackup_RecoversDurableEngramDataAndRejectsUnsafeRestores (78.95s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/recovery",
       "test": "TestOperatorRecoveryMissingDockerPreservesActionableDependencyError",
       "outcome": "pass",
-      "elapsed_seconds": 0.52,
-      "last_output": "--- PASS: TestOperatorRecoveryMissingDockerPreservesActionableDependencyError (0.52s)",
+      "elapsed_seconds": 0.49,
+      "last_output": "--- PASS: TestOperatorRecoveryMissingDockerPreservesActionableDependencyError (0.49s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/recovery",
       "test": "TestOperatorRecoveryScavengesKilledRunWithoutTouchingLiveOwner",
       "outcome": "pass",
-      "elapsed_seconds": 16.73,
-      "last_output": "--- PASS: TestOperatorRecoveryScavengesKilledRunWithoutTouchingLiveOwner (16.73s)",
+      "elapsed_seconds": 13.99,
+      "last_output": "--- PASS: TestOperatorRecoveryScavengesKilledRunWithoutTouchingLiveOwner (13.99s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/recovery",
       "test": "TestPreV5UpgradeBehavior",
       "outcome": "pass",
-      "elapsed_seconds": 9.67,
-      "last_output": "--- PASS: TestPreV5UpgradeBehavior (9.67s)",
+      "elapsed_seconds": 9.12,
+      "last_output": "--- PASS: TestPreV5UpgradeBehavior (9.12s)",
       "skip_allowed": false
     },
     {
@@ -148,128 +148,128 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard",
       "outcome": "pass",
-      "elapsed_seconds": 39.34,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard (39.34s)",
+      "elapsed_seconds": 37.66,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard (37.66s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs",
       "outcome": "pass",
-      "elapsed_seconds": 5.79,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs (5.79s)",
+      "elapsed_seconds": 5.45,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs (5.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/accept_v0.0.0",
       "outcome": "pass",
-      "elapsed_seconds": 0.47,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/accept_v0.0.0 (0.47s)",
+      "elapsed_seconds": 0.43,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/accept_v0.0.0 (0.43s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/accept_v1.2.3",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/accept_v1.2.3 (0.44s)",
+      "elapsed_seconds": 0.41,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/accept_v1.2.3 (0.41s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/accept_v1.2.3-alpha-1.2",
       "outcome": "pass",
-      "elapsed_seconds": 0.42,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/accept_v1.2.3-alpha-1.2 (0.42s)",
+      "elapsed_seconds": 0.41,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/accept_v1.2.3-alpha-1.2 (0.41s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/accept_v6.43.0-rc.1",
       "outcome": "pass",
-      "elapsed_seconds": 0.43,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/accept_v6.43.0-rc.1 (0.43s)",
+      "elapsed_seconds": 0.41,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/accept_v6.43.0-rc.1 (0.41s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_7630312e322e33",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_7630312e322e33 (0.44s)",
+      "elapsed_seconds": 0.43,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_7630312e322e33 (0.43s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_763124287072696e7466247b4946537d494e4a454354454429",
       "outcome": "pass",
-      "elapsed_seconds": 0.46,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_763124287072696e7466247b4946537d494e4a454354454429 (0.46s)",
+      "elapsed_seconds": 0.43,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_763124287072696e7466247b4946537d494e4a454354454429 (0.43s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e30322e33",
       "outcome": "pass",
-      "elapsed_seconds": 0.46,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e30322e33 (0.46s)",
+      "elapsed_seconds": 0.43,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e30322e33 (0.43s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e32",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e32 (0.44s)",
+      "elapsed_seconds": 0.41,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e32 (0.41s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e3033",
       "outcome": "pass",
-      "elapsed_seconds": 0.47,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e3033 (0.47s)",
+      "elapsed_seconds": 0.42,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e3033 (0.42s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e3320",
       "outcome": "pass",
-      "elapsed_seconds": 0.43,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e3320 (0.43s)",
+      "elapsed_seconds": 0.41,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e3320 (0.41s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e332b6275696c64",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e332b6275696c64 (0.44s)",
+      "elapsed_seconds": 0.42,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e332b6275696c64 (0.42s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e332d3031",
       "outcome": "pass",
-      "elapsed_seconds": 0.45,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e332d3031 (0.45s)",
+      "elapsed_seconds": 0.42,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e332d3031 (0.42s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e333b6563686f2d494e4a4543544544",
       "outcome": "pass",
-      "elapsed_seconds": 0.43,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e333b6563686f2d494e4a4543544544 (0.43s)",
+      "elapsed_seconds": 0.42,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e333b6563686f2d494e4a4543544544 (0.42s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/movement_before_and_after_old_guard",
       "outcome": "pass",
-      "elapsed_seconds": 1.46,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/movement_before_and_after_old_guard (1.46s)",
+      "elapsed_seconds": 1.29,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/movement_before_and_after_old_guard (1.29s)",
       "skip_allowed": false
     },
     {
@@ -282,82 +282,90 @@
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
+      "test": "TestDockerReleaseRefFreshnessGuard/operator_native_optional_tree_is_verified",
+      "outcome": "pass",
+      "elapsed_seconds": 0.07,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/operator_native_optional_tree_is_verified (0.07s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix",
       "outcome": "pass",
-      "elapsed_seconds": 2.07,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix (2.07s)",
+      "elapsed_seconds": 1.96,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix (1.96s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix/all_destinations_absent",
       "outcome": "pass",
-      "elapsed_seconds": 0.51,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix/all_destinations_absent (0.51s)",
+      "elapsed_seconds": 0.49,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix/all_destinations_absent (0.49s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix/existing_registry_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.51,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix/existing_registry_mismatch (0.51s)",
+      "elapsed_seconds": 0.47,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix/existing_registry_mismatch (0.47s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix/idempotent_exact_protected_tag",
       "outcome": "pass",
-      "elapsed_seconds": 0.54,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix/idempotent_exact_protected_tag (0.54s)",
+      "elapsed_seconds": 0.49,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix/idempotent_exact_protected_tag (0.49s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix/same_release_different_image",
       "outcome": "pass",
-      "elapsed_seconds": 0.51,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix/same_release_different_image (0.51s)",
+      "elapsed_seconds": 0.5,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/registry_compare-before-write_matrix/same_release_different_image (0.50s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/repository_controlled_single_writer",
       "outcome": "pass",
-      "elapsed_seconds": 0.04,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/repository_controlled_single_writer (0.04s)",
+      "elapsed_seconds": 0.03,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/repository_controlled_single_writer (0.03s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix",
       "outcome": "pass",
-      "elapsed_seconds": 10.35,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix (10.35s)",
+      "elapsed_seconds": 10.33,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix (10.33s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_digest_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.48,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_digest_mismatch (0.48s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_digest_mismatch (0.46s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_expired",
       "outcome": "pass",
-      "elapsed_seconds": 0.47,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_expired (0.47s)",
+      "elapsed_seconds": 0.79,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_expired (0.79s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_from_another_workflow_run",
       "outcome": "pass",
-      "elapsed_seconds": 0.47,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_from_another_workflow_run (0.47s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_from_another_workflow_run (0.46s)",
       "skip_allowed": false
     },
     {
@@ -372,40 +380,40 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_duplicate_expected_name",
       "outcome": "pass",
-      "elapsed_seconds": 0.47,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_duplicate_expected_name (0.47s)",
+      "elapsed_seconds": 0.49,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_duplicate_expected_name (0.49s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_extra_artifact",
       "outcome": "pass",
-      "elapsed_seconds": 0.49,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_extra_artifact (0.49s)",
+      "elapsed_seconds": 0.57,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_extra_artifact (0.57s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_missing_artifact",
       "outcome": "pass",
-      "elapsed_seconds": 0.49,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_missing_artifact (0.49s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_missing_artifact (0.46s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_one_exact_same-run_immutable_artifact",
       "outcome": "pass",
-      "elapsed_seconds": 0.41,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_one_exact_same-run_immutable_artifact (0.41s)",
+      "elapsed_seconds": 0.4,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/metadata_one_exact_same-run_immutable_artifact (0.40s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_archive_checksum_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.73,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_archive_checksum_mismatch (0.73s)",
+      "elapsed_seconds": 0.66,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_archive_checksum_mismatch (0.66s)",
       "skip_allowed": false
     },
     {
@@ -420,104 +428,104 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_extra_file",
       "outcome": "pass",
-      "elapsed_seconds": 0.68,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_extra_file (0.68s)",
+      "elapsed_seconds": 0.63,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_extra_file (0.63s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_immutable_commit_identity",
       "outcome": "pass",
-      "elapsed_seconds": 0.76,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_immutable_commit_identity (0.76s)",
+      "elapsed_seconds": 0.75,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_immutable_commit_identity (0.75s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_link_inside_outer_image_archive",
       "outcome": "pass",
-      "elapsed_seconds": 0.79,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_link_inside_outer_image_archive (0.79s)",
+      "elapsed_seconds": 0.72,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_link_inside_outer_image_archive (0.72s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_manifest_commit_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.76,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_manifest_commit_mismatch (0.76s)",
+      "elapsed_seconds": 0.66,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_manifest_commit_mismatch (0.66s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_path_traversal_in_bundle",
       "outcome": "pass",
-      "elapsed_seconds": 0.7,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_path_traversal_in_bundle (0.70s)",
+      "elapsed_seconds": 0.67,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_path_traversal_in_bundle (0.67s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_path_traversal_inside_image_archive",
       "outcome": "pass",
-      "elapsed_seconds": 0.74,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_path_traversal_inside_image_archive (0.74s)",
+      "elapsed_seconds": 0.69,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_path_traversal_inside_image_archive (0.69s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_symlink_entry",
       "outcome": "pass",
-      "elapsed_seconds": 0.67,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_symlink_entry (0.67s)",
+      "elapsed_seconds": 0.68,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/same-run_immutable_artifact_bridge_matrix/payload_symlink_entry (0.68s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix",
       "outcome": "pass",
-      "elapsed_seconds": 4.84,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix (4.84s)",
+      "elapsed_seconds": 4.7,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix (4.70s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/bypass",
       "outcome": "pass",
-      "elapsed_seconds": 0.49,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/bypass (0.49s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/bypass (0.46s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/disabled",
       "outcome": "pass",
-      "elapsed_seconds": 0.49,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/disabled (0.49s)",
+      "elapsed_seconds": 0.47,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/disabled (0.47s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/duplicate",
       "outcome": "pass",
-      "elapsed_seconds": 0.49,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/duplicate (0.49s)",
+      "elapsed_seconds": 0.5,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/duplicate (0.50s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/exact_active_immutable_namespace",
       "outcome": "pass",
-      "elapsed_seconds": 0.42,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/exact_active_immutable_namespace (0.42s)",
+      "elapsed_seconds": 0.41,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/exact_active_immutable_namespace (0.41s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/exclusion",
       "outcome": "pass",
-      "elapsed_seconds": 0.5,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/exclusion (0.50s)",
+      "elapsed_seconds": 0.52,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/exclusion (0.52s)",
       "skip_allowed": false
     },
     {
@@ -532,80 +540,80 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/missing_deletion",
       "outcome": "pass",
-      "elapsed_seconds": 0.49,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/missing_deletion (0.49s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/missing_deletion (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/missing_non_fast_forward",
       "outcome": "pass",
-      "elapsed_seconds": 0.47,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/missing_non_fast_forward (0.47s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/missing_non_fast_forward (0.46s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/wrong_include",
       "outcome": "pass",
-      "elapsed_seconds": 0.51,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/wrong_include (0.51s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/wrong_include (0.46s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/wrong_target",
       "outcome": "pass",
-      "elapsed_seconds": 0.49,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/wrong_target (0.49s)",
+      "elapsed_seconds": 0.47,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/tag_ruleset_positive_and_negative_matrix/wrong_target (0.47s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix",
       "outcome": "pass",
-      "elapsed_seconds": 14.28,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix (14.28s)",
+      "elapsed_seconds": 13.33,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix (13.33s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/additional_non-authority_status_check_is_allowed",
       "outcome": "pass",
-      "elapsed_seconds": 0.54,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/additional_non-authority_status_check_is_allowed (0.54s)",
+      "elapsed_seconds": 0.53,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/additional_non-authority_status_check_is_allowed (0.53s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_duplicate_context",
       "outcome": "pass",
-      "elapsed_seconds": 0.54,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_duplicate_context (0.54s)",
+      "elapsed_seconds": 0.49,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_duplicate_context (0.49s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_missing_integration_id",
       "outcome": "pass",
-      "elapsed_seconds": 0.52,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_missing_integration_id (0.52s)",
+      "elapsed_seconds": 0.48,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_missing_integration_id (0.48s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_string_integration_id",
       "outcome": "pass",
-      "elapsed_seconds": 0.5,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_string_integration_id (0.50s)",
+      "elapsed_seconds": 0.48,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_string_integration_id (0.48s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_wrong_integration_id",
       "outcome": "pass",
-      "elapsed_seconds": 0.64,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_wrong_integration_id (0.64s)",
+      "elapsed_seconds": 0.54,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_wrong_integration_id (0.54s)",
       "skip_allowed": false
     },
     {
@@ -620,120 +628,120 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/event_api_sha_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.48,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/event_api_sha_mismatch (0.48s)",
+      "elapsed_seconds": 0.49,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/event_api_sha_mismatch (0.49s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/exact_protected_release_provenance",
       "outcome": "pass",
-      "elapsed_seconds": 0.54,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/exact_protected_release_provenance (0.54s)",
+      "elapsed_seconds": 0.52,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/exact_protected_release_provenance (0.52s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/fork_head_repository",
       "outcome": "pass",
-      "elapsed_seconds": 0.54,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/fork_head_repository (0.54s)",
+      "elapsed_seconds": 0.55,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/fork_head_repository (0.55s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/hostile_shell-like_tag",
       "outcome": "pass",
-      "elapsed_seconds": 0.49,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/hostile_shell-like_tag (0.49s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/hostile_shell-like_tag (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/inactive_trusted_workflow",
       "outcome": "pass",
-      "elapsed_seconds": 0.51,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/inactive_trusted_workflow (0.51s)",
+      "elapsed_seconds": 0.47,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/inactive_trusted_workflow (0.47s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/manual_dispatch_spoof",
       "outcome": "pass",
-      "elapsed_seconds": 0.48,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/manual_dispatch_spoof (0.48s)",
+      "elapsed_seconds": 0.5,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/manual_dispatch_spoof (0.50s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/missing_immutable_tag_ruleset",
       "outcome": "pass",
-      "elapsed_seconds": 0.5,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/missing_immutable_tag_ruleset (0.50s)",
+      "elapsed_seconds": 0.47,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/missing_immutable_tag_ruleset (0.47s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/missing_protected_main_ruleset",
       "outcome": "pass",
-      "elapsed_seconds": 0.49,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/missing_protected_main_ruleset (0.49s)",
+      "elapsed_seconds": 0.47,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/missing_protected_main_ruleset (0.47s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/noncanonical_tag",
       "outcome": "pass",
-      "elapsed_seconds": 0.49,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/noncanonical_tag (0.49s)",
+      "elapsed_seconds": 0.48,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/noncanonical_tag (0.48s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_always",
       "outcome": "pass",
-      "elapsed_seconds": 0.71,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_always (0.71s)",
+      "elapsed_seconds": 0.47,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_always (0.47s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_duplicated",
       "outcome": "pass",
-      "elapsed_seconds": 0.58,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_duplicated (0.58s)",
+      "elapsed_seconds": 0.48,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_duplicated (0.48s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_missing",
       "outcome": "pass",
-      "elapsed_seconds": 0.55,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_missing (0.55s)",
+      "elapsed_seconds": 0.48,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_missing (0.48s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/run_failed",
       "outcome": "pass",
-      "elapsed_seconds": 0.46,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/run_failed (0.46s)",
+      "elapsed_seconds": 0.49,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/run_failed (0.49s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/run_id_event_api_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.52,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/run_id_event_api_mismatch (0.52s)",
+      "elapsed_seconds": 0.51,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/run_id_event_api_mismatch (0.51s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/tag_commit_outside_protected_main",
       "outcome": "pass",
-      "elapsed_seconds": 0.53,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/tag_commit_outside_protected_main (0.53s)",
+      "elapsed_seconds": 0.48,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/tag_commit_outside_protected_main (0.48s)",
       "skip_allowed": false
     },
     {
@@ -748,40 +756,40 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/trusted_output_rejects_symlink_or_reparse_escape",
       "outcome": "pass",
-      "elapsed_seconds": 1.15,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/trusted_output_rejects_symlink_or_reparse_escape (1.15s)",
+      "elapsed_seconds": 1.11,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/trusted_output_rejects_symlink_or_reparse_escape (1.11s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/trusted_workflow_id_spoof",
       "outcome": "pass",
-      "elapsed_seconds": 0.49,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/trusted_workflow_id_spoof (0.49s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/trusted_workflow_id_spoof (0.46s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/workflow_id_event_api_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.5,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/workflow_id_event_api_mismatch (0.50s)",
+      "elapsed_seconds": 0.47,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/workflow_id_event_api_mismatch (0.47s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/workflow_path_spoof",
       "outcome": "pass",
-      "elapsed_seconds": 0.54,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/workflow_path_spoof (0.54s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/workflow_path_spoof (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_publisher_selector_matrix",
       "outcome": "pass",
-      "elapsed_seconds": 0.49,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_publisher_selector_matrix (0.49s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_publisher_selector_matrix (0.46s)",
       "skip_allowed": false
     },
     {
@@ -812,8 +820,8 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestDockerReleaseRefFreshnessGuard/workflow_run_publisher_selector_matrix/hostile_tag-shaped_push_still_fails_closed_in_preflight",
       "outcome": "pass",
-      "elapsed_seconds": 0.49,
-      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_publisher_selector_matrix/hostile_tag-shaped_push_still_fails_closed_in_preflight (0.49s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestDockerReleaseRefFreshnessGuard/workflow_run_publisher_selector_matrix/hostile_tag-shaped_push_still_fails_closed_in_preflight (0.46s)",
       "skip_allowed": false
     },
     {
@@ -844,56 +852,56 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestOperatorConsoleRuntimeTargetContract",
       "outcome": "pass",
-      "elapsed_seconds": 69.56,
-      "last_output": "--- PASS: TestOperatorConsoleRuntimeTargetContract (69.56s)",
+      "elapsed_seconds": 73.12,
+      "last_output": "--- PASS: TestOperatorConsoleRuntimeTargetContract (73.12s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestOperatorConsoleRuntimeTargetContract/backend_error-200_never_becomes_healthy",
       "outcome": "pass",
-      "elapsed_seconds": 5.01,
-      "last_output": "--- PASS: TestOperatorConsoleRuntimeTargetContract/backend_error-200_never_becomes_healthy (5.01s)",
+      "elapsed_seconds": 4.59,
+      "last_output": "--- PASS: TestOperatorConsoleRuntimeTargetContract/backend_error-200_never_becomes_healthy (4.59s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestOperatorConsoleRuntimeTargetContract/backend_malformed_never_becomes_healthy",
       "outcome": "pass",
-      "elapsed_seconds": 4.61,
-      "last_output": "--- PASS: TestOperatorConsoleRuntimeTargetContract/backend_malformed_never_becomes_healthy (4.61s)",
+      "elapsed_seconds": 4.89,
+      "last_output": "--- PASS: TestOperatorConsoleRuntimeTargetContract/backend_malformed_never_becomes_healthy (4.89s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestOperatorConsoleRuntimeTargetContract/backend_root-only_never_becomes_healthy",
       "outcome": "pass",
-      "elapsed_seconds": 4.84,
-      "last_output": "--- PASS: TestOperatorConsoleRuntimeTargetContract/backend_root-only_never_becomes_healthy (4.84s)",
+      "elapsed_seconds": 4.7,
+      "last_output": "--- PASS: TestOperatorConsoleRuntimeTargetContract/backend_root-only_never_becomes_healthy (4.70s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestOperatorConsoleRuntimeTargetContract/backend_timeout_never_becomes_healthy",
       "outcome": "pass",
-      "elapsed_seconds": 4.74,
-      "last_output": "--- PASS: TestOperatorConsoleRuntimeTargetContract/backend_timeout_never_becomes_healthy (4.74s)",
+      "elapsed_seconds": 10.7,
+      "last_output": "--- PASS: TestOperatorConsoleRuntimeTargetContract/backend_timeout_never_becomes_healthy (10.70s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestPostgresImageContract",
       "outcome": "pass",
-      "elapsed_seconds": 48.22,
-      "last_output": "--- PASS: TestPostgresImageContract (48.22s)",
+      "elapsed_seconds": 48.63,
+      "last_output": "--- PASS: TestPostgresImageContract (48.63s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestPostgresImageContract/tmpfs-only_data_is_not_durable",
       "outcome": "pass",
-      "elapsed_seconds": 15.12,
-      "last_output": "--- PASS: TestPostgresImageContract/tmpfs-only_data_is_not_durable (15.12s)",
+      "elapsed_seconds": 15.04,
+      "last_output": "--- PASS: TestPostgresImageContract/tmpfs-only_data_is_not_durable (15.04s)",
       "skip_allowed": false
     },
     {
@@ -908,104 +916,104 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract",
       "outcome": "pass",
-      "elapsed_seconds": 78.82,
-      "last_output": "--- PASS: TestServerImageContract (78.82s)",
+      "elapsed_seconds": 78.73,
+      "last_output": "--- PASS: TestServerImageContract (78.73s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/absent-volume_fails_closed",
       "outcome": "pass",
-      "elapsed_seconds": 3.77,
-      "last_output": "--- PASS: TestServerImageContract/absent-volume_fails_closed (3.77s)",
+      "elapsed_seconds": 3.69,
+      "last_output": "--- PASS: TestServerImageContract/absent-volume_fails_closed (3.69s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/empty-home_fails_closed",
       "outcome": "pass",
-      "elapsed_seconds": 3.76,
-      "last_output": "--- PASS: TestServerImageContract/empty-home_fails_closed (3.76s)",
+      "elapsed_seconds": 3.71,
+      "last_output": "--- PASS: TestServerImageContract/empty-home_fails_closed (3.71s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard",
       "outcome": "pass",
-      "elapsed_seconds": 35.85,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard (35.85s)",
+      "elapsed_seconds": 36.23,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard (36.23s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs",
       "outcome": "pass",
-      "elapsed_seconds": 5.38,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs (5.38s)",
+      "elapsed_seconds": 5.32,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs (5.32s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/accept_v0.0.0",
       "outcome": "pass",
-      "elapsed_seconds": 0.41,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/accept_v0.0.0 (0.41s)",
+      "elapsed_seconds": 0.42,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/accept_v0.0.0 (0.42s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/accept_v1.2.3",
       "outcome": "pass",
-      "elapsed_seconds": 0.39,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/accept_v1.2.3 (0.39s)",
+      "elapsed_seconds": 0.38,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/accept_v1.2.3 (0.38s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/accept_v1.2.3-alpha-1.2",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/accept_v1.2.3-alpha-1.2 (0.44s)",
+      "elapsed_seconds": 0.4,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/accept_v1.2.3-alpha-1.2 (0.40s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/accept_v6.43.0-rc.1",
       "outcome": "pass",
-      "elapsed_seconds": 0.41,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/accept_v6.43.0-rc.1 (0.41s)",
+      "elapsed_seconds": 0.39,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/accept_v6.43.0-rc.1 (0.39s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_7630312e322e33",
       "outcome": "pass",
-      "elapsed_seconds": 0.42,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_7630312e322e33 (0.42s)",
+      "elapsed_seconds": 0.39,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_7630312e322e33 (0.39s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_763124287072696e7466247b4946537d494e4a454354454429",
       "outcome": "pass",
-      "elapsed_seconds": 0.42,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_763124287072696e7466247b4946537d494e4a454354454429 (0.42s)",
+      "elapsed_seconds": 0.47,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_763124287072696e7466247b4946537d494e4a454354454429 (0.47s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e30322e33",
       "outcome": "pass",
-      "elapsed_seconds": 0.42,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e30322e33 (0.42s)",
+      "elapsed_seconds": 0.39,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e30322e33 (0.39s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e32",
       "outcome": "pass",
-      "elapsed_seconds": 0.41,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e32 (0.41s)",
+      "elapsed_seconds": 0.39,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e32 (0.39s)",
       "skip_allowed": false
     },
     {
@@ -1028,32 +1036,32 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e332b6275696c64",
       "outcome": "pass",
-      "elapsed_seconds": 0.41,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e332b6275696c64 (0.41s)",
+      "elapsed_seconds": 0.4,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e332b6275696c64 (0.40s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e332d3031",
       "outcome": "pass",
-      "elapsed_seconds": 0.41,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e332d3031 (0.41s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e332d3031 (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e333b6563686f2d494e4a4543544544",
       "outcome": "pass",
-      "elapsed_seconds": 0.41,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e333b6563686f2d494e4a4543544544 (0.41s)",
+      "elapsed_seconds": 0.4,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/canonical_release_version_and_hostile_Git_refs/reject_76312e322e333b6563686f2d494e4a4543544544 (0.40s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/movement_before_and_after_old_guard",
       "outcome": "pass",
-      "elapsed_seconds": 1.26,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/movement_before_and_after_old_guard (1.26s)",
+      "elapsed_seconds": 1.23,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/movement_before_and_after_old_guard (1.23s)",
       "skip_allowed": false
     },
     {
@@ -1066,26 +1074,34 @@
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
+      "test": "TestServerImageContract/release_ref_freshness_guard/operator_native_optional_tree_is_verified",
+      "outcome": "pass",
+      "elapsed_seconds": 0.08,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/operator_native_optional_tree_is_verified (0.08s)",
+      "skip_allowed": false
+    },
+    {
+      "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/registry_compare-before-write_matrix",
       "outcome": "pass",
-      "elapsed_seconds": 1.83,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/registry_compare-before-write_matrix (1.83s)",
+      "elapsed_seconds": 1.96,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/registry_compare-before-write_matrix (1.96s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/registry_compare-before-write_matrix/all_destinations_absent",
       "outcome": "pass",
-      "elapsed_seconds": 0.46,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/registry_compare-before-write_matrix/all_destinations_absent (0.46s)",
+      "elapsed_seconds": 0.48,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/registry_compare-before-write_matrix/all_destinations_absent (0.48s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/registry_compare-before-write_matrix/existing_registry_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/registry_compare-before-write_matrix/existing_registry_mismatch (0.44s)",
+      "elapsed_seconds": 0.52,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/registry_compare-before-write_matrix/existing_registry_mismatch (0.52s)",
       "skip_allowed": false
     },
     {
@@ -1100,80 +1116,80 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/registry_compare-before-write_matrix/same_release_different_image",
       "outcome": "pass",
-      "elapsed_seconds": 0.45,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/registry_compare-before-write_matrix/same_release_different_image (0.45s)",
+      "elapsed_seconds": 0.48,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/registry_compare-before-write_matrix/same_release_different_image (0.48s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/repository_controlled_single_writer",
       "outcome": "pass",
-      "elapsed_seconds": 0.04,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/repository_controlled_single_writer (0.04s)",
+      "elapsed_seconds": 0.05,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/repository_controlled_single_writer (0.05s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix",
       "outcome": "pass",
-      "elapsed_seconds": 9.66,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix (9.66s)",
+      "elapsed_seconds": 9.58,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix (9.58s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_digest_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.43,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_digest_mismatch (0.43s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_digest_mismatch (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_expired",
       "outcome": "pass",
-      "elapsed_seconds": 0.43,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_expired (0.43s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_expired (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_from_another_workflow_run",
       "outcome": "pass",
-      "elapsed_seconds": 0.42,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_from_another_workflow_run (0.42s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_from_another_workflow_run (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_id_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.42,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_id_mismatch (0.42s)",
+      "elapsed_seconds": 0.44,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_artifact_id_mismatch (0.44s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_duplicate_expected_name",
       "outcome": "pass",
-      "elapsed_seconds": 0.46,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_duplicate_expected_name (0.46s)",
+      "elapsed_seconds": 0.44,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_duplicate_expected_name (0.44s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_extra_artifact",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_extra_artifact (0.44s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_extra_artifact (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_missing_artifact",
       "outcome": "pass",
-      "elapsed_seconds": 0.46,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_missing_artifact (0.46s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/metadata_missing_artifact (0.45s)",
       "skip_allowed": false
     },
     {
@@ -1212,32 +1228,32 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_immutable_commit_identity",
       "outcome": "pass",
-      "elapsed_seconds": 0.82,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_immutable_commit_identity (0.82s)",
+      "elapsed_seconds": 0.73,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_immutable_commit_identity (0.73s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_link_inside_outer_image_archive",
       "outcome": "pass",
-      "elapsed_seconds": 0.72,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_link_inside_outer_image_archive (0.72s)",
+      "elapsed_seconds": 0.71,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_link_inside_outer_image_archive (0.71s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_manifest_commit_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.63,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_manifest_commit_mismatch (0.63s)",
+      "elapsed_seconds": 0.64,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_manifest_commit_mismatch (0.64s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_path_traversal_in_bundle",
       "outcome": "pass",
-      "elapsed_seconds": 0.7,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_path_traversal_in_bundle (0.70s)",
+      "elapsed_seconds": 0.69,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_path_traversal_in_bundle (0.69s)",
       "skip_allowed": false
     },
     {
@@ -1252,144 +1268,144 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_symlink_entry",
       "outcome": "pass",
-      "elapsed_seconds": 0.67,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_symlink_entry (0.67s)",
+      "elapsed_seconds": 0.64,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/same-run_immutable_artifact_bridge_matrix/payload_symlink_entry (0.64s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix",
       "outcome": "pass",
-      "elapsed_seconds": 4.7,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix (4.70s)",
+      "elapsed_seconds": 4.85,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix (4.85s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/bypass",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/bypass (0.44s)",
+      "elapsed_seconds": 0.63,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/bypass (0.63s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/disabled",
       "outcome": "pass",
-      "elapsed_seconds": 0.51,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/disabled (0.51s)",
+      "elapsed_seconds": 0.58,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/disabled (0.58s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/duplicate",
       "outcome": "pass",
-      "elapsed_seconds": 0.52,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/duplicate (0.52s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/duplicate (0.46s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/exact_active_immutable_namespace",
       "outcome": "pass",
-      "elapsed_seconds": 0.42,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/exact_active_immutable_namespace (0.42s)",
+      "elapsed_seconds": 0.41,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/exact_active_immutable_namespace (0.41s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/exclusion",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/exclusion (0.44s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/exclusion (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/missing",
       "outcome": "pass",
-      "elapsed_seconds": 0.51,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/missing (0.51s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/missing (0.46s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/missing_deletion",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/missing_deletion (0.44s)",
+      "elapsed_seconds": 0.48,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/missing_deletion (0.48s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/missing_non_fast_forward",
       "outcome": "pass",
-      "elapsed_seconds": 0.46,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/missing_non_fast_forward (0.46s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/missing_non_fast_forward (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/wrong_include",
       "outcome": "pass",
-      "elapsed_seconds": 0.45,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/wrong_include (0.45s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/wrong_include (0.46s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/wrong_target",
       "outcome": "pass",
-      "elapsed_seconds": 0.51,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/wrong_target (0.51s)",
+      "elapsed_seconds": 0.47,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/tag_ruleset_positive_and_negative_matrix/wrong_target (0.47s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix",
       "outcome": "pass",
-      "elapsed_seconds": 12.51,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix (12.51s)",
+      "elapsed_seconds": 12.68,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix (12.68s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/additional_non-authority_status_check_is_allowed",
       "outcome": "pass",
-      "elapsed_seconds": 0.52,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/additional_non-authority_status_check_is_allowed (0.52s)",
+      "elapsed_seconds": 0.51,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/additional_non-authority_status_check_is_allowed (0.51s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_duplicate_context",
       "outcome": "pass",
-      "elapsed_seconds": 0.48,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_duplicate_context (0.48s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_duplicate_context (0.46s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_missing_integration_id",
       "outcome": "pass",
-      "elapsed_seconds": 0.48,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_missing_integration_id (0.48s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_missing_integration_id (0.46s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_string_integration_id",
       "outcome": "pass",
-      "elapsed_seconds": 0.45,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_string_integration_id (0.45s)",
+      "elapsed_seconds": 0.51,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_string_integration_id (0.51s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_wrong_integration_id",
       "outcome": "pass",
-      "elapsed_seconds": 0.47,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_wrong_integration_id (0.47s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/authority_guard_wrong_integration_id (0.45s)",
       "skip_allowed": false
     },
     {
@@ -1404,56 +1420,56 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/event_api_sha_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.42,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/event_api_sha_mismatch (0.42s)",
+      "elapsed_seconds": 0.43,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/event_api_sha_mismatch (0.43s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/exact_protected_release_provenance",
       "outcome": "pass",
-      "elapsed_seconds": 0.54,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/exact_protected_release_provenance (0.54s)",
+      "elapsed_seconds": 0.51,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/exact_protected_release_provenance (0.51s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/fork_head_repository",
       "outcome": "pass",
-      "elapsed_seconds": 0.43,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/fork_head_repository (0.43s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/fork_head_repository (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/hostile_shell-like_tag",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/hostile_shell-like_tag (0.44s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/hostile_shell-like_tag (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/inactive_trusted_workflow",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/inactive_trusted_workflow (0.44s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/inactive_trusted_workflow (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/manual_dispatch_spoof",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/manual_dispatch_spoof (0.44s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/manual_dispatch_spoof (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/missing_immutable_tag_ruleset",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/missing_immutable_tag_ruleset (0.44s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/missing_immutable_tag_ruleset (0.46s)",
       "skip_allowed": false
     },
     {
@@ -1468,32 +1484,32 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/noncanonical_tag",
       "outcome": "pass",
-      "elapsed_seconds": 0.43,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/noncanonical_tag (0.43s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/noncanonical_tag (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_always",
       "outcome": "pass",
-      "elapsed_seconds": 0.48,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_always (0.48s)",
+      "elapsed_seconds": 0.47,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_always (0.47s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_duplicated",
       "outcome": "pass",
-      "elapsed_seconds": 0.47,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_duplicated (0.47s)",
+      "elapsed_seconds": 0.49,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_duplicated (0.49s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_missing",
       "outcome": "pass",
-      "elapsed_seconds": 0.48,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_missing (0.48s)",
+      "elapsed_seconds": 0.49,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/recovery_bypass_missing (0.49s)",
       "skip_allowed": false
     },
     {
@@ -1508,8 +1524,8 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/run_id_event_api_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.43,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/run_id_event_api_mismatch (0.43s)",
+      "elapsed_seconds": 0.42,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/run_id_event_api_mismatch (0.42s)",
       "skip_allowed": false
     },
     {
@@ -1524,16 +1540,16 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/tag_peel_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.46,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/tag_peel_mismatch (0.46s)",
+      "elapsed_seconds": 0.49,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/tag_peel_mismatch (0.49s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/trusted_output_rejects_symlink_or_reparse_escape",
       "outcome": "pass",
-      "elapsed_seconds": 1.06,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/trusted_output_rejects_symlink_or_reparse_escape (1.06s)",
+      "elapsed_seconds": 1.1,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/trusted_output_rejects_symlink_or_reparse_escape (1.10s)",
       "skip_allowed": false
     },
     {
@@ -1548,24 +1564,24 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/workflow_id_event_api_mismatch",
       "outcome": "pass",
-      "elapsed_seconds": 0.43,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/workflow_id_event_api_mismatch (0.43s)",
+      "elapsed_seconds": 0.45,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/workflow_id_event_api_mismatch (0.45s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/workflow_path_spoof",
       "outcome": "pass",
-      "elapsed_seconds": 0.44,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/workflow_path_spoof (0.44s)",
+      "elapsed_seconds": 0.46,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_provenance_and_protected-main_authority_matrix/workflow_path_spoof (0.46s)",
       "skip_allowed": false
     },
     {
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_publisher_selector_matrix",
       "outcome": "pass",
-      "elapsed_seconds": 0.45,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_publisher_selector_matrix (0.45s)",
+      "elapsed_seconds": 0.44,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_publisher_selector_matrix (0.44s)",
       "skip_allowed": false
     },
     {
@@ -1596,8 +1612,8 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/release_ref_freshness_guard/workflow_run_publisher_selector_matrix/hostile_tag-shaped_push_still_fails_closed_in_preflight",
       "outcome": "pass",
-      "elapsed_seconds": 0.45,
-      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_publisher_selector_matrix/hostile_tag-shaped_push_still_fails_closed_in_preflight (0.45s)",
+      "elapsed_seconds": 0.44,
+      "last_output": "--- PASS: TestServerImageContract/release_ref_freshness_guard/workflow_run_publisher_selector_matrix/hostile_tag-shaped_push_still_fails_closed_in_preflight (0.44s)",
       "skip_allowed": false
     },
     {
@@ -1628,8 +1644,8 @@
       "package": "github.com/thebtf/engram/tests/critical/runtime",
       "test": "TestServerImageContract/root-owned-volume_fails_closed",
       "outcome": "pass",
-      "elapsed_seconds": 4.75,
-      "last_output": "--- PASS: TestServerImageContract/root-owned-volume_fails_closed (4.75s)",
+      "elapsed_seconds": 4.66,
+      "last_output": "--- PASS: TestServerImageContract/root-owned-volume_fails_closed (4.66s)",
       "skip_allowed": false
     }
   ],

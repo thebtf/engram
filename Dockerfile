@@ -5,7 +5,9 @@ FROM node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd
 
 WORKDIR /workspace/apps/operator-console
 COPY apps/operator-console/package.json apps/operator-console/package-lock.json ./
-RUN npm ci
+COPY apps/operator-console/scripts/verify-native-optional-deps.mjs ./scripts/
+RUN npm ci --include=optional --fetch-retries=5 --fetch-retry-factor=2 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=30000 \
+    && node scripts/verify-native-optional-deps.mjs
 COPY apps/operator-console/ ./
 COPY design/operator-console/contracts /workspace/design/operator-console/contracts
 RUN npm run parity && npm run build

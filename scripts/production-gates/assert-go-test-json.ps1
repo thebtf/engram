@@ -279,7 +279,7 @@ try {
     $summary = Read-GoTestTranscript $InputPath ([bool]$FailOnUnexpectedSkip) $AllowedSkipIdentity
     Write-Utf8NoBom $SummaryPath (($summary | ConvertTo-Json -Depth 12) + "`n")
     Write-Output ("go test JSON verdict={0} packages={1} tests={2} passed={3} failed={4} skipped={5} unexpected_skips={6} malformed={7}" -f $summary.verdict, $summary.counts.packages, $summary.counts.tests, $summary.counts.passed, $summary.counts.failed, $summary.counts.skipped, $summary.counts.unexpected_skips, $summary.counts.malformed_lines)
-    Write-Output "summary=$([System.IO.Path]::GetFullPath($SummaryPath))"
+    Write-Output "summary=$(ConvertTo-EvidencePath $SummaryPath)"
     if ($summary.verdict -ne 'PASS') { exit 1 }
     exit 0
 }

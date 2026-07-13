@@ -24,9 +24,10 @@ This is an S4 change because it modifies production image workflows, CI-download
 | Partial secret initialization bypasses cleanup | The temporary root is registered immediately after creation; the outer `finally` selects the completed or pending root and verifies deletion | `PendingImageSecretRoot` and `PendingDevStandSecretRoot` are required by the critical static contract | PASS |
 | False residue evidence | OTLP verification snapshots processes and Docker containers before and after the test and fails on newly created residue | live OTLP run: all 13 required tests pass, zero new process/container residue | PASS |
 | Host topology disclosure or non-portable proof | Critical command records store executable leaf names, repository-relative paths, and `working_directory: "."` | critical runner self-test | PASS |
-| Secrets accidentally committed in changed lines | gitleaks 8.30.0 scans only added diff lines with full redaction | 30.85 KB scanned; no leaks found | PASS |
+| Secrets accidentally committed in changed lines | gitleaks 8.30.0 scans added diff lines plus untracked/ignored batch artifacts with full redaction | 123,261 UTF-8 bytes scanned from batch base; no leaks found | PASS |
 | Critical isolation test silently skipped or pointed at production | The test rejects missing, production, or staging DSNs; acceptance uses a disposable localhost-only PostgreSQL 17 database explicitly named `engram_critical_test` | 199/199 passed, zero skips; the disposable DB container was removed in `finally` and residue is zero | PASS |
 | GHSA-gj2h-2fpw-fhv9 credential leak through pre-hydration GET | Official advisory requires SSR markup from `UForm`/`UAuthForm`; the console is explicitly `ssr: false` and has no affected component usage. A critical guard pins the reviewed lock state, scans source, and rejects a hostile UAuthForm fixture. | Official GitHub advisory via Parallel; `NUXT-UI-GHSA-gj2h-2fpw-fhv9.json`; targeted critical test PASS | NOT REACHABLE, FAIL-CLOSED |
+| Silent omission of runtime-required native optional package | Immutable install explicitly includes optionals and has bounded idempotent-fetch retries; a lock-driven OS/CPU/libc verifier requires every applicable package and exact locked version before Nuxt | injected 839-package tree fails with the exact missing identity; clean Linux/glibc tree installs 840 and checks 12; hostile verifier self-test PASS | PASS, FAIL-CLOSED |
 
 ## External-source basis
 
@@ -35,9 +36,10 @@ This is an S4 change because it modifies production image workflows, CI-download
 - GitHub Actions security guidance: <https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions>
 - Nuxt UI advisory: <https://github.com/advisories/GHSA-gj2h-2fpw-fhv9>
 - Context7 and Parallel were used to consult current official documentation. Tavily remains unavailable because its MCP route requires OAuth authorization; no claim was filled from model memory in its place.
+- Native dependency basis: <https://github.com/npm/cli/issues/4828>, <https://github.com/npm/cli/issues/8320>, <https://github.com/npm/cli/pull/8184>, and <https://github.com/parcel-bundler/lightningcss/issues/567>.
 
 ## Residual risk and verdict
 
-The local network did not complete the 62 MB Scout asset download within two command timeouts, so a local byte-for-byte hash is not claimed. The official release API metadata is recorded, and both workflows fail closed on the exact digest before installation. The full critical suite passed against a disposable dedicated test database with 199/199 tests, zero skips, portable evidence, and zero database-container residue. The image gate reports one direct moderate npm advisory; it is accepted only as demonstrably unreachable under the explicit SPA/no-UForm guard above, not silently waived. A clean-commit image/dev-stand run and the successor CI workflow remain required.
+The local network did not complete the 62 MB Scout asset download within two command timeouts, so a local byte-for-byte hash is not claimed. The official release API metadata is recorded, and both workflows fail closed on the exact digest before installation. The full critical suite passed against a disposable dedicated test database with 201/201 tests, zero skips, portable evidence, and zero database-container residue. The image gate reports one direct moderate npm advisory; it is accepted only as demonstrably unreachable under the explicit SPA/no-UForm guard above, not silently waived. A clean-commit image/dev-stand run and the successor CI workflow remain required.
 
 Verdict: **IMPLEMENTATION REVIEW PASS; RUNTIME/CI RELEASE VERDICT PENDING.**

@@ -443,6 +443,9 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 	t.Run("Nuxt UI credential-form advisory remains unreachable", func(t *testing.T) {
 		verifyNuxtUICredentialFormAdvisoryUnreachable(t, repo)
 	})
+	t.Run("operator native optional tree is verified", func(t *testing.T) {
+		verifyOperatorNativeOptionalTree(t, repo)
+	})
 
 	verification := readFile(t, verificationPath)
 	for _, fragment := range []string{
@@ -823,6 +826,33 @@ func findNuxtUICredentialFormUsage(root string) ([]string, error) {
 		return nil
 	})
 	return matches, err
+}
+
+func verifyOperatorNativeOptionalTree(t *testing.T, repo string) {
+	t.Helper()
+	verifier := filepath.Join(repo, "apps", "operator-console", "scripts", "verify-native-optional-deps.mjs")
+	command := exec.Command("node", verifier, "--self-test")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("native optional dependency verifier self-test failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "native-optional-deps self-test=PASS") {
+		t.Fatalf("native optional dependency verifier emitted no PASS proof: %s", output)
+	}
+
+	dockerfile := readFile(t, filepath.Join(repo, "Dockerfile"))
+	for _, required := range []string{
+		"npm ci --include=optional",
+		"--fetch-retries=5",
+		"--fetch-retry-factor=2",
+		"--fetch-retry-mintimeout=1000",
+		"--fetch-retry-maxtimeout=30000",
+		"node scripts/verify-native-optional-deps.mjs",
+	} {
+		if !strings.Contains(dockerfile, required) {
+			t.Fatalf("operator Docker build lacks native optional dependency contract %q", required)
+		}
+	}
 }
 
 func testCanonicalReleaseValidation(t *testing.T, repo string) {

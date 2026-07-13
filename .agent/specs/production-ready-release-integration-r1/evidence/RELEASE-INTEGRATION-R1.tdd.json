@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "recorded_at": "2026-07-13T03:41:19.9331020Z",
+  "recorded_at": "2026-07-13T05:30:18.6380046Z",
   "base_commit": "888708b3f20d0b520021cfcc4ae095ea5ddd2b81",
-  "scope": "release integration: Docker Scout provisioning, file-backed dev-stand/image credentials, portable critical evidence, and measured OTLP residue",
+  "scope": "release integration: Docker Scout provisioning, file-backed dev-stand/image credentials, portable critical evidence, measured OTLP residue, and fail-closed optional-native build completeness",
   "red": [
     {
       "command": "go test -tags=critical ./tests/critical/runtime -run TestDockerReleaseRefFreshnessGuard -count=1",
@@ -28,6 +28,16 @@
       "command": "./scripts/production-gates/assert-go-test-json.ps1 -SelfTest",
       "result": "FAIL",
       "observation": "the hostile portability assertion detected that the nested parser summary exposed an absolute host input_path"
+    },
+    {
+      "command": "clean exact-head build-and-scan-images.ps1 on 9282f324",
+      "result": "FAIL",
+      "observation": "npm ci exited zero after 839 packages, then Nuxt failed because lightningcss-linux-x64-gnu was absent"
+    },
+    {
+      "command": "target-only unavailable tarball injection with the committed lock",
+      "result": "FAIL_AS_EXPECTED",
+      "observation": "npm reproduced its false-success 839-package tree and the new verifier named the exact missing locked package before Nuxt"
     }
   ],
   "green": [
@@ -78,12 +88,27 @@
     {
       "command": "git diff --unified=0 added lines | gitleaks stdin --redact=100",
       "result": "PASS",
-      "detail": "final cumulative rerun scanned 87.88 KB since the batch base; no leaks found"
+      "detail": "final cumulative rerun scanned 123,261 UTF-8 bytes since the batch base, including untracked and ignored evidence; no leaks found"
     },
     {
       "command": "go test -tags=critical ./tests/critical/runtime -run TestDockerReleaseRefFreshnessGuard/Nuxt_UI_credential-form_advisory_remains_unreachable -count=1 -v",
       "result": "PASS",
       "detail": "reviewed @nuxt/ui 3.3.7 remains SPA-only, UForm/UAuthForm usage is absent, and a hostile UAuthForm fixture is rejected"
+    },
+    {
+      "command": "node apps/operator-console/scripts/verify-native-optional-deps.mjs --self-test",
+      "result": "PASS",
+      "detail": "hostile missing/version/platform/arch/OS-only/CPU-only/x64-libc/ARM-libc cases pass"
+    },
+    {
+      "command": "clean pinned Node 22/npm 10.9.8 Linux install plus verify-native-optional-deps.mjs",
+      "result": "PASS",
+      "detail": "840 packages installed; platform=linux arch=x64 libc=glibc checked=12"
+    },
+    {
+      "command": "run-critical-suite.ps1 with a disposable localhost-only PostgreSQL 17 database after native guard and parser fix",
+      "result": "PASS",
+      "detail": "201 tests, 201 passed, 0 failed, 0 skipped, 0 unexpected skips; no absolute evidence paths; disposable database residue is zero"
     }
   ],
   "external_source_evidence": {
@@ -96,6 +121,8 @@
     "context7": "official GitHub Actions, Docker, and OpenTelemetry documentation consulted",
     "parallel": "official GitHub and Docker documentation consulted",
     "parallel_nuxt_ui_advisory": "official GitHub advisory GHSA-gj2h-2fpw-fhv9 consulted; affected <=4.7.1, patched versions none, exploit requires SSR UForm/UAuthForm credential markup",
+    "context7_native_build": "official npm Arborist and Node 22 diagnostic-report documentation consulted for optional failure behavior and libc detection",
+    "parallel_native_build": "official npm/cli issues 4828 and 8320, merged PR 8184, npm config documentation, and lightningcss issue 567 consulted",
     "tavily": "BLOCKED: OAuth authorization required"
   },
   "incomplete_checks": [
@@ -111,5 +138,5 @@
       "reason": "the image gate intentionally rejects a dirty source tree"
     }
   ],
-  "verdict": "IMPLEMENTATION_GREEN_RUNTIME_GATES_PENDING"
+  "verdict": "IMPLEMENTATION_GREEN_EXACT_COMMIT_IMAGE_AND_DEV_STAND_GATES_PENDING"
 }

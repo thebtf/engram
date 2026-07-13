@@ -28,6 +28,8 @@
 | Missing DB silently treated as success | A full run failed 196/197 without a dedicated DSN. Final acceptance reran against disposable `engram_critical_test` PostgreSQL and passed 199/199 with zero skips and zero container residue. |
 | Secret-like test fixtures | Fixtures are computed and explicitly marked as non-secrets; gitleaks scans all added content with no finding. |
 | Direct moderate npm advisory | GHSA-gj2h-2fpw-fhv9 is unreachable because the console is SPA-only and does not use UForm/UAuthForm. A critical guard pins the reviewed state and rejects a hostile affected component; dependency or SSR changes force reclassification. |
+| npm exits zero with an incomplete optional-native tree | The original 839-package failure was reproduced by target-only fetch denial. The implementation checks every lock-applicable OS/CPU/libc optional package and exact version before Nuxt; the injected tree fails and a clean Linux tree checks 12. |
+| Portable summary but absolute nested parser stdout | Root review found this on the first 201-test run, changed the parser output to the existing evidence-path normalizer, and replaced the entire evidence run. The final directory has zero drive-letter matches. |
 
 ## Verification reviewed
 
@@ -35,11 +37,12 @@
 - Targeted critical runtime contract: PASS.
 - `assert-go-test-json.ps1`, `run-critical-suite.ps1`, `run-db-suite.ps1`, and `run-dev-stand.ps1` self-tests: PASS.
 - Six changed PowerShell scripts parse through the PowerShell AST parser: PASS.
-- Full critical evidence: 199 tests, 199 passed, zero failed/skipped/unexpected skips.
+- Full critical evidence: 201 tests, 201 passed, zero failed/skipped/unexpected skips.
 - Critical command evidence: two records, executables `go` and `pwsh`, `working_directory` is `.`, no absolute artifact paths.
 - OTLP evidence: 13 required tests, zero missing/failed, measured process/container residue both zero.
-- gitleaks 8.30.0: no leaks in 87.88 KB of cumulative changed and new evidence content since the batch base.
+- gitleaks 8.30.0: no leaks in 123,261 UTF-8 bytes of cumulative added, untracked, and ignored content since the batch base.
 - `git diff --check`: PASS.
+- Native optional verifier hostile self-test: PASS; clean pinned Linux/glibc install checks 12 applicable packages; injected omission fails with the exact locked package identity.
 
 ## Unresolved release gates
 

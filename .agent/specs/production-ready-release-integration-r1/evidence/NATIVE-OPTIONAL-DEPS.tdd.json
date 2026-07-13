@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-13T05:30:18.6380046Z",
+  "scope": "operator-console Linux container optional-native dependency completeness",
+  "original_failure": {
+    "source_commit": "9282f324",
+    "npm_exit": 0,
+    "installed_packages": 839,
+    "error": "Cannot find module '../lightningcss.linux-x64-gnu.node'"
+  },
+  "root_cause": "The Docker build treated npm success as proof of a complete platform-native tree even though npm may silently omit a failed optional native package.",
+  "hypotheses": {
+    "missing_committed_lock_entry": "REFUTED",
+    "wrong_platform_or_omit_optional": "REFUTED",
+    "advisory_guard_changed_dependency_inputs": "REFUTED",
+    "optional_fetch_failure_can_false-succeed": "CONFIRMED_BY_INJECTION"
+  },
+  "rejected_repairs": [
+    "an exact second npm install failed with ERR_INVALID_ARG_TYPE against the inconsistent hidden lock",
+    "restoring the root lock and removing the hidden lock before a second install exceeded 300 seconds",
+    "a Lightning-CSS-only dependency was rejected because nine native-parent families share the class"
+  ],
+  "implementation": {
+    "installer": "npm ci --include=optional with five bounded idempotent-fetch retries",
+    "verifier": "lock-driven OS/CPU/libc applicability, installed package presence, and exact version",
+    "policy": "fail before Nuxt; no second install; no lock mutation"
+  },
+  "red_green": [
+    {
+      "case": "target-only unreachable locked tarball",
+      "result": "EXPECTED_FAIL",
+      "detail": "npm exit 0 and 839 packages followed by verifier error: lightningcss-linux-x64-gnu missing, expected 1.32.0"
+    },
+    {
+      "case": "clean pinned Node 22/npm 10.9.8 Linux/glibc install",
+      "result": "PASS",
+      "detail": "840 packages; checked 12 applicable optional-native packages"
+    },
+    {
+      "case": "hostile verifier self-test",
+      "result": "PASS",
+      "detail": "missing, version, OS-only/CPU-only constraints, CPU exclusion, x64/ARM libc, and cleanup cases"
+    },
+    {
+      "case": "full critical runner with disposable PostgreSQL 17",
+      "result": "PASS",
+      "detail": "201/201, zero skips, zero non-zero child commands, portable evidence, zero DB-container residue"
+    }
+  ],
+  "external_sources": [
+    "https://github.com/npm/cli/issues/4828",
+    "https://github.com/npm/cli/issues/8320",
+    "https://github.com/npm/cli/pull/8184",
+    "https://github.com/parcel-bundler/lightningcss/issues/567",
+    "https://docs.npmjs.com/cli/v10/using-npm/config",
+    "https://nodejs.org/docs/latest-v22.x/api/report.html"
+  ],
+  "source_routes": {
+    "context7": "PASS",
+    "parallel": "PASS",
+    "tavily": "BLOCKED: OAuth authorization required"
+  },
+  "verdict": "SOURCE_AND_CRITICAL_ACCEPTED_EXACT_COMMIT_IMAGE_GATE_PENDING"
+}
