@@ -234,7 +234,7 @@ function Read-CriticalConfig {
         'image scanner' = '    scanner: "docker scout cves"'
         'image severities' = '    severities: ["critical", "high"]'
         'image findings policy' = '    fail_on_findings: true'
-        'PostgreSQL image target' = '      postgres: "pgvector/pgvector:pg17"'
+        'PostgreSQL image target' = '      postgres: "ghcr.io/thebtf/engram-postgres:main"'
         'server image target' = '      server: "ghcr.io/thebtf/engram:main"'
         'operator image target' = '      operator-console: "ghcr.io/thebtf/engram-operator-console:main"'
         'forbidden synthetic tag' = '      - "engram:prc-candidate"'

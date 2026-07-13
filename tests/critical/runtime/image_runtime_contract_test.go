@@ -422,6 +422,9 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		"ENGRAM_VAULT_KEY_SECRET_FILE",
 		"DevStandSecretRoot",
 		"Set-ComposeSecretPathAccess",
+		"ghcr.io/thebtf/engram-postgres:main",
+		"postgres_build_completed",
+		"dev-stand-failure-logs",
 		"credential_secret_mounts_verified",
 	} {
 		if !strings.Contains(devStandAction, required) {

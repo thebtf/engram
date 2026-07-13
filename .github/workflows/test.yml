@@ -280,7 +280,7 @@ jobs:
             if ($functions.Count -ne 1) { throw "Get-DevStandImageTargets cardinality must be exactly 1; found $($functions.Count)" }
             $maps = @($functions[0].Body.FindAll({ param($node) $node -is [System.Management.Automation.Language.HashtableAst] }, $true))
             if ($maps.Count -ne 1) { throw "Get-DevStandImageTargets must contain exactly one live hashtable; found $($maps.Count)" }
-            $expected = [ordered]@{ postgres = "'pgvector/pgvector:pg17'"; server = "'ghcr.io/thebtf/engram:main'"; 'operator-console' = "'ghcr.io/thebtf/engram-operator-console:main'" }
+            $expected = [ordered]@{ postgres = "'ghcr.io/thebtf/engram-postgres:main'"; server = "'ghcr.io/thebtf/engram:main'"; 'operator-console' = "'ghcr.io/thebtf/engram-operator-console:main'" }
             if ($maps[0].KeyValuePairs.Count -ne $expected.Count) { throw "exact image target map must contain 3 services; found $($maps[0].KeyValuePairs.Count)" }
             $actual = @{}
             foreach ($pair in $maps[0].KeyValuePairs) {
@@ -456,8 +456,7 @@ jobs:
             $sourceRoot = Get-ExactCapturedInvocation $ast 'dev-stand-source-root' '$gitPath' "@('-C', `$composeDirectory, 'rev-parse', '--show-toplevel')" '$sourceRoot' $outerBranch
             $sourceCommit = Get-ExactCapturedInvocation $ast 'dev-stand-source-commit' '$gitPath' "@('-C', `$sourceRepository, 'rev-parse', '--verify', 'HEAD^{commit}')" '$sourceHead' $outerBranch
             $sourceStatus = Get-ExactCapturedInvocation $ast 'dev-stand-source-tracked-status' '$gitPath' "@('-C', `$sourceRepository, 'status', '--porcelain=v1', '--untracked-files=all')" '$sourceStatus' $outerBranch
-            $build = Get-ExactCapturedInvocation $ast 'dev-stand-compose-build' '$dockerPath' "(@(`$composeArgs) + @('build', '--pull', 'server', 'operator-console'))" '$build' $upBranch
-            $pull = Get-ExactCapturedInvocation $ast 'dev-stand-postgres-pull' '$dockerPath' "(@(`$composeArgs) + @('pull', 'postgres'))" '$pull' $upBranch
+            $build = Get-ExactCapturedInvocation $ast 'dev-stand-compose-build' '$dockerPath' "(@(`$composeArgs) + @('build', '--pull', 'server', 'operator-console', 'postgres'))" '$build' $upBranch
             $postHead = Get-ExactCapturedInvocation $ast 'dev-stand-source-commit-post-build' '$gitPath' "@('-C', `$sourceRepository, 'rev-parse', '--verify', 'HEAD^{commit}')" '$postBuildHead' $upBranch
             $postStatus = Get-ExactCapturedInvocation $ast 'dev-stand-source-tracked-status-post-build' '$gitPath' "@('-C', `$sourceRepository, 'status', '--porcelain=v1', '--untracked-files=all')" '$postBuildStatus' $upBranch
             $prelaunch = Get-ExactCapturedInvocation $ast 'dev-stand-prelaunch-image-inspect-$($target.Key)' '$dockerPath' "@('image', 'inspect', `$target.Value, '--format', '{{.Id}}')" '$prelaunchInspect' $upBranch
@@ -467,7 +466,7 @@ jobs:
             foreach ($command in @($sourceRoot, $sourceCommit, $sourceStatus)) {
               Assert-ExactCommandControlFlow -node $command -expectedIfConditions @($outerBranch) -expectedLoopConditions @()
             }
-            foreach ($command in @($build, $pull, $postHead, $postStatus, $up)) {
+            foreach ($command in @($build, $postHead, $postStatus, $up)) {
               Assert-ExactCommandControlFlow -node $command -expectedIfConditions @($upBranch) -expectedLoopConditions @()
             }
             Assert-ExactCommandControlFlow -node $prelaunch -expectedIfConditions @($upBranch) -expectedLoopConditions @('foreach:(Get-DevStandImageTargets).GetEnumerator()')
@@ -488,7 +487,7 @@ jobs:
             })
             if ($liveScouts.Count -ne 1 -or $liveScouts[0].Extent.StartOffset -ne $scan.Extent.StartOffset) { throw "live Docker Scout invocation cardinality must be exactly 1; found $($liveScouts.Count)" }
 
-            $ordered = @($sourceRoot, $sourceCommit, $sourceStatus, $build, $pull, $postHead, $postStatus, $prelaunch, $up)
+            $ordered = @($sourceRoot, $sourceCommit, $sourceStatus, $build, $postHead, $postStatus, $prelaunch, $up)
             for ($i = 1; $i -lt $ordered.Count; $i++) {
               if ($ordered[$i].Extent.StartOffset -le $ordered[$i - 1].Extent.StartOffset) { throw "live dev-stand invocation order is invalid at '$([string]$ordered[$i].CommandElements[1].Value)'" }
             }
@@ -572,7 +571,7 @@ jobs:
             foreach ($required in @('Invoke-R9ProfileAudit', "freshness = 'HISTORICAL_DISCOVERY_ONLY'", 'used_for_acceptance = $false', 'mutable_register_read = $false', 'authority rejected_r8_head drifted', 'authority r8_scope_provenance_sha256 drifted', 'source_audit use must remain discovery-only and never acceptance authority', 'digest serialization drifted', 'digest path_case drifted', 'missing frozen path was accepted', 'extra frozen path was accepted', "`$wrongOwner.candidates[0].plan_owner = 'NO-PATHS'", 'zero-declaration non-empty candidate did not fail clearly', 'wrong test name was accepted', 'stale evidence namespace was accepted', 'undeclared pending .agent/testing path was accepted', 'explicitly forbidden pending path was accepted', 'prefix-only pending contract serialized a null exact-path declaration', 'prefix-only pending full plan-owned evidence surface failed', 'pending probe accepted or obscured a non-anchor base', 'R9 profile accepted a wrong rejected R8 head', 'R9 profile accepted wrong AB5F scope provenance', 'R9 profile accepted the mutable register as authority', 'R9 profile accepted wrong digest serialization', 'R9 profile accepted wrong digest path-case semantics')) {
               if (-not $activeAuthorityRunnerText.Contains($required)) { throw "active-candidate authority runner is missing '$required'" }
             }
-            foreach ($required in @('Test-StrictBoolean', '--untracked-files=all', 'dev-stand-source-commit', 'dev-stand-source-commit-post-build', 'dev-stand-source-tracked-status-post-build', 'dev-stand-compose-build', "@('build', '--pull', 'server', 'operator-console')", 'dev-stand-postgres-pull', "@('pull', 'postgres')", "@('up', '-d', '--no-build', '--pull', 'never', '--wait')", 'source_commit = $sourceCommit', 'source_tracked_clean = $sourceTrackedClean', 'prelaunch_image_ids = $prelaunchImageIds', 'prelaunch_to_running_image_identity = $prelaunchToRunningImageIdentity', 'scanned_reference = $scanReference', '$databaseName = New-RunDatabaseName -RequestedRunId $RunId -RepeatIndex $repeatIndex', 'engram_prc_rg_test_${runHash}_r$RepeatIndex', 'Get-RequiredSessionStartExecutionProof', '$sessionStartExecutionProof = Get-RequiredSessionStartExecutionProof $goTestSummary', 'required-session-start-execution.json', 'required_session_start_execution = $sessionStartExecutionProof')) {
+            foreach ($required in @('Test-StrictBoolean', '--untracked-files=all', 'dev-stand-source-commit', 'dev-stand-source-commit-post-build', 'dev-stand-source-tracked-status-post-build', 'dev-stand-compose-build', "@('build', '--pull', 'server', 'operator-console', 'postgres')", 'postgres_build_completed', 'dev-stand-failure-logs', "@('up', '-d', '--no-build', '--pull', 'never', '--wait')", 'source_commit = $sourceCommit', 'source_tracked_clean = $sourceTrackedClean', 'prelaunch_image_ids = $prelaunchImageIds', 'prelaunch_to_running_image_identity = $prelaunchToRunningImageIdentity', 'scanned_reference = $scanReference', '$databaseName = New-RunDatabaseName -RequestedRunId $RunId -RepeatIndex $repeatIndex', 'engram_prc_rg_test_${runHash}_r$RepeatIndex', 'Get-RequiredSessionStartExecutionProof', '$sessionStartExecutionProof = Get-RequiredSessionStartExecutionProof $goTestSummary', 'required-session-start-execution.json', 'required_session_start_execution = $sessionStartExecutionProof')) {
               if (-not $dbRunnerText.Contains($required)) { throw "dev-stand source/build provenance contract is missing '$required'" }
             }
             foreach ($required in @('openclaw-lock-non-ignored', "@('check-ignore', '--no-index', '--quiet'", 'npm pack contains forbidden path', 'dist/index.js', 'dist/index.d.ts', 'scripts/install.sh', 'npm-ci -> npm-typecheck -> npm-test -> npm-audit-high -> npm-pack-dry-run')) {
@@ -641,7 +640,7 @@ jobs:
 
             $devStandStep = Get-StepBody $execution 'Run tracked dev-stand lifecycle runner'
             if (-not $devStandStep.Contains("run: $trackedDevStandWrapper")) { throw 'workflow does not execute the tracked dev-stand wrapper exactly' }
-            foreach ($required in @("foreach (`$action in @('Up', 'Ready', 'Scan'))", 'if ($upAttempted)', "Read-ActionSummary 'Down'", 'residual_resources_zero', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready', 'Test-StrictBoolean', 'source_commit', 'source_tracked_clean', 'prelaunch_image_ids', 'dev-stand-compose-build', 'dev-stand-postgres-pull', 'Scan image ID is not the exact prelaunch/running ID', 'Scan command arguments do not end in the recorded immutable reference')) {
+            foreach ($required in @("foreach (`$action in @('Up', 'Ready', 'Scan'))", 'if ($upAttempted)', "Read-ActionSummary 'Down'", 'residual_resources_zero', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready', 'Test-StrictBoolean', 'source_commit', 'source_tracked_clean', 'prelaunch_image_ids', 'dev-stand-compose-build', 'postgres_build_completed', 'Scan image ID is not the exact prelaunch/running ID', 'Scan command arguments do not end in the recorded immutable reference')) {
               if (-not $devStandRunnerText.Contains($required)) { throw "dev-stand runner implementation is missing '$required'" }
             }
 
@@ -701,7 +700,7 @@ jobs:
           Assert-MutationRejected 'remove wrapper proxied operator validation' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner ($devStandRunner.Replace('dev-stand-operator-api-health', '')) }
           Assert-MutationRejected 'remove dev-stand Scan action' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner ($devStandRunner.Replace("@('Up', 'Ready', 'Scan')", "@('Up', 'Ready')")) }
           Assert-MutationRejected 'remove unconditional Down validation' { Assert-WorkflowContract $workflow $critical $stand $dbRunner $criticalRunner ($devStandRunner.Replace("Read-ActionSummary 'Down'", '')) }
-          Assert-MutationRejected 'remove prelaunch compose build' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("@('build', '--pull', 'server', 'operator-console')", "@('config')")) $criticalRunner $devStandRunner }
+          Assert-MutationRejected 'remove prelaunch compose build' { Assert-WorkflowContract $workflow $critical $stand ($dbRunner.Replace("@('build', '--pull', 'server', 'operator-console', 'postgres')", "@('config')")) $criticalRunner $devStandRunner }
           $lateBuildRunner = $dbRunner.Replace("Invoke-CapturedProcess 'dev-stand-compose-build'", "Invoke-CapturedProcess 'dev-stand-compose-build-placeholder'") + "`n# Invoke-CapturedProcess 'dev-stand-compose-build'"
           Assert-MutationRejected 'move prelaunch compose build after launch' { Assert-WorkflowContract $workflow $critical $stand $lateBuildRunner $criticalRunner $devStandRunner }
           $buildLines = @($dbRunner -split "`r?`n" | Where-Object { $_.Contains('$build = Invoke-CapturedProcess ''dev-stand-compose-build''') })

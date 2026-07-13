@@ -172,7 +172,7 @@ function Read-DevStandConfig {
         'image scanner' = '  scanner: "docker scout cves"'
         'image scan severities' = '  severities: ["critical", "high"]'
         'image scan finding policy' = '  fail_on_findings: true'
-        'PostgreSQL image' = '    postgres: "pgvector/pgvector:pg17"'
+        'PostgreSQL image' = '    postgres: "ghcr.io/thebtf/engram-postgres:main"'
         'server image' = '    server: "ghcr.io/thebtf/engram:main"'
         'operator-console image' = '    operator-console: "ghcr.io/thebtf/engram-operator-console:main"'
         'forbidden synthetic image' = '    - "engram:prc-candidate"'
@@ -192,7 +192,7 @@ function Read-DevStandConfig {
 
 function Test-ExactImageMaps {
     param([Parameter(Mandatory)]$Summary)
-    $expected = [ordered]@{ postgres = 'pgvector/pgvector:pg17'; server = 'ghcr.io/thebtf/engram:main'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
+    $expected = [ordered]@{ postgres = 'ghcr.io/thebtf/engram-postgres:main'; server = 'ghcr.io/thebtf/engram:main'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
     foreach ($entry in $expected.GetEnumerator()) {
         $imageProperty = $Summary.actual_images.PSObject.Properties[$entry.Key]
         $runningProperty = $Summary.actual_image_ids.PSObject.Properties[$entry.Key]
@@ -227,7 +227,7 @@ function Read-ActionSummary {
     if ($Action -in @('Up', 'Ready', 'Scan') -and -not (Test-ExactImageMaps $summary)) { throw "$Action did not prove exact tag-to-running-image identity" }
     if ($Action -in @('Up', 'Ready', 'Scan')) {
         if ([string]$summary.source_commit -notmatch '^[a-f0-9]{40}$' -or -not (Test-StrictBoolean $summary.source_tracked_clean $true)) { throw "$Action did not prove a clean exact source commit" }
-        foreach ($field in @('compose_build_completed', 'postgres_pull_completed', 'launch_no_build', 'prelaunch_to_running_image_identity')) {
+        foreach ($field in @('compose_build_completed', 'postgres_build_completed', 'launch_no_build', 'prelaunch_to_running_image_identity')) {
             if (-not (Test-StrictBoolean $summary.$field $true)) { throw "$Action did not preserve strict-Boolean source-build/prelaunch/running image provenance for '$field'" }
         }
     }
@@ -239,7 +239,7 @@ function Read-ActionSummary {
             if (-not (Test-StrictBoolean $summary.$field $false)) { throw "Up credential persistence proof '$field' is not strict false" }
         }
         $commands = Get-Content -LiteralPath $summary.commands -Raw | ConvertFrom-Json -Depth 100
-        foreach ($name in @('dev-stand-source-root', 'dev-stand-source-commit', 'dev-stand-source-tracked-status', 'dev-stand-compose-build', 'dev-stand-postgres-pull', 'dev-stand-prelaunch-image-inspect-postgres', 'dev-stand-prelaunch-image-inspect-server', 'dev-stand-prelaunch-image-inspect-operator-console', 'dev-stand-up', 'dev-stand-postgres-container-id', 'dev-stand-postgres-credential-injection', 'dev-stand-postgres-secret-mounts', 'dev-stand-server-container-id', 'dev-stand-server-credential-injection', 'dev-stand-server-secret-mounts', 'dev-stand-postgres-ready', 'dev-stand-health', 'dev-stand-api-ready', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready')) { if (@($commands | Where-Object name -eq $name).Count -ne 1) { throw "Up did not execute '$name' exactly once" } }
+        foreach ($name in @('dev-stand-source-root', 'dev-stand-source-commit', 'dev-stand-source-tracked-status', 'dev-stand-compose-build', 'dev-stand-prelaunch-image-inspect-postgres', 'dev-stand-prelaunch-image-inspect-server', 'dev-stand-prelaunch-image-inspect-operator-console', 'dev-stand-up', 'dev-stand-postgres-container-id', 'dev-stand-postgres-credential-injection', 'dev-stand-postgres-secret-mounts', 'dev-stand-server-container-id', 'dev-stand-server-credential-injection', 'dev-stand-server-secret-mounts', 'dev-stand-postgres-ready', 'dev-stand-health', 'dev-stand-api-ready', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready')) { if (@($commands | Where-Object name -eq $name).Count -ne 1) { throw "Up did not execute '$name' exactly once" } }
     }
     elseif ($Action -eq 'Ready') {
         $commands = Get-Content -LiteralPath $summary.commands -Raw | ConvertFrom-Json -Depth 100
@@ -250,7 +250,7 @@ function Read-ActionSummary {
         foreach ($name in @('dev-stand-source-root', 'dev-stand-source-commit', 'dev-stand-source-tracked-status', 'dev-stand-image-inventory', 'dev-stand-vulnerability-scan-postgres', 'dev-stand-vulnerability-scan-server', 'dev-stand-vulnerability-scan-operator-console')) { if (@($commands | Where-Object name -eq $name).Count -ne 1) { throw "Scan did not execute '$name' exactly once" } }
         $scans = @($summary.vulnerability_scan.scans)
         if ($scans.Count -ne 3) { throw "Scan must emit three exact image results; found $($scans.Count)" }
-        $expectedScans = [ordered]@{ postgres = 'pgvector/pgvector:pg17'; server = 'ghcr.io/thebtf/engram:main'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
+        $expectedScans = [ordered]@{ postgres = 'ghcr.io/thebtf/engram-postgres:main'; server = 'ghcr.io/thebtf/engram:main'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
         foreach ($entry in $expectedScans.GetEnumerator()) {
             $matches = @($scans | Where-Object { [string]$_.service -ceq $entry.Key })
             if ($matches.Count -ne 1) { throw "Scan must contain exactly one result for service '$($entry.Key)'; found $($matches.Count)" }

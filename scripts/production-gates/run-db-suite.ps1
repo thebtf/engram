@@ -525,7 +525,7 @@ function Get-DevStandEnvironment {
         STAND_OPERATOR_URL = 'http://localhost:3001'
         NUXT_OPERATOR_API_TARGET = 'http://server:37777'
         ENGRAM_AUTH_DISABLED = 'false'
-        ENGRAM_POSTGRES_IMAGE = 'pgvector/pgvector:pg17'
+        ENGRAM_POSTGRES_IMAGE = 'ghcr.io/thebtf/engram-postgres:main'
         ENGRAM_SERVER_IMAGE = 'ghcr.io/thebtf/engram:main'
         ENGRAM_OPERATOR_IMAGE = 'ghcr.io/thebtf/engram-operator-console:main'
         ENGRAM_BUILD_VERSION = $BuildVersion
@@ -546,7 +546,7 @@ function Get-NativeCommandPath {
 
 function Get-DevStandImageTargets {
     return [ordered]@{
-        postgres = 'pgvector/pgvector:pg17'
+        postgres = 'ghcr.io/thebtf/engram-postgres:main'
         server = 'ghcr.io/thebtf/engram:main'
         'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main'
     }
@@ -653,7 +653,7 @@ function Invoke-DevStandContract {
     $sourceCommit = $null
     $sourceTrackedClean = $false
     $composeBuildCompleted = $false
-    $postgresPullCompleted = $false
+    $postgresBuildCompleted = $false
     $launchNoBuild = $false
     $upProvenanceSummary = $null
     $vulnerabilityScans = [System.Collections.Generic.List[object]]::new()
@@ -706,9 +706,9 @@ function Invoke-DevStandContract {
                 if ([string]$upProvenanceSummary.action -cne 'Up' -or [string]$upProvenanceSummary.verdict -cne 'PASS') { throw 'Ready/Scan requires a passing Up provenance summary' }
                 if ([string]$upProvenanceSummary.source_commit -cne $sourceCommit -or -not (Test-StrictBoolean $upProvenanceSummary.source_tracked_clean $true)) { throw 'Ready/Scan source identity differs from the passing Up build source' }
                 $composeBuildCompleted = Test-StrictBoolean $upProvenanceSummary.compose_build_completed $true
-                $postgresPullCompleted = Test-StrictBoolean $upProvenanceSummary.postgres_pull_completed $true
+                $postgresBuildCompleted = Test-StrictBoolean $upProvenanceSummary.postgres_build_completed $true
                 $launchNoBuild = Test-StrictBoolean $upProvenanceSummary.launch_no_build $true
-                if (-not $composeBuildCompleted -or -not $postgresPullCompleted -or -not $launchNoBuild -or -not (Test-StrictBoolean $upProvenanceSummary.prelaunch_to_running_image_identity $true)) { throw 'passing Up summary lacks complete prelaunch build/image provenance' }
+                if (-not $composeBuildCompleted -or -not $postgresBuildCompleted -or -not $launchNoBuild -or -not (Test-StrictBoolean $upProvenanceSummary.prelaunch_to_running_image_identity $true)) { throw 'passing Up summary lacks complete prelaunch build/image provenance' }
                 foreach ($target in (Get-DevStandImageTargets).GetEnumerator()) {
                     $prelaunchId = Get-MapStringValue -Map $upProvenanceSummary.prelaunch_image_ids -Key $target.Key
                     if ($prelaunchId -notmatch '^sha256:[a-f0-9]{64}$') { throw "Up prelaunch image ID is missing or malformed for '$($target.Key)'" }
@@ -739,16 +739,14 @@ services:
       ENGRAM_AUTH_BOOTSTRAP_CAPABILITY: "${ENGRAM_AUTH_BOOTSTRAP_CAPABILITY:?required by production dev-stand}"
 '@
             $composeArgs = @('compose', '-p', $Project, '-f', $File, '-f', $composeOverridePath)
-            $build = Invoke-CapturedProcess 'dev-stand-compose-build' $dockerPath (@($composeArgs) + @('build', '--pull', 'server', 'operator-console')) $standEnvironment (Join-Path $actionDirectory 'compose-build.stdout.log') (Join-Path $actionDirectory 'compose-build.stderr.log') $connection @($sensitiveValues) 900
+            $build = Invoke-CapturedProcess 'dev-stand-compose-build' $dockerPath (@($composeArgs) + @('build', '--pull', 'server', 'operator-console', 'postgres')) $standEnvironment (Join-Path $actionDirectory 'compose-build.stdout.log') (Join-Path $actionDirectory 'compose-build.stderr.log') $connection @($sensitiveValues) 900
             if ($build.ExitCode -ne 0) { throw "compose source build failed with exit $($build.ExitCode)" }
             $composeBuildCompleted = $true
-            $pull = Invoke-CapturedProcess 'dev-stand-postgres-pull' $dockerPath (@($composeArgs) + @('pull', 'postgres')) $standEnvironment (Join-Path $actionDirectory 'compose-pull-postgres.stdout.log') (Join-Path $actionDirectory 'compose-pull-postgres.stderr.log') $connection @($sensitiveValues) 600
-            if ($pull.ExitCode -ne 0) { throw "compose PostgreSQL pull failed with exit $($pull.ExitCode)" }
-            $postgresPullCompleted = $true
+            $postgresBuildCompleted = $true
             $postBuildHead = Invoke-CapturedProcess 'dev-stand-source-commit-post-build' $gitPath @('-C', $sourceRepository, 'rev-parse', '--verify', 'HEAD^{commit}') @{} (Join-Path $actionDirectory 'source-commit-post-build.stdout.log') (Join-Path $actionDirectory 'source-commit-post-build.stderr.log') $connection @() 30
-            if ($postBuildHead.ExitCode -ne 0 -or $postBuildHead.Stdout.Trim().ToLowerInvariant() -cne $sourceCommit) { throw 'source HEAD changed during compose build/pull' }
+            if ($postBuildHead.ExitCode -ne 0 -or $postBuildHead.Stdout.Trim().ToLowerInvariant() -cne $sourceCommit) { throw 'source HEAD changed during compose build' }
             $postBuildStatus = Invoke-CapturedProcess 'dev-stand-source-tracked-status-post-build' $gitPath @('-C', $sourceRepository, 'status', '--porcelain=v1', '--untracked-files=all') @{} (Join-Path $actionDirectory 'source-tracked-status-post-build.stdout.log') (Join-Path $actionDirectory 'source-tracked-status-post-build.stderr.log') $connection @() 30
-            if ($postBuildStatus.ExitCode -ne 0 -or -not [string]::IsNullOrWhiteSpace($postBuildStatus.Stdout)) { throw 'source tree changed during compose build/pull' }
+            if ($postBuildStatus.ExitCode -ne 0 -or -not [string]::IsNullOrWhiteSpace($postBuildStatus.Stdout)) { throw 'source tree changed during compose build' }
             foreach ($target in (Get-DevStandImageTargets).GetEnumerator()) {
                 $prelaunchInspect = Invoke-CapturedProcess "dev-stand-prelaunch-image-inspect-$($target.Key)" $dockerPath @('image', 'inspect', $target.Value, '--format', '{{.Id}}') @{} (Join-Path $actionDirectory "prelaunch-image-inspect-$($target.Key).stdout.log") (Join-Path $actionDirectory "prelaunch-image-inspect-$($target.Key).stderr.log") $connection @() 30
                 if ($prelaunchInspect.ExitCode -ne 0) { throw "prelaunch image '$($target.Value)' is unavailable for service '$($target.Key)'" }
@@ -886,6 +884,8 @@ services:
             $automaticFailureCleanup = $true
             $failureComposeArgs = @('compose', '-p', $Project, '-f', $File)
             if ($composeOverridePath -and (Test-Path -LiteralPath $composeOverridePath -PathType Leaf)) { $failureComposeArgs += @('-f', $composeOverridePath) }
+            $failureLogs = Invoke-CapturedProcess 'dev-stand-failure-logs' $dockerPath (@($failureComposeArgs) + @('logs', '--no-color', '--tail', '300')) $standEnvironment (Join-Path $actionDirectory 'failure-logs.stdout.log') (Join-Path $actionDirectory 'failure-logs.stderr.log') $connection @($sensitiveValues) 60
+            if ($failureLogs.ExitCode -ne 0) { $errors.Add("automatic failure log capture failed with exit $($failureLogs.ExitCode)") }
             $failureDown = Invoke-CapturedProcess 'dev-stand-failure-cleanup' $dockerPath (@($failureComposeArgs) + @('down', '-v', '--remove-orphans')) $standEnvironment (Join-Path $actionDirectory 'failure-cleanup.stdout.log') (Join-Path $actionDirectory 'failure-cleanup.stderr.log') $connection @($sensitiveValues) 180
             if ($failureDown.ExitCode -ne 0) { $errors.Add("automatic failure cleanup failed with exit $($failureDown.ExitCode)") }
             $residualChecksPerformed = $true
@@ -933,7 +933,7 @@ services:
         source_commit = $sourceCommit
         source_tracked_clean = $sourceTrackedClean
         compose_build_completed = $composeBuildCompleted
-        postgres_pull_completed = $postgresPullCompleted
+        postgres_build_completed = $postgresBuildCompleted
         launch_no_build = $launchNoBuild
         prelaunch_to_running_image_identity = $prelaunchToRunningImageIdentity
         exact_image_targets = Get-DevStandImageTargets
@@ -1039,9 +1039,11 @@ function Invoke-SelfTest {
         Assert-SelfTestCondition (-not (Test-ContainerEnvironmentContract '["DATABASE_DSN_FILE=/run/secrets/database_dsn","DATABASE_DSN_FILE=/tmp/hostile"]' @{ DATABASE_DSN_FILE = '/run/secrets/database_dsn' } @())) 'conflicting duplicate file-backed credential survived the runtime environment proof'
         Assert-SelfTestCondition (-not (Test-ContainerEnvironmentContract '["DATABASE_DSN_FILE=/run/secrets/database_dsn","ENGRAM_AUTH_BOOTSTRAP_CAPABILITY=REDACTED_SENSITIVE_VALUE","ENGRAM_AUTH_BOOTSTRAP_CAPABILITY=hostile"]' @{ DATABASE_DSN_FILE = '/run/secrets/database_dsn' } @('ENGRAM_AUTH_BOOTSTRAP_CAPABILITY'))) 'conflicting duplicate bootstrap capability survived the runtime environment proof'
         Assert-SelfTestCondition (Test-SecretMountDestinations '[{"Type":"bind","Destination":"/run/secrets/database_dsn"}]' @('/run/secrets/database_dsn')) 'secret mount destination proof was rejected'
-        $validInventory = Test-ExactDevStandInventory @{ postgres = 'pgvector/pgvector:pg17'; server = 'ghcr.io/thebtf/engram:main'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
+        $validInventory = Test-ExactDevStandInventory @{ postgres = 'ghcr.io/thebtf/engram-postgres:main'; server = 'ghcr.io/thebtf/engram:main'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
         Assert-SelfTestCondition $validInventory.Pass 'exact compose service/image inventory was rejected'
-        $invalidInventory = Test-ExactDevStandInventory @{ postgres = 'pgvector/pgvector:pg17'; server = 'engram:prc-candidate'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
+        $upstreamFixtureInventory = Test-ExactDevStandInventory @{ postgres = 'pgvector/pgvector:pg17'; server = 'ghcr.io/thebtf/engram:main'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
+        Assert-SelfTestCondition (-not $upstreamFixtureInventory.Pass) 'upstream DB-test fixture was accepted as the production dev-stand PostgreSQL image'
+        $invalidInventory = Test-ExactDevStandInventory @{ postgres = 'ghcr.io/thebtf/engram-postgres:main'; server = 'engram:prc-candidate'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
         Assert-SelfTestCondition (-not $invalidInventory.Pass) 'non-produced engram:prc-candidate image was accepted'
         $testOnlyDatabase = New-RunDatabaseName -RequestedRunId 'prod-production-staging-is-operator-controlled' -RepeatIndex 20
         Assert-SelfTestCondition ($testOnlyDatabase -match '^engram_prc_rg_test_[a-f0-9]{16}_r20$') 'fresh database name is not an unambiguous literal-test identity'

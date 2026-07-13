@@ -46,7 +46,7 @@ image_scan:
   fail_on_findings: true
   machine_evidence: "dev-stand/<run-id>-scan/docker-scout-*.sarif.json plus summary.json"
   exact_service_images:
-    postgres: "pgvector/pgvector:pg17"
+    postgres: "ghcr.io/thebtf/engram-postgres:main"
     server: "ghcr.io/thebtf/engram:main"
     operator-console: "ghcr.io/thebtf/engram-operator-console:main"
   forbidden_synthetic_tags:

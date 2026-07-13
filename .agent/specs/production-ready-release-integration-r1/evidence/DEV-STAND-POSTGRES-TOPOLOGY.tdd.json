@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-13T07:05:00Z",
+  "scope": "clean exact-source production dev-stand PostgreSQL image topology and failure diagnostics",
+  "red": {
+    "source_commit": "08987ddb8e533d4c9365a5bed78e7b84a8601673",
+    "result": "FAIL_WITH_CLEANUP_PASS",
+    "duration_seconds": 43.917,
+    "failure": "the stand forced project UID 70 onto upstream pgvector/pgvector:pg17; PostgreSQL could not chmod or initialize its data directory",
+    "direct_reproduction": "docker run --rm --user 70:70 -e POSTGRES_HOST_AUTH_METHOD=trust pgvector/pgvector:pg17",
+    "direct_error": "initdb could not change permissions on /var/lib/postgresql/data: Operation not permitted",
+    "down_residual_resources_zero": true,
+    "secret_files_cleaned": true,
+    "diagnostic_gap": "failure logs were not captured before automatic cleanup"
+  },
+  "root_cause": "the dev stand mixed the upstream DB-test fixture image with the project-owned hardened production topology; the upstream image owns a different runtime UID and is not compatible with the Compose user contract",
+  "source_pack": {
+    "decision_anchor": "build the project-owned PostgreSQL service in the exact dev stand instead of pulling the upstream DB-test fixture",
+    "context7": {
+      "status": "PASS",
+      "library": "/docker/compose",
+      "claim": "docker compose build accepts multiple named services, and a service with both build and image is tagged with the configured image name",
+      "source": "https://github.com/docker/compose/blob/main/docs/reference/compose_build.md"
+    },
+    "parallel": {
+      "status": "PASS",
+      "claims": [
+        "pgvector's current Dockerfile inherits postgres:17-bookworm",
+        "docker compose build [SERVICE...] is the supported multi-service build path"
+      ],
+      "sources": [
+        "https://github.com/pgvector/pgvector/blob/master/Dockerfile",
+        "https://docs.docker.com/reference/cli/docker/compose/build",
+        "https://github.com/docker-library/postgres/blob/master/docker-entrypoint.sh"
+      ]
+    },
+    "tavily": "BLOCKED: OAuth authorization required",
+    "freshness": "2026-07-13",
+    "library_first_note": "reuse Docker Compose's native multi-service build and the existing deploy/postgres/Dockerfile; no new dependency or bespoke image orchestrator"
+  },
+  "tdd": {
+    "red": [
+      "run-db-suite self-test rejected the missing project PostgreSQL target",
+      "critical runtime guard rejected the missing project target, build provenance field, and failure-log capture"
+    ],
+    "green": [
+      "PowerShell AST parse passed for all three affected runners",
+      "run-db-suite, run-dev-stand, and run-critical-suite self-tests passed",
+      "targeted critical runtime guard passed",
+      "full critical suite passed 203/203 with zero skip, zero malformed lines, and zero nonzero child commands on a disposable database",
+      "disposable critical database residue was zero"
+    ]
+  },
+  "implementation": {
+    "production_postgres_image": "ghcr.io/thebtf/engram-postgres:main",
+    "compose_build_services": [
+      "server",
+      "operator-console",
+      "postgres"
+    ],
+    "database_test_fixture_unchanged": "pgvector/pgvector:pg17",
+    "provenance": "postgres_build_completed replaces the obsolete upstream pull proof",
+    "failure_diagnostics": "redacted docker compose logs are captured before automatic cleanup"
+  },
+  "status": "FIX_IMPLEMENTED_CRITICAL_PASS_EXACT_CLEAN_DEV_STAND_PENDING"
+}
