@@ -1,20 +1,21 @@
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName='Transition')]
 param(
     [Parameter(Mandatory)][string]$Repository,
     [Parameter(Mandatory)][string]$Remote,
     [Parameter(Mandatory)][string]$BaseRemoteRef,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$BaseSha,
-    [Parameter(Mandatory)][string]$HeadRemoteRef,
-    [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$HeadSha,
+    [Parameter(Mandatory, ParameterSetName='Transition')][string]$HeadRemoteRef,
+    [Parameter(Mandatory, ParameterSetName='Transition')][ValidatePattern('^[0-9a-f]{40}$')][string]$HeadSha,
     [string]$ExpectedDefaultBranch = 'main',
-    [Parameter(Mandatory)][string]$EventRepositoryFullName,
-    [Parameter(Mandatory)][string]$EventHeadRepositoryFullName,
-    [Parameter(Mandatory)][string]$ActorLogin,
-    [Parameter(Mandatory)][long]$ActorId,
-    [Parameter(Mandatory)][string]$ActorType,
-    [Parameter(Mandatory)][string]$AuthorAssociation,
-    [Parameter(Mandatory)][string]$ApprovalLabel,
-    [Parameter(Mandatory)][string]$ApprovalEpoch,
+    [Parameter(Mandatory, ParameterSetName='Transition')][string]$EventRepositoryFullName,
+    [Parameter(Mandatory, ParameterSetName='Transition')][string]$EventHeadRepositoryFullName,
+    [Parameter(Mandatory, ParameterSetName='Transition')][string]$ActorLogin,
+    [Parameter(Mandatory, ParameterSetName='Transition')][long]$ActorId,
+    [Parameter(Mandatory, ParameterSetName='Transition')][string]$ActorType,
+    [Parameter(Mandatory, ParameterSetName='Transition')][string]$AuthorAssociation,
+    [Parameter(Mandatory, ParameterSetName='Transition')][string]$ApprovalLabel,
+    [Parameter(Mandatory, ParameterSetName='Transition')][string]$ApprovalEpoch,
+    [Parameter(Mandatory, ParameterSetName='BaseOnly')][switch]$ValidateBaseOnly,
     [string]$ValidatorPath = 'scripts/production-gates/assert-pr-authority-maintenance.ps1',
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedValidatorGitBlob,
     [string]$Artifact = '.agent/e/rg17/pr-authority-maintenance.json'
@@ -147,7 +148,7 @@ function Assert-CanonicalPath {
 
 function Test-ProtectedPath {
     param([Parameter(Mandatory)][string]$Path)
-    return $Path.StartsWith('.github/workflows/', [System.StringComparison]::Ordinal) -or $Path.StartsWith('scripts/production-gates/', [System.StringComparison]::Ordinal) -or $Path.StartsWith('.agent/plans/', [System.StringComparison]::Ordinal)
+    return $Path.StartsWith('.github/workflows/', [System.StringComparison]::Ordinal) -or $Path.StartsWith('scripts/production-gates/', [System.StringComparison]::Ordinal) -or $Path.StartsWith('.agent/plans/', [System.StringComparison]::Ordinal) -or $Path.StartsWith('.agent/specs/release-gates-r12/evidence/plan-governance/', [System.StringComparison]::Ordinal)
 }
 
 function ConvertTo-Rfc3339 {
@@ -287,7 +288,8 @@ function Assert-HistoricalTransitionGitAnchor {
 function Get-RootYamlBlock {
     param([Parameter(Mandatory)][string]$Text, [Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Context)
     [string[]]$lines = [regex]::Split($Text, '\r?\n')
-    [int[]]$headers = @(for ($i=0; $i -lt $lines.Count; $i++) { if ($lines[$i] -ceq "$Name`:") { $i } })
+    $headerPattern = '^' + [regex]::Escape($Name) + '\s*:\s*(?:#.*)?$'
+    [int[]]$headers = @(for ($i=0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match $headerPattern) { $i } })
     if ($headers.Count -ne 1) { throw "$Context must contain exactly one block-form root '${Name}:' key" }
     $start = $headers[0]
     $body = [System.Collections.Generic.List[string]]::new()
@@ -305,11 +307,25 @@ function Assert-ReadOnlyPermissionBlocks {
     for ($i=0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -notmatch '^(?<indent>\s*)permissions\s*:(?<tail>.*)$') { continue }
         $count++
-        if (-not [string]::IsNullOrWhiteSpace([string]$Matches.tail)) { throw "$Context permissions must use block form with only contents: read" }
-        if ($i + 1 -ge $lines.Count) { throw "$Context permissions block is empty" }
-        $expected = ([string]$Matches.indent) + '  contents: read'
-        if ($lines[$i+1] -cne $expected) { throw "$Context permissions block must contain exactly contents: read" }
-        if ($i + 2 -lt $lines.Count -and $lines[$i+2].StartsWith(([string]$Matches.indent) + '  ', [System.StringComparison]::Ordinal)) { throw "$Context permissions block contains an additional capability" }
+        $indent = [string]$Matches.indent
+        $tail = [string]$Matches.tail
+        if ($tail -notmatch '^\s*(?:#.*)?$') { throw "$Context permissions must use block form with only contents: read" }
+        $contentsIndex = -1
+        for ($j=$i+1; $j -lt $lines.Count; $j++) {
+            $trimmed = $lines[$j].Trim()
+            if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith('#', [System.StringComparison]::Ordinal)) { continue }
+            if (-not $lines[$j].StartsWith($indent + '  ', [System.StringComparison]::Ordinal)) { break }
+            if ($lines[$j] -notmatch ('^' + [regex]::Escape($indent + '  ') + 'contents\s*:\s*read\s*(?:#.*)?$')) { throw "$Context permissions block must contain exactly contents: read" }
+            $contentsIndex = $j
+            break
+        }
+        if ($contentsIndex -lt 0) { throw "$Context permissions block is empty" }
+        for ($j=$contentsIndex+1; $j -lt $lines.Count; $j++) {
+            $trimmed = $lines[$j].Trim()
+            if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith('#', [System.StringComparison]::Ordinal)) { continue }
+            if ($lines[$j].StartsWith($indent + '  ', [System.StringComparison]::Ordinal)) { throw "$Context permissions block contains an additional capability" }
+            break
+        }
     }
     if ($count -lt $MinimumCount) { throw "$Context contains $count permissions blocks, expected at least $MinimumCount" }
 }
@@ -325,11 +341,27 @@ function Assert-ImmutableWorkflowActions {
     }
 }
 
+function Get-PrivilegedWorkflowSkeleton {
+    param([Parameter(Mandatory)][string]$Text)
+    $result = [System.Collections.Generic.List[string]]::new()
+    foreach ($rawLine in [regex]::Split($Text, '\r?\n')) {
+        $line = $rawLine.TrimEnd()
+        if ([string]::IsNullOrWhiteSpace($line) -or $line -match '^\s*#') { continue }
+        if ($line -match '^(?<prefix>\s*(?:-\s*)?["'']?uses["'']?\s*:\s*)(?<action>[^#]+?)(?<comment>\s+#.*)?$') {
+            $line = ([string]$Matches.prefix) + '<AUDITED-IMMUTABLE-ACTION>'
+        }
+        $result.Add($line)
+    }
+    return ($result -join "`n")
+}
+
 function Assert-HeadWorkflowSafety {
     param(
+        [Parameter(Mandatory)][string]$BaseAuthorityWorkflow,
         [Parameter(Mandatory)][string]$AuthorityWorkflow,
         [Parameter(Mandatory)][string]$TestWorkflow
     )
+    $baseAuthority = [System.IO.File]::ReadAllText([System.IO.Path]::GetFullPath($BaseAuthorityWorkflow))
     $authority = [System.IO.File]::ReadAllText([System.IO.Path]::GetFullPath($AuthorityWorkflow))
     $test = [System.IO.File]::ReadAllText([System.IO.Path]::GetFullPath($TestWorkflow))
     foreach ($required in @(
@@ -370,6 +402,7 @@ function Assert-HeadWorkflowSafety {
     $uploadArtifact = 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
     Assert-ImmutableWorkflowActions $authority 'candidate authority workflow' @($uploadArtifact)
     Assert-ImmutableWorkflowActions $test 'candidate test workflow' @($checkout, $setupGo, $uploadArtifact)
+    if ((Get-PrivilegedWorkflowSkeleton $authority) -cne (Get-PrivilegedWorkflowSkeleton $baseAuthority)) { throw 'candidate privileged workflow skeleton or run commands differ from the trusted base; only comments and pre-authorized action-pin rotation may change' }
 }
 
 function Assert-RequiredControlPlaneChangeSet {
@@ -622,6 +655,89 @@ $artifactObject = $null
 $exitCode = 1
 $trustedRoot = $null
 try {
+    if ($ValidateBaseOnly) {
+        $repo = [System.IO.Path]::GetFullPath($Repository)
+        if (-not (Test-Path -LiteralPath $repo -PathType Container)) { throw "repository does not exist: $repo" }
+        if ($ExpectedDefaultBranch -notmatch '^[A-Za-z0-9._/-]+$') { throw 'expected default branch has invalid syntax' }
+        $requiredBaseRef = "refs/heads/$ExpectedDefaultBranch"
+        if ($BaseRemoteRef -cne $requiredBaseRef) { throw "base ref '$BaseRemoteRef' is not trusted default-branch ref '$requiredBaseRef'" }
+        if ($ValidatorPath -cne 'scripts/production-gates/assert-pr-authority-maintenance.ps1') { throw 'base-only validator path drifted from the protected trusted-base path' }
+
+        [void](Invoke-Git $repo @('rev-parse','--is-inside-work-tree'))
+        [void](Invoke-Git $repo @('fetch','--no-tags','--force',$Remote,"+$BaseRemoteRef`:refs/authority/base"))
+        $fetchedBase = [string](Invoke-Git $repo @('rev-parse','refs/authority/base^{commit}')).output[-1]
+        if ($fetchedBase -cne $BaseSha) { throw "fetched default-branch base differs from the event base: expected=$BaseSha observed=$fetchedBase" }
+        $baseValidatorBlob = [string](Invoke-Git $repo @('rev-parse',"$BaseSha`:$ValidatorPath")).output[-1]
+        if ($baseValidatorBlob -cne $ExpectedValidatorGitBlob) { throw "trusted base-only validator blob mismatch: expected=$ExpectedValidatorGitBlob observed=$baseValidatorBlob" }
+        $executedBlob = [string](Invoke-Git $repo @('hash-object','--no-filters',[System.IO.Path]::GetFullPath($PSCommandPath))).output[-1]
+        if ($executedBlob -cne $ExpectedValidatorGitBlob) { throw "executed base-only validator is not the trusted base blob: expected=$ExpectedValidatorGitBlob observed=$executedBlob" }
+
+        $trustedRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('engram-authority-maintenance-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $trustedRoot -Force | Out-Null
+        $activePath = 'scripts/production-gates/assert-active-candidate-path-authority.ps1'
+        $ownershipValidatorPath = 'scripts/production-gates/assert-plan-path-ownership.ps1'
+        $ordinaryValidatorPath = 'scripts/production-gates/assert-pr-authority-guard.ps1'
+        $contractPath = '.agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json'
+        $planPath = '.agent/plans/2026-07-10-engram-production-ready-master-plan.md'
+        $statePath = '.agent/plans/2026-07-10-engram-production-ready-ownership-state.json'
+        $scopeMapPath = '.agent/plans/2026-07-10-engram-production-ready-scope-map.json'
+        $planGovernancePath = '.agent/specs/release-gates-r12/evidence/plan-governance/test-r12-plan-governance.ps1'
+        $pathEnvelopePath = '.agent/specs/release-gates-r12/evidence/plan-governance/path-envelope.json'
+        $fixedPointPath = '.agent/specs/release-gates-r12/evidence/plan-governance/fixed-point-proof.json'
+        $authoritySnapshotPath = '.agent/specs/release-gates-r12/evidence/plan-governance/authority-snapshot.json'
+        $activeFile = Join-Path $trustedRoot 'assert-active-candidate-path-authority.ps1'
+        $ownershipValidatorFile = Join-Path $trustedRoot 'assert-plan-path-ownership.ps1'
+        $contractFile = Join-Path $trustedRoot 'base-active-diff-contracts.json'
+        $planFile = Join-Path $trustedRoot 'base-master-plan.md'
+        $stateFile = Join-Path $trustedRoot 'base-ownership-state.json'
+        $scopeMapFile = Join-Path $trustedRoot 'base-scope-map.json'
+        $planGovernanceFile = Join-Path $trustedRoot 'test-r12-plan-governance.ps1'
+        $pathEnvelopeFile = Join-Path $trustedRoot 'path-envelope.json'
+        $fixedPointFile = Join-Path $trustedRoot 'fixed-point-proof.json'
+        $authoritySnapshotFile = Join-Path $trustedRoot 'authority-snapshot.json'
+        Export-GitBlob $repo "$BaseSha`:$activePath" $activeFile
+        Export-GitBlob $repo "$BaseSha`:$ownershipValidatorPath" $ownershipValidatorFile
+        Export-GitBlob $repo "$BaseSha`:$contractPath" $contractFile
+        Export-GitBlob $repo "$BaseSha`:$planPath" $planFile
+        Export-GitBlob $repo "$BaseSha`:$statePath" $stateFile
+        Export-GitBlob $repo "$BaseSha`:$scopeMapPath" $scopeMapFile
+        Export-GitBlob $repo "$BaseSha`:$planGovernancePath" $planGovernanceFile
+        Export-GitBlob $repo "$BaseSha`:$pathEnvelopePath" $pathEnvelopeFile
+        Export-GitBlob $repo "$BaseSha`:$fixedPointPath" $fixedPointFile
+        Export-GitBlob $repo "$BaseSha`:$authoritySnapshotPath" $authoritySnapshotFile
+        $activeBlob = [string](Invoke-Git $repo @('rev-parse',"$BaseSha`:$activePath")).output[-1]
+        $ownershipValidatorBlob = [string](Invoke-Git $repo @('rev-parse',"$BaseSha`:$ownershipValidatorPath")).output[-1]
+        if ([string](Invoke-Git $repo @('hash-object','--no-filters',$activeFile)).output[-1] -cne $activeBlob) { throw 'base-only active validator export differs from its trusted Git blob' }
+        if ([string](Invoke-Git $repo @('hash-object','--no-filters',$ownershipValidatorFile)).output[-1] -cne $ownershipValidatorBlob) { throw 'base-only ownership validator export differs from its trusted Git blob' }
+
+        $contractHash = Get-CanonicalTextSha256 $contractFile; $planHash = Get-CanonicalTextSha256 $planFile; $stateHash = Get-CanonicalTextSha256 $stateFile; $scopeMapHash = Get-CanonicalTextSha256 $scopeMapFile
+        $baseText = [System.IO.File]::ReadAllText($contractFile); Assert-NoDuplicateJsonProperties $baseText 'base-only active contract'
+        $baseContract = $baseText | ConvertFrom-Json -Depth 100
+        $baseFacts = Assert-BaseMaintenanceAuthority $baseContract ([DateTimeOffset]::UtcNow)
+        $ownershipArtifact = Join-Path $trustedRoot 'base-only-plan-ownership.json'
+        & pwsh -NoProfile -File $ownershipValidatorFile -Mode Ledger -Plan $planFile -ExpectedPlanSha256 $planHash -State $stateFile -ScopeMap $scopeMapFile -ExpectedScopeMapSha256 $scopeMapHash -Artifact $ownershipArtifact
+        if ($LASTEXITCODE -ne 0) { throw 'base-only plan/state/scope ownership validation failed' }
+        $bootstrapClosedWorld = $baseFacts.consumed.Count -eq 0
+        if ($bootstrapClosedWorld) {
+            & pwsh -NoProfile -File $planGovernanceFile -Plan $planFile -OwnershipState $stateFile -ScopeMap $scopeMapFile -ActiveContracts $contractFile -PathEnvelope $pathEnvelopeFile -FixedPointProof $fixedPointFile -AuthoritySnapshot $authoritySnapshotFile
+            if ($LASTEXITCODE -ne 0) { throw 'base-only bootstrap closed-world proof failed' }
+        }
+        $activeArtifact = Join-Path $trustedRoot 'base-only-active-authority.json'
+        & pwsh -NoProfile -File $activeFile -Contract $contractFile -ExpectedContractSha256 $contractHash -Plan $planFile -ExpectedPlanSha256 $planHash -Artifact $activeArtifact
+        if ($LASTEXITCODE -ne 0 -or [string](Get-Content -LiteralPath $activeArtifact -Raw | ConvertFrom-Json -Depth 100).verdict -cne 'PASS') { throw 'base-only active authority validation failed' }
+        [string[]]$validatorPaths = @($ordinaryValidatorPath, $activePath, $ValidatorPath, $ownershipValidatorPath)
+        Assert-HistoricalTransitionGitAnchor -WorkingTree $repo -CurrentBaseSha $BaseSha -BaseFacts $baseFacts -ValidatorPaths $validatorPaths
+
+        $finishedAt = [DateTimeOffset]::UtcNow
+        $artifactObject = [ordered]@{
+            schema_version=1; gate='pr-authority-maintenance-base'; verdict='PASS'; started_at=$startedAt.ToString('O'); finished_at=$finishedAt.ToString('O'); duration_seconds=[math]::Round(($finishedAt-$startedAt).TotalSeconds,3)
+            base=[ordered]@{remote_ref=$BaseRemoteRef;expected_sha=$BaseSha;fetched_sha=$fetchedBase;active_epoch=[string]$baseFacts.epoch.epoch;consumed_epoch_count=$baseFacts.consumed.Count;bootstrap_closed_world_proof=$bootstrapClosedWorld;historical_anchor_valid=$null -ne $baseFacts.historical_anchor;strict_latest=$true}
+            trusted_execution=[ordered]@{validator_path=$ValidatorPath;expected_git_blob=$ExpectedValidatorGitBlob;executed_git_blob=$executedBlob;active_validator_git_blob=$activeBlob;ownership_validator_git_blob=$ownershipValidatorBlob;contract_sha256=$contractHash;plan_sha256=$planHash;state_sha256=$stateHash;scope_map_sha256=$scopeMapHash;secrets_used=$false}
+            errors=@()
+        }
+        $exitCode = 0
+    }
+    else {
     $repo = [System.IO.Path]::GetFullPath($Repository)
     if (-not (Test-Path -LiteralPath $repo -PathType Container)) { throw "repository does not exist: $repo" }
     if ($ExpectedDefaultBranch -notmatch '^[A-Za-z0-9._/-]+$') { throw 'expected default branch has invalid syntax' }
@@ -684,6 +800,7 @@ try {
     $fixedPointFile = Join-Path $trustedRoot 'fixed-point-proof.json'
     $authoritySnapshotFile = Join-Path $trustedRoot 'authority-snapshot.json'
     $headAuthorityWorkflowFile = Join-Path $trustedRoot 'head-authority-guard.yml'
+    $baseAuthorityWorkflowFile = Join-Path $trustedRoot 'base-authority-guard.yml'
     $headTestWorkflowFile = Join-Path $trustedRoot 'head-test.yml'
     Export-GitBlob $repo "$BaseSha`:$activePath" $activeFile
     Export-GitBlob $repo "$BaseSha`:$ownershipValidatorPath" $ownershipValidatorFile
@@ -700,6 +817,7 @@ try {
     Export-GitBlob $repo "$BaseSha`:$fixedPointPath" $fixedPointFile
     Export-GitBlob $repo "$BaseSha`:$authoritySnapshotPath" $authoritySnapshotFile
     Export-GitBlob $repo "$HeadSha`:$authorityWorkflowPath" $headAuthorityWorkflowFile
+    Export-GitBlob $repo "$BaseSha`:$authorityWorkflowPath" $baseAuthorityWorkflowFile
     Export-GitBlob $repo "$HeadSha`:$testWorkflowPath" $headTestWorkflowFile
     $activeBlob = [string](Invoke-Git $repo @('rev-parse',"$BaseSha`:$activePath")).output[-1]
     $activeExportBlob = [string](Invoke-Git $repo @('hash-object','--no-filters',$activeFile)).output[-1]
@@ -742,7 +860,7 @@ try {
     }
     $headActiveResult = Get-Content -LiteralPath $headActiveArtifact -Raw | ConvertFrom-Json -Depth 100
     if ([string]$headActiveResult.verdict -cne 'PASS') { throw 'candidate head active authority artifact is not PASS' }
-    Assert-HeadWorkflowSafety -AuthorityWorkflow $headAuthorityWorkflowFile -TestWorkflow $headTestWorkflowFile
+    Assert-HeadWorkflowSafety -BaseAuthorityWorkflow $baseAuthorityWorkflowFile -AuthorityWorkflow $headAuthorityWorkflowFile -TestWorkflow $headTestWorkflowFile
     if ([string]$baseFacts.epoch.approval.label -cne $ApprovalLabel -or [string]$baseFacts.epoch.approval.approval_epoch -cne $ApprovalEpoch) { throw 'trusted event approval label/epoch differs from the active base epoch' }
     if ((Get-ChangeSignature $diffEntries) -cne (Get-ChangeSignature $baseFacts.changes)) { throw 'actual maintenance diff does not exactly equal the active trusted-base epoch status/path set' }
 
@@ -768,6 +886,7 @@ try {
         errors=@()
     }
     $exitCode = 0
+    }
 }
 catch {
     $finishedAt = [DateTimeOffset]::UtcNow

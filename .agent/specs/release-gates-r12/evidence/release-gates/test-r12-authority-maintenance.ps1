@@ -317,8 +317,12 @@ $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('engram-r12-authority-'
 $results = [System.Collections.Generic.List[object]]::new()
 $errorText = $null
 $cleanupVerified = $false
+$ordinaryAuthorizationSelfTestPassed = $false
 
 try {
+    $ordinarySelfTest = Invoke-Captured pwsh @('-NoProfile', '-File', (Join-Path $root 'scripts/production-gates/assert-pr-authority-guard.ps1'), '-SelfTest')
+    if ($ordinarySelfTest.exit_code -ne 0 -or ($ordinarySelfTest.stdout -join "`n") -notmatch 'SELFTEST PASS') { throw "ordinary authorization self-test failed: $($ordinarySelfTest.stderr -join '; ')" }
+    $ordinaryAuthorizationSelfTestPassed = $true
     $fixture = Join-Path $tempRoot 'fixture'
     $remote = Join-Path $tempRoot 'origin.git'
     $audit = Join-Path $tempRoot 'audit'
@@ -345,6 +349,16 @@ try {
         '.agent/specs/release-gates-r12/evidence/plan-governance/authority-snapshot.json'
     )
     foreach ($path in $fixtureFiles) { Copy-FixtureFile $root $fixture $path }
+    foreach ($workflowPath in @('.github/workflows/authority-guard.yml', '.github/workflows/test.yml')) {
+        $workflowFile = Join-Path $fixture $workflowPath
+        $workflowText = [System.IO.File]::ReadAllText($workflowFile)
+        $workflowText = [regex]::Replace($workflowText, '(?m)^on:\s*$', 'on: # parser fixture root-key comment', 1)
+        $workflowText = [regex]::Replace($workflowText, '(?m)^(?<indent>\s*)contents:\s*read\s*$', {
+            param($match)
+            return $match.Value + "`n" + $match.Groups['indent'].Value + '# parser fixture permission comment'
+        })
+        Write-Utf8NoBom $workflowFile $workflowText
+    }
     Write-Utf8NoBom (Join-Path $fixture 'internal/worker/handlers_hooks_crystallization_integration_test.go') "package worker`n`n// base fixture`n"
     [void](Invoke-Git $fixture @('add', '-A'))
     [void](Invoke-Git $fixture @('commit', '-m', 'fixture: trusted R12 base'))
@@ -373,6 +387,11 @@ try {
     [System.IO.File]::AppendAllText((Join-Path $fixture '.github/workflows/test.yml'), "`n# hostile protected mutation`n", [System.Text.UTF8Encoding]::new($false))
     $protectedHead = Push-Head $fixture 202 'fixture: protected mutation'
     $results.Add((Invoke-Scenario 'ordinary-protected-rejected' $ordinaryValidator $audit $remote $baseSha 202 $protectedHead $ordinaryBlob $false $output -ExpectedErrorPattern 'protected authority'))
+
+    Reset-Fixture $fixture $baseSha 'ordinary-plan-governance-evidence-rejected'
+    [System.IO.File]::AppendAllText((Join-Path $fixture '.agent/specs/release-gates-r12/evidence/plan-governance/path-envelope.json'), "`n ", [System.Text.UTF8Encoding]::new($false))
+    $planGovernanceHead = Push-Head $fixture 219 'fixture: protected plan-governance evidence mutation'
+    $results.Add((Invoke-Scenario 'ordinary-plan-governance-evidence-rejected' $ordinaryValidator $audit $remote $baseSha 219 $planGovernanceHead $ordinaryBlob $false $output -ExpectedErrorPattern 'protected authority'))
 
     Reset-Fixture $fixture $baseSha 'ordinary-type-base'
     $candidatePath = 'internal/worker/handlers_hooks_crystallization_integration_test.go'
@@ -437,6 +456,17 @@ try {
     }
     $results.Add((Invoke-Scenario 'maintenance-unapproved-pinned-action-rejected' $maintenanceValidator $audit $remote $baseSha 217 $unapprovedPinnedActionHead.head $maintenanceBlob $false $output -Maintenance -ApprovalEpoch $unapprovedPinnedActionHead.approval_epoch -ExpectedErrorPattern 'outside the audited allowlist'))
 
+    $runInjectionHead = New-MaintenanceHead $fixture $baseSha 220 'maintenance-privileged-run-injection' -FileMutation {
+        param($repository)
+        $path = Join-Path $repository '.github/workflows/authority-guard.yml'
+        $text = [System.IO.File]::ReadAllText($path)
+        $needle = "          Set-StrictMode -Version Latest"
+        $mutated = $text.Replace($needle, $needle + "`n          Invoke-Expression 'hostile candidate-controlled command'")
+        if ($mutated -ceq $text) { throw 'fixture did not inject a privileged run command' }
+        Write-Utf8NoBom $path $mutated
+    }
+    $results.Add((Invoke-Scenario 'maintenance-privileged-run-injection-rejected' $maintenanceValidator $audit $remote $baseSha 220 $runInjectionHead.head $maintenanceBlob $false $output -Maintenance -ApprovalEpoch $runInjectionHead.approval_epoch -ExpectedErrorPattern 'privileged workflow skeleton or run commands differ'))
+
     $writePermissionHead = New-MaintenanceHead $fixture $baseSha 212 'maintenance-write-permission' -FileMutation {
         param($repository)
         $path = Join-Path $repository '.github/workflows/test.yml'
@@ -478,6 +508,13 @@ try {
     $results.Add((Invoke-Scenario 'maintenance-short-successor-window-rejected' $maintenanceValidator $audit $remote $baseSha 216 $shortSuccessorHead.head $maintenanceBlob $false $output -Maintenance -ApprovalEpoch $shortSuccessorHead.approval_epoch -ExpectedErrorPattern 'lacks the required post-validation rotation window'))
 
     [void](Invoke-Git $fixture @('push', '--force', 'origin', "$($validHead.head)`:refs/heads/main"))
+    $successorOrdinaryValidator = Join-Path $tempRoot 'trusted-ordinary-successor.ps1'
+    Export-GitBlob $fixture "$($validHead.head)`:$ordinaryPath" $successorOrdinaryValidator
+    $successorOrdinaryBlob = Get-GitLine $fixture @('rev-parse', "$($validHead.head)`:$ordinaryPath")
+    Reset-Fixture $fixture $validHead.head 'ordinary-after-first-epoch'
+    [System.IO.File]::AppendAllText((Join-Path $fixture 'internal/worker/handlers_hooks_crystallization_integration_test.go'), "// authorized after first epoch`n", [System.Text.UTF8Encoding]::new($false))
+    $ordinaryAfterFirstEpochHead = Push-Head $fixture 218 'fixture: ordinary after first epoch'
+    $results.Add((Invoke-Scenario 'ordinary-after-first-epoch' $successorOrdinaryValidator $audit $remote $validHead.head 218 $ordinaryAfterFirstEpochHead $successorOrdinaryBlob $true $output))
     $successorMaintenanceValidator = Join-Path $tempRoot 'trusted-maintenance-successor.ps1'
     Export-GitBlob $fixture "$($validHead.head)`:$maintenancePath" $successorMaintenanceValidator
     $successorMaintenanceBlob = Get-GitLine $fixture @('rev-parse', "$($validHead.head)`:$maintenancePath")
@@ -506,7 +543,7 @@ finally {
 $finishedAt = [DateTimeOffset]::UtcNow
 $expectedPass = @($results | Where-Object expected -CEQ 'PASS').Count
 $expectedFail = @($results | Where-Object expected -CEQ 'FAIL').Count
-    $verdict = if ($null -eq $errorText -and $results.Count -eq 19 -and $expectedPass -eq 3 -and $expectedFail -eq 16 -and $cleanupVerified) { 'PASS' } else { 'FAIL' }
+    $verdict = if ($null -eq $errorText -and $results.Count -eq 22 -and $expectedPass -eq 4 -and $expectedFail -eq 18 -and $cleanupVerified) { 'PASS' } else { 'FAIL' }
 $summary = [ordered]@{
     schema_version = 1
     suite = 'R12 trusted-base authority and self-reference-free maintenance simulation'
@@ -521,6 +558,8 @@ $summary = [ordered]@{
         secrets_used = $false
         committed_manifest_contains_head_or_container_self_reference = $false
         trusted_artifact_binds_head_and_container = $true
+        ordinary_forbidden_final_paths_self_test = $ordinaryAuthorizationSelfTestPassed
+        workflow_parser_comments_exercised = $true
     }
     counts = [ordered]@{ scenarios = $results.Count; expected_pass = $expectedPass; expected_fail = $expectedFail }
     scenarios = @($results)

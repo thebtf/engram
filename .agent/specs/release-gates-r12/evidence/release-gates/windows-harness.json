@@ -2,21 +2,23 @@
   "schema_version": 1,
   "suite": "R12 trusted-base authority and self-reference-free maintenance simulation",
   "verdict": "PASS",
-  "started_at": "2026-07-13T09:50:57.6184980+00:00",
-  "finished_at": "2026-07-13T09:56:14.1263689+00:00",
-  "duration_seconds": 316.508,
+  "started_at": "2026-07-13T10:46:44.6125728+00:00",
+  "finished_at": "2026-07-13T10:52:53.4254259+00:00",
+  "duration_seconds": 368.813,
   "execution_contract": {
     "head_treated_as_data_only": true,
     "head_executed": false,
     "head_checked_out": false,
     "secrets_used": false,
     "committed_manifest_contains_head_or_container_self_reference": false,
-    "trusted_artifact_binds_head_and_container": true
+    "trusted_artifact_binds_head_and_container": true,
+    "ordinary_forbidden_final_paths_self_test": true,
+    "workflow_parser_comments_exercised": true
   },
   "counts": {
-    "scenarios": 19,
-    "expected_pass": 3,
-    "expected_fail": 16
+    "scenarios": 22,
+    "expected_pass": 4,
+    "expected_fail": 18
   },
   "scenarios": [
     {
@@ -33,6 +35,15 @@
       "exit_code": 1,
       "errors": [
         "protected authority/gate/governance mutation rejected: .github/workflows/test.yml"
+      ]
+    },
+    {
+      "name": "ordinary-plan-governance-evidence-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "protected authority/gate/governance mutation rejected: .agent/specs/release-gates-r12/evidence/plan-governance/path-envelope.json"
       ]
     },
     {
@@ -124,6 +135,15 @@
       ]
     },
     {
+      "name": "maintenance-privileged-run-injection-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "candidate privileged workflow skeleton or run commands differ from the trusted base; only comments and pre-authorized action-pin rotation may change"
+      ]
+    },
+    {
       "name": "maintenance-test-write-permission-rejected",
       "expected": "FAIL",
       "observed": "FAIL",
@@ -169,6 +189,13 @@
       ]
     },
     {
+      "name": "ordinary-after-first-epoch",
+      "expected": "PASS",
+      "observed": "PASS",
+      "exit_code": 0,
+      "errors": []
+    },
+    {
       "name": "maintenance-second-consecutive",
       "expected": "PASS",
       "observed": "PASS",
@@ -181,7 +208,7 @@
       "observed": "FAIL",
       "exit_code": 1,
       "errors": [
-        "fetched default-branch base differs from the event base; maintenance PR is stale: expected=9a783877fff4cefdf68d84301d27eee197422658 observed=e2da75b622f3556c8c2d5b3c5508530c3a8c52f6"
+        "fetched default-branch base differs from the event base; maintenance PR is stale: expected=3b868395a46518fea87489957345da93f22d10d5 observed=28903c63534bc4130578d6eae6956f8875e03533"
       ]
     }
   ],

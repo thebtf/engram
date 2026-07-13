@@ -1,15 +1,16 @@
 
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName='Run')]
 param(
-    [Parameter(Mandatory)][string]$Repository,
-    [Parameter(Mandatory)][string]$Remote,
-    [Parameter(Mandatory)][string]$BaseRemoteRef,
-    [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$BaseSha,
-    [Parameter(Mandatory)][string]$HeadRemoteRef,
-    [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$HeadSha,
+    [Parameter(Mandatory, ParameterSetName='Run')][string]$Repository,
+    [Parameter(Mandatory, ParameterSetName='Run')][string]$Remote,
+    [Parameter(Mandatory, ParameterSetName='Run')][string]$BaseRemoteRef,
+    [Parameter(Mandatory, ParameterSetName='Run')][ValidatePattern('^[0-9a-f]{40}$')][string]$BaseSha,
+    [Parameter(Mandatory, ParameterSetName='Run')][string]$HeadRemoteRef,
+    [Parameter(Mandatory, ParameterSetName='Run')][ValidatePattern('^[0-9a-f]{40}$')][string]$HeadSha,
     [string]$ExpectedDefaultBranch = 'main',
     [string]$ValidatorPath = 'scripts/production-gates/assert-pr-authority-guard.ps1',
-    [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedValidatorGitBlob,
+    [Parameter(Mandatory, ParameterSetName='Run')][ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedValidatorGitBlob,
+    [Parameter(Mandatory, ParameterSetName='SelfTest')][switch]$SelfTest,
     [string]$Artifact = '.agent/e/rg17/pr-authority-guard.json'
 )
 
@@ -121,6 +122,7 @@ function Test-ProtectedPath {
     if ($Path.StartsWith('.github/workflows/', [System.StringComparison]::Ordinal)) { return $true }
     if ($Path.StartsWith('scripts/production-gates/', [System.StringComparison]::Ordinal)) { return $true }
     if ($Path.StartsWith('.agent/plans/', [System.StringComparison]::Ordinal)) { return $true }
+    if ($Path.StartsWith('.agent/specs/release-gates-r12/evidence/plan-governance/', [System.StringComparison]::Ordinal)) { return $true }
     return $false
 }
 
@@ -152,6 +154,9 @@ function Find-Authorization {
     foreach ($pending in @($Contract.pending_namespaces)) {
         if ([int]$Contract.revision -ne 12 -and [string]$pending.status_class -cnotin $pendingStatuses) { continue }
         if ($pending.PSObject.Properties['release_accepted'] -and [bool]$pending.release_accepted) { continue }
+        [string[]]$forbidden = @(Get-OptionalArrayProperty $pending 'forbidden_final_paths')
+        $containsForbidden = @($DiffEntries | Where-Object { [string]$_.path -cin $forbidden }).Count -gt 0
+        if ($containsForbidden) { continue }
         [string[]]$exact = @(Get-OptionalArrayProperty $pending 'exact_paths')
         if ($exact.Count -gt 0) {
             [object[]]$expectedEntries = @($exact | ForEach-Object { [pscustomobject]@{path=[string]$_} })
@@ -168,6 +173,27 @@ function Find-Authorization {
     }
     return $null
 }
+
+function Invoke-AuthorizationSelfTest {
+    $contract = [pscustomobject][ordered]@{
+        revision = 12
+        status_classes = [pscustomobject]@{ current=@(); pending=@() }
+        candidates = @()
+        pending_namespaces = @([pscustomobject][ordered]@{
+            slice='SELFTEST'; status_class='current-maker-in-progress'; release_accepted=$false
+            exact_paths=@('src/exact.go'); exact_prefixes=@('src/generated/**'); forbidden_final_paths=@('src/exact.go','src/generated/secret.go')
+        })
+    }
+    $exactForbidden = Find-Authorization $contract @([pscustomobject]@{path='src/exact.go';git_status='M'})
+    if ($null -ne $exactForbidden) { throw 'SELFTEST FAIL: exact forbidden_final_paths entry was authorized' }
+    $prefixForbidden = Find-Authorization $contract @([pscustomobject]@{path='src/generated/secret.go';git_status='A'})
+    if ($null -ne $prefixForbidden) { throw 'SELFTEST FAIL: prefix-covered forbidden_final_paths entry was authorized' }
+    $prefixAllowed = Find-Authorization $contract @([pscustomobject]@{path='src/generated/public.go';git_status='A'})
+    if ($null -eq $prefixAllowed -or [string]$prefixAllowed.kind -cne 'pending-prefix-envelope') { throw 'SELFTEST FAIL: allowed prefix path was rejected' }
+    Write-Output 'SELFTEST PASS: ordinary authorization rejects exact and prefix-covered forbidden_final_paths entries'
+}
+
+if ($SelfTest) { Invoke-AuthorizationSelfTest; exit 0 }
 
 $startedAt = [DateTimeOffset]::UtcNow
 $artifactObject = $null
@@ -211,6 +237,7 @@ try {
     $trustedRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('engram-authority-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $trustedRoot -Force | Out-Null
     $activePath = 'scripts/production-gates/assert-active-candidate-path-authority.ps1'
+    $maintenanceValidatorPath = 'scripts/production-gates/assert-pr-authority-maintenance.ps1'
     $contractPath = '.agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json'
     $planPath = '.agent/plans/2026-07-10-engram-production-ready-master-plan.md'
     $statePath = '.agent/plans/2026-07-10-engram-production-ready-ownership-state.json'
@@ -220,6 +247,7 @@ try {
     $fixedPointPath = '.agent/specs/release-gates-r12/evidence/plan-governance/fixed-point-proof.json'
     $authoritySnapshotPath = '.agent/specs/release-gates-r12/evidence/plan-governance/authority-snapshot.json'
     $activeFile = Join-Path $trustedRoot 'assert-active-candidate-path-authority.ps1'
+    $maintenanceValidatorFile = Join-Path $trustedRoot 'assert-pr-authority-maintenance.ps1'
     $contractFile = Join-Path $trustedRoot 'active-diff-contracts.json'
     $planFile = Join-Path $trustedRoot 'master-plan.md'
     $stateFile = Join-Path $trustedRoot 'ownership-state.json'
@@ -229,6 +257,7 @@ try {
     $fixedPointFile = Join-Path $trustedRoot 'fixed-point-proof.json'
     $authoritySnapshotFile = Join-Path $trustedRoot 'authority-snapshot.json'
     Export-GitBlob $repo "$BaseSha`:$activePath" $activeFile
+    Export-GitBlob $repo "$BaseSha`:$maintenanceValidatorPath" $maintenanceValidatorFile
     Export-GitBlob $repo "$BaseSha`:$contractPath" $contractFile
     Export-GitBlob $repo "$BaseSha`:$planPath" $planFile
     Export-GitBlob $repo "$BaseSha`:$statePath" $stateFile
@@ -240,13 +269,22 @@ try {
     $activeBlob = [string](Invoke-Git $repo @('rev-parse',"$BaseSha`:$activePath")).output[-1]
     $activeExportBlob = [string](Invoke-Git $repo @('hash-object','--no-filters',$activeFile)).output[-1]
     if ($activeBlob -cne $activeExportBlob) { throw 'active authority validator export does not match trusted base bytes' }
+    $maintenanceValidatorBlob = [string](Invoke-Git $repo @('rev-parse',"$BaseSha`:$maintenanceValidatorPath")).output[-1]
+    $maintenanceValidatorExportBlob = [string](Invoke-Git $repo @('hash-object','--no-filters',$maintenanceValidatorFile)).output[-1]
+    if ($maintenanceValidatorBlob -cne $maintenanceValidatorExportBlob) { throw 'maintenance base validator export does not match trusted base bytes' }
     $activeArtifact = Join-Path $trustedRoot 'active-authority.json'
     $contractHash = Get-CanonicalTextSha256 $contractFile
     $planHash = Get-CanonicalTextSha256 $planFile
     $stateHash = Get-CanonicalTextSha256 $stateFile
     $scopeMapHash = Get-CanonicalTextSha256 $scopeMapFile
-    & pwsh -NoProfile -File $planGovernanceFile -Plan $planFile -OwnershipState $stateFile -ScopeMap $scopeMapFile -ActiveContracts $contractFile -PathEnvelope $pathEnvelopeFile -FixedPointProof $fixedPointFile -AuthoritySnapshot $authoritySnapshotFile
-    if ($LASTEXITCODE -ne 0) { throw 'trusted-base R12 closed-world plan-governance proof failed' }
+    $maintenanceBaseArtifact = Join-Path $trustedRoot 'maintenance-base-authority.json'
+    & pwsh -NoProfile -File $maintenanceValidatorFile -ValidateBaseOnly -Repository $repo -Remote $Remote -BaseRemoteRef $BaseRemoteRef -BaseSha $BaseSha -ExpectedDefaultBranch $ExpectedDefaultBranch -ExpectedValidatorGitBlob $maintenanceValidatorBlob -Artifact $maintenanceBaseArtifact
+    if ($LASTEXITCODE -ne 0) {
+        $detail = if (Test-Path -LiteralPath $maintenanceBaseArtifact) { @((Get-Content -LiteralPath $maintenanceBaseArtifact -Raw | ConvertFrom-Json -Depth 100).errors) -join '; ' } else { 'artifact missing' }
+        throw "trusted-base inductive maintenance authority validation failed: $detail"
+    }
+    $maintenanceBaseResult = Get-Content -LiteralPath $maintenanceBaseArtifact -Raw | ConvertFrom-Json -Depth 100
+    if ([string]$maintenanceBaseResult.verdict -cne 'PASS') { throw 'trusted-base inductive maintenance authority artifact is not PASS' }
     & pwsh -NoProfile -File $activeFile -Contract $contractFile -ExpectedContractSha256 $contractHash -Plan $planFile -ExpectedPlanSha256 $planHash -Artifact $activeArtifact
     if ($LASTEXITCODE -ne 0) { throw 'trusted-base active candidate authority validator failed' }
     $activeResult = Get-Content -LiteralPath $activeArtifact -Raw | ConvertFrom-Json -Depth 100
@@ -260,7 +298,7 @@ try {
         schema_version = 1; gate = 'pr-authority-guard'; verdict = 'PASS'; started_at = $startedAt.ToString('O'); finished_at = $finishedAt.ToString('O'); duration_seconds = [math]::Round(($finishedAt-$startedAt).TotalSeconds,3)
         base = [ordered]@{ remote_ref=$BaseRemoteRef; expected_sha=$BaseSha; fetched_sha=$fetchedBase }
         head = [ordered]@{ remote_ref=$HeadRemoteRef; expected_sha=$HeadSha; fetched_sha=$fetchedHead; tree=$headTree; inventory_count=$treeInventory.Count; treated_as_data_only=$true; executed=$false; checked_out=$false }
-        trusted_execution = [ordered]@{ validator_path=$ValidatorPath; expected_git_blob=$ExpectedValidatorGitBlob; executed_git_blob=$executedBlob; active_validator_git_blob=$activeBlob; plan_governance_validator_path=$planGovernancePath; contract_sha256=$contractHash; plan_sha256=$planHash; state_sha256=$stateHash; scope_map_sha256=$scopeMapHash; secrets_used=$false }
+        trusted_execution = [ordered]@{ validator_path=$ValidatorPath; expected_git_blob=$ExpectedValidatorGitBlob; executed_git_blob=$executedBlob; active_validator_git_blob=$activeBlob; maintenance_validator_path=$maintenanceValidatorPath; maintenance_validator_git_blob=$maintenanceValidatorBlob; inductive_base_artifact_verdict=[string]$maintenanceBaseResult.verdict; plan_governance_validator_path=$planGovernancePath; contract_sha256=$contractHash; plan_sha256=$planHash; state_sha256=$stateHash; scope_map_sha256=$scopeMapHash; secrets_used=$false }
         merge_tree = $mergeTree
         changed_paths = @($diffEntries)
         protected_path_count = 0

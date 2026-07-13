@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-07-13T09:58:49.8859602Z",
+  "captured_at": "2026-07-13T10:57:12.0828263Z",
   "batch": "R12/B17 release-governance bootstrap and CI truth repair",
   "verdict": "PASS",
   "red": {
@@ -26,16 +26,17 @@
     "actionlint": "PASS",
     "plan_ownership_selftest": "PASS",
     "active_authority_selftest": "PASS",
+    "ordinary_authority_selftest": "PASS",
     "r12_closed_world_plan_governance": "PASS",
     "workflow_conformance": {
       "verdict": "PASS",
-      "hostile_mutations_rejected": 70
+      "hostile_mutations_rejected": 71
     },
     "authority_simulation": {
       "verdict": "PASS",
-      "scenarios": 19,
-      "expected_pass": 3,
-      "expected_fail": 16,
+      "scenarios": 22,
+      "expected_pass": 4,
+      "expected_fail": 18,
       "temp_cleanup_verified": true,
       "two_clean_runs_after_final_revision": true,
       "artifacts": [
@@ -77,11 +78,20 @@
     "official_actions_pinned_to_full_sha": true,
     "candidate_workflow_secret_write_trigger_and_action_pin_envelope_validated": true,
     "candidate_workflow_actions_limited_to_audited_allowlist": true,
+    "candidate_privileged_workflow_skeleton_equals_trusted_base": true,
+    "ordinary_after_first_epoch_remains_live": true,
+    "forbidden_final_paths_rejected_under_exact_and_prefix_envelopes": true,
+    "plan_governance_evidence_is_owner_maintenance_only": true,
+    "unrelated_pr_events_cannot_cancel_approved_maintenance_run": true,
     "load_bearing_json_types_reject_scalar_coercion": true,
     "successor_paths_unique_independent_of_status": true,
     "successor_rotation_window_enforced": true,
     "historical_validator_blobs_reanchored_to_git": true,
-    "inductive_transition_chain_reaches_r12_0003": true
+    "inductive_transition_chain_reaches_r12_0003": true,
+    "live_required_status_enforcement": "BLOCKED_UNTIL_BOOTSTRAP_ON_MAIN",
+    "live_ruleset_id": 13610955,
+    "live_ruleset_required_status_checks": 0,
+    "required_status_integration_id": 15368
   },
   "external_sources": {
     "context7": "USED",
@@ -89,18 +99,20 @@
     "tavily": "BLOCKED_OAUTH_AUTHORIZATION_REQUIRED",
     "training_memory_substituted": false,
     "security_review": ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md",
-    "gedankenexperiment": "GE-001 found and closed two HIGH recurring-epoch deadlocks; R3 review closed type, duplicate-path, rotation-window, and action-allowlist edges; journal remains local and ignored"
+    "gedankenexperiment": "GE-001 found and closed two HIGH recurring-epoch deadlocks; R3 review closed type, duplicate-path, rotation-window, and action-allowlist edges; journal remains local and ignored",
+    "external_code_review": "CodeRabbit, Codex, and Gemini findings classified at PR #405 head 1dc6b91c; valid lockout, injection, type, protected-path, concurrency, forbidden-prefix, StrictMode, and YAML-parser findings repaired; replacement-base and uppercase-SHA proposals rejected with repository evidence",
+    "known_integration_blocker": "macOS base test TestCliWorker_ProductionReadinessStructuredArgsAndCWD compares /var with canonical /private/var; separate integration-fix required"
   },
   "sha256": {
     ".github/workflows/test.yml": "ea5556c91cdeedcd683063deeb1e3b398fbb433c12892caf4f67859698400bfa",
-    ".github/workflows/authority-guard.yml": "67e54245fd1d751a328faef424826a44cda3eca53a8a6bd3c0da576808f4b8a8",
-    "scripts/production-gates/assert-plan-path-ownership.ps1": "5fafc989f281c75fef8ef00207efb52edc7323e7e2a1a16488c6e66ea114561c",
-    "scripts/production-gates/assert-active-candidate-path-authority.ps1": "35719d5fa1b30f4e091bcf5ddbb443f9087703dde68497db55fe4fde6945c561",
-    "scripts/production-gates/assert-pr-authority-guard.ps1": "718b5c870a96ae55ffa6113105ff4e712f3511606b688f1eb2d7788e1a19f368",
-    "scripts/production-gates/assert-pr-authority-maintenance.ps1": "4b740b37d9d8d90e7bb33f61daf980a76738deba22129d66e07beb23a6ec15b9",
-    ".agent/specs/release-gates-r12/evidence/release-gates/test-r12-authority-maintenance.ps1": "52cf0a17ec02eba14691795efd384e3581cfff7c46c91d3e0a06c3fd7bf1e470",
-    ".agent/specs/release-gates-r12/evidence/release-gates/maintenance-simulation.json": "03f4ce1840d248d05bb32748f166ee8b94d0b8a83f12a225f8d69110fa4f804b",
-    ".agent/specs/release-gates-r12/evidence/release-gates/windows-harness.json": "95ce2ccb0b05bf0baa7977249f166c2412f8080babbda2dc59c32c25e789f956",
-    ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md": "d5b5f485f0aaa9c8323f7979247929a9bf72829541409a1933cceda2814d959a"
+    ".github/workflows/authority-guard.yml": "5a5483222561552345e904188f4e9e27c58b34f15bf3c80f01400c023601550a",
+    "scripts/production-gates/assert-plan-path-ownership.ps1": "5a244f83a59f7c4b8c4f3926d378fc135faebe7b6c63febf13b770d19d66d36d",
+    "scripts/production-gates/assert-active-candidate-path-authority.ps1": "fc503d7d13a4f48e321629468b16c1e351e613bf49e7a862b04c9e1be99b5526",
+    "scripts/production-gates/assert-pr-authority-guard.ps1": "b90326e38025caef3ae418b15675d98cc4b4f15c98694ef456de8126e70b4bc1",
+    "scripts/production-gates/assert-pr-authority-maintenance.ps1": "4e14969c1b8e31b26ce25f947c197943b4710a0e51a4869eaed246830ca8dd05",
+    ".agent/specs/release-gates-r12/evidence/release-gates/test-r12-authority-maintenance.ps1": "6735cbe07fea562404d32e77587da8922d7e2edcf3957070a5d438a96562afee",
+    ".agent/specs/release-gates-r12/evidence/release-gates/maintenance-simulation.json": "f2254011eb122efbc8839f73c7e29759accff828b95b22255f1e56f2802d9f60",
+    ".agent/specs/release-gates-r12/evidence/release-gates/windows-harness.json": "aacd202718edcd3ba97d19f2c47376bd80be7cf75fb437d07dd16f626b215ca6",
+    ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md": "8663d7ee623410b2e3c6991716e231f8a82f44acc89eded9f74b457529f1a9d6"
   }
 }

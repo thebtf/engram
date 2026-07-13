@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: authority-guard-${{ github.event.pull_request.number }}
+  group: authority-guard-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-${{ github.event.label.name || 'no-label' }}
   cancel-in-progress: true
 
 jobs:

@@ -302,7 +302,10 @@ function Invoke-R12ContractAudit {
     $errors = [System.Collections.Generic.List[string]]::new()
     if ($ObservedContractSha256 -cne $ExpectedContractSha256Value.ToLowerInvariant()) { $errors.Add("contract SHA256 mismatch: expected=$ExpectedContractSha256Value observed=$ObservedContractSha256") }
     if ($ObservedPlanSha256 -cne $ExpectedPlanSha256Value.ToLowerInvariant()) { $errors.Add("plan SHA256 mismatch: expected=$ExpectedPlanSha256Value observed=$ObservedPlanSha256") }
-    if ([int](Get-PropertyValue $ContractObject 'schema_version') -ne 1 -or [string](Get-PropertyValue $ContractObject 'kind') -cne 'production-ready-active-diff-contracts' -or [int](Get-PropertyValue $ContractObject 'revision') -ne 12) {
+    $schemaVersion = Get-PropertyValue $ContractObject 'schema_version'
+    $kind = Get-PropertyValue $ContractObject 'kind'
+    $revision = Get-PropertyValue $ContractObject 'revision'
+    if ($schemaVersion -isnot [long] -or [long]$schemaVersion -ne 1 -or $kind -isnot [string] -or [string]$kind -cne 'production-ready-active-diff-contracts' -or $revision -isnot [long] -or [long]$revision -ne 12) {
         $errors.Add('contract identity must be production-ready-active-diff-contracts revision 12')
     }
     $statusClasses = Get-PropertyValue $ContractObject 'status_classes'
@@ -330,7 +333,8 @@ function Invoke-R12ContractAudit {
         [string[]]$sortedPaths = @($paths); [Array]::Sort($sortedPaths, [System.StringComparer]::Ordinal)
         if (($paths -join "`n") -cne ($sortedPaths -join "`n")) { $errors.Add("candidate '$slice' paths are not ordinally sorted") }
         if (@($paths | Sort-Object -Unique).Count -ne $paths.Count) { $errors.Add("candidate '$slice' repeats a path") }
-        if ([int](Get-PropertyValue $candidate 'path_count') -ne $paths.Count) { $errors.Add("candidate '$slice' path_count does not match paths") }
+        $pathCount = Get-PropertyValue $candidate 'path_count'
+        if ($pathCount -isnot [long] -or [long]$pathCount -ne $paths.Count) { $errors.Add("candidate '$slice' path_count must be a JSON integer matching paths") }
         $digest = Get-PathSetSha256 $paths
         if ($digest -cne [string](Get-PropertyValue $candidate 'paths_sha256')) { $errors.Add("candidate '$slice' path digest mismatch") }
         foreach ($pathObject in $pathObjects) {
@@ -352,7 +356,11 @@ function Invoke-R12ContractAudit {
                     [string[]]$actualPaths = @($actual | ForEach-Object { [string]$_.path }); [Array]::Sort($actualPaths,[System.StringComparer]::Ordinal)
                     $actualDigest = Get-PathSetSha256 $actualPaths
                     $statusMismatch = $false
-                    foreach ($pathObject in $pathObjects) { if (@($actual | Where-Object { [string]$_.path -ceq [string]$pathObject.path -and [string]$_.git_status -ceq [string]$pathObject.git_status }).Count -ne 1) { $statusMismatch = $true } }
+                    foreach ($pathObject in $pathObjects) {
+                        $expectedPath = [string](Get-PropertyValue $pathObject 'path')
+                        $expectedStatus = [string](Get-PropertyValue $pathObject 'git_status')
+                        if (@($actual | Where-Object { [string]$_.path -ceq $expectedPath -and [string]$_.git_status -ceq $expectedStatus }).Count -ne 1) { $statusMismatch = $true }
+                    }
                     if ($actualDigest -cne $digest) { $errors.Add("candidate '$slice' live Git path digest differs from the frozen contract") }
                     if ($statusMismatch) { $errors.Add("candidate '$slice' live Git statuses differ from the frozen contract") }
                     $gitResults.Add([pscustomobject][ordered]@{slice=$slice;available=$true;verified=($actualDigest -ceq $digest -and -not $statusMismatch);path_count=$actualPaths.Count;paths_sha256=$actualDigest})
@@ -379,20 +387,34 @@ function Invoke-R12ContractAudit {
             try { $normalized = Normalize-AuthorityPath $token; if ($normalized.display -cne $token -or -not $seenPending.Add($token)) { throw "pending path is non-canonical or repeated: '$token'" } } catch { $errors.Add("pending '$slice': $($_.Exception.Message)") }
         }
         [string[]]$forbidden = @(Get-OptionalStringArray $pending 'forbidden_final_paths')
-        foreach ($token in $forbidden) { if ($token -cin $exactPaths) { $errors.Add("pending '$slice' both allows and forbids '$token'") } }
+        $seenForbidden = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        foreach ($token in $forbidden) {
+            try {
+                $normalizedForbidden = Normalize-AuthorityPath $token
+                if ($normalizedForbidden.kind -cne 'exact' -or $normalizedForbidden.display -cne $token -or -not $seenForbidden.Add($token)) { throw "forbidden path is non-canonical, non-exact, or repeated: '$token'" }
+                $coveredByPrefix = @($exactPrefixes | Where-Object {
+                    $normalizedPrefix = Normalize-AuthorityPath $_
+                    $token.StartsWith($normalizedPrefix.path.TrimEnd('/') + '/', [System.StringComparison]::Ordinal)
+                }).Count -gt 0
+                if ($token -cin $exactPaths -or $coveredByPrefix) { $errors.Add("pending '$slice' both allows and forbids '$token'") }
+            }
+            catch { $errors.Add("pending '$slice': $($_.Exception.Message)") }
+        }
         $pendingResults.Add([pscustomobject][ordered]@{slice=$slice;branch=$branch;base_anchor=$baseAnchor;allowed_exact_paths=@($exactPaths);allowed_prefixes=@($exactPrefixes);macro_bound_plan_union=$macroBound;requires_final_exact_diff_contract=$true})
     }
     $probeResult = $null
     if ($null -ne $Probe) {
         $probeSlice = [string](Get-PropertyValue $Probe 'slice')
-        $matches = @($pendingContracts | Where-Object { [string]$_.slice -ceq $probeSlice })
+        $probeBase = [string](Get-PropertyValue $Probe 'base')
+        $probeHead = [string](Get-PropertyValue $Probe 'head')
+        $matches = @($pendingContracts | Where-Object { [string](Get-PropertyValue $_ 'slice') -ceq $probeSlice })
         if ($matches.Count -ne 1) { $errors.Add("pending probe slice '$probeSlice' has $($matches.Count) contracts, expected 1") }
-        elseif ([string]$Probe.base -cne [string]$matches[0].base_anchor) { $errors.Add("pending probe base '$([string]$Probe.base)' must equal frozen base anchor '$([string]$matches[0].base_anchor)'") }
+        elseif ($probeBase -cne [string](Get-PropertyValue $matches[0] 'base_anchor')) { $errors.Add("pending probe base '$probeBase' must equal frozen base anchor '$([string](Get-PropertyValue $matches[0] 'base_anchor'))'") }
         else {
             try {
-                & git -C $Repository merge-base --is-ancestor ([string]$Probe.base) ([string]$Probe.head) 2>$null
+                & git -C $Repository merge-base --is-ancestor $probeBase $probeHead 2>$null
                 if ($LASTEXITCODE -ne 0) { throw 'pending probe base is not an ancestor of head' }
-                [object[]]$entries = @(Get-GitDiffEntries $Repository ([string]$Probe.base) ([string]$Probe.head))
+                [object[]]$entries = @(Get-GitDiffEntries $Repository $probeBase $probeHead)
                 [object[]]$declarations = @(
                     foreach ($token in @(Get-OptionalStringArray $matches[0] 'exact_paths') + @(Get-OptionalStringArray $matches[0] 'exact_prefixes')) {
                         $normalized = Normalize-AuthorityPath $token
@@ -644,6 +666,22 @@ function Invoke-SelfTest {
     Assert-SelfTest ((Invoke-ContractAudit $wrongBranch $plan $hash $hash $hash $hash).verdict -eq 'FAIL') 'current candidate wrong branch was accepted'
     $hashDrift = Invoke-ContractAudit $contract $plan ('0'*64) $hash $hash $hash
     Assert-SelfTest ($hashDrift.verdict -eq 'FAIL') 'contract hash drift was accepted'
+    $r12WrongIdentityTypes = [pscustomobject][ordered]@{
+        schema_version='1'; kind='production-ready-active-diff-contracts'; revision='12'
+        status_classes=[pscustomobject]@{current=@();rejected=@()};candidates=@();pending_namespaces=@();source_audit=[pscustomobject]@{observed_sha256=('a'*64)}
+    }
+    $r12WrongIdentityResult = Invoke-R12ContractAudit $r12WrongIdentityTypes $hash $hash $hash $hash
+    Assert-SelfTest ($r12WrongIdentityResult.verdict -eq 'FAIL' -and @($r12WrongIdentityResult.errors | Where-Object { $_ -match 'contract identity' }).Count -eq 1) 'R12 numeric-string identity fields were accepted'
+    $r12ForbiddenPrefix = [pscustomobject][ordered]@{
+        schema_version=[long]1; kind='production-ready-active-diff-contracts'; revision=[long]12
+        status_classes=[pscustomobject]@{current=@();rejected=@()}; candidates=@(); source_audit=[pscustomobject]@{observed_sha256=('a'*64)}
+        pending_namespaces=@([pscustomobject][ordered]@{
+            slice='SELFTEST';status_class='current-maker-in-progress';branch='work/selftest';base_anchor=('1'*40);release_accepted=$false
+            exact_prefixes=@('src/generated/**');forbidden_final_paths=@('src/generated/secret.go')
+        })
+    }
+    $r12ForbiddenPrefixResult = Invoke-R12ContractAudit $r12ForbiddenPrefix $hash $hash $hash $hash
+    Assert-SelfTest ($r12ForbiddenPrefixResult.verdict -eq 'FAIL' -and @($r12ForbiddenPrefixResult.errors | Where-Object { $_ -match 'both allows and forbids' }).Count -eq 1) 'R12 prefix-covered forbidden_final_paths entry was accepted'
     $authority = Get-PlanAuthority $plan
     $pending = $contract.pending_namespaces[0]
     [object[]]$pendingDeclarations = @($authority.declarations | Where-Object owner -CEQ 'A')

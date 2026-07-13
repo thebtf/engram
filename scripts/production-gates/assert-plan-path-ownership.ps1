@@ -1065,10 +1065,30 @@ function Invoke-SelfTest {
     $orderedResult = Invoke-OwnershipAudit $orderedEpoch 'selftest-ordered-epoch'
     Assert-SelfTestCondition ($orderedResult.verdict -eq 'PASS') ("correct epoch order was rejected: " + ($orderedResult.errors -join '; '))
 
-    $repository = ([string]@(& git rev-parse --show-toplevel 2>&1)[-1]).Trim()
-    $positiveBase = ([string]@(& git -C $repository rev-parse HEAD 2>&1)[-1]).Trim().ToLowerInvariant()
-    $requiredIntegration = ([string]@(& git -C $repository rev-parse HEAD^ 2>&1)[-1]).Trim().ToLowerInvariant()
-    $wrongBase = ([string]@(& git -C $repository rev-list --max-parents=0 HEAD 2>&1)[0]).Trim().ToLowerInvariant()
+    $graphFixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("engram-plan-graph-selftest-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $graphFixtureRoot -Force | Out-Null
+    try {
+        foreach ($arguments in @(
+            @('init', '--quiet', '--initial-branch=main'),
+            @('config', 'user.name', 'Plan Ownership Selftest'),
+            @('config', 'user.email', 'plan-ownership-selftest@example.invalid'),
+            @('config', 'core.autocrlf', 'false')
+        )) {
+            & git -C $graphFixtureRoot @arguments
+            if ($LASTEXITCODE -ne 0) { throw "graph fixture git $($arguments -join ' ') failed" }
+        }
+        $graphFile = Join-Path $graphFixtureRoot 'graph.txt'
+        for ($commitIndex = 1; $commitIndex -le 3; $commitIndex++) {
+            [System.IO.File]::AppendAllText($graphFile, "commit-$commitIndex`n", [System.Text.UTF8Encoding]::new($false))
+            & git -C $graphFixtureRoot add -- graph.txt
+            if ($LASTEXITCODE -ne 0) { throw "graph fixture git add failed at commit $commitIndex" }
+            & git -C $graphFixtureRoot commit --quiet -m "selftest graph $commitIndex"
+            if ($LASTEXITCODE -ne 0) { throw "graph fixture git commit failed at commit $commitIndex" }
+        }
+        $repository = $graphFixtureRoot
+        $positiveBase = ([string]@(& git -C $repository rev-parse HEAD 2>&1)[-1]).Trim().ToLowerInvariant()
+        $requiredIntegration = ([string]@(& git -C $repository rev-parse HEAD^ 2>&1)[-1]).Trim().ToLowerInvariant()
+        $wrongBase = ([string]@(& git -C $repository rev-list --max-parents=0 HEAD 2>&1)[0]).Trim().ToLowerInvariant()
     $syntheticPlanHash = ('a' * 64)
     $state = New-SyntheticOwnershipState -PlanSha256 $syntheticPlanHash -RequiredIntegrationSha $requiredIntegration
     $missingEvidenceState = New-SyntheticOwnershipState -PlanSha256 $syntheticPlanHash -RequiredIntegrationSha $requiredIntegration -MissingPredecessorEvidence
@@ -1115,8 +1135,15 @@ function Invoke-SelfTest {
     Assert-SelfTestCondition ($missingEvidence.verdict -eq 'FAIL') 'successor without checker/post-review/integration evidence was accepted'
     $wrongBaseResult = Invoke-DiffEpochAuthority -Slice B -ChangedPaths @('src/shared.go') -State $state -Repository $repository -BaseResolved $wrongBase
     Assert-SelfTestCondition ($wrongBaseResult.verdict -eq 'FAIL') 'correct owner on a base that omits the predecessor integration was accepted'
-    $descendantBaseResult = Invoke-DiffEpochAuthority -Slice B -ChangedPaths @('src/shared.go') -State $state -Repository $repository -BaseResolved $positiveBase
-    Assert-SelfTestCondition ($descendantBaseResult.verdict -eq 'PASS') ("descendant successor base was rejected: " + ($descendantBaseResult.errors -join '; '))
+        $descendantBaseResult = Invoke-DiffEpochAuthority -Slice B -ChangedPaths @('src/shared.go') -State $state -Repository $repository -BaseResolved $positiveBase
+        Assert-SelfTestCondition ($descendantBaseResult.verdict -eq 'PASS') ("descendant successor base was rejected: " + ($descendantBaseResult.errors -join '; '))
+    }
+    finally {
+        $tempPrefix = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\','/') + [System.IO.Path]::DirectorySeparatorChar
+        $target = [System.IO.Path]::GetFullPath($graphFixtureRoot)
+        if (-not $target.StartsWith($tempPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or -not ([System.IO.Path]::GetFileName($target)).StartsWith('engram-plan-graph-selftest-', [System.StringComparison]::Ordinal)) { throw "refusing unsafe graph fixture cleanup '$target'" }
+        Remove-Item -LiteralPath $target -Recurse -Force
+    }
 
     $undeclared = New-SyntheticPlan -Rows "| A | ``work/a`` | ``src/shared.go`` | none | proof |`n| B | ``work/b`` | ``src/shared.go`` | none | proof |" -EpochRows ''
     Assert-SelfTestCondition ((Invoke-OwnershipAudit $undeclared 'selftest-undeclared').verdict -eq 'FAIL') 'undeclared exact overlap was accepted'
