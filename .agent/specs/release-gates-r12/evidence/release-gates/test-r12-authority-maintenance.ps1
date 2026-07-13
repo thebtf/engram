@@ -551,8 +551,14 @@ finally {
             $errorText = "refusing unsafe cleanup '$target'"
         }
         else {
-            Remove-Item -LiteralPath $target -Recurse -Force
-            $cleanupVerified = -not (Test-Path -LiteralPath $target)
+            try {
+                Remove-Item -LiteralPath $target -Recurse -Force
+                $cleanupVerified = -not (Test-Path -LiteralPath $target)
+            }
+            catch {
+                $cleanupError = "temp cleanup failed: $($_.Exception.Message)"
+                $errorText = if ([string]::IsNullOrWhiteSpace($errorText)) { $cleanupError } else { "$errorText; $cleanupError" }
+            }
         }
     }
 }

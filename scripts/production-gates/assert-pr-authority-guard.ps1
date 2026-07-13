@@ -140,6 +140,14 @@ function Get-OptionalArrayProperty {
     return @($property.Value | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_) })
 }
 
+function Get-CanonicalPrefixBase {
+    param([Parameter(Mandatory)][string]$Prefix, [Parameter(Mandatory)][string]$Context)
+    if (-not $Prefix.EndsWith('/**', [System.StringComparison]::Ordinal) -or $Prefix.Length -le 3) { throw "$Context must end with a non-empty terminal /** prefix: '$Prefix'" }
+    $base = $Prefix.Substring(0, $Prefix.Length - 3)
+    if ($base.StartsWith('/') -or $base.Contains('\') -or $base.Contains('//') -or $base -match '(^|/)\.\.?(?:/|$)' -or $base -notmatch '^[A-Za-z0-9._/-]+$') { throw "$Context is non-canonical: '$Prefix'" }
+    return $base.TrimEnd('/') + '/'
+}
+
 function Find-Authorization {
     param([Parameter(Mandatory)]$Contract, [Parameter(Mandatory)][object[]]$DiffEntries)
     $actualStatus = Get-OrdinalSignature $DiffEntries
@@ -164,9 +172,10 @@ function Find-Authorization {
         }
         [string[]]$prefixes = @(Get-OptionalArrayProperty $pending 'exact_prefixes')
         if ($prefixes.Count -gt 0) {
+            [string[]]$prefixBases = @($prefixes | ForEach-Object { Get-CanonicalPrefixBase ([string]$_) "pending '$([string]$pending.slice)' exact_prefixes entry" })
             $allCovered = $true
             foreach ($entry in $DiffEntries) {
-                if (@($prefixes | Where-Object { ([string]$entry.path).StartsWith(([string]$_).Substring(0, ([string]$_).Length - 2), [System.StringComparison]::Ordinal) }).Count -eq 0) { $allCovered = $false; break }
+                if (@($prefixBases | Where-Object { ([string]$entry.path).StartsWith($_, [System.StringComparison]::Ordinal) }).Count -eq 0) { $allCovered = $false; break }
             }
             if ($allCovered) { return [pscustomobject][ordered]@{ kind='pending-prefix-envelope'; slice=[string]$pending.slice; status_class=[string]$pending.status_class } }
         }
@@ -193,6 +202,12 @@ function Invoke-AuthorizationSelfTest {
     if ($null -ne $prefixForbidden) { throw 'SELFTEST FAIL: prefix-covered forbidden_final_paths entry was authorized' }
     $prefixAllowed = Find-Authorization $contract @([pscustomobject]@{path='src/generated/public.go';git_status='A'})
     if ($null -eq $prefixAllowed -or [string]$prefixAllowed.kind -cne 'pending-prefix-envelope') { throw 'SELFTEST FAIL: allowed prefix path was rejected' }
+    $invalidPrefixContract = $contract | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+    $invalidPrefixContract.pending_namespaces[1].exact_prefixes = @('x')
+    $invalidPrefixRejected = $false
+    try { $null = Find-Authorization $invalidPrefixContract @([pscustomobject]@{path='src/generated/public.go';git_status='A'}) }
+    catch { $invalidPrefixRejected = $_.Exception.Message -match 'must end with a non-empty terminal /\*\* prefix' }
+    if (-not $invalidPrefixRejected) { throw 'SELFTEST FAIL: malformed pending prefix did not fail closed' }
     Write-Output 'SELFTEST PASS: ordinary authorization rejects exact and prefix-covered forbidden_final_paths entries'
 }
 
@@ -318,10 +333,18 @@ catch {
 }
 finally {
     if ($null -ne $trustedRoot -and (Test-Path -LiteralPath $trustedRoot)) {
-        $resolvedTemp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\','/') + [System.IO.Path]::DirectorySeparatorChar
-        $resolvedTarget = [System.IO.Path]::GetFullPath($trustedRoot)
-        if (-not $resolvedTarget.StartsWith($resolvedTemp, [System.StringComparison]::OrdinalIgnoreCase) -or -not ([System.IO.Path]::GetFileName($resolvedTarget)).StartsWith('engram-authority-', [System.StringComparison]::Ordinal)) { throw "refusing unsafe temp cleanup '$resolvedTarget'" }
-        Remove-Item -LiteralPath $resolvedTarget -Recurse -Force
+        try {
+            $resolvedTemp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\','/') + [System.IO.Path]::DirectorySeparatorChar
+            $resolvedTarget = [System.IO.Path]::GetFullPath($trustedRoot)
+            if (-not $resolvedTarget.StartsWith($resolvedTemp, [System.StringComparison]::OrdinalIgnoreCase) -or -not ([System.IO.Path]::GetFileName($resolvedTarget)).StartsWith('engram-authority-', [System.StringComparison]::Ordinal)) { throw "refusing unsafe temp cleanup '$resolvedTarget'" }
+            Remove-Item -LiteralPath $resolvedTarget -Recurse -Force
+        }
+        catch {
+            $cleanupError = "trusted temp cleanup failed: $($_.Exception.Message)"
+            if ($null -eq $artifactObject) { $artifactObject = [ordered]@{schema_version=1;gate='pr-authority-guard';verdict='FAIL';errors=@($cleanupError)} }
+            else { $artifactObject.verdict = 'FAIL'; $artifactObject.errors = @($artifactObject.errors) + $cleanupError }
+            $exitCode = 1
+        }
     }
 }
 

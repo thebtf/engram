@@ -2,9 +2,9 @@
   "schema_version": 1,
   "suite": "R12 trusted-base authority and self-reference-free maintenance simulation",
   "verdict": "PASS",
-  "started_at": "2026-07-13T11:36:01.6546447+00:00",
-  "finished_at": "2026-07-13T11:42:32.1398742+00:00",
-  "duration_seconds": 390.485,
+  "started_at": "2026-07-13T12:24:27.6392732+00:00",
+  "finished_at": "2026-07-13T12:31:09.0567710+00:00",
+  "duration_seconds": 401.417,
   "execution_contract": {
     "head_treated_as_data_only": true,
     "head_executed": false,
@@ -95,7 +95,7 @@
       "observed": "FAIL",
       "exit_code": 1,
       "errors": [
-        "candidate head active authority validation failed under trusted-base bytes: candidate 'DB-EMBEDDING-STATS' has unknown status class 'current-checker-active'"
+        "candidate head active authority validation failed under trusted-base bytes: R12 current status classes drifted from the audited closed-world set; candidate 'DB-EMBEDDING-STATS' has unknown status class 'current-checker-active'"
       ]
     },
     {
@@ -226,7 +226,7 @@
       "observed": "FAIL",
       "exit_code": 1,
       "errors": [
-        "fetched default-branch base differs from the event base; maintenance PR is stale: expected=5b60ce815d674bc1f9add03cbd641c746c3c90f4 observed=cc27eaef8327f7ff0c6b7ae3bdf3a66fd23373e8"
+        "fetched default-branch base differs from the event base; maintenance PR is stale: expected=c2994eb1006ec43af7ac6e767904808386a2cc16 observed=1d53e4bec74a9188578a6d357d966d62b7fa7459"
       ]
     }
   ],

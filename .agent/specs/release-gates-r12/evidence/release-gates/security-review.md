@@ -42,6 +42,10 @@ exact audited immutable-SHA allowlist.
   https://github.com/pgvector/pgvector/blob/master/Dockerfile
 - PostgreSQL official image entrypoint source:
   https://github.com/docker-library/postgres/blob/master/docker-entrypoint.sh
+- Microsoft .NET `File.SetUnixFileMode` API:
+  https://learn.microsoft.com/en-us/dotnet/api/system.io.file.setunixfilemode
+- `actions/checkout` full-history and tag-fetch contract:
+  https://github.com/actions/checkout#fetch-all-history-for-all-tags-and-branches
 
 Context7 was used for Docker Compose and GitHub Actions contract lookup,
 including least-privilege permissions, full-SHA pins, and concurrency groups.
@@ -50,6 +54,15 @@ Docker, pgvector, PostgreSQL, GitHub Actions, required-check, and ruleset
 sources. Tavily was attempted again during the external-review repair and
 remained blocked by `OAuth authorization required`; no training-memory claim
 was substituted for that unavailable source.
+
+The R6 review consultation also queried Context7's current .NET corpus and
+Parallel's official-source index. Both point to `System.IO.File.SetUnixFileMode`
+or `FileSystemInfo.UnixFileMode`; there is no
+`System.IO.Directory.SetUnixFileMode` API. That independently explains the
+release-runner failure now tracked outside this governance diff. Parallel also
+confirmed that `actions/checkout` requires `fetch-depth: 0` to make all history
+and tags available. Tavily was retried for this question and remained blocked
+by the same OAuth requirement.
 
 The official action tags were also resolved directly with `git ls-remote` on
 2026-07-13. The immutable pins are:
@@ -145,6 +158,25 @@ successor-base identities. The exact workflow-string checks also remain
 fail-closed: loosening them to substring-compatible alternatives would turn a
 review convenience into a larger accepted workflow language without a
 corresponding semantic parser or hostile proof.
+
+The exact-head R5 review was then repeated by CodeRabbit, Codex, and Gemini.
+CodeRabbit independently traced the changed operators and reported no new
+trust-boundary or type-confusion defect. Codex found two valid semantic gaps:
+pending exact paths and prefixes were normalized together even though the
+ordinary guard gives them different meaning, and the allowed R12 status sets
+were self-declared by the manifest being validated. R6 now requires each field
+to contain only its declared path kind, moves the live IMAGE evidence directory
+to `exact_prefixes`, and compares all three status arrays with literal audited
+closed-world sequences before using them.
+
+Gemini found that a malformed prefix could reach an unconditional `Substring`
+and crash the ordinary guard, and that cleanup exceptions in `finally` could
+mask the primary validation error. R6 validates a non-empty terminal `/**`
+prefix before matching, includes a malformed-prefix fail-closed self-test, and
+records cleanup failure alongside the original artifact errors while forcing a
+FAIL exit. Its namespace-resolution warning was disproved by the executed
+timestamp paths, but the production type references were still fully qualified
+as `System.Globalization` for clarity.
 
 ## Dynamic validation and hostile cases
 

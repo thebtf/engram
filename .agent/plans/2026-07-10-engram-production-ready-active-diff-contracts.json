@@ -581,7 +581,6 @@
       "exact_paths": [
         ".agent/reports/2026-07-11-image-remediation-r2-maker.md",
         ".agent/reports/2026-07-11-image-remediation-r2-security.md",
-        ".agent/reports/evidence/production-ready/image-remediation-r2/**",
         ".dockerignore",
         ".github/workflows/docker-publish.yml",
         ".github/workflows/docker.yaml",
@@ -596,6 +595,9 @@
         "scripts/production-gates/build-and-scan-images.ps1",
         "tests/critical/runtime/image_runtime_contract_test.go",
         "tests/critical/runtime/postgres_image_contract_test.go"
+      ],
+      "exact_prefixes": [
+        ".agent/reports/evidence/production-ready/image-remediation-r2/**"
       ],
       "acceptance_contract": {
         "package_names": [

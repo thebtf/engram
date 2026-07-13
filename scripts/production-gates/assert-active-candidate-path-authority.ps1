@@ -312,6 +312,12 @@ function Invoke-R12ContractAudit {
     [string[]]$currentStatuses = @((Get-PropertyValue $statusClasses 'current') | ForEach-Object { [string]$_ })
     [string[]]$rejectedStatuses = @((Get-PropertyValue $statusClasses 'rejected') | ForEach-Object { [string]$_ })
     [string[]]$pendingStatuses = @((Get-PropertyValue $statusClasses 'pending') | ForEach-Object { [string]$_ })
+    [string[]]$expectedCurrentStatuses = @('current-checker-active','current-ready','current-ready-for-check','current-ready-with-concerns')
+    [string[]]$expectedRejectedStatuses = @('rejected-evidence-revision','rejected-historical','rejected-release-gates-r9','rejected-security-r3')
+    [string[]]$expectedPendingStatuses = @('current-candidate-pending-checker','current-maker-frozen-checker-pending','current-maker-in-progress','current-rework-ready')
+    if (($currentStatuses -join "`n") -cne ($expectedCurrentStatuses -join "`n")) { $errors.Add('R12 current status classes drifted from the audited closed-world set') }
+    if (($rejectedStatuses -join "`n") -cne ($expectedRejectedStatuses -join "`n")) { $errors.Add('R12 rejected status classes drifted from the audited closed-world set') }
+    if (($pendingStatuses -join "`n") -cne ($expectedPendingStatuses -join "`n")) { $errors.Add('R12 pending status classes drifted from the audited closed-world set') }
     [object[]]$candidates = @((Get-PropertyValue $ContractObject 'candidates'))
     $candidateResults = [System.Collections.Generic.List[object]]::new()
     $gitResults = [System.Collections.Generic.List[object]]::new()
@@ -385,8 +391,19 @@ function Invoke-R12ContractAudit {
         $macroBound = [string](Get-PropertyValue $pending 'authority_mode') -ceq 'bound-plan-member-union-with-exact-r12-overrides' -and @((Get-PropertyValue $pending 'member_slices')).Count -gt 0 -and @((Get-PropertyValue $pending 'exact_r12_overrides')).Count -gt 0
         if ($exactPaths.Count + $exactPrefixes.Count -eq 0 -and -not $macroBound) { $errors.Add("pending '$slice' declares no bounded path") }
         $seenPending = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-        foreach ($token in @($exactPaths) + @($exactPrefixes)) {
-            try { $normalized = Normalize-AuthorityPath $token; if ($normalized.display -cne $token -or -not $seenPending.Add($token)) { throw "pending path is non-canonical or repeated: '$token'" } } catch { $errors.Add("pending '$slice': $($_.Exception.Message)") }
+        foreach ($token in $exactPaths) {
+            try {
+                $normalized = Normalize-AuthorityPath $token
+                if ($normalized.kind -cne 'exact' -or $normalized.display -cne $token -or -not $seenPending.Add($token)) { throw "exact_paths entry is non-exact, non-canonical, or repeated: '$token'" }
+            }
+            catch { $errors.Add("pending '$slice': $($_.Exception.Message)") }
+        }
+        foreach ($token in $exactPrefixes) {
+            try {
+                $normalized = Normalize-AuthorityPath $token
+                if ($normalized.kind -cne 'prefix' -or $normalized.display -cne $token -or -not $seenPending.Add($token)) { throw "exact_prefixes entry is non-prefix, non-canonical, or repeated: '$token'" }
+            }
+            catch { $errors.Add("pending '$slice': $($_.Exception.Message)") }
         }
         [string[]]$forbidden = @(Get-OptionalStringArray $pending 'forbidden_final_paths')
         $seenForbidden = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
@@ -676,10 +693,14 @@ function Invoke-SelfTest {
     Assert-SelfTest ($r12WrongIdentityResult.verdict -eq 'FAIL' -and @($r12WrongIdentityResult.errors | Where-Object { $_ -match 'contract identity' }).Count -eq 1) 'R12 numeric-string identity fields were accepted'
     $r12ForbiddenPrefix = [pscustomobject][ordered]@{
         schema_version=[long]1; kind='production-ready-active-diff-contracts'; revision=[long]12
-        status_classes=[pscustomobject]@{current=@();rejected=@();pending=@('current-maker-in-progress')}; candidates=@(); source_audit=[pscustomobject]@{observed_sha256=('a'*64)}
+        status_classes=[pscustomobject]@{
+            current=@('current-checker-active','current-ready','current-ready-for-check','current-ready-with-concerns')
+            rejected=@('rejected-evidence-revision','rejected-historical','rejected-release-gates-r9','rejected-security-r3')
+            pending=@('current-candidate-pending-checker','current-maker-frozen-checker-pending','current-maker-in-progress','current-rework-ready')
+        }; candidates=@(); source_audit=[pscustomobject]@{observed_sha256=('a'*64)}
         pending_namespaces=@([pscustomobject][ordered]@{
             slice='SELFTEST';status_class='current-maker-in-progress';branch='work/selftest';base_anchor=('1'*40);release_accepted=$false
-            exact_prefixes=@('src/generated/**');forbidden_final_paths=@('src/generated/secret.go')
+            exact_paths=@();exact_prefixes=@('src/generated/**');forbidden_final_paths=@('src/generated/secret.go')
         })
     }
     $r12ForbiddenPrefixResult = Invoke-R12ContractAudit $r12ForbiddenPrefix $hash $hash $hash $hash
@@ -694,6 +715,16 @@ function Invoke-SelfTest {
     $r12UnknownPending.pending_namespaces[0].status_class = 'arbitrary-pending-status'
     $r12UnknownPendingResult = Invoke-R12ContractAudit $r12UnknownPending $hash $hash $hash $hash
     Assert-SelfTest ($r12UnknownPendingResult.verdict -eq 'FAIL' -and @($r12UnknownPendingResult.errors | Where-Object { $_ -match 'unknown status class' }).Count -eq 1) 'R12 arbitrary pending status class was accepted'
+    $r12SelfDeclaredStatus = Copy-JsonObject $r12ValidPending
+    $r12SelfDeclaredStatus.status_classes.pending = @('arbitrary-pending-status')
+    $r12SelfDeclaredStatus.pending_namespaces[0].status_class = 'arbitrary-pending-status'
+    $r12SelfDeclaredStatusResult = Invoke-R12ContractAudit $r12SelfDeclaredStatus $hash $hash $hash $hash
+    Assert-SelfTest ($r12SelfDeclaredStatusResult.verdict -eq 'FAIL' -and @($r12SelfDeclaredStatusResult.errors | Where-Object { $_ -match 'audited closed-world set' }).Count -eq 1) 'R12 self-declared pending status set was accepted'
+    $r12PrefixInExactPaths = Copy-JsonObject $r12ValidPending
+    $r12PrefixInExactPaths.pending_namespaces[0].exact_paths = @('src/generated/**')
+    $r12PrefixInExactPaths.pending_namespaces[0].exact_prefixes = @()
+    $r12PrefixInExactPathsResult = Invoke-R12ContractAudit $r12PrefixInExactPaths $hash $hash $hash $hash
+    Assert-SelfTest ($r12PrefixInExactPathsResult.verdict -eq 'FAIL' -and @($r12PrefixInExactPathsResult.errors | Where-Object { $_ -match 'exact_paths entry is non-exact' }).Count -eq 1) 'R12 prefix token in exact_paths was accepted'
     Assert-SelfTest (('A' * 40) -cnotmatch '^[0-9a-f]{40}$') 'uppercase Git identity passed the canonical lowercase regex'
     $authority = Get-PlanAuthority $plan
     $pending = $contract.pending_namespaces[0]

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-07-13T11:46:26.8911930Z",
+  "captured_at": "2026-07-13T12:32:20.5853466Z",
   "batch": "R12/B17 release-governance bootstrap and CI truth repair",
   "verdict": "PASS",
   "red": {
@@ -90,6 +90,10 @@
     "null_optional_prefixes_are_filtered": true,
     "canonical_paths_reject_double_slash_aliases": true,
     "root_yaml_comments_cannot_hide_later_triggers": true,
+    "pending_path_fields_enforce_exact_vs_prefix_kind": true,
+    "r12_status_classes_match_literal_audited_sets": true,
+    "malformed_pending_prefixes_fail_closed": true,
+    "cleanup_failures_preserve_primary_artifact_errors_and_force_fail": true,
     "successor_paths_unique_independent_of_status": true,
     "successor_rotation_window_enforced": true,
     "historical_validator_blobs_reanchored_to_git": true,
@@ -106,23 +110,23 @@
     "training_memory_substituted": false,
     "security_review": ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md",
     "gedankenexperiment": "GE-001 found and closed two HIGH recurring-epoch deadlocks; R3 review closed type, duplicate-path, rotation-window, and action-allowlist edges; journal remains local and ignored",
-    "external_code_review": "CodeRabbit, Codex, and Gemini findings classified at PR #405 heads 1dc6b91c and 22ec8476; valid lockout, injection, type, protected-path, concurrency, forbidden-prefix, StrictMode, null-prefix, pending-status, root-comment, double-slash, successor-header, and case-sensitive canonical-identity findings repaired; the earlier uppercase-SHA rejection was explicitly reversed after PowerShell runtime proof; replacement-base and workflow-language widening proposals remain rejected with repository evidence",
-    "known_integration_blocker": "macOS base test TestCliWorker_ProductionReadinessStructuredArgsAndCWD compares /var with canonical /private/var; separate PR #406 uses os.SameFile and awaits exact-head remote macOS acceptance"
+    "external_code_review": "CodeRabbit, Codex, and Gemini findings classified through exact PR #405 head cc247402; R6 additionally closes exact-vs-prefix field confusion, self-declared status sets, malformed-prefix crashes, and cleanup exception masking; CodeRabbit independently reported no new trust-boundary/type-confusion defect; the earlier uppercase-SHA rejection remains explicitly reversed after PowerShell runtime proof; replacement-base and workflow-language widening proposals remain rejected with repository evidence",
+    "known_integration_blocker": "PR #406 exact-head macOS artifact proves go test exit 0 and removes the /var versus /private/var failure, but combined acceptance is pending; release CI also exposes invalid Directory.SetUnixFileMode calls and missing pre-v5 tag/image prerequisites outside this governance diff"
   },
   "sha256": {
     ".github/workflows/test.yml": "ea5556c91cdeedcd683063deeb1e3b398fbb433c12892caf4f67859698400bfa",
     ".github/workflows/authority-guard.yml": "5a5483222561552345e904188f4e9e27c58b34f15bf3c80f01400c023601550a",
-    ".agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json": "374351fc6bfda614f328daa7560f3708bd51367dc8e09d26537502890749c528",
-    ".agent/specs/release-gates-r12/evidence/plan-governance/gates-summary.json": "c405d36029dc3332f568fa4fd98cbb422c747e2d72d172d06d9b2e48948bf5cb",
-    ".agent/specs/release-gates-r12/evidence/plan-governance/test-r12-plan-governance.ps1": "41abdddfa28bb0d307240ec0557dcfc0ddd0b3f6e8efc944a3f4d80cbc50bf82",
-    ".agent/specs/release-gates-r12/evidence/plan-governance/verification-summary.json": "e69afe5a88832cc83bbb977d51b2223be36ec866b6ec8b5f7488930d07b40329",
+    ".agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json": "f75ad50977574071a45d59506c6a73fe623baca7c911bb5101c9511b98effbf9",
+    ".agent/specs/release-gates-r12/evidence/plan-governance/gates-summary.json": "c714a7c30fe76864feb16bf8a30e4a4087a4de49aa440f599d1968f2cba8f0b2",
+    ".agent/specs/release-gates-r12/evidence/plan-governance/test-r12-plan-governance.ps1": "07ee0e9f179a0182022cccffcd35abf6d5d1f382c8b7a1f0888591da09c235eb",
+    ".agent/specs/release-gates-r12/evidence/plan-governance/verification-summary.json": "97b2a6bd64c881663fc8d534b9816a2fea4506d632e50adcef92e9eb136687d3",
     "scripts/production-gates/assert-plan-path-ownership.ps1": "8387fa5628791f8e7f3c4c82a0b1754b9b3cae7a344053abd0aa479b7258f923",
-    "scripts/production-gates/assert-active-candidate-path-authority.ps1": "6ee4f31d84513331e5272832239c5d0381b249071cf34b58d9842287b4365aaa",
-    "scripts/production-gates/assert-pr-authority-guard.ps1": "bf83f407496851622a6786c5ac16291153076544452f35750626adf55aa8aae2",
-    "scripts/production-gates/assert-pr-authority-maintenance.ps1": "0e20a542fc9ea78e42b5baf98cb2b04fe2fe81788dc57b726b9c39648f2e642b",
-    ".agent/specs/release-gates-r12/evidence/release-gates/test-r12-authority-maintenance.ps1": "ab704d4f7917aab09012283e518eea3afb5732bfb234a3a69d0c78f68fee7adc",
-    ".agent/specs/release-gates-r12/evidence/release-gates/maintenance-simulation.json": "a04f9f8851ccef88a5a95b8f6dc44db08f564ebba4e8492a914670312fabafe5",
-    ".agent/specs/release-gates-r12/evidence/release-gates/windows-harness.json": "ad17e91a5e1b971a2ff67b87f9fcfa470f61fcc20dbe80faecfb7748a63f94d5",
-    ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md": "c67103a54e44cebf082e748b893c48a3f2774ff8137606bf3232fa6218ae4782"
+    "scripts/production-gates/assert-active-candidate-path-authority.ps1": "92e0440e1a1ba0e3b32de605f798eb1078849420d3f5db1e6d7426bd31f7f348",
+    "scripts/production-gates/assert-pr-authority-guard.ps1": "ab89e8f44d1bab636220636bef6c7211e3c352bb41c587bbc4cccdd3a491f3dc",
+    "scripts/production-gates/assert-pr-authority-maintenance.ps1": "045029b321c9919ccc3e2c1571e96f8c050698afc15d134a5f14f8cb66a42d97",
+    ".agent/specs/release-gates-r12/evidence/release-gates/test-r12-authority-maintenance.ps1": "f5670e1897e972fb5df44e640237e9f029412fd5f7ebaabb1c23f39001f12fa3",
+    ".agent/specs/release-gates-r12/evidence/release-gates/maintenance-simulation.json": "f4b0b9f9981586906e7a4cac343b3ea8e099b4ffd9e81d2ab2b408da797d2294",
+    ".agent/specs/release-gates-r12/evidence/release-gates/windows-harness.json": "8f584c8af4889aacd2bb87c096dfac1dd3ce62fcd2e3248c2b8ab3fa68d5c5c6",
+    ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md": "2c9c6cdd22e9ab2d8667e7e9027a096465a21e5823bf4acb3fb823efcd826954"
   }
 }

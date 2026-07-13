@@ -164,7 +164,7 @@ function ConvertTo-Rfc3339 {
     if ($Value -isnot [string]) { throw "$Context must be an RFC3339 UTC timestamp string" }
     if ($Value -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$') { throw "$Context must be an RFC3339 UTC timestamp" }
     $parsed = [DateTimeOffset]::MinValue
-    if (-not [DateTimeOffset]::TryParse($Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsed)) { throw "$Context is not a valid timestamp" }
+    if (-not [DateTimeOffset]::TryParse($Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsed)) { throw "$Context is not a valid timestamp" }
     return $parsed.ToUniversalTime()
 }
 
@@ -896,10 +896,18 @@ catch {
 }
 finally {
     if ($null -ne $trustedRoot -and (Test-Path -LiteralPath $trustedRoot)) {
-        $tempPrefix = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\','/') + [System.IO.Path]::DirectorySeparatorChar
-        $target = [System.IO.Path]::GetFullPath($trustedRoot)
-        if (-not $target.StartsWith($tempPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or -not ([System.IO.Path]::GetFileName($target)).StartsWith('engram-authority-maintenance-', [System.StringComparison]::Ordinal)) { throw "refusing unsafe temp cleanup '$target'" }
-        Remove-Item -LiteralPath $target -Recurse -Force
+        try {
+            $tempPrefix = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\','/') + [System.IO.Path]::DirectorySeparatorChar
+            $target = [System.IO.Path]::GetFullPath($trustedRoot)
+            if (-not $target.StartsWith($tempPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or -not ([System.IO.Path]::GetFileName($target)).StartsWith('engram-authority-maintenance-', [System.StringComparison]::Ordinal)) { throw "refusing unsafe temp cleanup '$target'" }
+            Remove-Item -LiteralPath $target -Recurse -Force
+        }
+        catch {
+            $cleanupError = "trusted maintenance temp cleanup failed: $($_.Exception.Message)"
+            if ($null -eq $artifactObject) { $artifactObject = [ordered]@{schema_version=1;gate='pr-authority-maintenance';verdict='FAIL';errors=@($cleanupError)} }
+            else { $artifactObject.verdict = 'FAIL'; $artifactObject.errors = @($artifactObject.errors) + $cleanupError }
+            $exitCode = 1
+        }
     }
 }
 
