@@ -871,6 +871,48 @@ func TestGetDatabaseDSN(t *testing.T) {
 	_ = dsn
 }
 
+func TestLoadReadsAdminTokenAndDatabaseDSNFromSecretFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv(EnvAdminToken, "")
+	t.Setenv(EnvDatabaseDSN, "")
+	tokenFile := filepath.Join(home, "admin-token")
+	dsnFile := filepath.Join(home, "database-dsn")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("file-admin-token\n"), 0o600))
+	require.NoError(t, os.WriteFile(dsnFile, []byte("postgres://file-user:file-pass@postgres/engram\n"), 0o600))
+	t.Setenv(EnvAdminTokenFile, tokenFile)
+	t.Setenv(EnvDatabaseDSNFile, dsnFile)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "file-admin-token", cfg.WorkerToken)
+	assert.Equal(t, "postgres://file-user:file-pass@postgres/engram", cfg.DatabaseDSN)
+
+	t.Setenv(EnvAdminToken, "direct-admin-token")
+	t.Setenv(EnvDatabaseDSN, "postgres://direct@postgres/engram")
+	cfg, err = Load()
+	require.NoError(t, err)
+	assert.Equal(t, "direct-admin-token", cfg.WorkerToken)
+	assert.Equal(t, "postgres://direct@postgres/engram", cfg.DatabaseDSN)
+}
+
+func TestLoadRejectsMissingOrEmptySecretFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv(EnvAdminToken, "")
+	t.Setenv(EnvAdminTokenFile, filepath.Join(home, "missing"))
+	_, err := Load()
+	require.ErrorContains(t, err, EnvAdminTokenFile)
+
+	empty := filepath.Join(home, "empty")
+	require.NoError(t, os.WriteFile(empty, nil, 0o600))
+	t.Setenv(EnvAdminTokenFile, empty)
+	_, err = Load()
+	require.ErrorContains(t, err, "secret file is empty")
+}
+
 // TestGetCollectionConfigPath verifies path fallback when env is unset.
 func TestGetCollectionConfigPath(t *testing.T) {
 	origEnv := os.Getenv("COLLECTION_CONFIG")

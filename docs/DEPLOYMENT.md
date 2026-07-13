@@ -1,338 +1,151 @@
 # Deployment Guide
 
-Engram uses a **client-server architecture** with a separate promoted browser host for the
-new operator control plane:
+Engram production deployment is a three-image stack: PostgreSQL, server, and
+operator console. Production Compose intentionally has no moving image default.
+Every deployment starts from the post-logout `publication-result.json`
+evidence emitted by the release workflow for one canonical tag such as
+`v6.43.0-rc.1`.
 
-- **Server** (Docker on remote host): Worker (API + MCP) + PostgreSQL
-- **Operator Console** (Docker on remote host): promoted `apps/operator-console`
-  browser host, typically running as an internal upstream on `:3000`
-- **Public browser origin**: normally the worker origin itself (`:37777`) when
-  `ENGRAM_OPERATOR_CONSOLE_URL` is set and the worker proxies browser routes to
-  the promoted console upstream while keeping `/api/*` local
-- **Client** (local workstation): Claude Code plugin (hooks + HTTP MCP)
+## Immutable image selection
 
-## Token Model (v6)
+Set all three identities before parsing either Compose file:
 
-Two distinct credential tiers, host-pinned:
-
-- **`ENGRAM_AUTH_ADMIN_TOKEN`** — Operator key. Set ONLY in the server-host
-  environment (Docker compose `.env` / Unraid template / systemd unit).
-  Grants admin-grade access. **MUST NOT be placed on a workstation.**
-- **`ENGRAM_TOKEN`** — Per-workstation API token (worker keycard). Issued
-  via the dashboard `/tokens` page after admin login. Each workstation
-  gets its own. Lives in `~/.claude/settings.json` env or the plugin's
-  `user_config.api_token`. **MUST NOT be set on the server host.**
-
-A workstation that starts with `ENGRAM_URL` set but `ENGRAM_TOKEN` empty
-exits with a fatal stderr line — replacing the pre-v6 silent
-graceful-degrade to `loom_*-only` that masked PR #203's regression.
-
-Keycard issuance, listing, revocation: `/api/auth/tokens` endpoints.
-These require an admin browser session cookie. Bearer-token callers
-(operator key OR keycard) are rejected with 403.
-
-```
-  ┌─── Workstation A ────────────────┐      ┌─── Server (Docker) ──────────────┐
-  │                                  │      │                                  │
-  │  Claude Code                     │      │  ┌──────────────────────────┐    │
-  │    ├── hooks ──POST──────────────────→  │  │  Worker :37777           │    │
-  │    └── plugin ──HTTP─/mcp────────────→  │  │  /api/* (hooks+dashboard)│    │
-  │                                  │      │  │  /mcp   (Streamable HTTP)│    │
-  ├─── Workstation B ────────────────┤      │  │  /sse   (SSE, legacy)    │    │
-  │  (same setup, shared brain)      │      │  └────────────┬─────────────┘    │
-  └──────────────────────────────────┘      │               │                  │
-                                            │  ┌────────────▼─────────────┐    │
-                                            │  │  PostgreSQL + pgvector    │    │
-                                            │  │  :5432                    │    │
-                                            │  └──────────────────────────┘    │
-                                            └──────────────────────────────────┘
+```dotenv
+ENGRAM_SERVER_IMAGE=ghcr.io/thebtf/engram@sha256:<server-manifest-digest>
+ENGRAM_OPERATOR_IMAGE=ghcr.io/thebtf/engram-operator-console@sha256:<operator-manifest-digest>
+ENGRAM_POSTGRES_IMAGE=ghcr.io/thebtf/engram-postgres@sha256:<postgres-manifest-digest>
+POSTGRES_PASSWORD=<unique-secret>
+ENGRAM_AUTH_ADMIN_TOKEN=<separate-operator-secret>
 ```
 
----
+The same release is also discoverable through exactly two tags per image:
 
-## Server Setup
+- the full canonical release tag, for example `v6.43.0-rc.1`;
+- `sha-<full-40-hex-release-commit>`.
 
-### Option A: Docker Compose (recommended)
+`main`, `latest`, branch, major, and minor aliases are not release identities.
+Do not replace the digest-pinned values above with moving tags.
+
+Validate and start the pull-only stack:
 
 ```bash
-# Clone and configure
-git clone https://github.com/thebtf/engram.git
-cd engram
-
-# Create .env file
-cat > .env << 'EOF'
-POSTGRES_PASSWORD=change-me-in-production
-API_TOKEN=your-secret-token
-EMBEDDING_PROVIDER=openai
-EMBEDDING_BASE_URL=http://localhost:4000/v1
-EMBEDDING_API_KEY=your-litellm-key
-EMBEDDING_MODEL_NAME=openai/Qwen/Qwen3-Embedding-8B
-EMBEDDING_DIMENSIONS=4096
-EOF
-
-# Start the stack
-docker compose up -d
+docker compose -f deploy/docker-compose.runtime.yml config
+docker compose -f deploy/docker-compose.runtime.yml pull
+docker compose -f deploy/docker-compose.runtime.yml up -d
 ```
 
-Services started:
-| Service | Port | Purpose |
-|---------|------|---------|
-| `postgres` | 5432 | PostgreSQL 17 + pgvector |
-| `server` | 37777 | Worker API + MCP SSE + public browser origin when root proxy is enabled |
-| `operator-console` | 3000 | Internal promoted operator-console upstream (optional direct bind for debugging) |
+The root `docker-compose.yml` uses the same required image variables and also
+contains local build definitions. The image acceptance gate sets them to exact
+local image IDs before exercising the stack. A direct source build also sets
+`ENGRAM_BUILD_VERSION` to the canonical release version or
+`sha-<full-40-hex-commit>`; the Dockerfile rejects an absent or untrusted value.
 
-Verify:
-```bash
-curl http://localhost:37777/health
-# {"status":"ok", ...}
-curl http://localhost:3000/
-# operator console HTML
-```
+## Release activation prerequisite
 
-Local reproducible smoke for the promoted host path:
+The release workflow fails before registry login unless GitHub reports exactly
+one active tag-target repository ruleset with all of these properties:
 
-```powershell
-pwsh -NoProfile -File scripts/smoke-operator-console.ps1
-```
+- include is exactly `refs/tags/v*` and exclusions are empty;
+- deletion and non-fast-forward updates are blocked;
+- bypass actors are empty.
 
-This script:
+It also requires exactly one active branch-target ruleset for
+`refs/heads/main` with no exclusions, deletion and non-fast-forward protection,
+strict status checks, and exactly one `authority-guard` status owned by GitHub
+Actions (`integration_id: 15368`). The only recovery bypass is exactly one
+`User` actor, ID `7106373`, in `pull_request` mode. A missing integration ID, a
+same-name status from another integration, zero/duplicate bypass actors, or an
+always-bypass actor stops the release.
 
-- builds the current-source `server` and `operator-console` images
-- brings up `postgres + server + operator-console`
-- checks the dedicated browser host, the worker root proxy, and `/api`
-- validates issue mutation flow through the promoted host path
+The repository currently needs this operator bootstrap before release
+publication can activate. The workflow does not create or weaken repository
+rules.
 
-For remote verification, use `scripts/smoke-operator-console-remote.ps1` with an
-explicit `-BaseUrl` for the actual deployed browser surface. Do not assume the
-local compose default `:3000` is the live public address on every server.
+GitHub Container Registry does not provide this project with an atomic tag CAS
+contract. Engram therefore uses a repository-controlled single-writer model.
+The default-branch publisher uses two fresh runners:
 
-### Option B: Unraid
+1. `prepare-release` has only `contents: read`. Trusted default-branch code
+   validates the event/tag/rulesets, checks out the exact candidate without
+   persisted credentials, builds from a tracked-file-only Git archive, runs the
+   full scan/runtime gate, and uploads one immutable five-file image-data
+   bundle. The bundle exposes the upload artifact ID and SHA-256 digest.
+2. `publish-images` alone has `actions: read` and `packages: write`. It checks
+   out only trusted default-branch code, repeats the full event/API/tag/main
+   provenance check, requires the current workflow run to contain exactly the
+   expected artifact ID/name/digest and no other artifact, downloads by ID,
+   rejects extra files, links, traversal, or checksum drift, and loads the three
+   exact image archives as data without running candidate code.
+3. The fresh publisher compares all six destinations before login, logs in only
+   after every check passes, re-compares before the first write, publishes only
+   absent exact identities, reads back all six, logs out, removes the isolated
+   Docker credential directory, validates the exact evidence envelope, and
+   only then uploads publication evidence.
 
-1. **PostgreSQL**: Install `pgvector/pgvector:pg17` from Community Applications (or use existing PostgreSQL instance). Create database `engram` with user `engram`.
+A package administrator or external PAT can still mutate package state outside
+the repository workflow; that is an explicit operational trust boundary and
+must be restricted by organization policy. The repository currently lacks the
+required immutable-tag and strict `authority-guard` rulesets, so release
+publication remains fail-closed until an operator installs both.
 
-2. **Engram**: Create a Docker container manually or use your own template:
-   - Image: `ghcr.io/thebtf/engram:main`
-   - Configure `DATABASE_DSN` to point to your PostgreSQL instance
-   - Set `ENGRAM_API_TOKEN` for security
-   - Configure embedding provider (LiteLLM recommended)
-   - Map port `37777`
+## Runtime contract
 
-3. **Enable pgvector** on first run:
-   ```sql
-   -- Connect to your PostgreSQL and run:
-   CREATE EXTENSION IF NOT EXISTS vector;
-   ```
-   The worker runs this automatically on startup, but your PostgreSQL user needs the `CREATE EXTENSION` privilege.
+- PostgreSQL: version 17.10, pgvector 0.8.1, UID/GID 70, persistent
+  `/var/lib/postgresql/data`.
+- Server: UID/GID 65532, read-only root filesystem, persistent
+  `HOME=/var/lib/engram`, semantic health probe on `/api/ready`.
+- Operator console: UID/GID 65532, read-only root filesystem,
+  `NUXT_OPERATOR_API_TARGET=http://server:37777`, semantic proxied readiness.
+- Every service drops all capabilities and enables `no-new-privileges`;
+  bounded tmpfs mounts cover runtime-only writable paths.
 
-### Option C: Manual Docker
-
-```bash
-# 1. Start PostgreSQL with pgvector
-docker run -d --name cmplus-postgres \
-  -e POSTGRES_DB=engram \
-  -e POSTGRES_USER=engram \
-  -e POSTGRES_PASSWORD=change-me \
-  -p 5432:5432 \
-  -v cmplus-pgdata:/var/lib/postgresql/data \
-  pgvector/pgvector:pg17
-
-# 2. Build the server image
-docker build --target server -t engram-server .
-
-# 2b. Build the operator console image
-docker build --target operator-console -t engram-operator-console .
-
-# 3. Start server (worker + MCP SSE on single port)
-docker run -d --name engram-server \
-  -e DATABASE_DSN="postgres://engram:change-me@host.docker.internal:5432/engram?sslmode=disable" \
-  -e ENGRAM_API_TOKEN="your-secret-token" \
-  -e ENGRAM_OPERATOR_CONSOLE_URL="http://host.docker.internal:3000" \
-  -e ENGRAM_EMBEDDING_PROVIDER=openai \
-  -e ENGRAM_EMBEDDING_BASE_URL=http://host.docker.internal:4000/v1 \
-  -e ENGRAM_EMBEDDING_DIMENSIONS=4096 \
-  -p 37777:37777 \
-  engram-server
-
-# 4. Start promoted operator console
-docker run -d --name engram-operator-console \
-  -e NUXT_OPERATOR_API_TARGET="http://host.docker.internal:37777" \
-  -e NUXT_PUBLIC_API_BASE="/api" \
-  -p 3000:3000 \
-  engram-operator-console
-```
-
----
-
-## Client Setup
-
-The client runs locally on each workstation. It connects to the remote server via the engram plugin.
-
-### Option A: Plugin Install (recommended)
-
-1. **Set environment variables** (add to shell profile or system environment):
-
-   **macOS / Linux** (`~/.bashrc` or `~/.zshrc`):
-   ```bash
-   export ENGRAM_URL=http://your-server:37777/mcp
-   export ENGRAM_API_TOKEN=your-secret-token
-   ```
-
-   **Windows** (PowerShell as admin):
-   ```powershell
-   [Environment]::SetEnvironmentVariable("ENGRAM_URL", "http://your-server:37777/mcp", "User")
-   [Environment]::SetEnvironmentVariable("ENGRAM_API_TOKEN", "your-secret-token", "User")
-   ```
-
-2. **Install the plugin** from [GitHub Releases](https://github.com/thebtf/engram/releases):
-
-   **macOS / Linux:**
-   ```bash
-   curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash
-   ```
-
-   **Windows (PowerShell):**
-   ```powershell
-   irm https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.ps1 | iex
-   ```
-
-3. **Restart Claude Code** — the plugin uses Streamable HTTP MCP to connect directly to the server. No proxy binary needed.
-
-4. **Verify** — in Claude Code, run `/engram:doctor` to check connectivity.
-
-### Option B: Manual Setup
-
-1. **Set environment variables** as described in Option A.
-
-2. **Clone or download** the `plugin/` directory from the repo.
-
-3. **Register the plugin** — add to `~/.claude/settings.json`:
-   ```json
-   {
-     "projects": {
-       "*": {
-         "plugins": ["path/to/engram/plugin"]
-       }
-     }
-   }
-   ```
-
-4. **Restart Claude Code.**
-
-### Option C: stdio Proxy (for non-HTTP MCP clients)
-
-If your MCP client does not support HTTP transport, use the stdio-to-SSE proxy:
+The server `/health` endpoint is liveness. During failed asynchronous
+initialization it can remain HTTP 200 while reporting an error. Docker health
+uses `/api/ready` and accepts only the exact JSON object:
 
 ```json
-{
-  "mcpServers": {
-    "engram": {
-      "command": "/path/to/engram-mcp-stdio-proxy",
-      "args": ["--url", "http://your-server:37777", "--token", "your-token"]
-    }
-  }
-}
+{"status":"ready"}
 ```
 
-> **Note:** Claude Code natively supports HTTP MCP — prefer Option A.
-
----
-
-## Embedding Configuration
-
-Engram supports two embedding providers:
-
-### LiteLLM + Qwen3-Embedding-8B (recommended)
-
-High-quality 4096-dimensional embeddings via LiteLLM proxy:
-
-```env
-ENGRAM_EMBEDDING_PROVIDER=openai
-ENGRAM_EMBEDDING_BASE_URL=http://your-litellm:4000/v1
-ENGRAM_EMBEDDING_API_KEY=your-key
-ENGRAM_EMBEDDING_MODEL_NAME=openai/Qwen/Qwen3-Embedding-8B
-ENGRAM_EMBEDDING_DIMENSIONS=4096
-```
-
-### Note on Legacy ONNX Provider
-
-The built-in ONNX BGE provider has been removed. Only the OpenAI-compatible REST API provider is available. Set `ENGRAM_EMBEDDING_PROVIDER=openai` and configure `ENGRAM_EMBEDDING_BASE_URL`, `ENGRAM_EMBEDDING_API_KEY`, and `ENGRAM_EMBEDDING_MODEL_NAME`.
-
-> **Note:** Changing embedding dimensions on an existing database triggers migration 020, which **truncates all vector data** and re-creates indexes. This is irreversible.
-
----
-
-## Environment Variables Reference
-
-### Server Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_DSN` | (required) | PostgreSQL connection string |
-| `ENGRAM_WORKER_HOST` | `0.0.0.0` | Worker bind address |
-| `ENGRAM_WORKER_PORT` | `37777` | Worker HTTP port (API + MCP) |
-| `ENGRAM_API_TOKEN` | (empty) | Auth token for all endpoints |
-| `ENGRAM_EMBEDDING_PROVIDER` | `openai` | Embedding provider (`openai`) |
-| `ENGRAM_EMBEDDING_BASE_URL` | `https://api.openai.com/v1` | Embedding API URL |
-| `ENGRAM_EMBEDDING_API_KEY` | (empty) | Embedding API key |
-| `ENGRAM_EMBEDDING_MODEL_NAME` | `text-embedding-3-small` | Model identifier |
-| `ENGRAM_EMBEDDING_DIMENSIONS` | `4096` | Vector dimensions |
-| `ENGRAM_EMBEDDING_TRUNCATE` | `true` | Truncate embeddings to fit dimensions |
-| `ENGRAM_GRAPH_PROVIDER` | (empty) | `falkordb` to enable graph backend |
-| `ENGRAM_FALKORDB_ADDR` | (empty) | FalkorDB address (e.g. `falkordb:6379`) |
-| `ENGRAM_FALKORDB_PASSWORD` | (empty) | FalkorDB password |
-| `ENGRAM_FALKORDB_GRAPH_NAME` | `engram` | FalkorDB graph name |
-| `DATABASE_MAX_CONNS` | `10` | PostgreSQL connection pool size |
-
-### Client Variables (set on each workstation)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ENGRAM_URL` | (required) | Server MCP endpoint (e.g. `http://server:37777/mcp`) |
-| `ENGRAM_API_TOKEN` | (empty) | Auth token (same as server's `ENGRAM_API_TOKEN`) |
-
----
-
-## Security
-
-- **Always set `ENGRAM_API_TOKEN`** in production. Without it, anyone with network access can read/write your observations.
-- Token auth uses constant-time comparison (timing-attack safe).
-- `DATABASE_DSN` contains credentials — never commit it to source control.
-- The worker binds to `0.0.0.0` by default — restrict with firewall rules or set `ENGRAM_WORKER_HOST=127.0.0.1` for local-only access.
-
----
-
-## Health Checks
+Verify the running stack:
 
 ```bash
-# Server health
-curl http://your-server:37777/health
-
-# MCP Streamable HTTP (with token)
-curl -X POST -H "Authorization: Bearer your-token" \
-  -H "Content-Type: application/json" \
-  http://your-server:37777/mcp
-
-# MCP SSE (legacy, with token)
-curl -H "Authorization: Bearer your-token" http://your-server:37777/sse
+docker compose -f deploy/docker-compose.runtime.yml ps
+curl --fail http://localhost:37777/health
+curl --fail http://localhost:37777/api/ready
+curl --fail http://localhost:3000/api/ready
 ```
 
----
+## Backup, upgrade, and rollback
 
-## Upgrading
+Before upgrade, create a PostgreSQL logical backup and prove it restores into a
+fresh database. Keep the named data volumes when recreating containers. Volumes
+created by the former UID 999 PostgreSQL image require the documented one-time
+ownership migration to UID/GID 70 before the new database image can start; the
+critical runtime suite proves the fail-closed and migrated cases.
 
-```bash
-# Docker Compose
-docker compose pull
-docker compose up -d
+Rollback uses the three digest identities from the preceding accepted release
+manifest. Change all three `ENGRAM_*_IMAGE` values as one set, recreate the
+stack without deleting named volumes, then verify PostgreSQL version/vector,
+retained data, direct readiness, and operator-proxied readiness.
 
-# Unraid
-# Update the container from the Docker tab (check for updates)
+## Reproduce image acceptance
 
-# Client (macOS/Linux)
-curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash
+Run from a clean candidate commit on a Docker host with Docker Scout:
 
-# Client (Windows)
-irm https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.ps1 | iex
+```powershell
+pwsh ./scripts/production-gates/build-and-scan-images.ps1 `
+  -Mode BuildAndScan `
+  -ServerTag engram:r2-server `
+  -OperatorTag engram:r2-operator-console `
+  -PostgresTag engram:r2-postgres `
+  -Platform linux/amd64 `
+  -ArtifactRoot .agent/reports/evidence/production-ready/image-remediation-r2 `
+  -Version sha-<full-40-hex-candidate-commit> `
+  -NoAllowlist
 ```
 
-Migrations run automatically on startup. No manual database changes needed.
+This performs no-cache builds from tracked files only, exact-ID HIGH/CRITICAL
+scans without allowlists, the permanent runtime/negative matrix, PostgreSQL
+recreation/durability proof, and prefix-scoped cleanup verification. It does
+not push a registry tag.

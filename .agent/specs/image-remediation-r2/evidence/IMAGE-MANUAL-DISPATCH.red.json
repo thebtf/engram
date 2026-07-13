@@ -1,0 +1,10 @@
+{
+  "task_id": "IMAGE-MANUAL-DISPATCH",
+  "stack": "GO",
+  "observed_at": "2026-07-11T07:18:21.9073036Z",
+  "test_file": "tests/critical/runtime/image_runtime_contract_test.go",
+  "test_name": "TestDockerReleaseRefFreshnessGuard/manual and main verification-only authority",
+  "invariant": "Push-to-main and workflow_dispatch are verification-only and can never obtain registry write authority or canonical publication aliases.",
+  "failure_reason": "R1 combines workflow_dispatch, top-level packages:write, and branch/latest/SemVer alias generators.",
+  "runner_stdout_excerpt": "workflow_dispatch=True top_level_packages_write=True alias_generators=True; RED IMG-S3-HIGH-003 reproduced"
+}

@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-11",
+  "gate": "full no-cache three-image runtime acceptance",
+  "source_commit": "76cfb56cac0e410256b719417d4307d45c10f69b",
+  "observed_failure": "The operator-console runtime target contract required a literal GHCR repository string even though deploy/docker-compose.runtime.yml intentionally requires an exact immutable image reference through ENGRAM_OPERATOR_IMAGE.",
+  "remediation": "Require the fail-closed ENGRAM_OPERATOR_IMAGE interpolation and preserve the API target assertion; rerun all three exact runtime contracts against the already-scanned images.",
+  "runtime_recheck": "PASS in 225.565s for operator-console, server, and PostgreSQL contracts",
+  "result": "RED_REPRODUCED_AND_FIXED_BEFORE_FINAL_GATE"
+}

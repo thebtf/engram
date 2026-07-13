@@ -1,0 +1,10 @@
+{
+  "task_id": "IMAGE-SHELL-BOUNDARY",
+  "stack": "GO",
+  "observed_at": "2026-07-11T07:18:21.9073036Z",
+  "test_file": "tests/critical/runtime/image_runtime_contract_test.go",
+  "test_name": "TestDockerReleaseRefFreshnessGuard/canonical release version and hostile Git refs",
+  "invariant": "Raw Git refs and Git-derived values never become inline shell source; only a strictly validated canonical release version reaches build metadata.",
+  "failure_reason": "R1 directly interpolates a raw git-describe output into generated Bash.",
+  "runner_stdout_excerpt": "valid_git_tag=v1$(printf${IFS}INJECTED); interpolated_value=v1INJECTED; environment_style_value=v1$(printf${IFS}INJECTED)"
+}

@@ -1,0 +1,10 @@
+{
+  "task_id": "IMAGE-DIFF-HYGIENE",
+  "stack": "GO",
+  "observed_at": "2026-07-11T07:18:21.9073036Z",
+  "test_file": "git diff --check 0c6269908aa810a2248f2bfaf3fca4f9f5791359..b7f8ff7b9efe826cefdc665894761783a6876676",
+  "test_name": "R1 immutable changed-diff whitespace regression",
+  "invariant": "Generated image evidence is normalized so the exact accepted-base-to-candidate diff passes git diff --check.",
+  "failure_reason": "R1 contains 34 trailing-whitespace diagnostics in operator-console/build.log and server/build.log.",
+  "runner_stdout_excerpt": "operator-console/build.log and server/build.log: 34 trailing whitespace diagnostics; exit 2"
+}

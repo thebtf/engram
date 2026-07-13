@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "task": "OPS-DEPLOY-ROLLBACK-E1",
+  "status": "PASS",
+  "project": "engram-e1-a32944257f",
+  "started_at": "2026-07-13T03:42:16.2621876+03:00",
+  "finished_at": "2026-07-13T03:50:35.1159744+03:00",
+  "current_server": "engram@sha256:0f678c4316e8ac5a49d917f58477d2a4a5f886eab3084924ec1ef7e1c4d769c1",
+  "previous_server": "engram@sha256:a00dd8dd2bd768335915fb9de7cf54f97ed1a72538397de2b8f0de1a1cf1f968",
+  "postgres_major": 17,
+  "unique_memory_sha256": "22090e07532e50566fb91508cda2f452519362949cbbde0228598ad903a13d20",
+  "steps": {
+    "config": "PASS",
+    "current_start": "PASS",
+    "customer_write": "PASS",
+    "restart_persistence": "PASS",
+    "db_outage_not_ready": "PASS",
+    "db_recovery": "PASS",
+    "previous_release_rollback": "PASS",
+    "current_restore_before_failure": "PASS",
+    "rollback_failure_recovery": "PASS"
+  },
+  "rollback_failure_decision": {
+    "status": "ROLLBACK_FAILED_CURRENT_RESTORED",
+    "decision": "retain current release and investigate before retry"
+  },
+  "sources": [
+    "https://docs.docker.com/reference/compose-file/services/",
+    "https://docs.docker.com/compose/how-tos/use-secrets/",
+    "https://www.postgresql.org/support/versioning/"
+  ],
+  "tavily": "BLOCKED: monthly keyless cap reached; Parallel official-source search completed"
+}

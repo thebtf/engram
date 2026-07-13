@@ -1,0 +1,38 @@
+{
+  "task_id": "OPS-DEPLOY-ROLLBACK-E1",
+  "stack": "POWERSHELL_COMPOSE",
+  "red": {
+    "observed_at": "2026-07-13T01:47:43.3238965+03:00",
+    "test_file": "deploy/rollback/tests/contract.tests.ps1",
+    "test_name": "deployment and rollback contract tests",
+    "failure_reason": "runtime health preflight helper is missing",
+    "invariant": "Production compose must fail closed on secrets and mutable image references, expose semantic readiness, and provide a guarded rollback path."
+  },
+  "green": {
+    "observed_at": "2026-07-13T02:12:22.3251401+03:00",
+    "contract_tests": "PASS",
+    "runtime_replay": "PASS",
+    "go_test_all": "PASS (96.6s)",
+    "go_vet_all": "PASS (12.4s)",
+    "critical_runtime": "PASS (275.991s)",
+    "regressed_tests": 0
+  },
+  "refactor": {
+    "applied": true,
+    "reason": "Restart replay was changed from simultaneous to dependency-ordered PostgreSQL, server, operator restart after the first real replay exposed the race.",
+    "post_refactor_parity": true
+  },
+  "prove_it": {
+    "failed_tests": 2,
+    "mutations": [
+      "tagged image references are rejected before compose deployment",
+      "unaudited PostgreSQL image digest is rejected and current release is restored"
+    ]
+  },
+  "coverage": {
+    "percent": null,
+    "threshold": null,
+    "status": "N/A",
+    "reason": "Configuration and PowerShell orchestration batch; behavioral Docker replay and focused contract tests are the coverage surface."
+  }
+}

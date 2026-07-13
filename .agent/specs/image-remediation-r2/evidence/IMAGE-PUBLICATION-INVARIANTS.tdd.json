@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-11",
+  "result": "PASS",
+  "invariants": {
+    "canonical_release_tags_only": true,
+    "manual_dispatch_is_unprivileged": true,
+    "inline_shell_has_no_raw_context_or_ref_source": true,
+    "immutable_tag_ruleset_exactly_one_no_bypass": true,
+    "protected_main_authority_guard_integration_id": 15368,
+    "protected_main_recovery_user_id": 7106373,
+    "all_six_destinations_compared_before_first_write": true,
+    "all_six_destinations_read_back": true,
+    "moving_aliases": [],
+    "registry_atomic_cas_claimed": false,
+    "external_package_admin_trust_boundary": true,
+    "tracked_file_only_build_context": true
+  },
+  "verification": [
+    "actionlint .github/workflows/docker.yaml .github/workflows/docker-publish.yml",
+    "PowerShell AST parse of scripts/production-gates/build-and-scan-images.ps1",
+    "go test -tags=critical ./tests/critical/runtime -run ^TestDockerReleaseRefFreshnessGuard$ -count=1",
+    "git diff --check"
+  ],
+  "prove_it": {
+    "mutation": "changed required authority-guard integration_id from 15368 to 15369",
+    "expected_failure_observed": true,
+    "production_code_restored": true,
+    "focused_test_after_restore": "PASS"
+  }
+}

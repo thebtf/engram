@@ -1,91 +1,308 @@
-name: Build and Publish Docker Image
+name: Docker Publish
 
 on:
-  push:
-    branches: ["main"]
-    tags: ["v*"]
-  pull_request:
-    branches: ["main"]
+  workflow_run:
+    workflows: ["Docker"]
+    types: [completed]
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+permissions:
+  contents: read
 
 jobs:
-  build:
+  prepare-release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-
+    outputs:
+      version: ${{ steps.preflight.outputs.version }}
+      commit: ${{ steps.preflight.outputs.commit }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact-name: ${{ steps.bridge.outputs.artifact_name }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout trusted default-branch preparation code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: main
+          path: trusted
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Compute version
-        id: version
-        run: echo "value=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" >> "$GITHUB_OUTPUT"
+      - name: Independently validate the triggering run, tag, and protected-main provenance
+        id: preflight
+        shell: pwsh
+        env:
+          REPOSITORY_NAME: ${{ github.repository }}
+          READ_ONLY_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pwsh ./trusted/scripts/production-gates/build-and-scan-images.ps1 `
+            -Mode ValidateWorkflowRun `
+            -EventOnlyValidation `
+            -RepositoryRoot ./trusted `
+            -WorkflowRunEventPath $env:GITHUB_EVENT_PATH `
+            -Repository $env:REPOSITORY_NAME `
+            -ExpectedDefaultBranch main `
+            -TrustedWorkflowPath .github/workflows/docker.yaml `
+            -ExpectedWorkflowName Docker `
+            -GitHubToken $env:READ_ONLY_GITHUB_TOKEN `
+            -GitHubOutputPath $env:GITHUB_OUTPUT
+
+      - name: Checkout exact validated candidate without workflow credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.preflight.outputs.commit }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: candidate/go.mod
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: candidate/apps/operator-console/package-lock.json
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+      - name: Build, scan, exercise, and export exact image data without package authority
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.preflight.outputs.version }}
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
+          CR_PAT: ""
+          GHCR_TOKEN: ""
+        run: |
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP "engram-image-prepare-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $payloadRoot = Join-Path $env:RUNNER_TEMP "engram-release-payload-data-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          pwsh ./trusted/scripts/production-gates/build-and-scan-images.ps1 `
+            -Mode BuildAndScan `
+            -RepositoryRoot ./candidate `
+            -TrustedOutputRoot $env:RUNNER_TEMP `
+            -ServerTag engram:r2-server `
+            -OperatorTag engram:r2-operator-console `
+            -PostgresTag engram:r2-postgres `
+            -Platform linux/amd64 `
+            -ArtifactRoot $evidenceRoot `
+            -ReleasePayloadPath $payloadRoot `
+            -Version $env:RELEASE_VERSION `
+            -NoAllowlist
+
+      - name: Bind the immutable bridge artifact name to this publisher workflow run
+        id: bridge
+        shell: pwsh
+        run: |
+          Add-Content -Encoding utf8NoBOM -LiteralPath $env:GITHUB_OUTPUT -Value "artifact_name=engram-release-payload-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+
+      - name: Upload the sole immutable release payload
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          registry: ${{ env.REGISTRY }}
+          name: ${{ steps.bridge.outputs.artifact_name }}
+          path: ${{ runner.temp }}/engram-release-payload-data-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  publish-images:
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    concurrency:
+      group: engram-image-release-${{ needs.prepare-release.outputs.commit }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout only trusted default-branch publisher code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Revalidate workflow, tag, rulesets, and protected-main provenance on the fresh runner
+        id: privileged-preflight
+        shell: pwsh
+        env:
+          REPOSITORY_NAME: ${{ github.repository }}
+          READ_ONLY_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pwsh ./trusted/scripts/production-gates/build-and-scan-images.ps1 `
+            -Mode ValidateWorkflowRun `
+            -RepositoryRoot ./trusted `
+            -WorkflowRunEventPath $env:GITHUB_EVENT_PATH `
+            -Repository $env:REPOSITORY_NAME `
+            -ExpectedDefaultBranch main `
+            -TrustedWorkflowPath .github/workflows/docker.yaml `
+            -ExpectedWorkflowName Docker `
+            -GitHubToken $env:READ_ONLY_GITHUB_TOKEN `
+            -GitHubOutputPath $env:GITHUB_OUTPUT
+
+      - name: Confirm preparation and fresh-runner provenance agree
+        shell: pwsh
+        env:
+          PREPARED_VERSION: ${{ needs.prepare-release.outputs.version }}
+          PREPARED_COMMIT: ${{ needs.prepare-release.outputs.commit }}
+          REVALIDATED_VERSION: ${{ steps.privileged-preflight.outputs.version }}
+          REVALIDATED_COMMIT: ${{ steps.privileged-preflight.outputs.commit }}
+        run: |
+          if ($env:PREPARED_VERSION -cne $env:REVALIDATED_VERSION -or $env:PREPARED_COMMIT -cne $env:REVALIDATED_COMMIT) {
+            throw 'Fresh-runner provenance does not match the prepare-release outputs.'
+          }
+
+      - name: Census the current-run artifact before download
+        shell: pwsh
+        env:
+          EXPECTED_ARTIFACT_ID: ${{ needs.prepare-release.outputs.artifact-id }}
+          EXPECTED_ARTIFACT_NAME: ${{ needs.prepare-release.outputs.artifact-name }}
+          EXPECTED_ARTIFACT_DIGEST: ${{ needs.prepare-release.outputs.artifact-digest }}
+          REPOSITORY_NAME: ${{ github.repository }}
+          READ_ONLY_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP "engram-publication-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          pwsh ./trusted/scripts/production-gates/build-and-scan-images.ps1 `
+            -Mode ValidateArtifactMetadata `
+            -RepositoryRoot ./trusted `
+            -TrustedOutputRoot $env:RUNNER_TEMP `
+            -ExpectedArtifactID $env:EXPECTED_ARTIFACT_ID `
+            -ExpectedArtifactName $env:EXPECTED_ARTIFACT_NAME `
+            -ExpectedArtifactDigest $env:EXPECTED_ARTIFACT_DIGEST `
+            -CurrentRunID $env:GITHUB_RUN_ID `
+            -Repository $env:REPOSITORY_NAME `
+            -GitHubToken $env:READ_ONLY_GITHUB_TOKEN `
+            -OutputPath (Join-Path $evidenceRoot 'artifact-census.json')
+
+      - name: Download the one censused artifact by immutable ID
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.prepare-release.outputs.artifact-id }}
+          path: ${{ runner.temp }}/engram-release-payload-download-${{ github.run_id }}-${{ github.run_attempt }}
+          merge-multiple: true
+
+      - name: Validate the exact regular-file envelope and internal checksums
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.privileged-preflight.outputs.version }}
+          VALIDATED_COMMIT: ${{ steps.privileged-preflight.outputs.commit }}
+        run: |
+          $payloadRoot = Join-Path $env:RUNNER_TEMP "engram-release-payload-download-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP "engram-publication-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          pwsh ./trusted/scripts/production-gates/build-and-scan-images.ps1 `
+            -Mode ValidatePayload `
+            -RepositoryRoot ./trusted `
+            -TrustedOutputRoot $env:RUNNER_TEMP `
+            -PayloadRoot $payloadRoot `
+            -ExpectedSha $env:VALIDATED_COMMIT `
+            -ReleaseVersion $env:RELEASE_VERSION `
+            -OutputPath (Join-Path $evidenceRoot 'payload-validation.json')
+
+      - name: Load validated image archives as data without running candidate code
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.privileged-preflight.outputs.version }}
+          VALIDATED_COMMIT: ${{ steps.privileged-preflight.outputs.commit }}
+        run: |
+          $payloadRoot = Join-Path $env:RUNNER_TEMP "engram-release-payload-download-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          pwsh ./trusted/scripts/production-gates/build-and-scan-images.ps1 `
+            -Mode LoadPayload `
+            -RepositoryRoot ./trusted `
+            -TrustedOutputRoot $env:RUNNER_TEMP `
+            -PayloadRoot $payloadRoot `
+            -ExpectedSha $env:VALIDATED_COMMIT `
+            -ReleaseVersion $env:RELEASE_VERSION
+
+      - name: Compare all six registry destinations before login
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.privileged-preflight.outputs.version }}
+          REPOSITORY_NAME: ${{ github.repository }}
+        run: |
+          $payloadRoot = Join-Path $env:RUNNER_TEMP "engram-release-payload-download-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP "engram-publication-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          pwsh ./trusted/scripts/production-gates/build-and-scan-images.ps1 `
+            -Mode PlanPublication `
+            -RepositoryRoot ./trusted `
+            -TrustedOutputRoot $env:RUNNER_TEMP `
+            -ManifestPath (Join-Path $payloadRoot 'final-image-set.json') `
+            -ReleaseVersion $env:RELEASE_VERSION `
+            -Registry ghcr.io `
+            -Repository $env:REPOSITORY_NAME `
+            -OutputPath (Join-Path $evidenceRoot 'pre-login-publication-plan.json')
+
+      - name: Login to GHCR after provenance, payload, local-image, and remote checks pass
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/engram-docker-auth-${{ github.run_id }}-${{ github.run_attempt }}
+        with:
+          registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=
+      - name: Recompare, publish absent exact identities, and read back all six
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.privileged-preflight.outputs.version }}
+          VALIDATED_COMMIT: ${{ steps.privileged-preflight.outputs.commit }}
+          REPOSITORY_NAME: ${{ github.repository }}
+          DOCKER_CONFIG: ${{ runner.temp }}/engram-docker-auth-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          $payloadRoot = Join-Path $env:RUNNER_TEMP "engram-release-payload-download-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP "engram-publication-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          pwsh ./trusted/scripts/production-gates/build-and-scan-images.ps1 `
+            -Mode Publish `
+            -RepositoryRoot ./trusted `
+            -TrustedOutputRoot $env:RUNNER_TEMP `
+            -ManifestPath (Join-Path $payloadRoot 'final-image-set.json') `
+            -ReleaseVersion $env:RELEASE_VERSION `
+            -ExpectedSha $env:VALIDATED_COMMIT `
+            -Registry ghcr.io `
+            -Repository $env:REPOSITORY_NAME `
+            -OutputPath (Join-Path $evidenceRoot 'publication-result.json')
 
-      - name: Extract operator-console metadata
-        id: meta_console
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-operator-console
-          tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=
+      - name: Logout and erase the isolated registry credential directory
+        if: always()
+        shell: pwsh
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/engram-docker-auth-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+          $dockerConfig = [IO.Path]::GetFullPath($env:DOCKER_CONFIG)
+          if (-not $dockerConfig.StartsWith($runnerTemp + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to erase Docker credentials outside RUNNER_TEMP: $dockerConfig"
+          }
+          docker logout ghcr.io
+          if (Test-Path -LiteralPath $dockerConfig) {
+            Remove-Item -Force -Recurse -LiteralPath $dockerConfig
+          }
+          if (Test-Path -LiteralPath $dockerConfig) {
+            throw "Docker credential directory still exists after erasure: $dockerConfig"
+          }
 
-      # Build and push server image
-      - name: Build and push server image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: server
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.version.outputs.value }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Validate the exact trusted evidence envelope after credential erasure
+        shell: pwsh
+        run: |
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP "engram-publication-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          pwsh ./trusted/scripts/production-gates/build-and-scan-images.ps1 `
+            -Mode ValidatePublicationEvidence `
+            -RepositoryRoot ./trusted `
+            -TrustedOutputRoot $env:RUNNER_TEMP `
+            -EvidenceRoot $evidenceRoot
 
-      - name: Build and push operator-console image
-        uses: docker/build-push-action@v6
+      - name: Upload trusted publication evidence after credential erasure
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          context: .
-          target: operator-console
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta_console.outputs.tags }}
-          labels: ${{ steps.meta_console.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          name: engram-publication-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/engram-publication-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 90

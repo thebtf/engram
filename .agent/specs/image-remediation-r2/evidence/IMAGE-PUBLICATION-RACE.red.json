@@ -1,0 +1,10 @@
+{
+  "task_id": "IMAGE-PUBLICATION-RACE",
+  "stack": "GO",
+  "observed_at": "2026-07-11T07:18:21.9073036Z",
+  "test_file": "tests/critical/runtime/image_runtime_contract_test.go",
+  "test_name": "TestDockerReleaseRefFreshnessGuard/movement before and after old guard",
+  "invariant": "Only externally immutable canonical release tags may publish; no stale branch or moved-tag run may write a registry alias.",
+  "failure_reason": "R1 validates the ref before registry login but publishes later, leaving a post-guard mutation window.",
+  "runner_stdout_excerpt": "guard_line_index=211 login_line_index=252 publish_line_index=259; RED IMG-S3-HIGH-001 reproduced"
+}

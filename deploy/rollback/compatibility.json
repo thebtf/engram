@@ -1,0 +1,26 @@
+{
+  "schema_version": 2,
+  "current": {
+    "revision": "a04e2de266ec6722af9513de31998d402a7b52e3",
+    "server_digest": "0f678c4316e8ac5a49d917f58477d2a4a5f886eab3084924ec1ef7e1c4d769c1",
+    "operator_digest": "bf959a088be3e607d483b3d64b1747f7e65f91ea9dfbc90baa3029544e728400",
+    "postgres_digest": "78780f7a04ce28fcdd33ff9fcd3b4de400bc510e39a06ff3223a164dbdb4eee7"
+  },
+  "previous": {
+    "revision": "e65b4835b4fcae6c2e12f6a75ff30b4c86c64ee7",
+    "server_digest": "a00dd8dd2bd768335915fb9de7cf54f97ed1a72538397de2b8f0de1a1cf1f968",
+    "operator_digest": "7ebac00425f4da75453bc8d08ecbc0b9c351f87ce80ee586bba816207cf1080a",
+    "postgres_digest": "950df543598a125b8bbcb551c5513718974c9ff73230685a35173b53e6d090bd"
+  },
+  "postgres_major": 17,
+  "application_schema": "byte-identical",
+  "application_schema_evidence": {
+    "base_revision": "e65b4835b4fcae6c2e12f6a75ff30b4c86c64ee7",
+    "head_revision": "a04e2de266ec6722af9513de31998d402a7b52e3",
+    "path_list_sha256": "41fd23686bd2d696656a7959226ad4ca1f1101a1e9061eae70e5c35b51b3e97f"
+  },
+  "customer_replay_evidence": {
+    "path": "deploy/rollback/evidence/OPS-DEPLOY-ROLLBACK-E1.replay.json",
+    "sha256": "45166796b4aa58b5762fa0824a6c8646a3c790c60d073165d3dcba005f167511"
+  }
+}
