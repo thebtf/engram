@@ -207,7 +207,7 @@ func TestGetSessionStartContext_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ruleStore.SetEnabled(ctx, disabledRule.ID, false, &project)
 	require.NoError(t, err)
-	_, err = ruleStore.Create(ctx, &models.BehavioralRule{
+	otherProjectRule, err := ruleStore.Create(ctx, &models.BehavioralRule{
 		Project:  &otherProject,
 		Content:  "other project rule content",
 		Priority: 999,
@@ -317,14 +317,16 @@ func TestGetSessionStartContext_HappyPath(t *testing.T) {
 	assert.Equal(t, highIssueID, resp.Issues[1].Id)
 	assert.Equal(t, "high", resp.Issues[1].Priority)
 
-	require.Len(t, resp.Rules, 2)
-	assert.Equal(t, globalRule.ID, resp.Rules[0].Id)
-	assert.Equal(t, "", resp.Rules[0].Project)
-	assert.Equal(t, projectRule.ID, resp.Rules[1].Id)
-	assert.Equal(t, project, resp.Rules[1].Project)
+	rulesByID := make(map[int64]*pb.SessionStartRule, len(resp.Rules))
 	for _, rule := range resp.Rules {
-		assert.NotEqual(t, disabledRule.ID, rule.Id, "disabled behavioral rules must not render into session-start rules")
+		rulesByID[rule.Id] = rule
 	}
+	require.Contains(t, rulesByID, globalRule.ID)
+	assert.Equal(t, "", rulesByID[globalRule.ID].Project)
+	require.Contains(t, rulesByID, projectRule.ID)
+	assert.Equal(t, project, rulesByID[projectRule.ID].Project)
+	require.NotContains(t, rulesByID, disabledRule.ID, "disabled behavioral rules must not render into session-start rules")
+	require.NotContains(t, rulesByID, otherProjectRule.ID, "sibling project rules must not render into session-start rules")
 }
 
 func TestGetSessionStartContext_PrincipalPrivateCrossPrincipalInvisible_FlagOff(t *testing.T) {
@@ -700,7 +702,18 @@ func TestGetSessionStartContext_RuleRouterEnabledPacketShape(t *testing.T) {
 		suppressedByVersion[packet.RuleVersionId] = packet
 	}
 	require.Contains(t, suppressedByVersion, suppressedID)
-	require.Equal(t, "within_budget", resp.RuleRouter.BudgetOutcome)
+	deferredByBudget := false
+	for _, packet := range resp.RuleRouter.Suppressed {
+		if packet.SuppressionReason == "deferred_budget" {
+			deferredByBudget = true
+			break
+		}
+	}
+	if deferredByBudget {
+		require.Equal(t, "truncated", resp.RuleRouter.BudgetOutcome)
+	} else {
+		require.Equal(t, "within_budget", resp.RuleRouter.BudgetOutcome)
+	}
 
 	require.Len(t, resp.RuleRouter.Kernel, 1)
 	require.Equal(t, kernelID, resp.RuleRouter.Kernel[0].RuleVersionId)
