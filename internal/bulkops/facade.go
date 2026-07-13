@@ -117,6 +117,9 @@ func (f *Facade) Execute(ctx context.Context, identity auth.Identity, op BulkOp)
 	if !op.Type.IsValid() {
 		return nil, fmt.Errorf("bulk_execute: invalid op_type %q", op.Type)
 	}
+	if !op.Type.IsExecutable() {
+		return nil, fmt.Errorf("bulk_execute: op_type %q is persisted historical-only and not executable", op.Type)
+	}
 
 	switch op.Type {
 	case models.SnapshotOpBulkPromote:
@@ -125,8 +128,6 @@ func (f *Facade) Execute(ctx context.Context, identity auth.Identity, op BulkOp)
 		return f.executeBulkDelete(ctx, identity, op)
 	case models.SnapshotOpBulkSupersede:
 		return f.executeBulkSupersede(ctx, identity, op)
-	case models.SnapshotOpIngestDoc:
-		return f.executeIngestDoc(ctx, identity, op)
 	default:
 		return nil, fmt.Errorf("bulk_execute: unhandled op_type %q", op.Type)
 	}
@@ -435,29 +436,6 @@ func (f *Facade) executeBulkSupersede(ctx context.Context, identity auth.Identit
 	}
 
 	return result, nil
-}
-
-// --- ingest_doc ---
-
-func (f *Facade) executeIngestDoc(ctx context.Context, identity auth.Identity, op BulkOp) (*ExecuteResult, error) {
-	// ingest_doc snapshot is created after ingestion; dry-run is handled upstream.
-	// This facade entry point is a thin wrapper for snapshot attribution on non-dry-run ingest.
-	if op.DryRun {
-		return &ExecuteResult{DryRun: true, WouldAffect: 0}, nil
-	}
-	actor := resolveActor(identity)
-	snapshotID := uuid.New().String()
-	snap, err := models.NewBulkOpSnapshot(snapshotID, models.SnapshotOpIngestDoc, actor, json.RawMessage(`{}`))
-	if err != nil {
-		return nil, fmt.Errorf("ingest_doc new_snapshot: %w", err)
-	}
-	snap.SourceSessionID = op.SourceSessionID
-	snap.Parameters = op.Parameters
-	created, err := f.snapshotStore.Create(ctx, snap)
-	if err != nil {
-		return nil, fmt.Errorf("ingest_doc store_snapshot: %w", err)
-	}
-	return &ExecuteResult{SnapshotID: created.SnapshotID, AffectedCount: 0}, nil
 }
 
 // --- helpers ---

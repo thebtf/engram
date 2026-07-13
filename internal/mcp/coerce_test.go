@@ -3,6 +3,8 @@ package mcp
 import (
 	"encoding/json"
 	"math"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +32,121 @@ func TestParseArgs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseArgsPreservesExactJSONNumbers(t *testing.T) {
+	m, err := parseArgs(json.RawMessage(`{"id":9007199254740993,"max":9223372036854775807}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := m["id"].(json.Number); !ok || got.String() != "9007199254740993" {
+		t.Fatalf("id lost exact JSON representation: %#v", m["id"])
+	}
+	if got, ok := m["max"].(json.Number); !ok || got.String() != "9223372036854775807" {
+		t.Fatalf("max lost exact JSON representation: %#v", m["max"])
+	}
+}
+
+func TestStrictMutationArgumentsRejectLossyOrPartialValues(t *testing.T) {
+	valid, err := parseArgs(json.RawMessage(`{
+		"id":9007199254740993,
+		"max":9223372036854775807,
+		"dry_run":false,
+		"tags":[],
+		"supersedes":[1,9007199254740993]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := requireInt64Arg(valid, "id"); err != nil || got != 9007199254740993 {
+		t.Fatalf("exact id: got %d err %v", got, err)
+	}
+	if got, err := requireInt64Arg(valid, "max"); err != nil || got != math.MaxInt64 {
+		t.Fatalf("max int64: got %d err %v", got, err)
+	}
+	if got, present, err := optionalBoolArg(valid, "dry_run"); err != nil || !present || got {
+		t.Fatalf("dry_run: got %v present %v err %v", got, present, err)
+	}
+	if got, present, err := optionalStringSliceArg(valid, "tags"); err != nil || !present || len(got) != 0 {
+		t.Fatalf("tags: got %#v present %v err %v", got, present, err)
+	}
+	if got, present, err := optionalInt64SliceArg(valid, "supersedes"); err != nil || !present || !reflect.DeepEqual(got, []int64{1, 9007199254740993}) {
+		t.Fatalf("supersedes: got %#v present %v err %v", got, present, err)
+	}
+
+	for _, raw := range []string{
+		`{}`, `{"id":null}`, `{"id":"1"}`, `{"id":1.5}`,
+		`{"id":1e3}`, `{"id":9223372036854775808}`,
+	} {
+		m, err := parseArgs(json.RawMessage(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := requireInt64Arg(m, "id"); err == nil {
+			t.Fatalf("requireInt64Arg accepted %s", raw)
+		}
+	}
+	for _, tc := range []struct {
+		raw string
+		key string
+	}{
+		{`{"dry_run":null}`, "dry_run"},
+		{`{"dry_run":"false"}`, "dry_run"},
+		{`{"tags":null}`, "tags"},
+		{`{"tags":["safe",1]}`, "tags"},
+		{`{"supersedes":null}`, "supersedes"},
+		{`{"supersedes":[1,"2"]}`, "supersedes"},
+		{`{"supersedes":[1,2.5]}`, "supersedes"},
+	} {
+		m, err := parseArgs(json.RawMessage(tc.raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var strictErr error
+		switch tc.key {
+		case "dry_run":
+			_, _, strictErr = optionalBoolArg(m, tc.key)
+		case "tags":
+			_, _, strictErr = optionalStringSliceArg(m, tc.key)
+		case "supersedes":
+			_, _, strictErr = optionalInt64SliceArg(m, tc.key)
+		}
+		if strictErr == nil {
+			t.Fatalf("strict parser accepted %s", tc.raw)
+		}
+	}
+}
+
+func TestParseArgsRejectsTrailingJSONValues(t *testing.T) {
+	for _, raw := range []string{
+		`{"id":1}{"id":2}`,
+		`{"id":1} null`,
+		`{"id":1} 2`,
+	} {
+		if _, err := parseArgs(json.RawMessage(raw)); err == nil {
+			t.Fatalf("parseArgs accepted trailing JSON value: %s", raw)
+		}
+	}
+}
+
+func FuzzRequireInt64ArgRejectsLossyRepresentations(f *testing.F) {
+	for _, seed := range []string{
+		"0", "-0", "1", "-1", "9007199254740993", "9223372036854775807",
+		"9223372036854775808", "1.5", "1e3", "1E3", `"42"`, "null", "true",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, raw string) {
+		m, err := parseArgs(json.RawMessage(`{"id":` + raw + `}`))
+		if err != nil {
+			return
+		}
+		_, strictErr := requireInt64Arg(m, "id")
+		if strictErr == nil && strings.ContainsAny(raw, ".eE\"") {
+			t.Fatalf("strict integer parser accepted lossy representation %q", raw)
+		}
+	})
 }
 
 func TestCoerceString(t *testing.T) {

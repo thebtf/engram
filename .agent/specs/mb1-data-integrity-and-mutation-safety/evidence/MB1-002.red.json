@@ -1,0 +1,8 @@
+{
+  "task_id": "MB1-002",
+  "observed_at": "2026-07-11T22:34:18Z",
+  "test_file": "internal/db/gorm/issue_store_isolation_test.go; internal/db/gorm/versioned_document_store_test.go",
+  "test_name": "TestIssueStore_ListIssuesExTreatsProjectSelectorsAsLiteralIdentities; TestVersionedDocumentStore_ListTreatsPathPrefixAsLiteralText",
+  "failure_reason": "Dynamic SQL LIKE selectors treated underscore, percent, and backslash input as pattern syntax and returned sibling projects or paths.",
+  "runner_stdout_excerpt": "Issue total expected 1 actual 2; path prefixes notes_1 and notes%literal returned two rows; notes\\root returned zero rows."
+}

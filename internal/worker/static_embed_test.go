@@ -1,19 +1,30 @@
 package worker
 
 import (
+	"bytes"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestStaticEmbedIncludesUnderscoreNuxtChunks(t *testing.T) {
+	source, err := os.ReadFile("static.go")
+	if err != nil {
+		t.Fatalf("read static.go: %v", err)
+	}
+	if !bytes.Contains(source, []byte("//go:embed all:static\n")) &&
+		!bytes.Contains(source, []byte("//go:embed all:static\r\n")) {
+		t.Fatal("static.go must contain the exact //go:embed all:static directive")
+	}
+
 	diskMatches, err := filepath.Glob(filepath.Join("static", "_nuxt", "_*.js"))
 	if err != nil {
 		t.Fatalf("glob disk underscore Nuxt chunks: %v", err)
 	}
 	if len(diskMatches) == 0 {
-		t.Skip("no underscore-prefixed generated Nuxt chunks are present in the source checkout")
+		return
 	}
 
 	matches, err := fs.Glob(staticSubFS, "_nuxt/_*.js")

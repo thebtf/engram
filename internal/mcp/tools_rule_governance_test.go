@@ -370,6 +370,59 @@ func TestRuleGovernancePinSnapshotAndRollbackUseRuleGovernanceSnapshots(t *testi
 	require.Equal(t, []any{float64(42)}, rollbackDecoded["restored_version_ids"])
 }
 
+func TestRuleGovernanceMutationsRejectMalformedPresentValuesBeforeTransition(t *testing.T) {
+	ctx := auth.WithIdentity(context.Background(), auth.Admin())
+	for _, tc := range []struct {
+		name string
+		tool string
+		raw  string
+	}{
+		{name: "transition numeric string id", tool: "rule_governance_transition", raw: `{"rule_version_id":"7","to_state":"active_project"}`},
+		{name: "transition fraction id", tool: "rule_governance_transition", raw: `{"rule_version_id":7.5,"to_state":"active_project"}`},
+		{name: "transition exponent id", tool: "rule_governance_transition", raw: `{"rule_version_id":1e3,"to_state":"active_project"}`},
+		{name: "transition overflow id", tool: "rule_governance_transition", raw: `{"rule_version_id":9223372036854775808,"to_state":"active_project"}`},
+		{name: "transition wrong state type", tool: "rule_governance_transition", raw: `{"rule_version_id":7,"to_state":true}`},
+		{name: "transition mixed evidence", tool: "rule_governance_transition", raw: `{"rule_version_id":7,"to_state":"active_project","evidence_handles":["report:ok",9]}`},
+		{name: "pin wrong snapshot type", tool: "rule_governance_pin_snapshot", raw: `{"snapshot_id":7,"pinned":true}`},
+		{name: "pin string boolean", tool: "rule_governance_pin_snapshot", raw: `{"snapshot_id":"rg-snap","pinned":"false"}`},
+		{name: "rollback wrong reason type", tool: "rule_governance_rollback", raw: `{"snapshot_id":"rg-snap","reason":9}`},
+		{name: "rollback null evidence", tool: "rule_governance_rollback", raw: `{"snapshot_id":"rg-snap","evidence_handles":null}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeRuleGovernanceStore{}
+			s := NewServer(ServerOptions{Version: "strict-rule-governance"})
+			s.SetRuleGovernanceStore(store)
+
+			out, err := s.callTool(ctx, tc.tool, json.RawMessage(tc.raw))
+
+			require.Error(t, err)
+			require.Empty(t, out)
+			require.Zero(t, store.transitionID)
+			require.Empty(t, store.pinSnapshotID)
+			require.Empty(t, store.rollbackID)
+		})
+	}
+}
+
+func TestRuleGovernanceTransitionPreservesExactLargeIntegerSelector(t *testing.T) {
+	store := &fakeRuleGovernanceStore{}
+	s := NewServer(ServerOptions{Version: "strict-rule-governance"})
+	s.SetRuleGovernanceStore(store)
+	ctx := auth.WithIdentity(context.Background(), auth.Admin())
+
+	_, err := s.callTool(ctx, "rule_governance_transition", json.RawMessage(`{
+		"rule_version_id":9007199254740993,
+		"to_state":"active_project",
+		"actor":"operator-a",
+		"actor_kind":"operator",
+		"reason":"exact selector",
+		"evidence_handles":[]
+	}`))
+
+	require.NoError(t, err)
+	require.Equal(t, int64(9007199254740993), store.transitionID)
+}
+
 func TestRuleGovernanceRollbackReturnsStructuredConflictResult(t *testing.T) {
 	store := &fakeRuleGovernanceStore{rollbackErr: errors.New("invalid_rule_transition: rollback conflicts detected")}
 	s := NewServer(ServerOptions{Version: "test"})

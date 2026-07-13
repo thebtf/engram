@@ -97,7 +97,7 @@ func TestMigrationsIntegration_PatternsDropped(t *testing.T) {
 	}
 }
 
-func TestMigrationsIntegration_AddsCommandsRunColumn(t *testing.T) {
+func TestMigration074_HistoricalOrderingAndFinalSchema(t *testing.T) {
 	dsn := os.Getenv("DATABASE_DSN")
 	if dsn == "" {
 		t.Skip("DATABASE_DSN not set, skipping integration test")
@@ -116,22 +116,22 @@ func TestMigrationsIntegration_AddsCommandsRunColumn(t *testing.T) {
 	const dims = 2000
 	require.NoError(t, runMigrations(db))
 
-	if !db.Migrator().HasTable("observations") {
-		t.Skip("observations table not present after v5 cleanup; migration 074 is historical-only")
+	var positions struct {
+		Migration074 int
+		Migration090 int
+		Migration099 int
 	}
-
-	require.NoError(t, db.Exec(`ALTER TABLE observations DROP COLUMN IF EXISTS commands_run`).Error)
-	require.NoError(t, db.Exec(`DELETE FROM migrations WHERE id = ?`, "074_observations_commands_run").Error)
-	require.NoError(t, runMigrations(db))
-
-	var dataType string
-	err = db.Raw(`
-		SELECT data_type
-		FROM information_schema.columns
-		WHERE table_name = 'observations' AND column_name = 'commands_run'
-	`).Row().Scan(&dataType)
-	require.NoError(t, err)
-	require.Equal(t, "jsonb", dataType)
+	require.NoError(t, db.Raw(`
+		SELECT
+			COALESCE(array_position(array_agg(id ORDER BY id), '074_observations_commands_run'), 0) AS migration074,
+			COALESCE(array_position(array_agg(id ORDER BY id), '090_observations_to_static_entities'), 0) AS migration090,
+			COALESCE(array_position(array_agg(id ORDER BY id), '099_drop_observations'), 0) AS migration099
+		FROM migrations
+	`).Scan(&positions).Error)
+	require.Positive(t, positions.Migration074)
+	require.Greater(t, positions.Migration090, positions.Migration074)
+	require.Greater(t, positions.Migration099, positions.Migration090)
+	require.False(t, db.Migrator().HasTable("observations"), "fresh current schema must not recreate the v5-demolished observations table")
 }
 
 // TestMigration125_AddPrivacyScope verifies migration 125_privacy_scope_addition
@@ -435,13 +435,14 @@ func TestMigration126_KnowledgeNodesTable(t *testing.T) {
 
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
-	defer sqlDB.Close()
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	require.NoError(t, sqlDB.Ping())
 
 	require.NoError(t, runMigrations(db), "full migration chain including 126 must succeed")
 
+	fixture := fmt.Sprintf("t009-test-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM knowledge_nodes WHERE project = 't009-test'`).Error
+		_ = db.Exec(`DELETE FROM knowledge_nodes WHERE project = ?`, fixture).Error
 	})
 
 	// Verify table exists with all required columns.
@@ -470,7 +471,7 @@ func TestMigration126_KnowledgeNodesTable(t *testing.T) {
 	for _, nt := range validTypes {
 		err := db.Exec(
 			`INSERT INTO knowledge_nodes (node_type, external_ref, project) VALUES (?, ?, ?)`,
-			nt, "ref-"+nt, "t009-test",
+			nt, "ref-"+nt+"-"+fixture, fixture,
 		).Error
 		require.NoError(t, err, "node_type=%q must be admitted by CHECK constraint", nt)
 	}
@@ -478,18 +479,18 @@ func TestMigration126_KnowledgeNodesTable(t *testing.T) {
 	// Verify CHECK constraint rejects an unknown type.
 	err = db.Exec(
 		`INSERT INTO knowledge_nodes (node_type, external_ref, project) VALUES (?, ?, ?)`,
-		"invalid_node_type", "ref-invalid", "t009-test",
+		"invalid_node_type", "ref-invalid-"+fixture, fixture,
 	).Error
 	require.Error(t, err, "unknown node_type must be rejected by CHECK constraint")
 
 	// Verify UNIQUE constraint on (node_type, external_ref) WHERE deleted_at IS NULL.
 	require.NoError(t, db.Exec(
 		`INSERT INTO knowledge_nodes (node_type, external_ref, project) VALUES (?, ?, ?)`,
-		"skill", "unique-test-skill", "t009-test",
+		"skill", "unique-test-skill-"+fixture, fixture,
 	).Error)
 	err = db.Exec(
 		`INSERT INTO knowledge_nodes (node_type, external_ref, project) VALUES (?, ?, ?)`,
-		"skill", "unique-test-skill", "t009-test",
+		"skill", "unique-test-skill-"+fixture, fixture,
 	).Error
 	require.Error(t, err, "duplicate (node_type, external_ref) while both deleted_at IS NULL must be rejected")
 }
@@ -522,13 +523,16 @@ func TestMigration127_EdgeDiscriminatorsAndNodeFKs(t *testing.T) {
 
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
-	defer sqlDB.Close()
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	require.NoError(t, sqlDB.Ping())
 
 	require.NoError(t, runMigrations(db), "full migration chain including 127 must succeed")
 
+	fixture := fmt.Sprintf("t010-test-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM knowledge_nodes WHERE project = 't010-test'`).Error
+		_ = db.Exec(`DELETE FROM knowledge_edges WHERE source_session_id = ?`, fixture).Error
+		_ = db.Exec(`DELETE FROM knowledge_nodes WHERE project = ?`, fixture).Error
+		_ = db.Exec(`DELETE FROM memories WHERE project = ?`, fixture).Error
 	})
 
 	// Verify new columns exist on knowledge_edges.
@@ -567,24 +571,20 @@ func TestMigration127_EdgeDiscriminatorsAndNodeFKs(t *testing.T) {
 	// First create a real memory row to have a valid source_id.
 	var memID int64
 	require.NoError(t, db.Raw(
-		`INSERT INTO memories (project, content) VALUES ('t010-test', 'edge-check fixture') RETURNING id`,
+		`INSERT INTO memories (project, content) VALUES (?, 'edge-check fixture') RETURNING id`, fixture,
 	).Row().Scan(&memID))
-	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM memories WHERE project = 't010-test'`).Error
-		_ = db.Exec(`DELETE FROM knowledge_edges WHERE source_session_id = 't010-test'`).Error
-	})
 
 	// Create a knowledge_node to use as node-type source.
 	var nodeID int64
 	require.NoError(t, db.Raw(
-		`INSERT INTO knowledge_nodes (node_type, external_ref, project) VALUES ('skill', 't010-test-skill', 't010-test') RETURNING id`,
+		`INSERT INTO knowledge_nodes (node_type, external_ref, project) VALUES ('skill', ?, ?) RETURNING id`, "skill-"+fixture, fixture,
 	).Row().Scan(&nodeID))
 
 	// Legal memory→memory edge (source_type='memory', source_id set, node_source_id NULL).
 	require.NoError(t, db.Exec(
 		`INSERT INTO knowledge_edges (source_id, target_id, edge_type, source_type, target_type, source_session_id)
-		 VALUES (?, ?, 'uses', 'memory', 'memory', 't010-test')`,
-		memID, memID,
+		 VALUES (?, ?, 'uses', 'memory', 'memory', ?)`,
+		memID, memID, fixture,
 	).Error, "memory→memory edge must be accepted")
 
 	// Legal node→memory edge (source_type='node', node_source_id set, source_id NULL).

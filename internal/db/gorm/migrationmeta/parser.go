@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -62,7 +63,7 @@ type ColumnDefinition struct {
 }
 
 var (
-	migrationIDPattern  = regexp.MustCompile(`^(\d+)_`)
+	migrationIDPattern = regexp.MustCompile(`^(\d+)_`)
 	// sqlCommentPattern strips line (--...) and block (/* ... */) SQL comments so
 	// a commented-out CREATE/DROP TABLE is not parsed as live DDL (PR #271 review,
 	// gemini). Applied to the raw SQL before table extraction.
@@ -78,6 +79,115 @@ func ParseFile(path string) (*Schema, error) {
 		return nil, err
 	}
 	return ParseSource(path, src)
+}
+
+// ParsePackageDir derives the migration ledger from runMigrations and each
+// zero-argument migration helper it registers across the production Go files in
+// dir. DDL is applied in migration-ID order so later DROP/CREATE operations
+// describe the same final schema as the runtime chain.
+func ParsePackageDir(dir string) (*Schema, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	type migrationUnit struct {
+		info  MigrationInfo
+		body  *ast.BlockStmt
+		fset  *token.FileSet
+		file  string
+		owner string
+	}
+	type parsedSource struct {
+		file *ast.File
+		fset *token.FileSet
+		name string
+	}
+	var sources []parsedSource
+	var units []migrationUnit
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || filepath.Ext(name) != ".go" || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		sources = append(sources, parsedSource{file: file, fset: fset, name: name})
+	}
+
+	registeredHelpers := make(map[string]bool)
+	foundRuntimeChain := false
+	for _, source := range sources {
+		for _, declaration := range source.file.Decls {
+			fn, ok := declaration.(*ast.FuncDecl)
+			if !ok || fn.Name.Name != "runMigrations" || fn.Body == nil {
+				continue
+			}
+			foundRuntimeChain = true
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok || len(call.Args) != 0 {
+					return true
+				}
+				if name, ok := call.Fun.(*ast.Ident); ok {
+					registeredHelpers[name.Name] = true
+				}
+				return true
+			})
+		}
+	}
+	if !foundRuntimeChain {
+		return nil, fmt.Errorf("runMigrations runtime chain not found in %s", dir)
+	}
+
+	for _, source := range sources {
+		for _, declaration := range source.file.Decls {
+			fn, ok := declaration.(*ast.FuncDecl)
+			if !ok || fn.Body == nil || (fn.Name.Name != "runMigrations" && !registeredHelpers[fn.Name.Name]) {
+				continue
+			}
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				lit, ok := node.(*ast.CompositeLit)
+				if !ok {
+					return true
+				}
+				info, body, ok := migrationLiteral(source.fset, lit)
+				if ok {
+					units = append(units, migrationUnit{info: info, body: body, fset: source.fset, file: source.name, owner: fn.Name.Name})
+				}
+				return true
+			})
+		}
+	}
+
+	sort.SliceStable(units, func(i, j int) bool {
+		if units[i].info.NumericID != units[j].info.NumericID {
+			return units[i].info.NumericID < units[j].info.NumericID
+		}
+		if units[i].info.ID != units[j].info.ID {
+			return units[i].info.ID < units[j].info.ID
+		}
+		if units[i].file != units[j].file {
+			return units[i].file < units[j].file
+		}
+		return units[i].info.Line < units[j].info.Line
+	})
+
+	schema := &Schema{Tables: make(map[string]TableInfo)}
+	seen := make(map[string]string, len(units))
+	for _, unit := range units {
+		if previous, exists := seen[unit.info.ID]; exists {
+			return nil, fmt.Errorf("duplicate migration %q in %s and %s", unit.info.ID, previous, unit.file)
+		}
+		seen[unit.info.ID] = unit.file
+		schema.Migrations = append(schema.Migrations, unit.info)
+		schema.processMigrateBody(unit.fset, unit.info, unit.body)
+	}
+	return schema, nil
 }
 
 func ParseSource(filename string, src []byte) (*Schema, error) {

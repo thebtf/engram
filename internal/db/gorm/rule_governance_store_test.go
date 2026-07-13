@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-gormigrate/gormigrate/v2"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
@@ -23,27 +24,25 @@ func TestMigration144_RuleGovernanceTables(t *testing.T) {
 
 func TestMigration144_RuleGovernanceRollbackAndReapply(t *testing.T) {
 	db := openCandidateTestDB(t)
-	migration := ruleGovernanceMigration144()
 	t.Cleanup(func() {
-		_ = migration.Migrate(db)
+		migrateRuleGovernanceChain144Through147(t, db)
 	})
 
 	requireRuleGovernanceTableState(t, db, true)
-	require.NoError(t, migration.Rollback(db))
+	rollbackRuleGovernanceChain147Through144(t, db)
 	requireRuleGovernanceTableState(t, db, false)
-	require.NoError(t, migration.Migrate(db))
+	migrateRuleGovernanceChain144Through147(t, db)
 	requireRuleGovernanceTableState(t, db, true)
 }
 
 func TestMigration144_RuleGovernanceEscapeConstraints(t *testing.T) {
 	db := openCandidateTestDB(t)
-	migration := ruleGovernanceMigration144()
 	t.Cleanup(func() {
-		_ = migration.Migrate(db)
+		migrateRuleGovernanceChain144Through147(t, db)
 	})
 
-	require.NoError(t, migration.Rollback(db))
-	require.NoError(t, migration.Migrate(db))
+	rollbackRuleGovernanceChain147Through144(t, db)
+	migrateRuleGovernanceChain144Through147(t, db)
 
 	for _, tc := range []struct {
 		name              string
@@ -289,6 +288,11 @@ func TestRuleGovernanceStore_ListLegacyBehavioralRuleFallbackKeepsLegacyRowsCont
 		EditedBy: "rg2-test",
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, db.Exec("DELETE FROM behavioral_rules WHERE id IN ?", []int64{
+			global.ID, projectScoped.ID, deleted.ID, disabled.ID,
+		}).Error)
+	})
 	_, err = behavioralStore.SetEnabled(ctx, disabled.ID, false, strPtr("rg2-test"))
 	require.NoError(t, err)
 
@@ -719,15 +723,38 @@ func requireRuleGovernanceTableState(t *testing.T, db *gorm.DB, exists bool) {
 	}
 }
 
+func rollbackRuleGovernanceChain147Through144(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	for _, migration := range []*gormigrate.Migration{
+		ruleGovernanceSnapshotStatusesMigration147(),
+		ruleInjectionEventsMigration146(),
+		ruleArbiterBackgroundMigration145(),
+		ruleGovernanceMigration144(),
+	} {
+		require.NoError(t, migration.Rollback(db), "rollback %s", migration.ID)
+	}
+}
+
+func migrateRuleGovernanceChain144Through147(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	for _, migration := range []*gormigrate.Migration{
+		ruleGovernanceMigration144(),
+		ruleArbiterBackgroundMigration145(),
+		ruleInjectionEventsMigration146(),
+		ruleGovernanceSnapshotStatusesMigration147(),
+	} {
+		require.NoError(t, migration.Migrate(db), "migrate %s", migration.ID)
+	}
+}
+
 func TestMigration144_RuleGovernanceSnapshotStatusesAcceptExtendedStates(t *testing.T) {
 	db := openCandidateTestDB(t)
-	migration := ruleGovernanceMigration144()
 	t.Cleanup(func() {
-		_ = migration.Migrate(db)
+		migrateRuleGovernanceChain144Through147(t, db)
 	})
 
-	require.NoError(t, migration.Rollback(db))
-	require.NoError(t, migration.Migrate(db))
+	rollbackRuleGovernanceChain147Through144(t, db)
+	migrateRuleGovernanceChain144Through147(t, db)
 
 	snapshotID := fmt.Sprintf("rg0-snapshot-status-%d", time.Now().UnixNano())
 	require.NoError(t, db.Exec(`

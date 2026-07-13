@@ -1,0 +1,8 @@
+{
+  "task_id": "MB1-001",
+  "observed_at": "2026-07-11T22:32:52Z",
+  "test_file": "internal/db/gorm/rule_arbiter_store_test.go; internal/db/gorm/rule_governance_store_test.go",
+  "test_name": "TestRuleGovernanceStore_AnnotatedCandidateWaitsUntilReviewAfter; TestMigration144_RuleGovernanceRollbackAndReapply; TestMigration144_RuleGovernanceEscapeConstraints; TestMigration144_RuleGovernanceSnapshotStatusesAcceptExtendedStates",
+  "failure_reason": "An annotated candidate retained its arbiter claim and three migration-144 tests attempted to drop tables while migrations 145-147 still depended on them.",
+  "runner_stdout_excerpt": "dueLater candidate IDs was empty; ERROR: cannot drop table rule_versions because other objects depend on it (SQLSTATE 2BP01)"
+}

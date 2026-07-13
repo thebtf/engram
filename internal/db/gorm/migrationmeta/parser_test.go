@@ -1,10 +1,33 @@
 package migrationmeta
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestParsePackageDirFollowsRegisteredHelperMigrations(t *testing.T) {
+	dir := t.TempDir()
+	mainSource := `package gorm
+func runMigrations() {
+  _ = []*Migration{{ID: "001_core", Migrate: func(tx *DB) error { return tx.Exec("CREATE TABLE core (id INT)").Error }}, helperMigration()}
+}`
+	helperSource := `package gorm
+func helperMigration() *Migration { return &Migration{ID: "002_helper", Migrate: func(tx *DB) error { return tx.Exec("CREATE TABLE helper (id INT)").Error }} }
+func unregisteredMigration() *Migration { return &Migration{ID: "003_stale", Migrate: func(tx *DB) error { return tx.Exec("CREATE TABLE stale (id INT)").Error }} }`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "migrations.go"), []byte(mainSource), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "migration_helper.go"), []byte(helperSource), 0o600))
+
+	schema, err := ParsePackageDir(dir)
+	require.NoError(t, err)
+	require.Equal(t, []string{"001_core", "002_helper"}, []string{schema.Migrations[0].ID, schema.Migrations[1].ID})
+	_, helperExists := schema.Table("helper")
+	require.True(t, helperExists)
+	_, staleExists := schema.Table("stale")
+	require.False(t, staleExists, "unregistered helper migrations are not part of the runtime chain")
+}
 
 // TestColumnDefinitions_StringLiteralRobustness locks the PR #271 hardening:
 // parentheses and commas inside single-quoted SQL string literals must not

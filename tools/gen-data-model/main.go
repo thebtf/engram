@@ -14,7 +14,7 @@ func main() {
 	check := flag.Bool("check", false, "print the generated block without modifying DATA_MODEL.md")
 	flag.Parse()
 
-	derivation, err := datamodel.DeriveFromMigrationsFile(*migrationsPath)
+	derivation, err := datamodel.DeriveFromMigrationsPackage(*migrationsPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "derive data model: %v\n", err)
 		os.Exit(1)

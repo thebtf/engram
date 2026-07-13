@@ -39,8 +39,16 @@ func TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables(t *tes
 	activeVersionID := insertRG3RuleVersionFixture(t, db, project, models.RuleStateActiveProject, "developer", 50)
 	supersededVersionID := insertRG3RuleVersionFixture(t, db, project, models.RuleStateSuperseded, "developer", 40)
 	draftVersionID := insertRG3RuleVersionFixture(t, db, project, models.RuleStateDraft, "developer", 30)
+	baseline, err := store.GetLifecycleHealth(ctx, RuleGovernanceHealthParams{
+		Project:                       project,
+		Since:                         since,
+		Limit:                         50,
+		IncludeGlobalArbiterRunCounts: true,
+	})
+	require.NoError(t, err)
 	run, err := store.StartRuleArbiterRun(ctx, "rg3-health")
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Delete(&models.RuleArbiterRun{}, run.ID).Error) })
 	_, err = store.FinishRuleArbiterRun(ctx, run.ID, models.RuleArbiterRunStatusCompleted, models.RuleArbiterRunCounts{
 		CandidatesSeen:      2,
 		CandidatesEvaluated: 2,
@@ -90,7 +98,7 @@ func TestRuleGovernanceStore_GetLifecycleHealthAggregatesGovernanceTables(t *tes
 	require.Equal(t, 1, health.CandidateStatusCounts[models.RuleCandidateRejected])
 	require.Equal(t, 1, health.VersionStateCounts[models.RuleStateActiveProject])
 	require.Equal(t, 1, health.VersionStateCounts[models.RuleStateSuperseded])
-	require.Equal(t, 1, health.ArbiterRunStatusCounts[models.RuleArbiterRunStatusCompleted])
+	require.Equal(t, baseline.ArbiterRunStatusCounts[models.RuleArbiterRunStatusCompleted]+1, health.ArbiterRunStatusCounts[models.RuleArbiterRunStatusCompleted])
 	require.Equal(t, 1, health.TransitionActionCounts["candidate_to_rejected"])
 	require.Equal(t, 1, health.TransitionActionCounts["rule_version_transition"])
 	require.Equal(t, 1, health.SnapshotStatusCounts["committed"])
@@ -104,8 +112,15 @@ func TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectS
 	store := NewRuleGovernanceStore(db)
 	ctx := context.Background()
 	project := fmt.Sprintf("rg3-health-scoped-%d", time.Now().UnixNano())
+	baseline, err := store.GetLifecycleHealth(ctx, RuleGovernanceHealthParams{
+		Project:                       project,
+		Limit:                         50,
+		IncludeGlobalArbiterRunCounts: true,
+	})
+	require.NoError(t, err)
 	run, err := store.StartRuleArbiterRun(ctx, "rg3-health-scoped")
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Delete(&models.RuleArbiterRun{}, run.ID).Error) })
 	_, err = store.FinishRuleArbiterRun(ctx, run.ID, models.RuleArbiterRunStatusCompleted, models.RuleArbiterRunCounts{
 		CandidatesSeen: 1,
 	}, "")
@@ -125,7 +140,7 @@ func TestRuleGovernanceStore_GetLifecycleHealthOmitsGlobalArbiterRunsForProjectS
 		IncludeGlobalArbiterRunCounts: true,
 	})
 	require.NoError(t, err)
-	require.Equal(t, 1, admin.ArbiterRunStatusCounts[models.RuleArbiterRunStatusCompleted])
+	require.Equal(t, baseline.ArbiterRunStatusCounts[models.RuleArbiterRunStatusCompleted]+1, admin.ArbiterRunStatusCounts[models.RuleArbiterRunStatusCompleted])
 	require.False(t, admin.NoData)
 }
 

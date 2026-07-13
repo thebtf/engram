@@ -313,8 +313,8 @@ func TestMigration139_CodeChunksTable(t *testing.T) {
 }
 
 // TestCodeChunkStore_UpdateEmbedding_SetsVector verifies that UpdateEmbedding
-// persists a vector on an existing NULL-embedding row and that the row is no
-// longer returned by ListUnembedded after the update.
+// persists a vector on an existing NULL-embedding row and that the owned row no
+// longer satisfies the ListUnembedded work predicate after the update.
 func TestCodeChunkStore_UpdateEmbedding_SetsVector(t *testing.T) {
 	db := openCodeChunkTestDB(t)
 	store := NewCodeChunkStore(db)
@@ -328,19 +328,15 @@ func TestCodeChunkStore_UpdateEmbedding_SetsVector(t *testing.T) {
 	chunk := testChunk(proj, "embed_me.go", "emb-001")
 	require.NoError(t, store.Upsert(ctx, chunk), "upsert chunk without embedding")
 
-	// Row must appear in ListUnembedded before the embedding is set.
-	unembedded, err := store.ListUnembedded(ctx, 10)
-	require.NoError(t, err)
-	var found bool
 	var targetID int64
-	for _, c := range unembedded {
-		if c.ProjectID == proj {
-			found = true
-			targetID = c.ID
-		}
-	}
-	require.True(t, found, "newly-inserted chunk must appear in ListUnembedded")
+	require.NoError(t, db.Raw(
+		"SELECT id FROM code_chunks WHERE project_id = ? AND file_path = ? AND content_sha256 = ?",
+		proj, chunk.FilePath, chunk.ContentSHA256,
+	).Row().Scan(&targetID))
 	require.NotZero(t, targetID, "chunk ID must be non-zero after upsert")
+	var workRows int64
+	require.NoError(t, db.Model(&CodeChunk{}).Where("id = ? AND embedding IS NULL", targetID).Count(&workRows).Error)
+	require.Equal(t, int64(1), workRows, "owned row must satisfy the ListUnembedded predicate before update")
 
 	// UpdateEmbedding must not error.
 	vec := pgvector.NewVector(make([]float32, 1536))
@@ -353,14 +349,10 @@ func TestCodeChunkStore_UpdateEmbedding_SetsVector(t *testing.T) {
 	).Scan(&embeddingNullCount).Error)
 	require.Equal(t, 0, embeddingNullCount, "embedding must not be NULL after UpdateEmbedding")
 
-	// The row must no longer appear in ListUnembedded.
-	unembedded2, err := store.ListUnembedded(ctx, 10)
-	require.NoError(t, err)
-	for _, c := range unembedded2 {
-		if c.ID == targetID {
-			t.Fatalf("chunk id=%d still appears in ListUnembedded after UpdateEmbedding", targetID)
-		}
-	}
+	// The owned row must no longer satisfy the global queue predicate. Other
+	// tests may legitimately leave unrelated NULL embeddings in the shared DB.
+	require.NoError(t, db.Model(&CodeChunk{}).Where("id = ? AND embedding IS NULL", targetID).Count(&workRows).Error)
+	require.Zero(t, workRows, "chunk id=%d still satisfies the ListUnembedded predicate", targetID)
 }
 
 // TestCodeChunkStore_UpdateEmbedding_InvalidID asserts that id <= 0 is rejected.

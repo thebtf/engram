@@ -44,6 +44,8 @@ type mockMemoryEditor struct {
 	stored   map[int64]*models.Memory // in-memory records
 	updateFn func(m *models.Memory) (*models.Memory, error)
 	getFn    func(id int64) (*models.Memory, error)
+	getCalls int
+	updates  int
 }
 
 func newMockMemoryEditor() *mockMemoryEditor {
@@ -55,6 +57,7 @@ func (m *mockMemoryEditor) seed(mem *models.Memory) {
 }
 
 func (m *mockMemoryEditor) Get(_ context.Context, id int64) (*models.Memory, error) {
+	m.getCalls++
 	if m.getFn != nil {
 		return m.getFn(id)
 	}
@@ -68,12 +71,61 @@ func (m *mockMemoryEditor) Get(_ context.Context, id int64) (*models.Memory, err
 }
 
 func (m *mockMemoryEditor) Update(_ context.Context, mem *models.Memory) (*models.Memory, error) {
+	m.updates++
 	if m.updateFn != nil {
 		return m.updateFn(mem)
 	}
 	cp := *mem
 	m.stored[mem.ID] = &cp
 	return &cp, nil
+}
+
+func TestEditMemory_StrictStructuredInputFailsBeforeReadOrWrite(t *testing.T) {
+	t.Setenv("ENGRAM_ENFORCE_SOURCE_PROJECT", "false")
+	reloadConfig(t)
+
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "missing id", raw: `{"narrative":"new"}`},
+		{name: "null id", raw: `{"id":null,"narrative":"new"}`},
+		{name: "numeric string id", raw: `{"id":"42","narrative":"new"}`},
+		{name: "fraction id", raw: `{"id":42.5,"narrative":"new"}`},
+		{name: "exponent id", raw: `{"id":1e3,"narrative":"new"}`},
+		{name: "overflow id", raw: `{"id":9223372036854775808,"narrative":"new"}`},
+		{name: "wrong narrative type", raw: `{"id":42,"narrative":7}`},
+		{name: "null tags", raw: `{"id":42,"narrative":"new","tags":null}`},
+		{name: "mixed tags", raw: `{"id":42,"narrative":"new","tags":["safe",7]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mem := newMockMemoryEditor()
+			srv := newEditServer(t, mem)
+
+			_, err := srv.handleEditMemory(context.Background(), json.RawMessage(tc.raw))
+
+			require.Error(t, err)
+			assert.Zero(t, mem.getCalls, "malformed edit input must fail before the durable read selector")
+			assert.Zero(t, mem.updates, "malformed edit input must fail before mutation")
+		})
+	}
+}
+
+func TestEditMemory_PreservesExactLargeIntegerSelector(t *testing.T) {
+	t.Setenv("ENGRAM_ENFORCE_SOURCE_PROJECT", "false")
+	reloadConfig(t)
+
+	const id int64 = 9007199254740993
+	mem := newMockMemoryEditor()
+	mem.seed(&models.Memory{ID: id, Project: "exact-id", Content: "before"})
+	srv := newEditServer(t, mem)
+
+	_, err := srv.handleEditMemory(context.Background(), json.RawMessage(`{"id":9007199254740993,"narrative":"after","tags":[]}`))
+
+	require.NoError(t, err)
+	require.Equal(t, 1, mem.getCalls)
+	require.Equal(t, 1, mem.updates)
+	require.Equal(t, "after", mem.stored[id].Content)
 }
 
 // ---------------------------------------------------------------------------

@@ -7,8 +7,10 @@ package crystallization_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,8 +18,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/crystallization"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -56,14 +58,20 @@ func TestCrystallizationLifecycle_FullPath(t *testing.T) {
 
 	// Step 1: construct a decision directly (regex extraction path removed; LLM path
 	// tested separately via LLMExtractor unit tests).
-	sessionID := "integration-test-session-t029"
-	project := "integration-test-project-t029"
+	fixtureID := time.Now().UnixNano()
+	sessionID := fmt.Sprintf("integration-test-session-t029-%d", fixtureID)
+	project := fmt.Sprintf("integration-test-project-t029-%d", fixtureID)
 	decision := crystallization.ExtractedDecision{
-		Text:           "decided to use pgvector for similarity search because it integrates natively with PostgreSQL",
+		Text:           fmt.Sprintf("decided to use pgvector for similarity search because it integrates natively with PostgreSQL fixture %d", fixtureID),
 		Confidence:     0.9,
 		Lang:           "en",
 		ProposedTarget: "rule",
 	}
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM audit_log WHERE source_session_id = ?", sessionID).Error
+		_ = db.Exec("DELETE FROM crystallization_candidates WHERE source_session_id = ?", sessionID).Error
+		_ = db.Exec("DELETE FROM memories WHERE project = ?", project).Error
+	})
 
 	// Step 2: RouteDecision → should create a pending candidate.
 	// Pass nil memChecker — integration test focus is candidate path; memory check is
@@ -108,6 +116,10 @@ func TestCrystallizationLifecycle_FullPath(t *testing.T) {
 	assert.Equal(t, models.CandidateStatusPromoted, promoted.Status)
 	require.NotNil(t, promoted.PromotedMemoryID)
 	assert.Equal(t, createdMem.ID, *promoted.PromotedMemoryID, "promoted_memory_id must match created memory")
+	require.Eventually(t, func() bool {
+		var count int64
+		return db.Table("audit_log").Where("source_session_id = ? AND action = ?", sessionID, "promote_candidate").Count(&count).Error == nil && count == 1
+	}, time.Second, 10*time.Millisecond, "promotion audit must become durable before cleanup")
 
 	// Step 5: second RouteDecision with same session+content → candidate-path idempotency.
 	result2, err := crystallization.RouteDecision(ctx, decision, sessionID, project, cs, nil)

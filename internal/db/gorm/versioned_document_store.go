@@ -201,8 +201,8 @@ func versionedDocBuildListFilters(project, docType, pathPrefix string) (string, 
 		args = append(args, docType)
 	}
 	if pathPrefix != "" {
-		clauses = append(clauses, "path LIKE ?")
-		args = append(args, pathPrefix+"%")
+		clauses = append(clauses, "path LIKE ? ESCAPE '\\'")
+		args = append(args, escapeSQLLike(pathPrefix)+"%")
 	}
 
 	if len(clauses) == 0 {

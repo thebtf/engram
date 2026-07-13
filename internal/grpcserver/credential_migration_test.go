@@ -1,3 +1,5 @@
+//go:build legacyupgrade
+
 package grpcserver
 
 import (
@@ -39,18 +41,12 @@ import (
 //   - Failure of this test BLOCKS Commit G (drop observations migration).
 //     Commit G must not land until F-1 is green in CI.
 //
-// Scope: ONE new test file, no new production code. Uses existing exported
-// APIs only: crypto.NewVault, crypto.Vault.Encrypt/Decrypt, gorm.Store,
-// gorm.NewCredentialStore, gorm.CredentialStore.Get/CountWithDifferentFingerprint.
-//
-// Prerequisite: DATABASE_DSN env var pointing at a Postgres instance with the
-// pgvector extension (matches the main migration test harness). If unset, the
-// test skips.
+// Prerequisite: DATABASE_DSN must point at a disposable database restored from
+// the pinned v4.5.0 fixture. The dedicated legacyupgrade gate fails rather than
+// skipping when that contract is not met.
 func TestCredentialDecryptRoundTripAfterMigration(t *testing.T) {
 	dsn := os.Getenv("DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping F-1 decrypt round-trip integration test")
-	}
+	require.NotEmpty(t, dsn, "legacyupgrade gate requires DATABASE_DSN restored from tests/fixtures/pre-v5/engram-v4.5.0.sql")
 
 	db, err := enggorm.Open(postgres.Open(dsn), &enggorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
@@ -62,38 +58,18 @@ func TestCredentialDecryptRoundTripAfterMigration(t *testing.T) {
 	require.NoError(t, sqlDB.Ping())
 	defer sqlDB.Close()
 
-	// Apply all migrations so tables exist. runMigrations is package-private to
-	// internal/db/gorm, so we call it via the exported wrapper (NewStore invokes
-	// the same migrator). Capture the returned *Store so its internal sql.DB pool
-	// is closeable.
-	gormStore, err := localgorm.NewStore(localgorm.Config{
-		DSN:      dsn,
-		LogLevel: logger.Silent,
-	})
-	require.NoError(t, err, "NewStore (applies migrations)")
-	defer gormStore.Close()
-
-	// Skip when the observations table no longer exists.
-	//
-	// This test was written to gate migration 090 (observations → credentials
-	// data migration) before migration 099 (DROP TABLE observations) shipped.
-	// In v5 (US3 PR-B) migration 099 is now in the standard migration chain,
-	// so any database that has run all migrations does not have an observations
-	// table — the code path this test exercises has been permanently applied.
-	// Running the test against a post-v5 DB would fail with
-	// "relation observations does not exist" on the INSERT statements below,
-	// which is not a signal about correctness — it is a signal that the
-	// migration is done. Skip instead of failing.
+	// This tagged gate starts from the checksum-pinned v4.5.0 fixture. Ordinary
+	// suites never recreate this demolished table and contain no legacy skip.
 	var obsExists bool
 	if err := db.Raw(
 		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='observations')`,
 	).Scan(&obsExists).Error; err != nil {
 		t.Fatalf("check observations table: %v", err)
 	}
-	if !obsExists {
-		t.Skip("observations table not present (migration 099 has already dropped it — " +
-			"this test only applies to databases migrated before v5 US3 PR-B)")
-	}
+	require.True(t, obsExists, "legacy fixture must contain observations before candidate migration")
+	var migrationCount int64
+	require.NoError(t, db.Table("migrations").Count(&migrationCount).Error)
+	require.Equal(t, int64(82), migrationCount, "fixture must be the exact v4.5.0 migration state")
 
 	// Deterministic 32-byte test key so the test is reproducible and does not
 	// depend on the Docker vault.key or the production fingerprint.
@@ -111,15 +87,28 @@ func TestCredentialDecryptRoundTripAfterMigration(t *testing.T) {
 	testProject := fmt.Sprintf("f1-decrypt-roundtrip-%d", time.Now().UnixNano())
 	const badFP = "wrongfingerprint" // 16 hex chars, mismatches goodFP
 
-	// Clean up any prior test rows for this slug (defensive — slug includes a
-	// nanosecond stamp so collisions are unlikely, but belt-and-suspenders
-	// matters for a hard gate).
-	defer func() {
-		db.Exec(`DELETE FROM credentials WHERE project = ?`, testProject)
-		db.Exec(`DELETE FROM observations WHERE project = ?`, testProject)
-	}()
-	db.Exec(`DELETE FROM credentials WHERE project = ?`, testProject)
-	db.Exec(`DELETE FROM observations WHERE project = ?`, testProject)
+	if os.Getenv("ENGRAM_PRE_V5_TEST_MODE") == "interrupted" {
+		ciphertext, encErr := vault.Encrypt("interrupted-upgrade-secret")
+		require.NoError(t, encErr)
+		require.NoError(t, db.Exec(`
+			INSERT INTO observations (project, sdk_session_id, type, title, encrypted_secret,
+				encryption_key_fingerprint, created_at, created_at_epoch, is_suppressed, is_archived, is_superseded)
+			VALUES (?, 'interrupted', 'credential', 'timestamp-overflow', ?, ?, ?, 9223372036854775807, false, 0, 0)`,
+			testProject, ciphertext, goodFP, time.Now().UTC().Format(time.RFC3339Nano)).Error)
+		failedStore, migrateErr := localgorm.NewStore(localgorm.Config{DSN: dsn, LogLevel: logger.Silent})
+		if failedStore != nil {
+			_ = failedStore.Close()
+		}
+		require.Error(t, migrateErr, "an invalid legacy timestamp must fail the upgrade")
+		require.True(t, db.Migrator().HasTable("observations"), "failed migration 090 must preserve the legacy source table")
+		var applied090 int64
+		require.NoError(t, db.Table("migrations").Where("id = ?", "090_observations_to_static_entities").Count(&applied090).Error)
+		require.Zero(t, applied090, "failed migration 090 must not advance its ledger entry")
+		var copied int64
+		require.NoError(t, db.Table("credentials").Where("project = ?", testProject).Count(&copied).Error)
+		require.Zero(t, copied, "failed migration 090 must roll back partial credential copies")
+		return
+	}
 
 	// --- Diverse plaintexts to exercise byte-preservation corner cases. ---
 	// Each entry produces one observation row with type='credential'.
@@ -202,7 +191,7 @@ func TestCredentialDecryptRoundTripAfterMigration(t *testing.T) {
 				ct,
 				goodFP,
 				now.Format(time.RFC3339Nano),
-				now.Unix(),
+				now.UnixMilli(),
 			).Error,
 			"insert observation for case %q", tc.name,
 		)
@@ -277,7 +266,7 @@ func TestCredentialDecryptRoundTripAfterMigration(t *testing.T) {
 				ct,
 				goodFP,
 				time.Now().UTC().Format(time.RFC3339Nano),
-				time.Now().Unix(),
+				time.Now().UnixMilli(),
 			).Error,
 			"insert excluded observation %q", ec.keyName,
 		)
@@ -306,48 +295,39 @@ func TestCredentialDecryptRoundTripAfterMigration(t *testing.T) {
 			[]byte("orphaned-ciphertext-not-decryptable-with-good-key-placeholder"),
 			badFP,
 			time.Now().UTC().Format(time.RFC3339Nano),
-			time.Now().Unix(),
+			time.Now().UnixMilli(),
 		).Error,
 		"insert orphan observation with bad fingerprint",
 	)
 
-	// --- Phase 2: run the migration-090 credentials INSERT against our seeded rows. ---
-	//
-	// SQL is copy-pasted verbatim from internal/db/gorm/migrations.go migration
-	// 090 (step 1 — credentials). We scope it to our testProject so production
-	// data and other tests are not affected. Scoping the INSERT is safe because
-	// migration 090 itself has no project predicate — it migrates everything —
-	// and we only need a subset that we can verify end-to-end without touching
-	// other rows.
-	//
-	// Anti-drift note: if migration 090 changes its SELECT columns, this test
-	// will fail to reproduce the prod migration shape and must be updated in
-	// lockstep. The CI pipeline runs both together, so drift is detected.
-	// IMPORTANT: this SQL must stay in sync with migration 090 step 1 in
-	// internal/db/gorm/migrations.go. The only intentional delta is the trailing
-	// "AND project = ?" predicate which scopes the INSERT to testProject rows only.
-	// If migration 090 changes its column list or expressions, update here in lockstep.
-	credInsertSQL := `
-		INSERT INTO credentials (project, key, encrypted_secret, encryption_key_fingerprint, scope, created_at, updated_at)
-		SELECT
-			project,
-			title AS key,
-			encrypted_secret,
-			encryption_key_fingerprint,
-			COALESCE(NULLIF(scope, ''), 'project') AS scope,
-			TO_TIMESTAMP(created_at_epoch / 1000.0) AS created_at,
-			TO_TIMESTAMP(created_at_epoch / 1000.0) AS updated_at
-		FROM observations
-		WHERE type = 'credential'
-		  AND encrypted_secret IS NOT NULL
-		  AND encryption_key_fingerprint IS NOT NULL
-		  AND title IS NOT NULL AND title != ''
-		  AND is_suppressed = false
-		  AND COALESCE(is_archived, 0) = 0
-		  AND COALESCE(is_superseded, 0) = 0
-		  AND project = ?
-	`
-	require.NoError(t, db.Exec(credInsertSQL, testProject).Error, "re-run migration 090 credentials INSERT")
+	for _, legacy := range []struct {
+		title     string
+		narrative string
+		concepts  string
+	}{
+		{title: "legacy-memory", narrative: "memory preserved across pre-v5 upgrade", concepts: `["upgrade"]`},
+		{title: "legacy-rule", narrative: "rule preserved across pre-v5 upgrade", concepts: `["always-inject"]`},
+	} {
+		require.NoError(t, db.Exec(`
+			INSERT INTO observations (project, sdk_session_id, type, title, narrative, concepts,
+				created_at, created_at_epoch, is_suppressed, is_archived, is_superseded)
+			VALUES (?, ?, 'guidance', ?, ?, ?::jsonb, ?, ?, false, 0, 0)`,
+			testProject, "legacy-"+legacy.title, legacy.title, legacy.narrative, legacy.concepts,
+			time.Now().UTC().Format(time.RFC3339Nano), time.Now().UnixMilli()).Error)
+	}
+
+	// --- Phase 2: run the real current migration chain over the historical fixture. ---
+	gormStore, err := localgorm.NewStore(localgorm.Config{DSN: dsn, LogLevel: logger.Silent})
+	require.NoError(t, err, "upgrade v4.5.0 fixture with current migrations")
+	defer gormStore.Close()
+	require.False(t, db.Migrator().HasTable("observations"), "migration 099 must drop observations only after migration 090 commits")
+
+	var migratedMemories int64
+	require.NoError(t, db.Table("memories").Where("project = ?", testProject).Count(&migratedMemories).Error)
+	require.Equal(t, int64(1), migratedMemories, "the ordinary legacy row must survive as a memory")
+	var migratedRules int64
+	require.NoError(t, db.Table("behavioral_rules").Where("project = ?", testProject).Count(&migratedRules).Error)
+	require.Equal(t, int64(1), migratedRules, "the always-inject legacy row must also survive as a behavioral rule")
 
 	// --- Phase 3: read via CredentialStore and decrypt via vault. ---
 	store := &localgorm.Store{DB: db}
@@ -451,4 +431,20 @@ func TestCredentialDecryptRoundTripAfterMigration(t *testing.T) {
 		_, err = vault.Decrypt(tampered)
 		require.Error(t, err, "decrypt of tampered ciphertext must fail (GCM auth)")
 	})
+
+	t.Run("wrong_key_fails_decrypt", func(t *testing.T) {
+		wrongVault, err := crypto.NewVault(&config.Config{EncryptionKey: "bb110102030405060708090a0b0c0d0e1f20212223242526272829aabbccddee"})
+		require.NoError(t, err)
+		got, err := credStore.Get(ctx, testProject, cases[0].key)
+		require.NoError(t, err)
+		_, err = wrongVault.Decrypt(got.EncryptedSecret)
+		require.Error(t, err, "a different vault key must not decrypt migrated ciphertext")
+	})
+
+	restarted, err := localgorm.NewStore(localgorm.Config{DSN: dsn, LogLevel: logger.Silent})
+	require.NoError(t, err, "current schema must reopen cleanly after the upgrade")
+	restartedCredential, err := localgorm.NewCredentialStore(restarted).Get(ctx, testProject, cases[0].key)
+	require.NoError(t, err, "current credential read must survive restart")
+	require.Equal(t, ciphertexts[0], restartedCredential.EncryptedSecret)
+	require.NoError(t, restarted.Close())
 }

@@ -500,6 +500,8 @@ func TestHandleToolsList_FeedbackSchemaCorrect(t *testing.T) {
 	}
 	require.NotNil(t, fb)
 	props := fb.InputSchema["properties"].(map[string]any)
+	idSchema := props["id"].(map[string]any)
+	assert.Equal(t, "integer", idSchema["type"], "feedback.id must match the strict integer handler")
 	_, hasRating := props["rating"]
 	assert.True(t, hasRating)
 	_, hasSessionID := props["session_id"]

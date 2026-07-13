@@ -1,0 +1,8 @@
+{
+  "task_id": "MB1-003",
+  "observed_at": "2026-07-11T22:43:02Z",
+  "test_file": "internal/worker/handlers_rules_test.go; internal/db/gorm/rule_governance_store_test.go",
+  "test_name": "TestHandleListBehavioralRules_ProjectScope; TestHandleCreateBehavioralRule_Success; TestHandleSetBehavioralRuleEnabled_Success",
+  "failure_reason": "Rule handler tests assumed an otherwise empty global rule set while a governance fixture leaked a global row into the shared test database.",
+  "runner_stdout_excerpt": "Project list expected 2 actual 3; create and enabled list expected 1 actual 2; leaked row content was rg2 legacy global fallback."
+}

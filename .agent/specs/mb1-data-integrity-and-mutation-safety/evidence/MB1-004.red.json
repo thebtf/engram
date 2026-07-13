@@ -1,0 +1,8 @@
+{
+  "task_id": "MB1-004",
+  "observed_at": "2026-07-11T22:45:54Z",
+  "test_file": "pkg/models/snapshot_test.go; internal/bulkops/facade_test.go; internal/mcp/ingest_snapshot_contract_test.go",
+  "test_name": "TestSnapshotOpIngestDoc_PersistedButNotExecutable; TestFacade_Execute_IngestDocHistoricalOnly_NoSnapshot; TestIngestDocument_StoresChunksWithoutBulkOpSnapshot",
+  "failure_reason": "The snapshot discriminator had no executable classification and Facade.Execute still accepted historical ingest_doc in both dry-run and committed form.",
+  "runner_stdout_excerpt": "SnapshotOpType.IsExecutable undefined; Facade ingest_doc expected an error but got nil; the independent live ingest path already stored chunks without snapshots."
+}

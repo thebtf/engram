@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 
 	"gorm.io/gorm"
 
@@ -20,6 +21,11 @@ func (s *Server) handleDocCreate(ctx context.Context, args json.RawMessage) (str
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
+	}
+	for _, key := range []string{"path", "project", "content", "doc_type", "metadata", "author"} {
+		if _, _, fieldErr := optionalStringArg(m, key); fieldErr != nil {
+			return "", fmt.Errorf("doc_create: %w", fieldErr)
+		}
 	}
 
 	path := coerceString(m["path"], "")
@@ -239,28 +245,46 @@ func (s *Server) handleDocComment(ctx context.Context, args json.RawMessage) (st
 		return "", err
 	}
 
-	documentID := coerceInt64(m["document_id"], 0)
+	documentID, err := requireInt64Arg(m, "document_id")
+	if err != nil {
+		return "", fmt.Errorf("doc_comment: %w", err)
+	}
 	if documentID <= 0 {
 		return "", fmt.Errorf("document_id is required and must be positive")
 	}
-	author := coerceString(m["author"], "agent")
-	content := coerceString(m["content"], "")
+	author, authorPresent, err := optionalStringArg(m, "author")
+	if err != nil {
+		return "", fmt.Errorf("doc_comment: %w", err)
+	}
+	if !authorPresent {
+		author = "agent"
+	}
+	content, _, err := optionalStringArg(m, "content")
+	if err != nil {
+		return "", fmt.Errorf("doc_comment: %w", err)
+	}
 	if content == "" {
 		return "", fmt.Errorf("content is required")
 	}
 
 	var lineStart, lineEnd *int
-	if v, ok := m["line_start"]; ok && v != nil {
-		ls := int(coerceInt(m["line_start"], 0))
-		if ls > 0 {
-			lineStart = &ls
+	if value, present, parseErr := optionalInt64Arg(m, "line_start"); parseErr != nil {
+		return "", fmt.Errorf("doc_comment: %w", parseErr)
+	} else if present {
+		if value <= 0 || value > int64(math.MaxInt) {
+			return "", fmt.Errorf("doc_comment: line_start must be an in-range positive integer")
 		}
+		ls := int(value)
+		lineStart = &ls
 	}
-	if v, ok := m["line_end"]; ok && v != nil {
-		le := int(coerceInt(m["line_end"], 0))
-		if le > 0 {
-			lineEnd = &le
+	if value, present, parseErr := optionalInt64Arg(m, "line_end"); parseErr != nil {
+		return "", fmt.Errorf("doc_comment: %w", parseErr)
+	} else if present {
+		if value <= 0 || value > int64(math.MaxInt) {
+			return "", fmt.Errorf("doc_comment: line_end must be an in-range positive integer")
 		}
+		le := int(value)
+		lineEnd = &le
 	}
 
 	commentID, err := s.versionedDocumentStore.AddComment(ctx, documentID, author, content, lineStart, lineEnd)
