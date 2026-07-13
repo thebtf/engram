@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "recorded_at": "2026-07-13T05:30:18.6380046Z",
+  "recorded_at": "2026-07-13T05:59:32.0685193Z",
   "base_commit": "888708b3f20d0b520021cfcc4ae095ea5ddd2b81",
   "scope": "release integration: Docker Scout provisioning, file-backed dev-stand/image credentials, portable critical evidence, measured OTLP residue, and fail-closed optional-native build completeness",
   "red": [
@@ -38,6 +38,21 @@
       "command": "target-only unavailable tarball injection with the committed lock",
       "result": "FAIL_AS_EXPECTED",
       "observation": "npm reproduced its false-success 839-package tree and the new verifier named the exact missing locked package before Nuxt"
+    },
+    {
+      "command": "go test -tags=critical ./tests/critical/runtime -run TestDockerReleaseRefFreshnessGuard -count=1 after independent-review tests",
+      "result": "FAIL",
+      "observation": "the new contract rejected the missing cross-platform Compose secret access control"
+    },
+    {
+      "command": "run-db-suite.ps1 -SelfTest with a mixed _FILE plus legacy plaintext environment fixture",
+      "result": "FAIL",
+      "observation": "the runtime proof accepted DATABASE_DSN alongside DATABASE_DSN_FILE"
+    },
+    {
+      "command": "run-db-suite.ps1 -SelfTest with conflicting duplicate DATABASE_DSN_FILE entries",
+      "result": "FAIL",
+      "observation": "the alleged exact runtime proof accepted both the expected and hostile duplicate value"
     }
   ],
   "green": [
@@ -88,7 +103,7 @@
     {
       "command": "git diff --unified=0 added lines | gitleaks stdin --redact=100",
       "result": "PASS",
-      "detail": "final cumulative rerun scanned 123,261 UTF-8 bytes since the batch base, including untracked and ignored evidence; no leaks found"
+      "detail": "final cumulative rerun scanned 141,552 UTF-8 bytes since the batch base, including untracked and ignored evidence; no leaks found"
     },
     {
       "command": "go test -tags=critical ./tests/critical/runtime -run TestDockerReleaseRefFreshnessGuard/Nuxt_UI_credential-form_advisory_remains_unreachable -count=1 -v",
@@ -109,6 +124,16 @@
       "command": "run-critical-suite.ps1 with a disposable localhost-only PostgreSQL 17 database after native guard and parser fix",
       "result": "PASS",
       "detail": "201 tests, 201 passed, 0 failed, 0 skipped, 0 unexpected skips; no absolute evidence paths; disposable database residue is zero"
+    },
+    {
+      "command": "independent-review follow-up: targeted critical, run-db-suite self-test, run-dev-stand self-test, and verify-otlp",
+      "result": "PASS",
+      "detail": "final critical 55.841s; both self-tests pass; OTLP 13/13 with one poll, no timeout, and zero process/container residue"
+    },
+    {
+      "command": "compose-secret-access direct Windows and container probe",
+      "result": "PASS",
+      "detail": "protected owner plus LocalSystem ACLs verified and UID 65532 reads the secret through a read-only bind mount"
     }
   ],
   "external_source_evidence": {
@@ -123,6 +148,7 @@
     "parallel_nuxt_ui_advisory": "official GitHub advisory GHSA-gj2h-2fpw-fhv9 consulted; affected <=4.7.1, patched versions none, exploit requires SSR UForm/UAuthForm credential markup",
     "context7_native_build": "official npm Arborist and Node 22 diagnostic-report documentation consulted for optional failure behavior and libc detection",
     "parallel_native_build": "official npm/cli issues 4828 and 8320, merged PR 8184, npm config documentation, and lightningcss issue 567 consulted",
+    "docker_compose_secret_bind": "official Docker Compose services reference confirms file-backed secrets use bind mounts and silently ignore uid/gid/mode remapping",
     "tavily": "BLOCKED: OAuth authorization required"
   },
   "incomplete_checks": [

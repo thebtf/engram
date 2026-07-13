@@ -25,6 +25,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'compose-secret-access.ps1')
 
 function Show-Help {
     @'
@@ -453,7 +454,9 @@ function Write-DevStandSecretFiles {
         ENGRAM_VAULT_KEY_SECRET_FILE = $VaultKey
     }
     foreach ($entry in $values.GetEnumerator()) {
-        [System.IO.File]::WriteAllText([string]$files[$entry.Key], [string]$entry.Value, [System.Text.UTF8Encoding]::new($false))
+        $path = [string]$files[$entry.Key]
+        [System.IO.File]::WriteAllText($path, [string]$entry.Value, [System.Text.UTF8Encoding]::new($false))
+        Set-ComposeSecretPathAccess -Path $path
     }
     return [pscustomobject]@{ Files = $files; Dsn = $dsn }
 }
@@ -479,10 +482,15 @@ function Test-ContainerEnvironmentContract {
     )
     try { $entries = @(ConvertFrom-Json -InputObject $CapturedJson -Depth 20) } catch { return $false }
     foreach ($entry in $Exact.GetEnumerator()) {
-        if ($entries -cnotcontains "$($entry.Key)=$($entry.Value)") { return $false }
+        $matches = @($entries | Where-Object { ([string]$_).StartsWith("$($entry.Key)=", [System.StringComparison]::Ordinal) })
+        if ($matches.Count -ne 1 -or [string]$matches[0] -cne "$($entry.Key)=$($entry.Value)") { return $false }
     }
     foreach ($name in $RedactedNames) {
-        if ($entries -cnotcontains "$name=REDACTED_SENSITIVE_VALUE") { return $false }
+        $matches = @($entries | Where-Object { ([string]$_).StartsWith("$name=", [System.StringComparison]::Ordinal) })
+        if ($matches.Count -ne 1 -or [string]$matches[0] -cne "$name=REDACTED_SENSITIVE_VALUE") { return $false }
+    }
+    foreach ($name in @('POSTGRES_PASSWORD', 'DATABASE_DSN', 'ENGRAM_AUTH_ADMIN_TOKEN', 'ENGRAM_ENCRYPTION_KEY', 'ENGRAM_VAULT_KEY')) {
+        if (@($entries | Where-Object { ([string]$_).StartsWith("$name=", [System.StringComparison]::Ordinal) }).Count -ne 0) { return $false }
     }
     return $true
 }
@@ -1027,6 +1035,9 @@ function Invoke-SelfTest {
         Assert-SelfTestCondition (-not (Test-RedactedContainerEnvironment '["POSTGRES_PASSWORD=wrong"]' @('POSTGRES_PASSWORD'))) 'wrong runtime credential value was accepted'
         Assert-SelfTestCondition (-not (Test-RedactedContainerEnvironment '["ENGRAM_AUTH_ADMIN_TOKEN=REDACTED_SENSITIVE_VALUE"]' @('ENGRAM_AUTH_ADMIN_TOKEN','ENGRAM_AUTH_BOOTSTRAP_CAPABILITY'))) 'missing runtime bootstrap capability was accepted'
         Assert-SelfTestCondition (Test-ContainerEnvironmentContract '["DATABASE_DSN_FILE=/run/secrets/database_dsn","ENGRAM_AUTH_BOOTSTRAP_CAPABILITY=REDACTED_SENSITIVE_VALUE"]' @{ DATABASE_DSN_FILE = '/run/secrets/database_dsn' } @('ENGRAM_AUTH_BOOTSTRAP_CAPABILITY')) 'file-backed container environment proof was rejected'
+        Assert-SelfTestCondition (-not (Test-ContainerEnvironmentContract '["DATABASE_DSN_FILE=/run/secrets/database_dsn","DATABASE_DSN=plaintext-regression"]' @{ DATABASE_DSN_FILE = '/run/secrets/database_dsn' } @())) 'legacy plaintext credential survived the runtime file-backed environment proof'
+        Assert-SelfTestCondition (-not (Test-ContainerEnvironmentContract '["DATABASE_DSN_FILE=/run/secrets/database_dsn","DATABASE_DSN_FILE=/tmp/hostile"]' @{ DATABASE_DSN_FILE = '/run/secrets/database_dsn' } @())) 'conflicting duplicate file-backed credential survived the runtime environment proof'
+        Assert-SelfTestCondition (-not (Test-ContainerEnvironmentContract '["DATABASE_DSN_FILE=/run/secrets/database_dsn","ENGRAM_AUTH_BOOTSTRAP_CAPABILITY=REDACTED_SENSITIVE_VALUE","ENGRAM_AUTH_BOOTSTRAP_CAPABILITY=hostile"]' @{ DATABASE_DSN_FILE = '/run/secrets/database_dsn' } @('ENGRAM_AUTH_BOOTSTRAP_CAPABILITY'))) 'conflicting duplicate bootstrap capability survived the runtime environment proof'
         Assert-SelfTestCondition (Test-SecretMountDestinations '[{"Type":"bind","Destination":"/run/secrets/database_dsn"}]' @('/run/secrets/database_dsn')) 'secret mount destination proof was rejected'
         $validInventory = Test-ExactDevStandInventory @{ postgres = 'pgvector/pgvector:pg17'; server = 'ghcr.io/thebtf/engram:main'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
         Assert-SelfTestCondition $validInventory.Pass 'exact compose service/image inventory was rejected'

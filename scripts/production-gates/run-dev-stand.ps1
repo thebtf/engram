@@ -9,6 +9,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'compose-secret-access.ps1')
 $script:CommandRecords = [System.Collections.Generic.List[object]]::new()
 
 function Show-Help {
@@ -39,9 +40,7 @@ function Initialize-DevStandSecretRoot {
     $root = Join-Path ([System.IO.Path]::GetTempPath()) "engram-dev-stand-secrets-$PID-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     $script:PendingDevStandSecretRoot = [System.IO.Path]::GetFullPath($root)
-    if (-not $IsWindows) {
-        [System.IO.File]::SetUnixFileMode($root, ([System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite -bor [System.IO.UnixFileMode]::UserExecute))
-    }
+    Set-ComposeSecretPathAccess -Path $root -Directory
     $files = [ordered]@{
         ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE = 'admin-token.secret'
         ENGRAM_DATABASE_DSN_SECRET_FILE = 'database-dsn.secret'
@@ -51,9 +50,7 @@ function Initialize-DevStandSecretRoot {
     foreach ($entry in $files.GetEnumerator()) {
         $path = Join-Path $root $entry.Value
         Write-Utf8NoBom $path ''
-        if (-not $IsWindows) {
-            [System.IO.File]::SetUnixFileMode($path, ([System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite))
-        }
+        Set-ComposeSecretPathAccess -Path $path
         [Environment]::SetEnvironmentVariable($entry.Key, [System.IO.Path]::GetFullPath($path), 'Process')
     }
     return [System.IO.Path]::GetFullPath($root)

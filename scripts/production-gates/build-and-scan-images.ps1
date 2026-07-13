@@ -46,6 +46,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'compose-secret-access.ps1')
 
 $defaultRepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $repoRoot = if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
@@ -1307,9 +1308,7 @@ function Initialize-ImageSecretFiles {
     $root = Join-Path ([IO.Path]::GetTempPath()) "engram-image-secrets-$PID-$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     $script:PendingImageSecretRoot = [IO.Path]::GetFullPath($root)
-    if (-not $IsWindows) {
-        [IO.File]::SetUnixFileMode($root, ([IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite -bor [IO.UnixFileMode]::UserExecute))
-    }
+    Set-ComposeSecretPathAccess -Path $root -Directory
     $postgresPassword = New-CryptographicHex
     $values = [ordered]@{
         ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE = New-CryptographicHex
@@ -1321,10 +1320,8 @@ function Initialize-ImageSecretFiles {
     foreach ($entry in $values.GetEnumerator()) {
         $leaf = ($entry.Key.ToLowerInvariant() -replace '^engram_', '' -replace '_secret_file$', '' -replace '_', '-') + '.secret'
         $path = Join-Path $root $leaf
-        [IO.File]::WriteAllText($path, [string]$entry.Value, [Text.UTF8Encoding]::new($false))
-        if (-not $IsWindows) {
-            [IO.File]::SetUnixFileMode($path, ([IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite))
-        }
+        [IO.File]::WriteAllText($path, [string]$entry.Value, [System.Text.UTF8Encoding]::new($false))
+        Set-ComposeSecretPathAccess -Path $path
         $files[$entry.Key] = [IO.Path]::GetFullPath($path)
         [Environment]::SetEnvironmentVariable($entry.Key, $files[$entry.Key], 'Process')
     }

@@ -2,9 +2,9 @@
   "schema_version": 1,
   "gate": "critical-suite",
   "run_id": "sol-synthesis-20260713-observability-r2",
-  "started_at": "2026-07-13T05:34:40.9896099+00:00",
-  "finished_at": "2026-07-13T05:38:41.4909338+00:00",
-  "duration_seconds": 240.501,
+  "started_at": "2026-07-13T06:00:40.8816998+00:00",
+  "finished_at": "2026-07-13T06:05:06.3942080+00:00",
+  "duration_seconds": 265.513,
   "verdict": "PASS",
   "config": {
     "path": ".agent/critical-suite.config.yaml",

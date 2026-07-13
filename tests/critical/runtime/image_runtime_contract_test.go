@@ -400,7 +400,7 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		"ENGRAM_VAULT_KEY_SECRET_FILE",
 		"engram-image-secrets-",
 		"PendingImageSecretRoot",
-		"SetUnixFileMode",
+		"Set-ComposeSecretPathAccess",
 		"secret_files_cleaned",
 	} {
 		if !strings.Contains(imageGate, required) {
@@ -409,7 +409,7 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 	}
 
 	devStand := readFile(t, filepath.Join(repo, "scripts", "production-gates", "run-dev-stand.ps1"))
-	for _, required := range []string{"engram-dev-stand-secrets-", "PendingDevStandSecretRoot", "SetUnixFileMode", "-DevStandSecretRoot", "secret_files_cleaned"} {
+	for _, required := range []string{"engram-dev-stand-secrets-", "PendingDevStandSecretRoot", "Set-ComposeSecretPathAccess", "-DevStandSecretRoot", "secret_files_cleaned"} {
 		if !strings.Contains(devStand, required) {
 			t.Fatalf("dev-stand lifecycle does not preserve and clean its secret root %q", required)
 		}
@@ -421,20 +421,36 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		"ENGRAM_POSTGRES_PASSWORD_SECRET_FILE",
 		"ENGRAM_VAULT_KEY_SECRET_FILE",
 		"DevStandSecretRoot",
+		"Set-ComposeSecretPathAccess",
 		"credential_secret_mounts_verified",
 	} {
 		if !strings.Contains(devStandAction, required) {
 			t.Fatalf("dev-stand action does not consume file-backed secrets safely %q", required)
 		}
 	}
+	secretAccess := readFile(t, filepath.Join(repo, "scripts", "production-gates", "compose-secret-access.ps1"))
+	for _, required := range []string{"Set-ComposeSecretPathAccess", "SetAccessRuleProtection", "LocalSystemSid", "UserExecute", "OtherRead"} {
+		if !strings.Contains(secretAccess, required) {
+			t.Fatalf("compose secret access helper lacks cross-platform host-private/container-readable control %q", required)
+		}
+	}
+	secretAccessSelfTest := filepath.Join(repo, "scripts", "production-gates", "test-compose-secret-access.ps1")
+	secretAccessCommand := exec.Command("pwsh", "-NoProfile", "-File", secretAccessSelfTest)
+	secretAccessOutput, err := secretAccessCommand.CombinedOutput()
+	if err != nil {
+		t.Fatalf("compose secret access self-test failed: %v\n%s", err, secretAccessOutput)
+	}
+	if !strings.Contains(string(secretAccessOutput), "compose-secret-access self-test=PASS") {
+		t.Fatalf("compose secret access self-test emitted no PASS proof: %s", secretAccessOutput)
+	}
 
 	otlpGate := readFile(t, filepath.Join(repo, "scripts", "production-smoke", "verify-otlp.ps1"))
-	for _, required := range []string{"process_residue_checked", "container_residue_checked", "Get-ResidualProcessSnapshot", "Get-ResidualContainerSnapshot"} {
+	for _, required := range []string{"process_residue_checked", "container_residue_checked", "Get-ResidualProcessSnapshot", "Get-ResidualContainerSnapshot", "Wait-ForResidualResources", "started_at_utc_ticks", "residue_poll_timed_out"} {
 		if !strings.Contains(otlpGate, required) {
 			t.Fatalf("OTLP evidence still lacks measured residue proof %q", required)
 		}
 	}
-	for _, forbidden := range []string{"process_residue = @()", "container_residue = @()"} {
+	for _, forbidden := range []string{"process_residue = @()", "container_residue = @()", "Start-Sleep -Milliseconds 300"} {
 		if strings.Contains(otlpGate, forbidden) {
 			t.Fatalf("OTLP evidence hard-codes a false residue claim %q", forbidden)
 		}
@@ -784,17 +800,20 @@ func verifyNuxtUICredentialFormAdvisoryUnreachable(t *testing.T, repo string) {
 	if err := os.WriteFile(filepath.Join(hostileRoot, "Login.vue"), []byte(`<template><UAuthForm /></template>`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(hostileRoot, "LoginKebab.vue"), []byte(`<template><u-auth-form /></template>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	hostileUsage, err := findNuxtUICredentialFormUsage(hostileRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hostileUsage) != 1 {
-		t.Fatalf("Nuxt UI advisory guard did not reject hostile UAuthForm fixture: %v", hostileUsage)
+	if len(hostileUsage) != 2 {
+		t.Fatalf("Nuxt UI advisory guard did not reject PascalCase and kebab-case hostile UAuthForm fixtures: %v", hostileUsage)
 	}
 }
 
 func findNuxtUICredentialFormUsage(root string) ([]string, error) {
-	credentialForm := regexp.MustCompile(`(?i)(<\s*U(?:Auth)?Form\b|["']U(?:Auth)?Form["'])`)
+	credentialForm := regexp.MustCompile(`(?i)(<\s*(?:u(?:auth)?form|u-(?:auth-)?form)\b|["'](?:u(?:auth)?form|u-(?:auth-)?form)["'])`)
 	var matches []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {

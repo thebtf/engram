@@ -20,7 +20,10 @@ function Get-ResidualProcessSnapshot {
     return @(Get-Process -ErrorAction SilentlyContinue |
         Where-Object { $_.ProcessName -match '^(?:engram|otelcol|obs\.test)(?:\.exe)?$' } |
         Sort-Object Id |
-        ForEach-Object { [pscustomobject][ordered]@{ id = [int]$_.Id; name = [string]$_.ProcessName } })
+        ForEach-Object {
+            $startedAtUtcTicks = try { [long]$_.StartTime.ToUniversalTime().Ticks } catch { [long]0 }
+            [pscustomobject][ordered]@{ id = [int]$_.Id; name = [string]$_.ProcessName; started_at_utc_ticks = $startedAtUtcTicks }
+        })
 }
 
 function Get-ResidualContainerSnapshot {
@@ -45,6 +48,31 @@ function Get-NewResidue {
     return @($After | Where-Object { -not $known.Contains([string](& $Identity $_)) })
 }
 
+function Wait-ForResidualResources {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$ProcessesBefore,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$ContainersBefore,
+        [ValidateRange(100, 30000)][int]$TimeoutMilliseconds = 5000,
+        [ValidateRange(25, 1000)][int]$PollMilliseconds = 200
+    )
+    $deadline = [DateTimeOffset]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
+    $attempts = 0
+    do {
+        $attempts++
+        $processesAfter = @(Get-ResidualProcessSnapshot)
+        $containersAfter = @(Get-ResidualContainerSnapshot)
+        $processResidue = @(Get-NewResidue -Before $ProcessesBefore -After $processesAfter -Identity { param($item) "$($item.id):$($item.started_at_utc_ticks)" })
+        $containerResidue = @(Get-NewResidue -Before $ContainersBefore -After $containersAfter -Identity { param($item) [string]$item })
+        if ($processResidue.Count -eq 0 -and $containerResidue.Count -eq 0) {
+            return [pscustomobject]@{ Processes = $processResidue; Containers = $containerResidue; Attempts = $attempts; TimedOut = $false; TimeoutMilliseconds = $TimeoutMilliseconds }
+        }
+        if ([DateTimeOffset]::UtcNow -ge $deadline) {
+            return [pscustomobject]@{ Processes = $processResidue; Containers = $containerResidue; Attempts = $attempts; TimedOut = $true; TimeoutMilliseconds = $TimeoutMilliseconds }
+        }
+        Start-Sleep -Milliseconds $PollMilliseconds
+    } while ($true)
+}
+
 Push-Location $repoRoot
 try {
     $processesBefore = @(Get-ResidualProcessSnapshot)
@@ -52,11 +80,9 @@ try {
     $output = & go test ./internal/module/obs -count=1 -json 2>&1
     $exitCode = $LASTEXITCODE
     $output | Set-Content -Encoding utf8 $jsonLog
-    Start-Sleep -Milliseconds 300
-    $processesAfter = @(Get-ResidualProcessSnapshot)
-    $containersAfter = @(Get-ResidualContainerSnapshot)
-    $processResidue = @(Get-NewResidue -Before $processesBefore -After $processesAfter -Identity { param($item) [string]$item.id })
-    $containerResidue = @(Get-NewResidue -Before $containersBefore -After $containersAfter -Identity { param($item) [string]$item })
+    $residue = Wait-ForResidualResources -ProcessesBefore $processesBefore -ContainersBefore $containersBefore
+    $processResidue = @($residue.Processes)
+    $containerResidue = @($residue.Containers)
 
     $events = @($output | ForEach-Object {
         try { $_ | ConvertFrom-Json -ErrorAction Stop } catch { $null }
@@ -93,6 +119,9 @@ try {
         process_residue = $processResidue
         container_residue_checked = $true
         container_residue = $containerResidue
+        residue_poll_attempts = [int]$residue.Attempts
+        residue_poll_timeout_milliseconds = [int]$residue.TimeoutMilliseconds
+        residue_poll_timed_out = [bool]$residue.TimedOut
         verdict = if ($exitCode -eq 0 -and $missing.Count -eq 0 -and $failedTests.Count -eq 0 -and $processResidue.Count -eq 0 -and $containerResidue.Count -eq 0) { "PASS" } else { "FAIL" }
     }
     $result | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 $summaryPath
