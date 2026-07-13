@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -388,7 +389,9 @@ func Load() (*Config, error) {
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_WORKER_HOST")); v != "" {
 		cfg.WorkerHost = v
 	}
-	if v := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")); v != "" {
+	if v, err := envOrFile(EnvAdminToken, EnvAdminTokenFile); err != nil {
+		return nil, err
+	} else if v != "" {
 		cfg.WorkerToken = v
 	}
 	if v := strings.TrimSpace(os.Getenv("ENGRAM_CONTEXT_MAX_TOKENS")); v != "" {
@@ -396,7 +399,9 @@ func Load() (*Config, error) {
 			cfg.ContextMaxTokens = n
 		}
 	}
-	if v := strings.TrimSpace(os.Getenv("DATABASE_DSN")); v != "" {
+	if v, err := envOrFile(EnvDatabaseDSN, EnvDatabaseDSNFile); err != nil {
+		return nil, err
+	} else if v != "" {
 		cfg.DatabaseDSN = v
 	}
 	if v := strings.TrimSpace(os.Getenv("DATABASE_MAX_CONNS")); v != "" {
@@ -538,6 +543,25 @@ func splitTrim(s string) []string {
 	return result
 }
 
+func envOrFile(envName, fileEnvName string) (string, error) {
+	if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
+		return value, nil
+	}
+	path := strings.TrimSpace(os.Getenv(fileEnvName))
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", fileEnvName, err)
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "" {
+		return "", fmt.Errorf("read %s: secret file is empty", fileEnvName)
+	}
+	return value, nil
+}
+
 // Get returns the global configuration, loading it if necessary.
 // The first call triggers Load(); subsequent calls return the cached value.
 // Use Reload() to hot-swap the config without restarting the server.
@@ -630,20 +654,21 @@ func GetWorkerHost() string {
 	return "127.0.0.1"
 }
 
-// GetWorkerToken returns the admin authentication token from ENGRAM_AUTH_ADMIN_TOKEN.
-// Falls back to the value loaded from the config file if the env var is not set.
+// GetWorkerToken returns the admin authentication token from the direct env var,
+// its file-backed counterpart, or the loaded config in that order.
 func GetWorkerToken() string {
-	if token := strings.TrimSpace(os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")); token != "" {
+	if token := strings.TrimSpace(os.Getenv(EnvAdminToken)); token != "" {
 		return token
 	}
 	return Get().WorkerToken
 }
 
 // GetDatabaseDSN returns the PostgreSQL DSN.
-// env DATABASE_DSN takes priority (contains password, never stored in config file).
+// Direct env takes priority over its file-backed counterpart; neither secret is
+// stored in settings JSON.
 // Returns empty string if not configured.
 func GetDatabaseDSN() string {
-	if v := strings.TrimSpace(os.Getenv("DATABASE_DSN")); v != "" {
+	if v := strings.TrimSpace(os.Getenv(EnvDatabaseDSN)); v != "" {
 		return v
 	}
 	return Get().DatabaseDSN

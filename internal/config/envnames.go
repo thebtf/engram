@@ -29,7 +29,11 @@ const (
 	// admin-only RPCs and as the master compare arm of the auth.Validator.
 	// MUST live ONLY in the server-host environment (Docker / compose).
 	// Reading this from a workstation context is a contract violation.
-	EnvAdminToken = "ENGRAM_AUTH_ADMIN_TOKEN"
+	EnvAdminToken     = "ENGRAM_AUTH_ADMIN_TOKEN"
+	EnvAdminTokenFile = "ENGRAM_AUTH_ADMIN_TOKEN_FILE"
+
+	EnvDatabaseDSN     = "DATABASE_DSN"
+	EnvDatabaseDSNFile = "DATABASE_DSN_FILE"
 
 	// EnvWorkstationToken is the per-workstation client api token (keycard)
 	// issued through the dashboard /tokens page. The daemon and the
