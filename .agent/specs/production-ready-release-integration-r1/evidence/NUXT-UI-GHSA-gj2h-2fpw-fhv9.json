@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-13T04:20:00Z",
+  "advisory": {
+    "id": "GHSA-gj2h-2fpw-fhv9",
+    "source": "https://github.com/advisories/GHSA-gj2h-2fpw-fhv9",
+    "source_route": "Parallel fetch of the official GitHub Advisory Database entry",
+    "severity": "moderate",
+    "affected_versions": "<=4.7.1",
+    "patched_versions": "none declared by the official advisory",
+    "affected_components": ["UForm", "UAuthForm"],
+    "exploit_precondition": "an SSR-rendered credential form is submitted before Vue hydration, causing native GET submission"
+  },
+  "local_dependency": {
+    "package": "@nuxt/ui",
+    "locked_version": "3.3.7",
+    "npm_audit_severity": "moderate",
+    "direct_dependency": true
+  },
+  "reachability": {
+    "operator_console_ssr": false,
+    "UForm_source_usages": 0,
+    "UAuthForm_source_usages": 0,
+    "credential_inputs": "native input elements, not Nuxt UI credential-form components",
+    "verdict": "NOT_REACHABLE"
+  },
+  "regression_control": {
+    "test": "TestDockerReleaseRefFreshnessGuard/Nuxt_UI_credential-form_advisory_remains_unreachable",
+    "requires": [
+      "nuxt.config.ts retains explicit ssr: false",
+      "package-lock retains the reviewed @nuxt/ui version until reclassification",
+      "operator source contains no UForm or UAuthForm usage"
+    ],
+    "hostile_fixture": "a synthetic UAuthForm Vue component is detected and rejected",
+    "result": "PASS"
+  },
+  "decision": "ACCEPTED_UNREACHABLE_WITH_FAIL_CLOSED_REGRESSION_GUARD",
+  "upgrade_note": "The official advisory declares no patched version. A major dependency migration is not substituted for reachability proof and requires separate UI replay."
+}

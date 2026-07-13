@@ -60,12 +60,12 @@
     {
       "command": "run-critical-suite.ps1 with a disposable localhost-only PostgreSQL 17 database named engram_critical_test",
       "result": "PASS",
-      "detail": "197 tests, 197 passed, 0 failed, 0 skipped, 0 unexpected skips; two child command records use only repository-relative paths; disposable database container residue is zero"
+      "detail": "199 tests, 199 passed, 0 failed, 0 skipped, 0 unexpected skips; two child command records use only repository-relative paths; disposable database container residue is zero"
     },
     {
       "command": "./scripts/production-gates/assert-go-test-json.ps1 -SelfTest",
       "result": "PASS",
-      "detail": "nested summary paths are repository-relative or external leaf-only; regenerated 197-test evidence contains no absolute Windows paths"
+      "detail": "nested summary paths are repository-relative or external leaf-only; regenerated 199-test evidence contains no absolute Windows paths"
     },
     {
       "command": "PowerShell AST parse of five changed scripts",
@@ -78,7 +78,12 @@
     {
       "command": "git diff --unified=0 added lines | gitleaks stdin --redact=100",
       "result": "PASS",
-      "detail": "30.85 KB scanned; no leaks found"
+      "detail": "final cumulative rerun scanned 87.88 KB since the batch base; no leaks found"
+    },
+    {
+      "command": "go test -tags=critical ./tests/critical/runtime -run TestDockerReleaseRefFreshnessGuard/Nuxt_UI_credential-form_advisory_remains_unreachable -count=1 -v",
+      "result": "PASS",
+      "detail": "reviewed @nuxt/ui 3.3.7 remains SPA-only, UForm/UAuthForm usage is absent, and a hostile UAuthForm fixture is rejected"
     }
   ],
   "external_source_evidence": {
@@ -90,6 +95,7 @@
     },
     "context7": "official GitHub Actions, Docker, and OpenTelemetry documentation consulted",
     "parallel": "official GitHub and Docker documentation consulted",
+    "parallel_nuxt_ui_advisory": "official GitHub advisory GHSA-gj2h-2fpw-fhv9 consulted; affected <=4.7.1, patched versions none, exploit requires SSR UForm/UAuthForm credential markup",
     "tavily": "BLOCKED: OAuth authorization required"
   },
   "incomplete_checks": [

@@ -440,6 +440,10 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		}
 	}
 
+	t.Run("Nuxt UI credential-form advisory remains unreachable", func(t *testing.T) {
+		verifyNuxtUICredentialFormAdvisoryUnreachable(t, repo)
+	})
+
 	verification := readFile(t, verificationPath)
 	for _, fragment := range []string{
 		"branches: [main]",
@@ -742,6 +746,83 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(content)
+}
+
+func verifyNuxtUICredentialFormAdvisoryUnreachable(t *testing.T, repo string) {
+	t.Helper()
+	operatorRoot := filepath.Join(repo, "apps", "operator-console")
+	config := readFile(t, filepath.Join(operatorRoot, "nuxt.config.ts"))
+	if !regexp.MustCompile(`(?m)^\s*ssr:\s*false\s*,?\s*(?://.*)?$`).MatchString(config) {
+		t.Fatal("GHSA-gj2h-2fpw-fhv9 reachability changed: operator console is no longer explicitly SPA-only")
+	}
+
+	var lock struct {
+		Packages map[string]struct {
+			Version string `json:"version"`
+		} `json:"packages"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(operatorRoot, "package-lock.json"))), &lock); err != nil {
+		t.Fatalf("parse operator package lock: %v", err)
+	}
+	const reviewedVersion = "3.3.7"
+	if got := lock.Packages["node_modules/@nuxt/ui"].Version; got != reviewedVersion {
+		t.Fatalf("@nuxt/ui changed from reviewed version %s to %q; reclassify GHSA-gj2h-2fpw-fhv9 before release", reviewedVersion, got)
+	}
+
+	usage, err := findNuxtUICredentialFormUsage(operatorRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(usage) != 0 {
+		t.Fatalf("GHSA-gj2h-2fpw-fhv9 became reachable through UForm/UAuthForm source usage: %v", usage)
+	}
+
+	hostileRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(hostileRoot, "Login.vue"), []byte(`<template><UAuthForm /></template>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hostileUsage, err := findNuxtUICredentialFormUsage(hostileRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hostileUsage) != 1 {
+		t.Fatalf("Nuxt UI advisory guard did not reject hostile UAuthForm fixture: %v", hostileUsage)
+	}
+}
+
+func findNuxtUICredentialFormUsage(root string) ([]string, error) {
+	credentialForm := regexp.MustCompile(`(?i)(<\s*U(?:Auth)?Form\b|["']U(?:Auth)?Form["'])`)
+	var matches []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			switch info.Name() {
+			case "node_modules", ".nuxt", ".output":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".vue", ".ts", ".js", ".mjs":
+		default:
+			return nil
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if credentialForm.Match(content) {
+			relative, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return relErr
+			}
+			matches = append(matches, filepath.ToSlash(relative))
+		}
+		return nil
+	})
+	return matches, err
 }
 
 func testCanonicalReleaseValidation(t *testing.T, repo string) {
