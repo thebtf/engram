@@ -32,6 +32,6 @@ Valid findings were fixed as a single security/runtime batch. Suggestions that w
 - GREEN: live OTLP smoke PASS for 13/13 required tests with one poll, no timeout, and zero residue.
 - GREEN: PowerShell AST parse PASS for all six changed/added scripts.
 - GREEN: Windows owner/LocalSystem ACL readback and non-root UID 65532 Docker bind-read probe PASS.
-- GREEN: gitleaks 8.30.0 scanned 141,552 cumulative UTF-8 bytes from the batch base, including untracked and ignored review artifacts; no leaks.
+- GREEN: gitleaks 8.30.0 scanned 149,061 cumulative UTF-8 bytes from the batch base, including untracked and ignored review artifacts; no leaks.
 
 External source: <https://docs.docker.com/reference/compose-file/services/#secrets>.

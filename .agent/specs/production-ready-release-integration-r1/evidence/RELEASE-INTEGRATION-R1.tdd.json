@@ -53,6 +53,11 @@
       "command": "run-db-suite.ps1 -SelfTest with conflicting duplicate DATABASE_DSN_FILE entries",
       "result": "FAIL",
       "observation": "the alleged exact runtime proof accepted both the expected and hostile duplicate value"
+    },
+    {
+      "command": "run-dev-stand.ps1 on clean af77359d",
+      "result": "FAIL_WITH_CLEANUP_PASS",
+      "observation": "operator-console independent Compose build omitted VERSION and failed the Dockerfile canonical version guard with exit 64"
     }
   ],
   "green": [
@@ -103,7 +108,7 @@
     {
       "command": "git diff --unified=0 added lines | gitleaks stdin --redact=100",
       "result": "PASS",
-      "detail": "final cumulative rerun scanned 141,552 UTF-8 bytes since the batch base, including untracked and ignored evidence; no leaks found"
+      "detail": "final cumulative rerun scanned 149,061 UTF-8 bytes since the batch base, including untracked and ignored evidence; no leaks found"
     },
     {
       "command": "go test -tags=critical ./tests/critical/runtime -run TestDockerReleaseRefFreshnessGuard/Nuxt_UI_credential-form_advisory_remains_unreachable -count=1 -v",
@@ -134,6 +139,21 @@
       "command": "compose-secret-access direct Windows and container probe",
       "result": "PASS",
       "detail": "protected owner plus LocalSystem ACLs verified and UID 65532 reads the secret through a read-only bind mount"
+    },
+    {
+      "command": "build-and-scan-images.ps1 on clean exact af77359d",
+      "result": "PASS",
+      "detail": "three image IDs, 0 high/critical, native verifier checked 12 in both operator builds, all runtime/restart/recreate/persistence assertions true, 48 migrations, 6 core tables, cleanup and secret cleanup pass"
+    },
+    {
+      "command": "operator-console Compose VERSION targeted regression and docker compose config",
+      "result": "PASS",
+      "detail": "the exact source SHA now reaches both server and operator-console build targets"
+    },
+    {
+      "command": "full critical runner after operator-console Compose VERSION fix",
+      "result": "PASS",
+      "detail": "203 tests, 203 passed, 0 failed/skipped/unexpected skips/nonzero children; portable evidence and zero disposable database residue"
     }
   ],
   "external_source_evidence": {
@@ -159,10 +179,10 @@
       "fail_closed_runtime_control": "both workflows validate the complete archive with sha256sum --check --strict before extraction"
     },
     {
-      "check": "clean-source image and dev-stand runtime gates",
-      "status": "PENDING_COMMIT",
-      "reason": "the image gate intentionally rejects a dirty source tree"
+      "check": "clean-source dev-stand runtime gate after operator-console VERSION fix",
+      "status": "PENDING_FIX_COMMIT",
+      "reason": "the clean af77359d image gate passed; dev-stand found and cleaned up a missing operator-console build arg, now fixed and awaiting exact-commit rerun"
     }
   ],
-  "verdict": "IMPLEMENTATION_GREEN_EXACT_COMMIT_IMAGE_AND_DEV_STAND_GATES_PENDING"
+  "verdict": "EXACT_IMAGE_GATE_GREEN_DEV_STAND_FIX_RERUN_PENDING"
 }

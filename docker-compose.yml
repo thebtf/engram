@@ -105,6 +105,8 @@ services:
     build:
       context: .
       target: operator-console
+      args:
+        VERSION: ${ENGRAM_BUILD_VERSION:?set ENGRAM_BUILD_VERSION to vMAJOR.MINOR.PATCH[-prerelease] or sha-<full commit>}
     user: "65532:65532"
     read_only: true
     cap_drop: ["ALL"]

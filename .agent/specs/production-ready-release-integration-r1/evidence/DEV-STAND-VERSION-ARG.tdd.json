@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "scope": "clean exact-source dev-stand operator-console build version propagation",
+  "source_commit": "af77359dd58fd0d87f33f2fae74384351ca760af",
+  "red": {
+    "command": "run-dev-stand.ps1 Up -> Ready -> Scan -> Down",
+    "result": "FAIL_WITH_CLEANUP_PASS",
+    "duration_seconds": 95.093,
+    "failure": "operator-console target did not receive VERSION; Dockerfile canonical version guard exited 64",
+    "up_source_clean": true,
+    "down_residual_resources_zero": true,
+    "secret_files_cleaned": true
+  },
+  "root_cause": "docker-compose.yml passed ENGRAM_BUILD_VERSION only to the server build, while the independent operator-console target also depends on the Go builder healthcheck stage that requires VERSION.",
+  "tdd": {
+    "red": "critical subtest rejected the missing operator-console VERSION build arg",
+    "green": "targeted critical subtest PASS and docker compose config resolves all three exact image targets"
+  },
+  "implementation": "operator-console build args now pass the same canonical ENGRAM_BUILD_VERSION contract as server",
+  "status": "FIX_IMPLEMENTED_FULL_DEV_STAND_GREEN_PENDING"
+}

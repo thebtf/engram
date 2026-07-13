@@ -2,9 +2,9 @@
   "schema_version": 1,
   "gate": "critical-suite",
   "run_id": "sol-synthesis-20260713-observability-r2",
-  "started_at": "2026-07-13T06:00:40.8816998+00:00",
-  "finished_at": "2026-07-13T06:05:06.3942080+00:00",
-  "duration_seconds": 265.513,
+  "started_at": "2026-07-13T06:31:26.3194907+00:00",
+  "finished_at": "2026-07-13T06:35:38.9613817+00:00",
+  "duration_seconds": 252.642,
   "verdict": "PASS",
   "config": {
     "path": ".agent/critical-suite.config.yaml",
@@ -20,8 +20,8 @@
   "json_summary": ".agent/reports/evidence/production-ready/release-gates-foundation/critical-suite-runner/sol-synthesis-20260713-observability-r2/go-test-summary.json",
   "counts": {
     "packages": 3,
-    "tests": 201,
-    "passed": 201,
+    "tests": 203,
+    "passed": 203,
     "failed": 0,
     "skipped": 0,
     "no_tests": 0,

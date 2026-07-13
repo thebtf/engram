@@ -462,6 +462,9 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 	t.Run("operator native optional tree is verified", func(t *testing.T) {
 		verifyOperatorNativeOptionalTree(t, repo)
 	})
+	t.Run("operator compose build receives exact source version", func(t *testing.T) {
+		verifyOperatorComposeBuildVersion(t, repo)
+	})
 
 	verification := readFile(t, verificationPath)
 	for _, fragment := range []string{
@@ -870,6 +873,25 @@ func verifyOperatorNativeOptionalTree(t *testing.T, repo string) {
 	} {
 		if !strings.Contains(dockerfile, required) {
 			t.Fatalf("operator Docker build lacks native optional dependency contract %q", required)
+		}
+	}
+}
+
+func verifyOperatorComposeBuildVersion(t *testing.T, repo string) {
+	t.Helper()
+	compose := strings.ReplaceAll(readFile(t, filepath.Join(repo, "docker-compose.yml")), "\r\n", "\n")
+	operatorStart := strings.Index(compose, "\n  operator-console:\n")
+	secretsStart := strings.Index(compose, "\nsecrets:\n")
+	if operatorStart < 0 || secretsStart <= operatorStart {
+		t.Fatal("operator-console service block is missing from docker-compose.yml")
+	}
+	operatorBlock := compose[operatorStart:secretsStart]
+	for _, required := range []string{
+		"target: operator-console",
+		"VERSION: ${ENGRAM_BUILD_VERSION:?set ENGRAM_BUILD_VERSION to vMAJOR.MINOR.PATCH[-prerelease] or sha-<full commit>}",
+	} {
+		if !strings.Contains(operatorBlock, required) {
+			t.Fatalf("operator-console compose build lacks exact source version contract %q", required)
 		}
 	}
 }

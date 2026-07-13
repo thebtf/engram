@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "gate": "clean-exact-commit-image-build-scan-runtime",
+  "source_commit": "af77359dd58fd0d87f33f2fae74384351ca760af",
+  "source_tree": "4abf9ca6e45f3c96fab38ea507b961e9ad5837a4",
+  "started_at": "2026-07-13T06:10:09.2572032Z",
+  "completed_at": "2026-07-13T06:24:52.7191504Z",
+  "duration_seconds": 883.462,
+  "source_tracked_clean": true,
+  "build_context": "git-archive-tracked-files-only",
+  "native_optional_proof": {
+    "server_build": "840 packages; linux/x64/glibc; checked 12",
+    "operator_build": "840 packages; linux/x64/glibc; checked 12"
+  },
+  "image_ids": {
+    "server": "sha256:44f0cb6f49732a04fed4e40f16c725f3b510f8700dd69e2208e8902d43cfb30f",
+    "operator_console": "sha256:d94f423954295ac5f4be4f25f349136d602d6f36c9fde56c8d10d4a452a1e6e8",
+    "postgres": "sha256:f64b5e6c89b0e87b72a6798a06eb1fba14b341f10b9390642e40553dd92b78ed"
+  },
+  "high_critical_findings": {
+    "server": 0,
+    "operator_console": 0,
+    "postgres": 0
+  },
+  "runtime": {
+    "critical_tests": true,
+    "compose_all_healthy": true,
+    "server_liveness": true,
+    "server_readiness": true,
+    "operator_readiness": true,
+    "restart_recovery": true,
+    "postgres_recreation_retained_marker": true,
+    "migration_table_count": 48,
+    "core_schema_table_count": 6
+  },
+  "cleanup": {
+    "build_context_cleaned": true,
+    "secret_files_cleaned": true,
+    "containers": 0,
+    "volumes": 0,
+    "networks": 0
+  },
+  "local_scanner_version": "1.18.3",
+  "workflow_scanner_contract": "v1.23.1 with strict official SHA-256 verification",
+  "verdict": "PASS"
+}

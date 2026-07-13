@@ -40,18 +40,18 @@
 - Targeted critical runtime contract: PASS.
 - `assert-go-test-json.ps1`, `run-critical-suite.ps1`, `run-db-suite.ps1`, and `run-dev-stand.ps1` self-tests: PASS.
 - Six changed PowerShell scripts parse through the PowerShell AST parser: PASS.
-- Full critical evidence: 201 tests, 201 passed, zero failed/skipped/unexpected skips.
+- Full critical evidence after the Compose version regression: 203 tests, 203 passed, zero failed/skipped/unexpected skips.
 - Critical command evidence: two records, executables `go` and `pwsh`, `working_directory` is `.`, no absolute artifact paths.
 - OTLP evidence: 13 required tests, zero missing/failed, measured process/container residue both zero.
-- gitleaks 8.30.0: no leaks in 141,552 UTF-8 bytes of cumulative added, untracked, and ignored content since the batch base.
+- gitleaks 8.30.0: no leaks in 149,061 UTF-8 bytes of cumulative added, untracked, and ignored content since the batch base.
 - `git diff --check`: PASS.
 - Native optional verifier hostile self-test: PASS; clean pinned Linux/glibc install checks 12 applicable packages; injected omission fails with the exact locked package identity.
 - Independent-review follow-up: final targeted critical contract PASS (55.841s), DB and dev-stand self-tests PASS, OTLP 13/13 with one poll/no timeout/zero residue, Windows owner/LocalSystem ACL assertion PASS, and non-root UID 65532 secret bind read PASS.
 
 ## Unresolved release gates
 
-- Clean-commit image build/scan/runtime gate.
-- Clean-commit dev-stand lifecycle and anti-regression walkthrough.
+- Clean-commit image build/scan/runtime gate: PASS at af77359d; final movement after later control-plane-only commits must remain classified.
+- Clean-commit dev-stand lifecycle and anti-regression walkthrough: af77359d RED exposed missing operator-console VERSION with cleanup PASS; fix implemented, exact-commit rerun pending.
 - A17 governance correction and exact direct-child B17 authority implementation.
 - Independent scoped PR review and blind verdict.
 
