@@ -3,21 +3,18 @@
 // by the dispatcher and lifecycle pipeline are registered here and exposed via
 // typed helper functions.
 //
-// Default behaviour: when OTEL_EXPORTER_OTLP_ENDPOINT is unset, the global
-// meter provider returned by otel.GetMeterProvider() is a no-op. Recording
-// metrics against it is safe and has effectively zero cost. The export
-// pipeline is activated only when the standard OTel environment variables
-// select a real exporter — no engram-specific configuration is required.
+// Default behaviour: when neither OTEL_EXPORTER_OTLP_ENDPOINT nor
+// OTEL_EXPORTER_OTLP_METRICS_ENDPOINT is set, recording uses the process-global
+// meter provider. Init never replaces that provider; an enabled Runtime routes
+// only Engram's instruments to its owned exporter.
 //
 // Framework rule: no code outside this package may call otel.GetMeterProvider()
 // or construct meters directly. This guarantees a single place to add caching,
 // labels, or exporter hooks in the future.
 //
-// Operator guidance: to enable metric export, set OTEL_EXPORTER_OTLP_ENDPOINT
-// to point at your collector (e.g. http://collector:4317) and register an OTel
-// SDK in your process before the first metric call. Engram itself does NOT
-// spawn or configure an exporter — this is intentional; the upstream OTel
-// no-op default is the correct choice for embedded libraries.
+// Operator guidance: set OTEL_EXPORTER_OTLP_ENDPOINT (or the metrics-specific
+// variant) to an http:// or https:// OTLP/gRPC collector URL. Init wires the
+// SDK from the standard OTel environment-variable contract.
 package obs
 
 import (
@@ -40,20 +37,10 @@ const scopeName = "github.com/thebtf/engram/internal/module"
 // wrapper so that later T064+ work can swap in caching or instrumentation-
 // version labels at one seam instead of every call site.
 func meter() metric.Meter {
+	if instrumentProvider != nil {
+		return instrumentProvider.Meter(scopeName)
+	}
 	return otel.GetMeterProvider().Meter(scopeName)
-}
-
-// Init prepares the obs package for use. In v0.1.0 it returns nil immediately
-// because the OTel SDK auto-wires via the global meter provider — engram does
-// not configure any exporter itself. Instruments are created lazily on first
-// use (sync.Once per instrument) so calling Init is optional but signals
-// intent at the call site.
-//
-// Operators who want real metric export should register an OTel SDK and set
-// OTEL_EXPORTER_OTLP_ENDPOINT before calling Init. Init will then pick up the
-// configured provider through otel.GetMeterProvider().
-func Init() error {
-	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -88,11 +75,18 @@ type instruments struct {
 	// No labels — avoiding cardinality explosion per design.md §6.
 	activeSessionsOnce sync.Once
 	activeSessions     metric.Int64UpDownCounter
+
+	runtimeEventsOnce sync.Once
+	runtimeEvents     metric.Int64Counter
 }
 
 // global is the process-wide instrument set. It is intentionally unexported
 // so all callers go through the typed helper functions below.
-var global instruments
+var (
+	global             instruments
+	instrumentsMu      sync.RWMutex
+	instrumentProvider metric.MeterProvider
+)
 
 // ---------------------------------------------------------------------------
 // RecordHandleTool — engram_handletool_duration_ms
@@ -110,6 +104,8 @@ var global instruments
 // Metric emission never returns an error to the caller. Any instrument
 // creation failure is logged once via slog and silently swallowed thereafter.
 func RecordHandleTool(ctx context.Context, module, tool, status string, durationMs int64) {
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
 	global.handleToolDurationMsOnce.Do(func() {
 		h, err := meter().Int64Histogram(
 			"engram_handletool_duration_ms",
@@ -150,6 +146,8 @@ func RecordHandleTool(ctx context.Context, module, tool, status string, duration
 // This is called in addition to RecordHandleTool (not instead of it) so that
 // dashboards can build error-rate panels by joining both metrics.
 func RecordHandleToolError(ctx context.Context, module, tool, errorCode string) {
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
 	global.handleToolErrorsTotalOnce.Do(func() {
 		c, err := meter().Int64Counter(
 			"engram_handletool_errors_total",
@@ -184,6 +182,8 @@ func RecordHandleToolError(ctx context.Context, module, tool, errorCode string) 
 //   - module: the module name as returned by EngramModule.Name().
 //   - durationMs: elapsed milliseconds for the Init call.
 func RecordModuleInit(ctx context.Context, module string, durationMs int64) {
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
 	global.moduleInitDurationMsOnce.Do(func() {
 		h, err := meter().Int64Histogram(
 			"engram_module_init_duration_ms",
@@ -217,6 +217,8 @@ func RecordModuleInit(ctx context.Context, module string, durationMs int64) {
 // per-project granularity is needed in the future, add a project_id label
 // behind a feature flag.
 func IncrementActiveSessions(ctx context.Context) {
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
 	global.activeSessionsOnce.Do(func() {
 		g, err := meter().Int64UpDownCounter(
 			"engram_active_sessions",
@@ -237,6 +239,8 @@ func IncrementActiveSessions(ctx context.Context) {
 // DecrementActiveSessions decrements the active-sessions gauge by 1.
 // Called by the dispatcher's OnProjectDisconnect handler.
 func DecrementActiveSessions(ctx context.Context) {
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
 	global.activeSessionsOnce.Do(func() {
 		g, err := meter().Int64UpDownCounter(
 			"engram_active_sessions",
@@ -254,6 +258,31 @@ func DecrementActiveSessions(ctx context.Context) {
 	global.activeSessions.Add(ctx, -1)
 }
 
+// RecordRuntimeEvent records one bounded-cardinality lifecycle diagnostic.
+// component and outcome must be fixed program values, never request data.
+func RecordRuntimeEvent(ctx context.Context, component, outcome string) {
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
+	global.runtimeEventsOnce.Do(func() {
+		c, err := meter().Int64Counter(
+			"engram_runtime_events_total",
+			metric.WithDescription("Engram server lifecycle events labelled by component and outcome"),
+		)
+		if err != nil {
+			slog.Warn("obs: failed to create engram_runtime_events_total counter", "error", err)
+			return
+		}
+		global.runtimeEvents = c
+	})
+	if global.runtimeEvents == nil {
+		return
+	}
+	global.runtimeEvents.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("component", component),
+		attribute.String("outcome", outcome),
+	))
+}
+
 // ---------------------------------------------------------------------------
 // ResetInstrumentsForTesting — test helper ONLY
 // ---------------------------------------------------------------------------
@@ -268,5 +297,11 @@ func DecrementActiveSessions(ctx context.Context) {
 // support the dispatcher benchmark test (T069) which needs to measure
 // recording overhead with two different providers in the same test binary.
 func ResetInstrumentsForTesting() {
+	instrumentsMu.Lock()
+	defer instrumentsMu.Unlock()
+	resetInstrumentsLocked()
+}
+
+func resetInstrumentsLocked() {
 	global = instruments{}
 }
