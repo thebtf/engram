@@ -741,7 +741,7 @@ function Resolve-ExactCommit {
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) { throw "$Label commit '$Revision' is not resolvable: $($output -join ' ')" }
     $resolved = ([string]$output[-1]).Trim().ToLowerInvariant()
-    if ($resolved -notmatch '^[0-9a-f]{40}$') { throw "$Label resolved to invalid commit identity '$resolved'" }
+    if ($resolved -cnotmatch '^[0-9a-f]{40}$') { throw "$Label resolved to invalid commit identity '$resolved'" }
     return $resolved
 }
 

@@ -239,7 +239,7 @@ function Invoke-R9ProfileAudit {
     if ([string](Get-PropertyValue $authority 'r8_scope_provenance_sha256') -cne 'ab5f882fa110ca823a317061ecbca0c62516702735325893a56206f9e7a29415') { $errors.Add('authority r8_scope_provenance_sha256 drifted') }
     $sourceAudit = Get-PropertyValue $ContractObject 'source_audit'
     if ([string](Get-PropertyValue $sourceAudit 'mutable_register_path') -cne '.agent/reports/production-readiness-evidence-register.json') { $errors.Add('source_audit mutable register path drifted') }
-    if ([string](Get-PropertyValue $sourceAudit 'observed_sha256') -notmatch '^[0-9a-f]{64}$') { $errors.Add('source_audit observed_sha256 must be lowercase full SHA-256 provenance') }
+    if ([string](Get-PropertyValue $sourceAudit 'observed_sha256') -cnotmatch '^[0-9a-f]{64}$') { $errors.Add('source_audit observed_sha256 must be lowercase full SHA-256 provenance') }
     $observedAt = [DateTimeOffset]::MinValue
     if (-not [DateTimeOffset]::TryParse([string](Get-PropertyValue $sourceAudit 'observed_updated_at'), [ref]$observedAt)) { $errors.Add('source_audit observed_updated_at is invalid') }
     if ([string](Get-PropertyValue $sourceAudit 'use') -cne 'discovery-only; never required by the frozen CI gate') { $errors.Add('source_audit use must remain discovery-only and never acceptance authority') }
@@ -305,12 +305,13 @@ function Invoke-R12ContractAudit {
     $schemaVersion = Get-PropertyValue $ContractObject 'schema_version'
     $kind = Get-PropertyValue $ContractObject 'kind'
     $revision = Get-PropertyValue $ContractObject 'revision'
-    if ($schemaVersion -isnot [long] -or [long]$schemaVersion -ne 1 -or $kind -isnot [string] -or [string]$kind -cne 'production-ready-active-diff-contracts' -or $revision -isnot [long] -or [long]$revision -ne 12) {
+    if (($schemaVersion -isnot [int] -and $schemaVersion -isnot [long]) -or [long]$schemaVersion -ne 1 -or $kind -isnot [string] -or [string]$kind -cne 'production-ready-active-diff-contracts' -or ($revision -isnot [int] -and $revision -isnot [long]) -or [long]$revision -ne 12) {
         $errors.Add('contract identity must be production-ready-active-diff-contracts revision 12')
     }
     $statusClasses = Get-PropertyValue $ContractObject 'status_classes'
     [string[]]$currentStatuses = @((Get-PropertyValue $statusClasses 'current') | ForEach-Object { [string]$_ })
     [string[]]$rejectedStatuses = @((Get-PropertyValue $statusClasses 'rejected') | ForEach-Object { [string]$_ })
+    [string[]]$pendingStatuses = @((Get-PropertyValue $statusClasses 'pending') | ForEach-Object { [string]$_ })
     [object[]]$candidates = @((Get-PropertyValue $ContractObject 'candidates'))
     $candidateResults = [System.Collections.Generic.List[object]]::new()
     $gitResults = [System.Collections.Generic.List[object]]::new()
@@ -324,7 +325,7 @@ function Invoke-R12ContractAudit {
         if ([string]::IsNullOrWhiteSpace($slice) -or -not $seenSlices.Add($slice)) { $errors.Add("candidate slice is blank or duplicated: '$slice'") }
         if ($statusClass -cnotin @($currentStatuses + $rejectedStatuses)) { $errors.Add("candidate '$slice' has unknown status class '$statusClass'") }
         if ($branch -notmatch '^work/[A-Za-z0-9._/-]+$') { $errors.Add("candidate '$slice' has invalid branch '$branch'") }
-        if ($base -notmatch '^[0-9a-f]{40}$' -or $head -notmatch '^[0-9a-f]{40}$' -or $base -ceq $head) { $errors.Add("candidate '$slice' must bind distinct full lowercase base/head commits") }
+        if ($base -cnotmatch '^[0-9a-f]{40}$' -or $head -cnotmatch '^[0-9a-f]{40}$' -or $base -ceq $head) { $errors.Add("candidate '$slice' must bind distinct full lowercase base/head commits") }
         if ([string]::IsNullOrWhiteSpace([string](Get-PropertyValue $candidate 'plan_owner'))) { $errors.Add("candidate '$slice' has no plan owner") }
         if ((Get-PropertyValue $candidate 'path_authority_eligible') -isnot [bool] -or -not [bool](Get-PropertyValue $candidate 'path_authority_eligible')) { $errors.Add("candidate '$slice' is not path-authority eligible") }
         if ((Get-PropertyValue $candidate 'release_accepted') -isnot [bool] -or [bool](Get-PropertyValue $candidate 'release_accepted')) { $errors.Add("candidate '$slice' must not claim release acceptance") }
@@ -334,7 +335,7 @@ function Invoke-R12ContractAudit {
         if (($paths -join "`n") -cne ($sortedPaths -join "`n")) { $errors.Add("candidate '$slice' paths are not ordinally sorted") }
         if (@($paths | Sort-Object -Unique).Count -ne $paths.Count) { $errors.Add("candidate '$slice' repeats a path") }
         $pathCount = Get-PropertyValue $candidate 'path_count'
-        if ($pathCount -isnot [long] -or [long]$pathCount -ne $paths.Count) { $errors.Add("candidate '$slice' path_count must be a JSON integer matching paths") }
+        if (($pathCount -isnot [int] -and $pathCount -isnot [long]) -or [long]$pathCount -ne $paths.Count) { $errors.Add("candidate '$slice' path_count must be a JSON integer matching paths") }
         $digest = Get-PathSetSha256 $paths
         if ($digest -cne [string](Get-PropertyValue $candidate 'paths_sha256')) { $errors.Add("candidate '$slice' path digest mismatch") }
         foreach ($pathObject in $pathObjects) {
@@ -375,8 +376,9 @@ function Invoke-R12ContractAudit {
         $slice = [string](Get-PropertyValue $pending 'slice')
         $branch = [string](Get-PropertyValue $pending 'branch')
         $baseAnchor = [string](Get-PropertyValue $pending 'base_anchor')
-        if ([string]::IsNullOrWhiteSpace($slice) -or [string]::IsNullOrWhiteSpace([string](Get-PropertyValue $pending 'status_class'))) { $errors.Add('pending authority entry has blank identity/status') }
-        if ($branch -notmatch '^work/[A-Za-z0-9._/-]+$' -or $baseAnchor -notmatch '^[0-9a-f]{40}$') { $errors.Add("pending '$slice' has invalid branch or base anchor") }
+        $pendingStatus = [string](Get-PropertyValue $pending 'status_class')
+        if ([string]::IsNullOrWhiteSpace($slice) -or $pendingStatus -cnotin $pendingStatuses) { $errors.Add("pending '$slice' has blank or unknown status class '$pendingStatus'") }
+        if ($branch -notmatch '^work/[A-Za-z0-9._/-]+$' -or $baseAnchor -cnotmatch '^[0-9a-f]{40}$') { $errors.Add("pending '$slice' has invalid branch or base anchor") }
         if ((Get-PropertyValue $pending 'release_accepted') -isnot [bool] -or [bool](Get-PropertyValue $pending 'release_accepted')) { $errors.Add("pending '$slice' must not claim release acceptance") }
         [string[]]$exactPaths = @(Get-OptionalStringArray $pending 'exact_paths')
         [string[]]$exactPrefixes = @(Get-OptionalStringArray $pending 'exact_prefixes')
@@ -479,7 +481,7 @@ function Invoke-ContractAudit {
         if ($statusClass -cnotin $allCandidateStatuses) { $errors.Add("candidate '$slice' has unknown status class '$statusClass'") }
         if ($branch -notmatch '^work/[A-Za-z0-9._/-]+$') { $errors.Add("candidate '$slice' has invalid branch '$branch'") }
         $base = [string](Get-PropertyValue $candidate 'base'); $head = [string](Get-PropertyValue $candidate 'head')
-        if ($base -notmatch '^[0-9a-f]{40}$' -or $head -notmatch '^[0-9a-f]{40}$' -or $base -ceq $head) { $errors.Add("candidate '$slice' must have distinct full lowercase base/head commits") }
+        if ($base -cnotmatch '^[0-9a-f]{40}$' -or $head -cnotmatch '^[0-9a-f]{40}$' -or $base -ceq $head) { $errors.Add("candidate '$slice' must have distinct full lowercase base/head commits") }
         [object[]]$ownerRows = @($planAuthority.slices | Where-Object { [string]$_.slice -ceq $owner })
         if ($ownerRows.Count -ne 1) { $errors.Add("candidate '$slice' plan owner '$owner' has $($ownerRows.Count) maker rows, expected 1") }
         elseif ($statusClass -cin $currentStatuses -and [string]$ownerRows[0].branch -cne $branch) { $errors.Add("current candidate '$slice' branch '$branch' differs from plan '$($ownerRows[0].branch)'") }
@@ -534,7 +536,7 @@ function Invoke-ContractAudit {
     foreach ($pending in $pendingContracts) {
         $slice = [string](Get-PropertyValue $pending 'slice'); $owner = [string](Get-PropertyValue $pending 'plan_owner'); $branch = [string](Get-PropertyValue $pending 'branch')
         if ([string](Get-PropertyValue $pending 'status_class') -cnotin $pendingStatuses) { $errors.Add("pending '$slice' has unknown status class") }
-        if ([string](Get-PropertyValue $pending 'base_anchor') -notmatch '^[0-9a-f]{40}$') { $errors.Add("pending '$slice' has invalid base anchor") }
+        if ([string](Get-PropertyValue $pending 'base_anchor') -cnotmatch '^[0-9a-f]{40}$') { $errors.Add("pending '$slice' has invalid base anchor") }
         [object[]]$ownerRows = @($planAuthority.slices | Where-Object { [string]$_.slice -ceq $owner })
         if ($ownerRows.Count -ne 1) { $errors.Add("pending '$slice' owner '$owner' has $($ownerRows.Count) maker rows") }
         elseif ([string]$ownerRows[0].branch -cne $branch) { $errors.Add("pending '$slice' branch '$branch' differs from plan '$($ownerRows[0].branch)'") }
@@ -674,7 +676,7 @@ function Invoke-SelfTest {
     Assert-SelfTest ($r12WrongIdentityResult.verdict -eq 'FAIL' -and @($r12WrongIdentityResult.errors | Where-Object { $_ -match 'contract identity' }).Count -eq 1) 'R12 numeric-string identity fields were accepted'
     $r12ForbiddenPrefix = [pscustomobject][ordered]@{
         schema_version=[long]1; kind='production-ready-active-diff-contracts'; revision=[long]12
-        status_classes=[pscustomobject]@{current=@();rejected=@()}; candidates=@(); source_audit=[pscustomobject]@{observed_sha256=('a'*64)}
+        status_classes=[pscustomobject]@{current=@();rejected=@();pending=@('current-maker-in-progress')}; candidates=@(); source_audit=[pscustomobject]@{observed_sha256=('a'*64)}
         pending_namespaces=@([pscustomobject][ordered]@{
             slice='SELFTEST';status_class='current-maker-in-progress';branch='work/selftest';base_anchor=('1'*40);release_accepted=$false
             exact_prefixes=@('src/generated/**');forbidden_final_paths=@('src/generated/secret.go')
@@ -682,6 +684,17 @@ function Invoke-SelfTest {
     }
     $r12ForbiddenPrefixResult = Invoke-R12ContractAudit $r12ForbiddenPrefix $hash $hash $hash $hash
     Assert-SelfTest ($r12ForbiddenPrefixResult.verdict -eq 'FAIL' -and @($r12ForbiddenPrefixResult.errors | Where-Object { $_ -match 'both allows and forbids' }).Count -eq 1) 'R12 prefix-covered forbidden_final_paths entry was accepted'
+    $r12ValidPending = Copy-JsonObject $r12ForbiddenPrefix
+    $r12ValidPending.schema_version = [int]1
+    $r12ValidPending.revision = [int]12
+    $r12ValidPending.pending_namespaces[0].forbidden_final_paths = @()
+    $r12ValidPendingResult = Invoke-R12ContractAudit $r12ValidPending $hash $hash $hash $hash
+    Assert-SelfTest ($r12ValidPendingResult.verdict -eq 'PASS') ("R12 valid Int32 identity/pending status was rejected: " + ($r12ValidPendingResult.errors -join '; '))
+    $r12UnknownPending = Copy-JsonObject $r12ValidPending
+    $r12UnknownPending.pending_namespaces[0].status_class = 'arbitrary-pending-status'
+    $r12UnknownPendingResult = Invoke-R12ContractAudit $r12UnknownPending $hash $hash $hash $hash
+    Assert-SelfTest ($r12UnknownPendingResult.verdict -eq 'FAIL' -and @($r12UnknownPendingResult.errors | Where-Object { $_ -match 'unknown status class' }).Count -eq 1) 'R12 arbitrary pending status class was accepted'
+    Assert-SelfTest (('A' * 40) -cnotmatch '^[0-9a-f]{40}$') 'uppercase Git identity passed the canonical lowercase regex'
     $authority = Get-PlanAuthority $plan
     $pending = $contract.pending_namespaces[0]
     [object[]]$pendingDeclarations = @($authority.declarations | Where-Object owner -CEQ 'A')

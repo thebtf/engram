@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-07-13T10:57:12.0828263Z",
+  "captured_at": "2026-07-13T11:46:26.8911930Z",
   "batch": "R12/B17 release-governance bootstrap and CI truth repair",
   "verdict": "PASS",
   "red": {
@@ -34,9 +34,9 @@
     },
     "authority_simulation": {
       "verdict": "PASS",
-      "scenarios": 22,
+      "scenarios": 24,
       "expected_pass": 4,
-      "expected_fail": 18,
+      "expected_fail": 20,
       "temp_cleanup_verified": true,
       "two_clean_runs_after_final_revision": true,
       "artifacts": [
@@ -84,6 +84,12 @@
     "plan_governance_evidence_is_owner_maintenance_only": true,
     "unrelated_pr_events_cannot_cancel_approved_maintenance_run": true,
     "load_bearing_json_types_reject_scalar_coercion": true,
+    "load_bearing_json_integers_accept_only_int32_or_int64": true,
+    "canonical_lowercase_git_and_sha256_inputs_runtime_enforced": true,
+    "pending_status_classes_are_closed_world": true,
+    "null_optional_prefixes_are_filtered": true,
+    "canonical_paths_reject_double_slash_aliases": true,
+    "root_yaml_comments_cannot_hide_later_triggers": true,
     "successor_paths_unique_independent_of_status": true,
     "successor_rotation_window_enforced": true,
     "historical_validator_blobs_reanchored_to_git": true,
@@ -100,19 +106,23 @@
     "training_memory_substituted": false,
     "security_review": ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md",
     "gedankenexperiment": "GE-001 found and closed two HIGH recurring-epoch deadlocks; R3 review closed type, duplicate-path, rotation-window, and action-allowlist edges; journal remains local and ignored",
-    "external_code_review": "CodeRabbit, Codex, and Gemini findings classified at PR #405 head 1dc6b91c; valid lockout, injection, type, protected-path, concurrency, forbidden-prefix, StrictMode, and YAML-parser findings repaired; replacement-base and uppercase-SHA proposals rejected with repository evidence",
-    "known_integration_blocker": "macOS base test TestCliWorker_ProductionReadinessStructuredArgsAndCWD compares /var with canonical /private/var; separate integration-fix required"
+    "external_code_review": "CodeRabbit, Codex, and Gemini findings classified at PR #405 heads 1dc6b91c and 22ec8476; valid lockout, injection, type, protected-path, concurrency, forbidden-prefix, StrictMode, null-prefix, pending-status, root-comment, double-slash, successor-header, and case-sensitive canonical-identity findings repaired; the earlier uppercase-SHA rejection was explicitly reversed after PowerShell runtime proof; replacement-base and workflow-language widening proposals remain rejected with repository evidence",
+    "known_integration_blocker": "macOS base test TestCliWorker_ProductionReadinessStructuredArgsAndCWD compares /var with canonical /private/var; separate PR #406 uses os.SameFile and awaits exact-head remote macOS acceptance"
   },
   "sha256": {
     ".github/workflows/test.yml": "ea5556c91cdeedcd683063deeb1e3b398fbb433c12892caf4f67859698400bfa",
     ".github/workflows/authority-guard.yml": "5a5483222561552345e904188f4e9e27c58b34f15bf3c80f01400c023601550a",
-    "scripts/production-gates/assert-plan-path-ownership.ps1": "5a244f83a59f7c4b8c4f3926d378fc135faebe7b6c63febf13b770d19d66d36d",
-    "scripts/production-gates/assert-active-candidate-path-authority.ps1": "fc503d7d13a4f48e321629468b16c1e351e613bf49e7a862b04c9e1be99b5526",
-    "scripts/production-gates/assert-pr-authority-guard.ps1": "b90326e38025caef3ae418b15675d98cc4b4f15c98694ef456de8126e70b4bc1",
-    "scripts/production-gates/assert-pr-authority-maintenance.ps1": "4e14969c1b8e31b26ce25f947c197943b4710a0e51a4869eaed246830ca8dd05",
-    ".agent/specs/release-gates-r12/evidence/release-gates/test-r12-authority-maintenance.ps1": "6735cbe07fea562404d32e77587da8922d7e2edcf3957070a5d438a96562afee",
-    ".agent/specs/release-gates-r12/evidence/release-gates/maintenance-simulation.json": "f2254011eb122efbc8839f73c7e29759accff828b95b22255f1e56f2802d9f60",
-    ".agent/specs/release-gates-r12/evidence/release-gates/windows-harness.json": "aacd202718edcd3ba97d19f2c47376bd80be7cf75fb437d07dd16f626b215ca6",
-    ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md": "8663d7ee623410b2e3c6991716e231f8a82f44acc89eded9f74b457529f1a9d6"
+    ".agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json": "374351fc6bfda614f328daa7560f3708bd51367dc8e09d26537502890749c528",
+    ".agent/specs/release-gates-r12/evidence/plan-governance/gates-summary.json": "c405d36029dc3332f568fa4fd98cbb422c747e2d72d172d06d9b2e48948bf5cb",
+    ".agent/specs/release-gates-r12/evidence/plan-governance/test-r12-plan-governance.ps1": "41abdddfa28bb0d307240ec0557dcfc0ddd0b3f6e8efc944a3f4d80cbc50bf82",
+    ".agent/specs/release-gates-r12/evidence/plan-governance/verification-summary.json": "e69afe5a88832cc83bbb977d51b2223be36ec866b6ec8b5f7488930d07b40329",
+    "scripts/production-gates/assert-plan-path-ownership.ps1": "8387fa5628791f8e7f3c4c82a0b1754b9b3cae7a344053abd0aa479b7258f923",
+    "scripts/production-gates/assert-active-candidate-path-authority.ps1": "6ee4f31d84513331e5272832239c5d0381b249071cf34b58d9842287b4365aaa",
+    "scripts/production-gates/assert-pr-authority-guard.ps1": "bf83f407496851622a6786c5ac16291153076544452f35750626adf55aa8aae2",
+    "scripts/production-gates/assert-pr-authority-maintenance.ps1": "0e20a542fc9ea78e42b5baf98cb2b04fe2fe81788dc57b726b9c39648f2e642b",
+    ".agent/specs/release-gates-r12/evidence/release-gates/test-r12-authority-maintenance.ps1": "ab704d4f7917aab09012283e518eea3afb5732bfb234a3a69d0c78f68fee7adc",
+    ".agent/specs/release-gates-r12/evidence/release-gates/maintenance-simulation.json": "a04f9f8851ccef88a5a95b8f6dc44db08f564ebba4e8492a914670312fabafe5",
+    ".agent/specs/release-gates-r12/evidence/release-gates/windows-harness.json": "ad17e91a5e1b971a2ff67b87f9fcfa470f61fcc20dbe80faecfb7748a63f94d5",
+    ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md": "c67103a54e44cebf082e748b893c48a3f2774ff8137606bf3232fa6218ae4782"
   }
 }

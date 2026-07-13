@@ -640,7 +640,7 @@ $contracts = Read-Json $ActiveContracts
 $envelope = Read-Json $PathEnvelope
 $fixedPoint = Read-Json $FixedPointProof
 $snapshot = Read-Json $AuthoritySnapshot
-$trustedAuthorityContractsSha256 = '6665a80d30c2b45319b8c8adce05430c6f6e3913ded92313c4ebbb381f11c9f6'
+$trustedAuthorityContractsSha256 = '9b389f87e7fbab224aacdf9dbd238e73474ccf76e87ffc9b20286c66e8c47c39'
 $immutableContractsPath = '.agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json'
 Assert-True ((Get-CanonicalTextSha256 $ActiveContracts) -ceq $trustedAuthorityContractsSha256) 'release authority manifest drifted from trusted closed-world digest'
 Assert-True (Test-StrictAuthoritySchema $contracts $contracts) 'release authority schema is incomplete'

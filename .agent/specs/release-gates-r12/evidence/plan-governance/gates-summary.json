@@ -29,7 +29,7 @@
     "master_plan": "5103adaced04e624f2e1fc9d5d69e7efdccb23830aecfac9010b2b66b484427e",
     "scope_map": "832ffd41e4b70280a335ae4a3f82cc5486e0ded6b1156f186ec3d2c4bd62886d",
     "ownership_state": "6233b92dbf3472c44b42af105e2b503b398e40f91008e90f97caa816f8a98c12",
-    "active_contracts": "6665a80d30c2b45319b8c8adce05430c6f6e3913ded92313c4ebbb381f11c9f6"
+    "active_contracts": "9b389f87e7fbab224aacdf9dbd238e73474ccf76e87ffc9b20286c66e8c47c39"
   },
   "fixed_point_proof_sha256": "bb5826b71a6d4fc5b30894825423b001a399c88b1a0b263e36552a7ee828ee4b",
   "legacy_ledger_red": {

@@ -105,7 +105,7 @@ function Assert-JsonBoolean {
 
 function Assert-JsonInteger {
     param([Parameter(Mandatory)][AllowNull()]$Value, [Parameter(Mandatory)][long]$Expected, [Parameter(Mandatory)][string]$Context)
-    if ($Value -isnot [long] -or [long]$Value -ne $Expected) { throw "$Context must be the JSON integer $Expected" }
+    if (($Value -isnot [int] -and $Value -isnot [long]) -or [long]$Value -ne $Expected) { throw "$Context must be the JSON integer $Expected" }
 }
 
 function Assert-JsonString {
@@ -143,7 +143,7 @@ function Get-SemanticDigest {
 
 function Assert-CanonicalPath {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Context)
-    if ([string]::IsNullOrWhiteSpace($Path) -or $Path.Contains('\') -or $Path.StartsWith('/') -or $Path.EndsWith('/') -or $Path -match '(^|/)(\.|\.\.)(/|$)') { throw "$Context contains non-canonical path '$Path'" }
+    if ([string]::IsNullOrWhiteSpace($Path) -or $Path.Contains('\') -or $Path.Contains('//') -or $Path.StartsWith('/') -or $Path.EndsWith('/') -or $Path -match '(^|/)(\.|\.\.)(/|$)') { throw "$Context contains non-canonical path '$Path'" }
 }
 
 function Test-ProtectedPath {
@@ -179,7 +179,7 @@ function Get-DiffEntries {
         $path = [string]$parts[1]; Assert-CanonicalPath $path 'maintenance diff'
         if (-not (Test-ProtectedPath $path)) { throw "maintenance diff path '$path' is outside the protected control-plane namespaces" }
         $headEntry = Invoke-Git $WorkingTree @('-c','core.quotepath=false','ls-tree','--full-tree',$Head,'--',":(literal)$path")
-        if ($headEntry.output.Count -ne 1 -or [string]$headEntry.output[0] -notmatch '^(?<mode>100644|100755) blob (?<object>[0-9a-f]{40})\t(?<path>.+)$') { throw "maintenance path '$path' is not one regular head blob" }
+        if ($headEntry.output.Count -ne 1 -or [string]$headEntry.output[0] -cnotmatch '^(?<mode>100644|100755) blob (?<object>[0-9a-f]{40})\t(?<path>.+)$') { throw "maintenance path '$path' is not one regular head blob" }
         if ([string]$Matches.path -cne $path) { throw "maintenance path '$path' resolved as '$([string]$Matches.path)'" }
         $actualType = Invoke-Git $WorkingTree @('cat-file','-t',[string]$Matches.object) -AllowFailure
         if ($actualType.exit_code -ne 0 -or $actualType.output.Count -ne 1 -or [string]$actualType.output[0] -cne 'blob') { throw "maintenance path '$path' head object is unavailable or not a blob" }
@@ -220,7 +220,7 @@ function Assert-ValidatorBlobArray {
     foreach ($entry in $Entries) {
         Assert-ObjectShape $entry @('path','git_blob') "$Context entry"
         Assert-CanonicalPath ([string]$entry.path) $Context
-        if ([string]$entry.git_blob -notmatch '^[0-9a-f]{40}$') { throw "$Context contains invalid git blob '$([string]$entry.git_blob)'" }
+        if ([string]$entry.git_blob -cnotmatch '^[0-9a-f]{40}$') { throw "$Context contains invalid git blob '$([string]$entry.git_blob)'" }
         if (-not $seen.Add([string]$entry.path)) { throw "$Context contains duplicate path '$([string]$entry.path)'" }
     }
 }
@@ -234,7 +234,7 @@ function Assert-ProtectedBlobArray {
         Assert-CanonicalPath ([string]$entry.path) $Context
         if (-not (Test-ProtectedPath ([string]$entry.path))) { throw "$Context contains unprotected path '$([string]$entry.path)'" }
         if ([string]$entry.mode -cnotin @('100644','100755')) { throw "$Context contains invalid mode '$([string]$entry.mode)'" }
-        if ([string]$entry.git_blob -notmatch '^[0-9a-f]{40}$') { throw "$Context contains invalid git blob '$([string]$entry.git_blob)'" }
+        if ([string]$entry.git_blob -cnotmatch '^[0-9a-f]{40}$') { throw "$Context contains invalid git blob '$([string]$entry.git_blob)'" }
         if (-not $seen.Add([string]$entry.path)) { throw "$Context contains duplicate path '$([string]$entry.path)'" }
     }
 }
@@ -243,7 +243,7 @@ function Get-ValidatorBlobs {
     param([Parameter(Mandatory)][string]$WorkingTree, [Parameter(Mandatory)][string]$Commit, [Parameter(Mandatory)][string[]]$Paths)
     $result = foreach ($path in $Paths) {
         $blob = [string](Invoke-Git $WorkingTree @('rev-parse',"$Commit`:$path")).output[-1]
-        if ($blob -notmatch '^[0-9a-f]{40}$') { throw "validator '$path' is not a regular blob at '$Commit'" }
+        if ($blob -cnotmatch '^[0-9a-f]{40}$') { throw "validator '$path' is not a regular blob at '$Commit'" }
         [pscustomobject][ordered]@{ path=$path; git_blob=$blob }
     }
     return @($result)
@@ -259,7 +259,7 @@ function Get-ProtectedBlobsAtCommit {
     $result = foreach ($change in @($Changes | Where-Object { [string]$_.path -cne $ExcludedPath })) {
         $path = [string]$change.path
         $tree = Invoke-Git $WorkingTree @('-c','core.quotepath=false','ls-tree','--full-tree',$Commit,'--',":(literal)$path")
-        if ($tree.output.Count -ne 1 -or [string]$tree.output[0] -notmatch '^(?<mode>100644|100755) blob (?<object>[0-9a-f]{40})\t(?<path>.+)$') { throw "historical protected path '$path' is not one regular blob at '$Commit'" }
+        if ($tree.output.Count -ne 1 -or [string]$tree.output[0] -cnotmatch '^(?<mode>100644|100755) blob (?<object>[0-9a-f]{40})\t(?<path>.+)$') { throw "historical protected path '$path' is not one regular blob at '$Commit'" }
         if ([string]$Matches.path -cne $path) { throw "historical protected path '$path' resolved as '$([string]$Matches.path)'" }
         [pscustomobject][ordered]@{ status=[string]$change.status; path=$path; mode=[string]$Matches.mode; git_blob=[string]$Matches.object }
     }
@@ -294,7 +294,7 @@ function Get-RootYamlBlock {
     $start = $headers[0]
     $body = [System.Collections.Generic.List[string]]::new()
     for ($i=$start+1; $i -lt $lines.Count; $i++) {
-        if (-not [string]::IsNullOrWhiteSpace($lines[$i]) -and $lines[$i] -notmatch '^\s') { break }
+        if (-not [string]::IsNullOrWhiteSpace($lines[$i]) -and $lines[$i] -notmatch '^\s' -and $lines[$i] -notmatch '^\s*#') { break }
         $body.Add($lines[$i])
     }
     return ($body -join "`n")
@@ -336,7 +336,7 @@ function Assert-ImmutableWorkflowActions {
     foreach ($line in [regex]::Split($Text, '\r?\n')) {
         if ($line -notmatch '^\s*(?:-\s*)?["'']?uses["'']?\s*:\s*(?<action>[^#]+?)(?:\s+#.*)?$') { continue }
         $action = ([string]$Matches.action).Trim().Trim('"', "'")
-        if ($action -notmatch '^[^\s@]+@[0-9a-f]{40}$') { throw "$Context action is not pinned to a full immutable SHA: $action" }
+        if ($action -cnotmatch '^[^\s@]+@[0-9a-f]{40}$') { throw "$Context action is not pinned to a full immutable SHA: $action" }
         if ($action -cnotin $AllowedActions) { throw "$Context action is pinned but outside the audited allowlist: $action" }
     }
 }
@@ -382,7 +382,7 @@ function Assert-HeadWorkflowSafety {
     $authorityOn = Get-RootYamlBlock $authority 'on' 'candidate authority workflow'
     if ([regex]::Matches($authorityOn, '(?m)^\s{2}pull_request_target:\s*$').Count -ne 1) { throw 'candidate authority workflow must contain exactly one pull_request_target trigger' }
     Assert-ReadOnlyPermissionBlocks $authority 'candidate authority workflow' 1
-    $successorMatch = [regex]::Match($test, '(?ms)^  authority-successor-selftest:\r?\n(?<body>.*?)(?=^  [A-Za-z0-9_-]+:|\z)')
+    $successorMatch = [regex]::Match($test, '(?ms)^  authority-successor-selftest:[ \t]*(?:#[^\r\n]*)?\r?\n(?<body>.*?)(?=^  [A-Za-z0-9_-]+:[ \t]*(?:#[^\r\n]*)?\r?\n|\z)')
     if (-not $successorMatch.Success) { throw 'candidate test workflow lacks the unprivileged authority-successor-selftest job' }
     $successor = $successorMatch.Groups['body'].Value
     foreach ($required in @('if: github.event_name == ''pull_request''', 'contents: read', 'persist-credentials: false', 'test-r12-authority-maintenance.ps1', 'r12-authority-maintenance.json')) {
@@ -436,7 +436,7 @@ function Assert-HistoricalTransitionAnchor {
     Assert-ObjectShape $manifest @('schema_version','reason','created_at','expires_at','event_base_sha','current_validator_blobs','successor_validator_blobs','protected_head_blobs_except_manifest_container','exact_changes','approval_epoch','successor_epoch') 'historical transition_manifest'
     Assert-JsonInteger $manifest.schema_version 2 'historical transition_manifest.schema_version'
     Assert-JsonString $manifest.reason 'historical transition_manifest.reason'
-    if ([string]$manifest.event_base_sha -notmatch '^[0-9a-f]{40}$' -or [string]$manifest.approval_epoch -notmatch '^r12-[0-9]{4}$' -or [string]$manifest.successor_epoch -notmatch '^r12-[0-9]{4}$') { throw 'historical transition manifest identity is malformed' }
+    if ([string]$manifest.event_base_sha -cnotmatch '^[0-9a-f]{40}$' -or [string]$manifest.approval_epoch -notmatch '^r12-[0-9]{4}$' -or [string]$manifest.successor_epoch -notmatch '^r12-[0-9]{4}$') { throw 'historical transition manifest identity is malformed' }
     if ([string]::IsNullOrWhiteSpace([string]$manifest.reason) -or ([string]$manifest.reason).Length -gt 512 -or [string]$manifest.reason -match '[\x00-\x08\x0B\x0C\x0E-\x1F]') { throw 'historical transition manifest reason is invalid' }
     $created = ConvertTo-Rfc3339 $manifest.created_at 'historical transition_manifest.created_at'
     $expires = ConvertTo-Rfc3339 $manifest.expires_at 'historical transition_manifest.expires_at'
@@ -503,7 +503,7 @@ function Assert-BaseMaintenanceAuthority {
     $previousEpochNumber = $null
     foreach ($record in $consumed) {
         Assert-ObjectShape $record @('epoch','state','consumed_at','event_base_sha','manifest_sha256','successor_epoch') 'base consumed epoch'
-        if ([string]$record.epoch -notmatch '^r12-[0-9]{4}$' -or [string]$record.state -cne 'consumed' -or [string]$record.event_base_sha -notmatch '^[0-9a-f]{40}$' -or [string]$record.manifest_sha256 -notmatch '^[0-9a-f]{64}$' -or [string]$record.successor_epoch -notmatch '^r12-[0-9]{4}$') { throw 'base consumed epoch record is malformed' }
+        if ([string]$record.epoch -notmatch '^r12-[0-9]{4}$' -or [string]$record.state -cne 'consumed' -or [string]$record.event_base_sha -cnotmatch '^[0-9a-f]{40}$' -or [string]$record.manifest_sha256 -cnotmatch '^[0-9a-f]{64}$' -or [string]$record.successor_epoch -notmatch '^r12-[0-9]{4}$') { throw 'base consumed epoch record is malformed' }
         [void](ConvertTo-Rfc3339 $record.consumed_at 'base consumed epoch consumed_at')
         if (-not $seenEpochs.Add([string]$record.epoch)) { throw "base consumed epoch '$([string]$record.epoch)' is duplicated" }
         $epochNumber = [int]([regex]::Match([string]$record.epoch, '^r12-([0-9]{4})$').Groups[1].Value)
@@ -655,6 +655,7 @@ $artifactObject = $null
 $exitCode = 1
 $trustedRoot = $null
 try {
+    if ($BaseSha -cnotmatch '^[0-9a-f]{40}$' -or $ExpectedValidatorGitBlob -cnotmatch '^[0-9a-f]{40}$' -or ($PSCmdlet.ParameterSetName -eq 'Transition' -and $HeadSha -cnotmatch '^[0-9a-f]{40}$')) { throw 'base, head, and validator Git identities must be canonical lowercase full SHAs' }
     if ($ValidateBaseOnly) {
         $repo = [System.IO.Path]::GetFullPath($Repository)
         if (-not (Test-Path -LiteralPath $repo -PathType Container)) { throw "repository does not exist: $repo" }
@@ -765,7 +766,7 @@ try {
     $ancestor = Invoke-Git $repo @('merge-base','--is-ancestor',$BaseSha,$HeadSha) -AllowFailure
     if ($ancestor.exit_code -ne 0) { throw 'maintenance PR head is not based on the exact current default-branch base' }
     $merge = Invoke-Git $repo @('merge-tree','--write-tree',$BaseSha,$HeadSha) -AllowFailure
-    if ($merge.exit_code -ne 0 -or [string]$merge.output[-1] -notmatch '^[0-9a-f]{40}$') { throw "maintenance merge-tree failed or conflicted: $($merge.output -join ' ')" }
+    if ($merge.exit_code -ne 0 -or [string]$merge.output[-1] -cnotmatch '^[0-9a-f]{40}$') { throw "maintenance merge-tree failed or conflicted: $($merge.output -join ' ')" }
     $mergeTree = [string]$merge.output[-1]
     $headTree = [string](Invoke-Git $repo @('rev-parse',"$HeadSha`^{tree}")).output[-1]
     if ($mergeTree -cne $headTree) { throw "maintenance merge-tree '$mergeTree' differs from exact head tree '$headTree'" }
@@ -870,7 +871,7 @@ try {
     [object[]]$successorValidatorBlobs = @(Get-ValidatorBlobs $repo $HeadSha $validatorPaths)
     $headFacts = Assert-HeadMaintenanceTransition -BaseFacts $baseFacts -HeadContract $headContract -DiffEntries $diffEntries -CurrentValidatorBlobs $currentValidatorBlobs -SuccessorValidatorBlobs $successorValidatorBlobs -EventBaseSha $BaseSha -Now ([DateTimeOffset]::UtcNow)
     $manifestContainerBlob = [string](Invoke-Git $repo @('rev-parse',"$HeadSha`:$contractPath")).output[-1]
-    if ($manifestContainerBlob -notmatch '^[0-9a-f]{40}$') { throw 'head manifest container is not one immutable Git blob' }
+    if ($manifestContainerBlob -cnotmatch '^[0-9a-f]{40}$') { throw 'head manifest container is not one immutable Git blob' }
     if ([string]$baseContract.external_enforcement.required_status_context -cne 'authority-guard' -or [int64]$baseContract.external_enforcement.required_status_integration_id -ne 15368 -or [string]$baseContract.external_enforcement.required_status_app_slug -cne 'github-actions') { throw 'trusted required-status identity drifted' }
 
     $finishedAt = [DateTimeOffset]::UtcNow

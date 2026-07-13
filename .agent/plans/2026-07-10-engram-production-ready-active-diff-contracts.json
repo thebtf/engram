@@ -360,6 +360,7 @@
     ],
     "pending": [
       "current-candidate-pending-checker",
+      "current-maker-frozen-checker-pending",
       "current-maker-in-progress",
       "current-rework-ready"
     ]

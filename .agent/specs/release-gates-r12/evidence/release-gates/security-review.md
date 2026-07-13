@@ -117,20 +117,34 @@ before acceptance.
 ## Independent external review
 
 CodeRabbit, Codex, and Gemini reviewed PR #405 at the original `1dc6b91c`
-head. Valid findings closed in this revision are: bootstrap-only ordinary-PR
-lockout after epoch one, privileged `run:` injection, numeric-string contract
-identity, unprotected plan-governance evidence, concurrency cancellation,
-prefix-covered forbidden paths, StrictMode property access, and YAML comment
-handling. The stale mutation count is regenerated below.
+head and the `22ec8476` repair head. Valid findings closed across the two
+review rounds are: bootstrap-only ordinary-PR lockout after epoch one,
+privileged `run:` injection, numeric-string contract identity, unprotected
+plan-governance evidence, concurrency cancellation, prefix-covered forbidden
+paths, StrictMode property access, YAML comment handling, case-insensitive
+PowerShell SHA validation, nullable optional-prefix arrays, open-world pending
+status values, root-comment trigger hiding, non-canonical double-slash paths,
+and commented successor-job headers. Load-bearing JSON integers now accept
+only the integral `Int32`/`Int64` runtime types and still reject numeric strings.
 
-Two proposed changes were rejected with repository evidence rather than
-silently applied. Lowercasing SHA inputs would weaken the explicit
-`^[0-9a-f]{40}$` canonical-input contract. Equating replacement predecessor
-identity with `required_successor_base_sha` would invalidate the live clean
-replacement model: a rejected head is deliberately not the clean successor
-base, while a root-selected predecessor may be an ancestor rather than the
-same commit. `rework` keeps exact-base semantics; `replacement` keeps distinct
-history and successor-base identities.
+The earlier review response that rejected explicit runtime lowercase checking
+was wrong and is reversed here. PowerShell `-match` and `ValidatePattern` are
+case-insensitive by default, so the textual `^[0-9a-f]{40}$` pattern alone did
+not enforce the canonical-input contract. Every load-bearing Git/SHA identity
+path now uses a case-sensitive runtime check (`-cnotmatch`), backed by an
+uppercase hostile self-test. This correction is evidence-led, not a silent
+change of rationale.
+
+The replacement-predecessor proposal remains rejected with repository
+evidence. Equating replacement predecessor identity with
+`required_successor_base_sha` would invalidate the live clean replacement
+model: a rejected head is deliberately not the clean successor base, while a
+root-selected predecessor may be an ancestor rather than the same commit.
+`rework` keeps exact-base semantics; `replacement` keeps distinct history and
+successor-base identities. The exact workflow-string checks also remain
+fail-closed: loosening them to substring-compatible alternatives would turn a
+review convenience into a larger accepted workflow language without a
+corresponding semantic parser or hostile proof.
 
 ## Dynamic validation and hostile cases
 
@@ -140,17 +154,20 @@ valid successor, and requiring `transition_manifest=null` permanently froze the
 second epoch. The design was changed from a bootstrap-only fixed point to an
 inductive history whose last manifest is revalidated against Git.
 
-After the external-review repair, two consecutive clean local-Git runs both
-passed 22 scenarios: four expected accepts and eighteen expected rejects. The
+After the final external-review repair, two consecutive clean local-Git runs
+both passed 24 scenarios: four expected accepts and twenty expected rejects. The
 accepted chain reaches `r12-0003` and proves an ordinary PR still works after
 epoch one. Rejected cases cover ordinary protected and plan-governance evidence
 mutation, type change, wrong actor, manifest self-reference, wrong protected
 blob, top-level contract rewrite, privileged checkout and command injection,
 secret use, unpinned and unapproved pinned actions, write permission,
 privileged test trigger, numeric-string type confusion, duplicate successor
-path, insufficient rotation window, and stale replay. The run also self-tests
-exact/prefix `forbidden_final_paths` and executes the trusted parsers against
-root-key and permission comments. Both runs verify temporary-fixture cleanup:
+path, insufficient rotation window, stale replay, a root YAML comment hiding a
+later privileged trigger, and a double-slash path alias. The run also
+self-tests exact/prefix `forbidden_final_paths`, closed-world pending status
+membership, null optional-prefix handling, integral runtime types, uppercase
+identity rejection, and trusted parsing of root-key, permission, and successor
+job comments. Both runs verify temporary-fixture cleanup:
 
 - `maintenance-simulation.json`
 - `windows-harness.json`

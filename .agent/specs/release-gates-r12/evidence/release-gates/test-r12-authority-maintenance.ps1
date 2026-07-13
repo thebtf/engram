@@ -357,6 +357,7 @@ try {
             param($match)
             return $match.Value + "`n" + $match.Groups['indent'].Value + '# parser fixture permission comment'
         })
+        $workflowText = [regex]::Replace($workflowText, '(?m)^  authority-successor-selftest:\s*$', '  authority-successor-selftest: # parser fixture job comment', 1)
         Write-Utf8NoBom $workflowFile $workflowText
     }
     Write-Utf8NoBom (Join-Path $fixture 'internal/worker/handlers_hooks_crystallization_integration_test.go') "package worker`n`n// base fixture`n"
@@ -487,11 +488,27 @@ try {
     }
     $results.Add((Invoke-Scenario 'maintenance-test-target-trigger-rejected' $maintenanceValidator $audit $remote $baseSha 213 $privilegedTriggerHead.head $maintenanceBlob $false $output -Maintenance -ApprovalEpoch $privilegedTriggerHead.approval_epoch -ExpectedErrorPattern 'may not use pull_request_target'))
 
+    $commentSeparatedTriggerHead = New-MaintenanceHead $fixture $baseSha 221 'maintenance-test-comment-separated-target-trigger' -FileMutation {
+        param($repository)
+        $path = Join-Path $repository '.github/workflows/test.yml'
+        $text = [System.IO.File]::ReadAllText($path)
+        $mutated = [regex]::Replace($text, '(?m)^(  pull_request:\s*(?:#.*)?\r?\n)', "`$1# hostile root comment separator`n  pull_request_target:`n", 1)
+        if ($mutated -ceq $text) { throw 'fixture did not insert the comment-separated pull_request_target trigger' }
+        Write-Utf8NoBom $path $mutated
+    }
+    $results.Add((Invoke-Scenario 'maintenance-test-comment-separated-target-trigger-rejected' $maintenanceValidator $audit $remote $baseSha 221 $commentSeparatedTriggerHead.head $maintenanceBlob $false $output -Maintenance -ApprovalEpoch $commentSeparatedTriggerHead.approval_epoch -ExpectedErrorPattern 'may not use pull_request_target'))
+
     $wrongTypeHead = New-MaintenanceHead $fixture $baseSha 214 'maintenance-wrong-json-type' {
         param($manifest)
         $manifest.schema_version = '2'
     }
     $results.Add((Invoke-Scenario 'maintenance-json-numeric-string-rejected' $maintenanceValidator $audit $remote $baseSha 214 $wrongTypeHead.head $maintenanceBlob $false $output -Maintenance -ApprovalEpoch $wrongTypeHead.approval_epoch -ExpectedErrorPattern 'must be the JSON integer 2'))
+
+    $doubleSlashPathHead = New-MaintenanceHead $fixture $baseSha 222 'maintenance-double-slash-path' {
+        param($manifest)
+        $manifest.exact_changes[0].path = ([string]$manifest.exact_changes[0].path).Replace('/', '//')
+    }
+    $results.Add((Invoke-Scenario 'maintenance-double-slash-path-rejected' $maintenanceValidator $audit $remote $baseSha 222 $doubleSlashPathHead.head $maintenanceBlob $false $output -Maintenance -ApprovalEpoch $doubleSlashPathHead.approval_epoch -ExpectedErrorPattern 'non-canonical path'))
 
     $duplicateSuccessorPathHead = New-MaintenanceHead $fixture $baseSha 215 'maintenance-duplicate-successor-path' -ContractMutation {
         param($contract)
@@ -543,7 +560,7 @@ finally {
 $finishedAt = [DateTimeOffset]::UtcNow
 $expectedPass = @($results | Where-Object expected -CEQ 'PASS').Count
 $expectedFail = @($results | Where-Object expected -CEQ 'FAIL').Count
-    $verdict = if ($null -eq $errorText -and $results.Count -eq 22 -and $expectedPass -eq 4 -and $expectedFail -eq 18 -and $cleanupVerified) { 'PASS' } else { 'FAIL' }
+    $verdict = if ($null -eq $errorText -and $results.Count -eq 24 -and $expectedPass -eq 4 -and $expectedFail -eq 20 -and $cleanupVerified) { 'PASS' } else { 'FAIL' }
 $summary = [ordered]@{
     schema_version = 1
     suite = 'R12 trusted-base authority and self-reference-free maintenance simulation'

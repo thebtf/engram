@@ -2,9 +2,9 @@
   "schema_version": 1,
   "suite": "R12 trusted-base authority and self-reference-free maintenance simulation",
   "verdict": "PASS",
-  "started_at": "2026-07-13T10:46:44.6125728+00:00",
-  "finished_at": "2026-07-13T10:52:53.4254259+00:00",
-  "duration_seconds": 368.813,
+  "started_at": "2026-07-13T11:36:01.6546447+00:00",
+  "finished_at": "2026-07-13T11:42:32.1398742+00:00",
+  "duration_seconds": 390.485,
   "execution_contract": {
     "head_treated_as_data_only": true,
     "head_executed": false,
@@ -16,9 +16,9 @@
     "workflow_parser_comments_exercised": true
   },
   "counts": {
-    "scenarios": 22,
+    "scenarios": 24,
     "expected_pass": 4,
-    "expected_fail": 18
+    "expected_fail": 20
   },
   "scenarios": [
     {
@@ -162,12 +162,30 @@
       ]
     },
     {
+      "name": "maintenance-test-comment-separated-target-trigger-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "candidate test workflow may not use pull_request_target"
+      ]
+    },
+    {
       "name": "maintenance-json-numeric-string-rejected",
       "expected": "FAIL",
       "observed": "FAIL",
       "exit_code": 1,
       "errors": [
         "head transition_manifest.schema_version must be the JSON integer 2"
+      ]
+    },
+    {
+      "name": "maintenance-double-slash-path-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "head transition_manifest.exact_changes contains non-canonical path '.agent//plans//2026-07-10-engram-production-ready-active-diff-contracts.json'"
       ]
     },
     {
@@ -208,7 +226,7 @@
       "observed": "FAIL",
       "exit_code": 1,
       "errors": [
-        "fetched default-branch base differs from the event base; maintenance PR is stale: expected=3b868395a46518fea87489957345da93f22d10d5 observed=28903c63534bc4130578d6eae6956f8875e03533"
+        "fetched default-branch base differs from the event base; maintenance PR is stale: expected=5b60ce815d674bc1f9add03cbd641c746c3c90f4 observed=cc27eaef8327f7ff0c6b7ae3bdf3a66fd23373e8"
       ]
     }
   ],

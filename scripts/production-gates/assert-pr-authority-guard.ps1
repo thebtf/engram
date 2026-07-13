@@ -93,7 +93,7 @@ function Get-DiffEntries {
         $headEntry = Invoke-Git $WorkingTree @('-c','core.quotepath=false','ls-tree','--full-tree',$Head,'--',":(literal)$path")
         if ($headEntry.output.Count -ne 1) { throw "changed PR path '$path' does not resolve to exactly one head tree entry" }
         $treeLine = [string]$headEntry.output[0]
-        if ($treeLine -notmatch '^(?<mode>[0-9]{6}) (?<type>[^ ]+) (?<object>[0-9a-f]{40,64})\t(?<path>.+)$') {
+        if ($treeLine -cnotmatch '^(?<mode>[0-9]{6}) (?<type>[^ ]+) (?<object>[0-9a-f]{40,64})\t(?<path>.+)$') {
             throw "changed PR path '$path' has malformed head tree metadata '$treeLine'"
         }
         $headMode = [string]$Matches.mode
@@ -137,7 +137,7 @@ function Get-OptionalArrayProperty {
     param([Parameter(Mandatory)]$Object, [Parameter(Mandatory)][string]$Name)
     $property = $Object.PSObject.Properties[$Name]
     if ($null -eq $property) { return @() }
-    return @($property.Value)
+    return @($property.Value | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_) })
 }
 
 function Find-Authorization {
@@ -152,7 +152,7 @@ function Find-Authorization {
     }
     [string[]]$pendingStatuses = @($Contract.status_classes.pending)
     foreach ($pending in @($Contract.pending_namespaces)) {
-        if ([int]$Contract.revision -ne 12 -and [string]$pending.status_class -cnotin $pendingStatuses) { continue }
+        if ([string]$pending.status_class -cnotin $pendingStatuses) { continue }
         if ($pending.PSObject.Properties['release_accepted'] -and [bool]$pending.release_accepted) { continue }
         [string[]]$forbidden = @(Get-OptionalArrayProperty $pending 'forbidden_final_paths')
         $containsForbidden = @($DiffEntries | Where-Object { [string]$_.path -cin $forbidden }).Count -gt 0
@@ -177,12 +177,15 @@ function Find-Authorization {
 function Invoke-AuthorizationSelfTest {
     $contract = [pscustomobject][ordered]@{
         revision = 12
-        status_classes = [pscustomobject]@{ current=@(); pending=@() }
+        status_classes = [pscustomobject]@{ current=@(); pending=@('current-maker-in-progress') }
         candidates = @()
-        pending_namespaces = @([pscustomobject][ordered]@{
-            slice='SELFTEST'; status_class='current-maker-in-progress'; release_accepted=$false
-            exact_paths=@('src/exact.go'); exact_prefixes=@('src/generated/**'); forbidden_final_paths=@('src/exact.go','src/generated/secret.go')
-        })
+        pending_namespaces = @(
+            [pscustomobject][ordered]@{ slice='NULLPREFIX'; status_class='current-maker-in-progress'; release_accepted=$false; exact_paths=@('src/other.go'); exact_prefixes=$null }
+            [pscustomobject][ordered]@{
+                slice='SELFTEST'; status_class='current-maker-in-progress'; release_accepted=$false
+                exact_paths=@('src/exact.go'); exact_prefixes=@('src/generated/**'); forbidden_final_paths=@('src/exact.go','src/generated/secret.go')
+            }
+        )
     }
     $exactForbidden = Find-Authorization $contract @([pscustomobject]@{path='src/exact.go';git_status='M'})
     if ($null -ne $exactForbidden) { throw 'SELFTEST FAIL: exact forbidden_final_paths entry was authorized' }
@@ -200,6 +203,7 @@ $artifactObject = $null
 $exitCode = 1
 $trustedRoot = $null
 try {
+    if ($BaseSha -cnotmatch '^[0-9a-f]{40}$' -or $HeadSha -cnotmatch '^[0-9a-f]{40}$' -or $ExpectedValidatorGitBlob -cnotmatch '^[0-9a-f]{40}$') { throw 'base, head, and validator Git identities must be canonical lowercase full SHAs' }
     $repo = [System.IO.Path]::GetFullPath($Repository)
     if (-not (Test-Path -LiteralPath $repo -PathType Container)) { throw "repository does not exist: $repo" }
     if ($ExpectedDefaultBranch -notmatch '^[A-Za-z0-9._/-]+$') { throw 'expected default branch has invalid syntax' }
@@ -224,7 +228,7 @@ try {
     $ancestor = Invoke-Git $repo @('merge-base','--is-ancestor',$BaseSha,$HeadSha) -AllowFailure
     if ($ancestor.exit_code -ne 0) { throw 'PR head is not based on the exact trusted base; rebase is required' }
     $merge = Invoke-Git $repo @('merge-tree','--write-tree',$BaseSha,$HeadSha) -AllowFailure
-    if ($merge.exit_code -ne 0 -or [string]$merge.output[-1] -notmatch '^[0-9a-f]{40}$') { throw "merge-tree failed or conflicted: $($merge.output -join ' ')" }
+    if ($merge.exit_code -ne 0 -or [string]$merge.output[-1] -cnotmatch '^[0-9a-f]{40}$') { throw "merge-tree failed or conflicted: $($merge.output -join ' ')" }
     $mergeTree = [string]$merge.output[-1]
     $headTree = [string](Invoke-Git $repo @('rev-parse',"$HeadSha`^{tree}")).output[-1]
     Assert-MergeTreeMatchesHead -MergeTree $mergeTree -HeadTree $headTree
