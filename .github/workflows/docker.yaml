@@ -38,6 +38,23 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
+      - name: Install pinned Docker Scout CLI
+        shell: bash
+        env:
+          DOCKER_SCOUT_LINUX_AMD64_SHA256: "0f778f9d833f28bc6cccff95e33039849c0afcecafa38d9f46fe74bfd0915714"
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/docker-scout_1.23.1_linux_amd64.tar.gz"
+          binary="$RUNNER_TEMP/docker-scout"
+          curl --fail --silent --show-error --location \
+            "https://github.com/docker/scout-cli/releases/download/v1.23.1/docker-scout_1.23.1_linux_amd64.tar.gz" \
+            --output "$archive"
+          printf '%s  %s\n' "$DOCKER_SCOUT_LINUX_AMD64_SHA256" "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" docker-scout
+          install --directory --mode 0755 "$HOME/.docker/cli-plugins"
+          install --mode 0755 "$binary" "$HOME/.docker/cli-plugins/docker-scout"
+          docker scout version
+
       - name: Build, scan, and exercise exact images without registry authority
         shell: pwsh
         env:

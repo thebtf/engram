@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "gate": "observability-otlp",
-  "started_at_utc": "2026-07-13T02:21:09.7732887+00:00",
-  "completed_at_utc": "2026-07-13T02:21:12.4795109+00:00",
+  "started_at_utc": "2026-07-13T03:43:20.5143330+00:00",
+  "completed_at_utc": "2026-07-13T03:43:29.5579328+00:00",
   "command": "go test ./internal/module/obs -count=1 -json",
   "exit_code": 0,
   "required_tests": [
@@ -22,7 +22,9 @@
   ],
   "missing_tests": [],
   "failed_tests": [],
+  "process_residue_checked": true,
   "process_residue": [],
+  "container_residue_checked": true,
   "container_residue": [],
   "verdict": "PASS"
 }

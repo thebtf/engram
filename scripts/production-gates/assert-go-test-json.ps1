@@ -10,6 +10,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$script:RepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 
 function Show-Help {
     @'
@@ -49,6 +50,17 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText([System.IO.Path]::GetFullPath($Path), $Content, [System.Text.UTF8Encoding]::new($false))
 }
 
+function ConvertTo-EvidencePath {
+    param([Parameter(Mandatory)][string]$Path)
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $root = $script:RepositoryRoot.TrimEnd('\', '/')
+    $prefix = $root + [System.IO.Path]::DirectorySeparatorChar
+    if ($full.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return ([System.IO.Path]::GetRelativePath($root, $full)).Replace('\', '/')
+    }
+    return 'external/' + [System.IO.Path]::GetFileName($full)
+}
+
 function Test-IsValidAllowedSkipIdentity {
     param([string]$Identity)
     if ([string]::IsNullOrWhiteSpace($Identity)) { return $false }
@@ -75,10 +87,10 @@ function Read-GoTestTranscript {
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         return [pscustomobject]@{
-            schema_version = 1; verdict = 'FAIL'; input_path = [System.IO.Path]::GetFullPath($Path)
+            schema_version = 1; verdict = 'FAIL'; input_path = ConvertTo-EvidencePath $Path
             fail_on_unexpected_skip = $EnforceUnexpectedSkip; allowed_skip_identities = @($AllowedIdentities)
             counts = [ordered]@{ packages = 0; tests = 0; passed = 0; failed = 0; skipped = 0; no_tests = 0; zero_tests = 1; incomplete = 0; unexpected_skips = 0; malformed_lines = 0 }
-            packages = @(); tests = @(); unexpected_skips = @(); errors = @("input transcript does not exist: $Path")
+            packages = @(); tests = @(); unexpected_skips = @(); errors = @("input transcript does not exist: $(ConvertTo-EvidencePath $Path)")
         }
     }
 
@@ -95,7 +107,7 @@ function Read-GoTestTranscript {
     }
     if ($identityErrors.Count -gt 0) {
         return [pscustomobject]@{
-            schema_version = 1; verdict = 'FAIL'; input_path = [System.IO.Path]::GetFullPath($Path)
+            schema_version = 1; verdict = 'FAIL'; input_path = ConvertTo-EvidencePath $Path
             fail_on_unexpected_skip = $EnforceUnexpectedSkip; allowed_skip_identities = @($AllowedIdentities)
             counts = [ordered]@{ packages = 0; tests = 0; passed = 0; failed = 0; skipped = 0; no_tests = 0; zero_tests = 1; incomplete = 0; unexpected_skips = 0; malformed_lines = 0 }
             packages = @(); tests = @(); unexpected_skips = @(); errors = @($identityErrors)
@@ -182,7 +194,7 @@ function Read-GoTestTranscript {
     [pscustomobject]@{
         schema_version = 1
         verdict = $verdict
-        input_path = [System.IO.Path]::GetFullPath($Path)
+        input_path = ConvertTo-EvidencePath $Path
         fail_on_unexpected_skip = $EnforceUnexpectedSkip
         allowed_skip_identities = @($AllowedIdentities)
         counts = [ordered]@{
@@ -215,6 +227,7 @@ function Invoke-SelfTest {
         ) -join "`n") + "`n")
         $pass = Read-GoTestTranscript $passPath $true @()
         Assert-SelfTest ($pass.verdict -eq 'PASS') 'passing transcript was rejected'
+        Assert-SelfTest (-not [System.IO.Path]::IsPathRooted([string]$pass.input_path)) 'parser summary exposes a host-specific input path'
 
         $skipPath = Join-Path $root 'skip.jsonl'
         Write-Utf8NoBom $skipPath ((@(

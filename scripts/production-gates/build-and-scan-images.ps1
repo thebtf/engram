@@ -1266,6 +1266,11 @@ function Remove-PrefixedResources {
             [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
         }
     }
+    foreach ($entry in $script:imageSecretFiles.GetEnumerator()) {
+        if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($entry.Key, 'Process'))) {
+            [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+        }
+    }
     Invoke-LoggedNative -File 'docker' -Arguments @(
         'compose', '-p', $composeProject, '-f', 'docker-compose.yml',
         'down', '--volumes', '--remove-orphans'
@@ -1293,6 +1298,54 @@ function Remove-PrefixedResources {
     }
 }
 
+function New-CryptographicHex {
+    param([ValidateRange(16, 128)][int]$ByteCount = 32)
+    return [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes($ByteCount)).ToLowerInvariant()
+}
+
+function Initialize-ImageSecretFiles {
+    $root = Join-Path ([IO.Path]::GetTempPath()) "engram-image-secrets-$PID-$([Guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $script:PendingImageSecretRoot = [IO.Path]::GetFullPath($root)
+    if (-not $IsWindows) {
+        [IO.File]::SetUnixFileMode($root, ([IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite -bor [IO.UnixFileMode]::UserExecute))
+    }
+    $postgresPassword = New-CryptographicHex
+    $values = [ordered]@{
+        ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE = New-CryptographicHex
+        ENGRAM_DATABASE_DSN_SECRET_FILE = "postgres://engram:$postgresPassword@postgres:5432/engram?sslmode=disable"
+        ENGRAM_POSTGRES_PASSWORD_SECRET_FILE = $postgresPassword
+        ENGRAM_VAULT_KEY_SECRET_FILE = New-CryptographicHex
+    }
+    $files = [ordered]@{}
+    foreach ($entry in $values.GetEnumerator()) {
+        $leaf = ($entry.Key.ToLowerInvariant() -replace '^engram_', '' -replace '_secret_file$', '' -replace '_', '-') + '.secret'
+        $path = Join-Path $root $leaf
+        [IO.File]::WriteAllText($path, [string]$entry.Value, [Text.UTF8Encoding]::new($false))
+        if (-not $IsWindows) {
+            [IO.File]::SetUnixFileMode($path, ([IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite))
+        }
+        $files[$entry.Key] = [IO.Path]::GetFullPath($path)
+        [Environment]::SetEnvironmentVariable($entry.Key, $files[$entry.Key], 'Process')
+    }
+    $script:imageSecretFiles = $files
+    return [IO.Path]::GetFullPath($root)
+}
+
+function Remove-ImageSecretFiles {
+    param([AllowNull()][string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $true }
+    $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
+    $resolved = [IO.Path]::GetFullPath($Path)
+    $prefix = $tempRoot + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or
+        -not ([IO.Path]::GetFileName($resolved)).StartsWith('engram-image-secrets-', [StringComparison]::Ordinal)) {
+        throw "Refusing to remove unverified image secret path: $resolved"
+    }
+    if (Test-Path -LiteralPath $resolved) { Remove-Item -LiteralPath $resolved -Recurse -Force }
+    return -not (Test-Path -LiteralPath $resolved)
+}
+
 $environmentNames = @(
     'ENGRAM_SERVER_IMAGE', 'ENGRAM_OPERATOR_IMAGE', 'ENGRAM_POSTGRES_IMAGE', 'ENGRAM_BUILD_VERSION',
     'ENGRAM_TEST_RESOURCE_PREFIX', 'POSTGRES_PASSWORD', 'ENGRAM_AUTH_DISABLED',
@@ -1301,7 +1354,9 @@ $environmentNames = @(
     'ENGRAM_EMBEDDING_URL', 'ENGRAM_EMBEDDING_MODEL', 'ENGRAM_EMBEDDING_API_KEY',
     'ENGRAM_VNEXT_ENABLED', 'ENGRAM_LIFECYCLE_ENABLED', 'ENGRAM_VNEXT_F_ENABLED',
     'ENGRAM_GRAPH_ENABLED', 'ENGRAM_TEMPORAL_TRUTH_ENABLED',
-    'ENGRAM_CRYSTALLIZATION_ENABLED', 'OPERATOR_CONSOLE_API_DISPLAY_HOST'
+    'ENGRAM_CRYSTALLIZATION_ENABLED', 'OPERATOR_CONSOLE_API_DISPLAY_HOST',
+    'ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE', 'ENGRAM_DATABASE_DSN_SECRET_FILE',
+    'ENGRAM_POSTGRES_PASSWORD_SECRET_FILE', 'ENGRAM_VAULT_KEY_SECRET_FILE'
 )
 $savedEnvironment = [ordered]@{}
 foreach ($name in $environmentNames) {
@@ -1314,9 +1369,16 @@ $env:WORKER_BIND = '127.0.0.1'
 $env:WORKER_PORT = '0'
 $env:OPERATOR_CONSOLE_BIND = '127.0.0.1'
 $env:OPERATOR_CONSOLE_PORT = '0'
+$script:imageSecretFiles = [ordered]@{}
+$script:PendingImageSecretRoot = $null
+$imageSecretRoot = $null
+$secretFilesCleaned = $false
+$locationPushed = $false
 
-Push-Location $repoRoot
 try {
+    $imageSecretRoot = Initialize-ImageSecretFiles
+    Push-Location $repoRoot
+    $locationPushed = $true
     $toolVersions.docker = Invoke-CapturedNative -File 'docker' -Arguments @('version', '--format', '{{.Client.Version}} client / {{.Server.Version}} server')
     $toolVersions.buildx = Invoke-CapturedNative -File 'docker' -Arguments @('buildx', 'version')
     $toolVersions.scout = Invoke-CapturedNative -File 'docker' -Arguments @('scout', 'version')
@@ -1582,7 +1644,18 @@ try {
             $caught = $_
         }
     }
+    try {
+        $secretCleanupRoot = if (-not [string]::IsNullOrWhiteSpace($imageSecretRoot)) { $imageSecretRoot } else { $script:PendingImageSecretRoot }
+        $secretFilesCleaned = Remove-ImageSecretFiles -Path $secretCleanupRoot
+        if (-not $secretFilesCleaned) { throw 'image secret-file cleanup did not remove the verified temporary root' }
+        $script:PendingImageSecretRoot = $null
+    } catch {
+        $secretFilesCleaned = $false
+        $cleanupPassed = $false
+        if ($null -eq $caught) { $caught = $_ }
+    }
     $cleanupInventory.status = if ($cleanupPassed) { 'PASS' } else { 'FAIL' }
+    $cleanupInventory.secret_files_cleaned = $secretFilesCleaned
     $cleanupInventory.observed_at = (Get-Date).ToUniversalTime().ToString('o')
     $cleanupInventory | ConvertTo-Json -Depth 8 |
         Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $artifactPath 'cleanup/cleanup.json')
@@ -1640,7 +1713,7 @@ try {
         failure = if ($null -eq $caught) { $null } else { $caught.Exception.Message }
     }
     Write-JsonFile -Value $manifest -Path (Join-Path $artifactPath 'final-image-set.json')
-    Pop-Location
+    if ($locationPushed) { Pop-Location }
 }
 
 if ($null -ne $caught) {

@@ -11,6 +11,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $script:CommandRecords = [System.Collections.Generic.List[object]]::new()
+$script:RepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 
 function Show-Help {
     @'
@@ -45,6 +46,33 @@ function Quote-CommandArgument {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
     if ($Value -match '^[A-Za-z0-9_./:=+,-]+$') { return $Value }
     return '"' + $Value.Replace('"', '\"') + '"'
+}
+
+function ConvertTo-EvidencePath {
+    param([Parameter(Mandatory)][string]$Path)
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $root = $script:RepositoryRoot.TrimEnd('\', '/')
+    $prefix = $root + [System.IO.Path]::DirectorySeparatorChar
+    if ($full.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return ([System.IO.Path]::GetRelativePath($root, $full)).Replace('\', '/')
+    }
+    return 'external/' + [System.IO.Path]::GetFileName($full)
+}
+
+function ConvertTo-EvidenceExecutable {
+    param([Parameter(Mandatory)][string]$Executable)
+    $leaf = [System.IO.Path]::GetFileName($Executable)
+    if ($leaf.EndsWith('.exe', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $leaf.Substring(0, $leaf.Length - 4)
+    }
+    return $leaf
+}
+
+function ConvertTo-EvidenceArgument {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
+    if ([System.IO.Path]::IsPathRooted($Value)) { return ConvertTo-EvidencePath $Value }
+    if ($Value -match '^(?:\.agent|scripts)[\\/]') { return $Value.Replace('\', '/') }
+    return $Value
 }
 
 function Invoke-CapturedProcess {
@@ -94,16 +122,19 @@ function Invoke-CapturedProcess {
     Write-Utf8NoBom $StdoutPath $stdout
     Write-Utf8NoBom $StderrPath $stderr
     $finishedAt = [DateTimeOffset]::UtcNow
+    $evidenceExecutable = ConvertTo-EvidenceExecutable $Executable
+    $evidenceArguments = @($Arguments | ForEach-Object { ConvertTo-EvidenceArgument ([string]$_) })
     $commandParts = [System.Collections.Generic.List[string]]::new()
-    $commandParts.Add((Quote-CommandArgument $Executable))
-    foreach ($argument in $Arguments) { $commandParts.Add((Quote-CommandArgument ([string]$argument))) }
+    $commandParts.Add((Quote-CommandArgument $evidenceExecutable))
+    foreach ($argument in $evidenceArguments) { $commandParts.Add((Quote-CommandArgument ([string]$argument))) }
     $record = [pscustomobject][ordered]@{
-        name = $Name; executable = $Executable; arguments = @($Arguments)
+        name = $Name; executable = $evidenceExecutable; arguments = @($evidenceArguments)
         command = $commandParts -join ' '
+        working_directory = '.'
         started_at = $startedAt.ToString('O'); finished_at = $finishedAt.ToString('O')
         duration_seconds = [math]::Round(($finishedAt - $startedAt).TotalSeconds, 3)
         exit_code = $exitCode; timed_out = $timedOut
-        stdout = [System.IO.Path]::GetFullPath($StdoutPath); stderr = [System.IO.Path]::GetFullPath($StderrPath)
+        stdout = ConvertTo-EvidencePath $StdoutPath; stderr = ConvertTo-EvidencePath $StderrPath
     }
     $script:CommandRecords.Add($record)
     return [pscustomobject]@{ ExitCode = $exitCode; Stdout = $stdout; Stderr = $stderr; Record = $record }
@@ -293,6 +324,9 @@ function Invoke-SelfTest {
         $later = Invoke-CapturedProcess 'selftest-later-pass' $pwsh @('-NoProfile', '-Command', 'exit 0') (Join-Path $root 'pass.stdout.log') (Join-Path $root 'pass.stderr.log') 30
         Assert-SelfTestCondition ($failed.ExitCode -eq 7 -and $later.ExitCode -eq 0) 'child exits were not captured independently'
         Assert-SelfTestCondition (($failed.ExitCode -ne 0) -or ($later.ExitCode -ne 0)) 'later success masked earlier failure'
+        Assert-SelfTestCondition ($failed.Record.working_directory -ceq '.') 'command evidence does not declare repository-relative working_directory'
+        Assert-SelfTestCondition (-not [System.IO.Path]::IsPathRooted([string]$failed.Record.executable)) 'command evidence exposes a host-specific executable path'
+        Assert-SelfTestCondition (-not [System.IO.Path]::IsPathRooted([string]$failed.Record.stdout) -and -not [System.IO.Path]::IsPathRooted([string]$failed.Record.stderr)) 'command evidence exposes host-specific artifact paths'
         $missing = Invoke-CapturedProcess 'selftest-missing' ('missing-critical-runner-' + [guid]::NewGuid().ToString('N')) @() (Join-Path $root 'missing.stdout.log') (Join-Path $root 'missing.stderr.log') 30
         Assert-SelfTestCondition ($missing.ExitCode -eq 127 -and $missing.Stderr -match 'PROCESS_START_OR_CAPTURE_ERROR') 'process-start failure did not fail closed'
         Write-Output 'SELFTEST PASS: run-critical-suite.ps1'
@@ -356,14 +390,14 @@ finally {
         schema_version = 1; gate = 'critical-suite'; run_id = $RunId
         started_at = $startedAt.ToString('O'); finished_at = $finishedAt.ToString('O'); duration_seconds = [math]::Round(($finishedAt - $startedAt).TotalSeconds, 3)
         verdict = if ($errors.Count -eq 0) { 'PASS' } else { 'FAIL' }
-        config = [ordered]@{ path = [System.IO.Path]::GetFullPath($Config); sha256 = if ($null -ne $configInfo) { $configInfo.Sha256 } else { $null }; command = if ($null -ne $configInfo) { $configInfo.Command } else { $null } }
+        config = [ordered]@{ path = ConvertTo-EvidencePath $Config; sha256 = if ($null -ne $configInfo) { $configInfo.Sha256 } else { $null }; command = if ($null -ne $configInfo) { $configInfo.Command } else { $null } }
         run_pattern = $Run; allowed_skip_identities = if ($null -ne $configInfo) { @($configInfo.AllowedSkipIdentities) } else { @() }
         matched_test_files = if ($null -ne $configInfo) { $configInfo.MatchedFiles.Count } else { 0 }; matched_go_files = if ($null -ne $configInfo) { $configInfo.MatchedGoFiles.Count } else { 0 }
         go_test_exit = if ($null -ne $goResult) { $goResult.ExitCode } else { $null }; json_parser_exit = if ($null -ne $parserResult) { $parserResult.ExitCode } else { $null }
-        json_summary = if (Test-Path -LiteralPath $parserSummaryPath) { [System.IO.Path]::GetFullPath($parserSummaryPath) } else { $null }
+        json_summary = if (Test-Path -LiteralPath $parserSummaryPath) { ConvertTo-EvidencePath $parserSummaryPath } else { $null }
         counts = if ($null -ne $parserSummary) { $parserSummary.counts } else { $null }
         child_commands = $script:CommandRecords.Count; nonzero_child_commands = @($script:CommandRecords | Where-Object exit_code -ne 0).Count
-        commands = [System.IO.Path]::GetFullPath($commandsPath); errors = @($errors); artifact_directory = [System.IO.Path]::GetFullPath($artifactDirectory)
+        commands = ConvertTo-EvidencePath $commandsPath; errors = @($errors); artifact_directory = ConvertTo-EvidencePath $artifactDirectory
     }
     $summaryPath = Join-Path $artifactDirectory 'summary.json'
     Write-Utf8NoBom $summaryPath (($summary | ConvertTo-Json -Depth 20) + "`n")

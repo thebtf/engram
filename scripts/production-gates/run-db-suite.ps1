@@ -18,6 +18,7 @@ param(
     [ValidateSet('None', 'Up', 'Ready', 'Scan', 'Down')][string]$DevStandAction = 'None',
     [string]$ComposeProject = 'engram-critical-stand',
     [string]$ComposeFile = 'docker-compose.yml',
+    [string]$DevStandSecretRoot,
     [switch]$Help,
     [switch]$SelfTest
 )
@@ -75,8 +76,8 @@ Options:
   -AdminDsn                Admin URL or ENGRAM_TEST_ADMIN_DSN; always redacted.
   -PostgresContainer       Use psql through docker exec; else host psql.
   -DevStandAction          Execute the tracked isolated stand lifecycle. Up
-                           generates three distinct process-local cryptographic
-                           PostgreSQL/admin/bootstrap credentials,
+                           generates four distinct process-local cryptographic
+                           PostgreSQL/admin/vault/bootstrap credentials,
                            validates exact compose service/image labels, and
                            proves /health + /api/ready without persisting them.
                            Scan runs Docker Scout against the exact running tags
@@ -405,7 +406,7 @@ function New-CryptographicSecret {
 function Assert-DevStandCredentials {
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Credentials)
 
-    $required = @('postgres_password', 'admin_token', 'bootstrap_capability')
+    $required = @('postgres_password', 'admin_token', 'vault_key', 'bootstrap_capability')
     $values = [System.Collections.Generic.List[string]]::new()
     $forbidden = @('engram', 'password', 'changeme', 'change-me', 'change-me-in-production', 'default', 'admin')
     foreach ($name in $required) {
@@ -417,6 +418,44 @@ function Assert-DevStandCredentials {
         $values.Add($value)
     }
     if (@($values | Select-Object -Unique).Count -ne $values.Count) { throw 'dev-stand PostgreSQL, admin, and bootstrap credentials must be distinct' }
+}
+
+function Get-DevStandSecretFiles {
+    param([Parameter(Mandatory)][string]$Root)
+    $resolved = [System.IO.Path]::GetFullPath($Root)
+    $temp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\', '/')
+    if (-not $resolved.StartsWith($temp + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not ([System.IO.Path]::GetFileName($resolved)).StartsWith('engram-dev-stand-secrets-', [System.StringComparison]::Ordinal)) {
+        throw "untrusted dev-stand secret root '$resolved'"
+    }
+    if (-not (Test-Path -LiteralPath $resolved -PathType Container)) { throw "dev-stand secret root does not exist: $resolved" }
+    return [ordered]@{
+        ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE = Join-Path $resolved 'admin-token.secret'
+        ENGRAM_DATABASE_DSN_SECRET_FILE = Join-Path $resolved 'database-dsn.secret'
+        ENGRAM_POSTGRES_PASSWORD_SECRET_FILE = Join-Path $resolved 'postgres-password.secret'
+        ENGRAM_VAULT_KEY_SECRET_FILE = Join-Path $resolved 'vault-key.secret'
+    }
+}
+
+function Write-DevStandSecretFiles {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$PostgresPassword,
+        [Parameter(Mandatory)][string]$AdminToken,
+        [Parameter(Mandatory)][string]$VaultKey
+    )
+    $files = Get-DevStandSecretFiles $Root
+    $dsn = "postgres://engram:$PostgresPassword@postgres:5432/engram?sslmode=disable"
+    $values = [ordered]@{
+        ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE = $AdminToken
+        ENGRAM_DATABASE_DSN_SECRET_FILE = $dsn
+        ENGRAM_POSTGRES_PASSWORD_SECRET_FILE = $PostgresPassword
+        ENGRAM_VAULT_KEY_SECRET_FILE = $VaultKey
+    }
+    foreach ($entry in $values.GetEnumerator()) {
+        [System.IO.File]::WriteAllText([string]$files[$entry.Key], [string]$entry.Value, [System.Text.UTF8Encoding]::new($false))
+    }
+    return [pscustomobject]@{ Files = $files; Dsn = $dsn }
 }
 
 function Test-RedactedContainerEnvironment {
@@ -432,33 +471,60 @@ function Test-RedactedContainerEnvironment {
     return $true
 }
 
+function Test-ContainerEnvironmentContract {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$CapturedJson,
+        [Parameter(Mandatory)][hashtable]$Exact,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$RedactedNames
+    )
+    try { $entries = @(ConvertFrom-Json -InputObject $CapturedJson -Depth 20) } catch { return $false }
+    foreach ($entry in $Exact.GetEnumerator()) {
+        if ($entries -cnotcontains "$($entry.Key)=$($entry.Value)") { return $false }
+    }
+    foreach ($name in $RedactedNames) {
+        if ($entries -cnotcontains "$name=REDACTED_SENSITIVE_VALUE") { return $false }
+    }
+    return $true
+}
+
+function Test-SecretMountDestinations {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$CapturedJson,
+        [Parameter(Mandatory)][string[]]$RequiredDestinations
+    )
+    try { $mounts = @(ConvertFrom-Json -InputObject $CapturedJson -Depth 20) } catch { return $false }
+    foreach ($destination in $RequiredDestinations) {
+        $matches = @($mounts | Where-Object { [string]$_.Destination -ceq $destination -and [string]$_.Type -ceq 'bind' })
+        if ($matches.Count -ne 1) { return $false }
+    }
+    return $true
+}
+
 function Get-DevStandEnvironment {
     param(
         [Parameter(Mandatory)][string]$Project,
-        [Parameter(Mandatory)][string]$PostgresPassword,
-        [Parameter(Mandatory)][string]$AdminToken,
-        [Parameter(Mandatory)][string]$BootstrapCapability
+        [Parameter(Mandatory)][string]$SecretRoot,
+        [Parameter(Mandatory)][ValidatePattern('^sha-[0-9a-f]{40}$')][string]$BuildVersion,
+        [AllowEmptyString()][string]$BootstrapCapability = ''
     )
-
-    $credentials = [ordered]@{ postgres_password = $PostgresPassword; admin_token = $AdminToken; bootstrap_capability = $BootstrapCapability }
-    Assert-DevStandCredentials $credentials
-    $escapedPassword = [uri]::EscapeDataString($PostgresPassword)
-    $databaseDsn = "postgres://engram:$escapedPassword@postgres:5432/engram?sslmode=disable"
-
-    return @{
+    $files = Get-DevStandSecretFiles $SecretRoot
+    $environment = @{
         COMPOSE_PROJECT_NAME = $Project
         POSTGRES_PORT = '55433'
         WORKER_PORT = '37778'
         OPERATOR_CONSOLE_PORT = '3001'
-        POSTGRES_PASSWORD = $PostgresPassword
-        DATABASE_DSN = $databaseDsn
         STAND_API_URL = 'http://localhost:37778'
         STAND_OPERATOR_URL = 'http://localhost:3001'
         NUXT_OPERATOR_API_TARGET = 'http://server:37777'
-        ENGRAM_AUTH_ADMIN_TOKEN = $AdminToken
-        ENGRAM_AUTH_BOOTSTRAP_CAPABILITY = $BootstrapCapability
         ENGRAM_AUTH_DISABLED = 'false'
+        ENGRAM_POSTGRES_IMAGE = 'pgvector/pgvector:pg17'
+        ENGRAM_SERVER_IMAGE = 'ghcr.io/thebtf/engram:main'
+        ENGRAM_OPERATOR_IMAGE = 'ghcr.io/thebtf/engram-operator-console:main'
+        ENGRAM_BUILD_VERSION = $BuildVersion
     }
+    foreach ($entry in $files.GetEnumerator()) { $environment[$entry.Key] = [string]$entry.Value }
+    if (-not [string]::IsNullOrWhiteSpace($BootstrapCapability)) { $environment.ENGRAM_AUTH_BOOTSTRAP_CAPABILITY = $BootstrapCapability }
+    return $environment
 }
 
 function Get-NativeCommandPath {
@@ -552,11 +618,13 @@ function Invoke-DevStandContract {
         [Parameter(Mandatory)][string]$Project,
         [Parameter(Mandatory)][string]$File,
         [Parameter(Mandatory)][string]$EvidenceRoot,
+        [Parameter(Mandatory)][string]$SecretRoot,
         [string]$RequestedRunId
     )
 
     if ($Project -notmatch '^[a-z0-9][a-z0-9_-]{2,62}$') { throw "unsafe compose project '$Project'" }
     if (-not (Test-Path -LiteralPath $File -PathType Leaf)) { throw "compose file does not exist: $File" }
+    [void](Get-DevStandSecretFiles $SecretRoot)
     $actionToken = [guid]::NewGuid().ToString('N').Substring(0, 10)
     if ([string]::IsNullOrWhiteSpace($RequestedRunId)) { $RequestedRunId = [DateTimeOffset]::UtcNow.ToString('yyyyMMddTHHmmssZ') + '-' + $actionToken }
     if ($RequestedRunId -notmatch '^[A-Za-z0-9._-]+$') { throw '-RunId may contain only letters, digits, dot, underscore, and hyphen.' }
@@ -584,13 +652,15 @@ function Invoke-DevStandContract {
     $credentialsGenerated = $false
     $postgresPassword = $null
     $adminToken = $null
+    $vaultKey = $null
     $bootstrapCapability = $null
     $credentialValuesPersisted = $false
     $credentialPolicyPass = $false
     $credentialRuntimeInjectionPass = $false
+    $credentialSecretMountsVerified = $false
     $endpointResults = [System.Collections.Generic.List[object]]::new()
     $composeOverridePath = $null
-    $standEnvironment = @{}
+    $standEnvironment = Get-DevStandEnvironment -Project $Project -SecretRoot $SecretRoot -BuildVersion "sha-$('0' * 40)"
     $automaticFailureCleanup = $false
     $residualChecksPerformed = $false
     $residualResourcesZero = $null
@@ -614,6 +684,7 @@ function Invoke-DevStandContract {
             if ($sourceHead.ExitCode -ne 0) { throw "challenged source commit could not be resolved (exit=$($sourceHead.ExitCode))" }
             $sourceCommit = $sourceHead.Stdout.Trim().ToLowerInvariant()
             if ($sourceCommit -notmatch '^[a-f0-9]{40}$') { throw "challenged source commit is malformed: '$sourceCommit'" }
+            $standEnvironment = Get-DevStandEnvironment -Project $Project -SecretRoot $SecretRoot -BuildVersion "sha-$sourceCommit"
             $sourceStatus = Invoke-CapturedProcess 'dev-stand-source-tracked-status' $gitPath @('-C', $sourceRepository, 'status', '--porcelain=v1', '--untracked-files=all') @{} (Join-Path $actionDirectory 'source-tracked-status.stdout.log') (Join-Path $actionDirectory 'source-tracked-status.stderr.log') $connection @() 30
             if ($sourceStatus.ExitCode -ne 0) { throw "challenged source tracked-status check failed (exit=$($sourceStatus.ExitCode))" }
             $sourceTrackedClean = [string]::IsNullOrWhiteSpace($sourceStatus.Stdout)
@@ -641,14 +712,16 @@ function Invoke-DevStandContract {
         if ($Action -eq 'Up') {
             $postgresPassword = New-CryptographicSecret
             $adminToken = New-CryptographicSecret
+            $vaultKey = New-CryptographicSecret
             $bootstrapCapability = New-CryptographicSecret
-            $credentials = [ordered]@{ postgres_password = $postgresPassword; admin_token = $adminToken; bootstrap_capability = $bootstrapCapability }
+            $credentials = [ordered]@{ postgres_password = $postgresPassword; admin_token = $adminToken; vault_key = $vaultKey; bootstrap_capability = $bootstrapCapability }
             Assert-DevStandCredentials $credentials
             $credentialPolicyPass = $true
             $credentialsGenerated = $true
-            $standEnvironment = Get-DevStandEnvironment -Project $Project -PostgresPassword $postgresPassword -AdminToken $adminToken -BootstrapCapability $bootstrapCapability
-            $standDsn = [string]$standEnvironment.DATABASE_DSN
-            foreach ($secret in @($postgresPassword, $adminToken, $bootstrapCapability, $standDsn)) { $sensitiveValues.Add($secret) }
+            $secretWrite = Write-DevStandSecretFiles -Root $SecretRoot -PostgresPassword $postgresPassword -AdminToken $adminToken -VaultKey $vaultKey
+            $standEnvironment = Get-DevStandEnvironment -Project $Project -SecretRoot $SecretRoot -BuildVersion "sha-$sourceCommit" -BootstrapCapability $bootstrapCapability
+            $standDsn = [string]$secretWrite.Dsn
+            foreach ($secret in @($postgresPassword, $adminToken, $vaultKey, $bootstrapCapability, $standDsn)) { $sensitiveValues.Add($secret) }
 
             $composeOverridePath = Join-Path $actionDirectory 'ephemeral-credential-injection.compose.yaml'
             Write-Utf8NoBom $composeOverridePath @'
@@ -682,17 +755,27 @@ services:
             $postgresContainer = Invoke-CapturedProcess 'dev-stand-postgres-container-id' $dockerPath (@($composeArgs) + @('ps', '-q', 'postgres')) $standEnvironment (Join-Path $actionDirectory 'postgres-container-id.stdout.log') (Join-Path $actionDirectory 'postgres-container-id.stderr.log') $connection @($sensitiveValues) 30
             if ($postgresContainer.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($postgresContainer.Stdout)) { throw 'running postgres container ID could not be resolved for credential proof' }
             $postgresCredential = Invoke-CapturedProcess 'dev-stand-postgres-credential-injection' $dockerPath @('inspect', $postgresContainer.Stdout.Trim(), '--format', '{{json .Config.Env}}') @{} (Join-Path $actionDirectory 'postgres-credential-injection.stdout.log') (Join-Path $actionDirectory 'postgres-credential-injection.stderr.log') $connection @($sensitiveValues) 30
-            if ($postgresCredential.ExitCode -ne 0 -or -not (Test-RedactedContainerEnvironment $postgresCredential.Stdout @('POSTGRES_PASSWORD'))) { throw 'generated PostgreSQL password did not reach the running postgres service exactly' }
+            if ($postgresCredential.ExitCode -ne 0 -or -not (Test-ContainerEnvironmentContract $postgresCredential.Stdout @{ POSTGRES_PASSWORD_FILE = '/run/secrets/postgres_password' } @())) { throw 'file-backed PostgreSQL password contract did not reach the running postgres service exactly' }
+            $postgresMounts = Invoke-CapturedProcess 'dev-stand-postgres-secret-mounts' $dockerPath @('inspect', $postgresContainer.Stdout.Trim(), '--format', '{{json .Mounts}}') @{} (Join-Path $actionDirectory 'postgres-secret-mounts.stdout.log') (Join-Path $actionDirectory 'postgres-secret-mounts.stderr.log') $connection @($sensitiveValues) 30
+            if ($postgresMounts.ExitCode -ne 0 -or -not (Test-SecretMountDestinations $postgresMounts.Stdout @('/run/secrets/postgres_password'))) { throw 'PostgreSQL secret mount destination proof failed' }
 
             $serverContainer = Invoke-CapturedProcess 'dev-stand-server-container-id' $dockerPath (@($composeArgs) + @('ps', '-q', 'server')) $standEnvironment (Join-Path $actionDirectory 'server-container-id.stdout.log') (Join-Path $actionDirectory 'server-container-id.stderr.log') $connection @($sensitiveValues) 30
             if ($serverContainer.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($serverContainer.Stdout)) { throw 'running server container ID could not be resolved for credential proof' }
             $serverCredential = Invoke-CapturedProcess 'dev-stand-server-credential-injection' $dockerPath @('inspect', $serverContainer.Stdout.Trim(), '--format', '{{json .Config.Env}}') @{} (Join-Path $actionDirectory 'server-credential-injection.stdout.log') (Join-Path $actionDirectory 'server-credential-injection.stderr.log') $connection @($sensitiveValues) 30
-            if ($serverCredential.ExitCode -ne 0 -or -not (Test-RedactedContainerEnvironment $serverCredential.Stdout @('ENGRAM_AUTH_ADMIN_TOKEN', 'ENGRAM_AUTH_BOOTSTRAP_CAPABILITY'))) { throw 'generated admin token/bootstrap capability did not reach the running server service exactly' }
+            $serverExactEnvironment = @{
+                DATABASE_DSN_FILE = '/run/secrets/database_dsn'
+                ENGRAM_AUTH_ADMIN_TOKEN_FILE = '/run/secrets/admin_token'
+                ENGRAM_ENCRYPTION_KEY_FILE = '/run/secrets/vault_key'
+            }
+            if ($serverCredential.ExitCode -ne 0 -or -not (Test-ContainerEnvironmentContract $serverCredential.Stdout $serverExactEnvironment @('ENGRAM_AUTH_BOOTSTRAP_CAPABILITY'))) { throw 'file-backed server credentials/bootstrap capability did not reach the running server service exactly' }
+            $serverMounts = Invoke-CapturedProcess 'dev-stand-server-secret-mounts' $dockerPath @('inspect', $serverContainer.Stdout.Trim(), '--format', '{{json .Mounts}}') @{} (Join-Path $actionDirectory 'server-secret-mounts.stdout.log') (Join-Path $actionDirectory 'server-secret-mounts.stderr.log') $connection @($sensitiveValues) 30
+            if ($serverMounts.ExitCode -ne 0 -or -not (Test-SecretMountDestinations $serverMounts.Stdout @('/run/secrets/database_dsn','/run/secrets/admin_token','/run/secrets/vault_key'))) { throw 'server secret mount destination proof failed' }
+            $credentialSecretMountsVerified = $true
             $credentialRuntimeInjectionPass = $true
         }
 
         if ($Action -in @('Up', 'Ready')) {
-            $pgReady = Invoke-CapturedProcess 'dev-stand-postgres-ready' $dockerPath @('compose', '-p', $Project, '-f', $File, 'exec', '-T', 'postgres', 'pg_isready', '-U', 'engram', '-d', 'engram') @{} (Join-Path $actionDirectory 'postgres-ready.stdout.log') (Join-Path $actionDirectory 'postgres-ready.stderr.log') $connection @($sensitiveValues) 30
+            $pgReady = Invoke-CapturedProcess 'dev-stand-postgres-ready' $dockerPath @('compose', '-p', $Project, '-f', $File, 'exec', '-T', 'postgres', 'pg_isready', '-U', 'engram', '-d', 'engram') $standEnvironment (Join-Path $actionDirectory 'postgres-ready.stdout.log') (Join-Path $actionDirectory 'postgres-ready.stderr.log') $connection @($sensitiveValues) 30
             if ($pgReady.ExitCode -ne 0) { throw "PostgreSQL readiness failed with exit $($pgReady.ExitCode)" }
             foreach ($endpoint in @(Get-DevStandReadyEndpoints)) {
                 $http = Invoke-CapturedProcess "dev-stand-$($endpoint.name)" $curlPath @('-sS', '--max-time', '15', '--write-out', '\n%{http_code}', $endpoint.url) @{} (Join-Path $actionDirectory "$($endpoint.name).stdout.log") (Join-Path $actionDirectory "$($endpoint.name).stderr.log") $connection @($sensitiveValues) 30
@@ -783,7 +866,7 @@ services:
         }
 
         if ($Action -eq 'Down') {
-            $down = Invoke-CapturedProcess 'dev-stand-down' $dockerPath @('compose', '-p', $Project, '-f', $File, 'down', '-v', '--remove-orphans') @{} (Join-Path $actionDirectory 'compose-down.stdout.log') (Join-Path $actionDirectory 'compose-down.stderr.log') $connection @() 180
+            $down = Invoke-CapturedProcess 'dev-stand-down' $dockerPath @('compose', '-p', $Project, '-f', $File, 'down', '-v', '--remove-orphans') $standEnvironment (Join-Path $actionDirectory 'compose-down.stdout.log') (Join-Path $actionDirectory 'compose-down.stderr.log') $connection @() 180
             if ($down.ExitCode -ne 0) { $errors.Add("compose down failed with exit $($down.ExitCode)") }
             $residualChecksPerformed = $true
             $residualResourcesZero = Invoke-DevStandResidualChecks -NamePrefix 'dev-stand-residual' -DockerPath $dockerPath -Project $Project -ActionDirectory $actionDirectory -Connection $connection -Errors $errors
@@ -812,7 +895,7 @@ services:
         foreach ($evidenceFile in Get-ChildItem -LiteralPath $actionDirectory -Recurse -File) {
             try {
                 $evidenceText = [System.IO.File]::ReadAllText($evidenceFile.FullName)
-                foreach ($credential in @($postgresPassword, $adminToken, $bootstrapCapability)) {
+                foreach ($credential in @($postgresPassword, $adminToken, $vaultKey, $bootstrapCapability, $standDsn)) {
                     if (-not [string]::IsNullOrWhiteSpace($credential) -and $evidenceText.Contains($credential)) {
                         $credentialValuesPersisted = $true; $errors.Add("ephemeral dev-stand credential persisted in evidence file '$($evidenceFile.FullName)'")
                         break
@@ -829,11 +912,14 @@ services:
         compose_project = $Project; compose_file = [System.IO.Path]::GetFullPath($File)
         ephemeral_postgres_password_generated = $credentialsGenerated
         ephemeral_admin_token_generated = $credentialsGenerated
+        ephemeral_vault_key_generated = $credentialsGenerated
         ephemeral_bootstrap_capability_generated = $credentialsGenerated
         ephemeral_credentials_distinct_and_nondefault = $credentialPolicyPass
         ephemeral_credentials_runtime_injected = $credentialRuntimeInjectionPass
+        credential_secret_mounts_verified = $credentialSecretMountsVerified
         ephemeral_postgres_password_persisted = $credentialValuesPersisted
         ephemeral_admin_token_persisted = $credentialValuesPersisted
+        ephemeral_vault_key_persisted = $credentialValuesPersisted
         ephemeral_bootstrap_capability_persisted = $credentialValuesPersisted
         source_repository = $sourceRepository
         source_commit = $sourceCommit
@@ -905,28 +991,43 @@ function Invoke-SelfTest {
         Assert-SelfTestCondition (@($readyEndpoints | Where-Object { $_.name -eq 'api-ready' -and $_.contract_kind -eq 'readiness' }).Count -eq 1) 'direct /api/ready is not classified as readiness'
         Assert-SelfTestCondition (@($readyEndpoints | Where-Object { $_.name -eq 'operator-api-health' -and $_.url -eq 'http://localhost:3001/api/health' -and $_.path_kind -eq 'operator-console-proxy' -and $_.contract_kind -eq 'liveness' }).Count -eq 1) 'operator-console proxied /api/health liveness proof is missing'
         Assert-SelfTestCondition (@($readyEndpoints | Where-Object { $_.name -eq 'operator-api-ready' -and $_.url -eq 'http://localhost:3001/api/ready' -and $_.path_kind -eq 'operator-console-proxy' -and $_.contract_kind -eq 'readiness' }).Count -eq 1) 'operator-console proxied /api/ready readiness proof is missing'
-        $credentials = [ordered]@{ postgres_password = 'random-postgres-selftest'; admin_token = 'random-admin-selftest'; bootstrap_capability = 'random-bootstrap-selftest' }
+        $fixture = { param([Parameter(Mandatory)][string]$Name) "test-fixture-$Name-not-secret" }
+        $sharedFixture = & $fixture 'shared'
+        $credentials = [ordered]@{
+            postgres_password = (& $fixture 'postgres')
+            admin_token = (& $fixture 'admin')
+            vault_key = (& $fixture 'vault')
+            bootstrap_capability = (& $fixture 'bootstrap')
+        }
         Assert-DevStandCredentials $credentials
         foreach ($invalidCredentials in @(
-            [ordered]@{ postgres_password = ''; admin_token = 'valid-admin-secret-0001'; bootstrap_capability = 'valid-bootstrap-secret-0001' },
-            [ordered]@{ postgres_password = 'engram'; admin_token = 'valid-admin-secret-0002'; bootstrap_capability = 'valid-bootstrap-secret-0002' },
-            [ordered]@{ postgres_password = 'valid-postgres-secret-0003'; admin_token = 'valid-admin-secret-0003' },
-            [ordered]@{ postgres_password = 'same-valid-secret-0004'; admin_token = 'same-valid-secret-0004'; bootstrap_capability = 'same-valid-secret-0004' }
+            [ordered]@{ postgres_password = ''; admin_token = (& $fixture 'admin-1'); vault_key = (& $fixture 'vault-1'); bootstrap_capability = (& $fixture 'bootstrap-1') },
+            [ordered]@{ postgres_password = 'engram'; admin_token = (& $fixture 'admin-2'); vault_key = (& $fixture 'vault-2'); bootstrap_capability = (& $fixture 'bootstrap-2') },
+            [ordered]@{ postgres_password = (& $fixture 'postgres-3'); admin_token = (& $fixture 'admin-3'); vault_key = (& $fixture 'vault-3') },
+            [ordered]@{ postgres_password = $sharedFixture; admin_token = $sharedFixture; vault_key = $sharedFixture; bootstrap_capability = $sharedFixture }
         )) {
             $rejected = $false
             try { Assert-DevStandCredentials $invalidCredentials } catch { $rejected = $true }
             Assert-SelfTestCondition $rejected 'blank/default/missing/reused dev-stand credentials were accepted'
         }
-        $standEnvironment = Get-DevStandEnvironment -Project 'engram-critical-stand' -PostgresPassword $credentials.postgres_password -AdminToken $credentials.admin_token -BootstrapCapability $credentials.bootstrap_capability
+        $selfTestSecretRoot = Join-Path $root ('engram-dev-stand-secrets-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $selfTestSecretRoot -Force | Out-Null
+        foreach ($leaf in @('admin-token.secret','database-dsn.secret','postgres-password.secret','vault-key.secret')) { Write-Utf8NoBom (Join-Path $selfTestSecretRoot $leaf) '' }
+        $secretWrite = Write-DevStandSecretFiles -Root $selfTestSecretRoot -PostgresPassword $credentials.postgres_password -AdminToken $credentials.admin_token -VaultKey $credentials.vault_key
+        $standEnvironment = Get-DevStandEnvironment -Project 'engram-critical-stand' -SecretRoot $selfTestSecretRoot -BuildVersion "sha-$('a' * 40)" -BootstrapCapability $credentials.bootstrap_capability
         Assert-SelfTestCondition ($standEnvironment.NUXT_OPERATOR_API_TARGET -ceq 'http://server:37777') 'dev stand uses the wrong Nuxt operator API target variable or value'
         Assert-SelfTestCondition (-not $standEnvironment.ContainsKey('NUXT_ENGRAM_API_TARGET')) 'stale NUXT_ENGRAM_API_TARGET was accepted into the dev stand environment'
-        Assert-SelfTestCondition ($standEnvironment.POSTGRES_PASSWORD -ceq $credentials.postgres_password) 'generated PostgreSQL password did not reach the compose environment'
-        Assert-SelfTestCondition ($standEnvironment.ENGRAM_AUTH_ADMIN_TOKEN -ceq $credentials.admin_token) 'generated admin token did not reach the compose environment'
+        Assert-SelfTestCondition (-not $standEnvironment.ContainsKey('POSTGRES_PASSWORD') -and -not $standEnvironment.ContainsKey('DATABASE_DSN') -and -not $standEnvironment.ContainsKey('ENGRAM_AUTH_ADMIN_TOKEN')) 'plaintext credentials remained in the compose environment'
+        foreach ($name in @('ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE','ENGRAM_DATABASE_DSN_SECRET_FILE','ENGRAM_POSTGRES_PASSWORD_SECRET_FILE','ENGRAM_VAULT_KEY_SECRET_FILE')) {
+            Assert-SelfTestCondition (Test-Path -LiteralPath ([string]$standEnvironment[$name]) -PathType Leaf) "file-backed credential path is missing for $name"
+        }
         Assert-SelfTestCondition ($standEnvironment.ENGRAM_AUTH_BOOTSTRAP_CAPABILITY -ceq $credentials.bootstrap_capability) 'generated bootstrap capability did not reach the compose environment'
-        Assert-SelfTestCondition ($standEnvironment.DATABASE_DSN -match '^postgres://engram:[^@]+@postgres:5432/engram\?sslmode=disable$' -and -not $standEnvironment.DATABASE_DSN.Contains(':engram@')) 'generated PostgreSQL password did not reach DATABASE_DSN'
+        Assert-SelfTestCondition ($secretWrite.Dsn -match '^postgres://engram:[^@]+@postgres:5432/engram\?sslmode=disable$' -and -not $secretWrite.Dsn.Contains(':engram@')) 'generated PostgreSQL password did not reach the DSN secret file'
         Assert-SelfTestCondition (Test-RedactedContainerEnvironment '["POSTGRES_PASSWORD=REDACTED_SENSITIVE_VALUE","OTHER=value"]' @('POSTGRES_PASSWORD')) 'redacted exact container environment proof was rejected'
         Assert-SelfTestCondition (-not (Test-RedactedContainerEnvironment '["POSTGRES_PASSWORD=wrong"]' @('POSTGRES_PASSWORD'))) 'wrong runtime credential value was accepted'
         Assert-SelfTestCondition (-not (Test-RedactedContainerEnvironment '["ENGRAM_AUTH_ADMIN_TOKEN=REDACTED_SENSITIVE_VALUE"]' @('ENGRAM_AUTH_ADMIN_TOKEN','ENGRAM_AUTH_BOOTSTRAP_CAPABILITY'))) 'missing runtime bootstrap capability was accepted'
+        Assert-SelfTestCondition (Test-ContainerEnvironmentContract '["DATABASE_DSN_FILE=/run/secrets/database_dsn","ENGRAM_AUTH_BOOTSTRAP_CAPABILITY=REDACTED_SENSITIVE_VALUE"]' @{ DATABASE_DSN_FILE = '/run/secrets/database_dsn' } @('ENGRAM_AUTH_BOOTSTRAP_CAPABILITY')) 'file-backed container environment proof was rejected'
+        Assert-SelfTestCondition (Test-SecretMountDestinations '[{"Type":"bind","Destination":"/run/secrets/database_dsn"}]' @('/run/secrets/database_dsn')) 'secret mount destination proof was rejected'
         $validInventory = Test-ExactDevStandInventory @{ postgres = 'pgvector/pgvector:pg17'; server = 'ghcr.io/thebtf/engram:main'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
         Assert-SelfTestCondition $validInventory.Pass 'exact compose service/image inventory was rejected'
         $invalidInventory = Test-ExactDevStandInventory @{ postgres = 'pgvector/pgvector:pg17'; server = 'engram:prc-candidate'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
@@ -1001,7 +1102,8 @@ function Invoke-SelfTest {
 if ($Help) { Show-Help; exit 0 }
 if ($SelfTest) { Invoke-SelfTest; exit 0 }
 if ($DevStandAction -ne 'None') {
-    $devStandSummary = Invoke-DevStandContract -Action $DevStandAction -Project $ComposeProject -File $ComposeFile -EvidenceRoot $ArtifactRoot -RequestedRunId $RunId
+    if ([string]::IsNullOrWhiteSpace($DevStandSecretRoot)) { Write-Error '-DevStandSecretRoot is mandatory for file-backed dev-stand credentials.'; exit 1 }
+    $devStandSummary = Invoke-DevStandContract -Action $DevStandAction -Project $ComposeProject -File $ComposeFile -EvidenceRoot $ArtifactRoot -SecretRoot $DevStandSecretRoot -RequestedRunId $RunId
     if ($devStandSummary.verdict -ne 'PASS') { exit 1 }
     exit 0
 }

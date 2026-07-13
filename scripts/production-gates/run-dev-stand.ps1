@@ -35,6 +35,42 @@ function Write-Utf8NoBom {
 
 function Get-Sha256 { param([Parameter(Mandatory)][string]$Path); return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
 
+function Initialize-DevStandSecretRoot {
+    $root = Join-Path ([System.IO.Path]::GetTempPath()) "engram-dev-stand-secrets-$PID-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $script:PendingDevStandSecretRoot = [System.IO.Path]::GetFullPath($root)
+    if (-not $IsWindows) {
+        [System.IO.File]::SetUnixFileMode($root, ([System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite -bor [System.IO.UnixFileMode]::UserExecute))
+    }
+    $files = [ordered]@{
+        ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE = 'admin-token.secret'
+        ENGRAM_DATABASE_DSN_SECRET_FILE = 'database-dsn.secret'
+        ENGRAM_POSTGRES_PASSWORD_SECRET_FILE = 'postgres-password.secret'
+        ENGRAM_VAULT_KEY_SECRET_FILE = 'vault-key.secret'
+    }
+    foreach ($entry in $files.GetEnumerator()) {
+        $path = Join-Path $root $entry.Value
+        Write-Utf8NoBom $path ''
+        if (-not $IsWindows) {
+            [System.IO.File]::SetUnixFileMode($path, ([System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite))
+        }
+        [Environment]::SetEnvironmentVariable($entry.Key, [System.IO.Path]::GetFullPath($path), 'Process')
+    }
+    return [System.IO.Path]::GetFullPath($root)
+}
+
+function Remove-DevStandSecretRoot {
+    param([Parameter(Mandatory)][string]$Path)
+    $temp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\', '/')
+    $resolved = [System.IO.Path]::GetFullPath($Path)
+    if (-not $resolved.StartsWith($temp + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not ([System.IO.Path]::GetFileName($resolved)).StartsWith('engram-dev-stand-secrets-', [System.StringComparison]::Ordinal)) {
+        throw "refusing unsafe dev-stand secret cleanup '$resolved'"
+    }
+    if (Test-Path -LiteralPath $resolved) { Remove-Item -LiteralPath $resolved -Recurse -Force }
+    return -not (Test-Path -LiteralPath $resolved)
+}
+
 function Quote-CommandArgument {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
     if ($Value -match '^[A-Za-z0-9_./:=+,-]+$') { return $Value }
@@ -91,12 +127,13 @@ function Assert-DevStandConfigCredentialPolicy {
         }
     }
     $required = [ordered]@{
-        'generation scope' = '  generation_scope: "three independent cryptographic 256-bit values generated inside the Up runner process"'
+        'generation scope' = '  generation_scope: "four independent cryptographic 256-bit values generated inside the Up runner process"'
         'PostgreSQL password generation' = '  postgres_password: "generated cryptographically inside the Up runner process"'
         'admin token generation' = '  admin_token: "generated cryptographically inside the Up runner process"'
+        'vault key generation' = '  vault_key: "generated cryptographically inside the Up runner process"'
         'bootstrap capability generation' = '  bootstrap_capability: "generated cryptographically inside the Up runner process"'
-        'PostgreSQL runtime interface' = '  postgres_runtime_interface: "POSTGRES_PASSWORD plus generated DATABASE_DSN"'
-        'admin runtime interface' = '  admin_runtime_interface: "ENGRAM_AUTH_ADMIN_TOKEN"'
+        'PostgreSQL runtime interface' = '  postgres_runtime_interface: "ENGRAM_POSTGRES_PASSWORD_SECRET_FILE plus ENGRAM_DATABASE_DSN_SECRET_FILE"'
+        'admin runtime interface' = '  admin_runtime_interface: "ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE"'
         'bootstrap runtime interface' = '  bootstrap_runtime_interface: "ENGRAM_AUTH_BOOTSTRAP_CAPABILITY via ephemeral compose override"'
         'credential distinctness' = '  required_distinct: true'
         'credential forbidden defaults' = '  forbidden_defaults: ["engram", "password", "changeme", "change-me", "change-me-in-production", "default", "admin"]'
@@ -198,14 +235,14 @@ function Read-ActionSummary {
         }
     }
     if ($Action -eq 'Up') {
-        foreach ($field in @('ephemeral_postgres_password_generated', 'ephemeral_admin_token_generated', 'ephemeral_bootstrap_capability_generated', 'ephemeral_credentials_distinct_and_nondefault', 'ephemeral_credentials_runtime_injected')) {
+        foreach ($field in @('ephemeral_postgres_password_generated', 'ephemeral_admin_token_generated', 'ephemeral_vault_key_generated', 'ephemeral_bootstrap_capability_generated', 'ephemeral_credentials_distinct_and_nondefault', 'ephemeral_credentials_runtime_injected', 'credential_secret_mounts_verified')) {
             if (-not (Test-StrictBoolean $summary.$field $true)) { throw "Up lacks strict true credential proof '$field'" }
         }
-        foreach ($field in @('ephemeral_postgres_password_persisted', 'ephemeral_admin_token_persisted', 'ephemeral_bootstrap_capability_persisted')) {
+        foreach ($field in @('ephemeral_postgres_password_persisted', 'ephemeral_admin_token_persisted', 'ephemeral_vault_key_persisted', 'ephemeral_bootstrap_capability_persisted')) {
             if (-not (Test-StrictBoolean $summary.$field $false)) { throw "Up credential persistence proof '$field' is not strict false" }
         }
         $commands = Get-Content -LiteralPath $summary.commands -Raw | ConvertFrom-Json -Depth 100
-        foreach ($name in @('dev-stand-source-root', 'dev-stand-source-commit', 'dev-stand-source-tracked-status', 'dev-stand-compose-build', 'dev-stand-postgres-pull', 'dev-stand-prelaunch-image-inspect-postgres', 'dev-stand-prelaunch-image-inspect-server', 'dev-stand-prelaunch-image-inspect-operator-console', 'dev-stand-up', 'dev-stand-postgres-container-id', 'dev-stand-postgres-credential-injection', 'dev-stand-server-container-id', 'dev-stand-server-credential-injection', 'dev-stand-postgres-ready', 'dev-stand-health', 'dev-stand-api-ready', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready')) { if (@($commands | Where-Object name -eq $name).Count -ne 1) { throw "Up did not execute '$name' exactly once" } }
+        foreach ($name in @('dev-stand-source-root', 'dev-stand-source-commit', 'dev-stand-source-tracked-status', 'dev-stand-compose-build', 'dev-stand-postgres-pull', 'dev-stand-prelaunch-image-inspect-postgres', 'dev-stand-prelaunch-image-inspect-server', 'dev-stand-prelaunch-image-inspect-operator-console', 'dev-stand-up', 'dev-stand-postgres-container-id', 'dev-stand-postgres-credential-injection', 'dev-stand-postgres-secret-mounts', 'dev-stand-server-container-id', 'dev-stand-server-credential-injection', 'dev-stand-server-secret-mounts', 'dev-stand-postgres-ready', 'dev-stand-health', 'dev-stand-api-ready', 'dev-stand-operator-api-health', 'dev-stand-operator-api-ready')) { if (@($commands | Where-Object name -eq $name).Count -ne 1) { throw "Up did not execute '$name' exactly once" } }
     }
     elseif ($Action -eq 'Ready') {
         $commands = Get-Content -LiteralPath $summary.commands -Raw | ConvertFrom-Json -Depth 100
@@ -295,8 +332,12 @@ $errors = [System.Collections.Generic.List[string]]::new(); $actions = [System.C
 $configInfo = $null; $upAttempted = $false; $downAttempted = $false; $downSummary = $null
 $nestedRoot = Join-Path $artifactDirectory 'nested'
 $pwsh = $null; $runnerScript = Join-Path $PSScriptRoot 'run-db-suite.ps1'
+$script:PendingDevStandSecretRoot = $null
+$secretRoot = $null
+$secretFilesCleaned = $false
 
 try {
+    $secretRoot = Initialize-DevStandSecretRoot
     $configInfo = Read-DevStandConfig $Config
     $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
     foreach ($action in @('Up', 'Ready', 'Scan')) {
@@ -304,7 +345,7 @@ try {
         if ($action -eq 'Up') { $upAttempted = $true }
         $stdoutPath = Join-Path $artifactDirectory ("$($action.ToLowerInvariant()).stdout.log")
         $stderrPath = Join-Path $artifactDirectory ("$($action.ToLowerInvariant()).stderr.log")
-        $arguments = @('-NoProfile', '-File', $runnerScript, '-DevStandAction', $action, '-ComposeProject', $configInfo.Project, '-ComposeFile', $configInfo.ComposeFile, '-ArtifactRoot', $nestedRoot, '-RunId', $RunId)
+        $arguments = @('-NoProfile', '-File', $runnerScript, '-DevStandAction', $action, '-ComposeProject', $configInfo.Project, '-ComposeFile', $configInfo.ComposeFile, '-DevStandSecretRoot', $secretRoot, '-ArtifactRoot', $nestedRoot, '-RunId', $RunId)
         $child = Invoke-CapturedProcess "dev-stand-$($action.ToLowerInvariant())" $pwsh $arguments $stdoutPath $stderrPath 1200
         $summaryPath = Join-Path (Join-Path (Join-Path $nestedRoot 'dev-stand') ("$RunId-$($action.ToLowerInvariant())")) 'summary.json'
         $summary = $null
@@ -323,13 +364,27 @@ finally {
         if ($null -eq $pwsh) { try { $pwsh = (Get-Command pwsh -ErrorAction Stop).Source } catch { $errors.Add($_.Exception.Message) } }
         if ($null -ne $pwsh -and $null -ne $configInfo) {
             $downStdout = Join-Path $artifactDirectory 'down.stdout.log'; $downStderr = Join-Path $artifactDirectory 'down.stderr.log'
-            $downArguments = @('-NoProfile', '-File', $runnerScript, '-DevStandAction', 'Down', '-ComposeProject', $configInfo.Project, '-ComposeFile', $configInfo.ComposeFile, '-ArtifactRoot', $nestedRoot, '-RunId', $RunId)
+            $downArguments = @('-NoProfile', '-File', $runnerScript, '-DevStandAction', 'Down', '-ComposeProject', $configInfo.Project, '-ComposeFile', $configInfo.ComposeFile, '-DevStandSecretRoot', $secretRoot, '-ArtifactRoot', $nestedRoot, '-RunId', $RunId)
             $downChild = Invoke-CapturedProcess 'dev-stand-down' $pwsh $downArguments $downStdout $downStderr 300
             $downSummaryPath = Join-Path (Join-Path (Join-Path $nestedRoot 'dev-stand') "$RunId-down") 'summary.json'
             try { $downSummary = Read-ActionSummary 'Down' $downSummaryPath $downChild.ExitCode } catch { $errors.Add($_.Exception.Message) }
             $actions.Add([pscustomobject][ordered]@{ action = 'Down'; exit_code = $downChild.ExitCode; summary = if (Test-Path -LiteralPath $downSummaryPath) { [System.IO.Path]::GetFullPath($downSummaryPath) } else { $null }; verdict = if ($null -ne $downSummary) { $downSummary.verdict } else { $null } })
             if ($downChild.ExitCode -ne 0) { $errors.Add("dev-stand Down failed with exit $($downChild.ExitCode)") }
         }
+    }
+
+    try {
+        $secretCleanupRoot = if (-not [string]::IsNullOrWhiteSpace($secretRoot)) { $secretRoot } else { $script:PendingDevStandSecretRoot }
+        if ([string]::IsNullOrWhiteSpace($secretCleanupRoot)) {
+            $secretFilesCleaned = $true
+        } else {
+            $secretFilesCleaned = Remove-DevStandSecretRoot -Path $secretCleanupRoot
+        }
+        if (-not $secretFilesCleaned) { throw 'dev-stand secret root remains after cleanup' }
+        $script:PendingDevStandSecretRoot = $null
+    } catch {
+        $secretFilesCleaned = $false
+        $errors.Add($_.Exception.Message)
     }
 
     $commandsPath = Join-Path $artifactDirectory 'commands.json'; Write-Utf8NoBom $commandsPath ((ConvertTo-Json -InputObject @($script:CommandRecords.ToArray()) -Depth 14) + "`n")
@@ -342,6 +397,7 @@ finally {
         up_attempted = $upAttempted; down_attempted = $downAttempted
         cleanup_status = if (-not $upAttempted) { 'NOT_APPLICABLE' } elseif ($null -ne $downSummary -and $downSummary.verdict -eq 'PASS' -and $downSummary.residual_resources_zero) { 'PASS' } else { 'FAIL' }
         residual_resources_zero = if ($null -ne $downSummary) { $downSummary.residual_resources_zero } else { $null }
+        secret_files_cleaned = $secretFilesCleaned
         actions = @($actions); child_commands = $script:CommandRecords.Count; nonzero_child_commands = @($script:CommandRecords | Where-Object exit_code -ne 0).Count
         commands = [System.IO.Path]::GetFullPath($commandsPath); errors = @($errors); artifact_directory = [System.IO.Path]::GetFullPath($artifactDirectory)
     }

@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-13T03:41:19.9331020Z",
+  "base_commit": "888708b3f20d0b520021cfcc4ae095ea5ddd2b81",
+  "scope": "release integration: Docker Scout provisioning, file-backed dev-stand/image credentials, portable critical evidence, and measured OTLP residue",
+  "red": [
+    {
+      "command": "go test -tags=critical ./tests/critical/runtime -run TestDockerReleaseRefFreshnessGuard -count=1",
+      "result": "FAIL",
+      "observation": "both Docker workflows lacked a pinned Docker Scout installation contract"
+    },
+    {
+      "command": "./scripts/production-gates/run-critical-suite.ps1 -SelfTest",
+      "result": "FAIL",
+      "observation": "command evidence lacked an explicit repository-relative working_directory"
+    },
+    {
+      "command": "go test -tags=critical ./tests/critical/runtime -run TestDockerReleaseRefFreshnessGuard -count=1",
+      "result": "FAIL",
+      "observation": "the new secret-file lifecycle contract detected missing Unix permission hardening"
+    },
+    {
+      "command": "./scripts/production-gates/run-critical-suite.ps1 -RunId sol-synthesis-20260713-observability-r2",
+      "result": "FAIL",
+      "observation": "196/197 passed; the isolation test failed closed because DATABASE_DSN did not identify a dedicated test database"
+    },
+    {
+      "command": "./scripts/production-gates/assert-go-test-json.ps1 -SelfTest",
+      "result": "FAIL",
+      "observation": "the hostile portability assertion detected that the nested parser summary exposed an absolute host input_path"
+    }
+  ],
+  "green": [
+    {
+      "command": "go test -tags=critical ./tests/critical/runtime -run TestDockerReleaseRefFreshnessGuard -count=1",
+      "result": "PASS",
+      "detail": "39.581s"
+    },
+    {
+      "command": "./scripts/production-gates/run-critical-suite.ps1 -SelfTest",
+      "result": "PASS"
+    },
+    {
+      "command": "./scripts/production-gates/run-db-suite.ps1 -SelfTest",
+      "result": "PASS"
+    },
+    {
+      "command": "./scripts/production-gates/run-dev-stand.ps1 -SelfTest",
+      "result": "PASS"
+    },
+    {
+      "command": "./scripts/production-smoke/verify-otlp.ps1 -ArtifactRoot .agent/tmp/otlp-verify-r1",
+      "result": "PASS",
+      "detail": "13 required tests, zero newly created process residue, zero newly created container residue"
+    },
+    {
+      "command": "go test ./...",
+      "result": "PASS"
+    },
+    {
+      "command": "run-critical-suite.ps1 with a disposable localhost-only PostgreSQL 17 database named engram_critical_test",
+      "result": "PASS",
+      "detail": "197 tests, 197 passed, 0 failed, 0 skipped, 0 unexpected skips; two child command records use only repository-relative paths; disposable database container residue is zero"
+    },
+    {
+      "command": "./scripts/production-gates/assert-go-test-json.ps1 -SelfTest",
+      "result": "PASS",
+      "detail": "nested summary paths are repository-relative or external leaf-only; regenerated 197-test evidence contains no absolute Windows paths"
+    },
+    {
+      "command": "PowerShell AST parse of five changed scripts",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --unified=0 added lines | gitleaks stdin --redact=100",
+      "result": "PASS",
+      "detail": "30.85 KB scanned; no leaks found"
+    }
+  ],
+  "external_source_evidence": {
+    "docker_scout_release_api": {
+      "url": "https://api.github.com/repos/docker/scout-cli/releases/tags/v1.23.1",
+      "asset": "docker-scout_1.23.1_linux_amd64.tar.gz",
+      "size_bytes": 62062436,
+      "sha256": "0f778f9d833f28bc6cccff95e33039849c0afcecafa38d9f46fe74bfd0915714"
+    },
+    "context7": "official GitHub Actions, Docker, and OpenTelemetry documentation consulted",
+    "parallel": "official GitHub and Docker documentation consulted",
+    "tavily": "BLOCKED: OAuth authorization required"
+  },
+  "incomplete_checks": [
+    {
+      "check": "local full download and byte-for-byte hash of the 62 MB Scout release archive",
+      "status": "INCOMPLETE",
+      "reason": "two network transfers exceeded command timeouts and produced partial files",
+      "fail_closed_runtime_control": "both workflows validate the complete archive with sha256sum --check --strict before extraction"
+    },
+    {
+      "check": "clean-source image and dev-stand runtime gates",
+      "status": "PENDING_COMMIT",
+      "reason": "the image gate intentionally rejects a dirty source tree"
+    }
+  ],
+  "verdict": "IMPLEMENTATION_GREEN_RUNTIME_GATES_PENDING"
+}

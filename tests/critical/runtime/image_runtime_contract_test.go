@@ -376,6 +376,70 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		}
 	}
 
+	const scoutVersion = "1.23.1"
+	const scoutArchiveSHA256 = "0f778f9d833f28bc6cccff95e33039849c0afcecafa38d9f46fe74bfd0915714"
+	for _, workflowPath := range []string{verificationPath, publisherPath} {
+		workflow := readFile(t, workflowPath)
+		for _, required := range []string{
+			"docker-scout_" + scoutVersion + "_linux_amd64.tar.gz",
+			scoutArchiveSHA256,
+			".docker/cli-plugins/docker-scout",
+			"docker scout version",
+		} {
+			if !strings.Contains(workflow, required) {
+				t.Fatalf("%s does not provision the pinned Docker Scout CLI contract %q", workflowPath, required)
+			}
+		}
+	}
+
+	imageGate := readFile(t, filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1"))
+	for _, required := range []string{
+		"ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE",
+		"ENGRAM_DATABASE_DSN_SECRET_FILE",
+		"ENGRAM_POSTGRES_PASSWORD_SECRET_FILE",
+		"ENGRAM_VAULT_KEY_SECRET_FILE",
+		"engram-image-secrets-",
+		"PendingImageSecretRoot",
+		"SetUnixFileMode",
+		"secret_files_cleaned",
+	} {
+		if !strings.Contains(imageGate, required) {
+			t.Fatalf("image gate does not own the temporary secret-file lifecycle %q", required)
+		}
+	}
+
+	devStand := readFile(t, filepath.Join(repo, "scripts", "production-gates", "run-dev-stand.ps1"))
+	for _, required := range []string{"engram-dev-stand-secrets-", "PendingDevStandSecretRoot", "SetUnixFileMode", "-DevStandSecretRoot", "secret_files_cleaned"} {
+		if !strings.Contains(devStand, required) {
+			t.Fatalf("dev-stand lifecycle does not preserve and clean its secret root %q", required)
+		}
+	}
+	devStandAction := readFile(t, filepath.Join(repo, "scripts", "production-gates", "run-db-suite.ps1"))
+	for _, required := range []string{
+		"ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE",
+		"ENGRAM_DATABASE_DSN_SECRET_FILE",
+		"ENGRAM_POSTGRES_PASSWORD_SECRET_FILE",
+		"ENGRAM_VAULT_KEY_SECRET_FILE",
+		"DevStandSecretRoot",
+		"credential_secret_mounts_verified",
+	} {
+		if !strings.Contains(devStandAction, required) {
+			t.Fatalf("dev-stand action does not consume file-backed secrets safely %q", required)
+		}
+	}
+
+	otlpGate := readFile(t, filepath.Join(repo, "scripts", "production-smoke", "verify-otlp.ps1"))
+	for _, required := range []string{"process_residue_checked", "container_residue_checked", "Get-ResidualProcessSnapshot", "Get-ResidualContainerSnapshot"} {
+		if !strings.Contains(otlpGate, required) {
+			t.Fatalf("OTLP evidence still lacks measured residue proof %q", required)
+		}
+	}
+	for _, forbidden := range []string{"process_residue = @()", "container_residue = @()"} {
+		if strings.Contains(otlpGate, forbidden) {
+			t.Fatalf("OTLP evidence hard-codes a false residue claim %q", forbidden)
+		}
+	}
+
 	verification := readFile(t, verificationPath)
 	for _, fragment := range []string{
 		"branches: [main]",

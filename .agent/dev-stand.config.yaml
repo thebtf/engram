@@ -25,12 +25,13 @@ env:
   ENGRAM_AUTH_DISABLED: "false"
 
 credential_policy:
-  generation_scope: "three independent cryptographic 256-bit values generated inside the Up runner process"
+  generation_scope: "four independent cryptographic 256-bit values generated inside the Up runner process"
   postgres_password: "generated cryptographically inside the Up runner process"
   admin_token: "generated cryptographically inside the Up runner process"
+  vault_key: "generated cryptographically inside the Up runner process"
   bootstrap_capability: "generated cryptographically inside the Up runner process"
-  postgres_runtime_interface: "POSTGRES_PASSWORD plus generated DATABASE_DSN"
-  admin_runtime_interface: "ENGRAM_AUTH_ADMIN_TOKEN"
+  postgres_runtime_interface: "ENGRAM_POSTGRES_PASSWORD_SECRET_FILE plus ENGRAM_DATABASE_DSN_SECRET_FILE"
+  admin_runtime_interface: "ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE"
   bootstrap_runtime_interface: "ENGRAM_AUTH_BOOTSTRAP_CAPABILITY via ephemeral compose override"
   required_distinct: true
   forbidden_defaults: ["engram", "password", "changeme", "change-me", "change-me-in-production", "default", "admin"]
