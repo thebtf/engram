@@ -441,6 +441,43 @@ func TestWriteLint_T035_Phase2_MergeWith(t *testing.T) {
 	assert.Equal(t, true, p2resp["stored"], "Phase2 must return stored=true")
 }
 
+func TestWriteLint_T035_Phase2PreservesExactTargetMemoryID(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+
+	const targetID int64 = 9007199254740993
+	target := nearDupMemory()
+	target.ID = targetID
+	orch, _, closer := buildWLOrchestrator(target)
+	defer closer()
+
+	srv := NewServer(ServerOptions{Version: "test-t035-exact-target"})
+	srv.SetWriteLintOrchestrator(orch)
+	ctx := context.Background()
+
+	p1args, err := json.Marshal(map[string]any{
+		"content": t035DupContent,
+		"project": "testproj",
+	})
+	require.NoError(t, err)
+	p1result, err := srv.handleStoreMemory(ctx, p1args)
+	require.NoError(t, err)
+	var p1resp map[string]any
+	require.NoError(t, json.Unmarshal([]byte(p1result), &p1resp))
+	token, ok := p1resp["resolution_token"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, token)
+
+	p2args := json.RawMessage(fmt.Sprintf(
+		`{"content":%q,"project":"testproj","resolution_token":%q,"option":"merge_with","target_memory_id":%d}`,
+		t035DupContent, token, targetID,
+	))
+	result, err := srv.handleStoreMemory(ctx, p2args)
+	require.NoError(t, err)
+	var response map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result), &response))
+	require.Equal(t, true, response["stored"])
+}
+
 // TestWriteLint_T035_ForceBypass verifies that force=true skips the write-lint gate
 // and falls through to the legacy create path (fails at nil memoryStore).
 func TestWriteLint_T035_ForceBypass(t *testing.T) {

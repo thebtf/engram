@@ -650,12 +650,9 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 					TargetMemoryID: nil,
 					Mem:            wlMem,
 				}
-				if tv, ok := m["target_memory_id"]; ok && tv != nil {
-					tid := coerceInt(tv, 0)
-					if tid > 0 {
-						tid64 := int64(tid)
-						p2req.TargetMemoryID = &tid64
-					}
+				if targetPresent {
+					tid := targetMemoryID
+					p2req.TargetMemoryID = &tid
 				}
 				p2resp, p2err := s.writeLint.Phase2WithMemoryStore(ctx, p2req, scopedWLStore)
 				if p2err != nil {
