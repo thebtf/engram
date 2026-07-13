@@ -31,6 +31,7 @@ const {
   modelStandby,
   modelDegraded,
   accessGap,
+  graphFlagState,
 } = useOperatorOverview()
 
 function displayCount(value: number, pending = false) {
@@ -57,6 +58,18 @@ const modelCountDisplay = computed(() => displayCount(models.value.length, model
 const modelOKDisplay = computed(() => displayCount(modelOK.value, modelsPending.value))
 const modelDegradedDisplay = computed(() => displayCount(modelDegraded.value, modelsPending.value))
 const queueCountDisplay = computed(() => displayCount(queueCount.value, queuePending.value))
+const graphFlagBadge = computed(() => {
+  switch (graphFlagState.value) {
+    case 'enabled':
+      return { cls: 'live', text: t('common.enabled') }
+    case 'disabled':
+      return { cls: 'gate', text: t('overview.cards.graph.disabled') }
+    case 'error':
+      return { cls: 'gate', text: t('overview.cards.graph.error') }
+    default:
+      return { cls: 'status', text: t('overview.cards.graph.pending') }
+  }
+})
 
 const memoryStops = computed(() => {
   const total = Math.max(1, memories.length)
@@ -154,7 +167,7 @@ const memoryCards = computed(() => [
     name: t('nav.items.graph'),
     big: '—',
     sub: t('overview.cards.graph.sub'),
-    meta: [{ cls: 'live', text: t('common.enabled') }],
+    meta: [graphFlagBadge.value],
   },
   {
     to: '/books',

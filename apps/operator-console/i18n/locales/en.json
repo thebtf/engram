@@ -180,7 +180,12 @@
       "memory": { "sub": "{active} active · {noise} in noise" },
       "queue": { "sub": "memory candidates waiting for a decision" },
       "noise": { "sub": "share of noisy injections" },
-      "graph": { "sub": "concept graph and transitions" },
+      "graph": {
+        "sub": "concept graph and transitions",
+        "disabled": "disabled",
+        "pending": "checking flag",
+        "error": "unavailable"
+      },
       "books": { "sub": "author-domain and terminology ingest" },
       "rules": { "sub": "operator always-inject directives" },
       "issues": {
@@ -748,6 +753,10 @@
     "filters": {
       "project": "Graph project"
     },
+    "honesty": {
+      "pending": "checking",
+      "error": "unavailable"
+    },
     "state": {
       "pending": "Loading graph data…",
       "error": "Could not load graph data: {message}",
@@ -815,7 +824,8 @@
       "deleteNodeCascade": "Cascade through connected edges",
       "runTraverse": "Run traverse",
       "findPath": "Find path",
-      "running": "Running…"
+      "running": "Running…",
+      "closeNotice": "Close notification"
     },
     "sections": {
       "nodes": "Project nodes",

@@ -1,5 +1,5 @@
 import { computed } from 'vue'
-import { unsupportedOperatorAction } from './useOperatorApi'
+import { operatorFetchJson, unsupportedOperatorAction } from './useOperatorApi'
 import { useCreds, useIssuesState, useModelsState, useProjects, useRules } from './useMockData'
 import { useOperatorMemoryLab } from './useOperatorMemoryLab'
 import { useOperatorQueue } from './useOperatorQueue'
@@ -17,6 +17,19 @@ export function useOperatorOverview() {
   const models = computed(() => modelsState.rows.value)
   const queue = useOperatorQueue()
   const shell = useOperatorShellStatus()
+  const graphFlagState = useState<'pending' | 'enabled' | 'disabled' | 'error'>('live:overview:graph-flag', () => 'pending')
+  const graphFlagStarted = useState<boolean>('live:overview:graph-flag:started', () => false)
+
+  if (import.meta.client && !graphFlagStarted.value) {
+    graphFlagStarted.value = true
+    void operatorFetchJson<{ flags?: Record<string, boolean> }>('/api/flags', undefined, 'operator-overview-graph-flag')
+      .then((payload) => {
+        graphFlagState.value = payload?.flags?.ENGRAM_GRAPH_ENABLED === true ? 'enabled' : 'disabled'
+      })
+      .catch(() => {
+        graphFlagState.value = 'error'
+      })
+  }
 
   const memoryActive = computed(() => memories.filter((memory) => !memory.noise).length)
   const memoryNoise = computed(() => memories.filter((memory) => memory.noise).length)
@@ -73,5 +86,6 @@ export function useOperatorOverview() {
     modelStandby,
     modelDegraded,
     accessGap,
+    graphFlagState,
   }
 }
