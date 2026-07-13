@@ -48,6 +48,14 @@ function Get-PropertyValue {
     return $property.Value
 }
 
+function Get-JsonPropertyValue {
+    param([AllowNull()]$Object, [Parameter(Mandatory)][string]$Name)
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    Write-Output -NoEnumerate $property.Value
+}
+
 function Get-OptionalStringArray {
     param([AllowNull()]$Object, [Parameter(Mandatory)][string]$Name)
     [string[]]$values = @(
@@ -58,6 +66,104 @@ function Get-OptionalStringArray {
         }
     )
     return $values
+}
+
+function Test-RequiredCanonicalStringArray {
+    param(
+        [AllowNull()]$Value,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Errors,
+        [string]$MemberPattern,
+        [ValidateSet('none','exact','directory-prefix')][string]$PathKind = 'none'
+    )
+    if ($Value -isnot [System.Array] -or @($Value).Count -eq 0) {
+        $Errors.Add("$Name must be a non-empty JSON array")
+        return $false
+    }
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $valid = $true
+    foreach ($member in @($Value)) {
+        if ($member -isnot [string] -or [string]::IsNullOrWhiteSpace($member)) {
+            $Errors.Add("$Name contains a null, non-string, or blank member")
+            $valid = $false
+            continue
+        }
+        if ($MemberPattern -and $member -cnotmatch $MemberPattern) {
+            $Errors.Add("$Name contains a non-canonical member '$member'")
+            $valid = $false
+            continue
+        }
+        if (-not $seen.Add($member)) {
+            $Errors.Add("$Name contains a duplicate member '$member'")
+            $valid = $false
+            continue
+        }
+        if ($PathKind -ne 'none') {
+            try {
+                $pathToken = if ($PathKind -eq 'directory-prefix') { $member + '**' } else { $member }
+                $normalized = Normalize-AuthorityPath $pathToken
+                $isCanonical = if ($PathKind -eq 'exact') {
+                    $normalized.kind -eq 'exact' -and $normalized.display -ceq $member
+                } else {
+                    $normalized.kind -eq 'prefix' -and ($normalized.path + '/') -ceq $member
+                }
+                if (-not $isCanonical) { throw "member is not a canonical $PathKind path: '$member'" }
+            }
+            catch {
+                $Errors.Add("${Name}: $($_.Exception.Message)")
+                $valid = $false
+            }
+        }
+    }
+    return $valid
+}
+
+function Test-R12MacroAuthority {
+    param([Parameter(Mandatory)]$Pending, [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Errors)
+    if ([string](Get-PropertyValue $Pending 'authority_mode') -cne 'bound-plan-member-union-with-exact-r12-overrides') { return $false }
+
+    $memberSlicesValue = Get-JsonPropertyValue $Pending 'member_slices'
+    $valid = Test-RequiredCanonicalStringArray -Value $memberSlicesValue -Name 'member_slices' -Errors $Errors -MemberPattern '^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*$'
+    $memberSlices = if ($valid) { @($memberSlicesValue) } else { @() }
+    $overrides = Get-JsonPropertyValue $Pending 'exact_r12_overrides'
+    if ($overrides -isnot [System.Array] -or @($overrides).Count -eq 0) {
+        $Errors.Add('exact_r12_overrides must be a non-empty JSON array')
+        return $false
+    }
+    $seenOverrides = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($override in @($overrides)) {
+        if ($override -isnot [pscustomobject]) {
+            $Errors.Add('exact_r12_overrides contains a null, non-object, or malformed member')
+            $valid = $false
+            continue
+        }
+        $propertyNames = @($override.PSObject.Properties.Name)
+        $unknownProperties = @($propertyNames | Where-Object { $_ -cnotin @('slice','exact_paths','exact_prefixes','forbidden_paths') })
+        if (@($unknownProperties).Count -gt 0 -or @($propertyNames | Where-Object { $_ -cin @('slice','exact_paths','forbidden_paths') }).Count -ne 3) {
+            $Errors.Add('exact_r12_overrides member has an incomplete or unknown schema')
+            $valid = $false
+            continue
+        }
+        $overrideSlice = Get-PropertyValue $override 'slice'
+        if ($overrideSlice -isnot [string] -or $overrideSlice -cnotmatch '^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*$' -or $overrideSlice -cnotin $memberSlices -or -not $seenOverrides.Add($overrideSlice)) {
+            $Errors.Add("exact_r12_overrides contains an unknown, non-canonical, or duplicate slice '$overrideSlice'")
+            $valid = $false
+        }
+        if (-not (Test-RequiredCanonicalStringArray -Value (Get-JsonPropertyValue $override 'exact_paths') -Name "exact_r12_overrides[$overrideSlice].exact_paths" -Errors $Errors -PathKind exact)) { $valid = $false }
+        if ($null -ne $override.PSObject.Properties['exact_prefixes'] -and -not (Test-RequiredCanonicalStringArray -Value (Get-JsonPropertyValue $override 'exact_prefixes') -Name "exact_r12_overrides[$overrideSlice].exact_prefixes" -Errors $Errors -PathKind directory-prefix)) { $valid = $false }
+        if (-not (Test-RequiredCanonicalStringArray -Value (Get-JsonPropertyValue $override 'forbidden_paths') -Name "exact_r12_overrides[$overrideSlice].forbidden_paths" -Errors $Errors -PathKind exact)) { $valid = $false }
+    }
+    return $valid
+}
+
+function Get-GitAncestorProbeResult {
+    param([Parameter(Mandatory)][string]$Repository, [Parameter(Mandatory)][string]$Base, [Parameter(Mandatory)][string]$Head)
+    & git -C $Repository merge-base --is-ancestor $Base $Head 2>$null
+    $exitCode = $LASTEXITCODE
+    return [pscustomobject][ordered]@{
+        classification = if ($exitCode -eq 0) { 'ancestor' } elseif ($exitCode -eq 1) { 'not-ancestor' } else { 'git-error' }
+        exit_code = $exitCode
+    }
 }
 
 function Split-MarkdownRow {
@@ -388,7 +494,7 @@ function Invoke-R12ContractAudit {
         if ((Get-PropertyValue $pending 'release_accepted') -isnot [bool] -or [bool](Get-PropertyValue $pending 'release_accepted')) { $errors.Add("pending '$slice' must not claim release acceptance") }
         [string[]]$exactPaths = @(Get-OptionalStringArray $pending 'exact_paths')
         [string[]]$exactPrefixes = @(Get-OptionalStringArray $pending 'exact_prefixes')
-        $macroBound = [string](Get-PropertyValue $pending 'authority_mode') -ceq 'bound-plan-member-union-with-exact-r12-overrides' -and @((Get-PropertyValue $pending 'member_slices')).Count -gt 0 -and @((Get-PropertyValue $pending 'exact_r12_overrides')).Count -gt 0
+        $macroBound = Test-R12MacroAuthority $pending $errors
         if ($exactPaths.Count + $exactPrefixes.Count -eq 0 -and -not $macroBound) { $errors.Add("pending '$slice' declares no bounded path") }
         $seenPending = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         foreach ($token in $exactPaths) {
@@ -431,8 +537,9 @@ function Invoke-R12ContractAudit {
         elseif ($probeBase -cne [string](Get-PropertyValue $matches[0] 'base_anchor')) { $errors.Add("pending probe base '$probeBase' must equal frozen base anchor '$([string](Get-PropertyValue $matches[0] 'base_anchor'))'") }
         else {
             try {
-                & git -C $Repository merge-base --is-ancestor $probeBase $probeHead 2>$null
-                if ($LASTEXITCODE -ne 0) { throw 'pending probe base is not an ancestor of head' }
+                $ancestor = Get-GitAncestorProbeResult $Repository $probeBase $probeHead
+                if ($ancestor.classification -eq 'not-ancestor') { throw "pending probe base '$probeBase' is not an ancestor of head '$probeHead'" }
+                if ($ancestor.classification -eq 'git-error') { throw "pending probe Git error: git merge-base --is-ancestor failed with exit $($ancestor.exit_code)" }
                 [object[]]$entries = @(Get-GitDiffEntries $Repository $probeBase $probeHead)
                 [object[]]$declarations = @(
                     foreach ($token in @(Get-OptionalStringArray $matches[0] 'exact_paths') + @(Get-OptionalStringArray $matches[0] 'exact_prefixes')) {
@@ -725,6 +832,45 @@ function Invoke-SelfTest {
     $r12PrefixInExactPaths.pending_namespaces[0].exact_prefixes = @()
     $r12PrefixInExactPathsResult = Invoke-R12ContractAudit $r12PrefixInExactPaths $hash $hash $hash $hash
     Assert-SelfTest ($r12PrefixInExactPathsResult.verdict -eq 'FAIL' -and @($r12PrefixInExactPathsResult.errors | Where-Object { $_ -match 'exact_paths entry is non-exact' }).Count -eq 1) 'R12 prefix token in exact_paths was accepted'
+    $r12ValidMacro = Copy-JsonObject $r12ValidPending
+    $r12ValidMacro.pending_namespaces[0].PSObject.Properties.Remove('exact_paths')
+    $r12ValidMacro.pending_namespaces[0].PSObject.Properties.Remove('exact_prefixes')
+    $r12ValidMacro.pending_namespaces[0].PSObject.Properties.Remove('forbidden_final_paths')
+    $r12ValidMacro.pending_namespaces[0] | Add-Member -NotePropertyName authority_mode -NotePropertyValue 'bound-plan-member-union-with-exact-r12-overrides'
+    $r12ValidMacro.pending_namespaces[0] | Add-Member -NotePropertyName member_slices -NotePropertyValue $null
+    $r12ValidMacro.pending_namespaces[0].member_slices = [object[]]@('SELFTEST-MEMBER')
+    $r12ValidMacro.pending_namespaces[0] | Add-Member -NotePropertyName exact_r12_overrides -NotePropertyValue $null
+    $r12ValidMacro.pending_namespaces[0].exact_r12_overrides = [object[]]@([pscustomobject][ordered]@{
+        slice='SELFTEST-MEMBER'; exact_paths=[object[]]@('src/selftest.go'); forbidden_paths=[object[]]@('src/forbidden.go')
+    })
+    $r12ValidMacroResult = Invoke-R12ContractAudit $r12ValidMacro $hash $hash $hash $hash
+    Assert-SelfTest ($r12ValidMacroResult.verdict -eq 'PASS' -and $r12ValidMacroResult.pending_contracts[0].macro_bound_plan_union) ("R12 valid macro authority was rejected: " + ($r12ValidMacroResult.errors -join '; '))
+    $r12MissingMembers = Copy-JsonObject $r12ValidMacro; $r12MissingMembers.pending_namespaces[0].PSObject.Properties.Remove('member_slices')
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12MissingMembers $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 macro accepted missing member_slices'
+    $r12NullMembers = Copy-JsonObject $r12ValidMacro; $r12NullMembers.pending_namespaces[0].member_slices = $null
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12NullMembers $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 macro accepted null member_slices'
+    $r12ScalarMembers = Copy-JsonObject $r12ValidMacro; $r12ScalarMembers.pending_namespaces[0].member_slices = 'SELFTEST-MEMBER'
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12ScalarMembers $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 macro accepted scalar member_slices'
+    $r12EmptyMembers = Copy-JsonObject $r12ValidMacro; $r12EmptyMembers.pending_namespaces[0].member_slices = @()
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12EmptyMembers $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 macro accepted empty member_slices'
+    $r12NullMember = Copy-JsonObject $r12ValidMacro; $r12NullMember.pending_namespaces[0].member_slices = @($null)
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12NullMember $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 macro accepted null member_slices member'
+    $r12DuplicateMembers = Copy-JsonObject $r12ValidMacro; $r12DuplicateMembers.pending_namespaces[0].member_slices = @('SELFTEST-MEMBER','SELFTEST-MEMBER')
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12DuplicateMembers $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 macro accepted duplicate member_slices member'
+    $r12MissingOverrides = Copy-JsonObject $r12ValidMacro; $r12MissingOverrides.pending_namespaces[0].PSObject.Properties.Remove('exact_r12_overrides')
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12MissingOverrides $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 macro accepted missing exact_r12_overrides'
+    $r12NullOverrides = Copy-JsonObject $r12ValidMacro; $r12NullOverrides.pending_namespaces[0].exact_r12_overrides = $null
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12NullOverrides $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 macro accepted null exact_r12_overrides'
+    $r12ScalarOverrides = Copy-JsonObject $r12ValidMacro; $r12ScalarOverrides.pending_namespaces[0].exact_r12_overrides = 'SELFTEST-MEMBER'
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12ScalarOverrides $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 macro accepted scalar exact_r12_overrides'
+    $r12EmptyOverrides = Copy-JsonObject $r12ValidMacro; $r12EmptyOverrides.pending_namespaces[0].exact_r12_overrides = @()
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12EmptyOverrides $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 macro accepted empty exact_r12_overrides'
+    $r12NullOverride = Copy-JsonObject $r12ValidMacro; $r12NullOverride.pending_namespaces[0].exact_r12_overrides = @($null)
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12NullOverride $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 macro accepted null exact_r12_overrides member'
+    $r12DuplicateOverrides = Copy-JsonObject $r12ValidMacro; $r12DuplicateOverrides.pending_namespaces[0].exact_r12_overrides = @($r12DuplicateOverrides.pending_namespaces[0].exact_r12_overrides) + @(Copy-JsonObject $r12DuplicateOverrides.pending_namespaces[0].exact_r12_overrides[0])
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12DuplicateOverrides $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 macro accepted duplicate exact_r12_overrides member'
+    $r12MalformedOverride = Copy-JsonObject $r12ValidMacro; $r12MalformedOverride.pending_namespaces[0].exact_r12_overrides = @([pscustomobject]@{slice='SELFTEST-MEMBER'})
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12MalformedOverride $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 macro accepted malformed exact_r12_overrides member'
     Assert-SelfTest (('A' * 40) -cnotmatch '^[0-9a-f]{40}$') 'uppercase Git identity passed the canonical lowercase regex'
     $authority = Get-PlanAuthority $plan
     $pending = $contract.pending_namespaces[0]
@@ -749,6 +895,12 @@ function Invoke-SelfTest {
     Assert-SelfTest ($prefixOnlyProbe.verdict -eq 'PASS_PENDING_SURFACE_ONLY') ("prefix-only pending full plan-owned evidence surface failed: " + ($prefixOnlyProbe.errors -join '; '))
     $wrongBaseProbe = Invoke-ContractAudit $contract $plan $hash $hash $hash $hash -Repository (Get-Location).Path -Probe ([pscustomobject]@{slice='A';base=('9'*40);head=('8'*40)})
     Assert-SelfTest (@($wrongBaseProbe.errors | Where-Object { $_ -match 'pending probe base .+ must equal frozen base anchor' }).Count -eq 1) 'pending probe accepted or obscured a non-anchor base'
+    $probeHead = ([string](& git rev-parse HEAD)).Trim()
+    $probeParent = ([string](& git rev-parse "$probeHead^" )).Trim()
+    $notAncestorProbe = Get-GitAncestorProbeResult (Get-Location).Path $probeHead $probeParent
+    Assert-SelfTest ($notAncestorProbe.classification -eq 'not-ancestor' -and $notAncestorProbe.exit_code -eq 1) 'pending probe did not classify merge-base exit 1 as not-ancestor'
+    $gitErrorProbe = Get-GitAncestorProbeResult (Get-Location).Path ('0' * 40) $probeHead
+    Assert-SelfTest ($gitErrorProbe.classification -eq 'git-error' -and $gitErrorProbe.exit_code -ne 0 -and $gitErrorProbe.exit_code -ne 1) 'pending probe did not classify a genuine merge-base failure distinctly'
     $wrongRejectedHead = Copy-JsonObject $contract; $wrongRejectedHead.authority.rejected_r8_head = ('4' * 40)
     Assert-SelfTest (@((Invoke-R9ProfileAudit $wrongRejectedHead $authority) | Where-Object { $_ -match 'authority rejected_r8_head drifted' }).Count -eq 1) 'R9 profile accepted a wrong rejected R8 head'
     $wrongScopeProvenance = Copy-JsonObject $contract; $wrongScopeProvenance.authority.r8_scope_provenance_sha256 = ('b' * 64)

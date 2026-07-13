@@ -16,7 +16,7 @@
   "epoch_invariants": "exact epoch identity, exact authorized actor and change set, canonical active window containing current UTC time, consumed/expired non-reopen, and stale-loser policy are strict and hostile-flipped",
   "two_pr_stale_loser": true,
   "required_status_identity": "authority-guard plus strict JSON integer GitHub Actions integration_id 15368",
-  "strict_authority_schema": "the complete canonical authority manifest is bound to trusted-validator SHA-256 9776e67bb8b2bc93de8fca2ec9296f765e64ef3d2380f40b306ca2d6b193a67a; recursive hostile tests prove exact object keys, scalar types/values, array cardinality/order, and duplicate/case-alias rejection without requiring an unreachable predecessor Git object",
+  "strict_authority_schema": "the complete canonical authority manifest is bound to canonical_sha256.active_contracts 9776e67bb8b2bc93de8fca2ec9296f765e64ef3d2380f40b306ca2d6b193a67a; recursive hostile tests prove exact object keys, scalar types/values, array cardinality/order, and duplicate/case-alias rejection without requiring an unreachable predecessor Git object",
   "macro_source_authority": "canonical bytes of the shipped challenge-report.json are checked against SHA-256 embedded in the digest-bound authority manifest; its GO verdict and declared source candidate fef455bc are parsed without requiring the historical 69b4b871 Git object",
   "document_r3_head": "9ea95b6adc3a838a459bf78e3ba7a0292153960f",
   "document_r3_tree": "c15a731de8ca8acac09bce8b209e2a27dd6303cb",
