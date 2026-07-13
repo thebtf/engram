@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "kind": "production-ready-active-diff-contracts",
-  "revision": 10,
+  "revision": 12,
   "authority": {
     "plan_path": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
     "scope_map_path": ".agent/plans/2026-07-10-engram-production-ready-scope-map.json",
@@ -12,7 +12,34 @@
     "rejected_r9_release_head": "f11a77cce88f013839e22662458a3318670445e9",
     "r9_checker_commit": "0354362c427d99eb2993e5acddeb9d5bcd561df7",
     "r9_checker_verdict": "REVISE_2_HIGH_1_MED",
-    "r9_disposition": "PRESERVE_PLAN_GOVERNANCE_A_AND_RELEASE_GATES_B_AS_REJECTED_HISTORY"
+    "r9_disposition": "PRESERVE_PLAN_GOVERNANCE_A_AND_RELEASE_GATES_B_AS_REJECTED_HISTORY",
+    "r11_required_base": "af1ed63536829916e0477be719a30a57a8d9227a",
+    "rejected_a11_head": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+    "a11_checker_verdict": "REJECT_HOLD_COMMITTED_MANIFEST_FIXED_POINT",
+    "a11_fixed_point_evidence": ".agent/specs/release-gates-r12/evidence/plan-governance/fixed-point-proof.json",
+    "a11_fixed_point_evidence_sha256": "bb5826b71a6d4fc5b30894825423b001a399c88b1a0b263e36552a7ee828ee4b",
+    "r12_required_base": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+    "rejected_b32": "b32f352ad4574cdba9acf93906bd38d49c8fabb5",
+    "rejected_b32_checker": "a2737a6922faf263b2da5b69d8f54c7ad787cbd9",
+    "rejected_r10_replacement": "969c06703245233103518ad4e9fc725856326ce9",
+    "rejected_r10_checker": "f829b3ac6977bfda34ef85f7b0cdbacf935e9a3a",
+    "r10_checker_verdict": "REVISE_HOLD_CONTROL_PLANE_MAINTENANCE_DEADLOCK",
+    "rejected_image_r1_head": "b7f8ff7b9efe826cefdc665894761783a6876676",
+    "rejected_image_r1_checker": "e1c3accacdabcfe50d3e72b8d5d7427caab9ec6f",
+    "image_r1_checker_verdict": "REVISE_3_HIGH_1_MED",
+    "image_r1_root_review_artifact": ".agent/reviews/2026-07-11-image-remediation-r1-post-review.md",
+    "image_r1_root_review_sha256": "3f4bc94f24d614b91c3015f1555f1e435e261b4154831d45ec8688e85c003a17",
+    "rejected_document_r1_head": "63775eb30f5cc01a843cee074d41dbe87439904b",
+    "rejected_document_r1_checker": "26938199ccdc682295211d16dd736430419cf4ab",
+    "document_r1_checker_verdict": "REVISE_1_HIGH_1_MED_1_LOW",
+    "document_r1_root_review_artifact": ".agent/reviews/2026-07-11-document-ingest-public-truth-r1-post-review.md",
+    "document_r1_root_review_sha256": "21cff0566ad063001d607ddc0a62319a9dd84a7c5cc1dd1cbc0516fc2ee612c5",
+    "rejected_document_r2_head": "efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0",
+    "rejected_document_r2_checker": "f3bba8815c97cf2000e46fdb2fbe1414d61a6264",
+    "document_r2_checker_verdict": "REVISE_1_HIGH_NON_ATOMIC_REMOVE",
+    "document_r2_checker_report_sha256": "94843cabaf3a25b207ba6dd83bd975eff64e9861f4d4cf6d4dc0de002ace938b",
+    "document_r2_root_review_artifact": ".agent/reviews/2026-07-12-document-r2-checker-post-review.md",
+    "document_r2_root_review_sha256": "3566074d1d94acb62781d1623a1786c5641412547d647876022f9ca8848ec4fc"
   },
   "source_audit": {
     "mutable_register_path": ".agent/reports/production-readiness-evidence-register.json",
@@ -36,12 +63,277 @@
       "deletion",
       "non_fast_forward"
     ],
-    "required_status_activation": "PENDING_POST_BOOTSTRAP_TRANSITION",
-    "bootstrap_contract": "merge the independently accepted R10 A/B chain onto main, observe one successful authority-guard status on an ordinary authorized PR, then amend ruleset 13610955 to require that exact status; capture pre/post ruleset JSON and a blocked protected-path PR as external evidence"
+    "required_status_activation": "PENDING_POST_R12_BOOTSTRAP_TRANSITION",
+    "required_status_context": "authority-guard",
+    "required_status_integration_id": 15368,
+    "required_status_app_slug": "github-actions",
+    "reject_context_name_only_or_untrusted_integration": true,
+    "strict_required_status_checks_policy": true,
+    "bootstrap_contract": "merge the independently accepted R12 A12/B12 chain onto main, observe the same authority-guard context on ordinary and maintenance fixtures, then model and later apply monotonic strict required-status activation; capture exact pre/post ruleset JSON and blocked protected-path proof",
+    "recovery_actor": {
+      "actor_id": 7106373,
+      "actor_type": "User",
+      "actor_login": "thebtf",
+      "bypass_mode": "pull_request",
+      "direct_push_bypass": false,
+      "exempt": false
+    },
+    "required_status_identity_negatives": [
+      "missing integration_id",
+      "null integration_id",
+      "wrong integration_id",
+      "same context from an untrusted app or status producer"
+    ],
+    "forbidden_transitions": [
+      "ruleset disable",
+      "ruleset removal",
+      "required status removal",
+      "direct-push bypass",
+      "exempt bypass",
+      "force push"
+    ]
+  },
+  "control_plane_maintenance": {
+    "schema_version": 2,
+    "manifest_container_path": ".agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json",
+    "manifest_property": "control_plane_maintenance.transition_manifest",
+    "current_validator_path": "scripts/production-gates/assert-pr-authority-guard.ps1",
+    "maintenance_validator_path": "scripts/production-gates/assert-pr-authority-maintenance.ps1",
+    "active_epoch": {
+      "epoch": "r12-0001",
+      "state": "open",
+      "reason": "self-reference-free control-plane evolution after rejected A11",
+      "not_before": "2026-07-11T00:00:00Z",
+      "expires_at": "2026-10-09T00:00:00Z",
+      "max_manifest_ttl_seconds": 86400,
+      "approval": {
+        "actor_login": "thebtf",
+        "actor_id": 7106373,
+        "actor_type": "User",
+        "association": "OWNER",
+        "label": "authority-maintenance:r12-0001",
+        "approval_epoch": "r12-0001"
+      },
+      "exact_changes": [
+        {"status":"M","path":".agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json"},
+        {"status":"M","path":".agent/plans/2026-07-10-engram-production-ready-master-plan.md"},
+        {"status":"M","path":".agent/plans/2026-07-10-engram-production-ready-ownership-state.json"},
+        {"status":"M","path":".agent/plans/2026-07-10-engram-production-ready-scope-map.json"},
+        {"status":"M","path":".github/workflows/authority-guard.yml"},
+        {"status":"M","path":".github/workflows/test.yml"},
+        {"status":"M","path":"scripts/production-gates/assert-active-candidate-path-authority.ps1"},
+        {"status":"M","path":"scripts/production-gates/assert-pr-authority-guard.ps1"},
+        {"status":"M","path":"scripts/production-gates/assert-pr-authority-maintenance.ps1"}
+      ]
+    },
+    "consumed_epochs": [],
+    "transition_manifest": null,
+    "manifest_binding_policy": {
+      "committed_manifest_required_fields": [
+        "event_base_sha",
+        "approval_epoch",
+        "successor_epoch",
+        "created_at",
+        "expires_at",
+        "exact_changes",
+        "current_validator_blobs",
+        "successor_validator_blobs",
+        "protected_head_blobs_except_manifest_container"
+      ],
+      "committed_manifest_forbidden_self_references": [
+        "event_head_sha",
+        "manifest_container_git_blob"
+      ],
+      "manifest_container_excluded_from_protected_head_blobs": true,
+      "all_other_protected_head_blobs_required": true,
+      "canonical_manifest_sha256_required": true,
+      "external_mutable_payload_is_sole_authority": false
+    },
+    "trusted_execution_artifact_policy": {
+      "producer": "trusted base pull_request_target validator",
+      "required_fields": [
+        "event_base_sha",
+        "event_head_sha",
+        "manifest_container_git_blob",
+        "canonical_manifest_sha256",
+        "trusted_validator_git_blob",
+        "required_status_context",
+        "required_status_integration_id",
+        "required_status_app_slug"
+      ],
+      "binds_actual_event_head_after_checkout": true,
+      "binds_actual_manifest_container_blob_after_checkout": true,
+      "candidate_artifact_is_data_only": true
+    },
+    "lifecycle_policy": {
+      "states": ["active", "consumed", "expired"],
+      "initial_state": "active",
+      "active_to_consumed_requires_accepted_exact_transition": true,
+      "active_to_expired_occurs_at_epoch_expiry": true,
+      "consumed_or_expired_epoch_cannot_reopen": true,
+      "successor_epoch_must_be_monotonic_and_new": true,
+      "max_epoch_lifetime_seconds": 7776000,
+      "rotate_before_expiry_seconds": 604800,
+      "automatic_extension": false,
+      "expired_epoch_reseed_requires_audited_pr_only_recovery_actor": true
+    },
+    "replay_policy": {
+      "strict_latest_base": true,
+      "require_event_base_equals_current_default_branch": true,
+      "require_consumed_epoch_transition": true,
+      "require_bounded_successor_epoch": true,
+      "two_pr_race_loser_must_be_stale": true,
+      "new_base_rejects_consumed_epoch": true
+    },
+    "head_execution_policy": {
+      "pull_request_target_executes_trusted_base_only": true,
+      "head_workflow_and_script_bytes_are_data_only": true,
+      "pull_request_successor_selftest_is_unprivileged": true,
+      "pull_request_successor_selftest_uses_secrets": false,
+      "trusted_execution_artifact_required": true,
+      "candidate_supplied_execution_artifact_forbidden": true
+    }
+  },
+  "macro_batches": {
+    "schema_version": 1,
+    "source": {
+      "path": ".agent/specs/release-gates-r12/evidence/plan-governance/challenge-report.json",
+      "sha256": "645bfc6817fe0f723df11398ee048bb1cfac004264cfa045d444289c51681e06",
+      "artifact_candidate": "69b4b871911a84f82ba5050d4d567bdac39a8767",
+      "source_candidate": "fef455bcf640f849c2d40c9bc26a459b5593e10a",
+      "verdict": "feasible"
+    },
+    "slice_cardinality_before": 69,
+    "slice_cardinality_after": 69,
+    "grouped_existing_slice_count": 43,
+    "acceptance_unit": "one immutable macro head plus one fresh maker-distinct checker and root post-review",
+    "internal_commits_are_separate_acceptance_units": false,
+    "dependency_order": [
+      "MB0_CONTROL_SUPPLY_PUBLIC",
+      "MB1_DATA_INTEGRITY_AND_MUTATION_SAFETY",
+      "MB2_RUNTIME_SECURITY_PRIVACY_AND_V7",
+      "MB3_DELIVERY_OPERATIONS_UI_CUSTOMER_AND_COVERAGE",
+      "M5_PUBLISHED_POST_RELEASE_PROVED",
+      "MB4_NORTHSTAR_CONTRACT_FREEZE"
+    ],
+    "batches": [
+      {
+        "id": "MB1_DATA_INTEGRITY_AND_MUTATION_SAFETY",
+        "branch": "work/prc-data-integrity-macro-batch",
+        "base_anchor": "fef455bcf640f849c2d40c9bc26a459b5593e10a",
+        "dependencies": ["exact:fef455bcf640f849c2d40c9bc26a459b5593e10a"],
+        "accepted_predecessors": [],
+        "makers": [
+          "DB-GOVERNANCE",
+          "DB-RULES-ISOLATION",
+          "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK",
+          "INGEST-DOC-SNAPSHOT-DEMOLITION",
+          "MCP-STRUCTURED-INPUT-VALIDATION",
+          "CRYSTALLIZATION-DREAM-CYCLE-CORRECTNESS",
+          "RETRIEVAL-VECTOR-CONTRACT",
+          "STATIC-EMBED-CONTRACT",
+          "PRE-V5-UPGRADE-CONTRACT"
+        ]
+      },
+      {
+        "id": "MB2_RUNTIME_SECURITY_PRIVACY_AND_V7",
+        "branch": "work/prc-runtime-security-v7-macro-batch",
+        "dependencies": ["MB0_CONTROL_SUPPLY_PUBLIC", "MB1_DATA_INTEGRITY_AND_MUTATION_SAFETY", "accepted:DB-AUTH"],
+        "accepted_predecessors": ["DB-AUTH"],
+        "makers": [
+          "AUTH-BOOTSTRAP-SECURITY",
+          "DURABLE-AUDIT-BOUNDARIES",
+          "PRIVACY-BOUNDARIES",
+          "REDACTION-LIVE-CONTRACT",
+          "OBSERVABILITY-OTLP",
+          "S4B-CONTRACT",
+          "V7-S4B-BACKEND",
+          "V7-CORE-CALLPATH",
+          "V7-TELEMETRY-WIRING",
+          "V7-RUNTIME-WIRING"
+        ]
+      },
+      {
+        "id": "MB3_DELIVERY_OPERATIONS_UI_CUSTOMER_AND_COVERAGE",
+        "branch": "work/prc-delivery-operations-experience-macro-batch",
+        "dependencies": ["MB0_CONTROL_SUPPLY_PUBLIC", "MB1_DATA_INTEGRITY_AND_MUTATION_SAFETY", "MB2_RUNTIME_SECURITY_PRIVACY_AND_V7"],
+        "accepted_predecessors": ["IMAGE-REMEDIATION-R2"],
+        "makers": [
+          "DEPLOYMENT-ROLLBACK",
+          "RECOVERY-DATA",
+          "UPDATE-LIFECYCLE",
+          "OPENCLAW-RELEASE",
+          "LAUNCHER-FIRST-RUN",
+          "CRITICAL-HARNESS",
+          "OC-INTEGRATION",
+          "ROADMAP-RECONCILIATION",
+          "CORE-PUBLIC-TRUTH",
+          "COVERAGE-CMD-ENGRAM",
+          "COVERAGE-CMD-SERVER",
+          "COVERAGE-UPDATE",
+          "COVERAGE-WORKER",
+          "COVERAGE-MCP",
+          "COVERAGE-GORM",
+          "COVERAGE-LOOM"
+        ]
+      },
+      {
+        "id": "MB4_NORTHSTAR_CONTRACT_FREEZE",
+        "branch": "work/prc-northstar-contracts-macro-batch",
+        "dependencies": ["M5_PUBLISHED_POST_RELEASE_PROVED"],
+        "accepted_predecessors": [],
+        "contract_makers": [
+          "NORTHSTAR-CI-A-CONTRACTS",
+          "NORTHSTAR-CI-B-CONTRACTS",
+          "NORTHSTAR-BOOK-CONTRACTS",
+          "NORTHSTAR-MEM-CONTRACTS",
+          "NORTHSTAR-EFFECTIVENESS-CONTRACTS",
+          "NORTHSTAR-SETTINGS-CONTRACTS"
+        ],
+        "exact_disjoint_contract_path_count": 31
+      }
+    ],
+    "collision_serialization": [
+      {
+        "paths": ["internal/db/gorm/candidate_store.go", "internal/db/gorm/candidate_store_test.go"],
+        "source_order": ["DB-GOVERNANCE", "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"],
+        "effective_order": ["CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"],
+        "resolution": "R12 narrows DB-GOVERNANCE to four rule-governance paths; Candidate Review is the sole effective writer"
+      },
+      {
+        "paths": ["internal/db/gorm/user_store.go"],
+        "effective_order": ["DB-AUTH", "AUTH-BOOTSTRAP-SECURITY", "DURABLE-AUDIT-BOUNDARIES"]
+      },
+      {
+        "paths": ["internal/worker/auth_handlers.go"],
+        "effective_order": ["DB-AUTH", "AUTH-BOOTSTRAP-SECURITY", "DURABLE-AUDIT-BOUNDARIES"]
+      },
+      {
+        "paths": ["internal/worker/service.go"],
+        "effective_order": ["AUTH-BOOTSTRAP-SECURITY", "REDACTION-LIVE-CONTRACT", "V7-RUNTIME-WIRING"]
+      },
+      {
+        "paths": ["internal/db/gorm/memory_store.go"],
+        "effective_order": ["DB-RULES-ISOLATION", "PRIVACY-BOUNDARIES"],
+        "resolution": "MB1 centralizes literal LIKE escaping before the dependent MB2 privacy owner; one macro boundary separates the writers"
+      },
+      {
+        "paths": ["docker-compose.yml", "deploy/docker-compose.runtime.yml"],
+        "effective_order": ["IMAGE-REMEDIATION-R2", "DEPLOYMENT-ROLLBACK"]
+      },
+      {
+        "paths": ["docs/DEPLOYMENT.md", "docs/PRODUCTION-TESTING-PLAYBOOK.md"],
+        "effective_order": ["IMAGE-REMEDIATION-R2", "CORE-PUBLIC-TRUTH"]
+      }
+    ],
+    "undeclared_overlap_allowed": false,
+    "member_branch_override_allowed": false
   },
   "release_blockers": {
     "db_repeat3": "BLOCKED_0_OF_3",
-    "image_scans": "BLOCKED_SERVER_5_POSTGRES_20_OPERATOR_13_HIGH_OR_CRITICAL"
+    "image_scans": "BLOCKED_SERVER_5_POSTGRES_20_OPERATOR_13_HIGH_OR_CRITICAL",
+    "image_publication": "BLOCKED_REJECTED_R1_REQUIRES_R2_WRITER_CENSUS_PREFLIGHT_SERIALIZATION_READBACK",
+    "document_public_truth": "BLOCKED_REJECTED_R1_REQUIRES_R2_END_TO_END_CONTRACT"
   },
   "demolition_guard": {
     "disposition": "PRESERVE_V5_EXCLUSIONS",
@@ -68,7 +360,8 @@
     ],
     "pending": [
       "current-candidate-pending-checker",
-      "current-maker-in-progress"
+      "current-maker-in-progress",
+      "current-rework-ready"
     ]
   },
   "pending_namespaces": [
@@ -97,26 +390,445 @@
       "release_accepted": false
     },
     {
-      "slice": "RELEASE-GATES",
-      "plan_owner": "RELEASE-GATES",
+      "slice": "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12",
+      "plan_owner": "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12",
       "status_class": "current-maker-in-progress",
-      "branch": "work/prc-release-gates-revision10-maker",
-      "base_anchor": "f11a77cce88f013839e22662458a3318670445e9",
-      "forbidden_base": "0354362c427d99eb2993e5acddeb9d5bcd561df7",
+      "branch": "work/prc-release-gates-r12-authority-db-isolation",
+      "base_anchor": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+      "rejected_predecessor": {
+        "head": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+        "verdict": "REJECT_HOLD_COMMITTED_MANIFEST_FIXED_POINT",
+        "evidence": ".agent/specs/release-gates-r12/evidence/plan-governance/fixed-point-proof.json",
+        "evidence_sha256": "bb5826b71a6d4fc5b30894825423b001a399c88b1a0b263e36552a7ee828ee4b"
+      },
+      "forbidden_bases": [
+        "b32f352ad4574cdba9acf93906bd38d49c8fabb5",
+        "a2737a6922faf263b2da5b69d8f54c7ad787cbd9",
+        "969c06703245233103518ad4e9fc725856326ce9",
+        "f829b3ac6977bfda34ef85f7b0cdbacf935e9a3a"
+      ],
+      "commit_envelope": {
+        "a12": {
+          "required_parent": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+          "role": "governance",
+          "exact_paths": [
+            ".agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json",
+            ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+            ".agent/plans/2026-07-10-engram-production-ready-ownership-state.json",
+            ".agent/plans/2026-07-10-engram-production-ready-scope-map.json",
+            ".agent/reports/2026-07-11-release-gates-r12-plan-governance.md",
+            ".agent/specs/release-gates-r12/evidence/plan-governance/R12-PLAN-GOVERNANCE.red.json",
+            ".agent/specs/release-gates-r12/evidence/plan-governance/authority-snapshot.json",
+            ".agent/specs/release-gates-r12/evidence/plan-governance/boundary.json",
+            ".agent/specs/release-gates-r12/evidence/plan-governance/challenge-report.json",
+            ".agent/specs/release-gates-r12/evidence/plan-governance/fixed-point-proof.json",
+            ".agent/specs/release-gates-r12/evidence/plan-governance/gates-summary.json",
+            ".agent/specs/release-gates-r12/evidence/plan-governance/ledger.json",
+            ".agent/specs/release-gates-r12/evidence/plan-governance/path-envelope.json",
+            ".agent/specs/release-gates-r12/evidence/plan-governance/test-r12-plan-governance.ps1",
+            ".agent/specs/release-gates-r12/evidence/plan-governance/verification-summary.json"
+          ]
+        },
+        "b12": {
+          "required_parent": "A12_IMMUTABLE_HEAD",
+          "role": "implementation",
+          "exact_paths": [
+            ".agent/reports/2026-07-11-release-gates-r12-maker.md",
+            ".agent/specs/release-gates-r12/evidence/release-gates/R12-AUTHORITY-MAINTENANCE.red.json",
+            ".agent/specs/release-gates-r12/evidence/release-gates/R12-AUTHORITY-MAINTENANCE.tdd.json",
+            ".agent/specs/release-gates-r12/evidence/release-gates/critical-suite-summary.json",
+            ".agent/specs/release-gates-r12/evidence/release-gates/fresh-clones.json",
+            ".agent/specs/release-gates-r12/evidence/release-gates/gates-summary.json",
+            ".agent/specs/release-gates-r12/evidence/release-gates/linux-harness.json",
+            ".agent/specs/release-gates-r12/evidence/release-gates/maintenance-simulation.json",
+            ".agent/specs/release-gates-r12/evidence/release-gates/path-budget.json",
+            ".agent/specs/release-gates-r12/evidence/release-gates/prove-it.json",
+            ".agent/specs/release-gates-r12/evidence/release-gates/ruleset-model.json",
+            ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md",
+            ".agent/specs/release-gates-r12/evidence/release-gates/test-r12-authority-maintenance.ps1",
+            ".agent/specs/release-gates-r12/evidence/release-gates/verification-summary.json",
+            ".agent/specs/release-gates-r12/evidence/release-gates/windows-harness.json",
+            ".agent/specs/release-gates-r12/evidence/release-gates/workflow-conformance.json",
+            ".github/workflows/authority-guard.yml",
+            ".github/workflows/test.yml",
+            "scripts/production-gates/assert-active-candidate-path-authority.ps1",
+            "scripts/production-gates/assert-pr-authority-guard.ps1",
+            "scripts/production-gates/assert-pr-authority-maintenance.ps1"
+          ]
+        }
+      },
       "exact_paths": [
-        ".agent/reports/2026-07-11-release-gates-r10-maker.md",
-        ".agent/specs/release-gates-r10/evidence/release-gates/R10-AUTHORITY-GUARD.red.json",
-        ".agent/specs/release-gates-r10/evidence/release-gates/authority-guard-simulation.json",
-        ".agent/specs/release-gates-r10/evidence/release-gates/security-review.md",
-        ".agent/specs/release-gates-r10/evidence/release-gates/strict-schema-regressions.json",
-        ".agent/specs/release-gates-r10/evidence/release-gates/test-r10-authority-guard.ps1",
-        ".agent/specs/release-gates-r10/evidence/release-gates/verification-summary.json",
-        ".agent/specs/release-gates-r10/evidence/release-gates/workflow-conformance.json",
+        ".agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json",
+        ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+        ".agent/plans/2026-07-10-engram-production-ready-ownership-state.json",
+        ".agent/plans/2026-07-10-engram-production-ready-scope-map.json",
+        ".agent/reports/2026-07-11-release-gates-r12-plan-governance.md",
+        ".agent/reports/2026-07-11-release-gates-r12-maker.md",
+        ".agent/specs/release-gates-r12/evidence/plan-governance/R12-PLAN-GOVERNANCE.red.json",
+        ".agent/specs/release-gates-r12/evidence/plan-governance/authority-snapshot.json",
+        ".agent/specs/release-gates-r12/evidence/plan-governance/boundary.json",
+        ".agent/specs/release-gates-r12/evidence/plan-governance/challenge-report.json",
+        ".agent/specs/release-gates-r12/evidence/plan-governance/fixed-point-proof.json",
+        ".agent/specs/release-gates-r12/evidence/plan-governance/gates-summary.json",
+        ".agent/specs/release-gates-r12/evidence/plan-governance/ledger.json",
+        ".agent/specs/release-gates-r12/evidence/plan-governance/path-envelope.json",
+        ".agent/specs/release-gates-r12/evidence/plan-governance/test-r12-plan-governance.ps1",
+        ".agent/specs/release-gates-r12/evidence/plan-governance/verification-summary.json",
+        ".agent/specs/release-gates-r12/evidence/release-gates/R12-AUTHORITY-MAINTENANCE.red.json",
+        ".agent/specs/release-gates-r12/evidence/release-gates/R12-AUTHORITY-MAINTENANCE.tdd.json",
+        ".agent/specs/release-gates-r12/evidence/release-gates/critical-suite-summary.json",
+        ".agent/specs/release-gates-r12/evidence/release-gates/fresh-clones.json",
+        ".agent/specs/release-gates-r12/evidence/release-gates/gates-summary.json",
+        ".agent/specs/release-gates-r12/evidence/release-gates/linux-harness.json",
+        ".agent/specs/release-gates-r12/evidence/release-gates/maintenance-simulation.json",
+        ".agent/specs/release-gates-r12/evidence/release-gates/path-budget.json",
+        ".agent/specs/release-gates-r12/evidence/release-gates/prove-it.json",
+        ".agent/specs/release-gates-r12/evidence/release-gates/ruleset-model.json",
+        ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md",
+        ".agent/specs/release-gates-r12/evidence/release-gates/test-r12-authority-maintenance.ps1",
+        ".agent/specs/release-gates-r12/evidence/release-gates/verification-summary.json",
+        ".agent/specs/release-gates-r12/evidence/release-gates/windows-harness.json",
+        ".agent/specs/release-gates-r12/evidence/release-gates/workflow-conformance.json",
         ".github/workflows/authority-guard.yml",
         ".github/workflows/test.yml",
         "scripts/production-gates/assert-active-candidate-path-authority.ps1",
-        "scripts/production-gates/assert-pr-authority-guard.ps1"
+        "scripts/production-gates/assert-pr-authority-guard.ps1",
+        "scripts/production-gates/assert-pr-authority-maintenance.ps1"
       ],
+      "release_accepted": false
+    },
+    {
+      "slice": "MB1_DATA_INTEGRITY_AND_MUTATION_SAFETY",
+      "plan_owner": "MACRO_BATCH_BOUND_PLAN_MEMBER_UNION",
+      "member_slices": [
+        "DB-GOVERNANCE",
+        "DB-RULES-ISOLATION",
+        "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK",
+        "INGEST-DOC-SNAPSHOT-DEMOLITION",
+        "MCP-STRUCTURED-INPUT-VALIDATION",
+        "CRYSTALLIZATION-DREAM-CYCLE-CORRECTNESS",
+        "RETRIEVAL-VECTOR-CONTRACT",
+        "STATIC-EMBED-CONTRACT",
+        "PRE-V5-UPGRADE-CONTRACT"
+      ],
+      "status_class": "current-maker-in-progress",
+      "dispatch_state": "BLOCKED_UNTIL_A12_CHECKER_AND_ROOT_ACCEPTANCE",
+      "branch": "work/prc-data-integrity-macro-batch",
+      "base_anchor": "fef455bcf640f849c2d40c9bc26a459b5593e10a",
+      "authority_mode": "bound-plan-member-union-with-exact-r12-overrides",
+      "bound_plan_path": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+      "bound_scope_map_path": ".agent/plans/2026-07-10-engram-production-ready-scope-map.json",
+      "exact_r12_overrides": [
+        {
+          "slice": "DB-GOVERNANCE",
+          "exact_paths": [
+            "internal/db/gorm/rule_governance_store.go",
+            "internal/db/gorm/rule_arbiter_store_test.go",
+            "internal/db/gorm/rule_governance_store_test.go",
+            "internal/db/gorm/rule_governance_rg3_store_test.go"
+          ],
+          "forbidden_paths": [
+            "internal/db/gorm/candidate_store.go",
+            "internal/db/gorm/candidate_store_test.go"
+          ]
+        },
+        {
+          "slice": "DB-RULES-ISOLATION",
+          "exact_paths": [
+            "internal/db/gorm/sql_like.go",
+            "internal/db/gorm/sql_like_test.go",
+            "internal/db/gorm/memory_store.go",
+            "internal/db/gorm/issue_store.go",
+            "internal/db/gorm/issue_store_project_match_test.go",
+            "internal/db/gorm/versioned_document_store.go",
+            "internal/db/gorm/versioned_document_store_test.go",
+            "internal/grpcserver/session_start_test.go",
+            "tests/critical/project_and_document_isolation_test.go",
+            ".agent/reports/2026-07-11-sql-like-literal-selector-cause-closure.md",
+            ".agent/reports/2026-07-11-db-governance-project-isolation-r2-long-batch-maker.md"
+          ],
+          "exact_prefixes": [
+            ".agent/reports/evidence/production-ready/db-governance-project-isolation-r2/"
+          ],
+          "forbidden_paths": [
+            "internal/db/gorm/rule_governance_store_test.go"
+          ]
+        }
+      ],
+      "acceptance_contract": {
+        "one_immutable_macro_head": true,
+        "fresh_maker_distinct_checker": true,
+        "root_post_review": true,
+        "fresh_database_per_fault_class": true,
+        "full_repeat_count_on_one_fresh_database": 2,
+        "flip_tests_required": true,
+        "undeclared_overlap_allowed": false,
+        "member_branch_override_allowed": false
+      },
+      "release_accepted": false
+    },
+    {
+      "slice": "IMAGE-REMEDIATION-R2",
+      "plan_owner": "IMAGE-REMEDIATION-R2",
+      "status_class": "current-maker-in-progress",
+      "branch": "work/prc-image-remediation-r2-immutable-publish",
+      "base_anchor": "0c6269908aa810a2248f2bfaf3fca4f9f5791359",
+      "forbidden_bases": [
+        "b7f8ff7b9efe826cefdc665894761783a6876676",
+        "e1c3accacdabcfe50d3e72b8d5d7427caab9ec6f"
+      ],
+      "exact_paths": [
+        ".agent/reports/2026-07-11-image-remediation-r2-maker.md",
+        ".agent/reports/2026-07-11-image-remediation-r2-security.md",
+        ".agent/reports/evidence/production-ready/image-remediation-r2/**",
+        ".dockerignore",
+        ".github/workflows/docker-publish.yml",
+        ".github/workflows/docker.yaml",
+        "Dockerfile",
+        "cmd/engram-healthcheck/main.go",
+        "cmd/engram-healthcheck/main_test.go",
+        "deploy/docker-compose.runtime.yml",
+        "deploy/postgres/Dockerfile",
+        "docker-compose.yml",
+        "docs/DEPLOYMENT.md",
+        "docs/PRODUCTION-TESTING-PLAYBOOK.md",
+        "scripts/production-gates/build-and-scan-images.ps1",
+        "tests/critical/runtime/image_runtime_contract_test.go",
+        "tests/critical/runtime/postgres_image_contract_test.go"
+      ],
+      "acceptance_contract": {
+        "package_names": [
+          "ghcr.io/thebtf/engram",
+          "ghcr.io/thebtf/engram-operator-console",
+          "ghcr.io/thebtf/engram-postgres"
+        ],
+        "destination_count": 6,
+        "destinations_per_package": [
+          "exact full SemVer",
+          "sha-<full commit>"
+        ],
+        "moving_or_generic_aliases_forbidden": true,
+        "sole_writers": [
+          ".github/workflows/docker.yaml release publication",
+          "scripts/production-gates/build-and-scan-images.ps1 -Mode Publish"
+        ],
+        "publisher_trust_model": {
+          "privileged_workflow_and_script_bytes_source": "protected default branch only",
+          "tag_push_workflow_role": "unprivileged verification and data producer",
+          "tag_push_packages_write": false,
+          "tag_ref_sha_and_artifacts_are_untrusted_data": true,
+          "prepare_release_job": {
+            "fresh_runner": true,
+            "permissions": {
+              "contents": "read",
+              "actions": "none",
+              "packages": "none"
+            },
+            "candidate_checkout_allowed": true,
+            "candidate_build_scan_and_runtime_only_here": true,
+            "packages_write": false,
+            "exports": [
+              "exact OCI data",
+              "trusted hash-bound manifest"
+            ]
+          },
+          "publish_job": {
+            "fresh_runner": true,
+            "packages_write": true,
+            "permissions": {
+              "contents": "read",
+              "actions": "read",
+              "packages": "write"
+            },
+            "candidate_checkout_allowed": false,
+            "trusted_default_branch_checkout_only": true,
+            "loaded_oci_images_are_data_only": true
+          },
+          "candidate_and_privileged_jobs_share_runner_host_process_or_daemon": false,
+          "actions_write_anywhere": false,
+          "privileged_validation": [
+            "named completed verification run",
+            "exact event",
+            "exact ref",
+            "exact full commit SHA",
+            "protected canonical tag target",
+            "protected-main ancestry and release provenance",
+            "same-run artifact identity and digest uniqueness",
+            "symlink/reparse-free trusted extraction"
+          ],
+          "rebuild_exact_verified_commit_on_privileged_path": false,
+          "execute_or_source_untrusted_artifact_content": false,
+          "packages_write_only_after_independent_validation_artifact_verification_and_destination_preflight": true,
+          "privileged_trigger": "workflow_run",
+          "checkout_persist_credentials": false,
+          "tokens_are_step_scoped": true,
+          "tokens_absent_from_candidate_build_and_runtime": true,
+          "credential_bearing_git_metadata_absent_from_build_context": true,
+          "third_party_actions_require_immutable_sha_pins": true,
+          "candidate_build_and_runtime_complete_before_registry_login": true,
+          "post_login_execution": "trusted default-branch Publish implementation only",
+          "post_login_candidate_controlled_path_allowed": false,
+          "trusted_output_root": "publisher-created symlink/reparse-free workspace or RUNNER_TEMP",
+          "candidate_role": "source and build context only",
+          "publish_manifest": "trusted-produced hash-bound manifest outside candidate checkout",
+          "docker_credentials_erased_before_later_evidence_upload": true,
+          "artifact_bridge": {
+            "upload_artifact_major": "v4+",
+            "upload_and_download_actions_immutable_sha_pinned": true,
+            "overwrite_allowed": false,
+            "prepare_release_records_artifact_id_and_sha256_digest": true,
+            "publish_rest_census_scope": "current publisher workflow run",
+            "required_artifact_count": 1,
+            "fixed_expected_name": true,
+            "exact_artifact_id_required": true,
+            "nonexpired_required": true,
+            "api_digest_match_required": true,
+            "extras_or_duplicates_allowed": false,
+            "download_by_exact_id": true,
+            "digest_mismatch_is_error": true,
+            "internal_checksums_required": true,
+            "regular_files_only": true,
+            "path_traversal_allowed": false,
+            "verify_before_oci_load": true
+          }
+        },
+        "publisher_adversarial_cases": [
+          "malicious tag workflow bytes",
+          "malicious tag script bytes",
+          "tag target outside protected-main ancestry",
+          "spoofed verification run",
+          "spoofed artifact",
+          "duplicate artifact",
+          "extra artifact",
+          "expired artifact",
+          "wrong artifact name id or API digest",
+          "artifact overwrite attempt",
+          "spoofed ref",
+          "spoofed SHA",
+          "persisted checkout credentials",
+          "token visible during candidate build or runtime",
+          "credential-bearing .git metadata in build context",
+          "mutable third-party action reference",
+          "registry login before candidate build/runtime completion",
+          "post-login execution of candidate or tag bytes",
+          "candidate-controlled evidence or upload path after login",
+          "persistent candidate process waiting for later login",
+          "candidate Docker-daemon tampering",
+          "cross-job runner or daemon contamination",
+          "symlink or reparse escape from trusted output root",
+          "publish manifest sourced from candidate checkout",
+          "artifact path traversal",
+          "artifact special file",
+          "artifact internal checksum mismatch",
+          "missing actions read on privileged artifact census",
+          "actions write granted to any job",
+          "docker credentials retained during later evidence upload"
+        ],
+        "preflight_all_destinations_before_first_write": true,
+        "readback_all_destinations_after_last_write": true,
+        "same_release_serialization": true,
+        "registry_atomic_compare_and_swap_claimed": false,
+        "github_tag_immutability_claimed": false,
+        "external_pat_and_package_admin_are_explicit_trust_boundary": true,
+        "future_changes_require_r12_exact_path_authority": true,
+        "rejected_maker_and_checker_absent_from_ancestry": true,
+        "full_clean_reconstruction": true,
+        "test_yml_owned": false
+      },
+      "release_accepted": false
+    },
+    {
+      "slice": "DOCUMENT-INGEST-PUBLIC-TRUTH-R3",
+      "plan_owner": "DOCUMENT-INGEST-PUBLIC-TRUTH-R3",
+      "status_class": "current-maker-frozen-checker-pending",
+      "branch": "work/prc-public-contracts-r3-atomic-remove",
+      "base_anchor": "efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0",
+      "immutable_head": "9ea95b6adc3a838a459bf78e3ba7a0292153960f",
+      "immutable_tree": "c15a731de8ca8acac09bce8b209e2a27dd6303cb",
+      "checker_state": "PENDING_FRESH",
+      "forbidden_bases": [
+        "26938199ccdc682295211d16dd736430419cf4ab",
+        "f3bba8815c97cf2000e46fdb2fbe1414d61a6264"
+      ],
+      "exact_paths": [
+        ".agent/reports/evidence/production-ready/document-r3-atomic-remove-20260712-0142/summary.json",
+        ".agent/specs/production-ready-document-r3-atomic-remove/evidence/DOCUMENT-R3-ATOMIC-REMOVE.red.json",
+        ".agent/specs/production-ready-document-r3-atomic-remove/evidence/DOCUMENT-R3-ATOMIC-REMOVE.tdd.json",
+        "internal/db/gorm/document_store.go",
+        "internal/mcp/document_public_truth_contract_test.go",
+        "internal/mcp/tools_documents.go"
+      ],
+      "acceptance_contract": {
+        "body_storage": "complete content-addressed body in singular content.doc",
+        "metadata_storage": "documents table collection/path/title/content_hash/updated_at",
+        "historical_r1_root_review_typo": "contents.doc was historical evidence wording only and is not runtime acceptance truth",
+        "metadata": [
+          "collection",
+          "path",
+          "title",
+          "content_hash",
+          "updated_at"
+        ],
+        "search_collection_registered": true,
+        "legacy_search_fields_retained": [
+          "query",
+          "collection",
+          "limit"
+        ],
+        "legacy_search_fields_non_operative": true,
+        "query_required": false,
+        "legacy_default_min_max_constraints_removed": true,
+        "missing_query_returns_v5_tombstone": true,
+        "remove_document_transition": "one atomic UPDATE by exact collection/path and active=true; RowsAffected=1 is the sole success authority",
+        "remove_document_zero_rows": "typed or boolean inactive/not-found outcome mapped to the existing stable MCP not-found error",
+        "remove_document_split_precheck_forbidden": true,
+        "remove_document_truth": "exactly one concurrent caller may transition active to inactive and report success; every loser reports stable not-found while the stored body remains retained",
+        "document_store_change": "minimum executable DeactivateDocument predicate and RowsAffected outcome only",
+        "document_model_change": "none beyond the rejected R2 base",
+        "store_logic_and_schema_byte_identical": false,
+        "schema_and_unrelated_store_logic_byte_identical": true,
+        "forbid_chunk_embedding_search_resurrection": true,
+        "critical_user_flow": {
+          "database": "real PostgreSQL",
+          "tag": "@critical",
+          "public_entrypoints": [
+            "Server",
+            "ListTools",
+            "HandleRequest"
+          ],
+          "covers": [
+            "truthful expanded schema",
+            "ingest and update",
+            "search_collection without query returns stable tombstone",
+            "nonexistent remove returns stable not-found with zero false-success",
+            "two concurrent remove calls produce exactly one success and one not-found",
+            "remove leaves inactive record",
+            "full document bodies remain retained",
+            "database readback",
+            "zero trigger/function/document probe residue"
+          ],
+          "zero_skip_when_critical_dsn_configured": true
+        },
+        "phase0_user_job_statement": {
+          "path": ".agent/reports/evidence/production-ready/document-r3-atomic-remove-20260712-0142/summary.json",
+          "signal": "per-run document-contract task success",
+          "target": "100% stages truthful",
+          "measurement": "critical MCP flow plus PostgreSQL readback"
+        },
+        "default_and_malformed_tools_list_omission_tests": "CODE-CONTRACT-ONLY characterization, not behavioral proof",
+        "adversarial_cases": [
+          "nonexistent collection/path remove",
+          "repeated nonexistent remove",
+          "wrong collection with existing path",
+          "wrong path with existing collection",
+          "false-success response without existing document",
+          "split GetDocument then DeactivateDocument decision",
+          "unconditional update without active=true predicate",
+          "ignored RowsAffected",
+          "two concurrent successes for one active-to-inactive transition",
+          "inactive/body-retained success claimed for nonexistent or already inactive document"
+        ]
+      },
       "release_accepted": false
     }
   ],
@@ -124,17 +836,17 @@
     {
       "slice": "MASTER-PLAN",
       "disposition": "in-progress-empty-diff",
-      "reason": "R10 A/B chain is pending; A owns governance and B owns the exact trusted guard envelope"
+      "reason": "R12 A12/B12 chain supersedes rejected A11; A owns self-reference-free governance and B owns the trusted evolvable guard envelope"
     },
     {
       "slice": "PLAN-GOVERNANCE",
       "disposition": "in-progress-empty-diff",
-      "reason": "R10 PLAN-GOVERNANCE A is the direct child of rejected R9 release head f11a77cc"
+      "reason": "R12 A12 is the direct child of rejected A11 887b7c61 and preserves every earlier rejected authority head as history"
     },
     {
       "slice": "RELEASE-GATES",
       "disposition": "in-progress-empty-diff",
-      "reason": "R10 RELEASE-GATES B must be the direct child of A and cannot use checker commit 0354362c as a base"
+      "reason": "R12 B12 must be the direct child of immutable A12 and cannot include the parked B11 draft, B32, 969c0670, or checker-only commits"
     },
     {
       "slice": "DEMOLITION-SKIP-CLASSIFICATION",

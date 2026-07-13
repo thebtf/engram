@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-11T10:48:00.1215092Z",
+  "a11": {
+    "head": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+    "parent": "af1ed63536829916e0477be719a30a57a8d9227a",
+    "tree": "ebb997b9e208bc2d59c519845b99eb622928c2d6",
+    "verdict": "REJECT_HOLD_FIXED_POINT",
+    "plan_sha256": "19239d00613b08ade0881c9564d69c001e83b5b054164a913aff0e480c796622",
+    "state_sha256": "d32137b41c43319653a670edd94d27b0363efd8c6af34ec983b937acf9283db7",
+    "scope_sha256": "eeb3fd436f87dc6b3f74c2fc7bfd623096f3d0881b20eca6f055563d47f15398",
+    "active_sha256": "97ab676b8e0ed1845b693c4eef62c37fde21ef8b5a80971e2b93c0eba63cedde"
+  },
+  "b11": {
+    "commit": null,
+    "state": "PARKED_UNCOMMITTED_DRAFT",
+    "acceptance_eligible": false
+  },
+  "external_db_base": {
+    "head": "fef455bcf640f849c2d40c9bc26a459b5593e10a",
+    "object_type": "commit",
+    "role": "implementation base only; not imported into A12 ancestry"
+  },
+  "macro_diagnostic": {
+    "path": ".agent/specs/release-gates-r12/evidence/plan-governance/challenge-report.json",
+    "sha256": "645bfc6817fe0f723df11398ee048bb1cfac004264cfa045d444289c51681e06",
+    "artifact_candidate": "69b4b871911a84f82ba5050d4d567bdac39a8767",
+    "verdict": "DIAGNOSTIC_FREEZE_MACRO_BATCHING_FEASIBLE",
+    "source_candidate": "fef455bcf640f849c2d40c9bc26a459b5593e10a"
+  },
+  "document_r3_successor": {
+    "rejected_r2_head": "efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0",
+    "rejected_r2_tree": "ffcf9a32762c23257fdceebc647d181496a0b7a2",
+    "checker": "f3bba8815c97cf2000e46fdb2fbe1414d61a6264",
+    "checker_verdict": "REVISE_1_HIGH_NON_ATOMIC_REMOVE",
+    "checker_report_sha256": "94843cabaf3a25b207ba6dd83bd975eff64e9861f4d4cf6d4dc0de002ace938b",
+    "root_post_review_sha256": "3566074d1d94acb62781d1623a1786c5641412547d647876022f9ca8848ec4fc",
+    "branch": "work/prc-public-contracts-r3-atomic-remove",
+    "immutable_head": "9ea95b6adc3a838a459bf78e3ba7a0292153960f",
+    "immutable_tree": "c15a731de8ca8acac09bce8b209e2a27dd6303cb",
+    "checker_state": "PENDING_FRESH",
+    "exact_path_count": 6,
+    "scope_slot_replaced_without_cardinality_change": true,
+    "contract": "atomic active=true update, RowsAffected outcome, one concurrent success, one stable not-found, retained body, zero probe residue"
+  },
+  "github_live_mutation": false,
+  "foreign_write": false
+}

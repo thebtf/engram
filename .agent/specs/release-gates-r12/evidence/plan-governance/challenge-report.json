@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "skill": "nvmd-platform:challenging-plans",
+  "skill_source": "installed nvmd-platform 2.86.1; injected 2.85.3 path was absent",
+  "verdict": "GO",
+  "scope_mode": "HOLD_SCOPE",
+  "premise": "Replace the operationally unsatisfiable R11 authority-maintenance contract and atomically refresh the same four governance files for the already-authorized shared DB batch.",
+  "approaches": [
+    {
+      "id": "A",
+      "name": "self-reference-free committed transition",
+      "class": "minimal viable",
+      "risk": "medium",
+      "summary": "Keep base-declared one-use epochs and committed successor data, exclude only the manifest container from committed blob inventory, and bind the actual head/container in the trusted execution artifact.",
+      "decision": "RECOMMENDED"
+    },
+    {
+      "id": "B",
+      "name": "external signed review manifest",
+      "class": "ideal external architecture",
+      "risk": "high",
+      "summary": "Move exact-head approval to an external review or signed payload.",
+      "decision": "REJECTED_FOR_R12",
+      "reason": "Adds mutable external-state dependency and would violate the boundary that no external mutable payload is sole authority."
+    },
+    {
+      "id": "C",
+      "name": "split R12 and DB governance commits",
+      "class": "serialization alternative",
+      "risk": "medium",
+      "summary": "Amend the four global files twice in sequential governance commits.",
+      "decision": "REJECTED_FOR_R12",
+      "reason": "Creates avoidable overlapping ownership and delays the shared DB batch without improving the trust model."
+    }
+  ],
+  "findings": [
+    {
+      "classification": "actionable",
+      "severity": "fatal",
+      "finding": "A11 requires a committed manifest to bind its own blob and commit SHA.",
+      "disposition": "Reject A11, park B11 uncommitted, define R12 self-reference-free binding."
+    },
+    {
+      "classification": "actionable",
+      "severity": "high",
+      "finding": "Current DB-GOVERNANCE and DB-RULES-ISOLATION plan rows are stale relative to external base fef455bc and the discovered claim/migration/literal-LIKE isolation defects.",
+      "disposition": "Replace their exact scopes and route both disjoint slices through one shared long-batch branch/base."
+    },
+    {
+      "classification": "actionable",
+      "severity": "high",
+      "finding": "DOCUMENT R2 performs GetDocument and DeactivateDocument as a split decision; the update ignores active state and RowsAffected, so concurrent callers can both report success.",
+      "disposition": "Replace the existing DOCUMENT slot with R3 from exact rejected R2 maker efe1ab50. Authorize only the minimal atomic store transition, handler outcome mapping, and existing contract/critical regression paths; keep cardinality 69."
+    },
+    {
+      "classification": "trade-off",
+      "severity": "medium",
+      "finding": "The shared DB branch carries two logical owners.",
+      "disposition": "Keep exact non-overlapping path sets, assign rule_governance_store_test.go only to DB-GOVERNANCE, and require maker-distinct checker judgment."
+    },
+    {
+      "classification": "noise",
+      "severity": "none",
+      "finding": "The external DB base is a merge commit rather than an ancestor of A11.",
+      "disposition": "It is a declared implementation base only; R12 governance remains a direct child of A11 and does not import external product bytes."
+    }
+  ],
+  "verified_live_facts": {
+    "a11_head": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+    "external_db_base": "fef455bcf640f849c2d40c9bc26a459b5593e10a",
+    "external_db_base_type": "commit",
+    "scope_slice_count_before": 69,
+    "scope_register_row_count_before": 69,
+    "sql_like_helper_exists_at_external_base": false,
+    "issue_store_has_unescaped_target_and_source_like": true,
+    "versioned_document_store_has_unescaped_path_prefix_like": true,
+    "memory_store_contains_existing_escape_helper_to_move": true,
+    "migration_144_through_147_exist": true,
+    "macro_diagnostic_sha256": "34bcdf4d7a708b22a1e33a6e174206cc32e83aeb09c7b6f191ee7b5b6f90f061",
+    "document_r2_rejected_head": "efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0",
+    "document_r2_checker": "f3bba8815c97cf2000e46fdb2fbe1414d61a6264",
+    "document_r2_checker_verdict": "REVISE_1_HIGH_NON_ATOMIC_REMOVE",
+    "document_r3_replaces_existing_scope_slot": true,
+    "document_r3_immutable_head": "9ea95b6adc3a838a459bf78e3ba7a0292153960f",
+    "document_r3_immutable_tree": "c15a731de8ca8acac09bce8b209e2a27dd6303cb",
+    "document_r3_exact_path_count": 6,
+    "document_r3_checker_state": "PENDING_FRESH",
+    "scope_slice_count_after_document_r3_amendment": 69
+  },
+  "macro_rechallenge": {
+    "verdict": "GO",
+    "recommended_approach": "metadata overlay preserving all 69 per-slice identities, owners, scopes and acceptance while adding macro branch, dependency, role and collision ledgers",
+    "rejected_alternatives": [
+      "collapse 43 slices into four replacement slices because it changes cardinality and loses acceptance ownership",
+      "prose-only grouping because it cannot prove branch consistency or collision serialization"
+    ],
+    "load_bearing_clarification": "DB-AUTH in MB2 and IMAGE-REMEDIATION-R2 in MB3 are accepted/frozen predecessor imports, not duplicate product writers. Their existing accepted path authority remains intact."
+  },
+  "a13_checker_rework": {
+    "source_checker_head": "8304ebd815652d2095b8894d8c33312995a0d0be",
+    "source_candidate": "3c7286ea155ed94fb42aa5225580edb320886fbc",
+    "source_verdict": "REVISE",
+    "disposition": "Close all four HIGH findings as one authority-validation batch; preserve the fixed-point architecture, exact 15-path parent envelope, v5 demolition boundary, and expected 12-error legacy transition class.",
+    "finding_ids": ["A12-001", "A12-002", "A12-003", "A12-004"],
+    "scope_expansion": false,
+    "external_mutation": false
+  },
+  "a14_checker_rework": {
+    "source_checker_head": "ab98525b3c6b152a4c05a53421daf398f3cbaccd",
+    "source_candidate": "69b4b871911a84f82ba5050d4d567bdac39a8767",
+    "source_verdict": "REVISE",
+    "disposition": "Close all seven false-green cases as one authority-validation batch while preserving the 15-path A12 envelope and expected 12-error B12-owned legacy transition class.",
+    "false_green_classes": [
+      "required status integration ID JSON string",
+      "future epoch not-before",
+      "approval actor identity drift",
+      "active epoch exact-change drift",
+      "coordinated bogus source hash",
+      "coordinated missing source path",
+      "duplicate MB2 maker"
+    ],
+    "scope_expansion": false,
+    "external_mutation": false
+  }
+}

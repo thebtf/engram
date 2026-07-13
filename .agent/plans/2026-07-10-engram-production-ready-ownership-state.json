@@ -2,11 +2,11 @@
   "schema_version": 1,
   "plan": {
     "path": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
-    "sha256": "084b4780386b22c5c7d941543c6e6a8f28fc1345bef67802b1b64f2160dacaae"
+    "sha256": "5103adaced04e624f2e1fc9d5d69e7efdccb23830aecfac9010b2b66b484427e"
   },
   "scope_map": {
     "path": ".agent/plans/2026-07-10-engram-production-ready-scope-map.json",
-    "sha256": "7c50b3d81095e7246aebea31d2f1f185117ea960402211854685a85a199d9fbf"
+    "sha256": "832ffd41e4b70280a335ae4a3f82cc5486e0ded6b1156f186ec3d2c4bd62886d"
   },
   "path_epochs": [
     {
@@ -14,7 +14,6 @@
       "ordered_owners": [
         "DB-BULKOPS",
         "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
-        "DB-GOVERNANCE",
         "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
       ],
       "current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
@@ -41,7 +40,6 @@
         "DB-BULKOPS",
         "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
         "DB-TEST-POOL-HYGIENE",
-        "DB-GOVERNANCE",
         "CANDIDATE-REVIEW-SNAPSHOT-ROLLBACK"
       ],
       "current_owner": "DB-BULKOPS-BEHAVIORAL-EDGE-REWORK",
@@ -201,53 +199,210 @@
       "path": "Dockerfile",
       "ordered_owners": [
         "SECURITY-TOOLCHAIN",
-        "IMAGE-REMEDIATION"
+        "IMAGE-REMEDIATION-R2"
       ],
-      "current_owner": "SECURITY-TOOLCHAIN",
-      "transition_kind": "integration",
-      "completed_predecessors": [],
-      "required_successor_base_sha": null
+      "current_owner": "IMAGE-REMEDIATION-R2",
+      "transition_kind": "replacement",
+      "completed_predecessors": [
+        {
+          "owner": "SECURITY-TOOLCHAIN",
+          "checker_verdict": "ROOT_SELECTED_EXACT_BASE",
+          "checker_artifact": null,
+          "checker_sha256": null,
+          "rejected_head_sha": null,
+          "post_review_verdict": "ROOT_SELECTED_EXACT_BASE",
+          "post_review_artifact": null,
+          "post_review_sha256": null,
+          "integration_sha": "30de64d2576891abb0ec3730336c60054afd5617"
+        }
+      ],
+      "required_successor_base_sha": "0c6269908aa810a2248f2bfaf3fca4f9f5791359",
+      "current_owner_status": "ACTIVE_CLEAN_RECONSTRUCTION"
     },
     {
       "path": ".github/workflows/test.yml",
       "ordered_owners": [
         "RELEASE-GATES",
-        "IMAGE-REMEDIATION"
+        "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12"
       ],
-      "current_owner": "RELEASE-GATES",
-      "transition_kind": "integration",
-      "completed_predecessors": [],
-      "required_successor_base_sha": null
+      "current_owner": "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12",
+      "transition_kind": "replacement",
+      "completed_predecessors": [
+        {
+          "owner": "RELEASE-GATES",
+          "checker_verdict": "REVISE_HOLD",
+          "checker_artifact": ".agent/worktrees/release-gates-r10-replacement-checker/.agent/reviews/release-gates-r10-replacement-fresh-checker/checker-report.md",
+          "checker_sha256": "6F3EE700457D4AEEB4C286F1B0D148BFC3F8603FC34CA7EED756BA29F55181C4",
+          "rejected_head_sha": "969c06703245233103518ad4e9fc725856326ce9",
+          "post_review_verdict": "REVISE_HOLD",
+          "post_review_artifact": ".agent/reviews/2026-07-11-release-gates-r10-replacement-post-review.md",
+          "post_review_sha256": "E36C103ECFDE2191949045DC677404A2F190442EEB9AD6DC894F43301E824E98",
+          "integration_sha": null
+        }
+      ],
+      "required_successor_base_sha": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+      "current_owner_status": "A12_GOVERNANCE_ACTIVE_B12_PENDING"
     },
     {
       "path": ".github/workflows/authority-guard.yml",
       "ordered_owners": [
-        "RELEASE-GATES"
+        "RELEASE-GATES",
+        "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12"
       ],
-      "current_owner": "RELEASE-GATES",
-      "transition_kind": "integration",
-      "completed_predecessors": [],
-      "required_successor_base_sha": null
+      "current_owner": "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12",
+      "transition_kind": "replacement",
+      "completed_predecessors": [
+        {
+          "owner": "RELEASE-GATES",
+          "checker_verdict": "REVISE_HOLD",
+          "checker_artifact": ".agent/worktrees/release-gates-r10-replacement-checker/.agent/reviews/release-gates-r10-replacement-fresh-checker/checker-report.md",
+          "checker_sha256": "6F3EE700457D4AEEB4C286F1B0D148BFC3F8603FC34CA7EED756BA29F55181C4",
+          "rejected_head_sha": "969c06703245233103518ad4e9fc725856326ce9",
+          "post_review_verdict": "REVISE_HOLD",
+          "post_review_artifact": ".agent/reviews/2026-07-11-release-gates-r10-replacement-post-review.md",
+          "post_review_sha256": "E36C103ECFDE2191949045DC677404A2F190442EEB9AD6DC894F43301E824E98",
+          "integration_sha": null
+        }
+      ],
+      "required_successor_base_sha": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+      "current_owner_status": "A12_GOVERNANCE_ACTIVE_B12_PENDING"
     },
     {
       "path": "scripts/production-gates/assert-active-candidate-path-authority.ps1",
       "ordered_owners": [
-        "RELEASE-GATES"
+        "RELEASE-GATES",
+        "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12"
       ],
-      "current_owner": "RELEASE-GATES",
-      "transition_kind": "integration",
-      "completed_predecessors": [],
-      "required_successor_base_sha": null
+      "current_owner": "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12",
+      "transition_kind": "replacement",
+      "completed_predecessors": [
+        {
+          "owner": "RELEASE-GATES",
+          "checker_verdict": "REVISE_HOLD",
+          "checker_artifact": ".agent/worktrees/release-gates-r10-replacement-checker/.agent/reviews/release-gates-r10-replacement-fresh-checker/checker-report.md",
+          "checker_sha256": "6F3EE700457D4AEEB4C286F1B0D148BFC3F8603FC34CA7EED756BA29F55181C4",
+          "rejected_head_sha": "969c06703245233103518ad4e9fc725856326ce9",
+          "post_review_verdict": "REVISE_HOLD",
+          "post_review_artifact": ".agent/reviews/2026-07-11-release-gates-r10-replacement-post-review.md",
+          "integration_sha": null
+        }
+      ],
+      "required_successor_base_sha": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+      "current_owner_status": "A12_GOVERNANCE_ACTIVE_B12_PENDING"
     },
     {
       "path": "scripts/production-gates/assert-pr-authority-guard.ps1",
       "ordered_owners": [
-        "RELEASE-GATES"
+        "RELEASE-GATES",
+        "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12"
       ],
-      "current_owner": "RELEASE-GATES",
+      "current_owner": "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12",
+      "transition_kind": "replacement",
+      "completed_predecessors": [
+        {
+          "owner": "RELEASE-GATES",
+          "checker_verdict": "REVISE_HOLD",
+          "checker_artifact": ".agent/worktrees/release-gates-r10-replacement-checker/.agent/reviews/release-gates-r10-replacement-fresh-checker/checker-report.md",
+          "checker_sha256": "6F3EE700457D4AEEB4C286F1B0D148BFC3F8603FC34CA7EED756BA29F55181C4",
+          "rejected_head_sha": "969c06703245233103518ad4e9fc725856326ce9",
+          "post_review_verdict": "REVISE_HOLD",
+          "post_review_artifact": ".agent/reviews/2026-07-11-release-gates-r10-replacement-post-review.md",
+          "integration_sha": null
+        }
+      ],
+      "required_successor_base_sha": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+      "current_owner_status": "A12_GOVERNANCE_ACTIVE_B12_PENDING"
+    },
+    {
+      "path": "scripts/production-gates/assert-pr-authority-maintenance.ps1",
+      "ordered_owners": [
+        "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12"
+      ],
+      "current_owner": "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12",
       "transition_kind": "integration",
       "completed_predecessors": [],
-      "required_successor_base_sha": null
+      "required_successor_base_sha": null,
+      "current_owner_status": "A12_GOVERNANCE_ACTIVE_B12_PENDING"
+    },
+    {
+      "path": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+      "ordered_owners": [
+        "PLAN-GOVERNANCE",
+        "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12"
+      ],
+      "current_owner": "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12",
+      "transition_kind": "replacement",
+      "completed_predecessors": [
+        {
+          "owner": "PLAN-GOVERNANCE",
+          "checker_verdict": "ROOT_SELECTED_EXACT_BASE",
+          "checker_artifact": ".agent/reports/2026-07-11-release-gates-r10-plan-governance.md",
+          "predecessor_head_sha": "af1ed63536829916e0477be719a30a57a8d9227a",
+          "integration_sha": null
+        }
+      ],
+      "required_successor_base_sha": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+      "current_owner_status": "A12_GOVERNANCE_ACTIVE"
+    },
+    {
+      "path": ".agent/plans/2026-07-10-engram-production-ready-ownership-state.json",
+      "ordered_owners": [
+        "PLAN-GOVERNANCE",
+        "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12"
+      ],
+      "current_owner": "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12",
+      "transition_kind": "replacement",
+      "completed_predecessors": [
+        {
+          "owner": "PLAN-GOVERNANCE",
+          "checker_verdict": "ROOT_SELECTED_EXACT_BASE",
+          "checker_artifact": ".agent/reports/2026-07-11-release-gates-r10-plan-governance.md",
+          "predecessor_head_sha": "af1ed63536829916e0477be719a30a57a8d9227a",
+          "integration_sha": null
+        }
+      ],
+      "required_successor_base_sha": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+      "current_owner_status": "A12_GOVERNANCE_ACTIVE"
+    },
+    {
+      "path": ".agent/plans/2026-07-10-engram-production-ready-scope-map.json",
+      "ordered_owners": [
+        "PLAN-GOVERNANCE",
+        "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12"
+      ],
+      "current_owner": "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12",
+      "transition_kind": "replacement",
+      "completed_predecessors": [
+        {
+          "owner": "PLAN-GOVERNANCE",
+          "checker_verdict": "ROOT_SELECTED_EXACT_BASE",
+          "checker_artifact": ".agent/reports/2026-07-11-release-gates-r10-plan-governance.md",
+          "predecessor_head_sha": "af1ed63536829916e0477be719a30a57a8d9227a",
+          "integration_sha": null
+        }
+      ],
+      "required_successor_base_sha": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+      "current_owner_status": "A12_GOVERNANCE_ACTIVE"
+    },
+    {
+      "path": ".agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json",
+      "ordered_owners": [
+        "PLAN-GOVERNANCE",
+        "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12"
+      ],
+      "current_owner": "RELEASE-GATES-CONTROL-PLANE-EVOLVABILITY-R12",
+      "transition_kind": "replacement",
+      "completed_predecessors": [
+        {
+          "owner": "PLAN-GOVERNANCE",
+          "checker_verdict": "ROOT_SELECTED_EXACT_BASE",
+          "checker_artifact": ".agent/reports/2026-07-11-release-gates-r10-plan-governance.md",
+          "predecessor_head_sha": "af1ed63536829916e0477be719a30a57a8d9227a",
+          "integration_sha": null
+        }
+      ],
+      "required_successor_base_sha": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+      "current_owner_status": "A12_GOVERNANCE_ACTIVE"
     },
     {
       "path": ".agent/specs/release-gates-r10/evidence/release-gates/test-r10-authority-guard.ps1",
@@ -332,10 +487,10 @@
     {
       "path": "docker-compose.yml",
       "ordered_owners": [
-        "IMAGE-REMEDIATION",
+        "IMAGE-REMEDIATION-R2",
         "DEPLOYMENT-ROLLBACK"
       ],
-      "current_owner": "IMAGE-REMEDIATION",
+      "current_owner": "IMAGE-REMEDIATION-R2",
       "transition_kind": "integration",
       "completed_predecessors": [],
       "required_successor_base_sha": null
@@ -343,32 +498,10 @@
     {
       "path": "deploy/docker-compose.runtime.yml",
       "ordered_owners": [
-        "IMAGE-REMEDIATION",
+        "IMAGE-REMEDIATION-R2",
         "DEPLOYMENT-ROLLBACK"
       ],
-      "current_owner": "IMAGE-REMEDIATION",
-      "transition_kind": "integration",
-      "completed_predecessors": [],
-      "required_successor_base_sha": null
-    },
-    {
-      "path": "apps/operator-console/package.json",
-      "ordered_owners": [
-        "IMAGE-REMEDIATION",
-        "OC-INTEGRATION"
-      ],
-      "current_owner": "IMAGE-REMEDIATION",
-      "transition_kind": "integration",
-      "completed_predecessors": [],
-      "required_successor_base_sha": null
-    },
-    {
-      "path": "apps/operator-console/package-lock.json",
-      "ordered_owners": [
-        "IMAGE-REMEDIATION",
-        "OC-INTEGRATION"
-      ],
-      "current_owner": "IMAGE-REMEDIATION",
+      "current_owner": "IMAGE-REMEDIATION-R2",
       "transition_kind": "integration",
       "completed_predecessors": [],
       "required_successor_base_sha": null
@@ -376,11 +509,11 @@
     {
       "path": "docs/DEPLOYMENT.md",
       "ordered_owners": [
-        "IMAGE-REMEDIATION",
+        "IMAGE-REMEDIATION-R2",
         "CORE-PUBLIC-TRUTH",
         "FINAL-PUBLIC-TRUTH"
       ],
-      "current_owner": "IMAGE-REMEDIATION",
+      "current_owner": "IMAGE-REMEDIATION-R2",
       "transition_kind": "integration",
       "completed_predecessors": [],
       "required_successor_base_sha": null
@@ -388,11 +521,11 @@
     {
       "path": "docs/PRODUCTION-TESTING-PLAYBOOK.md",
       "ordered_owners": [
-        "IMAGE-REMEDIATION",
+        "IMAGE-REMEDIATION-R2",
         "CORE-PUBLIC-TRUTH",
         "FINAL-PUBLIC-TRUTH"
       ],
-      "current_owner": "IMAGE-REMEDIATION",
+      "current_owner": "IMAGE-REMEDIATION-R2",
       "transition_kind": "integration",
       "completed_predecessors": [],
       "required_successor_base_sha": null
@@ -581,6 +714,221 @@
       "transition_kind": "integration",
       "completed_predecessors": [],
       "required_successor_base_sha": null
+    },
+    {
+      "path": ".dockerignore",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION-R2"
+      ],
+      "current_owner": "IMAGE-REMEDIATION-R2",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "cmd/engram-healthcheck/main.go",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION-R2"
+      ],
+      "current_owner": "IMAGE-REMEDIATION-R2",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "cmd/engram-healthcheck/main_test.go",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION-R2"
+      ],
+      "current_owner": "IMAGE-REMEDIATION-R2",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "deploy/postgres/Dockerfile",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION-R2"
+      ],
+      "current_owner": "IMAGE-REMEDIATION-R2",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": ".github/workflows/docker.yaml",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION-R2"
+      ],
+      "current_owner": "IMAGE-REMEDIATION-R2",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": ".github/workflows/docker-publish.yml",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION-R2"
+      ],
+      "current_owner": "IMAGE-REMEDIATION-R2",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "scripts/production-gates/build-and-scan-images.ps1",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION-R2"
+      ],
+      "current_owner": "IMAGE-REMEDIATION-R2",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "tests/critical/runtime/image_runtime_contract_test.go",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION-R2"
+      ],
+      "current_owner": "IMAGE-REMEDIATION-R2",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "tests/critical/runtime/postgres_image_contract_test.go",
+      "ordered_owners": [
+        "IMAGE-REMEDIATION-R2"
+      ],
+      "current_owner": "IMAGE-REMEDIATION-R2",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null
+    },
+    {
+      "path": "internal/db/gorm/memory_store.go",
+      "ordered_owners": [
+        "DB-RULES-ISOLATION",
+        "PRIVACY-BOUNDARIES"
+      ],
+      "current_owner": "DB-RULES-ISOLATION",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null,
+      "current_owner_status": "MB1_MAKER_IN_PROGRESS"
+    },
+    {
+      "path": "internal/mcp/server.go",
+      "ordered_owners": [
+        "DOCUMENT-INGEST-PUBLIC-TRUTH",
+        "DOCUMENT-INGEST-PUBLIC-TRUTH-R2"
+      ],
+      "current_owner": "DOCUMENT-INGEST-PUBLIC-TRUTH-R2",
+      "transition_kind": "rework",
+      "completed_predecessors": [
+        {
+          "owner": "DOCUMENT-INGEST-PUBLIC-TRUTH",
+          "checker_verdict": "REVISE_HOLD",
+          "checker_artifact": ".agent/worktrees/public-contracts-fresh-checker/.agent/reviews/document-ingest-public-truth-fresh-checker/report.md",
+          "checker_sha256": "D8C772C9176ACE3E2E6C9568C0AB5D7EAFC03E68DB1FCF6DC1F833D4311B3817",
+          "rejected_head_sha": "63775eb30f5cc01a843cee074d41dbe87439904b",
+          "post_review_verdict": "REVISE_HOLD",
+          "post_review_artifact": ".agent/reviews/2026-07-11-document-ingest-public-truth-r1-post-review.md",
+          "post_review_sha256": "21CFF0566AD063001D607DDC0A62319A9DD84A7C5CC1DD1CBC0516FC2EE612C5",
+          "integration_sha": null
+        }
+      ],
+      "required_successor_base_sha": "63775eb30f5cc01a843cee074d41dbe87439904b",
+      "current_owner_head_sha": "efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0",
+      "current_owner_status": "REJECTED_R2_INHERITED_BY_R3"
+    },
+    {
+      "path": "internal/mcp/public_tool_descriptions_test.go",
+      "ordered_owners": [
+        "DOCUMENT-INGEST-PUBLIC-TRUTH",
+        "DOCUMENT-INGEST-PUBLIC-TRUTH-R2"
+      ],
+      "current_owner": "DOCUMENT-INGEST-PUBLIC-TRUTH-R2",
+      "transition_kind": "rework",
+      "completed_predecessors": [
+        {
+          "owner": "DOCUMENT-INGEST-PUBLIC-TRUTH",
+          "checker_verdict": "REVISE_HOLD",
+          "checker_artifact": ".agent/worktrees/public-contracts-fresh-checker/.agent/reviews/document-ingest-public-truth-fresh-checker/report.md",
+          "checker_sha256": "D8C772C9176ACE3E2E6C9568C0AB5D7EAFC03E68DB1FCF6DC1F833D4311B3817",
+          "rejected_head_sha": "63775eb30f5cc01a843cee074d41dbe87439904b",
+          "post_review_verdict": "REVISE_HOLD",
+          "post_review_artifact": ".agent/reviews/2026-07-11-document-ingest-public-truth-r1-post-review.md",
+          "post_review_sha256": "21CFF0566AD063001D607DDC0A62319A9DD84A7C5CC1DD1CBC0516FC2EE612C5",
+          "integration_sha": null
+        }
+      ],
+      "required_successor_base_sha": "63775eb30f5cc01a843cee074d41dbe87439904b",
+      "current_owner_head_sha": "efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0",
+      "current_owner_status": "REJECTED_R2_INHERITED_BY_R3"
+    },
+    {
+      "path": "internal/mcp/tools_documents.go",
+      "ordered_owners": [
+        "DOCUMENT-INGEST-PUBLIC-TRUTH-R2",
+        "DOCUMENT-INGEST-PUBLIC-TRUTH-R3"
+      ],
+      "current_owner": "DOCUMENT-INGEST-PUBLIC-TRUTH-R3",
+      "transition_kind": "replacement",
+      "completed_predecessors": [{"owner":"DOCUMENT-INGEST-PUBLIC-TRUTH-R2","checker_verdict":"REVISE_HOLD","checker_artifact":".agent/reviews/document-ingest-public-truth-r2-fresh-checker/report.md","checker_sha256":"94843CABAF3A25B207BA6DD83BD975EFF64E9861F4D4CF6D4DC0DE002ACE938B","rejected_head_sha":"efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0","post_review_verdict":"REVISE_HOLD","post_review_artifact":".agent/reviews/2026-07-12-document-r2-checker-post-review.md","post_review_sha256":"3566074D1D94ACB62781D1623A1786C5641412547D647876022F9CA8848EC4FC","integration_sha":null}],
+      "required_successor_base_sha": "efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0",
+      "current_owner_head_sha": "9ea95b6adc3a838a459bf78e3ba7a0292153960f",
+      "mutation_edge_constraint": "remove the split GetDocument decision; map the atomic store transition's zero-row outcome to the existing stable not-found error, and report success only for RowsAffected=1"
+    },
+    {
+      "path": "internal/db/gorm/document_store.go",
+      "ordered_owners": [
+        "DOCUMENT-INGEST-PUBLIC-TRUTH-R2",
+        "DOCUMENT-INGEST-PUBLIC-TRUTH-R3"
+      ],
+      "current_owner": "DOCUMENT-INGEST-PUBLIC-TRUTH-R3",
+      "transition_kind": "replacement",
+      "completed_predecessors": [{"owner":"DOCUMENT-INGEST-PUBLIC-TRUTH-R2","checker_verdict":"REVISE_HOLD","checker_artifact":".agent/reviews/document-ingest-public-truth-r2-fresh-checker/report.md","checker_sha256":"94843CABAF3A25B207BA6DD83BD975EFF64E9861F4D4CF6D4DC0DE002ACE938B","rejected_head_sha":"efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0","post_review_verdict":"REVISE_HOLD","post_review_artifact":".agent/reviews/2026-07-12-document-r2-checker-post-review.md","post_review_sha256":"3566074D1D94ACB62781D1623A1786C5641412547D647876022F9CA8848EC4FC","integration_sha":null}],
+      "required_successor_base_sha": "efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0",
+      "current_owner_head_sha": "9ea95b6adc3a838a459bf78e3ba7a0292153960f",
+      "change_constraint": "minimum executable DeactivateDocument change: UPDATE exact collection/path WHERE active=true, inspect RowsAffected, preserve schema/body and unrelated store logic"
+    },
+    {
+      "path": "internal/db/gorm/models.go",
+      "ordered_owners": [
+        "DOCUMENT-INGEST-PUBLIC-TRUTH-R2"
+      ],
+      "current_owner": "DOCUMENT-INGEST-PUBLIC-TRUTH-R2",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null,
+      "current_owner_head_sha": "efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0",
+      "change_constraint": "R2 comment is inherited by R3 without a new diff; model logic and schema remain byte-identical"
+    },
+    {
+      "path": "internal/mcp/document_public_truth_contract_test.go",
+      "ordered_owners": [
+        "DOCUMENT-INGEST-PUBLIC-TRUTH-R2",
+        "DOCUMENT-INGEST-PUBLIC-TRUTH-R3"
+      ],
+      "current_owner": "DOCUMENT-INGEST-PUBLIC-TRUTH-R3",
+      "transition_kind": "replacement",
+      "completed_predecessors": [{"owner":"DOCUMENT-INGEST-PUBLIC-TRUTH-R2","checker_verdict":"REVISE_HOLD","checker_artifact":".agent/reviews/document-ingest-public-truth-r2-fresh-checker/report.md","checker_sha256":"94843CABAF3A25B207BA6DD83BD975EFF64E9861F4D4CF6D4DC0DE002ACE938B","rejected_head_sha":"efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0","post_review_verdict":"REVISE_HOLD","post_review_artifact":".agent/reviews/2026-07-12-document-r2-checker-post-review.md","post_review_sha256":"3566074D1D94ACB62781D1623A1786C5641412547D647876022F9CA8848EC4FC","integration_sha":null}],
+      "required_successor_base_sha": "efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0",
+      "current_owner_head_sha": "9ea95b6adc3a838a459bf78e3ba7a0292153960f",
+      "test_contract": "stable serial not-found plus atomic outcome mapping; no split GetDocument decision; concurrent behavior is proved in the real PostgreSQL critical test"
+    },
+    {
+      "path": "tests/critical/document_public_truth_test.go",
+      "ordered_owners": [
+        "DOCUMENT-INGEST-PUBLIC-TRUTH-R2"
+      ],
+      "current_owner": "DOCUMENT-INGEST-PUBLIC-TRUTH-R2",
+      "transition_kind": "integration",
+      "completed_predecessors": [],
+      "required_successor_base_sha": null,
+      "current_owner_head_sha": "efe1ab5041c514f1a7d9ee8b36e07e5150cfc8e0",
+      "test_contract": "R3 exact diff leaves this R2 critical test unchanged; the fresh checker must add or run a bounded two-caller PostgreSQL probe outside the maker diff"
     }
   ]
 }

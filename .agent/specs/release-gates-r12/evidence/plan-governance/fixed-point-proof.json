@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "finding_id": "R11-COMMITTED-MANIFEST-SELF-REFERENCE",
+  "verdict": "REJECT_A11_HOLD_B11",
+  "classification": "cryptographic fixed-point contract gap",
+  "rejected_governance_head": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+  "rejected_active_contract_sha256": "97ab676b8e0ed1845b693c4eef62c37fde21ef8b5a80971e2b93c0eba63cedde",
+  "container_path": ".agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json",
+  "evidence": [
+    {
+      "source": ".agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json",
+      "fact": "control_plane_maintenance.transition_manifest is committed inside the protected manifest container and requires head_sha plus protected_head_blobs"
+    },
+    {
+      "source": ".agent/specs/release-gates-r11/evidence/plan-governance/maintenance-contract.json",
+      "fact": "manifest_bindings requires head_sha and every protected head blob"
+    },
+    {
+      "source": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
+      "fact": "criterion 16 requires every protected head blob to be bound by the committed R11 amendment manifest"
+    }
+  ],
+  "fixed_point": {
+    "blob_cycle": "The manifest container content would contain its own exact Git blob id. Replacing the placeholder changes the content and therefore changes that blob id again.",
+    "commit_cycle": "The manifest container content would contain exact head_sha. The container blob changes the tree, and the tree changes the commit SHA that the content attempts to embed.",
+    "required_operation": "Construct a simultaneous SHA-1 fixed point/preimage for Git blob and commit object encodings.",
+    "git_support": "Git has no placeholder, detached-field, or post-commit amendment mechanism that preserves either object id.",
+    "conclusion": "No auditable ordinary Git workflow can construct the required head. Treating a guessed or stale id as exact would be a false green."
+  },
+  "r12_resolution": {
+    "committed_manifest_binds": [
+      "event_base_sha",
+      "owner approval epoch",
+      "successor epoch",
+      "exact literal status/path set",
+      "current validator blobs",
+      "successor validator blobs",
+      "every protected head blob except the manifest container"
+    ],
+    "trusted_execution_artifact_binds": [
+      "actual event head SHA",
+      "actual manifest-container Git blob",
+      "canonical manifest SHA-256",
+      "trusted-base validator Git blob",
+      "required-status producer tuple"
+    ],
+    "external_mutable_payload_is_sole_authority": false
+  },
+  "b11_draft": {
+    "worktree": "D:/Dev/engram/.agent/worktrees/release-gates-r11-control-plane",
+    "head": "887b7c6144a09829a1a3f43ff5a19d3fb27fb7c1",
+    "branch": null,
+    "state": "PARKED_UNCOMMITTED_IMPLEMENTATION_DRAFT",
+    "tracked_diff_sha256": "58cd1d3e4c001f225b3a2594abe61fcb2fad30ff54bf383ec58ad4d94d8fa734",
+    "tracked_diff_lines": 1105,
+    "visible_changed_paths": [
+      ".github/workflows/authority-guard.yml",
+      ".github/workflows/test.yml",
+      "scripts/production-gates/assert-active-candidate-path-authority.ps1",
+      "scripts/production-gates/assert-pr-authority-guard.ps1",
+      "scripts/production-gates/assert-pr-authority-maintenance.ps1"
+    ],
+    "ignored_draft_evidence": [
+      ".agent/specs/release-gates-r11/evidence/release-gates/R11-AUTHORITY-MAINTENANCE.red.json",
+      ".agent/specs/release-gates-r11/evidence/release-gates/prove-it.json",
+      ".agent/specs/release-gates-r11/evidence/release-gates/test-r11-authority-maintenance.ps1"
+    ],
+    "commit_authorized": false
+  }
+}
