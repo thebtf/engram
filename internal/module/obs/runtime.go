@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +41,18 @@ var (
 // the first configured owner supplies its service version and exporter config.
 // The process-global OpenTelemetry provider is left untouched.
 func Init(ctx context.Context, serviceVersion string) (*Runtime, error) {
+	return InitForService(ctx, serviceName, serviceVersion)
+}
+
+// InitForService installs the same bounded OTLP metrics runtime as Init while
+// assigning the process its real resource identity. The daemon and server are
+// separate executables, so collectors must not merge their transport metrics
+// under one service.name.
+func InitForService(ctx context.Context, resourceServiceName, serviceVersion string) (*Runtime, error) {
+	resourceServiceName = strings.TrimSpace(resourceServiceName)
+	if resourceServiceName == "" {
+		return nil, errors.New("observability service name is required")
+	}
 	endpoint := os.Getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
 	if endpoint == "" {
 		endpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -70,7 +83,7 @@ func Init(ctx context.Context, serviceVersion string) (*Runtime, error) {
 
 	res := resource.NewWithAttributes(
 		semconv.SchemaURL,
-		semconv.ServiceName(serviceName),
+		semconv.ServiceName(resourceServiceName),
 		semconv.ServiceVersion(serviceVersion),
 	)
 	reader := sdkmetric.NewPeriodicReader(exporter)

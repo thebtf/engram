@@ -1,0 +1,87 @@
+{
+  "task_id": "OBS-CALLSITES-R1",
+  "recorded_at": "2026-07-13T02:20:02.4095657Z",
+  "method": "RED-GREEN-REFACTOR plus production-mutation Prove-It",
+  "invalidated_attempts": [
+    {
+      "reason": "The first server transport assertion used the removed legacy metric name rpc.server.duration. All production edits from that attempt were reverted before the valid cycle began.",
+      "disposition": "excluded from evidence"
+    }
+  ],
+  "cycles": [
+    {
+      "surface": "gRPC server transport, auth rejection, and version negotiation",
+      "test": "TestGRPCObservability_EmitsTransportAuthAndVersionMetrics",
+      "red_at": "2026-07-13T01:58:26.0261994Z",
+      "red": "production grpc.Server emitted no rpc.server.call.duration metric",
+      "green": "ready-made otelgrpc server StatsHandler plus bounded auth/client_version outcomes"
+    },
+    {
+      "surface": "daemon engramcore gRPC client pool",
+      "test": "TestDialGRPC_EmitsClientTransportMetric",
+      "red_at": "2026-07-13T02:01:04.1061959Z",
+      "red": "production dialGRPC emitted no rpc.client.call.duration metric",
+      "green": "ready-made otelgrpc client StatsHandler"
+    },
+    {
+      "surface": "daemon persistent server-events gRPC client",
+      "test": "TestBridgeDialGRPC_EmitsClientTransportMetric",
+      "red_at": "2026-07-13T02:04:45.8301567Z",
+      "red": "production Bridge.dialGRPC emitted no rpc.client.call.duration metric",
+      "green": "ready-made otelgrpc client StatsHandler"
+    },
+    {
+      "surface": "PostgreSQL startup",
+      "test": "TestOpenObservedStore_RecordsInitializationFailure",
+      "red_at": "2026-07-13T02:06:05.3805569Z",
+      "red": "production database initialization had no bounded diagnostic event",
+      "green": "database initialized/initialization_error outcomes without DSN or driver error labels"
+    },
+    {
+      "surface": "background code-index run",
+      "test": "TestCodebaseIndex_RecordsBackgroundRunFailure",
+      "red_at": "2026-07-13T02:07:49.6142498Z",
+      "red": "production background failure updated only in-memory state and logs",
+      "green": "index run_error and panic outcomes without project, root, run ID, or error text labels"
+    },
+    {
+      "surface": "multi-process OTel resource identity",
+      "test": "TestInitForService_ExportsDaemonResourceIdentity",
+      "red_at": "2026-07-13T02:09:01.0272375Z",
+      "red": "InitForService API did not exist, so daemon and server could not be separated by service.name",
+      "green": "engram-server compatibility wrapper and explicit engram-daemon resource identity"
+    },
+    {
+      "surface": "local daemon exporter lifecycle",
+      "test": "TestInitDaemonObservability_ExportsDaemonResourceIdentity",
+      "red_at": "2026-07-13T02:10:40.6639840Z",
+      "red": "local daemon had no exporter lifecycle call site",
+      "green": "daemon-mode init before module lifecycle and bounded shutdown on normal, error, and graceful-restart paths"
+    },
+    {
+      "surface": "short-lived client/shim isolation",
+      "test": "TestInitDaemonObservability_ShimModeDoesNotStartExporter",
+      "red": "client/shim mode incorrectly started and identified an OTLP exporter as engram-daemon",
+      "green": "only --muxcore-daemon mode owns the daemon exporter"
+    }
+  ],
+  "prove_it": {
+    "production_mutations": [
+      "removed each otelgrpc server/client StatsHandler",
+      "changed database and index outcomes",
+      "forced daemon resource identity back to engram-server",
+      "changed exercised missing-auth and incompatible-version outcomes"
+    ],
+    "result": "Every corresponding contract test failed for its intended reason; all mutations were reverted and the focused suite returned green. An unexercised missing-metadata branch mutation did not fail and is not counted as proof."
+  },
+  "verification": {
+    "focused_count": "PASS, count=5",
+    "race": "PASS, count=3 across all seven changed packages",
+    "coverage_note": "Focused package coverage is informational and ranges from 0.2% to 64.7% because several target packages are large; every changed integration seam is executed and has mutation proof.",
+    "external_sources": [
+      "Context7 official OpenTelemetry Go and contrib documentation",
+      "Parallel official OpenTelemetry RPC metrics specification and pkg.go.dev module metadata",
+      "Tavily attempted but unavailable because OAuth authorization is required"
+    ]
+  }
+}

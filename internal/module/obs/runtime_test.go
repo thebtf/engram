@@ -224,6 +224,42 @@ func TestOTLPExportsStableMetricsAndKeepsHeaderOutOfPayload(t *testing.T) {
 	}
 }
 
+func TestInitForService_ExportsDaemonResourceIdentity(t *testing.T) {
+	clearOTLPEnv(t)
+	receiver := &metricReceiver{}
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", startMetricReceiver(t, receiver))
+
+	runtime, err := InitForService(context.Background(), "engram-daemon", "vtest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	RecordRuntimeEvent(context.Background(), "startup", "started")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := runtime.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	requests := receiver.snapshot()
+	if len(requests) == 0 {
+		t.Fatal("collector received no daemon metric export")
+	}
+	if !requestHasResourceAttribute(requests[0], "service.name", "engram-daemon") {
+		t.Fatalf("OTLP payload does not identify the daemon service: %v", requests[0])
+	}
+}
+
+func requestHasResourceAttribute(request *collector.ExportMetricsServiceRequest, key, want string) bool {
+	for _, resourceMetrics := range request.GetResourceMetrics() {
+		for _, attribute := range resourceMetrics.GetResource().GetAttributes() {
+			if attribute.GetKey() == key && attribute.GetValue().GetStringValue() == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestOTLPTLSWithExplicitTrustRoot(t *testing.T) {
 	clearOTLPEnv(t)
 	receiver := &metricReceiver{}

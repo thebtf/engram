@@ -1,0 +1,43 @@
+[
+  {
+    "name": "critical-go-test",
+    "executable": "C:\\Program Files\\Go\\bin\\go.exe",
+    "arguments": [
+      "test",
+      "-tags=critical",
+      "-json",
+      "./tests/critical/...",
+      "-count=1"
+    ],
+    "command": "\"C:\\Program Files\\Go\\bin\\go.exe\" test -tags=critical -json ./tests/critical/... -count=1",
+    "started_at": "2026-07-13T02:33:41.5597214+00:00",
+    "finished_at": "2026-07-13T02:37:59.9600691+00:00",
+    "duration_seconds": 258.4,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-sol-synthesis-r1\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation\\critical-suite-runner\\sol-synthesis-20260713-observability-r2\\go-test.stdout.jsonl",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-sol-synthesis-r1\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation\\critical-suite-runner\\sol-synthesis-20260713-observability-r2\\go-test.stderr.log"
+  },
+  {
+    "name": "critical-json-parser",
+    "executable": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+    "arguments": [
+      "-NoProfile",
+      "-File",
+      "D:\\Dev\\engram\\.agent\\worktrees\\prc-sol-synthesis-r1\\scripts\\production-gates\\assert-go-test-json.ps1",
+      "-InputPath",
+      ".agent\\reports\\evidence\\production-ready\\release-gates-foundation\\critical-suite-runner\\sol-synthesis-20260713-observability-r2\\go-test.stdout.jsonl",
+      "-SummaryPath",
+      ".agent\\reports\\evidence\\production-ready\\release-gates-foundation\\critical-suite-runner\\sol-synthesis-20260713-observability-r2\\go-test-summary.json",
+      "-FailOnUnexpectedSkip"
+    ],
+    "command": "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -File \"D:\\Dev\\engram\\.agent\\worktrees\\prc-sol-synthesis-r1\\scripts\\production-gates\\assert-go-test-json.ps1\" -InputPath \".agent\\reports\\evidence\\production-ready\\release-gates-foundation\\critical-suite-runner\\sol-synthesis-20260713-observability-r2\\go-test.stdout.jsonl\" -SummaryPath \".agent\\reports\\evidence\\production-ready\\release-gates-foundation\\critical-suite-runner\\sol-synthesis-20260713-observability-r2\\go-test-summary.json\" -FailOnUnexpectedSkip",
+    "started_at": "2026-07-13T02:37:59.9725318+00:00",
+    "finished_at": "2026-07-13T02:38:00.6718968+00:00",
+    "duration_seconds": 0.699,
+    "exit_code": 0,
+    "timed_out": false,
+    "stdout": "D:\\Dev\\engram\\.agent\\worktrees\\prc-sol-synthesis-r1\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation\\critical-suite-runner\\sol-synthesis-20260713-observability-r2\\json-parser.stdout.log",
+    "stderr": "D:\\Dev\\engram\\.agent\\worktrees\\prc-sol-synthesis-r1\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation\\critical-suite-runner\\sol-synthesis-20260713-observability-r2\\json-parser.stderr.log"
+  }
+]

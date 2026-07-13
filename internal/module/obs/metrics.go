@@ -37,10 +37,24 @@ const scopeName = "github.com/thebtf/engram/internal/module"
 // wrapper so that later T064+ work can swap in caching or instrumentation-
 // version labels at one seam instead of every call site.
 func meter() metric.Meter {
+	return meterProviderLocked().Meter(scopeName)
+}
+
+// MeterProvider returns the provider owned by the active Engram observability
+// runtime, or the process-global provider when no Engram exporter is active.
+// Integrations such as otelgrpc use this accessor so they share the exact
+// provider lifecycle without replacing global OpenTelemetry state.
+func MeterProvider() metric.MeterProvider {
+	instrumentsMu.RLock()
+	defer instrumentsMu.RUnlock()
+	return meterProviderLocked()
+}
+
+func meterProviderLocked() metric.MeterProvider {
 	if instrumentProvider != nil {
-		return instrumentProvider.Meter(scopeName)
+		return instrumentProvider
 	}
-	return otel.GetMeterProvider().Meter(scopeName)
+	return otel.GetMeterProvider()
 }
 
 // ---------------------------------------------------------------------------
@@ -266,7 +280,7 @@ func RecordRuntimeEvent(ctx context.Context, component, outcome string) {
 	global.runtimeEventsOnce.Do(func() {
 		c, err := meter().Int64Counter(
 			"engram_runtime_events_total",
-			metric.WithDescription("Engram server lifecycle events labelled by component and outcome"),
+			metric.WithDescription("Engram runtime lifecycle events labelled by component and outcome"),
 		)
 		if err != nil {
 			slog.Warn("obs: failed to create engram_runtime_events_total counter", "error", err)

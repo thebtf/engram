@@ -48,6 +48,7 @@ import (
 	"github.com/thebtf/engram/internal/injection"
 	"github.com/thebtf/engram/internal/logbuf"
 	"github.com/thebtf/engram/internal/mcp"
+	"github.com/thebtf/engram/internal/module/obs"
 	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/reranking"
@@ -781,7 +782,7 @@ func (s *Service) initializeAsync() {
 	}
 
 	// Open the PostgreSQL connection pool and run pending schema migrations.
-	store, err := gorm.NewStore(gorm.Config{
+	store, err := openObservedStore(s.ctx, gorm.Config{
 		DSN:      s.config.DatabaseDSN,
 		MaxConns: s.config.DatabaseMaxConns,
 	})
@@ -1289,6 +1290,23 @@ func (s *Service) initializeAsync() {
 
 	// Watch config and database files for external changes.
 	s.startWatchers()
+}
+
+// openObservedStore is the production database initialization seam. It keeps
+// diagnostics at the call site that knows whether startup succeeded, while
+// deliberately exposing only bounded outcomes (never DSNs or driver errors)
+// to metrics.
+func openObservedStore(ctx context.Context, cfg gorm.Config) (*gorm.Store, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	store, err := gorm.NewStore(cfg)
+	if err != nil {
+		obs.RecordRuntimeEvent(ctx, "database", "initialization_error")
+		return nil, err
+	}
+	obs.RecordRuntimeEvent(ctx, "database", "initialized")
+	return store, nil
 }
 
 // startWatchers registers filesystem notification handlers for config hot-reload.

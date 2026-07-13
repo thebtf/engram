@@ -28,6 +28,7 @@ try {
     $failedTests = @($events | Where-Object { $_.Action -eq "fail" -and $_.Test } | Select-Object -ExpandProperty Test -Unique)
     $required = @(
         "TestInitNoEndpointIsNoop",
+        "TestInitForService_ExportsDaemonResourceIdentity",
         "TestOTLPExportsStableMetricsAndKeepsHeaderOutOfPayload",
         "TestOTLPTLSWithExplicitTrustRoot",
         "TestCollectorAuthFailureIsBoundedAndSecretFree",

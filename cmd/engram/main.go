@@ -32,6 +32,7 @@ import (
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/module/dispatcher"
 	"github.com/thebtf/engram/internal/module/lifecycle"
+	"github.com/thebtf/engram/internal/module/obs"
 	"github.com/thebtf/engram/internal/module/registry"
 	"github.com/thebtf/engram/internal/version"
 	muxcontrol "github.com/thebtf/mcp-mux/muxcore/control"
@@ -261,11 +262,19 @@ func main() {
 	}
 
 	logger := newRootLogger()
+	telemetryCtx, telemetryCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	telemetry, err := initDaemonObservability(telemetryCtx)
+	telemetryCancel()
+	if err != nil {
+		logger.Error("observability initialization failed", "error", err)
+		os.Exit(1)
+	}
 
 	// --- Framework wiring ------------------------------------------------
 	reg := registry.New()
 	if err := registerModules(reg); err != nil {
 		logger.Error("module registration failed", "error", err)
+		shutdownDaemonObservability(logger, telemetry)
 		os.Exit(1)
 	}
 	reg.Freeze()
@@ -287,6 +296,7 @@ func main() {
 	if err := pipeline.Start(initCtx, depsProviderFor(logger, daemonCtx)); err != nil {
 		initCancel()
 		logger.Error("lifecycle Start failed", "error", err)
+		shutdownDaemonObservability(logger, telemetry)
 		os.Exit(1)
 	}
 	initCancel()
@@ -308,7 +318,7 @@ func main() {
 		func(cmd string) string {
 			switch cmd {
 			case "graceful-restart":
-				go handleGracefulRestart(logger, pipeline, disp, filepath.Join(dd, "modules"))
+				go handleGracefulRestart(logger, pipeline, disp, filepath.Join(dd, "modules"), telemetry)
 				return "ACK"
 			default:
 				return "ERR unknown command"
@@ -350,6 +360,7 @@ func main() {
 	if err != nil {
 		logger.Error("engine.New failed", "error", err)
 		_ = pipeline.ShutdownAll(daemonCtx)
+		shutdownDaemonObservability(logger, telemetry)
 		os.Exit(1)
 	}
 
@@ -376,6 +387,7 @@ func main() {
 		logger.Error("engine.Run terminated", "error", err)
 		sevBridge.Stop()
 		_ = pipeline.ShutdownAll(daemonCtx)
+		shutdownDaemonObservability(logger, telemetry)
 		os.Exit(1)
 	}
 
@@ -384,6 +396,7 @@ func main() {
 	if err := pipeline.ShutdownAll(daemonCtx); err != nil {
 		logger.Error("lifecycle Shutdown error", "error", err)
 	}
+	shutdownDaemonObservability(logger, telemetry)
 }
 
 // handleGracefulRestart executes the full graceful-restart sequence:
@@ -409,6 +422,7 @@ func handleGracefulRestart(
 	pipeline *lifecycle.Pipeline,
 	disp *dispatcher.Dispatcher,
 	storageDir string,
+	telemetry *obs.Runtime,
 ) {
 	const hardDeadline = 60 * time.Second
 
@@ -431,6 +445,7 @@ func handleGracefulRestart(
 	if err := pipeline.ShutdownAll(ctx); err != nil {
 		logger.Warn("ShutdownAll error (continuing)", "error", err)
 	}
+	shutdownDaemonObservabilityWithin(ctx, logger, telemetry)
 
 	// Phase 4 — Find new binary.
 	currentExe, err := os.Executable()
@@ -472,6 +487,30 @@ func handleGracefulRestart(
 			"error", err,
 		)
 		os.Exit(1) // Signal failure to supervisor.
+	}
+}
+
+func initDaemonObservability(ctx context.Context) (*obs.Runtime, error) {
+	if !isMuxcoreDaemonMode() {
+		return &obs.Runtime{}, nil
+	}
+	runtime, err := obs.InitForService(ctx, "engram-daemon", daemonVersion)
+	if err != nil {
+		return nil, err
+	}
+	obs.RecordRuntimeEvent(context.Background(), "startup", "started")
+	return runtime, nil
+}
+
+func shutdownDaemonObservability(logger *slog.Logger, telemetry *obs.Runtime) {
+	shutdownDaemonObservabilityWithin(context.Background(), logger, telemetry)
+}
+
+func shutdownDaemonObservabilityWithin(parent context.Context, logger *slog.Logger, telemetry *obs.Runtime) {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	if err := telemetry.Shutdown(ctx); err != nil {
+		logger.Error("observability shutdown failed; check collector availability")
 	}
 }
 

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "gate": "critical-suite",
+  "run_id": "sol-synthesis-20260713-observability-r2",
+  "started_at": "2026-07-13T02:33:41.4352981+00:00",
+  "finished_at": "2026-07-13T02:38:00.6881133+00:00",
+  "duration_seconds": 259.253,
+  "verdict": "PASS",
+  "config": {
+    "path": "D:\\Dev\\engram\\.agent\\worktrees\\prc-sol-synthesis-r1\\.agent\\critical-suite.config.yaml",
+    "sha256": "3F1DF7569119B95A05FD9D61FC0479A79150747B38EFB5A10C45AF511E18268A",
+    "command": "go test -tags=critical -json ./tests/critical/... -count=1"
+  },
+  "run_pattern": "",
+  "allowed_skip_identities": null,
+  "matched_test_files": 6,
+  "matched_go_files": 6,
+  "go_test_exit": 0,
+  "json_parser_exit": 0,
+  "json_summary": "D:\\Dev\\engram\\.agent\\worktrees\\prc-sol-synthesis-r1\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation\\critical-suite-runner\\sol-synthesis-20260713-observability-r2\\go-test-summary.json",
+  "counts": {
+    "packages": 3,
+    "tests": 197,
+    "passed": 197,
+    "failed": 0,
+    "skipped": 0,
+    "no_tests": 0,
+    "zero_tests": 0,
+    "incomplete": 0,
+    "unexpected_skips": 0,
+    "malformed_lines": 0
+  },
+  "child_commands": 2,
+  "nonzero_child_commands": 0,
+  "commands": "D:\\Dev\\engram\\.agent\\worktrees\\prc-sol-synthesis-r1\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation\\critical-suite-runner\\sol-synthesis-20260713-observability-r2\\commands.json",
+  "errors": [],
+  "artifact_directory": "D:\\Dev\\engram\\.agent\\worktrees\\prc-sol-synthesis-r1\\.agent\\reports\\evidence\\production-ready\\release-gates-foundation\\critical-suite-runner\\sol-synthesis-20260713-observability-r2"
+}

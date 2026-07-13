@@ -11,11 +11,14 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
+
+	"github.com/thebtf/engram/internal/module/obs"
 )
 
 // connKey identifies a pooled gRPC connection. The tokenHash axis (FR-7 /
@@ -146,6 +149,9 @@ func parseGRPCAddr(serverURL string) (string, error) {
 func dialGRPC(addr, serverURL, token string) (*grpc.ClientConn, error) {
 	opts := []grpc.DialOption{
 		grpc.WithNoProxy(),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler(
+			otelgrpc.WithMeterProvider(obs.MeterProvider()),
+		)),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                30 * time.Second,
 			Timeout:             10 * time.Second,

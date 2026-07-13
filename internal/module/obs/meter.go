@@ -1,7 +1,6 @@
 package obs
 
 import (
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 )
 
@@ -19,5 +18,5 @@ import (
 // Passing an empty moduleName is safe: it returns a meter with an unusual scope
 // name ("github.com/thebtf/engram/") but does not panic.
 func MeterFor(moduleName string) metric.Meter {
-	return otel.GetMeterProvider().Meter("github.com/thebtf/engram/" + moduleName)
+	return MeterProvider().Meter("github.com/thebtf/engram/" + moduleName)
 }

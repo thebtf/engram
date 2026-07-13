@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "gate": "observability-otlp",
+  "started_at_utc": "2026-07-13T02:21:09.7732887+00:00",
+  "completed_at_utc": "2026-07-13T02:21:12.4795109+00:00",
+  "command": "go test ./internal/module/obs -count=1 -json",
+  "exit_code": 0,
+  "required_tests": [
+    "TestInitNoEndpointIsNoop",
+    "TestInitForService_ExportsDaemonResourceIdentity",
+    "TestOTLPExportsStableMetricsAndKeepsHeaderOutOfPayload",
+    "TestOTLPTLSWithExplicitTrustRoot",
+    "TestCollectorAuthFailureIsBoundedAndSecretFree",
+    "TestCollectorBackpressureHonorsDeadline",
+    "TestTransientCollectorFailureRetriesWithinCallerDeadline",
+    "TestExporterOutageAndTLSMismatchAreBounded",
+    "TestShutdownFlushesPendingMetric",
+    "TestEndpointCredentialsAreRejectedWithoutEcho",
+    "TestConcurrentInitRecordShutdown",
+    "TestRuntimeOwnershipIsIdempotentAndReinitializable",
+    "TestRepeatedLifecycleWhileRecording"
+  ],
+  "missing_tests": [],
+  "failed_tests": [],
+  "process_residue": [],
+  "container_residue": [],
+  "verdict": "PASS"
+}

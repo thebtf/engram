@@ -49,6 +49,7 @@ import (
 
 	"github.com/thebtf/engram/internal/handlers/engramcore"
 	"github.com/thebtf/engram/internal/module"
+	"github.com/thebtf/engram/internal/module/obs"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
 
@@ -316,6 +317,7 @@ func (m *Module) handleIndex(_ context.Context, p muxcore.ProjectContext, args j
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
+				obs.RecordRuntimeEvent(daemonCtx, "index", "panic")
 				// Panic recovery: log stack and mark state as error.
 				if logger != nil {
 					logger.Error("codeintel: index goroutine panicked",
@@ -346,6 +348,7 @@ func (m *Module) handleIndex(_ context.Context, p muxcore.ProjectContext, args j
 		result, err := core.IndexCodebase(daemonCtx, p, root)
 
 		if err != nil {
+			obs.RecordRuntimeEvent(daemonCtx, "index", "run_error")
 			if logger != nil {
 				logger.Error("codeintel: index run failed",
 					"project_id", projectID,

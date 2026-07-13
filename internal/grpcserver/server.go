@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -16,6 +17,7 @@ import (
 	"github.com/thebtf/engram/internal/auth"
 	engramgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
+	"github.com/thebtf/engram/internal/module/obs"
 	"github.com/thebtf/engram/internal/worker/projectevents"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 )
@@ -73,6 +75,9 @@ func New(handler MCPHandler, validator *auth.Validator) (*grpc.Server, *Server) 
 	opts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(16 << 20), // 16 MB
 		grpc.MaxSendMsgSize(16 << 20),
+		grpc.StatsHandler(otelgrpc.NewServerHandler(
+			otelgrpc.WithMeterProvider(obs.MeterProvider()),
+		)),
 		// Always register the interceptors. They are runtime-no-op when the
 		// live validator is nil (auth disabled), and runtime-enforce when
 		// SetValidator promotes the server out of bootstrap. Conditional
@@ -255,15 +260,18 @@ func (s *Server) validateBearer(ctx context.Context) (auth.Identity, error) {
 	if v == nil {
 		// Auth disabled deployments skip the interceptor entirely; if we
 		// reach here without a validator, fail closed.
+		obs.RecordRuntimeEvent(ctx, "auth", "validator_missing")
 		return auth.Identity{}, status.Error(codes.Internal, "auth: validator not configured")
 	}
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
+		obs.RecordRuntimeEvent(ctx, "auth", "missing_credentials")
 		return auth.Identity{}, status.Error(codes.Unauthenticated, "missing metadata")
 	}
 	raw := extractBearer(md)
 	if raw == "" {
+		obs.RecordRuntimeEvent(ctx, "auth", "missing_credentials")
 		return auth.Identity{}, status.Error(codes.Unauthenticated, "missing authorization header")
 	}
 
@@ -272,8 +280,10 @@ func (s *Server) validateBearer(ctx context.Context) (auth.Identity, error) {
 	case err == nil:
 		return id, nil
 	case errors.Is(err, auth.ErrEmptyToken):
+		obs.RecordRuntimeEvent(ctx, "auth", "missing_credentials")
 		return auth.Identity{}, status.Error(codes.Unauthenticated, "missing authorization header")
 	case errors.Is(err, auth.ErrInvalidCredentials):
+		obs.RecordRuntimeEvent(ctx, "auth", "invalid_credentials")
 		return auth.Identity{}, status.Error(codes.Unauthenticated, "invalid token")
 	case errors.Is(err, auth.ErrRevoked):
 		// Currently unreachable: gormdb.TokenStore.FindByPrefix already
@@ -282,11 +292,13 @@ func (s *Server) validateBearer(ctx context.Context) (auth.Identity, error) {
 		// explicit mapping for the day FindByPrefix changes contract OR
 		// a different TokenStoreReader implementation surfaces revoked
 		// rows for audit logging.
+		obs.RecordRuntimeEvent(ctx, "auth", "revoked")
 		return auth.Identity{}, status.Error(codes.Unauthenticated, "token revoked")
 	default:
 		// DB error or unexpected bcrypt failure. Surface as Internal so
 		// monitoring distinguishes auth-rejected (Unauthenticated) from
 		// auth-broken (Internal).
+		obs.RecordRuntimeEvent(ctx, "auth", "store_error")
 		return auth.Identity{}, status.Error(codes.Internal, "auth: store unavailable")
 	}
 }

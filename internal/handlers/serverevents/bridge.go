@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/module"
+	"github.com/thebtf/engram/internal/module/obs"
 	"github.com/thebtf/engram/internal/module/registry"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 )
@@ -435,6 +437,9 @@ func (b *Bridge) dialGRPC() (*grpc.ClientConn, error) {
 
 	opts := []grpc.DialOption{
 		grpc.WithNoProxy(),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler(
+			otelgrpc.WithMeterProvider(obs.MeterProvider()),
+		)),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                30 * time.Second,
 			Timeout:             10 * time.Second,
