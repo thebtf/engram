@@ -719,9 +719,11 @@ func testRepositorySingleWriter(t *testing.T, repo string) {
 }
 
 func repositorySingleWriterViolations(repo, allowedWorkflow, allowedScript string) ([]string, error) {
-	writePattern := regexp.MustCompile(`(?i)packages:\s*write|docker/login-action|docker\s+(?:push|buildx[^\n]*--push)|\bdocker\s+push\b|PERSONAL_ACCESS_TOKEN`)
+	writePattern := regexp.MustCompile(`(?i)packages\s*:\s*["']?write\b["']?|docker/login-action|\b(?:PERSONAL_ACCESS_TOKEN|PAT_TOKEN|GHCR_TOKEN|CR_PAT)\b|\bdocker(?:\.exe)?\b[^\r\n]*(?:\bpush\b|--push\b)`)
+	continuationPattern := regexp.MustCompile("[ \\t]*(?:`|\\\\)[ \\t]*\\r?\\n[ \\t]*")
 	validatorPath := filepath.Clean(filepath.Join(repo, "scripts", "production-gates", "assert-pr-authority-maintenance.ps1"))
 	var violations []string
+	validatorSeen := false
 	for _, root := range []string{filepath.Join(repo, ".github", "workflows"), filepath.Join(repo, "scripts")} {
 		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -734,11 +736,14 @@ func repositorySingleWriterViolations(repo, allowedWorkflow, allowedScript strin
 			if ext != ".yml" && ext != ".yaml" && ext != ".ps1" && ext != ".sh" && ext != ".js" && ext != ".cjs" {
 				return nil
 			}
+			if filepath.Clean(path) == validatorPath {
+				validatorSeen = true
+			}
 			content, readErr := os.ReadFile(path)
 			if readErr != nil {
 				return readErr
 			}
-			if filepath.Clean(path) != allowedWorkflow && filepath.Clean(path) != allowedScript && registryWriteSurface(path, validatorPath, content, writePattern) {
+			if filepath.Clean(path) != allowedWorkflow && filepath.Clean(path) != allowedScript && registryWriteSurface(path, validatorPath, content, writePattern, continuationPattern) {
 				violations = append(violations, path)
 			}
 			return nil
@@ -747,18 +752,22 @@ func repositorySingleWriterViolations(repo, allowedWorkflow, allowedScript strin
 			return nil, err
 		}
 	}
+	if !validatorSeen {
+		violations = append(violations, validatorPath)
+	}
 	return violations, nil
 }
 
-func registryWriteSurface(path, validatorPath string, content []byte, writePattern *regexp.Regexp) bool {
+func registryWriteSurface(path, validatorPath string, content []byte, writePattern, continuationPattern *regexp.Regexp) bool {
 	const inertSentinel = "    foreach ($forbidden in @('secrets.', 'packages: write', 'contents: write', 'id-token: write')) {\n"
+	normalized := strings.ReplaceAll(string(content), "\r\n", "\n")
 	if filepath.Clean(path) == validatorPath {
-		normalized := strings.ReplaceAll(string(content), "\r\n", "\n")
-		if strings.Count(normalized, inertSentinel) == 1 {
-			return writePattern.MatchString(strings.Replace(normalized, inertSentinel, "", 1))
+		if strings.Count(normalized, inertSentinel) != 1 {
+			return true
 		}
+		normalized = strings.Replace(normalized, inertSentinel, "", 1)
 	}
-	return writePattern.Match(content)
+	return writePattern.MatchString(continuationPattern.ReplaceAllString(normalized, " "))
 }
 
 func testRepositorySingleWriterSentinel(t *testing.T, repo, allowedWorkflow, allowedScript string) {
@@ -771,17 +780,34 @@ func testRepositorySingleWriterSentinel(t *testing.T, repo, allowedWorkflow, all
 
 	const inertSentinel = "    foreach ($forbidden in @('secrets.', 'packages: write', 'contents: write', 'id-token: write')) {\n"
 	for _, test := range []struct {
-		name       string
-		validator  string
-		extraPath  string
-		extraValue string
-		wantReject bool
+		name          string
+		validator     string
+		omitValidator bool
+		extraPath     string
+		extraValue    string
+		wantReject    bool
 	}{
 		{name: "canonical inert sentinel", validator: inertSentinel},
+		{name: "canonical CRLF inert sentinel", validator: strings.ReplaceAll(inertSentinel, "\n", "\r\n")},
+		{name: "missing validator", omitValidator: true, wantReject: true},
+		{name: "missing sentinel", validator: "# read-only validator without the required permission guard\n", wantReject: true},
 		{name: "second sentinel occurrence", validator: inertSentinel + inertSentinel, wantReject: true},
 		{name: "changed sentinel context", validator: "    foreach ($forbidden in @('secrets.', \"packages: write\", 'contents: write', 'id-token: write')) {\n", wantReject: true},
+		{name: "same-line payload after sentinel", validator: strings.TrimSuffix(inertSentinel, "\n") + "; docker image push ghcr.io/thebtf/engram\n", wantReject: true},
 		{name: "registry command in validator", validator: inertSentinel + "docker push ghcr.io/thebtf/engram\n", wantReject: true},
+		{name: "registry command with global option", validator: inertSentinel + "docker --context default push ghcr.io/thebtf/engram\n", wantReject: true},
+		{name: "registry image subcommand", validator: inertSentinel + "docker image push ghcr.io/thebtf/engram\n", wantReject: true},
+		{name: "registry compose subcommand", validator: inertSentinel + "docker compose push\n", wantReject: true},
+		{name: "registry Windows executable", validator: inertSentinel + "docker.exe push ghcr.io/thebtf/engram\n", wantReject: true},
+		{name: "registry PowerShell continuation", validator: inertSentinel + "docker `\n  --context default `\n  push ghcr.io/thebtf/engram\n", wantReject: true},
+		{name: "registry shell continuation", validator: inertSentinel + "docker \\\n  image \\\n  push ghcr.io/thebtf/engram\n", wantReject: true},
 		{name: "permission in another executable", validator: inertSentinel, extraPath: filepath.Join("scripts", "other.ps1"), extraValue: "packages: write\n", wantReject: true},
+		{name: "permission with spaced key", validator: inertSentinel, extraPath: filepath.Join(".github", "workflows", "other.yml"), extraValue: "packages : write\n", wantReject: true},
+		{name: "permission with quoted value", validator: inertSentinel, extraPath: filepath.Join(".github", "workflows", "other.yml"), extraValue: "packages: \"write\"\n", wantReject: true},
+		{name: "non-write permission word", validator: inertSentinel, extraPath: filepath.Join(".github", "workflows", "other.yml"), extraValue: "packages: writer\n"},
+		{name: "PAT token in another executable", validator: inertSentinel, extraPath: filepath.Join("scripts", "other.ps1"), extraValue: "PAT_TOKEN=secret\n", wantReject: true},
+		{name: "GHCR token in another executable", validator: inertSentinel, extraPath: filepath.Join("scripts", "other.ps1"), extraValue: "GHCR_TOKEN=secret\n", wantReject: true},
+		{name: "CR PAT in another executable", validator: inertSentinel, extraPath: filepath.Join("scripts", "other.ps1"), extraValue: "CR_PAT=secret\n", wantReject: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := t.TempDir()
@@ -791,8 +817,10 @@ func testRepositorySingleWriterSentinel(t *testing.T, repo, allowedWorkflow, all
 					t.Fatal(err)
 				}
 			}
-			if err := os.WriteFile(validatorPath, []byte(test.validator), 0o600); err != nil {
-				t.Fatal(err)
+			if !test.omitValidator {
+				if err := os.WriteFile(validatorPath, []byte(test.validator), 0o600); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if test.extraPath != "" {
 				path := filepath.Join(fixture, test.extraPath)
