@@ -60,10 +60,10 @@ services:
       - "${WORKER_BIND:-0.0.0.0}:${WORKER_PORT:-37777}:37777"
     environment:
       HOME: /var/lib/engram
-      DATABASE_DSN: "${DATABASE_DSN:?set DATABASE_DSN explicitly; do not derive credentials in Compose}"
+      DATABASE_DSN_FILE: /run/secrets/database_dsn
       ENGRAM_WORKER_HOST: "0.0.0.0"
       ENGRAM_WORKER_PORT: "37777"
-      ENGRAM_AUTH_ADMIN_TOKEN: "${ENGRAM_AUTH_ADMIN_TOKEN:?set ENGRAM_AUTH_ADMIN_TOKEN to a production secret}"
+      ENGRAM_AUTH_ADMIN_TOKEN_FILE: /run/secrets/admin_token
       ENGRAM_AUTH_DISABLED: "false"
       ENGRAM_ENCRYPTION_KEY_FILE: /run/secrets/vault_key
       ENGRAM_EMBEDDING_URL: "${ENGRAM_EMBEDDING_URL:-}"
@@ -78,6 +78,8 @@ services:
     volumes:
       - engramdata:/var/lib/engram
     secrets:
+      - admin_token
+      - database_dsn
       - vault_key
     depends_on:
       postgres:
@@ -136,6 +138,10 @@ services:
         max-file: "5"
 
 secrets:
+  admin_token:
+    file: ${ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE:?set ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE}
+  database_dsn:
+    file: ${ENGRAM_DATABASE_DSN_SECRET_FILE:?set ENGRAM_DATABASE_DSN_SECRET_FILE}
   postgres_password:
     file: ${ENGRAM_POSTGRES_PASSWORD_SECRET_FILE:?set ENGRAM_POSTGRES_PASSWORD_SECRET_FILE}
   vault_key:

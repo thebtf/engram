@@ -13,14 +13,22 @@ function Require([bool]$condition, [string]$message) {
     if (-not $condition) { throw $message }
 }
 
-function Get-EnvValue([string]$name) {
-    foreach ($line in Get-Content -LiteralPath $EnvFile) {
+function Read-EnvValues([string]$path) {
+    $values = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($line in Get-Content -LiteralPath $path) {
         if ($line -match '^\s*(?:#|$)') { continue }
         $parts = $line -split '=', 2
-        if ($parts.Count -eq 2 -and $parts[0].Trim() -eq $name) { return $parts[1].Trim() }
+        if ($parts.Count -ne 2 -or $parts[0].Trim() -cnotmatch '^[A-Za-z_][A-Za-z0-9_]*$') { throw "invalid env entry in $path" }
+        $name = $parts[0].Trim()
+        if ($values.ContainsKey($name)) { throw "duplicate env key '$name' in $path" }
+        $values.Add($name, $parts[1].Trim())
     }
-    return $null
+    return $values
 }
+
+$envValues = Read-EnvValues $EnvFile
+
+function Get-EnvValue([string]$name) { return $envValues[$name] }
 
 function Get-Service([object]$config, [string]$name) {
     $property = $config.services.PSObject.Properties[$name]
@@ -60,8 +68,10 @@ Require ((@($server.healthcheck.test) -join ' ') -match 'http://127\.0\.0\.1:377
 Require ((@($operator.healthcheck.test) -join ' ') -match 'http://127\.0\.0\.1:3000/api/ready') 'operator healthcheck does not proxy /api/ready'
 Require ($postgres.environment.POSTGRES_PASSWORD_FILE -eq '/run/secrets/postgres_password') 'PostgreSQL does not consume its password secret'
 Require ($server.environment.ENGRAM_ENCRYPTION_KEY_FILE -eq '/run/secrets/vault_key') 'server does not consume its vault-key secret'
-Require (-not [string]::IsNullOrWhiteSpace($server.environment.DATABASE_DSN)) 'DATABASE_DSN is empty'
-Require (-not [string]::IsNullOrWhiteSpace($server.environment.ENGRAM_AUTH_ADMIN_TOKEN)) 'ENGRAM_AUTH_ADMIN_TOKEN is empty'
+Require ($server.environment.DATABASE_DSN_FILE -eq '/run/secrets/database_dsn') 'server does not consume its database DSN secret file'
+Require ($server.environment.ENGRAM_AUTH_ADMIN_TOKEN_FILE -eq '/run/secrets/admin_token') 'server does not consume its admin-token secret file'
+Require ($null -eq $server.environment.DATABASE_DSN) 'DATABASE_DSN leaked into container environment'
+Require ($null -eq $server.environment.ENGRAM_AUTH_ADMIN_TOKEN) 'ENGRAM_AUTH_ADMIN_TOKEN leaked into container environment'
 
 if ($ConfigOnly) {
     [pscustomobject]@{ status = 'CONFIG_VALID'; project = $ProjectName; compose = (Resolve-Path $ComposeFile).Path }
