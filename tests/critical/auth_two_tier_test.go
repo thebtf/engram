@@ -56,9 +56,10 @@ import (
 // This is the test PR #203's regression would have failed: PR #203 made a
 // daemon misconfigured with a renamed env-var look identical to a deeply
 // broken auth chain, surfacing only `loom_*` static tools. A critical test
-// that asserts "valid keycard ⇒ Initialize succeeds AND returns a tool list"
+// that asserts "valid keycard ⇒ an authenticated gRPC method succeeds"
 // would have flipped to FAIL the moment the env-var rename landed without
-// migration. This is that test.
+// migration. NegotiateVersion is the auth-only probe here: unlike Initialize,
+// it deliberately has no project-registration/tenant-DB precondition.
 
 func TestCritical_AuthTwoTier(t *testing.T) {
 	// --- Fixtures: valid keycard, valid operator key ---
@@ -104,12 +105,10 @@ func TestCritical_AuthTwoTier(t *testing.T) {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		resp, err := client.Initialize(ctx, &pb.InitializeRequest{
-			ClientName:    "critical-suite",
-			ClientVersion: "test",
-		})
+		resp, err := client.NegotiateVersion(ctx, &pb.NegotiateVersionRequest{ClientVersion: "1.0.0"})
 		require.NoError(t, err, "operator key MUST authenticate at gRPC layer (FR-1 tier 1)")
 		require.NotNil(t, resp)
+		require.True(t, resp.Compatible)
 	})
 
 	t.Run("gRPC accepts dashboard-issued keycard", func(t *testing.T) {
@@ -122,14 +121,12 @@ func TestCritical_AuthTwoTier(t *testing.T) {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		resp, err := client.Initialize(ctx, &pb.InitializeRequest{
-			ClientName:    "critical-suite",
-			ClientVersion: "test",
-		})
+		resp, err := client.NegotiateVersion(ctx, &pb.NegotiateVersionRequest{ClientVersion: "1.0.0"})
 		require.NoError(t, err,
 			"valid keycard MUST authenticate at gRPC layer (FR-2 symmetric validation — "+
 				"this is the assertion PR #203's regression would have flipped)")
 		require.NotNil(t, resp)
+		require.True(t, resp.Compatible)
 	})
 
 	t.Run("gRPC rejects garbage bearer", func(t *testing.T) {
@@ -142,7 +139,7 @@ func TestCritical_AuthTwoTier(t *testing.T) {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		_, err := client.Initialize(ctx, &pb.InitializeRequest{})
+		_, err := client.NegotiateVersion(ctx, &pb.NegotiateVersionRequest{ClientVersion: "1.0.0"})
 		require.Error(t, err, "garbage bearer MUST be rejected (FR-1)")
 		require.Contains(t, err.Error(), "Unauthenticated", "rejection MUST be auth-class")
 	})
@@ -154,7 +151,7 @@ func TestCritical_AuthTwoTier(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		_, err := client.Initialize(ctx, &pb.InitializeRequest{})
+		_, err := client.NegotiateVersion(ctx, &pb.NegotiateVersionRequest{ClientVersion: "1.0.0"})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "Unauthenticated")
 	})
@@ -213,7 +210,7 @@ func TestCritical_AuthTwoTier(t *testing.T) {
 		)
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		_, err := client.Initialize(ctx, &pb.InitializeRequest{})
+		_, err := client.NegotiateVersion(ctx, &pb.NegotiateVersionRequest{ClientVersion: "1.0.0"})
 		require.Error(t, err,
 			"anti-stub: replacing the keycard store with always-fail MUST flip "+
 				"the keycard-success assertion to error. If this passes, "+
@@ -244,7 +241,7 @@ func (stubMCPHandler) HandleToolCall(_ context.Context, _ string, _ []byte) ([]b
 	return []byte(`{}`), false, nil
 }
 func (stubMCPHandler) ToolDefinitions() []grpcserver.ToolDef { return nil }
-func (stubMCPHandler) ServerInfo() (string, string)          { return "engram-critical", "test" }
+func (stubMCPHandler) ServerInfo() (string, string)          { return "engram-critical", "1.0.0" }
 
 // newGRPCBufconnClient boots a real grpcserver.New on bufconn and returns a
 // connected EngramServiceClient.
