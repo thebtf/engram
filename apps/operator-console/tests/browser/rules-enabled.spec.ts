@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-test('behavioral rules can be disabled through the live control-plane route', async ({ page }) => {
+test('behavioral rules can be toggled through the live control-plane route', async ({ page }) => {
   const consoleProblems: string[] = []
   const failedRequests: string[] = []
   const badResponses: string[] = []
@@ -23,25 +23,37 @@ test('behavioral rules can be disabled through the live control-plane route', as
     pageErrors.push(error.message)
   })
 
+  const isSuccessfulRulesList = (response: import('@playwright/test').Response) =>
+    response.request().method() === 'GET'
+    && /\/api\/rules\?all=true&limit=200$/.test(response.url())
+    && response.status() < 400
+
+  const initialRulesResponsePromise = page.waitForResponse(isSuccessfulRulesList)
   await page.goto('/rules')
+  await initialRulesResponsePromise
 
   const status = page.getByTestId('rule-status-401')
   const toggle = page.getByTestId('rule-enable-toggle-401')
   await expect(status).toBeVisible()
-  await expect(toggle).toHaveAttribute('aria-checked', 'true')
+  const initialEnabled = await toggle.getAttribute('aria-checked') === 'true'
+  const expectedEnabled = !initialEnabled
 
   const toggleResponsePromise = page.waitForResponse((response) =>
     response.request().method() === 'PATCH'
     && /\/api\/rules\/401\/enabled$/.test(response.url())
     && response.status() < 400
   )
+  const refreshResponsePromise = page.waitForResponse(isSuccessfulRulesList)
   await toggle.click()
-  await toggleResponsePromise
-  await expect(toggle).toHaveAttribute('aria-checked', 'false')
+  await Promise.all([toggleResponsePromise, refreshResponsePromise])
+  await expect(toggle).toHaveAttribute('aria-checked', String(expectedEnabled))
+  await expect(toggle).toBeEnabled()
 
+  const reloadRulesResponsePromise = page.waitForResponse(isSuccessfulRulesList)
   await page.reload()
+  await reloadRulesResponsePromise
   await expect(page.getByTestId('rule-status-401')).toBeVisible()
-  await expect(page.getByTestId('rule-enable-toggle-401')).toHaveAttribute('aria-checked', 'false')
+  await expect(page.getByTestId('rule-enable-toggle-401')).toHaveAttribute('aria-checked', String(expectedEnabled))
 
   expect(consoleProblems).toEqual([])
   expect(failedRequests).toEqual([])
