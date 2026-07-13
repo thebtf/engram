@@ -1,0 +1,57 @@
+{
+  "task_id": "MACOS-CWD-CANONICAL",
+  "stack": "GO",
+  "verdict": "PASS_LOCAL_PENDING_MACOS_CI",
+  "red": {
+    "observed_at": "2026-07-13T10:03:34.817897Z",
+    "test_file": "internal/handlers/loom/production_readiness_coverage_test.go",
+    "test_name": "TestCliWorker_ProductionReadinessStructuredArgsAndCWD",
+    "failure_reason": "The exact-string assertion rejected equivalent /var and /private/var spellings of the same macOS temporary directory.",
+    "runner_stdout_excerpt": "expected /var/folders/...; actual /private/var/folders/...; one test failed",
+    "source": "GitHub Actions run 29241241316, job 86787538057, artifact 8275553191"
+  },
+  "green": {
+    "observed_at": "2026-07-13T11:14:13.6535708Z",
+    "implementation": "Stat both existing paths and assert os.SameFile directory identity.",
+    "scoped_target_passed": 1,
+    "module_regressions": 0,
+    "windows_runner": "go test target and full internal/handlers/loom package: PASS",
+    "linux_alias_replay": "TMPDIR symlink alias produced a physical child cwd; target test PASS in golang:1.26-bookworm"
+  },
+  "refactor": {
+    "applied": false,
+    "reason": "The GREEN test-only change is already the minimum standard-library identity check."
+  },
+  "prove_it": {
+    "mutation": "Temporarily restore the old assert.Equal path-string comparison.",
+    "substituted_files": [],
+    "failed_tests": 1,
+    "runner_stdout_excerpt": "expected /tmp/engram-cwd-alias/...; actual /tmp/...; TestCliWorker_ProductionReadinessStructuredArgsAndCWD FAIL",
+    "reverted_at": "2026-07-13T11:14:13.6535708Z",
+    "post_revert_green": true
+  },
+  "coverage": {
+    "package": "github.com/thebtf/engram/internal/handlers/loom",
+    "percent": 86.9,
+    "threshold": 80,
+    "status": "PASS"
+  },
+  "behavior_signal": {
+    "name": "cross-platform worker CWD identity",
+    "measurement": "The exact test must pass on windows-latest, ubuntu-latest, and macos-14 for the candidate head.",
+    "status": "LOCAL_PROXY_GREEN_PENDING_REMOTE_MACOS"
+  },
+  "external_sources": {
+    "go_same_file": "https://pkg.go.dev/os#SameFile",
+    "go_eval_symlinks": "https://pkg.go.dev/path/filepath#EvalSymlinks",
+    "decision": "Use os.SameFile because filepath.Abs does not guarantee a unique name and the tested invariant is directory identity, not path spelling.",
+    "context7": "USED",
+    "parallel": "USED",
+    "tavily": "BLOCKED_OAUTH_AUTHORIZATION_REQUIRED"
+  },
+  "infrastructure_notes": [
+    "The first WSL alias replay never reached tests because required modules were absent and WSL had no network route.",
+    "A second WSL attempt exposed that the base toolchain was Go 1.22.2 and auto-download state lived in the default module cache.",
+    "The accepted alias replay used the cached golang:1.26-bookworm image and the existing host module cache with GOPROXY=off."
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "task_id": "MACOS-CWD-CANONICAL",
+  "stack": "GO",
+  "observed_at": "2026-07-13T10:03:34.817897Z",
+  "source": "GitHub Actions run 29241241316, job 86787538057, cross-platform-tests-macos-14 artifact 8275553191",
+  "test_file": "internal/handlers/loom/production_readiness_coverage_test.go",
+  "test_name": "TestCliWorker_ProductionReadinessStructuredArgsAndCWD",
+  "protected_invariant": "The CLI worker executes the child process in the requested existing working directory even when the operating system reports a different canonical spelling for that directory.",
+  "failure_reason": "macOS returned the physical /private/var path for a t.TempDir requested through the equivalent /var path, so exact string equality rejected the correct directory identity.",
+  "runner_stdout_excerpt": "expected: /var/folders/.../TestCliWorker_ProductionReadinessStructuredArgsAndCWD.../001\nactual: /private/var/folders/.../TestCliWorker_ProductionReadinessStructuredArgsAndCWD.../001\n--- FAIL: TestCliWorker_ProductionReadinessStructuredArgsAndCWD (0.01s)"
+}
