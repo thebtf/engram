@@ -68,6 +68,30 @@ function Get-OptionalStringArray {
     return $values
 }
 
+function Get-R12OptionalStringArray {
+    param(
+        [Parameter(Mandatory)]$Object,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Context,
+        [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Errors
+    )
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) { return @() }
+    if ($property.Value -isnot [System.Array]) {
+        $Errors.Add("$Context must be a JSON array when present")
+        return @()
+    }
+    $values = [System.Collections.Generic.List[string]]::new()
+    foreach ($value in @($property.Value)) {
+        if ($value -isnot [string] -or [string]::IsNullOrWhiteSpace($value)) {
+            $Errors.Add("$Context contains a null, non-string, or blank member")
+            continue
+        }
+        $values.Add([string]$value)
+    }
+    return @($values)
+}
+
 function Test-RequiredCanonicalStringArray {
     param(
         [AllowNull()]$Value,
@@ -492,8 +516,8 @@ function Invoke-R12ContractAudit {
         if ([string]::IsNullOrWhiteSpace($slice) -or $pendingStatus -cnotin $pendingStatuses) { $errors.Add("pending '$slice' has blank or unknown status class '$pendingStatus'") }
         if ($branch -notmatch '^work/[A-Za-z0-9._/-]+$' -or $baseAnchor -cnotmatch '^[0-9a-f]{40}$') { $errors.Add("pending '$slice' has invalid branch or base anchor") }
         if ((Get-PropertyValue $pending 'release_accepted') -isnot [bool] -or [bool](Get-PropertyValue $pending 'release_accepted')) { $errors.Add("pending '$slice' must not claim release acceptance") }
-        [string[]]$exactPaths = @(Get-OptionalStringArray $pending 'exact_paths')
-        [string[]]$exactPrefixes = @(Get-OptionalStringArray $pending 'exact_prefixes')
+        [string[]]$exactPaths = @(Get-R12OptionalStringArray -Object $pending -Name 'exact_paths' -Context "pending '$slice' exact_paths" -Errors $errors)
+        [string[]]$exactPrefixes = @(Get-R12OptionalStringArray -Object $pending -Name 'exact_prefixes' -Context "pending '$slice' exact_prefixes" -Errors $errors)
         $macroBound = Test-R12MacroAuthority $pending $errors
         if ($exactPaths.Count + $exactPrefixes.Count -eq 0 -and -not $macroBound) { $errors.Add("pending '$slice' declares no bounded path") }
         $seenPending = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
@@ -511,7 +535,7 @@ function Invoke-R12ContractAudit {
             }
             catch { $errors.Add("pending '$slice': $($_.Exception.Message)") }
         }
-        [string[]]$forbidden = @(Get-OptionalStringArray $pending 'forbidden_final_paths')
+        [string[]]$forbidden = @(Get-R12OptionalStringArray -Object $pending -Name 'forbidden_final_paths' -Context "pending '$slice' forbidden_final_paths" -Errors $errors)
         $seenForbidden = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
         foreach ($token in $forbidden) {
             try {
@@ -832,6 +856,17 @@ function Invoke-SelfTest {
     $r12PrefixInExactPaths.pending_namespaces[0].exact_prefixes = @()
     $r12PrefixInExactPathsResult = Invoke-R12ContractAudit $r12PrefixInExactPaths $hash $hash $hash $hash
     Assert-SelfTest ($r12PrefixInExactPathsResult.verdict -eq 'FAIL' -and @($r12PrefixInExactPathsResult.errors | Where-Object { $_ -match 'exact_paths entry is non-exact' }).Count -eq 1) 'R12 prefix token in exact_paths was accepted'
+    $r12ScalarExactPaths = Copy-JsonObject $r12ValidPending
+    $r12ScalarExactPaths.pending_namespaces[0].exact_paths = 'src/selftest.go'
+    $r12ScalarExactPaths.pending_namespaces[0].exact_prefixes = @()
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12ScalarExactPaths $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 scalar exact_paths was accepted'
+    $r12ScalarExactPrefixes = Copy-JsonObject $r12ValidPending
+    $r12ScalarExactPrefixes.pending_namespaces[0].exact_paths = @()
+    $r12ScalarExactPrefixes.pending_namespaces[0].exact_prefixes = 'src/generated/**'
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12ScalarExactPrefixes $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 scalar exact_prefixes was accepted'
+    $r12ScalarForbiddenPaths = Copy-JsonObject $r12ValidPending
+    $r12ScalarForbiddenPaths.pending_namespaces[0].forbidden_final_paths = 'src/forbidden.go'
+    Assert-SelfTest ((Invoke-R12ContractAudit $r12ScalarForbiddenPaths $hash $hash $hash $hash).verdict -eq 'FAIL') 'R12 scalar forbidden_final_paths was accepted'
     $r12ValidMacro = Copy-JsonObject $r12ValidPending
     $r12ValidMacro.pending_namespaces[0].PSObject.Properties.Remove('exact_paths')
     $r12ValidMacro.pending_namespaces[0].PSObject.Properties.Remove('exact_prefixes')

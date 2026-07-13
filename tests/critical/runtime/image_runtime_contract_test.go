@@ -343,7 +343,8 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 	}
 	verificationPath := filepath.Join(repo, ".github", "workflows", "docker.yaml")
 	publisherPath := filepath.Join(repo, ".github", "workflows", "docker-publish.yml")
-	for _, workflowPath := range []string{verificationPath, publisherPath} {
+	testPath := filepath.Join(repo, ".github", "workflows", "test.yml")
+	for _, workflowPath := range []string{verificationPath, publisherPath, testPath} {
 		content, err := os.ReadFile(workflowPath)
 		if err != nil {
 			t.Fatal(err)
@@ -376,23 +377,37 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		}
 	}
 
-	const scoutVersion = "1.23.1"
-	const scoutArchiveSHA256 = "0f778f9d833f28bc6cccff95e33039849c0afcecafa38d9f46fe74bfd0915714"
-	for _, workflowPath := range []string{verificationPath, publisherPath} {
+	const trivyVersion = "0.72.0"
+	const trivyArchiveSHA256 = "bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea"
+	for _, workflowPath := range []string{verificationPath, publisherPath, testPath} {
 		workflow := readFile(t, workflowPath)
 		for _, required := range []string{
-			"docker-scout_" + scoutVersion + "_linux_amd64.tar.gz",
-			scoutArchiveSHA256,
-			".docker/cli-plugins/docker-scout",
-			"docker scout version",
+			"trivy_" + trivyVersion + "_Linux-64bit.tar.gz",
+			trivyArchiveSHA256,
+			"$HOME/.local/bin/trivy",
+			"$GITHUB_PATH",
+			"trivy\" --version",
 		} {
 			if !strings.Contains(workflow, required) {
-				t.Fatalf("%s does not provision the pinned Docker Scout CLI contract %q", workflowPath, required)
+				t.Fatalf("%s does not provision the pinned Trivy CLI contract %q", workflowPath, required)
+			}
+		}
+		for _, forbidden := range []string{"docker-scout", "docker scout"} {
+			if strings.Contains(strings.ToLower(workflow), forbidden) {
+				t.Fatalf("%s retains the authentication-bound Docker Scout contract %q", workflowPath, forbidden)
 			}
 		}
 	}
 
 	imageGate := readFile(t, filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1"))
+	for _, required := range []string{
+		"$toolVersions.trivy", "Invoke-LoggedNative -File 'trivy'", "'--image-src', 'docker'",
+		"'--scanners', 'vuln'", "'--severity', 'HIGH,CRITICAL'", "'--exit-code', '2'",
+	} {
+		if !strings.Contains(imageGate, required) {
+			t.Fatalf("image gate does not preserve the exact local Trivy scan contract %q", required)
+		}
+	}
 	for _, required := range []string{
 		"ENGRAM_AUTH_ADMIN_TOKEN_SECRET_FILE",
 		"ENGRAM_DATABASE_DSN_SECRET_FILE",
@@ -719,7 +734,9 @@ func testRepositorySingleWriter(t *testing.T, repo string) {
 }
 
 func repositorySingleWriterViolations(repo, allowedWorkflow, allowedScript string) ([]string, error) {
-	writePattern := regexp.MustCompile(`(?i)packages\s*:\s*["']?write\b["']?|docker/login-action|\b(?:PERSONAL_ACCESS_TOKEN|PAT_TOKEN|GHCR_TOKEN|CR_PAT)\b|\bdocker(?:\.exe)?\b[^\r\n]*(?:\bpush\b|--push\b)`)
+	// Detect quoted/unquoted packages:write keys, registry-login actions, known package-token aliases,
+	// and docker push/--push variants. continuationPattern joins shell/PowerShell continuations first.
+	writePattern := regexp.MustCompile(`(?i)["']?\bpackages\b["']?\s*:\s*["']?\bwrite\b["']?|docker/login-action|\b(?:PERSONAL_ACCESS_TOKEN|PAT_TOKEN|GHCR_TOKEN|CR_PAT)\b|\bdocker(?:\.exe)?\b[^\r\n]*(?:\bpush\b|--push\b)`)
 	continuationPattern := regexp.MustCompile("[ \\t]*(?:`|\\\\)[ \\t]*\\r?\\n[ \\t]*")
 	validatorPath := filepath.Clean(filepath.Join(repo, "scripts", "production-gates", "assert-pr-authority-maintenance.ps1"))
 	var violations []string
@@ -804,6 +821,8 @@ func testRepositorySingleWriterSentinel(t *testing.T, repo, allowedWorkflow, all
 		{name: "permission in another executable", validator: inertSentinel, extraPath: filepath.Join("scripts", "other.ps1"), extraValue: "packages: write\n", wantReject: true},
 		{name: "permission with spaced key", validator: inertSentinel, extraPath: filepath.Join(".github", "workflows", "other.yml"), extraValue: "packages : write\n", wantReject: true},
 		{name: "permission with quoted value", validator: inertSentinel, extraPath: filepath.Join(".github", "workflows", "other.yml"), extraValue: "packages: \"write\"\n", wantReject: true},
+		{name: "permission with double-quoted key", validator: inertSentinel, extraPath: filepath.Join(".github", "workflows", "other.yml"), extraValue: "\"packages\": write\n", wantReject: true},
+		{name: "permission with single-quoted key", validator: inertSentinel, extraPath: filepath.Join(".github", "workflows", "other.yml"), extraValue: "'packages': write\n", wantReject: true},
 		{name: "non-write permission word", validator: inertSentinel, extraPath: filepath.Join(".github", "workflows", "other.yml"), extraValue: "packages: writer\n"},
 		{name: "PAT token in another executable", validator: inertSentinel, extraPath: filepath.Join("scripts", "other.ps1"), extraValue: "PAT_TOKEN=secret\n", wantReject: true},
 		{name: "GHCR token in another executable", validator: inertSentinel, extraPath: filepath.Join("scripts", "other.ps1"), extraValue: "GHCR_TOKEN=secret\n", wantReject: true},

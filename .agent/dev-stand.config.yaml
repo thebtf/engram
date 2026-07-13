@@ -41,10 +41,10 @@ credential_policy:
 image_scan:
   command: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -DevStandAction Scan -ComposeProject engram-critical-stand -ComposeFile docker-compose.yml"
   discovery: "docker service inventory filtered by com.docker.compose.project=engram-critical-stand"
-  scanner: "docker scout cves"
+  scanner: "trivy image"
   severities: ["critical", "high"]
   fail_on_findings: true
-  machine_evidence: "dev-stand/<run-id>-scan/docker-scout-*.sarif.json plus summary.json"
+  machine_evidence: "dev-stand/<run-id>-scan/trivy-*.sarif.json plus summary.json"
   exact_service_images:
     postgres: "ghcr.io/thebtf/engram-postgres:main"
     server: "ghcr.io/thebtf/engram:main"

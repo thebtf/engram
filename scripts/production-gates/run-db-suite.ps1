@@ -81,7 +81,7 @@ Options:
                            PostgreSQL/admin/vault/bootstrap credentials,
                            validates exact compose service/image labels, and
                            proves /health + /api/ready without persisting them.
-                           Scan runs Docker Scout against the exact running tags
+                           Scan runs Trivy against the exact running image IDs
                            and fails on any HIGH or CRITICAL vulnerability.
   -ComposeProject          Exact isolated compose project label.
   -ComposeFile             Compose file used by the tracked stand contract.
@@ -674,6 +674,7 @@ function Invoke-DevStandContract {
     $residualResourcesZero = $null
     $connection = [pscustomobject]@{ Original = ''; Password = ''; Uri = $null; User = ''; Host = ''; Port = 0; Database = ''; SslMode = $null }
     $dockerPath = Get-NativeCommandPath @('docker.exe', 'docker')
+    $trivyPath = if ($Action -eq 'Scan') { Get-NativeCommandPath @('trivy.exe', 'trivy') } else { $null }
     $gitPath = $null
     $curlPath = $null
     if ($Action -in @('Up', 'Ready')) { $curlPath = Get-NativeCommandPath @('curl.exe', 'curl') }
@@ -843,10 +844,10 @@ services:
 
             if ($Action -eq 'Scan' -and $inventoryAssertion.Pass -and $imageIdentityPass -and $prelaunchToRunningImageIdentity) {
                 foreach ($entry in @($actualImages.GetEnumerator() | Sort-Object Key)) {
-                    $sarifPath = [System.IO.Path]::GetFullPath((Join-Path $actionDirectory ("docker-scout-$($entry.Key).sarif.json")))
+                    $sarifPath = [System.IO.Path]::GetFullPath((Join-Path $actionDirectory ("trivy-$($entry.Key).sarif.json")))
                     $imageId = $actualImageIds[$entry.Key]
-                    $scanReference = "local://$imageId"
-                    $scan = Invoke-CapturedProcess "dev-stand-vulnerability-scan-$($entry.Key)" $dockerPath @('scout', 'cves', '--exit-code', '--only-severity', 'critical,high', '--format', 'sarif', '--output', $sarifPath, $scanReference) @{} (Join-Path $actionDirectory "docker-scout-$($entry.Key).stdout.log") (Join-Path $actionDirectory "docker-scout-$($entry.Key).stderr.log") $connection @() 600
+                    $scanReference = $imageId
+                    $scan = Invoke-CapturedProcess "dev-stand-vulnerability-scan-$($entry.Key)" $trivyPath @('image', '--image-src', 'docker', '--scanners', 'vuln', '--severity', 'HIGH,CRITICAL', '--exit-code', '2', '--format', 'sarif', '--output', $sarifPath, '--no-progress', $scanReference) @{} (Join-Path $actionDirectory "trivy-$($entry.Key).stdout.log") (Join-Path $actionDirectory "trivy-$($entry.Key).stderr.log") $connection @() 600
                     $vulnerabilityCount = $null
                     $scanParseError = $null
                     if (Test-Path -LiteralPath $sarifPath -PathType Leaf) {
@@ -854,19 +855,19 @@ services:
                             $sarif = Get-Content -LiteralPath $sarifPath -Raw | ConvertFrom-Json -Depth 100
                             $vulnerabilityCount = @($sarif.runs | ForEach-Object { $_.results } | Where-Object { $null -ne $_ }).Count
                         }
-                        catch { $scanParseError = "Docker Scout SARIF parse failed for '$($entry.Value)': $($_.Exception.Message)"; $errors.Add($scanParseError) }
+                        catch { $scanParseError = "Trivy SARIF parse failed for '$($entry.Value)': $($_.Exception.Message)"; $errors.Add($scanParseError) }
                     }
-                    else { $scanParseError = "Docker Scout did not produce SARIF for '$($entry.Value)'"; $errors.Add($scanParseError) }
+                    else { $scanParseError = "Trivy did not produce SARIF for '$($entry.Value)'"; $errors.Add($scanParseError) }
 
                     $vulnerabilityScans.Add([pscustomobject][ordered]@{
-                        service = $entry.Key; image = $entry.Value; image_id = $imageId; scanned_reference = $scanReference; scanner = 'docker scout cves'
-                        severities = @('critical', 'high'); exit_code = $scan.ExitCode
+                        service = $entry.Key; image = $entry.Value; image_id = $imageId; scanned_reference = $scanReference; scanner = 'trivy image'; image_source = 'docker'
+                        severities = @('HIGH', 'CRITICAL'); exit_code = $scan.ExitCode
                         vulnerability_count = $vulnerabilityCount; sarif = $sarifPath; parse_error = $scanParseError
                     })
                     if ($scan.ExitCode -eq 2) { $errors.Add("HIGH/CRITICAL vulnerabilities detected in exact image '$($entry.Value)' (count=$vulnerabilityCount)") }
-                    elseif ($scan.ExitCode -ne 0) { $errors.Add("Docker Scout failed for exact image '$($entry.Value)' with exit $($scan.ExitCode)") }
-                    elseif ($null -eq $vulnerabilityCount) { $errors.Add("Docker Scout result count is unavailable for exact image '$($entry.Value)'") }
-                    elseif ($vulnerabilityCount -ne 0) { $errors.Add("Docker Scout returned exit 0 with $vulnerabilityCount HIGH/CRITICAL results for exact image '$($entry.Value)'") }
+                    elseif ($scan.ExitCode -ne 0) { $errors.Add("Trivy failed for exact image '$($entry.Value)' with exit $($scan.ExitCode)") }
+                    elseif ($null -eq $vulnerabilityCount) { $errors.Add("Trivy result count is unavailable for exact image '$($entry.Value)'") }
+                    elseif ($vulnerabilityCount -ne 0) { $errors.Add("Trivy returned exit 0 with $vulnerabilityCount HIGH/CRITICAL results for exact image '$($entry.Value)'") }
                 }
             }
         }
@@ -941,7 +942,7 @@ services:
         actual_images = $actualImages; actual_image_ids = $actualImageIds; tag_image_ids = $tagImageIds
         liveness_endpoints = @($endpointResults | Where-Object contract_kind -ceq 'liveness')
         semantic_ready_endpoints = @($endpointResults | Where-Object contract_kind -ceq 'readiness')
-        vulnerability_scan = [ordered]@{ scanner = 'docker scout cves'; severity_gate = @('critical', 'high'); scans = @($vulnerabilityScans) }
+        vulnerability_scan = [ordered]@{ scanner = 'trivy image'; image_source = 'docker'; severity_gate = @('HIGH', 'CRITICAL'); scans = @($vulnerabilityScans) }
         automatic_failure_cleanup = $automaticFailureCleanup; residual_checks_performed = $residualChecksPerformed; residual_resources_zero = $residualResourcesZero
         child_commands = $script:CommandRecords.Count; nonzero_child_commands = @($script:CommandRecords | Where-Object exit_code -ne 0).Count
         commands = [System.IO.Path]::GetFullPath($commandsPath); errors = @($errors); artifact_directory = [System.IO.Path]::GetFullPath($actionDirectory)

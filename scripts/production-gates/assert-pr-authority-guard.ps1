@@ -136,8 +136,14 @@ function Get-OrdinalSignature {
 function Get-OptionalArrayProperty {
     param([Parameter(Mandatory)]$Object, [Parameter(Mandatory)][string]$Name)
     $property = $Object.PSObject.Properties[$Name]
-    if ($null -eq $property) { return @() }
-    return @($property.Value | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_) })
+    if ($null -eq $property -or $null -eq $property.Value) { return @() }
+    if ($property.Value -isnot [System.Array]) { throw "$Name must be a JSON array when present" }
+    $values = [System.Collections.Generic.List[string]]::new()
+    foreach ($value in @($property.Value)) {
+        if ($value -isnot [string] -or [string]::IsNullOrWhiteSpace($value)) { throw "$Name contains a null, non-string, or blank member" }
+        $values.Add([string]$value)
+    }
+    return @($values)
 }
 
 function Get-CanonicalPrefixBase {
@@ -166,18 +172,24 @@ function Find-Authorization {
         $containsForbidden = @($DiffEntries | Where-Object { [string]$_.path -cin $forbidden }).Count -gt 0
         if ($containsForbidden) { continue }
         [string[]]$exact = @(Get-OptionalArrayProperty $pending 'exact_paths')
-        if ($exact.Count -gt 0) {
-            [object[]]$expectedEntries = @($exact | ForEach-Object { [pscustomobject]@{path=[string]$_} })
-            if ((Get-OrdinalSignature $expectedEntries -PathsOnly) -ceq $actualPaths) { return [pscustomobject][ordered]@{ kind='pending-exact-envelope'; slice=[string]$pending.slice; status_class=[string]$pending.status_class } }
-        }
         [string[]]$prefixes = @(Get-OptionalArrayProperty $pending 'exact_prefixes')
-        if ($prefixes.Count -gt 0) {
+        if ($exact.Count + $prefixes.Count -gt 0) {
+            $exactSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+            foreach ($path in $exact) { if (-not $exactSet.Add($path)) { throw "pending '$([string]$pending.slice)' exact_paths contains duplicate '$path'" } }
             [string[]]$prefixBases = @($prefixes | ForEach-Object { Get-CanonicalPrefixBase ([string]$_) "pending '$([string]$pending.slice)' exact_prefixes entry" })
+            $actualSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+            foreach ($entry in $DiffEntries) { [void]$actualSet.Add([string]$entry.path) }
+            $allExactPresent = @($exact | Where-Object { -not $actualSet.Contains($_) }).Count -eq 0
             $allCovered = $true
             foreach ($entry in $DiffEntries) {
-                if (@($prefixBases | Where-Object { ([string]$entry.path).StartsWith($_, [System.StringComparison]::Ordinal) }).Count -eq 0) { $allCovered = $false; break }
+                $path = [string]$entry.path
+                $prefixCovered = @($prefixBases | Where-Object { $path.StartsWith($_, [System.StringComparison]::Ordinal) }).Count -gt 0
+                if (-not $exactSet.Contains($path) -and -not $prefixCovered) { $allCovered = $false; break }
             }
-            if ($allCovered) { return [pscustomobject][ordered]@{ kind='pending-prefix-envelope'; slice=[string]$pending.slice; status_class=[string]$pending.status_class } }
+            if ($allExactPresent -and $allCovered) {
+                $kind = if ($exact.Count -gt 0 -and $prefixes.Count -gt 0) { 'pending-union-envelope' } elseif ($exact.Count -gt 0) { 'pending-exact-envelope' } else { 'pending-prefix-envelope' }
+                return [pscustomobject][ordered]@{ kind=$kind; slice=[string]$pending.slice; status_class=[string]$pending.status_class }
+            }
         }
     }
     return $null
@@ -192,7 +204,11 @@ function Invoke-AuthorizationSelfTest {
             [pscustomobject][ordered]@{ slice='NULLPREFIX'; status_class='current-maker-in-progress'; release_accepted=$false; exact_paths=@('src/other.go'); exact_prefixes=$null }
             [pscustomobject][ordered]@{
                 slice='SELFTEST'; status_class='current-maker-in-progress'; release_accepted=$false
-                exact_paths=@('src/exact.go'); exact_prefixes=@('src/generated/**'); forbidden_final_paths=@('src/exact.go','src/generated/secret.go')
+                exact_paths=@(); exact_prefixes=@('src/generated/**'); forbidden_final_paths=@('src/exact.go','src/generated/secret.go')
+            }
+            [pscustomobject][ordered]@{
+                slice='MIXED'; status_class='current-maker-in-progress'; release_accepted=$false
+                exact_paths=@('src/product.go'); exact_prefixes=@('evidence/**'); forbidden_final_paths=@('evidence/secret.json')
             }
         )
     }
@@ -202,13 +218,25 @@ function Invoke-AuthorizationSelfTest {
     if ($null -ne $prefixForbidden) { throw 'SELFTEST FAIL: prefix-covered forbidden_final_paths entry was authorized' }
     $prefixAllowed = Find-Authorization $contract @([pscustomobject]@{path='src/generated/public.go';git_status='A'})
     if ($null -eq $prefixAllowed -or [string]$prefixAllowed.kind -cne 'pending-prefix-envelope') { throw 'SELFTEST FAIL: allowed prefix path was rejected' }
+    $mixedAllowed = Find-Authorization $contract @([pscustomobject]@{path='src/product.go';git_status='M'},[pscustomobject]@{path='evidence/proof.json';git_status='A'})
+    if ($null -eq $mixedAllowed -or [string]$mixedAllowed.slice -cne 'MIXED') { throw 'SELFTEST FAIL: exact-plus-prefix pending union was rejected' }
+    $mixedMissingExact = Find-Authorization $contract @([pscustomobject]@{path='evidence/proof.json';git_status='A'})
+    if ($null -ne $mixedMissingExact) { throw 'SELFTEST FAIL: prefix-only diff bypassed required exact paths in a mixed envelope' }
+    $mixedExactOnly = Find-Authorization $contract @([pscustomobject]@{path='src/product.go';git_status='M'})
+    if ($null -eq $mixedExactOnly -or [string]$mixedExactOnly.slice -cne 'MIXED') { throw 'SELFTEST FAIL: exact-only diff was rejected by a mixed envelope' }
+    $scalarContract = $contract | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
+    $scalarContract.pending_namespaces[2].exact_paths = 'src/product.go'
+    $scalarRejected = $false
+    try { $null = Find-Authorization $scalarContract @([pscustomobject]@{path='src/product.go';git_status='M'}) }
+    catch { $scalarRejected = $_.Exception.Message -match 'must be a JSON array' }
+    if (-not $scalarRejected) { throw 'SELFTEST FAIL: scalar exact_paths authority was accepted' }
     $invalidPrefixContract = $contract | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20
     $invalidPrefixContract.pending_namespaces[1].exact_prefixes = @('x')
     $invalidPrefixRejected = $false
     try { $null = Find-Authorization $invalidPrefixContract @([pscustomobject]@{path='src/generated/public.go';git_status='A'}) }
     catch { $invalidPrefixRejected = $_.Exception.Message -match 'must end with a non-empty terminal /\*\* prefix' }
     if (-not $invalidPrefixRejected) { throw 'SELFTEST FAIL: malformed pending prefix did not fail closed' }
-    Write-Output 'SELFTEST PASS: ordinary authorization rejects exact and prefix-covered forbidden_final_paths entries'
+    Write-Output 'SELFTEST PASS: ordinary authorization enforces strict arrays and exact-plus-prefix union envelopes'
 }
 
 if ($SelfTest) { Invoke-AuthorizationSelfTest; exit 0 }

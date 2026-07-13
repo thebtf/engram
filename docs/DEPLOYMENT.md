@@ -131,7 +131,8 @@ retained data, direct readiness, and operator-proxied readiness.
 
 ## Reproduce image acceptance
 
-Run from a clean candidate commit on a Docker host with Docker Scout:
+Run from a clean candidate commit on a Docker host with Trivy 0.72.0+ available
+on `PATH`:
 
 ```powershell
 pwsh ./scripts/production-gates/build-and-scan-images.ps1 `

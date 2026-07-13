@@ -7,7 +7,7 @@ This is an S4 change because it modifies production image workflows, CI-download
 ## Assets and trust boundaries
 
 - Runtime PostgreSQL password, admin token, vault key, and bootstrap capability.
-- Trusted GitHub Actions execution and the Docker Scout binary downloaded during a run.
+- Trusted GitHub Actions execution and the Trivy binary downloaded during a run.
 - Docker bind mounts that cross from the runner host into containers.
 - Critical-suite and OTLP evidence consumed by later release decisions.
 - Cleanup boundaries for runner temporary directories, processes, containers, and compose resources.
@@ -16,7 +16,8 @@ This is an S4 change because it modifies production image workflows, CI-download
 
 | Threat | Control | Evidence | Result |
 |---|---|---|---|
-| Scout archive substitution | Exact v1.23.1 URL and published SHA-256; `sha256sum --check --strict` before extraction; installed binary executes `docker scout version` | Official GitHub release API reports asset size 62,062,436 and SHA-256 `0f778f9d833f28bc6cccff95e33039849c0afcecafa38d9f46fe74bfd0915714` | PASS, CI execution pending |
+| Trivy archive substitution | Exact v0.72.0 URL and published SHA-256; `sha256sum --check --strict` before extraction; installed binary executes `trivy --version` | Official GitHub release API reports Linux archive SHA-256 `bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea`; the downloaded Windows archive independently matched its published SHA-256 `ed3cf122060f61818fe1f735fd97557954e16e10bc8b058af9852271cf2e91b3` | PASS locally, CI replay pending |
+| Scanner requires hidden credentials | The canonical scanner must analyze immutable local Docker image IDs, fetch current vulnerability data without project/package credentials, emit SARIF, and distinguish findings (exit 2) from operational failure | Hermetic Linux Scout v1.23.1 reproduced the remote Docker-ID login failure even with `DOCKER_SCOUT_OFFLINE=true`; official Trivy v0.72.0 scanned the same exact image ID through `--image-src docker` with fresh anonymous DB download, SARIF 2.1.0, zero findings, and exit 0 on both Linux and Windows | Scout rejected; Trivy PASS locally, remote replay pending |
 | Credential disclosure in compose environment | Parent environment carries only secret-file paths; files are bind-mounted at `/run/secrets/*`; plaintext credential variables are explicitly rejected by self-test and runtime inspection | `run-db-suite.ps1 -SelfTest` and critical static contract | PASS |
 | Weak or reused credentials | Four independent 256-bit values are generated with `RandomNumberGenerator`; default, blank, missing, and reused values are rejected | dev-stand config contract and self-test hostile cases | PASS |
 | Host disclosure versus non-root container readability | Compose file secrets are bind mounts and ignore uid/gid/mode remapping. Unix roots are 0700 while files are 0644, so other host users cannot traverse the private root but UID 70/65532 can read the read-only in-container mount. Windows roots/files use protected owner + LocalSystem ACLs. | Official Docker Compose services reference; shared `compose-secret-access.ps1`; direct Windows owner/System ACL assertion and UID 65532 container read probe PASS | PASS |
@@ -33,8 +34,9 @@ This is an S4 change because it modifies production image workflows, CI-download
 
 ## External-source basis
 
-- Docker Scout release asset metadata: <https://api.github.com/repos/docker/scout-cli/releases/tags/v1.23.1>
-- Docker Scout installation documentation: <https://docs.docker.com/scout/install/>
+- Trivy v0.72.0 release asset metadata: <https://api.github.com/repos/aquasecurity/trivy/releases/tags/v0.72.0>
+- Trivy image CLI contract (`--image-src docker`, severity, exit code, SARIF): <https://trivy.dev/docs/v0.72/docs/references/configuration/cli/trivy_image/>
+- Docker Scout offline-mode documentation and local-image contract, consulted to reproduce and reject the Linux authentication dependency: <https://docs.docker.com/scout/how-tos/configure-cli/> and <https://docs.docker.com/reference/cli/docker/scout/cves/>
 - GitHub Actions security guidance: <https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions>
 - Nuxt UI advisory: <https://github.com/advisories/GHSA-gj2h-2fpw-fhv9>
 - Context7 and Parallel were used to consult current official documentation. Tavily remains unavailable because its MCP route requires OAuth authorization; no claim was filled from model memory in its place.
@@ -43,6 +45,6 @@ This is an S4 change because it modifies production image workflows, CI-download
 
 ## Residual risk and verdict
 
-The local network did not complete the 62 MB Scout asset download within two command timeouts, so a local byte-for-byte hash is not claimed. The official release API metadata is recorded, and both workflows fail closed on the exact digest before installation. The full critical suite passed against a disposable dedicated test database with 203/203 tests, zero skips, portable evidence, and zero database-container residue. The clean af77359d image gate built and scanned three exact IDs with zero high/critical findings and passed runtime/restart/recreate/persistence plus cleanup. The image gate reports one direct moderate npm advisory; it is accepted only as demonstrably unreachable under the explicit SPA/no-UForm guard above, not silently waived. Dev-stand found a missing operator-console VERSION build arg, cleaned up fully, and the fix still requires an exact-commit lifecycle rerun; the successor CI workflow also remains required.
+The remote Linux runner and a hermetic local Linux container both proved that Scout v1.23.1 is unsuitable for this no-package-credential lane: it stops at Docker-ID authentication even when the target is an immutable local image and offline mode is enabled. Trivy v0.72.0 is therefore the canonical scanner, not a fallback. Its official Linux and Windows archives matched the published SHA-256 values, and both platforms produced SARIF 2.1.0 for the same exact local image without package credentials. A known vulnerable exact-ID fixture produced exit 2 plus one result; a missing exact ID produced operational exit 1 without SARIF. The full critical suite and complete dev-stand lifecycle passed at `70783aeca6bda80f8740d510486a02f0ce2488c0`; the new Trivy exact-head image/runtime and remote CI replays remain mandatory before release acceptance.
 
 Verdict: **IMPLEMENTATION REVIEW PASS; RUNTIME/CI RELEASE VERDICT PENDING.**

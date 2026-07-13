@@ -231,7 +231,7 @@ function Read-CriticalConfig {
         'session evidence' = '  require_pg_stat_activity: true'
         'cleanup evidence' = '  require_cleanup_result: true'
         'image scan command' = '    command: "pwsh -NoProfile -File scripts/production-gates/run-db-suite.ps1 -DevStandAction Scan -ComposeProject engram-critical-stand -ComposeFile docker-compose.yml"'
-        'image scanner' = '    scanner: "docker scout cves"'
+        'image scanner' = '    scanner: "trivy image"'
         'image severities' = '    severities: ["critical", "high"]'
         'image findings policy' = '    fail_on_findings: true'
         'PostgreSQL image target' = '      postgres: "ghcr.io/thebtf/engram-postgres:main"'

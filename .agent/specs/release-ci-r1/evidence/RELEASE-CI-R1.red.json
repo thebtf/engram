@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-07-13T12:46:12.0237382Z",
-  "batch": "RELEASE-CI-R1 fresh-runner prerequisites and Unix permission API",
+  "captured_at": "2026-07-13T15:50:00Z",
+  "batch": "RELEASE-CI-R1 fresh-runner prerequisites, service identity, and secretless scanner repair",
   "verdict": "RED_REPRODUCED_REMOTE",
   "remote_runs": [
     {
@@ -23,6 +23,27 @@
         "fresh runner failed before image prerequisites were materialized",
         "all three ordinary OS matrices had go_test_exit 0, proving their red status was parser/coverage ownership rather than a Go test failure"
       ]
+    },
+    {
+      "run_id": 29258547103,
+      "head": "8230a3941fa54dac928a71ac79661b8fc072d1ec",
+      "release_job": "FAIL",
+      "evidence": [
+        "Ubuntu, Windows, and macOS matrices passed",
+        "release job could not rediscover the GitHub service container by mutable ancestor tag",
+        "critical and dev-stand failures were downstream of the missing service identity"
+      ]
+    },
+    {
+      "run_id": 29260129566,
+      "head": "70783aeca6bda80f8740d510486a02f0ce2488c0",
+      "release_job": "FAIL",
+      "evidence": [
+        "Ubuntu, Windows, and macOS matrices passed",
+        "official job.services.postgres.id binding passed",
+        "pinned Docker Scout v1.23.1 on the clean Linux runner required Docker ID login before producing SARIF",
+        "critical and dev-stand failures were downstream of the scanner abort"
+      ]
     }
   ],
   "local_control_plane_red": {
@@ -35,6 +56,8 @@
   "root_cause": {
     "primary": "live PowerShell called nonexistent Directory.Set/GetUnixFileMode APIs on Unix",
     "cascade": "the release job invoked image-dependent critical and recovery tests without first building the exact local images and without fetching historical tags",
-    "false_green_source": "prior local critical evidence inherited prebuilt images and complete Git tags from the operator workstation"
+    "false_green_source": "prior local critical evidence inherited prebuilt images, complete Git tags, Docker Desktop Scout authentication, and a persistent scanner cache from the operator workstation",
+    "service_identity": "ancestor/tag rediscovery is not a stable GitHub service-container contract; the official job.services.postgres.id context is",
+    "scanner": "Docker Scout v1.23.1 for Linux requires Docker ID even for a hermetic exact local image with DOCKER_SCOUT_OFFLINE=true; the release job intentionally has no package credentials"
   }
 }

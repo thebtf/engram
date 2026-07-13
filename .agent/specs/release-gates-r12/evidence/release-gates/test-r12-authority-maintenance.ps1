@@ -14,6 +14,19 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText([System.IO.Path]::GetFullPath($Path), $Text, [System.Text.UTF8Encoding]::new($false))
 }
 
+function Replace-ExactlyOneRegexMatch {
+    param(
+        [Parameter(Mandatory)][string]$Text,
+        [Parameter(Mandatory)][string]$Pattern,
+        [Parameter(Mandatory)][string]$Replacement,
+        [Parameter(Mandatory)][string]$Context
+    )
+    $regex = [regex]::new($Pattern)
+    $matches = $regex.Matches($Text)
+    if ($matches.Count -ne 1) { throw "$Context must match exactly once; found $($matches.Count)" }
+    return $regex.Replace($Text, $Replacement, 1)
+}
+
 function Invoke-Captured {
     param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory)
     $start = [System.Diagnostics.ProcessStartInfo]::new()
@@ -352,12 +365,17 @@ try {
     foreach ($workflowPath in @('.github/workflows/authority-guard.yml', '.github/workflows/test.yml')) {
         $workflowFile = Join-Path $fixture $workflowPath
         $workflowText = [System.IO.File]::ReadAllText($workflowFile)
-        $workflowText = [regex]::Replace($workflowText, '(?m)^on:\s*$', 'on: # parser fixture root-key comment', 1)
+        $workflowText = Replace-ExactlyOneRegexMatch $workflowText '(?m)^on:\s*$' 'on: # parser fixture root-key comment' "$workflowPath root on key"
         $workflowText = [regex]::Replace($workflowText, '(?m)^(?<indent>\s*)contents:\s*read\s*$', {
             param($match)
             return $match.Value + "`n" + $match.Groups['indent'].Value + '# parser fixture permission comment'
         })
-        $workflowText = [regex]::Replace($workflowText, '(?m)^  authority-successor-selftest:\s*$', '  authority-successor-selftest: # parser fixture job comment', 1)
+        $successorPattern = '(?m)^  authority-successor-selftest:\s*$'
+        if ($workflowPath -ceq '.github/workflows/test.yml') {
+            $workflowText = Replace-ExactlyOneRegexMatch $workflowText $successorPattern '  authority-successor-selftest: # parser fixture job comment' "$workflowPath successor job key"
+        } elseif ([regex]::IsMatch($workflowText, $successorPattern)) {
+            throw "$workflowPath must not contain the unprivileged successor job"
+        }
         Write-Utf8NoBom $workflowFile $workflowText
     }
     Write-Utf8NoBom (Join-Path $fixture 'internal/worker/handlers_hooks_crystallization_integration_test.go') "package worker`n`n// base fixture`n"
@@ -472,7 +490,7 @@ try {
         param($repository)
         $path = Join-Path $repository '.github/workflows/test.yml'
         $text = [System.IO.File]::ReadAllText($path)
-        $mutated = [regex]::Replace($text, '(?m)^permissions:\r?\n  contents: read[ \t]*\r?$', 'permissions: write-all', 1)
+        $mutated = Replace-ExactlyOneRegexMatch $text '(?m)^permissions:\r?\n  contents: read[ \t]*\r?$' 'permissions: write-all' 'workflow-level permissions mutation'
         if ($mutated -ceq $text) { throw 'fixture did not mutate the workflow-level permissions block' }
         Write-Utf8NoBom $path $mutated
     }
@@ -482,7 +500,7 @@ try {
         param($repository)
         $path = Join-Path $repository '.github/workflows/test.yml'
         $text = [System.IO.File]::ReadAllText($path)
-        $mutated = [regex]::Replace($text, '(?m)^  pull_request:\s*$', '  pull_request_target:', 1)
+        $mutated = Replace-ExactlyOneRegexMatch $text '(?m)^  pull_request:\s*$' '  pull_request_target:' 'pull_request trigger mutation'
         if ($mutated -ceq $text) { throw 'fixture did not mutate the pull_request trigger' }
         Write-Utf8NoBom $path $mutated
     }
@@ -492,7 +510,7 @@ try {
         param($repository)
         $path = Join-Path $repository '.github/workflows/test.yml'
         $text = [System.IO.File]::ReadAllText($path)
-        $mutated = [regex]::Replace($text, '(?m)^(  pull_request:\s*(?:#.*)?\r?\n)', "`$1# hostile root comment separator`n  pull_request_target:`n", 1)
+        $mutated = Replace-ExactlyOneRegexMatch $text '(?m)^(  pull_request:\s*(?:#.*)?\r?\n)' "`$1# hostile root comment separator`n  pull_request_target:`n" 'comment-separated pull_request_target mutation'
         if ($mutated -ceq $text) { throw 'fixture did not insert the comment-separated pull_request_target trigger' }
         Write-Utf8NoBom $path $mutated
     }

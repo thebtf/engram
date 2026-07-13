@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-07-13T12:32:20.5853466Z",
+  "captured_at": "2026-07-13T15:58:00Z",
   "batch": "R12/B17 release-governance bootstrap and CI truth repair",
   "verdict": "PASS",
   "red": {
@@ -30,7 +30,7 @@
     "r12_closed_world_plan_governance": "PASS",
     "workflow_conformance": {
       "verdict": "PASS",
-      "hostile_mutations_rejected": 71
+      "hostile_mutations_rejected": 72
     },
     "authority_simulation": {
       "verdict": "PASS",
@@ -93,6 +93,10 @@
     "pending_path_fields_enforce_exact_vs_prefix_kind": true,
     "r12_status_classes_match_literal_audited_sets": true,
     "malformed_pending_prefixes_fail_closed": true,
+    "ordinary_exact_and_prefix_authority_is_one_required_union": true,
+    "ordinary_and_r12_optional_path_fields_reject_scalar_coercion": true,
+    "quoted_packages_write_keys_are_detected": true,
+    "maintenance_regex_mutations_replace_exactly_one_match": true,
     "cleanup_failures_preserve_primary_artifact_errors_and_force_fail": true,
     "successor_paths_unique_independent_of_status": true,
     "successor_rotation_window_enforced": true,
@@ -114,19 +118,19 @@
     "known_integration_blocker": "PR #406 exact-head macOS artifact proves go test exit 0 and removes the /var versus /private/var failure, but combined acceptance is pending; release CI also exposes invalid Directory.SetUnixFileMode calls and missing pre-v5 tag/image prerequisites outside this governance diff"
   },
   "sha256": {
-    ".github/workflows/test.yml": "ea5556c91cdeedcd683063deeb1e3b398fbb433c12892caf4f67859698400bfa",
-    ".github/workflows/authority-guard.yml": "5a5483222561552345e904188f4e9e27c58b34f15bf3c80f01400c023601550a",
-    ".agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json": "f75ad50977574071a45d59506c6a73fe623baca7c911bb5101c9511b98effbf9",
-    ".agent/specs/release-gates-r12/evidence/plan-governance/gates-summary.json": "c714a7c30fe76864feb16bf8a30e4a4087a4de49aa440f599d1968f2cba8f0b2",
-    ".agent/specs/release-gates-r12/evidence/plan-governance/test-r12-plan-governance.ps1": "07ee0e9f179a0182022cccffcd35abf6d5d1f382c8b7a1f0888591da09c235eb",
-    ".agent/specs/release-gates-r12/evidence/plan-governance/verification-summary.json": "145b3426f8b522a0c9a79f82e76792b1905b4687e1a5b70a68e1d0023442eb0e",
-    "scripts/production-gates/assert-plan-path-ownership.ps1": "8387fa5628791f8e7f3c4c82a0b1754b9b3cae7a344053abd0aa479b7258f923",
-    "scripts/production-gates/assert-active-candidate-path-authority.ps1": "9f2fa2799e5096ce0df3c1b83b8e3a7671390b7d47fe346d2e8bcd9c3d18450c",
-    "scripts/production-gates/assert-pr-authority-guard.ps1": "ab89e8f44d1bab636220636bef6c7211e3c352bb41c587bbc4cccdd3a491f3dc",
-    "scripts/production-gates/assert-pr-authority-maintenance.ps1": "045029b321c9919ccc3e2c1571e96f8c050698afc15d134a5f14f8cb66a42d97",
-    ".agent/specs/release-gates-r12/evidence/release-gates/test-r12-authority-maintenance.ps1": "f5670e1897e972fb5df44e640237e9f029412fd5f7ebaabb1c23f39001f12fa3",
-    ".agent/specs/release-gates-r12/evidence/release-gates/maintenance-simulation.json": "f4b0b9f9981586906e7a4cac343b3ea8e099b4ffd9e81d2ab2b408da797d2294",
-    ".agent/specs/release-gates-r12/evidence/release-gates/windows-harness.json": "8f584c8af4889aacd2bb87c096dfac1dd3ce62fcd2e3248c2b8ab3fa68d5c5c6",
-    ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md": "2c9c6cdd22e9ab2d8667e7e9027a096465a21e5823bf4acb3fb823efcd826954"
+    ".github/workflows/test.yml": "0e5e4f4e3a3f2e9241d51bce2a0bf9e66eebec51bef8c9708e0cdab613908a4d",
+    ".github/workflows/authority-guard.yml": "6c47a7e4de7d5870edca6c7aae8c512b90ae22e18d17b2d1aa2bbfebda9ef1ad",
+    ".agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json": "0539cc714ece3ceb2ec41fa2ee6a0d8583baa689936b2382e5ee29daca53c6d3",
+    ".agent/specs/release-gates-r12/evidence/plan-governance/gates-summary.json": "93c11c47ee6b44cdecd8e2eecbba043593a020ee1399ec88cc437388de1dfbdf",
+    ".agent/specs/release-gates-r12/evidence/plan-governance/test-r12-plan-governance.ps1": "9bbdda1989c038456f651047d1aabeab201ad0f69de3d2d49cef3cc6d5174a17",
+    ".agent/specs/release-gates-r12/evidence/plan-governance/verification-summary.json": "da6e8dd6012ec312fe26b21c91d07a4fab75732758beb6d368aa91cd8cb37a52",
+    "scripts/production-gates/assert-plan-path-ownership.ps1": "ba0840df8c250c6c37edda8df4471e5d8cbf59b23a344be3b6c5ba722657cfe7",
+    "scripts/production-gates/assert-active-candidate-path-authority.ps1": "af9bc12583b55812da9cdf4e01ee9cd43aa6cadff479f19ba8d34d51d2b755d5",
+    "scripts/production-gates/assert-pr-authority-guard.ps1": "1d2c05f89bec7806aec2c761ea388969a641ef246669a23c85dc1a8d0ad578bc",
+    "scripts/production-gates/assert-pr-authority-maintenance.ps1": "f2cff47daf57cf3e62df311f94a7ae394727b9f6e63ee44aea4828801866aa0f",
+    ".agent/specs/release-gates-r12/evidence/release-gates/test-r12-authority-maintenance.ps1": "a84ff84573585dc65e7c31b47dfaaf092fd3ee323bb96122cab6ad120b05b05f",
+    ".agent/specs/release-gates-r12/evidence/release-gates/maintenance-simulation.json": "fb44bbbac4054e6b033c6d8978e5c68e52775ea7b9ebb75637c763073ca0cfc0",
+    ".agent/specs/release-gates-r12/evidence/release-gates/windows-harness.json": "13bc719d87a20564b38e14f2ecb92104575ee9ec00d9ca0a2e50321645513428",
+    ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md": "43675c75e56e9ea79be8eda5fcbc6169647b68021f8b2db575ca10eef30bab02"
   }
 }

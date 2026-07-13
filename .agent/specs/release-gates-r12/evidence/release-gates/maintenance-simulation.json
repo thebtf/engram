@@ -2,9 +2,9 @@
   "schema_version": 1,
   "suite": "R12 trusted-base authority and self-reference-free maintenance simulation",
   "verdict": "PASS",
-  "started_at": "2026-07-13T12:24:27.6646358+00:00",
-  "finished_at": "2026-07-13T12:31:09.0975609+00:00",
-  "duration_seconds": 401.433,
+  "started_at": "2026-07-13T15:49:49.1509384+00:00",
+  "finished_at": "2026-07-13T15:57:55.7962025+00:00",
+  "duration_seconds": 486.645,
   "execution_contract": {
     "head_treated_as_data_only": true,
     "head_executed": false,
@@ -226,7 +226,7 @@
       "observed": "FAIL",
       "exit_code": 1,
       "errors": [
-        "fetched default-branch base differs from the event base; maintenance PR is stale: expected=c2994eb1006ec43af7ac6e767904808386a2cc16 observed=1d53e4bec74a9188578a6d357d966d62b7fa7459"
+        "fetched default-branch base differs from the event base; maintenance PR is stale: expected=d757983cffa81a98294f013057da41476e39fcc4 observed=3ca6ed093180b6cb4ce277047a8d807dc995bb18"
       ]
     }
   ],

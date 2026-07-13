@@ -17,7 +17,7 @@ function Show-Help {
 run-dev-stand.ps1
 
 Validates .agent/dev-stand.config.yaml and owns the complete isolated lifecycle:
-Up -> Ready -> Docker Scout Scan -> Down. Down always runs after an Up attempt.
+Up -> Ready -> Trivy Scan -> Down. Down always runs after an Up attempt.
 Every child exit/raw stream and nested action summary is retained. Success also
 requires generated non-persisted credentials and zero residual compose resources.
 
@@ -169,7 +169,7 @@ function Read-DevStandConfig {
         'operator-console API proxy target' = '  NUXT_OPERATOR_API_TARGET: "http://server:37777"'
         'auth-disabled policy' = '  ENGRAM_AUTH_DISABLED: "false"'
         'image discovery' = '  discovery: "docker service inventory filtered by com.docker.compose.project=engram-critical-stand"'
-        'image scanner' = '  scanner: "docker scout cves"'
+        'image scanner' = '  scanner: "trivy image"'
         'image scan severities' = '  severities: ["critical", "high"]'
         'image scan finding policy' = '  fail_on_findings: true'
         'PostgreSQL image' = '    postgres: "ghcr.io/thebtf/engram-postgres:main"'
@@ -250,6 +250,7 @@ function Read-ActionSummary {
         foreach ($name in @('dev-stand-source-root', 'dev-stand-source-commit', 'dev-stand-source-tracked-status', 'dev-stand-image-inventory', 'dev-stand-vulnerability-scan-postgres', 'dev-stand-vulnerability-scan-server', 'dev-stand-vulnerability-scan-operator-console')) { if (@($commands | Where-Object name -eq $name).Count -ne 1) { throw "Scan did not execute '$name' exactly once" } }
         $scans = @($summary.vulnerability_scan.scans)
         if ($scans.Count -ne 3) { throw "Scan must emit three exact image results; found $($scans.Count)" }
+        if ([string]$summary.vulnerability_scan.scanner -cne 'trivy image' -or [string]$summary.vulnerability_scan.image_source -cne 'docker') { throw 'Scan summary does not bind the canonical Trivy local-Docker contract' }
         $expectedScans = [ordered]@{ postgres = 'ghcr.io/thebtf/engram-postgres:main'; server = 'ghcr.io/thebtf/engram:main'; 'operator-console' = 'ghcr.io/thebtf/engram-operator-console:main' }
         foreach ($entry in $expectedScans.GetEnumerator()) {
             $matches = @($scans | Where-Object { [string]$_.service -ceq $entry.Key })
@@ -259,7 +260,7 @@ function Read-ActionSummary {
             $prelaunchId = [string]$summary.prelaunch_image_ids.PSObject.Properties[$entry.Key].Value
             if ([string]$scan.image -cne $entry.Value) { throw "Scan image mismatch for service '$($entry.Key)'" }
             if ([string]$scan.image_id -notmatch '^sha256:[a-f0-9]{64}$' -or [string]$scan.image_id -cne $actualId -or [string]$scan.image_id -cne $prelaunchId) { throw "Scan image ID is not the exact prelaunch/running ID for service '$($entry.Key)'" }
-            if ([string]$scan.scanned_reference -cne "local://$($scan.image_id)") { throw "Scan did not target the exact running image ID for '$($scan.image)'" }
+            if ([string]$scan.scanned_reference -cne [string]$scan.image_id -or [string]$scan.scanner -cne 'trivy image' -or [string]$scan.image_source -cne 'docker') { throw "Scan did not target the exact running image ID through Trivy's local Docker source for '$($scan.image)'" }
             $command = @($commands | Where-Object { [string]$_.name -ceq "dev-stand-vulnerability-scan-$($entry.Key)" })[0]
             $arguments = @($command.arguments | ForEach-Object { [string]$_ })
             if ($arguments.Count -eq 0 -or $arguments[-1] -cne [string]$scan.scanned_reference) { throw "Scan command arguments do not end in the recorded immutable reference for service '$($entry.Key)'" }

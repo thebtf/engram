@@ -2,7 +2,7 @@
   "schema_version": 1,
   "plan": {
     "path": ".agent/plans/2026-07-10-engram-production-ready-master-plan.md",
-    "sha256": "5103adaced04e624f2e1fc9d5d69e7efdccb23830aecfac9010b2b66b484427e"
+    "sha256": "5d127602d0c83f421fb3ae96d3e77fcbce4b4f611e96e0d185714755ed510d8a"
   },
   "scope_map": {
     "path": ".agent/plans/2026-07-10-engram-production-ready-scope-map.json",

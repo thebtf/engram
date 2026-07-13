@@ -72,22 +72,23 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Install pinned Docker Scout CLI
+      - name: Install pinned Trivy CLI
         shell: bash
         env:
-          DOCKER_SCOUT_LINUX_AMD64_SHA256: "0f778f9d833f28bc6cccff95e33039849c0afcecafa38d9f46fe74bfd0915714"
+          TRIVY_LINUX_AMD64_SHA256: "bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea"
         run: |
           set -euo pipefail
-          archive="$RUNNER_TEMP/docker-scout_1.23.1_linux_amd64.tar.gz"
-          binary="$RUNNER_TEMP/docker-scout"
+          archive="$RUNNER_TEMP/trivy_0.72.0_Linux-64bit.tar.gz"
+          binary="$RUNNER_TEMP/trivy"
           curl --fail --silent --show-error --location \
-            "https://github.com/docker/scout-cli/releases/download/v1.23.1/docker-scout_1.23.1_linux_amd64.tar.gz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v0.72.0/trivy_0.72.0_Linux-64bit.tar.gz" \
             --output "$archive"
-          printf '%s  %s\n' "$DOCKER_SCOUT_LINUX_AMD64_SHA256" "$archive" | sha256sum --check --strict
-          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" docker-scout
-          install --directory --mode 0755 "$HOME/.docker/cli-plugins"
-          install --mode 0755 "$binary" "$HOME/.docker/cli-plugins/docker-scout"
-          docker scout version
+          printf '%s  %s\n' "$TRIVY_LINUX_AMD64_SHA256" "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" trivy
+          install --directory --mode 0755 "$HOME/.local/bin"
+          install --mode 0755 "$binary" "$HOME/.local/bin/trivy"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/trivy" --version
 
       - name: Build, scan, exercise, and export exact image data without package authority
         shell: pwsh
