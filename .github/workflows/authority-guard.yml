@@ -1,0 +1,141 @@
+name: authority-guard
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authority-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  authority-guard:
+    name: authority-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_DEFAULT_BRANCH: main
+      EVENT_ACTION: ${{ github.event.action }}
+      EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
+      EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+      EVENT_REPOSITORY: ${{ github.repository }}
+      EVENT_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+      EVENT_SENDER_LOGIN: ${{ github.event.sender.login }}
+      EVENT_SENDER_ID: ${{ github.event.sender.id }}
+      EVENT_SENDER_TYPE: ${{ github.event.sender.type }}
+      EVENT_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+      EVENT_LABEL: ${{ github.event.label.name }}
+    steps:
+      - name: Execute trusted-base authority validator against PR data
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+
+          if ($env:EVENT_BASE_REF -cne $env:EXPECTED_DEFAULT_BRANCH) { throw "unexpected base branch '$env:EVENT_BASE_REF'" }
+          if ($env:EVENT_BASE_SHA -notmatch '^[0-9a-f]{40}$' -or $env:EVENT_HEAD_SHA -notmatch '^[0-9a-f]{40}$') { throw 'event base/head SHA is not full lowercase hex' }
+          if ($env:EVENT_PR_NUMBER -notmatch '^[1-9][0-9]*$') { throw 'event pull-request number is invalid' }
+          if ($env:EVENT_REPOSITORY -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $env:EVENT_HEAD_REPOSITORY -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'event repository identity is malformed or missing' }
+
+          # A maintenance approval is one exact owner-generated labeled event. A
+          # later synchronize event deliberately falls back to the ordinary
+          # guard and fails until the owner re-applies the epoch label to the
+          # new head, preventing a stale label from approving new bytes.
+          $maintenance = $env:EVENT_ACTION -ceq 'labeled' -and $env:EVENT_LABEL -match '^authority-maintenance:(r12-[0-9]{4})$'
+          $approvalEpoch = if ($maintenance) { [string]$Matches[1] } else { '' }
+
+          $repository = Join-Path $env:RUNNER_TEMP 'authority-guard-repository'
+          New-Item -ItemType Directory -Path $repository -Force | Out-Null
+          & git -C $repository init --quiet
+          if ($LASTEXITCODE -ne 0) { throw 'git init failed' }
+          $remoteUrl = "$env:GITHUB_SERVER_URL/$env:EVENT_REPOSITORY.git"
+          & git -C $repository remote add origin $remoteUrl
+          if ($LASTEXITCODE -ne 0) { throw 'git remote add failed' }
+
+          $baseRemoteRef = "refs/heads/$env:EXPECTED_DEFAULT_BRANCH"
+          $headRemoteRef = "refs/pull/$env:EVENT_PR_NUMBER/head"
+          & git -C $repository fetch --no-tags --force origin "+$baseRemoteRef`:refs/authority/bootstrap-base"
+          if ($LASTEXITCODE -ne 0) { throw 'trusted base fetch failed' }
+          $fetchedBase = (& git -C $repository rev-parse 'refs/authority/bootstrap-base^{commit}').Trim()
+          if ($LASTEXITCODE -ne 0 -or $fetchedBase -cne $env:EVENT_BASE_SHA) { throw "bootstrap base SHA mismatch: expected=$env:EVENT_BASE_SHA observed=$fetchedBase" }
+
+          function Export-TrustedValidator {
+            param([Parameter(Mandatory)][string]$Path)
+            $blob = (& git -C $repository rev-parse "$env:EVENT_BASE_SHA`:$Path").Trim()
+            if ($LASTEXITCODE -ne 0 -or $blob -notmatch '^[0-9a-f]{40}$') { throw "trusted base does not contain validator '$Path'" }
+            $destination = Join-Path $env:RUNNER_TEMP ([System.IO.Path]::GetFileName($Path))
+            $start = [System.Diagnostics.ProcessStartInfo]::new()
+            $start.FileName = 'git'; $start.UseShellExecute = $false; $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
+            foreach ($argument in @('-C',$repository,'cat-file','blob',"$env:EVENT_BASE_SHA`:$Path")) { [void]$start.ArgumentList.Add($argument) }
+            $process = [System.Diagnostics.Process]::new(); $process.StartInfo = $start
+            if (-not $process.Start()) { throw "could not materialize trusted validator '$Path'" }
+            $stream = [System.IO.File]::Open($destination,[System.IO.FileMode]::Create,[System.IO.FileAccess]::Write,[System.IO.FileShare]::None)
+            try { $process.StandardOutput.BaseStream.CopyTo($stream) } finally { $stream.Dispose() }
+            $stderr = $process.StandardError.ReadToEnd(); $process.WaitForExit()
+            if ($process.ExitCode -ne 0) { throw "trusted validator materialization failed for '$Path': $stderr" }
+            $materialized = (& git -C $repository hash-object --no-filters $destination).Trim()
+            if ($LASTEXITCODE -ne 0 -or $materialized -cne $blob) { throw "materialized validator differs from trusted base '$Path'" }
+            return [pscustomobject][ordered]@{ path=$Path; blob=$blob; file=$destination }
+          }
+
+          $ordinary = Export-TrustedValidator 'scripts/production-gates/assert-pr-authority-guard.ps1'
+          $maintenanceValidator = Export-TrustedValidator 'scripts/production-gates/assert-pr-authority-maintenance.ps1'
+          $artifact = Join-Path $env:RUNNER_TEMP 'pr-authority-guard.json'
+          if ($maintenance) {
+            & pwsh -NoProfile -File $maintenanceValidator.file `
+              -Repository $repository `
+              -Remote origin `
+              -BaseRemoteRef $baseRemoteRef `
+              -BaseSha $env:EVENT_BASE_SHA `
+              -HeadRemoteRef $headRemoteRef `
+              -HeadSha $env:EVENT_HEAD_SHA `
+              -ExpectedDefaultBranch $env:EXPECTED_DEFAULT_BRANCH `
+              -EventRepositoryFullName $env:EVENT_REPOSITORY `
+              -EventHeadRepositoryFullName $env:EVENT_HEAD_REPOSITORY `
+              -ActorLogin $env:EVENT_SENDER_LOGIN `
+              -ActorId ([long]$env:EVENT_SENDER_ID) `
+              -ActorType $env:EVENT_SENDER_TYPE `
+              -AuthorAssociation $env:EVENT_AUTHOR_ASSOCIATION `
+              -ApprovalLabel $env:EVENT_LABEL `
+              -ApprovalEpoch $approvalEpoch `
+              -ExpectedValidatorGitBlob $maintenanceValidator.blob `
+              -Artifact $artifact
+          }
+          else {
+            & pwsh -NoProfile -File $ordinary.file `
+              -Repository $repository `
+              -Remote origin `
+              -BaseRemoteRef $baseRemoteRef `
+              -BaseSha $env:EVENT_BASE_SHA `
+              -HeadRemoteRef $headRemoteRef `
+              -HeadSha $env:EVENT_HEAD_SHA `
+              -ExpectedDefaultBranch $env:EXPECTED_DEFAULT_BRANCH `
+              -ExpectedValidatorGitBlob $ordinary.blob `
+              -Artifact $artifact
+          }
+          if ($LASTEXITCODE -ne 0) {
+            if (Test-Path -LiteralPath $artifact) { Get-Content -LiteralPath $artifact -Raw | Write-Output }
+            throw 'trusted PR authority guard rejected the pull request'
+          }
+          Get-Content -LiteralPath $artifact -Raw | Write-Output
+
+      - name: Upload trusted authority evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: authority-guard-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pr-authority-guard.json
+          if-no-files-found: error
+          retention-days: 30

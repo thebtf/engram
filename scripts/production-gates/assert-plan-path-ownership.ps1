@@ -773,7 +773,7 @@ function Get-EpochEvidenceErrors {
     if ($ownerCount -lt 1) { $errors.Add("state epoch '$path' must contain at least one ordered owner") }
     if (@($owners | Select-Object -Unique).Count -ne $ownerCount) { $errors.Add("state epoch '$path' contains duplicate owners") }
     if ($currentIndex -lt 0) { $errors.Add("state epoch '$path' current owner '$currentOwner' is not in its ordered owners") }
-    if ($transitionKind -notin @('integration', 'rework')) { $errors.Add("state epoch '$path' has unsupported transition_kind '$transitionKind'") }
+    if ($transitionKind -notin @('integration', 'rework', 'replacement')) { $errors.Add("state epoch '$path' has unsupported transition_kind '$transitionKind'") }
 
     if ($transitionKind -eq 'integration' -and $currentIndex -ge 0) {
         [object[]]$expectedPredecessors = if ($currentIndex -eq 0) { @() } else { @($owners[0..($currentIndex - 1)]) }
@@ -837,6 +837,45 @@ function Get-EpochEvidenceErrors {
             }
             if ($rejectedHead -notmatch '^[0-9a-fA-F]{40}$' -or -not [string]::Equals($rejectedHead, $requiredBase, [System.StringComparison]::OrdinalIgnoreCase)) { $errors.Add("state epoch '$path' rework base does not equal the rejected predecessor head") }
             if (-not [string]::IsNullOrWhiteSpace($integrationSha)) { $errors.Add("state epoch '$path' rejected rework predecessor '$immediateOwner' must not claim integration") }
+        }
+    }
+    elseif ($transitionKind -eq 'replacement' -and $currentIndex -ge 0) {
+        if ($currentIndex -eq 0) { $errors.Add("state epoch '$path' replacement transition has no predecessor") }
+        if ($requiredBase -notmatch '^[0-9a-fA-F]{40}$') { $errors.Add("state epoch '$path' replacement base must be a full SHA") }
+        if ($predecessorCount -ne $currentIndex) { $errors.Add("state epoch '$path' replacement predecessor evidence count is $predecessorCount, expected $currentIndex") }
+        $currentStatus = [string](Get-PropertyValue $Epoch 'current_owner_status')
+        $currentHead = [string](Get-PropertyValue $Epoch 'current_owner_head_sha')
+        if ([string]::IsNullOrWhiteSpace($currentStatus) -and $currentHead -notmatch '^[0-9a-fA-F]{40}$') {
+            $errors.Add("state epoch '$path' replacement lacks current-owner status or immutable head identity")
+        }
+        for ($ownerIndex = 0; $ownerIndex -lt [math]::Max(0, $currentIndex); $ownerIndex++) {
+            $expectedOwner = $owners[$ownerIndex]
+            $matches = @($predecessors | Where-Object { [string](Get-PropertyValue $_ 'owner') -ceq $expectedOwner })
+            if ($matches.Count -ne 1) { $errors.Add("state epoch '$path' replacement predecessor '$expectedOwner' evidence count is $($matches.Count), expected 1"); continue }
+            $entry = $matches[0]
+            $checkerVerdict = [string](Get-PropertyValue $entry 'checker_verdict')
+            if ($checkerVerdict -ceq 'REVISE_HOLD') {
+                $checkerArtifact = [string](Get-PropertyValue $entry 'checker_artifact')
+                $checkerSha = [string](Get-PropertyValue $entry 'checker_sha256')
+                $rejectedHead = [string](Get-PropertyValue $entry 'rejected_head_sha')
+                $postReviewVerdict = [string](Get-PropertyValue $entry 'post_review_verdict')
+                $postReviewArtifact = [string](Get-PropertyValue $entry 'post_review_artifact')
+                $postReviewSha = [string](Get-PropertyValue $entry 'post_review_sha256')
+                $integrationSha = [string](Get-PropertyValue $entry 'integration_sha')
+                if ($checkerArtifact -notmatch '^\.agent/' -or $checkerSha -notmatch '^[0-9a-fA-F]{64}$') { $errors.Add("state epoch '$path' replacement predecessor '$expectedOwner' lacks exact rejecting-checker evidence") }
+                if ($postReviewVerdict -cne 'REVISE_HOLD' -or $postReviewArtifact -notmatch '^\.agent/' -or (-not [string]::IsNullOrWhiteSpace($postReviewSha) -and $postReviewSha -notmatch '^[0-9a-fA-F]{64}$')) { $errors.Add("state epoch '$path' replacement predecessor '$expectedOwner' lacks root post-review evidence") }
+                if ($rejectedHead -notmatch '^[0-9a-fA-F]{40}$') { $errors.Add("state epoch '$path' replacement predecessor '$expectedOwner' lacks rejected-head identity") }
+                if (-not [string]::IsNullOrWhiteSpace($integrationSha)) { $errors.Add("state epoch '$path' rejected replacement predecessor '$expectedOwner' must not claim integration") }
+            }
+            elseif ($checkerVerdict -ceq 'ROOT_SELECTED_EXACT_BASE') {
+                $integrationSha = [string](Get-PropertyValue $entry 'integration_sha')
+                $selectedHead = [string](Get-PropertyValue $entry 'predecessor_head_sha')
+                if ($integrationSha -notmatch '^[0-9a-fA-F]{40}$' -and $selectedHead -notmatch '^[0-9a-fA-F]{40}$') { $errors.Add("state epoch '$path' root-selected replacement predecessor '$expectedOwner' lacks an immutable integration/head identity") }
+                if ($integrationSha -notmatch '^[0-9a-fA-F]{40}$' -and [string](Get-PropertyValue $entry 'checker_artifact') -notmatch '^\.agent/') { $errors.Add("state epoch '$path' root-selected replacement predecessor '$expectedOwner' lacks the root selection artifact") }
+            }
+            else {
+                $errors.Add("state epoch '$path' replacement predecessor '$expectedOwner' has unsupported checker verdict '$checkerVerdict'")
+            }
         }
     }
 
@@ -1054,6 +1093,19 @@ function Invoke-SelfTest {
     Assert-SelfTestCondition (@(Get-EpochEvidenceErrors $reworkEpoch).Count -eq 0) 'valid rejected-head rework evidence was rejected'
     $reworkWrongHead = $reworkEpoch.PSObject.Copy(); $reworkWrongHead.completed_predecessors = @($reworkEpoch.completed_predecessors | ForEach-Object { $_.PSObject.Copy() }); $reworkWrongHead.completed_predecessors[0].rejected_head_sha = $wrongBase
     Assert-SelfTestCondition (@(Get-EpochEvidenceErrors $reworkWrongHead).Count -gt 0) 'rework state whose required base differs from the rejected head was accepted'
+    $replacementEpoch = [pscustomobject][ordered]@{
+        path = 'src/replacement.go'; ordered_owners = @('A', 'B'); current_owner = 'B'; transition_kind = 'replacement'
+        completed_predecessors = @([pscustomobject][ordered]@{
+            owner = 'A'; checker_verdict = 'REVISE_HOLD'; checker_artifact = '.agent/reviews/a-check.md'; checker_sha256 = ('c' * 64)
+            rejected_head_sha = $requiredIntegration; post_review_verdict = 'REVISE_HOLD'; post_review_artifact = '.agent/reviews/a-root.md'; post_review_sha256 = ('d' * 64); integration_sha = $null
+        })
+        required_successor_base_sha = $requiredIntegration; current_owner_status = 'ACTIVE_REPLACEMENT'
+    }
+    Assert-SelfTestCondition (@(Get-EpochEvidenceErrors $replacementEpoch).Count -eq 0) 'valid rejected-head replacement evidence was rejected'
+    $replacementMissingHead = $replacementEpoch.PSObject.Copy(); $replacementMissingHead.completed_predecessors = @($replacementEpoch.completed_predecessors | ForEach-Object { $_.PSObject.Copy() }); $replacementMissingHead.completed_predecessors[0].rejected_head_sha = $null
+    Assert-SelfTestCondition (@(Get-EpochEvidenceErrors $replacementMissingHead).Count -gt 0) 'replacement without a rejected-head identity was accepted'
+    $replacementUnknownVerdict = $replacementEpoch.PSObject.Copy(); $replacementUnknownVerdict.completed_predecessors = @($replacementEpoch.completed_predecessors | ForEach-Object { $_.PSObject.Copy() }); $replacementUnknownVerdict.completed_predecessors[0].checker_verdict = 'PASS'
+    Assert-SelfTestCondition (@(Get-EpochEvidenceErrors $replacementUnknownVerdict).Count -gt 0) 'replacement with an unsupported predecessor verdict was accepted'
     Assert-SelfTestCondition (Test-ExpectedPlanHash -ObservedSha256 $syntheticPlanHash -ExpectedSha256 $syntheticPlanHash) 'matching expected plan hash was rejected'
     Assert-SelfTestCondition (-not (Test-ExpectedPlanHash -ObservedSha256 $syntheticPlanHash -ExpectedSha256 ('b' * 64))) 'mismatched expected plan hash was accepted'
     $nonCurrentOwner = Invoke-DiffEpochAuthority -Slice A -ChangedPaths @('src/shared.go') -State $state -Repository $repository -BaseResolved $positiveBase

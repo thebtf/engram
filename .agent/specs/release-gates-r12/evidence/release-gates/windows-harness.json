@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "suite": "R12 trusted-base authority and self-reference-free maintenance simulation",
+  "verdict": "PASS",
+  "started_at": "2026-07-13T09:50:57.6184980+00:00",
+  "finished_at": "2026-07-13T09:56:14.1263689+00:00",
+  "duration_seconds": 316.508,
+  "execution_contract": {
+    "head_treated_as_data_only": true,
+    "head_executed": false,
+    "head_checked_out": false,
+    "secrets_used": false,
+    "committed_manifest_contains_head_or_container_self_reference": false,
+    "trusted_artifact_binds_head_and_container": true
+  },
+  "counts": {
+    "scenarios": 19,
+    "expected_pass": 3,
+    "expected_fail": 16
+  },
+  "scenarios": [
+    {
+      "name": "ordinary-authorized",
+      "expected": "PASS",
+      "observed": "PASS",
+      "exit_code": 0,
+      "errors": []
+    },
+    {
+      "name": "ordinary-protected-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "protected authority/gate/governance mutation rejected: .github/workflows/test.yml"
+      ]
+    },
+    {
+      "name": "ordinary-type-change-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "PR diff status 'T' for 'internal/worker/handlers_hooks_crystallization_integration_test.go' is not authority-safe; only literal add/modify entries are allowed"
+      ]
+    },
+    {
+      "name": "maintenance-valid",
+      "expected": "PASS",
+      "observed": "PASS",
+      "exit_code": 0,
+      "errors": []
+    },
+    {
+      "name": "maintenance-wrong-actor",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "maintenance event actor identity/association is not the audited owner authority"
+      ]
+    },
+    {
+      "name": "maintenance-self-reference-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "head transition_manifest property set drifted: expected=[approval_epoch, created_at, current_validator_blobs, event_base_sha, exact_changes, expires_at, protected_head_blobs_except_manifest_container, reason, schema_version, successor_epoch, successor_validator_blobs] observed=[approval_epoch, created_at, current_validator_blobs, event_base_sha, event_head_sha, exact_changes, expires_at, protected_head_blobs_except_manifest_container, reason, schema_version, successor_epoch, successor_validator_blobs]"
+      ]
+    },
+    {
+      "name": "maintenance-wrong-blob-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "head transition manifest protected-head blob inventory differs from exact non-container head Git objects"
+      ]
+    },
+    {
+      "name": "maintenance-top-level-rewrite-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "candidate head active authority validation failed under trusted-base bytes: candidate 'DB-EMBEDDING-STATS' has unknown status class 'current-checker-active'"
+      ]
+    },
+    {
+      "name": "maintenance-authority-checkout-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "candidate authority workflow contains forbidden privileged surface 'actions/checkout@'"
+      ]
+    },
+    {
+      "name": "maintenance-test-secret-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "candidate test workflow may not reference repository secrets"
+      ]
+    },
+    {
+      "name": "maintenance-unpinned-shorthand-action-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "candidate authority workflow action is not pinned to a full immutable SHA: hostile/example@main"
+      ]
+    },
+    {
+      "name": "maintenance-unapproved-pinned-action-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "candidate authority workflow action is pinned but outside the audited allowlist: hostile/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    },
+    {
+      "name": "maintenance-test-write-permission-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "candidate test workflow must keep workflow-level contents: read permissions"
+      ]
+    },
+    {
+      "name": "maintenance-test-target-trigger-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "candidate test workflow may not use pull_request_target"
+      ]
+    },
+    {
+      "name": "maintenance-json-numeric-string-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "head transition_manifest.schema_version must be the JSON integer 2"
+      ]
+    },
+    {
+      "name": "maintenance-duplicate-successor-path-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "head successor exact_changes contains duplicate path '.agent/plans/2026-07-10-engram-production-ready-active-diff-contracts.json'"
+      ]
+    },
+    {
+      "name": "maintenance-short-successor-window-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "head successor epoch lacks the required post-validation rotation window"
+      ]
+    },
+    {
+      "name": "maintenance-second-consecutive",
+      "expected": "PASS",
+      "observed": "PASS",
+      "exit_code": 0,
+      "errors": []
+    },
+    {
+      "name": "maintenance-stale-replay-rejected",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "exit_code": 1,
+      "errors": [
+        "fetched default-branch base differs from the event base; maintenance PR is stale: expected=9a783877fff4cefdf68d84301d27eee197422658 observed=e2da75b622f3556c8c2d5b3c5508530c3a8c52f6"
+      ]
+    }
+  ],
+  "temp_cleanup_verified": true,
+  "errors": []
+}

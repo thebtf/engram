@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-13T09:58:49.8859602Z",
+  "batch": "R12/B17 release-governance bootstrap and CI truth repair",
+  "verdict": "PASS",
+  "red": {
+    "tracked_workflow_used_stale_authority_hashes": true,
+    "plan_ownership_errors_before_repair": 16,
+    "active_authority_rejected_current_revision_before_repair": true,
+    "critical_without_dedicated_database": {
+      "passed": 202,
+      "total": 203
+    },
+    "windows_matrix_without_database": {
+      "go_test_exit": 0,
+      "tests": 3913,
+      "passed": 3486,
+      "skipped": 427,
+      "unexpected_skips_under_old_policy": 427,
+      "coverage_percent": 41.14,
+      "old_threshold_percent": 60.0
+    }
+  },
+  "green": {
+    "powershell_ast": "PASS",
+    "actionlint": "PASS",
+    "plan_ownership_selftest": "PASS",
+    "active_authority_selftest": "PASS",
+    "r12_closed_world_plan_governance": "PASS",
+    "workflow_conformance": {
+      "verdict": "PASS",
+      "hostile_mutations_rejected": 70
+    },
+    "authority_simulation": {
+      "verdict": "PASS",
+      "scenarios": 19,
+      "expected_pass": 3,
+      "expected_fail": 16,
+      "temp_cleanup_verified": true,
+      "two_clean_runs_after_final_revision": true,
+      "artifacts": [
+        ".agent/specs/release-gates-r12/evidence/release-gates/maintenance-simulation.json",
+        ".agent/specs/release-gates-r12/evidence/release-gates/windows-harness.json"
+      ]
+    },
+    "critical_suite": {
+      "verdict": "PASS",
+      "tests": 203,
+      "passed": 203,
+      "failed": 0,
+      "skipped": 0,
+      "unexpected_skips": 0,
+      "malformed_lines": 0,
+      "database_residue": 0,
+      "summary": ".agent/reports/evidence/production-ready/release-gates-foundation/critical-suite-runner/20260713T080909Z-80739b59cf/summary.json"
+    },
+    "windows_portability_replay": {
+      "verdict": "PASS",
+      "go_test_exit": 0,
+      "json_parser_exit": 0,
+      "database_completeness_owner": "release-gates-foundation",
+      "coverage_profile_captured": true,
+      "coverage_enforcement_owner": "release-gates-foundation"
+    }
+  },
+  "security_contract": {
+    "pull_request_target_executes_trusted_base_only": true,
+    "candidate_head_checked_out_by_privileged_job": false,
+    "candidate_head_executed_by_privileged_job": false,
+    "privileged_job_uses_secrets": false,
+    "unprivileged_successor_selftest": true,
+    "committed_manifest_forbids_event_head_sha": true,
+    "committed_manifest_forbids_manifest_container_git_blob": true,
+    "trusted_artifact_binds_actual_event_head_and_container_blob": true,
+    "all_nonmaintenance_contract_surfaces_frozen": true,
+    "ordinary_diff_statuses_limited_to_add_modify": true,
+    "official_actions_pinned_to_full_sha": true,
+    "candidate_workflow_secret_write_trigger_and_action_pin_envelope_validated": true,
+    "candidate_workflow_actions_limited_to_audited_allowlist": true,
+    "load_bearing_json_types_reject_scalar_coercion": true,
+    "successor_paths_unique_independent_of_status": true,
+    "successor_rotation_window_enforced": true,
+    "historical_validator_blobs_reanchored_to_git": true,
+    "inductive_transition_chain_reaches_r12_0003": true
+  },
+  "external_sources": {
+    "context7": "USED",
+    "parallel": "USED",
+    "tavily": "BLOCKED_OAUTH_AUTHORIZATION_REQUIRED",
+    "training_memory_substituted": false,
+    "security_review": ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md",
+    "gedankenexperiment": "GE-001 found and closed two HIGH recurring-epoch deadlocks; R3 review closed type, duplicate-path, rotation-window, and action-allowlist edges; journal remains local and ignored"
+  },
+  "sha256": {
+    ".github/workflows/test.yml": "ea5556c91cdeedcd683063deeb1e3b398fbb433c12892caf4f67859698400bfa",
+    ".github/workflows/authority-guard.yml": "67e54245fd1d751a328faef424826a44cda3eca53a8a6bd3c0da576808f4b8a8",
+    "scripts/production-gates/assert-plan-path-ownership.ps1": "5fafc989f281c75fef8ef00207efb52edc7323e7e2a1a16488c6e66ea114561c",
+    "scripts/production-gates/assert-active-candidate-path-authority.ps1": "35719d5fa1b30f4e091bcf5ddbb443f9087703dde68497db55fe4fde6945c561",
+    "scripts/production-gates/assert-pr-authority-guard.ps1": "718b5c870a96ae55ffa6113105ff4e712f3511606b688f1eb2d7788e1a19f368",
+    "scripts/production-gates/assert-pr-authority-maintenance.ps1": "4b740b37d9d8d90e7bb33f61daf980a76738deba22129d66e07beb23a6ec15b9",
+    ".agent/specs/release-gates-r12/evidence/release-gates/test-r12-authority-maintenance.ps1": "52cf0a17ec02eba14691795efd384e3581cfff7c46c91d3e0a06c3fd7bf1e470",
+    ".agent/specs/release-gates-r12/evidence/release-gates/maintenance-simulation.json": "03f4ce1840d248d05bb32748f166ee8b94d0b8a83f12a225f8d69110fa4f804b",
+    ".agent/specs/release-gates-r12/evidence/release-gates/windows-harness.json": "95ce2ccb0b05bf0baa7977249f166c2412f8080babbda2dc59c32c25e789f956",
+    ".agent/specs/release-gates-r12/evidence/release-gates/security-review.md": "d5b5f485f0aaa9c8323f7979247929a9bf72829541409a1933cceda2814d959a"
+  }
+}

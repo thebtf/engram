@@ -287,6 +287,133 @@ function Invoke-R9ProfileAudit {
     return @($errors)
 }
 
+function Invoke-R12ContractAudit {
+    param(
+        [Parameter(Mandatory)]$ContractObject,
+        [Parameter(Mandatory)][string]$ObservedContractSha256,
+        [Parameter(Mandatory)][string]$ExpectedContractSha256Value,
+        [Parameter(Mandatory)][string]$ObservedPlanSha256,
+        [Parameter(Mandatory)][string]$ExpectedPlanSha256Value,
+        [string]$Repository,
+        [switch]$VerifyGit,
+        [switch]$RequireObjects,
+        [AllowNull()]$Probe
+    )
+    $errors = [System.Collections.Generic.List[string]]::new()
+    if ($ObservedContractSha256 -cne $ExpectedContractSha256Value.ToLowerInvariant()) { $errors.Add("contract SHA256 mismatch: expected=$ExpectedContractSha256Value observed=$ObservedContractSha256") }
+    if ($ObservedPlanSha256 -cne $ExpectedPlanSha256Value.ToLowerInvariant()) { $errors.Add("plan SHA256 mismatch: expected=$ExpectedPlanSha256Value observed=$ObservedPlanSha256") }
+    if ([int](Get-PropertyValue $ContractObject 'schema_version') -ne 1 -or [string](Get-PropertyValue $ContractObject 'kind') -cne 'production-ready-active-diff-contracts' -or [int](Get-PropertyValue $ContractObject 'revision') -ne 12) {
+        $errors.Add('contract identity must be production-ready-active-diff-contracts revision 12')
+    }
+    $statusClasses = Get-PropertyValue $ContractObject 'status_classes'
+    [string[]]$currentStatuses = @((Get-PropertyValue $statusClasses 'current') | ForEach-Object { [string]$_ })
+    [string[]]$rejectedStatuses = @((Get-PropertyValue $statusClasses 'rejected') | ForEach-Object { [string]$_ })
+    [object[]]$candidates = @((Get-PropertyValue $ContractObject 'candidates'))
+    $candidateResults = [System.Collections.Generic.List[object]]::new()
+    $gitResults = [System.Collections.Generic.List[object]]::new()
+    $seenSlices = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($candidate in $candidates) {
+        $slice = [string](Get-PropertyValue $candidate 'slice')
+        $statusClass = [string](Get-PropertyValue $candidate 'status_class')
+        $branch = [string](Get-PropertyValue $candidate 'branch')
+        $base = [string](Get-PropertyValue $candidate 'base')
+        $head = [string](Get-PropertyValue $candidate 'head')
+        if ([string]::IsNullOrWhiteSpace($slice) -or -not $seenSlices.Add($slice)) { $errors.Add("candidate slice is blank or duplicated: '$slice'") }
+        if ($statusClass -cnotin @($currentStatuses + $rejectedStatuses)) { $errors.Add("candidate '$slice' has unknown status class '$statusClass'") }
+        if ($branch -notmatch '^work/[A-Za-z0-9._/-]+$') { $errors.Add("candidate '$slice' has invalid branch '$branch'") }
+        if ($base -notmatch '^[0-9a-f]{40}$' -or $head -notmatch '^[0-9a-f]{40}$' -or $base -ceq $head) { $errors.Add("candidate '$slice' must bind distinct full lowercase base/head commits") }
+        if ([string]::IsNullOrWhiteSpace([string](Get-PropertyValue $candidate 'plan_owner'))) { $errors.Add("candidate '$slice' has no plan owner") }
+        if ((Get-PropertyValue $candidate 'path_authority_eligible') -isnot [bool] -or -not [bool](Get-PropertyValue $candidate 'path_authority_eligible')) { $errors.Add("candidate '$slice' is not path-authority eligible") }
+        if ((Get-PropertyValue $candidate 'release_accepted') -isnot [bool] -or [bool](Get-PropertyValue $candidate 'release_accepted')) { $errors.Add("candidate '$slice' must not claim release acceptance") }
+        [object[]]$pathObjects = @((Get-PropertyValue $candidate 'paths'))
+        [string[]]$paths = @($pathObjects | ForEach-Object { [string](Get-PropertyValue $_ 'path') })
+        [string[]]$sortedPaths = @($paths); [Array]::Sort($sortedPaths, [System.StringComparer]::Ordinal)
+        if (($paths -join "`n") -cne ($sortedPaths -join "`n")) { $errors.Add("candidate '$slice' paths are not ordinally sorted") }
+        if (@($paths | Sort-Object -Unique).Count -ne $paths.Count) { $errors.Add("candidate '$slice' repeats a path") }
+        if ([int](Get-PropertyValue $candidate 'path_count') -ne $paths.Count) { $errors.Add("candidate '$slice' path_count does not match paths") }
+        $digest = Get-PathSetSha256 $paths
+        if ($digest -cne [string](Get-PropertyValue $candidate 'paths_sha256')) { $errors.Add("candidate '$slice' path digest mismatch") }
+        foreach ($pathObject in $pathObjects) {
+            $path = [string](Get-PropertyValue $pathObject 'path')
+            try { $normalized = Normalize-AuthorityPath $path; if ($normalized.kind -ne 'exact' -or $normalized.path -cne $path) { throw "candidate path is not normalized exact: '$path'" } } catch { $errors.Add("candidate '$slice': $($_.Exception.Message)"); continue }
+            if ([string](Get-PropertyValue $pathObject 'git_status') -cnotin @('A','M','D','T')) { $errors.Add("candidate '$slice' path '$path' has unsupported git status") }
+            if ([string](Get-PropertyValue $pathObject 'classification') -cnotin @('product','evidence','report')) { $errors.Add("candidate '$slice' path '$path' has unsupported classification") }
+        }
+        $candidateResults.Add([pscustomobject][ordered]@{slice=$slice;status_class=$statusClass;branch=$branch;base=$base;head=$head;path_count=$paths.Count;paths_sha256=$digest})
+        if ($VerifyGit) {
+            $baseAvailable = Test-CommitAvailable $Repository $base; $headAvailable = Test-CommitAvailable $Repository $head
+            if (-not ($baseAvailable -and $headAvailable)) {
+                $gitResults.Add([pscustomobject][ordered]@{slice=$slice;available=$false;verified=$false})
+                if ($RequireObjects) { $errors.Add("candidate '$slice' Git objects are unavailable") }
+            }
+            else {
+                try {
+                    [object[]]$actual = @(Get-GitDiffEntries $Repository $base $head)
+                    [string[]]$actualPaths = @($actual | ForEach-Object { [string]$_.path }); [Array]::Sort($actualPaths,[System.StringComparer]::Ordinal)
+                    $actualDigest = Get-PathSetSha256 $actualPaths
+                    $statusMismatch = $false
+                    foreach ($pathObject in $pathObjects) { if (@($actual | Where-Object { [string]$_.path -ceq [string]$pathObject.path -and [string]$_.git_status -ceq [string]$pathObject.git_status }).Count -ne 1) { $statusMismatch = $true } }
+                    if ($actualDigest -cne $digest) { $errors.Add("candidate '$slice' live Git path digest differs from the frozen contract") }
+                    if ($statusMismatch) { $errors.Add("candidate '$slice' live Git statuses differ from the frozen contract") }
+                    $gitResults.Add([pscustomobject][ordered]@{slice=$slice;available=$true;verified=($actualDigest -ceq $digest -and -not $statusMismatch);path_count=$actualPaths.Count;paths_sha256=$actualDigest})
+                }
+                catch { $errors.Add("candidate '$slice' Git verification failed: $($_.Exception.Message)") }
+            }
+        }
+    }
+    [object[]]$pendingContracts = @((Get-PropertyValue $ContractObject 'pending_namespaces'))
+    $pendingResults = [System.Collections.Generic.List[object]]::new()
+    foreach ($pending in $pendingContracts) {
+        $slice = [string](Get-PropertyValue $pending 'slice')
+        $branch = [string](Get-PropertyValue $pending 'branch')
+        $baseAnchor = [string](Get-PropertyValue $pending 'base_anchor')
+        if ([string]::IsNullOrWhiteSpace($slice) -or [string]::IsNullOrWhiteSpace([string](Get-PropertyValue $pending 'status_class'))) { $errors.Add('pending authority entry has blank identity/status') }
+        if ($branch -notmatch '^work/[A-Za-z0-9._/-]+$' -or $baseAnchor -notmatch '^[0-9a-f]{40}$') { $errors.Add("pending '$slice' has invalid branch or base anchor") }
+        if ((Get-PropertyValue $pending 'release_accepted') -isnot [bool] -or [bool](Get-PropertyValue $pending 'release_accepted')) { $errors.Add("pending '$slice' must not claim release acceptance") }
+        [string[]]$exactPaths = @(Get-OptionalStringArray $pending 'exact_paths')
+        [string[]]$exactPrefixes = @(Get-OptionalStringArray $pending 'exact_prefixes')
+        $macroBound = [string](Get-PropertyValue $pending 'authority_mode') -ceq 'bound-plan-member-union-with-exact-r12-overrides' -and @((Get-PropertyValue $pending 'member_slices')).Count -gt 0 -and @((Get-PropertyValue $pending 'exact_r12_overrides')).Count -gt 0
+        if ($exactPaths.Count + $exactPrefixes.Count -eq 0 -and -not $macroBound) { $errors.Add("pending '$slice' declares no bounded path") }
+        $seenPending = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        foreach ($token in @($exactPaths) + @($exactPrefixes)) {
+            try { $normalized = Normalize-AuthorityPath $token; if ($normalized.display -cne $token -or -not $seenPending.Add($token)) { throw "pending path is non-canonical or repeated: '$token'" } } catch { $errors.Add("pending '$slice': $($_.Exception.Message)") }
+        }
+        [string[]]$forbidden = @(Get-OptionalStringArray $pending 'forbidden_final_paths')
+        foreach ($token in $forbidden) { if ($token -cin $exactPaths) { $errors.Add("pending '$slice' both allows and forbids '$token'") } }
+        $pendingResults.Add([pscustomobject][ordered]@{slice=$slice;branch=$branch;base_anchor=$baseAnchor;allowed_exact_paths=@($exactPaths);allowed_prefixes=@($exactPrefixes);macro_bound_plan_union=$macroBound;requires_final_exact_diff_contract=$true})
+    }
+    $probeResult = $null
+    if ($null -ne $Probe) {
+        $probeSlice = [string](Get-PropertyValue $Probe 'slice')
+        $matches = @($pendingContracts | Where-Object { [string]$_.slice -ceq $probeSlice })
+        if ($matches.Count -ne 1) { $errors.Add("pending probe slice '$probeSlice' has $($matches.Count) contracts, expected 1") }
+        elseif ([string]$Probe.base -cne [string]$matches[0].base_anchor) { $errors.Add("pending probe base '$([string]$Probe.base)' must equal frozen base anchor '$([string]$matches[0].base_anchor)'") }
+        else {
+            try {
+                & git -C $Repository merge-base --is-ancestor ([string]$Probe.base) ([string]$Probe.head) 2>$null
+                if ($LASTEXITCODE -ne 0) { throw 'pending probe base is not an ancestor of head' }
+                [object[]]$entries = @(Get-GitDiffEntries $Repository ([string]$Probe.base) ([string]$Probe.head))
+                [object[]]$declarations = @(
+                    foreach ($token in @(Get-OptionalStringArray $matches[0] 'exact_paths') + @(Get-OptionalStringArray $matches[0] 'exact_prefixes')) {
+                        $normalized = Normalize-AuthorityPath $token
+                        [pscustomobject]@{owner=$probeSlice;kind=$normalized.kind;path=$normalized.path;display=$token}
+                    }
+                )
+                $probeResult = Invoke-PendingSurfaceAudit $matches[0] $declarations $entries
+                foreach ($probeError in @($probeResult.errors)) { $errors.Add("pending probe: $probeError") }
+            }
+            catch { $errors.Add("pending probe failed: $($_.Exception.Message)") }
+        }
+    }
+    return [pscustomobject][ordered]@{
+        verdict = if($errors.Count -eq 0){'PASS'}else{'FAIL'}
+        counts = [pscustomobject][ordered]@{candidates=$candidates.Count;paths=(@($candidateResults|ForEach-Object path_count)|Measure-Object -Sum).Sum;pending_contracts=$pendingContracts.Count;current_candidates=@($candidateResults|Where-Object status_class -cin $currentStatuses).Count;rejected_candidates=@($candidateResults|Where-Object status_class -cin $rejectedStatuses).Count;git_verified=@($gitResults|Where-Object verified).Count;errors=$errors.Count}
+        candidates=@($candidateResults);pending_contracts=@($pendingResults);git_verification=@($gitResults);pending_probe=$probeResult
+        source_snapshot=[pscustomobject][ordered]@{freshness='HISTORICAL_DISCOVERY_ONLY';used_for_acceptance=$false;mutable_register_read=$false;observed_sha256=[string](Get-PropertyValue (Get-PropertyValue $ContractObject 'source_audit') 'observed_sha256')}
+        errors=@($errors)
+    }
+}
+
 function Invoke-ContractAudit {
     param(
         [Parameter(Mandatory)]$ContractObject,
@@ -301,6 +428,9 @@ function Invoke-ContractAudit {
         [AllowNull()]$Probe,
         [switch]$EnforceR9Profile
     )
+    if ([int](Get-PropertyValue $ContractObject 'revision') -eq 12) {
+        return Invoke-R12ContractAudit -ContractObject $ContractObject -ObservedContractSha256 $ObservedContractSha256 -ExpectedContractSha256Value $ExpectedContractSha256Value -ObservedPlanSha256 $ObservedPlanSha256 -ExpectedPlanSha256Value $ExpectedPlanSha256Value -Repository $Repository -VerifyGit:$VerifyGit -RequireObjects:$RequireObjects -Probe $Probe
+    }
     $errors = [System.Collections.Generic.List[string]]::new()
     if ($ObservedContractSha256 -cne $ExpectedContractSha256Value.ToLowerInvariant()) { $errors.Add("contract SHA256 mismatch: expected=$ExpectedContractSha256Value observed=$ObservedContractSha256") }
     if ($ObservedPlanSha256 -cne $ExpectedPlanSha256Value.ToLowerInvariant()) { $errors.Add("plan SHA256 mismatch: expected=$ExpectedPlanSha256Value observed=$ObservedPlanSha256") }
