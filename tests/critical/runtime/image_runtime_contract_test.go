@@ -661,33 +661,16 @@ func testRepositorySingleWriter(t *testing.T, repo string) {
 	t.Helper()
 	allowedWorkflow := filepath.Clean(filepath.Join(repo, ".github", "workflows", "docker-publish.yml"))
 	allowedScript := filepath.Clean(filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1"))
-	writePattern := regexp.MustCompile(`(?i)packages:\s*write|docker/login-action|docker\s+(?:push|buildx[^\n]*--push)|\bdocker\s+push\b|PERSONAL_ACCESS_TOKEN`)
-
-	for _, root := range []string{filepath.Join(repo, ".github", "workflows"), filepath.Join(repo, "scripts")} {
-		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-			if info.IsDir() {
-				return nil
-			}
-			ext := strings.ToLower(filepath.Ext(path))
-			if ext != ".yml" && ext != ".yaml" && ext != ".ps1" && ext != ".sh" && ext != ".js" && ext != ".cjs" {
-				return nil
-			}
-			content, readErr := os.ReadFile(path)
-			if readErr != nil {
-				return readErr
-			}
-			if writePattern.Match(content) && filepath.Clean(path) != allowedWorkflow && filepath.Clean(path) != allowedScript {
-				t.Errorf("executable surface %s contains an undeclared registry write credential or command", path)
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
+	if violations, err := repositorySingleWriterViolations(repo, allowedWorkflow, allowedScript); err != nil {
+		t.Fatal(err)
+	} else if len(violations) != 0 {
+		for _, path := range violations {
+			t.Errorf("executable surface %s contains an undeclared registry write credential or command", path)
 		}
 	}
+	t.Run("quoted authority sentinel fails closed", func(t *testing.T) {
+		testRepositorySingleWriterSentinel(t, repo, allowedWorkflow, allowedScript)
+	})
 
 	workflow := readFile(t, allowedWorkflow)
 	if got := strings.Count(workflow, "packages: write"); got != 1 {
@@ -732,6 +715,102 @@ func testRepositorySingleWriter(t *testing.T, repo string) {
 		if !strings.Contains(script, required) {
 			t.Fatalf("publication script lacks single-writer trust-boundary contract %q", required)
 		}
+	}
+}
+
+func repositorySingleWriterViolations(repo, allowedWorkflow, allowedScript string) ([]string, error) {
+	writePattern := regexp.MustCompile(`(?i)packages:\s*write|docker/login-action|docker\s+(?:push|buildx[^\n]*--push)|\bdocker\s+push\b|PERSONAL_ACCESS_TOKEN`)
+	validatorPath := filepath.Clean(filepath.Join(repo, "scripts", "production-gates", "assert-pr-authority-maintenance.ps1"))
+	var violations []string
+	for _, root := range []string{filepath.Join(repo, ".github", "workflows"), filepath.Join(repo, "scripts")} {
+		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			ext := strings.ToLower(filepath.Ext(path))
+			if ext != ".yml" && ext != ".yaml" && ext != ".ps1" && ext != ".sh" && ext != ".js" && ext != ".cjs" {
+				return nil
+			}
+			content, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			if filepath.Clean(path) != allowedWorkflow && filepath.Clean(path) != allowedScript && registryWriteSurface(path, validatorPath, content, writePattern) {
+				violations = append(violations, path)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return violations, nil
+}
+
+func registryWriteSurface(path, validatorPath string, content []byte, writePattern *regexp.Regexp) bool {
+	const inertSentinel = "    foreach ($forbidden in @('secrets.', 'packages: write', 'contents: write', 'id-token: write')) {\n"
+	if filepath.Clean(path) == validatorPath {
+		normalized := strings.ReplaceAll(string(content), "\r\n", "\n")
+		if strings.Count(normalized, inertSentinel) == 1 {
+			return writePattern.MatchString(strings.Replace(normalized, inertSentinel, "", 1))
+		}
+	}
+	return writePattern.Match(content)
+}
+
+func testRepositorySingleWriterSentinel(t *testing.T, repo, allowedWorkflow, allowedScript string) {
+	t.Helper()
+	if violations, err := repositorySingleWriterViolations(repo, allowedWorkflow, allowedScript); err != nil {
+		t.Fatal(err)
+	} else if len(violations) != 0 {
+		t.Fatalf("canonical authority validator is not the sole inert packages:write sentinel: %v", violations)
+	}
+
+	const inertSentinel = "    foreach ($forbidden in @('secrets.', 'packages: write', 'contents: write', 'id-token: write')) {\n"
+	for _, test := range []struct {
+		name       string
+		validator  string
+		extraPath  string
+		extraValue string
+		wantReject bool
+	}{
+		{name: "canonical inert sentinel", validator: inertSentinel},
+		{name: "second sentinel occurrence", validator: inertSentinel + inertSentinel, wantReject: true},
+		{name: "changed sentinel context", validator: "    foreach ($forbidden in @('secrets.', \"packages: write\", 'contents: write', 'id-token: write')) {\n", wantReject: true},
+		{name: "registry command in validator", validator: inertSentinel + "docker push ghcr.io/thebtf/engram\n", wantReject: true},
+		{name: "permission in another executable", validator: inertSentinel, extraPath: filepath.Join("scripts", "other.ps1"), extraValue: "packages: write\n", wantReject: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := t.TempDir()
+			validatorPath := filepath.Join(fixture, "scripts", "production-gates", "assert-pr-authority-maintenance.ps1")
+			for _, path := range []string{filepath.Join(fixture, ".github", "workflows"), filepath.Dir(validatorPath)} {
+				if err := os.MkdirAll(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(validatorPath, []byte(test.validator), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if test.extraPath != "" {
+				path := filepath.Join(fixture, test.extraPath)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(test.extraValue), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			violations, err := repositorySingleWriterViolations(fixture, filepath.Join(fixture, "allowed.yml"), filepath.Join(fixture, "allowed.ps1"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(violations) != 0; got != test.wantReject {
+				t.Fatalf("rejected=%v, want %v; violations=%v", got, test.wantReject, violations)
+			}
+		})
 	}
 }
 
