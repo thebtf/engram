@@ -65,7 +65,7 @@ try {
     Assert-True ($LASTEXITCODE -ne 0) 'tagged image references must be rejected before deployment'
 
     @(
-        'ENGRAM_SERVER_IMAGE=engram@sha256:cf0090ef9915ba5b3f8675cf9bb0fb273497d6f6ffb72b0860219a14b7c43664'
+        'ENGRAM_SERVER_IMAGE=engram@sha256:0f678c4316e8ac5a49d917f58477d2a4a5f886eab3084924ec1ef7e1c4d769c1'
         'ENGRAM_OPERATOR_IMAGE=engram@sha256:bf959a088be3e607d483b3d64b1747f7e65f91ea9dfbc90baa3029544e728400'
         'ENGRAM_POSTGRES_IMAGE=engram@sha256:78780f7a04ce28fcdd33ff9fcd3b4de400bc510e39a06ff3223a164dbdb4eee7'
         "ENGRAM_POSTGRES_PASSWORD_SECRET_FILE=$($secretFiles[0].Replace('\','/'))"

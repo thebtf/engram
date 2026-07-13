@@ -18,6 +18,7 @@ $previousEnv = Join-Path $temp 'previous.env'
 $badEnv = Join-Path $temp 'bad.env'
 $rollbackEvidence = Join-Path $temp 'rollback.json'
 $failedEvidence = Join-Path $temp 'rollback-failure.json'
+$badDatabaseDsn = Join-Path $temp 'bad_database_dsn'
 $memoryProject = "rollback-$suffix"
 $memoryContent = "customer-memory-$suffix"
 $token = ([guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N'))
@@ -132,11 +133,14 @@ Set-Content -LiteralPath (Join-Path $temp 'postgres_password') -Value $password 
 Set-Content -LiteralPath (Join-Path $temp 'vault_key') -Value ('a' * 64) -NoNewline
 Set-Content -LiteralPath (Join-Path $temp 'database_dsn') -Value "postgres://engram:$password@postgres:5432/engram?sslmode=disable" -NoNewline
 Set-Content -LiteralPath (Join-Path $temp 'admin_token') -Value $token -NoNewline
+Set-Content -LiteralPath $badDatabaseDsn -Value "postgres://engram:$password@missing-postgres:5432/engram?sslmode=disable" -NoNewline
 $serverPort = Get-FreePort
 $operatorPort = Get-FreePort
-Write-Env $currentEnv 'engram@sha256:cf0090ef9915ba5b3f8675cf9bb0fb273497d6f6ffb72b0860219a14b7c43664' 'engram@sha256:bf959a088be3e607d483b3d64b1747f7e65f91ea9dfbc90baa3029544e728400' 'engram@sha256:78780f7a04ce28fcdd33ff9fcd3b4de400bc510e39a06ff3223a164dbdb4eee7' $serverPort $operatorPort
-Write-Env $previousEnv 'engram@sha256:b9ecd67cdc4a6f3ea952ce11abb7ffc0d2cae0b6e47ea3ad84c33fd45436b4a3' 'engram@sha256:7ebac00425f4da75453bc8d08ecbc0b9c351f87ce80ee586bba816207cf1080a' 'engram@sha256:950df543598a125b8bbcb551c5513718974c9ff73230685a35173b53e6d090bd' $serverPort $operatorPort
-Write-Env $badEnv 'engram@sha256:b9ecd67cdc4a6f3ea952ce11abb7ffc0d2cae0b6e47ea3ad84c33fd45436b4a3' 'engram@sha256:7ebac00425f4da75453bc8d08ecbc0b9c351f87ce80ee586bba816207cf1080a' 'engram@sha256:b9ecd67cdc4a6f3ea952ce11abb7ffc0d2cae0b6e47ea3ad84c33fd45436b4a3' $serverPort $operatorPort
+Write-Env $currentEnv 'engram@sha256:0f678c4316e8ac5a49d917f58477d2a4a5f886eab3084924ec1ef7e1c4d769c1' 'engram@sha256:bf959a088be3e607d483b3d64b1747f7e65f91ea9dfbc90baa3029544e728400' 'engram@sha256:78780f7a04ce28fcdd33ff9fcd3b4de400bc510e39a06ff3223a164dbdb4eee7' $serverPort $operatorPort
+Write-Env $previousEnv 'engram@sha256:a00dd8dd2bd768335915fb9de7cf54f97ed1a72538397de2b8f0de1a1cf1f968' 'engram@sha256:7ebac00425f4da75453bc8d08ecbc0b9c351f87ce80ee586bba816207cf1080a' 'engram@sha256:950df543598a125b8bbcb551c5513718974c9ff73230685a35173b53e6d090bd' $serverPort $operatorPort
+Write-Env $badEnv 'engram@sha256:a00dd8dd2bd768335915fb9de7cf54f97ed1a72538397de2b8f0de1a1cf1f968' 'engram@sha256:7ebac00425f4da75453bc8d08ecbc0b9c351f87ce80ee586bba816207cf1080a' 'engram@sha256:950df543598a125b8bbcb551c5513718974c9ff73230685a35173b53e6d090bd' $serverPort $operatorPort
+$badEnvContent = (Get-Content -LiteralPath $badEnv) -replace '^ENGRAM_DATABASE_DSN_SECRET_FILE=.*$', "ENGRAM_DATABASE_DSN_SECRET_FILE=$($badDatabaseDsn.Replace('\','/'))"
+$badEnvContent | Set-Content -LiteralPath $badEnv -Encoding utf8NoBOM
 
 try {
     & $healthcheck -ComposeFile $compose -EnvFile $currentEnv -ProjectName $project -ConfigOnly | Out-Null
@@ -172,8 +176,13 @@ try {
     if (-not (Read-Memory $previousEnv)) { throw 'customer memory was lost after previous-release rollback' }
     $steps.previous_release_rollback = 'PASS'
 
+    Invoke-Compose $currentEnv @('up', '-d', '--wait', '--wait-timeout', '180')
+    & $healthcheck -ComposeFile $compose -EnvFile $currentEnv -ProjectName $project | Out-Null
+    if (-not (Read-Memory $currentEnv)) { throw 'customer memory was lost while restoring current before failure recovery proof' }
+    $steps.current_restore_before_failure = 'PASS'
+
     & pwsh -NoProfile -File $rollback -ComposeFile $compose -CurrentEnvFile $currentEnv -PreviousEnvFile $badEnv -ProjectName $project -EvidenceFile $failedEvidence *> $null
-    if ($LASTEXITCODE -eq 0) { throw 'invalid PostgreSQL rollback candidate was accepted' }
+    if ($LASTEXITCODE -eq 0) { throw 'runtime-invalid rollback candidate was accepted' }
     $failureDecision = Get-Content -Raw $failedEvidence | ConvertFrom-Json
     if ($failureDecision.status -ne 'ROLLBACK_FAILED_CURRENT_RESTORED') { throw 'rollback failure did not restore the current release' }
     & $healthcheck -ComposeFile $compose -EnvFile $currentEnv -ProjectName $project | Out-Null
@@ -187,8 +196,8 @@ try {
         project = $project
         started_at = $startedAt.ToString('o')
         finished_at = (Get-Date).ToString('o')
-        current_server = 'engram@sha256:cf0090ef9915ba5b3f8675cf9bb0fb273497d6f6ffb72b0860219a14b7c43664'
-        previous_server = 'engram@sha256:b9ecd67cdc4a6f3ea952ce11abb7ffc0d2cae0b6e47ea3ad84c33fd45436b4a3'
+        current_server = 'engram@sha256:0f678c4316e8ac5a49d917f58477d2a4a5f886eab3084924ec1ef7e1c4d769c1'
+        previous_server = 'engram@sha256:a00dd8dd2bd768335915fb9de7cf54f97ed1a72538397de2b8f0de1a1cf1f968'
         postgres_major = 17
         unique_memory_sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($memoryContent))).ToLowerInvariant()
         steps = $steps

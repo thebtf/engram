@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $healthcheck = Join-Path $PSScriptRoot '..\healthcheck\Test-EngramRuntime.ps1'
 $startedAt = Get-Date
-$trustedCompatibilitySha256 = '9a3828c7f8c046fcf0584db8e3303f131138cfe6d8b62849ea29f54db57a17f6'
+$trustedCompatibilitySha256 = '3580475819e3df708aa3948de0d58f615659602824611af2ddea024d9aaa9ac5'
 $rollbackStarted = $false
 
 function Read-EnvValues([string]$path) {
