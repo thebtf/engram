@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.42.1] - 2026-07-14
+
+### Fixed
+
+- **Muxcore v0.27.1 rolling-compatibility adoption (#408).** Upgrades the Engram stdio client from `muxcore` v0.26.1 to the released v0.27.1 contract while preserving the persistent always-connected daemon policy required by Engram background notifications. Automatic stale-daemon replacement now delegates to muxcore `RestartWithSuccessor` instead of maintaining duplicate consumer restart ownership.
+- **Concurrent startup and update convergence (#408).** Cross-install lock losers now join the version/PID-confirmed successor, socket-bound current daemons receive a bounded marker-publication grace before stale classification, successor executables must be absolute, and cancellation remains signal-aware across reconciliation and daemon readiness. The release intentionally does not enable persistent client dormancy or claim the separate zero-survivor supervisor objective tracked by `mcp-mux#140`.
+- **Go standard-library security refresh.** Raises the release toolchain floor from Go 1.25.11 to the published Go 1.25.12 security patch, closing reachable `crypto/tls` vulnerability `GO-2026-5856` identified by the mandatory `govulncheck ./...` release gate.
+
 ## [6.42.0] - 2026-07-06
 
 ### Added
