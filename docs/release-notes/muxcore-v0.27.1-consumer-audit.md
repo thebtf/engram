@@ -131,17 +131,23 @@ persistent client dormancy or copying the private launcher protocol while
   with one replacement winner, six joiners, zero redownloads, and one exact
   post-update response from predecessor wrapper PID `97316` to request `54000`.
 - Distinct `plugin-data-a` and `plugin-data-b` successor paths raced stale
-  daemon PID `82552` after the final review fixes. Path A won as daemon PID
-  `103480`; two path-B lock losers joined that current-version/status-PID
-  winner, all eight clients reported `v6.42.0-reviewed-new` and returned one
-  initialize and one tools response, and predecessor request `84000` returned
-  exactly once. Closing all nine clients left only the persistent daemon with
-  zero sessions before isolated shutdown.
-INS.POST 138:
+  daemon PID `112456` after all local and remote review fixes. Path B won as
+  daemon PID `109676`; three path-A lock losers joined that
+  current-version/status-PID winner, all eight clients reported
+  `v6.42.0-final-new` and returned one initialize and one tools response, and
+  predecessor request `109000` returned exactly once. Closing all nine clients
+  left only the persistent daemon with zero sessions before isolated shutdown.
 - Focused and race tests prove a provider-ready replacement is rejected until
   its current-version marker/status PID converges, and parent shutdown
   cancellation interrupts reconciliation instead of waiting for the two-minute
   bound.
+- Review hardening rejects a relative successor path before provider restart,
+  classifies wrapped cancellation during shim, readiness, and daemon run paths,
+  and gives a socket-bound fresh daemon two seconds to publish its marker before
+  any stale-version replacement decision.
+- A staggered two-install cold start initialized all eight clients: four joined
+  the starting current-version daemon and no stale replacement was attempted.
+  An eight-client same-install cold start also completed without replacement.
 - All 24 captured host stdout lines were valid JSON-RPC; no private launcher or
   dormant frame leaked.
 - Three additional cycles of three clients each returned to one daemon, zero
@@ -161,6 +167,10 @@ INS.POST 138:
   `initialize.serverInfo.version` regression. Removing it would need a new
   regression proving a new host cannot receive stale initialize data after an
   update.
+- A fully simultaneous zero-daemon cold start split across two executable paths
+  remains unreliable: this candidate timed out all eight shims, while the
+  v6.42.0/muxcore-v0.26.1 baseline passed only one of eight. This pre-existing
+  provider/start-topology limitation is not claimed as solved by this patch.
 
 ## Migration note for a future safe release
 

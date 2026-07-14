@@ -1,6 +1,6 @@
 {
   "schema": "engram.muxcore.windows-lifecycle-smoke.v2",
-  "captured_at": "2026-07-14T17:27:27.832652+00:00",
+  "captured_at": "2026-07-14T18:09:34.797577+00:00",
   "worktree": "D:/Dev/engram/.agent/worktrees/muxcore-v0271-engram-hotfix",
   "provider": {
     "release": "v0.27.1",
@@ -50,7 +50,13 @@
     "go test ./cmd/engram (post-review reconciliation fixes)",
     "go test -race ./cmd/engram (post-review reconciliation fixes)",
     "go test ./internal/control",
-    "go build predecessor/successor and run final 8-client cross-install Windows smoke under C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-reviewed-smoke-20260714T173000Z"
+    "go build predecessor/successor and run final 8-client cross-install Windows smoke under C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-reviewed-smoke-20260714T173000Z",
+    "go test ./cmd/engram and go test -race ./cmd/engram after Gemini review fixes",
+    "go test ./... and go vet ./cmd/engram ./internal/control after Gemini review fixes",
+    "go build predecessor/successor and run final post-Gemini 8-client cross-install Windows smoke under C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-remote-review-smoke-20260714T174000Z",
+    "go test ./cmd/engram and go test -race ./cmd/engram after startup-grace/readiness-cancellation fixes",
+    "go test ./... and go vet ./cmd/engram ./internal/control after startup-grace/readiness-cancellation fixes",
+    "final same-path, staggered cross-path, simultaneous cross-path cold-start comparison, and stale-update Windows smokes under C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-final-postreview-20260714T180000Z"
   ],
   "process_smoke": {
     "smoke_root": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-final-smoke-20260714T151500Z",
@@ -387,40 +393,41 @@
       "remaining_scoped_processes": 0
     },
     "cross_plugin_install_path_update": {
-      "smoke_root": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-reviewed-smoke-20260714T173000Z",
-      "parallel_launch_started_at": "2026-07-14T17:26:22.903240+00:00",
-      "parallel_launch_ended_at": "2026-07-14T17:26:23.266170+00:00",
-      "predecessor_wrapper_pid": 97932,
-      "old_daemon_pid": 82552,
+      "smoke_root": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-final-postreview-20260714T180000Z\\update",
+      "parallel_launch_started_at": "2026-07-14T18:04:10.330748+00:00",
+      "parallel_launch_ended_at": "2026-07-14T18:04:12.720681+00:00",
+      "elapsed_seconds": 2.389933,
+      "predecessor_wrapper_pid": 68916,
+      "old_daemon_pid": 112456,
       "successor_wrapper_pids": [
-        107392,
-        71728,
-        91420,
-        98176,
-        109156,
-        105532,
-        105660,
-        87224
+        62452,
+        53508,
+        99316,
+        94876,
+        117024,
+        104204,
+        58964,
+        71956
       ],
       "successor_install_paths": [
-        "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-reviewed-smoke-20260714T173000Z\\plugin-data-a\\bin\\engram.exe",
-        "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-reviewed-smoke-20260714T173000Z\\plugin-data-b\\bin\\engram.exe"
+        "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-final-postreview-20260714T180000Z\\update\\plugin-data-a\\bin\\engram.exe",
+        "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-final-postreview-20260714T180000Z\\update\\plugin-data-b\\bin\\engram.exe"
       ],
-      "new_daemon_pid": 103480,
+      "new_daemon_pid": 109676,
       "winner_marker": {
-        "version": "v6.42.0-reviewed-new",
-        "pid": 103480,
-        "exe": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-reviewed-smoke-20260714T173000Z\\plugin-data-a\\bin\\engram.exe"
+        "version": "v6.42.0-final-new",
+        "pid": 109676,
+        "exe": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-final-postreview-20260714T180000Z\\update\\plugin-data-b\\bin\\engram.exe"
       },
-      "winner_install_label": "plugin-data-a",
+      "winner_install_label": "plugin-data-b",
       "all_successor_clients_initialized": true,
       "all_initialize_responses_exactly_once": true,
       "all_tools_responses_exactly_once": true,
       "all_clients_reported_current_version": true,
-      "joined_concurrent_replacement_count": 5,
-      "cross_install_path_joiner_count": 2,
+      "joined_concurrent_replacement_count": 6,
+      "cross_install_path_joiner_count": 3,
       "winning_replacement_count": 1,
-      "predecessor_continuity_request_id": 84000,
+      "predecessor_continuity_request_id": 109000,
       "predecessor_continuity_response_count": 1,
       "predecessor_wrapper_survived": true,
       "shim_reconnect_fallback_spawned": 1,
@@ -457,6 +464,107 @@
         "focused_test": "TestReconcileMuxcoreDaemonVersionPropagatesParentCancellation",
         "go_test_result": "PASS",
         "go_test_race_result": "PASS"
+      },
+      "starting_current_daemon_marker_grace": {
+        "focused_test": "TestReconcileMuxcoreDaemonVersionJoinsStartingCurrentDaemon",
+        "go_test_result": "PASS",
+        "go_test_race_result": "PASS",
+        "staggered_cross_install_runtime_success_count": 8,
+        "joined_starting_daemon_count": 4,
+        "replacement_log_count": 0
+      },
+      "daemon_readiness_cancellation": {
+        "focused_test": "TestIsExpectedContextShutdown plus readiness-select use of isExpectedContextShutdown",
+        "go_test_result": "PASS",
+        "go_test_race_result": "PASS"
+      }
+    },
+    "remote_review_followup": {
+      "relative_successor_path_policy": "fail closed before provider restart",
+      "focused_test": "TestReconcileMuxcoreDaemonVersionRejectsRelativeSuccessorExecutable",
+      "wrapped_cancellation_handling": "errors.Is for shim and daemon engine.Run results",
+      "cross_platform_marker_test_path": "platform-native absolute tempfile path",
+      "focused_go_test": "PASS",
+      "focused_go_test_race": "PASS",
+      "aggregate_go_test": "PASS",
+      "go_vet": "PASS",
+      "post_fix_runtime_smoke_repeated": true
+    },
+    "fresh_daemon_startup_race": {
+      "same_install_path_parallel": {
+        "binary": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-final-postreview-20260714T180000Z\\fresh-same\\plugin-data\\bin\\engram.exe",
+        "wrapper_pids": [
+          93356,
+          69448,
+          83176,
+          109796,
+          67076,
+          99900,
+          21968,
+          110888
+        ],
+        "success_count": 8,
+        "failure_count": 0,
+        "all_reported_current_version": true,
+        "daemon_pid": 57644,
+        "replacement_log_count": 0,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "staggered_cross_install_paths": {
+        "lead_install_path": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-final-postreview-20260714T180000Z\\fresh-stagger\\plugin-data-a\\bin\\engram.exe",
+        "second_install_path": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-final-postreview-20260714T180000Z\\fresh-stagger\\plugin-data-b\\bin\\engram.exe",
+        "lead_delay_seconds": 0.05,
+        "started_at": "2026-07-14T18:08:23.441316+00:00",
+        "ended_at": "2026-07-14T18:08:23.541453+00:00",
+        "wrapper_pids": [
+          112576,
+          113144,
+          111304,
+          82796,
+          114124,
+          111372,
+          76764,
+          113192
+        ],
+        "success_count": 8,
+        "failure_count": 0,
+        "joined_starting_daemon_count": 4,
+        "replacement_log_count": 0,
+        "daemon_pid": 98300,
+        "session_count": 8,
+        "version_marker": {
+          "version": "v6.42.0-final-new",
+          "pid": 98300,
+          "exe": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-final-postreview-20260714T180000Z\\fresh-stagger\\plugin-data-a\\bin\\engram.exe"
+        },
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "fully_simultaneous_cross_install_paths": {
+        "candidate_v0_27_1_success_count": 0,
+        "candidate_v0_27_1_failure_count": 8,
+        "candidate_error": "engine client: start daemon: daemon did not start within 10s",
+        "baseline_v6_42_0_muxcore_v0_26_1_success_count": 1,
+        "baseline_v6_42_0_muxcore_v0_26_1_failure_count": 7,
+        "classification": "PREEXISTING_CROSS_INSTALL_COLD_START_LIMITATION",
+        "interpretation": "The marker-convergence grace closes the reported socket-bound/marker-not-yet-published race, proven by the staggered two-install run. When all distinct-install shims observe no daemon and enter provider startup simultaneously, the current candidate still fails, and v6.42.0/v0.26.1 also failed 7 of 8 clients; this is not claimed as fixed by the bounded groundwork."
       }
     }
   },
@@ -470,13 +578,15 @@
     "Eight simultaneous successor launchers coalesced on one RestartWithSuccessor winner; all eight initialized and responded exactly once, and the predecessor live client continued.",
     "The exact ensure-binary.js/run-engram.js customer flow installed a byte-identical successor, wrote matching marker/version state, then eight wrappers joined one replacement without redownloads or failures.",
     "Three additional three-client cycles returned to exactly one daemon and zero client processes.",
-    "Two distinct successor install paths raced one stale daemon after final review fixes: path A published the current-version marker, two path-B lock losers joined it, all eight clients reported the current version and responded exactly once, and the predecessor client continued.",
-    "All captured host stdout lines were JSON-RPC and no private launcher/dormant frame leaked."
+    "Two distinct successor install paths raced one stale daemon after all local and remote review fixes: path B published the current-version marker, three path-A lock losers joined it, all eight clients reported the current version and responded exactly once, and the predecessor client continued.",
+    "All captured host stdout lines were JSON-RPC and no private launcher/dormant frame leaked.",
+    "A staggered cross-install cold start initialized all eight clients, four joined the starting current-version daemon, and no stale replacement was attempted."
   ],
   "failed_or_unproven": [
     "With host stdin left open, all eight wrapper/shim pairs remained alive because Engram has no safe provider-backed idle/dormant bound.",
     "The requested abandoned-host idle-plus-grace convergence to zero client processes cannot be exercised or claimed with muxcore v0.27.1.",
-    "The update path used one fallback owner spawn rather than token refresh because SkipSnapshot remains necessary to prevent stale initialize.serverInfo.version replay."
+    "The update path used one fallback owner spawn rather than token refresh because SkipSnapshot remains necessary to prevent stale initialize.serverInfo.version replay.",
+    "A fully simultaneous zero-daemon cold start split across distinct executable paths remains unreliable: this candidate timed out all eight shims, while the v6.42.0/muxcore-v0.26.1 baseline passed only one of eight. This pre-existing provider/start-topology limitation is outside the bounded marker-race fix and is not claimed as solved."
   ],
   "verdict": "BLOCKED_PROVIDER_CONTRACT_INCOMPLETE"
 }

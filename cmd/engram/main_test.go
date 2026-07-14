@@ -88,7 +88,7 @@ func TestMuxcoreDaemonVersionMarkerMatchesVersionAndPID(t *testing.T) {
 	if muxcoreDaemonVersionMarkerMatchesVersionAndPID(path, "v6.4.6", 1234) {
 		t.Fatal("marker with blank executable path must not match")
 	}
-	if err := os.WriteFile(path, []byte(`{"version":"v6.4.6","pid":1234,"exe":"C:/other/engram.exe"}`+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"version":"v6.4.6","pid":1234,"exe":"`+filepath.ToSlash(otherExe)+`"}`+"\n"), 0o600); err != nil {
 		t.Fatalf("restore marker: %v", err)
 	}
 	if muxcoreDaemonVersionMarkerMatchesVersionAndPID(path, "v6.4.7", 1234) {
@@ -169,8 +169,60 @@ func TestMuxcoreDaemonConfigPreservesPersistentAlwaysConnectedPolicy(t *testing.
 	}
 }
 
+func stubStartingMuxcoreDaemonWait(t *testing.T, err error) {
+	t.Helper()
+	original := waitForStartingMuxcoreDaemonReady
+	waitForStartingMuxcoreDaemonReady = func(context.Context) error { return err }
+	t.Cleanup(func() { waitForStartingMuxcoreDaemonReady = original })
+}
+
+func TestIsExpectedContextShutdown(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if !isExpectedContextShutdown(canceled, errors.Join(errors.New("wrapped"), context.Canceled)) {
+		t.Fatal("wrapped cancellation with a canceled parent should be expected shutdown")
+	}
+	if isExpectedContextShutdown(context.Background(), context.Canceled) {
+		t.Fatal("cancellation without a canceled parent must not be suppressed")
+	}
+	if isExpectedContextShutdown(canceled, errors.New("engine failed")) {
+		t.Fatal("non-cancellation error must not be suppressed")
+	}
+}
+
+func TestReconcileMuxcoreDaemonVersionJoinsStartingCurrentDaemon(t *testing.T) {
+	t.Setenv("MCP_MUX_SESSION_ID", "")
+	stubStartingMuxcoreDaemonWait(t, nil)
+	originalStatus := readMuxcoreDaemonStatusPID
+	originalCurrent := isCurrentMuxcoreDaemon
+	originalExecutable := currentExecutable
+	originalRestart := restartMuxcoreDaemon
+	t.Cleanup(func() {
+		readMuxcoreDaemonStatusPID = originalStatus
+		isCurrentMuxcoreDaemon = originalCurrent
+		currentExecutable = originalExecutable
+		restartMuxcoreDaemon = originalRestart
+	})
+
+	readMuxcoreDaemonStatusPID = func(string) (int, bool) { return 4242, true }
+	isCurrentMuxcoreDaemon = func(string, string, int) bool { return false }
+	currentExecutable = func() (string, error) {
+		t.Fatal("current executable resolved after starting daemon converged")
+		return "", nil
+	}
+	restartMuxcoreDaemon = func(context.Context, string) (engine.UpdateAndRestartResult, error) {
+		t.Fatal("starting current-version daemon was treated as stale")
+		return engine.UpdateAndRestartResult{}, nil
+	}
+
+	if err := reconcileMuxcoreDaemonVersion(context.Background()); err != nil {
+		t.Fatalf("reconcileMuxcoreDaemonVersion() error = %v", err)
+	}
+}
+
 func TestReconcileMuxcoreDaemonVersionUsesProviderRestart(t *testing.T) {
 	t.Setenv("MCP_MUX_SESSION_ID", "")
+	stubStartingMuxcoreDaemonWait(t, context.DeadlineExceeded)
 	originalStatus := readMuxcoreDaemonStatusPID
 	originalCurrent := isCurrentMuxcoreDaemon
 	originalExecutable := currentExecutable
@@ -186,12 +238,13 @@ func TestReconcileMuxcoreDaemonVersionUsesProviderRestart(t *testing.T) {
 
 	readMuxcoreDaemonStatusPID = func(string) (int, bool) { return 4242, true }
 	isCurrentMuxcoreDaemon = func(string, string, int) bool { return false }
-	currentExecutable = func() (string, error) { return `C:\Engram\engram.exe`, nil }
+	wantSuccessorExe := filepath.Join(t.TempDir(), "engram.exe")
+	currentExecutable = func() (string, error) { return wantSuccessorExe, nil }
 	restarted := false
-	restartMuxcoreDaemon = func(_ context.Context, successorExe string) (engine.UpdateAndRestartResult, error) {
+	restartMuxcoreDaemon = func(_ context.Context, gotSuccessorExe string) (engine.UpdateAndRestartResult, error) {
 		restarted = true
-		if successorExe != `C:\Engram\engram.exe` {
-			t.Fatalf("successor executable = %q", successorExe)
+		if gotSuccessorExe != wantSuccessorExe {
+			t.Fatalf("successor executable = %q, want %q", gotSuccessorExe, wantSuccessorExe)
 		}
 		return engine.UpdateAndRestartResult{
 			DaemonWasRunning:  true,
@@ -218,6 +271,7 @@ func TestReconcileMuxcoreDaemonVersionUsesProviderRestart(t *testing.T) {
 
 func TestReconcileMuxcoreDaemonVersionFailsWhenReadyReplacementDoesNotConverge(t *testing.T) {
 	t.Setenv("MCP_MUX_SESSION_ID", "")
+	stubStartingMuxcoreDaemonWait(t, context.DeadlineExceeded)
 	originalStatus := readMuxcoreDaemonStatusPID
 	originalCurrent := isCurrentMuxcoreDaemon
 	originalExecutable := currentExecutable
@@ -233,7 +287,8 @@ func TestReconcileMuxcoreDaemonVersionFailsWhenReadyReplacementDoesNotConverge(t
 
 	readMuxcoreDaemonStatusPID = func(string) (int, bool) { return 4242, true }
 	isCurrentMuxcoreDaemon = func(string, string, int) bool { return false }
-	currentExecutable = func() (string, error) { return `C:\Engram\engram.exe`, nil }
+	successorExe := filepath.Join(t.TempDir(), "engram.exe")
+	currentExecutable = func() (string, error) { return successorExe, nil }
 	restartMuxcoreDaemon = func(context.Context, string) (engine.UpdateAndRestartResult, error) {
 		return engine.UpdateAndRestartResult{
 			DaemonWasRunning: true,
@@ -255,6 +310,7 @@ func TestReconcileMuxcoreDaemonVersionFailsWhenReadyReplacementDoesNotConverge(t
 
 func TestReconcileMuxcoreDaemonVersionReturnsProviderRestartError(t *testing.T) {
 	t.Setenv("MCP_MUX_SESSION_ID", "")
+	stubStartingMuxcoreDaemonWait(t, context.DeadlineExceeded)
 	originalStatus := readMuxcoreDaemonStatusPID
 	originalCurrent := isCurrentMuxcoreDaemon
 	originalExecutable := currentExecutable
@@ -268,7 +324,8 @@ func TestReconcileMuxcoreDaemonVersionReturnsProviderRestartError(t *testing.T) 
 
 	readMuxcoreDaemonStatusPID = func(string) (int, bool) { return 4242, true }
 	isCurrentMuxcoreDaemon = func(string, string, int) bool { return false }
-	currentExecutable = func() (string, error) { return `C:\Engram\engram.exe`, nil }
+	successorExe := filepath.Join(t.TempDir(), "engram.exe")
+	currentExecutable = func() (string, error) { return successorExe, nil }
 	restartMuxcoreDaemon = func(context.Context, string) (engine.UpdateAndRestartResult, error) {
 		return engine.UpdateAndRestartResult{}, errors.New("restart blocked")
 	}
@@ -282,8 +339,41 @@ func TestReconcileMuxcoreDaemonVersionReturnsProviderRestartError(t *testing.T) 
 	}
 }
 
+func TestReconcileMuxcoreDaemonVersionRejectsRelativeSuccessorExecutable(t *testing.T) {
+	t.Setenv("MCP_MUX_SESSION_ID", "")
+	stubStartingMuxcoreDaemonWait(t, context.DeadlineExceeded)
+	originalStatus := readMuxcoreDaemonStatusPID
+	originalCurrent := isCurrentMuxcoreDaemon
+	originalExecutable := currentExecutable
+	originalRestart := restartMuxcoreDaemon
+	t.Cleanup(func() {
+		readMuxcoreDaemonStatusPID = originalStatus
+		isCurrentMuxcoreDaemon = originalCurrent
+		currentExecutable = originalExecutable
+		restartMuxcoreDaemon = originalRestart
+	})
+
+	readMuxcoreDaemonStatusPID = func(string) (int, bool) { return 4242, true }
+	isCurrentMuxcoreDaemon = func(string, string, int) bool { return false }
+	currentExecutable = func() (string, error) { return "engram.exe", nil }
+	restarted := false
+	restartMuxcoreDaemon = func(context.Context, string) (engine.UpdateAndRestartResult, error) {
+		restarted = true
+		return engine.UpdateAndRestartResult{}, nil
+	}
+
+	err := reconcileMuxcoreDaemonVersion(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "not absolute") {
+		t.Fatalf("error = %v, want relative successor rejection", err)
+	}
+	if restarted {
+		t.Fatal("relative successor executable reached provider restart")
+	}
+}
+
 func TestReconcileMuxcoreDaemonVersionJoinsConcurrentRestart(t *testing.T) {
 	t.Setenv("MCP_MUX_SESSION_ID", "")
+	stubStartingMuxcoreDaemonWait(t, context.DeadlineExceeded)
 	originalStatus := readMuxcoreDaemonStatusPID
 	originalCurrent := isCurrentMuxcoreDaemon
 	originalExecutable := currentExecutable
@@ -299,7 +389,8 @@ func TestReconcileMuxcoreDaemonVersionJoinsConcurrentRestart(t *testing.T) {
 
 	readMuxcoreDaemonStatusPID = func(string) (int, bool) { return 4242, true }
 	isCurrentMuxcoreDaemon = func(string, string, int) bool { return false }
-	currentExecutable = func() (string, error) { return `C:\Engram\engram.exe`, nil }
+	successorExe := filepath.Join(t.TempDir(), "engram.exe")
+	currentExecutable = func() (string, error) { return successorExe, nil }
 	restartMuxcoreDaemon = func(context.Context, string) (engine.UpdateAndRestartResult, error) {
 		return engine.UpdateAndRestartResult{}, &engine.UpdateAndRestartError{
 			Phase: engine.UpdatePhaseLock,
@@ -322,6 +413,7 @@ func TestReconcileMuxcoreDaemonVersionJoinsConcurrentRestart(t *testing.T) {
 
 func TestReconcileMuxcoreDaemonVersionFailsWhenConcurrentRestartDoesNotConverge(t *testing.T) {
 	t.Setenv("MCP_MUX_SESSION_ID", "")
+	stubStartingMuxcoreDaemonWait(t, context.DeadlineExceeded)
 	originalStatus := readMuxcoreDaemonStatusPID
 	originalCurrent := isCurrentMuxcoreDaemon
 	originalExecutable := currentExecutable
@@ -337,7 +429,8 @@ func TestReconcileMuxcoreDaemonVersionFailsWhenConcurrentRestartDoesNotConverge(
 
 	readMuxcoreDaemonStatusPID = func(string) (int, bool) { return 4242, true }
 	isCurrentMuxcoreDaemon = func(string, string, int) bool { return false }
-	currentExecutable = func() (string, error) { return `C:\Engram\engram.exe`, nil }
+	successorExe := filepath.Join(t.TempDir(), "engram.exe")
+	currentExecutable = func() (string, error) { return successorExe, nil }
 	restartMuxcoreDaemon = func(context.Context, string) (engine.UpdateAndRestartResult, error) {
 		return engine.UpdateAndRestartResult{}, &engine.UpdateAndRestartError{
 			Phase: engine.UpdatePhaseLock,
@@ -359,6 +452,7 @@ func TestReconcileMuxcoreDaemonVersionFailsWhenConcurrentRestartDoesNotConverge(
 
 func TestReconcileMuxcoreDaemonVersionPropagatesParentCancellation(t *testing.T) {
 	t.Setenv("MCP_MUX_SESSION_ID", "")
+	stubStartingMuxcoreDaemonWait(t, context.DeadlineExceeded)
 	originalStatus := readMuxcoreDaemonStatusPID
 	originalCurrent := isCurrentMuxcoreDaemon
 	originalExecutable := currentExecutable
@@ -372,7 +466,8 @@ func TestReconcileMuxcoreDaemonVersionPropagatesParentCancellation(t *testing.T)
 
 	readMuxcoreDaemonStatusPID = func(string) (int, bool) { return 4242, true }
 	isCurrentMuxcoreDaemon = func(string, string, int) bool { return false }
-	currentExecutable = func() (string, error) { return `C:\Engram\engram.exe`, nil }
+	successorExe := filepath.Join(t.TempDir(), "engram.exe")
+	currentExecutable = func() (string, error) { return successorExe, nil }
 	restartStarted := make(chan struct{})
 	restartMuxcoreDaemon = func(ctx context.Context, _ string) (engine.UpdateAndRestartResult, error) {
 		close(restartStarted)

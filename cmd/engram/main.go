@@ -171,11 +171,12 @@ func muxcoreDaemonStatusPID(ctlPath string) (int, bool) {
 }
 
 var (
-	readMuxcoreDaemonStatusPID       = muxcoreDaemonStatusPID
-	isCurrentMuxcoreDaemon           = muxcoreDaemonVersionMatches
-	currentExecutable                = os.Executable
-	restartMuxcoreDaemon             = restartMuxcoreDaemonWithSuccessor
-	waitForCurrentMuxcoreDaemonReady = waitForMuxcoreDaemonVersion
+	readMuxcoreDaemonStatusPID        = muxcoreDaemonStatusPID
+	isCurrentMuxcoreDaemon            = muxcoreDaemonVersionMatches
+	currentExecutable                 = os.Executable
+	restartMuxcoreDaemon              = restartMuxcoreDaemonWithSuccessor
+	waitForCurrentMuxcoreDaemonReady  = waitForMuxcoreDaemonVersion
+	waitForStartingMuxcoreDaemonReady = waitForMuxcoreDaemonStartup
 )
 
 func waitForMuxcoreDaemonVersion(ctx context.Context) error {
@@ -196,9 +197,19 @@ func waitForMuxcoreDaemonVersion(ctx context.Context) error {
 	}
 }
 
+func waitForMuxcoreDaemonStartup(parent context.Context) error {
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+	defer cancel()
+	return waitForMuxcoreDaemonVersion(ctx)
+}
+
 func isConcurrentMuxcoreRestart(err error) bool {
 	var updateErr *engine.UpdateAndRestartError
 	return errors.As(err, &updateErr) && updateErr.Phase == engine.UpdatePhaseLock
+}
+
+func isExpectedContextShutdown(ctx context.Context, err error) bool {
+	return ctx.Err() != nil && errors.Is(err, context.Canceled)
 }
 
 func reconcileMuxcoreDaemonVersion(parent context.Context) error {
@@ -214,10 +225,23 @@ func reconcileMuxcoreDaemonVersion(parent context.Context) error {
 	if isCurrentMuxcoreDaemon(muxcoreDaemonVersionPath(), daemonVersion, livePID) {
 		return nil
 	}
+	// muxcore publishes control status just before the Engram marker. Give a
+	// fresh daemon a bounded chance to converge; the relaxed marker check also
+	// permits a same-version winner from another absolute plugin install path.
+	if waitErr := waitForStartingMuxcoreDaemonReady(parent); waitErr == nil {
+		fmt.Fprintf(os.Stderr, "[engram] joined starting muxcore daemon for %s\n", daemonVersion)
+		return nil
+	} else if parent.Err() != nil {
+		return parent.Err()
+	}
 
 	successorExe, err := currentExecutable()
 	if err != nil {
 		return fmt.Errorf("resolve muxcore successor executable: %w", err)
+	}
+	successorExe, ok = normalizedExecutablePath(successorExe)
+	if !ok {
+		return fmt.Errorf("resolve muxcore successor executable: path %q is not absolute", successorExe)
 	}
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	defer cancel()
@@ -375,7 +399,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "[engram] FATAL: muxcore shim setup failed: %v\n", err)
 			os.Exit(1)
 		}
-		if err := eng.Run(daemonCtx); err != nil && err != context.Canceled {
+		if err := eng.Run(daemonCtx); err != nil && !isExpectedContextShutdown(daemonCtx, err) {
 			fmt.Fprintf(os.Stderr, "[engram] FATAL: muxcore shim terminated: %v\n", err)
 			os.Exit(1)
 		}
@@ -439,8 +463,11 @@ func main() {
 			os.Exit(1)
 		}
 	case err := <-runErr:
-		logger.Error("engine.Run terminated before daemon readiness", "error", err)
 		_ = pipeline.ShutdownAll(daemonCtx)
+		if isExpectedContextShutdown(daemonCtx, err) {
+			return
+		}
+		logger.Error("engine.Run terminated before daemon readiness", "error", err)
 		os.Exit(1)
 	}
 	writeMuxcoreDaemonVersionMarker(logger)
@@ -494,7 +521,7 @@ func main() {
 
 	logger.Info("engram daemon ready", "version", daemonVersion)
 
-	if err := <-runErr; err != nil && err != context.Canceled {
+	if err := <-runErr; err != nil && !isExpectedContextShutdown(daemonCtx, err) {
 		logger.Error("engine.Run terminated", "error", err)
 		sevBridge.Stop()
 		_ = pipeline.ShutdownAll(daemonCtx)
