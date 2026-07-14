@@ -1,0 +1,483 @@
+{
+  "schema": "engram.muxcore.windows-lifecycle-smoke.v2",
+  "captured_at": "2026-07-14T17:27:27.832652+00:00",
+  "worktree": "D:/Dev/engram/.agent/worktrees/muxcore-v0271-engram-hotfix",
+  "provider": {
+    "release": "v0.27.1",
+    "release_url": "https://github.com/thebtf/mcp-mux/releases/tag/v0.27.1",
+    "release_published_at": "2026-07-14T05:22:20Z",
+    "release_tag_object_sha": "d79bf7e0a3d1311f36a863dd28a7b4a90d2d57a3",
+    "release_tag_commit_sha": "5f0ebb3c6c51cd6345b21bdf8ef0d0b21dc89338",
+    "module_tag_object_sha": "32bf1fddd25c249b038cb6e568bcced44e45f760",
+    "module_tag_commit_sha": "5f0ebb3c6c51cd6345b21bdf8ef0d0b21dc89338",
+    "module_sum": "h1:z5ftlF22TRgMkiwWpou/t+vPWtvMy5qkv5jDwedg0lk=",
+    "go_mod_sum": "h1:HiiAKxICByYnkWnG06roc0bjDGdrG3UhYgtW1eLTFDI=",
+    "verification_commands": [
+      "git ls-remote --tags https://github.com/thebtf/mcp-mux refs/tags/v0.27.1 refs/tags/v0.27.1^{}",
+      "gh release view v0.27.1 --repo thebtf/mcp-mux --json tagName,targetCommitish,publishedAt,url,name,isDraft,isPrerelease",
+      "go list -m -json github.com/thebtf/mcp-mux/muxcore@v0.27.1",
+      "git ls-remote --tags https://github.com/thebtf/mcp-mux refs/tags/muxcore/v0.27.* refs/tags/muxcore/v0.28.*"
+    ],
+    "newer_corrective_module_found": false,
+    "native_supervisor_issue": {
+      "url": "https://github.com/thebtf/mcp-mux/issues/140",
+      "state": "open",
+      "updated_at": "2026-07-14T05:25:37Z"
+    }
+  },
+  "candidate": {
+    "engram_release_base_version": "v6.42.0",
+    "initial_smoke_version_label": "v6.42.0-candidate",
+    "successor_smoke_version_label": "v6.42.0-update-smoke",
+    "muxcore_module": "github.com/thebtf/mcp-mux/muxcore v0.27.1",
+    "daemon_persistent": true,
+    "shim_config_persistent": false,
+    "effective_daemon_owner_persistent": true,
+    "idle_suspend_delay_seconds": 0,
+    "idle_dormant_grace_seconds": 0,
+    "allow_persistent_idle_suspend": false,
+    "skip_snapshot": true,
+    "interpretation": "muxcore v0.27.1 can park a downstream session after daemon safety checks, including for a persistent owner. Engram keeps idle suspend and dormant grace disabled because end-to-end notification buffering/replay safety is not proven and no released native supervisor consumes the private dormant handshake before process exit."
+  },
+  "commands": [
+    "go test ./cmd/engram ./internal/version",
+    "go test -race ./cmd/engram",
+    "node --test plugin/engram/scripts/ensure-binary.test.js plugin/engram/scripts/run-engram.test.js",
+    "go build -ldflags=-X=github.com/thebtf/engram/internal/version.Daemon=v6.42.0-candidate -o C:/Users/btf/AppData/Local/Temp/engram-v0271-final-smoke-20260714T151500Z/candidate.exe ./cmd/engram",
+    "go build -ldflags=-X=github.com/thebtf/engram/internal/version.Daemon=v6.42.0-update-smoke -o C:/Users/btf/AppData/Local/Temp/engram-v0271-final-smoke-20260714T151500Z/successor.exe ./cmd/engram",
+    "node <isolated-plugin-root>/scripts/ensure-binary.js (NODE_OPTIONS preload streamed the locally built successor through https.get)",
+    "node <isolated-plugin-root>/scripts/run-engram.js x8 concurrently after installation",
+    "go test ./cmd/engram (post-review reconciliation fixes)",
+    "go test -race ./cmd/engram (post-review reconciliation fixes)",
+    "go test ./internal/control",
+    "go build predecessor/successor and run final 8-client cross-install Windows smoke under C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-reviewed-smoke-20260714T173000Z"
+  ],
+  "process_smoke": {
+    "smoke_root": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-final-smoke-20260714T151500Z",
+    "baseline": {
+      "scoped_process_count": 0
+    },
+    "parallel_consumers": {
+      "started_at": "2026-07-14T15:16:07.337964+00:00",
+      "ended_at": "2026-07-14T15:16:07.774466+00:00",
+      "wrapper_pids": [
+        63224,
+        16120,
+        32840,
+        31760,
+        93432,
+        88488,
+        89148,
+        41764
+      ],
+      "shim_pids": [
+        37176,
+        39920,
+        54228,
+        89060,
+        89212,
+        93672,
+        94988,
+        96244
+      ],
+      "daemon_pid": 75440,
+      "version_marker": {
+        "version": "v6.42.0-candidate",
+        "pid": 75440,
+        "exe": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-final-smoke-20260714T151500Z\\plugin-data\\bin\\engram.exe"
+      },
+      "initialize_request_ids": [
+        31000,
+        31001,
+        31002,
+        31003,
+        31004,
+        31005,
+        31006,
+        31007
+      ],
+      "tools_request_ids": [
+        32000,
+        32001,
+        32002,
+        32003,
+        32004,
+        32005,
+        32006,
+        32007
+      ],
+      "initialize_responses_exactly_once": true,
+      "tools_responses_exactly_once": true,
+      "tool_count_per_consumer": [
+        70
+      ],
+      "daemon_owner_count": 1,
+      "daemon_owner_persistent": true,
+      "session_count": 8
+    },
+    "host_open_idle_observation": {
+      "started_at": "2026-07-14T15:16:26.483813+00:00",
+      "ended_at": "2026-07-14T15:16:38.484333+00:00",
+      "seconds": 12,
+      "wrappers_still_alive": 8,
+      "shims_still_alive_at_observation": 8,
+      "daemon_pid": 75440,
+      "owner_persistent": true,
+      "session_count": 8,
+      "result": "NO_DORMANT_BOUND_CONFIGURED"
+    },
+    "stdin_eof_close": {
+      "started_at": "2026-07-14T15:17:04.712323+00:00",
+      "ended_at": "2026-07-14T15:17:05.728574+00:00",
+      "wrapper_exit_codes": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "post_close_daemon_pid": 75440,
+      "post_close_scoped_process_count": 1,
+      "post_close_wrapper_count": 0,
+      "post_close_shim_count": 0,
+      "post_close_owner_count": 1,
+      "post_close_session_count": 0,
+      "attributable_serena_lsp_helper_count": 0,
+      "remaining_descendants": []
+    },
+    "clean_reconnect": {
+      "started_at": "2026-07-14T15:17:28.818575+00:00",
+      "wrapper_pid": 87276,
+      "daemon_pid": 75440,
+      "daemon_pid_unchanged": true,
+      "initialize_response_count": 1,
+      "tools_response_count": 1,
+      "server_version": "v6.42.0-candidate",
+      "tool_count": 70,
+      "session_count": 1
+    },
+    "live_update": {
+      "binary_swap_started_at": "2026-07-14T15:17:50.865059+00:00",
+      "binary_swap_ended_at": "2026-07-14T15:17:50.872732+00:00",
+      "new_launch_started_at": "2026-07-14T15:17:50.872751+00:00",
+      "live_request_started_at": "2026-07-14T15:18:14.117871+00:00",
+      "live_request_ended_at": "2026-07-14T15:18:14.121901+00:00",
+      "live_wrapper_pid": 87276,
+      "new_wrapper_pid": 79480,
+      "old_daemon_pid": 75440,
+      "new_daemon_pid": 66016,
+      "new_server_version": "v6.42.0-update-smoke",
+      "new_initialize_response_count": 1,
+      "new_tools_response_count": 1,
+      "continuity_request_id": 34002,
+      "continuity_response_count": 1,
+      "request_lost": false,
+      "duplicate_response": false,
+      "live_wrapper_survived": true,
+      "shim_reconnect_refreshed": 0,
+      "shim_reconnect_fallback_spawned": 1,
+      "shim_reconnect_gave_up": 0,
+      "handoff": {
+        "aborted": 0,
+        "attempted": 0,
+        "fallback": 0,
+        "old_owner_socket_retired_count": 0,
+        "predecessor_daemon_generation": "",
+        "predecessor_pid": 0,
+        "restored_owner_count": 0,
+        "successor_daemon_generation": "daemon_ddf104b0e25a",
+        "transferred": 0
+      },
+      "post_update_owner_count": 1,
+      "post_update_session_count": 2,
+      "post_close_exit_codes": [
+        0,
+        0
+      ],
+      "post_close_scoped_process_count": 1,
+      "post_close_session_count": 0
+    },
+    "host_frame_audit": {
+      "host_stdout_json_lines": 24,
+      "invalid_json_lines": 0,
+      "private_non_jsonrpc_top_level_lines": 0,
+      "private_launcher_methods": []
+    },
+    "stress": {
+      "cycles": [
+        {
+          "cycle": 1,
+          "started_at": "2026-07-14T15:18:59.280216+00:00",
+          "ended_at": "2026-07-14T15:19:00.056168+00:00",
+          "wrapper_pids": [
+            4776,
+            48476,
+            91932
+          ],
+          "all_initialize_responses_exactly_once": true,
+          "all_tools_responses_exactly_once": true,
+          "wrapper_exit_codes": [
+            0,
+            0,
+            0
+          ],
+          "post_cycle_daemon_pid": 66016,
+          "post_cycle_session_count": 0,
+          "post_cycle_scoped_process_count": 1
+        },
+        {
+          "cycle": 2,
+          "started_at": "2026-07-14T15:19:00.056186+00:00",
+          "ended_at": "2026-07-14T15:19:00.761730+00:00",
+          "wrapper_pids": [
+            64260,
+            92452,
+            87196
+          ],
+          "all_initialize_responses_exactly_once": true,
+          "all_tools_responses_exactly_once": true,
+          "wrapper_exit_codes": [
+            0,
+            0,
+            0
+          ],
+          "post_cycle_daemon_pid": 66016,
+          "post_cycle_session_count": 0,
+          "post_cycle_scoped_process_count": 1
+        },
+        {
+          "cycle": 3,
+          "started_at": "2026-07-14T15:19:00.761747+00:00",
+          "ended_at": "2026-07-14T15:19:01.491080+00:00",
+          "wrapper_pids": [
+            77560,
+            96720,
+            61780
+          ],
+          "all_initialize_responses_exactly_once": true,
+          "all_tools_responses_exactly_once": true,
+          "wrapper_exit_codes": [
+            0,
+            0,
+            0
+          ],
+          "post_cycle_daemon_pid": 66016,
+          "post_cycle_session_count": 0,
+          "post_cycle_scoped_process_count": 1
+        }
+      ],
+      "returned_to_one_daemon_zero_client_processes_each_cycle": true
+    },
+    "isolated_daemon_shutdown": {
+      "started_at": "2026-07-14T15:19:21.079194+00:00",
+      "ended_at": "2026-07-14T15:19:21.270641+00:00",
+      "response": "daemon shutting down",
+      "remaining_scoped_processes": 0
+    },
+    "concurrent_stale_daemon_update": {
+      "smoke_root": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-concurrent-update-20260714T154000Z",
+      "binary_swap_started_at": "2026-07-14T15:53:23.443680+00:00",
+      "binary_swap_ended_at": "2026-07-14T15:53:23.451180+00:00",
+      "parallel_launch_started_at": "2026-07-14T15:53:23.451202+00:00",
+      "parallel_launch_ended_at": "2026-07-14T15:53:23.845400+00:00",
+      "predecessor_live_wrapper_pid": 100536,
+      "old_daemon_pid": 69732,
+      "successor_wrapper_pids": [
+        86772,
+        76148,
+        53440,
+        84216,
+        99124,
+        55352,
+        89972,
+        61944
+      ],
+      "new_daemon_pid": 77460,
+      "all_successor_wrappers_initialized": true,
+      "all_initialize_responses_exactly_once": true,
+      "all_tools_responses_exactly_once": true,
+      "joined_concurrent_replacement_count": 5,
+      "winning_replacement_count": 1,
+      "successor_versions": [
+        "v6.42.0-successor"
+      ],
+      "predecessor_continuity_request_id": 44000,
+      "predecessor_continuity_response_count": 1,
+      "predecessor_wrapper_survived": true,
+      "shim_reconnect_fallback_spawned": 1,
+      "shim_reconnect_gave_up": 0,
+      "post_close_exit_codes": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "post_close_scoped_process_count": 1,
+      "post_close_session_count": 0,
+      "shutdown_response": "daemon shutting down",
+      "remaining_scoped_processes": 0
+    },
+    "customer_update_flow": {
+      "smoke_root": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-ensure-update-20260714T160000Z",
+      "predecessor_live_wrapper_pid": 97316,
+      "old_daemon_pid": 88132,
+      "installer_started_at": "2026-07-14T15:55:51.219404+00:00",
+      "installer_ended_at": "2026-07-14T15:55:51.293385+00:00",
+      "installer_exit_code": 0,
+      "download_transport": "exact ensure-binary.js with a Node preload intercepting https.get and streaming the locally built successor binary",
+      "download_source": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-concurrent-update-20260714T154000Z\\successor.exe",
+      "installed_marker": "6.42.0-successor",
+      "installed_binary_version": "v6.42.0-successor",
+      "installed_binary_sha256": "ae509c926c5e1861238bf2c908b1d51744d67272636d31aa876200d686c169f6",
+      "download_source_sha256": "ae509c926c5e1861238bf2c908b1d51744d67272636d31aa876200d686c169f6",
+      "installed_binary_matches_download_source": true,
+      "parallel_launch_started_at": "2026-07-14T15:56:19.694555+00:00",
+      "parallel_launch_ended_at": "2026-07-14T15:56:20.148715+00:00",
+      "successor_wrapper_pids": [
+        81052,
+        32596,
+        38436,
+        96756,
+        98204,
+        98404,
+        68896,
+        90852
+      ],
+      "new_daemon_pid": 92820,
+      "all_successor_wrappers_initialized": true,
+      "all_initialize_responses_exactly_once": true,
+      "all_tools_responses_exactly_once": true,
+      "joined_concurrent_replacement_count": 6,
+      "winning_replacement_count": 1,
+      "unexpected_redownload_count": 0,
+      "successor_versions": [
+        "v6.42.0-successor"
+      ],
+      "predecessor_continuity_request_id": 54000,
+      "predecessor_continuity_response_count": 1,
+      "predecessor_wrapper_survived": true,
+      "shim_reconnect_fallback_spawned": 1,
+      "shim_reconnect_gave_up": 0,
+      "post_close_exit_codes": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "post_close_scoped_process_count": 1,
+      "post_close_session_count": 0,
+      "final_marker": "6.42.0-successor",
+      "final_binary_version": "v6.42.0-successor",
+      "shutdown_started_at": "2026-07-14T15:57:19.379924+00:00",
+      "shutdown_ended_at": "2026-07-14T15:57:19.894237+00:00",
+      "shutdown_response": "daemon shutting down",
+      "remaining_scoped_processes": 0
+    },
+    "cross_plugin_install_path_update": {
+      "smoke_root": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-reviewed-smoke-20260714T173000Z",
+      "parallel_launch_started_at": "2026-07-14T17:26:22.903240+00:00",
+      "parallel_launch_ended_at": "2026-07-14T17:26:23.266170+00:00",
+      "predecessor_wrapper_pid": 97932,
+      "old_daemon_pid": 82552,
+      "successor_wrapper_pids": [
+        107392,
+        71728,
+        91420,
+        98176,
+        109156,
+        105532,
+        105660,
+        87224
+      ],
+      "successor_install_paths": [
+        "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-reviewed-smoke-20260714T173000Z\\plugin-data-a\\bin\\engram.exe",
+        "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-reviewed-smoke-20260714T173000Z\\plugin-data-b\\bin\\engram.exe"
+      ],
+      "new_daemon_pid": 103480,
+      "winner_marker": {
+        "version": "v6.42.0-reviewed-new",
+        "pid": 103480,
+        "exe": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-reviewed-smoke-20260714T173000Z\\plugin-data-a\\bin\\engram.exe"
+      },
+      "winner_install_label": "plugin-data-a",
+      "all_successor_clients_initialized": true,
+      "all_initialize_responses_exactly_once": true,
+      "all_tools_responses_exactly_once": true,
+      "all_clients_reported_current_version": true,
+      "joined_concurrent_replacement_count": 5,
+      "cross_install_path_joiner_count": 2,
+      "winning_replacement_count": 1,
+      "predecessor_continuity_request_id": 84000,
+      "predecessor_continuity_response_count": 1,
+      "predecessor_wrapper_survived": true,
+      "shim_reconnect_fallback_spawned": 1,
+      "shim_reconnect_gave_up": 0,
+      "post_close_exit_codes": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "post_close_scoped_process_count": 1,
+      "post_close_session_count": 0,
+      "shutdown_response": "daemon shutting down",
+      "remaining_scoped_processes": 0
+    },
+    "review_blocker_regressions": {
+      "successful_restart_requires_marker_status_pid_convergence": {
+        "focused_test": "TestReconcileMuxcoreDaemonVersionUsesProviderRestart and TestReconcileMuxcoreDaemonVersionFailsWhenReadyReplacementDoesNotConverge",
+        "go_test_result": "PASS",
+        "go_test_race_result": "PASS",
+        "runtime_winner_marker": {
+          "version": "v6.42.0-reviewed-new",
+          "pid": 103480,
+          "exe": "C:\\Users\\btf\\AppData\\Local\\Temp\\engram-v0271-reviewed-smoke-20260714T173000Z\\plugin-data-a\\bin\\engram.exe"
+        },
+        "runtime_all_clients_reported_current_version": true
+      },
+      "parent_shutdown_cancellation": {
+        "focused_test": "TestReconcileMuxcoreDaemonVersionPropagatesParentCancellation",
+        "go_test_result": "PASS",
+        "go_test_race_result": "PASS"
+      }
+    }
+  },
+  "passed": [
+    "Eight isolated clients initialized and received unique initialize/tools responses exactly once.",
+    "The winning daemon version marker matched the live daemon PID after an eight-client concurrent launch; losing spawn candidates did not overwrite it.",
+    "On host stdin EOF, all eight wrappers and all eight client shims exited with code 0 while the persistent daemon remained.",
+    "No attributable Serena, LSP, or helper descendant remained beyond the intended daemon.",
+    "A clean reconnect reused the existing daemon and returned one response for each request.",
+    "A live client survived provider RestartWithSuccessor replacement with no lost or duplicate post-reconnect request.",
+    "Eight simultaneous successor launchers coalesced on one RestartWithSuccessor winner; all eight initialized and responded exactly once, and the predecessor live client continued.",
+    "The exact ensure-binary.js/run-engram.js customer flow installed a byte-identical successor, wrote matching marker/version state, then eight wrappers joined one replacement without redownloads or failures.",
+    "Three additional three-client cycles returned to exactly one daemon and zero client processes.",
+    "Two distinct successor install paths raced one stale daemon after final review fixes: path A published the current-version marker, two path-B lock losers joined it, all eight clients reported the current version and responded exactly once, and the predecessor client continued.",
+    "All captured host stdout lines were JSON-RPC and no private launcher/dormant frame leaked."
+  ],
+  "failed_or_unproven": [
+    "With host stdin left open, all eight wrapper/shim pairs remained alive because Engram has no safe provider-backed idle/dormant bound.",
+    "The requested abandoned-host idle-plus-grace convergence to zero client processes cannot be exercised or claimed with muxcore v0.27.1.",
+    "The update path used one fallback owner spawn rather than token refresh because SkipSnapshot remains necessary to prevent stale initialize.serverInfo.version replay."
+  ],
+  "verdict": "BLOCKED_PROVIDER_CONTRACT_INCOMPLETE"
+}
+

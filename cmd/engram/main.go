@@ -16,7 +16,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -45,7 +47,11 @@ import (
 // structured logs. Tracks Constitution §15 unified engram + plugin version.
 var daemonVersion = version.Daemon
 
-const muxcoreDaemonFlag = "--muxcore-daemon"
+const (
+	muxcoreDaemonFlag      = "--muxcore-daemon"
+	muxcoreEmbeddedVersion = "v0.27.1"
+	muxcoreNamespace       = "engram"
+)
 
 type muxcoreDaemonVersionMarker struct {
 	Version string `json:"version"`
@@ -92,7 +98,7 @@ func isMuxcoreProxyMode() bool {
 }
 
 func muxcoreDaemonVersionPath() string {
-	return serverid.DaemonControlPath("", "engram") + ".version"
+	return serverid.DaemonControlPath("", muxcoreNamespace) + ".version"
 }
 
 func muxcoreDaemonVersionMatches(path string, want string, livePID int) bool {
@@ -105,28 +111,44 @@ func muxcoreDaemonVersionMatches(path string, want string, livePID int) bool {
 }
 
 func muxcoreDaemonVersionMarkerMatches(path string, want string, livePID int, currentExe string) bool {
+	marker, ok := readMuxcoreDaemonVersionMarker(path)
+	return ok && marker.Version == want && marker.PID == livePID && sameExecutablePath(marker.Exe, currentExe)
+}
+
+func muxcoreDaemonVersionMarkerMatchesVersionAndPID(path string, want string, livePID int) bool {
+	marker, ok := readMuxcoreDaemonVersionMarker(path)
+	_, validExe := normalizedExecutablePath(marker.Exe)
+	return ok && validExe && marker.Version == want && marker.PID == livePID
+}
+
+func readMuxcoreDaemonVersionMarker(path string) (muxcoreDaemonVersionMarker, bool) {
 	got, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return muxcoreDaemonVersionMarker{}, false
 	}
 
 	var marker muxcoreDaemonVersionMarker
 	if err := json.Unmarshal(got, &marker); err != nil {
-		return false
+		return muxcoreDaemonVersionMarker{}, false
 	}
-	return marker.Version == want && marker.PID == livePID && sameExecutablePath(marker.Exe, currentExe)
+	return marker, true
 }
 
 func sameExecutablePath(a string, b string) bool {
-	a = filepath.Clean(strings.TrimSpace(a))
-	b = filepath.Clean(strings.TrimSpace(b))
-	if a == "." || b == "." {
+	a, validA := normalizedExecutablePath(a)
+	b, validB := normalizedExecutablePath(b)
+	if !validA || !validB {
 		return false
 	}
 	if executablePathsAreCaseInsensitive(runtime.GOOS) {
 		return strings.EqualFold(a, b)
 	}
 	return a == b
+}
+
+func normalizedExecutablePath(path string) (string, bool) {
+	path = filepath.Clean(strings.TrimSpace(path))
+	return path, filepath.IsAbs(path)
 }
 
 func executablePathsAreCaseInsensitive(goos string) bool {
@@ -148,59 +170,83 @@ func muxcoreDaemonStatusPID(ctlPath string) (int, bool) {
 	return status.PID, true
 }
 
-func stopStaleMuxcoreDaemonForVersion() {
+var (
+	readMuxcoreDaemonStatusPID       = muxcoreDaemonStatusPID
+	isCurrentMuxcoreDaemon           = muxcoreDaemonVersionMatches
+	currentExecutable                = os.Executable
+	restartMuxcoreDaemon             = restartMuxcoreDaemonWithSuccessor
+	waitForCurrentMuxcoreDaemonReady = waitForMuxcoreDaemonVersion
+)
+
+func waitForMuxcoreDaemonVersion(ctx context.Context) error {
+	const pollInterval = 100 * time.Millisecond
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		if livePID, ok := readMuxcoreDaemonStatusPID(serverid.DaemonControlPath("", muxcoreNamespace)); ok &&
+			muxcoreDaemonVersionMarkerMatchesVersionAndPID(muxcoreDaemonVersionPath(), daemonVersion, livePID) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func isConcurrentMuxcoreRestart(err error) bool {
+	var updateErr *engine.UpdateAndRestartError
+	return errors.As(err, &updateErr) && updateErr.Phase == engine.UpdatePhaseLock
+}
+
+func reconcileMuxcoreDaemonVersion(parent context.Context) error {
 	if isMuxcoreDaemonMode() || isMuxcoreProxyMode() {
-		return
+		return nil
 	}
 
-	ctlPath := serverid.DaemonControlPath("", "engram")
-	livePID, ok := muxcoreDaemonStatusPID(ctlPath)
+	ctlPath := serverid.DaemonControlPath("", muxcoreNamespace)
+	livePID, ok := readMuxcoreDaemonStatusPID(ctlPath)
 	if !ok {
-		return
+		return nil
 	}
-	if muxcoreDaemonVersionMatches(muxcoreDaemonVersionPath(), daemonVersion, livePID) {
-		return
-	}
-
-	resp, err := muxcontrol.SendWithTimeout(ctlPath, muxcontrol.Request{
-		Cmd:            "shutdown",
-		DrainTimeoutMs: 5000,
-	}, 10*time.Second)
-	if err != nil || resp == nil || !resp.OK {
-		return
+	if isCurrentMuxcoreDaemon(muxcoreDaemonVersionPath(), daemonVersion, livePID) {
+		return nil
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := muxcontrol.SendWithTimeout(ctlPath, muxcontrol.Request{Cmd: "ping"}, 500*time.Millisecond); err != nil {
-			fmt.Fprintf(os.Stderr, "[engram] stopped stale muxcore daemon so %s can start cleanly\n", daemonVersion)
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	fmt.Fprintf(os.Stderr, "[engram] warning: stale muxcore daemon PID %d did not shut down gracefully; forcing termination\n", livePID)
-	proc, err := os.FindProcess(livePID)
+	successorExe, err := currentExecutable()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[engram] warning: could not find stale muxcore daemon PID %d: %v\n", livePID, err)
-		return
+		return fmt.Errorf("resolve muxcore successor executable: %w", err)
 	}
-	if err := proc.Kill(); err != nil {
-		fmt.Fprintf(os.Stderr, "[engram] warning: could not terminate stale muxcore daemon PID %d: %v\n", livePID, err)
-		_ = proc.Release()
-		return
-	}
-	_ = proc.Release()
+	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
+	defer cancel()
 
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := muxcontrol.SendWithTimeout(ctlPath, muxcontrol.Request{Cmd: "ping"}, 500*time.Millisecond); err != nil {
-			fmt.Fprintf(os.Stderr, "[engram] terminated stale muxcore daemon so %s can start cleanly\n", daemonVersion)
-			return
+	result, err := restartMuxcoreDaemon(ctx, successorExe)
+	if err != nil {
+		if isConcurrentMuxcoreRestart(err) {
+			if waitErr := waitForCurrentMuxcoreDaemonReady(ctx); waitErr == nil {
+				fmt.Fprintf(os.Stderr, "[engram] joined concurrent muxcore daemon replacement for %s\n", daemonVersion)
+				return nil
+			} else {
+				return fmt.Errorf("restart stale muxcore daemon PID %d with %s: %w; concurrent replacement did not converge: %v", livePID, daemonVersion, err, waitErr)
+			}
 		}
-		time.Sleep(100 * time.Millisecond)
+		return fmt.Errorf("restart stale muxcore daemon PID %d with %s: %w", livePID, daemonVersion, err)
 	}
-	fmt.Fprintf(os.Stderr, "[engram] warning: stale muxcore daemon PID %d still responds after forced termination\n", livePID)
+	if result.DaemonWasRunning {
+		if !result.ReplacementReady {
+			return fmt.Errorf("restart stale muxcore daemon PID %d did not produce a ready replacement", livePID)
+		}
+		if waitErr := waitForCurrentMuxcoreDaemonReady(ctx); waitErr != nil {
+			return fmt.Errorf("restart stale muxcore daemon PID %d reported ready but replacement did not converge to %s: %w", livePID, daemonVersion, waitErr)
+		}
+		fmt.Fprintf(os.Stderr,
+			"[engram] replaced stale muxcore daemon PID %d with %s (graceful=%t fallback_shutdown=%t)\n",
+			livePID, daemonVersion, result.GracefulRestarted, result.FallbackShutdown,
+		)
+	}
+	return nil
 }
 
 func writeMuxcoreDaemonVersionMarker(logger *slog.Logger) {
@@ -232,6 +278,58 @@ func writeMuxcoreDaemonVersionMarker(logger *slog.Logger) {
 	}
 }
 
+func muxcoreBaseConfig() engine.Config {
+	return engine.Config{
+		Name:         "engram",
+		Namespace:    muxcoreNamespace,
+		DaemonFlag:   muxcoreDaemonFlag,
+		SkipSnapshot: true,
+		// Opt in to muxcore's daemon registry (v0.26+) so the shared mcp-mux
+		// operator point can discover the engram engine via mux_engines /
+		// mux_list(engine_name:"engram"). Read-only: ListOwners only; no
+		// cross-engine stop/restart/update is advertised. Nil would be the
+		// opt-out zero value that preserves pre-registry behavior.
+		Registry: &muxregistry.Config{
+			ProductName:    "engram",
+			MuxcoreVersion: muxcoreEmbeddedVersion,
+			Capabilities:   muxregistry.Capabilities{ListOwners: true},
+		},
+	}
+}
+
+func muxcoreDaemonConfig(disp *dispatcher.Dispatcher) engine.Config {
+	cfg := muxcoreBaseConfig()
+	cfg.Persistent = true // daemon owns durable module/background state
+	cfg.SessionHandler = disp
+	return cfg
+}
+
+func muxcoreShimConfig() engine.Config {
+	cfg := muxcoreBaseConfig()
+	cfg.Persistent = false // host shim owns no durable state
+	// IdleSuspendDelay and IdleDormantGrace stay zero until muxcore exports a
+	// host-stdio supervisor that consumes its private dormant handshake.
+	cfg.Handler = func(context.Context, io.Reader, io.Writer) error {
+		return fmt.Errorf("engram muxcore shim cannot serve MCP traffic directly")
+	}
+	return cfg
+}
+
+func restartMuxcoreDaemonWithSuccessor(ctx context.Context, successorExe string) (engine.UpdateAndRestartResult, error) {
+	cfg := muxcoreShimConfig()
+	eng, err := engine.New(cfg)
+	if err != nil {
+		return engine.UpdateAndRestartResult{}, err
+	}
+	return eng.RestartWithSuccessor(ctx, engine.RestartWithSuccessorOptions{
+		SuccessorExe:    successorExe,
+		DrainTimeout:    30 * time.Second,
+		RestartTimeout:  60 * time.Second,
+		ShutdownTimeout: 10 * time.Second,
+		ReadyTimeout:    30 * time.Second,
+	})
+}
+
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h" || os.Args[1] == "--version" || os.Args[1] == "-v") {
 		fmt.Printf("engram %s — stdio MCP daemon for Claude Code\n", daemonVersion)
@@ -250,8 +348,19 @@ func main() {
 	// graceful degradation that masked PR #203's regression for days.
 	startupGate()
 
-	dd := dataDir()
-	stopStaleMuxcoreDaemonForVersion()
+	daemonCtx, daemonCancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer daemonCancel()
+
+	daemonMode := isMuxcoreDaemonMode()
+	if !daemonMode {
+		if err := reconcileMuxcoreDaemonVersion(daemonCtx); err != nil {
+			if daemonCtx.Err() != nil {
+				return
+			}
+			fmt.Fprintf(os.Stderr, "[engram] FATAL: muxcore daemon version reconciliation failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
 
 	// Clean stale binaries from previous upgrades (.old.* files).
 	if exePath, err := os.Executable(); err == nil {
@@ -260,6 +369,20 @@ func main() {
 		}
 	}
 
+	if !daemonMode {
+		eng, err := engine.New(muxcoreShimConfig())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[engram] FATAL: muxcore shim setup failed: %v\n", err)
+			os.Exit(1)
+		}
+		if err := eng.Run(daemonCtx); err != nil && err != context.Canceled {
+			fmt.Fprintf(os.Stderr, "[engram] FATAL: muxcore shim terminated: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	dd := dataDir()
 	logger := newRootLogger()
 
 	// --- Framework wiring ------------------------------------------------
@@ -281,8 +404,6 @@ func main() {
 	// Init context is distinct from daemon context — see design.md §3.2
 	// and clarification C3 (Init ctx vs deps.DaemonCtx).
 	initCtx, initCancel := context.WithCancel(context.Background())
-	daemonCtx, daemonCancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer daemonCancel()
 
 	if err := pipeline.Start(initCtx, depsProviderFor(logger, daemonCtx)); err != nil {
 		initCancel()
@@ -291,11 +412,42 @@ func main() {
 	}
 	initCancel()
 
-	// --- Control socket --------------------------------------------------
-	// Must be started BEFORE engine.Run so that ensure-binary.js can
-	// connect immediately after the PID file appears. The socket path is
-	// ${ENGRAM_DATA_DIR}/run/engram.sock. On Windows the Start() call is a
-	// no-op (named-pipe support deferred to v4.4.0).
+	// --- muxcore engine boot ---------------------------------------------
+	// The dispatcher satisfies BOTH muxcore.SessionHandler (HandleRequest)
+	// and muxcore.ProjectLifecycle (OnProjectConnect/OnProjectDisconnect).
+	// muxcore type-asserts on the SessionHandler to detect the optional
+	// lifecycle methods — see muxcore.ProjectLifecycle docs.
+	eng, err := engine.New(muxcoreDaemonConfig(disp))
+	if err != nil {
+		logger.Error("engine.New failed", "error", err)
+		_ = pipeline.ShutdownAll(daemonCtx)
+		os.Exit(1)
+	}
+
+	// Multiple clients may race to spawn the daemon. Only the process that
+	// actually binds muxcore's control socket reaches Ready; losers must never
+	// overwrite the live daemon's version marker or product control surface.
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- eng.Run(daemonCtx)
+	}()
+	select {
+	case <-eng.Ready():
+		if eng.Mode() != engine.ModeDaemon || eng.Daemon() == nil {
+			logger.Error("muxcore engine reported ready without a live daemon", "mode", eng.Mode())
+			_ = pipeline.ShutdownAll(daemonCtx)
+			os.Exit(1)
+		}
+	case err := <-runErr:
+		logger.Error("engine.Run terminated before daemon readiness", "error", err)
+		_ = pipeline.ShutdownAll(daemonCtx)
+		os.Exit(1)
+	}
+	writeMuxcoreDaemonVersionMarker(logger)
+
+	// --- Product control socket -----------------------------------------
+	// Start only after muxcore readiness so losing daemon-spawn candidates do
+	// not publish a stale PID or contend for Engram's restart control surface.
 	sockPath := control.SocketPath(dd)
 	pidPath := control.PIDPath(dd)
 	if err := os.MkdirAll(control.SocketDir(dd), 0o700); err != nil {
@@ -317,50 +469,20 @@ func main() {
 		logger,
 	)
 	if err := ctrlListener.Start(); err != nil {
-		// Non-fatal: daemon continues without graceful-restart support.
+		// Non-fatal: daemon continues without the legacy product control socket.
 		logger.Warn("control socket start failed — graceful-restart unavailable",
 			"error", err,
 		)
 	}
 	defer ctrlListener.Close()
-	writeMuxcoreDaemonVersionMarker(logger)
 
-	// --- muxcore engine boot ---------------------------------------------
-	// The dispatcher satisfies BOTH muxcore.SessionHandler (HandleRequest)
-	// and muxcore.ProjectLifecycle (OnProjectConnect/OnProjectDisconnect).
-	// muxcore type-asserts on the SessionHandler to detect the optional
-	// lifecycle methods — see muxcore.ProjectLifecycle docs.
-	eng, err := engine.New(engine.Config{
-		Name:           "engram",
-		Persistent:     true,
-		SessionHandler: disp,
-		DaemonFlag:     muxcoreDaemonFlag,
-		SkipSnapshot:   true,
-		// Opt in to muxcore's daemon registry (v0.26+) so the shared mcp-mux
-		// operator point can discover the engram engine via mux_engines /
-		// mux_list(engine_name:"engram"). Read-only: ListOwners only; no
-		// cross-engine stop/restart/update is advertised. Nil would be the
-		// opt-out zero value that preserves pre-registry behavior.
-		Registry: &muxregistry.Config{
-			ProductName:    "engram",
-			MuxcoreVersion: "v0.26.1",
-			Capabilities:   muxregistry.Capabilities{ListOwners: true},
-		},
-	})
-	if err != nil {
-		logger.Error("engine.New failed", "error", err)
-		_ = pipeline.ShutdownAll(daemonCtx)
-		os.Exit(1)
-	}
-
-	// --- Serverevents bridge -----------------------------------------------
+	// --- Serverevents bridge ---------------------------------------------
 	// Start the bridge that consumes engram-server's ProjectEvents gRPC stream
 	// and fans out OnProjectRemoved to all ProjectRemovalAware modules. The
 	// bridge runs in the background for the daemon's lifetime.
 	//
-	// The bridge is started after the muxcore engine is ready (modules are
-	// initialised) and stopped before pipeline.ShutdownAll so that in-flight
-	// fan-outs complete before modules begin tearing down.
+	// The bridge is started after the muxcore engine is ready and stopped before
+	// pipeline.ShutdownAll so in-flight fan-outs complete before module teardown.
 	//
 	// If ENGRAM_SERVER_URL is not set the bridge logs a warning and is a no-op.
 	// The dispatcher satisfies serverevents.ProjectTracker via its
@@ -372,7 +494,7 @@ func main() {
 
 	logger.Info("engram daemon ready", "version", daemonVersion)
 
-	if err := eng.Run(daemonCtx); err != nil && err != context.Canceled {
+	if err := <-runErr; err != nil && err != context.Canceled {
 		logger.Error("engine.Run terminated", "error", err)
 		sevBridge.Stop()
 		_ = pipeline.ShutdownAll(daemonCtx)
@@ -386,12 +508,12 @@ func main() {
 	}
 }
 
-// handleGracefulRestart executes the full graceful-restart sequence:
+// handleGracefulRestart executes the retained explicit graceful-restart sequence:
 //  1. Log INFO
 //  2. Drain — stop accepting new tool calls (5 s sleep)
 //  3. SnapshotAll — persist module state
 //  4. ShutdownAll — clean module shutdown
-//  5. Check for a .new binary written by ensure-binary.js
+//  5. Check for an operator-provided <current executable>.new binary
 //  6. upgrade.Swap(currentExe, newExe) — atomic rename
 //  7. execReplace — exec-in-place (Unix) or spawn+exit (Windows)
 //

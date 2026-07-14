@@ -1,23 +1,17 @@
 //go:build windows
 
-// Package control — Windows stub for the control socket listener.
+// Package control — Windows stub for the legacy product control socket.
 //
-// Windows named-pipe support (\\.\pipe\engram-<pid>) is deferred to v4.4.0
-// because go-winio is not a current transitive dependency of the engram module.
-// Adding it is a non-trivial go.mod change that requires vendor/CI alignment.
+// The legacy socket has no named-pipe implementation on Windows. Current plugin
+// auto-upgrade does not use this channel: ensure-binary.js installs atomically,
+// and normal Engram launch delegates live-daemon replacement to muxcore
+// RestartWithSuccessor.
 //
-// Known deviation: on Windows, graceful-restart commands from ensure-binary.js
-// cannot be delivered in-process. The plugin upgrade flow still works —
-// ensure-binary.js detects the missing socket gracefully (reads the PID file,
-// finds no socket, exits 0) and the daemon will be cleanly restarted by the
-// supervisor on the next Claude Code session start.
-//
-// Tracking issue: filed as follow-up for Phase 10 / v4.4.0.
+// Start intentionally remains non-fatal so daemon startup is portable.
 package control
 
-// Start is a no-op on Windows. A WARN log is emitted so the operator knows
-// graceful-restart via control socket is unavailable on this platform.
+// Start is a no-op on Windows. A WARN identifies the unavailable legacy command.
 func (l *Listener) Start() error {
-	l.logger.Warn("control socket: Windows named-pipe support deferred to v4.4.0 — graceful-restart via socket unavailable on this platform")
+	l.logger.Warn("control socket: legacy graceful-restart unavailable on Windows; normal muxcore update flow unaffected")
 	return nil
 }
