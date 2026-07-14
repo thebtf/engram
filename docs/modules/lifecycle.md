@@ -2,7 +2,7 @@
 
 This document covers the lifecycle pipeline phases, the Init-context vs
 DaemonCtx split, panic responsibility, control socket authorization, and the
-graceful-restart sequence introduced in Phase 8 (closes #71).
+retained explicit graceful-restart sequence introduced in Phase 8 (closes #71).
 
 ## Init Context vs DaemonCtx (clarification C3)
 
@@ -79,24 +79,24 @@ This design is intentional: framework recovery for unmanaged goroutines would
 hide goroutine leaks and make debugging harder. Module authors bear the
 responsibility because they control the goroutine's launch point.
 
-## Control Socket Authorization (clarification C4)
+## Legacy Control Socket Authorization (clarification C4)
 
-The `graceful-restart` command is received over the daemon's control socket.
-In v4.3.0, engram owns the control socket directly (not muxcore, which does
-not yet expose this API). Authorization is determined entirely by the
-**filesystem permissions on the socket file**:
+The daemon retains a `graceful-restart` command on Engram's product control
+socket for explicit operator use. It is not part of current plugin auto-upgrade:
+`ensure-binary.js` installs the selected binary atomically, and the next normal
+launch delegates live-daemon replacement to muxcore `RestartWithSuccessor`.
 
-- **Linux / macOS:** Unix domain socket at a path under `$XDG_RUNTIME_DIR` or
-  `$DATA_DIR`. Default permissions `0600` (owner read/write only).
-- **Windows:** Named pipe with ACL restricting access to the daemon's running
-  user.
+Authorization for the legacy socket is determined entirely by its filesystem
+permissions:
 
-The daemon adds no additional authentication layer. Any process that can open
-the socket is authorized. On multi-user systems, ensure the socket path and
-permissions are configured so that only the operator's account can reach it.
+- **Linux / macOS:** Unix domain socket under `$XDG_RUNTIME_DIR` or `$DATA_DIR`,
+  with owner-only permissions (`0600`).
+- **Windows:** no product-socket listener is started; the current muxcore update
+  flow does not depend on one.
 
-This is clarification C4 from `spec.md`. A richer per-command authorization
-model is deferred to a future release.
+Any process that can open the Unix socket is authorized. On multi-user systems,
+restrict the socket path to the operator account. A richer per-command
+authorization model is not implemented.
 
 ## Pipeline Phases
 
@@ -135,10 +135,10 @@ Reverse order on shutdown and snapshot ensures that modules with dependencies
 on others are cleaned up first (dependency graph flows in registration order;
 teardown is the inverse).
 
-## Graceful Restart Sequence (Phase 8, closes #71)
+## Legacy Explicit Graceful Restart Sequence (Phase 8, closes #71)
 
-When the `graceful-restart` command arrives on the control socket, the daemon
-executes the full drain → snapshot → shutdown → swap → exec chain:
+When an operator explicitly sends `graceful-restart` on the product control
+socket, the retained handler executes this sequence:
 
 ```
 1.  Drain (5-second deadline)
@@ -149,23 +149,18 @@ executes the full drain → snapshot → shutdown → swap → exec chain:
          per-module snapshot.bin files + MANIFEST.json
 3.  ShutdownAll (reverse order)
          modules release resources, close connections
-4.  upgrade.Swap
-         new binary (downloaded by ensure-binary.js) atomically replaces
-         the running binary
-         current binary moved to <path>.old.<pid> for rollback
-5.  exec new binary
+4.  Look for <current executable>.new
+         this file must be supplied explicitly; ensure-binary.js does not write it
+         if absent, exit cleanly for the next launcher to restart
+5.  upgrade.Swap and exec the replacement
+         current binary moves to <path>.old.<pid> for rollback
          new process starts with Init → Restore → Run
-         modules transparently read their snapshot.bin and resume state
-         sessions reconnect via muxcore session topology snapshot
 ```
 
-On startup, the new binary calls `upgrade.CleanStale()` to remove any
-`.old.<pid>` files from previous upgrades.
-
-If `upgrade.Swap` fails (step 4), the old binary remains in place, the daemon
-continues serving requests, and an error log with a non-zero exit code is
-emitted. Manual operator intervention is required (rename `.old.<pid>` back or
-re-download). Automatic rollback is a Phase B candidate.
+On startup, the binary calls `upgrade.CleanStale()` to remove old backup files.
+If `upgrade.Swap` fails, the process exits non-zero for supervisor recovery.
+This legacy command is independent of the normal muxcore
+`RestartWithSuccessor` plugin update path.
 
 ### Snapshot Storage Layout
 

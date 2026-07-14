@@ -21,7 +21,7 @@ existing MCP→gRPC routing as its first tenant (`engramcore` module). There are
 
 | Improvement | Details |
 |---|---|
-| Graceful restart | Issue #71 closed. Plugin auto-upgrade via `ensure-binary.js` now triggers a clean drain → snapshot → shutdown → binary swap → re-exec cycle. Active CC sessions reconnect transparently. |
+| Graceful restart | Issue #71 closed. Current plugin auto-upgrade atomically swaps the binary. The next normal launch delegates any live-daemon replacement to muxcore `RestartWithSuccessor`; `ensure-binary.js` no longer owns a separate restart path. |
 | Snapshot persistence | Each module persists opaque state across restarts via versioned `SnapshotEnvelope` files. Forward-compat: unknown future versions degrade to empty-state restore with a WARN log rather than aborting startup. |
 | OpenTelemetry metrics | `engram_handletool_duration_ms` histogram, `engram_handletool_errors_total` counter, and `engram_module_init_duration_ms` histogram are exported when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. No-op by default. |
 | Structured logging | JSON by default; `ENGRAM_LOG_FORMAT=text` for development. Canonical fields: `module`, `tool`, `session_id`, `project_id`, `duration_ms`, `error_code`. |

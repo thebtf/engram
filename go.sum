@@ -112,6 +112,8 @@ github.com/thebtf/aimux/loom v0.1.0 h1:6bHpsBECMWffIPQ7tfvC+ov3EbCX1qW0HvUSOSAP7
 github.com/thebtf/aimux/loom v0.1.0/go.mod h1:RhaAm49BssZqO4Ziqt0LJgV2WUpMim7V/xnZaimCpWk=
 github.com/thebtf/mcp-mux/muxcore v0.26.1 h1:spw/63Jmj+hYOhWJI/k7Y4/Zr3Q+3q82NTFAPHeBr2Y=
 github.com/thebtf/mcp-mux/muxcore v0.26.1/go.mod h1:HiiAKxICByYnkWnG06roc0bjDGdrG3UhYgtW1eLTFDI=
+github.com/thebtf/mcp-mux/muxcore v0.27.1 h1:z5ftlF22TRgMkiwWpou/t+vPWtvMy5qkv5jDwedg0lk=
+github.com/thebtf/mcp-mux/muxcore v0.27.1/go.mod h1:HiiAKxICByYnkWnG06roc0bjDGdrG3UhYgtW1eLTFDI=
 github.com/thejerf/suture/v4 v4.0.6 h1:QsuCEsCqb03xF9tPAsWAj8QOAJBgQI1c0VqJNaingg8=
 github.com/thejerf/suture/v4 v4.0.6/go.mod h1:gu9Y4dXNUWFrByqRt30Rm9/UZ0wzRSt9AJS6xu/ZGxU=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=

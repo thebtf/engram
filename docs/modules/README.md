@@ -205,19 +205,18 @@ Drain (stop accepting new sessions, await in-flight HandleTool calls)
   → Socket cleanup
 ```
 
-### Graceful restart (Phase 8, closes #71)
+### Legacy explicit graceful restart (Phase 8, closes #71)
 
-The Node shim (`ensure-binary.js`) sends `graceful-restart` over the daemon's
-control socket. The daemon then:
+The daemon retains a `graceful-restart` command on its product control socket
+for explicit operator use on supported Unix platforms. Normal plugin
+auto-upgrade does not send this command: `ensure-binary.js` installs the
+selected binary atomically, and the next normal Engram launch delegates any
+live-daemon replacement to muxcore `RestartWithSuccessor`.
 
-1. Drains (5-second deadline for in-flight calls)
-2. Snapshots all `Snapshotter` modules
-3. Shuts down all modules
-4. Swaps the binary (`upgrade.Swap`)
-5. Re-execs the new binary
-
-The new process runs `Init → Restore → Run`, transparently picking up
-persisted module state. See `docs/modules/lifecycle.md` for the full sequence.
+An explicit legacy command still drains, snapshots, and shuts down the modules,
+then optionally swaps an operator-provided `<current executable>.new` binary and
+re-execs it. Without a `.new` binary, the daemon exits for the next launcher to
+restart. See `docs/modules/lifecycle.md` for the retained sequence.
 
 ### Init context vs DaemonCtx (clarification C3)
 

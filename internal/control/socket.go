@@ -1,7 +1,6 @@
-// Package control implements the engram daemon's own control socket listener.
-// It provides a simple line-delimited command protocol so external clients
-// (notably ensure-binary.js) can request operations such as graceful-restart
-// without depending on muxcore internals.
+// Package control implements the Engram daemon's legacy product control socket.
+// It provides a simple line-delimited protocol for explicit operator commands,
+// independent of muxcore. The current plugin auto-upgrade path does not use it.
 //
 // # Protocol
 //
@@ -14,8 +13,7 @@
 // # Socket path
 //
 // Unix/macOS:  ${ENGRAM_DATA_DIR}/run/engram.sock
-// Windows:     listener is not started; a WARN is logged and Start returns nil.
-// Named-pipe Windows support is deferred to v4.4.0 (requires go-winio).
+// Windows:     listener is not started; the muxcore update flow does not depend on it.
 //
 // # PID file
 //
@@ -23,8 +21,8 @@
 // discovery tools can read the socket path deterministically. The PID file is
 // removed on Listener.Close.
 //
-// Design reference: tasks.md T056, Phase 8 pragmatic scope reduction
-// (muxcore v0.19.0 does not expose a control socket API).
+// Design reference: tasks.md T056, Phase 8 pragmatic scope reduction. The
+// socket remains only for legacy explicit commands.
 package control
 
 import (
