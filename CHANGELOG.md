@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.44.0] - 2026-07-15
+
+### Changed
+
+- **Operator console runtime-truth repair — Access/Graph/Settings (P0-A4).** The promoted console now renders live endpoint-backed state instead of synthesized or mustbuild placeholders across the Access, Graph, and Settings surfaces: typed transport-failure diagnosis localized at the presentation boundary (pending/empty/401/403/404/500/unreachable), graph capability classified as dormant-when-gated and never unconditionally live, named form fields, and a content-addressed reproducible evidence packet (`sourceProof` = deterministic `sha256` over the evidence-relevant source tree). Verified by 28 seam-contract tests and a 30-row Playwright hostile-accessibility matrix.
+- **Reproducible design promotion with version-bump guard (G1-R3).** The tracked design-to-console promotion path is now reproducible byte-for-byte, with a refusal guard that blocks a content change without a version bump and a deterministic `promoted_at_utc`. Version authority is unified on `2026.07.14`.
+
+### Documentation
+
+- **Route-truth front door + six-axis claim ledger (DOC-R3).** `README.md` and `docs/arch/architecture.md` are reconciled with the current runtime: a route-truth Troubleshooting table, an explicit `ENGRAM_URL` bare-origin invariant (no `/mcp`, `/sse`, or transport suffix), and an architecture tombstone that forbids resurrecting server HTTP MCP / `/sse` / Streamable-HTTP / stdio-to-SSE bridges. A tracked public decision index (`docs/DECISIONS.md`) records the release-policy decision (#17).
+
 ## [6.43.0] - 2026-07-15
 
 ### Changed

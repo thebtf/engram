@@ -1,0 +1,18 @@
+title = "engram gitleaks config"
+
+# Extend the upstream default ruleset; this file only narrows it with
+# targeted allowlists for proven false positives.
+[extend]
+useDefault = true
+
+# False positive: the word "secrets" appears in prose in the release
+# hard-stops list of docs/DECISIONS.md decision #17. The generic-api-key
+# heuristic reads the following words as a high-entropy value. This is
+# documentation, not a credential. Scoped to that exact file + phrase so a
+# real secret elsewhere in DECISIONS.md is still caught (condition = AND).
+[[allowlists]]
+description = "DECISIONS.md release hard-stops prose containing the literal word 'secrets'"
+condition = "AND"
+paths = ['''docs/DECISIONS\.md''']
+regexTarget = "match"
+regexes = ['''secrets, MAJOR/breaking''']
