@@ -433,27 +433,18 @@ When `ENGRAM_V7_PLUG_ENABLED=true` and the slice flag is enabled:
 check_system_health()
 
 # Search memories
-recall(query="authentication architecture")
-
-# Preset queries
-recall(action="preset", preset="decisions", query="caching strategy")
-
-# Check file history before editing
-recall(action="by_file", files="internal/search/hybrid.go")
+recall(action="search", project="engram", query="authentication architecture")
 
 # Store an observation
-store(content="Switched from Redis to in-memory cache for dev environments", title="Cache strategy change", tags=["architecture", "caching"])
+store(action="create", project="engram", content="Switched from Redis to in-memory cache for dev environments", title="Cache strategy change", tags=["architecture", "caching"])
 
-# Extract observations from raw content
-store(action="extract", content="<paste raw session notes or code review>")
+# Suppress a low-quality memory
+feedback(action="suppress", id=123)
 
-# Rate a memory
-feedback(action="rate", id=123, rating="useful")
+# Store a global credential
+vault(action="store", name="OPENAI_KEY", value="sk-...", scope="global")
 
-# Store a credential
-vault(action="store", name="OPENAI_KEY", value="sk-...")
-
-# Retrieve a credential
+# Retrieve a global credential
 vault(action="get", name="OPENAI_KEY")
 ```
 <!-- redoc:end:usage -->
@@ -466,7 +457,7 @@ vault(action="get", name="OPENAI_KEY")
 | Symptom | Fix |
 |---------|-----|
 | `check_system_health` shows embeddings unhealthy | Verify `ENGRAM_EMBEDDING_BASE_URL` and API key. The circuit breaker auto-recovers after transient failures. |
-| Search returns no results | Check that observations exist: `recall(action="preset", preset="decisions")`. Verify embeddings are healthy. |
+| Search returns no results | Check that observations exist: `recall(action="search", project="engram", query="decisions")`. Verify embeddings are healthy. |
 | MCP connection refused | Confirm server is running: `curl http://your-server:37777/health`. Check `ENGRAM_URL` in your environment. |
 | Vault returns "encryption not configured" | Set `ENGRAM_ENCRYPTION_KEY` (64-char hex string = 32 bytes AES-256). |
 | Dashboard not loading | Ensure you built with `make build` (includes dashboard). Check browser console for errors. |
