@@ -1,5 +1,5 @@
 import type { ComputedRef, Ref } from 'vue'
-import type { OperatorLoadState, OperatorSourceError } from './useOperatorApi'
+import type { OperatorDiagnosisCategory, OperatorLoadState, OperatorSourceError } from './useOperatorApi'
 import {
   emptyState,
   endpointEvidence,
@@ -7,6 +7,7 @@ import {
   gatedState,
   liveState,
   operatorApiUrl,
+  operatorErrorDiagnosis,
   operatorFetchJson,
   pendingState,
 } from './useOperatorApi'
@@ -139,6 +140,8 @@ export interface OperatorGraphPathResult {
 
 export interface GraphMutationError {
   status?: number
+  /** Typed transport diagnosis for locale-key mapping at the presentation boundary. */
+  category?: OperatorDiagnosisCategory
   code: string
   endpoint: string
   method: string
@@ -171,15 +174,17 @@ export interface DeleteGraphNodeInput {
 
 class GraphApiError extends Error {
   readonly status?: number
+  readonly category: OperatorDiagnosisCategory
   readonly code: string
   readonly endpoint: string
   readonly method: string
   readonly retryable: boolean
 
-  constructor(meta: GraphMutationError & { retryable: boolean }) {
+  constructor(meta: GraphMutationError & { category: OperatorDiagnosisCategory; retryable: boolean }) {
     super(meta.message)
     this.name = 'GraphApiError'
     this.status = meta.status
+    this.category = meta.category
     this.code = meta.code
     this.endpoint = meta.endpoint
     this.method = meta.method
@@ -212,6 +217,7 @@ function graphErrorFromThrown(error: unknown, fallback: Omit<GraphMutationError,
   if (error instanceof GraphApiError) {
     return {
       status: error.status,
+      category: error.category,
       code: error.code,
       endpoint: error.endpoint,
       method: error.method,
@@ -221,6 +227,7 @@ function graphErrorFromThrown(error: unknown, fallback: Omit<GraphMutationError,
 
   return {
     ...fallback,
+    category: 'unreachable',
     code: 'graph_request_failed',
     message: error instanceof Error ? error.message : String(error),
   }
@@ -230,6 +237,7 @@ function graphSourceError(error: unknown, fallback: Omit<OperatorSourceError, 'm
   if (error instanceof GraphApiError) {
     return {
       message: error.message,
+      category: error.category,
       status: error.status,
       source: fallback.source,
       path: error.endpoint,
@@ -240,6 +248,7 @@ function graphSourceError(error: unknown, fallback: Omit<OperatorSourceError, 'm
 
   return {
     message: error instanceof Error ? error.message : String(error),
+    category: 'unreachable',
     source: fallback.source,
     path: fallback.path,
     method: fallback.method,
@@ -257,6 +266,7 @@ async function fetchGraphJson<T>(path: string, init: RequestInit = {}): Promise<
     })
   } catch (error) {
     throw new GraphApiError({
+      category: 'unreachable',
       code: 'graph_request_failed',
       endpoint: path,
       method,
@@ -276,13 +286,14 @@ async function fetchGraphJson<T>(path: string, init: RequestInit = {}): Promise<
       }
     }
     const code = payload?.error?.code || 'graph_request_failed'
-    const message = payload?.error?.message || compactText(text) || `${response.status} ${response.statusText} for ${path}`
+    const category = operatorErrorDiagnosis(response.status)
     throw new GraphApiError({
       status: response.status,
+      category,
       code,
       endpoint: path,
       method,
-      message,
+      message: `${method} ${path} failed with status ${response.status}`,
       retryable: isRetryableStatus(response.status),
     })
   }
@@ -309,6 +320,7 @@ function mapNode(row: ApiGraphNode): OperatorGraphNode {
 function parseNodes(payload: ApiGraphNodesResponse, path: string): OperatorGraphNode[] {
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.nodes)) {
     throw new GraphApiError({
+      category: 'invalid-response',
       code: 'invalid_graph_payload',
       endpoint: path,
       method: 'GET',
@@ -339,6 +351,7 @@ function mapEdge(row: ApiGraphEdge): OperatorGraphEdge {
 function parseEdges(payload: ApiGraphEdgesResponse, path: string): OperatorGraphEdge[] {
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.edges)) {
     throw new GraphApiError({
+      category: 'invalid-response',
       code: 'invalid_graph_payload',
       endpoint: path,
       method: 'GET',
@@ -367,6 +380,7 @@ function parseTraverse(payload: ApiGraphTraverseResponse | null | undefined, pat
   }
   if (typeof payload !== 'object') {
     throw new GraphApiError({
+      category: 'invalid-response',
       code: 'invalid_graph_payload',
       endpoint: path,
       method: 'GET',
@@ -379,6 +393,7 @@ function parseTraverse(payload: ApiGraphTraverseResponse | null | undefined, pat
   }
   if (!Array.isArray(payload.results)) {
     throw new GraphApiError({
+      category: 'invalid-response',
       code: 'invalid_graph_payload',
       endpoint: path,
       method: 'GET',
@@ -395,6 +410,7 @@ function parsePath(payload: ApiGraphPathResponse | null | undefined, path: strin
   }
   if (typeof payload !== 'object') {
     throw new GraphApiError({
+      category: 'invalid-response',
       code: 'invalid_graph_payload',
       endpoint: path,
       method: 'GET',
@@ -405,6 +421,7 @@ function parsePath(payload: ApiGraphPathResponse | null | undefined, path: strin
   const rawPath = payload.path == null ? [] : payload.path
   if (!Array.isArray(rawPath)) {
     throw new GraphApiError({
+      category: 'invalid-response',
       code: 'invalid_graph_payload',
       endpoint: path,
       method: 'GET',
@@ -438,13 +455,14 @@ export function useOperatorGraph(): {
   connectedEdges: OperatorGraphEdge[]
   selectedNodeID: Ref<string | null>
   nodesState: ComputedRef<OperatorLoadState<OperatorGraphNode[]>>
+  hasProvenSnapshot: ComputedRef<boolean>
   edgesState: ComputedRef<OperatorLoadState<OperatorGraphEdge[]>>
   traverseResults: Ref<OperatorGraphTraverseStep[]>
   traverseBusy: Ref<boolean>
-  traverseError: Ref<string | null>
+  traverseError: Ref<GraphMutationError | null>
   pathResult: Ref<OperatorGraphPathResult | null>
   pathBusy: Ref<boolean>
-  pathError: Ref<string | null>
+  pathError: Ref<GraphMutationError | null>
   lastMutationError: Ref<GraphMutationError | null>
   refresh: () => Promise<void>
   refreshConnectedEdges: (nodeID?: string | null) => Promise<void>
@@ -463,16 +481,18 @@ export function useOperatorGraph(): {
   const selectedProject = useState<string>('live:graph:selected-project', () => '')
   const selectedNodeID = useState<string | null>('live:graph:selected-node-id', () => null)
   const nodesStateRef = useState<OperatorLoadState<OperatorGraphNode[]>>('live:graph:nodes:state', () => pendingState(nodesEvidence, nodesRows.value))
+  const hasProvenSnapshotValue = useState<boolean>('live:graph:has-proven-snapshot', () => false)
   const edgesStateRef = useState<OperatorLoadState<OperatorGraphEdge[]>>('live:graph:edges:state', () => emptyState(edgesEvidence, edgesRows.value))
   const traverseResults = useState<OperatorGraphTraverseStep[]>('live:graph:traverse-results', () => [])
   const traverseBusy = useState<boolean>('live:graph:traverse-busy', () => false)
-  const traverseError = useState<string | null>('live:graph:traverse-error', () => null)
+  const traverseError = useState<GraphMutationError | null>('live:graph:traverse-error', () => null)
   const pathResult = useState<OperatorGraphPathResult | null>('live:graph:path-result', () => null)
   const pathBusy = useState<boolean>('live:graph:path-busy', () => false)
-  const pathError = useState<string | null>('live:graph:path-error', () => null)
+  const pathError = useState<GraphMutationError | null>('live:graph:path-error', () => null)
   const lastMutationError = useState<GraphMutationError | null>('live:graph:last-mutation-error', () => null)
 
   const nodesState = computed(() => nodesStateRef.value)
+  const hasProvenSnapshot = computed(() => hasProvenSnapshotValue.value)
   const edgesState = computed(() => edgesStateRef.value)
 
   async function refreshConnectedEdges(nodeID = selectedNodeID.value) {
@@ -526,6 +546,7 @@ export function useOperatorGraph(): {
         replaceArray(nodesRows.value, [])
         replaceArray(edgesRows.value, [])
         nodesStateRef.value = emptyState(nodesEvidence, nodesRows.value)
+        hasProvenSnapshotValue.value = true
         edgesStateRef.value = emptyState(edgesEvidence, edgesRows.value)
         return
       }
@@ -538,6 +559,7 @@ export function useOperatorGraph(): {
         selectedNodeID.value = nodesRows.value[0]?.id || null
       }
       nodesStateRef.value = nodes.length ? liveState(nodesEvidence, nodesRows.value) : emptyState(nodesEvidence, nodesRows.value)
+      hasProvenSnapshotValue.value = true
       await refreshConnectedEdges(selectedNodeID.value)
     } catch (error) {
       const mapped = graphSourceError(error, {
@@ -641,7 +663,7 @@ export function useOperatorGraph(): {
       const payload = await fetchGraphJson<ApiGraphTraverseResponse>(path)
       replaceArray(traverseResults.value, parseTraverse(payload, path))
     } catch (error) {
-      traverseError.value = graphErrorFromThrown(error, { endpoint: '/api/graph/traverse', method: 'GET', status: undefined }).message
+      traverseError.value = graphErrorFromThrown(error, { endpoint: '/api/graph/traverse', method: 'GET', status: undefined })
       replaceArray(traverseResults.value, [])
     } finally {
       traverseBusy.value = false
@@ -661,7 +683,7 @@ export function useOperatorGraph(): {
       const payload = await fetchGraphJson<ApiGraphPathResponse>(path)
       pathResult.value = parsePath(payload, path)
     } catch (error) {
-      pathError.value = graphErrorFromThrown(error, { endpoint: '/api/graph/find-path', method: 'GET', status: undefined }).message
+      pathError.value = graphErrorFromThrown(error, { endpoint: '/api/graph/find-path', method: 'GET', status: undefined })
       pathResult.value = null
     } finally {
       pathBusy.value = false
@@ -677,6 +699,7 @@ export function useOperatorGraph(): {
     connectedEdges: edgesRows.value,
     selectedNodeID,
     nodesState,
+    hasProvenSnapshot,
     edgesState,
     traverseResults,
     traverseBusy,

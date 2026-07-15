@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { operatorDiagnosisKey, type OperatorSourceError } from '../composables/useOperatorApi'
 import {
   useOperatorAccess,
   type OperatorAccessInvitation,
@@ -24,6 +25,7 @@ const {
   pending,
   error,
   forbidden,
+  hasProvenSnapshot,
   refresh,
   openUser,
   closeUser,
@@ -44,18 +46,31 @@ const inviteActionID = ref<number | null>(null)
 const userActionID = ref<number | null>(null)
 const sessionActionID = ref<string | null>(null)
 const localAuthBlocked = ref(false)
+const revealedInvitationCode = ref('')
+const copyNotice = ref<'success' | 'error' | null>(null)
+const route = useRoute()
 
 const enabledProviderCount = computed(() => providers.filter((provider) => provider.enabled).length)
 const pendingInvitationCount = computed(() => invitations.filter((invite) => invite.status === 'pending').length)
 const activeSessionCount = computed(() => sessions.filter((session) => session.status === 'active').length)
 const adminCount = computed(() => roles.find((role) => role.role === 'admin')?.userCount ?? 0)
-const loadErrorMessage = computed(() => error.value?.message || null)
-const drilldownErrorMessage = computed(() => drilldownState.value.kind === 'error' ? drilldownState.value.error.message : null)
+const loadErrorMessage = computed(() => error.value ? t(operatorDiagnosisKey(error.value)) : null)
+const drilldownErrorMessage = computed(() => drilldownState.value.kind === 'error' ? t(operatorDiagnosisKey(drilldownState.value.error)) : null)
 const drilldownPending = computed(() => drilldownState.value.kind === 'pending')
 const selectedUser = computed(() => drilldown.value.user)
 const showDrilldown = computed(() => Boolean(selectedUserID.value))
-const accessLocked = computed(() => forbidden.value || localAuthBlocked.value)
-const accessHonesty = computed(() => accessLocked.value ? 'stale' : 'live')
+const accessPresentation = computed(() => {
+  if (localAuthBlocked.value || error.value?.status === 401) return 'unauthorized'
+  if (forbidden.value) return 'forbidden'
+  if (loadState.value.kind === 'pending') return 'pending'
+  if (loadState.value.kind === 'error') return hasProvenSnapshot.value ? 'stale-snapshot' : 'error'
+  return loadState.value.kind
+})
+const accessLocked = computed(() => ['unauthorized', 'forbidden', 'error'].includes(accessPresentation.value))
+const accessAvailable = computed(() => ['live', 'empty', 'stale-snapshot'].includes(accessPresentation.value))
+const accessMutationDisabled = computed(() => !['live', 'empty'].includes(accessPresentation.value) || summary.value.authDisabled)
+const accessCapability = computed(() => 'live')
+const accessRuntimeLabel = computed(() => t(`access.state.runtime.${accessPresentation.value}`))
 const currentRoleLabel = computed(() => selectedUser.value ? roleLabel(selectedUser.value.role) : '')
 
 function relativeTime(value: string | null | undefined) {
@@ -134,21 +149,42 @@ function sessionTone(session: OperatorAccessSession) {
 }
 
 function canMutate() {
-  return !summary.value.authDisabled && !accessLocked.value
+  return !accessMutationDisabled.value
 }
 
 function clearNotice() {
   notice.value = null
 }
 
-async function handleMutationFailure(message: string, status?: number) {
-  if (status === 401 || status === 403) {
+function clearInvitationReveal() {
+  revealedInvitationCode.value = ''
+  copyNotice.value = null
+}
+
+async function copyInvitationCode() {
+  if (!revealedInvitationCode.value || !navigator.clipboard?.writeText) {
+    copyNotice.value = 'error'
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(revealedInvitationCode.value)
+    copyNotice.value = 'success'
+  } catch {
+    copyNotice.value = 'error'
+  }
+}
+
+watch(() => route.fullPath, clearInvitationReveal)
+onBeforeUnmount(clearInvitationReveal)
+
+async function handleMutationFailure(error: Pick<OperatorSourceError, 'message' | 'status' | 'category'>) {
+  if (error.status === 401 || error.status === 403) {
     localAuthBlocked.value = true
     notice.value = null
     await recoverAccess()
     return
   }
-  notice.value = { kind: 'error', text: t('access.notice.error', { message }) }
+  notice.value = { kind: 'error', text: t('access.notice.error', { message: t(operatorDiagnosisKey(error)) }) }
 }
 
 async function recoverAccess() {
@@ -160,6 +196,7 @@ async function recoverAccess() {
 
 async function submitInvitation() {
   if (inviteBusy.value) return
+  clearInvitationReveal()
   const email = inviteForm.value.email.trim()
   if (!email) {
     notice.value = { kind: 'error', text: t('access.notice.inviteInvalid') }
@@ -178,10 +215,12 @@ async function submitInvitation() {
     })
     if (result.kind === 'success') {
       inviteForm.value.email = ''
+      revealedInvitationCode.value = result.data.invitation.code || ''
+      copyNotice.value = null
       notice.value = { kind: 'success', text: t('access.notice.inviteCreated') }
       return
     }
-    await handleMutationFailure(result.error.message, result.error.status)
+    await handleMutationFailure(result.error)
   } finally {
     inviteBusy.value = false
   }
@@ -193,10 +232,10 @@ async function onRevokeInvitation(invitation: OperatorAccessInvitation) {
   try {
     const result = await revokeInvitation(invitation.id, t('access.notice.inviteRevokedReason'))
     if (result.kind === 'success') {
-      notice.value = { kind: 'success', text: t('access.notice.inviteRevoked', { email: invitation.email || invitation.code }) }
+      notice.value = { kind: 'success', text: t('access.notice.inviteRevoked', { email: invitation.email || String(invitation.id) }) }
       return
     }
-    await handleMutationFailure(result.error.message, result.error.status)
+    await handleMutationFailure(result.error)
   } finally {
     inviteActionID.value = null
   }
@@ -212,7 +251,7 @@ async function onToggleUserRole(user: OperatorAccessUser) {
       notice.value = { kind: 'success', text: t('access.notice.userRoleUpdated', { email: user.email, role: roleLabel(nextRole) }) }
       return
     }
-    await handleMutationFailure(result.error.message, result.error.status)
+    await handleMutationFailure(result.error)
   } finally {
     userActionID.value = null
   }
@@ -228,7 +267,7 @@ async function onToggleUserDisabled(user: OperatorAccessUser) {
       notice.value = { kind: 'success', text: nextDisabled ? t('access.notice.userDisabled', { email: user.email }) : t('access.notice.userEnabled', { email: user.email }) }
       return
     }
-    await handleMutationFailure(result.error.message, result.error.status)
+    await handleMutationFailure(result.error)
   } finally {
     userActionID.value = null
   }
@@ -243,7 +282,7 @@ async function onRevokeSession(session: OperatorAccessSession) {
       notice.value = { kind: 'success', text: t('access.notice.sessionRevoked', { email: session.userEmail }) }
       return
     }
-    await handleMutationFailure(result.error.message, result.error.status)
+    await handleMutationFailure(result.error)
   } finally {
     sessionActionID.value = null
   }
@@ -256,22 +295,33 @@ async function selectUser(user: OperatorAccessUser) {
 </script>
 
 <template>
-  <div class="access-page">
+  <div class="access-page" :data-state="accessPresentation">
     <header class="page-head">
       <div>
         <h1>{{ t('access.title') }}</h1>
         <p>{{ t('access.subtitle') }}</p>
       </div>
-      <HonestyBadge :cls="accessHonesty" evidence="/api/access/*" />
+      <div class="runtime-state" :data-state="accessPresentation" role="status">{{ accessRuntimeLabel }}</div>
+      <HonestyBadge v-if="['live', 'empty'].includes(accessPresentation)" :cls="accessCapability" evidence="/api/access/*" />
     </header>
 
-    <section v-if="accessLocked" class="guard-panel">
-      <strong>{{ error?.status === 401 ? t('access.state.unauthorizedTitle') : t('access.state.forbiddenTitle') }}</strong>
-      <p>{{ error?.status === 401 ? t('access.state.unauthorizedBody') : t('access.state.forbiddenBody') }}</p>
+    <section v-if="accessLocked" class="guard-panel" role="alert">
+      <strong>{{ accessRuntimeLabel }}</strong>
+      <p>{{ accessPresentation === 'unauthorized' ? t('access.state.unauthorizedBody') : accessPresentation === 'forbidden' ? t('access.state.forbiddenBody') : loadErrorMessage }}</p>
+      <details v-if="error"><summary>{{ t('access.state.technicalEvidence') }}</summary><code>{{ error.method }} {{ error.path }} · {{ error.status || 'network' }}</code></details>
       <button class="tbtn" @click="recoverAccess">{{ t('access.actions.retry') }}</button>
     </section>
 
-    <template v-else>
+    <section v-else-if="accessPresentation === 'pending'" class="statebar pending" role="status">
+      <span>{{ t('access.state.pending') }}</span>
+    </section>
+
+    <template v-else-if="accessAvailable">
+      <section v-if="accessPresentation === 'stale-snapshot'" class="statebar error" role="status" data-state="stale-snapshot">
+        <span>{{ t('access.state.stale', { updatedAt: loadState.updatedAt, message: loadErrorMessage }) }}</span>
+        <details v-if="error"><summary>{{ t('access.state.technicalEvidence') }}</summary><code>{{ error.method }} {{ error.path }} · {{ error.status || 'network' }}</code></details>
+        <button class="tbtn" @click="refresh">{{ t('access.actions.retry') }}</button>
+      </section>
       <section class="access-brief">
         <div class="metric">
           <b>{{ enabledProviderCount }}</b>
@@ -301,13 +351,6 @@ async function selectUser(user: OperatorAccessUser) {
       <section v-else-if="notice" class="statebar" :data-kind="notice.kind">
         <span>{{ notice.text }}</span>
         <button class="tbtn" @click="notice = null">{{ t('common.hide') }}</button>
-      </section>
-      <section v-else-if="pending" class="statebar pending">
-        <span>{{ t('access.state.pending') }}</span>
-      </section>
-      <section v-else-if="loadErrorMessage" class="statebar error">
-        <span>{{ t('access.state.error', { message: loadErrorMessage }) }}</span>
-        <button class="tbtn" @click="refresh">{{ t('access.actions.retry') }}</button>
       </section>
 
       <div class="access-grid">
@@ -353,25 +396,35 @@ async function selectUser(user: OperatorAccessUser) {
           <form class="invite-form" @submit.prevent="submitInvitation">
             <label>
               <span>{{ t('access.invitations.form.email') }}</span>
-              <input v-model="inviteForm.email" class="input" type="email" :placeholder="t('access.invitations.form.emailPlaceholder')">
+              <input id="access-invitation-email" v-model="inviteForm.email" name="access-invitation-email" class="input" type="email" :disabled="accessMutationDisabled" :placeholder="t('access.invitations.form.emailPlaceholder')">
             </label>
             <label>
               <span>{{ t('access.invitations.form.role') }}</span>
-              <select v-model="inviteForm.role" class="select">
+              <select id="access-invitation-role" v-model="inviteForm.role" name="access-invitation-role" class="select" :disabled="accessMutationDisabled">
                 <option value="operator">{{ roleLabel('operator') }}</option>
                 <option value="admin">{{ roleLabel('admin') }}</option>
               </select>
             </label>
             <label>
               <span>{{ t('access.invitations.form.ttl') }}</span>
-              <select v-model="inviteForm.expiresInHours" class="select">
+              <select id="access-invitation-ttl" v-model="inviteForm.expiresInHours" name="access-invitation-ttl" class="select" :disabled="accessMutationDisabled">
                 <option :value="24">{{ t('access.invitations.form.ttl24') }}</option>
                 <option :value="72">{{ t('access.invitations.form.ttl72') }}</option>
                 <option :value="168">{{ t('access.invitations.form.ttl168') }}</option>
               </select>
             </label>
-            <button class="act primary" type="submit" :disabled="inviteBusy || summary.authDisabled">{{ inviteBusy ? t('access.actions.working') : t('access.invitations.form.submit') }}</button>
+            <button class="act primary" type="submit" :disabled="inviteBusy || accessMutationDisabled">{{ inviteBusy ? t('access.actions.working') : t('access.invitations.form.submit') }}</button>
           </form>
+          <div v-if="revealedInvitationCode" class="invite-reveal" role="status">
+            <strong>{{ t('access.invitations.reveal.title') }}</strong>
+            <p>{{ t('access.invitations.reveal.body') }}</p>
+            <code>{{ revealedInvitationCode }}</code>
+            <div class="reveal-actions">
+              <button class="act" type="button" @click="copyInvitationCode">{{ t('access.invitations.reveal.copy') }}</button>
+              <button class="act" type="button" @click="clearInvitationReveal">{{ t('access.invitations.reveal.dismiss') }}</button>
+            </div>
+            <p v-if="copyNotice" :data-kind="copyNotice">{{ t(`access.invitations.reveal.copy${copyNotice === 'success' ? 'Success' : 'Error'}`) }}</p>
+          </div>
           <table class="tbl">
             <thead>
               <tr>
@@ -389,8 +442,7 @@ async function selectUser(user: OperatorAccessUser) {
               </tr>
               <tr v-for="invitation in invitations" :key="invitation.id">
                 <td>
-                  <div class="row-main">{{ invitation.email || invitation.code }}</div>
-                  <div class="row-sub mono">{{ invitation.code }}</div>
+                  <div class="row-main">{{ invitation.email || '—' }}</div>
                 </td>
                 <td>{{ roleLabel(invitation.role) }}</td>
                 <td><span class="pill" :data-kind="invitationTone(invitation)">{{ invitationStatusLabel(invitation) }}</span></td>
@@ -400,7 +452,7 @@ async function selectUser(user: OperatorAccessUser) {
                 </td>
                 <td>{{ invitation.createdByEmail || '—' }}</td>
                 <td class="right">
-                  <button class="act danger" :disabled="inviteActionID === invitation.id || invitation.status !== 'pending' || summary.authDisabled" @click="onRevokeInvitation(invitation)">
+                  <button class="act danger" :disabled="inviteActionID === invitation.id || invitation.status !== 'pending' || accessMutationDisabled" @click="onRevokeInvitation(invitation)">
                     {{ inviteActionID === invitation.id ? t('access.actions.working') : t('access.actions.revoke') }}
                   </button>
                 </td>
@@ -441,10 +493,10 @@ async function selectUser(user: OperatorAccessUser) {
                 <td><span class="pill" :data-kind="user.disabled ? 'warn' : 'live'">{{ user.disabled ? t('access.users.status.disabled') : t('access.users.status.active') }}</span></td>
                 <td>{{ relativeTime(user.lastLoginAt) }}</td>
                 <td class="right actions-cell">
-                  <button class="act" :disabled="userActionID === user.id || summary.authDisabled" @click="onToggleUserRole(user)">
+                  <button class="act" :disabled="userActionID === user.id || accessMutationDisabled" @click="onToggleUserRole(user)">
                     {{ user.role === 'admin' ? t('access.actions.makeOperator') : t('access.actions.makeAdmin') }}
                   </button>
-                  <button class="act danger" :disabled="userActionID === user.id || summary.authDisabled" @click="onToggleUserDisabled(user)">
+                  <button class="act danger" :disabled="userActionID === user.id || accessMutationDisabled" @click="onToggleUserDisabled(user)">
                     {{ user.disabled ? t('access.actions.enable') : t('access.actions.disable') }}
                   </button>
                 </td>
@@ -501,7 +553,7 @@ async function selectUser(user: OperatorAccessUser) {
                 <td>{{ relativeTime(session.expiresAt) }}</td>
                 <td class="mono small">{{ session.userAgent || '—' }}</td>
                 <td class="right">
-                  <button class="act danger" :disabled="sessionActionID === session.id || session.status !== 'active' || summary.authDisabled" @click="onRevokeSession(session)">
+                  <button class="act danger" :disabled="sessionActionID === session.id || session.status !== 'active' || accessMutationDisabled" @click="onRevokeSession(session)">
                     {{ sessionActionID === session.id ? t('access.actions.working') : t('access.actions.revoke') }}
                   </button>
                 </td>
@@ -586,7 +638,7 @@ async function selectUser(user: OperatorAccessUser) {
               <ul class="stack-list">
                 <li v-if="!drilldown.invitationsCreated.length" class="empty-row">{{ t('access.drilldown.emptyInvitesCreated') }}</li>
                 <li v-for="invite in drilldown.invitationsCreated" :key="`created-${invite.id}`">
-                  <strong>{{ invite.email || invite.code }}</strong>
+                  <strong>{{ invite.email || '—' }}</strong>
                   <span>{{ invitationStatusLabel(invite) }} · {{ relativeTime(invite.createdAt) }}</span>
                 </li>
               </ul>
@@ -596,7 +648,7 @@ async function selectUser(user: OperatorAccessUser) {
               <ul class="stack-list">
                 <li v-if="!drilldown.invitationsUsed.length" class="empty-row">{{ t('access.drilldown.emptyInvitesUsed') }}</li>
                 <li v-for="invite in drilldown.invitationsUsed" :key="`used-${invite.id}`">
-                  <strong>{{ invite.email || invite.code }}</strong>
+                  <strong>{{ invite.email || '—' }}</strong>
                   <span>{{ invitationStatusLabel(invite) }} · {{ relativeTime(invite.usedAt || invite.createdAt) }}</span>
                 </li>
               </ul>
@@ -625,6 +677,10 @@ async function selectUser(user: OperatorAccessUser) {
 .page-head p { margin:0; color:var(--muted); font-size:var(--text-sm); }
 .access-brief { display:grid; grid-template-columns:repeat(4, minmax(120px, 180px)) minmax(260px, 1fr); gap:12px; }
 .metric, .brief-copy, .panel, .guard-panel, .statebar { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); }
+.invite-reveal { display:grid; gap:8px; margin:0 16px 16px; padding:14px; border:1px solid color-mix(in oklab,var(--accent),transparent 48%); border-radius:var(--r-sm); background:color-mix(in oklab,var(--accent),transparent 92%); }
+.invite-reveal p { margin:0; color:var(--fg-2); font-size:var(--text-sm); }
+.invite-reveal code { overflow-wrap:anywhere; font-family:var(--font-mono); color:var(--fg); }
+.reveal-actions { display:flex; gap:8px; flex-wrap:wrap; }
 .metric, .brief-copy, .guard-panel, .statebar { padding:14px; }
 .metric { display:flex; flex-direction:column; gap:3px; }
 .metric b { font-family:var(--font-mono); font-size:var(--text-xl); line-height:1; color:var(--fg); }

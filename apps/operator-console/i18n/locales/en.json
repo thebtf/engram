@@ -22,6 +22,18 @@
     "mustbuild": "must build"
   },
 
+  "errors": {
+    "diagnosis": {
+      "unauthorized": "Sign in again to continue.",
+      "forbidden": "Your current session does not have access to this surface.",
+      "endpoint-missing": "This server endpoint is unavailable.",
+      "request-rejected": "The Engram server rejected this request.",
+      "server-unavailable": "The Engram server is unavailable.",
+      "unreachable": "The Engram server could not be reached.",
+      "invalid-response": "The Engram server returned an unreadable response."
+    }
+  },
+
   "switchRow": {
     "restartRequired": "restart"
   },
@@ -56,6 +68,7 @@
     "authLocked": "login required",
     "authUnknown": "session unknown",
     "online": "online",
+    "backend": { "ready": "console reachable · server ready", "degraded": "console reachable · server degraded", "unavailable": "console reachable · server unavailable" },
     "postgres": "PostgreSQL 17 · pgvector",
     "statusDegradation": "degradation",
     "statusNoise": "noise",
@@ -563,13 +576,16 @@
       "body": "Trusted OIDC proxies configured: {proxies}. Invite use is single-use and session revoke is a soft, audited lifecycle event."
     },
     "state": {
+      "runtime": { "pending": "pending", "live": "live", "empty": "empty", "gated": "gated", "unauthorized": "unauthorized", "forbidden": "forbidden", "error": "error", "stale-snapshot": "stale-snapshot" },
       "pending": "Loading access surface…",
       "error": "Could not load access surface: {message}",
+      "stale": "Showing the last proven access snapshot from {updatedAt}; refresh failed: {message}",
       "forbiddenTitle": "Admin browser session required",
       "forbiddenBody": "This surface returns 403 until the request is authenticated as a browser session admin.",
       "unauthorizedTitle": "Browser session required",
       "unauthorizedBody": "Your browser session is missing, expired, or revoked. Sign in again before using this surface.",
-      "authDisabled": "Auth-disabled mode is active. Read the current posture, but invite/session lifecycle mutations stay intentionally constrained."
+      "authDisabled": "Auth-disabled mode is active. Read the current posture, but invite/session lifecycle mutations stay intentionally constrained.",
+      "technicalEvidence": "Technical summary"
     },
     "actions": {
       "refresh": "Refresh",
@@ -628,7 +644,15 @@
         "expired": "Expired",
         "revoked": "Revoked"
       },
-      "empty": "No invitations recorded yet."
+    "empty": "No invitations recorded yet.",
+    "reveal": {
+      "title": "Copy this invitation now",
+      "body": "This code is shown once and will not appear in invitation history.",
+      "copy": "Copy code",
+      "copySuccess": "Code copied.",
+      "copyError": "Could not copy the code. Copy it manually before closing this notice.",
+      "dismiss": "Dismiss"
+    }
     },
     "users": {
       "title": "Users",
@@ -749,12 +773,17 @@
       "project": "Graph project"
     },
     "state": {
+      "runtime": { "pending": "pending", "live": "live", "empty": "empty", "gated": "gated", "unauthorized": "unauthorized", "forbidden": "forbidden", "error": "error", "stale-snapshot": "stale-snapshot" },
       "pending": "Loading graph data…",
       "error": "Could not load graph data: {message}",
+      "stale": "Showing the last proven graph snapshot from {updatedAt}; refresh failed: {message}",
       "empty": "This project has no graph nodes yet.",
       "gated": "Graph is disabled by flag {flag}.",
       "live": "Loaded {count} nodes from the live graph.",
-      "retry": "Retry"
+      "retry": "Retry",
+      "unauthorized": "Sign in again to read the graph.",
+      "forbidden": "Your current session cannot read the graph.",
+      "technicalEvidence": "Technical summary"
     },
     "errors": {
       "title": "Typed graph error",
@@ -1447,6 +1476,14 @@
       "aria": "Server settings",
       "kicker": "Settings",
       "close": "Close settings",
+      "access": {
+        "title": "Access administration",
+        "body": "Manage sign-in providers, invitations, people, roles, sessions, and audit history on the Access page. A separate policy editor is not available.",
+        "action": "Open Access",
+        "detailsTitle": "Implementation details",
+        "detailsBody": "The Access page is the live administration surface; this Settings tab does not provide a separate policy editor."
+      },
+      "evidence": { "title": "Implementation details" },
       "groups": {
         "basic": "Basic",
         "models": "Models",

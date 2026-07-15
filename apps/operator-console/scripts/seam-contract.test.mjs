@@ -15,6 +15,10 @@ const overviewComposablePath = join(root, 'composables', 'useOperatorOverview.ts
 const overviewPagePath = join(root, 'pages', 'index.vue')
 const memoryPagePath = join(root, 'pages', 'memory.vue')
 const settingsModalPath = join(root, 'components', 'SettingsModal.vue')
+const defaultLayoutPath = join(root, 'layouts', 'default.vue')
+const navPath = join(root, 'composables', 'useNav.ts')
+const accessPagePath = join(root, 'pages', 'access.vue')
+const accessComposablePath = join(root, 'composables', 'useOperatorAccess.ts')
 const issuesPagePath = join(root, 'pages', 'issues.vue')
 const queuePagePath = join(root, 'pages', 'queue.vue')
 const queueComposablePath = join(root, 'composables', 'useOperatorQueue.ts')
@@ -71,6 +75,48 @@ function functionBody(source, name) {
   assert.fail(`${name} body is not balanced`)
 }
 
+test('responsive primary navigation is an accessible <=980px off-canvas control', () => {
+  const source = read(defaultLayoutPath)
+
+  assert.match(source, /@media \(max-width:980px\)/, 'off-canvas navigation must activate at the required 980px breakpoint')
+  assert.match(source, /\.topbar \.mobile-menu-button \{ display:inline-flex; \}/, 'the mobile trigger must override the desktop selector')
+  assert.match(source, /:aria-expanded="mobileNavOpen"/, 'the trigger must expose its open state')
+  assert.match(source, /aria-controls="primary-navigation"/, 'the trigger must identify the controlled navigation')
+  assert.match(source, /function closeMobileNav\(/, 'the shared close path must exist')
+  assert.match(source, /event\.key === 'Escape'[\s\S]*closeMobileNav\(\)/, 'Escape must close the drawer')
+  assert.match(source, /@click="closeMobileNav"/, 'route and scrim interactions must close the drawer')
+  assert.match(source, /mobileMenuButton\.value\?\.focus\(\)/, 'closing must restore trigger focus')
+  assert.match(source, /:inert="compactViewport && !mobileNavOpen"/, 'hidden mobile navigation must not remain interactable')
+  assert.match(source, /\.topbar-secondary \{ display:none; \}/, 'secondary topbar controls must not clip the mobile menu and search')
+  assert.match(source, /onBeforeUnmount\(\(\) => \{[\s\S]*document\.body\.style\.overflow = previousBodyOverflow\.value/, 'layout teardown must restore body scroll when the drawer is open')
+})
+
+test('access read state cannot retain invitation codes', () => {
+  const page = read(accessPagePath)
+  const composable = read(accessComposablePath)
+
+  assert.doesNotMatch(composable, /code:\s*row\.code/, 'ordinary access mapping must discard API invitation codes')
+  assert.doesNotMatch(page, /\{\{\s*invitation\.code\s*\}\}/, 'invitation table must not render stored codes')
+  assert.doesNotMatch(page, /\{\{\s*invite\.code\s*\}\}/, 'drill-down must not render stored codes')
+  assert.match(page, /revealedInvitationCode/, 'create response may use an isolated one-time reveal')
+  assert.match(page, /watch\(\(\) => route\.fullPath, clearInvitationReveal\)/, 'one-time reveal must clear on navigation')
+  assert.match(page, /onBeforeUnmount\(clearInvitationReveal\)/, 'one-time reveal must clear on teardown')
+  assert.match(page, /async function submitInvitation\(\) \{[\s\S]*clearInvitationReveal\(\)/, 'a new invitation attempt must clear a previous one-time reveal')
+  assert.match(page, /copyNotice/, 'copy outcomes must have bounded feedback')
+})
+
+test('navigation has no static queue or issue counts and derives gated state from live surfaces', () => {
+  const nav = read(navPath)
+
+  assert.doesNotMatch(nav, /count:\s*(?:7|304)/, 'navigation must not ship stale queue or issue counts')
+  assert.match(nav, /useOperatorQueue\(\)/, 'queue classification must follow its live surface')
+  assert.match(nav, /operatorFetchJson<\{ flags\?: Record<string, boolean> \}>\('\/api\/flags'/, 'graph classification must follow its runtime flag')
+  assert.match(nav, /'live:nav:graph-class', \(\) => 'stale'/, 'graph must start neutral until its runtime flag is known')
+  assert.match(nav, /if \(kind === 'mustbuild'\) return 'mustbuild'/, 'queue must preserve mustbuild state')
+  assert.match(nav, /if \(kind === 'live' \|\| kind === 'empty'\) return 'live'/, 'only proven live or empty queue states may render live')
+  assert.doesNotMatch(nav, /id: 'books',[\s\S]*cls: 'mustbuild'/, 'Books is a live surface')
+})
+
 test('load-state union covers every honest operator surface state', () => {
   const source = read(seamPath)
   const required = ['pending', 'error', 'empty', 'gated', 'stale', 'mustbuild', 'live']
@@ -103,7 +149,7 @@ test('fetch seam reads bodies safely instead of throwing browser-native JSON par
   const source = read(seamPath)
   const compatibility = read(compatibilityPath)
   const operatorBody = functionBody(source, 'operatorFetchJson')
-  const bodyDetailBody = functionBody(source, 'bodyDetail')
+  const diagnosisBody = functionBody(source, 'operatorErrorDiagnosis')
   const responseReaderBody = functionBody(source, 'readOperatorResponseText')
   const compatibilityBody = functionBody(compatibility, 'fetchJson')
 
@@ -119,9 +165,10 @@ test('fetch seam reads bodies safely instead of throwing browser-native JSON par
   assert.match(operatorBody, /if\s*\(\s*!text\.trim\(\)\s*\)/, 'operatorFetchJson must tolerate empty 200 JSON bodies')
   assert.match(operatorBody, /JSON\.parse\(text\)/, 'operatorFetchJson must parse JSON after the empty-body guard')
   assert.doesNotMatch(operatorBody, /response\.json\(\)/, 'operatorFetchJson must not throw native Response.json parse errors')
-  assert.match(operatorBody, /bodyDetail\(text\)/, 'HTTP errors must include response body details when present')
-  assert.match(bodyDetailBody, /HTML error response/, 'HTML error pages must be summarized instead of rendered into the operator UI')
-  assert.match(operatorBody, /Invalid JSON from/, 'invalid JSON must be reported with endpoint context')
+  assert.match(operatorBody, /operatorErrorDiagnosis\(response\.status\)/, 'HTTP errors must carry a typed operator diagnosis')
+  assert.match(diagnosisBody, /['"]server-unavailable['"]/, '5xx responses must classify as the typed server-unavailable category')
+  assert.doesNotMatch(diagnosisBody, /Engram server/, 'transport seam must not return English operator prose')
+  assert.doesNotMatch(operatorBody, /bodyDetail\(text\)/, 'response bodies must not become primary operator copy')
 })
 
 test('mutation seam supports success, rollback, refresh, and honest mustbuild unsupported actions', () => {
@@ -195,6 +242,8 @@ test('settings models tab is live read-only model health, not a fake model edito
   assert.match(settingsModalSource, /GET \/api\/model-health/, 'Models body must show model-health endpoint evidence')
   assert.match(settingsModalSource, /GET \/api\/models/, 'Models body must show model registry endpoint evidence')
   assert.match(settingsModalSource, /GET \/api\/model-credentials · GET \/api\/model-bindings · POST \/api\/models/, 'Unbuilt model mutations must stay explicit mustbuild evidence')
+  assert.match(settingsModalSource, /<details class="evidence-details">/, 'Settings evidence must be secondary, accessible disclosure')
+  assert.doesNotMatch(settingsModalSource, /<HonestyBadge/, 'Settings rail and primary stages must not lead with raw evidence badges')
   assert.doesNotMatch(settingsModalSource, /data-edit-model|data-delete-cred|openModelModal|modelForm/, 'Settings modal must not expose mockup-only model mutation controls')
   assert.match(mockApiSource, /case ['"]\/api\/models['"]:/, 'Browser smoke mock must expose the live-empty /api/models endpoint')
 
@@ -203,6 +252,7 @@ test('settings models tab is live read-only model health, not a fake model edito
     assert.match(localeSource, /"health":\s*\{/, 'Settings model health copy must be keyed in every locale')
     assert.match(localeSource, /"registry":\s*\{/, 'Settings model registry copy must be keyed in every locale')
     assert.match(localeSource, /"next":\s*\{/, 'Settings model mustbuild-next copy must be keyed in every locale')
+    assert.match(localeSource, /"access":\s*\{[\s\S]*"detailsTitle"/, 'Settings Access copy must be keyed in every locale')
   }
 })
 
@@ -577,6 +627,46 @@ test('projects control plane archives projects through typed soft-delete confirm
   assert.match(mockOperatorApiSource, /removed_at:\s*new Date\(\)\.toISOString\(\)/, 'Mock project archive must return removed_at like the live server')
   assert.match(mockOperatorApiSource, /case '\/api\/sessions':/, 'Mock API must expose session detail lookup')
   assert.match(mockOperatorApiSource, /claudeSessionId/, 'Mock session detail must use the same claudeSessionId query seam as the page')
+})
+
+test('transport failures are typed diagnosis categories localized at the presentation boundary', () => {
+  const seamSource = read(seamPath)
+  const graphComposableSource = read(join(root, 'composables', 'useOperatorGraph.ts'))
+  const graphPageSource = read(join(root, 'pages', 'graph.vue'))
+  const accessPageSource = read(accessPagePath)
+  const localeSources = [read(enLocalePath), read(ruLocalePath), read(zhLocalePath)]
+  const diagnosisBody = functionBody(seamSource, 'operatorErrorDiagnosis')
+
+  assert.match(seamSource, /export const OPERATOR_DIAGNOSIS_CATEGORIES/, 'diagnosis categories must be an exported typed contract')
+  assert.match(seamSource, /export type OperatorDiagnosisCategory/, 'diagnosis category type must be exported')
+  assert.match(seamSource, /export function operatorDiagnosisKey/, 'presentation boundary must have a locale-key resolver')
+  assert.match(seamSource, /errors\.diagnosis\./, 'diagnosis locale keys must live under errors.diagnosis.*')
+  assert.match(diagnosisBody, /['"]unauthorized['"]/, '401 must classify as unauthorized')
+  assert.match(diagnosisBody, /['"]endpoint-missing['"]/, '404 must classify as endpoint-missing')
+  assert.match(diagnosisBody, /['"]unreachable['"]/, 'network failure must classify as unreachable')
+  for (const prose of ['Sign in again', 'This server endpoint is unavailable', 'The Engram server']) {
+    assert.doesNotMatch(diagnosisBody, new RegExp(prose), `transport seam must not return English prose: ${prose}`)
+  }
+
+  assert.match(graphComposableSource, /category: operatorErrorDiagnosis\(response\.status\)|const category = operatorErrorDiagnosis\(response\.status\)/, 'graph transport must classify HTTP failures with the shared diagnosis')
+  assert.match(graphPageSource, /operatorDiagnosisKey/, 'Graph page must localize primary error copy through the diagnosis key')
+  assert.doesNotMatch(graphPageSource, /return nodesState\.value\.error\.message/, 'Graph page must not render raw transport messages as primary copy')
+  assert.match(accessPageSource, /operatorDiagnosisKey/, 'Access page must localize primary error copy through the diagnosis key')
+  assert.doesNotMatch(accessPageSource, /error\.value\?\.message \|\| null/, 'Access page must not render raw transport messages as primary copy')
+
+  for (const localeSource of localeSources) {
+    assert.match(localeSource, /"diagnosis":\s*\{/, 'diagnosis copy must be keyed in every locale')
+    for (const category of ['unauthorized', 'forbidden', 'endpoint-missing', 'request-rejected', 'server-unavailable', 'unreachable', 'invalid-response']) {
+      assert.match(localeSource, new RegExp(`"${category}":`), `diagnosis category ${category} must be keyed in every locale`)
+    }
+  }
+})
+
+test('graph capability classification is dormant when gated and never unconditionally live', () => {
+  const graphPageSource = read(join(root, 'pages', 'graph.vue'))
+
+  assert.doesNotMatch(graphPageSource, /graphCapability = computed\(\(\) => ['"]live['"]\)/, 'graph capability must not be a hardcoded live constant')
+  assert.match(graphPageSource, /graphPresentation\.value === ['"]gated['"] \? ['"]dormant['"] : ['"]live['"]/, 'gated capability must classify as dormant')
 })
 
 test('Nuxt UI color-mode auto-registration stays disabled', () => {

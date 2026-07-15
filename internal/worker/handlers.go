@@ -10,7 +10,10 @@ package worker
 
 import (
 	"encoding/json"
+	"mime"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 )
@@ -130,6 +133,33 @@ func (s *Service) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":  status,
 		"version": s.version,
 	})
+}
+
+// handleHealthRoute preserves probe compatibility while letting browser direct
+// loads reach the operator console's /health page. /api/health stays JSON-only.
+func (s *Service) handleHealthRoute(w http.ResponseWriter, r *http.Request) {
+	if acceptsHTML(r.Header.Get("Accept")) {
+		serveIndex(w, r)
+		return
+	}
+	s.handleHealth(w, r)
+}
+
+func acceptsHTML(header string) bool {
+	for _, value := range strings.Split(header, ",") {
+		mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(value))
+		if err != nil || mediaType != "text/html" {
+			continue
+		}
+		if q, ok := params["q"]; ok {
+			weight, err := strconv.ParseFloat(q, 64)
+			if err != nil || weight <= 0 || weight > 1 {
+				continue
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // handleVersion godoc

@@ -9,6 +9,9 @@
  * language-independent — translating the menu means editing the dictionary, not this file.
  */
 import type { HonestyClass } from './useHonesty'
+import { computed } from 'vue'
+import { operatorFetchJson } from './useOperatorApi'
+import { useOperatorQueue } from './useOperatorQueue'
 
 export interface NavItem {
   id: string
@@ -32,14 +35,14 @@ export const NAV: NavGroup[] = [
   ] },
   { grpKey: 'memoryProduct', items: [
     { id: 'memory', labelKey: 'memory', to: '/memory',  cls: 'live' },
-    { id: 'queue',  labelKey: 'queue',  to: '/queue',   cls: 'dormant', evidence: 'VNEXT_F', count: 7 },
+    { id: 'queue',  labelKey: 'queue',  to: '/queue',   cls: 'live' },
     { id: 'noise',  labelKey: 'noise',  to: '/noise',   cls: 'live' },
     { id: 'graph',  labelKey: 'graph',  to: '/graph',   cls: 'live' },
-    { id: 'books',  labelKey: 'books',  to: '/books',   cls: 'mustbuild', evidenceKey: 'booksPipeline' },
+    { id: 'books',  labelKey: 'books',  to: '/books',   cls: 'live' },
   ] },
   { grpKey: 'behaviorWork', items: [
     { id: 'rules',    labelKey: 'rules',    to: '/rules',    cls: 'live' },
-    { id: 'issues',   labelKey: 'issues',   to: '/issues',   cls: 'live', count: 304 },
+    { id: 'issues',   labelKey: 'issues',   to: '/issues',   cls: 'live' },
     { id: 'projects', labelKey: 'projects', to: '/projects', cls: 'live' },
   ] },
   { grpKey: 'storage', items: [
@@ -56,7 +59,32 @@ export const NAV: NavGroup[] = [
 /** Static structure with i18n KEYS. Use when you resolve labels yourself, or need the raw
  *  shape (routes, honesty class, ids) without a translation context. */
 export function useNav() {
-  return { NAV, flat: NAV.flatMap(g => g.items) }
+  const queue = useOperatorQueue()
+  // Runtime flags are unknown until the request settles. A neutral stale dot is
+  // deliberately less misleading than a green live dot for a gated feature.
+  const graphClass = useState<Extract<HonestyClass, 'live' | 'dormant' | 'stale'>>('live:nav:graph-class', () => 'stale')
+  const graphStarted = useState<boolean>('live:nav:graph-started', () => false)
+  if (import.meta.client && !graphStarted.value) {
+    graphStarted.value = true
+    void operatorFetchJson<{ flags?: Record<string, boolean> }>('/api/flags', undefined, 'navigation-flags')
+      .then((payload) => { graphClass.value = payload.flags?.ENGRAM_GRAPH_ENABLED === true ? 'live' : 'dormant' })
+      .catch(() => { graphClass.value = 'stale' })
+  }
+  const classFor = (kind: string): NavItem['cls'] => {
+    if (kind === 'live' || kind === 'empty') return 'live'
+    if (kind === 'gated') return 'dormant'
+    if (kind === 'mustbuild') return 'mustbuild'
+    return 'stale'
+  }
+  const resolved = computed(() => NAV.map((group) => ({
+    ...group,
+    items: group.items.map((item) => item.id === 'queue'
+      ? { ...item, cls: classFor(queue.loadState.value.kind), evidence: queue.loadState.value.kind === 'gated' ? 'ENGRAM_VNEXT_F_ENABLED' : undefined }
+      : item.id === 'graph'
+        ? { ...item, cls: graphClass.value, evidence: graphClass.value === 'dormant' ? 'ENGRAM_GRAPH_ENABLED' : undefined }
+        : item),
+  })))
+  return { NAV: resolved, flat: computed(() => resolved.value.flatMap(g => g.items)) }
 }
 
 /**

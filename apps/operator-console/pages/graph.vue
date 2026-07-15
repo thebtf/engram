@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import { operatorDiagnosisKey } from '../composables/useOperatorApi'
 import {
   GRAPH_DEFAULT_PATH_DEPTH,
   GRAPH_DEFAULT_TRAVERSE_DEPTH,
@@ -19,6 +20,7 @@ const {
   connectedEdges,
   selectedNodeID,
   nodesState,
+  hasProvenSnapshot,
   edgesState,
   traverseResults,
   traverseBusy,
@@ -68,8 +70,18 @@ const deleteCascade = ref(false)
 
 const selectedNode = computed(() => nodes.find((node) => node.id === selectedNodeID.value) || null)
 const nodeIndex = computed<Record<string, OperatorGraphNode>>(() => Object.fromEntries(nodes.map((node) => [node.id, node])))
-const graphHonesty = computed(() => nodesState.value.kind === 'gated' ? 'dormant' : 'live')
-const graphDisabled = computed(() => nodesState.value.kind === 'gated' || nodesState.value.kind === 'pending')
+const graphPresentation = computed(() => {
+  if (nodesState.value.kind === 'error' && nodesState.value.error.status === 401) return 'unauthorized'
+  if (nodesState.value.kind === 'error' && nodesState.value.error.status === 403) return 'forbidden'
+  if (nodesState.value.kind === 'error') return hasProvenSnapshot.value ? 'stale-snapshot' : 'error'
+  return nodesState.value.kind
+})
+// Capability classification is a separate dimension from runtime load state:
+// 'dormant' while the verified flag is off; 'live' only after a successful
+// enabled runtime read (live/empty). Other states render no capability badge.
+const graphCapability = computed(() => graphPresentation.value === 'gated' ? 'dormant' : 'live')
+const graphRuntimeLabel = computed(() => t(`graphPage.state.runtime.${graphPresentation.value}`))
+const graphDisabled = computed(() => !['live', 'empty'].includes(graphPresentation.value))
 const writeDisabled = graphDisabled
 const selectedDegree = computed(() => connectedEdges.length)
 const typedError = computed(() => lastMutationError.value)
@@ -118,11 +130,15 @@ function edgeDisplay(edge: OperatorGraphEdge) {
 }
 
 function stateMessage() {
-  switch (nodesState.value.kind) {
+  switch (graphPresentation.value) {
     case 'pending':
       return t('graphPage.state.pending')
     case 'error':
-      return t('graphPage.state.error', { message: nodesState.value.error.message })
+      return nodesState.value.kind === 'error' ? t(operatorDiagnosisKey(nodesState.value.error)) : t('errors.diagnosis.unreachable')
+    case 'stale-snapshot':
+      return t('graphPage.state.stale', { updatedAt: nodesState.value.updatedAt, message: nodesState.value.kind === 'error' ? t(operatorDiagnosisKey(nodesState.value.error)) : '' })
+    case 'unauthorized': return t('graphPage.state.unauthorized')
+    case 'forbidden': return t('graphPage.state.forbidden')
     case 'empty':
       return t('graphPage.state.empty')
     case 'gated':
@@ -135,7 +151,7 @@ function stateMessage() {
 function mutationErrorText(error: GraphMutationError) {
   const key = `graphPage.errors.codes.${error.code}`
   const label = t(key, { message: error.message })
-  return label === key ? error.message : label
+  return label === key ? t(operatorDiagnosisKey(error)) : label
 }
 
 function clearNotice() {
@@ -232,27 +248,28 @@ async function runFindPath() {
 </script>
 
 <template>
-  <div class="graph-page">
+  <div class="graph-page" :data-state="graphPresentation">
     <header class="page-head">
       <div>
         <h1>{{ t('graphPage.title') }}</h1>
         <p>{{ t('graphPage.subtitle') }}</p>
       </div>
-      <HonestyBadge :cls="graphHonesty" :evidence="nodesState.kind === 'gated' ? 'ENGRAM_GRAPH_ENABLED' : '/api/graph/*'" />
+      <div class="runtime-state" :data-state="graphPresentation" role="status">{{ graphRuntimeLabel }}</div>
+      <HonestyBadge v-if="['live', 'empty', 'gated'].includes(graphPresentation)" :cls="graphCapability" :evidence="graphPresentation === 'gated' ? 'ENGRAM_GRAPH_ENABLED' : '/api/graph/*'" />
     </header>
 
     <section class="graph-brief">
       <article class="metric">
         <span>{{ t('graphPage.metrics.nodes') }}</span>
-        <b>{{ nodes.length }}</b>
+        <b>{{ graphDisabled ? '—' : nodes.length }}</b>
       </article>
       <article class="metric">
         <span>{{ t('graphPage.metrics.edges') }}</span>
-        <b>{{ connectedEdges.length }}</b>
+        <b>{{ graphDisabled ? '—' : connectedEdges.length }}</b>
       </article>
       <article class="metric">
         <span>{{ t('graphPage.metrics.selectedDegree') }}</span>
-        <b>{{ selectedDegree }}</b>
+        <b>{{ graphDisabled ? '—' : selectedDegree }}</b>
       </article>
       <article class="brief-copy">
         <strong>{{ t('graphPage.brief.title') }}</strong>
@@ -264,7 +281,7 @@ async function runFindPath() {
       <div class="ops-left">
         <label>
           <span>{{ t('graphPage.filters.project') }}</span>
-          <select v-model="selectedProject" class="select">
+          <select id="graph-project-filter" v-model="selectedProject" name="graph-project-filter" class="select" :disabled="graphDisabled">
             <option v-for="project in projectOptions" :key="project" :value="project">{{ project }}</option>
           </select>
         </label>
@@ -274,9 +291,10 @@ async function runFindPath() {
       </div>
     </div>
 
-    <div class="statebar" :data-state="nodesState.kind">
+    <div class="statebar" :data-state="graphPresentation" role="status">
       <span>{{ stateMessage() }}</span>
-      <button v-if="nodesState.kind === 'error'" class="tbtn" @click="refresh">{{ t('graphPage.state.retry') }}</button>
+      <details v-if="nodesState.kind === 'error'"><summary>{{ t('graphPage.state.technicalEvidence') }}</summary><code>{{ nodesState.error.method }} {{ nodesState.error.path }} · {{ nodesState.error.status || 'network' }}</code></details>
+      <button v-if="graphPresentation === 'error' || graphPresentation === 'stale-snapshot'" class="tbtn" @click="refresh">{{ t('graphPage.state.retry') }}</button>
     </div>
 
     <div v-if="notice" class="notice" :data-kind="notice.kind">
@@ -285,7 +303,7 @@ async function runFindPath() {
     </div>
 
     <div v-if="typedError" class="typed-error">
-      <HonestyBadge cls="mustbuild" :evidence="typedError.code" />
+      <span class="runtime-state" data-state="error">{{ t('graphPage.state.runtime.error') }}</span>
       <div>
         <strong>{{ t('graphPage.errors.title') }}</strong>
         <p>{{ mutationErrorText(typedError) }}</p>
@@ -299,17 +317,17 @@ async function runFindPath() {
         </header>
         <label>
           <span>{{ t('graphPage.forms.node.type') }}</span>
-          <select v-model="nodeForm.nodeType" class="select" :disabled="writeDisabled">
+          <select id="graph-node-type" v-model="nodeForm.nodeType" name="graph-node-type" class="select" :disabled="writeDisabled">
             <option v-for="nodeType in GRAPH_NODE_TYPES" :key="nodeType" :value="nodeType">{{ enumLabel('nodeTypes', nodeType) }}</option>
           </select>
         </label>
         <label>
           <span>{{ t('graphPage.forms.node.externalRef') }}</span>
-          <input v-model="nodeForm.externalRef" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.node.externalRefPlaceholder')" />
+          <input id="graph-node-external-ref" v-model="nodeForm.externalRef" name="graph-node-external-ref" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.node.externalRefPlaceholder')" />
         </label>
         <label>
           <span>{{ t('graphPage.forms.node.privacy') }}</span>
-          <select v-model="nodeForm.privacyScope" class="select" :disabled="writeDisabled">
+          <select id="graph-node-privacy" v-model="nodeForm.privacyScope" name="graph-node-privacy" class="select" :disabled="writeDisabled">
             <option value="project">{{ enumLabel('privacy', 'project') }}</option>
             <option value="private">{{ enumLabel('privacy', 'private') }}</option>
             <option value="shared">{{ enumLabel('privacy', 'shared') }}</option>
@@ -325,21 +343,21 @@ async function runFindPath() {
         </header>
         <label>
           <span>{{ t('graphPage.forms.edge.source') }}</span>
-          <input v-model="edgeForm.sourceNodeID" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.edge.nodeIdPlaceholder')" list="graph-node-ids" />
+          <input id="graph-edge-source" v-model="edgeForm.sourceNodeID" name="graph-edge-source" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.edge.nodeIdPlaceholder')" list="graph-node-ids" />
         </label>
         <label>
           <span>{{ t('graphPage.forms.edge.target') }}</span>
-          <input v-model="edgeForm.targetNodeID" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.edge.nodeIdPlaceholder')" list="graph-node-ids" />
+          <input id="graph-edge-target" v-model="edgeForm.targetNodeID" name="graph-edge-target" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.edge.nodeIdPlaceholder')" list="graph-node-ids" />
         </label>
         <label>
           <span>{{ t('graphPage.forms.edge.type') }}</span>
-          <select v-model="edgeForm.edgeType" class="select" :disabled="writeDisabled">
+          <select id="graph-edge-type" v-model="edgeForm.edgeType" name="graph-edge-type" class="select" :disabled="writeDisabled">
             <option v-for="edgeType in GRAPH_EDGE_TYPES" :key="edgeType" :value="edgeType">{{ enumLabel('edgeTypes', edgeType) }}</option>
           </select>
         </label>
         <label>
           <span>{{ t('graphPage.forms.edge.reasoning') }}</span>
-          <input v-model="edgeForm.reasoning" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.edge.reasoningPlaceholder')" />
+          <input id="graph-edge-reasoning" v-model="edgeForm.reasoning" name="graph-edge-reasoning" class="input" :disabled="writeDisabled" :placeholder="t('graphPage.forms.edge.reasoningPlaceholder')" />
         </label>
         <button class="act primary" :disabled="writeDisabled" @click="submitCreateEdge">{{ t('graphPage.actions.createEdge') }}</button>
         <datalist id="graph-node-ids">
@@ -353,11 +371,11 @@ async function runFindPath() {
         </header>
         <label>
           <span>{{ t('graphPage.forms.traverse.memoryId') }}</span>
-          <input v-model="traverseForm.memoryID" class="input" :disabled="graphDisabled" :placeholder="t('graphPage.forms.traverse.memoryPlaceholder')" />
+          <input id="graph-traverse-memory" v-model="traverseForm.memoryID" name="graph-traverse-memory" class="input" :disabled="graphDisabled" :placeholder="t('graphPage.forms.traverse.memoryPlaceholder')" />
         </label>
         <label>
           <span>{{ t('graphPage.forms.traverse.depth') }}</span>
-          <input v-model.number="traverseForm.depth" class="input" :disabled="graphDisabled" type="number" min="1" max="3" />
+          <input id="graph-traverse-depth" v-model.number="traverseForm.depth" name="graph-traverse-depth" class="input" :disabled="graphDisabled" type="number" min="1" max="3" />
         </label>
         <button class="act primary" :disabled="traverseBusy || graphDisabled" @click="runTraverse">{{ traverseBusy ? t('graphPage.actions.running') : t('graphPage.actions.runTraverse') }}</button>
       </article>
@@ -368,15 +386,15 @@ async function runFindPath() {
         </header>
         <label>
           <span>{{ t('graphPage.forms.path.sourceId') }}</span>
-          <input v-model="pathForm.sourceID" class="input" :disabled="graphDisabled" :placeholder="t('graphPage.forms.path.memoryPlaceholder')" />
+          <input id="graph-path-source" v-model="pathForm.sourceID" name="graph-path-source" class="input" :disabled="graphDisabled" :placeholder="t('graphPage.forms.path.memoryPlaceholder')" />
         </label>
         <label>
           <span>{{ t('graphPage.forms.path.targetId') }}</span>
-          <input v-model="pathForm.targetID" class="input" :disabled="graphDisabled" :placeholder="t('graphPage.forms.path.memoryPlaceholder')" />
+          <input id="graph-path-target" v-model="pathForm.targetID" name="graph-path-target" class="input" :disabled="graphDisabled" :placeholder="t('graphPage.forms.path.memoryPlaceholder')" />
         </label>
         <label>
           <span>{{ t('graphPage.forms.path.maxDepth') }}</span>
-          <input v-model.number="pathForm.maxDepth" class="input" :disabled="graphDisabled" type="number" min="1" max="3" />
+          <input id="graph-path-max-depth" v-model.number="pathForm.maxDepth" name="graph-path-max-depth" class="input" :disabled="graphDisabled" type="number" min="1" max="3" />
         </label>
         <button class="act primary" :disabled="pathBusy || graphDisabled" @click="runFindPath">{{ pathBusy ? t('graphPage.actions.running') : t('graphPage.actions.findPath') }}</button>
       </article>
@@ -414,7 +432,7 @@ async function runFindPath() {
         <div v-if="selectedNode" class="selection-note">{{ t('graphPage.selectedNode', { node: nodeDisplay(selectedNode) }) }}</div>
         <div v-if="edgesState.kind === 'error'" class="empty-card">
           <b>{{ t('graphPage.empty.edgesTitle') }}</b>
-          <p>{{ edgesState.error.message }}</p>
+          <p>{{ t(operatorDiagnosisKey(edgesState.error)) }}</p>
         </div>
         <div v-else-if="connectedEdges.length" class="edge-list">
           <div v-for="edge in connectedEdges" :key="edge.id" class="edge-row">
@@ -436,7 +454,7 @@ async function runFindPath() {
       <article v-if="selectedNode" class="panel detail-panel">
         <header class="panel-head">
           <h2>{{ t('graphPage.sections.selected') }}</h2>
-          <HonestyBadge cls="live" />
+          <HonestyBadge v-if="['live', 'empty'].includes(graphPresentation)" cls="live" />
         </header>
         <div class="detail-copy">
           <b>{{ nodeDisplay(selectedNode) }}</b>
@@ -451,7 +469,7 @@ async function runFindPath() {
           <dd>{{ selectedNode.updatedAt || '—' }}</dd>
         </dl>
         <label class="cascade-toggle">
-          <input v-model="deleteCascade" type="checkbox" :disabled="writeDisabled" />
+          <input id="graph-delete-cascade" v-model="deleteCascade" name="graph-delete-cascade" type="checkbox" :disabled="writeDisabled" />
           <span>{{ t('graphPage.actions.deleteNodeCascade') }}</span>
         </label>
         <button class="act danger" :disabled="writeDisabled" @click="requestDeleteNode">
@@ -468,7 +486,7 @@ async function runFindPath() {
         </header>
         <div v-if="traverseError" class="empty-card">
           <b>{{ t('graphPage.empty.traverseTitle') }}</b>
-          <p>{{ traverseError }}</p>
+          <p>{{ mutationErrorText(traverseError) }}</p>
         </div>
         <ol v-else-if="traverseResults.length" class="trace-list">
           <li v-for="step in traverseResults" :key="step.edgeID + ':' + step.depth">
@@ -489,7 +507,7 @@ async function runFindPath() {
         </header>
         <div v-if="pathError" class="empty-card">
           <b>{{ t('graphPage.empty.pathTitle') }}</b>
-          <p>{{ pathError }}</p>
+          <p>{{ mutationErrorText(pathError) }}</p>
         </div>
         <div v-else-if="pathResult && pathResult.found" class="path-found">
           <p>{{ t('graphPage.pathFound', { hops: pathResult.hops }) }}</p>

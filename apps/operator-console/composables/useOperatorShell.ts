@@ -42,6 +42,7 @@ export interface ShellInfo {
   identityName: string
   identityInitials: string
   identityProvider: string
+  backendStatus: 'ready' | 'degraded' | 'unavailable'
 }
 
 function displayHost(base: string, configuredHost?: string): string {
@@ -106,6 +107,7 @@ function initialShellInfo(): ShellInfo {
     identityName: 'operator',
     identityInitials: 'EG',
     identityProvider: 'session',
+    backendStatus: 'unavailable',
   }
 }
 
@@ -176,6 +178,9 @@ export function useOperatorShellStatus() {
     } else {
       failures.push('/api/stats/vnext')
     }
+
+    const coreFailures = failures.filter((path) => path === '/api/selfcheck' || path === '/api/stats').length
+    next.backendStatus = coreFailures === 2 ? 'unavailable' : failures.length ? 'degraded' : 'ready'
 
     info.value = next
     error.value = failures.length ? `Unavailable shell endpoints: ${failures.join(', ')}` : null

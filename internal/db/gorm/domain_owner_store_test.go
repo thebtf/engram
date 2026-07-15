@@ -226,3 +226,42 @@ func TestDomainOwnerStoreRaceAndConflict(t *testing.T) {
 	require.Equal(t, mode, final.Mode, "final mode must match the same contender, not a half-updated row")
 	require.False(t, final.UpdatedAt.IsZero())
 }
+
+func TestRedactInvitationCodeRemovesHistoricalAuditSecretsWithoutMutatingInput(t *testing.T) {
+	input := map[string]any{
+		"CODE":   "historical-secret",
+		"nested": map[string]any{"invitation_code": "nested-secret"},
+		"rows":   []any{map[string]any{"Code": "array-secret"}},
+	}
+	output := redactInvitationCode(copyAuditState(input))
+
+	require.Contains(t, input, "CODE")
+	require.Contains(t, input["nested"].(map[string]any), "invitation_code")
+	require.Contains(t, input["rows"].([]any)[0].(map[string]any), "Code")
+	require.NotContains(t, output, "CODE")
+	require.NotContains(t, output["nested"].(map[string]any), "invitation_code")
+	require.NotContains(t, output["rows"].([]any)[0].(map[string]any), "Code")
+}
+
+func copyAuditState(input map[string]any) map[string]any {
+	output := make(map[string]any, len(input))
+	for key, value := range input {
+		switch nested := value.(type) {
+		case map[string]any:
+			output[key] = copyAuditState(nested)
+		case []any:
+			rows := make([]any, len(nested))
+			for index, item := range nested {
+				if row, ok := item.(map[string]any); ok {
+					rows[index] = copyAuditState(row)
+				} else {
+					rows[index] = item
+				}
+			}
+			output[key] = rows
+		default:
+			output[key] = value
+		}
+	}
+	return output
+}

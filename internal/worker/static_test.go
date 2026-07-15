@@ -6,11 +6,77 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 
 	"github.com/go-chi/chi/v5"
 )
+
+func TestHealthNegotiatesBrowserShellWithoutChangingJSONProbes(t *testing.T) {
+	restoreStaticFS := replaceStaticFSForTest(t, fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<!doctype html><title>operator health</title>")},
+	})
+	defer restoreStaticFS()
+
+	svc := &Service{router: chi.NewRouter(), version: "test"}
+	svc.setupRoutes()
+
+	for _, tc := range []struct {
+		name        string
+		path        string
+		accept      string
+		contentType string
+		body        string
+	}{
+		{name: "browser health page", path: "/health", accept: "text/html,application/xhtml+xml", contentType: "text/html; charset=utf-8", body: "operator health"},
+		{name: "html refused by quality", path: "/health", accept: "text/html;q=0,application/json", contentType: "application/json", body: `"status"`},
+		{name: "html accepted with quality", path: "/health", accept: "application/json;q=0.8,text/html;q=0.1", contentType: "text/html; charset=utf-8", body: "operator health"},
+		{name: "lookalike is not html", path: "/health", accept: "application/text/html", contentType: "application/json", body: `"status"`},
+		{name: "malformed is not html", path: "/health", accept: "text/html; q=wat", contentType: "application/json", body: `"status"`},
+		{name: "no accept probe", path: "/health", contentType: "application/json", body: `"status"`},
+		{name: "wildcard probe", path: "/health", accept: "*/*", contentType: "application/json", body: `"status"`},
+		{name: "json probe", path: "/health", accept: "application/json", contentType: "application/json", body: `"status"`},
+		{name: "api health is always json", path: "/api/health", accept: "text/html", contentType: "application/json", body: `"status"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			if tc.accept != "" {
+				req.Header.Set("Accept", tc.accept)
+			}
+			svc.router.ServeHTTP(rec, req)
+			if got := rec.Header().Get("Content-Type"); got != tc.contentType {
+				t.Fatalf("content type = %q, want %q", got, tc.contentType)
+			}
+			if !strings.Contains(rec.Body.String(), tc.body) {
+				t.Fatalf("body = %q, want %q", rec.Body.String(), tc.body)
+			}
+		})
+	}
+}
+
+func TestHealthBrowserRouteUsesConfiguredOperatorConsoleProxy(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<html><title>proxied health</title></html>"))
+	}))
+	defer upstream.Close()
+	restoreProxy := replaceOperatorConsoleProxyForTest(t)
+	defer restoreProxy()
+	t.Setenv("ENGRAM_OPERATOR_CONSOLE_URL", upstream.URL)
+
+	svc := &Service{router: chi.NewRouter(), version: "test"}
+	svc.setupRoutes()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.Header.Set("Accept", "text/html")
+	svc.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "proxied health") {
+		t.Fatalf("browser health proxy response = %d %q", rec.Code, rec.Body.String())
+	}
+}
 
 func TestOperatorConsoleFontAssetsDoNotFallThroughToSPA(t *testing.T) {
 	restoreStaticFS := replaceStaticFSForTest(t, fstest.MapFS{
@@ -118,6 +184,21 @@ func replaceStaticFSForTest(t *testing.T, next fs.FS) func() {
 	return func() {
 		staticSubFS = prevFS
 		staticInitErr = prevErr
+	}
+}
+
+func replaceOperatorConsoleProxyForTest(t *testing.T) func() {
+	t.Helper()
+	prevProxy, prevTarget, prevErr := operatorConsoleProxy, operatorConsoleProxyTarget, operatorConsoleProxyErr
+	operatorConsoleProxyOnce = sync.Once{}
+	operatorConsoleProxy = nil
+	operatorConsoleProxyTarget = ""
+	operatorConsoleProxyErr = nil
+	return func() {
+		operatorConsoleProxyOnce = sync.Once{}
+		operatorConsoleProxy = prevProxy
+		operatorConsoleProxyTarget = prevTarget
+		operatorConsoleProxyErr = prevErr
 	}
 }
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useOperatorOverview } from '../composables/useOperatorOverview'
+import { useNav } from '../composables/useNav'
 
 const { t } = useI18n()
 
@@ -32,6 +33,8 @@ const {
   modelDegraded,
   accessGap,
 } = useOperatorOverview()
+const { flat: navigation } = useNav()
+const graphNavigation = computed(() => navigation.value.find((item) => item.id === 'graph'))
 
 function displayCount(value: number, pending = false) {
   return pending ? t('common.loadingShort') : String(value)
@@ -116,7 +119,6 @@ const attention = computed(() => [
     to: '/queue',
     label: t('overview.attention.queueLink'),
   },
-  { color: 'var(--class-mustbuild)', text: t('overview.attention.books'), to: '/books', label: t('overview.attention.booksLink') },
   { color: 'var(--state-warn)', text: t('overview.attention.noise', { noise: info.value.noise, n: memoryNoiseDisplay.value }), to: '/noise', label: t('overview.attention.noiseLink') },
 ])
 
@@ -154,7 +156,7 @@ const memoryCards = computed(() => [
     name: t('nav.items.graph'),
     big: '—',
     sub: t('overview.cards.graph.sub'),
-    meta: [{ cls: 'live', text: t('common.enabled') }],
+    meta: [{ cls: graphNavigation.value?.cls === 'dormant' ? 'gate' : graphNavigation.value?.cls === 'stale' ? 'status' : 'live', text: graphNavigation.value?.cls === 'dormant' ? t('overview.badges.vnext') : t('overview.badges.liveEndpoint') }],
   },
   {
     to: '/books',
@@ -162,7 +164,7 @@ const memoryCards = computed(() => [
     name: t('nav.items.books'),
     big: null,
     sub: t('overview.cards.books.sub'),
-    meta: [{ cls: 'mb', text: t('overview.badges.mustBuild') }],
+    meta: [{ cls: 'live', text: t('overview.badges.liveEndpoint') }],
   },
 ])
 
@@ -216,7 +218,7 @@ const serviceCards = computed(() => [
     name: t('nav.items.access'),
     big: null,
     sub: t('overview.cards.access.sub'),
-    meta: [{ cls: 'mb', text: t('overview.badges.mustBuild') }],
+    meta: [{ cls: 'live', text: t('overview.badges.liveEndpoint') }],
   },
 ])
 

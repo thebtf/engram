@@ -2,9 +2,9 @@
 import { DOMAIN_OWNER_KINDS, DOMAIN_OWNER_MODES, useOperatorDomainRegistry } from '../composables/useOperatorDomainRegistry'
 import type { DomainRegistryDraft, OperatorMemoryDomain } from '../composables/useOperatorDomainRegistry'
 import { useModelRegistryState, useModelsState } from '../composables/useMockData'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
-type SettingsTabKind = 'general' | 'models' | 'runtime' | 'actions' | 'domains' | 'client' | 'dead' | 'mustbuild'
+type SettingsTabKind = 'general' | 'access' | 'models' | 'runtime' | 'actions' | 'domains' | 'client' | 'dead' | 'mustbuild'
 type SettingsTabClass = 'live' | 'mustbuild' | 'stale'
 
 interface SettingsTab {
@@ -62,6 +62,12 @@ const updateRestartConfirm = ref(false)
 const restartInFlight = ref(false)
 const updateRestartInFlight = ref(false)
 const previousBodyOverflow = ref<string | null>(null)
+const dialog = ref<HTMLElement | null>(null)
+const closeButton = ref<HTMLButtonElement | null>(null)
+const previousTrigger = ref<HTMLElement | null>(null)
+const previousAppInert = ref(false)
+const previousAppAriaHidden = ref<string | null>(null)
+const route = useRoute()
 const configSaveInFlight = ref(false)
 const domainSaveInFlight = ref(false)
 const domainDeleteInFlight = ref<string | null>(null)
@@ -82,17 +88,11 @@ const domainDraft = ref<DomainRegistryDraft>({
 
 const tabs = computed<SettingsTab[]>(() => [
   { id: 'general', groupKey: 'basic', labelKey: 'general', titleKey: 'general', descKey: 'general', kind: 'general', cls: 'live' },
+  { id: 'access', groupKey: 'access', labelKey: 'access', titleKey: 'general', descKey: 'general', kind: 'access', cls: 'live' },
   { id: 'models', groupKey: 'models', labelKey: 'models', titleKey: 'models', descKey: 'models', kind: 'models', cls: 'live', evidence: 'GET /api/model-health' },
   { id: 'credentials', groupKey: 'models', labelKey: 'credentials', titleKey: 'credentials', descKey: 'credentials', kind: 'mustbuild', cls: 'mustbuild', evidence: 'GET /api/model-credentials' },
   { id: 'bindings', groupKey: 'models', labelKey: 'bindings', titleKey: 'bindings', descKey: 'bindings', kind: 'mustbuild', cls: 'mustbuild', evidence: 'GET /api/model-bindings' },
   { id: 'addModel', groupKey: 'models', labelKey: 'addModel', titleKey: 'addModel', descKey: 'addModel', kind: 'mustbuild', cls: 'mustbuild', evidence: 'POST /api/models' },
-  { id: 'acProviders', groupKey: 'access', labelKey: 'acProviders', titleKey: 'acProviders', descKey: 'acProviders', kind: 'mustbuild', cls: 'mustbuild', evidence: 'GET /api/access/providers' },
-  { id: 'acPolicy', groupKey: 'access', labelKey: 'acPolicy', titleKey: 'acPolicy', descKey: 'acPolicy', kind: 'mustbuild', cls: 'mustbuild', evidence: 'GET /api/access/policy' },
-  { id: 'acUsers', groupKey: 'access', labelKey: 'acUsers', titleKey: 'acUsers', descKey: 'acUsers', kind: 'mustbuild', cls: 'mustbuild', evidence: 'GET /api/access/users' },
-  { id: 'acInvites', groupKey: 'access', labelKey: 'acInvites', titleKey: 'acInvites', descKey: 'acInvites', kind: 'mustbuild', cls: 'mustbuild', evidence: 'GET /api/access/invites' },
-  { id: 'acRoles', groupKey: 'access', labelKey: 'acRoles', titleKey: 'acRoles', descKey: 'acRoles', kind: 'mustbuild', cls: 'mustbuild', evidence: 'GET /api/access/roles' },
-  { id: 'acSessions', groupKey: 'access', labelKey: 'acSessions', titleKey: 'acSessions', descKey: 'acSessions', kind: 'mustbuild', cls: 'mustbuild', evidence: 'GET /api/access/sessions' },
-  { id: 'acAudit', groupKey: 'access', labelKey: 'acAudit', titleKey: 'acAudit', descKey: 'acAudit', kind: 'mustbuild', cls: 'mustbuild', evidence: 'GET /api/access/audit' },
   { id: 'runtime', groupKey: 'server', labelKey: 'runtime', titleKey: 'runtime', descKey: 'runtime', kind: 'runtime', cls: 'live' },
   { id: 'actions', groupKey: 'server', labelKey: 'actions', titleKey: 'actions', descKey: 'actions', kind: 'actions', cls: 'live' },
   { id: 'domains', groupKey: 'server', labelKey: 'domains', titleKey: 'domains', descKey: 'domains', kind: 'domains', cls: 'live' },
@@ -308,6 +308,30 @@ function closeModal() {
   open.value = false
 }
 
+function tabStatusLabel(cls: SettingsTabClass) {
+  return t(`honesty.${cls}`)
+}
+
+function focusables() {
+  return dialog.value ? [...dialog.value.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    .filter((element) => !element.hasAttribute('hidden') && element.getClientRects().length > 0) : []
+}
+
+function restoreModalEnvironment() {
+  if (!import.meta.client) return
+  document.body.style.overflow = previousBodyOverflow.value ?? ''
+  previousBodyOverflow.value = null
+  const app = document.querySelector<HTMLElement>('.app')
+  if (app) {
+    app.inert = previousAppInert.value
+    if (previousAppAriaHidden.value === null) app.removeAttribute('aria-hidden')
+    else app.setAttribute('aria-hidden', previousAppAriaHidden.value)
+  }
+  const trigger = previousTrigger.value
+  previousTrigger.value = null
+  if (trigger?.isConnected) trigger.focus()
+}
+
 function cycleLocaleTo(code: string) {
   setLocale(code)
 }
@@ -347,22 +371,45 @@ async function confirmUpdateRestart() {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape' && open.value) closeModal()
+  if (!open.value) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeModal()
+    return
+  }
+  if (event.key !== 'Tab') return
+  const items = focusables()
+  if (!items.length) return
+  const first = items[0]
+  const last = items[items.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
 }
 
 watch(open, (isOpen) => {
   if (!import.meta.client) return
   if (isOpen) {
+    previousTrigger.value = document.activeElement instanceof HTMLElement ? document.activeElement : null
     if (previousBodyOverflow.value === null) {
       previousBodyOverflow.value = document.body.style.overflow
     }
     document.body.style.overflow = 'hidden'
-    window.addEventListener('keydown', onKeydown)
-  } else {
-    if (previousBodyOverflow.value !== null) {
-      document.body.style.overflow = previousBodyOverflow.value
-      previousBodyOverflow.value = null
+    const app = document.querySelector<HTMLElement>('.app')
+    if (app) {
+      previousAppInert.value = app.inert
+      previousAppAriaHidden.value = app.getAttribute('aria-hidden')
+      app.inert = true
+      app.setAttribute('aria-hidden', 'true')
     }
+    window.addEventListener('keydown', onKeydown)
+    void nextTick(() => closeButton.value?.focus())
+  } else {
+    restoreModalEnvironment()
     window.removeEventListener('keydown', onKeydown)
   }
 }, { immediate: true })
@@ -376,20 +423,22 @@ watch([open, activeTab], ([isOpen, tab]) => {
   void refreshModelSurfaces()
 }, { immediate: true })
 
+watch(() => route.fullPath, (_current, previous) => {
+  // /settings is a redirect-only opener; its immediate redirect must not close the dialog it just opened.
+  if (open.value && previous !== '/settings') closeModal()
+})
+
 onBeforeUnmount(() => {
   if (!import.meta.client) return
   window.removeEventListener('keydown', onKeydown)
-  if (previousBodyOverflow.value !== null) {
-    document.body.style.overflow = previousBodyOverflow.value
-    previousBodyOverflow.value = null
-  }
+  restoreModalEnvironment()
 })
 </script>
 
 <template>
   <Teleport to="body">
     <div v-if="open" class="settings-overlay" @click.self="closeModal">
-      <section class="modal settings-modal" role="dialog" aria-modal="true" :aria-label="t('settings.modal.aria')">
+      <section ref="dialog" class="modal settings-modal" role="dialog" aria-modal="true" :aria-label="t('settings.modal.aria')">
         <div class="settings-shell">
           <aside class="settings-rail">
             <div class="settings-kicker">{{ t('settings.modal.kicker') }}</div>
@@ -401,12 +450,13 @@ onBeforeUnmount(() => {
                 class="settings-tab"
                 type="button"
                 :aria-selected="tab.id === selectedTab.id"
+                :aria-label="tab.kind === 'access' ? t('access.title') : t(`settings.modal.tabs.${tab.labelKey}.label`)"
+                :aria-description="tabStatusLabel(tab.cls)"
                 @click="selectTab(tab.id)"
               >
                 <span class="tab-mark" :data-cls="tab.cls" />
-                <span class="tab-label">{{ t(`settings.modal.tabs.${tab.labelKey}.label`) }}</span>
-                <HonestyBadge v-if="tab.cls === 'mustbuild'" cls="mustbuild" :evidence="tab.evidence" :label="t('honesty.mustbuild')" />
-                <HonestyBadge v-else-if="tab.cls === 'stale'" cls="stale" :label="t('honesty.stale')" />
+                <span class="tab-label">{{ tab.kind === 'access' ? t('access.title') : t(`settings.modal.tabs.${tab.labelKey}.label`) }}</span>
+                <span class="tab-status">{{ tabStatusLabel(tab.cls) }}</span>
               </button>
             </div>
           </aside>
@@ -414,10 +464,10 @@ onBeforeUnmount(() => {
           <section class="settings-stage">
             <div class="settings-head">
               <div>
-                <h3>{{ t(`settings.modal.tabs.${selectedTab.titleKey}.title`) }}</h3>
-                <p>{{ t(`settings.modal.tabs.${selectedTab.descKey}.desc`) }}</p>
+                <h3>{{ selectedTab.kind === 'access' ? t('settings.modal.access.title') : t(`settings.modal.tabs.${selectedTab.titleKey}.title`) }}</h3>
+                <p>{{ selectedTab.kind === 'access' ? t('settings.modal.access.body') : t(`settings.modal.tabs.${selectedTab.descKey}.desc`) }}</p>
               </div>
-              <button class="tbtn close" type="button" :aria-label="t('settings.modal.close')" @click="closeModal">×</button>
+              <button ref="closeButton" class="tbtn close" type="button" :aria-label="t('settings.modal.close')" @click="closeModal">×</button>
             </div>
 
             <div class="settings-body">
@@ -493,6 +543,16 @@ onBeforeUnmount(() => {
                 </section>
               </template>
 
+              <template v-else-if="selectedTab.kind === 'access'">
+                <section class="settings-section">
+                  <NuxtLink to="/access" class="tbtn primary" @click="closeModal">{{ t('settings.modal.access.action') }}</NuxtLink>
+                  <details class="evidence-details">
+                    <summary>{{ t('settings.modal.access.detailsTitle') }}</summary>
+                    <p>{{ t('settings.modal.access.detailsBody') }}</p>
+                  </details>
+                </section>
+              </template>
+
               <template v-else-if="selectedTab.kind === 'models'">
                 <section class="settings-section">
                   <div class="settings-section-title">{{ t('settings.models.health.title') }}</div>
@@ -502,13 +562,15 @@ onBeforeUnmount(() => {
                       <span class="tag">{{ t('settings.models.count', modelRows.length) }}</span>
                       <span class="tag">{{ t('settings.models.configured', { count: modelConfiguredCount }) }}</span>
                       <span class="tag">{{ t('settings.models.secrets', { count: modelSecretCount }) }}</span>
-                      <HonestyBadge cls="live" evidence="/api/model-health" />
-                      <code class="endpoint-pill">GET /api/model-health</code>
                     </div>
                     <button class="tbtn" type="button" :disabled="modelHealthState.pending.value || modelRegistryState.pending.value" @click="refreshModelSurfaces">
                       {{ t('settings.refresh') }}
                     </button>
                   </div>
+                  <details class="evidence-details">
+                    <summary>{{ t('settings.modal.evidence.title') }}</summary>
+                    <code>GET /api/model-health</code>
+                  </details>
                   <div v-if="modelHealthPending" class="state pending">{{ t('settings.models.health.pending') }}</div>
                   <div v-else-if="modelHealthState.error.value" class="state error">{{ t('settings.models.health.error', { message: modelHealthState.error.value }) }}</div>
                   <div v-else class="model-list">
@@ -539,7 +601,6 @@ onBeforeUnmount(() => {
                     <div v-for="model in modelRegistry.models" :key="model" class="surface-card">
                       <b>{{ model }}</b>
                       <p>{{ t('settings.models.registry.modelBody') }}</p>
-                      <div class="route">GET /api/models</div>
                     </div>
                   </div>
                   <div v-else class="operator-note">
@@ -547,9 +608,12 @@ onBeforeUnmount(() => {
                     <div>
                       <b>{{ t('settings.models.registry.emptyTitle') }}</b>
                       <p>{{ t('settings.models.registry.emptyBody') }}</p>
-                      <HonestyBadge cls="live" evidence="/api/models" />
                     </div>
                   </div>
+                  <details class="evidence-details">
+                    <summary>{{ t('settings.modal.evidence.title') }}</summary>
+                    <code>GET /api/models</code>
+                  </details>
                   <div class="metrics model-registry-metrics">
                     <div>
                       <span>{{ t('settings.models.registry.default') }}</span>
@@ -569,9 +633,12 @@ onBeforeUnmount(() => {
                     <div>
                       <b>{{ t('settings.models.next.bodyTitle') }}</b>
                       <p>{{ t('settings.models.next.body') }}</p>
-                      <HonestyBadge cls="mustbuild" evidence="GET /api/model-credentials · GET /api/model-bindings · POST /api/models" />
                     </div>
                   </div>
+                  <details class="evidence-details">
+                    <summary>{{ t('settings.modal.evidence.title') }}</summary>
+                    <code>GET /api/model-credentials · GET /api/model-bindings · POST /api/models</code>
+                  </details>
                 </section>
               </template>
 
@@ -612,8 +679,11 @@ onBeforeUnmount(() => {
                         {{ t('settings.save.reset') }}
                       </button>
                     </div>
-                    <HonestyBadge cls="live" :evidence="configSaveEvidence.endpoint" />
                   </div>
+                  <details class="evidence-details">
+                    <summary>{{ t('settings.modal.evidence.title') }}</summary>
+                    <code>PATCH {{ configSaveEvidence.endpoint }}</code>
+                  </details>
                   <div v-if="configSaveResult?.kind === 'success'" class="state" :class="configSaveResult.data.restart_required ? 'restart' : 'ok'">
                     {{ t('settings.save.success', {
                       changed: formatChanged(configSaveResult.data.changed),
@@ -691,11 +761,13 @@ onBeforeUnmount(() => {
                   <div class="settings-actions domain-toolbar">
                     <div class="left">
                       <span class="tag">{{ t('settings.domains.count', domainCount) }}</span>
-                      <HonestyBadge cls="live" :evidence="domainListEvidence.endpoint" />
-                      <code class="endpoint-pill">GET {{ domainListEvidence.endpoint }}</code>
                     </div>
                     <button class="tbtn" type="button" :disabled="domainsPending" @click="refreshDomains">{{ t('settings.refresh') }}</button>
                   </div>
+                  <details class="evidence-details">
+                    <summary>{{ t('settings.modal.evidence.title') }}</summary>
+                    <code>GET {{ domainListEvidence.endpoint }}</code>
+                  </details>
                   <div v-if="domainsPending" class="state pending">{{ t('settings.domains.pending') }}</div>
                   <div v-if="domainsError" class="state error">{{ t('settings.domains.error', { message: domainsError }) }}</div>
                   <div v-if="domainSaveResult?.kind === 'success'" class="state ok">
@@ -847,9 +919,12 @@ onBeforeUnmount(() => {
                     <div>
                       <b>{{ t('settings.modal.mustbuild.title') }}</b>
                       <p>{{ t('settings.modal.mustbuild.body') }}</p>
-                      <HonestyBadge cls="mustbuild" :evidence="selectedTab.evidence" />
                     </div>
                   </div>
+                  <details v-if="selectedTab.evidence" class="evidence-details">
+                    <summary>{{ t('settings.modal.evidence.title') }}</summary>
+                    <code>{{ selectedTab.evidence }}</code>
+                  </details>
                 </section>
               </template>
             </div>
@@ -885,10 +960,11 @@ onBeforeUnmount(() => {
 .settings-kicker { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; padding: 0 12px 8px; }
 .settings-group { display: grid; gap: 4px; }
 .sr-label { margin: 18px 12px 5px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; font-weight: 800; }
-.settings-tab { width: 100%; min-height: 36px; border: 0; background: transparent; color: var(--fg-2); text-align: left; border-radius: var(--r-sm); padding: 8px 10px; font-weight: 650; display: grid; grid-template-columns: 10px minmax(0, 1fr); align-items: center; gap: 6px 8px; cursor: pointer; }
+.settings-tab { width: 100%; min-height: 36px; border: 0; background: transparent; color: var(--fg-2); text-align: left; border-radius: var(--r-sm); padding: 8px 10px; font-weight: 650; display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 6px 8px; cursor: pointer; }
 .settings-tab:hover { background: color-mix(in oklab, var(--surface), var(--fg) 4%); color: var(--fg); }
 .settings-tab[aria-selected="true"] { background: color-mix(in oklab, var(--accent), transparent 88%); color: var(--fg); }
 .settings-tab .tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-status { color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
 .settings-tab :deep(.hb) { grid-column: 2; justify-self: start; max-width: 100%; min-width: 0; }
 .settings-tab :deep(.hb-lbl) { white-space: nowrap; }
 .settings-tab :deep(.hb-ev) { max-width: 116px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -921,7 +997,6 @@ onBeforeUnmount(() => {
 .bdg.warn-soft { color: var(--state-warn); background: color-mix(in oklab, var(--state-warn), transparent 88%); border-color: color-mix(in oklab, var(--state-warn), transparent 55%); }
 .bdg.danger-soft { color: var(--state-danger); background: color-mix(in oklab, var(--state-danger), transparent 90%); border-color: color-mix(in oklab, var(--state-danger), transparent 55%); }
 .tag { display: inline-flex; align-items: center; padding: 2px 7px; border: 1px solid var(--border); border-radius: var(--radius-pill); color: var(--fg-2); font-size: 10px; font-family: var(--font-mono); }
-.endpoint-pill { display: inline-flex; align-items: center; max-width: 100%; padding: 2px 7px; border: 1px solid var(--border-soft); border-radius: var(--radius-pill); color: var(--muted); background: color-mix(in oklab, var(--surface), var(--fg) 2%); font-family: var(--font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .state { border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); padding: 10px 12px; color: var(--fg-2); font-size: var(--text-sm); }
 .state.pending { border-color: color-mix(in oklab, var(--accent), transparent 55%); }
 .state.ok { color: var(--class-live); border-color: color-mix(in oklab, var(--class-live), transparent 45%); }
@@ -978,6 +1053,10 @@ onBeforeUnmount(() => {
 .operator-note p { margin: 4px 0 8px; color: var(--fg-2); }
 .operator-note .mark { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; flex: 0 0 auto; background: var(--accent); color: var(--accent-on); font-size: 12px; font-weight: 800; }
 .operator-note code { font-family: var(--font-mono); color: var(--muted); font-size: var(--text-xs); }
+.evidence-details { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); color: var(--muted); background: color-mix(in oklab, var(--surface), var(--fg) 1.5%); font-size: var(--text-xs); }
+.evidence-details summary { color: var(--fg-2); cursor: pointer; font-weight: 700; }
+.evidence-details p { margin: 8px 0 0; line-height: 1.42; }
+.evidence-details code { display: block; margin-top: 8px; overflow-wrap: anywhere; font-family: var(--font-mono); color: var(--muted); }
 @media (max-width: 1100px) {
   .settings-shell { grid-template-columns: 1fr; min-height: min(760px, 88vh); }
   .settings-rail { border-right: 0; border-bottom: 1px solid var(--border); max-height: 220px; }

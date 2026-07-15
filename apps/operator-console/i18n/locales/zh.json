@@ -22,6 +22,18 @@
     "mustbuild": "需要构建"
   },
 
+  "errors": {
+    "diagnosis": {
+      "unauthorized": "请重新登录后继续。",
+      "forbidden": "当前会话无权访问此界面。",
+      "endpoint-missing": "该服务器端点不可用。",
+      "request-rejected": "Engram 服务器拒绝了此请求。",
+      "server-unavailable": "Engram 服务器不可用。",
+      "unreachable": "无法连接到 Engram 服务器。",
+      "invalid-response": "Engram 服务器返回了无法读取的响应。"
+    }
+  },
+
   "switchRow": {
     "restartRequired": "restart"
   },
@@ -56,6 +68,7 @@
     "authLocked": "需要登录",
     "authUnknown": "会话未知",
     "online": "在线",
+    "backend": { "ready": "console reachable · server ready", "degraded": "console reachable · server degraded", "unavailable": "console reachable · server unavailable" },
     "postgres": "PostgreSQL 17 · pgvector",
     "statusDegradation": "降级",
     "statusNoise": "噪声",
@@ -563,13 +576,16 @@
       "body": "已配置的受信 OIDC 代理数量：{proxies}。邀请为单次使用，会话撤销是软撤销且带审计证据。"
     },
     "state": {
+      "runtime": { "pending": "pending", "live": "live", "empty": "empty", "gated": "gated", "unauthorized": "unauthorized", "forbidden": "forbidden", "error": "error", "stale-snapshot": "stale-snapshot" },
       "pending": "正在加载访问面板…",
       "error": "无法加载访问面板：{message}",
+      "stale": "正在显示 {updatedAt} 的最后一次已验证访问快照；刷新失败：{message}",
       "forbiddenTitle": "需要管理员浏览器会话",
       "forbiddenBody": "只有经过浏览器管理员会话认证的请求才能访问此面板，否则返回 403。",
       "unauthorizedTitle": "需要浏览器会话",
       "unauthorizedBody": "浏览器会话缺失、已过期或已被撤销。请重新登录后再使用此界面。",
-      "authDisabled": "当前处于 auth-disabled 模式。可查看当前状态，但邀请/会话生命周期变更会被有意限制。"
+      "authDisabled": "当前处于 auth-disabled 模式。可查看当前状态，但邀请/会话生命周期变更会被有意限制。",
+      "technicalEvidence": "技术摘要"
     },
     "actions": {
       "refresh": "刷新",
@@ -628,7 +644,15 @@
         "expired": "已过期",
         "revoked": "已撤销"
       },
-      "empty": "暂时没有邀请记录。"
+      "empty": "暂时没有邀请记录。",
+      "reveal": {
+        "title": "立即复制此邀请代码",
+      "body": "该代码只显示一次，不会出现在邀请历史中。",
+      "copy": "复制代码",
+      "copySuccess": "代码已复制。",
+      "copyError": "无法复制代码。请在关闭此提示前手动复制。",
+      "dismiss": "关闭"
+      }
     },
     "users": {
       "title": "用户",
@@ -749,12 +773,17 @@
       "project": "图谱项目"
     },
     "state": {
+      "runtime": { "pending": "pending", "live": "live", "empty": "empty", "gated": "gated", "unauthorized": "unauthorized", "forbidden": "forbidden", "error": "error", "stale-snapshot": "stale-snapshot" },
       "pending": "正在加载图谱数据…",
       "error": "无法加载图谱数据：{message}",
+      "stale": "正在显示 {updatedAt} 的最后一次已验证图谱快照；刷新失败：{message}",
       "empty": "该项目还没有 graph nodes。",
       "gated": "图谱被 flag {flag} 关闭。",
       "live": "已从实时图谱加载 {count} 个节点。",
-      "retry": "重试"
+      "retry": "重试",
+      "unauthorized": "请重新登录以读取图谱。",
+      "forbidden": "当前会话无法读取图谱。",
+      "technicalEvidence": "技术摘要"
     },
     "errors": {
       "title": "类型化图谱错误",
@@ -1447,6 +1476,14 @@
       "aria": "服务器设置",
       "kicker": "设置",
       "close": "关闭设置",
+      "access": {
+        "title": "访问管理",
+        "body": "请在“访问控制”页面管理登录提供方、邀请、用户、角色、会话和审计记录。单独的策略编辑器不可用。",
+        "action": "打开访问控制",
+        "detailsTitle": "实现详情",
+        "detailsBody": "访问控制页面是实际的管理界面；此设置标签页不提供单独的策略编辑器。"
+      },
+      "evidence": { "title": "实现详情" },
       "groups": {
         "basic": "基础",
         "models": "模型",

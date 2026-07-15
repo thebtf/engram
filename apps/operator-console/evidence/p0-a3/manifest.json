@@ -1,0 +1,118 @@
+{
+  "sourceProof": {
+    "algo": "sha256(sorted \"path:gitObjectHash\" pairs joined by \\n)",
+    "files": [
+      {
+        "path": "composables/useOperatorAccess.ts",
+        "objectHash": "937a4db67d2f9a4a8f7c9710548838f88e852107"
+      },
+      {
+        "path": "composables/useOperatorApi.ts",
+        "objectHash": "e72937ddc03c35a16e4002f565e9c6891e3154b7"
+      },
+      {
+        "path": "composables/useOperatorGraph.ts",
+        "objectHash": "39817120bd04186eeeb642518de2433a8200171a"
+      },
+      {
+        "path": "pages/access.vue",
+        "objectHash": "ed10f302abcfb5d928fb73be2a5bdb2162cd35c5"
+      },
+      {
+        "path": "pages/graph.vue",
+        "objectHash": "df3771e01ce0453bc99ce6022f70a18f6f2698d9"
+      },
+      {
+        "path": "pages/settings.vue",
+        "objectHash": "7cc4f2b814970f5d250e06ca290df5a93dd39e2e"
+      },
+      {
+        "path": "tests/browser/truth-accessibility.spec.ts",
+        "objectHash": "c8a2bf85a08d0d3027d497b1be106c9ab5b5f30d"
+      }
+    ],
+    "aggregate": "2f282a595f6d3871d3f288c933097efa7d1aa7a2a6da6c1fa96285037d062ed6"
+  },
+  "sourceFixture": "tests/browser/truth-accessibility.spec.ts",
+  "generation": "OPERATOR_EVIDENCE_DIR=<this dir> npx playwright test tests/browser/truth-accessibility.spec.ts; then node scripts/build-evidence-manifest.mjs",
+  "secretScan": "mock-only fixtures; no invitation code, credential, or live host data is captured",
+  "captures": [
+    {
+      "path": "access-error-390.png",
+      "viewport": "390x844",
+      "state": "error",
+      "bytes": 23106,
+      "sha256": "75fc00802eec6ac23c198a7d01e88e798c7267f9f2b3387a307a14da7a33fdd9"
+    },
+    {
+      "path": "access-forbidden-1280.png",
+      "viewport": "1280x720",
+      "state": "forbidden",
+      "bytes": 69840,
+      "sha256": "85804bb59444e01fec1fd4b1768645807cbdc356a140074a0f8d61c56769b55d"
+    },
+    {
+      "path": "access-populated-1280.png",
+      "viewport": "1280x720",
+      "state": "live",
+      "bytes": 113068,
+      "sha256": "07d645c7ce1a0304608bc8f7a42d91964a14adc74b5b0ab2f4f63e16e42593b3"
+    },
+    {
+      "path": "access-recovery-980.png",
+      "viewport": "980x844",
+      "state": "live",
+      "bytes": 77033,
+      "sha256": "a43be3e79c06dd8b1082b9211c2b6f7b4300463963276301d3f96a861926f19f"
+    },
+    {
+      "path": "access-unauthorized-1280.png",
+      "viewport": "1280x720",
+      "state": "unauthorized",
+      "bytes": 71375,
+      "sha256": "a303e106066c99b2cad06f065d25afee16c0eb106fa799b6f430204b56efd03c"
+    },
+    {
+      "path": "graph-error-1440.png",
+      "viewport": "1440x900",
+      "state": "error",
+      "bytes": 143202,
+      "sha256": "5578d7d9faec8cd6d49bba19a0a49903f5a35c1dbe236177fe8ff84dd38ed703"
+    },
+    {
+      "path": "graph-gated-980.png",
+      "viewport": "980x844",
+      "state": "gated",
+      "bytes": 75119,
+      "sha256": "ca420564a1827910b87d3428f438d236bdabdb6995755d6bd499b7b112268905"
+    },
+    {
+      "path": "graph-populated-1440.png",
+      "viewport": "1440x900",
+      "state": "live",
+      "bytes": 147035,
+      "sha256": "a5c2ae9adde726e40164cdef69e10483ee85cc19c94b406341458bf8fbcc938b"
+    },
+    {
+      "path": "graph-stale-1440.png",
+      "viewport": "1440x900",
+      "state": "stale-snapshot",
+      "bytes": 150899,
+      "sha256": "f4ac1e3dc45fce2ec42c8c6462ef0b1d313c2e290699064de55f1491c0f2a924"
+    },
+    {
+      "path": "settings-access-390.png",
+      "viewport": "390x844",
+      "state": "settings-access",
+      "bytes": 34142,
+      "sha256": "954494096284ffcb00fd7ec27ba082125e60e7e63f1c901d17a91a8f82b8a9f7"
+    },
+    {
+      "path": "settings-general-390.png",
+      "viewport": "390x844",
+      "state": "settings-general",
+      "bytes": 53387,
+      "sha256": "4fe5654f776620ada515732c897f410f9a3173b11093406f4481ee66ff397e6b"
+    }
+  ]
+}

@@ -43,8 +43,10 @@ type AccessRoleSummary struct {
 
 // AccessInvitationView is the operator-console read shape for one invitation.
 type AccessInvitationView struct {
-	ID               int64      `json:"id"`
-	Code             string     `json:"code"`
+	ID int64 `json:"id"`
+	// Code is populated only by the create response. Ordinary read surfaces
+	// intentionally omit it: an invitation code is a one-time secret.
+	Code             string     `json:"code,omitempty"`
 	Email            string     `json:"email"`
 	Role             string     `json:"role"`
 	CreatedBy        int64      `json:"created_by"`
@@ -524,7 +526,6 @@ func (s *DomainOwnerStore) listAccessInvitations(ctx context.Context, limit int,
 		Table("invitations AS i").
 		Select(`
 			i.id,
-			i.code,
 			i.invitee_email AS email,
 			i.role,
 			i.created_by,
@@ -554,7 +555,6 @@ func (s *DomainOwnerStore) listAccessInvitations(ctx context.Context, limit int,
 	for _, row := range rows {
 		result = append(result, AccessInvitationView{
 			ID:               row.ID,
-			Code:             row.Code,
 			Email:            row.Email,
 			Role:             row.Role,
 			CreatedBy:        row.CreatedBy,
@@ -668,11 +668,34 @@ func (s *DomainOwnerStore) queryAccessAudit(ctx context.Context, limit int, targ
 			Actor:       row.Actor,
 			Reason:      row.Reason,
 			CreatedAt:   row.CreatedAt,
-			BeforeState: decodeAuditJSON(row.BeforeState),
-			AfterState:  decodeAuditJSON(row.AfterState),
+			BeforeState: redactInvitationCode(decodeAuditJSON(row.BeforeState)),
+			AfterState:  redactInvitationCode(decodeAuditJSON(row.AfterState)),
 		})
 	}
 	return result, nil
+}
+
+func redactInvitationCode(state map[string]any) map[string]any {
+	if state == nil {
+		return nil
+	}
+	for key, value := range state {
+		if strings.EqualFold(key, "code") || strings.EqualFold(key, "invitation_code") {
+			delete(state, key)
+			continue
+		}
+		switch nested := value.(type) {
+		case map[string]any:
+			redactInvitationCode(nested)
+		case []any:
+			for _, item := range nested {
+				if child, ok := item.(map[string]any); ok {
+					redactInvitationCode(child)
+				}
+			}
+		}
+	}
+	return state
 }
 
 func marshalAuditState(v any) (*json.RawMessage, error) {

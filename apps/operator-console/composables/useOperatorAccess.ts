@@ -148,7 +148,6 @@ export interface OperatorAccessProvider {
 
 export interface OperatorAccessInvitation {
   id: number
-  code: string
   email: string
   role: string
   createdBy: number
@@ -298,7 +297,6 @@ function mapProvider(row: ApiAccessProvider): OperatorAccessProvider {
 function mapInvitation(row: ApiAccessInvitation): OperatorAccessInvitation {
   return {
     id: Number(row.id),
-    code: row.code || '',
     email: row.email || '',
     role: row.role || 'operator',
     createdBy: Number(row.created_by || 0),
@@ -388,6 +386,7 @@ export interface OperatorAccessComposable {
   pending: ComputedRef<boolean>
   error: ComputedRef<OperatorSourceError | null>
   forbidden: ComputedRef<boolean>
+  hasProvenSnapshot: ComputedRef<boolean>
   refresh: () => Promise<void>
   openUser: (userID: number) => Promise<void>
   closeUser: () => void
@@ -411,6 +410,7 @@ export function useOperatorAccess(): OperatorAccessComposable {
   const selectedUserID = useState<number | null>('live:access:selected-user', () => null)
   const drilldownData = useState<OperatorAccessDrilldown>('live:access:drilldown', emptyDrilldown)
   const loadStateValue = useState<OperatorLoadState<OperatorAccessSnapshot>>('live:access:state', () => pendingState(evidence, currentSnapshot()))
+  const hasProvenSnapshotValue = useState<boolean>('live:access:has-proven-snapshot', () => false)
   const drilldownStateValue = useState<OperatorLoadState<OperatorAccessDrilldown>>('live:access:drilldown-state', () => liveState(drilldownEvidence, emptyDrilldown()))
 
   function currentSnapshot(): OperatorAccessSnapshot {
@@ -446,6 +446,7 @@ export function useOperatorAccess(): OperatorAccessComposable {
     return null
   })
   const forbidden = computed(() => Boolean(error.value && (error.value.status === 401 || error.value.status === 403)))
+  const hasProvenSnapshot = computed(() => hasProvenSnapshotValue.value)
 
   async function refresh() {
     loadStateValue.value = pendingState(evidence, currentSnapshot())
@@ -471,6 +472,7 @@ export function useOperatorAccess(): OperatorAccessComposable {
         authentikTrustedProxyCount: Number(providersPayload.authentik_trusted_proxy_count || 0),
       }
       loadStateValue.value = liveState(evidence, currentSnapshot())
+      hasProvenSnapshotValue.value = true
 
       if (selectedUserID.value) {
         await openUser(selectedUserID.value)
@@ -590,6 +592,7 @@ export function useOperatorAccess(): OperatorAccessComposable {
     pending,
     error,
     forbidden,
+    hasProvenSnapshot,
     refresh,
     openUser,
     closeUser,

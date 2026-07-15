@@ -1528,7 +1528,9 @@ func (s *Service) setupRoutes() {
 	// Health returns 200 as soon as the process starts; hooks rely on this
 	// for the initial connection handshake before the database is ready.
 	// Both paths exist for backward compatibility with older hook versions.
-	s.router.Get("/health", s.handleHealth)
+	// /health predates the operator console and remains a machine JSON probe by
+	// default. Browsers explicitly asking for HTML get the SPA route instead.
+	s.router.Get("/health", s.handleHealthRoute)
 	s.router.Get("/api/health", s.handleHealth)
 
 	// Version lets hooks detect a stale worker process after an update.

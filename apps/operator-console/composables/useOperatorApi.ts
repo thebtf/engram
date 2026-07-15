@@ -19,8 +19,31 @@ export interface OperatorEndpointEvidence {
   retryable?: boolean
 }
 
+export const OPERATOR_DIAGNOSIS_CATEGORIES = [
+  'unauthorized',
+  'forbidden',
+  'endpoint-missing',
+  'request-rejected',
+  'server-unavailable',
+  'unreachable',
+  'invalid-response',
+] as const
+
+/**
+ * Typed diagnosis category — the transport seam classifies failures; the
+ * presentation boundary maps the category through locale keys
+ * (`errors.diagnosis.<category>`). The seam itself never returns operator prose.
+ */
+export type OperatorDiagnosisCategory = typeof OPERATOR_DIAGNOSIS_CATEGORIES[number]
+
 export interface OperatorSourceError {
   message: string
+  /**
+   * Typed diagnosis set by the transport seam. Optional only for page-local
+   * parse errors constructed outside this seam; the presentation boundary
+   * falls back to `unreachable`.
+   */
+  category?: OperatorDiagnosisCategory
   source: string
   path: string
   method: string
@@ -133,6 +156,7 @@ export function endpointEvidence(
 
 export class OperatorFetchError extends Error {
   readonly status?: number
+  readonly category?: OperatorDiagnosisCategory
   readonly source: string
   readonly path: string
   readonly method: string
@@ -142,6 +166,7 @@ export class OperatorFetchError extends Error {
     super(message)
     this.name = 'OperatorFetchError'
     this.status = meta.status
+    this.category = meta.category
     this.source = meta.source
     this.path = meta.path
     this.method = meta.method
@@ -156,6 +181,7 @@ export function toOperatorSourceError(
   if (error instanceof OperatorFetchError) {
     return {
       message: error.message,
+      category: error.category,
       status: error.status,
       source: error.source,
       path: error.path,
@@ -166,6 +192,7 @@ export function toOperatorSourceError(
 
   return {
     message: error instanceof Error ? error.message : String(error),
+    category: 'unreachable',
     source: fallback.source,
     path: fallback.path,
     method: fallback.method,
@@ -173,18 +200,33 @@ export function toOperatorSourceError(
   }
 }
 
-function bodyDetail(text: string): string {
-  const trimmed = text.trim()
-  if (!trimmed) {
-    return ''
-  }
+/**
+ * Classify an HTTP failure into a typed diagnosis category.
+ * No English operator prose leaves this seam — the presentation boundary
+ * translates the category via `errors.diagnosis.<category>` locale keys.
+ */
+export function operatorErrorDiagnosis(status?: number): OperatorDiagnosisCategory {
+  if (status === 401) return 'unauthorized'
+  if (status === 403) return 'forbidden'
+  if (status === 404) return 'endpoint-missing'
+  if (status !== undefined && status >= 500) return 'server-unavailable'
+  if (status !== undefined && status >= 400) return 'request-rejected'
+  return 'unreachable'
+}
 
-  const compact = trimmed.replace(/\s+/g, ' ')
-  if (/<(?:!doctype\s+html|html[\s>]|head[\s>]|body[\s>])/i.test(compact)) {
-    return ': HTML error response'
-  }
+/** Resolve the typed category for any source error, deriving from status when unset. */
+export function operatorDiagnosisCategory(
+  error: Pick<OperatorSourceError, 'category' | 'status'> | null | undefined,
+): OperatorDiagnosisCategory {
+  if (!error) return 'unreachable'
+  return error.category ?? operatorErrorDiagnosis(error.status)
+}
 
-  return `: ${compact.slice(0, 180)}${compact.length > 180 ? '...' : ''}`
+/** Locale key for the primary operator copy of a failure. Presentation boundary only. */
+export function operatorDiagnosisKey(
+  error: Pick<OperatorSourceError, 'category' | 'status'> | null | undefined,
+): string {
+  return `errors.diagnosis.${operatorDiagnosisCategory(error)}`
 }
 
 async function readOperatorResponseText(
@@ -200,6 +242,7 @@ async function readOperatorResponseText(
     const message = `Failed to read response from ${path}: ${detail}`
     throw new OperatorFetchError(message, {
       message,
+      category: 'invalid-response',
       status: response.status,
       source,
       path,
@@ -230,9 +273,11 @@ export async function operatorFetchJson<T>(
   const text = await readOperatorResponseText(response, path, source, method)
 
   if (!response.ok) {
-    const message = `${response.status} ${response.statusText} for ${path}${bodyDetail(text)}`
+    const category = operatorErrorDiagnosis(response.status)
+    const message = `${method} ${path} failed with status ${response.status}`
     throw new OperatorFetchError(message, {
       message,
+      category,
       status: response.status,
       source,
       path,
@@ -258,9 +303,10 @@ export async function operatorFetchJson<T>(
     return JSON.parse(text) as T
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
-    const message = `Invalid JSON from ${path}: ${detail}${bodyDetail(text)}`
+    const message = `Invalid JSON from ${path}: ${detail}`
     throw new OperatorFetchError(message, {
       message,
+      category: 'invalid-response',
       status: response.status,
       source,
       path,

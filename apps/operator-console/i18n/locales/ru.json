@@ -22,6 +22,18 @@
     "mustbuild": "нужно построить"
   },
 
+  "errors": {
+    "diagnosis": {
+      "unauthorized": "Войдите снова, чтобы продолжить.",
+      "forbidden": "Текущая сессия не имеет доступа к этой поверхности.",
+      "endpoint-missing": "Этот эндпоинт сервера недоступен.",
+      "request-rejected": "Сервер Engram отклонил этот запрос.",
+      "server-unavailable": "Сервер Engram недоступен.",
+      "unreachable": "Не удалось связаться с сервером Engram.",
+      "invalid-response": "Сервер Engram вернул нечитаемый ответ."
+    }
+  },
+
   "switchRow": {
     "restartRequired": "restart"
   },
@@ -56,6 +68,7 @@
     "authLocked": "требуется вход",
     "authUnknown": "сессия неизвестна",
     "online": "онлайн",
+    "backend": { "ready": "console reachable · server ready", "degraded": "console reachable · server degraded", "unavailable": "console reachable · server unavailable" },
     "postgres": "PostgreSQL 17 · pgvector",
     "statusDegradation": "деградация",
     "statusNoise": "шум",
@@ -563,13 +576,16 @@
       "body": "Доверенных OIDC-прокси настроено: {proxies}. Приглашение одноразовое, а revoke сессии остаётся мягким и аудируемым lifecycle-событием."
     },
     "state": {
+      "runtime": { "pending": "pending", "live": "live", "empty": "empty", "gated": "gated", "unauthorized": "unauthorized", "forbidden": "forbidden", "error": "error", "stale-snapshot": "stale-snapshot" },
       "pending": "Загружаем поверхность доступа…",
       "error": "Не удалось загрузить поверхность доступа: {message}",
+      "stale": "Показан последний подтверждённый снимок доступа от {updatedAt}; обновление не удалось: {message}",
       "forbiddenTitle": "Нужна браузерная admin-сессия",
       "forbiddenBody": "Эта поверхность возвращает 403, пока запрос не идёт из браузерной admin-сессии.",
       "unauthorizedTitle": "Нужна браузерная сессия",
       "unauthorizedBody": "Браузерная сессия отсутствует, истекла или была отозвана. Войдите снова, прежде чем пользоваться этой поверхностью.",
-      "authDisabled": "Режим auth-disabled активен. Текущее состояние видно, но мутации invite/session lifecycle намеренно ограничены."
+      "authDisabled": "Режим auth-disabled активен. Текущее состояние видно, но мутации invite/session lifecycle намеренно ограничены.",
+      "technicalEvidence": "Техническая сводка"
     },
     "actions": {
       "refresh": "Обновить",
@@ -628,7 +644,15 @@
         "expired": "Истекло",
         "revoked": "Отозвано"
       },
-      "empty": "Приглашений пока нет."
+    "empty": "Приглашений пока нет.",
+    "reveal": {
+      "title": "Скопируйте приглашение сейчас",
+      "body": "Код показан один раз и не появится в истории приглашений.",
+      "copy": "Скопировать код",
+      "copySuccess": "Код скопирован.",
+      "copyError": "Не удалось скопировать код. Скопируйте его вручную, прежде чем закрыть это сообщение.",
+      "dismiss": "Закрыть"
+    }
     },
     "users": {
       "title": "Пользователи",
@@ -749,12 +773,17 @@
       "project": "Проект графа"
     },
     "state": {
+      "runtime": { "pending": "pending", "live": "live", "empty": "empty", "gated": "gated", "unauthorized": "unauthorized", "forbidden": "forbidden", "error": "error", "stale-snapshot": "stale-snapshot" },
       "pending": "Загружаем граф…",
       "error": "Не удалось загрузить граф: {message}",
+      "stale": "Показан последний подтверждённый снимок графа от {updatedAt}; обновление не удалось: {message}",
       "empty": "В этом проекте пока нет graph nodes.",
       "gated": "Граф отключен флагом {flag}.",
       "live": "Из живого графа загружено {count} узлов.",
-      "retry": "Повторить"
+      "retry": "Повторить",
+      "unauthorized": "Войдите снова, чтобы читать граф.",
+      "forbidden": "Текущая сессия не может читать граф.",
+      "technicalEvidence": "Техническая сводка"
     },
     "errors": {
       "title": "Типизированная ошибка графа",
@@ -1447,6 +1476,14 @@
       "aria": "Настройки сервера",
       "kicker": "Настройки",
       "close": "Закрыть настройки",
+      "access": {
+        "title": "Управление доступом",
+        "body": "Управляйте провайдерами входа, приглашениями, пользователями, ролями, сессиями и историей аудита на странице «Доступ». Отдельный редактор политик недоступен.",
+        "action": "Открыть «Доступ»",
+        "detailsTitle": "Технические сведения",
+        "detailsBody": "Страница «Доступ» — рабочая поверхность администрирования; отдельного редактора политик в настройках нет."
+      },
+      "evidence": { "title": "Технические сведения" },
       "groups": {
         "basic": "Основное",
         "models": "Модели",

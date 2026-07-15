@@ -620,7 +620,7 @@ func (h *AuthHandlers) handleCreateInvitation(w http.ResponseWriter, r *http.Req
 	writeJSON(w, map[string]any{"code": inv.Code, "id": inv.ID, "email": inv.Email, "role": inv.Role, "expires_at": inv.ExpiresAt})
 }
 
-// handleListInvitations returns all invitation codes (legacy admin route).
+// handleListInvitations returns invitation metadata without one-time codes (legacy admin route).
 func (h *AuthHandlers) handleListInvitations(w http.ResponseWriter, r *http.Request) {
 	if !requireLegacyAdminRole(w, r) {
 		return
@@ -829,7 +829,7 @@ func (h *AuthHandlers) handleAccessCreateInvitation(w http.ResponseWriter, r *ht
 			Action:     "auth_invitation_created",
 			Actor:      actor.Email,
 			Reason:     "invitation issued",
-			AfterState: map[string]any{"invite_id": inv.ID, "code": inv.Code, "email": inv.Email, "role": inv.Role, "expires_at": inv.ExpiresAt},
+			AfterState: map[string]any{"invite_id": inv.ID, "email": inv.Email, "role": inv.Role, "expires_at": inv.ExpiresAt},
 			CreatedAt:  time.Now().UTC(),
 		})
 	}
@@ -912,7 +912,7 @@ func (h *AuthHandlers) handleAccessRevokeInvitation(w http.ResponseWriter, r *ht
 			Action:      "auth_invitation_revoked",
 			Actor:       actor.Email,
 			Reason:      reason,
-			BeforeState: map[string]any{"invite_id": before.ID, "code": before.Code, "email": before.Email, "role": before.Role},
+			BeforeState: map[string]any{"invite_id": before.ID, "email": before.Email, "role": before.Role},
 			AfterState:  map[string]any{"invite_id": before.ID, "revoked_by": actorAuditValue(actor), "reason": reason},
 			CreatedAt:   time.Now().UTC(),
 		})

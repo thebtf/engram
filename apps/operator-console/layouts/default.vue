@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useNav, type NavItem } from '../composables/useNav'
 import { operatorFetchJson } from '../composables/useOperatorApi'
 import { useOperatorMemoryLab } from '../composables/useOperatorMemoryLab'
+import { useOperatorQueue } from '../composables/useOperatorQueue'
 import { useOperatorShellStatus } from '../composables/useOperatorShell'
 
 const { NAV } = useNav()
 const shell = useOperatorShellStatus()
 const info = shell.info
 const memoryLab = useOperatorMemoryLab()
+const queue = useOperatorQueue()
 const memories = memoryLab.rows
 const route = useRoute()
 const router = useRouter()
@@ -22,6 +24,10 @@ const navCollapsed = useState<boolean>('nav-collapsed', () => false)
 const navPeek = ref(false)
 const peekSuppressed = ref(false)
 const mobileNavOpen = ref(false)
+const mobileMenuButton = ref<HTMLButtonElement | null>(null)
+const mobileNav = ref<HTMLElement | null>(null)
+const compactViewport = ref(false)
+const previousBodyOverflow = ref<string | null>(null)
 const search = ref('')
 const identityMenuOpen = ref(false)
 const identityMenuRef = ref<HTMLElement | null>(null)
@@ -46,7 +52,7 @@ const NAV_ICONS: Record<string, string> = {
   health: '<path d="M2 8.2 H5 L6.8 4 L9.2 12.4 L11 8.2 H14"/>',
 }
 
-const flatNav = computed(() => NAV.flatMap((group) => group.items))
+const flatNav = computed(() => NAV.value.flatMap((group) => group.items))
 const currentArea = computed(() => {
   const currentPath = normalizePath(route.path)
   const current = flatNav.value.find((item) => normalizePath(item.to) === currentPath)
@@ -56,6 +62,11 @@ const memoryRecordsLabel = computed(() => (
   memoryLab.pending.value && memories.length === 0
     ? t('shell.recordsLoading')
     : t('shell.records', memories.length)
+))
+const reviewQueueLabel = computed(() => (
+  ['live', 'empty'].includes(queue.loadState.value.kind)
+    ? t('shell.reviewQueue', queue.rows.length)
+    : t('nav.items.queue')
 ))
 const authPostureLabel = computed(() => {
   switch (info.value.authPosture) {
@@ -69,9 +80,12 @@ const authPostureLabel = computed(() => {
       return t('shell.authUnknown')
   }
 })
+const backendStatusLabel = computed(() => t(`shell.backend.${info.value.backendStatus}`))
 
 onMounted(() => {
   navCollapsed.value = window.localStorage.getItem(NAV_COLLAPSE_KEY) === '1'
+  syncViewport()
+  window.addEventListener('resize', syncViewport)
   window.addEventListener('pointerdown', onDocumentPointerDown)
   window.addEventListener('keydown', onDocumentKeydown)
 })
@@ -86,9 +100,33 @@ const logoutTitle = computed(() => {
 
 onBeforeUnmount(() => {
   if (!import.meta.client) return
+  window.removeEventListener('resize', syncViewport)
   window.removeEventListener('pointerdown', onDocumentPointerDown)
   window.removeEventListener('keydown', onDocumentKeydown)
+  if (previousBodyOverflow.value !== null) {
+    document.body.style.overflow = previousBodyOverflow.value
+    previousBodyOverflow.value = null
+  }
 })
+
+watch(() => route.fullPath, () => closeMobileNav())
+watch([mobileNavOpen, compactViewport], ([open, compact]) => {
+  if (!import.meta.client) return
+  if (open && compact) {
+    if (previousBodyOverflow.value === null) previousBodyOverflow.value = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return
+  }
+  if (previousBodyOverflow.value !== null) {
+    document.body.style.overflow = previousBodyOverflow.value
+    previousBodyOverflow.value = null
+  }
+})
+
+function syncViewport() {
+  compactViewport.value = window.innerWidth <= 980
+  if (!compactViewport.value) mobileNavOpen.value = false
+}
 
 function navIcon(id: string) {
   const path = NAV_ICONS[id] || ''
@@ -146,10 +184,26 @@ function goSearch() {
 }
 
 function handleNavItemClick(event: MouseEvent, item: NavItem) {
-  mobileNavOpen.value = false
+  closeMobileNav()
   if (item.id !== 'settings') return
   event.preventDefault()
   openSettingsModal('general')
+}
+
+function openMobileNav() {
+  mobileNavOpen.value = true
+  void nextTick(() => mobileNav.value?.querySelector<HTMLElement>('a, button')?.focus())
+}
+
+function closeMobileNav() {
+  if (!mobileNavOpen.value) return
+  mobileNavOpen.value = false
+  void nextTick(() => mobileMenuButton.value?.focus())
+}
+
+function toggleMobileNav() {
+  if (mobileNavOpen.value) closeMobileNav()
+  else openMobileNav()
 }
 
 function toggleIdentityMenu() {
@@ -189,24 +243,45 @@ function onDocumentPointerDown(event: PointerEvent) {
 }
 
 function onDocumentKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') closeIdentityMenu()
+  if (mobileNavOpen.value && compactViewport.value && event.key === 'Tab') {
+    const focusable = [...(mobileNav.value?.querySelectorAll<HTMLElement>('a[href], button:not(:disabled)') || [])]
+    if (focusable.length) {
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+  }
+  if (event.key === 'Escape') {
+    closeIdentityMenu()
+    closeMobileNav()
+  }
 }
 </script>
 
 <template>
   <div
     class="app"
-    :class="{ 'nav-collapsed': navCollapsed, 'nav-peek': navPeek }"
+    :class="{ 'nav-collapsed': navCollapsed, 'nav-peek': navPeek, 'mobile-nav-open': mobileNavOpen }"
     :data-density="density"
   >
     <nav
+      ref="mobileNav"
+      id="primary-navigation"
       class="nav"
       :class="{ open: mobileNavOpen }"
+      :aria-hidden="compactViewport && !mobileNavOpen"
+      :inert="compactViewport && !mobileNavOpen"
       @pointerenter="onNavEnter"
       @pointerleave="onNavLeave"
     >
       <div class="navhead">
-        <NuxtLink to="/" class="navbrand" :title="t('shell.brandHome')" @click="mobileNavOpen = false">
+        <NuxtLink to="/" class="navbrand" :title="t('shell.brandHome')" @click="closeMobileNav">
           <span class="glyph">e</span>
           <span class="navbrand-wm">engram</span>
         </NuxtLink>
@@ -248,8 +323,10 @@ function onDocumentKeydown(event: KeyboardEvent) {
       </div>
     </nav>
 
-    <header class="topbar">
-      <button class="tbtn mobile-menu-button" :aria-label="t('shell.mobileMenu')" @click="mobileNavOpen = !mobileNavOpen">☰</button>
+    <button v-if="mobileNavOpen" class="nav-scrim" :aria-label="t('shell.mobileMenu')" @click="closeMobileNav" />
+
+    <header class="topbar" :inert="compactViewport && mobileNavOpen">
+      <button ref="mobileMenuButton" class="tbtn mobile-menu-button" type="button" :aria-label="t('shell.mobileMenu')" :aria-expanded="mobileNavOpen" aria-controls="primary-navigation" @click="toggleMobileNav">☰</button>
       <form class="gsearch-wrap" @submit.prevent="goSearch">
         <div class="gsearch">
           <span>⌕</span>
@@ -258,12 +335,12 @@ function onDocumentKeydown(event: KeyboardEvent) {
         </div>
       </form>
       <div class="tspacer" />
-      <div class="seg" role="group" :aria-label="t('shell.density')">
+      <div class="seg topbar-secondary" role="group" :aria-label="t('shell.density')">
         <button :aria-pressed="density === 'comfortable'" @click="density = 'comfortable'">{{ t('shell.densityComfortable') }}</button>
         <button :aria-pressed="density === 'compact'" @click="density = 'compact'">{{ t('shell.densityCompact') }}</button>
       </div>
-      <button class="tbtn lang" :title="t('shell.language')" @click="cycleLocale">{{ String(locale).toUpperCase() }}</button>
-      <button class="tbtn" @click="toggleTheme" :title="colorMode.value === 'dark' ? t('shell.themeToLight') : t('shell.themeToDark')">◐</button>
+      <button class="tbtn lang topbar-secondary" :title="t('shell.language')" @click="cycleLocale">{{ String(locale).toUpperCase() }}</button>
+      <button class="tbtn topbar-secondary" @click="toggleTheme" :title="colorMode.value === 'dark' ? t('shell.themeToLight') : t('shell.themeToDark')">◐</button>
       <div ref="identityMenuRef" class="identity-wrap">
         <button
           class="identity"
@@ -317,12 +394,12 @@ function onDocumentKeydown(event: KeyboardEvent) {
       </div>
     </header>
 
-    <main class="content">
+    <main class="content" :inert="compactViewport && mobileNavOpen">
       <slot />
     </main>
 
-    <footer class="statusbar">
-      <span class="si"><span class="dot" />{{ t('shell.online') }}</span>
+    <footer class="statusbar" :inert="compactViewport && mobileNavOpen">
+      <span class="si" :data-state="info.backendStatus"><span class="dot" />{{ backendStatusLabel }}</span>
       <button type="button" class="si status-action" @click="openSettingsModal('general')"><span>{{ info.host }}</span><strong>{{ info.version }}</strong></button>
       <span class="si">{{ t('shell.postgres') }}</span>
       <span class="si">{{ currentArea }}</span>
@@ -330,7 +407,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
       <NuxtLink to="/health" class="si warn"><span class="dot" />{{ t('shell.statusDegradation') }} <strong>{{ info.health }}</strong></NuxtLink>
       <span class="si">{{ memoryRecordsLabel }}</span>
       <NuxtLink to="/noise" class="si warn"><span class="dot" />{{ t('shell.statusNoise') }} <strong>{{ info.noise }}</strong></NuxtLink>
-      <NuxtLink to="/queue" class="si">{{ t('shell.reviewQueue', 7) }}</NuxtLink>
+      <NuxtLink to="/queue" class="si">{{ reviewQueueLabel }}</NuxtLink>
       <span class="si">{{ t('shell.uptime', { value: info.uptime }) }}</span>
     </footer>
 
@@ -374,6 +451,7 @@ function onDocumentKeydown(event: KeyboardEvent) {
   border-right:1px solid var(--border);
   transition:width var(--motion-base) var(--ease-standard);
 }
+.nav-scrim { display:none; }
 .app.nav-collapsed > .nav { width:var(--nav-rail-w); }
 .app.nav-collapsed.nav-peek > .nav { width:var(--nav-w); z-index:55; box-shadow:var(--elev-raised); }
 .navhead { display:flex; align-items:center; gap:6px; flex:none; height:48px; padding:0 8px 0 14px; border-bottom:1px solid var(--border); }
@@ -480,14 +558,16 @@ function onDocumentKeydown(event: KeyboardEvent) {
   .tbtn,
   .seg button { min-height:40px; }
 }
-@media (max-width:900px) {
+@media (max-width:980px) {
   .app,
   .app.nav-collapsed { grid-template-columns:1fr; grid-template-areas:"topbar" "content" "statusbar"; }
   .topbar { gap:8px; padding:0 10px; }
-  .mobile-menu-button { display:inline-flex; }
+  .topbar .mobile-menu-button { display:inline-flex; }
+  .topbar-secondary { display:none; }
   .gsearch { min-width:0; width:min(360px,48vw); }
-  .app > .nav { position:fixed; top:0; bottom:0; left:0; width:236px; transform:translateX(-100%); transition:transform var(--motion-base) var(--ease-standard); z-index:60; }
+  .app > .nav { position:fixed; top:0; bottom:0; left:0; width:min(320px, calc(100vw - 48px)); transform:translateX(-100%); transition:transform var(--motion-base) var(--ease-standard); z-index:60; }
   .app > .nav.open { transform:none; }
+  .nav-scrim { display:block; position:fixed; inset:0; z-index:50; border:0; background:color-mix(in srgb, #000, transparent 52%); cursor:pointer; }
   .navcollapse,
   .identity,
   .statusbar .si:nth-last-child(-n+3) { display:none; }

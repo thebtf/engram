@@ -9,7 +9,8 @@ export default defineConfig({
   testDir: './tests/browser',
   timeout: 30_000,
   expect: { timeout: 5_000 },
-  fullyParallel: false,
+  fullyParallel: true,
+  workers: Number(process.env.OPERATOR_CONSOLE_WORKERS || 4),
   reporter: process.env.CI ? [['list']] : 'list',
   use: {
     baseURL: appUrl,

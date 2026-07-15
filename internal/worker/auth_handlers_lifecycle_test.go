@@ -205,6 +205,17 @@ func TestAuthHandlersLifecycle_AccessCreateInvitationAcceptsAuthentikAdminWithou
 	require.Equal(t, admin.ID, payload.Invitation.CreatedBy)
 	require.Equal(t, adminEmail, payload.Invitation.CreatedByEmail)
 	require.Equal(t, inviteEmail, payload.Invitation.Email)
+	require.NotEmpty(t, payload.Invitation.Code, "create is the only bounded code reveal")
+}
+
+func TestAccessInvitationReadShapesOmitCodes(t *testing.T) {
+	readBody, err := json.Marshal(gormdb.AccessInvitationView{ID: 1, Email: "operator@example.com"})
+	require.NoError(t, err)
+	require.NotContains(t, string(readBody), `"code"`)
+
+	createdBody, err := json.Marshal(gormdb.AccessInvitationView{ID: 1, Code: "one-time-secret"})
+	require.NoError(t, err)
+	require.Contains(t, string(createdBody), `"code":"one-time-secret"`)
 }
 
 func TestAuthHandlersLifecycle_LastAdminDemoteRaceLeavesOneAdmin(t *testing.T) {
