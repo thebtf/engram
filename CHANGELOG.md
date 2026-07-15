@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.43.0] - 2026-07-15
+
 ### Changed
 
-- **MCP tool surface convergence.** Removes 27 obsolete advertised compatibility tools plus their hidden direct-call/tombstone routes. The default primary count remains 9, while `tools/list(include_all=true)` no longer adds the 27 legacy entries. The primary `recall`, `store`, `feedback`, `vault`, `docs`, and `admin` schemas now advertise only live actions; callers must use consolidated tools, while provider-backed expanded tools remain conditional on their working stores and feature gates.
+- **MCP tool surface prune, 49 -> 22 (MCP-SURFACE-1).** Removes 27 obsolete advertised compatibility tools plus their hidden direct-call/tombstone routes: `find_by_file`, `find_similar_observations`, `get_memory_stats`, `search_sessions`, `list_sessions`, `import_instincts`, `backfill_status`, `store_memory`, `rate_memory`, `suppress_memory`, `set_session_outcome`, the legacy `*_credential`/`vault_*` pairs, the legacy `doc_*`/`list_*`/`get_document`/`remove_document`/`ingest_document`/`search_collection` pairs, `analyze_search_patterns`, `search`, `timeline`, `decisions`, `changes`, `how_it_works`, `find_by_concept`, `find_by_type`, and the `get_recent_context`/`get_context_timeline`/`get_timeline_by_query` trio. The default primary tool count remains 9 (`recall`, `store`, `feedback`, `issues`, `vault`, `settings`, `docs`, `admin`, `check_system_health`); `tools/list(include_all=true)` no longer advertises the removed legacy names, and calling any of them returns `unknown tool`. The primary `recall`, `store`, `feedback`, `vault`, `docs`, and `admin` schemas now advertise only live actions; callers must use consolidated tools, while provider-backed expanded tools remain conditional on their working stores and feature gates.
+- **Vault global credential scope.** `vault` credentials support an explicit `scope="global"` alongside the existing project scope: `CredentialStore.Create`/`Get` accept an empty `project` for global-scoped rows, keep the project and global namespaces independent under the `UNIQUE(project, key)` constraint, and the `vault` MCP tool and `handlers_vault.go` HTTP path route scope end to end.
+- **EN/RU/ZH docs sync.** `README.md`, `README.ru.md`, and `README.zh.md` are updated to describe the retained 9-tool primary surface and drop references to the removed legacy tool names, keeping all three locales consistent with the pruned surface.
 
 ## [6.42.1] - 2026-07-14
 
