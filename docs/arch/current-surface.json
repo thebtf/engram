@@ -1,0 +1,374 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Engram current architecture and operator-console claim ledger",
+  "generated_from": [
+    "cmd/engram/main.go",
+    "internal/worker/service.go",
+    "internal/worker/static.go",
+    "internal/worker/handlers.go",
+    "internal/worker/auth_handlers.go",
+    "internal/worker/handlers_graph.go",
+    "internal/worker/handlers_candidates.go",
+    "internal/mcp/tools_memory.go",
+    "internal/mcp/tools_code_intel.go",
+    "cmd/engram/wiring.go",
+    "apps/operator-console/pages/",
+    "apps/operator-console/nuxt.config.ts",
+    "Dockerfile",
+    "docker-compose.yml"
+  ],
+  "classification_vocabulary": [
+    "live",
+    "flag-gated",
+    "convergence-in-progress",
+    "optional-runtime",
+    "tombstone"
+  ],
+  "console_route_ledger_model": {
+    "note": "Each console_routes entry below records independent axes. page_source=present proves only that a Nuxt page file exists; it never sets journey_status=accepted by itself.",
+    "fields": {
+      "page_source": "present | absent — whether a matching apps/operator-console/pages/*.vue file exists",
+      "deployment_forms": "the distinct ways this route can be reached: standalone-nuxt (dedicated Compose service, port 3000), embedded-server (Go server serves the generated static bundle at its own origin), proxied-external (ENGRAM_OPERATOR_CONSOLE_URL reverse-proxy)",
+      "direct_load_status": "per deployment form: for standalone-nuxt/proxied-external, ok means locally replayed as loading the intended page. For embedded-server, ok means routing-verified — grep-confirmed no competing route registers this path ahead of the SPA catch-all in service.go; it is NOT a browser-load replay unless the evidence field also cites a passing HTTP-level test. collision means a same-path server route intercepts the request before the SPA fallback (proven, not inferred, when a test exists). untested-locally means not locally replayable in this batch.",
+      "capability_status": "live | flag-gated | convergence-in-progress | tombstone, applied to the backing capability/API this route depends on",
+      "journey_status": "accepted (a full source+runtime+browser-checked operator workflow) | partial (some reads/actions verified, others not) | blocked (a known collision or missing backend prevents the workflow) | not-applicable (informational-only page, no workflow to accept)",
+      "activation": "env var or flag gating the backing capability, when applicable",
+      "auth": "authentication/authorization requirement observed in source",
+      "limitations": "known caveats: redirects, missing routes, unverifiable-locally notes",
+      "evidence": "repository-relative file(s) and, where useful, line ranges"
+    }
+  },
+  "architecture": [
+    {
+      "claim": "The agent host reaches Engram over a local stdio daemon, which connects to the server over gRPC.",
+      "classification": "live",
+      "evidence": ["cmd/engram/main.go", "internal/worker/service.go:963-988"]
+    },
+    {
+      "claim": "Lifecycle hooks use the server REST API independently of the local MCP daemon.",
+      "classification": "live",
+      "evidence": ["plugin/engram/hooks/", "internal/worker/service.go:1273-1539"]
+    },
+    {
+      "claim": "The worker listener multiplexes REST and gRPC through cmux.",
+      "classification": "live",
+      "evidence": ["internal/worker/service.go:1720-1836"]
+    },
+    {
+      "claim": "The server serves its generated console bundle by default and can proxy browser routes to ENGRAM_OPERATOR_CONSOLE_URL; Compose also runs the Nuxt console as a separate service.",
+      "classification": "live",
+      "evidence": ["internal/worker/static.go:94-186", "Dockerfile:22-46", "docker-compose.yml:63-80"]
+    },
+    {
+      "claim": "Operator credentials stay on the server host while workstations use distinct database-backed tokens.",
+      "classification": "live",
+      "evidence": ["internal/config/envnames.go:10-38", "internal/worker/handlers_auth.go:239-431", "internal/grpcserver/server.go"]
+    },
+    {
+      "claim": "Server HTTP MCP, server SSE/Streamable-HTTP MCP, and a stdio-to-SSE bridge are not current setup paths.",
+      "classification": "tombstone",
+      "evidence": ["internal/worker/service.go:1161-1199", "internal/worker/service.go:1720-1836"],
+      "note": "A stale comment or test string is not route registration. The current MCP adapter is served through gRPC."
+    },
+    {
+      "claim": "Reranking is an optional configured recall path, not a default documented capability.",
+      "classification": "optional-runtime",
+      "activation": "ENGRAM_RERANK_URL",
+      "evidence": ["internal/worker/service.go:931-947", "internal/mcp/server.go:250-261", "internal/mcp/tools_memory.go:1819-1826"],
+      "note": "Source initializes this path when configured, but repository source cannot prove a deployment enabled it."
+    }
+  ],
+  "feature_status": [
+    {
+      "surface": "Graph",
+      "route_presence": "present — apps/operator-console/pages/graph.vue",
+      "flag_activation": "ENGRAM_GRAPH_ENABLED (default false; Compose sets it explicitly in docker-compose.yml:59)",
+      "backend_readiness": "handlers registered and functional when the flag is true; return 403/disabled behavior when the flag is false",
+      "accepted_workflow": "not accepted — no browser replay in this batch confirmed the flag-on graph CRUD/traverse flow end-to-end",
+      "classification": "flag-gated",
+      "activation": "ENGRAM_GRAPH_ENABLED",
+      "evidence": "internal/worker/handlers_graph.go:20-24,122-124; docker-compose.yml:59"
+    },
+    {
+      "surface": "Candidate queue",
+      "route_presence": "present — apps/operator-console/pages/queue.vue",
+      "flag_activation": "ENGRAM_VNEXT_F_ENABLED (default false; Compose sets it explicitly in docker-compose.yml:58)",
+      "backend_readiness": "list/promote/reject/supersede handlers return 403 with an explicit message when the flag is off",
+      "accepted_workflow": "not accepted — no browser replay in this batch confirmed the flag-on promote/reject/supersede flow end-to-end",
+      "classification": "flag-gated",
+      "activation": "ENGRAM_VNEXT_F_ENABLED",
+      "evidence": "internal/worker/handlers_candidates.go:24,90-92,294; docker-compose.yml:58"
+    },
+    {
+      "surface": "Code intelligence",
+      "route_presence": "absent — no apps/operator-console/pages/*.vue matches code-intel/codebase; this is an MCP-tool surface, not a console route",
+      "flag_activation": "ENGRAM_CODE_INTEL_ENABLED (default unset/false)",
+      "backend_readiness": "codebase_index/codebase_status/codebase_search tools register only when the flag is true; absent from tools/list otherwise",
+      "accepted_workflow": "not-applicable to the operator console; MCP-tool activation is out of scope for this route ledger",
+      "classification": "flag-gated",
+      "activation": "ENGRAM_CODE_INTEL_ENABLED",
+      "evidence": "cmd/engram/wiring.go:25-46; internal/mcp/tools_code_intel.go:35-51"
+    },
+    {
+      "surface": "Browser keycard issuance",
+      "route_presence": "absent as a distinct page — the promoted console has no pages/tokens.vue; /access is an access-administration page, not an issuance wizard",
+      "flag_activation": "not flag-gated; gated by admin session auth only",
+      "backend_readiness": "POST /api/auth/tokens exists and is reachable by an authenticated admin session",
+      "accepted_workflow": "not accepted — this ledger does not claim an accepted browser click-path from /access (or any other route) to keycard issuance",
+      "classification": "convergence-in-progress",
+      "evidence": "internal/worker/auth_handlers.go:1216; internal/worker/service.go:1457-1459; apps/operator-console/pages/access.vue",
+      "note": "internal/worker/auth_handlers.go:1216 is handleAccessProviders; the token-creation handler is handleCreateToken, registered at internal/worker/service.go:1457-1459. Backend admin token endpoints exist. The promoted console has /access and no pages/tokens.vue, so this ledger does not claim an accepted browser issuance journey."
+    }
+  ],
+  "console_routes": [
+    {
+      "path": "/",
+      "task": "Operational overview",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally", "note": "Requires `npm install` inside apps/operator-console/, not available in this offline batch."},
+        "embedded-server": {"direct_load_status": "ok", "note": "s.router.Get(\"/\", serveIndex) registers this path before the SPA catch-all; no competing machine route exists at \"/\"."},
+        "proxied-external": {"direct_load_status": "untested-locally", "note": "Depends on an operator-supplied ENGRAM_OPERATOR_CONSOLE_URL upstream; not replayable without one."}
+      },
+      "capability_status": "live",
+      "journey_status": "partial",
+      "auth": "public shell; data panels call authenticated /api endpoints client-side",
+      "limitations": "index.html itself has no server-side route collision, but sub-panel accuracy depends on the same-name backend endpoints listed per feature.",
+      "evidence": "apps/operator-console/pages/index.vue; internal/worker/service.go:1267,1540"
+    },
+    {
+      "path": "/access",
+      "task": "Access administration (providers, invitations, users, roles, sessions, audit)",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally"},
+        "embedded-server": {"direct_load_status": "ok", "note": "No server route registers \"/access\" ahead of the SPA catch-all at internal/worker/service.go:1540, so this path reaches the console shell, not a machine handler."},
+        "proxied-external": {"direct_load_status": "untested-locally"}
+      },
+      "capability_status": "live",
+      "journey_status": "partial",
+      "auth": "requireReady group with global auth middleware; console treats 401/403 responses as `forbidden` and locks the page",
+      "limitations": "This route is the live access-administration read/admin surface (providers, invitations, users, roles, sessions, audit log per apps/operator-console/composables/useOperatorAccess.ts). It is NOT a keycard-issuance workflow: creating an invitation here differs from the daemon's fatal-error text pointing operators at a `/tokens` page that does not exist in this console (see the Legacy /tokens limitations entry below). Treat invitation/session/user administration as live; treat keycard issuance as convergence-in-progress and unaccepted.",
+      "evidence": "apps/operator-console/pages/access.vue; internal/worker/service.go:1513-1524; apps/operator-console/composables/useOperatorAccess.ts:401-402,448"
+    },
+    {
+      "path": "/books",
+      "task": "Book ingestion and management",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally"},
+        "embedded-server": {"direct_load_status": "ok", "note": "No competing server route at \"/books\"."},
+        "proxied-external": {"direct_load_status": "untested-locally"}
+      },
+      "capability_status": "live",
+      "journey_status": "partial",
+      "auth": "requireReady group, global auth middleware",
+      "limitations": "Backend job-status polling (POST /api/books, GET /api/books/{id}/status) exists; no browser replay of a full ingestion run in this batch.",
+      "evidence": "apps/operator-console/pages/books.vue; internal/worker/service.go:1509-1511"
+    },
+    {
+      "path": "/documents",
+      "task": "Document management",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally"},
+        "embedded-server": {"direct_load_status": "ok", "note": "No competing server route at \"/documents\"."},
+        "proxied-external": {"direct_load_status": "untested-locally"}
+      },
+      "capability_status": "live",
+      "journey_status": "partial",
+      "auth": "requireReady group, global auth middleware",
+      "limitations": "CRUD/read/history/comment endpoints are registered and reachable; no browser replay in this batch.",
+      "evidence": "apps/operator-console/pages/documents.vue; internal/worker/service.go:1501-1507"
+    },
+    {
+      "path": "/graph",
+      "task": "Relationship exploration",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally"},
+        "embedded-server": {"direct_load_status": "ok", "note": "No competing server route at \"/graph\"; the page loads regardless of flag state, but its data calls will be rejected until the flag is enabled."},
+        "proxied-external": {"direct_load_status": "untested-locally"}
+      },
+      "capability_status": "flag-gated",
+      "activation": "ENGRAM_GRAPH_ENABLED",
+      "journey_status": "blocked",
+      "auth": "requireReady group, global auth middleware, plus the graph flag gate on each handler",
+      "limitations": "The page renders at direct load in every deployment form; its underlying node/edge/traverse calls return disabled behavior until ENGRAM_GRAPH_ENABLED=true. journey_status=blocked until a flag-on browser replay is recorded.",
+      "evidence": "apps/operator-console/pages/graph.vue; internal/worker/handlers_graph.go:20-24,146-149"
+    },
+    {
+      "path": "/health",
+      "task": "Health inspection",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally", "note": "The dedicated Nuxt service on port 3000 has no competing machine route at \"/health\", so this form is expected to load pages/health.vue, but was not locally replayed."},
+        "embedded-server": {"direct_load_status": "collision", "note": "internal/worker/service.go:1300 registers s.router.Get(\"/health\", s.handleHealth) BEFORE the SPA catch-all at line 1540. chi matches the more specific static route first, so a direct browser load of http://<server-origin>/health returns the machine health JSON body ({\"status\":...,\"version\":...}), never pages/health.vue. Confirmed locally: internal/worker/static_health_route_collision_test.go asserts the embedded route body is JSON, not the SPA shell."},
+        "proxied-external": {"direct_load_status": "untested-locally", "note": "Depends on how the external upstream itself is fronted; not replayable without one."}
+      },
+      "capability_status": "live",
+      "journey_status": "blocked",
+      "auth": "the /health path itself is listed in TokenAuth.ExemptPaths (internal/worker/middleware.go:240), so the embedded machine-health handler requires no auth; the page's own data sources (/api/selfcheck, /api/stats/vnext, /api/vector/metrics, /api/update/status, /api/migrations, /api/flags) sit behind the requireReady group and global auth middleware once the collision above is worked around",
+      "limitations": "Do not teach '/health' as a working embedded-console page until the collision is repaired (route rename, path split, or machine-health move to /api/health-only). Standalone Nuxt is the only deployment form where this page is expected to load, and even that was not locally confirmed in this batch.",
+      "evidence": "apps/operator-console/pages/health.vue; internal/worker/service.go:1300-1301,1540; internal/worker/middleware.go:240; internal/worker/static_health_route_collision_test.go"
+    },
+    {
+      "path": "/issues",
+      "task": "Issue management",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally"},
+        "embedded-server": {"direct_load_status": "ok", "note": "No competing server route at \"/issues\"."},
+        "proxied-external": {"direct_load_status": "untested-locally"}
+      },
+      "capability_status": "live",
+      "journey_status": "partial",
+      "auth": "requireReady group, global auth middleware",
+      "evidence": "apps/operator-console/pages/issues.vue"
+    },
+    {
+      "path": "/memory",
+      "task": "Memory inspection",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally"},
+        "embedded-server": {"direct_load_status": "ok", "note": "No competing server route at \"/memory\"."},
+        "proxied-external": {"direct_load_status": "untested-locally"}
+      },
+      "capability_status": "live",
+      "journey_status": "partial",
+      "auth": "requireReady group, global auth middleware",
+      "limitations": "README's stdio->gRPC->PostgreSQL persistence proof names this route as an optional browser inspection step, not the proof itself — the storage-and-recall path is proved by the CLI/tool round-trip. No standalone/proxied direct-load replay ran in this batch, and the embedded-server row below is a router-registration check, not a browser-load replay, so journey_status stays partial like /search and /rules rather than accepted.",
+      "evidence": "apps/operator-console/pages/memory.vue; README.md"
+    },
+    {
+      "path": "/noise",
+      "task": "Recall-quality inspection",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally"},
+        "embedded-server": {"direct_load_status": "ok", "note": "No competing server route at \"/noise\"."},
+        "proxied-external": {"direct_load_status": "untested-locally"}
+      },
+      "capability_status": "live",
+      "journey_status": "partial",
+      "auth": "requireReady group, global auth middleware; backing endpoints (/api/search/recent, /api/search/analytics, /api/stats/retrieval, /api/stats/vnext, /api/projects) require an authenticated admin/session/keycard identity",
+      "evidence": "apps/operator-console/pages/noise.vue; apps/operator-console/composables/useOperatorSearchNoise.ts:208-247; internal/worker/service.go:1410-1412,1447-1449"
+    },
+    {
+      "path": "/projects",
+      "task": "Project inspection",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally"},
+        "embedded-server": {"direct_load_status": "ok", "note": "No competing server route at \"/projects\"."},
+        "proxied-external": {"direct_load_status": "untested-locally"}
+      },
+      "capability_status": "live",
+      "journey_status": "partial",
+      "auth": "requireReady group, global auth middleware; GET /api/projects and per-project reads require an authenticated admin/session/keycard identity",
+      "note": "This is the one page-file whose script references code-intel/codebase text (per-project index status), but that is display-only and does not activate the code-intel MCP surface.",
+      "evidence": "apps/operator-console/pages/projects.vue; internal/worker/service.go:1408"
+    },
+    {
+      "path": "/queue",
+      "task": "Candidate queue",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally"},
+        "embedded-server": {"direct_load_status": "ok", "note": "No competing server route at \"/queue\"; the page loads regardless of flag state, but its data calls will be rejected until the flag is enabled."},
+        "proxied-external": {"direct_load_status": "untested-locally"}
+      },
+      "capability_status": "flag-gated",
+      "activation": "ENGRAM_VNEXT_F_ENABLED",
+      "journey_status": "blocked",
+      "auth": "requireReady group, global auth middleware, plus the candidateQueueActive() flag gate on each list/promote/reject/supersede handler (internal/worker/handlers_candidates.go:293-294)",
+      "limitations": "journey_status=blocked until a flag-on browser replay confirms promote/reject/supersede end-to-end.",
+      "evidence": "apps/operator-console/pages/queue.vue; internal/worker/handlers_candidates.go:24,90-92,294"
+    },
+    {
+      "path": "/rules",
+      "task": "Behavioral-rule management",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally"},
+        "embedded-server": {"direct_load_status": "ok", "note": "No competing server route at \"/rules\"."},
+        "proxied-external": {"direct_load_status": "untested-locally"}
+      },
+      "capability_status": "live",
+      "journey_status": "partial",
+      "auth": "requireReady group, global auth middleware; no admin-only gate observed in internal/worker/handlers_rules.go, so any authenticated identity (session or client keycard) can list/create/enable/update/delete rules",
+      "evidence": "apps/operator-console/pages/rules.vue; internal/worker/handlers_rules.go; internal/worker/service.go:1526-1530"
+    },
+    {
+      "path": "/search",
+      "task": "Stored-material search",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally"},
+        "embedded-server": {"direct_load_status": "ok", "note": "No competing server route at \"/search\"."},
+        "proxied-external": {"direct_load_status": "untested-locally"}
+      },
+      "capability_status": "live",
+      "journey_status": "partial",
+      "auth": "requireReady group, global auth middleware; /api/context/search is POST-callable by read-only client keycards via the readOnlyAllowedPosts allowlist (internal/worker/middleware.go:162-165) since it does not mutate state",
+      "evidence": "apps/operator-console/pages/search.vue; internal/worker/middleware.go:161-166; internal/worker/service.go:1430-1431"
+    },
+    {
+      "path": "/secrets",
+      "task": "Credential management",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally"},
+        "embedded-server": {"direct_load_status": "ok", "note": "No competing server route at \"/secrets\"."},
+        "proxied-external": {"direct_load_status": "untested-locally"}
+      },
+      "capability_status": "live",
+      "journey_status": "partial",
+      "auth": "requireReady group, global auth middleware; handlers_vault.go has no additional IsSessionAdmin/role gate beyond the global middleware, so any authenticated identity (session or client keycard) can list/store/delete vault credentials and read decrypted values via GET /api/vault/credentials/{name}",
+      "evidence": "apps/operator-console/pages/secrets.vue; internal/worker/handlers_vault.go:39,111,182,279,326,365; internal/worker/service.go:1462-1467"
+    },
+    {
+      "path": "/settings",
+      "task": "Settings entry point",
+      "page_source": "present",
+      "deployment_forms": {
+        "standalone-nuxt": {"direct_load_status": "untested-locally"},
+        "embedded-server": {"direct_load_status": "ok", "note": "No competing server route at \"/settings\"."},
+        "proxied-external": {"direct_load_status": "untested-locally"}
+      },
+      "capability_status": "live",
+      "journey_status": "not-applicable",
+      "auth": "the /settings page itself makes no fetch call; the general-settings modal it opens reads/writes /api/config and /api/flags, both behind the requireReady group and global auth middleware",
+      "limitations": "pages/settings.vue is not a configuration page. On mount it calls openSettingsModal('general') and, when the current route is exactly '/settings', immediately router.replace('/'). Deep-linking or refreshing on /settings opens the general-settings modal over the overview page rather than showing settings content at a stable /settings URL; there is no separate settings screen to browse back to.",
+      "evidence": "apps/operator-console/pages/settings.vue:1-11; internal/worker/service.go:1342-1343"
+    }
+  ],
+  "limitations": [
+    {
+      "subject": "Localized README files",
+      "classification": "convergence-in-progress",
+      "evidence": "README.ru.md; README.zh.md",
+      "note": "English README is canonical until localization parity is restored. See README.md's canonical-documentation notice for the visible stale/non-canonical links to both files."
+    },
+    {
+      "subject": "Legacy /tokens text",
+      "classification": "tombstone",
+      "evidence": "cmd/engram/main.go:75,244; apps/operator-console/pages/access.vue",
+      "note": "The daemon's fatal-token diagnostic and its --help text still name a dashboard '/tokens' route. The promoted console has no matching page file; the closest live route is /access, which is an administration surface, not an issuance wizard. internal/config/envnames.go's EnvWorkstationToken doc-comment previously repeated the same stale '/tokens UI' phrasing; it has been corrected in this batch to point at the actual issuance endpoint (POST /api/auth/tokens). Do not treat the daemon text as proof of a working /tokens page."
+    },
+    {
+      "subject": "Embedded /health direct-load collision",
+      "classification": "tombstone",
+      "evidence": "internal/worker/service.go:1300-1301,1540; internal/worker/static_health_route_collision_test.go",
+      "note": "P0: fix before teaching the embedded console's /health page as a working operator route. The machine health handler is registered ahead of the SPA catch-all, so the embedded server form always serves JSON at this path instead of pages/health.vue."
+    },
+    {
+      "subject": "Operator-console package not installed in this worktree",
+      "classification": "convergence-in-progress",
+      "evidence": "apps/operator-console/package.json",
+      "note": "apps/operator-console/node_modules is absent in this batch's worktree. Standalone-Nuxt and proxied-external direct-load replay for every route above is recorded as untested-locally because `npm install` was not run offline in this batch. Embedded-server direct_load_status=\"ok\" rows are a route-registration grep against service.go (confirming no competing handler intercepts the path before the SPA catch-all), not a browser-load or live-HTTP replay; only /health has an actual HTTP-level test (static_health_route_collision_test.go) proving its collision."
+    }
+  ],
+  "deferred": {}
+}

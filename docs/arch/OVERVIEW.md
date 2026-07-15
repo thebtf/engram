@@ -1,113 +1,62 @@
-# Architecture Overview
+# System overview
 
-## Project Positioning
+Engram separates the agent-host protocol from the shared durable service. The
+agent host runs `engram` locally as an MCP stdio process. That daemon calls the
+shared server over gRPC; lifecycle hooks call the server's REST API separately.
 
-`engram` is persistent shared memory infrastructure for Claude Code. It stores
-memories, behavioral rules, encrypted credentials, cross-project issues, and
-versioned documents in PostgreSQL 17 with pgvector. Agents interact via MCP tools
-exposed through a local stdio daemon; the server provides REST API, gRPC, and a
-Vue.js dashboard on a single port.
+## Workstation boundary
 
-The system is designed for multi-workstation, multi-tenant production use from
-day one. A single server instance (typically Docker on Unraid/NAS) serves all
-workstations in a team.
+`ENGRAM_URL` is a server origin such as `http://host:37777`. It is not an HTTP
+MCP endpoint. The local daemon receives `ENGRAM_URL` and its own
+`ENGRAM_TOKEN`; it fails at startup when a URL is configured without that token.
 
-## Logical Architecture
+- Agent-host discovery problems are local stdio/process problems.
+- Daemon failures are on the gRPC path.
+- Hook failures are REST-client problems.
+- Browser failures are console/static/proxy problems.
 
-```
-+-----------------------------------------------------+
-|                   Claude Code                        |
-|  +-----------+  +-------------------------------+   |
-|  | JS Hooks  |  |  engram stdio daemon (MCP)    |   |
-|  | (HTTP→srv)|  |  cmd/engram — per-session      |   |
-|  +-----+-----+  +---------------+---------------+   |
-+--------|-------------------------|-------------------+
-         |                         |
-         v                         v (gRPC)
-+--------------------------------------------------+
-|              engram-server :37777                  |
-|  +----------+ +--------+ +--------+ +---------+  |
-|  | HTTP API | | gRPC   | | Vue.js | | cmux    |  |
-|  | (REST)   | | service| | dash   | | (mux)   |  |
-|  +----------+ +--------+ +--------+ +---------+  |
-|                       |                           |
-|  +--------------------v-------------------------+ |
-|  |           PostgreSQL 17 + pgvector            | |
-|  |  +----------+ +----------+ +--------------+  | |
-|  |  | tsvector | | pgvector | | 25 tables    |  | |
-|  |  | GIN idx  | | HNSW idx | | 96 migrations|  | |
-|  |  +----------+ +----------+ +--------------+  | |
-|  +----------------------------------------------+ |
-+--------------------------------------------------+
-```
+The workstation must never receive `ENGRAM_AUTH_ADMIN_TOKEN`. Workstation
+keycards are distinct database-backed credentials; authenticated admin API calls
+can create and revoke them. The public browser issuance journey is not yet
+accepted, so the README does not turn a route label into a setup instruction.
 
-## How the System Works End-to-End
+## Server boundary
 
-1. Claude Code lifecycle hooks (JS, executed via node) fire on session-start,
-   user-prompt, post-tool-use, and stop events. They POST to the server's HTTP API.
-2. The `engram` stdio daemon runs as an MCP server per Claude Code session,
-   connecting to `engram-server` via gRPC. It exposes 39 MCP tools.
-3. `engram-server` handles all persistence, search (hybrid FTS + vector), and
-   background tasks (outcome recording, telemetry). REST API + gRPC + dashboard
-   share port 37777 via cmux.
-4. Search queries combine lexical (tsvector) and vector (pgvector) retrieval
-   through a hybrid pipeline with Reciprocal Rank Fusion (RRF, k=60).
-5. The Vue.js dashboard at `:37777` lets users browse memories, manage tokens,
-   view issues, and monitor system health.
+The server binds one worker listener and cmux sends gRPC HTTP/2 traffic to the
+gRPC server while the remaining HTTP traffic reaches the REST router and browser
+console handler. `/health` distinguishes a reachable process from the service's
+readiness endpoint, `/api/ready`.
 
-## Runtime Roles and Binaries
+The server image includes a generated Nuxt static bundle. `serveIndex` can instead
+proxy browser traffic to `ENGRAM_OPERATOR_CONSOLE_URL`. The supplied Compose file
+also runs the promoted Nuxt console as a separate service; it uses
+`NUXT_OPERATOR_API_TARGET=http://server:37777` and exposes port 3000 by default.
+These are deployment forms of the same browser application, not an HTTP MCP
+transport.
 
-| Binary | Source | Role |
-|--------|--------|------|
-| `engram-server` | `cmd/engram-server/` | HTTP API + gRPC + dashboard on :37777 (cmux). Long-lived server process. Docker image `ghcr.io/thebtf/engram`. |
-| `engram` | `cmd/engram/` | Stdio MCP daemon. One per Claude Code session. Connects to server via gRPC. Reports `daemonVersion` at startup. |
-| `engram-import` | `cmd/engram-import/` | Bulk JSONL import utility. |
-| JS hooks | `plugin/engram/hooks/*.js` | 9 lifecycle hooks (session-start, user-prompt, post-tool-use, pre-tool-use, pre-compact, stop, session-end, subagent-stop, statusline). Executed by Claude Code via node. |
+The embedded-server deployment form has one known route collision: the machine
+`/health` handler registers ahead of the SPA catch-all, so a direct browser load
+of `/health` at the server's own origin returns machine health JSON instead of
+`pages/health.vue`. The standalone Nuxt console (port 3000) has no such
+collision. See [current-surface.json](current-surface.json) for the full
+per-deployment-form ledger entry; do not teach the embedded `/health` page as
+working until this is repaired.
 
-## Authentication (v6)
+## Persistence proof
 
-Two-tier token model:
-- **Operator token** (`ENGRAM_AUTH_ADMIN_TOKEN`): lives on the server host only.
-  Used to manage the dashboard, issue worker keycards, and perform admin operations.
-- **Worker keycards**: per-workstation API tokens issued via the `/tokens` dashboard
-  page. Each workstation uses its keycard for all MCP + hook traffic. Revokable
-  from the dashboard.
-- **Local bypass** (`ENGRAM_AUTH_SKIP_LOCAL`): RFC 1918 addresses skip auth for
-  local dev convenience.
-- **Authentik SSO**: optional forward-auth integration via `ENGRAM_AUTHENTIK_*` env vars.
+Store a non-secret marker through the host-discovered memory tool, then start a
+new daemon or agent session and recall the marker. Reading the result in the
+Memory console route, when available, adds a browser check. This crosses the
+local stdio, gRPC, persistence, and retrieval boundaries; a healthy HTTP process
+does not prove those paths.
 
-## Key Design Decisions
+## Current exclusions
 
-### 1) PostgreSQL over SQLite
+The server's current setup paths do not include HTTP MCP, SSE/Streamable-HTTP
+MCP, or a stdio-to-SSE bridge. Stale comments and historical test strings are not
+route registrations. The current source also contains an optional reranker behind
+`ENGRAM_RERANK_URL`; it is not a default core capability and no document should
+infer that a deployment has enabled it.
 
-PostgreSQL + pgvector for all persistence and search. Concurrent hook-driven and
-MCP-driven write paths require strong transactional control. pgvector provides
-HNSW for fast approximate nearest-neighbor vector search; tsvector + GIN for
-full-text retrieval.
-
-### 2) Hybrid search with RRF
-
-Combine tsvector and vector retrieval, then apply Reciprocal Rank Fusion (k=60).
-FTS is precise for keywords; vector captures semantic similarity. Running both
-improves robustness across query styles.
-
-### 3) BM25 short-circuit
-
-Skip vector search when FTS score >= 0.85 with a gap >= 0.15 to rank 2. Reduces
-tail latency for exact-term lookups.
-
-### 4) Hub storage threshold
-
-Persist embeddings only after a memory is accessed `HubThreshold` times (default 5).
-Delays vector indexing cost for low-value items while allowing recall through FTS.
-
-### 5) Server/daemon separation
-
-`engram-server` owns background tasks and API responsibilities (long-lived).
-`engram` daemon is lightweight and session-scoped (MCP tools only). Failure
-domains are isolated.
-
-### 6) cmux port multiplexing
-
-HTTP and gRPC share :37777 via cmux. Single port simplifies Docker networking
-and firewall rules.
+See [current-surface.json](current-surface.json) for the source paths backing
+these statements.

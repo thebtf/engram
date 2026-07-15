@@ -1,23 +1,14 @@
-<!-- redoc:start:header -->
-<p align="center">
-  <img src="assets/branding/engram-icon-256.svg" alt="Engram" width="128" height="128">
-</p>
-
-[English](README.md) | [Русский](README.ru.md) | [中文](README.zh.md)
-
-[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql)](https://www.postgresql.org/)
-[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](https://www.docker.com/)
-[![CI](https://github.com/thebtf/engram/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/thebtf/engram/actions/workflows/docker-publish.yml)
-[![License](https://img.shields.io/github/license/thebtf/engram)](LICENSE)
-<!-- redoc:end:header -->
-
-<!-- redoc:start:intro -->
 # Engram
 
-**Persistent shared memory infrastructure for AI coding agents.**
+Engram is persistent shared memory infrastructure for coding-agent workstations.
+It keeps memories, behavioral rules, issues, documents, and encrypted credentials
+in PostgreSQL while an agent host talks to a local MCP process over stdio.
 
-AI coding agents forget everything between sessions. Every new conversation starts from zero — past decisions, bug fixes, architectural choices, and learned patterns are lost. You waste time re-explaining context, and agents repeat the same mistakes.
+> **Canonical documentation:** this English README is the current public front
+> door. [Русский README](README.ru.md) and [中文 README](README.zh.md) remain in
+> the repository, but both are **stale / non-canonical**: they have not yet been
+> synchronized with this v5+ architecture. Do not treat them as equivalent setup
+> instructions until a later localization batch restores parity.
 
 Engram fixes this by keeping only the memory primitives that proved reliable in production: explicit issues, documents, memories, behavioral rules, credentials, and API tokens. One server, multiple workstations, zero context loss.
 
@@ -65,129 +56,179 @@ Migration from v5.x: open `<server-url>/tokens`, log in as admin, generate a key
 <!-- redoc:start:architecture -->
 ## Architecture
 
-Single server on port `37777` serves the HTTP REST API, gRPC service (via cmux), Vue 3 dashboard, and the static storage/query surface. Each workstation runs a local daemon that connects to the server via gRPC. Multiple Claude Code sessions share one daemon.
-
 ```mermaid
-graph TB
-    subgraph "Workstation A"
-        CC_A[Claude Code]
-        H_A[Hooks + MCP Plugin]
-        CC_A --> H_A
-    end
-
-    subgraph "Workstation B"
-        CC_B[Claude Code]
-        H_B[Hooks + MCP Plugin]
-        CC_B --> H_B
-    end
-
-    H_A -- "stdio / gRPC" --> Server
-    H_B -- "stdio / gRPC" --> Server
-
-    subgraph "Engram Server :37777"
-        Server[Worker]
-        Server --> |HTTP API| API[REST Endpoints]
-        Server --> |gRPC| GRPC[Static session-start + tool bridge]
-        Server --> |Web| Dash["Vue 3 Dashboard"]
-    end
-
-    Server --> PG[(PostgreSQL 17)]
+flowchart LR
+  Host[Agent host] -->|stdio MCP| Daemon[local engram daemon]
+  Daemon -->|gRPC| Server[engram-server :37777]
+  Hooks[Lifecycle hooks] -->|REST| Server
+  Browser[Operator browser] -->|HTTP| Console[Nuxt operator console]
+  Console -->|REST API| Server
+  Server --> DB[(PostgreSQL 17 + pgvector)]
 ```
 
-**Server** (Docker on remote host / Unraid / NAS):
-- PostgreSQL 17
-- Worker — HTTP API, gRPC, Vue 3 dashboard, static entity stores
+`engram-server` multiplexes REST and gRPC on its worker listener with cmux.
+The agent-facing MCP protocol stays local: the `engram` executable is a stdio
+daemon and forwards tool calls over gRPC. Do **not** append `/mcp`, `/sse`, or
+another MCP transport suffix to `ENGRAM_URL`; the server does not offer those as
+current setup paths.
 
-**Client** (each workstation):
-- Hooks — session-start, session-end, and related Claude Code lifecycle integrations
-- MCP Plugin — connects Claude Code to the local daemon / server bridge
-- Slash commands — `/setup`, `/doctor`, `/restart` and memory-related workflows
-<!-- redoc:end:architecture -->
+The server image embeds a generated Nuxt console by default. The provided Compose
+stack also starts a dedicated Nuxt console on port 3000. Setting
+`ENGRAM_OPERATOR_CONSOLE_URL` makes the server proxy browser traffic to an
+explicit external console; see [the architecture overview](docs/arch/OVERVIEW.md)
+for the boundary details.
 
----
+## Quick start: server
 
-<!-- redoc:start:features -->
-## Features
-
-### Search and Retrieve
-- **Static session-start payload** — issues + behavioral rules + memories via gRPC `GetSessionStartContext`
-- **Project-scoped memory recall** — simple SQL-backed retrieval for static memories
-- **Document search** — versioned documents and collection-backed search remain available
-
-### Store and Organize
-- **Memories** — explicit project-scoped notes in the `memories` table
-- **Behavioral rules** — always-inject guidance in the `behavioral_rules` table
-- **Versioned documents** — collections with history and comments
-- **Encrypted vault** — AES-256-GCM credential storage with scoped access
-- **Cross-project issues** — explicit operational coordination between agents/projects
-
-### Resilience and Operations
-- **Session-start cache fallback** — `${ENGRAM_DATA_DIR}/cache/session-start-{project-slug}.json` is used when the server is temporarily unavailable
-- **Version negotiation** — explicit major-version compatibility checks on the session-start path
-- **Config hot-reload** — change settings without restart
-- **Graceful daemon restart** — binary swap and control socket flow remain in place
-
-### Dashboard and UX
-- **Vue 3 dashboard** — focused on the surviving static entity surface
-- **Lifecycle hooks** — session-start / session-end and related integrations remain installed
-- **Multi-workstation support** — one server, multiple local daemons, shared static memory surface
-<!-- redoc:end:features -->
-
----
-
-<!-- redoc:start:use-cases -->
-## Use Cases
-
-- **Context continuity** — start a new session and receive a static session-start block with active issues, behavioral rules, and recent memories
-- **Offline fallback** — if the server is temporarily unavailable, the client can reuse the last successful session-start payload with a visible staleness banner
-- **Architectural memory** — query explicit memories and documents before making design changes
-- **Operational coordination** — agents file and resolve cross-project issues explicitly
-- **Credential management** — store and retrieve API keys and secrets without `.env` files
-- **Multi-workstation sharing** — multiple local daemons connect to one shared Engram server
-<!-- redoc:end:use-cases -->
-
----
-
-<!-- redoc:start:quick-start -->
-## Quick Start
+Prerequisites: Docker with Compose, plus a secure password and an operator token
+for a real deployment. Docker Compose uses a Compose file to define and start a
+multi-container application; see the official [Docker Compose documentation](https://docs.docker.com/compose/).
 
 ```bash
 git clone https://github.com/thebtf/engram.git
 cd engram
-
-# Configure
-cp .env.example .env   # edit with your settings
-
-# Start
-docker compose up -d
+cp .env.example .env
+# Set POSTGRES_PASSWORD and ENGRAM_AUTH_ADMIN_TOKEN in .env before production use.
+docker compose up -d --build
+docker compose ps
 ```
 
-This starts PostgreSQL 17 + pgvector and the Engram server at `http://your-server:37777`.
+The supplied stack starts PostgreSQL 17 with pgvector, `engram-server` on
+`WORKER_PORT` (default `37777`), and the standalone Nuxt console on
+`OPERATOR_CONSOLE_PORT` (default `3000`). The server image also serves its
+embedded console at the server origin when no external console proxy is set.
 
-Verify:
+Verify the process and database readiness separately:
 
 ```bash
-curl http://your-server:37777/health
+curl -fsS http://localhost:37777/health
+curl -fsS http://localhost:37777/api/ready
+docker compose logs --tail=100 server
 ```
 
-Then install the plugin in Claude Code:
+`/health` proves that the HTTP process is answering. `/api/ready` is the
+readiness check for the initialized service. If you changed `WORKER_PORT`, use
+that port in these commands.
 
-```
-/plugin marketplace add thebtf/engram-marketplace
-/plugin install engram
+## Configure a workstation
+
+Keep credentials separated:
+
+| Location | Variable | Purpose |
+| --- | --- | --- |
+| Server host only | `ENGRAM_AUTH_ADMIN_TOKEN` | Operator credential for administrative API access. |
+| Workstation only | `ENGRAM_URL` | Bare server origin, for example `http://server.example:37777`. |
+| Workstation only | `ENGRAM_TOKEN` | Revocable per-workstation keycard used by the local daemon. |
+
+Never copy `ENGRAM_AUTH_ADMIN_TOKEN` into a plugin, agent-host configuration, or
+workstation environment. The daemon fails fast when a server URL is configured
+but `ENGRAM_TOKEN` is absent.
+
+Install or build the local daemon, then register it with your agent host as an
+MCP process that runs `engram` on stdio and receives `ENGRAM_URL` and
+`ENGRAM_TOKEN` in its environment. A host-agnostic process definition is:
+
+```text
+command: engram
+transport: stdio
+environment:
+  ENGRAM_URL: http://server.example:37777
+  ENGRAM_TOKEN: <per-workstation-keycard>
 ```
 
-Set environment variables (read by Claude Code at runtime):
+For a source checkout, build the binaries with:
 
 ```bash
-# Linux/macOS: add to shell profile
-# Windows: set as System Environment Variables
-ENGRAM_URL=http://your-server:37777
-ENGRAM_TOKEN=engram_your_workstation_keycard
+make build
 ```
 
-Generate the worker keycard from `http://your-server:37777/tokens`, then restart Claude Code. Memory is now active.
-<!-- redoc:end:quick-start -->
+The exact agent-host configuration file is host-specific; the invariant is the
+command, stdio transport, and the two workstation variables above. Confirm the
+host lists Engram's tools before relying on it for session continuity.
+
+### Keycard issuance limitation
+
+The server implements authenticated admin token issuance at `/api/auth/tokens`,
+but the currently promoted Nuxt `/access` page is an access-administration
+surface, not an accepted browser keycard-issuance workflow. The local daemon and
+some older text still refer to `/tokens`; that browser route is not present in
+the promoted console. Obtain a per-workstation keycard only through your
+operator's verified administrative procedure; this README deliberately does not
+invent an Access/Settings click path.
+
+## Use Engram
+
+After the host discovers the local daemon's tools, use the memory tools from the
+host rather than an HTTP MCP endpoint. A minimal persistence check is:
+
+1. Store a unique, non-secret marker through the discovered Engram memory tool.
+2. Start a fresh agent session or restart the local `engram` daemon.
+3. Recall the marker through the same host.
+4. Inspect it in the operator console's Memory route if the console is enabled.
+
+Successful recall after a new connection proves the stdio, gRPC, persistence,
+and read paths. A successful process check alone does not.
+
+## Operator console
+
+The console source is a Nuxt application. Nuxt uses file-based routing: current
+page files map to the route inventory in
+[`docs/arch/current-surface.json`](docs/arch/current-surface.json). The ledger
+distinguishes, per route, whether a page file exists, whether each deployment
+form (standalone Nuxt, the server's embedded bundle, a proxied external
+console) can actually direct-load it, the backing capability's flag/readiness
+state, and whether the end-to-end operator workflow is accepted. **A page file
+existing does not mean the workflow behind it is accepted** — read the ledger's
+`journey_status` field, not just route presence, before relying on a page.
+
+Known corrections from that ledger:
+
+- **`/health` (embedded server form only):** the Go server registers its
+  machine health handler at this same path before the SPA fallback, so a
+  direct browser load of the embedded console's `/health` returns machine
+  health JSON, not the `pages/health.vue` dashboard. This is a P0 defect, not
+  a working route; use `/api/selfcheck` for the same data today. The
+  standalone Nuxt console (port 3000) has no such route collision and is
+  expected to serve `pages/health.vue`, but that direct load was not replayed
+  in this batch (`apps/operator-console/node_modules` is not installed here) —
+  treat it as the likely remedy, not a confirmed one, until replayed.
+- **`/access`:** this is a live access-administration page (providers,
+  invitations, users, roles, sessions, audit log). It is *not* a keycard
+  issuance wizard. See "Keycard issuance limitation" above for what remains
+  unaccepted.
+- **`/settings`:** on mount it opens the general-settings modal and, if you
+  land on `/settings` directly, immediately redirects to `/`. There is no
+  separate settings screen; refreshing or deep-linking to `/settings` reopens
+  the modal over the overview rather than showing a stable settings page.
+- **Graph, candidate queue, code intelligence:** these routes/tools exist in
+  source and load at direct request, but their data operations are rejected
+  until `ENGRAM_GRAPH_ENABLED`, `ENGRAM_VNEXT_F_ENABLED`, or
+  `ENGRAM_CODE_INTEL_ENABLED` are set. Flag presence is not the same as an
+  accepted end-to-end workflow; the ledger records both separately.
+
+Use the console for operational overview, search, memory, rules, issues,
+documents, credentials, and access administration; treat health, graph, queue,
+and settings per the corrections above.
+
+## Configuration and deployment notes
+
+Copy `.env.example` to `.env`; it is the deployment template for the supplied
+Compose stack. Important defaults and boundaries:
+
+- PostgreSQL uses the bundled `pgvector/pgvector:pg17` service unless
+  `DATABASE_DSN` overrides it.
+- `ENGRAM_EMBEDDING_URL` is optional. With no embedding endpoint, recall remains
+  available through full-text search rather than a vector tier.
+- `ENGRAM_RERANK_URL` is an optional source-wired recall path, not a default or
+  advertised core capability. See the source classification in the ledger.
+- `ENGRAM_GRAPH_ENABLED`, `ENGRAM_VNEXT_F_ENABLED`, and
+  `ENGRAM_CODE_INTEL_ENABLED` enable distinct non-default surfaces.
+- `ENGRAM_AUTH_DISABLED=true` is a local smoke/debug choice, not a production
+  security setting.
+
+For a separate console host, set `ENGRAM_OPERATOR_CONSOLE_URL` on the server to
+an absolute URL. The server validates that this value includes a scheme and host
+before proxying browser routes.
 
 ---
 
@@ -278,7 +319,7 @@ If not using the plugin, configure MCP directly in `~/.claude/settings.json`:
 claude mcp add-json engram '{"type":"stdio","command":"engram","env":{"ENGRAM_URL":"http://your-server:37777","ENGRAM_TOKEN":"${ENGRAM_TOKEN}"}}' -s user
 ```
 
-`ENGRAM_URL` may be set either to the server origin (`http://host:37777`) or to an MCP path such as `http://host:37777/mcp`; the client normalizes the server origin for hook REST calls. `ENGRAM_TOKEN` must always be the workstation keycard, never the operator key.
+`ENGRAM_URL` must be the bare server origin (`http://host:37777`); do not append `/mcp`, `/sse`, or another MCP transport suffix — the server does not offer those, and the client uses the origin directly for daemon gRPC and hook REST calls. `ENGRAM_TOKEN` must always be the workstation keycard, never the operator key.
 
 ### Build from Source
 
@@ -454,123 +495,49 @@ vault(action="get", name="OPENAI_KEY")
 <!-- redoc:start:troubleshooting -->
 ## Troubleshooting
 
-| Symptom | Fix |
-|---------|-----|
-| `check_system_health` shows embeddings unhealthy | Verify `ENGRAM_EMBEDDING_BASE_URL` and API key. The circuit breaker auto-recovers after transient failures. |
-| Search returns no results | Check that observations exist: `recall(action="search", project="engram", query="decisions")`. Verify embeddings are healthy. |
-| MCP connection refused | Confirm server is running: `curl http://your-server:37777/health`. Check `ENGRAM_URL` in your environment. |
-| Vault returns "encryption not configured" | Set `ENGRAM_ENCRYPTION_KEY` (64-char hex string = 32 bytes AES-256). |
-| Dashboard not loading | Ensure you built with `make build` (includes dashboard). Check browser console for errors. |
-| Plugin not detected after install | Restart Claude Code. Verify `ENGRAM_URL` and `ENGRAM_TOKEN` are set, and that the token is a workstation keycard rather than the operator key. |
-| High memory usage | Reduce `DATABASE_MAX_CONNS`. Disable consolidation if not needed. Check `ENGRAM_EMBEDDING_DIMENSIONS`. |
-
-Server logs are available at `http://your-server:37777/api/logs`.
+| Symptom | Check | Smallest safe action |
+| --- | --- | --- |
+| Server does not answer | `docker compose ps` and `docker compose logs --tail=100 server` | Fix the failing service or port mapping; do not change client URLs until `/health` answers. |
+| Process is live but not ready | `curl -i http://host:37777/api/ready` and PostgreSQL logs | Wait for initialization or correct the database configuration. |
+| Agent host cannot discover tools | Verify the host launches `engram` as a stdio command | Correct the local host configuration; `/mcp` and `/sse` are not substitutes. |
+| Daemon rejects startup | Check that `ENGRAM_URL` is a bare origin and `ENGRAM_TOKEN` is set | Supply a valid per-workstation keycard, never the operator token. |
+| Browser console is unavailable | Check the server origin and `docker compose logs --tail=100 operator-console` | Use the embedded server console or repair the standalone console service/proxy configuration. |
+| Recall has no vector results | Check `ENGRAM_EMBEDDING_URL` and server logs | Configure a compatible embedding endpoint only if vector recall is required; FTS-only recall is a supported fallback. |
 <!-- redoc:end:troubleshooting -->
 
----
-
-<!-- redoc:start:development -->
 ## Development
 
-```bash
-make build            # Build dashboard + all Go binaries
-make test             # Run tests with race detector
-make test-coverage    # Coverage report
-make dev              # Run worker in foreground
-make install          # Build + install plugin + start worker
-make uninstall        # Remove plugin
-make clean            # Clean build artifacts
-```
-
-### Project Structure
-
-```
-cmd/
-  worker/             HTTP API + MCP + dashboard entry point
-  mcp/                Standalone MCP server
-  mcp-stdio-proxy/    stdio -> SSE bridge
-  engram-cli/         CLI client
-internal/
-  chunking/           AST-aware document chunking
-  collections/        YAML collection config
-  config/             Configuration with hot-reload
-  consolidation/      Decay, associations, forgetting
-  crypto/             AES-256-GCM vault encryption
-  db/gorm/            PostgreSQL stores + migrations
-  embedding/          REST embedding provider + resilience layer
-  graph/              In-memory CSR + FalkorDB
-  instincts/          Instinct parser and import
-  learning/           Self-learning, LLM client
-  maintenance/        Background tasks (summarizer, pattern insights)
-  mcp/                MCP protocol, 7 primary tool handlers
-  privacy/            Secret detection and redaction
-  reranking/          Cross-encoder reranker
-  scoring/            Importance + relevance scoring
-  search/             Hybrid retrieval + RRF fusion
-  sessions/           JSONL parser + indexer
-  vector/pgvector/    pgvector client
-  worker/             HTTP handlers, middleware, service
-    sdk/              Observation extraction, reasoning detection
-pkg/
-  models/             Domain models + relation types
-  strutil/            Shared string utilities
-plugin/
-  engram/             Claude Code plugin (hooks, commands)
-ui/                   Vue 3 dashboard SPA
-```
-
-### CI Workflows
-
-| Workflow | Description |
-|----------|-------------|
-| `docker-publish.yml` | Build and publish Docker image to ghcr.io |
-| `plugin-publish.yml` | Publish OpenClaw plugin |
-| `static.yml` | Deploy website to GitHub Pages |
-| `sync-marketplace.yml` | Sync plugin to marketplace |
-<!-- redoc:end:development -->
-
----
-
-<!-- redoc:start:platform-support -->
-## Platform Support
-
-| Platform | Server (Docker) | Client Plugin | Build from Source |
-|----------|:-:|:-:|:-:|
-| macOS Intel | Yes | Yes | Yes |
-| macOS Apple Silicon | Yes | Yes | Yes |
-| Linux amd64 | Yes | Yes | Yes |
-| Linux arm64 | Yes | Yes | Yes |
-| Windows amd64 | WSL2 / Docker Desktop | Yes | Yes |
-| Unraid | Docker template | N/A | N/A |
-<!-- redoc:end:platform-support -->
-
----
-
-<!-- redoc:start:uninstall -->
-## Uninstall
-
-**Server:**
+The project requires Go 1.25+ for its current build. Use the focused Go checks
+for the server and MCP layers:
 
 ```bash
-docker compose down       # stop containers
-docker compose down -v    # stop containers and remove data
+go test ./internal/worker ./internal/mcp
 ```
 
-**Client (plugin):**
+`make build` builds the server and local stdio daemon. The promoted operator
+console has its own source in `apps/operator-console/`; its routes are validated
+against the ledger rather than duplicated in prose.
 
-```
-/plugin uninstall engram
-```
-<!-- redoc:end:uninstall -->
+## Security and support
 
----
+- Treat `.env`, database backups, and vault keys as secrets; do not commit them.
+- Use a unique production `POSTGRES_PASSWORD` and a non-empty
+  `ENGRAM_AUTH_ADMIN_TOKEN`.
+- Restrict server and database network exposure to the intended operator and
+  workstations.
+- Report security vulnerabilities privately through the repository's security
+  contact/process rather than opening a public issue with credentials or exploit
+  details.
 
-<!-- redoc:start:license -->
+## Documentation map
+
+- [Architecture index](docs/arch/INDEX.md)
+- [System overview](docs/arch/OVERVIEW.md)
+- [Runtime components](docs/arch/COMPONENTS.md)
+- [Architecture rationale](docs/arch/architecture.md)
+- [Current architecture and route ledger](docs/arch/current-surface.json)
+- [License](LICENSE)
+
 ## License
 
 [MIT](LICENSE)
-
----
-
-Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
-<!-- redoc:end:license -->

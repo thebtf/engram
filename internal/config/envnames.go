@@ -7,8 +7,12 @@ package config
 //
 //   - EnvAdminToken       — server-host-only operator key. NEVER read by
 //     daemon, plugin, or hook code.
-//   - EnvWorkstationToken — client-side keycard issued via the dashboard
-//     /tokens UI. Read ONLY by the daemon and bridge.
+//   - EnvWorkstationToken — client-side keycard (per-workstation API token).
+//     Read ONLY by the daemon and bridge. See docs/arch/current-surface.json's
+//     "Legacy /tokens text" limitations entry: the promoted operator console
+//     has no dedicated issuance-wizard page; keycards are issued through the
+//     authenticated POST /api/auth/tokens admin endpoint, not a standalone
+//     "/tokens" dashboard route.
 //
 // EnvServerURL / EnvServerURLAlt resolve the historical split between
 // ENGRAM_URL (plugin docs / hooks) and ENGRAM_SERVER_URL (server-events
@@ -31,10 +35,10 @@ const (
 	// Reading this from a workstation context is a contract violation.
 	EnvAdminToken = "ENGRAM_AUTH_ADMIN_TOKEN"
 
-	// EnvWorkstationToken is the per-workstation client api token (keycard)
-	// issued through the dashboard /tokens page. The daemon and the
-	// serverevents bridge read it; nothing else does. Empty value at
-	// daemon startup with a configured server URL is fatal (FR-4).
+	// EnvWorkstationToken is the per-workstation client api token (keycard),
+	// issued through the authenticated POST /api/auth/tokens admin endpoint.
+	// The daemon and the serverevents bridge read it; nothing else does.
+	// Empty value at daemon startup with a configured server URL is fatal (FR-4).
 	EnvWorkstationToken = "ENGRAM_TOKEN"
 
 	// EnvClaudeSessionID is the Claude Code session identifier injected by the
