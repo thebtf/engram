@@ -20,8 +20,8 @@ Shared runtime: `plugin/engram/hooks/lib.js`
 | `pre-compact.js` | `PreCompact` | `pre_compact` | agent → server (reinject request) |
 | `post-tool-use.js` | `PostToolUse` | `tool_result` | no-op (stub; see note) |
 
-`memory_write` is not a hook; it is served directly by the MCP `store_memory` tool
-via the stdio daemon.
+`memory_write` is not a hook; it is served directly by the MCP `store` tool via
+the stdio daemon.
 
 ---
 

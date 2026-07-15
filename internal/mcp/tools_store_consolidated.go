@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
+
+var storeActions = []string{"create", "edit", "import"}
 
 // handleStoreConsolidated routes store tool actions to the appropriate handler.
 func (s *Server) handleStoreConsolidated(ctx context.Context, args json.RawMessage) (string, error) {
@@ -20,12 +23,9 @@ func (s *Server) handleStoreConsolidated(ctx context.Context, args json.RawMessa
 		return s.handleStoreMemory(ctx, args)
 	case "edit":
 		return s.handleEditMemory(ctx, args)
-	case "merge":
-		return "", fmt.Errorf("store action 'merge' (observation merging) removed in v5")
 	case "import":
 		return s.handleImportInstincts(ctx, args)
 	default:
-		return "", fmt.Errorf("unknown store action: %q (valid: create, edit, merge, import)", action)
+		return "", fmt.Errorf("unknown store action: %q (valid: %s)", action, strings.Join(storeActions, ", "))
 	}
 }
-

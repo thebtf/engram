@@ -16,73 +16,51 @@ and their feature flag is on (see "Conditional Tool Families" below). Do not
 treat any single total as canonical — inspect `ListTools()` on the running
 server for the live set.
 
-### Primary Tools (7 consolidated)
+### Primary Tools (9)
 
-These are the recommended entry points. Each supports an `action` parameter
-that routes to the appropriate operation.
+These are the stable entry points. Action enums list only routes that have live handlers.
 
 | Tool | Actions | Description |
 |------|---------|-------------|
 | `recall` | search | Search and retrieve memories |
-| `store` | create, edit, merge, import | Store, modify, or merge memories |
-| `feedback` | rate, suppress, outcome | Rate memories, suppress, record session outcomes |
+| `store` | create, edit, import | Create, edit, or import memories |
+| `feedback` | suppress, outcome | Suppress memories or record session outcomes |
 | `vault` | store, get, list, delete, status | Manage encrypted credentials |
-| `docs` | create, read, list, history, comment, collections, documents, get_doc, remove, ingest, search_docs | Versioned documents and collections |
-| `admin` | stats, search_analytics, backfill_status | Administrative operations |
+| `settings` | set, get, list, delete | Manage recall model settings |
+| `docs` | create, read, list, history, comment, collections, documents, get_doc, remove, ingest | Manage versioned documents and collections |
+| `admin` | stats; purge_project when enabled | Read administrative telemetry or perform gated project purge |
 | `issues` | create, list, get, update, comment, reopen, close | Cross-project issue tracker |
+| `check_system_health` | none | Report subsystem health |
 
-### Compatibility Tools
+### Expanded Tools
 
-Legacy aliases from before tool consolidation. Each maps to a primary tool action.
-
-**Memory:**
-`store_memory`, `recall_memory`, `rate_memory`, `suppress_memory`,
-`find_by_file`, `find_similar_observations`,
-`get_memory_stats`, `set_session_outcome`, `import_instincts`, `backfill_status`
-
-**Sessions:**
-`search_sessions`, `list_sessions`
-
-**Credentials:**
-`store_credential`, `get_credential`, `list_credentials`, `delete_credential`, `vault_status`
-
-**Documents:**
-`list_collections`, `list_documents`, `get_document`, `remove_document`,
-`ingest_document`, `search_collection`
-
-**Versioned Documents:**
-`doc_create`, `doc_read`, `doc_list`, `doc_history`, `doc_comment`
-
-**Rules:**
-`store_rule`, `list_rules` (conditional — only registered when behavioral rules store is initialized)
-
-**System:**
-`check_system_health`
+The expanded surface contains only provider-backed tools whose handler is currently usable. Retired compatibility names are neither advertised nor dispatched. Clients should inspect `tools/list` with `include_all: true` rather than assuming a historical alias exists.
 
 ### Conditional Tool Families
 
-These are advertised only when their backing store is wired AND their gate is
-satisfied. Flag-off paths are byte-identical to before the family landed, so a
-default deployment sees only the core tools above plus whichever families are
-enabled.
-
 | Family | Tools | Advertised when | Since |
 |--------|-------|-----------------|-------|
-| Memory extras | `find_by_file`, `find_similar_observations`, `get_memory_stats`, `get_memory_brief`, `set_session_outcome`, `import_instincts` | memory/promotion stores wired | v5+ |
+| Behavioral rules | `store_rule`, `list_rules` | behavioral-rules store wired | v5 |
+| Expanded memory retrieval | `recall_memory` | memory store wired | v5 |
+| Adaptive memory brief | `get_memory_brief` | memory store wired AND `ENGRAM_ADAPTIVE_ENABLED=true` | v6 |
+| S6 significance | `rate_memory_significance` | S6 outcome flags enabled AND significance updater wired | v6.41 |
+| Ambient hints | `get_ambient_hints` | ambient-hints flag enabled AND hint queue wired | v6.42 |
+| Ingest | `ingest` | memory store wired | v6 |
 | Lifecycle | `lifecycle` | memory + promotion store AND `ENGRAM_LIFECYCLE_ENABLED=true` | v6 |
 | Graph | `graph` | graph store AND `ENGRAM_GRAPH_ENABLED=true` | v6 |
 | Native state plane | `get_state`, `set_state` | state store wired | v6.30 (CR-006) |
 | Principal memory | `query_principal_memory` | principal-memory query service wired | v6.30 (CR-007) |
+| Experience history | `experience_history.read`, `experience_history.detail` | experience provider wired | v6.35 (CR-009) |
+| Temporal truth | `temporal_truth`, `temporal_truth_refresh` | temporal provider wired AND temporal-truth flag enabled | v6.36 (CR-011) |
+| Directive capture | `remember_directive` | directive service wired AND directive-capture flag enabled | v6.39 (ENG-V7-S4A) |
 | Review-loop candidates | `list_candidates`, `get_candidate`, `promote_candidate`, `reject_candidate`, `supersede_candidate` | `ENGRAM_VNEXT_F_ENABLED=true` AND candidate store wired | v6.32 (CR-008) |
 | Governance snapshots | `list_snapshots`, `rollback_snapshot`, `pin_snapshot`, `redaction_rules_status` | `ENGRAM_VNEXT_F_ENABLED=true` AND snapshot store wired | v6 (Milestone-F) |
-| Rule governance | `rule_governance_health`, `rule_governance_queue`, `rule_governance_snapshots`, `rule_governance_transition`, `rule_governance_pin_snapshot`, `rule_governance_rollback`, `rule_governance_usefulness` | rule-governance read store wired (`usefulness` needs injection telemetry) | v6.29 (RG-3) |
+| Rule governance | `rule_governance_health`, `rule_governance_queue`, `rule_governance_snapshots`, `rule_governance_transition`, `rule_governance_pin_snapshot`, `rule_governance_rollback`, `rule_governance_usefulness` | rule-governance read store wired (`usefulness` also needs injection telemetry) | v6.29 (RG-3) |
 | Bulk ops | `bulk_promote`, `bulk_delete`, `bulk_supersede` | `ENGRAM_VNEXT_F_ENABLED=true` | v6 (Milestone-F) |
 | Code intelligence | `codebase_search` | `ENGRAM_CODE_INTEL_ENABLED=true` AND code chunk store wired | v6.13 (CR-006 code-intel) |
-| V7 state subsystem | existing `get_state`, `set_state` via v7 `StateWriter` adapter | `ENGRAM_V7_PLUG_ENABLED=true` AND `ENGRAM_V7_S1_STATE=true` AND state store wired | v6.37 (ENG-V7-S1) |
 | V7 meta-memory discovery | `know_about` plus session-start `meta_summary` | `ENGRAM_V7_PLUG_ENABLED=true` AND `ENGRAM_V7_S2_METAMEM=true` AND meta-memory index wired | v6.38 (ENG-V7-S2) |
 
-Admin-gated families (candidates, governance, bulk ops) are additionally
-enforced at the handler level regardless of advertisement.
+Admin-gated families (candidates, governance, bulk ops) are additionally enforced at the handler level regardless of advertisement.
 
 #### `know_about` Response Shape
 

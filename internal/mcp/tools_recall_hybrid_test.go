@@ -20,12 +20,15 @@ type mockMemoryStoreForRecall struct {
 func (m *mockMemoryStoreForRecall) List(_ context.Context, _ string, _ int) ([]*models.Memory, error) {
 	return m.memories, nil
 }
+
 func (m *mockMemoryStoreForRecall) UpdateLifecycleFields(_ context.Context, _ int64, _ map[string]any) error {
 	return nil
 }
+
 func (m *mockMemoryStoreForRecall) SearchFTS(_ context.Context, _, _ string, _ int) ([]*models.Memory, error) {
 	return m.memories, nil
 }
+
 func (m *mockMemoryStoreForRecall) GetByIDs(_ context.Context, _ string, ids []int64) ([]*models.Memory, error) {
 	result := make([]*models.Memory, 0)
 	for _, mem := range m.memories {
@@ -38,6 +41,7 @@ func (m *mockMemoryStoreForRecall) GetByIDs(_ context.Context, _ string, ids []i
 	}
 	return result, nil
 }
+
 func (m *mockMemoryStoreForRecall) Get(_ context.Context, id int64) (*models.Memory, error) {
 	for _, mem := range m.memories {
 		if mem.ID == id {
@@ -46,9 +50,11 @@ func (m *mockMemoryStoreForRecall) Get(_ context.Context, id int64) (*models.Mem
 	}
 	return nil, fmt.Errorf("not found: %d", id)
 }
+
 func (m *mockMemoryStoreForRecall) Create(_ context.Context, mem *models.Memory) (*models.Memory, error) {
 	return mem, nil
 }
+
 func (m *mockMemoryStoreForRecall) Update(_ context.Context, mem *models.Memory) (*models.Memory, error) {
 	return mem, nil
 }
@@ -56,13 +62,15 @@ func (m *mockMemoryStoreForRecall) Delete(_ context.Context, _ int64) error { re
 func (m *mockMemoryStoreForRecall) FindByProject(_ context.Context, _ string) ([]*models.Memory, error) {
 	return m.memories, nil
 }
+
 func (m *mockMemoryStoreForRecall) FindSimilarByContent(_ context.Context, _, _ string, _ float32, _ int) ([]*models.Memory, error) {
 	return nil, nil
 }
+
 func (m *mockMemoryStoreForRecall) FindInjectable(_ context.Context, _ string, _ int) ([]*models.Memory, error) {
 	return m.memories, nil
 }
-func (m *mockMemoryStoreForRecall) Suppress(_ context.Context, _ int64) error { return nil }
+func (m *mockMemoryStoreForRecall) Suppress(_ context.Context, _ int64) error       { return nil }
 func (m *mockMemoryStoreForRecall) Rate(_ context.Context, _ int64, _ string) error { return nil }
 
 // TestRecallMemory_FlagOFF_SchemaNoVnextParams verifies that when ENGRAM_VNEXT_ENABLED is off,
@@ -213,57 +221,24 @@ func TestRecallMemory_FlagOFF_BehaviorIdentity(t *testing.T) {
 	}
 }
 
-// TestRecall_FlagOFF_TombstoneStrings_Similar verifies that when ENGRAM_VNEXT_ENABLED is off,
-// recall(action="similar") returns the exact byte-identical tombstone error from origin/main.
-// Any deviation breaks backward compatibility for callers that check the error message.
-func TestRecall_FlagOFF_TombstoneStrings_Similar(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
-
+func TestRecallRetiredActionsAreUnknown(t *testing.T) {
+	t.Parallel()
 	s := &Server{}
-	args, _ := json.Marshal(map[string]any{
-		"action":  "similar",
-		"query":   "test",
-		"project": "testproj",
-	})
-	_, err := s.handleRecall(context.Background(), args)
-	if err == nil {
-		t.Fatal("expected error for recall(similar) with flag OFF, got nil")
-	}
-	// Exact tombstone from origin/main: tools_recall.go case "similar" flag-OFF branch.
-	const wantContains = "vector similarity removed"
-	if !strings.Contains(err.Error(), wantContains) {
-		t.Errorf("tombstone mismatch: got %q, want message containing %q", err.Error(), wantContains)
-	}
-	// Must NOT contain the vnext hint text (only allowed under flag-ON).
-	const forbiddenHint = "ENGRAM_VNEXT_ENABLED"
-	if strings.Contains(err.Error(), forbiddenHint) {
-		t.Errorf("flag-OFF error must not contain vnext hint %q, got: %q", forbiddenHint, err.Error())
-	}
-}
-
-// TestRecall_FlagOFF_TombstoneStrings_Explain verifies that when ENGRAM_VNEXT_ENABLED is off,
-// recall(action="explain") returns the exact byte-identical tombstone error from origin/main.
-func TestRecall_FlagOFF_TombstoneStrings_Explain(t *testing.T) {
-	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
-
-	s := &Server{}
-	args, _ := json.Marshal(map[string]any{
-		"action":  "explain",
-		"query":   "test",
-		"project": "testproj",
-	})
-	_, err := s.handleRecall(context.Background(), args)
-	if err == nil {
-		t.Fatal("expected error for recall(explain) with flag OFF, got nil")
-	}
-	// Exact tombstone from origin/main: tools_recall.go case "explain" flag-OFF branch.
-	const wantContains = "search ranking removed"
-	if !strings.Contains(err.Error(), wantContains) {
-		t.Errorf("tombstone mismatch: got %q, want message containing %q", err.Error(), wantContains)
-	}
-	// Must NOT contain the vnext hint text.
-	const forbiddenHint = "ENGRAM_VNEXT_ENABLED"
-	if strings.Contains(err.Error(), forbiddenHint) {
-		t.Errorf("flag-OFF error must not contain vnext hint %q, got: %q", forbiddenHint, err.Error())
+	for _, action := range []string{"preset", "by_concept", "by_type", "similar", "timeline", "sessions", "explain"} {
+		action := action
+		t.Run(action, func(t *testing.T) {
+			t.Parallel()
+			args, err := json.Marshal(map[string]any{"action": action, "query": "test", "project": "testproj"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = s.handleRecall(context.Background(), args)
+			if err == nil {
+				t.Fatalf("expected unknown-action error for recall(%s)", action)
+			}
+			if !strings.Contains(err.Error(), "unknown recall action") {
+				t.Fatalf("retired action %q returned %q", action, err.Error())
+			}
+		})
 	}
 }

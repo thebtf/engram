@@ -228,30 +228,3 @@ func (s *Server) handleIngestDocument(ctx context.Context, args json.RawMessage)
 	newHash := hex.EncodeToString(hashBytes[:])
 	return fmt.Sprintf("Document %s/%s ingested (metadata only, hash %s; chunk embeddings removed in v5).", params.Collection, params.Path, newHash[:12]), nil
 }
-
-// handleSearchCollection searches document chunks in a collection.
-// Document chunk-level vector search was retired in v5 and never rewired to the
-// migration-108 content_chunks table (which is memory-keyed, not document-keyed).
-func (s *Server) handleSearchCollection(_ context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	var params struct {
-		Query      string
-		Collection string
-	}
-	params.Query = coerceString(m["query"], "")
-	params.Collection = coerceString(m["collection"], "")
-	if params.Query == "" {
-		return "", fmt.Errorf("query is required")
-	}
-
-	// Document chunk vector search was retired in v5 (not rewired to mig-108 content_chunks).
-	msg := "Document chunk search removed in v5; use find_relevant_memories for observation-level FTS retrieval"
-	if params.Collection != "" {
-		msg += fmt.Sprintf(" (collection %q)", params.Collection)
-	}
-	return msg + ".", nil
-}

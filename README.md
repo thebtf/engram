@@ -370,17 +370,14 @@ The old dynamic search / graph / learning-oriented tool surface was stripped in 
 |--------|-------------|
 | `create` | Store a new observation (default) |
 | `edit` | Modify observation fields |
-| `merge` | Merge duplicate observations |
 | `import` | Bulk import observations |
-| `extract` | LLM-driven extraction from raw content |
 
-### `feedback` — Rate and Improve
+### `feedback` — Suppression and Outcomes
 
 | Action | Description |
 |--------|-------------|
-| `rate` | Rate an observation as useful or not |
-| `suppress` | Suppress low-quality observations |
-| `outcome` | Record outcome for closed-loop learning |
+| `suppress` | Suppress low-quality memories |
+| `outcome` | Record a session outcome |
 
 ### `vault` — Encrypted Credentials
 
@@ -392,22 +389,24 @@ The old dynamic search / graph / learning-oriented tool surface was stripped in 
 | `delete` | Delete a credential |
 | `status` | Vault status and health |
 
-### `docs` — Versioned Documents
+### `docs` — Versioned Documents and Collections
 
 | Action | Description |
 |--------|-------------|
-| `create` | Create a document |
+| `create` | Create a versioned document |
 | `read` | Read document content |
-| `list` | List documents |
-| `history` | Version history |
-| `comment` | Add comments |
-| `collections` | Manage collections |
-| `ingest` | Chunk, embed, and store a document |
-| `search_docs` | Semantic search across documents |
+| `list` | List versioned documents |
+| `history` | Read version history |
+| `comment` | Add a document comment |
+| `collections` | List configured collections |
+| `documents` | List documents in a collection |
+| `get_doc` | Read a collection document |
+| `remove` | Soft-delete a collection document |
+| `ingest` | Upsert collection document metadata and content |
 
-### `admin` — Bulk Operations and Analytics
+### `admin` — Administrative Telemetry
 
-21 actions including: `bulk_delete`, `bulk_supersede`, `tag`, `graph`, `stats`, `trends`, `quality`, `export`, `maintenance`, `scoring`, `consolidation`, and more.
+`stats` returns memory-system telemetry. `purge_project` is additionally available when the vNext gate is enabled and requires admin authorization plus project-name confirmation.
 
 ### `check_system_health` — System Health
 

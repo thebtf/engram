@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **MCP tool surface convergence.** Removes 27 obsolete advertised compatibility tools plus their hidden direct-call/tombstone routes. The default primary count remains 9, while `tools/list(include_all=true)` no longer adds the 27 legacy entries. The primary `recall`, `store`, `feedback`, `vault`, `docs`, and `admin` schemas now advertise only live actions; callers must use consolidated tools, while provider-backed expanded tools remain conditional on their working stores and feature gates.
+
 ## [6.42.1] - 2026-07-14
 
 ### Fixed

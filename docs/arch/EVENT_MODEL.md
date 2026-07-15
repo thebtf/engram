@@ -41,8 +41,8 @@ native hook/plugin system.
 ### memory_write
 
 **Trigger:** Memory stored via MCP tool.
-**Payload:** MCP `store_memory` arguments (content, tags, tier, etc.)
-**Server endpoint:** MCP stdio `store_memory` tool call
+**Payload:** MCP `store` arguments (content, tags, type, etc.)
+**Server endpoint:** MCP stdio `store` tool call
 **Claude Code hook:** N/A (MCP tool, not a hook)
 
 ### pre_compact

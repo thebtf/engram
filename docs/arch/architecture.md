@@ -135,7 +135,7 @@ Claude Code starts session
 ### Memory Storage (MCP Tool)
 
 ```
-Agent calls store_memory / store MCP tool
+Agent calls store MCP tool
   → engram daemon receives stdio JSON-RPC
     → gRPC call to engram-server
       → MemoryStore.Create(memory)

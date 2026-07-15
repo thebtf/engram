@@ -150,8 +150,8 @@ Steps:
 Expected:
 - Isolated plugin smoke starts without errors
 - The assistant or `tools/list` surface lists tools beyond `loom_*` —
-  e.g., `mcp__engram__store_memory`, `mcp__engram__list_issues`,
-  `mcp__engram__credential_*`, etc.
+  e.g., `mcp__engram__store`, `mcp__engram__issues`,
+  `mcp__engram__vault`, etc.
 - The token field maps to the `ENGRAM_TOKEN` env var (FR-3)
 
 Failure signals (the bug this release fixes):

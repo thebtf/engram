@@ -10,7 +10,22 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
+
+var removedLegacyMCPToolNames = []string{
+	"find_by_file", "find_similar_observations", "get_memory_stats",
+	"search_sessions", "list_sessions", "import_instincts", "backfill_status",
+	"store_memory", "rate_memory", "suppress_memory", "set_session_outcome",
+	"store_credential", "get_credential", "list_credentials", "delete_credential", "vault_status",
+	"vault_store", "vault_get", "vault_list", "vault_delete",
+	"doc_create", "doc_read", "doc_update", "doc_list", "doc_history", "doc_comment",
+	"list_collections", "list_documents", "get_document", "remove_document", "ingest_document", "search_collection",
+	"doc_list_collections", "doc_list_documents", "doc_get", "doc_ingest", "doc_search", "doc_remove",
+	"analyze_search_patterns",
+	"search", "timeline", "decisions", "changes", "how_it_works", "find_by_concept", "find_by_type",
+	"get_recent_context", "get_context_timeline", "get_timeline_by_query",
+}
 
 // ---------------------------------------------------------------------------
 // JSON-RPC struct marshaling / unmarshaling
@@ -408,7 +423,7 @@ func TestHandleToolsList_DefaultCountMatchesPrimary(t *testing.T) {
 	assert.Equal(t, 9, len(tools))
 }
 
-func TestHandleToolsList_IncludeAllReturnsMore(t *testing.T) {
+func TestHandleToolsList_IncludeAllKeepsPrimary(t *testing.T) {
 	t.Parallel()
 	s := NewServer(ServerOptions{Version: "1.0.0"})
 	respDefault := s.handleToolsList(&Request{JSONRPC: "2.0", ID: float64(1), Method: "tools/list"})
@@ -418,38 +433,28 @@ func TestHandleToolsList_IncludeAllReturnsMore(t *testing.T) {
 	})
 	defaultTools := respDefault.Result.(map[string]any)["tools"].([]Tool)
 	allTools := respAll.Result.(map[string]any)["tools"].([]Tool)
-	assert.Greater(t, len(allTools), len(defaultTools))
+	assert.GreaterOrEqual(t, len(allTools), len(defaultTools))
 }
 
-func TestHandleToolsList_IncludeAllContainsLegacy(t *testing.T) {
+func TestHandleToolsList_RemovedLegacyToolsAbsent(t *testing.T) {
 	t.Parallel()
 	s := NewServer(ServerOptions{Version: "1.0.0"})
+	s.memoryStore = new(gormdb.MemoryStore)
+	s.sessionStore = new(gormdb.SessionStore)
+	s.documentStore = new(gormdb.DocumentStore)
+	s.versionedDocumentStore = new(gormdb.VersionedDocumentStore)
+
 	resp := s.handleToolsList(&Request{
 		JSONRPC: "2.0", ID: float64(1), Method: "tools/list",
 		Params: json.RawMessage(`{"include_all":true}`),
 	})
 	tools := resp.Result.(map[string]any)["tools"].([]Tool)
-	names := make(map[string]bool)
-	for _, t2 := range tools {
-		names[t2.Name] = true
+	names := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		names[tool.Name] = true
 	}
-	assert.True(t, names["find_by_file"], "find_by_file should appear with include_all")
-}
-
-func TestHandleToolsList_RemovedToolsAbsent(t *testing.T) {
-	t.Parallel()
-	s := NewServer(ServerOptions{Version: "1.0.0"})
-	respAll := s.handleToolsList(&Request{
-		JSONRPC: "2.0", ID: float64(1), Method: "tools/list",
-		Params: json.RawMessage(`{"include_all":true}`),
-	})
-	allTools := respAll.Result.(map[string]any)["tools"].([]Tool)
-	allNames := make(map[string]bool)
-	for _, t2 := range allTools {
-		allNames[t2.Name] = true
-	}
-	for _, removed := range []string{"search", "decisions", "trigger_maintenance", "get_maintenance_stats"} {
-		assert.False(t, allNames[removed], "removed tool %q must not appear", removed)
+	for _, removed := range removedLegacyMCPToolNames {
+		assert.False(t, names[removed], "removed tool %q must not appear", removed)
 	}
 }
 
@@ -489,23 +494,10 @@ func TestHandleToolsList_AllToolSchemasHaveTypeAndProperties(t *testing.T) {
 func TestHandleToolsList_FeedbackSchemaCorrect(t *testing.T) {
 	t.Parallel()
 	s := NewServer(ServerOptions{Version: "1.0.0"})
-	resp := s.handleToolsList(&Request{JSONRPC: "2.0", ID: float64(1), Method: "tools/list"})
-	tools := resp.Result.(map[string]any)["tools"].([]Tool)
-	var fb *Tool
-	for i := range tools {
-		if tools[i].Name == "feedback" {
-			fb = &tools[i]
-			break
-		}
-	}
-	require.NotNil(t, fb)
-	props := fb.InputSchema["properties"].(map[string]any)
-	_, hasRating := props["rating"]
-	assert.True(t, hasRating)
-	_, hasSessionID := props["session_id"]
-	assert.True(t, hasSessionID)
-	_, hasUseful := props["useful"]
-	assert.False(t, hasUseful, "feedback must not expose 'useful' boolean — use rating enum")
+	props := findToolProperties(t, s.primaryTools(), "feedback")
+	assert.Contains(t, props, "id")
+	assert.Contains(t, props, "session_id")
+	assert.NotContains(t, props, "rating", "feedback no longer exposes the retired rate action")
 }
 
 func TestHandleToolsList_StoreTypeEnumCorrect(t *testing.T) {
@@ -528,6 +520,40 @@ func TestHandleToolsList_StoreTypeEnumCorrect(t *testing.T) {
 		assert.Contains(t, enum, want)
 	}
 	assert.NotContains(t, enum, "insight")
+}
+
+func TestPrimaryToolActionEnumsContainOnlyWorkingActions(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
+	s := NewServer(ServerOptions{Version: "1.0.0"})
+
+	want := map[string][]string{
+		"recall":   {"search"},
+		"store":    {"create", "edit", "import"},
+		"feedback": {"suppress", "outcome"},
+		"vault":    {"store", "get", "list", "delete", "status"},
+		"docs":     {"create", "read", "list", "history", "comment", "collections", "documents", "get_doc", "remove", "ingest"},
+		"admin":    {"stats"},
+	}
+	for name, wantActions := range want {
+		props := findToolProperties(t, s.primaryTools(), name)
+		action := props["action"].(map[string]any)
+		assert.ElementsMatch(t, wantActions, toStringSlice(action["enum"]), "tool %q action enum", name)
+	}
+
+	storeProps := findToolProperties(t, s.primaryTools(), "store")
+	assert.NotContains(t, storeProps, "source_id")
+	assert.NotContains(t, storeProps, "target_id")
+	assert.Equal(t, "array", storeProps["tags"].(map[string]any)["type"])
+	feedbackProps := findToolProperties(t, s.primaryTools(), "feedback")
+	assert.NotContains(t, feedbackProps, "rating")
+	docsProps := findToolProperties(t, s.primaryTools(), "docs")
+	assert.NotContains(t, docsProps, "query")
+	assert.NotContains(t, docsProps, "comment")
+	assert.NotContains(t, docsProps, "id")
+	vaultProps := findToolProperties(t, s.primaryTools(), "vault")
+	assert.ElementsMatch(t, []string{"project"}, toStringSlice(vaultProps["scope"].(map[string]any)["enum"]))
+	adminProps := findToolProperties(t, s.primaryTools(), "admin")
+	assert.NotContains(t, adminProps, "project")
 }
 
 // ---------------------------------------------------------------------------
@@ -643,7 +669,7 @@ func TestSanitizeToolCallArgs_OtherToolsStillRedactSecrets(t *testing.T) {
 	t.Parallel()
 	args := json.RawMessage(`{"content":"api_key=abc123def456ghi789jkl012mno345pqr678"}`)
 
-	got := sanitizeToolCallArgs("store_memory", args)
+	got := sanitizeToolCallArgs("store", args)
 
 	assert.NotContains(t, got, "abc123def456ghi789jkl012mno345pqr678")
 	assert.Contains(t, got, "[REDACTED:")
@@ -676,27 +702,43 @@ func TestCallTool_UnknownToolNames_Table(t *testing.T) {
 	}
 }
 
-func TestCallTool_FindByFile_Removed(t *testing.T) {
+func TestCallTool_RemovedLegacyNamesAreUnknown(t *testing.T) {
 	t.Parallel()
-	// find_by_file was retired in v5; even invalid JSON returns "removed in v5"
 	s := NewServer(ServerOptions{Version: "1.0.0"})
-	_, err := s.callTool(context.Background(), "find_by_file", json.RawMessage(`{invalid}`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "removed in v5")
+	ctx := context.Background()
+	for _, name := range removedLegacyMCPToolNames {
+		name := name
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			result, err := s.callTool(ctx, name, json.RawMessage(`{invalid}`))
+			require.Error(t, err)
+			assert.Empty(t, result)
+			assert.Equal(t, "unknown tool: "+name, err.Error())
+		})
+	}
 }
 
-func TestCallTool_GetMemoryStats_NilStores(t *testing.T) {
-	t.Parallel()
+func TestRetiredConsolidatedActionsAreUnknown(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_ENABLED", "")
 	s := NewServer(ServerOptions{Version: "1.0.0"})
-	result, err := s.callTool(context.Background(), "get_memory_stats", json.RawMessage(`{}`))
-	require.NoError(t, err)
-	assert.NotEmpty(t, result)
-
-	// Shape: nil statsDB path must return generated_at and a note, never panic.
-	var parsed map[string]any
-	require.NoError(t, json.Unmarshal([]byte(result), &parsed), "result must be valid JSON")
-	assert.Contains(t, parsed, "generated_at", "generated_at key must be present in nil-db response")
-	assert.Contains(t, parsed, "note", "note key must be present when statsDB is nil")
+	for _, tc := range []struct {
+		tool   string
+		action string
+	}{
+		{tool: "recall", action: "preset"},
+		{tool: "store", action: "merge"},
+		{tool: "feedback", action: "rate"},
+		{tool: "docs", action: "search_docs"},
+		{tool: "admin", action: "search_analytics"},
+		{tool: "admin", action: "backfill_status"},
+	} {
+		t.Run(tc.tool+"/"+tc.action, func(t *testing.T) {
+			result, err := s.callTool(context.Background(), tc.tool, mustJSON(t, map[string]any{"action": tc.action}))
+			require.Error(t, err)
+			assert.Empty(t, result)
+			assert.Contains(t, err.Error(), "unknown "+tc.tool+" action")
+		})
+	}
 }
 
 // TestGetMemoryStats_NilDB_NoMemoryOrVnextSections verifies that the nil-statsDB
@@ -705,7 +747,7 @@ func TestGetMemoryStats_NilDB_NoMemoryOrVnextSections(t *testing.T) {
 	t.Parallel()
 	s := NewServer(ServerOptions{Version: "1.0.0"})
 	// statsDB is nil — simulates the server not yet being fully wired.
-	result, err := s.handleGetMemoryStats(context.Background())
+	result, err := s.handleAdminStats(context.Background())
 	require.NoError(t, err)
 
 	var parsed map[string]any
@@ -783,34 +825,6 @@ func TestCheckSystemHealth_VectorSubsystem(t *testing.T) {
 	})
 }
 
-func TestCallTool_ParameterValidation_Table(t *testing.T) {
-	t.Parallel()
-	s := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-	// Tools that still exist in the switch and validate params before hitting the DB
-	cases := []struct {
-		tool        string
-		args        string
-		errContains string
-	}{
-		{"find_similar_observations", `{invalid`, "invalid"},
-		{"find_similar_observations", `{}`, "query is required"},
-		{"analyze_search_patterns", `{invalid`, "invalid"},
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.tool+"/"+tc.args, func(t *testing.T) {
-			t.Parallel()
-			_, err := s.callTool(ctx, tc.tool, json.RawMessage(tc.args))
-			require.Error(t, err)
-			if tc.errContains != "" {
-				assert.Contains(t, err.Error(), tc.errContains)
-			}
-		})
-	}
-}
-
 // ---------------------------------------------------------------------------
 // handleGetMemoryStats / handleCheckSystemHealth
 // ---------------------------------------------------------------------------
@@ -818,7 +832,7 @@ func TestCallTool_ParameterValidation_Table(t *testing.T) {
 func TestHandleGetMemoryStats_NilStores_ValidJSON(t *testing.T) {
 	t.Parallel()
 	s := NewServer(ServerOptions{Version: "1.0.0"})
-	result, err := s.handleGetMemoryStats(context.Background())
+	result, err := s.handleAdminStats(context.Background())
 	require.NoError(t, err)
 	assert.NotEmpty(t, result)
 	var stats map[string]any
@@ -835,48 +849,6 @@ func TestHandleCheckSystemHealth_NilStores_StructuredResponse(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(result), &health))
 	assert.Contains(t, health, "overall_status")
 	assert.Contains(t, health, "subsystems")
-}
-
-// ---------------------------------------------------------------------------
-// handleFindSimilarObservations
-// ---------------------------------------------------------------------------
-
-func TestHandleFindSimilarObservations_Validation(t *testing.T) {
-	t.Parallel()
-	s := NewServer(ServerOptions{Version: "1.0.0"})
-	ctx := context.Background()
-
-	_, err := s.handleFindSimilarObservations(ctx, json.RawMessage(`{}`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "query is required")
-
-	_, err = s.handleFindSimilarObservations(ctx, json.RawMessage(`{invalid`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid arguments")
-}
-
-func TestHandleFindSimilarObservations_EmptyResultInV5(t *testing.T) {
-	t.Parallel()
-	s := NewServer(ServerOptions{Version: "1.0.0"})
-	result, err := s.handleFindSimilarObservations(context.Background(), json.RawMessage(`{"query":"test"}`))
-	require.NoError(t, err)
-
-	var payload struct {
-		Count        int   `json:"count"`
-		Observations []any `json:"observations"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(result), &payload))
-	assert.Equal(t, 0, payload.Count)
-	require.NotNil(t, payload.Observations)
-	assert.Len(t, payload.Observations, 0)
-}
-
-func TestHandleAnalyzeSearchPatterns_InvalidJSON(t *testing.T) {
-	t.Parallel()
-	s := NewServer(ServerOptions{Version: "1.0.0"})
-	_, err := s.handleAnalyzeSearchPatterns(context.Background(), json.RawMessage(`{invalid`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid arguments")
 }
 
 // ---------------------------------------------------------------------------

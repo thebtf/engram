@@ -415,7 +415,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		}
 	}
 	if params.Content == "" {
-		return "", fmt.Errorf("content is required for store_memory")
+		return "", fmt.Errorf("content is required for store")
 	}
 	if params.Importance != nil && (*params.Importance < 0 || *params.Importance > 1) {
 		return "", fmt.Errorf("importance must be between 0 and 1")
@@ -444,11 +444,11 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		params.Content = string([]rune(params.Content)[:softLimit])
 		log.Debug().
 			Int("soft_limit", softLimit).
-			Msg("store_memory: content truncated to soft limit")
+			Msg("store: content truncated to soft limit")
 	}
 
 	if privacy.ContainsSecrets(params.Content) {
-		log.Warn().Msg("store_memory: content contains secrets — redacting before storage")
+		log.Warn().Msg("store: content contains secrets — redacting before storage")
 		params.Content = privacy.RedactSecrets(params.Content)
 	}
 
@@ -506,7 +506,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		addPrincipalMemoryFields(preview, principalPreview)
 		out, jsonErr := json.MarshalIndent(preview, "", "  ")
 		if jsonErr != nil {
-			return "", fmt.Errorf("store_memory dry_run marshal: %w", jsonErr)
+			return "", fmt.Errorf("store dry_run marshal: %w", jsonErr)
 		}
 		return string(out), nil
 	}
@@ -640,7 +640,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 				return string(out), nil
 			}
 			// finding 6 fix: no-signal stored=true carries the same fields as the
-			// legacy store_memory response (NFR-F1): id, storage, scope, privacy_scope,
+			// consolidated store response (NFR-F1): id, storage, scope, privacy_scope,
 			// quality_signals. Phase1 returns MemoryID when Stored=true.
 			wlResult := map[string]any{
 				"stored":          true,
@@ -726,7 +726,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	}
 
 	if params.Project == "" && !(params.AlwaysInject && resolvedScope == string(models.ScopeGlobal)) {
-		return "", fmt.Errorf("project is required for store_memory in v5 unless always_inject=true with scope=global")
+		return "", fmt.Errorf("project is required for store in v5 unless always_inject=true with scope=global")
 	}
 
 	obsTypeStr := params.Type
@@ -793,7 +793,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 			Audience:    "developer",
 			SessionID:   params.SessionID,
 			Actor:       params.AgentSource,
-			SourceTool:  "store_memory",
+			SourceTool:  "store",
 			EvidenceTag: "always_inject",
 		}); err != nil {
 			return "", fmt.Errorf("store rule candidate: %w", err)
@@ -910,15 +910,15 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 		if bm, getErr := s.memoryStore.Get(ctx, sid); getErr == nil {
 			beforeMem = bm
 		} else {
-			log.Warn().Err(getErr).Int64("superseded_id", sid).Msg("store_memory: supersede target not found")
+			log.Warn().Err(getErr).Int64("superseded_id", sid).Msg("store: supersede target not found")
 			continue
 		}
 		if !domainManageAllowed(ctx, beforeMem) {
-			return "", fmt.Errorf("store_memory: memory %d not found", sid)
+			return "", fmt.Errorf("store: memory %d not found", sid)
 		}
 		oldImportance, supErr := s.memoryStore.Supersede(ctx, sid)
 		if supErr != nil {
-			log.Warn().Err(supErr).Int64("superseded_id", sid).Msg("store_memory: supersede failed")
+			log.Warn().Err(supErr).Int64("superseded_id", sid).Msg("store: supersede failed")
 			continue
 		}
 		// Audit: fire-and-forget supersede event.
@@ -948,7 +948,7 @@ func (s *Server) handleStoreMemory(ctx context.Context, args json.RawMessage) (s
 	if vnextEnabled && params.Project != "" {
 		existing, listErr := s.memoryStore.List(ctx, params.Project, 100)
 		if listErr != nil {
-			log.Warn().Err(listErr).Msg("store_memory: write gate could not load existing memories, skipping gate")
+			log.Warn().Err(listErr).Msg("store: write gate could not load existing memories, skipping gate")
 		} else {
 			existing = filterVisibleWriteGateCandidates(ctx, params.SessionID, existing)
 			gateResult = writegate.Check(ctx, params.Content, existing)
@@ -1121,7 +1121,7 @@ func (s *Server) handleEditMemory(ctx context.Context, args json.RawMessage) (st
 
 	id := coerceInt64(m["id"], 0)
 	if id == 0 {
-		return "", fmt.Errorf("id required for store_memory action=edit")
+		return "", fmt.Errorf("id required for store action=edit")
 	}
 	narrative := coerceString(m["narrative"], "")
 	tags := coerceStringSlice(m["tags"])
@@ -2248,35 +2248,6 @@ func (s *Server) handleRecallMemoryHybrid(
 	}
 }
 
-// handleRateMemory is kept explicit in v5: memories do not have a rating field yet.
-func (s *Server) handleRateMemory(ctx context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	id := coerceInt64(m["id"], 0)
-	rating := coerceString(m["rating"], "")
-	if rating == "" {
-		if usefulRaw, ok := m["useful"]; ok && usefulRaw != nil {
-			if coerceBool(usefulRaw, false) {
-				rating = "useful"
-			} else {
-				rating = "not_useful"
-			}
-		}
-	}
-
-	if id == 0 {
-		return "", fmt.Errorf("id required")
-	}
-	if rating != "useful" && rating != "not_useful" {
-		return "", fmt.Errorf("rating must be 'useful' or 'not_useful'")
-	}
-
-	return "", fmt.Errorf("rate_memory removed in v5 (US3): memories table has no rating field yet")
-}
-
 // handleSuppressMemory suppresses a v5 memory via soft-delete in the memories table.
 func (s *Server) handleSuppressMemory(ctx context.Context, args json.RawMessage) (string, error) {
 	if s.memoryStore == nil {
@@ -2297,19 +2268,19 @@ func (s *Server) handleSuppressMemory(ctx context.Context, args json.RawMessage)
 	beforeMem, getErr := s.memoryStore.Get(ctx, id)
 	if getErr != nil {
 		if errors.Is(getErr, gormlib.ErrRecordNotFound) {
-			return "", fmt.Errorf("suppress_memory: memory %d not found", id)
+			return "", fmt.Errorf("feedback suppress: memory %d not found", id)
 		}
-		return "", fmt.Errorf("suppress_memory: %w", getErr)
+		return "", fmt.Errorf("feedback suppress: %w", getErr)
 	}
 	if !domainManageAllowed(ctx, beforeMem) {
-		return "", fmt.Errorf("suppress_memory: memory %d not found", id)
+		return "", fmt.Errorf("feedback suppress: memory %d not found", id)
 	}
 
 	if err := s.memoryStore.Delete(ctx, id); err != nil {
 		if errors.Is(err, gormlib.ErrRecordNotFound) {
-			return "", fmt.Errorf("suppress_memory: memory %d not found", id)
+			return "", fmt.Errorf("feedback suppress: memory %d not found", id)
 		}
-		return "", fmt.Errorf("suppress_memory: %w", err)
+		return "", fmt.Errorf("feedback suppress: %w", err)
 	}
 
 	// Audit: fire-and-forget delete event.
