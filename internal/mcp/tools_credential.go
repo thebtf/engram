@@ -85,9 +85,8 @@ func (s *Server) handleStoreCredential(ctx context.Context, args json.RawMessage
 		return "", fmt.Errorf("invalid scope %q: must be \"project\" or \"global\"", params.Scope)
 	}
 	if params.Scope == "global" {
-		return "", fmt.Errorf("global-scope credentials are not yet supported; use scope \"project\" and provide a project name")
-	}
-	if params.Project == "" {
+		params.Project = ""
+	} else if params.Project == "" {
 		return "", fmt.Errorf("project is required for project-scoped credentials")
 	}
 
@@ -140,15 +139,31 @@ func (s *Server) handleGetCredential(ctx context.Context, args json.RawMessage) 
 
 	var params struct {
 		Name    string
+		Scope   string
 		Project string
 	}
 	params.Name = coerceString(m["name"], "")
+	params.Scope = coerceString(m["scope"], "")
 	params.Project = coerceString(m["project"], "")
 	if params.Name == "" {
 		return "", fmt.Errorf("name is required")
 	}
-	if params.Project == "" {
-		return "", fmt.Errorf("project is required")
+	if params.Scope == "" {
+		if params.Project == "" {
+			params.Scope = "global"
+		} else {
+			params.Scope = "project"
+		}
+	}
+	switch params.Scope {
+	case "project":
+		if params.Project == "" {
+			return "", fmt.Errorf("project is required for project-scoped credentials")
+		}
+	case "global":
+		params.Project = ""
+	default:
+		return "", fmt.Errorf("invalid scope %q: must be \"project\" or \"global\"", params.Scope)
 	}
 
 	v, err := s.getVault()
@@ -204,13 +219,17 @@ func (s *Server) handleListCredentials(ctx context.Context, args json.RawMessage
 		Project string
 	}
 	params.Project = coerceString(m["project"], "")
-	if params.Project == "" {
-		return "[]", nil
-	}
 
 	creds, err := store.List(ctx, params.Project)
 	if err != nil {
 		return "", fmt.Errorf("list credentials: %w", err)
+	}
+	if params.Project != "" {
+		globalCreds, globalErr := store.List(ctx, "")
+		if globalErr != nil {
+			return "", fmt.Errorf("list global credentials: %w", globalErr)
+		}
+		creds = append(creds, globalCreds...)
 	}
 
 	type credItem struct {
@@ -221,10 +240,18 @@ func (s *Server) handleListCredentials(ctx context.Context, args json.RawMessage
 	}
 	items := make([]credItem, 0, len(creds))
 	for _, c := range creds {
+		scope := c.Scope
+		if scope == "" {
+			if c.Project == "" {
+				scope = "global"
+			} else {
+				scope = "project"
+			}
+		}
 		item := credItem{
 			ID:    c.ID,
 			Name:  c.Key,
-			Scope: c.Scope,
+			Scope: scope,
 		}
 		if !c.CreatedAt.IsZero() {
 			item.CreatedAt = c.CreatedAt.UTC().Format(time.RFC3339)
@@ -263,19 +290,21 @@ func (s *Server) handleDeleteCredential(ctx context.Context, args json.RawMessag
 		return "", fmt.Errorf("name is required")
 	}
 	if params.Scope == "" {
-		params.Scope = "project"
+		if params.Project == "" {
+			params.Scope = "global"
+		} else {
+			params.Scope = "project"
+		}
 	}
 	switch params.Scope {
-	case "project", "global":
-		// valid
+	case "project":
+		if params.Project == "" {
+			return "", fmt.Errorf("project is required for project-scoped credentials")
+		}
+	case "global":
+		params.Project = ""
 	default:
 		return "", fmt.Errorf("invalid scope %q: must be \"project\" or \"global\"", params.Scope)
-	}
-	if params.Scope == "global" {
-		return "", fmt.Errorf("global-scope credentials are not yet supported; use scope \"project\" and provide a project name")
-	}
-	if params.Project == "" {
-		return "", fmt.Errorf("project is required for project-scoped credentials")
 	}
 
 	if err := store.Delete(ctx, params.Project, params.Name); err != nil {

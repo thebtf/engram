@@ -80,6 +80,13 @@ func (s *Service) handleListCredentials(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "failed to list credentials", http.StatusInternalServerError)
 		return
 	}
+	globalCreds, err := s.credentialStore.List(r.Context(), "")
+	if err != nil {
+		log.Error().Err(err).Msg("list global credentials failed")
+		http.Error(w, "failed to list credentials", http.StatusInternalServerError)
+		return
+	}
+	creds = append(creds, globalCreds...)
 
 	items := make([]credItem, 0, len(creds))
 	for _, c := range creds {
@@ -210,16 +217,8 @@ func (s *Service) handleStoreCredential(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if req.Scope == "global" {
-		// Global-scope credentials are not yet supported via this API — the credentials
-		// table requires a non-empty project (store validation). Reject early with a clear
-		// error rather than letting the store return an opaque "project must not be empty".
-		// When global credential support is added, the schema and store will need a
-		// dedicated global-project sentinel (e.g. project="__global__") or a nullable
-		// project column with an IS NULL path.
-		http.Error(w, "global-scope credentials are not yet supported; use scope \"project\" and provide a project name", http.StatusBadRequest)
-		return
-	}
-	if req.Scope == "project" && req.Project == "" {
+		req.Project = ""
+	} else if req.Project == "" {
 		http.Error(w, "project is required for project-scoped credentials", http.StatusBadRequest)
 		return
 	}

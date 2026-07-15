@@ -61,14 +61,20 @@ Tool: check_system_health()
 
 ## Credential Management
 
-Engram provides encrypted credential storage via AES-256-GCM vault. Credentials are stored per project, encrypted at rest, and never appear in search results or context injection.
+Engram provides encrypted credential storage via AES-256-GCM vault. Credentials may be project-scoped or global, are encrypted at rest, and never appear in search results or context injection.
 
 ```
-Use: "Store my OpenAI API key"
+Use: "Store my project OpenAI API key"
 Tool: vault(action="store", name="openai_api_key", value="sk-...", scope="project", project="my-project")
 
-Use: "Get my OpenAI key"
+Use: "Store a global OpenAI API key"
+Tool: vault(action="store", name="openai_api_key", value="sk-...", scope="global")
+
+Use: "Get my project OpenAI key"
 Tool: vault(action="get", name="openai_api_key", project="my-project")
+
+Use: "Get the global OpenAI key"
+Tool: vault(action="get", name="openai_api_key")
 
 Use: "Check vault status"
 Tool: vault(action="status")

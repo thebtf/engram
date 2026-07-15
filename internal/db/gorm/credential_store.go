@@ -29,14 +29,28 @@ func NewCredentialStore(store *Store) *CredentialStore {
 
 // Create inserts a new credential row. Returns a new *models.Credential populated with
 // the database-assigned ID and timestamps. The caller's input is never mutated.
-// Returns an error if the (project, key) pair already exists (unique constraint on the table).
+// Project credentials require a non-empty project; global credentials use project="".
+// The UNIQUE(project, key) constraint keeps those namespaces independent.
 // The caller is responsible for encrypting the secret before passing it in.
 func (s *CredentialStore) Create(ctx context.Context, cred *models.Credential) (*models.Credential, error) {
 	if cred == nil {
 		return nil, fmt.Errorf("credential must not be nil")
 	}
-	if cred.Project == "" {
-		return nil, fmt.Errorf("credential.Project must not be empty")
+	scope := cred.Scope
+	if scope == "" {
+		scope = "project"
+	}
+	switch scope {
+	case "project":
+		if cred.Project == "" {
+			return nil, fmt.Errorf("credential.Project must not be empty for project scope")
+		}
+	case "global":
+		if cred.Project != "" {
+			return nil, fmt.Errorf("credential.Project must be empty for global scope")
+		}
+	default:
+		return nil, fmt.Errorf("credential.Scope must be \"project\" or \"global\"")
 	}
 	if cred.Key == "" {
 		return nil, fmt.Errorf("credential.Key must not be empty")
@@ -60,7 +74,7 @@ func (s *CredentialStore) Create(ctx context.Context, cred *models.Credential) (
 		Key:                      cred.Key,
 		EncryptedSecret:          secret,
 		EncryptionKeyFingerprint: cred.EncryptionKeyFingerprint,
-		Scope:                    cred.Scope,
+		Scope:                    scope,
 		EditedBy:                 cred.EditedBy,
 		Version:                  1,
 		CreatedAt:                now,
@@ -76,12 +90,11 @@ func (s *CredentialStore) Create(ctx context.Context, cred *models.Credential) (
 	return credentialRowToModel(row), nil
 }
 
-// Get returns the active (non-soft-deleted) credential matching the given project and key.
+// Get returns the active credential matching the given project and key.
+// An empty project selects the exact global namespace; non-empty projects keep
+// the existing project-scoped lookup semantics.
 // Returns a wrapped gorm.ErrRecordNotFound if no active row exists.
 func (s *CredentialStore) Get(ctx context.Context, project, key string) (*models.Credential, error) {
-	if project == "" {
-		return nil, fmt.Errorf("project: must not be empty")
-	}
 	if key == "" {
 		return nil, fmt.Errorf("key: must not be empty")
 	}
@@ -95,10 +108,9 @@ func (s *CredentialStore) Get(ctx context.Context, project, key string) (*models
 	return credentialRowToModel(&row), nil
 }
 
-// GetByName returns the first active credential matching the given key across ALL projects.
+// GetByName returns the first active credential matching the given key across all projects.
 // Used by the dashboard admin view where the caller doesn't know the project.
-// If multiple projects have a credential with the same name, the first match is returned
-// (ordered by project ASC for determinism).
+// Global credentials are preferred, then project rows are ordered deterministically.
 // Returns a wrapped gorm.ErrRecordNotFound if no active row exists.
 func (s *CredentialStore) GetByName(ctx context.Context, key string) (*models.Credential, error) {
 	if key == "" {
@@ -107,6 +119,7 @@ func (s *CredentialStore) GetByName(ctx context.Context, key string) (*models.Cr
 	var row Credential
 	err := s.db.WithContext(ctx).
 		Where("key = ? AND deleted_at IS NULL", key).
+		Order("CASE WHEN project = '' THEN 0 ELSE 1 END").
 		Order("project ASC").
 		First(&row).Error
 	if err != nil {
@@ -115,12 +128,9 @@ func (s *CredentialStore) GetByName(ctx context.Context, key string) (*models.Cr
 	return credentialRowToModel(&row), nil
 }
 
-// List returns all active (non-soft-deleted) credentials for the given project,
-// ordered by key ascending.
+// List returns all active credentials for the exact project namespace, ordered
+// by key ascending. An empty project lists global credentials only.
 func (s *CredentialStore) List(ctx context.Context, project string) ([]*models.Credential, error) {
-	if project == "" {
-		return nil, fmt.Errorf("project: must not be empty")
-	}
 	var rows []Credential
 	err := s.db.WithContext(ctx).
 		Where("project = ? AND deleted_at IS NULL", project).
@@ -154,7 +164,8 @@ func (s *CredentialStore) ListAll(ctx context.Context) ([]*models.Credential, er
 	return result, nil
 }
 
-// Delete permanently removes the credential matching (project, key).
+// Delete permanently removes the credential matching the exact (project, key)
+// namespace. An empty project selects the global namespace.
 // Returns gorm.ErrRecordNotFound if no row exists.
 //
 // Design note — hard-delete vs soft-delete: credentials use hard-delete
@@ -167,9 +178,6 @@ func (s *CredentialStore) ListAll(ctx context.Context) ([]*models.Credential, er
 // is removed), but it is NOT used by this Delete method.
 // See: TestCredentialStore_CreateGetCountDelete "rotation scenario" test case.
 func (s *CredentialStore) Delete(ctx context.Context, project, key string) error {
-	if project == "" {
-		return fmt.Errorf("project: must not be empty")
-	}
 	if key == "" {
 		return fmt.Errorf("key: must not be empty")
 	}
@@ -186,16 +194,17 @@ func (s *CredentialStore) Delete(ctx context.Context, project, key string) error
 }
 
 // DeleteByName hard-deletes the first active credential matching the given key across
-// ALL projects. Used by the dashboard admin view where the caller doesn't know the project.
-// Returns gorm.ErrRecordNotFound if no active row exists.
+// all projects, preferring the exact global row. Used by the dashboard admin view
+// where the caller doesn't know the project. Returns gorm.ErrRecordNotFound if absent.
 func (s *CredentialStore) DeleteByName(ctx context.Context, key string) error {
 	if key == "" {
 		return fmt.Errorf("key: must not be empty")
 	}
-	// Find the credential first to get the exact row (deterministic: ordered by project).
+	// Find the exact row first; a global credential wins when names coexist.
 	var row Credential
 	if err := s.db.WithContext(ctx).
 		Where("key = ? AND deleted_at IS NULL", key).
+		Order("CASE WHEN project = '' THEN 0 ELSE 1 END").
 		Order("project ASC").
 		First(&row).Error; err != nil {
 		return fmt.Errorf("delete credential by name %q: %w", key, err)

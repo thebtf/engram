@@ -551,7 +551,8 @@ func TestPrimaryToolActionEnumsContainOnlyWorkingActions(t *testing.T) {
 	assert.NotContains(t, docsProps, "comment")
 	assert.NotContains(t, docsProps, "id")
 	vaultProps := findToolProperties(t, s.primaryTools(), "vault")
-	assert.ElementsMatch(t, []string{"project"}, toStringSlice(vaultProps["scope"].(map[string]any)["enum"]))
+	assert.ElementsMatch(t, []string{"project", "global"}, toStringSlice(vaultProps["scope"].(map[string]any)["enum"]))
+	assert.NotContains(t, vaultProps["scope"].(map[string]any), "default")
 	adminProps := findToolProperties(t, s.primaryTools(), "admin")
 	assert.NotContains(t, adminProps, "project")
 }
