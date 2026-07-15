@@ -1623,7 +1623,7 @@ let density='compact';
 const LIST_PAGE_SIZE = { memories:10, queue:10, issues:10, rules:10, vaultCreds:10, projects:10, sessions:10, tombstones:25 };
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 0]; // 0 = «Все»
 const listState = {
-  memories:{ page:1, project:'all', filters:new Set() },
+  memories:{ page:1, project:'all', filters:new Set(), reviewMode:false },
   queue:{ page:1 },
   issues:{ page:1, status:'all' },
   rules:{ page:1 },
@@ -2397,7 +2397,7 @@ function wireEntityChips(scope, kind, entity, field, label){
 const AREAS = {
   overview: renderOverview,
   search: renderSearch,
-  memories: renderMemoryLab, queue: renderQueue, noise: renderNoise, graph: renderGraph,
+  memories: renderMemoryLab, queue: renderMemoryLab, noise: renderNoise, graph: renderGraph,
   rules: renderRules, issues: renderIssues, books: renderBooks, secrets: renderVault, documents: renderVault, collections: renderVault, projects: renderProjects,
   access: renderAccess, designsystem: renderDesignSystem, settings: renderSettings, health: renderHealth, tombstones: renderTombstones,
 };
@@ -2420,48 +2420,100 @@ function filteredMemories(){
   });
 }
 function renderMemoryLab(c){
-  c.appendChild(areaHead('Память','Рабочий список знаний Engram: что использовать в ответах, что проверить, что убрать как шум.', false, null, null));
+  if (current === 'queue') {
+    current = 'memories';
+    listState.memories.reviewMode = true;
+    queueMicrotask(renderNav);
+  }
+  const isReviewMode = !!listState.memories.reviewMode;
+  const title = 'Память';
+  const subtitle = 'Рабочий список знаний Engram: что использовать в ответах, что проверить, что убрать как шум.';
+  
+  c.appendChild(areaHead(title, subtitle, false, null, null));
+
 
   const body=el('div', openEntity ? 'area-body with-detail detail-open' : 'area-body');
   const pane=el('div','pane');
   pane.innerHTML=legend();
-  const filtered=filteredMemories();
-  const page=pageList('memories', filtered);
+
+  if (isReviewMode && flags.VNEXT_F) {
+    const qband=el('div','instr-band');
+    qband.innerHTML=`<div class="lead"><div class="ln"><span data-count="7">0</span></div><div class="ll">ждут решения</div></div>
+      <div class="bfigs">
+        <div class="bfig good"><div class="bn"><span data-count="12">0</span></div><div class="bl">сохранено · за неделю</div></div>
+        <div class="bfig warn"><div class="bn"><span data-count="4">0</span></div><div class="bl">отклонено · за неделю</div></div>
+        <div class="bfig"><div class="bn"><span data-count="2">0</span></div><div class="bl">устарело · за неделю</div></div>
+      </div>`;
+    pane.appendChild(qband);
+    instrAnimate(qband);
+  }
+
+  const filtered = isReviewMode ? CANDIDATES : filteredMemories();
+  const page = pageList(isReviewMode ? 'queue' : 'memories', filtered);
+
   const ops=listOps({
-    key:'memories', total:MEMORIES.length, filtered:filtered.length, filterActive:memoryFilterActive(),
+    key: isReviewMode ? 'queue' : 'memories', 
+    total: isReviewMode ? CANDIDATES.length : MEMORIES.length, 
+    filtered: filtered.length, 
+    filterActive: isReviewMode ? false : memoryFilterActive(),
     selectAll:()=>{ filtered.forEach(m=>selected.add(m.id)); renderArea(); },
-    clearSelect:()=>{ MEMORIES.forEach(m=>selected.delete(m.id)); renderArea(); },
-    resetFilter:()=>{ listState.memories.project='all'; listState.memories.filters.clear(); listState.memories.page=1; renderArea(); }
+    clearSelect:()=>{ (isReviewMode ? CANDIDATES : MEMORIES).forEach(m=>selected.delete(m.id)); renderArea(); },
+    resetFilter: isReviewMode ? null : ()=>{ listState.memories.project='all'; listState.memories.filters.clear(); listState.memories.page=1; renderArea(); }
   });
-  ops.right.appendChild(pager('memories',page));
+  ops.right.appendChild(pager(isReviewMode ? 'queue' : 'memories', page));
   pane.appendChild(ops.wrap);
+
   const fb=el('div','filterbar');
-  fb.innerHTML=`<select class="fsel" id="memoryProjectFilter">
+  fb.innerHTML=`
+    <button class="fchip preset" aria-pressed="${isReviewMode}" style="margin-right:auto; border-color:var(--class-live); color:${isReviewMode?'var(--class-live)':'var(--fg-2)'}" onclick="listState.memories.reviewMode=${!isReviewMode}; listState.memories.page=1; openEntity=null; selected.clear(); renderArea()">На проверку (${CANDIDATES.length})</button>
+    <select class="fsel" id="memoryProjectFilter" ${isReviewMode?'disabled':''}>
       <option value="all">Все проекты</option>
       ${projectOptions().map(p=>`<option value="${escapeHtml(p)}"${listState.memories.project===p?' selected':''}>${escapeHtml(p)}</option>`).join('')}
     </select>
-    <button class="fchip" data-memory-filter="active" aria-pressed="${listState.memories.filters.has('active')}">Рабочие</button>
-    <button class="fchip" data-memory-filter="flagged" aria-pressed="${listState.memories.filters.has('flagged')}">Проверить</button>
-    <button class="fchip preset" data-memory-filter="stale" aria-pressed="${listState.memories.filters.has('stale')}">30 дней без пользы</button>
-    <button class="fchip preset" data-memory-filter="low" aria-pressed="${listState.memories.filters.has('low')}">Низкая уверенность</button>
-    <button class="fchip preset" data-memory-filter="chain" aria-pressed="${listState.memories.filters.has('chain')}">Цепочка замен</button>
-    <span class="fcount">${filtered.length} записей · шум 0.41</span>`;
+    <button class="fchip" data-memory-filter="active" aria-pressed="${listState.memories.filters.has('active')}" ${isReviewMode?'disabled':''}>Рабочие</button>
+    <button class="fchip" data-memory-filter="flagged" aria-pressed="${listState.memories.filters.has('flagged')}" ${isReviewMode?'disabled':''}>Проверить</button>
+    <button class="fchip preset" data-memory-filter="stale" aria-pressed="${listState.memories.filters.has('stale')}" ${isReviewMode?'disabled':''}>30 дней без пользы</button>
+    <button class="fchip preset" data-memory-filter="low" aria-pressed="${listState.memories.filters.has('low')}" ${isReviewMode?'disabled':''}>Низкая уверенность</button>
+    <button class="fchip preset" data-memory-filter="chain" aria-pressed="${listState.memories.filters.has('chain')}" ${isReviewMode?'disabled':''}>Цепочка замен</button>
+    <span class="fcount">${filtered.length} записей${!isReviewMode?' · шум 0.41':''}</span>`;
   fb.querySelector('#memoryProjectFilter').onchange=e=>{ listState.memories.project=e.target.value; listState.memories.page=1; renderArea(); };
   fb.querySelectorAll('[data-memory-filter]').forEach(ch=>ch.onclick=()=>{
+    if(isReviewMode) return;
     const k=ch.dataset.memoryFilter;
     listState.memories.filters.has(k)?listState.memories.filters.delete(k):listState.memories.filters.add(k);
     listState.memories.page=1;
     renderArea();
   });
   pane.appendChild(fb);
+
   const grid=el('div','grid');
-  grid.appendChild(el('div','grid-h','<span style="margin-left:27px">Запись · назначение · проект · давность</span><span style="margin-left:auto">польза / показы</span>'));
-  page.items.forEach(m=>grid.appendChild(memRow(m)));
+  if (isReviewMode) {
+    if (!flags.VNEXT_F) {
+      grid.innerHTML = `<div class="gate-off" style="margin:20px;border-radius:var(--r-md);border:1px dashed var(--border)">Предложения к памяти выключены<div class="ge">технически: ENGRAM_VNEXT_F_ENABLED</div></div>`;
+    } else {
+      grid.appendChild(el('div','grid-h','<span style="margin-left:27px">Предложение · повторялось · уверенность · вернуться · куда сохранить</span>'));
+      page.items.forEach(cd=>{
+        const row=el('div','erow'+(openEntity===cd.id?' open':''));
+        const chk=el('div','echk'+(selected.has(cd.id)?' on':''), selected.has(cd.id)?'✓':'');
+        chk.onclick=(e)=>{e.stopPropagation(); toggleSel(cd.id);};
+        row.innerHTML=`<span class="estate" data-s="pending"></span>
+          <div class="ebody"><div class="epreview">${cd.content}</div>
+          <div class="emeta"><span>повторялось ${cd.recur}×</span><span>уверенность ${Math.round(cd.conf*100)}%</span><span>${optionLabel(cd.after)}</span><span>${optionLabel(cd.target)}</span></div></div>
+          <div class="eside"><button class="rowmenu">⋯</button></div>`;
+        row.prepend(chk);
+        row.onclick=()=>{ openEntity=cd.id; renderArea(); };
+        grid.appendChild(row);
+      });
+    }
+  } else {
+    grid.appendChild(el('div','grid-h','<span style="margin-left:27px">Запись · назначение · проект · давность</span><span style="margin-left:auto">польза / показы</span>'));
+    page.items.forEach(m=>grid.appendChild(memRow(m)));
+  }
   pane.appendChild(grid);
   // bulk bar
-  pane.appendChild(bulkBar('memory'));
+  pane.appendChild(bulkBar(isReviewMode ? 'candidate' : 'memory'));
   body.appendChild(pane);
-  if(openEntity) body.appendChild(memDetail());
+  if(openEntity) body.appendChild(isReviewMode ? candidateDetail() : memDetail());
   c.appendChild(body);
 }
 
@@ -2501,7 +2553,7 @@ function memDetail(){
       <button class="act" ${flags.LIFECYCLE?'':'disabled'}>Повысить важность ${flags.LIFECYCLE?'':'<span class="mbp">требует lifecycle</span>'}</button>
       <button class="act" disabled>Пометить <span class="mbp">нужен backend</span></button>
     </div>`;
-  d.querySelector('[data-cand]')?.addEventListener('click',()=>{ current='queue'; sub=null; renderNav(); renderArea(); });
+  d.querySelector('[data-cand]')?.addEventListener('click',()=>{ current='memories'; listState.memories.reviewMode=true; sub=null; renderNav(); renderArea(); });
   d.querySelector('[data-sess]')?.addEventListener('click',()=>{ current='projects'; sub='sess'; renderNav(); renderArea(); });
   wireEntitySelects(d,'memory',m,{status:'состояние',tier:'как использовать',type:'категория',project:'проект'});
   wireEntityChips(d,'memory',m,'tags','теги');
@@ -2510,54 +2562,12 @@ function memDetail(){
 }
 
 /* ---- Candidate Queue (hero 2) ---- */
-function renderQueue(c){ c.appendChild(areaHead('На проверку','Предложения, которые Engram хочет превратить в память. Оператор решает: сохранить, отложить или отклонить.', false, null, null)); mountQueue(c); }
-function mountQueue(c){
-  if(!flags.VNEXT_F){
-    const w=el('div','pane'); w.innerHTML=legend()+`<div class="gate-off">Предложения к памяти выключены<div class="ge">технически: ENGRAM_VNEXT_F_ENABLED</div></div>`;
-    c.appendChild(w); return;
-  }
-  const body=el('div','area-body with-detail'+(openEntity?' detail-open':''));
-  const pane=el('div','pane');
-  pane.innerHTML=legend();
-  const page=pageList('queue', CANDIDATES);
-  const ops=listOps({
-    key:'queue', total:CANDIDATES.length, filtered:CANDIDATES.length,
-    selectAll:()=>{ CANDIDATES.forEach(cd=>selected.add(cd.id)); renderArea(); },
-    clearSelect:()=>{ CANDIDATES.forEach(cd=>selected.delete(cd.id)); renderArea(); },
-  });
-  ops.right.appendChild(pager('queue',page));
-  pane.appendChild(ops.wrap);
-  const qband=el('div','instr-band');
-  qband.innerHTML=`<div class="lead"><div class="ln"><span data-count="7">0</span></div><div class="ll">ждут решения</div></div>
-    <div class="bfigs">
-      <div class="bfig good"><div class="bn"><span data-count="12">0</span></div><div class="bl">сохранено · за неделю</div></div>
-      <div class="bfig warn"><div class="bn"><span data-count="4">0</span></div><div class="bl">отклонено · за неделю</div></div>
-      <div class="bfig"><div class="bn"><span data-count="2">0</span></div><div class="bl">устарело · за неделю</div></div>
-    </div>`;
-  pane.appendChild(qband);
-  instrAnimate(qband);
-  const grid=el('div','grid');
-  grid.appendChild(el('div','grid-h','<span style="margin-left:27px">Предложение · повторялось · уверенность · вернуться · куда сохранить</span>'));
-  page.items.forEach(cd=>{
-    const row=el('div','erow'+(openEntity===cd.id?' open':''));
-    const chk=el('div','echk'+(selected.has(cd.id)?' on':''), selected.has(cd.id)?'✓':'');
-    chk.onclick=(e)=>{e.stopPropagation(); toggleSel(cd.id);};
-    row.innerHTML=`<span class="estate" data-s="pending"></span>
-      <div class="ebody"><div class="epreview">${cd.content}</div>
-      <div class="emeta"><span>повторялось ${cd.recur}×</span><span>уверенность ${Math.round(cd.conf*100)}%</span><span>${optionLabel(cd.after)}</span><span>${optionLabel(cd.target)}</span></div></div>
-      <div class="eside"><button class="rowmenu">⋯</button></div>`;
-    row.prepend(chk);
-    row.onclick=()=>{ openEntity=cd.id; renderArea(); };
-    grid.appendChild(row);
-  });
-  pane.appendChild(grid);
-  pane.appendChild(bulkBar('candidate'));
-  body.appendChild(pane);
-  // detail
+function candidateDetail(){
   const d=el('div','detail');
-  if(openEntity && CANDIDATES.find(x=>x.id===openEntity)){
-    const cd=CANDIDATES.find(x=>x.id===openEntity);
-    d.innerHTML=`<h2>Предложение к памяти</h2><div class="dident mono">${cd.id}</div>
+  if(!openEntity){ d.innerHTML='<div class="detail-empty">Выберите кандидата.</div>'; return d; }
+  const cd=CANDIDATES.find(x=>x.id===openEntity);
+  if(!cd){ d.innerHTML='<div class="detail-empty">—</div>'; return d; }
+  d.innerHTML=`<h2>Предложение к памяти</h2><div class="dident mono">${cd.id}</div>
       <div class="dcontent">${cd.content}</div>
       <div class="operator-note"><span class="mark">?</span><div><b>Что решает оператор:</b> сохранить как память, отложить до следующего сигнала или отклонить как случайный шум.</div></div>
       <div class="edit-grid">
@@ -2571,12 +2581,10 @@ function mountQueue(c){
         <button class="act">Заменить старую запись</button>
         <button class="act danger">Отклонить</button>
       </div>`;
-    wireEntitySelects(d,'candidate',cd,{after:'вернуться',target:'куда сохранить'});
-    d.querySelector('#promo').onclick=()=>confirmModal('Сохранить предложение','Предпросмотр покажет новую запись памяти, затем создаст её одной операцией и откроет карточку.',()=>{ toast('Сохранено → новая память'); openEntity=null; });
-    d.querySelectorAll('.act.danger')[0].onclick=()=>toast('Отклонено');
-  } else d.innerHTML='<div class="detail-empty">Выберите кандидата.</div>';
-  body.appendChild(d);
-  c.appendChild(body);
+  wireEntitySelects(d,'candidate',cd,{after:'вернуться',target:'куда сохранить'});
+  d.querySelector('#promo').onclick=()=>confirmModal('Сохранить предложение','Предпросмотр покажет новую запись памяти, затем создаст её одной операцией и откроет карточку.',()=>{ toast('Сохранено → новая память'); openEntity=null; });
+  d.querySelectorAll('.act.danger')[0].onclick=()=>toast('Отклонено');
+  return d;
 }
 
 /* ---- Noise Dashboard (hero 3) ---- */
@@ -4604,7 +4612,8 @@ function bulkBar(kind){
 function updateBulk(){
   const bar=$('#bulkbar'); if(!bar) return;
   let count=selected.size;
-  let verbs = current==='queue'? ['Сохранить выбранные','Отклонить устаревшие'] : ['Скрыть как шум','Заменить версией'];
+  let isReview = current==='queue' || (current==='memories' && listState.memories?.reviewMode);
+  let verbs = isReview ? ['Сохранить выбранные','Отклонить устаревшие'] : ['Скрыть как шум','Заменить версией'];
   let note='<span class="mono" style="font-size:11px;color:var(--muted)">сначала снимок · затем применение</span>';
   if(current==='issues'){
     count=selectedIssueIds().length;

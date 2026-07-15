@@ -1,152 +1,56 @@
 # Promotion Contract — operator-console
 
-## Purpose
+## Boundary
 
-OpenDesign must keep working inside `.od/`, but the public repository and production
-deployment must **not** depend on tracking the whole `.od/` workspace.
+- `.od/` is private OpenDesign authoring.
+- `design/operator-console/` is the tracked curated public snapshot.
+- `apps/operator-console/` is developer-owned runtime integration.
 
-This contract establishes a **one-way promotion model**:
+Promotion is one-way and is neither code generation nor bidirectional sync. The
+public snapshot is identified by `PROMOTION-MANIFEST.json`, not a fictitious `.od`
+commit. The manifest records its explicit docs/mockups allowlist, canonical SHA-256
+values, deterministic snapshot SHA-256, route/frame map, tool version, and private-material exclusions. The source
+`DESIGN.md` stamp is the single design-version authority; the manifest copies it.
+The snapshot SHA-256 distinguishes content changes that retain the same source stamp.
+Canonical promoted text uses UTF-8 bytes with LF line endings, so CRLF/LF authoring
+differences do not create a new snapshot.
 
-- `.od/` is the local/private **authoring workspace**
-- `design/operator-console/` is the tracked **curated contract snapshot**
-- `apps/operator-console/` is the tracked **deployable runtime source**
+`promoted_at_utc` is a deterministic provenance stamp derived from the accepted
+`design_version` date (`YYYY.MM.DD` -> `YYYY-MM-DDT00:00:00Z`), never wall-clock time.
+A no-op promotion (unchanged `design_version`, unchanged content) preserves the
+existing `promoted_at_utc` from the prior manifest, so two identical promotions
+remain byte-identical.
 
-The model is explicit promotion, **not** code generation and **not** bidirectional sync.
+Promotion refuses to write when allowlisted content changed but `design_version`
+is unchanged from the existing manifest: bump `design_version` in `DESIGN.md`
+first.
 
-## Source of truth
+## Never promote
 
-### Authoring source
+Do not promote the full `.od` tree, nested `.git`, images, prompts, agent state,
+artifact metadata, critique/intermediate files, `.od-skills`, `.nuxt`, `.output`, or
+`node_modules`. Do not make `.od` a submodule.
 
-The following remain canonical inside `.od/`:
+## Workflow
 
-- `.od/PRODUCT.md`
-- `.od/DESIGN.md`
-- `.od/DESIGN-SYNC-PROTOCOL.md`
-- `.od/DEVELOPER-PLAYBOOK.md`
-- `.od/HANDOFF-data-integration.md`
-- `.od/RUNTIME-SUBSTRATE-MAP.md`
-- `.od/INTEGRATION-AGENT-PROMPT.md`
-- `.od/index.html`
-- `.od/access-admin.html`
-- `.od/saas-admin.html`
-- `.od/components.html`
-- `.od/nuxt-port/`
-
-### Public/tracked outputs
-
-- `design/operator-console/`
-  - curated docs and canonical mockups safe for the public repository
-- `apps/operator-console/`
-  - deployable Nuxt source used by CI/CD and production build/deploy flows
-
-## Non-goals
-
-This contract does **not** make `.od/` public.
-
-This contract does **not** promise that `apps/operator-console/` is edited directly by
-OpenDesign.
-
-This contract does **not** introduce a generator between mockup HTML and Vue/Nuxt code.
-
-## Ownership model
-
-### Design-owned, promoted on every sync
-
-Changes to these paths are expected to originate in `.od/nuxt-port/` and can be
-overwritten by the promotion script:
-
-- `assets/**`
-- `components/**`
-- `i18n/**`
-- `layouts/**`
-- `pages/**`
-- `composables/useHonesty.ts`
-- `composables/useNav.ts`
-- `scripts/parity-check.mjs`
-- `PARITY.json`
-- `PARITY.md`
-- `PARITY.schema.json`
-- `README.md`
-- `NUXT-PORT-GUIDE.md`
-- `app.vue`
-- `app.config.ts.example`
-
-### Developer-owned after bootstrap
-
-These files are bootstrapped from `.od/nuxt-port/` if missing, but are **not**
-overwritten by routine promotion:
-
-- `composables/useMockData.ts`
-- `nuxt.config.ts`
-- `package.json`
-- `package-lock.json`
-- repo-aware helper scripts that adapt `.od`-relative tooling to public repo paths
-
-Rationale:
-
-- `useMockData.ts` becomes the live seam against the real backend
-- `nuxt.config.ts` carries runtime/build policy
-- `package*.json` belong to the tracked app/runtime lifecycle
-- repo-aware helper scripts let the promoted app validate itself against
-  `design/operator-console/` without requiring `.od/` to be tracked
-
-If design needs a contract change that affects one of these files, it must be surfaced as
-an explicit contract change, not silently pushed through promotion.
-
-## What must never be promoted
-
-The following stay local/private in `.od/`:
-
-- `mq*.png`
-- `*.artifact.json`
-- `.od-skills/`
-- `.od/.agent/`
-- critique snapshots and intermediate prompt artifacts
-- local build/runtime folders such as `.nuxt/`, `.output/`, `node_modules/`
-
-## GitHub policy
-
-Public GitHub should contain:
-
-- `design/operator-console/` curated contract snapshot
-- `apps/operator-console/` tracked runtime source
-
-Public GitHub should **not** contain the full `.od/` working set.
-
-## Production policy
-
-Production receives:
-
-- built artifacts from `apps/operator-console/`
-- backend/runtime integration required for that app
-
-Production does **not** receive:
-
-- `.od/`
-- raw mockup images
-- intermediate OpenDesign artifacts
-- `PARITY` authoring noise outside what the tracked app explicitly needs
-
-## Promotion workflow
-
-1. Work on design inside `.od/`
-2. When a stable change is ready, run:
+Inspect the exact allowlisted diff without writing:
 
 ```powershell
-pwsh -NoProfile -File scripts/promote-od-operator-console.ps1
+pwsh -NoProfile -File scripts/promote-od-operator-console.ps1 -SourceRoot D:\path\to\.od
 ```
 
-3. Review the promoted diff in:
-   - `design/operator-console/`
-   - `apps/operator-console/`
-4. Build/test the promoted app from `apps/operator-console/`
-5. Commit only the promoted public/tracked output
+Promote only the reviewed public allowlist:
 
-## Safety rules
+```powershell
+pwsh -NoProfile -File scripts/promote-od-operator-console.ps1 -SourceRoot D:\path\to\.od -DesignOnly
+```
 
-- Promotion is **one-way**: `.od/` -> tracked repo paths
-- Do not edit design-owned files in `apps/operator-console/` and expect those edits to
-  survive the next promotion
-- Do not treat the promotion script as a generator; it copies a curated subset and
-  preserves runtime-owned files
-- If a file changes ownership, update this contract first
+Then run `npm run parity` in `apps/operator-console/`. It verifies the public
+manifest without reading `.od/`; explicit drift is reported, while false sync claims
+fail closed.
+
+## Runtime safety
+
+Routine design promotion never overwrites `apps/operator-console/`. Passing
+`-AllowAppWrite` produces a complete conflict report and stops in G1; a separately
+reviewed runtime-promotion slice is required before any app write exists.

@@ -4,8 +4,10 @@ description: >-
   Single-operator admin surface for persistent shared-memory infrastructure.
   Dark-first product UI with committed density, single accent, honesty contract
   over polish.
-design_version: "2026.06.21"   # contract stamp — bump on any token/component/screen change;
+design_version: "2026.07.14"   # contract stamp — bump on any token/component/screen change;
                                # PARITY.json records which port pages are synced to which stamp.
+                               # 2026.07.14: candidate queue merged into the memory screen as a
+                               # review-mode toggle (queue route now renders memory lab).
                                # 2026.06.21: app shell redesigned — full-height nav column,
                                # collapse/icon-rail, brand moved into nav, breadcrumb removed.
 colors:
@@ -223,6 +225,7 @@ components:
 ### Navigation
 - **nav**: левая колонка **во всю высоту** (`236px` развёрнуто / `60px` свёрнуто — icon-rail), `1px --border` справа. Шапка панели `navhead` (`48px`): brand glyph + wordmark слева, кнопка-сворачивания **справа** (НЕ в левом верхнем углу). Группа заголовков (`10px`, `0.08em` spacing, `--muted`), `nav-item` со статус-точкой слева от иконки. Подпункты класса `.sub`.
 - **collapse (icon-rail)**: панель сворачивается до `60px` — только иконки (крупнее) + цветная статус-точка как бейдж слева; лейблы/счётчики/заголовки групп скрыты. Состояние персистится в `localStorage`. Наведение на свёрнутый rail временно разворачивает панель поверх контента (Gemini-стиль), лейаут не сдвигается. Анимируется только `width` (плавно, без рывка). Логотип и кнопка-сворачивания живут в шапке nav, не в топбаре.
+- **rail alignment (жёсткая ось)**: в свёрнутом виде блок `[точка][иконка]` прижат к **правому** краю rail (`justify-content:flex-end`, `padding-right:10px`) — больший отступ от границы окна, меньший до границы nav/контент. Зазоры между flex-элементами строки обнулены (`gap:0`), чтобы скрытые хвостовые спаны нулевой ширины (`.lbl/.flag/.lock/.cnt`) не сдвигали иконку: правый край каждой иконки садится на одну вертикаль независимо от того, какие опциональные спаны несёт строка. Отступ точки от иконки — явный `margin-right:6px`, не резиновый gap. Логотип в шапке rail выровнен по той же правой оси.
 - **topbar**: `48px` высота, **над контентом** (не во всю ширину — слева от него полновысотный nav). Global search (левый край выровнен по границе nav/контент). Density seg. Language switch. Theme button. Identity chip. Без brand (переехал в nav) и без хлебной крошки (дублировала `h1` страницы).
 - **statusbar**: `26px` высота. `--surface` фон + `--border` top border. Mono 11px текст.
 

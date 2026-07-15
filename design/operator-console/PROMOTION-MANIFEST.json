@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "design_version": "2026.07.14",
+  "promoted_at_utc": "2026-07-14T00:00:00Z",
+  "content_sha256": "90cd6192b369dd32bf8d17079563e4ff3953053794ce2dd2d6d0884e4277827c",
+  "source_classification": "private-authoring-snapshot",
+  "promotion_tool": {
+    "path": "scripts/promote-od-operator-console.ps1",
+    "version": "g1-design-only-3"
+  },
+  "files": [
+    {
+      "path": "contracts/PRODUCT.md",
+      "sha256": "e9e17caaff9df4f9a5ef13e93aa4c9713a93af374ae9de0adad5da808b4e8c82",
+      "source_classification": "private-authoring-snapshot"
+    },
+    {
+      "path": "contracts/DESIGN.md",
+      "sha256": "c536f5b813ec5e22031345af25f86901f3171bd07de222ba652b2422f0211459",
+      "source_classification": "private-authoring-snapshot"
+    },
+    {
+      "path": "contracts/DESIGN-SYNC-PROTOCOL.md",
+      "sha256": "37159dcfb5c05c526ae6b774f302c58d066ef73987a64149740b84a8f0f47d40",
+      "source_classification": "private-authoring-snapshot"
+    },
+    {
+      "path": "contracts/DEVELOPER-PLAYBOOK.md",
+      "sha256": "4c1a1caa9fd2bd7fb06f2a5a9cd46a99a4ac1d4884f8f9bdcf66f931f8152e2b",
+      "source_classification": "private-authoring-snapshot"
+    },
+    {
+      "path": "contracts/HANDOFF-data-integration.md",
+      "sha256": "8a2836d5e31232112b7ff440f31fcdf44e5eb9d0733eff14f37476472258d33b",
+      "source_classification": "private-authoring-snapshot"
+    },
+    {
+      "path": "contracts/RUNTIME-SUBSTRATE-MAP.md",
+      "sha256": "a7bddbf9a626f39af25e0906e98d9acedd2e5338e02d0388f0a7760ea4e4c826",
+      "source_classification": "private-authoring-snapshot"
+    },
+    {
+      "path": "contracts/INTEGRATION-AGENT-PROMPT.md",
+      "sha256": "1c876b7370ae20681f61fcaf2bf4224ca41700a905ee7fb3731dd7668eccd133",
+      "source_classification": "private-authoring-snapshot"
+    },
+    {
+      "path": "contracts/ACCESS-ADMIN-spec.md",
+      "sha256": "4ce85aa3152facf4188de17488c6d96974ace1dc8beb5977d886ce1e088bee09",
+      "source_classification": "private-authoring-snapshot"
+    },
+    {
+      "path": "contracts/DESIGNER-endpoints-brief.md",
+      "sha256": "4aa5c41a55bdef2e61aaf3f5fc384a42297bc4efde24b766f7b04c30bc3c11e4",
+      "source_classification": "private-authoring-snapshot"
+    },
+    {
+      "path": "mockups/index.html",
+      "sha256": "87f3525f800f6ec8eab0fff6020bbe2b0c78e6da4e76e7bcc169d51323736466",
+      "source_classification": "private-authoring-snapshot"
+    },
+    {
+      "path": "mockups/access-admin.html",
+      "sha256": "e5c9f0377d63dfa6a52e3256394c38fb10c25e589e70a726946b15afc9f44c58",
+      "source_classification": "private-authoring-snapshot"
+    },
+    {
+      "path": "mockups/saas-admin.html",
+      "sha256": "8111b1b8f9d3700ae3e833498eb93b957af13f192dc14e81d37844d0d7aa4fb8",
+      "source_classification": "private-authoring-snapshot"
+    },
+    {
+      "path": "mockups/components.html",
+      "sha256": "bc05a14b9899fde9ad6a2170a344960196cb59e760f1e00b0ce69b05dc0df824",
+      "source_classification": "private-authoring-snapshot"
+    }
+  ],
+  "route_frames": [
+    {
+      "id": "overview",
+      "kind": "route",
+      "route": "/",
+      "mockup": "mockups/index.html#overview"
+    },
+    {
+      "id": "search",
+      "kind": "route",
+      "route": "/search",
+      "mockup": "mockups/index.html#search"
+    },
+    {
+      "id": "memory",
+      "kind": "route",
+      "route": "/memory",
+      "mockup": "mockups/index.html#memories"
+    },
+    {
+      "id": "queue",
+      "kind": "route",
+      "route": "/queue",
+      "mockup": "mockups/index.html#queue"
+    },
+    {
+      "id": "noise",
+      "kind": "route",
+      "route": "/noise",
+      "mockup": "mockups/index.html#noise"
+    },
+    {
+      "id": "graph",
+      "kind": "route",
+      "route": "/graph",
+      "mockup": "mockups/index.html#graph"
+    },
+    {
+      "id": "books",
+      "kind": "route",
+      "route": "/books",
+      "mockup": "mockups/index.html#books"
+    },
+    {
+      "id": "rules",
+      "kind": "route",
+      "route": "/rules",
+      "mockup": "mockups/index.html#rules"
+    },
+    {
+      "id": "issues",
+      "kind": "route",
+      "route": "/issues",
+      "mockup": "mockups/index.html#issues"
+    },
+    {
+      "id": "projects",
+      "kind": "route",
+      "route": "/projects",
+      "mockup": "mockups/index.html#projects"
+    },
+    {
+      "id": "secrets",
+      "kind": "route",
+      "route": "/secrets",
+      "mockup": "mockups/index.html#secrets"
+    },
+    {
+      "id": "documents",
+      "kind": "route",
+      "route": "/documents",
+      "mockup": "mockups/index.html#documents"
+    },
+    {
+      "id": "access",
+      "kind": "route",
+      "route": "/access",
+      "mockup": "mockups/access-admin.html"
+    },
+    {
+      "id": "settings",
+      "kind": "route",
+      "route": "/settings",
+      "mockup": "mockups/index.html#settings"
+    },
+    {
+      "id": "health",
+      "kind": "route",
+      "route": "/health",
+      "mockup": "mockups/index.html#health"
+    },
+    {
+      "id": "shell",
+      "kind": "frame",
+      "route": null,
+      "mockup": "mockups/index.html (app shell)"
+    },
+    {
+      "id": "settings-modal",
+      "kind": "frame",
+      "route": null,
+      "mockup": "mockups/index.html#settings-modal"
+    }
+  ],
+  "historical_frames": [
+    {
+      "mockup": "mockups/saas-admin.html",
+      "classification": "historical-non-routed-reference"
+    },
+    {
+      "mockup": "mockups/components.html",
+      "classification": "component-reference-not-a-route"
+    }
+  ],
+  "private_material_excluded": [
+    "images",
+    "prompts",
+    "agent state",
+    "artifact metadata",
+    "nested .git",
+    "intermediate files",
+    ".od-skills",
+    ".nuxt",
+    ".output",
+    "node_modules"
+  ],
+  "exclusions_statement": "Only the explicit allowlist is promoted. No private OpenDesign workspace material is tracked."
+}

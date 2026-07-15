@@ -1,2 +1,6 @@
 internal/embedding/assets/*.onnx filter=lfs diff=lfs merge=lfs -text
 internal/reranking/assets/*.onnx filter=lfs diff=lfs merge=lfs -text
+design/operator-console/contracts/** text eol=lf
+design/operator-console/mockups/** text eol=lf
+design/operator-console/mockups/index.html whitespace=-trailing-space
+design/operator-console/PROMOTION-MANIFEST.json text eol=lf

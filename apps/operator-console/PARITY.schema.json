@@ -1,30 +1,14 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "engram port parity manifest",
+  "title": "Engram operator-console parity ledger",
   "type": "object",
-  "required": ["design_version", "sections"],
+  "required": ["design_version", "design_snapshot_sha256", "sections"],
   "properties": {
-    "design_version": { "type": "string", "description": "Must match DESIGN.md design_version this manifest was last audited against." },
-    "note": { "type": "string" },
-    "fidelity_levels": { "type": "object" },
-    "sync_status": { "type": "object" },
-    "sections": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["id", "mockup", "page", "fidelity", "sync", "synced_to"],
-        "properties": {
-          "id": { "type": "string" },
-          "mockup": { "type": "string", "description": "Source-of-truth location, e.g. index.html#secrets or access-admin.html" },
-          "page": { "type": "string", "description": "Port page path relative to nuxt-port/" },
-          "fidelity": { "enum": ["full", "interactive", "structural", "stub"] },
-          "sync": { "enum": ["synced", "drifted", "ahead"] },
-          "synced_to": { "type": "string", "description": "design_version this page was last reconciled to" },
-          "i18n": { "enum": ["keyed", "partial", "hardcoded"], "description": "Localization readiness: keyed = every visible string resolves via t(); partial = some inline; hardcoded = pre-i18n literal strings. Defaults to hardcoded when omitted." },
-          "components": { "type": "array", "items": { "type": "string" } },
-          "gaps": { "type": "array", "items": { "type": "string" }, "description": "Named work remaining to reach full fidelity" }
-        }
-      }
-    }
+    "design_version": { "type": "string", "description": "Must equal design/operator-console/PROMOTION-MANIFEST.json." },
+    "design_snapshot_sha256": { "type": "string", "description": "Must equal PROMOTION-MANIFEST.json content_sha256." },
+    "sections": { "type": "array", "items": { "type": "object", "required": ["id", "kind", "mockup", "runtime", "fidelity", "sync", "synced_to", "synced_snapshot", "visual_evidence"], "properties": {
+      "id": { "type": "string" }, "kind": { "enum": ["route", "frame"] }, "route": { "type": ["string", "null"] }, "mockup": { "type": "string" }, "runtime": { "type": "string" },
+      "fidelity": { "enum": ["full", "interactive", "structural", "stub"] }, "sync": { "enum": ["synced", "drifted", "ahead"] }, "synced_to": { "type": ["string", "null"] }, "synced_snapshot": { "type": ["string", "null"] }, "visual_evidence": { "type": "array", "items": { "type": "string" } }, "gaps": { "type": "array", "items": { "type": "string" } }
+    } } }
   }
 }
