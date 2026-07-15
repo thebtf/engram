@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.45.0] - 2026-07-16
+
+### Added
+
+- **Engram v7 Creator Directive Surfacing, ENG-V7-S4B / CR-001.** Captured S4A directive records can now surface as bounded S3 ambient hints through a new flag-gated S4B `CandidateProposer`, without changing S3 rendering or S4A writes. The proposer reads the existing bounded project-scoped directive source, filters malformed/unconfirmed/wrong-project/invalid-horizon/invalid-privacy/blank-session/zero-time rows, keeps `session`-horizon and `secret` directives pinned to their originating session, scores lexical overlap deterministically, and returns bounded derived-intent titles only — never raw prompt text. Worker registration is gated by `ENGRAM_V7_PLUG_ENABLED=true` plus `ENGRAM_V7_S4B_DIRECTIVES_SURFACING=true`; flag-off preserves the shared candidate noop behavior byte-for-byte. The release ships generic substrate counters only (`calls`, `scanned`, `skipped`, `limit-dropped`, `empty`, `final-proposed`, `source errors`, `cancellation`, `deadline`) and leaves S5 product metrics ownership untouched.
+
+### Fixed
+
+- **S4B wrong-type payload acceptance hardening.** The first S4B implementation incorrectly skipped a malformed recognized payload key (`text` / `topic` / `query`) and still accepted a later valid sibling key, so mixed-key malformed inputs such as `{text:123, query:"release checklist"}` or `{topic:{x:"y"}, text:"release"}` could still call the bounded directive source. S4B now fails closed when any present recognized key is non-string, returning an explicit empty result before source access. Verified with a targeted RED/GREEN regression (`artifact://592` -> `artifact://599`) plus full package, worker, broad, race, vet, build, and diff gates.
+
 ## [6.44.1] - 2026-07-15
 
 ### Fixed
@@ -1872,7 +1882,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.28.2...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.45.0...HEAD
+[6.45.0]: https://github.com/thebtf/engram/compare/v6.44.1...v6.45.0
 [6.44.1]: https://github.com/thebtf/engram/compare/v6.44.0...v6.44.1
 [6.28.2]: https://github.com/thebtf/engram/compare/v6.28.1...v6.28.2
 [6.28.1]: https://github.com/thebtf/engram/compare/v6.28.0...v6.28.1
