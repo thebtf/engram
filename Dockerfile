@@ -16,7 +16,10 @@ WORKDIR /workspace/apps/operator-console
 COPY apps/operator-console/package.json apps/operator-console/package-lock.json ./
 RUN npm ci
 COPY apps/operator-console/ ./
-COPY design/operator-console/contracts /workspace/design/operator-console/contracts
+# Whole design/operator-console tree: the parity gate (scripts/parity-check.repo.mjs)
+# hash-verifies PROMOTION-MANIFEST.json + contracts/ + mockups/ against designRoot,
+# so copying only contracts/ leaves the manifest absent and the gate fails hard.
+COPY design/operator-console /workspace/design/operator-console
 RUN npm run parity && npm run build
 
 # --- Operator console static bundle for server embed ---

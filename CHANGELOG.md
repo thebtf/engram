@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [6.44.0] - 2026-07-15
+## [6.44.1] - 2026-07-15
+
+### Fixed
+
+- **Docker image publish broken since v6.44.0 — parity gate could not find the promotion manifest.** The `docker-publish` workflow failed on both the `v6.44.0` tag and `main` (`✗ missing promotion manifest: design/operator-console/PROMOTION-MANIFEST.json` → `✗ parity gate failed`), so the `:latest` server/operator-console images were never published and production stayed on v6.43.0 despite the v6.44.0 tag existing. The `operator-console-build` Dockerfile stage copied only `design/operator-console/contracts` into the build context, but `scripts/parity-check.repo.mjs` hash-verifies `PROMOTION-MANIFEST.json` plus `contracts/` **and** `mockups/` against `design/operator-console/` — so the manifest and the mockups were absent and the gate aborted before `nuxt build`. The stage now copies the whole tracked `design/operator-console` tree, which is robust as the promoted file set grows; `.od/` (the private authoring workspace the gate deliberately never reads) stays excluded via `.dockerignore`. Forward-only build fix; no runtime or schema change.
+
+
 
 ### Changed
 
@@ -1867,6 +1873,7 @@ Initial release with full feature set.
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
 [Unreleased]: https://github.com/thebtf/engram/compare/v6.28.2...HEAD
+[6.44.1]: https://github.com/thebtf/engram/compare/v6.44.0...v6.44.1
 [6.28.2]: https://github.com/thebtf/engram/compare/v6.28.1...v6.28.2
 [6.28.1]: https://github.com/thebtf/engram/compare/v6.28.0...v6.28.1
 [6.28.0]: https://github.com/thebtf/engram/compare/v6.27.1...v6.28.0
