@@ -69,6 +69,7 @@ func TestVaultGlobalCredentialLifecycleAndProjectCoexistence(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(call(map[string]any{
 		"action": "get",
 		"name":   key,
+		"scope":  "global",
 	})), &globalGet))
 	assert.Equal(t, key, globalGet.Name)
 	assert.Equal(t, "global-secret", globalGet.Value)
@@ -86,6 +87,18 @@ func TestVaultGlobalCredentialLifecycleAndProjectCoexistence(t *testing.T) {
 	assert.Equal(t, "project-secret", projectGet.Value)
 	assert.Equal(t, "project", projectGet.Scope)
 
+	var globalListed []struct {
+		Name  string `json:"name"`
+		Scope string `json:"scope"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(call(map[string]any{
+		"action": "list",
+		"scope":  "global",
+	})), &globalListed))
+	require.Len(t, globalListed, 1)
+	assert.Equal(t, key, globalListed[0].Name)
+	assert.Equal(t, "global", globalListed[0].Scope)
+
 	var listed []struct {
 		Name  string `json:"name"`
 		Scope string `json:"scope"`
@@ -102,6 +115,7 @@ func TestVaultGlobalCredentialLifecycleAndProjectCoexistence(t *testing.T) {
 	call(map[string]any{
 		"action": "delete",
 		"name":   key,
+		"scope":  "global",
 	})
 
 	projectGet = struct {
