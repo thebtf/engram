@@ -59,18 +59,27 @@ func attention(project, session string, payload map[string]interface{}) cognitiv
 }
 
 func TestProposerStrictPayloadTypeReturnsExplicitEmptyWithoutSourceRead(t *testing.T) {
-	source := &fakeSource{events: []s4directives.StoredAttentionEvent{
-		directive(1, "engram", "session-1", "release checklist", "project", "internal", time.Unix(1, 0).UTC()),
-	}}
-	proposals, err := NewProposer(source).Propose(context.Background(), attention("engram", "session-1", map[string]interface{}{
-		"text": []string{"release checklist"},
-	}), 5)
-	require.NoError(t, err)
-	require.NotNil(t, proposals)
-	require.Empty(t, proposals)
-	require.Empty(t, source.calls)
+	row := directive(1, "engram", "session-1", "release checklist", "project", "internal", time.Unix(1, 0).UTC())
+	for _, tc := range []struct {
+		name    string
+		payload map[string]interface{}
+	}{
+		{name: "invalid text only", payload: map[string]interface{}{"text": []string{"release checklist"}}},
+		{name: "invalid text before valid query", payload: map[string]interface{}{"text": 123, "query": "release checklist"}},
+		{name: "invalid topic after valid text", payload: map[string]interface{}{"text": "release checklist", "topic": map[string]string{"value": "release"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := &fakeSource{events: []s4directives.StoredAttentionEvent{row}}
+			proposals, err := NewProposer(source).Propose(context.Background(), attention("engram", "session-1", tc.payload), 5)
+			require.NoError(t, err)
+			require.NotNil(t, proposals)
+			require.Empty(t, proposals)
+			require.Empty(t, source.calls)
+		})
+	}
 
-	proposals, err = NewProposer(source).Propose(context.Background(), attention("engram", "   ", map[string]interface{}{
+	source := &fakeSource{events: []s4directives.StoredAttentionEvent{row}}
+	proposals, err := NewProposer(source).Propose(context.Background(), attention("engram", "   ", map[string]interface{}{
 		"text": "release checklist",
 	}), 5)
 	require.NoError(t, err)

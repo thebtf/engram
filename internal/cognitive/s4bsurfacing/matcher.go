@@ -47,16 +47,21 @@ func newMatchContext(event cognitive.AttentionEvent) matchContext {
 }
 
 func attentionText(payload map[string]interface{}) string {
+	var text string
 	for _, key := range []string{"text", "topic", "query"} {
-		value, ok := payload[key].(string)
-		if !ok {
+		value, exists := payload[key]
+		if !exists {
 			continue
 		}
-		if value = strings.TrimSpace(value); value != "" {
-			return value
+		candidate, ok := value.(string)
+		if !ok {
+			return ""
+		}
+		if text == "" {
+			text = strings.TrimSpace(candidate)
 		}
 	}
-	return ""
+	return text
 }
 
 func normalizeEventType(value string) string {
