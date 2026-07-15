@@ -20,6 +20,7 @@ import (
 	"github.com/thebtf/engram/internal/cognitive/s1state"
 	"github.com/thebtf/engram/internal/cognitive/s2meta"
 	"github.com/thebtf/engram/internal/cognitive/s3ambient"
+	"github.com/thebtf/engram/internal/cognitive/s4bsurfacing"
 	"github.com/thebtf/engram/internal/cognitive/s4directives"
 	"github.com/thebtf/engram/internal/cognitive/s5"
 	"github.com/thebtf/engram/internal/cognitive/s6"
@@ -1280,6 +1281,173 @@ func TestRegisterS3AmbientSubsystemRejectsDuplicateRegistration(t *testing.T) {
 
 	require.NoError(t, registerS3AmbientSubsystem(registry, s3ambient.NewEmitter(true)))
 	err := registerS3AmbientSubsystem(registry, s3ambient.NewEmitter(true))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "already registered")
+}
+
+type fakeS4BSource struct {
+	calls  []fakeS4BSourceCall
+	events []s4directives.StoredAttentionEvent
+}
+
+type fakeS4BSourceCall struct {
+	project string
+	limit   int
+}
+
+var _ s4bsurfacing.Source = (*fakeS4BSource)(nil)
+
+func (f *fakeS4BSource) ListByProject(ctx context.Context, project string, limit int) ([]s4directives.StoredAttentionEvent, error) {
+	f.calls = append(f.calls, fakeS4BSourceCall{project: project, limit: limit})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return append([]s4directives.StoredAttentionEvent(nil), f.events...), nil
+}
+
+func TestShouldRegisterRealS4BSurfacing(t *testing.T) {
+	tests := []struct {
+		name string
+		plug string
+		s4b  string
+		want bool
+	}{
+		{name: "master off s4b off", plug: "", s4b: "", want: false},
+		{name: "master off s4b on", plug: "", s4b: "true", want: false},
+		{name: "master on s4b off", plug: "true", s4b: "", want: false},
+		{name: "master on s4b on", plug: "true", s4b: "true", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENGRAM_V7_PLUG_ENABLED", tt.plug)
+			t.Setenv("ENGRAM_V7_S4B_DIRECTIVES_SURFACING", tt.s4b)
+			require.Equal(t, tt.want, shouldRegisterRealS4BSurfacing(core.LoadFlagConfigFromEnv()))
+		})
+	}
+}
+
+func TestPlatformWiring_S4BFlagMatrixControlsSurfacingWithoutS5OrS6(t *testing.T) {
+	tests := []struct {
+		name               string
+		masterFlag         string
+		s4bFlag            string
+		wantRealRegistered bool
+		wantCandidateNames []string
+		wantRealProposal   bool
+	}{
+		{
+			name:               "master disabled suppresses real s4b even when s4b is set",
+			masterFlag:         "false",
+			s4bFlag:            "true",
+			wantCandidateNames: []string{},
+		},
+		{
+			name:               "s4b disabled keeps core candidate noop fallback",
+			masterFlag:         "true",
+			s4bFlag:            "false",
+			wantCandidateNames: []string{"core.noop.candidate_proposer"},
+		},
+		{
+			name:               "master and s4b enabled replace noop without s5 or s6",
+			masterFlag:         "true",
+			s4bFlag:            "true",
+			wantRealRegistered: true,
+			wantCandidateNames: []string{"engram.s4b.directives_surfacing"},
+			wantRealProposal:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENGRAM_V7_PLUG_ENABLED", tt.masterFlag)
+			t.Setenv("ENGRAM_V7_S1_STATE", "false")
+			t.Setenv("ENGRAM_V7_S2_METAMEM", "false")
+			t.Setenv("ENGRAM_V7_S3_AMBIENT", "false")
+			t.Setenv("ENGRAM_V7_S4A_DIRECTIVES_CAPTURE", "false")
+			t.Setenv("ENGRAM_V7_S4B_DIRECTIVES_SURFACING", tt.s4bFlag)
+			t.Setenv("ENGRAM_V7_S5_TELEMETRY", "false")
+			t.Setenv("ENGRAM_V7_S6_OUTCOME", "false")
+
+			cfg := core.LoadFlagConfigFromEnv()
+			require.Equal(t, tt.wantRealRegistered, shouldRegisterRealS4BSurfacing(cfg))
+			require.False(t, shouldRegisterRealS5ProductMetrics(cfg))
+			require.False(t, shouldRegisterRealS6OutcomeProposer(cfg))
+
+			registry := core.NewRegistry()
+			require.NoError(t, core.RegisterNoOps(registry))
+			activateFromFlags(t, registry, cfg)
+
+			source := &fakeS4BSource{events: []s4directives.StoredAttentionEvent{{
+				ID:             701,
+				Project:        "engram",
+				SessionID:      "session-1",
+				DerivedIntent:  "release checklist",
+				AgentConfirmed: true,
+				Horizon:        "project",
+				PrivacyClass:   "internal",
+				CreatedAt:      time.Unix(1700050000, 0).UTC(),
+			}}}
+			if tt.wantRealRegistered {
+				require.NoError(t, registerS4BSurfacingSubsystem(registry, source))
+			}
+
+			resolver, ok := registry.(interface {
+				ResolveImpls(interfaceName string) []core.Subsystem
+			})
+			require.True(t, ok)
+			candidateImpls := resolver.ResolveImpls("CandidateProposer")
+			require.Equal(t, tt.wantCandidateNames, namesOfSubsystems(candidateImpls))
+			for _, iface := range []string{"HintEmitter", "StateWriter", "AttentionEventWriter", "DirectiveDistiller", "ProductMetricsProvider"} {
+				require.Empty(t, resolver.ResolveImpls(iface), "S4B must not activate %s", iface)
+			}
+
+			if len(candidateImpls) == 0 {
+				return
+			}
+			dispatcher := core.NewSubsystemDispatcher(registry, core.NewLocalMeter())
+			var proposals []cognitive.HintProposal
+			require.NoError(t, core.Dispatch[cognitive.CandidateProposer](
+				context.Background(),
+				dispatcher,
+				"CandidateProposer",
+				func(proposer cognitive.CandidateProposer) error {
+					var err error
+					proposals, err = proposer.Propose(context.Background(), cognitive.AttentionEvent{
+						Type:      "user_prompt_shift",
+						Project:   "engram",
+						SessionID: "session-1",
+						Payload:   map[string]interface{}{"text": "release"},
+					}, 1)
+					return err
+				},
+			))
+
+			if tt.wantRealProposal {
+				require.Len(t, proposals, 1)
+				require.Equal(t, "s4b:directive:701", proposals[0].ID)
+				require.Equal(t, "s4b.directive", proposals[0].Source)
+				require.Equal(t, []fakeS4BSourceCall{{project: "engram", limit: 50}}, source.calls)
+			} else {
+				require.NotNil(t, proposals)
+				require.Empty(t, proposals)
+				require.Empty(t, source.calls)
+			}
+		})
+	}
+}
+
+func TestRegisterS4BSurfacingSubsystemRejectsNilTypedNilAndDuplicate(t *testing.T) {
+	registry := core.NewRegistry()
+	require.NoError(t, core.RegisterNoOps(registry))
+
+	require.ErrorIs(t, registerS4BSurfacingSubsystem(registry, nil), s4bsurfacing.ErrNoSource)
+	var typedNil *fakeS4BSource
+	require.ErrorIs(t, registerS4BSurfacingSubsystem(registry, typedNil), s4bsurfacing.ErrNoSource)
+
+	source := &fakeS4BSource{}
+	require.NoError(t, registerS4BSurfacingSubsystem(registry, source))
+	err := registerS4BSurfacingSubsystem(registry, source)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "already registered")
 }

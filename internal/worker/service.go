@@ -34,6 +34,7 @@ import (
 	"github.com/thebtf/engram/internal/cognitive/s1state"
 	"github.com/thebtf/engram/internal/cognitive/s2meta"
 	"github.com/thebtf/engram/internal/cognitive/s3ambient"
+	"github.com/thebtf/engram/internal/cognitive/s4bsurfacing"
 	"github.com/thebtf/engram/internal/cognitive/s4directives"
 	"github.com/thebtf/engram/internal/cognitive/s5"
 	"github.com/thebtf/engram/internal/cognitive/s6"
@@ -407,6 +408,40 @@ func registerS4ADirectivesSubsystem(registry cognitivecore.SubsystemRegistry, se
 		return err
 	}
 	if err := registry.Disable("core.noop.directive_distiller"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func shouldRegisterRealS4BSurfacing(flagCfg cognitivecore.FlagConfig) bool {
+	return flagCfg.IsPlugEnabled() && flagCfg.IsSubsystemEnabled("s4b")
+}
+
+func hasEffectiveS4BSource(source s4bsurfacing.Source) bool {
+	if source == nil {
+		return false
+	}
+	value := reflect.ValueOf(source)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return !value.IsNil()
+	default:
+		return true
+	}
+}
+
+func registerS4BSurfacingSubsystem(registry cognitivecore.SubsystemRegistry, source s4bsurfacing.Source) error {
+	if !hasEffectiveS4BSource(source) {
+		return s4bsurfacing.ErrNoSource
+	}
+	subsystem := s4bsurfacing.NewSubsystem(source)
+	if err := registry.Register(subsystem); err != nil {
+		return err
+	}
+	if err := registry.Enable(subsystem.Name()); err != nil {
+		return err
+	}
+	if err := registry.Disable("core.noop.candidate_proposer"); err != nil {
 		return err
 	}
 	return nil
@@ -837,6 +872,12 @@ func (s *Service) initializeAsync() {
 	domainOwnerStore := gorm.NewDomainOwnerStore(store)
 	domainRegistrySvc := principalmemory.NewDomainRegistryService(domainOwnerStore, auditStore)
 	attentionEventStore := gorm.NewAttentionEventStore(store.GetDB())
+	if shouldRegisterRealS4BSurfacing(s.flagConfig) {
+		if err := registerS4BSurfacingSubsystem(s.cognitiveRegistry, attentionEventStore); err != nil {
+			s.setInitError(fmt.Errorf("register real s4b directive surfacing subsystem: %w", err))
+			return
+		}
+	}
 	directiveCaptureSvc := s4directives.NewService(attentionEventStore)
 	if shouldRegisterRealS4ADirectives(s.flagConfig) {
 		if err := registerS4ADirectivesSubsystem(s.cognitiveRegistry, directiveCaptureSvc); err != nil {
