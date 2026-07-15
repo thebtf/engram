@@ -369,17 +369,14 @@ Static core (v5 baseline):
 |----------|----------|
 | `create` | Сохранить новое наблюдение (по умолчанию) |
 | `edit` | Изменить поля наблюдения |
-| `merge` | Объединить дублирующиеся наблюдения |
-| `import` | Массовый импорт наблюдений |
-| `extract` | LLM-управляемое извлечение из сырого контента |
+| `import` | Массово импортировать наблюдения |
 
-### `feedback` — Оценка и улучшение
+### `feedback` — Подавление и результаты
 
 | Действие | Описание |
 |----------|----------|
-| `rate` | Оценить наблюдение как полезное или нет |
-| `suppress` | Подавить некачественные наблюдения |
-| `outcome` | Записать результат для замкнутого цикла обучения |
+| `suppress` | Подавить некачественное воспоминание |
+| `outcome` | Записать результат сессии |
 
 ### `vault` — Зашифрованные учётные данные
 
@@ -391,22 +388,24 @@ Static core (v5 baseline):
 | `delete` | Удалить учётные данные |
 | `status` | Статус и здоровье хранилища |
 
-### `docs` — Версионные документы
+### `docs` — Версионные документы и коллекции
 
 | Действие | Описание |
 |----------|----------|
-| `create` | Создать документ |
+| `create` | Создать версионный документ |
 | `read` | Прочитать содержимое документа |
-| `list` | Список документов |
-| `history` | История версий |
-| `comment` | Добавить комментарии |
-| `collections` | Управление коллекциями |
-| `ingest` | Разбить, векторизовать и сохранить документ |
-| `search_docs` | Семантический поиск по документам |
+| `list` | Получить список версионных документов |
+| `history` | Прочитать историю версий |
+| `comment` | Добавить комментарий к документу |
+| `collections` | Получить список настроенных коллекций |
+| `documents` | Получить список документов коллекции |
+| `get_doc` | Прочитать документ коллекции |
+| `remove` | Мягко удалить документ коллекции |
+| `ingest` | Добавить или обновить метаданные и содержимое документа коллекции |
 
-### `admin` — Массовые операции и аналитика
+### `admin` — Административная телеметрия
 
-21 действие, включая: `bulk_delete`, `bulk_supersede`, `tag`, `graph`, `stats`, `trends`, `quality`, `export`, `maintenance`, `scoring`, `consolidation` и другие.
+`stats` возвращает телеметрию системы памяти. При включённом vNext также доступно действие `purge_project`; оно требует прав администратора и подтверждения именем проекта.
 
 ### `check_system_health` — Здоровье системы
 
@@ -433,27 +432,18 @@ Static core (v5 baseline):
 check_system_health()
 
 # Поиск по памяти
-recall(query="authentication architecture")
-
-# Предустановленные запросы
-recall(action="preset", preset="decisions", query="caching strategy")
-
-# Проверка истории файла перед редактированием
-recall(action="by_file", files="internal/search/hybrid.go")
+recall(action="search", project="engram", query="authentication architecture")
 
 # Сохранение наблюдения
-store(content="Switched from Redis to in-memory cache for dev environments", title="Cache strategy change", tags=["architecture", "caching"])
+store(action="create", project="engram", content="Switched from Redis to in-memory cache for dev environments", title="Cache strategy change", tags=["architecture", "caching"])
 
-# Извлечение наблюдений из сырого контента
-store(action="extract", content="<paste raw session notes or code review>")
+# Подавление некачественного воспоминания
+feedback(action="suppress", id=123)
 
-# Оценка воспоминания
-feedback(action="rate", id=123, rating="useful")
+# Сохранение глобальных учётных данных
+vault(action="store", name="OPENAI_KEY", value="sk-...", scope="global")
 
-# Сохранение учётных данных
-vault(action="store", name="OPENAI_KEY", value="sk-...")
-
-# Получение учётных данных
+# Получение глобальных учётных данных
 vault(action="get", name="OPENAI_KEY")
 ```
 <!-- redoc:end:usage -->
@@ -466,7 +456,7 @@ vault(action="get", name="OPENAI_KEY")
 | Симптом | Решение |
 |---------|---------|
 | `check_system_health` показывает нездоровые embeddings | Проверьте `ENGRAM_EMBEDDING_BASE_URL` и API-ключ. Circuit breaker автоматически восстанавливается после временных сбоев. |
-| Поиск не возвращает результатов | Убедитесь, что наблюдения существуют: `recall(action="preset", preset="decisions")`. Проверьте здоровье embeddings. |
+| Поиск не возвращает результатов | Убедитесь, что наблюдения существуют: `recall(action="search", project="engram", query="decisions")`. Проверьте состояние embeddings. |
 | MCP — отказ в подключении | Убедитесь, что сервер запущен: `curl http://your-server:37777/health`. Проверьте `ENGRAM_URL` в переменных окружения. |
 | Vault возвращает "encryption not configured" | Задайте `ENGRAM_ENCRYPTION_KEY` (64-символьная hex-строка = 32 байта AES-256). |
 | Dashboard не загружается | Убедитесь, что сборка выполнена через `make build` (включает dashboard). Проверьте консоль браузера на ошибки. |

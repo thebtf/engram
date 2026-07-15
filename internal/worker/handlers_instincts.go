@@ -56,6 +56,6 @@ func (s *Service) handleInstinctsImport(w http.ResponseWriter, r *http.Request) 
 		"error":      "removed_in_v5",
 		"path":       dir,
 		"deprecated": true,
-		"message":    "filesystem instinct import no longer persists observations in v5; use the MCP import_instincts tool with 'files' content until memory-backed REST import exists",
+		"message":    "filesystem instinct import no longer persists observations in v5; use MCP store(action=import) with 'files' content until memory-backed REST import exists",
 	})
 }

@@ -370,17 +370,14 @@ The old dynamic search / graph / learning-oriented tool surface was stripped in 
 |--------|-------------|
 | `create` | Store a new observation (default) |
 | `edit` | Modify observation fields |
-| `merge` | Merge duplicate observations |
 | `import` | Bulk import observations |
-| `extract` | LLM-driven extraction from raw content |
 
-### `feedback` — Rate and Improve
+### `feedback` — Suppression and Outcomes
 
 | Action | Description |
 |--------|-------------|
-| `rate` | Rate an observation as useful or not |
-| `suppress` | Suppress low-quality observations |
-| `outcome` | Record outcome for closed-loop learning |
+| `suppress` | Suppress low-quality memories |
+| `outcome` | Record a session outcome |
 
 ### `vault` — Encrypted Credentials
 
@@ -392,22 +389,24 @@ The old dynamic search / graph / learning-oriented tool surface was stripped in 
 | `delete` | Delete a credential |
 | `status` | Vault status and health |
 
-### `docs` — Versioned Documents
+### `docs` — Versioned Documents and Collections
 
 | Action | Description |
 |--------|-------------|
-| `create` | Create a document |
+| `create` | Create a versioned document |
 | `read` | Read document content |
-| `list` | List documents |
-| `history` | Version history |
-| `comment` | Add comments |
-| `collections` | Manage collections |
-| `ingest` | Chunk, embed, and store a document |
-| `search_docs` | Semantic search across documents |
+| `list` | List versioned documents |
+| `history` | Read version history |
+| `comment` | Add a document comment |
+| `collections` | List configured collections |
+| `documents` | List documents in a collection |
+| `get_doc` | Read a collection document |
+| `remove` | Soft-delete a collection document |
+| `ingest` | Upsert collection document metadata and content |
 
-### `admin` — Bulk Operations and Analytics
+### `admin` — Administrative Telemetry
 
-21 actions including: `bulk_delete`, `bulk_supersede`, `tag`, `graph`, `stats`, `trends`, `quality`, `export`, `maintenance`, `scoring`, `consolidation`, and more.
+`stats` returns memory-system telemetry. `purge_project` is additionally available when the vNext gate is enabled and requires admin authorization plus project-name confirmation.
 
 ### `check_system_health` — System Health
 
@@ -434,27 +433,18 @@ When `ENGRAM_V7_PLUG_ENABLED=true` and the slice flag is enabled:
 check_system_health()
 
 # Search memories
-recall(query="authentication architecture")
-
-# Preset queries
-recall(action="preset", preset="decisions", query="caching strategy")
-
-# Check file history before editing
-recall(action="by_file", files="internal/search/hybrid.go")
+recall(action="search", project="engram", query="authentication architecture")
 
 # Store an observation
-store(content="Switched from Redis to in-memory cache for dev environments", title="Cache strategy change", tags=["architecture", "caching"])
+store(action="create", project="engram", content="Switched from Redis to in-memory cache for dev environments", title="Cache strategy change", tags=["architecture", "caching"])
 
-# Extract observations from raw content
-store(action="extract", content="<paste raw session notes or code review>")
+# Suppress a low-quality memory
+feedback(action="suppress", id=123)
 
-# Rate a memory
-feedback(action="rate", id=123, rating="useful")
+# Store a global credential
+vault(action="store", name="OPENAI_KEY", value="sk-...", scope="global")
 
-# Store a credential
-vault(action="store", name="OPENAI_KEY", value="sk-...")
-
-# Retrieve a credential
+# Retrieve a global credential
 vault(action="get", name="OPENAI_KEY")
 ```
 <!-- redoc:end:usage -->
@@ -467,7 +457,7 @@ vault(action="get", name="OPENAI_KEY")
 | Symptom | Fix |
 |---------|-----|
 | `check_system_health` shows embeddings unhealthy | Verify `ENGRAM_EMBEDDING_BASE_URL` and API key. The circuit breaker auto-recovers after transient failures. |
-| Search returns no results | Check that observations exist: `recall(action="preset", preset="decisions")`. Verify embeddings are healthy. |
+| Search returns no results | Check that observations exist: `recall(action="search", project="engram", query="decisions")`. Verify embeddings are healthy. |
 | MCP connection refused | Confirm server is running: `curl http://your-server:37777/health`. Check `ENGRAM_URL` in your environment. |
 | Vault returns "encryption not configured" | Set `ENGRAM_ENCRYPTION_KEY` (64-char hex string = 32 bytes AES-256). |
 | Dashboard not loading | Ensure you built with `make build` (includes dashboard). Check browser console for errors. |

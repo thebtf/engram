@@ -17,18 +17,15 @@ import (
 // indistinguishable from the pre-branch surface.
 func buildAdminTool() Tool {
 	actions := adminActionsForEnv()
-	desc := "Administrative operations: bulk ops, tagging, analytics. Actions: " +
+	desc := "Administrative operations. Actions: " +
 		strings.Join(actions, ", ") + ". Action required."
 
 	props := map[string]any{
-		"action":  map[string]any{"type": "string", "description": "Action to perform (required). See tool description for valid actions."},
-		"project": map[string]any{"type": "string", "description": "Project name (for stats, search_analytics)"},
-		"days":    map[string]any{"type": "number", "description": "Days to analyze (for search_analytics)"},
+		"action": map[string]any{"type": "string", "enum": actions, "description": "Action to perform (required)."},
 	}
 
 	if vnextEnabled() {
-		// Extend project description and add confirm field only when purge_project is active.
-		props["project"] = map[string]any{"type": "string", "description": "Project name (for stats, search_analytics, purge_project)"}
+		props["project"] = map[string]any{"type": "string", "description": "Project name (required for purge_project)"}
 		props["confirm"] = map[string]any{"type": "string", "description": "Double-entry confirmation: must equal project name (for purge_project)"}
 	}
 
@@ -44,22 +41,13 @@ func buildAdminTool() Tool {
 	}
 }
 
-// adminActionsBase lists the always-on admin actions (no feature flag required).
-var adminActionsBase = []string{
-	"stats", "search_analytics", "backfill_status",
-}
+// adminActionsBase lists the always-on admin actions.
+var adminActionsBase = []string{"stats"}
 
 // adminActionsVnext lists admin actions that require ENGRAM_VNEXT_ENABLED=true.
 var adminActionsVnext = []string{
 	"purge_project",
 }
-
-// adminActions is the single source of truth for valid admin tool actions
-// in the current runtime configuration. It is built once at package init
-// and references the current environment, so it reflects flag state at
-// process start. The server.go tool schema uses the same helper
-// (adminActionsForEnv) to build descriptions that match actual behaviour.
-var adminActions = adminActionsForEnv()
 
 // adminActionsForEnv returns the current set of valid admin actions based on
 // ENGRAM_VNEXT_ENABLED. When the flag is "true", vnext actions (purge_project)
@@ -93,11 +81,7 @@ func (s *Server) handleAdmin(ctx context.Context, args json.RawMessage) (string,
 
 	switch action {
 	case "stats":
-		return s.handleGetMemoryStats(ctx)
-	case "search_analytics":
-		return s.handleAnalyzeSearchPatterns(ctx, args)
-	case "backfill_status":
-		return s.handleBackfillStatus()
+		return s.handleAdminStats(ctx)
 	case "purge_project":
 		// purge_project is a vnext-gated action (Milestone D).
 		// When flag is off, respond byte-identically to an unknown action so

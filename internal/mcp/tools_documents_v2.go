@@ -41,7 +41,7 @@ func (s *Server) handleDocCreate(ctx context.Context, args json.RawMessage) (str
 
 	id, err := s.versionedDocumentStore.Create(ctx, path, project, content, docType, metadata, author)
 	if err != nil {
-		return "", fmt.Errorf("doc_create: %w", err)
+		return "", fmt.Errorf("docs(action=create): %w", err)
 	}
 
 	result := map[string]any{
@@ -91,7 +91,7 @@ func (s *Server) handleDocRead(ctx context.Context, args json.RawMessage) (strin
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return "", fmt.Errorf("document not found: path=%q project=%q", path, project)
 		}
-		return "", fmt.Errorf("doc_read: %w", err)
+		return "", fmt.Errorf("docs(action=read): %w", err)
 	}
 
 	result := map[string]any{
@@ -111,11 +111,6 @@ func (s *Server) handleDocRead(ctx context.Context, args json.RawMessage) (strin
 		return "", fmt.Errorf("marshal result: %w", err)
 	}
 	return string(out), nil
-}
-
-// handleDocUpdate creates a new version of an existing document (semantic alias for doc_create).
-func (s *Server) handleDocUpdate(ctx context.Context, args json.RawMessage) (string, error) {
-	return s.handleDocCreate(ctx, args)
 }
 
 // handleDocList lists the latest version of each document path in a project.
@@ -139,7 +134,7 @@ func (s *Server) handleDocList(ctx context.Context, args json.RawMessage) (strin
 
 	docs, err := s.versionedDocumentStore.List(ctx, project, docType, pathPrefix, limit)
 	if err != nil {
-		return "", fmt.Errorf("doc_list: %w", err)
+		return "", fmt.Errorf("docs(action=list): %w", err)
 	}
 
 	type docItem struct {
@@ -194,7 +189,7 @@ func (s *Server) handleDocHistory(ctx context.Context, args json.RawMessage) (st
 
 	docs, err := s.versionedDocumentStore.GetHistory(ctx, path, project, limit)
 	if err != nil {
-		return "", fmt.Errorf("doc_history: %w", err)
+		return "", fmt.Errorf("docs(action=history): %w", err)
 	}
 
 	type historyItem struct {
@@ -265,7 +260,7 @@ func (s *Server) handleDocComment(ctx context.Context, args json.RawMessage) (st
 
 	commentID, err := s.versionedDocumentStore.AddComment(ctx, documentID, author, content, lineStart, lineEnd)
 	if err != nil {
-		return "", fmt.Errorf("doc_comment: %w", err)
+		return "", fmt.Errorf("docs(action=comment): %w", err)
 	}
 
 	result := map[string]any{

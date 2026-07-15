@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
+
+var docsActions = []string{"create", "read", "list", "history", "comment", "collections", "documents", "get_doc", "remove", "ingest"}
 
 // handleDocsConsolidated routes docs tool actions to the appropriate handler.
 func (s *Server) handleDocsConsolidated(ctx context.Context, args json.RawMessage) (string, error) {
@@ -15,7 +18,7 @@ func (s *Server) handleDocsConsolidated(ctx context.Context, args json.RawMessag
 
 	action := coerceString(m["action"], "")
 	if action == "" {
-		return "", fmt.Errorf("action required for docs tool (valid: create, read, list, history, comment, collections, documents, get_doc, remove, ingest, search_docs)")
+		return "", fmt.Errorf("action required for docs tool (valid: %s)", strings.Join(docsActions, ", "))
 	}
 
 	switch action {
@@ -39,9 +42,7 @@ func (s *Server) handleDocsConsolidated(ctx context.Context, args json.RawMessag
 		return s.handleRemoveDocument(ctx, args)
 	case "ingest":
 		return s.handleIngestDocument(ctx, args)
-	case "search_docs":
-		return s.handleSearchCollection(ctx, args)
 	default:
-		return "", fmt.Errorf("unknown docs action: %q (valid: create, read, list, history, comment, collections, documents, get_doc, remove, ingest, search_docs)", action)
+		return "", fmt.Errorf("unknown docs action: %q (valid: %s)", action, strings.Join(docsActions, ", "))
 	}
 }

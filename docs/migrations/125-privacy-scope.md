@@ -46,8 +46,8 @@ The legacy `Memory.Scope` field does NOT exist as a struct field or DB column. V
 
 - `pkg/models/memory.go` — `Memory` struct has no `Scope` field (only the new `PrivacyScope` added in T002).
 - `internal/db/gorm/models.go` — GORM-layer `Memory` struct same shape, no `Scope` column.
-- `internal/mcp/tools_memory.go:176` — the MCP `store_memory` handler appends a `scope:<project|global>` entry to `Memory.Tags` for post-v5 writes.
-- `internal/mcp/tools_memory.go:358` — the response synthesizes a top-level `scope` field from the same tag for backward compatibility.
+- `internal/mcp/tools_memory.go` — the MCP `store` create handler appends a `scope:<project|global>` entry to `Memory.Tags` for post-v5 writes.
+- The response synthesizes a top-level `scope` field from the same tag for backward compatibility.
 
 The scope identity has lived in tags + response synthesis since v5. Migration 125 maps from this tag surface to the new column once, on migrate-up.
 

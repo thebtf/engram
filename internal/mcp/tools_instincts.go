@@ -41,10 +41,10 @@ func (s *Server) handleImportInstincts(ctx context.Context, args json.RawMessage
 
 	// Mutual exclusivity: exactly one of files/path is required.
 	if len(params.Files) == 0 && params.Path == "" {
-		return "", fmt.Errorf("import_instincts: one of 'files' (array of {name, content}) or 'path' (directory) is required")
+		return "", fmt.Errorf("store(action=import): one of 'files' (array of {name, content}) or 'path' (directory) is required")
 	}
 	if len(params.Files) > 0 && params.Path != "" {
-		return "", fmt.Errorf("import_instincts: provide EITHER 'files' OR 'path', not both")
+		return "", fmt.Errorf("store(action=import): provide EITHER 'files' OR 'path', not both")
 	}
 
 	var result *instincts.ImportResult
@@ -54,7 +54,7 @@ func (s *Server) handleImportInstincts(ctx context.Context, args json.RawMessage
 		result, err = instincts.ImportFromContent(ctx, params.Files)
 	} else {
 		// Legacy mode: read from local filesystem (deprecated)
-		log.Warn().Str("path", params.Path).Msg("import_instincts: using deprecated path-based import; 'path' parameter will be removed. Use 'files' with content instead.")
+		log.Warn().Str("path", params.Path).Msg("store(action=import): using deprecated path-based import; use 'files' with content instead")
 
 		dir, resolveErr := instincts.ResolveDir(params.Path)
 		if resolveErr != nil {

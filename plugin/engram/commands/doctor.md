@@ -39,7 +39,7 @@ e. If the URL appears to be a bare host without `/mcp` (e.g., `http://host:37777
 
 ### 3. Memory Health (only if step 1 succeeded)
 
-Call `get_memory_stats` to report:
+Call `admin(action="stats")` to report:
 - Total observations
 - Storage size
 - Last consolidation time

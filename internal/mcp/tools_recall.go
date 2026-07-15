@@ -1,11 +1,6 @@
-// Package mcp — tools_recall.go routes consolidated "recall" tool actions
-// to existing handler functions on *Server. This is the single entry point
-// for all memory retrieval operations, dispatching by action parameter.
-//
-// v5 (US9): dropped actions search (was hybrid/fusion), preset, by_concept,
-// by_type, similar, timeline, explain. The "search" action now runs a trivial
-// SQL filter over the memories store. Dropped handler symbols have been
-// removed from server.go.
+// Package mcp — tools_recall.go routes the consolidated "recall" search action.
+// Retired v5 search-manager actions are not compatibility-routed; callers must
+// use recall(action="search") or a separate currently advertised tool.
 package mcp
 
 import (
@@ -23,8 +18,9 @@ import (
 	"github.com/thebtf/engram/pkg/models"
 )
 
-// handleRecall is the consolidated recall tool handler. It parses the "action"
-// parameter and delegates to the appropriate existing handler or callTool dispatch.
+var recallActions = []string{"search"}
+
+// handleRecall is the consolidated recall tool handler.
 func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string, error) {
 	m, err := parseArgs(args)
 	if err != nil {
@@ -36,84 +32,8 @@ func (s *Server) handleRecall(ctx context.Context, args json.RawMessage) (string
 	switch action {
 	case "search":
 		return s.handleRecallSearch(ctx, m)
-
-	case "preset":
-		// Dropped in v5 (US9): preset (decisions/changes/how_it_works) used search.Manager.
-		return "", fmt.Errorf("recall: action %q not supported in v5 (search.Manager removed — use recall(action=\"search\") instead)", action)
-
-	case "by_concept":
-		// Dropped in v5 (US9): concept index backed by search.Manager.
-		return "", fmt.Errorf("recall: action %q not supported in v5 (concept search removed — use recall(action=\"search\") instead)", action)
-
-	case "by_type":
-		// Dropped in v5 (US9): type-lane search backed by search.Manager.
-		return "", fmt.Errorf("recall: action %q not supported in v5 (type-lane search removed — use recall(action=\"search\") instead)", action)
-
-	case "similar":
-		// The v5 demolition removed observation vector-similarity search (US9).
-		// vNext reinstated it on the migration-108 content_chunks table, gated by
-		// ENGRAM_VNEXT_ENABLED=true (W3); flag-off returns an empty result.
-		if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
-			// Under flag-ON: translate min_similarity into the hybrid vector threshold
-			// (VecThreshold on HybridOptions) and forward to recall_memory.
-			// This preserves legacy min_similarity semantics: callers that relied on
-			// a cosine floor will see the same filtering under the hybrid path.
-			var mArgs map[string]any
-			if jsonErr := json.Unmarshal(args, &mArgs); jsonErr != nil {
-				return "", fmt.Errorf("recall similar: %w", jsonErr)
-			}
-			// Map min_similarity → vec_threshold so handleRecallMemoryHybrid picks it up.
-			if ms, ok := mArgs["min_similarity"]; ok {
-				mArgs["vec_threshold"] = ms
-			}
-			// Restrict to vector tier only so callers get the promised cosine floor.
-			// Without this, FTS matches that pass text criteria but are below the
-			// cosine threshold would still appear in results (codex finding W3-#7).
-			mArgs["tier_filter"] = []string{"tier1_vector"}
-			patched, marshalErr := json.Marshal(mArgs)
-			if marshalErr != nil {
-				return "", fmt.Errorf("recall similar: patch args: %w", marshalErr)
-			}
-			return s.handleRecallMemory(ctx, patched)
-		}
-		// Flag-OFF: exact tombstone string from origin/main (byte-identical).
-		return "", fmt.Errorf("recall: action %q not supported in v5 (vector similarity removed)", action)
-
-	case "timeline":
-		// Dropped in v5 (US9): timeline backed by search.Manager.
-		return "", fmt.Errorf("recall: action %q not supported in v5 (timeline search removed — use recall(action=\"search\") instead)", action)
-
-	case "sessions":
-		query := coerceString(m["query"], "")
-		if query != "" {
-			return s.handleSearchSessions(ctx, args)
-		}
-		return s.handleListSessions(ctx, args)
-
-	case "explain":
-		// Dropped in v5 (US9): explain ranked search results using search.Manager.
-		// Reinstated under flag via recall_memory(explain=true) when ENGRAM_VNEXT_ENABLED=true (W3).
-		if os.Getenv("ENGRAM_VNEXT_ENABLED") == "true" {
-			// Forward to recall_memory with explain=true injected.
-			var m map[string]any
-			if jsonErr := json.Unmarshal(args, &m); jsonErr != nil {
-				return "", fmt.Errorf("recall explain: %w", jsonErr)
-			}
-			m["explain"] = true
-			patched, marshalErr := json.Marshal(m)
-			if marshalErr != nil {
-				return "", fmt.Errorf("recall explain: patch args: %w", marshalErr)
-			}
-			return s.handleRecallMemory(ctx, patched)
-		}
-		// Flag-OFF: exact tombstone string from origin/main (byte-identical).
-		return "", fmt.Errorf("recall: action %q not supported in v5 (search ranking removed)", action)
-
 	default:
-		return "", fmt.Errorf(
-			"unknown recall action: %q (valid: search)",
-			action,
-		)
+		return "", fmt.Errorf("unknown recall action: %q (valid: %s)", action, strings.Join(recallActions, ", "))
 	}
 }
 

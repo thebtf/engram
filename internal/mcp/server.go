@@ -25,7 +25,6 @@ import (
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/reranking"
-	"github.com/thebtf/engram/internal/sessions"
 	"github.com/thebtf/engram/internal/writelint"
 	"github.com/thebtf/engram/pkg/models"
 	gormlib "gorm.io/gorm"
@@ -38,7 +37,6 @@ type Server struct {
 	stdout                        io.Writer
 	sessionStore                  *gorm.SessionStore
 	collectionRegistry            *collections.Registry
-	sessionIdxStore               *sessions.Store
 	documentStore                 *gorm.DocumentStore
 	versionedDocumentStore        *gorm.VersionedDocumentStore
 	chunkManager                  *chunking.Manager
@@ -76,7 +74,6 @@ type Server struct {
 	vault                         *crypto.Vault
 	vaultInitErr                  error
 	vaultOnce                     sync.Once
-	backfillStatusFunc            func() (any, error)
 	writeLint                     *writelint.Orchestrator  // T035: two-phase write-lint protocol (nil → legacy path)
 	redactionRules                []redaction.CompiledRule // T036: operator scrub layer, loaded once at startup
 	statsDB                       *gormlib.DB              // raw DB handle for stats raw-SQL queries; set via SetStatsDB
@@ -114,7 +111,6 @@ type ServerOptions struct {
 	Version            string
 	SessionStore       *gorm.SessionStore
 	CollectionRegistry *collections.Registry
-	SessionIdxStore    *sessions.Store
 	DocumentStore      *gorm.DocumentStore
 	ChunkManager       *chunking.Manager
 }
@@ -131,15 +127,9 @@ func NewServer(opts ServerOptions) *Server {
 		stdout:             os.Stdout,
 		sessionStore:       opts.SessionStore,
 		collectionRegistry: opts.CollectionRegistry,
-		sessionIdxStore:    opts.SessionIdxStore,
 		documentStore:      opts.DocumentStore,
 		chunkManager:       opts.ChunkManager,
 	}
-}
-
-// SetBackfillStatusFunc sets the function to retrieve backfill run status.
-func (s *Server) SetBackfillStatusFunc(fn func() (any, error)) {
-	s.backfillStatusFunc = fn
 }
 
 // SetVersionedDocumentStore sets the versioned document store for document MCP tools.
@@ -255,7 +245,7 @@ func (s *Server) setTestMemorySignificanceUpdater(msu memorySignificanceUpdater)
 
 // SetWriteLintOrchestrator wires the write-lint orchestrator for the two-phase
 // write-lint protocol (T035, Milestone F TG5). When nil (the default), the
-// store_memory handler follows the pre-TG5 legacy path exactly.
+// consolidated store handler follows the pre-TG5 legacy write path exactly.
 // Call this only when ENGRAM_VNEXT_F_ENABLED=true is expected at runtime.
 func (s *Server) SetWriteLintOrchestrator(o *writelint.Orchestrator) {
 	s.writeLint = o
@@ -536,23 +526,23 @@ Engram is your permanent memory store. Memories saved here persist across ALL se
 3. ` + "`recall(query=\"prior decisions about ...\")`" + ` — before architectural decisions.
 
 **AFTER every task:**
-4. ` + "`store(content=\"...\", title=\"...\", tags=\"...\")`" + ` — save decisions, discoveries, patterns, and lessons learned. If you learned something worth knowing next session, store it.
-5. ` + "`feedback(action=\"rate\", id=N, rating=\"useful\")`" + ` — rate memories you used.
-6. ` + "`feedback(action=\"outcome\", session_id=\"<claude-session-id>\", outcome=\"success\")`" + ` — record session outcome when done.
+4. ` + "`store(content=\"...\", title=\"...\", tags=[\"...\"])`" + ` — save decisions, discoveries, patterns, and lessons learned. If you learned something worth knowing next session, store it.
+5. ` + "`feedback(action=\"outcome\", session_id=\"<claude-session-id>\", outcome=\"success\")`" + ` — record session outcome when done.
 
-**Steps 4-6 are NOT optional.** Every completed task produces knowledge. Store it or it is lost forever.
+**Steps 4-5 are NOT optional.** Every completed task produces knowledge. Store it or it is lost forever.
 
-## 8 Tools
+## 9 Tools
 
 | Tool | Purpose | Key Actions |
 |------|---------|-------------|
 | ` + "`recall`" + ` | **Search & retrieve** memories | search (default) |
-| ` + "`store`" + ` | **Save** memories, edit, merge, import | create (default), edit, merge, import |
-| ` + "`feedback`" + ` | **Rate** quality, suppress, record outcomes | rate, suppress, outcome |
+| ` + "`store`" + ` | **Save** memories, edit, import | create (default), edit, import |
+| ` + "`feedback`" + ` | **Suppress** low-quality memories, record outcomes | suppress, outcome |
 | ` + "`issues`" + ` | **Cross-project issue tracking** between agents | create, list, get, update, comment, reopen |
 | ` + "`vault`" + ` | **Credentials** — encrypted AES-256-GCM | store, get, list, delete, status |
-| ` + "`docs`" + ` | **Documents** — versioned docs & collections | create, read, list, history, comment, collections, documents, get_doc, remove, ingest, search_docs |
-| ` + "`admin`" + ` | **Bulk ops**, analytics | bulk_delete, bulk_supersede, tag, stats, trends, quality, export, ... |
+| ` + "`settings`" + ` | **Model settings** used by recall | set, get, list, delete |
+| ` + "`docs`" + ` | **Documents** — versioned docs & collections | create, read, list, history, comment, collections, documents, get_doc, remove, ingest |
+| ` + "`admin`" + ` | **Administrative telemetry** | stats; purge_project when enabled |
 | ` + "`check_system_health`" + ` | **Health** check of all subsystems | (no params) |
 
 ## Issues — Cross-Project Agent Bug Tracker
@@ -643,27 +633,29 @@ All text rendered in the dashboard supports full Markdown with syntax highlighti
 This applies to: ` + "`store(content=...)`" + `, ` + "`issues(body=..., comment=...)`" + `, ` + "`docs(content=...)`" + `.
 Unfenced text renders as plain paragraphs — code without fencing is unreadable.
 
-## Advanced: All Tools
+## Advanced: Expanded Tools
 
-By default, engram exposes 9 consolidated tools (above). Each tool supports multiple actions.
-If you need the full expanded tool list (50+ individual tools), call ` + "`tools/list`" + ` with ` + "`include_all: true`" + `.
+By default, engram exposes the 9 primary tools above. Provider-backed tools are added only when their store and feature gate are active. Use ` + "`tools/list`" + ` with ` + "`include_all: true`" + ` to inspect the working expanded surface; unadvertised legacy names are not dispatched.
 
 `
 
-// storeMemoryTool returns the store_memory tool definition.
+// storeTool returns the consolidated store tool definition.
 //
-// Schema contract (per TestStoreMemoryToolSchema_FlagOff_HasNewProperties_ButRuntimeIgnores):
+// Schema contract:
+//   - action selects the create, edit, or import path; each handler validates its
+//     own required fields.
 //   - privacy_scope and session_id are advertised unconditionally so clients always
 //     discover them; the runtime handler honors them only when ENGRAM_VNEXT_F_ENABLED=true.
 //   - dry_run, force, resolution_token, option, target_memory_id are advertised only
 //     when ENGRAM_VNEXT_F_ENABLED=true (T044 FR-F6.b — write-lint phase fields).
-func storeMemoryTool() Tool {
+func storeTool() Tool {
 	props := map[string]any{
-		"content":    map[string]any{"type": "string", "description": "The content/knowledge to remember"},
-		"title":      map[string]any{"type": "string", "description": "Short title for the memory"},
-		"tags":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Concept tags (supports hierarchical: lang:go:concurrency)"},
+		"action":     map[string]any{"type": "string", "enum": storeActions, "default": "create", "description": "Action to perform"},
+		"content":    map[string]any{"type": "string", "description": "The content/knowledge to remember (for create)"},
+		"title":      map[string]any{"type": "string", "description": "Short title for the memory (for create)"},
+		"tags":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Concept tags (for create or edit; supports hierarchical tags such as lang:go:concurrency)"},
 		"rejected":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Alternatives considered and dismissed (for decision observations)"},
-		"type":       map[string]any{"type": "string", "description": "Memory type: decision, bugfix, feature, discovery, refactor"},
+		"type":       map[string]any{"type": "string", "enum": []string{"decision", "bugfix", "feature", "refactor", "discovery", "change", "guidance", "credential", "entity", "wiki", "pitfall", "operational", "timeline"}, "description": "Observation type (for create)"},
 		"importance": map[string]any{"type": "number", "minimum": 0, "maximum": 1, "description": "Importance score (0-1)"},
 		"scope":      map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Legacy 2-tier visibility scope. Preserved for backward compatibility (RI-F2); prefer privacy_scope when ENGRAM_VNEXT_F_ENABLED is on."},
 		// privacy_scope and session_id are unconditional in schema (clients discover them at all
@@ -677,6 +669,21 @@ func storeMemoryTool() Tool {
 		"always_inject":    map[string]any{"type": "boolean", "description": "If true, this memory will be injected into every agent context regardless of query relevance. Use for behavioral rules that must always be present."},
 		"agent_source":     map[string]any{"type": "string", "enum": []string{"claude-code", "codex", "gemini", "other", "unknown"}, "description": "Which AI tool created this observation"},
 		"supersedes":       map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "IDs of memories this new memory replaces"},
+		"id":               map[string]any{"type": "integer", "description": "Memory ID (required for edit)"},
+		"narrative":        map[string]any{"type": "string", "description": "Replacement memory content (for edit)"},
+		"path":             map[string]any{"type": "string", "description": "Legacy local instinct directory (for import; use files for remote servers)"},
+		"files": map[string]any{
+			"type":        "array",
+			"description": "Instinct files to import. Provide this or path, not both.",
+			"items": map[string]any{
+				"type":     "object",
+				"required": []string{"name", "content"},
+				"properties": map[string]any{
+					"name":    map[string]any{"type": "string", "description": "Filename"},
+					"content": map[string]any{"type": "string", "description": "Full file content including YAML frontmatter"},
+				},
+			},
+		},
 	}
 	// dry_run and write-lint phase fields are only advertised when the flag is on.
 	// Advertising them unconditionally would imply they work on flag-off servers.
@@ -688,12 +695,11 @@ func storeMemoryTool() Tool {
 		props["target_memory_id"] = map[string]any{"type": "integer", "description": "T035 Phase2: target memory ID for merge_with / supersede options. Required for those options."}
 	}
 	return Tool{
-		Name:        "store_memory",
-		Description: "Explicitly store a memory/observation. Use when you want to remember something specific across sessions.",
+		Name:        "store",
+		Description: "Create, edit, or import memories. Actions: create (default), edit, import.",
 		tier:        tierCore,
 		InputSchema: map[string]any{
 			"type":       "object",
-			"required":   []string{"content"},
 			"properties": props,
 		},
 	}
@@ -711,9 +717,9 @@ func storeMemoryTool() Tool {
 // Flag-OFF clients see only the base 6-field schema (byte-identical to pre-W3/pre-F).
 func recallMemoryTool() Tool {
 	// session_id and include_scopes are always in the schema (unconditional,
-	// matching the store_memory design precedent in TestStoreMemoryToolSchema_FlagOff):
-	// schema discovery is deterministic regardless of runtime env; ENGRAM_VNEXT_F_ENABLED
-	// gates runtime behavior only (same pattern as store_memory privacy_scope/session_id).
+	// matching the consolidated store schema precedent: schema discovery is
+	// deterministic regardless of runtime env, while ENGRAM_VNEXT_F_ENABLED
+	// gates runtime behavior only.
 	props := map[string]any{
 		"query":   map[string]any{"type": "string", "description": "Natural language query"},
 		"tags":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Filter by concept tags"},
@@ -811,47 +817,24 @@ func (s *Server) primaryTools() []Tool {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"action":  map[string]any{"type": "string", "enum": []string{"search"}, "default": "search", "description": "Action to perform"},
+					"action":  map[string]any{"type": "string", "enum": recallActions, "default": "search", "description": "Action to perform"},
 					"query":   map[string]any{"type": "string", "description": "Search query / substring filter (for search)"},
 					"project": map[string]any{"type": "string", "description": "Project name filter"},
 					"limit":   map[string]any{"type": "number", "description": "Max results"},
 				},
 			},
 		},
-		{
-			Name:        "store",
-			Description: "Store, edit, merge, or import memories. Actions: create (default), edit, merge, import.",
-			tier:        tierCore,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"action":        map[string]any{"type": "string", "enum": []string{"create", "edit", "merge", "import"}, "default": "create", "description": "Action to perform"},
-					"content":       map[string]any{"type": "string", "description": "Observation content (for create)"},
-					"title":         map[string]any{"type": "string", "description": "Title (for create, edit)"},
-					"id":            map[string]any{"type": "number", "description": "Observation ID (for edit)"},
-					"source_id":     map[string]any{"type": "number", "description": "Source observation ID (for merge)"},
-					"target_id":     map[string]any{"type": "number", "description": "Target observation ID (for merge)"},
-					"type":          map[string]any{"type": "string", "enum": []string{"decision", "bugfix", "feature", "refactor", "discovery", "change", "guidance", "credential", "entity", "wiki", "pitfall", "operational", "timeline"}, "description": "Observation type (for create). Must be an observation type, not a memory_type value like insight/context/pattern."},
-					"tags":          map[string]any{"type": "string", "description": "Comma-separated tags (for create)"},
-					"scope":         map[string]any{"type": "string", "description": "Scope: project/global/agent (for create)"},
-					"always_inject": map[string]any{"type": "boolean", "description": "Always inject in context (for create, edit)"},
-					"narrative":     map[string]any{"type": "string", "description": "Narrative text (for edit)"},
-					"path":          map[string]any{"type": "string", "description": "File path (for import)"},
-					"project":       map[string]any{"type": "string", "description": "Project name"},
-				},
-			},
-		},
+		storeTool(),
 		{
 			Name:        "feedback",
-			Description: "Rate observations, suppress bad ones, or record session outcome. Actions: rate, suppress, outcome. Action required.",
+			Description: "Suppress a memory or record a session outcome. Actions: suppress, outcome. Action required.",
 			tier:        tierCore,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"action"},
 				"properties": map[string]any{
-					"action":     map[string]any{"type": "string", "enum": []string{"rate", "suppress", "outcome"}, "description": "Action to perform (required)"},
-					"id":         map[string]any{"type": "number", "description": "Observation ID (for rate, suppress)"},
-					"rating":     map[string]any{"type": "string", "enum": []string{"useful", "not_useful"}, "description": "Rating value for action=rate"},
+					"action":     map[string]any{"type": "string", "enum": feedbackActions, "description": "Action to perform (required)"},
+					"id":         map[string]any{"type": "integer", "description": "Memory ID (required for action=suppress)"},
 					"session_id": map[string]any{"type": "string", "description": "Claude session ID string (required for action=outcome)"},
 					"outcome":    map[string]any{"type": "string", "enum": []string{"success", "partial", "failure", "abandoned"}, "description": "Session outcome (for action=outcome)"},
 					"reason":     map[string]any{"type": "string", "description": "Outcome reason (for action=outcome)"},
@@ -869,8 +852,8 @@ func (s *Server) primaryTools() []Tool {
 					"action":  map[string]any{"type": "string", "enum": []string{"store", "get", "list", "delete", "status"}, "description": "Action to perform (required)"},
 					"name":    map[string]any{"type": "string", "description": "Credential name (for store, get, delete)"},
 					"value":   map[string]any{"type": "string", "description": "Credential value (for store)"},
-					"scope":   map[string]any{"type": "string", "description": "Scope: project/global (for store)"},
-					"project": map[string]any{"type": "string", "description": "Project name (for store)"},
+					"scope":   map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Credential scope. Store defaults to project; get/delete without project select the shared global namespace."},
+					"project": map[string]any{"type": "string", "description": "Project name. Required for project-scoped store/get/delete; omitted project selects global get/delete and list includes global credentials."},
 				},
 			},
 		},
@@ -895,22 +878,27 @@ func (s *Server) primaryTools() []Tool {
 		},
 		{
 			Name:        "docs",
-			Description: "Versioned documents and collections. Actions: create, read, list, history, comment, collections, documents, get_doc, remove, ingest, search_docs. Action required.",
+			Description: "Versioned documents and collections. Actions: create, read, list, history, comment, collections, documents, get_doc, remove, ingest. Action required.",
 			tier:        tierUseful,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"action"},
 				"properties": map[string]any{
-					"action":     map[string]any{"type": "string", "enum": []string{"create", "read", "list", "history", "comment", "collections", "documents", "get_doc", "remove", "ingest", "search_docs"}, "description": "Action to perform (required)"},
-					"path":       map[string]any{"type": "string", "description": "Document path (for create, read, list, history, comment)"},
-					"project":    map[string]any{"type": "string", "description": "Project name"},
-					"content":    map[string]any{"type": "string", "description": "Document content (for create, ingest)"},
-					"collection": map[string]any{"type": "string", "description": "Collection name (for documents, get_doc, remove, ingest, search_docs)"},
-					"query":      map[string]any{"type": "string", "description": "Search query (for search_docs)"},
-					"version":    map[string]any{"type": "number", "description": "Version number (for read)"},
-					"comment":    map[string]any{"type": "string", "description": "Comment text (for comment)"},
-					"doc_type":   map[string]any{"type": "string", "description": "Document type (for create, list)"},
-					"id":         map[string]any{"type": "string", "description": "Document ID (for get_doc, remove)"},
+					"action":      map[string]any{"type": "string", "enum": docsActions, "description": "Action to perform (required)"},
+					"path":        map[string]any{"type": "string", "description": "Document path"},
+					"project":     map[string]any{"type": "string", "description": "Project name"},
+					"content":     map[string]any{"type": "string", "description": "Document content (for create, comment, or ingest)"},
+					"collection":  map[string]any{"type": "string", "description": "Collection name (for documents, get_doc, remove, or ingest)"},
+					"version":     map[string]any{"type": "number", "description": "Version number (for read)"},
+					"document_id": map[string]any{"type": "number", "description": "Versioned document ID (for comment)"},
+					"author":      map[string]any{"type": "string", "description": "Author identifier (for create or comment)"},
+					"line_start":  map[string]any{"type": "number", "description": "Starting line number (for comment)"},
+					"line_end":    map[string]any{"type": "number", "description": "Ending line number (for comment)"},
+					"doc_type":    map[string]any{"type": "string", "description": "Document type (for create or list)"},
+					"metadata":    map[string]any{"type": "string", "description": "JSON metadata string (for create)"},
+					"path_prefix": map[string]any{"type": "string", "description": "Path prefix filter (for list)"},
+					"limit":       map[string]any{"type": "number", "description": "Maximum rows (for list or history)"},
+					"title":       map[string]any{"type": "string", "description": "Collection document title (for ingest)"},
 				},
 			},
 		},
@@ -940,106 +928,7 @@ func (s *Server) primaryTools() []Tool {
 // find_by_type removed — they were backed by internal/search (dropped). Use the
 // consolidated recall(action="search") tool instead.
 func (s *Server) handleToolsList(req *Request) *Response {
-	tools := []Tool{
-		{
-			Name:        "find_by_file",
-			Description: "Find observations related to specific file paths.",
-			tier:        tierCore,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"files"},
-				"properties": map[string]any{
-					"files":     map[string]any{"type": "string", "description": "File path(s) to filter by"},
-					"type":      map[string]any{"type": "string"},
-					"concepts":  map[string]any{"type": "string"},
-					"project":   map[string]any{"type": "string"},
-					"dateStart": map[string]any{"type": []string{"string", "number"}},
-					"dateEnd":   map[string]any{"type": []string{"string", "number"}},
-					"orderBy":   map[string]any{"type": "string", "enum": []string{"date_desc", "date_asc"}, "default": "date_desc"},
-					"limit":     map[string]any{"type": "number", "default": 20},
-					"offset":    map[string]any{"type": "number", "default": 0},
-					"format":    map[string]any{"type": "string", "enum": []string{"index", "full"}, "default": "index"},
-				},
-			},
-		},
-		// find_by_file_context, find_by_type, timeline, get_recent_context, get_context_timeline,
-		// get_timeline_by_query removed in v5 (US9) — backed by internal/search which is dropped.
-		{
-			Name:        "find_similar_observations",
-			Description: "Find observations semantically similar to a query or observation. Uses vector similarity search to find related content. Useful for detecting duplicates before creating new observations.",
-			tier:        tierUseful,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"query"},
-				"properties": map[string]any{
-					"query":          map[string]any{"type": "string", "description": "Text to find similar observations for"},
-					"project":        map[string]any{"type": "string", "description": "Filter by project name"},
-					"min_similarity": map[string]any{"type": "number", "default": 0.7, "minimum": 0.0, "maximum": 1.0, "description": "Minimum similarity threshold (0-1)"},
-					"limit":          map[string]any{"type": "number", "default": 10, "minimum": 1, "maximum": 50},
-				},
-			},
-		},
-		{
-			Name:        "get_memory_stats",
-			Description: "Get statistics about the memory system including observation counts, vector stats, pattern counts, and search metrics.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-		},
-		{
-			Name:        "search_sessions",
-			Description: "[DEPRECATED] Full-text search across indexed Claude Code sessions. Removed in v5 (US3) — indexed_sessions table dropped.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":     "object",
-				"required": []string{"query"},
-				"properties": map[string]any{
-					"query": map[string]any{"type": "string", "description": "Search query for session content"},
-					"limit": map[string]any{"type": "number", "default": 10, "minimum": 1, "maximum": 50},
-				},
-			},
-		},
-		{
-			Name:        "list_sessions",
-			Description: "[DEPRECATED] List indexed Claude Code sessions with optional workstation/project filters. Removed in v5 (US3) — indexed_sessions table dropped.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"workstation_id": map[string]any{"type": "string", "description": "Filter by workstation ID"},
-					"project_id":     map[string]any{"type": "string", "description": "Filter by project ID"},
-					"limit":          map[string]any{"type": "number", "default": 20, "minimum": 1, "maximum": 100},
-					"offset":         map[string]any{"type": "number", "default": 0, "minimum": 0},
-				},
-			},
-		},
-		// Import instincts tool (always available — observation store is required for MCP)
-		{
-			Name:        "import_instincts",
-			Description: "Import ECC instinct files as guidance observations. Provide EITHER 'files' (array of {name, content} — preferred for remote servers) OR 'path' (legacy local directory). Exactly one of these is required; server enforces. Idempotent — duplicates are skipped via vector similarity check.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"files": map[string]any{
-						"type":        "array",
-						"description": "REQUIRED (alternative to 'path'): array of instinct files with content. Preferred for client-server mode.",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"name":    map[string]any{"type": "string", "description": "Filename (e.g. 'my-instinct.md')"},
-								"content": map[string]any{"type": "string", "description": "Full file content including YAML frontmatter"},
-							},
-							"required": []string{"name", "content"},
-						},
-					},
-					"path": map[string]any{"type": "string", "description": "REQUIRED (alternative to 'files'): [DEPRECATED] Local filesystem path to instincts directory. Use 'files' for remote servers."},
-				},
-			},
-		},
-	}
+	tools := []Tool{}
 
 	// Behavioral rules tools — only advertise when the store is wired (US3 Commit C).
 	// Advertising store_rule/list_rules when behavioralRulesStore is nil would cause
@@ -1076,50 +965,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		)
 	}
 
-	// Backfill status tool — only advertise when backfill tracker is available
-	if s.backfillStatusFunc != nil {
-		tools = append(tools, Tool{
-			Name:        "backfill_status",
-			Description: "Get status of backfill runs — total runs, per-run stored/skipped/error counts, and total observations imported from historical sessions.",
-			tier:        tierAdmin,
-			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-		})
-	}
-
-	// Memory management tools — advertise when memory storage is available
+	// Recall's expanded schema remains available when memory storage is wired.
 	if s.memoryStore != nil {
-		tools = append(tools,
-			storeMemoryTool(),
-			recallMemoryTool(),
-			Tool{
-				Name:        "rate_memory",
-				Description: "Rate a memory as useful or not useful. Affects future ranking in search results.",
-				tier:        tierCore,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"id", "rating"},
-					"properties": map[string]any{
-						"id":     map[string]any{"type": "integer", "description": "Observation ID to rate"},
-						"rating": map[string]any{"type": "string", "enum": []string{"useful", "not_useful"}, "description": "Rating: useful or not_useful"},
-					},
-				},
-			},
-			Tool{
-				Name:        "suppress_memory",
-				Description: "Suppress an observation so it is excluded from future search results. The observation remains in the database but is hidden.",
-				tier:        tierCore,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"id"},
-					"properties": map[string]any{
-						"id": map[string]any{"type": "integer", "description": "Observation ID to suppress"},
-					},
-				},
-			},
-		)
+		tools = append(tools, recallMemoryTool())
 	}
 	if s6OutcomeEnabledFromEnv() && s.effectiveMemorySignificanceUpdater() != nil {
 		tools = append(tools, rateMemorySignificanceTool())
@@ -1143,25 +991,6 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 	if s.directiveCaptureService != nil && directivesCaptureEnabledFromEnv() {
 		tools = append(tools, rememberDirectiveTool())
-	}
-	// Session outcome tool — only advertise when session store is available
-	if s.sessionStore != nil {
-		tools = append(tools,
-			Tool{
-				Name:        "set_session_outcome",
-				Description: "Record the outcome of the current session (success/partial/failure/abandoned). Use at session end to enable closed-loop learning.",
-				tier:        tierUseful,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"session_id", "outcome"},
-					"properties": map[string]any{
-						"session_id": map[string]any{"type": "string", "description": "Claude session ID"},
-						"outcome":    map[string]any{"type": "string", "enum": []string{"success", "partial", "failure", "abandoned"}, "description": "Session outcome"},
-						"reason":     map[string]any{"type": "string", "description": "Optional explanation for the outcome"},
-					},
-				},
-			},
-		)
 	}
 
 	// Adaptive memory tools — advertise only when memory store is available AND adaptive features are enabled.
@@ -1232,69 +1061,6 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	// Ambient fallback polling — advertise only when the S3 flag is on and the queue seam is wired.
 	if ambientHintsEnabledFromEnv() && s.hintQueue != nil {
 		tools = append(tools, ambientHintsTool())
-	}
-
-	// Credential vault tools — advertise only when credential persistence and vault keying are actually available.
-	if config.GetDatabaseDSN() != "" && crypto.VaultExists(config.Get()) {
-		tools = append(tools,
-			Tool{
-				Name:        "store_credential",
-				Description: "[Vault] Securely store an encrypted credential (API key, password, token). Value is encrypted with AES-256-GCM.",
-				tier:        tierUseful,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"name", "value"},
-					"properties": map[string]any{
-						"name":  map[string]any{"type": "string", "description": "Credential name/identifier"},
-						"value": map[string]any{"type": "string", "description": "Secret value to encrypt and store"},
-						"scope": map[string]any{"type": "string", "enum": []string{"project", "global"}, "default": "project", "description": "Scope: 'project' (default) or 'global' (cross-project)"},
-						"tags":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional concept tags"},
-					},
-				},
-			},
-			Tool{
-				Name:        "get_credential",
-				Description: "[Vault] Retrieve and decrypt a stored credential by name. Returns the decrypted value.",
-				tier:        tierUseful,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"name"},
-					"properties": map[string]any{
-						"name": map[string]any{"type": "string", "description": "Credential name to retrieve"},
-					},
-				},
-			},
-			Tool{
-				Name:        "list_credentials",
-				Description: "[Vault] List all stored credentials (names and metadata only, no values).",
-				tier:        tierAdmin,
-				InputSchema: map[string]any{
-					"type":       "object",
-					"properties": map[string]any{},
-				},
-			},
-			Tool{
-				Name:        "delete_credential",
-				Description: "[Vault] Delete a stored credential by name.",
-				tier:        tierAdmin,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"name"},
-					"properties": map[string]any{
-						"name": map[string]any{"type": "string", "description": "Credential name to delete"},
-					},
-				},
-			},
-			Tool{
-				Name:        "vault_status",
-				Description: "[Vault] Check vault encryption status: key configured, fingerprint, credential count.",
-				tier:        tierAdmin,
-				InputSchema: map[string]any{
-					"type":       "object",
-					"properties": map[string]any{},
-				},
-			},
-		)
 	}
 
 	// Lifecycle tool — advertise when memory store + promotion store are available
@@ -1389,178 +1155,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		})
 	}
 
-	// Document / Collection tools — only advertise when dependencies are available
-	if s.documentStore != nil {
-		tools = append(tools,
-			Tool{
-				Name:        "list_collections",
-				Description: "[Documents] List all configured document collections with active document counts.",
-				tier:        tierAdmin,
-				InputSchema: map[string]any{
-					"type":       "object",
-					"properties": map[string]any{},
-				},
-			},
-			Tool{
-				Name:        "list_documents",
-				Description: "[Documents] List documents in a collection with metadata (path, title, hash, timestamps).",
-				tier:        tierAdmin,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"collection"},
-					"properties": map[string]any{
-						"collection": map[string]any{"type": "string", "description": "Collection name to list documents from"},
-					},
-				},
-			},
-			Tool{
-				Name:        "get_document",
-				Description: "[Documents] Retrieve full document content by collection and path.",
-				tier:        tierAdmin,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"collection", "path"},
-					"properties": map[string]any{
-						"collection": map[string]any{"type": "string", "description": "Collection name"},
-						"path":       map[string]any{"type": "string", "description": "Document path within the collection"},
-					},
-				},
-			},
-			Tool{
-				Name:        "remove_document",
-				Description: "[Documents] Deactivate (soft delete) a document from a collection. The document and its chunks remain in storage but are excluded from search.",
-				tier:        tierAdmin,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"collection", "path"},
-					"properties": map[string]any{
-						"collection": map[string]any{"type": "string", "description": "Collection name"},
-						"path":       map[string]any{"type": "string", "description": "Document path to deactivate"},
-					},
-				},
-			},
-		)
-	}
-
-	// Document ingest/search tools are document-store gated (embedding removed in v5).
-	if s.documentStore != nil {
-		tools = append(tools,
-			Tool{
-				Name:        "ingest_document",
-				Description: "[Documents] Ingest a document into a collection. Chunks the content, generates embeddings, and stores for semantic search. Skips re-embedding if content hash unchanged.",
-				tier:        tierAdmin,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"collection", "path", "content"},
-					"properties": map[string]any{
-						"collection": map[string]any{"type": "string", "description": "Target collection name"},
-						"path":       map[string]any{"type": "string", "description": "Document path (used as identifier within the collection)"},
-						"content":    map[string]any{"type": "string", "description": "Full document content to ingest"},
-						"title":      map[string]any{"type": "string", "description": "Optional document title"},
-					},
-				},
-			},
-			Tool{
-				Name:        "search_collection",
-				Description: "[Documents] Semantic search across document chunks in a collection. Returns ranked results with chunk text.",
-				tier:        tierAdmin,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"query"},
-					"properties": map[string]any{
-						"query":      map[string]any{"type": "string", "description": "Natural language search query"},
-						"collection": map[string]any{"type": "string", "description": "Collection to search (omit to search all collections)"},
-						"limit":      map[string]any{"type": "number", "default": 10, "minimum": 1, "maximum": 50},
-					},
-				},
-			},
-		)
-	}
-
-	// Versioned document tools — only advertise when versioned document store is available
-	if s.versionedDocumentStore != nil {
-		tools = append(tools,
-			Tool{
-				Name:        "doc_create",
-				Description: "[Versioned Docs] Create a new versioned document or a new version of an existing document. Each call increments the version atomically.",
-				tier:        tierUseful,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"path", "project", "content"},
-					"properties": map[string]any{
-						"path":     map[string]any{"type": "string", "description": "Document path identifier (e.g. 'docs/architecture.md')"},
-						"project":  map[string]any{"type": "string", "description": "Project name"},
-						"content":  map[string]any{"type": "string", "description": "Full document content"},
-						"doc_type": map[string]any{"type": "string", "default": "markdown", "description": "Document type (e.g. markdown, text, json)"},
-						"metadata": map[string]any{"type": "string", "default": "{}", "description": "JSON metadata string"},
-						"author":   map[string]any{"type": "string", "default": "agent", "description": "Author identifier"},
-					},
-				},
-			},
-			Tool{
-				Name:        "doc_read",
-				Description: "[Versioned Docs] Read the latest or a specific version of a versioned document.",
-				tier:        tierUseful,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"path", "project"},
-					"properties": map[string]any{
-						"path":    map[string]any{"type": "string", "description": "Document path identifier"},
-						"project": map[string]any{"type": "string", "description": "Project name"},
-						"version": map[string]any{"type": "number", "description": "Specific version to read (omit for latest)"},
-					},
-				},
-			},
-			// doc_update removed from registration (alias of doc_create) — dispatch alias retained in handleCallTool
-			Tool{
-				Name:        "doc_list",
-				Description: "[Versioned Docs] List the latest version of each document path in a project. Supports filtering by doc_type and path prefix.",
-				tier:        tierUseful,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"project"},
-					"properties": map[string]any{
-						"project":     map[string]any{"type": "string", "description": "Project name"},
-						"doc_type":    map[string]any{"type": "string", "description": "Filter by document type (optional)"},
-						"path_prefix": map[string]any{"type": "string", "description": "Filter by path prefix (optional)"},
-						"limit":       map[string]any{"type": "number", "default": 50, "minimum": 1, "maximum": 500, "description": "Maximum documents to return"},
-					},
-				},
-			},
-			Tool{
-				Name:        "doc_history",
-				Description: "[Versioned Docs] Get the full version history of a document. Returns all versions ordered newest first.",
-				tier:        tierAdmin,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"path", "project"},
-					"properties": map[string]any{
-						"path":    map[string]any{"type": "string", "description": "Document path identifier"},
-						"project": map[string]any{"type": "string", "description": "Project name"},
-						"limit":   map[string]any{"type": "number", "default": 0, "minimum": 0, "description": "Maximum versions to return (0 = no limit)"},
-					},
-				},
-			},
-			Tool{
-				Name:        "doc_comment",
-				Description: "[Versioned Docs] Add a comment to a specific document version. Optionally anchored to a line range.",
-				tier:        tierAdmin,
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": []string{"document_id", "content"},
-					"properties": map[string]any{
-						"document_id": map[string]any{"type": "number", "description": "Document ID (from doc_create or doc_read response)"},
-						"content":     map[string]any{"type": "string", "description": "Comment text"},
-						"author":      map[string]any{"type": "string", "default": "agent", "description": "Author identifier"},
-						"line_start":  map[string]any{"type": "number", "description": "Starting line number for line-anchored comment (optional)"},
-						"line_end":    map[string]any{"type": "number", "description": "Ending line number for line-anchored comment (optional)"},
-					},
-				},
-			},
-		)
-	}
-
-	// Tool tiering: consolidated primary tools by default, all aliases with cursor=all.
+	// Tool tiering: consolidated primary tools by default, expanded working tools with cursor=all.
 	var listParams struct {
 		Cursor     string `json:"cursor"`
 		IncludeAll bool   `json:"include_all"`
@@ -1582,9 +1177,8 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		},
 	})
 
-	// include_all=true or cursor=all: return primary + all expanded secondary tools.
-	// Default: return only primary tools (8 consolidated: 7 primary + check_system_health). Legacy aliases are
-	// handled by callTool dispatch — they appear in tools/list only with include_all.
+	// include_all=true or cursor=all: return primary + all expanded working tools.
+	// Default: return only the consolidated primary surface.
 	if listParams.IncludeAll || listParams.Cursor == "all" {
 		// Deduplicate: secondary tools list may contain names already in primary.
 		primaryNames := make(map[string]bool, len(primary))
@@ -1672,12 +1266,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleAdmin(ctx, args)
 	}
 
-	// Legacy alias handlers for non-search tools
+	// Expanded working tools.
 	switch name {
-	case "find_similar_observations":
-		return s.handleFindSimilarObservations(ctx, args)
-	case "get_memory_stats":
-		return s.handleGetMemoryStats(ctx)
 	case "store_rule":
 		return s.handleStoreRule(ctx, args)
 	case "list_rules":
@@ -1686,82 +1276,12 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleIssues(ctx, args)
 	case "check_system_health":
 		return s.handleCheckSystemHealth(ctx)
-	case "analyze_search_patterns":
-		return s.handleAnalyzeSearchPatterns(ctx, args)
-	case "search_sessions":
-		return s.handleSearchSessions(ctx, args)
-	case "list_sessions":
-		return s.handleListSessions(ctx, args)
-	// Document / Collection tools
-	case "list_collections":
-		return s.handleListCollections(ctx)
-	case "list_documents":
-		return s.handleListDocuments(ctx, args)
-	case "get_document":
-		return s.handleGetDocument(ctx, args)
-	case "ingest_document":
-		return s.handleIngestDocument(ctx, args)
-	case "search_collection":
-		return s.handleSearchCollection(ctx, args)
-	case "remove_document":
-		return s.handleRemoveDocument(ctx, args)
-	// Document tool aliases
-	case "doc_list_collections":
-		return s.handleListCollections(ctx)
-	case "doc_list_documents":
-		return s.handleListDocuments(ctx, args)
-	case "doc_get":
-		return s.handleGetDocument(ctx, args)
-	case "doc_ingest":
-		return s.handleIngestDocument(ctx, args)
-	case "doc_search":
-		return s.handleSearchCollection(ctx, args)
-	case "doc_remove":
-		return s.handleRemoveDocument(ctx, args)
-	// Versioned document tools
-	case "doc_create":
-		return s.handleDocCreate(ctx, args)
-	case "doc_read":
-		return s.handleDocRead(ctx, args)
-	case "doc_update":
-		return s.handleDocUpdate(ctx, args)
-	case "doc_list":
-		return s.handleDocList(ctx, args)
-	case "doc_history":
-		return s.handleDocHistory(ctx, args)
-	case "doc_comment":
-		return s.handleDocComment(ctx, args)
-	case "import_instincts":
-		return s.handleImportInstincts(ctx, args)
-	case "backfill_status":
-		return s.handleBackfillStatus()
-	case "store_credential":
-		return s.handleStoreCredential(ctx, args)
-	case "get_credential":
-		return s.handleGetCredential(ctx, args)
-	case "list_credentials":
-		return s.handleListCredentials(ctx, args)
-	case "delete_credential":
-		return s.handleDeleteCredential(ctx, args)
-	case "vault_status":
-		return s.handleVaultStatus(ctx, args)
 	case "lifecycle":
 		return s.handleLifecycle(ctx, args)
 	case "graph":
 		return s.handleGraph(ctx, args)
 	case "ingest":
 		return s.handleIngest(ctx, args)
-	// Vault tool aliases
-	case "vault_store":
-		return s.handleStoreCredential(ctx, args)
-	case "vault_get":
-		return s.handleGetCredential(ctx, args)
-	case "vault_list":
-		return s.handleListCredentials(ctx, args)
-	case "vault_delete":
-		return s.handleDeleteCredential(ctx, args)
-	case "store_memory":
-		return s.handleStoreMemory(ctx, args)
 	case "recall_memory":
 		return s.handleRecallMemory(ctx, args)
 	case "know_about":
@@ -1782,14 +1302,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleTemporalTruthRefresh(ctx, args)
 	case "remember_directive":
 		return s.handleRememberDirective(ctx, args)
-	case "rate_memory":
-		return s.handleRateMemory(ctx, args)
 	case "rate_memory_significance":
 		return s.handleRateMemorySignificance(ctx, args)
-	case "suppress_memory":
-		return s.handleSuppressMemory(ctx, args)
-	case "set_session_outcome":
-		return s.handleSetSessionOutcome(ctx, args)
 	case "get_memory_brief":
 		return s.handleGetMemoryBrief(ctx, args)
 	case "get_ambient_hints":
@@ -1853,21 +1367,7 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleCodebaseStatus(ctx, args)
 	}
 
-	// v5 (US9): search/timeline/decisions/changes/how_it_works/find_by_concept/
-	// find_by_type tools removed — internal/search package dropped.
-	// find_by_file (US3) also removed — observation store dropped in v5.
-	switch name {
-	case "find_by_file":
-		// find_by_file was backed by the observation store, not internal/search —
-		// keep its removal cause accurate (US3).
-		return "", fmt.Errorf("tool %q removed in v5 (US3, observation store dropped) — use recall(query=\"file:...\") instead", name)
-	case "search", "timeline", "decisions", "changes", "how_it_works",
-		"find_by_concept", "find_by_type", "get_recent_context",
-		"get_context_timeline", "get_timeline_by_query":
-		return "", fmt.Errorf("tool %q removed in v5 (internal/search dropped) — use recall(action=\"search\") instead", name)
-	default:
-		return "", fmt.Errorf("unknown tool: %s", name)
-	}
+	return "", fmt.Errorf("unknown tool: %s", name)
 }
 
 // sendResponse serialises resp to JSON and writes it as a single line to stdout.
@@ -1889,42 +1389,10 @@ func (s *Server) sendError(id any, code int, message string, data any) {
 	})
 }
 
-// handleFindSimilarObservations returns an empty result set.
-// The observation-vector-search feature was retired in v5; this tool is a no-op
-// shell. (content_chunks was later restored at migration 108 for vNext memory
-// embeddings, but this legacy observation-similarity tool was not rewired to it.)
-func (s *Server) handleFindSimilarObservations(_ context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	query := coerceString(m["query"], "")
-	if query == "" {
-		return "", fmt.Errorf("query is required")
-	}
-
-	minSim := coerceFloat64(m["min_similarity"], 0)
-	if minSim == 0 {
-		minSim = 0.7
-	}
-
-	out, err := json.Marshal(map[string]any{
-		"observations":   []any{},
-		"count":          0,
-		"min_similarity": minSim,
-		"note":           "Vector similarity search removed in v5; use recall(action=\"search\") for FTS-based retrieval",
-	})
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-	return string(out), nil
-}
-
-// handleGetMemoryStats returns real server-side telemetry for the MCP agent.
+// handleAdminStats returns real server-side telemetry for the MCP agent.
 // Sections whose backing store / DB handle is nil are omitted rather than causing
 // an error — telemetry must never fail just because a subsystem is off.
-func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
+func (s *Server) handleAdminStats(ctx context.Context) (string, error) {
 	result := map[string]any{
 		"generated_at": time.Now().UTC().Format(time.RFC3339),
 	}
@@ -1948,7 +1416,7 @@ func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
 	if err := db.WithContext(ctx).
 		Raw(`SELECT status, count(*) AS count FROM memories WHERE deleted_at IS NULL GROUP BY status`).
 		Scan(&memRows).Error; err != nil {
-		log.Debug().Err(err).Msg("get_memory_stats: memories by-status query failed")
+		log.Debug().Err(err).Msg("admin stats: memories by-status query failed")
 	} else {
 		byStatus := make(map[string]int64, len(memRows))
 		var total int64
@@ -1975,10 +1443,10 @@ func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
 		citErr := db.WithContext(ctx).Raw(`SELECT cited, count(*) AS count FROM citation_log GROUP BY cited`).Scan(&citRows).Error
 
 		if injErr != nil {
-			log.Debug().Err(injErr).Msg("get_memory_stats: injection_log count failed")
+			log.Debug().Err(injErr).Msg("admin stats: injection_log count failed")
 		}
 		if citErr != nil {
-			log.Debug().Err(citErr).Msg("get_memory_stats: citation_log count failed")
+			log.Debug().Err(citErr).Msg("admin stats: citation_log count failed")
 		}
 
 		// Include the section only when both queries succeeded.
@@ -2007,7 +1475,7 @@ func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
 	// --- embedding section: reuse embeddingStore.Stats ---
 	if s.embeddingStore != nil {
 		if embStats, err := s.embeddingStore.Stats(ctx); err != nil {
-			log.Debug().Err(err).Msg("get_memory_stats: embedding stats unavailable")
+			log.Debug().Err(err).Msg("admin stats: embedding stats unavailable")
 		} else {
 			result["embedding"] = embStats
 		}
@@ -2027,7 +1495,7 @@ func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
 		if err := db.WithContext(ctx).
 			Raw(`SELECT status, count(*) AS count FROM crystallization_candidates GROUP BY status`).
 			Scan(&candRows).Error; err != nil {
-			log.Debug().Err(err).Msg("get_memory_stats: crystallization_candidates count failed")
+			log.Debug().Err(err).Msg("admin stats: crystallization_candidates count failed")
 		} else {
 			var pending, total int64
 			for _, r := range candRows {
@@ -2048,23 +1516,6 @@ func (s *Server) handleGetMemoryStats(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("marshal response: %w", err)
 	}
 	return string(out), nil
-}
-
-// handleBackfillStatus returns backfill run status via the injected status function.
-// handleBulkDeleteObservations was removed in v5 (US3); the observations table was dropped.
-func (s *Server) handleBackfillStatus() (string, error) {
-	if s.backfillStatusFunc == nil {
-		return "", fmt.Errorf("backfill status not available")
-	}
-	status, err := s.backfillStatusFunc()
-	if err != nil {
-		return "", fmt.Errorf("failed to get backfill status: %w", err)
-	}
-	b, err := json.MarshalIndent(status, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal backfill status: %w", err)
-	}
-	return string(b), nil
 }
 
 // handleCheckSystemHealth performs comprehensive system health checks.
@@ -2209,45 +1660,4 @@ func (s *Server) handleCheckSystemHealth(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("marshal health report: %w", err)
 	}
 	return string(output), nil
-}
-
-// handleAnalyzeSearchPatterns returns a stub analysis response.
-// Observation-era search metrics were removed in v5 along with the observations table.
-func (s *Server) handleAnalyzeSearchPatterns(_ context.Context, args json.RawMessage) (string, error) {
-	m, err := parseArgs(args)
-	if err != nil {
-		return "", err
-	}
-
-	days := coerceInt(m["days"], 0)
-	if days <= 0 {
-		days = 7
-	}
-
-	out, err := json.Marshal(map[string]any{
-		"period":              fmt.Sprintf("Last %d days", days),
-		"top_queries":         []map[string]any{},
-		"zero_result_queries": []string{},
-		"insights": []string{
-			"Search metrics unavailable in v5",
-			"Observation-era search analytics were removed with the observations table cleanup",
-		},
-		"total_searches": 0,
-		"unique_queries": 0,
-		"note":           "search metrics unavailable in v5",
-	})
-	if err != nil {
-		return "", fmt.Errorf("marshal analysis: %w", err)
-	}
-	return string(out), nil
-}
-
-// handleSearchSessions is a tombstone for the removed v5 search_sessions tool.
-func (s *Server) handleSearchSessions(_ context.Context, _ json.RawMessage) (string, error) {
-	return "", fmt.Errorf("search_sessions removed in v5 (US3) — indexed_sessions table dropped")
-}
-
-// handleListSessions is a tombstone for the removed v5 list_sessions tool.
-func (s *Server) handleListSessions(_ context.Context, _ json.RawMessage) (string, error) {
-	return "", fmt.Errorf("list_sessions removed in v5 (US3) — indexed_sessions table dropped")
 }

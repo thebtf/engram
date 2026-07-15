@@ -318,21 +318,24 @@ func TestRateMemorySignificanceMissingUpdaterFailsExplicitly(t *testing.T) {
 	assert.Contains(t, err.Error(), "memory significance updater not available")
 }
 
-func TestRateMemorySignificanceLegacyRatePathsRemainUnsupported(t *testing.T) {
+func TestRateMemorySignificanceLegacyRatePathsAreRetired(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		tool string
-		args map[string]any
+		name        string
+		tool        string
+		args        map[string]any
+		errContains string
 	}{
 		{
-			name: "legacy rate_memory tool",
-			tool: "rate_memory",
-			args: map[string]any{"id": 42, "rating": "useful"},
+			name:        "legacy rate_memory tool",
+			tool:        "rate_memory",
+			args:        map[string]any{"id": 42, "rating": "useful"},
+			errContains: "unknown tool: rate_memory",
 		},
 		{
-			name: "consolidated feedback rate action",
-			tool: "feedback",
-			args: map[string]any{"action": "rate", "id": 42, "rating": "not_useful"},
+			name:        "consolidated feedback rate action",
+			tool:        "feedback",
+			args:        map[string]any{"action": "rate", "id": 42, "rating": "not_useful"},
+			errContains: "unknown feedback action",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -345,8 +348,8 @@ func TestRateMemorySignificanceLegacyRatePathsRemainUnsupported(t *testing.T) {
 			_, err := srv.callTool(context.Background(), tc.tool, mustJSON(t, tc.args))
 
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "rate_memory removed in v5 (US3): memories table has no rating field yet")
-			assert.Empty(t, updater.calls, "legacy rate compatibility must remain explicitly unsupported, not silently routed to S6")
+			assert.Contains(t, err.Error(), tc.errContains)
+			assert.Empty(t, updater.calls, "retired rate paths must not route to S6")
 		})
 	}
 }

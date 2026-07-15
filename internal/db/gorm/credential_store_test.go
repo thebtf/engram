@@ -141,6 +141,81 @@ func TestCredentialStore_CreateGetCountDelete(t *testing.T) {
 	require.Error(t, err, "Delete of non-existent key should return an error")
 }
 
+func TestCredentialStore_GlobalAndProjectSameNameCoexist(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+
+	store := &Store{DB: db}
+	cs := NewCredentialStore(store)
+	ctx := context.Background()
+
+	const project = "test-credential-store-global"
+	const key = "global-project-coexist"
+	const fingerprint = "globalfingerprint01"
+	require.NoError(t, db.Exec("DELETE FROM credentials WHERE key = ?", key).Error)
+	defer db.Exec("DELETE FROM credentials WHERE key = ?", key)
+
+	globalInput := &models.Credential{
+		Project:                  "",
+		Key:                      key,
+		EncryptedSecret:          []byte("global-ciphertext"),
+		EncryptionKeyFingerprint: fingerprint,
+		Scope:                    "global",
+		EditedBy:                 "global-smoke",
+	}
+	globalCreated, err := cs.Create(ctx, globalInput)
+	require.NoError(t, err)
+	assert.Empty(t, globalCreated.Project)
+	assert.Equal(t, "global", globalCreated.Scope)
+
+	projectCreated, err := cs.Create(ctx, &models.Credential{
+		Project:                  project,
+		Key:                      key,
+		EncryptedSecret:          []byte("project-ciphertext"),
+		EncryptionKeyFingerprint: fingerprint,
+		Scope:                    "project",
+		EditedBy:                 "project-smoke",
+	})
+	require.NoError(t, err, "global and project rows with the same key must coexist")
+	assert.NotEqual(t, globalCreated.ID, projectCreated.ID)
+
+	globalFetched, err := cs.Get(ctx, "", key)
+	require.NoError(t, err)
+	assert.Equal(t, globalCreated.ID, globalFetched.ID)
+	projectFetched, err := cs.Get(ctx, project, key)
+	require.NoError(t, err)
+	assert.Equal(t, projectCreated.ID, projectFetched.ID)
+
+	byName, err := cs.GetByName(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, globalCreated.ID, byName.ID, "project-less lookup must prefer the exact global row")
+
+	globalList, err := cs.List(ctx, "")
+	require.NoError(t, err)
+	require.Len(t, globalList, 1)
+	assert.Equal(t, globalCreated.ID, globalList[0].ID)
+	projectList, err := cs.List(ctx, project)
+	require.NoError(t, err)
+	require.Len(t, projectList, 1)
+	assert.Equal(t, projectCreated.ID, projectList[0].ID)
+
+	require.NoError(t, cs.Delete(ctx, "", key))
+	_, err = cs.Get(ctx, "", key)
+	require.Error(t, err)
+	projectFetched, err = cs.Get(ctx, project, key)
+	require.NoError(t, err, "deleting global must not delete the project credential")
+	assert.Equal(t, projectCreated.ID, projectFetched.ID)
+
+	globalCreated, err = cs.Create(ctx, globalInput)
+	require.NoError(t, err)
+	require.NoError(t, cs.DeleteByName(ctx, key))
+	_, err = cs.Get(ctx, "", key)
+	require.Error(t, err, "project-less delete must remove the preferred global row")
+	projectFetched, err = cs.Get(ctx, project, key)
+	require.NoError(t, err)
+	assert.Equal(t, projectCreated.ID, projectFetched.ID)
+}
+
 // TestCredentialStore_DeleteOrphanedByFingerprint verifies that orphaned rows
 // (wrong fingerprint) are hard-deleted and matching rows survive.
 func TestCredentialStore_DeleteOrphanedByFingerprint(t *testing.T) {

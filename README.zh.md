@@ -369,17 +369,14 @@ Memory Product Layer 新增（v6.30–v6.38）：
 |------|------|
 | `create` | 存储新的观察记录（默认） |
 | `edit` | 修改观察记录字段 |
-| `merge` | 合并重复的观察记录 |
 | `import` | 批量导入观察记录 |
-| `extract` | 从原始内容中进行 LLM 驱动的提取 |
 
-### `feedback` — 评价与改进
+### `feedback` — 抑制与结果
 
 | 操作 | 说明 |
 |------|------|
-| `rate` | 评价观察记录是否有用 |
-| `suppress` | 抑制低质量观察记录 |
-| `outcome` | 记录闭环学习的结果 |
+| `suppress` | 抑制低质量记忆 |
+| `outcome` | 记录会话结果 |
 
 ### `vault` — 加密凭据
 
@@ -391,22 +388,24 @@ Memory Product Layer 新增（v6.30–v6.38）：
 | `delete` | 删除凭据 |
 | `status` | 保险库状态和健康检查 |
 
-### `docs` — 版本化文档
+### `docs` — 版本化文档与集合
 
 | 操作 | 说明 |
 |------|------|
-| `create` | 创建文档 |
+| `create` | 创建版本化文档 |
 | `read` | 读取文档内容 |
-| `list` | 列出文档 |
-| `history` | 版本历史 |
-| `comment` | 添加评论 |
-| `collections` | 管理文档集合 |
-| `ingest` | 分块、嵌入和存储文档 |
-| `search_docs` | 跨文档语义搜索 |
+| `list` | 列出版本化文档 |
+| `history` | 读取版本历史 |
+| `comment` | 添加文档评论 |
+| `collections` | 列出已配置的集合 |
+| `documents` | 列出集合中的文档 |
+| `get_doc` | 读取集合文档 |
+| `remove` | 软删除集合文档 |
+| `ingest` | 新增或更新集合文档的元数据与内容 |
 
-### `admin` — 批量操作与分析
+### `admin` — 管理遥测
 
-包含 21 种操作：`bulk_delete`、`bulk_supersede`、`tag`、`graph`、`stats`、`trends`、`quality`、`export`、`maintenance`、`scoring`、`consolidation` 等。
+`stats` 返回记忆系统遥测。启用 vNext gate 后还可使用 `purge_project`；该操作需要管理员授权，并以项目名称进行确认。
 
 ### `check_system_health` — 系统健康检查
 
@@ -433,27 +432,18 @@ Memory Product Layer 新增（v6.30–v6.38）：
 check_system_health()
 
 # 搜索记忆
-recall(query="authentication architecture")
-
-# 预设查询
-recall(action="preset", preset="decisions", query="caching strategy")
-
-# 编辑前检查文件历史
-recall(action="by_file", files="internal/search/hybrid.go")
+recall(action="search", project="engram", query="authentication architecture")
 
 # 存储观察记录
-store(content="Switched from Redis to in-memory cache for dev environments", title="Cache strategy change", tags=["architecture", "caching"])
+store(action="create", project="engram", content="Switched from Redis to in-memory cache for dev environments", title="Cache strategy change", tags=["architecture", "caching"])
 
-# 从原始内容中提取观察记录
-store(action="extract", content="<paste raw session notes or code review>")
+# 抑制低质量记忆
+feedback(action="suppress", id=123)
 
-# 评价一条记忆
-feedback(action="rate", id=123, rating="useful")
+# 存储全局凭据
+vault(action="store", name="OPENAI_KEY", value="sk-...", scope="global")
 
-# 存储凭据
-vault(action="store", name="OPENAI_KEY", value="sk-...")
-
-# 检索凭据
+# 检索全局凭据
 vault(action="get", name="OPENAI_KEY")
 ```
 <!-- redoc:end:usage -->
@@ -466,7 +456,7 @@ vault(action="get", name="OPENAI_KEY")
 | 现象 | 解决方法 |
 |------|----------|
 | `check_system_health` 显示嵌入不健康 | 检查 `ENGRAM_EMBEDDING_BASE_URL` 和 API 密钥。熔断器会在瞬时故障后自动恢复。 |
-| 搜索无结果 | 确认观察记录是否存在：`recall(action="preset", preset="decisions")`。检查嵌入是否健康。 |
+| 搜索无结果 | 确认观察记录是否存在：`recall(action="search", project="engram", query="decisions")`。检查嵌入服务是否健康。 |
 | MCP 连接被拒绝 | 确认服务器正在运行：`curl http://your-server:37777/health`。检查环境中的 `ENGRAM_URL`。 |
 | 保险库返回 "encryption not configured" | 设置 `ENGRAM_ENCRYPTION_KEY`（64 位十六进制字符串 = 32 字节 AES-256）。 |
 | 仪表盘无法加载 | 确保使用 `make build` 构建（包含仪表盘）。检查浏览器控制台的错误信息。 |

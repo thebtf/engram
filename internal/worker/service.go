@@ -1004,14 +1004,8 @@ func (s *Service) initializeAsync() {
 		Version:            s.version,
 		SessionStore:       sessionStore,
 		CollectionRegistry: collectionRegistry,
-		SessionIdxStore:    sessionIdxStore,
 		DocumentStore:      documentStore,
 		ChunkManager:       chunkManager,
-	})
-
-	// Wire backfill status into MCP server.
-	mcpServer.SetBackfillStatusFunc(func() (any, error) {
-		return s.backfillTracker.snapshot(), nil
 	})
 
 	// Wire versioned document store into MCP server for collaborative document tools.

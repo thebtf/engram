@@ -54,21 +54,21 @@ For each observation, assess TWO dimensions:
 
 ### Step 4: Apply Actions via MCP Tools
 
-For each verdict, call the appropriate engram MCP tool:
+For each verdict, use only currently advertised engram tools. The significance tool is conditional; if it is absent, report the rating as unavailable instead of calling a retired alias.
 
-**Boost (keep):**
+**Boost (keep), when `rate_memory_significance` is advertised:**
 ```
-rate_memory(id=<observation_id>, rating="useful")
+rate_memory_significance(id=<observation_id>, rating="useful")
 ```
 
-**Demote:**
+**Demote, when `rate_memory_significance` is advertised:**
 ```
-rate_memory(id=<observation_id>, rating="not_useful")
+rate_memory_significance(id=<observation_id>, rating="not_useful")
 ```
 
 **Suppress:**
 ```
-suppress_memory(id=<observation_id>)
+feedback(action="suppress", id=<observation_id>)
 ```
 
 ### Step 5: Report Summary
