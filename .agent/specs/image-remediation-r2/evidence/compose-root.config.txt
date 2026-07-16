@@ -1,0 +1,120 @@
+name: image-remediation-r2-immutable-publish
+services:
+  operator-console:
+    build:
+      context: D:\Dev\engram\.agent\worktrees\image-remediation-r2-immutable-publish
+      dockerfile: Dockerfile
+      target: operator-console
+    cap_drop:
+      - ALL
+    depends_on:
+      server:
+        condition: service_healthy
+        required: true
+    environment:
+      NUXT_OPERATOR_API_TARGET: http://server:37777
+      NUXT_PUBLIC_API_BASE: /api
+      NUXT_PUBLIC_API_DISPLAY_HOST: ""
+    image: ghcr.io/thebtf/engram-operator-console@sha256:2222222222222222222222222222222222222222222222222222222222222222
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        host_ip: 0.0.0.0
+        target: 3000
+        published: "3000"
+        protocol: tcp
+    read_only: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=65532,gid=65532,mode=0700,size=64m
+    user: 65532:65532
+  postgres:
+    build:
+      context: D:\Dev\engram\.agent\worktrees\image-remediation-r2-immutable-publish
+      dockerfile: deploy/postgres/Dockerfile
+    cap_drop:
+      - ALL
+    environment:
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      POSTGRES_DB: engram
+      POSTGRES_PASSWORD: test-only
+      POSTGRES_USER: engram
+    image: ghcr.io/thebtf/engram-postgres@sha256:3333333333333333333333333333333333333333333333333333333333333333
+    networks:
+      default: null
+    read_only: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=70,gid=70,mode=0700,size=64m
+      - /var/run/postgresql:rw,noexec,nosuid,nodev,uid=70,gid=70,mode=0775,size=16m
+    user: 70:70
+    volumes:
+      - type: volume
+        source: pgdata
+        target: /var/lib/postgresql/data
+        volume: {}
+  server:
+    build:
+      context: D:\Dev\engram\.agent\worktrees\image-remediation-r2-immutable-publish
+      dockerfile: Dockerfile
+      args:
+        VERSION: sha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      target: server
+    cap_drop:
+      - ALL
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: true
+    environment:
+      DATABASE_DSN: postgres://engram:test-only@postgres:5432/engram?sslmode=disable
+      ENGRAM_AUTH_ADMIN_TOKEN: ""
+      ENGRAM_AUTH_DISABLED: "false"
+      ENGRAM_CRYSTALLIZATION_ENABLED: "false"
+      ENGRAM_EMBEDDING_API_KEY: ""
+      ENGRAM_EMBEDDING_MODEL: text-embedding
+      ENGRAM_EMBEDDING_URL: ""
+      ENGRAM_GRAPH_ENABLED: "false"
+      ENGRAM_LIFECYCLE_ENABLED: "false"
+      ENGRAM_TEMPORAL_TRUTH_ENABLED: "false"
+      ENGRAM_VAULT_KEY: ""
+      ENGRAM_VNEXT_ENABLED: "false"
+      ENGRAM_VNEXT_F_ENABLED: "false"
+      ENGRAM_WORKER_HOST: 0.0.0.0
+      ENGRAM_WORKER_PORT: "37777"
+      HOME: /var/lib/engram
+    image: ghcr.io/thebtf/engram@sha256:1111111111111111111111111111111111111111111111111111111111111111
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        host_ip: 0.0.0.0
+        target: 37777
+        published: "37777"
+        protocol: tcp
+    read_only: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=65532,gid=65532,mode=0700,size=64m
+    user: 65532:65532
+    volumes:
+      - type: volume
+        source: engramdata
+        target: /var/lib/engram
+        volume: {}
+networks:
+  default:
+    name: image-remediation-r2-immutable-publish_default
+volumes:
+  engramdata:
+    name: image-remediation-r2-immutable-publish_engramdata
+  pgdata:
+    name: image-remediation-r2-immutable-publish_pgdata
