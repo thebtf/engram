@@ -37,7 +37,7 @@
     "expected_head_blobs": [
       {
         "path": "scripts/production-gates/build-and-scan-images.ps1",
-        "git_blob": "3b9c9ede6416a9b0bb6c69c1f38fae55d22a3934"
+        "git_blob": "acd8910f5e19df8312640f2dbb4fc46f4dd8c48a"
       }
     ]
   }
