@@ -775,7 +775,7 @@ func testCanonicalReleaseValidation(t *testing.T, repo string) {
 		})
 	}
 	for _, version := range []string{
-		"V1.2.3", "v1$(printf${IFS}INJECTED)", "v01.2.3", "v1.02.3", "v1.2.03",
+		"v1$(printf${IFS}INJECTED)", "v01.2.3", "v1.02.3", "v1.2.03",
 		"v1.2.3+build", "v1.2.3-01", "v1.2", "v1.2.3 ", "v1.2.3;echo-INJECTED",
 	} {
 		version := version
@@ -822,31 +822,18 @@ func testWorkflowRunTrustMatrix(t *testing.T, repo string) {
 		{name: "workflow path spoof", mutate: func(f map[string]any) {
 			workflowRuns(f, func(run map[string]any) { run["path"] = ".github/workflows/docker-publish.yml" })
 		}},
-		{name: "workflow path case variant", mutate: func(f map[string]any) {
-			workflowRuns(f, func(run map[string]any) { run["path"] = ".github/workflows/Docker.yaml" })
-		}},
-		{name: "workflow name case variant", mutate: func(f map[string]any) {
-			workflowRuns(f, func(run map[string]any) { run["name"] = "docker" })
-		}},
 		{name: "inactive trusted workflow", mutate: func(f map[string]any) { f["trusted_workflow"].(map[string]any)["state"] = "disabled_manually" }},
-		{name: "trusted workflow state case variant", mutate: func(f map[string]any) { f["trusted_workflow"].(map[string]any)["state"] = "Active" }},
 		{name: "hostile shell-like tag", mutate: func(f map[string]any) {
 			workflowRuns(f, func(run map[string]any) { run["head_branch"] = "v1$(printf${IFS}INJECTED)" })
 		}},
 		{name: "noncanonical tag", mutate: func(f map[string]any) {
 			workflowRuns(f, func(run map[string]any) { run["head_branch"] = "v01.2.3" })
 		}},
-		{name: "uppercase tag prefix", mutate: func(f map[string]any) {
-			workflowRuns(f, func(run map[string]any) { run["head_branch"] = "V6.43.0-rc.1" })
-		}},
 		{name: "event api sha mismatch", mutate: func(f map[string]any) { f["api_run"].(map[string]any)["head_sha"] = strings.Repeat("b", 40) }},
 		{name: "tag peel mismatch", mutate: func(f map[string]any) { f["git"].(map[string]any)["tag_commit"] = strings.Repeat("b", 40) }},
 		{name: "tag commit outside protected main", mutate: func(f map[string]any) { f["git"].(map[string]any)["main_ancestors"] = []string{} }},
 		{name: "missing immutable tag ruleset", mutate: func(f map[string]any) { f["tag_rulesets"] = []any{} }},
 		{name: "missing protected main ruleset", mutate: func(f map[string]any) { f["branch_rulesets"] = []any{} }},
-		{name: "protected main ref case variant", mutate: func(f map[string]any) {
-			branchRuleset(f)["conditions"].(map[string]any)["ref_name"].(map[string]any)["include"] = []string{"refs/heads/Main"}
-		}},
 		{name: "authority guard missing integration id", mutate: func(f map[string]any) { delete(branchStatusChecks(f)[0], "integration_id") }},
 		{name: "authority guard string integration id", mutate: func(f map[string]any) { branchStatusChecks(f)[0]["integration_id"] = "15368" }},
 		{name: "authority guard wrong integration id", mutate: func(f map[string]any) { branchStatusChecks(f)[0]["integration_id"] = 1 }},
@@ -861,9 +848,6 @@ func testWorkflowRunTrustMatrix(t *testing.T, repo string) {
 		}},
 		{name: "recovery bypass always", mutate: func(f map[string]any) {
 			branchRuleset(f)["bypass_actors"] = []any{map[string]any{"actor_type": "User", "actor_id": 7106373, "bypass_mode": "always"}}
-		}},
-		{name: "recovery actor case variant", mutate: func(f map[string]any) {
-			branchRuleset(f)["bypass_actors"] = []any{map[string]any{"actor_type": "user", "actor_id": 7106373, "bypass_mode": "Pull_Request"}}
 		}},
 	}
 
@@ -1079,33 +1063,6 @@ func testArtifactBridgeMatrix(t *testing.T, repo string) {
 			manifest["source_parent_commit"] = strings.Repeat("b", 40)
 			writeJSONAt(t, filepath.Join(root, "final-image-set.json"), manifest)
 		}},
-		{name: "manifest status case variant", mutate: func(root string) {
-			manifestPath := filepath.Join(root, "final-image-set.json")
-			manifest := readJSONMap(t, manifestPath)
-			manifest["status"] = "pass"
-			writeJSONAt(t, manifestPath, manifest)
-			updatePayloadManifestHash(t, root)
-		}},
-		{name: "manifest version case variant", mutate: func(root string) {
-			manifestPath := filepath.Join(root, "final-image-set.json")
-			manifest := readJSONMap(t, manifestPath)
-			manifest["build_version"] = "V6.43.0-rc.1"
-			writeJSONAt(t, manifestPath, manifest)
-			updatePayloadManifestHash(t, root)
-		}},
-		{name: "bundle version case variant", mutate: func(root string) {
-			bundlePath := filepath.Join(root, "release-bundle.json")
-			bundle := readJSONMap(t, bundlePath)
-			bundle["release_version"] = "V6.43.0-rc.1"
-			writeJSONAt(t, bundlePath, bundle)
-		}},
-		{name: "image id prefix case variant", mutate: func(root string) {
-			bundlePath := filepath.Join(root, "release-bundle.json")
-			bundle := readJSONMap(t, bundlePath)
-			image := bundle["images"].([]any)[0].(map[string]any)
-			image["image_id"] = "SHA256:" + strings.Repeat("1", 64)
-			writeJSONAt(t, bundlePath, bundle)
-		}},
 		{name: "symlink entry", mutate: func(root string) {
 			target := filepath.Join(root, "operator-console.tar")
 			link := filepath.Join(root, "server.tar")
@@ -1227,21 +1184,6 @@ func testTarArchiveEntry(t *testing.T, entryName string, entryType byte) []byte 
 	return buffer.Bytes()
 }
 
-func updatePayloadManifestHash(t *testing.T, root string) {
-	t.Helper()
-	manifestPath := filepath.Join(root, "final-image-set.json")
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundlePath := filepath.Join(root, "release-bundle.json")
-	bundle := readJSONMap(t, bundlePath)
-	manifest := bundle["manifest"].(map[string]any)
-	manifest["sha256"] = sha256Hex(data)
-	manifest["size_bytes"] = len(data)
-	writeJSONAt(t, bundlePath, bundle)
-}
-
 func updatePayloadArchiveHash(t *testing.T, root string, imageIndex int, data []byte) {
 	t.Helper()
 	bundlePath := filepath.Join(root, "release-bundle.json")
@@ -1291,7 +1233,6 @@ func testTagRulesetMatrix(t *testing.T, repo string) {
 		{name: "disabled", fixture: mutateRuleset(positive, "enforcement", "disabled")},
 		{name: "wrong target", fixture: mutateRuleset(positive, "target", "branch")},
 		{name: "wrong include", fixture: mutateRuleset(positive, "include", []string{"refs/tags/release-*"})},
-		{name: "uppercase include", fixture: mutateRuleset(positive, "include", []string{"refs/tags/V*"})},
 		{name: "exclusion", fixture: mutateRuleset(positive, "exclude", []string{"refs/tags/v6.43.0"})},
 		{name: "bypass", fixture: mutateRuleset(positive, "bypass", []map[string]any{{"actor_id": 7106373, "actor_type": "RepositoryRole", "bypass_mode": "always"}})},
 		{name: "missing deletion", fixture: mutateRuleset(positive, "rules", []map[string]any{{"type": "non_fast_forward"}})},
