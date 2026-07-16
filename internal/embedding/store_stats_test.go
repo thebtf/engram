@@ -113,12 +113,9 @@ func TestStoreStats_EmptyPhysicalTableReturnsZeroValue(t *testing.T) {
 	defer rollback()
 
 	if err := tx.Exec(`
-		CREATE TEMP TABLE content_chunks (
-			memory_id BIGINT NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			model TEXT NOT NULL,
-			embedding VECTOR
-		) ON COMMIT DROP
+		CREATE TEMP TABLE content_chunks
+		(LIKE public.content_chunks)
+		ON COMMIT DROP
 	`).Error; err != nil {
 		t.Fatalf("create empty temporary content_chunks: %v", err)
 	}
