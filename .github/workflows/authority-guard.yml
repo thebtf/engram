@@ -1,0 +1,118 @@
+name: authority-guard
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authority-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  authority-guard:
+    name: authority-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_DEFAULT_BRANCH: main
+      EVENT_ACTION: ${{ github.event.action }}
+      EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+      EVENT_REPOSITORY: ${{ github.repository }}
+      EVENT_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+      EVENT_LABEL: ${{ github.event.label.name }}
+      EVENT_SENDER_LOGIN: ${{ github.event.sender.login }}
+      EVENT_SENDER_ID: ${{ github.event.sender.id }}
+      EVENT_SENDER_TYPE: ${{ github.event.sender.type }}
+    steps:
+      - name: Execute default-branch authority checker against PR data
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+
+          if ($env:EVENT_REPOSITORY -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+            throw 'invalid event repository identity'
+          }
+          if ($env:EVENT_PR_NUMBER -notmatch '^[1-9][0-9]*$') {
+            throw 'invalid pull-request number'
+          }
+          if ($env:EVENT_BASE_SHA -notmatch '^[0-9a-f]{40}$' -or $env:EVENT_HEAD_SHA -notmatch '^[0-9a-f]{40}$') {
+            throw 'invalid event base/head SHA'
+          }
+
+          $root = Join-Path $env:RUNNER_TEMP 'engram-authority-guard'
+          $repo = Join-Path $root 'repository'
+          $trusted = Join-Path $root 'trusted-base'
+          $artifact = Join-Path $root 'authority-result.json'
+          Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $repo,$trusted -Force | Out-Null
+
+          git -C $repo init --quiet
+          git -C $repo remote add origin "$env:GITHUB_SERVER_URL/$env:EVENT_REPOSITORY.git"
+          $baseRemoteRef = "refs/heads/$env:EXPECTED_DEFAULT_BRANCH"
+          $headRemoteRef = "refs/pull/$env:EVENT_PR_NUMBER/head"
+          git -C $repo fetch --no-tags --force origin "+${baseRemoteRef}:refs/authority/bootstrap-base"
+          if ($LASTEXITCODE -ne 0) { throw 'could not fetch trusted default-branch base' }
+          $fetchedBase = (git -C $repo rev-parse 'refs/authority/bootstrap-base^{commit}').Trim()
+          if ($LASTEXITCODE -ne 0 -or $fetchedBase -cne $env:EVENT_BASE_SHA) {
+            throw "default branch moved or event base is stale: event=$env:EVENT_BASE_SHA fetched=$fetchedBase"
+          }
+
+          $validatorPath = 'scripts/production-gates/assert-pr-authority-data-only.ps1'
+          $validatorBlob = (git -C $repo rev-parse "$env:EVENT_BASE_SHA`:$validatorPath").Trim()
+          if ($LASTEXITCODE -ne 0 -or $validatorBlob -notmatch '^[0-9a-f]{40}$') {
+            throw 'trusted base does not contain the authority checker'
+          }
+          $validatorFile = Join-Path $trusted 'assert-pr-authority-data-only.ps1'
+
+          $start = [System.Diagnostics.ProcessStartInfo]::new()
+          $start.FileName = 'git'
+          $start.UseShellExecute = $false
+          $start.RedirectStandardOutput = $true
+          $start.RedirectStandardError = $true
+          foreach ($argument in @('-C', $repo, 'cat-file', 'blob', "$env:EVENT_BASE_SHA`:$validatorPath")) {
+            [void]$start.ArgumentList.Add($argument)
+          }
+          $process = [System.Diagnostics.Process]::new()
+          $process.StartInfo = $start
+          if (-not $process.Start()) { throw 'could not start trusted validator materialization' }
+          $stream = [System.IO.File]::Open($validatorFile, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+          try { $process.StandardOutput.BaseStream.CopyTo($stream) } finally { $stream.Dispose() }
+          $stderr = $process.StandardError.ReadToEnd()
+          $process.WaitForExit()
+          if ($process.ExitCode -ne 0) { throw "could not materialize trusted validator: $stderr" }
+
+          & pwsh -NoProfile -File $validatorFile `
+            -Repository $repo `
+            -Remote origin `
+            -BaseRemoteRef $baseRemoteRef `
+            -BaseSha $env:EVENT_BASE_SHA `
+            -HeadRemoteRef $headRemoteRef `
+            -HeadSha $env:EVENT_HEAD_SHA `
+            -ExpectedDefaultBranch $env:EXPECTED_DEFAULT_BRANCH `
+            -EventAction $env:EVENT_ACTION `
+            -EventLabel ([string]$env:EVENT_LABEL) `
+            -EventRepositoryFullName $env:EVENT_REPOSITORY `
+            -EventHeadRepositoryFullName $env:EVENT_HEAD_REPOSITORY `
+            -ActorLogin $env:EVENT_SENDER_LOGIN `
+            -ActorId ([long]$env:EVENT_SENDER_ID) `
+            -ActorType $env:EVENT_SENDER_TYPE `
+            -ExpectedValidatorGitBlob $validatorBlob `
+            -Artifact $artifact
+          if ($LASTEXITCODE -ne 0) {
+            if (Test-Path -LiteralPath $artifact) { Get-Content -LiteralPath $artifact -Raw | Write-Output }
+            throw 'trusted default-branch authority checker rejected the pull request'
+          }
+          Get-Content -LiteralPath $artifact -Raw | Write-Output

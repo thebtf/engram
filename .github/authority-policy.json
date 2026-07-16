@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "kind": "engram-default-branch-authority-policy",
+  "repository": "thebtf/engram",
+  "default_branch": "main",
+  "protected_paths": {
+    "exact": [
+      ".github/authority-policy.json"
+    ],
+    "prefixes": [
+      ".github/workflows/",
+      "scripts/production-gates/"
+    ]
+  },
+  "trusted_actor": {
+    "login": "thebtf",
+    "id": 7106373,
+    "type": "User"
+  },
+  "transition": {
+    "consumed_epoch": null,
+    "event_base_sha": null
+  },
+  "active_epoch": {
+    "id": "authority-0001",
+    "label": "authority-maintenance:authority-0001",
+    "exact_changes": [
+      {
+        "status": "M",
+        "path": ".github/authority-policy.json"
+      }
+    ],
+    "expected_head_blobs": []
+  }
+}
