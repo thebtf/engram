@@ -1035,6 +1035,7 @@ $lddHash = $null
 $sourceCommit = $null
 $sourceTree = $null
 $buildVersion = $null
+$sourceDateEpoch = $null
 $buildContextRoot = $null
 $buildContext = $null
 $buildContextCleaned = $false
@@ -1301,7 +1302,7 @@ $environmentNames = @(
     'ENGRAM_EMBEDDING_URL', 'ENGRAM_EMBEDDING_MODEL', 'ENGRAM_EMBEDDING_API_KEY',
     'ENGRAM_VNEXT_ENABLED', 'ENGRAM_LIFECYCLE_ENABLED', 'ENGRAM_VNEXT_F_ENABLED',
     'ENGRAM_GRAPH_ENABLED', 'ENGRAM_TEMPORAL_TRUTH_ENABLED',
-    'ENGRAM_CRYSTALLIZATION_ENABLED', 'OPERATOR_CONSOLE_API_DISPLAY_HOST'
+    'ENGRAM_CRYSTALLIZATION_ENABLED', 'OPERATOR_CONSOLE_API_DISPLAY_HOST', 'SOURCE_DATE_EPOCH'
 )
 $savedEnvironment = [ordered]@{}
 foreach ($name in $environmentNames) {
@@ -1326,6 +1327,11 @@ try {
 
     $sourceCommit = Invoke-CapturedNative -File 'git' -Arguments @('rev-parse', 'HEAD')
     $sourceTree = Invoke-CapturedNative -File 'git' -Arguments @('rev-parse', 'HEAD^{tree}')
+    $sourceDateEpoch = Invoke-CapturedNative -File 'git' -Arguments @('show', '-s', '--format=%ct', 'HEAD')
+    if ($sourceDateEpoch -notmatch '^[1-9][0-9]*$') {
+        throw "Git returned an invalid source commit epoch: $sourceDateEpoch"
+    }
+    $env:SOURCE_DATE_EPOCH = $sourceDateEpoch
     $buildVersion = if ([string]::IsNullOrWhiteSpace($Version)) {
         Assert-CanonicalVersion -Value "sha-$sourceCommit"
     } else {
@@ -1351,8 +1357,11 @@ try {
         throw 'Tracked build context unexpectedly contains Git metadata or credentials.'
     }
 
+    # BuildKit's default provenance attestation contains per-run metadata and changes --iidfile identity.
+    # docker image save/load does not preserve that attestation, so release provenance remains in the
+    # validated immutable bundle while SOURCE_DATE_EPOCH stabilizes the loadable image configuration.
     Invoke-LoggedNative -File 'docker' -Arguments @(
-        'buildx', 'build', '--pull', '--no-cache', '--load', '--platform', $Platform,
+        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--load', '--platform', $Platform,
         '--target', 'server', '--build-arg', "VERSION=$buildVersion",
         '--label', 'org.opencontainers.image.source=https://github.com/thebtf/engram',
         '--label', "org.opencontainers.image.revision=$sourceCommit",
@@ -1361,7 +1370,7 @@ try {
     ) -LogPath (Join-Path $artifactPath 'server/build.log')
 
     Invoke-LoggedNative -File 'docker' -Arguments @(
-        'buildx', 'build', '--pull', '--no-cache', '--load', '--platform', $Platform,
+        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--load', '--platform', $Platform,
         '--target', 'operator-console', '--build-arg', "VERSION=$buildVersion",
         '--label', 'org.opencontainers.image.source=https://github.com/thebtf/engram',
         '--label', "org.opencontainers.image.revision=$sourceCommit",
@@ -1371,7 +1380,7 @@ try {
     ) -LogPath (Join-Path $artifactPath 'operator-console/build.log')
 
     Invoke-LoggedNative -File 'docker' -Arguments @(
-        'buildx', 'build', '--pull', '--no-cache', '--load', '--platform', $Platform,
+        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--load', '--platform', $Platform,
         '-f', (Join-Path $buildContext 'deploy/postgres/Dockerfile'),
         '--label', 'org.opencontainers.image.source=https://github.com/thebtf/engram',
         '--label', "org.opencontainers.image.revision=$sourceCommit",
@@ -1604,6 +1613,7 @@ try {
         completed_at = (Get-Date).ToUniversalTime().ToString('o')
         source_parent_commit = $sourceCommit
         source_parent_tree = $sourceTree
+        source_date_epoch = $sourceDateEpoch
         build_version = $buildVersion
         source_worktree_dirty = $false
         build_context = 'git-archive-tracked-files-only'
