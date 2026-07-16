@@ -96,6 +96,9 @@ func TestOperatorConsoleRuntimeTargetContract(t *testing.T) {
 		"operator-console:",
 		"${ENGRAM_OPERATOR_IMAGE:?set ENGRAM_OPERATOR_IMAGE from the immutable release manifest}",
 		"NUXT_OPERATOR_API_TARGET: \"http://server:37777\"",
+		"ENGRAM_LLM_URL: \"${ENGRAM_LLM_URL:-}\"",
+		"ENGRAM_LLM_MODEL: \"${ENGRAM_LLM_MODEL:-chat-default}\"",
+		"ENGRAM_LLM_API_KEY: \"${ENGRAM_LLM_API_KEY:-}\"",
 	)
 	requireFileNotContains(t, filepath.Join(repo, "deploy", "docker-compose.runtime.yml"),
 		"operator-web:", "NUXT_ENGRAM_API_TARGET")
@@ -330,6 +333,9 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		compose := readFile(t, composePath)
 		for _, required := range []string{
 			"${ENGRAM_SERVER_IMAGE:?", "${ENGRAM_OPERATOR_IMAGE:?", "${ENGRAM_POSTGRES_IMAGE:?",
+			"ENGRAM_LLM_URL: \"${ENGRAM_LLM_URL:-}\"",
+			"ENGRAM_LLM_MODEL: \"${ENGRAM_LLM_MODEL:-chat-default}\"",
+			"ENGRAM_LLM_API_KEY: \"${ENGRAM_LLM_API_KEY:-}\"",
 		} {
 			if !strings.Contains(compose, required) {
 				t.Fatalf("%s does not require immutable release-manifest identity %q", composePath, required)
@@ -341,6 +347,22 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 			}
 		}
 	}
+	requireFileContains(t, filepath.Join(repo, "docker-compose.yml"),
+		"target: operator-console",
+		"VERSION: ${ENGRAM_BUILD_VERSION:?set ENGRAM_BUILD_VERSION",
+	)
+	requireFileContains(t, filepath.Join(repo, "README.md"),
+		"ENGRAM_SERVER_IMAGE=engram-local-server",
+		"ENGRAM_OPERATOR_IMAGE=engram-local-operator-console",
+		"ENGRAM_POSTGRES_IMAGE=engram-local-postgres",
+		"ENGRAM_BUILD_VERSION=sha-$commit",
+	)
+	requireFileContains(t, filepath.Join(repo, "docs", "DEPLOYMENT.md"),
+		"--cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER",
+		"POSTGRES_MIGRATION_IMAGE='ghcr.io/thebtf/engram-postgres@sha256:<postgres-manifest-digest>'",
+		"chown -R 70:70 /var/lib/postgresql/data && chmod 0700 /var/lib/postgresql/data",
+		"The `stat` command must print `70:70:700`",
+	)
 	verificationPath := filepath.Join(repo, ".github", "workflows", "docker.yaml")
 	publisherPath := filepath.Join(repo, ".github", "workflows", "docker-publish.yml")
 	for _, workflowPath := range []string{verificationPath, publisherPath} {
@@ -388,6 +410,7 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		"$GITHUB_PATH",
 		"trivy_bin/trivy\" --version",
 		"Mode BuildAndScan",
+		"include-hidden-files: true",
 	} {
 		if !strings.Contains(verification, fragment) {
 			t.Fatalf("unprivileged Docker workflow lacks verification contract %q", fragment)
@@ -434,6 +457,9 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		"publish-images:",
 		"needs: prepare-release",
 		"ref: main",
+		"Install Trivy",
+		"trivy_0.72.0_Linux-64bit.tar.gz",
+		"bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea",
 		"Mode ValidateWorkflowRun",
 		"Mode BuildAndScan",
 		"Mode ValidateArtifactMetadata",
@@ -458,6 +484,11 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		if !strings.Contains(publisher, fragment) {
 			t.Fatalf("trusted workflow_run publisher lacks contract %q", fragment)
 		}
+	}
+	publisherTrivyInstallIndex := strings.Index(publisher, "Install Trivy")
+	publisherBuildAndScanIndex := strings.Index(publisher, "Build, scan, exercise, and export exact image data without package authority")
+	if publisherTrivyInstallIndex < 0 || publisherBuildAndScanIndex < 0 || publisherTrivyInstallIndex > publisherBuildAndScanIndex {
+		t.Fatal("Trivy must be installed before release image preparation")
 	}
 	for _, forbidden := range []string{
 		"workflow_dispatch:", "./candidate/scripts/", "overwrite: true",

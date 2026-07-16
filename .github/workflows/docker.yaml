@@ -77,5 +77,6 @@ jobs:
         with:
           name: image-verification-${{ github.run_id }}-${{ github.run_attempt }}
           path: .agent/reports/evidence/production-ready/image-remediation-r2/workflow-verify-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14

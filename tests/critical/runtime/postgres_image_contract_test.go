@@ -126,8 +126,12 @@ func TestPostgresImageContract(t *testing.T) {
 		startPostgresTmpfs(t, name, image)
 		waitHealthy(t, name, 90*time.Second)
 		cmd := execDocker("exec", name, "psql", "-v", "ON_ERROR_STOP=1", "-U", "engram", "-d", "engram", "-Atc", "SELECT COUNT(*) FROM volatile_marker")
-		if out, err := cmd.CombinedOutput(); err == nil {
+		out, err := cmd.CombinedOutput()
+		if err == nil {
 			t.Fatalf("tmpfs-only PGDATA unexpectedly retained marker: %q", out)
+		}
+		if !strings.Contains(string(out), `relation "volatile_marker" does not exist`) {
+			t.Fatalf("tmpfs-only PGDATA failed for an unexpected reason: %q (err: %v)", out, err)
 		}
 	})
 }

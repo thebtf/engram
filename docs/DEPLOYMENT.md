@@ -119,10 +119,35 @@ curl --fail http://localhost:3000/api/ready
 ## Backup, upgrade, and rollback
 
 Before upgrade, create a PostgreSQL logical backup and prove it restores into a
-fresh database. Keep the named data volumes when recreating containers. Volumes
-created by the former UID 999 PostgreSQL image require the documented one-time
-ownership migration to UID/GID 70 before the new database image can start; the
-critical runtime suite proves the fail-closed and migrated cases.
+fresh database. Keep the named data volumes when recreating containers.
+
+### One-time migration from PostgreSQL UID 999
+
+Volumes created by the former `pgvector/pgvector:pg17` image are owned by UID
+999. The new image runs as UID/GID 70 and intentionally fails closed until the
+volume is migrated. Stop the stack without deleting volumes, identify the
+Compose `pgdata` volume (normally `<project>_pgdata`), then run the bounded
+ownership repair with the exact new PostgreSQL image identity:
+
+```bash
+POSTGRES_MIGRATION_IMAGE='ghcr.io/thebtf/engram-postgres@sha256:<postgres-manifest-digest>'
+docker compose -f deploy/docker-compose.runtime.yml down
+docker volume ls --format '{{.Name}}'
+docker run --rm --user 0:0 \
+  --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+  --security-opt no-new-privileges:true --entrypoint /bin/sh \
+  -v <project>_pgdata:/var/lib/postgresql/data \
+  "$POSTGRES_MIGRATION_IMAGE" \
+  -c 'chown -R 70:70 /var/lib/postgresql/data && chmod 0700 /var/lib/postgresql/data'
+docker run --rm --user 0:0 --cap-drop ALL --entrypoint /bin/sh \
+  -v <project>_pgdata:/var/lib/postgresql/data \
+  "$POSTGRES_MIGRATION_IMAGE" -c "stat -c '%u:%g:%a' /var/lib/postgresql/data"
+docker compose -f deploy/docker-compose.runtime.yml up -d
+```
+
+The `stat` command must print `70:70:700`. Never add `-v` to the `down` command;
+that would delete the database volume. The critical runtime suite proves both
+the pre-migration fail-closed behavior and marker preservation after migration.
 
 Rollback uses the three digest identities from the preceding accepted release
 manifest. Change all three `ENGRAM_*_IMAGE` values as one set, recreate the
