@@ -159,15 +159,15 @@ function Assert-CanonicalVersion {
 
     $releasePattern = '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$'
     $commitPattern = '^sha-[0-9a-f]{40}$'
-    if ($Value -match $commitPattern) {
+    if ($Value -cmatch $commitPattern) {
         return $Value
     }
-    if ($Value -notmatch $releasePattern) {
+    if ($Value -cnotmatch $releasePattern) {
         throw "Version is not a canonical Docker-safe release or immutable commit identity: $Value"
     }
     if ($Matches[4]) {
         foreach ($identifier in $Matches[4].Split('.')) {
-            if ($identifier -match '^[0-9]+$' -and $identifier.Length -gt 1 -and $identifier.StartsWith('0', [StringComparison]::Ordinal)) {
+            if ($identifier -cmatch '^[0-9]+$' -and $identifier.Length -gt 1 -and $identifier.StartsWith('0', [StringComparison]::Ordinal)) {
                 throw "Numeric prerelease identifiers may not contain leading zeroes: $Value"
             }
         }
@@ -182,7 +182,7 @@ function Assert-CanonicalReleaseRef {
         throw "Release publication requires refs/tags/v*: $Ref"
     }
     $value = $Ref.Substring('refs/tags/'.Length)
-    if ((Assert-CanonicalVersion -Value $value) -notmatch '^v') {
+    if ((Assert-CanonicalVersion -Value $value) -cnotmatch '^v') {
         throw "Release publication requires a canonical SemVer tag: $Ref"
     }
     return $value
@@ -225,7 +225,7 @@ function Get-TagRulesets {
     }
     $details = @()
     foreach ($summary in $summaries) {
-        if ($summary.target -ne 'tag' -or $summary.enforcement -ne 'active') { continue }
+        if ($summary.target -cne 'tag' -or $summary.enforcement -cne 'active') { continue }
         $uri = "$($GitHubApiUrl.TrimEnd('/'))/repos/$Repository/rulesets/$($summary.id)"
         $details += Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
     }
@@ -237,13 +237,13 @@ function Assert-ImmutableReleaseRuleset {
 
     $matches = @()
     foreach ($ruleset in $Rulesets) {
-        if ($ruleset.target -ne 'tag' -or $ruleset.enforcement -ne 'active') { continue }
+        if ($ruleset.target -cne 'tag' -or $ruleset.enforcement -cne 'active') { continue }
         $includes = @($ruleset.conditions.ref_name.include)
         $excludes = @($ruleset.conditions.ref_name.exclude)
-        if ($includes.Count -ne 1 -or $includes[0] -ne 'refs/tags/v*' -or $excludes.Count -ne 0) { continue }
+        if ($includes.Count -ne 1 -or $includes[0] -cne 'refs/tags/v*' -or $excludes.Count -ne 0) { continue }
         if (@($ruleset.bypass_actors).Count -ne 0) { continue }
         $types = @($ruleset.rules | ForEach-Object { [string]$_.type })
-        if ($types -notcontains 'deletion' -or $types -notcontains 'non_fast_forward') { continue }
+        if ($types -cnotcontains 'deletion' -or $types -cnotcontains 'non_fast_forward') { continue }
         $matches += $ruleset
     }
     if ($matches.Count -ne 1) {
@@ -257,13 +257,13 @@ function Assert-ProtectedMainRuleset {
 
     $matches = @()
     foreach ($ruleset in $Rulesets) {
-        if ($ruleset.target -ne 'branch' -or $ruleset.enforcement -ne 'active') { continue }
+        if ($ruleset.target -cne 'branch' -or $ruleset.enforcement -cne 'active') { continue }
         $includes = @($ruleset.conditions.ref_name.include)
         $excludes = @($ruleset.conditions.ref_name.exclude)
-        if ($includes.Count -ne 1 -or $includes[0] -ne "refs/heads/$ExpectedDefaultBranch" -or $excludes.Count -ne 0) { continue }
+        if ($includes.Count -ne 1 -or $includes[0] -cne "refs/heads/$ExpectedDefaultBranch" -or $excludes.Count -ne 0) { continue }
         $types = @($ruleset.rules | ForEach-Object { [string]$_.type })
-        if ($types -notcontains 'deletion' -or $types -notcontains 'non_fast_forward') { continue }
-        $statusRules = @($ruleset.rules | Where-Object { $_.type -eq 'required_status_checks' })
+        if ($types -cnotcontains 'deletion' -or $types -cnotcontains 'non_fast_forward') { continue }
+        $statusRules = @($ruleset.rules | Where-Object { $_.type -ceq 'required_status_checks' })
         if ($statusRules.Count -ne 1 -or -not [bool]$statusRules[0].parameters.strict_required_status_checks_policy) { continue }
         $authorityChecks = @($statusRules[0].parameters.required_status_checks | Where-Object {
             [string]$_.context -ceq 'authority-guard'
@@ -275,7 +275,7 @@ function Assert-ProtectedMainRuleset {
         $bypassActors = @($ruleset.bypass_actors)
         if ($bypassActors.Count -ne 1) { continue }
         $recoveryActor = $bypassActors[0]
-        if ($recoveryActor.actor_type -ne 'User' -or [int64]$recoveryActor.actor_id -ne 7106373 -or $recoveryActor.bypass_mode -ne 'pull_request') { continue }
+        if ($recoveryActor.actor_type -cne 'User' -or [int64]$recoveryActor.actor_id -ne 7106373 -or $recoveryActor.bypass_mode -cne 'pull_request') { continue }
         $matches += $ruleset
     }
     if ($matches.Count -ne 1) {
@@ -320,7 +320,7 @@ function Get-LiveRulesetDetails {
     for ($page = 1; ; $page++) {
         $batch = @(Invoke-GitHubApi -Path "/repos/$Repository/rulesets?per_page=100&page=$page")
         foreach ($summary in $batch) {
-            if ($summary.target -ne $Target -or $summary.enforcement -ne 'active') { continue }
+            if ($summary.target -cne $Target -or $summary.enforcement -cne 'active') { continue }
             $details += Invoke-GitHubApi -Path "/repos/$Repository/rulesets/$($summary.id)"
         }
         if ($batch.Count -lt 100) { break }
@@ -390,31 +390,31 @@ function Assert-WorkflowRunFieldParity {
 }
 
 function Invoke-ValidateWorkflowRun {
-    if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+    if ($Repository -cnotmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
         throw "Repository must be owner/name: $Repository"
     }
     $inputs = Get-WorkflowRunValidationInputs
     $event = $inputs.event
     $eventRun = $event.workflow_run
     $apiRun = $inputs.api_run
-    if ($event.action -ne 'completed') { throw 'Publisher accepts only workflow_run/completed.' }
+    if ($event.action -cne 'completed') { throw 'Publisher accepts only workflow_run/completed.' }
     Assert-WorkflowRunFieldParity -EventRun $eventRun -ApiRun $apiRun
-    if ($apiRun.name -ne $ExpectedWorkflowName -or $apiRun.path -ne $TrustedWorkflowPath) {
+    if ($apiRun.name -cne $ExpectedWorkflowName -or $apiRun.path -cne $TrustedWorkflowPath) {
         throw 'Triggering run is not the named unprivileged Docker verification workflow.'
     }
-    if ($apiRun.event -ne 'push' -or $apiRun.status -ne 'completed' -or $apiRun.conclusion -ne 'success') {
+    if ($apiRun.event -cne 'push' -or $apiRun.status -cne 'completed' -or $apiRun.conclusion -cne 'success') {
         throw 'Triggering workflow must be a successful completed push verification.'
     }
-    if ($apiRun.head_repository.full_name -ne $Repository -or $apiRun.repository.full_name -ne $Repository -or $event.repository.full_name -ne $Repository) {
+    if ($apiRun.head_repository.full_name -cne $Repository -or $apiRun.repository.full_name -cne $Repository -or $event.repository.full_name -cne $Repository) {
         throw 'Triggering run must originate from the same repository.'
     }
-    if ($inputs.repository.full_name -ne $Repository -or $inputs.repository.default_branch -ne $ExpectedDefaultBranch) {
+    if ($inputs.repository.full_name -cne $Repository -or $inputs.repository.default_branch -cne $ExpectedDefaultBranch) {
         throw 'Repository/default-branch API identity mismatch.'
     }
     if ([int64]$apiRun.workflow_id -ne [int64]$inputs.trusted_workflow.id -or
-        $inputs.trusted_workflow.path -ne $TrustedWorkflowPath -or
-        $inputs.trusted_workflow.name -ne $ExpectedWorkflowName -or
-        $inputs.trusted_workflow.state -ne 'active') {
+        $inputs.trusted_workflow.path -cne $TrustedWorkflowPath -or
+        $inputs.trusted_workflow.name -cne $ExpectedWorkflowName -or
+        $inputs.trusted_workflow.state -cne 'active') {
         throw 'Triggering workflow ID/path/name is not the active trusted default-branch workflow.'
     }
 
@@ -424,10 +424,10 @@ function Invoke-ValidateWorkflowRun {
     $mainRuleset = Assert-ProtectedMainRuleset -Rulesets @($inputs.branch_rulesets)
 
     if ($null -ne $inputs.git) {
-        if ([string]$inputs.git.tag_commit -ne $commit) {
+        if ([string]$inputs.git.tag_commit -cne $commit) {
             throw 'Fixture tag does not peel to workflow_run head_sha.'
         }
-        if (@($inputs.git.main_ancestors) -notcontains $commit) {
+        if (@($inputs.git.main_ancestors) -cnotcontains $commit) {
             throw 'Fixture release commit is not an ancestor of protected main.'
         }
     } else {
@@ -441,7 +441,7 @@ function Invoke-ValidateWorkflowRun {
         Invoke-GitText -Arguments @('fetch', '--no-tags', '--force', 'origin', "+$tagRef`:$guardRef") | Out-Null
         Invoke-GitText -Arguments @('fetch', '--no-tags', '--force', 'origin', "+refs/heads/$ExpectedDefaultBranch`:refs/remotes/origin/$ExpectedDefaultBranch") | Out-Null
         $peeled = (Invoke-GitText -Arguments @('rev-parse', '--verify', "$guardRef^{commit}")).output.ToLowerInvariant()
-        if ($peeled -ne $commit) {
+        if ($peeled -cne $commit) {
             throw "Protected release tag peels to $peeled, not workflow_run head_sha $commit."
         }
         $ancestry = Invoke-GitText -Arguments @('merge-base', '--is-ancestor', $commit, "refs/remotes/origin/$ExpectedDefaultBranch") -AllowExitOne
@@ -490,10 +490,10 @@ function Normalize-Sha256Digest {
     param([Parameter(Mandatory = $true)][string]$Value, [Parameter(Mandatory = $true)][string]$Name)
 
     $normalized = $Value.ToLowerInvariant()
-    if ($normalized -match '^[0-9a-f]{64}$') {
+    if ($normalized -cmatch '^[0-9a-f]{64}$') {
         $normalized = "sha256:$normalized"
     }
-    if ($normalized -notmatch '^sha256:[0-9a-f]{64}$') {
+    if ($normalized -cnotmatch '^sha256:[0-9a-f]{64}$') {
         throw "$Name must be a SHA-256 digest."
     }
     return $normalized
@@ -520,9 +520,9 @@ function Get-ArtifactCensus {
 }
 
 function Invoke-ValidateArtifactMetadata {
-    if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw "Repository must be owner/name: $Repository" }
+    if ($Repository -cnotmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw "Repository must be owner/name: $Repository" }
     if ($ExpectedArtifactID -le 0 -or $CurrentRunID -le 0) { throw 'ExpectedArtifactID and CurrentRunID must be positive.' }
-    if ($ExpectedArtifactName -notmatch '^engram-release-payload-[0-9]+-[0-9]+$') {
+    if ($ExpectedArtifactName -cnotmatch '^engram-release-payload-[0-9]+-[0-9]+$') {
         throw 'ExpectedArtifactName must be the fixed publisher-run payload name.'
     }
     $expectedDigest = Normalize-Sha256Digest -Value $ExpectedArtifactDigest -Name 'ExpectedArtifactDigest'
@@ -537,7 +537,7 @@ function Invoke-ValidateArtifactMetadata {
     }
     if ([bool]$artifact.expired) { throw 'Release payload artifact is expired.' }
     $apiDigest = Normalize-Sha256Digest -Value ([string]$artifact.digest) -Name 'artifact API digest'
-    if ($apiDigest -ne $expectedDigest) { throw 'Artifact API digest does not match the immutable upload-artifact job output.' }
+    if ($apiDigest -cne $expectedDigest) { throw 'Artifact API digest does not match the immutable upload-artifact job output.' }
     if ($null -eq $artifact.workflow_run -or [int64]$artifact.workflow_run.id -ne $CurrentRunID) {
         throw 'Artifact provenance does not bind to the current publisher workflow run.'
     }
@@ -564,7 +564,7 @@ function Assert-RegularFileEnvelope {
     $entries = @(Get-ChildItem -Force -LiteralPath $resolvedRoot)
     $actualNames = @($entries | ForEach-Object { $_.Name } | Sort-Object)
     $wantedNames = @($ExpectedNames | Sort-Object)
-    if ($actualNames.Count -ne $wantedNames.Count -or @(Compare-Object -ReferenceObject $wantedNames -DifferenceObject $actualNames).Count -ne 0) {
+    if ($actualNames.Count -ne $wantedNames.Count -or @(Compare-Object -CaseSensitive -ReferenceObject $wantedNames -DifferenceObject $actualNames).Count -ne 0) {
         throw "Payload envelope must contain exactly: $($wantedNames -join ', ')."
     }
     foreach ($entry in $entries) {
@@ -605,19 +605,19 @@ function Read-AndValidatePayload {
     if ([int]$bundle.schema_version -ne 1) { throw 'Unsupported release bundle schema.' }
     $commit = Assert-FullCommitSha -Value $ExpectedSha -Name 'ExpectedSha'
     $version = Assert-CanonicalVersion -Value $ReleaseVersion
-    if ([string]$bundle.source_commit -ne $commit -or [string]$bundle.release_version -ne $version) {
+    if ([string]$bundle.source_commit -cne $commit -or [string]$bundle.release_version -cne $version) {
         throw 'Release bundle commit/version does not match validated workflow provenance.'
     }
     if ([string]$bundle.manifest.file -cne 'final-image-set.json') { throw 'Release bundle manifest path is not canonical.' }
     $manifestPath = Join-Path $root 'final-image-set.json'
     $manifestBytes = [IO.File]::ReadAllBytes($manifestPath)
     $manifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash.ToLowerInvariant()
-    if ((Normalize-Sha256Digest -Value ([string]$bundle.manifest.sha256) -Name 'manifest digest') -ne "sha256:$manifestHash" -or
+    if ((Normalize-Sha256Digest -Value ([string]$bundle.manifest.sha256) -Name 'manifest digest') -cne "sha256:$manifestHash" -or
         [int64]$bundle.manifest.size_bytes -ne $manifestBytes.LongLength) {
         throw 'Release bundle manifest hash/size mismatch.'
     }
     $manifest = [Text.Encoding]::UTF8.GetString($manifestBytes) | ConvertFrom-Json -Depth 100
-    if ([string]$manifest.status -ne 'PASS' -or [string]$manifest.source_parent_commit -ne $commit -or [string]$manifest.build_version -ne $version) {
+    if ([string]$manifest.status -cne 'PASS' -or [string]$manifest.source_parent_commit -cne $commit -or [string]$manifest.build_version -cne $version) {
         throw 'Acceptance manifest is not a PASS for the validated commit/version.'
     }
     $definitions = @(
@@ -637,13 +637,13 @@ function Read-AndValidatePayload {
         }
         $imageID = [string]$image.image_id
         $manifestID = [string]$manifest.image_ids.PSObject.Properties[$definition.manifest_property].Value
-        if ($imageID -notmatch '^sha256:[0-9a-f]{64}$' -or $imageID -ne $manifestID) {
+        if ($imageID -cnotmatch '^sha256:[0-9a-f]{64}$' -or $imageID -cne $manifestID) {
             throw "Release bundle image ID mismatch for $($definition.name)."
         }
         $archivePath = Join-Path $root $definition.archive
         $archiveItem = Get-Item -Force -LiteralPath $archivePath
         $archiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
-        if ((Normalize-Sha256Digest -Value ([string]$image.sha256) -Name "$($definition.name) archive digest") -ne "sha256:$archiveHash" -or
+        if ((Normalize-Sha256Digest -Value ([string]$image.sha256) -Name "$($definition.name) archive digest") -cne "sha256:$archiveHash" -or
             [int64]$image.size_bytes -ne $archiveItem.Length) {
             throw "Release bundle archive hash/size mismatch for $($definition.name)."
         }
@@ -675,8 +675,8 @@ function Invoke-LoadPayload {
         $inspectRaw = & docker image inspect $image.image_id 2>&1
         if ($LASTEXITCODE -ne 0) { throw "Loaded archive does not contain exact image ID $($image.image_id)." }
         $inspect = @((($inspectRaw | Out-String) | ConvertFrom-Json -Depth 100))[0]
-        if ([string]$inspect.Config.Labels.'org.opencontainers.image.revision' -ne $validated.source_commit -or
-            [string]$inspect.Config.Labels.'org.opencontainers.image.version' -ne $validated.release_version) {
+        if ([string]$inspect.Config.Labels.'org.opencontainers.image.revision' -cne $validated.source_commit -or
+            [string]$inspect.Config.Labels.'org.opencontainers.image.version' -cne $validated.release_version) {
             throw "Loaded exact image $($image.image_id) lacks validated revision/version labels."
         }
     }
@@ -700,15 +700,15 @@ function Invoke-ValidatePublicationEvidence {
             throw 'Publisher evidence does not cover all six immutable destinations and the external package-admin boundary.'
         }
     }
-    if ([string]$preflight.acceptance_manifest_sha256 -notmatch '^sha256:[0-9a-f]{64}$' -or
-        [string]$preflight.acceptance_manifest_sha256 -ne [string]$publication.acceptance_manifest_sha256 -or
-        [string]$payload.manifest_sha256 -ne [string]$publication.acceptance_manifest_sha256) {
+    if ([string]$preflight.acceptance_manifest_sha256 -cnotmatch '^sha256:[0-9a-f]{64}$' -or
+        [string]$preflight.acceptance_manifest_sha256 -cne [string]$publication.acceptance_manifest_sha256 -or
+        [string]$payload.manifest_sha256 -cne [string]$publication.acceptance_manifest_sha256) {
         throw 'Publisher evidence does not remain bound to one exact acceptance manifest.'
     }
     foreach ($destination in @($publication.destinations)) {
-        if ($destination.action -notin @('pushed', 'verified-noop') -or
-            [string]$destination.config_digest -notmatch '^sha256:[0-9a-f]{64}$' -or
-            [string]$destination.manifest_digest -notmatch '^sha256:[0-9a-f]{64}$') {
+        if ($destination.action -cnotin @('pushed', 'verified-noop') -or
+            [string]$destination.config_digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or
+            [string]$destination.manifest_digest -cnotmatch '^sha256:[0-9a-f]{64}$') {
             throw "Publisher evidence contains an incomplete destination readback: $($destination.reference)"
         }
     }
@@ -832,7 +832,7 @@ function New-PublicationPlan {
     )
 
     $validatedVersion = Assert-CanonicalVersion -Value $ReleaseVersion
-    if ($validatedVersion -notmatch '^v') {
+    if ($validatedVersion -cnotmatch '^v') {
         throw 'Publication requires a canonical release version, not a commit-only version.'
     }
     $sourceCommit = Assert-FullCommitSha -Value ([string]$Manifest.source_parent_commit) -Name 'manifest source_parent_commit'
@@ -843,7 +843,7 @@ function New-PublicationPlan {
     )
     $destinations = @()
     foreach ($image in $imageDefinitions) {
-        if ($image.id -notmatch '^sha256:[0-9a-f]{64}$') {
+        if ($image.id -cnotmatch '^sha256:[0-9a-f]{64}$') {
             throw "Manifest contains an invalid exact image ID for $($image.name): $($image.id)"
         }
         foreach ($tag in @($validatedVersion, "sha-$sourceCommit")) {
@@ -853,7 +853,7 @@ function New-PublicationPlan {
             } else {
                 Get-LiveRemoteIdentity -Reference $reference
             }
-            if ($remote.exists -and $remote.config_digest -ne $image.id) {
+            if ($remote.exists -and $remote.config_digest -cne $image.id) {
                 throw "Destination $reference already resolves to $($remote.config_digest), not exact scanned image $($image.id); refusing every write."
             }
             $destinations += [ordered]@{
@@ -879,7 +879,7 @@ function Invoke-ValidateRelease {
     $version = Assert-CanonicalReleaseRef -Ref $ReleaseRef
     $expected = Assert-FullCommitSha -Value $ExpectedSha -Name 'ExpectedSha'
     $actual = Assert-FullCommitSha -Value $ActualSha -Name 'ActualSha'
-    if ($expected -ne $actual) {
+    if ($expected -cne $actual) {
         throw "Live release tag peels to $actual, expected workflow commit $expected."
     }
     $ruleset = Assert-ImmutableReleaseRuleset -Rulesets @(Get-TagRulesets)
@@ -936,12 +936,12 @@ function Invoke-Publish {
     }
     Assert-TrustedOutputRoot | Out-Null
     $inputs = Read-PublicationInputs
-    if ([string]$inputs.manifest.status -ne 'PASS') {
+    if ([string]$inputs.manifest.status -cne 'PASS') {
         throw 'Publication requires a PASS image acceptance manifest produced before registry login.'
     }
     $validatedCommit = Assert-FullCommitSha -Value $ExpectedSha -Name 'ExpectedSha'
     $manifestCommit = Assert-FullCommitSha -Value ([string]$inputs.manifest.source_parent_commit) -Name 'manifest source_parent_commit'
-    if ($manifestCommit -ne $validatedCommit) {
+    if ($manifestCommit -cne $validatedCommit) {
         throw "Trusted manifest commit $manifestCommit does not match validated workflow_run commit $validatedCommit."
     }
     $plan = New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $null
@@ -957,7 +957,7 @@ function Invoke-Publish {
     # All six destinations were inspected above. No registry write occurs until
     # every mismatch check has passed. This is a repository single-writer model,
     # not an atomic registry compare-and-swap claim.
-    foreach ($destination in @($plan.destinations | Where-Object { $_.action -eq 'push' })) {
+    foreach ($destination in @($plan.destinations | Where-Object { $_.action -ceq 'push' })) {
         & docker tag $destination.config_digest $destination.reference
         if ($LASTEXITCODE -ne 0) { throw "Local exact-ID tag failed: $($destination.reference)" }
         & docker push $destination.reference
@@ -966,11 +966,11 @@ function Invoke-Publish {
 
     foreach ($destination in $plan.destinations) {
         $remote = Get-LiveRemoteIdentity -Reference $destination.reference
-        if (-not $remote.exists -or $remote.config_digest -ne $destination.config_digest) {
+        if (-not $remote.exists -or $remote.config_digest -cne $destination.config_digest) {
             throw "Post-write readback mismatch for $($destination.reference)."
         }
         $destination.manifest_digest = $remote.manifest_digest
-        $destination.action = if ($destination.action -eq 'push') { 'pushed' } else { 'verified-noop' }
+        $destination.action = if ($destination.action -ceq 'push') { 'pushed' } else { 'verified-noop' }
     }
     $plan.completed_at = (Get-Date).ToUniversalTime().ToString('o')
     if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
@@ -1035,6 +1035,7 @@ $lddHash = $null
 $sourceCommit = $null
 $sourceTree = $null
 $buildVersion = $null
+$sourceDateEpoch = $null
 $buildContextRoot = $null
 $buildContext = $null
 $buildContextCleaned = $false
@@ -1137,10 +1138,10 @@ function Wait-Healthy {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
         $status = (& docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' $Container 2>$null).Trim()
-        if ($LASTEXITCODE -eq 0 -and $status -eq 'healthy') {
+        if ($LASTEXITCODE -eq 0 -and $status -ceq 'healthy') {
             return
         }
-        if ($status -in @('exited', 'dead')) {
+        if ($status -cin @('exited', 'dead')) {
             $logs = & docker logs --tail 80 $Container 2>&1
             throw "Container $Container reached $status before healthy: $logs"
         }
@@ -1171,7 +1172,7 @@ function Get-PublishedUrl {
 function Assert-ReadyJson {
     param([Parameter(Mandatory = $true)][string]$Url)
     $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 -Uri $Url
-    if ($response.StatusCode -ne 200 -or $response.Content.Trim() -ne '{"status":"ready"}') {
+    if ($response.StatusCode -ne 200 -or $response.Content.Trim() -cne '{"status":"ready"}') {
         throw "Semantic readiness mismatch at $Url`: status=$($response.StatusCode) body=$($response.Content)"
     }
 }
@@ -1205,7 +1206,7 @@ function Wait-LivenessReady {
     do {
         try {
             $health = Invoke-RestMethod -TimeoutSec 5 -Uri $Url
-            if ($health.status -eq 'ready') {
+            if ($health.status -ceq 'ready') {
                 return
             }
             $lastError = "status=$($health.status)"
@@ -1231,7 +1232,7 @@ function Get-SarifResultCount {
     $sarif = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json -Depth 100
     $results = @(
         foreach ($run in @($sarif.runs)) {
-            if ($run.PSObject.Properties.Name -contains 'results') {
+            if ($run.PSObject.Properties.Name -ccontains 'results') {
                 @($run.results)
             }
         }
@@ -1301,7 +1302,7 @@ $environmentNames = @(
     'ENGRAM_EMBEDDING_URL', 'ENGRAM_EMBEDDING_MODEL', 'ENGRAM_EMBEDDING_API_KEY',
     'ENGRAM_VNEXT_ENABLED', 'ENGRAM_LIFECYCLE_ENABLED', 'ENGRAM_VNEXT_F_ENABLED',
     'ENGRAM_GRAPH_ENABLED', 'ENGRAM_TEMPORAL_TRUTH_ENABLED',
-    'ENGRAM_CRYSTALLIZATION_ENABLED', 'OPERATOR_CONSOLE_API_DISPLAY_HOST'
+    'ENGRAM_CRYSTALLIZATION_ENABLED', 'OPERATOR_CONSOLE_API_DISPLAY_HOST', 'SOURCE_DATE_EPOCH'
 )
 $savedEnvironment = [ordered]@{}
 foreach ($name in $environmentNames) {
@@ -1326,6 +1327,11 @@ try {
 
     $sourceCommit = Invoke-CapturedNative -File 'git' -Arguments @('rev-parse', 'HEAD')
     $sourceTree = Invoke-CapturedNative -File 'git' -Arguments @('rev-parse', 'HEAD^{tree}')
+    $sourceDateEpoch = Invoke-CapturedNative -File 'git' -Arguments @('show', '-s', '--format=%ct', 'HEAD')
+    if ($sourceDateEpoch -cnotmatch '^[1-9][0-9]*$') {
+        throw "Git returned an invalid source commit epoch: $sourceDateEpoch"
+    }
+    $env:SOURCE_DATE_EPOCH = $sourceDateEpoch
     $buildVersion = if ([string]::IsNullOrWhiteSpace($Version)) {
         Assert-CanonicalVersion -Value "sha-$sourceCommit"
     } else {
@@ -1351,8 +1357,11 @@ try {
         throw 'Tracked build context unexpectedly contains Git metadata or credentials.'
     }
 
+    # BuildKit's default provenance attestation contains per-run metadata and changes --iidfile identity.
+    # docker image save/load does not preserve that attestation, so release provenance remains in the
+    # validated immutable bundle while SOURCE_DATE_EPOCH stabilizes the loadable image configuration.
     Invoke-LoggedNative -File 'docker' -Arguments @(
-        'buildx', 'build', '--pull', '--no-cache', '--load', '--platform', $Platform,
+        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--load', '--platform', $Platform,
         '--target', 'server', '--build-arg', "VERSION=$buildVersion",
         '--label', 'org.opencontainers.image.source=https://github.com/thebtf/engram',
         '--label', "org.opencontainers.image.revision=$sourceCommit",
@@ -1361,7 +1370,7 @@ try {
     ) -LogPath (Join-Path $artifactPath 'server/build.log')
 
     Invoke-LoggedNative -File 'docker' -Arguments @(
-        'buildx', 'build', '--pull', '--no-cache', '--load', '--platform', $Platform,
+        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--load', '--platform', $Platform,
         '--target', 'operator-console', '--build-arg', "VERSION=$buildVersion",
         '--label', 'org.opencontainers.image.source=https://github.com/thebtf/engram',
         '--label', "org.opencontainers.image.revision=$sourceCommit",
@@ -1371,7 +1380,7 @@ try {
     ) -LogPath (Join-Path $artifactPath 'operator-console/build.log')
 
     Invoke-LoggedNative -File 'docker' -Arguments @(
-        'buildx', 'build', '--pull', '--no-cache', '--load', '--platform', $Platform,
+        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--load', '--platform', $Platform,
         '-f', (Join-Path $buildContext 'deploy/postgres/Dockerfile'),
         '--label', 'org.opencontainers.image.source=https://github.com/thebtf/engram',
         '--label', "org.opencontainers.image.revision=$sourceCommit",
@@ -1386,7 +1395,7 @@ try {
     $imageIds.operator_console = (Get-Content -Raw -LiteralPath (Join-Path $artifactPath 'operator-console/image-id.txt')).Trim()
     $imageIds.postgres = (Get-Content -Raw -LiteralPath (Join-Path $artifactPath 'postgres/image-id.txt')).Trim()
     foreach ($entry in $imageIds.GetEnumerator()) {
-        if ($entry.Value -notmatch '^sha256:[0-9a-f]{64}$') {
+        if ($entry.Value -cnotmatch '^sha256:[0-9a-f]{64}$') {
             throw "Buildx wrote an invalid exact image ID for $($entry.Key): $($entry.Value)"
         }
         Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $entry.Value) | Out-Null
@@ -1484,12 +1493,12 @@ try {
     Wait-ReadyJson -Url "$operatorUrl/api/ready"
     $runtimeProof.operator_readiness = $true
 
-    if ((Invoke-ComposePsql -Sql 'SHOW server_version;').Trim() -ne '17.10') {
+    if ((Invoke-ComposePsql -Sql 'SHOW server_version;').Trim() -cne '17.10') {
         throw 'Canonical compose PostgreSQL is not 17.10.'
     }
     $runtimeProof.postgres_17_10 = $true
     Invoke-ComposePsql -Sql 'CREATE EXTENSION IF NOT EXISTS vector;' | Out-Null
-    if ((Invoke-ComposePsql -Sql "SELECT extversion FROM pg_extension WHERE extname='vector';").Trim() -ne '0.8.1') {
+    if ((Invoke-ComposePsql -Sql "SELECT extversion FROM pg_extension WHERE extname='vector';").Trim() -cne '0.8.1') {
         throw 'Canonical compose pgvector is not 0.8.1.'
     }
     $runtimeProof.pgvector_0_8_1 = $true
@@ -1531,7 +1540,7 @@ try {
     ) -LogPath (Join-Path $artifactPath 'runtime/compose-recreate-postgres.log')
     Wait-Healthy -Container (Get-ComposeContainerId -Service 'postgres')
     $marker = Invoke-ComposePsql -Sql "SELECT note || ':' || embedding::text FROM image_gate_marker WHERE id=1;"
-    if ($marker.Trim() -ne 'compose-retained:[1,2,3]') {
+    if ($marker.Trim() -cne 'compose-retained:[1,2,3]') {
         throw "PostgreSQL marker was not retained after container recreation: $marker"
     }
     $runtimeProof.postgres_recreation_retained_marker = $true
@@ -1550,7 +1559,7 @@ try {
         @{ Id = $imageIds.postgres; Tag = $PostgresTag }
     )) {
         Invoke-CapturedNative -File 'docker' -Arguments @('tag', $promotion.Id, $promotion.Tag) | Out-Null
-        if ((Get-ImageId -Tag $promotion.Tag) -ne $promotion.Id) {
+        if ((Get-ImageId -Tag $promotion.Tag) -cne $promotion.Id) {
             throw "Local tag promotion did not retain exact image ID for $($promotion.Tag)."
         }
     }
@@ -1604,6 +1613,7 @@ try {
         completed_at = (Get-Date).ToUniversalTime().ToString('o')
         source_parent_commit = $sourceCommit
         source_parent_tree = $sourceTree
+        source_date_epoch = $sourceDateEpoch
         build_version = $buildVersion
         source_worktree_dirty = $false
         build_context = 'git-archive-tracked-files-only'
