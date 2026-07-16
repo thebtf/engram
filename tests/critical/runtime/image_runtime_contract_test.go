@@ -363,27 +363,6 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		"chown -R 70:70 /var/lib/postgresql/data && chmod 0700 /var/lib/postgresql/data",
 		"The `stat` command must print `70:70:700`",
 	)
-	scannerPath := filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1")
-	if _, err := os.Stat(scannerPath); err != nil {
-		if !os.IsNotExist(err) {
-			t.Fatalf("inspect authority-controlled image scanner: %v", err)
-		}
-		// The product-only PR lands before the protected workflow/scanner PR.
-		// Until that exact authority epoch is consumed, require main's policy to
-		// predeclare every pending protected blob instead of silently skipping a
-		// missing scanner. Once the scanner exists, the full contract below runs.
-		requireFileContains(t, filepath.Join(repo, ".github", "authority-policy.json"),
-			`"id": "authority-0002"`,
-			`"label": "authority-maintenance:authority-0002"`,
-			`"path": ".github/workflows/docker-publish.yml"`,
-			`"git_blob": "d84eeb6be03199e242680b9a1a97fd7a44f7f074"`,
-			`"path": ".github/workflows/docker.yaml"`,
-			`"git_blob": "d0b365ef2e5e3e58e94089426ec5947c1d99cd93"`,
-			`"path": "scripts/production-gates/build-and-scan-images.ps1"`,
-			`"git_blob": "5622378d61fa210376fc1f5d31901778c334a6f9"`,
-		)
-		return
-	}
 	verificationPath := filepath.Join(repo, ".github", "workflows", "docker.yaml")
 	publisherPath := filepath.Join(repo, ".github", "workflows", "docker-publish.yml")
 	for _, workflowPath := range []string{verificationPath, publisherPath} {
@@ -457,14 +436,26 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		"'--scanners', 'vuln'",
 		"'--severity', 'HIGH,CRITICAL'",
 		"trivy.sarif",
+		"type=docker,rewrite-timestamp=true,unpack=false",
+		"Resolve-LocalImageId",
+		"ExpectedConfigDigest",
+		"config.digest",
+		"image_ids = $imageIds",
+		"local_runtime_image_ids = $localImageIds",
 	} {
 		if !strings.Contains(scanner, fragment) {
 			t.Fatalf("image gate lacks unprivileged scanner contract %q", fragment)
 		}
 	}
-	for _, forbidden := range []string{"toolVersions.scout", "'scout', 'cves'", "docker-scout"} {
+	if count := strings.Count(scanner, "'type=docker,rewrite-timestamp=true,unpack=false'"); count != 3 {
+		t.Fatalf("image gate must normalize timestamps for exactly three Docker image builds, got %d", count)
+	}
+	for _, forbidden := range []string{
+		"toolVersions.scout", "'scout', 'cves'", "docker-scout",
+		"--load", "'type=docker,rewrite-timestamp=true'",
+	} {
 		if strings.Contains(scanner, forbidden) {
-			t.Fatalf("image gate retains authenticated Docker Scout dependency %q", forbidden)
+			t.Fatalf("image gate retains forbidden scanner or exporter contract %q", forbidden)
 		}
 	}
 
