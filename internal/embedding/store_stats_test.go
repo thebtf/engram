@@ -100,6 +100,35 @@ func TestStoreStats_Empty(t *testing.T) {
 	}
 }
 
+// TestStoreStats_EmptyPhysicalTableReturnsZeroValue protects the production
+// fresh-install path. PostgreSQL aggregate max(...) returns one NULL row for an
+// empty table; Stats must treat that as an absent timestamp, not a scan error.
+// A transaction-local temporary table shadows any shared test data so this
+// regression remains deterministic and leaves no persistent rows or schema.
+func TestStoreStats_EmptyPhysicalTableReturnsZeroValue(t *testing.T) {
+	db, closeDB := openEmbeddingTestDB(t)
+	defer closeDB()
+
+	tx, rollback := openTestTx(t, db)
+	defer rollback()
+
+	if err := tx.Exec(`
+		CREATE TEMP TABLE content_chunks
+		(LIKE public.content_chunks)
+		ON COMMIT DROP
+	`).Error; err != nil {
+		t.Fatalf("create empty temporary content_chunks: %v", err)
+	}
+
+	stats, err := NewStore(tx).Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats on physically empty content_chunks: %v", err)
+	}
+	if stats != (EmbeddingStats{}) {
+		t.Fatalf("Stats on physically empty content_chunks = %+v, want zero value", stats)
+	}
+}
+
 // TestStoreStats_Populated inserts a parent memory row + 2 chunks inside a
 // single rolled-back transaction, runs Stats on the tx-scoped DB handle, and
 // asserts the returned EmbeddingStats reflects the inserted data.
