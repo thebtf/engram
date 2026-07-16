@@ -842,24 +842,23 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	// Resolve/register synchronously before any retrieval or tenant mutation.
 	// Identity metadata selects a namespace; bearer/principal authorization is
 	// still enforced independently by the HTTP middleware.
-	if s.store != nil {
-		resolution, resolveErr := gorm.RegisterAndResolve(r.Context(), s.store.DB, project, projectIdentity)
-		if resolveErr != nil {
-			writeProjectIdentityHTTPError(w, resolveErr)
-			return
-		}
-		project = resolution.CanonicalProjectID
-		// Preserve the old HTTP contract: project is the canonical outer selector
-		// and legacy_project is only an alias. Never reverse them on a fresh DB.
-		if projectIdentity == nil && legacyProject != "" && legacyProject != project {
-			if err := gorm.AttachLegacyAlias(r.Context(), s.store.DB, project, legacyProject); err != nil {
-				writeProjectIdentityHTTPError(w, err)
-				return
-			}
-		}
-	} else if identityOnly || projectIdentity != nil {
+	if s.store == nil {
 		writeProjectIdentityHTTPError(w, &gorm.ProjectIdentityError{Code: gorm.ProjectIdentityUnavailable, UpgradeAction: gorm.UpgradeActionRetryProjectRegistration, Err: fmt.Errorf("project identity database is not ready")})
 		return
+	}
+	resolution, resolveErr := gorm.RegisterAndResolve(r.Context(), s.store.DB, project, projectIdentity)
+	if resolveErr != nil {
+		writeProjectIdentityHTTPError(w, resolveErr)
+		return
+	}
+	project = resolution.CanonicalProjectID
+	// Preserve the old HTTP contract: project is the canonical outer selector
+	// and legacy_project is only an alias. Never reverse them on a fresh DB.
+	if projectIdentity == nil && legacyProject != "" && legacyProject != project {
+		if err := gorm.AttachLegacyAlias(r.Context(), s.store.DB, project, legacyProject); err != nil {
+			writeProjectIdentityHTTPError(w, err)
+			return
+		}
 	}
 
 	if identityOnly {

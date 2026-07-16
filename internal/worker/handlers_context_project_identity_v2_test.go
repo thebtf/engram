@@ -117,6 +117,30 @@ func TestContextInject_LegacyAliasWithInternalWhitespaceRemainsCompatible(t *tes
 	}
 }
 
+func TestContextInject_FailsClosedWithoutIdentityStore(t *testing.T) {
+	payload, err := json.Marshal(map[string]any{"project": "prc-http-no-store"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	(&Service{}).handleContextInject(rec, httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewReader(payload)))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Error struct {
+			Code          string `json:"code"`
+			UpgradeAction string `json:"upgrade_action"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error.Code != gormdb.ProjectIdentityUnavailable || response.Error.UpgradeAction != gormdb.UpgradeActionRetryProjectRegistration {
+		t.Fatalf("error response=%+v", response.Error)
+	}
+}
+
 func TestProjectIdentityHTTPError_DoesNotExposeDatabaseDiagnostics(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeProjectIdentityHTTPError(rec, &gormdb.ProjectIdentityError{

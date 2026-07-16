@@ -569,12 +569,9 @@ async function registerProjectIdentityV2(context, requestFn = request) {
 
 function isProjectIdentityTransportOffline(error) {
   if (!error || typeof error !== 'object') return false;
-  if (error.name === 'AbortError') return true;
   const code = error.code || (error.cause && error.cause.code);
-  if (['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH'].includes(code)) {
-    return true;
-  }
-  return error instanceof TypeError && /fetch failed|network/i.test(String(error.message || ''));
+  if (error.cause && error.cause.message === 'bad port') return true;
+  return ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT'].includes(code);
 }
 
 function buildRequestHeaders(includeJsonBody = false) {
@@ -827,22 +824,21 @@ async function RunHook(hookName, handler) {
   }
 
   const cwd = typeof input.cwd === 'string' ? input.cwd : '';
-  const gitResult = getGitRemoteID(cwd);
-
-  const context = {
-    SessionID: typeof input.session_id === 'string' ? input.session_id : '',
-    CWD: cwd,
-    PermissionMode: typeof input.permission_mode === 'string' ? input.permission_mode : '',
-    HookEventName: typeof input.hook_event_name === 'string' ? input.hook_event_name : hookName,
-    Project: ProjectIDWithName(cwd),
-    LegacyProject: LegacyProjectID(cwd),
-    GitRemote: gitResult ? gitResult.gitRemote : '',
-    RelativePath: gitResult ? gitResult.relativePath : '',
-    ProjectIdentityV2: resolveProjectIdentityV2(cwd),
-    RawInput: rawInput,
-  };
 
   try {
+    const gitResult = getGitRemoteID(cwd);
+    const context = {
+      SessionID: typeof input.session_id === 'string' ? input.session_id : '',
+      CWD: cwd,
+      PermissionMode: typeof input.permission_mode === 'string' ? input.permission_mode : '',
+      HookEventName: typeof input.hook_event_name === 'string' ? input.hook_event_name : hookName,
+      Project: ProjectIDWithName(cwd),
+      LegacyProject: LegacyProjectID(cwd),
+      GitRemote: gitResult ? gitResult.gitRemote : '',
+      RelativePath: gitResult ? gitResult.relativePath : '',
+      ProjectIdentityV2: resolveProjectIdentityV2(cwd),
+      RawInput: rawInput,
+    };
     try {
       await registerProjectIdentityV2(context);
     } catch (registrationError) {

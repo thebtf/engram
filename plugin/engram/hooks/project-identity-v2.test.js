@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -158,6 +158,39 @@ test('v2 metadata and anchor files reject non-normalized or unknown input withou
   assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('.engram-project-v2.json.tmp-')), []);
 });
 
+test('hook identity resolution failure returns pass-through without running the handler', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-hook-failure-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, '.engram-project-v2.json'), '{"version":2,"anchor":"invalid"}');
+  const childScript = `
+    const lib = require(process.argv[1]);
+    lib.RunHook('SessionStart', async () => {
+      process.stderr.write('HANDLER_RAN');
+      return 'must-not-run';
+    }).catch((error) => {
+      process.stderr.write(String(error && error.stack || error));
+      process.exitCode = 1;
+    });
+  `;
+  const result = spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
+    input: JSON.stringify({ session_id: 'identity-failure', cwd: dir }),
+    encoding: 'utf8',
+    timeout: 2000,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      ENGRAM_INTERNAL: '0',
+      ENGRAM_QUIET: '0',
+      ENGRAM_URL: 'http://127.0.0.1:9',
+      ENGRAM_TOKEN: 'test-token',
+    },
+  });
+  assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '{"continue":true}');
+  assert.doesNotMatch(result.stderr, /HANDLER_RAN/);
+});
+
 test('shared invalid vectors and wrong-type anchor sharing are rejected exactly', () => {
   for (const vector of vectors.invalid_vectors) {
     if (vector.invalid_target !== 'identity') continue;
@@ -172,9 +205,15 @@ test('shared invalid vectors and wrong-type anchor sharing are rejected exactly'
   }), /PROJECT_IDENTITY_INVALID/);
 });
 
-test('registration offline fallback distinguishes transport failure from malformed reached-server response', () => {
+test('registration offline fallback only accepts failures that prove no request reached the server', () => {
   const offline = new TypeError('fetch failed', { cause: Object.assign(new Error('connect'), { code: 'ECONNREFUSED' }) });
+  const aborted = Object.assign(new Error('request timed out'), { name: 'AbortError' });
+  const reset = new TypeError('fetch failed', { cause: Object.assign(new Error('reset'), { code: 'ECONNRESET' }) });
+  const blockedPort = new TypeError('fetch failed', { cause: new Error('bad port') });
   assert.equal(lib.isProjectIdentityTransportOffline(offline), true);
+  assert.equal(lib.isProjectIdentityTransportOffline(blockedPort), true);
+  assert.equal(lib.isProjectIdentityTransportOffline(aborted), false);
+  assert.equal(lib.isProjectIdentityTransportOffline(reset), false);
   assert.equal(lib.isProjectIdentityTransportOffline(new SyntaxError('Unexpected token')), false);
 });
 

@@ -255,7 +255,9 @@ export class EngramRestClient {
     this.inFlightProjectRegistrations.set(key, registration);
     try {
       const result = await registration;
-      if (result.ok) this.completedProjectRegistrations.set(key, result);
+      if (result.ok || result.error.httpStatus === 400 || result.error.httpStatus === 409) {
+        this.completedProjectRegistrations.set(key, result);
+      }
       return result;
     } finally {
       this.inFlightProjectRegistrations.delete(key);

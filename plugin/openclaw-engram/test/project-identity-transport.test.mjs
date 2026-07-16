@@ -81,6 +81,7 @@ test('stable registration error preserves code/action and permits zero downstrea
 
   const client = new EngramRestClient(clientConfig());
   const result = await client.registerAndResolveProject({ projectId: 'legacy', agentId: 'agent' }, 'legacy');
+  const cached = await client.registerAndResolveProject({ projectId: 'legacy', agentId: 'agent' }, 'legacy');
   if (result.ok) {
     await client.searchContext({ project: result.canonicalProject, query: 'must not run' });
   }
@@ -94,7 +95,8 @@ test('stable registration error preserves code/action and permits zero downstrea
       httpStatus: 409,
     },
   });
-  assert.equal(requests.length, 1, 'registration failure must short-circuit data access');
+  assert.deepEqual(cached, result);
+  assert.equal(requests.length, 1, 'permanent registration failure must be cached and short-circuit data access');
 });
 
 test('session-start awaits registration before first write and honors config.project as outer selector', async () => {
