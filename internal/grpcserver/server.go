@@ -1,7 +1,9 @@
 package grpcserver
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -169,7 +171,12 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 		ctx = mcp.ContextWithSession(ctx, req.SessionId)
 	}
 
-	resultJSON, isError, err := s.handler.HandleToolCall(ctx, req.ToolName, req.ArgumentsJson)
+	argumentsJSON, err := canonicalizeProjectArgument(req.ToolName, req.ArgumentsJson, canonicalProject)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	resultJSON, isError, err := s.handler.HandleToolCall(ctx, req.ToolName, argumentsJSON)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "tool call failed: %v", err)
 	}
@@ -179,6 +186,47 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 		ContentJson:      resultJSON,
 		CanonicalProject: canonicalProject,
 	}, nil
+}
+
+// canonicalizeProjectArgument makes the identity-resolved project authoritative
+// for any explicitly project-scoped tool call. Empty/omitted project fields keep
+// their existing global/default semantics. The review queue's documented all/*
+// sentinels are also preserved.
+func canonicalizeProjectArgument(toolName string, args []byte, canonicalProject string) ([]byte, error) {
+	if canonicalProject == "" || len(bytes.TrimSpace(args)) == 0 {
+		return args, nil
+	}
+
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(args, &values); err != nil || values == nil {
+		return args, nil
+	}
+	rawProject, ok := values["project"]
+	if !ok || bytes.Equal(bytes.TrimSpace(rawProject), []byte("null")) {
+		return args, nil
+	}
+
+	var project string
+	if err := json.Unmarshal(rawProject, &project); err != nil {
+		return nil, errors.New("tool arguments.project must be a string")
+	}
+	if project == "" {
+		return args, nil
+	}
+	if (toolName == "review_metrics.read" || toolName == "review_queue.read") &&
+		(strings.EqualFold(project, "all") || project == "*") {
+		return args, nil
+	}
+	if project == canonicalProject {
+		return args, nil
+	}
+
+	encodedProject, err := json.Marshal(canonicalProject)
+	if err != nil {
+		return nil, err
+	}
+	values["project"] = encodedProject
+	return json.Marshal(values)
 }
 
 func (s *Server) resolveProjectIdentity(ctx context.Context, selector string, identity *pb.ProjectIdentityV2) (string, error) {
