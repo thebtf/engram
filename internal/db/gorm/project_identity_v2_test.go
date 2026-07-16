@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -279,6 +280,74 @@ func TestRegisterAndResolve_ConcurrentCallsConvergeAndSharingIsExplicit(t *testi
 	}
 	if restarted.CanonicalProjectID != results[0].CanonicalProjectID {
 		t.Fatalf("restart canonical=%q, want %q", restarted.CanonicalProjectID, results[0].CanonicalProjectID)
+	}
+}
+
+func TestRegisterAndResolve_ConcurrentDifferentBindingsDoNotClaimSameLegacyRow(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	prefix := "prc-v2-legacy-race-"
+	legacyID := prefix + "canonical"
+	aliases := []string{prefix + "alias-a", prefix + "alias-b"}
+	defer db.Exec(`DELETE FROM projects WHERE id = ? OR id LIKE 'p2_%' AND EXISTS (SELECT 1 FROM unnest(COALESCE(legacy_ids, ARRAY[]::TEXT[])) alias WHERE alias LIKE ?)`, legacyID, prefix+"%")
+	db.Exec(`DELETE FROM projects WHERE id = ? OR EXISTS (SELECT 1 FROM unnest(COALESCE(legacy_ids, ARRAY[]::TEXT[])) alias WHERE alias LIKE ?)`, legacyID, prefix+"%")
+	seed := Project{ID: legacyID, LegacyIDs: aliases}
+	if err := db.Create(&seed).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	functionName := fmt.Sprintf("engram_test_identity_delay_%d", time.Now().UnixNano())
+	triggerName := functionName + "_trigger"
+	functionSQL := fmt.Sprintf(`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF OLD.id = '%s' THEN PERFORM pg_sleep(0.5); END IF;
+  RETURN NEW;
+END $$`, functionName, legacyID)
+	if err := db.Exec(functionSQL).Error; err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec(fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", functionName))
+	if err := db.Exec(fmt.Sprintf("CREATE TRIGGER %s BEFORE UPDATE OF legacy_ids ON projects FOR EACH ROW EXECUTE FUNCTION %s()", triggerName, functionName)).Error; err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec(fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON projects", triggerName))
+
+	shared := true
+	identities := []*ProjectIdentityV2{
+		{Version: 2, LegacyProjectID: aliases[0], DisplayName: "binding-a", NonGitAnchor: "11111111111111111111111111111111", AnchorShared: &shared},
+		{Version: 2, LegacyProjectID: aliases[1], DisplayName: "binding-b", NonGitAnchor: "22222222222222222222222222222222", AnchorShared: &shared},
+	}
+	results := make([]ProjectIdentityResolution, 2)
+	errs := make([]error, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range identities {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			results[i], errs[i] = RegisterAndResolve(ctx, db, aliases[i], identities[i])
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("caller %d: %v", i, err)
+		}
+	}
+	if results[0].CanonicalProjectID == results[1].CanonicalProjectID {
+		t.Fatalf("different bindings claimed the same legacy row: %#v", results)
+	}
+	legacyClaims := 0
+	for _, result := range results {
+		if result.CanonicalProjectID == legacyID {
+			legacyClaims++
+		}
+	}
+	if legacyClaims != 1 {
+		t.Fatalf("legacy row claims=%d, want exactly one: %#v", legacyClaims, results)
 	}
 }
 

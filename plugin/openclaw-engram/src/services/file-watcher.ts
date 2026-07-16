@@ -45,8 +45,9 @@ class FileWatcherService implements OpenClawPluginService {
   async start(_ctx: OpenClawPluginServiceContext): Promise<void> {
     const registration = await this.client.registerAndResolveProject(this.identity, this.projectId);
     if (!registration.ok) {
-      this.logger.warn(`[file-watcher] project registration failed: ${registration.error.code}`);
-      return;
+      const message = `[file-watcher] project registration failed: ${registration.error.code}`;
+      this.logger.warn(message);
+      throw new Error(`PROJECT_IDENTITY_UNAVAILABLE: ${message}`);
     }
     this.projectId = registration.canonicalProject;
     // Lazy-load chokidar to avoid blocking plugin discovery with native module init

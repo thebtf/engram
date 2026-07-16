@@ -198,6 +198,13 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 		if err != nil {
 			return unavailableProjectIdentity(err)
 		}
+		if len(legacyCandidates) == 1 {
+			refreshed, err := lockProjectIdentityCandidate(ctx, tx, legacyCandidates[0].ID)
+			if err != nil {
+				return unavailableProjectIdentity(err)
+			}
+			legacyCandidates[0] = refreshed
+		}
 		canonical := bindingKey
 		if len(legacyCandidates) == 1 && projectIsUnboundLegacy(legacyCandidates[0]) {
 			canonical = legacyCandidates[0].ID
@@ -400,6 +407,21 @@ func findCombinedProjectCandidates(ctx context.Context, tx *gorm.DB, selectors .
 		projects = append(projects, byID[id])
 	}
 	return projects, nil
+}
+
+// lockProjectIdentityCandidate serializes the one-time conversion of a legacy
+// row into a v2 binding and refreshes the row after any concurrent binder
+// commits. The caller must re-evaluate projectIsUnboundLegacy on this value.
+func lockProjectIdentityCandidate(ctx context.Context, tx *gorm.DB, id string) (Project, error) {
+	var project Project
+	err := tx.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND removed_at IS NULL", id).
+		First(&project).Error
+	if err != nil {
+		return Project{}, fmt.Errorf("lock legacy project %s: %w", id, err)
+	}
+	return project, nil
 }
 
 func findGitIdentity(ctx context.Context, tx *gorm.DB, remote, relativePath string) ([]Project, error) {

@@ -111,6 +111,17 @@
       "anchor_shared": null
     },
     {
+      "name": "display-c1-control-character",
+      "invalid_target": "identity",
+      "selector": "configured-selector",
+      "display_name": "core\u0085workspace",
+      "legacy_project_id": "core_18f246",
+      "git_remote": "https://example.invalid/acme/mono.git",
+      "relative_path": "packages/core/",
+      "non_git_anchor": "",
+      "anchor_shared": null
+    },
+    {
       "name": "relative-leading-whitespace",
       "invalid_target": "identity",
       "selector": "configured-selector",

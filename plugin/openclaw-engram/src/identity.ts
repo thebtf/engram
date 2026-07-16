@@ -55,7 +55,7 @@ interface ProjectIdentityV2Input {
 
 const projectIdentityV2File = '.engram-project-v2.json';
 const strictAnchorV2 = /^[0-9a-f]{32}$/;
-const projectIdentityControl = /[\u0000-\u001f\u007f]/;
+const projectIdentityControl = /\p{Cc}/u;
 const projectSelectorV2 = /^[A-Za-z0-9_.\/:\\-]+$/;
 const projectAnchorV2Keys = ['anchor', 'shared', 'version'];
 
@@ -223,8 +223,9 @@ function getGitRemoteID(cwd: string): GitRemoteResult | null {
   try {
     const opts = {
       cwd,
-      stdio: ['ignore', 'pipe', 'ignore'] as ['ignore', 'pipe', 'ignore'],
+      stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
       timeout: 3000,
+      env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
     };
     const remoteURL = execSync('git remote get-url origin', opts).toString().trim();
     if (!remoteURL) {
@@ -244,10 +245,19 @@ function getGitRemoteID(cwd: string): GitRemoteResult | null {
     };
     gitRemoteCache.set(cacheKey, result);
     return result;
-  } catch {
-    gitRemoteCache.set(cacheKey, null);
-    return null;
+  } catch (error) {
+    if (isMissingGitIdentityError(error)) {
+      gitRemoteCache.set(cacheKey, null);
+      return null;
+    }
+    throw new Error('PROJECT_IDENTITY_UNAVAILABLE: git identity resolution failed', { cause: error });
   }
+}
+
+function isMissingGitIdentityError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const stderr = (error as { stderr?: unknown }).stderr;
+  return /not a git repository|no such remote/i.test(stderr == null ? '' : String(stderr));
 }
 
 /**

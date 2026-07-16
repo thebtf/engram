@@ -9,10 +9,10 @@ import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
 import { join, relative, resolve, normalize, isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
+import { resolveAndRegisterProject } from '../client.js';
 import type { EngramRestClient, BulkImportRequest } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptScalar } from '../context/formatter.js';
-import { resolveIdentity } from '../identity.js';
 import type {
   AnyAgentTool,
   OpenClawPluginToolContext,
@@ -166,9 +166,7 @@ async function runMigration(
   }
 
   // Import
-  const identity = resolveIdentity(ctx.agentId ?? '', workspaceDir);
-  const selectedProject = config.project ?? identity.projectId;
-  const registration = await client.registerAndResolveProject(identity, selectedProject);
+  const registration = await resolveAndRegisterProject(client, ctx.agentId ?? '', workspaceDir, config.project);
   if (!registration.ok) {
     return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
   }

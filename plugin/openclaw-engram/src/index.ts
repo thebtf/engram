@@ -22,10 +22,9 @@ import type {
  PluginHookContext,
 } from './types/openclaw.js';
 import { parseConfig, getJsonSchema } from './config.js';
-import { EngramRestClient } from './client.js';
+import { EngramRestClient, resolveAndRegisterProject } from './client.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { resolveIdentity } from './identity.js';
 
 import { handleSessionStart } from './hooks/session-start.js';
 import { handleBeforeAgentStart } from './hooks/before-agent-start.js';
@@ -87,21 +86,21 @@ const plugin: OpenClawPluginDefinition = {
    handleBeforePromptBuild(event, ctx, client, config, api.logger),
   );
 
-  api.on('after_tool_call', (event, ctx: PluginHookContext) => {
-   handleAfterToolCall(event, ctx, client, config);
-  });
+  api.on('after_tool_call', (event, ctx: PluginHookContext) =>
+   handleAfterToolCall(event, ctx, client, config),
+  );
 
-  api.on('before_compaction', (event, ctx: PluginHookContext) => {
-   handleBeforeCompaction(event, ctx, client, config, api.logger);
-  });
+  api.on('before_compaction', (event, ctx: PluginHookContext) =>
+   handleBeforeCompaction(event, ctx, client, config, api.logger),
+  );
 
   api.on('before_tool_call', (event, ctx: PluginHookContext) =>
    handleBeforeToolCall(event, ctx, client, config),
   );
 
-  api.on('session_end', (event, ctx: PluginHookContext) => {
-   handleSessionEnd(event, ctx, client, config, api.logger);
-  });
+  api.on('session_end', (event, ctx: PluginHookContext) =>
+   handleSessionEnd(event, ctx, client, config, api.logger),
+  );
 
   // ------------------------------------------------------------------
   // Tools (factory pattern)
@@ -190,9 +189,7 @@ const plugin: OpenClawPluginDefinition = {
     .description('Search engram memory')
     .argument('<query>', 'Search query')
     .action(async (query: unknown) => {
-     const identity = resolveIdentity('', process.cwd());
-     const selectedProject = config.project ?? identity.projectId;
-     const registration = await client.registerAndResolveProject(identity, selectedProject);
+     const registration = await resolveAndRegisterProject(client, '', process.cwd(), config.project);
      if (!registration.ok) {
       console.error(`Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`);
       return;
@@ -219,9 +216,7 @@ const plugin: OpenClawPluginDefinition = {
     .action(async (text: unknown) => {
      const textStr = String(text);
      const title = textStr.length > 80 ? textStr.slice(0, 77) + '...' : textStr;
-     const storeIdentity = resolveIdentity('', process.cwd());
-     const selectedProject = config.project ?? storeIdentity.projectId;
-     const registration = await client.registerAndResolveProject(storeIdentity, selectedProject);
+     const registration = await resolveAndRegisterProject(client, '', process.cwd(), config.project);
      if (!registration.ok) {
       console.error(`Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`);
       return;

@@ -9,9 +9,9 @@ import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { readFile, realpath } from 'node:fs/promises';
+import { resolveAndRegisterProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
-import { resolveIdentity } from '../identity.js';
 import { formatContext, quotedPromptPayload, quotedPromptScalar } from '../context/formatter.js';
 import type { AnyAgentTool, OpenClawPluginToolContext, OpenClawPluginApi } from '../types/openclaw.js';
 
@@ -55,9 +55,7 @@ export function createMemoryGetTool(
 
         const content = localFile.content;
         if (parsed.data.store && client.isAvailable()) {
-          const identity = resolveIdentity(ctx.agentId ?? '', ctx.workspaceDir);
-          const selectedProject = config.project ?? identity.projectId;
-          const registration = await client.registerAndResolveProject(identity, selectedProject);
+          const registration = await resolveAndRegisterProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
           if (!registration.ok) {
             return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
           }
@@ -136,9 +134,7 @@ async function searchEngram(
     return 'engram is currently unreachable — memory get unavailable';
   }
 
-  const identity = resolveIdentity(ctx.agentId ?? '', ctx.workspaceDir);
-  const selectedProject = config.project ?? identity.projectId;
-  const registration = await client.registerAndResolveProject(identity, selectedProject);
+  const registration = await resolveAndRegisterProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
   if (!registration.ok) {
     return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
   }

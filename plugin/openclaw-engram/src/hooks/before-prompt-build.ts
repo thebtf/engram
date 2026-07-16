@@ -6,9 +6,9 @@
  * message in each turn.
  */
 
+import { resolveAndRegisterProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
-import { resolveIdentity } from '../identity.js';
 import {
   formatContext,
   formatAlwaysInject,
@@ -57,9 +57,7 @@ export async function handleBeforePromptBuild(
     if (tier.tier === 'NONE') return;
 
     const agentId = ctx.agentId ?? '';
-    const identity = resolveIdentity(agentId, ctx.workspaceDir);
-    const selectedProject = config.project ?? identity.projectId;
-    const registration = await client.registerAndResolveProject(identity, selectedProject);
+    const registration = await resolveAndRegisterProject(client, agentId, ctx.workspaceDir, config.project);
     if (!registration.ok) {
       (logger ?? console).warn(`[engram] before-prompt-build: project registration failed: ${registration.error.code}`);
       return;

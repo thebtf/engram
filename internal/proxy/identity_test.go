@@ -156,7 +156,7 @@ func TestResolveProjectIdentityV2_PreExistingAnchorsAreNeverReplaced(t *testing.
 		dir := t.TempDir()
 		anchorPath := filepath.Join(dir, ".engram-project-v2.json")
 		original := []byte("{\n  \"version\": 2,\n  \"anchor\": \"00112233445566778899aabbccddeeff\",\n  \"shared\": false\n}\n")
-		if err := os.WriteFile(anchorPath, original, 0600); err != nil {
+		if err := os.WriteFile(anchorPath, original, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		const callers = 16
@@ -193,7 +193,7 @@ func TestResolveProjectIdentityV2_PreExistingAnchorsAreNeverReplaced(t *testing.
 		dir := t.TempDir()
 		anchorPath := filepath.Join(dir, ".engram-project-v2.json")
 		original := []byte(`{"version":2`)
-		if err := os.WriteFile(anchorPath, original, 0600); err != nil {
+		if err := os.WriteFile(anchorPath, original, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		for i := 0; i < 8; i++ {
@@ -208,6 +208,27 @@ func TestResolveProjectIdentityV2_PreExistingAnchorsAreNeverReplaced(t *testing.
 		}
 		if string(got) != string(original) {
 			t.Fatalf("malformed anchor was replaced: %q", got)
+		}
+		assertNoProjectAnchorTempFiles(t, dir)
+	})
+
+	t.Run("missing shared", func(t *testing.T) {
+		dir := t.TempDir()
+		anchorPath := filepath.Join(dir, ".engram-project-v2.json")
+		original := []byte(`{"version":2,"anchor":"00112233445566778899aabbccddeeff"}`)
+		if err := os.WriteFile(anchorPath, original, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := proxy.ResolveProjectIdentityV2(dir)
+		if err == nil || !strings.Contains(err.Error(), "PROJECT_IDENTITY_INVALID") {
+			t.Fatalf("error=%v, want missing shared rejection", err)
+		}
+		got, err := os.ReadFile(anchorPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(original) {
+			t.Fatalf("anchor missing shared was replaced: %q", got)
 		}
 		assertNoProjectAnchorTempFiles(t, dir)
 	})
@@ -239,7 +260,7 @@ func assertCompleteProjectAnchorV2(t *testing.T, dir, expectedAnchor string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("anchor mode=%#o, want 0600", info.Mode().Perm())
 	}
 	assertNoProjectAnchorTempFiles(t, dir)
@@ -374,6 +395,34 @@ func TestResolveProjectSlug_NonGitDir(t *testing.T) {
 	}
 }
 
+func TestResolveProjectIdentityV2_FailsClosedWhenGitCannotExecute(t *testing.T) {
+	workspace := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := proxy.ResolveProjectIdentityV2(workspace)
+	if err == nil || !strings.Contains(err.Error(), "resolve git identity") {
+		t.Fatalf("error=%v, want fail-closed git identity error", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, ".engram-project-v2.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("non-git anchor was created after git execution failure: %v", statErr)
+	}
+}
+
+func TestResolveProjectIdentityV2_GitRepositoryWithoutOriginUsesAnchor(t *testing.T) {
+	workspace := t.TempDir()
+	if output, err := exec.Command("git", "init", workspace).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, output)
+	}
+
+	identity, err := proxy.ResolveProjectIdentityV2(workspace)
+	if err != nil {
+		t.Fatalf("resolve repository without origin: %v", err)
+	}
+	if identity.GitRemote != "" || identity.NonGitAnchor == "" {
+		t.Fatalf("identity=%+v, want anchor fallback without git remote", identity)
+	}
+}
+
 // TestResolveProjectSlug_ConsistentAcrossCalls verifies that calling
 // ResolveProjectSlug twice with the same cwd produces identical results.
 // Uses the synthetic git repo helper so the test does not depend on the
@@ -467,7 +516,7 @@ func TestResolveProjectSlug_AnchorFile_CustomName(t *testing.T) {
 	dir := t.TempDir()
 	anchor := map[string]string{"name": "custom-name"}
 	data, _ := json.Marshal(anchor)
-	if err := os.WriteFile(filepath.Join(dir, ".engram-project"), data, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".engram-project"), data, 0o644); err != nil {
 		t.Fatalf("write anchor: %v", err)
 	}
 
@@ -522,7 +571,7 @@ func TestResolveProjectSlug_AnchorFile_NonGitStoredID(t *testing.T) {
 	dir := t.TempDir()
 	anchor := map[string]string{"name": "notes", "id": "abc123"}
 	data, _ := json.Marshal(anchor)
-	if err := os.WriteFile(filepath.Join(dir, ".engram-project"), data, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".engram-project"), data, 0o644); err != nil {
 		t.Fatalf("write anchor: %v", err)
 	}
 

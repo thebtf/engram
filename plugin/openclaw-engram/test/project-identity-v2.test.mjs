@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -154,6 +154,50 @@ test('OpenClaw rejects non-normalized metadata and unknown anchor-file fields wi
     assert.ok(concurrent.every((result) => !result.ok && /PROJECT_IDENTITY_INVALID/.test(result.error)), JSON.stringify(concurrent));
     assert.deepEqual(fs.readFileSync(anchorPath), malformedBytes, 'malformed existing bytes must never be regenerated');
     assert.deepEqual(fs.readdirSync(workspace).filter((name) => name.startsWith('.engram-project-v2.json.tmp-')), []);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('OpenClaw fails closed when Git cannot execute without minting an anchor', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-identity-v2-git-failure-'));
+  const emptyPath = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-identity-v2-empty-path-'));
+  try {
+    const childScript = `
+      try {
+        const { resolveIdentity } = require(process.argv[1]);
+        resolveIdentity('agent-a', process.argv[2]);
+        process.stdout.write('resolved');
+      } catch (error) {
+        process.stdout.write(String(error && error.message || error));
+      }
+    `;
+    const env = { ...process.env, PATH: emptyPath, Path: emptyPath };
+    const result = spawnSync(process.execPath, ['-e', childScript, identityModulePath, workspace], {
+      encoding: 'utf8',
+      timeout: 2000,
+      windowsHide: true,
+      env,
+    });
+    assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /PROJECT_IDENTITY_UNAVAILABLE/);
+    assert.equal(fs.existsSync(path.join(workspace, '.engram-project-v2.json')), false);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(emptyPath, { recursive: true, force: true });
+  }
+});
+
+test('OpenClaw Git repositories without origin use the anchor fallback', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-identity-v2-no-origin-'));
+  try {
+    const initialized = spawnSync('git', ['init', workspace], { encoding: 'utf8', windowsHide: true });
+    assert.equal(initialized.status, 0, initialized.stderr);
+
+    const identity = resolveIdentity('agent-a', workspace).projectIdentityV2;
+    assert.equal(identity.git_remote, '');
+    assert.match(identity.non_git_anchor, /^[0-9a-f]{32}$/);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }

@@ -158,6 +158,44 @@ test('v2 metadata and anchor files reject non-normalized or unknown input withou
   assert.deepEqual(fs.readdirSync(dir).filter((name) => name.startsWith('.engram-project-v2.json.tmp-')), []);
 });
 
+test('git execution failures do not mint a non-git identity anchor', (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-git-failure-'));
+  const emptyPath = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-empty-path-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(emptyPath, { recursive: true, force: true }));
+  const childScript = `
+    try {
+      const lib = require(process.argv[1]);
+      lib.resolveProjectIdentityV2(process.argv[2]);
+      process.stdout.write('resolved');
+    } catch (error) {
+      process.stdout.write(String(error && error.message || error));
+    }
+  `;
+  const env = { ...process.env, PATH: emptyPath, Path: emptyPath };
+  const result = spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib'), workspace], {
+    encoding: 'utf8',
+    timeout: 2000,
+    windowsHide: true,
+    env,
+  });
+  assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /PROJECT_IDENTITY_UNAVAILABLE/);
+  assert.equal(fs.existsSync(path.join(workspace, '.engram-project-v2.json')), false);
+});
+
+test('git repositories without origin use the explicit anchor fallback', (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-no-origin-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const initialized = spawnSync('git', ['init', workspace], { encoding: 'utf8', windowsHide: true });
+  assert.equal(initialized.status, 0, initialized.stderr);
+
+  const identity = lib.resolveProjectIdentityV2(workspace);
+  assert.equal(identity.git_remote, '');
+  assert.match(identity.non_git_anchor, /^[0-9a-f]{32}$/);
+});
+
 test('hook identity resolution failure returns pass-through without running the handler', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-hook-failure-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -205,16 +243,36 @@ test('shared invalid vectors and wrong-type anchor sharing are rejected exactly'
   }), /PROJECT_IDENTITY_INVALID/);
 });
 
-test('registration offline fallback only accepts failures that prove no request reached the server', () => {
-  const offline = new TypeError('fetch failed', { cause: Object.assign(new Error('connect'), { code: 'ECONNREFUSED' }) });
-  const aborted = Object.assign(new Error('request timed out'), { name: 'AbortError' });
-  const reset = new TypeError('fetch failed', { cause: Object.assign(new Error('reset'), { code: 'ECONNRESET' }) });
-  const blockedPort = new TypeError('fetch failed', { cause: new Error('bad port') });
-  assert.equal(lib.isProjectIdentityTransportOffline(offline), true);
-  assert.equal(lib.isProjectIdentityTransportOffline(blockedPort), true);
-  assert.equal(lib.isProjectIdentityTransportOffline(aborted), false);
-  assert.equal(lib.isProjectIdentityTransportOffline(reset), false);
-  assert.equal(lib.isProjectIdentityTransportOffline(new SyntaxError('Unexpected token')), false);
+test('hook registration transport failure returns pass-through without running the handler', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-registration-failure-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const childScript = `
+    const lib = require(process.argv[1]);
+    lib.RunHook('SessionStart', async () => {
+      process.stderr.write('HANDLER_RAN');
+      return 'must-not-run';
+    }).catch((error) => {
+      process.stderr.write(String(error && error.stack || error));
+      process.exitCode = 1;
+    });
+  `;
+  const result = spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
+    input: JSON.stringify({ session_id: 'registration-failure', cwd: dir }),
+    encoding: 'utf8',
+    timeout: 2000,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      ENGRAM_INTERNAL: '0',
+      ENGRAM_QUIET: '0',
+      ENGRAM_URL: 'http://127.0.0.1:9',
+      ENGRAM_TOKEN: 'test-token',
+    },
+  });
+  assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '{"continue":true}');
+  assert.doesNotMatch(result.stderr, /HANDLER_RAN/);
 });
 
 test('registration is synchronous, idempotent, and updates the hook canonical selector', async () => {

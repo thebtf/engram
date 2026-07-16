@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { EngramRestClient } from '../dist/client.js';
 import { handleSessionStart } from '../dist/hooks/session-start.js';
+import pluginModule from '../dist/index.js';
+import { parseConfig } from '../dist/config.js';
+import { createFileWatcherService } from '../dist/services/file-watcher.js';
+
+const plugin = pluginModule.default ?? pluginModule;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const vectors = JSON.parse(fs.readFileSync(
@@ -247,5 +253,71 @@ test('2xx malformed canonical response is not cached and cannot reach downstream
     assert.deepEqual(first, expected);
     assert.deepEqual(second, expected);
     assert.deepEqual(paths, ['/api/context/inject', '/api/context/inject']);
+  }
+});
+
+test('async hook registration returns the handler promises to the host', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-hook-promises-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  globalThis.fetch = async () => new Response(JSON.stringify({ canonical_project: 'canonical-project' }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const callbacks = new Map();
+  const logger = { debug() { }, info() { }, warn() { }, error() { } };
+  plugin.register({
+    pluginConfig: {
+      url: 'http://engram.test:37777',
+      token: 'test-token',
+      autoExtract: false,
+      workspaceDir: workspace,
+    },
+    logger,
+    on(name, callback) { callbacks.set(name, callback); },
+    registerTool() { },
+    registerCommand() { },
+    registerCli() { },
+    registerService() { },
+  });
+
+  const cases = [
+    ['after_tool_call', { toolName: 'noop' }],
+    ['before_compaction', { messages: [] }],
+    ['session_end', { messages: [] }],
+  ];
+  for (const [name, event] of cases) {
+    const result = callbacks.get(name)(event, { agentId: 'agent-a', sessionId: 'session-a', workspaceDir: workspace });
+    assert.equal(typeof result?.then, 'function', `${name} must return a Promise`);
+    await result;
+  }
+});
+
+test('file watcher startup rejects when canonical registration fails', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-file-watcher-registration-'));
+  try {
+    const warnings = [];
+    const logger = {
+      debug() { },
+      info() { },
+      warn(message) { warnings.push(message); },
+      error() { },
+    };
+    const client = {
+      registerAndResolveProject: async () => ({
+        ok: false,
+        error: { code: 'PROJECT_IDENTITY_UNAVAILABLE' },
+      }),
+    };
+    const service = createFileWatcherService(workspace, client, parseConfig({
+      url: 'http://engram.test:37777',
+      token: 'test-token',
+    }), logger);
+
+    await assert.rejects(service.start({ logger }), /PROJECT_IDENTITY_UNAVAILABLE/);
+    assert.deepEqual(warnings, ['[file-watcher] project registration failed: PROJECT_IDENTITY_UNAVAILABLE']);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
   }
 });

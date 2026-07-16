@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,8 @@ const (
 )
 
 var strictAnchorV2 = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+var errGitIdentityAbsent = errors.New("git repository or origin remote is absent")
 
 // ProjectIdentityV2 is complete project metadata sent before the first data
 // access. Exactly one source form is valid: git remote+relative path, or a
@@ -128,6 +131,9 @@ func ResolveProjectIdentityV2(cwd string) (ProjectIdentityV2, error) {
 	}
 	legacyID := filepath.Base(resolved) + "_" + sha256Hex(resolved)[:6]
 	remote, relativePath, gitErr := getGitInfo(resolved)
+	if gitErr != nil && !errors.Is(gitErr, errGitIdentityAbsent) {
+		return ProjectIdentityV2{}, fmt.Errorf("resolve git identity: %w", gitErr)
+	}
 	if gitErr == nil && remote != "" {
 		identity := ProjectIdentityV2{
 			Version:         ProjectIdentityVersionV2,
@@ -200,19 +206,23 @@ func readProjectAnchorV2(anchorPath string) (projectAnchorV2, error) {
 }
 
 func decodeProjectAnchorV2(data []byte) (projectAnchorV2, error) {
-	var anchor projectAnchorV2
+	var wire struct {
+		Version uint32 `json:"version"`
+		Anchor  string `json:"anchor"`
+		Shared  *bool  `json:"shared"`
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&anchor); err != nil {
+	if err := decoder.Decode(&wire); err != nil {
 		return projectAnchorV2{}, fmt.Errorf("decode %s: %w", projectIdentityV2File, err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return projectAnchorV2{}, fmt.Errorf("trailing data in %s", projectIdentityV2File)
 	}
-	if anchor.Version != ProjectIdentityVersionV2 || !strictAnchorV2.MatchString(anchor.Anchor) {
+	if wire.Version != ProjectIdentityVersionV2 || !strictAnchorV2.MatchString(wire.Anchor) || wire.Shared == nil {
 		return projectAnchorV2{}, fmt.Errorf("malformed %s", projectIdentityV2File)
 	}
-	return anchor, nil
+	return projectAnchorV2{Version: wire.Version, Anchor: wire.Anchor, Shared: *wire.Shared}, nil
 }
 
 func publishProjectAnchorV2(dir, anchorPath string, anchor projectAnchorV2) (bool, error) {
@@ -242,7 +252,7 @@ func publishProjectAnchorV2(dir, anchorPath string, anchor projectAnchorV2) (boo
 		return false, fmt.Errorf("%s %s: %w", stage, projectIdentityV2File, cause)
 	}
 
-	if err := temp.Chmod(0600); err != nil {
+	if err := temp.Chmod(0o600); err != nil {
 		return fail("chmod temporary", err, true)
 	}
 	n, err := temp.Write(data)
@@ -313,6 +323,9 @@ func ResolveProjectSlug(cwd string) (id string, displayName string, gitRemote st
 		id, displayName = applyAnchorFile(resolved, id, displayName, false)
 		return id, displayName, remoteURL, nil
 	}
+	if gitErr != nil && !errors.Is(gitErr, errGitIdentityAbsent) {
+		return "", "", "", fmt.Errorf("resolve git identity: %w", gitErr)
+	}
 
 	// Fallback: path-based ID (6 hex chars, matches LegacyProjectID)
 	hash := sha256Hex(resolved)
@@ -355,7 +368,7 @@ func applyAnchorFile(dir, id, displayName string, storeID bool) (string, string)
 		anchor["id"] = id
 	}
 	if fileData, marshalErr := json.MarshalIndent(anchor, "", "  "); marshalErr == nil {
-		_ = os.WriteFile(anchorPath, append(fileData, '\n'), 0644)
+		_ = os.WriteFile(anchorPath, append(fileData, '\n'), 0o644)
 		// Auto-stage in git if we are inside a repo.
 		if !storeID {
 			exec.Command("git", "-C", dir, "add", ".engram-project").Run() //nolint:errcheck
@@ -373,11 +386,14 @@ func getGitInfo(cwd string) (remoteURL, relativePath string, err error) {
 
 	rawRemote, err := runGit(ctx, cwd, "remote", "get-url", "origin")
 	if err != nil {
+		if isMissingGitIdentityError(err) {
+			return "", "", fmt.Errorf("%w: %v", errGitIdentityAbsent, err)
+		}
 		return "", "", err
 	}
 	remoteURL = strings.TrimSpace(rawRemote)
 	if remoteURL == "" {
-		return "", "", fmt.Errorf("empty remote URL")
+		return "", "", errGitIdentityAbsent
 	}
 
 	rawPrefix, err := runGit(ctx, cwd, "rev-parse", "--show-prefix")
@@ -389,16 +405,29 @@ func getGitInfo(cwd string) (remoteURL, relativePath string, err error) {
 	return remoteURL, relativePath, nil
 }
 
+func isMissingGitIdentityError(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "not a git repository") || strings.Contains(message, "no such remote")
+}
+
 // runGit executes a git command in the given directory and returns stdout.
 // On failure the error message includes stderr so callers get diagnostic detail
 // (e.g. "not a git repository") rather than a bare exit-status string.
 func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	cmdArgs := append([]string{"-C", dir}, args...)
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
 			return "", fmt.Errorf("%w: %s", err, msg)
 		}

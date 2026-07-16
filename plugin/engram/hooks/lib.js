@@ -304,7 +304,12 @@ function isInjectionHook(hookName) {
 function getGitRemoteID(cwd) {
   try {
     const execSync = require('child_process').execSync;
-    const opts = { cwd, stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 };
+    const opts = {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 3000,
+      env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
+    };
     const remoteURL = execSync('git remote get-url origin', opts).toString().trim();
     if (!remoteURL) return null;
     const relativePath = execSync('git rev-parse --show-prefix', opts).toString().trim();
@@ -315,9 +320,16 @@ function getGitRemoteID(cwd) {
       gitRemote: remoteURL,
       relativePath: relativePath,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    if (isMissingGitIdentityError(error)) return null;
+    throw new Error('PROJECT_IDENTITY_UNAVAILABLE: git identity resolution failed', { cause: error });
   }
+}
+
+function isMissingGitIdentityError(error) {
+  if (!error || typeof error !== 'object') return false;
+  const stderr = error.stderr == null ? '' : String(error.stderr);
+  return /not a git repository|no such remote/i.test(stderr);
 }
 
 /**
@@ -355,7 +367,7 @@ function ProjectIDWithName(cwd) {
 const PROJECT_IDENTITY_VERSION_V2 = 2;
 const PROJECT_IDENTITY_V2_FILE = '.engram-project-v2.json';
 const STRICT_ANCHOR_V2 = /^[0-9a-f]{32}$/;
-const PROJECT_IDENTITY_CONTROL = /[\u0000-\u001f\u007f]/;
+const PROJECT_IDENTITY_CONTROL = /\p{Cc}/u;
 const PROJECT_SELECTOR_V2 = /^[A-Za-z0-9_.\/:\\-]+$/;
 const PROJECT_ANCHOR_V2_KEYS = ['anchor', 'shared', 'version'];
 
@@ -839,17 +851,7 @@ async function RunHook(hookName, handler) {
       ProjectIdentityV2: resolveProjectIdentityV2(cwd),
       RawInput: rawInput,
     };
-    try {
-      await registerProjectIdentityV2(context);
-    } catch (registrationError) {
-      // A reached server that rejects registration (4xx/5xx) is a hard barrier:
-      // do not let the handler issue project-scoped requests. A transport-level
-      // offline failure cannot have performed data access, so preserve the
-      // hook's established local/offline fallback behavior.
-      const message = registrationError instanceof Error ? registrationError.message : String(registrationError);
-      if (!isProjectIdentityTransportOffline(registrationError)) throw registrationError;
-      console.error(`[engram] ${hookName} identity registration offline: ${message}`);
-    }
+    await registerProjectIdentityV2(context);
     const additionalContext =
       typeof handler === 'function' ? await handler(context, input) : '';
     writeResponse(hookName, additionalContext);
@@ -1135,6 +1137,7 @@ module.exports = {
   RunHook,
   RunStatuslineHook,
   isInjectionHook,
+  isQuietMode,
   writeResponse,
   incrementSessionSignals,
   appendSessionFile,

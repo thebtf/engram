@@ -6,10 +6,10 @@
  * and tracks utility signals for injected observations.
  */
 
+import { resolveAndRegisterProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { normalizeEngramContent } from './content.js';
-import { resolveIdentity } from '../identity.js';
 import { classifyMessage } from './message-classifier.js';
 import type { SessionEndEvent, ConversationMessage, PluginHookContext, PluginLogger } from '../types/openclaw.js';
 
@@ -71,9 +71,7 @@ export async function handleSessionEnd(
     if (!client.isAvailable()) return;
 
     const agentId = ctx.agentId ?? '';
-    const identity = resolveIdentity(agentId, ctx.workspaceDir);
-    const selectedProject = config.project ?? identity.projectId;
-    const registration = await client.registerAndResolveProject(identity, selectedProject);
+    const registration = await resolveAndRegisterProject(client, agentId, ctx.workspaceDir, config.project);
     if (!registration.ok) {
       (logger ?? console).warn(`[engram] session-end: project registration failed: ${registration.error.code}`);
       return;

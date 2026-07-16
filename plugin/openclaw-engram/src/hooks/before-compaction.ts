@@ -6,10 +6,10 @@
  * This is fire-and-forget: the hook must never block compaction.
  */
 
+import { resolveAndRegisterProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { normalizeEngramContent } from './content.js';
-import { resolveIdentity } from '../identity.js';
 import type { BeforeCompactionEvent, ConversationMessage, PluginHookContext, PluginLogger } from '../types/openclaw.js';
 
 /** Maximum recent messages to include in the backfill payload. */
@@ -37,9 +37,7 @@ export async function handleBeforeCompaction(
     const agentId = ctx.agentId ?? '';
     const sessionId = ctx.sessionId ?? ctx.sessionKey ?? agentId;
     if (!sessionId?.trim()) return; // no session identity available — skip
-    const identity = resolveIdentity(agentId, ctx.workspaceDir);
-    const selectedProject = config.project ?? identity.projectId;
-    const registration = await client.registerAndResolveProject(identity, selectedProject);
+    const registration = await resolveAndRegisterProject(client, agentId, ctx.workspaceDir, config.project);
     if (!registration.ok) {
       (logger ?? console).warn(`[engram] before-compaction: project registration failed: ${registration.error.code}`);
       return;

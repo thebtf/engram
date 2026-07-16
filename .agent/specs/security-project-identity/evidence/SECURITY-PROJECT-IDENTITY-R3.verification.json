@@ -50,7 +50,7 @@
     "database_remaining": 0
   },
   "security": {
-    "classification": "S2",
+    "classification": "S3",
     "verdict": "PASS",
     "open_findings": 0
   }

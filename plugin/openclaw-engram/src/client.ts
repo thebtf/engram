@@ -7,7 +7,7 @@
 
 import { AvailabilityTracker } from './availability.js';
 import type { PluginConfig } from './config.js';
-import { validateProjectSelectorV2, type ProjectIdentity } from './identity.js';
+import { resolveIdentity, validateProjectSelectorV2, type ProjectIdentity } from './identity.js';
 
 // ---------------------------------------------------------------------------
 // Response types
@@ -118,6 +118,21 @@ export type ProjectRegistrationResult =
         httpStatus: number;
       };
     };
+
+export interface ProjectRegistrationClient {
+  registerAndResolveProject(identity: ProjectIdentity, selector: string): Promise<ProjectRegistrationResult>;
+}
+
+/** Resolve workspace identity, apply the configured selector override, and register canonically. */
+export async function resolveAndRegisterProject(
+  client: ProjectRegistrationClient,
+  agentId: string,
+  workspaceDir: string | undefined,
+  configuredProject?: string,
+): Promise<ProjectRegistrationResult> {
+  const identity = resolveIdentity(agentId, workspaceDir);
+  return client.registerAndResolveProject(identity, configuredProject ?? identity.projectId);
+}
 
 /** A single observation returned by the decisions search endpoint. */
 export interface DecisionSearchObservation {

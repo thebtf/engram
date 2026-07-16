@@ -7,10 +7,10 @@
  * Non-blocking: 500ms timeout, failures swallowed (Constitution Principle 3).
  */
 
+import { resolveAndRegisterProject } from '../client.js';
 import type { EngramRestClient, Observation } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptPayload, quotedPromptScalar } from '../context/formatter.js';
-import { resolveIdentity } from '../identity.js';
 import type { BaseHookEvent, PluginHookContext } from '../types/openclaw.js';
 
 /** Tool name patterns that modify files. */
@@ -74,9 +74,7 @@ export async function handleBeforeToolCall(
     const filePath = toolEvent.tool_input ? extractFilePath(toolEvent.tool_input) : null;
     if (!filePath) return;
 
-    const identity = resolveIdentity(ctx.agentId ?? '', ctx.workspaceDir);
-    const selectedProject = config.project ?? identity.projectId;
-    const registration = await client.registerAndResolveProject(identity, selectedProject);
+    const registration = await resolveAndRegisterProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
     if (!registration.ok) return;
     const project = registration.canonicalProject;
 

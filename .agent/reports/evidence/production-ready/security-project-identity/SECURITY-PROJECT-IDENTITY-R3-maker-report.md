@@ -70,7 +70,7 @@ than falling back to an overwrite-capable rename.
 
 ## Security review
 
-Classification: **S2 (medium)**. The changed trust boundaries are externally
+Classification: **S3 (high)**. The changed trust boundaries are externally
 supplied selectors and workspace-local anchor files shared by concurrent
 processes. Relevant risks are malformed/path-like input, partial-file TOCTOU,
 silent replacement of persistent identity, unsafe permissions, and cleanup
@@ -95,10 +95,13 @@ applied before the final rerun: hard-link no-replace intent is now documented at
 each publication call, and child-process assertion failures serialize their
 per-process results instead of emitting opaque `[object Object]` messages.
 
-No new dependency, schema, public API, background retry, silent clamp, filtered
-count, raw-vs-normalized branch, or dormant/demolished call path was introduced.
-The final full suites passed after these review fixes. This maker review is not
-the independent acceptance verdict; a fresh checker and PM post-run review are
+The public protocol change is additive: `ProjectIdentityV2` protobuf metadata
+and the REST identity-only registration mode preserve existing field numbers,
+routes, and legacy selectors. No new dependency, schema, background retry,
+silent clamp, filtered count, raw-vs-normalized branch, or dormant/demolished
+call path was introduced. The final full suites passed after these review fixes.
+This maker review is not the independent acceptance verdict; a fresh checker
+and PM post-run review are
 still required.
 
 ## V5 demolition classification

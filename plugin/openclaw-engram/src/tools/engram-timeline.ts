@@ -7,10 +7,10 @@
 
 import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
+import { resolveAndRegisterProject } from '../client.js';
 import type { EngramRestClient, Observation } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptScalar } from '../context/formatter.js';
-import { resolveIdentity } from '../identity.js';
 import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.js';
 
 const TimelineParamsSchema = z.object({
@@ -52,9 +52,7 @@ export function createEngramTimelineTool(
         return 'engram is currently unreachable — timeline unavailable';
       }
 
-      const identity = resolveIdentity(ctx.agentId ?? '', ctx.workspaceDir);
-      const selectedProject = config.project ?? identity.projectId;
-      const registration = await client.registerAndResolveProject(identity, selectedProject);
+      const registration = await resolveAndRegisterProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
       if (!registration.ok) {
         return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
       }
