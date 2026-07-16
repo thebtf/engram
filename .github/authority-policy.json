@@ -18,43 +18,18 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0001",
-    "event_base_sha": "ef3f99d7bc83e5978f067446249edd0189417483"
+    "consumed_epoch": "authority-0002",
+    "event_base_sha": "d92cd7a5ce1669bb5aa74fe8e299f91f124b9611"
   },
   "active_epoch": {
-    "id": "authority-0002",
-    "label": "authority-maintenance:authority-0002",
+    "id": "authority-0003",
+    "label": "authority-maintenance:authority-0003",
     "exact_changes": [
       {
         "status": "M",
         "path": ".github/authority-policy.json"
-      },
-      {
-        "status": "M",
-        "path": ".github/workflows/docker-publish.yml"
-      },
-      {
-        "status": "M",
-        "path": ".github/workflows/docker.yaml"
-      },
-      {
-        "status": "A",
-        "path": "scripts/production-gates/build-and-scan-images.ps1"
       }
     ],
-    "expected_head_blobs": [
-      {
-        "path": ".github/workflows/docker-publish.yml",
-        "git_blob": "d84eeb6be03199e242680b9a1a97fd7a44f7f074"
-      },
-      {
-        "path": ".github/workflows/docker.yaml",
-        "git_blob": "d0b365ef2e5e3e58e94089426ec5947c1d99cd93"
-      },
-      {
-        "path": "scripts/production-gates/build-and-scan-images.ps1",
-        "git_blob": "5622378d61fa210376fc1f5d31901778c334a6f9"
-      }
-    ]
+    "expected_head_blobs": []
   }
 }
