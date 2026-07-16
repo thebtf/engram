@@ -382,11 +382,21 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		"tags: [\"v*\"]",
 		"workflow_dispatch:",
 		"verify-images:",
+		"Install Docker Scout CLI",
+		"docker-scout_1.23.1_linux_amd64.tar.gz",
+		"0f778f9d833f28bc6cccff95e33039849c0afcecafa38d9f46fe74bfd0915714",
+		".docker/cli-plugins/docker-scout",
+		"docker scout version",
 		"Mode BuildAndScan",
 	} {
 		if !strings.Contains(verification, fragment) {
 			t.Fatalf("unprivileged Docker workflow lacks verification contract %q", fragment)
 		}
+	}
+	scoutInstallIndex := strings.Index(verification, "Install Docker Scout CLI")
+	buildAndScanIndex := strings.Index(verification, "Build, scan, and exercise exact images without registry authority")
+	if scoutInstallIndex < 0 || buildAndScanIndex < 0 || scoutInstallIndex > buildAndScanIndex {
+		t.Fatal("Docker Scout CLI must be installed before image verification")
 	}
 	for _, forbidden := range []string{"packages: write", "docker/login-action@", "Mode Publish", "Mode ValidateWorkflowRun"} {
 		if strings.Contains(verification, forbidden) {
