@@ -131,6 +131,38 @@ func TestCallTool_PreservesDocumentedUnscopedReviewSelector(t *testing.T) {
 	}
 }
 
+func TestCallTool_PreservesAdminPurgeProjectTarget(t *testing.T) {
+	steps := []string{}
+	var captured []byte
+	srv := &Server{handler: identityOrderHandler{steps: &steps, arguments: &captured}}
+	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
+		return "canonical", nil
+	}
+
+	resp, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
+		ToolName:      "admin",
+		Project:       "legacy",
+		ArgumentsJson: []byte(`{"action":"purge_project","project":"target-project","confirm":"target-project"}`),
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if resp.CanonicalProject != "canonical" {
+		t.Fatalf("canonical response=%q", resp.CanonicalProject)
+	}
+	var args struct {
+		Action  string `json:"action"`
+		Project string `json:"project"`
+		Confirm string `json:"confirm"`
+	}
+	if err := json.Unmarshal(captured, &args); err != nil {
+		t.Fatalf("decode handler args: %v", err)
+	}
+	if args.Action != "purge_project" || args.Project != "target-project" || args.Confirm != "target-project" {
+		t.Fatalf("handler args=%+v", args)
+	}
+}
+
 func TestCallTool_RejectsNonStringProjectArgumentBeforeHandler(t *testing.T) {
 	steps := []string{}
 	srv := &Server{handler: identityOrderHandler{steps: &steps}}

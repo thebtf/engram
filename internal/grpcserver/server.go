@@ -189,9 +189,9 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 }
 
 // canonicalizeProjectArgument makes the identity-resolved project authoritative
-// for any explicitly project-scoped tool call. Empty/omitted project fields keep
-// their existing global/default semantics. The review queue's documented all/*
-// sentinels are also preserved.
+// for any explicitly caller-scoped project field. Empty/omitted project fields
+// keep their existing global/default semantics. The review queue's documented
+// all/* sentinels and admin purge_project's explicit target are preserved.
 func canonicalizeProjectArgument(toolName string, args []byte, canonicalProject string) ([]byte, error) {
 	if canonicalProject == "" || len(bytes.TrimSpace(args)) == 0 {
 		return args, nil
@@ -217,6 +217,12 @@ func canonicalizeProjectArgument(toolName string, args []byte, canonicalProject 
 	}
 	if project == "" {
 		return args, nil
+	}
+	if toolName == "admin" {
+		var action string
+		if rawAction, ok := values["action"]; ok && json.Unmarshal(rawAction, &action) == nil && action == "purge_project" {
+			return args, nil
+		}
 	}
 	if (toolName == "review_metrics.read" || toolName == "review_queue.read") &&
 		(strings.EqualFold(project, "all") || project == "*") {
