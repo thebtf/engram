@@ -58,6 +58,9 @@ func openCandidateTestDB(t *testing.T) *gorm.DB {
 // returns control to the parent.
 func TestOpenCandidateTestDB_SubtestOwnerClosesPoolWithoutPrematureClose(t *testing.T) {
 	observer := openCandidateTestDB(t)
+	observerSQL, err := observer.DB()
+	require.NoError(t, err, "resolve observer SQL pool")
+	observerSQL.SetMaxIdleConns(0)
 	baseline := candidateTestDBOtherSessionCount(t, observer)
 
 	for i := 0; i < 4; i++ {
