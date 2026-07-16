@@ -159,15 +159,15 @@ function Assert-CanonicalVersion {
 
     $releasePattern = '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$'
     $commitPattern = '^sha-[0-9a-f]{40}$'
-    if ($Value -match $commitPattern) {
+    if ($Value -cmatch $commitPattern) {
         return $Value
     }
-    if ($Value -notmatch $releasePattern) {
+    if ($Value -cnotmatch $releasePattern) {
         throw "Version is not a canonical Docker-safe release or immutable commit identity: $Value"
     }
     if ($Matches[4]) {
         foreach ($identifier in $Matches[4].Split('.')) {
-            if ($identifier -match '^[0-9]+$' -and $identifier.Length -gt 1 -and $identifier.StartsWith('0', [StringComparison]::Ordinal)) {
+            if ($identifier -cmatch '^[0-9]+$' -and $identifier.Length -gt 1 -and $identifier.StartsWith('0', [StringComparison]::Ordinal)) {
                 throw "Numeric prerelease identifiers may not contain leading zeroes: $Value"
             }
         }
@@ -182,7 +182,7 @@ function Assert-CanonicalReleaseRef {
         throw "Release publication requires refs/tags/v*: $Ref"
     }
     $value = $Ref.Substring('refs/tags/'.Length)
-    if ((Assert-CanonicalVersion -Value $value) -notmatch '^v') {
+    if ((Assert-CanonicalVersion -Value $value) -cnotmatch '^v') {
         throw "Release publication requires a canonical SemVer tag: $Ref"
     }
     return $value
@@ -225,7 +225,7 @@ function Get-TagRulesets {
     }
     $details = @()
     foreach ($summary in $summaries) {
-        if ($summary.target -ne 'tag' -or $summary.enforcement -ne 'active') { continue }
+        if ($summary.target -cne 'tag' -or $summary.enforcement -cne 'active') { continue }
         $uri = "$($GitHubApiUrl.TrimEnd('/'))/repos/$Repository/rulesets/$($summary.id)"
         $details += Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
     }
@@ -237,13 +237,13 @@ function Assert-ImmutableReleaseRuleset {
 
     $matches = @()
     foreach ($ruleset in $Rulesets) {
-        if ($ruleset.target -ne 'tag' -or $ruleset.enforcement -ne 'active') { continue }
+        if ($ruleset.target -cne 'tag' -or $ruleset.enforcement -cne 'active') { continue }
         $includes = @($ruleset.conditions.ref_name.include)
         $excludes = @($ruleset.conditions.ref_name.exclude)
-        if ($includes.Count -ne 1 -or $includes[0] -ne 'refs/tags/v*' -or $excludes.Count -ne 0) { continue }
+        if ($includes.Count -ne 1 -or $includes[0] -cne 'refs/tags/v*' -or $excludes.Count -ne 0) { continue }
         if (@($ruleset.bypass_actors).Count -ne 0) { continue }
         $types = @($ruleset.rules | ForEach-Object { [string]$_.type })
-        if ($types -notcontains 'deletion' -or $types -notcontains 'non_fast_forward') { continue }
+        if ($types -cnotcontains 'deletion' -or $types -cnotcontains 'non_fast_forward') { continue }
         $matches += $ruleset
     }
     if ($matches.Count -ne 1) {
@@ -257,13 +257,13 @@ function Assert-ProtectedMainRuleset {
 
     $matches = @()
     foreach ($ruleset in $Rulesets) {
-        if ($ruleset.target -ne 'branch' -or $ruleset.enforcement -ne 'active') { continue }
+        if ($ruleset.target -cne 'branch' -or $ruleset.enforcement -cne 'active') { continue }
         $includes = @($ruleset.conditions.ref_name.include)
         $excludes = @($ruleset.conditions.ref_name.exclude)
-        if ($includes.Count -ne 1 -or $includes[0] -ne "refs/heads/$ExpectedDefaultBranch" -or $excludes.Count -ne 0) { continue }
+        if ($includes.Count -ne 1 -or $includes[0] -cne "refs/heads/$ExpectedDefaultBranch" -or $excludes.Count -ne 0) { continue }
         $types = @($ruleset.rules | ForEach-Object { [string]$_.type })
-        if ($types -notcontains 'deletion' -or $types -notcontains 'non_fast_forward') { continue }
-        $statusRules = @($ruleset.rules | Where-Object { $_.type -eq 'required_status_checks' })
+        if ($types -cnotcontains 'deletion' -or $types -cnotcontains 'non_fast_forward') { continue }
+        $statusRules = @($ruleset.rules | Where-Object { $_.type -ceq 'required_status_checks' })
         if ($statusRules.Count -ne 1 -or -not [bool]$statusRules[0].parameters.strict_required_status_checks_policy) { continue }
         $authorityChecks = @($statusRules[0].parameters.required_status_checks | Where-Object {
             [string]$_.context -ceq 'authority-guard'
@@ -275,7 +275,7 @@ function Assert-ProtectedMainRuleset {
         $bypassActors = @($ruleset.bypass_actors)
         if ($bypassActors.Count -ne 1) { continue }
         $recoveryActor = $bypassActors[0]
-        if ($recoveryActor.actor_type -ne 'User' -or [int64]$recoveryActor.actor_id -ne 7106373 -or $recoveryActor.bypass_mode -ne 'pull_request') { continue }
+        if ($recoveryActor.actor_type -cne 'User' -or [int64]$recoveryActor.actor_id -ne 7106373 -or $recoveryActor.bypass_mode -cne 'pull_request') { continue }
         $matches += $ruleset
     }
     if ($matches.Count -ne 1) {
@@ -390,31 +390,31 @@ function Assert-WorkflowRunFieldParity {
 }
 
 function Invoke-ValidateWorkflowRun {
-    if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+    if ($Repository -cnotmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
         throw "Repository must be owner/name: $Repository"
     }
     $inputs = Get-WorkflowRunValidationInputs
     $event = $inputs.event
     $eventRun = $event.workflow_run
     $apiRun = $inputs.api_run
-    if ($event.action -ne 'completed') { throw 'Publisher accepts only workflow_run/completed.' }
+    if ($event.action -cne 'completed') { throw 'Publisher accepts only workflow_run/completed.' }
     Assert-WorkflowRunFieldParity -EventRun $eventRun -ApiRun $apiRun
-    if ($apiRun.name -ne $ExpectedWorkflowName -or $apiRun.path -ne $TrustedWorkflowPath) {
+    if ($apiRun.name -cne $ExpectedWorkflowName -or $apiRun.path -cne $TrustedWorkflowPath) {
         throw 'Triggering run is not the named unprivileged Docker verification workflow.'
     }
-    if ($apiRun.event -ne 'push' -or $apiRun.status -ne 'completed' -or $apiRun.conclusion -ne 'success') {
+    if ($apiRun.event -cne 'push' -or $apiRun.status -cne 'completed' -or $apiRun.conclusion -cne 'success') {
         throw 'Triggering workflow must be a successful completed push verification.'
     }
-    if ($apiRun.head_repository.full_name -ne $Repository -or $apiRun.repository.full_name -ne $Repository -or $event.repository.full_name -ne $Repository) {
+    if ($apiRun.head_repository.full_name -cne $Repository -or $apiRun.repository.full_name -cne $Repository -or $event.repository.full_name -cne $Repository) {
         throw 'Triggering run must originate from the same repository.'
     }
-    if ($inputs.repository.full_name -ne $Repository -or $inputs.repository.default_branch -ne $ExpectedDefaultBranch) {
+    if ($inputs.repository.full_name -cne $Repository -or $inputs.repository.default_branch -cne $ExpectedDefaultBranch) {
         throw 'Repository/default-branch API identity mismatch.'
     }
     if ([int64]$apiRun.workflow_id -ne [int64]$inputs.trusted_workflow.id -or
-        $inputs.trusted_workflow.path -ne $TrustedWorkflowPath -or
-        $inputs.trusted_workflow.name -ne $ExpectedWorkflowName -or
-        $inputs.trusted_workflow.state -ne 'active') {
+        $inputs.trusted_workflow.path -cne $TrustedWorkflowPath -or
+        $inputs.trusted_workflow.name -cne $ExpectedWorkflowName -or
+        $inputs.trusted_workflow.state -cne 'active') {
         throw 'Triggering workflow ID/path/name is not the active trusted default-branch workflow.'
     }
 
@@ -424,10 +424,10 @@ function Invoke-ValidateWorkflowRun {
     $mainRuleset = Assert-ProtectedMainRuleset -Rulesets @($inputs.branch_rulesets)
 
     if ($null -ne $inputs.git) {
-        if ([string]$inputs.git.tag_commit -ne $commit) {
+        if ([string]$inputs.git.tag_commit -cne $commit) {
             throw 'Fixture tag does not peel to workflow_run head_sha.'
         }
-        if (@($inputs.git.main_ancestors) -notcontains $commit) {
+        if (@($inputs.git.main_ancestors) -cnotcontains $commit) {
             throw 'Fixture release commit is not an ancestor of protected main.'
         }
     } else {
@@ -441,7 +441,7 @@ function Invoke-ValidateWorkflowRun {
         Invoke-GitText -Arguments @('fetch', '--no-tags', '--force', 'origin', "+$tagRef`:$guardRef") | Out-Null
         Invoke-GitText -Arguments @('fetch', '--no-tags', '--force', 'origin', "+refs/heads/$ExpectedDefaultBranch`:refs/remotes/origin/$ExpectedDefaultBranch") | Out-Null
         $peeled = (Invoke-GitText -Arguments @('rev-parse', '--verify', "$guardRef^{commit}")).output.ToLowerInvariant()
-        if ($peeled -ne $commit) {
+        if ($peeled -cne $commit) {
             throw "Protected release tag peels to $peeled, not workflow_run head_sha $commit."
         }
         $ancestry = Invoke-GitText -Arguments @('merge-base', '--is-ancestor', $commit, "refs/remotes/origin/$ExpectedDefaultBranch") -AllowExitOne
