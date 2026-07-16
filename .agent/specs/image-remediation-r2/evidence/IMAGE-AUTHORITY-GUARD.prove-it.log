@@ -1,0 +1,12 @@
+--- FAIL: TestDockerReleaseRefFreshnessGuard (0.80s)
+    --- FAIL: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix (0.80s)
+        --- FAIL: TestDockerReleaseRefFreshnessGuard/workflow_run_provenance_and_protected-main_authority_matrix/exact_protected_release_provenance (0.80s)
+            image_runtime_contract_test.go:733: image gate unexpectedly failed: exit status 1
+                [31;1mException: [0mD:\Dev\engram\.agent\worktrees\image-remediation-r2-immutable-publish\scripts\production-gates\build-and-scan-images.ps1:282[0m
+                [31;1m[0m[36;1mLine |[0m
+                [31;1m[0m[36;1m[36;1m 282 | [0m         [36;1mthrow "Expected exactly one active strict protected-main rule[0m …[0m
+                [31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m     | [31;1m         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+                [31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m[31;1m[31;1m[36;1m     | [31;1mExpected exactly one active strict protected-main ruleset requiring authority-guard; found 0.[0m
+FAIL
+FAIL	github.com/thebtf/engram/tests/critical/runtime	1.346s
+FAIL

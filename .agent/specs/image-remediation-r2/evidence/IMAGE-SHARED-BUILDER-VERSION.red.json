@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-11",
+  "gate": "full no-cache three-image acceptance",
+  "source_commit": "1f22adce5a86a14e556a715e799fa8562f83ba1f",
+  "observed_failure": "operator-console target traversed the shared Go builder without VERSION and failed closed at Dockerfile validation",
+  "secondary_discrepancy": "failure cleanup parsed Compose before mandatory image variables had values",
+  "remediation": [
+    "pass the already validated VERSION build argument to both server and operator-console targets",
+    "install bounded cleanup-only Compose placeholders before compose down when a build fails early",
+    "add permanent static regression assertions for both seams"
+  ],
+  "result": "RED_REPRODUCED_AND_FIXED_BEFORE_FINAL_GATE"
+}

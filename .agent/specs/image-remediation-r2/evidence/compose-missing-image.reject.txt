@@ -1,0 +1,1 @@
+error while interpolating services.server.image: required variable ENGRAM_SERVER_IMAGE is missing a value: set ENGRAM_SERVER_IMAGE from the immutable release manifest

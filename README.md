@@ -88,10 +88,20 @@ multi-container application; see the official [Docker Compose documentation](htt
 git clone https://github.com/thebtf/engram.git
 cd engram
 cp .env.example .env
-# Set POSTGRES_PASSWORD and ENGRAM_AUTH_ADMIN_TOKEN in .env before production use.
+commit=$(git rev-parse HEAD)
+cat >> .env <<EOF
+ENGRAM_SERVER_IMAGE=engram-local-server
+ENGRAM_OPERATOR_IMAGE=engram-local-operator-console
+ENGRAM_POSTGRES_IMAGE=engram-local-postgres
+ENGRAM_BUILD_VERSION=sha-$commit
+EOF
+# Also set POSTGRES_PASSWORD and ENGRAM_AUTH_ADMIN_TOKEN in .env before production use.
 docker compose up -d --build
 docker compose ps
 ```
+
+The pull-only production flow uses digest identities from a release manifest
+instead; see [the deployment guide](docs/DEPLOYMENT.md).
 
 The supplied stack starts PostgreSQL 17 with pgvector, `engram-server` on
 `WORKER_PORT` (default `37777`), and the standalone Nuxt console on

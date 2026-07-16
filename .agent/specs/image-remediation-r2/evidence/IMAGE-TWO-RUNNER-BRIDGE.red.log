@@ -1,0 +1,5 @@
+--- FAIL: TestDockerReleaseRefFreshnessGuard (0.00s)
+    image_runtime_contract_test.go:71: trusted workflow_run publisher lacks contract "prepare-release:"
+FAIL
+FAIL	github.com/thebtf/engram/tests/critical/runtime	0.544s
+FAIL
