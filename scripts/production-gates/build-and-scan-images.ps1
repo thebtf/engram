@@ -672,13 +672,18 @@ function Invoke-LoadPayload {
     foreach ($image in $validated.images) {
         & docker image load --input $image.archive
         if ($LASTEXITCODE -ne 0) { throw "Docker failed to load validated image archive for $($image.name)." }
-        $inspectRaw = & docker image inspect $image.image_id 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "Loaded archive does not contain exact image ID $($image.image_id)." }
-        $inspect = @((($inspectRaw | Out-String) | ConvertFrom-Json -Depth 100))[0]
+        $payloadTag = Get-PayloadImageTag -Name $image.name -ImageID $image.image_id
+        $localId = Resolve-LocalImageId -Tag $payloadTag -ExpectedConfigDigest $image.image_id
+        $inspectJson = Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $localId, '--format', '{{json .}}')
+        $inspect = $inspectJson | ConvertFrom-Json -Depth 100
+        if ($null -eq $inspect -or $inspect -is [array]) {
+            throw "Docker inspect returned an invalid result shape for loaded image $($image.name)."
+        }
         if ([string]$inspect.Config.Labels.'org.opencontainers.image.revision' -cne $validated.source_commit -or
             [string]$inspect.Config.Labels.'org.opencontainers.image.version' -cne $validated.release_version) {
             throw "Loaded exact image $($image.image_id) lacks validated revision/version labels."
         }
+        $image['local_id'] = $localId
     }
     $validated | ConvertTo-Json -Depth 30
 }
@@ -725,6 +730,7 @@ function Export-ReleasePayload {
     param(
         [Parameter(Mandatory = $true)][string]$AcceptanceManifestPath,
         [Parameter(Mandatory = $true)]$ExactImageIDs,
+        [Parameter(Mandatory = $true)]$LocalImageIDs,
         [Parameter(Mandatory = $true)][string]$Commit,
         [Parameter(Mandatory = $true)][string]$BuildVersion
     )
@@ -741,16 +747,22 @@ function Export-ReleasePayload {
     $manifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifestDestination).Hash.ToLowerInvariant()
     $manifestSize = (Get-Item -LiteralPath $manifestDestination).Length
     $definitions = @(
-        [ordered]@{ name = 'server'; archive = 'server.tar'; image_id = [string]$ExactImageIDs.server },
-        [ordered]@{ name = 'operator_console'; archive = 'operator-console.tar'; image_id = [string]$ExactImageIDs.operator_console },
-        [ordered]@{ name = 'postgres'; archive = 'postgres.tar'; image_id = [string]$ExactImageIDs.postgres }
+        [ordered]@{ name = 'server'; archive = 'server.tar'; image_id = [string]$ExactImageIDs.server; local_id = [string]$LocalImageIDs.server },
+        [ordered]@{ name = 'operator_console'; archive = 'operator-console.tar'; image_id = [string]$ExactImageIDs.operator_console; local_id = [string]$LocalImageIDs.operator_console },
+        [ordered]@{ name = 'postgres'; archive = 'postgres.tar'; image_id = [string]$ExactImageIDs.postgres; local_id = [string]$LocalImageIDs.postgres }
     )
     $images = @()
     foreach ($definition in $definitions) {
         $archivePath = Join-Path $payloadPath $definition.archive
-        & docker image save --output $archivePath $definition.image_id
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
-            throw "Failed to export exact image data for $($definition.name)."
+        $payloadTag = Get-PayloadImageTag -Name $definition.name -ImageID $definition.image_id
+        Invoke-CapturedNative -File 'docker' -Arguments @('image', 'tag', $definition.local_id, $payloadTag) | Out-Null
+        try {
+            & docker image save --output $archivePath $payloadTag
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
+                throw "Failed to export exact image data for $($definition.name)."
+            }
+        } finally {
+            Invoke-CapturedNative -File 'docker' -Arguments @('image', 'rm', $payloadTag) | Out-Null
         }
         Assert-ArchiveEnvelope -Path $archivePath
         $images += [ordered]@{
@@ -947,18 +959,21 @@ function Invoke-Publish {
     $plan = New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $null
     $plan['acceptance_manifest_sha256'] = $inputs.manifest_sha256
 
+    $localImageIdsByName = [ordered]@{}
     foreach ($destination in $plan.destinations) {
-        & docker image inspect $destination.config_digest *> $null
-        if ($LASTEXITCODE -ne 0) {
-            throw "Exact scanned local image is missing before publication: $($destination.config_digest)"
+        if (-not $localImageIdsByName.Contains($destination.image)) {
+            $payloadTag = Get-PayloadImageTag -Name $destination.image -ImageID $destination.config_digest
+            $localImageIdsByName[$destination.image] = Resolve-LocalImageId `
+                -Tag $payloadTag -ExpectedConfigDigest $destination.config_digest
         }
+        $destination['local_id'] = $localImageIdsByName[$destination.image]
     }
 
-    # All six destinations were inspected above. No registry write occurs until
+    # All six destinations were resolved to their exact local store IDs above. No registry write occurs until
     # every mismatch check has passed. This is a repository single-writer model,
     # not an atomic registry compare-and-swap claim.
     foreach ($destination in @($plan.destinations | Where-Object { $_.action -ceq 'push' })) {
-        & docker tag $destination.config_digest $destination.reference
+        & docker tag $destination.local_id $destination.reference
         if ($LASTEXITCODE -ne 0) { throw "Local exact-ID tag failed: $($destination.reference)" }
         & docker push $destination.reference
         if ($LASTEXITCODE -ne 0) { throw "Registry push failed: $($destination.reference)" }
@@ -1123,6 +1138,22 @@ function Get-ImageId {
     return Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $Tag, '--format', '{{.Id}}')
 }
 
+function Get-PayloadImageTag {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$ImageID
+    )
+
+    if ($Name -cnotin @('server', 'operator_console', 'postgres')) {
+        throw "Unsupported release payload image name: $Name"
+    }
+    if ($ImageID -cnotmatch '^sha256:[0-9a-f]{64}$') {
+        throw "Invalid release payload image ID for $Name`: $ImageID"
+    }
+    $safeName = $Name.Replace('_', '-')
+    return "engram-release-payload-$($safeName):$($ImageID.Substring(7))"
+}
+
 function Resolve-LocalImageId {
     param(
         [Parameter(Mandatory = $true)][string]$Tag,
@@ -1131,7 +1162,14 @@ function Resolve-LocalImageId {
 
     $inspectJson = Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $Tag, '--format', '{{json .}}')
     $inspect = $inspectJson | ConvertFrom-Json -Depth 100
-    $localId = [string]$inspect.Id
+    if ($null -eq $inspect -or $inspect -is [array]) {
+        throw "Docker inspect returned an invalid result shape for $Tag."
+    }
+    $idProperty = $inspect.PSObject.Properties['Id']
+    if ($null -eq $idProperty) {
+        throw "Docker inspect returned no image ID for $Tag."
+    }
+    $localId = [string]$idProperty.Value
     if ($localId -cnotmatch '^sha256:[0-9a-f]{64}$') {
         throw "Docker returned an invalid local image ID for $Tag`: $localId"
     }
@@ -1702,6 +1740,7 @@ if (-not [string]::IsNullOrWhiteSpace($ReleasePayloadPath)) {
     $payload = Export-ReleasePayload `
         -AcceptanceManifestPath (Join-Path $artifactPath 'final-image-set.json') `
         -ExactImageIDs $imageIds `
+        -LocalImageIDs $localImageIds `
         -Commit $sourceCommit `
         -BuildVersion $buildVersion
     Write-Host "Release payload: $payload"
