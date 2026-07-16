@@ -1359,9 +1359,10 @@ try {
 
     # BuildKit's default provenance attestation contains per-run metadata and changes --iidfile identity.
     # docker image save/load does not preserve that attestation, so release provenance remains in the
-    # validated immutable bundle while SOURCE_DATE_EPOCH stabilizes the loadable image configuration.
+    # validated immutable bundle. SOURCE_DATE_EPOCH pins image metadata and rewrite-timestamp pins
+    # exported layer file mtimes for repeatable no-cache image identities.
     Invoke-LoggedNative -File 'docker' -Arguments @(
-        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--load', '--platform', $Platform,
+        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--output', 'type=docker,rewrite-timestamp=true', '--platform', $Platform,
         '--target', 'server', '--build-arg', "VERSION=$buildVersion",
         '--label', 'org.opencontainers.image.source=https://github.com/thebtf/engram',
         '--label', "org.opencontainers.image.revision=$sourceCommit",
@@ -1370,7 +1371,7 @@ try {
     ) -LogPath (Join-Path $artifactPath 'server/build.log')
 
     Invoke-LoggedNative -File 'docker' -Arguments @(
-        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--load', '--platform', $Platform,
+        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--output', 'type=docker,rewrite-timestamp=true', '--platform', $Platform,
         '--target', 'operator-console', '--build-arg', "VERSION=$buildVersion",
         '--label', 'org.opencontainers.image.source=https://github.com/thebtf/engram',
         '--label', "org.opencontainers.image.revision=$sourceCommit",
@@ -1380,7 +1381,7 @@ try {
     ) -LogPath (Join-Path $artifactPath 'operator-console/build.log')
 
     Invoke-LoggedNative -File 'docker' -Arguments @(
-        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--load', '--platform', $Platform,
+        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--output', 'type=docker,rewrite-timestamp=true', '--platform', $Platform,
         '-f', (Join-Path $buildContext 'deploy/postgres/Dockerfile'),
         '--label', 'org.opencontainers.image.source=https://github.com/thebtf/engram',
         '--label', "org.opencontainers.image.revision=$sourceCommit",
