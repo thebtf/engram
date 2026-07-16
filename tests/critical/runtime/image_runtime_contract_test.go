@@ -452,7 +452,7 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 	}
 	for _, forbidden := range []string{
 		"toolVersions.scout", "'scout', 'cves'", "docker-scout",
-		"'--load'", "'type=docker,rewrite-timestamp=true'",
+		"--load", "'type=docker,rewrite-timestamp=true'",
 	} {
 		if strings.Contains(scanner, forbidden) {
 			t.Fatalf("image gate retains forbidden scanner or exporter contract %q", forbidden)
