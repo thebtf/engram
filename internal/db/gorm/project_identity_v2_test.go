@@ -248,6 +248,25 @@ func TestRegisterAndResolve_ConcurrentCallsConvergeAndSharingIsExplicit(t *testi
 	if a.CanonicalProjectID == b.CanonicalProjectID {
 		t.Fatal("copied unshared anchors converged")
 	}
+	crossClientLegacyID := prefix + "same-local-workspace"
+	crossClientIdentity := &ProjectIdentityV2{
+		Version:         2,
+		LegacyProjectID: crossClientLegacyID,
+		DisplayName:     "same-local-workspace",
+		NonGitAnchor:    anchor,
+		AnchorShared:    &unshared,
+	}
+	e, err := RegisterAndResolve(ctx, db, prefix+"client-a-selector", crossClientIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := RegisterAndResolve(ctx, db, prefix+"client-b-selector", crossClientIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.CanonicalProjectID != f.CanonicalProjectID {
+		t.Fatalf("same unshared workspace diverged across client selectors: %q != %q", e.CanonicalProjectID, f.CanonicalProjectID)
+	}
 	c, err := RegisterAndResolve(ctx, db, prefix+"shared-a", makeNonGit(prefix+"shared-a", &shared))
 	if err != nil {
 		t.Fatal(err)

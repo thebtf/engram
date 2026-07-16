@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { EngramRestClient } from '../dist/client.js';
+import { EngramRestClient, resolveAndRegisterProject } from '../dist/client.js';
 import { handleSessionStart } from '../dist/hooks/session-start.js';
 import pluginModule from '../dist/index.js';
 import { parseConfig } from '../dist/config.js';
@@ -67,6 +67,30 @@ test('registration sends full v2 metadata first, substitutes canonical, and dedu
   assert.deepEqual(requests[0].body.project_identity, identity.projectIdentityV2);
   for (const result of [...results, late]) {
     assert.deepEqual(result, { ok: true, canonicalProject: 'canonical-project' });
+  }
+});
+
+test('configured project override registers a selector-only shared scope', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-configured-project-'));
+  try {
+    fs.writeFileSync(path.join(workspace, '.engram-project-v2.json'), '{malformed');
+    const calls = [];
+    const client = {
+      registerAndResolveProject: async (identity, selector) => {
+        calls.push({ identity, selector });
+        return { ok: true, canonicalProject: selector };
+      },
+    };
+
+    const result = await resolveAndRegisterProject(client, 'agent-a', workspace, 'team-memory');
+
+    assert.deepEqual(result, { ok: true, canonicalProject: 'team-memory' });
+    assert.deepEqual(calls, [{
+      identity: { projectId: 'team-memory', agentId: 'agent-a' },
+      selector: 'team-memory',
+    }]);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
   }
 });
 
@@ -298,6 +322,7 @@ test('file watcher startup rejects when canonical registration fails', async () 
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-file-watcher-registration-'));
   try {
     const warnings = [];
+    let registrationCall;
     const logger = {
       debug() { },
       info() { },
@@ -305,18 +330,26 @@ test('file watcher startup rejects when canonical registration fails', async () 
       error() { },
     };
     const client = {
-      registerAndResolveProject: async () => ({
-        ok: false,
-        error: { code: 'PROJECT_IDENTITY_UNAVAILABLE' },
-      }),
+      registerAndResolveProject: async (identity, selector) => {
+        registrationCall = { identity, selector };
+        return {
+          ok: false,
+          error: { code: 'PROJECT_IDENTITY_UNAVAILABLE' },
+        };
+      },
     };
     const service = createFileWatcherService(workspace, client, parseConfig({
       url: 'http://engram.test:37777',
       token: 'test-token',
+      project: 'team-memory',
     }), logger);
 
     await assert.rejects(service.start({ logger }), /PROJECT_IDENTITY_UNAVAILABLE/);
     assert.deepEqual(warnings, ['[file-watcher] project registration failed: PROJECT_IDENTITY_UNAVAILABLE']);
+    assert.deepEqual(registrationCall, {
+      identity: { projectId: 'team-memory', agentId: 'file-watcher' },
+      selector: 'team-memory',
+    });
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }

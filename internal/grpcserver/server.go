@@ -201,6 +201,11 @@ func canonicalizeProjectArgument(toolName string, args []byte, canonicalProject 
 	if err := json.Unmarshal(args, &values); err != nil || values == nil {
 		return args, nil
 	}
+	for key := range values {
+		if key != "project" && strings.EqualFold(key, "project") {
+			return nil, errors.New(`tool arguments.project must use the lowercase "project" key`)
+		}
+	}
 	rawProject, ok := values["project"]
 	if !ok || bytes.Equal(bytes.TrimSpace(rawProject), []byte("null")) {
 		return args, nil

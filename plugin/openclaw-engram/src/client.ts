@@ -123,15 +123,24 @@ export interface ProjectRegistrationClient {
   registerAndResolveProject(identity: ProjectIdentity, selector: string): Promise<ProjectRegistrationResult>;
 }
 
-/** Resolve workspace identity, apply the configured selector override, and register canonically. */
+/**
+ * Register an explicit project override as a selector-only shared scope.
+ * Without an override, resolve and register the workspace's full identity.
+ */
 export async function resolveAndRegisterProject(
   client: ProjectRegistrationClient,
   agentId: string,
   workspaceDir: string | undefined,
   configuredProject?: string,
 ): Promise<ProjectRegistrationResult> {
+  if (configuredProject !== undefined) {
+    return client.registerAndResolveProject(
+      { projectId: configuredProject, agentId },
+      configuredProject,
+    );
+  }
   const identity = resolveIdentity(agentId, workspaceDir);
-  return client.registerAndResolveProject(identity, configuredProject ?? identity.projectId);
+  return client.registerAndResolveProject(identity, identity.projectId);
 }
 
 /** A single observation returned by the decisions search endpoint. */

@@ -151,6 +151,38 @@ func TestCallTool_RejectsNonStringProjectArgumentBeforeHandler(t *testing.T) {
 	}
 }
 
+func TestCallTool_RejectsCaseVariantProjectArgumentBeforeHandler(t *testing.T) {
+	tests := []struct {
+		name string
+		args []byte
+	}{
+		{name: "title case", args: []byte(`{"query":"needle","Project":"other"}`)},
+		{name: "upper case", args: []byte(`{"query":"needle","PROJECT":"other"}`)},
+		{name: "mixed case", args: []byte(`{"query":"needle","pRoJeCt":"other"}`)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			steps := []string{}
+			srv := &Server{handler: identityOrderHandler{steps: &steps}}
+			srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
+				return "canonical", nil
+			}
+
+			_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
+				ToolName:      "codebase_search",
+				Project:       "legacy",
+				ArgumentsJson: tt.args,
+			})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("status=%v error=%v, want InvalidArgument", status.Code(err), err)
+			}
+			if len(steps) != 0 {
+				t.Fatalf("handler ran with case-variant project argument: %v", steps)
+			}
+		})
+	}
+}
+
 func TestInitialize_ResolvesBeforeReturningTools(t *testing.T) {
 	srv := &Server{handler: identityOrderHandler{steps: &[]string{}}}
 	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {

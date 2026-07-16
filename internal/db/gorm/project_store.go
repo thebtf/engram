@@ -368,7 +368,14 @@ func projectIdentityBindingKey(selector string, identity ProjectIdentityV2) stri
 		prefix = "p2n_"
 		source = fmt.Sprintf("v2\x00non-git\x00%s\x00%t", identity.NonGitAnchor, *identity.AnchorShared)
 		if !*identity.AnchorShared {
-			source += "\x00" + selector
+			// The legacy ID is path-derived and stable across supported clients,
+			// so one local workspace converges even when outer selectors differ.
+			// Older metadata may omit it; retain selector isolation as a fallback.
+			localScope := identity.LegacyProjectID
+			if localScope == "" {
+				localScope = selector
+			}
+			source += "\x00" + localScope
 		}
 	}
 	sum := sha256.Sum256([]byte(source))
