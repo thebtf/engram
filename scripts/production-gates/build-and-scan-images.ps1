@@ -1319,7 +1319,7 @@ Push-Location $repoRoot
 try {
     $toolVersions.docker = Invoke-CapturedNative -File 'docker' -Arguments @('version', '--format', '{{.Client.Version}} client / {{.Server.Version}} server')
     $toolVersions.buildx = Invoke-CapturedNative -File 'docker' -Arguments @('buildx', 'version')
-    $toolVersions.scout = Invoke-CapturedNative -File 'docker' -Arguments @('scout', 'version')
+    $toolVersions.trivy = Invoke-CapturedNative -File 'trivy' -Arguments @('--version')
     $toolVersions.go = Invoke-CapturedNative -File 'go' -Arguments @('version')
     $toolVersions.node = Invoke-CapturedNative -File 'node' -Arguments @('--version')
     $toolVersions.npm = Invoke-CapturedNative -File 'npm' -Arguments @('--version')
@@ -1418,11 +1418,13 @@ try {
         @{ Name = 'postgres'; Id = $imageIds.postgres }
     )
     foreach ($target in $scanTargets) {
-        $sarif = Join-Path $artifactPath "$($target.Name)/docker-scout.sarif"
-        Invoke-LoggedNative -File 'docker' -Arguments @(
-            'scout', 'cves', "local://$($target.Id)", '--platform', $Platform,
-            '--only-severity', 'critical,high', '--exit-code', '--format', 'sarif', '--output', $sarif
-        ) -LogPath (Join-Path $artifactPath "$($target.Name)/docker-scout.log")
+        $sarif = Join-Path $artifactPath "$($target.Name)/trivy.sarif"
+        Invoke-LoggedNative -File 'trivy' -Arguments @(
+            'image', '--image-src', 'docker', '--platform', $Platform,
+            '--scanners', 'vuln', '--severity', 'HIGH,CRITICAL', '--exit-code', '1',
+            '--format', 'sarif', '--output', $sarif, $target.Id
+        ) -LogPath (Join-Path $artifactPath "$($target.Name)/trivy.log")
+
         $count = Get-SarifResultCount -Path $sarif
         if ($count -ne 0) {
             throw "Scanner returned $count HIGH/CRITICAL result(s) for $($target.Name)"

@@ -38,20 +38,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Install Docker Scout CLI
+      - name: Install Trivy
         shell: bash
         run: |
           set -euo pipefail
-          readonly scout_archive='docker-scout_1.23.1_linux_amd64.tar.gz'
-          readonly scout_url='https://github.com/docker/scout-cli/releases/download/v1.23.1/docker-scout_1.23.1_linux_amd64.tar.gz'
-          readonly scout_sha256='0f778f9d833f28bc6cccff95e33039849c0afcecafa38d9f46fe74bfd0915714'
-          readonly scout_tmp="${RUNNER_TEMP}/docker-scout"
-          mkdir -p "$scout_tmp" "$HOME/.docker/cli-plugins"
-          curl --fail --location --silent --show-error "$scout_url" --output "$scout_tmp/$scout_archive"
-          printf '%s  %s\n' "$scout_sha256" "$scout_tmp/$scout_archive" | sha256sum --check --strict
-          tar --extract --gzip --file "$scout_tmp/$scout_archive" --directory "$scout_tmp"
-          install --mode 0755 "$scout_tmp/docker-scout" "$HOME/.docker/cli-plugins/docker-scout"
-          docker scout version
+          readonly trivy_archive='trivy_0.72.0_Linux-64bit.tar.gz'
+          readonly trivy_url='https://github.com/aquasecurity/trivy/releases/download/v0.72.0/trivy_0.72.0_Linux-64bit.tar.gz'
+          readonly trivy_sha256='bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea'
+          readonly trivy_tmp="${RUNNER_TEMP}/trivy"
+          readonly trivy_bin="${RUNNER_TEMP}/engram-tools"
+          mkdir -p "$trivy_tmp" "$trivy_bin"
+          curl --fail --location --silent --show-error "$trivy_url" --output "$trivy_tmp/$trivy_archive"
+          printf '%s  %s\n' "$trivy_sha256" "$trivy_tmp/$trivy_archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$trivy_tmp/$trivy_archive" --directory "$trivy_tmp"
+          install --mode 0755 "$trivy_tmp/trivy" "$trivy_bin/trivy"
+          printf '%s\n' "$trivy_bin" >> "$GITHUB_PATH"
+          "$trivy_bin/trivy" --version
 
       - name: Build, scan, and exercise exact images without registry authority
         shell: pwsh

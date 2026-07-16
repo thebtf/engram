@@ -382,25 +382,45 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		"tags: [\"v*\"]",
 		"workflow_dispatch:",
 		"verify-images:",
-		"Install Docker Scout CLI",
-		"docker-scout_1.23.1_linux_amd64.tar.gz",
-		"0f778f9d833f28bc6cccff95e33039849c0afcecafa38d9f46fe74bfd0915714",
-		".docker/cli-plugins/docker-scout",
-		"docker scout version",
+		"Install Trivy",
+		"trivy_0.72.0_Linux-64bit.tar.gz",
+		"bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea",
+		"$GITHUB_PATH",
+		"trivy_bin/trivy\" --version",
 		"Mode BuildAndScan",
 	} {
 		if !strings.Contains(verification, fragment) {
 			t.Fatalf("unprivileged Docker workflow lacks verification contract %q", fragment)
 		}
 	}
-	scoutInstallIndex := strings.Index(verification, "Install Docker Scout CLI")
+	trivyInstallIndex := strings.Index(verification, "Install Trivy")
 	buildAndScanIndex := strings.Index(verification, "Build, scan, and exercise exact images without registry authority")
-	if scoutInstallIndex < 0 || buildAndScanIndex < 0 || scoutInstallIndex > buildAndScanIndex {
-		t.Fatal("Docker Scout CLI must be installed before image verification")
+	if trivyInstallIndex < 0 || buildAndScanIndex < 0 || trivyInstallIndex > buildAndScanIndex {
+		t.Fatal("Trivy must be installed before image verification")
 	}
+
 	for _, forbidden := range []string{"packages: write", "docker/login-action@", "Mode Publish", "Mode ValidateWorkflowRun"} {
 		if strings.Contains(verification, forbidden) {
 			t.Fatalf("unprivileged Docker workflow acquired publication authority %q", forbidden)
+		}
+	}
+
+	scanner := readFile(t, filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1"))
+	for _, fragment := range []string{
+		"toolVersions.trivy",
+		"Invoke-LoggedNative -File 'trivy'",
+		"'image', '--image-src', 'docker'",
+		"'--scanners', 'vuln'",
+		"'--severity', 'HIGH,CRITICAL'",
+		"trivy.sarif",
+	} {
+		if !strings.Contains(scanner, fragment) {
+			t.Fatalf("image gate lacks unprivileged scanner contract %q", fragment)
+		}
+	}
+	for _, forbidden := range []string{"toolVersions.scout", "'scout', 'cves'", "docker-scout"} {
+		if strings.Contains(scanner, forbidden) {
+			t.Fatalf("image gate retains authenticated Docker Scout dependency %q", forbidden)
 		}
 	}
 

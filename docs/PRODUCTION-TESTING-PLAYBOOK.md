@@ -8,7 +8,7 @@ critical suite or customer-mode release emulation.
 ## Prerequisites
 
 - Docker Engine and Compose v2
-- Docker Scout
+- Trivy
 - Go 1.25.12+
 - Node.js 22+
 - PowerShell 7+
