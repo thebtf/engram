@@ -39,7 +39,8 @@ test('behavioral rules can be disabled through the live control-plane route', as
   await toggleResponsePromise
   await expect(toggle).toHaveAttribute('aria-checked', 'false')
 
-  await page.reload()
+  await page.waitForLoadState('networkidle')
+  await page.reload({ waitUntil: 'networkidle' })
   await expect(page.getByTestId('rule-status-401')).toBeVisible()
   await expect(page.getByTestId('rule-enable-toggle-401')).toHaveAttribute('aria-checked', 'false')
 
