@@ -661,6 +661,74 @@ function Read-AndValidatePayload {
     }
 }
 
+function Invoke-CapturedNative {
+    param(
+        [Parameter(Mandatory = $true)][string]$File,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $output = @(& $File @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw "$File $($Arguments -join ' ') exited $exitCode`: $($output -join [Environment]::NewLine)"
+    }
+    return ($output -join [Environment]::NewLine).Trim()
+}
+
+function Get-PayloadImageTag {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$ImageID
+    )
+
+    if ($Name -cnotin @('server', 'operator_console', 'postgres')) {
+        throw "Unsupported release payload image name: $Name"
+    }
+    if ($ImageID -cnotmatch '^sha256:[0-9a-f]{64}$') {
+        throw "Invalid release payload image ID for $Name`: $ImageID"
+    }
+    $safeName = $Name.Replace('_', '-')
+    return "engram-release-payload-$($safeName):$($ImageID.Substring(7))"
+}
+
+function Resolve-LocalImageId {
+    param(
+        [Parameter(Mandatory = $true)][string]$Tag,
+        [Parameter(Mandatory = $true)][string]$ExpectedConfigDigest
+    )
+
+    $inspectJson = Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $Tag, '--format', '{{json .}}')
+    $inspect = $inspectJson | ConvertFrom-Json -Depth 100
+    if ($null -eq $inspect -or $inspect -is [array]) {
+        throw "Docker inspect returned an invalid result shape for $Tag."
+    }
+    $idProperty = $inspect.PSObject.Properties['Id']
+    if ($null -eq $idProperty) {
+        throw "Docker inspect returned no image ID for $Tag."
+    }
+    $localId = [string]$idProperty.Value
+    if ($localId -cnotmatch '^sha256:[0-9a-f]{64}$') {
+        throw "Docker returned an invalid local image ID for $Tag`: $localId"
+    }
+
+    $descriptorConfigDigest = $null
+    $descriptorProperty = $inspect.PSObject.Properties['Descriptor']
+    if ($null -ne $descriptorProperty -and $null -ne $descriptorProperty.Value) {
+        $annotationsProperty = $descriptorProperty.Value.PSObject.Properties['annotations']
+        if ($null -ne $annotationsProperty -and $null -ne $annotationsProperty.Value) {
+            $configProperty = $annotationsProperty.Value.PSObject.Properties['config.digest']
+            if ($null -ne $configProperty) {
+                $descriptorConfigDigest = [string]$configProperty.Value
+            }
+        }
+    }
+    $observedConfigDigest = if ($localId -ceq $ExpectedConfigDigest) { $localId } else { $descriptorConfigDigest }
+    if ($observedConfigDigest -cne $ExpectedConfigDigest) {
+        throw "Loaded image $Tag does not match Buildx config digest $ExpectedConfigDigest."
+    }
+    return $localId
+}
+
 function Invoke-ValidatePayload {
     $validated = Read-AndValidatePayload
     if (-not [string]::IsNullOrWhiteSpace($OutputPath)) { Write-JsonFile -Value $validated -Path $OutputPath }
@@ -679,8 +747,25 @@ function Invoke-LoadPayload {
         if ($null -eq $inspect -or $inspect -is [array]) {
             throw "Docker inspect returned an invalid result shape for loaded image $($image.name)."
         }
-        if ([string]$inspect.Config.Labels.'org.opencontainers.image.revision' -cne $validated.source_commit -or
-            [string]$inspect.Config.Labels.'org.opencontainers.image.version' -cne $validated.release_version) {
+        $configProperty = $inspect.PSObject.Properties['Config']
+        $labelsProperty = if ($null -ne $configProperty -and $null -ne $configProperty.Value) {
+            $configProperty.Value.PSObject.Properties['Labels']
+        } else {
+            $null
+        }
+        $revisionProperty = if ($null -ne $labelsProperty -and $null -ne $labelsProperty.Value) {
+            $labelsProperty.Value.PSObject.Properties['org.opencontainers.image.revision']
+        } else {
+            $null
+        }
+        $versionProperty = if ($null -ne $labelsProperty -and $null -ne $labelsProperty.Value) {
+            $labelsProperty.Value.PSObject.Properties['org.opencontainers.image.version']
+        } else {
+            $null
+        }
+        $revision = if ($null -ne $revisionProperty) { [string]$revisionProperty.Value } else { $null }
+        $version = if ($null -ne $versionProperty) { [string]$versionProperty.Value } else { $null }
+        if ($revision -cne $validated.source_commit -or $version -cne $validated.release_version) {
             throw "Loaded exact image $($image.image_id) lacks validated revision/version labels."
         }
         $image['local_id'] = $localId
@@ -757,12 +842,16 @@ function Export-ReleasePayload {
         $payloadTag = Get-PayloadImageTag -Name $definition.name -ImageID $definition.image_id
         Invoke-CapturedNative -File 'docker' -Arguments @('image', 'tag', $definition.local_id, $payloadTag) | Out-Null
         try {
+            $resolvedLocalId = Resolve-LocalImageId -Tag $payloadTag -ExpectedConfigDigest $definition.image_id
+            if ($resolvedLocalId -cne $definition.local_id) {
+                throw "Payload tag $payloadTag resolved to unexpected local image ID $resolvedLocalId."
+            }
             & docker image save --output $archivePath $payloadTag
             if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
                 throw "Failed to export exact image data for $($definition.name)."
             }
         } finally {
-            Invoke-CapturedNative -File 'docker' -Arguments @('image', 'rm', $payloadTag) | Out-Null
+            & docker image rm $payloadTag 2>$null | Out-Null
         }
         Assert-ArchiveEnvelope -Path $archivePath
         $images += [ordered]@{
@@ -959,9 +1048,9 @@ function Invoke-Publish {
     $plan = New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $null
     $plan['acceptance_manifest_sha256'] = $inputs.manifest_sha256
 
-    $localImageIdsByName = [ordered]@{}
+    $localImageIdsByName = @{}
     foreach ($destination in $plan.destinations) {
-        if (-not $localImageIdsByName.Contains($destination.image)) {
+        if (-not $localImageIdsByName.ContainsKey($destination.image)) {
             $payloadTag = Get-PayloadImageTag -Name $destination.image -ImageID $destination.config_digest
             $localImageIdsByName[$destination.image] = Resolve-LocalImageId `
                 -Tag $payloadTag -ExpectedConfigDigest $destination.config_digest
@@ -1119,78 +1208,12 @@ function Remove-TrackedBuildContext {
     $script:buildContextCleaned = -not (Test-Path -LiteralPath $resolved)
 }
 
-function Invoke-CapturedNative {
-    param(
-        [Parameter(Mandatory = $true)][string]$File,
-        [Parameter(Mandatory = $true)][string[]]$Arguments
-    )
-
-    $output = @(& $File @Arguments 2>&1 | ForEach-Object { $_.ToString() })
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -ne 0) {
-        throw "$File $($Arguments -join ' ') exited $exitCode`: $($output -join [Environment]::NewLine)"
-    }
-    return ($output -join [Environment]::NewLine).Trim()
-}
 
 function Get-ImageId {
     param([Parameter(Mandatory = $true)][string]$Tag)
     return Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $Tag, '--format', '{{.Id}}')
 }
 
-function Get-PayloadImageTag {
-    param(
-        [Parameter(Mandatory = $true)][string]$Name,
-        [Parameter(Mandatory = $true)][string]$ImageID
-    )
-
-    if ($Name -cnotin @('server', 'operator_console', 'postgres')) {
-        throw "Unsupported release payload image name: $Name"
-    }
-    if ($ImageID -cnotmatch '^sha256:[0-9a-f]{64}$') {
-        throw "Invalid release payload image ID for $Name`: $ImageID"
-    }
-    $safeName = $Name.Replace('_', '-')
-    return "engram-release-payload-$($safeName):$($ImageID.Substring(7))"
-}
-
-function Resolve-LocalImageId {
-    param(
-        [Parameter(Mandatory = $true)][string]$Tag,
-        [Parameter(Mandatory = $true)][string]$ExpectedConfigDigest
-    )
-
-    $inspectJson = Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $Tag, '--format', '{{json .}}')
-    $inspect = $inspectJson | ConvertFrom-Json -Depth 100
-    if ($null -eq $inspect -or $inspect -is [array]) {
-        throw "Docker inspect returned an invalid result shape for $Tag."
-    }
-    $idProperty = $inspect.PSObject.Properties['Id']
-    if ($null -eq $idProperty) {
-        throw "Docker inspect returned no image ID for $Tag."
-    }
-    $localId = [string]$idProperty.Value
-    if ($localId -cnotmatch '^sha256:[0-9a-f]{64}$') {
-        throw "Docker returned an invalid local image ID for $Tag`: $localId"
-    }
-
-    $descriptorConfigDigest = $null
-    $descriptorProperty = $inspect.PSObject.Properties['Descriptor']
-    if ($null -ne $descriptorProperty -and $null -ne $descriptorProperty.Value) {
-        $annotationsProperty = $descriptorProperty.Value.PSObject.Properties['annotations']
-        if ($null -ne $annotationsProperty -and $null -ne $annotationsProperty.Value) {
-            $configProperty = $annotationsProperty.Value.PSObject.Properties['config.digest']
-            if ($null -ne $configProperty) {
-                $descriptorConfigDigest = [string]$configProperty.Value
-            }
-        }
-    }
-    $observedConfigDigest = if ($localId -ceq $ExpectedConfigDigest) { $localId } else { $descriptorConfigDigest }
-    if ($observedConfigDigest -cne $ExpectedConfigDigest) {
-        throw "Loaded image $Tag does not match Buildx config digest $ExpectedConfigDigest."
-    }
-    return $localId
-}
 
 function Get-ComposeContainerId {
     param([Parameter(Mandatory = $true)][string]$Service)
