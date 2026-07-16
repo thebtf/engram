@@ -1079,6 +1079,33 @@ func testArtifactBridgeMatrix(t *testing.T, repo string) {
 			manifest["source_parent_commit"] = strings.Repeat("b", 40)
 			writeJSONAt(t, filepath.Join(root, "final-image-set.json"), manifest)
 		}},
+		{name: "manifest status case variant", mutate: func(root string) {
+			manifestPath := filepath.Join(root, "final-image-set.json")
+			manifest := readJSONMap(t, manifestPath)
+			manifest["status"] = "pass"
+			writeJSONAt(t, manifestPath, manifest)
+			updatePayloadManifestHash(t, root)
+		}},
+		{name: "manifest version case variant", mutate: func(root string) {
+			manifestPath := filepath.Join(root, "final-image-set.json")
+			manifest := readJSONMap(t, manifestPath)
+			manifest["build_version"] = "V6.43.0-rc.1"
+			writeJSONAt(t, manifestPath, manifest)
+			updatePayloadManifestHash(t, root)
+		}},
+		{name: "bundle version case variant", mutate: func(root string) {
+			bundlePath := filepath.Join(root, "release-bundle.json")
+			bundle := readJSONMap(t, bundlePath)
+			bundle["release_version"] = "V6.43.0-rc.1"
+			writeJSONAt(t, bundlePath, bundle)
+		}},
+		{name: "image id prefix case variant", mutate: func(root string) {
+			bundlePath := filepath.Join(root, "release-bundle.json")
+			bundle := readJSONMap(t, bundlePath)
+			image := bundle["images"].([]any)[0].(map[string]any)
+			image["image_id"] = "SHA256:" + strings.Repeat("1", 64)
+			writeJSONAt(t, bundlePath, bundle)
+		}},
 		{name: "symlink entry", mutate: func(root string) {
 			target := filepath.Join(root, "operator-console.tar")
 			link := filepath.Join(root, "server.tar")
@@ -1198,6 +1225,21 @@ func testTarArchiveEntry(t *testing.T, entryName string, entryType byte) []byte 
 		t.Fatal(err)
 	}
 	return buffer.Bytes()
+}
+
+func updatePayloadManifestHash(t *testing.T, root string) {
+	t.Helper()
+	manifestPath := filepath.Join(root, "final-image-set.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundlePath := filepath.Join(root, "release-bundle.json")
+	bundle := readJSONMap(t, bundlePath)
+	manifest := bundle["manifest"].(map[string]any)
+	manifest["sha256"] = sha256Hex(data)
+	manifest["size_bytes"] = len(data)
+	writeJSONAt(t, bundlePath, bundle)
 }
 
 func updatePayloadArchiveHash(t *testing.T, root string, imageIndex int, data []byte) {
