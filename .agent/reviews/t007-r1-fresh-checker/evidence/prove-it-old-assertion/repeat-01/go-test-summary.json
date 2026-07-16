@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "verdict": "FAIL",
+  "input_path": "D:\\Dev\\engram\\.w\\t007-r1-checker\\.agent\\reviews\\t007-r1-fresh-checker\\evidence\\prove-it-old-assertion\\repeat-01\\go-test.stdout.jsonl",
+  "fail_on_unexpected_skip": true,
+  "allowed_skip_identities": [],
+  "counts": {
+    "packages": 1,
+    "tests": 1,
+    "passed": 0,
+    "failed": 1,
+    "skipped": 0,
+    "no_tests": 0,
+    "zero_tests": 0,
+    "incomplete": 0,
+    "unexpected_skips": 0,
+    "malformed_lines": 0
+  },
+  "packages": [
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "outcome": "fail",
+      "elapsed_seconds": 4.569,
+      "last_output": "FAIL\tgithub.com/thebtf/engram/internal/mcp\t4.560s",
+      "tests_observed": 1
+    }
+  ],
+  "tests": [
+    {
+      "package": "github.com/thebtf/engram/internal/mcp",
+      "test": "TestEC_F1_TagDerivedBackfill_T007",
+      "outcome": "fail",
+      "elapsed_seconds": 4.3,
+      "last_output": "--- FAIL: TestEC_F1_TagDerivedBackfill_T007 (4.30s)",
+      "skip_allowed": false
+    }
+  ],
+  "unexpected_skips": [],
+  "errors": []
+}

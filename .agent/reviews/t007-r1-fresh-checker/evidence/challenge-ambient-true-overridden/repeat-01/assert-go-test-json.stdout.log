@@ -1,0 +1,2 @@
+go test JSON verdict=PASS packages=1 tests=1 passed=1 failed=0 skipped=0 unexpected_skips=0 malformed=0
+summary=D:\Dev\engram\.w\t007-r1-checker\.agent\reviews\t007-r1-fresh-checker\evidence\challenge-ambient-true-overridden\repeat-01\go-test-summary.json

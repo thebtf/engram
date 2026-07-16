@@ -1,0 +1,2 @@
+go test JSON verdict=FAIL packages=1 tests=1 passed=0 failed=1 skipped=0 unexpected_skips=0 malformed=0
+summary=D:\Dev\engram\.w\t007-r1-checker\.agent\reviews\t007-r1-fresh-checker\evidence\prove-it-old-assertion\repeat-01\go-test-summary.json

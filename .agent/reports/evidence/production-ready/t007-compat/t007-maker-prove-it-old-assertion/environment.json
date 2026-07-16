@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "run_id": "t007-maker-prove-it-old-assertion",
+  "timestamp": "2026-07-11T00:37:29.5703459+00:00",
+  "go_version": "go version go1.25.11 windows/amd64",
+  "postgres": {
+    "declared_image": "pgvector/pgvector:pg17",
+    "container": {
+      "name": "/engram-prc-postgres",
+      "configured_image": "pgvector/pgvector:pg17",
+      "image_id": "sha256:feb68f4f15446397d8cac7f4fe48fe4586de83160d1fc48b46283312d1a33966",
+      "running": true
+    },
+    "server": {
+      "server_version": "17.10 (Debian 17.10-1.pgdg12+1)",
+      "server_version_num": "170010",
+      "version": "PostgreSQL 17.10 (Debian 17.10-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
+      "max_connections": "100",
+      "superuser_reserved_connections": "3",
+      "reserved_connections": "0",
+      "current_connections": "6",
+      "database": "postgres",
+      "schema": "public",
+      "user": "engram"
+    },
+    "admin_dsn": "postgres://engram:REDACTED@127.0.0.1:55432/postgres?sslmode=disable"
+  },
+  "packages": [
+    "./internal/mcp"
+  ],
+  "run_pattern": "^TestEC_F1_TagDerivedBackfill_T007$",
+  "repeat": 1,
+  "fail_on_unexpected_skip": true,
+  "allowed_skip_identities": [],
+  "coverage_policy": "Targeted",
+  "connection_budget": 20,
+  "race": false,
+  "require_session_start_execution": false,
+  "required_session_start_test_count": 12,
+  "sequential_execution": {
+    "go_package_parallelism": 1,
+    "go_test_parallelism": 1,
+    "database_max_connections": 20
+  },
+  "govulncheck_policy": {
+    "authoritative": [
+      "source scan with tests",
+      "unstripped binary scan"
+    ],
+    "non_authoritative": "stripped binary scan (module-level fallback when symbols are absent)"
+  }
+}

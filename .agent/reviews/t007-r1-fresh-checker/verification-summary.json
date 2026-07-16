@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "review": "T007-R1-FRESH-CHECKER",
+  "recorded_at": "2026-07-11T04:06:02.8221931+03:00",
+  "verdict": "ACCEPT_WITH_MEDIUM_AUDIT_CORRECTION",
+  "maker": {
+    "sha": "1418796e55e8b5bfbb216ffbf5a3fba9fa620922",
+    "parent": "af1ed63536829916e0477be719a30a57a8d9227a",
+    "tree": "a08b92b88d5ac5570e25f3b8ef19ad0acf1727b6",
+    "direct_child": true,
+    "maker_worktree_clean": true
+  },
+  "scope": {
+    "changed_paths": 331,
+    "test_paths": [
+      "internal/mcp/store_memory_compat_t007_test.go"
+    ],
+    "production_code_paths": [],
+    "maker_evidence_paths": 329,
+    "maker_report_paths": 1,
+    "path_set_valid": true,
+    "claimed_culture_aware_path_digest_sha256": "5B4915A5F57F8251000992B52876B6291BF4E7CA60F6EA48CD36238E76E738F1",
+    "active_ordinal_lf_path_digest_sha256": "1d545a9ff8ff89dcd4a7a363ab621b3e7c28d9bc67c235ba715ec30cd98c294b"
+  },
+  "semantic_contract": {
+    "classification": "CURRENT_CONTRACT_TEST_CORRECTION",
+    "flag_off_explicit": true,
+    "raw_sql_proves_global_scope": true,
+    "durable_fixture_id_proved": true,
+    "list_requires_exact_id_and_content": true,
+    "privacy_scope_projection_required_when_flag_off": false,
+    "demolished_v5_behavior_restored": false
+  },
+  "independent_gates": {
+    "parent_original_red": {
+      "verdict": "EXPECTED_FAIL",
+      "tests": 1,
+      "failed": 1,
+      "skipped": 0
+    },
+    "prove_it_old_assertion": "EXPECTED_FAIL",
+    "wrong_fixture_id_challenge": "EXPECTED_FAIL_AT_EXACT_CONTENT_ASSERTION",
+    "raw_sql_corruption_challenge": "EXPECTED_FAIL_AT_GLOBAL_SCOPE_ASSERTION",
+    "parent_ambient_true": "EXPECTED_FALSE_GREEN_REPRODUCED",
+    "maker_flag_reset_with_ambient_true": "PASS",
+    "flag_reset_removed_with_checker_guard": "EXPECTED_FAIL",
+    "focused_fresh_database_repeat3": "PASS_3_OF_3",
+    "focused_fresh_database_race": "PASS_1_OF_1",
+    "full_internal_mcp": {
+      "tests": 488,
+      "passed": 487,
+      "failed": 1,
+      "skipped": 0,
+      "t007_tests": "PASS_2_OF_2",
+      "sole_unrelated_failure": "TestHybridTG3_ConfidenceMin_FloorEnforced_T022"
+    },
+    "go_build_all": "PASS",
+    "go_vet_all": "PASS",
+    "git_diff_check": "PASS",
+    "gitleaks_exact_maker_commit": "PASS_0_FINDINGS",
+    "synthesis_preview_merge_tree": {
+      "verdict": "PASS",
+      "preview": "0c6269908aa810a2248f2bfaf3fca4f9f5791359",
+      "merge_base": "dc891b2d72b1fd63b83e4a630a249241fc389151",
+      "result_tree": "9421a8eae8c9579dfe6800e6d16f26840269823a"
+    },
+    "maker_json_artifacts": "PASS_40_OF_40_PARSE",
+    "run_databases_checked": 12,
+    "database_residue": 0,
+    "session_residue": 0
+  },
+  "findings": [
+    {
+      "id": "T007-R1-AUDIT-001",
+      "severity": "MEDIUM",
+      "class": "AUDIT_PRESENTATION",
+      "blocking": false,
+      "summary": "The maker handoff path digest used culture-aware PowerShell sorting, not the active ordinal normalized-path plus LF contract.",
+      "evidence": "The claimed 5B4915... digest reproduces only with Sort-Object ordering; ordinal ordering of the same valid 331-path set yields 1d545a9f....",
+      "resolution": "Use the corrected active-contract digest from this checker artifact. No path membership, product, test, lineage, or immutable-tree discrepancy exists."
+    }
+  ]
+}
