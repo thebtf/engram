@@ -1028,6 +1028,7 @@ $caught = $null
 $cleanupPassed = $false
 $runtimePassed = $false
 $imageIds = [ordered]@{}
+$localImageIds = [ordered]@{}
 $sarifHashes = [ordered]@{}
 $scanCounts = [ordered]@{}
 $toolVersions = [ordered]@{}
@@ -1120,6 +1121,37 @@ function Invoke-CapturedNative {
 function Get-ImageId {
     param([Parameter(Mandatory = $true)][string]$Tag)
     return Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $Tag, '--format', '{{.Id}}')
+}
+
+function Resolve-LocalImageId {
+    param(
+        [Parameter(Mandatory = $true)][string]$Tag,
+        [Parameter(Mandatory = $true)][string]$ExpectedConfigDigest
+    )
+
+    $inspectJson = Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $Tag, '--format', '{{json .}}')
+    $inspect = $inspectJson | ConvertFrom-Json -Depth 100
+    $localId = [string]$inspect.Id
+    if ($localId -cnotmatch '^sha256:[0-9a-f]{64}$') {
+        throw "Docker returned an invalid local image ID for $Tag`: $localId"
+    }
+
+    $descriptorConfigDigest = $null
+    $descriptorProperty = $inspect.PSObject.Properties['Descriptor']
+    if ($null -ne $descriptorProperty -and $null -ne $descriptorProperty.Value) {
+        $annotationsProperty = $descriptorProperty.Value.PSObject.Properties['annotations']
+        if ($null -ne $annotationsProperty -and $null -ne $annotationsProperty.Value) {
+            $configProperty = $annotationsProperty.Value.PSObject.Properties['config.digest']
+            if ($null -ne $configProperty) {
+                $descriptorConfigDigest = [string]$configProperty.Value
+            }
+        }
+    }
+    $observedConfigDigest = if ($localId -ceq $ExpectedConfigDigest) { $localId } else { $descriptorConfigDigest }
+    if ($observedConfigDigest -cne $ExpectedConfigDigest) {
+        throw "Loaded image $Tag does not match Buildx config digest $ExpectedConfigDigest."
+    }
+    return $localId
 }
 
 function Get-ComposeContainerId {
@@ -1358,11 +1390,11 @@ try {
     }
 
     # BuildKit's default provenance attestation contains per-run metadata and changes --iidfile identity.
-    # docker image save/load does not preserve that attestation, so release provenance remains in the
-    # validated immutable bundle. SOURCE_DATE_EPOCH pins image metadata and rewrite-timestamp pins
-    # exported layer file mtimes for repeatable no-cache image identities.
+    # SOURCE_DATE_EPOCH pins image metadata and rewrite-timestamp pins exported layer file mtimes.
+    # Disable implicit unpack because it conflicts with timestamp rewriting on Docker's default driver;
+    # later runtime exercises unpack the locally stored images while release provenance stays immutable.
     Invoke-LoggedNative -File 'docker' -Arguments @(
-        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--output', 'type=docker,rewrite-timestamp=true', '--platform', $Platform,
+        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--output', 'type=docker,rewrite-timestamp=true,unpack=false', '--platform', $Platform,
         '--target', 'server', '--build-arg', "VERSION=$buildVersion",
         '--label', 'org.opencontainers.image.source=https://github.com/thebtf/engram',
         '--label', "org.opencontainers.image.revision=$sourceCommit",
@@ -1371,7 +1403,7 @@ try {
     ) -LogPath (Join-Path $artifactPath 'server/build.log')
 
     Invoke-LoggedNative -File 'docker' -Arguments @(
-        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--output', 'type=docker,rewrite-timestamp=true', '--platform', $Platform,
+        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--output', 'type=docker,rewrite-timestamp=true,unpack=false', '--platform', $Platform,
         '--target', 'operator-console', '--build-arg', "VERSION=$buildVersion",
         '--label', 'org.opencontainers.image.source=https://github.com/thebtf/engram',
         '--label', "org.opencontainers.image.revision=$sourceCommit",
@@ -1381,7 +1413,7 @@ try {
     ) -LogPath (Join-Path $artifactPath 'operator-console/build.log')
 
     Invoke-LoggedNative -File 'docker' -Arguments @(
-        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--output', 'type=docker,rewrite-timestamp=true', '--platform', $Platform,
+        'buildx', 'build', '--pull', '--no-cache', '--provenance=false', '--output', 'type=docker,rewrite-timestamp=true,unpack=false', '--platform', $Platform,
         '-f', (Join-Path $buildContext 'deploy/postgres/Dockerfile'),
         '--label', 'org.opencontainers.image.source=https://github.com/thebtf/engram',
         '--label', "org.opencontainers.image.revision=$sourceCommit",
@@ -1399,17 +1431,19 @@ try {
         if ($entry.Value -cnotmatch '^sha256:[0-9a-f]{64}$') {
             throw "Buildx wrote an invalid exact image ID for $($entry.Key): $($entry.Value)"
         }
-        Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $entry.Value) | Out-Null
     }
-    Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $imageIds.server) |
+    $localImageIds.server = Resolve-LocalImageId -Tag $ServerTag -ExpectedConfigDigest $imageIds.server
+    $localImageIds.operator_console = Resolve-LocalImageId -Tag $OperatorTag -ExpectedConfigDigest $imageIds.operator_console
+    $localImageIds.postgres = Resolve-LocalImageId -Tag $PostgresTag -ExpectedConfigDigest $imageIds.postgres
+    Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $localImageIds.server) |
         Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $artifactPath 'server/image-inspect.json')
-    Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $imageIds.operator_console) |
+    Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $localImageIds.operator_console) |
         Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $artifactPath 'operator-console/image-inspect.json')
-    Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $imageIds.postgres) |
+    Invoke-CapturedNative -File 'docker' -Arguments @('image', 'inspect', $localImageIds.postgres) |
         Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $artifactPath 'postgres/image-inspect.json')
 
     $lddContainer = "$prefix-ldd-proof"
-    Invoke-CapturedNative -File 'docker' -Arguments @('create', '--name', $lddContainer, $imageIds.server) | Out-Null
+    Invoke-CapturedNative -File 'docker' -Arguments @('create', '--name', $lddContainer, $localImageIds.server) | Out-Null
     try {
         $lddPath = Join-Path $artifactPath 'server/engram-server.ldd'
         Invoke-CapturedNative -File 'docker' -Arguments @('cp', "${lddContainer}:/usr/share/engram/engram-server.ldd", $lddPath) | Out-Null
@@ -1423,9 +1457,9 @@ try {
     }
 
     $scanTargets = @(
-        @{ Name = 'server'; Id = $imageIds.server },
-        @{ Name = 'operator-console'; Id = $imageIds.operator_console },
-        @{ Name = 'postgres'; Id = $imageIds.postgres }
+        @{ Name = 'server'; Id = $localImageIds.server },
+        @{ Name = 'operator-console'; Id = $localImageIds.operator_console },
+        @{ Name = 'postgres'; Id = $localImageIds.postgres }
     )
     foreach ($target in $scanTargets) {
         $sarif = Join-Path $artifactPath "$($target.Name)/trivy.sarif"
@@ -1459,9 +1493,9 @@ try {
         Pop-Location
     }
 
-    $env:ENGRAM_SERVER_IMAGE = $imageIds.server
-    $env:ENGRAM_OPERATOR_IMAGE = $imageIds.operator_console
-    $env:ENGRAM_POSTGRES_IMAGE = $imageIds.postgres
+    $env:ENGRAM_SERVER_IMAGE = $localImageIds.server
+    $env:ENGRAM_OPERATOR_IMAGE = $localImageIds.operator_console
+    $env:ENGRAM_POSTGRES_IMAGE = $localImageIds.postgres
     $env:ENGRAM_BUILD_VERSION = $buildVersion
     $env:ENGRAM_TEST_RESOURCE_PREFIX = "$prefix-test"
 
@@ -1555,9 +1589,9 @@ try {
     }
 
     foreach ($promotion in @(
-        @{ Id = $imageIds.server; Tag = $ServerTag },
-        @{ Id = $imageIds.operator_console; Tag = $OperatorTag },
-        @{ Id = $imageIds.postgres; Tag = $PostgresTag }
+        @{ Id = $localImageIds.server; Tag = $ServerTag },
+        @{ Id = $localImageIds.operator_console; Tag = $OperatorTag },
+        @{ Id = $localImageIds.postgres; Tag = $PostgresTag }
     )) {
         Invoke-CapturedNative -File 'docker' -Arguments @('tag', $promotion.Id, $promotion.Tag) | Out-Null
         if ((Get-ImageId -Tag $promotion.Tag) -cne $promotion.Id) {
@@ -1644,6 +1678,7 @@ try {
             pgvector = '0.8.1-r0'
         }
         image_ids = $imageIds
+        local_runtime_image_ids = $localImageIds
         high_critical_findings = $scanCounts
         sarif_sha256 = $sarifHashes
         runtime_proof = $runtimeProof
