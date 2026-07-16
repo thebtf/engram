@@ -1,0 +1,14 @@
+{"Time":"2026-07-11T04:01:30.8840184+03:00","Action":"start","Package":"github.com/thebtf/engram/internal/mcp"}
+{"Time":"2026-07-11T04:01:30.9740223+03:00","Action":"run","Package":"github.com/thebtf/engram/internal/mcp","Test":"TestEC_F1_TagDerivedBackfill_T007"}
+{"Time":"2026-07-11T04:01:30.9740223+03:00","Action":"output","Package":"github.com/thebtf/engram/internal/mcp","Test":"TestEC_F1_TagDerivedBackfill_T007","Output":"=== RUN   TestEC_F1_TagDerivedBackfill_T007\n"}
+{"Time":"2026-07-11T04:01:30.9740223+03:00","Action":"output","Package":"github.com/thebtf/engram/internal/mcp","Test":"TestEC_F1_TagDerivedBackfill_T007","Output":"    store_memory_compat_t007_test.go:83: \n"}
+{"Time":"2026-07-11T04:01:30.9740223+03:00","Action":"output","Package":"github.com/thebtf/engram/internal/mcp","Test":"TestEC_F1_TagDerivedBackfill_T007","Output":"        \tError Trace:\tD:/Dev/engram/.w/t007-r1-checker/internal/mcp/store_memory_compat_t007_test.go:83\n"}
+{"Time":"2026-07-11T04:01:30.9740223+03:00","Action":"output","Package":"github.com/thebtf/engram/internal/mcp","Test":"TestEC_F1_TagDerivedBackfill_T007","Output":"        \tError:      \tShould be empty, but was true\n"}
+{"Time":"2026-07-11T04:01:30.9740223+03:00","Action":"output","Package":"github.com/thebtf/engram/internal/mcp","Test":"TestEC_F1_TagDerivedBackfill_T007","Output":"        \tTest:       \tTestEC_F1_TagDerivedBackfill_T007\n"}
+{"Time":"2026-07-11T04:01:30.9740223+03:00","Action":"output","Package":"github.com/thebtf/engram/internal/mcp","Test":"TestEC_F1_TagDerivedBackfill_T007","Output":"        \tMessages:   \tchecker guard: focused test must force flag off\n"}
+{"Time":"2026-07-11T04:01:30.9740223+03:00","Action":"output","Package":"github.com/thebtf/engram/internal/mcp","Test":"TestEC_F1_TagDerivedBackfill_T007","Output":"--- FAIL: TestEC_F1_TagDerivedBackfill_T007 (0.00s)\n"}
+{"Time":"2026-07-11T04:01:30.9740223+03:00","Action":"fail","Package":"github.com/thebtf/engram/internal/mcp","Test":"TestEC_F1_TagDerivedBackfill_T007","Elapsed":0}
+{"Time":"2026-07-11T04:01:30.9740223+03:00","Action":"output","Package":"github.com/thebtf/engram/internal/mcp","Output":"FAIL\n"}
+{"Time":"2026-07-11T04:01:30.9875233+03:00","Action":"output","Package":"github.com/thebtf/engram/internal/mcp","Output":"coverage: 0.0% of statements\n"}
+{"Time":"2026-07-11T04:01:31.0079607+03:00","Action":"output","Package":"github.com/thebtf/engram/internal/mcp","Output":"FAIL\tgithub.com/thebtf/engram/internal/mcp\t0.117s\n"}
+{"Time":"2026-07-11T04:01:31.0079607+03:00","Action":"fail","Package":"github.com/thebtf/engram/internal/mcp","Elapsed":0.124}

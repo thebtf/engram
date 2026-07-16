@@ -1,0 +1,2 @@
+cleanup verdict=PASS database=engram_prc_rg_test_9a720e1716717962_r1 schema=public terminated_sessions=0 remaining_database_count=0
+summary=D:\Dev\engram\.w\t007-current-contract\.agent\reports\evidence\production-ready\t007-compat\t007-maker-prove-it-old-assertion\repeat-01\cleanup\cleanup.json

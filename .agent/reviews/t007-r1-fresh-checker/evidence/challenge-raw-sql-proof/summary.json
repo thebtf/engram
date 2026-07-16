@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "gate": "release-gates-foundation",
+  "run_id": "challenge-raw-sql-proof",
+  "started_at": "2026-07-11T00:59:13.6976987+00:00",
+  "finished_at": "2026-07-11T00:59:29.4335250+00:00",
+  "duration_seconds": 15.736,
+  "verdict": "FAIL",
+  "counts": {
+    "requested_repeats": 1,
+    "completed_repeats": 1,
+    "passed_repeats": 0,
+    "failed_repeats": 1,
+    "child_commands": 16,
+    "nonzero_child_commands": 2
+  },
+  "packages": [
+    "./internal/mcp"
+  ],
+  "run_pattern": "^TestEC_F1_TagDerivedBackfill_T007$",
+  "coverage_policy": "Targeted",
+  "connection_budget": 20,
+  "race": false,
+  "database_dsn": "REDACTED_DATABASE_DSN",
+  "environment": "D:\\Dev\\engram\\.w\\t007-r1-checker\\.agent\\reviews\\t007-r1-fresh-checker\\evidence\\challenge-raw-sql-proof\\environment.json",
+  "commands": "D:\\Dev\\engram\\.w\\t007-r1-checker\\.agent\\reviews\\t007-r1-fresh-checker\\evidence\\challenge-raw-sql-proof\\commands.json",
+  "repeats": [
+    {
+      "repeat": 1,
+      "verdict": "FAIL",
+      "database": "engram_prc_rg_test_3ce6312b91ffa9ad_r1",
+      "schema": "public",
+      "database_schema_identity": "engram_prc_rg_test_3ce6312b91ffa9ad_r1.public",
+      "database_dsn": "REDACTED_DATABASE_DSN",
+      "database_create_confirmed": true,
+      "sequential_execution": {
+        "package_parallelism": 1,
+        "test_parallelism": 1
+      },
+      "race": false,
+      "connection_budget": 20,
+      "server_sessions_before": 6,
+      "server_sessions_after": 6,
+      "sessions_before": 0,
+      "sessions_after": 0,
+      "go_test_exit": 1,
+      "json_parser_exit": 1,
+      "coverage_policy": "Targeted",
+      "coverage_exit": 0,
+      "cleanup_exit": 0,
+      "cleanup_status": "PASS",
+      "required_session_start_execution": {
+        "schema_version": 1,
+        "verdict": "NOT_APPLICABLE",
+        "reason": "only an unfiltered canonical ./... run requires the 12-test session-start execution proof"
+      },
+      "cleanup_summary": "D:\\Dev\\engram\\.w\\t007-r1-checker\\.agent\\reviews\\t007-r1-fresh-checker\\evidence\\challenge-raw-sql-proof\\repeat-01\\cleanup\\cleanup.json",
+      "errors": [
+        "go test failed with exit 1",
+        "go test JSON assertion failed with exit 1"
+      ],
+      "artifact_directory": "D:\\Dev\\engram\\.w\\t007-r1-checker\\.agent\\reviews\\t007-r1-fresh-checker\\evidence\\challenge-raw-sql-proof\\repeat-01"
+    }
+  ],
+  "errors": [],
+  "artifact_directory": "D:\\Dev\\engram\\.w\\t007-r1-checker\\.agent\\reviews\\t007-r1-fresh-checker\\evidence\\challenge-raw-sql-proof"
+}
