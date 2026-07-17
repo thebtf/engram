@@ -131,9 +131,13 @@ func (s *Server) Ping(_ context.Context, _ *pb.PingRequest) (*pb.PingResponse, e
 
 // Initialize returns server info and the complete list of available tools.
 func (s *Server) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb.InitializeResponse, error) {
-	canonicalProject, err := s.resolveProjectIdentity(ctx, req.GetProject(), req.GetProjectIdentity())
-	if err != nil {
-		return nil, err
+	canonicalProject := ""
+	if req.GetProject() != "" || req.GetProjectIdentity() != nil {
+		var err error
+		canonicalProject, err = s.resolveProjectIdentity(ctx, req.GetProject(), req.GetProjectIdentity())
+		if err != nil {
+			return nil, err
+		}
 	}
 	name, version := s.handler.ServerInfo()
 

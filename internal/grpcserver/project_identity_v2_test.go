@@ -262,6 +262,22 @@ func TestCallTool_RejectsCaseVariantProjectArgumentBeforeHandler(t *testing.T) {
 	}
 }
 
+func TestInitialize_WithoutProjectIdentitySkipsResolution(t *testing.T) {
+	srv := &Server{handler: identityOrderHandler{steps: &[]string{}}}
+	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
+		t.Fatal("identity resolver called for legacy capability discovery")
+		return "", nil
+	}
+
+	resp, err := srv.Initialize(context.Background(), &pb.InitializeRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ServerName != "test" || resp.CanonicalProject != "" {
+		t.Fatalf("response=%#v", resp)
+	}
+}
+
 func TestInitialize_ResolvesBeforeReturningTools(t *testing.T) {
 	srv := &Server{handler: identityOrderHandler{steps: &[]string{}}}
 	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {

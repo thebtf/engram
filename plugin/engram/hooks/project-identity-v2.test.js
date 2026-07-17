@@ -243,14 +243,15 @@ test('shared invalid vectors and wrong-type anchor sharing are rejected exactly'
   }), /PROJECT_IDENTITY_INVALID/);
 });
 
-test('non-SessionStart hook registration transport failure returns pass-through without running the handler', (t) => {
+test('capture hook registration transport failure still runs local handler', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-registration-failure-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const childScript = `
     const lib = require(process.argv[1]);
-    lib.RunHook('UserPromptSubmit', async () => {
+    lib.RunHook('UserPromptSubmit', async (context) => {
+      if (!context.ProjectIdentityRegistrationOffline) throw new Error('OFFLINE_FLAG_MISSING');
       process.stderr.write('HANDLER_RAN');
-      return 'must-not-run';
+      return '';
     }).catch((error) => {
       process.stderr.write(String(error && error.stack || error));
       process.exitCode = 1;
@@ -258,6 +259,36 @@ test('non-SessionStart hook registration transport failure returns pass-through 
   `;
   const result = spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
     input: JSON.stringify({ session_id: 'registration-failure', cwd: dir }),
+    encoding: 'utf8',
+    timeout: 2000,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      ENGRAM_INTERNAL: '0',
+      ENGRAM_QUIET: '0',
+      ENGRAM_URL: 'http://127.0.0.1:9',
+      ENGRAM_TOKEN: 'test-token',
+    },
+  });
+  assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '{"continue":true}');
+  assert.match(result.stderr, /HANDLER_RAN/);
+  assert.match(result.stderr, /continuing local capture\/cleanup/);
+});
+
+test('non-SessionStart injection hook registration transport failure stays fail closed', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-injection-registration-failure-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const childScript = `
+    const lib = require(process.argv[1]);
+    lib.RunHook('PreToolUse', async () => {
+      process.stderr.write('HANDLER_RAN');
+      return 'must-not-run';
+    });
+  `;
+  const result = spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
+    input: JSON.stringify({ session_id: 'injection-registration-failure', cwd: dir }),
     encoding: 'utf8',
     timeout: 2000,
     windowsHide: true,

@@ -859,11 +859,20 @@ async function RunHook(hookName, handler) {
     try {
       await registerProjectIdentityV2(context);
     } catch (error) {
-      if (hookName !== 'SessionStart' || !isProjectIdentityTransportOffline(error)) {
+      if (!isProjectIdentityTransportOffline(error)) {
+        throw error;
+      }
+      // Capture/learning hooks may have local cleanup to perform even while the
+      // server is offline. Injection hooks still fail closed, except SessionStart
+      // which owns an explicit stale-cache fallback.
+      if (hookName !== 'SessionStart' && isInjectionHook(hookName)) {
         throw error;
       }
       context.ProjectIdentityRegistrationOffline = true;
-      console.error(`[engram] SessionStart project registration offline; using cache fallback: ${error.message}`);
+      const fallback = hookName === 'SessionStart'
+        ? 'using cache fallback'
+        : 'continuing local capture/cleanup';
+      console.error(`[engram] ${hookName} project registration offline; ${fallback}: ${error.message}`);
     }
     const additionalContext =
       typeof handler === 'function' ? await handler(context, input) : '';

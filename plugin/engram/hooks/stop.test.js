@@ -3,6 +3,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const { handleStop, extractAgentOutput } = require('./stop');
 
@@ -35,6 +36,37 @@ test('handleStop ignores optional input payload and remains a no-op', async () =
   );
 
   assert.equal(result, '');
+});
+
+test('Stop clears the pending marker when project registration is offline', (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-stop-offline-'));
+  const sessionID = `stop-offline-${process.pid}-${Date.now()}`;
+  const markerPath = path.join(os.tmpdir(), `.engram-pending-${sessionID}`);
+  fs.writeFileSync(markerPath, 'pending', 'utf8');
+  t.after(() => {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(markerPath, { force: true });
+  });
+
+  const result = spawnSync(process.execPath, [require.resolve('./stop')], {
+    input: JSON.stringify({ session_id: sessionID, cwd: workspace }),
+    encoding: 'utf8',
+    timeout: 3000,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      ENGRAM_INTERNAL: '0',
+      ENGRAM_QUIET: '0',
+      ENGRAM_URL: 'http://127.0.0.1:9',
+      ENGRAM_TOKEN: 'test-token',
+    },
+  });
+
+  assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '{"continue":true}');
+  assert.equal(fs.existsSync(markerPath), false, 'clean Stop must remove the crash marker offline');
+  assert.match(result.stderr, /continuing local capture\/cleanup/);
 });
 
 // ---------------------------------------------------------------------------
