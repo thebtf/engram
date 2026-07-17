@@ -37,7 +37,7 @@
     "expected_head_blobs": [
       {
         "path": ".github/workflows/plugin-publish.yml",
-        "git_blob": "cd6f78b0824048274a1bb1bddbcff0df93dd5ea4"
+        "git_blob": "5348d2fd95c4de06b60274be57f727a11a2ad033"
       }
     ]
   }
