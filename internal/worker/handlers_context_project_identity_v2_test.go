@@ -156,6 +156,19 @@ func TestProjectIdentityHTTPError_DoesNotExposeDatabaseDiagnostics(t *testing.T)
 	}
 }
 
+func TestProjectIdentityHTTPError_TypedNilFailsClosed(t *testing.T) {
+	var typedNil *gormdb.ProjectIdentityError
+	var err error = typedNil
+	rec := httptest.NewRecorder()
+	writeProjectIdentityHTTPError(rec, err)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(gormdb.ProjectIdentityUnavailable)) {
+		t.Fatalf("typed-nil error did not fail closed: %s", rec.Body.String())
+	}
+}
+
 func TestContextInject_AmbiguousLegacyFailsWithUpgradeActionBeforeAccess(t *testing.T) {
 	db, cleanup := setupProjectTestDB(t)
 	defer cleanup()

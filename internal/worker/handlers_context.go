@@ -1326,7 +1326,7 @@ func writeProjectIdentityHTTPError(w http.ResponseWriter, err error) {
 	action := gorm.UpgradeActionRetryProjectRegistration
 	message := gorm.ProjectIdentityPublicMessage(err)
 	var identityErr *gorm.ProjectIdentityError
-	if errors.As(err, &identityErr) {
+	if errors.As(err, &identityErr) && identityErr != nil {
 		code = identityErr.Code
 		action = identityErr.UpgradeAction
 		switch identityErr.Code {

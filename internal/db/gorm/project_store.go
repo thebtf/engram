@@ -84,7 +84,7 @@ func unavailableProjectIdentity(err error) error {
 
 func projectIdentityWriteError(err error) error {
 	var identityErr *ProjectIdentityError
-	if errors.As(err, &identityErr) {
+	if errors.As(err, &identityErr) && identityErr != nil {
 		return err
 	}
 	return unavailableProjectIdentity(err)
@@ -94,7 +94,7 @@ func projectIdentityWriteError(err error) error {
 // database errors remain server-side and must never be serialized to clients.
 func ProjectIdentityPublicMessage(err error) string {
 	var identityErr *ProjectIdentityError
-	if errors.As(err, &identityErr) {
+	if errors.As(err, &identityErr) && identityErr != nil {
 		switch identityErr.Code {
 		case ProjectIdentityInvalid:
 			return "project identity metadata is invalid"

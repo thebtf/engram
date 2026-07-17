@@ -131,6 +131,28 @@ func TestCallTool_PreservesDocumentedUnscopedReviewSelector(t *testing.T) {
 	}
 }
 
+func TestCallTool_WithoutOuterProjectSkipsIdentityResolution(t *testing.T) {
+	steps := []string{}
+	var captured []byte
+	srv := &Server{handler: identityOrderHandler{steps: &steps, arguments: &captured}}
+	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
+		t.Fatal("identity resolver called for unscoped tool request")
+		return "", nil
+	}
+
+	arguments := []byte(`{"project":"all","limit":5}`)
+	resp, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
+		ToolName:      "review_queue.read",
+		ArgumentsJson: arguments,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.CanonicalProject != "" || !reflect.DeepEqual(captured, arguments) || !reflect.DeepEqual(steps, []string{"handler"}) {
+		t.Fatalf("response=%#v args=%s steps=%v", resp, captured, steps)
+	}
+}
+
 func TestCallTool_PreservesExplicitTargetProjectFilters(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -328,6 +350,22 @@ func TestCallTool_StableIdentityErrorsPrecedeMutation(t *testing.T) {
 	st, _ := status.FromError(err)
 	if len(st.Details()) != 1 {
 		t.Fatalf("stable machine-readable detail missing: %#v", st.Details())
+	}
+}
+
+func TestCallTool_TypedNilIdentityErrorFailsClosed(t *testing.T) {
+	steps := []string{}
+	srv := &Server{handler: identityOrderHandler{steps: &steps}}
+	srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
+		var typedNil *localgorm.ProjectIdentityError
+		return "", typedNil
+	}
+	_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: "recall", Project: "legacy"})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("status=%v error=%v, want Unavailable", status.Code(err), err)
+	}
+	if len(steps) != 0 {
+		t.Fatalf("handler ran after typed-nil identity error: %v", steps)
 	}
 }
 

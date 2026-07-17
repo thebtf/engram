@@ -53,6 +53,19 @@ func gitIdentityV2(legacy, remote string) *ProjectIdentityV2 {
 	}
 }
 
+func TestProjectIdentityError_TypedNilFailsClosed(t *testing.T) {
+	var typedNil *ProjectIdentityError
+	var err error = typedNil
+	if got := ProjectIdentityPublicMessage(err); got != "project identity registration is unavailable" {
+		t.Fatalf("public message=%q", got)
+	}
+	wrapped := projectIdentityWriteError(err)
+	var identityErr *ProjectIdentityError
+	if !errors.As(wrapped, &identityErr) || identityErr == nil || identityErr.Code != ProjectIdentityUnavailable {
+		t.Fatalf("wrapped error=%T %v", wrapped, wrapped)
+	}
+}
+
 func TestRegisterAndResolve_RejectsInvalidBeforeDatabaseAccess(t *testing.T) {
 	shared := false
 	_, err := RegisterAndResolve(context.Background(), nil, "selector", &ProjectIdentityV2{

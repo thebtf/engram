@@ -161,9 +161,13 @@ func (s *Server) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb
 
 // CallTool dispatches a single MCP tool call.
 func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.CallToolResponse, error) {
-	canonicalProject, err := s.resolveProjectIdentity(ctx, req.GetProject(), req.GetProjectIdentity())
-	if err != nil {
-		return nil, err
+	canonicalProject := ""
+	if req.GetProject() != "" || req.GetProjectIdentity() != nil {
+		var err error
+		canonicalProject, err = s.resolveProjectIdentity(ctx, req.GetProject(), req.GetProjectIdentity())
+		if err != nil {
+			return nil, err
+		}
 	}
 	// Inject project identity using the same context key that internal/mcp reads.
 	if canonicalProject != "" {
@@ -274,7 +278,7 @@ func (s *Server) resolveProjectIdentity(ctx context.Context, selector string, id
 		return canonical, nil
 	}
 	var identityErr *engramgorm.ProjectIdentityError
-	if !errors.As(err, &identityErr) {
+	if !errors.As(err, &identityErr) || identityErr == nil {
 		return "", status.Error(codes.Unavailable, engramgorm.ProjectIdentityPublicMessage(err))
 	}
 	code := codes.Unavailable
