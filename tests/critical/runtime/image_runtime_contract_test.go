@@ -527,11 +527,30 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 	if got := strings.Count(publisher, "-EventOnlyValidation"); got != 1 {
 		t.Fatalf("only the contents-read prepare job may use the event/git/ruleset validator, got %d", got)
 	}
-	if got := strings.Count(publisher, "RULESET_AUDIT_TOKEN: ${{ secrets.MARKETPLACE_PAT }}"); got != 2 {
-		t.Fatalf("both provenance validators must receive the bypass-aware ruleset credential, got %d bindings", got)
+	validators := []struct {
+		name    string
+		section string
+	}{
+		{
+			name: "prepare-release",
+			section: workflowStepSection(t, publisher,
+				"Independently validate the triggering run, tag, and protected-main provenance",
+				"Checkout exact validated candidate without workflow credentials"),
+		},
+		{
+			name: "publish-images",
+			section: workflowStepSection(t, publisher,
+				"Revalidate workflow, tag, rulesets, and protected-main provenance on the fresh runner",
+				"Confirm preparation and fresh-runner provenance agree"),
+		},
 	}
-	if got := strings.Count(publisher, "-GitHubToken $env:RULESET_AUDIT_TOKEN"); got != 2 {
-		t.Fatalf("both provenance validators must consume the ruleset audit credential, got %d consumers", got)
+	for _, validator := range validators {
+		if got := strings.Count(validator.section, "RULESET_AUDIT_TOKEN: ${{ secrets.MARKETPLACE_PAT }}"); got != 1 {
+			t.Fatalf("%s provenance validator must receive exactly one bypass-aware ruleset credential binding, got %d", validator.name, got)
+		}
+		if got := strings.Count(validator.section, "-GitHubToken $env:RULESET_AUDIT_TOKEN"); got != 1 {
+			t.Fatalf("%s provenance validator must consume exactly one ruleset audit credential, got %d", validator.name, got)
+		}
 	}
 	if got := strings.Count(publisher, `RULESET_AUDIT_TOKEN: ""`); got != 1 {
 		t.Fatalf("candidate execution must explicitly clear the ruleset audit credential, got %d clearings", got)
@@ -709,14 +728,48 @@ func testRepositorySingleWriter(t *testing.T, repo string) {
 		}
 	}
 	const rulesetSecret = "${{ secrets.MARKETPLACE_PAT }}"
-	if got := strings.Count(workflow, rulesetSecret); got != 2 {
-		t.Fatalf("release workflow must expose the proven ruleset credential only to two provenance validators, got %d references", got)
+	validators := []struct {
+		name    string
+		section string
+	}{
+		{
+			name: "prepare-release",
+			section: workflowStepSection(t, workflow,
+				"Independently validate the triggering run, tag, and protected-main provenance",
+				"Checkout exact validated candidate without workflow credentials"),
+		},
+		{
+			name: "publish-images",
+			section: workflowStepSection(t, workflow,
+				"Revalidate workflow, tag, rulesets, and protected-main provenance on the fresh runner",
+				"Confirm preparation and fresh-runner provenance agree"),
+		},
 	}
-	if got := strings.Count(workflow, "secrets."); got != 2 {
+	for _, validator := range validators {
+		if got := strings.Count(validator.section, rulesetSecret); got != 1 {
+			t.Fatalf("%s provenance validator must contain exactly one ruleset secret binding, got %d", validator.name, got)
+		}
+		if got := strings.Count(validator.section, "-GitHubToken $env:RULESET_AUDIT_TOKEN"); got != 1 {
+			t.Fatalf("%s provenance validator must contain exactly one ruleset credential consumer, got %d", validator.name, got)
+		}
+	}
+	if got := strings.Count(workflow, rulesetSecret); got != len(validators) {
+		t.Fatalf("release workflow exposes the ruleset credential outside its provenance validators, got %d references", got)
+	}
+	if got := strings.Count(workflow, "secrets."); got != len(validators) {
 		t.Fatalf("release workflow contains an undeclared repository secret route, got %d secret references", got)
 	}
+	artifactCensus := workflowStepSection(t, workflow,
+		"Census the current-run artifact before download",
+		"Download the one censused artifact by immutable ID")
+	if got := strings.Count(artifactCensus, "READ_ONLY_GITHUB_TOKEN: ${{ github.token }}"); got != 1 {
+		t.Fatalf("artifact census must receive exactly one job-scoped GitHub token binding, got %d", got)
+	}
+	if got := strings.Count(artifactCensus, "-GitHubToken $env:READ_ONLY_GITHUB_TOKEN"); got != 1 {
+		t.Fatalf("artifact census must consume exactly one job-scoped GitHub token, got %d", got)
+	}
 	if got := strings.Count(workflow, "READ_ONLY_GITHUB_TOKEN: ${{ github.token }}"); got != 1 {
-		t.Fatalf("job-scoped GitHub token must remain limited to artifact census, got %d bindings", got)
+		t.Fatalf("job-scoped GitHub token escaped the artifact census step, got %d bindings", got)
 	}
 	buildStart := strings.Index(workflow, "Build, scan, exercise, and export exact image data without package authority")
 	if buildStart < 0 {
@@ -788,6 +841,19 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(content)
+}
+
+func workflowStepSection(t *testing.T, workflow, startMarker, endMarker string) string {
+	t.Helper()
+	start := strings.Index(workflow, startMarker)
+	if start < 0 {
+		t.Fatalf("workflow step start marker is missing: %q", startMarker)
+	}
+	end := strings.Index(workflow[start:], endMarker)
+	if end <= 0 {
+		t.Fatalf("workflow step end marker is missing or out of order: %q", endMarker)
+	}
+	return workflow[start : start+end]
 }
 
 func testCanonicalReleaseValidation(t *testing.T, repo string) {
