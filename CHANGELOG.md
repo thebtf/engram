@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.46.1] - 2026-07-17
+
+### Fixed
+
+- **Docker image publication after v6.46.0 (#432, #433, #434, #435).** GitHub Rulesets list responses are flattened before target filtering, and the two trusted `ValidateWorkflowRun` steps now receive the proven bypass-aware repository credential while candidate-controlled execution explicitly clears it. The closed-world authority epoch was rotated before the protected workflow repair, and critical regressions now pin credential placement to the exact trusted steps, exercise live tag and branch ruleset-array responses through both release and workflow-run validation, and reject omitted bypass policy.
+
 ## [6.46.0] - 2026-07-17
 
 ### Added
@@ -1894,7 +1900,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.46.0...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.46.1...HEAD
+[6.46.1]: https://github.com/thebtf/engram/compare/v6.46.0...v6.46.1
 [6.46.0]: https://github.com/thebtf/engram/compare/v6.45.0...v6.46.0
 [6.45.0]: https://github.com/thebtf/engram/compare/v6.44.1...v6.45.0
 [6.44.1]: https://github.com/thebtf/engram/compare/v6.44.0...v6.44.1
