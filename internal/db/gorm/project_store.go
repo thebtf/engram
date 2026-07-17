@@ -198,6 +198,9 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 		if err != nil {
 			return unavailableProjectIdentity(err)
 		}
+		if len(legacyCandidates) > 1 {
+			return ambiguousProjectIdentity("selector and legacy identity map to different canonical projects")
+		}
 		if len(legacyCandidates) == 1 {
 			refreshed, err := lockProjectIdentityCandidate(ctx, tx, legacyCandidates[0].ID)
 			if err != nil {

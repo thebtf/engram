@@ -197,6 +197,51 @@ func TestRegisterAndResolve_ExistingLegacyCanonicalAndContradiction(t *testing.T
 	}
 }
 
+func TestRegisterAndResolve_ConflictingSelectorAndLegacyAliasFailWithoutMutation(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	prefix := "prc-v2-alias-conflict-"
+	selector := prefix + "selector"
+	legacyID := prefix + "legacy"
+	selectorCanonical := prefix + "selector-canonical"
+	legacyCanonical := prefix + "legacy-canonical"
+	defer db.Exec(`DELETE FROM projects WHERE id LIKE ? OR EXISTS (SELECT 1 FROM unnest(COALESCE(legacy_ids, ARRAY[]::TEXT[])) alias WHERE alias LIKE ?)`, prefix+"%", prefix+"%")
+	db.Exec(`DELETE FROM projects WHERE id LIKE ? OR EXISTS (SELECT 1 FROM unnest(COALESCE(legacy_ids, ARRAY[]::TEXT[])) alias WHERE alias LIKE ?)`, prefix+"%", prefix+"%")
+	if err := UpsertProject(ctx, db, selectorCanonical, selector, "", "", "selector owner"); err != nil {
+		t.Fatalf("seed selector owner: %v", err)
+	}
+	if err := UpsertProject(ctx, db, legacyCanonical, legacyID, "", "", "legacy owner"); err != nil {
+		t.Fatalf("seed legacy owner: %v", err)
+	}
+
+	_, err := RegisterAndResolve(ctx, db, selector, gitIdentityV2(legacyID, "https://example.invalid/acme/conflict.git"))
+	var identityErr *ProjectIdentityError
+	if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityAmbiguous || identityErr.UpgradeAction != UpgradeActionSendProjectIdentityV2 {
+		t.Fatalf("conflicting aliases error=%T %v", err, err)
+	}
+
+	for canonical, wantAlias := range map[string]string{
+		selectorCanonical: selector,
+		legacyCanonical:   legacyID,
+	} {
+		var persisted Project
+		if err := db.Where("id = ?", canonical).First(&persisted).Error; err != nil {
+			t.Fatalf("read %s: %v", canonical, err)
+		}
+		if len(persisted.LegacyIDs) != 1 || persisted.LegacyIDs[0] != wantAlias {
+			t.Fatalf("%s aliases mutated: %#v", canonical, persisted.LegacyIDs)
+		}
+	}
+	var created int64
+	if err := db.Model(&Project{}).Where("id LIKE ?", "p2g_%").Where(`COALESCE(legacy_ids, ARRAY[]::TEXT[]) && ARRAY[?, ?]::TEXT[]`, selector, legacyID).Count(&created).Error; err != nil {
+		t.Fatalf("count conflicting binding rows: %v", err)
+	}
+	if created != 0 {
+		t.Fatalf("conflicting aliases created %d binding rows", created)
+	}
+}
+
 func TestRegisterAndResolve_ConcurrentCallsConvergeAndSharingIsExplicit(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
