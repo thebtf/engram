@@ -219,7 +219,8 @@ function Get-TagRulesets {
     $summaries = @()
     for ($page = 1; ; $page++) {
         $uri = "$($GitHubApiUrl.TrimEnd('/'))/repos/$Repository/rulesets?per_page=100&page=$page"
-        $batch = @(Invoke-RestMethod -Method Get -Uri $uri -Headers $headers)
+        $response = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
+        $batch = @($response | ForEach-Object { $_ })
         $summaries += $batch
         if ($batch.Count -lt 100) { break }
     }
@@ -241,7 +242,8 @@ function Assert-ImmutableReleaseRuleset {
         $includes = @($ruleset.conditions.ref_name.include)
         $excludes = @($ruleset.conditions.ref_name.exclude)
         if ($includes.Count -ne 1 -or $includes[0] -cne 'refs/tags/v*' -or $excludes.Count -ne 0) { continue }
-        if (@($ruleset.bypass_actors).Count -ne 0) { continue }
+        $bypassProperty = $ruleset.PSObject.Properties['bypass_actors']
+        if ($null -eq $bypassProperty -or @($bypassProperty.Value).Count -ne 0) { continue }
         $types = @($ruleset.rules | ForEach-Object { [string]$_.type })
         if ($types -cnotcontains 'deletion' -or $types -cnotcontains 'non_fast_forward') { continue }
         $matches += $ruleset
@@ -272,7 +274,9 @@ function Assert-ProtectedMainRuleset {
         $integrationID = $authorityChecks[0].PSObject.Properties['integration_id']
         if ($null -eq $integrationID -or $integrationID.Value -isnot [int] -and $integrationID.Value -isnot [long]) { continue }
         if ([int64]$integrationID.Value -ne 15368) { continue }
-        $bypassActors = @($ruleset.bypass_actors)
+        $bypassProperty = $ruleset.PSObject.Properties['bypass_actors']
+        if ($null -eq $bypassProperty) { continue }
+        $bypassActors = @($bypassProperty.Value)
         if ($bypassActors.Count -ne 1) { continue }
         $recoveryActor = $bypassActors[0]
         if ($recoveryActor.actor_type -cne 'User' -or [int64]$recoveryActor.actor_id -ne 7106373 -or $recoveryActor.bypass_mode -cne 'pull_request') { continue }
@@ -318,7 +322,8 @@ function Get-LiveRulesetDetails {
 
     $details = @()
     for ($page = 1; ; $page++) {
-        $batch = @(Invoke-GitHubApi -Path "/repos/$Repository/rulesets?per_page=100&page=$page")
+        $response = Invoke-GitHubApi -Path "/repos/$Repository/rulesets?per_page=100&page=$page"
+        $batch = @($response | ForEach-Object { $_ })
         foreach ($summary in $batch) {
             if ($summary.target -cne $Target -or $summary.enforcement -cne 'active') { continue }
             $details += Invoke-GitHubApi -Path "/repos/$Repository/rulesets/$($summary.id)"
