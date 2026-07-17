@@ -38,3 +38,22 @@ Do not resurrect server HTTP MCP, `/sse`, Streamable HTTP MCP, or a stdio-to-SSE
 bridge from legacy text. The current listener registers REST and gRPC; the local
 `engram` binary supplies the stdio MCP boundary. The machine ledger records the
 call-path evidence and is the place to update when source changes.
+
+## Project identity routing
+
+Every project-scoped request resolves a versioned workspace identity to the
+canonical project before data access. The local stdio daemon carries the outer
+legacy selector plus `ProjectIdentityV2` over gRPC; lifecycle hooks and OpenClaw
+use the REST identity-only registration endpoint and wait for `canonical_project`
+before issuing context, memory, issue, vault, or session requests. Registration
+failure short-circuits the downstream request.
+
+Project identity is routing metadata, not authentication. Supplying a selector,
+Git remote/path, or non-Git anchor never grants access; existing bearer and
+principal-visibility checks still govern endpoints that require them. The
+protobuf field is additive,
+so legacy clients may continue only while their selector resolves unambiguously.
+Ambiguous legacy selectors fail closed with `PROJECT_IDENTITY_AMBIGUOUS` and the
+`send_project_identity_v2` upgrade action. Non-Git workspaces use 16 random bytes
+encoded as 32 lowercase hexadecimal characters in `.engram-project-v2.json`,
+with sharing enabled only by an explicit opt-in flag.

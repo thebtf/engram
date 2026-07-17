@@ -11,10 +11,10 @@
 
 import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
+import { resolveAndRegisterProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptPayload, quotedPromptScalar } from '../context/formatter.js';
-import { resolveIdentity } from '../identity.js';
 import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.js';
 
 // ---------------------------------------------------------------------------
@@ -187,8 +187,12 @@ export function createEngramIssuesTool(
         return 'engram is currently unreachable — issues unavailable';
       }
 
-      const identity = resolveIdentity(ctx.agentId ?? '', ctx.workspaceDir);
-      const project = config.project ?? identity.projectId;
+      const sourceAgent = ctx.agentId || 'openclaw';
+      const registration = await resolveAndRegisterProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
+      if (!registration.ok) {
+        return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
+      }
+      const project = registration.canonicalProject;
 
       switch (parsed.data.action) {
         case 'create': {
@@ -199,7 +203,7 @@ export function createEngramIssuesTool(
             priority,
             source_project: project,
             target_project: target_project ?? project,
-            source_agent: identity.agentId || 'openclaw',
+            source_agent: sourceAgent,
             labels,
           });
           if (!resp) return 'Failed to create issue — server error';
@@ -251,7 +255,7 @@ export function createEngramIssuesTool(
             status: parsed.data.status,
             comment: parsed.data.comment,
             source_project: project,
-            source_agent: identity.agentId || 'openclaw',
+            source_agent: sourceAgent,
           });
           if (!resp) return `Failed to update issue: id=${quotedPromptScalar(String(parsed.data.id))}`;
           return `Issue resolved: id=${quotedPromptScalar(String(parsed.data.id))}`;
@@ -261,7 +265,7 @@ export function createEngramIssuesTool(
           const resp = await client.updateIssue(parsed.data.id, {
             comment: parsed.data.body,
             source_project: project,
-            source_agent: identity.agentId || 'openclaw',
+            source_agent: sourceAgent,
           });
           if (!resp) return `Failed to comment on issue: id=${quotedPromptScalar(String(parsed.data.id))}`;
           return `Comment added to issue: id=${quotedPromptScalar(String(parsed.data.id))}`;
@@ -272,7 +276,7 @@ export function createEngramIssuesTool(
             status: 'reopened',
             comment: parsed.data.body ?? 'Reopened',
             source_project: project,
-            source_agent: identity.agentId || 'openclaw',
+            source_agent: sourceAgent,
           });
           if (!resp) return `Failed to reopen issue: id=${quotedPromptScalar(String(parsed.data.id))}`;
           return `Issue reopened: id=${quotedPromptScalar(String(parsed.data.id))}`;

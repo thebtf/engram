@@ -6,9 +6,9 @@
  * This is fire-and-forget: the hook never blocks on a response.
  */
 
+import { resolveAndRegisterProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
-import { resolveIdentity } from '../identity.js';
 import { classifyMessage } from './message-classifier.js';
 import type { AfterToolCallEvent, PluginHookContext, PluginLogger } from '../types/openclaw.js';
 
@@ -40,13 +40,13 @@ const HEARTBEAT_TOOL_NAMES = new Set([
  * @param client - Shared engram REST client.
  * @param config - Resolved plugin config.
  */
-export function handleAfterToolCall(
+export async function handleAfterToolCall(
   event: AfterToolCallEvent,
   ctx: PluginHookContext,
   client: EngramRestClient,
   config: PluginConfig,
   logger?: PluginLogger,
-): void {
+): Promise<void> {
   if (!client.isAvailable()) return;
   if (!config.autoExtract) return;
 
@@ -71,8 +71,12 @@ export function handleAfterToolCall(
   const agentId = ctx.agentId ?? '';
   const sessionId = ctx.sessionId ?? ctx.sessionKey ?? agentId;
   if (!sessionId?.trim()) return; // no session identity available — skip
-  const identity = resolveIdentity(agentId, ctx.workspaceDir);
-  const project = config.project ?? identity.projectId;
+  const registration = await resolveAndRegisterProject(client, agentId, ctx.workspaceDir, config.project);
+  if (!registration.ok) {
+    (logger ?? console).warn(`[engram] after-tool-call: project registration failed: ${registration.error.code}`);
+    return;
+  }
+  const project = registration.canonicalProject;
 
   let toolInput: string;
   let toolResult: string;
@@ -84,7 +88,7 @@ export function handleAfterToolCall(
     toolResult = '[unserializable]';
   }
 
-  // Fire-and-forget — do not await
+  // Registration is awaited above; the data write may now be fire-and-forget.
   void client.ingestEvent({
     session_id: sessionId,
     project,

@@ -212,6 +212,17 @@ function runHookProcess(scriptName, env, input) {
   return out.trim();
 }
 
+function readQuietMode(env) {
+  const baseEnv = { ...process.env };
+  for (const k of QUIET_ENV_ALIASES) delete baseEnv[k];
+  const modulePath = JSON.stringify(require.resolve('./lib'));
+  return execFileSync(process.execPath, ['-e', `process.stdout.write(String(require(${modulePath}).isQuietMode()))`], {
+    env: { ...baseEnv, ...env },
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim();
+}
+
 test('quiet mode emits empty pass-through and injects nothing (ENGRAM_QUIET=1)', () => {
   const out = runHookProcess('session-start.js', {
     ENGRAM_QUIET: '1',
@@ -222,7 +233,7 @@ test('quiet mode emits empty pass-through and injects nothing (ENGRAM_QUIET=1)',
     'quiet mode must return exactly {"continue":true} with no hookSpecificOutput');
 });
 
-test('quiet mode accepts truthy aliases and ignores falsey values', (t) => {
+test('quiet mode accepts truthy aliases and ignores falsey values', () => {
   for (const v of ['true', 'YES', 'on']) {
     const out = runHookProcess('session-start.js', {
       ENGRAM_QUIET: v,
@@ -231,19 +242,8 @@ test('quiet mode accepts truthy aliases and ignores falsey values', (t) => {
     });
     assert.strictEqual(out, '{"continue":true}', `value ${v} must enable quiet mode`);
   }
-  // A falsey value must NOT short-circuit: with an unreachable server the hook
-  // still runs its handler and falls through to the no-cache banner (proof the
-  // handler executed rather than being skipped by quiet mode).
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-quiet-off-'));
-  t.after(() => { try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (_) {} });
-  const active = runHookProcess('session-start.js', {
-    ENGRAM_QUIET: '0',
-    ENGRAM_URL: 'http://127.0.0.1:9/unreachable',
-    ENGRAM_TOKEN: 'engram_test',
-    ENGRAM_DATA_DIR: dataDir,
-  });
-  assert.notStrictEqual(active, '{"continue":true}',
-    'ENGRAM_QUIET=0 must leave the hook active (handler runs)');
+  assert.strictEqual(readQuietMode({ ENGRAM_QUIET: '0' }), 'false',
+    'ENGRAM_QUIET=0 must leave injection active');
 });
 
 test('quiet mode is honored from the engram config file (Codex ≥0.139 path, no env)', (t) => {
@@ -265,10 +265,6 @@ test('quiet mode is honored from the engram config file (Codex ≥0.139 path, no
 });
 
 test('explicit falsey quiet env overrides config-file quiet:true', (t) => {
-  // Precedence: a present-but-falsey ENGRAM_QUIET must win over a config-file
-  // quiet:true, so a user can temporarily re-enable injection without editing
-  // ~/.engram/config.json. With the server unreachable, "active" is proven by
-  // the handler running and NOT returning the bare {"continue":true}.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-quiet-prec-'));
   t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} });
   const cfgPath = path.join(dir, 'config.json');
@@ -278,12 +274,10 @@ test('explicit falsey quiet env overrides config-file quiet:true', (t) => {
     quiet: true,
   }));
 
-  const out = runHookProcess('session-start.js', {
+  assert.strictEqual(readQuietMode({
     ENGRAM_CONFIG_FILE: cfgPath,
     ENGRAM_QUIET: '0',
-  });
-  assert.notStrictEqual(out, '{"continue":true}',
-    'ENGRAM_QUIET=0 must override config-file quiet:true (explicit env wins, even falsey)');
+  }), 'false', 'ENGRAM_QUIET=0 must override config-file quiet:true');
 });
 
 test('quiet mode drains a large stdin payload without EPIPE', () => {

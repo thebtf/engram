@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"testing"
 
 	"github.com/thebtf/engram/internal/module"
@@ -33,6 +34,7 @@ import (
 // Each test configures its behaviour via the exported fields below.
 type mockEngramServer struct {
 	pb.UnimplementedEngramServiceServer
+	mu sync.Mutex
 
 	// initResp is the response returned by Initialize.
 	initResp *pb.InitializeResponse
@@ -40,16 +42,24 @@ type mockEngramServer struct {
 	callResp *pb.CallToolResponse
 	// callErr, if non-nil, is returned as an error from CallTool.
 	callErr error
+	initReq *pb.InitializeRequest
+	callReq *pb.CallToolRequest
 }
 
-func (s *mockEngramServer) Initialize(_ context.Context, _ *pb.InitializeRequest) (*pb.InitializeResponse, error) {
+func (s *mockEngramServer) Initialize(_ context.Context, req *pb.InitializeRequest) (*pb.InitializeResponse, error) {
+	s.mu.Lock()
+	s.initReq = req
+	s.mu.Unlock()
 	if s.initResp == nil {
 		return &pb.InitializeResponse{}, nil
 	}
 	return s.initResp, nil
 }
 
-func (s *mockEngramServer) CallTool(_ context.Context, _ *pb.CallToolRequest) (*pb.CallToolResponse, error) {
+func (s *mockEngramServer) CallTool(_ context.Context, req *pb.CallToolRequest) (*pb.CallToolResponse, error) {
+	s.mu.Lock()
+	s.callReq = req
+	s.mu.Unlock()
 	if s.callErr != nil {
 		return nil, s.callErr
 	}
@@ -130,7 +140,7 @@ func buildContractDispatcher(t *testing.T, grpcAddr string) (*dispatcher.Dispatc
 	}
 
 	// Pre-populate the slug cache so slug resolution skips the git call.
-	mod.cache.ForceCacheEntry(p.ID, p.ID)
+	mod.cache.ForceCacheEntry(p, p.ID)
 
 	// Also pre-populate the pool to use plaintext credentials matching our mock.
 	// We dial directly so tests are not subject to OS-level ephemeral port

@@ -8,10 +8,9 @@
 import type { FSWatcher } from 'chokidar';
 import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
-import type { EngramRestClient, BulkImportRequest } from '../client.js';
+import { resolveAndRegisterProject, type EngramRestClient, type BulkImportRequest } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import type { OpenClawPluginService, OpenClawPluginServiceContext, PluginLogger } from '../types/openclaw.js';
-import { resolveIdentity } from '../identity.js';
 import {
   splitIntoChunks,
   loadMarker,
@@ -29,7 +28,7 @@ class FileWatcherService implements OpenClawPluginService {
   private readonly debounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private readonly inFlight: Set<string> = new Set();
   private stopped = false;
-  private readonly projectId: string;
+  private projectId: string;
 
   constructor(
     private readonly workspaceDir: string,
@@ -37,11 +36,22 @@ class FileWatcherService implements OpenClawPluginService {
     private readonly config: PluginConfig,
     private readonly logger: PluginLogger,
   ) {
-    const identity = resolveIdentity('file-watcher', workspaceDir);
-    this.projectId = config.project ?? identity.projectId;
+    this.projectId = config.project ?? '';
   }
 
   async start(_ctx: OpenClawPluginServiceContext): Promise<void> {
+    const registration = await resolveAndRegisterProject(
+      this.client,
+      'file-watcher',
+      this.workspaceDir,
+      this.config.project,
+    );
+    if (!registration.ok) {
+      const message = `[file-watcher] project registration failed: ${registration.error.code}`;
+      this.logger.warn(message);
+      throw new Error(`PROJECT_IDENTITY_UNAVAILABLE: ${message}`);
+    }
+    this.projectId = registration.canonicalProject;
     // Lazy-load chokidar to avoid blocking plugin discovery with native module init
     const chokidar = await import('chokidar');
     const watchPaths = [

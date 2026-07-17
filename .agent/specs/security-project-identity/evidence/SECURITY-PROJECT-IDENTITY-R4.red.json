@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "task_id": "SECURITY-PROJECT-IDENTITY-R4",
+  "classification": "structural_acceptance_gap",
+  "observed_at": "2026-07-11T00:44:39.6108161+03:00",
+  "immutable_target": "38344455754fe503acbd79d2134141f996adff7f",
+  "protected_invariant": "The permanent Go suite must exercise Project Identity V2 first-use publication through independent OS processes synchronized by an explicit ready/go barrier.",
+  "baseline": {
+    "existing_goroutine_test_command": "go test ./internal/proxy -run '^TestResolveProjectIdentityV2_(ConcurrentFirstUseConverges|PreExistingAnchorsAreNeverReplaced)$' -count=1 -v",
+    "existing_goroutine_test_result": "PASS",
+    "structural_probe_command": "rg -n -g '*_test.go' 'os\\.Executable|StdinPipe|SECURITY_PROJECT_IDENTITY_CHILD|ready.go|child.process' internal/proxy",
+    "structural_probe_exit_code": 1,
+    "structural_probe_result": "FAIL: no permanent child-process helper or explicit ready/go barrier exists in the immutable target"
+  },
+  "product_edit_required": false,
+  "target_product_blob": {
+    "path": "internal/proxy/identity.go",
+    "git_blob": "9ecbad17612e7dd4e2ce8c8fed10ee4e041e11c1",
+    "initial_worktree_sha256": "a56fc40bf3cddfb18848df415354b6e781ff3e0d422bf9d525888d4a9c9ee00f",
+    "canonical_parity_key": "git_blob"
+  }
+}

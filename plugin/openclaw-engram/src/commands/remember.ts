@@ -6,9 +6,9 @@
  * Stores the provided text as a "change" type observation in the current project.
  */
 
+import { resolveAndRegisterProject } from '../client.js';
 import type { EngramRestClient, BulkImportRequest } from '../client.js';
 import type { PluginConfig } from '../config.js';
-import { resolveIdentity } from '../identity.js';
 import type { OpenClawPluginCommandDefinition, PluginCommandContext } from '../types/openclaw.js';
 
 const CONTENT_MAX_CHARS = 900;
@@ -35,8 +35,11 @@ export function buildRememberCommand(
         return { text: 'engram is currently unreachable — cannot store memory' };
       }
 
-      const identity = resolveIdentity('', config.workspaceDir ?? process.cwd());
-      const project = config.project ?? identity.projectId;
+      const registration = await resolveAndRegisterProject(client, '', config.workspaceDir ?? process.cwd(), config.project);
+      if (!registration.ok) {
+        return { text: `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})` };
+      }
+      const project = registration.canonicalProject;
 
       // Use the first sentence (up to 80 chars) as the title
       const firstSentence = text.split(/[.!?]/)[0]?.trim() ?? text;

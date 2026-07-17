@@ -304,7 +304,12 @@ function isInjectionHook(hookName) {
 function getGitRemoteID(cwd) {
   try {
     const execSync = require('child_process').execSync;
-    const opts = { cwd, stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 };
+    const opts = {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 3000,
+      env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
+    };
     const remoteURL = execSync('git remote get-url origin', opts).toString().trim();
     if (!remoteURL) return null;
     const relativePath = execSync('git rev-parse --show-prefix', opts).toString().trim();
@@ -315,9 +320,16 @@ function getGitRemoteID(cwd) {
       gitRemote: remoteURL,
       relativePath: relativePath,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    if (isMissingGitIdentityError(error)) return null;
+    throw new Error('PROJECT_IDENTITY_UNAVAILABLE: git identity resolution failed', { cause: error });
   }
+}
+
+function isMissingGitIdentityError(error) {
+  if (!error || typeof error !== 'object') return false;
+  const stderr = error.stderr == null ? '' : String(error.stderr);
+  return /not a git repository|no such remote/i.test(stderr);
 }
 
 /**
@@ -350,6 +362,245 @@ function ProjectIDWithName(cwd) {
   const resolvedPath = path.resolve(cwd || '');
   const hash = crypto.createHash('sha256').update(resolvedPath).digest('hex');
   return hash.slice(0, 6);
+}
+
+const PROJECT_IDENTITY_VERSION_V2 = 2;
+const PROJECT_IDENTITY_V2_FILE = '.engram-project-v2.json';
+const STRICT_ANCHOR_V2 = /^[0-9a-f]{32}$/;
+const PROJECT_IDENTITY_CONTROL = /\p{Cc}/u;
+const PROJECT_SELECTOR_V2 = /^[A-Za-z0-9_.\/:\\-]+$/;
+const RESERVED_PROJECT_BINDING_V2 = /^p2[gn]_[0-9a-f]{32}$/;
+const PROJECT_ANCHOR_V2_KEYS = ['anchor', 'shared', 'version'];
+
+function projectIdentityInvalid(reason) {
+  return new Error(`PROJECT_IDENTITY_INVALID: ${reason}`);
+}
+
+function validateProjectSelectorSyntaxV2(selector) {
+  if (typeof selector !== 'string' || selector === '' || selector.length > 256 ||
+      selector.trim() !== selector || selector.includes('..') ||
+      PROJECT_IDENTITY_CONTROL.test(selector) || !PROJECT_SELECTOR_V2.test(selector)) {
+    throw projectIdentityInvalid('project selector is empty or malformed');
+  }
+  return selector;
+}
+
+function validateProjectSelectorV2(selector) {
+  const validated = validateProjectSelectorSyntaxV2(selector);
+  if (RESERVED_PROJECT_BINDING_V2.test(validated)) {
+    throw projectIdentityInvalid('project selector uses the reserved identity binding namespace');
+  }
+  return validated;
+}
+
+function validateCanonicalProjectV2(selector) {
+  return validateProjectSelectorSyntaxV2(selector);
+}
+
+function buildProjectIdentityV2(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw projectIdentityInvalid('identity metadata must be an object');
+  }
+  for (const field of ['legacy_project_id', 'display_name', 'git_remote', 'relative_path', 'non_git_anchor']) {
+    if (value[field] != null && typeof value[field] !== 'string') {
+      throw projectIdentityInvalid(`${field} must be a string`);
+    }
+  }
+  if (value.anchor_shared != null && typeof value.anchor_shared !== 'boolean') {
+    throw projectIdentityInvalid('anchor_shared must be a JSON boolean or null');
+  }
+  return {
+    version: PROJECT_IDENTITY_VERSION_V2,
+    legacy_project_id: value.legacy_project_id || '',
+    display_name: value.display_name || '',
+    git_remote: value.git_remote || '',
+    relative_path: value.relative_path || '',
+    non_git_anchor: value.non_git_anchor || '',
+    anchor_shared: value.anchor_shared == null ? null : value.anchor_shared,
+  };
+}
+
+function validateProjectIdentityV2(identity) {
+  const invalid = (reason) => {
+    throw new Error(`PROJECT_IDENTITY_INVALID: ${reason}`);
+  };
+  if (!identity || identity.version !== PROJECT_IDENTITY_VERSION_V2) {
+    invalid('unsupported version');
+  }
+  for (const field of ['legacy_project_id', 'display_name', 'git_remote', 'relative_path', 'non_git_anchor']) {
+    if (typeof identity[field] !== 'string') invalid(`${field} must be a string`);
+  }
+  if (identity.anchor_shared !== null && typeof identity.anchor_shared !== 'boolean') {
+    invalid('anchor_shared must be a JSON boolean or null');
+  }
+  if (identity.legacy_project_id.length > 256 || identity.display_name.length > 256 ||
+      identity.legacy_project_id.trim() !== identity.legacy_project_id ||
+      identity.display_name.trim() !== identity.display_name ||
+      PROJECT_IDENTITY_CONTROL.test(identity.legacy_project_id) || PROJECT_IDENTITY_CONTROL.test(identity.display_name) ||
+      RESERVED_PROJECT_BINDING_V2.test(identity.legacy_project_id)) {
+    invalid('selector or display name is malformed');
+  }
+  const hasGit = identity.git_remote !== '' || identity.relative_path !== '';
+  const hasAnchor = identity.non_git_anchor !== '' || identity.anchor_shared !== null;
+  if (hasGit === hasAnchor) invalid('exactly one identity source is required');
+  if (hasGit) {
+    if (!identity.git_remote || identity.git_remote.length > 2048 || identity.git_remote.trim() !== identity.git_remote || PROJECT_IDENTITY_CONTROL.test(identity.git_remote)) {
+      invalid('git_remote is missing or malformed');
+    }
+    if (!normalizedProjectRelativePathV2(identity.relative_path)) {
+      invalid('relative_path is not normalized');
+    }
+  } else {
+    if (!STRICT_ANCHOR_V2.test(identity.non_git_anchor) || typeof identity.anchor_shared !== 'boolean') {
+      invalid('non-git anchor must be 128-bit lowercase hex with explicit sharing');
+    }
+  }
+  return identity;
+}
+
+function normalizedProjectRelativePathV2(value) {
+  if (value === '') return true;
+  if (value.length > 4096 || value.trim() !== value || value.startsWith('/') ||
+      !value.endsWith('/') || value.includes('\\') || PROJECT_IDENTITY_CONTROL.test(value)) return false;
+  return value.slice(0, -1).split('/').every((part) =>
+    part !== '' && part !== '.' && part !== '..' && part.trim() === part);
+}
+
+function readOrCreateProjectAnchorV2(cwd) {
+  const anchorPath = path.join(path.resolve(cwd || ''), PROJECT_IDENTITY_V2_FILE);
+  for (;;) {
+    try {
+      return decodeProjectAnchorV2(fs.readFileSync(anchorPath, 'utf8'));
+    } catch (error) {
+      if (error && error.code !== 'ENOENT') throw error;
+    }
+
+    const anchor = {
+      version: PROJECT_IDENTITY_VERSION_V2,
+      anchor: crypto.randomBytes(16).toString('hex'),
+      shared: false,
+    };
+    const payload = `${JSON.stringify(anchor, null, 2)}\n`;
+    decodeProjectAnchorV2(payload);
+    if (publishProjectAnchorV2(anchorPath, payload)) {
+      return anchor;
+    }
+  }
+}
+
+function decodeProjectAnchorV2(data) {
+  let parsed;
+  try {
+    parsed = JSON.parse(data);
+  } catch (error) {
+    throw projectIdentityInvalid(`decode ${PROJECT_IDENTITY_V2_FILE}: ${error.message}`);
+  }
+  const keys = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.keys(parsed).sort() : [];
+  if (keys.length !== PROJECT_ANCHOR_V2_KEYS.length || keys.some((key, index) => key !== PROJECT_ANCHOR_V2_KEYS[index]) ||
+      parsed.version !== PROJECT_IDENTITY_VERSION_V2 || !STRICT_ANCHOR_V2.test(parsed.anchor) || typeof parsed.shared !== 'boolean') {
+    throw projectIdentityInvalid(`malformed ${PROJECT_IDENTITY_V2_FILE}`);
+  }
+  return parsed;
+}
+
+function publishProjectAnchorV2(anchorPath, payload) {
+  const tempPath = `${anchorPath}.tmp-${process.pid}-${crypto.randomBytes(16).toString('hex')}`;
+  let fd;
+  let phase = 'create';
+  let primaryError;
+  try {
+    fd = fs.openSync(tempPath, 'wx', 0o600);
+    phase = 'write';
+    fs.writeFileSync(fd, payload, 'utf8');
+    phase = 'sync';
+    fs.fsyncSync(fd);
+    phase = 'close';
+    fs.closeSync(fd);
+    fd = undefined;
+    phase = 'publish';
+    // Hard-link publication is atomic and refuses to replace an existing name.
+    fs.linkSync(tempPath, anchorPath);
+  } catch (error) {
+    primaryError = error;
+  }
+
+  if (fd === undefined && phase === 'create' && primaryError) {
+    throw primaryError;
+  }
+  let closeError;
+  if (fd !== undefined) {
+    try { fs.closeSync(fd); } catch (error) { closeError = error; }
+  }
+  let cleanupError;
+  try { fs.unlinkSync(tempPath); } catch (error) {
+    if (!error || error.code !== 'ENOENT') cleanupError = error;
+  }
+  if (cleanupError) throw projectAnchorPublicationError(primaryError, closeError, cleanupError);
+  if (primaryError) {
+    if (phase === 'publish' && primaryError.code === 'EEXIST' && !closeError) return false;
+    throw projectAnchorPublicationError(primaryError, closeError);
+  }
+  if (closeError) throw projectAnchorPublicationError(closeError);
+  return true;
+}
+
+function projectAnchorPublicationError(...errors) {
+  const present = errors.filter(Boolean);
+  if (present.length === 1) return present[0];
+  return new Error(present.map((error) => error.message || String(error)).join('; '));
+}
+
+function resolveProjectIdentityV2(cwd) {
+  const resolved = path.resolve(cwd || '');
+  const git = getGitRemoteID(resolved);
+  const base = {
+    legacy_project_id: LegacyProjectID(resolved),
+    display_name: path.basename(resolved),
+    git_remote: git ? git.gitRemote : '',
+    relative_path: git ? git.relativePath.replace(/\\/g, '/') : '',
+    non_git_anchor: '',
+    anchor_shared: null,
+  };
+  if (!git) {
+    const anchor = readOrCreateProjectAnchorV2(resolved);
+    base.non_git_anchor = anchor.anchor;
+    base.anchor_shared = anchor.shared;
+  }
+  return validateProjectIdentityV2(buildProjectIdentityV2(base));
+}
+
+async function registerProjectIdentityV2(context, requestFn = request) {
+  if (!context || !context.ProjectIdentityV2) {
+    throw new Error('PROJECT_IDENTITY_INVALID: hook context has no v2 identity');
+  }
+  const selector = validateProjectSelectorV2(context.Project);
+  validateProjectIdentityV2(context.ProjectIdentityV2);
+  const response = await requestFn('POST', '/api/context/inject', {
+    project: selector,
+    legacy_project: context.LegacyProject,
+    git_remote: context.GitRemote,
+    relative_path: context.RelativePath,
+    project_identity: context.ProjectIdentityV2,
+    identity_only: true,
+  });
+  let canonical;
+  try {
+    canonical = validateCanonicalProjectV2(response && response.canonical_project);
+  } catch {
+    throw new Error('PROJECT_IDENTITY_UNAVAILABLE: project identity registration response is malformed');
+  }
+  context.Project = canonical;
+  return context.Project;
+}
+
+function isProjectIdentityTransportOffline(error) {
+  if (!error || typeof error !== 'object') return false;
+  const cause = error.cause && typeof error.cause === 'object' ? error.cause : null;
+  const code = error.code || (cause && cause.code);
+  const name = error.name || (cause && cause.name);
+  if (cause && cause.message === 'bad port') return true;
+  if (name === 'AbortError') return true;
+  return ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT'].includes(code);
 }
 
 function buildRequestHeaders(includeJsonBody = false) {
@@ -587,7 +838,7 @@ async function RunHook(hookName, handler) {
   // process. Each hook runs in its own Node process so env changes from
   // session-start.js do not carry over. This ensures config-file-only setups
   // (e.g. ~/.engram/config.json for Codex ≥0.139) work in all hook handlers.
-  getEngramConfig();
+  const runtimeEnv = getEngramConfig();
 
   let rawInput = '';
   let input = {};
@@ -602,21 +853,43 @@ async function RunHook(hookName, handler) {
   }
 
   const cwd = typeof input.cwd === 'string' ? input.cwd : '';
-  const gitResult = getGitRemoteID(cwd);
-
-  const context = {
-    SessionID: typeof input.session_id === 'string' ? input.session_id : '',
-    CWD: cwd,
-    PermissionMode: typeof input.permission_mode === 'string' ? input.permission_mode : '',
-    HookEventName: typeof input.hook_event_name === 'string' ? input.hook_event_name : hookName,
-    Project: ProjectIDWithName(cwd),
-    LegacyProject: LegacyProjectID(cwd),
-    GitRemote: gitResult ? gitResult.gitRemote : '',
-    RelativePath: gitResult ? gitResult.relativePath : '',
-    RawInput: rawInput,
-  };
 
   try {
+    const gitResult = getGitRemoteID(cwd);
+    const projectSelector = ProjectIDWithName(cwd);
+    const context = {
+      SessionID: typeof input.session_id === 'string' ? input.session_id : '',
+      CWD: cwd,
+      PermissionMode: typeof input.permission_mode === 'string' ? input.permission_mode : '',
+      HookEventName: typeof input.hook_event_name === 'string' ? input.hook_event_name : hookName,
+      Project: projectSelector,
+      ProjectSelector: projectSelector,
+      LegacyProject: LegacyProjectID(cwd),
+      GitRemote: gitResult ? gitResult.gitRemote : '',
+      RelativePath: gitResult ? gitResult.relativePath : '',
+      ProjectIdentityV2: resolveProjectIdentityV2(cwd),
+      RawInput: rawInput,
+    };
+    if (hookName !== 'SessionStart' || (runtimeEnv.serverURL && runtimeEnv.token)) {
+      try {
+        await registerProjectIdentityV2(context);
+      } catch (error) {
+        if (!isProjectIdentityTransportOffline(error)) {
+          throw error;
+        }
+        // Capture/learning hooks may have local cleanup to perform even while the
+        // server is offline. Injection hooks still fail closed, except SessionStart
+        // which owns an explicit stale-cache fallback.
+        if (hookName !== 'SessionStart' && isInjectionHook(hookName)) {
+          throw error;
+        }
+        context.ProjectIdentityRegistrationOffline = true;
+        const fallback = hookName === 'SessionStart'
+          ? 'using cache fallback'
+          : 'continuing local capture/cleanup';
+        console.error(`[engram] ${hookName} project registration offline; ${fallback}: ${error.message}`);
+      }
+    }
     const additionalContext =
       typeof handler === 'function' ? await handler(context, input) : '';
     writeResponse(hookName, additionalContext);
@@ -890,11 +1163,19 @@ module.exports = {
   writeJSONFile,
   ProjectIDWithName,
   LegacyProjectID,
+  PROJECT_IDENTITY_VERSION_V2,
+  buildProjectIdentityV2,
+  validateProjectIdentityV2,
+  validateProjectSelectorV2,
+  resolveProjectIdentityV2,
+  registerProjectIdentityV2,
+  isProjectIdentityTransportOffline,
   requestGet,
   requestPost,
   RunHook,
   RunStatuslineHook,
   isInjectionHook,
+  isQuietMode,
   writeResponse,
   incrementSessionSignals,
   appendSessionFile,

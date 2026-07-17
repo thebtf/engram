@@ -1,11 +1,14 @@
 package grpcserver
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -13,6 +16,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/thebtf/engram/internal/auth"
+	engramgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/worker/projectevents"
 	pb "github.com/thebtf/engram/proto/engram/v1"
@@ -45,11 +49,12 @@ type ToolDef struct {
 // nil ONLY when ENGRAM_AUTH_DISABLED=true is the operator's deliberate choice.
 type Server struct {
 	pb.UnimplementedEngramServiceServer
-	handler   MCPHandler
-	mu        sync.RWMutex       // guards validator pointer swaps
-	validator *auth.Validator    // nil = auth disabled; read under mu.RLock
-	db        *gorm.DB           // injected by worker after DB is ready
-	bus       *projectevents.Bus // in-process project lifecycle event bus
+	handler          MCPHandler
+	mu               sync.RWMutex       // guards validator pointer swaps
+	validator        *auth.Validator    // nil = auth disabled; read under mu.RLock
+	db               *gorm.DB           // injected by worker after DB is ready
+	bus              *projectevents.Bus // in-process project lifecycle event bus
+	identityResolver func(context.Context, *gorm.DB, string, *pb.ProjectIdentityV2) (string, error)
 }
 
 // New creates a new gRPC server. The returned *grpc.Server has EngramService
@@ -125,7 +130,15 @@ func (s *Server) Ping(_ context.Context, _ *pb.PingRequest) (*pb.PingResponse, e
 }
 
 // Initialize returns server info and the complete list of available tools.
-func (s *Server) Initialize(_ context.Context, _ *pb.InitializeRequest) (*pb.InitializeResponse, error) {
+func (s *Server) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb.InitializeResponse, error) {
+	canonicalProject := ""
+	if req.GetProject() != "" || req.GetProjectIdentity() != nil {
+		var err error
+		canonicalProject, err = s.resolveProjectIdentity(ctx, req.GetProject(), req.GetProjectIdentity())
+		if err != nil {
+			return nil, err
+		}
+	}
 	name, version := s.handler.ServerInfo()
 
 	defs := s.handler.ToolDefinitions()
@@ -139,17 +152,26 @@ func (s *Server) Initialize(_ context.Context, _ *pb.InitializeRequest) (*pb.Ini
 	}
 
 	return &pb.InitializeResponse{
-		ServerName:    name,
-		ServerVersion: version,
-		Tools:         tools,
+		ServerName:       name,
+		ServerVersion:    version,
+		Tools:            tools,
+		CanonicalProject: canonicalProject,
 	}, nil
 }
 
 // CallTool dispatches a single MCP tool call.
 func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.CallToolResponse, error) {
+	canonicalProject := ""
+	if req.GetProject() != "" || req.GetProjectIdentity() != nil {
+		var err error
+		canonicalProject, err = s.resolveProjectIdentity(ctx, req.GetProject(), req.GetProjectIdentity())
+		if err != nil {
+			return nil, err
+		}
+	}
 	// Inject project identity using the same context key that internal/mcp reads.
-	if req.Project != "" {
-		ctx = mcp.ContextWithProject(ctx, req.Project)
+	if canonicalProject != "" {
+		ctx = mcp.ContextWithProject(ctx, canonicalProject)
 	}
 	// Finding 3: inject session identity so audit helpers can record the correct
 	// SourceSessionID. Only set when the proto field is non-empty.
@@ -157,15 +179,125 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 		ctx = mcp.ContextWithSession(ctx, req.SessionId)
 	}
 
-	resultJSON, isError, err := s.handler.HandleToolCall(ctx, req.ToolName, req.ArgumentsJson)
+	argumentsJSON, err := canonicalizeProjectArgument(req.ToolName, req.ArgumentsJson, canonicalProject)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	resultJSON, isError, err := s.handler.HandleToolCall(ctx, req.ToolName, argumentsJSON)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "tool call failed: %v", err)
 	}
 
 	return &pb.CallToolResponse{
-		IsError:     isError,
-		ContentJson: resultJSON,
+		IsError:          isError,
+		ContentJson:      resultJSON,
+		CanonicalProject: canonicalProject,
 	}, nil
+}
+
+// canonicalizeProjectArgument makes the identity-resolved project authoritative
+// for explicitly caller-scoped project fields. Empty/omitted fields retain
+// their global/default semantics, while documented target/filter fields keep
+// the caller's explicit project value.
+func canonicalizeProjectArgument(toolName string, args []byte, canonicalProject string) ([]byte, error) {
+	if canonicalProject == "" || len(bytes.TrimSpace(args)) == 0 {
+		return args, nil
+	}
+
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(args, &values); err != nil || values == nil {
+		return args, nil
+	}
+	for key := range values {
+		if key != "project" && strings.EqualFold(key, "project") {
+			return nil, errors.New(`tool arguments.project must use the lowercase "project" key`)
+		}
+	}
+	rawProject, ok := values["project"]
+	if !ok || bytes.Equal(bytes.TrimSpace(rawProject), []byte("null")) {
+		return args, nil
+	}
+
+	var project string
+	if err := json.Unmarshal(rawProject, &project); err != nil {
+		return nil, errors.New("tool arguments.project must be a string")
+	}
+	if project == "" {
+		return args, nil
+	}
+	var action string
+	if rawAction, ok := values["action"]; ok {
+		if bytes.Equal(bytes.TrimSpace(rawAction), []byte("null")) || json.Unmarshal(rawAction, &action) != nil {
+			return nil, errors.New("tool arguments.action must be a string")
+		}
+	}
+	if (toolName == "admin" && action == "purge_project") ||
+		(toolName == "issues" && (action == "" || action == "list")) {
+		return args, nil
+	}
+	switch toolName {
+	case "review_metrics.read", "review_queue.read",
+		"rule_governance_health", "rule_governance_queue", "rule_governance_snapshots", "rule_governance_usefulness":
+		return args, nil
+	}
+	if project == canonicalProject {
+		return args, nil
+	}
+
+	encodedProject, err := json.Marshal(canonicalProject)
+	if err != nil {
+		return nil, err
+	}
+	values["project"] = encodedProject
+	return json.Marshal(values)
+}
+
+func (s *Server) resolveProjectIdentity(ctx context.Context, selector string, identity *pb.ProjectIdentityV2) (string, error) {
+	resolver := s.identityResolver
+	if resolver == nil {
+		resolver = func(ctx context.Context, db *gorm.DB, selector string, wire *pb.ProjectIdentityV2) (string, error) {
+			var metadata *engramgorm.ProjectIdentityV2
+			if wire != nil {
+				metadata = &engramgorm.ProjectIdentityV2{
+					Version:         wire.GetVersion(),
+					LegacyProjectID: wire.GetLegacyProjectId(),
+					DisplayName:     wire.GetDisplayName(),
+					GitRemote:       wire.GetGitRemote(),
+					RelativePath:    wire.GetRelativePath(),
+					NonGitAnchor:    wire.GetNonGitAnchor(),
+					AnchorShared:    wire.AnchorShared,
+				}
+			}
+			resolved, err := engramgorm.RegisterAndResolve(ctx, db, selector, metadata)
+			return resolved.CanonicalProjectID, err
+		}
+	}
+	canonical, err := resolver(ctx, s.db, selector, identity)
+	if err == nil {
+		return canonical, nil
+	}
+	var identityErr *engramgorm.ProjectIdentityError
+	if !errors.As(err, &identityErr) || identityErr == nil {
+		return "", status.Error(codes.Unavailable, engramgorm.ProjectIdentityPublicMessage(err))
+	}
+	code := codes.Unavailable
+	switch identityErr.Code {
+	case engramgorm.ProjectIdentityInvalid:
+		code = codes.InvalidArgument
+	case engramgorm.ProjectIdentityAmbiguous:
+		code = codes.FailedPrecondition
+	}
+	st := status.New(code, engramgorm.ProjectIdentityPublicMessage(identityErr))
+	withDetails, detailsErr := st.WithDetails(&errdetails.ErrorInfo{
+		Reason:   identityErr.Code,
+		Domain:   "engram.project_identity",
+		Metadata: map[string]string{"upgrade_action": identityErr.UpgradeAction},
+	})
+	if detailsErr != nil {
+		return "", st.Err()
+	}
+	return "", withDetails.Err()
 }
 
 // extractBearer pulls the bearer token from gRPC metadata, stripping the

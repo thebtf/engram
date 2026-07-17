@@ -4,10 +4,10 @@
 
 import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
+import { resolveAndRegisterProject } from '../client.js';
 import type { DecisionSearchObservation, EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptPayload, quotedPromptScalar } from '../context/formatter.js';
-import { resolveIdentity } from '../identity.js';
 import type { AnyAgentTool, OpenClawPluginToolContext } from '../types/openclaw.js';
 
 const DecisionsParamsSchema = z.object({
@@ -40,8 +40,11 @@ export function createEngramDecisionsTool(
         return 'engram is currently unreachable — decisions query unavailable';
       }
 
-      const identity = resolveIdentity(ctx.agentId ?? '', ctx.workspaceDir);
-      const project = config.project ?? identity.projectId;
+      const registration = await resolveAndRegisterProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project);
+      if (!registration.ok) {
+        return `Project identity unavailable: ${registration.error.code} (${registration.error.upgradeAction})`;
+      }
+      const project = registration.canonicalProject;
 
       const response = await client.searchDecisions({
         project,

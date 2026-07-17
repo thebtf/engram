@@ -6,9 +6,9 @@
  * can track the conversation from the beginning.
  */
 
+import { resolveAndRegisterProject } from '../client.js';
 import type { EngramRestClient } from '../client.js';
 import type { PluginConfig } from '../config.js';
-import { resolveIdentity } from '../identity.js';
 import type {
   SessionStartEvent,
   PluginHookContext,
@@ -35,8 +35,12 @@ export async function handleSessionStart(
     if (!client.isAvailable()) return;
 
     const agentId = ctx.agentId ?? '';
-    const identity = resolveIdentity(agentId, ctx.workspaceDir);
-    const project = config.project ?? identity.projectId;
+    const registration = await resolveAndRegisterProject(client, agentId, ctx.workspaceDir, config.project);
+    if (!registration.ok) {
+      (logger ?? console).warn(`[engram] session-start: project registration failed: ${registration.error.code}`);
+      return;
+    }
+    const project = registration.canonicalProject;
 
     const claudeSessionId = ctx.sessionId ?? agentId;
     if (!claudeSessionId) {
@@ -46,7 +50,7 @@ export async function handleSessionStart(
       return;
     }
 
-    // Initialize session tracking (fire-and-forget)
+    // Registration is awaited above; the data write may now be fire-and-forget.
     void client.initSession({
       claudeSessionId,
       project,

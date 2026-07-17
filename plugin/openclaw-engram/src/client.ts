@@ -7,6 +7,7 @@
 
 import { AvailabilityTracker } from './availability.js';
 import type { PluginConfig } from './config.js';
+import { resolveIdentity, validateCanonicalProjectV2, validateProjectSelectorV2, type ProjectIdentity, type ProjectIdentityV2 } from './identity.js';
 
 // ---------------------------------------------------------------------------
 // Response types
@@ -106,6 +107,67 @@ export interface BulkDeleteResponse {
   deleted: number;
 }
 
+export interface ProjectRegistrationSuccess {
+  ok: true;
+  canonicalProject: string;
+}
+
+export interface ResolvedProjectRegistrationSuccess extends ProjectRegistrationSuccess {
+  projectSelector: string;
+  projectIdentityV2?: ProjectIdentityV2;
+}
+
+export interface ProjectRegistrationFailure {
+  ok: false;
+  error: {
+    code: string;
+    message: string;
+    upgradeAction: string;
+    httpStatus: number;
+  };
+}
+
+export type ProjectRegistrationResult = ProjectRegistrationSuccess | ProjectRegistrationFailure;
+export type ResolvedProjectRegistrationResult = ResolvedProjectRegistrationSuccess | ProjectRegistrationFailure;
+
+export interface ProjectRegistrationClient {
+  registerAndResolveProject(identity: ProjectIdentity, selector: string): Promise<ProjectRegistrationResult>;
+}
+
+/**
+ * Register an explicit project override as a selector-only shared scope.
+ * Without an override, resolve and register the workspace's full identity.
+ */
+export async function resolveAndRegisterProject(
+  client: ProjectRegistrationClient,
+  agentId: string,
+  workspaceDir: string | undefined,
+  configuredProject?: string,
+): Promise<ResolvedProjectRegistrationResult> {
+  try {
+    const identity: ProjectIdentity = configuredProject !== undefined
+      ? { projectId: configuredProject, agentId }
+      : resolveIdentity(agentId, workspaceDir);
+    const selector = configuredProject ?? identity.projectId;
+    const registration = await client.registerAndResolveProject(identity, selector);
+    if (!registration.ok) return registration;
+    return {
+      ...registration,
+      projectSelector: selector,
+      ...(identity.projectIdentityV2 ? { projectIdentityV2: identity.projectIdentityV2 } : {}),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const invalid = message.startsWith('PROJECT_IDENTITY_INVALID:');
+    return projectRegistrationFailure(
+      invalid ? 'PROJECT_IDENTITY_INVALID' : 'PROJECT_IDENTITY_UNAVAILABLE',
+      message,
+      invalid ? 'regenerate_project_identity_v2' : 'retry_project_identity_registration',
+      invalid ? 400 : 503,
+    );
+  }
+}
+
 /** A single observation returned by the decisions search endpoint. */
 export interface DecisionSearchObservation {
   title?: string;
@@ -189,6 +251,8 @@ export class EngramRestClient {
   private readonly baseUrl: string;
   private readonly token: string;
   private readonly defaultTimeoutMs: number;
+  private readonly completedProjectRegistrations = new Map<string, ProjectRegistrationResult>();
+  private readonly inFlightProjectRegistrations = new Map<string, Promise<ProjectRegistrationResult>>();
   readonly availability: AvailabilityTracker;
 
   constructor(config: PluginConfig) {
@@ -204,18 +268,141 @@ export class EngramRestClient {
   // ---------------------------------------------------------------------------
 
   /**
+   * Registration barrier for every project-scoped OpenClaw access.
+   *
+   * The full identity and outer compatibility selector are resolved before a
+   * caller sends its first data request. Concurrent and late calls reuse the
+   * same result. Project metadata routes a namespace; the bearer header remains
+   * the independent authorization gate.
+   */
+  async registerAndResolveProject(
+    identity: ProjectIdentity,
+    selector: string,
+  ): Promise<ProjectRegistrationResult> {
+    let validatedSelector: string;
+    try {
+      validatedSelector = validateProjectSelectorV2(selector);
+    } catch {
+      return {
+        ok: false,
+        error: {
+          code: 'PROJECT_IDENTITY_INVALID',
+          message: 'project selector is empty or malformed',
+          upgradeAction: 'regenerate_project_identity_v2',
+          httpStatus: 400,
+        },
+      };
+    }
+
+    const key = JSON.stringify([validatedSelector, identity.projectIdentityV2 ?? null]);
+    const completed = this.completedProjectRegistrations.get(key);
+    if (completed) return completed;
+    const inFlight = this.inFlightProjectRegistrations.get(key);
+    if (inFlight) return inFlight;
+
+    const registration = this.performProjectRegistration(identity, validatedSelector);
+    this.inFlightProjectRegistrations.set(key, registration);
+    try {
+      const result = await registration;
+      if (result.ok || result.error.httpStatus === 400 || result.error.httpStatus === 409) {
+        this.completedProjectRegistrations.set(key, result);
+      }
+      return result;
+    } finally {
+      this.inFlightProjectRegistrations.delete(key);
+    }
+  }
+
+  private async performProjectRegistration(
+    identity: ProjectIdentity,
+    selector: string,
+  ): Promise<ProjectRegistrationResult> {
+    if (!this.availability.isAvailable()) {
+      return projectRegistrationFailure(
+        'PROJECT_IDENTITY_UNAVAILABLE',
+        'engram is temporarily unavailable',
+        'retry_project_identity_registration',
+        503,
+      );
+    }
+
+    const path = '/api/context/inject';
+    const url = this.baseUrl + path;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.defaultTimeoutMs);
+    const body = {
+      project: selector,
+      ...(identity.projectIdentityV2 ? { project_identity: identity.projectIdentityV2 } : {}),
+      identity_only: true,
+    };
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      let payload: unknown = {};
+      if (text) {
+        try { payload = JSON.parse(text); } catch { payload = {}; }
+      }
+
+      if (!response.ok) {
+        if (response.status >= 500 || response.status === 401 || response.status === 403) {
+          this.availability.recordFailure();
+        }
+        const parsed = parseProjectRegistrationError(payload, response.status);
+        return projectRegistrationFailure(parsed.code, parsed.message, parsed.upgradeAction, response.status);
+      }
+
+      const canonical = readCanonicalProject(payload);
+      if (!canonical) {
+        this.availability.recordFailure();
+        return projectRegistrationFailure(
+          'PROJECT_IDENTITY_UNAVAILABLE',
+          'project identity registration response is malformed',
+          'retry_project_identity_registration',
+          503,
+        );
+      }
+      this.availability.recordSuccess();
+      return { ok: true, canonicalProject: canonical };
+    } catch (err: unknown) {
+      this.availability.recordFailure();
+      const message = err instanceof Error ? err.message : String(err);
+      return projectRegistrationFailure(
+        'PROJECT_IDENTITY_UNAVAILABLE',
+        message,
+        'retry_project_identity_registration',
+        503,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
    * Fetch session context for injection (static session-level context).
    * POST /api/context/inject
    */
   async getContextInject(
     agentId: string,
     cwd?: string,
+    project?: string,
+    projectIdentityV2?: ProjectIdentityV2,
   ): Promise<ContextInjectResponse | null> {
     // Inject returns large payloads (80KB+) with vector search — needs more than default 5s.
     // Timeout failures here trigger availability cooldown, blocking ALL engram tools for 60s.
     return this.post<ContextInjectResponse>('/api/context/inject', {
       agent_id: agentId,
       ...(cwd ? { cwd } : {}),
+      ...(project ? { project } : {}),
+      ...(projectIdentityV2 ? { project_identity: projectIdentityV2 } : {}),
     }, 15_000);
   }
 
@@ -647,4 +834,47 @@ function extractOrigin(rawUrl: string): string {
   } catch {
     return trimmed.replace(/\/$/, '');
   }
+}
+
+function projectRegistrationFailure(
+  code: string,
+  message: string,
+  upgradeAction: string,
+  httpStatus: number,
+): ProjectRegistrationFailure {
+  return { ok: false, error: { code, message, upgradeAction, httpStatus } };
+}
+
+function readCanonicalProject(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const value = (payload as { canonical_project?: unknown }).canonical_project;
+  try {
+    return validateCanonicalProjectV2(value);
+  } catch {
+    return '';
+  }
+}
+
+function parseProjectRegistrationError(
+  payload: unknown,
+  status: number,
+): { code: string; message: string; upgradeAction: string } {
+  const fallback = status === 400
+    ? { code: 'PROJECT_IDENTITY_INVALID', upgradeAction: 'regenerate_project_identity_v2' }
+    : status === 409
+      ? { code: 'PROJECT_IDENTITY_AMBIGUOUS', upgradeAction: 'send_project_identity_v2' }
+      : { code: 'PROJECT_IDENTITY_UNAVAILABLE', upgradeAction: 'retry_project_identity_registration' };
+  if (!payload || typeof payload !== 'object') {
+    return { ...fallback, message: `HTTP ${status} project identity registration failed` };
+  }
+  const error = (payload as { error?: unknown }).error;
+  if (!error || typeof error !== 'object') {
+    return { ...fallback, message: `HTTP ${status} project identity registration failed` };
+  }
+  const typed = error as { code?: unknown; message?: unknown; upgrade_action?: unknown };
+  return {
+    code: typeof typed.code === 'string' ? typed.code : fallback.code,
+    message: typeof typed.message === 'string' ? typed.message : `HTTP ${status} project identity registration failed`,
+    upgradeAction: typeof typed.upgrade_action === 'string' ? typed.upgrade_action : fallback.upgradeAction,
+  };
 }

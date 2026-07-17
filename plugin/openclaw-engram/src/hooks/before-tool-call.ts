@@ -7,14 +7,15 @@
  * Non-blocking: 500ms timeout, failures swallowed (Constitution Principle 3).
  */
 
+import { resolveAndRegisterProject } from '../client.js';
 import type { EngramRestClient, Observation } from '../client.js';
 import type { PluginConfig } from '../config.js';
 import { quotedPromptPayload, quotedPromptScalar } from '../context/formatter.js';
-import { resolveIdentity } from '../identity.js';
 import type { BaseHookEvent, PluginHookContext } from '../types/openclaw.js';
 
 /** Tool name patterns that modify files. */
 const FILE_MODIFY_TOOLS = ['write', 'edit', 'create_file', 'replace', 'patch'];
+const BEFORE_TOOL_CALL_BUDGET_MS = 500;
 
 interface ToolCallEvent extends BaseHookEvent {
   tool_name?: string;
@@ -74,11 +75,21 @@ export async function handleBeforeToolCall(
     const filePath = toolEvent.tool_input ? extractFilePath(toolEvent.tool_input) : null;
     if (!filePath) return;
 
-    const identity = resolveIdentity(ctx.agentId ?? '', ctx.workspaceDir);
-    const project = config.project ?? identity.projectId;
+    const deadline = Date.now() + BEFORE_TOOL_CALL_BUDGET_MS;
+    let registrationTimer: NodeJS.Timeout | undefined;
+    const registration = await Promise.race([
+      resolveAndRegisterProject(client, ctx.agentId ?? '', ctx.workspaceDir, config.project),
+      new Promise<null>((resolve) => {
+        registrationTimer = setTimeout(() => resolve(null), BEFORE_TOOL_CALL_BUDGET_MS);
+      }),
+    ]);
+    clearTimeout(registrationTimer);
+    if (!registration?.ok) return;
+    const project = registration.canonicalProject;
 
-    // 500ms timeout — must not noticeably delay Write/Edit tools
-    const observations = await client.getFileContext(filePath, project, 5, 500);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return;
+    const observations = await client.getFileContext(filePath, project, 5, remainingMs);
     if (observations.length === 0) return;
 
     const context = formatFileContext(filePath, observations);
