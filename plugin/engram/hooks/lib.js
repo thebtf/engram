@@ -581,9 +581,12 @@ async function registerProjectIdentityV2(context, requestFn = request) {
 
 function isProjectIdentityTransportOffline(error) {
   if (!error || typeof error !== 'object') return false;
-  const code = error.code || (error.cause && error.cause.code);
-  if (error.cause && error.cause.message === 'bad port') return true;
-  return ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT'].includes(code);
+  const cause = error.cause && typeof error.cause === 'object' ? error.cause : null;
+  const code = error.code || (cause && cause.code);
+  const name = error.name || (cause && cause.name);
+  if (cause && cause.message === 'bad port') return true;
+  if (name === 'AbortError') return true;
+  return ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT'].includes(code);
 }
 
 function buildRequestHeaders(includeJsonBody = false) {
@@ -839,19 +842,29 @@ async function RunHook(hookName, handler) {
 
   try {
     const gitResult = getGitRemoteID(cwd);
+    const projectSelector = ProjectIDWithName(cwd);
     const context = {
       SessionID: typeof input.session_id === 'string' ? input.session_id : '',
       CWD: cwd,
       PermissionMode: typeof input.permission_mode === 'string' ? input.permission_mode : '',
       HookEventName: typeof input.hook_event_name === 'string' ? input.hook_event_name : hookName,
-      Project: ProjectIDWithName(cwd),
+      Project: projectSelector,
+      ProjectSelector: projectSelector,
       LegacyProject: LegacyProjectID(cwd),
       GitRemote: gitResult ? gitResult.gitRemote : '',
       RelativePath: gitResult ? gitResult.relativePath : '',
       ProjectIdentityV2: resolveProjectIdentityV2(cwd),
       RawInput: rawInput,
     };
-    await registerProjectIdentityV2(context);
+    try {
+      await registerProjectIdentityV2(context);
+    } catch (error) {
+      if (hookName !== 'SessionStart' || !isProjectIdentityTransportOffline(error)) {
+        throw error;
+      }
+      context.ProjectIdentityRegistrationOffline = true;
+      console.error(`[engram] SessionStart project registration offline; using cache fallback: ${error.message}`);
+    }
     const additionalContext =
       typeof handler === 'function' ? await handler(context, input) : '';
     writeResponse(hookName, additionalContext);

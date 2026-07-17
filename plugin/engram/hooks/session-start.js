@@ -205,6 +205,15 @@ function formatNoCacheBanner() {
   return '<engram-session-start-unavailable>\nWARNING: Engram session-start context is unavailable and no cache is present. Continuing without injected static context.\n</engram-session-start-unavailable>\n';
 }
 
+function renderSessionStartFallback(cachedPayload, cachePath, project) {
+  if (cachedPayload) {
+    console.error(`[engram] Using cached session-start payload from ${cachePath}`);
+    return formatStaleCacheBanner(cachedPayload.generated_at) + buildSessionStartContext(cachedPayload, project, { stale: getRuleRouter(cachedPayload) !== null });
+  }
+  console.error('[engram] No cached session-start payload available');
+  return formatNoCacheBanner();
+}
+
 async function fetchSessionStartPayload(project, sessionID) {
   // POST with session_id so the server records this primary injection event to
   // injection_log + increments injection_count (CR-001: revive feedback loop).
@@ -229,11 +238,18 @@ async function handleSessionStart(ctx, input) {
   }
 
   const project = typeof ctx.Project === 'string' ? ctx.Project : '';
+  const cacheProject = typeof ctx.ProjectSelector === 'string' && ctx.ProjectSelector !== '' ? ctx.ProjectSelector : project;
 
   // Crash-safe session tracking (gstack-insights FR-8)
   const sessionID = typeof ctx.SessionID === 'string' ? ctx.SessionID : '';
   if (sessionID) {
     lib.createPendingMarker(sessionID);
+  }
+
+  const { cachePath, payload: cachedPayload } = getSessionStartCachePayload(cacheProject);
+  if (ctx.ProjectIdentityRegistrationOffline === true) {
+    console.error('[engram] Warning: project identity registration is offline; skipping live session-start requests');
+    return renderSessionStartFallback(cachedPayload, cachePath, project);
   }
 
   // Check for stale markers from crashed sessions (>2h old)
@@ -262,11 +278,9 @@ async function handleSessionStart(ctx, input) {
     }, 3000).catch(() => {});
   }
 
-  const { cachePath, payload: cachedPayload } = getSessionStartCachePayload(project);
-
   try {
     const payload = await fetchSessionStartPayload(project, sessionID);
-    cacheSessionStartPayload(project, payload);
+    cacheSessionStartPayload(cacheProject, payload);
 
     const rules = Array.isArray(payload && payload.rules) ? payload.rules : [];
     const issues = Array.isArray(payload && payload.issues) ? payload.issues : [];
@@ -289,12 +303,7 @@ async function handleSessionStart(ctx, input) {
     return buildSessionStartContext(payload, project);
   } catch (error) {
     console.error(`[engram] Warning: static session-start fetch failed: ${error.message}`);
-    if (cachedPayload) {
-      console.error(`[engram] Using cached session-start payload from ${cachePath}`);
-      return formatStaleCacheBanner(cachedPayload.generated_at) + buildSessionStartContext(cachedPayload, project, { stale: getRuleRouter(cachedPayload) !== null });
-    }
-    console.error('[engram] No cached session-start payload available');
-    return formatNoCacheBanner();
+    return renderSessionStartFallback(cachedPayload, cachePath, project);
   }
 }
 

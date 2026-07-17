@@ -243,12 +243,12 @@ test('shared invalid vectors and wrong-type anchor sharing are rejected exactly'
   }), /PROJECT_IDENTITY_INVALID/);
 });
 
-test('hook registration transport failure returns pass-through without running the handler', (t) => {
+test('non-SessionStart hook registration transport failure returns pass-through without running the handler', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-registration-failure-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const childScript = `
     const lib = require(process.argv[1]);
-    lib.RunHook('SessionStart', async () => {
+    lib.RunHook('UserPromptSubmit', async () => {
       process.stderr.write('HANDLER_RAN');
       return 'must-not-run';
     }).catch((error) => {
@@ -273,6 +273,52 @@ test('hook registration transport failure returns pass-through without running t
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), '{"continue":true}');
   assert.doesNotMatch(result.stderr, /HANDLER_RAN/);
+});
+
+test('SessionStart registration transport failure renders cached payload without a live fetch', (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-session-cache-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-session-data-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+
+  const selector = lib.ProjectIDWithName(workspace);
+  const cachePath = path.join(dataDir, 'cache', `session-start-${selector}.json`);
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(cachePath, JSON.stringify({
+    issues: [],
+    rules: [],
+    memories: [{ content: 'cached offline session context' }],
+    generated_at: '2026-04-22T11:59:59Z',
+  }));
+
+  const result = spawnSync(process.execPath, [require.resolve('./session-start')], {
+    input: JSON.stringify({ session_id: 'registration-offline-cache', cwd: workspace }),
+    encoding: 'utf8',
+    timeout: 3000,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      ENGRAM_INTERNAL: '0',
+      ENGRAM_QUIET: '0',
+      ENGRAM_URL: 'http://127.0.0.1:9',
+      ENGRAM_TOKEN: 'test-token',
+      ENGRAM_DATA_DIR: dataDir,
+    },
+  });
+
+  assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+  assert.equal(result.status, 0, result.stderr);
+  const response = JSON.parse(result.stdout.trim());
+  const additionalContext = response.hookSpecificOutput && response.hookSpecificOutput.additionalContext || '';
+  assert.match(additionalContext, /<engram-session-start-stale>/);
+  assert.match(additionalContext, /cached offline session context/);
+  assert.match(result.stderr, /Using cached session-start payload/);
+  assert.match(result.stderr, /skipping live session-start requests/);
+  assert.doesNotMatch(result.stderr, /static session-start fetch failed/);
+});
+
+test('project registration offline classifier includes abort timeouts', () => {
+  assert.equal(lib.isProjectIdentityTransportOffline({ name: 'AbortError' }), true);
 });
 
 test('registration is synchronous, idempotent, and updates the hook canonical selector', async () => {
