@@ -2,7 +2,7 @@
 
 ## Applies When
 
-- Releasing the Engram server, stdio daemon, Claude plugin, Codex plugin, or GitHub release artifacts.
+- Releasing the Engram server, stdio daemon, Claude plugin, Codex plugin, OpenClaw npm plugin, or GitHub release artifacts.
 - Any change merged to `main` that operators should receive through the tagged release / Watchtower path.
 
 ## Additional Release Surfaces
@@ -12,6 +12,7 @@
 | Server / daemon | `internal/version/version.go` | annotated `vX.Y.Z` tag triggers `.github/workflows/release.yaml` | `git ls-remote --tags origin refs/tags/vX.Y.Z`; release workflow success |
 | Claude plugin | `plugin/engram/.claude-plugin/plugin.json` | included in repository tag / plugin package | JSON `version` equals tag without `v` |
 | Codex plugin | `plugin/engram/.codex-plugin/plugin.json` | included in repository tag / plugin package | JSON `version` equals tag without `v` |
+| OpenClaw npm plugin | `plugin/openclaw-engram/package.json` + `openclaw.plugin.json` | merge to `main` triggers `.github/workflows/plugin-publish.yml` | both JSON versions match; local stable version is greater than `npm view openclaw-engram version`; publish workflow succeeds; registry serves the new version |
 | Changelog | `CHANGELOG.md` | release commit | top entry for `X.Y.Z` exists and names merged PRs |
 
 ## Required Gates
@@ -26,6 +27,7 @@
 | Build | `go build ./cmd/engram ./cmd/engram-server` | non-zero exit |
 | Plugin hooks | `node --test plugin/engram/hooks/*.test.js` | non-zero exit when hook/plugin code changed |
 | OpenClaw plugin | `npm test --prefix plugin/openclaw-engram` | non-zero exit when OpenClaw plugin code changed |
+| OpenClaw publish version | `node plugin/openclaw-engram/scripts/check-publish-version.mjs <local> <npm>` | local version is malformed, equal to, or older than the registry version |
 | Diff hygiene | `git diff --check` | whitespace/conflict marker errors |
 
 ## Release Autonomy
@@ -44,6 +46,8 @@ Project default: `auto_private_patch_minor` for reviewed PRs and active-goal mil
 - `internal/version/version.go` stores the daemon/server version with `v` prefix.
 - `plugin/engram/.claude-plugin/plugin.json` stores the same version without `v`.
 - `plugin/engram/.codex-plugin/plugin.json` stores the same version without `v`.
+- `plugin/openclaw-engram/package.json` and `plugin/openclaw-engram/openclaw.plugin.json` store the same independently versioned OpenClaw package release.
+- Every OpenClaw source change that triggers the publish workflow must advance that package version beyond the registry version; equality is a failed release gate, not a no-op.
 - Git tags use `vX.Y.Z`.
 
 ## Release Notes
@@ -58,6 +62,7 @@ Project default: `auto_private_patch_minor` for reviewed PRs and active-goal mil
 - Create an annotated tag and push it to origin.
 - Verify the tag exists remotely.
 - Verify the GitHub release workflow succeeds for the tag.
+- For an OpenClaw package release, verify the `plugin-publish` workflow, `npm view openclaw-engram@X.Y.Z version`, and both package/descriptor version sources before declaring publication complete.
 - For Watchtower/server rollout, verify deployed server version and at least one server/client MCP smoke before declaring deployment complete.
 - Plugin/local daemon consumers must be checked for version parity after release; runtime consumer-home updates remain explicit consumer update flows.
 
