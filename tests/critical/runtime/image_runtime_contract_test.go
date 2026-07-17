@@ -524,6 +524,21 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 	if got := strings.Count(publisher, "-EventOnlyValidation"); got != 1 {
 		t.Fatalf("only the contents-read prepare job may use the event/git/ruleset validator, got %d", got)
 	}
+	rulesetBindings := strings.Count(publisher, "RULESET_AUDIT_TOKEN: ${{ secrets.MARKETPLACE_PAT }}")
+	rulesetConsumers := strings.Count(publisher, "-GitHubToken $env:RULESET_AUDIT_TOKEN")
+	rulesetClearings := strings.Count(publisher, `RULESET_AUDIT_TOKEN: ""`)
+	switch rulesetBindings {
+	case 0:
+		if rulesetConsumers != 0 || rulesetClearings != 0 {
+			t.Fatal("publisher contains a partial ruleset credential transition")
+		}
+	case 2:
+		if rulesetConsumers != 2 || rulesetClearings != 1 {
+			t.Fatalf("publisher ruleset credential transition is incomplete: bindings=%d consumers=%d clearings=%d", rulesetBindings, rulesetConsumers, rulesetClearings)
+		}
+	default:
+		t.Fatalf("publisher contains an invalid ruleset credential binding count %d", rulesetBindings)
+	}
 	prepareIndex := strings.Index(publisher, "prepare-release:")
 	publishJobIndex := strings.Index(publisher, "publish-images:")
 	packagesIndex := strings.Index(publisher, "packages: write")
@@ -688,10 +703,36 @@ func testRepositorySingleWriter(t *testing.T, repo string) {
 	if got := strings.Count(workflow, "actions/download-artifact@"); got != 1 {
 		t.Fatalf("release workflow must download the bridge exactly once by artifact ID, got %d", got)
 	}
-	for _, forbidden := range []string{"PERSONAL_ACCESS_TOKEN", "PAT_TOKEN", "secrets."} {
+	for _, forbidden := range []string{"PERSONAL_ACCESS_TOKEN", "PAT_TOKEN"} {
 		if strings.Contains(workflow, forbidden) {
 			t.Fatalf("release workflow accepts an external package credential route %q", forbidden)
 		}
+	}
+	const rulesetSecret = "${{ secrets.MARKETPLACE_PAT }}"
+	secretReferences := strings.Count(workflow, rulesetSecret)
+	switch secretReferences {
+	case 0:
+		if strings.Contains(workflow, "secrets.") || strings.Count(workflow, "READ_ONLY_GITHUB_TOKEN: ${{ github.token }}") != 3 {
+			t.Fatal("legacy publisher credential contract drifted during transition")
+		}
+	case 2:
+		if strings.Count(workflow, "secrets.") != 2 || strings.Count(workflow, "READ_ONLY_GITHUB_TOKEN: ${{ github.token }}") != 1 {
+			t.Fatal("ruleset credential transition introduced an undeclared secret or GitHub token binding")
+		}
+		buildStart := strings.Index(workflow, "Build, scan, exercise, and export exact image data without package authority")
+		if buildStart < 0 {
+			t.Fatal("candidate build step start is missing")
+		}
+		buildEnd := strings.Index(workflow[buildStart:], "Bind the immutable bridge artifact name")
+		if buildEnd < 0 {
+			t.Fatal("candidate build step end is missing")
+		}
+		candidateBuild := workflow[buildStart : buildStart+buildEnd]
+		if strings.Contains(candidateBuild, "secrets.") || !strings.Contains(candidateBuild, `RULESET_AUDIT_TOKEN: ""`) {
+			t.Fatal("candidate build environment can inherit the ruleset audit credential")
+		}
+	default:
+		t.Fatalf("release workflow contains an invalid ruleset credential reference count %d", secretReferences)
 	}
 	for _, cleared := range []string{`CR_PAT: ""`, `GHCR_TOKEN: ""`} {
 		if !strings.Contains(workflow, cleared) {
@@ -825,6 +866,8 @@ func testWorkflowRunTrustMatrix(t *testing.T, repo string) {
 		{name: "tag commit outside protected main", mutate: func(f map[string]any) { f["git"].(map[string]any)["main_ancestors"] = []string{} }},
 		{name: "missing immutable tag ruleset", mutate: func(f map[string]any) { f["tag_rulesets"] = []any{} }},
 		{name: "missing protected main ruleset", mutate: func(f map[string]any) { f["branch_rulesets"] = []any{} }},
+		{name: "tag bypass policy omitted", mutate: func(f map[string]any) { delete(f["tag_rulesets"].([]map[string]any)[0], "bypass_actors") }},
+		{name: "recovery bypass policy omitted", mutate: func(f map[string]any) { delete(branchRuleset(f), "bypass_actors") }},
 		{name: "authority guard missing integration id", mutate: func(f map[string]any) { delete(branchStatusChecks(f)[0], "integration_id") }},
 		{name: "authority guard string integration id", mutate: func(f map[string]any) { branchStatusChecks(f)[0]["integration_id"] = "15368" }},
 		{name: "authority guard wrong integration id", mutate: func(f map[string]any) { branchStatusChecks(f)[0]["integration_id"] = 1 }},
@@ -1226,6 +1269,7 @@ func testTagRulesetMatrix(t *testing.T, repo string) {
 		{name: "wrong include", fixture: mutateRuleset(positive, "include", []string{"refs/tags/release-*"})},
 		{name: "exclusion", fixture: mutateRuleset(positive, "exclude", []string{"refs/tags/v6.43.0"})},
 		{name: "bypass", fixture: mutateRuleset(positive, "bypass", []map[string]any{{"actor_id": 7106373, "actor_type": "RepositoryRole", "bypass_mode": "always"}})},
+		{name: "bypass policy omitted", fixture: mutateRuleset(positive, "delete-bypass", nil)},
 		{name: "missing deletion", fixture: mutateRuleset(positive, "rules", []map[string]any{{"type": "non_fast_forward"}})},
 		{name: "missing non fast forward", fixture: mutateRuleset(positive, "rules", []map[string]any{{"type": "deletion"}})},
 	}
@@ -1364,6 +1408,8 @@ func mutateRuleset(source []map[string]any, field string, value any) []map[strin
 		refName[field] = value
 	case "bypass":
 		rule["bypass_actors"] = value
+	case "delete-bypass":
+		delete(rule, "bypass_actors")
 	default:
 		rule[field] = value
 	}
