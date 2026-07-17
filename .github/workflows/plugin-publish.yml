@@ -29,22 +29,17 @@ jobs:
       - name: Install dependencies
         run: npm install --ignore-scripts
 
-      - name: Build
-        run: npm run build
+      - name: Test
+        run: npm test
 
-      - name: Check if version changed
+      - name: Require unpublished newer version
         id: version
         run: |
           LOCAL=$(node -p "require('./package.json').version")
-          REMOTE=$(npm view openclaw-engram version 2>/dev/null || echo "0.0.0")
+          REMOTE=$(npm view openclaw-engram version)
+          node scripts/check-publish-version.mjs "$LOCAL" "$REMOTE"
           echo "local=$LOCAL" >> "$GITHUB_OUTPUT"
           echo "remote=$REMOTE" >> "$GITHUB_OUTPUT"
-          if [ "$LOCAL" != "$REMOTE" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Publish to npm (trusted publishing via OIDC)
-        if: steps.version.outputs.changed == 'true'
         run: npm publish --access public
