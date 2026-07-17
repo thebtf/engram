@@ -131,6 +131,53 @@ func TestCallTool_PreservesDocumentedUnscopedReviewSelector(t *testing.T) {
 	}
 }
 
+func TestCallTool_PreservesExplicitTargetProjectFilters(t *testing.T) {
+	tests := []struct {
+		name        string
+		toolName    string
+		arguments   string
+		wantProject string
+	}{
+		{name: "issues list target", toolName: "issues", arguments: `{"action":"list","project":"target-project","limit":5}`, wantProject: "target-project"},
+		{name: "issues create actor", toolName: "issues", arguments: `{"action":"create","project":"other","target_project":"target-project"}`, wantProject: "canonical"},
+		{name: "issues default list target", toolName: "issues", arguments: `{"project":"target-project","limit":5}`, wantProject: "target-project"},
+		{name: "review metrics filter", toolName: "review_metrics.read", arguments: `{"project":"target-project","limit":5}`, wantProject: "target-project"},
+		{name: "review queue filter", toolName: "review_queue.read", arguments: `{"project":"target-project","limit":5}`, wantProject: "target-project"},
+		{name: "governance health filter", toolName: "rule_governance_health", arguments: `{"project":"target-project","limit":5}`, wantProject: "target-project"},
+		{name: "governance queue filter", toolName: "rule_governance_queue", arguments: `{"project":"target-project","limit":5}`, wantProject: "target-project"},
+		{name: "governance snapshots filter", toolName: "rule_governance_snapshots", arguments: `{"project":"target-project","limit":5}`, wantProject: "target-project"},
+		{name: "governance usefulness filter", toolName: "rule_governance_usefulness", arguments: `{"project":"target-project","limit":5}`, wantProject: "target-project"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			steps := []string{}
+			var captured []byte
+			srv := &Server{handler: identityOrderHandler{steps: &steps, arguments: &captured}}
+			srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
+				return "canonical", nil
+			}
+
+			_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
+				ToolName:      tt.toolName,
+				Project:       "legacy",
+				ArgumentsJson: []byte(tt.arguments),
+			})
+			if err != nil {
+				t.Fatalf("CallTool: %v", err)
+			}
+			var args struct {
+				Project string `json:"project"`
+			}
+			if err := json.Unmarshal(captured, &args); err != nil {
+				t.Fatalf("decode handler args: %v", err)
+			}
+			if args.Project != tt.wantProject {
+				t.Fatalf("project=%q, want %q", args.Project, tt.wantProject)
+			}
+		})
+	}
+}
+
 func TestCallTool_PreservesAdminPurgeProjectTarget(t *testing.T) {
 	steps := []string{}
 	var captured []byte
