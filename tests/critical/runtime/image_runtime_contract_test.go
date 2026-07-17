@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -1407,7 +1408,25 @@ func testRegistryCASMatrix(t *testing.T, repo string) {
 	}
 	manifest := writeJSONFixture(t, map[string]any{"source_parent_commit": commit, "image_ids": ids})
 	version := "v6.43.0-rc.1"
-	expectedRefs := expectedPublicationRefs(version, commit)
+	expectedRefs := expectedPublicationRefs("ghcr.io", "thebtf/engram", version, commit)
+	t.Run("credential-free plan defers registry inspection", func(t *testing.T) {
+		var requests atomic.Int64
+		registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			requests.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		t.Cleanup(registry.Close)
+
+		outputPath := filepath.Join(t.TempDir(), "plan.json")
+		runImageGateWithoutDocker(t, repo,
+			"-Mode", "PlanPublication", "-ManifestPath", manifest, "-ReleaseVersion", version,
+			"-Registry", registry.URL, "-Repository", "thebtf/engram", "-OutputPath", outputPath)
+		if got := requests.Load(); got != 0 {
+			t.Fatalf("credential-free publication plan made %d registry requests, want 0", got)
+		}
+		assertDeferredPublicationPlan(t, outputPath,
+			expectedPublicationRefs(registry.URL, "thebtf/engram", version, commit))
+	})
 
 	t.Run("all destinations absent", func(t *testing.T) {
 		registry := writeJSONFixture(t, map[string]any{"refs": map[string]any{}})
@@ -1481,6 +1500,47 @@ func runImageGate(t *testing.T, repo string, expectSuccess bool, args ...string)
 	return string(output)
 }
 
+func runImageGateWithoutDocker(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	stubDir := t.TempDir()
+	dockerName := "docker"
+	dockerStub := "#!/bin/sh\nexit 97\n"
+	if runtime.GOOS == "windows" {
+		dockerName = "docker.cmd"
+		dockerStub = "@echo off\r\nexit /b 97\r\n"
+	}
+	if err := os.WriteFile(filepath.Join(stubDir, dockerName), []byte(dockerStub), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1")
+	commandArgs := append([]string{"-NoProfile", "-File", script}, args...)
+	command := exec.Command("pwsh", commandArgs...)
+	env := os.Environ()
+	pathSet := false
+	for i, entry := range env {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok || !strings.EqualFold(name, "PATH") {
+			continue
+		}
+		if value == "" {
+			env[i] = name + "=" + stubDir
+		} else {
+			env[i] = name + "=" + stubDir + string(os.PathListSeparator) + value
+		}
+		pathSet = true
+		break
+	}
+	if !pathSet {
+		env = append(env, "PATH="+stubDir)
+	}
+	command.Env = env
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("credential-free publication plan invoked Docker: %v\n%s", err, output)
+	}
+	return string(output)
+}
+
 func exactRulesetFixture() []map[string]any {
 	return []map[string]any{{
 		"id": 9001, "name": "immutable v releases", "target": "tag", "enforcement": "active",
@@ -1547,14 +1607,14 @@ func writeJSONFixture(t *testing.T, value any) string {
 	return path
 }
 
-func expectedPublicationRefs(version, commit string) map[string]string {
+func expectedPublicationRefs(registry, repository, version, commit string) map[string]string {
 	ids := []struct {
 		repository string
 		id         string
 	}{
-		{"ghcr.io/thebtf/engram", "sha256:" + strings.Repeat("1", 64)},
-		{"ghcr.io/thebtf/engram-operator-console", "sha256:" + strings.Repeat("2", 64)},
-		{"ghcr.io/thebtf/engram-postgres", "sha256:" + strings.Repeat("3", 64)},
+		{registry + "/" + repository, "sha256:" + strings.Repeat("1", 64)},
+		{registry + "/" + repository + "-operator-console", "sha256:" + strings.Repeat("2", 64)},
+		{registry + "/" + repository + "-postgres", "sha256:" + strings.Repeat("3", 64)},
 	}
 	refs := make(map[string]string, 6)
 	for _, image := range ids {
@@ -1600,6 +1660,48 @@ func assertPublicationPlan(t *testing.T, path string, expected map[string]string
 	}
 	if len(seen) != len(expected) || pushes != expectedPushes {
 		t.Fatalf("publication plan coverage mismatch: refs=%d pushes=%d, want refs=%d pushes=%d", len(seen), pushes, len(expected), expectedPushes)
+	}
+}
+
+func assertDeferredPublicationPlan(t *testing.T, path string, expected map[string]string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan struct {
+		RemoteInspection string `json:"remote_inspection"`
+		Destinations     []struct {
+			Reference    string `json:"reference"`
+			ConfigDigest string `json:"config_digest"`
+			Action       string `json:"action"`
+		} `json:"destinations"`
+	}
+	if err := json.Unmarshal(data, &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.RemoteInspection != "deferred-until-authenticated-publish" {
+		t.Fatalf("credential-free plan remote inspection = %q, want deferred authenticated publish", plan.RemoteInspection)
+	}
+	seen := make(map[string]struct{}, len(plan.Destinations))
+	for _, destination := range plan.Destinations {
+		want, ok := expected[destination.Reference]
+		if !ok {
+			t.Fatalf("deferred publication plan leaked non-canonical alias %q", destination.Reference)
+		}
+		if _, duplicate := seen[destination.Reference]; duplicate {
+			t.Fatalf("deferred publication plan repeated destination %q", destination.Reference)
+		}
+		seen[destination.Reference] = struct{}{}
+		if destination.ConfigDigest != want {
+			t.Fatalf("deferred publication plan changed exact image identity for %s", destination.Reference)
+		}
+		if destination.Action != "inspect-after-login" {
+			t.Fatalf("deferred publication action for %s = %q, want inspect-after-login", destination.Reference, destination.Action)
+		}
+	}
+	if len(seen) != len(expected) {
+		t.Fatalf("deferred publication plan coverage mismatch: refs=%d, want %d", len(seen), len(expected))
 	}
 }
 
