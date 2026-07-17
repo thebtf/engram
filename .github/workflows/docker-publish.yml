@@ -240,7 +240,7 @@ jobs:
             -ExpectedSha $env:VALIDATED_COMMIT `
             -ReleaseVersion $env:RELEASE_VERSION
 
-      - name: Compare all six registry destinations before login
+      - name: Plan all six canonical registry destinations before login
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ steps.privileged-preflight.outputs.version }}
@@ -258,7 +258,7 @@ jobs:
             -Repository $env:REPOSITORY_NAME `
             -OutputPath (Join-Path $evidenceRoot 'pre-login-publication-plan.json')
 
-      - name: Login to GHCR after provenance, payload, local-image, and remote checks pass
+      - name: Login to GHCR after provenance, payload, and local-image checks pass
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/engram-docker-auth-${{ github.run_id }}-${{ github.run_attempt }}

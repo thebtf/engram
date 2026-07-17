@@ -934,9 +934,13 @@ function New-PublicationPlan {
     param(
         [Parameter(Mandatory = $true)]$Manifest,
         [Parameter(Mandatory = $true)][string]$ReleaseVersion,
-        $RegistryFixture
+        $RegistryFixture,
+        [switch]$DeferLiveRemoteInspection
     )
 
+    if ($DeferLiveRemoteInspection -and $null -ne $RegistryFixture) {
+        throw 'Deferred live registry inspection cannot be combined with a registry fixture.'
+    }
     $validatedVersion = Assert-CanonicalVersion -Value $ReleaseVersion
     if ($validatedVersion -cnotmatch '^v') {
         throw 'Publication requires a canonical release version, not a commit-only version.'
@@ -954,7 +958,9 @@ function New-PublicationPlan {
         }
         foreach ($tag in @($validatedVersion, "sha-$sourceCommit")) {
             $reference = "$($image.repository):$tag"
-            $remote = if ($null -ne $RegistryFixture) {
+            $remote = if ($DeferLiveRemoteInspection) {
+                [ordered]@{ exists = $false; config_digest = $null; manifest_digest = $null }
+            } elseif ($null -ne $RegistryFixture) {
                 Get-FixtureRemoteIdentity -Fixture $RegistryFixture -Reference $reference
             } else {
                 Get-LiveRemoteIdentity -Reference $reference
@@ -962,11 +968,18 @@ function New-PublicationPlan {
             if ($remote.exists -and $remote.config_digest -cne $image.id) {
                 throw "Destination $reference already resolves to $($remote.config_digest), not exact scanned image $($image.id); refusing every write."
             }
+            $action = if ($DeferLiveRemoteInspection) {
+                'inspect-after-login'
+            } elseif ($remote.exists) {
+                'noop'
+            } else {
+                'push'
+            }
             $destinations += [ordered]@{
                 image = $image.name
                 reference = $reference
                 config_digest = $image.id
-                action = if ($remote.exists) { 'noop' } else { 'push' }
+                action = $action
                 manifest_digest = $remote.manifest_digest
             }
         }
@@ -977,6 +990,7 @@ function New-PublicationPlan {
         source_commit = $sourceCommit
         single_writer_model = 'repository-workflow-release-publish'
         external_package_admin_trust_boundary = $true
+        remote_inspection = if ($DeferLiveRemoteInspection) { 'deferred-until-authenticated-publish' } else { 'complete' }
         destinations = @($destinations | Sort-Object reference)
     }
 }
@@ -1028,7 +1042,11 @@ function Read-PublicationInputs {
 
 function Invoke-PlanPublication {
     $inputs = Read-PublicationInputs
-    $plan = New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $inputs.fixture
+    $plan = if ($null -eq $inputs.fixture) {
+        New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -DeferLiveRemoteInspection
+    } else {
+        New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $inputs.fixture
+    }
     $plan['acceptance_manifest_sha256'] = $inputs.manifest_sha256
     if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
         Write-JsonFile -Value $plan -Path (Resolve-RepositoryPath -Path $OutputPath)
