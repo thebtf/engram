@@ -838,7 +838,7 @@ async function RunHook(hookName, handler) {
   // process. Each hook runs in its own Node process so env changes from
   // session-start.js do not carry over. This ensures config-file-only setups
   // (e.g. ~/.engram/config.json for Codex ≥0.139) work in all hook handlers.
-  getEngramConfig();
+  const runtimeEnv = getEngramConfig();
 
   let rawInput = '';
   let input = {};
@@ -870,23 +870,25 @@ async function RunHook(hookName, handler) {
       ProjectIdentityV2: resolveProjectIdentityV2(cwd),
       RawInput: rawInput,
     };
-    try {
-      await registerProjectIdentityV2(context);
-    } catch (error) {
-      if (!isProjectIdentityTransportOffline(error)) {
-        throw error;
+    if (hookName !== 'SessionStart' || (runtimeEnv.serverURL && runtimeEnv.token)) {
+      try {
+        await registerProjectIdentityV2(context);
+      } catch (error) {
+        if (!isProjectIdentityTransportOffline(error)) {
+          throw error;
+        }
+        // Capture/learning hooks may have local cleanup to perform even while the
+        // server is offline. Injection hooks still fail closed, except SessionStart
+        // which owns an explicit stale-cache fallback.
+        if (hookName !== 'SessionStart' && isInjectionHook(hookName)) {
+          throw error;
+        }
+        context.ProjectIdentityRegistrationOffline = true;
+        const fallback = hookName === 'SessionStart'
+          ? 'using cache fallback'
+          : 'continuing local capture/cleanup';
+        console.error(`[engram] ${hookName} project registration offline; ${fallback}: ${error.message}`);
       }
-      // Capture/learning hooks may have local cleanup to perform even while the
-      // server is offline. Injection hooks still fail closed, except SessionStart
-      // which owns an explicit stale-cache fallback.
-      if (hookName !== 'SessionStart' && isInjectionHook(hookName)) {
-        throw error;
-      }
-      context.ProjectIdentityRegistrationOffline = true;
-      const fallback = hookName === 'SessionStart'
-        ? 'using cache fallback'
-        : 'continuing local capture/cleanup';
-      console.error(`[engram] ${hookName} project registration offline; ${fallback}: ${error.message}`);
     }
     const additionalContext =
       typeof handler === 'function' ? await handler(context, input) : '';

@@ -277,6 +277,57 @@ test('capture hook registration transport failure still runs local handler', (t)
   assert.match(result.stderr, /continuing local capture\/cleanup/);
 });
 
+test('SessionStart without credentials reaches setup before identity registration', (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-session-setup-'));
+  const configPath = path.join(workspace, 'config.json');
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.writeFileSync(configPath, '{}');
+
+  const childScript = `
+    global.fetch = async () => ({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      text: async () => 'unauthorized',
+    });
+    const lib = require(process.argv[1]);
+    const { handleSessionStart } = require(process.argv[2]);
+    lib.RunHook('SessionStart', handleSessionStart).catch((error) => {
+      process.stderr.write(String(error && error.stack || error));
+      process.exitCode = 1;
+    });
+  `;
+  const result = spawnSync(process.execPath, [
+    '-e',
+    childScript,
+    require.resolve('./lib'),
+    require.resolve('./session-start'),
+  ], {
+    input: JSON.stringify({ session_id: 'registration-setup', cwd: workspace }),
+    encoding: 'utf8',
+    timeout: 2000,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      ENGRAM_INTERNAL: '0',
+      ENGRAM_QUIET: '0',
+      ENGRAM_URL: 'http://127.0.0.1:37777',
+      ENGRAM_TOKEN: '',
+      CLAUDE_PLUGIN_OPTION_api_token: '',
+      CLAUDE_PLUGIN_OPTION_API_TOKEN: '',
+      ENGRAM_CLAUDE_USERCONFIG_TOKEN: '',
+      ENGRAM_CONFIG_FILE: configPath,
+    },
+  });
+
+  assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
+  assert.equal(result.status, 0, result.stderr);
+  const response = JSON.parse(result.stdout.trim());
+  const additionalContext = response.hookSpecificOutput && response.hookSpecificOutput.additionalContext || '';
+  assert.match(additionalContext, /<engram-setup>/);
+  assert.doesNotMatch(result.stderr, /HTTP 401/);
+});
+
 test('non-SessionStart injection hook registration transport failure stays fail closed', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-identity-v2-injection-registration-failure-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
