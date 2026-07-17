@@ -7,8 +7,10 @@ package engramcore
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/thebtf/engram/internal/moduletest"
+	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
 
@@ -37,6 +39,71 @@ func TestOnProjectRemoved_ClearsSlugCache(t *testing.T) {
 
 	if mod.cache.HasEntry(projectID) {
 		t.Error("slug cache entry MUST be cleared after OnProjectRemoved")
+	}
+}
+
+func TestSlugCacheResolutionAndForgetSerialize(t *testing.T) {
+	cache := &slugCache{}
+	project := muxcore.ProjectContext{ID: "serialized-project", Cwd: t.TempDir()}
+	key := cacheKey(project)
+	cache.entries.Store(key, resolvedSlug{id: "cached"})
+	cache.identities.Store(key, &pb.ProjectIdentityV2{Version: 2})
+
+	cache.mu.Lock()
+	slugStarted, slugDone := make(chan struct{}), make(chan struct{})
+	identityStarted, identityDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		close(slugStarted)
+		_ = cache.Resolve(project)
+		close(slugDone)
+	}()
+	go func() {
+		close(identityStarted)
+		_, _ = cache.ResolveIdentity(project)
+		close(identityDone)
+	}()
+	<-slugStarted
+	<-identityStarted
+	assertBlocked := func(name string, done <-chan struct{}) {
+		t.Helper()
+		select {
+		case <-done:
+			t.Fatalf("%s bypassed cache lifecycle lock", name)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	assertBlocked("Resolve", slugDone)
+	assertBlocked("ResolveIdentity", identityDone)
+	cache.mu.Unlock()
+
+	for name, done := range map[string]<-chan struct{}{"Resolve": slugDone, "ResolveIdentity": identityDone} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatalf("%s did not resume after cache lifecycle unlock", name)
+		}
+	}
+
+	cache.mu.RLock()
+	forgetStarted, forgetDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		close(forgetStarted)
+		cache.Forget(project.ID)
+		close(forgetDone)
+	}()
+	<-forgetStarted
+	assertBlocked("Forget", forgetDone)
+	cache.mu.RUnlock()
+	select {
+	case <-forgetDone:
+	case <-time.After(time.Second):
+		t.Fatal("Forget did not resume after active resolutions completed")
+	}
+	if cache.HasEntry(project.ID) {
+		t.Fatal("Forget left a compatibility slug entry")
+	}
+	if _, ok := cache.identities.Load(key); ok {
+		t.Fatal("Forget left a v2 identity entry")
 	}
 }
 

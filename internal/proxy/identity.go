@@ -285,9 +285,7 @@ func publishProjectAnchorV2(dir, anchorPath string, anchor projectAnchorV2) (boo
 		}
 		return false, fmt.Errorf("publish %s: %w", projectIdentityV2File, err)
 	}
-	if err := os.Remove(tempPath); err != nil {
-		return false, fmt.Errorf("cleanup published temporary %s: %w", projectIdentityV2File, err)
-	}
+	_ = os.Remove(tempPath) // The anchor is already atomically published.
 	return true, nil
 }
 

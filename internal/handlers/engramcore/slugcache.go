@@ -15,9 +15,11 @@ import (
 // and cwd. One muxcore project ID can serve sessions rooted at different
 // subdirectories, and their routing metadata must stay aligned.
 //
-// Thread-safety: sync.Map — resolution runs on muxcore dispatch goroutines and
-// may race with OnProjectRemoved clearing entries.
+// Thread-safety: the RWMutex makes invalidation wait for every in-flight
+// resolution through its cache write; sync.Map keeps concurrent project reads
+// independent while no invalidation is running.
 type slugCache struct {
+	mu         sync.RWMutex
 	entries    sync.Map // slugCacheKey → resolvedSlug
 	identities sync.Map // slugCacheKey → *pb.ProjectIdentityV2
 }
@@ -50,6 +52,8 @@ func cacheKey(p muxcore.ProjectContext) slugCacheKey {
 // git-hash-derived inside muxcore's session layer) so the daemon never
 // fails to respond due to a git lookup hiccup.
 func (c *slugCache) Resolve(p muxcore.ProjectContext) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	key := cacheKey(p)
 	if cached, ok := c.entries.Load(key); ok {
 		return cached.(resolvedSlug).id
@@ -75,6 +79,8 @@ func (c *slugCache) Resolve(p muxcore.ProjectContext) string {
 // The first successful resolution is reused until OnProjectRemoved calls
 // Forget, avoiding synchronous git subprocesses on every tool request.
 func (c *slugCache) ResolveIdentity(p muxcore.ProjectContext) (*pb.ProjectIdentityV2, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	key := cacheKey(p)
 	if cached, ok := c.identities.Load(key); ok {
 		return cached.(*pb.ProjectIdentityV2), nil
@@ -92,6 +98,8 @@ func (c *slugCache) ResolveIdentity(p muxcore.ProjectContext) (*pb.ProjectIdenti
 // Module.OnProjectRemoved so a subsequent session does not reuse stale identity
 // metadata from any subdirectory.
 func (c *slugCache) Forget(projectID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.entries.Range(func(rawKey, _ any) bool {
 		key := rawKey.(slugCacheKey)
 		if key.projectID == projectID {
@@ -110,11 +118,15 @@ func (c *slugCache) Forget(projectID string) {
 
 // ForceCacheEntry injects a synthetic entry for one project/cwd pair. Test-only.
 func (c *slugCache) ForceCacheEntry(p muxcore.ProjectContext, slug string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	c.entries.Store(cacheKey(p), resolvedSlug{id: slug, announce: true})
 }
 
 // HasEntry reports whether any cwd-scoped entry exists for projectID. Test-only.
 func (c *slugCache) HasEntry(projectID string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	found := false
 	c.entries.Range(func(rawKey, _ any) bool {
 		if rawKey.(slugCacheKey).projectID == projectID {
