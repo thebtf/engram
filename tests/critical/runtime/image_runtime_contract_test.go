@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -492,6 +493,8 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		"persist-credentials: false",
 		"cancel-in-progress: false",
 		"docker logout ghcr.io",
+		"RULESET_AUDIT_TOKEN: ${{ secrets.MARKETPLACE_PAT }}",
+		`RULESET_AUDIT_TOKEN: ""`,
 	} {
 		if !strings.Contains(publisher, fragment) {
 			t.Fatalf("trusted workflow_run publisher lacks contract %q", fragment)
@@ -524,20 +527,14 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 	if got := strings.Count(publisher, "-EventOnlyValidation"); got != 1 {
 		t.Fatalf("only the contents-read prepare job may use the event/git/ruleset validator, got %d", got)
 	}
-	rulesetBindings := strings.Count(publisher, "RULESET_AUDIT_TOKEN: ${{ secrets.MARKETPLACE_PAT }}")
-	rulesetConsumers := strings.Count(publisher, "-GitHubToken $env:RULESET_AUDIT_TOKEN")
-	rulesetClearings := strings.Count(publisher, `RULESET_AUDIT_TOKEN: ""`)
-	switch rulesetBindings {
-	case 0:
-		if rulesetConsumers != 0 || rulesetClearings != 0 {
-			t.Fatal("publisher contains a partial ruleset credential transition")
-		}
-	case 2:
-		if rulesetConsumers != 2 || rulesetClearings != 1 {
-			t.Fatalf("publisher ruleset credential transition is incomplete: bindings=%d consumers=%d clearings=%d", rulesetBindings, rulesetConsumers, rulesetClearings)
-		}
-	default:
-		t.Fatalf("publisher contains an invalid ruleset credential binding count %d", rulesetBindings)
+	if got := strings.Count(publisher, "RULESET_AUDIT_TOKEN: ${{ secrets.MARKETPLACE_PAT }}"); got != 2 {
+		t.Fatalf("both provenance validators must receive the bypass-aware ruleset credential, got %d bindings", got)
+	}
+	if got := strings.Count(publisher, "-GitHubToken $env:RULESET_AUDIT_TOKEN"); got != 2 {
+		t.Fatalf("both provenance validators must consume the ruleset audit credential, got %d consumers", got)
+	}
+	if got := strings.Count(publisher, `RULESET_AUDIT_TOKEN: ""`); got != 1 {
+		t.Fatalf("candidate execution must explicitly clear the ruleset audit credential, got %d clearings", got)
 	}
 	prepareIndex := strings.Index(publisher, "prepare-release:")
 	publishJobIndex := strings.Index(publisher, "publish-images:")
@@ -601,6 +598,9 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 	})
 	t.Run("tag ruleset positive and negative matrix", func(t *testing.T) {
 		testTagRulesetMatrix(t, repo)
+	})
+	t.Run("live ruleset API array response", func(t *testing.T) {
+		testLiveRulesetAPIArray(t, repo)
 	})
 	t.Run("registry compare-before-write matrix", func(t *testing.T) {
 		testRegistryCASMatrix(t, repo)
@@ -709,30 +709,26 @@ func testRepositorySingleWriter(t *testing.T, repo string) {
 		}
 	}
 	const rulesetSecret = "${{ secrets.MARKETPLACE_PAT }}"
-	secretReferences := strings.Count(workflow, rulesetSecret)
-	switch secretReferences {
-	case 0:
-		if strings.Contains(workflow, "secrets.") || strings.Count(workflow, "READ_ONLY_GITHUB_TOKEN: ${{ github.token }}") != 3 {
-			t.Fatal("legacy publisher credential contract drifted during transition")
-		}
-	case 2:
-		if strings.Count(workflow, "secrets.") != 2 || strings.Count(workflow, "READ_ONLY_GITHUB_TOKEN: ${{ github.token }}") != 1 {
-			t.Fatal("ruleset credential transition introduced an undeclared secret or GitHub token binding")
-		}
-		buildStart := strings.Index(workflow, "Build, scan, exercise, and export exact image data without package authority")
-		if buildStart < 0 {
-			t.Fatal("candidate build step start is missing")
-		}
-		buildEnd := strings.Index(workflow[buildStart:], "Bind the immutable bridge artifact name")
-		if buildEnd < 0 {
-			t.Fatal("candidate build step end is missing")
-		}
-		candidateBuild := workflow[buildStart : buildStart+buildEnd]
-		if strings.Contains(candidateBuild, "secrets.") || !strings.Contains(candidateBuild, `RULESET_AUDIT_TOKEN: ""`) {
-			t.Fatal("candidate build environment can inherit the ruleset audit credential")
-		}
-	default:
-		t.Fatalf("release workflow contains an invalid ruleset credential reference count %d", secretReferences)
+	if got := strings.Count(workflow, rulesetSecret); got != 2 {
+		t.Fatalf("release workflow must expose the proven ruleset credential only to two provenance validators, got %d references", got)
+	}
+	if got := strings.Count(workflow, "secrets."); got != 2 {
+		t.Fatalf("release workflow contains an undeclared repository secret route, got %d secret references", got)
+	}
+	if got := strings.Count(workflow, "READ_ONLY_GITHUB_TOKEN: ${{ github.token }}"); got != 1 {
+		t.Fatalf("job-scoped GitHub token must remain limited to artifact census, got %d bindings", got)
+	}
+	buildStart := strings.Index(workflow, "Build, scan, exercise, and export exact image data without package authority")
+	if buildStart < 0 {
+		t.Fatal("candidate build step start is missing")
+	}
+	buildEnd := strings.Index(workflow[buildStart:], "Bind the immutable bridge artifact name")
+	if buildEnd < 0 {
+		t.Fatal("candidate build step end is missing")
+	}
+	candidateBuild := workflow[buildStart : buildStart+buildEnd]
+	if strings.Contains(candidateBuild, "secrets.") || !strings.Contains(candidateBuild, `RULESET_AUDIT_TOKEN: ""`) {
+		t.Fatal("candidate build environment can inherit the ruleset audit credential")
 	}
 	for _, cleared := range []string{`CR_PAT: ""`, `GHCR_TOKEN: ""`} {
 		if !strings.Contains(workflow, cleared) {
@@ -1284,6 +1280,57 @@ func testTagRulesetMatrix(t *testing.T, repo string) {
 	}
 }
 
+func testLiveRulesetAPIArray(t *testing.T, repo string) {
+	t.Helper()
+	const token = "ruleset-audit-token"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			t.Errorf("ruleset API received wrong authorization header")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/thebtf/engram/rulesets":
+			if r.URL.Query().Get("per_page") != "100" || r.URL.Query().Get("page") != "1" {
+				t.Errorf("ruleset API received unexpected pagination query %q", r.URL.RawQuery)
+			}
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"id": 9001, "target": "tag", "enforcement": "active"},
+				{"id": 9100, "target": "branch", "enforcement": "active"},
+			})
+		case "/repos/thebtf/engram/rulesets/9001":
+			_ = json.NewEncoder(w).Encode(exactRulesetFixture()[0])
+		case "/repos/thebtf/engram/rulesets/9100":
+			_ = json.NewEncoder(w).Encode(exactBranchRulesetFixture()[0])
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	sha := strings.Repeat("d", 40)
+	runImageGate(t, repo, true,
+		"-Mode", "ValidateRelease",
+		"-ReleaseRef", "refs/tags/v6.46.0",
+		"-ExpectedSha", sha,
+		"-ActualSha", sha,
+		"-Repository", "thebtf/engram",
+		"-GitHubToken", token,
+		"-GitHubApiUrl", server.URL)
+
+	gitFixture := newGitRefFreshnessFixture(t)
+	eventPath := writeJSONFixture(t, workflowRunFixture(gitFixture.initialSHA, "v1.0.0")["event"])
+	runImageGate(t, repo, true,
+		"-Mode", "ValidateWorkflowRun",
+		"-EventOnlyValidation",
+		"-RepositoryRoot", gitFixture.consumer,
+		"-WorkflowRunEventPath", eventPath,
+		"-Repository", "thebtf/engram",
+		"-GitHubToken", token,
+		"-GitHubApiUrl", server.URL)
+}
+
 func testRegistryCASMatrix(t *testing.T, repo string) {
 	t.Helper()
 	commit := strings.Repeat("c", 40)
@@ -1501,7 +1548,11 @@ type gitRefFreshnessFixture struct {
 func newGitRefFreshnessFixture(t *testing.T) *gitRefFreshnessFixture {
 	t.Helper()
 	root := t.TempDir()
-	remote := filepath.Join(root, "remote.git")
+	remoteRoot := filepath.Join(root, "github.com", "thebtf")
+	if err := os.MkdirAll(remoteRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	remote := filepath.ToSlash(filepath.Join(remoteRoot, "engram.git"))
 	work := filepath.Join(root, "source")
 	consumer := filepath.Join(root, "consumer")
 	runGit(t, "", "init", "--bare", remote)
