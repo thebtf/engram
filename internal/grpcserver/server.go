@@ -224,7 +224,9 @@ func canonicalizeProjectArgument(toolName string, args []byte, canonicalProject 
 	}
 	var action string
 	if rawAction, ok := values["action"]; ok {
-		_ = json.Unmarshal(rawAction, &action)
+		if bytes.Equal(bytes.TrimSpace(rawAction), []byte("null")) || json.Unmarshal(rawAction, &action) != nil {
+			return nil, errors.New("tool arguments.action must be a string")
+		}
 	}
 	if (toolName == "admin" && action == "purge_project") ||
 		(toolName == "issues" && (action == "" || action == "list")) {

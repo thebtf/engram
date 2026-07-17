@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/thebtf/engram/internal/proxy"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 )
 
@@ -45,6 +46,43 @@ func TestProxyTools_SendsProjectIdentityV2OnInitialize(t *testing.T) {
 	srv.mu.Unlock()
 	if req == nil || req.ProjectIdentity == nil || req.ProjectIdentity.Version != 2 {
 		t.Fatalf("Initialize project identity=%#v", req)
+	}
+}
+
+func TestProxyHandleTool_SameProjectIDDifferentCWDKeepsSelectorAligned(t *testing.T) {
+	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
+	grpcAddr := startMockGRPC(t, srv)
+	_, mod, project := buildContractDispatcher(t, grpcAddr)
+	mod.cache.Forget(project.ID)
+
+	selectors := make([]string, 0, 2)
+	for _, cwd := range []string{t.TempDir(), t.TempDir()} {
+		project.Cwd = cwd
+		if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
+			t.Fatalf("CallTool for %s: %v", cwd, err)
+		}
+
+		srv.mu.Lock()
+		req := srv.callReq
+		srv.mu.Unlock()
+		wantSelector, _, _, err := proxy.ResolveProjectSlug(cwd)
+		if err != nil {
+			t.Fatalf("resolve selector for %s: %v", cwd, err)
+		}
+		wantIdentity, err := proxy.ResolveProjectIdentityV2(cwd)
+		if err != nil {
+			t.Fatalf("resolve v2 identity for %s: %v", cwd, err)
+		}
+		if req == nil || req.ProjectIdentity == nil {
+			t.Fatalf("missing request identity for %s", cwd)
+		}
+		if req.Project != wantSelector || req.ProjectIdentity.LegacyProjectId != wantIdentity.LegacyProjectID {
+			t.Fatalf("cwd=%s selector=%q legacy=%q, want selector=%q legacy=%q", cwd, req.Project, req.ProjectIdentity.LegacyProjectId, wantSelector, wantIdentity.LegacyProjectID)
+		}
+		selectors = append(selectors, req.Project)
+	}
+	if selectors[0] == selectors[1] {
+		t.Fatalf("different cwd values reused selector %q", selectors[0])
 	}
 }
 

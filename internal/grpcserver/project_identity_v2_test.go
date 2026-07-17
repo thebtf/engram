@@ -178,6 +178,30 @@ func TestCallTool_PreservesExplicitTargetProjectFilters(t *testing.T) {
 	}
 }
 
+func TestCallTool_RejectsMalformedActionBeforeProjectExemption(t *testing.T) {
+	for _, action := range []string{`123`, `{}`, `[]`, `null`} {
+		t.Run(action, func(t *testing.T) {
+			steps := []string{}
+			srv := &Server{handler: identityOrderHandler{steps: &steps}}
+			srv.identityResolver = func(_ context.Context, _ *gormlib.DB, _ string, _ *pb.ProjectIdentityV2) (string, error) {
+				return "canonical", nil
+			}
+
+			_, err := srv.CallTool(context.Background(), &pb.CallToolRequest{
+				ToolName:      "issues",
+				Project:       "legacy",
+				ArgumentsJson: []byte(`{"action":` + action + `,"project":"target-project"}`),
+			})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("status=%v error=%v, want InvalidArgument", status.Code(err), err)
+			}
+			if len(steps) != 0 {
+				t.Fatalf("handler ran with malformed action: %v", steps)
+			}
+		})
+	}
+}
+
 func TestCallTool_PreservesAdminPurgeProjectTarget(t *testing.T) {
 	steps := []string{}
 	var captured []byte

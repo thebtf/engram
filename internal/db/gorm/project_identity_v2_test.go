@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -240,6 +241,102 @@ func TestRegisterAndResolve_ConflictingSelectorAndLegacyAliasFailWithoutMutation
 	if created != 0 {
 		t.Fatalf("conflicting aliases created %d binding rows", created)
 	}
+}
+
+func TestRegisterAndResolve_EarlyIdentityMatchesRejectForeignAliasesWithoutMutation(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	readAliases := func(id string) []string {
+		t.Helper()
+		var project Project
+		if err := db.Where("id = ?", id).First(&project).Error; err != nil {
+			t.Fatalf("read project %s: %v", id, err)
+		}
+		return append([]string(nil), project.LegacyIDs...)
+	}
+	countBindings := func(remote string) int64 {
+		t.Helper()
+		var count int64
+		if err := db.Model(&Project{}).
+			Where("removed_at IS NULL AND id LIKE 'p2g_%' AND git_remote = ?", remote).
+			Count(&count).Error; err != nil {
+			t.Fatalf("count binding rows for %s: %v", remote, err)
+		}
+		return count
+	}
+	assertAmbiguous := func(err error) {
+		t.Helper()
+		var identityErr *ProjectIdentityError
+		if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityAmbiguous || identityErr.UpgradeAction != UpgradeActionSendProjectIdentityV2 {
+			t.Fatalf("conflicting alias error=%T %v", err, err)
+		}
+	}
+
+	t.Run("existing binding", func(t *testing.T) {
+		prefix := fmt.Sprintf("prc-v2-bound-conflict-%d-", time.Now().UnixNano())
+		defer db.Exec(`DELETE FROM projects WHERE id LIKE ? OR EXISTS (SELECT 1 FROM unnest(COALESCE(legacy_ids, ARRAY[]::TEXT[])) alias WHERE alias LIKE ?)`, prefix+"%", prefix+"%")
+		remote := "https://example.invalid/acme/" + prefix + "repo.git"
+		ownerSelector := prefix + "owner-selector"
+		ownerLegacy := prefix + "owner-legacy"
+		ownerIdentity := gitIdentityV2(ownerLegacy, remote)
+		owner, err := RegisterAndResolve(ctx, db, ownerSelector, ownerIdentity)
+		if err != nil {
+			t.Fatalf("seed existing binding: %v", err)
+		}
+		foreignSelector := prefix + "foreign-selector"
+		foreignCanonical := prefix + "foreign-canonical"
+		if err := UpsertProject(ctx, db, foreignCanonical, foreignSelector, "", "", "foreign"); err != nil {
+			t.Fatalf("seed foreign selector owner: %v", err)
+		}
+
+		ownerAliases := readAliases(owner.CanonicalProjectID)
+		foreignAliases := readAliases(foreignCanonical)
+		bindingRows := countBindings(remote)
+		_, err = RegisterAndResolve(ctx, db, foreignSelector, gitIdentityV2(ownerLegacy, remote))
+		assertAmbiguous(err)
+		if got := readAliases(owner.CanonicalProjectID); !slices.Equal(got, ownerAliases) {
+			t.Fatalf("bound owner aliases mutated: got %#v want %#v", got, ownerAliases)
+		}
+		if got := readAliases(foreignCanonical); !slices.Equal(got, foreignAliases) {
+			t.Fatalf("foreign owner aliases mutated: got %#v want %#v", got, foreignAliases)
+		}
+		if got := countBindings(remote); got != bindingRows {
+			t.Fatalf("binding rows changed: got %d want %d", got, bindingRows)
+		}
+	})
+
+	t.Run("exact git identity", func(t *testing.T) {
+		prefix := fmt.Sprintf("prc-v2-exact-conflict-%d-", time.Now().UnixNano())
+		defer db.Exec(`DELETE FROM projects WHERE id LIKE ? OR EXISTS (SELECT 1 FROM unnest(COALESCE(legacy_ids, ARRAY[]::TEXT[])) alias WHERE alias LIKE ?)`, prefix+"%", prefix+"%")
+		remote := "https://example.invalid/acme/" + prefix + "repo.git"
+		exactCanonical := prefix + "exact-canonical"
+		exactLegacy := prefix + "exact-legacy"
+		if err := UpsertProject(ctx, db, exactCanonical, exactLegacy, remote, "packages/core/", "exact"); err != nil {
+			t.Fatalf("seed exact git owner: %v", err)
+		}
+		foreignSelector := prefix + "foreign-selector"
+		foreignCanonical := prefix + "foreign-canonical"
+		if err := UpsertProject(ctx, db, foreignCanonical, foreignSelector, "", "", "foreign"); err != nil {
+			t.Fatalf("seed foreign selector owner: %v", err)
+		}
+
+		exactAliases := readAliases(exactCanonical)
+		foreignAliases := readAliases(foreignCanonical)
+		bindingRows := countBindings(remote)
+		_, err := RegisterAndResolve(ctx, db, foreignSelector, gitIdentityV2(exactLegacy, remote))
+		assertAmbiguous(err)
+		if got := readAliases(exactCanonical); !slices.Equal(got, exactAliases) {
+			t.Fatalf("exact owner aliases mutated: got %#v want %#v", got, exactAliases)
+		}
+		if got := readAliases(foreignCanonical); !slices.Equal(got, foreignAliases) {
+			t.Fatalf("foreign owner aliases mutated: got %#v want %#v", got, foreignAliases)
+		}
+		if got := countBindings(remote); got != bindingRows {
+			t.Fatalf("binding rows changed: got %d want %d", got, bindingRows)
+		}
+	})
 }
 
 func TestRegisterAndResolve_ConcurrentCallsConvergeAndSharingIsExplicit(t *testing.T) {

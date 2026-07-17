@@ -81,6 +81,14 @@ func unavailableProjectIdentity(err error) error {
 	return &ProjectIdentityError{Code: ProjectIdentityUnavailable, UpgradeAction: UpgradeActionRetryProjectRegistration, Err: err}
 }
 
+func projectIdentityWriteError(err error) error {
+	var identityErr *ProjectIdentityError
+	if errors.As(err, &identityErr) {
+		return err
+	}
+	return unavailableProjectIdentity(err)
+}
+
 // ProjectIdentityPublicMessage returns a stable transport-safe diagnostic. Raw
 // database errors remain server-side and must never be serialized to clients.
 func ProjectIdentityPublicMessage(err error) string {
@@ -143,7 +151,7 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 			switch len(projects) {
 			case 0:
 				if err := createProjectIdentityRow(ctx, tx, selector, "", "", selector, nil); err != nil {
-					return unavailableProjectIdentity(err)
+					return projectIdentityWriteError(err)
 				}
 				resolution.CanonicalProjectID = selector
 				return nil
@@ -170,7 +178,7 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 				return ambiguousProjectIdentity("binding key conflicts with stored git identity")
 			}
 			if err := appendProjectAliases(ctx, tx, canonical, selector, identity.LegacyProjectID, bindingKey); err != nil {
-				return unavailableProjectIdentity(err)
+				return projectIdentityWriteError(err)
 			}
 			resolution.CanonicalProjectID = canonical
 			return nil
@@ -187,7 +195,7 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 			if len(exact) == 1 {
 				canonical := exact[0].ID
 				if err := appendProjectAliases(ctx, tx, canonical, selector, identity.LegacyProjectID, bindingKey); err != nil {
-					return unavailableProjectIdentity(err)
+					return projectIdentityWriteError(err)
 				}
 				resolution.CanonicalProjectID = canonical
 				return nil
@@ -230,11 +238,11 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 
 		if canonical == bindingKey {
 			if err := createProjectIdentityRow(ctx, tx, canonical, identity.GitRemote, identity.RelativePath, identity.DisplayName, []string{selector, identity.LegacyProjectID}); err != nil {
-				return unavailableProjectIdentity(err)
+				return projectIdentityWriteError(err)
 			}
 		}
 		if err := appendProjectAliases(ctx, tx, canonical, selector, identity.LegacyProjectID, bindingKey); err != nil {
-			return unavailableProjectIdentity(err)
+			return projectIdentityWriteError(err)
 		}
 		resolution.CanonicalProjectID = canonical
 		return nil
@@ -292,7 +300,7 @@ func AttachLegacyAlias(ctx context.Context, db *gorm.DB, canonical, alias string
 			return ambiguousProjectIdentity("legacy alias already selects a different canonical project")
 		}
 		if err := appendProjectAliases(ctx, tx, canonical, alias); err != nil {
-			return unavailableProjectIdentity(err)
+			return projectIdentityWriteError(err)
 		}
 		return nil
 	})
@@ -495,6 +503,15 @@ func appendProjectAliases(ctx context.Context, tx *gorm.DB, canonical string, al
 			continue
 		}
 		seen[alias] = struct{}{}
+		var owners int64
+		if err := tx.WithContext(ctx).Model(&Project{}).
+			Where("removed_at IS NULL AND id <> ? AND (id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[])", canonical, alias, alias).
+			Count(&owners).Error; err != nil {
+			return fmt.Errorf("check project alias %s ownership: %w", alias, err)
+		}
+		if owners != 0 {
+			return ambiguousProjectIdentity("project alias already selects a different canonical project")
+		}
 		result := tx.WithContext(ctx).Exec(`UPDATE projects
 			SET legacy_ids = array_append(COALESCE(legacy_ids, ARRAY[]::TEXT[]), ?)
 			WHERE id = ? AND removed_at IS NULL AND NOT (COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[])`, alias, canonical, alias)

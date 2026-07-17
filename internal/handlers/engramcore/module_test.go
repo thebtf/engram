@@ -28,7 +28,7 @@ func TestOnProjectRemoved_ClearsSlugCache(t *testing.T) {
 	const projectID = "proj-remove-me"
 
 	// Pre-populate the slug cache with a synthetic entry bypassing git I/O.
-	mod.cache.ForceCacheEntry(projectID, "some-slug-value")
+	mod.cache.ForceCacheEntry(muxcore.ProjectContext{ID: projectID, Cwd: t.TempDir()}, "some-slug-value")
 	if !mod.cache.HasEntry(projectID) {
 		t.Fatal("pre-condition: cache entry not set")
 	}

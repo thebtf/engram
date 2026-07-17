@@ -140,7 +140,7 @@ func buildContractDispatcher(t *testing.T, grpcAddr string) (*dispatcher.Dispatc
 	}
 
 	// Pre-populate the slug cache so slug resolution skips the git call.
-	mod.cache.ForceCacheEntry(p.ID, p.ID)
+	mod.cache.ForceCacheEntry(p, p.ID)
 
 	// Also pre-populate the pool to use plaintext credentials matching our mock.
 	// We dial directly so tests are not subject to OS-level ephemeral port
