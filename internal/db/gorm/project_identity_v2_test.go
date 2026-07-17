@@ -119,6 +119,8 @@ func TestRegisterAndResolve_StrictOuterSelectorRejectsBeforeDatabaseAccess(t *te
 		{name: "control", selector: "repo\u0001segment"},
 		{name: "edge whitespace", selector: " repo"},
 		{name: "over 256 bytes", selector: strings.Repeat("a", 257)},
+		{name: "reserved git binding", selector: "p2g_00112233445566778899aabbccddeeff"},
+		{name: "reserved non-git binding", selector: "p2n_00112233445566778899aabbccddeeff"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -131,6 +133,23 @@ func TestRegisterAndResolve_StrictOuterSelectorRejectsBeforeDatabaseAccess(t *te
 	}
 }
 
+func TestAttachLegacyAlias_RejectsReservedBindingNamespaceBeforeDatabaseAccess(t *testing.T) {
+	for _, alias := range []string{
+		"p2g_00112233445566778899aabbccddeeff",
+		"p2n_00112233445566778899aabbccddeeff",
+	} {
+		_, err := RegisterAndResolve(context.Background(), nil, alias, nil)
+		var identityErr *ProjectIdentityError
+		if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityInvalid {
+			t.Fatalf("outer selector %q error=%T %v", alias, err, err)
+		}
+		err = AttachLegacyAlias(context.Background(), nil, "canonical", alias)
+		if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityInvalid {
+			t.Fatalf("legacy alias %q error=%T %v", alias, err, err)
+		}
+	}
+}
+
 func TestRegisterAndResolve_StrictOuterSelectorPreservesCompatibility(t *testing.T) {
 	selectors := []string{
 		"repo:segment",
@@ -139,6 +158,8 @@ func TestRegisterAndResolve_StrictOuterSelectorPreservesCompatibility(t *testing
 		"repo.segment",
 		"repo-segment",
 		"repo_segment",
+		"p2g_workspace",
+		"p2n_workspace",
 	}
 	for _, selector := range selectors {
 		t.Run(selector, func(t *testing.T) {

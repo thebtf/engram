@@ -7,7 +7,7 @@
 
 import { AvailabilityTracker } from './availability.js';
 import type { PluginConfig } from './config.js';
-import { resolveIdentity, validateProjectSelectorV2, type ProjectIdentity } from './identity.js';
+import { resolveIdentity, validateCanonicalProjectV2, validateProjectSelectorV2, type ProjectIdentity } from './identity.js';
 
 // ---------------------------------------------------------------------------
 // Response types
@@ -833,7 +833,7 @@ function readCanonicalProject(payload: unknown): string {
   if (!payload || typeof payload !== 'object') return '';
   const value = (payload as { canonical_project?: unknown }).canonical_project;
   try {
-    return validateProjectSelectorV2(value);
+    return validateCanonicalProjectV2(value);
   } catch {
     return '';
   }

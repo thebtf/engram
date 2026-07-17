@@ -287,6 +287,16 @@ test('registration preserves legacy selector characters accepted by the HTTP bou
   assert.equal(sentSelector, selector);
 });
 
+test('registration accepts a reserved binding-shaped canonical response', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const canonical = 'p2g_00112233445566778899aabbccddeeff';
+  globalThis.fetch = async () => new Response(JSON.stringify({ canonical_project: canonical }), { status: 200 });
+  const client = new EngramRestClient(clientConfig());
+  const result = await client.registerAndResolveProject(gitIdentity(), 'legacy-selector');
+  assert.deepEqual(result, { ok: true, canonicalProject: canonical });
+});
+
 test('2xx malformed canonical response is not cached and cannot reach downstream data', async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });

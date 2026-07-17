@@ -423,6 +423,24 @@ test('registration preserves legacy selector characters accepted by the HTTP bou
   assert.equal(context.Project, selector);
 });
 
+test('registration accepts a reserved binding-shaped canonical response', async () => {
+  const canonical = 'p2g_00112233445566778899aabbccddeeff';
+  const context = {
+    Project: 'legacy-selector',
+    ProjectIdentityV2: {
+      version: 2,
+      legacy_project_id: 'legacy-selector',
+      display_name: 'workspace',
+      git_remote: 'https://example.invalid/acme/mono.git',
+      relative_path: 'packages/core/',
+      non_git_anchor: '',
+      anchor_shared: null,
+    },
+  };
+  await lib.registerProjectIdentityV2(context, async () => ({ canonical_project: canonical }));
+  assert.equal(context.Project, canonical);
+});
+
 test('registration fails closed on malformed canonical responses without raw fallback', async () => {
   const payloads = [
     {},

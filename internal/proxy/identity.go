@@ -25,7 +25,10 @@ const (
 	projectIdentityV2File           = ".engram-project-v2.json"
 )
 
-var strictAnchorV2 = regexp.MustCompile(`^[0-9a-f]{32}$`)
+var (
+	strictAnchorV2           = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	reservedProjectBindingV2 = regexp.MustCompile(`^p2[gn]_[0-9a-f]{32}$`)
+)
 
 var errGitIdentityAbsent = errors.New("git repository or origin remote is absent")
 
@@ -60,8 +63,9 @@ func ValidateProjectIdentityV2(identity ProjectIdentityV2) error {
 	if len(identity.LegacyProjectID) > 256 || len(identity.DisplayName) > 256 ||
 		strings.TrimSpace(identity.LegacyProjectID) != identity.LegacyProjectID ||
 		strings.TrimSpace(identity.DisplayName) != identity.DisplayName ||
-		containsProjectIdentityControl(identity.LegacyProjectID) || containsProjectIdentityControl(identity.DisplayName) {
-		return invalid("selector or display name is malformed")
+		containsProjectIdentityControl(identity.LegacyProjectID) || containsProjectIdentityControl(identity.DisplayName) ||
+		reservedProjectBindingV2.MatchString(identity.LegacyProjectID) {
+		return invalid("selector or display name is malformed or reserved")
 	}
 	hasGit := identity.GitRemote != "" || identity.RelativePath != ""
 	hasAnchor := identity.NonGitAnchor != "" || identity.AnchorShared != nil

@@ -29,8 +29,9 @@ const (
 )
 
 var (
-	strictProjectAnchorV2   = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	strictProjectSelectorV2 = regexp.MustCompile(`^[A-Za-z0-9_.\\/:-]+$`)
+	strictProjectAnchorV2    = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	strictProjectSelectorV2  = regexp.MustCompile(`^[A-Za-z0-9_.\\/:-]+$`)
+	reservedProjectBindingV2 = regexp.MustCompile(`^p2[gn]_[0-9a-f]{32}$`)
 )
 
 // ProjectIdentityV2 mirrors the additive protobuf/HTTP contract at the store
@@ -259,8 +260,8 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 func validateProjectSelectorV2(selector string) error {
 	if selector == "" || len(selector) > 256 || strings.TrimSpace(selector) != selector ||
 		strings.Contains(selector, "..") || containsProjectIdentityControl(selector) ||
-		!strictProjectSelectorV2.MatchString(selector) {
-		return invalidProjectIdentity("project selector is empty or malformed")
+		!strictProjectSelectorV2.MatchString(selector) || reservedProjectBindingV2.MatchString(selector) {
+		return invalidProjectIdentity("project selector is empty, malformed, or reserved")
 	}
 	return nil
 }
@@ -273,6 +274,9 @@ func AttachLegacyAlias(ctx context.Context, db *gorm.DB, canonical, alias string
 	}
 	if err := ValidateProjectAliasV2(alias); err != nil {
 		return err
+	}
+	if reservedProjectBindingV2.MatchString(alias) {
+		return invalidProjectIdentity("project alias uses the reserved identity binding namespace")
 	}
 	if db == nil {
 		return unavailableProjectIdentity(fmt.Errorf("project identity database is not ready"))
@@ -327,8 +331,9 @@ func ValidateProjectIdentityV2(identity ProjectIdentityV2) error {
 	if len(identity.LegacyProjectID) > 256 || len(identity.DisplayName) > 256 ||
 		strings.TrimSpace(identity.LegacyProjectID) != identity.LegacyProjectID ||
 		strings.TrimSpace(identity.DisplayName) != identity.DisplayName ||
-		containsProjectIdentityControl(identity.LegacyProjectID) || containsProjectIdentityControl(identity.DisplayName) {
-		return invalidProjectIdentity("identity selector or display name is malformed")
+		containsProjectIdentityControl(identity.LegacyProjectID) || containsProjectIdentityControl(identity.DisplayName) ||
+		reservedProjectBindingV2.MatchString(identity.LegacyProjectID) {
+		return invalidProjectIdentity("identity selector or display name is malformed or reserved")
 	}
 	hasGit := identity.GitRemote != "" || identity.RelativePath != ""
 	hasAnchor := identity.NonGitAnchor != "" || identity.AnchorShared != nil

@@ -89,6 +89,50 @@
       "anchor_shared": null
     },
     {
+      "name": "selector-reserved-git-binding",
+      "invalid_target": "selector",
+      "selector": "p2g_00112233445566778899aabbccddeeff",
+      "display_name": "core",
+      "legacy_project_id": "core_18f246",
+      "git_remote": "https://example.invalid/acme/mono.git",
+      "relative_path": "packages/core/",
+      "non_git_anchor": "",
+      "anchor_shared": null
+    },
+    {
+      "name": "selector-reserved-non-git-binding",
+      "invalid_target": "selector",
+      "selector": "p2n_00112233445566778899aabbccddeeff",
+      "display_name": "core",
+      "legacy_project_id": "core_18f246",
+      "git_remote": "https://example.invalid/acme/mono.git",
+      "relative_path": "packages/core/",
+      "non_git_anchor": "",
+      "anchor_shared": null
+    },
+    {
+      "name": "legacy-id-reserved-git-binding",
+      "invalid_target": "identity",
+      "selector": "configured-selector",
+      "display_name": "core",
+      "legacy_project_id": "p2g_00112233445566778899aabbccddeeff",
+      "git_remote": "https://example.invalid/acme/mono.git",
+      "relative_path": "packages/core/",
+      "non_git_anchor": "",
+      "anchor_shared": null
+    },
+    {
+      "name": "legacy-id-reserved-non-git-binding",
+      "invalid_target": "identity",
+      "selector": "configured-selector",
+      "display_name": "core",
+      "legacy_project_id": "p2n_00112233445566778899aabbccddeeff",
+      "git_remote": "https://example.invalid/acme/mono.git",
+      "relative_path": "packages/core/",
+      "non_git_anchor": "",
+      "anchor_shared": null
+    },
+    {
       "name": "display-leading-whitespace",
       "invalid_target": "identity",
       "selector": "configured-selector",

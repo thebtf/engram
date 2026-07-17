@@ -57,15 +57,28 @@ const projectIdentityV2File = '.engram-project-v2.json';
 const strictAnchorV2 = /^[0-9a-f]{32}$/;
 const projectIdentityControl = /\p{Cc}/u;
 const projectSelectorV2 = /^[A-Za-z0-9_.\/:\\-]+$/;
+const reservedProjectBindingV2 = /^p2[gn]_[0-9a-f]{32}$/;
 const projectAnchorV2Keys = ['anchor', 'shared', 'version'];
 
-export function validateProjectSelectorV2(selector: unknown): string {
+function validateProjectSelectorSyntaxV2(selector: unknown): string {
   if (typeof selector !== 'string' || selector === '' || selector.length > 256 ||
       selector.trim() !== selector || selector.includes('..') ||
       projectIdentityControl.test(selector) || !projectSelectorV2.test(selector)) {
     throw new Error('PROJECT_IDENTITY_INVALID: project selector is empty or malformed');
   }
   return selector;
+}
+
+export function validateProjectSelectorV2(selector: unknown): string {
+  const validated = validateProjectSelectorSyntaxV2(selector);
+  if (reservedProjectBindingV2.test(validated)) {
+    throw new Error('PROJECT_IDENTITY_INVALID: project selector uses the reserved identity binding namespace');
+  }
+  return validated;
+}
+
+export function validateCanonicalProjectV2(selector: unknown): string {
+  return validateProjectSelectorSyntaxV2(selector);
 }
 
 export function buildProjectIdentityV2(input: ProjectIdentityV2Input): ProjectIdentityV2 {
@@ -92,7 +105,8 @@ export function validateProjectIdentityV2(identity: ProjectIdentityV2): ProjectI
   if (identity.legacy_project_id.length > 256 || identity.display_name.length > 256 ||
       identity.legacy_project_id.trim() !== identity.legacy_project_id ||
       identity.display_name.trim() !== identity.display_name ||
-      projectIdentityControl.test(identity.legacy_project_id) || projectIdentityControl.test(identity.display_name)) {
+      projectIdentityControl.test(identity.legacy_project_id) || projectIdentityControl.test(identity.display_name) ||
+      reservedProjectBindingV2.test(identity.legacy_project_id)) {
     invalid('selector or display name is malformed');
   }
   const hasGit = identity.git_remote !== '' || identity.relative_path !== '';

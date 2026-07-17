@@ -369,19 +369,32 @@ const PROJECT_IDENTITY_V2_FILE = '.engram-project-v2.json';
 const STRICT_ANCHOR_V2 = /^[0-9a-f]{32}$/;
 const PROJECT_IDENTITY_CONTROL = /\p{Cc}/u;
 const PROJECT_SELECTOR_V2 = /^[A-Za-z0-9_.\/:\\-]+$/;
+const RESERVED_PROJECT_BINDING_V2 = /^p2[gn]_[0-9a-f]{32}$/;
 const PROJECT_ANCHOR_V2_KEYS = ['anchor', 'shared', 'version'];
 
 function projectIdentityInvalid(reason) {
   return new Error(`PROJECT_IDENTITY_INVALID: ${reason}`);
 }
 
-function validateProjectSelectorV2(selector) {
+function validateProjectSelectorSyntaxV2(selector) {
   if (typeof selector !== 'string' || selector === '' || selector.length > 256 ||
       selector.trim() !== selector || selector.includes('..') ||
       PROJECT_IDENTITY_CONTROL.test(selector) || !PROJECT_SELECTOR_V2.test(selector)) {
     throw projectIdentityInvalid('project selector is empty or malformed');
   }
   return selector;
+}
+
+function validateProjectSelectorV2(selector) {
+  const validated = validateProjectSelectorSyntaxV2(selector);
+  if (RESERVED_PROJECT_BINDING_V2.test(validated)) {
+    throw projectIdentityInvalid('project selector uses the reserved identity binding namespace');
+  }
+  return validated;
+}
+
+function validateCanonicalProjectV2(selector) {
+  return validateProjectSelectorSyntaxV2(selector);
 }
 
 function buildProjectIdentityV2(value) {
@@ -423,7 +436,8 @@ function validateProjectIdentityV2(identity) {
   if (identity.legacy_project_id.length > 256 || identity.display_name.length > 256 ||
       identity.legacy_project_id.trim() !== identity.legacy_project_id ||
       identity.display_name.trim() !== identity.display_name ||
-      PROJECT_IDENTITY_CONTROL.test(identity.legacy_project_id) || PROJECT_IDENTITY_CONTROL.test(identity.display_name)) {
+      PROJECT_IDENTITY_CONTROL.test(identity.legacy_project_id) || PROJECT_IDENTITY_CONTROL.test(identity.display_name) ||
+      RESERVED_PROJECT_BINDING_V2.test(identity.legacy_project_id)) {
     invalid('selector or display name is malformed');
   }
   const hasGit = identity.git_remote !== '' || identity.relative_path !== '';
@@ -571,7 +585,7 @@ async function registerProjectIdentityV2(context, requestFn = request) {
   });
   let canonical;
   try {
-    canonical = validateProjectSelectorV2(response && response.canonical_project);
+    canonical = validateCanonicalProjectV2(response && response.canonical_project);
   } catch {
     throw new Error('PROJECT_IDENTITY_UNAVAILABLE: project identity registration response is malformed');
   }
