@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 import { EngramRestClient, resolveAndRegisterProject } from '../dist/client.js';
 import { handleSessionStart } from '../dist/hooks/session-start.js';
+import { handleBeforeAgentStart } from '../dist/hooks/before-agent-start.js';
+import { handleBeforeToolCall } from '../dist/hooks/before-tool-call.js';
 import pluginModule from '../dist/index.js';
 import { parseConfig } from '../dist/config.js';
 import { createFileWatcherService } from '../dist/services/file-watcher.js';
@@ -70,6 +72,71 @@ test('registration sends full v2 metadata first, substitutes canonical, and dedu
   }
 });
 
+test('before-agent-start repeats the original selector and v2 metadata for context injection', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-context-identity-'));
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
+  const requests = [];
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init.body));
+    requests.push(body);
+    if (body.identity_only) {
+      return new Response(JSON.stringify({ canonical_project: 'p2n_00112233445566778899aabbccddeeff' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ observations: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const client = new EngramRestClient(clientConfig());
+  await handleBeforeAgentStart(
+    { initialPrompt: 'hello' },
+    { agentId: 'agent-a', sessionId: 'session-a', workspaceDir: workspace },
+    client,
+    { tokenBudget: 1000 },
+  );
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].project, requests[0].project);
+  assert.notEqual(requests[1].project, 'p2n_00112233445566778899aabbccddeeff');
+  assert.deepEqual(requests[1].project_identity, requests[0].project_identity);
+});
+
+test('before-tool-call registration shares the 500ms file-context deadline', async () => {
+  let fileContextReads = 0;
+  const client = {
+    isAvailable: () => true,
+    registerAndResolveProject: async () => new Promise((resolve) => {
+      setTimeout(() => resolve({ ok: true, canonicalProject: 'late-project' }), 1500);
+    }),
+    getFileContext: async () => {
+      fileContextReads++;
+      return [];
+    },
+  };
+
+  const started = Date.now();
+  const result = await handleBeforeToolCall(
+    { tool_name: 'Write', tool_input: { file_path: 'src/example.ts' } },
+    { agentId: 'agent-a' },
+    client,
+    { project: 'team-memory' },
+  );
+  const elapsed = Date.now() - started;
+
+  assert.equal(result, undefined);
+  assert.equal(fileContextReads, 0);
+  assert.ok(elapsed >= 350 && elapsed < 1200, `elapsed=${elapsed}ms`);
+});
+
 test('configured project override registers a selector-only shared scope', async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-configured-project-'));
   try {
@@ -84,7 +151,7 @@ test('configured project override registers a selector-only shared scope', async
 
     const result = await resolveAndRegisterProject(client, 'agent-a', workspace, 'team-memory');
 
-    assert.deepEqual(result, { ok: true, canonicalProject: 'team-memory' });
+    assert.deepEqual(result, { ok: true, canonicalProject: 'team-memory', projectSelector: 'team-memory' });
     assert.deepEqual(calls, [{
       identity: { projectId: 'team-memory', agentId: 'agent-a' },
       selector: 'team-memory',
