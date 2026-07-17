@@ -34,7 +34,7 @@ jobs:
         shell: pwsh
         env:
           REPOSITORY_NAME: ${{ github.repository }}
-          READ_ONLY_GITHUB_TOKEN: ${{ github.token }}
+          RULESET_AUDIT_TOKEN: ${{ secrets.MARKETPLACE_PAT }}
         run: |
           pwsh ./trusted/scripts/production-gates/build-and-scan-images.ps1 `
             -Mode ValidateWorkflowRun `
@@ -45,7 +45,7 @@ jobs:
             -ExpectedDefaultBranch main `
             -TrustedWorkflowPath .github/workflows/docker.yaml `
             -ExpectedWorkflowName Docker `
-            -GitHubToken $env:READ_ONLY_GITHUB_TOKEN `
+            -GitHubToken $env:RULESET_AUDIT_TOKEN `
             -GitHubOutputPath $env:GITHUB_OUTPUT
 
       - name: Checkout exact validated candidate without workflow credentials
@@ -97,6 +97,7 @@ jobs:
           GH_TOKEN: ""
           CR_PAT: ""
           GHCR_TOKEN: ""
+          RULESET_AUDIT_TOKEN: ""
         run: |
           $evidenceRoot = Join-Path $env:RUNNER_TEMP "engram-image-prepare-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           $payloadRoot = Join-Path $env:RUNNER_TEMP "engram-release-payload-data-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
@@ -153,7 +154,7 @@ jobs:
         shell: pwsh
         env:
           REPOSITORY_NAME: ${{ github.repository }}
-          READ_ONLY_GITHUB_TOKEN: ${{ github.token }}
+          RULESET_AUDIT_TOKEN: ${{ secrets.MARKETPLACE_PAT }}
         run: |
           pwsh ./trusted/scripts/production-gates/build-and-scan-images.ps1 `
             -Mode ValidateWorkflowRun `
@@ -163,7 +164,7 @@ jobs:
             -ExpectedDefaultBranch main `
             -TrustedWorkflowPath .github/workflows/docker.yaml `
             -ExpectedWorkflowName Docker `
-            -GitHubToken $env:READ_ONLY_GITHUB_TOKEN `
+            -GitHubToken $env:RULESET_AUDIT_TOKEN `
             -GitHubOutputPath $env:GITHUB_OUTPUT
 
       - name: Confirm preparation and fresh-runner provenance agree
