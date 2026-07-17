@@ -7,18 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [6.46.0] - 2026-07-17
-
-### Added
-
-- **Project Identity v2 successor (#427).** Go, Claude hooks, and OpenClaw now send the same strict versioned project metadata and converge on a server-issued canonical `p2g_*` / `p2n_*` binding before project-scoped retrieval or mutation. Git worktrees retain deterministic remote-plus-relative-path identity; non-Git workspaces use a strict high-entropy `.engram-project-v2.json` anchor with explicit sharing only.
-- **OpenClaw plugin 3.8.0.** OpenClaw registers Project Identity v2 synchronously before context access, reuses the canonical project across concurrent and later hooks, and preserves explicit configured selectors as the registration authority.
-
-### Fixed
-
-- **Identity integrity and concurrency hardening.** Registration rejects malformed, mixed-version, traversal-shaped, control-character, overlong, and reserved raw selectors before database access; PostgreSQL advisory locks make first registration deterministic; project removal waits for in-flight cache resolutions; successful anchor publication is not misreported when temporary-file cleanup fails; and unconfigured Claude sessions still render the setup banner before authenticated identity registration.
-- **Fail-closed OpenClaw publication.** The npm workflow now runs the complete plugin test suite and refuses publication unless the local stable semantic version is strictly newer than the current registry version, preventing changed source from silently shipping under an already-published version.
-
 ## [6.45.0] - 2026-07-16
 
 ### Added
@@ -1894,8 +1882,7 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.46.0...HEAD
-[6.46.0]: https://github.com/thebtf/engram/compare/v6.45.0...v6.46.0
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.45.0...HEAD
 [6.45.0]: https://github.com/thebtf/engram/compare/v6.44.1...v6.45.0
 [6.44.1]: https://github.com/thebtf/engram/compare/v6.44.0...v6.44.1
 [6.28.2]: https://github.com/thebtf/engram/compare/v6.28.1...v6.28.2
