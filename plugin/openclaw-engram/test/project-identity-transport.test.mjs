@@ -94,6 +94,53 @@ test('configured project override registers a selector-only shared scope', async
   }
 });
 
+test('identity resolution errors return structured failures without registration access', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-invalid-project-identity-'));
+  try {
+    fs.writeFileSync(path.join(workspace, '.engram-project-v2.json'), '{malformed');
+    let registrations = 0;
+    const client = {
+      registerAndResolveProject: async () => {
+        registrations++;
+        return { ok: true, canonicalProject: 'must-not-run' };
+      },
+    };
+
+    const result = await resolveAndRegisterProject(client, 'agent-a', workspace);
+
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: 'PROJECT_IDENTITY_INVALID',
+        message: 'PROJECT_IDENTITY_INVALID: malformed .engram-project-v2.json',
+        upgradeAction: 'regenerate_project_identity_v2',
+        httpStatus: 400,
+      },
+    });
+    assert.equal(registrations, 0);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('registration client rejections return structured unavailable failures', async () => {
+  const client = {
+    registerAndResolveProject: async () => { throw new Error('network down'); },
+  };
+
+  const result = await resolveAndRegisterProject(client, 'agent-a', undefined, 'team-memory');
+
+  assert.deepEqual(result, {
+    ok: false,
+    error: {
+      code: 'PROJECT_IDENTITY_UNAVAILABLE',
+      message: 'network down',
+      upgradeAction: 'retry_project_identity_registration',
+      httpStatus: 503,
+    },
+  });
+});
+
 test('stable registration error preserves code/action and permits zero downstream requests', async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });

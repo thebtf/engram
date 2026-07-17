@@ -133,14 +133,25 @@ export async function resolveAndRegisterProject(
   workspaceDir: string | undefined,
   configuredProject?: string,
 ): Promise<ProjectRegistrationResult> {
-  if (configuredProject !== undefined) {
-    return client.registerAndResolveProject(
-      { projectId: configuredProject, agentId },
-      configuredProject,
+  try {
+    if (configuredProject !== undefined) {
+      return await client.registerAndResolveProject(
+        { projectId: configuredProject, agentId },
+        configuredProject,
+      );
+    }
+    const identity = resolveIdentity(agentId, workspaceDir);
+    return await client.registerAndResolveProject(identity, identity.projectId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const invalid = message.startsWith('PROJECT_IDENTITY_INVALID:');
+    return projectRegistrationFailure(
+      invalid ? 'PROJECT_IDENTITY_INVALID' : 'PROJECT_IDENTITY_UNAVAILABLE',
+      message,
+      invalid ? 'regenerate_project_identity_v2' : 'retry_project_identity_registration',
+      invalid ? 400 : 503,
     );
   }
-  const identity = resolveIdentity(agentId, workspaceDir);
-  return client.registerAndResolveProject(identity, identity.projectId);
 }
 
 /** A single observation returned by the decisions search endpoint. */
