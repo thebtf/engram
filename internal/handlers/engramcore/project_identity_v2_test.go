@@ -3,6 +3,7 @@ package engramcore
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/thebtf/engram/internal/proxy"
@@ -29,6 +30,26 @@ func TestProxyHandleTool_FirstCallBeforeHookSendsProjectIdentityV2(t *testing.T)
 	}
 	if req.ProjectIdentity.LegacyProjectId == "" {
 		t.Fatal("legacy selector is required for mixed-version convergence")
+	}
+}
+
+func TestProxyHandleTool_ReusesCachedProjectIdentityV2UntilProjectRemoval(t *testing.T) {
+	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
+	grpcAddr := startMockGRPC(t, srv)
+	_, mod, project := buildContractDispatcher(t, grpcAddr)
+
+	if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("first CallTool: %v", err)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("cached CallTool required git: %v", err)
+	}
+
+	mod.cache.Forget(project.ID)
+	if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "project identity v2") {
+		t.Fatalf("CallTool after Forget error=%v, want project identity resolution failure", err)
 	}
 }
 

@@ -7,17 +7,19 @@ import (
 	"sync"
 
 	"github.com/thebtf/engram/internal/proxy"
+	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
 
-// slugCache is the project-ID resolution cache. The cwd is part of the key:
-// one muxcore project ID can serve sessions rooted at different subdirectories,
-// and their compatibility selectors must stay aligned with their v2 identities.
+// slugCache caches the compatibility slug and v2 project identity by project
+// and cwd. One muxcore project ID can serve sessions rooted at different
+// subdirectories, and their routing metadata must stay aligned.
 //
-// Thread-safety: sync.Map — Resolve is called from muxcore dispatch
-// goroutines and may race with OnProjectRemoved clearing entries.
+// Thread-safety: sync.Map — resolution runs on muxcore dispatch goroutines and
+// may race with OnProjectRemoved clearing entries.
 type slugCache struct {
-	entries sync.Map // slugCacheKey → resolvedSlug
+	entries    sync.Map // slugCacheKey → resolvedSlug
+	identities sync.Map // slugCacheKey → *pb.ProjectIdentityV2
 }
 
 type slugCacheKey struct {
@@ -69,6 +71,23 @@ func (c *slugCache) Resolve(p muxcore.ProjectContext) string {
 	return id
 }
 
+// ResolveIdentity returns stable v2 metadata for the given project and cwd.
+// The first successful resolution is reused until OnProjectRemoved calls
+// Forget, avoiding synchronous git subprocesses on every tool request.
+func (c *slugCache) ResolveIdentity(p muxcore.ProjectContext) (*pb.ProjectIdentityV2, error) {
+	key := cacheKey(p)
+	if cached, ok := c.identities.Load(key); ok {
+		return cached.(*pb.ProjectIdentityV2), nil
+	}
+
+	identity, err := resolveProjectIdentityV2(p.Cwd)
+	if err != nil {
+		return nil, err
+	}
+	stored, _ := c.identities.LoadOrStore(key, identity)
+	return stored.(*pb.ProjectIdentityV2), nil
+}
+
 // Forget removes every cwd-scoped cache entry for a project ID. Called from
 // Module.OnProjectRemoved so a subsequent session does not reuse stale identity
 // metadata from any subdirectory.
@@ -77,6 +96,13 @@ func (c *slugCache) Forget(projectID string) {
 		key := rawKey.(slugCacheKey)
 		if key.projectID == projectID {
 			c.entries.Delete(key)
+		}
+		return true
+	})
+	c.identities.Range(func(rawKey, _ any) bool {
+		key := rawKey.(slugCacheKey)
+		if key.projectID == projectID {
+			c.identities.Delete(key)
 		}
 		return true
 	})

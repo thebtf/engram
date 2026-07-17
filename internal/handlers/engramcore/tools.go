@@ -30,7 +30,7 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 	}
 	token := m.envFor(p, config.EnvWorkstationToken)
 	project := m.cache.Resolve(p)
-	projectIdentity, err := resolveProjectIdentityV2(p.Cwd)
+	projectIdentity, err := m.cache.ResolveIdentity(p)
 	if err != nil {
 		return nil, fmt.Errorf("project identity v2: %w", err)
 	}
@@ -89,7 +89,7 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 	}
 	token := m.envFor(p, config.EnvWorkstationToken)
 	project := m.cache.Resolve(p)
-	projectIdentity, err := resolveProjectIdentityV2(p.Cwd)
+	projectIdentity, err := m.cache.ResolveIdentity(p)
 	if err != nil {
 		return nil, fmt.Errorf("project identity v2: %w", err)
 	}
