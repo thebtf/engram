@@ -32,6 +32,28 @@ type ModuleError struct {
 // Error implements the error interface. Returns "<code>: <message>".
 func (e *ModuleError) Error() string { return e.Code + ": " + e.Message }
 
+// RequiredProxyToolsError marks a dynamic tool-discovery failure that must be
+// surfaced to the client because the proxy backend is configured and
+// authoritative. Plain ProxyTools errors remain optional/offline failures and
+// may fall back to static tools.
+type RequiredProxyToolsError struct {
+	Cause error
+}
+
+func (e *RequiredProxyToolsError) Error() string {
+	if e == nil || e.Cause == nil {
+		return "required proxy tool discovery failed"
+	}
+	return "required proxy tool discovery failed: " + e.Cause.Error()
+}
+
+func (e *RequiredProxyToolsError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 // ErrNotReady returns a ModuleError indicating the module has not yet
 // completed initialisation or its backend is not reachable. retryAfter
 // provides a suggested wait before the next attempt.

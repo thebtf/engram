@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -23,9 +24,9 @@ import (
 // network I/O (typically a gRPC Initialize handshake) — this is accepted
 // because tools/list is low-frequency (once per session open).
 //
-// Graceful degradation: if ProxyTools returns an error, the dispatcher logs a
-// warning and returns ONLY the static tools. A network blip MUST NOT break
-// tools/list — this is explicit in the FR-11a contract.
+// Optional proxy errors preserve the static-only offline contract. A
+// RequiredProxyToolsError means a configured authoritative backend failed, so
+// tools/list returns a service-unavailable error instead of a partial inventory.
 //
 // Design reference: FR-4 (Dispatcher) + FR-11a (ProxyToolProvider) and
 // design.md Section 5.1.
@@ -35,8 +36,16 @@ func (d *Dispatcher) handleToolsList(ctx context.Context, p muxcore.ProjectConte
 	if proxy, proxyName, ok := d.reg.GetProxyToolProvider(); ok {
 		proxyTools, err := proxy.ProxyTools(ctx, p)
 		if err != nil {
-			// FR-11a graceful degradation: log + fall through to static-only.
-			d.logger.Warn("proxy tool provider ProxyTools failed, returning static tools only",
+			var requiredErr *module.RequiredProxyToolsError
+			if errors.As(err, &requiredErr) {
+				d.logger.Error("required proxy tool discovery failed",
+					"module", proxyName,
+					"project_id", p.ID,
+					"error", err,
+				)
+				return marshalError(req.ID, -32000, "service unavailable: configured proxy tool discovery failed; retry tools/list"), nil
+			}
+			d.logger.Warn("optional proxy tools unavailable, returning static tools only",
 				"module", proxyName,
 				"project_id", p.ID,
 				"error", err,
