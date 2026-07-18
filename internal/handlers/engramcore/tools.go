@@ -24,14 +24,14 @@ const proxyToolsDiscoveryTimeout = 30 * time.Second
 // translation from pb.ToolDefinition to module.ToolDef preserves the exact
 // shape the CC client expects.
 //
-// Missing ENGRAM_URL is intentional offline mode and remains eligible for a
-// static Loom-only response. Once a backend is configured, every identity,
-// connection, or Initialize failure is classified as required and fails loud.
+// Missing both supported server URL variables is intentional offline mode and
+// remains eligible for a static Loom-only response. Once either backend URL is
+// configured, every identity, connection, or Initialize failure fails loud.
 func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]module.ToolDef, error) {
 	serverURL, err := m.requireServerURL(p)
 	if err != nil {
-		// No ENGRAM_URL is the intentional offline contract: the dispatcher may
-		// still return static Loom tools.
+		// No configured server URL is the intentional offline contract: the
+		// dispatcher may still return static Loom tools.
 		return nil, err
 	}
 	token := m.envFor(p, config.EnvWorkstationToken)

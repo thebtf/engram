@@ -38,11 +38,19 @@ func (d *Dispatcher) handleToolsList(ctx context.Context, p muxcore.ProjectConte
 		if err != nil {
 			var requiredErr *module.RequiredProxyToolsError
 			if errors.As(err, &requiredErr) {
-				d.logger.Error("required proxy tool discovery failed",
-					"module", proxyName,
-					"project_id", p.ID,
-					"error", err,
-				)
+				if ctx.Err() != nil {
+					d.logger.Warn("required proxy tool discovery cancelled",
+						"module", proxyName,
+						"project_id", p.ID,
+						"error", err,
+					)
+				} else {
+					d.logger.Error("required proxy tool discovery failed",
+						"module", proxyName,
+						"project_id", p.ID,
+						"error", err,
+					)
+				}
 				return marshalError(req.ID, -32000, "service unavailable: configured proxy tool discovery failed; retry tools/list"), nil
 			}
 			d.logger.Warn("optional proxy tools unavailable, returning static tools only",

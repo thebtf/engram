@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thebtf/engram/internal/config"
 	loomhandler "github.com/thebtf/engram/internal/handlers/loom"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/module/dispatcher"
@@ -308,7 +309,8 @@ func assertToolsListServiceUnavailable(t *testing.T, resp []byte) {
 // ---------------------------------------------------------------------------
 
 func TestContract_ToolsList_OfflineWithoutURLReturnsLoomOnly(t *testing.T) {
-	t.Setenv("ENGRAM_URL", "")
+	t.Setenv(config.EnvServerURL, "")
+	t.Setenv(config.EnvServerURLAlt, "")
 	disp, _, p := buildContractDispatcher(t, "", loomhandler.NewModule())
 
 	resp, err := disp.HandleRequest(context.Background(), p, jsonrpcListReq(1))
@@ -344,6 +346,22 @@ func TestContract_ToolsList_ConfiguredInitializeFailureIsServiceUnavailable(t *t
 	srv := &mockEngramServer{initErr: status.Error(codes.Unavailable, "backend starting")}
 	grpcAddr := startMockGRPC(t, srv)
 	disp, _, p := buildContractDispatcher(t, grpcAddr)
+
+	resp, err := disp.HandleRequest(context.Background(), p, jsonrpcListReq(1))
+	if err != nil {
+		t.Fatalf("HandleRequest: %v", err)
+	}
+	assertToolsListServiceUnavailable(t, resp)
+}
+
+func TestContract_ToolsList_ServerURLAliasIsConfigured(t *testing.T) {
+	t.Setenv(config.EnvServerURL, "")
+	t.Setenv(config.EnvServerURLAlt, "")
+	srv := &mockEngramServer{initErr: status.Error(codes.Unavailable, "backend starting")}
+	grpcAddr := startMockGRPC(t, srv)
+	disp, _, p := buildContractDispatcher(t, grpcAddr)
+	delete(p.Env, config.EnvServerURL)
+	p.Env[config.EnvServerURLAlt] = "http://" + grpcAddr
 
 	resp, err := disp.HandleRequest(context.Background(), p, jsonrpcListReq(1))
 	if err != nil {
