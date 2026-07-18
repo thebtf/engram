@@ -12,9 +12,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/thebtf/engram/internal/config"
+	loomhandler "github.com/thebtf/engram/internal/handlers/loom"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/module/dispatcher"
 	"github.com/thebtf/engram/internal/module/lifecycle"
@@ -22,8 +26,12 @@ import (
 	"github.com/thebtf/engram/internal/version"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
+	"go.uber.org/goleak"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 // ---------------------------------------------------------------------------
@@ -38,22 +46,30 @@ type mockEngramServer struct {
 
 	// initResp is the response returned by Initialize.
 	initResp *pb.InitializeResponse
+	// initErr, if non-nil, is returned as an error from Initialize.
+	initErr error
 	// callResp is the response returned by CallTool.
 	callResp *pb.CallToolResponse
 	// callErr, if non-nil, is returned as an error from CallTool.
-	callErr error
-	initReq *pb.InitializeRequest
-	callReq *pb.CallToolRequest
+	callErr   error
+	initReq   *pb.InitializeRequest
+	callReq   *pb.CallToolRequest
+	initCalls int
 }
 
 func (s *mockEngramServer) Initialize(_ context.Context, req *pb.InitializeRequest) (*pb.InitializeResponse, error) {
 	s.mu.Lock()
 	s.initReq = req
+	s.initCalls++
+	resp, err := s.initResp, s.initErr
 	s.mu.Unlock()
-	if s.initResp == nil {
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
 		return &pb.InitializeResponse{}, nil
 	}
-	return s.initResp, nil
+	return resp, nil
 }
 
 func (s *mockEngramServer) CallTool(_ context.Context, req *pb.CallToolRequest) (*pb.CallToolResponse, error) {
@@ -89,6 +105,32 @@ func startMockGRPC(t *testing.T, srv *mockEngramServer) string {
 	return lis.Addr().String()
 }
 
+// startDeferredMockGRPC reserves an address but leaves it unreachable until
+// start is called. This forces the client connection through transient failure
+// before the backend becomes ready.
+func startDeferredMockGRPC(t *testing.T, srv *mockEngramServer) (string, func() error) {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+
+	gs := grpc.NewServer()
+	pb.RegisterEngramServiceServer(gs, srv)
+	var once sync.Once
+	start := func() error {
+		once.Do(func() {
+			go func() { _ = gs.Serve(lis) }()
+		})
+		return nil
+	}
+	t.Cleanup(func() {
+		gs.Stop()
+		_ = lis.Close()
+	})
+	return lis.Addr().String(), start
+}
+
 // ---------------------------------------------------------------------------
 // Dispatcher bootstrap helpers for contract tests
 // ---------------------------------------------------------------------------
@@ -99,12 +141,17 @@ func startMockGRPC(t *testing.T, srv *mockEngramServer) string {
 //
 // The slug cache is pre-populated with a synthetic entry to avoid any git I/O
 // during the test (see ForceCacheEntry in slugcache.go).
-func buildContractDispatcher(t *testing.T, grpcAddr string) (*dispatcher.Dispatcher, *Module, muxcore.ProjectContext) {
+func buildContractDispatcher(t *testing.T, grpcAddr string, staticModules ...module.EngramModule) (*dispatcher.Dispatcher, *Module, muxcore.ProjectContext) {
 	t.Helper()
 
 	mod := NewModule()
 
 	reg := registry.New()
+	for _, staticMod := range staticModules {
+		if err := reg.Register(staticMod); err != nil {
+			t.Fatalf("Register %s: %v", staticMod.Name(), err)
+		}
+	}
 	if err := reg.Register(mod); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -113,11 +160,13 @@ func buildContractDispatcher(t *testing.T, grpcAddr string) (*dispatcher.Dispatc
 	pl := lifecycle.New(reg, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	storageDir := t.TempDir()
 
 	if err := pl.Start(ctx, func(_ string) module.ModuleDeps {
 		return module.ModuleDeps{
-			Logger:    slog.Default(),
-			DaemonCtx: ctx,
+			Logger:     slog.Default(),
+			DaemonCtx:  ctx,
+			StorageDir: storageDir,
 		}
 	}); err != nil {
 		t.Fatalf("pipeline.Start: %v", err)
@@ -128,24 +177,37 @@ func buildContractDispatcher(t *testing.T, grpcAddr string) (*dispatcher.Dispatc
 	})
 
 	disp := dispatcher.New(reg, slog.Default())
-
-	// Use a synthetic project with ENGRAM_URL pointing at the mock server.
-	// Pass http:// prefix so getOrDialGRPC uses plaintext.
 	p := muxcore.ProjectContext{
 		ID:  "contract-test-project",
 		Cwd: t.TempDir(),
-		Env: map[string]string{
-			"ENGRAM_URL": "http://" + grpcAddr,
-		},
+		Env: map[string]string{},
 	}
 
 	// Pre-populate the slug cache so slug resolution skips the git call.
 	mod.cache.ForceCacheEntry(p, p.ID)
+	if grpcAddr == "" {
+		return disp, mod, p
+	}
 
-	// Also pre-populate the pool to use plaintext credentials matching our mock.
+	// Pass http:// prefix so getOrDialGRPC uses plaintext.
+	p.Env["ENGRAM_URL"] = "http://" + grpcAddr
+
+	// Pre-populate the pool to use plaintext credentials matching our mock.
 	// We dial directly so tests are not subject to OS-level ephemeral port
 	// exhaustion from repeated lazy-dial calls.
-	conn, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(
+		grpcAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff: backoff.Config{
+				BaseDelay:  10 * time.Millisecond,
+				Multiplier: 1.2,
+				Jitter:     0,
+				MaxDelay:   50 * time.Millisecond,
+			},
+			MinConnectTimeout: 20 * time.Millisecond,
+		}),
+	)
 	if err != nil {
 		t.Fatalf("grpc.NewClient: %v", err)
 	}
@@ -219,9 +281,214 @@ func assertJSONEqual(t *testing.T, label string, got, want []byte) {
 	}
 }
 
+func assertToolsListServiceUnavailable(t *testing.T, resp []byte) {
+	t.Helper()
+	var got struct {
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(resp, &got); err != nil {
+		t.Fatalf("unmarshal tools/list response: %v (raw: %s)", err, resp)
+	}
+	if got.Error == nil {
+		t.Fatalf("configured discovery failure returned success: %s", resp)
+	}
+	if got.Error.Code != -32000 || !strings.Contains(got.Error.Message, "service unavailable") {
+		t.Fatalf("tools/list error=%+v, want JSON-RPC service unavailable", got.Error)
+	}
+	if len(got.Result) != 0 {
+		t.Fatalf("configured discovery failure leaked result: %s", got.Result)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Contract tests
 // ---------------------------------------------------------------------------
+
+func TestContract_ToolsList_OfflineWithoutURLReturnsLoomOnly(t *testing.T) {
+	t.Setenv(config.EnvServerURL, "")
+	t.Setenv(config.EnvServerURLAlt, "")
+	disp, _, p := buildContractDispatcher(t, "", loomhandler.NewModule())
+
+	resp, err := disp.HandleRequest(context.Background(), p, jsonrpcListReq(1))
+	if err != nil {
+		t.Fatalf("HandleRequest: %v", err)
+	}
+	var got struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+		Error *struct{ Code int } `json:"error"`
+	}
+	if err := json.Unmarshal(resp, &got); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if got.Error != nil {
+		t.Fatalf("offline tools/list error: %+v", got.Error)
+	}
+	want := []string{"loom_submit", "loom_get", "loom_list", "loom_cancel"}
+	if len(got.Result.Tools) != len(want) {
+		t.Fatalf("offline tools=%v, want Loom-only %v", got.Result.Tools, want)
+	}
+	for i, name := range want {
+		if got.Result.Tools[i].Name != name {
+			t.Fatalf("offline tool[%d]=%q, want %q", i, got.Result.Tools[i].Name, name)
+		}
+	}
+}
+
+func TestContract_ToolsList_ConfiguredInitializeFailureIsServiceUnavailable(t *testing.T) {
+	srv := &mockEngramServer{initErr: status.Error(codes.Unavailable, "backend starting")}
+	grpcAddr := startMockGRPC(t, srv)
+	disp, _, p := buildContractDispatcher(t, grpcAddr)
+
+	resp, err := disp.HandleRequest(context.Background(), p, jsonrpcListReq(1))
+	if err != nil {
+		t.Fatalf("HandleRequest: %v", err)
+	}
+	assertToolsListServiceUnavailable(t, resp)
+}
+
+func TestContract_ToolsList_ServerURLAliasIsConfigured(t *testing.T) {
+	t.Setenv(config.EnvServerURL, "")
+	t.Setenv(config.EnvServerURLAlt, "")
+	srv := &mockEngramServer{initErr: status.Error(codes.Unavailable, "backend starting")}
+	grpcAddr := startMockGRPC(t, srv)
+	disp, _, p := buildContractDispatcher(t, grpcAddr)
+	delete(p.Env, config.EnvServerURL)
+	p.Env[config.EnvServerURLAlt] = "http://" + grpcAddr
+
+	resp, err := disp.HandleRequest(context.Background(), p, jsonrpcListReq(1))
+	if err != nil {
+		t.Fatalf("HandleRequest: %v", err)
+	}
+	assertToolsListServiceUnavailable(t, resp)
+}
+
+func TestContract_ToolsList_WaitsForDelayedGRPCReadiness(t *testing.T) {
+	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{
+		{Name: "memory_store", Description: "store"},
+		{Name: "memory_search", Description: "search"},
+	}}}
+	grpcAddr, start := startDeferredMockGRPC(t, srv)
+	disp, _, p := buildContractDispatcher(t, grpcAddr)
+	startResult := make(chan error, 1)
+	go func() {
+		time.Sleep(75 * time.Millisecond)
+		startResult <- start()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := disp.HandleRequest(ctx, p, jsonrpcListReq(1))
+	if startErr := <-startResult; startErr != nil {
+		t.Fatalf("start delayed gRPC server: %v", startErr)
+	}
+	if err != nil {
+		t.Fatalf("HandleRequest: %v", err)
+	}
+	var got struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+		Error *struct{ Code int } `json:"error"`
+	}
+	if err := json.Unmarshal(resp, &got); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if got.Error != nil {
+		t.Fatalf("delayed readiness error: %+v", got.Error)
+	}
+	want := []string{"memory_store", "memory_search"}
+	if len(got.Result.Tools) != len(want) {
+		t.Fatalf("tools=%v, want %v", got.Result.Tools, want)
+	}
+	for i, name := range want {
+		if got.Result.Tools[i].Name != name {
+			t.Fatalf("tool[%d]=%q, want %q", i, got.Result.Tools[i].Name, name)
+		}
+	}
+}
+
+func TestContract_ToolsList_DeadlineIsBoundedAndConnectionIsReusable(t *testing.T) {
+	leakBaseline := goleak.IgnoreCurrent()
+	t.Cleanup(func() { goleak.VerifyNone(t, leakBaseline) })
+	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{{Name: "memory_store"}}}}
+	grpcAddr, start := startDeferredMockGRPC(t, srv)
+	disp, mod, p := buildContractDispatcher(t, grpcAddr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	startedAt := time.Now()
+	resp, err := disp.HandleRequest(ctx, p, jsonrpcListReq(1))
+	cancel()
+	if err != nil {
+		t.Fatalf("HandleRequest: %v", err)
+	}
+	assertToolsListServiceUnavailable(t, resp)
+	if elapsed := time.Since(startedAt); elapsed < 50*time.Millisecond || elapsed > time.Second {
+		t.Fatalf("deadline elapsed=%s, want bounded wait", elapsed)
+	}
+
+	countConnections := func() int {
+		count := 0
+		mod.pool.conns.Range(func(_, _ any) bool {
+			count++
+			return true
+		})
+		return count
+	}
+	connectionsAfterFirst := countConnections()
+	if connectionsAfterFirst == 0 {
+		t.Fatal("deadline attempt left no reusable pooled connection")
+	}
+	secondCtx, secondCancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	secondResp, err := disp.HandleRequest(secondCtx, p, jsonrpcListReq(2))
+	secondCancel()
+	if err != nil {
+		t.Fatalf("second deadline HandleRequest: %v", err)
+	}
+	assertToolsListServiceUnavailable(t, secondResp)
+	if got := countConnections(); got != connectionsAfterFirst {
+		t.Fatalf("pooled connections grew across retries: first=%d second=%d", connectionsAfterFirst, got)
+	}
+
+	if err := start(); err != nil {
+		t.Fatalf("start gRPC server: %v", err)
+	}
+	retryCtx, retryCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer retryCancel()
+	retryResp, err := disp.HandleRequest(retryCtx, p, jsonrpcListReq(3))
+	if err != nil {
+		t.Fatalf("retry HandleRequest: %v", err)
+	}
+	var retry struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+		Error *struct{ Code int } `json:"error"`
+	}
+	if err := json.Unmarshal(retryResp, &retry); err != nil {
+		t.Fatalf("unmarshal retry response: %v", err)
+	}
+	if retry.Error != nil || len(retry.Result.Tools) != 1 || retry.Result.Tools[0].Name != "memory_store" {
+		t.Fatalf("retry response=%s, want recovered full list", retryResp)
+	}
+	srv.mu.Lock()
+	initCalls := srv.initCalls
+	srv.mu.Unlock()
+	if initCalls != 1 {
+		t.Fatalf("Initialize calls=%d, want only the post-deadline retry", initCalls)
+	}
+}
 
 // TestContract_ToolsList_MatchesV42 verifies that a tools/list response
 // dispatched through the dispatcher, with a mock gRPC server returning 3 canned

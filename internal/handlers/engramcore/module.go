@@ -19,7 +19,9 @@ package engramcore
 import (
 	"context"
 	"fmt"
+	"os"
 
+	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/module"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
@@ -152,13 +154,22 @@ func (m *Module) envFor(p muxcore.ProjectContext, key string) string {
 	return envOrDefault(p.Env, key)
 }
 
-// requireServerURL returns the ENGRAM_URL for the session or a structured
-// error indicating the configuration problem. Extracted so ProxyTools and
-// ProxyHandleTool share identical validation.
+// requireServerURL returns the configured server URL using session-first
+// precedence across both supported names: session ENGRAM_URL, session
+// ENGRAM_SERVER_URL, host ENGRAM_URL, then host ENGRAM_SERVER_URL. Extracted so
+// ProxyTools, ProxyHandleTool, and code indexing share identical validation.
 func (m *Module) requireServerURL(p muxcore.ProjectContext) (string, error) {
-	serverURL := m.envFor(p, "ENGRAM_URL")
-	if serverURL == "" {
-		return "", fmt.Errorf("ENGRAM_URL not set for project %s", p.ID)
+	if serverURL := p.Env[config.EnvServerURL]; serverURL != "" {
+		return serverURL, nil
 	}
-	return serverURL, nil
+	if serverURL := p.Env[config.EnvServerURLAlt]; serverURL != "" {
+		return serverURL, nil
+	}
+	if serverURL := os.Getenv(config.EnvServerURL); serverURL != "" {
+		return serverURL, nil
+	}
+	if serverURL := os.Getenv(config.EnvServerURLAlt); serverURL != "" {
+		return serverURL, nil
+	}
+	return "", fmt.Errorf("%s or %s not set for project %s", config.EnvServerURL, config.EnvServerURLAlt, p.ID)
 }

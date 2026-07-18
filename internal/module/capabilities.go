@@ -160,9 +160,9 @@ type ProxyToolProvider interface {
 	// Initialize handshake to engram-server). A reasonable timeout (configured
 	// by the module implementer, not the framework) MUST be applied internally.
 	//
-	// Returning an error means the tool list is temporarily unavailable; the
-	// dispatcher logs a warning and returns ONLY the static tool list. This is
-	// graceful degradation — a network blip MUST NOT break tools/list.
+	// A [RequiredProxyToolsError] means configured authoritative discovery
+	// failed: the dispatcher returns JSON-RPC service unavailable and no partial
+	// result. Any other error is optional/offline and falls back to static tools.
 	ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]ToolDef, error)
 
 	// ProxyHandleTool forwards a tools/call request to the backend when the

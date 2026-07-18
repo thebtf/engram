@@ -70,6 +70,20 @@ func TestProxyTools_SendsProjectIdentityV2OnInitialize(t *testing.T) {
 	}
 }
 
+func TestToolsList_ConfiguredIdentityFailureIsServiceUnavailable(t *testing.T) {
+	srv := &mockEngramServer{initResp: &pb.InitializeResponse{}}
+	grpcAddr := startMockGRPC(t, srv)
+	disp, mod, project := buildContractDispatcher(t, grpcAddr)
+	mod.cache.Forget(project.ID)
+	t.Setenv("PATH", t.TempDir())
+
+	resp, err := disp.HandleRequest(context.Background(), project, jsonrpcListReq(1))
+	if err != nil {
+		t.Fatalf("HandleRequest: %v", err)
+	}
+	assertToolsListServiceUnavailable(t, resp)
+}
+
 func TestProxyHandleTool_SameProjectIDDifferentCWDKeepsSelectorAligned(t *testing.T) {
 	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
 	grpcAddr := startMockGRPC(t, srv)

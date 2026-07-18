@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/module"
@@ -11,7 +12,10 @@ import (
 	"github.com/thebtf/engram/internal/version"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
+	"google.golang.org/grpc"
 )
+
+const proxyToolsDiscoveryTimeout = 30 * time.Second
 
 // ProxyTools fetches the dynamic tool set from the engram server via a gRPC
 // Initialize handshake. Implements module.ProxyToolProvider per FR-11a.
@@ -20,35 +24,39 @@ import (
 // translation from pb.ToolDefinition to module.ToolDef preserves the exact
 // shape the CC client expects.
 //
-// Graceful degradation: on backend error, return the error to the dispatcher
-// which will log a warning and omit dynamic tools from the tools/list
-// response. The static tool list (empty in v4.3.0) is returned regardless.
+// Missing both supported server URL variables is intentional offline mode and
+// remains eligible for a static Loom-only response. Once either backend URL is
+// configured, every identity, connection, or Initialize failure fails loud.
 func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]module.ToolDef, error) {
 	serverURL, err := m.requireServerURL(p)
 	if err != nil {
+		// No configured server URL is the intentional offline contract: the
+		// dispatcher may still return static Loom tools.
 		return nil, err
 	}
 	token := m.envFor(p, config.EnvWorkstationToken)
 	project := m.cache.Resolve(p)
 	projectIdentity, err := m.cache.ResolveIdentity(p)
 	if err != nil {
-		return nil, fmt.Errorf("project identity v2: %w", err)
+		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("project identity v2: %w", err)}
 	}
 
 	conn, err := m.pool.getOrDialGRPC(serverURL, token)
 	if err != nil {
-		return nil, fmt.Errorf("gRPC connect: %w", err)
+		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("gRPC connect: %w", err)}
 	}
 	client := pb.NewEngramServiceClient(conn)
+	discoveryCtx, cancel := context.WithTimeout(ctx, proxyToolsDiscoveryTimeout)
+	defer cancel()
 
-	resp, err := client.Initialize(ctx, &pb.InitializeRequest{
+	resp, err := client.Initialize(discoveryCtx, &pb.InitializeRequest{
 		ClientName:      "engram-daemon",
 		ClientVersion:   daemonClientVersion,
 		Project:         project,
 		ProjectIdentity: projectIdentity,
-	})
+	}, grpc.WaitForReady(true))
 	if err != nil {
-		return nil, fmt.Errorf("gRPC Initialize: %w", err)
+		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("gRPC Initialize: %w", err)}
 	}
 
 	tools := make([]module.ToolDef, len(resp.Tools))

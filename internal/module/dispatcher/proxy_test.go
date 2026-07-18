@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,9 +33,9 @@ type proxyMod struct {
 	handleToolsCalls int32
 }
 
-func (f *proxyMod) Name() string                                       { return f.name }
-func (f *proxyMod) Init(_ context.Context, _ module.ModuleDeps) error  { return nil }
-func (f *proxyMod) Shutdown(_ context.Context) error                   { return nil }
+func (f *proxyMod) Name() string                                      { return f.name }
+func (f *proxyMod) Init(_ context.Context, _ module.ModuleDeps) error { return nil }
+func (f *proxyMod) Shutdown(_ context.Context) error                  { return nil }
 
 func (f *proxyMod) ProxyTools(_ context.Context, _ muxcore.ProjectContext) ([]module.ToolDef, error) {
 	atomic.AddInt32(&f.proxyToolsCalls, 1)
@@ -150,11 +151,10 @@ func TestHandleToolsList_StaticAndProxy_MergedInOrder(t *testing.T) {
 	}
 }
 
-// TestHandleToolsList_ProxyError_GracefulDegradation verifies FR-11a graceful
-// degradation: when ProxyTools returns an error, tools/list returns ONLY the
-// static tools and does NOT surface an error to the client. A network blip
-// MUST NOT break tools/list.
-func TestHandleToolsList_ProxyError_GracefulDegradation(t *testing.T) {
+// TestHandleToolsList_OptionalProxyError_GracefulDegradation verifies FR-11a
+// offline degradation: an unclassified ProxyTools error returns static tools
+// and does not surface an error to the client.
+func TestHandleToolsList_OptionalProxyError_GracefulDegradation(t *testing.T) {
 	t.Parallel()
 
 	staticMod := &fakeMod{
@@ -165,7 +165,7 @@ func TestHandleToolsList_ProxyError_GracefulDegradation(t *testing.T) {
 	}
 	proxy := &proxyMod{
 		name:     "proxymod",
-		proxyErr: errors.New("backend unreachable"),
+		proxyErr: errors.New("proxy intentionally unavailable"),
 	}
 	d := buildDispatcher(t, staticMod, proxy)
 
@@ -175,9 +175,8 @@ func TestHandleToolsList_ProxyError_GracefulDegradation(t *testing.T) {
 		t.Fatalf("HandleRequest: %v", err)
 	}
 	r := parseResp(t, resp)
-	// Must NOT be a JSON-RPC error — proxy error is logged and swallowed.
 	if r.Error != nil {
-		t.Fatalf("tools/list must not propagate proxy error as JSON-RPC error, got %+v", r.Error)
+		t.Fatalf("optional proxy error became JSON-RPC error: %+v", r.Error)
 	}
 
 	var result struct {
@@ -188,14 +187,37 @@ func TestHandleToolsList_ProxyError_GracefulDegradation(t *testing.T) {
 	if err := json.Unmarshal(r.Result, &result); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if len(result.Tools) != 1 {
-		t.Fatalf("expected 1 static tool after graceful degradation, got %d", len(result.Tools))
-	}
-	if result.Tools[0].Name != "static.ping" {
-		t.Errorf("expected static.ping, got %q", result.Tools[0].Name)
+	if len(result.Tools) != 1 || result.Tools[0].Name != "static.ping" {
+		t.Fatalf("optional proxy fallback tools=%+v, want static.ping", result.Tools)
 	}
 	if got := atomic.LoadInt32(&proxy.proxyToolsCalls); got != 1 {
 		t.Errorf("ProxyTools should have been called once, got %d", got)
+	}
+}
+
+func TestHandleToolsList_RequiredProxyErrorFailsWithoutPartialResult(t *testing.T) {
+	t.Parallel()
+
+	staticMod := &fakeMod{
+		name:  "staticmod",
+		tools: []module.ToolDef{{Name: "static.ping", Description: "ping"}},
+	}
+	proxy := &proxyMod{
+		name:     "proxymod",
+		proxyErr: &module.RequiredProxyToolsError{Cause: errors.New("backend unreachable")},
+	}
+	d := buildDispatcher(t, staticMod, proxy)
+
+	resp, err := d.HandleRequest(context.Background(), projectCtx("p1"), jsonrpcReq(1, "tools/list", nil))
+	if err != nil {
+		t.Fatalf("HandleRequest: %v", err)
+	}
+	r := parseResp(t, resp)
+	if r.Error == nil || r.Error.Code != -32000 || !strings.Contains(r.Error.Message, "service unavailable") {
+		t.Fatalf("required proxy error=%+v, want service unavailable", r.Error)
+	}
+	if len(r.Result) != 0 {
+		t.Fatalf("required proxy failure leaked partial result: %s", r.Result)
 	}
 }
 

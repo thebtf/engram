@@ -9,10 +9,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/moduletest"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
+
+func TestRequireServerURL_SessionAliasOverridesHostCanonical(t *testing.T) {
+	t.Setenv(config.EnvServerURL, "https://host.example")
+	t.Setenv(config.EnvServerURLAlt, "https://host-alias.example")
+	p := muxcore.ProjectContext{
+		ID: "session-alias",
+		Env: map[string]string{
+			config.EnvServerURLAlt: "https://session-alias.example",
+		},
+	}
+
+	got, err := NewModule().requireServerURL(p)
+	if err != nil {
+		t.Fatalf("requireServerURL: %v", err)
+	}
+	if want := "https://session-alias.example"; got != want {
+		t.Fatalf("requireServerURL=%q, want session alias %q", got, want)
+	}
+}
 
 // TestOnProjectRemoved_ClearsSlugCache verifies that OnProjectRemoved deletes
 // the slug cache entry for the removed project, so a subsequent session does not

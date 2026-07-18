@@ -49,7 +49,7 @@ var daemonVersion = version.Daemon
 
 const (
 	muxcoreDaemonFlag      = "--muxcore-daemon"
-	muxcoreEmbeddedVersion = "v0.27.1"
+	muxcoreEmbeddedVersion = "v0.28.0"
 	muxcoreNamespace       = "engram"
 )
 
