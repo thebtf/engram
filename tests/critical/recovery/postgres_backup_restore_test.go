@@ -62,6 +62,12 @@ func TestOperatorCanRestorePostgresBackup_RecoversDurableEngramDataAndRejectsUns
 	if err != nil {
 		t.Fatalf("operator recovery flow failed: %v\n%s", err, output)
 	}
+	// Deterministic mutation proof: the script must have observed an in-flight write
+	// transaction (non-null backend_xid) via pg_stat_activity before interrupting.
+	// A time-only approach (e.g. a fixed sleep) would not emit this line.
+	if !strings.Contains(string(output), "RECOVERY MUTATION PROOF:") {
+		t.Fatalf("interrupted-restore-negative did not prove an in-flight write transaction:\n%s", output)
+	}
 }
 
 // @critical

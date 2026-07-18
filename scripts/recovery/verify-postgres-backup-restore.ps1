@@ -22,6 +22,7 @@ $passwordFile = $null
 $vaultKeyFile = $null
 $wrongVaultKeyFile = $null
 $securitySamples = [System.Collections.Generic.List[string]]::new()
+$dynamicSecrets = [System.Collections.Generic.List[string]]::new()
 $ownerLabel = "engram.recovery.owner"
 $ownerMarkerName = ".engram-recovery-owner.json"
 
@@ -40,8 +41,12 @@ function Protect-RecoveryOutput {
     foreach ($secret in @($password, $vaultKey, $wrongVaultKey)) {
         if ($secret) { $redacted = $redacted.Replace($secret, "<redacted>") }
     }
+    foreach ($secret in $dynamicSecrets) {
+        if ($secret) { $redacted = $redacted.Replace($secret, "<redacted>") }
+    }
     $redacted
 }
+
 
 function Require-Command {
     param([Parameter(Mandatory)][string]$Name)
@@ -465,6 +470,7 @@ try {
     Write-Output "RECOVERY STAGE baseline-upgrade-seed"
     $source = Start-Postgres -Suffix "source" -User "source_admin"
     $sourceDSN = Get-DSN -Name $source -User "source_admin"
+    $dynamicSecrets.Add($sourceDSN)
     $sourceDSNFile = New-SecretFile -Name "source-dsn" -Value $sourceDSN
 
     $legacyRoot = Join-Path $tempRoot "baseline-source"
@@ -528,22 +534,66 @@ try {
     Restore-Globals -Name $target -User "target_admin"
     [void](Invoke-Docker -Arguments @("cp", (Join-Path $tempRoot "engram.dump"), "${target}:/tmp/engram.dump"))
 
-    $restoreArgs = @(
-        "exec", "--env", "PGPASSFILE=/tmp/engram-recovery.pgpass", $target,
-        "pg_restore", "--exit-on-error", "--single-transaction", "-U", "target_admin", "-d", "engram", "/tmp/engram.dump"
-    )
-    $restoreProcess = Start-Process -FilePath $DockerCommand -ArgumentList $restoreArgs -PassThru -NoNewWindow
-    Start-Sleep -Milliseconds 25
+    # Unique application name lets pg_stat_activity identify this exact backend.
+    $restoreAppName = "engram-restore-probe-$runID"
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $DockerCommand
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($arg in @(
+        "exec", "--env", "PGPASSFILE=/tmp/engram-recovery.pgpass",
+        "--env", "PGAPPNAME=$restoreAppName",
+        $target,
+        "pg_restore", "--exit-on-error", "--single-transaction",
+        "-U", "target_admin", "-d", "engram", "/tmp/engram.dump"
+    )) { [void]$startInfo.ArgumentList.Add($arg) }
+    $restoreProcess = [Diagnostics.Process]::new()
+    $restoreProcess.StartInfo = $startInfo
+    [void]$restoreProcess.Start()
+    $restoreStdout = $restoreProcess.StandardOutput.ReadToEndAsync()
+    $restoreStderr = $restoreProcess.StandardError.ReadToEndAsync()
+
+    # Poll pg_stat_activity until the restore backend has entered a write transaction.
+    $xidQuery = "SELECT backend_xid::text FROM pg_stat_activity WHERE application_name='" + $restoreAppName + "' AND backend_xid IS NOT NULL LIMIT 1"
+    $mutationObserved = $false
+    $pollDeadline = [DateTime]::UtcNow.AddSeconds(120)
+    while ([DateTime]::UtcNow -lt $pollDeadline) {
+        if ($restoreProcess.HasExited) {
+            throw "pg_restore exited (code=$($restoreProcess.ExitCode)) before an in-flight write transaction was observed; interrupted-restore-negative requires mutation proof"
+        }
+        $probe = Invoke-Docker -Arguments @(
+            "exec", "--env", "PGPASSFILE=/tmp/engram-recovery.pgpass", $target,
+            "psql", "-X", "-At", "-v", "ON_ERROR_STOP=1", "-U", "target_admin", "-d", "engram", "-c", $xidQuery
+        ) -AllowFailure
+        if ($probe.ExitCode -eq 0 -and $probe.Output.Trim() -match '^\d+$') {
+            Write-Output "RECOVERY MUTATION PROOF: application_name=$restoreAppName backend_xid=$($probe.Output.Trim())"
+            $mutationObserved = $true
+            break
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not $mutationObserved) {
+        $restoreProcess.Kill()
+        $restoreProcess.WaitForExit()
+        throw "no in-flight write transaction observed for application_name='$restoreAppName' within 120 s; interrupted-restore-negative cannot be proven"
+    }
+
+    # Confirmed write transaction in progress; stop the container hard to simulate power loss.
     [void](Invoke-Docker -Arguments @("stop", "--time", "0", $target) -AllowFailure)
     $restoreProcess.WaitForExit()
+    if ($restoreProcess.ExitCode -eq 0) {
+        throw "pg_restore reported success after container was stopped; interrupted-restore-negative failed"
+    }
+
     [void](Invoke-Docker -Arguments @("start", $target))
     Wait-Postgres -Name $target -User "target_admin"
-    Start-Sleep -Milliseconds 500
     Assert-DatabaseEmpty -Name $target -User "target_admin"
 
     Write-Output "RECOVERY STAGE clean-restore-readback"
     [void](Restore-Database -Name $target -User "target_admin" -Archive (Join-Path $tempRoot "engram.dump"))
     $targetDSN = Get-DSN -Name $target -User "target_admin"
+    $dynamicSecrets.Add($targetDSN)
     $targetDSNFile = New-SecretFile -Name "target-dsn" -Value $targetDSN
     [void](Invoke-Fixture -SourceRoot $repoRoot -Action "assert" -DSNFile $targetDSNFile -KeyFile $vaultKeyFile)
 
