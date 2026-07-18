@@ -16,8 +16,21 @@ import (
 // follows the OTel Go conventions for instrumentation-scope naming and keeps
 // per-module dashboards distinct from the framework-level metrics in metrics.go.
 //
+// When an Engram-owned OTLP runtime is active, MeterFor returns a meter backed
+// by that owned provider so module metrics flow through the same pipeline as
+// the framework wrapper metrics. After final shutdown (or when no runtime was
+// ever configured) it falls back to otel.GetMeterProvider(), matching the
+// no-op behaviour of the disabled path.
+//
 // Passing an empty moduleName is safe: it returns a meter with an unusual scope
 // name ("github.com/thebtf/engram/") but does not panic.
 func MeterFor(moduleName string) metric.Meter {
-	return otel.GetMeterProvider().Meter("github.com/thebtf/engram/" + moduleName)
+	const prefix = "github.com/thebtf/engram/"
+	instrumentsMu.RLock()
+	p := instrumentProvider
+	instrumentsMu.RUnlock()
+	if p != nil {
+		return p.Meter(prefix + moduleName)
+	}
+	return otel.GetMeterProvider().Meter(prefix + moduleName)
 }
