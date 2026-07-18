@@ -142,10 +142,12 @@ func TestOperatorRecoveryScavengesKilledRunWithoutTouchingLiveOwner(t *testing.T
 }
 
 // @critical
-// TestOperatorRecoveryScavengerSkipsMalformedMarker proves that a directory
-// under the engram-recovery-* prefix whose .engram-recovery-owner.json has a
-// missing, wrong-type, or non-matching schema_version/prefix field is not
-// mistaken for a live owner and is instead cleaned up by the scavenger.
+// TestOperatorRecoveryScavengerSkipsMalformedMarker proves that the scavenger
+// exits successfully and preserves every directory whose .engram-recovery-owner.json
+// is malformed (invalid JSON), has a missing required field, carries a wrong-type
+// schema_version, or has a mismatched prefix. Only a valid schema-1 marker with
+// a confirmed inactive owner may be scavenged; unknown/malformed state must fail
+// closed against deletion.
 func TestOperatorRecoveryScavengerSkipsMalformedMarker(t *testing.T) {
 	for _, command := range []string{"docker", "pwsh"} {
 		if _, err := exec.LookPath(command); err != nil {
@@ -179,18 +181,18 @@ func TestOperatorRecoveryScavengerSkipsMalformedMarker(t *testing.T) {
 			if err := os.Mkdir(directory, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			defer os.RemoveAll(directory)
+			// Explicit cleanup ensures no test residue remains regardless of outcome.
+			t.Cleanup(func() { removeRecoveryResidue(prefix) })
 			content := strings.ReplaceAll(tc.content, "PLACEHOLDER", prefix)
 			if err := os.WriteFile(filepath.Join(directory, ".engram-recovery-owner.json"), []byte(content), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			createRecoveryResidue(t, prefix, image)
-			defer removeRecoveryResidue(prefix)
 
 			runRecoveryScavenger(t, repoRoot, script)
-			// The directory with the malformed marker must be cleaned up because
-			// the scavenger cannot confirm a live owner.
-			assertRecoveryResidue(t, prefix, false)
+			// Malformed/unknown markers must be preserved — the scavenger fails closed
+			// and must not delete a directory it cannot positively identify as stale.
+			assertRecoveryResidue(t, prefix, true)
 		})
 	}
 }

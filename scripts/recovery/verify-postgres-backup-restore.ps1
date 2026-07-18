@@ -157,13 +157,13 @@ function Remove-StaleRecoveryRuns {
             if ($directory.Name -cnotmatch '^engram-recovery-[0-9a-f]{10}$') { continue }
             $markerPath = Join-Path $directory.FullName $ownerMarkerName
             if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { continue }
-            # Parse the marker and validate it under StrictMode: accessing a missing
-            # property on a PSCustomObject throws PropertyNotFoundException.  Treat any
-            # parse failure or schema mismatch as no live owner and fall through to cleanup.
-            $hasLiveOwner = $false
+            # Parse the marker and validate required properties without StrictMode throws.
+            # On malformed JSON, null/missing/wrong-type fields, schema != 1, or prefix
+            # mismatch: fail closed — continue and preserve the directory/resources.
+            $isValidMarker = $false
             try {
                 $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json -Depth 8
-                # Read properties only via PSObject.Properties to avoid StrictMode throw.
+                # Read properties via PSObject.Properties to avoid StrictMode throw on missing keys.
                 $markerSchemaVersion = $null
                 $markerPrefix = $null
                 $markerPid = $null
@@ -172,20 +172,18 @@ function Remove-StaleRecoveryRuns {
                 if ($null -ne $marker.PSObject.Properties['prefix'])         { $markerPrefix = $marker.prefix }
                 if ($null -ne $marker.PSObject.Properties['pid'])            { $markerPid = $marker.pid }
                 if ($null -ne $marker.PSObject.Properties['process_start_time_utc_ticks']) { $markerTicks = $marker.process_start_time_utc_ticks }
-                if ($markerSchemaVersion -is [int] -and [int]$markerSchemaVersion -eq 1 -and
+                if (($markerSchemaVersion -is [int] -or $markerSchemaVersion -is [int64]) -and [int64]$markerSchemaVersion -eq 1L -and
                     $markerPrefix -is [string] -and [string]$markerPrefix -ceq $directory.Name -and
-                    $markerPid -is [int] -and $markerTicks -is [long]) {
-                    # Confirmed valid marker; check whether the owner process is still live.
-                    $ownerProcess = Get-Process -Id ([int]$markerPid) -ErrorAction SilentlyContinue
-                    if ($null -ne $ownerProcess -and $ownerProcess.StartTime.ToUniversalTime().Ticks -eq [long]$markerTicks) {
-                        $hasLiveOwner = $true
-                    }
+                    ($markerPid -is [int] -or $markerPid -is [int64]) -and ($markerTicks -is [long] -or $markerTicks -is [int64])) {
+                    $isValidMarker = $true
                 }
             } catch {
-                # Malformed JSON, type coercion failure, or StrictMode property access —
-                # cannot confirm a live owner; fall through to cleanup.
+                # Malformed JSON or type coercion failure — cannot confirm state; preserve.
             }
-            if ($hasLiveOwner) { continue }
+            # Fail closed: unknown/malformed state must not be scavenged.
+            if (-not $isValidMarker) { continue }
+            # Valid schema-1 marker: delegate process-state check to the canonical authority.
+            if (Test-RecoveryOwnerActive -Marker $marker) { continue }
             $filter = "label=$ownerLabel=$($directory.Name)"
             $containerIDs = Get-DockerResultLines (Invoke-Docker -Arguments @("ps", "--all", "--quiet", "--filter", $filter) -AllowFailure)
             foreach ($id in $containerIDs) { [void](Invoke-Docker -Arguments @("rm", "--force", "--volumes", $id)) }
@@ -506,7 +504,7 @@ try {
     $baselineCommit = $baselineResolve.Output.Trim()
     Write-Output "RECOVERY STAGE baseline-upgrade-seed resolved $BaselineRef=$baselineCommit"
 
-    [void](Invoke-Native -FilePath "git" -Arguments @("archive", "--format=tar", "--output=$legacyTar", $baselineCommit))
+    [void](Invoke-Native -FilePath "git" -Arguments @("-C", $repoRoot, "archive", "--format=tar", "--output=$legacyTar", $baselineCommit))
     [void](Invoke-Native -FilePath "tar" -Arguments @("-xf", $legacyTar, "-C", $legacyRoot))
     $legacyFixture = Join-Path $legacyRoot "tests\fixtures\recovery\fixture"
     New-Item -ItemType Directory -Path $legacyFixture -Force | Out-Null
