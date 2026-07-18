@@ -364,7 +364,28 @@ function Invoke-Fixture {
 
 function Assert-DatabaseEmpty {
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$User)
-    $query = "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S');"
+    # A restore target is empty only when it has no non-system user schema/object state.
+    # PostgreSQL system schemas (pg_catalog, information_schema, pg_* temp/toast) and
+    # the default empty public schema plus the plpgsql extension are allowed.
+    # Five categories are checked; any nonzero total rejects the target.
+    $query = @"
+SELECT
+  (SELECT count(*) FROM pg_namespace
+   WHERE nspname NOT IN ('public','pg_catalog','information_schema')
+     AND nspname !~ '^pg_') +
+  (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+   WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+     AND n.nspname !~ '^pg_'
+     AND c.relkind IN ('r','p','v','m','S')) +
+  (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+   WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+     AND n.nspname !~ '^pg_') +
+  (SELECT count(*) FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace
+   WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+     AND n.nspname !~ '^pg_'
+     AND t.typtype IN ('d','e','r','m')) +
+  (SELECT count(*) FROM pg_extension WHERE extname <> 'plpgsql')
+"@
     $count = (Invoke-Docker -Arguments @(
         "exec", "--env", "PGPASSFILE=/tmp/engram-recovery.pgpass", $Name, "psql", "-X", "-At", "-v", "ON_ERROR_STOP=1", "-U", $User, "-d", "engram", "-c", $query
     )).Output.Trim()
@@ -539,9 +560,12 @@ try {
     Write-Output "RECOVERY STAGE nonempty-target-negative"
     $nonEmpty = Start-Postgres -Suffix "nonempty" -User "target_admin"
     Restore-Globals -Name $nonEmpty -User "target_admin"
+    # Use a non-public schema plus a SQL function — an object class the old public-relation-only
+    # query would have accepted; the new bounded catalog query must reject it.
     [void](Invoke-Docker -Arguments @(
         "exec", "--env", "PGPASSFILE=/tmp/engram-recovery.pgpass", $nonEmpty,
-        "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "target_admin", "-d", "engram", "-c", "CREATE TABLE must_block_restore(id integer);"
+        "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "target_admin", "-d", "engram", "-c",
+        "CREATE SCHEMA engram_recovery_blocked; CREATE FUNCTION engram_recovery_blocked.noop() RETURNS void LANGUAGE sql AS '';"
     ))
     $nonEmptyRejected = $false
     try { [void](Restore-Database -Name $nonEmpty -User "target_admin" -Archive (Join-Path $tempRoot "engram.dump")) } catch { $nonEmptyRejected = $true }
@@ -582,8 +606,9 @@ try {
     $restoreStdout = $restoreProcess.StandardOutput.ReadToEndAsync()
     $restoreStderr = $restoreProcess.StandardError.ReadToEndAsync()
 
-    # Poll pg_stat_activity until the restore backend has entered a write transaction.
-    $xidQuery = "SELECT backend_xid::text FROM pg_stat_activity WHERE application_name='" + $restoreAppName + "' AND backend_xid IS NOT NULL LIMIT 1"
+    # Detect a write transaction and terminate that exact backend in the same server-side query.
+    # This removes the host-side race where pg_restore could commit between observation and docker stop.
+    $xidQuery = "WITH victim AS MATERIALIZED (SELECT pid, backend_xid::text AS xid FROM pg_stat_activity WHERE application_name='" + $restoreAppName + "' AND backend_xid IS NOT NULL LIMIT 1) SELECT xid FROM victim WHERE pg_terminate_backend(pid);"
     $mutationObserved = $false
     $pollDeadline = [DateTime]::UtcNow.AddSeconds(120)
     while ([DateTime]::UtcNow -lt $pollDeadline) {
@@ -607,15 +632,11 @@ try {
         throw "no in-flight write transaction observed for application_name='$restoreAppName' within 120 s; interrupted-restore-negative cannot be proven"
     }
 
-    # Confirmed write transaction in progress; stop the container hard to simulate power loss.
-    [void](Invoke-Docker -Arguments @("stop", "--time", "0", $target) -AllowFailure)
+    # The probe terminated the backend while its write transaction was active.
     $restoreProcess.WaitForExit()
     if ($restoreProcess.ExitCode -eq 0) {
-        throw "pg_restore reported success after container was stopped; interrupted-restore-negative failed"
+        throw "pg_restore reported success after its active backend was terminated; interrupted-restore-negative failed"
     }
-
-    [void](Invoke-Docker -Arguments @("start", $target))
-    Wait-Postgres -Name $target -User "target_admin"
     Assert-DatabaseEmpty -Name $target -User "target_admin"
 
     Write-Output "RECOVERY STAGE clean-restore-readback"
