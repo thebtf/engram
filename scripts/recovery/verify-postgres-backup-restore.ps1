@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$DockerCommand = "docker",
-    [string]$PostgresImage = $(if ($env:ENGRAM_RECOVERY_POSTGRES_IMAGE) { $env:ENGRAM_RECOVERY_POSTGRES_IMAGE } else { "engram:r2-accepted-65837cc7-postgres" }),
+    [string]$PostgresImage = $(if ($env:ENGRAM_RECOVERY_POSTGRES_IMAGE) { $env:ENGRAM_RECOVERY_POSTGRES_IMAGE } else { "engram:r2-postgres" }),
     [string]$BaselineRef = "v6.42.0",
     [switch]$ScavengeOnly
 )
@@ -157,14 +157,35 @@ function Remove-StaleRecoveryRuns {
             if ($directory.Name -cnotmatch '^engram-recovery-[0-9a-f]{10}$') { continue }
             $markerPath = Join-Path $directory.FullName $ownerMarkerName
             if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { continue }
+            # Parse the marker and validate it under StrictMode: accessing a missing
+            # property on a PSCustomObject throws PropertyNotFoundException.  Treat any
+            # parse failure or schema mismatch as no live owner and fall through to cleanup.
+            $hasLiveOwner = $false
             try {
                 $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json -Depth 8
+                # Read properties only via PSObject.Properties to avoid StrictMode throw.
+                $markerSchemaVersion = $null
+                $markerPrefix = $null
+                $markerPid = $null
+                $markerTicks = $null
+                if ($null -ne $marker.PSObject.Properties['schema_version']) { $markerSchemaVersion = $marker.schema_version }
+                if ($null -ne $marker.PSObject.Properties['prefix'])         { $markerPrefix = $marker.prefix }
+                if ($null -ne $marker.PSObject.Properties['pid'])            { $markerPid = $marker.pid }
+                if ($null -ne $marker.PSObject.Properties['process_start_time_utc_ticks']) { $markerTicks = $marker.process_start_time_utc_ticks }
+                if ($markerSchemaVersion -is [int] -and [int]$markerSchemaVersion -eq 1 -and
+                    $markerPrefix -is [string] -and [string]$markerPrefix -ceq $directory.Name -and
+                    $markerPid -is [int] -and $markerTicks -is [long]) {
+                    # Confirmed valid marker; check whether the owner process is still live.
+                    $ownerProcess = Get-Process -Id ([int]$markerPid) -ErrorAction SilentlyContinue
+                    if ($null -ne $ownerProcess -and $ownerProcess.StartTime.ToUniversalTime().Ticks -eq [long]$markerTicks) {
+                        $hasLiveOwner = $true
+                    }
+                }
             } catch {
-                continue
+                # Malformed JSON, type coercion failure, or StrictMode property access —
+                # cannot confirm a live owner; fall through to cleanup.
             }
-            if ([int]$marker.schema_version -ne 1 -or [string]$marker.prefix -cne $directory.Name) { continue }
-            if (Test-RecoveryOwnerActive -Marker $marker) { continue }
-
+            if ($hasLiveOwner) { continue }
             $filter = "label=$ownerLabel=$($directory.Name)"
             $containerIDs = Get-DockerResultLines (Invoke-Docker -Arguments @("ps", "--all", "--quiet", "--filter", $filter) -AllowFailure)
             foreach ($id in $containerIDs) { [void](Invoke-Docker -Arguments @("rm", "--force", "--volumes", $id)) }
@@ -334,9 +355,9 @@ function Invoke-Fixture {
     [void]$process.Start()
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
-    Assert-NoSecretExposure -Phase "fixture-$Action"
     $process.WaitForExit()
     $output = (($stdout.Result, $stderr.Result) -join [Environment]::NewLine).Trim()
+    Assert-NoSecretExposure -Phase "fixture-$Action"
     if ($process.ExitCode -ne 0) {
         throw (Protect-RecoveryOutput -Text "recovery fixture $Action failed with exit code $($process.ExitCode): $output")
     }
@@ -476,7 +497,16 @@ try {
     $legacyRoot = Join-Path $tempRoot "baseline-source"
     New-Item -ItemType Directory -Path $legacyRoot | Out-Null
     $legacyTar = Join-Path $tempRoot "baseline.tar"
-    [void](Invoke-Native -FilePath "git" -Arguments @("archive", "--format=tar", "--output=$legacyTar", $BaselineRef))
+    # Resolve $BaselineRef to a commit before git archive so shallow clones or
+    # repos without the tag emit an actionable error rather than a cryptic failure.
+    $baselineResolve = Invoke-Native -FilePath "git" -Arguments @("-C", $repoRoot, "rev-parse", "--verify", "$BaselineRef^{commit}") -AllowFailure
+    if ($baselineResolve.ExitCode -ne 0) {
+        throw "baseline ref '$BaselineRef' cannot be resolved to a commit in this repository; run 'git fetch --tags' or 'git fetch --unshallow' to fetch history, or pass -BaselineRef with a locally available ref"
+    }
+    $baselineCommit = $baselineResolve.Output.Trim()
+    Write-Output "RECOVERY STAGE baseline-upgrade-seed resolved $BaselineRef=$baselineCommit"
+
+    [void](Invoke-Native -FilePath "git" -Arguments @("archive", "--format=tar", "--output=$legacyTar", $baselineCommit))
     [void](Invoke-Native -FilePath "tar" -Arguments @("-xf", $legacyTar, "-C", $legacyRoot))
     $legacyFixture = Join-Path $legacyRoot "tests\fixtures\recovery\fixture"
     New-Item -ItemType Directory -Path $legacyFixture -Force | Out-Null

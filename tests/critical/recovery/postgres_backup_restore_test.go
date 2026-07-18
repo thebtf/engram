@@ -80,7 +80,7 @@ func TestOperatorRecoveryScavengesKilledRunWithoutTouchingLiveOwner(t *testing.T
 	repoRoot, script := recoveryPaths(t)
 	image := os.Getenv("ENGRAM_RECOVERY_POSTGRES_IMAGE")
 	if image == "" {
-		image = "engram:r2-accepted-65837cc7-postgres"
+		image = "engram:r2-postgres"
 	}
 	dockerOutput(t, "image", "inspect", image)
 
@@ -139,6 +139,60 @@ func TestOperatorRecoveryScavengesKilledRunWithoutTouchingLiveOwner(t *testing.T
 	_, _ = liveProcess.Process.Wait()
 	runRecoveryScavenger(t, repoRoot, script)
 	assertRecoveryResidue(t, livePrefix, false)
+}
+
+// @critical
+// TestOperatorRecoveryScavengerSkipsMalformedMarker proves that a directory
+// under the engram-recovery-* prefix whose .engram-recovery-owner.json has a
+// missing, wrong-type, or non-matching schema_version/prefix field is not
+// mistaken for a live owner and is instead cleaned up by the scavenger.
+func TestOperatorRecoveryScavengerSkipsMalformedMarker(t *testing.T) {
+	for _, command := range []string{"docker", "pwsh"} {
+		if _, err := exec.LookPath(command); err != nil {
+			t.Fatalf("recovery requires %s: %v", command, err)
+		}
+	}
+	repoRoot, script := recoveryPaths(t)
+	image := os.Getenv("ENGRAM_RECOVERY_POSTGRES_IMAGE")
+	if image == "" {
+		image = "engram:r2-postgres"
+	}
+	dockerOutput(t, "image", "inspect", image)
+
+	type markerCase struct {
+		name    string
+		content string
+	}
+	cases := []markerCase{
+		{"malformed-json", `{not-json`},
+		{"missing-schema-version", `{"prefix":"PLACEHOLDER"}`},
+		{"wrong-schema-version", `{"schema_version":2,"prefix":"PLACEHOLDER"}`},
+		{"schema-version-not-int", `{"schema_version":"1","prefix":"PLACEHOLDER"}`},
+		{"wrong-prefix", `{"schema_version":1,"prefix":"engram-recovery-wrong"}`},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			prefix := newRecoveryPrefix(t)
+			directory := filepath.Join(os.TempDir(), prefix)
+			if err := os.Mkdir(directory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(directory)
+			content := strings.ReplaceAll(tc.content, "PLACEHOLDER", prefix)
+			if err := os.WriteFile(filepath.Join(directory, ".engram-recovery-owner.json"), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			createRecoveryResidue(t, prefix, image)
+			defer removeRecoveryResidue(prefix)
+
+			runRecoveryScavenger(t, repoRoot, script)
+			// The directory with the malformed marker must be cleaned up because
+			// the scavenger cannot confirm a live owner.
+			assertRecoveryResidue(t, prefix, false)
+		})
+	}
 }
 
 func newRecoveryPrefix(t *testing.T) string {
