@@ -9,7 +9,22 @@ permissions:
   contents: write
 
 jobs:
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Test plugin scripts
+        run: node --test --test-concurrency=1 plugin/engram/hooks/*.test.js plugin/engram/scripts/*.test.js
+        env:
+          ENGRAM_TOKEN: release-test-keycard
+
   build:
+    needs: plugin
     runs-on: ubuntu-latest
     strategy:
       matrix:
