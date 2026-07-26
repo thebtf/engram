@@ -2,14 +2,14 @@
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "engram",
   "version": "6.46.2",
-  "description": "Persistent memory for Claude Code — captures observations, stores knowledge across sessions, injects relevant context automatically",
+  "description": "Persistent memory for Claude Code and Oh My Pi",
   "owner": {
     "name": "thebtf"
   },
   "plugins": [
     {
       "name": "engram",
-      "description": "Persistent memory system with PostgreSQL+pgvector backend and MCP integration",
+      "description": "Persistent shared memory with MCP integration",
       "version": "6.46.2",
       "author": {
         "name": "thebtf"

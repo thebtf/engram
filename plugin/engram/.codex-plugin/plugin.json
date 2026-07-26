@@ -1,6 +1,6 @@
 {
   "name": "engram",
-  "version": "6.46.1",
+  "version": "6.46.2",
   "description": "Persistent shared memory for Codex. Requires ENGRAM_URL and ENGRAM_TOKEN from a dashboard-issued worker keycard; the server operator key must stay on the server host.",
   "author": {
     "name": "thebtf"
