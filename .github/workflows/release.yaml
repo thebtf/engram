@@ -57,6 +57,11 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
+      - name: Test plugin scripts
+        run: node --test --test-concurrency=1 plugin/engram/hooks/*.test.js plugin/engram/scripts/*.test.js
+        env:
+          ENGRAM_TOKEN: release-test-keycard
+
       - name: Run GoReleaser
         run: goreleaser release --clean
         env:

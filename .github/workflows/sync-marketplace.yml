@@ -38,11 +38,26 @@ jobs:
 
       - name: Sync plugin files
         run: |
-          rm -rf marketplace/engram marketplace/plugins/engram marketplace/.agents/plugins/marketplace.json
+          set -euo pipefail
+          rm -rf marketplace/engram marketplace/plugins/engram \
+            marketplace/.agents/plugins/marketplace.json \
+            marketplace/.claude-plugin/marketplace.json \
+            marketplace/.omp-plugin/marketplace.json
           rm -f marketplace/marketplace.json
-          mkdir -p marketplace/plugins marketplace/.agents/plugins
+          mkdir -p marketplace/plugins marketplace/.agents/plugins \
+            marketplace/.claude-plugin marketplace/.omp-plugin
           cp -r plugin/engram marketplace/engram
           cp -r plugin/engram marketplace/plugins/engram
+          VERSION=$(jq -r .version plugin/engram/.claude-plugin/plugin.json)
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "::error::version missing in plugin/engram/.claude-plugin/plugin.json"
+            exit 1
+          fi
+          jq --arg version "$VERSION" '
+            .version = $version
+            | .plugins |= map(.version = $version | .source = "./engram")
+          ' .claude-plugin/marketplace.json > marketplace/.claude-plugin/marketplace.json
+          cp marketplace/.claude-plugin/marketplace.json marketplace/.omp-plugin/marketplace.json
           cat > marketplace/.agents/plugins/marketplace.json <<'JSON'
           {
             "name": "engram-marketplace",
@@ -72,7 +87,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to sync"
           else
-            VERSION=$(jq -r .version engram/.claude-plugin/plugin.json)
             git commit -m "chore: sync engram plugin to v${VERSION}"
             git push origin main
           fi
