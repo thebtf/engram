@@ -1,3 +1,7 @@
+---
+description: Diagnose Engram MCP connectivity and subsystem health
+---
+
 # Engram Doctor
 
 Diagnose Engram connectivity and health. Tests the actual MCP connection, not just environment variables.

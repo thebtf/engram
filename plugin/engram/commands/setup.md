@@ -1,3 +1,7 @@
+---
+description: Configure Engram for Claude Code, Oh My Pi, or Codex
+---
+
 # Engram Setup (v6 — two-tier token model)
 
 Configure the connection to your Engram server.
@@ -10,7 +14,7 @@ Configure the connection to your Engram server.
 > If you are upgrading from v5.x: you MUST issue a fresh keycard via the
 > dashboard before this session can authenticate. See step 2 below.
 
-## Codex setup
+## OMP and Codex setup
 
 > **Note (Codex ≥ 0.139):** Codex stopped forwarding
 > `[shell_environment_policy.set]` values to plugin MCP server children in
@@ -40,9 +44,9 @@ chmod 600 ~/.engram/config.json
 On Windows the file lives in your user profile; NTFS ACLs inherited from the
 parent directory already restrict access to your account.
 
-The engram plugin reads this file as the final fallback in its credential
-chain, so it works in Codex, Claude Code, and any other harness that does
-not forward env vars to plugin children.
+The engram plugin reads this file as the final fallback, so it works in OMP,
+Codex, Claude Code, and any other harness that does not forward environment
+variables to plugin children.
 
 ### Legacy path (Codex < 0.139 only)
 
@@ -130,14 +134,14 @@ it there triggers a v6 warning at daemon startup.
 If the user has a stale `ENGRAM_API_TOKEN` entry, remove it too (v5-era
 name, no longer read).
 
-For Codex, create `~/.engram/config.json` as shown in "Codex setup" above.
-The config file also works as a universal fallback for any harness that does not
-forward env vars to plugin children.
+For OMP and Codex, create `~/.engram/config.json` as shown in "OMP and Codex
+setup" above. The config file also works as a universal fallback for any harness
+that does not forward environment variables to plugin children.
 
 ### 4. Restart the agent host
 
 > Settings are only read when the agent host starts. Please **close and reopen
-> Claude Code/Codex or start a new Codex thread** for the changes to take
+> Claude Code or OMP, or start a new Codex thread** for the changes to take
 > effect. The plugin wrapper exits non-zero when `ENGRAM_URL` or
 > `ENGRAM_TOKEN` is missing, so you'll see a clear error rather than silent
 > partial-tool degradation.
@@ -208,3 +212,7 @@ Set it the same way you set credentials for your harness:
 Truthy values: `true` (boolean) or the strings `1`/`true`/`yes`/`on`
 (case-insensitive); unset or anything else leaves hooks fully active. Reversible
 — remove the var/key to restore. Explicit env always wins over the config file.
+
+OMP 17.x loads the MCP server, skills, and slash commands from the marketplace,
+but does not execute Claude `hooks.json`; quiet mode therefore has no hook effect
+under OMP.

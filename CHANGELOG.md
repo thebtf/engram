@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.46.2] - 2026-07-26
+
+### Fixed
+
+- **Marketplace version propagation.** The repository and published marketplace catalogs now derive the Engram plugin version from the canonical plugin manifest, preventing OMP and Claude Code from pinning current plugin content under the stale `4.0.4` cache version.
+- **Oh My Pi compatibility.** OMP receives a native `.omp-plugin/marketplace.json`, reuses stable plugin data across versioned marketplace cache slots, and has explicit installation and configuration guidance. Claude lifecycle hooks remain Claude-only; OMP loads the MCP server, skills, and supported slash commands. Legacy commands that called removed admin actions or server-only operator endpoints are no longer shipped.
+
 ## [6.46.1] - 2026-07-17
 
 ### Fixed
@@ -1900,7 +1907,8 @@ Initial release with full feature set.
 
 Originally based on [claude-mnemonic](https://github.com/lukaszraczylo/claude-mnemonic) by Lukasz Raczylo.
 
-[Unreleased]: https://github.com/thebtf/engram/compare/v6.46.1...HEAD
+[Unreleased]: https://github.com/thebtf/engram/compare/v6.46.2...HEAD
+[6.46.2]: https://github.com/thebtf/engram/compare/v6.46.1...v6.46.2
 [6.46.1]: https://github.com/thebtf/engram/compare/v6.46.0...v6.46.1
 [6.46.0]: https://github.com/thebtf/engram/compare/v6.45.0...v6.46.0
 [6.45.0]: https://github.com/thebtf/engram/compare/v6.44.1...v6.45.0

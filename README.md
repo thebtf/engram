@@ -245,22 +245,32 @@ before proxying browser routes.
 <!-- redoc:start:installation -->
 ## Installation
 
-### Plugin Install (recommended)
+### Plugin install (recommended)
 
-The plugin registers the MCP server, hooks, and slash commands automatically.
+The marketplace plugin registers the MCP server, skills, and slash commands in
+Claude Code and Oh My Pi. Claude Code also activates the bundled lifecycle hooks;
+OMP 17.x does not execute Claude `hooks.json`, so automatic capture and context
+injection remain Claude-only.
 
-```bash
-# Set environment variables first
-ENGRAM_URL=http://your-server:37777
-ENGRAM_TOKEN=engram_your_workstation_keycard
-```
+Install the marketplace plugin first, then run `/engram:setup` to create the
+universal `~/.engram/config.json` configuration and restart the host.
+
+Claude Code:
 
 ```
 /plugin marketplace add thebtf/engram-marketplace
 /plugin install engram
 ```
 
-Restart Claude Code. Everything is configured.
+Oh My Pi:
+
+```bash
+omp plugin marketplace add thebtf/engram-marketplace
+omp plugin install engram@engram
+```
+
+Restart the agent host after configuration.
+
 
 ### Docker Compose
 

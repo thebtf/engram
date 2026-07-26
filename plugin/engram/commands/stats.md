@@ -1,3 +1,7 @@
+---
+description: Display Engram memory health and usage statistics
+---
+
 # Memory Statistics
 
 Display engram memory system health and analytics at a glance.

@@ -7,6 +7,7 @@ const { execFileSync } = require("node:child_process");
 
 const {
   appendStartupDiagnosticLog,
+  childEnvForEngram,
   configuredEnvValue,
   describeConfigFile,
   describeEnvValue,
@@ -16,6 +17,7 @@ const {
   readEngramConfigFile,
   resolveConfigFilePath,
   resolvePluginData,
+  resolvePluginRoot,
   spawnFailureMessage,
   trimStartupDiagnosticLog,
 } = require("./run-engram.js");
@@ -65,6 +67,24 @@ test("MCP configs never interpolate user_config in an env block", () => {
     assert.ok(server.env_vars.includes("ENGRAM_URL"), `ENGRAM_URL missing in ${rel}`);
     assert.ok(server.env_vars.includes("ENGRAM_TOKEN"), `ENGRAM_TOKEN missing in ${rel}`);
   }
+});
+
+test("release-facing plugin and marketplace versions stay aligned", () => {
+  const repoRoot = path.resolve(__dirname, "..", "..", "..");
+  const readJson = (...segments) => JSON.parse(fs.readFileSync(path.join(repoRoot, ...segments), "utf8"));
+  const claudePlugin = readJson("plugin", "engram", ".claude-plugin", "plugin.json");
+  const codexPlugin = readJson("plugin", "engram", ".codex-plugin", "plugin.json");
+  const rootPlugin = readJson(".claude-plugin", "plugin.json");
+  const claudeMarketplace = readJson(".claude-plugin", "marketplace.json");
+  const ompMarketplace = readJson(".omp-plugin", "marketplace.json");
+
+  assert.equal(claudePlugin.version, "6.46.2");
+  assert.equal(codexPlugin.version, claudePlugin.version);
+  assert.equal(rootPlugin.version, claudePlugin.version);
+  assert.equal(claudeMarketplace.version, claudePlugin.version);
+  assert.equal(claudeMarketplace.plugins[0].version, claudePlugin.version);
+  assert.equal(ompMarketplace.version, claudePlugin.version);
+  assert.equal(ompMarketplace.plugins[0].version, claudePlugin.version);
 });
 
 test("Codex MCP config launches wrapper when cwd is the plugin root", () => {
@@ -161,6 +181,27 @@ test("infers Codex plugin data dir from installed cache root", () => {
     inferCodexPluginDataDir(pluginRoot),
     path.join(codexHome, "plugins", "data", "engram-marketplace-engram")
   );
+});
+
+test("infers OMP plugin data dir from installed cache root", () => {
+  const ompHome = path.join(os.tmpdir(), "omp-home");
+  const pluginRoot = path.join(
+    ompHome,
+    "plugins",
+    "cache",
+    "plugins",
+    "engram___engram___6.46.2"
+  );
+
+  assert.equal(
+    inferCodexPluginDataDir(pluginRoot),
+    path.join(ompHome, "plugins", "data", "engram-engram")
+  );
+});
+
+test("OMP cache root without a plugin slot fails open", () => {
+  const ompCacheRoot = path.join(os.tmpdir(), "omp-home", "plugins", "cache", "plugins");
+  assert.equal(inferCodexPluginDataDir(ompCacheRoot), "");
 });
 
 test("explicit plugin data env takes precedence over inferred Codex path", () => {
@@ -264,6 +305,9 @@ test("startup diagnostic classifies env values without leaking token contents", 
     ENGRAM_SERVER_URL: "",
     ENGRAM_CLAUDE_USERCONFIG_URL: "${user_config.server_url}",
     CLAUDE_PLUGIN_OPTION_api_token: "engram_secret_keycard_value",
+    CLAUDE_PLUGIN_OPTION_SERVER_URL: "https://uppercase.example.test/mcp",
+    CLAUDE_PLUGIN_OPTION_API_TOKEN: "engram_uppercase_secret",
+    ENGRAM_CONFIG_FILE: "/tmp/engram-config.json",
   });
 
   assert.match(diagnostic, /ENGRAM_URL=present\(len=25\)/);
@@ -271,6 +315,10 @@ test("startup diagnostic classifies env values without leaking token contents", 
   assert.match(diagnostic, /ENGRAM_SERVER_URL=empty/);
   assert.match(diagnostic, /ENGRAM_CLAUDE_USERCONFIG_URL=placeholder/);
   assert.match(diagnostic, /CLAUDE_PLUGIN_OPTION_api_token=redacted\(len=27\)/);
+  assert.match(diagnostic, /CLAUDE_PLUGIN_OPTION_SERVER_URL=present\(len=34\)/);
+  assert.match(diagnostic, /CLAUDE_PLUGIN_OPTION_API_TOKEN=redacted\(len=23\)/);
+  assert.match(diagnostic, /ENGRAM_CONFIG_FILE=present\(len=23\)/);
+  assert.doesNotMatch(diagnostic, /engram_uppercase_secret/);
   assert.doesNotMatch(diagnostic, /engram_secret_keycard_value/);
 });
 
@@ -295,6 +343,38 @@ test("wrapper falls back to CLAUDE_PLUGIN_OPTION userConfig env names", () => {
   } finally {
     restoreEnv("ENGRAM_TOKEN", previousToken);
     restoreEnv("CLAUDE_PLUGIN_OPTION_api_token", previousOption);
+  }
+});
+
+test("child environment drops the server-only operator token", () => {
+  assert.deepEqual(
+    childEnvForEngram({
+      ENGRAM_AUTH_ADMIN_TOKEN: "operator-secret",
+      ENGRAM_TOKEN: "worker-keycard",
+      ENGRAM_URL: "https://engram.example.test/mcp",
+    }),
+    {
+      ENGRAM_TOKEN: "worker-keycard",
+      ENGRAM_URL: "https://engram.example.test/mcp",
+    }
+  );
+});
+
+test("resolvePluginRoot ignores unresolved placeholder values", () => {
+  const previousPluginRoot = process.env.PLUGIN_ROOT;
+  const previousClaudePluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+
+  try {
+    process.env.PLUGIN_ROOT = "${PLUGIN_ROOT}";
+    process.env.CLAUDE_PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT}";
+    assert.equal(resolvePluginRoot(), path.resolve(__dirname, ".."));
+
+    delete process.env.PLUGIN_ROOT;
+    process.env.CLAUDE_PLUGIN_ROOT = path.join(os.tmpdir(), "engram-plugin-root");
+    assert.equal(resolvePluginRoot(), process.env.CLAUDE_PLUGIN_ROOT);
+  } finally {
+    restoreEnv("PLUGIN_ROOT", previousPluginRoot);
+    restoreEnv("CLAUDE_PLUGIN_ROOT", previousClaudePluginRoot);
   }
 });
 
