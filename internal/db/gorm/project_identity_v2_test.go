@@ -197,11 +197,13 @@ func TestRegisterAndResolve_ExistingLegacyCanonicalAndContradiction(t *testing.T
 	ctx := context.Background()
 	selector := "prc-v2-existing-selector"
 	canonical := "prc-v2-existing-canonical"
+	contradictory := gitIdentityV2(selector, "https://example.invalid/acme/other.git")
+	contradictoryBinding := projectIdentityBindingKey(selector, *contradictory)
 	defer func() {
-		db.Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, canonical, selector)
+		db.Exec(`DELETE FROM projects WHERE id = ? OR id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, canonical, contradictoryBinding, selector)
 		db.Exec(`DELETE FROM projects WHERE id LIKE 'p2_%' AND COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector)
 	}()
-	db.Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, canonical, selector)
+	db.Exec(`DELETE FROM projects WHERE id = ? OR id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, canonical, contradictoryBinding, selector)
 	if err := UpsertProject(ctx, db, canonical, selector, "", "", "existing"); err != nil {
 		t.Fatalf("seed existing canonical: %v", err)
 	}
@@ -214,25 +216,45 @@ func TestRegisterAndResolve_ExistingLegacyCanonicalAndContradiction(t *testing.T
 		t.Fatalf("canonical=%q, want existing %q", first.CanonicalProjectID, canonical)
 	}
 
-	conflict, err := RegisterAndResolve(ctx, db, selector, gitIdentityV2(selector, "https://example.invalid/acme/other.git"))
+	adoptedAliases := readProjectAliases(t, db, canonical)
+
+	conflict, err := RegisterAndResolve(ctx, db, selector, contradictory)
 	if err != nil {
 		t.Fatalf("register contradictory identity: %v", err)
 	}
-	if conflict.CanonicalProjectID == canonical {
-		t.Fatal("contradictory full identities merged")
+	if conflict.CanonicalProjectID != contradictoryBinding {
+		t.Fatalf("canonical=%q, want fresh binding %q", conflict.CanonicalProjectID, contradictoryBinding)
 	}
-	if conflict.CanonicalProjectID == "" {
-		t.Fatal("conflict canonical is empty")
+	if got := readProjectAliases(t, db, canonical); !slices.Equal(got, adoptedAliases) {
+		t.Fatalf("adopted legacy row mutated: got %#v want %#v", got, adoptedAliases)
+	}
+	if got := readProjectAliases(t, db, contradictoryBinding); len(got) != 0 {
+		t.Fatalf("fresh binding stole an owned alias: %#v", got)
 	}
 
-	_, err = RegisterAndResolve(ctx, db, selector, nil)
-	var identityErr *ProjectIdentityError
-	if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityAmbiguous || identityErr.UpgradeAction != UpgradeActionSendProjectIdentityV2 {
-		t.Fatalf("legacy-only ambiguity error=%T %v", err, err)
+	stable, err := RegisterAndResolve(ctx, db, selector, contradictory)
+	if err != nil {
+		t.Fatalf("second contradictory registration: %v", err)
+	}
+	if stable.CanonicalProjectID != conflict.CanonicalProjectID {
+		t.Fatalf("second registration diverged: %q != %q", stable.CanonicalProjectID, conflict.CanonicalProjectID)
+	}
+
+	// The selector still belongs to the adopted legacy row, so an identity-less
+	// client keeps resolving there instead of finding two owners.
+	legacyOnly, err := RegisterAndResolve(ctx, db, selector, nil)
+	if err != nil {
+		t.Fatalf("legacy-only resolution: %v", err)
+	}
+	if legacyOnly.CanonicalProjectID != canonical {
+		t.Fatalf("legacy-only canonical=%q, want %q", legacyOnly.CanonicalProjectID, canonical)
 	}
 }
 
-func TestRegisterAndResolve_ConflictingSelectorAndLegacyAliasFailWithoutMutation(t *testing.T) {
+// A full git identity defines the tenant, so legacy rows that merely shadow the
+// selector and the legacy id cannot deny service: the registration mints its own
+// binding row and leaves both legacy rows exactly as they were.
+func TestRegisterAndResolve_ConflictingSelectorAndLegacyAliasMintsBindingWithoutMutation(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -241,8 +263,10 @@ func TestRegisterAndResolve_ConflictingSelectorAndLegacyAliasFailWithoutMutation
 	legacyID := prefix + "legacy"
 	selectorCanonical := prefix + "selector-canonical"
 	legacyCanonical := prefix + "legacy-canonical"
-	defer db.Exec(`DELETE FROM projects WHERE id LIKE ? OR EXISTS (SELECT 1 FROM unnest(COALESCE(legacy_ids, ARRAY[]::TEXT[])) alias WHERE alias LIKE ?)`, prefix+"%", prefix+"%")
-	db.Exec(`DELETE FROM projects WHERE id LIKE ? OR EXISTS (SELECT 1 FROM unnest(COALESCE(legacy_ids, ARRAY[]::TEXT[])) alias WHERE alias LIKE ?)`, prefix+"%", prefix+"%")
+	identity := gitIdentityV2(legacyID, "https://example.invalid/acme/conflict.git")
+	bindingKey := projectIdentityBindingKey(selector, *identity)
+	defer db.Exec(`DELETE FROM projects WHERE id = ? OR id LIKE ? OR EXISTS (SELECT 1 FROM unnest(COALESCE(legacy_ids, ARRAY[]::TEXT[])) alias WHERE alias LIKE ?)`, bindingKey, prefix+"%", prefix+"%")
+	db.Exec(`DELETE FROM projects WHERE id = ? OR id LIKE ? OR EXISTS (SELECT 1 FROM unnest(COALESCE(legacy_ids, ARRAY[]::TEXT[])) alias WHERE alias LIKE ?)`, bindingKey, prefix+"%", prefix+"%")
 	if err := UpsertProject(ctx, db, selectorCanonical, selector, "", "", "selector owner"); err != nil {
 		t.Fatalf("seed selector owner: %v", err)
 	}
@@ -250,10 +274,12 @@ func TestRegisterAndResolve_ConflictingSelectorAndLegacyAliasFailWithoutMutation
 		t.Fatalf("seed legacy owner: %v", err)
 	}
 
-	_, err := RegisterAndResolve(ctx, db, selector, gitIdentityV2(legacyID, "https://example.invalid/acme/conflict.git"))
-	var identityErr *ProjectIdentityError
-	if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityAmbiguous || identityErr.UpgradeAction != UpgradeActionSendProjectIdentityV2 {
-		t.Fatalf("conflicting aliases error=%T %v", err, err)
+	minted, err := RegisterAndResolve(ctx, db, selector, identity)
+	if err != nil {
+		t.Fatalf("register against conflicting legacy rows: %v", err)
+	}
+	if minted.CanonicalProjectID != bindingKey {
+		t.Fatalf("canonical=%q, want fresh binding %q", minted.CanonicalProjectID, bindingKey)
 	}
 
 	for canonical, wantAlias := range map[string]string{
@@ -268,16 +294,27 @@ func TestRegisterAndResolve_ConflictingSelectorAndLegacyAliasFailWithoutMutation
 			t.Fatalf("%s aliases mutated: %#v", canonical, persisted.LegacyIDs)
 		}
 	}
-	var created int64
-	if err := db.Model(&Project{}).Where("id LIKE ?", "p2g_%").Where(`COALESCE(legacy_ids, ARRAY[]::TEXT[]) && ARRAY[?, ?]::TEXT[]`, selector, legacyID).Count(&created).Error; err != nil {
-		t.Fatalf("count conflicting binding rows: %v", err)
+	var binding Project
+	if err := db.Where("id = ?", bindingKey).First(&binding).Error; err != nil {
+		t.Fatalf("read minted binding: %v", err)
 	}
-	if created != 0 {
-		t.Fatalf("conflicting aliases created %d binding rows", created)
+	if slices.Contains(binding.LegacyIDs, selector) || slices.Contains(binding.LegacyIDs, legacyID) {
+		t.Fatalf("minted binding stole an owned alias: %#v", binding.LegacyIDs)
+	}
+
+	stable, err := RegisterAndResolve(ctx, db, selector, identity)
+	if err != nil {
+		t.Fatalf("second registration: %v", err)
+	}
+	if stable.CanonicalProjectID != minted.CanonicalProjectID {
+		t.Fatalf("second registration diverged: %q != %q", stable.CanonicalProjectID, minted.CanonicalProjectID)
 	}
 }
 
-func TestRegisterAndResolve_EarlyIdentityMatchesRejectForeignAliasesWithoutMutation(t *testing.T) {
+// An early identity match resolves on the git identity the client presented and
+// never steals an alias another live row owns — both when the binding key is
+// already stored and when only the git identity matches.
+func TestRegisterAndResolve_EarlyIdentityMatchesNeverStealForeignAliases(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -300,13 +337,6 @@ func TestRegisterAndResolve_EarlyIdentityMatchesRejectForeignAliasesWithoutMutat
 		}
 		return count
 	}
-	assertAmbiguous := func(err error) {
-		t.Helper()
-		var identityErr *ProjectIdentityError
-		if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityAmbiguous || identityErr.UpgradeAction != UpgradeActionSendProjectIdentityV2 {
-			t.Fatalf("conflicting alias error=%T %v", err, err)
-		}
-	}
 
 	t.Run("existing binding", func(t *testing.T) {
 		prefix := fmt.Sprintf("prc-v2-bound-conflict-%d-", time.Now().UnixNano())
@@ -328,8 +358,13 @@ func TestRegisterAndResolve_EarlyIdentityMatchesRejectForeignAliasesWithoutMutat
 		ownerAliases := readAliases(owner.CanonicalProjectID)
 		foreignAliases := readAliases(foreignCanonical)
 		bindingRows := countBindings(remote)
-		_, err = RegisterAndResolve(ctx, db, foreignSelector, gitIdentityV2(ownerLegacy, remote))
-		assertAmbiguous(err)
+		resolved, err := RegisterAndResolve(ctx, db, foreignSelector, gitIdentityV2(ownerLegacy, remote))
+		if err != nil {
+			t.Fatalf("bound identity with a shadowed selector: %v", err)
+		}
+		if resolved.CanonicalProjectID != owner.CanonicalProjectID {
+			t.Fatalf("canonical=%q, want bound owner %q", resolved.CanonicalProjectID, owner.CanonicalProjectID)
+		}
 		if got := readAliases(owner.CanonicalProjectID); !slices.Equal(got, ownerAliases) {
 			t.Fatalf("bound owner aliases mutated: got %#v want %#v", got, ownerAliases)
 		}
@@ -359,10 +394,19 @@ func TestRegisterAndResolve_EarlyIdentityMatchesRejectForeignAliasesWithoutMutat
 		exactAliases := readAliases(exactCanonical)
 		foreignAliases := readAliases(foreignCanonical)
 		bindingRows := countBindings(remote)
-		_, err := RegisterAndResolve(ctx, db, foreignSelector, gitIdentityV2(exactLegacy, remote))
-		assertAmbiguous(err)
-		if got := readAliases(exactCanonical); !slices.Equal(got, exactAliases) {
-			t.Fatalf("exact owner aliases mutated: got %#v want %#v", got, exactAliases)
+		identity := gitIdentityV2(exactLegacy, remote)
+		bindingKey := projectIdentityBindingKey(foreignSelector, *identity)
+		resolved, err := RegisterAndResolve(ctx, db, foreignSelector, identity)
+		if err != nil {
+			t.Fatalf("exact git identity with a shadowed selector: %v", err)
+		}
+		if resolved.CanonicalProjectID != exactCanonical {
+			t.Fatalf("canonical=%q, want exact git owner %q", resolved.CanonicalProjectID, exactCanonical)
+		}
+		// The binding key is the only alias the resolution may add: the shadowed
+		// selector stays with the row that owns it.
+		if got := readAliases(exactCanonical); !slices.Equal(got, append(append([]string(nil), exactAliases...), bindingKey)) {
+			t.Fatalf("exact owner aliases mutated: got %#v want %#v plus %q", got, exactAliases, bindingKey)
 		}
 		if got := readAliases(foreignCanonical); !slices.Equal(got, foreignAliases) {
 			t.Fatalf("foreign owner aliases mutated: got %#v want %#v", got, foreignAliases)
@@ -604,4 +648,251 @@ func TestRegisterAndResolve_LegacyOnlySoftDeletedCanonicalFailsWithoutMutation(t
 	if len(rows[0].LegacyIDs) != 1 || rows[0].LegacyIDs[0] != "preserve-existing-alias" {
 		t.Fatalf("aliases mutated: %#v", rows[0].LegacyIDs)
 	}
+}
+
+// The live nvmd-devops constellation: the repo moved orgs, so two rows carry
+// different git_remotes and both still list the same legacy path-hash alias. The
+// client presents the current remote, matching exactly one row, and the shared
+// legacy alias owned by the other row must not deny service.
+func TestProjectIdentity_MovedRepoSharedLegacyAliasResolves(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	prefix := fmt.Sprintf("prc-v2-moved-repo-%d-", time.Now().UnixNano())
+	currentRow := prefix + "4a8aca29"
+	staleRow := prefix + "01be8f28"
+	sharedLegacy := prefix + "nvmd-devops_9aa4cc"
+	staleOnlyAlias := prefix + "nvmd-devops_01be8f28"
+	currentRemote := "https://github.invalid/nv-md/" + prefix + "nvmd-devops.git"
+	staleRemote := "https://github.invalid/thebtf/" + prefix + "nvmd-devops.git"
+	identity := &ProjectIdentityV2{
+		Version:         ProjectIdentityVersionV2,
+		LegacyProjectID: sharedLegacy,
+		DisplayName:     "nvmd-devops",
+		GitRemote:       currentRemote,
+	}
+	bindingKey := projectIdentityBindingKey(currentRow, *identity)
+	defer db.Exec(`DELETE FROM projects WHERE id = ? OR id LIKE ?`, bindingKey, prefix+"%")
+	if err := UpsertProject(ctx, db, currentRow, sharedLegacy, currentRemote, "", "current"); err != nil {
+		t.Fatalf("seed current row: %v", err)
+	}
+	if err := UpsertProject(ctx, db, staleRow, sharedLegacy, staleRemote, "", "stale"); err != nil {
+		t.Fatalf("seed stale row: %v", err)
+	}
+	if err := UpsertProject(ctx, db, staleRow, staleOnlyAlias, staleRemote, "", "stale"); err != nil {
+		t.Fatalf("seed stale row alias: %v", err)
+	}
+	staleAliases := readProjectAliases(t, db, staleRow)
+	if !slices.Contains(staleAliases, sharedLegacy) {
+		t.Fatalf("fixture does not reproduce the shared legacy alias: %#v", staleAliases)
+	}
+
+	first, err := RegisterAndResolve(ctx, db, currentRow, identity)
+	if err != nil {
+		t.Fatalf("register moved-repo identity: %v", err)
+	}
+	if first.CanonicalProjectID != currentRow {
+		t.Fatalf("canonical=%q, want the row storing the current remote %q", first.CanonicalProjectID, currentRow)
+	}
+	if got := readProjectAliases(t, db, staleRow); !slices.Equal(got, staleAliases) {
+		t.Fatalf("stale row mutated: got %#v want %#v", got, staleAliases)
+	}
+	if got := readProjectAliases(t, db, currentRow); !slices.Equal(got, []string{sharedLegacy, bindingKey}) {
+		t.Fatalf("current row aliases=%#v, want the seed alias plus %q", got, bindingKey)
+	}
+
+	second, err := RegisterAndResolve(ctx, db, currentRow, identity)
+	if err != nil {
+		t.Fatalf("second registration: %v", err)
+	}
+	if second.CanonicalProjectID != first.CanonicalProjectID {
+		t.Fatalf("second registration diverged: %q != %q", second.CanonicalProjectID, first.CanonicalProjectID)
+	}
+	if got := readProjectAliases(t, db, staleRow); !slices.Equal(got, staleAliases) {
+		t.Fatalf("stale row mutated on re-registration: got %#v want %#v", got, staleAliases)
+	}
+}
+
+func seedProjectMemories(t *testing.T, db *gormio.DB, project string, count int) {
+	t.Helper()
+	for range count {
+		if err := db.Exec(`INSERT INTO memories (project, content) VALUES (?, ?)`, project, "identity-v2 collapse fixture").Error; err != nil {
+			t.Fatalf("seed memory for %s: %v", project, err)
+		}
+	}
+}
+
+func readProjectAliases(t *testing.T, db *gormio.DB, id string) []string {
+	t.Helper()
+	var project Project
+	if err := db.Where("id = ?", id).First(&project).Error; err != nil {
+		t.Fatalf("read project %s: %v", id, err)
+	}
+	return append([]string(nil), project.LegacyIDs...)
+}
+
+// Legacy dirName and path-hash registrations leave several rows carrying one
+// git_remote + relative_path. The v2 contract says that is one tenant, so the
+// registration collapses onto the row holding the most live memories instead of
+// failing PROJECT_IDENTITY_AMBIGUOUS, which left the MCP surface dead.
+//
+// The fixture is a repo-root identity on purpose: idx_projects_remote_path is
+// UNIQUE over (git_remote, relative_path), and only a NULL relative_path — what
+// a repo-root project stores — lets duplicate git rows exist at all.
+func TestProjectIdentity_DuplicateGitRowsCollapseToDensestCanonical(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	prefix := fmt.Sprintf("prc-v2-dup-git-%d-", time.Now().UnixNano())
+	remote := "https://example.invalid/acme/" + prefix + "repo.git"
+	// "a-" sorts before "b-", so a densest pick proves count beats id ordering.
+	sparse := prefix + "a-dirname"
+	dense := prefix + "b-path-hash"
+	selector := prefix + "selector"
+	legacyID := prefix + "legacy"
+	identity := &ProjectIdentityV2{
+		Version:         ProjectIdentityVersionV2,
+		LegacyProjectID: legacyID,
+		DisplayName:     "identity-v2-test",
+		GitRemote:       remote,
+	}
+	bindingKey := projectIdentityBindingKey(selector, *identity)
+	defer func() {
+		db.Exec(`DELETE FROM memories WHERE project LIKE ?`, prefix+"%")
+		db.Exec(`DELETE FROM projects WHERE id = ? OR id LIKE ?`, bindingKey, prefix+"%")
+	}()
+	for _, id := range []string{sparse, dense} {
+		if err := UpsertProject(ctx, db, id, "", remote, "", id); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+	seedProjectMemories(t, db, sparse, 1)
+	seedProjectMemories(t, db, dense, 3)
+
+	first, err := RegisterAndResolve(ctx, db, selector, identity)
+	if err != nil {
+		t.Fatalf("register duplicated git identity: %v", err)
+	}
+	if first.CanonicalProjectID != dense {
+		t.Fatalf("canonical=%q, want densest row %q", first.CanonicalProjectID, dense)
+	}
+	if aliases := readProjectAliases(t, db, sparse); len(aliases) != 0 {
+		t.Fatalf("shadowed row mutated: %#v", aliases)
+	}
+	// The binding key lands on the chosen row, so the next call short-circuits
+	// through the bound branch instead of re-running the collapse.
+	if aliases := readProjectAliases(t, db, dense); !slices.Contains(aliases, bindingKey) {
+		t.Fatalf("binding key missing from canonical: %#v", aliases)
+	}
+
+	second, err := RegisterAndResolve(ctx, db, selector, identity)
+	if err != nil {
+		t.Fatalf("second registration: %v", err)
+	}
+	if second.CanonicalProjectID != first.CanonicalProjectID {
+		t.Fatalf("second registration diverged: %q != %q", second.CanonicalProjectID, first.CanonicalProjectID)
+	}
+}
+
+// The collapse must not steal an alias another live row owns, and skipping one
+// must not abort the remaining appends.
+func TestProjectIdentity_LenientAliasAppendSkipsOwnedAlias(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	prefix := fmt.Sprintf("prc-v2-lenient-%d-", time.Now().UnixNano())
+	owner := prefix + "owner"
+	target := prefix + "target"
+	ownedAlias := prefix + "owned-alias"
+	freshAlias := prefix + "fresh-alias"
+	defer db.Exec(`DELETE FROM projects WHERE id LIKE ?`, prefix+"%")
+	if err := UpsertProject(ctx, db, owner, ownedAlias, "", "", "owner"); err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+	if err := UpsertProject(ctx, db, target, "", "", "", "target"); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+
+	err := appendProjectAliases(ctx, db, target, ownedAlias)
+	var identityErr *ProjectIdentityError
+	if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityAmbiguous {
+		t.Fatalf("strict append error=%T %v, want PROJECT_IDENTITY_AMBIGUOUS", err, err)
+	}
+
+	if err := appendProjectAliasesOwned(ctx, db, target, true, ownedAlias, freshAlias); err != nil {
+		t.Fatalf("lenient append: %v", err)
+	}
+	aliases := readProjectAliases(t, db, target)
+	if slices.Contains(aliases, ownedAlias) {
+		t.Fatalf("lenient append stole an owned alias: %#v", aliases)
+	}
+	if !slices.Contains(aliases, freshAlias) {
+		t.Fatalf("skipped alias aborted the remaining appends: %#v", aliases)
+	}
+	if got := readProjectAliases(t, db, owner); len(got) != 1 || got[0] != ownedAlias {
+		t.Fatalf("owner aliases mutated: %#v", got)
+	}
+}
+
+// Leniency is scoped to full git identities. Non-git anchors and binding-key
+// contradictions stay fail-closed.
+func TestProjectIdentity_NonGitAndContradictoryBindingsStillFailLoud(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+	assertAmbiguous := func(t *testing.T, err error) {
+		t.Helper()
+		var identityErr *ProjectIdentityError
+		if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityAmbiguous || identityErr.UpgradeAction != UpgradeActionSendProjectIdentityV2 {
+			t.Fatalf("error=%T %v, want PROJECT_IDENTITY_AMBIGUOUS", err, err)
+		}
+	}
+
+	t.Run("non-git anchor ambiguity", func(t *testing.T) {
+		prefix := fmt.Sprintf("prc-v2-nongit-ambig-%d-", time.Now().UnixNano())
+		selector := prefix + "selector"
+		legacyID := prefix + "legacy"
+		defer db.Exec(`DELETE FROM projects WHERE id LIKE ?`, prefix+"%")
+		if err := UpsertProject(ctx, db, prefix+"selector-owner", selector, "", "", "selector owner"); err != nil {
+			t.Fatalf("seed selector owner: %v", err)
+		}
+		if err := UpsertProject(ctx, db, prefix+"legacy-owner", legacyID, "", "", "legacy owner"); err != nil {
+			t.Fatalf("seed legacy owner: %v", err)
+		}
+		shared := true
+		_, err := RegisterAndResolve(ctx, db, selector, &ProjectIdentityV2{
+			Version:         ProjectIdentityVersionV2,
+			LegacyProjectID: legacyID,
+			DisplayName:     "non-git",
+			NonGitAnchor:    "aabbccddeeff00112233445566778899",
+			AnchorShared:    &shared,
+		})
+		assertAmbiguous(t, err)
+	})
+
+	t.Run("legacy selector without identity", func(t *testing.T) {
+		prefix := fmt.Sprintf("prc-v2-legacy-ambig-%d-", time.Now().UnixNano())
+		selector := prefix + "selector"
+		defer db.Exec(`DELETE FROM projects WHERE id LIKE ?`, prefix+"%")
+		for _, id := range []string{prefix + "owner-a", prefix + "owner-b"} {
+			if err := UpsertProject(ctx, db, id, selector, "", "", id); err != nil {
+				t.Fatalf("seed %s: %v", id, err)
+			}
+		}
+		_, err := RegisterAndResolve(ctx, db, selector, nil)
+		assertAmbiguous(t, err)
+	})
+
+	t.Run("binding key conflicts with stored git identity", func(t *testing.T) {
+		prefix := fmt.Sprintf("prc-v2-binding-conflict-%d-", time.Now().UnixNano())
+		selector := prefix + "selector"
+		identity := gitIdentityV2(prefix+"legacy", "https://example.invalid/acme/"+prefix+"repo.git")
+		bindingKey := projectIdentityBindingKey(selector, *identity)
+		defer db.Exec(`DELETE FROM projects WHERE id = ? OR id LIKE ?`, bindingKey, prefix+"%")
+		if err := UpsertProject(ctx, db, bindingKey, "", "https://example.invalid/acme/"+prefix+"other.git", "packages/core/", "stored"); err != nil {
+			t.Fatalf("seed contradictory binding: %v", err)
+		}
+		_, err := RegisterAndResolve(ctx, db, selector, identity)
+		assertAmbiguous(t, err)
+	})
 }

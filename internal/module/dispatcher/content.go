@@ -51,7 +51,7 @@ func (d *Dispatcher) handleToolsList(ctx context.Context, p muxcore.ProjectConte
 						"error", err,
 					)
 				}
-				return marshalError(req.ID, -32000, "service unavailable: configured proxy tool discovery failed; retry tools/list"), nil
+				return marshalError(req.ID, -32000, fmt.Sprintf("service unavailable: configured proxy tool discovery failed; retry tools/list (%v)", err)), nil
 			}
 			d.logger.Warn("optional proxy tools unavailable, returning static tools only",
 				"module", proxyName,

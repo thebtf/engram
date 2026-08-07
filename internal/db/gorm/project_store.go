@@ -178,7 +178,12 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 			if identity.GitRemote != "" && !projectHasGitIdentity(bound[0], identity.GitRemote, identity.RelativePath) {
 				return ambiguousProjectIdentity("binding key conflicts with stored git identity")
 			}
-			if err := appendProjectAliases(ctx, tx, canonical, selector, identity.LegacyProjectID, bindingKey); err != nil {
+			// The bound row has proven it owns this full git identity, so a
+			// selector another legacy row still shadows must not deny service on
+			// every later handshake: that is the re-registration half of the
+			// leniency below, without which a lenient first resolution is
+			// unreachable a second time. Non-git bindings stay fail-closed.
+			if err := appendProjectAliasesOwned(ctx, tx, canonical, identity.GitRemote != "", selector, identity.LegacyProjectID, bindingKey); err != nil {
 				return projectIdentityWriteError(err)
 			}
 			resolution.CanonicalProjectID = canonical
@@ -191,11 +196,27 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 				return unavailableProjectIdentity(err)
 			}
 			if len(exact) > 1 {
-				return ambiguousProjectIdentity("git identity maps to multiple canonical projects")
+				// Every row here already stores this git_remote and relative_path,
+				// so by the v2 contract they are one tenant that legacy dirName and
+				// path-hash registrations split. Collapse onto the densest row
+				// instead of refusing service. The alias append must stay lenient:
+				// the shadowed rows keep owning the outer selector.
+				canonical, err := densestProjectCandidate(ctx, tx, exact)
+				if err != nil {
+					return unavailableProjectIdentity(err)
+				}
+				if err := appendProjectAliasesOwned(ctx, tx, canonical, true, selector, identity.LegacyProjectID, bindingKey); err != nil {
+					return projectIdentityWriteError(err)
+				}
+				resolution.CanonicalProjectID = canonical
+				return nil
 			}
 			if len(exact) == 1 {
 				canonical := exact[0].ID
-				if err := appendProjectAliases(ctx, tx, canonical, selector, identity.LegacyProjectID, bindingKey); err != nil {
+				// This row stores the presented git identity, so it is the tenant.
+				// A legacy alias another row still carries — a repo that moved
+				// orgs leaves exactly that — must not deny service.
+				if err := appendProjectAliasesOwned(ctx, tx, canonical, true, selector, identity.LegacyProjectID, bindingKey); err != nil {
 					return projectIdentityWriteError(err)
 				}
 				resolution.CanonicalProjectID = canonical
@@ -208,7 +229,13 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 			return unavailableProjectIdentity(err)
 		}
 		if len(legacyCandidates) > 1 {
-			return ambiguousProjectIdentity("selector and legacy identity map to different canonical projects")
+			if identity.GitRemote == "" {
+				return ambiguousProjectIdentity("selector and legacy identity map to different canonical projects")
+			}
+			// The presented git identity matched none of these rows above, so none
+			// of them owns it. Mint the binding row and leave every colliding
+			// legacy row untouched, exactly as with zero adoptable candidates.
+			legacyCandidates = nil
 		}
 		if len(legacyCandidates) == 1 {
 			refreshed, err := lockProjectIdentityCandidate(ctx, tx, legacyCandidates[0].ID)
@@ -237,12 +264,23 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 			}
 		}
 
+		// Every alias append on a git-identity path is lenient: the identity the
+		// client presented decides the tenant, so a legacy row still shadowing
+		// the selector or the legacy id is skipped, never stolen and never fatal.
+		// Non-git anchors keep the strict append.
+		lenientAliases := identity.GitRemote != ""
 		if canonical == bindingKey {
-			if err := createProjectIdentityRow(ctx, tx, canonical, identity.GitRemote, identity.RelativePath, identity.DisplayName, []string{selector, identity.LegacyProjectID}); err != nil {
+			// Under a lenient append the seed aliases are omitted here: alias
+			// ownership is decided once, by the append below.
+			aliases := []string{selector, identity.LegacyProjectID}
+			if lenientAliases {
+				aliases = nil
+			}
+			if err := createProjectIdentityRow(ctx, tx, canonical, identity.GitRemote, identity.RelativePath, identity.DisplayName, aliases); err != nil {
 				return projectIdentityWriteError(err)
 			}
 		}
-		if err := appendProjectAliases(ctx, tx, canonical, selector, identity.LegacyProjectID, bindingKey); err != nil {
+		if err := appendProjectAliasesOwned(ctx, tx, canonical, lenientAliases, selector, identity.LegacyProjectID, bindingKey); err != nil {
 			return projectIdentityWriteError(err)
 		}
 		resolution.CanonicalProjectID = canonical
@@ -460,6 +498,39 @@ func projectHasGitIdentity(project Project, remote, relativePath string) bool {
 		(!project.RelativePath.Valid && relativePath == "" || project.RelativePath.Valid && project.RelativePath.String == relativePath)
 }
 
+// densestProjectCandidate picks the canonical row among candidates that already
+// share one git identity: the row holding the most live memories wins, so the
+// collapse keeps the tenant's data reachable. Candidates arrive ordered by id
+// ASC and the comparison is strict, so equal counts resolve on that order and
+// every caller and replica converges on the same row.
+func densestProjectCandidate(ctx context.Context, tx *gorm.DB, candidates []Project) (string, error) {
+	ids := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		ids = append(ids, candidate.ID)
+	}
+	var counted []struct {
+		Project string
+		Total   int64
+	}
+	if err := tx.WithContext(ctx).Model(&Memory{}).
+		Select("project, COUNT(*) AS total").
+		Where("deleted_at IS NULL AND project IN ?", ids).
+		Group("project").Scan(&counted).Error; err != nil {
+		return "", fmt.Errorf("count memories for git identity candidates: %w", err)
+	}
+	totals := make(map[string]int64, len(counted))
+	for _, row := range counted {
+		totals[row.Project] = row.Total
+	}
+	densest := candidates[0].ID
+	for _, candidate := range candidates[1:] {
+		if totals[candidate.ID] > totals[densest] {
+			densest = candidate.ID
+		}
+	}
+	return densest, nil
+}
+
 func projectIsUnboundLegacy(project Project) bool {
 	if project.GitRemote.Valid && project.GitRemote.String != "" {
 		return false
@@ -496,6 +567,16 @@ func createProjectIdentityRow(ctx context.Context, tx *gorm.DB, id, remote, rela
 }
 
 func appendProjectAliases(ctx context.Context, tx *gorm.DB, canonical string, aliases ...string) error {
+	return appendProjectAliasesOwned(ctx, tx, canonical, false, aliases...)
+}
+
+// appendProjectAliasesOwned appends aliases to canonical. An alias a different
+// live row already owns fails the call unless skipOwned is set, in which case
+// it is skipped and the remaining aliases still append. Only a full git
+// identity may set skipOwned: there the v2 contract has already fixed the
+// tenant, and the shadowing rows are legacy dirName or path-hash collisions
+// that must not deny service. Every other caller stays fail-closed.
+func appendProjectAliasesOwned(ctx context.Context, tx *gorm.DB, canonical string, skipOwned bool, aliases ...string) error {
 	seen := map[string]struct{}{}
 	for _, alias := range aliases {
 		if alias == "" || alias == canonical {
@@ -515,7 +596,10 @@ func appendProjectAliases(ctx context.Context, tx *gorm.DB, canonical string, al
 			return fmt.Errorf("check project alias %s ownership: %w", alias, err)
 		}
 		if owners != 0 {
-			return ambiguousProjectIdentity("project alias already selects a different canonical project")
+			if !skipOwned {
+				return ambiguousProjectIdentity("project alias already selects a different canonical project")
+			}
+			continue
 		}
 		result := tx.WithContext(ctx).Exec(`UPDATE projects
 			SET legacy_ids = array_append(COALESCE(legacy_ids, ARRAY[]::TEXT[]), ?)
