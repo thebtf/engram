@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.46.3] - 2026-08-08
+
+### Fixed
+
+- **Per-project MCP outage for projects with legacy duplicate rows.** Identity v2 hard-failed `Initialize` with `PROJECT_IDENTITY_AMBIGUOUS` whenever legacy dirName/path-hash rows shadowed a project's selector or legacy id (e.g. after a repository org move), and the fail-loud client turned that into a dead `tools/list` (-32000) with no remediation path. A full git identity now resolves deterministically: exact-match rows win with lenient alias handling, duplicated git-identity rows collapse onto the densest row, and legacy collisions without a git match mint a fresh binding row. Genuine conflicts and non-git anchors still fail loud. The client -32000 error now carries the underlying cause.
+
+### Security
+
+- **google.golang.org/grpc v1.80.0 → v1.82.1** (GHSA-hrxh-6v49-42gf, HIGH: HTTP/2 Rapid Reset DoS bypass) — this CVE blocked the v6.46.2 image publication at the trivy gate, leaving prod on v6.46.1 while plugin clients auto-updated.
+- **golang.org/x/text v0.37.0 → v0.39.0** (CVE-2026-56852, HIGH).
+- **Operator-console dependency graph**: `npm audit fix` clearing 2 CRITICAL (@nuxt/devtools RPC command execution, node-tar DoS class) and 6 HIGH findings; lockfile regenerated and verified under the CI runner's npm on linux.
+
 ## [6.46.2] - 2026-07-26
 
 ### Fixed
