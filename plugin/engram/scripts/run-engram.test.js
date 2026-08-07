@@ -78,7 +78,7 @@ test("release-facing plugin and marketplace versions stay aligned", () => {
   const claudeMarketplace = readJson(".claude-plugin", "marketplace.json");
   const ompMarketplace = readJson(".omp-plugin", "marketplace.json");
 
-  assert.equal(claudePlugin.version, "6.46.2");
+  assert.equal(claudePlugin.version, "6.46.4");
   assert.equal(codexPlugin.version, claudePlugin.version);
   assert.equal(rootPlugin.version, claudePlugin.version);
   assert.equal(claudeMarketplace.version, claudePlugin.version);
@@ -190,7 +190,7 @@ test("infers OMP plugin data dir from installed cache root", () => {
     "plugins",
     "cache",
     "plugins",
-    "engram___engram___6.46.2"
+    "engram___engram___6.46.4"
   );
 
   assert.equal(

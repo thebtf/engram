@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.46.4] - 2026-08-08
+
+### Fixed
+
+- **Release-surface alignment.** v6.46.3 bumped only the runtime and plugin manifests; the root plugin manifest, both marketplace catalogs, and the version-alignment test still carried 6.46.2, so the tag's Release and Release Binary workflows failed and no client binary/marketplace update shipped. All release-facing version surfaces now move together; this release ships the v6.46.3 fixes to plugin clients.
+
 ## [6.46.3] - 2026-08-08
 
 ### Fixed
