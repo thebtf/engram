@@ -45,8 +45,17 @@ func TestServiceShutdownWaitsForReaper(t *testing.T) {
 		t.Fatalf("Shutdown returned before reaper stopped: %v", err)
 	default:
 	}
+	results := make(chan error, 8)
+	for range 8 {
+		go func() { results <- svc.Shutdown(context.Background()) }()
+	}
 
 	close(release)
+	for range 8 {
+		if err := <-results; err != nil {
+			t.Fatalf("concurrent Shutdown: %v", err)
+		}
+	}
 	if err := <-shutdown; err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
