@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { PRINCIPAL_CURRENT_PROJECT, useOperatorMemoryLab, useOperatorPrincipalMemorySurface, type MemoryAuditResponse } from '../composables/useOperatorMemoryLab'
 import { MEMORY_PAGE_SIZE_STORAGE_KEY, resolvePageSize, usePersistentPageSize } from '../composables/usePersistentPageSize'
 import type { Memory } from '../composables/useMockData'
@@ -121,6 +121,24 @@ const noiseRatio = computed(() => {
   if (!measured.length) return '—'
   return (all.filter((memory) => memory.noise || (memory.utilityKnown && memory.inj >= 10 && memory.cite === 0)).length / measured.length).toFixed(2)
 })
+
+const route = useRoute()
+const requestedProject = computed(() => typeof route.query.project === 'string' ? route.query.project.trim() : '')
+const requestedMemory = computed(() => typeof route.query.memory === 'string' ? route.query.memory.trim() : '')
+
+watch([loadState, requestedProject, requestedMemory], async ([state, nextProject, nextMemory]) => {
+  if (state.kind !== 'live' || !nextProject || !nextMemory) return
+  const memory = all.find((row) => row.project === nextProject && row.id === nextMemory)
+  if (!memory) return
+
+  project.value = nextProject
+  const index = filtered.value.findIndex((row) => row.id === memory.id)
+  if (index < 0) return
+  page.value = Math.floor(index / effectivePageSize.value) + 1
+  openId.value = memory.id
+  await nextTick()
+  if (import.meta.client) document.querySelector<HTMLElement>(`[data-testid="memory-row-${memory.id}"]`)?.scrollIntoView({ block: 'center' })
+}, { immediate: true })
 
 watch([filtered, pageSize], () => {
   if (page.value > pageCount.value) page.value = pageCount.value

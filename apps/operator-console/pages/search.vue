@@ -1,6 +1,11 @@
 <script setup lang="ts">
 const { t } = useI18n()
+const route = useRoute()
+const router = useRouter()
 const query = ref('')
+const requestedQuery = computed(() => typeof route.query.q === 'string' ? route.query.q.trim() : '')
+const requestedProject = computed(() => typeof route.query.project === 'string' ? route.query.project.trim() : '')
+const appliedRouteSearch = ref('')
 const {
   projects,
   selectedProject,
@@ -18,8 +23,27 @@ const {
 
 const hasProjects = computed(() => projects.value.length > 0)
 
+watch([requestedQuery, requestedProject, projects], async ([nextQuery, nextProject]) => {
+  query.value = nextQuery
+  if (!nextQuery || !nextProject || !projects.value.includes(nextProject)) {
+    appliedRouteSearch.value = ''
+    return
+  }
+
+  selectedProject.value = nextProject
+  const searchKey = `${nextProject}\u0000${nextQuery}`
+  if (appliedRouteSearch.value === searchKey) return
+  appliedRouteSearch.value = searchKey
+  await runSearch(nextQuery, nextProject)
+}, { immediate: true })
+
 async function submitSearch() {
   await runSearch(query.value, selectedProject.value)
+}
+
+function openResult(project: string, memory: string) {
+  if (!project || project === '-' || !memory) return
+  void router.push({ path: '/memory', query: { project, memory } })
 }
 </script>
 
@@ -81,6 +105,7 @@ async function submitSearch() {
               <span>{{ row.project }}</span>
               <code>{{ row.type }}</code>
               <code>{{ row.score }}</code>
+              <button class="btn" type="button" :data-testid="`search-result-open-${row.id}`" @click="openResult(row.project, row.id)">{{ t('searchPage.actions.openMemory') }}</button>
             </div>
           </div>
         </div>

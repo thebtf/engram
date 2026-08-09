@@ -1779,7 +1779,8 @@
     "placeholder": "Enter a context query…",
     "actions": {
       "refresh": "Refresh",
-      "search": "Search"
+      "search": "Search",
+      "openMemory": "Open memory"
     },
     "form": {
       "project": "Project",
