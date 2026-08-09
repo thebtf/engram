@@ -47,6 +47,9 @@ type AuthHandlers struct {
 
 	// beforeAccessSessionCheck is a test seam used by the lifecycle race tests.
 	beforeAccessSessionCheck func()
+	// beforeInitialAdminCreate is a test seam used to align concurrent setup
+	// requests after bcrypt but before the authoritative database operation.
+	beforeInitialAdminCreate func()
 }
 
 // NewAuthHandlers creates AuthHandlers wired to the given stores.
@@ -485,8 +488,15 @@ func (h *AuthHandlers) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.users.CreateUser(strings.TrimSpace(req.Email), string(hash), gormdb.DashboardRoleAdmin)
+	if h.beforeInitialAdminCreate != nil {
+		h.beforeInitialAdminCreate()
+	}
+	user, err := h.users.CreateInitialAdmin(r.Context(), strings.TrimSpace(req.Email), string(hash))
 	if err != nil {
+		if errors.Is(err, gormdb.ErrInitialAdminSetupAlreadyCompleted) {
+			writeAuthJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
 		log.Error().Err(err).Str("email", req.Email).Msg("auth: failed to create admin user during setup")
 		writeAuthJSONError(w, http.StatusInternalServerError, "failed to create user")
 		return

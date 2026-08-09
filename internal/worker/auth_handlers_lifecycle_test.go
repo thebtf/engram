@@ -140,6 +140,71 @@ func TestAuthHandlersLifecycle_InvitationSingleUseRace(t *testing.T) {
 	require.NotNil(t, matched.UsedAt)
 }
 
+func TestAuthHandlersLifecycle_SetupCreatesOnlyOneInitialAdmin(t *testing.T) {
+	env := openAuthLifecycleEnv(t)
+	count, err := env.users.CountUsers()
+	require.NoError(t, err)
+	require.Zero(t, count, "initial-admin setup requires an empty test database")
+
+	prefix := fmt.Sprintf("zz-initial-admin-race-%d", time.Now().UnixNano())
+	emails := []string{prefix + "-a@example.com", prefix + "-b@example.com"}
+	t.Cleanup(func() {
+		_ = env.store.DB.Exec(`DELETE FROM audit_log WHERE action = 'auth_setup_completed' AND actor LIKE ?`, prefix+"%@example.com").Error
+		_ = env.store.DB.Exec(`DELETE FROM users WHERE email LIKE ?`, prefix+"%@example.com").Error
+	})
+
+	ready := make(chan struct{}, len(emails))
+	release := make(chan struct{})
+	env.handlers.beforeInitialAdminCreate = func() {
+		ready <- struct{}{}
+		<-release
+	}
+
+	statuses := make([]int, len(emails))
+	bodies := make([]string, len(emails))
+	var wg sync.WaitGroup
+	for i, email := range emails {
+		wg.Add(1)
+		go func(idx int, email string) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(fmt.Sprintf(`{"email":%q,"password":"password-123"}`, email)))
+			rec := httptest.NewRecorder()
+			env.handlers.handleSetup(rec, req)
+			statuses[idx] = rec.Code
+			bodies[idx] = rec.Body.String()
+		}(i, email)
+	}
+	for range emails {
+		<-ready
+	}
+	close(release)
+	wg.Wait()
+
+	successes := 0
+	for i, status := range statuses {
+		switch status {
+		case http.StatusCreated:
+			successes++
+			require.Contains(t, bodies[i], `"user"`)
+			require.NotContains(t, bodies[i], "password")
+		case http.StatusConflict:
+			require.Contains(t, bodies[i], "setup already completed")
+		default:
+			t.Fatalf("setup attempt %d status=%d body=%s", i, status, bodies[i])
+		}
+	}
+	require.Equal(t, 1, successes, "exactly one concurrent setup response must contain credentials")
+
+	rows, err := env.users.ListUsers()
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "only one initial admin user may be committed")
+	require.Contains(t, emails, rows[0].Email)
+	require.Equal(t, gormdb.DashboardRoleAdmin, rows[0].Role)
+	var auditEvents int64
+	require.NoError(t, env.store.DB.Model(&gormdb.AccessAuditRecord{}).Where("action = ? AND actor LIKE ?", "auth_setup_completed", prefix+"%@example.com").Count(&auditEvents).Error)
+	require.Equal(t, int64(1), auditEvents, "only the successful setup may issue an audit credential event")
+}
+
 func TestAuthHandlersLifecycle_SessionRevokeWinsInFlightRequest(t *testing.T) {
 	env := openAuthLifecycleEnv(t)
 

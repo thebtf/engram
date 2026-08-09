@@ -1,12 +1,17 @@
 package gorm
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// ErrInitialAdminSetupAlreadyCompleted reports that another request created the first user.
+var ErrInitialAdminSetupAlreadyCompleted = errors.New("setup already completed")
 
 // UserStore provides CRUD operations for dashboard users.
 type UserStore struct {
@@ -28,6 +33,35 @@ func (s *UserStore) CreateUser(email, passwordHash, role string) (*User, error) 
 	}
 	if err := s.db.Create(user).Error; err != nil {
 		return nil, fmt.Errorf("create user: %w", err)
+	}
+	return user, nil
+}
+
+// CreateInitialAdmin atomically creates the first dashboard user as an administrator.
+func (s *UserStore) CreateInitialAdmin(ctx context.Context, email, passwordHash string) (*User, error) {
+	user := &User{
+		Email:        email,
+		PasswordHash: passwordHash,
+		Role:         DashboardRoleAdmin,
+		CreatedAt:    time.Now(),
+	}
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "initial-admin-setup").Error; err != nil {
+			return fmt.Errorf("lock initial admin setup: %w", err)
+		}
+		var count int64
+		if err := tx.Model(&User{}).Count(&count).Error; err != nil {
+			return fmt.Errorf("count users for initial admin setup: %w", err)
+		}
+		if count > 0 {
+			return ErrInitialAdminSetupAlreadyCompleted
+		}
+		if err := tx.Create(user).Error; err != nil {
+			return fmt.Errorf("create initial admin: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return user, nil
 }
