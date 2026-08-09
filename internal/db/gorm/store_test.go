@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -423,6 +426,141 @@ func TestUserStore_CreateInitialAdminSerializesAcrossStores(t *testing.T) {
 	var usersAfter int64
 	require.NoError(t, stores[0].DB.Model(&User{}).Count(&usersAfter).Error)
 	require.Equal(t, int64(1), usersAfter)
+}
+
+const (
+	initialAdminProcessChildEnv = "ENGRAM_INITIAL_ADMIN_PROCESS_CHILD"
+	initialAdminProcessDSNEnv   = "ENGRAM_INITIAL_ADMIN_PROCESS_DSN"
+	initialAdminProcessEmailEnv = "ENGRAM_INITIAL_ADMIN_PROCESS_EMAIL"
+	initialAdminProcessSlotEnv    = "ENGRAM_INITIAL_ADMIN_PROCESS_SLOT"
+	initialAdminProcessBarrierEnv = "ENGRAM_INITIAL_ADMIN_PROCESS_BARRIER"
+)
+
+func TestUserStore_CreateInitialAdminSerializesAcrossProcesses(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping initial admin process integration test")
+	}
+	store := openStoreForStoreTest(t)
+	var usersBefore int64
+	require.NoError(t, store.DB.Model(&User{}).Count(&usersBefore).Error)
+	require.Zero(t, usersBefore, "initial-admin setup requires an empty test database")
+	prefix := fmt.Sprintf("zz-initial-admin-process-race-%d", time.Now().UnixNano())
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+	barrierName := "initial_admin_process_barrier_" + suffix
+	delayFunctionName := "initial_admin_process_delay_" + suffix
+	delayTriggerName := "initial_admin_process_trigger_" + suffix
+	t.Cleanup(func() {
+		_ = store.DB.Exec(`DELETE FROM audit_log WHERE action = 'auth_setup_completed' AND actor LIKE ?`, prefix+"%@example.com").Error
+		_ = store.DB.Exec(`DELETE FROM users WHERE email LIKE ?`, prefix+"%@example.com").Error
+		_ = store.DB.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON users`, delayTriggerName)).Error
+		_ = store.DB.Exec(fmt.Sprintf(`DROP FUNCTION IF EXISTS %s()`, delayFunctionName)).Error
+		_ = store.DB.Exec(fmt.Sprintf(`DROP TABLE IF EXISTS %s`, barrierName)).Error
+	})
+	require.NoError(t, store.DB.Exec(fmt.Sprintf(`CREATE TABLE %s (slot integer PRIMARY KEY, released boolean NOT NULL DEFAULT false)`, barrierName)).Error)
+	require.NoError(t, store.DB.Exec(fmt.Sprintf(`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.2); RETURN NEW; END; $$`, delayFunctionName)).Error)
+	require.NoError(t, store.DB.Exec(fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT ON users FOR EACH ROW WHEN (NEW.email LIKE 'zz-initial-admin-process-race-%%') EXECUTE FUNCTION %s()`, delayTriggerName, delayFunctionName)).Error)
+
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	repeatableReadDSN := dsn + "&options=-c%20default_transaction_isolation%3Drepeatable%5C%20read"
+	type processResult struct {
+		output string
+		err    error
+	}
+	results := make(chan processResult, 2)
+	for slot := range 2 {
+		go func(slot int) {
+			cmd := exec.CommandContext(ctx, executable, "-test.run=^TestUserStore_CreateInitialAdminProcessHelper$", "-test.count=1")
+			cmd.Env = append(os.Environ(),
+				initialAdminProcessChildEnv+"=1",
+				initialAdminProcessDSNEnv+"="+repeatableReadDSN,
+				initialAdminProcessEmailEnv+"="+fmt.Sprintf("%s-%d@example.com", prefix, slot),
+				initialAdminProcessSlotEnv+"="+strconv.Itoa(slot),
+				initialAdminProcessBarrierEnv+"="+barrierName,
+			)
+			output, err := cmd.CombinedOutput()
+			results <- processResult{output: string(output), err: err}
+		}(slot)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var ready int64
+		require.NoError(t, store.DB.Table(barrierName).Count(&ready).Error)
+		if ready == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("initial admin child processes did not reach the database barrier")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.NoError(t, store.DB.Exec(fmt.Sprintf(`UPDATE %s SET released = true`, barrierName)).Error)
+
+	successes := 0
+	conflicts := 0
+	for range 2 {
+		result := <-results
+		require.NoError(t, result.err, result.output)
+		switch {
+		case strings.Contains(result.output, "INITIAL_ADMIN_RESULT=SUCCESS"):
+			successes++
+		case strings.Contains(result.output, "INITIAL_ADMIN_RESULT=CONFLICT"):
+			conflicts++
+		default:
+			t.Fatalf("initial admin child produced no result marker: %s", result.output)
+		}
+	}
+	require.Equal(t, 1, successes)
+	require.Equal(t, 1, conflicts)
+	var usersAfter int64
+	require.NoError(t, store.DB.Model(&User{}).Count(&usersAfter).Error)
+	require.Equal(t, int64(1), usersAfter)
+	var auditsAfter int64
+	require.NoError(t, store.DB.Model(&AuditLogEntry{}).Where("action = ? AND actor LIKE ?", "auth_setup_completed", prefix+"%@example.com").Count(&auditsAfter).Error)
+	require.Equal(t, int64(1), auditsAfter)
+}
+
+func TestUserStore_CreateInitialAdminProcessHelper(t *testing.T) {
+	if os.Getenv(initialAdminProcessChildEnv) != "1" {
+		return
+	}
+	dsn := os.Getenv(initialAdminProcessDSNEnv)
+	email := os.Getenv(initialAdminProcessEmailEnv)
+	slot, err := strconv.Atoi(os.Getenv(initialAdminProcessSlotEnv))
+	barrierName := os.Getenv(initialAdminProcessBarrierEnv)
+	require.NoError(t, err)
+	store, err := NewStore(Config{DSN: dsn, MaxConns: 1, LogLevel: 0})
+	require.NoError(t, err)
+	defer store.Close()
+	var isolation string
+	require.NoError(t, store.DB.Raw("SHOW default_transaction_isolation").Scan(&isolation).Error)
+	require.Equal(t, "repeatable read", isolation)
+	require.NoError(t, store.DB.Exec(fmt.Sprintf(`INSERT INTO %s (slot) VALUES (?)`, barrierName), slot).Error)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var released bool
+		require.NoError(t, store.DB.Raw(fmt.Sprintf(`SELECT COALESCE(bool_or(released), false) FROM %s`, barrierName)).Scan(&released).Error)
+		if released {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("initial admin process release barrier timed out")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_, err = NewUserStore(store.DB).CreateInitialAdmin(context.Background(), email, "hash", NewDomainOwnerStore(store))
+	switch {
+	case err == nil:
+		fmt.Fprintln(os.Stdout, "INITIAL_ADMIN_RESULT=SUCCESS")
+	case errors.Is(err, ErrInitialAdminSetupAlreadyCompleted):
+		fmt.Fprintln(os.Stdout, "INITIAL_ADMIN_RESULT=CONFLICT")
+	default:
+		t.Fatal(err)
+	}
 }
 
 func TestUserStore_CreateInitialAdminRollsBackOnAuditFailure(t *testing.T) {
