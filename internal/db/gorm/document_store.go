@@ -19,7 +19,8 @@ import (
 // should treat this as a graceful "feature removed" signal and degrade accordingly.
 var ErrChunkStorageUnsupported = errors.New("document chunk storage unsupported: the document-chunk path was retired in v5")
 
-// DocumentStore provides document and chunk persistence for content-addressable storage.
+// DocumentStore provides active-document metadata and content-addressed body
+// persistence. Its legacy document-chunk methods return ErrChunkStorageUnsupported.
 type DocumentStore struct {
 	db    *gorm.DB
 	rawDB *sql.DB
@@ -130,17 +131,18 @@ func (s *DocumentStore) ChunksExist(_ context.Context, _ string) (bool, error) {
 	return false, ErrChunkStorageUnsupported
 }
 
-// DeactivateDocument marks a document as inactive.
-func (s *DocumentStore) DeactivateDocument(ctx context.Context, collection, path string) error {
-	if err := s.db.WithContext(ctx).
+// DeactivateDocument marks an active document inactive and reports whether one
+// row made that transition.
+func (s *DocumentStore) DeactivateDocument(ctx context.Context, collection, path string) (bool, error) {
+	result := s.db.WithContext(ctx).
 		Model(&Document{}).
-		Where("collection = ? AND path = ?", collection, path).
-		Update("active", false).
-		Error; err != nil {
-		return fmt.Errorf("deactivate document: %w", err)
+		Where("collection = ? AND path = ? AND active = true", collection, path).
+		Update("active", false)
+	if result.Error != nil {
+		return false, fmt.Errorf("deactivate document: %w", result.Error)
 	}
 
-	return nil
+	return result.RowsAffected == 1, nil
 }
 
 // CollectionDocCounts returns active document counts by collection.

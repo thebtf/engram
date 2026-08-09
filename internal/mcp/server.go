@@ -877,9 +877,9 @@ func (s *Server) primaryTools() []Tool {
 			},
 		},
 		{
-			Name:        "docs",
-			Description: "Versioned documents and collections. Actions: create, read, list, history, comment, collections, documents, get_doc, remove, ingest. Action required.",
-			tier:        tierUseful,
+			Name: "docs",
+			Description: "Versioned documents and collections. docs(action=ingest) stores the full content-addressed body with collection, path, title, and hash metadata; document chunking, embeddings, and search is unavailable. Actions: create, read, list, history, comment, collections, documents, get_doc, remove, ingest. Action required.",
+			tier: tierUseful,
 			InputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"action"},
@@ -887,7 +887,7 @@ func (s *Server) primaryTools() []Tool {
 					"action":      map[string]any{"type": "string", "enum": docsActions, "description": "Action to perform (required)"},
 					"path":        map[string]any{"type": "string", "description": "Document path"},
 					"project":     map[string]any{"type": "string", "description": "Project name"},
-					"content":     map[string]any{"type": "string", "description": "Document content (for create, comment, or ingest)"},
+					"content":     map[string]any{"type": "string", "description": "Document content (for create or comment; ingest stores the full content-addressed body)"},
 					"collection":  map[string]any{"type": "string", "description": "Collection name (for documents, get_doc, remove, or ingest)"},
 					"version":     map[string]any{"type": "number", "description": "Version number (for read)"},
 					"document_id": map[string]any{"type": "number", "description": "Versioned document ID (for comment)"},
