@@ -58,6 +58,13 @@ func nodeToRow(n *models.KnowledgeNode) nodeRow {
 	}
 }
 
+func normalizeNodeMetadata(metadata []byte) []byte {
+	if len(metadata) == 0 {
+		return []byte("{}")
+	}
+	return metadata
+}
+
 // NodesStore handles knowledge_nodes CRUD with scope-based visibility filtering.
 //
 // Visibility contract (T012 AC):
@@ -108,6 +115,7 @@ func (s *NodesStore) Create(ctx context.Context, node *models.KnowledgeNode) (*m
 	default:
 		return nil, fmt.Errorf("invalid privacy_scope %q", node.PrivacyScope)
 	}
+	node.Metadata = normalizeNodeMetadata(node.Metadata)
 
 	row := nodeToRow(node)
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
@@ -196,6 +204,7 @@ func (s *NodesStore) Update(ctx context.Context, node *models.KnowledgeNode) (*m
 	default:
 		return nil, fmt.Errorf("invalid privacy_scope %q", ps)
 	}
+	node.Metadata = normalizeNodeMetadata(node.Metadata)
 	updates := map[string]interface{}{
 		"external_ref":  node.ExternalRef,
 		"metadata":      node.Metadata,

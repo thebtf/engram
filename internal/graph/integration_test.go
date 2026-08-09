@@ -223,3 +223,95 @@ func TestPathC_T015_NodeCreatedAtTimestamp(t *testing.T) {
 	assert.True(t, node.CreatedAt.After(before), "CreatedAt must be after %v, got %v", before, node.CreatedAt)
 	assert.True(t, node.CreatedAt.Before(after), "CreatedAt must be before %v, got %v", after, node.CreatedAt)
 }
+
+// TestNodesStore_MetadataDefaults_Create verifies that optional metadata is
+// persisted as an empty JSON object, while non-empty JSON is unchanged.
+func TestNodesStore_MetadataDefaults_Create(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping metadata integration test")
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Warn)})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	const project = "graph-metadata-create-test"
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM knowledge_nodes WHERE project = ?", project).Error })
+	ns := NewNodesStore(db)
+
+	for _, tc := range []struct {
+		name     string
+		metadata []byte
+		expected string
+	}{
+		{name: "nil", expected: "{}"},
+		{name: "empty", metadata: []byte{}, expected: "{}"},
+		{name: "non-empty", metadata: []byte(`{"source":"test"}`), expected: `{"source":"test"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node, err := ns.Create(context.Background(), &models.KnowledgeNode{
+				NodeType: models.NodeTypeSkill, ExternalRef: "create-" + tc.name, Project: project, Metadata: tc.metadata,
+			})
+			require.NoError(t, err)
+			assert.JSONEq(t, tc.expected, string(node.Metadata))
+			if len(tc.metadata) != 0 {
+				assert.Equal(t, tc.metadata, node.Metadata)
+			}
+
+			stored, err := ns.Get(context.Background(), node.ID, true)
+			require.NoError(t, err)
+			assert.JSONEq(t, tc.expected, string(stored.Metadata))
+		})
+	}
+}
+
+// TestNodesStore_MetadataDefaults_Update verifies that optional metadata is
+// normalized on updates as well as creates.
+func TestNodesStore_MetadataDefaults_Update(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping metadata integration test")
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Warn)})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	const project = "graph-metadata-update-test"
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM knowledge_nodes WHERE project = ?", project).Error })
+	ns := NewNodesStore(db)
+
+	for _, tc := range []struct {
+		name     string
+		metadata []byte
+		expected string
+	}{
+		{name: "nil", expected: "{}"},
+		{name: "empty", metadata: []byte{}, expected: "{}"},
+		{name: "non-empty", metadata: []byte(`{"source":"test"}`), expected: `{"source":"test"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node, err := ns.Create(context.Background(), &models.KnowledgeNode{
+				NodeType: models.NodeTypeSkill, ExternalRef: "update-" + tc.name, Project: project, Metadata: []byte(`{"initial":true}`),
+			})
+			require.NoError(t, err)
+
+			node.Metadata = tc.metadata
+			_, err = ns.Update(context.Background(), node)
+			require.NoError(t, err)
+			assert.JSONEq(t, tc.expected, string(node.Metadata))
+			if len(tc.metadata) != 0 {
+				assert.Equal(t, tc.metadata, node.Metadata)
+			}
+
+			stored, err := ns.Get(context.Background(), node.ID, true)
+			require.NoError(t, err)
+			assert.JSONEq(t, tc.expected, string(stored.Metadata))
+		})
+	}
+}
