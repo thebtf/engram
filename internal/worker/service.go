@@ -209,7 +209,7 @@ type Service struct {
 	vaultErr                    error
 	promptCache                 sync.Map // map[int64]promptCacheEntry — last user prompt per session
 	eventBus                    *projectevents.Bus
-	projectReaper               *reaper.Reaper
+	projectReaper               projectReaperLifecycle
 	// lastRequestAt tracks the Unix nanosecond timestamp of the most recent
 	// MCP/REST request handled by this server. Updated atomically in
 	// requestActivityMiddleware on every request.
@@ -268,6 +268,10 @@ type lifecycleQueue interface {
 	cognitivecore.HintQueue
 	Start(ctx context.Context) error
 	Stop() error
+}
+
+type projectReaperLifecycle interface {
+	Stop()
 }
 
 // promptCacheEntry stores a user prompt with a timestamp for eviction.
@@ -2290,6 +2294,18 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	}
 	if s.writelintTokenStore != nil {
 		s.writelintTokenStore.Close()
+	}
+	if s.projectReaper != nil {
+		reaperStopped := make(chan struct{})
+		go func() {
+			s.projectReaper.Stop()
+			close(reaperStopped)
+		}()
+		select {
+		case <-reaperStopped:
+		case <-ctx.Done():
+			collectError("project_reaper", ctx.Err())
+		}
 	}
 
 	// Phase 4: flush pending session work.

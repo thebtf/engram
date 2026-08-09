@@ -26,6 +26,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -36,38 +38,58 @@ const (
 	// defaultRetentionDays is the number of days a soft-deleted project is kept
 	// before the reaper hard-deletes the row.
 	defaultRetentionDays = 30
-
-	// reaperInterval is how often the reaper runs its cleanup sweep.
-	reaperInterval = 1 * time.Hour
+	reaperInterval        = time.Hour
+	maxRetentionDays      = int64((1<<63 - 1) / (24 * time.Hour))
 )
 
 // Reaper periodically hard-deletes project rows whose removed_at timestamp
 // has passed the retention window.
 type Reaper struct {
-	db   *gorm.DB
-	stop chan struct{}
-	done chan struct{}
+	db *gorm.DB
+
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	done    chan struct{}
+	running bool
 }
 
 // New creates a Reaper backed by the given database connection.
 func New(db *gorm.DB) *Reaper {
-	return &Reaper{
-		db:   db,
-		stop: make(chan struct{}),
-		done: make(chan struct{}),
-	}
+	return &Reaper{db: db}
 }
 
 // Start launches the reaper loop in a background goroutine. It respects ctx for
 // graceful shutdown and also responds to Stop(). Returns immediately.
 func (r *Reaper) Start(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	r.mu.Lock()
+	if r.running {
+		r.mu.Unlock()
+		return
+	}
+	ctx, r.cancel = context.WithCancel(ctx)
+	r.done = make(chan struct{})
+	r.running = true
+	done := r.done
+	r.mu.Unlock()
+
 	log.Info().
 		Dur("interval", reaperInterval).
 		Int("retention_days", retentionDays()).
 		Msg("project reaper started")
 
 	go func() {
-		defer close(r.done)
+		defer func() {
+			r.mu.Lock()
+			if r.done == done {
+				r.running = false
+			}
+			close(done)
+			r.mu.Unlock()
+		}()
 
 		ticker := time.NewTicker(reaperInterval)
 		defer ticker.Stop()
@@ -77,11 +99,10 @@ func (r *Reaper) Start(ctx context.Context) {
 			case <-ctx.Done():
 				log.Info().Msg("project reaper stopped (context cancelled)")
 				return
-			case <-r.stop:
-				log.Info().Msg("project reaper stopped")
-				return
 			case <-ticker.C:
-				r.purge(ctx)
+				if err := r.purge(ctx); err != nil {
+					log.Error().Err(err).Msg("project reaper: purge sweep failed")
+				}
 			}
 		}
 	}()
@@ -89,23 +110,29 @@ func (r *Reaper) Start(ctx context.Context) {
 
 // Stop signals the reaper to cease and waits for the goroutine to exit.
 func (r *Reaper) Stop() {
-	select {
-	case <-r.stop:
-		// Already closed — idempotent.
-	default:
-		close(r.stop)
+	r.mu.Lock()
+	if r.done == nil {
+		r.mu.Unlock()
+		return
 	}
-	<-r.done
+	cancel, done := r.cancel, r.done
+	r.mu.Unlock()
+
+	cancel()
+	<-done
 }
 
 // purge deletes projects that were soft-deleted more than retentionDays() ago.
 // It is idempotent and safe to call concurrently.
-func (r *Reaper) purge(ctx context.Context) {
+func (r *Reaper) purge(ctx context.Context) error {
 	if r.db == nil {
-		return
+		return fmt.Errorf("reaper: db is nil")
 	}
 
-	retention := time.Duration(retentionDays()) * 24 * time.Hour
+	retention, err := retentionDuration()
+	if err != nil {
+		return err
+	}
 	cutoff := time.Now().UTC().Add(-retention)
 
 	result := r.db.WithContext(ctx).
@@ -114,8 +141,7 @@ func (r *Reaper) purge(ctx context.Context) {
 			cutoff,
 		)
 	if result.Error != nil {
-		log.Error().Err(result.Error).Msg("project reaper: purge query failed")
-		return
+		return fmt.Errorf("project reaper: purge query failed: %w", result.Error)
 	}
 
 	if result.RowsAffected > 0 {
@@ -124,25 +150,55 @@ func (r *Reaper) purge(ctx context.Context) {
 			Time("cutoff", cutoff).
 			Msg("project reaper: purged soft-deleted projects")
 	}
+	return nil
 }
 
 // retentionDays returns the configured retention window in days.
 // Reads ENGRAM_PROJECT_RETENTION_DAYS; falls back to defaultRetentionDays.
 func retentionDays() int {
-	if v := os.Getenv("ENGRAM_PROJECT_RETENTION_DAYS"); v != "" {
-		if days, err := strconv.Atoi(v); err == nil && days > 0 {
-			return days
+	days, err := strconv.Atoi(os.Getenv("ENGRAM_PROJECT_RETENTION_DAYS"))
+	if err != nil || days <= 0 {
+		return defaultRetentionDays
+	}
+	return days
+}
+
+func retentionDuration() (time.Duration, error) {
+	value := os.Getenv("ENGRAM_PROJECT_RETENTION_DAYS")
+	if value == "" {
+		return defaultRetentionDays * 24 * time.Hour, nil
+	}
+	days, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		if isPositiveDecimal(value) {
+			return 0, fmt.Errorf("reaper: retention days exceed maximum %d", maxRetentionDays)
+		}
+		return defaultRetentionDays * 24 * time.Hour, nil
+	}
+	if days <= 0 {
+		return defaultRetentionDays * 24 * time.Hour, nil
+	}
+	if days > maxRetentionDays {
+		return 0, fmt.Errorf("reaper: retention days exceed maximum %d", maxRetentionDays)
+	}
+	return time.Duration(days) * 24 * time.Hour, nil
+}
+
+func isPositiveDecimal(value string) bool {
+	value = strings.TrimPrefix(value, "+")
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
 		}
 	}
-	return defaultRetentionDays
+	return strings.TrimLeft(value, "0") != ""
 }
 
 // PurgeOnce runs a single purge sweep synchronously. Useful for integration
 // testing where time-based scheduling is not practical.
 func (r *Reaper) PurgeOnce(ctx context.Context) error {
-	if r.db == nil {
-		return fmt.Errorf("reaper: db is nil")
-	}
-	r.purge(ctx)
-	return nil
+	return r.purge(ctx)
 }

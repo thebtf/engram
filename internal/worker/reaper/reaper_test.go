@@ -171,3 +171,20 @@ func TestReaper_StopsOnContextCancel(t *testing.T) {
 		t.Fatal("reaper goroutine did not stop within 5s after context cancel")
 	}
 }
+
+func TestReaper_PurgeOnceReturnsQueryError(t *testing.T) {
+	db, cleanup := testReaperDB(t)
+	defer cleanup()
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sql DB: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close sql DB: %v", err)
+	}
+
+	if err := New(db).PurgeOnce(context.Background()); err == nil {
+		t.Fatal("PurgeOnce returned nil after the database was closed")
+	}
+}
