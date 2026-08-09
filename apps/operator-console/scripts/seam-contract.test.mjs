@@ -669,6 +669,21 @@ test('graph capability classification is dormant when gated and never unconditio
   assert.match(graphPageSource, /graphPresentation\.value === ['"]gated['"] \? ['"]dormant['"] : ['"]live['"]/, 'gated capability must classify as dormant')
 })
 
+test('graph async ownership invalidates stale requests and notices', () => {
+  const graphComposableSource = read(join(root, 'composables', 'useOperatorGraph.ts'))
+  const graphPageSource = read(join(root, 'pages', 'graph.vue'))
+
+  for (const generation of ['refreshGeneration', 'edgesGeneration', 'traverseGeneration', 'pathGeneration', 'mutationGeneration']) {
+    assert.match(graphComposableSource, new RegExp(`const ${generation} = ref\\(0\\)`), `${generation} must be scoped to this graph composable instance`)
+  }
+  assert.match(graphComposableSource, /onScopeDispose\(\(\) => \{[\s\S]*scopeActive = false/, 'composable disposal must invalidate pending graph work')
+  assert.match(graphComposableSource, /selectedNodeID\.value !== nodeID/, 'edge responses must retain selected-node ownership')
+  assert.match(graphComposableSource, /if \(!owns\(traverseGeneration, run\)\) return/, 'traverse responses must retain request ownership')
+  assert.match(graphComposableSource, /function invalidateMutations\(\)/, 'newer page actions must invalidate pending mutations')
+  assert.match(graphPageSource, /function dismissNotice\(\)[\s\S]*invalidateMutations\(\)/, 'dismissal must retain notice ownership')
+  assert.match(graphPageSource, /const run = \+\+actionGeneration[\s\S]*invalidateMutations\(\)/, 'mutation actions must retain their latest notice')
+})
+
 test('Nuxt UI color-mode auto-registration stays disabled', () => {
   const source = read(nuxtConfigPath)
 

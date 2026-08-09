@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { operatorDiagnosisKey } from '../composables/useOperatorApi'
 import {
   GRAPH_DEFAULT_PATH_DEPTH,
@@ -29,12 +29,13 @@ const {
   pathBusy,
   pathError,
   lastMutationError,
-  refresh,
+  refresh: refreshGraph,
   refreshConnectedEdges,
   createNode,
   createEdge,
   deleteEdge,
   deleteNode,
+  invalidateMutations,
   traverseMemory,
   findPath,
 } = useOperatorGraph()
@@ -67,6 +68,11 @@ const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
 const confirmDeleteEdgeID = ref<string | null>(null)
 const confirmDeleteNode = ref(false)
 const deleteCascade = ref(false)
+let actionGeneration = 0
+
+onBeforeUnmount(() => {
+  actionGeneration += 1
+})
 
 const selectedNode = computed(() => nodes.find((node) => node.id === selectedNodeID.value) || null)
 const nodeIndex = computed<Record<string, OperatorGraphNode>>(() => Object.fromEntries(nodes.map((node) => [node.id, node])))
@@ -88,13 +94,17 @@ const typedError = computed(() => lastMutationError.value)
 const projectOptions = computed(() => projects.length ? projects : (selectedProject.value ? [selectedProject.value] : []))
 
 watch(selectedProject, () => {
+  actionGeneration += 1
+  invalidateMutations()
   confirmDeleteEdgeID.value = null
   confirmDeleteNode.value = false
   notice.value = null
-  void refresh()
+  void refreshGraph()
 })
 
 watch(selectedNodeID, (next) => {
+  actionGeneration += 1
+  invalidateMutations()
   confirmDeleteEdgeID.value = null
   confirmDeleteNode.value = false
   deleteCascade.value = false
@@ -158,7 +168,21 @@ function clearNotice() {
   notice.value = null
 }
 
+function dismissNotice() {
+  actionGeneration += 1
+  invalidateMutations()
+  clearNotice()
+}
+
+function refresh() {
+  actionGeneration += 1
+  invalidateMutations()
+  return refreshGraph()
+}
+
 async function submitCreateNode() {
+  const run = ++actionGeneration
+  invalidateMutations()
   if (!selectedProject.value || !nodeForm.externalRef.trim()) {
     notice.value = { kind: 'error', text: t('graphPage.notices.invalidNode') }
     return
@@ -169,6 +193,7 @@ async function submitCreateNode() {
     project: selectedProject.value,
     privacyScope: nodeForm.privacyScope,
   })
+  if (run !== actionGeneration) return
   if (result.ok) {
     nodeForm.externalRef = ''
     notice.value = { kind: 'success', text: t('graphPage.notices.nodeCreated') }
@@ -178,6 +203,8 @@ async function submitCreateNode() {
 }
 
 async function submitCreateEdge() {
+  const run = ++actionGeneration
+  invalidateMutations()
   if (!edgeForm.sourceNodeID || !edgeForm.targetNodeID) {
     notice.value = { kind: 'error', text: t('graphPage.notices.invalidEdge') }
     return
@@ -188,6 +215,7 @@ async function submitCreateEdge() {
     edgeType: edgeForm.edgeType,
     reasoning: edgeForm.reasoning.trim(),
   })
+  if (run !== actionGeneration) return
   if (result.ok) {
     edgeForm.targetNodeID = ''
     edgeForm.reasoning = ''
@@ -198,12 +226,15 @@ async function submitCreateEdge() {
 }
 
 async function requestDeleteEdge(edgeID: string) {
+  const run = ++actionGeneration
+  invalidateMutations()
   if (confirmDeleteEdgeID.value !== edgeID) {
     confirmDeleteEdgeID.value = edgeID
     notice.value = null
     return
   }
   const result = await deleteEdge(edgeID)
+  if (run !== actionGeneration) return
   confirmDeleteEdgeID.value = null
   if (result.ok) {
     notice.value = { kind: 'success', text: t('graphPage.notices.edgeDeleted') }
@@ -213,6 +244,8 @@ async function requestDeleteEdge(edgeID: string) {
 }
 
 async function requestDeleteNode() {
+  const run = ++actionGeneration
+  invalidateMutations()
   if (!selectedNode.value) return
   if (!confirmDeleteNode.value) {
     confirmDeleteNode.value = true
@@ -220,6 +253,7 @@ async function requestDeleteNode() {
     return
   }
   const result = await deleteNode({ nodeID: selectedNode.value.id, cascade: deleteCascade.value })
+  if (run !== actionGeneration) return
   confirmDeleteNode.value = false
   if (result.ok) {
     notice.value = { kind: 'success', text: t('graphPage.notices.nodeDeleted') }
@@ -229,6 +263,8 @@ async function requestDeleteNode() {
 }
 
 async function runTraverse() {
+  actionGeneration += 1
+  invalidateMutations()
   if (!traverseForm.memoryID.trim()) {
     notice.value = { kind: 'error', text: t('graphPage.notices.invalidTraverse') }
     return
@@ -238,6 +274,8 @@ async function runTraverse() {
 }
 
 async function runFindPath() {
+  actionGeneration += 1
+  invalidateMutations()
   if (!pathForm.sourceID.trim() || !pathForm.targetID.trim()) {
     notice.value = { kind: 'error', text: t('graphPage.notices.invalidPath') }
     return
@@ -299,7 +337,7 @@ async function runFindPath() {
 
     <div v-if="notice" class="notice" :data-kind="notice.kind">
       <span>{{ notice.text }}</span>
-      <button class="notice-close" @click="notice = null">×</button>
+      <button class="notice-close" :aria-label="t('graphPage.actions.closeNotice')" @click="dismissNotice">×</button>
     </div>
 
     <div v-if="typedError" class="typed-error">
@@ -329,7 +367,6 @@ async function runFindPath() {
           <span>{{ t('graphPage.forms.node.privacy') }}</span>
           <select id="graph-node-privacy" v-model="nodeForm.privacyScope" name="graph-node-privacy" class="select" :disabled="writeDisabled">
             <option value="project">{{ enumLabel('privacy', 'project') }}</option>
-            <option value="private">{{ enumLabel('privacy', 'private') }}</option>
             <option value="shared">{{ enumLabel('privacy', 'shared') }}</option>
             <option value="global">{{ enumLabel('privacy', 'global') }}</option>
           </select>
