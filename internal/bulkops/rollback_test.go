@@ -417,9 +417,16 @@ func TestRollback_ConflictDetectedAfterStalePreTransactionRead(t *testing.T) {
 		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id = 'rollback-stale-read-001'`).Error
 	})
 	require.NoError(t, db.Exec(`UPDATE memories SET updated_at = NOW() - INTERVAL '2 seconds' WHERE id = ?`, mem.ID).Error)
-
-	beforeState, err := json.Marshal(map[string]any{fmt.Sprintf("%d", mem.ID): mem})
-	require.NoError(t, err)
+	beforeState, err := json.Marshal(map[string]any{fmt.Sprintf("%d", mem.ID): &models.Memory{
+		ID:          mem.ID,
+		CreatedAt:   mem.CreatedAt,
+		UpdatedAt:   mem.UpdatedAt,
+		Content:     "before concurrent edit",
+		Project:     mem.Project,
+		SourceAgent: mem.SourceAgent,
+		Status:      "active",
+		Tags:        []string{},
+	}})
 	snap, err := models.NewBulkOpSnapshot("rollback-stale-read-001", models.SnapshotOpBulkDelete, "master", beforeState)
 	require.NoError(t, err)
 	snap.AffectedMemoryIDs = []int64{mem.ID}
@@ -429,7 +436,7 @@ func TestRollback_ConflictDetectedAfterStalePreTransactionRead(t *testing.T) {
 
 	writer := db.Begin()
 	require.NoError(t, writer.Error)
-	require.NoError(t, writer.Exec(`UPDATE memories SET content = 'concurrent edit', updated_at = NOW() WHERE id = ?`, mem.ID).Error)
+	require.NoError(t, writer.Exec(`UPDATE memories SET content = 'concurrent edit', updated_at = ? WHERE id = ?`, createdSnap.CreatedAt.Add(time.Second), mem.ID).Error)
 
 	type rollbackOutcome struct {
 		result *RollbackResult

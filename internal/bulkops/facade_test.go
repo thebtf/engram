@@ -321,3 +321,51 @@ func TestFacade_BulkPromote_AmendFailureRollsBack(t *testing.T) {
 	assert.Zero(t, memories, "a failed audit snapshot amendment must roll back promoted memories")
 	assert.Equal(t, snapshotsBefore, snapshotsAfter, "a failed audit snapshot amendment must roll back its snapshot")
 }
+
+func TestFacade_BulkPromote_PreservesCandidateAuditAndSeparatesIDs(t *testing.T) {
+	db, store := openTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	auditStore := gormdb.NewAuditStore(db)
+	candidateStore := gormdb.NewCandidateStore(db, auditStore)
+	f := NewFacade(snapStore, candidateStore, memStore, auditStore)
+
+	project := fmt.Sprintf("tg6-promote-audit-%d", time.Now().UnixNano())
+	candidate, err := candidateStore.Create(context.Background(), &models.CrystallizationCandidate{
+		SourceSessionID:         "tg6-promote-audit",
+		ProposedContent:         "transaction-owned promotion keeps candidate audit",
+		ProposedTier:            "semantic",
+		ProposedPromotionTarget: "semantic",
+		PrivacyScope:            "project",
+		Status:                  models.CandidateStatusPending,
+		Fingerprint:             project,
+		AffectedProjects:        []string{project},
+		Confidence:              0.9,
+		RecurrenceCount:         1,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
+		_ = db.Exec("DELETE FROM memories WHERE project = ?", project).Error
+	})
+
+	var auditsBefore int64
+	require.NoError(t, db.Model(&gormdb.AuditLogEntry{}).Where("action = ? AND reason LIKE ?", "promote_candidate", fmt.Sprintf("candidate %d promoted%%", candidate.ID)).Count(&auditsBefore).Error)
+	result, err := f.Execute(context.Background(), adminIdentity(), BulkOp{Type: models.SnapshotOpBulkPromote, CandidateIDs: []int64{candidate.ID}})
+	require.NoError(t, err)
+	require.Len(t, result.Promoted, 1)
+
+	require.Eventually(t, func() bool {
+		var auditsAfter int64
+		return db.Model(&gormdb.AuditLogEntry{}).Where("action = ? AND reason LIKE ?", "promote_candidate", fmt.Sprintf("candidate %d promoted%%", candidate.ID)).Count(&auditsAfter).Error == nil && auditsAfter > auditsBefore
+	}, time.Second, 10*time.Millisecond, "successful bulk promotion must retain its per-candidate audit row")
+
+	snap, err := snapStore.Get(context.Background(), result.SnapshotID)
+	require.NoError(t, err)
+	assert.NotContains(t, snap.AffectedMemoryIDs, candidate.ID)
+	assert.Contains(t, snap.AffectedMemoryIDs, result.Promoted[0])
+	entries, err := decodeTypedBeforeState(snap.BeforeState)
+	require.NoError(t, err)
+	assert.Contains(t, entries, fmt.Sprintf("candidate:%d", candidate.ID))
+	assert.Contains(t, entries, fmt.Sprintf("memory:%d", result.Promoted[0]))
+}

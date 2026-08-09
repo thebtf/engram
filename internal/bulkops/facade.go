@@ -160,10 +160,16 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 	if err != nil {
 		return nil, fmt.Errorf("bulk_promote new_snapshot: %w", err)
 	}
-	snap.AffectedMemoryIDs = ids
+	snap.AffectedMemoryIDs = []int64{}
 	snap.SourceSessionID = op.SourceSessionID
 	snap.Parameters = params
 
+	type promotionAudit struct {
+		candidateID int64
+		candidate   *models.CrystallizationCandidate
+		memory      *models.Memory
+	}
+	var promotionAudits []promotionAudit
 	result := &ExecuteResult{SnapshotID: snapshotID, Promoted: []int64{}}
 	txErr := f.candidateStore.GetDB().WithContext(ctx).Transaction(func(tx *gormpkg.DB) error {
 		created, createErr := f.snapshotStore.CreateTx(ctx, tx, snap)
@@ -173,7 +179,7 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 		result.SnapshotID = created.SnapshotID
 
 		for _, id := range ids {
-			candidate, getErr := f.candidateStore.Get(ctx, id)
+			candidate, getErr := f.candidateStore.GetForUpdateTx(ctx, tx, id)
 			if getErr != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("candidate %d: get: %v", id, getErr))
 				log.Warn().Err(getErr).Int64("candidate_id", id).Msg("bulk_promote: get candidate failed")
@@ -203,6 +209,7 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 			} else if createdMemory != nil {
 				result.Promoted = append(result.Promoted, createdMemory.ID)
 			}
+			promotionAudits = append(promotionAudits, promotionAudit{candidateID: id, candidate: promoted, memory: createdMemory})
 		}
 		if amendErr := f.snapshotStore.AmendPromoteEntriesTx(ctx, tx, created.SnapshotID, result.Promoted); amendErr != nil {
 			return fmt.Errorf("bulk_promote amend snapshot entries: %w", amendErr)
@@ -211,6 +218,9 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 	})
 	if txErr != nil {
 		return nil, txErr
+	}
+	for _, promotion := range promotionAudits {
+		f.candidateStore.LogPromoteAudit(promotion.candidateID, promotion.candidate, promotion.memory)
 	}
 
 	if f.auditStore != nil {
@@ -401,24 +411,21 @@ func (f *Facade) captureCandidateBeforeState(ctx context.Context, ids []int64) (
 }
 
 // capturePromoteBeforeState captures candidate before-state as typed SnapshotEntry rows.
-// Each candidate ID is stored as EntryKindRestore with the candidate body as Before data.
-// Promoted memory IDs (created by the op) are added later via AmendPromoteEntries as
-// EntryKindDelete (no before needed — they did not exist pre-op).
+// Entity-prefixed keys keep candidate IDs distinct from promoted memory IDs.
 func (f *Facade) capturePromoteBeforeState(ctx context.Context, candidateIDs []int64) (string, json.RawMessage, error) {
 	snapshotID := uuid.New().String()
 	state := make(map[string]models.SnapshotEntry, len(candidateIDs))
 	for _, id := range candidateIDs {
 		c, err := f.candidateStore.Get(ctx, id)
 		if err != nil {
-			// Missing candidate: still record a restore entry with empty Before.
-			state[fmt.Sprintf("%d", id)] = models.SnapshotEntry{Kind: models.EntryKindRestore}
+			state[fmt.Sprintf("candidate:%d", id)] = models.SnapshotEntry{Kind: models.EntryKindRestore}
 			continue
 		}
 		before, marshalErr := json.Marshal(c)
 		if marshalErr != nil {
 			return "", nil, fmt.Errorf("capturePromoteBeforeState: marshal candidate %d: %w", id, marshalErr)
 		}
-		state[fmt.Sprintf("%d", id)] = models.SnapshotEntry{Kind: models.EntryKindRestore, Before: json.RawMessage(before)}
+		state[fmt.Sprintf("candidate:%d", id)] = models.SnapshotEntry{Kind: models.EntryKindRestore, Before: json.RawMessage(before)}
 	}
 	bs, err := json.Marshal(state)
 	if err != nil {

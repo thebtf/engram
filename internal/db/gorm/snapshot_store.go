@@ -210,6 +210,15 @@ func (s *SnapshotStore) Get(ctx context.Context, snapshotID string) (*models.Bul
 	return toDomainSnapshot(&row), nil
 }
 
+// GetForUpdateTx retrieves the current snapshot state while holding its row lock.
+func (s *SnapshotStore) GetForUpdateTx(ctx context.Context, tx *gorm.DB, snapshotID string) (*models.BulkOpSnapshot, error) {
+	var row snapshotRow
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("snapshot_id = ?", snapshotID).First(&row).Error; err != nil {
+		return nil, fmt.Errorf("snapshot_store get_for_update %q: %w", snapshotID, err)
+	}
+	return toDomainSnapshot(&row), nil
+}
+
 // GetByID retrieves a snapshot by its numeric primary key.
 // Returns gorm.ErrRecordNotFound if absent.
 func (s *SnapshotStore) GetByID(ctx context.Context, id int64) (*models.BulkOpSnapshot, error) {
@@ -321,13 +330,12 @@ func (s *SnapshotStore) amendPromoteEntriesTx(ctx context.Context, tx *gorm.DB, 
 		}
 	}
 
-	// Add delete entries for each promoted memory ID. candidate_review_action
-	// snapshots use entity-prefixed keys so a memory ID cannot overwrite the
-	// candidate restore entry when the two tables happen to allocate the same ID.
+	// Use entity-prefixed keys whenever a snapshot contains both candidate and
+	// memory IDs; independent table sequences can otherwise collide.
 	deleteEntry, _ := json.Marshal(models.SnapshotEntry{Kind: models.EntryKindDelete})
 	for _, memID := range promotedMemoryIDs {
 		key := fmt.Sprintf("%d", memID)
-		if row.OpType == string(models.SnapshotOpCandidateReviewAction) {
+		if row.OpType == string(models.SnapshotOpCandidateReviewAction) || row.OpType == string(models.SnapshotOpBulkPromote) {
 			key = fmt.Sprintf("memory:%d", memID)
 		}
 		existing[key] = json.RawMessage(deleteEntry)

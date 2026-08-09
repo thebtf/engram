@@ -85,14 +85,6 @@ func Rollback(
 
 	actor := resolveActor(identity)
 
-	// Decode before_state. Supports two formats:
-	//  - Typed entries: map[id-or-entity-key]{"kind":"restore"|"delete","before":<raw>}
-	//  - Legacy flat format: map[id]<memory JSON> (bulk_delete, bulk_supersede)
-	// decodeTypedBeforeState transparently handles both.
-	typedEntries, err := decodeTypedBeforeState(snap.BeforeState)
-	if err != nil {
-		return nil, fmt.Errorf("rollback: decode before_state: %w", err)
-	}
 
 	// Conflict detection and mutations must share one transaction. Locking each target
 	// row makes a concurrent edit commit before the check or wait behind this rollback.
@@ -100,28 +92,28 @@ func Rollback(
 	result := &RollbackResult{SnapshotID: snapshotID}
 
 	txErr := db.WithContext(ctx).Transaction(func(tx *gormpkg.DB) error {
-		var lockedSnapshot struct {
-			Status string
-		}
-		if err := tx.WithContext(ctx).Table("bulk_op_snapshots").
-			Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("snapshot_id = ?", snapshotID).First(&lockedSnapshot).Error; err != nil {
+		lockedSnap, err := snapshotStore.GetForUpdateTx(ctx, tx, snapshotID)
+		if err != nil {
 			return fmt.Errorf("rollback: lock snapshot %q: %w", snapshotID, err)
 		}
-		if models.SnapshotStatus(lockedSnapshot.Status) != models.SnapshotStatusCommitted {
-			return fmt.Errorf("rollback: snapshot %q has status %q, expected 'committed': %w", snapshotID, lockedSnapshot.Status, ErrSnapshotNotRollbackable)
+		if lockedSnap.Status != models.SnapshotStatusCommitted {
+			return fmt.Errorf("rollback: snapshot %q has status %q, expected 'committed': %w", snapshotID, lockedSnap.Status, ErrSnapshotNotRollbackable)
+		}
+		typedEntries, err := decodeTypedBeforeState(lockedSnap.BeforeState)
+		if err != nil {
+			return fmt.Errorf("rollback: decode before_state: %w", err)
 		}
 
 		var idsToCheck []int64
 		var createdIDsToCheck []int64
-		for _, id := range snap.AffectedMemoryIDs {
+		for _, id := range lockedSnap.AffectedMemoryIDs {
 			if entry, ok := snapshotEntryForMemoryID(typedEntries, id); ok && entry.Kind == models.EntryKindDelete {
 				createdIDsToCheck = append(createdIDsToCheck, id)
 				continue
 			}
 			idsToCheck = append(idsToCheck, id)
 		}
-		conflictIDs, err := detectConflictsTx(ctx, tx, idsToCheck, snap.CreatedAt)
+		conflictIDs, err := detectConflictsTx(ctx, tx, idsToCheck, lockedSnap.CreatedAt)
 		if err != nil {
 			return fmt.Errorf("rollback: conflict detection: %w", err)
 		}
@@ -156,7 +148,7 @@ func Rollback(
 					// Empty before-state: row didn't exist pre-op; skip (same as legacy skip).
 					continue
 				}
-				if entity == snapshotEntryEntityCandidate || (entity == "" && (snap.OpType == models.SnapshotOpBulkPromote || snap.OpType == models.SnapshotOpCandidateReviewAction)) {
+				if entity == snapshotEntryEntityCandidate || (entity == "" && (lockedSnap.OpType == models.SnapshotOpBulkPromote || lockedSnap.OpType == models.SnapshotOpCandidateReviewAction)) {
 					// bulk_promote and candidate_review_action store candidate JSON in restore entries.
 					// Rollback must revert the candidate row to its pre-op state (e.g., pending),
 					// NOT write candidate data into the memories table.

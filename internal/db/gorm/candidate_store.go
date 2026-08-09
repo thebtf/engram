@@ -164,6 +164,15 @@ func (s *CandidateStore) Get(ctx context.Context, id int64) (*models.Crystalliza
 	return toDomainCandidate(&row), nil
 }
 
+// GetForUpdateTx retrieves and locks a candidate in the caller's transaction.
+func (s *CandidateStore) GetForUpdateTx(ctx context.Context, tx *gorm.DB, id int64) (*models.CrystallizationCandidate, error) {
+	var row candidateRow
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, id).Error; err != nil {
+		return nil, fmt.Errorf("candidate_store get_for_update %d: %w", id, err)
+	}
+	return toDomainCandidate(&row), nil
+}
+
 // ListByStatus returns candidates filtered by project (via affected_projects array) and status.
 // project="" returns candidates regardless of project.
 // limit <= 0 defaults to 50.
@@ -389,6 +398,11 @@ func (s *CandidateStore) PromoteWithMemoryTx(
 		return nil, nil, err
 	}
 	return updatedCandidate, createdMemory, nil
+}
+
+// LogPromoteAudit records the post-commit audit entry for a transaction-owned promotion.
+func (s *CandidateStore) LogPromoteAudit(candidateID int64, updatedCandidate *models.CrystallizationCandidate, createdMemory *models.Memory) {
+	s.logPromoteAudit(candidateID, updatedCandidate, createdMemory)
 }
 
 // PromoteWithMemoryAndSnapshot creates the candidate-review snapshot, creates the
