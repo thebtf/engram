@@ -36,6 +36,7 @@ func testReaperDB(t *testing.T) (*gorm.DB, func()) {
 		created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		removed_at     TIMESTAMPTZ NULL,
 		last_heartbeat TIMESTAMPTZ DEFAULT NOW()
+
 	)`
 	if err := db.Exec(ddl).Error; err != nil {
 		sqlDB, _ := db.DB()
@@ -45,6 +46,15 @@ func testReaperDB(t *testing.T) (*gorm.DB, func()) {
 
 	sqlDB, _ := db.DB()
 	return db, func() { sqlDB.Close() }
+}
+
+func newTestReaper(t *testing.T, db *gorm.DB) *Reaper {
+	t.Helper()
+	r, err := New(db)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return r
 }
 
 func TestReaper_PurgesExpired(t *testing.T) {
@@ -64,7 +74,7 @@ func TestReaper_PurgesExpired(t *testing.T) {
 	}
 	defer db.Exec("DELETE FROM projects WHERE id = ?", id)
 
-	r := New(db)
+	r := newTestReaper(t, db)
 	if err := r.PurgeOnce(context.Background()); err != nil {
 		t.Fatalf("PurgeOnce: %v", err)
 	}
@@ -94,7 +104,7 @@ func TestReaper_PreservesUnexpired(t *testing.T) {
 	}
 	defer db.Exec("DELETE FROM projects WHERE id = ?", id)
 
-	r := New(db)
+	r := newTestReaper(t, db)
 	if err := r.PurgeOnce(context.Background()); err != nil {
 		t.Fatalf("PurgeOnce: %v", err)
 	}
@@ -127,7 +137,7 @@ func TestReaper_RespectsRetentionEnvVar(t *testing.T) {
 	}
 	defer db.Exec("DELETE FROM projects WHERE id = ?", id)
 
-	r := New(db)
+	r := newTestReaper(t, db)
 	if err := r.PurgeOnce(context.Background()); err != nil {
 		t.Fatalf("PurgeOnce: %v", err)
 	}
@@ -145,7 +155,7 @@ func TestReaper_StopsOnContextCancel(t *testing.T) {
 	db, cleanup := testReaperDB(t)
 	defer cleanup()
 
-	r := New(db)
+	r := newTestReaper(t, db)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -184,7 +194,8 @@ func TestReaper_PurgeOnceReturnsQueryError(t *testing.T) {
 		t.Fatalf("close sql DB: %v", err)
 	}
 
-	if err := New(db).PurgeOnce(context.Background()); err == nil {
+	r := newTestReaper(t, db)
+	if err := r.PurgeOnce(context.Background()); err == nil {
 		t.Fatal("PurgeOnce returned nil after the database was closed")
 	}
 }

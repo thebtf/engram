@@ -169,6 +169,10 @@ type Service struct {
 	version                     string
 	recentQueriesBuf            [maxRecentQueries]RecentSearchQuery
 	wg                          sync.WaitGroup
+	initWG                      sync.WaitGroup
+	shutdownOnce                sync.Once
+	shutdownDone                chan struct{}
+	shutdownErr                 error
 	recentQueriesLen            int
 	recentQueriesHead           int
 	statsCacheTTL               time.Duration
@@ -776,8 +780,11 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 
 	// Kick off heavy initialization in the background. The service is already
 	// accepting requests at this point; data-plane routes gate on s.ready.
-	go svc.initializeAsync()
-
+	svc.initWG.Add(1)
+	go func() {
+		defer svc.initWG.Done()
+		svc.initializeAsync()
+	}()
 	return svc, nil
 }
 
@@ -796,6 +803,9 @@ func (s *Service) createChunkManager() *chunking.Manager {
 // On any fatal error it calls setInitError which surfaces through /api/health.
 func (s *Service) initializeAsync() {
 	log.Info().Msg("background init: starting")
+	if s.ctx.Err() != nil {
+		return
+	}
 
 	// Verify data directory layout and settings file presence before the first DB dial.
 	if err := config.EnsureAll(); err != nil {
@@ -810,6 +820,10 @@ func (s *Service) initializeAsync() {
 	})
 	if err != nil {
 		s.setInitError(fmt.Errorf("init database: %w", err))
+		return
+	}
+	if s.ctx.Err() != nil {
+		_ = store.Close()
 		return
 	}
 
@@ -1276,8 +1290,14 @@ func (s *Service) initializeAsync() {
 	log.Info().Msg("background init: complete, service ready")
 
 	// Start project reaper (hourly cleanup of hard-expired soft-deleted projects).
-	projectReaper := reaper.New(store.DB)
+	projectReaper, err := reaper.New(store.DB)
+	if err != nil {
+		s.setInitError(fmt.Errorf("init project reaper: %w", err))
+		return
+	}
+	s.initMu.Lock()
 	s.projectReaper = projectReaper
+	s.initMu.Unlock()
 	projectReaper.Start(s.ctx)
 
 	// Start retention cron for injection_log and citation_log cleanup.
@@ -2254,11 +2274,33 @@ func (s *Service) processAllSessions() {
 // WaitGroup drains, teardown continues and a warning is logged. The first
 // component error (if any) is returned; subsequent errors are only logged.
 func (s *Service) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.shutdownOnce.Do(func() {
+		s.shutdownDone = make(chan struct{})
+		go func() {
+			s.shutdownErr = s.shutdown(ctx)
+			close(s.shutdownDone)
+		}()
+	})
+
+	select {
+	case <-s.shutdownDone:
+		return s.shutdownErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Service) shutdown(ctx context.Context) error {
 	log.Info().Msg("graceful shutdown: starting")
 	start := time.Now()
 
-	// Signal all background goroutines.
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.initWG.Wait()
 
 	var shutdownErrors []error
 	var errMu sync.Mutex
@@ -2272,50 +2314,33 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		log.Error().Err(err).Str("component", component).Msg("shutdown error")
 	}
 
-	// Phase 1: stop accepting new requests.
-	log.Debug().Msg("shutdown phase 1: HTTP + gRPC servers")
 	if s.server != nil {
 		collectError("http_server", s.server.Shutdown(ctx))
 	}
 	if s.grpcServer != nil {
 		s.grpcServer.GracefulStop()
 	}
-
-	// Phase 2: stop filesystem watchers.
-	log.Debug().Msg("shutdown phase 2: watchers")
 	if s.configWatcher != nil {
 		_ = s.configWatcher.Stop()
 	}
-
-	// Phase 3: stop background workers.
-	log.Debug().Msg("shutdown phase 3: background workers")
 	if s.cognitiveQueueLifecycle != nil {
 		collectError("cognitive_hint_queue", s.cognitiveQueueLifecycle.Stop())
 	}
 	if s.writelintTokenStore != nil {
 		s.writelintTokenStore.Close()
 	}
-	if s.projectReaper != nil {
-		reaperStopped := make(chan struct{})
-		go func() {
-			s.projectReaper.Stop()
-			close(reaperStopped)
-		}()
-		select {
-		case <-reaperStopped:
-		case <-ctx.Done():
-			collectError("project_reaper", ctx.Err())
-		}
+
+	s.initMu.RLock()
+	projectReaper := s.projectReaper
+	s.initMu.RUnlock()
+	if projectReaper != nil {
+		projectReaper.Stop()
 	}
 
-	// Phase 4: flush pending session work.
-	log.Debug().Msg("shutdown phase 4: sessions")
 	if s.sessionManager != nil {
 		s.sessionManager.ShutdownAll(ctx)
 	}
 
-	// Phase 5: wait for all goroutines to exit.
-	log.Debug().Msg("shutdown phase 5: draining goroutines")
 	drained := make(chan struct{})
 	go func() {
 		s.wg.Wait()
@@ -2323,26 +2348,21 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	}()
 	select {
 	case <-drained:
-		log.Debug().Msg("all goroutines exited")
 	case <-ctx.Done():
 		log.Warn().Msg("shutdown: goroutine drain timed out, forcing")
 	}
 
-	// Phase 6 (placeholder): AI/ML model teardown — nothing to do currently.
-
-	// Phase 7: close database — done last so phases above can still query.
-	log.Debug().Msg("shutdown phase 7: database")
-	if s.store != nil {
-		collectError("database", s.store.Close())
+	s.initMu.RLock()
+	store := s.store
+	s.initMu.RUnlock()
+	if store != nil {
+		collectError("database", store.Close())
 	}
 
-	elapsed := time.Since(start)
 	if len(shutdownErrors) > 0 {
-		log.Warn().Int("errors", len(shutdownErrors)).Dur("elapsed", elapsed).Msg("shutdown completed with errors")
 		return shutdownErrors[0]
 	}
-
-	log.Info().Dur("elapsed", elapsed).Msg("graceful shutdown complete")
+	log.Info().Dur("elapsed", time.Since(start)).Msg("graceful shutdown complete")
 	return nil
 }
 

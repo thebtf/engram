@@ -45,7 +45,8 @@ const (
 // Reaper periodically hard-deletes project rows whose removed_at timestamp
 // has passed the retention window.
 type Reaper struct {
-	db *gorm.DB
+	db        *gorm.DB
+	retention time.Duration
 
 	mu      sync.Mutex
 	cancel  context.CancelFunc
@@ -54,8 +55,12 @@ type Reaper struct {
 }
 
 // New creates a Reaper backed by the given database connection.
-func New(db *gorm.DB) *Reaper {
-	return &Reaper{db: db}
+func New(db *gorm.DB) (*Reaper, error) {
+	retention, err := retentionDuration()
+	if err != nil {
+		return nil, err
+	}
+	return &Reaper{db: db, retention: retention}, nil
 }
 
 // Start launches the reaper loop in a background goroutine. It respects ctx for
@@ -78,7 +83,7 @@ func (r *Reaper) Start(ctx context.Context) {
 
 	log.Info().
 		Dur("interval", reaperInterval).
-		Int("retention_days", retentionDays()).
+		Dur("retention", r.retention).
 		Msg("project reaper started")
 
 	go func() {
@@ -122,18 +127,14 @@ func (r *Reaper) Stop() {
 	<-done
 }
 
-// purge deletes projects that were soft-deleted more than retentionDays() ago.
+// purge deletes projects that were soft-deleted more than the configured retention ago.
 // It is idempotent and safe to call concurrently.
 func (r *Reaper) purge(ctx context.Context) error {
 	if r.db == nil {
 		return fmt.Errorf("reaper: db is nil")
 	}
 
-	retention, err := retentionDuration()
-	if err != nil {
-		return err
-	}
-	cutoff := time.Now().UTC().Add(-retention)
+	cutoff := time.Now().UTC().Add(-r.retention)
 
 	result := r.db.WithContext(ctx).
 		Exec(
@@ -151,16 +152,6 @@ func (r *Reaper) purge(ctx context.Context) error {
 			Msg("project reaper: purged soft-deleted projects")
 	}
 	return nil
-}
-
-// retentionDays returns the configured retention window in days.
-// Reads ENGRAM_PROJECT_RETENTION_DAYS; falls back to defaultRetentionDays.
-func retentionDays() int {
-	days, err := strconv.Atoi(os.Getenv("ENGRAM_PROJECT_RETENTION_DAYS"))
-	if err != nil || days <= 0 {
-		return defaultRetentionDays
-	}
-	return days
 }
 
 func retentionDuration() (time.Duration, error) {
