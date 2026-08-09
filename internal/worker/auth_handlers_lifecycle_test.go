@@ -201,7 +201,7 @@ func TestAuthHandlersLifecycle_SetupCreatesOnlyOneInitialAdmin(t *testing.T) {
 	require.Contains(t, emails, rows[0].Email)
 	require.Equal(t, gormdb.DashboardRoleAdmin, rows[0].Role)
 	var auditEvents int64
-	require.NoError(t, env.store.DB.Model(&gormdb.AccessAuditRecord{}).Where("action = ? AND actor LIKE ?", "auth_setup_completed", prefix+"%@example.com").Count(&auditEvents).Error)
+	require.NoError(t, env.store.DB.Model(&gormdb.AuditLogEntry{}).Where("action = ? AND actor LIKE ?", "auth_setup_completed", prefix+"%@example.com").Count(&auditEvents).Error)
 	require.Equal(t, int64(1), auditEvents, "only the successful setup may issue an audit credential event")
 }
 
