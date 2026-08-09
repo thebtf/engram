@@ -491,7 +491,7 @@ func (h *AuthHandlers) handleSetup(w http.ResponseWriter, r *http.Request) {
 	if h.beforeInitialAdminCreate != nil {
 		h.beforeInitialAdminCreate()
 	}
-	user, err := h.users.CreateInitialAdmin(r.Context(), strings.TrimSpace(req.Email), string(hash))
+	user, err := h.users.CreateInitialAdmin(r.Context(), strings.TrimSpace(req.Email), string(hash), h.access)
 	if err != nil {
 		if errors.Is(err, gormdb.ErrInitialAdminSetupAlreadyCompleted) {
 			writeAuthJSONError(w, http.StatusConflict, err.Error())
@@ -500,15 +500,6 @@ func (h *AuthHandlers) handleSetup(w http.ResponseWriter, r *http.Request) {
 		log.Error().Err(err).Str("email", req.Email).Msg("auth: failed to create admin user during setup")
 		writeAuthJSONError(w, http.StatusInternalServerError, "failed to create user")
 		return
-	}
-	if h.access != nil {
-		_ = h.access.LogAccessEvent(r.Context(), gormdb.AccessAuditRecord{
-			Action:     "auth_setup_completed",
-			Actor:      user.Email,
-			Reason:     "initial admin created",
-			AfterState: map[string]any{"user_id": user.ID, "email": user.Email, "role": user.Role},
-			CreatedAt:  time.Now().UTC(),
-		})
 	}
 
 	w.WriteHeader(http.StatusCreated)

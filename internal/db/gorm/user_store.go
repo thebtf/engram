@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -38,7 +39,8 @@ func (s *UserStore) CreateUser(email, passwordHash, role string) (*User, error) 
 }
 
 // CreateInitialAdmin atomically creates the first dashboard user as an administrator.
-func (s *UserStore) CreateInitialAdmin(ctx context.Context, email, passwordHash string) (*User, error) {
+// When an access store is configured, the setup audit row commits with the user.
+func (s *UserStore) CreateInitialAdmin(ctx context.Context, email, passwordHash string, access *DomainOwnerStore) (*User, error) {
 	user := &User{
 		Email:        email,
 		PasswordHash: passwordHash,
@@ -59,8 +61,19 @@ func (s *UserStore) CreateInitialAdmin(ctx context.Context, email, passwordHash 
 		if err := tx.Create(user).Error; err != nil {
 			return fmt.Errorf("create initial admin: %w", err)
 		}
+		if access != nil {
+			if err := access.logAccessEventTx(ctx, tx, AccessAuditRecord{
+				Action:     "auth_setup_completed",
+				Actor:      user.Email,
+				Reason:     "initial admin created",
+				AfterState: map[string]any{"user_id": user.ID, "email": user.Email, "role": user.Role},
+				CreatedAt:  time.Now().UTC(),
+			}); err != nil {
+				return fmt.Errorf("audit initial admin setup: %w", err)
+			}
+		}
 		return nil
-	}); err != nil {
+	}, &sql.TxOptions{Isolation: sql.LevelReadCommitted}); err != nil {
 		return nil, err
 	}
 	return user, nil

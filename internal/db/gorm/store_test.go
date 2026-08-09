@@ -5,7 +5,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -357,3 +359,89 @@ func TestStore_Optimize(t *testing.T) {
 // TestStore_ConceptWeightsSeedCount was removed in CR-2b of provenance-cleanup:
 // migration 137 drops the concept_weights table and the ConceptWeight struct was
 // deleted, so the seed-count invariant no longer applies.
+
+
+func TestUserStore_CreateInitialAdminSerializesAcrossStores(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping initial admin integration test")
+	}
+	repeatableReadDSN := dsn + "&options=-c%20default_transaction_isolation%3Drepeatable%5C%20read"
+	stores := make([]*Store, 2)
+	for i := range stores {
+		store, err := NewStore(Config{DSN: repeatableReadDSN, MaxConns: 1, LogLevel: 0})
+		require.NoError(t, err)
+		stores[i] = store
+		var isolation string
+		require.NoError(t, store.DB.Raw("SHOW default_transaction_isolation").Scan(&isolation).Error)
+		require.Equal(t, "repeatable read", isolation)
+	}
+	t.Cleanup(func() {
+		for _, store := range stores {
+			_ = store.Close()
+		}
+	})
+
+	var usersBefore int64
+	require.NoError(t, stores[0].DB.Model(&User{}).Count(&usersBefore).Error)
+	require.Zero(t, usersBefore, "initial-admin setup requires an empty test database")
+	prefix := fmt.Sprintf("zz-initial-admin-store-race-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = stores[0].DB.Exec(`DELETE FROM audit_log WHERE action = 'auth_setup_completed' AND actor LIKE ?`, prefix+"%@example.com").Error
+		_ = stores[0].DB.Exec(`DELETE FROM users WHERE email LIKE ?`, prefix+"%@example.com").Error
+		_ = stores[0].DB.Exec(`DROP TRIGGER IF EXISTS initial_admin_setup_delay ON users`).Error
+		_ = stores[0].DB.Exec(`DROP FUNCTION IF EXISTS initial_admin_setup_delay()`).Error
+	})
+	require.NoError(t, stores[0].DB.Exec(`CREATE FUNCTION initial_admin_setup_delay() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.2); RETURN NEW; END; $$`).Error)
+	require.NoError(t, stores[0].DB.Exec(`CREATE TRIGGER initial_admin_setup_delay BEFORE INSERT ON users FOR EACH ROW WHEN (NEW.email LIKE 'zz-initial-admin-store-race-%') EXECUTE FUNCTION initial_admin_setup_delay()`).Error)
+
+	start := make(chan struct{})
+	results := make(chan error, len(stores))
+	var wg sync.WaitGroup
+	for i, store := range stores {
+		wg.Add(1)
+		go func(i int, store *Store) {
+			defer wg.Done()
+			<-start
+			_, err := NewUserStore(store.DB).CreateInitialAdmin(context.Background(), fmt.Sprintf("%s-%d@example.com", prefix, i), "hash", NewDomainOwnerStore(store))
+			results <- err
+		}(i, store)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+			continue
+		}
+		require.ErrorIs(t, err, ErrInitialAdminSetupAlreadyCompleted)
+	}
+	require.Equal(t, 1, successes)
+	var usersAfter int64
+	require.NoError(t, stores[0].DB.Model(&User{}).Count(&usersAfter).Error)
+	require.Equal(t, int64(1), usersAfter)
+}
+
+func TestUserStore_CreateInitialAdminRollsBackOnAuditFailure(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	var usersBefore int64
+	require.NoError(t, store.DB.Model(&User{}).Count(&usersBefore).Error)
+	require.Zero(t, usersBefore, "initial-admin setup requires an empty test database")
+	prefix := fmt.Sprintf("zz-initial-admin-audit-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = store.DB.Exec(`DELETE FROM users WHERE email = ?`, prefix+"@example.com").Error
+		_ = store.DB.Exec(`DROP TRIGGER IF EXISTS initial_admin_audit_failure ON audit_log`).Error
+		_ = store.DB.Exec(`DROP FUNCTION IF EXISTS initial_admin_audit_failure()`).Error
+	})
+	require.NoError(t, store.DB.Exec(`CREATE FUNCTION initial_admin_audit_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action = 'auth_setup_completed' THEN RAISE EXCEPTION 'forced initial admin audit failure'; END IF; RETURN NEW; END; $$`).Error)
+	require.NoError(t, store.DB.Exec(`CREATE TRIGGER initial_admin_audit_failure BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION initial_admin_audit_failure()`).Error)
+
+	_, err := NewUserStore(store.DB).CreateInitialAdmin(context.Background(), prefix+"@example.com", "hash", NewDomainOwnerStore(store))
+	require.Error(t, err)
+	var usersAfter int64
+	require.NoError(t, store.DB.Model(&User{}).Count(&usersAfter).Error)
+	require.Zero(t, usersAfter, "failed setup audit must roll back the initial admin")
+}
