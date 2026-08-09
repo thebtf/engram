@@ -397,3 +397,67 @@ func TestRollback_CandidateReviewPromoteEditedMemoryConflicts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, models.SnapshotStatusCommitted, stillCommitted.Status)
 }
+
+
+func TestRollback_ConflictDetectedAfterStalePreTransactionRead(t *testing.T) {
+	db, store := openRollbackTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	auditStore := gormdb.NewAuditStore(db)
+	ctx := context.Background()
+
+	mem, err := memStore.Create(ctx, &models.Memory{
+		Content:     "before concurrent edit",
+		Project:     "tg6-rollback-stale-read",
+		SourceAgent: "claude-code",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM memories WHERE id = ?", mem.ID).Error
+		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE snapshot_id = 'rollback-stale-read-001'`).Error
+	})
+	require.NoError(t, db.Exec(`UPDATE memories SET updated_at = NOW() - INTERVAL '2 seconds' WHERE id = ?`, mem.ID).Error)
+
+	beforeState, err := json.Marshal(map[string]any{fmt.Sprintf("%d", mem.ID): mem})
+	require.NoError(t, err)
+	snap, err := models.NewBulkOpSnapshot("rollback-stale-read-001", models.SnapshotOpBulkDelete, "master", beforeState)
+	require.NoError(t, err)
+	snap.AffectedMemoryIDs = []int64{mem.ID}
+	snap.CreatedAt = time.Now().UTC().Add(-time.Second)
+	createdSnap, err := snapStore.Create(ctx, snap)
+	require.NoError(t, err)
+
+	writer := db.Begin()
+	require.NoError(t, writer.Error)
+	require.NoError(t, writer.Exec(`UPDATE memories SET content = 'concurrent edit', updated_at = NOW() WHERE id = ?`, mem.ID).Error)
+
+	type rollbackOutcome struct {
+		result *RollbackResult
+		err    error
+	}
+	done := make(chan rollbackOutcome, 1)
+	go func() {
+		result, rollbackErr := Rollback(ctx, adminIdentity(), createdSnap.SnapshotID, snapStore, memStore, auditStore, nil)
+		done <- rollbackOutcome{result: result, err: rollbackErr}
+	}()
+
+	select {
+	case outcome := <-done:
+		t.Fatalf("rollback completed before concurrent writer committed: result=%+v err=%v", outcome.result, outcome.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	require.NoError(t, writer.Commit().Error)
+
+	select {
+	case outcome := <-done:
+		require.ErrorIs(t, outcome.err, ErrRollbackConflict)
+		require.NotNil(t, outcome.result)
+		assert.Contains(t, outcome.result.ConflictIDs, mem.ID)
+	case <-time.After(5 * time.Second):
+		t.Fatal("rollback did not finish after concurrent writer committed")
+	}
+
+	after, err := memStore.Get(ctx, mem.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "concurrent edit", after.Content)
+}

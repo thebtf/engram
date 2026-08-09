@@ -17,9 +17,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/auth"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
+	gormpkg "gorm.io/gorm"
 )
 
 // ErrAdminRequired is returned when a non-admin caller attempts a bulk operation.
@@ -136,29 +137,21 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 			Promoted:    []int64{},
 		}, nil
 	}
-
 	if f.candidateStore == nil {
 		return nil, fmt.Errorf("bulk_promote: candidate store not available")
 	}
-
+	if f.snapshotStore == nil {
+		return nil, fmt.Errorf("bulk_promote: snapshot store not available")
+	}
 	if len(ids) == 0 {
 		return &ExecuteResult{DryRun: false, AffectedCount: 0, Promoted: []int64{}}, nil
 	}
 
-	// Capture before-state using typed entries (MAJOR fix: distinguish restore vs delete).
-	//
-	// The before_state JSONB uses SnapshotEntry{Kind, Before} per row:
-	//   - Candidates (by candidate ID): EntryKindRestore — rollback restores them to pending.
-	//   - Promoted memory rows (by memory ID): EntryKindDelete — rollback hard-deletes them.
-	//
-	// This fixes the rollback bug where AffectedMemoryIDs contained candidate IDs,
-	// memoryStore.Get() returned not-found for them, and promoted memory rows survived.
 	actor := resolveActor(identity)
 	snapshotID, beforeState, err := f.capturePromoteBeforeState(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("bulk_promote snapshot capture: %w", err)
 	}
-
 	params := op.Parameters
 	if len(params) == 0 {
 		params, _ = json.Marshal(map[string]any{"candidate_ids": ids})
@@ -167,79 +160,66 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 	if err != nil {
 		return nil, fmt.Errorf("bulk_promote new_snapshot: %w", err)
 	}
-	// AffectedMemoryIDs for bulk_promote tracks the CANDIDATE ids at this point
-	// (before promotions run). After promotions, we amend it with the promoted memory IDs
-	// so conflict detection can check the actual memory rows. The before_state typed entries
-	// are the rollback source of truth — AffectedMemoryIDs is only used for conflict detection.
-	snap.AffectedMemoryIDs = ids // candidate IDs pre-op; amended below with memory IDs
+	snap.AffectedMemoryIDs = ids
 	snap.SourceSessionID = op.SourceSessionID
 	snap.Parameters = params
 
-	created, err := f.snapshotStore.Create(ctx, snap)
-	if err != nil {
-		return nil, fmt.Errorf("bulk_promote store_snapshot: %w", err)
+	result := &ExecuteResult{SnapshotID: snapshotID, Promoted: []int64{}}
+	txErr := f.candidateStore.GetDB().WithContext(ctx).Transaction(func(tx *gormpkg.DB) error {
+		created, createErr := f.snapshotStore.CreateTx(ctx, tx, snap)
+		if createErr != nil {
+			return fmt.Errorf("bulk_promote store_snapshot: %w", createErr)
+		}
+		result.SnapshotID = created.SnapshotID
+
+		for _, id := range ids {
+			candidate, getErr := f.candidateStore.Get(ctx, id)
+			if getErr != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("candidate %d: get: %v", id, getErr))
+				log.Warn().Err(getErr).Int64("candidate_id", id).Msg("bulk_promote: get candidate failed")
+				continue
+			}
+			project := ""
+			if len(candidate.AffectedProjects) > 0 {
+				project = candidate.AffectedProjects[0]
+			}
+			mem := &models.Memory{
+				Content:       candidate.ProposedContent,
+				Project:       project,
+				Tier:          candidate.ProposedTier,
+				EpistemicType: "decision",
+				Tags:          []string{fmt.Sprintf("candidate:%d", id), "crystallized"},
+				SourceAgent:   "crystallization",
+			}
+			promoted, createdMemory, promoteErr := f.candidateStore.PromoteWithMemoryTx(ctx, tx, id, mem)
+			if promoteErr != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("candidate %d: %v", id, promoteErr))
+				log.Warn().Err(promoteErr).Int64("candidate_id", id).Msg("bulk_promote: candidate promotion failed")
+				continue
+			}
+			result.AffectedCount++
+			if promoted != nil && promoted.PromotedMemoryID != nil {
+				result.Promoted = append(result.Promoted, *promoted.PromotedMemoryID)
+			} else if createdMemory != nil {
+				result.Promoted = append(result.Promoted, createdMemory.ID)
+			}
+		}
+		if amendErr := f.snapshotStore.AmendPromoteEntriesTx(ctx, tx, created.SnapshotID, result.Promoted); amendErr != nil {
+			return fmt.Errorf("bulk_promote amend snapshot entries: %w", amendErr)
+		}
+		return nil
+	})
+	if txErr != nil {
+		return nil, txErr
 	}
 
-	// Execute promotions.
-	result := &ExecuteResult{
-		SnapshotID: created.SnapshotID,
-		DryRun:     false,
-		Promoted:   []int64{},
-	}
-	for _, id := range ids {
-		// Load the candidate to build the memory.
-		candidate, cErr := f.candidateStore.Get(ctx, id)
-		if cErr != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("candidate %d: get: %v", id, cErr))
-			log.Warn().Err(cErr).Int64("candidate_id", id).Msg("bulk_promote: get candidate failed")
-			continue
-		}
-		// Build memory from candidate — same logic as promote_candidate MCP tool.
-		project := ""
-		if len(candidate.AffectedProjects) > 0 {
-			project = candidate.AffectedProjects[0]
-		}
-		mem := &models.Memory{
-			Content:       candidate.ProposedContent,
-			Project:       project,
-			Tier:          candidate.ProposedTier,
-			EpistemicType: "decision",
-			Tags:          []string{fmt.Sprintf("candidate:%d", id), "crystallized"},
-			SourceAgent:   "crystallization",
-		}
-		// PromoteWithMemory atomically creates the memory and transitions the candidate.
-		promoted, created, promErr := f.candidateStore.PromoteWithMemory(ctx, id, mem)
-		if promErr != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("candidate %d: %v", id, promErr))
-			log.Warn().Err(promErr).Int64("candidate_id", id).Msg("bulk_promote: candidate promotion failed")
-			continue
-		}
-		result.AffectedCount++
-		if promoted != nil && promoted.PromotedMemoryID != nil {
-			result.Promoted = append(result.Promoted, *promoted.PromotedMemoryID)
-		} else if created != nil {
-			result.Promoted = append(result.Promoted, created.ID)
-		}
-	}
-
-	// Amend the snapshot before_state with delete-kind entries for promoted memory IDs,
-	// and update AffectedMemoryIDs to contain the memory IDs for conflict detection.
-	if len(result.Promoted) > 0 {
-		if amendErr := f.snapshotStore.AmendPromoteEntries(ctx, created.SnapshotID, result.Promoted); amendErr != nil {
-			// Non-fatal: log and continue — the snapshot is still usable for candidate restore.
-			log.Warn().Err(amendErr).Str("snapshot_id", created.SnapshotID).Msg("bulk_promote: amend snapshot entries failed")
-		}
-	}
-
-	// Audit log.
 	if f.auditStore != nil {
 		_ = f.auditStore.Log(ctx, gormdb.AuditLogEntry{
 			Action: "bulk_promote",
 			Actor:  actor,
-			Reason: fmt.Sprintf("bulk_promote snapshot=%s affected=%d", created.SnapshotID, result.AffectedCount),
+			Reason: fmt.Sprintf("bulk_promote snapshot=%s affected=%d", result.SnapshotID, result.AffectedCount),
 		})
 	}
-
 	return result, nil
 }
 

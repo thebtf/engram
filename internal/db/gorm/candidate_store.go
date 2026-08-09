@@ -368,6 +368,29 @@ func (s *CandidateStore) PromoteWithMemory(
 	return updatedCandidate, createdMemory, nil
 }
 
+// GetDB returns the database shared by candidate and memory operations.
+func (s *CandidateStore) GetDB() *gorm.DB {
+	return s.db
+}
+
+// PromoteWithMemoryTx promotes a candidate using the caller's transaction.
+// The caller must log promotion audit only after that transaction commits.
+func (s *CandidateStore) PromoteWithMemoryTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	candidateID int64,
+	mem *models.Memory,
+) (*models.CrystallizationCandidate, *models.Memory, error) {
+	if err := validatePromoteMemory(mem); err != nil {
+		return nil, nil, err
+	}
+	_, updatedCandidate, createdMemory, err := s.promoteWithMemoryTx(ctx, tx, candidateID, mem)
+	if err != nil {
+		return nil, nil, err
+	}
+	return updatedCandidate, createdMemory, nil
+}
+
 // PromoteWithMemoryAndSnapshot creates the candidate-review snapshot, creates the
 // promoted memory, transitions the candidate, amends the snapshot with the
 // promoted-memory delete entry, and durably writes the candidate_review audit row

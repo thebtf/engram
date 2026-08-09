@@ -21,6 +21,7 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 	gormpkg "gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ErrRollbackConflict is returned when at least one affected memory has been modified
@@ -93,50 +94,47 @@ func Rollback(
 		return nil, fmt.Errorf("rollback: decode before_state: %w", err)
 	}
 
-	// Conflict check (EC-F3): pre-existing rows conflict when updated after the snapshot.
-	// EntryKindDelete rows were created by the operation, so they use a different guard:
-	// rollback may hard-delete them only while updated_at still equals created_at.
-	var idsToCheck []int64
-	var createdIDsToCheck []int64
-	for _, id := range snap.AffectedMemoryIDs {
-		if entry, ok := snapshotEntryForMemoryID(typedEntries, id); ok && entry.Kind == models.EntryKindDelete {
-			createdIDsToCheck = append(createdIDsToCheck, id)
-			continue
-		}
-		idsToCheck = append(idsToCheck, id)
-	}
-	conflictIDs, err := detectConflicts(ctx, memoryStore, idsToCheck, snap.CreatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("rollback: conflict detection: %w", err)
-	}
-	createdConflictIDs, err := detectCreatedRowConflicts(ctx, memoryStore, createdIDsToCheck)
-	if err != nil {
-		return nil, fmt.Errorf("rollback: created-row conflict detection: %w", err)
-	}
-	conflictIDs = append(conflictIDs, createdConflictIDs...)
-	if len(conflictIDs) > 0 {
-		// Write conflict audit entry and return error — no restore occurs.
-		if auditStore != nil {
-			_ = auditStore.Log(ctx, gormdb.AuditLogEntry{
-				Action: "rollback_attempted_with_conflict",
-				Actor:  actor,
-				Reason: fmt.Sprintf("snapshot=%s conflict_ids=%v", snapshotID, conflictIDs),
-			})
-		}
-		return &RollbackResult{
-			SnapshotID:  snapshotID,
-			ConflictIDs: conflictIDs,
-		}, ErrRollbackConflict
-	}
-
-	// MAJOR fix: all restore mutations + MarkRolledBack run inside ONE transaction.
-	// A mid-loop failure previously left partially-restored state with the snapshot
-	// still committed — re-rollback would double-write already-restored rows.
-	// With a single transaction: either everything is applied or nothing is.
+	// Conflict detection and mutations must share one transaction. Locking each target
+	// row makes a concurrent edit commit before the check or wait behind this rollback.
 	db := memoryStore.GetDB()
 	result := &RollbackResult{SnapshotID: snapshotID}
 
 	txErr := db.WithContext(ctx).Transaction(func(tx *gormpkg.DB) error {
+		var lockedSnapshot struct {
+			Status string
+		}
+		if err := tx.WithContext(ctx).Table("bulk_op_snapshots").
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("snapshot_id = ?", snapshotID).First(&lockedSnapshot).Error; err != nil {
+			return fmt.Errorf("rollback: lock snapshot %q: %w", snapshotID, err)
+		}
+		if models.SnapshotStatus(lockedSnapshot.Status) != models.SnapshotStatusCommitted {
+			return fmt.Errorf("rollback: snapshot %q has status %q, expected 'committed': %w", snapshotID, lockedSnapshot.Status, ErrSnapshotNotRollbackable)
+		}
+
+		var idsToCheck []int64
+		var createdIDsToCheck []int64
+		for _, id := range snap.AffectedMemoryIDs {
+			if entry, ok := snapshotEntryForMemoryID(typedEntries, id); ok && entry.Kind == models.EntryKindDelete {
+				createdIDsToCheck = append(createdIDsToCheck, id)
+				continue
+			}
+			idsToCheck = append(idsToCheck, id)
+		}
+		conflictIDs, err := detectConflictsTx(ctx, tx, idsToCheck, snap.CreatedAt)
+		if err != nil {
+			return fmt.Errorf("rollback: conflict detection: %w", err)
+		}
+		createdConflictIDs, err := detectCreatedRowConflictsTx(ctx, tx, createdIDsToCheck)
+		if err != nil {
+			return fmt.Errorf("rollback: created-row conflict detection: %w", err)
+		}
+		conflictIDs = append(conflictIDs, createdConflictIDs...)
+		if len(conflictIDs) > 0 {
+			result.ConflictIDs = conflictIDs
+			return ErrRollbackConflict
+		}
+
 		var restored int
 
 		for key, entry := range typedEntries {
@@ -211,6 +209,16 @@ func Rollback(
 		return nil
 	})
 
+	if errors.Is(txErr, ErrRollbackConflict) {
+		if auditStore != nil {
+			_ = auditStore.Log(ctx, gormdb.AuditLogEntry{
+				Action: "rollback_attempted_with_conflict",
+				Actor:  actor,
+				Reason: fmt.Sprintf("snapshot=%s conflict_ids=%v", snapshotID, result.ConflictIDs),
+			})
+		}
+		return result, ErrRollbackConflict
+	}
 	if txErr != nil {
 		return nil, txErr
 	}
@@ -255,21 +263,17 @@ func snapshotEntryForMemoryID(entries map[string]models.SnapshotEntry, id int64)
 	return entry, ok
 }
 
-// detectConflicts returns the IDs of memories modified after snapshotTime.
-// A memory's updated_at > snapshotTime indicates a post-snapshot modification (EC-F3).
-func detectConflicts(ctx context.Context, memoryStore *gormdb.MemoryStore, ids []int64, snapshotTime time.Time) ([]int64, error) {
-	if memoryStore == nil || len(ids) == 0 {
-		return nil, nil
-	}
+// detectConflictsTx locks each existing memory before checking its timestamp.
+func detectConflictsTx(ctx context.Context, tx *gormpkg.DB, ids []int64, snapshotTime time.Time) ([]int64, error) {
 	var conflicts []int64
 	for _, id := range ids {
-		mem, err := memoryStore.Get(ctx, id)
+		var mem gormdb.Memory
+		err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&mem, id).Error
 		if err != nil {
 			if errors.Is(err, gormpkg.ErrRecordNotFound) {
-				// Deleted memories don't conflict — skip.
 				continue
 			}
-			return nil, fmt.Errorf("detectConflicts: get memory %d: %w", id, err)
+			return nil, fmt.Errorf("detectConflicts: lock memory %d: %w", id, err)
 		}
 		if mem.UpdatedAt.After(snapshotTime) {
 			conflicts = append(conflicts, id)
@@ -278,28 +282,18 @@ func detectConflicts(ctx context.Context, memoryStore *gormdb.MemoryStore, ids [
 	return conflicts, nil
 }
 
-// detectCreatedRowConflicts returns op-created memory IDs that were modified after creation.
-// EntryKindDelete rollback hard-deletes rows that did not exist before the operation, so
-// snapshot.created_at is not a valid conflict boundary for them. Instead, the safe-delete
-// invariant is created_at == updated_at; any later update means rollback must refuse to
-// destroy user-visible edits.
-func detectCreatedRowConflicts(ctx context.Context, memoryStore *gormdb.MemoryStore, ids []int64) ([]int64, error) {
-	if memoryStore == nil || len(ids) == 0 {
-		return nil, nil
-	}
+// detectCreatedRowConflictsTx locks promoted rows before deciding whether rollback
+// may hard-delete them.
+func detectCreatedRowConflictsTx(ctx context.Context, tx *gormpkg.DB, ids []int64) ([]int64, error) {
 	var conflicts []int64
 	for _, id := range ids {
 		var mem gormdb.Memory
-		err := memoryStore.GetDB().WithContext(ctx).
-			Unscoped().
-			Where("id = ?", id).
-			First(&mem).Error
+		err := tx.WithContext(ctx).Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).First(&mem).Error
 		if err != nil {
 			if errors.Is(err, gormpkg.ErrRecordNotFound) {
-				// Already hard-deleted rows have nothing left for rollback to destroy.
 				continue
 			}
-			return nil, fmt.Errorf("detectCreatedRowConflicts: get memory %d: %w", id, err)
+			return nil, fmt.Errorf("detectCreatedRowConflicts: lock memory %d: %w", id, err)
 		}
 		if mem.UpdatedAt.After(mem.CreatedAt) {
 			conflicts = append(conflicts, id)

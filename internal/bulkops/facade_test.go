@@ -13,8 +13,10 @@ package bulkops
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -260,4 +262,62 @@ func TestFacade_BulkSupersede_Committed_AuditLogWritten(t *testing.T) {
 		Count(&auditCountAfter)
 	assert.GreaterOrEqual(t, auditCountAfter-auditCountBefore, int64(1),
 		"audit log must have at least 1 new bulk_supersede entry from this Execute call")
+}
+
+func TestFacade_BulkPromote_AmendFailureRollsBack(t *testing.T) {
+	db, store := openTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	candidateStore := gormdb.NewCandidateStore(db, nil)
+	f := NewFacade(snapStore, candidateStore, memStore, gormdb.NewAuditStore(db))
+
+	project := fmt.Sprintf("tg6-promote-amend-failure-%d", time.Now().UnixNano())
+	candidate, err := candidateStore.Create(context.Background(), &models.CrystallizationCandidate{
+		SourceSessionID:         "tg6-promote-amend-failure",
+		ProposedContent:         "snapshot amendment failure must not promote this candidate",
+		ProposedTier:            "semantic",
+		ProposedPromotionTarget: "semantic",
+		EvidenceHandles:         []string{"session:tg6-promote-amend-failure"},
+		PrivacyScope:            "project",
+		Status:                  models.CandidateStatusPending,
+		Fingerprint:             project,
+		AffectedProjects:        []string{project},
+		Confidence:              0.9,
+		RecurrenceCount:         1,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id = ?", candidate.ID).Error
+		_ = db.Exec("DELETE FROM memories WHERE project = ?", project).Error
+	})
+
+	function := fmt.Sprintf("bulkops_reject_amend_%d", time.Now().UnixNano())
+	trigger := function + "_trigger"
+	require.NoError(t, db.Exec(fmt.Sprintf(`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced snapshot amend failure'; END; $$`, function)).Error)
+	require.NoError(t, db.Exec(fmt.Sprintf(`CREATE TRIGGER %s BEFORE UPDATE ON bulk_op_snapshots FOR EACH ROW EXECUTE FUNCTION %s()`, trigger, function)).Error)
+	t.Cleanup(func() {
+		_ = db.Exec(fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON bulk_op_snapshots", trigger)).Error
+		_ = db.Exec(fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", function)).Error
+	})
+
+	var snapshotsBefore int64
+	require.NoError(t, db.Table("bulk_op_snapshots").Where("op_type = ? AND actor = ?", models.SnapshotOpBulkPromote, "master").Count(&snapshotsBefore).Error)
+
+	result, err := f.Execute(context.Background(), adminIdentity(), BulkOp{
+		Type:         models.SnapshotOpBulkPromote,
+		CandidateIDs: []int64{candidate.ID},
+	})
+	require.Error(t, err)
+	assert.Nil(t, result)
+
+	after, err := candidateStore.Get(context.Background(), candidate.ID)
+	require.NoError(t, err)
+	assert.Equal(t, models.CandidateStatusPending, after.Status)
+	assert.Nil(t, after.PromotedMemoryID)
+
+	var memories, snapshotsAfter int64
+	require.NoError(t, db.Model(&gormdb.Memory{}).Where("project = ?", project).Count(&memories).Error)
+	require.NoError(t, db.Table("bulk_op_snapshots").Where("op_type = ? AND actor = ?", models.SnapshotOpBulkPromote, "master").Count(&snapshotsAfter).Error)
+	assert.Zero(t, memories, "a failed audit snapshot amendment must roll back promoted memories")
+	assert.Equal(t, snapshotsBefore, snapshotsAfter, "a failed audit snapshot amendment must roll back its snapshot")
 }

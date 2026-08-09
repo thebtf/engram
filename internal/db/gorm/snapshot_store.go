@@ -180,6 +180,11 @@ func (s *SnapshotStore) Create(ctx context.Context, snap *models.BulkOpSnapshot)
 	return s.createTx(ctx, s.db, snap)
 }
 
+// CreateTx inserts a snapshot using the caller's transaction.
+func (s *SnapshotStore) CreateTx(ctx context.Context, tx *gorm.DB, snap *models.BulkOpSnapshot) (*models.BulkOpSnapshot, error) {
+	return s.createTx(ctx, tx, snap)
+}
+
 func (s *SnapshotStore) createTx(ctx context.Context, tx *gorm.DB, snap *models.BulkOpSnapshot) (*models.BulkOpSnapshot, error) {
 	if snap == nil {
 		return nil, fmt.Errorf("snapshot_store create: snapshot must not be nil")
@@ -288,6 +293,11 @@ func (s *SnapshotStore) AmendPromoteEntries(ctx context.Context, snapshotID stri
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return s.amendPromoteEntriesTx(ctx, tx, snapshotID, promotedMemoryIDs)
 	})
+}
+
+// AmendPromoteEntriesTx amends a snapshot using the caller's transaction.
+func (s *SnapshotStore) AmendPromoteEntriesTx(ctx context.Context, tx *gorm.DB, snapshotID string, promotedMemoryIDs []int64) error {
+	return s.amendPromoteEntriesTx(ctx, tx, snapshotID, promotedMemoryIDs)
 }
 
 func (s *SnapshotStore) amendPromoteEntriesTx(ctx context.Context, tx *gorm.DB, snapshotID string, promotedMemoryIDs []int64) error {
