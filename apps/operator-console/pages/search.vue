@@ -22,10 +22,11 @@ const {
 } = useOperatorSearchNoise()
 
 const hasProjects = computed(() => projects.value.length > 0)
+const hasRequestedProject = computed(() => Boolean(requestedProject.value) && projects.value.includes(requestedProject.value))
 
-watch([requestedQuery, requestedProject, projects], async ([nextQuery, nextProject]) => {
+watch([requestedQuery, requestedProject, hasRequestedProject], async ([nextQuery, nextProject, projectAvailable]) => {
   query.value = nextQuery
-  if (!nextQuery || !nextProject || !projects.value.includes(nextProject)) {
+  if (!nextQuery || !nextProject || !projectAvailable) {
     appliedRouteSearch.value = ''
     return
   }

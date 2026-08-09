@@ -21,5 +21,5 @@ test('search deep links preserve a q-only prefill and open the scoped memory row
   await expect(page).toHaveURL(/\/memory\?project=operator-console&memory=101/)
   await expect(page.locator('#memory-project-filter')).toHaveValue('operator-console')
   await expect(page.getByTestId('memory-row-101')).toHaveClass(/open/)
-  await expect(page.getByText('operator console = data plane: manage memory PRODUCT, config one Settings tab')).toBeVisible()
+  await expect(page.locator('.detail .dcontent')).toHaveText('operator console = data plane: manage memory PRODUCT, config one Settings tab')
 })
