@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Black-box checks for deploy/image-preflight.sh.
+# Black-box checks for the immutable deployment wrapper.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,28 +19,32 @@ make_env() {
         printf 'ENGRAM_POSTGRES_IMAGE=%s\n' "${postgres}"
     } >"${path}"
 }
-make_env_without_server() {
-    local path="$1" operator="$2" postgres="$3"
-    {
-        printf 'ENGRAM_OPERATOR_IMAGE=%s\n' "${operator}"
-        printf 'ENGRAM_POSTGRES_IMAGE=%s\n' "${postgres}"
-    } >"${path}"
-}
 
-run_documented_path() {
-    local env_file="$1" marker="$2"
-    shift 2
+run_wrapper() {
+    local env_file="$1" marker="$2" replacement="$3"
+    shift 3
     local mock_bin="${marker}.bin"
     mkdir "${mock_bin}"
     cat >"${mock_bin}/docker" <<EOF
 #!/usr/bin/env bash
-printf '%s\\n' "\$*" >> "${marker}"
+env_file=""
+for ((i = 1; i <= \$#; i++)); do
+    if [[ "\${!i}" == --env-file ]]; then
+        next=\$((i + 1)); env_file="\${!next}"; break
+    fi
+done
+server=""
+while IFS= read -r line || [[ -n "\${line}" ]]; do
+    case "\${line}" in ENGRAM_SERVER_IMAGE=*) server="\${line#*=}";; esac
+done < "\${env_file}"
+printf '%s|%s\\n' "\${*: -1}" "\${server}" >> "${marker}"
+case "\${*: -1}" in
+    config|pull) cp "${replacement}" "${env_file}" ;;
+esac
 EOF
     chmod +x "${mock_bin}/docker"
     set +e
-    PATH="${mock_bin}:${PATH}" "$@" bash -c '
-        bash "$1" "$2" && docker compose --env-file "$2" -f "$3" config
-    ' -- "${PREFLIGHT}" "${env_file}" "${ROOT}/deploy/docker-compose.runtime.yml"
+    PATH="${mock_bin}:${PATH}" "$@" bash "${PREFLIGHT}" "${env_file}"
     local rc=$?
     set -e
     rm -rf "${mock_bin}"
@@ -48,59 +52,61 @@ EOF
 }
 
 assert_rejected_before_compose() {
-    local name="$1" env_file="$2"
-    local marker="${env_file}.compose"
-    local rc=0
-    run_documented_path "${env_file}" "${marker}" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE || rc=$?
+    local name="$1" env_file="$2" replacement="$3" marker="${2}.compose" rc=0
+    run_wrapper "${env_file}" "${marker}" "${replacement}" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE || rc=$?
     if [[ ${rc} -ne 0 && ! -e ${marker} ]]; then pass "${name}"; else fail "${name}"; fi
     rm -f "${marker}"
 }
 
+assert_frozen_compose_input() {
+    local marker="$1" expected="$2" config=0 pull=0 up=0 invalid=0 line
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        case "${line}" in
+            "config|${expected}") config=1 ;;
+            "pull|${expected}") pull=1 ;;
+            "-d|${expected}") up=1 ;;
+            *) invalid=1 ;;
+        esac
+    done < "${marker}"
+    [[ ${config} -eq 1 && ${pull} -eq 1 && ${up} -eq 1 && ${invalid} -eq 0 ]]
+}
+
 main() {
-    local tmp
-    tmp=".image-preflight-test.$$"
+    local tmp=".image-preflight-test.$$"
     mkdir "${tmp}"
     trap "rm -rf '${tmp}'" EXIT
     local server="ghcr.io/example/server@sha256:$(printf 'a%.0s' {1..64})"
     local operator="ghcr.io/example/operator@sha256:$(printf 'b%.0s' {1..64})"
     local postgres="ghcr.io/example/postgres@sha256:$(printf 'c%.0s' {1..64})"
+    local changed="ghcr.io/example/server@sha256:$(printf 'd%.0s' {1..64})"
+    local replacement="${tmp}/replacement.env" marker="${tmp}/valid.compose" rc=0
     make_env "${tmp}/valid.env" "${server}" "${operator}" "${postgres}"
-    local marker="${tmp}/valid.compose" rc=0
-    run_documented_path "${tmp}/valid.env" "${marker}" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE || rc=$?
-    if [[ ${rc} -eq 0 && -s ${marker} && ! -e ${tmp}/valid.env.injected ]]; then
-        pass 'valid three digests reach compose without evaluating dotenv'
+    make_env "${replacement}" "${changed}" "${operator}" "${postgres}"
+    run_wrapper "${tmp}/valid.env" "${marker}" "${replacement}" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE || rc=$?
+    if [[ ${rc} -eq 0 && ! -e ${tmp}/valid.env.injected ]] && assert_frozen_compose_input "${marker}" "${server}"; then
+        pass 'valid input uses one frozen snapshot through config pull and up without evaluation'
     else
-        fail 'valid three digests reach compose without evaluating dotenv'
+        fail 'valid input uses one frozen snapshot through config pull and up without evaluation'
     fi
     rm -f "${marker}"
 
-    make_env_without_server "${tmp}/missing.env" "${operator}" "${postgres}"
-    assert_rejected_before_compose 'missing image rejected before compose' "${tmp}/missing.env"
+    make_env "${tmp}/invalid.env" "${server}" "${operator}" "${postgres}"
+    printf 'ENGRAM_SERVER_IMAGE=%s\n' "${server}" >>"${tmp}/invalid.env"
+    assert_rejected_before_compose 'duplicate bare assignment rejected' "${tmp}/invalid.env" "${replacement}"
 
-    make_env "${tmp}/empty.env" "" "${operator}" "${postgres}"
-    assert_rejected_before_compose 'empty image rejected before compose' "${tmp}/empty.env"
+    for syntax in "export ENGRAM_SERVER_IMAGE=${server}" "ENGRAM_SERVER_IMAGE=\"${server}\"" "ENGRAM_SERVER_IMAGE=${server} # pinned" "ENGRAM_SERVER_IMAGE=\${OTHER_IMAGE}"; do
+        make_env "${tmp}/syntax.env" "${server}" "${operator}" "${postgres}"
+        printf '%s\n' "${syntax}" >>"${tmp}/syntax.env"
+        assert_rejected_before_compose "managed nonliteral syntax rejected: ${syntax%%=*}" "${tmp}/syntax.env" "${replacement}"
+    done
 
-    make_env "${tmp}/latest.env" 'ghcr.io/example/server:latest' "${operator}" "${postgres}"
-    assert_rejected_before_compose 'latest tag rejected before compose' "${tmp}/latest.env"
-
-    make_env "${tmp}/branch.env" 'ghcr.io/example/server:main' "${operator}" "${postgres}"
-    assert_rejected_before_compose 'branch tag rejected before compose' "${tmp}/branch.env"
-
-    make_env "${tmp}/semver.env" 'ghcr.io/example/server:v1.2.3' "${operator}" "${postgres}"
-    assert_rejected_before_compose 'semver tag rejected before compose' "${tmp}/semver.env"
-
-    make_env "${tmp}/malformed.env" 'ghcr.io/example/server@sha256:abc' "${operator}" "${postgres}"
-    assert_rejected_before_compose 'malformed digest rejected before compose' "${tmp}/malformed.env"
-
-    make_env "${tmp}/duplicate.env" "${server}" "${operator}" "${postgres}"
-    printf 'ENGRAM_SERVER_IMAGE=%s\n' "${server}" >>"${tmp}/duplicate.env"
-    assert_rejected_before_compose 'duplicate image key rejected before compose' "${tmp}/duplicate.env"
+    make_env "${tmp}/malformed.env" 'ghcr.io/example/server:latest' "${operator}" "${postgres}"
+    assert_rejected_before_compose 'mutable tag rejected before compose' "${tmp}/malformed.env" "${replacement}"
 
     make_env "${tmp}/override.env" "${server}" "${operator}" "${postgres}"
     marker="${tmp}/override.compose"; rc=0
-    run_documented_path "${tmp}/override.env" "${marker}" env ENGRAM_SERVER_IMAGE="${operator}" || rc=$?
-    if [[ ${rc} -ne 0 && ! -e ${marker} ]]; then pass 'environment override rejected before compose'; else fail 'environment override rejected before compose'; fi
-    rm -f "${marker}"
+    run_wrapper "${tmp}/override.env" "${marker}" "${replacement}" env ENGRAM_SERVER_IMAGE="${changed}" || rc=$?
+    if [[ ${rc} -ne 0 && ! -e ${marker} ]]; then pass 'different process override rejected before compose'; else fail 'different process override rejected before compose'; fi
 
     printf '\n%d tests, %d failures\n' "${TESTS_RUN}" "${TESTS_FAILED}"
     [[ ${TESTS_FAILED} -eq 0 ]]

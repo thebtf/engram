@@ -26,16 +26,14 @@ The same release is also discoverable through exactly two tags per image:
 `main`, `latest`, branch, major, and minor aliases are not release identities.
 Do not replace the digest-pinned values above with moving tags.
 
-Validate and start the pull-only stack. The preflight reads the selected dotenv
-file without sourcing it, rejects duplicate or non-digest image definitions, and
-rejects a conflicting shell override before Compose can run:
+Start the pull-only stack through the deployment wrapper. It snapshots the selected
+dotenv file once, rejects nonliteral/duplicate image definitions and conflicting
+shell overrides, then runs Compose `config`, `pull`, and `up` against that frozen
+snapshot:
 
 ```bash
 ENV_FILE=.env
-bash deploy/image-preflight.sh "$ENV_FILE" &&
-docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.runtime.yml config &&
-docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.runtime.yml pull &&
-docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.runtime.yml up -d
+bash deploy/image-preflight.sh "$ENV_FILE"
 ```
 
 The root `docker-compose.yml` uses the same required image variables and also
@@ -134,8 +132,9 @@ Compose `pgdata` volume (normally `<project>_pgdata`), then run the bounded
 ownership repair with the exact new PostgreSQL image identity:
 
 ```bash
+ENV_FILE=.env
 POSTGRES_MIGRATION_IMAGE='ghcr.io/thebtf/engram-postgres@sha256:<postgres-manifest-digest>'
-docker compose -f deploy/docker-compose.runtime.yml down
+docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.runtime.yml down
 docker volume ls --format '{{.Name}}'
 docker run --rm --user 0:0 \
   --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
@@ -146,7 +145,7 @@ docker run --rm --user 0:0 \
 docker run --rm --user 0:0 --cap-drop ALL --entrypoint /bin/sh \
   -v <project>_pgdata:/var/lib/postgresql/data \
   "$POSTGRES_MIGRATION_IMAGE" -c "stat -c '%u:%g:%a' /var/lib/postgresql/data"
-docker compose -f deploy/docker-compose.runtime.yml up -d
+bash deploy/image-preflight.sh "$ENV_FILE"
 ```
 
 The `stat` command must print `70:70:700`. Never add `-v` to the `down` command;
@@ -154,8 +153,9 @@ that would delete the database volume. The critical runtime suite proves both
 the pre-migration fail-closed behavior and marker preservation after migration.
 
 Rollback uses the three digest identities from the preceding accepted release
-manifest. Change all three `ENGRAM_*_IMAGE` values as one set, recreate the
-stack without deleting named volumes, then verify PostgreSQL version/vector,
+manifest. Change all three `ENGRAM_*_IMAGE` values as one set in a selected
+dotenv file, then run `bash deploy/image-preflight.sh "$ENV_FILE"` to recreate
+the stack without deleting named volumes. Verify PostgreSQL version/vector,
 retained data, direct readiness, and operator-proxied readiness.
 
 ## Reproduce image acceptance
