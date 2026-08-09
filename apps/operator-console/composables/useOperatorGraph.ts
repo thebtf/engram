@@ -491,6 +491,7 @@ export function useOperatorGraph(): {
   const pathResult = useState<OperatorGraphPathResult | null>('live:graph:path-result', () => null)
   const pathBusy = useState<boolean>('live:graph:path-busy', () => false)
   const pathError = useState<GraphMutationError | null>('live:graph:path-error', () => null)
+  const lastMutationError = useState<GraphMutationError | null>('live:graph:last-mutation-error', () => null)
   const refreshGeneration = ref(0)
   const edgesGeneration = ref(0)
   const traverseGeneration = ref(0)

@@ -337,7 +337,7 @@ async function runFindPath() {
 
     <div v-if="notice" class="notice" :data-kind="notice.kind">
       <span>{{ notice.text }}</span>
-      <button class="notice-close" :aria-label="t('graphPage.actions.closeNotice')" @click="dismissNotice">×</button>
+      <button class="notice-close" @click="dismissNotice">×</button>
     </div>
 
     <div v-if="typedError" class="typed-error">
