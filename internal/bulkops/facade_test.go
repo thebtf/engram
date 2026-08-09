@@ -362,8 +362,8 @@ func TestFacade_BulkPromote_PreservesCandidateAuditAndSeparatesIDs(t *testing.T)
 
 	snap, err := snapStore.Get(context.Background(), result.SnapshotID)
 	require.NoError(t, err)
-	assert.NotContains(t, snap.AffectedMemoryIDs, candidate.ID)
-	assert.Contains(t, snap.AffectedMemoryIDs, result.Promoted[0])
+	assert.Equal(t, result.Promoted, snap.AffectedMemoryIDs,
+		"affected IDs must be exactly the promoted memory IDs even when candidate and memory sequences collide")
 	entries, err := decodeTypedBeforeState(snap.BeforeState)
 	require.NoError(t, err)
 	assert.Contains(t, entries, fmt.Sprintf("candidate:%d", candidate.ID))
