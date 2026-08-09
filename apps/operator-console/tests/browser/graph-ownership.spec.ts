@@ -112,6 +112,37 @@ test('a delayed mutation notice cannot overwrite newer validation or dismissal',
   await expect(page.locator('.typed-error')).toHaveCount(0)
 })
 
+test('a delayed successful node creation cannot overwrite newer invalid-node validation', async ({ page }) => {
+  let releaseMutation!: () => void
+  const mutation = new Promise<void>((resolve) => { releaseMutation = resolve })
+  await page.route('**/api/flags', enabled)
+  await routeProjects(page)
+  await routeGraph(page)
+  await page.route('**/api/graph/edges**', (route) => route.fulfill({ json: { edges: [] } }))
+  await page.route('**/api/graph/nodes', async (route) => {
+    if (route.request().method() === 'POST') {
+      await mutation
+      await route.fulfill({ json: { id: 99, node_type: 'skill', external_ref: 'late-success', project: 'alpha' } })
+      return
+    }
+    await route.fallback()
+  })
+
+  await page.goto('/graph')
+  const ref = page.locator('#graph-node-external-ref')
+  const create = page.getByRole('button', { name: 'Создать узел' })
+  await ref.fill('late-success')
+  await create.click()
+  await ref.fill('')
+  await create.click()
+  await expect(page.locator('.notice')).toHaveAttribute('data-kind', 'error')
+  const mutationResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/graph/nodes')
+  releaseMutation()
+  await mutationResponse
+  await expect(page.locator('.notice')).toHaveAttribute('data-kind', 'error')
+  await expect(page.locator('.notice')).toContainText('Нужны тип узла, проект и внешний ref.')
+})
+
 test('refresh invalidates a delayed traverse response', async ({ page }) => {
   let releaseTraverse!: () => void
   const traverse = new Promise<void>((resolve) => { releaseTraverse = resolve })
