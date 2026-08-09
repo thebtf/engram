@@ -26,12 +26,16 @@ The same release is also discoverable through exactly two tags per image:
 `main`, `latest`, branch, major, and minor aliases are not release identities.
 Do not replace the digest-pinned values above with moving tags.
 
-Validate and start the pull-only stack:
+Validate and start the pull-only stack. The preflight reads the selected dotenv
+file without sourcing it, rejects duplicate or non-digest image definitions, and
+rejects a conflicting shell override before Compose can run:
 
 ```bash
-docker compose -f deploy/docker-compose.runtime.yml config
-docker compose -f deploy/docker-compose.runtime.yml pull
-docker compose -f deploy/docker-compose.runtime.yml up -d
+ENV_FILE=.env
+bash deploy/image-preflight.sh "$ENV_FILE" &&
+docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.runtime.yml config &&
+docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.runtime.yml pull &&
+docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.runtime.yml up -d
 ```
 
 The root `docker-compose.yml` uses the same required image variables and also
