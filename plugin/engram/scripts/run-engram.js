@@ -6,67 +6,25 @@ const { spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const { hashFile, objectRoots, resolveForLaunch } = require("./ensure-binary.js");
 
 const STARTUP_DIAGNOSTIC_LOG_MAX_BYTES = 128 * 1024;
 
-function main() {
+async function main() {
  const pluginRoot = resolvePluginRoot();
  const pluginData = resolvePluginData(pluginRoot);
-
- const ext = process.platform === "win32" ? ".exe" : "";
- const binaryPath = path.join(pluginData, "bin", `engram${ext}`);
- const ensureBinary = path.join(pluginRoot, "scripts", "ensure-binary.js");
 
  const configFilePath = resolveConfigFilePath(pluginData);
  const configFile = readEngramConfigFile(configFilePath);
 
  emitStartupDiagnostic(pluginData, configFilePath, configFile);
 
- if (fs.existsSync(ensureBinary)) {
-  // ensure-binary owns freshness: it compares plugin.json with both the
-  // marker file and the binary's own --version output.
-  const ensureStatus = checkedSpawnSync(process.execPath, [ensureBinary], {
-   stdio: "inherit",
-   env: {
-    ...process.env,
-    PLUGIN_ROOT: pluginRoot,
-    PLUGIN_DATA: pluginData,
-    CLAUDE_PLUGIN_ROOT: process.env.CLAUDE_PLUGIN_ROOT || pluginRoot,
-    CLAUDE_PLUGIN_DATA: process.env.CLAUDE_PLUGIN_DATA || pluginData,
-   },
-  }, "ensure-binary");
-  if (ensureStatus !== 0) {
-   process.exit(ensureStatus);
-  }
- }
-
- if (!fs.existsSync(binaryPath)) {
-  process.stderr.write(
-   `[engram] binary not found at ${binaryPath}. The plugin could not install the client binary. ` +
-   "Check network access to GitHub Releases and reinstall or upgrade the plugin.\n"
-  );
-  process.exit(1);
- }
-
  // Visible diagnostic: fail early if the workstation is not configured. A new
  // install should not expose half-working tools with no remote memory backend.
- //
- // Resolution order for each credential:
- //   1. Explicit env vars (ENGRAM_URL / ENGRAM_TOKEN)
- //   2. Claude Code plugin option env (CLAUDE_PLUGIN_OPTION_*)
- //   3. Legacy userConfig env aliases (ENGRAM_CLAUDE_USERCONFIG_*)
- //   4. Config file fallback (ENGRAM_CONFIG_FILE, <pluginData>/config.json,
- //      or ~/.engram/config.json) — added in v6.4.15 to handle Codex ≥0.139
- //      which stopped forwarding shell_environment_policy.set values to plugin
- //      MCP server children (openai/codex#24401).
  const serverURL =
   configuredEnvValue(
    "ENGRAM_URL",
    "ENGRAM_SERVER_URL",
-   // Claude Code exports plugin userConfig values to plugin subprocesses as
-   // CLAUDE_PLUGIN_OPTION_<KEY>. Interpolating ${user_config.*} inside the
-   // .mcp.json env block is NOT used: it silently prevents the MCP server
-   // from spawning (anthropics/claude-code#51573).
    "CLAUDE_PLUGIN_OPTION_server_url",
    "CLAUDE_PLUGIN_OPTION_SERVER_URL",
    "ENGRAM_CLAUDE_USERCONFIG_URL"
@@ -80,13 +38,11 @@ function main() {
    "Claude Code: run /engram:setup or set ENGRAM_URL in ~/.claude/settings.json env.\n" +
    `Config file checked: ${configFilePath}\n`
   );
-  process.exit(1);
+  process.exitCode = 1;
+  return;
  }
  process.env.ENGRAM_URL = serverURL;
 
- // v6 model: ENGRAM_TOKEN is the per-workstation keycard issued via the
- // dashboard /tokens page. The operator key (ENGRAM_AUTH_ADMIN_TOKEN) lives
- // ONLY on the server host and MUST NOT be set on a workstation.
  const token =
   configuredEnvValue(
    "ENGRAM_TOKEN",
@@ -102,7 +58,8 @@ function main() {
    "Universal (all harnesses): add \"api_token\":\"engram_...\" to the config file.\n" +
    `Config file checked: ${configFilePath}\n`
   );
-  process.exit(1);
+  process.exitCode = 1;
+  return;
  }
  process.env.ENGRAM_TOKEN = token;
  const childEnv = childEnvForEngram(process.env);
@@ -115,12 +72,31 @@ function main() {
   );
  }
 
- // Run the engram binary as a child process and propagate its exit code.
- const status = checkedSpawnSync(binaryPath, process.argv.slice(2), {
+ try {
+  const status = await resolveAndSpawn({ pluginRoot, pluginData, args: process.argv.slice(2), env: childEnv });
+  process.exitCode = status;
+ } catch (error) {
+  process.stderr.write(`[engram] FATAL: trusted client launch failed: ${error.message}\n`);
+  process.exitCode = 1;
+ }
+}
+
+async function resolveAndSpawn(options) {
+ const resolver = options.resolve || resolveForLaunch;
+ const hash = options.hash || hashFile;
+ const roots = options.roots || objectRoots;
+ const resolved = await resolver({ pluginRoot: options.pluginRoot, pluginData: options.pluginData });
+ // Rehash the policy-derived object in this process immediately before spawn.
+ if (!hash(resolved.path, resolved.target, roots(options.pluginData).objects)) {
+  throw new Error("resolved client failed final integrity verification");
+ }
+ const result = (options.spawnSync || spawnSync)(resolved.path, options.args || [], {
   stdio: "inherit",
-  env: childEnv,
- }, "engram exec");
- process.exit(status);
+  env: options.env,
+ });
+ const failure = spawnFailureMessage(result, "engram exec");
+ if (failure) throw new Error(failure.trim());
+ return result.status ?? 0;
 }
 
 function childEnvForEngram(env = process.env) {
@@ -367,7 +343,10 @@ function spawnFailureMessage(result, label) {
 }
 
 if (require.main === module) {
- main();
+ main().catch((error) => {
+  process.stderr.write(`[engram] FATAL: trusted client launch failed: ${error.message}\n`);
+  process.exitCode = 1;
+ });
 }
 
 module.exports = {
@@ -385,6 +364,7 @@ module.exports = {
  resolveConfigFilePath,
  resolvePluginData,
  resolvePluginRoot,
+ resolveAndSpawn,
  spawnFailureMessage,
  trimStartupDiagnosticLog,
 };
