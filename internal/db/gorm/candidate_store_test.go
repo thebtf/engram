@@ -598,6 +598,14 @@ func TestCandidateStore_PromoteWithMemoryAndSnapshot_WritesCandidateReviewAudit(
 
 	candidate := createCandidateReviewStoreTestCandidate(t, cs, ctx, "promote-audit")
 	snapshot := newCandidateReviewStoreTestSnapshot(t, candidate, "promote", "agent/promoter")
+	stale := *candidate
+	stale.ProposedContent = "stale snapshot state"
+	staleBefore, err := json.Marshal(stale)
+	require.NoError(t, err)
+	snapshot.BeforeState, err = json.Marshal(map[string]models.SnapshotEntry{
+		fmt.Sprintf("candidate:%d", candidate.ID): {Kind: models.EntryKindRestore, Before: staleBefore},
+	})
+	require.NoError(t, err)
 	mem := &models.Memory{
 		Content:       candidate.ProposedContent,
 		Project:       "test-project",
@@ -606,10 +614,20 @@ func TestCandidateStore_PromoteWithMemoryAndSnapshot_WritesCandidateReviewAudit(
 		SourceAgent:   "crystallization",
 	}
 
-	updated, created, _, err := cs.PromoteWithMemoryAndSnapshot(ctx, snapshotStore, candidate.ID, mem, snapshot, "agent/promoter")
+	updated, created, storedSnapshot, err := cs.PromoteWithMemoryAndSnapshot(ctx, snapshotStore, candidate.ID, mem, snapshot, "agent/promoter")
 	require.NoError(t, err)
 	require.Equal(t, models.CandidateStatusPromoted, updated.Status)
 	require.NotNil(t, created)
+	storedSnapshot, err = snapshotStore.Get(ctx, storedSnapshot.SnapshotID)
+	require.NoError(t, err)
+	var entries map[string]models.SnapshotEntry
+	require.NoError(t, json.Unmarshal(storedSnapshot.BeforeState, &entries))
+	captured := entries[fmt.Sprintf("candidate:%d", candidate.ID)]
+	var lockedBefore models.CrystallizationCandidate
+	require.NoError(t, json.Unmarshal(captured.Before, &lockedBefore))
+	require.Equal(t, models.CandidateStatusPending, lockedBefore.Status)
+	require.Equal(t, candidate.ProposedContent, lockedBefore.ProposedContent)
+	require.NotEmpty(t, captured.PostStateToken)
 
 	var entry AuditLogEntry
 	require.NoError(t, db.Where("action = ? AND actor = ? AND source_session_id = ?", "candidate_review", "agent/promoter", candidate.SourceSessionID).
@@ -647,6 +665,20 @@ func TestCandidateStore_TransitionToRejectedWithSnapshot_WritesCandidateReviewAu
 	require.NoError(t, err)
 	require.Equal(t, models.CandidateStatusRejected, updated.Status)
 	require.NotNil(t, createdSnapshot)
+	storedSnapshot, err := snapshotStore.Get(ctx, createdSnapshot.SnapshotID)
+	require.NoError(t, err)
+	var entries map[string]models.SnapshotEntry
+	require.NoError(t, json.Unmarshal(storedSnapshot.BeforeState, &entries))
+	candidateEntry, ok := entries[fmt.Sprintf("candidate:%d", candidate.ID)]
+	require.True(t, ok)
+	require.NotEmpty(t, candidateEntry.PostStateToken)
+	var capturedBefore models.CrystallizationCandidate
+	require.NoError(t, json.Unmarshal(candidateEntry.Before, &capturedBefore))
+	require.Equal(t, candidate.ID, capturedBefore.ID)
+	require.Equal(t, models.CandidateStatusPending, capturedBefore.Status)
+	postStateToken, err := models.SnapshotStateToken(updated)
+	require.NoError(t, err)
+	require.Equal(t, postStateToken, candidateEntry.PostStateToken)
 
 	var entry AuditLogEntry
 	require.NoError(t, db.Where("action = ? AND actor = ? AND source_session_id = ?", "candidate_review", "agent/reviewer", candidate.SourceSessionID).

@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -17,6 +18,17 @@ var projectHashSuffixRe = regexp.MustCompile(`_[0-9a-f]{6,8}$`)
 func projectBareName(projectID string) string {
 	return projectHashSuffixRe.ReplaceAllString(projectID, "")
 }
+
+var (
+	// ErrIssueNotFound indicates that no issue exists for the requested ID.
+	ErrIssueNotFound = errors.New("issue_not_found")
+	// ErrIssueInvalidTransition indicates that the requested lifecycle change is not allowed.
+	ErrIssueInvalidTransition = errors.New("issue_invalid_transition")
+	// ErrIssueInvalidInput indicates that request data cannot be persisted.
+	ErrIssueInvalidInput = errors.New("issue_invalid_input")
+	// ErrIssueForbidden indicates that the authenticated actor cannot mutate the issue.
+	ErrIssueForbidden = errors.New("issue_forbidden")
+)
 
 // IssueStore provides CRUD operations for issues and issue comments.
 type IssueStore struct {
@@ -186,7 +198,108 @@ func (s *IssueStore) GetIssue(ctx context.Context, id int64) (*Issue, []IssueCom
 
 // UpdateIssueStatus transitions an issue to a new status with appropriate timestamps.
 func (s *IssueStore) UpdateIssueStatus(ctx context.Context, id int64, status string) error {
-	now := time.Now()
+	return s.UpdateIssueStatusWithComment(ctx, id, status, "", "", "")
+}
+
+// UpdateIssueStatusWithComment applies a status transition and its optional
+// comment atomically so callers never observe a resolved issue without the
+// comment that explained the transition.
+func (s *IssueStore) UpdateIssueStatusWithComment(ctx context.Context, id int64, status, comment, authorProject, authorAgent string) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		now := time.Now()
+		if err := updateIssueStatusTx(tx, id, status, now); err != nil {
+			return err
+		}
+		if comment == "" {
+			return nil
+		}
+		_, err := addIssueCommentTx(tx, id, &IssueComment{
+			AuthorProject: authorProject,
+			AuthorAgent:   authorAgent,
+			Body:          comment,
+		}, now)
+		return err
+	})
+}
+
+// IssueUpdate is the complete mutation requested by a REST issue PATCH.
+type IssueUpdate struct {
+	Status        string
+	Comment       string
+	AuthorProject string
+	AuthorAgent   string
+	Title         string
+	Body          string
+	Priority      string
+	Type          string
+	Labels        []string
+}
+
+func (u IssueUpdate) hasFields() bool {
+	return u.Title != "" || u.Body != "" || u.Priority != "" || u.Type != "" || u.Labels != nil
+}
+
+// UpdateIssueAtomically applies fields, a lifecycle transition, and an optional
+// comment as a single transaction.
+func (s *IssueStore) UpdateIssueAtomically(ctx context.Context, id int64, update IssueUpdate, isOperator bool) error {
+	if update.Status != "" {
+		switch update.Status {
+		case "resolved", "reopened", "closed", "rejected", "open", "acknowledged":
+		default:
+			return fmt.Errorf("%w: invalid status %q", ErrIssueInvalidInput, update.Status)
+		}
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		now := time.Now()
+		if update.hasFields() {
+			if err := updateIssueFieldsTx(tx, id, update.Title, update.Body, update.Priority, update.Type, update.Labels, now); err != nil {
+				return err
+			}
+		}
+		switch update.Status {
+		case "":
+			if update.Comment == "" {
+				return nil
+			}
+			_, err := addIssueCommentTx(tx, id, &IssueComment{AuthorProject: update.AuthorProject, AuthorAgent: update.AuthorAgent, Body: update.Comment}, now)
+			return err
+		case "resolved":
+			if err := updateIssueStatusTx(tx, id, update.Status, now); err != nil {
+				return err
+			}
+		case "open", "acknowledged":
+			if !isOperator {
+				return fmt.Errorf("%w: issue mutation forbidden: operator identity is required", ErrIssueForbidden)
+			}
+			if err := updateIssueStatusTx(tx, id, update.Status, now); err != nil {
+				return err
+			}
+		case "reopened":
+			if err := reopenIssueTx(tx, id, now); err != nil {
+				return err
+			}
+		case "closed":
+			if err := closeIssueTx(tx, id, isOperator, now); err != nil {
+				return err
+			}
+		case "rejected":
+			if !isOperator {
+				return fmt.Errorf("%w: issue mutation forbidden: operator identity is required", ErrIssueForbidden)
+			}
+			if update.Comment == "" {
+				return fmt.Errorf("%w: comment is required when rejecting an issue", ErrIssueInvalidInput)
+			}
+			return rejectIssueTx(tx, id, update.Comment, update.AuthorProject, update.AuthorAgent, now)
+		}
+		if update.Comment == "" {
+			return nil
+		}
+		_, err := addIssueCommentTx(tx, id, &IssueComment{AuthorProject: update.AuthorProject, AuthorAgent: update.AuthorAgent, Body: update.Comment}, now)
+		return err
+	})
+}
+
+func updateIssueStatusTx(tx *gorm.DB, id int64, status string, now time.Time) error {
 	updates := map[string]interface{}{
 		"status":     status,
 		"updated_at": now,
@@ -203,19 +316,85 @@ func (s *IssueStore) UpdateIssueStatus(ctx context.Context, id int64, status str
 		updates["closed_at"] = now
 	}
 
-	result := s.db.WithContext(ctx).Model(&Issue{}).Where("id = ?", id).Updates(updates)
+	result := tx.Model(&Issue{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
 		return fmt.Errorf("update issue status: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("issue %d not found", id)
+		return fmt.Errorf("%w: issue %d", ErrIssueNotFound, id)
 	}
 	return nil
 }
 
+func reopenIssueTx(tx *gorm.DB, id int64, now time.Time) error {
+	var issue Issue
+	if err := tx.First(&issue, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return fmt.Errorf("%w: issue %d", ErrIssueNotFound, id)
+		}
+		return err
+	}
+	if issue.Status != "resolved" {
+		return fmt.Errorf("%w: issue %d is %s, not resolved — cannot reopen", ErrIssueInvalidTransition, id, issue.Status)
+	}
+	result := tx.Model(&Issue{}).Where("id = ? AND status = ?", id, "resolved").Updates(map[string]any{
+		"status":      "reopened",
+		"reopened_at": now,
+		"updated_at":  now,
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("%w: issue %d is no longer resolved (concurrent modification)", ErrIssueInvalidTransition, id)
+	}
+	return nil
+}
+
+func rejectIssueTx(tx *gorm.DB, id int64, comment, authorProject, authorAgent string, now time.Time) error {
+	result := tx.Model(&Issue{}).Where("id = ?", id).Updates(map[string]any{
+		"status":     "rejected",
+		"closed_at":  now,
+		"updated_at": now,
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("%w: issue %d", ErrIssueNotFound, id)
+	}
+	return tx.Create(&IssueComment{
+		IssueID:       id,
+		AuthorProject: authorProject,
+		AuthorAgent:   authorAgent,
+		Body:          "Rejected: " + comment,
+		CreatedAt:     now,
+	}).Error
+}
+
 // AddComment adds a comment to an issue and updates the issue's updated_at.
 func (s *IssueStore) AddComment(ctx context.Context, issueID int64, comment *IssueComment) (int64, error) {
-	now := time.Now()
+	var commentID int64
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		commentID, err = addIssueCommentTx(tx, issueID, comment, time.Now())
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("add comment: %w", err)
+	}
+	return commentID, nil
+}
+
+func addIssueCommentTx(tx *gorm.DB, issueID int64, comment *IssueComment, now time.Time) (int64, error) {
+	// Verify issue exists before inserting comment (prevents orphan rows).
+	var count int64
+	if err := tx.Model(&Issue{}).Where("id = ?", issueID).Count(&count).Error; err != nil {
+		return 0, err
+	}
+	if count == 0 {
+		return 0, fmt.Errorf("%w: issue %d", ErrIssueNotFound, issueID)
+	}
 	created := IssueComment{
 		IssueID:       issueID,
 		AuthorProject: comment.AuthorProject,
@@ -223,23 +402,11 @@ func (s *IssueStore) AddComment(ctx context.Context, issueID int64, comment *Iss
 		Body:          comment.Body,
 		CreatedAt:     now,
 	}
-
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Verify issue exists before inserting comment (prevents orphan rows)
-		var count int64
-		if err := tx.Model(&Issue{}).Where("id = ?", issueID).Count(&count).Error; err != nil {
-			return err
-		}
-		if count == 0 {
-			return fmt.Errorf("issue %d not found", issueID)
-		}
-		if err := tx.Create(&created).Error; err != nil {
-			return err
-		}
-		return tx.Model(&Issue{}).Where("id = ?", issueID).Update("updated_at", now).Error
-	})
-	if err != nil {
-		return 0, fmt.Errorf("add comment: %w", err)
+	if err := tx.Create(&created).Error; err != nil {
+		return 0, err
+	}
+	if err := tx.Model(&Issue{}).Where("id = ?", issueID).Update("updated_at", now).Error; err != nil {
+		return 0, err
 	}
 	return created.ID, nil
 }
@@ -271,15 +438,15 @@ func (s *IssueStore) AcknowledgeIssues(ctx context.Context, ids []int64) (int64,
 // open before transitioning the complete set in one transaction.
 func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int64) (int64, error) {
 	if len(ids) == 0 {
-		return 0, fmt.Errorf("issue ids are required")
+		return 0, fmt.Errorf("%w: issue ids are required", ErrIssueInvalidInput)
 	}
 	seen := make(map[int64]struct{}, len(ids))
 	for _, id := range ids {
 		if id <= 0 {
-			return 0, fmt.Errorf("invalid issue id %d", id)
+			return 0, fmt.Errorf("%w: invalid issue id %d", ErrIssueInvalidInput, id)
 		}
 		if _, exists := seen[id]; exists {
-			return 0, fmt.Errorf("duplicate issue id %d", id)
+			return 0, fmt.Errorf("%w: duplicate issue id %d", ErrIssueInvalidInput, id)
 		}
 		seen[id] = struct{}{}
 	}
@@ -291,10 +458,10 @@ func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int6
 			return err
 		}
 		if count != int64(len(ids)) {
-			return fmt.Errorf("all requested issues must exist and be open")
+			return fmt.Errorf("%w: all requested issues must exist and be open", ErrIssueInvalidTransition)
 		}
 		now := time.Now()
-		result := tx.Model(&Issue{}).Where("id IN ? AND status = ?", ids, "open").Updates(map[string]interface{}{
+		result := tx.Model(&Issue{}).Where("id IN ? AND status = ?", ids, "open").Updates(map[string]any{
 			"status":          "acknowledged",
 			"acknowledged_at": now,
 			"updated_at":      now,
@@ -303,7 +470,7 @@ func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int6
 			return result.Error
 		}
 		if result.RowsAffected != int64(len(ids)) {
-			return fmt.Errorf("issue acknowledgement changed concurrently")
+			return fmt.Errorf("%w: issue acknowledgement changed concurrently", ErrIssueInvalidTransition)
 		}
 		acknowledged = result.RowsAffected
 		return nil
@@ -319,19 +486,19 @@ func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int6
 // Optionally adds a comment explaining the reopen reason.
 func (s *IssueStore) ReopenIssue(ctx context.Context, id int64, comment, authorProject, authorAgent string) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Verify issue exists and is resolved
+		// Verify issue exists and is resolved.
 		var issue Issue
 		if err := tx.First(&issue, id).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
-				return fmt.Errorf("issue %d not found", id)
+				return fmt.Errorf("%w: issue %d", ErrIssueNotFound, id)
 			}
 			return err
 		}
 		if issue.Status != "resolved" {
-			return fmt.Errorf("issue %d is %s, not resolved — cannot reopen", id, issue.Status)
+			return fmt.Errorf("%w: issue %d is %s, not resolved — cannot reopen", ErrIssueInvalidTransition, id, issue.Status)
 		}
 
-		// Transition to reopened — include status check in WHERE to prevent race condition
+		// Include the old state in the update to prevent a race.
 		now := time.Now()
 		result := tx.Model(&Issue{}).Where("id = ? AND status = ?", id, "resolved").Updates(map[string]interface{}{
 			"status":      "reopened",
@@ -342,21 +509,17 @@ func (s *IssueStore) ReopenIssue(ctx context.Context, id int64, comment, authorP
 			return result.Error
 		}
 		if result.RowsAffected == 0 {
-			return fmt.Errorf("issue %d is no longer resolved (concurrent modification)", id)
+			return fmt.Errorf("%w: issue %d is no longer resolved (concurrent modification)", ErrIssueInvalidTransition, id)
 		}
-
-		// Add reopen comment if provided
-		if comment != "" {
-			return tx.Create(&IssueComment{
-				IssueID:       id,
-				AuthorProject: authorProject,
-				AuthorAgent:   authorAgent,
-				Body:          comment,
-				CreatedAt:     now,
-			}).Error
+		if comment == "" {
+			return nil
 		}
-
-		return nil
+		_, err := addIssueCommentTx(tx, id, &IssueComment{
+			AuthorProject: authorProject,
+			AuthorAgent:   authorAgent,
+			Body:          comment,
+		}, now)
+		return err
 	})
 }
 
@@ -367,18 +530,18 @@ func (s *IssueStore) AuthorizeIssueMutation(ctx context.Context, id int64, keyca
 		return nil
 	}
 	if keycardID == "" {
-		return fmt.Errorf("issue mutation forbidden: authenticated client keycard is required")
+		return fmt.Errorf("%w: issue mutation forbidden: authenticated client keycard is required", ErrIssueForbidden)
 	}
 
 	var issue Issue
 	if err := s.db.WithContext(ctx).Select("creator_keycard_id").First(&issue, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return fmt.Errorf("issue %d not found", id)
+			return fmt.Errorf("%w: issue %d", ErrIssueNotFound, id)
 		}
 		return fmt.Errorf("authorize issue mutation: %w", err)
 	}
 	if issue.CreatorKeycardID == "" || issue.CreatorKeycardID != keycardID {
-		return fmt.Errorf("issue mutation forbidden")
+		return fmt.Errorf("%w: issue mutation forbidden", ErrIssueForbidden)
 	}
 	return nil
 }
@@ -386,44 +549,62 @@ func (s *IssueStore) AuthorizeIssueMutation(ctx context.Context, id int64, keyca
 // CloseIssue transitions an issue to closed state. Authorization belongs to
 // the transport boundary and must complete before this store mutation.
 func (s *IssueStore) CloseIssue(ctx context.Context, id int64, isOperator bool) error {
+	return s.CloseIssueWithComment(ctx, id, isOperator, "", "", "")
+}
+
+// CloseIssueWithComment atomically closes an issue and records an optional comment.
+func (s *IssueStore) CloseIssueWithComment(ctx context.Context, id int64, isOperator bool, comment, authorProject, authorAgent string) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var issue Issue
-		if err := tx.First(&issue, id).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				return fmt.Errorf("issue %d not found", id)
-			}
+		now := time.Now()
+		if err := closeIssueTx(tx, id, isOperator, now); err != nil {
 			return err
 		}
-
-		validFromStates := map[string]bool{"resolved": true, "reopened": true}
-		if !isOperator && !validFromStates[issue.Status] {
-			return fmt.Errorf("issue %d is %s — can only close from resolved or reopened state", id, issue.Status)
+		if comment == "" {
+			return nil
 		}
-		if issue.Status == "closed" {
-			return fmt.Errorf("issue %d is already closed", id)
-		}
-
-		now := time.Now()
-		result := tx.Model(&Issue{}).Where("id = ? AND status = ?", id, issue.Status).Updates(map[string]any{
-			"status":     "closed",
-			"closed_at":  now,
-			"updated_at": now,
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return fmt.Errorf("issue %d state changed concurrently", id)
-		}
-		return nil
+		_, err := addIssueCommentTx(tx, id, &IssueComment{
+			AuthorProject: authorProject,
+			AuthorAgent:   authorAgent,
+			Body:          comment,
+		}, now)
+		return err
 	})
+}
+
+func closeIssueTx(tx *gorm.DB, id int64, isOperator bool, now time.Time) error {
+	var issue Issue
+	if err := tx.First(&issue, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return fmt.Errorf("%w: issue %d", ErrIssueNotFound, id)
+		}
+		return err
+	}
+	validFromStates := map[string]bool{"resolved": true, "reopened": true}
+	if !isOperator && !validFromStates[issue.Status] {
+		return fmt.Errorf("%w: issue %d is %s — can only close from resolved or reopened state", ErrIssueInvalidTransition, id, issue.Status)
+	}
+	if issue.Status == "closed" {
+		return fmt.Errorf("%w: issue %d is already closed", ErrIssueInvalidTransition, id)
+	}
+	result := tx.Model(&Issue{}).Where("id = ? AND status = ?", id, issue.Status).Updates(map[string]any{
+		"status":     "closed",
+		"closed_at":  now,
+		"updated_at": now,
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("%w: issue %d state changed concurrently", ErrIssueInvalidTransition, id)
+	}
+	return nil
 }
 
 // RejectIssue transitions any issue to rejected state with a mandatory comment.
 // Intended for human operators (dashboard). No lifecycle validation.
 func (s *IssueStore) RejectIssue(ctx context.Context, id int64, comment, authorProject, authorAgent string) error {
 	if comment == "" {
-		return fmt.Errorf("comment is required when rejecting an issue")
+		return fmt.Errorf("%w: comment is required when rejecting an issue", ErrIssueInvalidInput)
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
@@ -436,7 +617,7 @@ func (s *IssueStore) RejectIssue(ctx context.Context, id int64, comment, authorP
 			return result.Error
 		}
 		if result.RowsAffected == 0 {
-			return fmt.Errorf("issue %d not found", id)
+			return fmt.Errorf("%w: issue %d", ErrIssueNotFound, id)
 		}
 		return tx.Create(&IssueComment{
 			IssueID:       id,
@@ -468,9 +649,13 @@ func (s *IssueStore) DeleteIssue(ctx context.Context, id int64) error {
 // UpdateIssueFields updates mutable fields (title, body, priority, labels, type) for dashboard editing.
 // Only non-zero-value fields are updated.
 func (s *IssueStore) UpdateIssueFields(ctx context.Context, id int64, title, body, priority, issueType string, labels []string) error {
-	updates := map[string]any{
-		"updated_at": time.Now(),
-	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return updateIssueFieldsTx(tx, id, title, body, priority, issueType, labels, time.Now())
+	})
+}
+
+func updateIssueFieldsTx(tx *gorm.DB, id int64, title, body, priority, issueType string, labels []string, now time.Time) error {
+	updates := map[string]any{"updated_at": now}
 	if title != "" {
 		updates["title"] = title
 	}
@@ -480,26 +665,25 @@ func (s *IssueStore) UpdateIssueFields(ctx context.Context, id int64, title, bod
 	if priority != "" {
 		validPriorities := map[string]bool{"critical": true, "high": true, "medium": true, "low": true}
 		if !validPriorities[priority] {
-			return fmt.Errorf("invalid priority %q", priority)
+			return fmt.Errorf("%w: invalid priority %q", ErrIssueInvalidInput, priority)
 		}
 		updates["priority"] = priority
 	}
 	if issueType != "" {
 		if !validIssueTypes[issueType] {
-			return fmt.Errorf("invalid type %q: must be one of bug, feature, improvement, task", issueType)
+			return fmt.Errorf("%w: invalid type %q: must be one of bug, feature, improvement, task", ErrIssueInvalidInput, issueType)
 		}
 		updates["type"] = issueType
 	}
 	if labels != nil {
 		updates["labels"] = labels
 	}
-
-	result := s.db.WithContext(ctx).Model(&Issue{}).Where("id = ?", id).Updates(updates)
+	result := tx.Model(&Issue{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
 		return fmt.Errorf("update issue fields: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("issue %d not found", id)
+		return fmt.Errorf("%w: issue %d", ErrIssueNotFound, id)
 	}
 	return nil
 }

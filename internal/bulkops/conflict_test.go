@@ -24,9 +24,6 @@ import (
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 // --- Unit: detectConflicts via rollback admin gate (no DB) ---
@@ -74,21 +71,16 @@ func TestEC_F3_ErrRollbackConflict_IsDistinct(t *testing.T) {
 
 // --- Integration: full EC-F3 conflict → clear → retry flow ---
 
-func openConflictTestDB(t *testing.T) (*gorm.DB, *gormdb.Store) {
+func openConflictTestDB(t *testing.T) *gormdb.Store {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_DSN")
 	if dsn == "" {
 		t.Skip("DATABASE_DSN not set — skipping EC-F3 integration test")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
-	})
+	store, err := gormdb.NewStore(gormdb.Config{DSN: dsn, LogLevel: 0})
 	require.NoError(t, err)
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	require.NoError(t, sqlDB.Ping())
-	return db, &gormdb.Store{DB: db}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
 }
 
 // TestEC_F3_ConflictDetected_Integration is the primary EC-F3 acceptance test.
@@ -104,7 +96,8 @@ func openConflictTestDB(t *testing.T) (*gorm.DB, *gormdb.Store) {
 //  8. Create new snapshot S2 (committed).
 //  9. Rollback(S2) → must succeed.
 func TestEC_F3_ConflictDetected_Integration(t *testing.T) {
-	db, store := openConflictTestDB(t)
+	store := openConflictTestDB(t)
+	db := store.DB
 	memStore := gormdb.NewMemoryStore(store)
 	snapStore := gormdb.NewSnapshotStore(db)
 	auditStore := gormdb.NewAuditStore(db)
@@ -181,31 +174,45 @@ func TestEC_F3_ConflictDetected_Integration(t *testing.T) {
 	assert.GreaterOrEqual(t, conflictAuditCount, int64(1),
 		"EC-F3: audit_log must record rollback_attempted_with_conflict")
 
-	// Step 7: Clear the conflict — reset updated_at to before the snapshot (can't use same snap,
-	// so create S2 with fresh created_at > the modification time).
-
-	// Wait a moment so NOW() > updated_at for the new snapshot.
+	// Step 7: Capture a fresh exact pre-state, perform the real delete mutation,
+	// and bind S2 to the immutable post-state token produced by that mutation.
 	require.NoError(t, db.Exec(
-		`UPDATE memories SET updated_at = ?, content = 'restored by test' WHERE id = ?`,
-		snapshotTime.Add(-time.Second), created.ID,
+		`UPDATE memories SET content = 'retry pre-state' WHERE id = ?`,
+		created.ID,
 	).Error)
+	retryBefore, err := memStore.Get(ctx, created.ID)
+	require.NoError(t, err)
+	retryBeforeBytes, err := json.Marshal(retryBefore)
+	require.NoError(t, err)
+	require.NoError(t, memStore.Delete(ctx, created.ID))
+	retryPostState, err := memStore.GetForRollbackTx(ctx, db, created.ID)
+	require.NoError(t, err)
+	retryPostStateToken, err := models.SnapshotStateToken(retryPostState)
+	require.NoError(t, err)
+	retryStateBytes, err := json.Marshal(map[string]models.SnapshotEntry{
+		fmt.Sprintf("memory:%d", created.ID): {
+			Kind:           models.EntryKindRestore,
+			Before:         retryBeforeBytes,
+			PostStateToken: retryPostStateToken,
+		},
+	})
+	require.NoError(t, err)
 
-	// Step 8: New snapshot S2 for the same memory, with created_at after the reset.
+	// Step 8: New committed snapshot S2 represents the exact retry mutation.
 	snap2, err := models.NewBulkOpSnapshot(
 		"ec-f3-test-002",
 		models.SnapshotOpBulkDelete,
 		"master",
-		json.RawMessage(beforeStateBytes),
+		retryStateBytes,
 	)
 	require.NoError(t, err)
 	snap2.AffectedMemoryIDs = []int64{created.ID}
-	snap2.CreatedAt = time.Now().UTC().Add(time.Second) // future: no conflict
 	createdSnap2, err := snapStore.Create(ctx, snap2)
 	require.NoError(t, err)
 
-	// Step 9: Rollback S2 → must succeed (no conflict).
+	// Step 9: Rollback S2 succeeds because the locked row still matches its token.
 	result2, err := Rollback(ctx, admin, createdSnap2.SnapshotID, snapStore, memStore, auditStore, nil)
-	require.NoError(t, err, "EC-F3: rollback must succeed after conflict is cleared")
+	require.NoError(t, err, "EC-F3: rollback must succeed for the exact post-state")
 	require.NotNil(t, result2)
 	assert.Empty(t, result2.ConflictIDs,
 		"EC-F3: no conflict IDs when modification is cleared before rollback")

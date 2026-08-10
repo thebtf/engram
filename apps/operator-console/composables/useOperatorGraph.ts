@@ -150,6 +150,7 @@ export interface GraphMutationError {
 
 export interface GraphActionResult {
   ok: boolean
+  stale?: boolean
   error?: GraphMutationError
 }
 
@@ -632,18 +633,22 @@ export function useOperatorGraph(): {
         project: input.project,
         privacy_scope: input.privacyScope || 'project',
       }))
-      if (created && owns(mutationGeneration, run)) {
+      if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
+      if (created) {
         await refresh()
+        if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
         const createdID = String(created.id)
-        if (owns(mutationGeneration, run) && selectedProject.value === input.project && nodesRows.value.some((node) => node.id === createdID)) {
+        if (selectedProject.value === input.project && nodesRows.value.some((node) => node.id === createdID)) {
           selectedNodeID.value = createdID
           await refreshConnectedEdges(createdID)
+          if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
         }
       }
       return { ok: true }
     } catch (error) {
       const mapped = graphErrorFromThrown(error, { endpoint: path, method: 'POST', status: undefined })
-      if (owns(mutationGeneration, run)) lastMutationError.value = mapped
+      if (!owns(mutationGeneration, run)) return { ok: false, stale: true, error: mapped }
+      lastMutationError.value = mapped
       return { ok: false, error: mapped }
     }
   }
@@ -661,13 +666,16 @@ export function useOperatorGraph(): {
         edge_type: input.edgeType,
         reasoning: input.reasoning || '',
       }))
-      if (owns(mutationGeneration, run) && (selectedNodeID.value === input.sourceNodeID || selectedNodeID.value === input.targetNodeID)) {
+      if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
+      if (selectedNodeID.value === input.sourceNodeID || selectedNodeID.value === input.targetNodeID) {
         await refreshConnectedEdges(selectedNodeID.value)
+        if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
       }
       return { ok: true }
     } catch (error) {
       const mapped = graphErrorFromThrown(error, { endpoint: path, method: 'POST', status: undefined })
-      if (owns(mutationGeneration, run)) lastMutationError.value = mapped
+      if (!owns(mutationGeneration, run)) return { ok: false, stale: true, error: mapped }
+      lastMutationError.value = mapped
       return { ok: false, error: mapped }
     }
   }
@@ -678,11 +686,14 @@ export function useOperatorGraph(): {
     const path = `/api/graph/edges/${encodeURIComponent(edgeID)}`
     try {
       await fetchGraphJson(path, jsonInit('DELETE'))
-      if (owns(mutationGeneration, run)) await refreshConnectedEdges(selectedNodeID.value)
+      if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
+      await refreshConnectedEdges(selectedNodeID.value)
+      if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
       return { ok: true }
     } catch (error) {
       const mapped = graphErrorFromThrown(error, { endpoint: path, method: 'DELETE', status: undefined })
-      if (owns(mutationGeneration, run)) lastMutationError.value = mapped
+      if (!owns(mutationGeneration, run)) return { ok: false, stale: true, error: mapped }
+      lastMutationError.value = mapped
       return { ok: false, error: mapped }
     }
   }
@@ -693,15 +704,17 @@ export function useOperatorGraph(): {
     const path = `/api/graph/nodes/${encodeURIComponent(input.nodeID)}?cascade=${input.cascade ? 'true' : 'false'}`
     try {
       await fetchGraphJson(path, jsonInit('DELETE'))
-      if (!owns(mutationGeneration, run)) return { ok: true }
+      if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
       if (selectedNodeID.value === input.nodeID) {
         selectedNodeID.value = null
       }
       await refresh()
+      if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
       return { ok: true }
     } catch (error) {
       const mapped = graphErrorFromThrown(error, { endpoint: path, method: 'DELETE', status: undefined })
-      if (owns(mutationGeneration, run)) lastMutationError.value = mapped
+      if (!owns(mutationGeneration, run)) return { ok: false, stale: true, error: mapped }
+      lastMutationError.value = mapped
       return { ok: false, error: mapped }
     }
   }

@@ -15,9 +15,10 @@ type auditRetainer interface {
 }
 
 // startRetentionCron launches a daily background cleanup goroutine that:
-// 1. Deletes injection_log rows older than 90 days
-// 2. Deletes citation_log rows older than 90 days
-// 3. Deletes audit_log rows older than 90 days (T005)
+//  1. Deletes injection_log rows older than 90 days
+//  2. Deletes citation_log rows older than 90 days
+//  3. Deletes ordinary audit_log rows older than 90 days while retaining the
+//     durable initial-admin setup proof (T005)
 //
 // The first run is delayed by 5 minutes after startup so it does not compete
 // with the main initialization path. Subsequent runs fire every 24 hours.
@@ -40,8 +41,9 @@ func (s *Service) startRetentionCron(ctx context.Context) {
 	}()
 }
 
-// runRetentionCleanup deletes raw injection_log, citation_log, and audit_log
-// rows whose timestamp is older than 90 days. Intended to be called from
+// runRetentionCleanup deletes raw injection_log and citation_log rows older
+// than 90 days, plus ordinary audit_log rows older than 90 days. The durable
+// initial-admin setup proof is exempt. Intended to be called from
 // startRetentionCron.
 func (s *Service) runRetentionCleanup(ctx context.Context) {
 	cutoff := time.Now().Add(-90 * 24 * time.Hour)
@@ -64,7 +66,7 @@ func (s *Service) runRetentionCleanup(ctx context.Context) {
 		}
 	}
 
-	// T005: audit_log 90-day retention (FR-D2, EC-D4).
+	// T005: ordinary audit_log 90-day retention (FR-D2, EC-D4).
 	// auditRetainer is satisfied by *gorm.AuditStore; testAuditRetainer is
 	// used by unit tests to avoid a live DB connection.
 	//

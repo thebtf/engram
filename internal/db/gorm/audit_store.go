@@ -9,6 +9,9 @@ import (
 	"gorm.io/gorm"
 )
 
+// authSetupCompletedAuditAction permanently proves a surviving admin completed setup.
+const authSetupCompletedAuditAction = "auth_setup_completed"
+
 // AuditLogEntry represents a single audit trail record.
 type AuditLogEntry struct {
 	ID              int64            `gorm:"primaryKey;autoIncrement" json:"id"`
@@ -89,10 +92,12 @@ func (s *AuditStore) LogAudit(ctx context.Context, memoryID int64, action, actor
 	return s.Log(ctx, entry)
 }
 
-// DeleteOlderThan removes audit entries older than the cutoff.
+// DeleteOlderThan removes ordinary audit entries older than the cutoff.
+// The initial-admin setup proof is retained because Authentik provisioning
+// relies on it to distinguish a completed setup from an uninitialized system.
 func (s *AuditStore) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	result := s.db.WithContext(ctx).
-		Where("created_at < ?", cutoff).
+		Where("created_at < ? AND action <> ?", cutoff, authSetupCompletedAuditAction).
 		Delete(&AuditLogEntry{})
 	return result.RowsAffected, result.Error
 }

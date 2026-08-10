@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"gorm.io/gorm"
@@ -337,17 +338,67 @@ func (s *SnapshotStore) amendPromoteEntriesWithCandidatesTx(ctx context.Context,
 	}
 
 	for candidateID, before := range candidateBefore {
-		entry, err := json.Marshal(models.SnapshotEntry{Kind: models.EntryKindRestore, Before: before})
+		var candidate candidateRow
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&candidate, candidateID).Error; err != nil {
+			return fmt.Errorf("amend_promote_entries: lock candidate %d: %w", candidateID, err)
+		}
+		token, err := models.SnapshotStateToken(toDomainCandidate(&candidate))
+		if err != nil {
+			return fmt.Errorf("amend_promote_entries: token candidate %d: %w", candidateID, err)
+		}
+		entry, err := json.Marshal(models.SnapshotEntry{Kind: models.EntryKindRestore, Before: before, PostStateToken: token})
 		if err != nil {
 			return fmt.Errorf("amend_promote_entries: serialize candidate %d: %w", candidateID, err)
 		}
 		existing[fmt.Sprintf("candidate:%d", candidateID)] = json.RawMessage(entry)
 	}
 
+	// Candidate-review snapshots are created before the candidate mutation. When
+	// their caller later amends promoted-memory entries, bind every pre-existing
+	// candidate restore entry to its exact post-mutation state as well.
+	for key, raw := range existing {
+		if len(key) <= len("candidate:") || key[:len("candidate:")] != "candidate:" {
+			continue
+		}
+		var entry models.SnapshotEntry
+		if err := json.Unmarshal(raw, &entry); err != nil || entry.Kind != models.EntryKindRestore || entry.PostStateToken != "" {
+			continue
+		}
+		candidateID, err := strconv.ParseInt(key[len("candidate:"):], 10, 64)
+		if err != nil {
+			return fmt.Errorf("amend_promote_entries: parse candidate key %q: %w", key, err)
+		}
+		var candidate candidateRow
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&candidate, candidateID).Error; err != nil {
+			return fmt.Errorf("amend_promote_entries: lock candidate %d: %w", candidateID, err)
+		}
+		token, err := models.SnapshotStateToken(toDomainCandidate(&candidate))
+		if err != nil {
+			return fmt.Errorf("amend_promote_entries: token candidate %d: %w", candidateID, err)
+		}
+		entry.PostStateToken = token
+		encoded, err := json.Marshal(entry)
+		if err != nil {
+			return fmt.Errorf("amend_promote_entries: serialize candidate %d: %w", candidateID, err)
+		}
+		existing[key] = encoded
+	}
+
 	// Use entity-prefixed keys whenever a snapshot contains both candidate and
 	// memory IDs; independent table sequences can otherwise collide.
-	deleteEntry, _ := json.Marshal(models.SnapshotEntry{Kind: models.EntryKindDelete})
 	for _, memID := range promotedMemoryIDs {
+		var memory Memory
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&memory, memID).Error; err != nil {
+			return fmt.Errorf("amend_promote_entries: lock memory %d: %w", memID, err)
+		}
+		token, err := models.SnapshotStateToken(memoryRowToSnapshotModel(&memory))
+		if err != nil {
+			return fmt.Errorf("amend_promote_entries: token memory %d: %w", memID, err)
+		}
+		deleteEntry, err := json.Marshal(models.SnapshotEntry{Kind: models.EntryKindDelete, PostStateToken: token})
+		if err != nil {
+			return fmt.Errorf("amend_promote_entries: serialize memory %d: %w", memID, err)
+		}
 		key := fmt.Sprintf("%d", memID)
 		if row.OpType == string(models.SnapshotOpCandidateReviewAction) || row.OpType == string(models.SnapshotOpBulkPromote) {
 			key = fmt.Sprintf("memory:%d", memID)

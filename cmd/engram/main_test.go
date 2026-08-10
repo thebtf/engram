@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/thebtf/engram/internal/module/dispatcher"
 	"github.com/thebtf/mcp-mux/muxcore/engine"
@@ -115,6 +116,40 @@ func TestMuxcoreDaemonConvergenceActionCorrelatesStatusAndLimitsLegacyTakeover(t
 	}
 }
 
+func TestReadLiveMuxcoreDaemonActionRejectsLegacyWhenSchemaTwoIsUncorrelated(t *testing.T) {
+	dir := t.TempDir()
+	v2Path := filepath.Join(dir, "daemon.marker.json")
+	legacyPath := filepath.Join(dir, "daemon.version")
+	exe := filepath.ToSlash(filepath.Join(dir, "engram.exe"))
+	if err := os.WriteFile(v2Path, []byte(`{"schema_version":2,"product_version":"v6.47.0","daemon_compat_epoch":1,"pid":11,"daemon_generation":"new","exe":"`+exe+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(`{"version":"v6.46.4","pid":12,"exe":"`+exe+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	action, err := readLiveMuxcoreDaemonActionAt(v2Path, legacyPath, muxcoreDaemonStatusIdentity{PID: 12, DaemonGeneration: "legacy"}, daemonConvergenceIdentity{ProductVersion: "v6.47.0", DaemonCompatEpoch: 1})
+	if err == nil || action != daemonConvergenceFail {
+		t.Fatalf("schema-2 marker must prevent legacy fallback: action, error = %v, %v", action, err)
+	}
+}
+
+func TestReadLiveMuxcoreDaemonActionRejectsUncorrelatedHigherDaemon(t *testing.T) {
+	dir := t.TempDir()
+	v2Path := filepath.Join(dir, "daemon.marker.json")
+	legacyPath := filepath.Join(dir, "daemon.version")
+	exe := filepath.ToSlash(filepath.Join(dir, "engram.exe"))
+	if err := os.WriteFile(v2Path, []byte(`{"schema_version":2,"product_version":"v6.47.1","daemon_compat_epoch":1,"pid":41,"daemon_generation":"old","exe":"`+exe+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(`{"version":"v6.47.1","pid":42,"exe":"`+exe+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	action, err := readLiveMuxcoreDaemonActionAt(v2Path, legacyPath, muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "new"}, daemonConvergenceIdentity{ProductVersion: "v6.47.0", DaemonCompatEpoch: 1})
+	if err == nil || action != daemonConvergenceFail {
+		t.Fatalf("action, error = %v, %v; want fail-closed higher daemon", action, err)
+	}
+}
+
 func TestMuxcoreDaemonConfigPreservesPersistentAlwaysConnectedPolicy(t *testing.T) {
 	cfg := muxcoreDaemonConfig(&dispatcher.Dispatcher{})
 	if !cfg.Persistent || cfg.Namespace != muxcoreNamespace || cfg.LifecycleProtocol.Enabled() || cfg.AllowPersistentIdleSuspend {
@@ -135,12 +170,15 @@ func TestMuxcoreDaemonConfigPreservesPersistentAlwaysConnectedPolicy(t *testing.
 func stubReconciliation(t *testing.T, status muxcoreDaemonStatusIdentity, action daemonConvergenceAction, actionErr error) {
 	t.Helper()
 	oldStatus, oldAction, oldExe, oldRestart, oldWait := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, currentExecutable, restartMuxcoreDaemon, waitForCurrentMuxcoreDaemonReady
+	oldLock, oldContended := acquireRestartLock, isRestartLockContended
 	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) { return status, true }
 	readLiveMuxcoreDaemonAction = func(muxcoreDaemonStatusIdentity, daemonConvergenceIdentity) (daemonConvergenceAction, error) {
 		return action, actionErr
 	}
+	acquireRestartLock = func() (io.Closer, error) { return io.NopCloser(strings.NewReader("")), nil }
 	t.Cleanup(func() {
 		readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, currentExecutable, restartMuxcoreDaemon, waitForCurrentMuxcoreDaemonReady = oldStatus, oldAction, oldExe, oldRestart, oldWait
+		acquireRestartLock, isRestartLockContended = oldLock, oldContended
 	})
 }
 
@@ -213,54 +251,350 @@ func TestReconcileMuxcoreDaemonVersionReplacesLowerAndWaitsForMarkerConvergence(
 	}
 }
 
-func TestReconcileMuxcoreDaemonVersionLowerClientJoinsHigherConcurrentWinner(t *testing.T) {
-	stubReconciliation(t, muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "daemon-old"}, daemonConvergenceReplace, nil)
-	currentExecutable = func() (string, error) { return filepath.Join(t.TempDir(), "engram.exe"), nil }
-	restarts := 0
-	restartMuxcoreDaemon = func(context.Context, string) (engine.UpdateAndRestartResult, error) {
-		restarts++
-		return engine.UpdateAndRestartResult{}, &engine.UpdateAndRestartError{Phase: engine.UpdatePhaseLock, Err: errors.New("winner holds restart lock")}
-	}
-	waitForCurrentMuxcoreDaemonReady = func(context.Context) error {
-		action, err := classifyDaemonConvergence(
-			daemonConvergenceIdentity{ProductVersion: "v6.47.0", DaemonCompatEpoch: 1},
-			daemonConvergenceIdentity{ProductVersion: "v6.47.1", DaemonCompatEpoch: 1},
-		)
-		if err != nil || action != daemonConvergenceJoin {
-			return errors.New("higher same-epoch winner was not joinable")
-		}
-		return nil
-	}
-	if err := reconcileMuxcoreDaemonVersion(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if restarts != 1 {
-		t.Fatalf("lower client restarted %d times, want only its lock-losing attempt", restarts)
-	}
-}
-
-func TestWriteMuxcoreDaemonVersionMarkerPublishesOnlyCorrelatedIdentity(t *testing.T) {
+func TestWriteMuxcoreDaemonVersionMarkerPublishesBidirectionalMarkers(t *testing.T) {
 	oldStatus, oldExe := readMuxcoreDaemonStatusIdentity, currentExecutable
 	t.Cleanup(func() { readMuxcoreDaemonStatusIdentity, currentExecutable = oldStatus, oldExe })
-	path := filepath.Join(t.TempDir(), "marker.json")
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	path := filepath.Join(t.TempDir(), "marker.marker.json")
+	legacyPath := filepath.Join(filepath.Dir(path), "marker.version")
 	currentExecutable = func() (string, error) { return filepath.Join(t.TempDir(), "engram.exe"), nil }
+	generation := "daemon-new"
 	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) {
-		return muxcoreDaemonStatusIdentity{PID: os.Getpid(), DaemonGeneration: "daemon-new"}, true
+		return muxcoreDaemonStatusIdentity{PID: os.Getpid(), DaemonGeneration: generation}, true
 	}
-	writeMuxcoreDaemonVersionMarkerAt(path, logger)
-	marker, err := readMuxcoreDaemonVersionMarker(path)
-	if err != nil || marker.SchemaVersion != 2 || marker.PID != os.Getpid() || marker.DaemonGeneration != "daemon-new" {
-		t.Fatalf("published marker = %#v, error = %v", marker, err)
-	}
-	if err := os.Remove(path); err != nil {
+	if err := writeMuxcoreDaemonVersionMarkerAt(path); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	generation = "daemon-newer"
+	if err := writeMuxcoreDaemonVersionMarkerAt(path); err != nil {
+		t.Fatalf("overwrite existing Windows markers: %v", err)
+	}
+	marker, err := readMuxcoreDaemonVersionMarker(path)
+	if err != nil || marker.SchemaVersion != 2 || marker.PID != os.Getpid() || marker.DaemonGeneration != generation {
+		t.Fatalf("published schema-2 marker = %#v, error = %v", marker, err)
+	}
+	legacy, err := os.ReadFile(legacyPath)
+	if err != nil || !strings.Contains(string(legacy), `"version":"`+daemonVersion+`"`) {
+		t.Fatalf("published legacy marker = %q, error = %v", legacy, err)
 	}
 	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) {
 		return muxcoreDaemonStatusIdentity{PID: os.Getpid() + 1, DaemonGeneration: "daemon-wrong"}, true
 	}
-	writeMuxcoreDaemonVersionMarkerAt(path, logger)
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("uncorrelated marker publication error = %v, want absent marker", err)
+	if err := writeMuxcoreDaemonVersionMarkerAt(filepath.Join(t.TempDir(), "missing.marker.json")); err == nil {
+		t.Fatal("uncorrelated marker publication succeeded")
+	}
+}
+
+func TestWriteMuxcoreDaemonVersionMarkerPartialPublishFailsClosed(t *testing.T) {
+	oldStatus, oldExe, oldWrite := readMuxcoreDaemonStatusIdentity, currentExecutable, writeMuxcoreMarker
+	t.Cleanup(func() {
+		readMuxcoreDaemonStatusIdentity, currentExecutable, writeMuxcoreMarker = oldStatus, oldExe, oldWrite
+	})
+	dir := t.TempDir()
+	markerPath := filepath.Join(dir, "daemon.marker.json")
+	legacyPath := filepath.Join(dir, "daemon.version")
+	exe := filepath.ToSlash(filepath.Join(dir, "engram.exe"))
+	if err := os.WriteFile(markerPath, []byte(`{"schema_version":2,"product_version":"v6.46.4","daemon_compat_epoch":1,"pid":11,"daemon_generation":"old","exe":"`+exe+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(`{"version":"v6.46.4","pid":11,"exe":"`+exe+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	currentExecutable = func() (string, error) { return exe, nil }
+	status := muxcoreDaemonStatusIdentity{PID: os.Getpid(), DaemonGeneration: "new"}
+	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) { return status, true }
+	writes := 0
+	writeMuxcoreMarker = func(path string, payload []byte) error {
+		writes++
+		if writes == 1 {
+			return oldWrite(path, payload)
+		}
+		return errors.New("schema-2 marker publish failed")
+	}
+	if err := writeMuxcoreDaemonVersionMarkerAt(markerPath); err == nil {
+		t.Fatal("partial marker publication succeeded")
+	}
+	legacy, err := os.ReadFile(legacyPath)
+	if err != nil || !strings.Contains(string(legacy), `"version":"`+daemonVersion+`"`) {
+		t.Fatalf("legacy marker did not publish new daemon identity: %q, %v", legacy, err)
+	}
+	action, err := readLiveMuxcoreDaemonActionAt(markerPath, legacyPath, status, daemonConvergenceIdentity{ProductVersion: daemonVersion, DaemonCompatEpoch: muxcoreDaemonCompatEpoch})
+	if err == nil || action != daemonConvergenceFail {
+		t.Fatalf("partial markers action, error = %v, %v; want fail, error", action, err)
+	}
+}
+
+func TestWaitForMuxcoreDaemonVersionAcceptsFreshMarkerAfterStaleValidWindow(t *testing.T) {
+	oldStatus, oldAction := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction
+	t.Cleanup(func() { readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction = oldStatus, oldAction })
+	dir := t.TempDir()
+	markerPath := filepath.Join(dir, "daemon.marker.json")
+	legacyPath := filepath.Join(dir, "daemon.version")
+	exe := filepath.ToSlash(filepath.Join(dir, "engram.exe"))
+	writeMarker := func(pid int, generation string) {
+		t.Helper()
+		raw := `{"schema_version":2,"product_version":"` + daemonVersion + `","daemon_compat_epoch":1,"pid":` + strconv.Itoa(pid) + `,"daemon_generation":"` + generation + `","exe":"` + exe + `"}`
+		if err := os.WriteFile(markerPath, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeMarker(41, "old")
+	status := muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "new"}
+	statusReads := 0
+	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) {
+		statusReads++
+		if statusReads == 2 {
+			writeMarker(status.PID, status.DaemonGeneration)
+		}
+		return status, true
+	}
+	readLiveMuxcoreDaemonAction = func(live muxcoreDaemonStatusIdentity, client daemonConvergenceIdentity) (daemonConvergenceAction, error) {
+		return readLiveMuxcoreDaemonActionAt(markerPath, legacyPath, live, client)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := waitForMuxcoreDaemonVersion(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if statusReads < 2 {
+		t.Fatal("stale marker did not consume a bounded publication retry")
+	}
+}
+
+func TestReconcileMuxcoreDaemonVersionWaitsForUncorrelatedMarker(t *testing.T) {
+	stubReconciliation(t, muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "daemon-starting"}, daemonConvergenceFail, errMuxcoreDaemonMarkerUncorrelated)
+	called := false
+	restartMuxcoreDaemon = func(context.Context, string) (engine.UpdateAndRestartResult, error) {
+		called = true
+		return engine.UpdateAndRestartResult{}, nil
+	}
+	waitForCurrentMuxcoreDaemonReady = func(context.Context) error { return nil }
+	if err := reconcileMuxcoreDaemonVersion(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("uncorrelated schema-2 marker triggered replacement")
+	}
+}
+
+func TestReconcileMuxcoreDaemonVersionWaitsForLongLockHolderWithoutRetryExhaustion(t *testing.T) {
+	status := muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "daemon-old"}
+	oldStatus, oldAction, oldLock, oldContended := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, acquireRestartLock, isRestartLockContended
+	defer func() {
+		readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, acquireRestartLock, isRestartLockContended = oldStatus, oldAction, oldLock, oldContended
+	}()
+	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) { return status, true }
+	actionReads := 0
+	readLiveMuxcoreDaemonAction = func(muxcoreDaemonStatusIdentity, daemonConvergenceIdentity) (daemonConvergenceAction, error) {
+		actionReads++
+		if actionReads > 10 {
+			return daemonConvergenceJoin, nil
+		}
+		return daemonConvergenceReplace, nil
+	}
+	lockAttempts := 0
+	acquireRestartLock = func() (io.Closer, error) {
+		lockAttempts++
+		return nil, errors.New("held")
+	}
+	isRestartLockContended = func(error) bool { return true }
+	if err := reconcileMuxcoreDaemonVersion(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if actionReads <= 10 || lockAttempts <= 1 {
+		t.Fatalf("action reads=%d lock probes=%d; long holder was not waited under the outer deadline", actionReads, lockAttempts)
+	}
+}
+
+func TestReconcileMuxcoreDaemonVersionRechecksStatusUnderLock(t *testing.T) {
+	lower := muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "daemon-old"}
+	higher := muxcoreDaemonStatusIdentity{PID: 43, DaemonGeneration: "daemon-new"}
+	oldStatus, oldAction, oldLock, oldRestart := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, acquireRestartLock, restartMuxcoreDaemon
+	defer func() {
+		readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, acquireRestartLock, restartMuxcoreDaemon = oldStatus, oldAction, oldLock, oldRestart
+	}()
+	current := lower
+	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) { return current, true }
+	readLiveMuxcoreDaemonAction = func(status muxcoreDaemonStatusIdentity, _ daemonConvergenceIdentity) (daemonConvergenceAction, error) {
+		if sameMuxcoreDaemon(status, higher) {
+			return daemonConvergenceJoin, nil
+		}
+		return daemonConvergenceReplace, nil
+	}
+	acquireRestartLock = func() (io.Closer, error) {
+		current = higher
+		return io.NopCloser(strings.NewReader("")), nil
+	}
+	restarted := false
+	restartMuxcoreDaemon = func(context.Context, string) (engine.UpdateAndRestartResult, error) {
+		restarted = true
+		return engine.UpdateAndRestartResult{}, nil
+	}
+	if err := reconcileMuxcoreDaemonVersion(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if restarted {
+		t.Fatal("stale lower decision restarted a newer daemon")
+	}
+}
+
+func TestWaitForMuxcoreDaemonVersionAcceptsFreshMarkerAfterMissingWindow(t *testing.T) {
+	oldStatus, oldAction := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction
+	t.Cleanup(func() { readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction = oldStatus, oldAction })
+	dir := t.TempDir()
+	markerPath := filepath.Join(dir, "daemon.marker.json")
+	legacyPath := filepath.Join(dir, "daemon.version")
+	exe := filepath.ToSlash(filepath.Join(dir, "engram.exe"))
+	status := muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "new"}
+	statusReads := 0
+	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) {
+		statusReads++
+		if statusReads == 2 {
+			raw := `{"schema_version":2,"product_version":"` + daemonVersion + `","daemon_compat_epoch":1,"pid":` + strconv.Itoa(status.PID) + `,"daemon_generation":"` + status.DaemonGeneration + `","exe":"` + exe + `"}`
+			if err := os.WriteFile(markerPath, []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return status, true
+	}
+	readLiveMuxcoreDaemonAction = func(live muxcoreDaemonStatusIdentity, client daemonConvergenceIdentity) (daemonConvergenceAction, error) {
+		return readLiveMuxcoreDaemonActionAt(markerPath, legacyPath, live, client)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := waitForMuxcoreDaemonVersion(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if statusReads < 2 {
+		t.Fatal("missing marker did not consume a bounded publication retry")
+	}
+}
+
+func TestVerifyCurrentMuxcoreDaemonIdentityRejectsLowerElectionWinner(t *testing.T) {
+	oldStatus, oldAction := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction
+	t.Cleanup(func() { readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction = oldStatus, oldAction })
+	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) {
+		return muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "lower-winner"}, true
+	}
+	readLiveMuxcoreDaemonAction = func(muxcoreDaemonStatusIdentity, daemonConvergenceIdentity) (daemonConvergenceAction, error) {
+		return daemonConvergenceReplace, nil
+	}
+	if err := verifyCurrentMuxcoreDaemonIdentity(muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "lower-winner"}); err == nil {
+		t.Fatal("lower cold-start election winner was accepted")
+	}
+}
+
+func TestReadLiveMuxcoreDaemonActionRejectsMalformedSchemaBeforeLegacyFallback(t *testing.T) {
+	dir := t.TempDir()
+	v2Path := filepath.Join(dir, "daemon.marker.json")
+	legacyPath := filepath.Join(dir, "daemon.version")
+	exe := filepath.ToSlash(filepath.Join(dir, "engram.exe"))
+	if err := os.WriteFile(v2Path, []byte(`{"schema_version":2,"pid":42}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(`{"version":"v6.46.4","pid":42,"exe":"`+exe+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	action, err := readLiveMuxcoreDaemonActionAt(v2Path, legacyPath, muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "legacy"}, daemonConvergenceIdentity{ProductVersion: "v6.47.0", DaemonCompatEpoch: 1})
+	if err == nil || action != daemonConvergenceFail {
+		t.Fatalf("malformed schema action, error = %v, %v; want fail, error", action, err)
+	}
+}
+
+func TestVerifyCurrentMuxcoreDaemonIdentityRequiresExactLiveIdentity(t *testing.T) {
+	oldStatus, oldAction := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction
+	defer func() { readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction = oldStatus, oldAction }()
+	expected := muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "generation-a"}
+	readLiveMuxcoreDaemonAction = func(muxcoreDaemonStatusIdentity, daemonConvergenceIdentity) (daemonConvergenceAction, error) {
+		return daemonConvergenceJoin, nil
+	}
+	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) { return expected, true }
+	if err := verifyCurrentMuxcoreDaemonIdentity(expected); err != nil {
+		t.Fatalf("exact live daemon was rejected: %v", err)
+	}
+	for _, status := range []muxcoreDaemonStatusIdentity{
+		{PID: 43, DaemonGeneration: "generation-a"},
+		{PID: 42, DaemonGeneration: "generation-b"},
+		{PID: 42, DaemonGeneration: "generation-a", ShuttingDown: true},
+	} {
+		readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) { return status, true }
+		if err := verifyCurrentMuxcoreDaemonIdentity(expected); err == nil {
+			t.Fatalf("status %#v was accepted for %#v", status, expected)
+		}
+	}
+}
+func TestDaemonTerminationStatusTreatsCancellationAndCleanCompletionAsNormal(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if normal, observed := daemonTerminationStatus(ctx, make(chan error, 1)); !normal || !observed {
+		t.Fatal("cancellation during marker publication was treated as fatal")
+	}
+	done := make(chan error, 1)
+	done <- nil
+	if normal, observed := daemonTerminationStatus(context.Background(), done); !normal || !observed {
+		t.Fatal("clean daemon completion during marker verification was treated as fatal")
+	}
+}
+
+func TestReadLiveMuxcoreDaemonActionTreatsShuttingDownAsTransient(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "marker.json")
+	exe := filepath.ToSlash(filepath.Join(t.TempDir(), "engram.exe"))
+	if err := os.WriteFile(path, []byte(`{"schema_version":2,"product_version":"v6.47.0","daemon_compat_epoch":1,"pid":42,"daemon_generation":"generation-a","exe":"`+exe+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	action, err := readLiveMuxcoreDaemonActionAt(path, path+".legacy", muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "generation-a", ShuttingDown: true}, daemonConvergenceIdentity{ProductVersion: "v6.47.0", DaemonCompatEpoch: 1})
+	if action != daemonConvergenceFail || !errors.Is(err, errMuxcoreDaemonMarkerUncorrelated) {
+		t.Fatalf("shutting-down daemon action, error = %v, %v", action, err)
+	}
+}
+
+func TestReconcileMuxcoreDaemonVersionReprobesFreedLock(t *testing.T) {
+	status := muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "daemon-old"}
+	oldStatus, oldAction, oldLock, oldContended, oldExe, oldRestart := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, acquireRestartLock, isRestartLockContended, currentExecutable, restartMuxcoreDaemon
+	defer func() {
+		readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, acquireRestartLock, isRestartLockContended, currentExecutable, restartMuxcoreDaemon = oldStatus, oldAction, oldLock, oldContended, oldExe, oldRestart
+	}()
+	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) { return status, true }
+	readLiveMuxcoreDaemonAction = func(muxcoreDaemonStatusIdentity, daemonConvergenceIdentity) (daemonConvergenceAction, error) {
+		return daemonConvergenceReplace, nil
+	}
+	currentExecutable = func() (string, error) { return filepath.Join(t.TempDir(), "engram.exe"), nil }
+	acquisitions := 0
+	acquireRestartLock = func() (io.Closer, error) {
+		acquisitions++
+		if acquisitions == 1 {
+			return nil, errors.New("held")
+		}
+		return io.NopCloser(strings.NewReader("")), nil
+	}
+	isRestartLockContended = func(error) bool { return true }
+	restarted := false
+	restartMuxcoreDaemon = func(context.Context, string) (engine.UpdateAndRestartResult, error) {
+		restarted = true
+		return engine.UpdateAndRestartResult{}, nil
+	}
+	if err := reconcileMuxcoreDaemonVersion(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if acquisitions != 3 || !restarted {
+		t.Fatalf("acquisitions=%d restarted=%t; freed lock was not freshly fenced", acquisitions, restarted)
+	}
+}
+
+type failingCloser struct{}
+
+func (failingCloser) Close() error { return errors.New("unlock failed") }
+
+func TestReconcileMuxcoreDaemonVersionDoesNotFailSuccessfulRestartOnUnlockError(t *testing.T) {
+	stubReconciliation(t, muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "daemon-old"}, daemonConvergenceReplace, nil)
+	currentExecutable = func() (string, error) { return filepath.Join(t.TempDir(), "engram.exe"), nil }
+	acquireRestartLock = func() (io.Closer, error) { return failingCloser{}, nil }
+	restartMuxcoreDaemon = func(context.Context, string) (engine.UpdateAndRestartResult, error) {
+		return engine.UpdateAndRestartResult{}, nil
+	}
+	if err := reconcileMuxcoreDaemonVersion(context.Background()); err != nil {
+		t.Fatalf("successful restart was reported failed after unlock error: %v", err)
 	}
 }

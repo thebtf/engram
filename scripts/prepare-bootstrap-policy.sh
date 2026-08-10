@@ -4,6 +4,7 @@ set -euo pipefail
 
 version=""
 output="plugin/engram/bootstrap-targets.json"
+go_command="${ENGRAM_BOOTSTRAP_GO:-go}"
 check=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -14,13 +15,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || { echo 'version must be canonical SemVer without v' >&2; exit 2; }
-[[ "$(go version | awk '{print $3}')" == 'go1.25.12' ]] || { echo 'requires Go 1.25.12' >&2; exit 1; }
+for manifest in plugin/engram/.claude-plugin/plugin.json plugin/engram/.codex-plugin/plugin.json; do
+  manifest_version="$(node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version; if (typeof value !== "string") process.exit(1); process.stdout.write(value)' "$manifest")"
+  [[ "$manifest_version" == "$version" ]] || { echo "package manifest version differs from policy version: $manifest" >&2; exit 1; }
+done
+[[ "$("$go_command" version | awk '{print $3}')" == 'go1.25.12' ]] || { echo 'requires Go 1.25.12' >&2; exit 1; }
 
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 build_target() {
   local goos="$1" goarch="$2" asset="$3"
-  GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -buildvcs=false \
+  GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 "$go_command" build -trimpath -buildvcs=false \
     -ldflags "-s -w -X github.com/thebtf/engram/internal/version.Daemon=v${version}" \
     -o "$workdir/$asset" ./cmd/engram
 }
@@ -32,30 +37,17 @@ candidate="$workdir/bootstrap-targets.json"
 node - "$version" "$workdir" "$candidate" <<'NODE'
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const { createPolicy } = require('./plugin/engram/scripts/bootstrap-policy.js');
 const [version, dir, output] = process.argv.slice(2);
 const target = (asset) => {
   const bytes = fs.readFileSync(`${dir}/${asset}`);
   return { version, asset, size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
 };
-const policy = {
-  schema_version: 1,
-  launcher_security_epoch: 1,
-  package_version: version,
-  daemon_compat_epoch: 1,
-  targets: {
-    'win32-x64': { desired: target('engram-windows-amd64.exe'), predecessor: null },
-    'linux-x64': { desired: target('engram-linux-amd64'), predecessor: null },
-    'darwin-arm64': { desired: target('engram-darwin-arm64'), predecessor: null },
-  },
-  revoked_sha256: [],
-  build_contract: {
-    go_version: '1.25.12', trimpath: true, buildvcs: false, client_cgo: false,
-    daemon_version_ldflag: `v${version}`,
-  },
-};
-for (const entry of Object.values(policy.targets)) {
-  if (!Number.isSafeInteger(entry.desired.size) || entry.desired.size <= 0 || !/^[0-9a-f]{64}$/.test(entry.desired.sha256)) process.exit(1);
-}
+const policy = createPolicy(version, {
+  'win32-x64': target('engram-windows-amd64.exe'),
+  'linux-x64': target('engram-linux-amd64'),
+  'darwin-arm64': target('engram-darwin-arm64'),
+});
 fs.writeFileSync(output, `${JSON.stringify(policy, null, 2)}\n`);
 NODE
 

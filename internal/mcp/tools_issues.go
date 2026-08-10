@@ -120,13 +120,17 @@ func validateIssueActionParams(action string, m map[string]any) error {
 			if err != nil || id <= 0 {
 				missing = append(missing, "id (integer)")
 			}
-		case "status":
-			if coerceString(m["status"], "") == "" {
-				missing = append(missing, `status="resolved"`)
-			}
 		default:
-			if coerceString(m[param], "") == "" {
-				missing = append(missing, param)
+			value, present, err := optionalStringArg(m, param)
+			if err != nil {
+				return fmt.Errorf("issues %q: %w", action, err)
+			}
+			if !present || value == "" {
+				if param == "status" {
+					missing = append(missing, `status="resolved"`)
+				} else {
+					missing = append(missing, param)
+				}
 			}
 		}
 	}
@@ -217,22 +221,49 @@ func (s *Server) authorizeIssueMutation(ctx context.Context, id int64) (bool, er
 }
 
 func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (string, error) {
-	title := coerceString(m["title"], "")
-	if title == "" {
+	title, present, err := optionalStringArg(m, "title")
+	if err != nil {
+		return "", err
+	}
+	if !present || title == "" {
 		return "", fmt.Errorf("title is required for issues create")
 	}
-
-	body := coerceString(m["body"], "")
-	priority := coerceString(m["priority"], "medium")
-	issueType := coerceString(m["type"], "task")
-	targetProject := coerceString(m["target_project"], "")
+	body, _, err := optionalStringArg(m, "body")
+	if err != nil {
+		return "", err
+	}
+	priority, present, err := optionalStringArg(m, "priority")
+	if err != nil {
+		return "", err
+	}
+	if !present {
+		priority = "medium"
+	}
+	issueType, present, err := optionalStringArg(m, "type")
+	if err != nil {
+		return "", err
+	}
+	if !present {
+		issueType = "task"
+	}
+	targetProject, _, err := optionalStringArg(m, "target_project")
+	if err != nil {
+		return "", err
+	}
+	labels, _, err := optionalStringSliceArg(m, "labels")
+	if err != nil {
+		return "", err
+	}
+	sourceAgent, present, err := optionalStringArg(m, "agent_source")
+	if err != nil {
+		return "", err
+	}
+	if !present {
+		sourceAgent = "claude-code"
+	}
 	if targetProject != "" {
 		targetProject = s.issueStore.ResolveProject(ctx, targetProject)
 	}
-	labels := coerceStringSlice(m["labels"])
-
-	// Source project is attribution from transport context, never an authority.
-	sourceAgent := coerceString(m["agent_source"], "claude-code")
 	keycardID, isOperator, err := issueMutationActor(ctx)
 	if err != nil {
 		return "", err
@@ -396,40 +427,37 @@ func (s *Server) handleIssueUpdate(ctx context.Context, m map[string]any) (strin
 	if err != nil || id <= 0 {
 		return "", fmt.Errorf("id is required for issues update")
 	}
-
+	status, present, err := optionalStringArg(m, "status")
+	if err != nil {
+		return "", err
+	}
+	if !present || status == "" {
+		return "", fmt.Errorf("status is required for issues update")
+	}
+	comment, _, err := optionalStringArg(m, "comment")
+	if err != nil {
+		return "", err
+	}
+	sourceAgent, present, err := optionalStringArg(m, "agent_source")
+	if err != nil {
+		return "", err
+	}
+	if !present {
+		sourceAgent = "claude-code"
+	}
 	if _, err := s.authorizeIssueMutation(ctx, id); err != nil {
 		return "", err
 	}
 	sourceProject := s.issueSourceProject(ctx)
-	status := coerceString(m["status"], "")
-	comment := coerceString(m["comment"], "")
 
-	if status != "" {
-		if status != "resolved" {
-			return "", fmt.Errorf("status can only be set to 'resolved' via update (use reopen action to reopen)")
-		}
-		if err := s.issueStore.UpdateIssueStatus(ctx, id, status); err != nil {
-			return "", err
-		}
+	if status != "resolved" {
+		return "", fmt.Errorf("status can only be set to 'resolved' via update (use reopen action to reopen)")
+	}
+	if err := s.issueStore.UpdateIssueStatusWithComment(ctx, id, status, comment, sourceProject, sourceAgent); err != nil {
+		return "", err
 	}
 
-	if comment != "" {
-		sourceAgent := coerceString(m["agent_source"], "claude-code")
-		_, err := s.issueStore.AddComment(ctx, id, &gormdb.IssueComment{
-			AuthorProject: sourceProject,
-			AuthorAgent:   sourceAgent,
-			Body:          comment,
-		})
-		if err != nil {
-			return "", err
-		}
-	}
-
-	action := "updated"
-	if status == "resolved" {
-		action = "resolved"
-	}
-	return fmt.Sprintf("Issue #%d %s.", id, action), nil
+	return fmt.Sprintf("Issue #%d resolved.", id), nil
 }
 
 func (s *Server) handleIssueComment(ctx context.Context, m map[string]any) (string, error) {
@@ -437,17 +465,24 @@ func (s *Server) handleIssueComment(ctx context.Context, m map[string]any) (stri
 	if err != nil || id <= 0 {
 		return "", fmt.Errorf("id is required for issues comment")
 	}
-
-	body := coerceString(m["body"], "")
-	if body == "" {
+	body, present, err := optionalStringArg(m, "body")
+	if err != nil {
+		return "", err
+	}
+	if !present || body == "" {
 		return "", fmt.Errorf("body is required for issues comment")
 	}
-
+	sourceAgent, present, err := optionalStringArg(m, "agent_source")
+	if err != nil {
+		return "", err
+	}
+	if !present {
+		sourceAgent = "claude-code"
+	}
 	if _, err := s.authorizeIssueMutation(ctx, id); err != nil {
 		return "", err
 	}
 	sourceProject := s.issueSourceProject(ctx)
-	sourceAgent := coerceString(m["agent_source"], "claude-code")
 
 	commentID, err := s.issueStore.AddComment(ctx, id, &gormdb.IssueComment{
 		AuthorProject: sourceProject,
@@ -466,13 +501,21 @@ func (s *Server) handleIssueReopen(ctx context.Context, m map[string]any) (strin
 	if err != nil || id <= 0 {
 		return "", fmt.Errorf("id is required for issues reopen")
 	}
-
-	comment := coerceString(m["comment"], "")
+	comment, _, err := optionalStringArg(m, "comment")
+	if err != nil {
+		return "", err
+	}
+	sourceAgent, present, err := optionalStringArg(m, "agent_source")
+	if err != nil {
+		return "", err
+	}
+	if !present {
+		sourceAgent = "claude-code"
+	}
 	if _, err := s.authorizeIssueMutation(ctx, id); err != nil {
 		return "", err
 	}
 	sourceProject := s.issueSourceProject(ctx)
-	sourceAgent := coerceString(m["agent_source"], "claude-code")
 
 	if err := s.issueStore.ReopenIssue(ctx, id, comment, sourceProject, sourceAgent); err != nil {
 		return "", err

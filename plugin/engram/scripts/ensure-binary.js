@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 "use strict";
 
+const { BootstrapError, MAX_OBJECT_BYTES, TARGET_ASSETS, canonicalVersion, parsePolicy: parseSharedPolicy } = require("./bootstrap-policy.js");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const https = require("node:https");
 const path = require("node:path");
 
 const REPO = "thebtf/engram";
-const MAX_OBJECT_BYTES = 128 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
 const DOWNLOAD_DEADLINE_MS = 120_000;
 const RELEASE_HOSTS = new Set([
@@ -16,45 +16,9 @@ const RELEASE_HOSTS = new Set([
   "github-releases.githubusercontent.com",
   "release-assets.githubusercontent.com",
 ]);
-const TARGET_ASSETS = Object.freeze({
-  "win32-x64": "engram-windows-amd64.exe",
-  "linux-x64": "engram-linux-amd64",
-  "darwin-arm64": "engram-darwin-arm64",
-});
-const TOP_LEVEL_FIELDS = [
-  "schema_version", "launcher_security_epoch", "package_version",
-  "daemon_compat_epoch", "targets", "revoked_sha256", "build_contract",
-];
-const BUILD_CONTRACT_FIELDS = [
-  "go_version", "trimpath", "buildvcs", "client_cgo", "daemon_version_ldflag",
-];
-const TARGET_FIELDS = ["desired", "predecessor"];
-const OBJECT_FIELDS = ["version", "asset", "size", "sha256"];
-const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-const SHA256 = /^[0-9a-f]{64}$/;
-
-class BootstrapError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "BootstrapError";
-  }
-}
 
 function fail(message) {
   throw new BootstrapError(message);
-}
-
-function exactFields(value, fields, label) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) fail(`${label} must be an object`);
-  const actual = Object.keys(value);
-  if (actual.length !== fields.length || actual.some((field) => !fields.includes(field))) {
-    fail(`${label} has unknown or missing fields`);
-  }
-}
-
-function canonicalVersion(value, label) {
-  if (typeof value !== "string" || !SEMVER.test(value)) fail(`${label} must be canonical SemVer`);
-  return value;
 }
 
 function platformKey(platform = process.platform, arch = process.arch) {
@@ -63,75 +27,11 @@ function platformKey(platform = process.platform, arch = process.arch) {
   return key;
 }
 
-function compareVersions(left, right) {
-  const parse = (value) => value.split(/[+-]/, 1)[0].split(".").map(Number);
-  const a = parse(left);
-  const b = parse(right);
-  for (let i = 0; i < 3; i += 1) if (a[i] !== b[i]) return a[i] - b[i];
-  // A predecessor may not be the same release; pre-release ordering is irrelevant here.
-  return left === right ? 0 : left.includes("-") ? -1 : 1;
-}
-
-function validateTarget(raw, key, packageVersion, revoked) {
-  exactFields(raw, TARGET_FIELDS, `target ${key}`);
-  const validateObject = (target, label) => {
-    exactFields(target, OBJECT_FIELDS, label);
-    const version = canonicalVersion(target.version, `${label}.version`);
-    if (typeof target.asset !== "string" || target.asset !== TARGET_ASSETS[key] ||
-      target.asset !== path.basename(target.asset) || /[\\/:]/.test(target.asset)) {
-      fail(`${label}.asset is not the canonical ${key} asset`);
-    }
-    if (!Number.isSafeInteger(target.size) || target.size <= 0 || target.size > MAX_OBJECT_BYTES) {
-      fail(`${label}.size is unsafe`);
-    }
-    if (typeof target.sha256 !== "string" || !SHA256.test(target.sha256)) fail(`${label}.sha256 is invalid`);
-    if (revoked.has(target.sha256)) fail(`${label}.sha256 is revoked`);
-    return Object.freeze({ version, asset: target.asset, size: target.size, sha256: target.sha256 });
-  };
-  const desired = validateObject(raw.desired, `target ${key}.desired`);
-  if (desired.version !== packageVersion) fail(`target ${key}.desired version differs from package version`);
-  if (raw.predecessor === null) return Object.freeze({ desired, predecessor: null });
-  const predecessor = validateObject(raw.predecessor, `target ${key}.predecessor`);
-  if (compareVersions(predecessor.version, desired.version) >= 0) fail(`target ${key}.predecessor is not older than desired`);
-  if (predecessor.sha256 === desired.sha256 &&
-    (predecessor.size !== desired.size || predecessor.asset !== desired.asset || predecessor.version !== desired.version)) {
-    fail(`target ${key} has contradictory duplicate digest metadata`);
-  }
-  return Object.freeze({ desired, predecessor });
-}
-
 function parsePolicy(text, packageVersion, key) {
-  let policy;
-  try { policy = JSON.parse(text); } catch { fail("bootstrap policy is not valid JSON"); }
-  exactFields(policy, TOP_LEVEL_FIELDS, "bootstrap policy");
-  if (policy.schema_version !== 1) fail("unsupported bootstrap policy schema");
-  if (policy.launcher_security_epoch !== 1) fail("unsupported launcher security epoch");
-  if (policy.daemon_compat_epoch !== 1) fail("unsupported daemon compatibility epoch");
-  canonicalVersion(policy.package_version, "bootstrap policy package_version");
-  if (policy.package_version !== packageVersion) fail("bootstrap policy package version differs from active package");
-  exactFields(policy.build_contract, BUILD_CONTRACT_FIELDS, "bootstrap policy build_contract");
-  if (policy.build_contract.go_version !== "1.25.12" || policy.build_contract.trimpath !== true ||
-    policy.build_contract.buildvcs !== false || policy.build_contract.client_cgo !== false ||
-    policy.build_contract.daemon_version_ldflag !== `v${policy.package_version}`) {
-    fail("bootstrap policy build_contract is unsupported");
-  }
-  if (!Array.isArray(policy.revoked_sha256) || policy.revoked_sha256.some((hash) => typeof hash !== "string" || !SHA256.test(hash))) {
-    fail("bootstrap policy revoked_sha256 is invalid");
-  }
-  if (new Set(policy.revoked_sha256).size !== policy.revoked_sha256.length) fail("bootstrap policy revoked_sha256 has duplicates");
-  if (!policy.targets || typeof policy.targets !== "object" || Array.isArray(policy.targets)) fail("bootstrap policy targets are invalid");
-  const targetKeys = Object.keys(policy.targets);
-  if (targetKeys.length !== Object.keys(TARGET_ASSETS).length || targetKeys.some((target) => !Object.hasOwn(TARGET_ASSETS, target))) {
-    fail("bootstrap policy targets are invalid");
-  }
-  const targets = {};
-  for (const targetKey of targetKeys) {
-    targets[targetKey] = validateTarget(policy.targets[targetKey], targetKey, policy.package_version, new Set(policy.revoked_sha256));
-    if (targets[targetKey].predecessor !== null) fail("security epoch 1 must not authorize a predecessor");
-  }
+  const policy = parseSharedPolicy(text, packageVersion);
   const wantedKey = key || platformKey();
-  if (!Object.hasOwn(targets, wantedKey)) fail(`bootstrap policy has no target for ${wantedKey}`);
-  return Object.freeze({ ...policy, target: targets[wantedKey], platform: wantedKey });
+  if (!Object.hasOwn(policy.targets, wantedKey)) fail(`bootstrap policy has no target for ${wantedKey}`);
+  return Object.freeze({ ...policy, target: policy.targets[wantedKey], platform: wantedKey });
 }
 
 function readActivePackageVersion(pluginRoot) {
@@ -207,7 +107,7 @@ function hashFile(filePath, target, root) {
   const fd = fs.openSync(filePath, "r");
   try {
     const buffer = Buffer.allocUnsafe(64 * 1024);
-    for (;;) {
+    for (; ;) {
       const bytes = fs.readSync(fd, buffer, 0, buffer.length, null);
       if (!bytes) break;
       hash.update(buffer.subarray(0, bytes));
@@ -346,7 +246,7 @@ function importLegacy(roots, target) {
     const source = fs.openSync(legacy, "r");
     try {
       const buffer = Buffer.allocUnsafe(64 * 1024);
-      for (;;) {
+      for (; ;) {
         const bytes = fs.readSync(source, buffer, 0, buffer.length, null);
         if (!bytes) break;
         fs.writeSync(stage.fd, buffer, 0, bytes, offset);

@@ -104,6 +104,25 @@ func TestHandleGetCandidate_EmptyIDReturnsError(t *testing.T) {
 		"error must mention 'id is required', got: %v", callErr)
 }
 
+func TestGetCandidateSelectorIsLossless(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	s := NewServer(ServerOptions{Version: "strict-candidate"})
+	s.candidateStore = nonNilCandidateStore()
+
+	for _, raw := range []string{
+		`{"id":"1"}`,
+		`{"id":1.5}`,
+		`{"id":1e3}`,
+		`{"id":-1}`,
+		`{"id":9223372036854775808}`,
+		`{"id":0}`,
+	} {
+		out, err := s.handleGetCandidate(context.Background(), json.RawMessage(raw))
+		require.Error(t, err, raw)
+		require.Empty(t, out, raw)
+	}
+}
+
 func TestCandidateMutationSelectorsAreLossless(t *testing.T) {
 	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
 	s := NewServer(ServerOptions{Version: "strict-candidate"})

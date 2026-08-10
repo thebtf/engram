@@ -214,6 +214,7 @@ type Service struct {
 	promptCache                 sync.Map // map[int64]promptCacheEntry — last user prompt per session
 	eventBus                    *projectevents.Bus
 	projectReaper               projectReaperLifecycle
+	projectReaperFactory        projectReaperFactory
 	// lastRequestAt tracks the Unix nanosecond timestamp of the most recent
 	// MCP/REST request handled by this server. Updated atomically in
 	// requestActivityMiddleware on every request.
@@ -275,7 +276,14 @@ type lifecycleQueue interface {
 }
 
 type projectReaperLifecycle interface {
+	Start(context.Context)
 	Stop()
+}
+
+type projectReaperFactory func(*gorm.Store) (projectReaperLifecycle, error)
+
+func defaultProjectReaperFactory(store *gorm.Store) (projectReaperLifecycle, error) {
+	return reaper.New(store.DB)
 }
 
 // promptCacheEntry stores a user prompt with a timestamp for eviction.
@@ -753,6 +761,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		statsCacheTTL:         time.Minute,
 		mcpHealth:             mcp.NewMCPHealth(),
 		eventBus:              &projectevents.Bus{},
+		projectReaperFactory:  defaultProjectReaperFactory,
 
 		cognitiveRegistry:       cRegistry,
 		cognitiveMeter:          cMeter,
@@ -1284,21 +1293,11 @@ func (s *Service) initializeAsync() {
 	s.retrievalStatsLogStore = retrievalStatsLogStore
 	s.initMu.Unlock()
 
-	// All stores are wired. Flip the ready flag so /api/ready and requireReady
-	// middleware start passing requests through to the data-plane handlers.
-	s.ready.Store(true)
-	log.Info().Msg("background init: complete, service ready")
-
 	// Start project reaper (hourly cleanup of hard-expired soft-deleted projects).
-	projectReaper, err := reaper.New(store.DB)
-	if err != nil {
-		s.setInitError(fmt.Errorf("init project reaper: %w", err))
+	if err := s.initializeProjectReaper(store); err != nil {
+		s.setInitError(err)
 		return
 	}
-	s.initMu.Lock()
-	s.projectReaper = projectReaper
-	s.initMu.Unlock()
-	projectReaper.Start(s.ctx)
 
 	// Start retention cron for injection_log and citation_log cleanup.
 	// CR-1 (provenance-cleanup, PR #272 review): injection_log + citation_log are now
@@ -1323,8 +1322,47 @@ func (s *Service) initializeAsync() {
 		go s.processQueue()
 	}
 
+	// Critical initialization has completed, including installation of the
+	// project reaper that owns stale-project cleanup. Watchers remain nonfatal
+	// and may start after readiness is published.
+	if err := s.publishReady(); err != nil {
+		s.setInitError(fmt.Errorf("publish readiness: %w", err))
+		return
+	}
+	log.Info().Msg("background init: complete, service ready")
+
 	// Watch config and database files for external changes.
 	s.startWatchers()
+}
+
+func (s *Service) initializeProjectReaper(store *gorm.Store) error {
+	factory := s.projectReaperFactory
+	if factory == nil {
+		factory = defaultProjectReaperFactory
+	}
+	projectReaper, err := factory(store)
+	if err != nil {
+		return fmt.Errorf("init project reaper: %w", err)
+	}
+	if projectReaper == nil {
+		return errors.New("init project reaper: factory returned nil")
+	}
+	s.initMu.Lock()
+	s.projectReaper = projectReaper
+	s.initMu.Unlock()
+	projectReaper.Start(s.ctx)
+	return nil
+}
+
+func (s *Service) publishReady() error {
+	s.initMu.RLock()
+	projectReaperInstalled := s.projectReaper != nil
+	s.initMu.RUnlock()
+	if !projectReaperInstalled {
+		return errors.New("project reaper is not initialized")
+	}
+	s.ready.Store(true)
+	return nil
 }
 
 // startWatchers registers filesystem notification handlers for config hot-reload.

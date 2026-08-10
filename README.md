@@ -252,6 +252,11 @@ Claude Code and Oh My Pi. Claude Code also activates the bundled lifecycle hooks
 OMP 17.x does not execute Claude `hooks.json`, so automatic capture and context
 injection remain Claude-only.
 
+**Prerequisite:** Node.js 18+ must be available on `PATH`. It runs the bundled
+lifecycle hooks and lets the standalone installers validate the release
+bootstrap policy before installation. Windows-compatible Bash installs (Git
+Bash, MSYS2, or Cygwin) also require `unzip` on `PATH`.
+
 Install the marketplace plugin first, then run `/engram:setup` to create the
 universal `~/.engram/config.json` configuration and restart the host.
 

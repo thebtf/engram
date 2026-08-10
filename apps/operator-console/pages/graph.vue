@@ -68,10 +68,9 @@ const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
 const confirmDeleteEdgeID = ref<string | null>(null)
 const confirmDeleteNode = ref(false)
 const deleteCascade = ref(false)
-let actionGeneration = 0
 
 onBeforeUnmount(() => {
-  actionGeneration += 1
+  invalidateMutations()
 })
 
 const selectedNode = computed(() => nodes.find((node) => node.id === selectedNodeID.value) || null)
@@ -94,8 +93,6 @@ const typedError = computed(() => lastMutationError.value)
 const projectOptions = computed(() => projects.length ? projects : (selectedProject.value ? [selectedProject.value] : []))
 
 watch(selectedProject, () => {
-  actionGeneration += 1
-  invalidateMutations()
   confirmDeleteEdgeID.value = null
   confirmDeleteNode.value = false
   notice.value = null
@@ -103,8 +100,6 @@ watch(selectedProject, () => {
 })
 
 watch(selectedNodeID, (next) => {
-  actionGeneration += 1
-  invalidateMutations()
   confirmDeleteEdgeID.value = null
   confirmDeleteNode.value = false
   deleteCascade.value = false
@@ -113,6 +108,18 @@ watch(selectedNodeID, (next) => {
   }
   void refreshConnectedEdges(next)
 })
+
+function selectProject(project: string) {
+  if (project === selectedProject.value) return
+  invalidateMutations()
+  selectedProject.value = project
+}
+
+function selectNode(nodeID: string) {
+  if (nodeID === selectedNodeID.value) return
+  invalidateMutations()
+  selectedNodeID.value = nodeID
+}
 
 function enumLabel(group: 'nodeTypes' | 'edgeTypes' | 'privacy', value: string) {
   const key = `graphPage.${group}.${value}`
@@ -169,19 +176,16 @@ function clearNotice() {
 }
 
 function dismissNotice() {
-  actionGeneration += 1
   invalidateMutations()
   clearNotice()
 }
 
 function refresh() {
-  actionGeneration += 1
   invalidateMutations()
   return refreshGraph()
 }
 
 async function submitCreateNode() {
-  const run = ++actionGeneration
   invalidateMutations()
   if (!selectedProject.value || !nodeForm.externalRef.trim()) {
     notice.value = { kind: 'error', text: t('graphPage.notices.invalidNode') }
@@ -193,7 +197,7 @@ async function submitCreateNode() {
     project: selectedProject.value,
     privacyScope: nodeForm.privacyScope,
   })
-  if (run !== actionGeneration) return
+  if (result.stale) return
   if (result.ok) {
     nodeForm.externalRef = ''
     notice.value = { kind: 'success', text: t('graphPage.notices.nodeCreated') }
@@ -203,7 +207,6 @@ async function submitCreateNode() {
 }
 
 async function submitCreateEdge() {
-  const run = ++actionGeneration
   invalidateMutations()
   if (!edgeForm.sourceNodeID || !edgeForm.targetNodeID) {
     notice.value = { kind: 'error', text: t('graphPage.notices.invalidEdge') }
@@ -215,7 +218,7 @@ async function submitCreateEdge() {
     edgeType: edgeForm.edgeType,
     reasoning: edgeForm.reasoning.trim(),
   })
-  if (run !== actionGeneration) return
+  if (result.stale) return
   if (result.ok) {
     edgeForm.targetNodeID = ''
     edgeForm.reasoning = ''
@@ -226,7 +229,6 @@ async function submitCreateEdge() {
 }
 
 async function requestDeleteEdge(edgeID: string) {
-  const run = ++actionGeneration
   invalidateMutations()
   if (confirmDeleteEdgeID.value !== edgeID) {
     confirmDeleteEdgeID.value = edgeID
@@ -234,7 +236,7 @@ async function requestDeleteEdge(edgeID: string) {
     return
   }
   const result = await deleteEdge(edgeID)
-  if (run !== actionGeneration) return
+  if (result.stale) return
   confirmDeleteEdgeID.value = null
   if (result.ok) {
     notice.value = { kind: 'success', text: t('graphPage.notices.edgeDeleted') }
@@ -244,7 +246,6 @@ async function requestDeleteEdge(edgeID: string) {
 }
 
 async function requestDeleteNode() {
-  const run = ++actionGeneration
   invalidateMutations()
   if (!selectedNode.value) return
   if (!confirmDeleteNode.value) {
@@ -253,7 +254,7 @@ async function requestDeleteNode() {
     return
   }
   const result = await deleteNode({ nodeID: selectedNode.value.id, cascade: deleteCascade.value })
-  if (run !== actionGeneration) return
+  if (result.stale) return
   confirmDeleteNode.value = false
   if (result.ok) {
     notice.value = { kind: 'success', text: t('graphPage.notices.nodeDeleted') }
@@ -263,7 +264,6 @@ async function requestDeleteNode() {
 }
 
 async function runTraverse() {
-  actionGeneration += 1
   invalidateMutations()
   if (!traverseForm.memoryID.trim()) {
     notice.value = { kind: 'error', text: t('graphPage.notices.invalidTraverse') }
@@ -274,7 +274,6 @@ async function runTraverse() {
 }
 
 async function runFindPath() {
-  actionGeneration += 1
   invalidateMutations()
   if (!pathForm.sourceID.trim() || !pathForm.targetID.trim()) {
     notice.value = { kind: 'error', text: t('graphPage.notices.invalidPath') }
@@ -319,7 +318,7 @@ async function runFindPath() {
       <div class="ops-left">
         <label>
           <span>{{ t('graphPage.filters.project') }}</span>
-          <select id="graph-project-filter" v-model="selectedProject" name="graph-project-filter" class="select" :disabled="graphDisabled">
+          <select id="graph-project-filter" :value="selectedProject" name="graph-project-filter" class="select" :disabled="graphDisabled" @change="selectProject(($event.target as HTMLSelectElement).value)">
             <option v-for="project in projectOptions" :key="project" :value="project">{{ project }}</option>
           </select>
         </label>
@@ -449,7 +448,7 @@ async function runFindPath() {
             :key="node.id"
             class="node-row"
             :class="{ selected: selectedNodeID === node.id }"
-            @click="selectedNodeID = node.id"
+            @click="selectNode(node.id)"
           >
             <b>{{ nodeDisplay(node) }}</b>
             <span>{{ enumLabel('privacy', node.privacyScope) }} · #{{ node.id }}</span>

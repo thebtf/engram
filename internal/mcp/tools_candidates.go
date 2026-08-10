@@ -217,9 +217,12 @@ func (s *Server) handleGetCandidate(ctx context.Context, args json.RawMessage) (
 	if err != nil {
 		return "", err
 	}
-	id := coerceInt64(m["id"], 0)
+	id, err := requireInt64Arg(m, "id")
+	if err != nil {
+		return "", fmt.Errorf("get_candidate: %w", err)
+	}
 	if id <= 0 {
-		return "", fmt.Errorf("get_candidate: id is required")
+		return "", fmt.Errorf("get_candidate: id must be > 0")
 	}
 
 	candidate, err := s.candidateStore.Get(ctx, id)

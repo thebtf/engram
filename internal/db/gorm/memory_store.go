@@ -553,6 +553,24 @@ func (s *MemoryStore) GetForSnapshotTx(ctx context.Context, tx *gorm.DB, id int6
 	return memoryRowToSnapshotModel(&row), nil
 }
 
+// GetForRollbackTx returns a locked memory including soft-deleted rows so rollback
+// can compare the exact post-mutation state before changing anything.
+func (s *MemoryStore) GetForRollbackTx(ctx context.Context, tx *gorm.DB, id int64) (*models.Memory, error) {
+	if id == 0 {
+		return nil, fmt.Errorf("memory id must be non-zero")
+	}
+	var row Memory
+	err := tx.WithContext(ctx).
+		Unscoped().
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", id).
+		First(&row).Error
+	if err != nil {
+		return nil, fmt.Errorf("get memory rollback id=%d: %w", id, err)
+	}
+	return memoryRowToSnapshotModel(&row), nil
+}
+
 // List returns active (non-soft-deleted) memories for the given project,
 // ordered by created_at DESC, limited to limit rows.
 // project must not be empty.

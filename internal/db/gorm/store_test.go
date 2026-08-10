@@ -427,6 +427,149 @@ func TestUserStore_CreateInitialAdminSerializesAcrossStores(t *testing.T) {
 	require.Equal(t, int64(1), usersAfter)
 }
 
+func TestUserStore_InitialAdminAndAuthentikProvisioningSchedules(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	users := NewUserStore(store.DB)
+
+	for _, setupFirst := range []bool{false, true} {
+		t.Run(map[bool]string{false: "Authentik before setup", true: "setup before Authentik"}[setupFirst], func(t *testing.T) {
+			var existing int64
+			require.NoError(t, store.DB.Model(&User{}).Count(&existing).Error)
+			require.Zero(t, existing, "mixed-writer regression requires an empty test database")
+
+			prefix := fmt.Sprintf("zz-initial-admin-authentik-%d", time.Now().UnixNano())
+			adminEmail := prefix + "-admin@example.com"
+			operatorEmail := prefix + "-operator@example.com"
+			t.Cleanup(func() {
+				_ = store.DB.Exec(`DELETE FROM audit_log WHERE action = 'auth_setup_completed' AND actor = ?`, adminEmail).Error
+				_ = store.DB.Exec(`DELETE FROM users WHERE email IN (?, ?)`, adminEmail, operatorEmail).Error
+			})
+
+			if !setupFirst {
+				operator, err := users.ProvisionAuthentikOperator(context.Background(), operatorEmail)
+				require.ErrorIs(t, err, ErrInitialAdminSetupRequired)
+				require.Nil(t, operator)
+				var stranded int64
+				require.NoError(t, store.DB.Model(&User{}).Count(&stranded).Error)
+				require.Zero(t, stranded, "pre-setup Authentik provisioning must not create an operator")
+			}
+
+			admin, err := users.CreateInitialAdmin(context.Background(), adminEmail, "hash", NewDomainOwnerStore(store))
+			require.NoError(t, err)
+			require.Equal(t, DashboardRoleAdmin, admin.Role)
+
+			operator, err := users.ProvisionAuthentikOperator(context.Background(), operatorEmail)
+			require.NoError(t, err)
+			require.Equal(t, DashboardRoleOperator, operator.Role)
+
+			results := make(chan *User, 2)
+			errs := make(chan error, 2)
+			for range 2 {
+				go func() {
+					user, err := users.ProvisionAuthentikOperator(context.Background(), operatorEmail)
+					results <- user
+					errs <- err
+				}()
+			}
+			for range 2 {
+				require.NoError(t, <-errs)
+				require.Equal(t, operator.ID, (<-results).ID)
+			}
+
+			var userCount, auditCount int64
+			require.NoError(t, store.DB.Model(&User{}).Where("email IN ?", []string{adminEmail, operatorEmail}).Count(&userCount).Error)
+			require.Equal(t, int64(2), userCount)
+			require.NoError(t, store.DB.Model(&AuditLogEntry{}).Where("action = ? AND actor = ?", "auth_setup_completed", adminEmail).Count(&auditCount).Error)
+			require.Equal(t, int64(1), auditCount)
+		})
+	}
+}
+
+func TestAuditStore_RetentionPreservesInitialAdminSetupProof(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	users := NewUserStore(store.DB)
+	prefix := fmt.Sprintf("zz-audit-retention-%d", time.Now().UnixNano())
+	adminEmail := prefix + "-admin@example.com"
+	operatorEmail := prefix + "-operator@example.com"
+	ordinaryAction := "ordinary_retention_test"
+	t.Cleanup(func() {
+		_ = store.DB.Where("action = ? AND actor = ?", authSetupCompletedAuditAction, adminEmail).Delete(&AuditLogEntry{}).Error
+		_ = store.DB.Where("action = ? AND actor = ?", ordinaryAction, adminEmail).Delete(&AuditLogEntry{}).Error
+		_ = store.DB.Where("email IN ?", []string{adminEmail, operatorEmail}).Delete(&User{}).Error
+	})
+
+	_, err := users.CreateInitialAdmin(context.Background(), adminEmail, "hash", NewDomainOwnerStore(store))
+	require.NoError(t, err)
+	old := time.Now().UTC().AddDate(0, 0, -91)
+	require.NoError(t, store.DB.Model(&AuditLogEntry{}).
+		Where("action = ? AND actor = ?", authSetupCompletedAuditAction, adminEmail).
+		Update("created_at", old).Error)
+	require.NoError(t, store.DB.Create(&AuditLogEntry{Action: ordinaryAction, Actor: adminEmail, CreatedAt: old}).Error)
+
+	deleted, err := NewAuditStore(store.DB).DeleteOlderThan(context.Background(), time.Now().UTC().AddDate(0, 0, -90))
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, deleted, int64(1))
+
+	var setupProofs, ordinaryRows int64
+	require.NoError(t, store.DB.Model(&AuditLogEntry{}).Where("action = ? AND actor = ?", authSetupCompletedAuditAction, adminEmail).Count(&setupProofs).Error)
+	require.NoError(t, store.DB.Model(&AuditLogEntry{}).Where("action = ? AND actor = ?", ordinaryAction, adminEmail).Count(&ordinaryRows).Error)
+	require.Equal(t, int64(1), setupProofs)
+	require.Zero(t, ordinaryRows)
+
+	operator, err := users.ProvisionAuthentikOperator(context.Background(), operatorEmail)
+	require.NoError(t, err)
+	require.Equal(t, DashboardRoleOperator, operator.Role)
+}
+
+func TestUserStore_InitialAdminAndAuthentikProvisioningConcurrent(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	users := NewUserStore(store.DB)
+	var existing int64
+	require.NoError(t, store.DB.Model(&User{}).Count(&existing).Error)
+	require.Zero(t, existing, "mixed-writer regression requires an empty test database")
+
+	prefix := fmt.Sprintf("zz-initial-admin-authentik-race-%d", time.Now().UnixNano())
+	adminEmail := prefix + "-admin@example.com"
+	operatorEmail := prefix + "-operator@example.com"
+	t.Cleanup(func() {
+		_ = store.DB.Exec(`DELETE FROM audit_log WHERE action = 'auth_setup_completed' AND actor = ?`, adminEmail).Error
+		_ = store.DB.Exec(`DELETE FROM users WHERE email IN (?, ?)`, adminEmail, operatorEmail).Error
+	})
+
+	type provisionResult struct {
+		user *User
+		err  error
+	}
+	start := make(chan struct{})
+	setupResult := make(chan error, 1)
+	provisionResultCh := make(chan provisionResult, 1)
+	go func() {
+		<-start
+		_, err := users.CreateInitialAdmin(context.Background(), adminEmail, "hash", NewDomainOwnerStore(store))
+		setupResult <- err
+	}()
+	go func() {
+		<-start
+		user, err := users.ProvisionAuthentikOperator(context.Background(), operatorEmail)
+		provisionResultCh <- provisionResult{user: user, err: err}
+	}()
+	close(start)
+
+	require.NoError(t, <-setupResult)
+	provision := <-provisionResultCh
+	if errors.Is(provision.err, ErrInitialAdminSetupRequired) {
+		provision.user, provision.err = users.ProvisionAuthentikOperator(context.Background(), operatorEmail)
+	}
+	require.NoError(t, provision.err)
+	require.Equal(t, DashboardRoleOperator, provision.user.Role)
+
+	var userCount, auditCount int64
+	require.NoError(t, store.DB.Model(&User{}).Where("email IN ?", []string{adminEmail, operatorEmail}).Count(&userCount).Error)
+	require.Equal(t, int64(2), userCount)
+	require.NoError(t, store.DB.Model(&AuditLogEntry{}).Where("action = ? AND actor = ?", "auth_setup_completed", adminEmail).Count(&auditCount).Error)
+	require.Equal(t, int64(1), auditCount)
+}
+
 const (
 	initialAdminProcessChildEnv   = "ENGRAM_INITIAL_ADMIN_PROCESS_CHILD"
 	initialAdminProcessDSNEnv     = "ENGRAM_INITIAL_ADMIN_PROCESS_DSN"

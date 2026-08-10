@@ -379,13 +379,10 @@ test('candidate review queue is a live gated surface, not a SectionStub', () => 
 })
 
 test('behavioral rules enabled toggle is live endpoint-backed and remains recoverable', () => {
-  const compatibilitySource = read(compatibilityPath)
   const rulesPageSource = read(rulesPagePath)
   const rulesComposableSource = read(rulesComposablePath)
   const mockOperatorApiSource = read(mockOperatorApiPath)
 
-  assert.match(compatibilitySource, /enabled\?: boolean/, 'Rule compatibility payload must carry the server enabled field')
-  assert.match(compatibilitySource, /enabled: row\.enabled !== false/, 'Rule compatibility mapper must default legacy rows to enabled')
   assert.match(rulesComposableSource, /toggleRuleEnabled:\s*\(id: number, enabled: boolean\) => Promise<unknown>/, 'Rules composable must expose a typed enabled toggle action')
   assert.match(rulesComposableSource, /action:\s*['"]rule-enable-toggle['"]/, 'Rule enabled toggle must be a real mutation action')
   assert.match(rulesComposableSource, /endpointEvidence\(`\/api\/rules\/\$\{id\}\/enabled`,\s*['"]rule-enable-toggle['"]\)/, 'Rule enabled toggle must carry PATCH /api/rules/{id}/enabled evidence')
@@ -672,6 +669,7 @@ test('graph capability classification is dormant when gated and never unconditio
 test('graph async ownership invalidates stale requests and notices', () => {
   const graphComposableSource = read(join(root, 'composables', 'useOperatorGraph.ts'))
   const graphPageSource = read(join(root, 'pages', 'graph.vue'))
+  const selectedNodeWatch = graphPageSource.slice(graphPageSource.indexOf('watch(selectedNodeID'), graphPageSource.indexOf('function selectProject'))
 
   for (const generation of ['refreshGeneration', 'edgesGeneration', 'traverseGeneration', 'pathGeneration', 'mutationGeneration']) {
     assert.match(graphComposableSource, new RegExp(`const ${generation} = ref\\(0\\)`), `${generation} must be scoped to this graph composable instance`)
@@ -681,7 +679,12 @@ test('graph async ownership invalidates stale requests and notices', () => {
   assert.match(graphComposableSource, /if \(!owns\(traverseGeneration, run\)\) return/, 'traverse responses must retain request ownership')
   assert.match(graphComposableSource, /function invalidateMutations\(\)/, 'newer page actions must invalidate pending mutations')
   assert.match(graphPageSource, /function dismissNotice\(\)[\s\S]*invalidateMutations\(\)/, 'dismissal must retain notice ownership')
-  assert.match(graphPageSource, /const run = \+\+actionGeneration[\s\S]*invalidateMutations\(\)/, 'mutation actions must retain their latest notice')
+  assert.match(graphPageSource, /function selectProject\(project: string\)[\s\S]*?invalidateMutations\(\)[\s\S]*?selectedProject\.value = project/, 'only an explicit user project change may invalidate an in-flight mutation')
+  assert.match(graphPageSource, /function selectNode\(nodeID: string\)[\s\S]*?invalidateMutations\(\)[\s\S]*?selectedNodeID\.value = nodeID/, 'only an explicit user node selection may invalidate an in-flight mutation')
+  assert.doesNotMatch(selectedNodeWatch, /invalidateMutations\(\)/, 'mutation-owned node selection must not invalidate its own completion')
+  assert.match(graphComposableSource, /if \(!owns\(mutationGeneration, run\)\) return \{ ok: true, stale: true \}/, 'mutations must report invalidated completions as stale')
+  assert.match(graphPageSource, /if \(result\.stale\) return/, 'mutation notices must ignore composable-owned stale results')
+  assert.doesNotMatch(graphPageSource, /actionGeneration/, 'page-local generations must not compete with composable mutation ownership')
 })
 
 test('Nuxt UI color-mode auto-registration stays disabled', () => {

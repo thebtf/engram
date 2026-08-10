@@ -28,7 +28,8 @@ done
 
 umask 077
 SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/engram-image-env.XXXXXX")"
-trap 'rm -f "${SNAPSHOT}"' EXIT
+LOCK_DIR=""
+trap 'rm -f "${SNAPSHOT}"; [[ -z "${LOCK_DIR}" ]] || rmdir "${LOCK_DIR}" 2>/dev/null || true' EXIT
 chmod 600 "${SNAPSHOT}"
 cat -- "${ENV_FILE}" > "${SNAPSHOT}"
 
@@ -53,6 +54,7 @@ done < "${RUNTIME_COMPOSE_FILE}"
 
 declare -A snapshot_values=()
 while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ "${line}" =~ ^[[:space:]]*# ]] && continue
     line="${line%$'\r'}"
     for key in "${compose_overrides[@]}"; do
         [[ "${line}" =~ ^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*([=:]|$) ]] && die "env file sets ${key}"
@@ -142,6 +144,9 @@ for key in "${!interpolation_keys[@]}"; do
     unset "${key}"
 done
 
+lock_path="${RUNTIME_COMPOSE_FILE}.deploy.lock"
+mkdir "${lock_path}" || die "another deployment already owns this Compose project"
+LOCK_DIR="${lock_path}"
 printf 'image preflight: immutable image identities accepted from %s\n' "${ENV_FILE}"
 docker compose --env-file "${SNAPSHOT}" -f "${RUNTIME_COMPOSE_FILE}" config --quiet
 docker compose --env-file "${SNAPSHOT}" -f "${RUNTIME_COMPOSE_FILE}" pull

@@ -34,8 +34,8 @@ Do not replace the digest-pinned values above with moving tags.
 
 Start the pull-only stack through the deployment wrapper. Pass both the retained
 publication record and an optional dotenv snapshot (default: `.env`). The wrapper
-requires `python3` for strict JSON parsing; it never evaluates JSON or dotenv content as shell code.
-
+requires `python3` for strict JSON parsing; it never evaluates JSON or dotenv
+content as shell code.
 
 ```bash
 PUBLICATION_RESULT=/secure/evidence/publication-result.json
@@ -50,6 +50,9 @@ manifest fields, and contain exactly the six canonical version/commit image
 destinations. Each dotenv image must equal its canonical repository plus the
 matching publication manifest digest; a mixed-release three-digest file cannot
 pass.
+Comment lines whose first non-whitespace character is `#` are ignored, including
+comments that mention a managed image key. Every non-comment occurrence of a
+managed image key must still be one unique bare digest assignment.
 
 It copies the selected dotenv file to a mode-`0600` snapshot and treats that
 snapshot as the entire Compose interpolation boundary. Before any Docker call it
@@ -61,9 +64,15 @@ configuration. It also rejects `COMPOSE_FILE`, `COMPOSE_PATH_SEPARATOR`,
 `COMPOSE_DISABLE_ENV_FILE`, and `COMPOSE_PROJECT_DIRECTORY`; these can select a
 different Compose source, project, profile, or dotenv source. Docker client
 transport settings such as `DOCKER_HOST`, `DOCKER_CONTEXT`, and TLS variables
-are preserved. The wrapper runs `docker compose config --quiet` to fully
-interpolate, resolve, and validate without printing resolved configuration, then
-runs `pull` and `up` with the same sanitized environment and frozen snapshot:
+are preserved. After validation, the wrapper atomically creates
+`deploy/docker-compose.runtime.yml.deploy.lock`; a concurrent invocation fails
+before any Compose command. The owner removes the empty lock directory and the
+mode-`0600` snapshot on normal or error exit. If the process is killed before its
+exit trap runs, verify that no deployment is active, remove only that stale empty
+lock directory, and retry. While it owns the lock, the wrapper runs
+`docker compose config --quiet` to fully interpolate, resolve, and validate
+without printing resolved configuration, then runs `pull` and `up` with the same
+sanitized environment and frozen snapshot.
 
 The root `docker-compose.yml` uses the same required image variables and also
 contains local build definitions. The image acceptance gate sets them to exact
@@ -88,9 +97,8 @@ Actions (`integration_id: 15368`). The only recovery bypass is exactly one
 same-name status from another integration, zero/duplicate bypass actors, or an
 always-bypass actor stops the release.
 
-The repository currently needs this operator bootstrap before release
-publication can activate. The workflow does not create or weaken repository
-rules.
+The workflow validates this operator-managed configuration live before release;
+it does not create or weaken repository rules.
 
 GitHub Container Registry does not provide this project with an atomic tag CAS
 contract. Engram therefore uses a repository-controlled single-writer model.
@@ -115,9 +123,7 @@ The default-branch publisher uses two fresh runners:
 
 A package administrator or external PAT can still mutate package state outside
 the repository workflow; that is an explicit operational trust boundary and
-must be restricted by organization policy. The repository currently lacks the
-required immutable-tag and strict `authority-guard` rulesets, so release
-publication remains fail-closed until an operator installs both.
+must be restricted by organization policy.
 
 ## Runtime contract
 

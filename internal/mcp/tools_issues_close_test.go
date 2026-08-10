@@ -135,3 +135,25 @@ func TestLegacyIssueDeniesClientButAllowsNonClientAdmin(t *testing.T) {
 	_, err = callIssueAction(t, server, auth.WithIdentity(context.Background(), auth.Admin()), args)
 	require.NoError(t, err)
 }
+
+func TestIssueUpdateRollsBackStatusWhenCommentInsertFails(t *testing.T) {
+	store, issueStore := openIssueToolTestDB(t)
+	server := NewServer(ServerOptions{})
+	server.SetIssueStore(issueStore)
+	project := uniqueIssueToolProject(t, "atomic-resolve")
+	id := createIssueToolFixture(t, store, issueStore, project, "keycard-owner", "open")
+	constraint := fmt.Sprintf("issue_comment_atomic_%d", time.Now().UnixNano())
+	require.NoError(t, store.GetDB().Exec(fmt.Sprintf(`ALTER TABLE issue_comments ADD CONSTRAINT %s CHECK (body <> 'force-atomic-comment-failure')`, constraint)).Error)
+	t.Cleanup(func() {
+		_ = store.GetDB().Exec(fmt.Sprintf(`ALTER TABLE issue_comments DROP CONSTRAINT IF EXISTS %s`, constraint)).Error
+	})
+
+	_, err := callIssueAction(t, server, issueClientContext(project, "keycard-owner", auth.RoleReadWrite), map[string]any{
+		"action": "update", "id": id, "status": "resolved", "comment": "force-atomic-comment-failure", "project": project,
+	})
+	require.Error(t, err)
+	issue, comments, getErr := issueStore.GetIssue(context.Background(), id)
+	require.NoError(t, getErr)
+	require.Equal(t, "open", issue.Status)
+	require.Empty(t, comments)
+}

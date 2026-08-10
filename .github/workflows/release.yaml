@@ -17,8 +17,8 @@ jobs:
     container:
       image: ghcr.io/goreleaser/goreleaser-cross:v1.25.9
     steps:
-      - name: Install git-lfs
-        run: apt-get update && apt-get install -y git-lfs curl
+      - name: Install release tools
+        run: apt-get update && apt-get install -y git-lfs curl unzip
 
       - uses: actions/checkout@v4
         with:

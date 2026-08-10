@@ -2,6 +2,8 @@
 package models
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -115,7 +117,78 @@ const (
 type SnapshotEntry struct {
 	Kind            SnapshotEntryKind `json:"kind"`
 	Before          json.RawMessage   `json:"before,omitempty"`           // populated only for EntryKindRestore
-	ExpectedVersion *int              `json:"expected_version,omitempty"` // nil for legacy snapshots
+	PostStateToken  string            `json:"post_state_token,omitempty"` // immutable hash of the exact post-mutation row state
+	ExpectedVersion *int              `json:"expected_version,omitempty"` // compatibility proof for pre-token typed snapshots
+}
+
+// SnapshotStateToken returns the stable SHA-256 token for a persisted row state.
+// PostgreSQL stores timestamps at microsecond precision and may read them back in
+// a different zone, so supported row models are canonicalized before hashing.
+func SnapshotStateToken(row any) (string, error) {
+	encoded, err := json.Marshal(canonicalSnapshotState(row))
+	if err != nil {
+		return "", fmt.Errorf("snapshot state token: %w", err)
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func canonicalSnapshotState(row any) any {
+	switch value := row.(type) {
+	case *Memory:
+		if value == nil {
+			return value
+		}
+		clone := *value
+		canonicalizeMemorySnapshotTimes(&clone)
+		return &clone
+	case Memory:
+		clone := value
+		canonicalizeMemorySnapshotTimes(&clone)
+		return clone
+	case *CrystallizationCandidate:
+		if value == nil {
+			return value
+		}
+		clone := *value
+		canonicalizeCandidateSnapshotTimes(&clone)
+		return &clone
+	case CrystallizationCandidate:
+		clone := value
+		canonicalizeCandidateSnapshotTimes(&clone)
+		return clone
+	default:
+		return row
+	}
+}
+
+func canonicalizeMemorySnapshotTimes(memory *Memory) {
+	memory.CreatedAt = canonicalSnapshotTime(memory.CreatedAt)
+	memory.UpdatedAt = canonicalSnapshotTime(memory.UpdatedAt)
+	memory.DeletedAt = canonicalSnapshotTimePtr(memory.DeletedAt)
+	memory.LastRetrievedAt = canonicalSnapshotTimePtr(memory.LastRetrievedAt)
+	memory.LastConfirmed = canonicalSnapshotTimePtr(memory.LastConfirmed)
+	memory.ReviewAfter = canonicalSnapshotTimePtr(memory.ReviewAfter)
+	memory.ValidFrom = canonicalSnapshotTimePtr(memory.ValidFrom)
+	memory.ValidUntil = canonicalSnapshotTimePtr(memory.ValidUntil)
+}
+
+func canonicalizeCandidateSnapshotTimes(candidate *CrystallizationCandidate) {
+	candidate.CreatedAt = canonicalSnapshotTime(candidate.CreatedAt)
+	candidate.UpdatedAt = canonicalSnapshotTime(candidate.UpdatedAt)
+	candidate.ReviewAfter = canonicalSnapshotTimePtr(candidate.ReviewAfter)
+}
+
+func canonicalSnapshotTime(value time.Time) time.Time {
+	return value.UTC().Truncate(time.Microsecond)
+}
+
+func canonicalSnapshotTimePtr(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	canonical := canonicalSnapshotTime(*value)
+	return &canonical
 }
 
 // NewBulkOpSnapshot constructs a BulkOpSnapshot with validation.

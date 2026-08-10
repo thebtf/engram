@@ -3,7 +3,10 @@ package worker
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,6 +21,8 @@ type blockingProjectReaper struct {
 	once    sync.Once
 	calls   atomic.Int32
 }
+
+func (r *blockingProjectReaper) Start(context.Context) {}
 
 func (r *blockingProjectReaper) Stop() {
 	r.calls.Add(1)
@@ -91,8 +96,8 @@ func TestServiceShutdownBoundsReaperWait(t *testing.T) {
 	if got := r.calls.Load(); got != 1 {
 		t.Fatalf("reaper Stop calls = %d, want 1", got)
 	}
-
 }
+
 func TestServiceShutdownStopsReaperBeforeClosingDatabase(t *testing.T) {
 	dsn := os.Getenv("DATABASE_DSN")
 	if dsn == "" {
@@ -167,4 +172,75 @@ func TestNewServiceShutdownJoinsInitialization(t *testing.T) {
 
 type projectReaperFunc func()
 
-func (f projectReaperFunc) Stop() { f() }
+func (projectReaperFunc) Start(context.Context) {}
+func (f projectReaperFunc) Stop()               { f() }
+
+type recordingProjectReaper struct {
+	started atomic.Bool
+}
+
+func (r *recordingProjectReaper) Start(context.Context) { r.started.Store(true) }
+func (*recordingProjectReaper) Stop()                   {}
+
+func TestServiceProjectReaperFailurePreventsReadiness(t *testing.T) {
+	cause := errors.New("invalid retention")
+	svc := &Service{
+		ctx: context.Background(),
+		projectReaperFactory: func(*dbgorm.Store) (projectReaperLifecycle, error) {
+			return nil, cause
+		},
+	}
+
+	err := svc.initializeProjectReaper(nil)
+	if !errors.Is(err, cause) || !strings.Contains(err.Error(), "init project reaper") {
+		t.Fatalf("initializeProjectReaper error = %v, want wrapped project reaper error", err)
+	}
+	svc.setInitError(err)
+	if err := svc.publishReady(); err == nil {
+		t.Fatal("publishReady succeeded without an installed project reaper")
+	}
+	if svc.ready.Load() {
+		t.Fatal("service reported ready after project reaper initialization failed")
+	}
+
+	ready := httptest.NewRecorder()
+	svc.handleReady(ready, httptest.NewRequest(http.MethodGet, "/api/ready", nil))
+	if ready.Code != http.StatusInternalServerError {
+		t.Fatalf("/api/ready status = %d, want %d; body=%q", ready.Code, http.StatusInternalServerError, ready.Body.String())
+	}
+	if !strings.Contains(ready.Body.String(), "init project reaper") {
+		t.Fatalf("/api/ready did not expose init error: %q", ready.Body.String())
+	}
+
+	health := httptest.NewRecorder()
+	svc.handleHealth(health, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	if health.Code != http.StatusOK || !strings.Contains(health.Body.String(), `"status":"error"`) {
+		t.Fatalf("/api/health = %d %q, want error status", health.Code, health.Body.String())
+	}
+}
+
+func TestServiceInstallsProjectReaperBeforePublishingReadiness(t *testing.T) {
+	projectReaper := &recordingProjectReaper{}
+	svc := &Service{
+		ctx: context.Background(),
+		projectReaperFactory: func(*dbgorm.Store) (projectReaperLifecycle, error) {
+			return projectReaper, nil
+		},
+	}
+
+	if err := svc.initializeProjectReaper(nil); err != nil {
+		t.Fatalf("initializeProjectReaper: %v", err)
+	}
+	if svc.ready.Load() {
+		t.Fatal("service reported ready before the readiness publication point")
+	}
+	if !projectReaper.started.Load() {
+		t.Fatal("project reaper was installed but not started")
+	}
+	if err := svc.publishReady(); err != nil {
+		t.Fatalf("publishReady: %v", err)
+	}
+	if !svc.ready.Load() {
+		t.Fatal("service did not report ready after project reaper ownership was installed")
+	}
+}

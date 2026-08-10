@@ -53,7 +53,7 @@ func governanceTools() []Tool {
 		},
 		{
 			Name:        "rollback_snapshot",
-			Description: "Roll back a committed bulk_op_snapshot. Admin-only. Conflict-safe: refuses if any affected memory was modified after snapshot capture (EC-F3).",
+			Description: "Roll back a committed bulk_op_snapshot. Admin-only. Conflict-safe: refuses if any affected memory or crystallization-candidate row no longer matches its captured post-operation state (EC-F3).",
 			tier:        tierAdmin,
 			InputSchema: map[string]any{
 				"type":     "object",
@@ -163,7 +163,7 @@ func (s *Server) handleListSnapshots(ctx context.Context, args json.RawMessage) 
 }
 
 // handleRollbackSnapshot rolls back a committed snapshot.
-// Conflict detection per EC-F3: refuses if any affected memory was modified after snapshot.
+// Conflict detection per EC-F3 refuses rows that no longer match captured post-operation state.
 func (s *Server) handleRollbackSnapshot(ctx context.Context, args json.RawMessage) (string, error) {
 	id, ok := auth.IdentityFrom(ctx)
 	if !ok || !id.IsAdmin() {
@@ -190,10 +190,11 @@ func (s *Server) handleRollbackSnapshot(ctx context.Context, args json.RawMessag
 	if rollErr != nil {
 		if errors.Is(rollErr, bulkops.ErrRollbackConflict) {
 			conflictOut := map[string]any{
-				"error":        "rollback_conflict",
-				"description":  "One or more affected memories were modified after the snapshot was captured. Rollback refused per EC-F3.",
-				"conflict_ids": result.ConflictIDs,
-				"snapshot_id":  snapshotID,
+				"error":         "rollback_conflict",
+				"description":   "One or more affected memory or crystallization-candidate rows no longer match the snapshot's captured post-operation state. Rollback refused per EC-F3; inspect typed before_state keys for mixed-entity snapshots.",
+				"conflict_ids":  result.ConflictIDs,
+				"conflict_refs": result.ConflictRefs,
+				"snapshot_id":   snapshotID,
 			}
 			return marshalJSON(conflictOut)
 		}

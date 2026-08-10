@@ -26,6 +26,17 @@ test("rejects a tag that is not the policy's canonical package version", () => {
   const skewed = structuredClone(policy);
   skewed.package_version = "06.47.0";
   assert.throws(() => verifyReleaseAssets(skewed, [draft()], "v06.47.0"), /tag mismatch/);
+  const unknown = structuredClone(policy);
+  unknown.extra = true;
+  assert.throws(() => verifyReleaseAssets(unknown, [draft()], "v6.47.0"), /malformed bootstrap policy/);
+});
+
+test("rejects build metadata in release identities", () => {
+  const metadata = structuredClone(policy);
+  metadata.package_version = "6.47.0+build.1";
+  for (const target of Object.values(metadata.targets)) target.desired.version = metadata.package_version;
+  metadata.build_contract.daemon_version_ldflag = `v${metadata.package_version}`;
+  assert.throws(() => verifyReleaseAssets(metadata, [draft()], "v6.47.0+build.1"), /malformed bootstrap policy/);
 });
 
 test("rejects published, missing, or duplicate release records", () => {

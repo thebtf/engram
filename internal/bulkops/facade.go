@@ -15,7 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -161,7 +161,6 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 	}
 	snap.AffectedMemoryIDs = []int64{}
 	snap.SourceSessionID = op.SourceSessionID
-	snap.Parameters = params
 
 	type promotionAudit struct {
 		candidateID int64
@@ -169,16 +168,11 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 		memory      *models.Memory
 	}
 	candidateBefore := make(map[int64]json.RawMessage, len(ids))
+	var promotedCandidateIDs []int64
 	var promotionAudits []promotionAudit
-	result := &ExecuteResult{SnapshotID: snapshotID, Promoted: []int64{}}
+	result := &ExecuteResult{Promoted: []int64{}}
 	txErr := f.candidateStore.GetDB().WithContext(ctx).Transaction(func(tx *gormpkg.DB) error {
-		created, createErr := f.snapshotStore.CreateTx(ctx, tx, snap)
-		if createErr != nil {
-			return fmt.Errorf("bulk_promote store_snapshot: %w", createErr)
-		}
-		result.SnapshotID = created.SnapshotID
-
-		for _, id := range ids {
+		for _, id := range orderedLockIDs(ids) {
 			candidate, getErr := f.candidateStore.GetForUpdateTx(ctx, tx, id)
 			if getErr != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("candidate %d: get: %v", id, getErr))
@@ -215,8 +209,22 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 				result.Promoted = append(result.Promoted, createdMemory.ID)
 			}
 			candidateBefore[id] = before
+			promotedCandidateIDs = append(promotedCandidateIDs, id)
 			promotionAudits = append(promotionAudits, promotionAudit{candidateID: id, candidate: promoted, memory: createdMemory})
 		}
+		if len(result.Promoted) == 0 {
+			return nil
+		}
+		params, marshalErr := bulkPromoteParameters(params, promotedCandidateIDs)
+		if marshalErr != nil {
+			return fmt.Errorf("bulk_promote parameters: %w", marshalErr)
+		}
+		snap.Parameters = params
+		created, createErr := f.snapshotStore.CreateTx(ctx, tx, snap)
+		if createErr != nil {
+			return fmt.Errorf("bulk_promote store_snapshot: %w", createErr)
+		}
+		result.SnapshotID = created.SnapshotID
 		if amendErr := f.snapshotStore.AmendPromoteEntriesWithCandidatesTx(ctx, tx, created.SnapshotID, candidateBefore, result.Promoted); amendErr != nil {
 			return fmt.Errorf("bulk_promote amend snapshot entries: %w", amendErr)
 		}
@@ -227,13 +235,20 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 		}); auditErr != nil {
 			return fmt.Errorf("bulk_promote audit: %w", auditErr)
 		}
+		for _, promotion := range promotionAudits {
+			if auditErr := f.auditStore.LogTx(ctx, tx, gormdb.AuditLogEntry{
+				Action:          "promote_candidate",
+				Actor:           actor,
+				SourceSessionID: promotion.candidate.SourceSessionID,
+				Reason:          fmt.Sprintf("candidate %d promoted to memory %d", promotion.candidateID, promotion.memory.ID),
+			}); auditErr != nil {
+				return fmt.Errorf("bulk_promote candidate audit %d: %w", promotion.candidateID, auditErr)
+			}
+		}
 		return nil
 	})
 	if txErr != nil {
 		return nil, txErr
-	}
-	for _, promotion := range promotionAudits {
-		f.candidateStore.LogPromoteAudit(promotion.candidateID, promotion.candidate, promotion.memory)
 	}
 
 	return result, nil
@@ -294,6 +309,17 @@ func (f *Facade) executeBulkMemoryMutation(ctx context.Context, identity auth.Id
 				result.Errors = append(result.Errors, fmt.Sprintf("memory %d: %v", id, err))
 				continue
 			}
+			post, err := f.memoryStore.GetForRollbackTx(ctx, tx, id)
+			if err != nil {
+				return fmt.Errorf("%s capture post-state %d: %w", op.Type, id, err)
+			}
+			token, err := models.SnapshotStateToken(post)
+			if err != nil {
+				return fmt.Errorf("%s token post-state %d: %w", op.Type, id, err)
+			}
+			entry := entries[id]
+			entry.PostStateToken = token
+			entries[id] = entry
 			successfulIDs = append(successfulIDs, id)
 		}
 		if len(successfulIDs) == 0 {
@@ -418,26 +444,26 @@ func resolveActor(identity auth.Identity) string {
 	return string(identity.Source)
 }
 
-// captureCandidateBeforeState fetches candidate rows and serializes them as JSONB.
-// The before_state JSONB is keyed by candidate ID (string for JSON compat).
-// Deprecated: use capturePromoteBeforeState for bulk_promote (typed entries).
-func (f *Facade) captureCandidateBeforeState(ctx context.Context, ids []int64) (string, json.RawMessage, error) {
-	snapshotID := uuid.New().String()
-	state := make(map[string]any, len(ids))
-	for _, id := range ids {
-		c, err := f.candidateStore.Get(ctx, id)
-		if err != nil {
-			// Treat missing as empty entry — snapshot still proceeds.
-			state[fmt.Sprintf("%d", id)] = nil
-			continue
-		}
-		state[fmt.Sprintf("%d", id)] = c
+func orderedLockIDs(ids []int64) []int64 {
+	ordered := slices.Clone(ids)
+	slices.Sort(ordered)
+	return ordered
+}
+
+// bulkPromoteParameters persists only candidates that actually promoted, in the
+// same order as their created-memory IDs.
+func bulkPromoteParameters(raw json.RawMessage, candidateIDs []int64) (json.RawMessage, error) {
+	parameters := make(map[string]json.RawMessage)
+	if len(raw) > 0 && json.Unmarshal(raw, &parameters) != nil {
+		return nil, errors.New("parameters must be a JSON object")
 	}
-	bs, err := json.Marshal(state)
+	encodedIDs, err := json.Marshal(candidateIDs)
 	if err != nil {
-		return "", nil, fmt.Errorf("serialize before_state: %w", err)
+		return nil, err
 	}
-	return snapshotID, json.RawMessage(bs), nil
+	delete(parameters, "candidate_id")
+	parameters["candidate_ids"] = encodedIDs
+	return json.Marshal(parameters)
 }
 
 // captureMemoryBeforeState fetches active memory rows for a bulk mutation.
@@ -446,7 +472,7 @@ func (f *Facade) captureMemoryBeforeState(ctx context.Context, tx *gormpkg.DB, i
 	state := make(map[int64]models.SnapshotEntry, len(ids))
 	capturedIDs := make([]int64, 0, len(ids))
 	missingIDs := make([]int64, 0)
-	for _, id := range ids {
+	for _, id := range orderedLockIDs(ids) {
 		mem, err := f.memoryStore.GetForSnapshotTx(ctx, tx, id)
 		if err != nil {
 			if errors.Is(err, gormpkg.ErrRecordNotFound) {
@@ -459,23 +485,11 @@ func (f *Facade) captureMemoryBeforeState(ctx context.Context, tx *gormpkg.DB, i
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("serialize memory %d before_state: %w", id, err)
 		}
-		expectedVersion := mem.Version + 1
 		state[id] = models.SnapshotEntry{
-			Kind:            models.EntryKindRestore,
-			Before:          before,
-			ExpectedVersion: &expectedVersion,
+			Kind:   models.EntryKindRestore,
+			Before: before,
 		}
 		capturedIDs = append(capturedIDs, id)
 	}
 	return state, capturedIDs, missingIDs, nil
-}
-
-func candidateIDsToInt64(ids []int64) []int64 {
-	return ids
-}
-
-// captureCandidateBeforeStateAt is a timestamp-capturing variant used by rollback.
-// Returns the snapshot time so rollback can compare updated_at values.
-func SnapshotTime() time.Time {
-	return time.Now().UTC()
 }

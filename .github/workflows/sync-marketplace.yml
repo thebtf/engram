@@ -58,15 +58,16 @@ jobs:
           rm -f marketplace/marketplace.json
           mkdir -p marketplace/plugins marketplace/.agents/plugins \
             marketplace/.claude-plugin marketplace/.omp-plugin
-          cp -r plugin/engram marketplace/engram
-          cp -r plugin/engram marketplace/plugins/engram
-          cmp plugin/engram/bootstrap-targets.json marketplace/engram/bootstrap-targets.json
-          cmp plugin/engram/bootstrap-targets.json marketplace/plugins/engram/bootstrap-targets.json
           VERSION=$(jq -r .version plugin/engram/.claude-plugin/plugin.json)
           if [ -z "$VERSION" ] || [ "$VERSION" = null ]; then
             echo "::error::version missing in plugin/engram/.claude-plugin/plugin.json"
             exit 1
           fi
+          node plugin/engram/scripts/bootstrap-policy.js validate plugin/engram/bootstrap-targets.json "$VERSION"
+          cp -r plugin/engram marketplace/engram
+          cp -r plugin/engram marketplace/plugins/engram
+          cmp plugin/engram/bootstrap-targets.json marketplace/engram/bootstrap-targets.json
+          cmp plugin/engram/bootstrap-targets.json marketplace/plugins/engram/bootstrap-targets.json
           jq --arg version "$VERSION" '
             .version = $version
             | .plugins |= map(.version = $version | .source = "./engram")

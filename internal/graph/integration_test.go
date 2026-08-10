@@ -224,8 +224,7 @@ func TestPathC_T015_NodeCreatedAtTimestamp(t *testing.T) {
 	assert.True(t, node.CreatedAt.Before(after), "CreatedAt must be before %v, got %v", after, node.CreatedAt)
 }
 
-// TestNodesStore_MetadataDefaults_Create verifies that optional metadata is
-// persisted as an empty JSON object, while non-empty JSON is unchanged.
+// TestNodesStore_MetadataDefaults_Create verifies that metadata persists in canonical JSON form.
 func TestNodesStore_MetadataDefaults_Create(t *testing.T) {
 	dsn := os.Getenv("DATABASE_DSN")
 	if dsn == "" {
@@ -246,24 +245,21 @@ func TestNodesStore_MetadataDefaults_Create(t *testing.T) {
 		name     string
 		metadata []byte
 		expected string
-		preserve bool
 	}{
 		{name: "nil", expected: "{}"},
 		{name: "empty", metadata: []byte{}, expected: "{}"},
 		{name: "whitespace", metadata: []byte(" \t\n"), expected: "{}"},
 		{name: "null", metadata: []byte("null"), expected: "{}"},
 		{name: "whitespace-null", metadata: []byte(" \tnull\n"), expected: "{}"},
-		{name: "object", metadata: []byte(`{"source":"test"}`), expected: `{"source":"test"}`, preserve: true},
+		{name: "canonical-object", metadata: []byte(`{"source":"test"}`), expected: `{"source":"test"}`},
+		{name: "spaced-object", metadata: []byte(" { \"z\" : [ true, false ], \"a\" : { \"nested\" : 1 } } "), expected: `{"a":{"nested":1},"z":[true,false]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			node, err := ns.Create(context.Background(), &models.KnowledgeNode{
 				NodeType: models.NodeTypeSkill, ExternalRef: "create-" + tc.name, Project: project, Metadata: tc.metadata,
 			})
 			require.NoError(t, err)
-			assert.JSONEq(t, tc.expected, string(node.Metadata))
-			if tc.preserve {
-				assert.Equal(t, tc.metadata, node.Metadata)
-			}
+			assert.Equal(t, tc.expected, string(node.Metadata))
 
 			stored, err := ns.Get(context.Background(), node.ID, true)
 			require.NoError(t, err)
@@ -272,8 +268,7 @@ func TestNodesStore_MetadataDefaults_Create(t *testing.T) {
 	}
 }
 
-// TestNodesStore_MetadataDefaults_Update verifies that optional metadata is
-// normalized on updates as well as creates.
+// TestNodesStore_MetadataDefaults_Update verifies that metadata persists in canonical JSON form on updates.
 func TestNodesStore_MetadataDefaults_Update(t *testing.T) {
 	dsn := os.Getenv("DATABASE_DSN")
 	if dsn == "" {
@@ -294,14 +289,14 @@ func TestNodesStore_MetadataDefaults_Update(t *testing.T) {
 		name     string
 		metadata []byte
 		expected string
-		preserve bool
 	}{
 		{name: "nil", expected: "{}"},
 		{name: "empty", metadata: []byte{}, expected: "{}"},
 		{name: "whitespace", metadata: []byte(" \t\n"), expected: "{}"},
 		{name: "null", metadata: []byte("null"), expected: "{}"},
 		{name: "whitespace-null", metadata: []byte(" \tnull\n"), expected: "{}"},
-		{name: "object", metadata: []byte(`{"source":"test"}`), expected: `{"source":"test"}`, preserve: true},
+		{name: "canonical-object", metadata: []byte(`{"source":"test"}`), expected: `{"source":"test"}`},
+		{name: "spaced-object", metadata: []byte(" { \"z\" : [ true, false ], \"a\" : { \"nested\" : 1 } } "), expected: `{"a":{"nested":1},"z":[true,false]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			node, err := ns.Create(context.Background(), &models.KnowledgeNode{
@@ -312,10 +307,7 @@ func TestNodesStore_MetadataDefaults_Update(t *testing.T) {
 			node.Metadata = tc.metadata
 			_, err = ns.Update(context.Background(), node)
 			require.NoError(t, err)
-			assert.JSONEq(t, tc.expected, string(node.Metadata))
-			if tc.preserve {
-				assert.Equal(t, tc.metadata, node.Metadata)
-			}
+			assert.Equal(t, tc.expected, string(node.Metadata))
 
 			stored, err := ns.Get(context.Background(), node.ID, true)
 			require.NoError(t, err)

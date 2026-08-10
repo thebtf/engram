@@ -13,6 +13,7 @@ fail() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_FAILED=$((TESTS_FAILED + 1)); print
 make_env() {
     local path="$1" server="$2" operator="$3" postgres="$4"
     {
+        # shellcheck disable=SC2016 # Deliberately write command substitution as inert fixture text.
         printf 'UNRELATED_VALUE=$(touch %s.injected)\n' "${path}"
         printf 'ENGRAM_SERVER_IMAGE=%s\n' "${server}"
         printf 'ENGRAM_OPERATOR_IMAGE=%s\n' "${operator}"
@@ -60,7 +61,7 @@ for key in ENGRAM_SERVER_IMAGE ENGRAM_OPERATOR_IMAGE ENGRAM_POSTGRES_IMAGE POSTG
     [[ -z "\${!key+x}" ]] || present+="\${key},"
 done
 mode="\$(stat -c '%a' "\${snapshot}")"
-printf '%s|%s|%s|%s|%s|%s\\n' "\${action}" "\${snapshot}" "\${mode}" "\${server}" "\${quiet}" "\${present}" >> "${marker}"
+printf '%s|%s|%s|%s|%s|%s\n' "\${action}" "\${snapshot}" "\${mode}" "\${server}" "\${quiet}" "\${present}" >> "${marker}"
 case "\${action}" in
     config) [[ "${after_config}" == "${source}" ]] || cp "${after_config}" "${source}" ;;
     pull) [[ "${after_pull}" == "${source}" ]] || cp "${after_pull}" "${source}" ;;
@@ -73,6 +74,57 @@ EOF
     set -e
     rm -rf "${mock_bin}"
     return "${rc}"
+}
+make_blocking_docker() {
+    local mock_bin="$1" marker="$2" pull_started="$3" release="$4"
+    mkdir "${mock_bin}"
+    cat >"${mock_bin}/docker" <<EOF
+#!/usr/bin/env bash
+action=""
+for ((i = 1; i <= \$#; i++)); do
+    case "\${!i}" in config|pull|up) action="\${!i}" ;; esac
+done
+printf '%s\n' "\${action}" >> "${marker}"
+if [[ "\${action}" == pull ]]; then
+    : > "${pull_started}"
+    while [[ ! -e "${release}" ]]; do sleep 0.05; done
+fi
+EOF
+    chmod +x "${mock_bin}/docker"
+}
+
+start_wrapper() {
+    local source="$1" output="$2" mock_bin="$3"
+    shift 3
+    (
+        PATH="${mock_bin}:${PATH}" env -u COMPOSE_FILE -u COMPOSE_PATH_SEPARATOR -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE -u COMPOSE_PROJECT_DIRECTORY "${@}" bash "${PREFLIGHT}" --publication-result "${PUBLICATION_RESULT}" --env-file "${source}"
+    ) >"${output}" 2>&1 &
+    STARTED_WRAPPER_PID=$!
+}
+
+wait_for_file() {
+    local path="$1"
+    for _ in {1..100}; do
+        [[ -e "${path}" ]] && return 0
+        sleep 0.05
+    done
+    return 1
+}
+
+assert_no_values_output() {
+    local output="$1" value
+    shift
+    for value in "$@"; do
+        [[ "$(<"${output}")" != *"${value}"* ]] || return 1
+    done
+}
+
+assert_lock_sequence() {
+    local marker="$1" action configs=0 pulls=0 ups=0 invalid=0
+    while IFS= read -r action || [[ -n "${action}" ]]; do
+        case "${action}" in config) configs=$((configs + 1)) ;; pull) pulls=$((pulls + 1)) ;; up) ups=$((ups + 1)) ;; *) invalid=1 ;; esac
+    done < "${marker}"
+    [[ ${configs} -eq 2 && ${pulls} -eq 2 && ${ups} -eq 2 && ${invalid} -eq 0 ]]
 }
 
 assert_rejected_before_compose() {
@@ -105,10 +157,12 @@ assert_no_secret_output() {
 main() {
     local tmp=".image-preflight-test.$$"
     mkdir "${tmp}"
+    # shellcheck disable=SC2064 # Capture this invocation's unique temporary path now.
     trap "rm -rf '${tmp}'" EXIT
-    local server="ghcr.io/thebtf/engram@sha256:$(printf 'a%.0s' {1..64})"
-    local operator="ghcr.io/thebtf/engram-operator-console@sha256:$(printf 'b%.0s' {1..64})"
-    local postgres="ghcr.io/thebtf/engram-postgres@sha256:$(printf 'c%.0s' {1..64})"
+    local server operator postgres
+    server="ghcr.io/thebtf/engram@sha256:$(printf 'a%.0s' {1..64})"
+    operator="ghcr.io/thebtf/engram-operator-console@sha256:$(printf 'b%.0s' {1..64})"
+    postgres="ghcr.io/thebtf/engram-postgres@sha256:$(printf 'c%.0s' {1..64})"
     local marker="${tmp}/valid.compose" rc=0
     PUBLICATION_RESULT="${tmp}/publication-result.json"
     make_publication_result "${PUBLICATION_RESULT}"
@@ -122,6 +176,30 @@ main() {
     fi
     rm -f "${marker}"
 
+    local lock_marker="${tmp}/lock.compose" lock_mock="${tmp}/lock.bin" pull_started="${tmp}/pull.started" release="${tmp}/pull.release" first_pid second_pid third_pid first_rc second_rc third_rc
+    make_env "${tmp}/lock.env" "${server}" "${operator}" "${postgres}"
+    make_blocking_docker "${lock_mock}" "${lock_marker}" "${pull_started}" "${release}"
+    start_wrapper "${tmp}/lock.env" "${tmp}/lock-first.output" "${lock_mock}" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+    first_pid=${STARTED_WRAPPER_PID}
+    if wait_for_file "${pull_started}"; then
+        start_wrapper "${tmp}/lock.env" "${tmp}/lock-second.output" "${lock_mock}" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+        second_pid=${STARTED_WRAPPER_PID}
+        second_rc=0; wait "${second_pid}" || second_rc=$?
+        : >"${release}"
+        first_rc=0; wait "${first_pid}" || first_rc=$?
+        start_wrapper "${tmp}/lock.env" "${tmp}/lock-third.output" "${lock_mock}" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+        third_pid=${STARTED_WRAPPER_PID}
+        third_rc=0; wait "${third_pid}" || third_rc=$?
+        if [[ ${first_rc} -eq 0 && ${second_rc} -ne 0 && ${third_rc} -eq 0 && ! -e "${ROOT}/deploy/docker-compose.runtime.yml.deploy.lock" ]] && assert_lock_sequence "${lock_marker}" && assert_no_values_output "${tmp}/lock-first.output" database-sentinel admin-sentinel vault-sentinel provider-sentinel "${server}" "${operator}" "${postgres}" && assert_no_values_output "${tmp}/lock-second.output" database-sentinel admin-sentinel vault-sentinel provider-sentinel "${server}" "${operator}" "${postgres}" && assert_no_values_output "${tmp}/lock-third.output" database-sentinel admin-sentinel vault-sentinel provider-sentinel "${server}" "${operator}" "${postgres}"; then
+            pass 'concurrent deployments reject contenders and release the Compose lock'
+        else
+            fail 'concurrent deployments reject contenders and release the Compose lock'
+        fi
+    else
+        fail 'concurrent deployments reject contenders and release the Compose lock'
+    fi
+    rm -rf "${lock_mock}"
+
     make_env "${tmp}/invalid.env" "${server}" "${operator}" "${postgres}"
     printf 'ENGRAM_SERVER_IMAGE=%s\n' "${server}" >>"${tmp}/invalid.env"
     assert_rejected_before_compose 'duplicate bare assignment rejected' "${tmp}/invalid.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
@@ -131,6 +209,16 @@ main() {
         printf '%s\n' "${syntax}" >>"${tmp}/syntax.env"
         assert_rejected_before_compose "managed nonliteral syntax rejected: ${syntax%%=*}" "${tmp}/syntax.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
     done
+    make_env "${tmp}/comment.env" "${server}" "${operator}" "${postgres}"
+    printf '# ENGRAM_SERVER_IMAGE=untrusted\n  # ENGRAM_OPERATOR_IMAGE=untrusted\n# ENGRAM_POSTGRES_IMAGE=untrusted\n' >>"${tmp}/comment.env"
+    marker="${tmp}/comment.compose"; rc=0; WRAPPER_OUTPUT="${tmp}/comment.output"
+    run_wrapper "${tmp}/comment.env" "${marker}" "${tmp}/comment.env" "${tmp}/comment.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE || rc=$?
+    if [[ ${rc} -eq 0 ]] && assert_frozen_compose_input "${marker}" "${server}" "${tmp}/comment.env" && assert_no_secret_output "${WRAPPER_OUTPUT}"; then
+        pass 'comment-only managed image key mentions are ignored'
+    else
+        fail 'comment-only managed image key mentions are ignored'
+    fi
+    rm -f "${marker}"
 
     make_env "${tmp}/malformed.env" 'ghcr.io/example/server:latest' "${operator}" "${postgres}"
     assert_rejected_before_compose 'mutable tag rejected before compose' "${tmp}/malformed.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE

@@ -14,6 +14,9 @@ import (
 // ErrInitialAdminSetupAlreadyCompleted reports that another request created the first user.
 var ErrInitialAdminSetupAlreadyCompleted = errors.New("setup already completed")
 
+// ErrInitialAdminSetupRequired reports that the audited initial-admin setup has not completed.
+var ErrInitialAdminSetupRequired = errors.New("initial admin setup required")
+
 // UserStore provides CRUD operations for dashboard users.
 type UserStore struct {
 	db *gorm.DB
@@ -38,6 +41,49 @@ func (s *UserStore) CreateUser(email, passwordHash, role string) (*User, error) 
 	return user, nil
 }
 
+// ProvisionAuthentikOperator returns the Authentik user for email, creating an
+// operator only after the audited initial-admin setup has completed.
+func (s *UserStore) ProvisionAuthentikOperator(ctx context.Context, email string) (*User, error) {
+	var user User
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockInitialAdminSetup(tx); err != nil {
+			return err
+		}
+		if err := tx.Where("email = ?", email).First(&user).Error; err == nil {
+			return nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("look up Authentik user: %w", err)
+		}
+
+		var bootstrapCount int64
+		if err := tx.Table("users").
+			Joins("JOIN audit_log ON audit_log.actor = users.email").
+			Where("users.role = ? AND audit_log.action = ?", DashboardRoleAdmin, authSetupCompletedAuditAction).
+			Count(&bootstrapCount).Error; err != nil {
+			return fmt.Errorf("verify initial admin setup: %w", err)
+		}
+		if bootstrapCount == 0 {
+			return ErrInitialAdminSetupRequired
+		}
+
+		user = User{Email: email, Role: DashboardRoleOperator, CreatedAt: time.Now()}
+		if err := tx.Create(&user).Error; err != nil {
+			return fmt.Errorf("create Authentik operator: %w", err)
+		}
+		return nil
+	}, &sql.TxOptions{Isolation: sql.LevelReadCommitted}); err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func lockInitialAdminSetup(tx *gorm.DB) error {
+	if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "initial-admin-setup").Error; err != nil {
+		return fmt.Errorf("lock initial admin setup: %w", err)
+	}
+	return nil
+}
+
 // CreateInitialAdmin atomically creates the first dashboard user as an administrator.
 // When an access store is configured, the setup audit row commits with the user.
 func (s *UserStore) CreateInitialAdmin(ctx context.Context, email, passwordHash string, access *DomainOwnerStore) (*User, error) {
@@ -48,8 +94,8 @@ func (s *UserStore) CreateInitialAdmin(ctx context.Context, email, passwordHash 
 		CreatedAt:    time.Now(),
 	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "initial-admin-setup").Error; err != nil {
-			return fmt.Errorf("lock initial admin setup: %w", err)
+		if err := lockInitialAdminSetup(tx); err != nil {
+			return err
 		}
 		var count int64
 		if err := tx.Model(&User{}).Count(&count).Error; err != nil {
@@ -63,7 +109,7 @@ func (s *UserStore) CreateInitialAdmin(ctx context.Context, email, passwordHash 
 		}
 		if access != nil {
 			if err := access.logAccessEventTx(ctx, tx, AccessAuditRecord{
-				Action:     "auth_setup_completed",
+				Action:     authSetupCompletedAuditAction,
 				Actor:      user.Email,
 				Reason:     "initial admin created",
 				AfterState: map[string]any{"user_id": user.ID, "email": user.Email, "role": user.Role},

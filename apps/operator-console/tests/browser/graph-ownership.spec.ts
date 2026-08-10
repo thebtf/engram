@@ -81,6 +81,90 @@ test('selected-node edge ownership rejects a delayed edge response', async ({ pa
   await expect(page.getByText('late-edge-for-eight', { exact: true })).toHaveCount(0)
 })
 
+test('successful node creation keeps its mutation action and selects the created node', async ({ page }) => {
+  const nodes = [{ id: 7, node_type: 'skill', external_ref: 'node-seven', project: 'alpha', privacy_scope: 'project' }]
+  await page.route('**/api/flags', enabled)
+  await routeProjects(page)
+  await page.route('**/api/graph/nodes**', async (route) => {
+    if (route.request().method() === 'POST') {
+      const created = { id: 99, node_type: 'skill', external_ref: 'created-node', project: 'alpha', privacy_scope: 'project' }
+      nodes.push(created)
+      await route.fulfill({ json: created })
+      return
+    }
+    await route.fulfill({ json: { nodes } })
+  })
+  await page.route('**/api/graph/edges**', (route) => route.fulfill({ json: { edges: [] } }))
+
+  await page.goto('/graph')
+  await page.locator('#graph-node-external-ref').fill('created-node')
+  await page.getByRole('button', { name: 'Создать узел' }).click()
+
+  await expect(page.locator('.notice')).toHaveAttribute('data-kind', 'success')
+  await expect(page.locator('.notice')).toContainText('Узел графа создан.')
+  await expect(page.locator('#graph-node-external-ref')).toHaveValue('')
+  await expect(page.locator('.selection-note')).toContainText('created-node')
+})
+
+test('successful node deletion keeps its mutation action and resets confirmation', async ({ page }) => {
+  let nodes = [
+    { id: 7, node_type: 'skill', external_ref: 'node-seven', project: 'alpha', privacy_scope: 'project' },
+    { id: 8, node_type: 'skill', external_ref: 'node-eight', project: 'alpha', privacy_scope: 'project' },
+  ]
+  await page.route('**/api/flags', enabled)
+  await routeProjects(page)
+  await page.route('**/api/graph/nodes**', async (route) => {
+    if (route.request().method() === 'DELETE') {
+      nodes = nodes.filter((node) => node.id !== 7)
+      await route.fulfill({ status: 204 })
+      return
+    }
+    await route.fulfill({ json: { nodes } })
+  })
+  await page.route('**/api/graph/edges**', (route) => route.fulfill({ json: { edges: [] } }))
+
+  await page.goto('/graph')
+  await page.getByRole('button', { name: 'Удалить узел' }).click()
+  await page.getByRole('button', { name: 'Подтвердить удаление узла' }).click()
+
+  await expect(page.locator('.notice')).toHaveAttribute('data-kind', 'success')
+  await expect(page.locator('.notice')).toContainText('Узел графа удален.')
+  await expect(page.getByRole('button', { name: 'Удалить узел' })).toBeVisible()
+  await expect(page.locator('.node-row')).toHaveCount(1)
+  await expect(page.locator('.selection-note')).toContainText('node-eight')
+})
+
+test('a newer user node selection invalidates an older in-flight mutation', async ({ page }) => {
+  let releaseMutation!: () => void
+  const mutation = new Promise<void>((resolve) => { releaseMutation = resolve })
+  await page.route('**/api/flags', enabled)
+  await routeProjects(page)
+  await routeGraph(page, ['node-seven', 'node-eight'])
+  await page.route('**/api/graph/edges**', (route) => route.fulfill({ json: { edges: [] } }))
+  await page.route('**/api/graph/nodes', async (route) => {
+    if (route.request().method() === 'POST') {
+      await mutation
+      await route.fulfill({ json: { id: 99, node_type: 'skill', external_ref: 'late-success', project: 'alpha' } })
+      return
+    }
+    await route.fallback()
+  })
+
+  await page.goto('/graph')
+  await page.locator('#graph-node-external-ref').fill('late-success')
+  await page.getByRole('button', { name: 'Создать узел' }).click()
+  await page.locator('.node-row').nth(1).click()
+  await expect(page.locator('.selection-note')).toContainText('node-eight')
+  const mutationResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/graph/nodes')
+  releaseMutation()
+  await mutationResponse
+  await expect(page.locator('.notice')).toHaveCount(0)
+  await expect(page.locator('#graph-node-external-ref')).toHaveValue('late-success')
+  await expect(page.locator('.node-row')).toHaveCount(2)
+  await expect(page.locator('.node-row').nth(1)).toContainText('node-eight')
+  await expect(page.locator('.selection-note')).toContainText('node-eight')
+})
+
 test('a delayed mutation notice cannot overwrite newer validation or dismissal', async ({ page }) => {
   let releaseMutation!: () => void
   const mutation = new Promise<void>((resolve) => { releaseMutation = resolve })
@@ -108,7 +192,9 @@ test('a delayed mutation notice cannot overwrite newer validation or dismissal',
   const closeNotice = page.locator('.notice-close')
   await expect(closeNotice).toBeVisible()
   await closeNotice.click()
+  const mutationResponse = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/graph/nodes')
   releaseMutation()
+  await mutationResponse
   await expect(page.locator('.notice')).toHaveCount(0)
   await expect(page.locator('.typed-error')).toHaveCount(0)
 })

@@ -367,13 +367,14 @@ func (s *CandidateStore) PromoteWithMemory(
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var err error
 		_, updatedCandidate, createdMemory, err = s.promoteWithMemoryTx(ctx, tx, candidateID, mem)
-		return err
+		if err != nil {
+			return err
+		}
+		return s.logPromoteAuditTx(ctx, tx, candidateID, updatedCandidate, createdMemory)
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-
-	s.logPromoteAudit(candidateID, updatedCandidate, createdMemory)
 	return updatedCandidate, createdMemory, nil
 }
 
@@ -383,7 +384,7 @@ func (s *CandidateStore) GetDB() *gorm.DB {
 }
 
 // PromoteWithMemoryTx promotes a candidate using the caller's transaction.
-// The caller must log promotion audit only after that transaction commits.
+// The caller must write any required audit entry through that transaction.
 func (s *CandidateStore) PromoteWithMemoryTx(
 	ctx context.Context,
 	tx *gorm.DB,
@@ -398,11 +399,6 @@ func (s *CandidateStore) PromoteWithMemoryTx(
 		return nil, nil, err
 	}
 	return updatedCandidate, createdMemory, nil
-}
-
-// LogPromoteAudit records the post-commit audit entry for a transaction-owned promotion.
-func (s *CandidateStore) LogPromoteAudit(candidateID int64, updatedCandidate *models.CrystallizationCandidate, createdMemory *models.Memory) {
-	s.logPromoteAudit(candidateID, updatedCandidate, createdMemory)
 }
 
 // PromoteWithMemoryAndSnapshot creates the candidate-review snapshot, creates the
@@ -486,9 +482,16 @@ func (s *CandidateStore) promoteWithMemoryAndSnapshotAction(
 		}
 
 		if createdSnapshot != nil && createdMemory.ID != 0 {
-			if err := snapshotStore.amendPromoteEntriesTx(ctx, tx, createdSnapshot.SnapshotID, []int64{createdMemory.ID}); err != nil {
+			before, marshalErr := json.Marshal(beforeCandidate)
+			if marshalErr != nil {
+				return fmt.Errorf("%s: marshal locked candidate before-state: %w", operation, marshalErr)
+			}
+			if err := snapshotStore.amendPromoteEntriesWithCandidatesTx(ctx, tx, createdSnapshot.SnapshotID, map[int64]json.RawMessage{candidateID: before}, []int64{createdMemory.ID}); err != nil {
 				return err
 			}
+		}
+		if err := s.logPromoteAuditTx(ctx, tx, candidateID, updatedCandidate, createdMemory); err != nil {
+			return err
 		}
 		if candidateReviewAuditRequired(snapshot) {
 			return s.logCandidateReviewAuditTx(ctx, tx, reviewAction, actor, "", beforeCandidate, updatedCandidate)
@@ -499,7 +502,6 @@ func (s *CandidateStore) promoteWithMemoryAndSnapshotAction(
 		return nil, nil, nil, err
 	}
 
-	s.logPromoteAudit(candidateID, updatedCandidate, createdMemory)
 	return updatedCandidate, createdMemory, createdSnapshot, nil
 }
 
@@ -556,23 +558,19 @@ func (s *CandidateStore) promoteWithMemoryTx(ctx context.Context, tx *gorm.DB, c
 	return before, toDomainCandidate(&row), created, nil
 }
 
-func (s *CandidateStore) logPromoteAudit(candidateID int64, updatedCandidate *models.CrystallizationCandidate, createdMemory *models.Memory) {
-	if s.auditStore == nil || updatedCandidate == nil || createdMemory == nil {
-		return
+func (s *CandidateStore) logPromoteAuditTx(ctx context.Context, tx *gorm.DB, candidateID int64, updatedCandidate *models.CrystallizationCandidate, createdMemory *models.Memory) error {
+	if s.auditStore == nil {
+		return nil
 	}
-	entry := AuditLogEntry{
+	if updatedCandidate == nil || createdMemory == nil {
+		return fmt.Errorf("promote audit requires candidate and memory")
+	}
+	return s.auditStore.LogTx(ctx, tx, AuditLogEntry{
 		Action:          "promote_candidate",
 		Actor:           "system",
 		SourceSessionID: updatedCandidate.SourceSessionID,
 		Reason:          fmt.Sprintf("candidate %d promoted to memory %d", candidateID, createdMemory.ID),
-	}
-	auditStore := s.auditStore
-	go func() {
-		defer func() { recover() }() //nolint:errcheck
-		auditCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = auditStore.Log(auditCtx, entry)
-	}()
+	})
 }
 
 func candidateReviewAuditRequired(snapshot *models.BulkOpSnapshot) bool {
@@ -715,6 +713,13 @@ func (s *CandidateStore) transitionWithSnapshot(
 		beforeCandidate, afterCandidate, err := s.transitionStatusTx(ctx, tx, id, newStatus, nil)
 		if err != nil {
 			return err
+		}
+		before, err := json.Marshal(beforeCandidate)
+		if err != nil {
+			return fmt.Errorf("%s_with_snapshot: marshal locked candidate before state: %w", action, err)
+		}
+		if err := snapshotStore.AmendPromoteEntriesWithCandidatesTx(ctx, tx, createdSnapshot.SnapshotID, map[int64]json.RawMessage{id: before}, nil); err != nil {
+			return fmt.Errorf("%s_with_snapshot: amend candidate snapshot: %w", action, err)
 		}
 		updatedCandidate = afterCandidate
 		return s.logCandidateReviewAuditTx(ctx, tx, action, actor, detail, beforeCandidate, afterCandidate)
