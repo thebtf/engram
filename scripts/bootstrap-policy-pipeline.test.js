@@ -202,11 +202,14 @@ exec "$node_path" "$@"
       assert.equal(calls.length, Number(fs.readFileSync(count, "utf8")));
       assert.ok(calls.every((call) => /(?:^| )--max-time 5(?: |$)/.test(call)));
     };
-    const policy = parsePolicy(fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8"), "6.47.1");
+    const policyJSON = fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8");
+    const policyVersion = JSON.parse(policyJSON).package_version;
+    const policy = parsePolicy(policyJSON, policyVersion);
+    const tagName = `v${policyVersion}`;
     fs.writeFileSync(first, "[]");
     fs.writeFileSync(second, JSON.stringify([{
       id: 368199776,
-      tag_name: "v6.47.1",
+      tag_name: tagName,
       draft: true,
       assets: Object.values(policy.targets).map(({ desired }) => ({
         name: desired.asset,
@@ -218,7 +221,7 @@ exec "$node_path" "$@"
     fs.writeFileSync(path.join(fakeBin, "curl"), "#!/usr/bin/env bash\ncount=0\n[[ -f $FAKE_CURL_COUNT ]] && count=$(cat \"$FAKE_CURL_COUNT\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$FAKE_CURL_COUNT\"\nprintf '%s\\n' \"$*\" >> \"$FAKE_CURL_INVOCATIONS\"\nif [[ ${FAKE_CURL_ALWAYS_FAIL:-} == 1 ]] || { (( count == 1 )) && [[ ${FAKE_CURL_FAIL_FIRST:-} == 1 ]]; }; then echo \"transient release list failure $count\" >&2; exit 1; fi\nif (( count == 1 )); then cat \"$FAKE_RELEASE_FIRST\"; else cat \"$FAKE_RELEASE_SECOND\"; fi\n", { mode: 0o755 });
     fs.writeFileSync(path.join(fakeBin, "sleep"), "#!/usr/bin/env bash\nprintf '%s\\n' \"$1\" >> \"$FAKE_SLEEP_LOG\"\n", { mode: 0o755 });
     const environment = `PATH=${shellQuote(installerPath(fakeBin))} GITHUB_TOKEN=fake FAKE_MKTEMP_PATH=${shellQuote(bashPath(release))} FAKE_CURL_COUNT=${shellQuote(bashPath(count))} FAKE_CURL_INVOCATIONS=${shellQuote(bashPath(invocations))} FAKE_RELEASE_FIRST=${shellQuote(bashPath(first))} FAKE_RELEASE_SECOND=${shellQuote(bashPath(second))} FAKE_SLEEP_LOG=${shellQuote(bashPath(sleeps))}`;
-    const result = spawnSync("bash", ["-c", `${environment} bash scripts/readback-bootstrap-policy-assets.sh --tag v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/readback-bootstrap-policy-assets.sh --tag ${tagName}`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.equal(fs.readFileSync(count, "utf8"), "2");
@@ -227,7 +230,7 @@ exec "$node_path" "$@"
     fs.rmSync(count);
     fs.rmSync(sleeps);
     fs.rmSync(invocations);
-    const recovered = spawnSync("bash", ["-c", `${environment} FAKE_CURL_FAIL_FIRST=1 bash scripts/readback-bootstrap-policy-assets.sh --tag v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
+    const recovered = spawnSync("bash", ["-c", `${environment} FAKE_CURL_FAIL_FIRST=1 bash scripts/readback-bootstrap-policy-assets.sh --tag ${tagName}`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(recovered.error);
     assert.equal(recovered.status, 0, recovered.stderr || recovered.stdout);
     assert.equal(fs.readFileSync(count, "utf8"), "2");
@@ -236,7 +239,7 @@ exec "$node_path" "$@"
     fs.rmSync(count);
     fs.rmSync(sleeps);
     fs.rmSync(invocations);
-    const rejected = spawnSync("bash", ["-c", `${environment} FAKE_RELEASE_SECOND=${shellQuote(bashPath(first))} bash scripts/readback-bootstrap-policy-assets.sh --tag v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
+    const rejected = spawnSync("bash", ["-c", `${environment} FAKE_RELEASE_SECOND=${shellQuote(bashPath(first))} bash scripts/readback-bootstrap-policy-assets.sh --tag ${tagName}`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(rejected.error);
     assert.notEqual(rejected.status, 0);
     assert.equal(fs.readFileSync(count, "utf8"), "5");
@@ -246,7 +249,7 @@ exec "$node_path" "$@"
     fs.rmSync(count);
     fs.rmSync(sleeps);
     fs.rmSync(invocations);
-    const transportRejected = spawnSync("bash", ["-c", `${environment} FAKE_CURL_ALWAYS_FAIL=1 bash scripts/readback-bootstrap-policy-assets.sh --tag v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
+    const transportRejected = spawnSync("bash", ["-c", `${environment} FAKE_CURL_ALWAYS_FAIL=1 bash scripts/readback-bootstrap-policy-assets.sh --tag ${tagName}`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(transportRejected.error);
     assert.notEqual(transportRejected.status, 0);
     assert.equal(fs.readFileSync(count, "utf8"), "5");

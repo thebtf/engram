@@ -1,6 +1,6 @@
 {
   "name": "engram",
-  "version": "6.47.1",
+  "version": "6.47.2",
   "description": "Persistent memory for Claude Code. v6 BREAKING: per-workstation API tokens replace the shared admin token. Issue a keycard via the dashboard /tokens page after upgrade and paste it via /engram:setup. The operator key (ENGRAM_AUTH_ADMIN_TOKEN) lives ONLY on the server host and MUST NOT be pasted into a workstation.",
   "author": {
     "name": "thebtf"
