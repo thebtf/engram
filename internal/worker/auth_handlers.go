@@ -3,11 +3,13 @@ package worker
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -455,9 +457,17 @@ func (h *AuthHandlers) handleSetupNeeded(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, map[string]bool{"needed": count == 0})
 }
 
-// handleSetup creates the first admin user (no invitation required).
+// handleSetup creates the first admin user (no invitation required). The
+// server-host operator token is required even while setup-needed stays public.
 // Returns 409 Conflict if any users already exist.
 func (h *AuthHandlers) handleSetup(w http.ResponseWriter, r *http.Request) {
+	masterToken := os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")
+	providedToken := extractHTTPBearer(r)
+	if masterToken == "" || providedToken == "" || subtle.ConstantTimeCompare([]byte(providedToken), []byte(masterToken)) != 1 {
+		writeAuthJSONError(w, http.StatusUnauthorized, "operator token required")
+		return
+	}
+
 	if !h.requireStores(w, true, false, false, false) {
 		return
 	}

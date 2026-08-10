@@ -4788,6 +4788,8 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		accessMilestoneMigration156(),
 		temporalTruthRecordsMigration157(),
 		attentionEventsMigration158(),
+		ruleGovernanceEscapeConstraintsMigration159(),
+		issueCreatorKeycardMigration160(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

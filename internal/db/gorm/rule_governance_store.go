@@ -607,6 +607,7 @@ func (s *RuleGovernanceStore) AnnotateRuleCandidate(ctx context.Context, candida
 		"arbiter_evaluation_id": ann.EvaluationID,
 		"last_evaluated_at":     &evaluatedAt,
 		"review_after":          ann.ReviewAfter,
+		"arbiter_claim_run_id":  nil,
 		"updated_at":            time.Now().UTC(),
 	}
 	var row ruleCandidateRow

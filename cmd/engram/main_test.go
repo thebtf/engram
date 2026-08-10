@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/thebtf/engram/internal/module/dispatcher"
 	"github.com/thebtf/mcp-mux/muxcore/engine"
 )
 
@@ -122,7 +124,7 @@ func TestExecutablePathsAreCaseInsensitive(t *testing.T) {
 func TestMuxcoreDaemonConfigPreservesPersistentAlwaysConnectedPolicy(t *testing.T) {
 	t.Parallel()
 
-	cfg := muxcoreDaemonConfig(nil)
+	cfg := muxcoreDaemonConfig(&dispatcher.Dispatcher{})
 	if !cfg.Persistent {
 		t.Fatal("Engram owner must remain persistent")
 	}
@@ -133,7 +135,10 @@ func TestMuxcoreDaemonConfigPreservesPersistentAlwaysConnectedPolicy(t *testing.
 		t.Fatalf("IdleSuspendDelay = %s, want zero for always-connected transport", cfg.IdleSuspendDelay)
 	}
 	if cfg.IdleDormantGrace != 0 {
-		t.Fatalf("IdleDormantGrace = %s, want zero without a capable native supervisor", cfg.IdleDormantGrace)
+		t.Fatalf("IdleDormantGrace = %s, want zero because Engram's plugin launcher does not wire muxcore's supervisor", cfg.IdleDormantGrace)
+	}
+	if cfg.LifecycleProtocol.Enabled() {
+		t.Fatal("LifecycleProtocol must remain disabled because Engram's plugin launcher does not wire muxcore's supervisor")
 	}
 	if cfg.AllowPersistentIdleSuspend {
 		t.Fatal("AllowPersistentIdleSuspend must remain false while Engram emits unbuffered background notifications")
@@ -141,8 +146,11 @@ func TestMuxcoreDaemonConfigPreservesPersistentAlwaysConnectedPolicy(t *testing.
 	if cfg.Registry == nil {
 		t.Fatal("muxcore registry metadata must be configured")
 	}
-	if got := cfg.Registry.MuxcoreVersion; got != muxcoreEmbeddedVersion {
-		t.Fatalf("registry muxcore version = %q, want %q", got, muxcoreEmbeddedVersion)
+	if got := muxcoreEmbeddedVersion; got != "v0.29.1" {
+		t.Fatalf("embedded muxcore version = %q, want v0.29.1", got)
+	}
+	if got := cfg.Registry.MuxcoreVersion; got != "v0.29.1" {
+		t.Fatalf("registry muxcore version = %q, want v0.29.1", got)
 	}
 	if !cfg.Registry.Capabilities.ListOwners {
 		t.Fatal("registry ListOwners capability must remain enabled")
@@ -152,8 +160,8 @@ func TestMuxcoreDaemonConfigPreservesPersistentAlwaysConnectedPolicy(t *testing.
 	if shimCfg.Persistent {
 		t.Fatal("per-host muxcore shim owner must be non-persistent")
 	}
-	if shimCfg.IdleSuspendDelay != 0 || shimCfg.IdleDormantGrace != 0 {
-		t.Fatalf("shim idle lifecycle = (%s, %s), want disabled until native supervisor release", shimCfg.IdleSuspendDelay, shimCfg.IdleDormantGrace)
+	if shimCfg.IdleSuspendDelay != 0 || shimCfg.IdleDormantGrace != 0 || shimCfg.LifecycleProtocol.Enabled() {
+		t.Fatalf("shim lifecycle = (idle_suspend=%s idle_dormant=%s protocol_enabled=%t), want disabled because Engram's plugin launcher does not wire muxcore's supervisor", shimCfg.IdleSuspendDelay, shimCfg.IdleDormantGrace, shimCfg.LifecycleProtocol.Enabled())
 	}
 	if shimCfg.AllowPersistentIdleSuspend {
 		t.Fatal("shim must not assert persistent idle-suspend safety while Engram emits background notifications")
@@ -163,6 +171,15 @@ func TestMuxcoreDaemonConfigPreservesPersistentAlwaysConnectedPolicy(t *testing.
 	}
 	if shimCfg.Handler == nil {
 		t.Fatal("shim config must provide a non-serving Handler shape for engine.New")
+	}
+	if err := shimCfg.Handler(context.Background(), nil, io.Discard); err == nil || err.Error() != "engram muxcore shim cannot serve MCP traffic directly" {
+		t.Fatalf("shim Handler error = %v, want explicit unsupported error", err)
+	}
+	if cfg.SessionHandler == nil {
+		t.Fatal("daemon config must initialize SessionHandler")
+	}
+	if cfg.Handler != nil {
+		t.Fatal("daemon config must not initialize raw Handler")
 	}
 	if _, err := engine.New(shimCfg); err != nil {
 		t.Fatalf("engine.New(shim config) error = %v", err)
@@ -187,6 +204,41 @@ func TestIsExpectedContextShutdown(t *testing.T) {
 	}
 	if isExpectedContextShutdown(canceled, errors.New("engine failed")) {
 		t.Fatal("non-cancellation error must not be suppressed")
+	}
+}
+
+func TestReconcileMuxcoreDaemonVersionSkipsExternalMuxSession(t *testing.T) {
+	t.Setenv("MCP_MUX_SESSION_ID", "external-mux-session")
+	originalStatus := readMuxcoreDaemonStatusPID
+	originalCurrent := isCurrentMuxcoreDaemon
+	originalExecutable := currentExecutable
+	originalRestart := restartMuxcoreDaemon
+	t.Cleanup(func() {
+		readMuxcoreDaemonStatusPID = originalStatus
+		isCurrentMuxcoreDaemon = originalCurrent
+		currentExecutable = originalExecutable
+		restartMuxcoreDaemon = originalRestart
+	})
+
+	readMuxcoreDaemonStatusPID = func(string) (int, bool) {
+		t.Fatal("external MCP_MUX_SESSION_ID must bypass daemon reconciliation")
+		return 0, false
+	}
+	isCurrentMuxcoreDaemon = func(string, string, int) bool {
+		t.Fatal("external MCP_MUX_SESSION_ID must bypass daemon version checks")
+		return false
+	}
+	currentExecutable = func() (string, error) {
+		t.Fatal("external MCP_MUX_SESSION_ID must bypass daemon restart")
+		return "", nil
+	}
+	restartMuxcoreDaemon = func(context.Context, string) (engine.UpdateAndRestartResult, error) {
+		t.Fatal("external MCP_MUX_SESSION_ID must bypass daemon restart")
+		return engine.UpdateAndRestartResult{}, nil
+	}
+
+	if err := reconcileMuxcoreDaemonVersion(context.Background()); err != nil {
+		t.Fatalf("reconcileMuxcoreDaemonVersion() error = %v", err)
 	}
 }
 

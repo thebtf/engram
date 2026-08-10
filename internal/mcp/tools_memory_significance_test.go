@@ -279,6 +279,22 @@ func TestRateMemorySignificanceRejectsInvalidIDWithoutWrite(t *testing.T) {
 	}
 }
 
+func TestRateMemorySignificanceUsesLosslessSelectors(t *testing.T) {
+	setS6OutcomeFlags(t, true, true)
+	updater := &fakeMemorySignificanceUpdater{}
+	srv := NewServer(ServerOptions{Version: "strict-significance"})
+	srv.setTestMemorySignificanceUpdater(updater)
+	_, err := srv.callTool(context.Background(), "rate_memory_significance", json.RawMessage(`{"id":9007199254740993,"rating":"useful"}`))
+	require.NoError(t, err)
+	require.Len(t, updater.calls, 1)
+	assert.Equal(t, int64(9007199254740993), updater.calls[0].id)
+	for _, raw := range []string{`{"id":"42","rating":"useful"}`, `{"id":42.5,"rating":"useful"}`, `{"id":1e3,"rating":"useful"}`} {
+		_, err := srv.callTool(context.Background(), "rate_memory_significance", json.RawMessage(raw))
+		require.Error(t, err)
+	}
+	require.Len(t, updater.calls, 1)
+}
+
 func TestRateMemorySignificanceRejectsInvalidRatingWithoutWrite(t *testing.T) {
 	for _, tc := range []struct {
 		name string

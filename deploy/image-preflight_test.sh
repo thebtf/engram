@@ -17,6 +17,11 @@ make_env() {
         printf 'ENGRAM_SERVER_IMAGE=%s\n' "${server}"
         printf 'ENGRAM_OPERATOR_IMAGE=%s\n' "${operator}"
         printf 'ENGRAM_POSTGRES_IMAGE=%s\n' "${postgres}"
+        printf 'POSTGRES_PASSWORD=database-sentinel\n'
+        printf 'ENGRAM_AUTH_ADMIN_TOKEN=admin-sentinel\n'
+        printf 'ENGRAM_AUTH_DISABLED=false\n'
+        printf 'ENGRAM_VAULT_KEY=vault-sentinel\n'
+        printf 'ENGRAM_EMBEDDING_API_KEY=provider-sentinel\n'
     } >"${path}"
 }
 
@@ -27,26 +32,31 @@ run_wrapper() {
     mkdir "${mock_bin}"
     cat >"${mock_bin}/docker" <<EOF
 #!/usr/bin/env bash
-snapshot=""
+snapshot="" action="" quiet=0 present=""
 for ((i = 1; i <= \$#; i++)); do
-    if [[ "\${!i}" == --env-file ]]; then
-        next=\$((i + 1)); snapshot="\${!next}"; break
-    fi
+    case "\${!i}" in
+        --env-file) next=\$((i + 1)); snapshot="\${!next}" ;;
+        config|pull|up) action="\${!i}" ;;
+        --quiet) quiet=1 ;;
+    esac
 done
 server=""
 while IFS= read -r line || [[ -n "\${line}" ]]; do
     case "\${line}" in ENGRAM_SERVER_IMAGE=*) server="\${line#*=}";; esac
 done < "\${snapshot}"
+for key in ENGRAM_SERVER_IMAGE ENGRAM_OPERATOR_IMAGE ENGRAM_POSTGRES_IMAGE POSTGRES_PASSWORD ENGRAM_AUTH_ADMIN_TOKEN ENGRAM_AUTH_DISABLED ENGRAM_VAULT_KEY ENGRAM_EMBEDDING_API_KEY; do
+    [[ -z "\${!key+x}" ]] || present+="\${key},"
+done
 mode="\$(stat -c '%a' "\${snapshot}")"
-printf '%s|%s|%s|%s\\n' "\${*: -1}" "\${snapshot}" "\${mode}" "\${server}" >> "${marker}"
-case "\${*: -1}" in
-    config) cp "${after_config}" "${source}" ;;
-    pull) cp "${after_pull}" "${source}" ;;
+printf '%s|%s|%s|%s|%s|%s\\n' "\${action}" "\${snapshot}" "\${mode}" "\${server}" "\${quiet}" "\${present}" >> "${marker}"
+case "\${action}" in
+    config) [[ "${after_config}" == "${source}" ]] || cp "${after_config}" "${source}" ;;
+    pull) [[ "${after_pull}" == "${source}" ]] || cp "${after_pull}" "${source}" ;;
 esac
 EOF
     chmod +x "${mock_bin}/docker"
     set +e
-    PATH="${mock_bin}:${PATH}" "$@" bash "${PREFLIGHT}" "${source}"
+    PATH="${mock_bin}:${PATH}" env -u COMPOSE_FILE -u COMPOSE_PATH_SEPARATOR -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE -u COMPOSE_PROJECT_DIRECTORY "$@" bash "${PREFLIGHT}" "${source}" >"${WRAPPER_OUTPUT}" 2>&1
     local rc=$?
     set -e
     rm -rf "${mock_bin}"
@@ -54,61 +64,105 @@ EOF
 }
 
 assert_rejected_before_compose() {
-    local name="$1" source="$2" replacement="$3" marker="${2}.compose" rc=0
-    run_wrapper "${source}" "${marker}" "${replacement}" "${replacement}" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE || rc=$?
-    if [[ ${rc} -ne 0 && ! -e ${marker} ]]; then pass "${name}"; else fail "${name}"; fi
+    local name="$1" source="$2" marker="${2}.compose" rc=0
+    shift 2
+    WRAPPER_OUTPUT="${source}.output"
+    run_wrapper "${source}" "${marker}" "${source}" "${source}" "$@" || rc=$?
+    if [[ ${rc} -ne 0 && ! -e ${marker} ]] && assert_no_secret_output "${WRAPPER_OUTPUT}"; then pass "${name}"; else fail "${name}"; fi
     rm -f "${marker}"
 }
 
 assert_frozen_compose_input() {
-    local marker="$1" expected="$2" source="$3" config=0 pull=0 up=0 invalid=0 snapshot_path="" line action snapshot mode actual
+    local marker="$1" expected="$2" source="$3" config=0 pull=0 up=0 invalid=0 snapshot_path="" line action snapshot mode actual quiet present
     while IFS= read -r line || [[ -n "${line}" ]]; do
-        IFS='|' read -r action snapshot mode actual <<<"${line}"
-        [[ "${snapshot}" != "${source}" && "${mode}" == 600 && ( -z "${snapshot_path}" || "${snapshot}" == "${snapshot_path}" ) && "${actual}" == "${expected}" ]] || { invalid=1; continue; }
+        IFS='|' read -r action snapshot mode actual quiet present <<<"${line}"
+        [[ "${snapshot}" != "${source}" && "${mode}" == 600 && ( -z "${snapshot_path}" || "${snapshot}" == "${snapshot_path}" ) && "${actual}" == "${expected}" && -z "${present}" ]] || { invalid=1; continue; }
         snapshot_path="${snapshot}"
-        case "${action}" in config) config=1 ;; pull) pull=1 ;; -d) up=1 ;; *) invalid=1 ;; esac
+        case "${action}" in config) [[ ${quiet} -eq 1 ]] || invalid=1; config=1 ;; pull) pull=1 ;; up) up=1 ;; *) invalid=1 ;; esac
     done < "${marker}"
     [[ ${config} -eq 1 && ${pull} -eq 1 && ${up} -eq 1 && ${invalid} -eq 0 ]]
+}
+
+assert_no_secret_output() {
+    local output="$1" secret
+    for secret in database-sentinel admin-sentinel vault-sentinel provider-sentinel; do
+        [[ "$(<"${output}")" != *"${secret}"* ]] || return 1
+    done
 }
 
 main() {
     local tmp=".image-preflight-test.$$"
     mkdir "${tmp}"
     trap "rm -rf '${tmp}'" EXIT
-    local server="ghcr.io/example/server@sha256:$(printf 'a%.0s' {1..64})"
-    local operator="ghcr.io/example/operator@sha256:$(printf 'b%.0s' {1..64})"
-    local postgres="ghcr.io/example/postgres@sha256:$(printf 'c%.0s' {1..64})"
-    local changed_after_config="ghcr.io/example/server@sha256:$(printf 'd%.0s' {1..64})"
-    local changed_after_pull="ghcr.io/example/server@sha256:$(printf 'e%.0s' {1..64})"
-    local replacement_after_config="${tmp}/after-config.env" replacement_after_pull="${tmp}/after-pull.env" marker="${tmp}/valid.compose" rc=0
+    local server="ghcr.io/thebtf/engram@sha256:$(printf 'a%.0s' {1..64})"
+    local operator="ghcr.io/thebtf/engram-operator-console@sha256:$(printf 'b%.0s' {1..64})"
+    local postgres="ghcr.io/thebtf/engram-postgres@sha256:$(printf 'c%.0s' {1..64})"
+    local marker="${tmp}/valid.compose" rc=0
     make_env "${tmp}/valid.env" "${server}" "${operator}" "${postgres}"
-    make_env "${replacement_after_config}" "${changed_after_config}" "${operator}" "${postgres}"
-    make_env "${replacement_after_pull}" "${changed_after_pull}" "${operator}" "${postgres}"
-    run_wrapper "${tmp}/valid.env" "${marker}" "${replacement_after_config}" "${replacement_after_pull}" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE || rc=$?
-    if [[ ${rc} -eq 0 && ! -e ${tmp}/valid.env.injected ]] && assert_frozen_compose_input "${marker}" "${server}" "${tmp}/valid.env"; then
-        pass 'valid input uses one frozen snapshot through config pull and up without evaluation'
+    WRAPPER_OUTPUT="${tmp}/valid.output"
+    run_wrapper "${tmp}/valid.env" "${marker}" "${tmp}/valid.env" "${tmp}/valid.env" env ENGRAM_SERVER_IMAGE="${server}" ENGRAM_OPERATOR_IMAGE="${operator}" ENGRAM_POSTGRES_IMAGE="${postgres}" POSTGRES_PASSWORD=database-sentinel ENGRAM_AUTH_ADMIN_TOKEN=admin-sentinel ENGRAM_AUTH_DISABLED=false ENGRAM_VAULT_KEY=vault-sentinel ENGRAM_EMBEDDING_API_KEY=provider-sentinel || rc=$?
+    if [[ ${rc} -eq 0 && ! -e ${tmp}/valid.env.injected ]] && assert_frozen_compose_input "${marker}" "${server}" "${tmp}/valid.env" && assert_no_secret_output "${WRAPPER_OUTPUT}"; then
+        pass 'config quietly validates and all mutations use only the frozen snapshot'
     else
-        fail 'valid input uses one frozen snapshot through config pull and up without evaluation'
+        fail 'config quietly validates and all mutations use only the frozen snapshot'
     fi
     rm -f "${marker}"
 
     make_env "${tmp}/invalid.env" "${server}" "${operator}" "${postgres}"
     printf 'ENGRAM_SERVER_IMAGE=%s\n' "${server}" >>"${tmp}/invalid.env"
-    assert_rejected_before_compose 'duplicate bare assignment rejected' "${tmp}/invalid.env" "${replacement_after_config}"
+    assert_rejected_before_compose 'duplicate bare assignment rejected' "${tmp}/invalid.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
 
     for syntax in "export ENGRAM_SERVER_IMAGE=${server}" "ENGRAM_SERVER_IMAGE=\"${server}\"" "ENGRAM_SERVER_IMAGE=${server} # pinned" "ENGRAM_SERVER_IMAGE=\${OTHER_IMAGE}"; do
         make_env "${tmp}/syntax.env" "${server}" "${operator}" "${postgres}"
         printf '%s\n' "${syntax}" >>"${tmp}/syntax.env"
-        assert_rejected_before_compose "managed nonliteral syntax rejected: ${syntax%%=*}" "${tmp}/syntax.env" "${replacement_after_config}"
+        assert_rejected_before_compose "managed nonliteral syntax rejected: ${syntax%%=*}" "${tmp}/syntax.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
     done
 
     make_env "${tmp}/malformed.env" 'ghcr.io/example/server:latest' "${operator}" "${postgres}"
-    assert_rejected_before_compose 'mutable tag rejected before compose' "${tmp}/malformed.env" "${replacement_after_config}"
+    assert_rejected_before_compose 'mutable tag rejected before compose' "${tmp}/malformed.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+    make_env "${tmp}/wrong-registry-server.env" "registry.example/thebtf/engram@sha256:$(printf 'a%.0s' {1..64})" "${operator}" "${postgres}"
+    assert_rejected_before_compose 'server wrong registry rejected before compose' "${tmp}/wrong-registry-server.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+    make_env "${tmp}/near-miss-registry-server.env" "ghcrXio/thebtf/engram@sha256:$(printf 'a%.0s' {1..64})" "${operator}" "${postgres}"
+    assert_rejected_before_compose 'server near-miss registry rejected before compose' "${tmp}/near-miss-registry-server.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+    make_env "${tmp}/wrong-registry-operator.env" "${server}" "registry.example/thebtf/engram-operator-console@sha256:$(printf 'b%.0s' {1..64})" "${postgres}"
+    assert_rejected_before_compose 'operator wrong registry rejected before compose' "${tmp}/wrong-registry-operator.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+    make_env "${tmp}/wrong-registry-postgres.env" "${server}" "${operator}" "registry.example/thebtf/engram-postgres@sha256:$(printf 'c%.0s' {1..64})"
+    assert_rejected_before_compose 'postgres wrong registry rejected before compose' "${tmp}/wrong-registry-postgres.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+
+    make_env "${tmp}/wrong-repository-server.env" "ghcr.io/thebtf/engram-other@sha256:$(printf 'a%.0s' {1..64})" "${operator}" "${postgres}"
+    assert_rejected_before_compose 'server wrong repository rejected before compose' "${tmp}/wrong-repository-server.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+    make_env "${tmp}/wrong-repository-operator.env" "${server}" "ghcr.io/thebtf/engram-operator-console-other@sha256:$(printf 'b%.0s' {1..64})" "${postgres}"
+    assert_rejected_before_compose 'operator wrong repository rejected before compose' "${tmp}/wrong-repository-operator.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+    make_env "${tmp}/wrong-repository-postgres.env" "${server}" "${operator}" "ghcr.io/thebtf/engram-postgres-other@sha256:$(printf 'c%.0s' {1..64})"
+    assert_rejected_before_compose 'postgres wrong repository rejected before compose' "${tmp}/wrong-repository-postgres.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
 
     make_env "${tmp}/override.env" "${server}" "${operator}" "${postgres}"
-    marker="${tmp}/override.compose"; rc=0
-    run_wrapper "${tmp}/override.env" "${marker}" "${replacement_after_config}" "${replacement_after_pull}" env ENGRAM_SERVER_IMAGE="${changed_after_config}" || rc=$?
-    if [[ ${rc} -ne 0 && ! -e ${marker} ]]; then pass 'different process override rejected before compose'; else fail 'different process override rejected before compose'; fi
+    assert_rejected_before_compose 'different inherited security value is rejected before compose' "${tmp}/override.env" env ENGRAM_AUTH_ADMIN_TOKEN=conflicting-admin-token
+
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        [[ "${line}" == ENGRAM_AUTH_DISABLED=* ]] || printf '%s\n' "${line}"
+    done <"${tmp}/valid.env" >"${tmp}/missing.env"
+    marker="${tmp}/missing.compose"; rc=0; WRAPPER_OUTPUT="${tmp}/missing.output"
+    run_wrapper "${tmp}/missing.env" "${marker}" "${tmp}/missing.env" "${tmp}/missing.env" env ENGRAM_AUTH_DISABLED=true || rc=$?
+    if [[ ${rc} -eq 0 ]] && assert_frozen_compose_input "${marker}" "${server}" "${tmp}/missing.env" && assert_no_secret_output "${WRAPPER_OUTPUT}"; then
+        pass 'absent snapshot keys cannot be injected from the parent environment'
+    else
+        fail 'absent snapshot keys cannot be injected from the parent environment'
+    fi
+
+    for key in COMPOSE_FILE COMPOSE_PATH_SEPARATOR COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_ENV_FILES COMPOSE_DISABLE_ENV_FILE COMPOSE_PROJECT_DIRECTORY COMPOSE_CONVERT_WINDOWS_PATHS COMPOSE_REMOVE_ORPHANS COMPOSE_IGNORE_ORPHANS; do
+        make_env "${tmp}/compose.env" "${server}" "${operator}" "${postgres}"
+        assert_rejected_before_compose "${key} in process environment is rejected before compose" "${tmp}/compose.env" env "${key}=untrusted"
+        make_env "${tmp}/compose-snapshot.env" "${server}" "${operator}" "${postgres}"
+        printf '%s=untrusted\n' "${key}" >>"${tmp}/compose-snapshot.env"
+        assert_rejected_before_compose "${key} in frozen env file is rejected before compose" "${tmp}/compose-snapshot.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+    done
+    make_env "${tmp}/compose-whitespace.env" "${server}" "${operator}" "${postgres}"
+    printf '  COMPOSE_PROJECT_NAME = untrusted\n' >>"${tmp}/compose-whitespace.env"
+    assert_rejected_before_compose 'whitespace-form COMPOSE_PROJECT_NAME is rejected before compose' "${tmp}/compose-whitespace.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+    make_env "${tmp}/compose-export.env" "${server}" "${operator}" "${postgres}"
+    printf 'export COMPOSE_REMOVE_ORPHANS=untrusted\n' >>"${tmp}/compose-export.env"
+    assert_rejected_before_compose 'export-form COMPOSE_REMOVE_ORPHANS is rejected before compose' "${tmp}/compose-export.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
 
     printf '\n%d tests, %d failures\n' "${TESTS_RUN}" "${TESTS_FAILED}"
     [[ ${TESTS_FAILED} -eq 0 ]]

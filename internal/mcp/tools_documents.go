@@ -172,12 +172,18 @@ func (s *Server) handleRemoveDocument(ctx context.Context, args json.RawMessage)
 		return "", err
 	}
 
-	var params struct {
-		Collection string
-		Path       string
+	collection, collectionPresent, err := optionalStringArg(m, "collection")
+	if err != nil {
+		return "", fmt.Errorf("remove_document: %w", err)
 	}
-	params.Collection = coerceString(m["collection"], "")
-	params.Path = coerceString(m["path"], "")
+	path, pathPresent, err := optionalStringArg(m, "path")
+	if err != nil {
+		return "", fmt.Errorf("remove_document: %w", err)
+	}
+	if !collectionPresent || !pathPresent || collection == "" || path == "" {
+		return "", fmt.Errorf("collection and path are required")
+	}
+	params := struct{ Collection, Path string }{Collection: collection, Path: path}
 	if params.Collection == "" || params.Path == "" {
 		return "", fmt.Errorf("collection and path are required")
 	}
@@ -205,16 +211,15 @@ func (s *Server) handleIngestDocument(ctx context.Context, args json.RawMessage)
 		return "", err
 	}
 
-	var params struct {
-		Collection string
-		Path       string
-		Content    string
-		Title      string
+	values := make(map[string]string, 4)
+	for _, key := range []string{"collection", "path", "content", "title"} {
+		value, _, fieldErr := optionalStringArg(m, key)
+		if fieldErr != nil {
+			return "", fmt.Errorf("ingest_document: %w", fieldErr)
+		}
+		values[key] = value
 	}
-	params.Collection = coerceString(m["collection"], "")
-	params.Path = coerceString(m["path"], "")
-	params.Content = coerceString(m["content"], "")
-	params.Title = coerceString(m["title"], "")
+	params := struct{ Collection, Path, Content, Title string }{Collection: values["collection"], Path: values["path"], Content: values["content"], Title: values["title"]}
 	if params.Collection == "" || params.Path == "" || params.Content == "" {
 		return "", fmt.Errorf("collection, path, and content are required")
 	}

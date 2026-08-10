@@ -14,7 +14,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/sessions"
-	"github.com/thebtf/engram/internal/worker/session"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -196,68 +195,6 @@ func (s *Service) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 		Int64("sessionId", id).
 		Int("promptNumber", req.PromptNumber).
 		Msg("SDK agent session initialized")
-
-	s.broadcastProcessingStatus()
-	w.WriteHeader(http.StatusOK)
-}
-
-// ObservationRequest is the request body for posting observations.
-type ObservationRequest struct {
-	ClaudeSessionID string `json:"claudeSessionId"`
-	Project         string `json:"project"`
-	ToolName        string `json:"tool_name"`
-	ToolInput       any    `json:"tool_input"`
-	ToolResponse    any    `json:"tool_response"`
-	CWD             string `json:"cwd"`
-}
-
-// handleObservation godoc
-// @Summary Post observation from hook
-// @Description Handles observation posting from post-tool-use hook. Creates session on-the-fly if not found.
-// @Tags Sessions
-// @Accept json
-// @Produce json
-// @Security ApiKeyAuth
-// @Param body body ObservationRequest true "Observation data"
-// @Success 200 "OK"
-// @Failure 400 {string} string "bad request"
-// @Failure 500 {string} string "internal error"
-// @Router /api/sessions/observations [post]
-func (s *Service) handleObservation(w http.ResponseWriter, r *http.Request) {
-	var req ObservationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	sess, err := s.sessionStore.FindAnySDKSession(r.Context(), req.ClaudeSessionID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if sess == nil {
-		// Create session on-the-fly with project from request.
-		// QueueObservation will auto-initialize the session manager from the DB,
-		// so we only need the database ID here.
-		id, err := s.sessionStore.CreateSDKSession(r.Context(), req.ClaudeSessionID, req.Project, "")
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		sess = &models.SDKSession{ID: id}
-	}
-
-	// Queue observation with user prompt context (Learning Memory v3 FR-4)
-	if err := s.sessionManager.QueueObservation(r.Context(), sess.ID, session.ObservationData{
-		ToolName:     req.ToolName,
-		ToolInput:    req.ToolInput,
-		ToolResponse: req.ToolResponse,
-		CWD:          req.CWD,
-		UserPrompt:   s.GetLastPrompt(sess.ID),
-	}); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
 	s.broadcastProcessingStatus()
 	w.WriteHeader(http.StatusOK)

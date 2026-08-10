@@ -1,6 +1,8 @@
 // Package bulkops implements admin-only bulk operations on memories and
-// crystallization candidates with pre-op snapshot capture for rollback (FR-F6.a).
+// crystallization candidates with rollback snapshots.
 //
+// bulk_promote captures candidate state under the promotion transaction so a
+// rollback contains only successfully mutated candidates.
 // All exported operations require auth.Identity.Role == auth.RoleAdmin.
 // Non-admin callers receive ErrAdminRequired.
 //
@@ -98,9 +100,9 @@ func NewFacade(
 // Dry-run: when op.DryRun=true, Execute computes the would-affect count and returns
 // immediately with DryRun=true and no DB mutations. No snapshot row is created.
 //
-// Committed: before executing the op, a snapshot is captured with the full before-state
-// of affected rows (JSONB per ADR-F-003). The snapshot is marked 'committed' after
-// the op completes. On partial failure, errors are collected in ExecuteResult.Errors.
+// Committed operations create rollback snapshots. bulk_promote captures each
+// successful candidate's full before-state under its promotion transaction.
+// On partial failure, errors are collected in ExecuteResult.Errors.
 func (f *Facade) Execute(ctx context.Context, identity auth.Identity, op BulkOp) (*ExecuteResult, error) {
 	// Admin gate — spec §FR-F6 CHK010-ADDED.
 	if identity.Role != auth.RoleAdmin {
@@ -130,15 +132,11 @@ func (f *Facade) Execute(ctx context.Context, identity auth.Identity, op BulkOp)
 func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity, op BulkOp) (*ExecuteResult, error) {
 	ids := op.CandidateIDs
 
-	if op.DryRun {
-		return &ExecuteResult{
-			DryRun:      true,
-			WouldAffect: len(ids),
-			Promoted:    []int64{},
-		}, nil
-	}
 	if f.candidateStore == nil {
 		return nil, fmt.Errorf("bulk_promote: candidate store not available")
+	}
+	if op.DryRun {
+		return f.previewBulkPromote(ctx, ids)
 	}
 	if f.snapshotStore == nil {
 		return nil, fmt.Errorf("bulk_promote: snapshot store not available")
@@ -146,12 +144,13 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 	if len(ids) == 0 {
 		return &ExecuteResult{DryRun: false, AffectedCount: 0, Promoted: []int64{}}, nil
 	}
+	if f.auditStore == nil {
+		return nil, fmt.Errorf("bulk_promote: audit store not available")
+	}
 
 	actor := resolveActor(identity)
-	snapshotID, beforeState, err := f.capturePromoteBeforeState(ctx, ids)
-	if err != nil {
-		return nil, fmt.Errorf("bulk_promote snapshot capture: %w", err)
-	}
+	snapshotID := uuid.NewString()
+	beforeState := json.RawMessage(`{}`)
 	params := op.Parameters
 	if len(params) == 0 {
 		params, _ = json.Marshal(map[string]any{"candidate_ids": ids})
@@ -169,6 +168,7 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 		candidate   *models.CrystallizationCandidate
 		memory      *models.Memory
 	}
+	candidateBefore := make(map[int64]json.RawMessage, len(ids))
 	var promotionAudits []promotionAudit
 	result := &ExecuteResult{SnapshotID: snapshotID, Promoted: []int64{}}
 	txErr := f.candidateStore.GetDB().WithContext(ctx).Transaction(func(tx *gormpkg.DB) error {
@@ -185,6 +185,11 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 				log.Warn().Err(getErr).Int64("candidate_id", id).Msg("bulk_promote: get candidate failed")
 				continue
 			}
+			before, marshalErr := json.Marshal(candidate)
+			if marshalErr != nil {
+				return fmt.Errorf("bulk_promote capture candidate %d: %w", id, marshalErr)
+			}
+
 			project := ""
 			if len(candidate.AffectedProjects) > 0 {
 				project = candidate.AffectedProjects[0]
@@ -209,10 +214,18 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 			} else if createdMemory != nil {
 				result.Promoted = append(result.Promoted, createdMemory.ID)
 			}
+			candidateBefore[id] = before
 			promotionAudits = append(promotionAudits, promotionAudit{candidateID: id, candidate: promoted, memory: createdMemory})
 		}
-		if amendErr := f.snapshotStore.AmendPromoteEntriesTx(ctx, tx, created.SnapshotID, result.Promoted); amendErr != nil {
+		if amendErr := f.snapshotStore.AmendPromoteEntriesWithCandidatesTx(ctx, tx, created.SnapshotID, candidateBefore, result.Promoted); amendErr != nil {
 			return fmt.Errorf("bulk_promote amend snapshot entries: %w", amendErr)
+		}
+		if auditErr := f.auditStore.LogTx(ctx, tx, gormdb.AuditLogEntry{
+			Action: "bulk_promote",
+			Actor:  actor,
+			Reason: fmt.Sprintf("bulk_promote snapshot=%s affected=%d", result.SnapshotID, result.AffectedCount),
+		}); auditErr != nil {
+			return fmt.Errorf("bulk_promote audit: %w", auditErr)
 		}
 		return nil
 	})
@@ -223,133 +236,150 @@ func (f *Facade) executeBulkPromote(ctx context.Context, identity auth.Identity,
 		f.candidateStore.LogPromoteAudit(promotion.candidateID, promotion.candidate, promotion.memory)
 	}
 
-	if f.auditStore != nil {
-		_ = f.auditStore.Log(ctx, gormdb.AuditLogEntry{
-			Action: "bulk_promote",
-			Actor:  actor,
-			Reason: fmt.Sprintf("bulk_promote snapshot=%s affected=%d", result.SnapshotID, result.AffectedCount),
-		})
-	}
 	return result, nil
 }
 
 // --- bulk_delete ---
 
 func (f *Facade) executeBulkDelete(ctx context.Context, identity auth.Identity, op BulkOp) (*ExecuteResult, error) {
-	ids := op.MemoryIDs
-
-	if op.DryRun {
-		return &ExecuteResult{DryRun: true, WouldAffect: len(ids)}, nil
-	}
-
-	if f.memoryStore == nil {
-		return nil, fmt.Errorf("bulk_delete: memory store not available")
-	}
-
-	if len(ids) == 0 {
-		return &ExecuteResult{DryRun: false, AffectedCount: 0}, nil
-	}
-
-	actor := resolveActor(identity)
-	snapshotID, beforeState, err := f.captureMemoryBeforeState(ctx, ids)
-	if err != nil {
-		return nil, fmt.Errorf("bulk_delete snapshot capture: %w", err)
-	}
-
-	params := op.Parameters
-	if len(params) == 0 {
-		params, _ = json.Marshal(map[string]any{"memory_ids": ids})
-	}
-	snap, err := models.NewBulkOpSnapshot(snapshotID, models.SnapshotOpBulkDelete, actor, beforeState)
-	if err != nil {
-		return nil, fmt.Errorf("bulk_delete new_snapshot: %w", err)
-	}
-	snap.AffectedMemoryIDs = ids
-	snap.SourceSessionID = op.SourceSessionID
-	snap.Parameters = params
-
-	created, err := f.snapshotStore.Create(ctx, snap)
-	if err != nil {
-		return nil, fmt.Errorf("bulk_delete store_snapshot: %w", err)
-	}
-
-	result := &ExecuteResult{SnapshotID: created.SnapshotID}
-	for _, id := range ids {
-		if err := f.memoryStore.Delete(ctx, id); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("memory %d: %v", id, err))
-			continue
-		}
-		result.AffectedCount++
-	}
-
-	if f.auditStore != nil {
-		_ = f.auditStore.Log(ctx, gormdb.AuditLogEntry{
-			Action: "bulk_delete",
-			Actor:  actor,
-			Reason: fmt.Sprintf("bulk_delete snapshot=%s affected=%d", created.SnapshotID, result.AffectedCount),
-		})
-	}
-
-	return result, nil
+	return f.executeBulkMemoryMutation(ctx, identity, op, func(ctx context.Context, tx *gormpkg.DB, id int64) error {
+		return f.memoryStore.DeleteTx(ctx, tx, id)
+	})
 }
 
 // --- bulk_supersede ---
 
 func (f *Facade) executeBulkSupersede(ctx context.Context, identity auth.Identity, op BulkOp) (*ExecuteResult, error) {
-	ids := op.MemoryIDs
+	return f.executeBulkMemoryMutation(ctx, identity, op, func(ctx context.Context, tx *gormpkg.DB, id int64) error {
+		_, err := f.memoryStore.SupersedeTx(ctx, tx, id)
+		return err
+	})
+}
 
-	if op.DryRun {
-		return &ExecuteResult{DryRun: true, WouldAffect: len(ids)}, nil
-	}
-
+func (f *Facade) executeBulkMemoryMutation(ctx context.Context, identity auth.Identity, op BulkOp, mutate func(context.Context, *gormpkg.DB, int64) error) (*ExecuteResult, error) {
 	if f.memoryStore == nil {
-		return nil, fmt.Errorf("bulk_supersede: memory store not available")
+		return nil, fmt.Errorf("%s: memory store not available", op.Type)
 	}
-
-	if len(ids) == 0 {
+	if op.DryRun {
+		return f.previewBulkMemoryMutation(ctx, op)
+	}
+	if f.snapshotStore == nil {
+		return nil, fmt.Errorf("%s: snapshot store not available", op.Type)
+	}
+	if len(op.MemoryIDs) == 0 {
 		return &ExecuteResult{DryRun: false, AffectedCount: 0}, nil
 	}
-
-	actor := resolveActor(identity)
-	snapshotID, beforeState, err := f.captureMemoryBeforeState(ctx, ids)
-	if err != nil {
-		return nil, fmt.Errorf("bulk_supersede snapshot capture: %w", err)
+	if f.auditStore == nil {
+		return nil, fmt.Errorf("%s: audit store not available", op.Type)
 	}
 
+	result := &ExecuteResult{}
+	actor := resolveActor(identity)
 	params := op.Parameters
 	if len(params) == 0 {
-		params, _ = json.Marshal(map[string]any{"memory_ids": ids})
-	}
-	snap, err := models.NewBulkOpSnapshot(snapshotID, models.SnapshotOpBulkSupersede, actor, beforeState)
-	if err != nil {
-		return nil, fmt.Errorf("bulk_supersede new_snapshot: %w", err)
-	}
-	snap.AffectedMemoryIDs = ids
-	snap.SourceSessionID = op.SourceSessionID
-	snap.Parameters = params
-
-	created, err := f.snapshotStore.Create(ctx, snap)
-	if err != nil {
-		return nil, fmt.Errorf("bulk_supersede store_snapshot: %w", err)
+		params, _ = json.Marshal(map[string]any{"memory_ids": op.MemoryIDs})
 	}
 
-	result := &ExecuteResult{SnapshotID: created.SnapshotID}
+	txErr := f.memoryStore.GetDB().WithContext(ctx).Transaction(func(tx *gormpkg.DB) error {
+		entries, capturedIDs, missingIDs, err := f.captureMemoryBeforeState(ctx, tx, op.MemoryIDs)
+		if err != nil {
+			return fmt.Errorf("%s snapshot capture: %w", op.Type, err)
+		}
+		for _, id := range missingIDs {
+			result.Errors = append(result.Errors, fmt.Sprintf("memory %d: %v", id, gormpkg.ErrRecordNotFound))
+		}
+		successfulIDs := make([]int64, 0, len(capturedIDs))
+		for _, id := range capturedIDs {
+			if err := mutate(ctx, tx, id); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("memory %d: %v", id, err))
+				continue
+			}
+			successfulIDs = append(successfulIDs, id)
+		}
+		if len(successfulIDs) == 0 {
+			return nil
+		}
+
+		beforeState := make(map[string]models.SnapshotEntry, len(successfulIDs))
+		for _, id := range successfulIDs {
+			beforeState[fmt.Sprintf("%d", id)] = entries[id]
+		}
+		encodedBeforeState, err := json.Marshal(beforeState)
+		if err != nil {
+			return fmt.Errorf("%s serialize before_state: %w", op.Type, err)
+		}
+		snap, err := models.NewBulkOpSnapshot(uuid.NewString(), op.Type, actor, encodedBeforeState)
+		if err != nil {
+			return fmt.Errorf("%s new_snapshot: %w", op.Type, err)
+		}
+		snap.AffectedMemoryIDs = successfulIDs
+		snap.SourceSessionID = op.SourceSessionID
+		snap.Parameters = params
+		created, err := f.snapshotStore.CreateTx(ctx, tx, snap)
+		if err != nil {
+			return fmt.Errorf("%s store_snapshot: %w", op.Type, err)
+		}
+		if err := f.auditStore.LogTx(ctx, tx, gormdb.AuditLogEntry{
+			Action: string(op.Type),
+			Actor:  actor,
+			Reason: fmt.Sprintf("%s snapshot=%s affected=%d", op.Type, created.SnapshotID, len(successfulIDs)),
+		}); err != nil {
+			return fmt.Errorf("%s audit: %w", op.Type, err)
+		}
+		result.SnapshotID = created.SnapshotID
+		result.AffectedCount = len(successfulIDs)
+		return nil
+	})
+	if txErr != nil {
+		return nil, txErr
+	}
+	return result, nil
+}
+
+func (f *Facade) previewBulkPromote(ctx context.Context, ids []int64) (*ExecuteResult, error) {
+	result := &ExecuteResult{DryRun: true, Promoted: []int64{}}
+	seen := make(map[int64]struct{}, len(ids))
 	for _, id := range ids {
-		if _, err := f.memoryStore.Supersede(ctx, id); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("memory %d: %v", id, err))
+		if _, ok := seen[id]; ok {
 			continue
 		}
-		result.AffectedCount++
+		seen[id] = struct{}{}
+		candidate, err := f.candidateStore.Get(ctx, id)
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("candidate %d: get: %v", id, err))
+			continue
+		}
+		if candidate.Status != models.CandidateStatusPending {
+			result.Errors = append(result.Errors, fmt.Sprintf("candidate %d: %v: %s → promoted", id, gormdb.ErrInvalidTransition, candidate.Status))
+			continue
+		}
+		result.WouldAffect++
 	}
+	return result, nil
+}
 
-	if f.auditStore != nil {
-		_ = f.auditStore.Log(ctx, gormdb.AuditLogEntry{
-			Action: "bulk_supersede",
-			Actor:  actor,
-			Reason: fmt.Sprintf("bulk_supersede snapshot=%s affected=%d", created.SnapshotID, result.AffectedCount),
-		})
+func (f *Facade) previewBulkMemoryMutation(ctx context.Context, op BulkOp) (*ExecuteResult, error) {
+	result := &ExecuteResult{DryRun: true}
+	seen := make(map[int64]struct{}, len(op.MemoryIDs))
+	for _, id := range op.MemoryIDs {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		mem, err := f.memoryStore.GetForSnapshot(ctx, id)
+		if err != nil {
+			if errors.Is(err, gormpkg.ErrRecordNotFound) {
+				result.Errors = append(result.Errors, fmt.Sprintf("memory %d: %v", id, gormpkg.ErrRecordNotFound))
+				continue
+			}
+			return nil, fmt.Errorf("%s dry-run read memory %d: %w", op.Type, id, err)
+		}
+		if op.Type == models.SnapshotOpBulkSupersede && mem.Status != "active" {
+			result.Errors = append(result.Errors, fmt.Sprintf("memory %d: not found or already superseded", id))
+			continue
+		}
+		result.WouldAffect++
 	}
-
 	return result, nil
 }
 
@@ -410,49 +440,34 @@ func (f *Facade) captureCandidateBeforeState(ctx context.Context, ids []int64) (
 	return snapshotID, json.RawMessage(bs), nil
 }
 
-// capturePromoteBeforeState captures candidate before-state as typed SnapshotEntry rows.
-// Entity-prefixed keys keep candidate IDs distinct from promoted memory IDs.
-func (f *Facade) capturePromoteBeforeState(ctx context.Context, candidateIDs []int64) (string, json.RawMessage, error) {
-	snapshotID := uuid.New().String()
-	state := make(map[string]models.SnapshotEntry, len(candidateIDs))
-	for _, id := range candidateIDs {
-		c, err := f.candidateStore.Get(ctx, id)
+// captureMemoryBeforeState fetches active memory rows for a bulk mutation.
+// Missing IDs are omitted; all other read failures abort before mutation.
+func (f *Facade) captureMemoryBeforeState(ctx context.Context, tx *gormpkg.DB, ids []int64) (map[int64]models.SnapshotEntry, []int64, []int64, error) {
+	state := make(map[int64]models.SnapshotEntry, len(ids))
+	capturedIDs := make([]int64, 0, len(ids))
+	missingIDs := make([]int64, 0)
+	for _, id := range ids {
+		mem, err := f.memoryStore.GetForSnapshotTx(ctx, tx, id)
 		if err != nil {
-			state[fmt.Sprintf("candidate:%d", id)] = models.SnapshotEntry{Kind: models.EntryKindRestore}
-			continue
-		}
-		before, marshalErr := json.Marshal(c)
-		if marshalErr != nil {
-			return "", nil, fmt.Errorf("capturePromoteBeforeState: marshal candidate %d: %w", id, marshalErr)
-		}
-		state[fmt.Sprintf("candidate:%d", id)] = models.SnapshotEntry{Kind: models.EntryKindRestore, Before: json.RawMessage(before)}
-	}
-	bs, err := json.Marshal(state)
-	if err != nil {
-		return "", nil, fmt.Errorf("capturePromoteBeforeState: serialize: %w", err)
-	}
-	return snapshotID, json.RawMessage(bs), nil
-}
-
-// captureMemoryBeforeState fetches memory rows and serializes them as JSONB.
-func (f *Facade) captureMemoryBeforeState(ctx context.Context, ids []int64) (string, json.RawMessage, error) {
-	snapshotID := uuid.New().String()
-	state := make(map[string]any, len(ids))
-	if f.memoryStore != nil {
-		for _, id := range ids {
-			mem, err := f.memoryStore.Get(ctx, id)
-			if err != nil {
-				state[fmt.Sprintf("%d", id)] = nil
+			if errors.Is(err, gormpkg.ErrRecordNotFound) {
+				missingIDs = append(missingIDs, id)
 				continue
 			}
-			state[fmt.Sprintf("%d", id)] = mem
+			return nil, nil, nil, fmt.Errorf("read memory %d before_state: %w", id, err)
 		}
+		before, err := json.Marshal(mem)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("serialize memory %d before_state: %w", id, err)
+		}
+		expectedVersion := mem.Version + 1
+		state[id] = models.SnapshotEntry{
+			Kind:            models.EntryKindRestore,
+			Before:          before,
+			ExpectedVersion: &expectedVersion,
+		}
+		capturedIDs = append(capturedIDs, id)
 	}
-	bs, err := json.Marshal(state)
-	if err != nil {
-		return "", nil, fmt.Errorf("serialize memory before_state: %w", err)
-	}
-	return snapshotID, json.RawMessage(bs), nil
+	return state, capturedIDs, missingIDs, nil
 }
 
 func candidateIDsToInt64(ids []int64) []int64 {

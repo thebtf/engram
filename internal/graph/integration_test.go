@@ -246,10 +246,14 @@ func TestNodesStore_MetadataDefaults_Create(t *testing.T) {
 		name     string
 		metadata []byte
 		expected string
+		preserve bool
 	}{
 		{name: "nil", expected: "{}"},
 		{name: "empty", metadata: []byte{}, expected: "{}"},
-		{name: "non-empty", metadata: []byte(`{"source":"test"}`), expected: `{"source":"test"}`},
+		{name: "whitespace", metadata: []byte(" \t\n"), expected: "{}"},
+		{name: "null", metadata: []byte("null"), expected: "{}"},
+		{name: "whitespace-null", metadata: []byte(" \tnull\n"), expected: "{}"},
+		{name: "object", metadata: []byte(`{"source":"test"}`), expected: `{"source":"test"}`, preserve: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			node, err := ns.Create(context.Background(), &models.KnowledgeNode{
@@ -257,7 +261,7 @@ func TestNodesStore_MetadataDefaults_Create(t *testing.T) {
 			})
 			require.NoError(t, err)
 			assert.JSONEq(t, tc.expected, string(node.Metadata))
-			if len(tc.metadata) != 0 {
+			if tc.preserve {
 				assert.Equal(t, tc.metadata, node.Metadata)
 			}
 
@@ -290,10 +294,14 @@ func TestNodesStore_MetadataDefaults_Update(t *testing.T) {
 		name     string
 		metadata []byte
 		expected string
+		preserve bool
 	}{
 		{name: "nil", expected: "{}"},
 		{name: "empty", metadata: []byte{}, expected: "{}"},
-		{name: "non-empty", metadata: []byte(`{"source":"test"}`), expected: `{"source":"test"}`},
+		{name: "whitespace", metadata: []byte(" \t\n"), expected: "{}"},
+		{name: "null", metadata: []byte("null"), expected: "{}"},
+		{name: "whitespace-null", metadata: []byte(" \tnull\n"), expected: "{}"},
+		{name: "object", metadata: []byte(`{"source":"test"}`), expected: `{"source":"test"}`, preserve: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			node, err := ns.Create(context.Background(), &models.KnowledgeNode{
@@ -305,7 +313,7 @@ func TestNodesStore_MetadataDefaults_Update(t *testing.T) {
 			_, err = ns.Update(context.Background(), node)
 			require.NoError(t, err)
 			assert.JSONEq(t, tc.expected, string(node.Metadata))
-			if len(tc.metadata) != 0 {
+			if tc.preserve {
 				assert.Equal(t, tc.metadata, node.Metadata)
 			}
 

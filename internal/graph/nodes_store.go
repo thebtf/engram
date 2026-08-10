@@ -1,7 +1,9 @@
 package graph
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -58,11 +60,18 @@ func nodeToRow(n *models.KnowledgeNode) nodeRow {
 	}
 }
 
-func normalizeNodeMetadata(metadata []byte) []byte {
-	if len(metadata) == 0 {
-		return []byte("{}")
+func normalizeNodeMetadata(metadata []byte) ([]byte, error) {
+	trimmed := bytes.TrimSpace(metadata)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return []byte("{}"), nil
 	}
-	return metadata
+	if !json.Valid(trimmed) {
+		return nil, fmt.Errorf("invalid metadata: must be valid JSON")
+	}
+	if trimmed[0] != '{' {
+		return nil, fmt.Errorf("invalid metadata: must be a JSON object")
+	}
+	return metadata, nil
 }
 
 // NodesStore handles knowledge_nodes CRUD with scope-based visibility filtering.
@@ -101,6 +110,7 @@ func (s *NodesStore) Create(ctx context.Context, node *models.KnowledgeNode) (*m
 	if node.Project == "" {
 		return nil, fmt.Errorf("project is required")
 	}
+
 	now := time.Now().UTC()
 	if node.CreatedAt.IsZero() {
 		node.CreatedAt = now
@@ -115,8 +125,11 @@ func (s *NodesStore) Create(ctx context.Context, node *models.KnowledgeNode) (*m
 	default:
 		return nil, fmt.Errorf("invalid privacy_scope %q", node.PrivacyScope)
 	}
-	node.Metadata = normalizeNodeMetadata(node.Metadata)
-
+	metadata, err := normalizeNodeMetadata(node.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	node.Metadata = metadata
 	row := nodeToRow(node)
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return nil, fmt.Errorf("create knowledge_node: %w", err)
@@ -204,7 +217,12 @@ func (s *NodesStore) Update(ctx context.Context, node *models.KnowledgeNode) (*m
 	default:
 		return nil, fmt.Errorf("invalid privacy_scope %q", ps)
 	}
-	node.Metadata = normalizeNodeMetadata(node.Metadata)
+	metadata, err := normalizeNodeMetadata(node.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	node.Metadata = metadata
+
 	updates := map[string]interface{}{
 		"external_ref":  node.ExternalRef,
 		"metadata":      node.Metadata,

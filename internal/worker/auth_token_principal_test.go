@@ -108,6 +108,58 @@ func TestAuthTokenHandlers_PrincipalMetadataRoundTrip(t *testing.T) {
 	require.NotContains(t, statsResp, "token_hash")
 }
 
+func TestHandleCreateTokenCreatesLegacyUnboundToken(t *testing.T) {
+	store, tokenStore := openWorkerAuthTokenStore(t)
+	svc := &Service{tokenStore: tokenStore}
+
+	name := fmt.Sprintf("zz-test-handler-unbound-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = store.DB.Exec(`DELETE FROM api_tokens WHERE name = ?`, name).Error
+	})
+
+	body := bytes.NewReader([]byte(fmt.Sprintf(`{
+		"name": %q,
+		"scope": "read-write"
+	}`, name)))
+	rec := httptest.NewRecorder()
+	svc.handleCreateToken(rec, sessionAdminRequest(http.MethodPost, "/api/auth/tokens", body))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	var response struct {
+		ID string `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	created, err := tokenStore.GetByID(context.Background(), response.ID)
+	require.NoError(t, err)
+	require.NotNil(t, created)
+	require.Empty(t, created.Principal)
+	require.Equal(t, "human", created.PrincipalKind)
+}
+
+func TestNormalizeTokenPrincipal(t *testing.T) {
+	for _, tt := range []struct {
+		name, principal, principalKind, wantPrincipal, wantKind string
+		wantErr                                                 bool
+	}{
+		{name: "unbound remains empty", wantPrincipal: "", wantKind: ""},
+		{name: "blank unbound remains empty", principal: " \t", principalKind: "\n", wantPrincipal: "", wantKind: ""},
+		{name: "named principal defaults human", principal: " operator/alice ", wantPrincipal: "operator/alice", wantKind: "human"},
+		{name: "named invalid kind rejects", principal: "operator/alice", principalKind: "daemon", wantErr: true},
+		{name: "kind without principal rejects", principalKind: "agent", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			principal, principalKind, err := normalizeTokenPrincipal(tt.principal, tt.principalKind)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.wantPrincipal, principal)
+			require.Equal(t, tt.wantKind, principalKind)
+		})
+	}
+}
+
 func TestHandleCreateTokenRejectsPrincipalKindWithoutPrincipal(t *testing.T) {
 	_, tokenStore := openWorkerAuthTokenStore(t)
 	svc := &Service{tokenStore: tokenStore}

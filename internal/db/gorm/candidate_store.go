@@ -624,7 +624,7 @@ func (s *CandidateStore) logCandidateReviewAuditTx(
 		AfterState:      &afterState,
 		Reason:          reason,
 	}
-	return s.auditStore.logTx(ctx, tx, entry)
+	return s.auditStore.LogTx(ctx, tx, entry)
 }
 
 func (s *CandidateStore) createCandidateReviewSnapshotTx(ctx context.Context, tx *gorm.DB, snapshotStore *SnapshotStore, snapshot *models.BulkOpSnapshot, operation string) (*models.BulkOpSnapshot, error) {

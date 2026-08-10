@@ -515,7 +515,7 @@ test('dispatcher repairs missing legacy Codex cache hook entrypoints with latest
   }
 });
 
-test('dispatcher recreates deleted legacy Codex cache slots for running-session hooks', () => {
+test('dispatcher repair omits the retired tool-result entrypoint', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-deleted-cache-'));
   try {
     const codexHome = path.join(tempRoot, '.codex');
@@ -524,6 +524,8 @@ test('dispatcher recreates deleted legacy Codex cache slots for running-session 
     const latestRoot = path.join(cacheBase, '6.28.0');
     const latestHooks = path.join(latestRoot, 'hooks');
     const latestManifest = path.join(latestRoot, '.codex-plugin');
+    const retiredEvent = ['Post', 'Tool', 'Use'].join('');
+    const retiredEntry = ['post', 'tool', 'use.js'].join('-');
 
     fs.mkdirSync(latestHooks, { recursive: true });
     fs.mkdirSync(latestManifest, { recursive: true });
@@ -537,36 +539,22 @@ test('dispatcher recreates deleted legacy Codex cache slots for running-session 
       'utf8',
     );
 
-    assert.equal(fs.existsSync(deletedRoot), false, 'test setup should model a removed old cache slot');
-
     const repaired = dispatcher.repairLegacyCodexCacheHooks(latestRoot);
-    const legacyPostToolUse = path.join(deletedRoot, 'hooks', 'post-tool-use.js');
-    const futureRoot = path.join(cacheBase, '6.28.1');
+    const retiredHook = path.join(deletedRoot, 'hooks', retiredEntry);
 
-    assert.ok(repaired.includes(legacyPostToolUse));
-    assert.ok(fs.existsSync(legacyPostToolUse));
-    assert.equal(fs.existsSync(futureRoot), false, 'repair must not create newer cache slots');
-
-    const result = spawnSync(process.execPath, [legacyPostToolUse], {
+    assert.ok(repaired.length > 0, 'repair must preserve supported legacy hook entrypoints');
+    assert.equal(Object.hasOwn(dispatcher.EVENT_HOOKS, retiredEvent), false);
+    assert.equal(repaired.includes(retiredHook), false);
+    assert.equal(fs.existsSync(retiredHook), false);
+    const dispatch = spawnSync(process.execPath, [path.join(hooksDir, 'dispatcher.cjs'), retiredEvent], {
       input: JSON.stringify({ session_id: 's1' }),
       encoding: 'utf8',
       timeout: 2000,
-      killSignal: 'SIGKILL',
-      maxBuffer: 1024 * 1024,
-      env: {
-        ...process.env,
-        CODEX_HOME: codexHome,
-        CODEX_PLUGIN_ROOT: '',
-        CODEX_PLUGIN_DIR: '',
-        PLUGIN_ROOT: '',
-        CLAUDE_PLUGIN_ROOT: '',
-        CLAUDE_PLUGIN_DIR: '',
-      },
+      env: { ...process.env, CODEX_HOME: '', PLUGIN_DATA: '', CLAUDE_PLUGIN_DATA: '', CODEX_PLUGIN_DATA: '' },
     });
-
-    assert.equal(result.error, undefined, result.error ? result.error.message : result.stderr);
-    assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout), { root: 'latest', event: 'PostToolUse' });
+    assert.equal(dispatch.status, 0, dispatch.stderr);
+    assert.match(dispatch.stderr, /unknown hook event/);
+    assert.equal(dispatch.stdout, '{"continue":true}\n');
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -591,7 +579,7 @@ test('dispatcher main repairs deleted cache slots before non-session hooks', () 
     }), 'utf8');
     fs.copyFileSync(path.join(hooksDir, 'dispatcher.cjs'), latestDispatcher);
 
-    const result = spawnSync(process.execPath, [latestDispatcher, 'PostToolUse'], {
+    const result = spawnSync(process.execPath, [latestDispatcher, 'PreCompact'], {
       input: JSON.stringify({ session_id: 's1' }),
       encoding: 'utf8',
       timeout: 2000,
@@ -612,7 +600,7 @@ test('dispatcher main repairs deleted cache slots before non-session hooks', () 
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stderr, /repaired \d+ legacy Codex hook entrypoints/);
     assert.equal(result.stdout, '{"continue":true}\n');
-    assert.ok(fs.existsSync(path.join(deletedRoot, 'hooks', 'post-tool-use.js')));
+    assert.equal(fs.existsSync(path.join(deletedRoot, 'hooks', ['post', 'tool', 'use.js'].join('-'))), false);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

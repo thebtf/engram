@@ -28,6 +28,7 @@ watch([requestedQuery, requestedProject, hasRequestedProject], async ([nextQuery
   query.value = nextQuery
   if (!nextQuery || !nextProject || !projectAvailable) {
     appliedRouteSearch.value = ''
+    await runSearch('', '')
     return
   }
 
@@ -106,7 +107,7 @@ function openResult(project: string, memory: string) {
               <span>{{ row.project }}</span>
               <code>{{ row.type }}</code>
               <code>{{ row.score }}</code>
-              <button class="btn" type="button" :data-testid="`search-result-open-${row.id}`" @click="openResult(row.project, row.id)">{{ t('searchPage.actions.openMemory') }}</button>
+              <button v-if="row.memoryBacked" class="btn" type="button" :data-testid="`search-result-open-${row.id}`" @click="openResult(row.project, row.id)">{{ t('searchPage.actions.openMemory') }}</button>
             </div>
           </div>
         </div>

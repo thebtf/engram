@@ -13,15 +13,17 @@ package bulkops
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/auth"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/pkg/models"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -74,8 +76,8 @@ func TestFacade_NonAdmin_ReturnsErrAdminRequired(t *testing.T) {
 		for _, opType := range opTypes {
 			t.Run(nc.name+"/"+string(opType), func(t *testing.T) {
 				_, err := f.Execute(ctx, nc.identity, BulkOp{
-					Type:     opType,
-					DryRun:   false,
+					Type:      opType,
+					DryRun:    false,
 					MemoryIDs: []int64{1},
 				})
 				require.ErrorIs(t, err, ErrAdminRequired,
@@ -85,47 +87,17 @@ func TestFacade_NonAdmin_ReturnsErrAdminRequired(t *testing.T) {
 	}
 }
 
-// --- Unit: dry-run paths (no DB required) ---
+// --- Unit: dry-run path without stores ---
 
-// TestFacade_DryRun_AllOpTypes verifies every op_type returns a preview with DryRun=true
-// and no DB mutations (facade has nil stores — any store call would panic).
-func TestFacade_DryRun_AllOpTypes(t *testing.T) {
-	// snapshotStore must not be nil for non-dryrun paths, but for dryrun all paths
-	// return before any store access. We pass nil to prove it.
-	f := newNilFacade()
-	ctx := context.Background()
-	admin := adminIdentity()
-
-	cases := []struct {
-		opType      BulkOpType
-		candidateIDs []int64
-		memoryIDs   []int64
-		wantAffect  int
-	}{
-		{models.SnapshotOpBulkPromote, []int64{10, 20, 30}, nil, 3},
-		{models.SnapshotOpBulkDelete, nil, []int64{11, 22}, 2},
-		{models.SnapshotOpBulkSupersede, nil, []int64{13, 14, 15}, 3},
-		{models.SnapshotOpIngestDoc, nil, nil, 0},
-	}
-
-	for _, c := range cases {
-		t.Run(string(c.opType), func(t *testing.T) {
-			op := BulkOp{
-				Type:         c.opType,
-				DryRun:       true,
-				CandidateIDs: c.candidateIDs,
-				MemoryIDs:    c.memoryIDs,
-				Actor:        "test-actor",
-				Parameters:   json.RawMessage(`{}`),
-			}
-			result, err := f.Execute(ctx, admin, op)
-			require.NoError(t, err, "dry-run must not return an error for op %q", c.opType)
-			require.NotNil(t, result)
-			assert.True(t, result.DryRun, "DryRun must be true in result")
-			assert.Empty(t, result.SnapshotID, "no snapshot created for dry-run")
-			assert.Equal(t, c.wantAffect, result.WouldAffect, "WouldAffect must equal input length for op %q", c.opType)
-		})
-	}
+func TestFacade_DryRun_IngestDoesNotRequireStores(t *testing.T) {
+	result, err := newNilFacade().Execute(context.Background(), adminIdentity(), BulkOp{
+		Type:   models.SnapshotOpIngestDoc,
+		DryRun: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, result.DryRun)
+	assert.Empty(t, result.SnapshotID)
+	assert.Zero(t, result.WouldAffect)
 }
 
 // --- Integration: committed paths + audit log (require DATABASE_DSN) ---
@@ -152,6 +124,7 @@ func openTestDB(t *testing.T) (*gorm.DB, *gormdb.Store) {
 //   - bulk_delete committed: snapshot created, memory rows soft-deleted, audit log entry written.
 //   - Spec §FR-F6, §FR-F5 enum, EC-F3 (no conflict for fresh rows).
 func TestFacade_BulkDelete_Committed_AuditLogWritten(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "")
 	db, store := openTestDB(t)
 
 	memStore := gormdb.NewMemoryStore(store)
@@ -164,23 +137,27 @@ func TestFacade_BulkDelete_Committed_AuditLogWritten(t *testing.T) {
 
 	// Create a test memory row to delete.
 	mem := &models.Memory{
-		Content:     "bulk_delete_test_memory",
-		Project:     "tg6-facade-test",
-		SourceAgent: "claude-code",
+		Content:             "bulk_delete_test_memory",
+		Project:             "tg6-facade-test",
+		SourceAgent:         "claude-code",
+		PrivacyScope:        "private",
+		SourceWorkstationID: "facade-workstation",
+		SourceSessions:      pq.StringArray{"facade-session-a", "facade-session-b"},
 	}
 	created, err := memStore.Create(ctx, mem)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = db.Exec("DELETE FROM memories WHERE id = ?", created.ID).Error
 		_ = db.Exec(`DELETE FROM audit_log WHERE action = 'bulk_delete' AND reason LIKE '%tg6-facade-test%'`).Error
+
 		_ = db.Exec(`DELETE FROM bulk_op_snapshots WHERE actor = 'master' AND op_type = 'bulk_delete'`).Error
 	})
 
 	op := BulkOp{
-		Type:        models.SnapshotOpBulkDelete,
-		MemoryIDs:   []int64{created.ID},
-		DryRun:      false,
-		Parameters:  json.RawMessage(`{"test":"bulk_delete_committed"}`),
+		Type:       models.SnapshotOpBulkDelete,
+		MemoryIDs:  []int64{created.ID},
+		DryRun:     false,
+		Parameters: json.RawMessage(`{"test":"bulk_delete_committed"}`),
 	}
 
 	// Capture audit count BEFORE Execute to avoid false pass from historical records (§FR-F5).
@@ -202,6 +179,17 @@ func TestFacade_BulkDelete_Committed_AuditLogWritten(t *testing.T) {
 	assert.Equal(t, models.SnapshotOpBulkDelete, snap.OpType)
 	assert.Equal(t, models.SnapshotStatusCommitted, snap.Status)
 	assert.Contains(t, snap.AffectedMemoryIDs, created.ID)
+	entries, err := decodeTypedBeforeState(snap.BeforeState)
+	require.NoError(t, err)
+	entry, ok := entries[fmt.Sprintf("%d", created.ID)]
+	require.True(t, ok, "snapshot must contain the affected memory")
+	require.NotNil(t, entry.ExpectedVersion)
+	assert.Equal(t, created.Version+1, *entry.ExpectedVersion)
+	var captured models.Memory
+	require.NoError(t, json.Unmarshal(entry.Before, &captured))
+	assert.Equal(t, "private", captured.PrivacyScope)
+	assert.Equal(t, "facade-workstation", captured.SourceWorkstationID)
+	assert.Equal(t, []string{"facade-session-a", "facade-session-b"}, []string(captured.SourceSessions))
 
 	// Verify audit log entry written (§FR-F5): delta >= 1 ties the entry to this run.
 	var auditCountAfter int64
@@ -210,6 +198,66 @@ func TestFacade_BulkDelete_Committed_AuditLogWritten(t *testing.T) {
 		Count(&auditCountAfter)
 	assert.GreaterOrEqual(t, auditCountAfter-auditCountBefore, int64(1),
 		"audit log must have at least 1 new bulk_delete entry from this Execute call")
+}
+func TestFacade_DryRunCountsOnlyEligibleUniqueRows(t *testing.T) {
+	db, store := openTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	auditStore := gormdb.NewAuditStore(db)
+	candidateStore := gormdb.NewCandidateStore(db, auditStore)
+	facade := NewFacade(gormdb.NewSnapshotStore(db), candidateStore, memStore, auditStore)
+	ctx := context.Background()
+	project := fmt.Sprintf("bulk-dry-run-%d", time.Now().UnixNano())
+	active, err := memStore.Create(ctx, &models.Memory{Content: "active", Project: project, SourceAgent: "test"})
+	require.NoError(t, err)
+	deleted, err := memStore.Create(ctx, &models.Memory{Content: "deleted", Project: project, SourceAgent: "test"})
+	require.NoError(t, err)
+	require.NoError(t, memStore.Delete(ctx, deleted.ID))
+	superseded, err := memStore.Create(ctx, &models.Memory{Content: "superseded", Project: project, SourceAgent: "test"})
+	require.NoError(t, err)
+	_, err = memStore.Supersede(ctx, superseded.ID)
+	require.NoError(t, err)
+	newCandidate := func(status models.CandidateStatus, suffix string) *models.CrystallizationCandidate {
+		candidate, err := candidateStore.Create(ctx, &models.CrystallizationCandidate{
+			SourceSessionID: "bulk-dry-run", ProposedContent: suffix, ProposedTier: "semantic", ProposedPromotionTarget: "semantic",
+			PrivacyScope: "project", Status: status, Fingerprint: project + "-" + suffix, AffectedProjects: []string{project}, Confidence: 0.9, RecurrenceCount: 1,
+		})
+		require.NoError(t, err)
+		return candidate
+	}
+	pending := newCandidate(models.CandidateStatusPending, "pending")
+	rejected := newCandidate(models.CandidateStatusRejected, "rejected")
+	t.Cleanup(func() {
+		_ = db.Unscoped().Delete(&gormdb.Memory{}, "id IN ?", []int64{active.ID, superseded.ID, deleted.ID}).Error
+		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id IN ?", []int64{pending.ID, rejected.ID}).Error
+	})
+
+	var snapshotsBefore, auditsBefore int64
+	require.NoError(t, db.Table("bulk_op_snapshots").Count(&snapshotsBefore).Error)
+	require.NoError(t, db.Model(&gormdb.AuditLogEntry{}).Count(&auditsBefore).Error)
+	deletePreview, err := facade.Execute(ctx, adminIdentity(), BulkOp{Type: models.SnapshotOpBulkDelete, DryRun: true, MemoryIDs: []int64{active.ID, active.ID, deleted.ID, 999999999}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, deletePreview.WouldAffect)
+	require.Len(t, deletePreview.Errors, 2)
+	supersedePreview, err := facade.Execute(ctx, adminIdentity(), BulkOp{Type: models.SnapshotOpBulkSupersede, DryRun: true, MemoryIDs: []int64{active.ID, superseded.ID, deleted.ID, 999999999}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, supersedePreview.WouldAffect)
+	require.Len(t, supersedePreview.Errors, 3)
+	promotePreview, err := facade.Execute(ctx, adminIdentity(), BulkOp{Type: models.SnapshotOpBulkPromote, DryRun: true, CandidateIDs: []int64{pending.ID, pending.ID, rejected.ID, 999999999}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, promotePreview.WouldAffect)
+	require.Len(t, promotePreview.Errors, 2)
+
+	var snapshotsAfter, auditsAfter int64
+	require.NoError(t, db.Table("bulk_op_snapshots").Count(&snapshotsAfter).Error)
+	require.NoError(t, db.Model(&gormdb.AuditLogEntry{}).Count(&auditsAfter).Error)
+	assert.Equal(t, snapshotsBefore, snapshotsAfter)
+	assert.Equal(t, auditsBefore, auditsAfter)
+	stillActive, err := memStore.Get(ctx, active.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "active", stillActive.Status)
+	stillPending, err := candidateStore.Get(ctx, pending.ID)
+	require.NoError(t, err)
+	assert.Equal(t, models.CandidateStatusPending, stillPending.Status)
 }
 
 // TestFacade_BulkSupersede_Committed_AuditLogWritten verifies the supersede path.
@@ -262,6 +310,133 @@ func TestFacade_BulkSupersede_Committed_AuditLogWritten(t *testing.T) {
 		Count(&auditCountAfter)
 	assert.GreaterOrEqual(t, auditCountAfter-auditCountBefore, int64(1),
 		"audit log must have at least 1 new bulk_supersede entry from this Execute call")
+}
+
+func TestFacade_BulkMemoryRollback_RestoresOriginalVersion(t *testing.T) {
+	for _, opType := range []models.SnapshotOpType{models.SnapshotOpBulkDelete, models.SnapshotOpBulkSupersede} {
+		t.Run(string(opType), func(t *testing.T) {
+			db, store := openTestDB(t)
+			memStore := gormdb.NewMemoryStore(store)
+			snapStore := gormdb.NewSnapshotStore(db)
+			auditStore := gormdb.NewAuditStore(db)
+			facade := NewFacade(snapStore, nil, memStore, auditStore)
+			ctx := context.Background()
+
+			before, err := memStore.Create(ctx, &models.Memory{
+				Content:     "bulk rollback original " + string(opType),
+				Project:     "bulk-rollback-version",
+				SourceAgent: "test",
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", before.ID).Error })
+
+			result, err := facade.Execute(ctx, adminIdentity(), BulkOp{Type: opType, MemoryIDs: []int64{before.ID}})
+			require.NoError(t, err)
+			require.Equal(t, 1, result.AffectedCount)
+			var forward gormdb.Memory
+			require.NoError(t, db.Unscoped().Where("id = ?", before.ID).First(&forward).Error)
+			assert.Equal(t, before.Version+1, forward.Version)
+			t.Cleanup(func() { _ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = ?", result.SnapshotID).Error })
+
+			snap, err := snapStore.Get(ctx, result.SnapshotID)
+			require.NoError(t, err)
+			entries, err := decodeTypedBeforeState(snap.BeforeState)
+			require.NoError(t, err)
+			entry := entries[fmt.Sprintf("%d", before.ID)]
+			require.NotNil(t, entry.ExpectedVersion)
+			assert.Equal(t, before.Version+1, *entry.ExpectedVersion)
+
+			rollback, err := Rollback(ctx, adminIdentity(), result.SnapshotID, snapStore, memStore, auditStore, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, rollback.RestoredCount)
+			restored, err := memStore.GetForSnapshot(ctx, before.ID)
+			require.NoError(t, err)
+			assert.Equal(t, before.Version, restored.Version)
+			assert.Equal(t, before.Status, restored.Status)
+			assert.Equal(t, before.DeletedAt, restored.DeletedAt)
+			assert.Equal(t, before.Content, restored.Content)
+		})
+	}
+}
+
+func TestFacade_BulkSupersedeRollback_ConflictsAfterVersionAdvance(t *testing.T) {
+	db, store := openTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	auditStore := gormdb.NewAuditStore(db)
+	facade := NewFacade(snapStore, nil, memStore, auditStore)
+	ctx := context.Background()
+
+	before, err := memStore.Create(ctx, &models.Memory{Content: "rollback conflict source", Project: "bulk-rollback-conflict", SourceAgent: "test"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", before.ID).Error })
+	result, err := facade.Execute(ctx, adminIdentity(), BulkOp{Type: models.SnapshotOpBulkSupersede, MemoryIDs: []int64{before.ID}})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = ?", result.SnapshotID).Error })
+
+	forward, err := memStore.GetForSnapshot(ctx, before.ID)
+	require.NoError(t, err)
+	forward.Content = "post-operation normal edit"
+	_, err = memStore.Update(ctx, forward)
+	require.NoError(t, err)
+
+	rollback, err := Rollback(ctx, adminIdentity(), result.SnapshotID, snapStore, memStore, auditStore, nil)
+
+	require.ErrorIs(t, err, ErrRollbackConflict)
+	require.NotNil(t, rollback)
+	assert.Contains(t, rollback.ConflictIDs, before.ID)
+}
+func TestFacade_BulkDelete_CaptureFailureDoesNotMutate(t *testing.T) {
+	db, store := openTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	before, err := memStore.Create(context.Background(), &models.Memory{Content: "capture failure source", Project: "bulk-capture-failure", SourceAgent: "test"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", before.ID).Error })
+
+	callbackName := fmt.Sprintf("bulkops_capture_failure_%d", time.Now().UnixNano())
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		tx.AddError(errors.New("forced snapshot read failure"))
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+	facade := NewFacade(gormdb.NewSnapshotStore(db), nil, memStore, gormdb.NewAuditStore(db))
+	_, err = facade.Execute(context.Background(), adminIdentity(), BulkOp{Type: models.SnapshotOpBulkDelete, MemoryIDs: []int64{before.ID}})
+	require.NoError(t, db.Callback().Query().Remove(callbackName))
+	require.Error(t, err)
+
+	after, err := memStore.Get(context.Background(), before.ID)
+	require.NoError(t, err)
+	assert.Nil(t, after.DeletedAt)
+	assert.Equal(t, before.Version, after.Version)
+}
+
+func TestFacade_BulkDelete_PartialSuccessSnapshotExcludesFailedRows(t *testing.T) {
+	db, store := openTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	auditStore := gormdb.NewAuditStore(db)
+	ctx := context.Background()
+	before, err := memStore.Create(ctx, &models.Memory{Content: "partial delete source", Project: "bulk-partial-delete", SourceAgent: "test"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Unscoped().Delete(&gormdb.Memory{}, "id = ?", before.ID).Error })
+
+	facade := NewFacade(snapStore, nil, memStore, auditStore)
+	result, err := facade.Execute(ctx, adminIdentity(), BulkOp{Type: models.SnapshotOpBulkDelete, MemoryIDs: []int64{before.ID, before.ID}})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.AffectedCount)
+	require.Len(t, result.Errors, 1)
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = ?", result.SnapshotID).Error })
+
+	snap, err := snapStore.Get(ctx, result.SnapshotID)
+	require.NoError(t, err)
+	assert.Equal(t, []int64{before.ID}, snap.AffectedMemoryIDs)
+	entries, err := decodeTypedBeforeState(snap.BeforeState)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	_, err = Rollback(ctx, adminIdentity(), result.SnapshotID, snapStore, memStore, auditStore, nil)
+	require.NoError(t, err)
+	restored, err := memStore.GetForSnapshot(ctx, before.ID)
+	require.NoError(t, err)
+	assert.Equal(t, before.Version, restored.Version)
 }
 
 func TestFacade_BulkPromote_AmendFailureRollsBack(t *testing.T) {
@@ -368,4 +543,76 @@ func TestFacade_BulkPromote_PreservesCandidateAuditAndSeparatesIDs(t *testing.T)
 	require.NoError(t, err)
 	assert.Contains(t, entries, fmt.Sprintf("candidate:%d", candidate.ID))
 	assert.Contains(t, entries, fmt.Sprintf("memory:%d", result.Promoted[0]))
+}
+
+func TestFacade_BulkPromote_RollbackExcludesFailedCandidates(t *testing.T) {
+	db, store := openTestDB(t)
+	memStore := gormdb.NewMemoryStore(store)
+	snapStore := gormdb.NewSnapshotStore(db)
+	auditStore := gormdb.NewAuditStore(db)
+	candidateStore := gormdb.NewCandidateStore(db, auditStore)
+	f := NewFacade(snapStore, candidateStore, memStore, auditStore)
+
+	project := fmt.Sprintf("tg6-promote-partial-rollback-%d", time.Now().UnixNano())
+	makeCandidate := func(content string) *models.CrystallizationCandidate {
+		candidate, err := candidateStore.Create(context.Background(), &models.CrystallizationCandidate{
+			SourceSessionID:         "tg6-promote-partial-rollback",
+			ProposedContent:         content,
+			ProposedTier:            "semantic",
+			ProposedPromotionTarget: "semantic",
+			PrivacyScope:            "project",
+			Status:                  models.CandidateStatusPending,
+			Fingerprint:             fmt.Sprintf("%s-%s", project, content),
+			AffectedProjects:        []string{project},
+			Confidence:              0.9,
+			RecurrenceCount:         1,
+		})
+		require.NoError(t, err)
+		return candidate
+	}
+	successful := makeCandidate("successful candidate")
+	failed := makeCandidate("failed candidate")
+	snapshotID := ""
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM crystallization_candidates WHERE id IN (?, ?)", successful.ID, failed.ID).Error
+		_ = db.Exec("DELETE FROM memories WHERE project = ?", project).Error
+		if snapshotID != "" {
+			_ = db.Exec("DELETE FROM bulk_op_snapshots WHERE snapshot_id = ?", snapshotID).Error
+		}
+	})
+	// A promoted candidate cannot transition to promoted again, producing the
+	// partial-success path without failing the transaction.
+	require.NoError(t, db.Exec("UPDATE crystallization_candidates SET status = ? WHERE id = ?", models.CandidateStatusPromoted, failed.ID).Error)
+
+	result, err := f.Execute(context.Background(), adminIdentity(), BulkOp{
+		Type:         models.SnapshotOpBulkPromote,
+		CandidateIDs: []int64{successful.ID, failed.ID},
+	})
+	require.NoError(t, err)
+	snapshotID = result.SnapshotID
+	require.Equal(t, 1, result.AffectedCount)
+	require.Len(t, result.Promoted, 1)
+	require.Len(t, result.Errors, 1)
+
+	snap, err := snapStore.Get(context.Background(), result.SnapshotID)
+	require.NoError(t, err)
+	entries, err := decodeTypedBeforeState(snap.BeforeState)
+	require.NoError(t, err)
+	assert.Contains(t, entries, fmt.Sprintf("candidate:%d", successful.ID))
+	assert.NotContains(t, entries, fmt.Sprintf("candidate:%d", failed.ID))
+
+	// Simulate a later change to the candidate that this operation did not mutate.
+	require.NoError(t, db.Exec("UPDATE crystallization_candidates SET status = ?, proposed_content = ? WHERE id = ?", models.CandidateStatusRejected, "failed candidate changed after bulk", failed.ID).Error)
+
+	rollback, err := Rollback(context.Background(), adminIdentity(), result.SnapshotID, snapStore, memStore, auditStore, candidateStore)
+	require.NoError(t, err)
+	assert.Equal(t, 1, rollback.RestoredCount)
+
+	failedAfter, err := candidateStore.Get(context.Background(), failed.ID)
+	require.NoError(t, err)
+	assert.Equal(t, models.CandidateStatusRejected, failedAfter.Status)
+	assert.Equal(t, "failed candidate changed after bulk", failedAfter.ProposedContent)
+	var promotedMemoryCount int64
+	require.NoError(t, db.Unscoped().Model(&gormdb.Memory{}).Where("id = ?", result.Promoted[0]).Count(&promotedMemoryCount).Error)
+	assert.Zero(t, promotedMemoryCount)
 }

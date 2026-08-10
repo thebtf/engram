@@ -55,6 +55,9 @@ test('rules create and edit round-trip through current control-plane routes', as
   await page.locator('.rule-row.editing button.primary-line').click()
   expect(await (await editResponse).json()).toMatchObject({ id: created.id, content: 'readback rule after edit', version: 2 })
   await expect(page.locator('.rule-row').filter({ hasText: 'readback rule after edit' })).toBeVisible()
+  await page.locator('.navbrand').click()
+  await expect(page).toHaveURL(/\/$/)
+  await expect(page.locator('.ov-card[href="/rules"] .ov-big')).toHaveText('3')
   expect(failures).toEqual([])
 })
 
@@ -94,5 +97,8 @@ test('orphan credential cleanup returns current receipt and refreshes truthful v
   expect(await (await cleanupResponse).json()).toEqual({ status: 'ok', deleted: 1 })
   expect(await (await statusResponse).json()).toMatchObject({ credential_count: 2 })
   await expect(page.locator('.vault-status')).toContainText('2')
+  await page.locator('.navbrand').click()
+  await expect(page).toHaveURL(/\/$/)
+  await expect(page.locator('.ov-card[href="/secrets"] .ov-big')).toHaveText('2')
   expect(failures).toEqual([])
 })

@@ -224,12 +224,12 @@ function isInternalHook() {
  *      quiet never gated those; the SessionStart binary bootstrap
  *      (scripts/ensure-binary.js, which downloads/updates the daemon only when
  *      missing or version-stale) runs regardless. It injects no context.
- *   2. The CAPTURE / LEARNING hooks (UserPromptSubmit, PostToolUse, Stop,
- *      SessionEnd, SubagentStop) still run their handlers under quiet. They emit
- *      no prompt context (writeResponse only renders injection for a non-empty
- *      handler result, and these return ''), but they DO record correction /
- *      segment signals, crystallize lessons from the transcript, and propagate
- *      session outcomes. So engram keeps learning; it just stops talking.
+ *   2. The CAPTURE / LEARNING hooks (UserPromptSubmit, Stop, SessionEnd,
+ *      SubagentStop) still run their handlers under quiet. They emit no prompt
+ *      context (writeResponse only renders injection for a non-empty handler
+ *      result, and these return ''), but they DO record correction / segment
+ *      signals, crystallize lessons from the transcript, and propagate session
+ *      outcomes. So engram keeps learning; it just stops talking.
  * Only the INJECTION_HOOKS set below is gated. To stop ALL MCP activity, disable
  * the plugin instead of using quiet mode.
  *
@@ -286,9 +286,9 @@ function isQuietMode() {
 // SessionStart renders <user-behavior-rules>/<engram-static-memories>;
 // PreToolUse injects per-file warnings + context observations; PreCompact writes
 // .engram/reinjection.md (read by the agent via @-import on the next turn).
-// Every other hook (UserPromptSubmit, PostToolUse, Stop, SessionEnd,
-// SubagentStop) is capture/learning: it records signals and crystallizes
-// lessons but returns no prompt context, so it stays active under quiet.
+// Every other hook (UserPromptSubmit, Stop, SessionEnd, SubagentStop) is
+// capture/learning: it records signals and crystallizes lessons but returns no
+// prompt context, so it stays active under quiet.
 const INJECTION_HOOKS = new Set(['SessionStart', 'PreToolUse', 'PreCompact']);
 
 function isInjectionHook(hookName) {
@@ -696,11 +696,10 @@ function readAllStdin() {
 }
 
 // drainStdin consumes and discards the hook's stdin without parsing it.
-// The host writes the hook JSON into the child's stdin pipe; for hooks carrying
-// large payloads (e.g. PostToolUse after a verbose Bash/Agent call) the writer
-// may still be mid-write when an early-return path exits. Returning before the
-// pipe is drained can give the writer EPIPE, surfacing a no-op path (quiet mode,
-// internal hook) as a hook FAILURE. Draining first keeps the early exit silent.
+// The host writes the hook JSON into the child's stdin pipe. A hook can return
+// early while the writer is still sending a large payload. Returning before the
+// pipe is drained can give the writer EPIPE, surfacing a quiet or internal
+// no-op path as a hook FAILURE. Draining first keeps the early exit silent.
 // No parsing, no server calls — just empty the pipe. Never rejects.
 function drainStdin() {
   return new Promise((resolve) => {
@@ -738,13 +737,12 @@ function clearReinjectionFile(rawInput) {
 }
 
 // Claude Code validates hookSpecificOutput as a discriminated union by hookEventName.
-// Only PreToolUse, UserPromptSubmit, PostToolUse have defined schemas with hookEventName.
-// Other hooks (PostCompact, SessionStart, etc.) must omit hookEventName entirely
-// and send only { additionalContext } to pass validation.
+// Only PreToolUse, UserPromptSubmit, and SessionStart have defined schemas with
+// hookEventName. Other hooks must omit hookEventName and send only
+// { additionalContext } to pass validation.
 const HOOKS_WITH_EVENT_NAME = new Set([
   'PreToolUse',
   'UserPromptSubmit',
-  'PostToolUse',
   'SessionStart',
 ]);
 
@@ -925,9 +923,8 @@ async function RunStatuslineHook(handler, offlineRenderer) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// Session signal store — persists per-session counters to a temp
-// file so post-tool-use.js and stop.js can share state across
-// separate process invocations (hooks run as independent procs).
+// Session signal store — persists per-session counters to a temp file so
+// hooks can share state across separate process invocations.
 // ──────────────────────────────────────────────────────────────
 
 function _signalPath(sessionID) {

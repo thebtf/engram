@@ -176,6 +176,7 @@ type Issue struct {
 	TargetProject    string                 `gorm:"type:text;not null;index:idx_issues_target_status,priority:1" json:"target_project"`
 	SourceAgent      string                 `gorm:"type:text" json:"source_agent"`
 	CreatedBySession string                 `gorm:"type:text" json:"created_by_session"`
+	CreatorKeycardID string                 `gorm:"type:text" json:"-"`
 	Labels           models.JSONStringArray `gorm:"type:jsonb;default:'[]'" json:"labels"`
 	AcknowledgedAt   *time.Time             `gorm:"type:timestamptz" json:"acknowledged_at"`
 	ResolvedAt       *time.Time             `gorm:"type:timestamptz" json:"resolved_at"`

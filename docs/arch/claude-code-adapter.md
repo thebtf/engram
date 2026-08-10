@@ -1,9 +1,7 @@
 # Claude Code Adapter
 
-The Claude Code adapter is the reference implementation of the engram abstract event
-model (see [EVENT\_MODEL.md](EVENT_MODEL.md)). It maps Claude Code's native plugin hook
-events to the five canonical engram events using Node.js scripts executed by Claude
-Code's plugin system.
+The Claude Code adapter is the reference implementation of the engram lifecycle
+integration. It uses Node.js scripts executed by Claude Code's plugin system.
 
 Source: `plugin/engram/hooks/`  
 Registration: `plugin/engram/hooks/hooks.json`  
@@ -11,17 +9,24 @@ Shared runtime: `plugin/engram/hooks/lib.js`
 
 ---
 
-## Hook → Abstract Event Mapping
+## Automatic Lifecycle Model
 
-| Hook file | Claude Code event | Abstract event | Direction |
-|---|---|---|---|
-| `session-start.js` | `SessionStart` | `session_start` | server → agent (context injection) |
-| `stop.js` | `Stop` | `session_end` | agent → server (transcript POST) |
-| `pre-compact.js` | `PreCompact` | `pre_compact` | agent → server (reinject request) |
-| `post-tool-use.js` | `PostToolUse` | `tool_result` | no-op (stub; see note) |
+`SessionStart` and `UserPromptSubmit` inject relevant context. `Stop` submits the
+session transcript for citation and session processing, and `SessionEnd` propagates
+the resulting outcome. Tool results are not captured automatically. Use the MCP
+`store` and `recall` tools for deliberate memory operations.
 
-`memory_write` is not a hook; it is served directly by the MCP `store` tool via
-the stdio daemon.
+---
+
+## Hook → Lifecycle Mapping
+
+| Hook file | Claude Code event | Behavior |
+|---|---|---|
+| `session-start.js` | `SessionStart` | Context injection |
+| `user-prompt.js` | `UserPromptSubmit` | Context injection |
+| `stop.js` | `Stop` | Transcript submission for citation and session processing |
+| `session-end.js` | `SessionEnd` | Outcome propagation |
+| `pre-compact.js` | `PreCompact` | Reinject request |
 
 ---
 
@@ -100,14 +105,13 @@ Claude Code only accepts `hookSpecificOutput` on a defined set of hooks. The
 constant `HOOKS_WITH_EVENT_NAME` in `lib.js` tracks which hooks support it:
 
 ```
-PreToolUse, UserPromptSubmit, PostToolUse, SessionStart
+PreToolUse, UserPromptSubmit, SessionStart
 ```
 
-For all other hooks (`Stop`, `PreCompact`, `SubagentStop`,
-`SessionEnd`) the `hookSpecificOutput` key is omitted entirely; including it
-would fail Claude Code's discriminated-union validation. These hooks deliver
-their output as side effects (POST requests, file writes) rather than through
-the context injection path.
+For all other hooks (`Stop`, `PreCompact`, `SubagentStop`, `SessionEnd`) the
+`hookSpecificOutput` key is omitted entirely; including it would fail Claude Code's
+discriminated-union validation. These hooks deliver their output as side effects
+(POST requests or file writes) rather than through the context injection path.
 
 **Exit codes:** Non-zero exit is treated by Claude Code as a hook failure. All
 engram hooks catch errors and call `lib.writeResponse` before exiting, so the
@@ -312,47 +316,6 @@ failure is silently ignored. The hook always exits 0.
 
 ---
 
-### `post-tool-use.js` — `tool_result`
-
-**Trigger:** Fires after any tool call whose name matches the matcher
-`Write|Edit|Bash|Agent|mcp__aimux` (`PostToolUse` event). Timeout in
-`hooks.json`: 10 s.
-
-**Stdin input schema (passed by Claude Code):**
-
-```json
-{
-  "session_id": "string",
-  "cwd": "string",
-  "tool_name": "string",
-  "tool_input": {},
-  "tool_response": {},
-  "hook_event_name": "PostToolUse"
-}
-```
-
-**Handler behaviour:** The current implementation is a stub that returns `""`
-immediately without reading the input or making any server calls:
-
-```js
-async function handlePostToolUse() {
-  return '';
-}
-```
-
-The `tool_result` abstract event is not yet implemented at the hook level. The
-hook file exists and is registered so the matcher-based filtering mechanism is in
-place for future use.
-
-**Output:** Always `""`. `PostToolUse` is in `HOOKS_WITH_EVENT_NAME` so the
-empty string produces `{ "continue": true }` with no `hookSpecificOutput`.
-
-> **Code vs. spec note:** `EVENT_MODEL.md` describes `tool_result` as mapping to
-> `post-tool-use.js`. The hook is registered and runs, but the handler body is a
-> no-op. No server endpoint is called. This is accurate as of the current
-> codebase.
-
----
 
 ## Auxiliary Hooks
 
@@ -408,9 +371,6 @@ fallback renderer is the same function.
 
 ---
 
-## Known Discrepancies
-
 | Item | hooks.json | Disk | Notes |
 |---|---|---|---|
-| `post-tool-use.js` | Registered with matcher `Write\|Edit\|Bash\|Agent\|mcp__aimux` | Present, handler is a stub | `tool_result` abstract event has no server-side implementation yet. |
 | `statusline.js` | Not in `hooks.json` | Present | Uses a separate statusline invocation path via `lib.RunStatuslineHook`, not the standard `RunHook` pipeline. |

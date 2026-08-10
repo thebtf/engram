@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
@@ -116,7 +116,8 @@ func validateIssueActionParams(action string, m map[string]any) error {
 	for _, param := range spec.required {
 		switch param {
 		case "id":
-			if int64(coerceInt(m["id"], 0)) <= 0 {
+			id, err := requireInt64Arg(m, "id")
+			if err != nil || id <= 0 {
 				missing = append(missing, "id (integer)")
 			}
 		case "status":
@@ -178,28 +179,41 @@ func (s *Server) handleIssues(ctx context.Context, args json.RawMessage) (string
 	}
 }
 
-// resolveSourceProject returns the canonical source project for a request.
-// When EnforceSourceProject is enabled the header value (from context) takes
-// precedence over the explicit "project" parameter; when the header is absent
-// the parameter is used as fallback so that clients without a proxy still work.
-//
-// The result is passed through ResolveProjectID to normalize legacy slugs
-// (e.g. "mcp-mux_a1777ae2" → "mcp-mux") so that issue ownership checks
-// work across sessions that generate different slug formats.
-func (s *Server) resolveSourceProject(ctx context.Context, m map[string]any) string {
-	var raw string
-	if config.Get().EnforceSourceProject {
-		if p := projectFromContext(ctx); p != "" {
-			raw = p
-		}
-	}
-	if raw == "" {
-		raw = coerceString(m["project"], "")
-	}
+// issueSourceProject returns transport-derived attribution only. It is never
+// used to authorize an issue mutation.
+func (s *Server) issueSourceProject(ctx context.Context) string {
+	raw := strings.TrimSpace(projectFromContext(ctx))
 	if raw == "" {
 		return ""
 	}
 	return s.issueStore.ResolveProject(ctx, raw)
+}
+
+// issueMutationActor returns the only identities permitted to mutate issues.
+// SourceClient callers are bound to their keycard; only non-client admins bypass.
+func issueMutationActor(ctx context.Context) (keycardID string, isOperator bool, err error) {
+	id, ok := auth.IdentityFrom(ctx)
+	if !ok {
+		return "", false, fmt.Errorf("issue mutation forbidden: authenticated identity is required")
+	}
+	if id.IsAdmin() && id.Source != auth.SourceClient {
+		return "", true, nil
+	}
+	if id.Source != auth.SourceClient || id.KeycardID == "" {
+		return "", false, fmt.Errorf("issue mutation forbidden: authenticated client keycard is required")
+	}
+	return id.KeycardID, false, nil
+}
+
+func (s *Server) authorizeIssueMutation(ctx context.Context, id int64) (bool, error) {
+	keycardID, isOperator, err := issueMutationActor(ctx)
+	if err != nil {
+		return false, err
+	}
+	if err := s.issueStore.AuthorizeIssueMutation(ctx, id, keycardID, isOperator); err != nil {
+		return false, err
+	}
+	return isOperator, nil
 }
 
 func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (string, error) {
@@ -217,10 +231,16 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 	}
 	labels := coerceStringSlice(m["labels"])
 
-	// Auto-fill from session context
+	// Source project is attribution from transport context, never an authority.
 	sourceAgent := coerceString(m["agent_source"], "claude-code")
-	sourceProject := s.resolveSourceProject(ctx, m)
-
+	keycardID, isOperator, err := issueMutationActor(ctx)
+	if err != nil {
+		return "", err
+	}
+	sourceProject := s.issueSourceProject(ctx)
+	if isOperator {
+		keycardID = ""
+	}
 	if targetProject == "" {
 		targetProject = sourceProject
 	}
@@ -229,14 +249,15 @@ func (s *Server) handleIssueCreate(ctx context.Context, m map[string]any) (strin
 	}
 
 	issue := &gormdb.Issue{
-		Title:         title,
-		Body:          body,
-		Priority:      priority,
-		Type:          issueType,
-		SourceProject: sourceProject,
-		TargetProject: targetProject,
-		SourceAgent:   sourceAgent,
-		Labels:        labels,
+		Title:            title,
+		Body:             body,
+		Priority:         priority,
+		Type:             issueType,
+		SourceProject:    sourceProject,
+		TargetProject:    targetProject,
+		SourceAgent:      sourceAgent,
+		CreatorKeycardID: keycardID,
+		Labels:           labels,
 	}
 
 	id, err := s.issueStore.CreateIssue(ctx, issue)
@@ -257,9 +278,14 @@ func (s *Server) handleIssueList(ctx context.Context, m map[string]any) (string,
 		sourceProject = s.issueStore.ResolveProject(ctx, sourceProject)
 	}
 	statusParam := coerceString(m["status"], "open,reopened")
-	limit := coerceInt(m["limit"], 20)
-	resolvedSinceMs := int64(coerceInt(m["resolved_since"], 0))
-
+	limit, err := parseIssueListLimit(m)
+	if err != nil {
+		return "", err
+	}
+	resolvedSinceMs, err := parseIssueResolvedSince(m)
+	if err != nil {
+		return "", err
+	}
 	var statuses []string
 	for _, s := range strings.Split(statusParam, ",") {
 		s = strings.TrimSpace(s)
@@ -275,7 +301,7 @@ func (s *Server) handleIssueList(ctx context.Context, m map[string]any) (string,
 		Limit:         limit,
 	}
 	if resolvedSinceMs > 0 {
-		t := time.Unix(0, resolvedSinceMs*int64(time.Millisecond))
+		t := time.UnixMilli(resolvedSinceMs)
 		params.ResolvedSince = &t
 	}
 
@@ -308,9 +334,33 @@ func (s *Server) handleIssueList(ctx context.Context, m map[string]any) (string,
 	return sb.String(), nil
 }
 
+const issueListMaxLimit = 100
+
+func parseIssueListLimit(m map[string]any) (int, error) {
+	limit, present, err := optionalInt64Arg(m, "limit")
+	if !present {
+		return 20, nil
+	}
+	if err != nil || limit < 1 || limit > issueListMaxLimit {
+		return 0, fmt.Errorf("limit must be between 1 and %d", issueListMaxLimit)
+	}
+	return int(limit), nil
+}
+
+func parseIssueResolvedSince(m map[string]any) (int64, error) {
+	resolvedSince, present, err := optionalInt64Arg(m, "resolved_since")
+	if !present {
+		return 0, nil
+	}
+	if err != nil || resolvedSince < 1 {
+		return 0, fmt.Errorf("resolved_since must be a positive in-range integer")
+	}
+	return resolvedSince, nil
+}
+
 func (s *Server) handleIssueGet(ctx context.Context, m map[string]any) (string, error) {
-	id := int64(coerceInt(m["id"], 0))
-	if id <= 0 {
+	id, err := requireInt64Arg(m, "id")
+	if err != nil || id <= 0 {
 		return "", fmt.Errorf("id is required for issues get")
 	}
 
@@ -342,11 +392,15 @@ func (s *Server) handleIssueGet(ctx context.Context, m map[string]any) (string, 
 }
 
 func (s *Server) handleIssueUpdate(ctx context.Context, m map[string]any) (string, error) {
-	id := int64(coerceInt(m["id"], 0))
-	if id <= 0 {
+	id, err := requireInt64Arg(m, "id")
+	if err != nil || id <= 0 {
 		return "", fmt.Errorf("id is required for issues update")
 	}
 
+	if _, err := s.authorizeIssueMutation(ctx, id); err != nil {
+		return "", err
+	}
+	sourceProject := s.issueSourceProject(ctx)
 	status := coerceString(m["status"], "")
 	comment := coerceString(m["comment"], "")
 
@@ -360,7 +414,6 @@ func (s *Server) handleIssueUpdate(ctx context.Context, m map[string]any) (strin
 	}
 
 	if comment != "" {
-		sourceProject := s.resolveSourceProject(ctx, m)
 		sourceAgent := coerceString(m["agent_source"], "claude-code")
 		_, err := s.issueStore.AddComment(ctx, id, &gormdb.IssueComment{
 			AuthorProject: sourceProject,
@@ -380,8 +433,8 @@ func (s *Server) handleIssueUpdate(ctx context.Context, m map[string]any) (strin
 }
 
 func (s *Server) handleIssueComment(ctx context.Context, m map[string]any) (string, error) {
-	id := int64(coerceInt(m["id"], 0))
-	if id <= 0 {
+	id, err := requireInt64Arg(m, "id")
+	if err != nil || id <= 0 {
 		return "", fmt.Errorf("id is required for issues comment")
 	}
 
@@ -390,7 +443,10 @@ func (s *Server) handleIssueComment(ctx context.Context, m map[string]any) (stri
 		return "", fmt.Errorf("body is required for issues comment")
 	}
 
-	sourceProject := s.resolveSourceProject(ctx, m)
+	if _, err := s.authorizeIssueMutation(ctx, id); err != nil {
+		return "", err
+	}
+	sourceProject := s.issueSourceProject(ctx)
 	sourceAgent := coerceString(m["agent_source"], "claude-code")
 
 	commentID, err := s.issueStore.AddComment(ctx, id, &gormdb.IssueComment{
@@ -406,13 +462,16 @@ func (s *Server) handleIssueComment(ctx context.Context, m map[string]any) (stri
 }
 
 func (s *Server) handleIssueReopen(ctx context.Context, m map[string]any) (string, error) {
-	id := int64(coerceInt(m["id"], 0))
-	if id <= 0 {
+	id, err := requireInt64Arg(m, "id")
+	if err != nil || id <= 0 {
 		return "", fmt.Errorf("id is required for issues reopen")
 	}
 
 	comment := coerceString(m["comment"], "")
-	sourceProject := s.resolveSourceProject(ctx, m)
+	if _, err := s.authorizeIssueMutation(ctx, id); err != nil {
+		return "", err
+	}
+	sourceProject := s.issueSourceProject(ctx)
 	sourceAgent := coerceString(m["agent_source"], "claude-code")
 
 	if err := s.issueStore.ReopenIssue(ctx, id, comment, sourceProject, sourceAgent); err != nil {
@@ -423,18 +482,17 @@ func (s *Server) handleIssueReopen(ctx context.Context, m map[string]any) (strin
 }
 
 func (s *Server) handleIssueClose(ctx context.Context, m map[string]any) (string, error) {
-	id := int64(coerceInt(m["id"], 0))
-	if id <= 0 {
+	id, err := requireInt64Arg(m, "id")
+	if err != nil || id <= 0 {
 		return "", fmt.Errorf("id is required for issues close")
 	}
 
-	sourceProject := s.resolveSourceProject(ctx, m)
-	sourceProjects := []string{sourceProject}
-	if explicitProject := strings.TrimSpace(coerceString(m["project"], "")); explicitProject != "" && explicitProject != "dashboard" && explicitProject != sourceProject {
-		sourceProjects = append(sourceProjects, explicitProject)
+	isOperator, err := s.authorizeIssueMutation(ctx, id)
+	if err != nil {
+		return "", err
 	}
 
-	if err := s.issueStore.CloseIssueFromAnySource(ctx, id, sourceProjects...); err != nil {
+	if err := s.issueStore.CloseIssue(ctx, id, isOperator); err != nil {
 		return "", err
 	}
 

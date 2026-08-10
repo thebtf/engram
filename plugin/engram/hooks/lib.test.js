@@ -281,12 +281,11 @@ test('explicit falsey quiet env overrides config-file quiet:true', (t) => {
 });
 
 test('quiet mode drains a large stdin payload without EPIPE', () => {
-  // A no-op must stay a no-op even when the host streams a large hook payload
-  // (e.g. PostToolUse after a verbose Bash/Agent call). If the child exited
-  // before draining stdin, execFileSync's writer would hit EPIPE and throw —
-  // surfacing quiet mode as a hook failure. ~2 MiB exercises the pipe buffer.
+  // A no-op must drain a large host payload before returning. Otherwise the
+  // writer can hit EPIPE and surface quiet mode as a hook failure. ~2 MiB
+  // exercises the pipe buffer.
   const bigField = 'x'.repeat(2 * 1024 * 1024);
-  const payload = JSON.stringify({ session_id: 'quiet-big', cwd: __dirname, tool_output: bigField });
+  const payload = JSON.stringify({ session_id: 'quiet-big', cwd: __dirname, payload: bigField });
   const out = runHookProcess('session-start.js', { ENGRAM_QUIET: '1' }, payload);
   assert.strictEqual(out, '{"continue":true}',
     'quiet mode must drain large stdin and return a clean no-op (no EPIPE)');
@@ -322,7 +321,7 @@ test('isInjectionHook gates only the push-context hooks, never capture/learning'
     assert.strictEqual(lib.isInjectionHook(h), true,
       `${h} pushes prompt context — quiet must gate it`);
   }
-  for (const h of ['UserPromptSubmit', 'PostToolUse', 'Stop', 'SessionEnd', 'SubagentStop']) {
+  for (const h of ['UserPromptSubmit', 'Stop', 'SessionEnd', 'SubagentStop']) {
     assert.strictEqual(lib.isInjectionHook(h), false,
       `${h} is capture/learning — it must keep running under quiet so engram still learns`);
   }

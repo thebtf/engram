@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -22,11 +21,6 @@ func projectBareName(projectID string) string {
 // IssueStore provides CRUD operations for issues and issue comments.
 type IssueStore struct {
 	db *gorm.DB
-}
-
-type closeIssueCandidate struct {
-	raw      string
-	resolved string
 }
 
 // NewIssueStore creates a new IssueStore.
@@ -62,6 +56,7 @@ func (s *IssueStore) CreateIssue(ctx context.Context, issue *Issue) (int64, erro
 		TargetProject:    issue.TargetProject,
 		SourceAgent:      issue.SourceAgent,
 		CreatedBySession: issue.CreatedBySession,
+		CreatorKeycardID: issue.CreatorKeycardID,
 		Labels:           issue.Labels,
 		CreatedAt:        now,
 		UpdatedAt:        now,
@@ -131,13 +126,13 @@ func (s *IssueStore) ListIssuesEx(ctx context.Context, params IssueListParams) (
 	// Query "mcp-mux_e54050" matches issues with target_project="mcp-mux_e54050" AND "mcp-mux".
 	if params.TargetProject != "" {
 		bare := projectBareName(params.TargetProject)
-		query = query.Where("target_project = ? OR target_project = ? OR target_project LIKE ?",
-			params.TargetProject, bare, bare+"_%")
+		query = query.Where(`target_project = ? OR target_project = ? OR target_project LIKE ? ESCAPE '\'`,
+			params.TargetProject, bare, escapeSQLLike(bare)+`\_%`)
 	}
 	if params.SourceProject != "" {
 		bare := projectBareName(params.SourceProject)
-		query = query.Where("source_project = ? OR source_project = ? OR source_project LIKE ?",
-			params.SourceProject, bare, bare+"_%")
+		query = query.Where(`source_project = ? OR source_project = ? OR source_project LIKE ? ESCAPE '\'`,
+			params.SourceProject, bare, escapeSQLLike(bare)+`\_%`)
 	}
 	if len(params.Statuses) > 0 {
 		query = query.Where("status IN ?", params.Statuses)
@@ -272,6 +267,53 @@ func (s *IssueStore) AcknowledgeIssues(ctx context.Context, ids []int64) (int64,
 	return result.RowsAffected, nil
 }
 
+// AcknowledgeIssuesAtomically requires every requested issue to exist and be
+// open before transitioning the complete set in one transaction.
+func (s *IssueStore) AcknowledgeIssuesAtomically(ctx context.Context, ids []int64) (int64, error) {
+	if len(ids) == 0 {
+		return 0, fmt.Errorf("issue ids are required")
+	}
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return 0, fmt.Errorf("invalid issue id %d", id)
+		}
+		if _, exists := seen[id]; exists {
+			return 0, fmt.Errorf("duplicate issue id %d", id)
+		}
+		seen[id] = struct{}{}
+	}
+
+	var acknowledged int64
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&Issue{}).Where("id IN ? AND status = ?", ids, "open").Count(&count).Error; err != nil {
+			return err
+		}
+		if count != int64(len(ids)) {
+			return fmt.Errorf("all requested issues must exist and be open")
+		}
+		now := time.Now()
+		result := tx.Model(&Issue{}).Where("id IN ? AND status = ?", ids, "open").Updates(map[string]interface{}{
+			"status":          "acknowledged",
+			"acknowledged_at": now,
+			"updated_at":      now,
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != int64(len(ids)) {
+			return fmt.Errorf("issue acknowledgement changed concurrently")
+		}
+		acknowledged = result.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("acknowledge issues: %w", err)
+	}
+	return acknowledged, nil
+}
+
 // ReopenIssue transitions a resolved issue back to reopened state.
 // Returns error if issue is not in 'resolved' state.
 // Optionally adds a comment explaining the reopen reason.
@@ -318,19 +360,32 @@ func (s *IssueStore) ReopenIssue(ctx context.Context, id int64, comment, authorP
 	})
 }
 
-func (s *IssueStore) CloseIssue(ctx context.Context, id int64, sourceProject string) error {
-	return s.CloseIssueFromAnySource(ctx, id, sourceProject)
+// AuthorizeIssueMutation permits an authenticated operator or the SourceClient
+// keycard that created the issue. Project metadata is never authorization data.
+func (s *IssueStore) AuthorizeIssueMutation(ctx context.Context, id int64, keycardID string, isOperator bool) error {
+	if isOperator {
+		return nil
+	}
+	if keycardID == "" {
+		return fmt.Errorf("issue mutation forbidden: authenticated client keycard is required")
+	}
+
+	var issue Issue
+	if err := s.db.WithContext(ctx).Select("creator_keycard_id").First(&issue, id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return fmt.Errorf("issue %d not found", id)
+		}
+		return fmt.Errorf("authorize issue mutation: %w", err)
+	}
+	if issue.CreatorKeycardID == "" || issue.CreatorKeycardID != keycardID {
+		return fmt.Errorf("issue mutation forbidden")
+	}
+	return nil
 }
 
-// CloseIssueFromAnySource transitions a resolved or reopened issue to closed state.
-// Only the source project (or anyone if source_project is empty) can close.
-// Dashboard operator (source_project="dashboard") can close from any state.
-//
-// Multiple source candidates let MCP handlers preserve enforced context identity
-// while still accepting the explicit issue.source_project supplied by source-side
-// agents for legacy issues whose old slug is not yet aliased to the current
-// project id.
-func (s *IssueStore) CloseIssueFromAnySource(ctx context.Context, id int64, sourceProjects ...string) error {
+// CloseIssue transitions an issue to closed state. Authorization belongs to
+// the transport boundary and must complete before this store mutation.
+func (s *IssueStore) CloseIssue(ctx context.Context, id int64, isOperator bool) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var issue Issue
 		if err := tx.First(&issue, id).Error; err != nil {
@@ -340,65 +395,6 @@ func (s *IssueStore) CloseIssueFromAnySource(ctx context.Context, id int64, sour
 			return err
 		}
 
-		// Source project authorization:
-		// - Dashboard operator can always close (bypass check)
-		// - If issue has a source_project, caller must match
-		// - If issue source_project is empty, anyone can close (backward compat)
-		//
-		// Both sides are canonicalized through ResolveProjectID before comparison.
-		// The incoming sourceProject is resolved by the handler, but the STORED
-		// issue.SourceProject is the canonical form as of *creation time*; if the
-		// project's slug/legacy-id registration changed between create and close
-		// (e.g. two sessions deriving different slugs for the same git remote, like
-		// "aimux" vs "aimux_<hash>"), a raw string compare wrongly rejects the true
-		// owner. Resolving both against the current projects table maps each to the
-		// same present-day canonical id. Resolution is idempotent for already-
-		// canonical values, so this is safe for the common case too.
-		candidates := make([]closeIssueCandidate, 0, len(sourceProjects))
-		seen := make(map[string]struct{}, len(sourceProjects))
-		isOperator := false
-		for _, sourceProject := range sourceProjects {
-			sourceProject = strings.TrimSpace(sourceProject)
-			if sourceProject == "" {
-				continue
-			}
-			if sourceProject == "dashboard" {
-				isOperator = true
-			}
-			if _, ok := seen[sourceProject]; ok {
-				continue
-			}
-			seen[sourceProject] = struct{}{}
-			candidates = append(candidates, closeIssueCandidate{raw: sourceProject})
-		}
-
-		if !isOperator && issue.SourceProject != "" {
-			// Resolve only when authorization actually needs checking (avoids two DB
-			// round-trips for the operator-bypass and empty-source paths).
-			storedSource := ResolveProjectID(ctx, tx, issue.SourceProject)
-			authorized := false
-			for i := range candidates {
-				candidates[i].resolved = ResolveProjectID(ctx, tx, candidates[i].raw)
-				candidate := candidates[i]
-				if candidate.raw == issue.SourceProject || candidate.resolved == storedSource {
-					authorized = true
-					break
-				}
-			}
-			if !authorized {
-				return fmt.Errorf(
-					"close rejected: issue source_project=%q resolved_source_project=%q caller_projects=%s",
-					issue.SourceProject,
-					storedSource,
-					formatCloseCallerProjects(candidates),
-				)
-			}
-		}
-
-		// State validation:
-		// - resolved → closed: source confirms fix works
-		// - reopened → closed: source decided issue no longer needed
-		// - Operator can close from any non-terminal state
 		validFromStates := map[string]bool{"resolved": true, "reopened": true}
 		if !isOperator && !validFromStates[issue.Status] {
 			return fmt.Errorf("issue %d is %s — can only close from resolved or reopened state", id, issue.Status)
@@ -421,21 +417,6 @@ func (s *IssueStore) CloseIssueFromAnySource(ctx context.Context, id int64, sour
 		}
 		return nil
 	})
-}
-
-func formatCloseCallerProjects(candidates []closeIssueCandidate) string {
-	if len(candidates) == 0 {
-		return "[]"
-	}
-	parts := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		if candidate.raw == candidate.resolved {
-			parts = append(parts, fmt.Sprintf("%q", candidate.raw))
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("%q->%q", candidate.raw, candidate.resolved))
-	}
-	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 // RejectIssue transitions any issue to rejected state with a mandatory comment.

@@ -58,18 +58,6 @@ native hook/plugin system.
 **Server endpoint:** `GET /api/context/inject` (same as session_start, primes cache)
 **Claude Code hook:** `plugin/engram/hooks/pre-compact.js`
 
-### tool_result
-
-**Trigger:** Tool execution complete.
-**Payload:**
-```json
-{
-  "tool_name": "string",
-  "result_summary": "string"
-}
-```
-**Server endpoint:** N/A (client-side processing only)
-**Claude Code hook:** `plugin/engram/hooks/post-tool-use.js`
 
 ## Consumer Adapter Matrix
 
@@ -78,7 +66,6 @@ native hook/plugin system.
 | session_start | session-start.js | deferred | deferred | deferred |
 | session_end | stop.js | deferred | deferred | deferred |
 | pre_compact | pre-compact.js | N/A (no compaction) | deferred | deferred |
-| tool_result | post-tool-use.js | deferred | deferred | deferred |
 | memory_write | MCP tool | MCP tool | deferred | deferred |
 
 Codex, OpenClaw, and Hermes adapters are deferred until a concrete consumer

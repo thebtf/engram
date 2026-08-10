@@ -193,11 +193,11 @@ func (s *Service) maybeSleepCycle(ctx context.Context) {
 		}
 	}
 
-	// Dream-cycle crystallization: extract decisions from session transcripts and
-	// route them to candidates. Gated by ENGRAM_CRYSTALLIZATION_ENABLED so it
-	// runs on the same tick as the memory sleep cycle and shares its idle/count
-	// trigger conditions. Candidates additionally require ENGRAM_VNEXT_F_ENABLED
-	// (enforced inside runDreamCrystallization via RouteDecision).
+	// Dream-cycle crystallization extracts decisions from session transcripts and
+	// routes them to candidates on the memory sleep-cycle tick. The call is gated
+	// here by ENGRAM_CRYSTALLIZATION_ENABLED; runDreamCrystallization then fails
+	// closed on the candidate flag and candidate-writer availability before reads
+	// or extraction.
 	//
 	// Runs SYNCHRONOUSLY inside this (s.wg-tracked) sleep-cycle goroutine. The LLM
 	// client has a 30s per-attempt timeout with 3 attempts + 2s/4s backoff, so an

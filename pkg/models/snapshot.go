@@ -113,8 +113,9 @@ const (
 // SnapshotEntry is the typed unit stored inside before_state for each affected row.
 // Stored as JSONB — no new column required.
 type SnapshotEntry struct {
-	Kind   SnapshotEntryKind `json:"kind"`
-	Before json.RawMessage   `json:"before,omitempty"` // populated only for EntryKindRestore
+	Kind            SnapshotEntryKind `json:"kind"`
+	Before          json.RawMessage   `json:"before,omitempty"`           // populated only for EntryKindRestore
+	ExpectedVersion *int              `json:"expected_version,omitempty"` // nil for legacy snapshots
 }
 
 // NewBulkOpSnapshot constructs a BulkOpSnapshot with validation.

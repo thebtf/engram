@@ -26,10 +26,20 @@ The same release is also discoverable through exactly two tags per image:
 `main`, `latest`, branch, major, and minor aliases are not release identities.
 Do not replace the digest-pinned values above with moving tags.
 
-Start the pull-only stack through the deployment wrapper. It snapshots the selected
-dotenv file once, rejects nonliteral/duplicate image definitions and conflicting
-shell overrides, then runs Compose `config`, `pull`, and `up` against that frozen
-snapshot:
+Start the pull-only stack through the deployment wrapper. It copies the selected
+dotenv file to a mode-`0600` snapshot and treats that snapshot as the entire
+Compose interpolation boundary. Before any Docker call it finds every `${VAR}`
+reference in `deploy/docker-compose.runtime.yml`, rejects a different inherited
+value for a snapshot-defined key, and unsets every referenced key—including keys
+absent from the snapshot—so the parent process cannot inject configuration.
+It also rejects `COMPOSE_FILE`, `COMPOSE_PATH_SEPARATOR`,
+`COMPOSE_PROJECT_NAME`, `COMPOSE_PROFILES`, `COMPOSE_ENV_FILES`,
+`COMPOSE_DISABLE_ENV_FILE`, and `COMPOSE_PROJECT_DIRECTORY`; these can select a
+different Compose source, project, profile, or dotenv source. Docker client
+transport settings such as `DOCKER_HOST`, `DOCKER_CONTEXT`, and TLS variables
+are preserved. The wrapper runs `docker compose config --quiet` to fully
+interpolate, resolve, and validate without printing resolved configuration, then
+runs `pull` and `up` with the same sanitized environment and frozen snapshot:
 
 ```bash
 ENV_FILE=.env

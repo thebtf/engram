@@ -949,9 +949,9 @@ func (s *Service) initializeAsync() {
 	s.processor = processor
 	s.initMu.Unlock()
 
-	// Wire crystallization candidate store (Milestone-F TG4).
-	// Gated on ENGRAM_VNEXT_F_ENABLED so production deployments without the flag
-	// see no change in behaviour (candidateStore stays nil → dream-cycle RouteDecision returns nil).
+	// Wire crystallization candidate storage only when the candidate flag is enabled.
+	// The dream cycle additionally checks both flags and writer availability before
+	// it reads transcripts or constructs an extractor.
 	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
 		candidateStore := gorm.NewCandidateStore(store.GetDB(), auditStore)
 		s.SetCandidateStore(candidateStore)

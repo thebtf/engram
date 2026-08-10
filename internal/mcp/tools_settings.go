@@ -25,8 +25,11 @@ func (s *Server) handleSettingsConsolidated(ctx context.Context, args json.RawMe
 		return "", err
 	}
 
-	action := coerceString(m["action"], "")
-	if action == "" {
+	action, present, err := optionalStringArg(m, "action")
+	if err != nil {
+		return "", err
+	}
+	if !present || action == "" {
 		return "", fmt.Errorf("action required for settings tool (valid: set, get, list, delete)")
 	}
 
@@ -87,17 +90,28 @@ func (s *Server) handleSetSetting(ctx context.Context, m map[string]any) (string
 		return "", err
 	}
 
-	key := strings.TrimSpace(coerceString(m["key"], ""))
-	if key == "" {
+	keyValue, keyPresent, err := optionalStringArg(m, "key")
+	if err != nil {
+		return "", err
+	}
+	key := strings.TrimSpace(keyValue)
+	if !keyPresent || key == "" {
 		return "", fmt.Errorf("key is required")
 	}
-	value := coerceString(m["value"], "")
-	if value == "" {
+	value, valuePresent, err := optionalStringArg(m, "value")
+	if err != nil {
+		return "", err
+	}
+	if !valuePresent || value == "" {
 		return "", fmt.Errorf("value is required")
 	}
 	// A key is secret if its name marks it (.api_key) OR the caller explicitly asks. The
 	// name rule is the safety net; the explicit flag is forward-compat for future secret keys.
-	secret := isSecretSettingKey(key) || coerceBool(m["encrypt"], false)
+	encrypt, _, err := optionalBoolArg(m, "encrypt")
+	if err != nil {
+		return "", err
+	}
+	secret := isSecretSettingKey(key) || encrypt
 
 	store, err := s.settingsStore()
 	if err != nil {
@@ -105,10 +119,14 @@ func (s *Server) handleSetSetting(ctx context.Context, m map[string]any) (string
 	}
 
 	in := &models.ModelSetting{
-		Key:         key,
-		Description: coerceString(m["description"], ""),
-		EditedBy:    "mcp",
+		Key:      key,
+		EditedBy: "mcp",
 	}
+	description, _, err := optionalStringArg(m, "description")
+	if err != nil {
+		return "", err
+	}
+	in.Description = description
 
 	if secret {
 		v, vErr := s.getVault()
@@ -218,8 +236,12 @@ func (s *Server) handleDeleteSetting(ctx context.Context, m map[string]any) (str
 		return "", err
 	}
 
-	key := strings.TrimSpace(coerceString(m["key"], ""))
-	if key == "" {
+	keyValue, keyPresent, err := optionalStringArg(m, "key")
+	if err != nil {
+		return "", err
+	}
+	key := strings.TrimSpace(keyValue)
+	if !keyPresent || key == "" {
 		return "", fmt.Errorf("key is required")
 	}
 

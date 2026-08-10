@@ -61,6 +61,18 @@ func TestStoreMemory_DryRun_RequiresContent(t *testing.T) {
 	assert.Contains(t, err.Error(), "content is required")
 }
 
+func TestStoreMemoryCreateUsesLosslessSupersedesSelector(t *testing.T) {
+	s := NewServer(ServerOptions{Version: "strict-store"})
+	ctx := auth.WithIdentity(context.Background(), auth.Admin())
+	_, err := s.handleStoreMemory(ctx, json.RawMessage(`{"content":"exact","project":"test","supersedes":[9007199254740993],"dry_run":true}`))
+	require.NoError(t, err)
+	for _, raw := range []string{`[1.5]`, `["1"]`, `[9223372036854775808]`} {
+		_, err := s.handleStoreMemory(ctx, json.RawMessage(`{"content":"bad","project":"test","supersedes":`+raw+`,"dry_run":true}`))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "supersedes")
+	}
+}
+
 // TestPromoteCandidate_DryRun_NilStore verifies promote_candidate dry_run=true
 // returns a preview without hitting candidateStore (nil-safe path).
 func TestPromoteCandidate_DryRun_NilStore(t *testing.T) {
@@ -176,6 +188,36 @@ func TestBulkOps_FlagOff_NotAdvertised(t *testing.T) {
 		assert.NotEqual(t, "bulk_promote", tool.Name)
 		assert.NotEqual(t, "bulk_delete", tool.Name)
 		assert.NotEqual(t, "bulk_supersede", tool.Name)
+	}
+}
+
+func TestBulkMutationsUseLosslessSelectors(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	ctx := auth.WithIdentity(context.Background(), auth.Admin())
+	for _, tc := range []struct{ tool, field string }{{"bulk_promote", "candidate_ids"}, {"bulk_delete", "memory_ids"}, {"bulk_supersede", "memory_ids"}} {
+		s := NewServer(ServerOptions{Version: "strict-bulk"})
+		out, err := s.callTool(ctx, tc.tool, json.RawMessage(`{"`+tc.field+`":[9007199254740993],"dry_run":true}`))
+		require.NoError(t, err, tc.tool)
+		require.Contains(t, out, `"would_affect":1`)
+		for _, ids := range []string{`[1.5]`, `["1"]`, `[9223372036854775808]`} {
+			out, err := s.callTool(ctx, tc.tool, json.RawMessage(`{"`+tc.field+`":`+ids+`,"dry_run":true}`))
+			require.Error(t, err, tc.tool)
+			require.Empty(t, out, tc.tool)
+		}
+		out, err = s.callTool(ctx, tc.tool, json.RawMessage(`{"`+tc.field+`":[1],"dry_run":"true"}`))
+		require.Error(t, err, tc.tool)
+		require.Empty(t, out, tc.tool)
+	}
+}
+
+func TestBulkMutationsAcceptExactIntegralDecimalAndExponentSelectors(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	ctx := auth.WithIdentity(context.Background(), auth.Admin())
+	for _, tc := range []struct{ tool, field string }{{"bulk_promote", "candidate_ids"}, {"bulk_delete", "memory_ids"}, {"bulk_supersede", "memory_ids"}} {
+		s := NewServer(ServerOptions{Version: "strict-bulk"})
+		out, err := s.callTool(ctx, tc.tool, json.RawMessage(`{"`+tc.field+`":[1.0,1e0,9007199254740993],"dry_run":true}`))
+		require.NoError(t, err, tc.tool)
+		require.Contains(t, out, `"would_affect":3`, tc.tool)
 	}
 }
 

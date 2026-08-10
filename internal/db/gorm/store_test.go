@@ -363,7 +363,6 @@ func TestStore_Optimize(t *testing.T) {
 // migration 137 drops the concept_weights table and the ConceptWeight struct was
 // deleted, so the seed-count invariant no longer applies.
 
-
 func TestUserStore_CreateInitialAdminSerializesAcrossStores(t *testing.T) {
 	dsn := os.Getenv("DATABASE_DSN")
 	if dsn == "" {
@@ -429,9 +428,9 @@ func TestUserStore_CreateInitialAdminSerializesAcrossStores(t *testing.T) {
 }
 
 const (
-	initialAdminProcessChildEnv = "ENGRAM_INITIAL_ADMIN_PROCESS_CHILD"
-	initialAdminProcessDSNEnv   = "ENGRAM_INITIAL_ADMIN_PROCESS_DSN"
-	initialAdminProcessEmailEnv = "ENGRAM_INITIAL_ADMIN_PROCESS_EMAIL"
+	initialAdminProcessChildEnv   = "ENGRAM_INITIAL_ADMIN_PROCESS_CHILD"
+	initialAdminProcessDSNEnv     = "ENGRAM_INITIAL_ADMIN_PROCESS_DSN"
+	initialAdminProcessEmailEnv   = "ENGRAM_INITIAL_ADMIN_PROCESS_EMAIL"
 	initialAdminProcessSlotEnv    = "ENGRAM_INITIAL_ADMIN_PROCESS_SLOT"
 	initialAdminProcessBarrierEnv = "ENGRAM_INITIAL_ADMIN_PROCESS_BARRIER"
 )
@@ -582,4 +581,95 @@ func TestUserStore_CreateInitialAdminRollsBackOnAuditFailure(t *testing.T) {
 	var usersAfter int64
 	require.NoError(t, store.DB.Model(&User{}).Count(&usersAfter).Error)
 	require.Zero(t, usersAfter, "failed setup audit must roll back the initial admin")
+}
+
+func TestUserStore_CreateInitialAdminConcurrentDuplicateEmailFailsSafely(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	count, err := NewUserStore(store.DB).CountUsers()
+	require.NoError(t, err)
+	require.Zero(t, count, "initial-admin setup requires an empty test database")
+
+	email := fmt.Sprintf("zz-initial-admin-duplicate-%d@example.com", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = store.DB.Exec(`DELETE FROM users WHERE email = ?`, email).Error
+	})
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			_, err := NewUserStore(store.DB).CreateInitialAdmin(context.Background(), email, "hash", nil)
+			results <- err
+		}()
+	}
+	close(start)
+
+	successes := 0
+	for range 2 {
+		err := <-results
+		if err == nil {
+			successes++
+			continue
+		}
+		require.ErrorIs(t, err, ErrInitialAdminSetupAlreadyCompleted)
+	}
+	require.Equal(t, 1, successes)
+	count, err = NewUserStore(store.DB).CountUsers()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+}
+
+func TestUserStore_CreateInitialAdminContextCancellationLeavesSetupRetryable(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	users := NewUserStore(store.DB)
+	count, err := users.CountUsers()
+	require.NoError(t, err)
+	require.Zero(t, count, "initial-admin setup requires an empty test database")
+
+	retryEmail := fmt.Sprintf("zz-initial-admin-retry-%d@example.com", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = store.DB.Exec(`DELETE FROM users WHERE email = ?`, retryEmail).Error
+	})
+	lockTx := store.DB.Begin()
+	require.NoError(t, lockTx.Error)
+	require.NoError(t, lockTx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "initial-admin-setup").Error)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	created, err := users.CreateInitialAdmin(ctx, "cancelled@example.com", "hash", nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, created)
+	require.NoError(t, lockTx.Rollback().Error)
+
+	count, err = users.CountUsers()
+	require.NoError(t, err)
+	require.Zero(t, count)
+	created, err = users.CreateInitialAdmin(context.Background(), retryEmail, "hash", nil)
+	require.NoError(t, err)
+	require.NotNil(t, created)
+}
+
+func TestUserStore_CreateInitialAdminInsertFailureRollsBackAndLeavesSetupRetryable(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	users := NewUserStore(store.DB)
+	count, err := users.CountUsers()
+	require.NoError(t, err)
+	require.Zero(t, count, "initial-admin setup requires an empty test database")
+
+	retryEmail := fmt.Sprintf("zz-initial-admin-retry-%d@example.com", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = store.DB.Exec(`DELETE FROM users WHERE email = ?`, retryEmail).Error
+	})
+	created, err := users.CreateInitialAdmin(context.Background(), "too-long-hash@example.com", strings.Repeat("x", 256), nil)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrInitialAdminSetupAlreadyCompleted)
+	require.Nil(t, created)
+
+	count, err = users.CountUsers()
+	require.NoError(t, err)
+	require.Zero(t, count)
+	created, err = users.CreateInitialAdmin(context.Background(), retryEmail, "hash", nil)
+	require.NoError(t, err)
+	require.NotNil(t, created)
 }

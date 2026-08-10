@@ -49,7 +49,7 @@ var daemonVersion = version.Daemon
 
 const (
 	muxcoreDaemonFlag      = "--muxcore-daemon"
-	muxcoreEmbeddedVersion = "v0.28.0"
+	muxcoreEmbeddedVersion = "v0.29.1"
 	muxcoreNamespace       = "engram"
 )
 
@@ -331,8 +331,8 @@ func muxcoreDaemonConfig(disp *dispatcher.Dispatcher) engine.Config {
 func muxcoreShimConfig() engine.Config {
 	cfg := muxcoreBaseConfig()
 	cfg.Persistent = false // host shim owns no durable state
-	// IdleSuspendDelay and IdleDormantGrace stay zero until muxcore exports a
-	// host-stdio supervisor that consumes its private dormant handshake.
+	// IdleSuspendDelay and IdleDormantGrace stay zero: muxcore's supervisor
+	// exists, but Engram's plugin launcher does not wire it.
 	cfg.Handler = func(context.Context, io.Reader, io.Writer) error {
 		return fmt.Errorf("engram muxcore shim cannot serve MCP traffic directly")
 	}

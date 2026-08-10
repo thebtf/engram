@@ -288,12 +288,8 @@ func (s *SnapshotStore) Pin(ctx context.Context, snapshotID string) error {
 }
 
 // AmendPromoteEntries adds EntryKindDelete typed entries for memory IDs that were
-// CREATED by a promotion. These entries tell rollback to hard-delete those rows
-// (they have no pre-op state to restore). The method reads the existing before_state,
-// merges the new delete entries, and writes back atomically.
-//
-// Promotion callers should run this in the same transaction that creates the
-// snapshot and promoted memory so an amend error cannot commit a partial rollback snapshot.
+// created by a promotion. Promotion callers must run this in the same transaction
+// that creates the snapshot and promoted memory.
 func (s *SnapshotStore) AmendPromoteEntries(ctx context.Context, snapshotID string, promotedMemoryIDs []int64) error {
 	if len(promotedMemoryIDs) == 0 {
 		return nil
@@ -309,8 +305,18 @@ func (s *SnapshotStore) AmendPromoteEntriesTx(ctx context.Context, tx *gorm.DB, 
 	return s.amendPromoteEntriesTx(ctx, tx, snapshotID, promotedMemoryIDs)
 }
 
+// AmendPromoteEntriesWithCandidatesTx records the exact locked candidate state
+// and the memories created by successful promotions in the caller's transaction.
+func (s *SnapshotStore) AmendPromoteEntriesWithCandidatesTx(ctx context.Context, tx *gorm.DB, snapshotID string, candidateBefore map[int64]json.RawMessage, promotedMemoryIDs []int64) error {
+	return s.amendPromoteEntriesWithCandidatesTx(ctx, tx, snapshotID, candidateBefore, promotedMemoryIDs)
+}
+
 func (s *SnapshotStore) amendPromoteEntriesTx(ctx context.Context, tx *gorm.DB, snapshotID string, promotedMemoryIDs []int64) error {
-	if len(promotedMemoryIDs) == 0 {
+	return s.amendPromoteEntriesWithCandidatesTx(ctx, tx, snapshotID, nil, promotedMemoryIDs)
+}
+
+func (s *SnapshotStore) amendPromoteEntriesWithCandidatesTx(ctx context.Context, tx *gorm.DB, snapshotID string, candidateBefore map[int64]json.RawMessage, promotedMemoryIDs []int64) error {
+	if len(candidateBefore) == 0 && len(promotedMemoryIDs) == 0 {
 		return nil
 	}
 
@@ -328,6 +334,14 @@ func (s *SnapshotStore) amendPromoteEntriesTx(ctx context.Context, tx *gorm.DB, 
 		if err := json.Unmarshal([]byte(row.BeforeState), &existing); err != nil {
 			return fmt.Errorf("amend_promote_entries: decode before_state: %w", err)
 		}
+	}
+
+	for candidateID, before := range candidateBefore {
+		entry, err := json.Marshal(models.SnapshotEntry{Kind: models.EntryKindRestore, Before: before})
+		if err != nil {
+			return fmt.Errorf("amend_promote_entries: serialize candidate %d: %w", candidateID, err)
+		}
+		existing[fmt.Sprintf("candidate:%d", candidateID)] = json.RawMessage(entry)
 	}
 
 	// Use entity-prefixed keys whenever a snapshot contains both candidate and

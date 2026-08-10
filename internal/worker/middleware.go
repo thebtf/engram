@@ -209,7 +209,8 @@ type TokenAuth struct {
 
 // NewTokenAuth creates a new TokenAuth using a provided token.
 // If ENGRAM_AUTH_DISABLED is set, authentication is replaced by a synthetic
-// admin session identity for dashboard/operator flows.
+// admin identity for dashboard/operator flows. The identity is deliberately
+// not a browser session, so it cannot manage durable keycards.
 // Otherwise, authentication will be enforced at startup (see Service.Start).
 func NewTokenAuth(token string) (*TokenAuth, error) {
 	authDisabled := authDisabledFromEnv()
@@ -358,10 +359,10 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 		authentikTrustedProxies := ta.authentikTrustedProxies
 		ta.mu.RUnlock()
 
-		// Explicit disabled-auth mode behaves as a synthetic browser admin
-		// session so downstream dashboard handlers see one coherent access map.
+		// Explicit disabled-auth mode retains ordinary admin access without
+		// impersonating a browser session. Keycard handlers therefore reject it.
 		if authDisabled {
-			next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), authpkg.Session("admin"))))
+			next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), authpkg.AuthDisabled())))
 			return
 		}
 

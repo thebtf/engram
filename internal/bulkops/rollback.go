@@ -1,9 +1,9 @@
 // Package bulkops — rollback.go implements snapshot rollback with conflict detection.
 //
 // Rollback restores the before_state of a bulk_op_snapshot to the memories table.
-// Per spec EC-F3: if any affected memory's updated_at > snapshot.created_at, the
-// rollback is refused (not partially applied). The caller receives ErrRollbackConflict
-// and an audit entry with action='rollback_attempted_with_conflict'.
+// Typed restore entries use their expected post-mutation version to reject later edits;
+// legacy entries fall back to updated_at > snapshot.created_at. The rollback is refused
+// (not partially applied) and returns ErrRollbackConflict on any conflict.
 //
 // Successful rollback writes action='rollback' to the audit log and marks the snapshot
 // status='rolled_back' via SnapshotStore.MarkRolledBack.
@@ -31,6 +31,10 @@ var ErrRollbackConflict = errors.New("rollback_conflict")
 // ErrSnapshotNotRollbackable is returned when the snapshot status is not 'committed'
 // (e.g., already rolled back or in preview state).
 var ErrSnapshotNotRollbackable = errors.New("snapshot_not_rollbackable")
+
+// ErrLegacySnapshotAmbiguous is returned when a legacy unprefixed promotion
+// snapshot collides across candidate and memory identities.
+var ErrLegacySnapshotAmbiguous = errors.New("legacy_snapshot_ambiguous")
 
 // RollbackResult is the outcome of a Rollback call.
 type RollbackResult struct {
@@ -82,9 +86,11 @@ func Rollback(
 		return nil, fmt.Errorf("rollback: snapshot %q has status %q, expected 'committed': %w",
 			snapshotID, snap.Status, ErrSnapshotNotRollbackable)
 	}
+	if auditStore == nil {
+		return nil, errors.New("rollback: audit store required")
+	}
 
 	actor := resolveActor(identity)
-
 
 	// Conflict detection and mutations must share one transaction. Locking each target
 	// row makes a concurrent edit commit before the check or wait behind this rollback.
@@ -103,20 +109,34 @@ func Rollback(
 		if err != nil {
 			return fmt.Errorf("rollback: decode before_state: %w", err)
 		}
+		if err := rejectAmbiguousLegacyPromoteEntriesTx(ctx, tx, lockedSnap.OpType, typedEntries); err != nil {
+			return err
+		}
 
-		var idsToCheck []int64
+		var legacyTimestampIDs []int64
 		var createdIDsToCheck []int64
+		expectedVersions := make(map[int64]int)
 		for _, id := range lockedSnap.AffectedMemoryIDs {
-			if entry, ok := snapshotEntryForMemoryID(typedEntries, id); ok && entry.Kind == models.EntryKindDelete {
+			entry, ok := snapshotEntryForMemoryID(typedEntries, id)
+			if ok && entry.ExpectedVersion != nil {
+				expectedVersions[id] = *entry.ExpectedVersion
+				continue
+			}
+			if ok && entry.Kind == models.EntryKindDelete {
 				createdIDsToCheck = append(createdIDsToCheck, id)
 				continue
 			}
-			idsToCheck = append(idsToCheck, id)
+			legacyTimestampIDs = append(legacyTimestampIDs, id)
 		}
-		conflictIDs, err := detectConflictsTx(ctx, tx, idsToCheck, lockedSnap.CreatedAt)
+		conflictIDs, err := detectConflictsTx(ctx, tx, legacyTimestampIDs, lockedSnap.CreatedAt, lockedSnap.OpType == models.SnapshotOpBulkDelete)
 		if err != nil {
 			return fmt.Errorf("rollback: conflict detection: %w", err)
 		}
+		versionConflictIDs, err := detectExpectedVersionConflictsTx(ctx, tx, expectedVersions)
+		if err != nil {
+			return fmt.Errorf("rollback: version conflict detection: %w", err)
+		}
+		conflictIDs = append(conflictIDs, versionConflictIDs...)
 		createdConflictIDs, err := detectCreatedRowConflictsTx(ctx, tx, createdIDsToCheck)
 		if err != nil {
 			return fmt.Errorf("rollback: created-row conflict detection: %w", err)
@@ -198,16 +218,23 @@ func Rollback(
 		}
 
 		result.RestoredCount = restored
+		if err := auditStore.LogTx(ctx, tx, gormdb.AuditLogEntry{
+			Action: "rollback",
+			Actor:  actor,
+			Reason: fmt.Sprintf("snapshot=%s restored=%d", snapshotID, result.RestoredCount),
+		}); err != nil {
+			return fmt.Errorf("rollback: audit: %w", err)
+		}
 		return nil
 	})
 
 	if errors.Is(txErr, ErrRollbackConflict) {
-		if auditStore != nil {
-			_ = auditStore.Log(ctx, gormdb.AuditLogEntry{
-				Action: "rollback_attempted_with_conflict",
-				Actor:  actor,
-				Reason: fmt.Sprintf("snapshot=%s conflict_ids=%v", snapshotID, result.ConflictIDs),
-			})
+		if err := auditStore.Log(ctx, gormdb.AuditLogEntry{
+			Action: "rollback_attempted_with_conflict",
+			Actor:  actor,
+			Reason: fmt.Sprintf("snapshot=%s conflict_ids=%v", snapshotID, result.ConflictIDs),
+		}); err != nil {
+			return result, errors.Join(ErrRollbackConflict, fmt.Errorf("rollback conflict audit: %w", err))
 		}
 		return result, ErrRollbackConflict
 	}
@@ -215,16 +242,8 @@ func Rollback(
 		return nil, txErr
 	}
 
-	// Audit success (outside tx — non-fatal if it fails).
-	if auditStore != nil {
-		_ = auditStore.Log(ctx, gormdb.AuditLogEntry{
-			Action: "rollback",
-			Actor:  actor,
-			Reason: fmt.Sprintf("snapshot=%s restored=%d", snapshotID, result.RestoredCount),
-		})
-	}
-
 	return result, nil
+
 }
 
 const (
@@ -255,14 +274,71 @@ func snapshotEntryForMemoryID(entries map[string]models.SnapshotEntry, id int64)
 	return entry, ok
 }
 
-// detectConflictsTx locks each existing memory before checking its timestamp.
-func detectConflictsTx(ctx context.Context, tx *gormpkg.DB, ids []int64, snapshotTime time.Time) ([]int64, error) {
+// rejectAmbiguousLegacyPromoteEntriesTx refuses legacy bulk-promote and
+// candidate-review entries whose unprefixed ID names both a candidate and memory.
+// Entity-prefixed entries carry their identity and are always safe to process.
+func rejectAmbiguousLegacyPromoteEntriesTx(ctx context.Context, tx *gormpkg.DB, opType models.SnapshotOpType, entries map[string]models.SnapshotEntry) error {
+	if opType != models.SnapshotOpBulkPromote && opType != models.SnapshotOpCandidateReviewAction {
+		return nil
+	}
+	for key := range entries {
+		entity, id, err := parseSnapshotEntryKey(key)
+		if err != nil {
+			return fmt.Errorf("rollback: parse entry key %q: %w", key, err)
+		}
+		if entity != "" {
+			continue
+		}
+
+		var candidates, memories int64
+		if err := tx.WithContext(ctx).Table("crystallization_candidates").Where("id = ?", id).Count(&candidates).Error; err != nil {
+			return fmt.Errorf("rollback: inspect legacy candidate %d: %w", id, err)
+
+		}
+		if err := tx.WithContext(ctx).Table("memories").Where("id = ?", id).Count(&memories).Error; err != nil {
+			return fmt.Errorf("rollback: inspect legacy memory %d: %w", id, err)
+		}
+		if candidates > 0 && memories > 0 {
+			return fmt.Errorf("rollback: legacy unprefixed %s snapshot entry %d is candidate/memory ambiguous: %w", opType, id, ErrLegacySnapshotAmbiguous)
+		}
+	}
+	return nil
+}
+
+// detectExpectedVersionConflictsTx locks each row, including soft-deleted rows,
+// and requires its version to equal the version produced by the forward mutation.
+func detectExpectedVersionConflictsTx(ctx context.Context, tx *gormpkg.DB, expectedVersions map[int64]int) ([]int64, error) {
+	var conflicts []int64
+	for id, expectedVersion := range expectedVersions {
+		var mem gormdb.Memory
+		err := tx.WithContext(ctx).Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).First(&mem).Error
+		if err != nil {
+			if errors.Is(err, gormpkg.ErrRecordNotFound) {
+				conflicts = append(conflicts, id)
+				continue
+			}
+			return nil, fmt.Errorf("detectExpectedVersionConflicts: lock memory %d: %w", id, err)
+		}
+		if mem.Version != expectedVersion {
+			conflicts = append(conflicts, id)
+		}
+	}
+	return conflicts, nil
+}
+
+// detectConflictsTx locks each row, including soft-deleted rows, before checking
+// its timestamp. Missing rows conflict for legacy bulk-delete snapshots, where a
+// restore cannot safely distinguish deletion from a later hard-delete.
+func detectConflictsTx(ctx context.Context, tx *gormpkg.DB, ids []int64, snapshotTime time.Time, missingIsConflict bool) ([]int64, error) {
 	var conflicts []int64
 	for _, id := range ids {
 		var mem gormdb.Memory
-		err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&mem, id).Error
+		err := tx.WithContext(ctx).Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).First(&mem).Error
 		if err != nil {
 			if errors.Is(err, gormpkg.ErrRecordNotFound) {
+				if missingIsConflict {
+					conflicts = append(conflicts, id)
+				}
 				continue
 			}
 			return nil, fmt.Errorf("detectConflicts: lock memory %d: %w", id, err)

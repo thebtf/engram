@@ -41,17 +41,17 @@ func ruleGovernanceMigration144() *gormigrate.Migration {
 					CONSTRAINT rule_candidates_anti_capture_status_escape_chk
 						CHECK (btrim(anti_capture_status) <> '' AND (
 							anti_capture_status !~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION)' OR
-							anti_capture_status ~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION): .*\\S'
+							anti_capture_status ~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION): .*[[:graph:]]$'
 						)),
 					CONSTRAINT rule_candidates_conflict_status_escape_chk
 						CHECK (btrim(conflict_status) <> '' AND (
 							conflict_status !~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION)' OR
-							conflict_status ~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION): .*\\S'
+							conflict_status ~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION): .*[[:graph:]]$'
 						)),
 					CONSTRAINT rule_candidates_decay_policy_escape_chk
 						CHECK (btrim(decay_policy) <> '' AND (
 							decay_policy !~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION)' OR
-							decay_policy ~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION): .*\\S'
+							decay_policy ~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION): .*[[:graph:]]$'
 						)),
 					CONSTRAINT rule_candidates_activation_object_chk
 						CHECK (jsonb_typeof(activation_predicate_json) = 'object'),
@@ -106,17 +106,17 @@ func ruleGovernanceMigration144() *gormigrate.Migration {
 					CONSTRAINT rule_versions_anti_capture_status_escape_chk
 						CHECK (btrim(anti_capture_status) <> '' AND (
 							anti_capture_status !~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION)' OR
-							anti_capture_status ~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION): .*\\S'
+							anti_capture_status ~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION): .*[[:graph:]]$'
 						)),
 					CONSTRAINT rule_versions_conflict_status_escape_chk
 						CHECK (btrim(conflict_status) <> '' AND (
 							conflict_status !~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION)' OR
-							conflict_status ~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION): .*\\S'
+							conflict_status ~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION): .*[[:graph:]]$'
 						)),
 					CONSTRAINT rule_versions_decay_policy_escape_chk
 						CHECK (btrim(decay_policy) <> '' AND (
 							decay_policy !~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION)' OR
-							decay_policy ~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION): .*\\S'
+							decay_policy ~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION): .*[[:graph:]]$'
 						)),
 					CONSTRAINT rule_versions_activation_object_chk
 						CHECK (jsonb_typeof(activation_predicate_json) = 'object'),

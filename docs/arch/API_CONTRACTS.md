@@ -123,13 +123,12 @@ Bypass: `ENGRAM_AUTH_SKIP_LOCAL=true` skips auth for RFC 1918 addresses.
 | `POST` | `/api/tokens` | Create worker keycard. |
 | `DELETE` | `/api/tokens/:id` | Revoke token. |
 
-### Hook Endpoints
+### Hook and Observation Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/hooks/session-start` | Session initialization + context injection. |
 | `POST` | `/api/hooks/user-prompt` | Record user prompt text. |
-| `POST` | `/api/hooks/post-tool-use` | Record tool invocation. |
 | `POST` | `/api/hooks/pre-tool-use` | Pre-tool context enrichment. |
 | `POST` | `/api/hooks/pre-compact` | Pre-compaction state capture. |
 | `POST` | `/api/hooks/stop` | Session end summary. |
@@ -184,10 +183,9 @@ Hooks write to stdout for Claude Code to consume:
 
 ### Configuration
 
-Hook registration in `plugin/engram/hooks/hooks.json`. Each hook specifies:
-- `type`: PreToolUse, PostToolUse, Stop, etc.
-- `command`: path to JS file
-- Matching rules (tool names, event types)
+Hook registration in `plugin/engram/hooks/hooks.json` specifies each Claude Code event,
+its command, and any matching rules. The current set does not capture tool results
+automatically; use MCP `store` and `recall` for deliberate memory operations.
 
 ---
 

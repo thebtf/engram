@@ -7,9 +7,12 @@ description: Use when you want to explicitly store or recall knowledge across se
 
 ## Overview
 
-Engram is persistent shared memory for Claude Code. Hooks automatically capture observations from your coding sessions. Your job is to **use** that knowledge — search it, build on it, and keep it clean.
+Engram is persistent shared memory for Claude Code. Hooks automatically inject relevant
+context at session start and when you submit a prompt, then process citations and outcomes
+as the session closes. Use MCP tools for deliberate memory operations.
 
-**Core principle:** Hooks handle automatic capture. You handle retrieval, explicit storage, and curation.
+**Core principle:** Hooks provide context and lifecycle processing. You deliberately retrieve,
+store, and curate knowledge.
 
 ## Connection Check
 
@@ -24,13 +27,13 @@ Tool: check_system_health()
 
 ## What Hooks Do Automatically
 
-| Hook | Fires When | Captures |
+| Hook | Fires When | Behavior |
 |------|-----------|----------|
 | **SessionStart** | Conversation begins | Injects relevant project memories into context |
 | **UserPromptSubmit** | User sends a message | Searches for relevant memories and injects them as `<relevant-memory>` context |
-| **PostToolUse** | Any tool completes | Captures tool usage patterns and outcomes |
-| **SubagentStop** | Subagent finishes | Notifies system of subagent completion |
-| **Stop** | Session ends | Generates session summary, stores key observations |
+| **Stop** | Session stops | Sends the transcript for citation and session processing |
+| **SessionEnd** | Session closes | Propagates the session outcome |
+| **SubagentStop** | Subagent finishes | Notifies the system of subagent completion |
 
 ## Mandatory Workflow
 

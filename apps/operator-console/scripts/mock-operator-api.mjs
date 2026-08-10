@@ -154,6 +154,20 @@ const memoryRows = [
   },
 ]
 
+const searchGuidanceRows = [
+  {
+    id: 303,
+    project: 'operator-console',
+    type: 'behavioral_rule',
+    memory_type: 'guidance',
+    title: 'behavioral rule guidance: preserve explicit memory evidence',
+    narrative: 'Guidance results are not memory records and cannot open the memory page.',
+    content: 'behavioral rule guidance: preserve explicit memory evidence',
+    similarity: 0.88,
+    created_at: '2026-06-23T10:00:00Z',
+  },
+]
+
 const suppressedMemoryIds = new Set()
 
 let projectIds = ['operator-console', 'project-alpha']
@@ -1186,20 +1200,23 @@ const server = createServer(async (req, res) => {
           json(res, 400, { error: 'project and query required' })
           return
         }
-        const observations = memoryRows
-          .filter((row) => row.project === project && !suppressedMemoryIds.has(String(row.id)))
-          .filter((row) => row.content.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
-          .slice(0, 20)
-          .map((row) => ({
-            id: row.id,
-            project: row.project,
-            type: 'discovery',
-            title: row.content,
-            narrative: row.content,
-            content: row.content,
-            similarity: 0.92,
-            created_at: row.updated_at,
-          }))
+        const observations = [
+          ...memoryRows
+            .filter((row) => row.project === project && !suppressedMemoryIds.has(String(row.id)))
+            .filter((row) => row.content.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
+            .map((row) => ({
+              id: row.id,
+              project: row.project,
+              type: 'discovery',
+              memory_type: 'context',
+              title: row.content,
+              narrative: row.content,
+              content: row.content,
+              similarity: 0.92,
+              created_at: row.updated_at,
+            })),
+          ...searchGuidanceRows.filter((row) => row.project === project && row.content.toLocaleLowerCase().includes(query.toLocaleLowerCase())),
+        ].slice(0, 20)
         json(res, 200, { project, query, intent: 'search', observations, threshold: 0, max_results: 20, total_results: observations.length })
       }
       return

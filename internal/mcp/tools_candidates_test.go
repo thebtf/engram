@@ -104,6 +104,30 @@ func TestHandleGetCandidate_EmptyIDReturnsError(t *testing.T) {
 		"error must mention 'id is required', got: %v", callErr)
 }
 
+func TestCandidateMutationSelectorsAreLossless(t *testing.T) {
+	t.Setenv("ENGRAM_VNEXT_F_ENABLED", "true")
+	s := NewServer(ServerOptions{Version: "strict-candidate"})
+	out, err := s.handlePromoteCandidate(context.Background(), json.RawMessage(`{"id":9007199254740993,"dry_run":true}`))
+	require.NoError(t, err)
+	require.Contains(t, out, `"candidate_id":9007199254740993`)
+
+	for _, call := range []func(*Server) (string, error){
+		func(s *Server) (string, error) {
+			return s.handlePromoteCandidate(context.Background(), json.RawMessage(`{"id":42.5,"dry_run":true}`))
+		},
+		func(s *Server) (string, error) {
+			return s.handleRejectCandidate(context.Background(), json.RawMessage(`{"id":"42"}`))
+		},
+		func(s *Server) (string, error) {
+			return s.handleSupersedeCandidate(context.Background(), json.RawMessage(`{"id":1e3}`))
+		},
+	} {
+		out, err := call(s)
+		require.Error(t, err)
+		require.Empty(t, out)
+	}
+}
+
 func TestCandidateTools_ExposeCR008ReviewLoopContracts(t *testing.T) {
 	names := map[string]bool{}
 	for _, tool := range candidateTools() {

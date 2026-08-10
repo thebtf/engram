@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/thebtf/engram/pkg/models"
@@ -117,6 +118,57 @@ func TestNodesStore_T012_ValidateUpdate(t *testing.T) {
 	_, err = ns.Update(ctx, &models.KnowledgeNode{ID: 0})
 	if err == nil {
 		t.Error("Update with ID=0 should return an error")
+	}
+}
+
+// TestNodesStore_MetadataValidationRejectsInvalidValues verifies that malformed
+// and non-object metadata returns validation errors before either mutation reaches the DB.
+func TestNodesStore_MetadataValidationRejectsInvalidValues(t *testing.T) {
+	ns := &NodesStore{db: nil}
+	ctx := context.Background()
+
+	operations := []struct {
+		name string
+		call func([]byte) error
+	}{
+		{
+			name: "Create",
+			call: func(metadata []byte) error {
+				_, err := ns.Create(ctx, &models.KnowledgeNode{
+					NodeType: models.NodeTypeSkill, ExternalRef: "metadata-test", Project: "project", Metadata: metadata,
+				})
+				return err
+			},
+		},
+		{
+			name: "Update",
+			call: func(metadata []byte) error {
+				_, err := ns.Update(ctx, &models.KnowledgeNode{ID: 1, Metadata: metadata})
+				return err
+			},
+		},
+	}
+	cases := []struct {
+		name     string
+		metadata []byte
+		message  string
+	}{
+		{name: "malformed", metadata: []byte(`{"unterminated":`), message: "valid JSON"},
+		{name: "array", metadata: []byte(`[]`), message: "JSON object"},
+		{name: "string", metadata: []byte(`"value"`), message: "JSON object"},
+		{name: "number", metadata: []byte(`1`), message: "JSON object"},
+		{name: "boolean", metadata: []byte(`true`), message: "JSON object"},
+	}
+
+	for _, operation := range operations {
+		for _, tc := range cases {
+			t.Run(operation.name+"/"+tc.name, func(t *testing.T) {
+				err := operation.call(tc.metadata)
+				if err == nil || !strings.Contains(err.Error(), tc.message) {
+					t.Fatalf("expected metadata validation error containing %q, got %v", tc.message, err)
+				}
+			})
+		}
 	}
 }
 
