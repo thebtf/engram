@@ -22,7 +22,7 @@ for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     --max-time "$request_timeout_seconds" \
     -H "Authorization: Bearer ${GITHUB_TOKEN}" \
     -H 'Accept: application/vnd.github+json' \
-    "https://api.github.com/repos/thebtf/engram/releases?per_page=100" > "$release" 2>&1)"; then
+    "https://api.github.com/repos/thebtf/engram/releases?per_page=100" 2>&1 > "$release")"; then
     if node_error="$(node "$(dirname "${BASH_SOURCE[0]}")/verify-bootstrap-release-assets.js" "$policy" "$release" "$tag" 2>&1 >/dev/null)"; then
       exit 0
     fi
