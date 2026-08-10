@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "engram",
-  "version": "6.47.0",
+  "version": "6.47.1",
   "description": "Persistent memory for Claude Code and Oh My Pi",
   "owner": {
     "name": "thebtf"
@@ -10,7 +10,7 @@
     {
       "name": "engram",
       "description": "Persistent shared memory with MCP integration",
-      "version": "6.47.0",
+      "version": "6.47.1",
       "author": {
         "name": "thebtf"
       },
