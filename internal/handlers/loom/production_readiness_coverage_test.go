@@ -95,9 +95,11 @@ func TestCliWorker_ProductionReadinessStructuredArgsAndCWD(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(result.Content), &state))
 	assert.Equal(t, []string{"--role", "maker", "--model", "test-model", "--effort", "high"}, state.Args)
-	expectedCWD, err := filepath.EvalSymlinks(cwd)
+	requestedDir, err := os.Stat(cwd)
 	require.NoError(t, err)
-	assert.Equal(t, expectedCWD, state.CWD)
+	childDir, err := os.Stat(state.CWD)
+	require.NoError(t, err)
+	assert.True(t, os.SameFile(requestedDir, childDir), "child cwd %q must identify requested cwd %q", state.CWD, cwd)
 	assert.Equal(t, "structured-env", state.Env)
 	assert.Equal(t, "structured prompt", state.Prompt)
 	assert.GreaterOrEqual(t, result.DurationMS, int64(0))
