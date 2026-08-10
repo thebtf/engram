@@ -35,10 +35,10 @@ function target(version, asset, bytes) {
 
 test("one strict schema rejects malformed fields and target matrices", () => {
   const bytes = Buffer.from("trusted");
-  const policy = createPolicy("6.47.0", {
-    "win32-x64": target("6.47.0", "engram-windows-amd64.exe", bytes),
-    "linux-x64": target("6.47.0", "engram-linux-amd64", bytes),
-    "darwin-arm64": target("6.47.0", "engram-darwin-arm64", bytes),
+  const policy = createPolicy("6.47.1", {
+    "win32-x64": target("6.47.1", "engram-windows-amd64.exe", bytes),
+    "linux-x64": target("6.47.1", "engram-linux-amd64", bytes),
+    "darwin-arm64": target("6.47.1", "engram-darwin-arm64", bytes),
   });
   for (const mutate of [
     (value) => { value.extra = true; },
@@ -49,10 +49,10 @@ test("one strict schema rejects malformed fields and target matrices", () => {
   ]) {
     const malformed = structuredClone(policy);
     mutate(malformed);
-    assert.throws(() => parsePolicy(JSON.stringify(malformed), "6.47.0"), BootstrapError);
+    assert.throws(() => parsePolicy(JSON.stringify(malformed), "6.47.1"), BootstrapError);
   }
   const duplicateTarget = JSON.stringify(policy).replace('"targets":{', '"targets":{"win32-x64":null,');
-  assert.throws(() => parsePolicy(duplicateTarget, "6.47.0"), /duplicate fields/);
+  assert.throws(() => parsePolicy(duplicateTarget, "6.47.1"), /duplicate fields/);
 });
 
 test("shared policy rejects build metadata while preserving prereleases", () => {
@@ -62,8 +62,8 @@ test("shared policy rejects build metadata while preserving prereleases", () => 
     "linux-x64": target(version, "engram-linux-amd64", bytes),
     "darwin-arm64": target(version, "engram-darwin-arm64", bytes),
   });
-  assert.doesNotThrow(() => createPolicy("6.47.0-rc.1", targets("6.47.0-rc.1")));
-  assert.throws(() => createPolicy("6.47.0+build.1", targets("6.47.0+build.1")), BootstrapError);
+  assert.doesNotThrow(() => createPolicy("6.47.1-rc.1", targets("6.47.1-rc.1")));
+  assert.throws(() => createPolicy("6.47.1+build.1", targets("6.47.1+build.1")), BootstrapError);
 });
 
 test("Node 16 fails before curl or archive access", () => {
@@ -75,7 +75,7 @@ test("Node 16 fails before curl or archive access", () => {
     fs.writeFileSync(path.join(fakeBin, "node"), "#!/usr/bin/env bash\necho v16.0.0\n", { mode: 0o755 });
     fs.writeFileSync(path.join(fakeBin, "curl"), "#!/usr/bin/env bash\ntouch \"$CURL_ACCESSED\"\n", { mode: 0o755 });
     const environment = `HOME=${shellQuote(bashPath(path.join(temp, "home")))} PATH=${shellQuote(installerPath(fakeBin))} CURL_ACCESSED=${shellQuote(bashPath(accessed))}`;
-    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.0`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.notEqual(result.status, 0);
     assert.match(`${result.stdout}\n${result.stderr}`, /Node\.js 18\+/);
@@ -94,7 +94,7 @@ test("Windows-compatible Bash requires unzip before download", () => {
     fs.writeFileSync(path.join(fakeBin, "uname"), "#!/bin/sh\n[ \"$1\" = -s ] && echo MINGW64_NT || echo x86_64\n", { mode: 0o755 });
     fs.writeFileSync(path.join(fakeBin, "curl"), "#!/bin/sh\ntouch \"$CURL_ACCESSED\"\n", { mode: 0o755 });
     const environment = `HOME=${shellQuote(bashPath(path.join(temp, "home")))} PATH=${shellQuote(bashPath(fakeBin))} CURL_ACCESSED=${shellQuote(bashPath(accessed))}`;
-    const result = spawnSync("bash", ["-c", `${environment} source scripts/install.sh v6.47.0`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `${environment} source scripts/install.sh v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.notEqual(result.status, 0);
     assert.match(`${result.stdout}\n${result.stderr}`, /unzip is required/);
@@ -113,9 +113,9 @@ test("generator check mode and raw artifact gate accept only the shared target r
     fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.25.12 linux/amd64'; exit 0; fi\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then shift; printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
     const fakeGoArgument = shellQuote(bashPath(fakeGo));
     const policyArgument = shellQuote(bashPath(policyPath));
-    run("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} scripts/prepare-bootstrap-policy.sh --version 6.47.0 --output ${policyArgument}`]);
-    run("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} scripts/prepare-bootstrap-policy.sh --version 6.47.0 --output ${policyArgument} --check`]);
-    const policy = parsePolicy(fs.readFileSync(policyPath, "utf8"), "6.47.0");
+    run("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} scripts/prepare-bootstrap-policy.sh --version 6.47.1 --output ${policyArgument}`]);
+    run("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} scripts/prepare-bootstrap-policy.sh --version 6.47.1 --output ${policyArgument} --check`]);
+    const policy = parsePolicy(fs.readFileSync(policyPath, "utf8"), "6.47.1");
     fs.mkdirSync(dist, { recursive: true });
     for (const { desired } of Object.values(policy.targets)) {
       const bytes = desired.asset.includes("windows") ? "windows-amd64" : desired.asset.includes("linux") ? "linux-amd64" : "darwin-arm64";
@@ -124,7 +124,7 @@ test("generator check mode and raw artifact gate accept only the shared target r
     const archiveRoot = path.join(temp, "archive");
     fs.mkdirSync(archiveRoot);
     fs.copyFileSync(policyPath, path.join(archiveRoot, "bootstrap-targets.json"));
-    const archive = path.join(dist, "engram_6.47.0_linux_amd64.tar.gz");
+    const archive = path.join(dist, "engram_6.47.1_linux_amd64.tar.gz");
     const archived = spawnSync("tar", ["-czf", archive, "-C", archiveRoot, "bootstrap-targets.json"], { encoding: "utf8" });
     assert.equal(archived.status, 0, archived.stderr);
     run("bash", ["scripts/check-bootstrap-policy-artifacts.sh", "--policy", bashPath(policyPath), "--dist", bashPath(dist)]);
@@ -156,7 +156,7 @@ test("direct installer rejects archive self-validation before install mutation",
     fs.writeFileSync(fakeCurl, "#!/usr/bin/env bash\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then cp \"$FAKE_RELEASE_ARCHIVE\" \"$2\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
 
     const bashEnvironment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))}`;
-    const result = spawnSync("bash", ["-c", `${bashEnvironment} bash scripts/install.sh v6.47.0`], {
+    const result = spawnSync("bash", ["-c", `${bashEnvironment} bash scripts/install.sh v6.47.1`], {
       cwd: root,
       encoding: "utf8",
       env: process.env,
@@ -171,8 +171,8 @@ test("direct installer rejects archive self-validation before install mutation",
     assert.ok(powerShellInstaller.indexOf("$ValidatorScript | & node") < powerShellInstaller.indexOf("New-Item -ItemType Directory -Path \"$InstallDir\\hooks\""));
     for (const source of [powerShellInstaller, fs.readFileSync(path.join(root, "scripts", "install.sh"), "utf8")]) {
       const semver = installerSemver(source);
-      assert.equal(semver.test("6.47.0-rc.1"), true);
-      assert.equal(semver.test("6.47.0+build.1"), false);
+      assert.equal(semver.test("6.47.1-rc.1"), true);
+      assert.equal(semver.test("6.47.1+build.1"), false);
     }
     assert.match(powerShellInstaller, /Node\.js 18\+/);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
