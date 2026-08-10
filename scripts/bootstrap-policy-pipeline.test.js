@@ -203,8 +203,8 @@ exec "$node_path" "$@"
       assert.ok(calls.every((call) => /(?:^| )--max-time 5(?: |$)/.test(call)));
     };
     const policyJSON = fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8");
-    const policyVersion = JSON.parse(policyJSON).package_version;
-    const policy = parsePolicy(policyJSON, policyVersion);
+    const policy = parsePolicy(policyJSON);
+    const policyVersion = policy.package_version;
     const tagName = `v${policyVersion}`;
     fs.writeFileSync(first, "[]");
     fs.writeFileSync(second, JSON.stringify([{
