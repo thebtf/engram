@@ -1,12 +1,4 @@
-# Build and publish a GitHub release using GoReleaser.
-#
-# Triggered by version tags (v*) and manual workflow_dispatch.
-# Uses the goreleaser-cross container so CGO builds work for all
-# published platform targets without a separate cross-compilation setup.
-#
-# Job names and step names are referenced by branch protection rules and
-# release automation — do not rename without updating those dependencies.
-
+# The sole tag-triggered writer for Engram server archives and raw launcher clients.
 name: Release
 
 on:
@@ -23,13 +15,10 @@ jobs:
   release:
     runs-on: ubuntu-latest
     container:
-      # goreleaser-cross bundles the CGO toolchains for all supported targets.
-      # The nearest published 1.25.x image provides the cross toolchains; the
-      # exact Go compiler version comes from actions/setup-go and go.mod below.
       image: ghcr.io/goreleaser/goreleaser-cross:v1.25.9
     steps:
       - name: Install git-lfs
-        run: apt-get update && apt-get install -y git-lfs
+        run: apt-get update && apt-get install -y git-lfs curl
 
       - uses: actions/checkout@v4
         with:
@@ -62,7 +51,26 @@ jobs:
         env:
           ENGRAM_TOKEN: release-test-keycard
 
-      - name: Run GoReleaser
-        run: goreleaser release --clean
+      # This is intentionally a check: the integrated release commit must carry
+      # tuples generated from its exact client source before a tag can publish.
+      - name: Verify committed launcher policy
+        run: scripts/prepare-bootstrap-policy.sh --version "${GITHUB_REF_NAME#v}" --check
+
+      - name: Build split release artifacts
+        run: goreleaser release --clean --split
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Gate raw clients against committed policy
+        run: scripts/check-bootstrap-policy-artifacts.sh --policy plugin/engram/bootstrap-targets.json --dist dist
+
+      # continue --merge consumes the checked split artifacts; it does not rebuild.
+      - name: Archive sign and publish checked artifacts
+        run: goreleaser continue --merge
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read published launcher assets back
+        run: scripts/readback-bootstrap-policy-assets.sh --policy plugin/engram/bootstrap-targets.json --tag "${GITHUB_REF_NAME}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

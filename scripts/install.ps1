@@ -105,6 +105,32 @@ function Install-Release {
             Write-Err "Release archive is missing required JS scripts in $TempDir\scripts"
         }
         Copy-Item "$TempDir\scripts\*.js" "$InstallDir\scripts\" -Force -ErrorAction Stop
+        $PolicyPath = Join-Path $TempDir "bootstrap-targets.json"
+        if (-not (Test-Path -LiteralPath $PolicyPath -PathType Leaf)) {
+            Write-Err "Release archive is missing required bootstrap-targets.json"
+        }
+        try {
+            $Policy = Get-Content -Raw -LiteralPath $PolicyPath | ConvertFrom-Json -Depth 20
+            $ExpectedTargets = @('win32-x64', 'linux-x64', 'darwin-arm64')
+            $ActualTargets = @($Policy.targets.PSObject.Properties.Name | Sort-Object)
+            if ($Policy.schema_version -ne 1 -or $Policy.launcher_security_epoch -ne 1 -or
+                $Policy.daemon_compat_epoch -ne 1 -or $Policy.package_version -cne $VersionClean -or
+                (@($ActualTargets) -join ',') -cne ($ExpectedTargets -join ',')) {
+                throw 'schema or target matrix mismatch'
+            }
+            foreach ($TargetName in $ExpectedTargets) {
+                $Target = $Policy.targets.$TargetName
+                if ($null -eq $Target -or $null -ne $Target.predecessor -or
+                    $Target.desired.version -cne $VersionClean -or [long]$Target.desired.size -le 0 -or
+                    [string]$Target.desired.sha256 -cnotmatch '^[0-9a-f]{64}$') {
+                    throw "invalid desired target $TargetName"
+                }
+            }
+        }
+        catch {
+            Write-Err "Release archive has an invalid bootstrap policy: $_"
+        }
+        Copy-Item $PolicyPath "$InstallDir\bootstrap-targets.json" -Force -ErrorAction Stop
 
         Copy-Item "$TempDir\.claude-plugin\*" "$InstallDir\.claude-plugin\" -Force
 

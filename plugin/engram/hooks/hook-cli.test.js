@@ -698,6 +698,8 @@ test('release archives include scripts required by hooks and MCP wrapper', () =>
   assert.match(goreleaser, /src:\s+plugin\/engram\/scripts\/\*\.js/);
   assert.match(goreleaser, /src:\s+plugin\/engram\/hooks\/\*\.cjs/);
   assert.match(goreleaser, /dst:\s+scripts/);
+  assert.match(goreleaser, /src:\s+plugin\/engram\/bootstrap-targets\.json/);
+  assert.match(goreleaser, /id:\s+client-raw[\s\S]*?builds:[\s\S]*?engram-client[\s\S]*?formats:[\s\S]*?binary/);
   assert.deepEqual(codexMcp.mcpServers.engram.args, ['./scripts/run-engram.js']);
   assert.deepEqual(claudeMcp.mcpServers.engram.args, ['${CLAUDE_PLUGIN_ROOT}/scripts/run-engram.js']);
   assert.match(dispatcher, /\.\.\/scripts\/ensure-binary\.js/);
@@ -716,6 +718,8 @@ test('release installers copy plugin scripts from archives', () => {
   assert.match(installPs1, /New-Item -ItemType Directory -Path "\$InstallDir\\scripts"/);
   assert.match(installPs1, /Copy-Item "\$TempDir\\scripts\\\*\.js" "\$InstallDir\\scripts\\"/);
   assert.match(installPs1, /Copy-Item "\$TempDir\\hooks\\\*\.cjs" "\$InstallDir\\hooks\\"/);
+  assert.match(installSh, /bootstrap-targets\.json/);
+  assert.match(installPs1, /bootstrap-targets\.json/);
   assert.match(installPs1, /Preserving old cache versions for running-session hook compatibility/);
   assert.doesNotMatch(installPs1, /Get-ChildItem -Path \$CacheBase[\s\S]*Remove-Item -Recurse -Force/);
   assert.match(registerPluginSh, /Preserving old cache versions for running-session hook compatibility/);

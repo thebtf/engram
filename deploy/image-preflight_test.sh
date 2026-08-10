@@ -24,6 +24,18 @@ make_env() {
         printf 'ENGRAM_EMBEDDING_API_KEY=provider-sentinel\n'
     } >"${path}"
 }
+make_publication_result() {
+    local path="$1" commit="0123456789abcdef0123456789abcdef01234567" version="v6.47.0"
+    cat >"${path}" <<EOF
+{"schema_version":1,"release_version":"${version}","source_commit":"${commit}","single_writer_model":"repository-workflow-release-publish","external_package_admin_trust_boundary":true,"remote_inspection":"complete","acceptance_manifest_sha256":"sha256:$(printf 'd%.0s' {1..64})","destinations":[
+{"image":"server","reference":"ghcr.io/thebtf/engram:${version}","config_digest":"sha256:$(printf 'e%.0s' {1..64})","manifest_digest":"sha256:$(printf 'a%.0s' {1..64})","action":"pushed"},
+{"image":"server","reference":"ghcr.io/thebtf/engram:sha-${commit}","config_digest":"sha256:$(printf 'e%.0s' {1..64})","manifest_digest":"sha256:$(printf 'a%.0s' {1..64})","action":"verified-noop"},
+{"image":"operator_console","reference":"ghcr.io/thebtf/engram-operator-console:${version}","config_digest":"sha256:$(printf 'f%.0s' {1..64})","manifest_digest":"sha256:$(printf 'b%.0s' {1..64})","action":"pushed"},
+{"image":"operator_console","reference":"ghcr.io/thebtf/engram-operator-console:sha-${commit}","config_digest":"sha256:$(printf 'f%.0s' {1..64})","manifest_digest":"sha256:$(printf 'b%.0s' {1..64})","action":"verified-noop"},
+{"image":"postgres","reference":"ghcr.io/thebtf/engram-postgres:${version}","config_digest":"sha256:$(printf '0%.0s' {1..64})","manifest_digest":"sha256:$(printf 'c%.0s' {1..64})","action":"pushed"},
+{"image":"postgres","reference":"ghcr.io/thebtf/engram-postgres:sha-${commit}","config_digest":"sha256:$(printf '0%.0s' {1..64})","manifest_digest":"sha256:$(printf 'c%.0s' {1..64})","action":"verified-noop"}]}
+EOF
+}
 
 run_wrapper() {
     local source="$1" marker="$2" after_config="$3" after_pull="$4"
@@ -56,7 +68,7 @@ esac
 EOF
     chmod +x "${mock_bin}/docker"
     set +e
-    PATH="${mock_bin}:${PATH}" env -u COMPOSE_FILE -u COMPOSE_PATH_SEPARATOR -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE -u COMPOSE_PROJECT_DIRECTORY "$@" bash "${PREFLIGHT}" "${source}" >"${WRAPPER_OUTPUT}" 2>&1
+    PATH="${mock_bin}:${PATH}" env -u COMPOSE_FILE -u COMPOSE_PATH_SEPARATOR -u COMPOSE_PROJECT_NAME -u COMPOSE_PROFILES -u COMPOSE_ENV_FILES -u COMPOSE_DISABLE_ENV_FILE -u COMPOSE_PROJECT_DIRECTORY "$@" bash "${PREFLIGHT}" --publication-result "${PUBLICATION_RESULT}" --env-file "${source}" >"${WRAPPER_OUTPUT}" 2>&1
     local rc=$?
     set -e
     rm -rf "${mock_bin}"
@@ -98,6 +110,8 @@ main() {
     local operator="ghcr.io/thebtf/engram-operator-console@sha256:$(printf 'b%.0s' {1..64})"
     local postgres="ghcr.io/thebtf/engram-postgres@sha256:$(printf 'c%.0s' {1..64})"
     local marker="${tmp}/valid.compose" rc=0
+    PUBLICATION_RESULT="${tmp}/publication-result.json"
+    make_publication_result "${PUBLICATION_RESULT}"
     make_env "${tmp}/valid.env" "${server}" "${operator}" "${postgres}"
     WRAPPER_OUTPUT="${tmp}/valid.output"
     run_wrapper "${tmp}/valid.env" "${marker}" "${tmp}/valid.env" "${tmp}/valid.env" env ENGRAM_SERVER_IMAGE="${server}" ENGRAM_OPERATOR_IMAGE="${operator}" ENGRAM_POSTGRES_IMAGE="${postgres}" POSTGRES_PASSWORD=database-sentinel ENGRAM_AUTH_ADMIN_TOKEN=admin-sentinel ENGRAM_AUTH_DISABLED=false ENGRAM_VAULT_KEY=vault-sentinel ENGRAM_EMBEDDING_API_KEY=provider-sentinel || rc=$?
@@ -163,6 +177,17 @@ main() {
     make_env "${tmp}/compose-export.env" "${server}" "${operator}" "${postgres}"
     printf 'export COMPOSE_REMOVE_ORPHANS=untrusted\n' >>"${tmp}/compose-export.env"
     assert_rejected_before_compose 'export-form COMPOSE_REMOVE_ORPHANS is rejected before compose' "${tmp}/compose-export.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+    cp "${tmp}/publication-result.json" "${tmp}/invalid-publication.json"
+    sed -i 's/"remote_inspection":"complete"/"remote_inspection":"deferred"/' "${tmp}/invalid-publication.json"
+    PUBLICATION_RESULT="${tmp}/invalid-publication.json"
+    make_env "${tmp}/invalid-publication.env" "${server}" "${operator}" "${postgres}"
+    assert_rejected_before_compose 'publication provenance fields are required before compose' "${tmp}/invalid-publication.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+
+    make_publication_result "${tmp}/publication-result.json"
+    PUBLICATION_RESULT="${tmp}/publication-result.json"
+    make_env "${tmp}/manifest-mismatch.env" "ghcr.io/thebtf/engram@sha256:$(printf '9%.0s' {1..64})" "${operator}" "${postgres}"
+    assert_rejected_before_compose 'image digest must match publication manifest before compose' "${tmp}/manifest-mismatch.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+
 
     printf '\n%d tests, %d failures\n' "${TESTS_RUN}" "${TESTS_FAILED}"
     [[ ${TESTS_FAILED} -eq 0 ]]

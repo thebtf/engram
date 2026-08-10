@@ -2,9 +2,9 @@
 
 Engram production deployment is a three-image stack: PostgreSQL, server, and
 operator console. Production Compose intentionally has no moving image default.
-Every deployment starts from the post-logout `publication-result.json`
-evidence emitted by the release workflow for one canonical tag such as
-`v6.43.0-rc.1`.
+Every deployment requires the retained post-readback `publication-result.json`
+from the one release workflow execution that published the selected images. It
+is deployment authority, not merely release evidence.
 
 ## Immutable image selection
 
@@ -26,13 +26,31 @@ The same release is also discoverable through exactly two tags per image:
 `main`, `latest`, branch, major, and minor aliases are not release identities.
 Do not replace the digest-pinned values above with moving tags.
 
-Start the pull-only stack through the deployment wrapper. It copies the selected
-dotenv file to a mode-`0600` snapshot and treats that snapshot as the entire
-Compose interpolation boundary. Before any Docker call it finds every `${VAR}`
-reference in `deploy/docker-compose.runtime.yml`, rejects a different inherited
-value for a snapshot-defined key, and unsets every referenced key—including keys
-absent from the snapshot—so the parent process cannot inject configuration.
-It also rejects `COMPOSE_FILE`, `COMPOSE_PATH_SEPARATOR`,
+Start the pull-only stack through the deployment wrapper. Pass both the retained
+publication record and an optional dotenv snapshot (default: `.env`). The wrapper
+requires `python3` for strict JSON parsing; it never evaluates JSON or dotenv content as shell code.
+
+
+```bash
+PUBLICATION_RESULT=/secure/evidence/publication-result.json
+ENV_FILE=.env
+bash deploy/image-preflight.sh --publication-result "$PUBLICATION_RESULT" --env-file "$ENV_FILE"
+```
+
+Before Docker is invoked, the wrapper parses JSON without evaluation and rejects
+records unless they are schema 1, have the canonical `v*` release version and
+full lowercase commit, carry the single-writer/trust-boundary and acceptance
+manifest fields, and contain exactly the six canonical version/commit image
+destinations. Each dotenv image must equal its canonical repository plus the
+matching publication manifest digest; a mixed-release three-digest file cannot
+pass.
+
+It copies the selected dotenv file to a mode-`0600` snapshot and treats that
+snapshot as the entire Compose interpolation boundary. Before any Docker call it
+finds every `${VAR}` reference in `deploy/docker-compose.runtime.yml`, rejects a
+different inherited value for a snapshot-defined key, and unsets every referenced
+key—including keys absent from the snapshot—so the parent process cannot inject
+configuration. It also rejects `COMPOSE_FILE`, `COMPOSE_PATH_SEPARATOR`,
 `COMPOSE_PROJECT_NAME`, `COMPOSE_PROFILES`, `COMPOSE_ENV_FILES`,
 `COMPOSE_DISABLE_ENV_FILE`, and `COMPOSE_PROJECT_DIRECTORY`; these can select a
 different Compose source, project, profile, or dotenv source. Docker client
@@ -40,11 +58,6 @@ transport settings such as `DOCKER_HOST`, `DOCKER_CONTEXT`, and TLS variables
 are preserved. The wrapper runs `docker compose config --quiet` to fully
 interpolate, resolve, and validate without printing resolved configuration, then
 runs `pull` and `up` with the same sanitized environment and frozen snapshot:
-
-```bash
-ENV_FILE=.env
-bash deploy/image-preflight.sh "$ENV_FILE"
-```
 
 The root `docker-compose.yml` uses the same required image variables and also
 contains local build definitions. The image acceptance gate sets them to exact
@@ -155,7 +168,7 @@ docker run --rm --user 0:0 \
 docker run --rm --user 0:0 --cap-drop ALL --entrypoint /bin/sh \
   -v <project>_pgdata:/var/lib/postgresql/data \
   "$POSTGRES_MIGRATION_IMAGE" -c "stat -c '%u:%g:%a' /var/lib/postgresql/data"
-bash deploy/image-preflight.sh "$ENV_FILE"
+bash deploy/image-preflight.sh --publication-result "$PUBLICATION_RESULT" --env-file "$ENV_FILE"
 ```
 
 The `stat` command must print `70:70:700`. Never add `-v` to the `down` command;
@@ -164,7 +177,7 @@ the pre-migration fail-closed behavior and marker preservation after migration.
 
 Rollback uses the three digest identities from the preceding accepted release
 manifest. Change all three `ENGRAM_*_IMAGE` values as one set in a selected
-dotenv file, then run `bash deploy/image-preflight.sh "$ENV_FILE"` to recreate
+dotenv file, then run `bash deploy/image-preflight.sh --publication-result "$PUBLICATION_RESULT" --env-file "$ENV_FILE"` to recreate
 the stack without deleting named volumes. Verify PostgreSQL version/vector,
 retained data, direct readiness, and operator-proxied readiness.
 

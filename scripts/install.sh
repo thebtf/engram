@@ -2,10 +2,6 @@
 # engram installer — macOS / Linux / Git-Bash
 #
 # One-shot install from GitHub releases:
-#   curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash
-#
-# Pin a specific release tag:
-#   curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash -s -- v1.0.0
 #
 # Flags (order-independent):
 #   --full           install server binary in addition to plugin files
@@ -122,11 +118,7 @@ Options:
     fi
 
     version=$(echo "$response" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-
-    if [[ -z "$version" ]]; then
-        error "Could not parse release tag from GitHub API. Response: $response"
-    fi
-
+    [[ -n "$version" ]] || error "Could not parse release tag from GitHub API. Response: $response"
     echo "$version"
 }
 
@@ -184,6 +176,24 @@ download_release() {
         || error "Release archive is missing required scripts directory"
     cp "$tmp_dir/scripts/"*.js "$INSTALL_DIR/scripts/" \
         || error "Failed to copy JS scripts from $tmp_dir/scripts/"
+    [[ -f "$tmp_dir/bootstrap-targets.json" ]] \
+        || error "Release archive is missing required bootstrap-targets.json"
+    node - "$tmp_dir/bootstrap-targets.json" "${version#v}" <<'NODE' || error "Release archive has an invalid bootstrap policy"
+const fs = require('node:fs');
+const [file, version] = process.argv.slice(2);
+const policy = JSON.parse(fs.readFileSync(file, 'utf8'));
+const expected = ['win32-x64', 'linux-x64', 'darwin-arm64'];
+if (policy.schema_version !== 1 || policy.launcher_security_epoch !== 1 ||
+    policy.daemon_compat_epoch !== 1 || policy.package_version !== version ||
+    !policy.targets || Object.keys(policy.targets).sort().join() !== expected.sort().join()) process.exit(1);
+for (const key of expected) {
+  const target = policy.targets[key];
+  if (!target || target.predecessor !== null || !target.desired || target.desired.version !== version ||
+      !Number.isSafeInteger(target.desired.size) || target.desired.size <= 0 || !/^[0-9a-f]{64}$/.test(target.desired.sha256)) process.exit(1);
+}
+NODE
+    cp "$tmp_dir/bootstrap-targets.json" "$INSTALL_DIR/" \
+        || error "Failed to copy bootstrap policy from release archive"
 
     cp "$tmp_dir/.claude-plugin/"* "$INSTALL_DIR/.claude-plugin/"
 

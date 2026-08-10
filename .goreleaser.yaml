@@ -2,22 +2,18 @@
 # vim: set ts=2 sw=2 tw=0 fo=cnqoj
 
 version: 2
-
 project_name: engram
 
 before:
   hooks:
     - go mod tidy
     # Build the Vue dashboard and embed it into the server binary.
-    # The tpl step injects the version so the UI reports the correct release.
     - bash -c "sed 's/{{ .Version }}/{{ .Version }}/g' ui/package.json.tpl > ui/package.json"
     - bash -c "cd ui && npm install && npm run build"
     - bash -c "rm -rf internal/worker/static && mkdir -p internal/worker/static && cp -r ui/dist/* internal/worker/static/"
-    # Copy Claude + Codex plugin manifests into the archive staging directories.
     - bash scripts/generate-plugin-config.sh
 
 builds:
-  # engram-server — CGO is required for the FTS5 search extension via go-sqlite3.
   - id: engram-server
     main: ./cmd/engram-server
     binary: engram-server
@@ -27,6 +23,7 @@ builds:
       - fts5
     flags:
       - -trimpath
+      - -buildvcs=false
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
@@ -38,22 +35,45 @@ builds:
       - amd64
       - arm64
     ignore:
-      # darwin/amd64 is not published (arm64 Apple Silicon is the primary target).
       - goos: darwin
         goarch: amd64
-      # linux/arm64 is not published — CGO cross-compilation for this target
-      # requires a separate toolchain not available in the release container.
       - goos: linux
         goarch: arm64
-      # windows/arm64 is not published.
+      - goos: windows
+        goarch: arm64
+
+  # These are the only launcher objects policy can authorize.
+  - id: engram-client
+    main: ./cmd/engram
+    binary: engram-{{ .Os }}-{{ .Arch }}
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+      - -buildvcs=false
+    ldflags:
+      - -s -w
+      - -X github.com/thebtf/engram/internal/version.Daemon=v{{.Version}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: linux
+        goarch: arm64
+      - goos: darwin
+        goarch: amd64
       - goos: windows
         goarch: arm64
 
 archives:
-  # CONTRACT: archive names and file layout are parsed by install.sh and
-  # plugin/hooks/scripts/ensure-binary.js. Do not rename ids, change the
-  # name_template, or move files without updating those callers.
-  - id: default
+  # Archive names and layout are the direct-installer contract.
+  - id: server-plugin
+    builds:
+      - engram-server
     formats:
       - tar.gz
     name_template: >-
@@ -67,6 +87,9 @@ archives:
         strip_parent: true
       - src: .codex-plugin/*
         dst: .codex-plugin
+        strip_parent: true
+      - src: plugin/engram/bootstrap-targets.json
+        dst: .
         strip_parent: true
       - src: plugin/engram/hooks/*.js
         dst: hooks
@@ -92,13 +115,20 @@ archives:
         dst: claude
         strip_parent: true
     format_overrides:
-      # Windows users unzip with Explorer or PowerShell; tar.gz is awkward there.
       - goos: windows
         formats:
           - zip
 
+  # Raw client assets are published by this GoReleaser writer, never another workflow.
+  - id: client-raw
+    builds:
+      - engram-client
+    formats:
+      - binary
+    name_template: "{{ .Binary }}"
+
 checksum:
-  name_template: 'checksums.txt'
+  name_template: checksums.txt
 
 changelog:
   sort: asc
