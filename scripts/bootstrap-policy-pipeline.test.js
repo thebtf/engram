@@ -187,6 +187,13 @@ test("release readback retries until the private draft is visible", () => {
     const second = path.join(temp, "second.json");
     const sleeps = path.join(temp, "sleeps");
     fs.mkdirSync(fakeBin, { recursive: true });
+    fs.writeFileSync(path.join(fakeBin, "node"), `#!/usr/bin/env bash
+node_path=${shellQuote(process.execPath)}
+if command -v wslpath >/dev/null 2>&1; then node_path=$(wslpath -u "$node_path")
+elif command -v cygpath >/dev/null 2>&1; then node_path=$(cygpath -u "$node_path")
+fi
+exec "$node_path" "$@"
+`, { mode: 0o755 });
     const policy = parsePolicy(fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8"), "6.47.1");
     fs.writeFileSync(first, "[]");
     fs.writeFileSync(second, JSON.stringify([{
@@ -208,5 +215,13 @@ test("release readback retries until the private draft is visible", () => {
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.equal(fs.readFileSync(count, "utf8"), "2");
     assert.equal(fs.readFileSync(sleeps, "utf8"), "10\n");
+    fs.rmSync(count);
+    fs.rmSync(sleeps);
+    const rejected = spawnSync("bash", ["-c", `${environment} FAKE_RELEASE_SECOND=${shellQuote(bashPath(first))} bash scripts/readback-bootstrap-policy-assets.sh --tag v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
+    assert.ifError(rejected.error);
+    assert.notEqual(rejected.status, 0);
+    assert.equal(fs.readFileSync(count, "utf8"), "5");
+    assert.equal(fs.readFileSync(sleeps, "utf8"), "10\n10\n10\n10\n");
+    assert.match(rejected.stderr, /expected exactly one private draft release/);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
