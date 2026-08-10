@@ -17,8 +17,9 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
-// issueMutationActor accepts only SourceClient keycards or authenticated
-// non-client admins. Project and agent request fields are attribution only.
+// issueMutationActor accepts only read-write SourceClient keycards or
+// authenticated non-client admins. Project and agent request fields are
+// attribution only.
 func issueMutationActor(ctx context.Context) (keycardID string, isOperator bool, err error) {
 	id, ok := auth.IdentityFrom(ctx)
 	if !ok {
@@ -27,18 +28,29 @@ func issueMutationActor(ctx context.Context) (keycardID string, isOperator bool,
 	if id.IsAdmin() && id.Source != auth.SourceClient {
 		return "", true, nil
 	}
-	if id.Source != auth.SourceClient || id.KeycardID == "" {
-		return "", false, fmt.Errorf("%w: issue mutation forbidden: authenticated client keycard is required", gormdb.ErrIssueForbidden)
+	if id.Source != auth.SourceClient || id.KeycardID == "" || id.Role != auth.RoleReadWrite {
+		return "", false, fmt.Errorf("%w: issue mutation forbidden: authenticated read-write client keycard is required", gormdb.ErrIssueForbidden)
 	}
 	return id.KeycardID, false, nil
 }
 
-func (s *Service) authorizeIssueMutation(ctx context.Context, id int64) (bool, error) {
+func (s *Service) authorizeIssueProgression(ctx context.Context) (bool, error) {
 	keycardID, isOperator, err := issueMutationActor(ctx)
 	if err != nil {
 		return false, err
 	}
-	if err := s.issueStore.AuthorizeIssueMutation(ctx, id, keycardID, isOperator); err != nil {
+	if err := s.issueStore.AuthorizeIssueProgressionMutation(ctx, keycardID, isOperator); err != nil {
+		return false, err
+	}
+	return isOperator, nil
+}
+
+func (s *Service) authorizeIssueSourceMutation(ctx context.Context, id int64) (bool, error) {
+	keycardID, isOperator, err := issueMutationActor(ctx)
+	if err != nil {
+		return false, err
+	}
+	if err := s.issueStore.AuthorizeIssueSourceMutation(ctx, id, keycardID, isOperator); err != nil {
 		return false, err
 	}
 	return isOperator, nil
@@ -282,13 +294,7 @@ func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// Normalize type before validation and storage.
 	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
 
-	isOperator, err := s.authorizeIssueMutation(r.Context(), id)
-	if err != nil {
-		writeIssueAuthorizationError(w, err)
-		return
-	}
-
-	if err := s.issueStore.UpdateIssueAtomically(r.Context(), id, gormdb.IssueUpdate{
+	update := gormdb.IssueUpdate{
 		Status:        req.Status,
 		Comment:       req.Comment,
 		AuthorProject: req.SourceProject,
@@ -298,7 +304,21 @@ func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 		Priority:      req.Priority,
 		Type:          req.Type,
 		Labels:        req.Labels,
-	}, isOperator); err != nil {
+	}
+	// Field edits and source-terminal actions require the creator keycard or an
+	// operator. Comment-only and resolved progression require only a RW keycard.
+	var isOperator bool
+	if update.HasSourceAuthorityAction() {
+		isOperator, err = s.authorizeIssueSourceMutation(r.Context(), id)
+	} else {
+		isOperator, err = s.authorizeIssueProgression(r.Context())
+	}
+	if err != nil {
+		writeIssueAuthorizationError(w, err)
+		return
+	}
+
+	if err := s.issueStore.UpdateIssueAtomically(r.Context(), id, update, isOperator); err != nil {
 		writeIssueStoreError(w, err)
 		return
 	}

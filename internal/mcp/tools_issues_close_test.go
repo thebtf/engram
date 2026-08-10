@@ -81,58 +81,88 @@ func TestIssueCreateBindsSourceClientKeycard(t *testing.T) {
 	require.Equal(t, project, issue.SourceProject)
 }
 
-func TestIssueMutationsUseCreatorKeycardNotClaimedProject(t *testing.T) {
+func TestIssueCollaboratorProgressionProtectsSourceActions(t *testing.T) {
 	store, issueStore := openIssueToolTestDB(t)
 	server := NewServer(ServerOptions{})
 	server.SetIssueStore(issueStore)
-	project := uniqueIssueToolProject(t, "claimed")
+	project := uniqueIssueToolProject(t, "collaborator")
 	owner := issueClientContext(project, "keycard-owner", auth.RoleReadWrite)
 	foreign := issueClientContext(project, "keycard-second", auth.RoleReadWrite)
 
+	progressID := createIssueToolFixture(t, store, issueStore, project, "keycard-owner", "open")
+	_, err := callIssueAction(t, server, foreign, map[string]any{"action": "update", "id": progressID, "status": "resolved", "project": "spoofed-project"})
+	require.NoError(t, err)
+	_, err = callIssueAction(t, server, foreign, map[string]any{"action": "comment", "id": progressID, "body": "foreign collaborator", "project": "spoofed-project"})
+	require.NoError(t, err)
+	issue, comments, err := issueStore.GetIssue(context.Background(), progressID)
+	require.NoError(t, err)
+	require.Equal(t, "resolved", issue.Status)
+	require.Len(t, comments, 1)
+	require.Equal(t, "foreign collaborator", comments[0].Body)
+
 	for _, tc := range []struct {
 		name   string
-		status string
-		args   func(int64) map[string]any
+		action string
 	}{
-		{"update", "open", func(id int64) map[string]any {
-			return map[string]any{"action": "update", "id": id, "status": "resolved", "project": project}
-		}},
-		{"comment", "open", func(id int64) map[string]any {
-			return map[string]any{"action": "comment", "id": id, "body": "foreign", "project": project}
-		}},
-		{"reopen", "resolved", func(id int64) map[string]any { return map[string]any{"action": "reopen", "id": id, "project": project} }},
-		{"close", "resolved", func(id int64) map[string]any { return map[string]any{"action": "close", "id": id, "project": project} }},
+		{"reopen", "reopen"},
+		{"close", "close"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			id := createIssueToolFixture(t, store, issueStore, project, "keycard-owner", tc.status)
-			_, err := callIssueAction(t, server, foreign, tc.args(id))
+			id := createIssueToolFixture(t, store, issueStore, project, "keycard-owner", "resolved")
+			_, err := callIssueAction(t, server, foreign, map[string]any{"action": tc.action, "id": id, "project": "spoofed-project"})
 			require.ErrorContains(t, err, "issue mutation forbidden")
+			issue, _, err := issueStore.GetIssue(context.Background(), id)
+			require.NoError(t, err)
+			require.Equal(t, "resolved", issue.Status)
 		})
 	}
 
-	id := createIssueToolFixture(t, store, issueStore, project, "keycard-owner", "open")
-	_, err := callIssueAction(t, server, owner, map[string]any{"action": "update", "id": id, "status": "resolved", "project": project})
+	ownerID := createIssueToolFixture(t, store, issueStore, project, "keycard-owner", "resolved")
+	_, err = callIssueAction(t, server, owner, map[string]any{"action": "reopen", "id": ownerID, "project": project})
 	require.NoError(t, err)
-	_, err = callIssueAction(t, server, owner, map[string]any{"action": "comment", "id": id, "body": "owner", "project": project})
+	_, err = callIssueAction(t, server, owner, map[string]any{"action": "update", "id": ownerID, "status": "resolved", "project": project})
 	require.NoError(t, err)
-	_, err = callIssueAction(t, server, owner, map[string]any{"action": "reopen", "id": id, "project": project})
-	require.NoError(t, err)
-	_, err = callIssueAction(t, server, owner, map[string]any{"action": "update", "id": id, "status": "resolved", "project": project})
-	require.NoError(t, err)
-	_, err = callIssueAction(t, server, owner, map[string]any{"action": "close", "id": id, "project": project})
+	_, err = callIssueAction(t, server, owner, map[string]any{"action": "close", "id": ownerID, "project": project})
 	require.NoError(t, err)
 }
 
-func TestLegacyIssueDeniesClientButAllowsNonClientAdmin(t *testing.T) {
+func TestIssueProgressionRejectsMissingAndReadOnlyIdentity(t *testing.T) {
 	store, issueStore := openIssueToolTestDB(t)
 	server := NewServer(ServerOptions{})
 	server.SetIssueStore(issueStore)
-	id := createIssueToolFixture(t, store, issueStore, "claimed-project", "", "open")
-	args := map[string]any{"action": "close", "id": id, "project": "claimed-project"}
+	project := uniqueIssueToolProject(t, "readonly")
+	id := createIssueToolFixture(t, store, issueStore, project, "keycard-owner", "open")
 
-	_, err := callIssueAction(t, server, issueClientContext("claimed-project", "keycard-client-admin", auth.RoleAdmin), args)
-	require.ErrorContains(t, err, "issue mutation forbidden")
-	_, err = callIssueAction(t, server, auth.WithIdentity(context.Background(), auth.Admin()), args)
+	_, err := callIssueAction(t, server, context.Background(), map[string]any{"action": "update", "id": id, "status": "resolved", "project": project})
+	require.ErrorContains(t, err, "authenticated identity is required")
+	_, err = callIssueAction(t, server, issueClientContext(project, "keycard-read-only", auth.RoleReadOnly), map[string]any{"action": "comment", "id": id, "body": "denied", "project": project})
+	require.ErrorContains(t, err, "read-write client keycard is required")
+	issue, comments, err := issueStore.GetIssue(context.Background(), id)
+	require.NoError(t, err)
+	require.Equal(t, "open", issue.Status)
+	require.Empty(t, comments)
+}
+
+func TestLegacyIssueAllowsProgressionButRestrictsSourceActions(t *testing.T) {
+	store, issueStore := openIssueToolTestDB(t)
+	server := NewServer(ServerOptions{})
+	server.SetIssueStore(issueStore)
+	project := uniqueIssueToolProject(t, "legacy")
+	id := createIssueToolFixture(t, store, issueStore, project, "", "open")
+	client := issueClientContext(project, "keycard-client", auth.RoleReadWrite)
+
+	_, err := callIssueAction(t, server, client, map[string]any{"action": "update", "id": id, "status": "resolved", "project": project})
+	require.NoError(t, err)
+	_, err = callIssueAction(t, server, client, map[string]any{"action": "comment", "id": id, "body": "allowed", "project": project})
+	require.NoError(t, err)
+	for _, action := range []string{"reopen", "close"} {
+		_, err = callIssueAction(t, server, client, map[string]any{"action": action, "id": id, "project": project})
+		require.ErrorContains(t, err, "issue mutation forbidden")
+	}
+	issue, _, err := issueStore.GetIssue(context.Background(), id)
+	require.NoError(t, err)
+	require.Equal(t, "resolved", issue.Status)
+	_, err = callIssueAction(t, server, auth.WithIdentity(context.Background(), auth.Admin()), map[string]any{"action": "close", "id": id, "project": project})
 	require.NoError(t, err)
 }
 

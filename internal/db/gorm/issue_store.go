@@ -239,6 +239,12 @@ func (u IssueUpdate) hasFields() bool {
 	return u.Title != "" || u.Body != "" || u.Priority != "" || u.Type != "" || u.Labels != nil
 }
 
+// HasSourceAuthorityAction reports whether a PATCH needs the creator keycard
+// (or an operator) rather than ordinary collaborator progression rights.
+func (u IssueUpdate) HasSourceAuthorityAction() bool {
+	return u.hasFields() || u.Status == "reopened" || u.Status == "closed"
+}
+
 // UpdateIssueAtomically applies fields, a lifecycle transition, and an optional
 // comment as a single transaction.
 func (s *IssueStore) UpdateIssueAtomically(ctx context.Context, id int64, update IssueUpdate, isOperator bool) error {
@@ -523,9 +529,20 @@ func (s *IssueStore) ReopenIssue(ctx context.Context, id int64, comment, authorP
 	})
 }
 
-// AuthorizeIssueMutation permits an authenticated operator or the SourceClient
-// keycard that created the issue. Project metadata is never authorization data.
-func (s *IssueStore) AuthorizeIssueMutation(ctx context.Context, id int64, keycardID string, isOperator bool) error {
+// AuthorizeIssueProgressionMutation permits any authenticated read-write
+// SourceClient keycard or an authenticated operator to comment or resolve an
+// issue. Project metadata and creator attribution are never authorization data.
+func (s *IssueStore) AuthorizeIssueProgressionMutation(_ context.Context, keycardID string, isOperator bool) error {
+	if isOperator || keycardID != "" {
+		return nil
+	}
+	return fmt.Errorf("%w: issue mutation forbidden: authenticated client keycard is required", ErrIssueForbidden)
+}
+
+// AuthorizeIssueSourceMutation permits an authenticated operator or the SourceClient
+// keycard that created the issue. It protects terminal source actions and field
+// edits; project metadata is never authorization data.
+func (s *IssueStore) AuthorizeIssueSourceMutation(ctx context.Context, id int64, keycardID string, isOperator bool) error {
 	if isOperator {
 		return nil
 	}

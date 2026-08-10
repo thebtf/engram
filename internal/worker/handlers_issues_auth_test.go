@@ -60,40 +60,99 @@ func createIssueHTTPFixture(t *testing.T, store *gormdb.Store, issueStore *gormd
 	return id
 }
 
-func TestIssueHTTPKeycardOwnershipIgnoresClaimedProject(t *testing.T) {
+func TestIssueHTTPCollaboratorProgressionProtectsSourceActions(t *testing.T) {
 	service, store := newIssueHTTPTestService(t)
 	project := fmt.Sprintf("zz-http-issue-%d", time.Now().UnixNano())
 	owner := auth.Client("read-write", "keycard-owner")
-	create := issueHTTPRouteRequest(t, http.MethodPost, 0, map[string]any{
-		"title": "bound", "source_project": project, "target_project": project,
-	}, owner)
-	createRec := httptest.NewRecorder()
-	service.handleCreateIssue(createRec, create)
-	require.Equal(t, http.StatusCreated, createRec.Code, createRec.Body.String())
-	var created struct {
-		ID int64 `json:"id"`
+	foreign := auth.Client("read-write", "keycard-second")
+	id := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", "open")
+
+	for _, body := range []map[string]any{
+		{"status": "resolved", "source_project": "spoofed-project", "source_agent": "spoofed"},
+		{"comment": "foreign collaborator", "source_project": "spoofed-project", "source_agent": "spoofed"},
+	} {
+		rec := httptest.NewRecorder()
+		service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, body, foreign))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	}
-	require.NoError(t, json.Unmarshal(createRec.Body.Bytes(), &created))
-	t.Cleanup(func() {
-		store.GetDB().Exec(`DELETE FROM issue_comments WHERE issue_id = ?`, created.ID)
-		store.GetDB().Exec(`DELETE FROM issues WHERE id = ?`, created.ID)
-	})
-
-	issue, _, err := service.issueStore.GetIssue(context.Background(), created.ID)
+	issue, comments, err := service.issueStore.GetIssue(context.Background(), id)
 	require.NoError(t, err)
-	require.Equal(t, "keycard-owner", issue.CreatorKeycardID)
+	require.Equal(t, "resolved", issue.Status)
+	require.Len(t, comments, 1)
+	require.Equal(t, "foreign collaborator", comments[0].Body)
 
-	foreign := issueHTTPRouteRequest(t, http.MethodPatch, created.ID, map[string]any{
-		"status": "resolved", "source_project": project, "source_agent": "spoofed",
-	}, auth.Client("read-write", "keycard-second"))
-	foreignRec := httptest.NewRecorder()
-	service.handleUpdateIssue(foreignRec, foreign)
-	require.Equal(t, http.StatusForbidden, foreignRec.Code, foreignRec.Body.String())
+	for _, body := range []map[string]any{
+		{"title": "foreign field edit"},
+		{"status": "resolved", "title": "mixed foreign edit"},
+		{"status": "reopened"},
+		{"status": "closed"},
+	} {
+		rec := httptest.NewRecorder()
+		service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, body, foreign))
+		require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+		issue, _, err := service.issueStore.GetIssue(context.Background(), id)
+		require.NoError(t, err)
+		require.Equal(t, "HTTP issue auth", issue.Title)
+		require.Equal(t, "resolved", issue.Status)
+	}
 
-	ownerReq := issueHTTPRouteRequest(t, http.MethodPatch, created.ID, map[string]any{"status": "resolved"}, owner)
-	ownerRec := httptest.NewRecorder()
-	service.handleUpdateIssue(ownerRec, ownerReq)
-	require.Equal(t, http.StatusOK, ownerRec.Code, ownerRec.Body.String())
+	ownerID := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", "resolved")
+	for _, body := range []map[string]any{
+		{"title": "owner field edit"},
+		{"status": "reopened"},
+		{"status": "resolved"},
+		{"status": "closed"},
+	} {
+		rec := httptest.NewRecorder()
+		service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, ownerID, body, owner))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	}
+}
+
+func TestIssueHTTPProgressionRejectsMissingAndReadOnlyIdentity(t *testing.T) {
+	service, store := newIssueHTTPTestService(t)
+	project := fmt.Sprintf("zz-http-issue-readonly-%d", time.Now().UnixNano())
+	id := createIssueHTTPFixture(t, store, service.issueStore, project, "keycard-owner", "open")
+	payload, err := json.Marshal(map[string]any{"status": "resolved"})
+	require.NoError(t, err)
+	missing := httptest.NewRequest(http.MethodPatch, "/api/issues/"+strconv.FormatInt(id, 10), bytes.NewReader(payload))
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("id", strconv.FormatInt(id, 10))
+	missing = missing.WithContext(context.WithValue(missing.Context(), chi.RouteCtxKey, routeCtx))
+	rec := httptest.NewRecorder()
+	service.handleUpdateIssue(rec, missing)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+
+	rec = httptest.NewRecorder()
+	service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, map[string]any{"comment": "denied"}, auth.Client("read-only", "keycard-read-only")))
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	issue, comments, err := service.issueStore.GetIssue(context.Background(), id)
+	require.NoError(t, err)
+	require.Equal(t, "open", issue.Status)
+	require.Empty(t, comments)
+}
+
+func TestIssueHTTPLegacyAllowsProgressionButRestrictsSourceActions(t *testing.T) {
+	service, store := newIssueHTTPTestService(t)
+	project := fmt.Sprintf("zz-http-issue-legacy-%d", time.Now().UnixNano())
+	id := createIssueHTTPFixture(t, store, service.issueStore, project, "", "open")
+	client := auth.Client("read-write", "keycard-client")
+	for _, body := range []map[string]any{
+		{"status": "resolved"},
+		{"comment": "legacy collaboration"},
+	} {
+		rec := httptest.NewRecorder()
+		service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, body, client))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	}
+	for _, body := range []map[string]any{{"title": "forbidden"}, {"status": "reopened"}, {"status": "closed"}} {
+		rec := httptest.NewRecorder()
+		service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, body, client))
+		require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	}
+	rec := httptest.NewRecorder()
+	service.handleUpdateIssue(rec, issueHTTPRouteRequest(t, http.MethodPatch, id, map[string]any{"status": "closed"}, auth.Admin()))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 }
 
 func TestIssueHTTPOperatorOnlyRoutesAndAtomicAcknowledge(t *testing.T) {

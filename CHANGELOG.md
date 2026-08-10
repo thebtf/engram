@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Replaced mutable launcher binaries, version markers, and executable probes with a strict package policy and content-addressed objects that are size- and SHA-256-verified immediately before spawn.
 - Bound production image deployment to one retained `publication-result.json`, including all six version/commit registry readbacks, before accepting immutable Compose image digests.
-- Enforced read-only MCP authorization at the shared dispatch boundary, creator-keycard issue ownership across MCP/REST, bounded numeric inputs, and legacy unbound-token semantics.
+- Enforced read-only MCP authorization at the shared dispatch boundary, creator-keycard authority for issue field edits and source-terminal actions across MCP/REST, bounded numeric inputs, and legacy unbound-token semantics while preserving read-write collaborator comment/resolution workflows.
 
 ### Changed
 

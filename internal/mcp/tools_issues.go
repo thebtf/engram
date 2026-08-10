@@ -193,8 +193,8 @@ func (s *Server) issueSourceProject(ctx context.Context) string {
 	return s.issueStore.ResolveProject(ctx, raw)
 }
 
-// issueMutationActor returns the only identities permitted to mutate issues.
-// SourceClient callers are bound to their keycard; only non-client admins bypass.
+// issueMutationActor returns a trusted read-write keycard or non-client
+// operator. Project and agent request fields are attribution only.
 func issueMutationActor(ctx context.Context) (keycardID string, isOperator bool, err error) {
 	id, ok := auth.IdentityFrom(ctx)
 	if !ok {
@@ -203,18 +203,29 @@ func issueMutationActor(ctx context.Context) (keycardID string, isOperator bool,
 	if id.IsAdmin() && id.Source != auth.SourceClient {
 		return "", true, nil
 	}
-	if id.Source != auth.SourceClient || id.KeycardID == "" {
-		return "", false, fmt.Errorf("issue mutation forbidden: authenticated client keycard is required")
+	if id.Source != auth.SourceClient || id.KeycardID == "" || id.Role != auth.RoleReadWrite {
+		return "", false, fmt.Errorf("issue mutation forbidden: authenticated read-write client keycard is required")
 	}
 	return id.KeycardID, false, nil
 }
 
-func (s *Server) authorizeIssueMutation(ctx context.Context, id int64) (bool, error) {
+func (s *Server) authorizeIssueProgression(ctx context.Context) (bool, error) {
 	keycardID, isOperator, err := issueMutationActor(ctx)
 	if err != nil {
 		return false, err
 	}
-	if err := s.issueStore.AuthorizeIssueMutation(ctx, id, keycardID, isOperator); err != nil {
+	if err := s.issueStore.AuthorizeIssueProgressionMutation(ctx, keycardID, isOperator); err != nil {
+		return false, err
+	}
+	return isOperator, nil
+}
+
+func (s *Server) authorizeIssueSourceMutation(ctx context.Context, id int64) (bool, error) {
+	keycardID, isOperator, err := issueMutationActor(ctx)
+	if err != nil {
+		return false, err
+	}
+	if err := s.issueStore.AuthorizeIssueSourceMutation(ctx, id, keycardID, isOperator); err != nil {
 		return false, err
 	}
 	return isOperator, nil
@@ -445,7 +456,7 @@ func (s *Server) handleIssueUpdate(ctx context.Context, m map[string]any) (strin
 	if !present {
 		sourceAgent = "claude-code"
 	}
-	if _, err := s.authorizeIssueMutation(ctx, id); err != nil {
+	if _, err := s.authorizeIssueProgression(ctx); err != nil {
 		return "", err
 	}
 	sourceProject := s.issueSourceProject(ctx)
@@ -479,7 +490,7 @@ func (s *Server) handleIssueComment(ctx context.Context, m map[string]any) (stri
 	if !present {
 		sourceAgent = "claude-code"
 	}
-	if _, err := s.authorizeIssueMutation(ctx, id); err != nil {
+	if _, err := s.authorizeIssueProgression(ctx); err != nil {
 		return "", err
 	}
 	sourceProject := s.issueSourceProject(ctx)
@@ -512,7 +523,7 @@ func (s *Server) handleIssueReopen(ctx context.Context, m map[string]any) (strin
 	if !present {
 		sourceAgent = "claude-code"
 	}
-	if _, err := s.authorizeIssueMutation(ctx, id); err != nil {
+	if _, err := s.authorizeIssueSourceMutation(ctx, id); err != nil {
 		return "", err
 	}
 	sourceProject := s.issueSourceProject(ctx)
@@ -530,7 +541,7 @@ func (s *Server) handleIssueClose(ctx context.Context, m map[string]any) (string
 		return "", fmt.Errorf("id is required for issues close")
 	}
 
-	isOperator, err := s.authorizeIssueMutation(ctx, id)
+	isOperator, err := s.authorizeIssueSourceMutation(ctx, id)
 	if err != nil {
 		return "", err
 	}
