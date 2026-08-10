@@ -17,7 +17,6 @@ on:
 permissions:
   contents: read
 
-
 concurrency:
   group: sync-marketplace
   cancel-in-progress: false
@@ -56,6 +55,39 @@ jobs:
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/$TAG")"
           jq -e --arg tag "$TAG" '.tag_name == $tag and (.draft | not)' <<<"$release" >/dev/null
 
+      - name: Checkout trusted package validator
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted-validator
+          persist-credentials: false
+
+      # Candidate package files are data; only the workflow-definition commit's
+      # validator executes before any marketplace credential exists.
+      - name: Validate plugin package before marketplace access
+        run: |
+          set -euo pipefail
+          VERSION="$(jq -r .version plugin/engram/.claude-plugin/plugin.json)"
+          if [ -z "$VERSION" ] || [ "$VERSION" = null ]; then
+            echo "::error::version missing in plugin/engram/.claude-plugin/plugin.json"
+            exit 1
+          fi
+          node trusted-validator/plugin/engram/scripts/bootstrap-policy.js validate plugin/engram/bootstrap-targets.json "$VERSION"
+          OMP_MANIFEST="plugin/engram/.omp-plugin/plugin.json"
+          if [ ! -f "$OMP_MANIFEST" ]; then
+            echo "::error::OMP plugin manifest missing: $OMP_MANIFEST"
+            exit 1
+          fi
+          OMP_VERSION="$(jq -r .version "$OMP_MANIFEST")"
+          if [ -z "$OMP_VERSION" ] || [ "$OMP_VERSION" = null ]; then
+            echo "::error::version missing in $OMP_MANIFEST"
+            exit 1
+          fi
+          if [ "$OMP_VERSION" != "$VERSION" ]; then
+            echo "::error::OMP plugin manifest version must exactly match the canonical plugin version: $VERSION"
+            exit 1
+          fi
+
       - name: Checkout marketplace
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -73,12 +105,11 @@ jobs:
           rm -f marketplace/marketplace.json
           mkdir -p marketplace/plugins marketplace/.agents/plugins \
             marketplace/.claude-plugin marketplace/.omp-plugin
-          VERSION=$(jq -r .version plugin/engram/.claude-plugin/plugin.json)
+          VERSION="$(jq -r .version plugin/engram/.claude-plugin/plugin.json)"
           if [ -z "$VERSION" ] || [ "$VERSION" = null ]; then
             echo "::error::version missing in plugin/engram/.claude-plugin/plugin.json"
             exit 1
           fi
-          node plugin/engram/scripts/bootstrap-policy.js validate plugin/engram/bootstrap-targets.json "$VERSION"
           cp -r plugin/engram marketplace/engram
           cp -r plugin/engram marketplace/plugins/engram
           cmp plugin/engram/bootstrap-targets.json marketplace/engram/bootstrap-targets.json
