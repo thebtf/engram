@@ -425,6 +425,11 @@ func memoryVisibilityOptions() scope.MemoryVisibilityOptions {
 	}
 }
 
+// memoryVisibleREST applies the same caller-aware read policy as list and search.
+func memoryVisibleREST(ctx context.Context, mem *models.Memory) bool {
+	return scope.ResolveMemory(memoryVisibilityCaller(ctx, ""), mem, memoryVisibilityOptions())
+}
+
 // listVisibleMemoriesREST returns up to `limit` memories from the given project
 // that are visible to the caller. It always pages with ListWithOffset so
 // invisible principal-private rows cannot truncate visible results; the
@@ -573,7 +578,7 @@ func (s *Service) handleGetMemoryByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	if memory == nil || !memoryDomainManageAllowedREST(r.Context(), memory) {
+	if !memoryVisibleREST(r.Context(), memory) {
 		http.Error(w, "memory not found", http.StatusNotFound)
 		return
 	}

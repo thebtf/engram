@@ -774,3 +774,69 @@ func TestHandleGetMemoryByID(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleGetMemoryByID_ReadVisibility(t *testing.T) {
+	alice := auth.ClientWithPrincipal("read-write", "ws-alice", "agent/alice", auth.PrincipalKindAgent)
+	bob := auth.ClientWithPrincipal("read-write", "ws-bob", "agent/bob", auth.PrincipalKindAgent)
+
+	tests := []struct {
+		name       string
+		flag       string
+		memory     *models.Memory
+		identity   auth.Identity
+		wantStatus int
+	}{
+		{
+			name:     "another principal cannot read a guessed private ID",
+			memory:   &models.Memory{ID: 42, Project: "deep-link", Content: "bob private", OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", AgentVisibility: models.AgentVisibilityPrivate},
+			identity: alice, wantStatus: http.StatusNotFound,
+		},
+		{
+			name:     "owner can read a private row",
+			memory:   &models.Memory{ID: 42, Project: "deep-link", Content: "bob private", OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", AgentVisibility: models.AgentVisibilityPrivate},
+			identity: bob, wantStatus: http.StatusOK,
+		},
+		{
+			name:     "another principal can read a shared row",
+			memory:   &models.Memory{ID: 42, Project: "deep-link", Content: "bob shared", OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", AgentVisibility: models.AgentVisibilityShared},
+			identity: alice, wantStatus: http.StatusOK,
+		},
+		{
+			name:     "another principal cannot read a domain-owned row",
+			memory:   &models.Memory{ID: 42, Project: "deep-link", Content: "bob domain", OwnerPrincipal: "agent/bob", OwnerPrincipalKind: "agent", AgentVisibility: models.AgentVisibilityShared, Domain: "memory-lab"},
+			identity: alice, wantStatus: http.StatusNotFound,
+		},
+		{
+			name:     "private scope hides another workstation when enabled",
+			flag:     "true",
+			memory:   &models.Memory{ID: 42, Project: "deep-link", Content: "private scope", PrivacyScope: "private", SourceWorkstationID: "ws-bob"},
+			identity: alice, wantStatus: http.StatusNotFound,
+		},
+		{
+			name:     "private scope remains legacy-visible when disabled",
+			memory:   &models.Memory{ID: 42, Project: "deep-link", Content: "private scope", PrivacyScope: "private", SourceWorkstationID: "ws-bob"},
+			identity: alice, wantStatus: http.StatusOK,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ENGRAM_VNEXT_F_ENABLED", tc.flag)
+			store := &fakeMemoryGetStore{memory: tc.memory}
+			service := &Service{memoryGetStoreSeam: store}
+			w := httptest.NewRecorder()
+			req := newCHIRequest(http.MethodGet, "/api/memories/42", "id", "42")
+			req = req.WithContext(auth.WithIdentity(req.Context(), tc.identity))
+
+			service.handleGetMemoryByID(w, req)
+
+			require.Equal(t, tc.wantStatus, w.Code, w.Body.String())
+			assert.Equal(t, 1, store.calls)
+			if tc.wantStatus == http.StatusOK {
+				var got models.Memory
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+				assert.Equal(t, tc.memory.ID, got.ID)
+			}
+		})
+	}
+}
