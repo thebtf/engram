@@ -4,3 +4,5 @@ design/operator-console/contracts/** text eol=lf
 design/operator-console/mockups/** text eol=lf
 design/operator-console/mockups/index.html whitespace=-trailing-space
 design/operator-console/PROMOTION-MANIFEST.json text eol=lf
+deploy/*.sh text eol=lf
+scripts/*.sh text eol=lf

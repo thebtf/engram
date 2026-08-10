@@ -64,6 +64,28 @@ func TestAuthInterceptor_PingSkipsAuth(t *testing.T) {
 		"Ping must reach handler regardless of credentials (monitoring path)")
 }
 
+func TestAuthInterceptor_AuthDisabledIdentity(t *testing.T) {
+	t.Parallel()
+	srv := &Server{}
+
+	var capturedID auth.Identity
+	handler := func(ctx context.Context, req any) (any, error) {
+		var ok bool
+		capturedID, ok = auth.IdentityFrom(ctx)
+		require.True(t, ok, "auth-disabled calls must carry an explicit identity")
+		return req, nil
+	}
+
+	info := &grpc.UnaryServerInfo{FullMethod: "/engram.v1.EngramService/CallTool"}
+	resp, err := srv.authInterceptor(context.Background(), "payload", info, handler)
+
+	require.NoError(t, err)
+	assert.Equal(t, "payload", resp)
+	assert.Equal(t, auth.SourceAuthDisabled, capturedID.Source)
+	assert.True(t, capturedID.IsAdmin(), "ordinary admin-authorized RPCs must remain available")
+	assert.False(t, capturedID.IsSessionAdmin(), "session-admin-only routes must reject disabled-auth identity")
+}
+
 func TestAuthInterceptor_MissingMetadata(t *testing.T) {
 	t.Parallel()
 	srv := &Server{validator: auth.NewValidator("master", &stubReader{})}
@@ -197,6 +219,28 @@ func TestStreamAuthInterceptor_ValidKeycard(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, auth.SourceClient, capturedID.Source)
 	assert.Equal(t, "uuid-s", capturedID.KeycardID)
+}
+
+func TestStreamAuthInterceptor_AuthDisabledIdentity(t *testing.T) {
+	t.Parallel()
+	srv := &Server{}
+
+	var capturedID auth.Identity
+	streamHandler := func(_ any, ss grpc.ServerStream) error {
+		var ok bool
+		capturedID, ok = auth.IdentityFrom(ss.Context())
+		require.True(t, ok, "auth-disabled streams must carry an explicit identity")
+		return nil
+	}
+
+	ss := &stubStream{ctx: context.Background()}
+	info := &grpc.StreamServerInfo{FullMethod: "/engram.v1.EngramService/ProjectEvents"}
+	err := srv.streamAuthInterceptor(nil, ss, info, streamHandler)
+
+	require.NoError(t, err)
+	assert.Equal(t, auth.SourceAuthDisabled, capturedID.Source)
+	assert.True(t, capturedID.IsAdmin())
+	assert.False(t, capturedID.IsSessionAdmin())
 }
 
 func TestStreamAuthInterceptor_MissingBearer(t *testing.T) {

@@ -11,8 +11,7 @@ existing MCP→gRPC routing as its first tenant (`engramcore` module). There are
 - Plugin `.mcp.json` — **unchanged**, no config edits required
 - MCP tool names, descriptions, and input schemas — **unchanged** (all 68
   tools work identically per NFR-5)
-- Hook scripts (`session-start`, `user-prompt`, `post-tool-use`, `stop`) —
-  **unchanged**
+- Hook scripts (`session-start`, `user-prompt`, `stop`) — **unchanged**
 - engram-server gRPC and HTTP APIs — **unchanged**
 - PostgreSQL schema — **unchanged**
 - Dashboard URL, project identity hash, SessionStart hook output — **unchanged**

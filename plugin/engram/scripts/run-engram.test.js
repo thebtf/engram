@@ -3,7 +3,6 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { execFileSync } = require("node:child_process");
 
 const {
   appendStartupDiagnosticLog,
@@ -18,6 +17,7 @@ const {
   resolveConfigFilePath,
   resolvePluginData,
   resolvePluginRoot,
+  resolveAndSpawn,
   spawnFailureMessage,
   trimStartupDiagnosticLog,
 } = require("./run-engram.js");
@@ -73,97 +73,44 @@ test("release-facing plugin and marketplace versions stay aligned", () => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const readJson = (...segments) => JSON.parse(fs.readFileSync(path.join(repoRoot, ...segments), "utf8"));
   const claudePlugin = readJson("plugin", "engram", ".claude-plugin", "plugin.json");
+  const ompPlugin = readJson("plugin", "engram", ".omp-plugin", "plugin.json");
   const codexPlugin = readJson("plugin", "engram", ".codex-plugin", "plugin.json");
   const rootPlugin = readJson(".claude-plugin", "plugin.json");
   const claudeMarketplace = readJson(".claude-plugin", "marketplace.json");
   const ompMarketplace = readJson(".omp-plugin", "marketplace.json");
 
-  assert.equal(claudePlugin.version, "6.46.4");
-  assert.equal(codexPlugin.version, claudePlugin.version);
+  assert.match(claudePlugin.version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
+  assert.equal(ompPlugin.version, claudePlugin.version);
+  const ompServer = ompPlugin.mcpServers.engram;
+  assert.deepEqual(ompServer, {
+    type: "stdio",
+    command: "node",
+    args: ["./scripts/run-engram.js"],
+    cwd: ".",
+    timeout: 60000,
+  });
+  assert.equal(path.resolve(repoRoot, "plugin", "engram", ompServer.args[0]), path.join(repoRoot, "plugin", "engram", "scripts", "run-engram.js"));
   assert.equal(rootPlugin.version, claudePlugin.version);
+  assert.equal(codexPlugin.version, claudePlugin.version);
   assert.equal(claudeMarketplace.version, claudePlugin.version);
   assert.equal(claudeMarketplace.plugins[0].version, claudePlugin.version);
   assert.equal(ompMarketplace.version, claudePlugin.version);
   assert.equal(ompMarketplace.plugins[0].version, claudePlugin.version);
 });
 
-test("Codex MCP config launches wrapper when cwd is the plugin root", () => {
-  // Codex spawns the plugin MCP server with cwd resolved to the plugin root
-  // (the .mcp.json "cwd": "."), so the relative entrypoint must resolve there.
+test("Codex MCP config resolves the wrapper from plugin-root cwd without executing it", () => {
   const mcpPath = path.resolve(__dirname, "..", ".mcp.json");
   const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
   const server = payload.mcpServers.engram;
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "engram-mcp-entrypoint-"));
-  const scriptsDir = path.join(tmpRoot, "scripts");
-  const markerPath = path.join(tmpRoot, "main-ran.txt");
-
-  fs.mkdirSync(scriptsDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(scriptsDir, "run-engram.js"),
-    [
-      "const fs = require('node:fs');",
-      "fs.writeFileSync(process.env.ENGRAM_TEST_MARKER, process.argv.slice(1).join('|'));",
-      "",
-    ].join("\n")
-  );
-
-  try {
-    execFileSync(process.execPath, server.args, {
-      cwd: tmpRoot,
-      env: {
-        ...process.env,
-        CLAUDE_PLUGIN_ROOT: "",
-        ENGRAM_TEST_MARKER: markerPath,
-        PLUGIN_ROOT: "",
-      },
-    });
-
-    assert.equal(
-      fs.readFileSync(markerPath, "utf8"),
-      path.join(tmpRoot, "scripts", "run-engram.js")
-    );
-  } finally {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
-  }
+  assert.equal(server.cwd, ".");
+  assert.equal(path.resolve(path.dirname(mcpPath), server.args[0]), path.join(path.dirname(mcpPath), "scripts", "run-engram.js"));
 });
 
-test("Claude MCP config preserves host-provided argv", () => {
+test("Claude MCP config preserves host argv via the package-root wrapper path", () => {
   const mcpPath = path.resolve(__dirname, "..", "claude", ".mcp.json");
   const payload = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
-  const server = payload.mcpServers.engram;
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "engram-mcp-argv-"));
-  const scriptsDir = path.join(tmpRoot, "scripts");
-  const markerPath = path.join(tmpRoot, "argv.txt");
-
-  fs.mkdirSync(scriptsDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(scriptsDir, "run-engram.js"),
-    [
-      "const fs = require('node:fs');",
-      "fs.writeFileSync(process.env.ENGRAM_TEST_MARKER, process.argv.slice(1).join('|'));",
-      "",
-    ].join("\n")
-  );
-
-  try {
-    const args = expandMcpArgsForTest(server.args, tmpRoot);
-    execFileSync(process.execPath, [...args, "--from-host", "value"], {
-      cwd: os.tmpdir(),
-      env: {
-        ...process.env,
-        CLAUDE_PLUGIN_ROOT: "",
-        ENGRAM_TEST_MARKER: markerPath,
-        PLUGIN_ROOT: "",
-      },
-    });
-
-    assert.equal(
-      fs.readFileSync(markerPath, "utf8"),
-      [path.join(tmpRoot, "scripts", "run-engram.js"), "--from-host", "value"].join("|")
-    );
-  } finally {
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
-  }
+  const args = expandMcpArgsForTest(payload.mcpServers.engram.args, path.resolve(__dirname, ".."));
+  assert.deepEqual(args.map(path.normalize), [path.resolve(__dirname, "..", "scripts", "run-engram.js")]);
 });
 
 test("infers Codex plugin data dir from installed cache root", () => {
@@ -190,7 +137,7 @@ test("infers OMP plugin data dir from installed cache root", () => {
     "plugins",
     "cache",
     "plugins",
-    "engram___engram___6.46.4"
+    "engram___engram___6.47.0"
   );
 
   assert.equal(
@@ -574,6 +521,35 @@ test("startup diagnostic config_file=malformed when file exists but contains inv
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+test("rehashes the resolved object before one spawn and reports spawn failure without fallback", async () => {
+  const events = [];
+  const target = { size: 1, sha256: "a".repeat(64) };
+  await assert.rejects(
+    resolveAndSpawn({
+      pluginRoot: "root",
+      pluginData: "data",
+      args: ["serve"],
+      env: {},
+      resolve: async () => { events.push("resolve"); return { path: "trusted-object", target }; },
+      roots: () => ({ objects: "objects" }),
+      hash: (candidate, actual, root) => { events.push(`hash:${candidate}:${actual.sha256}:${root}`); return true; },
+      spawnSync: (command) => { events.push(`spawn:${command}`); return { error: new Error("permission denied"), status: null }; },
+    }),
+    /engram exec failed: permission denied/
+  );
+  assert.deepEqual(events, ["resolve", `hash:trusted-object:${target.sha256}:objects`, "spawn:trusted-object"]);
+});
+
+test("final rehash failure prevents spawn of resolved bytes", async () => {
+  let spawned = false;
+  await assert.rejects(resolveAndSpawn({
+    pluginRoot: "root", pluginData: "data", args: [], env: {},
+    resolve: async () => ({ path: "tampered", target: { size: 1, sha256: "b".repeat(64) } }),
+    roots: () => ({ objects: "objects" }), hash: () => false,
+    spawnSync: () => { spawned = true; return { status: 0 }; },
+  }), /final integrity verification/);
+  assert.equal(spawned, false);
 });
 
 function restoreEnv(key, value) {

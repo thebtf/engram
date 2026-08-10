@@ -179,13 +179,14 @@ type limitedWriter struct {
 }
 
 func (l *limitedWriter) Write(p []byte) (int, error) {
+	inputLen := len(p)
 	if l.n <= 0 {
-		return len(p), nil // discard
+		return inputLen, nil // discard
 	}
-	if int64(len(p)) > l.n {
+	if int64(inputLen) > l.n {
 		p = p[:l.n]
 	}
 	n, err := l.w.Write(p)
 	l.n -= int64(n)
-	return len(p), err // report full len to avoid short-write errors
+	return inputLen, err // report full len to avoid short-write errors
 }

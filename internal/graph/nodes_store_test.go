@@ -2,6 +2,8 @@ package graph
 
 import (
 	"context"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/thebtf/engram/pkg/models"
@@ -117,6 +119,95 @@ func TestNodesStore_T012_ValidateUpdate(t *testing.T) {
 	_, err = ns.Update(ctx, &models.KnowledgeNode{ID: 0})
 	if err == nil {
 		t.Error("Update with ID=0 should return an error")
+	}
+}
+
+func TestNormalizeNodeMetadata_CanonicalizesObjects(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input []byte
+		want  string
+	}{
+		{name: "nil", want: `{}`},
+		{name: "empty", input: []byte{}, want: `{}`},
+		{name: "whitespace", input: []byte(" \t\n"), want: `{}`},
+		{name: "null", input: []byte(" \tnull\n"), want: `{}`},
+		{name: "canonical object", input: []byte(`{"a":1,"z":[true,false]}`), want: `{"a":1,"z":[true,false]}`},
+		{name: "spaced nested object", input: []byte(" { \n \t\"z\" : [ true, { \"deep\" : [ 1, 2 ] } ], \"a\" : { \"nested\" : 1 } \n } \t"), want: `{"a":{"nested":1},"z":[true,{"deep":[1,2]}]}`},
+		{name: "large integer", input: []byte(`{"id":9007199254740993,"nested":[18446744073709551615]}`), want: `{"id":9007199254740993,"nested":[18446744073709551615]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeNodeMetadata(tc.input)
+			if err != nil {
+				t.Fatalf("normalizeNodeMetadata() error = %v", err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("normalizeNodeMetadata() = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNodesStore_MetadataValidationRejectsInvalidValues verifies that malformed
+// and non-object metadata returns validation errors without mutating the node or reaching the DB.
+func TestNodesStore_MetadataValidationRejectsInvalidValues(t *testing.T) {
+	ns := &NodesStore{db: nil}
+	ctx := context.Background()
+
+	operations := []struct {
+		name string
+		new  func([]byte) *models.KnowledgeNode
+		call func(*models.KnowledgeNode) error
+	}{
+		{
+			name: "Create",
+			new: func(metadata []byte) *models.KnowledgeNode {
+				return &models.KnowledgeNode{NodeType: models.NodeTypeSkill, ExternalRef: "metadata-test", Project: "project", Metadata: metadata}
+			},
+			call: func(node *models.KnowledgeNode) error {
+				_, err := ns.Create(ctx, node)
+				return err
+			},
+		},
+		{
+			name: "Update",
+			new: func(metadata []byte) *models.KnowledgeNode {
+				return &models.KnowledgeNode{ID: 1, Metadata: metadata}
+			},
+			call: func(node *models.KnowledgeNode) error {
+				_, err := ns.Update(ctx, node)
+				return err
+			},
+		},
+	}
+	cases := []struct {
+		name     string
+		metadata []byte
+		message  string
+	}{
+		{name: "malformed", metadata: []byte(`{"unterminated":`), message: "valid JSON"},
+		{name: "array", metadata: []byte(`[]`), message: "JSON object"},
+		{name: "string", metadata: []byte(`"value"`), message: "JSON object"},
+		{name: "number", metadata: []byte(`1`), message: "JSON object"},
+		{name: "boolean", metadata: []byte(`true`), message: "JSON object"},
+		{name: "trailing value", metadata: []byte(`{"a":1} {"b":2}`), message: "exactly one JSON value"},
+	}
+
+	for _, operation := range operations {
+		for _, tc := range cases {
+			t.Run(operation.name+"/"+tc.name, func(t *testing.T) {
+				node := operation.new(tc.metadata)
+				before := *node
+				before.Metadata = append([]byte(nil), node.Metadata...)
+				err := operation.call(node)
+				if err == nil || !strings.Contains(err.Error(), tc.message) {
+					t.Fatalf("expected metadata validation error containing %q, got %v", tc.message, err)
+				}
+				if !reflect.DeepEqual(node, &before) {
+					t.Fatalf("rejected metadata mutated node: got %#v, want %#v", node, &before)
+				}
+			})
+		}
 	}
 }
 

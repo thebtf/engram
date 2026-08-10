@@ -88,6 +88,32 @@ func TestRuleGovernanceStore_ArbiterRunEvaluationAndCandidateAnnotation(t *testi
 	require.Equal(t, 1, finished.CandidatesHeld)
 }
 
+func TestRuleGovernanceStore_AnnotatedDueCandidateCanBeReclaimed(t *testing.T) {
+	db := openCandidateTestDB(t)
+	store := NewRuleGovernanceStore(db)
+	ctx := context.Background()
+	candidate, err := store.CreateRuleCandidate(ctx, ruleGovernanceCandidate("arbiter-reclaim"))
+	require.NoError(t, err)
+
+	firstRun, err := store.StartRuleArbiterRun(ctx, "unit-test-first")
+	require.NoError(t, err)
+	require.Contains(t, ruleCandidateIDs(claimRuleArbiterCandidates(t, store, firstRun.ID, time.Now().UTC())), candidate.ID)
+	eval, err := store.CreateRuleArbiterEvaluation(ctx, &models.RuleArbiterEvaluation{
+		RunID: firstRun.ID, CandidateID: candidate.ID, Action: models.RuleArbiterActionHold,
+		Reason: "re-evaluate when due", Confidence: 0.8, ParseStatus: models.RuleArbiterParseStatusNotApplicable,
+	})
+	require.NoError(t, err)
+	_, err = store.AnnotateRuleCandidate(ctx, candidate.ID, models.RuleCandidateAnnotation{
+		Action: models.RuleArbiterActionHold, Reason: "re-evaluate when due", Confidence: 0.8,
+		RunID: &firstRun.ID, EvaluationID: &eval.ID, ReviewAfter: ptrTime(time.Now().UTC().Add(-time.Second)),
+	})
+	require.NoError(t, err)
+
+	secondRun, err := store.StartRuleArbiterRun(ctx, "unit-test-second")
+	require.NoError(t, err)
+	require.Contains(t, ruleCandidateIDs(claimRuleArbiterCandidates(t, store, secondRun.ID, time.Now().UTC())), candidate.ID)
+}
+
 func TestRuleGovernanceStore_ArbiterRejectsTerminalRunEvaluation(t *testing.T) {
 	db := openCandidateTestDB(t)
 	store := NewRuleGovernanceStore(db)

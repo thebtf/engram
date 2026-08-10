@@ -62,7 +62,7 @@ Role/assignment state is CONTROL-PLANE, not a last-writer-wins free-for-all. A D
 - Database: PostgreSQL 17
 - Server: `cmd/engram-server/main.go` — HTTP API + gRPC + dashboard on :37777 (cmux)
 - Client: `cmd/engram/main.go` — stdio MCP proxy with git-derived project identity
-- Hooks: `plugin/hooks/` — JavaScript hooks for Claude Code lifecycle
+- Hooks: `plugin/engram/hooks/` — JavaScript hooks for Claude Code lifecycle
 - Plugin: `plugin/` — Claude Code plugin definition + marketplace
 
 ## KEY DIRECTORIES
@@ -75,7 +75,7 @@ internal/grpcserver/ — gRPC service implementations
 internal/worker/     — HTTP handlers, retrieval, session management
 internal/db/gorm/    — GORM models + stores (memories, behavioral_rules, credentials, issues, documents)
 internal/crypto/     — AES-256-GCM vault for credential encryption
-plugin/hooks/        — JS hooks (session-start, user-prompt, post-tool-use, stop)
+plugin/engram/hooks/ — JS hooks (SessionStart, UserPromptSubmit, SubagentStop, PreToolUse, PreCompact, Stop, SessionEnd)
 ```
 
 ## CODE INTELLIGENCE (SocratiCode replacement, v6.13.0+)

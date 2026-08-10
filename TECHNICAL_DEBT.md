@@ -72,11 +72,12 @@ curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.s
 hits a 404 on the archive download. This has been broken for 8 consecutive
 releases.
 
-`release-binary.yml` IS independent and DOES publish bare per-platform
+At the time, `release-binary.yml` independently published bare per-platform
 binaries (engram-darwin-arm64 / engram-linux-amd64 / engram-windows-amd64.exe),
-but those are NOT what install.sh consumes — the script expects the bundled
-tar.gz / zip containing `.claude-plugin/`, `hooks/`, `commands/`, `skills/`,
-and `.mcp.json` together.
+but those were not what install.sh consumed — the script expected the bundled
+tar.gz / zip containing `.claude-plugin/`, `hooks/`, `commands`, `skills`, and
+`.mcp.json` together. The v6.47 release cutover later removed that duplicate
+publisher and made the GoReleaser workflow the sole server/client writer.
 
 The earlier "no user-facing impact" claim was wrong because the user-path
 verification stopped at the in-repo plugin/marketplace flow (which IS

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/bulkops"
 	"github.com/thebtf/engram/internal/chunking"
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
@@ -22,7 +23,6 @@ import (
 	gorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/graph"
-	"github.com/thebtf/engram/internal/privacy"
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/reranking"
 	"github.com/thebtf/engram/internal/writelint"
@@ -878,7 +878,7 @@ func (s *Server) primaryTools() []Tool {
 		},
 		{
 			Name:        "docs",
-			Description: "Versioned documents and collections. Actions: create, read, list, history, comment, collections, documents, get_doc, remove, ingest. Action required.",
+			Description: "Versioned documents and collections. docs(action=ingest) stores the full content-addressed body with collection, path, title, and hash metadata; document chunking, embeddings, and search is unavailable. Actions: create, read, list, history, comment, collections, documents, get_doc, remove, ingest. Action required.",
 			tier:        tierUseful,
 			InputSchema: map[string]any{
 				"type":     "object",
@@ -887,13 +887,13 @@ func (s *Server) primaryTools() []Tool {
 					"action":      map[string]any{"type": "string", "enum": docsActions, "description": "Action to perform (required)"},
 					"path":        map[string]any{"type": "string", "description": "Document path"},
 					"project":     map[string]any{"type": "string", "description": "Project name"},
-					"content":     map[string]any{"type": "string", "description": "Document content (for create, comment, or ingest)"},
+					"content":     map[string]any{"type": "string", "description": "Document content (for create or comment; ingest stores the full content-addressed body)"},
 					"collection":  map[string]any{"type": "string", "description": "Collection name (for documents, get_doc, remove, or ingest)"},
 					"version":     map[string]any{"type": "number", "description": "Version number (for read)"},
-					"document_id": map[string]any{"type": "number", "description": "Versioned document ID (for comment)"},
+					"document_id": map[string]any{"type": "integer", "description": "Versioned document ID (for comment)"},
 					"author":      map[string]any{"type": "string", "description": "Author identifier (for create or comment)"},
-					"line_start":  map[string]any{"type": "number", "description": "Starting line number (for comment)"},
-					"line_end":    map[string]any{"type": "number", "description": "Ending line number (for comment)"},
+					"line_start":  map[string]any{"type": "integer", "description": "Starting line number (for comment)"},
+					"line_end":    map[string]any{"type": "integer", "description": "Ending line number (for comment)"},
 					"doc_type":    map[string]any{"type": "string", "description": "Document type (for create or list)"},
 					"metadata":    map[string]any{"type": "string", "description": "JSON metadata string (for create)"},
 					"path_prefix": map[string]any{"type": "string", "description": "Path prefix filter (for list)"},
@@ -1215,8 +1215,11 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 
 	result, err := s.callTool(ctx, params.Name, params.Arguments)
 	if err != nil {
-		args := sanitizeToolCallArgs(params.Name, params.Arguments)
-		log.Error().Err(err).Str("tool", params.Name).Str("args", args).Msg("Tool call failed")
+		event := log.Error().Err(err).Str("tool", params.Name)
+		if identity, ok := auth.IdentityFrom(ctx); ok {
+			event = event.Str("auth_source", string(identity.Source)).Str("auth_role", string(identity.Role))
+		}
+		event.Msg("Tool call failed")
 		return &Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,
@@ -1235,19 +1238,110 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 	}
 }
 
-func sanitizeToolCallArgs(tool string, args json.RawMessage) string {
-	if tool == "remember_directive" {
-		return "<redacted>"
+const readOnlyMutationError = "read_only: action is not permitted"
+
+// readOnlyToolAllowlist is the complete positive authorization policy for
+// dashboard-issued read-only keycards. A nil action set permits a non-consolidated
+// read-only tool; a non-nil set lists its permitted consolidated actions.
+// Everything absent from this map is denied before dispatch.
+var readOnlyToolAllowlist = map[string]map[string]struct{}{
+	"check_system_health":          nil,
+	"list_rules":                   nil,
+	"recall_memory":                nil,
+	"know_about":                   nil,
+	"query_principal_memory":       nil,
+	"experience_history.read":      nil,
+	"experience_history.detail":    nil,
+	"temporal_truth":               nil,
+	"get_memory_brief":             nil,
+	"list_candidates":              nil,
+	"get_candidate":                nil,
+	"review_metrics.read":          nil,
+	"review_queue.read":            nil,
+	"review_packet.detail":         nil,
+	"review_packet.preview_action": nil,
+	"rule_governance_health":       nil,
+	"rule_governance_queue":        nil,
+	"rule_governance_snapshots":    nil,
+	"rule_governance_usefulness":   nil,
+	"codebase_search":              nil,
+	"codebase_status":              nil,
+	"recall": {
+		"search": {},
+	},
+	"docs": {
+		"read": {}, "list": {}, "history": {}, "collections": {}, "documents": {}, "get_doc": {},
+	},
+	"issues": {
+		"list": {}, "get": {},
+	},
+	"lifecycle": {
+		"info": {}, "sleep_status": {}, "decay_preview": {},
+	},
+	"graph": {
+		"get_edges": {}, "traverse": {}, "find_path": {}, "synonyms": {},
+	},
+}
+
+func readOnlyToolAllowed(name string, args json.RawMessage) bool {
+	actions, known := readOnlyToolAllowlist[name]
+	if !known {
+		return false
 	}
-	value := string(args)
-	if len(value) > 200 {
-		value = value[:200] + "..."
+	if actions == nil {
+		return true
 	}
-	return privacy.RedactSecrets(value)
+
+	values, err := parseArgs(args)
+	if err != nil {
+		return false
+	}
+	action := coerceString(values["action"], "")
+	if action == "" && (name == "recall" || name == "issues") {
+		return true // Both handlers default to their listed read action.
+	}
+	_, allowed := actions[action]
+	return allowed
+}
+
+// readOnlyAdminGatedTools mirrors the handlers whose first action is an admin
+// gate. The central policy still stops these calls before dispatch, but keeps
+// their established admin_required error class for callers.
+var readOnlyAdminGatedTools = map[string]struct{}{
+	"list_snapshots": {}, "rollback_snapshot": {}, "pin_snapshot": {}, "redaction_rules_status": {},
+	"bulk_promote": {}, "bulk_delete": {}, "bulk_supersede": {},
+	"rule_governance_transition": {}, "rule_governance_pin_snapshot": {}, "rule_governance_rollback": {},
+}
+
+func readOnlyAdminGatedCall(name string, args json.RawMessage) bool {
+	if _, ok := readOnlyAdminGatedTools[name]; ok {
+		return true
+	}
+	values, err := parseArgs(args)
+	if err != nil {
+		return false
+	}
+	action := coerceString(values["action"], "")
+	return (name == "settings" && (action == "set" || action == "delete")) ||
+		(name == "admin" && action == "purge_project")
+}
+
+func readOnlyDenial(ctx context.Context, name string, args json.RawMessage) error {
+	identity, ok := auth.IdentityFrom(ctx)
+	if !ok || identity.Source != auth.SourceClient || identity.Role != auth.RoleReadOnly || readOnlyToolAllowed(name, args) {
+		return nil
+	}
+	if readOnlyAdminGatedCall(name, args) {
+		return fmt.Errorf("admin_required: %s requires admin identity", name)
+	}
+	return fmt.Errorf(readOnlyMutationError)
 }
 
 // callTool dispatches to the appropriate tool handler.
 func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	if err := readOnlyDenial(ctx, name, args); err != nil {
+		return "", err
+	}
 	// Primary consolidated tool handlers
 	switch name {
 	case "recall":

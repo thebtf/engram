@@ -337,6 +337,20 @@ func TestRuleGovernanceTransitionToolUsesStateMachineStore(t *testing.T) {
 	require.Equal(t, "rule_versions", decoded["source_table"])
 }
 
+func TestRuleGovernanceTransitionUsesLosslessSelector(t *testing.T) {
+	store := &fakeRuleGovernanceStore{}
+	s := NewServer(ServerOptions{Version: "strict-rule-governance"})
+	s.SetRuleGovernanceStore(store)
+	ctx := auth.WithIdentity(context.Background(), auth.Admin())
+	_, err := s.callTool(ctx, "rule_governance_transition", json.RawMessage(`{"rule_version_id":9007199254740993,"to_state":"active_project"}`))
+	require.NoError(t, err)
+	require.Equal(t, int64(9007199254740993), store.transitionID)
+	for _, raw := range []string{`{"rule_version_id":"7","to_state":"active_project"}`, `{"rule_version_id":7.5,"to_state":"active_project"}`} {
+		_, err := s.callTool(ctx, "rule_governance_transition", json.RawMessage(raw))
+		require.Error(t, err)
+	}
+}
+
 func TestRuleGovernancePinSnapshotAndRollbackUseRuleGovernanceSnapshots(t *testing.T) {
 	store := &fakeRuleGovernanceStore{}
 	s := NewServer(ServerOptions{Version: "test"})

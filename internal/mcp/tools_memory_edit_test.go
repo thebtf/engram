@@ -42,6 +42,8 @@ func reloadConfig(t *testing.T) {
 
 type mockMemoryEditor struct {
 	stored   map[int64]*models.Memory // in-memory records
+	getCalls int
+	updates  int
 	updateFn func(m *models.Memory) (*models.Memory, error)
 	getFn    func(id int64) (*models.Memory, error)
 }
@@ -55,6 +57,7 @@ func (m *mockMemoryEditor) seed(mem *models.Memory) {
 }
 
 func (m *mockMemoryEditor) Get(_ context.Context, id int64) (*models.Memory, error) {
+	m.getCalls++
 	if m.getFn != nil {
 		return m.getFn(id)
 	}
@@ -68,6 +71,7 @@ func (m *mockMemoryEditor) Get(_ context.Context, id int64) (*models.Memory, err
 }
 
 func (m *mockMemoryEditor) Update(_ context.Context, mem *models.Memory) (*models.Memory, error) {
+	m.updates++
 	if m.updateFn != nil {
 		return m.updateFn(mem)
 	}
@@ -97,6 +101,21 @@ func newEditServer(t *testing.T, mem *mockMemoryEditor) *Server {
 }
 
 // ---------------------------------------------------------------------------
+
+func TestEditMemoryPreservesExactSelectorAndRejectsFraction(t *testing.T) {
+	t.Setenv("ENGRAM_ENFORCE_SOURCE_PROJECT", "false")
+	reloadConfig(t)
+	const id int64 = 9007199254740993
+	mem := newMockMemoryEditor()
+	mem.seed(&models.Memory{ID: id, Project: "exact", Content: "before"})
+	srv := newEditServer(t, mem)
+	_, err := srv.handleEditMemory(context.Background(), json.RawMessage(`{"id":9007199254740993,"narrative":"after"}`))
+	require.NoError(t, err)
+	require.Equal(t, "after", mem.stored[id].Content)
+	_, err = srv.handleEditMemory(context.Background(), json.RawMessage(`{"id":42.5,"narrative":"bad"}`))
+	require.Error(t, err)
+}
+
 // Finding 1: hard limit rejection
 // ---------------------------------------------------------------------------
 

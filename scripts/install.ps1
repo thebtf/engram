@@ -33,6 +33,18 @@ function Write-Success { param($Message) Write-Host "[OK] $Message"    -Foregrou
 function Write-Warn    { param($Message) Write-Host "[WARN] $Message"  -ForegroundColor Yellow }
 function Write-Err     { param($Message) Write-Host "[ERROR] $Message" -ForegroundColor Red; exit 1 }
 
+# The release policy is validated before any release files are installed.
+function Assert-Node {
+    $Node = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $Node) {
+        Write-Err "Node.js 18+ is required to validate the release bootstrap policy. Install Node.js 18 or newer and re-run this installer."
+    }
+    $NodeVersion = & $Node.Source --version 2>$null
+    if ($LASTEXITCODE -ne 0 -or $NodeVersion -notmatch "^v?([0-9]+)\." -or [int]$Matches[1] -lt 18) {
+        Write-Err "Node.js 18+ is required to validate the release bootstrap policy. Found $NodeVersion; install Node.js 18 or newer and re-run this installer."
+    }
+}
+
 # ---------------------------------------------------------------------------
 # Fetch latest release tag
 # ---------------------------------------------------------------------------
@@ -85,6 +97,99 @@ function Install-Release {
         Write-Info "Extracting archive..."
         Expand-Archive -Path $ZipPath -DestinationPath $TempDir -Force
 
+        if (-not (Test-Path "$TempDir\scripts\*.js")) {
+            Write-Err "Release archive is missing required JS scripts in $TempDir\scripts"
+        }
+        $PolicyPath = Join-Path $TempDir "bootstrap-targets.json"
+        if (-not (Test-Path -LiteralPath $PolicyPath -PathType Leaf)) {
+            Write-Err "Release archive is missing required bootstrap-targets.json"
+        }
+
+        # This validator is part of the trusted installer, not the release archive.
+        # A release payload must never be allowed to validate its own policy.
+        $ValidatorScript = @'
+const fs = require('node:fs');
+const [file, version] = process.argv.slice(2);
+const assets = { 'win32-x64': 'engram-windows-amd64.exe', 'linux-x64': 'engram-linux-amd64', 'darwin-arm64': 'engram-darwin-arm64' };
+const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9A-Za-z-][0-9A-Za-z-]*))*)?$/;
+const sha256 = /^[0-9a-f]{64}$/;
+const exact = (value, fields) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join('\0') !== [...fields].sort().join('\0')) throw new Error('unknown or missing fields');
+};
+const assertNoDuplicateProperties = (text) => {
+  let cursor = 0;
+  const skip = () => { while (/\s/.test(text[cursor])) cursor += 1; };
+  const string = () => {
+    if (text[cursor] !== '"') throw new Error('bootstrap policy is not valid JSON');
+    const start = cursor++;
+    while (cursor < text.length) {
+      const character = text[cursor++];
+      if (character === '"') return JSON.parse(text.slice(start, cursor));
+      if (character === '\\') { if (text[cursor++] === 'u') cursor += 4; }
+      else if (character < ' ') throw new Error('bootstrap policy is not valid JSON');
+    }
+    throw new Error('bootstrap policy is not valid JSON');
+  };
+  const value = () => {
+    skip();
+    if (text[cursor] === '"') { string(); return; }
+    if (text[cursor] === '{') {
+      cursor += 1; skip();
+      const keys = new Set();
+      if (text[cursor] === '}') { cursor += 1; return; }
+      for (;;) {
+        skip(); const key = string();
+        if (keys.has(key)) throw new Error('bootstrap policy has duplicate fields');
+        keys.add(key); skip();
+        if (text[cursor++] !== ':') throw new Error('bootstrap policy is not valid JSON');
+        value(); skip();
+        if (text[cursor] === '}') { cursor += 1; return; }
+        if (text[cursor++] !== ',') throw new Error('bootstrap policy is not valid JSON');
+      }
+    }
+    if (text[cursor] === '[') {
+      cursor += 1; skip();
+      if (text[cursor] === ']') { cursor += 1; return; }
+      for (;;) {
+        value(); skip();
+        if (text[cursor] === ']') { cursor += 1; return; }
+        if (text[cursor++] !== ',') throw new Error('bootstrap policy is not valid JSON');
+      }
+    }
+    const token = /^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/.exec(text.slice(cursor));
+    if (!token) throw new Error('bootstrap policy is not valid JSON');
+    cursor += token[0].length;
+  };
+  value(); skip();
+  if (cursor !== text.length) throw new Error('bootstrap policy is not valid JSON');
+};
+const text = fs.readFileSync(file, 'utf8');
+assertNoDuplicateProperties(text);
+const policy = JSON.parse(text);
+exact(policy, ['schema_version', 'launcher_security_epoch', 'package_version', 'daemon_compat_epoch', 'targets', 'revoked_sha256', 'build_contract']);
+if (policy.schema_version !== 1 || policy.launcher_security_epoch !== 1 || policy.daemon_compat_epoch !== 1 || policy.package_version !== version || !semver.test(version)) throw new Error('schema or version mismatch');
+exact(policy.build_contract, ['go_version', 'trimpath', 'buildvcs', 'client_cgo', 'daemon_version_ldflag']);
+if (policy.build_contract.go_version !== '1.25.12' || policy.build_contract.trimpath !== true || policy.build_contract.buildvcs !== false || policy.build_contract.client_cgo !== false || policy.build_contract.daemon_version_ldflag !== `v${version}`) throw new Error('unsupported build contract');
+if (!Array.isArray(policy.revoked_sha256) || policy.revoked_sha256.some((hash) => typeof hash !== 'string' || !sha256.test(hash)) || new Set(policy.revoked_sha256).size !== policy.revoked_sha256.length) throw new Error('invalid revocation list');
+exact(policy.targets, Object.keys(assets));
+for (const [key, asset] of Object.entries(assets)) {
+  const target = policy.targets[key];
+  exact(target, ['desired', 'predecessor']);
+  if (target.predecessor !== null) throw new Error('predecessor is not allowed');
+  exact(target.desired, ['version', 'asset', 'size', 'sha256']);
+  if (target.desired.version !== version || target.desired.asset !== asset || !Number.isSafeInteger(target.desired.size) || target.desired.size <= 0 || target.desired.size > 128 * 1024 * 1024 || !sha256.test(target.desired.sha256) || policy.revoked_sha256.includes(target.desired.sha256)) throw new Error(`invalid target ${key}`);
+}
+'@
+        try {
+            $ValidatorScript | & node - $PolicyPath $VersionClean
+            if ($LASTEXITCODE -ne 0) {
+                throw 'schema or target matrix mismatch'
+            }
+        }
+        catch {
+            Write-Err "Release archive has an invalid bootstrap policy: $_"
+        }
+
         Write-Info "Installing to $InstallDir..."
         New-Item -ItemType Directory -Path "$InstallDir\hooks"         -Force | Out-Null
         New-Item -ItemType Directory -Path "$InstallDir\scripts"       -Force | Out-Null
@@ -101,10 +206,8 @@ function Install-Release {
         }
         Copy-Item "$TempDir\hooks\hooks.json" "$InstallDir\hooks\" -Force -ErrorAction Stop
 
-        if (-not (Test-Path "$TempDir\scripts\*.js")) {
-            Write-Err "Release archive is missing required JS scripts in $TempDir\scripts"
-        }
         Copy-Item "$TempDir\scripts\*.js" "$InstallDir\scripts\" -Force -ErrorAction Stop
+        Copy-Item $PolicyPath "$InstallDir\bootstrap-targets.json" -Force -ErrorAction Stop
 
         Copy-Item "$TempDir\.claude-plugin\*" "$InstallDir\.claude-plugin\" -Force
 
@@ -365,6 +468,8 @@ if ($Uninstall) {
     Uninstall-Engram
     exit 0
 }
+
+Assert-Node
 
 if (-not $Version) {
     Write-Info "Fetching latest release..."

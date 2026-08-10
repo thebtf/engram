@@ -23,6 +23,7 @@ import (
 	"github.com/rs/zerolog/log"
 	authpkg "github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	gormlib "gorm.io/gorm"
 )
 
 // requestIDKey is the context key for request IDs.
@@ -209,7 +210,8 @@ type TokenAuth struct {
 
 // NewTokenAuth creates a new TokenAuth using a provided token.
 // If ENGRAM_AUTH_DISABLED is set, authentication is replaced by a synthetic
-// admin session identity for dashboard/operator flows.
+// admin identity for dashboard/operator flows. The identity is deliberately
+// not a browser session, so it cannot manage durable keycards.
 // Otherwise, authentication will be enforced at startup (see Service.Start).
 func NewTokenAuth(token string) (*TokenAuth, error) {
 	authDisabled := authDisabledFromEnv()
@@ -358,10 +360,10 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 		authentikTrustedProxies := ta.authentikTrustedProxies
 		ta.mu.RUnlock()
 
-		// Explicit disabled-auth mode behaves as a synthetic browser admin
-		// session so downstream dashboard handlers see one coherent access map.
+		// Explicit disabled-auth mode retains ordinary admin access without
+		// impersonating a browser session. Keycard handlers therefore reject it.
 		if authDisabled {
-			next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), authpkg.Session("admin"))))
+			next.ServeHTTP(w, r.WithContext(buildAuthCtx(r.Context(), authpkg.AuthDisabled())))
 			return
 		}
 
@@ -472,18 +474,14 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 			authentikEmail := r.Header.Get("X-Authentik-Email")
 			if authentikEmail != "" && isTrustedProxy(r, authentikTrustedProxies) {
 				user, err := uStore.GetUserByEmail(authentikEmail)
-				if err != nil && authentikAutoProvision {
-					// Autoprovisioned users receive the "operator" role —
-					// the regular non-admin role. This is intentional:
-					// auto-creating SSO callers as admin would mean any
-					// user reaching the SSO endpoint receives keycard
-					// issuance privileges. Existing admins can promote
-					// the new user via PATCH /api/users/{id}/role. v6
-					// IsSessionAdmin (admin role only) preserves this
-					// boundary; v5 issuance gated on master-token bearer
-					// alone, so "operator" session users could never
-					// issue keycards either — no regression.
-					user, err = uStore.CreateUser(authentikEmail, "", "operator")
+				if errors.Is(err, gormlib.ErrRecordNotFound) && authentikAutoProvision {
+					// Provisioning serializes with initial setup and refuses to make
+					// Authentik the unaudited first dashboard identity.
+					user, err = uStore.ProvisionAuthentikOperator(r.Context(), authentikEmail)
+					if errors.Is(err, gormdb.ErrInitialAdminSetupRequired) {
+						http.Error(w, "unauthorized", http.StatusUnauthorized)
+						return
+					}
 				}
 				if err == nil && user != nil && !user.Disabled {
 					id := authpkg.Session(user.Role)

@@ -140,6 +140,107 @@ func TestAuthHandlersLifecycle_InvitationSingleUseRace(t *testing.T) {
 	require.NotNil(t, matched.UsedAt)
 }
 
+func TestAuthHandlersSetupRequiresOperatorTokenProof(t *testing.T) {
+	h := NewAuthHandlers(nil, nil, nil, nil)
+	t.Setenv("ENGRAM_AUTH_ADMIN_TOKEN", "operator-token")
+
+	for _, tc := range []struct {
+		name   string
+		header string
+		value  string
+		want   int
+	}{
+		{name: "missing proof", want: http.StatusUnauthorized},
+		{name: "invalid proof", header: "X-Auth-Token", value: "wrong-token", want: http.StatusUnauthorized},
+		{name: "bearer proof", header: "Authorization", value: "Bearer operator-token", want: http.StatusServiceUnavailable},
+		{name: "x auth token proof", header: "X-Auth-Token", value: "operator-token", want: http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(`{"email":"admin@example.com","password":"password-123"}`))
+			if tc.header != "" {
+				req.Header.Set(tc.header, tc.value)
+			}
+			rec := httptest.NewRecorder()
+			h.handleSetup(rec, req)
+			require.Equal(t, tc.want, rec.Code, rec.Body.String())
+		})
+	}
+
+	t.Setenv("ENGRAM_AUTH_ADMIN_TOKEN", "")
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(`{"email":"admin@example.com","password":"password-123"}`))
+	req.Header.Set("X-Auth-Token", "operator-token")
+	rec := httptest.NewRecorder()
+	h.handleSetup(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+}
+
+func TestAuthHandlersLifecycle_SetupCreatesOnlyOneInitialAdmin(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_ADMIN_TOKEN", "operator-token")
+	env := openAuthLifecycleEnv(t)
+	count, err := env.users.CountUsers()
+	require.NoError(t, err)
+	require.Zero(t, count, "initial-admin setup requires an empty test database")
+
+	prefix := fmt.Sprintf("zz-initial-admin-race-%d", time.Now().UnixNano())
+	emails := []string{prefix + "-a@example.com", prefix + "-b@example.com"}
+	t.Cleanup(func() {
+		_ = env.store.DB.Exec(`DELETE FROM audit_log WHERE action = 'auth_setup_completed' AND actor LIKE ?`, prefix+"%@example.com").Error
+		_ = env.store.DB.Exec(`DELETE FROM users WHERE email LIKE ?`, prefix+"%@example.com").Error
+	})
+
+	ready := make(chan struct{}, len(emails))
+	release := make(chan struct{})
+	env.handlers.beforeInitialAdminCreate = func() {
+		ready <- struct{}{}
+		<-release
+	}
+
+	statuses := make([]int, len(emails))
+	bodies := make([]string, len(emails))
+	var wg sync.WaitGroup
+	for i, email := range emails {
+		wg.Add(1)
+		go func(idx int, email string) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/setup", strings.NewReader(fmt.Sprintf(`{"email":%q,"password":"password-123"}`, email)))
+			req.Header.Set("X-Auth-Token", "operator-token")
+			rec := httptest.NewRecorder()
+			env.handlers.handleSetup(rec, req)
+			statuses[idx] = rec.Code
+			bodies[idx] = rec.Body.String()
+		}(i, email)
+	}
+	for range emails {
+		<-ready
+	}
+	close(release)
+	wg.Wait()
+
+	successes := 0
+	for i, status := range statuses {
+		switch status {
+		case http.StatusCreated:
+			successes++
+			require.Contains(t, bodies[i], `"user"`)
+			require.NotContains(t, bodies[i], "password")
+		case http.StatusConflict:
+			require.Contains(t, bodies[i], "setup already completed")
+		default:
+			t.Fatalf("setup attempt %d status=%d body=%s", i, status, bodies[i])
+		}
+	}
+	require.Equal(t, 1, successes, "exactly one concurrent setup response must contain credentials")
+
+	rows, err := env.users.ListUsers()
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "only one initial admin user may be committed")
+	require.Contains(t, emails, rows[0].Email)
+	require.Equal(t, gormdb.DashboardRoleAdmin, rows[0].Role)
+	var auditEvents int64
+	require.NoError(t, env.store.DB.Model(&gormdb.AuditLogEntry{}).Where("action = ? AND actor LIKE ?", "auth_setup_completed", prefix+"%@example.com").Count(&auditEvents).Error)
+	require.Equal(t, int64(1), auditEvents, "only the successful setup may issue an audit credential event")
+}
+
 func TestAuthHandlersLifecycle_SessionRevokeWinsInFlightRequest(t *testing.T) {
 	env := openAuthLifecycleEnv(t)
 
@@ -259,6 +360,57 @@ func TestAuthHandlersLifecycle_LastAdminDemoteRaceLeavesOneAdmin(t *testing.T) {
 	require.Equal(t, int64(1), count)
 }
 
+func TestAuthHandlersLifecycle_LastAdminDemoteDisableRaceLeavesOneAdmin(t *testing.T) {
+	env := openAuthLifecycleEnv(t)
+	adminAEmail := fmt.Sprintf("zz-access-last-admin-demote-%d@example.com", time.Now().UnixNano())
+	adminBEmail := fmt.Sprintf("zz-access-last-admin-disable-%d@example.com", time.Now().UnixNano())
+	adminA, err := env.users.CreateUser(adminAEmail, "hash", gormdb.DashboardRoleAdmin)
+	require.NoError(t, err)
+	adminB, err := env.users.CreateUser(adminBEmail, "hash", gormdb.DashboardRoleAdmin)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = env.store.DB.Exec(`DELETE FROM users WHERE email IN (?, ?)`, adminAEmail, adminBEmail).Error
+	})
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := env.handlers.applyUserUpdate(adminA.ID, updateUserRequest{Role: strPtr(gormdb.DashboardRoleOperator)}, nil, "", false)
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := env.handlers.applyUserUpdate(adminB.ID, updateUserRequest{Disabled: ptrBool(true)}, nil, "", false)
+		results <- err
+	}()
+	close(start)
+
+	successes := 0
+	for range 2 {
+		err := <-results
+		if err == nil {
+			successes++
+			continue
+		}
+		require.Contains(t, []string{"cannot demote the last admin", "cannot disable the last admin"}, err.Error())
+		require.NotContains(t, strings.ToLower(err.Error()), "deadlock")
+	}
+	require.Equal(t, 1, successes)
+
+	adminA, err = env.users.GetUserByID(adminA.ID)
+	require.NoError(t, err)
+	adminB, err = env.users.GetUserByID(adminB.ID)
+	require.NoError(t, err)
+	activeAdmins := 0
+	for _, admin := range []*gormdb.User{adminA, adminB} {
+		if admin.Role == gormdb.DashboardRoleAdmin && !admin.Disabled {
+			activeAdmins++
+		}
+	}
+	require.Equal(t, 1, activeAdmins)
+}
+
 func TestAuthHandlersLifecycle_DisabledAdminCanBeDemotedWithoutLastAdminError(t *testing.T) {
 	env := openAuthLifecycleEnv(t)
 	activeEmail := fmt.Sprintf("zz-active-admin-%d@example.com", time.Now().UnixNano())
@@ -280,6 +432,21 @@ func TestAuthHandlersLifecycle_DisabledAdminCanBeDemotedWithoutLastAdminError(t 
 	require.NoError(t, err)
 	require.Equal(t, int64(1), count)
 	require.Equal(t, active.ID, active.ID)
+}
+
+func TestAuthHandlersLifecycle_NormalizedAdminRoleIsNotDemotion(t *testing.T) {
+	env := openAuthLifecycleEnv(t)
+	email := fmt.Sprintf("zz-access-normalized-admin-%d@example.com", time.Now().UnixNano())
+	admin, err := env.users.CreateUser(email, "hash", gormdb.DashboardRoleAdmin)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = env.store.DB.Exec(`DELETE FROM users WHERE email = ?`, email).Error
+	})
+
+	updated, err := env.handlers.applyUserUpdate(admin.ID, updateUserRequest{Role: strPtr(" ADMIN ")}, nil, "", false)
+	require.NoError(t, err)
+	require.Equal(t, gormdb.DashboardRoleAdmin, updated.Role)
+	require.False(t, updated.Disabled)
 }
 
 func ptrBool(v bool) *bool { return &v }

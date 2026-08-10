@@ -8,8 +8,11 @@
  *   health, server config, model registry, and model health are backed by the current Engram HTTP surface.
  */
 
+import { computed } from 'vue'
 import { operatorApiBase, operatorApiUrl } from './useOperatorApi'
 import { useOperatorMemoryLab } from './useOperatorMemoryLab'
+import { useOperatorRules } from './useOperatorRules'
+import { useOperatorSecrets } from './useOperatorSecrets'
 
 export interface Memory {
   id: string
@@ -173,18 +176,6 @@ interface ApiIssueList {
   issues?: ApiIssueRow[]
 }
 
-interface ApiVaultCredential {
-  name: string
-  project?: string
-  scope?: string
-  created_at?: string
-}
-
-interface ApiVaultStatus {
-  key_configured?: boolean
-  fingerprint?: string
-  key_source?: string
-}
 
 interface ApiStats {
   uptime?: string
@@ -208,17 +199,6 @@ interface ApiStatsVnext {
   }
 }
 
-interface ApiRuleRow {
-  id: number
-  project?: string
-  content?: string
-  priority?: number
-  version?: number
-  enabled?: boolean
-  edited_by?: string
-  created_at?: string
-  updated_at?: string
-}
 
 interface ApiSessionRow {
   id?: number
@@ -406,17 +386,6 @@ function percentValue(value?: number): string {
   return `${Math.round(value)}%`
 }
 
-function mapRuleRow(row: ApiRuleRow): RuleRow {
-  return {
-    id: row.id,
-    content: row.content || '—',
-    project: normalizeProject(row.project),
-    priority: typeof row.priority === 'number' ? row.priority : 0,
-    version: typeof row.version === 'number' ? row.version : 1,
-    updated: compactAge(row.updated_at || row.created_at),
-    enabled: row.enabled !== false,
-  }
-}
 
 function mapModelHealthRow(row: ApiModelHealthRow): ModelRow {
   return {
@@ -467,29 +436,6 @@ async function listProjects(): Promise<string[]> {
   return [...new Set((projects || []).filter((value) => typeof value === 'string' && value.trim()))]
 }
 
-async function loadAllRules(): Promise<RuleRow[]> {
-  const projects = await listProjects()
-  const combined = new Map<number, RuleRow>()
-  const globalRows = await fetchJson<ApiRuleRow[]>('/api/rules?limit=100')
-
-  for (const row of globalRows || []) {
-    combined.set(row.id, mapRuleRow(row))
-  }
-
-  for (const project of projects) {
-    const rows = await fetchJson<ApiRuleRow[]>(`/api/rules?project=${encodeURIComponent(project)}&limit=100`)
-    for (const row of rows || []) {
-      combined.set(row.id, mapRuleRow(row))
-    }
-  }
-
-  return [...combined.values()].sort((left, right) => {
-    if (left.priority !== right.priority) {
-      return right.priority - left.priority
-    }
-    return left.content.localeCompare(right.content)
-  })
-}
 
 async function loadProjectSummaries(): Promise<ProjectSummary[]> {
   const [projects, sessionsPayload] = await Promise.all([
@@ -569,88 +515,21 @@ export const useIssuesState = () => {
 
 export const useIssues = () => useIssuesState().rows
 
-export const useCreds = () => {
-  const state = useState<Cred[]>('live:creds', () => [])
-  const rows = state.value
+export const useCreds = () => useOperatorSecrets().creds
 
-  startOnce('creds', async () => {
-    const payload = await fetchJson<ApiVaultCredential[]>('/api/vault/credentials')
-    const liveRows = payload.map((row) => ({
-      id: row.name,
-      project: row.project || 'global',
-      scope: row.scope || 'project',
-      created: compactAge(row.created_at),
-    }))
-    replaceArray(rows, liveRows)
-  })
-
-  return rows
-}
-
-export const useVaultStatus = () => {
-  const state = useState('live:vault-status', () => ({
-    encrypted: false,
-    fingerprint: '—',
-    source: '—',
-  }))
-  const vault = state.value
-
-  startOnce('vault-status', async () => {
-    const payload = await fetchJson<ApiVaultStatus>('/api/vault/status')
-    Object.assign(vault, {
-      encrypted: Boolean(payload.key_configured),
-      fingerprint: payload.fingerprint || '—',
-      source: payload.key_source || '—',
-    })
-  })
-
-  return vault
-}
+export const useVaultStatus = () => useOperatorSecrets().vault
 
 export const useRules = () => {
-  const rows = useState<RuleRow[]>('live:rules', () => [])
-  const pending = useState<boolean>('live:rules:pending', () => false)
-  const error = useState<string | null>('live:rules:error', () => null)
-
-  async function refresh() {
-    pending.value = true
-    error.value = null
-    try {
-      rows.value = await loadAllRules()
-    } catch (nextError) {
-      error.value = errorMessage(nextError)
-    } finally {
-      pending.value = false
-    }
+  const rules = useOperatorRules()
+  return {
+    rows: computed(() => rules.rows),
+    pending: rules.pending,
+    error: rules.error,
+    refresh: rules.refresh,
+    create: rules.createRule,
+    update: rules.updateRule,
+    remove: rules.deleteRule,
   }
-
-  async function create(input: RuleCreateInput) {
-    await fetchJson<ApiRuleRow>('/api/rules', jsonInit('POST', {
-      content: input.content,
-      priority: input.priority ?? 0,
-      edited_by: input.editedBy || 'operator-console',
-      ...(input.project ? { project: input.project } : {}),
-    }))
-    await refresh()
-  }
-
-  async function update(id: number, input: RuleUpdateInput) {
-    await fetchJson<ApiRuleRow>(`/api/rules/${id}`, jsonInit('PATCH', {
-      ...(input.content !== undefined ? { content: input.content } : {}),
-      ...(input.priority !== undefined ? { priority: input.priority } : {}),
-      ...(input.editedBy !== undefined ? { edited_by: input.editedBy } : {}),
-    }))
-    await refresh()
-  }
-
-  async function remove(id: number) {
-    await fetchJson(`/api/rules/${id}`, jsonInit('DELETE'))
-    rows.value = rows.value.filter((row) => row.id !== id)
-  }
-
-  startOnce('rules', refresh)
-
-  return { rows, pending, error, refresh, create, update, remove }
 }
 
 export const useProjects = () => {

@@ -104,6 +104,7 @@ export interface OperatorSearchResult {
   type: string
   score: string
   createdAt: string
+  memoryBacked: boolean
 }
 
 export interface OperatorRecentSearch {
@@ -156,6 +157,7 @@ function normalizeObservation(row: ApiObservation, index: number): OperatorSearc
     type: row.type || row.memory_type || '-',
     score: typeof row.similarity === 'number' ? row.similarity.toFixed(3) : '-',
     createdAt: row.created_at || '-',
+    memoryBacked: row.type === 'discovery' && row.memory_type === 'context',
   }
 }
 
@@ -222,6 +224,7 @@ export function useOperatorSearchNoise(): {
   const analyticsStateValue = useState<OperatorLoadState<ApiSearchAnalytics>>('live:search-noise:analytics-state', () => pendingState(analyticsEvidence))
   const retrievalStateValue = useState<OperatorLoadState<ApiRetrievalStats>>('live:search-noise:retrieval-state', () => pendingState(retrievalEvidence))
   const vnextStateValue = useState<OperatorLoadState<ApiStatsVNext>>('live:search-noise:vnext-state', () => pendingState(vnextEvidence))
+  let searchGeneration = 0
 
   const searchState = computed(() => searchStateValue.value)
   const recentState = computed(() => recentStateValue.value)
@@ -320,6 +323,7 @@ export function useOperatorSearchNoise(): {
   }
 
   async function runSearch(query: string, project = selectedProject.value) {
+    const run = ++searchGeneration
     const trimmedQuery = query.trim()
     const trimmedProject = project.trim()
     if (!trimmedQuery || !trimmedProject) {
@@ -337,6 +341,7 @@ export function useOperatorSearchNoise(): {
 
     try {
       const payload = await operatorFetchJson<ApiContextSearch>(path, undefined, 'context-search')
+      if (run !== searchGeneration) return
       if (typeof payload === 'string' || payload.deprecated) {
         replaceArray(searchResults.value, [])
         searchStateValue.value = staleState(evidence, payload.message || 'Deprecated search response; not a live result set.', searchResults.value)
@@ -350,6 +355,7 @@ export function useOperatorSearchNoise(): {
         : emptyState(evidence, searchResults.value)
       await Promise.all([refreshRecent(), refreshAnalytics(), refreshRetrieval(), refreshVNext()])
     } catch (nextError) {
+      if (run !== searchGeneration) return
       const mapped = toOperatorSourceError(nextError, {
         source: 'context-search',
         path,

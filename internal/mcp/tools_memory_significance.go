@@ -85,12 +85,20 @@ func (s *Server) handleRateMemorySignificance(ctx context.Context, args json.Raw
 		return "", err
 	}
 
-	id := coerceInt64(m["id"], 0)
+	id, err := requireInt64Arg(m, "id")
+	if err != nil {
+		return "", err
+	}
 	if id <= 0 {
 		return "", fmt.Errorf("id required and must be > 0")
 	}
-
-	rating := coerceString(m["rating"], "")
+	rating, present, err := optionalStringArg(m, "rating")
+	if err != nil {
+		return "", err
+	}
+	if !present {
+		return "", fmt.Errorf("rating is required")
+	}
 	if rating != s6.RatingUseful && rating != s6.RatingNotUseful {
 		return "", fmt.Errorf("rating must be '%s' or '%s'", s6.RatingUseful, s6.RatingNotUseful)
 	}

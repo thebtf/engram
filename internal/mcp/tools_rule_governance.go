@@ -350,9 +350,19 @@ func (s *Server) handleRuleGovernanceTransition(ctx context.Context, args json.R
 	if err != nil {
 		return "", err
 	}
-	versionID := coerceInt64(m["rule_version_id"], 0)
-	to := models.RuleVersionState(strings.TrimSpace(coerceString(m["to_state"], "")))
-	req := parseRuleGovernanceTransitionRequest(m)
+	versionID, err := requireInt64Arg(m, "rule_version_id")
+	if err != nil || versionID <= 0 {
+		return "", fmt.Errorf("rule_governance_transition: rule_version_id must be a positive integer")
+	}
+	toValue, _, err := optionalStringArg(m, "to_state")
+	if err != nil {
+		return "", fmt.Errorf("rule_governance_transition: %w", err)
+	}
+	to := models.RuleVersionState(strings.TrimSpace(toValue))
+	req, err := parseRuleGovernanceTransitionRequest(m)
+	if err != nil {
+		return "", fmt.Errorf("rule_governance_transition: %w", err)
+	}
 	version, err := writeStore.TransitionRuleVersion(ctx, versionID, to, req)
 	if err != nil {
 		return "", fmt.Errorf("rule_governance_transition: %w", err)
@@ -385,10 +395,17 @@ func (s *Server) handleRuleGovernancePinSnapshot(ctx context.Context, args json.
 	if err != nil {
 		return "", err
 	}
-	snapshotID := strings.TrimSpace(coerceString(m["snapshot_id"], ""))
-	pinned := true
-	if raw, ok := m["pinned"]; ok {
-		pinned = coerceBool(raw, true)
+	snapshotValue, _, err := optionalStringArg(m, "snapshot_id")
+	if err != nil {
+		return "", fmt.Errorf("rule_governance_pin_snapshot: %w", err)
+	}
+	snapshotID := strings.TrimSpace(snapshotValue)
+	pinned, present, err := optionalBoolArg(m, "pinned")
+	if err != nil {
+		return "", fmt.Errorf("rule_governance_pin_snapshot: %w", err)
+	}
+	if !present {
+		pinned = true
 	}
 	summary, err := writeStore.PinRuleGovernanceSnapshot(ctx, snapshotID, pinned)
 	if err != nil {
@@ -418,30 +435,30 @@ func (s *Server) handleRuleGovernanceRollback(ctx context.Context, args json.Raw
 	if err != nil {
 		return "", err
 	}
-	snapshotID := strings.TrimSpace(coerceString(m["snapshot_id"], ""))
-	result, err := writeStore.RollbackRuleGovernanceSnapshot(ctx, snapshotID, parseRuleGovernanceTransitionRequest(m))
+	snapshotValue, _, err := optionalStringArg(m, "snapshot_id")
+	if err != nil {
+		return "", fmt.Errorf("rule_governance_rollback: %w", err)
+	}
+	snapshotID := strings.TrimSpace(snapshotValue)
+	req, err := parseRuleGovernanceTransitionRequest(m)
+	if err != nil {
+		return "", fmt.Errorf("rule_governance_rollback: %w", err)
+	}
+	result, err := writeStore.RollbackRuleGovernanceSnapshot(ctx, snapshotID, req)
 	if err != nil {
 		if len(result.ConflictVersionIDs) > 0 {
 			return marshalJSON(map[string]any{
-				"snapshot_id":          result.SnapshotID,
-				"restored_version_ids": result.RestoredVersionIDs,
-				"conflict_version_ids": result.ConflictVersionIDs,
-				"status":               "rollback_conflict",
-				"ok":                   false,
-				"source_table":         "rule_governance_snapshots",
-				"bulk_op_surface":      false,
+				"snapshot_id": result.SnapshotID, "restored_version_ids": result.RestoredVersionIDs,
+				"conflict_version_ids": result.ConflictVersionIDs, "status": "rollback_conflict", "ok": false,
+				"source_table": "rule_governance_snapshots", "bulk_op_surface": false,
 			})
 		}
 		return "", fmt.Errorf("rule_governance_rollback: %w", err)
 	}
 	return marshalJSON(map[string]any{
-		"snapshot_id":          result.SnapshotID,
-		"restored_version_ids": result.RestoredVersionIDs,
-		"conflict_version_ids": result.ConflictVersionIDs,
-		"status":               "rolled_back",
-		"ok":                   true,
-		"source_table":         "rule_governance_snapshots",
-		"bulk_op_surface":      false,
+		"snapshot_id": result.SnapshotID, "restored_version_ids": result.RestoredVersionIDs,
+		"conflict_version_ids": result.ConflictVersionIDs, "status": "rolled_back", "ok": true,
+		"source_table": "rule_governance_snapshots", "bulk_op_surface": false,
 	})
 }
 
@@ -582,8 +599,7 @@ func isSafeRuleGovernanceEvidenceID(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
-			r == '-' || r == '_' || r == '.' {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
 			continue
 		}
 		return false
@@ -591,14 +607,23 @@ func isSafeRuleGovernanceEvidenceID(value string) bool {
 	return true
 }
 
-func parseRuleGovernanceTransitionRequest(m map[string]any) gormdb.RuleTransitionRequest {
-	return gormdb.RuleTransitionRequest{
-		Actor:           strings.TrimSpace(coerceString(m["actor"], "")),
-		ActorKind:       models.RuleActorKind(strings.TrimSpace(coerceString(m["actor_kind"], ""))),
-		Reason:          strings.TrimSpace(coerceString(m["reason"], "")),
-		EvidenceHandles: coerceStringSlice(m["evidence_handles"]),
-		SnapshotID:      strings.TrimSpace(coerceString(m["snapshot_id"], "")),
+func parseRuleGovernanceTransitionRequest(m map[string]any) (gormdb.RuleTransitionRequest, error) {
+	values := make(map[string]string, 4)
+	for _, key := range []string{"actor", "actor_kind", "reason", "snapshot_id"} {
+		value, _, err := optionalStringArg(m, key)
+		if err != nil {
+			return gormdb.RuleTransitionRequest{}, err
+		}
+		values[key] = strings.TrimSpace(value)
 	}
+	evidence, _, err := optionalStringSliceArg(m, "evidence_handles")
+	if err != nil {
+		return gormdb.RuleTransitionRequest{}, err
+	}
+	return gormdb.RuleTransitionRequest{
+		Actor: values["actor"], ActorKind: models.RuleActorKind(values["actor_kind"]), Reason: values["reason"],
+		EvidenceHandles: evidence, SnapshotID: values["snapshot_id"],
+	}, nil
 }
 
 func parseRuleGovernanceSince(m map[string]any) (time.Time, error) {

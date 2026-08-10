@@ -1779,7 +1779,8 @@
     "placeholder": "输入 context 查询…",
     "actions": {
       "refresh": "刷新",
-      "search": "搜索"
+      "search": "搜索",
+      "openMemory": "打开记忆"
     },
     "form": {
       "project": "项目",

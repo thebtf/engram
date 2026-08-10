@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 // TestSnapshotOpType_IsValid verifies all 6 op types and invalid rejection.
@@ -131,5 +132,48 @@ func TestBulkOpSnapshot_JSONRoundtrip(t *testing.T) {
 	}
 	if decoded.SourceSessionID != "sess-001" {
 		t.Errorf("source_session_id: got %q", decoded.SourceSessionID)
+	}
+}
+
+func TestSnapshotStateTokenCanonicalizesPersistedTimes(t *testing.T) {
+	precise := time.Date(2026, time.August, 10, 5, 30, 0, 123456789, time.UTC)
+	persisted := precise.Truncate(time.Microsecond)
+	offset := persisted.In(time.FixedZone("UTC+3", 3*60*60))
+
+	memoryA := Memory{CreatedAt: precise, UpdatedAt: precise, ReviewAfter: &precise, Content: "stable", Tags: []string{}}
+	memoryB := Memory{CreatedAt: offset, UpdatedAt: offset, ReviewAfter: &offset, Content: "stable", Tags: []string{}}
+	tokenA, err := SnapshotStateToken(memoryA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenB, err := SnapshotStateToken(&memoryB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokenA != tokenB {
+		t.Fatalf("equivalent persisted memory times produced different tokens: %s != %s", tokenA, tokenB)
+	}
+
+	candidateA := CrystallizationCandidate{CreatedAt: precise, UpdatedAt: precise, ReviewAfter: &precise, Status: CandidateStatusRejected}
+	candidateB := CrystallizationCandidate{CreatedAt: offset, UpdatedAt: offset, ReviewAfter: &offset, Status: CandidateStatusRejected}
+	tokenA, err = SnapshotStateToken(&candidateA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenB, err = SnapshotStateToken(candidateB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokenA != tokenB {
+		t.Fatalf("equivalent persisted candidate times produced different tokens: %s != %s", tokenA, tokenB)
+	}
+
+	candidateB.Status = CandidateStatusSuperseded
+	changed, err := SnapshotStateToken(candidateB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed == tokenA {
+		t.Fatal("candidate state change did not change snapshot token")
 	}
 }

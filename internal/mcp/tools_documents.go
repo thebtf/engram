@@ -161,7 +161,7 @@ func (s *Server) handleGetDocument(ctx context.Context, args json.RawMessage) (s
 	return content.Doc, nil
 }
 
-// handleRemoveDocument deactivates a document.
+// handleRemoveDocument atomically deactivates an existing active document.
 func (s *Server) handleRemoveDocument(ctx context.Context, args json.RawMessage) (string, error) {
 	if s.documentStore == nil {
 		return "", fmt.Errorf("document store not available")
@@ -172,28 +172,35 @@ func (s *Server) handleRemoveDocument(ctx context.Context, args json.RawMessage)
 		return "", err
 	}
 
-	var params struct {
-		Collection string
-		Path       string
+	collection, collectionPresent, err := optionalStringArg(m, "collection")
+	if err != nil {
+		return "", fmt.Errorf("remove_document: %w", err)
 	}
-	params.Collection = coerceString(m["collection"], "")
-	params.Path = coerceString(m["path"], "")
+	path, pathPresent, err := optionalStringArg(m, "path")
+	if err != nil {
+		return "", fmt.Errorf("remove_document: %w", err)
+	}
+	if !collectionPresent || !pathPresent || collection == "" || path == "" {
+		return "", fmt.Errorf("collection and path are required")
+	}
+	params := struct{ Collection, Path string }{Collection: collection, Path: path}
 	if params.Collection == "" || params.Path == "" {
 		return "", fmt.Errorf("collection and path are required")
 	}
 
-	if err := s.documentStore.DeactivateDocument(ctx, params.Collection, params.Path); err != nil {
+	deactivated, err := s.documentStore.DeactivateDocument(ctx, params.Collection, params.Path)
+	if err != nil {
 		return "", fmt.Errorf("deactivate document: %w", err)
 	}
+	if !deactivated {
+		return "", fmt.Errorf("document not found or inactive: %s/%s", params.Collection, params.Path)
+	}
 
-	return fmt.Sprintf("Document %s/%s deactivated.", params.Collection, params.Path), nil
+	return fmt.Sprintf("Document %s/%s marked inactive; its content-addressed body remains stored.", params.Collection, params.Path), nil
 }
 
-// handleIngestDocument ingests a document into a collection.
-// Document chunk/embedding storage was retired in v5; only document metadata is
-// upserted and chunk-level search is unavailable. (content_chunks was restored at
-// migration 108 for vNext MEMORY embeddings — a memory-keyed schema — but the
-// document-chunk path was not rewired to it.)
+// handleIngestDocument stores the full body content-addressably and upserts
+// document metadata. Document chunking, embeddings, and search are unavailable.
 func (s *Server) handleIngestDocument(ctx context.Context, args json.RawMessage) (string, error) {
 	if s.documentStore == nil {
 		return "", fmt.Errorf("document store not available")
@@ -204,21 +211,20 @@ func (s *Server) handleIngestDocument(ctx context.Context, args json.RawMessage)
 		return "", err
 	}
 
-	var params struct {
-		Collection string
-		Path       string
-		Content    string
-		Title      string
+	values := make(map[string]string, 4)
+	for _, key := range []string{"collection", "path", "content", "title"} {
+		value, _, fieldErr := optionalStringArg(m, key)
+		if fieldErr != nil {
+			return "", fmt.Errorf("ingest_document: %w", fieldErr)
+		}
+		values[key] = value
 	}
-	params.Collection = coerceString(m["collection"], "")
-	params.Path = coerceString(m["path"], "")
-	params.Content = coerceString(m["content"], "")
-	params.Title = coerceString(m["title"], "")
+	params := struct{ Collection, Path, Content, Title string }{Collection: values["collection"], Path: values["path"], Content: values["content"], Title: values["title"]}
 	if params.Collection == "" || params.Path == "" || params.Content == "" {
 		return "", fmt.Errorf("collection, path, and content are required")
 	}
 
-	// Upsert document metadata only (embedding pipeline removed in v5).
+	// Store the full content-addressed body and upsert its document metadata.
 	_, err = s.documentStore.UpsertDocument(ctx, params.Collection, params.Path, params.Title, params.Content)
 	if err != nil {
 		return "", fmt.Errorf("upsert document: %w", err)
@@ -226,5 +232,5 @@ func (s *Server) handleIngestDocument(ctx context.Context, args json.RawMessage)
 
 	hashBytes := sha256.Sum256([]byte(params.Content))
 	newHash := hex.EncodeToString(hashBytes[:])
-	return fmt.Sprintf("Document %s/%s ingested (metadata only, hash %s; chunk embeddings removed in v5).", params.Collection, params.Path, newHash[:12]), nil
+	return fmt.Sprintf("Document %s/%s ingested: full body stored content-addressably (hash %s); document chunks, embeddings, and search remain unavailable.", params.Collection, params.Path, newHash[:12]), nil
 }

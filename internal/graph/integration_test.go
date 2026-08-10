@@ -223,3 +223,95 @@ func TestPathC_T015_NodeCreatedAtTimestamp(t *testing.T) {
 	assert.True(t, node.CreatedAt.After(before), "CreatedAt must be after %v, got %v", before, node.CreatedAt)
 	assert.True(t, node.CreatedAt.Before(after), "CreatedAt must be before %v, got %v", after, node.CreatedAt)
 }
+
+// TestNodesStore_MetadataDefaults_Create verifies that metadata persists in canonical JSON form.
+func TestNodesStore_MetadataDefaults_Create(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping metadata integration test")
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Warn)})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	const project = "graph-metadata-create-test"
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM knowledge_nodes WHERE project = ?", project).Error })
+	ns := NewNodesStore(db)
+
+	for _, tc := range []struct {
+		name     string
+		metadata []byte
+		expected string
+	}{
+		{name: "nil", expected: "{}"},
+		{name: "empty", metadata: []byte{}, expected: "{}"},
+		{name: "whitespace", metadata: []byte(" \t\n"), expected: "{}"},
+		{name: "null", metadata: []byte("null"), expected: "{}"},
+		{name: "whitespace-null", metadata: []byte(" \tnull\n"), expected: "{}"},
+		{name: "canonical-object", metadata: []byte(`{"source":"test"}`), expected: `{"source":"test"}`},
+		{name: "spaced-object", metadata: []byte(" { \"z\" : [ true, false ], \"a\" : { \"nested\" : 1 } } "), expected: `{"a":{"nested":1},"z":[true,false]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node, err := ns.Create(context.Background(), &models.KnowledgeNode{
+				NodeType: models.NodeTypeSkill, ExternalRef: "create-" + tc.name, Project: project, Metadata: tc.metadata,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, string(node.Metadata))
+
+			stored, err := ns.Get(context.Background(), node.ID, true)
+			require.NoError(t, err)
+			assert.JSONEq(t, tc.expected, string(stored.Metadata))
+		})
+	}
+}
+
+// TestNodesStore_MetadataDefaults_Update verifies that metadata persists in canonical JSON form on updates.
+func TestNodesStore_MetadataDefaults_Update(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping metadata integration test")
+	}
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Warn)})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	const project = "graph-metadata-update-test"
+	t.Cleanup(func() { _ = db.Exec("DELETE FROM knowledge_nodes WHERE project = ?", project).Error })
+	ns := NewNodesStore(db)
+
+	for _, tc := range []struct {
+		name     string
+		metadata []byte
+		expected string
+	}{
+		{name: "nil", expected: "{}"},
+		{name: "empty", metadata: []byte{}, expected: "{}"},
+		{name: "whitespace", metadata: []byte(" \t\n"), expected: "{}"},
+		{name: "null", metadata: []byte("null"), expected: "{}"},
+		{name: "whitespace-null", metadata: []byte(" \tnull\n"), expected: "{}"},
+		{name: "canonical-object", metadata: []byte(`{"source":"test"}`), expected: `{"source":"test"}`},
+		{name: "spaced-object", metadata: []byte(" { \"z\" : [ true, false ], \"a\" : { \"nested\" : 1 } } "), expected: `{"a":{"nested":1},"z":[true,false]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node, err := ns.Create(context.Background(), &models.KnowledgeNode{
+				NodeType: models.NodeTypeSkill, ExternalRef: "update-" + tc.name, Project: project, Metadata: []byte(`{"initial":true}`),
+			})
+			require.NoError(t, err)
+
+			node.Metadata = tc.metadata
+			_, err = ns.Update(context.Background(), node)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, string(node.Metadata))
+
+			stored, err := ns.Get(context.Background(), node.ID, true)
+			require.NoError(t, err)
+			assert.JSONEq(t, tc.expected, string(stored.Metadata))
+		})
+	}
+}

@@ -59,9 +59,9 @@ type Server struct {
 
 // New creates a new gRPC server. The returned *grpc.Server has EngramService
 // already registered AND has unary + streaming auth interceptors wired
-// unconditionally. The interceptors bypass auth when the live validator is
-// nil — used by tests and by ENGRAM_AUTH_DISABLED deployments — but they
-// honour any validator installed later via SetValidator without restart.
+// unconditionally. When the live validator is nil, the interceptors inject the
+// explicit disabled-auth identity; otherwise they validate bearer credentials.
+// They honour any validator installed later via SetValidator without restart.
 //
 // Pass validator = nil to start with auth disabled; SetValidator(v) at any
 // later time re-enables it. Production callers SHOULD pass a non-nil
@@ -75,12 +75,12 @@ func New(handler MCPHandler, validator *auth.Validator) (*grpc.Server, *Server) 
 	opts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(16 << 20), // 16 MB
 		grpc.MaxSendMsgSize(16 << 20),
-		// Always register the interceptors. They are runtime-no-op when the
-		// live validator is nil (auth disabled), and runtime-enforce when
-		// SetValidator promotes the server out of bootstrap. Conditional
-		// registration would lock the server into the construction-time
-		// auth state and silently leave RPCs unprotected after a
-		// nil → non-nil swap.
+		// Always register the interceptors. When the live validator is nil,
+		// they inject the disabled-auth identity; when SetValidator promotes
+		// the server out of bootstrap, they enforce bearer validation.
+		// Conditional registration would lock the server into the
+		// construction-time auth state and silently leave RPCs unprotected
+		// after a nil → non-nil swap.
 		grpc.UnaryInterceptor(srv.authInterceptor),
 		grpc.StreamInterceptor(srv.streamAuthInterceptor),
 	}
@@ -377,11 +377,10 @@ func (s *Server) authInterceptor(
 		return handler(ctx, req)
 	}
 
-	// Auth disabled (no validator installed) — bypass entirely. This is the
-	// runtime check that lets SetValidator(v) flip the server from bootstrap
-	// to enforced without recreating the gRPC server.
+	// Auth-disabled calls still need a concrete identity so downstream role
+	// checks distinguish this deliberate mode from an unauthenticated request.
 	if s.currentValidator() == nil {
-		return handler(ctx, req)
+		return handler(auth.WithIdentity(ctx, auth.AuthDisabled()), req)
 	}
 
 	id, err := s.validateBearer(ctx)
@@ -404,9 +403,11 @@ func (s *Server) streamAuthInterceptor(
 	info *grpc.StreamServerInfo,
 	handler grpc.StreamHandler,
 ) error {
-	// Auth disabled (no validator installed) — bypass entirely.
+	// Preserve the stream wrapper so downstream handlers observe the same
+	// disabled-auth identity through ServerStream.Context().
 	if s.currentValidator() == nil {
-		return handler(srv, ss)
+		wrapped := &authedStream{ServerStream: ss, ctx: auth.WithIdentity(ss.Context(), auth.AuthDisabled())}
+		return handler(srv, wrapped)
 	}
 
 	id, err := s.validateBearer(ss.Context())

@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 
 const router = useRouter()
 const email = ref('')
+const operatorToken = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const error = ref('')
@@ -16,8 +17,8 @@ const submitting = ref(false)
 
 async function handleSetup() {
   error.value = ''
-  if (!email.value.trim() || !password.value) {
-    error.value = 'Email and password are required.'
+  if (!email.value.trim() || !operatorToken.value || !password.value) {
+    error.value = 'Email, operator token, and password are required.'
     return
   }
   if (password.value !== confirmPassword.value) {
@@ -33,7 +34,7 @@ async function handleSetup() {
   try {
     const resp = await fetch('/api/auth/setup', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Auth-Token': operatorToken.value },
       body: JSON.stringify({ email: email.value.trim(), password: password.value }),
     })
     if (!resp.ok) {
@@ -46,6 +47,7 @@ async function handleSetup() {
     error.value = 'Connection error. Is the server running?'
   } finally {
     submitting.value = false
+    operatorToken.value = ''
   }
 }
 </script>
@@ -72,6 +74,17 @@ async function handleSetup() {
                 type="email"
                 autocomplete="email"
                 placeholder="admin@example.com"
+                :disabled="submitting"
+              />
+            </div>
+
+            <div class="space-y-2">
+              <Label for="setup-operator-token">Operator Token</Label>
+              <Input
+                id="setup-operator-token"
+                v-model="operatorToken"
+                type="password"
+                autocomplete="off"
                 :disabled="submitting"
               />
             </div>

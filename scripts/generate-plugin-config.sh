@@ -13,8 +13,10 @@ set -e
 
 CLAUDE_OUTPUT_DIR=".claude-plugin"
 CODEX_OUTPUT_DIR=".codex-plugin"
+OMP_OUTPUT_DIR=".omp-plugin"
 CLAUDE_MANIFEST="plugin/engram/.claude-plugin/plugin.json"
 CODEX_MANIFEST="plugin/engram/.codex-plugin/plugin.json"
+OMP_MANIFEST="plugin/engram/.omp-plugin/plugin.json"
 
 # Read the version field from a JSON manifest using Node.
 # Node is installed as a separate step (actions/setup-node@v4) in release.yaml;
@@ -34,18 +36,21 @@ read_manifest_version() {
 
 CLAUDE_VERSION="$(read_manifest_version "$CLAUDE_MANIFEST")"
 CODEX_VERSION="$(read_manifest_version "$CODEX_MANIFEST")"
+OMP_VERSION="$(read_manifest_version "$OMP_MANIFEST")"
 
-# The two manifests must stay in sync — a mismatch means someone bumped
-# one without bumping the other.
-if [ "$CLAUDE_VERSION" != "$CODEX_VERSION" ]; then
+# All client manifests must stay in sync — a mismatch means someone bumped
+# one without updating the package-bound bootstrap policy.
+if [ "$CLAUDE_VERSION" != "$CODEX_VERSION" ] || [ "$CLAUDE_VERSION" != "$OMP_VERSION" ]; then
     echo "Plugin manifest version mismatch:" \
          "$CLAUDE_MANIFEST=$CLAUDE_VERSION," \
-         "$CODEX_MANIFEST=$CODEX_VERSION" >&2
+         "$CODEX_MANIFEST=$CODEX_VERSION," \
+         "$OMP_MANIFEST=$OMP_VERSION" >&2
     exit 1
 fi
 
 mkdir -p "$CLAUDE_OUTPUT_DIR"
 mkdir -p "$CODEX_OUTPUT_DIR"
+mkdir -p "$OMP_OUTPUT_DIR"
 
 # The plugin.json single source of truth lives in plugin/engram/.claude-plugin/.
 # Copying it into the release-time OUTPUT_DIR lets the GoReleaser archive
@@ -58,6 +63,9 @@ echo "Copied $CLAUDE_OUTPUT_DIR/plugin.json"
 # than trying to reuse Claude userConfig fields.
 cp "$CODEX_MANIFEST" "$CODEX_OUTPUT_DIR/plugin.json"
 echo "Copied $CODEX_OUTPUT_DIR/plugin.json"
+
+cp "$OMP_MANIFEST" "$OMP_OUTPUT_DIR/plugin.json"
+echo "Copied $OMP_OUTPUT_DIR/plugin.json"
 
 # NOTE: an earlier version of this script copied marketplace.json from a
 # now-deleted path (plugin/.claude-plugin/marketplace.json, removed in

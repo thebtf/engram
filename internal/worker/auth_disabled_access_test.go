@@ -167,7 +167,7 @@ func TestParseRevokeReasonRejectsMalformedJSON(t *testing.T) {
 	}
 }
 
-func TestAuthDisabledTokenProbeReachesStoreReadiness(t *testing.T) {
+func TestAuthDisabledKeycardEndpointsRejected(t *testing.T) {
 	t.Setenv("ENGRAM_AUTH_DISABLED", "true")
 
 	ta, err := NewTokenAuth("")
@@ -176,16 +176,39 @@ func TestAuthDisabledTokenProbeReachesStoreReadiness(t *testing.T) {
 	}
 	svc := &Service{tokenAuth: ta}
 
-	h := ta.Middleware(http.HandlerFunc(svc.handleListTokens))
-	req := httptest.NewRequest(http.MethodGet, "/api/auth/tokens", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
-		t.Fatalf("disabled-auth token probe stopped at auth gate: status=%d body=%s", rec.Code, rec.Body.String())
+	for _, tc := range []struct {
+		name    string
+		method  string
+		path    string
+		handler http.HandlerFunc
+	}{
+		{name: "list", method: http.MethodGet, path: "/api/auth/tokens", handler: svc.handleListTokens},
+		{name: "create", method: http.MethodPost, path: "/api/auth/tokens", handler: svc.handleCreateToken},
+		{name: "revoke", method: http.MethodDelete, path: "/api/auth/tokens/token-id", handler: svc.handleRevokeToken},
+		{name: "stats", method: http.MethodGet, path: "/api/auth/tokens/token-id/stats", handler: svc.handleGetTokenStats},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := ta.Middleware(tc.handler)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("auth-disabled keycard %s status=%d, want %d; body=%s", tc.name, rec.Code, http.StatusForbidden, rec.Body.String())
+			}
+		})
 	}
+}
+
+func TestAuthSetupNeededRemainsPublic(t *testing.T) {
+	t.Setenv("ENGRAM_AUTH_DISABLED", "")
+	ta, err := NewTokenAuth("operator-token")
+	if err != nil {
+		t.Fatalf("NewTokenAuth: %v", err)
+	}
+	h := NewAuthHandlers(nil, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	ta.Middleware(http.HandlerFunc(h.handleSetupNeeded)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/auth/setup-needed", nil))
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("disabled-auth token probe status=%d, want store readiness %d; body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+		t.Fatalf("public setup-needed status=%d, want %d; body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
 	}
 }
 

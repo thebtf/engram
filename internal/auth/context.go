@@ -43,6 +43,9 @@ func WithIdentity(ctx context.Context, id Identity) context.Context {
 // no Identity has been set on the context — callers should treat that as
 // "unauthenticated" and respond accordingly.
 func IdentityFrom(ctx context.Context) (Identity, bool) {
+	if ctx == nil {
+		return Identity{}, false
+	}
 	id, ok := ctx.Value(IdentityKey).(Identity)
 	return id, ok
 }
