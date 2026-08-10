@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.47.1] - 2026-08-10
+
+### Fixed
+
+- Restored the release-container installer-policy test PATH so the setup-node binary remains available.
+
+
 ## [6.47.0] - 2026-08-10
 
 ### Security

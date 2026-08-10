@@ -15,6 +15,11 @@ function run(command, args, options = {}) {
 }
 
 function bashPath(value) { return path.relative(root, value).split(path.sep).join("/"); }
+function installerPath(fakeBin) {
+  return process.platform === "win32"
+    ? `${bashPath(fakeBin)}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`
+    : `${bashPath(fakeBin)}:${process.env.PATH}`;
+}
 function shellQuote(value) { return `'${value.replaceAll("'", `'\\''`)}'`; }
 function temporaryDirectory() { return fs.mkdtempSync(path.join(root, ".tmp-bootstrap-policy-")); }
 
@@ -69,7 +74,7 @@ test("Node 16 fails before curl or archive access", () => {
     fs.mkdirSync(fakeBin, { recursive: true });
     fs.writeFileSync(path.join(fakeBin, "node"), "#!/usr/bin/env bash\necho v16.0.0\n", { mode: 0o755 });
     fs.writeFileSync(path.join(fakeBin, "curl"), "#!/usr/bin/env bash\ntouch \"$CURL_ACCESSED\"\n", { mode: 0o755 });
-    const environment = `HOME=${shellQuote(bashPath(path.join(temp, "home")))} PATH=${shellQuote(`${bashPath(fakeBin)}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`)} CURL_ACCESSED=${shellQuote(bashPath(accessed))}`;
+    const environment = `HOME=${shellQuote(bashPath(path.join(temp, "home")))} PATH=${shellQuote(installerPath(fakeBin))} CURL_ACCESSED=${shellQuote(bashPath(accessed))}`;
     const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.0`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.notEqual(result.status, 0);
@@ -150,7 +155,7 @@ test("direct installer rejects archive self-validation before install mutation",
     const fakeCurl = path.join(fakeBin, "curl");
     fs.writeFileSync(fakeCurl, "#!/usr/bin/env bash\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then cp \"$FAKE_RELEASE_ARCHIVE\" \"$2\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
 
-    const bashEnvironment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(`${bashPath(fakeBin)}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`)} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))}`;
+    const bashEnvironment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))}`;
     const result = spawnSync("bash", ["-c", `${bashEnvironment} bash scripts/install.sh v6.47.0`], {
       cwd: root,
       encoding: "utf8",
