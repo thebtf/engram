@@ -109,13 +109,14 @@ test("generator check mode and raw artifact gate accept only the shared target r
     const fakeGo = path.join(fakeBin, "go");
     const policyPath = path.join(temp, "bootstrap-targets.json");
     const dist = path.join(temp, "dist");
+    const currentVersion = parsePolicy(fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8")).package_version;
     fs.mkdirSync(fakeBin, { recursive: true });
     fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.25.12 linux/amd64'; exit 0; fi\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then shift; printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
     const fakeGoArgument = shellQuote(bashPath(fakeGo));
     const policyArgument = shellQuote(bashPath(policyPath));
-    run("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} scripts/prepare-bootstrap-policy.sh --version 6.47.1 --output ${policyArgument}`]);
-    run("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} scripts/prepare-bootstrap-policy.sh --version 6.47.1 --output ${policyArgument} --check`]);
-    const policy = parsePolicy(fs.readFileSync(policyPath, "utf8"), "6.47.1");
+    run("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} scripts/prepare-bootstrap-policy.sh --version ${currentVersion} --output ${policyArgument}`]);
+    run("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} scripts/prepare-bootstrap-policy.sh --version ${currentVersion} --output ${policyArgument} --check`]);
+    const policy = parsePolicy(fs.readFileSync(policyPath, "utf8"), currentVersion);
     fs.mkdirSync(dist, { recursive: true });
     for (const { desired } of Object.values(policy.targets)) {
       const bytes = desired.asset.includes("windows") ? "windows-amd64" : desired.asset.includes("linux") ? "linux-amd64" : "darwin-arm64";
@@ -124,7 +125,7 @@ test("generator check mode and raw artifact gate accept only the shared target r
     const archiveRoot = path.join(temp, "archive");
     fs.mkdirSync(archiveRoot);
     fs.copyFileSync(policyPath, path.join(archiveRoot, "bootstrap-targets.json"));
-    const archive = path.join(dist, "engram_6.47.1_linux_amd64.tar.gz");
+    const archive = path.join(dist, `engram_${currentVersion}_linux_amd64.tar.gz`);
     const archived = spawnSync("tar", ["-czf", archive, "-C", archiveRoot, "bootstrap-targets.json"], { encoding: "utf8" });
     assert.equal(archived.status, 0, archived.stderr);
     run("bash", ["scripts/check-bootstrap-policy-artifacts.sh", "--policy", bashPath(policyPath), "--dist", bashPath(dist)]);
