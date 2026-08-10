@@ -36,6 +36,7 @@ function parsePolicy(text, packageVersion, key) {
 
 function readActivePackageVersion(pluginRoot) {
   const candidates = [
+    path.join(pluginRoot, ".omp-plugin", "plugin.json"),
     path.join(pluginRoot, ".codex-plugin", "plugin.json"),
     path.join(pluginRoot, ".claude-plugin", "plugin.json"),
   ];

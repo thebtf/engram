@@ -8,7 +8,7 @@ const { Readable } = require("node:stream");
 const test = require("node:test");
 
 const {
-  BootstrapError, downloadObject, hashFile, importLegacy, objectPath, objectRoots, parsePolicy,
+  BootstrapError, downloadObject, hashFile, importLegacy, loadPolicy, objectPath, objectRoots, parsePolicy,
   publishStage, requestStream, resolveForLaunch, verifyObject,
 } = require("./ensure-binary.js");
 
@@ -55,6 +55,17 @@ test("policy selection only accepts the exact host platform tuple", () => {
   const policy = selected();
   assert.equal(policy.target.desired.asset, policy.targets[policy.platform].desired.asset);
   assert.throws(() => parsePolicy(JSON.stringify(fixture().policy), "6.47.0", "linux-arm64"), /no target/);
+});
+
+test("OMP manifest wins over a skewed Codex fallback while loading strict policy", () => {
+  const root = tempRoot();
+  fs.mkdirSync(path.join(root, ".omp-plugin"));
+  fs.mkdirSync(path.join(root, ".codex-plugin"));
+  fs.writeFileSync(path.join(root, ".omp-plugin", "plugin.json"), '{"version":"6.47.0"}');
+  fs.writeFileSync(path.join(root, ".codex-plugin", "plugin.json"), '{"version":"6.46.9"}');
+  fs.writeFileSync(path.join(root, "bootstrap-targets.json"), JSON.stringify(fixture().policy));
+
+  assert.equal(loadPolicy(root, { platformKey: "win32-x64" }).package_version, "6.47.0");
 });
 
 test("object verification rejects poisoned, oversized, truncated, directory, and reparse objects", () => {

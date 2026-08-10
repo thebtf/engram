@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unified server and raw client publication under one GoReleaser workflow with deterministic policy generation, private-draft equality checks, pre-publication release-asset readback, and marketplace propagation from the successful release run.
 - Added schema-2 muxcore daemon identity with PID/generation correlation and monotonic epoch/SemVer convergence; v6.46.4 is the sole accepted one-time legacy takeover.
 - Rebuilt bulk snapshot/rollback integrity, graph metadata/readback contracts, Loom writer behavior, document API truth, console deep links, and canonical Overview readback stores.
+- Added an OMP-native plugin manifest and the explicit OMP upgrade plus `/reload-plugins` contract required for refreshed MCP discovery.
 
 ## [6.46.4] - 2026-08-08
 

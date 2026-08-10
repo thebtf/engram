@@ -88,6 +88,9 @@ archives:
       - src: .codex-plugin/*
         dst: .codex-plugin
         strip_parent: true
+      - src: .omp-plugin/*
+        dst: .omp-plugin
+        strip_parent: true
       - src: plugin/engram/bootstrap-targets.json
         dst: .
         strip_parent: true

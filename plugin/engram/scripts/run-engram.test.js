@@ -73,14 +73,25 @@ test("release-facing plugin and marketplace versions stay aligned", () => {
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const readJson = (...segments) => JSON.parse(fs.readFileSync(path.join(repoRoot, ...segments), "utf8"));
   const claudePlugin = readJson("plugin", "engram", ".claude-plugin", "plugin.json");
+  const ompPlugin = readJson("plugin", "engram", ".omp-plugin", "plugin.json");
   const codexPlugin = readJson("plugin", "engram", ".codex-plugin", "plugin.json");
   const rootPlugin = readJson(".claude-plugin", "plugin.json");
   const claudeMarketplace = readJson(".claude-plugin", "marketplace.json");
   const ompMarketplace = readJson(".omp-plugin", "marketplace.json");
 
-  assert.equal(claudePlugin.version, "6.47.0");
-  assert.equal(codexPlugin.version, claudePlugin.version);
+  assert.match(claudePlugin.version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
+  assert.equal(ompPlugin.version, claudePlugin.version);
+  const ompServer = ompPlugin.mcpServers.engram;
+  assert.deepEqual(ompServer, {
+    type: "stdio",
+    command: "node",
+    args: ["./scripts/run-engram.js"],
+    cwd: ".",
+    timeout: 60000,
+  });
+  assert.equal(path.resolve(repoRoot, "plugin", "engram", ompServer.args[0]), path.join(repoRoot, "plugin", "engram", "scripts", "run-engram.js"));
   assert.equal(rootPlugin.version, claudePlugin.version);
+  assert.equal(codexPlugin.version, claudePlugin.version);
   assert.equal(claudeMarketplace.version, claudePlugin.version);
   assert.equal(claudeMarketplace.plugins[0].version, claudePlugin.version);
   assert.equal(ompMarketplace.version, claudePlugin.version);

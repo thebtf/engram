@@ -11,13 +11,16 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Git ref, tag, or SHA to sync
-        required: false
-        default: main
+        description: Published v* tag to sync
+        required: true
 
 permissions:
   contents: read
 
+
+concurrency:
+  group: sync-marketplace
+  cancel-in-progress: false
 jobs:
   sync:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
@@ -30,16 +33,28 @@ jobs:
           ref: ${{ github.event.inputs.ref || github.event.workflow_run.head_sha || github.event.release.tag_name }}
           persist-credentials: false
 
-      - name: Verify workflow-run tag provenance
-        if: github.event_name == 'workflow_run'
+      - name: Verify published Release provenance
         env:
+          TAG: ${{ github.event.release.tag_name || github.event.workflow_run.head_branch || github.event.inputs.ref }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test -n "$HEAD_SHA"
-          case "$HEAD_BRANCH" in v*) ;; *) echo "Release workflow was not tag-triggered" >&2; exit 1 ;; esac
-          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          VERSION="$(jq -r .version plugin/engram/.claude-plugin/plugin.json)"
+          if [ -z "$VERSION" ] || [ "$VERSION" = null ]; then
+            echo "::error::version missing in plugin/engram/.claude-plugin/plugin.json"
+            exit 1
+          fi
+          case "$TAG" in "v$VERSION") ;; *) echo "Sync tag must exactly match the canonical plugin version: v$VERSION" >&2; exit 1 ;; esac
+          git fetch --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
+          TAG_SHA="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          test "$(git rev-parse HEAD)" = "$TAG_SHA"
+          if [ -n "$HEAD_SHA" ]; then test "$HEAD_SHA" = "$TAG_SHA"; fi
+          release="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/$TAG")"
+          jq -e --arg tag "$TAG" '.tag_name == $tag and (.draft | not)' <<<"$release" >/dev/null
 
       - name: Checkout marketplace
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -68,6 +83,8 @@ jobs:
           cp -r plugin/engram marketplace/plugins/engram
           cmp plugin/engram/bootstrap-targets.json marketplace/engram/bootstrap-targets.json
           cmp plugin/engram/bootstrap-targets.json marketplace/plugins/engram/bootstrap-targets.json
+          cmp plugin/engram/.omp-plugin/plugin.json marketplace/engram/.omp-plugin/plugin.json
+          cmp plugin/engram/.omp-plugin/plugin.json marketplace/plugins/engram/.omp-plugin/plugin.json
           jq --arg version "$VERSION" '
             .version = $version
             | .plugins |= map(.version = $version | .source = "./engram")

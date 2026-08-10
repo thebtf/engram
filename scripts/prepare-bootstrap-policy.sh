@@ -15,7 +15,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || { echo 'version must be canonical SemVer without v' >&2; exit 2; }
-for manifest in plugin/engram/.claude-plugin/plugin.json plugin/engram/.codex-plugin/plugin.json; do
+for manifest in plugin/engram/.claude-plugin/plugin.json plugin/engram/.codex-plugin/plugin.json plugin/engram/.omp-plugin/plugin.json; do
   manifest_version="$(node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version; if (typeof value !== "string") process.exit(1); process.stdout.write(value)' "$manifest")"
   [[ "$manifest_version" == "$version" ]] || { echo "package manifest version differs from policy version: $manifest" >&2; exit 1; }
 done

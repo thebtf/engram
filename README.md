@@ -274,6 +274,14 @@ omp plugin marketplace add thebtf/engram-marketplace
 omp plugin install engram@engram
 ```
 
+For an OMP update, refreshing the marketplace updates only its catalog. Upgrade
+the installed plugin, then run `/reload-plugins` (or restart OMP or start a new
+session) before expecting updated MCP discovery:
+
+```bash
+omp plugin upgrade engram@engram
+```
+
 Restart the agent host after configuration.
 
 

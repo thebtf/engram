@@ -48,6 +48,12 @@ The engram plugin reads this file as the final fallback, so it works in OMP,
 Codex, Claude Code, and any other harness that does not forward environment
 variables to plugin children.
 
+### Updating OMP
+
+An OMP marketplace update refreshes only the catalog. Upgrade the installed
+plugin with `omp plugin upgrade engram@engram`, then run `/reload-plugins` or
+restart OMP / start a new session before expecting updated MCP discovery.
+
 ### Legacy path (Codex < 0.139 only)
 
 For Codex versions that still forward `shell_environment_policy.set`:
