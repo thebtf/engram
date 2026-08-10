@@ -18,18 +18,43 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0019",
-    "event_base_sha": "f3411e7a764ca09315c760304b1a7c24a2c783cb"
+    "consumed_epoch": "authority-0020",
+    "event_base_sha": "b7b43196b9689988ad6591471b56003c0d63797c"
   },
   "active_epoch": {
-    "id": "authority-0020",
-    "label": "authority-maintenance:authority-0020",
+    "id": "authority-0021",
+    "label": "authority-maintenance:authority-0021",
     "exact_changes": [
       {
         "status": "M",
         "path": ".github/authority-policy.json"
+      },
+      {
+        "status": "M",
+        "path": ".github/workflows/release-binary.yml"
+      },
+      {
+        "status": "M",
+        "path": ".github/workflows/release.yaml"
+      },
+      {
+        "status": "M",
+        "path": ".github/workflows/sync-marketplace.yml"
       }
     ],
-    "expected_head_blobs": []
+    "expected_head_blobs": [
+      {
+        "path": ".github/workflows/release-binary.yml",
+        "git_blob": "c5dac8a51001c2fda7a26f5726b49ccc18a340b0"
+      },
+      {
+        "path": ".github/workflows/release.yaml",
+        "git_blob": "fe49ede646acd84daa855d746eee90e2824f26a8"
+      },
+      {
+        "path": ".github/workflows/sync-marketplace.yml",
+        "git_blob": "ffd0bee07ee7e4f19871e6d15bfa08b4a6db61f2"
+      }
+    ]
   }
 }
