@@ -186,6 +186,7 @@ test("release readback retries until the private draft is visible", () => {
     const first = path.join(temp, "first.json");
     const second = path.join(temp, "second.json");
     const sleeps = path.join(temp, "sleeps");
+    const release = path.join(temp, "release.json");
     fs.mkdirSync(fakeBin, { recursive: true });
     fs.writeFileSync(path.join(fakeBin, "node"), `#!/usr/bin/env bash
 node_path=${shellQuote(process.execPath)}
@@ -194,6 +195,7 @@ elif command -v cygpath >/dev/null 2>&1; then node_path=$(cygpath -u "$node_path
 fi
 exec "$node_path" "$@"
 `, { mode: 0o755 });
+    fs.writeFileSync(path.join(fakeBin, "mktemp"), "#!/usr/bin/env bash\nprintf '%s\\n' \"$FAKE_MKTEMP_PATH\"\n", { mode: 0o755 });
     const policy = parsePolicy(fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8"), "6.47.1");
     fs.writeFileSync(first, "[]");
     fs.writeFileSync(second, JSON.stringify([{
@@ -209,7 +211,7 @@ exec "$node_path" "$@"
     }]));
     fs.writeFileSync(path.join(fakeBin, "curl"), "#!/usr/bin/env bash\ncount=0\n[[ -f $FAKE_CURL_COUNT ]] && count=$(cat \"$FAKE_CURL_COUNT\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$FAKE_CURL_COUNT\"\nif (( count == 1 )); then cat \"$FAKE_RELEASE_FIRST\"; else cat \"$FAKE_RELEASE_SECOND\"; fi\n", { mode: 0o755 });
     fs.writeFileSync(path.join(fakeBin, "sleep"), "#!/usr/bin/env bash\nprintf '%s\\n' \"$1\" >> \"$FAKE_SLEEP_LOG\"\n", { mode: 0o755 });
-    const environment = `PATH=${shellQuote(installerPath(fakeBin))} GITHUB_TOKEN=fake FAKE_CURL_COUNT=${shellQuote(bashPath(count))} FAKE_RELEASE_FIRST=${shellQuote(bashPath(first))} FAKE_RELEASE_SECOND=${shellQuote(bashPath(second))} FAKE_SLEEP_LOG=${shellQuote(bashPath(sleeps))}`;
+    const environment = `PATH=${shellQuote(installerPath(fakeBin))} GITHUB_TOKEN=fake FAKE_MKTEMP_PATH=${shellQuote(bashPath(release))} FAKE_CURL_COUNT=${shellQuote(bashPath(count))} FAKE_RELEASE_FIRST=${shellQuote(bashPath(first))} FAKE_RELEASE_SECOND=${shellQuote(bashPath(second))} FAKE_SLEEP_LOG=${shellQuote(bashPath(sleeps))}`;
     const result = spawnSync("bash", ["-c", `${environment} bash scripts/readback-bootstrap-policy-assets.sh --tag v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr || result.stdout);
