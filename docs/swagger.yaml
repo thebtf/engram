@@ -1699,6 +1699,42 @@ paths:
       summary: Delete a memory note by ID
       tags:
       - Memories
+    get:
+      description: Returns one active memory entry by numeric ID.
+      parameters:
+      - description: Memory ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_thebtf_engram_pkg_models.Memory'
+        "400":
+          description: invalid id
+          schema:
+            type: string
+        "404":
+          description: not found
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get a memory note by ID
+      tags:
+      - Memories
   /api/memories/{id}/audit:
     get:
       description: Returns safe audit summaries for a memory visible to the operator.

@@ -521,6 +521,66 @@ type memoryListStore interface {
 	ListWithOffset(ctx context.Context, project string, limit int, offset int) ([]*models.Memory, error)
 }
 
+// memoryGetStore is the subset of MemoryStore needed for exact-ID reads.
+// It permits focused handler tests without a database.
+type memoryGetStore interface {
+	Get(ctx context.Context, id int64) (*models.Memory, error)
+}
+
+func (s *Service) memGetStore() memoryGetStore {
+	if s.memoryGetStoreSeam != nil {
+		return s.memoryGetStoreSeam
+	}
+	if s.memoryStore == nil {
+		return nil
+	}
+	return s.memoryStore
+}
+
+// handleGetMemoryByID godoc
+// @Summary Get a memory note by ID
+// @Description Returns one active memory entry by numeric ID.
+// @Tags Memories
+// @Produce json
+// @Security ApiKeyAuth
+// @Param id path int true "Memory ID"
+// @Success 200 {object} models.Memory
+// @Failure 400 {string} string "invalid id"
+// @Failure 404 {string} string "not found"
+// @Failure 503 {string} string "service unavailable"
+// @Failure 500 {string} string "internal error"
+// @Router /api/memories/{id} [get]
+func (s *Service) handleGetMemoryByID(w http.ResponseWriter, r *http.Request) {
+	store := s.memGetStore()
+	if store == nil {
+		http.Error(w, "memory store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid memory id", http.StatusBadRequest)
+		return
+	}
+
+	memory, err := store.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, gormlib.ErrRecordNotFound) {
+			http.Error(w, "memory not found", http.StatusNotFound)
+			return
+		}
+		log.Error().Err(err).Int64("id", id).Msg("get memory failed")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if memory == nil || !memoryDomainManageAllowedREST(r.Context(), memory) {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, jsonSafeMemory(memory))
+}
+
 // injectionCandidateStore is the subset of the MemoryStore surface that
 // listVisibleForInjection needs. Defined as a small interface to allow
 // unit-testing without the full store dependency.

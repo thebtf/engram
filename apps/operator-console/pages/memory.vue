@@ -12,6 +12,7 @@ const {
   pending,
   error,
   refresh,
+  loadMemoryByID,
   deleteMemory,
   suppressMemory,
   suppressMemories,
@@ -128,8 +129,18 @@ const requestedMemory = computed(() => typeof route.query.memory === 'string' ? 
 
 watch([loadState, requestedProject, requestedMemory], async ([state, nextProject, nextMemory]) => {
   if (state.kind !== 'live' || !nextProject || !nextMemory) return
-  const memory = all.find((row) => row.project === nextProject && row.id === nextMemory)
-  if (!memory) return
+  const listed = all.find((row) => row.project === nextProject && row.id === nextMemory)
+  let memory: Memory
+  if (listed) memory = listed
+  else {
+    try {
+      memory = await loadMemoryByID(nextMemory)
+    } catch {
+      return
+    }
+  }
+  if (requestedProject.value !== nextProject || requestedMemory.value !== nextMemory) return
+  if (memory.project !== nextProject) return
 
   project.value = nextProject
   const index = filtered.value.findIndex((row) => row.id === memory.id)

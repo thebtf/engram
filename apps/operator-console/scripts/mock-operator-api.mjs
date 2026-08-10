@@ -154,6 +154,22 @@ const memoryRows = [
   },
 ]
 
+const deepLinkMemoryRows = [
+  {
+    id: 501,
+    project: 'operator-console',
+    content: 'older memory omitted by the 500-row project list',
+    tags: ['deep-link'],
+    tier: 'semantic',
+    epistemic_type: 'fact',
+    confidence: 0.9,
+    citation_count: 1,
+    injection_count: 1,
+    updated_at: '2026-01-01T10:00:00Z',
+    status: 'active',
+  },
+]
+
 const searchGuidanceRows = [
   {
     id: 303,
@@ -668,6 +684,22 @@ const server = createServer(async (req, res) => {
     }
     suppressedMemoryIds.add(id)
     json(res, 200, { status: 'ok' })
+    return
+  }
+
+  const memoryGetMatch = path.match(/^\/api\/memories\/(-?\d+)$/)
+  if (req.method === 'GET' && memoryGetMatch) {
+    const id = Number(memoryGetMatch[1])
+    if (!Number.isInteger(id) || id <= 0) {
+      json(res, 400, { error: 'invalid memory id' })
+      return
+    }
+    const row = [...memoryRows, ...deepLinkMemoryRows].find((item) => item.id === id)
+    if (!row || suppressedMemoryIds.has(String(id))) {
+      json(res, 404, { error: 'memory not found' })
+      return
+    }
+    json(res, 200, { ...row, tags: [...row.tags] })
     return
   }
 
@@ -1201,7 +1233,7 @@ const server = createServer(async (req, res) => {
           return
         }
         const observations = [
-          ...memoryRows
+          ...[...memoryRows, ...deepLinkMemoryRows]
             .filter((row) => row.project === project && !suppressedMemoryIds.has(String(row.id)))
             .filter((row) => row.content.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
             .map((row) => ({

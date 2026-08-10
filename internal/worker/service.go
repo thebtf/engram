@@ -190,6 +190,7 @@ type Service struct {
 	booksStore                  booksStore
 	booksPipeline               booksPipelineRunner
 	memoryStoreSeam             memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
+	memoryGetStoreSeam          memoryGetStore  // test-only: when non-nil, overrides memoryStore for exact-ID reads
 	stateStore                  statePlane
 	experienceProvider          experienceHistoryProvider
 	temporalTruthProvider       temporalTruthProvider
@@ -1828,6 +1829,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/memories/suppress", s.handleSuppressMemories)
 		r.Get("/api/memories/{id}/audit", s.handleGetMemoryAudit)
 		r.Post("/api/memories/{id}/suppress", s.handleSuppressMemoryByID)
+		r.Get("/api/memories/{id}", s.handleGetMemoryByID)
 		r.Delete("/api/memories/{id}", s.handleDeleteMemoryByID)
 
 		// Knowledge graph bridge (CR-002 graph lane)

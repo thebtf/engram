@@ -22,6 +22,7 @@ import (
 	dbgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/principalmemory"
 	"github.com/thebtf/engram/pkg/models"
+	gormlib "gorm.io/gorm"
 )
 
 func newMemoryTestService(t *testing.T, project string) *Service {
@@ -727,4 +728,49 @@ func TestHandleSuppressMemories_ValidatesBeforeDelete(t *testing.T) {
 	require.NoError(t, json.Unmarshal(listW.Body.Bytes(), &list))
 	require.Len(t, list, 1)
 	assert.Equal(t, created.ID, list[0].ID)
+}
+
+type fakeMemoryGetStore struct {
+	memory *models.Memory
+	err    error
+	calls  int
+}
+
+func (f *fakeMemoryGetStore) Get(_ context.Context, _ int64) (*models.Memory, error) {
+	f.calls++
+	return f.memory, f.err
+}
+
+func TestHandleGetMemoryByID(t *testing.T) {
+	tests := []struct {
+		name       string
+		id         string
+		store      *fakeMemoryGetStore
+		wantStatus int
+		wantCalls  int
+	}{
+		{"returns memory", "42", &fakeMemoryGetStore{memory: &models.Memory{ID: 42, Project: "deep-link", Content: "older memory"}}, http.StatusOK, 1},
+		{"rejects invalid ID", "invalid", &fakeMemoryGetStore{}, http.StatusBadRequest, 0},
+		{"rejects zero ID", "0", &fakeMemoryGetStore{}, http.StatusBadRequest, 0},
+		{"rejects negative ID", "-1", &fakeMemoryGetStore{}, http.StatusBadRequest, 0},
+		{"maps missing memory", "42", &fakeMemoryGetStore{err: gormlib.ErrRecordNotFound}, http.StatusNotFound, 1},
+		{"maps store failure", "42", &fakeMemoryGetStore{err: errors.New("store failed")}, http.StatusInternalServerError, 1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &Service{memoryGetStoreSeam: tc.store}
+			w := httptest.NewRecorder()
+			service.handleGetMemoryByID(w, newCHIRequest(http.MethodGet, "/api/memories/"+tc.id, "id", tc.id))
+
+			require.Equal(t, tc.wantStatus, w.Code)
+			assert.Equal(t, tc.wantCalls, tc.store.calls)
+			if tc.wantStatus == http.StatusOK {
+				var memory models.Memory
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &memory))
+				assert.Equal(t, int64(42), memory.ID)
+				assert.Equal(t, "deep-link", memory.Project)
+			}
+		})
+	}
 }
