@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 
 	"gorm.io/gorm"
 
@@ -20,6 +21,11 @@ func (s *Server) handleDocCreate(ctx context.Context, args json.RawMessage) (str
 	m, err := parseArgs(args)
 	if err != nil {
 		return "", err
+	}
+	for _, key := range []string{"path", "project", "content", "doc_type", "metadata", "author"} {
+		if _, _, fieldErr := optionalStringArg(m, key); fieldErr != nil {
+			return "", fmt.Errorf("doc_create: %w", fieldErr)
+		}
 	}
 
 	path := coerceString(m["path"], "")
@@ -41,7 +47,7 @@ func (s *Server) handleDocCreate(ctx context.Context, args json.RawMessage) (str
 
 	id, err := s.versionedDocumentStore.Create(ctx, path, project, content, docType, metadata, author)
 	if err != nil {
-		return "", fmt.Errorf("docs(action=create): %w", err)
+		return "", fmt.Errorf("doc_create: %w", err)
 	}
 
 	result := map[string]any{
@@ -77,12 +83,12 @@ func (s *Server) handleDocRead(ctx context.Context, args json.RawMessage) (strin
 		return "", fmt.Errorf("project is required")
 	}
 
+	version, present, err := parseDocumentVersion(m)
+	if err != nil {
+		return "", err
+	}
 	var doc *gormpkg.VersionedDocument
-	if v, ok := m["version"]; ok && v != nil {
-		version := int(coerceInt(m["version"], 0))
-		if version <= 0 {
-			return "", fmt.Errorf("version must be a positive integer")
-		}
+	if present {
 		doc, err = s.versionedDocumentStore.ReadVersion(ctx, path, project, version)
 	} else {
 		doc, err = s.versionedDocumentStore.ReadLatest(ctx, path, project)
@@ -130,7 +136,10 @@ func (s *Server) handleDocList(ctx context.Context, args json.RawMessage) (strin
 	}
 	docType := coerceString(m["doc_type"], "")
 	pathPrefix := coerceString(m["path_prefix"], "")
-	limit := int(coerceInt(m["limit"], 50))
+	limit, err := parseDocumentListLimit(m)
+	if err != nil {
+		return "", err
+	}
 
 	docs, err := s.versionedDocumentStore.List(ctx, project, docType, pathPrefix, limit)
 	if err != nil {
@@ -185,7 +194,10 @@ func (s *Server) handleDocHistory(ctx context.Context, args json.RawMessage) (st
 	if project == "" {
 		return "", fmt.Errorf("project is required")
 	}
-	limit := int(coerceInt(m["limit"], 0))
+	limit, err := parseDocumentHistoryLimit(m)
+	if err != nil {
+		return "", err
+	}
 
 	docs, err := s.versionedDocumentStore.GetHistory(ctx, path, project, limit)
 	if err != nil {
@@ -223,6 +235,38 @@ func (s *Server) handleDocHistory(ctx context.Context, args json.RawMessage) (st
 	return string(out), nil
 }
 
+const documentQueryMaxLimit = 100
+
+func parseDocumentVersion(m map[string]any) (int, bool, error) {
+	version, present, err := optionalInt64Arg(m, "version")
+	if err != nil || (present && (version < 1 || version > int64(math.MaxInt))) {
+		return 0, present, fmt.Errorf("version must be a positive in-range integer")
+	}
+	return int(version), present, nil
+}
+
+func parseDocumentListLimit(m map[string]any) (int, error) {
+	limit, present, err := optionalInt64Arg(m, "limit")
+	if !present {
+		return 50, nil
+	}
+	if err != nil || limit < 1 || limit > documentQueryMaxLimit {
+		return 0, fmt.Errorf("limit must be between 1 and %d", documentQueryMaxLimit)
+	}
+	return int(limit), nil
+}
+
+func parseDocumentHistoryLimit(m map[string]any) (int, error) {
+	limit, present, err := optionalInt64Arg(m, "limit")
+	if !present {
+		return 0, nil
+	}
+	if err != nil || limit < 1 || limit > documentQueryMaxLimit {
+		return 0, fmt.Errorf("limit must be between 1 and %d", documentQueryMaxLimit)
+	}
+	return int(limit), nil
+}
+
 // handleDocComment adds a comment to a versioned document identified by its document ID.
 func (s *Server) handleDocComment(ctx context.Context, args json.RawMessage) (string, error) {
 	if s.versionedDocumentStore == nil {
@@ -234,28 +278,46 @@ func (s *Server) handleDocComment(ctx context.Context, args json.RawMessage) (st
 		return "", err
 	}
 
-	documentID := coerceInt64(m["document_id"], 0)
+	documentID, err := requireInt64Arg(m, "document_id")
+	if err != nil {
+		return "", fmt.Errorf("doc_comment: %w", err)
+	}
 	if documentID <= 0 {
 		return "", fmt.Errorf("document_id is required and must be positive")
 	}
-	author := coerceString(m["author"], "agent")
-	content := coerceString(m["content"], "")
+	author, authorPresent, err := optionalStringArg(m, "author")
+	if err != nil {
+		return "", fmt.Errorf("doc_comment: %w", err)
+	}
+	if !authorPresent {
+		author = "agent"
+	}
+	content, _, err := optionalStringArg(m, "content")
+	if err != nil {
+		return "", fmt.Errorf("doc_comment: %w", err)
+	}
 	if content == "" {
 		return "", fmt.Errorf("content is required")
 	}
 
 	var lineStart, lineEnd *int
-	if v, ok := m["line_start"]; ok && v != nil {
-		ls := int(coerceInt(m["line_start"], 0))
-		if ls > 0 {
-			lineStart = &ls
+	if value, present, parseErr := optionalInt64Arg(m, "line_start"); parseErr != nil {
+		return "", fmt.Errorf("doc_comment: %w", parseErr)
+	} else if present {
+		if value <= 0 || value > int64(math.MaxInt) {
+			return "", fmt.Errorf("doc_comment: line_start must be an in-range positive integer")
 		}
+		lineStartValue := int(value)
+		lineStart = &lineStartValue
 	}
-	if v, ok := m["line_end"]; ok && v != nil {
-		le := int(coerceInt(m["line_end"], 0))
-		if le > 0 {
-			lineEnd = &le
+	if value, present, parseErr := optionalInt64Arg(m, "line_end"); parseErr != nil {
+		return "", fmt.Errorf("doc_comment: %w", parseErr)
+	} else if present {
+		if value <= 0 || value > int64(math.MaxInt) {
+			return "", fmt.Errorf("doc_comment: line_end must be an in-range positive integer")
 		}
+		lineEndValue := int(value)
+		lineEnd = &lineEndValue
 	}
 
 	commentID, err := s.versionedDocumentStore.AddComment(ctx, documentID, author, content, lineStart, lineEnd)

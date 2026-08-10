@@ -8,7 +8,6 @@ const { spawnSync } = require('node:child_process');
 const EVENT_HOOKS = {
   SessionStart: ['../scripts/ensure-binary.js', './session-start.js'],
   UserPromptSubmit: ['./user-prompt.js'],
-  PostToolUse: ['./post-tool-use.js'],
   SubagentStop: ['./subagent-stop.js'],
   PreToolUse: ['./pre-tool-use.js'],
   PreCompact: ['./pre-compact.js'],
@@ -19,7 +18,6 @@ const EVENT_HOOKS = {
 const LEGACY_HOOK_ENTRYPOINTS = {
   'session-start.js': 'SessionStart',
   'user-prompt.js': 'UserPromptSubmit',
-  'post-tool-use.js': 'PostToolUse',
   'subagent-stop.js': 'SubagentStop',
   'pre-tool-use.js': 'PreToolUse',
   'pre-compact.js': 'PreCompact',

@@ -2,9 +2,15 @@
 
 Engram production deployment is a three-image stack: PostgreSQL, server, and
 operator console. Production Compose intentionally has no moving image default.
-Every deployment starts from the post-logout `publication-result.json`
-evidence emitted by the release workflow for one canonical tag such as
-`v6.43.0-rc.1`.
+Every deployment requires the retained post-readback `publication-result.json`
+from the one release workflow execution that published the selected images. It
+is deployment authority, not merely release evidence.
+
+The retained record is an explicit local trust boundary: keep it at an
+operator-owned, access-controlled path such as `/secure/evidence`. Anyone able
+to modify both this record and the deployment dotenv holds deployment authority.
+The wrapper validates the record and binds its read-back digests to the dotenv;
+it does not claim to verify a cryptographic signature over the local file.
 
 ## Immutable image selection
 
@@ -26,13 +32,47 @@ The same release is also discoverable through exactly two tags per image:
 `main`, `latest`, branch, major, and minor aliases are not release identities.
 Do not replace the digest-pinned values above with moving tags.
 
-Validate and start the pull-only stack:
+Start the pull-only stack through the deployment wrapper. Pass both the retained
+publication record and an optional dotenv snapshot (default: `.env`). The wrapper
+requires `python3` for strict JSON parsing; it never evaluates JSON or dotenv
+content as shell code.
 
 ```bash
-docker compose -f deploy/docker-compose.runtime.yml config
-docker compose -f deploy/docker-compose.runtime.yml pull
-docker compose -f deploy/docker-compose.runtime.yml up -d
+PUBLICATION_RESULT=/secure/evidence/publication-result.json
+ENV_FILE=.env
+bash deploy/image-preflight.sh --publication-result "$PUBLICATION_RESULT" --env-file "$ENV_FILE"
 ```
+
+Before Docker is invoked, the wrapper parses JSON without evaluation and rejects
+records unless they are schema 1, have the canonical `v*` release version and
+full lowercase commit, carry the single-writer/trust-boundary and acceptance
+manifest fields, and contain exactly the six canonical version/commit image
+destinations. Each dotenv image must equal its canonical repository plus the
+matching publication manifest digest; a mixed-release three-digest file cannot
+pass.
+Comment lines whose first non-whitespace character is `#` are ignored, including
+comments that mention a managed image key. Every non-comment occurrence of a
+managed image key must still be one unique bare digest assignment.
+
+It copies the selected dotenv file to a mode-`0600` snapshot and treats that
+snapshot as the entire Compose interpolation boundary. Before any Docker call it
+finds every `${VAR}` reference in `deploy/docker-compose.runtime.yml`, rejects a
+different inherited value for a snapshot-defined key, and unsets every referenced
+key—including keys absent from the snapshot—so the parent process cannot inject
+configuration. It also rejects `COMPOSE_FILE`, `COMPOSE_PATH_SEPARATOR`,
+`COMPOSE_PROJECT_NAME`, `COMPOSE_PROFILES`, `COMPOSE_ENV_FILES`,
+`COMPOSE_DISABLE_ENV_FILE`, and `COMPOSE_PROJECT_DIRECTORY`; these can select a
+different Compose source, project, profile, or dotenv source. Docker client
+transport settings such as `DOCKER_HOST`, `DOCKER_CONTEXT`, and TLS variables
+are preserved. After validation, the wrapper atomically creates
+`deploy/docker-compose.runtime.yml.deploy.lock`; a concurrent invocation fails
+before any Compose command. The owner removes the empty lock directory and the
+mode-`0600` snapshot on normal or error exit. If the process is killed before its
+exit trap runs, verify that no deployment is active, remove only that stale empty
+lock directory, and retry. While it owns the lock, the wrapper runs
+`docker compose config --quiet` to fully interpolate, resolve, and validate
+without printing resolved configuration, then runs `pull` and `up` with the same
+sanitized environment and frozen snapshot.
 
 The root `docker-compose.yml` uses the same required image variables and also
 contains local build definitions. The image acceptance gate sets them to exact
@@ -57,9 +97,8 @@ Actions (`integration_id: 15368`). The only recovery bypass is exactly one
 same-name status from another integration, zero/duplicate bypass actors, or an
 always-bypass actor stops the release.
 
-The repository currently needs this operator bootstrap before release
-publication can activate. The workflow does not create or weaken repository
-rules.
+The workflow validates this operator-managed configuration live before release;
+it does not create or weaken repository rules.
 
 GitHub Container Registry does not provide this project with an atomic tag CAS
 contract. Engram therefore uses a repository-controlled single-writer model.
@@ -84,9 +123,7 @@ The default-branch publisher uses two fresh runners:
 
 A package administrator or external PAT can still mutate package state outside
 the repository workflow; that is an explicit operational trust boundary and
-must be restricted by organization policy. The repository currently lacks the
-required immutable-tag and strict `authority-guard` rulesets, so release
-publication remains fail-closed until an operator installs both.
+must be restricted by organization policy.
 
 ## Runtime contract
 
@@ -130,8 +167,9 @@ Compose `pgdata` volume (normally `<project>_pgdata`), then run the bounded
 ownership repair with the exact new PostgreSQL image identity:
 
 ```bash
+ENV_FILE=.env
 POSTGRES_MIGRATION_IMAGE='ghcr.io/thebtf/engram-postgres@sha256:<postgres-manifest-digest>'
-docker compose -f deploy/docker-compose.runtime.yml down
+docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.runtime.yml down
 docker volume ls --format '{{.Name}}'
 docker run --rm --user 0:0 \
   --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
@@ -142,7 +180,7 @@ docker run --rm --user 0:0 \
 docker run --rm --user 0:0 --cap-drop ALL --entrypoint /bin/sh \
   -v <project>_pgdata:/var/lib/postgresql/data \
   "$POSTGRES_MIGRATION_IMAGE" -c "stat -c '%u:%g:%a' /var/lib/postgresql/data"
-docker compose -f deploy/docker-compose.runtime.yml up -d
+bash deploy/image-preflight.sh --publication-result "$PUBLICATION_RESULT" --env-file "$ENV_FILE"
 ```
 
 The `stat` command must print `70:70:700`. Never add `-v` to the `down` command;
@@ -150,8 +188,9 @@ that would delete the database volume. The critical runtime suite proves both
 the pre-migration fail-closed behavior and marker preservation after migration.
 
 Rollback uses the three digest identities from the preceding accepted release
-manifest. Change all three `ENGRAM_*_IMAGE` values as one set, recreate the
-stack without deleting named volumes, then verify PostgreSQL version/vector,
+manifest. Change all three `ENGRAM_*_IMAGE` values as one set in a selected
+dotenv file, then run `bash deploy/image-preflight.sh --publication-result "$PUBLICATION_RESULT" --env-file "$ENV_FILE"` to recreate
+the stack without deleting named volumes. Verify PostgreSQL version/vector,
 retained data, direct readiness, and operator-proxied readiness.
 
 ## Reproduce image acceptance

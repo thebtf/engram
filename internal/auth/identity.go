@@ -25,6 +25,12 @@ const (
 	// engram_auth DB-backed session cookie (browser logins). Issuance and
 	// revocation endpoints accept SourceSession only.
 	SourceSession Source = "session"
+
+	// SourceAuthDisabled marks the synthetic identity used when the operator
+	// deliberately disables authentication. It retains ordinary admin access
+	// without impersonating a browser session, so keycard management remains
+	// unavailable.
+	SourceAuthDisabled Source = "auth-disabled"
 )
 
 // Role is the role string carried in the request context. Existing call sites
@@ -124,6 +130,13 @@ func ClientWithPrincipal(scope string, keycardID string, principal string, princ
 // for engram_auth cookie).
 func Session(role string) Identity {
 	return Identity{Role: Role(role), Source: SourceSession}
+}
+
+// AuthDisabled returns the synthetic identity used by disabled-auth mode.
+// It is intentionally not a session identity: durable keycard management
+// requires a real authenticated browser session.
+func AuthDisabled() Identity {
+	return Identity{Role: RoleAdmin, Source: SourceAuthDisabled}
 }
 
 // IsAdmin reports whether the bearer holds admin role regardless of source.

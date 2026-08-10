@@ -1,8 +1,11 @@
 package graph
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/thebtf/engram/internal/scope"
@@ -58,6 +61,33 @@ func nodeToRow(n *models.KnowledgeNode) nodeRow {
 	}
 }
 
+func normalizeNodeMetadata(metadata []byte) ([]byte, error) {
+	trimmed := bytes.TrimSpace(metadata)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return []byte("{}"), nil
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, fmt.Errorf("invalid metadata: must be valid JSON")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("invalid metadata: must contain exactly one JSON value")
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("invalid metadata: must be a JSON object")
+	}
+	canonical, err := json.Marshal(object)
+	if err != nil {
+		return nil, fmt.Errorf("canonicalize metadata: %w", err)
+	}
+	return canonical, nil
+}
+
 // NodesStore handles knowledge_nodes CRUD with scope-based visibility filtering.
 //
 // Visibility contract (T012 AC):
@@ -94,21 +124,29 @@ func (s *NodesStore) Create(ctx context.Context, node *models.KnowledgeNode) (*m
 	if node.Project == "" {
 		return nil, fmt.Errorf("project is required")
 	}
+	metadata, err := normalizeNodeMetadata(node.Metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	ps := node.PrivacyScope
+	if ps == "" {
+		ps = scope.ScopeProject
+	}
+	switch ps {
+	case scope.ScopePrivate, scope.ScopeProject, scope.ScopeShared, scope.ScopeGlobal:
+		// valid
+	default:
+		return nil, fmt.Errorf("invalid privacy_scope %q", ps)
+	}
+
 	now := time.Now().UTC()
 	if node.CreatedAt.IsZero() {
 		node.CreatedAt = now
 	}
 	node.UpdatedAt = now
-	if node.PrivacyScope == "" {
-		node.PrivacyScope = scope.ScopeProject
-	}
-	switch node.PrivacyScope {
-	case scope.ScopePrivate, scope.ScopeProject, scope.ScopeShared, scope.ScopeGlobal:
-		// valid
-	default:
-		return nil, fmt.Errorf("invalid privacy_scope %q", node.PrivacyScope)
-	}
-
+	node.PrivacyScope = ps
+	node.Metadata = metadata
 	row := nodeToRow(node)
 	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return nil, fmt.Errorf("create knowledge_node: %w", err)
@@ -185,7 +223,11 @@ func (s *NodesStore) Update(ctx context.Context, node *models.KnowledgeNode) (*m
 	if node.ID == 0 {
 		return nil, fmt.Errorf("node.ID is required for Update")
 	}
-	node.UpdatedAt = time.Now().UTC()
+	metadata, err := normalizeNodeMetadata(node.Metadata)
+	if err != nil {
+		return nil, err
+	}
+
 	ps := node.PrivacyScope
 	if ps == "" {
 		ps = scope.ScopeProject
@@ -196,6 +238,10 @@ func (s *NodesStore) Update(ctx context.Context, node *models.KnowledgeNode) (*m
 	default:
 		return nil, fmt.Errorf("invalid privacy_scope %q", ps)
 	}
+
+	node.UpdatedAt = time.Now().UTC()
+	node.Metadata = metadata
+
 	updates := map[string]interface{}{
 		"external_ref":  node.ExternalRef,
 		"metadata":      node.Metadata,

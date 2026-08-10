@@ -29,6 +29,15 @@ func TestIdentityFrom_NoIdentity(t *testing.T) {
 	assert.Equal(t, auth.Identity{}, id)
 }
 
+func TestIdentityFrom_NilContext(t *testing.T) {
+	t.Parallel()
+
+	id, ok := auth.IdentityFrom(nil)
+
+	assert.False(t, ok)
+	assert.Equal(t, auth.Identity{}, id)
+}
+
 func TestRoleFrom_AdminMaster(t *testing.T) {
 	t.Parallel()
 	ctx := auth.WithIdentity(context.Background(), auth.Admin())
@@ -52,6 +61,15 @@ func TestWithIdentity_SessionAdmin(t *testing.T) {
 	assert.True(t, ok)
 	assert.True(t, id.IsSessionAdmin(), "FR-6 / C4: session admin must satisfy IsSessionAdmin")
 	assert.True(t, id.IsAdmin())
+}
+
+func TestIdentity_AuthDisabledIsNotSessionAdmin(t *testing.T) {
+	t.Parallel()
+	id := auth.AuthDisabled()
+
+	assert.Equal(t, auth.SourceAuthDisabled, id.Source)
+	assert.True(t, id.IsAdmin())
+	assert.False(t, id.IsSessionAdmin())
 }
 
 func TestIdentity_IsSessionAdmin_RejectsMaster(t *testing.T) {

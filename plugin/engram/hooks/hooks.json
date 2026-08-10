@@ -22,18 +22,6 @@
         ]
       }
     ],
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit|Bash|Agent|mcp__aimux",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node -e \"(()=>{process.env.ENGRAM_HOOK_EVENT='PostToolUse';const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),d='dispatcher.cjs';function pass(){process.stdout.write(JSON.stringify({continue:true})+'\\n')}function parts(v){return String(v).split(/[^0-9]+/).filter(Boolean).map(Number)}function cmp(a,b){const aa=parts(a),bb=parts(b),m=Math.max(aa.length,bb.length);for(let i=0;i<m;i++){const n=(aa[i]||0)-(bb[i]||0);if(n)return n}return String(a).localeCompare(String(b))}function uniq(v){return v.filter((x,i,a)=>x&&a.indexOf(x)===i)}function fromRoot(r){if(!r)return null;return [path.join(r,'hooks',d),path.join(r,d)].find(f=>fs.existsSync(f))||null}function readName(r){for(const p of [path.join('.codex-plugin','plugin.json'),path.join('.claude-plugin','plugin.json')]){try{const j=JSON.parse(fs.readFileSync(path.join(r,p),'utf8'));if(j&&typeof j.name==='string')return j.name}catch(_){}}return ''}function usable(r){return readName(r)==='engram'&&!!fromRoot(r)}function dataRoots(){const names=['engram-engram-marketplace','engram-engram','engram-marketplace-engram'],h=process.env.CODEX_HOME,roots=[process.env.PLUGIN_DATA,process.env.CLAUDE_PLUGIN_DATA,process.env.CODEX_PLUGIN_DATA];if(h)for(const n of names)roots.push(path.join(h,'plugins','data',n));return uniq(roots.map(r=>r?path.resolve(r):''))}function homeFromData(r){const p=path.parse(r),s=r.slice(p.root.length).split(path.sep).filter(Boolean),i=s.lastIndexOf('data');return i>0&&s[i-1]==='plugins'?path.join(p.root,...s.slice(0,i-1)):''}function homes(){const dataHomes=dataRoots().map(homeFromData).filter(Boolean),explicit=process.env.CODEX_HOME?path.resolve(process.env.CODEX_HOME):'',roots=[explicit,...dataHomes];if(!explicit&&dataHomes.length===0)roots.push(path.join(os.homedir(),'.codex'));return uniq(roots.map(h=>h?path.resolve(h):''))}function cacheRoots(){const bases=homes().flatMap(h=>[path.join(h,'plugins','cache','engram-marketplace','engram'),path.join(h,'plugins','cache','engram','engram')]);return bases.flatMap(b=>{let e=[];try{e=fs.readdirSync(b,{withFileTypes:true})}catch(_){return []}return e.filter(x=>x.isDirectory()).map(x=>path.join(b,x.name)).filter(usable)}).sort((a,b)=>cmp(path.basename(b),path.basename(a)))}const roots=[...dataRoots(),process.env.CODEX_PLUGIN_ROOT,process.env.CODEX_PLUGIN_DIR,process.env.PLUGIN_ROOT,...cacheRoots(),process.env.CLAUDE_PLUGIN_ROOT,process.env.CLAUDE_PLUGIN_DIR];const f=roots.map(fromRoot).find(Boolean);if(f){try{const m=require(f);if(m&&typeof m.main==='function'){m.main();return}}catch(e){try{process.stderr.write('engram hook launcher: dispatcher failed open: '+e.message+'\\n')}catch(_){}}}pass()})()\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
     "SubagentStop": [
       {
         "hooks": [

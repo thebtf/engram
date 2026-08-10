@@ -1779,7 +1779,8 @@
     "placeholder": "Введите запрос к контексту…",
     "actions": {
       "refresh": "Обновить",
-      "search": "Искать"
+      "search": "Искать",
+      "openMemory": "Открыть память"
     },
     "form": {
       "project": "Проект",

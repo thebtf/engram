@@ -169,6 +169,10 @@ type Service struct {
 	version                     string
 	recentQueriesBuf            [maxRecentQueries]RecentSearchQuery
 	wg                          sync.WaitGroup
+	initWG                      sync.WaitGroup
+	shutdownOnce                sync.Once
+	shutdownDone                chan struct{}
+	shutdownErr                 error
 	recentQueriesLen            int
 	recentQueriesHead           int
 	statsCacheTTL               time.Duration
@@ -186,6 +190,7 @@ type Service struct {
 	booksStore                  booksStore
 	booksPipeline               booksPipelineRunner
 	memoryStoreSeam             memoryListStore // test-only: when non-nil, overrides memoryStore in List-only paths
+	memoryGetStoreSeam          memoryGetStore  // test-only: when non-nil, overrides memoryStore for exact-ID reads
 	stateStore                  statePlane
 	experienceProvider          experienceHistoryProvider
 	temporalTruthProvider       temporalTruthProvider
@@ -209,7 +214,8 @@ type Service struct {
 	vaultErr                    error
 	promptCache                 sync.Map // map[int64]promptCacheEntry — last user prompt per session
 	eventBus                    *projectevents.Bus
-	projectReaper               *reaper.Reaper
+	projectReaper               projectReaperLifecycle
+	projectReaperFactory        projectReaperFactory
 	// lastRequestAt tracks the Unix nanosecond timestamp of the most recent
 	// MCP/REST request handled by this server. Updated atomically in
 	// requestActivityMiddleware on every request.
@@ -268,6 +274,17 @@ type lifecycleQueue interface {
 	cognitivecore.HintQueue
 	Start(ctx context.Context) error
 	Stop() error
+}
+
+type projectReaperLifecycle interface {
+	Start(context.Context)
+	Stop()
+}
+
+type projectReaperFactory func(*gorm.Store) (projectReaperLifecycle, error)
+
+func defaultProjectReaperFactory(store *gorm.Store) (projectReaperLifecycle, error) {
+	return reaper.New(store.DB)
 }
 
 // promptCacheEntry stores a user prompt with a timestamp for eviction.
@@ -745,6 +762,7 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 		statsCacheTTL:         time.Minute,
 		mcpHealth:             mcp.NewMCPHealth(),
 		eventBus:              &projectevents.Bus{},
+		projectReaperFactory:  defaultProjectReaperFactory,
 
 		cognitiveRegistry:       cRegistry,
 		cognitiveMeter:          cMeter,
@@ -772,8 +790,11 @@ func NewService(version string, logBuffer *logbuf.RingBuffer) (*Service, error) 
 
 	// Kick off heavy initialization in the background. The service is already
 	// accepting requests at this point; data-plane routes gate on s.ready.
-	go svc.initializeAsync()
-
+	svc.initWG.Add(1)
+	go func() {
+		defer svc.initWG.Done()
+		svc.initializeAsync()
+	}()
 	return svc, nil
 }
 
@@ -792,6 +813,9 @@ func (s *Service) createChunkManager() *chunking.Manager {
 // On any fatal error it calls setInitError which surfaces through /api/health.
 func (s *Service) initializeAsync() {
 	log.Info().Msg("background init: starting")
+	if s.ctx.Err() != nil {
+		return
+	}
 
 	// Verify data directory layout and settings file presence before the first DB dial.
 	if err := config.EnsureAll(); err != nil {
@@ -806,6 +830,10 @@ func (s *Service) initializeAsync() {
 	})
 	if err != nil {
 		s.setInitError(fmt.Errorf("init database: %w", err))
+		return
+	}
+	if s.ctx.Err() != nil {
+		_ = store.Close()
 		return
 	}
 
@@ -931,9 +959,9 @@ func (s *Service) initializeAsync() {
 	s.processor = processor
 	s.initMu.Unlock()
 
-	// Wire crystallization candidate store (Milestone-F TG4).
-	// Gated on ENGRAM_VNEXT_F_ENABLED so production deployments without the flag
-	// see no change in behaviour (candidateStore stays nil → dream-cycle RouteDecision returns nil).
+	// Wire crystallization candidate storage only when the candidate flag is enabled.
+	// The dream cycle additionally checks both flags and writer availability before
+	// it reads transcripts or constructs an extractor.
 	if os.Getenv("ENGRAM_VNEXT_F_ENABLED") == "true" {
 		candidateStore := gorm.NewCandidateStore(store.GetDB(), auditStore)
 		s.SetCandidateStore(candidateStore)
@@ -1266,15 +1294,11 @@ func (s *Service) initializeAsync() {
 	s.retrievalStatsLogStore = retrievalStatsLogStore
 	s.initMu.Unlock()
 
-	// All stores are wired. Flip the ready flag so /api/ready and requireReady
-	// middleware start passing requests through to the data-plane handlers.
-	s.ready.Store(true)
-	log.Info().Msg("background init: complete, service ready")
-
 	// Start project reaper (hourly cleanup of hard-expired soft-deleted projects).
-	projectReaper := reaper.New(store.DB)
-	s.projectReaper = projectReaper
-	projectReaper.Start(s.ctx)
+	if err := s.initializeProjectReaper(store); err != nil {
+		s.setInitError(err)
+		return
+	}
 
 	// Start retention cron for injection_log and citation_log cleanup.
 	// CR-1 (provenance-cleanup, PR #272 review): injection_log + citation_log are now
@@ -1299,8 +1323,47 @@ func (s *Service) initializeAsync() {
 		go s.processQueue()
 	}
 
+	// Critical initialization has completed, including installation of the
+	// project reaper that owns stale-project cleanup. Watchers remain nonfatal
+	// and may start after readiness is published.
+	if err := s.publishReady(); err != nil {
+		s.setInitError(fmt.Errorf("publish readiness: %w", err))
+		return
+	}
+	log.Info().Msg("background init: complete, service ready")
+
 	// Watch config and database files for external changes.
 	s.startWatchers()
+}
+
+func (s *Service) initializeProjectReaper(store *gorm.Store) error {
+	factory := s.projectReaperFactory
+	if factory == nil {
+		factory = defaultProjectReaperFactory
+	}
+	projectReaper, err := factory(store)
+	if err != nil {
+		return fmt.Errorf("init project reaper: %w", err)
+	}
+	if projectReaper == nil {
+		return errors.New("init project reaper: factory returned nil")
+	}
+	s.initMu.Lock()
+	s.projectReaper = projectReaper
+	s.initMu.Unlock()
+	projectReaper.Start(s.ctx)
+	return nil
+}
+
+func (s *Service) publishReady() error {
+	s.initMu.RLock()
+	projectReaperInstalled := s.projectReaper != nil
+	s.initMu.RUnlock()
+	if !projectReaperInstalled {
+		return errors.New("project reaper is not initialized")
+	}
+	s.ready.Store(true)
+	return nil
 }
 
 // startWatchers registers filesystem notification handlers for config hot-reload.
@@ -1766,6 +1829,7 @@ func (s *Service) setupRoutes() {
 		r.Post("/api/memories/suppress", s.handleSuppressMemories)
 		r.Get("/api/memories/{id}/audit", s.handleGetMemoryAudit)
 		r.Post("/api/memories/{id}/suppress", s.handleSuppressMemoryByID)
+		r.Get("/api/memories/{id}", s.handleGetMemoryByID)
 		r.Delete("/api/memories/{id}", s.handleDeleteMemoryByID)
 
 		// Knowledge graph bridge (CR-002 graph lane)
@@ -2250,11 +2314,33 @@ func (s *Service) processAllSessions() {
 // WaitGroup drains, teardown continues and a warning is logged. The first
 // component error (if any) is returned; subsequent errors are only logged.
 func (s *Service) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.shutdownOnce.Do(func() {
+		s.shutdownDone = make(chan struct{})
+		go func() {
+			s.shutdownErr = s.shutdown(ctx)
+			close(s.shutdownDone)
+		}()
+	})
+
+	select {
+	case <-s.shutdownDone:
+		return s.shutdownErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Service) shutdown(ctx context.Context) error {
 	log.Info().Msg("graceful shutdown: starting")
 	start := time.Now()
 
-	// Signal all background goroutines.
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.initWG.Wait()
 
 	var shutdownErrors []error
 	var errMu sync.Mutex
@@ -2268,23 +2354,15 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		log.Error().Err(err).Str("component", component).Msg("shutdown error")
 	}
 
-	// Phase 1: stop accepting new requests.
-	log.Debug().Msg("shutdown phase 1: HTTP + gRPC servers")
 	if s.server != nil {
 		collectError("http_server", s.server.Shutdown(ctx))
 	}
 	if s.grpcServer != nil {
 		s.grpcServer.GracefulStop()
 	}
-
-	// Phase 2: stop filesystem watchers.
-	log.Debug().Msg("shutdown phase 2: watchers")
 	if s.configWatcher != nil {
 		_ = s.configWatcher.Stop()
 	}
-
-	// Phase 3: stop background workers.
-	log.Debug().Msg("shutdown phase 3: background workers")
 	if s.cognitiveQueueLifecycle != nil {
 		collectError("cognitive_hint_queue", s.cognitiveQueueLifecycle.Stop())
 	}
@@ -2292,14 +2370,17 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		s.writelintTokenStore.Close()
 	}
 
-	// Phase 4: flush pending session work.
-	log.Debug().Msg("shutdown phase 4: sessions")
+	s.initMu.RLock()
+	projectReaper := s.projectReaper
+	s.initMu.RUnlock()
+	if projectReaper != nil {
+		projectReaper.Stop()
+	}
+
 	if s.sessionManager != nil {
 		s.sessionManager.ShutdownAll(ctx)
 	}
 
-	// Phase 5: wait for all goroutines to exit.
-	log.Debug().Msg("shutdown phase 5: draining goroutines")
 	drained := make(chan struct{})
 	go func() {
 		s.wg.Wait()
@@ -2307,26 +2388,21 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	}()
 	select {
 	case <-drained:
-		log.Debug().Msg("all goroutines exited")
 	case <-ctx.Done():
 		log.Warn().Msg("shutdown: goroutine drain timed out, forcing")
 	}
 
-	// Phase 6 (placeholder): AI/ML model teardown — nothing to do currently.
-
-	// Phase 7: close database — done last so phases above can still query.
-	log.Debug().Msg("shutdown phase 7: database")
-	if s.store != nil {
-		collectError("database", s.store.Close())
+	s.initMu.RLock()
+	store := s.store
+	s.initMu.RUnlock()
+	if store != nil {
+		collectError("database", store.Close())
 	}
 
-	elapsed := time.Since(start)
 	if len(shutdownErrors) > 0 {
-		log.Warn().Int("errors", len(shutdownErrors)).Dur("elapsed", elapsed).Msg("shutdown completed with errors")
 		return shutdownErrors[0]
 	}
-
-	log.Info().Dur("elapsed", elapsed).Msg("graceful shutdown complete")
+	log.Info().Dur("elapsed", time.Since(start)).Msg("graceful shutdown complete")
 	return nil
 }
 

@@ -1,0 +1,22 @@
+{
+  "name": "engram",
+  "version": "6.47.0",
+  "description": "Persistent shared memory for Oh My Pi. Requires ENGRAM_URL and ENGRAM_TOKEN from a dashboard-issued worker keycard; the server operator key must stay on the server host.",
+  "author": {
+    "name": "thebtf"
+  },
+  "homepage": "https://github.com/thebtf/engram",
+  "repository": "https://github.com/thebtf/engram",
+  "license": "MIT",
+  "mcpServers": {
+    "engram": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "./scripts/run-engram.js"
+      ],
+      "cwd": ".",
+      "timeout": 60000
+    }
+  }
+}

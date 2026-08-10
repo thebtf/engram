@@ -5,7 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -357,3 +362,457 @@ func TestStore_Optimize(t *testing.T) {
 // TestStore_ConceptWeightsSeedCount was removed in CR-2b of provenance-cleanup:
 // migration 137 drops the concept_weights table and the ConceptWeight struct was
 // deleted, so the seed-count invariant no longer applies.
+
+func TestUserStore_CreateInitialAdminSerializesAcrossStores(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping initial admin integration test")
+	}
+	repeatableReadDSN := dsn + "&options=-c%20default_transaction_isolation%3Drepeatable%5C%20read"
+	stores := make([]*Store, 2)
+	for i := range stores {
+		store, err := NewStore(Config{DSN: repeatableReadDSN, MaxConns: 1, LogLevel: 0})
+		require.NoError(t, err)
+		stores[i] = store
+		var isolation string
+		require.NoError(t, store.DB.Raw("SHOW default_transaction_isolation").Scan(&isolation).Error)
+		require.Equal(t, "repeatable read", isolation)
+	}
+	t.Cleanup(func() {
+		for _, store := range stores {
+			_ = store.Close()
+		}
+	})
+
+	var usersBefore int64
+	require.NoError(t, stores[0].DB.Model(&User{}).Count(&usersBefore).Error)
+	require.Zero(t, usersBefore, "initial-admin setup requires an empty test database")
+	prefix := fmt.Sprintf("zz-initial-admin-store-race-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = stores[0].DB.Exec(`DELETE FROM audit_log WHERE action = 'auth_setup_completed' AND actor LIKE ?`, prefix+"%@example.com").Error
+		_ = stores[0].DB.Exec(`DELETE FROM users WHERE email LIKE ?`, prefix+"%@example.com").Error
+		_ = stores[0].DB.Exec(`DROP TRIGGER IF EXISTS initial_admin_setup_delay ON users`).Error
+		_ = stores[0].DB.Exec(`DROP FUNCTION IF EXISTS initial_admin_setup_delay()`).Error
+	})
+	require.NoError(t, stores[0].DB.Exec(`CREATE FUNCTION initial_admin_setup_delay() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.2); RETURN NEW; END; $$`).Error)
+	require.NoError(t, stores[0].DB.Exec(`CREATE TRIGGER initial_admin_setup_delay BEFORE INSERT ON users FOR EACH ROW WHEN (NEW.email LIKE 'zz-initial-admin-store-race-%') EXECUTE FUNCTION initial_admin_setup_delay()`).Error)
+
+	start := make(chan struct{})
+	results := make(chan error, len(stores))
+	var wg sync.WaitGroup
+	for i, store := range stores {
+		wg.Add(1)
+		go func(i int, store *Store) {
+			defer wg.Done()
+			<-start
+			_, err := NewUserStore(store.DB).CreateInitialAdmin(context.Background(), fmt.Sprintf("%s-%d@example.com", prefix, i), "hash", NewDomainOwnerStore(store))
+			results <- err
+		}(i, store)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+			continue
+		}
+		require.ErrorIs(t, err, ErrInitialAdminSetupAlreadyCompleted)
+	}
+	require.Equal(t, 1, successes)
+	var usersAfter int64
+	require.NoError(t, stores[0].DB.Model(&User{}).Count(&usersAfter).Error)
+	require.Equal(t, int64(1), usersAfter)
+}
+
+func TestUserStore_InitialAdminAndAuthentikProvisioningSchedules(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	users := NewUserStore(store.DB)
+
+	for _, setupFirst := range []bool{false, true} {
+		t.Run(map[bool]string{false: "Authentik before setup", true: "setup before Authentik"}[setupFirst], func(t *testing.T) {
+			var existing int64
+			require.NoError(t, store.DB.Model(&User{}).Count(&existing).Error)
+			require.Zero(t, existing, "mixed-writer regression requires an empty test database")
+
+			prefix := fmt.Sprintf("zz-initial-admin-authentik-%d", time.Now().UnixNano())
+			adminEmail := prefix + "-admin@example.com"
+			operatorEmail := prefix + "-operator@example.com"
+			t.Cleanup(func() {
+				_ = store.DB.Exec(`DELETE FROM audit_log WHERE action = 'auth_setup_completed' AND actor = ?`, adminEmail).Error
+				_ = store.DB.Exec(`DELETE FROM users WHERE email IN (?, ?)`, adminEmail, operatorEmail).Error
+			})
+
+			if !setupFirst {
+				operator, err := users.ProvisionAuthentikOperator(context.Background(), operatorEmail)
+				require.ErrorIs(t, err, ErrInitialAdminSetupRequired)
+				require.Nil(t, operator)
+				var stranded int64
+				require.NoError(t, store.DB.Model(&User{}).Count(&stranded).Error)
+				require.Zero(t, stranded, "pre-setup Authentik provisioning must not create an operator")
+			}
+
+			admin, err := users.CreateInitialAdmin(context.Background(), adminEmail, "hash", NewDomainOwnerStore(store))
+			require.NoError(t, err)
+			require.Equal(t, DashboardRoleAdmin, admin.Role)
+
+			operator, err := users.ProvisionAuthentikOperator(context.Background(), operatorEmail)
+			require.NoError(t, err)
+			require.Equal(t, DashboardRoleOperator, operator.Role)
+
+			results := make(chan *User, 2)
+			errs := make(chan error, 2)
+			for range 2 {
+				go func() {
+					user, err := users.ProvisionAuthentikOperator(context.Background(), operatorEmail)
+					results <- user
+					errs <- err
+				}()
+			}
+			for range 2 {
+				require.NoError(t, <-errs)
+				require.Equal(t, operator.ID, (<-results).ID)
+			}
+
+			var userCount, auditCount int64
+			require.NoError(t, store.DB.Model(&User{}).Where("email IN ?", []string{adminEmail, operatorEmail}).Count(&userCount).Error)
+			require.Equal(t, int64(2), userCount)
+			require.NoError(t, store.DB.Model(&AuditLogEntry{}).Where("action = ? AND actor = ?", "auth_setup_completed", adminEmail).Count(&auditCount).Error)
+			require.Equal(t, int64(1), auditCount)
+		})
+	}
+}
+
+func TestAuditStore_RetentionPreservesInitialAdminSetupProof(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	users := NewUserStore(store.DB)
+	prefix := fmt.Sprintf("zz-audit-retention-%d", time.Now().UnixNano())
+	adminEmail := prefix + "-admin@example.com"
+	operatorEmail := prefix + "-operator@example.com"
+	ordinaryAction := "ordinary_retention_test"
+	t.Cleanup(func() {
+		_ = store.DB.Where("action = ? AND actor = ?", authSetupCompletedAuditAction, adminEmail).Delete(&AuditLogEntry{}).Error
+		_ = store.DB.Where("action = ? AND actor = ?", ordinaryAction, adminEmail).Delete(&AuditLogEntry{}).Error
+		_ = store.DB.Where("email IN ?", []string{adminEmail, operatorEmail}).Delete(&User{}).Error
+	})
+
+	_, err := users.CreateInitialAdmin(context.Background(), adminEmail, "hash", NewDomainOwnerStore(store))
+	require.NoError(t, err)
+	old := time.Now().UTC().AddDate(0, 0, -91)
+	require.NoError(t, store.DB.Model(&AuditLogEntry{}).
+		Where("action = ? AND actor = ?", authSetupCompletedAuditAction, adminEmail).
+		Update("created_at", old).Error)
+	require.NoError(t, store.DB.Create(&AuditLogEntry{Action: ordinaryAction, Actor: adminEmail, CreatedAt: old}).Error)
+
+	deleted, err := NewAuditStore(store.DB).DeleteOlderThan(context.Background(), time.Now().UTC().AddDate(0, 0, -90))
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, deleted, int64(1))
+
+	var setupProofs, ordinaryRows int64
+	require.NoError(t, store.DB.Model(&AuditLogEntry{}).Where("action = ? AND actor = ?", authSetupCompletedAuditAction, adminEmail).Count(&setupProofs).Error)
+	require.NoError(t, store.DB.Model(&AuditLogEntry{}).Where("action = ? AND actor = ?", ordinaryAction, adminEmail).Count(&ordinaryRows).Error)
+	require.Equal(t, int64(1), setupProofs)
+	require.Zero(t, ordinaryRows)
+
+	operator, err := users.ProvisionAuthentikOperator(context.Background(), operatorEmail)
+	require.NoError(t, err)
+	require.Equal(t, DashboardRoleOperator, operator.Role)
+}
+
+func TestUserStore_InitialAdminAndAuthentikProvisioningConcurrent(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	users := NewUserStore(store.DB)
+	var existing int64
+	require.NoError(t, store.DB.Model(&User{}).Count(&existing).Error)
+	require.Zero(t, existing, "mixed-writer regression requires an empty test database")
+
+	prefix := fmt.Sprintf("zz-initial-admin-authentik-race-%d", time.Now().UnixNano())
+	adminEmail := prefix + "-admin@example.com"
+	operatorEmail := prefix + "-operator@example.com"
+	t.Cleanup(func() {
+		_ = store.DB.Exec(`DELETE FROM audit_log WHERE action = 'auth_setup_completed' AND actor = ?`, adminEmail).Error
+		_ = store.DB.Exec(`DELETE FROM users WHERE email IN (?, ?)`, adminEmail, operatorEmail).Error
+	})
+
+	type provisionResult struct {
+		user *User
+		err  error
+	}
+	start := make(chan struct{})
+	setupResult := make(chan error, 1)
+	provisionResultCh := make(chan provisionResult, 1)
+	go func() {
+		<-start
+		_, err := users.CreateInitialAdmin(context.Background(), adminEmail, "hash", NewDomainOwnerStore(store))
+		setupResult <- err
+	}()
+	go func() {
+		<-start
+		user, err := users.ProvisionAuthentikOperator(context.Background(), operatorEmail)
+		provisionResultCh <- provisionResult{user: user, err: err}
+	}()
+	close(start)
+
+	require.NoError(t, <-setupResult)
+	provision := <-provisionResultCh
+	if errors.Is(provision.err, ErrInitialAdminSetupRequired) {
+		provision.user, provision.err = users.ProvisionAuthentikOperator(context.Background(), operatorEmail)
+	}
+	require.NoError(t, provision.err)
+	require.Equal(t, DashboardRoleOperator, provision.user.Role)
+
+	var userCount, auditCount int64
+	require.NoError(t, store.DB.Model(&User{}).Where("email IN ?", []string{adminEmail, operatorEmail}).Count(&userCount).Error)
+	require.Equal(t, int64(2), userCount)
+	require.NoError(t, store.DB.Model(&AuditLogEntry{}).Where("action = ? AND actor = ?", "auth_setup_completed", adminEmail).Count(&auditCount).Error)
+	require.Equal(t, int64(1), auditCount)
+}
+
+const (
+	initialAdminProcessChildEnv   = "ENGRAM_INITIAL_ADMIN_PROCESS_CHILD"
+	initialAdminProcessDSNEnv     = "ENGRAM_INITIAL_ADMIN_PROCESS_DSN"
+	initialAdminProcessEmailEnv   = "ENGRAM_INITIAL_ADMIN_PROCESS_EMAIL"
+	initialAdminProcessSlotEnv    = "ENGRAM_INITIAL_ADMIN_PROCESS_SLOT"
+	initialAdminProcessBarrierEnv = "ENGRAM_INITIAL_ADMIN_PROCESS_BARRIER"
+)
+
+func TestUserStore_CreateInitialAdminSerializesAcrossProcesses(t *testing.T) {
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("DATABASE_DSN not set, skipping initial admin process integration test")
+	}
+	store := openStoreForStoreTest(t)
+	var usersBefore int64
+	require.NoError(t, store.DB.Model(&User{}).Count(&usersBefore).Error)
+	require.Zero(t, usersBefore, "initial-admin setup requires an empty test database")
+	prefix := fmt.Sprintf("zz-initial-admin-process-race-%d", time.Now().UnixNano())
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+	barrierName := "initial_admin_process_barrier_" + suffix
+	delayFunctionName := "initial_admin_process_delay_" + suffix
+	delayTriggerName := "initial_admin_process_trigger_" + suffix
+	t.Cleanup(func() {
+		_ = store.DB.Exec(`DELETE FROM audit_log WHERE action = 'auth_setup_completed' AND actor LIKE ?`, prefix+"%@example.com").Error
+		_ = store.DB.Exec(`DELETE FROM users WHERE email LIKE ?`, prefix+"%@example.com").Error
+		_ = store.DB.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON users`, delayTriggerName)).Error
+		_ = store.DB.Exec(fmt.Sprintf(`DROP FUNCTION IF EXISTS %s()`, delayFunctionName)).Error
+		_ = store.DB.Exec(fmt.Sprintf(`DROP TABLE IF EXISTS %s`, barrierName)).Error
+	})
+	require.NoError(t, store.DB.Exec(fmt.Sprintf(`CREATE TABLE %s (slot integer PRIMARY KEY, released boolean NOT NULL DEFAULT false)`, barrierName)).Error)
+	require.NoError(t, store.DB.Exec(fmt.Sprintf(`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.2); RETURN NEW; END; $$`, delayFunctionName)).Error)
+	require.NoError(t, store.DB.Exec(fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT ON users FOR EACH ROW WHEN (NEW.email LIKE 'zz-initial-admin-process-race-%%') EXECUTE FUNCTION %s()`, delayTriggerName, delayFunctionName)).Error)
+
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	repeatableReadDSN := dsn + "&options=-c%20default_transaction_isolation%3Drepeatable%5C%20read"
+	type processResult struct {
+		output string
+		err    error
+	}
+	results := make(chan processResult, 2)
+	for slot := range 2 {
+		go func(slot int) {
+			cmd := exec.CommandContext(ctx, executable, "-test.run=^TestUserStore_CreateInitialAdminProcessHelper$", "-test.count=1")
+			cmd.Env = append(os.Environ(),
+				initialAdminProcessChildEnv+"=1",
+				initialAdminProcessDSNEnv+"="+repeatableReadDSN,
+				initialAdminProcessEmailEnv+"="+fmt.Sprintf("%s-%d@example.com", prefix, slot),
+				initialAdminProcessSlotEnv+"="+strconv.Itoa(slot),
+				initialAdminProcessBarrierEnv+"="+barrierName,
+			)
+			output, err := cmd.CombinedOutput()
+			results <- processResult{output: string(output), err: err}
+		}(slot)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var ready int64
+		require.NoError(t, store.DB.Table(barrierName).Count(&ready).Error)
+		if ready == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("initial admin child processes did not reach the database barrier")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.NoError(t, store.DB.Exec(fmt.Sprintf(`UPDATE %s SET released = true`, barrierName)).Error)
+
+	successes := 0
+	conflicts := 0
+	for range 2 {
+		result := <-results
+		require.NoError(t, result.err, result.output)
+		switch {
+		case strings.Contains(result.output, "INITIAL_ADMIN_RESULT=SUCCESS"):
+			successes++
+		case strings.Contains(result.output, "INITIAL_ADMIN_RESULT=CONFLICT"):
+			conflicts++
+		default:
+			t.Fatalf("initial admin child produced no result marker: %s", result.output)
+		}
+	}
+	require.Equal(t, 1, successes)
+	require.Equal(t, 1, conflicts)
+	var usersAfter int64
+	require.NoError(t, store.DB.Model(&User{}).Count(&usersAfter).Error)
+	require.Equal(t, int64(1), usersAfter)
+	var auditsAfter int64
+	require.NoError(t, store.DB.Model(&AuditLogEntry{}).Where("action = ? AND actor LIKE ?", "auth_setup_completed", prefix+"%@example.com").Count(&auditsAfter).Error)
+	require.Equal(t, int64(1), auditsAfter)
+}
+
+func TestUserStore_CreateInitialAdminProcessHelper(t *testing.T) {
+	if os.Getenv(initialAdminProcessChildEnv) != "1" {
+		return
+	}
+	dsn := os.Getenv(initialAdminProcessDSNEnv)
+	email := os.Getenv(initialAdminProcessEmailEnv)
+	slot, err := strconv.Atoi(os.Getenv(initialAdminProcessSlotEnv))
+	barrierName := os.Getenv(initialAdminProcessBarrierEnv)
+	require.NoError(t, err)
+	store, err := NewStore(Config{DSN: dsn, MaxConns: 1, LogLevel: 0})
+	require.NoError(t, err)
+	defer store.Close()
+	var isolation string
+	require.NoError(t, store.DB.Raw("SHOW default_transaction_isolation").Scan(&isolation).Error)
+	require.Equal(t, "repeatable read", isolation)
+	require.NoError(t, store.DB.Exec(fmt.Sprintf(`INSERT INTO %s (slot) VALUES (?)`, barrierName), slot).Error)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var released bool
+		require.NoError(t, store.DB.Raw(fmt.Sprintf(`SELECT COALESCE(bool_or(released), false) FROM %s`, barrierName)).Scan(&released).Error)
+		if released {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("initial admin process release barrier timed out")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_, err = NewUserStore(store.DB).CreateInitialAdmin(context.Background(), email, "hash", NewDomainOwnerStore(store))
+	switch {
+	case err == nil:
+		fmt.Fprintln(os.Stdout, "INITIAL_ADMIN_RESULT=SUCCESS")
+	case errors.Is(err, ErrInitialAdminSetupAlreadyCompleted):
+		fmt.Fprintln(os.Stdout, "INITIAL_ADMIN_RESULT=CONFLICT")
+	default:
+		t.Fatal(err)
+	}
+}
+
+func TestUserStore_CreateInitialAdminRollsBackOnAuditFailure(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	var usersBefore int64
+	require.NoError(t, store.DB.Model(&User{}).Count(&usersBefore).Error)
+	require.Zero(t, usersBefore, "initial-admin setup requires an empty test database")
+	prefix := fmt.Sprintf("zz-initial-admin-audit-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = store.DB.Exec(`DELETE FROM users WHERE email = ?`, prefix+"@example.com").Error
+		_ = store.DB.Exec(`DROP TRIGGER IF EXISTS initial_admin_audit_failure ON audit_log`).Error
+		_ = store.DB.Exec(`DROP FUNCTION IF EXISTS initial_admin_audit_failure()`).Error
+	})
+	require.NoError(t, store.DB.Exec(`CREATE FUNCTION initial_admin_audit_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action = 'auth_setup_completed' THEN RAISE EXCEPTION 'forced initial admin audit failure'; END IF; RETURN NEW; END; $$`).Error)
+	require.NoError(t, store.DB.Exec(`CREATE TRIGGER initial_admin_audit_failure BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION initial_admin_audit_failure()`).Error)
+
+	_, err := NewUserStore(store.DB).CreateInitialAdmin(context.Background(), prefix+"@example.com", "hash", NewDomainOwnerStore(store))
+	require.Error(t, err)
+	var usersAfter int64
+	require.NoError(t, store.DB.Model(&User{}).Count(&usersAfter).Error)
+	require.Zero(t, usersAfter, "failed setup audit must roll back the initial admin")
+}
+
+func TestUserStore_CreateInitialAdminConcurrentDuplicateEmailFailsSafely(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	count, err := NewUserStore(store.DB).CountUsers()
+	require.NoError(t, err)
+	require.Zero(t, count, "initial-admin setup requires an empty test database")
+
+	email := fmt.Sprintf("zz-initial-admin-duplicate-%d@example.com", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = store.DB.Exec(`DELETE FROM users WHERE email = ?`, email).Error
+	})
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			_, err := NewUserStore(store.DB).CreateInitialAdmin(context.Background(), email, "hash", nil)
+			results <- err
+		}()
+	}
+	close(start)
+
+	successes := 0
+	for range 2 {
+		err := <-results
+		if err == nil {
+			successes++
+			continue
+		}
+		require.ErrorIs(t, err, ErrInitialAdminSetupAlreadyCompleted)
+	}
+	require.Equal(t, 1, successes)
+	count, err = NewUserStore(store.DB).CountUsers()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+}
+
+func TestUserStore_CreateInitialAdminContextCancellationLeavesSetupRetryable(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	users := NewUserStore(store.DB)
+	count, err := users.CountUsers()
+	require.NoError(t, err)
+	require.Zero(t, count, "initial-admin setup requires an empty test database")
+
+	retryEmail := fmt.Sprintf("zz-initial-admin-retry-%d@example.com", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = store.DB.Exec(`DELETE FROM users WHERE email = ?`, retryEmail).Error
+	})
+	lockTx := store.DB.Begin()
+	require.NoError(t, lockTx.Error)
+	require.NoError(t, lockTx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "initial-admin-setup").Error)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	created, err := users.CreateInitialAdmin(ctx, "cancelled@example.com", "hash", nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, created)
+	require.NoError(t, lockTx.Rollback().Error)
+
+	count, err = users.CountUsers()
+	require.NoError(t, err)
+	require.Zero(t, count)
+	created, err = users.CreateInitialAdmin(context.Background(), retryEmail, "hash", nil)
+	require.NoError(t, err)
+	require.NotNil(t, created)
+}
+
+func TestUserStore_CreateInitialAdminInsertFailureRollsBackAndLeavesSetupRetryable(t *testing.T) {
+	store := openStoreForStoreTest(t)
+	users := NewUserStore(store.DB)
+	count, err := users.CountUsers()
+	require.NoError(t, err)
+	require.Zero(t, count, "initial-admin setup requires an empty test database")
+
+	retryEmail := fmt.Sprintf("zz-initial-admin-retry-%d@example.com", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = store.DB.Exec(`DELETE FROM users WHERE email = ?`, retryEmail).Error
+	})
+	created, err := users.CreateInitialAdmin(context.Background(), "too-long-hash@example.com", strings.Repeat("x", 256), nil)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrInitialAdminSetupAlreadyCompleted)
+	require.Nil(t, created)
+
+	count, err = users.CountUsers()
+	require.NoError(t, err)
+	require.Zero(t, count)
+	created, err = users.CreateInitialAdmin(context.Background(), retryEmail, "hash", nil)
+	require.NoError(t, err)
+	require.NotNil(t, created)
+}

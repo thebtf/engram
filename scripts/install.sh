@@ -2,10 +2,6 @@
 # engram installer — macOS / Linux / Git-Bash
 #
 # One-shot install from GitHub releases:
-#   curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash
-#
-# Pin a specific release tag:
-#   curl -sSL https://raw.githubusercontent.com/thebtf/engram/main/scripts/install.sh | bash -s -- v1.0.0
 #
 # Flags (order-independent):
 #   --full           install server binary in addition to plugin files
@@ -61,6 +57,16 @@ info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
 success() { echo -e "${GREEN}[OK]${NC} $1"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error()   { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+
+# The release policy is validated before any release files are installed.
+require_node() {
+    command -v node &> /dev/null || error "Node.js 18+ is required to validate the release bootstrap policy. Install Node.js 18 or newer and re-run this installer."
+    local node_version
+    node_version=$(node --version 2>/dev/null)
+    if ! [[ "$node_version" =~ ^v?([0-9]+)\. ]] || (( BASH_REMATCH[1] < 18 )); then
+        error "Node.js 18+ is required to validate the release bootstrap policy. Found ${node_version:-an invalid version}; install Node.js 18 or newer and re-run this installer."
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # Platform detection
@@ -122,11 +128,7 @@ Options:
     fi
 
     version=$(echo "$response" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-
-    if [[ -z "$version" ]]; then
-        error "Could not parse release tag from GitHub API. Response: $response"
-    fi
-
+    [[ -n "$version" ]] || error "Could not parse release tag from GitHub API. Response: $response"
     echo "$version"
 }
 
@@ -139,12 +141,14 @@ download_release() {
     local tmp_dir archive_ext archive_name download_url
 
     tmp_dir=$(mktemp -d)
-    trap "rm -rf $tmp_dir" EXIT
+    # shellcheck disable=SC2064 # Capture this per-install temp directory now.
+    trap "rm -rf -- $(printf '%q' "$tmp_dir")" EXIT
 
     # Windows releases use zip; everything else uses tar.gz
     archive_ext="tar.gz"
     if [[ "$platform" == windows_* ]]; then
         archive_ext="zip"
+        command -v unzip &> /dev/null || error "unzip is required for Windows-compatible Bash installs"
     fi
 
     archive_name="engram_${version#v}_${platform}.${archive_ext}"
@@ -161,6 +165,89 @@ download_release() {
     else
         tar -xzf "$tmp_dir/release.tar.gz" -C "$tmp_dir" || error "Failed to extract tar.gz"
     fi
+
+    [[ -d "$tmp_dir/scripts" ]] \
+        || error "Release archive is missing required scripts directory"
+    compgen -G "$tmp_dir/scripts/*.js" > /dev/null \
+        || error "Release archive is missing required JS scripts"
+    [[ -f "$tmp_dir/bootstrap-targets.json" ]] \
+        || error "Release archive is missing required bootstrap-targets.json"
+    # This validator is part of the trusted installer, not the release archive.
+    # A release payload must never be allowed to validate its own policy.
+    node - "$tmp_dir/bootstrap-targets.json" "${version#v}" <<'NODE' \
+        || error "Release archive has an invalid bootstrap policy"
+const fs = require('node:fs');
+const [file, version] = process.argv.slice(2);
+const assets = { 'win32-x64': 'engram-windows-amd64.exe', 'linux-x64': 'engram-linux-amd64', 'darwin-arm64': 'engram-darwin-arm64' };
+const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9A-Za-z-][0-9A-Za-z-]*))*)?$/;
+const sha256 = /^[0-9a-f]{64}$/;
+const exact = (value, fields) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join('\0') !== [...fields].sort().join('\0')) throw new Error('unknown or missing fields');
+};
+const assertNoDuplicateProperties = (text) => {
+  let cursor = 0;
+  const skip = () => { while (/\s/.test(text[cursor])) cursor += 1; };
+  const string = () => {
+    if (text[cursor] !== '"') throw new Error('bootstrap policy is not valid JSON');
+    const start = cursor++;
+    while (cursor < text.length) {
+      const character = text[cursor++];
+      if (character === '"') return JSON.parse(text.slice(start, cursor));
+      if (character === '\\') { if (text[cursor++] === 'u') cursor += 4; }
+      else if (character < ' ') throw new Error('bootstrap policy is not valid JSON');
+    }
+    throw new Error('bootstrap policy is not valid JSON');
+  };
+  const value = () => {
+    skip();
+    if (text[cursor] === '"') { string(); return; }
+    if (text[cursor] === '{') {
+      cursor += 1; skip();
+      const keys = new Set();
+      if (text[cursor] === '}') { cursor += 1; return; }
+      for (;;) {
+        skip(); const key = string();
+        if (keys.has(key)) throw new Error('bootstrap policy has duplicate fields');
+        keys.add(key); skip();
+        if (text[cursor++] !== ':') throw new Error('bootstrap policy is not valid JSON');
+        value(); skip();
+        if (text[cursor] === '}') { cursor += 1; return; }
+        if (text[cursor++] !== ',') throw new Error('bootstrap policy is not valid JSON');
+      }
+    }
+    if (text[cursor] === '[') {
+      cursor += 1; skip();
+      if (text[cursor] === ']') { cursor += 1; return; }
+      for (;;) {
+        value(); skip();
+        if (text[cursor] === ']') { cursor += 1; return; }
+        if (text[cursor++] !== ',') throw new Error('bootstrap policy is not valid JSON');
+      }
+    }
+    const token = /^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/.exec(text.slice(cursor));
+    if (!token) throw new Error('bootstrap policy is not valid JSON');
+    cursor += token[0].length;
+  };
+  value(); skip();
+  if (cursor !== text.length) throw new Error('bootstrap policy is not valid JSON');
+};
+const text = fs.readFileSync(file, 'utf8');
+assertNoDuplicateProperties(text);
+const policy = JSON.parse(text);
+exact(policy, ['schema_version', 'launcher_security_epoch', 'package_version', 'daemon_compat_epoch', 'targets', 'revoked_sha256', 'build_contract']);
+if (policy.schema_version !== 1 || policy.launcher_security_epoch !== 1 || policy.daemon_compat_epoch !== 1 || policy.package_version !== version || !semver.test(version)) throw new Error('schema or version mismatch');
+exact(policy.build_contract, ['go_version', 'trimpath', 'buildvcs', 'client_cgo', 'daemon_version_ldflag']);
+if (policy.build_contract.go_version !== '1.25.12' || policy.build_contract.trimpath !== true || policy.build_contract.buildvcs !== false || policy.build_contract.client_cgo !== false || policy.build_contract.daemon_version_ldflag !== `v${version}`) throw new Error('unsupported build contract');
+if (!Array.isArray(policy.revoked_sha256) || policy.revoked_sha256.some((hash) => typeof hash !== 'string' || !sha256.test(hash)) || new Set(policy.revoked_sha256).size !== policy.revoked_sha256.length) throw new Error('invalid revocation list');
+exact(policy.targets, Object.keys(assets));
+for (const [key, asset] of Object.entries(assets)) {
+  const target = policy.targets[key];
+  exact(target, ['desired', 'predecessor']);
+  if (target.predecessor !== null) throw new Error('predecessor is not allowed');
+  exact(target.desired, ['version', 'asset', 'size', 'sha256']);
+  if (target.desired.version !== version || target.desired.asset !== asset || !Number.isSafeInteger(target.desired.size) || target.desired.size <= 0 || target.desired.size > 128 * 1024 * 1024 || !sha256.test(target.desired.sha256) || policy.revoked_sha256.includes(target.desired.sha256)) throw new Error(`invalid target ${key}`);
+}
+NODE
 
     info "Installing to ${INSTALL_DIR}..."
     mkdir -p "$INSTALL_DIR/hooks" "$INSTALL_DIR/scripts" "$INSTALL_DIR/.claude-plugin" "$INSTALL_DIR/commands"
@@ -180,10 +267,10 @@ download_release() {
     cp "$tmp_dir/hooks/hooks.json" "$INSTALL_DIR/hooks/" \
         || error "Failed to copy hooks.json from $tmp_dir/hooks/"
 
-    [[ -d "$tmp_dir/scripts" ]] \
-        || error "Release archive is missing required scripts directory"
     cp "$tmp_dir/scripts/"*.js "$INSTALL_DIR/scripts/" \
         || error "Failed to copy JS scripts from $tmp_dir/scripts/"
+    cp "$tmp_dir/bootstrap-targets.json" "$INSTALL_DIR/" \
+        || error "Failed to copy bootstrap policy from release archive"
 
     cp "$tmp_dir/.claude-plugin/"* "$INSTALL_DIR/.claude-plugin/"
 
@@ -218,7 +305,7 @@ download_release() {
 # ---------------------------------------------------------------------------
 register_plugin() {
     local version="$1"
-    local timestamp cache_base cache_path plugin_entry statusline_cmd statusline_entry marketplace_entry
+    local timestamp cache_path plugin_entry statusline_cmd statusline_entry marketplace_entry
 
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
@@ -313,7 +400,7 @@ setup_connection() {
     echo ""
 
     local default_url="http://localhost:37777/mcp"
-    read -p "  Server URL [${default_url}]: " ENGRAM_URL
+    read -r -p "  Server URL [${default_url}]: " ENGRAM_URL
     ENGRAM_URL="${ENGRAM_URL:-$default_url}"
 
     # Callers sometimes forget the MCP path segment
@@ -322,7 +409,7 @@ setup_connection() {
         info "Added /mcp suffix: $ENGRAM_URL"
     fi
 
-    read -p "  API Token (leave blank for no auth): " ENGRAM_API_TOKEN
+    read -r -p "  API Token (leave blank for no auth): " ENGRAM_API_TOKEN
     ENGRAM_API_TOKEN="${ENGRAM_API_TOKEN:-}"
 
     # Persist to whichever shell profile is present
@@ -340,9 +427,11 @@ setup_connection() {
         sed -i.bak '/^export ENGRAM_API_TOKEN=/d' "$shell_profile" 2>/dev/null || true
         sed -i.bak '/^export ENGRAM_TOKEN=/d' "$shell_profile" 2>/dev/null || true
         rm -f "${shell_profile}.bak"
-        printf 'export ENGRAM_URL=%q\n' "$ENGRAM_URL"           >> "$shell_profile"
-        printf 'export ENGRAM_API_TOKEN=%q\n' "$ENGRAM_API_TOKEN" >> "$shell_profile"
-        printf 'export ENGRAM_TOKEN=%q\n'     "$ENGRAM_API_TOKEN" >> "$shell_profile"
+        {
+            printf 'export ENGRAM_URL=%q\n' "$ENGRAM_URL"
+            printf 'export ENGRAM_API_TOKEN=%q\n' "$ENGRAM_API_TOKEN"
+            printf 'export ENGRAM_TOKEN=%q\n' "$ENGRAM_API_TOKEN"
+        } >> "$shell_profile"
         success "Environment variables written to $shell_profile"
     else
         warn "Could not detect a shell profile. Set these manually:"
@@ -382,11 +471,18 @@ main() {
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
 
-    command -v curl &> /dev/null || error "curl is required but not installed"
-    command -v tar  &> /dev/null || error "tar is required but not installed"
+    require_node
 
     local platform
     platform=$(detect_platform)
+
+    if [[ "$platform" == windows_* ]]; then
+        command -v unzip &> /dev/null || error "unzip is required for Windows-compatible Bash installs"
+    fi
+
+    command -v curl &> /dev/null || error "curl is required but not installed"
+    command -v tar  &> /dev/null || error "tar is required but not installed"
+
     info "Detected platform: $platform"
 
     if [[ -z "$version" ]]; then
@@ -422,6 +518,7 @@ main() {
 # Entry points for non-default modes
 # ---------------------------------------------------------------------------
 if [[ "$FLAG_REGISTER_ONLY" == "true" ]]; then
+    require_node
     version=$(grep '"version"' "$INSTALL_DIR/.claude-plugin/plugin.json" 2>/dev/null \
               | sed -E 's/.*"([^"]+)".*/\1/' || echo "1.0.0")
     register_plugin "v$version"

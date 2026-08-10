@@ -582,7 +582,6 @@ func (u *Updater) replaceBinaries(extractDir string) error {
 		"mcp-server",
 		"hooks/session-start",
 		"hooks/user-prompt",
-		"hooks/post-tool-use",
 		"hooks/stop",
 		"hooks/subagent-stop",
 		"hooks/statusline",

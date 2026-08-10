@@ -8,10 +8,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
+
+const expectedReadOnlyMutationError = "read_only: action is not permitted"
 
 var removedLegacyMCPToolNames = []string{
 	"find_by_file", "find_similar_observations", "get_memory_stats",
@@ -655,25 +660,40 @@ func TestHandleToolsCall_UnknownTool(t *testing.T) {
 	assert.Equal(t, -32000, resp.Error.Code)
 }
 
-func TestSanitizeToolCallArgs_RememberDirectiveRedactsRawLogArguments(t *testing.T) {
-	t.Parallel()
-	args := json.RawMessage(`{"text":"RAW_DIRECTIVE_NEVER_LOG","source_turn":"RAW_SOURCE_TURN_NEVER_LOG","privacy_class":"secret"}`)
+func TestHandleToolsCall_ArgumentsNeverReachErrorLogs(t *testing.T) {
+	const sentinel = "OPAQUE_VALUE_NEVER_LOG"
+	server := NewServer(ServerOptions{Version: "test"})
 
-	got := sanitizeToolCallArgs("remember_directive", args)
+	for _, testCase := range []struct {
+		name string
+		args string
+		ctx  context.Context
+	}{
+		{"docs", `{"action":"create","content":"OPAQUE_VALUE_NEVER_LOG"}`, auth.WithIdentity(context.Background(), auth.Client("read-only", "keycard-read-only"))},
+		{"vault", `{"action":"store","name":"credential","value":"OPAQUE_VALUE_NEVER_LOG"}`, auth.WithIdentity(context.Background(), auth.Client("read-write", "keycard-read-write"))},
+		{"settings", `{"action":"set","key":"reranker.url","value":"OPAQUE_VALUE_NEVER_LOG"}`, auth.WithIdentity(context.Background(), auth.Client("read-write", "keycard-read-write"))},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			original := log.Logger
+			log.Logger = zerolog.New(&logs)
+			t.Cleanup(func() { log.Logger = original })
 
-	assert.Equal(t, "<redacted>", got)
-	assert.NotContains(t, got, "RAW_DIRECTIVE_NEVER_LOG")
-	assert.NotContains(t, got, "RAW_SOURCE_TURN_NEVER_LOG")
-}
+			response := server.HandleRequest(testCase.ctx, &Request{
+				JSONRPC: "2.0", ID: float64(1), Method: "tools/call",
+				Params: json.RawMessage(`{"name":"` + testCase.name + `","arguments":` + testCase.args + `}`),
+			})
 
-func TestSanitizeToolCallArgs_OtherToolsStillRedactSecrets(t *testing.T) {
-	t.Parallel()
-	args := json.RawMessage(`{"content":"api_key=abc123def456ghi789jkl012mno345pqr678"}`)
-
-	got := sanitizeToolCallArgs("store", args)
-
-	assert.NotContains(t, got, "abc123def456ghi789jkl012mno345pqr678")
-	assert.Contains(t, got, "[REDACTED:")
+			require.NotNil(t, response.Error)
+			assert.NotContains(t, response.Error.Message, sentinel)
+			assert.NotContains(t, response.Error.Data, sentinel)
+			assert.NotContains(t, logs.String(), sentinel)
+			assert.NotContains(t, logs.String(), `"args"`)
+			assert.Contains(t, logs.String(), `"tool":"`+testCase.name+`"`)
+			assert.Contains(t, logs.String(), `"auth_source":"client"`)
+			assert.Contains(t, logs.String(), `"message":"Tool call failed"`)
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -686,6 +706,161 @@ func TestCallTool_UnknownToolReturnsError(t *testing.T) {
 	_, err := s.callTool(context.Background(), "nonexistent_tool", json.RawMessage(`{}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown tool")
+}
+
+func TestReadOnlyToolAllowed_DispatchAndActionInventory(t *testing.T) {
+	allowed := []struct{ name, args string }{
+		{"recall", `{}`}, {"recall", `{"action":"search"}`},
+		{"docs", `{"action":"read"}`}, {"docs", `{"action":"list"}`}, {"docs", `{"action":"history"}`}, {"docs", `{"action":"collections"}`}, {"docs", `{"action":"documents"}`}, {"docs", `{"action":"get_doc"}`},
+		{"issues", `{}`}, {"issues", `{"action":"list"}`}, {"issues", `{"action":"get"}`},
+		{"lifecycle", `{"action":"info"}`}, {"lifecycle", `{"action":"sleep_status"}`}, {"lifecycle", `{"action":"decay_preview"}`},
+		{"graph", `{"action":"get_edges"}`}, {"graph", `{"action":"traverse"}`}, {"graph", `{"action":"find_path"}`}, {"graph", `{"action":"synonyms"}`},
+		{"check_system_health", `{}`}, {"list_rules", `{}`}, {"recall_memory", `{}`}, {"know_about", `{}`}, {"query_principal_memory", `{}`}, {"experience_history.read", `{}`}, {"experience_history.detail", `{}`}, {"temporal_truth", `{}`}, {"get_memory_brief", `{}`}, {"list_candidates", `{}`}, {"get_candidate", `{}`}, {"review_metrics.read", `{}`}, {"review_queue.read", `{}`}, {"review_packet.detail", `{}`}, {"review_packet.preview_action", `{}`}, {"rule_governance_health", `{}`}, {"rule_governance_queue", `{}`}, {"rule_governance_snapshots", `{}`}, {"rule_governance_usefulness", `{}`}, {"codebase_search", `{}`}, {"codebase_status", `{}`},
+	}
+	denied := []struct{ name, args string }{
+		{"recall", `{"action":"future"}`},
+		{"store", `{}`}, {"store", `{"action":"create"}`}, {"store", `{"action":"edit"}`}, {"store", `{"action":"import"}`},
+		{"feedback", `{"action":"suppress"}`}, {"feedback", `{"action":"outcome"}`},
+		{"vault", `{"action":"store"}`}, {"vault", `{"action":"get"}`}, {"vault", `{"action":"list"}`}, {"vault", `{"action":"delete"}`}, {"vault", `{"action":"status"}`},
+		{"settings", `{"action":"set"}`}, {"settings", `{"action":"get"}`}, {"settings", `{"action":"list"}`}, {"settings", `{"action":"delete"}`},
+		{"docs", `{}`}, {"docs", `{"action":"create"}`}, {"docs", `{"action":"comment"}`}, {"docs", `{"action":"remove"}`}, {"docs", `{"action":"ingest"}`}, {"docs", `{"action":"future"}`},
+		{"admin", `{"action":"stats"}`}, {"admin", `{"action":"purge_project"}`},
+		{"issues", `{"action":"create"}`}, {"issues", `{"action":"update"}`}, {"issues", `{"action":"comment"}`}, {"issues", `{"action":"reopen"}`}, {"issues", `{"action":"close"}`}, {"issues", `{"action":"future"}`},
+		{"lifecycle", `{"action":"promote"}`}, {"lifecycle", `{"action":"demote"}`}, {"lifecycle", `{"action":"set_confidence"}`}, {"lifecycle", `{"action":"set_defeasibility"}`}, {"lifecycle", `{"action":"future"}`},
+		{"graph", `{"action":"add_edge"}`}, {"graph", `{"action":"remove_edge"}`}, {"graph", `{"action":"add_node"}`}, {"graph", `{"action":"future"}`},
+		{"store_rule", `{}`}, {"ingest", `{"action":"ingest"}`}, {"get_state", `{"action":"session"}`}, {"get_state", `{"action":"project"}`}, {"get_state", `{"action":"resume"}`}, {"set_state", `{"action":"session"}`}, {"set_state", `{"action":"project"}`}, {"temporal_truth_refresh", `{}`}, {"remember_directive", `{}`}, {"rate_memory_significance", `{}`}, {"get_ambient_hints", `{}`},
+		{"promote_candidate", `{}`}, {"reject_candidate", `{}`}, {"supersede_candidate", `{}`}, {"review_packet.apply_action", `{}`}, {"list_snapshots", `{}`}, {"rollback_snapshot", `{}`}, {"pin_snapshot", `{}`}, {"redaction_rules_status", `{}`}, {"rule_governance_transition", `{}`}, {"rule_governance_pin_snapshot", `{}`}, {"rule_governance_rollback", `{}`}, {"bulk_promote", `{}`}, {"bulk_delete", `{}`}, {"bulk_supersede", `{}`},
+		{"future_tool", `{}`},
+	}
+
+	for _, testCase := range allowed {
+		t.Run("allow/"+testCase.name+testCase.args, func(t *testing.T) {
+			assert.True(t, readOnlyToolAllowed(testCase.name, json.RawMessage(testCase.args)))
+		})
+	}
+	for _, testCase := range denied {
+		t.Run("deny/"+testCase.name+testCase.args, func(t *testing.T) {
+			assert.False(t, readOnlyToolAllowed(testCase.name, json.RawMessage(testCase.args)))
+		})
+	}
+}
+
+func TestCallTool_ReadOnlyClientDeniesRepresentativeMutationsAndSecretReads(t *testing.T) {
+	ctx := auth.WithIdentity(context.Background(), auth.Client("read-only", "keycard-read-only"))
+	server := NewServer(ServerOptions{Version: "test"})
+	for _, testCase := range []struct{ name, args string }{
+		{"store", `{"action":"create","content":"value"}`},
+		{"feedback", `{"action":"suppress","id":1}`},
+		{"vault", `{"action":"get","name":"credential"}`},
+		{"vault", `{"action":"list"}`},
+		{"settings", `{"action":"list"}`},
+		{"graph", `{"action":"add_edge"}`},
+		{"get_ambient_hints", `{"session_id":"session"}`},
+		{"future_tool", `{}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			result, err := server.callTool(ctx, testCase.name, json.RawMessage(testCase.args))
+			require.EqualError(t, err, expectedReadOnlyMutationError)
+			require.Empty(t, result)
+		})
+	}
+}
+
+func TestCallTool_ReadOnlyClientPreservesAdminGateErrors(t *testing.T) {
+	ctx := auth.WithIdentity(context.Background(), auth.Client("read-only", "keycard-read-only"))
+	server := NewServer(ServerOptions{Version: "test"})
+
+	for _, testCase := range []struct{ name, args string }{
+		{"settings", `{"action":"set"}`}, {"settings", `{"action":"delete"}`}, {"admin", `{"action":"purge_project"}`},
+		{"list_snapshots", `{}`}, {"rollback_snapshot", `{}`}, {"pin_snapshot", `{}`}, {"redaction_rules_status", `{}`},
+		{"bulk_promote", `{}`}, {"bulk_delete", `{}`}, {"bulk_supersede", `{}`},
+		{"rule_governance_transition", `{}`}, {"rule_governance_pin_snapshot", `{}`}, {"rule_governance_rollback", `{}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			result, err := server.callTool(ctx, testCase.name, json.RawMessage(testCase.args))
+			require.ErrorContains(t, err, "admin_required")
+			require.Empty(t, result)
+		})
+	}
+}
+
+func TestCallTool_ReadOnlyClientAllowsDocsAndIssuesReads(t *testing.T) {
+	ctx := auth.WithIdentity(context.Background(), auth.Client("read-only", "keycard-read-only"))
+	server := NewServer(ServerOptions{Version: "test"})
+
+	for _, testCase := range []struct {
+		tool   string
+		action string
+		error  string
+	}{
+		{tool: "docs", action: "read", error: "versioned document store not available"},
+		{tool: "docs", action: "list", error: "versioned document store not available"},
+		{tool: "docs", action: "history", error: "versioned document store not available"},
+		{tool: "docs", action: "collections"},
+		{tool: "docs", action: "documents", error: "document store not available"},
+		{tool: "docs", action: "get_doc", error: "document store not available"},
+		{tool: "issues", action: "list", error: "issue store not available"},
+		{tool: "issues", action: "get", error: "issue store not available"},
+	} {
+		t.Run(testCase.tool+"/"+testCase.action, func(t *testing.T) {
+			result, err := server.callTool(ctx, testCase.tool, mustJSON(t, map[string]any{"action": testCase.action}))
+			if testCase.error != "" {
+				require.EqualError(t, err, testCase.error)
+				require.Empty(t, result)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, "No collections configured.", result)
+		})
+	}
+}
+
+func TestCallTool_WritableIdentitiesBypassReadOnlyGuard(t *testing.T) {
+	server := NewServer(ServerOptions{Version: "test"})
+	for _, identity := range []auth.Identity{
+		auth.Client("read-write", "keycard-read-write"),
+		auth.Admin(),
+	} {
+		ctx := auth.WithIdentity(context.Background(), identity)
+
+		_, err := server.callTool(ctx, "docs", json.RawMessage(`{"action":"create"}`))
+		require.EqualError(t, err, "versioned document store not available")
+
+		_, err = server.callTool(ctx, "issues", json.RawMessage(`{"action":"create"}`))
+		require.EqualError(t, err, "issue store not available")
+	}
+}
+
+func TestCallTool_ReadOnlyMalformedAndMissingActionsAreDeniedUnlessTheyDefaultToRead(t *testing.T) {
+	ctx := auth.WithIdentity(context.Background(), auth.Client("read-only", "keycard-read-only"))
+	server := NewServer(ServerOptions{Version: "test"})
+
+	for _, raw := range []json.RawMessage{json.RawMessage(`{}`), json.RawMessage(`{invalid}`)} {
+		_, err := server.callTool(ctx, "docs", raw)
+		require.EqualError(t, err, expectedReadOnlyMutationError)
+	}
+
+	_, err := server.callTool(ctx, "issues", json.RawMessage(`{}`))
+	require.EqualError(t, err, "issue store not available")
+}
+
+func TestHandleToolsCall_ReadOnlyMutationReturnsToolError(t *testing.T) {
+	ctx := auth.WithIdentity(context.Background(), auth.Client("read-only", "keycard-read-only"))
+	server := NewServer(ServerOptions{Version: "test"})
+
+	response := server.HandleRequest(ctx, &Request{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"docs","arguments":{"action":"create","content":"api_key=must-not-appear"}}`),
+	})
+
+	require.NotNil(t, response.Error)
+	assert.Equal(t, -32000, response.Error.Code)
+	assert.Equal(t, "Tool error: "+expectedReadOnlyMutationError, response.Error.Message)
+	assert.Equal(t, expectedReadOnlyMutationError, response.Error.Data)
+	assert.NotContains(t, response.Error.Message, "must-not-appear")
+	assert.NotContains(t, response.Error.Data, "must-not-appear")
 }
 
 func TestCallTool_UnknownToolNames_Table(t *testing.T) {

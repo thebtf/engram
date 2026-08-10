@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 
 const port = Number(process.env.PORT || 37993)
@@ -153,6 +154,36 @@ const memoryRows = [
   },
 ]
 
+const deepLinkMemoryRows = [
+  {
+    id: 501,
+    project: 'operator-console',
+    content: 'older memory omitted by the 500-row project list',
+    tags: ['deep-link'],
+    tier: 'semantic',
+    epistemic_type: 'fact',
+    confidence: 0.9,
+    citation_count: 1,
+    injection_count: 1,
+    updated_at: '2026-01-01T10:00:00Z',
+    status: 'active',
+  },
+]
+
+const searchGuidanceRows = [
+  {
+    id: 303,
+    project: 'operator-console',
+    type: 'behavioral_rule',
+    memory_type: 'guidance',
+    title: 'behavioral rule guidance: preserve explicit memory evidence',
+    narrative: 'Guidance results are not memory records and cannot open the memory page.',
+    content: 'behavioral rule guidance: preserve explicit memory evidence',
+    similarity: 0.88,
+    created_at: '2026-06-23T10:00:00Z',
+  },
+]
+
 const suppressedMemoryIds = new Set()
 
 let projectIds = ['operator-console', 'project-alpha']
@@ -296,7 +327,61 @@ const vaultCredentials = [
     created_at: '2026-06-22T10:00:00Z',
     value: 'beta-secret-value',
   },
+  {
+    id: 3,
+    name: 'orphaned-token',
+    project: 'legacy',
+    scope: 'project',
+    created_at: '2026-06-20T10:00:00Z',
+    value: 'orphaned-secret-value',
+    orphaned: true,
+  },
 ]
+let bookJobs = []
+let documentRows = []
+
+function nextBookID() {
+  return Math.max(0, ...bookJobs.map((row) => row.id)) + 1
+}
+
+function nextDocumentID() {
+  return Math.max(0, ...documentRows.map((row) => row.id)) + 1
+}
+
+function documentHash(content) {
+  return createHash('sha256').update(content).digest('hex')
+}
+
+function documentListResponse(url) {
+  const project = (url.searchParams.get('project') || '').trim()
+  const docType = (url.searchParams.get('doc_type') || '').trim()
+  const pathPrefix = (url.searchParams.get('path_prefix') || '').trim()
+  const requestedLimit = Number(url.searchParams.get('limit') || 50)
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 200) : 50
+  const latestByPath = new Map()
+  for (const row of documentRows) {
+    if (row.project !== project || (docType && row.doc_type !== docType) || (pathPrefix && !row.path.startsWith(pathPrefix))) continue
+    if (!latestByPath.has(row.path) || latestByPath.get(row.path).version < row.version) latestByPath.set(row.path, row)
+  }
+  const documents = [...latestByPath.values()]
+    .sort((left, right) => left.path.localeCompare(right.path))
+    .slice(0, limit)
+    .map(({ content, content_hash, metadata, ...row }) => ({ ...row }))
+  return { documents, project, ...(docType ? { doc_type: docType } : {}), ...(pathPrefix ? { path_prefix: pathPrefix } : {}), count: documents.length, limit }
+}
+
+function documentHistoryResponse(url) {
+  const path = (url.searchParams.get('path') || '').trim()
+  const project = (url.searchParams.get('project') || '').trim()
+  const requestedLimit = Number(url.searchParams.get('limit') || 0)
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 200) : 0
+  const versions = documentRows
+    .filter((row) => row.path === path && row.project === project)
+    .sort((left, right) => right.version - left.version)
+    .slice(0, limit || undefined)
+    .map(({ path: _path, project: _project, content, doc_type, metadata, ...row }) => ({ ...row }))
+  return { path, project, versions, count: versions.length }
+}
 
 function memoryResponseForProject(project) {
   return memoryRows
@@ -602,6 +687,22 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  const memoryGetMatch = path.match(/^\/api\/memories\/(-?\d+)$/)
+  if (req.method === 'GET' && memoryGetMatch) {
+    const id = Number(memoryGetMatch[1])
+    if (!Number.isInteger(id) || id <= 0) {
+      json(res, 400, { error: 'invalid memory id' })
+      return
+    }
+    const row = [...memoryRows, ...deepLinkMemoryRows].find((item) => item.id === id)
+    if (!row || suppressedMemoryIds.has(String(id))) {
+      json(res, 404, { error: 'memory not found' })
+      return
+    }
+    json(res, 200, { ...row, tags: [...row.tags] })
+    return
+  }
+
   const memoryAuditMatch = path.match(/^\/api\/memories\/([^/]+)\/audit$/)
   if (req.method === 'GET' && memoryAuditMatch) {
     const idRaw = memoryAuditMatch[1]
@@ -732,6 +833,97 @@ const server = createServer(async (req, res) => {
     } catch (error) {
       json(res, 400, controlPlaneError(error instanceof Error ? error.message : String(error), 400))
     }
+    return
+  }
+
+  if (req.method === 'POST' && path === '/api/books') {
+    try {
+      const body = await readRequestJson(req)
+      const sourceRef = typeof body.source_ref === 'string' ? body.source_ref.trim() : ''
+      if (!sourceRef) {
+        json(res, 400, { error: 'source_ref required' })
+        return
+      }
+      const now = new Date().toISOString()
+      const row = {
+        id: nextBookID(),
+        status: 'pending',
+        source_ref: sourceRef,
+        error: '',
+        created_at: now,
+        updated_at: now,
+        documents_path_prefix: '',
+        documents_link: '/documents',
+      }
+      bookJobs.push(row)
+      json(res, 202, row)
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  const bookStatusMatch = path.match(/^\/api\/books\/(\d+)\/status$/)
+  if (req.method === 'GET' && bookStatusMatch) {
+    const id = Number(bookStatusMatch[1])
+    const index = bookJobs.findIndex((row) => row.id === id)
+    if (index < 0) {
+      json(res, 404, { error: 'book job not found' })
+      return
+    }
+    const current = bookJobs[index]
+    if (current.status === 'pending') {
+      bookJobs[index] = {
+        ...current,
+        status: 'done',
+        updated_at: new Date().toISOString(),
+        documents_path_prefix: `books/jobs/${id}/`,
+      }
+    }
+    json(res, 200, bookJobs[index])
+    return
+  }
+
+  if (req.method === 'POST' && path === '/api/documents') {
+    try {
+      const body = await readRequestJson(req)
+      const pathValue = typeof body.path === 'string' ? body.path.trim() : ''
+      const project = typeof body.project === 'string' ? body.project.trim() : ''
+      const content = typeof body.content === 'string' ? body.content : ''
+      if (!pathValue || !project || !content.trim()) {
+        json(res, 400, { error: !pathValue ? 'path is required' : !project ? 'project is required' : 'content is required' })
+        return
+      }
+      const now = new Date().toISOString()
+      const latest = documentRows
+        .filter((row) => row.path === pathValue && row.project === project)
+        .reduce((max, row) => Math.max(max, row.version), 0)
+      const row = {
+        id: nextDocumentID(),
+        path: pathValue,
+        project,
+        content,
+        content_hash: documentHash(content),
+        doc_type: typeof body.doc_type === 'string' && body.doc_type.trim() ? body.doc_type.trim() : 'markdown',
+        metadata: typeof body.metadata === 'string' && body.metadata.trim() ? body.metadata.trim() : '{}',
+        author: typeof body.author === 'string' && body.author.trim() ? body.author.trim() : 'operator',
+        version: latest + 1,
+        created_at: now,
+      }
+      documentRows.push(row)
+      json(res, 201, { id: row.id, path: row.path, project: row.project, message: 'document created' })
+    } catch (error) {
+      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return
+  }
+
+  if (req.method === 'DELETE' && path === '/api/vault/orphaned-credentials') {
+    const deleted = vaultCredentials.filter((credential) => credential.orphaned).length
+    for (let index = vaultCredentials.length - 1; index >= 0; index -= 1) {
+      if (vaultCredentials[index].orphaned) vaultCredentials.splice(index, 1)
+    }
+    json(res, 200, { status: 'ok', deleted })
     return
   }
 
@@ -1032,8 +1224,96 @@ const server = createServer(async (req, res) => {
     case '/api/issues':
       json(res, 200, { issues: [] })
       return
+    case '/api/context/search':
+      {
+        const project = (url.searchParams.get('project') || '').trim()
+        const query = (url.searchParams.get('query') || '').trim()
+        if (!project || !query) {
+          json(res, 400, { error: 'project and query required' })
+          return
+        }
+        const observations = [
+          ...[...memoryRows, ...deepLinkMemoryRows]
+            .filter((row) => row.project === project && !suppressedMemoryIds.has(String(row.id)))
+            .filter((row) => row.content.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
+            .map((row) => ({
+              id: row.id,
+              project: row.project,
+              type: 'discovery',
+              memory_type: 'context',
+              title: row.content,
+              narrative: row.content,
+              content: row.content,
+              similarity: 0.92,
+              created_at: row.updated_at,
+            })),
+          ...searchGuidanceRows.filter((row) => row.project === project && row.content.toLocaleLowerCase().includes(query.toLocaleLowerCase())),
+        ].slice(0, 20)
+        json(res, 200, { project, query, intent: 'search', observations, threshold: 0, max_results: 20, total_results: observations.length })
+      }
+      return
+    case '/api/documents':
+      {
+        const project = (url.searchParams.get('project') || '').trim()
+        if (!project) {
+          json(res, 400, { error: 'project query parameter is required' })
+          return
+        }
+        json(res, 200, documentListResponse(url))
+      }
+      return
+    case '/api/documents/comments':
+      {
+        const documentID = Number((url.searchParams.get('document_id') || '').trim())
+        if (!Number.isInteger(documentID) || documentID <= 0) {
+          json(res, 400, { error: 'document_id is required' })
+          return
+        }
+        if (!documentRows.some((row) => row.id === documentID)) {
+          json(res, 404, { error: 'document not found' })
+          return
+        }
+        json(res, 200, { comments: [], count: 0, document_id: documentID })
+      }
+      return
+    case '/api/documents/history':
+      {
+        const pathValue = (url.searchParams.get('path') || '').trim()
+        const project = (url.searchParams.get('project') || '').trim()
+        if (!pathValue || !project) {
+          json(res, 400, { error: !pathValue ? 'path query parameter is required' : 'project query parameter is required' })
+          return
+        }
+        json(res, 200, documentHistoryResponse(url))
+      }
+      return
+    case '/api/documents/read':
+      {
+        const pathValue = (url.searchParams.get('path') || '').trim()
+        const project = (url.searchParams.get('project') || '').trim()
+        const rawVersion = (url.searchParams.get('version') || '').trim()
+        if (!pathValue || !project) {
+          json(res, 400, { error: !pathValue ? 'path query parameter is required' : 'project query parameter is required' })
+          return
+        }
+        const version = rawVersion ? Number(rawVersion) : null
+        if (rawVersion && (!Number.isInteger(version) || version <= 0)) {
+          json(res, 400, { error: `invalid version ${JSON.stringify(rawVersion)}` })
+          return
+        }
+        const rows = documentRows.filter((row) => row.path === pathValue && row.project === project)
+        const row = version === null
+          ? rows.reduce((latest, item) => !latest || item.version > latest.version ? item : latest, null)
+          : rows.find((item) => item.version === version)
+        if (!row) {
+          json(res, 404, { error: 'document not found' })
+          return
+        }
+        json(res, 200, { ...row })
+      }
+      return
     case '/api/vault/credentials':
-      json(res, 200, vaultCredentials.map(({ value: _value, ...item }) => item))
+      json(res, 200, vaultCredentials.map(({ value: _value, orphaned: _orphaned, ...item }) => item))
       return
     case '/api/vault/status':
       json(res, 200, { key_configured: true, fingerprint: 'abcddcba11223344', key_source: 'mock', credential_count: vaultCredentials.length })

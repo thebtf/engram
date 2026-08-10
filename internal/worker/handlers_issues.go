@@ -1,7 +1,9 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,8 +13,83 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
+	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
+
+// issueMutationActor accepts only read-write SourceClient keycards or
+// authenticated non-client admins. Project and agent request fields are
+// attribution only.
+func issueMutationActor(ctx context.Context) (keycardID string, isOperator bool, err error) {
+	id, ok := auth.IdentityFrom(ctx)
+	if !ok {
+		return "", false, fmt.Errorf("%w: issue mutation forbidden: authenticated identity is required", gormdb.ErrIssueForbidden)
+	}
+	if id.IsAdmin() && id.Source != auth.SourceClient {
+		return "", true, nil
+	}
+	if id.Source != auth.SourceClient || id.KeycardID == "" || id.Role != auth.RoleReadWrite {
+		return "", false, fmt.Errorf("%w: issue mutation forbidden: authenticated read-write client keycard is required", gormdb.ErrIssueForbidden)
+	}
+	return id.KeycardID, false, nil
+}
+
+func (s *Service) authorizeIssueProgression(ctx context.Context) (bool, error) {
+	keycardID, isOperator, err := issueMutationActor(ctx)
+	if err != nil {
+		return false, err
+	}
+	if err := s.issueStore.AuthorizeIssueProgressionMutation(ctx, keycardID, isOperator); err != nil {
+		return false, err
+	}
+	return isOperator, nil
+}
+
+func (s *Service) authorizeIssueSourceMutation(ctx context.Context, id int64) (bool, error) {
+	keycardID, isOperator, err := issueMutationActor(ctx)
+	if err != nil {
+		return false, err
+	}
+	if err := s.issueStore.AuthorizeIssueSourceMutation(ctx, id, keycardID, isOperator); err != nil {
+		return false, err
+	}
+	return isOperator, nil
+}
+
+func requireIssueOperator(ctx context.Context) error {
+	_, isOperator, err := issueMutationActor(ctx)
+	if err != nil {
+		return err
+	}
+	if !isOperator {
+		return fmt.Errorf("%w: issue mutation forbidden: operator identity is required", gormdb.ErrIssueForbidden)
+	}
+	return nil
+}
+
+func writeIssueAuthorizationError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, gormdb.ErrIssueNotFound):
+		http.Error(w, `{"error": "issue not found"}`, http.StatusNotFound)
+	case errors.Is(err, gormdb.ErrIssueForbidden):
+		http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusForbidden)
+	default:
+		http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusInternalServerError)
+	}
+}
+
+func writeIssueStoreError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, gormdb.ErrIssueNotFound):
+		http.Error(w, `{"error": "issue not found"}`, http.StatusNotFound)
+	case errors.Is(err, gormdb.ErrIssueForbidden):
+		writeIssueAuthorizationError(w, err)
+	case errors.Is(err, gormdb.ErrIssueInvalidInput), errors.Is(err, gormdb.ErrIssueInvalidTransition):
+		http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusBadRequest)
+	default:
+		http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusInternalServerError)
+	}
+}
 
 // handleListIssues handles GET /api/issues with optional filters.
 func (s *Service) handleListIssues(w http.ResponseWriter, r *http.Request) {
@@ -107,11 +184,11 @@ func (s *Service) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"issue":                        issue,
-		"comments":                     comments,
-		"comment_count":                len(comments),
-		"source_project_display_name":  s.getProjectDisplayName(r.Context(), issue.SourceProject),
-		"target_project_display_name":  s.getProjectDisplayName(r.Context(), issue.TargetProject),
+		"issue":                       issue,
+		"comments":                    comments,
+		"comment_count":               len(comments),
+		"source_project_display_name": s.getProjectDisplayName(r.Context(), issue.SourceProject),
+		"target_project_display_name": s.getProjectDisplayName(r.Context(), issue.TargetProject),
 	})
 }
 
@@ -147,6 +224,14 @@ func (s *Service) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	keycardID, isOperator, err := issueMutationActor(r.Context())
+	if err != nil {
+		writeIssueAuthorizationError(w, err)
+		return
+	}
+	if isOperator {
+		keycardID = ""
+	}
 	issue := &gormdb.Issue{
 		Title:            req.Title,
 		Body:             req.Body,
@@ -156,6 +241,7 @@ func (s *Service) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		TargetProject:    req.TargetProject,
 		SourceAgent:      req.SourceAgent,
 		CreatedBySession: req.CreatedBySession,
+		CreatorKeycardID: keycardID,
 		Labels:           req.Labels,
 	}
 
@@ -208,59 +294,33 @@ func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// Normalize type before validation and storage.
 	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
 
-	// Field edits (dashboard inline editing)
-	if req.Title != "" || req.Body != "" || req.Priority != "" || req.Type != "" || req.Labels != nil {
-		if err := s.issueStore.UpdateIssueFields(r.Context(), id, req.Title, req.Body, req.Priority, req.Type, req.Labels); err != nil {
-			if strings.Contains(err.Error(), "not found") {
-				http.Error(w, `{"error": "issue not found"}`, http.StatusNotFound)
-				return
-			}
-			http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusBadRequest)
-			return
-		}
+	update := gormdb.IssueUpdate{
+		Status:        req.Status,
+		Comment:       req.Comment,
+		AuthorProject: req.SourceProject,
+		AuthorAgent:   req.SourceAgent,
+		Title:         req.Title,
+		Body:          req.Body,
+		Priority:      req.Priority,
+		Type:          req.Type,
+		Labels:        req.Labels,
+	}
+	// Field edits and source-terminal actions require the creator keycard or an
+	// operator. Comment-only and resolved progression require only a RW keycard.
+	var isOperator bool
+	if update.HasSourceAuthorityAction() {
+		isOperator, err = s.authorizeIssueSourceMutation(r.Context(), id)
+	} else {
+		isOperator, err = s.authorizeIssueProgression(r.Context())
+	}
+	if err != nil {
+		writeIssueAuthorizationError(w, err)
+		return
 	}
 
-	// Status transitions
-	if req.Status != "" {
-		var statusErr error
-		switch req.Status {
-		case "resolved":
-			statusErr = s.issueStore.UpdateIssueStatus(r.Context(), id, req.Status)
-		case "reopened":
-			statusErr = s.issueStore.ReopenIssue(r.Context(), id, req.Comment, req.SourceProject, req.SourceAgent)
-			req.Comment = "" // ReopenIssue already adds comment
-		case "closed":
-			statusErr = s.issueStore.CloseIssue(r.Context(), id, req.SourceProject)
-		case "rejected":
-			statusErr = s.issueStore.RejectIssue(r.Context(), id, req.Comment, req.SourceProject, req.SourceAgent)
-			req.Comment = "" // RejectIssue already adds comment
-		case "open", "acknowledged":
-			// Force status (operator override) — no lifecycle validation
-			statusErr = s.issueStore.UpdateIssueStatus(r.Context(), id, req.Status)
-		default:
-			http.Error(w, `{"error": "invalid status"}`, http.StatusBadRequest)
-			return
-		}
-		if statusErr != nil {
-			if strings.Contains(statusErr.Error(), "not found") {
-				http.Error(w, `{"error": "issue not found"}`, http.StatusNotFound)
-				return
-			}
-			http.Error(w, fmt.Sprintf(`{"error": %q}`, statusErr.Error()), http.StatusBadRequest)
-			return
-		}
-	}
-
-	if req.Comment != "" {
-		_, err := s.issueStore.AddComment(r.Context(), id, &gormdb.IssueComment{
-			AuthorProject: req.SourceProject,
-			AuthorAgent:   req.SourceAgent,
-			Body:          req.Comment,
-		})
-		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusInternalServerError)
-			return
-		}
+	if err := s.issueStore.UpdateIssueAtomically(r.Context(), id, update, isOperator); err != nil {
+		writeIssueStoreError(w, err)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -271,6 +331,10 @@ func (s *Service) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 
 // handleAcknowledgeIssues handles POST /api/issues/acknowledge.
 func (s *Service) handleAcknowledgeIssues(w http.ResponseWriter, r *http.Request) {
+	if err := requireIssueOperator(r.Context()); err != nil {
+		writeIssueAuthorizationError(w, err)
+		return
+	}
 	var req struct {
 		IDs []int64 `json:"ids"`
 	}
@@ -279,9 +343,9 @@ func (s *Service) handleAcknowledgeIssues(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	acknowledged, err := s.issueStore.AcknowledgeIssues(r.Context(), req.IDs)
+	acknowledged, err := s.issueStore.AcknowledgeIssuesAtomically(r.Context(), req.IDs)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": %q}`, err.Error()), http.StatusInternalServerError)
+		writeIssueStoreError(w, err)
 		return
 	}
 
@@ -318,7 +382,10 @@ func (s *Service) handleDeleteIssue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "invalid issue id"}`, http.StatusBadRequest)
 		return
 	}
-
+	if err := requireIssueOperator(r.Context()); err != nil {
+		writeIssueAuthorizationError(w, err)
+		return
+	}
 	if err := s.issueStore.DeleteIssue(r.Context(), id); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			http.Error(w, `{"error": "issue not found"}`, http.StatusNotFound)
@@ -331,4 +398,3 @@ func (s *Service) handleDeleteIssue(w http.ResponseWriter, r *http.Request) {
 	log.Info().Int64("issue_id", id).Msg("Issue deleted by operator")
 	w.WriteHeader(http.StatusNoContent)
 }
-

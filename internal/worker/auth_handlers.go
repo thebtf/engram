@@ -3,11 +3,13 @@ package worker
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,6 +49,9 @@ type AuthHandlers struct {
 
 	// beforeAccessSessionCheck is a test seam used by the lifecycle race tests.
 	beforeAccessSessionCheck func()
+	// beforeInitialAdminCreate is a test seam used to align concurrent setup
+	// requests after bcrypt but before the authoritative database operation.
+	beforeInitialAdminCreate func()
 }
 
 // NewAuthHandlers creates AuthHandlers wired to the given stores.
@@ -452,9 +457,17 @@ func (h *AuthHandlers) handleSetupNeeded(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, map[string]bool{"needed": count == 0})
 }
 
-// handleSetup creates the first admin user (no invitation required).
+// handleSetup creates the first admin user (no invitation required). The
+// server-host operator token is required even while setup-needed stays public.
 // Returns 409 Conflict if any users already exist.
 func (h *AuthHandlers) handleSetup(w http.ResponseWriter, r *http.Request) {
+	masterToken := os.Getenv("ENGRAM_AUTH_ADMIN_TOKEN")
+	providedToken := extractHTTPBearer(r)
+	if masterToken == "" || providedToken == "" || subtle.ConstantTimeCompare([]byte(providedToken), []byte(masterToken)) != 1 {
+		writeAuthJSONError(w, http.StatusUnauthorized, "operator token required")
+		return
+	}
+
 	if !h.requireStores(w, true, false, false, false) {
 		return
 	}
@@ -485,20 +498,18 @@ func (h *AuthHandlers) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.users.CreateUser(strings.TrimSpace(req.Email), string(hash), gormdb.DashboardRoleAdmin)
+	if h.beforeInitialAdminCreate != nil {
+		h.beforeInitialAdminCreate()
+	}
+	user, err := h.users.CreateInitialAdmin(r.Context(), strings.TrimSpace(req.Email), string(hash), h.access)
 	if err != nil {
+		if errors.Is(err, gormdb.ErrInitialAdminSetupAlreadyCompleted) {
+			writeAuthJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
 		log.Error().Err(err).Str("email", req.Email).Msg("auth: failed to create admin user during setup")
 		writeAuthJSONError(w, http.StatusInternalServerError, "failed to create user")
 		return
-	}
-	if h.access != nil {
-		_ = h.access.LogAccessEvent(r.Context(), gormdb.AccessAuditRecord{
-			Action:     "auth_setup_completed",
-			Actor:      user.Email,
-			Reason:     "initial admin created",
-			AfterState: map[string]any{"user_id": user.ID, "email": user.Email, "role": user.Role},
-			CreatedAt:  time.Now().UTC(),
-		})
 	}
 
 	w.WriteHeader(http.StatusCreated)

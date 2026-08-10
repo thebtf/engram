@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-gormigrate/gormigrate/v2"
+
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
@@ -23,27 +25,25 @@ func TestMigration144_RuleGovernanceTables(t *testing.T) {
 
 func TestMigration144_RuleGovernanceRollbackAndReapply(t *testing.T) {
 	db := openCandidateTestDB(t)
-	migration := ruleGovernanceMigration144()
 	t.Cleanup(func() {
-		_ = migration.Migrate(db)
+		migrateRuleGovernanceChain144Through147(t, db)
 	})
 
 	requireRuleGovernanceTableState(t, db, true)
-	require.NoError(t, migration.Rollback(db))
+	rollbackRuleGovernanceChain147Through144(t, db)
 	requireRuleGovernanceTableState(t, db, false)
-	require.NoError(t, migration.Migrate(db))
+	migrateRuleGovernanceChain144Through147(t, db)
 	requireRuleGovernanceTableState(t, db, true)
 }
 
 func TestMigration144_RuleGovernanceEscapeConstraints(t *testing.T) {
 	db := openCandidateTestDB(t)
-	migration := ruleGovernanceMigration144()
 	t.Cleanup(func() {
-		_ = migration.Migrate(db)
+		migrateRuleGovernanceChain144Through147(t, db)
 	})
 
-	require.NoError(t, migration.Rollback(db))
-	require.NoError(t, migration.Migrate(db))
+	rollbackRuleGovernanceChain147Through144(t, db)
+	migrateRuleGovernanceChain144Through147(t, db)
 
 	for _, tc := range []struct {
 		name              string
@@ -81,6 +81,11 @@ func TestMigration144_RuleGovernanceEscapeConstraints(t *testing.T) {
 		})
 	}
 
+	fingerprint := fmt.Sprintf("rg0-good-escape-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		require.NoError(t, db.Exec(`DELETE FROM rule_candidates WHERE fingerprint = ?`, fingerprint).Error)
+	})
+
 	err := db.Exec(`INSERT INTO rule_candidates (
 		source_signal_type,
 		source_actor,
@@ -100,9 +105,58 @@ func TestMigration144_RuleGovernanceEscapeConstraints(t *testing.T) {
 		"HYPOTHESIS: accepted with evidence",
 		"none",
 		"NO DATA",
-		fmt.Sprintf("rg0-good-escape-%d", time.Now().UnixNano()),
+		fingerprint,
 	).Error
 	require.NoError(t, err)
+}
+
+func TestMigration159_RuleGovernanceEscapeConstraintRepairIsIdempotent(t *testing.T) {
+	db := openCandidateTestDB(t)
+	migration := ruleGovernanceEscapeConstraintsMigration159()
+	t.Cleanup(func() {
+		require.NoError(t, migration.Migrate(db))
+	})
+
+	for _, table := range []string{"rule_candidates", "rule_versions"} {
+		for _, column := range []string{"anti_capture_status", "conflict_status", "decay_policy"} {
+			constraint := table + "_" + column + "_escape_chk"
+			require.NoError(t, db.Exec(fmt.Sprintf(`ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s`, table, constraint)).Error)
+			require.NoError(t, db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD CONSTRAINT %s CHECK (
+				btrim(%s) <> '' AND (
+					%s !~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION)' OR
+					%s ~ '^(HYPOTHESIS|BLOCKED|NEEDS CLARIFICATION): .*\\S'
+				)
+			)`, table, constraint, column, column, column)).Error)
+		}
+	}
+
+	require.NoError(t, migration.Migrate(db))
+	require.NoError(t, migration.Migrate(db))
+
+	store := NewRuleGovernanceStore(db)
+	candidate := ruleGovernanceCandidate("migration-159-escape")
+	candidate.AntiCaptureStatus = "HYPOTHESIS: repair evidence"
+	candidate.ConflictStatus = "BLOCKED: repair evidence"
+	candidate.DecayPolicy = "NEEDS CLARIFICATION: repair evidence"
+	created, err := store.CreateRuleCandidate(context.Background(), candidate)
+	require.NoError(t, err)
+	readback, err := store.GetRuleCandidate(context.Background(), created.ID)
+	require.NoError(t, err)
+	require.Equal(t, candidate.AntiCaptureStatus, readback.AntiCaptureStatus)
+	require.Equal(t, candidate.ConflictStatus, readback.ConflictStatus)
+	require.Equal(t, candidate.DecayPolicy, readback.DecayPolicy)
+
+	version, err := store.CreateDraftFromCandidate(context.Background(), created.ID, transitionReq("migration 159", ""))
+	require.NoError(t, err)
+	require.Equal(t, candidate.AntiCaptureStatus, version.AntiCaptureStatus)
+	require.Equal(t, candidate.ConflictStatus, version.ConflictStatus)
+	require.Equal(t, candidate.DecayPolicy, version.DecayPolicy)
+	var stored ruleVersionRow
+	require.NoError(t, db.First(&stored, version.ID).Error)
+	require.Equal(t, candidate.AntiCaptureStatus, stored.AntiCaptureStatus)
+	require.Equal(t, candidate.ConflictStatus, stored.ConflictStatus)
+	require.Equal(t, candidate.DecayPolicy, stored.DecayPolicy)
+	require.Error(t, db.Exec(`UPDATE rule_versions SET decay_policy = 'HYPOTHESIS' WHERE id = ?`, version.ID).Error)
 }
 
 func TestRuleGovernanceStore_IsUniqueViolationRecognizesPostgresDrivers(t *testing.T) {
@@ -289,6 +343,11 @@ func TestRuleGovernanceStore_ListLegacyBehavioralRuleFallbackKeepsLegacyRowsCont
 		EditedBy: "rg2-test",
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, db.Exec("DELETE FROM behavioral_rules WHERE id IN ?", []int64{
+			global.ID, projectScoped.ID, deleted.ID, disabled.ID,
+		}).Error)
+	})
 	_, err = behavioralStore.SetEnabled(ctx, disabled.ID, false, strPtr("rg2-test"))
 	require.NoError(t, err)
 
@@ -719,15 +778,75 @@ func requireRuleGovernanceTableState(t *testing.T, db *gorm.DB, exists bool) {
 	}
 }
 
+func rollbackRuleGovernanceChain147Through144(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	for _, migration := range []*gormigrate.Migration{
+		ruleGovernanceSnapshotStatusesMigration147(),
+		ruleInjectionEventsMigration146ForTest(),
+		ruleArbiterBackgroundMigration145(),
+		ruleGovernanceMigration144(),
+	} {
+		require.NoError(t, migration.Rollback(db), "rollback %s", migration.ID)
+	}
+}
+
+func migrateRuleGovernanceChain144Through147(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	for _, migration := range []*gormigrate.Migration{
+		ruleGovernanceMigration144(),
+		ruleArbiterBackgroundMigration145(),
+		ruleInjectionEventsMigration146ForTest(),
+		ruleGovernanceSnapshotStatusesMigration147(),
+	} {
+		require.NoError(t, migration.Migrate(db), "migrate %s", migration.ID)
+	}
+}
+
+func ruleInjectionEventsMigration146ForTest() *gormigrate.Migration {
+	return &gormigrate.Migration{
+		ID: "146_rule_injection_events",
+		Migrate: func(tx *gorm.DB) error {
+			for _, stmt := range []string{
+				`CREATE TABLE IF NOT EXISTS rule_injection_events (
+					id                         BIGSERIAL PRIMARY KEY,
+					session_id                 TEXT NOT NULL,
+					project                    TEXT NOT NULL,
+					surface                    TEXT NOT NULL,
+					rule_version_id            BIGINT REFERENCES rule_versions(id) ON DELETE SET NULL,
+					legacy_behavioral_rule_id  BIGINT REFERENCES behavioral_rules(id) ON DELETE SET NULL,
+					event_type                 TEXT NOT NULL,
+					reason                     TEXT NOT NULL DEFAULT '',
+					budget_position            INTEGER NOT NULL DEFAULT 0,
+					created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+					CONSTRAINT rule_injection_events_type_chk
+						CHECK (event_type IN ('emitted_kernel','emitted_contextual','deferred_budget','suppressed_state','suppressed_predicate','suppressed_prompt_safety','fallback_legacy','router_error'))
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_rule_injection_events_project_created ON rule_injection_events (project, created_at DESC)`,
+				`CREATE INDEX IF NOT EXISTS idx_rule_injection_events_session_created ON rule_injection_events (session_id, created_at DESC)`,
+				`CREATE INDEX IF NOT EXISTS idx_rule_injection_events_rule_version_created ON rule_injection_events (rule_version_id, created_at DESC) WHERE rule_version_id IS NOT NULL`,
+				`CREATE INDEX IF NOT EXISTS idx_rule_injection_events_legacy_rule_created ON rule_injection_events (legacy_behavioral_rule_id, created_at DESC) WHERE legacy_behavioral_rule_id IS NOT NULL`,
+				`CREATE INDEX IF NOT EXISTS idx_rule_injection_events_event_created ON rule_injection_events (event_type, created_at DESC)`,
+			} {
+				if err := tx.Exec(stmt).Error; err != nil {
+					return fmt.Errorf("migration 146: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Exec(`DROP TABLE IF EXISTS rule_injection_events`).Error
+		},
+	}
+}
+
 func TestMigration144_RuleGovernanceSnapshotStatusesAcceptExtendedStates(t *testing.T) {
 	db := openCandidateTestDB(t)
-	migration := ruleGovernanceMigration144()
 	t.Cleanup(func() {
-		_ = migration.Migrate(db)
+		migrateRuleGovernanceChain144Through147(t, db)
 	})
 
-	require.NoError(t, migration.Rollback(db))
-	require.NoError(t, migration.Migrate(db))
+	rollbackRuleGovernanceChain147Through144(t, db)
+	migrateRuleGovernanceChain144Through147(t, db)
 
 	snapshotID := fmt.Sprintf("rg0-snapshot-status-%d", time.Now().UnixNano())
 	require.NoError(t, db.Exec(`

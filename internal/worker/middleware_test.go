@@ -218,12 +218,14 @@ func TestTokenAuth_DisabledInjectsAdminContext(t *testing.T) {
 
 	var sawIdentity bool
 	var sawSessionAdmin bool
+	var sawDisabledSource bool
 	var sawLegacyAdmin bool
 	h := ta.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := authpkg.IdentityFrom(r.Context())
 		sawIdentity = ok
 		if ok {
 			sawSessionAdmin = id.IsSessionAdmin()
+			sawDisabledSource = id.Source == authpkg.SourceAuthDisabled
 		}
 		sawLegacyAdmin = getAuthRole(r) == "admin"
 		w.WriteHeader(http.StatusOK)
@@ -239,8 +241,11 @@ func TestTokenAuth_DisabledInjectsAdminContext(t *testing.T) {
 	if !sawIdentity {
 		t.Fatal("disabled auth should expose auth identity to downstream handler")
 	}
-	if !sawSessionAdmin {
-		t.Fatal("disabled auth identity should be a session admin")
+	if sawSessionAdmin {
+		t.Fatal("disabled auth identity must not be a session admin")
+	}
+	if !sawDisabledSource {
+		t.Fatal("disabled auth identity must retain its distinct source")
 	}
 	if !sawLegacyAdmin {
 		t.Fatal(`disabled auth should expose legacy role "admin" to downstream handler`)

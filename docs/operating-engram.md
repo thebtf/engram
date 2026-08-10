@@ -142,9 +142,9 @@ of age. Pin a snapshot via the `pin_snapshot` MCP tool or the admin dashboard.
 
 ## Rollback Conflicts (EC-F3)
 
-If a memory affected by a bulk operation has been modified after the snapshot was
-captured (`updated_at > snapshot.created_at`), a rollback attempt will be **refused**
-atomically. No rows are restored on conflict.
+If a memory or crystallization-candidate row no longer matches the immutable
+post-operation state captured by the snapshot, rollback is **refused** atomically.
+No rows are restored on conflict.
 
 The conflict is reported as:
 
@@ -152,15 +152,18 @@ The conflict is reported as:
 {
   "error": "rollback_conflict",
   "conflict_ids": [42, 99],
+  "conflict_refs": [{"entity":"memory","id":42}, {"entity":"candidate","id":99}],
   "snapshot_id": "snap-abc123"
 }
 ```
 
-`conflict_ids` lists the memory IDs that have been modified. To resolve:
+`conflict_ids` preserves the legacy numeric list. `conflict_refs` identifies each
+affected `memory` or `candidate` row, including mixed operations with equal IDs. To
+resolve:
 
-1. Review the conflicting memories.
-2. If safe to proceed, the operator must manually reset the modified memories or
-   create a new snapshot capturing the current state.
+1. Review the conflicting rows.
+2. If safe to proceed, the operator must manually reset the modified rows or create
+   a new snapshot capturing the current state.
 3. Retry the rollback with the new snapshot.
 
 The audit log records `action='rollback_attempted_with_conflict'` for all refused

@@ -10,6 +10,97 @@ definitions:
       status_code:
         type: integer
     type: object
+  github_com_thebtf_engram_internal_reviewpacket.CandidateAuditPolicy:
+    properties:
+      action:
+        type: string
+      status:
+        type: string
+      store:
+        type: string
+    type: object
+  github_com_thebtf_engram_internal_reviewpacket.CandidateDecisionPolicy:
+    properties:
+      allowed_actions:
+        items:
+          type: string
+        type: array
+      default_action:
+        type: string
+      epistemic_type:
+        type: string
+      promotion_target:
+        type: string
+      tier:
+        type: string
+    type: object
+  github_com_thebtf_engram_internal_reviewpacket.CandidateEvidence:
+    properties:
+      handle:
+        type: string
+      kind:
+        type: string
+    type: object
+  github_com_thebtf_engram_internal_reviewpacket.CandidateMutationRequirements:
+    properties:
+      audit_write_required:
+        type: boolean
+      privacy_scope_required:
+        type: boolean
+      snapshot_required:
+        type: boolean
+      structural_loss_check_required:
+        type: boolean
+    type: object
+  github_com_thebtf_engram_internal_reviewpacket.CandidateReviewPacket:
+    properties:
+      audit:
+        $ref: '#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateAuditPolicy'
+      candidate_id:
+        type: integer
+      decision:
+        $ref: '#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateDecisionPolicy'
+      evidence:
+        items:
+          $ref: '#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateEvidence'
+        type: array
+      kind:
+        type: string
+      mutation_requirements:
+        $ref: '#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateMutationRequirements'
+      packet_id:
+        type: string
+      read_only:
+        type: boolean
+      scope:
+        $ref: '#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateScope'
+      snapshot:
+        $ref: '#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateSnapshotPolicy'
+      status:
+        type: string
+    type: object
+  github_com_thebtf_engram_internal_reviewpacket.CandidateScope:
+    properties:
+      privacy_scope:
+        type: string
+      projects:
+        items:
+          type: string
+        type: array
+      source_session_id:
+        type: string
+    type: object
+  github_com_thebtf_engram_internal_reviewpacket.CandidateSnapshotPolicy:
+    properties:
+      operation:
+        type: string
+      required:
+        type: boolean
+      status:
+        type: string
+      store:
+        type: string
+    type: object
   github_com_thebtf_engram_pkg_models.BehavioralRule:
     properties:
       content:
@@ -20,6 +111,8 @@ definitions:
         type: string
       edited_by:
         type: string
+      enabled:
+        type: boolean
       id:
         type: integer
       priority:
@@ -245,19 +338,6 @@ definitions:
       tool:
         type: string
     type: object
-  internal_worker.ObservationRequest:
-    properties:
-      claudeSessionId:
-        type: string
-      cwd:
-        type: string
-      project:
-        type: string
-      tool_input: {}
-      tool_name:
-        type: string
-      tool_response: {}
-    type: object
   internal_worker.RunInfo:
     properties:
       errors:
@@ -328,6 +408,13 @@ definitions:
       lastUserMessage:
         type: string
     type: object
+  internal_worker.behavioralRuleEnabledRequest:
+    properties:
+      edited_by:
+        type: string
+      enabled:
+        type: boolean
+    type: object
   internal_worker.behavioralRuleRequest:
     properties:
       content:
@@ -388,6 +475,8 @@ definitions:
         type: integer
       review_after:
         type: string
+      review_packet:
+        $ref: '#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateReviewPacket'
       source_session_id:
         type: string
       status:
@@ -1016,8 +1105,8 @@ paths:
         in: query
         name: format
         type: string
-      - description: 'POST body: {project, agent_id, cwd, legacy_project, git_remote,
-          relative_path}'
+      - description: 'POST body: {project, agent_id, cwd, legacy_project, project_identity,
+          identity_only}'
         in: body
         name: body
         schema:
@@ -1034,10 +1123,20 @@ paths:
           description: project required
           schema:
             type: string
+        "409":
+          description: ambiguous legacy project identity
+          schema:
+            additionalProperties: true
+            type: object
         "500":
           description: internal error
           schema:
             type: string
+        "503":
+          description: project identity registration unavailable
+          schema:
+            additionalProperties: true
+            type: object
       security:
       - ApiKeyAuth: []
       summary: Inject context for session start
@@ -1062,8 +1161,8 @@ paths:
         in: query
         name: format
         type: string
-      - description: 'POST body: {project, agent_id, cwd, legacy_project, git_remote,
-          relative_path}'
+      - description: 'POST body: {project, agent_id, cwd, legacy_project, project_identity,
+          identity_only}'
         in: body
         name: body
         schema:
@@ -1080,10 +1179,20 @@ paths:
           description: project required
           schema:
             type: string
+        "409":
+          description: ambiguous legacy project identity
+          schema:
+            additionalProperties: true
+            type: object
         "500":
           description: internal error
           schema:
             type: string
+        "503":
+          description: project identity registration unavailable
+          schema:
+            additionalProperties: true
+            type: object
       security:
       - ApiKeyAuth: []
       summary: Inject context for session start
@@ -1590,6 +1699,42 @@ paths:
       summary: Delete a memory note by ID
       tags:
       - Memories
+    get:
+      description: Returns one active memory entry by numeric ID.
+      parameters:
+      - description: Memory ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_thebtf_engram_pkg_models.Memory'
+        "400":
+          description: invalid id
+          schema:
+            type: string
+        "404":
+          description: not found
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Get a memory note by ID
+      tags:
+      - Memories
   /api/memories/{id}/audit:
     get:
       description: Returns safe audit summaries for a memory visible to the operator.
@@ -1762,6 +1907,48 @@ paths:
       security:
       - ApiKeyAuth: []
       summary: List crystallization candidates for operator review
+      tags:
+      - Memories
+  /api/memory/candidates/{id}:
+    get:
+      description: Returns one vNext-F crystallization candidate with its bounded
+        review_packet projection.
+      parameters:
+      - description: Candidate ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_worker.candidateReviewItem'
+        "400":
+          description: invalid id
+          schema:
+            type: string
+        "403":
+          description: feature flag required
+          schema:
+            type: string
+        "404":
+          description: candidate not found
+          schema:
+            type: string
+        "500":
+          description: internal error
+          schema:
+            type: string
+        "503":
+          description: service unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Read one crystallization candidate review packet
       tags:
       - Memories
   /api/memory/triggers:
@@ -2136,6 +2323,52 @@ paths:
       summary: Update a behavioral rule
       tags:
       - Rules
+  /api/rules/{id}/enabled:
+    patch:
+      consumes:
+      - application/json
+      description: Toggles whether an active behavioral rule is injected. Disabled
+        rules remain listed for operator review and re-enabling.
+      parameters:
+      - description: Rule ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Rule enabled payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_worker.behavioralRuleEnabledRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_thebtf_engram_pkg_models.BehavioralRule'
+        "400":
+          description: enabled is required
+          schema:
+            type: string
+        "404":
+          description: rule not found
+          schema:
+            type: string
+        "500":
+          description: internal server error
+          schema:
+            type: string
+        "503":
+          description: service unavailable
+          schema:
+            type: string
+      security:
+      - ApiKeyAuth: []
+      summary: Enable or disable a behavioral rule
+      tags:
+      - Rules
   /api/search/analytics:
     get:
       description: Returns aggregated search analytics from the persistent search
@@ -2384,37 +2617,6 @@ paths:
       security:
       - ApiKeyAuth: []
       summary: List SDK sessions
-      tags:
-      - Sessions
-  /api/sessions/observations:
-    post:
-      consumes:
-      - application/json
-      description: Handles observation posting from post-tool-use hook. Creates session
-        on-the-fly if not found.
-      parameters:
-      - description: Observation data
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/internal_worker.ObservationRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-        "400":
-          description: bad request
-          schema:
-            type: string
-        "500":
-          description: internal error
-          schema:
-            type: string
-      security:
-      - ApiKeyAuth: []
-      summary: Post observation from hook
       tags:
       - Sessions
   /api/sessions/subagent-complete:

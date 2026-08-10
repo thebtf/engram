@@ -105,17 +105,22 @@ func (s *Server) handleBulkPromote(ctx context.Context, args json.RawMessage) (s
 	if err != nil {
 		return "", err
 	}
-
-	candidateIDs := coerceInt64Slice(m["candidate_ids"])
-	dryRun := coerceBool(m["dry_run"], false)
+	candidateIDs, err := requireIntegralInt64SliceArg(m, "candidate_ids")
+	if err != nil {
+		return "", fmt.Errorf("bulk_promote: %w", err)
+	}
+	dryRun, _, err := optionalBoolArg(m, "dry_run")
+	if err != nil {
+		return "", fmt.Errorf("bulk_promote: %w", err)
+	}
 
 	// Nil-safe TG5-absent dry-run seam: when facade is nil and dry_run=true,
 	// return a preview using the input array length — no DB access.
 	if dryRun && s.bulkFacade == nil {
 		out := map[string]any{
-			"dry_run":     true,
+			"dry_run":      true,
 			"would_affect": len(candidateIDs),
-			"note":        "bulk_promote preview (facade not wired — would_affect from input only)",
+			"note":         "bulk_promote preview (facade not wired — would_affect from input only)",
 		}
 		return marshalJSON(out)
 	}
@@ -136,12 +141,12 @@ func (s *Server) handleBulkPromote(ctx context.Context, args json.RawMessage) (s
 	}
 
 	out := map[string]any{
-		"dry_run":       result.DryRun,
-		"would_affect":  result.WouldAffect,
+		"dry_run":        result.DryRun,
+		"would_affect":   result.WouldAffect,
 		"affected_count": result.AffectedCount,
-		"snapshot_id":   result.SnapshotID,
-		"promoted":      result.Promoted,
-		"errors":        result.Errors,
+		"snapshot_id":    result.SnapshotID,
+		"promoted":       result.Promoted,
+		"errors":         result.Errors,
 	}
 	return marshalJSON(out)
 }
@@ -164,9 +169,14 @@ func (s *Server) handleBulkDelete(ctx context.Context, args json.RawMessage) (st
 	if err != nil {
 		return "", err
 	}
-
-	memoryIDs := coerceInt64Slice(m["memory_ids"])
-	dryRun := coerceBool(m["dry_run"], false)
+	memoryIDs, err := requireIntegralInt64SliceArg(m, "memory_ids")
+	if err != nil {
+		return "", fmt.Errorf("bulk_delete: %w", err)
+	}
+	dryRun, _, err := optionalBoolArg(m, "dry_run")
+	if err != nil {
+		return "", fmt.Errorf("bulk_delete: %w", err)
+	}
 
 	// Nil-safe TG5-absent dry-run seam.
 	if dryRun && s.bulkFacade == nil {
@@ -221,9 +231,14 @@ func (s *Server) handleBulkSupersede(ctx context.Context, args json.RawMessage) 
 	if err != nil {
 		return "", err
 	}
-
-	memoryIDs := coerceInt64Slice(m["memory_ids"])
-	dryRun := coerceBool(m["dry_run"], false)
+	memoryIDs, err := requireIntegralInt64SliceArg(m, "memory_ids")
+	if err != nil {
+		return "", fmt.Errorf("bulk_supersede: %w", err)
+	}
+	dryRun, _, err := optionalBoolArg(m, "dry_run")
+	if err != nil {
+		return "", fmt.Errorf("bulk_supersede: %w", err)
+	}
 
 	// Nil-safe TG5-absent dry-run seam.
 	if dryRun && s.bulkFacade == nil {

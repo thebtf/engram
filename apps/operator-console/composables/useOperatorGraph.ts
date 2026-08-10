@@ -1,4 +1,4 @@
-import type { ComputedRef, Ref } from 'vue'
+import { onScopeDispose, ref, type ComputedRef, type Ref } from 'vue'
 import type { OperatorDiagnosisCategory, OperatorLoadState, OperatorSourceError } from './useOperatorApi'
 import {
   emptyState,
@@ -150,6 +150,7 @@ export interface GraphMutationError {
 
 export interface GraphActionResult {
   ok: boolean
+  stale?: boolean
   error?: GraphMutationError
 }
 
@@ -446,6 +447,7 @@ function startOnce(key: string, run: () => Promise<void>) {
       }
     })
   }
+  return started
 }
 
 export function useOperatorGraph(): {
@@ -470,6 +472,7 @@ export function useOperatorGraph(): {
   createEdge: (input: CreateGraphEdgeInput) => Promise<GraphActionResult>
   deleteEdge: (edgeID: string) => Promise<GraphActionResult>
   deleteNode: (input: DeleteGraphNodeInput) => Promise<GraphActionResult>
+  invalidateMutations: () => void
   traverseMemory: (memoryID: string, depth?: number) => Promise<void>
   findPath: (sourceID: string, targetID: string, maxDepth?: number) => Promise<void>
 } {
@@ -490,25 +493,50 @@ export function useOperatorGraph(): {
   const pathBusy = useState<boolean>('live:graph:path-busy', () => false)
   const pathError = useState<GraphMutationError | null>('live:graph:path-error', () => null)
   const lastMutationError = useState<GraphMutationError | null>('live:graph:last-mutation-error', () => null)
+  const refreshGeneration = ref(0)
+  const edgesGeneration = ref(0)
+  const traverseGeneration = ref(0)
+  const pathGeneration = ref(0)
+  const mutationGeneration = ref(0)
+  let scopeActive = true
 
   const nodesState = computed(() => nodesStateRef.value)
   const hasProvenSnapshot = computed(() => hasProvenSnapshotValue.value)
   const edgesState = computed(() => edgesStateRef.value)
 
+  function begin(generation: Ref<number>) {
+    generation.value += 1
+    return generation.value
+  }
+
+  function owns(generation: Ref<number>, run: number) {
+    return scopeActive && generation.value === run
+  }
+
+  function invalidateMutations() {
+    begin(mutationGeneration)
+    lastMutationError.value = null
+  }
+
   async function refreshConnectedEdges(nodeID = selectedNodeID.value) {
+    const run = begin(edgesGeneration)
     if (!nodeID) {
+      if (!owns(edgesGeneration, run)) return
       replaceArray(edgesRows.value, [])
       edgesStateRef.value = emptyState(edgesEvidence, edgesRows.value)
       return
     }
+    if (nodesStateRef.value.kind === 'gated' || nodesStateRef.value.kind === 'pending' || selectedNodeID.value !== nodeID) return
     const path = `/api/graph/edges?node_id=${encodeURIComponent(nodeID)}&direction=both`
     edgesStateRef.value = pendingState(edgesEvidence, edgesRows.value)
     try {
       const payload = await fetchGraphJson<ApiGraphEdgesResponse>(path)
       const edges = parseEdges(payload, path)
+      if (!owns(edgesGeneration, run) || selectedNodeID.value !== nodeID) return
       replaceArray(edgesRows.value, edges)
       edgesStateRef.value = edges.length ? liveState(edgesEvidence, edgesRows.value) : emptyState(edgesEvidence, edgesRows.value)
     } catch (error) {
+      if (!owns(edgesGeneration, run) || selectedNodeID.value !== nodeID) return
       const mapped = graphSourceError(error, {
         source: 'operator-graph-edges',
         path,
@@ -525,10 +553,22 @@ export function useOperatorGraph(): {
   }
 
   async function refresh() {
+    const run = begin(refreshGeneration)
+    begin(edgesGeneration)
+    begin(traverseGeneration)
+    begin(pathGeneration)
+    traverseBusy.value = false
+    traverseError.value = null
+    replaceArray(traverseResults.value, [])
+    pathBusy.value = false
+    pathError.value = null
+    pathResult.value = null
     nodesStateRef.value = pendingState(nodesEvidence, nodesRows.value)
     try {
       const flags = await operatorFetchJson<ApiFlags>('/api/flags', undefined, 'operator-graph-flags')
+      if (!owns(refreshGeneration, run)) return
       if (flags.flags?.[GRAPH_FLAG] !== true) {
+        begin(edgesGeneration)
         replaceArray(nodesRows.value, [])
         replaceArray(edgesRows.value, [])
         nodesStateRef.value = gatedState(nodesEvidence, GRAPH_FLAG, 'Knowledge graph is disabled by the graph feature flag.', nodesRows.value)
@@ -537,12 +577,14 @@ export function useOperatorGraph(): {
       }
 
       const projects = await operatorFetchJson<string[]>('/api/projects', undefined, 'operator-graph-projects')
+      if (!owns(refreshGeneration, run)) return
       const nextProjects = Array.isArray(projects) ? projects.filter(Boolean).sort() : []
       replaceArray(projectsState.value, nextProjects)
       if (!selectedProject.value || !projectsState.value.includes(selectedProject.value)) {
         selectedProject.value = projectsState.value[0] || ''
       }
       if (!selectedProject.value) {
+        begin(edgesGeneration)
         replaceArray(nodesRows.value, [])
         replaceArray(edgesRows.value, [])
         nodesStateRef.value = emptyState(nodesEvidence, nodesRows.value)
@@ -551,9 +593,11 @@ export function useOperatorGraph(): {
         return
       }
 
-      const path = `/api/graph/nodes?project=${encodeURIComponent(selectedProject.value)}&limit=${GRAPH_LIMIT}`
+      const project = selectedProject.value
+      const path = `/api/graph/nodes?project=${encodeURIComponent(project)}&limit=${GRAPH_LIMIT}`
       const payload = await fetchGraphJson<ApiGraphNodesResponse>(path)
       const nodes = parseNodes(payload, path)
+      if (!owns(refreshGeneration, run) || selectedProject.value !== project) return
       replaceArray(nodesRows.value, nodes)
       if (!selectedNodeID.value || !nodesRows.value.some((node) => node.id === selectedNodeID.value)) {
         selectedNodeID.value = nodesRows.value[0]?.id || null
@@ -562,6 +606,7 @@ export function useOperatorGraph(): {
       hasProvenSnapshotValue.value = true
       await refreshConnectedEdges(selectedNodeID.value)
     } catch (error) {
+      if (!owns(refreshGeneration, run)) return
       const mapped = graphSourceError(error, {
         source: 'operator-graph-nodes',
         path: nodesEvidence.endpoint,
@@ -578,6 +623,7 @@ export function useOperatorGraph(): {
   }
 
   async function createNode(input: CreateGraphNodeInput): Promise<GraphActionResult> {
+    const run = begin(mutationGeneration)
     lastMutationError.value = null
     const path = '/api/graph/nodes'
     try {
@@ -587,19 +633,28 @@ export function useOperatorGraph(): {
         project: input.project,
         privacy_scope: input.privacyScope || 'project',
       }))
+      if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
       if (created) {
         await refresh()
-        selectedNodeID.value = String(created.id)
-        await refreshConnectedEdges(String(created.id))
+        if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
+        const createdID = String(created.id)
+        if (selectedProject.value === input.project && nodesRows.value.some((node) => node.id === createdID)) {
+          selectedNodeID.value = createdID
+          await refreshConnectedEdges(createdID)
+          if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
+        }
       }
       return { ok: true }
     } catch (error) {
-      lastMutationError.value = graphErrorFromThrown(error, { endpoint: path, method: 'POST', status: undefined })
-      return { ok: false, error: lastMutationError.value }
+      const mapped = graphErrorFromThrown(error, { endpoint: path, method: 'POST', status: undefined })
+      if (!owns(mutationGeneration, run)) return { ok: false, stale: true, error: mapped }
+      lastMutationError.value = mapped
+      return { ok: false, error: mapped }
     }
   }
 
   async function createEdge(input: CreateGraphEdgeInput): Promise<GraphActionResult> {
+    const run = begin(mutationGeneration)
     lastMutationError.value = null
     const path = '/api/graph/edges'
     try {
@@ -611,46 +666,61 @@ export function useOperatorGraph(): {
         edge_type: input.edgeType,
         reasoning: input.reasoning || '',
       }))
+      if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
       if (selectedNodeID.value === input.sourceNodeID || selectedNodeID.value === input.targetNodeID) {
         await refreshConnectedEdges(selectedNodeID.value)
+        if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
       }
       return { ok: true }
     } catch (error) {
-      lastMutationError.value = graphErrorFromThrown(error, { endpoint: path, method: 'POST', status: undefined })
-      return { ok: false, error: lastMutationError.value }
+      const mapped = graphErrorFromThrown(error, { endpoint: path, method: 'POST', status: undefined })
+      if (!owns(mutationGeneration, run)) return { ok: false, stale: true, error: mapped }
+      lastMutationError.value = mapped
+      return { ok: false, error: mapped }
     }
   }
 
   async function deleteEdge(edgeID: string): Promise<GraphActionResult> {
+    const run = begin(mutationGeneration)
     lastMutationError.value = null
     const path = `/api/graph/edges/${encodeURIComponent(edgeID)}`
     try {
       await fetchGraphJson(path, jsonInit('DELETE'))
+      if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
       await refreshConnectedEdges(selectedNodeID.value)
+      if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
       return { ok: true }
     } catch (error) {
-      lastMutationError.value = graphErrorFromThrown(error, { endpoint: path, method: 'DELETE', status: undefined })
-      return { ok: false, error: lastMutationError.value }
+      const mapped = graphErrorFromThrown(error, { endpoint: path, method: 'DELETE', status: undefined })
+      if (!owns(mutationGeneration, run)) return { ok: false, stale: true, error: mapped }
+      lastMutationError.value = mapped
+      return { ok: false, error: mapped }
     }
   }
 
   async function deleteNode(input: DeleteGraphNodeInput): Promise<GraphActionResult> {
+    const run = begin(mutationGeneration)
     lastMutationError.value = null
     const path = `/api/graph/nodes/${encodeURIComponent(input.nodeID)}?cascade=${input.cascade ? 'true' : 'false'}`
     try {
       await fetchGraphJson(path, jsonInit('DELETE'))
+      if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
       if (selectedNodeID.value === input.nodeID) {
         selectedNodeID.value = null
       }
       await refresh()
+      if (!owns(mutationGeneration, run)) return { ok: true, stale: true }
       return { ok: true }
     } catch (error) {
-      lastMutationError.value = graphErrorFromThrown(error, { endpoint: path, method: 'DELETE', status: undefined })
-      return { ok: false, error: lastMutationError.value }
+      const mapped = graphErrorFromThrown(error, { endpoint: path, method: 'DELETE', status: undefined })
+      if (!owns(mutationGeneration, run)) return { ok: false, stale: true, error: mapped }
+      lastMutationError.value = mapped
+      return { ok: false, error: mapped }
     }
   }
 
   async function traverseMemory(memoryID: string, depth = GRAPH_DEFAULT_TRAVERSE_DEPTH) {
+    const run = begin(traverseGeneration)
     if (nodesStateRef.value.kind === 'gated' || nodesStateRef.value.kind === 'pending') {
       replaceArray(traverseResults.value, [])
       traverseError.value = null
@@ -661,16 +731,19 @@ export function useOperatorGraph(): {
     try {
       const path = `/api/graph/traverse?memory_id=${encodeURIComponent(memoryID)}&depth=${encodeURIComponent(String(depth))}`
       const payload = await fetchGraphJson<ApiGraphTraverseResponse>(path)
+      if (!owns(traverseGeneration, run)) return
       replaceArray(traverseResults.value, parseTraverse(payload, path))
     } catch (error) {
+      if (!owns(traverseGeneration, run)) return
       traverseError.value = graphErrorFromThrown(error, { endpoint: '/api/graph/traverse', method: 'GET', status: undefined })
       replaceArray(traverseResults.value, [])
     } finally {
-      traverseBusy.value = false
+      if (owns(traverseGeneration, run)) traverseBusy.value = false
     }
   }
 
   async function findPath(sourceID: string, targetID: string, maxDepth = GRAPH_DEFAULT_PATH_DEPTH) {
+    const run = begin(pathGeneration)
     if (nodesStateRef.value.kind === 'gated' || nodesStateRef.value.kind === 'pending') {
       pathResult.value = null
       pathError.value = null
@@ -681,16 +754,27 @@ export function useOperatorGraph(): {
     try {
       const path = `/api/graph/find-path?source_id=${encodeURIComponent(sourceID)}&target_id=${encodeURIComponent(targetID)}&max_depth=${encodeURIComponent(String(maxDepth))}`
       const payload = await fetchGraphJson<ApiGraphPathResponse>(path)
+      if (!owns(pathGeneration, run)) return
       pathResult.value = parsePath(payload, path)
     } catch (error) {
+      if (!owns(pathGeneration, run)) return
       pathError.value = graphErrorFromThrown(error, { endpoint: '/api/graph/find-path', method: 'GET', status: undefined })
       pathResult.value = null
     } finally {
-      pathBusy.value = false
+      if (owns(pathGeneration, run)) pathBusy.value = false
     }
   }
 
-  startOnce('operator-graph', refresh)
+  const started = startOnce('operator-graph', refresh)
+  onScopeDispose(() => {
+    scopeActive = false
+    begin(refreshGeneration)
+    begin(edgesGeneration)
+    begin(traverseGeneration)
+    begin(pathGeneration)
+    begin(mutationGeneration)
+    started.value = false
+  })
 
   return {
     projects: projectsState.value,
@@ -714,6 +798,7 @@ export function useOperatorGraph(): {
     createEdge,
     deleteEdge,
     deleteNode,
+    invalidateMutations,
     traverseMemory,
     findPath,
   }

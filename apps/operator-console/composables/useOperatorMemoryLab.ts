@@ -699,6 +699,7 @@ export function useOperatorMemoryLab(): {
   pending: ComputedRef<boolean>
   error: ComputedRef<string | null>
   refresh: () => Promise<void>
+  loadMemoryByID: (id: string) => Promise<Memory>
   storeMemory: (input: StoreMemoryInput) => Promise<OperatorMutationResult<Memory>>
   deleteMemory: (id: string) => Promise<OperatorMutationResult<unknown>>
   suppressMemory: (id: string, reason?: string) => Promise<OperatorMutationResult<MemoryActionReceipt>>
@@ -739,6 +740,14 @@ export function useOperatorMemoryLab(): {
     }
   }
 
+  async function loadMemoryByID(id: string) {
+    const path = `/api/memories/${encodeURIComponent(id)}`
+    const row = mapMemoryRow(await operatorFetchJson<ApiMemory>(path, undefined, 'memory-get'))
+    const index = rowsState.value.findIndex((item) => item.project === row.project && item.id === row.id)
+    if (index < 0) rowsState.value.push(row)
+    else rowsState.value.splice(index, 1, row)
+    return row
+  }
   async function storeMemory(input: StoreMemoryInput) {
     return runOperatorMutation({
       action: 'memory-store',
@@ -847,6 +856,7 @@ export function useOperatorMemoryLab(): {
     pending,
     error,
     refresh,
+    loadMemoryByID,
     storeMemory,
     deleteMemory,
     suppressMemory,

@@ -617,7 +617,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, agent_id, cwd, legacy_project, git_remote, relative_path}",
+                        "description": "POST body: {project, agent_id, cwd, legacy_project, project_identity, identity_only}",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -639,10 +639,24 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
+                    "409": {
+                        "description": "ambiguous legacy project identity",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
                     "500": {
                         "description": "internal error",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "project identity registration unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     }
                 }
@@ -684,7 +698,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "description": "POST body: {project, agent_id, cwd, legacy_project, git_remote, relative_path}",
+                        "description": "POST body: {project, agent_id, cwd, legacy_project, project_identity, identity_only}",
                         "name": "body",
                         "in": "body",
                         "schema": {
@@ -706,10 +720,24 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
+                    "409": {
+                        "description": "ambiguous legacy project identity",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
                     "500": {
                         "description": "internal error",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "project identity registration unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     }
                 }
@@ -1484,6 +1512,62 @@ const docTemplate = `{
             }
         },
         "/api/memories/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns one active memory entry by numeric ID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Memories"
+                ],
+                "summary": "Get a memory note by ID",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Memory ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.Memory"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
             "delete": {
                 "security": [
                     {
@@ -1727,6 +1811,70 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "feature flag required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/memory/candidates/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns one vNext-F crystallization candidate with its bounded review_packet projection.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Memories"
+                ],
+                "summary": "Read one crystallization candidate review packet",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Candidate ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.candidateReviewItem"
+                        }
+                    },
+                    "400": {
+                        "description": "invalid id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "feature flag required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "candidate not found",
                         "schema": {
                             "type": "string"
                         }
@@ -2313,6 +2461,76 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/rules/{id}/enabled": {
+            "patch": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Toggles whether an active behavioral rule is injected. Disabled rules remain listed for operator review and re-enabling.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Rules"
+                ],
+                "summary": "Enable or disable a behavioral rule",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Rule ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Rule enabled payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_worker.behavioralRuleEnabledRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/github_com_thebtf_engram_pkg_models.BehavioralRule"
+                        }
+                    },
+                    "400": {
+                        "description": "enabled is required",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "rule not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "internal server error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "service unavailable",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/search/analytics": {
             "get": {
                 "security": [
@@ -2688,54 +2906,6 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
-                        }
-                    },
-                    "500": {
-                        "description": "internal error",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/sessions/observations": {
-            "post": {
-                "security": [
-                    {
-                        "ApiKeyAuth": []
-                    }
-                ],
-                "description": "Handles observation posting from post-tool-use hook. Creates session on-the-fly if not found.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Sessions"
-                ],
-                "summary": "Post observation from hook",
-                "parameters": [
-                    {
-                        "description": "Observation data",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/internal_worker.ObservationRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK"
-                    },
-                    "400": {
-                        "description": "bad request",
-                        "schema": {
-                            "type": "string"
                         }
                     },
                     "500": {
@@ -3546,6 +3716,146 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_thebtf_engram_internal_reviewpacket.CandidateAuditPolicy": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "store": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_thebtf_engram_internal_reviewpacket.CandidateDecisionPolicy": {
+            "type": "object",
+            "properties": {
+                "allowed_actions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "default_action": {
+                    "type": "string"
+                },
+                "epistemic_type": {
+                    "type": "string"
+                },
+                "promotion_target": {
+                    "type": "string"
+                },
+                "tier": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_thebtf_engram_internal_reviewpacket.CandidateEvidence": {
+            "type": "object",
+            "properties": {
+                "handle": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_thebtf_engram_internal_reviewpacket.CandidateMutationRequirements": {
+            "type": "object",
+            "properties": {
+                "audit_write_required": {
+                    "type": "boolean"
+                },
+                "privacy_scope_required": {
+                    "type": "boolean"
+                },
+                "snapshot_required": {
+                    "type": "boolean"
+                },
+                "structural_loss_check_required": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "github_com_thebtf_engram_internal_reviewpacket.CandidateReviewPacket": {
+            "type": "object",
+            "properties": {
+                "audit": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateAuditPolicy"
+                },
+                "candidate_id": {
+                    "type": "integer"
+                },
+                "decision": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateDecisionPolicy"
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateEvidence"
+                    }
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "mutation_requirements": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateMutationRequirements"
+                },
+                "packet_id": {
+                    "type": "string"
+                },
+                "read_only": {
+                    "type": "boolean"
+                },
+                "scope": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateScope"
+                },
+                "snapshot": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateSnapshotPolicy"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_thebtf_engram_internal_reviewpacket.CandidateScope": {
+            "type": "object",
+            "properties": {
+                "privacy_scope": {
+                    "type": "string"
+                },
+                "projects": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "source_session_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "github_com_thebtf_engram_internal_reviewpacket.CandidateSnapshotPolicy": {
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string"
+                },
+                "required": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "store": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_thebtf_engram_pkg_models.BehavioralRule": {
             "type": "object",
             "properties": {
@@ -3560,6 +3870,9 @@ const docTemplate = `{
                 },
                 "edited_by": {
                     "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
                 },
                 "id": {
                     "type": "integer"
@@ -3868,25 +4181,6 @@ const docTemplate = `{
                 }
             }
         },
-        "internal_worker.ObservationRequest": {
-            "type": "object",
-            "properties": {
-                "claudeSessionId": {
-                    "type": "string"
-                },
-                "cwd": {
-                    "type": "string"
-                },
-                "project": {
-                    "type": "string"
-                },
-                "tool_input": {},
-                "tool_name": {
-                    "type": "string"
-                },
-                "tool_response": {}
-            }
-        },
         "internal_worker.RunInfo": {
             "type": "object",
             "properties": {
@@ -3995,6 +4289,17 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_worker.behavioralRuleEnabledRequest": {
+            "type": "object",
+            "properties": {
+                "edited_by": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                }
+            }
+        },
         "internal_worker.behavioralRuleRequest": {
             "type": "object",
             "properties": {
@@ -4085,6 +4390,9 @@ const docTemplate = `{
                 },
                 "review_after": {
                     "type": "string"
+                },
+                "review_packet": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_internal_reviewpacket.CandidateReviewPacket"
                 },
                 "source_session_id": {
                     "type": "string"

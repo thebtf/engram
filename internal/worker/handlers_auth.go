@@ -529,7 +529,7 @@ func normalizeTokenPrincipal(principal, principalKind string) (string, string, e
 		if principalKind != "" {
 			return "", "", errors.New("principal is required when principal_kind is set")
 		}
-		return "", string(authpkg.PrincipalKindHuman), nil
+		return "", "", nil
 	}
 	if principalKind == "" {
 		principalKind = string(authpkg.PrincipalKindHuman)
