@@ -18,16 +18,20 @@ retry_delay_seconds=10
 release="$(mktemp)"
 trap 'rm -f "$release"' EXIT
 for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-  curl --fail --silent --show-error --location \
+  if curl_error="$(curl --fail --silent --show-error --location \
     --max-time "$request_timeout_seconds" \
     -H "Authorization: Bearer ${GITHUB_TOKEN}" \
     -H 'Accept: application/vnd.github+json' \
-    "https://api.github.com/repos/thebtf/engram/releases?per_page=100" > "$release"
-  if verifier_error="$(node "$(dirname "${BASH_SOURCE[0]}")/verify-bootstrap-release-assets.js" "$policy" "$release" "$tag" 2>&1 >/dev/null)"; then
-    exit 0
+    "https://api.github.com/repos/thebtf/engram/releases?per_page=100" > "$release" 2>&1)"; then
+    if node_error="$(node "$(dirname "${BASH_SOURCE[0]}")/verify-bootstrap-release-assets.js" "$policy" "$release" "$tag" 2>&1 >/dev/null)"; then
+      exit 0
+    fi
+    last_error="$node_error"
+  else
+    last_error="$curl_error"
   fi
   if (( attempt == max_attempts )); then
-    printf '%s\n' "$verifier_error" >&2
+    printf '%s\n' "$last_error" >&2
     exit 1
   fi
   sleep "$retry_delay_seconds"

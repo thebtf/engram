@@ -209,12 +209,19 @@ exec "$node_path" "$@"
         digest: `sha256:${desired.sha256}`,
       })),
     }]));
-    fs.writeFileSync(path.join(fakeBin, "curl"), "#!/usr/bin/env bash\ncount=0\n[[ -f $FAKE_CURL_COUNT ]] && count=$(cat \"$FAKE_CURL_COUNT\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$FAKE_CURL_COUNT\"\nif (( count == 1 )); then cat \"$FAKE_RELEASE_FIRST\"; else cat \"$FAKE_RELEASE_SECOND\"; fi\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(fakeBin, "curl"), "#!/usr/bin/env bash\ncount=0\n[[ -f $FAKE_CURL_COUNT ]] && count=$(cat \"$FAKE_CURL_COUNT\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$FAKE_CURL_COUNT\"\nif (( count == 1 )) && [[ ${FAKE_CURL_FAIL_FIRST:-} == 1 ]]; then echo 'transient release list failure' >&2; exit 1; fi\nif (( count == 1 )); then cat \"$FAKE_RELEASE_FIRST\"; else cat \"$FAKE_RELEASE_SECOND\"; fi\n", { mode: 0o755 });
     fs.writeFileSync(path.join(fakeBin, "sleep"), "#!/usr/bin/env bash\nprintf '%s\\n' \"$1\" >> \"$FAKE_SLEEP_LOG\"\n", { mode: 0o755 });
     const environment = `PATH=${shellQuote(installerPath(fakeBin))} GITHUB_TOKEN=fake FAKE_MKTEMP_PATH=${shellQuote(bashPath(release))} FAKE_CURL_COUNT=${shellQuote(bashPath(count))} FAKE_RELEASE_FIRST=${shellQuote(bashPath(first))} FAKE_RELEASE_SECOND=${shellQuote(bashPath(second))} FAKE_SLEEP_LOG=${shellQuote(bashPath(sleeps))}`;
     const result = spawnSync("bash", ["-c", `${environment} bash scripts/readback-bootstrap-policy-assets.sh --tag v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.readFileSync(count, "utf8"), "2");
+    assert.equal(fs.readFileSync(sleeps, "utf8"), "10\n");
+    fs.rmSync(count);
+    fs.rmSync(sleeps);
+    const recovered = spawnSync("bash", ["-c", `${environment} FAKE_CURL_FAIL_FIRST=1 bash scripts/readback-bootstrap-policy-assets.sh --tag v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
+    assert.ifError(recovered.error);
+    assert.equal(recovered.status, 0, recovered.stderr || recovered.stdout);
     assert.equal(fs.readFileSync(count, "utf8"), "2");
     assert.equal(fs.readFileSync(sleeps, "utf8"), "10\n");
     fs.rmSync(count);
