@@ -200,7 +200,7 @@ exec "$node_path" "$@"
     const assertCurlInvocations = () => {
       const calls = fs.readFileSync(invocations, "utf8").trimEnd().split("\n");
       assert.equal(calls.length, Number(fs.readFileSync(count, "utf8")));
-      assert.ok(calls.every((call) => call.includes("--max-time 5")));
+      assert.ok(calls.every((call) => /(?:^| )--max-time 5(?: |$)/.test(call)));
     };
     const policy = parsePolicy(fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8"), "6.47.1");
     fs.writeFileSync(first, "[]");
