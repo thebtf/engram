@@ -13,7 +13,7 @@ while [[ $# -gt 0 ]]; do
     *) printf 'usage: %s --version X.Y.Z [--output PATH] [--check]\n' "$0" >&2; exit 2 ;;
   esac
 done
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || { echo 'version must be canonical SemVer without v' >&2; exit 2; }
+[[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || { echo 'version must be canonical SemVer without v' >&2; exit 2; }
 [[ "$(go version | awk '{print $3}')" == 'go1.25.12' ]] || { echo 'requires Go 1.25.12' >&2; exit 1; }
 
 workdir="$(mktemp -d)"

@@ -53,14 +53,14 @@ test("strict policy rejects unknown fields, package skew, revoked hashes, and ep
 
 test("policy selection only accepts the exact host platform tuple", () => {
   const policy = selected();
-  assert.equal(policy.target.asset, policy.targets[policy.platform].desired.asset);
+  assert.equal(policy.target.desired.asset, policy.targets[policy.platform].desired.asset);
   assert.throws(() => parsePolicy(JSON.stringify(fixture().policy), "6.47.0", "linux-arm64"), /no target/);
 });
 
 test("object verification rejects poisoned, oversized, truncated, directory, and reparse objects", () => {
   const root = tempRoot();
   const roots = objectRoots(root);
-  const target = selected().target;
+  const target = selected().target.desired;
   const object = objectPath(roots, target);
   fs.writeFileSync(object, "wrong");
   assert.equal(verifyObject(roots, target), "");
@@ -68,7 +68,7 @@ test("object verification rejects poisoned, oversized, truncated, directory, and
   fs.writeFileSync(object, Buffer.concat([fixture().bytes, Buffer.from("x")]));
   assert.equal(verifyObject(roots, target), "");
   fs.mkdirSync(object);
-  assert.equal(verifyObject(roots, target), "");
+  assert.throws(() => verifyObject(roots, target), BootstrapError);
   fs.symlinkSync(path.join(root, "outside"), object, process.platform === "win32" ? "file" : undefined);
   assert.throws(() => verifyObject(roots, target), BootstrapError);
 });
@@ -76,7 +76,7 @@ test("object verification rejects poisoned, oversized, truncated, directory, and
 test("legacy canonical bytes are imported only after exact hashing and are never authority", () => {
   const root = tempRoot();
   const roots = objectRoots(root);
-  const target = selected().target;
+  const target = selected().target.desired;
   const legacy = path.join(roots.bin, process.platform === "win32" ? "engram.exe" : "engram");
   fs.writeFileSync(legacy, fixture().bytes);
   fs.chmodSync(legacy, 0o444); // Models a legacy file the importer must only read.
@@ -88,7 +88,7 @@ test("legacy canonical bytes are imported only after exact hashing and are never
 test("concurrent no-overwrite publication accepts only an independently verified winner", () => {
   const root = tempRoot();
   const roots = objectRoots(root);
-  const target = selected().target;
+  const target = selected().target.desired;
   const stages = [path.join(roots.staging, "one.part"), path.join(roots.staging, "two.part")];
   fs.writeFileSync(stages[0], fixture().bytes);
   fs.writeFileSync(stages[1], fixture().bytes);
@@ -99,16 +99,16 @@ test("concurrent no-overwrite publication accepts only an independently verified
 });
 
 test("redirect escape and loop fail before bytes are accepted", async () => {
-  const target = selected().target;
+  const target = selected().target.desired;
   const fakeRequest = (url, _options, callback) => {
     const request = new EventEmitter();
-    request.end = () => callback(Object.assign(Readable.from([]), { statusCode: 302, headers: { location: "http://evil.invalid/a" }, resume() {} }));
+    request.end = () => callback(Object.assign(Readable.from([]), { statusCode: 302, headers: { location: "http://evil.invalid/a" }, resume() { } }));
     return request;
   };
   await assert.rejects(requestStream("https://github.com/thebtf/engram/releases/download/v6.47.0/x", target, fakeRequest), BootstrapError);
   const loopRequest = (_url, _options, callback) => {
     const request = new EventEmitter();
-    request.end = () => callback(Object.assign(Readable.from([]), { statusCode: 302, headers: { location: "https://github.com/again" }, resume() {} }));
+    request.end = () => callback(Object.assign(Readable.from([]), { statusCode: 302, headers: { location: "https://github.com/again" }, resume() { } }));
     return request;
   };
   await assert.rejects(requestStream("https://github.com/thebtf/engram/releases/download/v6.47.0/x", target, loopRequest), /redirect limit/);
@@ -118,10 +118,10 @@ test("redirect escape and loop fail before bytes are accepted", async () => {
 test("bounded acquisition rejects contradictory, truncated, and one-byte oversize streams without leaving staging", async () => {
   const root = tempRoot();
   const roots = objectRoots(root);
-  const target = selected().target;
+  const target = selected().target.desired;
   const makeRequest = (bytes, length = target.size) => (_url, _options, callback) => {
     const request = new EventEmitter();
-    request.end = () => callback(Object.assign(Readable.from([bytes]), { statusCode: 200, headers: { "content-length": String(length) }, resume() {} }));
+    request.end = () => callback(Object.assign(Readable.from([bytes]), { statusCode: 200, headers: { "content-length": String(length) } }));
     return request;
   };
   await assert.rejects(downloadObject(roots, target, { request: makeRequest(fixture().bytes, target.size + 1) }), BootstrapError);
@@ -133,7 +133,7 @@ test("offline resolution uses a verified desired object and rejects bytes change
   const root = tempRoot();
   const roots = objectRoots(root);
   const policy = selected();
-  const object = objectPath(roots, policy.target);
+  const object = objectPath(roots, policy.target.desired);
   fs.writeFileSync(object, fixture().bytes);
   const resolved = await resolveForLaunch({ pluginRoot: root, pluginData: root, policy, request: () => { throw new Error("network must not run"); } });
   assert.equal(resolved.path, object);

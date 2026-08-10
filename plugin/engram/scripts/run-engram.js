@@ -321,15 +321,6 @@ function trimStartupDiagnosticLog(logPath, maxBytes = STARTUP_DIAGNOSTIC_LOG_MAX
  }
 }
 
-function checkedSpawnSync(command, args, options, label) {
- const result = spawnSync(command, args, options);
- const failure = spawnFailureMessage(result, label);
- if (failure) {
-  process.stderr.write(failure);
-  process.exit(1);
- }
- return result.status ?? 0;
-}
 
 function spawnFailureMessage(result, label) {
  const prefix = `[engram] ${label}`;

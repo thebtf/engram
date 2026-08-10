@@ -47,7 +47,8 @@ func TestClassifyDaemonConvergence(t *testing.T) {
 
 func TestReadMuxcoreDaemonVersionMarkerRejectsMalformedIdentity(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "marker.json")
-	valid := `{"schema_version":2,"product_version":"v6.47.0","daemon_compat_epoch":1,"pid":42,"daemon_generation":"daemon-1","exe":"` + filepath.ToSlash(filepath.Join(t.TempDir(), "engram.exe")) + `"}`
+	validExe := filepath.ToSlash(filepath.Join(t.TempDir(), "engram.exe"))
+	valid := `{"schema_version":2,"product_version":"v6.47.0","daemon_compat_epoch":1,"pid":42,"daemon_generation":"daemon-1","exe":"` + validExe + `"}`
 	for _, test := range []struct {
 		name string
 		raw  string
@@ -57,7 +58,7 @@ func TestReadMuxcoreDaemonVersionMarkerRejectsMalformedIdentity(t *testing.T) {
 		{"schema one rejected", strings.Replace(valid, `"schema_version":2`, `"schema_version":1`, 1), false},
 		{"unknown field rejected", strings.TrimSuffix(valid, "}") + `,"extra":true}`, false},
 		{"missing generation rejected", strings.Replace(valid, `"daemon_generation":"daemon-1",`, "", 1), false},
-		{"relative executable rejected", strings.Replace(valid, `"exe":"`+filepath.ToSlash(filepath.Join(t.TempDir(), "engram.exe"))+`"`, `"exe":"engram.exe"`, 1), false},
+		{"relative executable rejected", strings.Replace(valid, `"exe":"`+validExe+`"`, `"exe":"engram.exe"`, 1), false},
 		{"noncanonical semver rejected", strings.Replace(valid, "v6.47.0", "6.47.0", 1), false},
 		{"multiple JSON values rejected", valid + "\n{}", false},
 	} {
@@ -135,7 +136,9 @@ func stubReconciliation(t *testing.T, status muxcoreDaemonStatusIdentity, action
 	t.Helper()
 	oldStatus, oldAction, oldExe, oldRestart, oldWait := readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, currentExecutable, restartMuxcoreDaemon, waitForCurrentMuxcoreDaemonReady
 	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) { return status, true }
-	readLiveMuxcoreDaemonAction = func(muxcoreDaemonStatusIdentity, daemonConvergenceIdentity) (daemonConvergenceAction, error) { return action, actionErr }
+	readLiveMuxcoreDaemonAction = func(muxcoreDaemonStatusIdentity, daemonConvergenceIdentity) (daemonConvergenceAction, error) {
+		return action, actionErr
+	}
 	t.Cleanup(func() {
 		readMuxcoreDaemonStatusIdentity, readLiveMuxcoreDaemonAction, currentExecutable, restartMuxcoreDaemon, waitForCurrentMuxcoreDaemonReady = oldStatus, oldAction, oldExe, oldRestart, oldWait
 	})
@@ -169,9 +172,9 @@ func TestReconcileMuxcoreDaemonVersionStartsNormallyWithoutLiveDaemon(t *testing
 
 func TestReconcileMuxcoreDaemonVersionDoesNotReplaceHigherOrMalformedDaemon(t *testing.T) {
 	for _, test := range []struct {
-		name string
+		name   string
 		action daemonConvergenceAction
-		err error
+		err    error
 	}{
 		{"higher epoch", daemonConvergenceFail, errors.New("incompatible newer daemon epoch 2")},
 		{"uncorrelated marker", daemonConvergenceFail, errors.New("daemon marker does not correlate to fresh control status")},
@@ -179,7 +182,10 @@ func TestReconcileMuxcoreDaemonVersionDoesNotReplaceHigherOrMalformedDaemon(t *t
 		t.Run(test.name, func(t *testing.T) {
 			stubReconciliation(t, muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "daemon-1"}, test.action, test.err)
 			called := false
-			restartMuxcoreDaemon = func(context.Context, string) (engine.UpdateAndRestartResult, error) { called = true; return engine.UpdateAndRestartResult{}, nil }
+			restartMuxcoreDaemon = func(context.Context, string) (engine.UpdateAndRestartResult, error) {
+				called = true
+				return engine.UpdateAndRestartResult{}, nil
+			}
 			if err := reconcileMuxcoreDaemonVersion(context.Background()); err == nil || !strings.Contains(err.Error(), test.err.Error()) {
 				t.Fatalf("error = %v, want %q", err, test.err)
 			}

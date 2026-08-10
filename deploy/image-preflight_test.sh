@@ -183,6 +183,12 @@ main() {
     make_env "${tmp}/invalid-publication.env" "${server}" "${operator}" "${postgres}"
     assert_rejected_before_compose 'publication provenance fields are required before compose' "${tmp}/invalid-publication.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
 
+    cp "${tmp}/publication-result.json" "${tmp}/boolean-schema-publication.json"
+    sed -i 's/"schema_version":1/"schema_version":true/' "${tmp}/boolean-schema-publication.json"
+    PUBLICATION_RESULT="${tmp}/boolean-schema-publication.json"
+    make_env "${tmp}/boolean-schema.env" "${server}" "${operator}" "${postgres}"
+    assert_rejected_before_compose 'boolean schema version is rejected before compose' "${tmp}/boolean-schema.env" env -u ENGRAM_SERVER_IMAGE -u ENGRAM_OPERATOR_IMAGE -u ENGRAM_POSTGRES_IMAGE
+
     make_publication_result "${tmp}/publication-result.json"
     PUBLICATION_RESULT="${tmp}/publication-result.json"
     make_env "${tmp}/manifest-mismatch.env" "ghcr.io/thebtf/engram@sha256:$(printf '9%.0s' {1..64})" "${operator}" "${postgres}"

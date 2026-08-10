@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Refuse GoReleaser merge/upload unless split raw clients equal package policy.
+# Refuse public release publication unless GoReleaser raw clients equal package policy.
 set -euo pipefail
 policy="plugin/engram/bootstrap-targets.json"
 dist="dist"
@@ -24,7 +24,7 @@ const walk = (dir) => { for (const entry of fs.readdirSync(dir, { withFileTypes:
 walk(dist);
 for (const item of expected) {
   const matches = files.filter((file) => path.basename(file) === item.asset);
-  if (matches.length !== 1) throw new Error(`expected exactly one split raw artifact named ${item.asset}`);
+  if (matches.length !== 1) throw new Error(`expected exactly one raw artifact named ${item.asset}`);
   const bytes = fs.readFileSync(matches[0]);
   const digest = crypto.createHash('sha256').update(bytes).digest('hex');
   if (bytes.length !== item.size || digest !== item.sha256) throw new Error(`policy mismatch for ${item.asset}`);

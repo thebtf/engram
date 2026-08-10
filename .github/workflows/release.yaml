@@ -47,7 +47,7 @@ jobs:
         uses: sigstore/cosign-installer@v3
 
       - name: Test plugin scripts
-        run: node --test --test-concurrency=1 plugin/engram/hooks/*.test.js plugin/engram/scripts/*.test.js
+        run: node --test --test-concurrency=1 plugin/engram/hooks/*.test.js plugin/engram/scripts/*.test.js scripts/*.test.js
         env:
           ENGRAM_TOKEN: release-test-keycard
 
@@ -56,21 +56,49 @@ jobs:
       - name: Verify committed launcher policy
         run: scripts/prepare-bootstrap-policy.sh --version "${GITHUB_REF_NAME#v}" --check
 
-      - name: Build split release artifacts
-        run: goreleaser release --clean --split
+      # GoReleaser OSS has no split/continue gate. Upload into a private draft,
+      # verify the exact bytes locally and through GitHub readback, then publish.
+      - name: Build sign and upload draft release
+        run: goreleaser release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Gate raw clients against committed policy
         run: scripts/check-bootstrap-policy-artifacts.sh --policy plugin/engram/bootstrap-targets.json --dist dist
 
-      # continue --merge consumes the checked split artifacts; it does not rebuild.
-      - name: Archive sign and publish checked artifacts
-        run: goreleaser continue --merge
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Read published launcher assets back
+      - name: Read draft launcher assets back
         run: scripts/readback-bootstrap-policy-assets.sh --policy plugin/engram/bootstrap-targets.json --tag "${GITHUB_REF_NAME}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish verified draft
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          release="$(mktemp)"
+          published="$(mktemp)"
+          trap 'rm -f "$release" "$published"' EXIT
+          curl --fail --silent --show-error --location \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "https://api.github.com/repos/thebtf/engram/releases?per_page=100" > "$release"
+          release_id="$(node scripts/verify-bootstrap-release-assets.js plugin/engram/bootstrap-targets.json "$release" "$GITHUB_REF_NAME")"
+          curl --fail --silent --show-error --location \
+            -X PATCH \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'Content-Type: application/json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "https://api.github.com/repos/thebtf/engram/releases/${release_id}" \
+            --data '{"draft":false}' > "$published"
+          node - "$published" "$GITHUB_REF_NAME" <<'NODE'
+          const fs = require('node:fs');
+          const [path, tag] = process.argv.slice(2);
+          const release = JSON.parse(fs.readFileSync(path, 'utf8'));
+          if (release.tag_name !== tag || release.draft !== false) {
+            throw new Error('verified draft was not published');
+          }
+          NODE

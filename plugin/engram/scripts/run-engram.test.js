@@ -126,7 +126,7 @@ test("infers OMP plugin data dir from installed cache root", () => {
     "plugins",
     "cache",
     "plugins",
-    "engram___engram___6.46.4"
+    "engram___engram___6.47.0"
   );
 
   assert.equal(

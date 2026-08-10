@@ -6,6 +6,12 @@ Every deployment requires the retained post-readback `publication-result.json`
 from the one release workflow execution that published the selected images. It
 is deployment authority, not merely release evidence.
 
+The retained record is an explicit local trust boundary: keep it at an
+operator-owned, access-controlled path such as `/secure/evidence`. Anyone able
+to modify both this record and the deployment dotenv holds deployment authority.
+The wrapper validates the record and binds its read-back digests to the dotenv;
+it does not claim to verify a cryptographic signature over the local file.
+
 ## Immutable image selection
 
 Set all three identities before parsing either Compose file:

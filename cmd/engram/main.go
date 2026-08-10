@@ -52,7 +52,7 @@ const (
 	muxcoreEmbeddedVersion   = "v0.29.1"
 	muxcoreNamespace         = "engram"
 	muxcoreDaemonCompatEpoch = 1
-	legacyDaemonVersion       = "v6.46.4"
+	legacyDaemonVersion      = "v6.46.4"
 )
 
 type muxcoreDaemonVersionMarker struct {

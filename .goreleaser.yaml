@@ -72,7 +72,7 @@ builds:
 archives:
   # Archive names and layout are the direct-installer contract.
   - id: server-plugin
-    builds:
+    ids:
       - engram-server
     formats:
       - tar.gz
@@ -121,7 +121,7 @@ archives:
 
   # Raw client assets are published by this GoReleaser writer, never another workflow.
   - id: client-raw
-    builds:
+    ids:
       - engram-client
     formats:
       - binary
@@ -134,9 +134,9 @@ changelog:
   sort: asc
   filters:
     exclude:
-      - '^docs:'
-      - '^test:'
-      - '^chore:'
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
       - Merge pull request
       - Merge branch
 
@@ -144,7 +144,9 @@ release:
   github:
     owner: thebtf
     name: engram
-  draft: false
+  # Keep every artifact private until the workflow verifies the exact raw clients.
+  draft: true
+  replace_existing_draft: true
   prerelease: auto
   name_template: "v{{.Version}}"
   header: |

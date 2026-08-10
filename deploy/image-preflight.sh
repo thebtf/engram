@@ -97,7 +97,7 @@ required = {'schema_version', 'release_version', 'source_commit', 'single_writer
 allowed = required | {'completed_at'}
 if not isinstance(record, dict) or set(record) - allowed or required - set(record):
     raise SystemExit('publication result has an unsupported schema')
-if record['schema_version'] != 1 or not re.fullmatch(r'v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?', record['release_version']):
+if type(record['schema_version']) is not int or record['schema_version'] != 1 or not re.fullmatch(r'v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?', record['release_version']):
     raise SystemExit('publication result has an invalid schema or release version')
 if not re.fullmatch(r'[0-9a-f]{40}', record['source_commit']) or record['single_writer_model'] != 'repository-workflow-release-publish' or record['external_package_admin_trust_boundary'] is not True or record['remote_inspection'] != 'complete' or not re.fullmatch(r'sha256:[0-9a-f]{64}', record['acceptance_manifest_sha256']):
     raise SystemExit('publication result lacks accepted provenance fields')

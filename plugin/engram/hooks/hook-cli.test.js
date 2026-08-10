@@ -699,7 +699,7 @@ test('release archives include scripts required by hooks and MCP wrapper', () =>
   assert.match(goreleaser, /src:\s+plugin\/engram\/hooks\/\*\.cjs/);
   assert.match(goreleaser, /dst:\s+scripts/);
   assert.match(goreleaser, /src:\s+plugin\/engram\/bootstrap-targets\.json/);
-  assert.match(goreleaser, /id:\s+client-raw[\s\S]*?builds:[\s\S]*?engram-client[\s\S]*?formats:[\s\S]*?binary/);
+  assert.match(goreleaser, /id:\s+client-raw[\s\S]*?ids:[\s\S]*?engram-client[\s\S]*?formats:[\s\S]*?binary/);
   assert.deepEqual(codexMcp.mcpServers.engram.args, ['./scripts/run-engram.js']);
   assert.deepEqual(claudeMcp.mcpServers.engram.args, ['${CLAUDE_PLUGIN_ROOT}/scripts/run-engram.js']);
   assert.match(dispatcher, /\.\.\/scripts\/ensure-binary\.js/);
