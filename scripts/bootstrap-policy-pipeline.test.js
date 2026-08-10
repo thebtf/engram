@@ -187,6 +187,7 @@ test("release readback retries until the private draft is visible", () => {
     const second = path.join(temp, "second.json");
     const sleeps = path.join(temp, "sleeps");
     const release = path.join(temp, "release.json");
+    const invocations = path.join(temp, "curl-invocations");
     fs.mkdirSync(fakeBin, { recursive: true });
     fs.writeFileSync(path.join(fakeBin, "node"), `#!/usr/bin/env bash
 node_path=${shellQuote(process.execPath)}
@@ -196,6 +197,11 @@ fi
 exec "$node_path" "$@"
 `, { mode: 0o755 });
     fs.writeFileSync(path.join(fakeBin, "mktemp"), "#!/usr/bin/env bash\nprintf '%s\\n' \"$FAKE_MKTEMP_PATH\"\n", { mode: 0o755 });
+    const assertCurlInvocations = () => {
+      const calls = fs.readFileSync(invocations, "utf8").trimEnd().split("\n");
+      assert.equal(calls.length, Number(fs.readFileSync(count, "utf8")));
+      assert.ok(calls.every((call) => call.includes("--max-time 5")));
+    };
     const policy = parsePolicy(fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8"), "6.47.1");
     fs.writeFileSync(first, "[]");
     fs.writeFileSync(second, JSON.stringify([{
@@ -209,36 +215,43 @@ exec "$node_path" "$@"
         digest: `sha256:${desired.sha256}`,
       })),
     }]));
-    fs.writeFileSync(path.join(fakeBin, "curl"), "#!/usr/bin/env bash\ncount=0\n[[ -f $FAKE_CURL_COUNT ]] && count=$(cat \"$FAKE_CURL_COUNT\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$FAKE_CURL_COUNT\"\nif [[ ${FAKE_CURL_ALWAYS_FAIL:-} == 1 ]] || { (( count == 1 )) && [[ ${FAKE_CURL_FAIL_FIRST:-} == 1 ]]; }; then echo 'transient release list failure' >&2; exit 1; fi\nif (( count == 1 )); then cat \"$FAKE_RELEASE_FIRST\"; else cat \"$FAKE_RELEASE_SECOND\"; fi\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(fakeBin, "curl"), "#!/usr/bin/env bash\ncount=0\n[[ -f $FAKE_CURL_COUNT ]] && count=$(cat \"$FAKE_CURL_COUNT\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$FAKE_CURL_COUNT\"\nprintf '%s\\n' \"$*\" >> \"$FAKE_CURL_INVOCATIONS\"\nif [[ ${FAKE_CURL_ALWAYS_FAIL:-} == 1 ]] || { (( count == 1 )) && [[ ${FAKE_CURL_FAIL_FIRST:-} == 1 ]]; }; then echo \"transient release list failure $count\" >&2; exit 1; fi\nif (( count == 1 )); then cat \"$FAKE_RELEASE_FIRST\"; else cat \"$FAKE_RELEASE_SECOND\"; fi\n", { mode: 0o755 });
     fs.writeFileSync(path.join(fakeBin, "sleep"), "#!/usr/bin/env bash\nprintf '%s\\n' \"$1\" >> \"$FAKE_SLEEP_LOG\"\n", { mode: 0o755 });
-    const environment = `PATH=${shellQuote(installerPath(fakeBin))} GITHUB_TOKEN=fake FAKE_MKTEMP_PATH=${shellQuote(bashPath(release))} FAKE_CURL_COUNT=${shellQuote(bashPath(count))} FAKE_RELEASE_FIRST=${shellQuote(bashPath(first))} FAKE_RELEASE_SECOND=${shellQuote(bashPath(second))} FAKE_SLEEP_LOG=${shellQuote(bashPath(sleeps))}`;
+    const environment = `PATH=${shellQuote(installerPath(fakeBin))} GITHUB_TOKEN=fake FAKE_MKTEMP_PATH=${shellQuote(bashPath(release))} FAKE_CURL_COUNT=${shellQuote(bashPath(count))} FAKE_CURL_INVOCATIONS=${shellQuote(bashPath(invocations))} FAKE_RELEASE_FIRST=${shellQuote(bashPath(first))} FAKE_RELEASE_SECOND=${shellQuote(bashPath(second))} FAKE_SLEEP_LOG=${shellQuote(bashPath(sleeps))}`;
     const result = spawnSync("bash", ["-c", `${environment} bash scripts/readback-bootstrap-policy-assets.sh --tag v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.equal(fs.readFileSync(count, "utf8"), "2");
     assert.equal(fs.readFileSync(sleeps, "utf8"), "10\n");
+    assertCurlInvocations();
     fs.rmSync(count);
     fs.rmSync(sleeps);
+    fs.rmSync(invocations);
     const recovered = spawnSync("bash", ["-c", `${environment} FAKE_CURL_FAIL_FIRST=1 bash scripts/readback-bootstrap-policy-assets.sh --tag v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(recovered.error);
     assert.equal(recovered.status, 0, recovered.stderr || recovered.stdout);
     assert.equal(fs.readFileSync(count, "utf8"), "2");
     assert.equal(fs.readFileSync(sleeps, "utf8"), "10\n");
+    assertCurlInvocations();
     fs.rmSync(count);
     fs.rmSync(sleeps);
+    fs.rmSync(invocations);
     const rejected = spawnSync("bash", ["-c", `${environment} FAKE_RELEASE_SECOND=${shellQuote(bashPath(first))} bash scripts/readback-bootstrap-policy-assets.sh --tag v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(rejected.error);
     assert.notEqual(rejected.status, 0);
     assert.equal(fs.readFileSync(count, "utf8"), "5");
     assert.equal(fs.readFileSync(sleeps, "utf8"), "10\n10\n10\n10\n");
     assert.match(rejected.stderr, /expected exactly one private draft release/);
+    assertCurlInvocations();
     fs.rmSync(count);
     fs.rmSync(sleeps);
+    fs.rmSync(invocations);
     const transportRejected = spawnSync("bash", ["-c", `${environment} FAKE_CURL_ALWAYS_FAIL=1 bash scripts/readback-bootstrap-policy-assets.sh --tag v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(transportRejected.error);
     assert.notEqual(transportRejected.status, 0);
     assert.equal(fs.readFileSync(count, "utf8"), "5");
     assert.equal(fs.readFileSync(sleeps, "utf8"), "10\n10\n10\n10\n");
-    assert.match(transportRejected.stderr, /transient release list failure/);
+    assert.match(transportRejected.stderr, /transient release list failure 5/);
+    assertCurlInvocations();
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });

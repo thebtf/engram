@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Retried private-draft release asset readback while GitHub's release list converges after upload.
+- Retried private-draft release asset readback through transient API/transfer failures and release-list convergence after upload.
 
 ## [6.47.1] - 2026-08-10
 
