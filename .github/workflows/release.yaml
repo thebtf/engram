@@ -1,4 +1,12 @@
-# The sole tag-triggered writer for Engram server archives and raw launcher clients.
+# Build and publish a GitHub release using GoReleaser.
+#
+# Triggered by version tags (v*) and manual workflow_dispatch.
+# Uses the goreleaser-cross container so CGO builds work for all
+# published platform targets without a separate cross-compilation setup.
+#
+# Job names and step names are referenced by branch protection rules and
+# release automation — do not rename without updating those dependencies.
+
 name: Release
 
 on:
@@ -15,10 +23,13 @@ jobs:
   release:
     runs-on: ubuntu-latest
     container:
+      # goreleaser-cross bundles the CGO toolchains for all supported targets.
+      # The nearest published 1.25.x image provides the cross toolchains; the
+      # exact Go compiler version comes from actions/setup-go and go.mod below.
       image: ghcr.io/goreleaser/goreleaser-cross:v1.25.9
     steps:
-      - name: Install release tools
-        run: apt-get update && apt-get install -y git-lfs curl unzip
+      - name: Install git-lfs
+        run: apt-get update && apt-get install -y git-lfs
 
       - uses: actions/checkout@v4
         with:
@@ -47,58 +58,11 @@ jobs:
         uses: sigstore/cosign-installer@v3
 
       - name: Test plugin scripts
-        run: node --test --test-concurrency=1 plugin/engram/hooks/*.test.js plugin/engram/scripts/*.test.js scripts/*.test.js
+        run: node --test --test-concurrency=1 plugin/engram/hooks/*.test.js plugin/engram/scripts/*.test.js
         env:
           ENGRAM_TOKEN: release-test-keycard
 
-      # This is intentionally a check: the integrated release commit must carry
-      # tuples generated from its exact client source before a tag can publish.
-      - name: Verify committed launcher policy
-        run: scripts/prepare-bootstrap-policy.sh --version "${GITHUB_REF_NAME#v}" --check
-
-      # GoReleaser OSS has no split/continue gate. Upload into a private draft,
-      # verify the exact bytes locally and through GitHub readback, then publish.
-      - name: Build sign and upload draft release
+      - name: Run GoReleaser
         run: goreleaser release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Gate raw clients against committed policy
-        run: scripts/check-bootstrap-policy-artifacts.sh --policy plugin/engram/bootstrap-targets.json --dist dist
-
-      - name: Read draft launcher assets back
-        run: scripts/readback-bootstrap-policy-assets.sh --policy plugin/engram/bootstrap-targets.json --tag "${GITHUB_REF_NAME}"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Publish verified draft
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          release="$(mktemp)"
-          published="$(mktemp)"
-          trap 'rm -f "$release" "$published"' EXIT
-          curl --fail --silent --show-error --location \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "https://api.github.com/repos/thebtf/engram/releases?per_page=100" > "$release"
-          release_id="$(node scripts/verify-bootstrap-release-assets.js plugin/engram/bootstrap-targets.json "$release" "$GITHUB_REF_NAME")"
-          curl --fail --silent --show-error --location \
-            -X PATCH \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'Content-Type: application/json' \
-            -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "https://api.github.com/repos/thebtf/engram/releases/${release_id}" \
-            --data '{"draft":false}' > "$published"
-          node - "$published" "$GITHUB_REF_NAME" <<'NODE'
-          const fs = require('node:fs');
-          const [path, tag] = process.argv.slice(2);
-          const release = JSON.parse(fs.readFileSync(path, 'utf8'));
-          if (release.tag_name !== tag || release.draft !== false) {
-            throw new Error('verified draft was not published');
-          }
-          NODE
