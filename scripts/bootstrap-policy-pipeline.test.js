@@ -177,3 +177,36 @@ test("direct installer rejects archive self-validation before install mutation",
     assert.match(powerShellInstaller, /Node\.js 18\+/);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
+
+test("release readback retries until the private draft is visible", () => {
+  const temp = temporaryDirectory();
+  try {
+    const fakeBin = path.join(temp, "bin");
+    const count = path.join(temp, "curl-count");
+    const first = path.join(temp, "first.json");
+    const second = path.join(temp, "second.json");
+    const sleeps = path.join(temp, "sleeps");
+    fs.mkdirSync(fakeBin, { recursive: true });
+    const policy = parsePolicy(fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8"), "6.47.1");
+    fs.writeFileSync(first, "[]");
+    fs.writeFileSync(second, JSON.stringify([{
+      id: 368199776,
+      tag_name: "v6.47.1",
+      draft: true,
+      assets: Object.values(policy.targets).map(({ desired }) => ({
+        name: desired.asset,
+        state: "uploaded",
+        size: desired.size,
+        digest: `sha256:${desired.sha256}`,
+      })),
+    }]));
+    fs.writeFileSync(path.join(fakeBin, "curl"), "#!/usr/bin/env bash\ncount=0\n[[ -f $FAKE_CURL_COUNT ]] && count=$(cat \"$FAKE_CURL_COUNT\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$FAKE_CURL_COUNT\"\nif (( count == 1 )); then cat \"$FAKE_RELEASE_FIRST\"; else cat \"$FAKE_RELEASE_SECOND\"; fi\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(fakeBin, "sleep"), "#!/usr/bin/env bash\nprintf '%s\\n' \"$1\" >> \"$FAKE_SLEEP_LOG\"\n", { mode: 0o755 });
+    const environment = `PATH=${shellQuote(installerPath(fakeBin))} GITHUB_TOKEN=fake FAKE_CURL_COUNT=${shellQuote(bashPath(count))} FAKE_RELEASE_FIRST=${shellQuote(bashPath(first))} FAKE_RELEASE_SECOND=${shellQuote(bashPath(second))} FAKE_SLEEP_LOG=${shellQuote(bashPath(sleeps))}`;
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/readback-bootstrap-policy-assets.sh --tag v6.47.1`], { cwd: root, encoding: "utf8", env: process.env });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.readFileSync(count, "utf8"), "2");
+    assert.equal(fs.readFileSync(sleeps, "utf8"), "10\n");
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
