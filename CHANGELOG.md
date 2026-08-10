@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.47.2] - 2026-08-10
+
 ### Fixed
 
 - Retried private-draft release asset readback through transient API/transfer failures and release-list convergence after upload.
+
+
 
 ## [6.47.1] - 2026-08-10
 
