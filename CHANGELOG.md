@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.47.3] - 2026-08-10
+
+### Fixed
+
+- Regenerated launcher policy tuples inside the exact GoReleaser cross release image after v6.47.2 stopped before publication on an environment-specific hash mismatch.
+
 ## [6.47.2] - 2026-08-10
 
 ### Fixed
