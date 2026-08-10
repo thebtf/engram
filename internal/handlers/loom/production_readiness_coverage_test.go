@@ -95,7 +95,9 @@ func TestCliWorker_ProductionReadinessStructuredArgsAndCWD(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(result.Content), &state))
 	assert.Equal(t, []string{"--role", "maker", "--model", "test-model", "--effort", "high"}, state.Args)
-	assert.Equal(t, cwd, state.CWD)
+	expectedCWD, err := filepath.EvalSymlinks(cwd)
+	require.NoError(t, err)
+	assert.Equal(t, expectedCWD, state.CWD)
 	assert.Equal(t, "structured-env", state.Env)
 	assert.Equal(t, "structured prompt", state.Prompt)
 	assert.GreaterOrEqual(t, result.DurationMS, int64(0))
