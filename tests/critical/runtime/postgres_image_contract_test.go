@@ -19,6 +19,7 @@ func TestPostgresImageContract(t *testing.T) {
 	dockerfile := filepath.Join(repo, "deploy", "postgres", "Dockerfile")
 	requireFileContains(t, dockerfile,
 		"cgr.dev/chainguard/wolfi-base@sha256:02dab76bd852a70556b5b2002195c8a5fdab77d323c433bf6642aab080489795",
+		"apk --repositories-file /dev/null --repository https://packages.wolfi.dev/os --no-cache add",
 		"bash=5.3-r12",
 		"gosu=1.19-r13",
 		"postgresql-17=17.10-r1",
@@ -27,6 +28,7 @@ func TestPostgresImageContract(t *testing.T) {
 		"LC_ALL=C.UTF-8",
 		"USER 70:70",
 	)
+	requireFileNotContains(t, dockerfile, "apk.cgr.dev/chainguard")
 
 	image := imageFromEnv("ENGRAM_POSTGRES_IMAGE", defaultPostgresImage)
 	config := inspectImage(t, image)

@@ -4,18 +4,18 @@
 # versions, and the upstream OCI initialization contract.
 FROM cgr.dev/chainguard/wolfi-base@sha256:02dab76bd852a70556b5b2002195c8a5fdab77d323c433bf6642aab080489795
 
-RUN apk add --no-cache \
-      bash=5.3-r12 \
-      gosu=1.19-r13 \
-      postgresql-17=17.10-r1 \
-      postgresql-17-client=17.10-r1 \
-      postgresql-17-contrib=17.10-r1 \
-      postgresql-17-oci-entrypoint=17.10-r1 \
-      pgvector-17=0.8.1-r0 \
-    && addgroup -S -g 70 postgres \
-    && adduser -S -D -H -u 70 -G postgres postgres \
-    && install -d -o postgres -g postgres -m 0700 /var/lib/postgresql/data \
-    && install -d -o postgres -g postgres -m 0775 /var/run/postgresql
+RUN apk --repositories-file /dev/null --repository https://packages.wolfi.dev/os --no-cache add \
+  bash=5.3-r12 \
+  gosu=1.19-r13 \
+  postgresql-17=17.10-r1 \
+  postgresql-17-client=17.10-r1 \
+  postgresql-17-contrib=17.10-r1 \
+  postgresql-17-oci-entrypoint=17.10-r1 \
+  pgvector-17=0.8.1-r0 \
+  && addgroup -S -g 70 postgres \
+  && adduser -S -D -H -u 70 -G postgres postgres \
+  && install -d -o postgres -g postgres -m 0700 /var/lib/postgresql/data \
+  && install -d -o postgres -g postgres -m 0775 /var/run/postgresql
 
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
@@ -25,7 +25,7 @@ ENV PATH=/usr/lib/postgresql17/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/
 EXPOSE 5432
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
-    CMD ["pg_isready", "-U", "engram", "-d", "engram"]
+  CMD ["pg_isready", "-U", "engram", "-d", "engram"]
 
 USER 70:70
 ENTRYPOINT ["/usr/bin/docker-entrypoint.sh"]
