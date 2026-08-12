@@ -1,9 +1,10 @@
 const fs = require("node:fs");
+const path = require("node:path");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const test = require("node:test");
 
-const { ExitCode, contentText, createLifecycleTrace, deliberateRecall, failOpenSpec, lifecycleReceiptFor, main, parseArgs, r6ReceiptFor, r6Run, readOutcome, receiptFor, runFailOpen, runLifecycleChild, runLifecycleDiagnostic, runSessionSeed, statsCorroboration, validSessionID } = require("./agent-memory-dogfood.js");
+const { ExitCode, McpClient, contentText, createLifecycleTrace, deliberateRecall, failOpenSpec, lifecycleReceiptFor, main, parseArgs, r6ReceiptFor, r6Run, readOutcome, receiptFor, runChild, runFailOpen, runLifecycleChild, runLifecycleDiagnostic, runSessionSeed, statsCorroboration, validSessionID } = require("./agent-memory-dogfood.js");
 
 test("parses only supported phases and safe run IDs", () => {
  assert.deepEqual(parseArgs(["--phase", "read", "--run-id", "run_42"]), { phase: "read", runID: "run_42" });
@@ -27,8 +28,9 @@ test("receipt has an allowlisted secret-safe shape", () => {
 });
 
 test("lifecycle receipt remains writable after a finalized trace", () => {
+ const repoRoot = path.resolve(__dirname, "../..");
  const receipt = lifecycleReceiptFor("lifecycle-receipt", {
-  tracePath: "D:\\Dev\\engram\\.agent\\runs\\agent-memory-dogfooding\\r6-lifecycle-trace.jsonl",
+  tracePath: path.join(repoRoot, ".agent", "runs", "agent-memory-dogfooding", "r6-lifecycle-trace.jsonl"),
   classification: { class: "H2_AUTO_DISCOVERY_EVENT_NOT_OBSERVED" },
   requestCount: 0,
  });
@@ -59,6 +61,15 @@ test("unwraps the mounted MCP content envelope", () => {
  const mountedResult = { content: [{ type: "text", text: JSON.stringify(directResult) }] };
  assert.deepEqual(contentText(directResult), health);
  assert.deepEqual(contentText(mountedResult), health);
+});
+test("MCP client drains wrapper stderr independently from JSON-RPC stdout", () => {
+ const child = fakeChild();
+ child.stdin = { writable: true, end() { } };
+ child.stdout.setEncoding = () => { };
+ let stderrDrained = false;
+ child.stderr.resume = () => { stderrDrained = true; };
+ new McpClient(() => child);
+ assert.equal(stderrDrained, true);
 });
 
 test("invalid input produces a typed CONFIG receipt and exit code", async () => {
@@ -303,10 +314,27 @@ function fakeChild(pid = 1) {
  const child = new EventEmitter();
  child.pid = pid;
  child.stdout = new EventEmitter();
+ child.stdout.setEncoding = () => { };
  child.stderr = new EventEmitter();
  child.kill = () => true;
  return child;
 }
+
+test("child timeout terminates its tree and waits for close", async () => {
+ const child = fakeChild(103);
+ let treeKillRequested = false;
+ let settled = false;
+ const result = runChild("fake", [], { cwd: process.cwd(), env: process.env, timeoutMs: 5 }, () => child, () => {
+  treeKillRequested = true;
+  return true;
+ });
+ result.then(() => { settled = true; }, () => { settled = true; });
+ await new Promise((resolve) => setTimeout(resolve, 20));
+ assert.equal(treeKillRequested, true);
+ assert.equal(settled, false);
+ child.emit("close", null, "SIGKILL");
+ await assert.rejects(result, /child process exceeded budget/);
+});
 
 test("lifecycle trace flushes header, fixture, and launch metadata before awaits", async () => {
  let checked = false;

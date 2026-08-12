@@ -90,15 +90,16 @@ async function checkReady(endpoint) {
 }
 
 class McpClient {
- constructor() {
+ constructor(spawnChild = spawn) {
   this.nextID = 1;
   this.pending = new Map();
   this.buffer = "";
   this.failed = null;
   const runner = path.resolve(__dirname, "../../plugin/engram/scripts/run-engram.js");
-  this.child = spawn(process.execPath, [runner], { cwd: path.resolve(__dirname, "../.."), stdio: ["pipe", "pipe", "pipe"] });
+  this.child = spawnChild(process.execPath, [runner], { cwd: path.resolve(__dirname, "../.."), stdio: ["pipe", "pipe", "pipe"] });
   this.child.stdout.setEncoding("utf8");
   this.child.stdout.on("data", (chunk) => this.consume(chunk));
+  this.child.stderr.resume();
   this.child.on("error", () => this.fail());
   this.child.on("close", () => this.fail());
  }
@@ -283,11 +284,12 @@ function removeRunnerSessionDirectory(directory) {
  fs.rmSync(directory, { recursive: true, force: true });
 }
 
-function runChild(command, args, options) {
+function runChild(command, args, options, spawnChild = spawn, terminate = terminateChildProcessTree) {
  return new Promise((resolve, reject) => {
   let stdout = "";
   let settled = false;
-  const child = spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ["ignore", "pipe", "pipe"] });
+  let timedOut = false;
+  const child = spawnChild(command, args, { cwd: options.cwd, env: options.env, stdio: ["ignore", "pipe", "pipe"] });
   const finish = (callback, value) => {
    if (settled) return;
    settled = true;
@@ -295,14 +297,14 @@ function runChild(command, args, options) {
    callback(value);
   };
   const timer = setTimeout(() => {
-   child.kill();
-   finish(reject, new Error("child process exceeded budget"));
+   timedOut = true;
+   terminate(child);
   }, options.timeoutMs);
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk) => { if (stdout.length < 128 * 1024) stdout += chunk.slice(0, 128 * 1024 - stdout.length); });
   child.stderr.on("data", () => { });
-  child.on("error", () => finish(reject, new Error("child process failed")));
-  child.on("close", (code) => finish(resolve, { code, stdout }));
+  child.on("error", () => { if (!timedOut) finish(reject, new Error("child process failed")); });
+  child.on("close", (code) => timedOut ? finish(reject, new Error("child process exceeded budget")) : finish(resolve, { code, stdout }));
  });
 }
 
@@ -953,4 +955,4 @@ if (require.main === module) {
  main().then((code) => { process.exitCode = code; });
 }
 
-module.exports = { ExitCode, PhaseError, activeConfig, appendLifecycleTrace, classifyLifecycleDiagnostic, contentText, createLifecycleTrace, deliberateRecall, failOpenSpec, lifecycleReceiptFor, main, parseArgs, r6ReceiptFor, r6Run, readOutcome, receiptFor, runFailOpen, runLifecycleChild, runLifecycleDiagnostic, runSessionSeed, sessionIDFromDirectory, statsCorroboration, validSessionID };
+module.exports = { ExitCode, McpClient, PhaseError, activeConfig, appendLifecycleTrace, classifyLifecycleDiagnostic, contentText, createLifecycleTrace, deliberateRecall, failOpenSpec, lifecycleReceiptFor, main, parseArgs, r6ReceiptFor, r6Run, readOutcome, receiptFor, runChild, runFailOpen, runLifecycleChild, runLifecycleDiagnostic, runSessionSeed, sessionIDFromDirectory, statsCorroboration, validSessionID };
