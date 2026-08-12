@@ -349,9 +349,10 @@ test("child timer cancellation uses its injected scheduler", async () => {
  const callbacks = [];
  const cancelled = [];
  let terminationCalls = 0;
+ let settlements = 0;
  const schedule = (callback) => {
   const timer = { cancelled: false, unref() { } };
-  callbacks.push(() => { if (!timer.cancelled) callback(); });
+  callbacks.push(callback);
   return timer;
  };
  const cancel = (timer) => {
@@ -360,10 +361,13 @@ test("child timer cancellation uses its injected scheduler", async () => {
   cancelled.push(timer);
  };
  const normal = runChild("fake", [], { cwd: process.cwd(), env: process.env, timeoutMs: 5 }, () => child, () => { terminationCalls += 1; return false; }, schedule, cancel);
+ normal.then(() => { settlements += 1; });
  child.emit("close", 0, null);
  await assert.doesNotReject(normal);
  callbacks[0]();
  assert.equal(terminationCalls, 0);
+ assert.equal(callbacks.length, 1);
+ assert.equal(settlements, 1);
  assert.equal(cancelled.length, 1);
 
  const timedOutChild = fakeChild(105);
