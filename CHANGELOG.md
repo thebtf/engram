@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.47.5] - 2026-08-13
+
+### Fixed
+
+- Regenerated launcher policy in the exact release container after v6.47.4 failed before GitHub Release publication on a launcher-policy mismatch.
+
 ## [6.47.4] - 2026-08-12
 
 ### Fixed
