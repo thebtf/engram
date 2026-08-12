@@ -284,7 +284,7 @@ function removeRunnerSessionDirectory(directory) {
  fs.rmSync(directory, { recursive: true, force: true });
 }
 
-function runChild(command, args, options, spawnChild = spawn, terminate = terminateChildProcessTree) {
+function runChild(command, args, options, spawnChild = spawn, terminate = terminateChildProcessTree, schedule = setTimeout) {
  return new Promise((resolve, reject) => {
   let stdout = "";
   let settled = false;
@@ -298,16 +298,17 @@ function runChild(command, args, options, spawnChild = spawn, terminate = termin
    clearTimeout(hardTimeout);
    callback(value);
   };
-  const timer = setTimeout(() => {
+  const timer = schedule(() => {
    timedOut = true;
    try { terminate(child); } catch { }
-   hardTimeout = setTimeout(() => finish(reject, new Error("child process exceeded budget")), Math.min(Math.max(options.timeoutMs, 100), 5_000));
+   hardTimeout = schedule(() => finish(reject, new Error("child process exceeded budget")), Math.min(Math.max(options.timeoutMs, 100), 5_000));
    hardTimeout.unref?.();
   }, options.timeoutMs);
+  timer.unref?.();
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk) => { if (stdout.length < 128 * 1024) stdout += chunk.slice(0, 128 * 1024 - stdout.length); });
   child.stderr.on("data", () => { });
-  child.on("error", () => { if (!timedOut) finish(reject, new Error("child process failed")); });
+  child.on("error", () => finish(reject, timedOut ? new Error("child process exceeded budget") : new Error("child process failed")));
   child.on("close", (code) => timedOut ? finish(reject, new Error("child process exceeded budget")) : finish(resolve, { code, stdout }));
  });
 }
