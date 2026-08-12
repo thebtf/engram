@@ -344,8 +344,26 @@ test("child timeout establishes a process group and waits for close", async () =
  assert.equal(settled, 1);
 });
 
-test("child timeout has a bounded settlement when termination cannot close it", async () => {
+test("child timeout unrefs its timer and settles on timeout error before grace", async () => {
  const child = fakeChild(104);
+ const callbacks = [];
+ const timers = [];
+ const schedule = (callback) => {
+  callbacks.push(callback);
+  const timer = { unrefCalled: false, unref() { this.unrefCalled = true; } };
+  timers.push(timer);
+  return timer;
+ };
+ const result = runChild("fake", [], { cwd: process.cwd(), env: process.env, timeoutMs: 5 }, () => child, () => false, schedule);
+ assert.equal(timers[0].unrefCalled, true);
+ callbacks[0]();
+ assert.equal(timers[1].unrefCalled, true);
+ child.emit("error", new Error("termination error"));
+ await assert.rejects(result, /child process exceeded budget/);
+});
+
+test("child timeout has a bounded settlement when termination cannot close it", async () => {
+ const child = fakeChild(105);
  const started = performance.now();
  const result = runChild("fake", [], { cwd: process.cwd(), env: process.env, timeoutMs: 5 }, () => child, () => false);
  await assert.rejects(result, /child process exceeded budget/);
