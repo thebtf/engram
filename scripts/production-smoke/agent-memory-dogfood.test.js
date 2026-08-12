@@ -320,20 +320,36 @@ function fakeChild(pid = 1) {
  return child;
 }
 
-test("child timeout terminates its tree and waits for close", async () => {
+test("child timeout establishes a process group and waits for close", async () => {
  const child = fakeChild(103);
  let treeKillRequested = false;
- let settled = false;
- const result = runChild("fake", [], { cwd: process.cwd(), env: process.env, timeoutMs: 5 }, () => child, () => {
+ let settled = 0;
+ let spawnOptions;
+ const result = runChild("fake", [], { cwd: process.cwd(), env: process.env, timeoutMs: 5 }, (_command, _args, options) => {
+  spawnOptions = options;
+  return child;
+ }, () => {
   treeKillRequested = true;
   return true;
  });
- result.then(() => { settled = true; }, () => { settled = true; });
+ result.then(() => { settled += 1; }, () => { settled += 1; });
  await new Promise((resolve) => setTimeout(resolve, 20));
+ assert.equal(spawnOptions.detached, process.platform !== "win32");
+ assert.equal(spawnOptions.windowsHide, true);
  assert.equal(treeKillRequested, true);
- assert.equal(settled, false);
+ assert.equal(settled, 0);
  child.emit("close", null, "SIGKILL");
+ child.emit("error", new Error("late error"));
  await assert.rejects(result, /child process exceeded budget/);
+ assert.equal(settled, 1);
+});
+
+test("child timeout has a bounded settlement when termination cannot close it", async () => {
+ const child = fakeChild(104);
+ const started = performance.now();
+ const result = runChild("fake", [], { cwd: process.cwd(), env: process.env, timeoutMs: 5 }, () => child, () => false);
+ await assert.rejects(result, /child process exceeded budget/);
+ assert.ok(performance.now() - started < 250);
 });
 
 test("lifecycle trace flushes header, fixture, and launch metadata before awaits", async () => {
