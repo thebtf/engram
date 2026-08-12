@@ -344,26 +344,38 @@ test("child timeout establishes a process group and waits for close", async () =
  assert.equal(settled, 1);
 });
 
-test("child timeout unrefs its timer and settles on timeout error before grace", async () => {
+test("child timer cancellation uses its injected scheduler", async () => {
  const child = fakeChild(104);
  const callbacks = [];
- const timers = [];
+ const cancelled = [];
+ let terminationCalls = 0;
  const schedule = (callback) => {
-  callbacks.push(callback);
-  const timer = { unrefCalled: false, unref() { this.unrefCalled = true; } };
-  timers.push(timer);
+  const timer = { cancelled: false, unref() { } };
+  callbacks.push(() => { if (!timer.cancelled) callback(); });
   return timer;
  };
- const result = runChild("fake", [], { cwd: process.cwd(), env: process.env, timeoutMs: 5 }, () => child, () => false, schedule);
- assert.equal(timers[0].unrefCalled, true);
+ const cancel = (timer) => {
+  if (!timer) return;
+  timer.cancelled = true;
+  cancelled.push(timer);
+ };
+ const normal = runChild("fake", [], { cwd: process.cwd(), env: process.env, timeoutMs: 5 }, () => child, () => { terminationCalls += 1; return false; }, schedule, cancel);
+ child.emit("close", 0, null);
+ await assert.doesNotReject(normal);
  callbacks[0]();
- assert.equal(timers[1].unrefCalled, true);
- child.emit("error", new Error("termination error"));
- await assert.rejects(result, /child process exceeded budget/);
+ assert.equal(terminationCalls, 0);
+ assert.equal(cancelled.length, 1);
+
+ const timedOutChild = fakeChild(105);
+ const timeout = runChild("fake", [], { cwd: process.cwd(), env: process.env, timeoutMs: 5 }, () => timedOutChild, () => false, schedule, cancel);
+ callbacks[1]();
+ timedOutChild.emit("error", new Error("termination error"));
+ await assert.rejects(timeout, /child process exceeded budget/);
+ assert.equal(cancelled.length, 3);
 });
 
 test("child timeout has a bounded settlement when termination cannot close it", async () => {
- const child = fakeChild(105);
+ const child = fakeChild(106);
  const started = performance.now();
  const result = runChild("fake", [], { cwd: process.cwd(), env: process.env, timeoutMs: 5 }, () => child, () => false);
  await assert.rejects(result, /child process exceeded budget/);

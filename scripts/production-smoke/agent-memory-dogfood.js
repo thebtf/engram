@@ -284,7 +284,7 @@ function removeRunnerSessionDirectory(directory) {
  fs.rmSync(directory, { recursive: true, force: true });
 }
 
-function runChild(command, args, options, spawnChild = spawn, terminate = terminateChildProcessTree, schedule = setTimeout) {
+function runChild(command, args, options, spawnChild = spawn, terminate = terminateChildProcessTree, schedule = setTimeout, cancelSchedule = clearTimeout) {
  return new Promise((resolve, reject) => {
   let stdout = "";
   let settled = false;
@@ -294,8 +294,8 @@ function runChild(command, args, options, spawnChild = spawn, terminate = termin
   const finish = (callback, value) => {
    if (settled) return;
    settled = true;
-   clearTimeout(timer);
-   clearTimeout(hardTimeout);
+   cancelSchedule(timer);
+   cancelSchedule(hardTimeout);
    callback(value);
   };
   const timer = schedule(() => {
