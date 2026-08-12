@@ -299,6 +299,7 @@ function runChild(command, args, options, spawnChild = spawn, terminate = termin
    callback(value);
   };
   const timer = schedule(() => {
+   if (settled) return;
    timedOut = true;
    try { terminate(child); } catch { }
    hardTimeout = schedule(() => finish(reject, new Error("child process exceeded budget")), Math.min(Math.max(options.timeoutMs, 100), 5_000));
