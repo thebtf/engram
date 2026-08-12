@@ -289,16 +289,20 @@ function runChild(command, args, options, spawnChild = spawn, terminate = termin
   let stdout = "";
   let settled = false;
   let timedOut = false;
-  const child = spawnChild(command, args, { cwd: options.cwd, env: options.env, stdio: ["ignore", "pipe", "pipe"] });
+  let hardTimeout;
+  const child = spawnChild(command, args, { cwd: options.cwd, env: options.env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true });
   const finish = (callback, value) => {
    if (settled) return;
    settled = true;
    clearTimeout(timer);
+   clearTimeout(hardTimeout);
    callback(value);
   };
   const timer = setTimeout(() => {
    timedOut = true;
-   terminate(child);
+   try { terminate(child); } catch { }
+   hardTimeout = setTimeout(() => finish(reject, new Error("child process exceeded budget")), Math.min(Math.max(options.timeoutMs, 100), 5_000));
+   hardTimeout.unref?.();
   }, options.timeoutMs);
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk) => { if (stdout.length < 128 * 1024) stdout += chunk.slice(0, 128 * 1024 - stdout.length); });
