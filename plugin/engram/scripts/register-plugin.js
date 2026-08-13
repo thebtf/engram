@@ -3,6 +3,7 @@
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
@@ -27,37 +28,112 @@ function sleep(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
+const LOCK_NAME = ".engram-registry-transaction.lock";
+const RECLAIM_MARKER = new RegExp(`^${LOCK_NAME.replaceAll(".", "\\.")}\\.reclaim-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$`);
+const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
+
+function sameOwner(left, right) {
+  return left.hostname === right.hostname && left.pid === right.pid && left.token === right.token;
+}
+
+function readLockOwner(directory) {
+  let value;
+  try {
+    value = JSON.parse(fs.readFileSync(path.join(directory, "owner"), "utf8"));
+  } catch {
+    return null;
+  }
+  if (!value || Array.isArray(value) || typeof value !== "object" || Object.keys(value).sort().join("\0") !== "hostname\0pid\0token" ||
+    typeof value.hostname !== "string" || value.hostname.length === 0 || !Number.isSafeInteger(value.pid) || value.pid < 1 || typeof value.token !== "string" || !UUID.test(value.token)) return null;
+  return value;
+}
+
+function isDeadLocalOwner(owner) {
+  if (!owner || owner.hostname !== os.hostname()) return false;
+  try {
+    process.kill(owner.pid, 0);
+    return false;
+  } catch (error) {
+    return error.code === "ESRCH";
+  }
+}
+
+function staleOwner(directory, expected) {
+  const owner = readLockOwner(directory);
+  return owner && (!expected || sameOwner(owner, expected)) && isDeadLocalOwner(owner) ? owner : null;
+}
+
+function removeDeadLock(directory, expected) {
+  if (!staleOwner(directory, expected)) return false;
+  try {
+    fs.unlinkSync(path.join(directory, "owner"));
+    fs.rmdirSync(directory);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function recoverReclaimMarkers(claudeDirectory) {
+  for (const name of fs.readdirSync(claudeDirectory)) {
+    if (!RECLAIM_MARKER.test(name)) continue;
+    const marker = path.join(claudeDirectory, name);
+    if (!removeDeadLock(marker)) return false;
+  }
+  return true;
+}
+
+function quarantineDeadCanonical(directory) {
+  const owner = staleOwner(directory);
+  if (!owner) return false;
+  const marker = `${directory}.reclaim-${process.pid}-${crypto.randomUUID()}`;
+  try {
+    fs.renameSync(directory, marker);
+  } catch (error) {
+    if (error.code === "ENOENT" || error.code === "EEXIST") return false;
+    throw error;
+  }
+  return removeDeadLock(marker, owner);
+}
+
 function acquireLock(claudeDirectory) {
   fs.mkdirSync(claudeDirectory, { recursive: true, mode: 0o700 });
-  const directory = path.join(claudeDirectory, ".engram-registry-transaction.lock");
+  const directory = path.join(claudeDirectory, LOCK_NAME);
   const deadline = Date.now() + lockTimeout();
-  const token = crypto.randomUUID();
+  const identity = { hostname: os.hostname(), pid: process.pid, token: crypto.randomUUID() };
   for (; ;) {
-    try {
-      fs.mkdirSync(directory, { mode: 0o700 });
-      const owner = path.join(directory, "owner");
+    if (recoverReclaimMarkers(claudeDirectory)) {
       try {
-        fs.writeFileSync(owner, token, { encoding: "utf8", flag: "wx", mode: 0o600 });
+        fs.mkdirSync(directory, { mode: 0o700 });
+        const owner = path.join(directory, "owner");
+        try {
+          fs.writeFileSync(owner, `${JSON.stringify(identity)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+        } catch (error) {
+          try { fs.rmdirSync(directory); } catch { }
+          throw error;
+        }
+        return { directory, owner, identity };
       } catch (error) {
-        try { fs.rmdirSync(directory); } catch { }
-        throw error;
+        if (error.code !== "EEXIST") throw error;
+        quarantineDeadCanonical(directory);
       }
-      return { directory, owner, token };
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) fail(`timed out waiting for registry transaction lock: ${directory}`);
-      sleep(Math.min(LOCK_RETRY_MS, remaining));
     }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) fail(`timed out waiting for registry transaction lock: ${directory}`);
+    sleep(Math.min(LOCK_RETRY_MS, remaining));
   }
 }
 
 function releaseLock(lock) {
-  if (fs.readFileSync(lock.owner, "utf8") !== lock.token) {
-    fail(`registry transaction lock ownership changed; retained lock: ${lock.directory}`);
+  const marker = `${lock.directory}.reclaim-${process.pid}-${crypto.randomUUID()}`;
+  fs.renameSync(lock.directory, marker);
+  const owner = readLockOwner(marker);
+  if (!owner || !sameOwner(owner, lock.identity)) {
+    fail(`registry transaction lock ownership changed; retained lock: ${marker}`);
   }
-  fs.unlinkSync(lock.owner);
-  fs.rmdirSync(lock.directory);
+  fs.unlinkSync(path.join(marker, "owner"));
+  fs.rmdirSync(marker);
 }
 
 function snapshot(file) {

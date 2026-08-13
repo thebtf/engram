@@ -327,7 +327,7 @@ register_plugin() {
 
     cache_path="${CACHE_DIR}/${version}"
     mkdir -p "$cache_path/.claude-plugin" "$cache_path/hooks" "$cache_path/commands"
-    cp -a "$INSTALL_DIR/." "$cache_path/" 2>/dev/null || true
+    cp -a "$INSTALL_DIR/." "$cache_path/" 2>/dev/null || error "Failed to copy plugin files to versioned cache"
 
     if ! node "$INSTALL_DIR/scripts/register-plugin.js" \
         "$PLUGINS_FILE" "$SETTINGS_FILE" "$MARKETPLACES_FILE" \
