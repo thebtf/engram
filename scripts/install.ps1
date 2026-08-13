@@ -104,6 +104,14 @@ function Install-Release {
         if (-not (Test-Path -LiteralPath $PolicyPath -PathType Leaf)) {
             Write-Err "Release archive is missing required bootstrap-targets.json"
         }
+        $ManifestPath = Join-Path $TempDir "package.json"
+        if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+            Write-Err "Release archive is missing required OMP package.json"
+        }
+        $ExtensionPath = Join-Path $TempDir "extensions\engram-memory.mjs"
+        if (-not (Test-Path -LiteralPath $ExtensionPath -PathType Leaf)) {
+            Write-Err "Release archive is missing required OMP extension"
+        }
 
         # This validator is part of the trusted installer, not the release archive.
         # A release payload must never be allowed to validate its own policy.
@@ -195,6 +203,7 @@ for (const [key, asset] of Object.entries(assets)) {
         New-Item -ItemType Directory -Path "$InstallDir\scripts"       -Force | Out-Null
         New-Item -ItemType Directory -Path "$InstallDir\.claude-plugin" -Force | Out-Null
         New-Item -ItemType Directory -Path "$InstallDir\commands"       -Force | Out-Null
+        New-Item -ItemType Directory -Path "$InstallDir\extensions"    -Force | Out-Null
 
         # Server binary — present in all archives; let callers decide whether to use it
         Copy-Item "$TempDir\engram-server.exe" "$InstallDir\" -Force -ErrorAction SilentlyContinue
@@ -208,6 +217,8 @@ for (const [key, asset] of Object.entries(assets)) {
 
         Copy-Item "$TempDir\scripts\*.js" "$InstallDir\scripts\" -Force -ErrorAction Stop
         Copy-Item $PolicyPath "$InstallDir\bootstrap-targets.json" -Force -ErrorAction Stop
+        Copy-Item $ManifestPath "$InstallDir\package.json" -Force -ErrorAction Stop
+        Copy-Item $ExtensionPath "$InstallDir\extensions\engram-memory.mjs" -Force -ErrorAction Stop
 
         Copy-Item "$TempDir\.claude-plugin\*" "$InstallDir\.claude-plugin\" -Force
 

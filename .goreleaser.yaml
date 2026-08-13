@@ -94,6 +94,12 @@ archives:
       - src: plugin/engram/bootstrap-targets.json
         dst: .
         strip_parent: true
+      - src: plugin/engram/package.json
+        dst: .
+        strip_parent: true
+      - src: plugin/engram/extensions/engram-memory.mjs
+        dst: extensions
+        strip_parent: true
       - src: plugin/engram/hooks/*.js
         dst: hooks
         strip_parent: true

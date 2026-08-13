@@ -172,6 +172,10 @@ download_release() {
         || error "Release archive is missing required JS scripts"
     [[ -f "$tmp_dir/bootstrap-targets.json" ]] \
         || error "Release archive is missing required bootstrap-targets.json"
+    [[ -f "$tmp_dir/package.json" ]] \
+        || error "Release archive is missing required OMP package.json"
+    [[ -f "$tmp_dir/extensions/engram-memory.mjs" ]] \
+        || error "Release archive is missing required OMP extension"
     # This validator is part of the trusted installer, not the release archive.
     # A release payload must never be allowed to validate its own policy.
     node - "$tmp_dir/bootstrap-targets.json" "${version#v}" <<'NODE' \
@@ -250,7 +254,7 @@ for (const [key, asset] of Object.entries(assets)) {
 NODE
 
     info "Installing to ${INSTALL_DIR}..."
-    mkdir -p "$INSTALL_DIR/hooks" "$INSTALL_DIR/scripts" "$INSTALL_DIR/.claude-plugin" "$INSTALL_DIR/commands"
+    mkdir -p "$INSTALL_DIR/hooks" "$INSTALL_DIR/scripts" "$INSTALL_DIR/.claude-plugin" "$INSTALL_DIR/commands" "$INSTALL_DIR/extensions"
 
     # Server binary is only included in --full installs
     if [[ "$INSTALL_MODE" == "full" ]]; then
@@ -271,6 +275,10 @@ NODE
         || error "Failed to copy JS scripts from $tmp_dir/scripts/"
     cp "$tmp_dir/bootstrap-targets.json" "$INSTALL_DIR/" \
         || error "Failed to copy bootstrap policy from release archive"
+    cp "$tmp_dir/package.json" "$INSTALL_DIR/" \
+        || error "Failed to copy OMP package manifest from release archive"
+    cp "$tmp_dir/extensions/engram-memory.mjs" "$INSTALL_DIR/extensions/" \
+        || error "Failed to copy OMP extension from release archive"
 
     cp "$tmp_dir/.claude-plugin/"* "$INSTALL_DIR/.claude-plugin/"
 
@@ -305,7 +313,7 @@ NODE
 # ---------------------------------------------------------------------------
 register_plugin() {
     local version="$1"
-    local timestamp cache_path plugin_entry statusline_cmd statusline_entry marketplace_entry
+    local timestamp cache_path
 
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
@@ -321,71 +329,129 @@ register_plugin() {
 
     cache_path="${CACHE_DIR}/${version}"
     mkdir -p "${cache_path}"
-
-    # Bootstrap JSON files when they do not exist yet
-    [[ ! -f "$PLUGINS_FILE" ]]      && echo '{"version": 2, "plugins": {}}' > "$PLUGINS_FILE"
-    [[ ! -f "$SETTINGS_FILE" ]]     && echo '{}' > "$SETTINGS_FILE"
-    [[ ! -f "$MARKETPLACES_FILE" ]] && echo '{}' > "$MARKETPLACES_FILE"
-
-    if ! command -v jq &> /dev/null; then
-        warn "jq is not installed — plugin registration requires jq."
-        warn "Install jq: brew install jq (macOS) / apt-get install jq (Linux)"
-        warn "Then re-run: $0 --register-only"
-        return 1
-    fi
-
     mkdir -p "$cache_path/.claude-plugin" "$cache_path/hooks" "$cache_path/commands"
     cp -a "$INSTALL_DIR/." "$cache_path/" 2>/dev/null || true
 
-    # installed_plugins.json — record install path, version, and timestamp
-    plugin_entry=$(cat <<EOF
-[{
-    "scope": "user",
-    "installPath": "$cache_path",
-    "version": "${version#v}",
-    "installedAt": "$timestamp",
-    "lastUpdated": "$timestamp",
-    "isLocal": true
-}]
-EOF
-)
-    jq --arg key "$PLUGIN_KEY" --argjson entry "$plugin_entry" \
-        '.plugins[$key] = $entry' "$PLUGINS_FILE" > "${PLUGINS_FILE}.tmp" \
-        && mv "${PLUGINS_FILE}.tmp" "$PLUGINS_FILE"
-    success "Plugin registered in installed_plugins.json"
+    if ! node - "$PLUGINS_FILE" "$SETTINGS_FILE" "$MARKETPLACES_FILE" "$PLUGIN_KEY" "$cache_path" "${version#v}" "$timestamp" "$INSTALL_DIR" <<'NODE'
+const crypto = require("node:crypto");
+const fs = require("node:fs");
 
-    # settings.json — enable plugin and wire the statusline command
-    statusline_cmd="node \"$INSTALL_DIR/hooks/statusline.js\""
-    statusline_entry=$(cat <<EOF
-{
-    "type": "command",
-    "command": "$statusline_cmd",
-    "padding": 0
+const [pluginsFile, settingsFile, marketplacesFile, pluginKey, cachePath, version, timestamp, installDir] = process.argv.slice(2);
+const files = [pluginsFile, settingsFile, marketplacesFile];
+const defaults = ['{"version":2,"plugins":{}}', "{}", "{}"];
+const stripBom = (text) => text.startsWith("\uFEFF") ? text.slice(1) : text;
+const object = (value, file) => {
+    if (value === null || Array.isArray(value) || typeof value !== "object") throw new Error(`${file} must contain a JSON object`);
+    return value;
+};
+const nestedObject = (container, key, file) => {
+    if (container[key] == null) return container[key] = {};
+    return object(container[key], file);
+};
+const removeRegularFile = (file) => {
+    try {
+        if (fs.lstatSync(file).isFile()) fs.unlinkSync(file);
+    } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+    }
+};
+const cleanupRegularFile = (file, failures) => {
+    try { removeRegularFile(file); } catch (error) { failures.push(`${file}: ${error.message}`); }
+};
+const ledger = files.map((target) => ({
+    target,
+    staged: `${target}.staged-${process.pid}-${crypto.randomUUID()}.tmp`,
+    backup: `${target}.backup-${process.pid}-${crypto.randomUUID()}`,
+    stagedCreated: false,
+    backupCreated: false,
+    existed: false,
+    originalMoved: false,
+    installed: false,
+    restored: false,
+}));
+let commitStarted = false;
+
+try {
+    const [plugins, settings, marketplaces] = files.map((file, index) => object(JSON.parse(stripBom(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : defaults[index])), file));
+
+    nestedObject(plugins, "plugins", pluginsFile)[pluginKey] = [{
+        scope: "user",
+        installPath: cachePath,
+        version,
+        installedAt: timestamp,
+        lastUpdated: timestamp,
+        isLocal: true,
+    }];
+    nestedObject(settings, "enabledPlugins", settingsFile)[pluginKey] = true;
+    settings.statusLine = {
+        type: "command",
+        command: `node "${installDir}/hooks/statusline.js"`,
+        padding: 0,
+    };
+    marketplaces.engram = {
+        source: { source: "directory", path: installDir },
+        installLocation: installDir,
+        lastUpdated: timestamp,
+    };
+
+    for (const [index, value] of [plugins, settings, marketplaces].entries()) {
+        const entry = ledger[index];
+        const descriptor = fs.openSync(entry.staged, "wx");
+        entry.stagedCreated = true;
+        try {
+            fs.writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+        } finally {
+            fs.closeSync(descriptor);
+        }
+    }
+
+    for (const entry of ledger) entry.existed = fs.existsSync(entry.target);
+    commitStarted = true;
+    for (const entry of ledger) {
+        if (entry.existed) {
+            if (fs.existsSync(entry.backup)) throw new Error(`backup path already exists: ${entry.backup}`);
+            fs.renameSync(entry.target, entry.backup);
+            entry.backupCreated = true;
+            entry.originalMoved = true;
+        }
+        fs.renameSync(entry.staged, entry.target);
+        entry.installed = true;
+    }
+} catch (error) {
+    const rollbackFailures = [];
+    if (commitStarted) {
+        for (const entry of ledger.slice().reverse()) {
+            if (entry.installed) cleanupRegularFile(entry.target, rollbackFailures);
+            if (entry.originalMoved) {
+                try {
+                    fs.renameSync(entry.backup, entry.target);
+                    entry.restored = true;
+                } catch (rollbackError) {
+                    rollbackFailures.push(`restore ${entry.target}: ${rollbackError.message}`);
+                }
+            }
+        }
+    }
+    for (const entry of ledger) {
+        if (entry.stagedCreated) cleanupRegularFile(entry.staged, rollbackFailures);
+        if (entry.backupCreated && entry.restored) cleanupRegularFile(entry.backup, rollbackFailures);
+    }
+    if (rollbackFailures.length) error.message += `\nRollback failures: ${rollbackFailures.join("; ")}`;
+    throw error;
 }
-EOF
-)
-    jq --arg key "$PLUGIN_KEY" --argjson statusline "$statusline_entry" \
-        '.enabledPlugins //= {} | .enabledPlugins[$key] = true | .statusLine = $statusline' \
-        "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" \
-        && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+const backupCleanupFailures = [];
+for (const entry of ledger) {
+    if (entry.backupCreated) cleanupRegularFile(entry.backup, backupCleanupFailures);
+}
+if (backupCleanupFailures.length) console.error(`WARNING: Retained orphan registration backups: ${backupCleanupFailures.join("; ")}`);
+NODE
+    then
+        error "Plugin registration failed"
+    fi
+
+    success "Plugin registered in installed_plugins.json"
     success "Plugin enabled in settings.json"
     success "Statusline configured in settings.json"
-
-    # known_marketplaces.json — register local directory as the source
-    marketplace_entry=$(cat <<EOF
-{
-    "source": {
-        "source": "directory",
-        "path": "$INSTALL_DIR"
-    },
-    "installLocation": "$INSTALL_DIR",
-    "lastUpdated": "$timestamp"
-}
-EOF
-)
-    jq --arg key "engram" --argjson entry "$marketplace_entry" \
-        '.[$key] = $entry' "$MARKETPLACES_FILE" > "${MARKETPLACES_FILE}.tmp" \
-        && mv "${MARKETPLACES_FILE}.tmp" "$MARKETPLACES_FILE"
     success "Marketplace registered in known_marketplaces.json"
 
     # MCP transport is declared in the plugin's .mcp.json — no settings.json edit needed
@@ -493,11 +559,8 @@ main() {
 
     download_release "$version" "$platform"
 
-    if register_plugin "$version"; then
-        success "Plugin registered successfully"
-    else
-        warn "Plugin registration incomplete — install jq and re-run with --register-only"
-    fi
+    register_plugin "$version"
+    success "Plugin registered successfully"
 
     setup_connection
     verify_health

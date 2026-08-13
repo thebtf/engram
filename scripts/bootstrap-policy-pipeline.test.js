@@ -22,6 +22,118 @@ function installerPath(fakeBin) {
 }
 function shellQuote(value) { return `'${value.replaceAll("'", `'\\''`)}'`; }
 function temporaryDirectory() { return fs.mkdtempSync(path.join(root, ".tmp-bootstrap-policy-")); }
+function directInstallerFixture(temp) {
+  const archiveRoot = path.join(temp, "archive");
+  const fakeBin = path.join(temp, "bin");
+  for (const directory of ["hooks", "scripts", ".claude-plugin", "extensions"]) fs.mkdirSync(path.join(archiveRoot, directory), { recursive: true });
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(archiveRoot, "hooks", "hook.js"), "module.exports = {};\n");
+  fs.writeFileSync(path.join(archiveRoot, "hooks", "hooks.json"), "{}\n");
+  fs.writeFileSync(path.join(archiveRoot, "scripts", "bootstrap-policy.js"), "module.exports = {};\n");
+  fs.writeFileSync(path.join(archiveRoot, ".claude-plugin", "plugin.json"), "{}\n");
+  fs.copyFileSync(path.join(root, "plugin", "engram", "package.json"), path.join(archiveRoot, "package.json"));
+  fs.copyFileSync(path.join(root, "plugin", "engram", "extensions", "engram-memory.mjs"), path.join(archiveRoot, "extensions", "engram-memory.mjs"));
+  fs.copyFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), path.join(archiveRoot, "bootstrap-targets.json"));
+  const archive = path.join(temp, "release.tar.gz");
+  const archived = spawnSync("tar", ["-czf", archive, "-C", archiveRoot, "."], { encoding: "utf8" });
+  assert.equal(archived.status, 0, archived.stderr);
+  fs.writeFileSync(path.join(fakeBin, "curl"), "#!/usr/bin/env bash\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then cp \"$FAKE_RELEASE_ARCHIVE\" \"$2\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
+  return { archive, fakeBin };
+}
+const registrationStaged = (file) => /(?:installed_plugins|settings|known_marketplaces)\.json\.staged-\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\.tmp$/.test(String(file));
+const registrationBackup = (file) => /(?:installed_plugins|settings|known_marketplaces)\.json\.backup-\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(String(file));
+const absentTargetRaceSentinel = Buffer.from("foreign absent-target registration race sentinel\n");
+function renameFailurePreload(temp) {
+  const preload = path.join(temp, "fail-second-registration-rename.cjs");
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const renameSync = fs.renameSync;
+const stagedSuffix = /\\.staged-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\\.tmp$/;
+const registrationStaged = (file) => /(?:installed_plugins|settings|known_marketplaces)\\.json\\.staged-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\\.tmp$/.test(String(file));
+let registrationRenames = 0;
+fs.renameSync = (from, to, ...rest) => {
+  if (registrationStaged(from) && String(to) === String(from).replace(stagedSuffix, "") && ++registrationRenames === 2) {
+    const error = new Error("injected second registration-stage rename failure");
+    error.code = "EIO";
+    throw error;
+  }
+  return renameSync.call(fs, from, to, ...rest);
+};
+`);
+  return preload;
+}
+function absentTargetRacePreload(temp) {
+  const preload = path.join(temp, "fail-absent-target-registration-rename.cjs");
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const renameSync = fs.renameSync;
+const stagedSuffix = /\\.staged-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\\.tmp$/;
+const registrationStaged = (file) => /(?:installed_plugins|settings|known_marketplaces)\\.json\\.staged-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\\.tmp$/.test(String(file));
+const sentinel = "foreign absent-target registration race sentinel\\n";
+let failed = false;
+fs.renameSync = (from, to, ...rest) => {
+  const target = String(from).replace(stagedSuffix, "");
+  if (!failed && registrationStaged(from) && String(to) === target && !fs.existsSync(to)) {
+    failed = true;
+    fs.writeFileSync(to, sentinel);
+    const error = new Error("injected absent-target registration rename race");
+    error.code = "EIO";
+    throw error;
+  }
+  return renameSync.call(fs, from, to, ...rest);
+};
+`);
+  return preload;
+}
+function partialWriteFailurePreload(temp) {
+  const preload = path.join(temp, "fail-second-registration-partial-write.cjs");
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const openSync = fs.openSync;
+const writeFileSync = fs.writeFileSync;
+const registrationStaged = (file) => /(?:installed_plugins|settings|known_marketplaces)\\.json\\.staged-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\\.tmp$/.test(String(file));
+const registrationDescriptors = new Set();
+let registrationWrites = 0;
+fs.openSync = (file, flags, ...rest) => {
+  const descriptor = openSync.call(fs, file, flags, ...rest);
+  if (flags === "wx" && registrationStaged(file)) registrationDescriptors.add(descriptor);
+  return descriptor;
+};
+fs.writeFileSync = (file, data, ...rest) => {
+  if (registrationDescriptors.has(file) && ++registrationWrites === 2) {
+    writeFileSync.call(fs, file, typeof data === "string" ? data.slice(0, 1) : data.subarray(0, 1), ...rest);
+    const error = new Error("injected second registration partial-write failure");
+    error.code = "EIO";
+    throw error;
+  }
+  return writeFileSync.call(fs, file, data, ...rest);
+};
+`);
+  return preload;
+}
+function backupCleanupFailurePreload(temp) {
+  const preload = path.join(temp, "fail-first-registration-backup-unlink.cjs");
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const unlinkSync = fs.unlinkSync;
+const registrationBackup = (file) => /(?:installed_plugins|settings|known_marketplaces)\\.json\\.backup-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(String(file));
+let failed = false;
+fs.unlinkSync = (file, ...rest) => {
+  if (!failed && registrationBackup(file)) {
+    failed = true;
+    fs.appendFileSync(process.env.ENGRAM_TEST_BACKUP_UNLINK_LOG, \`\${file}\\n\`);
+    const error = new Error("injected first registration backup unlink failure");
+    error.code = "EIO";
+    throw error;
+  }
+  return unlinkSync.call(fs, file, ...rest);
+};
+`);
+  return preload;
+}
+function registrationArtifacts(home) {
+  const claude = path.join(home, ".claude");
+  const directories = [path.join(claude, "plugins"), claude];
+  return directories.flatMap((directory) => fs.existsSync(directory)
+    ? fs.readdirSync(directory).filter((name) => (registrationStaged(name) || registrationBackup(name)) && fs.lstatSync(path.join(directory, name)).isFile()).map((name) => path.join(directory, name))
+    : []);
+}
 
 function installerSemver(source) {
   const match = source.match(/^const semver = (\/.+\/);$/m);
@@ -141,12 +253,14 @@ test("direct installer rejects archive self-validation before install mutation",
     const archiveRoot = path.join(temp, "archive");
     const fakeBin = path.join(temp, "bin");
     const home = path.join(temp, "home");
-    for (const directory of ["hooks", "scripts", ".claude-plugin"]) fs.mkdirSync(path.join(archiveRoot, directory), { recursive: true });
+    for (const directory of ["hooks", "scripts", ".claude-plugin", "extensions"]) fs.mkdirSync(path.join(archiveRoot, directory), { recursive: true });
     fs.mkdirSync(fakeBin, { recursive: true });
     fs.writeFileSync(path.join(archiveRoot, "hooks", "hook.js"), "module.exports = {};\n");
     fs.writeFileSync(path.join(archiveRoot, "hooks", "hooks.json"), "{}\n");
     fs.writeFileSync(path.join(archiveRoot, "scripts", "bootstrap-policy.js"), "process.exit(0);\n");
     fs.writeFileSync(path.join(archiveRoot, ".claude-plugin", "plugin.json"), "{}\n");
+    fs.copyFileSync(path.join(root, "plugin", "engram", "package.json"), path.join(archiveRoot, "package.json"));
+    fs.copyFileSync(path.join(root, "plugin", "engram", "extensions", "engram-memory.mjs"), path.join(archiveRoot, "extensions", "engram-memory.mjs"));
     const validPolicy = fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8");
     const duplicatePolicy = validPolicy.replace('"schema_version": 1,', '"schema_version": 1,\n  "\\u0073chema_version": 1,');
     fs.writeFileSync(path.join(archiveRoot, "bootstrap-targets.json"), duplicatePolicy);
@@ -176,6 +290,277 @@ test("direct installer rejects archive self-validation before install mutation",
       assert.equal(semver.test("6.47.1+build.1"), false);
     }
     assert.match(powerShellInstaller, /Node\.js 18\+/);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("direct installer registers all Claude registries without jq", () => {
+  const temp = temporaryDirectory();
+  try {
+    const { archive, fakeBin } = directInstallerFixture(temp);
+    const home = path.join(temp, "home with spaces");
+    const registries = path.join(home, ".claude", "plugins");
+    fs.mkdirSync(registries, { recursive: true });
+    fs.writeFileSync(path.join(registries, "installed_plugins.json"), "\uFEFF{\"version\":2,\"plugins\":{},\"other\":true}\n");
+    fs.writeFileSync(path.join(home, ".claude", "settings.json"), "{\"other\":true}\n");
+    fs.writeFileSync(path.join(registries, "known_marketplaces.json"), "{\"other\":true}\n");
+
+    const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} ENGRAM_URL=http://localhost:37777/mcp ENGRAM_API_TOKEN=`;
+    const result = spawnSync("bash", ["-c", `printf '\\n\\n' | ${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.doesNotMatch(output, /jq|Plugin registration failed/);
+
+    const installRoot = path.join(home, ".claude", "plugins", "marketplaces", "engram");
+    const cachePath = path.join(home, ".claude", "plugins", "cache", "engram", "engram", "v6.47.5");
+    const installed = JSON.parse(fs.readFileSync(path.join(registries, "installed_plugins.json"), "utf8"));
+    const settings = JSON.parse(fs.readFileSync(path.join(home, ".claude", "settings.json"), "utf8"));
+    const marketplaces = JSON.parse(fs.readFileSync(path.join(registries, "known_marketplaces.json"), "utf8"));
+    assert.equal(installed.other, true);
+    assert.equal(installed.plugins["engram@engram"][0].installPath, bashPath(cachePath));
+    assert.equal(installed.plugins["engram@engram"][0].version, "6.47.5");
+    assert.equal(fs.existsSync(path.join(cachePath, "extensions", "engram-memory.mjs")), true);
+    assert.equal(settings.other, true);
+    assert.equal(settings.enabledPlugins["engram@engram"], true);
+    assert.equal(settings.statusLine.command, `node "${bashPath(installRoot)}/hooks/statusline.js"`);
+    assert.equal(marketplaces.other, true);
+    assert.deepEqual(marketplaces.engram.source, { source: "directory", path: bashPath(installRoot) });
+    assert.equal(marketplaces.engram.installLocation, bashPath(installRoot));
+    assert.deepEqual(fs.readFileSync(path.join(installRoot, "package.json")), fs.readFileSync(path.join(root, "plugin", "engram", "package.json")));
+    assert.deepEqual(fs.readFileSync(path.join(installRoot, "extensions", "engram-memory.mjs")), fs.readFileSync(path.join(root, "plugin", "engram", "extensions", "engram-memory.mjs")));
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+test("register-only registers an installed plugin without installation side effects", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home with spaces");
+    const installRoot = path.join(home, ".claude", "plugins", "marketplaces", "engram");
+    const registries = path.join(home, ".claude", "plugins");
+    const pluginsFile = path.join(registries, "installed_plugins.json");
+    const settingsFile = path.join(home, ".claude", "settings.json");
+    const marketplacesFile = path.join(registries, "known_marketplaces.json");
+    const fakeBin = path.join(temp, "bin");
+    const curlMarker = path.join(temp, "curl-accessed");
+    const plugin = JSON.parse(fs.readFileSync(path.join(root, "plugin", "engram", ".claude-plugin", "plugin.json"), "utf8"));
+    for (const directory of [".claude-plugin", "hooks", "extensions"]) fs.mkdirSync(path.join(installRoot, directory), { recursive: true });
+    fs.mkdirSync(fakeBin, { recursive: true });
+    fs.copyFileSync(path.join(root, "plugin", "engram", ".claude-plugin", "plugin.json"), path.join(installRoot, ".claude-plugin", "plugin.json"));
+    fs.copyFileSync(path.join(root, "plugin", "engram", "package.json"), path.join(installRoot, "package.json"));
+    fs.copyFileSync(path.join(root, "plugin", "engram", "extensions", "engram-memory.mjs"), path.join(installRoot, "extensions", "engram-memory.mjs"));
+    fs.writeFileSync(path.join(installRoot, "hooks", "statusline.js"), "module.exports = {};\n");
+    fs.writeFileSync(pluginsFile, "\uFEFF{\"version\":2,\"plugins\":{},\"unrelated\":\"installed\"}\n");
+    fs.writeFileSync(settingsFile, "{\"unrelated\":\"settings\"}\n");
+    fs.writeFileSync(marketplacesFile, "{\"unrelated\":\"marketplaces\"}\n");
+    fs.writeFileSync(path.join(fakeBin, "node"), `#!/usr/bin/env bash
+node_path=${shellQuote(process.execPath)}
+if command -v wslpath >/dev/null 2>&1; then node_path=$(wslpath -u "$node_path")
+elif command -v cygpath >/dev/null 2>&1; then node_path=$(cygpath -u "$node_path")
+fi
+exec "$node_path" "$@"
+`, { mode: 0o755 });
+    for (const command of ["curl", "tar", "uname"]) fs.writeFileSync(path.join(fakeBin, command), "#!/usr/bin/env bash\nprintf %s \"$0\" > \"$FORBIDDEN_MARKER\"\nexit 1\n", { mode: 0o755 });
+
+    const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FORBIDDEN_MARKER=${shellQuote(bashPath(curlMarker))}`;
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh --register-only`], { cwd: root, encoding: "utf8", env: process.env });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const output = `${result.stdout}\n${result.stderr}`;
+    for (const message of ["Plugin registered in installed_plugins.json", "Plugin enabled in settings.json", "Statusline configured in settings.json", "Marketplace registered in known_marketplaces.json"]) assert.match(output, new RegExp(message.replaceAll(".", "\\.")));
+    assert.equal(fs.existsSync(curlMarker), false);
+    assert.doesNotMatch(output, /Downloading|Extracting|Detected platform|connection|health|Installation Complete/i);
+
+    const cachePath = path.join(home, ".claude", "plugins", "cache", "engram", "engram", `v${plugin.version}`);
+    const installed = JSON.parse(fs.readFileSync(pluginsFile, "utf8"));
+    const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
+    const marketplaces = JSON.parse(fs.readFileSync(marketplacesFile, "utf8"));
+    assert.equal(installed.unrelated, "installed");
+    assert.equal(installed.plugins["engram@engram"].length, 1);
+    const registration = installed.plugins["engram@engram"][0];
+    assert.deepEqual(Object.keys(registration).sort(), ["installPath", "installedAt", "isLocal", "lastUpdated", "scope", "version"]);
+    assert.equal(registration.installPath, bashPath(cachePath));
+    assert.equal(registration.version, plugin.version);
+    assert.equal(registration.scope, "user");
+    assert.equal(registration.isLocal, true);
+    assert.equal(registration.installedAt, registration.lastUpdated);
+    assert.deepEqual(fs.readFileSync(path.join(cachePath, "extensions", "engram-memory.mjs")), fs.readFileSync(path.join(installRoot, "extensions", "engram-memory.mjs")));
+    assert.equal(settings.unrelated, "settings");
+    assert.equal(settings.enabledPlugins["engram@engram"], true);
+    assert.deepEqual(settings.statusLine, { type: "command", command: `node "${bashPath(installRoot)}/hooks/statusline.js"`, padding: 0 });
+    assert.equal(marketplaces.unrelated, "marketplaces");
+    assert.deepEqual(Object.keys(marketplaces.engram).sort(), ["installLocation", "lastUpdated", "source"]);
+    assert.deepEqual(marketplaces.engram.source, { source: "directory", path: bashPath(installRoot) });
+    assert.equal(marketplaces.engram.installLocation, bashPath(installRoot));
+
+    const beforePlugins = fs.readFileSync(pluginsFile);
+    const beforeMarketplaces = fs.readFileSync(marketplacesFile);
+    const malformedSettings = Buffer.from("{malformed settings}\n");
+    fs.writeFileSync(settingsFile, malformedSettings);
+    const rejected = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh --register-only`], { cwd: root, encoding: "utf8", env: process.env });
+    assert.ifError(rejected.error);
+    assert.notEqual(rejected.status, 0);
+    const rejectedOutput = `${rejected.stdout}\n${rejected.stderr}`;
+    assert.match(rejectedOutput, /SyntaxError: .*JSON/);
+    assert.doesNotMatch(rejectedOutput, /Plugin registered in installed_plugins\.json|Plugin enabled in settings\.json|Statusline configured in settings\.json|Marketplace registered in known_marketplaces\.json/);
+    assert.equal(fs.existsSync(curlMarker), false);
+    assert.deepEqual(fs.readFileSync(pluginsFile), beforePlugins);
+    assert.deepEqual(fs.readFileSync(marketplacesFile), beforeMarketplaces);
+    assert.deepEqual(fs.readFileSync(settingsFile), malformedSettings);
+    assert.deepEqual(registrationArtifacts(home), []);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("direct installer stops when an existing registry is malformed", () => {
+  const temp = temporaryDirectory();
+  try {
+    const { archive, fakeBin } = directInstallerFixture(temp);
+    const home = path.join(temp, "home");
+    const registries = path.join(home, ".claude", "plugins");
+    fs.mkdirSync(registries, { recursive: true });
+    fs.writeFileSync(path.join(registries, "installed_plugins.json"), "{not json}\n");
+    const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))}`;
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    assert.ifError(result.error);
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /Plugin registered successfully|Installation Complete/);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+
+test("direct installer restores every registry after a registration rename failure", () => {
+  const temp = temporaryDirectory();
+  try {
+    const { archive, fakeBin } = directInstallerFixture(temp);
+    const home = path.join(temp, "home");
+    const registries = path.join(home, ".claude", "plugins");
+    fs.mkdirSync(registries, { recursive: true });
+    const pluginsFile = path.join(registries, "installed_plugins.json");
+    const settingsFile = path.join(home, ".claude", "settings.json");
+    const marketplacesFile = path.join(registries, "known_marketplaces.json");
+    fs.writeFileSync(pluginsFile, "\uFEFF{\"plugins\":{},\"keep\":\"plugins\"}\n");
+    fs.writeFileSync(settingsFile, "{\"keep\":\"settings\"}\n");
+    fs.writeFileSync(marketplacesFile, "{\"keep\":\"marketplaces\"}\n");
+    const files = [pluginsFile, settingsFile, marketplacesFile];
+    const before = files.map((file) => fs.readFileSync(file));
+    const preload = renameFailurePreload(temp);
+    const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} NODE_OPTIONS=${shellQuote(`--require=./${bashPath(preload)}`)}`;
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    assert.ifError(result.error);
+    assert.notEqual(result.status, 0);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.match(output, /injected second registration-stage rename failure/);
+    assert.doesNotMatch(output, /Plugin registered successfully|Installation Complete/);
+    assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+    assert.deepEqual(registrationArtifacts(home), []);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+test("direct installer preserves a foreign target after an absent-target registration rename race", () => {
+  const temp = temporaryDirectory();
+  try {
+    const { archive, fakeBin } = directInstallerFixture(temp);
+    const home = path.join(temp, "home");
+    const registries = path.join(home, ".claude", "plugins");
+    const pluginsFile = path.join(registries, "installed_plugins.json");
+    const settingsFile = path.join(home, ".claude", "settings.json");
+    const marketplacesFile = path.join(registries, "known_marketplaces.json");
+    const files = [pluginsFile, settingsFile, marketplacesFile];
+    assert.deepEqual(files.map((file) => fs.existsSync(file)), [false, false, false]);
+    const preload = absentTargetRacePreload(temp);
+    const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} NODE_OPTIONS=${shellQuote(`--require=./${bashPath(preload)}`)}`;
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    assert.ifError(result.error);
+    assert.notEqual(result.status, 0);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.match(output, /injected absent-target registration rename race/);
+    assert.doesNotMatch(output, /Plugin registered in installed_plugins\.json|Plugin enabled in settings\.json|Statusline configured in settings\.json|Marketplace registered in known_marketplaces\.json|Installation Complete/);
+    assert.deepEqual(fs.readFileSync(pluginsFile), absentTargetRaceSentinel);
+    assert.equal(fs.existsSync(settingsFile), false);
+    assert.equal(fs.existsSync(marketplacesFile), false);
+    assert.deepEqual(registrationArtifacts(home), []);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+test("direct installer retains an orphan backup when post-commit cleanup fails", () => {
+  const temp = temporaryDirectory();
+  try {
+    const { archive, fakeBin } = directInstallerFixture(temp);
+    const home = path.join(temp, "home");
+    const registries = path.join(home, ".claude", "plugins");
+    fs.mkdirSync(registries, { recursive: true });
+    const pluginsFile = path.join(registries, "installed_plugins.json");
+    const settingsFile = path.join(home, ".claude", "settings.json");
+    const marketplacesFile = path.join(registries, "known_marketplaces.json");
+    const files = [pluginsFile, settingsFile, marketplacesFile];
+    fs.writeFileSync(pluginsFile, "\uFEFF{\"plugins\":{},\"keep\":\"plugins\"}\n");
+    fs.writeFileSync(settingsFile, "{\"keep\":\"settings\"}\n");
+    fs.writeFileSync(marketplacesFile, "{\"keep\":\"marketplaces\"}\n");
+    const before = files.map((file) => fs.readFileSync(file));
+    const failureLog = path.join(temp, "backup-unlink-failures");
+    const preload = backupCleanupFailurePreload(temp);
+    const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} NODE_OPTIONS=${shellQuote(`--require=./${bashPath(preload)}`)} ENGRAM_TEST_BACKUP_UNLINK_LOG=${shellQuote(bashPath(failureLog))}`;
+    const result = spawnSync("bash", ["-c", `printf '\\n\\n' | ${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.match(output, /injected first registration backup unlink failure/);
+    assert.match(output, /WARNING: Retained orphan registration backups: .*injected first registration backup unlink failure/);
+    assert.match(output, /Plugin registered successfully/);
+    assert.match(output, /Installation Complete/);
+
+    const installRoot = path.join(home, ".claude", "plugins", "marketplaces", "engram");
+    const cachePath = path.join(home, ".claude", "plugins", "cache", "engram", "engram", "v6.47.5");
+    const installed = JSON.parse(fs.readFileSync(pluginsFile, "utf8"));
+    const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
+    const marketplaces = JSON.parse(fs.readFileSync(marketplacesFile, "utf8"));
+    const registration = installed.plugins["engram@engram"][0];
+    assert.equal(registration.scope, "user");
+    assert.equal(registration.installPath, bashPath(cachePath));
+    assert.equal(registration.version, "6.47.5");
+    assert.equal(registration.isLocal, true);
+    assert.equal(settings.enabledPlugins["engram@engram"], true);
+    assert.deepEqual(settings.statusLine, { type: "command", command: `node "${bashPath(installRoot)}/hooks/statusline.js"`, padding: 0 });
+    assert.deepEqual(marketplaces.engram.source, { source: "directory", path: bashPath(installRoot) });
+    assert.equal(marketplaces.engram.installLocation, bashPath(installRoot));
+    assert.equal(marketplaces.engram.lastUpdated, registration.lastUpdated);
+    assert.equal(registration.installedAt, registration.lastUpdated);
+
+    const artifacts = registrationArtifacts(home);
+    const backups = artifacts.filter(registrationBackup);
+    assert.equal(backups.length, 1);
+    assert.ok(backups[0].startsWith(`${pluginsFile}.backup-`));
+    assert.deepEqual(fs.readFileSync(backups[0]), before[0]);
+    assert.ok(output.includes(bashPath(backups[0])));
+    assert.deepEqual(artifacts.filter(registrationStaged), []);
+    assert.deepEqual(fs.readFileSync(failureLog, "utf8").trimEnd().split("\n"), [bashPath(backups[0])]);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+test("direct installer removes owned staging after a registration partial write failure", () => {
+  const temp = temporaryDirectory();
+  try {
+    const { archive, fakeBin } = directInstallerFixture(temp);
+    const home = path.join(temp, "home");
+    const registries = path.join(home, ".claude", "plugins");
+    fs.mkdirSync(registries, { recursive: true });
+    const pluginsFile = path.join(registries, "installed_plugins.json");
+    const settingsFile = path.join(home, ".claude", "settings.json");
+    const marketplacesFile = path.join(registries, "known_marketplaces.json");
+    const files = [pluginsFile, settingsFile, marketplacesFile];
+    fs.writeFileSync(pluginsFile, "{\"plugins\":{},\"keep\":1}\n");
+    fs.writeFileSync(settingsFile, "{\"keep\":2}\n");
+    fs.writeFileSync(marketplacesFile, "{\"keep\":3}\n");
+    const before = files.map((file) => fs.readFileSync(file));
+    const sentinelFile = `${settingsFile}.tmp`;
+    const sentinel = Buffer.from("foreign legacy settings temp sentinel\n");
+    fs.writeFileSync(sentinelFile, sentinel);
+    const preload = partialWriteFailurePreload(temp);
+    const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} NODE_OPTIONS=${shellQuote(`--require=./${bashPath(preload)}`)}`;
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    assert.ifError(result.error);
+    assert.notEqual(result.status, 0);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.match(output, /injected second registration partial-write failure/);
+    assert.doesNotMatch(output, /Plugin registered|Plugin enabled|Statusline configured|Marketplace registered|Installation Complete/);
+    assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+    assert.deepEqual(fs.readFileSync(sentinelFile), sentinel);
+    assert.deepEqual(registrationArtifacts(home), []);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
