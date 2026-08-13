@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -140,6 +141,62 @@ test('session start validates identity then queues one hidden next-turn context 
   } finally {
     restore();
   }
+});
+
+test('config-file credential rotation reaches OMP requests without env mutation', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-runtime-rotation-'));
+  const configFile = path.join(dir, 'config.json');
+  const envKeys = [
+    'ENGRAM_CONFIG_FILE', 'ENGRAM_DATA_DIR', 'CLAUDE_PLUGIN_DATA',
+    'ENGRAM_URL', 'ENGRAM_SERVER_URL', 'CLAUDE_PLUGIN_OPTION_server_url',
+    'CLAUDE_PLUGIN_OPTION_SERVER_URL', 'ENGRAM_CLAUDE_USERCONFIG_URL',
+    'ENGRAM_TOKEN', 'CLAUDE_PLUGIN_OPTION_api_token', 'CLAUDE_PLUGIN_OPTION_API_TOKEN',
+    'ENGRAM_CLAUDE_USERCONFIG_TOKEN',
+  ];
+  const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+  for (const key of envKeys) delete process.env[key];
+  process.env.ENGRAM_CONFIG_FILE = configFile;
+
+  const originalIdentity = lib.resolveHookProjectIdentityV2;
+  const originalFetch = globalThis.fetch;
+  lib.resolveHookProjectIdentityV2 = async () => identity;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url: String(url), authorization: options.headers.Authorization });
+    const body = String(url).endsWith('/api/context/inject')
+      ? { canonical_project: 'p2g_canonical' }
+      : { issues: [], rules: [], memories: [{ content: 'rotated config context' }] };
+    return { ok: true, text: async () => JSON.stringify(body) };
+  };
+
+  t.after(() => {
+    lib.resolveHookProjectIdentityV2 = originalIdentity;
+    globalThis.fetch = originalFetch;
+    for (const key of envKeys) {
+      if (previousEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = previousEnv[key];
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  fs.writeFileSync(configFile, JSON.stringify({
+    server_url: 'http://first.example.test/mcp', api_token: 'first-token',
+  }));
+  assert.match((await sessionStartMessage({ cwd: process.cwd(), sessionId: 'first-config' }, {})).content, /rotated config context/);
+
+  fs.writeFileSync(configFile, JSON.stringify({
+    server_url: 'http://second.example.test/mcp', api_token: 'second-token',
+  }));
+  assert.match((await sessionStartMessage({ cwd: process.cwd(), sessionId: 'second-config' }, {})).content, /rotated config context/);
+
+  assert.deepEqual(requests, [
+    { url: 'http://first.example.test/api/context/inject', authorization: 'Bearer first-token' },
+    { url: 'http://first.example.test/api/context/session-start', authorization: 'Bearer first-token' },
+    { url: 'http://second.example.test/api/context/inject', authorization: 'Bearer second-token' },
+    { url: 'http://second.example.test/api/context/session-start', authorization: 'Bearer second-token' },
+  ]);
+  assert.equal(process.env.ENGRAM_URL, undefined);
+  assert.equal(process.env.ENGRAM_TOKEN, undefined);
 });
 
 test('session start passes only the remaining registration budget to context fetch', async () => {

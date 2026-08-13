@@ -75,7 +75,7 @@ function untilAborted(signal, operation) {
   });
 }
 
-async function validateProject(event, ctx, deadline) {
+async function validateProject(event, ctx, deadline, config) {
   if (deadline.remaining() <= 0) return null;
   const identity = eventContext(event, ctx);
   if (!identity) return null;
@@ -96,6 +96,8 @@ async function validateProject(event, ctx, deadline) {
   await lib.registerProjectIdentityV2(projectContext, undefined, {
     signal: deadline.signal,
     timeoutMs: deadline.remaining(),
+    serverURL: config.serverURL,
+    token: config.token,
   });
   if (deadline.remaining() <= 0) return null;
   return { project: projectContext.Project, sessionID: identity.sessionID };
@@ -106,14 +108,14 @@ async function sessionStartMessage(event, ctx, timeoutMs = sessionStartTimeoutMs
   try {
     const config = await untilAborted(deadline.signal, () => lib.resolveEngramRuntimeConfig({ signal: deadline.signal }));
     if (!config || deadline.remaining() <= 0 || config.quiet || !config.serverURL || !config.token) return null;
-    const scope = await untilAborted(deadline.signal, () => validateProject(event, ctx, deadline));
+    const scope = await untilAborted(deadline.signal, () => validateProject(event, ctx, deadline, config));
     const remaining = deadline.remaining();
     if (!scope || remaining <= 0) return null;
     const payload = await untilAborted(deadline.signal, () => lib.requestPost(
       '/api/context/session-start',
       { project: scope.project, session_id: scope.sessionID },
       remaining,
-      { signal: deadline.signal },
+      { signal: deadline.signal, serverURL: config.serverURL, token: config.token },
     ));
     if (!payload || deadline.remaining() <= 0) return null;
     const content = boundedContext(buildSessionStartContext(payload, scope.project, { maxLength: hiddenContextLimit }));
@@ -128,7 +130,7 @@ async function ambientMessage(event, ctx) {
   try {
     const config = await untilAborted(deadline.signal, () => lib.resolveEngramRuntimeConfig({ signal: deadline.signal }));
     if (!config || deadline.remaining() <= 0 || config.quiet || !config.serverURL || !config.token) return null;
-    const scope = await untilAborted(deadline.signal, () => validateProject(event, ctx, deadline));
+    const scope = await untilAborted(deadline.signal, () => validateProject(event, ctx, deadline, config));
     const prompt = stringField(event.prompt, event.userMessage, event.user_message, ctx.prompt);
     const remaining = deadline.remaining();
     if (!scope || !prompt || remaining <= 0) return null;
@@ -137,7 +139,7 @@ async function ambientMessage(event, ctx) {
       scope.sessionID,
       prompt,
       remaining,
-      { signal: deadline.signal },
+      { signal: deadline.signal, serverURL: config.serverURL, token: config.token },
     )));
     return deadline.signal.aborted || !content ? null : hiddenMessage(content);
   } finally {

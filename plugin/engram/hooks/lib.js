@@ -221,16 +221,16 @@ function getEngramConfig() {
  return { serverURL, token };
 }
 
-function getServerURL() {
+function getServerURL(configuredURL) {
  // ENGRAM_URL may include a path (e.g. http://server:37777/mcp for MCP transport).
  // Hooks use REST API endpoints at the server root (/api/...), so we extract just the origin.
- const customURL = configuredPluginEnv(
+ const customURL = configuredURL === undefined ? configuredPluginEnv(
   'ENGRAM_URL',
   'ENGRAM_SERVER_URL',
   'CLAUDE_PLUGIN_OPTION_server_url',
   'CLAUDE_PLUGIN_OPTION_SERVER_URL',
   'ENGRAM_CLAUDE_USERCONFIG_URL'
- );
+ ) : configuredURL;
  if (customURL && customURL.trim() !== '') {
   try {
    const parsed = new URL(customURL.trim());
@@ -363,8 +363,6 @@ async function resolveEngramRuntimeConfig(options = {}) {
   }
  }
 
- if (serverURL) process.env.ENGRAM_URL = serverURL;
- if (token) process.env.ENGRAM_TOKEN = token;
  return { serverURL, token, quiet };
 }
 
@@ -857,16 +855,16 @@ function isProjectIdentityTransportOffline(error) {
  return ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT'].includes(code);
 }
 
-function buildRequestHeaders(includeJsonBody = false) {
+function buildRequestHeaders(includeJsonBody = false, token) {
  const headers = {};
- const token = configuredPluginEnv(
+ const resolvedToken = token === undefined ? configuredPluginEnv(
   'ENGRAM_TOKEN',
   'CLAUDE_PLUGIN_OPTION_api_token',
   'CLAUDE_PLUGIN_OPTION_API_TOKEN',
   'ENGRAM_CLAUDE_USERCONFIG_TOKEN'
- );
- if (token) {
-  headers.Authorization = `Bearer ${token}`;
+ ) : token;
+ if (resolvedToken) {
+  headers.Authorization = `Bearer ${resolvedToken}`;
  }
 
  if (includeJsonBody) {
@@ -876,8 +874,8 @@ function buildRequestHeaders(includeJsonBody = false) {
  return headers;
 }
 
-function resolveRequestURL(endpoint) {
- const base = getServerURL().replace(/\/+$/, '');
+function resolveRequestURL(endpoint, serverURL) {
+ const base = getServerURL(serverURL).replace(/\/+$/, '');
  if (!endpoint) {
   return base;
  }
@@ -1032,7 +1030,7 @@ async function requestPost(endpoint, body, timeoutMs = 10000, options = {}) {
 }
 
 async function request(method, endpoint, body, timeoutMs = 10000, options = {}) {
- const url = resolveRequestURL(endpoint);
+ const url = resolveRequestURL(endpoint, options.serverURL);
  const controller = new AbortController();
  const externalSignal = options && options.signal;
  const abort = () => controller.abort();
@@ -1047,7 +1045,7 @@ async function request(method, endpoint, body, timeoutMs = 10000, options = {}) 
   }
   if (externalSignal) externalSignal.addEventListener('abort', abort, { once: true });
 
-  const headers = buildRequestHeaders(body !== undefined);
+  const headers = buildRequestHeaders(body !== undefined, options.token);
   const response = await fetch(url, {
    method,
    headers,
