@@ -39,10 +39,12 @@ function Assert-Node {
     if (-not $Node) {
         Write-Err "Node.js 18+ is required to validate the release bootstrap policy. Install Node.js 18 or newer and re-run this installer."
     }
-    $NodeVersion = & $Node.Source --version 2>$null
+    $NodeExecutable = $Node.Source
+    $NodeVersion = & $NodeExecutable --version 2>$null
     if ($LASTEXITCODE -ne 0 -or $NodeVersion -notmatch "^v?([0-9]+)\." -or [int]$Matches[1] -lt 18) {
         Write-Err "Node.js 18+ is required to validate the release bootstrap policy. Found $NodeVersion; install Node.js 18 or newer and re-run this installer."
     }
+    return $NodeExecutable
 }
 
 # ---------------------------------------------------------------------------
@@ -81,7 +83,7 @@ function Get-LatestVersion {
 # Download release zip and lay out files into $InstallDir
 # ---------------------------------------------------------------------------
 function Install-Release {
-    param([string]$Ver)
+    param([string]$Ver, [string]$NodeExecutable)
 
     $TempDir = New-Item -ItemType Directory -Path "$env:TEMP\engram-$(Get-Random)" -Force
 
@@ -191,14 +193,11 @@ for (const [key, asset] of Object.entries(assets)) {
   if (target.desired.version !== version || target.desired.asset !== asset || !Number.isSafeInteger(target.desired.size) || target.desired.size <= 0 || target.desired.size > 128 * 1024 * 1024 || !sha256.test(target.desired.sha256) || policy.revoked_sha256.includes(target.desired.sha256)) throw new Error(`invalid target ${key}`);
 }
 '@
-        try {
-            $ValidatorScript | & node - $PolicyPath $VersionClean
-            if ($LASTEXITCODE -ne 0) {
-                throw 'schema or target matrix mismatch'
-            }
-        }
-        catch {
-            Write-Err "Release archive has an invalid bootstrap policy: $_"
+        $ValidatorOutput = @($ValidatorScript | & $NodeExecutable - $PolicyPath $VersionClean 2>&1)
+        $ValidatorExitCode = $LASTEXITCODE
+        $ValidatorOutput | ForEach-Object { Write-Host $_ }
+        if ($ValidatorExitCode -ne 0) {
+            Write-Err "Release archive has an invalid bootstrap policy: schema or target matrix mismatch"
         }
 
         Write-Info "Installing to $InstallDir..."
@@ -255,7 +254,7 @@ for (const [key, asset] of Object.entries(assets)) {
 # Write plugin metadata into Claude Code's JSON registry files
 # ---------------------------------------------------------------------------
 function Register-Plugin {
-    param([string]$Ver)
+    param([string]$Ver, [string]$NodeExecutable)
 
     $Timestamp    = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.000Z")
     $VersionClean = $Ver -replace "^v", ""
@@ -274,25 +273,22 @@ function Register-Plugin {
 
     New-Item -ItemType Directory -Path "$CachePath\.claude-plugin" -Force | Out-Null
     New-Item -ItemType Directory -Path "$CachePath\hooks"          -Force | Out-Null
-    Copy-Item "$InstallDir\*" $CachePath -Recurse -Force -ErrorAction SilentlyContinue
+    Copy-Item "$InstallDir\*" $CachePath -Recurse -Force -ErrorAction Stop
 
-    try {
-        & node "$InstallDir\scripts\register-plugin.js" `
-            $PluginsFile $SettingsFile $MarketplacesFile `
-            $PluginKey $CachePath $VersionClean $Timestamp $InstallDir
-        if ($LASTEXITCODE -ne 0) {
-            throw "registry transaction helper failed with exit code $LASTEXITCODE"
-        }
-        Write-Success "Plugin registered in installed_plugins.json"
-        Write-Success "Plugin enabled in settings.json"
-        Write-Success "Statusline configured in settings.json"
-        Write-Success "Marketplace registered in known_marketplaces.json"
-    }
-    catch {
-        Write-Host "[ERROR] Plugin registration failed: $_" -ForegroundColor Red
+    $HelperOutput = @(& $NodeExecutable "$InstallDir\scripts\register-plugin.js" `
+        $PluginsFile $SettingsFile $MarketplacesFile `
+        $PluginKey $CachePath $VersionClean $Timestamp $InstallDir 2>&1)
+    $HelperExitCode = $LASTEXITCODE
+    $HelperOutput | ForEach-Object { Write-Host $_ }
+    if ($HelperExitCode -ne 0) {
+        Write-Host "[ERROR] Plugin registration failed: registry transaction helper failed with exit code $HelperExitCode" -ForegroundColor Red
         Write-Host "[ERROR] Registry transaction did not complete." -ForegroundColor Red
         exit 1
     }
+    Write-Success "Plugin registered in installed_plugins.json"
+    Write-Success "Plugin enabled in settings.json"
+    Write-Success "Statusline configured in settings.json"
+    Write-Success "Marketplace registered in known_marketplaces.json"
 }
 
 # ---------------------------------------------------------------------------
@@ -440,7 +436,7 @@ if ($Uninstall) {
     exit 0
 }
 
-Assert-Node
+$NodeExecutable = Assert-Node
 
 if (-not $Version) {
     Write-Info "Fetching latest release..."
@@ -448,8 +444,8 @@ if (-not $Version) {
 }
 Write-Info "Installing version: $Version"
 
-Install-Release  -Ver $Version
-Register-Plugin  -Ver $Version
+Install-Release  -Ver $Version -NodeExecutable $NodeExecutable
+Register-Plugin  -Ver $Version -NodeExecutable $NodeExecutable
 Setup-Connection
 Test-ServerHealth
 

@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 const test = require("node:test");
@@ -241,6 +242,7 @@ test("registry transaction serializes concurrent registration without losing eit
     const first = start(argumentsFor("first@engram", "6.47.1"), "holder");
     waitForFile(acquired);
     assert.equal(fs.existsSync(lockDirectory), true, "holder must own the registry lock");
+    assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(lockDirectory, "owner"), "utf8"))).sort(), ["hostname", "pid", "token"]);
     assert.equal(fs.existsSync(path.join(lockDirectory, "owner")), true, "holder must create the registry lock owner file");
     const second = start(argumentsFor("second@engram", "6.47.2"), "waiter");
     waitForFile(contended);
@@ -259,6 +261,221 @@ test("registry transaction serializes concurrent registration without losing eit
     assert.equal(settings.enabledPlugins["second@engram"], true);
     assert.equal(fs.existsSync(lockDirectory), false);
     assert.deepEqual(registrationArtifacts(home), []);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+const registryLockName = ".engram-registry-transaction.lock";
+function registryLock(home) { return path.join(home, ".claude", registryLockName); }
+function lockIdentity(pid, hostname = os.hostname(), token = crypto.randomUUID()) { return { hostname, pid, token }; }
+function writeRegistryLock(directory, identity) {
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "owner"), `${JSON.stringify(identity)}\n`);
+}
+function runRegistry(home, environment = {}) {
+  return spawnSync(process.execPath, [registryHelper, ...registryArguments(home)], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, ENGRAM_REGISTRY_LOCK_TIMEOUT_MS: "100", ...environment },
+  });
+}
+function registryError(result) { return `${result.stdout}\n${result.stderr}`; }
+function terminatedProcessId() {
+  const child = spawnSync(process.execPath, ["-e", ""], { encoding: "utf8" });
+  assert.equal(child.status, 0, child.stderr);
+  assert.ok(Number.isSafeInteger(child.pid) && child.pid > 0);
+  return child.pid;
+}
+function reclaimMarker(home) { return `${registryLock(home)}.reclaim-1-${crypto.randomUUID()}`; }
+
+test("registry transaction recovers a terminated same-host owner", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    writeRegistryLock(registryLock(home), lockIdentity(terminatedProcessId()));
+    const result = runRegistry(home);
+    assert.equal(result.status, 0, registryError(result));
+    assert.equal(fs.existsSync(registryLock(home)), false);
+    assert.deepEqual(registrationArtifacts(home), []);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+for (const [name, identity] of [
+  ["live owner", () => lockIdentity(process.pid)],
+  ["malformed owner", () => "not JSON\n"],
+  ["foreign owner", () => lockIdentity(1, "foreign-host")],
+]) {
+  test(`registry transaction times out for ${name}`, () => {
+    const temp = temporaryDirectory();
+    try {
+      const home = path.join(temp, "home");
+      const lock = registryLock(home);
+      fs.mkdirSync(lock, { recursive: true });
+      const value = identity();
+      fs.writeFileSync(path.join(lock, "owner"), typeof value === "string" ? value : `${JSON.stringify(value)}\n`);
+      const result = runRegistry(home);
+      assert.notEqual(result.status, 0);
+      assert.match(registryError(result), /timed out waiting for registry transaction lock/);
+      assert.equal(fs.existsSync(lock), true);
+      assert.deepEqual(registrationArtifacts(home), []);
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+}
+
+test("registry transaction preserves a canonical ABA lock replacement", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const lock = registryLock(home);
+    writeRegistryLock(lock, lockIdentity(terminatedProcessId()));
+    const replacement = lockIdentity(process.pid);
+    const preload = path.join(temp, "canonical-aba.cjs");
+    fs.writeFileSync(preload, `const fs = require("node:fs");
+const path = require("node:path");
+const renameSync = fs.renameSync;
+const canonical = path.resolve(process.env.ENGRAM_TEST_REGISTRY_LOCK);
+let replaced = false;
+fs.renameSync = (from, to, ...rest) => {
+  const result = renameSync.call(fs, from, to, ...rest);
+  if (!replaced && path.resolve(String(from)) === canonical && /\\.reclaim-/.test(String(to))) {
+    replaced = true;
+    fs.mkdirSync(canonical);
+    fs.writeFileSync(path.join(canonical, "owner"), process.env.ENGRAM_TEST_REPLACEMENT);
+  }
+  return result;
+};
+`);
+    const result = runRegistry(home, {
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" "),
+      ENGRAM_TEST_REGISTRY_LOCK: lock,
+      ENGRAM_TEST_REPLACEMENT: `${JSON.stringify(replacement)}\n`,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(registryError(result), /timed out waiting for registry transaction lock/);
+    assert.equal(fs.readFileSync(path.join(lock, "owner"), "utf8"), `${JSON.stringify(replacement)}\n`);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("registry transaction recovers an interrupted stale quarantine", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const marker = reclaimMarker(home);
+    writeRegistryLock(marker, lockIdentity(terminatedProcessId()));
+    const result = runRegistry(home);
+    assert.equal(result.status, 0, registryError(result));
+    assert.equal(fs.existsSync(marker), false);
+    assert.equal(fs.existsSync(registryLock(home)), false);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("registry transaction treats a live reclaim marker as contention", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const marker = reclaimMarker(home);
+    const owner = lockIdentity(process.pid);
+    writeRegistryLock(marker, owner);
+    const result = runRegistry(home);
+    assert.notEqual(result.status, 0);
+    assert.match(registryError(result), /timed out waiting for registry transaction lock/);
+    assert.equal(fs.readFileSync(path.join(marker, "owner"), "utf8"), `${JSON.stringify(owner)}\n`);
+    assert.equal(fs.existsSync(registryLock(home)), false);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("registry transaction rejects release with a matching token and different PID", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const lock = registryLock(home);
+    const preload = path.join(temp, "different-pid-release.cjs");
+    fs.writeFileSync(preload, `const fs = require("node:fs");
+const path = require("node:path");
+const writeFileSync = fs.writeFileSync;
+const lock = path.resolve(process.env.ENGRAM_TEST_REGISTRY_LOCK);
+let changed = false;
+fs.writeFileSync = (file, data, ...rest) => {
+  const result = writeFileSync.call(fs, file, data, ...rest);
+  if (!changed && path.resolve(String(file)) === path.join(lock, "owner")) {
+    changed = true;
+    const owner = JSON.parse(String(data));
+    writeFileSync.call(fs, file, JSON.stringify({ ...owner, pid: owner.pid + 1 }) + "\\n");
+  }
+  return result;
+};
+`);
+    const result = runRegistry(home, {
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" "),
+      ENGRAM_TEST_REGISTRY_LOCK: lock,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(registryError(result), /registry transaction lock ownership changed/);
+    const marker = fs.readdirSync(path.dirname(lock)).map((name) => path.join(path.dirname(lock), name)).find((file) => file.startsWith(`${lock}.reclaim-`));
+    assert.ok(marker, "mismatched owner must remain quarantined");
+    const owner = JSON.parse(fs.readFileSync(path.join(marker, "owner"), "utf8"));
+    assert.notEqual(owner.pid, process.pid);
+    assert.equal(fs.existsSync(lock), false);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+function nativePwsh() {
+  const result = spawnSync("where.exe", ["pwsh.exe"], { cwd: root, encoding: "utf8", env: process.env });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const executable = result.stdout.split(/\r?\n/).find(Boolean);
+  assert.ok(executable && path.isAbsolute(executable), "unpoisoned parent PATH must resolve an absolute pwsh.exe");
+  return executable;
+}
+function powerShellQuote(value) { return value.replaceAll("'", "''"); }
+function runPowerShellRegistrationFixture(temp, helper, failCacheCopy = false) {
+  const home = path.join(temp, "home");
+  const install = path.join(home, ".claude", "plugins", "marketplaces", "engram");
+  const fakeBin = path.join(temp, "poisoned-path");
+  const poisonedNode = path.join(temp, "poisoned-node-ran");
+  fs.mkdirSync(path.join(install, "scripts"), { recursive: true });
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(install, "scripts", "register-plugin.js"), helper);
+  fs.writeFileSync(path.join(install, "hook.js"), "module.exports = {};\n");
+  fs.writeFileSync(path.join(fakeBin, "node.cmd"), `@echo off\r\necho poisoned > "${poisonedNode}"\r\nexit /b 97\r\n`);
+  const ps = `$env:USERPROFILE = '${powerShellQuote(home)}'
+$env:PATH = '${powerShellQuote(fakeBin)}'
+$env:ENGRAM_TEST_NODE = '${powerShellQuote(process.execPath)}'
+$source = Get-Content -LiteralPath '${powerShellQuote(path.join(root, "scripts", "install.ps1"))}' -Raw
+$source = $source.Substring($source.IndexOf('$ErrorActionPreference = "Stop"'))
+$source = [regex]::Split($source, '# ---------------------------------------------------------------------------\\r?\\n# Entry point')[0]
+Invoke-Expression $source
+function Get-Command { param($Name) if ($Name -eq 'node') { return [pscustomobject]@{ Source = $env:ENGRAM_TEST_NODE } }; return $null }
+${failCacheCopy ? "function Copy-Item { throw 'injected cache copy failure' }" : ""}
+$node = Assert-Node
+Register-Plugin -Ver 'v6.47.5' -NodeExecutable $node
+`;
+  const result = spawnSync(nativePwsh(), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, PATH: fakeBin },
+  });
+  return { home, poisonedNode, result };
+}
+
+const windowsTest = process.platform === "win32" ? test : test.skip;
+windowsTest("PowerShell registration preserves diagnostics and stops before registry writes on cache copy failure", () => {
+  const temp = temporaryDirectory();
+  try {
+    const warning = runPowerShellRegistrationFixture(temp, "console.error('registry warning');\nprocess.exit(0);\n");
+    assert.equal(warning.result.status, 0, registryError(warning.result));
+    assert.match(registryError(warning.result), /registry warning/);
+    assert.equal(fs.existsSync(warning.poisonedNode), false);
+
+    const failure = runPowerShellRegistrationFixture(path.join(temp, "failure"), "console.error('registry diagnostic');\nprocess.exit(42);\n");
+    assert.notEqual(failure.result.status, 0);
+    assert.match(registryError(failure.result), /registry diagnostic/);
+    assert.match(registryError(failure.result), /exit code 42/);
+    assert.equal(fs.existsSync(failure.poisonedNode), false);
+
+    const copyFailure = runPowerShellRegistrationFixture(path.join(temp, "copy-failure"), "process.exit(99);\n", true);
+    assert.notEqual(copyFailure.result.status, 0);
+    assert.match(registryError(copyFailure.result), /injected cache copy failure/);
+    assert.deepEqual(registryArguments(copyFailure.home).slice(0, 3).map((file) => fs.existsSync(file)), [false, false, false]);
+    assert.equal(fs.existsSync(copyFailure.poisonedNode), false);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -412,7 +629,7 @@ test("direct installer rejects archive self-validation before install mutation",
 
     const powerShellInstaller = fs.readFileSync(path.join(root, "scripts", "install.ps1"), "utf8");
     assert.doesNotMatch(powerShellInstaller, /node\s+"\$TempDir\\scripts\\bootstrap-policy\.js"/);
-    assert.ok(powerShellInstaller.indexOf("$ValidatorScript | & node") < powerShellInstaller.indexOf("New-Item -ItemType Directory -Path \"$InstallDir\\hooks\""));
+    assert.ok(powerShellInstaller.indexOf("$ValidatorScript | & $NodeExecutable") < powerShellInstaller.indexOf("New-Item -ItemType Directory -Path \"$InstallDir\\hooks\""));
     for (const source of [powerShellInstaller, fs.readFileSync(path.join(root, "scripts", "install.sh"), "utf8")]) {
       const semver = installerSemver(source);
       assert.equal(semver.test("6.47.1-rc.1"), true);
