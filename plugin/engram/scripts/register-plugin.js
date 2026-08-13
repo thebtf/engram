@@ -62,6 +62,22 @@ function prepareParent(directory) {
   }
 }
 
+function syncDirectory(directory) {
+  // Node cannot portably open a directory on Windows.
+  if (process.platform === "win32") return;
+  let descriptor;
+  let primaryError;
+  try {
+    descriptor = fs.openSync(directory, "r");
+    fs.fsyncSync(descriptor);
+  } catch (error) {
+    primaryError = error;
+  } finally {
+    if (descriptor !== undefined) try { fs.closeSync(descriptor); } catch (error) { if (!primaryError) primaryError = error; }
+  }
+  if (primaryError) throw primaryError;
+}
+
 function readLockOwner(directory) {
   let value;
   try { value = JSON.parse(fs.readFileSync(path.join(directory, "owner"), "utf8")); } catch { return null; }
@@ -113,7 +129,8 @@ function cleanupReleasedMarker(marker) {
   let stat;
   try { stat = fs.lstatSync(marker); } catch (error) { if (error.code === "ENOENT") return true; throw error; }
   if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
-  const children = fs.readdirSync(marker);
+  let children;
+  try { children = fs.readdirSync(marker); } catch (error) { if (error.code === "ENOENT") return true; throw error; }
   if (children.length === 0) {
     try { fs.rmdirSync(marker); return true; } catch (error) {
       if (error.code === "ENOENT") return true;
@@ -224,20 +241,28 @@ function entry(target, original, output, identity) {
 }
 function stage(output) {
   const descriptor = fs.openSync(output.staged, "wx", 0o600);
+  let primaryError;
   try {
     const stat = fs.fstatSync(descriptor);
     if (!stat.isFile()) fail(`registration conflict: ${output.staged} is not a regular file`);
     output.stagedIdentity = { dev: stat.dev, ino: stat.ino };
     fs.writeFileSync(descriptor, output.output);
     fs.fsyncSync(descriptor);
-  } finally { fs.closeSync(descriptor); }
+  } catch (error) {
+    primaryError = error;
+  }
+  try { fs.closeSync(descriptor); } catch (error) { if (!primaryError) primaryError = error; }
+  if (primaryError) throw primaryError;
+  syncDirectory(path.dirname(output.target));
 }
 function removeOwnedStage(output, failures) {
   if (!output.stagedIdentity) return;
   try {
     const stat = fs.lstatSync(output.staged);
-    if (stat.isFile() && !stat.isSymbolicLink() && stat.dev === output.stagedIdentity.dev && stat.ino === output.stagedIdentity.ino) fs.unlinkSync(output.staged);
-    else failures.push(`retained staged ${output.staged}: ownership changed`);
+    if (stat.isFile() && !stat.isSymbolicLink() && stat.dev === output.stagedIdentity.dev && stat.ino === output.stagedIdentity.ino) {
+      fs.unlinkSync(output.staged);
+      syncDirectory(path.dirname(output.target));
+    } else failures.push(`retained staged ${output.staged}: ownership changed`);
   } catch (error) { if (error.code !== "ENOENT") failures.push(`remove staged ${output.staged}: ${error.message}`); }
 }
 function verifyOriginal(output) {
@@ -249,15 +274,19 @@ function moveOriginal(output) {
   verifyOriginal(output);
   if (fs.existsSync(output.backup)) fail(`registration conflict: backup path already exists: ${output.backup}`);
   fs.renameSync(output.target, output.backup);
+  syncDirectory(path.dirname(output.target));
   const moved = snapshot(output.backup);
   if (!moved.exists || !sameBytes(moved.bytes, output.original.bytes)) fail(`registration conflict: ${output.target} changed while moving to backup`);
 }
+
 function installStage(output) {
   try { fs.linkSync(output.staged, output.target); } catch (error) {
     if (error.code === "EEXIST") fail(`registration conflict: ${output.target} appeared during commit`);
     throw error;
   }
+  syncDirectory(path.dirname(output.target));
   fs.unlinkSync(output.staged);
+  syncDirectory(path.dirname(output.target));
 }
 
 function canonicalJson(value) { return Buffer.from(`${JSON.stringify(value)}\n`, "utf8"); }
@@ -321,12 +350,12 @@ function restoreUncommitted(journal) {
     const target = snapshot(output.target);
     const backup = snapshot(output.backup);
     if (output.original.exists && backup.exists) {
-      if (target.exists && sha256(target.bytes) === output.outputSha256) fs.unlinkSync(output.target);
-      if (!snapshot(output.target).exists) fs.renameSync(output.backup, output.target);
-      else fs.unlinkSync(output.backup);
-    } else if (!output.original.exists && target.exists) fs.unlinkSync(output.target);
+      if (target.exists && sha256(target.bytes) === output.outputSha256) { fs.unlinkSync(output.target); syncDirectory(path.dirname(output.target)); }
+      if (!snapshot(output.target).exists) { fs.renameSync(output.backup, output.target); syncDirectory(path.dirname(output.target)); }
+      else { fs.unlinkSync(output.backup); syncDirectory(path.dirname(output.target)); }
+    } else if (!output.original.exists && target.exists) { fs.unlinkSync(output.target); syncDirectory(path.dirname(output.target)); }
   }
-  for (const output of journal.manifest.entries) if (snapshot(output.staged).exists) fs.unlinkSync(output.staged);
+  for (const output of journal.manifest.entries) if (snapshot(output.staged).exists) { fs.unlinkSync(output.staged); syncDirectory(path.dirname(output.target)); }
   for (const output of journal.manifest.entries) {
     const target = snapshot(output.target);
     if (output.original.exists ? !target.exists || sha256(target.bytes) !== output.original.sha256 : target.exists) fail("registry recovery did not reach original state");
@@ -346,7 +375,7 @@ function finishCommitted(journal) {
   validateCommitted(journal);
   const failures = [];
   for (const output of journal.manifest.entries) for (const file of [output.backup, output.staged]) {
-    try { if (snapshot(file).exists) fs.unlinkSync(file); } catch (error) { failures.push(`remove ${file}: ${error.message}`); }
+    try { if (snapshot(file).exists) { fs.unlinkSync(file); syncDirectory(path.dirname(output.target)); } } catch (error) { failures.push(`remove ${file}: ${error.message}`); }
   }
   if (failures.length) fail(`registry recovery cleanup failed: ${failures.join("; ")}`);
   validateCommitted(journal);
@@ -365,7 +394,7 @@ function cleanupTerminalMarker(marker, targets) {
   try { stat = fs.lstatSync(marker); } catch (error) { if (error.code === "ENOENT") return true; throw error; }
   if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
   const children = fs.readdirSync(marker).sort();
-  if (children.length === 0) { fs.rmdirSync(marker); return true; }
+  if (children.length === 0) { fs.rmdirSync(marker); syncDirectory(path.dirname(marker)); return true; }
   if (children.join("\0") === MANIFEST_NAME) {
     let manifest;
     try { manifest = readStrictJson(path.join(marker, MANIFEST_NAME), "manifest"); } catch { return false; }
@@ -373,8 +402,11 @@ function cleanupTerminalMarker(marker, targets) {
     if (!strictKeys(value, ["entries", "lock", "version"]) || !validOwner(value.lock) || value.lock.pid !== markerIdentity.pid || value.lock.token !== markerIdentity.token || sha256(Buffer.from(value.lock.hostname, "utf8")) !== markerIdentity.hostnameHash || sha256(manifest.bytes) !== markerIdentity.manifestDigest) return false;
     for (const item of value.entries) if (!validEntry(item, item.target, value.lock) || !targets.includes(item.target)) return false;
     try { validateCommitted({ directory: marker, manifest: value, committed: true }); } catch { return false; }
+    for (const target of targets) syncDirectory(path.dirname(target));
     fs.unlinkSync(path.join(marker, MANIFEST_NAME));
+    syncDirectory(marker);
     fs.rmdirSync(marker);
+    syncDirectory(path.dirname(marker));
     return true;
   }
   if (children.join("\0") !== `${MANIFEST_NAME}\0${RECEIPT_NAME}`) return false;
@@ -382,9 +414,13 @@ function cleanupTerminalMarker(marker, targets) {
   try { journal = readJournalDirectory(marker, targets); } catch { return false; }
   if (!journal || !journal.committed || journal.manifest.lock.pid !== markerIdentity.pid || journal.manifest.lock.token !== markerIdentity.token || sha256(Buffer.from(journal.manifest.lock.hostname, "utf8")) !== markerIdentity.hostnameHash || sha256(fs.readFileSync(path.join(marker, MANIFEST_NAME))) !== markerIdentity.manifestDigest) return false;
   try { finishCommitted(journal); } catch { return false; }
+  for (const target of targets) syncDirectory(path.dirname(target));
   fs.unlinkSync(path.join(marker, RECEIPT_NAME));
+  syncDirectory(marker);
   fs.unlinkSync(path.join(marker, MANIFEST_NAME));
+  syncDirectory(marker);
   fs.rmdirSync(marker);
+  syncDirectory(path.dirname(marker));
   return true;
 }
 function cleanTerminalMarkers(claudeDirectory, targets) {
@@ -393,22 +429,89 @@ function cleanTerminalMarkers(claudeDirectory, targets) {
 function removeJournal(journal, targets) {
   const manifest = fs.readFileSync(path.join(journal.directory, MANIFEST_NAME));
   const marker = terminalMarker(journal.directory, journal.manifest.lock, sha256(manifest));
+  for (const target of targets) syncDirectory(path.dirname(target));
   fs.renameSync(journal.directory, marker);
+  syncDirectory(path.dirname(journal.directory));
   cleanupTerminalMarker(marker, targets);
 }
 function recoverJournal(claudeDirectory, targets) {
+  syncDirectory(claudeDirectory);
   cleanTerminalMarkers(claudeDirectory, targets);
   const journal = readJournal(claudeDirectory, targets);
   if (!journal) return false;
+  syncDirectory(claudeDirectory);
   if (journal.committed) {
     finishCommitted(journal);
     removeJournal(journal, targets);
   } else {
     restoreUncommitted(journal);
+    for (const target of targets) syncDirectory(path.dirname(target));
     fs.unlinkSync(path.join(journal.directory, MANIFEST_NAME));
+    syncDirectory(journal.directory);
     fs.rmdirSync(journal.directory);
+    syncDirectory(claudeDirectory);
   }
   return true;
+}
+function sameArtifact(stat, identity, type) {
+  return stat.dev === identity.dev && stat.ino === identity.ino
+    && (type === "file" ? stat.isFile() && !stat.isSymbolicLink() : stat.isDirectory() && !stat.isSymbolicLink());
+}
+function removeCleanupQuarantine(quarantine, parent) {
+  try { fs.rmdirSync(quarantine); } catch (error) {
+    if (error.code === "ENOENT") return;
+    if (error.code === "ENOTEMPTY") fail(`retained cleanup quarantine: ${quarantine}`);
+    throw error;
+  }
+  syncDirectory(parent);
+}
+function claimOwnedArtifact(artifact, identity, type, label) {
+  const parent = path.dirname(artifact);
+  const quarantine = fs.mkdtempSync(path.join(parent, ".engram-registry-cleanup-"));
+  syncDirectory(parent);
+  const claimed = path.join(quarantine, "artifact");
+  try { fs.renameSync(artifact, claimed); } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    removeCleanupQuarantine(quarantine, parent);
+    return null;
+  }
+  syncDirectory(parent);
+  syncDirectory(quarantine);
+  let stat;
+  try { stat = fs.lstatSync(claimed); } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    removeCleanupQuarantine(quarantine, parent);
+    return null;
+  }
+  if (!sameArtifact(stat, identity, type)) {
+    console.error(`Retained foreign ${label}: ${claimed}`);
+    fail(`retained foreign ${label} at ${claimed}: identity or type changed`);
+  }
+  return { parent, quarantine, claimed };
+}
+function cleanupOwnedFile(file, identity, label) {
+  const claim = claimOwnedArtifact(file, identity, "file", label);
+  if (!claim) return;
+  try { fs.unlinkSync(claim.claimed); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  syncDirectory(claim.quarantine);
+  removeCleanupQuarantine(claim.quarantine, claim.parent);
+}
+function cleanupOwnedPendingManifest(directory, directoryIdentity, manifestIdentity) {
+  const claim = claimOwnedArtifact(directory, directoryIdentity, "directory", "pending manifest directory");
+  if (!claim) return;
+  if (manifestIdentity) cleanupOwnedFile(path.join(claim.claimed, MANIFEST_NAME), manifestIdentity, "pending manifest file");
+  try { fs.rmdirSync(claim.claimed); } catch (error) {
+    if (error.code === "ENOTEMPTY") {
+      console.error(`Retained foreign pending manifest directory: ${claim.claimed}`);
+      fail(`retained pending manifest directory with foreign contents: ${claim.claimed}`);
+    }
+    if (error.code !== "ENOENT") throw error;
+  }
+  syncDirectory(claim.quarantine);
+  removeCleanupQuarantine(claim.quarantine, claim.parent);
+}
+function appendCleanupFailure(primaryError, label, cleanup) {
+  try { cleanup(); } catch (cleanupError) { primaryError.message += `\n${label} cleanup failed: ${cleanupError.message}`; }
 }
 function publishManifest(claudeDirectory, outputs, identity) {
   const directory = path.join(claudeDirectory, JOURNAL_NAME);
@@ -419,21 +522,65 @@ function publishManifest(claudeDirectory, outputs, identity) {
     entries: outputs.map((output) => ({ target: output.target, staged: output.staged, backup: output.backup, original: { exists: output.original.exists, sha256: output.original.exists ? sha256(output.original.bytes) : null }, outputSha256: sha256(output.output) })),
   };
   const pending = `${directory}.pending-${identity.pid}-${identity.token}`;
-  fs.mkdirSync(pending, { mode: 0o700 });
-  const manifestFile = path.join(pending, MANIFEST_NAME);
-  const descriptor = fs.openSync(manifestFile, "wx", 0o600);
-  try { fs.writeFileSync(descriptor, canonicalJson(manifest)); fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
-  try { fs.renameSync(pending, directory); } catch (error) { try { fs.unlinkSync(manifestFile); fs.rmdirSync(pending); } catch { } throw error; }
+  let pendingIdentity;
+  let manifestIdentity;
+  let published = false;
+  try {
+    fs.mkdirSync(pending, { mode: 0o700 });
+    const pendingStat = fs.lstatSync(pending);
+    if (!pendingStat.isDirectory() || pendingStat.isSymbolicLink()) fail(`registry recovery pending journal is not a regular directory: ${pending}`);
+    pendingIdentity = { dev: pendingStat.dev, ino: pendingStat.ino };
+    const manifestFile = path.join(pending, MANIFEST_NAME);
+    let descriptor;
+    let primaryError;
+    try {
+      descriptor = fs.openSync(manifestFile, "wx", 0o600);
+      const stat = fs.fstatSync(descriptor);
+      if (!stat.isFile()) fail(`registry recovery manifest is not a regular file: ${manifestFile}`);
+      manifestIdentity = { dev: stat.dev, ino: stat.ino };
+      fs.writeFileSync(descriptor, canonicalJson(manifest));
+      fs.fsyncSync(descriptor);
+    } catch (error) { primaryError = error; }
+    try { if (descriptor !== undefined) fs.closeSync(descriptor); } catch (error) { if (!primaryError) primaryError = error; }
+    if (primaryError) throw primaryError;
+    syncDirectory(pending);
+    fs.renameSync(pending, directory);
+    published = true;
+    syncDirectory(claudeDirectory);
+  } catch (error) {
+    if (pendingIdentity && !published) appendCleanupFailure(error, "Pending manifest", () => cleanupOwnedPendingManifest(pending, pendingIdentity, manifestIdentity));
+    throw error;
+  }
 }
 function publishReceipt(claudeDirectory, targets, identity) {
   const journal = readJournal(claudeDirectory, targets);
   if (!journal || !sameOwner(journal.manifest.lock, identity)) fail("registry recovery journal identity changed");
   const manifest = fs.readFileSync(path.join(journal.directory, MANIFEST_NAME));
+  for (const target of targets) syncDirectory(path.dirname(target));
   const receipt = canonicalJson({ version: 1, lock: identity, manifestSha256: sha256(manifest) });
   const pending = `${journal.directory}.receipt-${identity.pid}-${identity.token}.tmp`;
-  const descriptor = fs.openSync(pending, "wx", 0o600);
-  try { fs.writeFileSync(descriptor, receipt); fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
-  try { fs.renameSync(pending, path.join(journal.directory, RECEIPT_NAME)); } catch (error) { try { fs.unlinkSync(pending); } catch { } throw error; }
+  let receiptIdentity;
+  let published = false;
+  try {
+    let descriptor;
+    let primaryError;
+    try {
+      descriptor = fs.openSync(pending, "wx", 0o600);
+      const stat = fs.fstatSync(descriptor);
+      if (!stat.isFile()) fail(`registry recovery receipt is not a regular file: ${pending}`);
+      receiptIdentity = { dev: stat.dev, ino: stat.ino };
+      fs.writeFileSync(descriptor, receipt);
+      fs.fsyncSync(descriptor);
+    } catch (error) { primaryError = error; }
+    try { if (descriptor !== undefined) fs.closeSync(descriptor); } catch (error) { if (!primaryError) primaryError = error; }
+    if (primaryError) throw primaryError;
+    fs.renameSync(pending, path.join(journal.directory, RECEIPT_NAME));
+    published = true;
+    syncDirectory(journal.directory);
+  } catch (error) {
+    if (receiptIdentity && !published) appendCleanupFailure(error, "Pending receipt", () => cleanupOwnedFile(pending, receiptIdentity, "pending receipt"));
+    throw error;
+  }
 }
 
 function register(arguments_) {
