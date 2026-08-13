@@ -189,14 +189,16 @@ function takeBoundedString(value, state) {
 }
 
 function takeBoundedRecords(records, state, copyRecord) {
-  if (!Array.isArray(records) || state.remaining === 0) return [];
+  if (!Array.isArray(records) || state.remaining <= 0) return [];
 
   const limit = Math.min(records.length, state.remaining);
   const copy = new Array(limit);
-  for (let index = 0; index < limit; index += 1) {
+  let index = 0;
+  for (; index < limit && state.remaining > 0; index += 1) {
     state.remaining -= 1;
     copy[index] = copyRecord(records[index], state);
   }
+  copy.length = index;
   return copy;
 }
 
