@@ -18,18 +18,35 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0023",
-    "event_base_sha": "49907a744d1e3eec3ae10cd80b34bc9b82a9177c"
+    "consumed_epoch": "authority-0024",
+    "event_base_sha": "cdb553508c226b2b521271dd60a0b7a49853e93f"
   },
   "active_epoch": {
-    "id": "authority-0024",
-    "label": "authority-maintenance:authority-0024",
+    "id": "authority-0025",
+    "label": "authority-maintenance:authority-0025",
     "exact_changes": [
       {
         "status": "M",
         "path": ".github/authority-policy.json"
+      },
+      {
+        "status": "M",
+        "path": ".github/workflows/release.yaml"
+      },
+      {
+        "status": "M",
+        "path": ".github/workflows/sync-marketplace.yml"
       }
     ],
-    "expected_head_blobs": []
+    "expected_head_blobs": [
+      {
+        "path": ".github/workflows/release.yaml",
+        "git_blob": "55b8d8851506c989279c02fb83d4034687873a5b"
+      },
+      {
+        "path": ".github/workflows/sync-marketplace.yml",
+        "git_blob": "e7da7cefd1a1cc0552476f16453687ac990cc084"
+      }
+    ]
   }
 }
