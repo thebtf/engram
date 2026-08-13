@@ -229,6 +229,22 @@ test('buildSessionStartContext preserves exact output for a payload within the e
   );
 });
 
+test('buildSessionStartContext stops copying outer rules after nested facts consume the record budget', () => {
+  const payload = {
+    rules: [
+      { title: '', facts: [''] },
+      { title: '', facts: [] },
+    ],
+  };
+  let result;
+
+  assert.doesNotThrow(() => {
+    result = buildSessionStartContext(payload, '', { maxLength: 3 });
+  });
+  assert.ok(result.length <= 3);
+  assert.equal(result, '');
+});
+
 test('buildSessionStartContext never reads the unbounded payload tail while limited', () => {
   const firstUntouchedIndex = 12000;
   const memories = new Array(1000000);
