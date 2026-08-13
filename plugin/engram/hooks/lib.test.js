@@ -179,6 +179,37 @@ test('JS git ID algorithm matches Go ResolveProjectSlug for canonical test vecto
  assert.match(jsID, /^[0-9a-f]{8}$/, 'canonical vector must produce 8 hex chars');
 });
 
+test('abortable Git identity yields to the event loop and rejects a stalled subprocess', async (t) => {
+ const childProcess = require('node:child_process');
+ const originalExecFile = childProcess.execFile;
+ childProcess.execFile = (_file, _args, options, callback) => {
+  const onAbort = () => callback(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+  options.signal.addEventListener('abort', onAbort, { once: true });
+  return { kill() { } };
+ };
+ t.after(() => { childProcess.execFile = originalExecFile; });
+
+ const controller = new AbortController();
+ const pending = lib.getGitRemoteIDAsync(process.cwd(), { signal: controller.signal });
+ let yielded = false;
+ await new Promise((resolve) => setImmediate(() => { yielded = true; resolve(); }));
+ controller.abort();
+ await assert.rejects(pending, (error) => error && error.name === 'AbortError');
+ assert.equal(yielded, true);
+});
+
+test('async Git identity returns null when Git executable is missing', async (t) => {
+ const childProcess = require('node:child_process');
+ const originalExecFile = childProcess.execFile;
+ childProcess.execFile = (_file, _args, _options, callback) => {
+  callback(Object.assign(new Error('git missing'), { code: 'ENOENT' }), '', '');
+  return { kill() { } };
+ };
+ t.after(() => { childProcess.execFile = originalExecFile; });
+
+ assert.equal(await lib.getGitRemoteIDAsync(process.cwd()), null);
+});
+
 // Quiet mode (ENGRAM_QUIET) — global injection kill-switch through RunHook.
 // Driven via a child process because the guard lives in RunHook before the
 // handler, ahead of any stdin parsing or server call.
@@ -415,6 +446,26 @@ test('requestPost clears timeout and external abort handling after a successful 
  assert.equal(fetchSignal.aborted, false);
  controller.abort();
  assert.equal(fetchSignal.aborted, false);
+});
+
+test('requestPost removes its relay listener after an aborted request', async (t) => {
+ const originalFetch = global.fetch;
+ const controller = new AbortController();
+ let removals = 0;
+ const remove = controller.signal.removeEventListener.bind(controller.signal);
+ controller.signal.removeEventListener = (...args) => {
+  removals += 1;
+  return remove(...args);
+ };
+ global.fetch = (_url, init) => new Promise((_resolve, reject) => {
+  init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+ });
+ t.after(() => { global.fetch = originalFetch; });
+
+ const pending = lib.requestPost('/api/context/inject', {}, 10000, { signal: controller.signal });
+ controller.abort();
+ await assert.rejects(pending, (error) => error && error.name === 'AbortError');
+ assert.equal(removals, 1);
 });
 
 test('registerProjectIdentityV2 passes options to custom requests and mutates only on a valid canonical response', async () => {

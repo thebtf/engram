@@ -22,12 +22,14 @@ const identity = {
 
 function installConfiguredStubs(requestPost) {
   const original = Object.fromEntries([
-    'getEngramConfig', 'isQuietMode', 'resolveProjectIdentityV2', 'ProjectIDWithName',
-    'LegacyProjectID', 'registerProjectIdentityV2', 'requestPost',
+    'getEngramConfig', 'isQuietMode', 'resolveHookProjectIdentityV2',
+    'resolveProjectIdentityV2', 'ProjectIDWithName', 'LegacyProjectID',
+    'registerProjectIdentityV2', 'requestPost',
   ].map((name) => [name, lib[name]]));
   lib.getEngramConfig = () => ({ serverURL: 'http://127.0.0.1:37777', token: 'worker-secret-token' });
   lib.isQuietMode = () => false;
   lib.resolveProjectIdentityV2 = () => identity;
+  lib.resolveHookProjectIdentityV2 = async () => identity;
   lib.ProjectIDWithName = () => 'engram';
   lib.LegacyProjectID = () => 'engram_123456';
   lib.registerProjectIdentityV2 = async (context) => {
@@ -65,7 +67,7 @@ test('OMP documentation distinguishes native injection from Claude hooks and MCP
   const readme = fs.readFileSync(path.resolve(here, '..', '..', '..', 'README.md'), 'utf8');
   const setup = fs.readFileSync(path.resolve(here, '..', 'commands', 'setup.md'), 'utf8');
   assert.match(readme, /OMP 17\.x does not execute Claude `hooks\.json`/);
-  assert.match(readme, /native extension instead injects Engram context on `session_start` and\n`before_agent_start`/);
+  assert.match(readme, /the bundled native Engram extension instead injects Engram context on `session_start` and\n`before_agent_start`/);
   assert.match(setup, /OMP it suppresses the native `session_start` and `before_agent_start` injection\npaths/);
   assert.match(setup, /it never disables MCP tools/);
 });
@@ -92,15 +94,15 @@ test('quiet mode sends no messages and makes no requests', async () => {
 test('session start validates identity then queues one hidden next-turn context without leaking config', async () => {
   const calls = [];
   const registrations = [];
-  const restore = installConfiguredStubs(async (endpoint, body, timeoutMs) => {
-    calls.push({ endpoint, body, timeoutMs });
+  const restore = installConfiguredStubs(async (endpoint, body, timeoutMs, options) => {
+    calls.push({ endpoint, body, timeoutMs, options });
     if (endpoint === '/api/context/session-start') {
       return { memories: [{ content: `Use the project memory contract. ${'x'.repeat(20000)}` }], issues: [], rules: [] };
     }
     throw new Error(`unexpected endpoint ${endpoint}`);
   });
-  lib.registerProjectIdentityV2 = async (context) => {
-    registrations.push({ ...context });
+  lib.registerProjectIdentityV2 = async (context, _request, options) => {
+    registrations.push({ ...context, options });
     context.Project = 'p2g_canonical';
     return context.Project;
   };
@@ -110,13 +112,13 @@ test('session start validates identity then queues one hidden next-turn context 
       cwd: process.cwd(),
       sessionManager: { getSessionId: () => 'start-session' },
     });
-    assert.deepEqual(registrations, [{
-      Project: 'engram',
-      LegacyProject: 'engram_123456',
-      GitRemote: identity.git_remote,
-      RelativePath: identity.relative_path,
-      ProjectIdentityV2: identity,
-    }]);
+    assert.equal(registrations.length, 1);
+    assert.match(registrations[0].Project, /^[0-9a-f]{8}$/);
+    assert.equal(registrations[0].LegacyProject, 'engram_123456');
+    assert.equal(registrations[0].GitRemote, identity.git_remote);
+    assert.equal(registrations[0].RelativePath, identity.relative_path);
+    assert.strictEqual(registrations[0].ProjectIdentityV2, identity);
+    assert.strictEqual(registrations[0].options.signal, calls[0].options.signal);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].endpoint, '/api/context/session-start');
     assert.deepEqual(calls[0].body, { project: 'p2g_canonical', session_id: 'start-session' });
@@ -172,11 +174,10 @@ test('before-agent-start returns one hidden bounded ambient message under the ex
   });
   try {
     const message = await ambientMessage({ cwd: process.cwd(), sessionId: 'ambient-session', prompt: 'Need memory now' }, {});
-    assert.deepEqual(calls, [{
-      endpoint: '/api/hooks/ambient-candidates',
-      body: { project: 'p2g_canonical', session_id: 'ambient-session', prompt_text: 'Need memory now', limit: 3 },
-      timeoutMs: 200,
-    }]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].endpoint, '/api/hooks/ambient-candidates');
+    assert.deepEqual(calls[0].body, { project: 'p2g_canonical', session_id: 'ambient-session', prompt_text: 'Need memory now', limit: 3 });
+    assert.ok(calls[0].timeoutMs > 0 && calls[0].timeoutMs <= 200);
     assert.equal(message.display, false);
     assert.equal(message.attribution, 'agent');
     assert.match(message.content, /First hint/);
@@ -208,11 +209,10 @@ test('canonical OMP before-agent events resolve sessionManager and return the me
       cwd: process.cwd(),
       sessionManager: { getSessionId: () => 'canonical-session' },
     });
-    assert.deepEqual(calls, [{
-      endpoint: '/api/hooks/ambient-candidates',
-      body: { project: 'p2g_canonical', session_id: 'canonical-session', prompt_text: 'Need canonical memory now', limit: 3 },
-      timeoutMs: 200,
-    }]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].endpoint, '/api/hooks/ambient-candidates');
+    assert.deepEqual(calls[0].body, { project: 'p2g_canonical', session_id: 'canonical-session', prompt_text: 'Need canonical memory now', limit: 3 });
+    assert.ok(calls[0].timeoutMs > 0 && calls[0].timeoutMs <= 200);
     assert.deepEqual(Object.keys(result), ['message']);
     assert.equal(result.message.customType, 'engram-memory');
     assert.equal(result.message.display, false);
@@ -224,6 +224,31 @@ test('canonical OMP before-agent events resolve sessionManager and return the me
       sessionManager: { getSessionId() { throw new Error('session unavailable'); } },
     }), undefined);
     assert.equal(calls.length, 1);
+  } finally {
+    restore();
+  }
+});
+
+test('ambient shares one signal across identity, registration, and request and suppresses late context', async () => {
+  const calls = [];
+  const restore = installConfiguredStubs(async (_endpoint, _body, _timeoutMs, options) => {
+    calls.push(options.signal);
+    return new Promise((resolve) => setTimeout(() => resolve({ hints: [{ title: 'late', reason: 'late', score: 1 }] }), 250));
+  });
+  let identitySignal;
+  let registrationSignal;
+  lib.resolveHookProjectIdentityV2 = async (_cwd, options) => {
+    identitySignal = options.signal;
+    return identity;
+  };
+  lib.registerProjectIdentityV2 = async (_context, _request, options) => {
+    registrationSignal = options.signal;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  };
+  try {
+    assert.equal(await ambientMessage({ cwd: process.cwd(), sessionId: 'late-ambient', prompt: 'No late result' }, {}), null);
+    assert.strictEqual(identitySignal, registrationSignal);
+    assert.strictEqual(registrationSignal, calls[0]);
   } finally {
     restore();
   }
@@ -326,6 +351,42 @@ test('session start does not begin context after a late custom registration sett
     const message = await pendingMessage;
     assert.equal(message, null);
     assert.equal(contextRequests, 0);
+  } finally {
+    restore();
+  }
+});
+
+test('session start rejects a context whose synchronous renderer passes the shared deadline', async () => {
+  const budgetMs = 25;
+  const startedAt = performance.now();
+  let requestStartedAt;
+  let requestResolvedAt;
+  let contentReads = 0;
+  const restore = installConfiguredStubs(async (endpoint) => {
+    assert.equal(endpoint, '/api/context/session-start');
+    requestStartedAt = performance.now() - startedAt;
+    requestResolvedAt = performance.now() - startedAt;
+    return {
+      issues: [],
+      rules: [],
+      memories: [{
+        get content() {
+          contentReads += 1;
+          if (contentReads === 1) {
+            const blockStartedAt = performance.now();
+            while (performance.now() - blockStartedAt <= budgetMs) { }
+          }
+          return 'context rendered after deadline';
+        },
+      }],
+    };
+  });
+  try {
+    const message = await sessionStartMessage({ cwd: process.cwd(), sessionId: 'render-deadline' }, {}, budgetMs);
+    assert.ok(requestStartedAt >= 0 && requestStartedAt < budgetMs);
+    assert.ok(requestResolvedAt >= 0 && requestResolvedAt < budgetMs);
+    assert.ok(contentReads > 0);
+    assert.equal(message, null);
   } finally {
     restore();
   }
@@ -479,7 +540,7 @@ test('session start clears its deadline without aborting successful context tran
     assert.match(message.content, /successful session context/);
 
     await new Promise((resolve) => setTimeout(resolve, budgetMs + 20));
-    assert.equal(controllers[0].signal.aborted, true);
+    assert.equal(controllers[0].signal.aborted, false);
     assert.equal(contextFetchSignal.aborted, false);
     assert.match(message.content, /successful session context/);
   } finally {
