@@ -63,6 +63,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Gate server-plugin OMP artifacts
+        run: scripts/check-server-plugin-artifacts.sh --version "${GITHUB_REF_NAME#v}" --dist dist
+
       - name: Gate raw clients against committed policy
         run: scripts/check-bootstrap-policy-artifacts.sh --policy plugin/engram/bootstrap-targets.json --dist dist
 

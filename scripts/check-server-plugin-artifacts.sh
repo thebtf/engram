@@ -13,6 +13,7 @@ while [[ $# -gt 0 ]]; do
     *) echo "usage: $0 --version VERSION [--dist PATH]" >&2; exit 2 ;;
   esac
 done
+version="${version#v}"
 
 [[ -n "$version" && -f "$source_manifest" && -f "$source_extension" && -d "$dist" ]] \
   || { echo 'release version, source OMP payload, or split dist is missing' >&2; exit 1; }

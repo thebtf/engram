@@ -8,11 +8,14 @@ const root = path.resolve(__dirname, "..");
 const manifestPath = path.join(root, "plugin", "engram", "package.json");
 const extensionPath = path.join(root, "plugin", "engram", "extensions", "engram-memory.mjs");
 const version = JSON.parse(fs.readFileSync(manifestPath, "utf8")).version;
-const expectedArchives = [
-  `engram_${version}_linux_amd64.tar.gz`,
-  `engram_${version}_darwin_arm64.tar.gz`,
-  `engram_${version}_windows_amd64.zip`,
-];
+function expectedArchives(expectedVersion = version) {
+  const normalizedVersion = expectedVersion.replace(/^v/, "");
+  return [
+    `engram_${normalizedVersion}_linux_amd64.tar.gz`,
+    `engram_${normalizedVersion}_darwin_arm64.tar.gz`,
+    `engram_${normalizedVersion}_windows_amd64.zip`,
+  ];
+}
 
 function command(command, args, options = {}) {
   const result = spawnSync(command, args, { cwd: root, encoding: "utf8", ...options });
@@ -98,31 +101,33 @@ function createFixture() {
   return { archiveRoot, dist, temporary };
 }
 
-function buildExpectedMatrix({ archiveRoot, dist }) {
-  for (const archiveName of expectedArchives) buildArchive(archiveRoot, path.join(dist, archiveName));
+function buildExpectedMatrix({ archiveRoot, dist }, expectedVersion = version) {
+  for (const archiveName of expectedArchives(expectedVersion)) buildArchive(archiveRoot, path.join(dist, archiveName));
 }
 
-function gate(dist) {
-  return command("bash", ["scripts/check-server-plugin-artifacts.sh", "--version", version, "--dist", bashPath(dist)]);
+function gate(dist, expectedVersion = version) {
+  return command("bash", ["scripts/check-server-plugin-artifacts.sh", "--version", expectedVersion, "--dist", bashPath(dist)]);
 }
 
 test("server-plugin archive gate accepts exactly the canonical three-archive OMP payload matrix", () => {
   const fixture = createFixture();
+  const releaseVersion = "v6.47.5";
+  const archives = expectedArchives(releaseVersion);
   try {
-    buildExpectedMatrix(fixture);
-    const accepted = gate(fixture.dist);
+    buildExpectedMatrix(fixture, releaseVersion);
+    const accepted = gate(fixture.dist, releaseVersion);
     assert.equal(accepted.status, 0, accepted.stderr || accepted.stdout);
     assert.match(accepted.stdout, /3 server-plugin archive\(s\)/);
 
-    fs.rmSync(path.join(fixture.dist, expectedArchives[1]));
-    const missing = gate(fixture.dist);
+    fs.rmSync(path.join(fixture.dist, archives[1]));
+    const missing = gate(fixture.dist, releaseVersion);
     assert.notEqual(missing.status, 0);
     assert.match(`${missing.stderr}\n${missing.stdout}`, /matrix mismatch/);
 
     const duplicateDirectory = path.join(fixture.dist, "duplicate");
     fs.mkdirSync(duplicateDirectory);
-    fs.copyFileSync(path.join(fixture.dist, expectedArchives[0]), path.join(duplicateDirectory, expectedArchives[0]));
-    const duplicateArchive = gate(fixture.dist);
+    fs.copyFileSync(path.join(fixture.dist, archives[0]), path.join(duplicateDirectory, archives[0]));
+    const duplicateArchive = gate(fixture.dist, releaseVersion);
     assert.notEqual(duplicateArchive.status, 0);
     assert.match(`${duplicateArchive.stderr}\n${duplicateArchive.stdout}`, /missing or duplicates/);
   } finally {
@@ -134,12 +139,12 @@ test("server-plugin archive gate rejects duplicate or non-canonical OMP entry pa
   const fixture = createFixture();
   try {
     buildExpectedMatrix(fixture);
-    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives[0]), ["package.json", "package.json", "extensions/engram-memory.mjs"]);
+    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]), ["package.json", "package.json", "extensions/engram-memory.mjs"]);
     const duplicate = gate(fixture.dist);
     assert.notEqual(duplicate.status, 0);
     assert.match(`${duplicate.stderr}\n${duplicate.stdout}`, /exactly one canonical package\.json/);
 
-    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives[0]), ["package.json"]);
+    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]), ["package.json"]);
     const missingCanonicalPath = gate(fixture.dist);
     assert.notEqual(missingCanonicalPath.status, 0);
     assert.match(`${missingCanonicalPath.stderr}\n${missingCanonicalPath.stdout}`, /canonical extensions\/engram-memory\.mjs/);
@@ -155,22 +160,36 @@ test("server-plugin archive gate rejects manifest contract mutation and extensio
     const manifest = JSON.parse(fs.readFileSync(path.join(fixture.archiveRoot, "package.json"), "utf8"));
     manifest.version = "0.0.0";
     fs.writeFileSync(path.join(fixture.archiveRoot, "package.json"), `${JSON.stringify(manifest)}\n`);
-    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives[0]));
-    const versionMismatch = gate(fixture.dist);
-    assert.notEqual(versionMismatch.status, 0);
-    assert.match(`${versionMismatch.stderr}\n${versionMismatch.stdout}`, /manifest does not match the release contract/);
+    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]));
+    const stringVersionMismatch = gate(fixture.dist);
+    assert.notEqual(stringVersionMismatch.status, 0);
+    assert.match(`${stringVersionMismatch.stderr}\n${stringVersionMismatch.stdout}`, /manifest does not match the release contract/);
+
+    manifest.version = 6;
+    fs.writeFileSync(path.join(fixture.archiveRoot, "package.json"), `${JSON.stringify(manifest)}\n`);
+    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]));
+    const numericVersionMismatch = gate(fixture.dist);
+    assert.notEqual(numericVersionMismatch.status, 0);
+    assert.match(`${numericVersionMismatch.stderr}\n${numericVersionMismatch.stdout}`, /manifest does not match the release contract/);
+
+    delete manifest.version;
+    fs.writeFileSync(path.join(fixture.archiveRoot, "package.json"), `${JSON.stringify(manifest)}\n`);
+    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]));
+    const missingVersion = gate(fixture.dist);
+    assert.notEqual(missingVersion.status, 0);
+    assert.match(`${missingVersion.stderr}\n${missingVersion.stdout}`, /manifest does not match the release contract/);
 
     manifest.version = version;
     manifest.omp.extensions = ["./wrong.mjs"];
     fs.writeFileSync(path.join(fixture.archiveRoot, "package.json"), `${JSON.stringify(manifest)}\n`);
-    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives[0]));
+    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]));
     const extensionPathMismatch = gate(fixture.dist);
     assert.notEqual(extensionPathMismatch.status, 0);
     assert.match(`${extensionPathMismatch.stderr}\n${extensionPathMismatch.stdout}`, /manifest does not match the release contract/);
 
     fs.copyFileSync(manifestPath, path.join(fixture.archiveRoot, "package.json"));
     fs.appendFileSync(path.join(fixture.archiveRoot, "extensions", "engram-memory.mjs"), "\n// mutation\n");
-    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives[0]));
+    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]));
     const byteDrift = gate(fixture.dist);
     assert.notEqual(byteDrift.status, 0);
     assert.match(`${byteDrift.stderr}\n${byteDrift.stdout}`, /extension differs from tagged source/);
