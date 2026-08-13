@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -39,18 +41,22 @@ function hiddenMessage(content) {
   };
 }
 
-function withinDeadline(operation, timeoutMs) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(value);
-    };
-    const timer = setTimeout(() => finish(null), timeoutMs);
-    Promise.resolve().then(operation).then(finish, () => finish(null));
-  });
+function deadlineController(timeoutMs) {
+  const controller = new AbortController();
+  const deadlineAt = performance.now() + timeoutMs;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    signal: controller.signal,
+    remaining() {
+      if (controller.signal.aborted) return 0;
+      const remaining = Math.floor(deadlineAt - performance.now());
+      if (remaining <= 0) controller.abort();
+      return Math.max(0, remaining);
+    },
+    dispose() {
+      clearTimeout(timeout);
+    },
+  };
 }
 
 function untilAborted(signal, operation) {
@@ -69,26 +75,29 @@ function untilAborted(signal, operation) {
   });
 }
 
-async function validateProject(event, ctx, deadline = null) {
-  if (deadline?.expired()) return null;
+async function validateProject(event, ctx, deadline) {
+  if (deadline.remaining() <= 0) return null;
   const identity = eventContext(event, ctx);
   if (!identity) return null;
-
-  const projectIdentity = lib.resolveProjectIdentityV2(identity.cwd);
+  const projectIdentity = await lib.resolveHookProjectIdentityV2(identity.cwd, {
+    signal: deadline.signal,
+    timeoutMs: deadline.remaining(),
+  });
+  if (deadline.remaining() <= 0) return null;
   const projectContext = {
-    Project: lib.ProjectIDWithName(identity.cwd),
+    Project: projectIdentity.git_remote
+      ? crypto.createHash('sha256').update(`${projectIdentity.git_remote}/${projectIdentity.relative_path}`).digest('hex').slice(0, 8)
+      : crypto.createHash('sha256').update(path.resolve(identity.cwd)).digest('hex').slice(0, 6),
     LegacyProject: lib.LegacyProjectID(identity.cwd),
     GitRemote: projectIdentity.git_remote,
     RelativePath: projectIdentity.relative_path,
     ProjectIdentityV2: projectIdentity,
   };
-  if (deadline?.expired()) return null;
-  if (deadline) {
-    await lib.registerProjectIdentityV2(projectContext, undefined, { signal: deadline.signal });
-  } else {
-    await lib.registerProjectIdentityV2(projectContext);
-  }
-  if (deadline?.expired()) return null;
+  await lib.registerProjectIdentityV2(projectContext, undefined, {
+    signal: deadline.signal,
+    timeoutMs: deadline.remaining(),
+  });
+  if (deadline.remaining() <= 0) return null;
   return { project: projectContext.Project, sessionID: identity.sessionID };
 }
 
@@ -96,64 +105,46 @@ async function sessionStartMessage(event, ctx, timeoutMs = sessionStartTimeoutMs
   if (lib.isQuietMode()) return null;
   const config = lib.getEngramConfig();
   if (!config.serverURL || !config.token) return null;
-
-  const budgetMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : sessionStartTimeoutMs;
-  const controller = new AbortController();
-  const deadlineAt = performance.now() + budgetMs;
-  const timeout = setTimeout(() => controller.abort(), budgetMs);
-  const deadline = {
-    signal: controller.signal,
-    expired() {
-      if (controller.signal.aborted) return true;
-      if (performance.now() < deadlineAt) return false;
-      controller.abort();
-      return true;
-    },
-  };
-  const remainingBudget = () => {
-    if (deadline.expired()) return 0;
-    return Math.floor(deadlineAt - performance.now());
-  };
-
+  const deadline = deadlineController(Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : sessionStartTimeoutMs);
   try {
-    const scope = await untilAborted(controller.signal, () => validateProject(event, ctx, deadline));
-    const remaining = remainingBudget();
+    const scope = await untilAborted(deadline.signal, () => validateProject(event, ctx, deadline));
+    const remaining = deadline.remaining();
     if (!scope || remaining <= 0) return null;
-
-    const payload = await untilAborted(
-      controller.signal,
-      () => deadline.expired()
-        ? null
-        : lib.requestPost(
-          '/api/context/session-start',
-          { project: scope.project, session_id: scope.sessionID },
-          remaining,
-          { signal: controller.signal },
-        ),
-    );
-    if (!payload || deadline.expired()) return null;
+    const payload = await untilAborted(deadline.signal, () => lib.requestPost(
+      '/api/context/session-start',
+      { project: scope.project, session_id: scope.sessionID },
+      remaining,
+      { signal: deadline.signal },
+    ));
+    if (!payload || deadline.remaining() <= 0) return null;
     const content = boundedContext(buildSessionStartContext(payload, scope.project, { maxLength: hiddenContextLimit }));
-    return deadline.expired() || !content ? null : hiddenMessage(content);
-  } catch {
-    return null;
+    return !content || deadline.remaining() <= 0 ? null : hiddenMessage(content);
   } finally {
-    clearTimeout(timeout);
-    controller.abort();
+    deadline.dispose();
   }
 }
 
 async function ambientMessage(event, ctx) {
   if (lib.isQuietMode()) return null;
-  return withinDeadline(async () => {
-    const config = lib.getEngramConfig();
-    if (!config.serverURL || !config.token) return null;
-
-    const scope = await validateProject(event, ctx);
+  const config = lib.getEngramConfig();
+  if (!config.serverURL || !config.token) return null;
+  const deadline = deadlineController(ambientTimeoutMs);
+  try {
+    const scope = await untilAborted(deadline.signal, () => validateProject(event, ctx, deadline));
     const prompt = stringField(event.prompt, event.userMessage, event.user_message, ctx.prompt);
-    if (!scope || !prompt) return null;
-    const content = boundedContext(await fetchAmbientAdditionalContext(scope.project, scope.sessionID, prompt));
-    return content ? hiddenMessage(content) : null;
-  }, ambientTimeoutMs);
+    const remaining = deadline.remaining();
+    if (!scope || !prompt || remaining <= 0) return null;
+    const content = boundedContext(await untilAborted(deadline.signal, () => fetchAmbientAdditionalContext(
+      scope.project,
+      scope.sessionID,
+      prompt,
+      remaining,
+      { signal: deadline.signal },
+    )));
+    return deadline.signal.aborted || !content ? null : hiddenMessage(content);
+  } finally {
+    deadline.dispose();
+  }
 }
 
 export default function engramMemory(pi) {

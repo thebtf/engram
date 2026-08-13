@@ -326,8 +326,56 @@ function getGitRemoteID(cwd) {
  }
 }
 
+function abortError() {
+ const error = new Error('The operation was aborted');
+ error.name = 'AbortError';
+ return error;
+}
+
+function throwIfAborted(signal) {
+ if (signal?.aborted) throw abortError();
+}
+
+function execGitFile(args, cwd, options = {}) {
+ throwIfAborted(options.signal);
+ const { execFile } = require('node:child_process');
+ return new Promise((resolve, reject) => {
+  execFile('git', args, {
+   cwd,
+   timeout: options.timeoutMs ?? 3000,
+   windowsHide: true,
+   env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
+   signal: options.signal,
+  }, (error, stdout, stderr) => {
+   if (error) {
+    if (error.stderr == null) error.stderr = stderr;
+    reject(error);
+    return;
+   }
+   resolve(String(stdout).trim());
+  });
+ });
+}
+
+async function getGitRemoteIDAsync(cwd, options = {}) {
+ try {
+  const remoteURL = await execGitFile(['remote', 'get-url', 'origin'], cwd, options);
+  throwIfAborted(options.signal);
+  if (!remoteURL) return null;
+  const relativePath = await execGitFile(['rev-parse', '--show-prefix'], cwd, options);
+  throwIfAborted(options.signal);
+  const hash = crypto.createHash('sha256').update(`${remoteURL}/${relativePath}`).digest('hex');
+  return { projectID: hash.slice(0, 8), gitRemote: remoteURL, relativePath };
+ } catch (error) {
+  if (error?.name === 'AbortError' || options.signal?.aborted) throw abortError();
+  if (isMissingGitIdentityError(error)) return null;
+  throw new Error('PROJECT_IDENTITY_UNAVAILABLE: git identity resolution failed', { cause: error });
+ }
+}
+
 function isMissingGitIdentityError(error) {
  if (!error || typeof error !== 'object') return false;
+ if (error.code === 'ENOENT') return true;
  const stderr = error.stderr == null ? '' : String(error.stderr);
  return /not a git repository|no such remote/i.test(stderr);
 }
@@ -569,12 +617,37 @@ function resolveProjectIdentityV2(cwd) {
  return validateProjectIdentityV2(buildProjectIdentityV2(base));
 }
 
+async function resolveHookProjectIdentityV2(cwd, options = {}) {
+ const resolved = path.resolve(cwd || '');
+ const git = await getGitRemoteIDAsync(resolved, options);
+ throwIfAborted(options.signal);
+ const base = {
+  legacy_project_id: LegacyProjectID(resolved),
+  display_name: path.basename(resolved),
+  git_remote: git ? git.gitRemote : '',
+  relative_path: git ? git.relativePath.replace(/\\/g, '/') : '',
+  non_git_anchor: '',
+  anchor_shared: null,
+ };
+ if (!git) {
+  throwIfAborted(options.signal);
+  const anchor = readOrCreateProjectAnchorV2(resolved);
+  base.non_git_anchor = anchor.anchor;
+  base.anchor_shared = anchor.shared;
+ }
+ throwIfAborted(options.signal);
+ return validateProjectIdentityV2(buildProjectIdentityV2(base));
+}
+
 async function registerProjectIdentityV2(context, requestFn = request, requestOptions = {}) {
  if (!context || !context.ProjectIdentityV2) {
   throw new Error('PROJECT_IDENTITY_INVALID: hook context has no v2 identity');
  }
  const selector = validateProjectSelectorV2(context.Project);
  validateProjectIdentityV2(context.ProjectIdentityV2);
+ const timeoutMs = Number.isFinite(requestOptions.timeoutMs) && requestOptions.timeoutMs > 0
+  ? requestOptions.timeoutMs
+  : 10000;
  const response = await requestFn('POST', '/api/context/inject', {
   project: selector,
   legacy_project: context.LegacyProject,
@@ -582,12 +655,8 @@ async function registerProjectIdentityV2(context, requestFn = request, requestOp
   relative_path: context.RelativePath,
   project_identity: context.ProjectIdentityV2,
   identity_only: true,
- }, 10000, requestOptions);
- if (requestOptions.signal && requestOptions.signal.aborted) {
-  const error = new Error('The operation was aborted');
-  error.name = 'AbortError';
-  throw error;
- }
+ }, timeoutMs, requestOptions);
+ if (requestOptions.signal?.aborted) throw abortError();
  let canonical;
  try {
   canonical = validateCanonicalProjectV2(response && response.canonical_project);
@@ -1182,6 +1251,8 @@ module.exports = {
  validateProjectSelectorV2,
  resolveProjectIdentityV2,
  registerProjectIdentityV2,
+ getGitRemoteIDAsync,
+ resolveHookProjectIdentityV2,
  isProjectIdentityTransportOffline,
  requestGet,
  requestPost,
