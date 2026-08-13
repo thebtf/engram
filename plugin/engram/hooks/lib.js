@@ -82,6 +82,39 @@ function readEngramConfigFile(configFilePath) {
  }
 }
 
+async function resolveEngramConfigFilePath(signal) {
+ const explicit = configuredPluginEnv('ENGRAM_CONFIG_FILE');
+ if (explicit) return explicit;
+ const pluginData = (process.env.ENGRAM_DATA_DIR || process.env.CLAUDE_PLUGIN_DATA || '').trim();
+ if (pluginData) {
+  const candidate = path.join(pluginData, 'config.json');
+  try {
+   await awaitAbortable(signal, fsPromises.access(candidate));
+   return candidate;
+  } catch {
+   if (signal?.aborted) throw abortError();
+  }
+ }
+ return path.join(os.homedir(), '.engram', 'config.json');
+}
+
+async function readEngramConfigFileAsync(configFilePath, signal) {
+ try {
+  if (!configFilePath || signal?.aborted) return null;
+  const raw = await awaitAbortable(signal, fsPromises.readFile(configFilePath, { encoding: 'utf8', signal }));
+  const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  return {
+   server_url: typeof parsed.server_url === 'string' ? parsed.server_url.trim() : '',
+   api_token: typeof parsed.api_token === 'string' ? parsed.api_token.trim() : '',
+   quiet: parsed.quiet,
+  };
+ } catch (error) {
+  if (signal?.aborted || error?.name === 'AbortError') throw abortError();
+  return null;
+ }
+}
+
 function safePromptScalar(value) {
  return String(value ?? '')
   .replace(/\s+/g, ' ')
@@ -290,6 +323,49 @@ function isQuietMode() {
  // children receive no env, so this is their only path).
  const cf = readEngramConfigFile(resolveConfigFilePath());
  return !!cf && isTruthyFlag(cf.quiet);
+}
+
+async function resolveEngramRuntimeConfig(options = {}) {
+ const quietValue = configuredPluginEnv(
+  'ENGRAM_QUIET',
+  'ENGRAM_QUIET_HOOKS',
+  'CLAUDE_PLUGIN_OPTION_ENGRAM_QUIET',
+  'CLAUDE_PLUGIN_OPTION_engram_quiet',
+  'CLAUDE_PLUGIN_OPTION_QUIET',
+  'CLAUDE_PLUGIN_OPTION_quiet'
+ );
+ let serverURL = configuredPluginEnv(
+  'ENGRAM_URL',
+  'ENGRAM_SERVER_URL',
+  'CLAUDE_PLUGIN_OPTION_server_url',
+  'CLAUDE_PLUGIN_OPTION_SERVER_URL',
+  'ENGRAM_CLAUDE_USERCONFIG_URL'
+ );
+ let token = configuredPluginEnv(
+  'ENGRAM_TOKEN',
+  'CLAUDE_PLUGIN_OPTION_api_token',
+  'CLAUDE_PLUGIN_OPTION_API_TOKEN',
+  'ENGRAM_CLAUDE_USERCONFIG_TOKEN'
+ );
+ let quiet = quietValue === '' ? false : isTruthyFlag(quietValue);
+
+ if (!serverURL || !token || quietValue === '') {
+  let config = null;
+  try {
+   config = await readEngramConfigFileAsync(await resolveEngramConfigFilePath(options.signal), options.signal);
+  } catch (error) {
+   if (options.signal?.aborted || error?.name === 'AbortError') throw abortError();
+  }
+  if (config) {
+   if (!serverURL && config.server_url) serverURL = config.server_url;
+   if (!token && config.api_token) token = config.api_token;
+   if (quietValue === '') quiet = isTruthyFlag(config.quiet);
+  }
+ }
+
+ if (serverURL) process.env.ENGRAM_URL = serverURL;
+ if (token) process.env.ENGRAM_TOKEN = token;
+ return { serverURL, token, quiet };
 }
 
 // Hooks that PUSH context into the prompt — the only ones quiet mode gates.
@@ -1342,6 +1418,7 @@ module.exports = {
  readEngramConfigFile,
  readJSONFile,
  resolveConfigFilePath,
+ resolveEngramRuntimeConfig,
  safePromptScalar,
  quotedPromptScalar,
  safePromptPayload,
