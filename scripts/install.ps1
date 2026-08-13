@@ -100,9 +100,20 @@ function Install-Release {
         if (-not (Test-Path "$TempDir\scripts\*.js")) {
             Write-Err "Release archive is missing required JS scripts in $TempDir\scripts"
         }
+        if (-not (Test-Path -LiteralPath (Join-Path $TempDir "scripts\register-plugin.js") -PathType Leaf)) {
+            Write-Err "Release archive is missing required registry transaction helper"
+        }
         $PolicyPath = Join-Path $TempDir "bootstrap-targets.json"
         if (-not (Test-Path -LiteralPath $PolicyPath -PathType Leaf)) {
             Write-Err "Release archive is missing required bootstrap-targets.json"
+        }
+        $ManifestPath = Join-Path $TempDir "package.json"
+        if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+            Write-Err "Release archive is missing required OMP package.json"
+        }
+        $ExtensionPath = Join-Path $TempDir "extensions\engram-memory.mjs"
+        if (-not (Test-Path -LiteralPath $ExtensionPath -PathType Leaf)) {
+            Write-Err "Release archive is missing required OMP extension"
         }
 
         # This validator is part of the trusted installer, not the release archive.
@@ -195,6 +206,7 @@ for (const [key, asset] of Object.entries(assets)) {
         New-Item -ItemType Directory -Path "$InstallDir\scripts"       -Force | Out-Null
         New-Item -ItemType Directory -Path "$InstallDir\.claude-plugin" -Force | Out-Null
         New-Item -ItemType Directory -Path "$InstallDir\commands"       -Force | Out-Null
+        New-Item -ItemType Directory -Path "$InstallDir\extensions"    -Force | Out-Null
 
         # Server binary — present in all archives; let callers decide whether to use it
         Copy-Item "$TempDir\engram-server.exe" "$InstallDir\" -Force -ErrorAction SilentlyContinue
@@ -208,6 +220,8 @@ for (const [key, asset] of Object.entries(assets)) {
 
         Copy-Item "$TempDir\scripts\*.js" "$InstallDir\scripts\" -Force -ErrorAction Stop
         Copy-Item $PolicyPath "$InstallDir\bootstrap-targets.json" -Force -ErrorAction Stop
+        Copy-Item $ManifestPath "$InstallDir\package.json" -Force -ErrorAction Stop
+        Copy-Item $ExtensionPath "$InstallDir\extensions\engram-memory.mjs" -Force -ErrorAction Stop
 
         Copy-Item "$TempDir\.claude-plugin\*" "$InstallDir\.claude-plugin\" -Force
 
@@ -258,68 +272,25 @@ function Register-Plugin {
         Write-Info "Preserving old cache versions for running-session hook compatibility..."
     }
 
-    New-Item -ItemType Directory -Path $CachePath -Force | Out-Null
-
-    # Bootstrap JSON files when they do not exist yet
-    if (-not (Test-Path $PluginsFile))      { '{"version": 2, "plugins": {}}' | Out-File -Encoding UTF8 $PluginsFile }
-    if (-not (Test-Path $SettingsFile))     { '{}' | Out-File -Encoding UTF8 $SettingsFile }
-    if (-not (Test-Path $MarketplacesFile)) { '{}' | Out-File -Encoding UTF8 $MarketplacesFile }
-
     New-Item -ItemType Directory -Path "$CachePath\.claude-plugin" -Force | Out-Null
     New-Item -ItemType Directory -Path "$CachePath\hooks"          -Force | Out-Null
     Copy-Item "$InstallDir\*" $CachePath -Recurse -Force -ErrorAction SilentlyContinue
 
     try {
-        # installed_plugins.json
-        $Plugins     = Get-Content $PluginsFile -Raw | ConvertFrom-Json
-        $PluginEntry = @(
-            @{
-                scope       = "user"
-                installPath = $CachePath
-                version     = $VersionClean
-                installedAt = $Timestamp
-                lastUpdated = $Timestamp
-                isLocal     = $true
-            }
-        )
-        if (-not $Plugins.plugins) {
-            $Plugins | Add-Member -NotePropertyName "plugins" -NotePropertyValue ([PSCustomObject]@{}) -Force
+        & node "$InstallDir\scripts\register-plugin.js" `
+            $PluginsFile $SettingsFile $MarketplacesFile `
+            $PluginKey $CachePath $VersionClean $Timestamp $InstallDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "registry transaction helper failed with exit code $LASTEXITCODE"
         }
-        $Plugins.plugins | Add-Member -NotePropertyName $PluginKey -NotePropertyValue $PluginEntry -Force
-        $Plugins | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $PluginsFile
         Write-Success "Plugin registered in installed_plugins.json"
-
-        # settings.json — enable plugin and configure statusline
-        $Settings = Get-Content $SettingsFile -Raw | ConvertFrom-Json
-        if (-not $Settings.enabledPlugins) {
-            $Settings | Add-Member -NotePropertyName "enabledPlugins" -NotePropertyValue ([PSCustomObject]@{}) -Force
-        }
-        $Settings.enabledPlugins | Add-Member -NotePropertyName $PluginKey -NotePropertyValue $true -Force
-
-        $StatuslineCmd   = "node `"$InstallDir\hooks\statusline.js`""
-        $StatuslineEntry = @{ type = "command"; command = $StatuslineCmd; padding = 0 }
-        $Settings | Add-Member -NotePropertyName "statusLine" -NotePropertyValue $StatuslineEntry -Force
-
-        $Settings | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $SettingsFile
         Write-Success "Plugin enabled in settings.json"
         Write-Success "Statusline configured in settings.json"
-
-        # MCP transport is declared in the plugin's .mcp.json — no settings.json edit needed
-
-        # known_marketplaces.json
-        $Marketplaces     = Get-Content $MarketplacesFile -Raw | ConvertFrom-Json
-        $MarketplaceEntry = @{
-            source          = @{ source = "directory"; path = $InstallDir }
-            installLocation = $InstallDir
-            lastUpdated     = $Timestamp
-        }
-        $Marketplaces | Add-Member -NotePropertyName "engram" -NotePropertyValue $MarketplaceEntry -Force
-        $Marketplaces | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $MarketplacesFile
         Write-Success "Marketplace registered in known_marketplaces.json"
     }
     catch {
         Write-Host "[ERROR] Plugin registration failed: $_" -ForegroundColor Red
-        Write-Host "[ERROR] installed_plugins.json / settings.json / known_marketplaces.json may not have been updated." -ForegroundColor Red
+        Write-Host "[ERROR] Registry transaction did not complete." -ForegroundColor Red
         exit 1
     }
 }

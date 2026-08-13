@@ -170,8 +170,14 @@ download_release() {
         || error "Release archive is missing required scripts directory"
     compgen -G "$tmp_dir/scripts/*.js" > /dev/null \
         || error "Release archive is missing required JS scripts"
+    [[ -f "$tmp_dir/scripts/register-plugin.js" ]] \
+        || error "Release archive is missing required registry transaction helper"
     [[ -f "$tmp_dir/bootstrap-targets.json" ]] \
         || error "Release archive is missing required bootstrap-targets.json"
+    [[ -f "$tmp_dir/package.json" ]] \
+        || error "Release archive is missing required OMP package.json"
+    [[ -f "$tmp_dir/extensions/engram-memory.mjs" ]] \
+        || error "Release archive is missing required OMP extension"
     # This validator is part of the trusted installer, not the release archive.
     # A release payload must never be allowed to validate its own policy.
     node - "$tmp_dir/bootstrap-targets.json" "${version#v}" <<'NODE' \
@@ -250,7 +256,7 @@ for (const [key, asset] of Object.entries(assets)) {
 NODE
 
     info "Installing to ${INSTALL_DIR}..."
-    mkdir -p "$INSTALL_DIR/hooks" "$INSTALL_DIR/scripts" "$INSTALL_DIR/.claude-plugin" "$INSTALL_DIR/commands"
+    mkdir -p "$INSTALL_DIR/hooks" "$INSTALL_DIR/scripts" "$INSTALL_DIR/.claude-plugin" "$INSTALL_DIR/commands" "$INSTALL_DIR/extensions"
 
     # Server binary is only included in --full installs
     if [[ "$INSTALL_MODE" == "full" ]]; then
@@ -271,6 +277,10 @@ NODE
         || error "Failed to copy JS scripts from $tmp_dir/scripts/"
     cp "$tmp_dir/bootstrap-targets.json" "$INSTALL_DIR/" \
         || error "Failed to copy bootstrap policy from release archive"
+    cp "$tmp_dir/package.json" "$INSTALL_DIR/" \
+        || error "Failed to copy OMP package manifest from release archive"
+    cp "$tmp_dir/extensions/engram-memory.mjs" "$INSTALL_DIR/extensions/" \
+        || error "Failed to copy OMP extension from release archive"
 
     cp "$tmp_dir/.claude-plugin/"* "$INSTALL_DIR/.claude-plugin/"
 
@@ -304,88 +314,30 @@ NODE
 # Write plugin metadata into Claude Code's JSON registry files
 # ---------------------------------------------------------------------------
 register_plugin() {
-    local version="$1"
-    local timestamp cache_path plugin_entry statusline_cmd statusline_entry marketplace_entry
+    local version="$1" timestamp cache_path
 
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
-
     mkdir -p "$HOME/.claude/plugins"
 
     # Preserve stale cache versions: already-running sessions may have hook
     # commands pointing at their versioned cache path until they restart.
-    # installed_plugins.json below points new sessions at cache_path, so old
-    # cache slots no longer shadow the new plugin.
     if [[ -d "$CACHE_DIR" ]]; then
         info "Preserving old cache versions for running-session hook compatibility..."
     fi
 
     cache_path="${CACHE_DIR}/${version}"
-    mkdir -p "${cache_path}"
-
-    # Bootstrap JSON files when they do not exist yet
-    [[ ! -f "$PLUGINS_FILE" ]]      && echo '{"version": 2, "plugins": {}}' > "$PLUGINS_FILE"
-    [[ ! -f "$SETTINGS_FILE" ]]     && echo '{}' > "$SETTINGS_FILE"
-    [[ ! -f "$MARKETPLACES_FILE" ]] && echo '{}' > "$MARKETPLACES_FILE"
-
-    if ! command -v jq &> /dev/null; then
-        warn "jq is not installed — plugin registration requires jq."
-        warn "Install jq: brew install jq (macOS) / apt-get install jq (Linux)"
-        warn "Then re-run: $0 --register-only"
-        return 1
-    fi
-
     mkdir -p "$cache_path/.claude-plugin" "$cache_path/hooks" "$cache_path/commands"
     cp -a "$INSTALL_DIR/." "$cache_path/" 2>/dev/null || true
 
-    # installed_plugins.json — record install path, version, and timestamp
-    plugin_entry=$(cat <<EOF
-[{
-    "scope": "user",
-    "installPath": "$cache_path",
-    "version": "${version#v}",
-    "installedAt": "$timestamp",
-    "lastUpdated": "$timestamp",
-    "isLocal": true
-}]
-EOF
-)
-    jq --arg key "$PLUGIN_KEY" --argjson entry "$plugin_entry" \
-        '.plugins[$key] = $entry' "$PLUGINS_FILE" > "${PLUGINS_FILE}.tmp" \
-        && mv "${PLUGINS_FILE}.tmp" "$PLUGINS_FILE"
-    success "Plugin registered in installed_plugins.json"
+    if ! node "$INSTALL_DIR/scripts/register-plugin.js" \
+        "$PLUGINS_FILE" "$SETTINGS_FILE" "$MARKETPLACES_FILE" \
+        "$PLUGIN_KEY" "$cache_path" "${version#v}" "$timestamp" "$INSTALL_DIR"; then
+        error "Plugin registration failed"
+    fi
 
-    # settings.json — enable plugin and wire the statusline command
-    statusline_cmd="node \"$INSTALL_DIR/hooks/statusline.js\""
-    statusline_entry=$(cat <<EOF
-{
-    "type": "command",
-    "command": "$statusline_cmd",
-    "padding": 0
-}
-EOF
-)
-    jq --arg key "$PLUGIN_KEY" --argjson statusline "$statusline_entry" \
-        '.enabledPlugins //= {} | .enabledPlugins[$key] = true | .statusLine = $statusline' \
-        "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp" \
-        && mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+    success "Plugin registered in installed_plugins.json"
     success "Plugin enabled in settings.json"
     success "Statusline configured in settings.json"
-
-    # known_marketplaces.json — register local directory as the source
-    marketplace_entry=$(cat <<EOF
-{
-    "source": {
-        "source": "directory",
-        "path": "$INSTALL_DIR"
-    },
-    "installLocation": "$INSTALL_DIR",
-    "lastUpdated": "$timestamp"
-}
-EOF
-)
-    jq --arg key "engram" --argjson entry "$marketplace_entry" \
-        '.[$key] = $entry' "$MARKETPLACES_FILE" > "${MARKETPLACES_FILE}.tmp" \
-        && mv "${MARKETPLACES_FILE}.tmp" "$MARKETPLACES_FILE"
     success "Marketplace registered in known_marketplaces.json"
 
     # MCP transport is declared in the plugin's .mcp.json — no settings.json edit needed
@@ -493,11 +445,8 @@ main() {
 
     download_release "$version" "$platform"
 
-    if register_plugin "$version"; then
-        success "Plugin registered successfully"
-    else
-        warn "Plugin registration incomplete — install jq and re-run with --register-only"
-    fi
+    register_plugin "$version"
+    success "Plugin registered successfully"
 
     setup_connection
     verify_health

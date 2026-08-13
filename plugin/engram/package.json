@@ -1,0 +1,10 @@
+{
+  "name": "engram",
+  "version": "6.47.5",
+  "private": true,
+  "omp": {
+    "extensions": [
+      "./extensions/engram-memory.mjs"
+    ]
+  }
+}

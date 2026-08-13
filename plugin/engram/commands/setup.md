@@ -178,25 +178,25 @@ Tool: check_system_health()
 - **Docker networking**: If the server runs in Docker, use the host
   machine's IP (not `localhost` unless same machine).
 
-### Quiet mode (mute automatic hook injection)
+### Quiet mode (mute automatic context injection)
 
-Quiet mode stops engram PUSHING context into the prompt: no session-start
-behavioral rules / memories / issues, no pre-tool-use or pre-compact context.
-The capture/learning hooks still run — engram keeps crystallizing lessons and
-recording session outcomes — so quiet stops engram *talking*, not *learning*.
-Use it when injected context is more noise than signal: a stale or mis-scoped
-server-side rule set, focused development, or any session where "zero hints"
-beats "wrong hints".
+Quiet mode stops Engram PUSHING context into the prompt. In Claude Code this
+means no hook-injected session-start behavioral rules / memories / issues and
+no pre-tool-use or pre-compact context; capture/learning hooks still run. In
+OMP it suppresses the native `session_start` and `before_agent_start` injection
+paths. Use it when injected context is more noise than signal: a stale or
+mis-scoped server-side rule set, focused development, or any session where
+"zero hints" beats "wrong hints".
 
-**Scope — what quiet mode does and does NOT silence.** Quiet mode silences hook
-*context injection* (the prompt noise). It deliberately does NOT disable the MCP
-daemon: the `store`/`recall`/`vault`/`issues`/... tools keep working, so the
-SessionStart binary bootstrap (`ensure-binary.js`, which downloads/updates the
-daemon binary only when it is missing or version-stale) still runs. That is by
-design — muting injection must not break the tools. The bootstrap is rare (only
-on first install or a version bump), best-effort, and non-fatal; it makes no
-context injection. If you want zero MCP activity too, disable the engram plugin
-rather than using quiet mode.
+**Scope — what quiet mode does and does NOT silence.** Quiet mode silences
+context injection only. It deliberately does NOT disable the MCP daemon: the
+`store`/`recall`/`vault`/`issues`/... tools keep working, and SessionStart binary
+bootstrap (`ensure-binary.js`, which downloads/updates the daemon binary only
+when it is missing or version-stale) still runs. That is by design — muting
+injection must not break the tools. The bootstrap is rare (only on first install
+or a version bump), best-effort, and non-fatal; it makes no context injection.
+If you want zero MCP activity too, disable the engram plugin rather than using
+quiet mode.
 
 Set it the same way you set credentials for your harness:
 
@@ -219,6 +219,7 @@ Truthy values: `true` (boolean) or the strings `1`/`true`/`yes`/`on`
 (case-insensitive); unset or anything else leaves hooks fully active. Reversible
 — remove the var/key to restore. Explicit env always wins over the config file.
 
-OMP 17.x loads the MCP server, skills, and slash commands from the marketplace,
-but does not execute Claude `hooks.json`; quiet mode therefore has no hook effect
-under OMP.
+OMP 17.x loads the MCP server, skills, slash commands, and the native Engram
+extension from the marketplace, but does not execute Claude `hooks.json`.
+Quiet mode therefore suppresses native OMP injection rather than Claude hook
+execution; it never disables MCP tools.
