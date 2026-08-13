@@ -182,6 +182,182 @@ function registryArguments(home) {
     path.join(claude, "plugins", "marketplaces", "engram"),
   ];
 }
+
+function registryDurabilityPreload(temp) {
+  const preload = path.join(temp, "record-registry-durability.cjs");
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const path = require("node:path");
+const openSync = fs.openSync;
+const fsyncSync = fs.fsyncSync;
+const renameSync = fs.renameSync;
+const linkSync = fs.linkSync;
+const unlinkSync = fs.unlinkSync;
+const rmdirSync = fs.rmdirSync;
+const closeSync = fs.closeSync;
+const writeFileSync = fs.writeFileSync;
+const descriptors = new Map();
+const events = [];
+const resolve = (file) => path.resolve(String(file));
+const record = (event) => events.push(event);
+fs.openSync = (file, flags, ...rest) => {
+  const descriptor = openSync.call(fs, file, flags, ...rest);
+  if (fs.fstatSync(descriptor).isDirectory()) descriptors.set(descriptor, resolve(file));
+  return descriptor;
+};
+fs.fsyncSync = (descriptor, ...rest) => {
+  const result = fsyncSync.call(fs, descriptor, ...rest);
+  if (descriptors.has(descriptor)) record({ kind: "sync", path: descriptors.get(descriptor) });
+  return result;
+};
+fs.closeSync = (descriptor, ...rest) => {
+  try { return closeSync.call(fs, descriptor, ...rest); } finally { descriptors.delete(descriptor); }
+};
+
+fs.renameSync = (from, to, ...rest) => {
+  const result = renameSync.call(fs, from, to, ...rest);
+  record({ kind: "rename", from: resolve(from), to: resolve(to) });
+  return result;
+};
+fs.linkSync = (from, to, ...rest) => {
+  const result = linkSync.call(fs, from, to, ...rest);
+  record({ kind: "link", from: resolve(from), to: resolve(to) });
+  return result;
+};
+fs.unlinkSync = (file, ...rest) => {
+  const result = unlinkSync.call(fs, file, ...rest);
+  record({ kind: "unlink", path: resolve(file) });
+  return result;
+};
+fs.rmdirSync = (directory, ...rest) => {
+  const result = rmdirSync.call(fs, directory, ...rest);
+  record({ kind: "rmdir", path: resolve(directory) });
+  return result;
+};
+
+process.on("exit", () => writeFileSync.call(fs, process.env.ENGRAM_TEST_REGISTRY_DURABILITY_LOG, JSON.stringify(events)));
+`);
+  return preload;
+}
+
+function registryDescriptorFailurePreload(temp) {
+  const preload = path.join(temp, "fail-registry-descriptor.cjs");
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const path = require("node:path");
+const openSync = fs.openSync;
+const fsyncSync = fs.fsyncSync;
+const closeSync = fs.closeSync;
+const renameSync = fs.renameSync;
+const unlinkSync = fs.unlinkSync;
+const rmdirSync = fs.rmdirSync;
+const writeFileSync = fs.writeFileSync;
+const descriptors = new Map();
+const descriptorFiles = new Map();
+const directories = new Map();
+const events = [];
+let bodyFailed = false;
+let cleanupFailed = false;
+let replaced = false;
+const resolve = (file) => path.resolve(String(file));
+const phaseFor = (file) => {
+  const name = path.basename(String(file));
+  const parent = path.basename(path.dirname(String(file)));
+  if (/(?:installed_plugins|settings|known_marketplaces)\\.json\\.staged-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\\.tmp$/.test(name)) return "staged";
+  if (name === "manifest.json" && parent.startsWith(".engram-registry-transaction.recovery.pending-")) return "manifest";
+  if (name.startsWith(".engram-registry-transaction.recovery.receipt-") && name.endsWith(".tmp")) return "receipt";
+  return null;
+};
+const cleanupPhase = (file) => {
+  const name = path.basename(String(file));
+  if (name.startsWith(".engram-registry-transaction.recovery.pending-")) return "manifest";
+  if (name.startsWith(".engram-registry-transaction.recovery.receipt-") && name.endsWith(".tmp")) return "receipt";
+  return null;
+};
+const record = (event) => events.push(event);
+const recordCleanup = (phase, claimed) => {
+  if (process.env.ENGRAM_TEST_REGISTRY_DESCRIPTOR_CLEANUP_LOG) writeFileSync.call(fs, process.env.ENGRAM_TEST_REGISTRY_DESCRIPTOR_CLEANUP_LOG, phase + "\\t" + claimed + "\\n", { flag: "a" });
+};
+const foreign = (file, phase) => {
+  if (phase === "manifest") {
+    fs.mkdirSync(file, { mode: 0o700 });
+    writeFileSync.call(fs, path.join(file, "foreign"), "foreign descriptor cleanup race sentinel\\n");
+  } else writeFileSync.call(fs, file, "foreign descriptor cleanup race sentinel\\n");
+};
+fs.openSync = (file, flags, ...rest) => {
+  const descriptor = openSync.call(fs, file, flags, ...rest);
+  if (fs.fstatSync(descriptor).isDirectory()) directories.set(descriptor, resolve(file));
+  const phase = flags === "wx" && phaseFor(file);
+  if (phase) { descriptors.set(descriptor, phase); descriptorFiles.set(descriptor, String(file)); }
+  return descriptor;
+};
+fs.fsyncSync = (descriptor, ...rest) => {
+  const phase = descriptors.get(descriptor);
+  if (phase === process.env.ENGRAM_TEST_REGISTRY_DESCRIPTOR_PHASE && process.env.ENGRAM_TEST_REGISTRY_DESCRIPTOR_BODY_FAILURE === "1" && !bodyFailed) {
+    bodyFailed = true;
+    const error = new Error(\`injected \${phase} body persistence failure\`);
+    error.code = "EIO";
+    throw error;
+  }
+  const result = fsyncSync.call(fs, descriptor, ...rest);
+  if (directories.has(descriptor)) record({ kind: "sync", path: directories.get(descriptor) });
+  return result;
+};
+fs.closeSync = (descriptor, ...rest) => {
+  const phase = descriptors.get(descriptor);
+  try { return closeSync.call(fs, descriptor, ...rest); } finally {
+    descriptors.delete(descriptor);
+    descriptorFiles.delete(descriptor);
+    directories.delete(descriptor);
+    if (phase === process.env.ENGRAM_TEST_REGISTRY_DESCRIPTOR_PHASE && process.env.ENGRAM_TEST_REGISTRY_DESCRIPTOR_CLOSE_FAILURE === "1") {
+      fs.appendFileSync(process.env.ENGRAM_TEST_REGISTRY_DESCRIPTOR_LOG, \`close:\${phase}\\n\`);
+      const error = new Error(\`injected \${phase} close failure\`);
+      error.code = "EIO";
+      throw error;
+    }
+  }
+};
+fs.renameSync = (from, to, ...rest) => {
+  const phase = cleanupPhase(from);
+  if (phase === process.env.ENGRAM_TEST_REGISTRY_DESCRIPTOR_PHASE && process.env.ENGRAM_TEST_REGISTRY_DESCRIPTOR_REPLACE_BEFORE_CLAIM === "1" && !replaced) {
+    replaced = true;
+    renameSync.call(fs, from, String(from) + ".owned-before");
+    foreign(from, phase);
+  }
+  const result = renameSync.call(fs, from, to, ...rest);
+  if (phase) {
+    record({ kind: "rename", from: resolve(from), to: resolve(to) });
+    recordCleanup(phase, resolve(to));
+    if (phase === process.env.ENGRAM_TEST_REGISTRY_DESCRIPTOR_PHASE && process.env.ENGRAM_TEST_REGISTRY_DESCRIPTOR_REPLACE_AFTER_CLAIM === "1" && !replaced) {
+      replaced = true;
+      renameSync.call(fs, to, String(to) + ".owned-after");
+      foreign(to, phase);
+    }
+  }
+  return result;
+};
+fs.unlinkSync = (file, ...rest) => {
+  const phase = process.env.ENGRAM_TEST_REGISTRY_DESCRIPTOR_PHASE;
+  if (String(file).includes(".engram-registry-cleanup-") && process.env.ENGRAM_TEST_REGISTRY_DESCRIPTOR_CLEANUP_FAILURE === "1" && !cleanupFailed) {
+    cleanupFailed = true;
+    fs.appendFileSync(process.env.ENGRAM_TEST_REGISTRY_DESCRIPTOR_LOG, \`cleanup:\${phase}\\n\`);
+    const error = new Error(\`injected \${phase} cleanup failure\`);
+    error.code = "EIO";
+    throw error;
+  }
+  const result = unlinkSync.call(fs, file, ...rest);
+  record({ kind: "unlink", path: resolve(file) });
+  return result;
+};
+fs.rmdirSync = (directory, ...rest) => {
+  const result = rmdirSync.call(fs, directory, ...rest);
+  record({ kind: "rmdir", path: resolve(directory) });
+  return result;
+};
+process.on("exit", () => {
+  if (process.env.ENGRAM_TEST_REGISTRY_DURABILITY_LOG) writeFileSync.call(fs, process.env.ENGRAM_TEST_REGISTRY_DURABILITY_LOG, JSON.stringify(events));
+});
+`);
+  return preload;
+}
 function waitForFile(file, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
   while (!fs.existsSync(file)) {
@@ -258,6 +434,24 @@ fs.unlinkSync = (file, ...rest) => {
     rmdirSync.call(fs, path.dirname(String(file)));
   }
   return unlinkSync.call(fs, file, ...rest);
+};
+`);
+  return preload;
+}
+function releasedMarkerLstatToReaddirRemovalPreload(temp) {
+  const preload = path.join(temp, "released-marker-lstat-to-readdir-removal.cjs");
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const path = require("node:path");
+const lstatSync = fs.lstatSync;
+const rmSync = fs.rmSync;
+let removed = false;
+fs.lstatSync = (file, ...rest) => {
+  const result = lstatSync.call(fs, file, ...rest);
+  if (!removed && path.basename(String(file)).includes(".released-")) {
+    removed = true;
+    rmSync.call(fs, file, { recursive: true, force: true });
+  }
+  return result;
 };
 `);
   return preload;
@@ -444,6 +638,167 @@ function reclaimMarker(home) { return `${registryLock(home)}.reclaim-1-${crypto.
 function claimedReclaimMarker(home, owner, claimant = lockIdentity(process.pid)) {
   return `${registryLock(home)}.reclaiming-${owner.pid}-${owner.token}-${crypto.createHash("sha256").update(owner.hostname).digest("hex")}-${claimant.pid}-${claimant.token}`;
 }
+
+for (const phase of ["staged", "manifest", "receipt"]) {
+  test(`registry ${phase} descriptor preserves a body persistence error when close also fails`, () => {
+    const temp = temporaryDirectory();
+    try {
+      const home = path.join(temp, "home");
+      const { files, before } = seededRegistries(home);
+      const closeLog = path.join(temp, "descriptor-close.log");
+      const preload = registryDescriptorFailurePreload(temp);
+      const result = runRegistry(home, {
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" "),
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_PHASE: phase,
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_BODY_FAILURE: "1",
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_CLOSE_FAILURE: "1",
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_LOG: closeLog,
+      });
+      assert.ifError(result.error);
+      assert.notEqual(result.status, 0);
+      const error = registryError(result);
+      assert.match(error, new RegExp(`injected ${phase} body persistence failure`));
+      assert.doesNotMatch(error, new RegExp(`injected ${phase} close failure`));
+      assert.equal(fs.readFileSync(closeLog, "utf8"), `close:${phase}\n`);
+      assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+      if (phase !== "staged") {
+        assert.equal(pendingArtifact(home, phase), undefined);
+        assert.equal(cleanupQuarantine(home), undefined);
+      }
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+
+  test(`registry ${phase} descriptor reports a close-only failure`, () => {
+    const temp = temporaryDirectory();
+    try {
+      const home = path.join(temp, "home");
+      const { files, before } = seededRegistries(home);
+      const closeLog = path.join(temp, "descriptor-close.log");
+      const preload = registryDescriptorFailurePreload(temp);
+      const result = runRegistry(home, {
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" "),
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_PHASE: phase,
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_CLOSE_FAILURE: "1",
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_LOG: closeLog,
+      });
+      assert.ifError(result.error);
+      assert.notEqual(result.status, 0);
+      assert.match(registryError(result), new RegExp(`injected ${phase} close failure`));
+      assert.equal(fs.readFileSync(closeLog, "utf8"), `close:${phase}\n`);
+      assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+      if (phase !== "staged") {
+        assert.equal(pendingArtifact(home, phase), undefined);
+        assert.equal(cleanupQuarantine(home), undefined);
+      }
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+}
+function pendingArtifact(home, phase) {
+  const claude = path.join(home, ".claude");
+  const names = fs.readdirSync(claude);
+  if (phase === "manifest") return names.map((name) => path.join(claude, name)).find((file) => path.basename(file).startsWith(".engram-registry-transaction.recovery.pending-"));
+  const journal = registryJournal(home);
+  return fs.existsSync(journal) ? fs.readdirSync(journal).map((name) => path.join(journal, name)).find((file) => path.basename(file).startsWith(".engram-registry-transaction.recovery.receipt-")) : undefined;
+}
+function cleanupQuarantine(home) {
+  const claude = path.join(home, ".claude");
+  return fs.readdirSync(claude).map((name) => path.join(claude, name)).find((file) => path.basename(file).startsWith(".engram-registry-cleanup-"));
+}
+for (const phase of ["manifest", "receipt"]) {
+  test(`registry ${phase} descriptor cleans its owned artifact after body failure`, () => {
+    const temp = temporaryDirectory();
+    try {
+      const home = path.join(temp, "home");
+      const { files, before } = seededRegistries(home);
+      const preload = registryDescriptorFailurePreload(temp);
+      const result = runRegistry(home, {
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" "),
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_PHASE: phase,
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_BODY_FAILURE: "1",
+      });
+      assert.notEqual(result.status, 0);
+      assert.match(registryError(result), new RegExp(`injected ${phase} body persistence failure`));
+      assert.equal(pendingArtifact(home, phase), undefined);
+      assert.equal(cleanupQuarantine(home), undefined);
+      assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+
+  test(`registry ${phase} descriptor preserves primary failure when cleanup fails`, () => {
+    const temp = temporaryDirectory();
+    try {
+      const home = path.join(temp, "home");
+      const { files, before } = seededRegistries(home);
+      const log = path.join(temp, "descriptor-cleanup.log");
+      const preload = registryDescriptorFailurePreload(temp);
+      const result = runRegistry(home, {
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" "),
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_PHASE: phase,
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_BODY_FAILURE: "1",
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_CLEANUP_FAILURE: "1",
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_LOG: log,
+      });
+      assert.notEqual(result.status, 0);
+      const error = registryError(result);
+      assert.match(error, new RegExp(`injected ${phase} body persistence failure`));
+      assert.match(error, new RegExp(`Pending ${phase} cleanup failed: injected ${phase} cleanup failure`));
+      assert.equal(fs.readFileSync(log, "utf8"), `cleanup:${phase}\n`);
+      assert.ok(cleanupQuarantine(home), "failed cleanup must retain the owned artifact in quarantine");
+      assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+
+  for (const point of ["before", "after"]) test(`registry ${phase} descriptor retains a foreign ${point}-claim cleanup replacement`, () => {
+    const temp = temporaryDirectory();
+    try {
+      const home = path.join(temp, "home");
+      const { files, before } = seededRegistries(home);
+      const preload = registryDescriptorFailurePreload(temp);
+      const result = runRegistry(home, {
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" "),
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_PHASE: phase,
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_BODY_FAILURE: "1",
+        ...(point === "before" ? { ENGRAM_TEST_REGISTRY_DESCRIPTOR_REPLACE_BEFORE_CLAIM: "1" } : { ENGRAM_TEST_REGISTRY_DESCRIPTOR_REPLACE_AFTER_CLAIM: "1" }),
+      });
+      assert.notEqual(result.status, 0);
+      const error = registryError(result);
+      assert.match(error, new RegExp(`injected ${phase} body persistence failure`));
+      assert.match(error, /cleanup failed: retained (foreign|pending manifest directory)/);
+      const retained = /Retained foreign (?:[^:]+): (.+)/.exec(error);
+      assert.ok(retained, "cleanup diagnostic must name the retained foreign artifact");
+      const claimed = retained[1].trim();
+      assert.ok(fs.existsSync(claimed), "foreign object must remain at its atomically claimed path");
+      if (phase === "manifest") assert.equal(fs.readFileSync(path.join(claimed, "foreign"), "utf8"), "foreign descriptor cleanup race sentinel\n");
+      else assert.equal(fs.readFileSync(claimed, "utf8"), "foreign descriptor cleanup race sentinel\n");
+      assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+}
+(process.platform === "win32" ? test.skip : test)("registry descriptor cleanup durably orders successful pending removal", () => {
+  const temp = temporaryDirectory();
+  try {
+    for (const phase of ["manifest", "receipt"]) {
+      const home = path.join(temp, phase);
+      seededRegistries(home);
+      const log = path.join(temp, `${phase}-cleanup-durability.json`);
+      const preload = registryDescriptorFailurePreload(temp);
+      const result = runRegistry(home, {
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" "),
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_PHASE: phase,
+        ENGRAM_TEST_REGISTRY_DESCRIPTOR_BODY_FAILURE: "1",
+        ENGRAM_TEST_REGISTRY_DURABILITY_LOG: log,
+      });
+      assert.notEqual(result.status, 0);
+      const events = JSON.parse(fs.readFileSync(log, "utf8"));
+      const cleanupRename = events.findIndex((event) => event.kind === "rename" && event.from.includes(phase === "manifest" ? ".pending-" : ".receipt-") && event.to.includes(".engram-registry-cleanup-"));
+      assert.ok(cleanupRename >= 0, `${phase}: cleanup must atomically claim its exact artifact`);
+      const cleanupParent = path.join(home, ".claude");
+      const nextMutation = events.findIndex((event, index) => index > cleanupRename && ["rename", "unlink", "rmdir"].includes(event.kind));
+      const end = nextMutation < 0 ? events.length : nextMutation;
+      assert.ok(events.slice(cleanupRename + 1, end).some((event) => event.kind === "sync" && event.path === cleanupParent), `${phase}: claimed namespace must be fsynced before the next cleanup mutation`);
+    }
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
 
 test("registry transaction recovers a terminated same-host owner", () => {
   const temp = temporaryDirectory();
@@ -751,6 +1106,79 @@ for (const backupNumber of [1, 2, 3]) {
   });
 }
 
+const posixTest = process.platform === "win32" ? test.skip : test;
+posixTest("registry transaction durably orders POSIX journal, target, receipt, and recovery namespaces", () => {
+  const temp = temporaryDirectory();
+  try {
+    const trace = (home, label) => {
+      const log = path.join(temp, `registry-durability-${label}.json`);
+      const result = runRegistry(home, {
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${registryDurabilityPreload(temp)}`].filter(Boolean).join(" "),
+        ENGRAM_TEST_REGISTRY_DURABILITY_LOG: log,
+      });
+      assert.equal(result.status, 0, registryError(result));
+      return JSON.parse(fs.readFileSync(log, "utf8"));
+    };
+    const assertSyncBeforeNextMutation = (events, directory, after, message) => {
+      const next = events.findIndex((event, index) => index > after && ["rename", "link", "unlink", "rmdir"].includes(event.kind));
+      const end = next < 0 ? events.length : next;
+      assert.ok(events.slice(after + 1, end).some((event) => event.kind === "sync" && event.path === directory), message);
+    };
+    const assertTargetMutations = (events, files, label) => {
+      const targetFor = (event) => files.find((file) => event.from === file || event.to === file || event.from?.startsWith(`${file}.`) || event.to?.startsWith(`${file}.`) || event.path === file || event.path?.startsWith(`${file}.`));
+      for (const [index, event] of events.entries()) if (["rename", "link", "unlink"].includes(event.kind) && targetFor(event)) {
+        const file = targetFor(event);
+        assertSyncBeforeNextMutation(events, path.dirname(file), index, `${label}: target namespace mutation must be durable before the next mutation: ${file}`);
+      }
+    };
+
+    const home = path.join(temp, "success");
+    const success = seededRegistries(home);
+    const journal = registryJournal(home);
+    const successEvents = trace(home, "success");
+    assertTargetMutations(successEvents, success.files, "success");
+    const journalPublication = successEvents.findIndex((event) => event.kind === "rename" && event.to === journal && event.from.startsWith(`${journal}.pending-`));
+    const firstTargetMove = successEvents.findIndex((event) => event.kind === "rename" && success.files.some((file) => event.from === file && event.to.startsWith(`${file}.backup-`)));
+    assert.ok(journalPublication >= 0 && firstTargetMove > journalPublication, "canonical journal must publish before the first target move");
+    assertSyncBeforeNextMutation(successEvents, success.claude, journalPublication, "journal parent must be durable before the first target move");
+    const receiptPublication = successEvents.findIndex((event) => event.kind === "rename" && event.to === path.join(journal, "receipt.json"));
+    assert.ok(receiptPublication >= 0, "receipt must be published");
+    assertSyncBeforeNextMutation(successEvents, journal, receiptPublication, "receipt publication must be durable before terminal cleanup");
+
+    const rollbackHome = path.join(temp, "rollback");
+    const rollback = seededRegistries(rollbackHome);
+    assert.notEqual(runRegistry(rollbackHome, { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${crashAfterRegistrationBackupPreload(temp, 1)}`].filter(Boolean).join(" ") }).status, 0);
+    const rollbackEvents = trace(rollbackHome, "rollback");
+    assertTargetMutations(rollbackEvents, rollback.files, "rollback");
+    const restored = rollbackEvents.findIndex((event) => event.kind === "rename" && event.from.startsWith(`${rollback.files[0]}.backup-`) && event.to === rollback.files[0]);
+    const rollbackManifestRemoval = rollbackEvents.findIndex((event) => event.kind === "unlink" && event.path === path.join(registryJournal(rollbackHome), "manifest.json"));
+    const rollbackRecordRemoval = rollbackEvents.findIndex((event) => event.kind === "rmdir" && event.path === registryJournal(rollbackHome));
+    assert.ok(restored >= 0 && rollbackManifestRemoval > restored && rollbackRecordRemoval > rollbackManifestRemoval, "rollback must restore the backup before deleting its recovery record");
+    assert.ok(rollbackEvents.slice(0, restored).some((event) => event.kind === "sync" && event.path === rollback.claude), "pre-existing rollback journal parent must be durable before recovery mutation");
+    assertSyncBeforeNextMutation(rollbackEvents, path.dirname(rollback.files[0]), restored, "rollback restore must be durable before recovery record removal");
+    assertSyncBeforeNextMutation(rollbackEvents, registryJournal(rollbackHome), rollbackManifestRemoval, "rollback manifest removal must be durable before recovery record removal");
+    assertSyncBeforeNextMutation(rollbackEvents, rollback.claude, rollbackRecordRemoval, "rollback recovery record removal must be durable before the next transaction");
+
+    const terminalHome = path.join(temp, "terminal");
+    const terminal = seededRegistries(terminalHome);
+    assert.notEqual(runRegistry(terminalHome, { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${terminalJournalCrashPreload(temp, "terminal-receipt")}`].filter(Boolean).join(" ") }).status, 0);
+    const terminalEvents = trace(terminalHome, "terminal");
+    assertTargetMutations(terminalEvents, terminal.files, "terminal");
+    const terminalManifestRemoval = terminalEvents.findIndex((event) => event.kind === "unlink" && event.path.startsWith(`${registryJournal(terminalHome)}.terminal-`) && path.basename(event.path) === "manifest.json");
+    assert.ok(terminalManifestRemoval >= 0, "manifest-only terminal recovery must remove its manifest");
+    assert.ok(terminalEvents.slice(0, terminalManifestRemoval).some((event) => event.kind === "sync" && event.path === terminal.claude), "pre-existing terminal journal parent must be durable before recovery mutation");
+    for (const file of terminal.files) assert.ok(
+      terminalEvents.slice(0, terminalManifestRemoval).some((event) => event.kind === "sync" && event.path === path.dirname(file)),
+      `terminal recovery must durably retain ${file} before journal cleanup`,
+    );
+    const terminalMarkerRemoval = terminalEvents.findIndex((event) => event.kind === "rmdir" && event.path.startsWith(`${registryJournal(terminalHome)}.terminal-`));
+    assert.ok(terminalMarkerRemoval > terminalManifestRemoval, "manifest-only terminal recovery must remove the terminal marker");
+    assertSyncBeforeNextMutation(terminalEvents, path.dirname(terminalEvents[terminalManifestRemoval].path), terminalManifestRemoval, "terminal manifest removal must be durable before marker removal");
+    assertSyncBeforeNextMutation(terminalEvents, terminal.claude, terminalMarkerRemoval, "terminal marker removal must be durable before the next transaction");
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+
 test("registry transaction leaves a foreign interrupted target and journal untouched", () => {
   const temp = temporaryDirectory();
   try {
@@ -828,6 +1256,18 @@ test("registry transaction tolerates cooperative released double cleanup", () =>
   try {
     const home = path.join(temp, "home");
     const preload = releasedMarkerDoubleCleanupPreload(temp);
+    const result = runRegistry(home, { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" ") });
+    assert.equal(result.status, 0, registryError(result));
+    assert.deepEqual(registryArguments(home).slice(0, 3).map((file) => fs.existsSync(file)), [true, true, true]);
+    assert.equal(fs.readdirSync(path.join(home, ".claude")).filter((name) => name.includes(".released-")).length, 0);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("registry transaction tolerates released marker lstat-to-readdir disappearance", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const preload = releasedMarkerLstatToReaddirRemovalPreload(temp);
     const result = runRegistry(home, { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" ") });
     assert.equal(result.status, 0, registryError(result));
     assert.deepEqual(registryArguments(home).slice(0, 3).map((file) => fs.existsSync(file)), [true, true, true]);

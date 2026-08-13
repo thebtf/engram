@@ -227,6 +227,179 @@ test('async Git identity returns null when Git executable is missing', async (t)
  assert.equal(await lib.getGitRemoteIDAsync(process.cwd()), null);
 });
 
+function nonGitIdentityError() {
+ return Object.assign(new Error('not a git repository'), { stderr: 'fatal: not a git repository' });
+}
+
+function stubNonGitIdentity(t) {
+ const childProcess = require('node:child_process');
+ const originalExecFile = childProcess.execFile;
+ childProcess.execFile = (_file, _args, _options, callback) => {
+  callback(nonGitIdentityError(), '', 'fatal: not a git repository');
+  return { kill() { } };
+ };
+ t.after(() => { childProcess.execFile = originalExecFile; });
+}
+
+function writeProjectAnchor(directory, anchor = '00112233445566778899aabbccddeeff') {
+ fs.writeFileSync(path.join(directory, '.engram-project-v2.json'), `${JSON.stringify({
+  version: 2,
+  anchor,
+  shared: false,
+ }, null, 2)}\n`, { mode: 0o600 });
+ return anchor;
+}
+
+test('resolveHookProjectIdentityV2 resolves an existing non-Git anchor asynchronously', async (t) => {
+ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-anchor-'));
+ t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+ const anchor = writeProjectAnchor(directory);
+ stubNonGitIdentity(t);
+ const fsPromises = require('node:fs/promises');
+ const originalReadFile = fsPromises.readFile;
+ const originalReadFileSync = fs.readFileSync;
+ let asyncRead = false;
+ fsPromises.readFile = async (...args) => {
+  asyncRead = true;
+  return originalReadFile(...args);
+ };
+ fs.readFileSync = () => { throw new Error('synchronous anchor read'); };
+ t.after(() => {
+  fsPromises.readFile = originalReadFile;
+  fs.readFileSync = originalReadFileSync;
+ });
+
+ const identity = await lib.resolveHookProjectIdentityV2(directory);
+ assert.equal(identity.non_git_anchor, anchor);
+ assert.equal(identity.anchor_shared, false);
+ assert.equal(asyncRead, true);
+});
+
+test('resolveHookProjectIdentityV2 aborts promptly during a pending non-Git anchor read', async (t) => {
+ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-anchor-'));
+ t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+ stubNonGitIdentity(t);
+ const fsPromises = require('node:fs/promises');
+ const originalReadFile = fsPromises.readFile;
+ let resolveRead;
+ let started;
+ const readStarted = new Promise((resolve) => { started = resolve; });
+ fsPromises.readFile = () => {
+  started();
+  return new Promise((resolve) => { resolveRead = resolve; });
+ };
+ t.after(() => fsPromises.readFile = originalReadFile);
+
+ const controller = new AbortController();
+ const pending = lib.resolveHookProjectIdentityV2(directory, { signal: controller.signal });
+ await readStarted;
+ controller.abort();
+ let timeout;
+ try {
+  await assert.rejects(Promise.race([
+   pending,
+   new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('anchor read abort did not reject promptly')), 100); }),
+  ]), (error) => error && error.name === 'AbortError');
+ } finally {
+  clearTimeout(timeout);
+ }
+ resolveRead('{"version":2,"anchor":"00112233445566778899aabbccddeeff","shared":false}\n');
+});
+
+test('resolveHookProjectIdentityV2 publishes one first-use non-Git anchor and cleans owned temps', async (t) => {
+ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-anchor-'));
+ t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+ stubNonGitIdentity(t);
+
+ const [first, second] = await Promise.all([
+  lib.resolveHookProjectIdentityV2(directory),
+  lib.resolveHookProjectIdentityV2(directory),
+ ]);
+ const anchorPath = path.join(directory, '.engram-project-v2.json');
+ assert.equal(first.non_git_anchor, second.non_git_anchor);
+ assert.equal(first.anchor_shared, false);
+ assert.equal(second.anchor_shared, false);
+ assert.match(first.non_git_anchor, /^[0-9a-f]{32}$/);
+ assert.equal(fs.statSync(anchorPath).nlink, 1);
+ assert.deepEqual(fs.readdirSync(directory).filter((entry) => entry.includes('.engram-project-v2.json.tmp-')), []);
+});
+
+test('resolveHookProjectIdentityV2 aborts a stalled first-use publication and cleans its temp', async (t) => {
+ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-anchor-'));
+ t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+ stubNonGitIdentity(t);
+ const fsPromises = require('node:fs/promises');
+ const originalLink = fsPromises.link;
+ const originalUnlink = fsPromises.unlink;
+ let releaseLink;
+ let linkStarted;
+ let cleanupFinished;
+ const publicationStarted = new Promise((resolve) => { linkStarted = resolve; });
+ const cleanupComplete = new Promise((resolve) => { cleanupFinished = resolve; });
+ const publicationReleased = new Promise((resolve) => { releaseLink = resolve; });
+ fsPromises.link = async (tempPath) => {
+  assert.equal(fs.existsSync(tempPath), true);
+  linkStarted();
+  await publicationReleased;
+  throw Object.assign(new Error('late publication cancelled'), { name: 'AbortError' });
+ };
+ fsPromises.unlink = async (tempPath) => {
+  try {
+   return await originalUnlink(tempPath);
+  } finally {
+   if (tempPath.includes('.engram-project-v2.json.tmp-')) cleanupFinished();
+  }
+ };
+ t.after(() => {
+  fsPromises.link = originalLink;
+  fsPromises.unlink = originalUnlink;
+ });
+ let unhandled;
+ const onUnhandledRejection = (error) => { unhandled = error; };
+ process.on('unhandledRejection', onUnhandledRejection);
+ t.after(() => process.off('unhandledRejection', onUnhandledRejection));
+
+ const controller = new AbortController();
+ const pending = lib.resolveHookProjectIdentityV2(directory, { signal: controller.signal });
+ await publicationStarted;
+ controller.abort();
+ let timeout;
+ try {
+  await assert.rejects(Promise.race([
+   pending,
+   new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('anchor publication abort did not reject promptly')), 100); }),
+  ]), (error) => error && error.name === 'AbortError');
+ } finally {
+  clearTimeout(timeout);
+ }
+ releaseLink();
+ await cleanupComplete;
+ assert.deepEqual(fs.readdirSync(directory).filter((entry) => entry.includes('.engram-project-v2.json.tmp-')), []);
+ assert.equal(unhandled, undefined);
+});
+
+test('resolveHookProjectIdentityV2 retains a valid winner after publication EEXIST', async (t) => {
+ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-anchor-'));
+ t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+ stubNonGitIdentity(t);
+ const anchorPath = path.join(directory, '.engram-project-v2.json');
+ const winner = '0123456789abcdef0123456789abcdef';
+ const winnerBytes = `${JSON.stringify({ version: 2, anchor: winner, shared: false }, null, 2)}\n`;
+ const fsPromises = require('node:fs/promises');
+ const originalLink = fsPromises.link;
+ fsPromises.link = async () => {
+  fs.writeFileSync(anchorPath, winnerBytes, { mode: 0o600 });
+  throw Object.assign(new Error('winner published'), { code: 'EEXIST' });
+ };
+ t.after(() => { fsPromises.link = originalLink; });
+
+ const identity = await lib.resolveHookProjectIdentityV2(directory);
+ assert.equal(identity.non_git_anchor, winner);
+ assert.equal(identity.anchor_shared, false);
+ assert.equal(fs.readFileSync(anchorPath, 'utf8'), winnerBytes);
+ assert.deepEqual(fs.readdirSync(directory).filter((entry) => entry.includes('.engram-project-v2.json.tmp-')), []);
+});
+
 // Quiet mode (ENGRAM_QUIET) — global injection kill-switch through RunHook.
 // Driven via a child process because the guard lives in RunHook before the
 // handler, ahead of any stdin parsing or server call.

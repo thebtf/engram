@@ -12,6 +12,7 @@ assertSupportedNodeVersion();
 
 const crypto = require('crypto');
 const fs = require('fs');
+const fsPromises = require('node:fs/promises');
 const os = require('os');
 const path = require('path');
 
@@ -345,6 +346,26 @@ function throwIfAborted(signal) {
  if (signal?.aborted) throw abortError();
 }
 
+function awaitAbortable(signal, operation) {
+ if (!signal) return operation;
+ throwIfAborted(signal);
+ return new Promise((resolve, reject) => {
+  let settled = false;
+  const finish = (callback, value) => {
+   if (settled) return;
+   settled = true;
+   signal.removeEventListener('abort', onAbort);
+   callback(value);
+  };
+  const onAbort = () => finish(reject, abortError());
+  signal.addEventListener('abort', onAbort, { once: true });
+  operation.then(
+   (value) => signal.aborted ? finish(reject, abortError()) : finish(resolve, value),
+   (error) => finish(reject, signal.aborted ? abortError() : error),
+  );
+ });
+}
+
 function execGitFile(args, cwd, options = {}) {
  throwIfAborted(options.signal);
  const { execFile } = require('node:child_process');
@@ -601,6 +622,80 @@ function publishProjectAnchorV2(anchorPath, payload) {
  return true;
 }
 
+async function readOrCreateProjectAnchorV2Async(cwd, options = {}) {
+ const anchorPath = path.join(path.resolve(cwd || ''), PROJECT_IDENTITY_V2_FILE);
+ for (; ;) {
+  throwIfAborted(options.signal);
+  try {
+   const data = await fsPromises.readFile(anchorPath, { encoding: 'utf8', signal: options.signal });
+   throwIfAborted(options.signal);
+   return decodeProjectAnchorV2(data);
+  } catch (error) {
+   if (error?.name === 'AbortError' || options.signal?.aborted) throw abortError();
+   if (error?.code !== 'ENOENT') throw error;
+  }
+
+  throwIfAborted(options.signal);
+  const anchor = {
+   version: PROJECT_IDENTITY_VERSION_V2,
+   anchor: crypto.randomBytes(16).toString('hex'),
+   shared: false,
+  };
+  const payload = `${JSON.stringify(anchor, null, 2)}\n`;
+  decodeProjectAnchorV2(payload);
+  throwIfAborted(options.signal);
+  if (await publishProjectAnchorV2Async(anchorPath, payload, options)) return anchor;
+ }
+}
+
+async function publishProjectAnchorV2Async(anchorPath, payload, options = {}) {
+ const tempPath = `${anchorPath}.tmp-${process.pid}-${crypto.randomBytes(16).toString('hex')}`;
+ let fileHandle;
+ let phase = 'create';
+ let primaryError;
+ try {
+  throwIfAborted(options.signal);
+  fileHandle = await fsPromises.open(tempPath, 'wx', 0o600);
+  throwIfAborted(options.signal);
+  phase = 'write';
+  await fileHandle.writeFile(payload, 'utf8');
+  throwIfAborted(options.signal);
+  phase = 'sync';
+  await fileHandle.sync();
+  throwIfAborted(options.signal);
+  phase = 'close';
+  await fileHandle.close();
+  fileHandle = undefined;
+  throwIfAborted(options.signal);
+  phase = 'publish';
+  // Hard-link publication is atomic and refuses to replace an existing name.
+  await fsPromises.link(tempPath, anchorPath);
+  throwIfAborted(options.signal);
+ } catch (error) {
+  primaryError = error;
+ }
+
+ if (fileHandle === undefined && phase === 'create' && primaryError) {
+  throw primaryError;
+ }
+ let closeError;
+ if (fileHandle !== undefined) {
+  try { await fileHandle.close(); } catch (error) { closeError = error; }
+ }
+ let cleanupError;
+ try { await fsPromises.unlink(tempPath); } catch (error) {
+  if (!error || error.code !== 'ENOENT') cleanupError = error;
+ }
+ if (cleanupError) throw projectAnchorPublicationError(primaryError, closeError, cleanupError);
+ if (primaryError) {
+  if (primaryError?.name === 'AbortError' || options.signal?.aborted) throw abortError();
+  if (phase === 'publish' && primaryError.code === 'EEXIST' && !closeError) return false;
+  throw projectAnchorPublicationError(primaryError, closeError);
+ }
+ if (closeError) throw projectAnchorPublicationError(closeError);
+ return true;
+}
+
 function projectAnchorPublicationError(...errors) {
  const present = errors.filter(Boolean);
  if (present.length === 1) return present[0];
@@ -640,7 +735,7 @@ async function resolveHookProjectIdentityV2(cwd, options = {}) {
  };
  if (!git) {
   throwIfAborted(options.signal);
-  const anchor = readOrCreateProjectAnchorV2(resolved);
+  const anchor = await awaitAbortable(options.signal, readOrCreateProjectAnchorV2Async(resolved, options));
   base.non_git_anchor = anchor.anchor;
   base.anchor_shared = anchor.shared;
  }
