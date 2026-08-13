@@ -169,6 +169,44 @@ test('buildSessionStartContext keeps quoted records and enclosing tags complete 
   assert.doesNotMatch(result, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
 });
 
+test('buildSessionStartContext bounds an oversized string issue ID', () => {
+  const maxLength = 12000;
+  const id = `issue-${'x'.repeat(maxLength * 3)}`;
+  const result = buildSessionStartContext(buildCachedSessionStartPayload({
+    issues: [{ id, status: 'open', title: 'Bounded issue ID', created_at: '2026-04-22T12:00:00Z' }],
+  }), 'engram', { maxLength });
+
+  assert.ok(result.length > 0 && result.length <= maxLength);
+  assert.match(result, /<open-issues\b[^>]*>/);
+  assert.match(result, /<\/open-issues>\n$/);
+  assert.match(result, /#issue-x+/);
+  assert.equal(result.includes(id), false);
+});
+
+test('buildSessionStartContext bounds an oversized string issue comment count', () => {
+  const maxLength = 12000;
+  const commentCount = '9'.repeat(maxLength * 3);
+  const result = buildSessionStartContext(buildCachedSessionStartPayload({
+    issues: [{ id: 1, status: 'open', comment_count: commentCount, title: 'Bounded issue comments', created_at: '2026-04-22T12:00:00Z', updated_at: '2026-04-22T12:00:00Z' }],
+  }), 'engram', { maxLength });
+
+  assert.ok(result.length > 0 && result.length <= maxLength);
+  assert.match(result, /<open-issues\b[^>]*>/);
+  assert.match(result, /<\/open-issues>\n$/);
+  assert.match(result, /#1 \[TASK\]/);
+  assert.match(result, /└─ 9+ comment\(s\), updated/);
+  assert.equal(result.includes(commentCount), false);
+});
+
+test('buildSessionStartContext retains numeric issue scalars exactly', () => {
+  const result = buildSessionStartContext(buildCachedSessionStartPayload({
+    issues: [{ id: 42, status: 'open', comment_count: 7, title: 'Numeric issue scalars', created_at: '2026-04-22T12:00:00Z', updated_at: '2026-04-22T12:00:00Z' }],
+  }), 'engram', { maxLength: 12000 });
+
+  assert.match(result, /#42 \[TASK\] \[MEDIUM\] \[from: unknown\] title="Numeric issue scalars"/);
+  assert.match(result, /└─ 7 comment\(s\), updated/);
+});
+
 test('buildSessionStartContext preserves exact output for a payload within the extension limit', () => {
   const payload = buildCachedSessionStartPayload({
     issues: [{

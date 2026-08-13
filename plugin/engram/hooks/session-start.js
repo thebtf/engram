@@ -203,15 +203,15 @@ function takeBoundedRecords(records, state, copyRecord) {
 function copyBoundedIssue(issue, stringState) {
   if (!issue || typeof issue !== 'object') return issue;
   return {
-    id: issue.id,
+    id: typeof issue.id === 'string' ? takeBoundedString(issue.id, stringState) : issue.id,
     status: takeBoundedString(issue.status, stringState),
     priority: takeBoundedString(issue.priority, stringState),
     type: takeBoundedString(issue.type, stringState),
     source_project: takeBoundedString(issue.source_project, stringState),
-    comment_count: issue.comment_count,
+    updated_at: takeBoundedString(issue.updated_at, stringState),
+    comment_count: typeof issue.comment_count === 'string' ? takeBoundedString(issue.comment_count, stringState) : issue.comment_count,
     title: takeBoundedString(issue.title, stringState),
     created_at: takeBoundedString(issue.created_at, stringState),
-    updated_at: takeBoundedString(issue.updated_at, stringState),
     acknowledged_at: takeBoundedString(issue.acknowledged_at, stringState),
   };
 }

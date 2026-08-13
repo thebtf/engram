@@ -352,9 +352,9 @@ func TestWriteMuxcoreDaemonVersionMarkerPublishesBidirectionalMarkers(t *testing
 }
 
 func TestWriteMuxcoreDaemonVersionMarkerWaitsForPredecessorLock(t *testing.T) {
-	oldStatus, oldExe, oldLock, oldContended, oldTimeout := readMuxcoreDaemonStatusIdentity, currentExecutable, acquireRestartLock, isRestartLockContended, muxcoreMarkerPublicationTimeout
+	oldStatus, oldExe, oldLock, oldContended := readMuxcoreDaemonStatusIdentity, currentExecutable, acquireRestartLock, isRestartLockContended
 	t.Cleanup(func() {
-		readMuxcoreDaemonStatusIdentity, currentExecutable, acquireRestartLock, isRestartLockContended, muxcoreMarkerPublicationTimeout = oldStatus, oldExe, oldLock, oldContended, oldTimeout
+		readMuxcoreDaemonStatusIdentity, currentExecutable, acquireRestartLock, isRestartLockContended = oldStatus, oldExe, oldLock, oldContended
 	})
 	dir := t.TempDir()
 	ambientLockPath := serverid.DaemonLockPath("", muxcoreNamespace)
@@ -370,7 +370,6 @@ func TestWriteMuxcoreDaemonVersionMarkerWaitsForPredecessorLock(t *testing.T) {
 		t.Fatalf("isolated muxcore lock path = %q, ambient path = %q", lockPath, ambientLockPath)
 	}
 	readyCtx, cancelReady := context.WithTimeout(context.Background(), time.Second)
-	defer cancelReady()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestMuxcoreDaemonLockHolderProcess$", "-test.v=false")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -423,15 +422,13 @@ func TestWriteMuxcoreDaemonVersionMarkerWaitsForPredecessorLock(t *testing.T) {
 		ready := <-readyCh
 		t.Fatalf("lock holder readiness timed out: %v; kill = %v; release = %v; read = %q, %v", readyCtx.Err(), killErr, releaseErr, ready.line, ready.err)
 	}
-	muxcoreMarkerPublicationTimeout = time.Second
+	cancelReady()
 
 	markerPath := filepath.Join(dir, "daemon.marker.json")
 	successorExe := filepath.Join(dir, "engram.exe")
 	live := muxcoreDaemonStatusIdentity{PID: os.Getpid(), DaemonGeneration: "successor"}
 	readMuxcoreDaemonStatusIdentity = func(string) (muxcoreDaemonStatusIdentity, bool) { return live, true }
 	currentExecutable = func() (string, error) { return successorExe, nil }
-	ctx, cancel := context.WithTimeout(context.Background(), muxcoreMarkerPublicationTimeout)
-	defer cancel()
 	contended := make(chan struct{})
 	originalAcquire := acquireRestartLock
 	acquireRestartLock = func() (io.Closer, error) {
@@ -449,19 +446,14 @@ func TestWriteMuxcoreDaemonVersionMarkerWaitsForPredecessorLock(t *testing.T) {
 	go func() { published <- writeMuxcoreDaemonVersionMarkerAt(markerPath) }()
 	select {
 	case <-contended:
-	case <-ctx.Done():
-		t.Fatal("successor did not attempt the real shared lock")
+	case err := <-published:
+		t.Fatalf("successor marker publication terminated before predecessor contention was observed: %v", err)
 	}
 	if err := release(); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case err := <-published:
-		if err != nil {
-			t.Fatalf("successor marker publication did not wait for predecessor lock: %v", err)
-		}
-	case <-ctx.Done():
-		t.Fatal("successor marker publication exceeded its bounded wait")
+	if err := <-published; err != nil {
+		t.Fatalf("successor marker publication did not wait for predecessor lock: %v", err)
 	}
 
 	marker, err := readMuxcoreDaemonVersionMarker(markerPath)
