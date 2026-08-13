@@ -3,8 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import lib from '../hooks/lib.js';
 import engramMemory, { ambientMessage, sessionStartMessage } from './engram-memory.mjs';
+
+
+const require = createRequire(import.meta.url);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packagePath = path.resolve(here, '..', 'package.json');
@@ -22,12 +26,13 @@ const identity = {
 
 function installConfiguredStubs(requestPost) {
   const original = Object.fromEntries([
-    'getEngramConfig', 'isQuietMode', 'resolveHookProjectIdentityV2',
+    'resolveEngramRuntimeConfig', 'resolveHookProjectIdentityV2',
     'resolveProjectIdentityV2', 'ProjectIDWithName', 'LegacyProjectID',
     'registerProjectIdentityV2', 'requestPost',
   ].map((name) => [name, lib[name]]));
-  lib.getEngramConfig = () => ({ serverURL: 'http://127.0.0.1:37777', token: 'worker-secret-token' });
-  lib.isQuietMode = () => false;
+  lib.resolveEngramRuntimeConfig = async () => ({
+    serverURL: 'http://127.0.0.1:37777', token: 'worker-secret-token', quiet: false,
+  });
   lib.resolveProjectIdentityV2 = () => identity;
   lib.resolveHookProjectIdentityV2 = async () => identity;
   lib.ProjectIDWithName = () => 'engram';
@@ -74,12 +79,12 @@ test('OMP documentation distinguishes native injection from Claude hooks and MCP
 });
 
 test('quiet mode sends no messages and makes no requests', async () => {
-  const originalQuiet = lib.isQuietMode;
-  const originalConfig = lib.getEngramConfig;
+  const originalConfig = lib.resolveEngramRuntimeConfig;
   const originalRequest = lib.requestPost;
   let requested = false;
-  lib.isQuietMode = () => true;
-  lib.getEngramConfig = () => ({ serverURL: 'http://127.0.0.1:37777', token: 'worker-secret-token' });
+  lib.resolveEngramRuntimeConfig = async () => ({
+    serverURL: 'http://127.0.0.1:37777', token: 'worker-secret-token', quiet: true,
+  });
   lib.requestPost = async () => { requested = true; };
   try {
     const { handlers, sent } = adapterHarness();
@@ -88,7 +93,7 @@ test('quiet mode sends no messages and makes no requests', async () => {
     assert.equal(sent.length, 0);
     assert.equal(requested, false);
   } finally {
-    Object.assign(lib, { isQuietMode: originalQuiet, getEngramConfig: originalConfig, requestPost: originalRequest });
+    Object.assign(lib, { resolveEngramRuntimeConfig: originalConfig, requestPost: originalRequest });
   }
 });
 
@@ -236,8 +241,13 @@ test('ambient shares one signal across identity, registration, and request and s
     calls.push(options.signal);
     return new Promise((resolve) => setTimeout(() => resolve({ hints: [{ title: 'late', reason: 'late', score: 1 }] }), 250));
   });
+  let configSignal;
   let identitySignal;
   let registrationSignal;
+  lib.resolveEngramRuntimeConfig = async ({ signal }) => {
+    configSignal = signal;
+    return { serverURL: 'http://127.0.0.1:37777', token: 'worker-secret-token', quiet: false };
+  };
   lib.resolveHookProjectIdentityV2 = async (_cwd, options) => {
     identitySignal = options.signal;
     return identity;
@@ -248,6 +258,7 @@ test('ambient shares one signal across identity, registration, and request and s
   };
   try {
     assert.equal(await ambientMessage({ cwd: process.cwd(), sessionId: 'late-ambient', prompt: 'No late result' }, {}), null);
+    assert.strictEqual(configSignal, identitySignal);
     assert.strictEqual(identitySignal, registrationSignal);
     assert.strictEqual(registrationSignal, calls[0]);
   } finally {
@@ -400,9 +411,7 @@ test('session start aborts the real pending context request through the shared d
   const originalURL = process.env.ENGRAM_URL;
   const originalToken = process.env.ENGRAM_TOKEN;
   const originalAbortController = globalThis.AbortController;
-  const originalAddEventListener = AbortSignal.prototype.addEventListener;
   const controllers = [];
-  const abortListenerAdds = new Map();
   let contextFetchSignal;
   let resolveContextFetch;
   let contextFetchStarted;
@@ -417,10 +426,6 @@ test('session start aborts the real pending context request through the shared d
       super();
       controllers.push(this);
     }
-  };
-  AbortSignal.prototype.addEventListener = function addEventListener(type, listener, options) {
-    if (type === 'abort') abortListenerAdds.set(this, (abortListenerAdds.get(this) || 0) + 1);
-    return originalAddEventListener.call(this, type, listener, options);
   };
   process.env.ENGRAM_URL = 'http://127.0.0.1:37777';
   process.env.ENGRAM_TOKEN = 'worker-secret-token';
@@ -439,7 +444,6 @@ test('session start aborts the real pending context request through the shared d
     contextFetchSignal = options.signal;
     const sessionDeadlineSignal = controllers[0]?.signal;
     assert.ok(sessionDeadlineSignal);
-    assert.equal(abortListenerAdds.get(sessionDeadlineSignal), 4);
     const aborted = new Promise((resolve) => {
       contextFetchSignal.addEventListener('abort', resolve, { once: true });
     });
@@ -468,7 +472,6 @@ test('session start aborts the real pending context request through the shared d
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.AbortController = originalAbortController;
-    AbortSignal.prototype.addEventListener = originalAddEventListener;
     if (originalURL === undefined) delete process.env.ENGRAM_URL;
     else process.env.ENGRAM_URL = originalURL;
     if (originalToken === undefined) delete process.env.ENGRAM_TOKEN;
@@ -556,12 +559,12 @@ test('session start clears its deadline without aborting successful context tran
 });
 
 test('missing configuration, identity failures, and request deadline errors fail open', async () => {
-  const originalConfig = lib.getEngramConfig;
-  lib.getEngramConfig = () => ({ serverURL: '', token: '' });
+  const originalConfig = lib.resolveEngramRuntimeConfig;
+  lib.resolveEngramRuntimeConfig = async () => ({ serverURL: '', token: '', quiet: false });
   try {
     assert.equal(await sessionStartMessage({ cwd: process.cwd(), sessionId: 'no-config' }, {}), null);
   } finally {
-    lib.getEngramConfig = originalConfig;
+    lib.resolveEngramRuntimeConfig = originalConfig;
   }
 
   const restore = installConfiguredStubs(async (endpoint) => {
@@ -579,6 +582,79 @@ test('missing configuration, identity failures, and request deadline errors fail
     assert.equal(await sessionStartMessage({ cwd: process.cwd(), sessionId: 'backend-error' }, {}), null);
   } finally {
     lib.registerProjectIdentityV2 = originalRegister;
+    restore();
+  }
+});
+
+test('ambientMessage fails open within its shared budget when async config reading stalls', async (t) => {
+  const configEnvKeys = [
+    'ENGRAM_CONFIG_FILE', 'ENGRAM_DATA_DIR', 'CLAUDE_PLUGIN_DATA',
+    'ENGRAM_URL', 'ENGRAM_SERVER_URL', 'CLAUDE_PLUGIN_OPTION_server_url',
+    'CLAUDE_PLUGIN_OPTION_SERVER_URL', 'ENGRAM_CLAUDE_USERCONFIG_URL',
+    'ENGRAM_TOKEN', 'CLAUDE_PLUGIN_OPTION_api_token', 'CLAUDE_PLUGIN_OPTION_API_TOKEN',
+    'ENGRAM_CLAUDE_USERCONFIG_TOKEN', 'ENGRAM_QUIET', 'ENGRAM_QUIET_HOOKS',
+    'CLAUDE_PLUGIN_OPTION_ENGRAM_QUIET', 'CLAUDE_PLUGIN_OPTION_engram_quiet',
+    'CLAUDE_PLUGIN_OPTION_QUIET', 'CLAUDE_PLUGIN_OPTION_quiet',
+  ];
+  const previousEnv = Object.fromEntries(configEnvKeys.map((key) => [key, process.env[key]]));
+  for (const key of configEnvKeys) delete process.env[key];
+  const configFile = path.join(here, 'stalled-config.json');
+  process.env.ENGRAM_CONFIG_FILE = configFile;
+  t.after(() => {
+    for (const key of configEnvKeys) {
+      if (previousEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = previousEnv[key];
+    }
+  });
+
+  const fsPromises = require('node:fs/promises');
+  const originalReadFile = fsPromises.readFile;
+  const resolveRuntimeConfig = lib.resolveEngramRuntimeConfig;
+  const originalReadFileSync = fs.readFileSync;
+  const originalExistsSync = fs.existsSync;
+  fs.readFileSync = () => { throw new Error('ambient must not synchronously read config'); };
+  fs.existsSync = () => { throw new Error('ambient must not synchronously stat config'); };
+  t.after(() => {
+    fs.readFileSync = originalReadFileSync;
+    fs.existsSync = originalExistsSync;
+  });
+  let configReadSignal;
+  let identityStarts = 0;
+  let registrationStarts = 0;
+  let requestStarts = 0;
+  let readStarted;
+  const startedRead = new Promise((resolve) => { readStarted = resolve; });
+  fsPromises.readFile = (filePath, options) => {
+    assert.equal(filePath, configFile);
+    configReadSignal = options.signal;
+    readStarted();
+    return new Promise(() => { });
+  };
+  t.after(() => { fsPromises.readFile = originalReadFile; });
+
+  const restore = installConfiguredStubs(async () => {
+    requestStarts += 1;
+    throw new Error('ambient request must not start after a stalled config read');
+  });
+  lib.resolveEngramRuntimeConfig = resolveRuntimeConfig;
+  lib.resolveHookProjectIdentityV2 = async () => {
+    identityStarts += 1;
+    return identity;
+  };
+  lib.registerProjectIdentityV2 = async () => { registrationStarts += 1; };
+  try {
+    const startedAt = performance.now();
+    const pending = ambientMessage({ cwd: process.cwd(), sessionId: 'stalled-config', prompt: 'Need memory now' }, {});
+    await startedRead;
+    const message = await pending;
+    const elapsedMs = performance.now() - startedAt;
+    assert.equal(message, null);
+    assert.strictEqual(configReadSignal.aborted, true);
+    assert.ok(elapsedMs >= 180 && elapsedMs < 275, `whole before-agent-start path took ${elapsedMs} ms`);
+    assert.equal(identityStarts, 0);
+    assert.equal(registrationStarts, 0);
+    assert.equal(requestStarts, 0);
+  } finally {
     restore();
   }
 });

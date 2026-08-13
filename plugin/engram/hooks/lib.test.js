@@ -417,6 +417,26 @@ const QUIET_ENV_ALIASES = [
  'CLAUDE_PLUGIN_OPTION_quiet',
 ];
 
+const RUNTIME_CONFIG_ENV_KEYS = [
+ 'ENGRAM_CONFIG_FILE', 'ENGRAM_DATA_DIR', 'CLAUDE_PLUGIN_DATA',
+ 'ENGRAM_URL', 'ENGRAM_SERVER_URL', 'CLAUDE_PLUGIN_OPTION_server_url',
+ 'CLAUDE_PLUGIN_OPTION_SERVER_URL', 'ENGRAM_CLAUDE_USERCONFIG_URL',
+ 'ENGRAM_TOKEN', 'CLAUDE_PLUGIN_OPTION_api_token', 'CLAUDE_PLUGIN_OPTION_API_TOKEN',
+ 'ENGRAM_CLAUDE_USERCONFIG_TOKEN', ...QUIET_ENV_ALIASES,
+];
+
+function setRuntimeConfigEnv(t, values) {
+ const previous = Object.fromEntries(RUNTIME_CONFIG_ENV_KEYS.map((key) => [key, process.env[key]]));
+ for (const key of RUNTIME_CONFIG_ENV_KEYS) delete process.env[key];
+ Object.assign(process.env, values);
+ t.after(() => {
+  for (const key of RUNTIME_CONFIG_ENV_KEYS) {
+   if (previous[key] === undefined) delete process.env[key];
+   else process.env[key] = previous[key];
+  }
+ });
+}
+
 function runHookProcess(scriptName, env, input) {
  const baseEnv = { ...process.env };
  for (const k of QUIET_ENV_ALIASES) delete baseEnv[k];
@@ -498,6 +518,116 @@ test('explicit falsey quiet env overrides config-file quiet:true', (t) => {
   ENGRAM_CONFIG_FILE: cfgPath,
   ENGRAM_QUIET: '0',
  }), 'false', 'ENGRAM_QUIET=0 must override config-file quiet:true');
+});
+
+test('resolveEngramRuntimeConfig independently overlays env credentials with one async config read', async (t) => {
+ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-runtime-config-'));
+ const configFile = path.join(dir, 'config.json');
+ fs.writeFileSync(configFile, JSON.stringify({
+  server_url: 'http://config.example.test', api_token: 'config-token', quiet: true,
+ }));
+ t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+ setRuntimeConfigEnv(t, { ENGRAM_CONFIG_FILE: configFile, ENGRAM_URL: 'http://env.example.test' });
+
+ const fsPromises = require('node:fs/promises');
+ const originalReadFile = fsPromises.readFile;
+ let reads = 0;
+ fsPromises.readFile = async (...args) => {
+  reads += 1;
+  return originalReadFile(...args);
+ };
+ t.after(() => { fsPromises.readFile = originalReadFile; });
+
+ assert.deepEqual(await lib.resolveEngramRuntimeConfig(), {
+  serverURL: 'http://env.example.test', token: 'config-token', quiet: true,
+ });
+ assert.equal(reads, 1);
+
+ delete process.env.ENGRAM_URL;
+ process.env.ENGRAM_TOKEN = 'env-token';
+ assert.deepEqual(await lib.resolveEngramRuntimeConfig(), {
+  serverURL: 'http://config.example.test', token: 'env-token', quiet: true,
+ });
+ assert.equal(reads, 2);
+});
+
+test('resolveEngramRuntimeConfig checks the plugin config path asynchronously', async (t) => {
+ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-runtime-plugin-data-'));
+ const configFile = path.join(dir, 'config.json');
+ fs.writeFileSync(configFile, JSON.stringify({ server_url: 'http://plugin.example.test', api_token: 'plugin-token' }));
+ t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+ setRuntimeConfigEnv(t, { ENGRAM_DATA_DIR: dir });
+ const fsPromises = require('node:fs/promises');
+ const originalAccess = fsPromises.access;
+ const originalReadFile = fsPromises.readFile;
+ const originalExistsSync = fs.existsSync;
+ let accesses = 0;
+ let reads = 0;
+ fsPromises.access = async (...args) => {
+  accesses += 1;
+  return originalAccess(...args);
+ };
+ fsPromises.readFile = async (...args) => {
+  reads += 1;
+  return originalReadFile(...args);
+ };
+ fs.existsSync = () => { throw new Error('runtime resolver must not synchronously stat plugin config'); };
+ t.after(() => {
+  fsPromises.access = originalAccess;
+  fsPromises.readFile = originalReadFile;
+  fs.existsSync = originalExistsSync;
+ });
+
+ assert.deepEqual(await lib.resolveEngramRuntimeConfig(), {
+  serverURL: 'http://plugin.example.test', token: 'plugin-token', quiet: false,
+ });
+ assert.equal(accesses, 1);
+ assert.equal(reads, 1);
+});
+
+test('resolveEngramRuntimeConfig honors explicit quiet false over config quiet', async (t) => {
+ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-runtime-quiet-'));
+ const configFile = path.join(dir, 'config.json');
+ fs.writeFileSync(configFile, JSON.stringify({
+  server_url: 'http://config.example.test', api_token: 'config-token', quiet: true,
+ }));
+ t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+ setRuntimeConfigEnv(t, {
+  ENGRAM_CONFIG_FILE: configFile, ENGRAM_URL: 'http://env.example.test', ENGRAM_QUIET: '0',
+ });
+
+ assert.deepEqual(await lib.resolveEngramRuntimeConfig(), {
+  serverURL: 'http://env.example.test', token: 'config-token', quiet: false,
+ });
+});
+
+test('resolveEngramRuntimeConfig fails open for malformed and aborted config reads', async (t) => {
+ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-runtime-fail-open-'));
+ const configFile = path.join(dir, 'config.json');
+ fs.writeFileSync(configFile, '{not-json}');
+ t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+ setRuntimeConfigEnv(t, {
+  ENGRAM_CONFIG_FILE: configFile, ENGRAM_URL: 'http://env.example.test', ENGRAM_TOKEN: 'env-token',
+ });
+
+ assert.deepEqual(await lib.resolveEngramRuntimeConfig(), {
+  serverURL: 'http://env.example.test', token: 'env-token', quiet: false,
+ });
+
+ const fsPromises = require('node:fs/promises');
+ const originalReadFile = fsPromises.readFile;
+ let beginRead;
+ const readStarted = new Promise((resolve) => { beginRead = resolve; });
+ fsPromises.readFile = () => {
+  beginRead();
+  return new Promise(() => { });
+ };
+ t.after(() => { fsPromises.readFile = originalReadFile; });
+ const controller = new AbortController();
+ const pending = lib.resolveEngramRuntimeConfig({ signal: controller.signal });
+ await readStarted;
+ controller.abort();
+ await assert.rejects(pending, (error) => error && error.name === 'AbortError');
 });
 
 test('quiet mode drains a large stdin payload without EPIPE', () => {
