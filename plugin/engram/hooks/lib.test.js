@@ -550,6 +550,39 @@ test('resolveEngramRuntimeConfig independently overlays env credentials with one
  });
  assert.equal(reads, 2);
 });
+test('resolveEngramRuntimeConfig refreshes file credentials without promoting them to env', async (t) => {
+ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-runtime-refresh-'));
+ const configFile = path.join(dir, 'config.json');
+ t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+ setRuntimeConfigEnv(t, { ENGRAM_CONFIG_FILE: configFile });
+
+ fs.writeFileSync(configFile, JSON.stringify({
+  server_url: 'http://first.example.test', api_token: 'first-token',
+ }));
+ assert.deepEqual(await lib.resolveEngramRuntimeConfig(), {
+  serverURL: 'http://first.example.test', token: 'first-token', quiet: false,
+ });
+
+ fs.writeFileSync(configFile, JSON.stringify({
+  server_url: 'http://second.example.test', api_token: 'second-token',
+ }));
+ assert.deepEqual(await lib.resolveEngramRuntimeConfig(), {
+  serverURL: 'http://second.example.test', token: 'second-token', quiet: false,
+ });
+
+ process.env.ENGRAM_URL = 'http://env.example.test';
+ process.env.ENGRAM_TOKEN = 'env-token';
+ assert.deepEqual(await lib.resolveEngramRuntimeConfig(), {
+  serverURL: 'http://env.example.test', token: 'env-token', quiet: false,
+ });
+
+ delete process.env.ENGRAM_URL;
+ delete process.env.ENGRAM_TOKEN;
+ fs.rmSync(configFile);
+ assert.deepEqual(await lib.resolveEngramRuntimeConfig(), {
+  serverURL: '', token: '', quiet: false,
+ });
+});
 
 test('resolveEngramRuntimeConfig checks the plugin config path asynchronously', async (t) => {
  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-runtime-plugin-data-'));
@@ -765,6 +798,27 @@ test('requestPost clears timeout and external abort handling after a successful 
  assert.equal(fetchSignal.aborted, false);
  controller.abort();
  assert.equal(fetchSignal.aborted, false);
+});
+
+test('requestPost uses per-request credentials without promoting them to env', async (t) => {
+ setRuntimeConfigEnv(t, {});
+ const originalFetch = global.fetch;
+ let request;
+ global.fetch = async (url, init) => {
+  request = { url: String(url), headers: init.headers };
+  return { ok: true, text: async () => '{}' };
+ };
+ t.after(() => { global.fetch = originalFetch; });
+
+ await lib.requestPost('/api/context/inject', {}, 10, {
+  serverURL: 'http://runtime.example.test/root',
+  token: 'runtime-token',
+ });
+
+ assert.equal(request.url, 'http://runtime.example.test/api/context/inject');
+ assert.equal(request.headers.Authorization, 'Bearer runtime-token');
+ assert.equal(process.env.ENGRAM_URL, undefined);
+ assert.equal(process.env.ENGRAM_TOKEN, undefined);
 });
 
 test('requestPost removes its relay listener after an aborted request', async (t) => {
