@@ -4,8 +4,25 @@ const os = require('node:os');
 const test = require('node:test');
 const crypto = require('crypto');
 const path = require('path');
+const { execFileSync } = require('node:child_process');
 
 const lib = require('./lib');
+
+test('assertSupportedNodeVersion requires a canonical Node 18+ version', () => {
+ for (const version of ['16.20.2', '17.9.1', '018.0.0', '18.00.00', '18', '18.0', 'node-18.0.0', '18.0.0-beta']) {
+  assert.throws(() => lib.assertSupportedNodeVersion(version), /Engram requires Node 18\+/);
+ }
+ lib.assertSupportedNodeVersion('18.0.0');
+ lib.assertSupportedNodeVersion(process.versions.node);
+});
+
+test('module load enforces the Node version contract', () => {
+ const loadWithVersion = (version) => execFileSync(process.execPath, ['-e', 'Object.defineProperty(process.versions, "node", { value: process.argv[1] }); require(process.argv[2]);', version, path.join(__dirname, 'lib.js')], { encoding: 'utf8', stdio: 'pipe' });
+ for (const version of ['17.9.1', '018.0.0', '18.00.00']) {
+  assert.throws(() => loadWithVersion(version), /Engram requires Node 18\+/);
+ }
+ assert.doesNotThrow(() => loadWithVersion('18.0.0'));
+});
 
 function signalPath(sessionID) {
  const safe = String(sessionID).replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -213,7 +230,6 @@ test('async Git identity returns null when Git executable is missing', async (t)
 // Quiet mode (ENGRAM_QUIET) — global injection kill-switch through RunHook.
 // Driven via a child process because the guard lives in RunHook before the
 // handler, ahead of any stdin parsing or server call.
-const { execFileSync } = require('node:child_process');
 
 // Quiet-mode aliases that must NOT leak from the dev/CI environment into the
 // child, or they would override the per-test values (e.g. an inherited

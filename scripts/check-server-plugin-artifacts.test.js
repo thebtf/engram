@@ -109,6 +109,17 @@ function gate(dist, expectedVersion = version) {
   return command("bash", ["scripts/check-server-plugin-artifacts.sh", "--version", expectedVersion, "--dist", bashPath(dist)]);
 }
 
+test("server-plugin archive gate runs through supported Bash invocation", () => {
+  const fixture = createFixture();
+  try {
+    buildExpectedMatrix(fixture);
+    const accepted = gate(fixture.dist);
+    assert.equal(accepted.status, 0, accepted.stderr || accepted.stdout);
+  } finally {
+    fs.rmSync(fixture.temporary, { recursive: true, force: true });
+  }
+});
+
 test("server-plugin archive gate accepts exactly the canonical three-archive OMP payload matrix", () => {
   const fixture = createFixture();
   const releaseVersion = "v6.47.5";
@@ -186,6 +197,21 @@ test("server-plugin archive gate rejects manifest contract mutation and extensio
     const extensionPathMismatch = gate(fixture.dist);
     assert.notEqual(extensionPathMismatch.status, 0);
     assert.match(`${extensionPathMismatch.stderr}\n${extensionPathMismatch.stdout}`, /manifest does not match the release contract/);
+    manifest.omp.extensions = ["./extensions/engram-memory.mjs"];
+
+    delete manifest.engines;
+    fs.writeFileSync(path.join(fixture.archiveRoot, "package.json"), `${JSON.stringify(manifest)}\n`);
+    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]));
+    const missingEngines = gate(fixture.dist);
+    assert.notEqual(missingEngines.status, 0);
+    assert.match(`${missingEngines.stderr}\n${missingEngines.stdout}`, /manifest does not match the release contract/);
+
+    manifest.engines = { node: ">=20" };
+    fs.writeFileSync(path.join(fixture.archiveRoot, "package.json"), `${JSON.stringify(manifest)}\n`);
+    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]));
+    const wrongEngines = gate(fixture.dist);
+    assert.notEqual(wrongEngines.status, 0);
+    assert.match(`${wrongEngines.stderr}\n${wrongEngines.stdout}`, /manifest does not match the release contract/);
 
     fs.copyFileSync(manifestPath, path.join(fixture.archiveRoot, "package.json"));
     fs.appendFileSync(path.join(fixture.archiveRoot, "extensions", "engram-memory.mjs"), "\n// mutation\n");

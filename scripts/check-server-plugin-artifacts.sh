@@ -28,7 +28,7 @@ const fs = require('node:fs');
 const [manifestPath, version] = process.argv.slice(2);
 let manifest;
 try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { throw new Error('OMP package manifest is not valid JSON'); }
-if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || manifest.version !== version || !manifest.omp || typeof manifest.omp !== 'object' || Array.isArray(manifest.omp) || Object.keys(manifest.omp).length !== 1 || !Array.isArray(manifest.omp.extensions) || manifest.omp.extensions.length !== 1 || manifest.omp.extensions[0] !== './extensions/engram-memory.mjs') {
+if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || manifest.version !== version || !manifest.engines || typeof manifest.engines !== 'object' || Array.isArray(manifest.engines) || Object.keys(manifest.engines).length !== 1 || manifest.engines.node !== '>=18' || !manifest.omp || typeof manifest.omp !== 'object' || Array.isArray(manifest.omp) || Object.keys(manifest.omp).length !== 1 || !Array.isArray(manifest.omp.extensions) || manifest.omp.extensions.length !== 1 || manifest.omp.extensions[0] !== './extensions/engram-memory.mjs') {
   throw new Error('OMP package manifest does not match the release contract');
 }
 NODE

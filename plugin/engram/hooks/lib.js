@@ -1,6 +1,15 @@
 #!/usr/bin/env node
 'use strict';
 
+function assertSupportedNodeVersion(version = process.versions.node) {
+ if (typeof version !== 'string') throw new Error('Engram requires Node 18+');
+ const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(version);
+ const major = match && Number(match[1]);
+ if (!Number.isSafeInteger(major) || major < 18) throw new Error('Engram requires Node 18+');
+}
+
+assertSupportedNodeVersion();
+
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
@@ -1229,6 +1238,7 @@ function _timeAgo(date) {
 }
 
 module.exports = {
+ assertSupportedNodeVersion,
  configuredPluginEnv,
  getEngramConfig,
  getServerURL,

@@ -54,6 +54,7 @@ test('package exposes the native OMP extension at the canonical plugin version',
   const manifest = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
   const canonicalManifest = JSON.parse(fs.readFileSync(canonicalManifestPath, 'utf8'));
   assert.equal(manifest.version, canonicalManifest.version);
+  assert.equal(manifest.engines.node, '>=18');
   assert.deepEqual(manifest.omp.extensions, ['./extensions/engram-memory.mjs']);
   assert.equal(fs.existsSync(extensionPath), true);
   assert.equal(Object.hasOwn(manifest, 'type'), false);
