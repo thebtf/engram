@@ -189,6 +189,161 @@ function waitForFile(file, timeoutMs = 1_000) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
   }
 }
+
+function crashAfterRegistrationBackupPreload(temp, backupNumber) {
+  const preload = path.join(temp, `crash-after-registration-backup-${backupNumber}.cjs`);
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const renameSync = fs.renameSync;
+const backup = /(?:installed_plugins|settings|known_marketplaces)\\.json\\.backup-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
+let moved = 0;
+fs.renameSync = (from, to, ...rest) => {
+  const result = renameSync.call(fs, from, to, ...rest);
+  if (backup.test(String(to)) && ++moved === ${backupNumber}) process.abort();
+  return result;
+};
+`);
+  return preload;
+}
+
+function terminalJournalCrashPreload(temp, point) {
+  const preload = path.join(temp, `crash-terminal-journal-${point}.cjs`);
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const path = require("node:path");
+const renameSync = fs.renameSync;
+const unlinkSync = fs.unlinkSync;
+fs.renameSync = (from, to, ...rest) => {
+  const result = renameSync.call(fs, from, to, ...rest);
+  if (("${point}" === "receipt" && path.basename(String(to)) === "receipt.json") || ("${point}" === "terminal" && String(to).includes(".engram-registry-transaction.recovery.terminal-"))) process.abort();
+  return result;
+};
+fs.unlinkSync = (file, ...rest) => {
+  const result = unlinkSync.call(fs, file, ...rest);
+  if (("${point}" === "terminal-receipt" && path.basename(String(file)) === "receipt.json" && path.basename(path.dirname(String(file))).includes(".terminal-")) || ("${point}" === "terminal-manifest" && path.basename(String(file)) === "manifest.json" && path.basename(path.dirname(String(file))).includes(".terminal-"))) process.abort();
+  return result;
+};
+`);
+  return preload;
+}
+
+function releasedMarkerCrashPreload(temp, point) {
+  const preload = path.join(temp, `crash-released-marker-${point}.cjs`);
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const path = require("node:path");
+const renameSync = fs.renameSync;
+const unlinkSync = fs.unlinkSync;
+fs.renameSync = (from, to, ...rest) => {
+  const result = renameSync.call(fs, from, to, ...rest);
+  if ("${point}" === "released" && String(from).includes(".reclaim-") && String(to).includes(".released-")) process.abort();
+  return result;
+};
+fs.unlinkSync = (file, ...rest) => {
+  const result = unlinkSync.call(fs, file, ...rest);
+  if ("${point}" === "owner" && path.basename(String(file)) === "owner" && path.basename(path.dirname(String(file))).includes(".released-")) process.abort();
+  return result;
+};
+`);
+  return preload;
+}
+function releasedMarkerDoubleCleanupPreload(temp) {
+  const preload = path.join(temp, "released-marker-double-cleanup.cjs");
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const path = require("node:path");
+const unlinkSync = fs.unlinkSync;
+const rmdirSync = fs.rmdirSync;
+let cleaned = false;
+fs.unlinkSync = (file, ...rest) => {
+  if (!cleaned && path.basename(String(file)) === "owner" && path.basename(path.dirname(String(file))).includes(".released-")) {
+    cleaned = true;
+    unlinkSync.call(fs, file, ...rest);
+    rmdirSync.call(fs, path.dirname(String(file)));
+  }
+  return unlinkSync.call(fs, file, ...rest);
+};
+`);
+  return preload;
+}
+
+function reclaimMarkerOwnerUnlinkCrashPreload(temp) {
+  const preload = path.join(temp, "crash-reclaim-marker-owner-unlink.cjs");
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const path = require("node:path");
+const unlinkSync = fs.unlinkSync;
+const lock = path.resolve(process.env.ENGRAM_TEST_REGISTRY_LOCK);
+const reclaimingPrefix = lock + ".reclaiming-";
+fs.unlinkSync = (file, ...rest) => {
+  const result = unlinkSync.call(fs, file, ...rest);
+  if (path.basename(String(file)) === "owner" && path.resolve(path.dirname(String(file))).startsWith(reclaimingPrefix)) process.abort();
+  return result;
+};
+`);
+  return preload;
+}
+function reclaimMarkerRenameCrashPreload(temp) {
+  const preload = path.join(temp, "crash-reclaim-marker-rename.cjs");
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const path = require("node:path");
+const renameSync = fs.renameSync;
+const lock = path.resolve(process.env.ENGRAM_TEST_REGISTRY_LOCK);
+fs.renameSync = (from, to, ...rest) => {
+  const result = renameSync.call(fs, from, to, ...rest);
+  if (path.resolve(String(from)).startsWith(lock + ".reclaim-") && path.resolve(String(to)).startsWith(lock + ".reclaiming-")) process.abort();
+  return result;
+};
+`);
+  return preload;
+}
+function reclaimMarkerReplacementPreload(temp) {
+  const preload = path.join(temp, "replace-post-validation-reclaim-marker.cjs");
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const path = require("node:path");
+const renameSync = fs.renameSync;
+const lock = path.resolve(process.env.ENGRAM_TEST_REGISTRY_LOCK);
+let replaced = false;
+fs.renameSync = (from, to, ...rest) => {
+  const raw = path.resolve(String(from));
+  if (!replaced && raw.startsWith(lock + ".reclaim-") && path.resolve(String(to)).startsWith(lock + ".reclaiming-")) {
+    replaced = true;
+    renameSync.call(fs, raw, raw + ".validated");
+    fs.mkdirSync(raw);
+    fs.writeFileSync(path.join(raw, "owner"), process.env.ENGRAM_TEST_REPLACEMENT);
+  }
+  return renameSync.call(fs, from, to, ...rest);
+};
+`);
+  return preload;
+}
+
+function seededRegistries(home) {
+  const claude = path.join(home, ".claude");
+  const registries = path.join(claude, "plugins");
+  fs.mkdirSync(registries, { recursive: true });
+  const files = [
+    path.join(registries, "installed_plugins.json"),
+    path.join(claude, "settings.json"),
+    path.join(registries, "known_marketplaces.json"),
+  ];
+  const values = ["{\"plugins\":{},\"keep\":\"plugins\"}\n", "{\"keep\":\"settings\"}\n", "{\"keep\":\"marketplaces\"}\n"];
+  files.forEach((file, index) => fs.writeFileSync(file, values[index]));
+  return { claude, files, before: files.map((file) => fs.readFileSync(file)) };
+}
+
+function registryJournal(home) { return path.join(home, ".claude", ".engram-registry-transaction.recovery"); }
+
+test("registry transaction rejects a symlinked registry parent before outside writes", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const claude = path.join(home, ".claude");
+    const outside = path.join(temp, "outside");
+    fs.mkdirSync(outside, { recursive: true });
+    fs.mkdirSync(claude, { recursive: true });
+    try { fs.symlinkSync(outside, path.join(claude, "plugins"), "junction"); } catch { fs.symlinkSync(outside, path.join(claude, "plugins"), "dir"); }
+    const result = runRegistry(home);
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(fs.readdirSync(outside), []);
+    assert.equal(fs.existsSync(path.join(claude, "settings.json")), false);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
 test("registry transaction serializes concurrent registration without losing either update", async () => {
   const temp = temporaryDirectory();
   try {
@@ -286,6 +441,9 @@ function terminatedProcessId() {
   return child.pid;
 }
 function reclaimMarker(home) { return `${registryLock(home)}.reclaim-1-${crypto.randomUUID()}`; }
+function claimedReclaimMarker(home, owner, claimant = lockIdentity(process.pid)) {
+  return `${registryLock(home)}.reclaiming-${owner.pid}-${owner.token}-${crypto.createHash("sha256").update(owner.hostname).digest("hex")}-${claimant.pid}-${claimant.token}`;
+}
 
 test("registry transaction recovers a terminated same-host owner", () => {
   const temp = temporaryDirectory();
@@ -368,6 +526,144 @@ test("registry transaction recovers an interrupted stale quarantine", () => {
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
+test("registry transaction recovers an empty claimed stale quarantine after owner-unlink crash", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const lock = registryLock(home);
+    writeRegistryLock(lock, lockIdentity(terminatedProcessId()));
+    const crashed = runRegistry(home, {
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${reclaimMarkerOwnerUnlinkCrashPreload(temp)}`].filter(Boolean).join(" "),
+      ENGRAM_TEST_REGISTRY_LOCK: lock,
+    });
+    assert.notEqual(crashed.status, 0);
+    const marker = fs.readdirSync(path.dirname(lock)).map((name) => path.join(path.dirname(lock), name)).find((file) => path.basename(file).startsWith(`${registryLockName}.reclaiming-`));
+    assert.ok(marker, "owner-unlink crash must retain the strict claimed reclaim marker");
+    assert.deepEqual(fs.readdirSync(marker), []);
+    assert.equal(fs.existsSync(lock), false);
+    assert.deepEqual(registryArguments(home).slice(0, 3).map((file) => fs.existsSync(file)), [false, false, false], "crash before lock acquisition must not commit registry targets");
+
+    const recovered = runRegistry(home);
+    assert.equal(recovered.status, 0, registryError(recovered));
+    assert.equal(fs.existsSync(marker), false);
+    assert.deepEqual(registryArguments(home).slice(0, 3).map((file) => fs.existsSync(file)), [true, true, true]);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("registry transaction recovers a claimed stale quarantine after raw-to-claimed crash", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const lock = registryLock(home);
+    writeRegistryLock(lock, lockIdentity(terminatedProcessId()));
+    const crashed = runRegistry(home, {
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${reclaimMarkerRenameCrashPreload(temp)}`].filter(Boolean).join(" "),
+      ENGRAM_TEST_REGISTRY_LOCK: lock,
+    });
+    assert.notEqual(crashed.status, 0);
+    const marker = fs.readdirSync(path.dirname(lock)).map((name) => path.join(path.dirname(lock), name)).find((file) => path.basename(file).startsWith(`${registryLockName}.reclaiming-`));
+    assert.ok(marker, "raw-to-claimed crash must retain the strict claimed reclaim marker");
+    assert.ok(fs.existsSync(path.join(marker, "owner")));
+    assert.deepEqual(registryArguments(home).slice(0, 3).map((file) => fs.existsSync(file)), [false, false, false]);
+
+    const recovered = runRegistry(home);
+    assert.equal(recovered.status, 0, registryError(recovered));
+    assert.equal(fs.existsSync(marker), false);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("registry transaction preserves a post-validation reclaim replacement", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const lock = registryLock(home);
+    const raw = reclaimMarker(home);
+    const replacement = lockIdentity(process.pid);
+    writeRegistryLock(raw, lockIdentity(terminatedProcessId()));
+    const result = runRegistry(home, {
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${reclaimMarkerReplacementPreload(temp)}`].filter(Boolean).join(" "),
+      ENGRAM_TEST_REGISTRY_LOCK: lock,
+      ENGRAM_TEST_REPLACEMENT: `${JSON.stringify(replacement)}\n`,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(registryError(result), /timed out waiting for registry transaction lock/);
+    const claimed = fs.readdirSync(path.dirname(lock)).map((name) => path.join(path.dirname(lock), name)).find((file) => path.basename(file).startsWith(`${registryLockName}.reclaiming-`));
+    assert.ok(claimed, "replacement must be retained under the claimed marker");
+    assert.equal(fs.readFileSync(path.join(claimed, "owner"), "utf8"), `${JSON.stringify(replacement)}\n`);
+    assert.ok(fs.existsSync(`${raw}.validated`), "validated marker must remain aside from the replacement");
+    assert.deepEqual(registryArguments(home).slice(0, 3).map((file) => fs.existsSync(file)), [false, false, false]);
+    assert.deepEqual(registrationArtifacts(home), []);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+for (const [name, setup] of [
+  ["empty marker", () => { }],
+  ["malformed owner", (marker) => fs.writeFileSync(path.join(marker, "owner"), "not JSON\n")],
+  ["foreign owner", (marker) => fs.writeFileSync(path.join(marker, "owner"), `${JSON.stringify(lockIdentity(1, "foreign-host"))}\n`)],
+  ["unexpected foreign child", (marker) => {
+    fs.writeFileSync(path.join(marker, "owner"), `${JSON.stringify(lockIdentity(terminatedProcessId()))}\n`);
+    fs.writeFileSync(path.join(marker, "foreign"), "foreign state\n");
+  }],
+]) {
+  test(`registry transaction retains a reclaim marker with ${name}`, () => {
+    const temp = temporaryDirectory();
+    try {
+      const home = path.join(temp, "home");
+      const marker = reclaimMarker(home);
+      fs.mkdirSync(marker, { recursive: true });
+      setup(marker);
+      const before = fs.readdirSync(marker).sort();
+      const result = runRegistry(home);
+      assert.notEqual(result.status, 0);
+      assert.match(registryError(result), /timed out waiting for registry transaction lock/);
+      assert.deepEqual(fs.readdirSync(marker).sort(), before);
+      assert.deepEqual(registrationArtifacts(home), []);
+      assert.deepEqual(registryArguments(home).slice(0, 3).map((file) => fs.existsSync(file)), [false, false, false]);
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+}
+
+for (const [name, setup] of [
+  ["malformed name", (home) => `${registryLock(home)}.reclaiming-malformed`],
+  ["live owner", (home) => {
+    const owner = lockIdentity(process.pid);
+    return { marker: claimedReclaimMarker(home, owner), owner };
+  }],
+  ["foreign owner", (home) => {
+    const owner = lockIdentity(1, "foreign-host");
+    return { marker: claimedReclaimMarker(home, owner), owner };
+  }],
+  ["mismatched owner", (home) => {
+    const expected = lockIdentity(terminatedProcessId());
+    return { marker: claimedReclaimMarker(home, expected), owner: { ...expected, token: crypto.randomUUID() } };
+  }],
+  ["unexpected child", (home) => {
+    const owner = lockIdentity(terminatedProcessId());
+    return { marker: claimedReclaimMarker(home, owner), owner, foreign: true };
+  }],
+]) {
+  test(`registry transaction retains a claimed reclaim marker with ${name}`, () => {
+    const temp = temporaryDirectory();
+    try {
+      const home = path.join(temp, "home");
+      const fixture = setup(home);
+      const marker = typeof fixture === "string" ? fixture : fixture.marker;
+      fs.mkdirSync(marker, { recursive: true });
+      if (typeof fixture !== "string") {
+        fs.writeFileSync(path.join(marker, "owner"), `${JSON.stringify(fixture.owner)}\n`);
+        if (fixture.foreign) fs.writeFileSync(path.join(marker, "foreign"), "foreign state\n");
+      }
+      const before = fs.readdirSync(marker).sort();
+      const result = runRegistry(home);
+      assert.notEqual(result.status, 0);
+      assert.match(registryError(result), /timed out waiting for registry transaction lock/);
+      assert.deepEqual(fs.readdirSync(marker).sort(), before);
+      assert.deepEqual(registrationArtifacts(home), []);
+      assert.deepEqual(registryArguments(home).slice(0, 3).map((file) => fs.existsSync(file)), [false, false, false]);
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+}
+
 test("registry transaction treats a live reclaim marker as contention", () => {
   const temp = temporaryDirectory();
   try {
@@ -386,35 +682,192 @@ test("registry transaction treats a live reclaim marker as contention", () => {
 test("registry transaction rejects release with a matching token and different PID", () => {
   const temp = temporaryDirectory();
   try {
+
     const home = path.join(temp, "home");
     const lock = registryLock(home);
     const preload = path.join(temp, "different-pid-release.cjs");
     fs.writeFileSync(preload, `const fs = require("node:fs");
 const path = require("node:path");
+const renameSync = fs.renameSync;
 const writeFileSync = fs.writeFileSync;
 const lock = path.resolve(process.env.ENGRAM_TEST_REGISTRY_LOCK);
 let changed = false;
-fs.writeFileSync = (file, data, ...rest) => {
-  const result = writeFileSync.call(fs, file, data, ...rest);
-  if (!changed && path.resolve(String(file)) === path.join(lock, "owner")) {
+fs.renameSync = (from, to, ...rest) => {
+  const result = renameSync.call(fs, from, to, ...rest);
+  if (!changed && path.resolve(String(from)) === lock && String(to).includes(".reclaim-")) {
     changed = true;
-    const owner = JSON.parse(String(data));
-    writeFileSync.call(fs, file, JSON.stringify({ ...owner, pid: owner.pid + 1 }) + "\\n");
+    const ownerFile = path.join(to, "owner");
+    const original = JSON.parse(fs.readFileSync(ownerFile, "utf8"));
+    const replacement = { ...original, pid: original.pid + 1 };
+    writeFileSync.call(fs, process.env.ENGRAM_TEST_RELEASE_IDENTITIES, JSON.stringify({ original, replacement }) + "\\n");
+    writeFileSync.call(fs, ownerFile, JSON.stringify(replacement) + "\\n");
   }
   return result;
 };
 `);
+    const identities = path.join(temp, "release-identities.json");
     const result = runRegistry(home, {
       NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" "),
       ENGRAM_TEST_REGISTRY_LOCK: lock,
+      ENGRAM_TEST_RELEASE_IDENTITIES: identities,
     });
     assert.notEqual(result.status, 0);
     assert.match(registryError(result), /registry transaction lock ownership changed/);
     const marker = fs.readdirSync(path.dirname(lock)).map((name) => path.join(path.dirname(lock), name)).find((file) => file.startsWith(`${lock}.reclaim-`));
     assert.ok(marker, "mismatched owner must remain quarantined");
     const owner = JSON.parse(fs.readFileSync(path.join(marker, "owner"), "utf8"));
-    assert.notEqual(owner.pid, process.pid);
+    const identitiesValue = JSON.parse(fs.readFileSync(identities, "utf8"));
+    assert.equal(identitiesValue.original.pid, result.pid);
+    assert.deepEqual(owner, identitiesValue.replacement);
+    assert.equal(owner.token, identitiesValue.original.token);
+    const [pluginsFile, settingsFile, marketplacesFile] = registryArguments(home);
+    assert.ok(fs.existsSync(pluginsFile));
+    assert.ok(fs.existsSync(settingsFile));
+    assert.ok(fs.existsSync(marketplacesFile));
     assert.equal(fs.existsSync(lock), false);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+for (const backupNumber of [1, 2, 3]) {
+  test(`registry transaction recovers all originals after crash following backup ${backupNumber}`, () => {
+    const temp = temporaryDirectory();
+    try {
+      const home = path.join(temp, "home");
+      const { files, before } = seededRegistries(home);
+      const preload = crashAfterRegistrationBackupPreload(temp, backupNumber);
+      const crashed = runRegistry(home, {
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" "),
+      });
+      assert.notEqual(crashed.status, 0);
+      assert.equal(fs.existsSync(registryJournal(home)), true);
+      const recovered = runRegistry(home);
+      assert.equal(recovered.status, 0, registryError(recovered));
+      for (const [index, file] of files.entries()) {
+        const parsed = JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+        assert.equal(parsed.keep, JSON.parse(before[index].toString("utf8")).keep);
+      }
+      assert.equal(fs.existsSync(registryJournal(home)), false);
+      assert.deepEqual(registrationArtifacts(home), []);
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+}
+
+test("registry transaction leaves a foreign interrupted target and journal untouched", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const { files } = seededRegistries(home);
+    const preload = crashAfterRegistrationBackupPreload(temp, 1);
+    const crashed = runRegistry(home, { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" ") });
+    assert.notEqual(crashed.status, 0);
+    fs.writeFileSync(files[0], "foreign target\n");
+    const journal = registryJournal(home);
+    const before = fs.readFileSync(path.join(journal, "manifest.json"));
+    const recovered = runRegistry(home);
+    assert.notEqual(recovered.status, 0);
+    assert.match(registryError(recovered), /retained foreign target/);
+    assert.deepEqual(fs.readFileSync(files[0]), Buffer.from("foreign target\n"));
+    assert.deepEqual(fs.readFileSync(path.join(journal, "manifest.json")), before);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+for (const point of ["receipt", "terminal", "terminal-receipt", "terminal-manifest"]) {
+  test(`registry transaction preserves committed outputs after ${point} cleanup interruption`, () => {
+    const temp = temporaryDirectory();
+    try {
+      const home = path.join(temp, "home");
+      const { files } = seededRegistries(home);
+      const preload = terminalJournalCrashPreload(temp, point);
+      const crashed = runRegistry(home, { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" ") });
+      assert.notEqual(crashed.status, 0);
+      const recovered = runRegistry(home);
+      assert.equal(recovered.status, 0, registryError(recovered));
+      for (const file of files) assert.match(fs.readFileSync(file, "utf8"), /"keep"\s*:/);
+      assert.equal(fs.existsSync(registryJournal(home)), false);
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+}
+
+for (const point of ["released", "owner"]) {
+  test(`registry transaction cleans interrupted ${point} released marker`, () => {
+    const temp = temporaryDirectory();
+    try {
+      const home = path.join(temp, "home");
+      const crashed = runRegistry(home, { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${releasedMarkerCrashPreload(temp, point)}`].filter(Boolean).join(" ") });
+      assert.notEqual(crashed.status, 0);
+      const recovered = runRegistry(home);
+      assert.equal(recovered.status, 0, registryError(recovered));
+      assert.equal(fs.readdirSync(path.join(home, ".claude")).filter((name) => name.includes(".released-")).length, 0);
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+}
+test("registry transaction retains a static foreign released marker", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const { claude, files } = seededRegistries(home);
+    const owner = { hostname: "foreign-host", pid: process.pid, token: crypto.randomUUID() };
+    const marker = path.join(claude, `${registryLockName}.released-${owner.pid}-${owner.token}-${crypto.createHash("sha256").update(Buffer.from(owner.hostname, "utf8")).digest("hex")}`);
+    const ownerBytes = Buffer.from(JSON.stringify(owner));
+    fs.mkdirSync(marker);
+    fs.writeFileSync(path.join(marker, "owner"), ownerBytes);
+    const result = runRegistry(home);
+    assert.equal(result.status, 0, registryError(result));
+    const [plugins, settings, marketplaces] = files.map((file) => JSON.parse(fs.readFileSync(file, "utf8")));
+    assert.equal(plugins.plugins["engram@engram"][0].version, "6.47.5");
+    assert.equal(settings.enabledPlugins["engram@engram"], true);
+    assert.equal(marketplaces.engram.source.source, "directory");
+    assert.equal(fs.existsSync(marker), true);
+    assert.deepEqual(fs.readdirSync(marker), ["owner"]);
+    assert.deepEqual(fs.readFileSync(path.join(marker, "owner")), ownerBytes);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+
+test("registry transaction tolerates cooperative released double cleanup", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const preload = releasedMarkerDoubleCleanupPreload(temp);
+    const result = runRegistry(home, { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" ") });
+    assert.equal(result.status, 0, registryError(result));
+    assert.deepEqual(registryArguments(home).slice(0, 3).map((file) => fs.existsSync(file)), [true, true, true]);
+    assert.equal(fs.readdirSync(path.join(home, ".claude")).filter((name) => name.includes(".released-")).length, 0);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("registry transaction rejects malformed and ambiguous journal without mutations", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const { files, before } = seededRegistries(home);
+    const journal = registryJournal(home);
+    fs.mkdirSync(journal, { recursive: true });
+    fs.writeFileSync(path.join(journal, "manifest.json"), "{}\n");
+    fs.writeFileSync(path.join(journal, "foreign"), "foreign\n");
+    const result = runRegistry(home);
+    assert.notEqual(result.status, 0);
+    assert.match(registryError(result), /invalid registry recovery journal/);
+    assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+    assert.equal(fs.existsSync(path.join(journal, "foreign")), true);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("registry transaction resumes an interrupted recovery", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const { files, before } = seededRegistries(home);
+    const crash = crashAfterRegistrationBackupPreload(temp, 2);
+    assert.notEqual(runRegistry(home, { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${crash}`].filter(Boolean).join(" ") }).status, 0);
+    const journal = registryJournal(home);
+    const interrupt = path.join(temp, "interrupt-recovery.cjs");
+    fs.writeFileSync(interrupt, `const fs = require("node:fs"); const rename = fs.renameSync; let restored = false; fs.renameSync = (from, to, ...rest) => { const result = rename.call(fs, from, to, ...rest); if (!restored && /\\.backup-/.test(String(from))) { restored = true; process.abort(); } return result; };`);
+    assert.notEqual(runRegistry(home, { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${interrupt}`].filter(Boolean).join(" ") }).status, 0);
+    assert.equal(fs.existsSync(journal), true);
+    const recovered = runRegistry(home);
+    assert.equal(recovered.status, 0, registryError(recovered));
+    for (const [index, file] of files.entries()) assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).keep, JSON.parse(before[index].toString("utf8")).keep);
+    assert.equal(fs.existsSync(journal), false);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -559,7 +1012,67 @@ test("Windows-compatible Bash requires unzip before download", () => {
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
-test("generator check mode and raw artifact gate accept only the shared target rows", () => {
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function writeZip(archiveRoot, archivePath, entries) {
+  const records = [];
+  const centralDirectory = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const name = Buffer.from(entry);
+    const bytes = fs.readFileSync(path.join(archiveRoot, ...entry.split("/")));
+    const crc = crc32(bytes);
+    const local = Buffer.alloc(30 + name.length);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(bytes.length, 18);
+    local.writeUInt32LE(bytes.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    name.copy(local, 30);
+    records.push(local, bytes);
+
+    const central = Buffer.alloc(46 + name.length);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(bytes.length, 20);
+    central.writeUInt32LE(bytes.length, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE(offset, 42);
+    name.copy(central, 46);
+    centralDirectory.push(central);
+    offset += local.length + bytes.length;
+  }
+  const directory = Buffer.concat(centralDirectory);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(directory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  fs.writeFileSync(archivePath, Buffer.concat([...records, directory, end]));
+}
+
+function buildServerArchive(archiveRoot, archivePath) {
+  const entries = ["package.json", "extensions/engram-memory.mjs", "bootstrap-targets.json"];
+  if (archivePath.endsWith(".tar.gz")) {
+    const archived = spawnSync("tar", ["-czf", archivePath, "-C", archiveRoot, ...entries], { encoding: "utf8" });
+    assert.equal(archived.status, 0, archived.stderr);
+  } else {
+    writeZip(archiveRoot, archivePath, entries);
+  }
+}
+
+test("generator check mode and combined artifact gate accept only the shared target rows", () => {
   const temp = temporaryDirectory();
   try {
     const fakeBin = path.join(temp, "bin");
@@ -580,15 +1093,35 @@ test("generator check mode and raw artifact gate accept only the shared target r
       fs.writeFileSync(path.join(dist, desired.asset), bytes);
     }
     const archiveRoot = path.join(temp, "archive");
-    fs.mkdirSync(archiveRoot);
+    fs.mkdirSync(path.join(archiveRoot, "extensions"), { recursive: true });
+    fs.copyFileSync(path.join(root, "plugin", "engram", "package.json"), path.join(archiveRoot, "package.json"));
+    fs.copyFileSync(path.join(root, "plugin", "engram", "extensions", "engram-memory.mjs"), path.join(archiveRoot, "extensions", "engram-memory.mjs"));
     fs.copyFileSync(policyPath, path.join(archiveRoot, "bootstrap-targets.json"));
-    const archive = path.join(dist, `engram_${currentVersion}_linux_amd64.tar.gz`);
-    const archived = spawnSync("tar", ["-czf", archive, "-C", archiveRoot, "bootstrap-targets.json"], { encoding: "utf8" });
-    assert.equal(archived.status, 0, archived.stderr);
-    run("bash", ["scripts/check-bootstrap-policy-artifacts.sh", "--policy", bashPath(policyPath), "--dist", bashPath(dist)]);
-    fs.appendFileSync(path.join(dist, policy.targets["linux-x64"].desired.asset), "drift");
-    const rejected = spawnSync("bash", ["scripts/check-bootstrap-policy-artifacts.sh", "--policy", bashPath(policyPath), "--dist", bashPath(dist)], { cwd: root, encoding: "utf8" });
-    assert.notEqual(rejected.status, 0);
+    const archives = [
+      `engram_${currentVersion}_linux_amd64.tar.gz`,
+      `engram_${currentVersion}_darwin_arm64.tar.gz`,
+      `engram_${currentVersion}_windows_amd64.zip`,
+    ];
+    for (const archive of archives) buildServerArchive(archiveRoot, path.join(dist, archive));
+    const gate = ["scripts/check-bootstrap-policy-artifacts.sh", "--policy", bashPath(policyPath), "--dist", bashPath(dist)];
+    run("bash", gate);
+
+    const rawClientPath = path.join(dist, policy.targets["linux-x64"].desired.asset);
+    const rawClient = fs.readFileSync(rawClientPath);
+    fs.appendFileSync(rawClientPath, "drift");
+    const rawRejected = spawnSync("bash", gate, { cwd: root, encoding: "utf8" });
+    assert.notEqual(rawRejected.status, 0);
+    assert.match(rawRejected.stderr, /policy mismatch/);
+    fs.writeFileSync(rawClientPath, rawClient);
+
+    const manifestPath = path.join(archiveRoot, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.engines.node = ">=20";
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    buildServerArchive(archiveRoot, path.join(dist, archives[0]));
+    const serverRejected = spawnSync("bash", gate, { cwd: root, encoding: "utf8" });
+    assert.notEqual(serverRejected.status, 0);
+    assert.match(serverRejected.stderr, /OMP package manifest does not match the release contract/);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -817,7 +1350,8 @@ test("direct installer preserves a foreign target after an absent-target registr
     assert.deepEqual(fs.readFileSync(pluginsFile), absentTargetRaceSentinel);
     assert.equal(fs.existsSync(settingsFile), false);
     assert.equal(fs.existsSync(marketplacesFile), false);
-    assert.deepEqual(registrationArtifacts(home), []);
+    assert.equal(fs.existsSync(registryJournal(home)), true);
+    assert.ok(registrationArtifacts(home).length > 0);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 test("direct installer retains an orphan backup when post-commit cleanup fails", () => {
@@ -856,13 +1390,13 @@ test("direct installer retains an orphan backup when post-commit cleanup fails",
     assert.equal(registration.scope, "user");
     assert.equal(registration.installPath, bashPath(cachePath));
     assert.equal(registration.version, "6.47.5");
-    assert.equal(registration.isLocal, true);
     assert.equal(settings.enabledPlugins["engram@engram"], true);
     assert.deepEqual(settings.statusLine, { type: "command", command: `node "${bashPath(installRoot)}/hooks/statusline.js"`, padding: 0 });
     assert.deepEqual(marketplaces.engram.source, { source: "directory", path: bashPath(installRoot) });
     assert.equal(marketplaces.engram.installLocation, bashPath(installRoot));
     assert.equal(marketplaces.engram.lastUpdated, registration.lastUpdated);
     assert.equal(registration.installedAt, registration.lastUpdated);
+    assert.equal(fs.existsSync(registryJournal(home)), true);
 
     const artifacts = registrationArtifacts(home);
     const backups = artifacts.filter(registrationBackup);
@@ -871,7 +1405,7 @@ test("direct installer retains an orphan backup when post-commit cleanup fails",
     assert.deepEqual(fs.readFileSync(backups[0]), before[0]);
     assert.ok(output.includes(bashPath(backups[0])));
     assert.deepEqual(artifacts.filter(registrationStaged), []);
-    assert.deepEqual(fs.readFileSync(failureLog, "utf8").trimEnd().split("\n"), [bashPath(backups[0])]);
+    assert.match(fs.readFileSync(failureLog, "utf8").trimEnd().replaceAll("\\", "/"), new RegExp(`${path.basename(backups[0]).replaceAll(".", "\\.")}$`));
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 test("direct installer removes owned staging after a registration partial write failure", () => {
