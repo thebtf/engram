@@ -7,6 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
+const LOCK_OWNER_PUBLICATION_GRACE_MS = 250;
 const LOCK_RETRY_MS = 25;
 const LOCK_NAME = ".engram-registry-transaction.lock";
 const JOURNAL_NAME = ".engram-registry-transaction.recovery";
@@ -15,6 +16,7 @@ const RECEIPT_NAME = "receipt.json";
 const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
 const DIGEST = /^[0-9a-f]{64}$/;
 const RECLAIM_MARKER = new RegExp(`^${LOCK_NAME.replaceAll(".", "\\.")}\\.reclaim-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$`);
+const OWNER_PUBLICATION_RECLAIM_MARKER = new RegExp(`^${LOCK_NAME.replaceAll(".", "\\.")}\\.publication-reclaim-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$`);
 const CLAIMED_RECLAIM_MARKER = new RegExp(`^${LOCK_NAME.replaceAll(".", "\\.")}\\.reclaiming-([1-9]\\d*)-([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})-([0-9a-f]{64})-([1-9]\\d*)-([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$`);
 const RELEASED_MARKER = new RegExp(`^${LOCK_NAME.replaceAll(".", "\\.")}\\.released-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}-[0-9a-f]{64}$`);
 const TERMINAL_MARKER = new RegExp(`^${JOURNAL_NAME.replaceAll(".", "\\.")}\\.terminal-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}-[0-9a-f]{64}-[0-9a-f]{64}$`);
@@ -90,6 +92,23 @@ function isDeadLocalOwner(owner) {
 function staleOwner(directory, expected) {
   const owner = readLockOwner(directory);
   return owner && (!expected || sameOwner(owner, expected)) && isDeadLocalOwner(owner) ? owner : null;
+}
+function staleUnpublishedLock(directory) {
+  let stat;
+  try { stat = fs.lstatSync(directory); } catch { return false; }
+  if (!stat.isDirectory() || stat.isSymbolicLink() || Date.now() - stat.mtimeMs < LOCK_OWNER_PUBLICATION_GRACE_MS) return false;
+  let children;
+  try { children = fs.readdirSync(directory); } catch { return false; }
+  if (children.length === 0) return true;
+  if (children.length !== 1 || children[0] !== "owner") return false;
+  let ownerStat;
+  try { ownerStat = fs.lstatSync(path.join(directory, "owner")); } catch { return false; }
+  return ownerStat.isFile() && !ownerStat.isSymbolicLink() && !readLockOwner(directory);
+}
+function removeStaleUnpublishedLock(directory) {
+  if (!staleUnpublishedLock(directory)) return false;
+  try { fs.unlinkSync(path.join(directory, "owner")); } catch (error) { if (error.code !== "ENOENT") return false; }
+  try { fs.rmdirSync(directory); return true; } catch (error) { return error.code === "ENOENT"; }
 }
 function claimedReclaimIdentity(name) {
   const match = CLAIMED_RECLAIM_MARKER.exec(name);
@@ -175,18 +194,28 @@ function recoverReclaimMarkers(claudeDirectory) {
   }
   return true;
 }
+function recoverOwnerPublicationMarker(marker) {
+  const owner = readLockOwner(marker);
+  return owner ? claimReclaimMarker(marker, owner) : removeStaleUnpublishedLock(marker);
+}
+function recoverOwnerPublicationMarkers(claudeDirectory) {
+  for (const name of fs.readdirSync(claudeDirectory)) if (OWNER_PUBLICATION_RECLAIM_MARKER.test(name) && !recoverOwnerPublicationMarker(path.join(claudeDirectory, name))) return false;
+  return true;
+}
 function recoverReleasedMarkers(claudeDirectory) {
   for (const name of fs.readdirSync(claudeDirectory)) if (RELEASED_MARKER.test(name)) cleanupReleasedMarker(path.join(claudeDirectory, name));
 }
 function quarantineDeadCanonical(directory) {
   const owner = staleOwner(directory);
-  if (!owner) return false;
-  const marker = `${directory}.reclaim-${process.pid}-${crypto.randomUUID()}`;
+  if (!owner && !staleUnpublishedLock(directory)) return false;
+  const marker = owner
+    ? `${directory}.reclaim-${process.pid}-${crypto.randomUUID()}`
+    : `${directory}.publication-reclaim-${process.pid}-${crypto.randomUUID()}`;
   try { fs.renameSync(directory, marker); } catch (error) {
     if (error.code === "ENOENT" || error.code === "EEXIST") return false;
     throw error;
   }
-  return claimReclaimMarker(marker, owner);
+  return owner ? claimReclaimMarker(marker, owner) : recoverOwnerPublicationMarker(marker);
 }
 function acquireLock(claudeDirectory) {
   fs.mkdirSync(claudeDirectory, { recursive: true, mode: 0o700 });
@@ -195,7 +224,7 @@ function acquireLock(claudeDirectory) {
   const identity = { hostname: os.hostname(), pid: process.pid, token: crypto.randomUUID() };
   for (; ;) {
     recoverReleasedMarkers(claudeDirectory);
-    if (recoverReclaimMarkers(claudeDirectory)) {
+    if (recoverOwnerPublicationMarkers(claudeDirectory) && recoverReclaimMarkers(claudeDirectory)) {
       try {
         fs.mkdirSync(directory, { mode: 0o700 });
         const owner = path.join(directory, "owner");

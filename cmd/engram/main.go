@@ -616,9 +616,7 @@ func waitForMuxcoreDaemonVersion(ctx context.Context) error {
 }
 
 func waitForMuxcoreDaemonMarker(ctx context.Context) error {
-	markerCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	return waitForCurrentMuxcoreDaemonReady(markerCtx)
+	return waitForCurrentMuxcoreDaemonReady(ctx)
 }
 
 func verifyCurrentMuxcoreDaemonIdentity(expected muxcoreDaemonStatusIdentity) error {

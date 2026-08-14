@@ -876,6 +876,42 @@ func TestWaitForMuxcoreDaemonVersionAcceptsFreshMarkerAfterStaleValidWindow(t *t
 	}
 }
 
+func TestWaitForMuxcoreDaemonMarkerUsesOuterDeadlineAfterLongPredecessorShutdown(t *testing.T) {
+	oldWait := waitForCurrentMuxcoreDaemonReady
+	t.Cleanup(func() { waitForCurrentMuxcoreDaemonReady = oldWait })
+
+	outerCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	predecessorShutdown := 2*time.Second + time.Millisecond
+	successorPublication := time.Now().Add(predecessorShutdown)
+	waitForCurrentMuxcoreDaemonReady = func(ctx context.Context) error {
+		deadline, ok := ctx.Deadline()
+		if !ok || !deadline.After(successorPublication) {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}
+
+	if err := waitForMuxcoreDaemonMarker(outerCtx); err != nil {
+		t.Fatalf("successor publication after a two-second predecessor shutdown failed before the outer deadline: %v", err)
+	}
+}
+
+func TestWaitForMuxcoreDaemonMarkerFailsWhenOuterDeadlineExpires(t *testing.T) {
+	oldWait := waitForCurrentMuxcoreDaemonReady
+	t.Cleanup(func() { waitForCurrentMuxcoreDaemonReady = oldWait })
+
+	waitForCurrentMuxcoreDaemonReady = func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	outerCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if err := waitForMuxcoreDaemonMarker(outerCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired outer deadline error = %v, want deadline exceeded", err)
+	}
+}
+
 func TestReconcileMuxcoreDaemonVersionWaitsForUncorrelatedMarker(t *testing.T) {
 	stubReconciliation(t, muxcoreDaemonStatusIdentity{PID: 42, DaemonGeneration: "daemon-starting"}, daemonConvergenceFail, errMuxcoreDaemonMarkerUncorrelated)
 	called := false

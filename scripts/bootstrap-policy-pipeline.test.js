@@ -506,6 +506,24 @@ fs.renameSync = (from, to, ...rest) => {
 `);
   return preload;
 }
+function publicationMarkerOwnerReplacementPreload(temp) {
+  const preload = path.join(temp, "replace-publication-marker-owner.cjs");
+  fs.writeFileSync(preload, `const fs = require("node:fs");
+const path = require("node:path");
+const renameSync = fs.renameSync;
+const lock = path.resolve(process.env.ENGRAM_TEST_REGISTRY_LOCK);
+let replaced = false;
+fs.renameSync = (from, to, ...rest) => {
+  const result = renameSync.call(fs, from, to, ...rest);
+  if (!replaced && path.resolve(String(from)) === lock && path.resolve(String(to)).startsWith(lock + ".publication-reclaim-")) {
+    replaced = true;
+    fs.writeFileSync(path.join(to, "owner"), process.env.ENGRAM_TEST_REPLACEMENT);
+  }
+  return result;
+};
+`);
+  return preload;
+}
 
 function seededRegistries(home) {
   const claude = path.join(home, ".claude");
@@ -635,6 +653,10 @@ function terminatedProcessId() {
   return child.pid;
 }
 function reclaimMarker(home) { return `${registryLock(home)}.reclaim-1-${crypto.randomUUID()}`; }
+function publicationReclaimMarker(home) {
+  const lock = registryLock(home);
+  return fs.readdirSync(path.dirname(lock)).map((name) => path.join(path.dirname(lock), name)).find((file) => path.basename(file).startsWith(`${registryLockName}.publication-reclaim-`));
+}
 function claimedReclaimMarker(home, owner, claimant = lockIdentity(process.pid)) {
   return `${registryLock(home)}.reclaiming-${owner.pid}-${owner.token}-${crypto.createHash("sha256").update(owner.hostname).digest("hex")}-${claimant.pid}-${claimant.token}`;
 }
@@ -811,8 +833,84 @@ test("registry transaction recovers a terminated same-host owner", () => {
     assert.deepEqual(registrationArtifacts(home), []);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
+test("registry transaction recovers stale empty and malformed locks from interrupted owner publication", () => {
+  const temp = temporaryDirectory();
+  try {
+    for (const [name, setup] of [
+      ["empty lock", () => { }],
+      ["malformed owner", (lock) => fs.writeFileSync(path.join(lock, "owner"), "not JSON\n")],
+    ]) {
+      const home = path.join(temp, name);
+      const lock = registryLock(home);
+      fs.mkdirSync(lock, { recursive: true });
+      setup(lock);
+      const staleAt = new Date(Date.now() - 1_000);
+      fs.utimesSync(lock, staleAt, staleAt);
+      const result = runRegistry(home);
+      assert.equal(result.status, 0, `${name}: ${registryError(result)}`);
+      assert.equal(fs.existsSync(lock), false, `${name}: recovered lock must be released`);
+      assert.deepEqual(registryArguments(home).slice(0, 3).map((file) => fs.existsSync(file)), [true, true, true]);
+      assert.deepEqual(registrationArtifacts(home), []);
+    }
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+for (const [name, setup] of [
+  ["empty lock", () => { }],
+  ["malformed owner", (lock) => fs.writeFileSync(path.join(lock, "owner"), "not JSON\n")],
+]) {
+  test(`registry transaction recovers when ${name} publication marker gains a dead owner`, () => {
+    const temp = temporaryDirectory();
+    try {
+      const home = path.join(temp, "home");
+      const lock = registryLock(home);
+      fs.mkdirSync(lock, { recursive: true });
+      setup(lock);
+      const staleAt = new Date(Date.now() - 1_000);
+      fs.utimesSync(lock, staleAt, staleAt);
+      const replacement = lockIdentity(terminatedProcessId());
+      const result = runRegistry(home, {
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${publicationMarkerOwnerReplacementPreload(temp)}`].filter(Boolean).join(" "),
+        ENGRAM_TEST_REGISTRY_LOCK: lock,
+        ENGRAM_TEST_REPLACEMENT: `${JSON.stringify(replacement)}\n`,
+      });
+      assert.equal(result.status, 0, `${name}: ${registryError(result)}`);
+      assert.equal(publicationReclaimMarker(home), undefined, `${name}: dead owner publication marker must be removed`);
+      assert.equal(fs.existsSync(lock), false, `${name}: recovery must release its acquired lock`);
+      assert.deepEqual(registrationArtifacts(home), []);
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+
+  test(`registry transaction blocks when ${name} publication marker gains a live owner`, () => {
+    const temp = temporaryDirectory();
+    try {
+      const home = path.join(temp, "home");
+      const lock = registryLock(home);
+      fs.mkdirSync(lock, { recursive: true });
+      setup(lock);
+      const staleAt = new Date(Date.now() - 1_000);
+      fs.utimesSync(lock, staleAt, staleAt);
+      const replacement = lockIdentity(process.pid);
+      const replacementText = `${JSON.stringify(replacement)}\n`;
+      const result = runRegistry(home, {
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${publicationMarkerOwnerReplacementPreload(temp)}`].filter(Boolean).join(" "),
+        ENGRAM_TEST_REGISTRY_LOCK: lock,
+        ENGRAM_TEST_REPLACEMENT: replacementText,
+      });
+      assert.notEqual(result.status, 0);
+      assert.match(registryError(result), /timed out waiting for registry transaction lock/);
+      const marker = publicationReclaimMarker(home);
+      assert.ok(marker, `${name}: live owner publication marker must remain`);
+      assert.equal(fs.readFileSync(path.join(marker, "owner"), "utf8"), replacementText);
+      assert.equal(fs.existsSync(lock), false);
+      assert.deepEqual(registrationArtifacts(home), []);
+      assert.deepEqual(registryArguments(home).slice(0, 3).map((file) => fs.existsSync(file)), [false, false, false]);
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
+}
+
 
 for (const [name, identity] of [
+  ["empty lock", () => null],
   ["live owner", () => lockIdentity(process.pid)],
   ["malformed owner", () => "not JSON\n"],
   ["foreign owner", () => lockIdentity(1, "foreign-host")],
@@ -824,7 +922,7 @@ for (const [name, identity] of [
       const lock = registryLock(home);
       fs.mkdirSync(lock, { recursive: true });
       const value = identity();
-      fs.writeFileSync(path.join(lock, "owner"), typeof value === "string" ? value : `${JSON.stringify(value)}\n`);
+      if (value !== null) fs.writeFileSync(path.join(lock, "owner"), typeof value === "string" ? value : `${JSON.stringify(value)}\n`);
       const result = runRegistry(home);
       assert.notEqual(result.status, 0);
       assert.match(registryError(result), /timed out waiting for registry transaction lock/);
