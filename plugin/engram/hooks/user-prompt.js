@@ -134,28 +134,29 @@ function formatAmbientAdditionalContext(payload) {
   return lines.join('\n');
 }
 
-async function requestAmbientPayloadWithinBudget(project, sessionID, promptText) {
-  let timeoutHandle;
+async function requestAmbientPayloadWithinBudget(project, sessionID, promptText, timeoutMs = ambientTimeoutMs, options = {}) {
+  let timeout;
   try {
     return await Promise.race([
       lib.requestPost(
         '/api/hooks/ambient-candidates',
         buildAmbientRequest(project, sessionID, promptText),
-        ambientTimeoutMs,
+        timeoutMs,
+        options,
       ),
       new Promise((resolve) => {
-        timeoutHandle = setTimeout(() => resolve(null), ambientTimeoutMs);
+        timeout = setTimeout(() => resolve(null), timeoutMs);
       }),
     ]);
   } finally {
-    clearTimeout(timeoutHandle);
+    clearTimeout(timeout);
   }
 }
 
-async function fetchAmbientAdditionalContext(project, sessionID, promptText) {
+async function fetchAmbientAdditionalContext(project, sessionID, promptText, timeoutMs = ambientTimeoutMs, options = {}) {
   try {
-    const payload = await requestAmbientPayloadWithinBudget(project, sessionID, promptText);
-    return formatAmbientAdditionalContext(payload);
+    const payload = await requestAmbientPayloadWithinBudget(project, sessionID, promptText, timeoutMs, options);
+    return options.signal?.aborted ? '' : formatAmbientAdditionalContext(payload);
   } catch (_) {
     return '';
   }
@@ -187,5 +188,7 @@ if (require.main === module) {
 
 module.exports = {
   handleUserPrompt,
+  fetchAmbientAdditionalContext,
+  requestAmbientPayloadWithinBudget,
   detectCorrection,
 };

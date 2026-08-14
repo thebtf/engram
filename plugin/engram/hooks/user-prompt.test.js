@@ -201,6 +201,27 @@ test('both endpoints unavailable still fail open to empty output', async () => {
   }
 });
 
+test('ambient helpers forward an explicit remaining budget and signal', async () => {
+  const originalRequestPost = lib.requestPost;
+  const controller = new AbortController();
+  const calls = [];
+  lib.requestPost = async (...args) => {
+    calls.push(args);
+    return { hints: [makeHint('1', 'Forwarded deadline', 'tag:signal', 0.9)] };
+  };
+  try {
+    const result = await userPrompt.fetchAmbientAdditionalContext(
+      'engram', 'ambient-options', 'Need deadline propagation', 123, { signal: controller.signal },
+    );
+    assert.match(result, /Forwarded deadline/);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][2], 123);
+    assert.strictEqual(calls[0][3].signal, controller.signal);
+  } finally {
+    lib.requestPost = originalRequestPost;
+  }
+});
+
 function hasLoneSurrogate(value) {
   for (let i = 0; i < value.length; i += 1) {
     const code = value.charCodeAt(i);

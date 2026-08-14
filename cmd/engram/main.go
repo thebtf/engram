@@ -15,14 +15,17 @@ package main
 
 import (
 	"context"
+	"debug/buildinfo"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -37,6 +40,7 @@ import (
 	"github.com/thebtf/engram/internal/version"
 	muxcontrol "github.com/thebtf/mcp-mux/muxcore/control"
 	"github.com/thebtf/mcp-mux/muxcore/engine"
+	"github.com/thebtf/mcp-mux/muxcore/ipc"
 	muxregistry "github.com/thebtf/mcp-mux/muxcore/registry"
 	"github.com/thebtf/mcp-mux/muxcore/serverid"
 	"github.com/thebtf/mcp-mux/muxcore/upgrade"
@@ -48,11 +52,16 @@ import (
 var daemonVersion = version.Daemon
 
 const (
-	muxcoreDaemonFlag        = "--muxcore-daemon"
-	muxcoreEmbeddedVersion   = "v0.29.1"
-	muxcoreNamespace         = "engram"
-	muxcoreDaemonCompatEpoch = 1
-	legacyDaemonVersion      = "v6.46.4"
+	muxcoreDaemonFlag            = "--muxcore-daemon"
+	muxcoreEmbeddedVersion       = "v0.29.1"
+	muxcoreNamespace             = "engram"
+	muxcoreDaemonCompatEpoch     = 1
+	legacyDaemonVersion          = "v6.46.4"
+	legacyEngramCommandPath      = "github.com/thebtf/engram/cmd/engram"
+	legacyEngramModulePath       = "github.com/thebtf/engram"
+	legacyEngramRevision         = "b7b43196b9689988ad6591471b56003c0d63797c"
+	legacyMuxcoreModulePath      = "github.com/thebtf/mcp-mux/muxcore"
+	legacyMuxcoreEmbeddedVersion = "v0.28.0"
 )
 
 type muxcoreDaemonVersionMarker struct {
@@ -200,11 +209,7 @@ func readMuxcoreDaemonVersionMarker(path string) (muxcoreDaemonVersionMarker, er
 	return marker, nil
 }
 
-func readLegacyMuxcoreDaemonVersionMarker(path string) (legacyMuxcoreDaemonVersionMarker, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return legacyMuxcoreDaemonVersionMarker{}, err
-	}
+func decodeLegacyMuxcoreDaemonVersionMarker(raw []byte) (legacyMuxcoreDaemonVersionMarker, error) {
 	var marker legacyMuxcoreDaemonVersionMarker
 	if err := decodeStrictJSON(raw, &marker); err != nil {
 		return legacyMuxcoreDaemonVersionMarker{}, err
@@ -216,6 +221,14 @@ func readLegacyMuxcoreDaemonVersionMarker(path string) (legacyMuxcoreDaemonVersi
 		return legacyMuxcoreDaemonVersionMarker{}, errors.New("invalid legacy daemon executable")
 	}
 	return marker, nil
+}
+
+func readLegacyMuxcoreDaemonVersionMarker(path string) (legacyMuxcoreDaemonVersionMarker, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return legacyMuxcoreDaemonVersionMarker{}, err
+	}
+	return decodeLegacyMuxcoreDaemonVersionMarker(raw)
 }
 
 func muxcoreDaemonStatus(ctlPath string) (muxcoreDaemonStatusIdentity, bool) {
@@ -254,15 +267,220 @@ func muxcoreDaemonConvergenceAction(path string, status muxcoreDaemonStatusIdent
 	return classifyDaemonConvergence(client, daemonConvergenceIdentity{ProductVersion: marker.ProductVersion, DaemonCompatEpoch: marker.DaemonCompatEpoch})
 }
 
+// processImageIdentity owns the single opened file that proves both the
+// marker's filesystem identity and the Go build metadata of the live image.
+// Darwin fills its kernel process binding fields before returning it.
+type processImageIdentity struct {
+	File           *os.File
+	darwinUUID     [16]byte
+	darwinUniqueID uint64
+}
+
+func (image *processImageIdentity) Close() error {
+	if image == nil || image.File == nil {
+		return nil
+	}
+	return image.File.Close()
+}
+
+func sameDarwinProcessImageBinding(beforeUUID [16]byte, beforeUniqueID uint64, afterUUID [16]byte, afterUniqueID uint64) bool {
+	return beforeUniqueID != 0 &&
+		afterUniqueID != 0 &&
+		beforeUUID != [16]byte{} &&
+		afterUUID != [16]byte{} &&
+		beforeUniqueID == afterUniqueID &&
+		beforeUUID == afterUUID
+}
+
+func sameLegacyProcessExecutable(markerPath string, image *processImageIdentity) error {
+	markerPath, ok := normalizedExecutablePath(markerPath)
+	if !ok {
+		return errors.New("invalid legacy daemon executable")
+	}
+	if image == nil || image.File == nil {
+		return errors.New("invalid live daemon process image")
+	}
+	markerInfo, err := os.Stat(markerPath)
+	if err != nil {
+		return fmt.Errorf("stat legacy daemon executable: %w", err)
+	}
+	imageInfo, err := image.File.Stat()
+	if err != nil {
+		return fmt.Errorf("stat opened live daemon executable: %w", err)
+	}
+	if !os.SameFile(markerInfo, imageInfo) {
+		return errors.New("legacy daemon executable does not match live process image")
+	}
+	return nil
+}
+
+func effectiveBuildModuleVersion(info *buildinfo.BuildInfo, modulePath string) (string, bool) {
+	if info == nil {
+		return "", false
+	}
+	version := ""
+	for _, dependency := range info.Deps {
+		if dependency == nil || dependency.Path == "" || dependency.Version == "" {
+			return "", false
+		}
+		module := dependency
+		seen := map[*debug.Module]struct{}{}
+		for {
+			if module == nil || module.Path == "" || module.Version == "" {
+				return "", false
+			}
+			if _, duplicate := seen[module]; duplicate {
+				return "", false
+			}
+			seen[module] = struct{}{}
+			if module.Replace == nil {
+				break
+			}
+			module = module.Replace
+		}
+		if module.Path != modulePath {
+			continue
+		}
+		if version != "" || module.Version == "" {
+			return "", false
+		}
+		version = module.Version
+	}
+	if version == "" {
+		return "", false
+	}
+	return version, true
+}
+
+func legacyMuxcoreBuildInfoMatches(info *buildinfo.BuildInfo) bool {
+	if info == nil ||
+		info.Path != legacyEngramCommandPath ||
+		info.Main.Path != legacyEngramModulePath ||
+		info.Main.Replace != nil {
+		return false
+	}
+	settings := make(map[string]string, len(info.Settings))
+	for _, setting := range info.Settings {
+		if setting.Key == "" || setting.Value == "" {
+			return false
+		}
+		if _, duplicate := settings[setting.Key]; duplicate {
+			return false
+		}
+		settings[setting.Key] = setting.Value
+	}
+	if settings["vcs.revision"] != legacyEngramRevision || settings["vcs.modified"] != "false" {
+		return false
+	}
+	dependencies := make(map[string]struct{}, len(info.Deps))
+	for _, dependency := range info.Deps {
+		if dependency == nil || dependency.Path == "" || dependency.Version == "" {
+			return false
+		}
+		if _, duplicate := dependencies[dependency.Path]; duplicate {
+			return false
+		}
+		dependencies[dependency.Path] = struct{}{}
+	}
+	version, ok := effectiveBuildModuleVersion(info, legacyMuxcoreModulePath)
+	return ok && version == legacyMuxcoreEmbeddedVersion
+}
+
+func listMuxcoreRegistryDescriptorsAt(controlPath string) ([]muxregistry.Record, error) {
+	return muxregistry.ListDescriptors(filepath.Dir(controlPath))
+}
+
+func legacyMuxcoreRegistryDescriptorMatches(records []muxregistry.Record, controlPath string, status muxcoreDaemonStatusIdentity) error {
+	expectedPath, err := muxregistry.DescriptorPath(filepath.Dir(controlPath), muxregistry.Descriptor{
+		SchemaVersion:     muxregistry.SchemaVersion,
+		EngineName:        muxcoreNamespace,
+		DaemonControlPath: controlPath,
+	})
+	if err != nil {
+		return fmt.Errorf("construct expected muxcore registry descriptor path: %w", err)
+	}
+	var descriptor *muxregistry.Descriptor
+	for _, record := range records {
+		if record.Err != nil {
+			return fmt.Errorf("read muxcore registry descriptor %q: %w", record.Path, record.Err)
+		}
+		if record.Descriptor.EngineName != muxcoreNamespace {
+			continue
+		}
+		if descriptor != nil || record.Path != expectedPath {
+			return errors.New("muxcore registry descriptor is ambiguous")
+		}
+		descriptorCopy := record.Descriptor
+		descriptor = &descriptorCopy
+	}
+	if descriptor == nil {
+		return errors.New("expected muxcore registry descriptor is missing")
+	}
+	if descriptor.ProductName != muxcoreNamespace ||
+		descriptor.DaemonControlPath != controlPath ||
+		descriptor.PID != status.PID ||
+		descriptor.MuxcoreVersion != legacyMuxcoreEmbeddedVersion {
+		return errors.New("muxcore registry descriptor does not match the live legacy daemon")
+	}
+	capabilities := descriptor.Capabilities
+	if !capabilities.ListOwners || capabilities.Stop || capabilities.Restart || capabilities.Update {
+		return errors.New("muxcore registry descriptor has unsupported capabilities")
+	}
+	return nil
+}
+
+func readCorrelatedLegacyMuxcoreDaemonMarker(path string, status muxcoreDaemonStatusIdentity) (legacyMuxcoreDaemonVersionMarker, error) {
+	legacy, err := readLegacyMuxcoreDaemonVersionMarker(path)
+	if err != nil {
+		return legacyMuxcoreDaemonVersionMarker{}, err
+	}
+	if legacy.PID != status.PID {
+		return legacyMuxcoreDaemonVersionMarker{}, errors.New("legacy daemon marker PID does not match fresh control status")
+	}
+	image, err := readLiveProcessImage(status.PID)
+	if err != nil {
+		return legacyMuxcoreDaemonVersionMarker{}, fmt.Errorf("read live legacy daemon process image: %w", err)
+	}
+	if image == nil {
+		return legacyMuxcoreDaemonVersionMarker{}, errors.New("read live legacy daemon process image: empty handle")
+	}
+	defer image.Close()
+	if err := sameLegacyProcessExecutable(legacy.Exe, image); err != nil {
+		return legacyMuxcoreDaemonVersionMarker{}, err
+	}
+	info, err := readProcessBuildInfo(image.File)
+	if err != nil {
+		return legacyMuxcoreDaemonVersionMarker{}, fmt.Errorf("read live legacy daemon Go build info: %w", err)
+	}
+	if err := verifyLiveProcessImageBindingForLegacyProof(status.PID, image); err != nil {
+		return legacyMuxcoreDaemonVersionMarker{}, fmt.Errorf("verify live legacy daemon process image: %w", err)
+	}
+	if !legacyMuxcoreBuildInfoMatches(info) {
+		return legacyMuxcoreDaemonVersionMarker{}, errors.New("live legacy daemon does not match the official v6.46.4 build identity")
+	}
+	controlPath := serverid.DaemonControlPath("", muxcoreNamespace)
+	records, err := listMuxcoreRegistryDescriptors(controlPath)
+	if err != nil {
+		return legacyMuxcoreDaemonVersionMarker{}, fmt.Errorf("list muxcore registry descriptors: %w", err)
+	}
+	if err := legacyMuxcoreRegistryDescriptorMatches(records, controlPath, status); err != nil {
+		return legacyMuxcoreDaemonVersionMarker{}, err
+	}
+	return legacy, nil
+}
+
 func muxcoreLegacyDaemonConvergenceAction(path string, status muxcoreDaemonStatusIdentity, client daemonConvergenceIdentity) (daemonConvergenceAction, error) {
 	if status.PID <= 0 || strings.TrimSpace(status.DaemonGeneration) == "" || status.ShuttingDown {
 		return daemonConvergenceFail, errors.New("missing fresh live muxcore daemon status identity")
 	}
-	legacy, err := readLegacyMuxcoreDaemonVersionMarker(path)
-	if err == nil && legacy.PID == status.PID && client.DaemonCompatEpoch == 1 && validDaemonIdentity(client) {
+	_, err := readCorrelatedLegacyMuxcoreDaemonMarker(path, status)
+	if err != nil {
+		return daemonConvergenceFail, fmt.Errorf("correlate legacy daemon marker: %w", err)
+	}
+	if client.DaemonCompatEpoch == 1 && validDaemonIdentity(client) {
 		return daemonConvergenceReplace, nil
 	}
-	return daemonConvergenceFail, errors.New("missing, malformed, or uncorrelated legacy daemon marker")
+	return daemonConvergenceFail, errors.New("legacy daemon compatibility identity is unsupported")
 }
 
 func readLiveMuxcoreDaemonActionFromDisk(status muxcoreDaemonStatusIdentity, client daemonConvergenceIdentity) (daemonConvergenceAction, error) {
@@ -270,15 +488,28 @@ func readLiveMuxcoreDaemonActionFromDisk(status muxcoreDaemonStatusIdentity, cli
 }
 
 func readLiveMuxcoreDaemonActionAt(markerPath, legacyPath string, status muxcoreDaemonStatusIdentity, client daemonConvergenceIdentity) (daemonConvergenceAction, error) {
-	if status.ShuttingDown {
+	if status.PID <= 0 || strings.TrimSpace(status.DaemonGeneration) == "" || status.ShuttingDown {
 		return daemonConvergenceFail, errMuxcoreDaemonMarkerUncorrelated
 	}
 	marker, markerErr := readMuxcoreDaemonVersionMarker(markerPath)
 	if markerErr == nil {
-		if marker.PID != status.PID || marker.DaemonGeneration != status.DaemonGeneration {
+		if marker.PID == status.PID {
+			if marker.DaemonGeneration == status.DaemonGeneration {
+				return classifyDaemonConvergence(client, daemonConvergenceIdentity{ProductVersion: marker.ProductVersion, DaemonCompatEpoch: marker.DaemonCompatEpoch})
+			}
 			return daemonConvergenceFail, fmt.Errorf("%w: PID or generation differs from fresh control status", errMuxcoreDaemonMarkerUncorrelated)
 		}
-		return classifyDaemonConvergence(client, daemonConvergenceIdentity{ProductVersion: marker.ProductVersion, DaemonCompatEpoch: marker.DaemonCompatEpoch})
+		// A v6.46.4 client can leave its correlated legacy marker behind after
+		// replacing this schema-2 generation. Only use it when schema-2 proves
+		// a different, newer PID than that legacy identity.
+		legacy, legacyErr := readCorrelatedLegacyMuxcoreDaemonMarker(legacyPath, status)
+		if legacyErr == nil &&
+			marker.DaemonCompatEpoch == client.DaemonCompatEpoch &&
+			client.DaemonCompatEpoch == 1 && validDaemonIdentity(client) &&
+			semver.Compare(marker.ProductVersion, legacy.Version) > 0 {
+			return classifyDaemonConvergence(client, daemonConvergenceIdentity{ProductVersion: legacy.Version, DaemonCompatEpoch: 1})
+		}
+		return daemonConvergenceFail, fmt.Errorf("%w: PID or generation differs from fresh control status", errMuxcoreDaemonMarkerUncorrelated)
 	}
 	if !errors.Is(markerErr, os.ErrNotExist) {
 		return daemonConvergenceFail, markerErr
@@ -291,12 +522,20 @@ func readLiveMuxcoreDaemonActionAt(markerPath, legacyPath string, status muxcore
 }
 
 var (
-	readMuxcoreDaemonStatusIdentity                            = muxcoreDaemonStatus
-	readLiveMuxcoreDaemonAction                                = readLiveMuxcoreDaemonActionFromDisk
-	currentExecutable                                          = os.Executable
-	restartMuxcoreDaemon                                       = restartMuxcoreDaemonWithSuccessor
-	waitForCurrentMuxcoreDaemonReady                           = waitForMuxcoreDaemonVersion
-	acquireRestartLock               func() (io.Closer, error) = func() (io.Closer, error) { return acquireMuxcoreDaemonLock() }
+	readMuxcoreDaemonStatusIdentity                                       = muxcoreDaemonStatus
+	readLiveMuxcoreDaemonAction                                           = readLiveMuxcoreDaemonActionFromDisk
+	currentExecutable                                                     = os.Executable
+	readLiveProcessImage                                                  = liveProcessImageIdentity
+	readProcessBuildInfo                                                  = buildinfo.Read
+	listMuxcoreRegistryDescriptors                                        = listMuxcoreRegistryDescriptorsAt
+	verifyLiveProcessImageBindingForLegacyProof                           = verifyLiveProcessImageBinding
+	dialMuxcoreControl                                                    = ipc.DialTimeout
+	readMuxcoreControlPeerPID                                             = muxcoreControlPeerPID
+	sendMuxcoreControlRequest                                             = sendMuxcoreControlRequestAndReadResponse
+	restartMuxcoreDaemon                                                  = restartMuxcoreDaemonBound
+	waitForCurrentMuxcoreDaemonReady                                      = waitForMuxcoreDaemonVersion
+	acquireRestartLock                          func() (io.Closer, error) = func() (io.Closer, error) { return acquireMuxcoreDaemonLock() }
+	muxcoreMarkerPublicationTimeout                                       = muxcoreDaemonMarkerPublicationTimeout
 )
 
 var (
@@ -306,6 +545,45 @@ var (
 	writeMuxcoreMarker                 = writeMuxcoreMarkerAtomically
 	isRestartLockContended             = isMuxcoreDaemonLockContended
 )
+
+const (
+	muxcoreDaemonMarkerPublicationTimeout = 5 * time.Second
+	muxcoreDaemonLockRetryInterval        = 10 * time.Millisecond
+)
+
+// acquireRestartLockWithContext retries only the expected nonblocking-lock
+// contention. All other acquisition failures and the caller's deadline remain
+// visible to the elected daemon.
+func acquireRestartLockWithContext(ctx context.Context) (io.Closer, error) {
+	var retry *time.Timer
+	defer func() {
+		if retry != nil {
+			retry.Stop()
+		}
+	}()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		lock, err := acquireRestartLock()
+		if err == nil {
+			return lock, nil
+		}
+		if !isRestartLockContended(err) {
+			return nil, err
+		}
+		if retry == nil {
+			retry = time.NewTimer(muxcoreDaemonLockRetryInterval)
+		} else {
+			retry.Reset(muxcoreDaemonLockRetryInterval)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-retry.C:
+		}
+	}
+}
 
 func waitForMuxcoreDaemonVersion(ctx context.Context) error {
 	const pollInterval = 100 * time.Millisecond
@@ -338,9 +616,7 @@ func waitForMuxcoreDaemonVersion(ctx context.Context) error {
 }
 
 func waitForMuxcoreDaemonMarker(ctx context.Context) error {
-	markerCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	return waitForCurrentMuxcoreDaemonReady(markerCtx)
+	return waitForCurrentMuxcoreDaemonReady(ctx)
 }
 
 func verifyCurrentMuxcoreDaemonIdentity(expected muxcoreDaemonStatusIdentity) error {
@@ -413,6 +689,7 @@ func daemonTerminationStatus(ctx context.Context, runErr <-chan error) (normal, 
 		return false, false
 	}
 }
+
 func isExpectedContextShutdown(ctx context.Context, err error) bool {
 	return ctx.Err() != nil && errors.Is(err, context.Canceled)
 }
@@ -502,7 +779,7 @@ func reconcileMuxcoreDaemonVersion(parent context.Context) error {
 			_ = lock.Close()
 			return fmt.Errorf("resolve muxcore successor executable: path %q is not absolute", successorExe)
 		}
-		result, restartErr := restartMuxcoreDaemon(ctx, successorExe)
+		restartErr := restartMuxcoreDaemon(ctx, current, successorExe)
 		closeErr := lock.Close()
 		if restartErr != nil {
 			if closeErr != nil {
@@ -513,15 +790,9 @@ func reconcileMuxcoreDaemonVersion(parent context.Context) error {
 		if closeErr != nil {
 			fmt.Fprintf(os.Stderr, "[engram] WARN: released muxcore daemon restart lock with error: %v\n", closeErr)
 		}
-		if !result.DaemonWasRunning {
-			return nil
-		}
 		waitErr := waitForMuxcoreDaemonMarker(ctx)
-		if result.ReplacementReady {
-			waitErr = waitForCurrentMuxcoreDaemonReady(ctx)
-		}
 		if waitErr == nil {
-			fmt.Fprintf(os.Stderr, "[engram] replaced lower muxcore daemon PID %d with %s (graceful=%t fallback_shutdown=%t)\n", current.PID, daemonVersion, result.GracefulRestarted, result.FallbackShutdown)
+			fmt.Fprintf(os.Stderr, "[engram] replaced lower muxcore daemon PID %d with %s\n", current.PID, daemonVersion)
 			return nil
 		}
 		if errors.Is(waitErr, errMuxcoreDaemonStillLower) {
@@ -532,10 +803,16 @@ func reconcileMuxcoreDaemonVersion(parent context.Context) error {
 }
 
 func writeMuxcoreDaemonVersionMarker(logger *slog.Logger) error {
+	ctx, cancel := context.WithTimeout(context.Background(), muxcoreMarkerPublicationTimeout)
+	defer cancel()
+	return writeMuxcoreDaemonVersionMarkerWithContext(ctx, logger)
+}
+
+func writeMuxcoreDaemonVersionMarkerWithContext(ctx context.Context, logger *slog.Logger) error {
 	if !isMuxcoreDaemonMode() {
 		return nil
 	}
-	if err := writeMuxcoreDaemonVersionMarkerAt(muxcoreDaemonMarkerPath()); err != nil {
+	if err := writeMuxcoreDaemonVersionMarkerAtWithContext(ctx, muxcoreDaemonMarkerPath()); err != nil {
 		logger.Error("could not publish muxcore daemon version marker", "error", err)
 		return err
 	}
@@ -543,11 +820,29 @@ func writeMuxcoreDaemonVersionMarker(logger *slog.Logger) error {
 }
 
 func writeMuxcoreDaemonVersionMarkerAt(markerPath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), muxcoreMarkerPublicationTimeout)
+	defer cancel()
+	return writeMuxcoreDaemonVersionMarkerAtWithContext(ctx, markerPath)
+}
+
+func writeMuxcoreDaemonVersionMarkerAtWithContext(ctx context.Context, markerPath string) (err error) {
 	if err := os.MkdirAll(filepath.Dir(markerPath), 0o700); err != nil {
 		return fmt.Errorf("create muxcore marker directory: %w", err)
 	}
+	lock, err := acquireRestartLockWithContext(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire muxcore daemon restart lock before publishing marker: %w", err)
+	}
+	defer func() {
+		if closeErr := lock.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("release muxcore daemon restart lock after publishing marker: %w", closeErr))
+		}
+	}()
+
+	// The status read is deliberately after taking the shared restart lock:
+	// a daemon superseded while waiting for it publishes neither projection.
 	status, ok := readMuxcoreDaemonStatusIdentity(serverid.DaemonControlPath("", muxcoreNamespace))
-	if !ok || status.PID != os.Getpid() || status.ShuttingDown {
+	if !ok || status.PID != os.Getpid() || strings.TrimSpace(status.DaemonGeneration) == "" || status.ShuttingDown {
 		return errors.New("correlate this live, non-shutting-down muxcore daemon before publishing marker")
 	}
 	exePath, err := currentExecutable()
@@ -562,19 +857,64 @@ func writeMuxcoreDaemonVersionMarkerAt(markerPath string) error {
 	if err != nil {
 		return err
 	}
+	legacyPath := muxcoreLegacyDaemonVersionPathForMarker(markerPath)
+	priorLegacy, priorLegacyErr := os.ReadFile(legacyPath)
+	legacyExisted := priorLegacyErr == nil
+	if priorLegacyErr != nil && !errors.Is(priorLegacyErr, os.ErrNotExist) {
+		return fmt.Errorf("read prior muxcore legacy marker: %w", priorLegacyErr)
+	}
+	legacyMarker := legacyMuxcoreDaemonVersionMarker{Version: client.ProductVersion, PID: status.PID, Exe: exePath}
+	if prior, priorErr := readLegacyMuxcoreDaemonVersionMarker(legacyPath); priorErr == nil {
+		// v6.46.4 compares its own version and executable exactly before it joins.
+		// Keeping that trusted prior identity with this daemon's PID lets it join
+		// the schema-2-authoritative current daemon instead of replacing it.
+		legacyMarker.Version = prior.Version
+		legacyMarker.Exe = prior.Exe
+	}
+	legacy, err := json.Marshal(legacyMarker)
+	if err != nil {
+		return fmt.Errorf("marshal muxcore legacy marker: %w", err)
+	}
 	v2, err := json.Marshal(muxcoreDaemonVersionMarker{SchemaVersion: 2, ProductVersion: client.ProductVersion, DaemonCompatEpoch: client.DaemonCompatEpoch, PID: status.PID, DaemonGeneration: status.DaemonGeneration, Exe: exePath})
 	if err != nil {
 		return fmt.Errorf("marshal muxcore schema-2 marker: %w", err)
 	}
-	legacy, err := json.Marshal(legacyMuxcoreDaemonVersionMarker{Version: client.ProductVersion, PID: status.PID, Exe: exePath})
-	if err != nil {
-		return fmt.Errorf("marshal muxcore legacy marker: %w", err)
+	legacy = append(legacy, '\n')
+	v2 = append(v2, '\n')
+
+	// v6.46.4 joins only after its retained identity names this PID. Publish
+	// that projection first, then commit schema-2 authority. The restart lock
+	// spans both atomic replacements, so a new client cannot act on the mixed
+	// tuple; a legacy client sees only an already-rebound PID. If the second
+	// write cannot commit, restore the exact previous legacy projection before
+	// releasing the lock; without that compensation, the mixed tuple is unsafe.
+	restoreLegacy := func(publishErr error) error {
+		var restoreErr error
+		if legacyExisted {
+			restoreErr = writeMuxcoreMarker(legacyPath, priorLegacy)
+		} else if err := os.Remove(legacyPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			restoreErr = err
+		}
+		if restoreErr != nil {
+			return errors.Join(publishErr, fmt.Errorf("restore prior muxcore legacy marker: %w", restoreErr))
+		}
+		return publishErr
 	}
-	legacyPath := muxcoreLegacyDaemonVersionPathForMarker(markerPath)
+	current, ok := readMuxcoreDaemonStatusIdentity(serverid.DaemonControlPath("", muxcoreNamespace))
+	if !ok || !sameMuxcoreDaemon(status, current) || current.ShuttingDown {
+		return errors.New("muxcore daemon status changed before publishing marker")
+	}
 	if err := writeMuxcoreMarker(legacyPath, legacy); err != nil {
 		return err
 	}
-	return writeMuxcoreMarker(markerPath, v2)
+	current, ok = readMuxcoreDaemonStatusIdentity(serverid.DaemonControlPath("", muxcoreNamespace))
+	if !ok || !sameMuxcoreDaemon(status, current) || current.ShuttingDown {
+		return restoreLegacy(errors.New("muxcore daemon status changed before publishing schema-2 marker"))
+	}
+	if err := writeMuxcoreMarker(markerPath, v2); err != nil {
+		return restoreLegacy(err)
+	}
+	return nil
 }
 
 func writeMuxcoreMarkerAtomically(path string, payload []byte) error {
@@ -588,7 +928,7 @@ func writeMuxcoreMarkerAtomically(path string, payload []byte) error {
 		_ = tmp.Close()
 		return fmt.Errorf("set muxcore marker permissions: %w", err)
 	}
-	if _, err := tmp.Write(append(payload, '\n')); err != nil {
+	if _, err := tmp.Write(payload); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("write muxcore marker: %w", err)
 	}
@@ -637,20 +977,59 @@ func muxcoreShimConfig() engine.Config {
 	return cfg
 }
 
-func restartMuxcoreDaemonWithSuccessor(ctx context.Context, successorExe string) (engine.UpdateAndRestartResult, error) {
-	cfg := muxcoreShimConfig()
-	eng, err := engine.New(cfg)
-	if err != nil {
-		return engine.UpdateAndRestartResult{}, err
+func sendMuxcoreControlRequestAndReadResponse(ctx context.Context, connection net.Conn, request muxcontrol.Request) (*muxcontrol.Response, error) {
+	deadline := time.Now().Add(60 * time.Second)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
 	}
-	return eng.RestartWithSuccessor(ctx, engine.RestartWithSuccessorOptions{
-		SuccessorExe:       successorExe,
-		DrainTimeout:       30 * time.Second,
-		RestartTimeout:     60 * time.Second,
-		ShutdownTimeout:    10 * time.Second,
-		ReadyTimeout:       30 * time.Second,
-		ProceedWithoutLock: true,
+	if err := connection.SetDeadline(deadline); err != nil {
+		return nil, fmt.Errorf("set muxcore control deadline: %w", err)
+	}
+	if err := json.NewEncoder(connection).Encode(request); err != nil {
+		return nil, fmt.Errorf("write muxcore control request: %w", err)
+	}
+	var response muxcontrol.Response
+	if err := json.NewDecoder(connection).Decode(&response); err != nil {
+		return nil, fmt.Errorf("read muxcore control response: %w", err)
+	}
+	return &response, nil
+}
+
+func restartMuxcoreDaemonBound(ctx context.Context, expected muxcoreDaemonStatusIdentity, successorExe string) error {
+	if expected.PID <= 0 || strings.TrimSpace(expected.DaemonGeneration) == "" || expected.ShuttingDown {
+		return errors.New("missing fenced live muxcore daemon status identity")
+	}
+	connection, err := dialMuxcoreControl(serverid.DaemonControlPath("", muxcoreNamespace), 5*time.Second)
+	if err != nil {
+		return fmt.Errorf("dial fenced muxcore control connection: %w", err)
+	}
+	defer connection.Close()
+	peerPID, err := readMuxcoreControlPeerPID(connection)
+	if err != nil {
+		return fmt.Errorf("identify muxcore control peer: %w", err)
+	}
+	if peerPID != expected.PID {
+		return fmt.Errorf("muxcore control peer PID %d does not match fenced status PID %d", peerPID, expected.PID)
+	}
+	current, ok := readMuxcoreDaemonStatusIdentity(serverid.DaemonControlPath("", muxcoreNamespace))
+	if !ok || !sameMuxcoreDaemon(expected, current) || current.ShuttingDown {
+		return errors.New("muxcore daemon status changed after control peer verification")
+	}
+	response, err := sendMuxcoreControlRequest(ctx, connection, muxcontrol.Request{
+		Cmd:            "graceful-restart",
+		DrainTimeoutMs: int((30 * time.Second).Milliseconds()),
+		SuccessorExe:   successorExe,
 	})
+	if err != nil {
+		return fmt.Errorf("send peer-bound muxcore graceful restart: %w", err)
+	}
+	if response == nil || !response.OK {
+		if response == nil {
+			return errors.New("peer-bound muxcore graceful restart returned no response")
+		}
+		return fmt.Errorf("peer-bound muxcore graceful restart rejected: %s", response.Message)
+	}
+	return nil
 }
 
 func main() {
@@ -775,7 +1154,10 @@ func main() {
 		logger.Error("muxcore daemon status is not this live elected daemon")
 		os.Exit(1)
 	}
-	if err := writeMuxcoreDaemonVersionMarker(logger); err != nil {
+	markerCtx, cancelMarkerPublication := context.WithTimeout(daemonCtx, muxcoreMarkerPublicationTimeout)
+	err = writeMuxcoreDaemonVersionMarkerWithContext(markerCtx, logger)
+	cancelMarkerPublication()
+	if err != nil {
 		_ = pipeline.ShutdownAll(daemonCtx)
 		if normal, _ := daemonTerminationStatus(daemonCtx, runErr); normal {
 			return

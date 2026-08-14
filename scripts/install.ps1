@@ -39,10 +39,12 @@ function Assert-Node {
     if (-not $Node) {
         Write-Err "Node.js 18+ is required to validate the release bootstrap policy. Install Node.js 18 or newer and re-run this installer."
     }
-    $NodeVersion = & $Node.Source --version 2>$null
+    $NodeExecutable = $Node.Source
+    $NodeVersion = & $NodeExecutable --version 2>$null
     if ($LASTEXITCODE -ne 0 -or $NodeVersion -notmatch "^v?([0-9]+)\." -or [int]$Matches[1] -lt 18) {
         Write-Err "Node.js 18+ is required to validate the release bootstrap policy. Found $NodeVersion; install Node.js 18 or newer and re-run this installer."
     }
+    return $NodeExecutable
 }
 
 # ---------------------------------------------------------------------------
@@ -81,7 +83,7 @@ function Get-LatestVersion {
 # Download release zip and lay out files into $InstallDir
 # ---------------------------------------------------------------------------
 function Install-Release {
-    param([string]$Ver)
+    param([string]$Ver, [string]$NodeExecutable)
 
     $TempDir = New-Item -ItemType Directory -Path "$env:TEMP\engram-$(Get-Random)" -Force
 
@@ -100,9 +102,20 @@ function Install-Release {
         if (-not (Test-Path "$TempDir\scripts\*.js")) {
             Write-Err "Release archive is missing required JS scripts in $TempDir\scripts"
         }
+        if (-not (Test-Path -LiteralPath (Join-Path $TempDir "scripts\register-plugin.js") -PathType Leaf)) {
+            Write-Err "Release archive is missing required registry transaction helper"
+        }
         $PolicyPath = Join-Path $TempDir "bootstrap-targets.json"
         if (-not (Test-Path -LiteralPath $PolicyPath -PathType Leaf)) {
             Write-Err "Release archive is missing required bootstrap-targets.json"
+        }
+        $ManifestPath = Join-Path $TempDir "package.json"
+        if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+            Write-Err "Release archive is missing required OMP package.json"
+        }
+        $ExtensionPath = Join-Path $TempDir "extensions\engram-memory.mjs"
+        if (-not (Test-Path -LiteralPath $ExtensionPath -PathType Leaf)) {
+            Write-Err "Release archive is missing required OMP extension"
         }
 
         # This validator is part of the trusted installer, not the release archive.
@@ -180,14 +193,11 @@ for (const [key, asset] of Object.entries(assets)) {
   if (target.desired.version !== version || target.desired.asset !== asset || !Number.isSafeInteger(target.desired.size) || target.desired.size <= 0 || target.desired.size > 128 * 1024 * 1024 || !sha256.test(target.desired.sha256) || policy.revoked_sha256.includes(target.desired.sha256)) throw new Error(`invalid target ${key}`);
 }
 '@
-        try {
-            $ValidatorScript | & node - $PolicyPath $VersionClean
-            if ($LASTEXITCODE -ne 0) {
-                throw 'schema or target matrix mismatch'
-            }
-        }
-        catch {
-            Write-Err "Release archive has an invalid bootstrap policy: $_"
+        $ValidatorOutput = @($ValidatorScript | & $NodeExecutable - $PolicyPath $VersionClean 2>&1)
+        $ValidatorExitCode = $LASTEXITCODE
+        $ValidatorOutput | ForEach-Object { Write-Host $_ }
+        if ($ValidatorExitCode -ne 0) {
+            Write-Err "Release archive has an invalid bootstrap policy: schema or target matrix mismatch"
         }
 
         Write-Info "Installing to $InstallDir..."
@@ -195,6 +205,7 @@ for (const [key, asset] of Object.entries(assets)) {
         New-Item -ItemType Directory -Path "$InstallDir\scripts"       -Force | Out-Null
         New-Item -ItemType Directory -Path "$InstallDir\.claude-plugin" -Force | Out-Null
         New-Item -ItemType Directory -Path "$InstallDir\commands"       -Force | Out-Null
+        New-Item -ItemType Directory -Path "$InstallDir\extensions"    -Force | Out-Null
 
         # Server binary — present in all archives; let callers decide whether to use it
         Copy-Item "$TempDir\engram-server.exe" "$InstallDir\" -Force -ErrorAction SilentlyContinue
@@ -208,6 +219,8 @@ for (const [key, asset] of Object.entries(assets)) {
 
         Copy-Item "$TempDir\scripts\*.js" "$InstallDir\scripts\" -Force -ErrorAction Stop
         Copy-Item $PolicyPath "$InstallDir\bootstrap-targets.json" -Force -ErrorAction Stop
+        Copy-Item $ManifestPath "$InstallDir\package.json" -Force -ErrorAction Stop
+        Copy-Item $ExtensionPath "$InstallDir\extensions\engram-memory.mjs" -Force -ErrorAction Stop
 
         Copy-Item "$TempDir\.claude-plugin\*" "$InstallDir\.claude-plugin\" -Force
 
@@ -241,7 +254,7 @@ for (const [key, asset] of Object.entries(assets)) {
 # Write plugin metadata into Claude Code's JSON registry files
 # ---------------------------------------------------------------------------
 function Register-Plugin {
-    param([string]$Ver)
+    param([string]$Ver, [string]$NodeExecutable)
 
     $Timestamp    = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.000Z")
     $VersionClean = $Ver -replace "^v", ""
@@ -258,70 +271,24 @@ function Register-Plugin {
         Write-Info "Preserving old cache versions for running-session hook compatibility..."
     }
 
-    New-Item -ItemType Directory -Path $CachePath -Force | Out-Null
-
-    # Bootstrap JSON files when they do not exist yet
-    if (-not (Test-Path $PluginsFile))      { '{"version": 2, "plugins": {}}' | Out-File -Encoding UTF8 $PluginsFile }
-    if (-not (Test-Path $SettingsFile))     { '{}' | Out-File -Encoding UTF8 $SettingsFile }
-    if (-not (Test-Path $MarketplacesFile)) { '{}' | Out-File -Encoding UTF8 $MarketplacesFile }
-
     New-Item -ItemType Directory -Path "$CachePath\.claude-plugin" -Force | Out-Null
     New-Item -ItemType Directory -Path "$CachePath\hooks"          -Force | Out-Null
-    Copy-Item "$InstallDir\*" $CachePath -Recurse -Force -ErrorAction SilentlyContinue
+    Copy-Item "$InstallDir\*" $CachePath -Recurse -Force -ErrorAction Stop
 
-    try {
-        # installed_plugins.json
-        $Plugins     = Get-Content $PluginsFile -Raw | ConvertFrom-Json
-        $PluginEntry = @(
-            @{
-                scope       = "user"
-                installPath = $CachePath
-                version     = $VersionClean
-                installedAt = $Timestamp
-                lastUpdated = $Timestamp
-                isLocal     = $true
-            }
-        )
-        if (-not $Plugins.plugins) {
-            $Plugins | Add-Member -NotePropertyName "plugins" -NotePropertyValue ([PSCustomObject]@{}) -Force
-        }
-        $Plugins.plugins | Add-Member -NotePropertyName $PluginKey -NotePropertyValue $PluginEntry -Force
-        $Plugins | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $PluginsFile
-        Write-Success "Plugin registered in installed_plugins.json"
-
-        # settings.json — enable plugin and configure statusline
-        $Settings = Get-Content $SettingsFile -Raw | ConvertFrom-Json
-        if (-not $Settings.enabledPlugins) {
-            $Settings | Add-Member -NotePropertyName "enabledPlugins" -NotePropertyValue ([PSCustomObject]@{}) -Force
-        }
-        $Settings.enabledPlugins | Add-Member -NotePropertyName $PluginKey -NotePropertyValue $true -Force
-
-        $StatuslineCmd   = "node `"$InstallDir\hooks\statusline.js`""
-        $StatuslineEntry = @{ type = "command"; command = $StatuslineCmd; padding = 0 }
-        $Settings | Add-Member -NotePropertyName "statusLine" -NotePropertyValue $StatuslineEntry -Force
-
-        $Settings | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $SettingsFile
-        Write-Success "Plugin enabled in settings.json"
-        Write-Success "Statusline configured in settings.json"
-
-        # MCP transport is declared in the plugin's .mcp.json — no settings.json edit needed
-
-        # known_marketplaces.json
-        $Marketplaces     = Get-Content $MarketplacesFile -Raw | ConvertFrom-Json
-        $MarketplaceEntry = @{
-            source          = @{ source = "directory"; path = $InstallDir }
-            installLocation = $InstallDir
-            lastUpdated     = $Timestamp
-        }
-        $Marketplaces | Add-Member -NotePropertyName "engram" -NotePropertyValue $MarketplaceEntry -Force
-        $Marketplaces | ConvertTo-Json -Depth 10 | Out-File -Encoding UTF8 $MarketplacesFile
-        Write-Success "Marketplace registered in known_marketplaces.json"
-    }
-    catch {
-        Write-Host "[ERROR] Plugin registration failed: $_" -ForegroundColor Red
-        Write-Host "[ERROR] installed_plugins.json / settings.json / known_marketplaces.json may not have been updated." -ForegroundColor Red
+    $HelperOutput = @(& $NodeExecutable "$InstallDir\scripts\register-plugin.js" `
+        $PluginsFile $SettingsFile $MarketplacesFile `
+        $PluginKey $CachePath $VersionClean $Timestamp $InstallDir 2>&1)
+    $HelperExitCode = $LASTEXITCODE
+    $HelperOutput | ForEach-Object { Write-Host $_ }
+    if ($HelperExitCode -ne 0) {
+        Write-Host "[ERROR] Plugin registration failed: registry transaction helper failed with exit code $HelperExitCode" -ForegroundColor Red
+        Write-Host "[ERROR] Registry transaction did not complete." -ForegroundColor Red
         exit 1
     }
+    Write-Success "Plugin registered in installed_plugins.json"
+    Write-Success "Plugin enabled in settings.json"
+    Write-Success "Statusline configured in settings.json"
+    Write-Success "Marketplace registered in known_marketplaces.json"
 }
 
 # ---------------------------------------------------------------------------
@@ -469,7 +436,7 @@ if ($Uninstall) {
     exit 0
 }
 
-Assert-Node
+$NodeExecutable = Assert-Node
 
 if (-not $Version) {
     Write-Info "Fetching latest release..."
@@ -477,8 +444,8 @@ if (-not $Version) {
 }
 Write-Info "Installing version: $Version"
 
-Install-Release  -Ver $Version
-Register-Plugin  -Ver $Version
+Install-Release  -Ver $Version -NodeExecutable $NodeExecutable
+Register-Plugin  -Ver $Version -NodeExecutable $NodeExecutable
 Setup-Connection
 Test-ServerHealth
 

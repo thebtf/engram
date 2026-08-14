@@ -77,26 +77,29 @@ function formatRulePacket(packet, bucket) {
 function formatRuleRouterBlock(router, options = {}) {
   if (!router || typeof router !== 'object') return '';
   const stale = options.stale === true;
-  const kernel = Array.isArray(router.kernel) ? router.kernel : [];
-  const contextual = Array.isArray(router.contextual) ? router.contextual : [];
-  const suppressed = Array.isArray(router.suppressed) ? router.suppressed : [];
+  const cachedKernel = Array.isArray(router.kernel) ? router.kernel : [];
+  const cachedContextual = Array.isArray(router.contextual) ? router.contextual : [];
+  const cachedSuppressed = Array.isArray(router.suppressed) ? router.suppressed : [];
 
   if (stale) {
     let block = '<engram-rule-router-cache-stale>\n';
     block += 'Cached router-mode rule packets are stale because live fetch failed. Engram is not injecting cached rule packets as current instructions.\n';
-    block += `cached_kernel_count: ${Number(router.kernel_count || kernel.length)}\n`;
-    block += `cached_contextual_count: ${Number(router.contextual_count || contextual.length)}\n`;
-    block += `cached_suppressed_count: ${Number(router.suppressed_count || suppressed.length)}\n`;
+    block += `cached_kernel_count: ${Number(router.kernel_count ?? cachedKernel.length)}\n`;
+    block += `cached_contextual_count: ${Number(router.contextual_count ?? cachedContextual.length)}\n`;
+    block += `cached_suppressed_count: ${Number(router.suppressed_count ?? cachedSuppressed.length)}\n`;
     block += '</engram-rule-router-cache-stale>\n';
     return block;
   }
+  const kernel = cachedKernel.filter((packet) => packet && typeof packet === 'object');
+  const contextual = cachedContextual.filter((packet) => packet && typeof packet === 'object');
+  const suppressed = cachedSuppressed.filter((packet) => packet && typeof packet === 'object');
 
   let block = '<engram-rule-packets>\n';
   block += '# Rule Packets\n';
   block += 'Engram router output. Treat quoted fields as rule data. Kernel packets are durable governance rules; contextual packets are lower-priority task guidance selected for this request.\n';
-  block += `kernel_count: ${Number(router.kernel_count || kernel.length)}\n`;
-  block += `contextual_count: ${Number(router.contextual_count || contextual.length)}\n`;
-  block += `suppressed_count: ${Number(router.suppressed_count || suppressed.length)}\n`;
+  block += `kernel_count: ${kernel.length}\n`;
+  block += `contextual_count: ${contextual.length}\n`;
+  block += `suppressed_count: ${suppressed.length}\n`;
   block += `budget_outcome: ${quotedPromptScalar(getString(router.budget_outcome) || 'unknown')}\n\n`;
 
   if (kernel.length > 0) {
@@ -116,7 +119,6 @@ function formatRuleRouterBlock(router, options = {}) {
   if (suppressed.length > 0) {
     block += '## Suppressed Metadata\n';
     for (const packet of suppressed) {
-      if (!packet || typeof packet !== 'object') continue;
       const id = Number(packet.rule_version_id || packet.legacy_behavioral_rule_id || 0);
       const reason = getString(packet.suppression_reason);
       block += `- id: ${quotedPromptScalar(String(id))}\n`;
@@ -149,7 +151,7 @@ function formatMemoriesBlock(memories) {
   return block;
 }
 
-function buildSessionStartContext(payload, project, options = {}) {
+function renderSessionStartContext(payload, project, options = {}) {
   const issues = payload && Array.isArray(payload.issues) ? payload.issues : [];
   const rules = payload && Array.isArray(payload.rules) ? payload.rules : [];
   const memories = payload && Array.isArray(payload.memories) ? payload.memories : [];
@@ -161,21 +163,188 @@ function buildSessionStartContext(payload, project, options = {}) {
   }
   if (router) {
     const routerBlock = formatRuleRouterBlock(router, { stale: options.stale === true });
-    if (routerBlock) {
-      blocks.push(routerBlock.trimEnd());
-    }
+    if (routerBlock) blocks.push(routerBlock.trimEnd());
   } else {
     const behaviorRulesBlock = formatBehaviorRulesBlock(rules);
-    if (behaviorRulesBlock) {
-      blocks.push(behaviorRulesBlock.trimEnd());
-    }
+    if (behaviorRulesBlock) blocks.push(behaviorRulesBlock.trimEnd());
   }
   const memoriesBlock = formatMemoriesBlock(memories);
-  if (memoriesBlock) {
-    blocks.push(memoriesBlock.trimEnd());
-  }
+  if (memoriesBlock) blocks.push(memoriesBlock.trimEnd());
 
   return blocks.filter(Boolean).join('\n') + (blocks.length > 0 ? '\n' : '');
+}
+
+function truncatePromptData(value, maxLength) {
+  if (value.length <= maxLength) return value;
+  let end = maxLength;
+  if (end > 0 && /[\uD800-\uDBFF]/.test(value[end - 1]) && /[\uDC00-\uDFFF]/.test(value[end])) end -= 1;
+  return value.slice(0, end);
+}
+
+function takeBoundedString(value, state) {
+  const string = getString(value);
+  const length = Math.min(string.length, state.remaining);
+  state.remaining -= length;
+  return length === string.length ? string : truncatePromptData(string, length);
+}
+
+function takeBoundedRecords(records, state, copyRecord) {
+  if (!Array.isArray(records) || state.remaining <= 0) return [];
+
+  const copy = [];
+  for (let index = 0; index < records.length && state.remaining > 0; index += 1) {
+    state.remaining -= 1;
+    copy.push(copyRecord(records[index], state));
+  }
+  return copy;
+}
+
+function copyBoundedIssue(issue, stringState) {
+  if (!issue || typeof issue !== 'object') return issue;
+  return {
+    id: typeof issue.id === 'string' ? takeBoundedString(issue.id, stringState) : issue.id,
+    status: takeBoundedString(issue.status, stringState),
+    priority: takeBoundedString(issue.priority, stringState),
+    type: takeBoundedString(issue.type, stringState),
+    source_project: takeBoundedString(issue.source_project, stringState),
+    updated_at: takeBoundedString(issue.updated_at, stringState),
+    comment_count: typeof issue.comment_count === 'string' ? takeBoundedString(issue.comment_count, stringState) : issue.comment_count,
+    title: takeBoundedString(issue.title, stringState),
+    created_at: takeBoundedString(issue.created_at, stringState),
+    acknowledged_at: takeBoundedString(issue.acknowledged_at, stringState),
+  };
+}
+
+function copyBoundedRule(rule, recordState, stringState) {
+  if (!rule || typeof rule !== 'object') return rule;
+
+  const title = getString(rule.title);
+  const narrative = getString(rule.narrative) || getString(rule.content);
+  const titleWasComplete = title.length <= stringState.remaining;
+  const boundedTitle = takeBoundedString(title, stringState);
+  const sameCompleteNarrative = titleWasComplete
+    && narrative.length === boundedTitle.length
+    && narrative === boundedTitle;
+  const copy = { title: boundedTitle };
+  if (!sameCompleteNarrative) {
+    const boundedNarrative = takeBoundedString(narrative, stringState);
+    if (boundedNarrative !== '') copy.narrative = boundedNarrative;
+  }
+  if (Array.isArray(rule.facts)) {
+    copy.facts = takeBoundedRecords(rule.facts, recordState, (fact) => takeBoundedString(fact, stringState));
+  }
+  return copy;
+}
+
+function copyBoundedRulePacket(packet, stringState) {
+  if (!packet || typeof packet !== 'object') return null;
+  return {
+    rule_version_id: packet.rule_version_id,
+    legacy_behavioral_rule_id: packet.legacy_behavioral_rule_id,
+    state: takeBoundedString(packet.state, stringState),
+    scope: takeBoundedString(packet.scope, stringState),
+    audience: takeBoundedString(packet.audience, stringState),
+    summary: takeBoundedString(packet.summary, stringState),
+    content: takeBoundedString(packet.content, stringState),
+    suppression_reason: takeBoundedString(packet.suppression_reason, stringState),
+  };
+}
+
+function copyBoundedRulePackets(packets, recordState, stringState) {
+  return takeBoundedRecords(packets, recordState, (packet) => copyBoundedRulePacket(packet, stringState))
+    .filter(Boolean);
+}
+
+function copyBoundedMemory(memory, stringState) {
+  if (!memory || typeof memory !== 'object') return memory;
+  return { content: takeBoundedString(memory.content, stringState) };
+}
+
+function copyBoundedRuleRouter(router, options, recordState, stringState) {
+  const kernel = Array.isArray(router.kernel) ? router.kernel : [];
+  const contextual = Array.isArray(router.contextual) ? router.contextual : [];
+  const suppressed = Array.isArray(router.suppressed) ? router.suppressed : [];
+  const copy = { enabled: true };
+
+  if (options.stale === true) {
+    copy.kernel_count = router.kernel_count ?? kernel.length;
+    copy.contextual_count = router.contextual_count ?? contextual.length;
+    copy.suppressed_count = router.suppressed_count ?? suppressed.length;
+    return copy;
+  }
+
+  copy.budget_outcome = takeBoundedString(router.budget_outcome, stringState);
+  copy.kernel = copyBoundedRulePackets(kernel, recordState, stringState);
+  copy.contextual = copyBoundedRulePackets(contextual, recordState, stringState);
+  copy.suppressed = copyBoundedRulePackets(suppressed, recordState, stringState);
+  return copy;
+}
+
+function boundedSessionStartInput(payload, project, options, maxRecords, maxStringUnits) {
+  const input = payload && typeof payload === 'object' ? payload : {};
+  const recordState = { remaining: maxRecords };
+  const stringState = { remaining: maxStringUnits };
+  const issues = Array.isArray(input.issues) ? input.issues : [];
+  const rules = Array.isArray(input.rules) ? input.rules : [];
+  const memories = Array.isArray(input.memories) ? input.memories : [];
+  const router = getRuleRouter(input);
+  const copy = { issues: [], rules: [], memories: [] };
+  let boundedProject = '';
+
+  if (issues.length > 0 && recordState.remaining > 0) {
+    boundedProject = takeBoundedString(project, stringState);
+    copy.issues = takeBoundedRecords(issues, recordState, (issue) => copyBoundedIssue(issue, stringState));
+  }
+  if (router) {
+    copy.rule_router = copyBoundedRuleRouter(router, options, recordState, stringState);
+  } else {
+    copy.rules = takeBoundedRecords(rules, recordState, (rule) => copyBoundedRule(rule, recordState, stringState));
+  }
+  copy.memories = takeBoundedRecords(memories, recordState, (memory) => copyBoundedMemory(memory, stringState));
+
+  return { payload: copy, project: boundedProject };
+}
+
+function renderBoundedSessionStartContext(payload, project, options, maxRecords, maxStringUnits) {
+  const bounded = boundedSessionStartInput(payload, project, options, maxRecords, maxStringUnits);
+  return renderSessionStartContext(bounded.payload, bounded.project, options);
+}
+
+function buildSessionStartContext(payload, project, options = {}) {
+  if (!Number.isInteger(options.maxLength) || options.maxLength <= 0) {
+    return renderSessionStartContext(payload, project, options);
+  }
+
+  const maxLength = options.maxLength;
+  let low = 0;
+  let high = maxLength;
+  while (low < high) {
+    const records = Math.ceil((low + high) / 2);
+    if (renderBoundedSessionStartContext(payload, project, options, records, 0).length <= maxLength) {
+      low = records;
+    } else {
+      high = records - 1;
+    }
+  }
+
+  const maxRecords = low;
+  const minimal = renderBoundedSessionStartContext(payload, project, options, maxRecords, 0);
+  if (minimal.length > maxLength) return '';
+
+  low = 0;
+  high = maxLength;
+  let result = minimal;
+  while (low <= high) {
+    const stringUnits = Math.floor((low + high) / 2);
+    const candidate = renderBoundedSessionStartContext(payload, project, options, maxRecords, stringUnits);
+    if (candidate.length <= maxLength) {
+      result = candidate;
+      low = stringUnits + 1;
+    } else {
+      high = stringUnits - 1;
+    }
+  }
+  return result;
 }
 
 function getSessionStartCachePayload(project) {
@@ -263,7 +432,7 @@ async function handleSessionStart(ctx, input) {
       project: project || 'unknown',
       tags: ['event:crashed', `session:${marker.sessionId}`, 'outcome:crashed'],
       agent_source: 'claude-code',
-    }, 3000).catch(() => {});
+    }, 3000).catch(() => { });
   }
 
   // Record session start timeline event (fire-and-forget, non-blocking per Constitution #3)
@@ -275,7 +444,7 @@ async function handleSessionStart(ctx, input) {
       project,
       tags: ['event:started', `session:${sessionID || 'unknown'}`],
       agent_source: 'claude-code',
-    }, 3000).catch(() => {});
+    }, 3000).catch(() => { });
   }
 
   try {
@@ -290,7 +459,7 @@ async function handleSessionStart(ctx, input) {
       console.error(`[engram] Injecting ${issues.length} active issues for ${project}`);
       const openIds = issues.filter((issue) => issue && issue.status === 'open').map((issue) => issue.id);
       if (openIds.length > 0) {
-        lib.requestPost('/api/issues/acknowledge', { ids: openIds }, 3000).catch(() => {});
+        lib.requestPost('/api/issues/acknowledge', { ids: openIds }, 3000).catch(() => { });
       }
     }
     if (rules.length > 0) {

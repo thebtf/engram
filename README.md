@@ -248,9 +248,10 @@ before proxying browser routes.
 ### Plugin install (recommended)
 
 The marketplace plugin registers the MCP server, skills, and slash commands in
-Claude Code and Oh My Pi. Claude Code also activates the bundled lifecycle hooks;
-OMP 17.x does not execute Claude `hooks.json`, so automatic capture and context
-injection remain Claude-only.
+Claude Code and Oh My Pi. Claude Code also activates the bundled lifecycle hooks.
+OMP 17.x does not execute Claude `hooks.json`, so Claude capture paths do not run
+there; the bundled native Engram extension instead injects Engram context on `session_start` and
+`before_agent_start`.
 
 **Prerequisite:** Node.js 18+ must be available on `PATH`. It runs the bundled
 lifecycle hooks and lets the standalone installers validate the release

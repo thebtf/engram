@@ -11,7 +11,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -f "$policy" && -d "$dist" ]] || { echo 'policy or split dist is missing' >&2; exit 1; }
-node - "$policy" "$dist" <<'NODE'
+version="$(node - "$policy" "$dist" <<'NODE'
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -29,7 +29,9 @@ for (const item of expected) {
   const digest = crypto.createHash('sha256').update(bytes).digest('hex');
   if (bytes.length !== item.size || digest !== item.sha256) throw new Error(`policy mismatch for ${item.asset}: expected size=${item.size} sha256=${item.sha256}, got size=${bytes.length} sha256=${digest}`);
 }
+console.log(policy.package_version);
 NODE
+)"
 
 archive_policy_entry() {
   local archive="$1" name entry="" count=0
@@ -55,3 +57,4 @@ archive_policy_entry() {
 mapfile -t archives < <(find "$dist" -type f \( -name '*.tar.gz' -o -name '*.zip' \))
 ((${#archives[@]})) || { echo 'no release archives found for policy verification' >&2; exit 1; }
 for archive in "${archives[@]}"; do archive_policy_entry "$archive"; done
+bash "$(dirname "$0")/check-server-plugin-artifacts.sh" --version "$version" --dist "$dist"
