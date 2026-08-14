@@ -73,6 +73,29 @@ jobs:
             exit 1
           fi
           node trusted-validator/plugin/engram/scripts/bootstrap-policy.js validate plugin/engram/bootstrap-targets.json "$VERSION"
+          PACKAGE_MANIFEST="plugin/engram/package.json"
+          EXTENSION="plugin/engram/extensions/engram-memory.mjs"
+          if [ ! -f "$PACKAGE_MANIFEST" ]; then
+            echo "::error::OMP package manifest missing: $PACKAGE_MANIFEST"
+            exit 1
+          fi
+          PACKAGE_VERSION="$(jq -r .version "$PACKAGE_MANIFEST")"
+          if [ -z "$PACKAGE_VERSION" ] || [ "$PACKAGE_VERSION" = null ]; then
+            echo "::error::version missing in $PACKAGE_MANIFEST"
+            exit 1
+          fi
+          if [ "$PACKAGE_VERSION" != "$VERSION" ]; then
+            echo "::error::OMP package version must exactly match the canonical plugin version: $VERSION"
+            exit 1
+          fi
+          if ! jq -e '.omp.extensions == ["./extensions/engram-memory.mjs"]' "$PACKAGE_MANIFEST" >/dev/null; then
+            echo "::error::OMP package must declare exactly ./extensions/engram-memory.mjs"
+            exit 1
+          fi
+          if [ ! -f "$EXTENSION" ]; then
+            echo "::error::OMP extension missing: $EXTENSION"
+            exit 1
+          fi
           OMP_MANIFEST="plugin/engram/.omp-plugin/plugin.json"
           if [ ! -f "$OMP_MANIFEST" ]; then
             echo "::error::OMP plugin manifest missing: $OMP_MANIFEST"
@@ -116,6 +139,14 @@ jobs:
           cmp plugin/engram/bootstrap-targets.json marketplace/plugins/engram/bootstrap-targets.json
           cmp plugin/engram/.omp-plugin/plugin.json marketplace/engram/.omp-plugin/plugin.json
           cmp plugin/engram/.omp-plugin/plugin.json marketplace/plugins/engram/.omp-plugin/plugin.json
+          for ROOT in marketplace/engram marketplace/plugins/engram; do
+            test -f "$ROOT/package.json"
+            test -f "$ROOT/extensions/engram-memory.mjs"
+            cmp plugin/engram/package.json "$ROOT/package.json"
+            cmp plugin/engram/extensions/engram-memory.mjs "$ROOT/extensions/engram-memory.mjs"
+          done
+          cmp marketplace/engram/package.json marketplace/plugins/engram/package.json
+          cmp marketplace/engram/extensions/engram-memory.mjs marketplace/plugins/engram/extensions/engram-memory.mjs
           jq --arg version "$VERSION" '
             .version = $version
             | .plugins |= map(.version = $version | .source = "./engram")
