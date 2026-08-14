@@ -1264,13 +1264,25 @@ function Invoke-Publish {
     if ($manifestCommit -cne $validatedCommit) {
         throw "Trusted manifest commit $manifestCommit does not match validated workflow_run commit $validatedCommit."
     }
-    $plan = New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $null
-    $plan['acceptance_manifest_sha256'] = $inputs.manifest_sha256
-    $plan['status'] = 'RUNNING'
-    $plan['failure'] = $null
+    $plan = [ordered]@{
+        schema_version = 1
+        release_version = $ReleaseVersion
+        source_commit = $validatedCommit
+        single_writer_model = 'repository-workflow-release-publish'
+        external_package_admin_trust_boundary = $true
+        remote_inspection = 'not-started'
+        acceptance_manifest_sha256 = $inputs.manifest_sha256
+        destinations = @()
+        status = 'RUNNING'
+        failure = $null
+    }
 
     $publishFailure = $null
     try {
+        $plan = New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $null
+        $plan['acceptance_manifest_sha256'] = $inputs.manifest_sha256
+        $plan['status'] = 'RUNNING'
+        $plan['failure'] = $null
         $localImageIdsByName = @{}
         foreach ($destination in $plan.destinations) {
             if (-not $localImageIdsByName.ContainsKey($destination.image)) {
@@ -2238,7 +2250,7 @@ try {
             server = 'gcr.io/distroless/base-debian13@sha256:b78832f41c8128046807c24840ebee4f1c18ba7870eed423d8750c272c15e147'
             operator_console = 'gcr.io/distroless/nodejs22-debian13@sha256:773a62fbe24a3f8c8b24b16fd59154627f8b406737bc906f83bf1732bc8907dd'
             postgres = 'cgr.dev/chainguard/wolfi-base@sha256:02dab76bd852a70556b5b2002195c8a5fdab77d323c433bf6642aab080489795'
-            go_builder = 'golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36'
+            go_builder = 'golang:1.25.12-bookworm@sha256:a9c020ee3d1508c7be5435c262434e3d3fc1d0e76a11afeb9ddae7d60bc86aa4'
             node_builder = 'node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf'
         }
         pinned_packages = [ordered]@{

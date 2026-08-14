@@ -476,6 +476,11 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 			t.Fatalf("image gate lacks unprivileged scanner contract %q", fragment)
 		}
 	}
+	goBuilder := "golang:1.25.12-bookworm@sha256:a9c020ee3d1508c7be5435c262434e3d3fc1d0e76a11afeb9ddae7d60bc86aa4"
+	requireFileContains(t, filepath.Join(repo, "Dockerfile"), goBuilder)
+	if !strings.Contains(scanner, "go_builder = '"+goBuilder+"'") {
+		t.Fatal("image acceptance evidence records a Go builder that differs from the Dockerfile source")
+	}
 	if count := strings.Count(scanner, "'type=docker,rewrite-timestamp=true,unpack=false'"); count != 3 {
 		t.Fatalf("image gate must normalize timestamps for exactly three Docker image builds, got %d", count)
 	}
@@ -1783,7 +1788,7 @@ func testRegistryCASMatrix(t *testing.T, repo string) {
 		})
 	}
 
-	t.Run("publication failure retains completed evidence", func(t *testing.T) {
+	t.Run("registry inspection failure retains completed evidence", func(t *testing.T) {
 		trustedRoot := t.TempDir()
 		manifestPath := filepath.Join(trustedRoot, "final-image-set.json")
 		manifestData, err := json.Marshal(map[string]any{
@@ -1801,7 +1806,7 @@ func testRegistryCASMatrix(t *testing.T, repo string) {
 		}
 		writePublishedScanFixtureCommand(t, stubDir, "docker", `
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ToolArguments)
-if ($ToolArguments -contains 'imagetools') { 'manifest unknown'; exit 1 }
+if ($ToolArguments -contains 'imagetools') { 'registry unavailable'; exit 1 }
 exit 97
 `)
 		outputPath := filepath.Join(trustedRoot, "publication.json")
@@ -1829,7 +1834,7 @@ exit 97
 		command.Env = append(env, "RUNNER_TEMP="+trustedRoot)
 		output, commandErr := command.CombinedOutput()
 		if commandErr == nil {
-			t.Fatalf("publication unexpectedly succeeded with missing local images:\n%s", output)
+			t.Fatalf("publication unexpectedly succeeded with failed registry inspection:\n%s", output)
 		}
 		data, readErr := os.ReadFile(outputPath)
 		if readErr != nil {
@@ -1843,8 +1848,8 @@ exit 97
 		if err := json.Unmarshal(data, &evidence); err != nil {
 			t.Fatal(err)
 		}
-		if evidence.Status != "FAIL" || evidence.Failure == "" {
-			t.Fatalf("publication failure evidence lost status or cause: %+v", evidence)
+		if evidence.Status != "FAIL" || !strings.Contains(evidence.Failure, "Remote image inspection failed") {
+			t.Fatalf("publication registry failure evidence lost status or cause: %+v", evidence)
 		}
 		if _, err := time.Parse(time.RFC3339Nano, evidence.CompletedAt); err != nil {
 			t.Fatalf("publication failure evidence lacks a valid completion timestamp %q: %v", evidence.CompletedAt, err)
