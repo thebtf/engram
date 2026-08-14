@@ -229,20 +229,24 @@ test('buildSessionStartContext preserves exact output for a payload within the e
   );
 });
 
-test('buildSessionStartContext stops copying outer rules after nested facts consume the record budget', () => {
+test('buildSessionStartContext keeps usable bounded context when nested facts exhaust the shared record budget', () => {
+  const maxLength = 512;
   const payload = {
     rules: [
-      { title: '', facts: [''] },
-      { title: '', facts: [] },
+      { title: 'Nested facts exhaust the shared budget', facts: new Array(maxLength).fill('') },
+      ...Array.from({ length: maxLength }, () => ({ title: 'Outer record that must be dropped', facts: [] })),
     ],
   };
   let result;
 
   assert.doesNotThrow(() => {
-    result = buildSessionStartContext(payload, '', { maxLength: 3 });
+    result = buildSessionStartContext(payload, '', { maxLength });
   });
-  assert.ok(result.length <= 3);
-  assert.equal(result, '');
+  assert.ok(result.length > 0 && result.length <= maxLength);
+  assert.match(result, /<user-behavior-rules>/);
+  assert.match(result, /Nested facts exhaust the shared budget/);
+  assert.doesNotMatch(result, /Outer record that must be dropped/);
+  assert.match(result, /<\/user-behavior-rules>\n$/);
 });
 
 test('buildSessionStartContext never reads the unbounded payload tail while limited', () => {

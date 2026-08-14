@@ -189,11 +189,18 @@ test('config-file credential rotation reaches OMP requests without env mutation'
   }));
   assert.match((await sessionStartMessage({ cwd: process.cwd(), sessionId: 'second-config' }, {})).content, /rotated config context/);
 
+  fs.writeFileSync(configFile, JSON.stringify({
+    server_url: 'http://no-auth.example.test/mcp', api_token: '',
+  }));
+  assert.match((await sessionStartMessage({ cwd: process.cwd(), sessionId: 'no-auth-config' }, {})).content, /rotated config context/);
+
   assert.deepEqual(requests, [
     { url: 'http://first.example.test/api/context/inject', authorization: 'Bearer first-token' },
     { url: 'http://first.example.test/api/context/session-start', authorization: 'Bearer first-token' },
     { url: 'http://second.example.test/api/context/inject', authorization: 'Bearer second-token' },
     { url: 'http://second.example.test/api/context/session-start', authorization: 'Bearer second-token' },
+    { url: 'http://no-auth.example.test/api/context/inject', authorization: undefined },
+    { url: 'http://no-auth.example.test/api/context/session-start', authorization: undefined },
   ]);
   assert.equal(process.env.ENGRAM_URL, undefined);
   assert.equal(process.env.ENGRAM_TOKEN, undefined);

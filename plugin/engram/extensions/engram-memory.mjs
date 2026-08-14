@@ -107,7 +107,7 @@ async function sessionStartMessage(event, ctx, timeoutMs = sessionStartTimeoutMs
   const deadline = deadlineController(Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : sessionStartTimeoutMs);
   try {
     const config = await untilAborted(deadline.signal, () => lib.resolveEngramRuntimeConfig({ signal: deadline.signal }));
-    if (!config || deadline.remaining() <= 0 || config.quiet || !config.serverURL || !config.token) return null;
+    if (!config || deadline.remaining() <= 0 || config.quiet || !config.serverURL) return null;
     const scope = await untilAborted(deadline.signal, () => validateProject(event, ctx, deadline, config));
     const remaining = deadline.remaining();
     if (!scope || remaining <= 0) return null;
@@ -129,7 +129,7 @@ async function ambientMessage(event, ctx) {
   const deadline = deadlineController(ambientTimeoutMs);
   try {
     const config = await untilAborted(deadline.signal, () => lib.resolveEngramRuntimeConfig({ signal: deadline.signal }));
-    if (!config || deadline.remaining() <= 0 || config.quiet || !config.serverURL || !config.token) return null;
+    if (!config || deadline.remaining() <= 0 || config.quiet || !config.serverURL) return null;
     const scope = await untilAborted(deadline.signal, () => validateProject(event, ctx, deadline, config));
     const prompt = stringField(event.prompt, event.userMessage, event.user_message, ctx.prompt);
     const remaining = deadline.remaining();
