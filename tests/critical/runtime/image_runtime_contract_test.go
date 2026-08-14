@@ -429,6 +429,31 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 			t.Fatalf("unprivileged Docker workflow acquired publication authority %q", forbidden)
 		}
 	}
+	if !strings.Contains(verification, "  schedule:\n") || !strings.Contains(verification, "cron: \"17 3 * * *\"") {
+		t.Fatal("Docker workflow must schedule the daily UTC image freshness checks")
+	}
+	rescanIndex := strings.Index(verification, "  rescan-published-images:")
+	if rescanIndex < 0 {
+		t.Fatal("Docker workflow lacks the scheduled published-image rescan job")
+	}
+	publishedRescan := verification[rescanIndex:]
+	for _, required := range []string{
+		"if: github.event_name == 'schedule'", "contents: read",
+		"Resolve latest published release through read-only GitHub API", "/releases/latest", "/git/ref/tags/$version", "READ_ONLY_GITHUB_TOKEN",
+		"-TimeoutSec 30", "-MaximumRetryCount 3", "-RetryIntervalSec 2", "source_commit", "EXPECTED_SOURCE_COMMIT",
+		"Rescan published immutable images without registry authority", "Mode ScanPublished", "-ExpectedSha $env:EXPECTED_SOURCE_COMMIT", "-NoAllowlist",
+		"-ArtifactRoot (Join-Path $env:EVIDENCE_ROOT 'scan')", "-TrustedOutputRoot $env:RUNNER_TEMP",
+		"Upload scheduled published-image rescan evidence", "if: always()",
+	} {
+		if !strings.Contains(publishedRescan, required) {
+			t.Fatalf("scheduled published-image rescan lacks contract %q", required)
+		}
+	}
+	for _, forbidden := range []string{"needs:", "packages: write", "docker/login-action@", "Mode Publish", "docker pull", "docker push"} {
+		if strings.Contains(publishedRescan, forbidden) {
+			t.Fatalf("scheduled published-image rescan exceeds read-only authority with %q", forbidden)
+		}
+	}
 
 	scanner := readFile(t, filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1"))
 	for _, fragment := range []string{
@@ -444,10 +469,17 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		"config.digest",
 		"image_ids = $imageIds",
 		"local_runtime_image_ids = $localImageIds",
+		"ManifestName = 'operator_console'",
+		"$scanCounts[$target.ManifestName]",
 	} {
 		if !strings.Contains(scanner, fragment) {
 			t.Fatalf("image gate lacks unprivileged scanner contract %q", fragment)
 		}
+	}
+	goBuilder := "golang:1.25.12-bookworm@sha256:a9c020ee3d1508c7be5435c262434e3d3fc1d0e76a11afeb9ddae7d60bc86aa4"
+	requireFileContains(t, filepath.Join(repo, "Dockerfile"), goBuilder)
+	if !strings.Contains(scanner, "go_builder = '"+goBuilder+"'") {
+		t.Fatal("image acceptance evidence records a Go builder that differs from the Dockerfile source")
 	}
 	if count := strings.Count(scanner, "'type=docker,rewrite-timestamp=true,unpack=false'"); count != 3 {
 		t.Fatalf("image gate must normalize timestamps for exactly three Docker image builds, got %d", count)
@@ -458,6 +490,26 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 	} {
 		if strings.Contains(scanner, forbidden) {
 			t.Fatalf("image gate retains forbidden scanner or exporter contract %q", forbidden)
+		}
+	}
+	publishedModeStart := strings.Index(scanner, "function Invoke-ScanPublished")
+	publishedModeEnd := strings.Index(scanner, "switch ($Mode)")
+	if publishedModeStart < 0 || publishedModeEnd <= publishedModeStart {
+		t.Fatal("image gate lacks the published-image scan mode")
+	}
+	publishedMode := scanner[publishedModeStart:publishedModeEnd]
+	for _, required := range []string{
+		"Assert-CanonicalPublishedReleaseVersion", "Assert-FullCommitSha", "Get-LiveRemoteIdentity", "'image', '--download-db-only'",
+		"'image', '--skip-db-update'", "tag_reference", "commit_reference", "manifest_digest", "commit_manifest_digest", "scan_reference",
+		"source_commit", "sha-$sourceCommit", "published-image-scan-summary.json", "trivy-version.log", "version_log_sha256", "-AllowFailure", "-NoAllowlist",
+	} {
+		if !strings.Contains(publishedMode, required) {
+			t.Fatalf("published-image scan mode lacks contract %q", required)
+		}
+	}
+	for _, forbidden := range []string{"docker login", "docker pull", "docker push", "docker run", "--image-src', 'docker'"} {
+		if strings.Contains(publishedMode, forbidden) {
+			t.Fatalf("published-image scan mode violates read-only remote scan authority with %q", forbidden)
 		}
 	}
 
@@ -496,6 +548,11 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		"docker logout ghcr.io",
 		"RULESET_AUDIT_TOKEN: ${{ secrets.MARKETPLACE_PAT }}",
 		`RULESET_AUDIT_TOKEN: ""`,
+		"server.trivy.sarif",
+		"Validate the exact trusted evidence envelope after credential erasure\n        if: always() && steps.publish.outcome != 'skipped'",
+		"Upload trusted publication evidence after credential erasure\n        if: always() && steps.publish.outcome != 'skipped'",
+		"id: publish",
+		"-CredentialDirectoryPath $env:DOCKER_CONFIG",
 	} {
 		if !strings.Contains(publisher, fragment) {
 			t.Fatalf("trusted workflow_run publisher lacks contract %q", fragment)
@@ -599,6 +656,9 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 	if !(validateIndex >= 0 && validateIndex < candidateIndex && candidateIndex < buildIndex && buildIndex < uploadIndex && uploadIndex < publishJobIndex && publishJobIndex < artifactValidationIndex && artifactValidationIndex < downloadIndex && downloadIndex < payloadValidationIndex && payloadValidationIndex < loadIndex && loadIndex < preflightIndex && preflightIndex < loginIndex && loginIndex < publishIndex && publishIndex < logoutIndex && logoutIndex < evidenceValidationIndex && evidenceValidationIndex < evidenceUploadIndex) {
 		t.Fatalf("two-runner trust/credential ordering is unsafe: validate=%d candidate=%d build=%d upload=%d publishJob=%d artifact=%d download=%d payload=%d load=%d preflight=%d login=%d publish=%d logout=%d evidenceValidate=%d evidenceUpload=%d", validateIndex, candidateIndex, buildIndex, uploadIndex, publishJobIndex, artifactValidationIndex, downloadIndex, payloadValidationIndex, loadIndex, preflightIndex, loginIndex, publishIndex, logoutIndex, evidenceValidationIndex, evidenceUploadIndex)
 	}
+	t.Run("published immutable image scan evidence and failures", func(t *testing.T) {
+		testPublishedImageScanGate(t, repo)
+	})
 
 	t.Run("repository controlled single writer", func(t *testing.T) {
 		testRepositorySingleWriter(t, repo)
@@ -799,6 +859,7 @@ func testRepositorySingleWriter(t *testing.T, repo string) {
 	for _, required := range []string{
 		"No registry write occurs until", "repository single-writer model", "external_package_admin_trust_boundary",
 		"TrustedOutputRoot", "git-archive-tracked-files-only", "integration_id", "engram:cleanup-placeholder",
+		"push-sent", "$plan.status = 'FAIL'", "Assert-PublicationDestinationRecord",
 	} {
 		if !strings.Contains(script, required) {
 			t.Fatalf("publication script lacks single-writer trust-boundary contract %q", required)
@@ -1160,6 +1221,52 @@ func testArtifactBridgeMatrix(t *testing.T, repo string) {
 			manifest["source_parent_commit"] = strings.Repeat("b", 40)
 			writeJSONAt(t, filepath.Join(root, "final-image-set.json"), manifest)
 		}},
+		{name: "missing SARIF", mutate: func(root string) {
+			if err := os.Remove(filepath.Join(root, "server.trivy.sarif")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "SARIF hash mismatch", mutate: func(root string) {
+			if err := os.WriteFile(filepath.Join(root, "server.trivy.sarif"), []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "malformed SARIF shape with matching hash", mutate: func(root string) {
+			path := filepath.Join(root, "server.trivy.sarif")
+			writeJSONAt(t, path, map[string]any{"version": "2.1.0", "runs": map[string]any{}})
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest := readJSONMap(t, filepath.Join(root, "final-image-set.json"))
+			manifest["sarif_sha256"].(map[string]any)["server"] = sha256Hex(data)
+			writeJSONAt(t, filepath.Join(root, "final-image-set.json"), manifest)
+			updatePayloadManifestHash(t, root)
+		}},
+		{name: "nonzero finding count", mutate: func(root string) {
+			manifest := readJSONMap(t, filepath.Join(root, "final-image-set.json"))
+			manifest["high_critical_findings"].(map[string]any)["server"] = 1
+			writeJSONAt(t, filepath.Join(root, "final-image-set.json"), manifest)
+			updatePayloadManifestHash(t, root)
+		}},
+		{name: "incomplete runtime proof", mutate: func(root string) {
+			manifest := readJSONMap(t, filepath.Join(root, "final-image-set.json"))
+			manifest["runtime_proof"].(map[string]any)["critical_tests"] = false
+			writeJSONAt(t, filepath.Join(root, "final-image-set.json"), manifest)
+			updatePayloadManifestHash(t, root)
+		}},
+		{name: "retained cleanup resource", mutate: func(root string) {
+			manifest := readJSONMap(t, filepath.Join(root, "final-image-set.json"))
+			manifest["cleanup"].(map[string]any)["containers"] = []any{"leaked-container"}
+			writeJSONAt(t, filepath.Join(root, "final-image-set.json"), manifest)
+			updatePayloadManifestHash(t, root)
+		}},
+		{name: "scanner exception input", mutate: func(root string) {
+			manifest := readJSONMap(t, filepath.Join(root, "final-image-set.json"))
+			manifest["scanner_exception_inputs"] = []any{"CVE-test"}
+			writeJSONAt(t, filepath.Join(root, "final-image-set.json"), manifest)
+			updatePayloadManifestHash(t, root)
+		}},
 		{name: "symlink entry", mutate: func(root string) {
 			target := filepath.Join(root, "operator-console.tar")
 			link := filepath.Join(root, "server.tar")
@@ -1199,6 +1306,74 @@ func testArtifactBridgeMatrix(t *testing.T, repo string) {
 			"-ExpectedSha", sha,
 			"-ReleaseVersion", version)
 	})
+	publicationCases := []struct {
+		name   string
+		pass   bool
+		mutate func(string)
+	}{
+		{name: "retained acceptance proof", pass: true},
+		{name: "retained SARIF mismatch", mutate: func(root string) {
+			if err := os.WriteFile(filepath.Join(root, "postgres.trivy.sarif"), []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "retained manifest semantic tamper", mutate: func(root string) {
+			manifestPath := filepath.Join(root, "final-image-set.json")
+			manifest := readJSONMap(t, manifestPath)
+			manifest["runtime_proof"].(map[string]any)["critical_tests"] = false
+			writeJSONAt(t, manifestPath, manifest)
+			manifestData, err := os.ReadFile(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := "sha256:" + sha256Hex(manifestData)
+			for _, name := range []string{"payload-validation.json", "pre-login-publication-plan.json", "publication-result.json"} {
+				path := filepath.Join(root, name)
+				record := readJSONMap(t, path)
+				if name == "payload-validation.json" {
+					record["manifest_sha256"] = digest
+				} else {
+					record["acceptance_manifest_sha256"] = digest
+				}
+				writeJSONAt(t, path, record)
+			}
+		}},
+		{name: "noncanonical destination", mutate: func(root string) {
+			for _, name := range []string{"pre-login-publication-plan.json", "publication-result.json"} {
+				path := filepath.Join(root, name)
+				record := readJSONMap(t, path)
+				record["destinations"].([]any)[0].(map[string]any)["reference"] = "ghcr.io/thebtf/unrelated:v6.43.0-rc.1"
+				writeJSONAt(t, path, record)
+			}
+		}},
+		{name: "wrong destination image digest", mutate: func(root string) {
+			path := filepath.Join(root, "publication-result.json")
+			record := readJSONMap(t, path)
+			record["destinations"].([]any)[0].(map[string]any)["config_digest"] = "sha256:" + strings.Repeat("f", 64)
+			writeJSONAt(t, path, record)
+		}},
+		{name: "credential directory retained", mutate: func(root string) {
+			path := publicationEvidenceCredentialPath(root)
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(path) })
+		}},
+	}
+	for _, test := range publicationCases {
+		test := test
+		t.Run("publication evidence "+test.name, func(t *testing.T) {
+			root := writePublicationEvidenceFixture(t, repo, sha, "v6.43.0-rc.1")
+			if test.mutate != nil {
+				test.mutate(root)
+			}
+			runImageGate(t, repo, test.pass,
+				"-Mode", "ValidatePublicationEvidence",
+				"-TrustedOutputRoot", publicationEvidenceTrustedRoot(root),
+				"-EvidenceRoot", root,
+				"-CredentialDirectoryPath", publicationEvidenceCredentialPath(root))
+		})
+	}
 }
 
 func writeReleasePayloadFixture(t *testing.T, commit, version string) string {
@@ -1209,10 +1384,53 @@ func writeReleasePayloadFixture(t *testing.T, commit, version string) string {
 		"operator_console": "sha256:" + strings.Repeat("2", 64),
 		"postgres":         "sha256:" + strings.Repeat("3", 64),
 	}
+	sarifFiles := map[string]string{
+		"server":           "server.trivy.sarif",
+		"operator_console": "operator-console.trivy.sarif",
+		"postgres":         "postgres.trivy.sarif",
+	}
+	sarifHashes := make(map[string]string, len(sarifFiles))
+	for name, filename := range sarifFiles {
+		path := filepath.Join(root, filename)
+		writeJSONAt(t, path, map[string]any{
+			"version": "2.1.0",
+			"runs": []any{map[string]any{
+				"tool":    map[string]any{"driver": map[string]any{"name": "fixture-" + name}},
+				"results": []any{},
+			}},
+		})
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sarifHashes[name] = sha256Hex(data)
+	}
 	manifestPath := filepath.Join(root, "final-image-set.json")
 	writeJSONAt(t, manifestPath, map[string]any{
 		"schema_version": 1, "status": "PASS", "source_parent_commit": commit,
-		"build_version": version, "image_ids": ids,
+		"build_version": version, "source_worktree_dirty": false,
+		"build_context": "git-archive-tracked-files-only",
+		"git_credentials_present_in_build_context": false,
+		"build_context_cleanup_passed":             true, "no_allowlist": true,
+		"scanner_exception_inputs": []any{}, "failure": nil,
+		"image_ids": ids, "high_critical_findings": map[string]any{
+			"server": 0, "operator_console": 0, "postgres": 0,
+		},
+		"sarif_sha256": sarifHashes,
+		"runtime_proof": map[string]any{
+			"critical_tests": true, "volume_ownership_contract": true,
+			"server_home_persistence": true, "legacy_postgres_uid_migration": true,
+			"compose_all_healthy": true, "server_liveness": true,
+			"server_readiness": true, "operator_readiness": true,
+			"postgres_17_10": true, "pgvector_0_8_1": true,
+			"migrations_present": true, "migration_table_count": 40,
+			"core_schema_table_count": 6, "restart_recovery": true,
+			"postgres_recreation_retained_marker": true,
+			"local_tags_promoted_from_exact_ids":  true,
+		},
+		"cleanup": map[string]any{
+			"status": "PASS", "containers": []any{}, "volumes": []any{}, "networks": []any{},
+		},
 	})
 	images := make([]map[string]any, 0, 3)
 	for _, image := range []struct {
@@ -1244,6 +1462,108 @@ func writeReleasePayloadFixture(t *testing.T, commit, version string) string {
 		"images":   images,
 	})
 	return root
+}
+
+func updatePayloadManifestHash(t *testing.T, root string) {
+	t.Helper()
+	manifestData, err := os.ReadFile(filepath.Join(root, "final-image-set.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundlePath := filepath.Join(root, "release-bundle.json")
+	bundle := readJSONMap(t, bundlePath)
+	bundleManifest := bundle["manifest"].(map[string]any)
+	bundleManifest["sha256"] = sha256Hex(manifestData)
+	bundleManifest["size_bytes"] = len(manifestData)
+	writeJSONAt(t, bundlePath, bundle)
+}
+
+func writePublicationEvidenceFixture(t *testing.T, repo, commit, version string) string {
+	t.Helper()
+	payloadRoot := writeReleasePayloadFixture(t, commit, version)
+	trustedRoot := os.Getenv("RUNNER_TEMP")
+	if trustedRoot == "" {
+		trustedRoot = t.TempDir()
+	}
+	evidenceRoot, err := os.MkdirTemp(trustedRoot, "engram-publication-evidence-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(evidenceRoot) })
+	runImageGate(t, repo, true,
+		"-Mode", "ValidatePayload",
+		"-PayloadRoot", payloadRoot,
+		"-ExpectedSha", commit,
+		"-ReleaseVersion", version,
+		"-OutputPath", filepath.Join(evidenceRoot, "payload-validation.json"))
+	for _, name := range []string{"final-image-set.json", "server.trivy.sarif", "operator-console.trivy.sarif", "postgres.trivy.sarif"} {
+		data, err := os.ReadFile(filepath.Join(payloadRoot, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(evidenceRoot, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	payloadValidation := readJSONMap(t, filepath.Join(evidenceRoot, "payload-validation.json"))
+	manifestDigest := payloadValidation["manifest_sha256"].(string)
+	manifest := readJSONMap(t, filepath.Join(evidenceRoot, "final-image-set.json"))
+	ids := manifest["image_ids"].(map[string]any)
+	writeJSONAt(t, filepath.Join(evidenceRoot, "artifact-census.json"), map[string]any{
+		"artifact_count": 1,
+	})
+	preflightDestinations := make([]map[string]any, 0, 6)
+	publicationDestinations := make([]map[string]any, 0, 6)
+	for index, image := range []struct {
+		name       string
+		repository string
+		digest     string
+	}{
+		{"server", "ghcr.io/thebtf/engram", ids["server"].(string)},
+		{"operator_console", "ghcr.io/thebtf/engram-operator-console", ids["operator_console"].(string)},
+		{"postgres", "ghcr.io/thebtf/engram-postgres", ids["postgres"].(string)},
+	} {
+		for _, tag := range []string{version, "sha-" + commit} {
+			reference := image.repository + ":" + tag
+			preflightDestinations = append(preflightDestinations, map[string]any{
+				"image": image.name, "reference": reference, "config_digest": image.digest,
+				"action": "inspect-after-login", "manifest_digest": nil,
+			})
+			publicationDestinations = append(publicationDestinations, map[string]any{
+				"image": image.name, "reference": reference, "config_digest": image.digest,
+				"action": "pushed", "manifest_digest": fmt.Sprintf("sha256:%064x", index+1),
+			})
+		}
+	}
+	writeJSONAt(t, filepath.Join(evidenceRoot, "pre-login-publication-plan.json"), map[string]any{
+		"schema_version": 1, "release_version": version, "source_commit": commit,
+		"single_writer_model":                   "repository-workflow-release-publish",
+		"external_package_admin_trust_boundary": true,
+		"remote_inspection":                     "deferred-until-authenticated-publish",
+		"acceptance_manifest_sha256":            manifestDigest,
+		"destinations":                          preflightDestinations,
+	})
+	writeJSONAt(t, filepath.Join(evidenceRoot, "publication-result.json"), map[string]any{
+		"schema_version": 1, "release_version": version, "source_commit": commit,
+		"single_writer_model":                   "repository-workflow-release-publish",
+		"external_package_admin_trust_boundary": true,
+		"remote_inspection":                     "complete",
+		"acceptance_manifest_sha256":            manifestDigest,
+		"status":                                "PASS", "failure": nil,
+		"destinations": publicationDestinations,
+	})
+	return evidenceRoot
+}
+
+func publicationEvidenceTrustedRoot(evidenceRoot string) string {
+	if root := os.Getenv("RUNNER_TEMP"); root != "" {
+		return root
+	}
+	return filepath.Dir(evidenceRoot)
+}
+
+func publicationEvidenceCredentialPath(evidenceRoot string) string {
+	return filepath.Join(publicationEvidenceTrustedRoot(evidenceRoot), filepath.Base(evidenceRoot)+"-docker-auth")
 }
 
 func sha256Hex(data []byte) string {
@@ -1467,6 +1787,74 @@ func testRegistryCASMatrix(t *testing.T, repo string) {
 				"-RegistryFixturePath", registry, "-OutputPath", filepath.Join(t.TempDir(), "plan.json"))
 		})
 	}
+
+	t.Run("registry inspection failure retains completed evidence", func(t *testing.T) {
+		trustedRoot := t.TempDir()
+		manifestPath := filepath.Join(trustedRoot, "final-image-set.json")
+		manifestData, err := json.Marshal(map[string]any{
+			"status": "PASS", "source_parent_commit": commit, "image_ids": ids,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(manifestPath, manifestData, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		stubDir := filepath.Join(trustedRoot, "bin")
+		if err := os.MkdirAll(stubDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writePublishedScanFixtureCommand(t, stubDir, "docker", `
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ToolArguments)
+if ($ToolArguments -contains 'imagetools') { 'registry unavailable'; exit 1 }
+exit 97
+`)
+		outputPath := filepath.Join(trustedRoot, "publication.json")
+		script := filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1")
+		command := exec.Command("pwsh",
+			"-NoProfile", "-File", script,
+			"-Mode", "Publish",
+			"-ManifestPath", manifestPath,
+			"-ReleaseVersion", version,
+			"-ExpectedSha", commit,
+			"-Registry", "ghcr.io",
+			"-Repository", "thebtf/engram",
+			"-OutputPath", outputPath,
+			"-TrustedOutputRoot", trustedRoot,
+		)
+		env := os.Environ()
+		for index, entry := range env {
+			name, value, ok := strings.Cut(entry, "=")
+			if !ok || !strings.EqualFold(name, "PATH") {
+				continue
+			}
+			env[index] = name + "=" + stubDir + string(os.PathListSeparator) + value
+			break
+		}
+		command.Env = append(env, "RUNNER_TEMP="+trustedRoot)
+		output, commandErr := command.CombinedOutput()
+		if commandErr == nil {
+			t.Fatalf("publication unexpectedly succeeded with failed registry inspection:\n%s", output)
+		}
+		data, readErr := os.ReadFile(outputPath)
+		if readErr != nil {
+			t.Fatalf("publication failure lost its evidence file: %v\n%s", readErr, output)
+		}
+		var evidence struct {
+			Status      string `json:"status"`
+			Failure     string `json:"failure"`
+			CompletedAt string `json:"completed_at"`
+		}
+		if err := json.Unmarshal(data, &evidence); err != nil {
+			t.Fatal(err)
+		}
+		if evidence.Status != "FAIL" || !strings.Contains(evidence.Failure, "Remote image inspection failed") {
+			t.Fatalf("publication registry failure evidence lost status or cause: %+v", evidence)
+		}
+		if _, err := time.Parse(time.RFC3339Nano, evidence.CompletedAt); err != nil {
+			t.Fatalf("publication failure evidence lacks a valid completion timestamp %q: %v", evidence.CompletedAt, err)
+		}
+	})
 }
 
 func testImmutableTagMovement(t *testing.T, repo string) {
@@ -1484,6 +1872,310 @@ func testImmutableTagMovement(t *testing.T, repo string) {
 	runImageGate(t, repo, false,
 		"-Mode", "ValidateRelease", "-ReleaseRef", "refs/tags/v1.0.0",
 		"-ExpectedSha", initial, "-ActualSha", initial, "-RulesetFixturePath", unprotected)
+}
+
+type publishedImageScanSummary struct {
+	Status                    string                         `json:"status"`
+	ReleaseVersion            string                         `json:"release_version"`
+	SourceCommit              string                         `json:"source_commit"`
+	NoAllowlist               bool                           `json:"no_allowlist"`
+	TotalHighCriticalFindings int                            `json:"total_high_critical_findings"`
+	Images                    []publishedImageScanEvidence   `json:"images"`
+	TrivyDatabase             publishedTrivyDatabaseEvidence `json:"trivy_database"`
+}
+
+type publishedTrivyDatabaseEvidence struct {
+	RefreshLog       string `json:"refresh_log"`
+	VersionLog       string `json:"version_log"`
+	VersionLogSHA256 string `json:"version_log_sha256"`
+}
+
+type publishedImageScanEvidence struct {
+	Name                 string  `json:"name"`
+	TagReference         string  `json:"tag_reference"`
+	CommitReference      string  `json:"commit_reference"`
+	ConfigDigest         string  `json:"config_digest"`
+	ManifestDigest       string  `json:"manifest_digest"`
+	CommitConfigDigest   string  `json:"commit_config_digest"`
+	CommitManifestDigest string  `json:"commit_manifest_digest"`
+	ScanReference        string  `json:"scan_reference"`
+	Sarif                string  `json:"sarif"`
+	Log                  string  `json:"log"`
+	ScanExitCode         *int    `json:"scan_exit_code"`
+	HighCriticalFindings *int    `json:"high_critical_findings"`
+	Error                *string `json:"error"`
+}
+
+func testPublishedImageScanGate(t *testing.T, repo string) {
+	t.Helper()
+	sourceCommit := strings.Repeat("a", 40)
+	t.Run("no allowlist is mandatory", func(t *testing.T) {
+		output := runImageGate(t, repo, false,
+			"-Mode", "ScanPublished",
+			"-RepositoryRoot", t.TempDir(),
+			"-ReleaseVersion", "v6.47.6",
+			"-ExpectedSha", sourceCommit,
+			"-Registry", "ghcr.io",
+			"-Repository", "thebtf/engram",
+			"-ArtifactRoot", "evidence")
+		if !strings.Contains(output, "-NoAllowlist is mandatory") {
+			t.Fatalf("published scan did not reject missing no-allowlist guard: %s", output)
+		}
+	})
+	t.Run("only final canonical release tags scan", func(t *testing.T) {
+		output := runImageGate(t, repo, false,
+			"-Mode", "ScanPublished",
+			"-RepositoryRoot", t.TempDir(),
+			"-ReleaseVersion", "v6.47.6-rc.1",
+			"-ExpectedSha", sourceCommit,
+			"-Registry", "ghcr.io",
+			"-Repository", "thebtf/engram",
+			"-ArtifactRoot", "evidence",
+			"-NoAllowlist")
+		if !strings.Contains(output, "canonical final vMAJOR.MINOR.PATCH") {
+			t.Fatalf("published scan accepted a non-final release version: %s", output)
+		}
+	})
+	for _, test := range []struct {
+		name         string
+		mode         string
+		wantSuccess  bool
+		wantFindings int
+		wantScans    int
+	}{
+		{name: "clean immutable digests pass", wantSuccess: true, wantScans: 3},
+		{name: "all image findings aggregate after all scans", mode: "findings", wantFindings: 3, wantScans: 3},
+		{name: "scanner failure remains distinct and fail closed", mode: "scanner-failure", wantScans: 3},
+		{name: "release tag movement fails closed against commit alias", mode: "identity-mismatch", wantScans: 2},
+		{name: "database refresh failure skips registry resolution", mode: "database-failure"},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			artifactPath, dockerLog, trivyLog, output, err := runPublishedImageScanFixture(t, repo, test.mode)
+			if test.wantSuccess && err != nil {
+				t.Fatalf("published image scan unexpectedly failed: %v\n%s", err, output)
+			}
+			if !test.wantSuccess && err == nil {
+				t.Fatalf("published image scan unexpectedly passed:\n%s", output)
+			}
+
+			var summary publishedImageScanSummary
+			data, readErr := os.ReadFile(filepath.Join(artifactPath, "published-image-scan-summary.json"))
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if unmarshalErr := json.Unmarshal(data, &summary); unmarshalErr != nil {
+				t.Fatal(unmarshalErr)
+			}
+			wantStatus := "FAIL"
+			if test.wantSuccess {
+				wantStatus = "PASS"
+			}
+			if summary.Status != wantStatus || summary.ReleaseVersion != "v6.47.6" || summary.SourceCommit != sourceCommit || !summary.NoAllowlist {
+				t.Fatalf("published scan summary status/version/commit/allowlist = %q/%q/%q/%v, want %q/v6.47.6/%s/true", summary.Status, summary.ReleaseVersion, summary.SourceCommit, summary.NoAllowlist, wantStatus, sourceCommit)
+			}
+			if test.mode == "database-failure" {
+				if summary.TrivyDatabase.VersionLogSHA256 != "" {
+					t.Fatalf("failed database refresh retained nonexistent version evidence: %+v", summary.TrivyDatabase)
+				}
+			} else {
+				versionLogPath := filepath.Join(artifactPath, summary.TrivyDatabase.VersionLog)
+				versionLogBytes, versionLogErr := os.ReadFile(versionLogPath)
+				if versionLogErr != nil {
+					t.Fatal(versionLogErr)
+				}
+				if summary.TrivyDatabase.RefreshLog != "trivy-db-refresh.log" || summary.TrivyDatabase.VersionLog != "trivy-version.log" ||
+					summary.TrivyDatabase.VersionLogSHA256 != "sha256:"+sha256Hex(versionLogBytes) {
+					t.Fatalf("published scan does not retain post-refresh Trivy version evidence: %+v", summary.TrivyDatabase)
+				}
+			}
+			if summary.TotalHighCriticalFindings != test.wantFindings || len(summary.Images) != 3 {
+				t.Fatalf("published scan summary findings/images = %d/%d, want %d/3", summary.TotalHighCriticalFindings, len(summary.Images), test.wantFindings)
+			}
+			wantTags := map[string]string{
+				"server":           "ghcr.io/thebtf/engram:v6.47.6",
+				"operator-console": "ghcr.io/thebtf/engram-operator-console:v6.47.6",
+				"postgres":         "ghcr.io/thebtf/engram-postgres:v6.47.6",
+			}
+			for _, image := range summary.Images {
+				wantTag, ok := wantTags[image.Name]
+				if !ok || image.TagReference != wantTag {
+					t.Fatalf("published scan retained non-canonical tag reference %q for %q", image.TagReference, image.Name)
+				}
+				wantRepository := strings.Split(image.TagReference, ":v")[0]
+				if image.CommitReference != wantRepository+":sha-"+sourceCommit {
+					t.Fatalf("published scan retained wrong commit alias for %s: %+v", image.Name, image)
+				}
+				if _, statErr := os.Stat(filepath.Join(artifactPath, image.Log)); statErr != nil {
+					t.Fatalf("published scan lacks %s log: %v", image.Name, statErr)
+				}
+				if test.mode == "database-failure" {
+					if image.Error == nil || !strings.Contains(*image.Error, "fresh vulnerability database") || image.ManifestDigest != "" || image.CommitManifestDigest != "" || image.ScanReference != "" {
+						t.Fatalf("database failure did not skip registry identity resolution for %s: %+v", image.Name, image)
+					}
+					continue
+				}
+				if test.mode == "identity-mismatch" && image.Name == "server" {
+					if image.Error == nil || !strings.Contains(*image.Error, "identity mismatch") || image.ManifestDigest != "sha256:"+strings.Repeat("d", 64) || image.CommitManifestDigest != "sha256:"+strings.Repeat("e", 64) || image.ScanReference != "" {
+						t.Fatalf("release tag movement was not retained as an identity mismatch: %+v", image)
+					}
+					continue
+				}
+				if image.ConfigDigest != "sha256:"+strings.Repeat("c", 64) || image.CommitConfigDigest != image.ConfigDigest || image.ManifestDigest != "sha256:"+strings.Repeat("d", 64) || image.CommitManifestDigest != image.ManifestDigest || image.ScanReference != wantRepository+"@sha256:"+strings.Repeat("d", 64) {
+					t.Fatalf("published scan did not bind %s release and commit identities to one immutable manifest: %+v", image.Name, image)
+				}
+				if test.mode != "scanner-failure" || image.Name != "postgres" {
+					if _, statErr := os.Stat(filepath.Join(artifactPath, image.Sarif)); statErr != nil {
+						t.Fatalf("published scan lacks %s SARIF: %v", image.Name, statErr)
+					}
+				}
+				if test.mode == "findings" && (image.HighCriticalFindings == nil || *image.HighCriticalFindings != 1 || image.ScanExitCode == nil || *image.ScanExitCode != 1) {
+					t.Fatalf("published scan did not retain finding evidence for %s: %+v", image.Name, image)
+				}
+			}
+			if test.mode == "scanner-failure" {
+				postgres := summary.Images[2]
+				if postgres.Error == nil || !strings.Contains(*postgres.Error, "Trivy scanner failure") {
+					t.Fatalf("published scanner failure was not distinguished in summary: %+v", postgres)
+				}
+			}
+
+			dockerBytes, dockerErr := os.ReadFile(dockerLog)
+			if test.mode == "database-failure" {
+				if dockerErr == nil && len(strings.TrimSpace(string(dockerBytes))) != 0 {
+					t.Fatalf("database failure still resolved registry identities:\n%s", dockerBytes)
+				}
+				if dockerErr != nil && !os.IsNotExist(dockerErr) {
+					t.Fatal(dockerErr)
+				}
+			} else {
+				if dockerErr != nil || len(strings.TrimSpace(string(dockerBytes))) == 0 {
+					t.Fatalf("published scan did not resolve release and commit identities: %v", dockerErr)
+				}
+				forbiddenVerbs := map[string]struct{}{"login": {}, "pull": {}, "push": {}, "run": {}}
+				for _, line := range strings.Split(strings.TrimSpace(string(dockerBytes)), "\n") {
+					fields := strings.Fields(strings.TrimSpace(line))
+					if len(fields) == 0 {
+						continue
+					}
+					if _, forbidden := forbiddenVerbs[fields[0]]; forbidden {
+						t.Fatalf("published scan invoked Docker mutation or candidate execution %q", fields[0])
+					}
+				}
+			}
+			trivyInvocations := readFile(t, trivyLog)
+			if strings.Count(trivyInvocations, "--download-db-only") != 1 || strings.Count(trivyInvocations, "--skip-db-update") != test.wantScans {
+				t.Fatalf("published scan refresh/scan count mismatch, want 1/%d:\n%s", test.wantScans, trivyInvocations)
+			}
+			if strings.Count(trivyInvocations, "@sha256:"+strings.Repeat("d", 64)) != test.wantScans {
+				t.Fatalf("published scan did not scan %d expected immutable digest references:\n%s", test.wantScans, trivyInvocations)
+			}
+		})
+	}
+}
+
+func runPublishedImageScanFixture(t *testing.T, repo, mode string) (artifactPath, dockerLog, trivyLog string, output []byte, commandErr error) {
+	t.Helper()
+	root := t.TempDir()
+	stubDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(stubDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writePublishedScanFixtureCommand(t, stubDir, "docker", `
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ToolArguments)
+[IO.File]::AppendAllText($env:FAKE_DOCKER_LOG, ($ToolArguments -join [char]9) + [Environment]::NewLine)
+$reference = $ToolArguments | Where-Object { $_ -match '^ghcr\.io/' } | Select-Object -Last 1
+$movedServerAlias = $env:FAKE_TRIVY_MODE -eq 'identity-mismatch' -and $reference -match '^ghcr\.io/thebtf/engram:sha-'
+if ($ToolArguments -contains '--raw') {
+  if ($movedServerAlias) { '{"schemaVersion":2,"config":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}' }
+  else { '{"schemaVersion":2,"config":{"digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}' }
+  exit 0
+}
+if ($ToolArguments -contains '--format') {
+  if ($movedServerAlias) { '{"digest":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}' }
+  else { '{"digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}' }
+  exit 0
+}
+exit 97
+`)
+	writePublishedScanFixtureCommand(t, stubDir, "trivy", `
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ToolArguments)
+[IO.File]::AppendAllText($env:FAKE_TRIVY_LOG, ($ToolArguments -join [char]9) + [Environment]::NewLine)
+if ($ToolArguments -contains '--version') { 'Version: fixture'; exit 0 }
+if ($ToolArguments -contains '--download-db-only') {
+  if ($env:FAKE_TRIVY_MODE -eq 'database-failure') { exit 2 }
+  exit 0
+}
+$reference = $ToolArguments[$ToolArguments.Count - 1]
+if ($env:FAKE_TRIVY_MODE -eq 'scanner-failure' -and $reference -match '-postgres@') { exit 2 }
+$outputIndex = [Array]::IndexOf($ToolArguments, '--output')
+if ($outputIndex -lt 0) { exit 98 }
+$results = @()
+if ($env:FAKE_TRIVY_MODE -eq 'findings') { $results = @([ordered]@{ ruleId = 'CVE-test' }) }
+[ordered]@{ version = '2.1.0'; runs = @([ordered]@{ tool = [ordered]@{ driver = [ordered]@{ name = 'fixture-trivy' } }; results = $results }) } |
+  ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8NoBOM -LiteralPath $ToolArguments[$outputIndex + 1]
+if ($results.Count -ne 0) { exit 1 }
+exit 0
+`)
+
+	dockerLog = filepath.Join(root, "docker.log")
+	trivyLog = filepath.Join(root, "trivy.log")
+	artifactPath = filepath.Join(root, "evidence")
+	script := filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1")
+	commandArgs := []string{
+		"-NoProfile", "-File", script,
+		"-Mode", "ScanPublished",
+		"-RepositoryRoot", root,
+		"-ReleaseVersion", "v6.47.6",
+		"-ExpectedSha", strings.Repeat("a", 40),
+		"-Registry", "ghcr.io",
+		"-Repository", "thebtf/engram",
+		"-ArtifactRoot", "evidence",
+		"-Platform", "linux/amd64",
+		"-NoAllowlist",
+	}
+	command := exec.Command("pwsh", commandArgs...)
+	env := os.Environ()
+	pathSet := false
+	for i, entry := range env {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok || !strings.EqualFold(name, "PATH") {
+			continue
+		}
+		if value == "" {
+			env[i] = name + "=" + stubDir
+		} else {
+			env[i] = name + "=" + stubDir + string(os.PathListSeparator) + value
+		}
+		pathSet = true
+		break
+	}
+	if !pathSet {
+		env = append(env, "PATH="+stubDir)
+	}
+	command.Env = append(env,
+		"FAKE_DOCKER_LOG="+dockerLog,
+		"FAKE_TRIVY_LOG="+trivyLog,
+		"FAKE_TRIVY_MODE="+mode,
+	)
+	output, commandErr = command.CombinedOutput()
+	return artifactPath, dockerLog, trivyLog, output, commandErr
+}
+
+func writePublishedScanFixtureCommand(t *testing.T, directory, name, script string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(directory, name+".ps1"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	launcherName := name
+	launcher := "#!/bin/sh\nexec pwsh -NoProfile -File \"$(dirname \"$0\")/" + name + ".ps1\" \"$@\"\n"
+	if runtime.GOOS == "windows" {
+		launcherName += ".cmd"
+		launcher = "@echo off\r\npwsh -NoProfile -File \"%~dp0" + name + ".ps1\" %*\r\n"
+	}
+	if err := os.WriteFile(filepath.Join(directory, launcherName), []byte(launcher), 0o700); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func runImageGate(t *testing.T, repo string, expectSuccess bool, args ...string) string {

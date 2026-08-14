@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('BuildAndScan', 'ValidateRelease', 'ValidateWorkflowRun', 'ValidateArtifactMetadata', 'ValidatePayload', 'LoadPayload', 'ValidatePublicationEvidence', 'PlanPublication', 'Publish')]
+    [ValidateSet('BuildAndScan', 'ScanPublished', 'ValidateRelease', 'ValidateWorkflowRun', 'ValidateArtifactMetadata', 'ValidatePayload', 'LoadPayload', 'ValidatePublicationEvidence', 'PlanPublication', 'Publish')]
     [string]$Mode = 'BuildAndScan',
 
     [string]$ServerTag,
@@ -35,6 +35,7 @@ param(
     [long]$CurrentRunID,
     [string]$PayloadRoot,
     [string]$EvidenceRoot,
+    [string]$CredentialDirectoryPath,
 
     [string]$ManifestPath,
     [string]$ReleaseVersion,
@@ -600,10 +601,135 @@ function Assert-ArchiveEnvelope {
     }
 }
 
+
+function Assert-ExactObjectProperties {
+    param(
+        [Parameter(Mandatory = $true)]$Value,
+        [Parameter(Mandatory = $true)][string[]]$ExpectedNames,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if ($null -eq $Value -or $Value -is [string] -or $Value -is [ValueType]) {
+        throw "$Name must be an object."
+    }
+    $actualNames = @($Value.PSObject.Properties.Name | Sort-Object)
+    $wantedNames = @($ExpectedNames | Sort-Object)
+    if ($actualNames.Count -ne $wantedNames.Count -or @(Compare-Object -CaseSensitive -ReferenceObject $wantedNames -DifferenceObject $actualNames).Count -ne 0) {
+        throw "$Name must contain exactly: $($wantedNames -join ', ')."
+    }
+}
+
+function Assert-AcceptanceManifest {
+    param(
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)][string]$Commit,
+        [Parameter(Mandatory = $true)][string]$Version,
+        [Parameter(Mandatory = $true)][Collections.IDictionary]$SarifPaths
+    )
+
+    if ([int]$Manifest.schema_version -ne 1 -or
+        [string]$Manifest.status -cne 'PASS' -or
+        [string]$Manifest.source_parent_commit -cne $Commit -or
+        [string]$Manifest.build_version -cne $Version) {
+        throw 'Acceptance manifest is not a schema-v1 PASS for the validated commit/version.'
+    }
+    foreach ($booleanField in @('build_context_cleanup_passed', 'no_allowlist')) {
+        $property = $Manifest.PSObject.Properties[$booleanField]
+        if ($null -eq $property -or $property.Value -isnot [bool] -or -not $property.Value) {
+            throw "Acceptance manifest requires $booleanField=true."
+        }
+    }
+    foreach ($falseField in @('source_worktree_dirty', 'git_credentials_present_in_build_context')) {
+        $property = $Manifest.PSObject.Properties[$falseField]
+        if ($null -eq $property -or $property.Value -isnot [bool] -or $property.Value) {
+            throw "Acceptance manifest requires $falseField=false."
+        }
+    }
+    if ([string]$Manifest.build_context -cne 'git-archive-tracked-files-only') {
+        throw 'Acceptance manifest lacks the tracked-files-only build-context proof.'
+    }
+    $exceptionProperty = $Manifest.PSObject.Properties['scanner_exception_inputs']
+    if ($null -eq $exceptionProperty -or $exceptionProperty.Value -isnot [array] -or @($exceptionProperty.Value).Count -ne 0) {
+        throw 'Acceptance manifest contains scanner exception inputs.'
+    }
+    $failureProperty = $Manifest.PSObject.Properties['failure']
+    if ($null -eq $failureProperty -or $null -ne $failureProperty.Value) {
+        throw 'Acceptance manifest retains a failure value.'
+    }
+
+    $imageNames = @('server', 'operator_console', 'postgres')
+    Assert-ExactObjectProperties -Value $Manifest.image_ids -ExpectedNames $imageNames -Name 'Acceptance manifest image_ids'
+    Assert-ExactObjectProperties -Value $Manifest.high_critical_findings -ExpectedNames $imageNames -Name 'Acceptance manifest high_critical_findings'
+    Assert-ExactObjectProperties -Value $Manifest.sarif_sha256 -ExpectedNames $imageNames -Name 'Acceptance manifest sarif_sha256'
+    $sarifPathNames = @($SarifPaths.Keys | Sort-Object)
+    if ($sarifPathNames.Count -ne 3 -or @(Compare-Object -CaseSensitive -ReferenceObject @($imageNames | Sort-Object) -DifferenceObject $sarifPathNames).Count -ne 0) {
+        throw 'Acceptance manifest validator requires exactly three SARIF paths.'
+    }
+    foreach ($name in $imageNames) {
+        $imageID = [string]$Manifest.image_ids.PSObject.Properties[$name].Value
+        if ($imageID -cnotmatch '^sha256:[0-9a-f]{64}$') {
+            throw "Acceptance manifest contains an invalid image ID for $name."
+        }
+        $findingProperty = $Manifest.high_critical_findings.PSObject.Properties[$name]
+        if (($findingProperty.Value -isnot [int] -and $findingProperty.Value -isnot [long]) -or [int64]$findingProperty.Value -ne 0) {
+            throw "Acceptance manifest contains HIGH/CRITICAL findings for $name."
+        }
+        $expectedHash = [string]$Manifest.sarif_sha256.PSObject.Properties[$name].Value
+        if ($expectedHash -cnotmatch '^[0-9a-f]{64}$') {
+            throw "Acceptance manifest contains an invalid SARIF hash for $name."
+        }
+        $sarifPath = [string]$SarifPaths[$name]
+        if (-not (Test-Path -LiteralPath $sarifPath -PathType Leaf)) {
+            throw "Acceptance manifest SARIF is missing for $name."
+        }
+        $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sarifPath).Hash.ToLowerInvariant()
+        if ($actualHash -cne $expectedHash -or (Get-SarifResultCount -Path $sarifPath) -ne 0) {
+            throw "Acceptance manifest SARIF is not a zero-finding match for $name."
+        }
+    }
+
+    $runtimeBooleanFields = @(
+        'critical_tests', 'volume_ownership_contract', 'server_home_persistence',
+        'legacy_postgres_uid_migration', 'compose_all_healthy', 'server_liveness',
+        'server_readiness', 'operator_readiness', 'postgres_17_10', 'pgvector_0_8_1',
+        'migrations_present', 'restart_recovery', 'postgres_recreation_retained_marker',
+        'local_tags_promoted_from_exact_ids'
+    )
+    $runtimeFields = @($runtimeBooleanFields) + @('migration_table_count', 'core_schema_table_count')
+    Assert-ExactObjectProperties -Value $Manifest.runtime_proof -ExpectedNames $runtimeFields -Name 'Acceptance manifest runtime_proof'
+    foreach ($name in $runtimeBooleanFields) {
+        $property = $Manifest.runtime_proof.PSObject.Properties[$name]
+        if ($property.Value -isnot [bool] -or -not $property.Value) {
+            throw "Acceptance manifest runtime proof is incomplete at $name."
+        }
+    }
+    $migrationCount = $Manifest.runtime_proof.PSObject.Properties['migration_table_count'].Value
+    $coreCount = $Manifest.runtime_proof.PSObject.Properties['core_schema_table_count'].Value
+    if (($migrationCount -isnot [int] -and $migrationCount -isnot [long]) -or [int64]$migrationCount -lt 40 -or
+        ($coreCount -isnot [int] -and $coreCount -isnot [long]) -or [int64]$coreCount -ne 6) {
+        throw 'Acceptance manifest runtime schema-count proof is incomplete.'
+    }
+
+    foreach ($field in @('status', 'containers', 'volumes', 'networks')) {
+        if ($null -eq $Manifest.cleanup.PSObject.Properties[$field]) {
+            throw "Acceptance manifest cleanup proof lacks $field."
+        }
+    }
+    if ([string]$Manifest.cleanup.status -cne 'PASS') {
+        throw 'Acceptance manifest cleanup status is not PASS.'
+    }
+    foreach ($field in @('containers', 'volumes', 'networks')) {
+        $value = $Manifest.cleanup.PSObject.Properties[$field].Value
+        if ($value -isnot [array] -or @($value).Count -ne 0) {
+            throw "Acceptance manifest cleanup retained $field."
+        }
+    }
+}
+
 function Read-AndValidatePayload {
     if ([string]::IsNullOrWhiteSpace($PayloadRoot)) { throw 'PayloadRoot is required.' }
     $root = Assert-RegularFileEnvelope -Root $PayloadRoot -ExpectedNames @(
-        'release-bundle.json', 'final-image-set.json', 'server.tar', 'operator-console.tar', 'postgres.tar'
+        'release-bundle.json', 'final-image-set.json', 'server.trivy.sarif', 'operator-console.trivy.sarif', 'postgres.trivy.sarif', 'server.tar', 'operator-console.tar', 'postgres.tar'
     )
     $bundlePath = Join-Path $root 'release-bundle.json'
     $bundle = Get-Content -Raw -LiteralPath $bundlePath | ConvertFrom-Json -Depth 100
@@ -622,14 +748,16 @@ function Read-AndValidatePayload {
         throw 'Release bundle manifest hash/size mismatch.'
     }
     $manifest = [Text.Encoding]::UTF8.GetString($manifestBytes) | ConvertFrom-Json -Depth 100
-    if ([string]$manifest.status -cne 'PASS' -or [string]$manifest.source_parent_commit -cne $commit -or [string]$manifest.build_version -cne $version) {
-        throw 'Acceptance manifest is not a PASS for the validated commit/version.'
-    }
     $definitions = @(
-        [ordered]@{ name = 'server'; archive = 'server.tar'; manifest_property = 'server' },
-        [ordered]@{ name = 'operator_console'; archive = 'operator-console.tar'; manifest_property = 'operator_console' },
-        [ordered]@{ name = 'postgres'; archive = 'postgres.tar'; manifest_property = 'postgres' }
+        [ordered]@{ name = 'server'; archive = 'server.tar'; sarif = 'server.trivy.sarif'; manifest_property = 'server' },
+        [ordered]@{ name = 'operator_console'; archive = 'operator-console.tar'; sarif = 'operator-console.trivy.sarif'; manifest_property = 'operator_console' },
+        [ordered]@{ name = 'postgres'; archive = 'postgres.tar'; sarif = 'postgres.trivy.sarif'; manifest_property = 'postgres' }
     )
+    $sarifPaths = [ordered]@{}
+    foreach ($definition in $definitions) {
+        $sarifPaths[$definition.manifest_property] = Join-Path $root $definition.sarif
+    }
+    Assert-AcceptanceManifest -Manifest $manifest -Commit $commit -Version $version -SarifPaths $sarifPaths
     $images = @($bundle.images)
     if ($images.Count -ne 3) { throw 'Release bundle must contain exactly three image records.' }
     $validatedImages = @()
@@ -778,10 +906,63 @@ function Invoke-LoadPayload {
     $validated | ConvertTo-Json -Depth 30
 }
 
+function Assert-PublicationDestinationRecord {
+    param(
+        [Parameter(Mandatory = $true)]$Record,
+        [Parameter(Mandatory = $true)]$ExpectedPlan,
+        [Parameter(Mandatory = $true)][ValidateSet('preflight', 'publication')][string]$Phase
+    )
+
+    $trustProperty = $Record.PSObject.Properties['external_package_admin_trust_boundary']
+    $expectedInspection = if ($Phase -ceq 'preflight') { 'deferred-until-authenticated-publish' } else { 'complete' }
+    if ([int]$Record.schema_version -ne 1 -or
+        [string]$Record.release_version -cne [string]$ExpectedPlan.release_version -or
+        [string]$Record.source_commit -cne [string]$ExpectedPlan.source_commit -or
+        [string]$Record.single_writer_model -cne 'repository-workflow-release-publish' -or
+        $null -eq $trustProperty -or $trustProperty.Value -isnot [bool] -or -not $trustProperty.Value -or
+        [string]$Record.remote_inspection -cne $expectedInspection) {
+        throw "Publisher $Phase evidence does not match the canonical publication plan."
+    }
+
+    $expectedDestinations = @($ExpectedPlan.destinations)
+    $actualDestinations = @($Record.destinations)
+    if ($actualDestinations.Count -ne 6 -or @($actualDestinations | Group-Object reference | Where-Object Count -ne 1).Count -ne 0) {
+        throw "Publisher $Phase evidence does not contain six unique destinations."
+    }
+    $expectedReferences = @($expectedDestinations | ForEach-Object { [string]$_.reference } | Sort-Object)
+    $actualReferences = @($actualDestinations | ForEach-Object { [string]$_.reference } | Sort-Object)
+    if (@(Compare-Object -CaseSensitive -ReferenceObject $expectedReferences -DifferenceObject $actualReferences).Count -ne 0) {
+        throw "Publisher $Phase evidence does not cover the canonical six destinations."
+    }
+
+    foreach ($expected in $expectedDestinations) {
+        $actual = @($actualDestinations | Where-Object { [string]$_.reference -ceq [string]$expected.reference })[0]
+        if ([string]$actual.image -cne [string]$expected.image -or
+            [string]$actual.config_digest -cne [string]$expected.config_digest) {
+            throw "Publisher $Phase evidence is bound to the wrong image for $($expected.reference)."
+        }
+        if ($Phase -ceq 'preflight') {
+            $manifestDigestProperty = $actual.PSObject.Properties['manifest_digest']
+            if ([string]$actual.action -cne 'inspect-after-login' -or $null -eq $manifestDigestProperty -or $null -ne $manifestDigestProperty.Value) {
+                throw "Publisher preflight evidence is not an unmodified deferred plan for $($expected.reference)."
+            }
+        } elseif ($actual.action -cnotin @('pushed', 'verified-noop') -or
+            [string]$actual.manifest_digest -cnotmatch '^sha256:[0-9a-f]{64}$') {
+            throw "Publisher evidence contains an incomplete destination readback: $($expected.reference)"
+        }
+    }
+}
+
 function Invoke-ValidatePublicationEvidence {
     if ([string]::IsNullOrWhiteSpace($EvidenceRoot)) { throw 'EvidenceRoot is required.' }
+    if ([string]::IsNullOrWhiteSpace($CredentialDirectoryPath)) { throw 'CredentialDirectoryPath is required.' }
+    $credentialDirectory = Resolve-TrustedOutputPath -Path $CredentialDirectoryPath -LeafMayNotExist
+    if (Test-Path -LiteralPath $credentialDirectory) {
+        throw "Registry credential directory still exists before evidence validation: $credentialDirectory"
+    }
     $root = Assert-RegularFileEnvelope -Root $EvidenceRoot -ExpectedNames @(
-        'artifact-census.json', 'payload-validation.json', 'pre-login-publication-plan.json', 'publication-result.json'
+        'artifact-census.json', 'payload-validation.json', 'pre-login-publication-plan.json', 'publication-result.json',
+        'final-image-set.json', 'server.trivy.sarif', 'operator-console.trivy.sarif', 'postgres.trivy.sarif'
     )
     $census = Get-Content -Raw -LiteralPath (Join-Path $root 'artifact-census.json') | ConvertFrom-Json -Depth 100
     $payload = Get-Content -Raw -LiteralPath (Join-Path $root 'payload-validation.json') | ConvertFrom-Json -Depth 100
@@ -790,22 +971,31 @@ function Invoke-ValidatePublicationEvidence {
     if ([int]$census.artifact_count -ne 1 -or [int]$payload.schema_version -ne 1) {
         throw 'Publisher evidence lacks the single-artifact or payload-validation proof.'
     }
-    foreach ($record in @($preflight, $publication)) {
-        if (@($record.destinations).Count -ne 6 -or -not [bool]$record.external_package_admin_trust_boundary) {
-            throw 'Publisher evidence does not cover all six immutable destinations and the external package-admin boundary.'
-        }
+    $payloadCommit = Assert-FullCommitSha -Value ([string]$payload.source_commit) -Name 'payload source commit'
+    $payloadVersion = Assert-CanonicalVersion -Value ([string]$payload.release_version)
+    $manifestPath = Join-Path $root 'final-image-set.json'
+    $manifestHash = "sha256:$((Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash.ToLowerInvariant())"
+    if ($manifestHash -cne [string]$payload.manifest_sha256) {
+        throw 'Retained publication evidence manifest does not match the validated payload.'
     }
+    $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json -Depth 100
+    Assert-AcceptanceManifest `
+        -Manifest $manifest `
+        -Commit $payloadCommit `
+        -Version $payloadVersion `
+        -SarifPaths ([ordered]@{
+            server = Join-Path $root 'server.trivy.sarif'
+            operator_console = Join-Path $root 'operator-console.trivy.sarif'
+            postgres = Join-Path $root 'postgres.trivy.sarif'
+        })
+    $expectedPlan = New-PublicationPlan -Manifest $manifest -ReleaseVersion $payloadVersion -DeferLiveRemoteInspection
+    Assert-PublicationDestinationRecord -Record $preflight -ExpectedPlan $expectedPlan -Phase preflight
+    Assert-PublicationDestinationRecord -Record $publication -ExpectedPlan $expectedPlan -Phase publication
     if ([string]$preflight.acceptance_manifest_sha256 -cnotmatch '^sha256:[0-9a-f]{64}$' -or
         [string]$preflight.acceptance_manifest_sha256 -cne [string]$publication.acceptance_manifest_sha256 -or
-        [string]$payload.manifest_sha256 -cne [string]$publication.acceptance_manifest_sha256) {
-        throw 'Publisher evidence does not remain bound to one exact acceptance manifest.'
-    }
-    foreach ($destination in @($publication.destinations)) {
-        if ($destination.action -cnotin @('pushed', 'verified-noop') -or
-            [string]$destination.config_digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or
-            [string]$destination.manifest_digest -cnotmatch '^sha256:[0-9a-f]{64}$') {
-            throw "Publisher evidence contains an incomplete destination readback: $($destination.reference)"
-        }
+        [string]$payload.manifest_sha256 -cne [string]$publication.acceptance_manifest_sha256 -or
+        [string]$publication.status -cne 'PASS' -or $null -ne $publication.failure) {
+        throw 'Publisher evidence does not remain bound to one complete successful publication.'
     }
     [ordered]@{
         schema_version = 1
@@ -836,13 +1026,19 @@ function Export-ReleasePayload {
     [IO.File]::Copy($AcceptanceManifestPath, $manifestDestination, $false)
     $manifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifestDestination).Hash.ToLowerInvariant()
     $manifestSize = (Get-Item -LiteralPath $manifestDestination).Length
+    $acceptanceRoot = Split-Path -Parent $AcceptanceManifestPath
     $definitions = @(
-        [ordered]@{ name = 'server'; archive = 'server.tar'; image_id = [string]$ExactImageIDs.server; local_id = [string]$LocalImageIDs.server },
-        [ordered]@{ name = 'operator_console'; archive = 'operator-console.tar'; image_id = [string]$ExactImageIDs.operator_console; local_id = [string]$LocalImageIDs.operator_console },
-        [ordered]@{ name = 'postgres'; archive = 'postgres.tar'; image_id = [string]$ExactImageIDs.postgres; local_id = [string]$LocalImageIDs.postgres }
+        [ordered]@{ name = 'server'; archive = 'server.tar'; sarif_source = 'server/trivy.sarif'; sarif = 'server.trivy.sarif'; image_id = [string]$ExactImageIDs.server; local_id = [string]$LocalImageIDs.server },
+        [ordered]@{ name = 'operator_console'; archive = 'operator-console.tar'; sarif_source = 'operator-console/trivy.sarif'; sarif = 'operator-console.trivy.sarif'; image_id = [string]$ExactImageIDs.operator_console; local_id = [string]$LocalImageIDs.operator_console },
+        [ordered]@{ name = 'postgres'; archive = 'postgres.tar'; sarif_source = 'postgres/trivy.sarif'; sarif = 'postgres.trivy.sarif'; image_id = [string]$ExactImageIDs.postgres; local_id = [string]$LocalImageIDs.postgres }
     )
     $images = @()
     foreach ($definition in $definitions) {
+        $sarifSource = Join-Path $acceptanceRoot $definition.sarif_source
+        if (-not (Test-Path -LiteralPath $sarifSource -PathType Leaf)) {
+            throw "Acceptance SARIF is missing for $($definition.name): $sarifSource"
+        }
+        [IO.File]::Copy($sarifSource, (Join-Path $payloadPath $definition.sarif), $false)
         $archivePath = Join-Path $payloadPath $definition.archive
         $payloadTag = Get-PayloadImageTag -Name $definition.name -ImageID $definition.image_id
         Invoke-CapturedNative -File 'docker' -Arguments @('image', 'tag', $definition.local_id, $payloadTag) | Out-Null
@@ -880,7 +1076,7 @@ function Export-ReleasePayload {
     }
     Write-JsonFile -Value $bundle -Path (Join-Path $payloadPath 'release-bundle.json')
     Assert-RegularFileEnvelope -Root $payloadPath -ExpectedNames @(
-        'release-bundle.json', 'final-image-set.json', 'server.tar', 'operator-console.tar', 'postgres.tar'
+        'release-bundle.json', 'final-image-set.json', 'server.trivy.sarif', 'operator-console.trivy.sarif', 'postgres.trivy.sarif', 'server.tar', 'operator-console.tar', 'postgres.tar'
     ) | Out-Null
     return $payloadPath
 }
@@ -1068,46 +1264,361 @@ function Invoke-Publish {
     if ($manifestCommit -cne $validatedCommit) {
         throw "Trusted manifest commit $manifestCommit does not match validated workflow_run commit $validatedCommit."
     }
-    $plan = New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $null
-    $plan['acceptance_manifest_sha256'] = $inputs.manifest_sha256
+    $plan = [ordered]@{
+        schema_version = 1
+        release_version = $ReleaseVersion
+        source_commit = $validatedCommit
+        single_writer_model = 'repository-workflow-release-publish'
+        external_package_admin_trust_boundary = $true
+        remote_inspection = 'not-started'
+        acceptance_manifest_sha256 = $inputs.manifest_sha256
+        destinations = @()
+        status = 'RUNNING'
+        failure = $null
+    }
 
-    $localImageIdsByName = @{}
-    foreach ($destination in $plan.destinations) {
-        if (-not $localImageIdsByName.ContainsKey($destination.image)) {
-            $payloadTag = Get-PayloadImageTag -Name $destination.image -ImageID $destination.config_digest
-            $localImageIdsByName[$destination.image] = Resolve-LocalImageId `
-                -Tag $payloadTag -ExpectedConfigDigest $destination.config_digest
+    $publishFailure = $null
+    try {
+        $plan = New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $null
+        $plan['acceptance_manifest_sha256'] = $inputs.manifest_sha256
+        $plan['status'] = 'RUNNING'
+        $plan['failure'] = $null
+        $localImageIdsByName = @{}
+        foreach ($destination in $plan.destinations) {
+            if (-not $localImageIdsByName.ContainsKey($destination.image)) {
+                $payloadTag = Get-PayloadImageTag -Name $destination.image -ImageID $destination.config_digest
+                $localImageIdsByName[$destination.image] = Resolve-LocalImageId `
+                    -Tag $payloadTag -ExpectedConfigDigest $destination.config_digest
+            }
+            $destination['local_id'] = $localImageIdsByName[$destination.image]
         }
-        $destination['local_id'] = $localImageIdsByName[$destination.image]
-    }
 
-    # All six destinations were resolved to their exact local store IDs above. No registry write occurs until
-    # every mismatch check has passed. This is a repository single-writer model,
-    # not an atomic registry compare-and-swap claim.
-    foreach ($destination in @($plan.destinations | Where-Object { $_.action -ceq 'push' })) {
-        & docker tag $destination.local_id $destination.reference
-        if ($LASTEXITCODE -ne 0) { throw "Local exact-ID tag failed: $($destination.reference)" }
-        & docker push $destination.reference
-        if ($LASTEXITCODE -ne 0) { throw "Registry push failed: $($destination.reference)" }
-    }
-
-    foreach ($destination in $plan.destinations) {
-        $remote = Get-LiveRemoteIdentity -Reference $destination.reference
-        if (-not $remote.exists -or $remote.config_digest -cne $destination.config_digest) {
-            throw "Post-write readback mismatch for $($destination.reference)."
+        # All six destinations were resolved to their exact local store IDs above. No registry write occurs until
+        # every mismatch check has passed. This is a repository single-writer model,
+        # not an atomic registry compare-and-swap claim.
+        foreach ($destination in @($plan.destinations | Where-Object { $_.action -ceq 'push' })) {
+            & docker tag $destination.local_id $destination.reference
+            if ($LASTEXITCODE -ne 0) { throw "Local exact-ID tag failed: $($destination.reference)" }
+            & docker push $destination.reference
+            if ($LASTEXITCODE -ne 0) { throw "Registry push failed: $($destination.reference)" }
+            $destination.action = 'push-sent'
         }
-        $destination.manifest_digest = $remote.manifest_digest
-        $destination.action = if ($destination.action -ceq 'push') { 'pushed' } else { 'verified-noop' }
+
+        foreach ($destination in $plan.destinations) {
+            $remote = Get-LiveRemoteIdentity -Reference $destination.reference
+            if (-not $remote.exists -or $remote.config_digest -cne $destination.config_digest) {
+                throw "Post-write readback mismatch for $($destination.reference)."
+            }
+            $destination.manifest_digest = $remote.manifest_digest
+            $destination.action = if ($destination.action -ceq 'push-sent') { 'pushed' } else { 'verified-noop' }
+        }
+        $plan.status = 'PASS'
+    } catch {
+        $publishFailure = $_
+        $plan.status = 'FAIL'
+        $plan.failure = $_.Exception.Message
+    } finally {
+        $plan['completed_at'] = (Get-Date).ToUniversalTime().ToString('o')
+        if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+            Write-JsonFile -Value $plan -Path (Resolve-RepositoryPath -Path $OutputPath)
+        }
     }
-    $plan.completed_at = (Get-Date).ToUniversalTime().ToString('o')
-    if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
-        Write-JsonFile -Value $plan -Path (Resolve-RepositoryPath -Path $OutputPath)
+    if ($null -ne $publishFailure) {
+        throw $publishFailure
     }
     $plan | ConvertTo-Json -Depth 100
 }
 
+function Assert-CanonicalPublishedReleaseVersion {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    $version = Assert-CanonicalVersion -Value $Value
+    if ($version -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+        throw "Published-image scans require a canonical final vMAJOR.MINOR.PATCH release version: $Value"
+    }
+    return $version
+}
+
+function Invoke-LoggedNative {
+    param(
+        [Parameter(Mandatory = $true)][string]$File,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$LogPath,
+        [switch]$AllowFailure
+    )
+
+    Write-Host "> $File $($Arguments -join ' ')"
+    $normalized = [Collections.Generic.List[string]]::new()
+    & $File @Arguments 2>&1 | ForEach-Object {
+        $line = $_.ToString().TrimEnd()
+        $normalized.Add($line)
+        Write-Host $line
+    }
+    $exitCode = $LASTEXITCODE
+    if ($normalized.Count -eq 0) {
+        [IO.File]::WriteAllText($LogPath, '')
+    } else {
+        $normalized | Set-Content -Encoding utf8NoBOM -LiteralPath $LogPath
+    }
+    if ($exitCode -ne 0 -and -not $AllowFailure) {
+        throw "$File exited $exitCode; transcript: $LogPath"
+    }
+    if ($AllowFailure) {
+        return $exitCode
+    }
+}
+
+function Get-SarifResultCount {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Scanner did not write SARIF evidence: $Path"
+    }
+    try {
+        $sarif = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json -Depth 100
+    } catch {
+        throw "Scanner wrote malformed SARIF evidence at $Path`: $($_.Exception.Message)"
+    }
+    if ($null -eq $sarif -or $sarif -is [array] -or [string]$sarif.version -cne '2.1.0') {
+        throw "Scanner wrote invalid SARIF evidence at $Path"
+    }
+    $runsProperty = $sarif.PSObject.Properties['runs']
+    if ($null -eq $runsProperty -or $runsProperty.Value -isnot [array] -or @($runsProperty.Value).Count -eq 0) {
+        throw "Scanner wrote SARIF without a runs array at $Path"
+    }
+    $results = @(
+        foreach ($run in @($runsProperty.Value)) {
+            if ($null -eq $run -or $run -is [string] -or $run -is [ValueType]) {
+                throw "Scanner wrote malformed SARIF run at $Path"
+            }
+            $toolProperty = $run.PSObject.Properties['tool']
+            $driverProperty = if ($null -ne $toolProperty -and $null -ne $toolProperty.Value) {
+                $toolProperty.Value.PSObject.Properties['driver']
+            } else {
+                $null
+            }
+            $driverNameProperty = if ($null -ne $driverProperty -and $null -ne $driverProperty.Value) {
+                $driverProperty.Value.PSObject.Properties['name']
+            } else {
+                $null
+            }
+            if ($null -eq $driverNameProperty -or [string]::IsNullOrWhiteSpace([string]$driverNameProperty.Value)) {
+                throw "Scanner wrote SARIF without run.tool.driver.name at $Path"
+            }
+            $resultsProperty = $run.PSObject.Properties['results']
+            if ($null -eq $resultsProperty -or $resultsProperty.Value -isnot [array]) {
+                throw "Scanner wrote SARIF without a results array at $Path"
+            }
+            foreach ($result in @($resultsProperty.Value)) {
+                if ($null -eq $result -or $result -is [string] -or $result -is [ValueType]) {
+                    throw "Scanner wrote malformed SARIF result at $Path"
+                }
+                $result
+            }
+        }
+    )
+    return $results.Count
+}
+
+function Invoke-ScanPublished {
+    foreach ($required in @{
+        ReleaseVersion = $ReleaseVersion
+        ExpectedSha = $ExpectedSha
+        Registry = $Registry
+        Repository = $Repository
+        ArtifactRoot = $ArtifactRoot
+    }.GetEnumerator()) {
+        if ([string]::IsNullOrWhiteSpace([string]$required.Value)) {
+            throw "$($required.Key) is mandatory in ScanPublished mode."
+        }
+    }
+    if (-not $NoAllowlist) {
+        throw 'Published-image scans are fail-closed: -NoAllowlist is mandatory and scanner exceptions are unsupported.'
+    }
+    $version = Assert-CanonicalPublishedReleaseVersion -Value $ReleaseVersion
+    $sourceCommit = Assert-FullCommitSha -Value $ExpectedSha -Name 'ExpectedSha'
+    if ($Registry -cnotmatch '^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]+)?$') {
+        throw "Registry must be a canonical registry host name: $Registry"
+    }
+    if ($Repository -cnotmatch '^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$') {
+        throw "Repository must be a canonical owner/name: $Repository"
+    }
+
+    $artifactPath = if ([IO.Path]::IsPathRooted($ArtifactRoot)) {
+        [IO.Path]::GetFullPath($ArtifactRoot)
+    } elseif (-not [string]::IsNullOrWhiteSpace($TrustedOutputRoot)) {
+        [IO.Path]::GetFullPath((Join-Path $TrustedOutputRoot $ArtifactRoot))
+    } else {
+        [IO.Path]::GetFullPath((Join-Path $repoRoot $ArtifactRoot))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TrustedOutputRoot)) {
+        $artifactPath = New-TrustedOutputDirectory -Path $artifactPath
+    } else {
+        $repoPrefix = $repoRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+        if (-not $artifactPath.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "ArtifactRoot must resolve inside the repository unless TrustedOutputRoot is supplied: $artifactPath"
+        }
+    }
+    New-Item -ItemType Directory -Force -Path $artifactPath | Out-Null
+    foreach ($name in @('server', 'operator-console', 'postgres')) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $artifactPath $name) | Out-Null
+    }
+
+    $startedAt = (Get-Date).ToUniversalTime().ToString('o')
+    $scanErrors = [Collections.Generic.List[string]]::new()
+    $targets = @()
+    $databaseLog = Join-Path $artifactPath 'trivy-db-refresh.log'
+    $databaseVersionLog = Join-Path $artifactPath 'trivy-version.log'
+    $databaseVersionSha256 = $null
+    $databaseExitCode = $null
+    $databaseError = $null
+    $trivyVersion = $null
+    try {
+        $databaseExitCode = Invoke-LoggedNative -File 'trivy' -Arguments @('image', '--download-db-only') -LogPath $databaseLog -AllowFailure
+        if ($databaseExitCode -ne 0) {
+            $databaseError = "Trivy vulnerability database refresh exited $databaseExitCode; transcript: $databaseLog"
+            $scanErrors.Add($databaseError)
+        } else {
+            Invoke-LoggedNative -File 'trivy' -Arguments @('--version') -LogPath $databaseVersionLog
+            $trivyVersion = (Get-Content -Raw -LiteralPath $databaseVersionLog).Trim()
+        }
+    } catch {
+        $databaseError = "Trivy vulnerability database refresh failed: $($_.Exception.Message)"
+        $scanErrors.Add($databaseError)
+        if (-not (Test-Path -LiteralPath $databaseLog -PathType Leaf)) {
+            $databaseError | Set-Content -Encoding utf8NoBOM -LiteralPath $databaseLog
+        }
+    }
+    if (Test-Path -LiteralPath $databaseVersionLog -PathType Leaf) {
+        $databaseVersionSha256 = "sha256:$((Get-FileHash -Algorithm SHA256 -LiteralPath $databaseVersionLog).Hash.ToLowerInvariant())"
+    }
+
+    $definitions = @(
+        [ordered]@{ name = 'server'; repository = "$Registry/$Repository" },
+        [ordered]@{ name = 'operator-console'; repository = "$Registry/$Repository-operator-console" },
+        [ordered]@{ name = 'postgres'; repository = "$Registry/$Repository-postgres" }
+    )
+    foreach ($definition in $definitions) {
+        $tagReference = "$($definition.repository):$version"
+        $commitReference = "$($definition.repository):sha-$sourceCommit"
+        $logPath = Join-Path $artifactPath "$($definition.name)/trivy.log"
+        $entry = [ordered]@{
+            name = $definition.name
+            tag_reference = $tagReference
+            commit_reference = $commitReference
+            config_digest = $null
+            manifest_digest = $null
+            commit_config_digest = $null
+            commit_manifest_digest = $null
+            scan_reference = $null
+            sarif = "$($definition.name)/trivy.sarif"
+            sarif_sha256 = $null
+            log = "$($definition.name)/trivy.log"
+            scan_exit_code = $null
+            high_critical_findings = $null
+            error = $null
+        }
+        if ($null -ne $databaseError) {
+            $entry.error = 'Trivy scan was not attempted because the fresh vulnerability database could not be obtained.'
+            $entry.error | Set-Content -Encoding utf8NoBOM -LiteralPath $logPath
+            $targets += ,$entry
+            continue
+        }
+        try {
+            $tagRemote = Get-LiveRemoteIdentity -Reference $tagReference
+            if (-not $tagRemote.exists) {
+                throw "Published release tag does not resolve: $tagReference"
+            }
+            $commitRemote = Get-LiveRemoteIdentity -Reference $commitReference
+            if (-not $commitRemote.exists) {
+                throw "Published release commit alias does not resolve: $commitReference"
+            }
+            $entry.config_digest = Normalize-Sha256Digest -Value ([string]$tagRemote.config_digest) -Name "$($definition.name) release config digest"
+            $entry.manifest_digest = Normalize-Sha256Digest -Value ([string]$tagRemote.manifest_digest) -Name "$($definition.name) release manifest digest"
+            $entry.commit_config_digest = Normalize-Sha256Digest -Value ([string]$commitRemote.config_digest) -Name "$($definition.name) commit config digest"
+            $entry.commit_manifest_digest = Normalize-Sha256Digest -Value ([string]$commitRemote.manifest_digest) -Name "$($definition.name) commit manifest digest"
+            if ($entry.config_digest -cne $entry.commit_config_digest -or $entry.manifest_digest -cne $entry.commit_manifest_digest) {
+                throw "Published release identity mismatch between $tagReference and $commitReference."
+            }
+            $entry.scan_reference = "$($definition.repository)@$($entry.manifest_digest)"
+        } catch {
+            $entry.error = "Published identity resolution failed: $($_.Exception.Message)"
+            $scanErrors.Add("$($definition.name): $($entry.error)")
+        }
+        if ($null -eq $entry.error) {
+            $sarifPath = Join-Path $artifactPath $entry.sarif
+            try {
+                $entry.scan_exit_code = Invoke-LoggedNative -File 'trivy' -Arguments @(
+                    'image', '--skip-db-update', '--platform', $Platform,
+                    '--scanners', 'vuln', '--severity', 'HIGH,CRITICAL', '--exit-code', '1',
+                    '--format', 'sarif', '--output', $sarifPath, $entry.scan_reference
+                ) -LogPath $logPath -AllowFailure
+                $entry.high_critical_findings = Get-SarifResultCount -Path $sarifPath
+                $entry.sarif_sha256 = "sha256:$((Get-FileHash -Algorithm SHA256 -LiteralPath $sarifPath).Hash.ToLowerInvariant())"
+                if ($entry.scan_exit_code -ne 0 -and ($entry.scan_exit_code -ne 1 -or $entry.high_critical_findings -eq 0)) {
+                    throw "Trivy scanner exited $($entry.scan_exit_code); transcript: $logPath"
+                }
+            } catch {
+                $entry.error = "Trivy scanner failure: $($_.Exception.Message)"
+                $scanErrors.Add("$($definition.name): $($entry.error)")
+            }
+        } else {
+            $entry.error | Set-Content -Encoding utf8NoBOM -LiteralPath $logPath
+        }
+        $targets += ,$entry
+    }
+
+    $totalFindings = 0
+    foreach ($entry in $targets) {
+        if ($null -ne $entry.high_critical_findings) {
+            $totalFindings += [int]$entry.high_critical_findings
+        }
+    }
+    $failure = if ($scanErrors.Count -ne 0) {
+        $scanErrors -join [Environment]::NewLine
+    } elseif ($totalFindings -ne 0) {
+        "Published images contain $totalFindings HIGH/CRITICAL finding(s)."
+    } else {
+        $null
+    }
+    $summary = [ordered]@{
+        schema_version = 1
+        status = if ($null -eq $failure) { 'PASS' } else { 'FAIL' }
+        started_at = $startedAt
+        completed_at = (Get-Date).ToUniversalTime().ToString('o')
+        release_version = $version
+        source_commit = $sourceCommit
+        registry = $Registry
+        repository = $Repository
+        platform = $Platform
+        no_allowlist = $true
+        trivy_version = $trivyVersion
+        trivy_database = [ordered]@{
+            refresh_command = 'trivy image --download-db-only'
+            refresh_log = 'trivy-db-refresh.log'
+            refresh_exit_code = $databaseExitCode
+            version_log = 'trivy-version.log'
+            version_log_sha256 = $databaseVersionSha256
+            error = $databaseError
+        }
+        images = $targets
+        total_high_critical_findings = $totalFindings
+        failure = $failure
+    }
+    Write-JsonFile -Value $summary -Path (Join-Path $artifactPath 'published-image-scan-summary.json')
+    if ($scanErrors.Count -ne 0) {
+        throw "Published image scan encountered scanner or registry errors; evidence: $artifactPath"
+    }
+    if ($totalFindings -ne 0) {
+        throw "Published image scan found $totalFindings HIGH/CRITICAL finding(s); evidence: $artifactPath"
+    }
+    Write-Host 'PASS: scanned three published release identities bound to immutable commit aliases with a fresh Trivy database'
+    Write-Host "Evidence: $artifactPath"
+}
+
 switch ($Mode) {
     'ValidateRelease' { Invoke-ValidateRelease; exit 0 }
+    'ScanPublished' { Invoke-ScanPublished; exit 0 }
     'ValidateWorkflowRun' { Invoke-ValidateWorkflowRun; exit 0 }
     'ValidateArtifactMetadata' { Invoke-ValidateArtifactMetadata; exit 0 }
     'ValidatePayload' { Invoke-ValidatePayload; exit 0 }
@@ -1189,27 +1700,6 @@ $runtimeProof = [ordered]@{
 New-Item -ItemType Directory -Force -Path $artifactPath | Out-Null
 foreach ($name in @('server', 'operator-console', 'postgres', 'runtime', 'cleanup')) {
     New-Item -ItemType Directory -Force -Path (Join-Path $artifactPath $name) | Out-Null
-}
-
-function Invoke-LoggedNative {
-    param(
-        [Parameter(Mandatory = $true)][string]$File,
-        [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [Parameter(Mandatory = $true)][string]$LogPath
-    )
-
-    Write-Host "> $File $($Arguments -join ' ')"
-    $normalized = [Collections.Generic.List[string]]::new()
-    & $File @Arguments 2>&1 | ForEach-Object {
-        $line = $_.ToString().TrimEnd()
-        $normalized.Add($line)
-        Write-Host $line
-    }
-    $exitCode = $LASTEXITCODE
-    $normalized | Set-Content -Encoding utf8NoBOM -LiteralPath $LogPath
-    if ($exitCode -ne 0) {
-        throw "$File exited $exitCode; transcript: $LogPath"
-    }
 }
 
 function Remove-TrackedBuildContext {
@@ -1341,19 +1831,6 @@ function Invoke-ComposePsql {
         'exec', '-T', 'postgres', 'psql', '-qAt', '-v', 'ON_ERROR_STOP=1',
         '-U', 'engram', '-d', 'engram', '-c', $Sql
     )
-}
-
-function Get-SarifResultCount {
-    param([Parameter(Mandatory = $true)][string]$Path)
-    $sarif = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json -Depth 100
-    $results = @(
-        foreach ($run in @($sarif.runs)) {
-            if ($run.PSObject.Properties.Name -ccontains 'results') {
-                @($run.results)
-            }
-        }
-    )
-    return $results.Count
 }
 
 function Get-PrefixedResourceInventory {
@@ -1541,24 +2018,45 @@ try {
     }
 
     $scanTargets = @(
-        @{ Name = 'server'; Id = $localImageIds.server },
-        @{ Name = 'operator-console'; Id = $localImageIds.operator_console },
-        @{ Name = 'postgres'; Id = $localImageIds.postgres }
+        @{ Name = 'server'; ManifestName = 'server'; Id = $localImageIds.server },
+        @{ Name = 'operator-console'; ManifestName = 'operator_console'; Id = $localImageIds.operator_console },
+        @{ Name = 'postgres'; ManifestName = 'postgres'; Id = $localImageIds.postgres }
     )
+    $scannerErrors = [Collections.Generic.List[string]]::new()
+    $findingTargets = [Collections.Generic.List[string]]::new()
     foreach ($target in $scanTargets) {
         $sarif = Join-Path $artifactPath "$($target.Name)/trivy.sarif"
-        Invoke-LoggedNative -File 'trivy' -Arguments @(
-            'image', '--image-src', 'docker', '--platform', $Platform,
-            '--scanners', 'vuln', '--severity', 'HIGH,CRITICAL', '--exit-code', '1',
-            '--format', 'sarif', '--output', $sarif, $target.Id
-        ) -LogPath (Join-Path $artifactPath "$($target.Name)/trivy.log")
-
-        $count = Get-SarifResultCount -Path $sarif
-        if ($count -ne 0) {
-            throw "Scanner returned $count HIGH/CRITICAL result(s) for $($target.Name)"
+        $logPath = Join-Path $artifactPath "$($target.Name)/trivy.log"
+        $exitCode = $null
+        try {
+            $exitCode = Invoke-LoggedNative -File 'trivy' -Arguments @(
+                'image', '--image-src', 'docker', '--platform', $Platform,
+                '--scanners', 'vuln', '--severity', 'HIGH,CRITICAL', '--exit-code', '1',
+                '--format', 'sarif', '--output', $sarif, $target.Id
+            ) -LogPath $logPath -AllowFailure
+        } catch {
+            $scannerErrors.Add("$($target.Name): $($_.Exception.Message)")
+            continue
         }
-        $scanCounts[$target.Name] = $count
-        $sarifHashes[$target.Name] = (Get-FileHash -Algorithm SHA256 -LiteralPath $sarif).Hash.ToLowerInvariant()
+        try {
+            $count = Get-SarifResultCount -Path $sarif
+            $scanCounts[$target.ManifestName] = $count
+            $sarifHashes[$target.ManifestName] = (Get-FileHash -Algorithm SHA256 -LiteralPath $sarif).Hash.ToLowerInvariant()
+            if ($exitCode -ne 0 -and ($exitCode -ne 1 -or $count -eq 0)) {
+                $scannerErrors.Add("$($target.Name): trivy exited $exitCode; transcript: $logPath")
+            }
+            if ($count -ne 0) {
+                $findingTargets.Add("$($target.Name)=$count")
+            }
+        } catch {
+            $scannerErrors.Add("$($target.Name): $($_.Exception.Message)")
+        }
+    }
+    if ($scannerErrors.Count -ne 0) {
+        throw "Trivy scanner/tool failure(s) after all image scan attempts: $($scannerErrors -join '; ')"
+    }
+    if ($findingTargets.Count -ne 0) {
+        throw "Scanner found HIGH/CRITICAL result(s) after all image scans: $($findingTargets -join ', ')"
     }
 
     Push-Location (Join-Path $repoRoot 'apps/operator-console')

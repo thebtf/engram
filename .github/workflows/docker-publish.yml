@@ -208,7 +208,7 @@ jobs:
           path: ${{ runner.temp }}/engram-release-payload-download-${{ github.run_id }}-${{ github.run_attempt }}
           merge-multiple: true
 
-      - name: Validate the exact regular-file envelope and internal checksums
+      - name: Validate the exact payload and retain its acceptance evidence
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ steps.privileged-preflight.outputs.version }}
@@ -224,6 +224,9 @@ jobs:
             -ExpectedSha $env:VALIDATED_COMMIT `
             -ReleaseVersion $env:RELEASE_VERSION `
             -OutputPath (Join-Path $evidenceRoot 'payload-validation.json')
+          foreach ($name in @('final-image-set.json', 'server.trivy.sarif', 'operator-console.trivy.sarif', 'postgres.trivy.sarif')) {
+            Copy-Item -LiteralPath (Join-Path $payloadRoot $name) -Destination (Join-Path $evidenceRoot $name)
+          }
 
       - name: Load validated image archives as data without running candidate code
         shell: pwsh
@@ -268,6 +271,7 @@ jobs:
           password: ${{ github.token }}
 
       - name: Recompare, publish absent exact identities, and read back all six
+        id: publish
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ steps.privileged-preflight.outputs.version }}
@@ -308,16 +312,24 @@ jobs:
           }
 
       - name: Validate the exact trusted evidence envelope after credential erasure
+        if: always() && steps.publish.outcome != 'skipped'
         shell: pwsh
+        env:
+          REPOSITORY_NAME: ${{ github.repository }}
+          DOCKER_CONFIG: ${{ runner.temp }}/engram-docker-auth-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           $evidenceRoot = Join-Path $env:RUNNER_TEMP "engram-publication-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           pwsh ./trusted/scripts/production-gates/build-and-scan-images.ps1 `
             -Mode ValidatePublicationEvidence `
             -RepositoryRoot ./trusted `
             -TrustedOutputRoot $env:RUNNER_TEMP `
-            -EvidenceRoot $evidenceRoot
+            -EvidenceRoot $evidenceRoot `
+            -CredentialDirectoryPath $env:DOCKER_CONFIG `
+            -Registry ghcr.io `
+            -Repository $env:REPOSITORY_NAME
 
       - name: Upload trusted publication evidence after credential erasure
+        if: always() && steps.publish.outcome != 'skipped'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: engram-publication-evidence-${{ github.run_id }}-${{ github.run_attempt }}
