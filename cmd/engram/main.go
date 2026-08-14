@@ -493,17 +493,17 @@ func readLiveMuxcoreDaemonActionAt(markerPath, legacyPath string, status muxcore
 	}
 	marker, markerErr := readMuxcoreDaemonVersionMarker(markerPath)
 	if markerErr == nil {
-		if marker.PID == status.PID && marker.DaemonGeneration == status.DaemonGeneration {
-			return classifyDaemonConvergence(client, daemonConvergenceIdentity{ProductVersion: marker.ProductVersion, DaemonCompatEpoch: marker.DaemonCompatEpoch})
+		if marker.PID == status.PID {
+			if marker.DaemonGeneration == status.DaemonGeneration {
+				return classifyDaemonConvergence(client, daemonConvergenceIdentity{ProductVersion: marker.ProductVersion, DaemonCompatEpoch: marker.DaemonCompatEpoch})
+			}
+			return daemonConvergenceFail, fmt.Errorf("%w: PID or generation differs from fresh control status", errMuxcoreDaemonMarkerUncorrelated)
 		}
 		// A v6.46.4 client can leave its correlated legacy marker behind after
 		// replacing this schema-2 generation. Only use it when schema-2 proves
-		// a different, newer PID than that legacy identity. A same-PID generation
-		// mismatch is an ABA PID reuse, so it remains fail-closed until the live
-		// schema-2 daemon publishes its own generation.
+		// a different, newer PID than that legacy identity.
 		legacy, legacyErr := readCorrelatedLegacyMuxcoreDaemonMarker(legacyPath, status)
 		if legacyErr == nil &&
-			marker.PID != status.PID &&
 			marker.DaemonCompatEpoch == client.DaemonCompatEpoch &&
 			client.DaemonCompatEpoch == 1 && validDaemonIdentity(client) &&
 			semver.Compare(marker.ProductVersion, legacy.Version) > 0 {

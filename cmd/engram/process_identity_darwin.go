@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -15,6 +16,7 @@ import (
 
 const (
 	darwinProcPidPathInfoMaxSize    = 4096
+	darwinProcPIDPathInfo           = 11
 	darwinProcPIDUniqIdentifierInfo = 17
 	darwinMachOLoadCommandUUID      = 0x1b
 	darwinMachOLoadCommandUUIDSize  = 24
@@ -73,15 +75,18 @@ func verifyLiveProcessImageBinding(pid int, image *processImageIdentity) error {
 	return nil
 }
 
+func darwinProcInfo(pid, flavor int, buffer unsafe.Pointer, size uintptr) (uintptr, syscall.Errno) {
+	result, _, errno := syscall.Syscall6(unix.SYS_PROC_INFO, 2, uintptr(pid), uintptr(flavor), 0, uintptr(buffer), size)
+	return result, errno
+}
+
 func darwinProcessIdentity(pid int) (darwinProcUniqueIdentifierInfo, error) {
 	var identity darwinProcUniqueIdentifierInfo
-	result, _, errno := syscallSyscall6(libproc_proc_pidinfo_trampoline_addr,
-		uintptr(pid), darwinProcPIDUniqIdentifierInfo, 0,
-		uintptr(unsafe.Pointer(&identity)), unsafe.Sizeof(identity), 0)
+	result, errno := darwinProcInfo(pid, darwinProcPIDUniqIdentifierInfo, unsafe.Pointer(&identity), unsafe.Sizeof(identity))
 	if errno != 0 {
 		return darwinProcUniqueIdentifierInfo{}, fmt.Errorf("query process %d identity: %w", pid, errno)
 	}
-	if result != unsafe.Sizeof(identity) {
+	if result != 56 {
 		return darwinProcUniqueIdentifierInfo{}, fmt.Errorf("query process %d identity: returned %d bytes", pid, result)
 	}
 	if identity.UniqueID == 0 || identity.UUID == [16]byte{} {
@@ -92,25 +97,21 @@ func darwinProcessIdentity(pid int) (darwinProcUniqueIdentifierInfo, error) {
 
 func darwinProcessPath(pid int) (string, error) {
 	buffer := make([]byte, darwinProcPidPathInfoMaxSize)
-	result, _, errno := syscallSyscall6(libproc_proc_pidpath_trampoline_addr, uintptr(pid), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)), 0, 0, 0)
-	if errno != 0 || result == 0 {
-		if errno != 0 {
-			return "", fmt.Errorf("query process %d executable: %w", pid, errno)
-		}
-		return "", fmt.Errorf("query process %d executable: empty path", pid)
+	_, errno := darwinProcInfo(pid, darwinProcPIDPathInfo, unsafe.Pointer(&buffer[0]), uintptr(len(buffer)))
+	if errno != 0 {
+		return "", fmt.Errorf("query process %d executable: %w", pid, errno)
 	}
-	pathLength := int(result)
-	if pathLength >= len(buffer) {
+	pathLength := 0
+	for pathLength < len(buffer) && buffer[pathLength] != 0 {
+		pathLength++
+	}
+	if pathLength == len(buffer) {
 		return "", fmt.Errorf("query process %d executable: path is too long", pid)
 	}
-	path := string(buffer[:pathLength])
-	if pathLength > 0 && path[pathLength-1] == 0 {
-		path = path[:pathLength-1]
-	}
-	if path == "" {
+	if pathLength == 0 {
 		return "", fmt.Errorf("query process %d executable: empty path", pid)
 	}
-	return path, nil
+	return string(buffer[:pathLength]), nil
 }
 
 func darwinMachOUUID(image *os.File) ([16]byte, error) {
@@ -142,17 +143,6 @@ func darwinMachOUUID(image *os.File) ([16]byte, error) {
 	}
 	return uuid, nil
 }
-
-var (
-	libproc_proc_pidpath_trampoline_addr uintptr
-	libproc_proc_pidinfo_trampoline_addr uintptr
-)
-
-//go:cgo_import_dynamic libproc_proc_pidpath proc_pidpath "/usr/lib/libproc.dylib"
-//go:cgo_import_dynamic libproc_proc_pidinfo proc_pidinfo "/usr/lib/libproc.dylib"
-
-//go:linkname syscallSyscall6 syscall.syscall6
-func syscallSyscall6(fn, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err unix.Errno)
 
 func muxcoreControlPeerPID(connection net.Conn) (int, error) {
 	unixConnection, ok := connection.(*net.UnixConn)

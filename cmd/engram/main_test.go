@@ -261,9 +261,19 @@ func TestReadLiveMuxcoreDaemonActionRejectsSamePIDGenerationABAAfterLegacyRebind
 		t.Fatal(err)
 	}
 	status := muxcoreDaemonStatusIdentity{PID: 88060, DaemonGeneration: "generation-reused"}
+	oldReadLiveProcessImage := readLiveProcessImage
+	liveProcessImageCalls := 0
+	readLiveProcessImage = func(int) (*processImageIdentity, error) {
+		liveProcessImageCalls++
+		return nil, errors.New("unexpected live image probe")
+	}
+	t.Cleanup(func() { readLiveProcessImage = oldReadLiveProcessImage })
 	action, err := readLiveMuxcoreDaemonActionAt(v2Path, legacyPath, status, daemonConvergenceIdentity{ProductVersion: daemonVersion, DaemonCompatEpoch: 1})
 	if !errors.Is(err, errMuxcoreDaemonMarkerUncorrelated) || action != daemonConvergenceFail {
 		t.Fatalf("same-PID ABA action, error = %v, %v; want fail, uncorrelated", action, err)
+	}
+	if liveProcessImageCalls != 0 {
+		t.Fatalf("same-PID ABA read live process image %d times; want 0", liveProcessImageCalls)
 	}
 }
 
