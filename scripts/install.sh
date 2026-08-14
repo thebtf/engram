@@ -237,7 +237,8 @@ const policy = JSON.parse(text);
 exact(policy, ['schema_version', 'launcher_security_epoch', 'package_version', 'daemon_compat_epoch', 'targets', 'revoked_sha256', 'build_contract']);
 if (policy.schema_version !== 1 || policy.launcher_security_epoch !== 1 || policy.daemon_compat_epoch !== 1 || policy.package_version !== version || !semver.test(version)) throw new Error('schema or version mismatch');
 exact(policy.build_contract, ['go_version', 'trimpath', 'buildvcs', 'client_cgo', 'daemon_version_ldflag']);
-if (policy.build_contract.go_version !== '1.26.6' || policy.build_contract.trimpath !== true || policy.build_contract.buildvcs !== false || policy.build_contract.client_cgo !== false || policy.build_contract.daemon_version_ldflag !== `v${version}`) throw new Error('unsupported build contract');
+const supportedGoVersions = version === '6.47.6' ? new Set(['1.26.6']) : new Set(['1.25.12']);
+if (!supportedGoVersions.has(policy.build_contract.go_version) || policy.build_contract.trimpath !== true || policy.build_contract.buildvcs !== false || policy.build_contract.client_cgo !== false || policy.build_contract.daemon_version_ldflag !== `v${version}`) throw new Error('unsupported build contract');
 if (!Array.isArray(policy.revoked_sha256) || policy.revoked_sha256.some((hash) => typeof hash !== 'string' || !sha256.test(hash)) || new Set(policy.revoked_sha256).size !== policy.revoked_sha256.length) throw new Error('invalid revocation list');
 exact(policy.targets, Object.keys(assets));
 for (const [key, asset] of Object.entries(assets)) {
