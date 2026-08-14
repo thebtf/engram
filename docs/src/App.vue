@@ -226,7 +226,7 @@
             <br>
             <span class="text-amber-400">make build && make install</span>
             <br><br>
-            <span class="text-slate-500"># Requires: Go 1.25+, Node.js 18+, CGO compiler</span>
+            <span class="text-slate-500"># Requires: Go 1.26.6+, Node.js 18+, CGO compiler</span>
           </CodeBlock>
         </div>
 

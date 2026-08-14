@@ -281,7 +281,7 @@ claude mcp add-json engram '{"type":"stdio","command":"engram","env":{"ENGRAM_UR
 
 ### Сборка из исходников
 
-Требуется Go 1.25+ и Node.js (для dashboard).
+Требуется Go 1.26.6+ и Node.js (для dashboard).
 
 ```bash
 git clone https://github.com/thebtf/engram.git && cd engram

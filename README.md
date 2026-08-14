@@ -356,7 +356,7 @@ claude mcp add-json engram '{"type":"stdio","command":"engram","env":{"ENGRAM_UR
 
 ### Build from Source
 
-Requires Go 1.25+ and Node.js (for dashboard).
+Requires Go 1.26.6+ and Node.js (for dashboard).
 
 ```bash
 git clone https://github.com/thebtf/engram.git && cd engram
@@ -540,7 +540,7 @@ vault(action="get", name="OPENAI_KEY")
 
 ## Development
 
-The project requires Go 1.25+ for its current build. Use the focused Go checks
+The project requires Go 1.26.6+ for its current build. Use the focused Go checks
 for the server and MCP layers:
 
 ```bash

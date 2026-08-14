@@ -28,7 +28,16 @@
 | Plugin hooks | `node --test plugin/engram/hooks/*.test.js` | non-zero exit when hook/plugin code changed |
 | OpenClaw plugin | `npm test --prefix plugin/openclaw-engram` | non-zero exit when OpenClaw plugin code changed |
 | OpenClaw publish version | `node plugin/openclaw-engram/scripts/check-publish-version.mjs <local> <npm>` | local version is malformed, equal to, or older than the registry version |
+| Docker image acceptance | The exact `final-image-set.json` for the release workflow plus its three zero-finding SARIF files, with server, operator-console, and postgres identities, runtime proof, and cleanup PASS | the manifest or any SARIF is missing, stale, incomplete, failed, non-zero, or cannot be verified |
+| Released-digest freshness rescan | The latest scheduled published-image rescan status for all three released digests; clean runs retain per-image SARIF/log, failed attempts retain per-image error/log, and every run has an aggregate summary | any image has a finding/error, required PASS evidence is missing/stale, or the rescan cannot be verified |
 | Diff hygiene | `git diff --check` | whitespace/conflict marker errors |
+
+The Docker acceptance manifest, its three SARIF files, and latest
+released-digest rescan status are mandatory evidence for Docker, server, and
+Watchtower publication. A failed rescan blocks the release owner named by the
+active release run; that owner must complete and record the remediation loop
+below before retrying publication or rollout. The scan job reports evidence and
+fails closed; it does not silently create, merge, or release the maintenance PR.
 
 ## Release Autonomy
 
@@ -49,6 +58,30 @@ Project default: `auto_private_patch_minor` for reviewed PRs and active-goal mil
 - `plugin/openclaw-engram/package.json` and `plugin/openclaw-engram/openclaw.plugin.json` store the same independently versioned OpenClaw package release.
 - Every OpenClaw source change that triggers the publish workflow must advance that package version beyond the registry version; equality is a failed release gate, not a no-op.
 - Git tags use `vX.Y.Z`.
+
+## Published-image freshness and remediation
+
+Exact image pins and digests are required for reproducibility; they do not
+prove that a published image remains free of vulnerabilities. The scheduled
+published-image rescan is read-only and does not rewrite source, workflow, or
+version pins. Release jobs never rewrite pins after a tag.
+
+When a released-digest rescan reports a newly fixed CVE, the release owner
+blocks Docker/server/Watchtower publication and follows this bounded loop:
+
+1. Record the affected image/CVE and select the fixed base or toolchain version.
+2. Open and merge a reviewed maintenance PR containing the required pin change.
+3. Rebuild, run the aggregate three-image scan, and rerun the runtime evidence.
+4. Cut a patch release and publish only with a new passing
+   `final-image-set.json`, its three SARIF files, and released-digest rescan
+   status.
+5. Record the maintenance PR, patch release, and clean rescan artifact in the
+   release handoff.
+
+If no fixed version exists, publication remains blocked. The current automated
+lane implements no VEX record, allowlist, scanner-ignore input, or
+`--ignore-unfixed` bypass; adding an exception path is a separate reviewed
+security change, not an operator-side escape hatch.
 
 ## Release Notes
 
