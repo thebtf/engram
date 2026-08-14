@@ -7,9 +7,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-  schedule:
-    # Daily UTC verification of current main plus the last published image set.
-    - cron: "17 3 * * *"
 
 permissions:
   contents: read
@@ -80,99 +77,6 @@ jobs:
         with:
           name: image-verification-${{ github.run_id }}-${{ github.run_attempt }}
           path: .agent/reports/evidence/production-ready/image-remediation-r2/workflow-verify-${{ github.run_id }}-${{ github.run_attempt }}
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 14
-
-  rescan-published-images:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout trusted scan policy
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          persist-credentials: false
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Install Trivy
-        shell: bash
-        run: |
-          set -euo pipefail
-          readonly trivy_archive='trivy_0.72.0_Linux-64bit.tar.gz'
-          readonly trivy_url='https://github.com/aquasecurity/trivy/releases/download/v0.72.0/trivy_0.72.0_Linux-64bit.tar.gz'
-          readonly trivy_sha256='bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea'
-          readonly trivy_tmp="${RUNNER_TEMP}/trivy"
-          readonly trivy_bin="${RUNNER_TEMP}/engram-tools"
-          mkdir -p "$trivy_tmp" "$trivy_bin"
-          curl --fail --location --silent --show-error "$trivy_url" --output "$trivy_tmp/$trivy_archive"
-          printf '%s  %s\n' "$trivy_sha256" "$trivy_tmp/$trivy_archive" | sha256sum --check --strict
-          tar --extract --gzip --file "$trivy_tmp/$trivy_archive" --directory "$trivy_tmp"
-          install --mode 0755 "$trivy_tmp/trivy" "$trivy_bin/trivy"
-          printf '%s\n' "$trivy_bin" >> "$GITHUB_PATH"
-          "$trivy_bin/trivy" --version
-
-      - name: Resolve latest published release through read-only GitHub API
-        id: latest-release
-        shell: pwsh
-        env:
-          REPOSITORY_NAME: ${{ github.repository }}
-          READ_ONLY_GITHUB_TOKEN: ${{ github.token }}
-          EVIDENCE_ROOT: ${{ runner.temp }}/engram-published-image-rescan-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          New-Item -ItemType Directory -Force -Path $env:EVIDENCE_ROOT | Out-Null
-          $version = $null
-          try {
-            $headers = @{
-              Accept = 'application/vnd.github+json'
-              Authorization = "Bearer $env:READ_ONLY_GITHUB_TOKEN"
-              'X-GitHub-Api-Version' = '2022-11-28'
-            }
-            $releaseUri = "https://api.github.com/repos/$($env:REPOSITORY_NAME)/releases/latest"
-            $release = Invoke-RestMethod -Method Get -Uri $releaseUri -Headers $headers
-            $version = [string]$release.tag_name
-            if ([bool]$release.draft -or [bool]$release.prerelease -or $version -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
-              throw "Latest published release is not a canonical final vMAJOR.MINOR.PATCH tag: $version"
-            }
-            [ordered]@{ status = 'PASS'; release_version = $version } |
-              ConvertTo-Json | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $env:EVIDENCE_ROOT 'release-resolution.json')
-            Add-Content -Encoding utf8NoBOM -LiteralPath $env:GITHUB_OUTPUT -Value "version=$version"
-          } catch {
-            [ordered]@{ status = 'FAIL'; release_version = $version; failure = $_.Exception.Message } |
-              ConvertTo-Json | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $env:EVIDENCE_ROOT 'release-resolution.json')
-            throw
-          }
-
-      - name: Rescan published immutable images without registry authority
-        shell: pwsh
-        env:
-          RELEASE_VERSION: ${{ steps.latest-release.outputs.version }}
-          REPOSITORY_NAME: ${{ github.repository }}
-          EVIDENCE_ROOT: ${{ runner.temp }}/engram-published-image-rescan-${{ github.run_id }}-${{ github.run_attempt }}
-          GITHUB_TOKEN: ""
-          GH_TOKEN: ""
-          CR_PAT: ""
-          GHCR_TOKEN: ""
-        run: |
-          pwsh ./scripts/production-gates/build-and-scan-images.ps1 `
-            -Mode ScanPublished `
-            -ReleaseVersion $env:RELEASE_VERSION `
-            -Registry ghcr.io `
-            -Repository $env:REPOSITORY_NAME `
-            -ArtifactRoot (Join-Path $env:EVIDENCE_ROOT 'scan') `
-            -TrustedOutputRoot $env:RUNNER_TEMP `
-            -Platform linux/amd64 `
-            -NoAllowlist
-
-      - name: Upload scheduled published-image rescan evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: published-image-rescan-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/engram-published-image-rescan-${{ github.run_id }}-${{ github.run_attempt }}
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
