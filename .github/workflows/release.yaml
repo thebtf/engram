@@ -47,7 +47,7 @@ jobs:
         uses: sigstore/cosign-installer@v3
 
       - name: Test plugin scripts
-        run: node --test --test-concurrency=1 plugin/engram/hooks/*.test.js plugin/engram/scripts/*.test.js scripts/*.test.js
+        run: node --test --test-concurrency=1 plugin/engram/hooks/*.test.js plugin/engram/scripts/*.test.js plugin/engram/extensions/*.test.mjs scripts/*.test.js
         env:
           ENGRAM_TOKEN: release-test-keycard
 
@@ -65,6 +65,9 @@ jobs:
 
       - name: Gate raw clients against committed policy
         run: scripts/check-bootstrap-policy-artifacts.sh --policy plugin/engram/bootstrap-targets.json --dist dist
+
+      - name: Gate server-plugin archives against tagged OMP payload
+        run: scripts/check-server-plugin-artifacts.sh --version "${GITHUB_REF_NAME#v}" --dist dist
 
       - name: Read draft launcher assets back
         run: scripts/readback-bootstrap-policy-assets.sh --policy plugin/engram/bootstrap-targets.json --tag "${GITHUB_REF_NAME}"

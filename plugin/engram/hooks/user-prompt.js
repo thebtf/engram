@@ -187,5 +187,6 @@ if (require.main === module) {
 
 module.exports = {
   handleUserPrompt,
+  fetchAmbientAdditionalContext,
   detectCorrection,
 };
