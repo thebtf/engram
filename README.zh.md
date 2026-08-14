@@ -281,7 +281,7 @@ claude mcp add-json engram '{"type":"stdio","command":"engram","env":{"ENGRAM_UR
 
 ### 从源码构建
 
-需要 Go 1.25+ 和 Node.js（用于仪表盘）。
+需要 Go 1.26.6+ 和 Node.js（用于仪表盘）。
 
 ```bash
 git clone https://github.com/thebtf/engram.git && cd engram

@@ -12,6 +12,18 @@ to modify both this record and the deployment dotenv holds deployment authority.
 The wrapper validates the record and binds its read-back digests to the dotenv;
 it does not claim to verify a cryptographic signature over the local file.
 
+Docker/server/Watchtower publication also requires two current records: the
+exact three-image `final-image-set.json` acceptance manifest together with its
+three zero-finding SARIF files, and the latest released-digest rescan status.
+A clean rescan retains per-image SARIF/log evidence; a tag-resolution, scanner,
+or database-refresh failure retains the per-image error/log and aggregate FAIL
+summary instead. The read-only rescan does not refresh pins; exact pins provide
+reproducibility, not freshness. A newly reported CVE blocks the
+release/deployment owner. Use the bounded next action: fixed version -> reviewed
+maintenance PR -> rebuild/aggregate scan/runtime proof -> patch release. If no
+fixed version exists, publication remains blocked: the automated lane implements
+no VEX, allowlist, scanner-ignore, or `--ignore-unfixed` override.
+
 ## Immutable image selection
 
 Set all three identities before parsing either Compose file:
@@ -209,7 +221,13 @@ pwsh ./scripts/production-gates/build-and-scan-images.ps1 `
   -NoAllowlist
 ```
 
-This performs no-cache builds from tracked files only, exact-ID HIGH/CRITICAL
-scans without allowlists, the permanent runtime/negative matrix, PostgreSQL
-recreation/durability proof, and prefix-scoped cleanup verification. It does
-not push a registry tag.
+This performs no-cache builds from tracked files only, attempts all three image
+scans before one aggregate HIGH/CRITICAL verdict, and requires one zero-finding
+SARIF per image for PASS. A scanner error is retained as per-image log/error
+evidence and fails the run. The gate also runs the permanent runtime/negative
+matrix, PostgreSQL recreation/durability proof, and prefix-scoped cleanup
+verification. It does not push a registry tag. For a released image, retain the
+scheduled published-digest rescan summary. A clean rescan
+retains per-image SARIF/log evidence; a failed attempt retains per-image
+error/log evidence and blocks publication. The rescan does not log in, pull into
+Docker, execute candidate code, or write registry data.

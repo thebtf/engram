@@ -29,7 +29,7 @@ function fixture(version = "6.47.0", bytes = Buffer.from("trusted client bytes")
         "darwin-arm64": { desired: tuple("engram-darwin-arm64"), predecessor: null },
       },
       revoked_sha256: [],
-      build_contract: { go_version: "1.25.12", trimpath: true, buildvcs: false, client_cgo: false, daemon_version_ldflag: `v${version}` },
+      build_contract: { go_version: "1.26.6", trimpath: true, buildvcs: false, client_cgo: false, daemon_version_ldflag: `v${version}` },
     },
   };
 }
