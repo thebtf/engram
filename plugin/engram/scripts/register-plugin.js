@@ -2,12 +2,13 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
-const LOCK_OWNER_PUBLICATION_GRACE_MS = 250;
+const LOCK_OWNER_PUBLICATION_GRACE_MS = 5_000;
 const LOCK_RETRY_MS = 25;
 const LOCK_NAME = ".engram-registry-transaction.lock";
 const JOURNAL_NAME = ".engram-registry-transaction.recovery";
@@ -15,6 +16,7 @@ const MANIFEST_NAME = "manifest.json";
 const RECEIPT_NAME = "receipt.json";
 const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
 const DIGEST = /^[0-9a-f]{64}$/;
+const PROCESS_INCARNATION = /^(?:linux|darwin|win32):\d+(?::\d+)?$/;
 const RECLAIM_MARKER = new RegExp(`^${LOCK_NAME.replaceAll(".", "\\.")}\\.reclaim-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$`);
 const OWNER_PUBLICATION_RECLAIM_MARKER = new RegExp(`^${LOCK_NAME.replaceAll(".", "\\.")}\\.publication-reclaim-\\d+-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$`);
 const CLAIMED_RECLAIM_MARKER = new RegExp(`^${LOCK_NAME.replaceAll(".", "\\.")}\\.reclaiming-([1-9]\\d*)-([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})-([0-9a-f]{64})-([1-9]\\d*)-([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$`);
@@ -26,9 +28,9 @@ function usage() { fail("usage: register-plugin.js <installed_plugins.json> <set
 function sleep(milliseconds) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds); }
 function sha256(bytes) { return crypto.createHash("sha256").update(bytes).digest("hex"); }
 function sameBytes(left, right) { return left.length === right.length && crypto.timingSafeEqual(left, right); }
-function sameOwner(left, right) { return left.hostname === right.hostname && left.pid === right.pid && left.token === right.token; }
+function sameOwner(left, right) { return left.hostname === right.hostname && left.pid === right.pid && left.token === right.token && (("incarnation" in left) === ("incarnation" in right)) && (!("incarnation" in left) || left.incarnation === right.incarnation); }
 function strictKeys(value, keys) { return value && !Array.isArray(value) && typeof value === "object" && Object.keys(value).sort().join("\0") === [...keys].sort().join("\0"); }
-function validOwner(value) { return strictKeys(value, ["hostname", "pid", "token"]) && typeof value.hostname === "string" && value.hostname.length > 0 && Number.isSafeInteger(value.pid) && value.pid > 0 && typeof value.token === "string" && UUID.test(value.token); }
+function validOwner(value) { return (strictKeys(value, ["hostname", "pid", "token"]) || strictKeys(value, ["hostname", "incarnation", "pid", "token"])) && typeof value.hostname === "string" && value.hostname.length > 0 && Number.isSafeInteger(value.pid) && value.pid > 0 && typeof value.token === "string" && UUID.test(value.token) && (!("incarnation" in value) || typeof value.incarnation === "string" && PROCESS_INCARNATION.test(value.incarnation)); }
 function lockTimeout() {
   const value = process.env.ENGRAM_REGISTRY_LOCK_TIMEOUT_MS;
   if (value === undefined || value === "") return DEFAULT_LOCK_TIMEOUT_MS;
@@ -85,13 +87,45 @@ function readLockOwner(directory) {
   try { value = JSON.parse(fs.readFileSync(path.join(directory, "owner"), "utf8")); } catch { return null; }
   return validOwner(value) ? value : null;
 }
-function isDeadLocalOwner(owner) {
-  if (!owner || owner.hostname !== os.hostname()) return false;
-  try { process.kill(owner.pid, 0); return false; } catch (error) { return error.code === "ESRCH"; }
+function processIncarnation(pid) {
+  try { process.kill(pid, 0); } catch (error) { return error.code === "ESRCH" ? null : undefined; }
+  if (process.platform === "linux") {
+    let stat;
+    try { stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8"); } catch { return undefined; }
+    const close = stat.lastIndexOf(")");
+    const startTime = close < 0 ? "" : stat.slice(close + 2).trim().split(/\s+/)[19];
+    return /^\d+$/.test(startTime) ? `linux:${startTime}` : undefined;
+  }
+  const command = process.platform === "darwin"
+    ? ["/usr/sbin/sysctl", ["-n", `kern.proc.pid.${pid}`]]
+    : process.platform === "win32"
+      ? ["powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference = 'Stop'; [Console]::Out.Write((Get-Process -Id ${pid}).StartTime.ToUniversalTime().Ticks)`]]
+      : null;
+  if (!command) return undefined;
+  let result;
+  try { result = spawnSync(command[0], command[1], { encoding: "utf8", windowsHide: true }); } catch { return undefined; }
+  if (result.error || result.status !== 0 || typeof result.stdout !== "string") return undefined;
+  if (process.platform === "darwin") {
+    const match = /p_starttime\s*=\s*\{\s*tv_sec\s*=\s*(\d+)\s*,\s*tv_usec\s*=\s*(\d+)\s*\}/.exec(result.stdout);
+    return match ? `darwin:${match[1]}:${match[2]}` : undefined;
+  }
+  const ticks = result.stdout.trim();
+  return /^\d+$/.test(ticks) ? `win32:${ticks}` : undefined;
 }
+function localOwnerState(owner) {
+  if (!owner || owner.hostname !== os.hostname()) return "foreign";
+  if (!("incarnation" in owner)) {
+    try { process.kill(owner.pid, 0); return "legacy-live"; } catch (error) { return error.code === "ESRCH" ? "dead" : "unknown"; }
+  }
+  const incarnation = processIncarnation(owner.pid);
+  if (incarnation === null) return "dead";
+  if (typeof incarnation !== "string") return "unknown";
+  return incarnation === owner.incarnation ? "live" : "reused";
+}
+function isStaleLocalOwner(owner) { const state = localOwnerState(owner); return state === "dead" || state === "reused"; }
 function staleOwner(directory, expected) {
   const owner = readLockOwner(directory);
-  return owner && (!expected || sameOwner(owner, expected)) && isDeadLocalOwner(owner) ? owner : null;
+  return owner && (!expected || sameOwner(owner, expected)) && isStaleLocalOwner(owner) ? owner : null;
 }
 function staleUnpublishedLock(directory) {
   let stat;
@@ -132,7 +166,7 @@ function cleanupClaimedReclaimMarker(marker) {
   let ownerStat;
   try { ownerStat = fs.lstatSync(ownerFile); } catch { return false; }
   const owner = ownerStat.isFile() && !ownerStat.isSymbolicLink() ? readLockOwner(marker) : null;
-  if (!owner || owner.pid !== identity.pid || owner.token !== identity.token || sha256(Buffer.from(owner.hostname, "utf8")) !== identity.hostnameHash || !isDeadLocalOwner(owner)) return false;
+  if (!owner || owner.pid !== identity.pid || owner.token !== identity.token || sha256(Buffer.from(owner.hostname, "utf8")) !== identity.hostnameHash || !isStaleLocalOwner(owner)) return false;
   try { fs.unlinkSync(ownerFile); fs.rmdirSync(marker); return true; } catch (error) {
     if (error.code === "ENOENT") return false;
     throw error;
@@ -220,8 +254,10 @@ function quarantineDeadCanonical(directory) {
 function acquireLock(claudeDirectory) {
   fs.mkdirSync(claudeDirectory, { recursive: true, mode: 0o700 });
   const directory = path.join(claudeDirectory, LOCK_NAME);
+  const incarnation = processIncarnation(process.pid);
+  if (typeof incarnation !== "string") fail("cannot verify registry transaction process incarnation");
+  const identity = { hostname: os.hostname(), pid: process.pid, token: crypto.randomUUID(), incarnation };
   const deadline = Date.now() + lockTimeout();
-  const identity = { hostname: os.hostname(), pid: process.pid, token: crypto.randomUUID() };
   for (; ;) {
     recoverReleasedMarkers(claudeDirectory);
     if (recoverOwnerPublicationMarkers(claudeDirectory) && recoverReclaimMarkers(claudeDirectory)) {
@@ -233,7 +269,7 @@ function acquireLock(claudeDirectory) {
         return { directory, identity };
       } catch (error) {
         if (error.code !== "EEXIST") throw error;
-        quarantineDeadCanonical(directory);
+        if (quarantineDeadCanonical(directory)) continue;
       }
     }
     const remaining = deadline - Date.now();

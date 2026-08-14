@@ -570,6 +570,7 @@ test("registry transaction serializes concurrent registration without losing eit
       waiter: path.join(temp, "registry-waiter-completed"),
     };
     const preload = registryContentionPreload(temp);
+    const contentionTimeoutMs = process.platform === "win32" ? 3_000 : 1_000;
 
     const argumentsFor = (key, version) => {
       const arguments_ = registryArguments(home);
@@ -587,7 +588,7 @@ test("registry transaction serializes concurrent registration without losing eit
           env: {
             ...process.env,
             NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(" "),
-            ENGRAM_REGISTRY_LOCK_TIMEOUT_MS: "1000",
+            ENGRAM_REGISTRY_LOCK_TIMEOUT_MS: String(contentionTimeoutMs),
             ENGRAM_TEST_REGISTRY_ROLE: role,
             ENGRAM_TEST_REGISTRY_LOCK: lockDirectory,
             ENGRAM_TEST_REGISTRY_ACQUIRED: acquired,
@@ -607,12 +608,12 @@ test("registry transaction serializes concurrent registration without losing eit
     };
 
     const first = start(argumentsFor("first@engram", "6.47.1"), "holder");
-    waitForFile(acquired);
+    waitForFile(acquired, contentionTimeoutMs);
     assert.equal(fs.existsSync(lockDirectory), true, "holder must own the registry lock");
-    assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(lockDirectory, "owner"), "utf8"))).sort(), ["hostname", "pid", "token"]);
+    assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(lockDirectory, "owner"), "utf8"))).sort(), ["hostname", "incarnation", "pid", "token"]);
     assert.equal(fs.existsSync(path.join(lockDirectory, "owner")), true, "holder must create the registry lock owner file");
     const second = start(argumentsFor("second@engram", "6.47.2"), "waiter");
-    waitForFile(contended);
+    waitForFile(contended, contentionTimeoutMs);
     assert.equal(fs.existsSync(completed.holder), false, "holder must remain blocked before release");
     assert.equal(fs.existsSync(completed.waiter), false, "waiter must remain blocked before release");
     fs.writeFileSync(release, "release\n");
@@ -633,7 +634,33 @@ test("registry transaction serializes concurrent registration without losing eit
 
 const registryLockName = ".engram-registry-transaction.lock";
 function registryLock(home) { return path.join(home, ".claude", registryLockName); }
-function lockIdentity(pid, hostname = os.hostname(), token = crypto.randomUUID()) { return { hostname, pid, token }; }
+function currentProcessIncarnation() {
+  if (process.platform === "linux") {
+    const stat = fs.readFileSync(`/proc/${process.pid}/stat`, "utf8");
+    const close = stat.lastIndexOf(")");
+    const startTime = close < 0 ? "" : stat.slice(close + 2).trim().split(/\s+/)[19];
+    assert.match(startTime, /^\d+$/);
+    return `linux:${startTime}`;
+  }
+  const command = process.platform === "darwin"
+    ? ["/usr/sbin/sysctl", ["-n", `kern.proc.pid.${process.pid}`]]
+    : process.platform === "win32"
+      ? ["powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference = 'Stop'; [Console]::Out.Write((Get-Process -Id ${process.pid}).StartTime.ToUniversalTime().Ticks)`]]
+      : null;
+  assert.ok(command, `unsupported process-incarnation platform: ${process.platform}`);
+  const result = spawnSync(command[0], command[1], { encoding: "utf8", windowsHide: true });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  if (process.platform === "darwin") {
+    const match = /p_starttime\s*=\s*\{\s*tv_sec\s*=\s*(\d+)\s*,\s*tv_usec\s*=\s*(\d+)\s*\}/.exec(result.stdout);
+    assert.ok(match, result.stdout);
+    return `darwin:${match[1]}:${match[2]}`;
+  }
+  const ticks = result.stdout.trim();
+  assert.match(ticks, /^\d+$/);
+  return `win32:${ticks}`;
+}
+function lockIdentity(pid, hostname = os.hostname(), token = crypto.randomUUID(), incarnation = pid === process.pid && hostname === os.hostname() ? currentProcessIncarnation() : `${process.platform}:0`) { return { hostname, pid, token, incarnation }; }
+function legacyLockIdentity(...arguments_) { const { incarnation, ...owner } = lockIdentity(...arguments_); return owner; }
 function writeRegistryLock(directory, identity) {
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, "owner"), `${JSON.stringify(identity)}\n`);
@@ -833,6 +860,63 @@ test("registry transaction recovers a terminated same-host owner", () => {
     assert.deepEqual(registrationArtifacts(home), []);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
+
+test("registry transaction recovers a terminated legacy same-host owner", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    writeRegistryLock(registryLock(home), legacyLockIdentity(terminatedProcessId()));
+    const result = runRegistry(home);
+    assert.equal(result.status, 0, registryError(result));
+    assert.equal(fs.existsSync(registryLock(home)), false);
+    assert.deepEqual(registrationArtifacts(home), []);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("registry transaction reclaims a same-host PID reused by a different incarnation", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const live = lockIdentity(process.pid);
+    const reused = { ...live, incarnation: `${live.incarnation.slice(0, -1)}${live.incarnation.endsWith("0") ? "1" : "0"}` };
+    writeRegistryLock(registryLock(home), reused);
+    const result = runRegistry(home);
+    assert.equal(result.status, 0, registryError(result));
+    assert.equal(fs.existsSync(registryLock(home)), false);
+    assert.deepEqual(registryArguments(home).slice(0, 3).map((file) => fs.existsSync(file)), [true, true, true]);
+    assert.deepEqual(registrationArtifacts(home), []);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("registry transaction retains a same-host owner with an exact live incarnation", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const owner = lockIdentity(process.pid);
+    writeRegistryLock(registryLock(home), owner);
+    const result = runRegistry(home);
+    assert.notEqual(result.status, 0);
+    assert.match(registryError(result), /timed out waiting for registry transaction lock/);
+    assert.equal(fs.readFileSync(path.join(registryLock(home), "owner"), "utf8"), `${JSON.stringify(owner)}\n`);
+    assert.deepEqual(registryArguments(home).slice(0, 3).map((file) => fs.existsSync(file)), [false, false, false]);
+    assert.deepEqual(registrationArtifacts(home), []);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("registry transaction retains a live legacy same-host owner", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const owner = legacyLockIdentity(process.pid);
+    writeRegistryLock(registryLock(home), owner);
+    const result = runRegistry(home);
+    assert.notEqual(result.status, 0);
+    assert.match(registryError(result), /timed out waiting for registry transaction lock/);
+    assert.equal(fs.readFileSync(path.join(registryLock(home), "owner"), "utf8"), `${JSON.stringify(owner)}\n`);
+    assert.deepEqual(registryArguments(home).slice(0, 3).map((file) => fs.existsSync(file)), [false, false, false]);
+    assert.deepEqual(registrationArtifacts(home), []);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
 test("registry transaction recovers stale empty and malformed locks from interrupted owner publication", () => {
   const temp = temporaryDirectory();
   try {
@@ -844,7 +928,7 @@ test("registry transaction recovers stale empty and malformed locks from interru
       const lock = registryLock(home);
       fs.mkdirSync(lock, { recursive: true });
       setup(lock);
-      const staleAt = new Date(Date.now() - 1_000);
+      const staleAt = new Date(Date.now() - 10_000);
       fs.utimesSync(lock, staleAt, staleAt);
       const result = runRegistry(home);
       assert.equal(result.status, 0, `${name}: ${registryError(result)}`);
@@ -865,7 +949,7 @@ for (const [name, setup] of [
       const lock = registryLock(home);
       fs.mkdirSync(lock, { recursive: true });
       setup(lock);
-      const staleAt = new Date(Date.now() - 1_000);
+      const staleAt = new Date(Date.now() - 10_000);
       fs.utimesSync(lock, staleAt, staleAt);
       const replacement = lockIdentity(terminatedProcessId());
       const result = runRegistry(home, {
@@ -887,7 +971,7 @@ for (const [name, setup] of [
       const lock = registryLock(home);
       fs.mkdirSync(lock, { recursive: true });
       setup(lock);
-      const staleAt = new Date(Date.now() - 1_000);
+      const staleAt = new Date(Date.now() - 10_000);
       fs.utimesSync(lock, staleAt, staleAt);
       const replacement = lockIdentity(process.pid);
       const replacementText = `${JSON.stringify(replacement)}\n`;
@@ -1204,6 +1288,28 @@ for (const backupNumber of [1, 2, 3]) {
   });
 }
 
+test("registry transaction recovers an interrupted legacy journal manifest", () => {
+  const temp = temporaryDirectory();
+  try {
+    const home = path.join(temp, "home");
+    const { files, before } = seededRegistries(home);
+    const crashed = runRegistry(home, {
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${crashAfterRegistrationBackupPreload(temp, 1)}`].filter(Boolean).join(" "),
+    });
+    assert.notEqual(crashed.status, 0);
+    const manifestFile = path.join(registryJournal(home), "manifest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+    const { incarnation, ...legacy } = manifest.lock;
+    manifest.lock = legacy;
+    fs.writeFileSync(manifestFile, `${JSON.stringify(manifest)}\n`);
+    const recovered = runRegistry(home);
+    assert.equal(recovered.status, 0, registryError(recovered));
+    for (const [index, file] of files.entries()) assert.equal(JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "")).keep, JSON.parse(before[index].toString("utf8")).keep);
+    assert.equal(fs.existsSync(registryJournal(home)), false);
+    assert.deepEqual(registrationArtifacts(home), []);
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+});
+
 const posixTest = process.platform === "win32" ? test.skip : test;
 posixTest("registry transaction durably orders POSIX journal, target, receipt, and recovery namespaces", () => {
   const temp = temporaryDirectory();
@@ -1331,7 +1437,7 @@ test("registry transaction retains a static foreign released marker", () => {
   try {
     const home = path.join(temp, "home");
     const { claude, files } = seededRegistries(home);
-    const owner = { hostname: "foreign-host", pid: process.pid, token: crypto.randomUUID() };
+    const owner = lockIdentity(process.pid, "foreign-host");
     const marker = path.join(claude, `${registryLockName}.released-${owner.pid}-${owner.token}-${crypto.createHash("sha256").update(Buffer.from(owner.hostname, "utf8")).digest("hex")}`);
     const ownerBytes = Buffer.from(JSON.stringify(owner));
     fs.mkdirSync(marker);
