@@ -104,7 +104,7 @@ function validatePolicy(raw, packageVersion) {
   const version = canonicalVersion(raw.package_version, "bootstrap policy package_version");
   if (packageVersion !== undefined && version !== canonicalVersion(packageVersion, "active package version")) fail("bootstrap policy package version differs from active package");
   exactFields(raw.build_contract, BUILD_CONTRACT_FIELDS, "bootstrap policy build_contract");
-  if (raw.build_contract.go_version !== "1.25.12" || raw.build_contract.trimpath !== true || raw.build_contract.buildvcs !== false || raw.build_contract.client_cgo !== false || raw.build_contract.daemon_version_ldflag !== `v${version}`) fail("bootstrap policy build_contract is unsupported");
+  if (raw.build_contract.go_version !== "1.26.6" || raw.build_contract.trimpath !== true || raw.build_contract.buildvcs !== false || raw.build_contract.client_cgo !== false || raw.build_contract.daemon_version_ldflag !== `v${version}`) fail("bootstrap policy build_contract is unsupported");
   if (!Array.isArray(raw.revoked_sha256) || raw.revoked_sha256.some((hash) => typeof hash !== "string" || !SHA256.test(hash))) fail("bootstrap policy revoked_sha256 is invalid");
   if (new Set(raw.revoked_sha256).size !== raw.revoked_sha256.length) fail("bootstrap policy revoked_sha256 has duplicates");
   exactFields(raw.targets, Object.keys(TARGET_ASSETS), "bootstrap policy targets");
@@ -139,7 +139,7 @@ function createPolicy(version, targets) {
     daemon_compat_epoch: 1,
     targets: Object.fromEntries(Object.entries(TARGET_ASSETS).map(([key, asset]) => [key, { desired: targets[key], predecessor: null }])),
     revoked_sha256: [],
-    build_contract: { go_version: "1.25.12", trimpath: true, buildvcs: false, client_cgo: false, daemon_version_ldflag: `v${version}` },
+    build_contract: { go_version: "1.26.6", trimpath: true, buildvcs: false, client_cgo: false, daemon_version_ldflag: `v${version}` },
   }, version);
 }
 

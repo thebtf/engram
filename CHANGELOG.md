@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.47.6] - 2026-08-14
+
+### Fixed
+
+- Upgraded the Docker and launcher bootstrap Go toolchain to Go 1.26.6, refreshed the pinned production bases/packages, and made release publication retain and validate all three zero-finding SARIF reports.
+- Added daily read-only rescans of the latest published immutable image digests with aggregate fail-closed evidence and an explicit patch-remediation owner loop.
+
 ## [6.47.5] - 2026-08-13
 
 ### Fixed

@@ -1583,6 +1583,14 @@ function installerSemver(source) {
   return Function(`return ${match[1]}`)();
 }
 
+function installerValidator(source) {
+  const powerShell = source.match(/\$ValidatorScript = @'\r?\n([\s\S]*?)\r?\n'@/);
+  if (powerShell) return powerShell[1];
+  const bash = source.match(/<<'NODE' \\\r?\n\s*\|\|[^\r\n]*\r?\n([\s\S]*?)\r?\nNODE/);
+  assert.ok(bash, "trusted inline installer validator must exist");
+  return bash[1];
+}
+
 function target(version, asset, bytes) {
   return { version, asset, size: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex") };
 }
@@ -1618,6 +1626,40 @@ test("shared policy rejects build metadata while preserving prereleases", () => 
   });
   assert.doesNotThrow(() => createPolicy("6.47.1-rc.1", targets("6.47.1-rc.1")));
   assert.throws(() => createPolicy("6.47.1+build.1", targets("6.47.1+build.1")), BootstrapError);
+});
+
+test("trusted installers preserve the Go toolchain version boundary", () => {
+  const temp = temporaryDirectory();
+  try {
+    const bytes = Buffer.from("trusted");
+    const targets = (version) => ({
+      "win32-x64": target(version, "engram-windows-amd64.exe", bytes),
+      "linux-x64": target(version, "engram-linux-amd64", bytes),
+      "darwin-arm64": target(version, "engram-darwin-arm64", bytes),
+    });
+    const policy = (version, goVersion) => {
+      const value = createPolicy(version, targets(version));
+      value.build_contract.go_version = goVersion;
+      return value;
+    };
+    const cases = [
+      ["historical", "6.47.5", "1.25.12", true],
+      ["historical-wrong", "6.47.5", "1.26.6", false],
+      ["current", "6.47.6", "1.26.6", true],
+      ["current-wrong", "6.47.6", "1.25.12", false],
+      ["prerelease", "6.47.6-rc.1", "1.26.6", true],
+      ["future-patch", "6.47.7", "1.26.6", true],
+    ];
+    for (const installer of ["install.ps1", "install.sh"]) {
+      const validator = installerValidator(fs.readFileSync(path.join(root, "scripts", installer), "utf8"));
+      for (const [name, version, goVersion, accepted] of cases) {
+        const policyPath = path.join(temp, `${installer}-${name}.json`);
+        fs.writeFileSync(policyPath, JSON.stringify(policy(version, goVersion)));
+        const result = spawnSync(process.execPath, ["-", policyPath, version], { input: validator, encoding: "utf8" });
+        assert.equal(result.status === 0, accepted, `${installer} ${name}: ${result.stderr}`);
+      }
+    }
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
 test("Node 16 fails before curl or archive access", () => {
@@ -1725,7 +1767,7 @@ test("generator check mode and combined artifact gate accept only the shared tar
     const dist = path.join(temp, "dist");
     const currentVersion = parsePolicy(fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8")).package_version;
     fs.mkdirSync(fakeBin, { recursive: true });
-    fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.25.12 linux/amd64'; exit 0; fi\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then shift; printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
+    fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.26.6 linux/amd64'; exit 0; fi\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then shift; printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
     const fakeGoArgument = shellQuote(bashPath(fakeGo));
     const policyArgument = shellQuote(bashPath(policyPath));
     run("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} scripts/prepare-bootstrap-policy.sh --version ${currentVersion} --output ${policyArgument}`]);

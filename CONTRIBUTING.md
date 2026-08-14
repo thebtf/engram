@@ -12,7 +12,7 @@ Engram is persistent shared memory infrastructure for Claude Code workstations. 
 
 ### Prerequisites
 
-- Go 1.25+
+- Go 1.26.6+
 - PostgreSQL 17 with pgvector extension
 - Docker and Docker Compose (optional, for local PostgreSQL)
 - CGO enabled (required for test build tags)

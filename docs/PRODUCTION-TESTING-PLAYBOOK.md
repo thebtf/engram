@@ -9,7 +9,7 @@ critical suite or customer-mode release emulation.
 
 - Docker Engine and Compose v2
 - Trivy
-- Go 1.25.12+
+- Go 1.26.6+
 - Node.js 22+
 - PowerShell 7+
 
@@ -40,6 +40,9 @@ Expected:
 - the manifest records the Dockerfile hashes, pinned bases, package versions,
   exact image IDs, and SARIF hashes;
 - each accepted image records OCI source, full revision, and version labels;
+- the gate attempts scans for server, operator-console, and postgres before one
+  aggregate HIGH/CRITICAL verdict; an accepted run has one zero-finding SARIF
+  per image, while a scanner error retains its per-image log and fails closed;
 - every exact-ID scan has zero HIGH and zero CRITICAL findings;
 - no scanner allowlist, ignore, suppression, or exception input exists;
 - the operator lock audit has no HIGH/CRITICAL or picomatch/sigstore finding.
@@ -174,8 +177,20 @@ The run is PASS only when `final-image-set.json` reports:
 - `status: PASS`;
 - exact IDs for all three images;
 - zero HIGH/CRITICAL results for all three SARIF files;
-- every runtime proof field true;
+- every boolean runtime proof field true, migration table count at least 40,
+  and all six core tables present;
 - cleanup status PASS with empty container, volume, and network arrays.
 
 Any missing artifact, unexpected skip, retained probe resource, or scanner
 exception is a release blocker.
+
+For scheduled freshness evidence, retain the
+published-image rescan summary for the latest released server, operator-console,
+and postgres digests. A clean run retains per-image SARIF/log outputs. A tag,
+scanner, or database failure retains the affected image's error/log instead and
+fails the aggregate verdict. The rescan attempts all three images, is read-only
+(no login, Docker pull, candidate execution, or registry write), and is required
+alongside the acceptance manifest and its three SARIF files for
+Docker/server/Watchtower publication. A new CVE blocks the release owner until
+the bounded maintenance-PR, rebuild/scan/runtime, and patch-release loop in the
+release protocol completes.

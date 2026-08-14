@@ -56,7 +56,7 @@ Role/assignment state is CONTROL-PLANE, not a last-writer-wins free-for-all. A D
 
 ## CONVENTIONS
 
-- Language: Go 1.25+
+- Language: Go 1.26.6+
 - Build: `make build`
 - Test: `go test ./...`
 - Database: PostgreSQL 17
