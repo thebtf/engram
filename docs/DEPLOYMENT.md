@@ -236,7 +236,8 @@ image with zero HIGH/CRITICAL findings for PASS. A scanner error is retained as
 evidence and fails the run. The gate also runs the permanent runtime/negative
 matrix, PostgreSQL recreation/durability proof, and prefix-scoped cleanup
 verification. It does not push a registry tag. For a released image, retain the
-scheduled published-digest rescan summary. A clean rescan
-retains per-image SARIF/log evidence; a failed attempt retains per-image
-error/log evidence and blocks publication. The rescan does not log in, pull into
-Docker, execute candidate code, or write registry data.
+scheduled published-digest rescan summary. A clean rescan retains per-image
+SARIF/log evidence; a failed attempt retains per-image error/log evidence and
+blocks rollout and continued deployment, not initial publication of immutable
+release digests. The rescan does not log in, pull into Docker, execute candidate
+code, or write registry data.

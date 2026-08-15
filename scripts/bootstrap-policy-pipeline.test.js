@@ -1870,20 +1870,20 @@ test("direct installer registers all Claude registries without jq", () => {
     fs.writeFileSync(path.join(registries, "known_marketplaces.json"), "{\"other\":true}\n");
 
     const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} ENGRAM_URL=http://localhost:37777/mcp ENGRAM_API_TOKEN=`;
-    const result = spawnSync("bash", ["-c", `printf '\\n\\n' | ${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `printf '\n\n' | ${environment} bash scripts/install.sh v6.47.6`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const output = `${result.stdout}\n${result.stderr}`;
     assert.doesNotMatch(output, /jq|Plugin registration failed/);
 
     const installRoot = path.join(home, ".claude", "plugins", "marketplaces", "engram");
-    const cachePath = path.join(home, ".claude", "plugins", "cache", "engram", "engram", "v6.47.5");
+    const cachePath = path.join(home, ".claude", "plugins", "cache", "engram", "engram", "v6.47.6");
     const installed = JSON.parse(fs.readFileSync(path.join(registries, "installed_plugins.json"), "utf8").replace(/^\uFEFF/, ""));
     const settings = JSON.parse(fs.readFileSync(path.join(home, ".claude", "settings.json"), "utf8").replace(/^\uFEFF/, ""));
     const marketplaces = JSON.parse(fs.readFileSync(path.join(registries, "known_marketplaces.json"), "utf8"));
     assert.equal(installed.other, true);
     assert.equal(installed.plugins["engram@engram"][0].installPath, bashPath(cachePath));
-    assert.equal(installed.plugins["engram@engram"][0].version, "6.47.5");
+    assert.equal(installed.plugins["engram@engram"][0].version, "6.47.6");
     assert.equal(settings.other, true);
     assert.equal(settings.enabledPlugins["engram@engram"], true);
     assert.equal(settings.statusLine.command, `node "${bashPath(installRoot)}/hooks/statusline.js"`);
@@ -1979,7 +1979,7 @@ test("direct installer stops when an existing registry is malformed", () => {
     fs.mkdirSync(registries, { recursive: true });
     fs.writeFileSync(path.join(registries, "installed_plugins.json"), "{not json}\n");
     const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))}`;
-    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.6`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.notEqual(result.status, 0);
     assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /Plugin registered successfully|Installation Complete/);
@@ -2004,7 +2004,7 @@ test("direct installer restores every registry after a registration rename failu
     const before = files.map((file) => fs.readFileSync(file));
     const preload = renameFailurePreload(temp);
     const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} NODE_OPTIONS=${shellQuote(`--require=./${bashPath(preload)}`)}`;
-    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.6`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.notEqual(result.status, 0);
     const output = `${result.stdout}\n${result.stderr}`;
@@ -2027,7 +2027,7 @@ test("direct installer preserves a foreign target after an absent-target registr
     assert.deepEqual(files.map((file) => fs.existsSync(file)), [false, false, false]);
     const preload = absentTargetRacePreload(temp);
     const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} NODE_OPTIONS=${shellQuote(`--require=./${bashPath(preload)}`)}`;
-    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.6`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.notEqual(result.status, 0);
     const output = `${result.stdout}\n${result.stderr}`;
@@ -2058,7 +2058,7 @@ test("direct installer retains an orphan backup when post-commit cleanup fails",
     const failureLog = path.join(temp, "backup-unlink-failures");
     const preload = backupCleanupFailurePreload(temp);
     const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} NODE_OPTIONS=${shellQuote(`--require=./${bashPath(preload)}`)} ENGRAM_TEST_BACKUP_UNLINK_LOG=${shellQuote(bashPath(failureLog))}`;
-    const result = spawnSync("bash", ["-c", `printf '\\n\\n' | ${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `printf '\n\n' | ${environment} bash scripts/install.sh v6.47.6`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const output = `${result.stdout}\n${result.stderr}`;
@@ -2068,14 +2068,14 @@ test("direct installer retains an orphan backup when post-commit cleanup fails",
     assert.match(output, /Installation Complete/);
 
     const installRoot = path.join(home, ".claude", "plugins", "marketplaces", "engram");
-    const cachePath = path.join(home, ".claude", "plugins", "cache", "engram", "engram", "v6.47.5");
+    const cachePath = path.join(home, ".claude", "plugins", "cache", "engram", "engram", "v6.47.6");
     const installed = JSON.parse(fs.readFileSync(pluginsFile, "utf8").replace(/^\uFEFF/, ""));
     const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
     const marketplaces = JSON.parse(fs.readFileSync(marketplacesFile, "utf8"));
     const registration = installed.plugins["engram@engram"][0];
     assert.equal(registration.scope, "user");
     assert.equal(registration.installPath, bashPath(cachePath));
-    assert.equal(registration.version, "6.47.5");
+    assert.equal(registration.version, "6.47.6");
     assert.equal(settings.enabledPlugins["engram@engram"], true);
     assert.deepEqual(settings.statusLine, { type: "command", command: `node "${bashPath(installRoot)}/hooks/statusline.js"`, padding: 0 });
     assert.deepEqual(marketplaces.engram.source, { source: "directory", path: bashPath(installRoot) });
@@ -2114,7 +2114,7 @@ test("direct installer removes owned staging after a registration partial write 
     fs.writeFileSync(sentinelFile, sentinel);
     const preload = partialWriteFailurePreload(temp);
     const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} NODE_OPTIONS=${shellQuote(`--require=./${bashPath(preload)}`)}`;
-    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.6`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.notEqual(result.status, 0);
     const output = `${result.stdout}\n${result.stderr}`;
