@@ -18,35 +18,18 @@
     "type": "User"
   },
   "transition": {
-    "consumed_epoch": "authority-0027",
-    "event_base_sha": "ea256d45e56f4b604ea714d7ad786c50912d51a1"
+    "consumed_epoch": "authority-0028",
+    "event_base_sha": "b67777a51dedf5234886bf5be570a9457e46c12f"
   },
   "active_epoch": {
-    "id": "authority-0028",
-    "label": "authority-maintenance:authority-0028",
+    "id": "authority-0029",
+    "label": "authority-maintenance:authority-0029",
     "exact_changes": [
       {
         "status": "M",
         "path": ".github/authority-policy.json"
-      },
-      {
-        "status": "M",
-        "path": ".github/workflows/docker-publish.yml"
-      },
-      {
-        "status": "M",
-        "path": ".github/workflows/docker.yaml"
       }
     ],
-    "expected_head_blobs": [
-      {
-        "path": ".github/workflows/docker-publish.yml",
-        "git_blob": "62fab88b20d6c6323a316d671bd2f0d31c6a0d63"
-      },
-      {
-        "path": ".github/workflows/docker.yaml",
-        "git_blob": "40a64aaff7dcf542a465eb7dba9335764c5a4836"
-      }
-    ]
+    "expected_head_blobs": []
   }
 }
