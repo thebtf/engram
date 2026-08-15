@@ -1264,13 +1264,20 @@ function Invoke-Publish {
     if ($manifestCommit -cne $validatedCommit) {
         throw "Trusted manifest commit $manifestCommit does not match validated workflow_run commit $validatedCommit."
     }
-    $plan = New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $null
-    $plan['acceptance_manifest_sha256'] = $inputs.manifest_sha256
-    $plan['status'] = 'RUNNING'
-    $plan['failure'] = $null
-
+    $plan = [ordered]@{
+        schema_version = 1
+        release_version = $ReleaseVersion
+        source_commit = $validatedCommit
+        destinations = @()
+        status = 'RUNNING'
+        failure = $null
+    }
     $publishFailure = $null
     try {
+        $plan = New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $null
+        $plan['acceptance_manifest_sha256'] = $inputs.manifest_sha256
+        $plan['status'] = 'RUNNING'
+        $plan['failure'] = $null
         $localImageIdsByName = @{}
         foreach ($destination in $plan.destinations) {
             if (-not $localImageIdsByName.ContainsKey($destination.image)) {
@@ -1504,6 +1511,12 @@ function Invoke-ScanPublished {
             scan_exit_code = $null
             high_critical_findings = $null
             error = $null
+        }
+        if ($null -ne $databaseError) {
+            $entry.error = 'Trivy scan was not attempted because the fresh vulnerability database could not be obtained.'
+            $entry.error | Set-Content -Encoding utf8NoBOM -LiteralPath $logPath
+            $targets += ,$entry
+            continue
         }
         try {
             $remote = Get-LiveRemoteIdentity -Reference $tagReference
