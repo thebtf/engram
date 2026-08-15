@@ -122,7 +122,7 @@ test("server-plugin archive gate runs through supported Bash invocation", () => 
 
 test("server-plugin archive gate accepts exactly the canonical three-archive OMP payload matrix", () => {
   const fixture = createFixture();
-  const releaseVersion = "v6.47.5";
+  const releaseVersion = `v${version}`;
   const archives = expectedArchives(releaseVersion);
   try {
     buildExpectedMatrix(fixture, releaseVersion);
