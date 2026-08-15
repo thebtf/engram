@@ -125,23 +125,42 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path $env:EVIDENCE_ROOT | Out-Null
           $version = $null
+          $sourceCommit = $null
+          $headers = @{
+            Accept = 'application/vnd.github+json'
+            Authorization = "Bearer $env:READ_ONLY_GITHUB_TOKEN"
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          function Invoke-GitHubJson {
+            param([Parameter(Mandatory = $true)][string]$Uri)
+            Invoke-RestMethod -Method Get -Uri $Uri -Headers $headers -TimeoutSec 30 -MaximumRetryCount 3 -RetryIntervalSec 2
+          }
           try {
-            $headers = @{
-              Accept = 'application/vnd.github+json'
-              Authorization = "Bearer $env:READ_ONLY_GITHUB_TOKEN"
-              'X-GitHub-Api-Version' = '2022-11-28'
-            }
-            $releaseUri = "https://api.github.com/repos/$($env:REPOSITORY_NAME)/releases/latest"
-            $release = Invoke-RestMethod -Method Get -Uri $releaseUri -Headers $headers
+            $release = Invoke-GitHubJson -Uri "https://api.github.com/repos/$($env:REPOSITORY_NAME)/releases/latest"
             $version = [string]$release.tag_name
             if ([bool]$release.draft -or [bool]$release.prerelease -or $version -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
               throw "Latest published release is not a canonical final vMAJOR.MINOR.PATCH tag: $version"
             }
-            [ordered]@{ status = 'PASS'; release_version = $version } |
+            $tagRef = Invoke-GitHubJson -Uri "https://api.github.com/repos/$($env:REPOSITORY_NAME)/git/ref/tags/$version"
+            $sourceCommit = [string]$tagRef.object.sha
+            if ([string]$tagRef.object.type -ceq 'tag') {
+              $tagObject = Invoke-GitHubJson -Uri "https://api.github.com/repos/$($env:REPOSITORY_NAME)/git/tags/$sourceCommit"
+              if ([string]$tagObject.object.type -cne 'commit') {
+                throw "Release tag $version does not dereference directly to a commit."
+              }
+              $sourceCommit = [string]$tagObject.object.sha
+            } elseif ([string]$tagRef.object.type -cne 'commit') {
+              throw "Release ref $version has unsupported object type $([string]$tagRef.object.type)."
+            }
+            if ($sourceCommit -cnotmatch '^[0-9a-f]{40}$') {
+              throw "Release tag $version resolved to an invalid commit identity: $sourceCommit"
+            }
+            [ordered]@{ status = 'PASS'; release_version = $version; source_commit = $sourceCommit } |
               ConvertTo-Json | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $env:EVIDENCE_ROOT 'release-resolution.json')
             Add-Content -Encoding utf8NoBOM -LiteralPath $env:GITHUB_OUTPUT -Value "version=$version"
+            Add-Content -Encoding utf8NoBOM -LiteralPath $env:GITHUB_OUTPUT -Value "commit=$sourceCommit"
           } catch {
-            [ordered]@{ status = 'FAIL'; release_version = $version; failure = $_.Exception.Message } |
+            [ordered]@{ status = 'FAIL'; release_version = $version; source_commit = $sourceCommit; failure = $_.Exception.Message } |
               ConvertTo-Json | Set-Content -Encoding utf8NoBOM -LiteralPath (Join-Path $env:EVIDENCE_ROOT 'release-resolution.json')
             throw
           }
@@ -150,6 +169,7 @@ jobs:
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ steps.latest-release.outputs.version }}
+          EXPECTED_SOURCE_COMMIT: ${{ steps.latest-release.outputs.commit }}
           REPOSITORY_NAME: ${{ github.repository }}
           EVIDENCE_ROOT: ${{ runner.temp }}/engram-published-image-rescan-${{ github.run_id }}-${{ github.run_attempt }}
           GITHUB_TOKEN: ""
@@ -160,6 +180,7 @@ jobs:
           pwsh ./scripts/production-gates/build-and-scan-images.ps1 `
             -Mode ScanPublished `
             -ReleaseVersion $env:RELEASE_VERSION `
+            -ExpectedSha $env:EXPECTED_SOURCE_COMMIT `
             -Registry ghcr.io `
             -Repository $env:REPOSITORY_NAME `
             -ArtifactRoot (Join-Path $env:EVIDENCE_ROOT 'scan') `

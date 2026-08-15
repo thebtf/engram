@@ -271,6 +271,7 @@ jobs:
           password: ${{ github.token }}
 
       - name: Recompare, publish absent exact identities, and read back all six
+        id: publish
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ steps.privileged-preflight.outputs.version }}
@@ -311,7 +312,7 @@ jobs:
           }
 
       - name: Validate the exact trusted evidence envelope after credential erasure
-        if: always()
+        if: always() && steps.publish.outcome != 'skipped'
         shell: pwsh
         env:
           REPOSITORY_NAME: ${{ github.repository }}
@@ -328,7 +329,7 @@ jobs:
             -Repository $env:REPOSITORY_NAME
 
       - name: Upload trusted publication evidence after credential erasure
-        if: always()
+        if: always() && steps.publish.outcome != 'skipped'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: engram-publication-evidence-${{ github.run_id }}-${{ github.run_attempt }}
