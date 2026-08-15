@@ -1583,6 +1583,14 @@ function installerSemver(source) {
   return Function(`return ${match[1]}`)();
 }
 
+function installerValidator(source) {
+  const powerShell = source.match(/\$ValidatorScript = @'\r?\n([\s\S]*?)\r?\n'@/);
+  if (powerShell) return powerShell[1];
+  const bash = source.match(/<<'NODE' \\\r?\n\s*\|\|[^\r\n]*\r?\n([\s\S]*?)\r?\nNODE/);
+  assert.ok(bash, "trusted inline installer validator must exist");
+  return bash[1];
+}
+
 function target(version, asset, bytes) {
   return { version, asset, size: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex") };
 }
@@ -1618,6 +1626,40 @@ test("shared policy rejects build metadata while preserving prereleases", () => 
   });
   assert.doesNotThrow(() => createPolicy("6.47.1-rc.1", targets("6.47.1-rc.1")));
   assert.throws(() => createPolicy("6.47.1+build.1", targets("6.47.1+build.1")), BootstrapError);
+});
+
+test("trusted installers preserve the Go toolchain version boundary", () => {
+  const temp = temporaryDirectory();
+  try {
+    const bytes = Buffer.from("trusted");
+    const targets = (version) => ({
+      "win32-x64": target(version, "engram-windows-amd64.exe", bytes),
+      "linux-x64": target(version, "engram-linux-amd64", bytes),
+      "darwin-arm64": target(version, "engram-darwin-arm64", bytes),
+    });
+    const policy = (version, goVersion) => {
+      const value = createPolicy(version, targets(version));
+      value.build_contract.go_version = goVersion;
+      return value;
+    };
+    const cases = [
+      ["historical", "6.47.5", "1.25.12", true],
+      ["historical-wrong", "6.47.5", "1.26.6", false],
+      ["current", "6.47.6", "1.26.6", true],
+      ["current-wrong", "6.47.6", "1.25.12", false],
+      ["prerelease", "6.47.6-rc.1", "1.26.6", true],
+      ["future-patch", "6.47.7", "1.26.6", true],
+    ];
+    for (const installer of ["install.ps1", "install.sh"]) {
+      const validator = installerValidator(fs.readFileSync(path.join(root, "scripts", installer), "utf8"));
+      for (const [name, version, goVersion, accepted] of cases) {
+        const policyPath = path.join(temp, `${installer}-${name}.json`);
+        fs.writeFileSync(policyPath, JSON.stringify(policy(version, goVersion)));
+        const result = spawnSync(process.execPath, ["-", policyPath, version], { input: validator, encoding: "utf8" });
+        assert.equal(result.status === 0, accepted, `${installer} ${name}: ${result.stderr}`);
+      }
+    }
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
 test("Node 16 fails before curl or archive access", () => {
@@ -1725,7 +1767,7 @@ test("generator check mode and combined artifact gate accept only the shared tar
     const dist = path.join(temp, "dist");
     const currentVersion = parsePolicy(fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8")).package_version;
     fs.mkdirSync(fakeBin, { recursive: true });
-    fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.25.12 linux/amd64'; exit 0; fi\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then shift; printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
+    fs.writeFileSync(fakeGo, "#!/usr/bin/env bash\nif [[ $1 == version ]]; then echo 'go version go1.26.6 linux/amd64'; exit 0; fi\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then shift; printf '%s-%s' \"$GOOS\" \"$GOARCH\" > \"$1\"; exit 0; fi; shift; done\nexit 1\n", { mode: 0o755 });
     const fakeGoArgument = shellQuote(bashPath(fakeGo));
     const policyArgument = shellQuote(bashPath(policyPath));
     run("bash", ["-c", `ENGRAM_BOOTSTRAP_GO=${fakeGoArgument} scripts/prepare-bootstrap-policy.sh --version ${currentVersion} --output ${policyArgument}`]);
@@ -1828,20 +1870,20 @@ test("direct installer registers all Claude registries without jq", () => {
     fs.writeFileSync(path.join(registries, "known_marketplaces.json"), "{\"other\":true}\n");
 
     const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} ENGRAM_URL=http://localhost:37777/mcp ENGRAM_API_TOKEN=`;
-    const result = spawnSync("bash", ["-c", `printf '\\n\\n' | ${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `printf '\n\n' | ${environment} bash scripts/install.sh v6.47.6`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const output = `${result.stdout}\n${result.stderr}`;
     assert.doesNotMatch(output, /jq|Plugin registration failed/);
 
     const installRoot = path.join(home, ".claude", "plugins", "marketplaces", "engram");
-    const cachePath = path.join(home, ".claude", "plugins", "cache", "engram", "engram", "v6.47.5");
+    const cachePath = path.join(home, ".claude", "plugins", "cache", "engram", "engram", "v6.47.6");
     const installed = JSON.parse(fs.readFileSync(path.join(registries, "installed_plugins.json"), "utf8").replace(/^\uFEFF/, ""));
     const settings = JSON.parse(fs.readFileSync(path.join(home, ".claude", "settings.json"), "utf8").replace(/^\uFEFF/, ""));
     const marketplaces = JSON.parse(fs.readFileSync(path.join(registries, "known_marketplaces.json"), "utf8"));
     assert.equal(installed.other, true);
     assert.equal(installed.plugins["engram@engram"][0].installPath, bashPath(cachePath));
-    assert.equal(installed.plugins["engram@engram"][0].version, "6.47.5");
+    assert.equal(installed.plugins["engram@engram"][0].version, "6.47.6");
     assert.equal(settings.other, true);
     assert.equal(settings.enabledPlugins["engram@engram"], true);
     assert.equal(settings.statusLine.command, `node "${bashPath(installRoot)}/hooks/statusline.js"`);
@@ -1937,7 +1979,7 @@ test("direct installer stops when an existing registry is malformed", () => {
     fs.mkdirSync(registries, { recursive: true });
     fs.writeFileSync(path.join(registries, "installed_plugins.json"), "{not json}\n");
     const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))}`;
-    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.6`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.notEqual(result.status, 0);
     assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /Plugin registered successfully|Installation Complete/);
@@ -1962,7 +2004,7 @@ test("direct installer restores every registry after a registration rename failu
     const before = files.map((file) => fs.readFileSync(file));
     const preload = renameFailurePreload(temp);
     const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} NODE_OPTIONS=${shellQuote(`--require=./${bashPath(preload)}`)}`;
-    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.6`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.notEqual(result.status, 0);
     const output = `${result.stdout}\n${result.stderr}`;
@@ -1985,7 +2027,7 @@ test("direct installer preserves a foreign target after an absent-target registr
     assert.deepEqual(files.map((file) => fs.existsSync(file)), [false, false, false]);
     const preload = absentTargetRacePreload(temp);
     const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} NODE_OPTIONS=${shellQuote(`--require=./${bashPath(preload)}`)}`;
-    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.6`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.notEqual(result.status, 0);
     const output = `${result.stdout}\n${result.stderr}`;
@@ -2016,7 +2058,7 @@ test("direct installer retains an orphan backup when post-commit cleanup fails",
     const failureLog = path.join(temp, "backup-unlink-failures");
     const preload = backupCleanupFailurePreload(temp);
     const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} NODE_OPTIONS=${shellQuote(`--require=./${bashPath(preload)}`)} ENGRAM_TEST_BACKUP_UNLINK_LOG=${shellQuote(bashPath(failureLog))}`;
-    const result = spawnSync("bash", ["-c", `printf '\\n\\n' | ${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `printf '\n\n' | ${environment} bash scripts/install.sh v6.47.6`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const output = `${result.stdout}\n${result.stderr}`;
@@ -2026,14 +2068,14 @@ test("direct installer retains an orphan backup when post-commit cleanup fails",
     assert.match(output, /Installation Complete/);
 
     const installRoot = path.join(home, ".claude", "plugins", "marketplaces", "engram");
-    const cachePath = path.join(home, ".claude", "plugins", "cache", "engram", "engram", "v6.47.5");
+    const cachePath = path.join(home, ".claude", "plugins", "cache", "engram", "engram", "v6.47.6");
     const installed = JSON.parse(fs.readFileSync(pluginsFile, "utf8").replace(/^\uFEFF/, ""));
     const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
     const marketplaces = JSON.parse(fs.readFileSync(marketplacesFile, "utf8"));
     const registration = installed.plugins["engram@engram"][0];
     assert.equal(registration.scope, "user");
     assert.equal(registration.installPath, bashPath(cachePath));
-    assert.equal(registration.version, "6.47.5");
+    assert.equal(registration.version, "6.47.6");
     assert.equal(settings.enabledPlugins["engram@engram"], true);
     assert.deepEqual(settings.statusLine, { type: "command", command: `node "${bashPath(installRoot)}/hooks/statusline.js"`, padding: 0 });
     assert.deepEqual(marketplaces.engram.source, { source: "directory", path: bashPath(installRoot) });
@@ -2072,7 +2114,7 @@ test("direct installer removes owned staging after a registration partial write 
     fs.writeFileSync(sentinelFile, sentinel);
     const preload = partialWriteFailurePreload(temp);
     const environment = `HOME=${shellQuote(bashPath(home))} PATH=${shellQuote(installerPath(fakeBin))} FAKE_RELEASE_ARCHIVE=${shellQuote(bashPath(archive))} NODE_OPTIONS=${shellQuote(`--require=./${bashPath(preload)}`)}`;
-    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.5`], { cwd: root, encoding: "utf8", env: process.env });
+    const result = spawnSync("bash", ["-c", `${environment} bash scripts/install.sh v6.47.6`], { cwd: root, encoding: "utf8", env: process.env });
     assert.ifError(result.error);
     assert.notEqual(result.status, 0);
     const output = `${result.stdout}\n${result.stderr}`;
