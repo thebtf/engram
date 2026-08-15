@@ -184,13 +184,15 @@ The run is PASS only when `final-image-set.json` reports:
 Any missing artifact, unexpected skip, retained probe resource, or scanner
 exception is a release blocker.
 
-For scheduled freshness evidence, retain the
-published-image rescan summary for the latest released server, operator-console,
-and postgres digests. A clean run retains per-image SARIF/log outputs. A tag,
-scanner, or database failure retains the affected image's error/log instead and
-fails the aggregate verdict. The rescan attempts all three images, is read-only
-(no login, Docker pull, candidate execution, or registry write), and is required
-alongside the acceptance manifest and its three SARIF files for
-Docker/server/Watchtower publication. A new CVE blocks the release owner until
+For scheduled freshness evidence, retain the post-publication rescan summary for
+the latest released `server`, `operator-console`, and `postgres` digests. The
+first run must start within 24 hours of publication; later evidence must be no
+older than 36 hours by `started_at` and `completed_at`. A clean run retains
+per-image SARIF/log outputs. A tag, scanner, or database failure retains the
+affected image's error/log instead and fails the aggregate verdict. The rescan
+attempts all three images and is read-only (no login, Docker pull, candidate
+execution, or registry write). Missing, stale, failed, or finding-bearing
+evidence blocks rollout and continued deployment, not initial publication of
+the immutable digests. A new HIGH/CRITICAL CVE blocks the release owner until
 the bounded maintenance-PR, rebuild/scan/runtime, and patch-release loop in the
 release protocol completes.
