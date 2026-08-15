@@ -29,6 +29,9 @@ func TestDaemonVersionMatchesPluginManifests(t *testing.T) {
 		filepath.Join("plugin", "engram", ".codex-plugin", "plugin.json"),
 		filepath.Join("plugin", "engram", ".claude-plugin", "plugin.json"),
 		filepath.Join("plugin", "engram", ".omp-plugin", "plugin.json"),
+		filepath.Join(".claude-plugin", "marketplace.json"),
+		filepath.Join(".claude-plugin", "plugin.json"),
+		filepath.Join(".omp-plugin", "marketplace.json"),
 	} {
 		data, err := os.ReadFile(filepath.Join(repoRoot, rel))
 		if err != nil {

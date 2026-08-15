@@ -1,7 +1,8 @@
 # Deployment Guide
 
-Engram production deployment is a three-image stack: PostgreSQL, server, and
-operator console. Production Compose intentionally has no moving image default.
+Engram production deployment is a three-image stack: `server`,
+`operator-console`, and `postgres`. Production Compose intentionally has no
+moving image default.
 Every deployment requires the retained post-readback `publication-result.json`
 from the one release workflow execution that published the selected images. It
 is deployment authority, not merely release evidence.
@@ -12,17 +13,25 @@ to modify both this record and the deployment dotenv holds deployment authority.
 The wrapper validates the record and binds its read-back digests to the dotenv;
 it does not claim to verify a cryptographic signature over the local file.
 
-Docker/server/Watchtower publication also requires two current records: the
-exact three-image `final-image-set.json` acceptance manifest together with its
-three zero-finding SARIF files, and the latest released-digest rescan status.
-A clean rescan retains per-image SARIF/log evidence; a tag-resolution, scanner,
-or database-refresh failure retains the per-image error/log and aggregate FAIL
-summary instead. The read-only rescan does not refresh pins; exact pins provide
-reproducibility, not freshness. A newly reported CVE blocks the
-release/deployment owner. Use the bounded next action: fixed version -> reviewed
-maintenance PR -> rebuild/aggregate scan/runtime proof -> patch release. If no
-fixed version exists, publication remains blocked: the automated lane implements
-no VEX, allowlist, scanner-ignore, or `--ignore-unfixed` override.
+Pre-publication image acceptance requires the exact three-image
+`final-image-set.json` manifest for `server`, `operator-console`, and `postgres`,
+its three SARIF files with zero HIGH/CRITICAL findings, runtime proof, and cleanup
+PASS. Scanner, vulnerability-database, or tag-resolution errors are retained as
+explicit FAIL evidence rather than reported as findings.
+
+Released-digest rescanning is post-publication monitoring. The first run must
+start within 24 hours of publication, and later retained evidence must be no
+older than 36 hours by its `started_at` and `completed_at` timestamps. Missing,
+stale, failed, or finding-bearing evidence blocks rollout and continued
+deployment, not the initial creation of immutable release digests.
+
+When remediation is required, update the affected base image or toolchain and,
+where applicable, `go.mod`/`go.sum` or `package.json`/`package-lock.json` in a
+reviewed maintenance PR. Rebuild all three images, rerun acceptance scans and
+runtime proof, rerun the released-digest scan, and retain the final image set,
+per-image SARIF/logs, rescan summary, and timestamp evidence in the handoff. If
+no fixed version exists, remain blocked unless an explicit, scoped, expiring
+VEX/operator exception is approved; the automated lane remains `-NoAllowlist`.
 
 ## Immutable image selection
 
@@ -222,8 +231,8 @@ pwsh ./scripts/production-gates/build-and-scan-images.ps1 `
 ```
 
 This performs no-cache builds from tracked files only, attempts all three image
-scans before one aggregate HIGH/CRITICAL verdict, and requires one zero-finding
-SARIF per image for PASS. A scanner error is retained as per-image log/error
+scans before one aggregate HIGH/CRITICAL verdict, and requires one SARIF per
+image with zero HIGH/CRITICAL findings for PASS. A scanner error is retained as
 evidence and fails the run. The gate also runs the permanent runtime/negative
 matrix, PostgreSQL recreation/durability proof, and prefix-scoped cleanup
 verification. It does not push a registry tag. For a released image, retain the
