@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.47.7] - 2026-08-15
+
+### Fixed
+
+- Derive the server-plugin archive matrix test version from the current OMP package manifest so the tagged release gate validates the version being published instead of the previous patch.
+
 ## [6.47.6] - 2026-08-14
 
 ### Fixed
