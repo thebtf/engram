@@ -1264,25 +1264,13 @@ function Invoke-Publish {
     if ($manifestCommit -cne $validatedCommit) {
         throw "Trusted manifest commit $manifestCommit does not match validated workflow_run commit $validatedCommit."
     }
-    $plan = [ordered]@{
-        schema_version = 1
-        release_version = $ReleaseVersion
-        source_commit = $validatedCommit
-        single_writer_model = 'repository-workflow-release-publish'
-        external_package_admin_trust_boundary = $true
-        remote_inspection = 'not-started'
-        acceptance_manifest_sha256 = $inputs.manifest_sha256
-        destinations = @()
-        status = 'RUNNING'
-        failure = $null
-    }
+    $plan = New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $null
+    $plan['acceptance_manifest_sha256'] = $inputs.manifest_sha256
+    $plan['status'] = 'RUNNING'
+    $plan['failure'] = $null
 
     $publishFailure = $null
     try {
-        $plan = New-PublicationPlan -Manifest $inputs.manifest -ReleaseVersion $ReleaseVersion -RegistryFixture $null
-        $plan['acceptance_manifest_sha256'] = $inputs.manifest_sha256
-        $plan['status'] = 'RUNNING'
-        $plan['failure'] = $null
         $localImageIdsByName = @{}
         foreach ($destination in $plan.destinations) {
             if (-not $localImageIdsByName.ContainsKey($destination.image)) {
@@ -1318,7 +1306,7 @@ function Invoke-Publish {
         $plan.status = 'FAIL'
         $plan.failure = $_.Exception.Message
     } finally {
-        $plan['completed_at'] = (Get-Date).ToUniversalTime().ToString('o')
+        $plan.completed_at = (Get-Date).ToUniversalTime().ToString('o')
         if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
             Write-JsonFile -Value $plan -Path (Resolve-RepositoryPath -Path $OutputPath)
         }
@@ -1423,7 +1411,6 @@ function Get-SarifResultCount {
 function Invoke-ScanPublished {
     foreach ($required in @{
         ReleaseVersion = $ReleaseVersion
-        ExpectedSha = $ExpectedSha
         Registry = $Registry
         Repository = $Repository
         ArtifactRoot = $ArtifactRoot
@@ -1436,7 +1423,6 @@ function Invoke-ScanPublished {
         throw 'Published-image scans are fail-closed: -NoAllowlist is mandatory and scanner exceptions are unsupported.'
     }
     $version = Assert-CanonicalPublishedReleaseVersion -Value $ReleaseVersion
-    $sourceCommit = Assert-FullCommitSha -Value $ExpectedSha -Name 'ExpectedSha'
     if ($Registry -cnotmatch '^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]+)?$') {
         throw "Registry must be a canonical registry host name: $Registry"
     }
@@ -1500,16 +1486,12 @@ function Invoke-ScanPublished {
     )
     foreach ($definition in $definitions) {
         $tagReference = "$($definition.repository):$version"
-        $commitReference = "$($definition.repository):sha-$sourceCommit"
         $logPath = Join-Path $artifactPath "$($definition.name)/trivy.log"
         $entry = [ordered]@{
             name = $definition.name
             tag_reference = $tagReference
-            commit_reference = $commitReference
             config_digest = $null
             manifest_digest = $null
-            commit_config_digest = $null
-            commit_manifest_digest = $null
             scan_reference = $null
             sarif = "$($definition.name)/trivy.sarif"
             sarif_sha256 = $null
@@ -1518,34 +1500,19 @@ function Invoke-ScanPublished {
             high_critical_findings = $null
             error = $null
         }
-        if ($null -ne $databaseError) {
-            $entry.error = 'Trivy scan was not attempted because the fresh vulnerability database could not be obtained.'
-            $entry.error | Set-Content -Encoding utf8NoBOM -LiteralPath $logPath
-            $targets += ,$entry
-            continue
-        }
         try {
-            $tagRemote = Get-LiveRemoteIdentity -Reference $tagReference
-            if (-not $tagRemote.exists) {
+            $remote = Get-LiveRemoteIdentity -Reference $tagReference
+            if (-not $remote.exists) {
                 throw "Published release tag does not resolve: $tagReference"
             }
-            $commitRemote = Get-LiveRemoteIdentity -Reference $commitReference
-            if (-not $commitRemote.exists) {
-                throw "Published release commit alias does not resolve: $commitReference"
-            }
-            $entry.config_digest = Normalize-Sha256Digest -Value ([string]$tagRemote.config_digest) -Name "$($definition.name) release config digest"
-            $entry.manifest_digest = Normalize-Sha256Digest -Value ([string]$tagRemote.manifest_digest) -Name "$($definition.name) release manifest digest"
-            $entry.commit_config_digest = Normalize-Sha256Digest -Value ([string]$commitRemote.config_digest) -Name "$($definition.name) commit config digest"
-            $entry.commit_manifest_digest = Normalize-Sha256Digest -Value ([string]$commitRemote.manifest_digest) -Name "$($definition.name) commit manifest digest"
-            if ($entry.config_digest -cne $entry.commit_config_digest -or $entry.manifest_digest -cne $entry.commit_manifest_digest) {
-                throw "Published release identity mismatch between $tagReference and $commitReference."
-            }
+            $entry.config_digest = Normalize-Sha256Digest -Value ([string]$remote.config_digest) -Name "$($definition.name) config digest"
+            $entry.manifest_digest = Normalize-Sha256Digest -Value ([string]$remote.manifest_digest) -Name "$($definition.name) manifest digest"
             $entry.scan_reference = "$($definition.repository)@$($entry.manifest_digest)"
         } catch {
-            $entry.error = "Published identity resolution failed: $($_.Exception.Message)"
+            $entry.error = "Published tag resolution failed: $($_.Exception.Message)"
             $scanErrors.Add("$($definition.name): $($entry.error)")
         }
-        if ($null -eq $entry.error) {
+        if ($null -eq $entry.error -and $null -eq $databaseError) {
             $sarifPath = Join-Path $artifactPath $entry.sarif
             try {
                 $entry.scan_exit_code = Invoke-LoggedNative -File 'trivy' -Arguments @(
@@ -1562,6 +1529,9 @@ function Invoke-ScanPublished {
                 $entry.error = "Trivy scanner failure: $($_.Exception.Message)"
                 $scanErrors.Add("$($definition.name): $($entry.error)")
             }
+        } elseif ($null -eq $entry.error) {
+            $entry.error = 'Trivy scan was not attempted because the fresh vulnerability database could not be obtained.'
+            $entry.error | Set-Content -Encoding utf8NoBOM -LiteralPath $logPath
         } else {
             $entry.error | Set-Content -Encoding utf8NoBOM -LiteralPath $logPath
         }
@@ -1587,7 +1557,6 @@ function Invoke-ScanPublished {
         started_at = $startedAt
         completed_at = (Get-Date).ToUniversalTime().ToString('o')
         release_version = $version
-        source_commit = $sourceCommit
         registry = $Registry
         repository = $Repository
         platform = $Platform
@@ -1612,7 +1581,7 @@ function Invoke-ScanPublished {
     if ($totalFindings -ne 0) {
         throw "Published image scan found $totalFindings HIGH/CRITICAL finding(s); evidence: $artifactPath"
     }
-    Write-Host 'PASS: scanned three published release identities bound to immutable commit aliases with a fresh Trivy database'
+    Write-Host 'PASS: scanned three published immutable image digests with a fresh Trivy database'
     Write-Host "Evidence: $artifactPath"
 }
 
@@ -2250,7 +2219,7 @@ try {
             server = 'gcr.io/distroless/base-debian13@sha256:b78832f41c8128046807c24840ebee4f1c18ba7870eed423d8750c272c15e147'
             operator_console = 'gcr.io/distroless/nodejs22-debian13@sha256:773a62fbe24a3f8c8b24b16fd59154627f8b406737bc906f83bf1732bc8907dd'
             postgres = 'cgr.dev/chainguard/wolfi-base@sha256:02dab76bd852a70556b5b2002195c8a5fdab77d323c433bf6642aab080489795'
-            go_builder = 'golang:1.25.12-bookworm@sha256:a9c020ee3d1508c7be5435c262434e3d3fc1d0e76a11afeb9ddae7d60bc86aa4'
+            go_builder = 'golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36'
             node_builder = 'node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf'
         }
         pinned_packages = [ordered]@{
