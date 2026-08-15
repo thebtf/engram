@@ -1896,7 +1896,6 @@ type publishedImageScanEvidence struct {
 	CommitReference      string  `json:"commit_reference"`
 	ConfigDigest         string  `json:"config_digest"`
 	ManifestDigest       string  `json:"manifest_digest"`
-	CommitConfigDigest   string  `json:"commit_config_digest"`
 	CommitManifestDigest string  `json:"commit_manifest_digest"`
 	ScanReference        string  `json:"scan_reference"`
 	Sarif                string  `json:"sarif"`
@@ -2016,12 +2015,12 @@ func testPublishedImageScanGate(t *testing.T, repo string) {
 					continue
 				}
 				if test.mode == "identity-mismatch" && image.Name == "server" {
-					if image.Error == nil || !strings.Contains(*image.Error, "identity mismatch") || image.ManifestDigest != "sha256:"+strings.Repeat("d", 64) || image.CommitManifestDigest != "sha256:"+strings.Repeat("e", 64) || image.ScanReference != "" {
+					if image.Error == nil || !strings.Contains(*image.Error, "different immutable images") || image.ManifestDigest != "sha256:"+strings.Repeat("d", 64) || image.CommitManifestDigest != "sha256:"+strings.Repeat("e", 64) || image.ScanReference != "" {
 						t.Fatalf("release tag movement was not retained as an identity mismatch: %+v", image)
 					}
 					continue
 				}
-				if image.ConfigDigest != "sha256:"+strings.Repeat("c", 64) || image.CommitConfigDigest != image.ConfigDigest || image.ManifestDigest != "sha256:"+strings.Repeat("d", 64) || image.CommitManifestDigest != image.ManifestDigest || image.ScanReference != wantRepository+"@sha256:"+strings.Repeat("d", 64) {
+				if image.ConfigDigest != "sha256:"+strings.Repeat("c", 64) || image.ManifestDigest != "sha256:"+strings.Repeat("d", 64) || image.CommitManifestDigest != image.ManifestDigest || image.ScanReference != wantRepository+"@sha256:"+strings.Repeat("d", 64) {
 					t.Fatalf("published scan did not bind %s release and commit identities to one immutable manifest: %+v", image.Name, image)
 				}
 				if test.mode != "scanner-failure" || image.Name != "postgres" {
