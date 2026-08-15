@@ -1411,6 +1411,7 @@ function Get-SarifResultCount {
 function Invoke-ScanPublished {
     foreach ($required in @{
         ReleaseVersion = $ReleaseVersion
+        ExpectedSha = $ExpectedSha
         Registry = $Registry
         Repository = $Repository
         ArtifactRoot = $ArtifactRoot
@@ -1423,6 +1424,7 @@ function Invoke-ScanPublished {
         throw 'Published-image scans are fail-closed: -NoAllowlist is mandatory and scanner exceptions are unsupported.'
     }
     $version = Assert-CanonicalPublishedReleaseVersion -Value $ReleaseVersion
+    $sourceCommit = Assert-FullCommitSha -Value $ExpectedSha -Name 'ExpectedSha'
     if ($Registry -cnotmatch '^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]+)?$') {
         throw "Registry must be a canonical registry host name: $Registry"
     }
@@ -1486,12 +1488,15 @@ function Invoke-ScanPublished {
     )
     foreach ($definition in $definitions) {
         $tagReference = "$($definition.repository):$version"
+        $commitReference = "$($definition.repository):sha-$sourceCommit"
         $logPath = Join-Path $artifactPath "$($definition.name)/trivy.log"
         $entry = [ordered]@{
             name = $definition.name
             tag_reference = $tagReference
+            commit_reference = $commitReference
             config_digest = $null
             manifest_digest = $null
+            commit_manifest_digest = $null
             scan_reference = $null
             sarif = "$($definition.name)/trivy.sarif"
             sarif_sha256 = $null
@@ -1505,8 +1510,17 @@ function Invoke-ScanPublished {
             if (-not $remote.exists) {
                 throw "Published release tag does not resolve: $tagReference"
             }
+            $commitRemote = Get-LiveRemoteIdentity -Reference $commitReference
+            if (-not $commitRemote.exists) {
+                throw "Published commit tag does not resolve: $commitReference"
+            }
             $entry.config_digest = Normalize-Sha256Digest -Value ([string]$remote.config_digest) -Name "$($definition.name) config digest"
             $entry.manifest_digest = Normalize-Sha256Digest -Value ([string]$remote.manifest_digest) -Name "$($definition.name) manifest digest"
+            $commitConfigDigest = Normalize-Sha256Digest -Value ([string]$commitRemote.config_digest) -Name "$($definition.name) commit config digest"
+            $entry.commit_manifest_digest = Normalize-Sha256Digest -Value ([string]$commitRemote.manifest_digest) -Name "$($definition.name) commit manifest digest"
+            if ($entry.config_digest -cne $commitConfigDigest -or $entry.manifest_digest -cne $entry.commit_manifest_digest) {
+                throw "Published release and source-commit tags resolve to different immutable images: $tagReference vs $commitReference"
+            }
             $entry.scan_reference = "$($definition.repository)@$($entry.manifest_digest)"
         } catch {
             $entry.error = "Published tag resolution failed: $($_.Exception.Message)"
@@ -1557,6 +1571,7 @@ function Invoke-ScanPublished {
         started_at = $startedAt
         completed_at = (Get-Date).ToUniversalTime().ToString('o')
         release_version = $version
+        source_commit = $sourceCommit
         registry = $Registry
         repository = $Repository
         platform = $Platform
