@@ -35,6 +35,15 @@ func NewPurgeStore(store *Store) *PurgeStore {
 	return &PurgeStore{db: store.DB}
 }
 
+// LockPurgeProjectTx serializes project purges and continuity-slot sets.
+// Callers hold this transaction lock before taking any target-memory lock.
+func LockPurgeProjectTx(tx *gorm.DB, project string) error {
+	if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext('engram_purge_' || ?))", project).Error; err != nil {
+		return fmt.Errorf("acquire project purge advisory lock: %w", err)
+	}
+	return nil
+}
+
 // PurgeProject permanently deletes all memories, behavioral rules, reasoning
 // traces, and associated edges/audit rows for the given project in a single
 // transaction.
@@ -45,11 +54,11 @@ func NewPurgeStore(store *Store) *PurgeStore {
 // legitimate caller pattern.
 //
 // Deletion order (FK-safe):
-//  1. Acquire pg_advisory_xact_lock scoped to the project to serialise
-//     concurrent purges of the same project.
+//  1. Acquire the shared project advisory lock before any target-memory lock.
+//     It serialises purges and continuity-slot sets for the same project.
 //  2. Lock every current memory row in the project with FOR UPDATE before any
-//     continuity-slot operation, matching continuity_slot set's target-first
-//     lock order.
+//     continuity-slot operation; set follows the same project-lock → target-lock
+//     → slot-mutation order.
 //  3. citation_log rows referencing the project's memories — NOT NULL FK,
 //     no ON DELETE CASCADE.
 //  4. content_chunks rows referencing the project's memories — NOT NULL FK,
@@ -96,20 +105,14 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// --- Step 1: advisory lock scoped to this project ---
-		// Serialises concurrent purges of the same project. hashtext() maps the
-		// project string to a 32-bit integer; the 'engram_purge_' prefix
-		// namespace-isolates the lock from any other advisory lock users.
-		if err := tx.Exec(
-			"SELECT pg_advisory_xact_lock(hashtext('engram_purge_' || ?))",
-			project,
-		).Error; err != nil {
-			return fmt.Errorf("acquire advisory lock: %w", err)
+		if err := LockPurgeProjectTx(tx, project); err != nil {
+			return err
 		}
 
-		// --- Step 2: lock memory targets before continuity-slot operations ---
-		// Continuity-slot set locks its target memory first. Locking the complete
-		// purge target set in the same order prevents it from committing a new
-		// RESTRICT-FK slot after this transaction has cleared slots.
+		// --- Step 2: lock memory targets after the shared project lock ---
+		// The project lock prevents a late-created target from reaching a slot
+		// mutation after this scan; row locks preserve the target-level ordering
+		// for the transaction's existing memories.
 		if err := tx.Exec("SELECT 1 FROM memories WHERE project = ? FOR UPDATE", project).Error; err != nil {
 			return fmt.Errorf("lock project memories: %w", err)
 		}

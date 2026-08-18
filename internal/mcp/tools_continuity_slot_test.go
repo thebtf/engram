@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -116,6 +117,41 @@ func continuitySlotQueryProbe(t *testing.T, db *gormlib.DB, table string, ctx co
 		_ = callbacks.Remove(afterName)
 	})
 	return ctx, started, returned
+}
+
+func newContinuitySlotRaceStore(t *testing.T, maxConns int) *dbgorm.Store {
+	t.Helper()
+	store, err := dbgorm.NewStore(dbgorm.Config{DSN: os.Getenv("DATABASE_DSN"), MaxConns: maxConns})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+func continuitySlotStatementBlocked(t *testing.T, db *gormlib.DB, timeout time.Duration, statementPrefix string) bool {
+	t.Helper()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		var count int64
+		require.NoError(t, db.Raw(`
+			SELECT count(*)
+			FROM pg_stat_activity
+			WHERE state = 'active'
+			  AND wait_event_type = 'Lock'
+			  AND query LIKE ?
+		`, statementPrefix+"%").Scan(&count).Error)
+		if count > 0 {
+			return true
+		}
+		select {
+		case <-deadline.C:
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 func TestContinuitySlot_SetReplacementClearAndAudit(t *testing.T) {
@@ -434,6 +470,75 @@ func TestContinuitySlot_HandlerFlagsAndDiscovery(t *testing.T) {
 		t.Setenv("ENGRAM_CONTINUITY_SLOT_ENABLED", "false")
 		assert.False(t, hasContinuitySlotTool(srv.ListTools()))
 	})
+}
+
+// TestContinuitySlot_SetWaitsForPurgeLateCreatedTarget proves that a set
+// started after purge's initial target scan waits on the shared project lock.
+// Once purge commits, the set sees its target was purged and fails without
+// inserting a RESTRICT-FK slot.
+func TestContinuitySlot_SetWaitsForPurgeLateCreatedTarget(t *testing.T) {
+	env := newContinuitySlotTestEnv(t)
+	ctx, cancel := context.WithTimeout(continuitySlotContext(env.project, "agent/alice"), 5*time.Second)
+	defer cancel()
+	t.Cleanup(func() {
+		require.NoError(t, env.store.GetDB().Exec("DELETE FROM audit_log WHERE action = 'purge' AND after_state->>'project' = ?", env.project).Error)
+	})
+	blocker := newContinuitySlotRaceStore(t, 1)
+	purgeDB := newContinuitySlotRaceStore(t, 2)
+
+	existing := env.createMemory(t, env.project, "agent/alice", "release", "project", "keycard-agent/alice")
+	require.NoError(t, env.store.GetDB().Exec(
+		`INSERT INTO citation_log (session_id, memory_id, cited, match_type) VALUES ('late-target-race', ?, true, 'exact')`,
+		existing.ID,
+	).Error)
+
+	blockTx := blocker.GetDB().WithContext(ctx).Begin()
+	require.NoError(t, blockTx.Error)
+	defer func() { _ = blockTx.Rollback().Error }()
+	require.NoError(t, blockTx.Exec("SELECT 1 FROM citation_log WHERE memory_id = ? FOR UPDATE", existing.ID).Error)
+
+	purgeResult := make(chan error, 1)
+	go func() {
+		_, err := dbgorm.NewPurgeStore(purgeDB).PurgeProject(ctx, env.project)
+		purgeResult <- err
+	}()
+	require.True(t, continuitySlotStatementBlocked(t, purgeDB.GetDB(), time.Second, "DELETE FROM citation_log WHERE memory_id IN"), "purge did not finish its target scan before blocking on citation cleanup")
+
+	late := env.createMemory(t, env.project, "agent/alice", "release", "project", "keycard-agent/alice")
+	setResult := make(chan error, 1)
+	go func() {
+		_, err := env.srv.handleContinuitySlot(ctx, continuitySlotSetArgs(t, env.project, late.ID, time.Now().UTC().Add(time.Hour).Format(time.RFC3339)))
+		setResult <- err
+	}()
+	require.True(t, continuitySlotStatementBlocked(t, purgeDB.GetDB(), time.Second, "SELECT pg_advisory_xact_lock(hashtext('engram_purge_' ||"), "set did not wait on purge's shared project lock")
+
+	probeTx := env.store.GetDB().WithContext(ctx).Begin()
+	require.NoError(t, probeTx.Error)
+	require.NoError(t, probeTx.Exec("SELECT 1 FROM memories WHERE id = ? FOR UPDATE NOWAIT", late.ID).Error, "set must not lock its target before the project lock")
+	require.NoError(t, probeTx.Rollback().Error)
+	var slotCount int64
+	require.NoError(t, env.store.GetDB().Model(&dbgorm.ContinuitySlot{}).Where("project = ?", env.project).Count(&slotCount).Error)
+	assert.Zero(t, slotCount, "set must not mutate the slot before the project lock")
+
+	require.NoError(t, blockTx.Commit().Error)
+	select {
+	case err := <-purgeResult:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("purge did not commit after citation cleanup released")
+	}
+	select {
+	case err := <-setResult:
+		require.EqualError(t, err, continuitySlotAuthorizationError)
+	case <-ctx.Done():
+		t.Fatal("set did not finish after purge committed")
+	}
+
+	var memoryCount int64
+	require.NoError(t, env.store.GetDB().Model(&dbgorm.Memory{}).Where("id = ?", late.ID).Count(&memoryCount).Error)
+	assert.Zero(t, memoryCount, "purge must delete the late-created target")
+	require.NoError(t, env.store.GetDB().Model(&dbgorm.ContinuitySlot{}).Where("project = ?", env.project).Count(&slotCount).Error)
+	assert.Zero(t, slotCount, "setter must not leave a slot for the purged target")
 }
 
 func hasContinuitySlotTool(tools []Tool) bool {

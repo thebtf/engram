@@ -118,6 +118,9 @@ func continuitySlotSetParams(values map[string]any) (int64, time.Time, error) {
 
 func (s *Server) setContinuitySlot(ctx context.Context, project string, caller scope.KeycardContext, actor string, memoryID int64, expiresAt time.Time) (string, error) {
 	err := s.memoryStore.GetDB().WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
+		if err := gormstore.LockPurgeProjectTx(tx, project); err != nil {
+			return err
+		}
 		memory, err := s.memoryStore.GetCurrentForSnapshotTx(ctx, tx, memoryID)
 		if err != nil || !continuitySlotTargetAllowed(memory, project, caller) {
 			return errContinuitySlotTransactionAuthorization
