@@ -15,7 +15,9 @@ package gorm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -201,6 +203,81 @@ func TestPurgeStore_PurgeProject_DoesNotTouchOtherProject(t *testing.T) {
 	fetched, err := ms.Get(ctx, safe.ID)
 	require.NoError(t, err)
 	assert.Equal(t, safeProj, fetched.Project)
+}
+
+// TestPurgeStore_PurgeProject_DeletesContinuitySlotsByProjectOrTarget verifies
+// that the purge transaction clears continuity slots both for the purged
+// project and for any slot that targets one of its memories before deleting
+// memories. A slot for another project survives unless its target is purged.
+func TestPurgeStore_PurgeProject_DeletesContinuitySlotsByProjectOrTarget(t *testing.T) {
+	db, closeDB := openTestDB(t)
+	t.Cleanup(closeDB)
+
+	ctx := context.Background()
+	suffix := time.Now().UnixNano()
+	purgeProject := fmt.Sprintf("test-purge-continuity-a-%d", suffix)
+	safeProject := fmt.Sprintf("test-purge-continuity-b-%d", suffix)
+	targetSlotProject := fmt.Sprintf("test-purge-continuity-target-%d", suffix)
+	projectSlotProject := fmt.Sprintf("test-purge-continuity-project-%d", suffix)
+
+	cleanup := func() {
+		require.NoError(t, db.Exec(`
+			DELETE FROM project_continuity_slots
+			WHERE project IN (?, ?, ?, ?)
+			   OR memory_id IN (SELECT id FROM memories WHERE project IN (?, ?, ?))`,
+			purgeProject, safeProject, targetSlotProject, projectSlotProject,
+			purgeProject, safeProject, projectSlotProject,
+		).Error)
+		require.NoError(t, db.Exec(
+			`DELETE FROM memories WHERE project IN (?, ?, ?)`,
+			purgeProject, safeProject, projectSlotProject,
+		).Error)
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	store := &Store{DB: db}
+	memoryStore := NewMemoryStore(store)
+	purgeStore := NewPurgeStore(store)
+	slotStore := NewContinuitySlotStore(db)
+
+	purgeMemory, err := memoryStore.Create(ctx, &models.Memory{Project: purgeProject, Content: "purge continuity target"})
+	require.NoError(t, err)
+	safeMemory, err := memoryStore.Create(ctx, &models.Memory{Project: safeProject, Content: "safe continuity target"})
+	require.NoError(t, err)
+	_, err = memoryStore.Create(ctx, &models.Memory{Project: projectSlotProject, Content: "project-key purge memory"})
+	require.NoError(t, err)
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	for _, slot := range []ContinuitySlot{
+		{Project: purgeProject, MemoryID: purgeMemory.ID, ExpiresAt: expiresAt, AuthorityDomain: "test", AuthorityOwnerPrincipal: "agent:test", AuthorityOwnerPrincipalKind: "agent"},
+		{Project: targetSlotProject, MemoryID: purgeMemory.ID, ExpiresAt: expiresAt, AuthorityDomain: "test", AuthorityOwnerPrincipal: "agent:test", AuthorityOwnerPrincipalKind: "agent"},
+		{Project: safeProject, MemoryID: safeMemory.ID, ExpiresAt: expiresAt, AuthorityDomain: "test", AuthorityOwnerPrincipal: "agent:test", AuthorityOwnerPrincipalKind: "agent"},
+		{Project: projectSlotProject, MemoryID: safeMemory.ID, ExpiresAt: expiresAt, AuthorityDomain: "test", AuthorityOwnerPrincipal: "agent:test", AuthorityOwnerPrincipalKind: "agent"},
+	} {
+		require.NoError(t, slotStore.Upsert(ctx, slot))
+	}
+
+	receipt, err := purgeStore.PurgeProject(ctx, purgeProject)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), receipt.MemoryCount)
+
+	var count int64
+	require.NoError(t, db.Model(&Memory{}).Where("project = ?", purgeProject).Count(&count).Error)
+	assert.Zero(t, count, "purged project memories must be deleted")
+	require.NoError(t, db.Model(&ContinuitySlot{}).Where("project IN ?", []string{purgeProject, targetSlotProject}).Count(&count).Error)
+	assert.Zero(t, count, "slots for the project or its memory target must be deleted")
+
+	_, err = purgeStore.PurgeProject(ctx, projectSlotProject)
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&ContinuitySlot{}).Where("project = ?", projectSlotProject).Count(&count).Error)
+	assert.Zero(t, count, "a slot for the purged project must be deleted even when it targets another project")
+
+	require.NoError(t, db.Model(&Memory{}).Where("id = ?", safeMemory.ID).Count(&count).Error)
+	assert.Equal(t, int64(1), count, "unrelated project memory must survive")
+	var safeSlot ContinuitySlot
+	require.NoError(t, db.Where("project = ?", safeProject).First(&safeSlot).Error)
+	assert.Equal(t, safeMemory.ID, safeSlot.MemoryID, "unrelated project slot must survive")
 }
 
 // TestPurgeStore_PurgeProject_DoesNotTouchCredentials verifies that credentials for the

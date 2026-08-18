@@ -60,13 +60,16 @@ func NewPurgeStore(store *Store) *PurgeStore {
 //     nullable column, no FK constraint, but rows would become orphan noise.
 //  7. attention_events WHERE project = ? — project-scoped S4A captures with
 //     no memory FK, but they must be purged with the rest of the project's data.
-//  8. NULL out supersedes_id on memories in other projects that reference
-//     this project's memories — prevents FK violation on step 9.
-//  9. memories WHERE project = ? — credentials live in the separate
+//  8. project_continuity_slots WHERE project = ? OR memory_id references one
+//     of the project's memories — migration 161 adds a RESTRICT target FK;
+//     project-key rows are also cleared to prevent stale designations.
+//  9. NULL out supersedes_id on memories in other projects that reference
+//     this project's memories — prevents FK violation on step 10.
+//  10. memories WHERE project = ? — credentials live in the separate
 //     `credentials` table and are explicitly excluded (vault concern).
-// 10. behavioral_rules WHERE project = ? (project column is *string / NULLable;
+//  11. behavioral_rules WHERE project = ? (project column is *string / NULLable;
 //     NULL = global rule — those are never touched).
-//     (Former step 11 — reasoning_traces — removed in CR-2a; store + writers gone.)
+//     (Former step 12 — reasoning_traces — removed in CR-2a; store + writers gone.)
 //
 // All child-table deletes use SQL subqueries (DELETE … WHERE … IN (SELECT id
 // FROM memories WHERE project = ?)) rather than a Go-side ID slice, which
@@ -164,7 +167,19 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 		}
 		receipt.AttentionEventCount = r.RowsAffected
 
-		// --- Step 8: clear supersedes_id references from outside this project ---
+		// --- Step 8: continuity slots for this project or its memory targets ---
+		// migration 161 makes memory_id a RESTRICT FK, so these rows must be
+		// removed before deleting the target memories below. Include project-key
+		// matches because the schema permits a slot to target another project.
+		r = tx.Exec(
+			"DELETE FROM project_continuity_slots WHERE project = ? OR memory_id IN (SELECT id FROM memories WHERE project = ?)",
+			project, project,
+		)
+		if r.Error != nil {
+			return fmt.Errorf("delete continuity slots: %w", r.Error)
+		}
+
+		// --- Step 9: clear supersedes_id references from outside this project ---
 		// memories.supersedes_id BIGINT REFERENCES memories(id) (no CASCADE, no SET NULL).
 		// Rows in other projects that point at this project's memories would cause a
 		// FK violation when the memories are deleted in step 9. NULL them out first.
@@ -175,14 +190,14 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 			return fmt.Errorf("clear supersedes_id references: %w", err)
 		}
 
-		// --- Step 9: memories (credentials table untouched — vault concern) ---
+		// --- Step 10: memories (credentials table untouched — vault concern) ---
 		r = tx.Exec("DELETE FROM memories WHERE project = ?", project)
 		if r.Error != nil {
 			return fmt.Errorf("delete memories: %w", r.Error)
 		}
 		receipt.MemoryCount = r.RowsAffected
 
-		// --- Step 10: behavioral_rules for this project ---
+		// --- Step 11: behavioral_rules for this project ---
 		// NULL-project rows are global rules and must not be affected.
 		r = tx.Exec("DELETE FROM behavioral_rules WHERE project = ?", project)
 		if r.Error != nil {
@@ -190,13 +205,13 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 		}
 		receipt.RuleCount = r.RowsAffected
 
-		// (Former step 11 deleted reasoning_traces rows. The reasoning_traces table
+		// (Former step 12 deleted reasoning_traces rows. The reasoning_traces table
 		// is dropped by migration 137 in CR-2b of provenance-cleanup — the same
 		// change that removes this coupled DELETE. The table no longer exists post-
 		// migration, so the statement would error; it is removed here per the
 		// coupling note added in CR-2a.)
 
-		// --- Step 12: write the purge audit row inside the transaction ---
+		// --- Step 13: write the purge audit row inside the transaction ---
 		// memory_id is nullable (*int64); pass nil to indicate project-level event.
 		// after_state carries the receipt JSON so the event is self-describing.
 		// Note: receipt counts at this point reflect actual rows deleted (RowsAffected);
