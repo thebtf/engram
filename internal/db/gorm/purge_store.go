@@ -47,29 +47,32 @@ func NewPurgeStore(store *Store) *PurgeStore {
 // Deletion order (FK-safe):
 //  1. Acquire pg_advisory_xact_lock scoped to the project to serialise
 //     concurrent purges of the same project.
-//  2. citation_log rows referencing the project's memories — NOT NULL FK,
+//  2. Lock every current memory row in the project with FOR UPDATE before any
+//     continuity-slot operation, matching continuity_slot set's target-first
+//     lock order.
+//  3. citation_log rows referencing the project's memories — NOT NULL FK,
 //     no ON DELETE CASCADE.
-//  3. content_chunks rows referencing the project's memories — NOT NULL FK,
+//  4. content_chunks rows referencing the project's memories — NOT NULL FK,
 //     no ON DELETE CASCADE.
-//  4. promotion_log rows referencing the project's memories — NOT NULL FK,
+//  5. promotion_log rows referencing the project's memories — NOT NULL FK,
 //     no ON DELETE CASCADE.
-//  5. knowledge_edges where source_id or target_id belong to the project's
+//  6. knowledge_edges where source_id or target_id belong to the project's
 //     memory IDs — migration 121 added ON DELETE CASCADE, but we delete
 //     explicitly so the RowsAffected count is authoritative.
-//  6. audit_log rows whose memory_id references the project's memories —
+//  7. audit_log rows whose memory_id references the project's memories —
 //     nullable column, no FK constraint, but rows would become orphan noise.
-//  7. attention_events WHERE project = ? — project-scoped S4A captures with
+//  8. attention_events WHERE project = ? — project-scoped S4A captures with
 //     no memory FK, but they must be purged with the rest of the project's data.
-//  8. project_continuity_slots WHERE project = ? OR memory_id references one
+//  9. project_continuity_slots WHERE project = ? OR memory_id references one
 //     of the project's memories — migration 161 adds a RESTRICT target FK;
 //     project-key rows are also cleared to prevent stale designations.
-//  9. NULL out supersedes_id on memories in other projects that reference
-//     this project's memories — prevents FK violation on step 10.
-//  10. memories WHERE project = ? — credentials live in the separate
+//  10. NULL out supersedes_id on memories in other projects that reference
+//     this project's memories — prevents FK violation on step 11.
+//  11. memories WHERE project = ? — credentials live in the separate
 //     `credentials` table and are explicitly excluded (vault concern).
-//  11. behavioral_rules WHERE project = ? (project column is *string / NULLable;
+//  12. behavioral_rules WHERE project = ? (project column is *string / NULLable;
 //     NULL = global rule — those are never touched).
-//     (Former step 12 — reasoning_traces — removed in CR-2a; store + writers gone.)
+//     (Former step 13 — reasoning_traces — removed in CR-2a; store + writers gone.)
 //
 // All child-table deletes use SQL subqueries (DELETE … WHERE … IN (SELECT id
 // FROM memories WHERE project = ?)) rather than a Go-side ID slice, which
@@ -103,7 +106,15 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 			return fmt.Errorf("acquire advisory lock: %w", err)
 		}
 
-		// --- Step 2: citation_log (NOT NULL FK, no CASCADE) ---
+		// --- Step 2: lock memory targets before continuity-slot operations ---
+		// Continuity-slot set locks its target memory first. Locking the complete
+		// purge target set in the same order prevents it from committing a new
+		// RESTRICT-FK slot after this transaction has cleared slots.
+		if err := tx.Exec("SELECT 1 FROM memories WHERE project = ? FOR UPDATE", project).Error; err != nil {
+			return fmt.Errorf("lock project memories: %w", err)
+		}
+
+		// --- Step 3: citation_log (NOT NULL FK, no CASCADE) ---
 		// citation_log.memory_id BIGINT NOT NULL REFERENCES memories(id)
 		r := tx.Exec(
 			"DELETE FROM citation_log WHERE memory_id IN (SELECT id FROM memories WHERE project = ?)",
@@ -114,7 +125,7 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 		}
 		receipt.CitationCount = r.RowsAffected
 
-		// --- Step 3: content_chunks (NOT NULL FK, no CASCADE) ---
+		// --- Step 4: content_chunks (NOT NULL FK, no CASCADE) ---
 		// content_chunks.memory_id BIGINT NOT NULL REFERENCES memories(id)
 		r = tx.Exec(
 			"DELETE FROM content_chunks WHERE memory_id IN (SELECT id FROM memories WHERE project = ?)",
@@ -125,7 +136,7 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 		}
 		receipt.ChunkCount = r.RowsAffected
 
-		// --- Step 4: promotion_log (NOT NULL FK, no CASCADE) ---
+		// --- Step 5: promotion_log (NOT NULL FK, no CASCADE) ---
 		// promotion_log.memory_id BIGINT NOT NULL REFERENCES memories(id)
 		r = tx.Exec(
 			"DELETE FROM promotion_log WHERE memory_id IN (SELECT id FROM memories WHERE project = ?)",
@@ -136,7 +147,7 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 		}
 		receipt.PromotionCount = r.RowsAffected
 
-		// --- Step 5: knowledge_edges (ON DELETE CASCADE via migration 121) ---
+		// --- Step 6: knowledge_edges (ON DELETE CASCADE via migration 121) ---
 		// Explicit delete so RowsAffected count is authoritative.
 		r = tx.Exec(
 			"DELETE FROM knowledge_edges WHERE source_id IN (SELECT id FROM memories WHERE project = ?) OR target_id IN (SELECT id FROM memories WHERE project = ?)",
@@ -147,7 +158,7 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 		}
 		receipt.EdgeCount = r.RowsAffected
 
-		// --- Step 6: audit_log rows referencing the project's memories ---
+		// --- Step 7: audit_log rows referencing the project's memories ---
 		// audit_log.memory_id is nullable with no FK constraint; rows would
 		// become orphan noise pointing to non-existent memory IDs.
 		// The purge event itself is recorded as a new audit row below.
@@ -160,14 +171,14 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 		}
 		receipt.AuditCount = r.RowsAffected
 
-		// --- Step 7: project-scoped S4A attention_events ---
+		// --- Step 8: project-scoped S4A attention_events ---
 		r = tx.Exec("DELETE FROM attention_events WHERE project = ?", project)
 		if r.Error != nil {
 			return fmt.Errorf("delete attention_events: %w", r.Error)
 		}
 		receipt.AttentionEventCount = r.RowsAffected
 
-		// --- Step 8: continuity slots for this project or its memory targets ---
+		// --- Step 9: continuity slots for this project or its memory targets ---
 		// migration 161 makes memory_id a RESTRICT FK, so these rows must be
 		// removed before deleting the target memories below. Include project-key
 		// matches because the schema permits a slot to target another project.
@@ -179,10 +190,10 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 			return fmt.Errorf("delete continuity slots: %w", r.Error)
 		}
 
-		// --- Step 9: clear supersedes_id references from outside this project ---
+		// --- Step 10: clear supersedes_id references from outside this project ---
 		// memories.supersedes_id BIGINT REFERENCES memories(id) (no CASCADE, no SET NULL).
 		// Rows in other projects that point at this project's memories would cause a
-		// FK violation when the memories are deleted in step 9. NULL them out first.
+		// FK violation when the memories are deleted in step 11. NULL them out first.
 		if err := tx.Exec(
 			"UPDATE memories SET supersedes_id = NULL WHERE supersedes_id IN (SELECT id FROM memories WHERE project = ?)",
 			project,
@@ -190,14 +201,14 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 			return fmt.Errorf("clear supersedes_id references: %w", err)
 		}
 
-		// --- Step 10: memories (credentials table untouched — vault concern) ---
+		// --- Step 11: memories (credentials table untouched — vault concern) ---
 		r = tx.Exec("DELETE FROM memories WHERE project = ?", project)
 		if r.Error != nil {
 			return fmt.Errorf("delete memories: %w", r.Error)
 		}
 		receipt.MemoryCount = r.RowsAffected
 
-		// --- Step 11: behavioral_rules for this project ---
+		// --- Step 12: behavioral_rules for this project ---
 		// NULL-project rows are global rules and must not be affected.
 		r = tx.Exec("DELETE FROM behavioral_rules WHERE project = ?", project)
 		if r.Error != nil {
@@ -205,13 +216,13 @@ func (s *PurgeStore) PurgeProject(ctx context.Context, project string) (PurgeRec
 		}
 		receipt.RuleCount = r.RowsAffected
 
-		// (Former step 12 deleted reasoning_traces rows. The reasoning_traces table
+		// (Former step 13 deleted reasoning_traces rows. The reasoning_traces table
 		// is dropped by migration 137 in CR-2b of provenance-cleanup — the same
 		// change that removes this coupled DELETE. The table no longer exists post-
 		// migration, so the statement would error; it is removed here per the
 		// coupling note added in CR-2a.)
 
-		// --- Step 13: write the purge audit row inside the transaction ---
+		// --- Step 14: write the purge audit row inside the transaction ---
 		// memory_id is nullable (*int64); pass nil to indicate project-level event.
 		// after_state carries the receipt JSON so the event is self-describing.
 		// Note: receipt counts at this point reflect actual rows deleted (RowsAffected);

@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/thebtf/engram/pkg/cognitive"
 	"github.com/thebtf/engram/pkg/models"
@@ -625,6 +626,139 @@ func TestPurgeStore_PurgeProject_ZeroRowsSucceeds(t *testing.T) {
 	assert.Equal(t, int64(0), receipt.PromotionCount)
 	assert.Equal(t, purgeProj, receipt.Project)
 	assert.False(t, receipt.PurgedAt.IsZero(), "PurgedAt must be set even for zero-row purge")
+}
+
+// TestPurgeStore_PurgeProject_WaitsForConcurrentContinuitySet verifies that a
+// purge locks target memories before clearing continuity slots. This keeps a
+// concurrent continuity set from committing a new RESTRICT-FK slot after purge
+// has already passed its slot delete.
+func TestPurgeStore_PurgeProject_WaitsForConcurrentContinuitySet(t *testing.T) {
+	db, closeDB := openTestDB(t)
+	t.Cleanup(closeDB)
+	// A dedicated connection makes the purge's blocked SQL observable without
+	// confusing it with the setter or the test observer.
+	purgeDB := openCandidateTestDB(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	suffix := time.Now().UnixNano()
+	purgeProject := fmt.Sprintf("test-purge-continuity-race-%d", suffix)
+	safeProject := fmt.Sprintf("test-purge-continuity-race-safe-%d", suffix)
+
+	t.Cleanup(func() {
+		require.NoError(t, db.Exec(`DELETE FROM project_continuity_slots WHERE project IN (?, ?)`, purgeProject, safeProject).Error)
+		require.NoError(t, db.Exec(`DELETE FROM memories WHERE project IN (?, ?)`, purgeProject, safeProject).Error)
+	})
+
+	memoryStore := NewMemoryStore(&Store{DB: db})
+	slotStore := NewContinuitySlotStore(db)
+	purgeStore := NewPurgeStore(&Store{DB: purgeDB})
+	target, err := memoryStore.Create(ctx, &models.Memory{Project: purgeProject, Content: "purge race target"})
+	require.NoError(t, err)
+	safe, err := memoryStore.Create(ctx, &models.Memory{Project: safeProject, Content: "purge race safe"})
+	require.NoError(t, err)
+	require.NoError(t, slotStore.Upsert(ctx, ContinuitySlot{
+		Project:                     safeProject,
+		MemoryID:                    safe.ID,
+		ExpiresAt:                   time.Now().UTC().Add(time.Hour),
+		AuthorityDomain:             "test",
+		AuthorityOwnerPrincipal:     "agent:test",
+		AuthorityOwnerPrincipalKind: "agent",
+	}))
+
+	setTx := db.WithContext(ctx).Begin()
+	require.NoError(t, setTx.Error)
+	defer func() { _ = setTx.Rollback().Error }()
+	lockedTarget, err := memoryStore.GetCurrentForSnapshotTx(ctx, setTx, target.ID)
+	require.NoError(t, err)
+
+	purgeResult := make(chan error, 1)
+	go func() { _, err := purgeStore.PurgeProject(ctx, purgeProject); purgeResult <- err }()
+
+	// The unfixed implementation reaches DELETE memories while the setter holds
+	// its target lock. Completing the set at that point deterministically exposes
+	// the old SQLSTATE 23503 RESTRICT-FK failure as RED evidence.
+	if purgeRaceStatementObserved(t, db, 250*time.Millisecond, "DELETE FROM memories WHERE project =") {
+		t.Log("observed legacy purge waiting on target delete; completing concurrent set")
+		require.NoError(t, slotStore.UpsertTx(ctx, setTx, ContinuitySlot{
+			Project:                     purgeProject,
+			MemoryID:                    lockedTarget.ID,
+			ExpiresAt:                   time.Now().UTC().Add(time.Hour),
+			AuthorityDomain:             "test",
+			AuthorityOwnerPrincipal:     "agent:test",
+			AuthorityOwnerPrincipalKind: "agent",
+		}))
+		require.NoError(t, setTx.Commit().Error)
+		select {
+		case err := <-purgeResult:
+			require.NoError(t, err, "purge must not fail with the concurrent continuity slot's RESTRICT FK")
+		case <-ctx.Done():
+			t.Fatal("purge did not finish after concurrent set committed")
+		}
+		return
+	}
+
+	require.True(t, purgeRaceStatementObserved(t, db, time.Second, "SELECT 1 FROM memories WHERE project ="), "purge did not attempt target-memory FOR UPDATE")
+	select {
+	case err := <-purgeResult:
+		t.Fatalf("purge completed before the setter committed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NoError(t, slotStore.UpsertTx(ctx, setTx, ContinuitySlot{
+		Project:                     purgeProject,
+		MemoryID:                    lockedTarget.ID,
+		ExpiresAt:                   time.Now().UTC().Add(time.Hour),
+		AuthorityDomain:             "test",
+		AuthorityOwnerPrincipal:     "agent:test",
+		AuthorityOwnerPrincipalKind: "agent",
+	}))
+	require.NoError(t, setTx.Commit().Error)
+
+	select {
+	case err := <-purgeResult:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("purge did not finish after concurrent set committed")
+	}
+
+	var count int64
+	require.NoError(t, db.Model(&Memory{}).Where("id = ?", target.ID).Count(&count).Error)
+	assert.Zero(t, count, "purge target must be deleted")
+	require.NoError(t, db.Model(&ContinuitySlot{}).Where("project = ?", purgeProject).Count(&count).Error)
+	assert.Zero(t, count, "purge target slot must be deleted")
+	require.NoError(t, db.Model(&Memory{}).Where("id = ?", safe.ID).Count(&count).Error)
+	assert.Equal(t, int64(1), count, "unrelated memory must survive")
+	require.NoError(t, db.Model(&ContinuitySlot{}).Where("project = ?", safeProject).Count(&count).Error)
+	assert.Equal(t, int64(1), count, "unrelated slot must survive")
+}
+
+func purgeRaceStatementObserved(t *testing.T, db *gorm.DB, timeout time.Duration, statementPrefix string) bool {
+	t.Helper()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		var count int64
+		require.NoError(t, db.Raw(`
+			SELECT count(*)
+			FROM pg_stat_activity
+			WHERE application_name = ?
+			  AND state = 'active'
+			  AND wait_event_type = 'Lock'
+			  AND query LIKE ?
+		`, candidateTestDBApplicationName, statementPrefix+"%").Scan(&count).Error)
+		if count > 0 {
+			return true
+		}
+		select {
+		case <-deadline.C:
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 // TestPurgeStore_ReceiptFields_AllPresent verifies PurgeReceipt has all required fields
