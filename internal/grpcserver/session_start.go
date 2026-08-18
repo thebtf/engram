@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sort"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 )
 
 const (
@@ -105,17 +107,35 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 		if listErr != nil {
 			return nil, status.Error(codes.Internal, "failed to list session-start memories")
 		}
-		if metaSummaryEnabled {
-			// Meta summary is built from a full visibility-aware scan after the main response rows are selected.
-		}
-		// Apply visibility before Thompson scoring so invisible rows are excluded
-		// from the candidate pool before they can consume the scored window.
-		scored := injection.Score(allMemories, memoriesLimit)
-		for _, sm := range scored {
-			if !sm.Selected {
-				break
+		candidateRows := allMemories
+		if os.Getenv(config.EnvContinuitySlotEnabled) == "true" {
+			slot, slotErr := dbgorm.NewContinuitySlotStore(s.db).Get(ctx, project)
+			if slotErr != nil && !errors.Is(slotErr, gorm.ErrRecordNotFound) {
+				return nil, status.Error(codes.Internal, "failed to get session-start continuity slot")
 			}
-			memoryRows = append(memoryRows, sm.Memory)
+			if slotErr == nil && slot.ExpiresAt.After(time.Now().UTC()) {
+				slotRows, getErr := memoryStore.GetByIDs(ctx, project, []int64{slot.MemoryID})
+				if getErr != nil {
+					return nil, status.Error(codes.Internal, "failed to get session-start continuity memory")
+				}
+				if len(slotRows) == 1 && scope.ResolveMemory(callerCtx, slotRows[0], visibilityOpts) {
+					memoryRows = append(memoryRows, slotRows[0])
+					candidateRows = make([]*models.Memory, 0, len(allMemories))
+					for _, memory := range allMemories {
+						if memory.ID != slotRows[0].ID {
+							candidateRows = append(candidateRows, memory)
+						}
+					}
+				}
+			}
+		}
+		if remaining := memoriesLimit - len(memoryRows); remaining > 0 {
+			for _, scoredMemory := range injection.Score(candidateRows, remaining) {
+				if !scoredMemory.Selected {
+					break
+				}
+				memoryRows = append(memoryRows, scoredMemory.Memory)
+			}
 		}
 	} else {
 		var listErr error

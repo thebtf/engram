@@ -47,4 +47,8 @@ const (
 	// (process-level) and propagates it as SessionId in pb.CallToolRequest so
 	// the server-side audit helpers can record the correct SourceSessionID.
 	EnvClaudeSessionID = "CLAUDE_SESSION_ID"
+
+	// EnvContinuitySlotEnabled enables the bounded project continuity reservation.
+	// It defaults off and is effective only with ENGRAM_VNEXT_ENABLED=true.
+	EnvContinuitySlotEnabled = "ENGRAM_CONTINUITY_SLOT_ENABLED"
 )

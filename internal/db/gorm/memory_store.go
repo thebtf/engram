@@ -18,6 +18,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -425,6 +426,16 @@ func (s *MemoryStore) CreateWithLifecycle(ctx context.Context, mem *models.Memor
 	return memoryRowToModel(row), nil
 }
 
+// CreateWithLifecycleTx inserts a lifecycle memory in the caller transaction.
+// It is used when a correction must create its successor and invalidate its
+// predecessor atomically.
+func (s *MemoryStore) CreateWithLifecycleTx(ctx context.Context, tx *gorm.DB, mem *models.Memory) (*models.Memory, error) {
+	if err := validateMemoryForCreate(mem); err != nil {
+		return nil, err
+	}
+	return createMemoryWithLifecycleTx(ctx, tx, mem)
+}
+
 // createMemoryWithLifecycleTx inserts a lifecycle memory row using an existing
 // GORM transaction (tx). This is a package-internal helper used by
 // CandidateStore.PromoteWithMemory to create the promoted memory atomically
@@ -549,6 +560,23 @@ func (s *MemoryStore) GetForSnapshotTx(ctx context.Context, tx *gorm.DB, id int6
 		First(&row).Error
 	if err != nil {
 		return nil, fmt.Errorf("get memory snapshot id=%d: %w", id, err)
+	}
+	return memoryRowToSnapshotModel(&row), nil
+}
+
+// GetCurrentForSnapshotTx locks an active, non-deleted memory that is currently valid
+// according to the database clock.
+func (s *MemoryStore) GetCurrentForSnapshotTx(ctx context.Context, tx *gorm.DB, id int64) (*models.Memory, error) {
+	if id == 0 {
+		return nil, fmt.Errorf("id must be non-zero")
+	}
+	var row Memory
+	err := applyCurrentMemoryValidity(tx.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND status = 'active' AND deleted_at IS NULL", id)).
+		First(&row).Error
+	if err != nil {
+		return nil, fmt.Errorf("get current memory snapshot id=%d: %w", id, err)
 	}
 	return memoryRowToSnapshotModel(&row), nil
 }
@@ -933,26 +961,50 @@ func (s *MemoryStore) Update(ctx context.Context, mem *models.Memory) (*models.M
 	return s.Get(ctx, mem.ID)
 }
 
-// Delete soft-deletes the memory and atomically advances its version.
-// Returns gorm.ErrRecordNotFound if no active row exists.
-func (s *MemoryStore) Delete(ctx context.Context, id int64) error {
-	return s.DeleteTx(ctx, s.db, id)
+const continuitySlotLifecycleAuditAction = "continuity_slot_lifecycle_clear"
+
+func (s *MemoryStore) clearContinuitySlotByMemoryTx(ctx context.Context, tx *gorm.DB, memoryID int64, invalidationAction string) error {
+	var slots []ContinuitySlot
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("memory_id = ?", memoryID).Find(&slots).Error; err != nil {
+		return fmt.Errorf("lock continuity slots for memory id=%d: %w", memoryID, err)
+	}
+	if len(slots) == 0 {
+		return nil
+	}
+	result := tx.WithContext(ctx).Where("memory_id = ?", memoryID).Delete(&ContinuitySlot{})
+	if result.Error != nil {
+		return fmt.Errorf("clear continuity slots for memory id=%d: %w", memoryID, result.Error)
+	}
+	if result.RowsAffected != int64(len(slots)) {
+		return fmt.Errorf("clear continuity slots for memory id=%d: cleared=%d locked=%d", memoryID, result.RowsAffected, len(slots))
+	}
+	for _, slot := range slots {
+		if err := NewAuditStore(tx).LogTx(ctx, tx, AuditLogEntry{MemoryID: &memoryID, Action: continuitySlotLifecycleAuditAction, Actor: auditcontext.Actor(ctx), SourceSessionID: auditcontext.SourceSession(ctx), Reason: fmt.Sprintf("project=%q target_memory_id=%d invalidation_action=%s", slot.Project, memoryID, invalidationAction)}); err != nil {
+			return fmt.Errorf("audit continuity slot clear for memory id=%d: %w", memoryID, err)
+		}
+	}
+	return nil
 }
 
-// DeleteTx is Delete using the caller's transaction.
+// Delete soft-deletes the memory and atomically clears a matching continuity slot.
+func (s *MemoryStore) Delete(ctx context.Context, id int64) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return s.DeleteTx(ctx, tx, id) })
+}
+
+// DeleteTx locks the target before any matching slot and clears the slot in this transaction.
 func (s *MemoryStore) DeleteTx(ctx context.Context, tx *gorm.DB, id int64) error {
 	if id == 0 {
 		return fmt.Errorf("memory id must be non-zero")
 	}
+	var row Memory
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", id).First(&row).Error; err != nil {
+		return fmt.Errorf("delete memory id=%d: %w", id, err)
+	}
+	if err := s.clearContinuitySlotByMemoryTx(ctx, tx, id, "delete"); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
-	result := tx.WithContext(ctx).
-		Model(&Memory{}).
-		Where("id = ? AND deleted_at IS NULL", id).
-		Updates(map[string]any{
-			"deleted_at": now,
-			"updated_at": now,
-			"version":    gorm.Expr("version + 1"),
-		})
+	result := tx.WithContext(ctx).Model(&Memory{}).Where("id = ? AND deleted_at IS NULL", id).Updates(map[string]any{"deleted_at": now, "updated_at": now, "version": gorm.Expr("version + 1")})
 	if result.Error != nil {
 		return fmt.Errorf("delete memory id=%d: %w", id, result.Error)
 	}
@@ -962,35 +1014,29 @@ func (s *MemoryStore) DeleteTx(ctx context.Context, tx *gorm.DB, id int64) error
 	return nil
 }
 
-// Supersede marks an existing memory as superseded and returns the memory's importance_base
-// BEFORE the penalty was applied (for the caller to compute the new memory's importance).
-//
-// The old memory receives status='superseded', importance_base *= 0.1, and a version increment.
-// Returns an error when the memory is not found or is already superseded/deleted.
+// Supersede marks a memory superseded and atomically clears its continuity slot.
 func (s *MemoryStore) Supersede(ctx context.Context, id int64) (oldImportance float64, err error) {
-	return s.SupersedeTx(ctx, s.db, id)
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { oldImportance, err = s.SupersedeTx(ctx, tx, id); return err })
+	return oldImportance, err
 }
 
-// SupersedeTx is Supersede using the caller's transaction.
+// SupersedeTx locks the target before clearing any matching slot.
 func (s *MemoryStore) SupersedeTx(ctx context.Context, tx *gorm.DB, id int64) (oldImportance float64, err error) {
 	if id == 0 {
 		return 0, fmt.Errorf("memory id must be non-zero")
 	}
 	var row Memory
-	if err := tx.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", id).First(&row).Error; err != nil {
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", id).First(&row).Error; err != nil {
 		return 0, fmt.Errorf("supersede memory id=%d: %w", id, err)
 	}
+	if row.Status != "active" {
+		return 0, fmt.Errorf("supersede memory id=%d: not found or already superseded", id)
+	}
+	if err := s.clearContinuitySlotByMemoryTx(ctx, tx, id, "supersede"); err != nil {
+		return 0, err
+	}
 	oldImportance = row.ImportanceBase
-
-	now := time.Now().UTC()
-	result := tx.WithContext(ctx).Model(&Memory{}).
-		Where("id = ? AND deleted_at IS NULL AND status = 'active'", id).
-		Updates(map[string]any{
-			"status":          "superseded",
-			"importance_base": row.ImportanceBase * 0.1,
-			"updated_at":      now,
-			"version":         gorm.Expr("version + 1"),
-		})
+	result := tx.WithContext(ctx).Model(&Memory{}).Where("id = ? AND deleted_at IS NULL AND status = 'active'", id).Updates(map[string]any{"status": "superseded", "importance_base": row.ImportanceBase * 0.1, "updated_at": time.Now().UTC(), "version": gorm.Expr("version + 1")})
 	if result.Error != nil {
 		return 0, fmt.Errorf("supersede memory id=%d: %w", id, result.Error)
 	}
@@ -1000,54 +1046,44 @@ func (s *MemoryStore) SupersedeTx(ctx context.Context, tx *gorm.DB, id int64) (o
 	return oldImportance, nil
 }
 
-// MarkSuperseded atomically sets status='superseded' and superseded_by=newID on
-// the memory identified by olderID. It does NOT scale importance_base (that
-// remains the caller's decision). Returns an error when olderID is not found,
-// already deleted, or when the UPDATE affects 0 rows (already superseded is
-// treated as success to keep the operation idempotent).
-//
-// This is distinct from Supersede: Supersede also scales importance and does
-// not record the successor ID. MarkSuperseded is the precise link-recording
-// counterpart used by the writelint Phase2 supersede path.
+// MarkSuperseded atomically records a successor and clears a matching continuity slot.
 func (s *MemoryStore) MarkSuperseded(ctx context.Context, olderID, newID int64) error {
-	if olderID == 0 {
-		return fmt.Errorf("MarkSuperseded: olderID must be non-zero")
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return s.MarkSupersededTx(ctx, tx, olderID, newID) })
+}
+
+func (s *MemoryStore) MarkSupersededTx(ctx context.Context, tx *gorm.DB, olderID, newID int64) error {
+	if olderID == 0 || newID == 0 {
+		return fmt.Errorf("MarkSuperseded: memory IDs must be non-zero")
 	}
-	if newID == 0 {
-		return fmt.Errorf("MarkSuperseded: newID must be non-zero")
+	var row Memory
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND deleted_at IS NULL", olderID).First(&row).Error; err != nil {
+		return fmt.Errorf("MarkSuperseded memory id=%d: %w", olderID, err)
 	}
-	now := time.Now().UTC()
-	result := s.db.WithContext(ctx).Model(&Memory{}).
-		Where("id = ? AND deleted_at IS NULL", olderID).
-		Updates(map[string]any{
-			"status":        "superseded",
-			"superseded_by": newID,
-			"updated_at":    now,
-		})
+	if err := s.clearContinuitySlotByMemoryTx(ctx, tx, olderID, "mark_superseded"); err != nil {
+		return err
+	}
+	result := tx.WithContext(ctx).Model(&Memory{}).Where("id = ? AND deleted_at IS NULL", olderID).Updates(map[string]any{"status": "superseded", "superseded_by": newID, "updated_at": time.Now().UTC()})
 	if result.Error != nil {
 		return fmt.Errorf("MarkSuperseded memory id=%d: %w", olderID, result.Error)
 	}
-	// 0 rows affected means the memory was not found or already deleted.
-	// An already-superseded row still exists and should be updated if found.
 	if result.RowsAffected == 0 {
 		return fmt.Errorf("MarkSuperseded memory id=%d: %w", olderID, gorm.ErrRecordNotFound)
 	}
 	return nil
 }
 
-// UpdateLifecycleFields updates specific lifecycle fields on a memory without
-// touching content, tags, or version. Used by feedback and injection pipelines.
+// UpdateLifecycleFields updates non-invalidating lifecycle fields.
 func (s *MemoryStore) UpdateLifecycleFields(ctx context.Context, id int64, fields map[string]any) error {
-	if id == 0 {
-		return fmt.Errorf("memory id must be non-zero")
-	}
-	if fields == nil {
-		return fmt.Errorf("fields must not be nil")
+	return s.UpdateLifecycleFieldsTx(ctx, s.db, id, fields)
+}
+
+// UpdateLifecycleFieldsTx deliberately does not clear a continuity slot.
+func (s *MemoryStore) UpdateLifecycleFieldsTx(ctx context.Context, tx *gorm.DB, id int64, fields map[string]any) error {
+	if id == 0 || fields == nil {
+		return fmt.Errorf("memory id and fields are required")
 	}
 	fields["updated_at"] = time.Now().UTC()
-	result := s.db.WithContext(ctx).Model(&Memory{}).
-		Where("id = ? AND deleted_at IS NULL", id).
-		Updates(fields)
+	result := tx.WithContext(ctx).Model(&Memory{}).Where("id = ? AND deleted_at IS NULL", id).Updates(fields)
 	if result.Error != nil {
 		return fmt.Errorf("update lifecycle fields memory id=%d: %w", id, result.Error)
 	}
@@ -1906,13 +1942,20 @@ func (s *MemoryStore) HardDeleteTx(ctx context.Context, tx *gorm.DB, id int64) e
 	if id == 0 {
 		return fmt.Errorf("hardDeleteTx: memory ID must be non-zero")
 	}
-	result := tx.WithContext(ctx).
-		Unscoped().
-		Delete(&Memory{}, "id = ?", id)
+	var row Memory
+	err := tx.WithContext(ctx).Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).First(&row).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("hardDeleteTx memory id=%d: %w", id, err)
+	}
+	if err == nil {
+		if err := s.clearContinuitySlotByMemoryTx(ctx, tx, id, "hard_delete"); err != nil {
+			return err
+		}
+	}
+	result := tx.WithContext(ctx).Unscoped().Delete(&Memory{}, "id = ?", id)
 	if result.Error != nil {
 		return fmt.Errorf("hardDeleteTx memory id=%d: %w", id, result.Error)
 	}
-	// RowsAffected == 0 is not an error — the memory may have already been deleted.
 	return nil
 }
 

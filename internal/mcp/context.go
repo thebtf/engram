@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"net/http"
+
+	"github.com/thebtf/engram/internal/auditcontext"
 )
 
 type contextKey string
@@ -37,9 +39,9 @@ func projectFromContext(ctx context.Context) string {
 	return v
 }
 
-// contextWithSession stores session identity in context for audit actor derivation.
+// contextWithSession stores session identity in a neutral audit context.
 func contextWithSession(ctx context.Context, sessionID string) context.Context {
-	return context.WithValue(ctx, sessionContextKey, sessionID)
+	return auditcontext.WithSourceSession(ctx, sessionID)
 }
 
 // ContextWithSession is the exported variant of contextWithSession for use by
@@ -52,8 +54,7 @@ func ContextWithSession(ctx context.Context, sessionID string) context.Context {
 // sessionFromContext retrieves the session ID from context.
 // Returns empty string if not set.
 func sessionFromContext(ctx context.Context) string {
-	v, _ := ctx.Value(sessionContextKey).(string)
-	return v
+	return auditcontext.SourceSession(ctx)
 }
 
 // actorFromContext derives an audit actor string from context.

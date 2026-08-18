@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.48.0] - 2026-08-18
+
+### Added
+
+- Added an opt-in reserved continuity slot, backed by migration 161, that keeps a designated project memory first at session start and clears its designation atomically on lifecycle invalidation.
+
 ## [6.47.7] - 2026-08-15
 
 ### Fixed

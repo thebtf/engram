@@ -1,6 +1,10 @@
 package auth
 
-import "context"
+import (
+	"context"
+
+	"github.com/thebtf/engram/internal/auditcontext"
+)
 
 // Context-key types. Both are unexported as type definitions but exported as
 // VALUE singletons (RoleKey, SourceKey) so other packages can read context
@@ -36,7 +40,11 @@ var IdentityKey = identityKeyType{}
 // KeycardID for SourceClient) is preserved so issuance audit / stats handlers
 // can attribute requests to a specific keycard.
 func WithIdentity(ctx context.Context, id Identity) context.Context {
-	return context.WithValue(ctx, IdentityKey, id)
+	ctx = context.WithValue(ctx, IdentityKey, id)
+	if principal, _, ok := id.MemoryOwner(); ok {
+		return auditcontext.WithActor(ctx, principal)
+	}
+	return ctx
 }
 
 // IdentityFrom extracts an Identity from ctx. The second return is false when

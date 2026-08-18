@@ -1132,7 +1132,8 @@ func (s *Service) initializeAsync() {
 	promotionStore := gorm.NewPromotionStore(store.GetDB())
 	nodesStore := graph.NewNodesStore(store.GetDB())
 	graphStore := graph.NewStore(store.GetDB(), nodesStore)
-	wireVnextStores(mcpServer, promotionStore, graphStore, nodesStore, auditStore)
+	continuitySlotStore := gorm.NewContinuitySlotStore(store.GetDB())
+	wireVnextStores(mcpServer, promotionStore, graphStore, nodesStore, auditStore, continuitySlotStore)
 	s.initMu.Lock()
 	s.promotionStore = promotionStore
 	s.graphStore = graphStore
@@ -2432,11 +2433,14 @@ func getPID() int {
 // nodesStore does NOT need a separate Service field: it is accessed via
 // graphStore (graph.Store.nodes, used by Resolve) and mcpServer (Server.nodesStore,
 // used by add_node / get_edges). No other Service method references it directly.
-func wireVnextStores(mcpServer *mcp.Server, promotionStore *gorm.PromotionStore, graphStore *graph.Store, nodesStore *graph.NodesStore, auditStore *gorm.AuditStore) {
+func wireVnextStores(mcpServer *mcp.Server, promotionStore *gorm.PromotionStore, graphStore *graph.Store, nodesStore *graph.NodesStore, auditStore *gorm.AuditStore, continuitySlotStores ...*gorm.ContinuitySlotStore) {
 	mcpServer.SetPromotionStore(promotionStore)
 	mcpServer.SetGraphStore(graphStore)
 	mcpServer.SetNodesStore(nodesStore)
 	mcpServer.SetAuditStore(auditStore)
+	if len(continuitySlotStores) > 0 {
+		mcpServer.SetContinuitySlotStore(continuitySlotStores[0])
+	}
 }
 
 // wireVnextF wires the TG5 write-lint orchestrator into the MCP server.
