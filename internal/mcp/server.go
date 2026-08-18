@@ -45,6 +45,7 @@ type Server struct {
 	embeddingStore                *embedding.Store
 	rerankClient                  *reranking.Client
 	memoryStore                   *gorm.MemoryStore
+	continuitySlotStore           *gorm.ContinuitySlotStore
 	metaMemoryIndex               metaMemoryIndex
 	hintQueue                     cognitivecore.HintQueue
 	stateStore                    statePlane
@@ -145,6 +146,11 @@ func (s *Server) SetIssueStore(is *gorm.IssueStore) {
 // SetMemoryStore sets the memory store for the memories table (US3 Commit C).
 func (s *Server) SetMemoryStore(ms *gorm.MemoryStore) {
 	s.memoryStore = ms
+}
+
+// SetContinuitySlotStore wires the project continuity designation store.
+func (s *Server) SetContinuitySlotStore(store *gorm.ContinuitySlotStore) {
+	s.continuitySlotStore = store
 }
 
 // SetMetaMemoryIndex wires the content-free S2 meta-memory query seam.
@@ -969,6 +975,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	if s.memoryStore != nil {
 		tools = append(tools, recallMemoryTool())
 	}
+	if continuitySlotEnabled() && s.memoryStore != nil && s.continuitySlotStore != nil && s.auditStore != nil {
+		tools = append(tools, continuitySlotTool())
+	}
 	if s6OutcomeEnabledFromEnv() && s.effectiveMemorySignificanceUpdater() != nil {
 		tools = append(tools, rateMemorySignificanceTool())
 	}
@@ -1372,6 +1381,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleCheckSystemHealth(ctx)
 	case "lifecycle":
 		return s.handleLifecycle(ctx, args)
+	case "continuity_slot":
+		return s.handleContinuitySlot(ctx, args)
 	case "graph":
 		return s.handleGraph(ctx, args)
 	case "ingest":

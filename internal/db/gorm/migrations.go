@@ -4790,6 +4790,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		attentionEventsMigration158(),
 		ruleGovernanceEscapeConstraintsMigration159(),
 		issueCreatorKeycardMigration160(),
+		continuitySlotMigration161(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -4922,6 +4923,49 @@ func attentionEventsMigration158() *gormigrate.Migration {
 				return fmt.Errorf("migration 158 rollback: %w", err)
 			}
 			return nil
+		},
+	}
+}
+
+func continuitySlotMigration161() *gormigrate.Migration {
+	return &gormigrate.Migration{
+		ID: "161_project_continuity_slots",
+		Migrate: func(tx *gorm.DB) error {
+			for _, stmt := range []string{
+				`CREATE TABLE IF NOT EXISTS project_continuity_slots (
+					project TEXT PRIMARY KEY,
+					memory_id BIGINT NOT NULL REFERENCES memories(id) ON DELETE RESTRICT,
+					expires_at TIMESTAMPTZ NOT NULL,
+					authority_domain TEXT NOT NULL,
+					authority_owner_principal TEXT NOT NULL,
+					authority_owner_principal_kind TEXT NOT NULL,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+					CONSTRAINT project_continuity_slots_project_not_blank CHECK (btrim(project) <> '')
+				)`,
+				`CREATE INDEX IF NOT EXISTS idx_project_continuity_slots_memory_id ON project_continuity_slots (memory_id)`,
+				`CREATE INDEX IF NOT EXISTS idx_project_continuity_slots_expires_at ON project_continuity_slots (expires_at)`,
+			} {
+				if err := tx.Exec(stmt).Error; err != nil {
+					return fmt.Errorf("migration 161: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Transaction(func(rollbackTx *gorm.DB) error {
+				var slotRows int64
+				if err := rollbackTx.Table("project_continuity_slots").Count(&slotRows).Error; err != nil {
+					return fmt.Errorf("migration 161 rollback preflight: %w", err)
+				}
+				if slotRows > 0 {
+					return fmt.Errorf("migration 161 rollback blocked: %d project_continuity_slots rows exist; clear slots before rollback", slotRows)
+				}
+				if err := rollbackTx.Exec(`DROP TABLE IF EXISTS project_continuity_slots`).Error; err != nil {
+					return fmt.Errorf("migration 161 rollback: %w", err)
+				}
+				return nil
+			})
 		},
 	}
 }

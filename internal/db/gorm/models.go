@@ -304,6 +304,21 @@ type Memory struct {
 
 func (Memory) TableName() string { return "memories" }
 
+// ContinuitySlot is the separately owned, one-per-project designation state.
+// Authority fields are server-derived snapshots used for later clear authorization.
+type ContinuitySlot struct {
+	CreatedAt                   time.Time `gorm:"column:created_at;type:timestamptz;not null;default:now()" json:"created_at"`
+	UpdatedAt                   time.Time `gorm:"column:updated_at;type:timestamptz;not null;default:now()" json:"updated_at"`
+	ExpiresAt                   time.Time `gorm:"column:expires_at;type:timestamptz;not null;index:idx_project_continuity_slots_expires_at" json:"expires_at"`
+	Project                     string    `gorm:"column:project;primaryKey;type:text" json:"project"`
+	AuthorityDomain             string    `gorm:"column:authority_domain;type:text;not null" json:"authority_domain"`
+	AuthorityOwnerPrincipal     string    `gorm:"column:authority_owner_principal;type:text;not null" json:"authority_owner_principal"`
+	AuthorityOwnerPrincipalKind string    `gorm:"column:authority_owner_principal_kind;type:text;not null" json:"authority_owner_principal_kind"`
+	MemoryID                    int64     `gorm:"column:memory_id;type:bigint;not null;index:idx_project_continuity_slots_memory_id" json:"memory_id"`
+}
+
+func (ContinuitySlot) TableName() string { return "project_continuity_slots" }
+
 // DomainOwner is the operator-managed registry row that decides who owns a
 // memory domain and whether cross-owner writes are allowed, warned, or rejected.
 type DomainOwner struct {

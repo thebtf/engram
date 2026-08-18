@@ -3,20 +3,24 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/writegate"
 	"github.com/thebtf/engram/pkg/models"
+	"gorm.io/gorm"
 )
 
 type correctionRequest struct {
 	SessionID   string `json:"session_id"`
 	Project     string `json:"project"`
 	UserMessage string `json:"user_message"`
+	actor       string
 }
 
 // handleCorrection processes user correction signals from the UserPromptSubmit hook.
@@ -33,6 +37,7 @@ func (s *Service) handleCorrection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.UserMessage = strings.TrimSpace(req.UserMessage)
+	req.actor = auditcontext.Actor(r.Context())
 	if req.Project == "" || req.UserMessage == "" {
 		http.Error(w, "project and user_message required", http.StatusBadRequest)
 		return
@@ -58,73 +63,50 @@ func (s *Service) handleCorrection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) processCorrectionAsync(req correctionRequest) {
-	ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
+	ctx := auditcontext.WithSourceSession(auditcontext.WithActor(s.ctx, req.actor), req.SessionID)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	s.initMu.RLock()
 	memStore := s.memoryStore
 	s.initMu.RUnlock()
-
 	if memStore == nil {
 		return
 	}
-
 	existing, err := memStore.List(ctx, req.Project, 100)
 	if err != nil {
 		log.Error().Err(err).Str("project", req.Project).Msg("correction: list failed")
 		return
 	}
-
 	gateResult := writegate.Check(ctx, req.UserMessage, existing)
 	if gateResult.SimilarExisting == nil || gateResult.MaxJaccard < 0.3 {
-		newMem := &models.Memory{
-			Project:       req.Project,
-			Content:       req.UserMessage,
-			SourceAgent:   "user_correction",
-			Tags:          []string{"user_correction"},
-			EpistemicType: "guidance",
-		}
-		// Correction always sets EpistemicType; use CreateWithLifecycle so the
-		// field is persisted without touching the plain Create path.
-		if _, createErr := memStore.CreateWithLifecycle(ctx, newMem); createErr != nil {
-			log.Error().Err(createErr).Msg("correction: create new memory failed")
-		} else {
-			log.Info().Str("project", req.Project).Msg("correction: stored as new memory (no similar found)")
+		newMem := &models.Memory{Project: req.Project, Content: req.UserMessage, SourceAgent: "user_correction", Tags: []string{"user_correction"}, EpistemicType: "guidance"}
+		if _, err := memStore.CreateWithLifecycle(ctx, newMem); err != nil {
+			log.Error().Err(err).Msg("correction: create new memory failed")
 		}
 		return
 	}
-
 	similarID := *gateResult.SimilarExisting
-	newMem := &models.Memory{
-		Project:       req.Project,
-		Content:       req.UserMessage,
-		SourceAgent:   "user_correction",
-		Tags:          []string{"user_correction", "supersedes"},
-		SupersedesID:  &similarID,
-		EpistemicType: "guidance",
-	}
-	created, createErr := memStore.CreateWithLifecycle(ctx, newMem)
-	if createErr != nil {
-		log.Error().Err(createErr).Int64("supersedes", similarID).Msg("correction: create superseding memory failed")
+	newMem := &models.Memory{Project: req.Project, Content: req.UserMessage, SourceAgent: "user_correction", Tags: []string{"user_correction", "supersedes"}, SupersedesID: &similarID, EpistemicType: "guidance"}
+	var created *models.Memory
+	now := time.Now().UTC()
+	err = memStore.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		created, err = memStore.CreateWithLifecycleTx(ctx, tx, newMem)
+		if err != nil {
+			return fmt.Errorf("create superseding memory: %w", err)
+		}
+		if err := memStore.MarkSupersededTx(ctx, tx, similarID, created.ID); err != nil {
+			return fmt.Errorf("mark superseded memory: %w", err)
+		}
+		if err := memStore.UpdateLifecycleFieldsTx(ctx, tx, similarID, map[string]any{"valid_until": now}); err != nil {
+			return fmt.Errorf("set superseded memory validity: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		log.Error().Err(err).Int64("old_memory_id", similarID).Msg("correction: supersede transaction failed")
 		return
 	}
-
-	now := time.Now().UTC()
-	if updateErr := memStore.UpdateLifecycleFields(ctx, similarID, map[string]any{
-		"superseded_by": created.ID,
-		"valid_until":   now,
-		"status":        "superseded",
-	}); updateErr != nil {
-		log.Error().Err(updateErr).
-			Int64("old_memory_id", similarID).
-			Int64("new_memory_id", created.ID).
-			Msg("correction: mark superseded failed — new memory created but old not marked; manual reconciliation may be needed")
-	}
-
-	log.Info().
-		Int64("old_id", similarID).
-		Int64("new_id", created.ID).
-		Float64("jaccard", gateResult.MaxJaccard).
-		Str("project", req.Project).
-		Msg("correction: auto-superseded stale memory")
+	log.Info().Int64("old_id", similarID).Int64("new_id", created.ID).Float64("jaccard", gateResult.MaxJaccard).Str("project", req.Project).Msg("correction: auto-superseded stale memory")
 }
