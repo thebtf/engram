@@ -58,8 +58,8 @@ jobs:
             if ([string]::IsNullOrWhiteSpace($triggeringWorkflowName) -or $triggeringWorkflowHeadSHA -notmatch '^[0-9a-f]{40}$') {
               throw "workflow_run did not provide a valid triggering workflow name and head SHA: name=$triggeringWorkflowName head=$triggeringWorkflowHeadSHA"
             }
-            if ($commit -cne $triggeringWorkflowHeadSHA) {
-              throw "latest GitHub Release commit does not match workflow_run head: release=$commit event=$triggeringWorkflowHeadSHA"
+            if ($triggeringWorkflowName -eq 'Release' -and $commit -cne $triggeringWorkflowHeadSHA) {
+              throw "latest GitHub Release commit does not match Release workflow_run head: release=$commit event=$triggeringWorkflowHeadSHA"
             }
           }
           [ordered]@{
@@ -197,7 +197,8 @@ jobs:
             }
           }
 
-          $latest = foreach ($image in @($source.images)) {
+          $latest = [System.Collections.Generic.List[object]]::new()
+          foreach ($image in @($source.images)) {
             $target = "$($image.repository):latest"
             docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference
             if ($LASTEXITCODE -ne 0) { throw "could not promote $($image.immutable_reference) to $target" }
@@ -207,11 +208,11 @@ jobs:
                 throw "latest readback differs from the official release for $target: $field"
               }
             }
-            $observed
+            $latest.Add($observed)
+            [ordered]@{ images = $latest } |
+              ConvertTo-Json -Depth 5 |
+              Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM
           }
-          [ordered]@{ images = @($latest) } |
-            ConvertTo-Json -Depth 5 |
-            Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM
 
       - name: Logout and erase the isolated registry credential directory
         if: always()
