@@ -1,0 +1,266 @@
+name: Promote Latest Release Images
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Release", "Docker Publish"]
+    types: [completed]
+permissions:
+  contents: read
+concurrency:
+  group: engram-latest-release-images
+  cancel-in-progress: false
+jobs:
+  promote-latest:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run')))
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REPOSITORY_NAME: ${{ github.repository }}
+    steps:
+      - name: Initialize isolated promotion paths
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dockerConfig = Join-Path $env:RUNNER_TEMP "engram-latest-promotion-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $receiptDir = Join-Path $env:RUNNER_TEMP "engram-latest-promotion-receipt-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          "DOCKER_CONFIG=$dockerConfig" | Add-Content -LiteralPath $env:GITHUB_ENV
+          "RECEIPT_DIR=$receiptDir" | Add-Content -LiteralPath $env:GITHUB_ENV
+          New-Item -ItemType Directory -Path $receiptDir -Force | Out-Null
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Resolve the official GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          TRIGGERING_WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          if ($env:GITHUB_EVENT_NAME -notin @('workflow_run', 'workflow_dispatch')) {
+            throw "unsupported event: $env:GITHUB_EVENT_NAME"
+          }
+          $tag = (gh api "repos/$env:REPOSITORY_NAME/releases/latest" --jq .tag_name).Trim()
+          if ($tag -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw "official GitHub Release tag is not a stable version: $tag"
+          }
+          $commit = (gh api "repos/$env:REPOSITORY_NAME/commits/$tag" --jq .sha).Trim()
+          if ($commit -notmatch '^[0-9a-f]{40}$') {
+            throw "official GitHub Release does not resolve to a commit: $commit"
+          }
+          $triggeringWorkflowName = $null
+          $triggeringWorkflowHeadSHA = $null
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_run') {
+            $triggeringWorkflowName = ([string]$env:TRIGGERING_WORKFLOW_NAME).Trim()
+            $triggeringWorkflowHeadSHA = ([string]$env:TRIGGERING_WORKFLOW_HEAD_SHA).Trim()
+            if ([string]::IsNullOrWhiteSpace($triggeringWorkflowName) -or $triggeringWorkflowHeadSHA -notmatch '^[0-9a-f]{40}$') {
+              throw "workflow_run did not provide a valid triggering workflow name and head SHA: name=$triggeringWorkflowName head=$triggeringWorkflowHeadSHA"
+            }
+            if ($triggeringWorkflowName -eq 'Release' -and $commit -cne $triggeringWorkflowHeadSHA) {
+              throw "latest GitHub Release commit does not match Release workflow_run head: release=$commit event=$triggeringWorkflowHeadSHA"
+            }
+          }
+          [ordered]@{
+            release_tag = $tag
+            source_commit = $commit
+            triggering_workflow_name = $triggeringWorkflowName
+            triggering_workflow_head_sha = $triggeringWorkflowHeadSHA
+          } |
+            ConvertTo-Json -Compress |
+            Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'release.json') -Encoding utf8NoBOM
+
+      - name: Wait for all public immutable release images before login
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $release = Get-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'release.json') -Raw | ConvertFrom-Json
+          $maxAttempts = 6
+          $retrySeconds = 10
+
+          function Get-Label {
+            param([Parameter(Mandatory)]$Labels, [Parameter(Mandatory)][string]$Name)
+            $property = $Labels.PSObject.Properties[$Name]
+            if ($null -eq $property) { return '' }
+            return [string]$property.Value
+          }
+
+          function Get-ImageIdentity {
+            param([Parameter(Mandatory)][string]$Reference)
+            $manifest = docker buildx imagetools inspect $Reference --format '{{json .Manifest}}' | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "could not inspect manifest for $Reference" }
+            $raw = docker buildx imagetools inspect $Reference --raw | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "could not inspect raw manifest for $Reference" }
+            $image = docker buildx imagetools inspect $Reference --format '{{json .Image}}' | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "could not inspect image configuration for $Reference" }
+            $manifestDigest = [string]$manifest.digest
+            $configDigest = [string]$raw.config.digest
+            $source = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.source'
+            $version = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.version'
+            $revision = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.revision'
+            if ($manifestDigest -notmatch '^sha256:[0-9a-f]{64}$' -or $configDigest -notmatch '^sha256:[0-9a-f]{64}$') {
+              throw "immutable image does not expose manifest/config identities: $Reference"
+            }
+            if ($source -cne 'https://github.com/thebtf/engram' -or $version -cne $release.release_tag -or $revision -cne $release.source_commit) {
+              throw "immutable image provenance labels do not match the official release: $Reference"
+            }
+            $repository = $Reference.Substring(0, $Reference.LastIndexOf(':'))
+            return [ordered]@{
+              reference = $Reference
+              repository = $repository
+              immutable_reference = "$repository@$manifestDigest"
+              manifest_digest = $manifestDigest
+              config_digest = $configDigest
+              source = $source
+              version = $version
+              revision = $revision
+            }
+          }
+
+          $repositories = @(
+            'ghcr.io/thebtf/engram',
+            'ghcr.io/thebtf/engram-operator-console',
+            'ghcr.io/thebtf/engram-postgres'
+          )
+          $sources = foreach ($repository in $repositories) {
+            $versionReference = "$repository`:$($release.release_tag)"
+            $commitReference = "$repository`:sha-$($release.source_commit)"
+            for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+              try {
+                $versionIdentity = Get-ImageIdentity -Reference $versionReference
+                $commitIdentity = Get-ImageIdentity -Reference $commitReference
+                foreach ($field in 'manifest_digest', 'config_digest') {
+                  if ([string]$versionIdentity.$field -cne [string]$commitIdentity.$field) {
+                    throw "release image references disagree: $versionReference $commitReference $field"
+                  }
+                }
+                $identity = [ordered]@{
+                  reference = $versionIdentity.reference
+                  repository = $versionIdentity.repository
+                  immutable_reference = $versionIdentity.immutable_reference
+                  commit_reference = $commitIdentity.reference
+                  manifest_digest = $versionIdentity.manifest_digest
+                  config_digest = $versionIdentity.config_digest
+                  source = $versionIdentity.source
+                  version = $versionIdentity.version
+                  revision = $versionIdentity.revision
+                }
+                break
+              } catch {
+                if ($attempt -eq $maxAttempts) { throw "official release images remained unavailable or inconsistent after $maxAttempts attempts: $versionReference $commitReference. $($_.Exception.Message)" }
+                Start-Sleep -Seconds $retrySeconds
+              }
+            }
+            $identity
+          }
+          [ordered]@{ release_tag = $release.release_tag; source_commit = $release.source_commit; images = @($sources) } |
+            ConvertTo-Json -Depth 5 |
+            Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'sources.json') -Encoding utf8NoBOM
+
+      - name: Login to GHCR only after immutable provenance inspection
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:GITHUB_TOKEN | docker login ghcr.io --username $env:GITHUB_ACTOR --password-stdin
+          if ($LASTEXITCODE -ne 0) { throw 'GHCR login failed' }
+
+      - name: Promote each official release image to latest and read it back
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $source = Get-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'sources.json') -Raw | ConvertFrom-Json
+
+          function Get-Label {
+            param([Parameter(Mandatory)]$Labels, [Parameter(Mandatory)][string]$Name)
+            $property = $Labels.PSObject.Properties[$Name]
+            if ($null -eq $property) { return '' }
+            return [string]$property.Value
+          }
+
+          function Get-ImageIdentity {
+            param([Parameter(Mandatory)][string]$Reference)
+            $manifest = docker buildx imagetools inspect $Reference --format '{{json .Manifest}}' | ConvertFrom-Json
+            $raw = docker buildx imagetools inspect $Reference --raw | ConvertFrom-Json
+            $image = docker buildx imagetools inspect $Reference --format '{{json .Image}}' | ConvertFrom-Json
+            return [ordered]@{
+              reference = $Reference
+              manifest_digest = [string]$manifest.digest
+              config_digest = [string]$raw.config.digest
+              source = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.source'
+              version = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.version'
+              revision = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.revision'
+            }
+          }
+
+          $latest = [System.Collections.Generic.List[object]]::new()
+          foreach ($image in @($source.images)) {
+            $target = "$($image.repository):latest"
+            docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference
+            if ($LASTEXITCODE -ne 0) { throw "could not promote $($image.immutable_reference) to $target" }
+            $observed = Get-ImageIdentity -Reference $target
+            foreach ($field in 'manifest_digest','config_digest','source','version','revision') {
+              if ([string]$observed.$field -cne [string]$image.$field) {
+                throw "latest readback differs from the official release for $target: $field"
+              }
+            }
+            $latest.Add($observed)
+            [ordered]@{ images = $latest } |
+              ConvertTo-Json -Depth 5 |
+              Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM
+          }
+
+      - name: Logout and erase the isolated registry credential directory
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $hadCredentialDirectory = Test-Path -LiteralPath $env:DOCKER_CONFIG
+          docker logout ghcr.io
+          $logoutExit = $LASTEXITCODE
+          if ($hadCredentialDirectory) {
+            Remove-Item -Force -Recurse -LiteralPath $env:DOCKER_CONFIG
+          }
+          if (Test-Path -LiteralPath $env:DOCKER_CONFIG) {
+            throw 'Docker credential directory still exists after erasure'
+          }
+          if ($logoutExit -ne 0 -and $hadCredentialDirectory) {
+            throw 'GHCR logout failed'
+          }
+
+      - name: Write latest-promotion receipt
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path $env:RECEIPT_DIR -Force | Out-Null
+          $releasePath = Join-Path $env:RECEIPT_DIR 'release.json'
+          $sourcesPath = Join-Path $env:RECEIPT_DIR 'sources.json'
+          $latestPath = Join-Path $env:RECEIPT_DIR 'latest.json'
+          $release = if (Test-Path -LiteralPath $releasePath) { Get-Content -LiteralPath $releasePath -Raw | ConvertFrom-Json } else { $null }
+          $sources = if (Test-Path -LiteralPath $sourcesPath) { Get-Content -LiteralPath $sourcesPath -Raw | ConvertFrom-Json } else { $null }
+          $latest = if (Test-Path -LiteralPath $latestPath) { Get-Content -LiteralPath $latestPath -Raw | ConvertFrom-Json } else { $null }
+          [ordered]@{
+            schema_version = 1
+            release_tag = if ($null -eq $release) { $null } else { $release.release_tag }
+            source_commit = if ($null -eq $release) { $null } else { $release.source_commit }
+            triggering_workflow_name = if ($null -eq $release) { $null } else { $release.triggering_workflow_name }
+            triggering_workflow_head_sha = if ($null -eq $release) { $null } else { $release.triggering_workflow_head_sha }
+            source_images = if ($null -eq $sources) { @() } else { @($sources.images) }
+            latest_images = if ($null -eq $latest) { @() } else { @($latest.images) }
+            rollout_claimed = $false
+          } | ConvertTo-Json -Depth 6 |
+            Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest-promotion-receipt.json') -Encoding utf8NoBOM
+
+      - name: Upload latest-promotion receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: latest-promotion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RECEIPT_DIR }}
+          if-no-files-found: error
+          retention-days: 90
