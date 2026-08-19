@@ -883,6 +883,20 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 			t.Fatalf("latest-only promoter lacks contract %q", required)
 		}
 	}
+	if strings.Contains(latest, "secrets.") || strings.Contains(latest, "PERSONAL_ACCESS_TOKEN") {
+		t.Fatal("latest promoter must not consume repository or external personal access-token secrets")
+	}
+	if !strings.Contains(latest, "GH_TOKEN: ${{ github.token }}") || !strings.Contains(latest, "GITHUB_TOKEN: ${{ github.token }}") {
+		t.Fatal("latest promoter must use the built-in GitHub token handoff for API and registry access")
+	}
+	repositoriesMatch := regexp.MustCompile(`(?s)\$repositories\s*=\s*@\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*'([^']+)'\s*\)`)
+	repositories := repositoriesMatch.FindStringSubmatch(latest)
+	if len(repositories) != 4 || repositories[1] != "ghcr.io/thebtf/engram" || repositories[2] != "ghcr.io/thebtf/engram-operator-console" || repositories[3] != "ghcr.io/thebtf/engram-postgres" {
+		t.Fatalf("latest promoter must enumerate exactly the three canonical repositories, got %v", repositories[1:])
+	}
+	if !strings.Contains(latest, "concurrency:\n  group: engram-latest-release-images\n  cancel-in-progress: false") {
+		t.Fatal("latest promoter must use the exact serialized concurrency contract")
+	}
 	for _, trigger := range []struct {
 		name, eventName, conclusion, workflow, workflowEvent string
 		allowed                                              bool
