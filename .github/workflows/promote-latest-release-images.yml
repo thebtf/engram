@@ -1,6 +1,5 @@
 name: Promote Latest Release Images
 on:
-  workflow_dispatch:
   workflow_run:
     workflows: ["Release", "Docker Publish"]
     types: [completed]
@@ -12,9 +11,10 @@ concurrency:
 jobs:
   promote-latest:
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run')))
+    if: github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run'))
     permissions:
       contents: read
+      actions: read
       packages: write
     env:
       REPOSITORY_NAME: ${{ github.repository }}
@@ -36,11 +36,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
           TRIGGERING_WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          TRIGGERING_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          if ($env:GITHUB_EVENT_NAME -notin @('workflow_run', 'workflow_dispatch')) {
+          if ($env:GITHUB_EVENT_NAME -ne 'workflow_run') {
             throw "unsupported event: $env:GITHUB_EVENT_NAME"
+          }
+          $triggeringWorkflowName = ([string]$env:TRIGGERING_WORKFLOW_NAME).Trim()
+          $triggeringWorkflowHeadSHA = ([string]$env:TRIGGERING_WORKFLOW_HEAD_SHA).Trim()
+          $triggeringWorkflowRunID = ([string]$env:TRIGGERING_WORKFLOW_RUN_ID).Trim()
+          if ([string]::IsNullOrWhiteSpace($triggeringWorkflowName) -or $triggeringWorkflowHeadSHA -notmatch '^[0-9a-f]{40}$' -or $triggeringWorkflowRunID -notmatch '^[1-9][0-9]*$') {
+            throw "workflow_run did not provide a valid triggering workflow name, head SHA, and run ID: name=$triggeringWorkflowName head=$triggeringWorkflowHeadSHA run=$triggeringWorkflowRunID"
+          }
+          $triggeringWorkflowJobConclusion = $null
+          if ($triggeringWorkflowName -eq 'Docker Publish') {
+            $jobPages = gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/jobs?per_page=100"
+            if ($LASTEXITCODE -ne 0) { throw "could not query jobs for triggering Docker Publish run: $triggeringWorkflowRunID" }
+            $publishJobs = @($jobPages | ConvertFrom-Json | ForEach-Object { $_.jobs } | Where-Object { $_.name -ceq 'publish-images' })
+            if ($publishJobs.Count -ne 1) { throw "triggering Docker Publish run must contain exactly one publish-images job: run=$triggeringWorkflowRunID count=$($publishJobs.Count)" }
+            $publishJob = $publishJobs[0]
+            if ([string]$publishJob.run_id -cne $triggeringWorkflowRunID -or [string]$publishJob.status -cne 'completed' -or [string]$publishJob.conclusion -cne 'success') {
+              throw "triggering Docker Publish publish-images job was not completed successfully: run=$triggeringWorkflowRunID job_run=$($publishJob.run_id) status=$($publishJob.status) conclusion=$($publishJob.conclusion)"
+            }
+            $triggeringWorkflowJobConclusion = [string]$publishJob.conclusion
           }
           $tag = (gh api "repos/$env:REPOSITORY_NAME/releases/latest" --jq .tag_name).Trim()
           if ($tag -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
@@ -50,23 +69,16 @@ jobs:
           if ($commit -notmatch '^[0-9a-f]{40}$') {
             throw "official GitHub Release does not resolve to a commit: $commit"
           }
-          $triggeringWorkflowName = $null
-          $triggeringWorkflowHeadSHA = $null
-          if ($env:GITHUB_EVENT_NAME -eq 'workflow_run') {
-            $triggeringWorkflowName = ([string]$env:TRIGGERING_WORKFLOW_NAME).Trim()
-            $triggeringWorkflowHeadSHA = ([string]$env:TRIGGERING_WORKFLOW_HEAD_SHA).Trim()
-            if ([string]::IsNullOrWhiteSpace($triggeringWorkflowName) -or $triggeringWorkflowHeadSHA -notmatch '^[0-9a-f]{40}$') {
-              throw "workflow_run did not provide a valid triggering workflow name and head SHA: name=$triggeringWorkflowName head=$triggeringWorkflowHeadSHA"
-            }
-            if ($triggeringWorkflowName -eq 'Release' -and $commit -cne $triggeringWorkflowHeadSHA) {
-              throw "latest GitHub Release commit does not match Release workflow_run head: release=$commit event=$triggeringWorkflowHeadSHA"
-            }
+          if ($triggeringWorkflowName -eq 'Release' -and $commit -cne $triggeringWorkflowHeadSHA) {
+            throw "latest GitHub Release commit does not match Release workflow_run head: release=$commit event=$triggeringWorkflowHeadSHA"
           }
           [ordered]@{
             release_tag = $tag
             source_commit = $commit
             triggering_workflow_name = $triggeringWorkflowName
             triggering_workflow_head_sha = $triggeringWorkflowHeadSHA
+            triggering_workflow_run_id = $triggeringWorkflowRunID
+            triggering_workflow_job_conclusion = $triggeringWorkflowJobConclusion
           } |
             ConvertTo-Json -Compress |
             Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'release.json') -Encoding utf8NoBOM
@@ -250,6 +262,8 @@ jobs:
             source_commit = if ($null -eq $release) { $null } else { $release.source_commit }
             triggering_workflow_name = if ($null -eq $release) { $null } else { $release.triggering_workflow_name }
             triggering_workflow_head_sha = if ($null -eq $release) { $null } else { $release.triggering_workflow_head_sha }
+            triggering_workflow_run_id = if ($null -eq $release) { $null } else { $release.triggering_workflow_run_id }
+            triggering_workflow_job_conclusion = if ($null -eq $release) { $null } else { $release.triggering_workflow_job_conclusion }
             source_images = if ($null -eq $sources) { @() } else { @($sources.images) }
             latest_images = if ($null -eq $latest) { @() } else { @($latest.images) }
             rollout_claimed = $false
