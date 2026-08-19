@@ -37,7 +37,7 @@
     "expected_head_blobs": [
       {
         "path": ".github/workflows/promote-latest-release-images.yml",
-        "git_blob": "5c12788d8af916c677e79a6ccb5640bf74c16832"
+        "git_blob": "7209723a974000c6a8325c18169af09840ad05d2"
       }
     ]
   }
