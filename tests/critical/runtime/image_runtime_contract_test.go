@@ -868,11 +868,13 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 
 	latest := readFile(t, latestWorkflowPath)
 	for _, required := range []string{
-		"name: Promote Latest Release Images", "workflow_dispatch:", "workflow_run:", "workflows: [\"Docker Publish\"]", "types: [completed]",
-		"group: engram-latest-release-images", "cancel-in-progress: false", "contents: read", "packages: write",
-		"gh api \"repos/$env:REPOSITORY_NAME/releases/latest\" --jq .tag_name", "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+		"name: Promote Latest Release Images", "workflow_dispatch:", "release:\n    types: [published]",
+		"RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}", "if ($env:GITHUB_EVENT_NAME -eq 'release')", "elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch')",
+		"gh api \"repos/$env:REPOSITORY_NAME/releases/latest\" --jq .tag_name", "if ($latestTag -cne $tag)", "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+		"$maxAttempts = 6", "for ($attempt = 1; $attempt -le $maxAttempts; $attempt++)", "Start-Sleep -Seconds $retrySeconds",
 		"ghcr.io/thebtf/engram", "ghcr.io/thebtf/engram-operator-console", "ghcr.io/thebtf/engram-postgres",
 		"org.opencontainers.image.source", "org.opencontainers.image.version", "docker login ghcr.io", "docker buildx imagetools create --prefer-index=false",
+		"immutable_reference = \"$repository@$manifestDigest\"", "docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference",
 		"$target = \"$($image.repository):latest\"", "docker logout ghcr.io", "latest-promotion-receipt.json", "source_commit", "rollout_claimed = $false",
 	} {
 		if !strings.Contains(latest, required) {
@@ -888,15 +890,18 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	if got := strings.Count(latest, "docker buildx imagetools create --prefer-index=false"); got != 1 {
 		t.Fatalf("latest promoter must have exactly one registry-native promotion seam, got %d", got)
 	}
-	inspectIndex := strings.Index(latest, "Inspect all public immutable release images before login")
+	waitIndex := strings.Index(latest, "Wait for all public immutable release images before login")
 	loginIndex := strings.Index(latest, "Login to GHCR only after immutable provenance inspection")
 	promoteIndex := strings.Index(latest, "Promote each official release image to latest and read it back")
-	if !(inspectIndex >= 0 && inspectIndex < loginIndex && loginIndex < promoteIndex) {
-		t.Fatalf("latest promoter checks public immutable provenance before login and writes only afterwards: inspect=%d login=%d promote=%d", inspectIndex, loginIndex, promoteIndex)
+	if !(waitIndex >= 0 && waitIndex < loginIndex && loginIndex < promoteIndex) {
+		t.Fatalf("latest promoter waits for exact official images before login and writes only afterwards: wait=%d login=%d promote=%d", waitIndex, loginIndex, promoteIndex)
 	}
-	for _, forbidden := range []string{"actions/checkout@", "docker/login-action@", "docker build ", "docker buildx build", "docker buildx bake", "docker push", ":main", "ssh", "production"} {
+	for _, forbidden := range []string{
+		"workflow_run:", "Docker Publish", "github.event.workflow_run", "docker buildx imagetools create --prefer-index=false --tag $target $image.reference",
+		"actions/checkout@", "docker/login-action@", "docker build ", "docker buildx build", "docker buildx bake", "docker push", ":main", "ssh", "production",
+	} {
 		if strings.Contains(latest, forbidden) {
-			t.Fatalf("latest promoter exposes a forbidden source, build, or production surface %q", forbidden)
+			t.Fatalf("latest promoter exposes a forbidden trigger, mutable source, build, or production surface %q", forbidden)
 		}
 	}
 }

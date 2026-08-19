@@ -1,9 +1,8 @@
 name: Promote Latest Release Images
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows: ["Docker Publish"]
-    types: [completed]
+  release:
+    types: [published]
 permissions:
   contents: read
 concurrency:
@@ -11,7 +10,6 @@ concurrency:
   cancel-in-progress: false
 jobs:
   promote-latest:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -20,10 +18,11 @@ jobs:
       REPOSITORY_NAME: ${{ github.repository }}
       DOCKER_CONFIG: ${{ runner.temp }}/engram-latest-promotion-${{ github.run_id }}-${{ github.run_attempt }}
       RECEIPT_DIR: ${{ runner.temp }}/engram-latest-promotion-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+      RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: Resolve the latest official GitHub Release
+      - name: Resolve the official GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -31,24 +30,35 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
           New-Item -ItemType Directory -Path $env:RECEIPT_DIR -Force | Out-Null
-          $tag = (gh api "repos/$env:REPOSITORY_NAME/releases/latest" --jq .tag_name).Trim()
+          if ($env:GITHUB_EVENT_NAME -eq 'release') {
+            $tag = ([string]$env:RELEASE_EVENT_TAG).Trim()
+            if ([string]::IsNullOrWhiteSpace($tag)) { throw 'release event did not provide a tag' }
+            $latestTag = (gh api "repos/$env:REPOSITORY_NAME/releases/latest" --jq .tag_name).Trim()
+            if ($latestTag -cne $tag) { throw "published release tag does not match the latest GitHub Release: event=$tag latest=$latestTag" }
+          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            $tag = (gh api "repos/$env:REPOSITORY_NAME/releases/latest" --jq .tag_name).Trim()
+          } else {
+            throw "unsupported event: $env:GITHUB_EVENT_NAME"
+          }
           if ($tag -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
-            throw "latest GitHub Release tag is not a stable version: $tag"
+            throw "official GitHub Release tag is not a stable version: $tag"
           }
           $commit = (gh api "repos/$env:REPOSITORY_NAME/commits/$tag" --jq .sha).Trim()
           if ($commit -notmatch '^[0-9a-f]{40}$') {
-            throw "latest GitHub Release does not resolve to a commit: $commit"
+            throw "official GitHub Release does not resolve to a commit: $commit"
           }
           [ordered]@{ release_tag = $tag; source_commit = $commit } |
             ConvertTo-Json -Compress |
             Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'release.json') -Encoding utf8NoBOM
 
-      - name: Inspect all public immutable release images before login
+      - name: Wait for all public immutable release images before login
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
           $release = Get-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'release.json') -Raw | ConvertFrom-Json
+          $maxAttempts = 6
+          $retrySeconds = 10
 
           function Get-Label {
             param([Parameter(Mandatory)]$Labels, [Parameter(Mandatory)][string]$Name)
@@ -60,8 +70,11 @@ jobs:
           function Get-ImageIdentity {
             param([Parameter(Mandatory)][string]$Reference)
             $manifest = docker buildx imagetools inspect $Reference --format '{{json .Manifest}}' | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "could not inspect manifest for $Reference" }
             $raw = docker buildx imagetools inspect $Reference --raw | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "could not inspect raw manifest for $Reference" }
             $image = docker buildx imagetools inspect $Reference --format '{{json .Image}}' | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "could not inspect image configuration for $Reference" }
             $manifestDigest = [string]$manifest.digest
             $configDigest = [string]$raw.config.digest
             $source = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.source'
@@ -72,9 +85,11 @@ jobs:
             if ($source -cne 'https://github.com/thebtf/engram' -or $version -cne $release.release_tag) {
               throw "immutable image provenance labels do not match the official release: $Reference"
             }
+            $repository = $Reference.Substring(0, $Reference.LastIndexOf(':'))
             return [ordered]@{
               reference = $Reference
-              repository = $Reference.Substring(0, $Reference.LastIndexOf(':'))
+              repository = $repository
+              immutable_reference = "$repository@$manifestDigest"
               manifest_digest = $manifestDigest
               config_digest = $configDigest
               source = $source
@@ -82,11 +97,23 @@ jobs:
             }
           }
 
-          $sources = @(
+          $releaseRefs = @(
             'ghcr.io/thebtf/engram',
             'ghcr.io/thebtf/engram-operator-console',
             'ghcr.io/thebtf/engram-postgres'
-          ) | ForEach-Object { Get-ImageIdentity -Reference "$_`:$($release.release_tag)" }
+          ) | ForEach-Object { "$_`:$($release.release_tag)" }
+          $sources = foreach ($reference in $releaseRefs) {
+            for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+              try {
+                $identity = Get-ImageIdentity -Reference $reference
+                break
+              } catch {
+                if ($attempt -eq $maxAttempts) { throw "official release image remained unavailable after $maxAttempts attempts: $reference. $($_.Exception.Message)" }
+                Start-Sleep -Seconds $retrySeconds
+              }
+            }
+            $identity
+          }
           [ordered]@{ release_tag = $release.release_tag; source_commit = $release.source_commit; images = @($sources) } |
             ConvertTo-Json -Depth 5 |
             Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'sources.json') -Encoding utf8NoBOM
@@ -130,8 +157,8 @@ jobs:
 
           $latest = foreach ($image in @($source.images)) {
             $target = "$($image.repository):latest"
-            docker buildx imagetools create --prefer-index=false --tag $target $image.reference
-            if ($LASTEXITCODE -ne 0) { throw "could not promote $($image.reference) to $target" }
+            docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference
+            if ($LASTEXITCODE -ne 0) { throw "could not promote $($image.immutable_reference) to $target" }
             $observed = Get-ImageIdentity -Reference $target
             foreach ($field in 'manifest_digest','config_digest','source','version') {
               if ([string]$observed.$field -cne [string]$image.$field) {
