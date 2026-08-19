@@ -367,7 +367,8 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 	)
 	verificationPath := filepath.Join(repo, ".github", "workflows", "docker.yaml")
 	publisherPath := filepath.Join(repo, ".github", "workflows", "docker-publish.yml")
-	for _, workflowPath := range []string{verificationPath, publisherPath} {
+	latestPromotionPath := filepath.Join(repo, ".github", "workflows", "promote-latest-release-images.yml")
+	for _, workflowPath := range []string{verificationPath, publisherPath, latestPromotionPath} {
 		content, err := os.ReadFile(workflowPath)
 		if err != nil {
 			t.Fatal(err)
@@ -660,8 +661,8 @@ func verifyDockerReleaseRefFreshnessGuard(t *testing.T, repo string) {
 		testPublishedImageScanGate(t, repo)
 	})
 
-	t.Run("repository controlled single writer", func(t *testing.T) {
-		testRepositorySingleWriter(t, repo)
+	t.Run("repository controlled release and latest writers", func(t *testing.T) {
+		testRepositoryReleaseAndLatestWriters(t, repo)
 	})
 
 	t.Run("canonical release version and hostile Git refs", func(t *testing.T) {
@@ -732,11 +733,13 @@ func testWorkflowRunPublisherSelector(t *testing.T, publisher, repo string) {
 	})
 }
 
-func testRepositorySingleWriter(t *testing.T, repo string) {
+func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	t.Helper()
-	allowedWorkflow := filepath.Clean(filepath.Join(repo, ".github", "workflows", "docker-publish.yml"))
+	releaseWorkflowPath := filepath.Clean(filepath.Join(repo, ".github", "workflows", "docker-publish.yml"))
+	latestWorkflowPath := filepath.Clean(filepath.Join(repo, ".github", "workflows", "promote-latest-release-images.yml"))
 	allowedScript := filepath.Clean(filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1"))
-	writePattern := regexp.MustCompile(`(?i)packages:\s*write|docker/login-action|docker\s+(?:push|buildx[^\n]*--push)|\bdocker\s+push\b|PERSONAL_ACCESS_TOKEN`)
+	allowedWriters := map[string]bool{releaseWorkflowPath: true, latestWorkflowPath: true}
+	writePattern := regexp.MustCompile(`(?i)packages:\s*write|docker/login-action|docker\s+(?:login|push|buildx[^\n]*--push)|\bdocker\s+push\b|PERSONAL_ACCESS_TOKEN`)
 
 	for _, root := range []string{filepath.Join(repo, ".github", "workflows"), filepath.Join(repo, "scripts")} {
 		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -754,7 +757,7 @@ func testRepositorySingleWriter(t *testing.T, repo string) {
 			if readErr != nil {
 				return readErr
 			}
-			if writePattern.Match(content) && filepath.Clean(path) != allowedWorkflow && filepath.Clean(path) != allowedScript {
+			if writePattern.Match(content) && !allowedWriters[filepath.Clean(path)] && filepath.Clean(path) != allowedScript {
 				t.Errorf("executable surface %s contains an undeclared registry write credential or command", path)
 			}
 			return nil
@@ -764,7 +767,7 @@ func testRepositorySingleWriter(t *testing.T, repo string) {
 		}
 	}
 
-	workflow := readFile(t, allowedWorkflow)
+	workflow := readFile(t, releaseWorkflowPath)
 	if got := strings.Count(workflow, "packages: write"); got != 1 {
 		t.Fatalf("release workflow must have exactly one packages:write grant, got %d", got)
 	}
@@ -772,10 +775,7 @@ func testRepositorySingleWriter(t *testing.T, repo string) {
 		t.Fatalf("release workflow must have exactly one registry login seam, got %d", got)
 	}
 	if got := strings.Count(workflow, "-Mode Publish"); got != 1 {
-		t.Fatalf("release workflow must invoke the sole publish mode exactly once, got %d", got)
-	}
-	if got := strings.Count(workflow, "packages: write"); got != 1 {
-		t.Fatalf("packages:write must exist in exactly one fresh runner job, got %d", got)
+		t.Fatalf("release workflow must invoke the sole immutable publish mode exactly once, got %d", got)
 	}
 	if got := strings.Count(workflow, "actions/upload-artifact@"); got != 2 {
 		t.Fatalf("release workflow must upload one bridge artifact and one post-logout evidence artifact, got %d", got)
@@ -862,7 +862,41 @@ func testRepositorySingleWriter(t *testing.T, repo string) {
 		"push-sent", "$plan.status = 'FAIL'", "Assert-PublicationDestinationRecord",
 	} {
 		if !strings.Contains(script, required) {
-			t.Fatalf("publication script lacks single-writer trust-boundary contract %q", required)
+			t.Fatalf("publication script lacks immutable-writer trust-boundary contract %q", required)
+		}
+	}
+
+	latest := readFile(t, latestWorkflowPath)
+	for _, required := range []string{
+		"name: Promote Latest Release Images", "workflow_dispatch:", "workflow_run:", "workflows: [\"Docker Publish\"]", "types: [completed]",
+		"group: engram-latest-release-images", "cancel-in-progress: false", "contents: read", "packages: write",
+		"gh api \"repos/$env:REPOSITORY_NAME/releases/latest\" --jq .tag_name", "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+		"ghcr.io/thebtf/engram", "ghcr.io/thebtf/engram-operator-console", "ghcr.io/thebtf/engram-postgres",
+		"org.opencontainers.image.source", "org.opencontainers.image.version", "docker login ghcr.io", "docker buildx imagetools create --prefer-index=false",
+		"$target = \"$($image.repository):latest\"", "docker logout ghcr.io", "latest-promotion-receipt.json", "source_commit", "rollout_claimed = $false",
+	} {
+		if !strings.Contains(latest, required) {
+			t.Fatalf("latest-only promoter lacks contract %q", required)
+		}
+	}
+	if got := strings.Count(latest, "packages: write"); got != 1 {
+		t.Fatalf("latest promoter must have exactly one packages:write grant, got %d", got)
+	}
+	if got := strings.Count(latest, "docker login ghcr.io"); got != 1 {
+		t.Fatalf("latest promoter must have exactly one registry login, got %d", got)
+	}
+	if got := strings.Count(latest, "docker buildx imagetools create --prefer-index=false"); got != 1 {
+		t.Fatalf("latest promoter must have exactly one registry-native promotion seam, got %d", got)
+	}
+	inspectIndex := strings.Index(latest, "Inspect all public immutable release images before login")
+	loginIndex := strings.Index(latest, "Login to GHCR only after immutable provenance inspection")
+	promoteIndex := strings.Index(latest, "Promote each official release image to latest and read it back")
+	if !(inspectIndex >= 0 && inspectIndex < loginIndex && loginIndex < promoteIndex) {
+		t.Fatalf("latest promoter checks public immutable provenance before login and writes only afterwards: inspect=%d login=%d promote=%d", inspectIndex, loginIndex, promoteIndex)
+	}
+	for _, forbidden := range []string{"actions/checkout@", "docker/login-action@", "docker build ", "docker buildx build", "docker buildx bake", "docker push", ":main", "ssh", "production"} {
+		if strings.Contains(latest, forbidden) {
+			t.Fatalf("latest promoter exposes a forbidden source, build, or production surface %q", forbidden)
 		}
 	}
 }

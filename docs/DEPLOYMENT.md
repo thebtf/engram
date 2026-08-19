@@ -122,8 +122,8 @@ The workflow validates this operator-managed configuration live before release;
 it does not create or weaken repository rules.
 
 GitHub Container Registry does not provide this project with an atomic tag CAS
-contract. Engram therefore uses a repository-controlled single-writer model.
-The default-branch publisher uses two fresh runners:
+contract. Engram therefore separates immutable release publication from the
+`latest`-only promotion authority. The default-branch publisher uses two fresh runners:
 
 1. `prepare-release` has only `contents: read`. Trusted default-branch code
    validates the event/tag/rulesets, checks out the exact candidate without
@@ -141,6 +141,12 @@ The default-branch publisher uses two fresh runners:
    absent exact identities, reads back all six, logs out, removes the isolated
    Docker credential directory, validates the exact evidence envelope, and
    only then uploads publication evidence.
+
+4. `Promote Latest Release Images` is the only `latest` writer. It resolves the
+   latest stable GitHub Release, verifies each public `vX.Y.Z` image's OCI
+   source/version labels and manifest/config identities before login, then copies
+   only those identities to `latest` and reads them back. It never builds an image
+   or claims a production rollout.
 
 A package administrator or external PAT can still mutate package state outside
 the repository workflow; that is an explicit operational trust boundary and
