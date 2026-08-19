@@ -937,7 +937,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		t.Fatal("latest promoter must bind and validate the triggering workflow head")
 	}
 	for _, forbidden := range []string{
-		"release:\n", "github.event.release", "actions/checkout@", "docker/login-action@", "docker build ", "docker buildx build", "docker buildx bake", "docker push", ":main", "ssh", "production",
+		"release:\n", "github.event.release", "actions/checkout@", "docker/login-action@", "docker build ", "docker buildx build", "docker buildx bake", "docker push", "docker manifest create", "docker manifest push", "oras copy", "oras push", "skopeo copy", "crane copy", "crane push", ":main", "ssh", "production",
 	} {
 		if strings.Contains(latest, forbidden) {
 			t.Fatalf("latest promoter exposes a forbidden trigger, mutable source, build, or production surface %q", forbidden)
