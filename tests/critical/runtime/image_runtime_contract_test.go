@@ -928,9 +928,31 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	if !(waitIndex >= 0 && waitIndex < loginIndex && loginIndex < promoteIndex) {
 		t.Fatalf("latest promoter waits for exact official images before login and writes only afterwards: wait=%d login=%d promote=%d", waitIndex, loginIndex, promoteIndex)
 	}
-	releaseHeadGuardIndex := strings.Index(latest, "if ($commit -cne $triggeringWorkflowHeadSHA)")
+	releaseHeadGuard := "if ($triggeringWorkflowName -eq 'Release' -and $commit -cne $triggeringWorkflowHeadSHA)"
+	releaseHeadGuardIndex := strings.Index(latest, releaseHeadGuard)
 	if releaseHeadGuardIndex < 0 || releaseHeadGuardIndex >= loginIndex {
-		t.Fatal("latest promoter must reject a workflow_run whose head differs from the latest release commit before registry login")
+		t.Fatal("latest promoter must reject only a Release workflow_run whose head differs from the latest release commit before registry login")
+	}
+	if strings.Contains(latest, "if ($commit -cne $triggeringWorkflowHeadSHA)") {
+		t.Fatal("latest promoter must not apply the Release head check to Docker Publish")
+	}
+	for _, required := range []string{
+		"gh api \"repos/$env:REPOSITORY_NAME/releases/latest\" --jq .tag_name",
+		"$commitReference = \"$repository`:sha-$($release.source_commit)\"",
+		"foreach ($field in 'manifest_digest', 'config_digest')", "release image references disagree",
+	} {
+		index := strings.Index(latest, required)
+		if index < 0 || index >= loginIndex {
+			t.Fatalf("latest promoter must validate Docker Publish through latest-release v/sha OCI equality before registry login: %q", required)
+		}
+	}
+	promotionReceipt := "" +
+		"            $latest.Add($observed)\n" +
+		"            [ordered]@{ images = $latest } |\n" +
+		"              ConvertTo-Json -Depth 5 |\n" +
+		"              Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'latest.json') -Encoding utf8NoBOM"
+	if !strings.Contains(latest, "$latest = [System.Collections.Generic.List[object]]::new()") || !strings.Contains(latest, promotionReceipt) {
+		t.Fatal("latest promoter must write latest.json after each successful promotion so the always receipt retains partial success")
 	}
 	if !strings.Contains(latest, "TRIGGERING_WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}") ||
 		!strings.Contains(latest, "if ($env:GITHUB_EVENT_NAME -eq 'workflow_run')") {
