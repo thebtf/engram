@@ -1,5 +1,7 @@
 name: Promote Latest Release Images
 on:
+  repository_dispatch:
+    types: [promote-latest-release-images]
   workflow_run:
     workflows: ["Release", "Docker Publish"]
     types: [completed]
@@ -11,7 +13,7 @@ concurrency:
 jobs:
   promote-latest:
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run'))
+    if: github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run')))
     permissions:
       contents: read
       actions: read
@@ -40,26 +42,30 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          if ($env:GITHUB_EVENT_NAME -ne 'workflow_run') {
-            throw "unsupported event: $env:GITHUB_EVENT_NAME"
-          }
-          $triggeringWorkflowName = ([string]$env:TRIGGERING_WORKFLOW_NAME).Trim()
-          $triggeringWorkflowHeadSHA = ([string]$env:TRIGGERING_WORKFLOW_HEAD_SHA).Trim()
-          $triggeringWorkflowRunID = ([string]$env:TRIGGERING_WORKFLOW_RUN_ID).Trim()
-          if ([string]::IsNullOrWhiteSpace($triggeringWorkflowName) -or $triggeringWorkflowHeadSHA -notmatch '^[0-9a-f]{40}$' -or $triggeringWorkflowRunID -notmatch '^[1-9][0-9]*$') {
-            throw "workflow_run did not provide a valid triggering workflow name, head SHA, and run ID: name=$triggeringWorkflowName head=$triggeringWorkflowHeadSHA run=$triggeringWorkflowRunID"
-          }
+          $triggeringWorkflowName = $env:GITHUB_EVENT_NAME
+          $triggeringWorkflowHeadSHA = $null
+          $triggeringWorkflowRunID = $null
           $triggeringWorkflowJobConclusion = $null
-          if ($triggeringWorkflowName -eq 'Docker Publish') {
-            $jobPages = gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/jobs?per_page=100"
-            if ($LASTEXITCODE -ne 0) { throw "could not query jobs for triggering Docker Publish run: $triggeringWorkflowRunID" }
-            $publishJobs = @($jobPages | ConvertFrom-Json | ForEach-Object { $_.jobs } | Where-Object { $_.name -ceq 'publish-images' })
-            if ($publishJobs.Count -ne 1) { throw "triggering Docker Publish run must contain exactly one publish-images job: run=$triggeringWorkflowRunID count=$($publishJobs.Count)" }
-            $publishJob = $publishJobs[0]
-            if ([string]$publishJob.run_id -cne $triggeringWorkflowRunID -or [string]$publishJob.status -cne 'completed' -or [string]$publishJob.conclusion -cne 'success') {
-              throw "triggering Docker Publish publish-images job was not completed successfully: run=$triggeringWorkflowRunID job_run=$($publishJob.run_id) status=$($publishJob.status) conclusion=$($publishJob.conclusion)"
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_run') {
+            $triggeringWorkflowName = ([string]$env:TRIGGERING_WORKFLOW_NAME).Trim()
+            $triggeringWorkflowHeadSHA = ([string]$env:TRIGGERING_WORKFLOW_HEAD_SHA).Trim()
+            $triggeringWorkflowRunID = ([string]$env:TRIGGERING_WORKFLOW_RUN_ID).Trim()
+            if ([string]::IsNullOrWhiteSpace($triggeringWorkflowName) -or $triggeringWorkflowHeadSHA -notmatch '^[0-9a-f]{40}$' -or $triggeringWorkflowRunID -notmatch '^[1-9][0-9]*$') {
+              throw "workflow_run did not provide a valid triggering workflow name, head SHA, and run ID: name=$triggeringWorkflowName head=$triggeringWorkflowHeadSHA run=$triggeringWorkflowRunID"
             }
-            $triggeringWorkflowJobConclusion = [string]$publishJob.conclusion
+            if ($triggeringWorkflowName -eq 'Docker Publish') {
+              $jobPages = gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/jobs?per_page=100"
+              if ($LASTEXITCODE -ne 0) { throw "could not query jobs for triggering Docker Publish run: $triggeringWorkflowRunID" }
+              $publishJobs = @($jobPages | ConvertFrom-Json | ForEach-Object { $_.jobs } | Where-Object { $_.name -ceq 'publish-images' })
+              if ($publishJobs.Count -ne 1) { throw "triggering Docker Publish run must contain exactly one publish-images job: run=$triggeringWorkflowRunID count=$($publishJobs.Count)" }
+              $publishJob = $publishJobs[0]
+              if ([string]$publishJob.run_id -cne $triggeringWorkflowRunID -or [string]$publishJob.status -cne 'completed' -or [string]$publishJob.conclusion -cne 'success') {
+                throw "triggering Docker Publish publish-images job was not completed successfully: run=$triggeringWorkflowRunID job_run=$($publishJob.run_id) status=$($publishJob.status) conclusion=$($publishJob.conclusion)"
+              }
+              $triggeringWorkflowJobConclusion = [string]$publishJob.conclusion
+            }
+          } elseif ($env:GITHUB_EVENT_NAME -cne 'repository_dispatch') {
+            throw "unsupported event: $env:GITHUB_EVENT_NAME"
           }
           $tag = (gh api "repos/$env:REPOSITORY_NAME/releases/latest" --jq .tag_name).Trim()
           if ($tag -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
@@ -73,6 +79,7 @@ jobs:
             throw "latest GitHub Release commit does not match Release workflow_run head: release=$commit event=$triggeringWorkflowHeadSHA"
           }
           [ordered]@{
+            triggering_event = $env:GITHUB_EVENT_NAME
             release_tag = $tag
             source_commit = $commit
             triggering_workflow_name = $triggeringWorkflowName
