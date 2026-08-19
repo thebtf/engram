@@ -142,11 +142,17 @@ contract. Engram therefore separates immutable release publication from the
    Docker credential directory, validates the exact evidence envelope, and
    only then uploads publication evidence.
 
-4. `Promote Latest Release Images` is the only `latest` writer. It resolves the
-   latest stable GitHub Release, verifies each public `vX.Y.Z` image's OCI
-   source/version labels and manifest/config identities before login, then copies
-   only those identities to `latest` and reads them back. It never builds an image
-   or claims a production rollout.
+4. `Promote Latest Release Images` is the only `latest` writer. It has no
+   manual-dispatch path: it accepts only successful `Release`/`push` or `Docker
+   Publish`/`workflow_run` events. Before registry login, the Docker Publish
+   path paginates the GitHub REST jobs endpoint and requires exactly one
+   successful, completed `publish-images` job; the Release path requires its
+   event head to match the latest release commit. It then resolves the latest
+   stable GitHub Release, verifies each public `vX.Y.Z` image's OCI
+   source/version labels and manifest/config identities before login, copies
+   only those identities to `latest`, reads them back, and records partial
+   success after each promotion. It never builds an image or claims a
+   production rollout.
 
 A package administrator or external PAT can still mutate package state outside
 the repository workflow; that is an explicit operational trust boundary and

@@ -868,16 +868,17 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 
 	latest := readFile(t, latestWorkflowPath)
 	for _, required := range []string{
-		"name: Promote Latest Release Images", "workflow_dispatch:", "workflow_run:\n    workflows: [\"Release\", \"Docker Publish\"]\n    types: [completed]",
-		"if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run')))",
-		"Initialize isolated promotion paths", `"DOCKER_CONFIG=$dockerConfig" | Add-Content -LiteralPath $env:GITHUB_ENV`, `"RECEIPT_DIR=$receiptDir" | Add-Content -LiteralPath $env:GITHUB_ENV`, "path: ${{ env.RECEIPT_DIR }}",
+		"name: Promote Latest Release Images", "workflow_run:\n    workflows: [\"Release\", \"Docker Publish\"]\n    types: [completed]",
+		"if: github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run'))",
+		"contents: read", "actions: read", "packages: write", "Initialize isolated promotion paths", `"DOCKER_CONFIG=$dockerConfig" | Add-Content -LiteralPath $env:GITHUB_ENV`, `"RECEIPT_DIR=$receiptDir" | Add-Content -LiteralPath $env:GITHUB_ENV`, "path: ${{ env.RECEIPT_DIR }}",
 		"gh api \"repos/$env:REPOSITORY_NAME/releases/latest\" --jq .tag_name", "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+		"TRIGGERING_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}", `gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/jobs?per_page=100"`, "Where-Object { $_.name -ceq 'publish-images' }", "if ($publishJobs.Count -ne 1)", "status -cne 'completed'", "conclusion -cne 'success'",
 		"$maxAttempts = 6", "for ($attempt = 1; $attempt -le $maxAttempts; $attempt++)", "Start-Sleep -Seconds $retrySeconds",
 		"ghcr.io/thebtf/engram", "ghcr.io/thebtf/engram-operator-console", "ghcr.io/thebtf/engram-postgres",
 		"org.opencontainers.image.source", "org.opencontainers.image.version", "org.opencontainers.image.revision", "docker login ghcr.io", "docker buildx imagetools create --prefer-index=false",
 		"$commitReference = \"$repository`:sha-$($release.source_commit)\"", "foreach ($field in 'manifest_digest', 'config_digest')", "release image references disagree",
 		"immutable_reference = \"$repository@$manifestDigest\"", "commit_reference = $commitIdentity.reference", "docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference",
-		"$target = \"$($image.repository):latest\"", "'manifest_digest','config_digest','source','version','revision'", "docker logout ghcr.io", "latest-promotion-receipt.json", "source_commit", "triggering_workflow_name", "triggering_workflow_head_sha", "rollout_claimed = $false",
+		"$target = \"$($image.repository):latest\"", "'manifest_digest','config_digest','source','version','revision'", "docker logout ghcr.io", "latest-promotion-receipt.json", "source_commit", "triggering_workflow_name", "triggering_workflow_head_sha", "triggering_workflow_run_id", "triggering_workflow_job_conclusion", "rollout_claimed = $false",
 	} {
 		if !strings.Contains(latest, required) {
 			t.Fatalf("latest-only promoter lacks contract %q", required)
@@ -901,7 +902,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		name, eventName, conclusion, workflow, workflowEvent string
 		allowed                                              bool
 	}{
-		{"manual dispatch", "workflow_dispatch", "", "", "", true},
+		{"manual dispatch", "workflow_dispatch", "", "", "", false},
 		{"successful Release push", "workflow_run", "success", "Release", "push", true},
 		{"successful Docker Publish workflow run", "workflow_run", "success", "Docker Publish", "workflow_run", true},
 		{"failed Release push", "workflow_run", "failure", "Release", "push", false},
@@ -909,7 +910,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		{"Docker Publish push", "workflow_run", "success", "Docker Publish", "push", false},
 		{"other workflow push", "workflow_run", "success", "Docker", "push", false},
 	} {
-		got := trigger.eventName == "workflow_dispatch" || (trigger.conclusion == "success" && ((trigger.workflow == "Release" && trigger.workflowEvent == "push") || (trigger.workflow == "Docker Publish" && trigger.workflowEvent == "workflow_run")))
+		got := trigger.eventName == "workflow_run" && trigger.conclusion == "success" && ((trigger.workflow == "Release" && trigger.workflowEvent == "push") || (trigger.workflow == "Docker Publish" && trigger.workflowEvent == "workflow_run"))
 		if got != trigger.allowed {
 			t.Errorf("promotion guard accepts %s = %t, want %t", trigger.name, got, trigger.allowed)
 		}
@@ -933,14 +934,21 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	if got := strings.Count(latest, "docker login ghcr.io"); got != 1 {
 		t.Fatalf("latest promoter must have exactly one registry login, got %d", got)
 	}
-	if got := strings.Count(latest, "docker buildx imagetools create --prefer-index=false"); got != 1 {
-		t.Fatalf("latest promoter must have exactly one registry-native promotion seam, got %d", got)
+	if got := len(regexp.MustCompile(`(?m)^\s*docker buildx imagetools create\b`).FindAllString(latest, -1)); got != 1 {
+		t.Fatalf("latest promoter must have exactly one registry-native promotion invocation, got %d", got)
+	}
+	if got := strings.Count(latest, "docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference"); got != 1 {
+		t.Fatalf("latest promoter must use exactly one canonical registry-native promotion seam, got %d", got)
 	}
 	waitIndex := strings.Index(latest, "Wait for all public immutable release images before login")
 	loginIndex := strings.Index(latest, "Login to GHCR only after immutable provenance inspection")
 	promoteIndex := strings.Index(latest, "Promote each official release image to latest and read it back")
 	if !(waitIndex >= 0 && waitIndex < loginIndex && loginIndex < promoteIndex) {
 		t.Fatalf("latest promoter waits for exact official images before login and writes only afterwards: wait=%d login=%d promote=%d", waitIndex, loginIndex, promoteIndex)
+	}
+	publishJobsIndex := strings.Index(latest, `gh api --paginate --slurp "repos/$env:REPOSITORY_NAME/actions/runs/$triggeringWorkflowRunID/jobs?per_page=100"`)
+	if publishJobsIndex < 0 || publishJobsIndex >= loginIndex {
+		t.Fatal("latest promoter must REST-validate the triggering Docker Publish publish-images job before registry login")
 	}
 	releaseHeadGuard := "if ($triggeringWorkflowName -eq 'Release' -and $commit -cne $triggeringWorkflowHeadSHA)"
 	releaseHeadGuardIndex := strings.Index(latest, releaseHeadGuard)
@@ -949,6 +957,9 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	}
 	if strings.Contains(latest, "if ($commit -cne $triggeringWorkflowHeadSHA)") {
 		t.Fatal("latest promoter must not apply the Release head check to Docker Publish")
+	}
+	if strings.Contains(latest, "workflow_dispatch:") || strings.Contains(latest, "github.event_name == 'workflow_dispatch'") {
+		t.Fatal("latest promoter must not retain a manual-dispatch path")
 	}
 	for _, required := range []string{
 		"gh api \"repos/$env:REPOSITORY_NAME/releases/latest\" --jq .tag_name",
@@ -968,9 +979,18 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	if !strings.Contains(latest, "$latest = [System.Collections.Generic.List[object]]::new()") || !strings.Contains(latest, promotionReceipt) {
 		t.Fatal("latest promoter must write latest.json after each successful promotion so the always receipt retains partial success")
 	}
+	for _, step := range []string{
+		"Logout and erase the isolated registry credential directory",
+		"Write latest-promotion receipt",
+		"Upload latest-promotion receipt",
+	} {
+		if !regexp.MustCompile(`(?ms)- name: ` + regexp.QuoteMeta(step) + `\n\s+if: always\(\)`).MatchString(latest) {
+			t.Fatalf("latest promoter %q must always run", step)
+		}
+	}
 	if !strings.Contains(latest, "TRIGGERING_WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}") ||
-		!strings.Contains(latest, "if ($env:GITHUB_EVENT_NAME -eq 'workflow_run')") {
-		t.Fatal("latest promoter must bind and validate the triggering workflow head")
+		!strings.Contains(latest, "if ($env:GITHUB_EVENT_NAME -ne 'workflow_run')") {
+		t.Fatal("latest promoter must bind and require the triggering workflow head")
 	}
 	for _, forbidden := range []string{
 		"release:\n", "github.event.release", "actions/checkout@", "docker/login-action@", "docker build ", "docker buildx build", "docker buildx bake", "docker push", "docker manifest create", "docker manifest push", "oras copy", "oras push", "skopeo copy", "crane copy", "crane push", ":main", "ssh", "production",
