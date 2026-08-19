@@ -1,8 +1,9 @@
 name: Promote Latest Release Images
 on:
   workflow_dispatch:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
 permissions:
   contents: read
 concurrency:
@@ -11,15 +12,22 @@ concurrency:
 jobs:
   promote-latest:
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     permissions:
       contents: read
       packages: write
     env:
       REPOSITORY_NAME: ${{ github.repository }}
-      DOCKER_CONFIG: ${{ runner.temp }}/engram-latest-promotion-${{ github.run_id }}-${{ github.run_attempt }}
-      RECEIPT_DIR: ${{ runner.temp }}/engram-latest-promotion-receipt-${{ github.run_id }}-${{ github.run_attempt }}
-      RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}
     steps:
+      - name: Initialize isolated promotion paths
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dockerConfig = Join-Path $env:RUNNER_TEMP "engram-latest-promotion-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $receiptDir = Join-Path $env:RUNNER_TEMP "engram-latest-promotion-receipt-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          "DOCKER_CONFIG=$dockerConfig" | Add-Content -LiteralPath $env:GITHUB_ENV
+          "RECEIPT_DIR=$receiptDir" | Add-Content -LiteralPath $env:GITHUB_ENV
+          New-Item -ItemType Directory -Path $receiptDir -Force | Out-Null
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Resolve the official GitHub Release
@@ -29,17 +37,10 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          New-Item -ItemType Directory -Path $env:RECEIPT_DIR -Force | Out-Null
-          if ($env:GITHUB_EVENT_NAME -eq 'release') {
-            $tag = ([string]$env:RELEASE_EVENT_TAG).Trim()
-            if ([string]::IsNullOrWhiteSpace($tag)) { throw 'release event did not provide a tag' }
-            $latestTag = (gh api "repos/$env:REPOSITORY_NAME/releases/latest" --jq .tag_name).Trim()
-            if ($latestTag -cne $tag) { throw "published release tag does not match the latest GitHub Release: event=$tag latest=$latestTag" }
-          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
-            $tag = (gh api "repos/$env:REPOSITORY_NAME/releases/latest" --jq .tag_name).Trim()
-          } else {
+          if ($env:GITHUB_EVENT_NAME -notin @('workflow_run', 'workflow_dispatch')) {
             throw "unsupported event: $env:GITHUB_EVENT_NAME"
           }
+          $tag = (gh api "repos/$env:REPOSITORY_NAME/releases/latest" --jq .tag_name).Trim()
           if ($tag -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
             throw "official GitHub Release tag is not a stable version: $tag"
           }
@@ -79,10 +80,11 @@ jobs:
             $configDigest = [string]$raw.config.digest
             $source = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.source'
             $version = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.version'
+            $revision = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.revision'
             if ($manifestDigest -notmatch '^sha256:[0-9a-f]{64}$' -or $configDigest -notmatch '^sha256:[0-9a-f]{64}$') {
               throw "immutable image does not expose manifest/config identities: $Reference"
             }
-            if ($source -cne 'https://github.com/thebtf/engram' -or $version -cne $release.release_tag) {
+            if ($source -cne 'https://github.com/thebtf/engram' -or $version -cne $release.release_tag -or $revision -cne $release.source_commit) {
               throw "immutable image provenance labels do not match the official release: $Reference"
             }
             $repository = $Reference.Substring(0, $Reference.LastIndexOf(':'))
@@ -94,21 +96,41 @@ jobs:
               config_digest = $configDigest
               source = $source
               version = $version
+              revision = $revision
             }
           }
 
-          $releaseRefs = @(
+          $repositories = @(
             'ghcr.io/thebtf/engram',
             'ghcr.io/thebtf/engram-operator-console',
             'ghcr.io/thebtf/engram-postgres'
-          ) | ForEach-Object { "$_`:$($release.release_tag)" }
-          $sources = foreach ($reference in $releaseRefs) {
+          )
+          $sources = foreach ($repository in $repositories) {
+            $versionReference = "$repository`:$($release.release_tag)"
+            $commitReference = "$repository`:sha-$($release.source_commit)"
             for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
               try {
-                $identity = Get-ImageIdentity -Reference $reference
+                $versionIdentity = Get-ImageIdentity -Reference $versionReference
+                $commitIdentity = Get-ImageIdentity -Reference $commitReference
+                foreach ($field in 'manifest_digest', 'config_digest') {
+                  if ([string]$versionIdentity.$field -cne [string]$commitIdentity.$field) {
+                    throw "release image references disagree: $versionReference $commitReference $field"
+                  }
+                }
+                $identity = [ordered]@{
+                  reference = $versionIdentity.reference
+                  repository = $versionIdentity.repository
+                  immutable_reference = $versionIdentity.immutable_reference
+                  commit_reference = $commitIdentity.reference
+                  manifest_digest = $versionIdentity.manifest_digest
+                  config_digest = $versionIdentity.config_digest
+                  source = $versionIdentity.source
+                  version = $versionIdentity.version
+                  revision = $versionIdentity.revision
+                }
                 break
               } catch {
-                if ($attempt -eq $maxAttempts) { throw "official release image remained unavailable after $maxAttempts attempts: $reference. $($_.Exception.Message)" }
+                if ($attempt -eq $maxAttempts) { throw "official release images remained unavailable or inconsistent after $maxAttempts attempts: $versionReference $commitReference. $($_.Exception.Message)" }
                 Start-Sleep -Seconds $retrySeconds
               }
             }
@@ -152,6 +174,7 @@ jobs:
               config_digest = [string]$raw.config.digest
               source = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.source'
               version = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.version'
+              revision = Get-Label -Labels $image.config.Labels -Name 'org.opencontainers.image.revision'
             }
           }
 
@@ -160,7 +183,7 @@ jobs:
             docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference
             if ($LASTEXITCODE -ne 0) { throw "could not promote $($image.immutable_reference) to $target" }
             $observed = Get-ImageIdentity -Reference $target
-            foreach ($field in 'manifest_digest','config_digest','source','version') {
+            foreach ($field in 'manifest_digest','config_digest','source','version','revision') {
               if ([string]$observed.$field -cne [string]$image.$field) {
                 throw "latest readback differs from the official release for $target: $field"
               }
@@ -216,6 +239,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: latest-promotion-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/engram-latest-promotion-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RECEIPT_DIR }}
           if-no-files-found: error
           retention-days: 90

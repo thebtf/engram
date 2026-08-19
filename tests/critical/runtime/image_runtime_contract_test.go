@@ -868,18 +868,30 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 
 	latest := readFile(t, latestWorkflowPath)
 	for _, required := range []string{
-		"name: Promote Latest Release Images", "workflow_dispatch:", "release:\n    types: [published]",
-		"RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}", "if ($env:GITHUB_EVENT_NAME -eq 'release')", "elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch')",
-		"gh api \"repos/$env:REPOSITORY_NAME/releases/latest\" --jq .tag_name", "if ($latestTag -cne $tag)", "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+		"name: Promote Latest Release Images", "workflow_dispatch:", "workflow_run:\n    workflows: [\"Release\"]\n    types: [completed]",
+		"if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')",
+		"Initialize isolated promotion paths", `"DOCKER_CONFIG=$dockerConfig" | Add-Content -LiteralPath $env:GITHUB_ENV`, `"RECEIPT_DIR=$receiptDir" | Add-Content -LiteralPath $env:GITHUB_ENV`, "path: ${{ env.RECEIPT_DIR }}",
+		"gh api \"repos/$env:REPOSITORY_NAME/releases/latest\" --jq .tag_name", "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
 		"$maxAttempts = 6", "for ($attempt = 1; $attempt -le $maxAttempts; $attempt++)", "Start-Sleep -Seconds $retrySeconds",
 		"ghcr.io/thebtf/engram", "ghcr.io/thebtf/engram-operator-console", "ghcr.io/thebtf/engram-postgres",
-		"org.opencontainers.image.source", "org.opencontainers.image.version", "docker login ghcr.io", "docker buildx imagetools create --prefer-index=false",
-		"immutable_reference = \"$repository@$manifestDigest\"", "docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference",
-		"$target = \"$($image.repository):latest\"", "docker logout ghcr.io", "latest-promotion-receipt.json", "source_commit", "rollout_claimed = $false",
+		"org.opencontainers.image.source", "org.opencontainers.image.version", "org.opencontainers.image.revision", "docker login ghcr.io", "docker buildx imagetools create --prefer-index=false",
+		"$commitReference = \"$repository`:sha-$($release.source_commit)\"", "foreach ($field in 'manifest_digest', 'config_digest')", "release image references disagree",
+		"immutable_reference = \"$repository@$manifestDigest\"", "commit_reference = $commitIdentity.reference", "docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference",
+		"$target = \"$($image.repository):latest\"", "'manifest_digest','config_digest','source','version','revision'", "docker logout ghcr.io", "latest-promotion-receipt.json", "source_commit", "rollout_claimed = $false",
 	} {
 		if !strings.Contains(latest, required) {
 			t.Fatalf("latest-only promoter lacks contract %q", required)
 		}
+	}
+	jobEnvStart := strings.Index(latest, "    env:\n      REPOSITORY_NAME:")
+	stepsStart := strings.Index(latest, "    steps:")
+	if jobEnvStart < 0 || stepsStart <= jobEnvStart || strings.Contains(latest[jobEnvStart:stepsStart], "runner.") {
+		t.Fatal("latest promoter job environment must not resolve runner context")
+	}
+	initializerIndex := strings.Index(latest, "Initialize isolated promotion paths")
+	firstActionIndex := strings.Index(latest, "uses:")
+	if initializerIndex < 0 || firstActionIndex < 0 || initializerIndex > firstActionIndex {
+		t.Fatal("latest promoter must initialize isolated paths before every action step")
 	}
 	if got := strings.Count(latest, "packages: write"); got != 1 {
 		t.Fatalf("latest promoter must have exactly one packages:write grant, got %d", got)
@@ -897,8 +909,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		t.Fatalf("latest promoter waits for exact official images before login and writes only afterwards: wait=%d login=%d promote=%d", waitIndex, loginIndex, promoteIndex)
 	}
 	for _, forbidden := range []string{
-		"workflow_run:", "Docker Publish", "github.event.workflow_run", "docker buildx imagetools create --prefer-index=false --tag $target $image.reference",
-		"actions/checkout@", "docker/login-action@", "docker build ", "docker buildx build", "docker buildx bake", "docker push", ":main", "ssh", "production",
+		"release:\n", "github.event.release", "actions/checkout@", "docker/login-action@", "docker build ", "docker buildx build", "docker buildx bake", "docker push", ":main", "ssh", "production",
 	} {
 		if strings.Contains(latest, forbidden) {
 			t.Fatalf("latest promoter exposes a forbidden trigger, mutable source, build, or production surface %q", forbidden)
