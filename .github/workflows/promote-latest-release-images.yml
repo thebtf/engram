@@ -224,7 +224,7 @@ jobs:
             $observed = Get-ImageIdentity -Reference $target
             foreach ($field in 'manifest_digest','config_digest','source','version','revision') {
               if ([string]$observed.$field -cne [string]$image.$field) {
-                throw "latest readback differs from the official release for $target: $field"
+                throw "latest readback differs from the official release for ${target}: $field"
               }
             }
             $latest.Add($observed)
