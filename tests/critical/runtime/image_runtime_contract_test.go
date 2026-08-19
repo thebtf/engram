@@ -868,7 +868,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 
 	latest := readFile(t, latestWorkflowPath)
 	for _, required := range []string{
-		"name: Promote Latest Release Images", "workflow_dispatch:", "workflow_run:\n    workflows: [\"Release\"]\n    types: [completed]",
+		"name: Promote Latest Release Images", "workflow_dispatch:", "workflow_run:\n    workflows: [\"Release\", \"Docker Publish\"]\n    types: [completed]",
 		"if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')",
 		"Initialize isolated promotion paths", `"DOCKER_CONFIG=$dockerConfig" | Add-Content -LiteralPath $env:GITHUB_ENV`, `"RECEIPT_DIR=$receiptDir" | Add-Content -LiteralPath $env:GITHUB_ENV`, "path: ${{ env.RECEIPT_DIR }}",
 		"gh api \"repos/$env:REPOSITORY_NAME/releases/latest\" --jq .tag_name", "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
@@ -877,11 +877,14 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		"org.opencontainers.image.source", "org.opencontainers.image.version", "org.opencontainers.image.revision", "docker login ghcr.io", "docker buildx imagetools create --prefer-index=false",
 		"$commitReference = \"$repository`:sha-$($release.source_commit)\"", "foreach ($field in 'manifest_digest', 'config_digest')", "release image references disagree",
 		"immutable_reference = \"$repository@$manifestDigest\"", "commit_reference = $commitIdentity.reference", "docker buildx imagetools create --prefer-index=false --tag $target $image.immutable_reference",
-		"$target = \"$($image.repository):latest\"", "'manifest_digest','config_digest','source','version','revision'", "docker logout ghcr.io", "latest-promotion-receipt.json", "source_commit", "rollout_claimed = $false",
+		"$target = \"$($image.repository):latest\"", "'manifest_digest','config_digest','source','version','revision'", "docker logout ghcr.io", "latest-promotion-receipt.json", "source_commit", "triggering_workflow_name", "triggering_workflow_head_sha", "rollout_claimed = $false",
 	} {
 		if !strings.Contains(latest, required) {
 			t.Fatalf("latest-only promoter lacks contract %q", required)
 		}
+	}
+	if strings.Contains(latest, "workflows: [\"Release\"]") {
+		t.Fatal("latest promoter must also trigger after Docker Publish completes")
 	}
 	jobEnvStart := strings.Index(latest, "    env:\n      REPOSITORY_NAME:")
 	stepsStart := strings.Index(latest, "    steps:")
@@ -907,6 +910,14 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	promoteIndex := strings.Index(latest, "Promote each official release image to latest and read it back")
 	if !(waitIndex >= 0 && waitIndex < loginIndex && loginIndex < promoteIndex) {
 		t.Fatalf("latest promoter waits for exact official images before login and writes only afterwards: wait=%d login=%d promote=%d", waitIndex, loginIndex, promoteIndex)
+	}
+	releaseHeadGuardIndex := strings.Index(latest, "if ($commit -cne $triggeringWorkflowHeadSHA)")
+	if releaseHeadGuardIndex < 0 || releaseHeadGuardIndex >= loginIndex {
+		t.Fatal("latest promoter must reject a workflow_run whose head differs from the latest release commit before registry login")
+	}
+	if !strings.Contains(latest, "TRIGGERING_WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}") ||
+		!strings.Contains(latest, "if ($env:GITHUB_EVENT_NAME -eq 'workflow_run')") {
+		t.Fatal("latest promoter must bind and validate the triggering workflow head")
 	}
 	for _, forbidden := range []string{
 		"release:\n", "github.event.release", "actions/checkout@", "docker/login-action@", "docker build ", "docker buildx build", "docker buildx bake", "docker push", ":main", "ssh", "production",

@@ -2,7 +2,7 @@ name: Promote Latest Release Images
 on:
   workflow_dispatch:
   workflow_run:
-    workflows: ["Release"]
+    workflows: ["Release", "Docker Publish"]
     types: [completed]
 permissions:
   contents: read
@@ -34,6 +34,8 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          TRIGGERING_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          TRIGGERING_WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
@@ -48,7 +50,24 @@ jobs:
           if ($commit -notmatch '^[0-9a-f]{40}$') {
             throw "official GitHub Release does not resolve to a commit: $commit"
           }
-          [ordered]@{ release_tag = $tag; source_commit = $commit } |
+          $triggeringWorkflowName = $null
+          $triggeringWorkflowHeadSHA = $null
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_run') {
+            $triggeringWorkflowName = ([string]$env:TRIGGERING_WORKFLOW_NAME).Trim()
+            $triggeringWorkflowHeadSHA = ([string]$env:TRIGGERING_WORKFLOW_HEAD_SHA).Trim()
+            if ([string]::IsNullOrWhiteSpace($triggeringWorkflowName) -or $triggeringWorkflowHeadSHA -notmatch '^[0-9a-f]{40}$') {
+              throw "workflow_run did not provide a valid triggering workflow name and head SHA: name=$triggeringWorkflowName head=$triggeringWorkflowHeadSHA"
+            }
+            if ($commit -cne $triggeringWorkflowHeadSHA) {
+              throw "latest GitHub Release commit does not match workflow_run head: release=$commit event=$triggeringWorkflowHeadSHA"
+            }
+          }
+          [ordered]@{
+            release_tag = $tag
+            source_commit = $commit
+            triggering_workflow_name = $triggeringWorkflowName
+            triggering_workflow_head_sha = $triggeringWorkflowHeadSHA
+          } |
             ConvertTo-Json -Compress |
             Set-Content -LiteralPath (Join-Path $env:RECEIPT_DIR 'release.json') -Encoding utf8NoBOM
 
@@ -228,6 +247,8 @@ jobs:
             schema_version = 1
             release_tag = if ($null -eq $release) { $null } else { $release.release_tag }
             source_commit = if ($null -eq $release) { $null } else { $release.source_commit }
+            triggering_workflow_name = if ($null -eq $release) { $null } else { $release.triggering_workflow_name }
+            triggering_workflow_head_sha = if ($null -eq $release) { $null } else { $release.triggering_workflow_head_sha }
             source_images = if ($null -eq $sources) { @() } else { @($sources.images) }
             latest_images = if ($null -eq $latest) { @() } else { @($latest.images) }
             rollout_claimed = $false
