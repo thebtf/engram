@@ -739,7 +739,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	latestWorkflowPath := filepath.Clean(filepath.Join(repo, ".github", "workflows", "promote-latest-release-images.yml"))
 	allowedScript := filepath.Clean(filepath.Join(repo, "scripts", "production-gates", "build-and-scan-images.ps1"))
 	allowedWriters := map[string]bool{releaseWorkflowPath: true, latestWorkflowPath: true}
-	writePattern := regexp.MustCompile(`(?i)packages:\s*write|docker/login-action|docker\s+(?:login|push|buildx[^\n]*--push)|\bdocker\s+push\b|PERSONAL_ACCESS_TOKEN`)
+	writePattern := regexp.MustCompile(`(?i)packages:\s*write|docker/login-action|docker\s+(?:login|push|buildx[^\n]*--push)|\bdocker\s+push\b|\b(?:oras\s+(?:login|copy|push)|skopeo\s+(?:login|copy)|crane\s+(?:auth\s+login|copy|push))\b|(?:GHCR_TOKEN|CR_PAT)\s*:\s*(?:\$\{\{|\$env:|[^"'\s])|PERSONAL_ACCESS_TOKEN`)
 
 	for _, root := range []string{filepath.Join(repo, ".github", "workflows"), filepath.Join(repo, "scripts")} {
 		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -984,8 +984,10 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		"Write latest-promotion receipt",
 		"Upload latest-promotion receipt",
 	} {
-		if !regexp.MustCompile(`(?ms)- name: ` + regexp.QuoteMeta(step) + `\n\s+if: always\(\)`).MatchString(latest) {
-			t.Fatalf("latest promoter %q must always run", step)
+		stepPattern := regexp.MustCompile(`(?ms)^\s*- name:\s*` + regexp.QuoteMeta(step) + `\s*$.*?(?:^\s*- name:|\z)`)
+		matches := stepPattern.FindAllString(latest, -1)
+		if len(matches) != 1 || !regexp.MustCompile(`(?m)^\s*if:\s*always\(\)\s*$`).MatchString(matches[0]) {
+			t.Fatalf("latest promoter %q must have exactly one step block with if: always()", step)
 		}
 	}
 	if !strings.Contains(latest, "TRIGGERING_WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}") ||
@@ -993,7 +995,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 		t.Fatal("latest promoter must bind and require the triggering workflow head")
 	}
 	for _, forbidden := range []string{
-		"release:\n", "github.event.release", "actions/checkout@", "docker/login-action@", "docker build ", "docker buildx build", "docker buildx bake", "docker push", "docker manifest create", "docker manifest push", "oras copy", "oras push", "skopeo copy", "crane copy", "crane push", ":main", "ssh", "production",
+		"release:\n", "github.event.release", "actions/checkout@", "docker/login-action@", "docker build ", "docker buildx build", "docker buildx bake", "docker push", "docker manifest create", "docker manifest push", "oras login", "oras copy", "oras push", "skopeo login", "skopeo copy", "crane auth login", "crane copy", "crane push", "GHCR_TOKEN", "CR_PAT", ":main", "ssh", "production",
 	} {
 		if strings.Contains(latest, forbidden) {
 			t.Fatalf("latest promoter exposes a forbidden trigger, mutable source, build, or production surface %q", forbidden)
