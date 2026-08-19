@@ -869,7 +869,7 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	latest := readFile(t, latestWorkflowPath)
 	for _, required := range []string{
 		"name: Promote Latest Release Images", "workflow_dispatch:", "workflow_run:\n    workflows: [\"Release\", \"Docker Publish\"]\n    types: [completed]",
-		"if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')",
+		"if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Release' && github.event.workflow_run.event == 'push') || (github.event.workflow_run.name == 'Docker Publish' && github.event.workflow_run.event == 'workflow_run')))",
 		"Initialize isolated promotion paths", `"DOCKER_CONFIG=$dockerConfig" | Add-Content -LiteralPath $env:GITHUB_ENV`, `"RECEIPT_DIR=$receiptDir" | Add-Content -LiteralPath $env:GITHUB_ENV`, "path: ${{ env.RECEIPT_DIR }}",
 		"gh api \"repos/$env:REPOSITORY_NAME/releases/latest\" --jq .tag_name", "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
 		"$maxAttempts = 6", "for ($attempt = 1; $attempt -le $maxAttempts; $attempt++)", "Start-Sleep -Seconds $retrySeconds",
@@ -881,6 +881,23 @@ func testRepositoryReleaseAndLatestWriters(t *testing.T, repo string) {
 	} {
 		if !strings.Contains(latest, required) {
 			t.Fatalf("latest-only promoter lacks contract %q", required)
+		}
+	}
+	for _, trigger := range []struct {
+		name, eventName, conclusion, workflow, workflowEvent string
+		allowed                                              bool
+	}{
+		{"manual dispatch", "workflow_dispatch", "", "", "", true},
+		{"successful Release push", "workflow_run", "success", "Release", "push", true},
+		{"successful Docker Publish workflow run", "workflow_run", "success", "Docker Publish", "workflow_run", true},
+		{"failed Release push", "workflow_run", "failure", "Release", "push", false},
+		{"Release workflow run", "workflow_run", "success", "Release", "workflow_run", false},
+		{"Docker Publish push", "workflow_run", "success", "Docker Publish", "push", false},
+		{"other workflow push", "workflow_run", "success", "Docker", "push", false},
+	} {
+		got := trigger.eventName == "workflow_dispatch" || (trigger.conclusion == "success" && ((trigger.workflow == "Release" && trigger.workflowEvent == "push") || (trigger.workflow == "Docker Publish" && trigger.workflowEvent == "workflow_run")))
+		if got != trigger.allowed {
+			t.Errorf("promotion guard accepts %s = %t, want %t", trigger.name, got, trigger.allowed)
 		}
 	}
 	if strings.Contains(latest, "workflows: [\"Release\"]") {
