@@ -71,6 +71,7 @@ temp/
 # Test artifacts
 __debug_bin*
 .test/
+.scannerwork/
 
 # OS generated
 Thumbs.db
