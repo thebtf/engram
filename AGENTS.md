@@ -24,6 +24,7 @@ stdio daemon + gRPC model); REST API + gRPC on port 37777 (cmux multiplexed).
 | **No silent patching** | Report every discrepancy found |
 | **No time estimates** | Prioritize by value/risk/dependencies, not phantom duration |
 | **No resurrecting demolished code** | A symbol/field/env-var/doc EXISTING ≠ it is wired or correct. Classify before building on it (see V5 DEMOLITION GUARD). |
+| **Release SonarQube gate** | Before any tag or publication, analyze the exact release candidate specified by `sonar-project.properties`, fix every reported finding, rerun the exact-head analysis, and require an `OK` Quality Gate. No release may proceed with unresolved SonarQube findings. |
 
 ## V5 DEMOLITION GUARD (anti-resurrection — read before extending any existing scaffold)
 
