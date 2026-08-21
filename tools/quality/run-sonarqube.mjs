@@ -48,12 +48,14 @@ function capture(command, args, cwd) {
 }
 
 function run(command, args, cwd) {
-  const result = spawnSync(command, args, {
+  const isWindowsBatch = process.platform === "win32" && /\.(?:bat|cmd)$/i.test(command);
+  const executable = isWindowsBatch ? process.env.ComSpec || "cmd.exe" : command;
+  const executableArgs = isWindowsBatch ? ["/d", "/c", command, ...args] : args;
+  const result = spawnSync(executable, executableArgs, {
     cwd,
     env: process.env,
     stdio: "inherit",
     windowsHide: true,
-    shell: process.platform === "win32" && /\.(?:bat|cmd)$/i.test(command),
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
