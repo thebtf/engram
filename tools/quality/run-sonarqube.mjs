@@ -47,14 +47,15 @@ function capture(command, args, cwd) {
   return result.stdout.trim();
 }
 
-function run(command, args, cwd) {
+function run(command, args, cwd, { env = process.env, timeoutMs } = {}) {
   const isWindowsBatch = process.platform === "win32" && /\.(?:bat|cmd)$/i.test(command);
   const executable = isWindowsBatch ? process.env.ComSpec || "cmd.exe" : command;
   const executableArgs = isWindowsBatch ? ["/d", "/c", command, ...args] : args;
   const result = spawnSync(executable, executableArgs, {
     cwd,
-    env: process.env,
+    env,
     stdio: "inherit",
+    timeout: timeoutMs,
     windowsHide: true,
   });
   if (result.error) throw result.error;
@@ -144,12 +145,13 @@ const sonarToken =
   worktreeDotEnv.get("SONAR_TOKEN")?.trim() ||
   sharedDotEnv.get("SONAR_TOKEN")?.trim();
 if (!sonarToken) throw new Error("SONAR_TOKEN is required in the process environment or project .env");
-process.env.SONAR_TOKEN = sonarToken;
 const sonarHostUrl =
   process.env.SONAR_HOST_URL?.trim() ||
   worktreeDotEnv.get("SONAR_HOST_URL")?.trim() ||
-  sharedDotEnv.get("SONAR_HOST_URL")?.trim() ||
-  "http://unleashed.lan:9000";
+  sharedDotEnv.get("SONAR_HOST_URL")?.trim();
+if (!sonarHostUrl) {
+  throw new Error("SONAR_HOST_URL is required in the process environment or project .env");
+}
 const parsedHost = new URL(sonarHostUrl);
 if (!["http:", "https:"].includes(parsedHost.protocol)) {
   throw new Error("SONAR_HOST_URL must use http or https");
@@ -183,10 +185,14 @@ if (!scannerPath && process.platform === "win32" && scannerCommand === "sonar-sc
 }
 if (!scannerPath) throw new Error(`SonarScanner was not found: ${scannerCommand}`);
 
+const testEnvironment = { ...process.env };
+delete testEnvironment.SONAR_TOKEN;
+const scannerEnvironment = { ...testEnvironment, SONAR_TOKEN: sonarToken };
 run(
   goCommand,
   ["test", "./...", "-race", "-covermode=atomic", "-coverprofile=coverage.out"],
   repoRoot,
+  { env: testEnvironment, timeoutMs: 30 * 60 * 1000 },
 );
 run(
   scannerPath,
@@ -198,6 +204,7 @@ run(
     `-Dsonar.qualitygate.timeout=${qualityGateTimeout}`,
   ],
   repoRoot,
+  { env: scannerEnvironment, timeoutMs: (qualityGateTimeout + 300) * 1000 },
 );
 
 const finalHead = capture("git", ["rev-parse", "--verify", "HEAD^{commit}"], repoRoot).toLowerCase();
