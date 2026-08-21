@@ -23,9 +23,10 @@ for (let index = 2; index < process.argv.length; index += 1) {
   if (option === "--repository") repository = resolve(value);
   else if (option === "--scanner") scannerCommand = value;
   else if (option === "--timeout") {
-    qualityGateTimeout = Number.parseInt(value, 10);
-    if (!Number.isInteger(qualityGateTimeout) || qualityGateTimeout < 1) {
-      throw new Error("--timeout must be a positive integer");
+    if (!/^[1-9]\d*$/.test(value)) throw new Error("--timeout must be a positive integer");
+    qualityGateTimeout = Number(value);
+    if (!Number.isSafeInteger(qualityGateTimeout)) {
+      throw new Error("--timeout exceeds the safe integer range");
     }
   } else throw new Error(`Unknown option: ${option}`);
   index += 1;
@@ -196,6 +197,12 @@ run(
   ],
   repoRoot,
 );
+
+const finalHead = capture("git", ["rev-parse", "--verify", "HEAD^{commit}"], repoRoot).toLowerCase();
+if (finalHead !== head) throw new Error(`Git HEAD changed during analysis: ${head} -> ${finalHead}`);
+if (capture("git", ["status", "--porcelain"], repoRoot)) {
+  throw new Error("Working tree changed during SonarQube analysis");
+}
 
 const report = parseReport(reportTaskPath);
 const receipt = {
