@@ -90,6 +90,28 @@ function parseReport(path) {
   return values;
 }
 
+function readSonarDotEnv(path) {
+  const values = new Map();
+  if (!existsSync(path)) return values;
+  for (const rawLine of readFileSync(path, "utf8").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const match = /^(?:export\s+)?(SONAR_TOKEN|SONAR_HOST_URL)\s*=\s*(.*)$/.exec(line);
+    if (!match) continue;
+    if (values.has(match[1])) throw new Error(`Duplicate ${match[1]} in ${path}`);
+    let value = match[2].trim();
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1);
+    }
+    values.set(match[1], value);
+  }
+  return values;
+}
+
 const repoRoot = resolve(capture("git", ["rev-parse", "--show-toplevel"], repository));
 if (!existsSync(join(repoRoot, "sonar-project.properties"))) {
   throw new Error(`Repository has no sonar-project.properties: ${repoRoot}`);
@@ -100,7 +122,8 @@ if (!/^[0-9a-f]{40}$/.test(head)) throw new Error(`Invalid Git HEAD: ${head}`);
 const commonGitDir = resolve(
   capture("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], repoRoot),
 );
-const receiptDirectory = join(dirname(commonGitDir), ".agent", "e", "sonarqube");
+const coordinationRoot = dirname(commonGitDir);
+const receiptDirectory = join(coordinationRoot, ".agent", "e", "sonarqube");
 const receiptPath = join(receiptDirectory, `${head}.json`);
 const reportTaskPath = join(repoRoot, ".scannerwork", "report-task.txt");
 mkdirSync(receiptDirectory, { recursive: true });
@@ -110,9 +133,20 @@ rmSync(reportTaskPath, { force: true });
 if (capture("git", ["status", "--porcelain"], repoRoot)) {
   throw new Error("Refusing to run SonarQube against a dirty working tree");
 }
-const sonarToken = process.env.SONAR_TOKEN?.trim();
-if (!sonarToken) throw new Error("SONAR_TOKEN is required");
-const sonarHostUrl = process.env.SONAR_HOST_URL?.trim() || "http://unleashed.lan:9000";
+const worktreeDotEnv = readSonarDotEnv(join(repoRoot, ".env"));
+const sharedDotEnv =
+  coordinationRoot === repoRoot ? new Map() : readSonarDotEnv(join(coordinationRoot, ".env"));
+const sonarToken =
+  process.env.SONAR_TOKEN?.trim() ||
+  worktreeDotEnv.get("SONAR_TOKEN")?.trim() ||
+  sharedDotEnv.get("SONAR_TOKEN")?.trim();
+if (!sonarToken) throw new Error("SONAR_TOKEN is required in the process environment or project .env");
+process.env.SONAR_TOKEN = sonarToken;
+const sonarHostUrl =
+  process.env.SONAR_HOST_URL?.trim() ||
+  worktreeDotEnv.get("SONAR_HOST_URL")?.trim() ||
+  sharedDotEnv.get("SONAR_HOST_URL")?.trim() ||
+  "http://unleashed.lan:9000";
 const parsedHost = new URL(sonarHostUrl);
 if (!["http:", "https:"].includes(parsedHost.protocol)) {
   throw new Error("SONAR_HOST_URL must use http or https");
