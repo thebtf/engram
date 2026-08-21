@@ -21,6 +21,7 @@
 | --- | --- | --- |
 | PR review | PR merged with review approval and zero unresolved review threads | review not approved or unresolved threads remain |
 | CI | `gh pr checks <PR>` or checks on release commit | any required check fails |
+| Local SonarQube | `pwsh -NoProfile -File scripts/production-gates/run-sonarqube.ps1` | analysis does not bind to the exact clean HEAD, tests/scanner fail, Quality Gate is not PASS, or the exact-head receipt is missing |
 | Go tests | `go test ./...` | non-zero exit |
 | Go vet | `go vet ./...` | non-zero exit |
 | Vulnerability scan | `govulncheck ./...` | reachable vulnerability reported |
