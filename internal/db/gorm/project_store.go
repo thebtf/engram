@@ -151,11 +151,7 @@ func RegisterAndResolve(ctx context.Context, db *gorm.DB, selector string, ident
 			}
 			switch len(projects) {
 			case 0:
-				if err := createProjectIdentityRow(ctx, tx, selector, "", "", selector, nil); err != nil {
-					return projectIdentityWriteError(err)
-				}
-				resolution.CanonicalProjectID = selector
-				return nil
+				return ambiguousProjectIdentity("legacy selector is not registered")
 			case 1:
 				resolution.CanonicalProjectID = projects[0].ID
 				return nil
