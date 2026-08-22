@@ -1,0 +1,945 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://engram.dev/contracts/architectural-recovery/migration-receipt.schema.json",
+  "title": "Engram Architectural Recovery Migration Receipt",
+  "description": "An auditable, redacted receipt for one migration phase. It records identity convergence, verification, quarantine, idempotency, backup/export, rollback, and observation evidence without storing secrets or raw private content.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_id",
+    "issued_at",
+    "migration",
+    "phase",
+    "result",
+    "idempotency",
+    "scope",
+    "backup_export",
+    "verification",
+    "conflicts",
+    "quarantine",
+    "privacy_preservation",
+    "rollback",
+    "observation",
+    "metrics",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "receipt_id": {
+      "$ref": "#/$defs/nonEmptyId"
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "migration_id",
+        "feature_id",
+        "release_id",
+        "source_version",
+        "target_version",
+        "schema_set",
+        "operation_kind"
+      ],
+      "properties": {
+        "migration_id": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "feature_id": {
+          "const": "001-engram-architectural-recovery"
+        },
+        "release_id": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "source_version": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "target_version": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "schema_set": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyId"
+          }
+        },
+        "operation_kind": {
+          "enum": [
+            "identity_convergence",
+            "knowledge_migration",
+            "retrieval_migration",
+            "contraction"
+          ]
+        }
+      }
+    },
+    "phase": {
+      "enum": [
+        "expand",
+        "backfill",
+        "compare",
+        "cutover",
+        "observe",
+        "contract"
+      ]
+    },
+    "result": {
+      "enum": [
+        "completed",
+        "paused",
+        "failed",
+        "rolled_back"
+      ]
+    },
+    "idempotency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "attempt",
+        "logical_result",
+        "original_receipt_id"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "logical_result": {
+          "enum": [
+            "first_execution",
+            "replay"
+          ]
+        },
+        "original_receipt_id": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/nonEmptyId"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "logical_result": {
+                "const": "first_execution"
+              }
+            },
+            "required": [
+              "logical_result"
+            ]
+          },
+          "then": {
+            "properties": {
+              "original_receipt_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "logical_result": {
+                "const": "replay"
+              }
+            },
+            "required": [
+              "logical_result"
+            ]
+          },
+          "then": {
+            "properties": {
+              "original_receipt_id": {
+                "$ref": "#/$defs/nonEmptyId"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_project_keys",
+        "target_project_keys",
+        "object_families"
+      ],
+      "properties": {
+        "source_project_keys": {
+          "$ref": "#/$defs/idArray"
+        },
+        "target_project_keys": {
+          "$ref": "#/$defs/idArray"
+        },
+        "object_families": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyId"
+          }
+        }
+      }
+    },
+    "backup_export": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference",
+        "created_at",
+        "verified_at",
+        "integrity_fingerprint",
+        "redaction_class"
+      ],
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "verified_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "integrity_fingerprint": {
+          "$ref": "#/$defs/redactedFingerprint"
+        },
+        "redaction_class": {
+          "enum": [
+            "metadata_only",
+            "redacted_content",
+            "sealed_export"
+          ]
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verifier",
+        "verified_at",
+        "count_comparisons",
+        "payload_preservation",
+        "provenance_preserved",
+        "revision_history_preserved",
+        "compatibility_readback"
+      ],
+      "properties": {
+        "verifier": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "verified_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "count_comparisons": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/countComparison"
+          }
+        },
+        "payload_preservation": {
+          "description": "Every accepted object family has an explicit semantic payload-preservation or quarantine result; count equality alone is insufficient.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "object_family",
+              "status",
+              "comparison_method",
+              "evidence_reference"
+            ],
+            "properties": {
+              "object_family": {
+                "$ref": "#/$defs/nonEmptyId"
+              },
+              "status": {
+                "enum": [
+                  "preserved",
+                  "quarantined",
+                  "not_applicable"
+                ]
+              },
+              "comparison_method": {
+                "enum": [
+                  "semantic_redacted_comparison",
+                  "native_identifier_provenance_comparison",
+                  "sealed_metadata_comparison",
+                  "quarantine_ledger"
+                ]
+              },
+              "evidence_reference": {
+                "$ref": "#/$defs/nonEmptyId"
+              }
+            }
+          }
+        },
+        "provenance_preserved": {
+          "const": true
+        },
+        "revision_history_preserved": {
+          "const": true
+        },
+        "compatibility_readback": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reference"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "passed",
+                "not_applicable",
+                "failed"
+              ]
+            },
+            "reference": {
+              "$ref": "#/$defs/nonEmptyId"
+            }
+          }
+        }
+      }
+    },
+    "conflicts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "by_class",
+        "policy_reference"
+      ],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "by_class": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/conflictCount"
+          }
+        },
+        "policy_reference": {
+          "$ref": "#/$defs/nonEmptyId"
+        }
+      }
+    },
+    "quarantine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "ledger_reference",
+        "evidence_fingerprint",
+        "items"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ledger_reference": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "evidence_fingerprint": {
+          "$ref": "#/$defs/redactedFingerprint"
+        },
+        "items": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/quarantineItem"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "count": {
+                "const": 0
+              }
+            },
+            "required": [
+              "count"
+            ]
+          },
+          "then": {
+            "properties": {
+              "items": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "count": {
+                "minimum": 1
+              }
+            },
+            "required": [
+              "count"
+            ]
+          },
+          "then": {
+            "properties": {
+              "items": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "privacy_preservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "privacy_scope_widened",
+        "principal_scope_preserved",
+        "verification_reference"
+      ],
+      "properties": {
+        "privacy_scope_widened": {
+          "type": "boolean"
+        },
+        "principal_scope_preserved": {
+          "const": true
+        },
+        "authorization_reference": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/nonEmptyId"
+            }
+          ]
+        },
+        "verification_reference": {
+          "$ref": "#/$defs/nonEmptyId"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "privacy_scope_widened": {
+                "const": false
+              }
+            },
+            "required": [
+              "privacy_scope_widened"
+            ]
+          },
+          "then": {
+            "properties": {
+              "authorization_reference": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "privacy_scope_widened": {
+                "const": true
+              }
+            },
+            "required": [
+              "privacy_scope_widened"
+            ]
+          },
+          "then": {
+            "required": [
+              "authorization_reference"
+            ],
+            "properties": {
+              "authorization_reference": {
+                "$ref": "#/$defs/nonEmptyId"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "last_compatible_read_boundary",
+        "status",
+        "evidence_reference"
+      ],
+      "properties": {
+        "last_compatible_read_boundary": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "status": {
+          "enum": [
+            "available",
+            "rehearsed",
+            "executed",
+            "unavailable"
+          ]
+        },
+        "evidence_reference": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "executed_at": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "format": "date-time"
+            }
+          ]
+        },
+        "restored_receipt_id": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/nonEmptyId"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "executed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "executed_at",
+              "restored_receipt_id"
+            ],
+            "properties": {
+              "executed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "restored_receipt_id": {
+                "$ref": "#/$defs/nonEmptyId"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "window_start",
+        "window_end",
+        "evidence_reference"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "passed",
+            "in_progress",
+            "failed",
+            "not_applicable"
+          ]
+        },
+        "window_start": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "window_end": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "zero_drift_verified": {
+          "type": "boolean"
+        },
+        "evidence_reference": {
+          "$ref": "#/$defs/nonEmptyId"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "passed"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "zero_drift_verified"
+            ],
+            "properties": {
+              "zero_drift_verified": {
+                "const": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "metrics": {
+      "description": "Every migration or identity metric declares its denominator and refuses a computed green result when that denominator is zero.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "metric_id",
+          "measurement_scope",
+          "window",
+          "numerator_definition",
+          "denominator_definition",
+          "denominator_value",
+          "result_status",
+          "evidence_reference"
+        ],
+        "properties": {
+          "metric_id": {
+            "$ref": "#/$defs/nonEmptyId"
+          },
+          "measurement_scope": {
+            "$ref": "#/$defs/nonEmptyId"
+          },
+          "window": {
+            "$ref": "#/$defs/nonEmptyId"
+          },
+          "numerator_definition": {
+            "$ref": "#/$defs/nonEmptyId"
+          },
+          "denominator_definition": {
+            "$ref": "#/$defs/nonEmptyId"
+          },
+          "denominator_value": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "result_status": {
+            "enum": [
+              "computed",
+              "not_computable"
+            ]
+          },
+          "evidence_reference": {
+            "$ref": "#/$defs/nonEmptyId"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "denominator_value": {
+                  "const": 0
+                }
+              },
+              "required": [
+                "denominator_value"
+              ]
+            },
+            "then": {
+              "properties": {
+                "result_status": {
+                  "const": "not_computable"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "denominator_value": {
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "denominator_value"
+              ]
+            },
+            "then": {
+              "properties": {
+                "result_status": {
+                  "const": "computed"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor",
+        "execution_environment",
+        "manifest_fingerprint"
+      ],
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "execution_environment": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "manifest_fingerprint": {
+          "$ref": "#/$defs/redactedFingerprint"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "contract"
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "then": {
+        "properties": {
+          "verification": {
+            "properties": {
+              "compatibility_readback": {
+                "properties": {
+                  "status": {
+                    "const": "passed"
+                  }
+                }
+              }
+            }
+          },
+          "observation": {
+            "properties": {
+              "status": {
+                "const": "passed"
+              },
+              "zero_drift_verified": {
+                "const": true
+              }
+            },
+            "required": [
+              "zero_drift_verified"
+            ]
+          },
+          "rollback": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "rehearsed",
+                  "executed"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "result": {
+            "const": "rolled_back"
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "then": {
+        "properties": {
+          "rollback": {
+            "properties": {
+              "status": {
+                "const": "executed"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "nonEmptyId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\s].*[^\\s]$|^[^\\s]$"
+    },
+    "redactedFingerprint": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 512,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "idArray": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/nonEmptyId"
+      }
+    },
+    "countComparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object_family",
+        "before_count",
+        "after_count",
+        "disposition",
+        "fingerprint"
+      ],
+      "properties": {
+        "object_family": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "before_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "after_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "disposition": {
+          "enum": [
+            "equal",
+            "expected_transformation",
+            "quarantined",
+            "failed"
+          ]
+        },
+        "fingerprint": {
+          "$ref": "#/$defs/redactedFingerprint"
+        }
+      }
+    },
+    "conflictCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "class",
+        "count",
+        "disposition"
+      ],
+      "properties": {
+        "class": {
+          "enum": [
+            "equivalent_row",
+            "external_id_content_mismatch",
+            "current_state",
+            "settings",
+            "credential",
+            "issue_document",
+            "cross_project_relation",
+            "privacy_principal"
+          ]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "disposition": {
+          "enum": [
+            "resolved",
+            "quarantined",
+            "requires_operator_decision"
+          ]
+        }
+      }
+    },
+    "quarantineItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quarantine_id",
+        "object_family",
+        "source_reference",
+        "reason_code",
+        "privacy_class",
+        "required_decision",
+        "evidence_reference"
+      ],
+      "properties": {
+        "quarantine_id": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "object_family": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "source_reference": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "reason_code": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "privacy_class": {
+          "enum": [
+            "public",
+            "internal",
+            "restricted",
+            "sealed"
+          ]
+        },
+        "required_decision": {
+          "$ref": "#/$defs/nonEmptyId"
+        },
+        "evidence_reference": {
+          "$ref": "#/$defs/nonEmptyId"
+        }
+      }
+    }
+  }
+}

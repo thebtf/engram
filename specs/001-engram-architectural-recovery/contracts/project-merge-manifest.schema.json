@@ -1,0 +1,440 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://engram.dev/contracts/project-merge-manifest.schema.json",
+  "title": "Engram Project Merge Manifest",
+  "description": "A redacted, deterministic plan or execution record for one project-identity merge operation. It contains references and permitted structural fingerprints only; it never contains credential values, private payloads, raw paths, remote URLs, or secret material.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest_version",
+    "manifest_id",
+    "mode",
+    "idempotency_key",
+    "generated_at",
+    "actor_ref",
+    "source_release",
+    "target_release",
+    "inventory_reference",
+    "source_project_keys",
+    "target_project_key",
+    "anchor_evidence",
+    "record_counts",
+    "collision_dispositions",
+    "privacy_result",
+    "rollback_boundary",
+    "plan_fingerprint"
+  ],
+  "properties": {
+    "manifest_version": {
+      "const": "engram.project-merge-manifest/v1"
+    },
+    "manifest_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "dry_run",
+        "apply",
+        "rollback"
+      ]
+    },
+    "idempotency_key": {
+      "description": "Stable operation UUID. Repeating the same mode with this key returns the original logical receipt and must not repeat row movement.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "actor_ref": {
+      "description": "Opaque, non-secret actor or workflow reference for audit.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9._:@/-]+$"
+    },
+    "source_release": {
+      "$ref": "#/$defs/releaseReference"
+    },
+    "target_release": {
+      "$ref": "#/$defs/releaseReference"
+    },
+    "inventory_reference": {
+      "$ref": "#/$defs/redactedReference"
+    },
+    "source_project_keys": {
+      "description": "Distinct canonical project keys to converge. Their ordering is lexicographic UUID order for deterministic planning.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "target_project_key": {
+      "description": "The existing active canonical project key that receives approved source records.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "anchor_evidence": {
+      "description": "Redacted evidence that each source and target binding is eligible for this operation. Each anchor_project_id is the server-mapped Project.anchor_project_id corresponding to `.engram-project` field project_id. The array must cover every source key and the target key exactly once by semantic validation.",
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/$defs/anchorEvidence"
+      }
+    },
+    "record_counts": {
+      "description": "One named denominator per inventoried project-bearing object family. Counts include rows selected, expected after application, and rows quarantined rather than silently moved.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/recordCount"
+      }
+    },
+    "collision_dispositions": {
+      "description": "Every detected collision receives a deterministic safe disposition. Undecidable items are quarantine items, not inferred assignments.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/collisionDisposition"
+      }
+    },
+    "privacy_result": {
+      "description": "The complete plan must not widen privacy or principal scope. A requested widening is outside a normal merge and requires separate explicit authorization before it can be represented.",
+      "const": "non_widening"
+    },
+    "rollback_boundary": {
+      "$ref": "#/$defs/rollbackBoundary"
+    },
+    "plan_fingerprint": {
+      "$ref": "#/$defs/structuralFingerprint"
+    },
+    "dry_run_receipt_reference": {
+      "$ref": "#/$defs/redactedReference"
+    },
+    "approved_dry_run_manifest_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "approved_dry_run_fingerprint": {
+      "$ref": "#/$defs/structuralFingerprint"
+    },
+    "approval_reference": {
+      "$ref": "#/$defs/redactedReference"
+    },
+    "backup_export_reference": {
+      "$ref": "#/$defs/redactedReference"
+    },
+    "execution_receipt_reference": {
+      "$ref": "#/$defs/redactedReference"
+    },
+    "rollback_of_manifest_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "rollback_of_execution_receipt_reference": {
+      "$ref": "#/$defs/redactedReference"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "dry_run"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "dry_run_receipt_reference"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "apply"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "approved_dry_run_manifest_id",
+          "approved_dry_run_fingerprint",
+          "approval_reference",
+          "backup_export_reference",
+          "execution_receipt_reference"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "rollback"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "backup_export_reference",
+          "execution_receipt_reference",
+          "rollback_of_manifest_id",
+          "rollback_of_execution_receipt_reference"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "releaseReference": {
+      "description": "A non-secret release or schema-set reference.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9._:/+-]+$"
+    },
+    "redactedReference": {
+      "description": "An opaque audit, inventory, export, receipt, quarantine, or approval reference. It must not embed a filesystem path, URL with credentials, secret, or private payload.",
+      "type": "string",
+      "pattern": "^urn:engram:[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+    },
+    "structuralFingerprint": {
+      "description": "SHA-256 over approved non-secret structural metadata only. It must not include credentials, plaintext secrets, private content, or raw identifier values.",
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "anchorEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project_key",
+        "anchor_project_id",
+        "evidence_class",
+        "evidence_reference"
+      ],
+      "properties": {
+        "project_key": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "anchor_project_id": {
+          "description": "Server-side Project.anchor_project_id mapped from the V3 `.engram-project` anchor project_id; it is not a second canonical key.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "evidence_class": {
+          "type": "string",
+          "enum": [
+            "explicit_identity_decision",
+            "approved_anchor_lineage",
+            "corroborated_legacy_identifier"
+          ]
+        },
+        "evidence_reference": {
+          "$ref": "#/$defs/redactedReference"
+        }
+      }
+    },
+    "recordCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object_family",
+        "before_count",
+        "expected_after_count",
+        "quarantined_count",
+        "redacted_structural_fingerprint"
+      ],
+      "properties": {
+        "object_family": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$"
+        },
+        "before_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expected_after_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "quarantined_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "redacted_structural_fingerprint": {
+          "$ref": "#/$defs/structuralFingerprint"
+        }
+      }
+    },
+    "collisionDisposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "conflict_id",
+        "class",
+        "object_family",
+        "stable_source_reference",
+        "disposition",
+        "requires_operator_decision"
+      ],
+      "properties": {
+        "conflict_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "class": {
+          "type": "string",
+          "enum": [
+            "equivalent_row",
+            "same_external_id_different_content",
+            "current_state_conflict",
+            "settings_conflict",
+            "credential_conflict",
+            "issue_document_collision",
+            "cross_project_relation",
+            "privacy_principal_conflict"
+          ]
+        },
+        "object_family": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$"
+        },
+        "stable_source_reference": {
+          "$ref": "#/$defs/redactedReference"
+        },
+        "disposition": {
+          "type": "string",
+          "enum": [
+            "deduplicate_preserving_evidence",
+            "preserve_distinct_revisions",
+            "preserve_causally_valid_state",
+            "recorded_settings_winner",
+            "operator_decision",
+            "namespace_preserving_native_identifier",
+            "rewrite_after_endpoint_resolution",
+            "choose_stricter_scope",
+            "quarantine"
+          ]
+        },
+        "requires_operator_decision": {
+          "type": "boolean"
+        },
+        "decision_reference": {
+          "$ref": "#/$defs/redactedReference"
+        },
+        "quarantine_reference": {
+          "$ref": "#/$defs/redactedReference"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "class": {
+                "const": "credential_conflict"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "disposition": {
+                "enum": [
+                  "operator_decision",
+                  "quarantine"
+                ]
+              },
+              "requires_operator_decision": {
+                "const": true
+              }
+            },
+            "required": [
+              "decision_reference"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "class": {
+                "const": "privacy_principal_conflict"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "disposition": {
+                "enum": [
+                  "choose_stricter_scope",
+                  "quarantine"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "quarantine"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "quarantine_reference"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "operator_decision"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "decision_reference"
+            ]
+          }
+        }
+      ]
+    },
+    "rollbackBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "last_compatible_release",
+        "strategy",
+        "read_boundary_reference"
+      ],
+      "properties": {
+        "last_compatible_release": {
+          "$ref": "#/$defs/releaseReference"
+        },
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "restore_pre_apply_boundary",
+            "forward_compensating_migration"
+          ]
+        },
+        "read_boundary_reference": {
+          "$ref": "#/$defs/redactedReference"
+        }
+      }
+    }
+  }
+}

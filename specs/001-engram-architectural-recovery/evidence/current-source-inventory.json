@@ -1,0 +1,532 @@
+{
+  "inventory": "current-source",
+  "feature": "001-engram-architectural-recovery",
+  "scope": "AR-0 source-only recovery-relevant module and consumer inventory",
+  "source_freshness": "local checkout inspected during AR-0; no runtime, database, deployment, or installed-client state asserted",
+  "disposition_vocabulary": [
+    "target-core",
+    "move-and-reshape",
+    "projection",
+    "adjacent",
+    "compatibility-temporary",
+    "quarantine-pending-proof",
+    "delete",
+    "historical-immutable"
+  ],
+  "entries": [
+    {
+      "id": "server.worker-service",
+      "kind": "server-orchestrator-and-http-router",
+      "disposition": "move-and-reshape",
+      "owner": "recovery-platform",
+      "evidence": [
+        "cmd/engram-server/main.go",
+        "internal/worker/service.go"
+      ],
+      "target_release": "AR-4",
+      "notes": "Current boot path starts one worker service that owns HTTP, gRPC adapter wiring, readiness, background cycles, and route registration; durable evidence work must be extracted without adding a second service."
+    },
+    {
+      "id": "identity.proxy-v2-and-legacy-slug",
+      "kind": "project-identity-resolution",
+      "disposition": "move-and-reshape",
+      "owner": "identity",
+      "evidence": [
+        "internal/proxy/identity.go",
+        "internal/grpcserver/server.go"
+      ],
+      "target_release": "AR-2",
+      "notes": "V2 descriptor validation and resolution coexist with ResolveProjectSlug path/remote-hash and non-Git fallback identity; V3 becomes the sole scoped authority after bounded compatibility."
+    },
+    {
+      "id": "grpc.identity-boundary",
+      "kind": "grpc-auth-and-project-canonicalization",
+      "disposition": "move-and-reshape",
+      "owner": "identity",
+      "evidence": [
+        "internal/grpcserver/server.go",
+        "proto/engram/v1/engram.proto"
+      ],
+      "target_release": "AR-2",
+      "notes": "gRPC canonicalizes selected tool project arguments and resolves ProjectIdentityV2, but its descriptor remains a legacy-compatible identity contract."
+    },
+    {
+      "id": "gorm.authoritative-records",
+      "kind": "durable-storage-models-and-stores",
+      "disposition": "move-and-reshape",
+      "owner": "data-migration",
+      "evidence": [
+        "internal/db/gorm/models.go",
+        "internal/db/gorm/project_store.go",
+        "internal/db/gorm/transcript_store.go",
+        "internal/db/gorm/migrations.go"
+      ],
+      "target_release": "AR-1",
+      "notes": "Current GORM records and migration families are observed inputs to the project-bearing and session-evidence inventory; AR-0 assigns no live-row meaning."
+    },
+    {
+      "id": "session-transcript-hook-intake",
+      "kind": "transcript-persistence-and-async-citation-path",
+      "disposition": "compatibility-temporary",
+      "owner": "session-evidence",
+      "evidence": [
+        "internal/worker/handlers_hooks.go",
+        "internal/db/gorm/transcript_store.go",
+        "plugin/engram/hooks/stop.js"
+      ],
+      "target_release": "AR-4",
+      "notes": "The stop hook posts transcript-derived assistant output to the session-end hook, which returns before asynchronous processing; preserve only as a replay/import adapter until durable evidence receipts and observation prove replacement.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for session-evidence"
+    },
+    {
+      "id": "dream-crystallization",
+      "kind": "timer-gated-transcript-to-candidate-processing",
+      "disposition": "compatibility-temporary",
+      "owner": "session-evidence",
+      "evidence": [
+        "internal/worker/dream_cycle.go",
+        "internal/worker/sleep_cycle.go",
+        "internal/crystallization/candidate_gate.go"
+      ],
+      "target_release": "AR-4",
+      "notes": "Current processing is gated by transcript availability, flags, idle/time conditions, an in-process watermark, candidate storage, and extraction availability; it is not the durable job authority.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for session-evidence"
+    },
+    {
+      "id": "candidate-and-bulk-governance",
+      "kind": "candidate-review-and-bulk-operation-flow",
+      "disposition": "compatibility-temporary",
+      "owner": "knowledge-reconciliation",
+      "evidence": [
+        "internal/crystallization/candidate_gate.go",
+        "internal/db/gorm/candidate_store.go",
+        "internal/bulkops/facade.go",
+        "internal/mcp/tools_candidates.go"
+      ],
+      "target_release": "AR-5",
+      "notes": "Candidate status, review, and bulk operations are a current separate truth surface; retain only through semantic mapping to proposals, revisions, decisions, and exceptions.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for knowledge-reconciliation"
+    },
+    {
+      "id": "memory-lifecycle",
+      "kind": "memory-tier-decay-and-promotion",
+      "disposition": "compatibility-temporary",
+      "owner": "knowledge-reconciliation",
+      "evidence": [
+        "internal/lifecycle/sleep.go",
+        "internal/lifecycle/promotion.go",
+        "internal/db/gorm/memory_store.go"
+      ],
+      "target_release": "AR-5",
+      "notes": "Current active-memory lifecycle fields and transitions must map to belief/revision history; they do not themselves establish the target knowledge decision model.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for knowledge-reconciliation"
+    },
+    {
+      "id": "retrieval-ranking",
+      "kind": "retrieval-and-ranking-engine",
+      "disposition": "target-core",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "internal/retrieval/hybrid.go",
+        "internal/retrieval/rationale.go",
+        "internal/worker/retrieval.go",
+        "internal/mcp/tools_recall.go"
+      ],
+      "target_release": "AR-6",
+      "notes": "Existing retrieval paths are inputs to one task-aware retrieval workflow with scope filters before ranking, rationale, bounded rendering, and exposure recording."
+    },
+    {
+      "id": "static-context-injection",
+      "kind": "session-start-and-context-injection",
+      "disposition": "compatibility-temporary",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "internal/grpcserver/session_start.go",
+        "internal/worker/handlers_context.go",
+        "plugin/engram/hooks/session-start.js"
+      ],
+      "target_release": "AR-6",
+      "notes": "The present session-start path returns SQL-backed issues, rules, and recent memories before a concrete task; retain only while a query-driven packet replaces normal static memory injection.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for retrieval-exposure"
+    },
+    {
+      "id": "injection-feedback-loop",
+      "kind": "injection-selection-and-citation-feedback",
+      "disposition": "compatibility-temporary",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "internal/injection/injection.go",
+        "internal/feedback/feedback.go",
+        "internal/worker/handlers_hooks.go"
+      ],
+      "target_release": "AR-6",
+      "notes": "Thompson-scored injection and citation detection are current feedback inputs; target exposure and outcome evidence must retain source and certainty rather than infer completion from hook execution.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for retrieval-exposure"
+    },
+    {
+      "id": "rule-injection-and-governance",
+      "kind": "behavioral-rule-selection-and-management",
+      "disposition": "target-core",
+      "owner": "knowledge-reconciliation",
+      "evidence": [
+        "internal/ruleinjection/router.go",
+        "internal/mcp/tools_rules.go",
+        "internal/mcp/rule_governance_intent.go",
+        "plugin/engram/hooks/session-start.js"
+      ],
+      "target_release": "AR-5",
+      "notes": "Behavioral rules remain a stricter policy class; retain their explicit authority rather than merging them into ordinary candidates."
+    },
+    {
+      "id": "state-plane",
+      "kind": "session-project-and-resume-state",
+      "disposition": "adjacent",
+      "owner": "state-plane",
+      "evidence": [
+        "internal/stateplane/service.go",
+        "internal/mcp/tools_state.go",
+        "internal/worker/service.go"
+      ],
+      "target_release": "AR-3",
+      "notes": "State is an adjacent continuation primitive with explicit fallback behavior; it is not knowledge and must retain native ownership."
+    },
+    {
+      "id": "continuity-slot",
+      "kind": "designated-memory-continuity-state",
+      "disposition": "compatibility-temporary",
+      "owner": "state-plane",
+      "evidence": [
+        "internal/db/gorm/continuity_slot_store.go",
+        "internal/mcp/tools_continuity_slot.go",
+        "internal/grpcserver/session_start.go"
+      ],
+      "target_release": "AR-6",
+      "notes": "The continuity designation is currently memory-backed. AR-3 migrates continuation ownership into State Plane with a receipt; AR-6 proves no remaining normal static-context dependency; AR-7 may delete the slot only after that observation.",
+      "closure_rule": "AR-3 migration receipt, AR-6 nonzero replacement observation, compatibility sunset, rollback evidence, and exact source/configuration scan all pass before AR-7 deletion.",
+      "closure_verifier": "independent state-plane migration and contraction verifier"
+    },
+    {
+      "id": "graph-store",
+      "kind": "knowledge-graph-and-node-store",
+      "disposition": "projection",
+      "owner": "projection-governance",
+      "evidence": [
+        "internal/graph/store.go",
+        "internal/graph/nodes_store.go",
+        "internal/mcp/tools_graph.go"
+      ],
+      "target_release": "AR-7",
+      "notes": "Graph records must have a named consumer, authoritative source, rebuild procedure, and health state before retention; they have no independent evidence or identity write authority."
+    },
+    {
+      "id": "embedding-and-vector-index",
+      "kind": "embedding-client-and-content-index",
+      "disposition": "projection",
+      "owner": "projection-governance",
+      "evidence": [
+        "internal/embedding/store.go",
+        "internal/embedding/client.go",
+        "internal/db/gorm/code_chunk_store.go",
+        "internal/retrieval/hybrid.go"
+      ],
+      "target_release": "AR-7",
+      "notes": "Embedding and vector-backed indices are rebuildable retrieval support, subject to capability health and authoritative-record preservation."
+    },
+    {
+      "id": "meta-memory-and-summaries",
+      "kind": "meta-index-summary-and-ambient-subsystems",
+      "disposition": "projection",
+      "owner": "projection-governance",
+      "evidence": [
+        "internal/cognitive/s2meta",
+        "internal/cognitive/s3ambient",
+        "internal/mcp/tools_meta_memory.go",
+        "plugin/engram/hooks/user-prompt.js"
+      ],
+      "target_release": "AR-7",
+      "notes": "Current meta and ambient surfaces are feature-gated projections or selection aids, not authoritative knowledge or automatic deletion candidates."
+    },
+    {
+      "id": "configuration-and-capability-health",
+      "kind": "runtime-configuration-and-health",
+      "disposition": "move-and-reshape",
+      "owner": "operability",
+      "evidence": [
+        "internal/config/config.go",
+        "internal/worker/handlers_system.go",
+        "internal/mcp/server.go",
+        "internal/mcp/tools_settings.go"
+      ],
+      "target_release": "AR-1",
+      "notes": "Architecture-selection flags and provider availability must contract to typed operational capability health; the feature-flag ledger owns individual flag disposition."
+    },
+    {
+      "id": "auth-and-vault",
+      "kind": "authentication-and-encrypted-credentials",
+      "disposition": "adjacent",
+      "owner": "security-privacy",
+      "evidence": [
+        "internal/auth/validator.go",
+        "internal/crypto/vault.go",
+        "internal/worker/handlers_vault.go",
+        "internal/mcp/tools_vault_consolidated.go"
+      ],
+      "target_release": "AR-3",
+      "notes": "Authentication and credential metadata are retained native primitives; recovery inventories metadata only and never promotes credentials into knowledge."
+    },
+    {
+      "id": "issues",
+      "kind": "cross-project-agent-issue-tracking",
+      "disposition": "adjacent",
+      "owner": "adjacent-capabilities",
+      "evidence": [
+        "internal/db/gorm/issue_store.go",
+        "internal/worker/handlers_issues.go",
+        "internal/mcp/tools_issues.go",
+        "ui/src/composables/useIssues.ts"
+      ],
+      "target_release": "AR-3",
+      "notes": "Issues have a direct UI and MCP consumer and retain native lifecycle semantics; no automatic conversion to knowledge is authorized."
+    },
+    {
+      "id": "versioned-documents-and-collections",
+      "kind": "document-and-collection-records",
+      "disposition": "adjacent",
+      "owner": "adjacent-capabilities",
+      "evidence": [
+        "internal/db/gorm/versioned_document_store.go",
+        "internal/mcp/tools_docs_consolidated.go",
+        "internal/worker/handlers_documents.go",
+        "internal/collections/context.go"
+      ],
+      "target_release": "AR-3",
+      "notes": "Documents and collections retain their content-addressed/versioned contract and are not implicit beliefs."
+    },
+    {
+      "id": "loom",
+      "kind": "daemon-task-engine",
+      "disposition": "adjacent",
+      "owner": "adjacent-capabilities",
+      "evidence": [
+        "internal/handlers/loom/module.go",
+        "internal/handlers/loom/tools.go",
+        "cmd/engram/wiring.go"
+      ],
+      "target_release": "AR-3",
+      "notes": "Loom has its own task store and daemon MCP tools; it is outside the memory-core rewrite but needs project-identity compatibility evidence."
+    },
+    {
+      "id": "code-intelligence",
+      "kind": "daemon-indexing-and-server-chunk-search",
+      "disposition": "adjacent",
+      "owner": "adjacent-capabilities",
+      "evidence": [
+        "internal/handlers/codeintel/module.go",
+        "internal/mcp/tools_code_intel.go",
+        "internal/grpcserver/code_index.go",
+        "cmd/engram/wiring.go"
+      ],
+      "target_release": "AR-3",
+      "notes": "Daemon index liveness and server chunk search are split by design; retain their native contract and resolve project identity consistently."
+    },
+    {
+      "id": "governance-import-export",
+      "kind": "import-export-and-audit-support",
+      "disposition": "target-core",
+      "owner": "data-migration",
+      "evidence": [
+        "internal/governance/export.go",
+        "internal/governance/import.go",
+        "internal/db/gorm/audit_store.go"
+      ],
+      "target_release": "AR-3",
+      "notes": "Recovery migration needs redacted exports, audit receipts, and rollback support; existing governance code is an input, not authorization for destructive migration."
+    },
+    {
+      "id": "server-events-bridge",
+      "kind": "daemon-project-event-stream-and-heartbeat",
+      "disposition": "move-and-reshape",
+      "owner": "identity",
+      "evidence": [
+        "internal/handlers/serverevents/bridge.go",
+        "internal/grpcserver/project_events.go",
+        "proto/engram/v1/engram.proto"
+      ],
+      "target_release": "AR-2",
+      "notes": "The daemon bridge streams and reconciles project removal using local connected-project state; its V2 project identifiers require migration-safe replacement."
+    },
+    {
+      "id": "mcp-server",
+      "kind": "stdio-json-rpc-tool-server",
+      "disposition": "move-and-reshape",
+      "owner": "mcp-contracts",
+      "evidence": [
+        "internal/mcp/server.go",
+        "internal/mcp/tools_memory.go",
+        "internal/mcp/tools_recall.go"
+      ],
+      "target_release": "AR-4",
+      "notes": "MCP exposes consolidated and conditional tools over stdin/stdout, with current tools spanning core memory, candidate, projection, and adjacent domains."
+    },
+    {
+      "id": "daemon-engramcore-proxy",
+      "kind": "daemon-to-server-mcp-grpc-proxy",
+      "disposition": "move-and-reshape",
+      "owner": "mcp-contracts",
+      "evidence": [
+        "cmd/engram/main.go",
+        "cmd/engram/wiring.go",
+        "internal/handlers/engramcore/module.go"
+      ],
+      "target_release": "AR-2",
+      "notes": "The daemon dynamically fetches the server tool catalogue through gRPC; it is a live non-UI consumer and must not be removed from a UI-only scan."
+    },
+    {
+      "id": "claude-hook-package",
+      "kind": "Claude-Code-hook-client-package",
+      "disposition": "move-and-reshape",
+      "owner": "session-evidence",
+      "evidence": [
+        "plugin/engram/hooks/hooks.json",
+        "plugin/engram/hooks/dispatcher.cjs",
+        "plugin/engram/hooks/lib.js"
+      ],
+      "target_release": "AR-4",
+      "notes": "The installed hook package dispatches SessionStart, UserPromptSubmit, SubagentStop, PreToolUse, PreCompact, Stop, and SessionEnd events; recovery preserves a versioned client contract rather than a best-effort hidden path."
+    },
+    {
+      "id": "openclaw-plugin",
+      "kind": "OpenClaw-client-plugin",
+      "disposition": "compatibility-temporary",
+      "owner": "session-evidence",
+      "evidence": [
+        "plugin/openclaw-engram/src/client.ts",
+        "plugin/openclaw-engram/src/hooks/session-end.ts",
+        "plugin/openclaw-engram/src/hooks/before-compaction.ts"
+      ],
+      "target_release": "AR-4",
+      "notes": "OpenClaw currently calls legacy backfill and outcome URLs that are not registered by the server; keep as a versioned temporary adapter until supported durable intake replaces them.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for session-evidence"
+    },
+    {
+      "id": "operator-console-router",
+      "kind": "Vue-operator-console-navigation",
+      "disposition": "adjacent",
+      "owner": "operator-console",
+      "evidence": [
+        "ui/src/router/index.ts",
+        "ui/src/views/MemoriesView.vue",
+        "ui/src/views/ProjectsView.vue",
+        "ui/src/views/SystemView.vue"
+      ],
+      "target_release": "AR-7",
+      "notes": "The current console has routes for memories, projects, issues, vault, tokens, system, settings, and administration. AR-0 creates no new operator UI design authority."
+    },
+    {
+      "id": "ui.issue-and-vault-consumers",
+      "kind": "direct-ui-consumers-of-adjacent-capabilities",
+      "disposition": "adjacent",
+      "owner": "adjacent-capabilities",
+      "evidence": [
+        "ui/src/composables/useIssues.ts",
+        "ui/src/composables/useVault.ts",
+        "ui/src/router/index.ts"
+      ],
+      "target_release": "AR-3",
+      "notes": "Direct UI consumers exist for issues and vault, so their underlying contracts require compatibility checks."
+    },
+    {
+      "id": "ui.retrieval-and-outcome-consumer-absence",
+      "kind": "absence-of-direct-console-surface",
+      "disposition": "quarantine-pending-proof",
+      "owner": "operator-console",
+      "evidence": [
+        "ui/src/router/index.ts",
+        "ui/src/views",
+        "internal/mcp/server.go",
+        "internal/handlers/engramcore/module.go"
+      ],
+      "target_release": "AR-1",
+      "notes": "No direct console route for a task-aware retrieval packet or durable session outcome is established by the inspected router/views. This is not deletion authority: MCP and daemon consumers remain source-present, while installed-client use is unavailable under AR-0.",
+      "closure_rule": "A redacted inventory/fixture resolves the uncertainty into keep, move, delete, or explicitly approved compatibility; no identity, payload, or privacy inference may close this entry.",
+      "closure_verifier": "independent migration/data-integrity verifier for operator-console"
+    },
+    {
+      "id": "retired-observation-sdk",
+      "kind": "legacy-observation-processing-stubs",
+      "disposition": "delete",
+      "owner": "session-evidence",
+      "evidence": [
+        "internal/worker/sdk/processor.go",
+        "internal/worker/trigger_matcher.go",
+        "internal/worker/service.go"
+      ],
+      "target_release": "AR-7",
+      "notes": "Current source identifies retired observation extraction, summary, trigger, and stale-verification behavior as no-op compatibility residue; removal requires AR replacement and consumer proof."
+    },
+    {
+      "id": "retired-rest-compatibility-handlers",
+      "kind": "legacy-rest-noop-and-deprecation-handlers",
+      "disposition": "delete",
+      "owner": "mcp-contracts",
+      "evidence": [
+        "internal/worker/handlers_backfill.go",
+        "internal/worker/handlers_context.go",
+        "internal/worker/handlers_context_file.go",
+        "internal/worker/handlers_ingest.go",
+        "internal/worker/handlers_sessions.go"
+      ],
+      "target_release": "AR-7",
+      "notes": "These handlers preserve explicit retired behavior or empty compatibility payloads. Their individual route ledger entries identify the consumer and contraction prerequisites."
+    },
+    {
+      "id": "removed-search-mcp-names",
+      "kind": "historically-removed-mcp-tool-names",
+      "disposition": "historical-immutable",
+      "owner": "mcp-contracts",
+      "evidence": [
+        "internal/mcp/server.go"
+      ],
+      "target_release": "AR-7",
+      "notes": "Source documents that search, timeline, decisions, changes, how_it_works, find_by_concept, and find_by_type were removed and directs callers to consolidated recall; this historical record is not a live route."
+    },
+    {
+      "id": "operator-console-nuxt-surface",
+      "kind": "deployable-Nuxt-operator-console",
+      "disposition": "quarantine-pending-proof",
+      "owner": "operator-console",
+      "evidence": [
+        "apps/operator-console/package.json",
+        "apps/operator-console/pages/",
+        "apps/operator-console/composables/",
+        "apps/operator-console/scripts/mock-operator-api.mjs",
+        "ui/src/router/index.ts"
+      ],
+      "target_release": "AR-1",
+      "notes": "The repository has both the Vue dashboard under ui/ and a separate deployable Nuxt operator console under apps/operator-console/. AR-0 establishes neither as a new design target; AR-1 inventories their routes, mocks, flag consumers, and server contracts before AR-7 cleanup.",
+      "closure_rule": "A redacted dual-surface inventory records every route, navigation claim, mock, flag consumer, and server dependency; each is kept as adjacent compatibility or assigned removal after consumer evidence. No surface is redesigned by recovery.",
+      "closure_verifier": "independent operator-surface inventory and contraction verifier"
+    }
+  ],
+  "entry_closure_contract": {
+    "applies_to": [
+      "compatibility-temporary",
+      "quarantine-pending-proof"
+    ],
+    "required_fields": [
+      "owner",
+      "evidence",
+      "target_release",
+      "closure_rule",
+      "closure_verifier"
+    ],
+    "zero_evidence_rule": "A target release, calendar date, empty denominator, or silent absence never closes an entry."
+  }
+}

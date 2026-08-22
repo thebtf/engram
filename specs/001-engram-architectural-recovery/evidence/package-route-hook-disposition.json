@@ -1,0 +1,692 @@
+{
+  "inventory": "package-route-hook-disposition",
+  "feature": "001-engram-architectural-recovery",
+  "scope": "AR-0 source-only disposition of recovery-relevant transports, routes, MCP/daemon surfaces, hooks, UI consumers, and explicit retirement seams",
+  "source_freshness": "registrations and client call sites were inspected in the local AR-0 checkout; this file does not infer installed-client population or live request volume",
+  "disposition_vocabulary": [
+    "target-core",
+    "move-and-reshape",
+    "projection",
+    "adjacent",
+    "compatibility-temporary",
+    "quarantine-pending-proof",
+    "delete",
+    "historical-immutable"
+  ],
+  "entries": [
+    {
+      "id": "transport.http-rest",
+      "surface": "HTTP route registration",
+      "disposition": "move-and-reshape",
+      "owner": "mcp-contracts",
+      "evidence": [
+        "internal/worker/service.go"
+      ],
+      "target_release": "AR-4",
+      "notes": "One chi router exposes public, pre-ready, and ready-gated HTTP surfaces. Recovery contracts replace individual paths in place; no second HTTP service is authorized."
+    },
+    {
+      "id": "transport.grpc",
+      "surface": "gRPC EngramService",
+      "disposition": "move-and-reshape",
+      "owner": "mcp-contracts",
+      "evidence": [
+        "proto/engram/v1/engram.proto",
+        "internal/grpcserver/server.go"
+      ],
+      "target_release": "AR-2",
+      "notes": "The server exposes CallTool, Initialize, Ping, SyncProjectState, ProjectEvents, GetSessionStartContext, NegotiateVersion, CodeIndexNegotiate, and CodeIndexUpload; compatibility must be versioned through identity migration."
+    },
+    {
+      "id": "transport.mcp-stdio",
+      "surface": "MCP JSON-RPC over stdin/stdout",
+      "disposition": "move-and-reshape",
+      "owner": "mcp-contracts",
+      "evidence": [
+        "internal/mcp/server.go"
+      ],
+      "target_release": "AR-4",
+      "notes": "The MCP server dispatches tools/list and tools/call directly and is also used through the gRPC adapter; it is a first-class transport, not a dashboard-only backend."
+    },
+    {
+      "id": "transport.daemon-proxy",
+      "surface": "modular daemon MCP-to-gRPC proxy",
+      "disposition": "move-and-reshape",
+      "owner": "mcp-contracts",
+      "evidence": [
+        "cmd/engram/main.go",
+        "cmd/engram/wiring.go",
+        "internal/handlers/engramcore/module.go"
+      ],
+      "target_release": "AR-2",
+      "notes": "engramcore dynamically proxies the server-owned tool list over gRPC. Its source presence establishes a non-UI consumer."
+    },
+    {
+      "id": "grpc.session-start-context",
+      "surface": "GetSessionStartContext RPC",
+      "disposition": "compatibility-temporary",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "proto/engram/v1/engram.proto",
+        "internal/grpcserver/session_start.go",
+        "plugin/engram/hooks/session-start.js"
+      ],
+      "target_release": "AR-6",
+      "notes": "The current RPC returns SQL-backed issues, rules, and recent memories without task ranking. It remains only during migration to the query-driven retrieval packet.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for retrieval-exposure"
+    },
+    {
+      "id": "grpc.project-events",
+      "surface": "ProjectEvents and SyncProjectState RPCs",
+      "disposition": "move-and-reshape",
+      "owner": "identity",
+      "evidence": [
+        "proto/engram/v1/engram.proto",
+        "internal/handlers/serverevents/bridge.go",
+        "internal/grpcserver/project_events.go"
+      ],
+      "target_release": "AR-2",
+      "notes": "The daemon consumes a project-lifecycle stream plus periodic reconciliation. The V2 project reference needs V3-compatible migration rather than removal."
+    },
+    {
+      "id": "grpc.code-index",
+      "surface": "CodeIndexNegotiate and CodeIndexUpload RPCs",
+      "disposition": "adjacent",
+      "owner": "adjacent-capabilities",
+      "evidence": [
+        "proto/engram/v1/engram.proto",
+        "internal/grpcserver/code_index.go",
+        "internal/handlers/codeintel/module.go"
+      ],
+      "target_release": "AR-3",
+      "notes": "Code-index transport is an adjacent native contract; its project scoping must converge but its chunks are not knowledge authority."
+    },
+    {
+      "id": "mcp.primary-memory-tools",
+      "surface": "recall, store, feedback",
+      "disposition": "move-and-reshape",
+      "owner": "knowledge-reconciliation",
+      "evidence": [
+        "internal/mcp/server.go",
+        "internal/mcp/tools_memory.go",
+        "internal/mcp/tools_recall.go",
+        "internal/mcp/tools_feedback.go"
+      ],
+      "target_release": "AR-5",
+      "notes": "The consolidated core tool surface currently mixes recall, writes, suppression, and explicit outcome feedback; it migrates to evidence, reconciliation, retrieval, exposure, and outcome contracts."
+    },
+    {
+      "id": "mcp.conditional-candidate-and-bulk-tools",
+      "surface": "candidate, review, snapshot, and bulk MCP tools",
+      "disposition": "compatibility-temporary",
+      "owner": "knowledge-reconciliation",
+      "evidence": [
+        "internal/mcp/server.go",
+        "internal/mcp/tools_candidates.go",
+        "internal/mcp/tools_bulkops.go",
+        "internal/mcp/tools_governance.go"
+      ],
+      "target_release": "AR-5",
+      "notes": "Advertisement and invocation are gated by current stores and VNext-F configuration; retain through one recorded decision model, then retire competing candidate truth.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for knowledge-reconciliation"
+    },
+    {
+      "id": "mcp.rule-tools",
+      "surface": "store_rule, list_rules, and rule-governance tools",
+      "disposition": "target-core",
+      "owner": "knowledge-reconciliation",
+      "evidence": [
+        "internal/mcp/server.go",
+        "internal/mcp/tools_rules.go",
+        "internal/mcp/rule_governance_intent.go"
+      ],
+      "target_release": "AR-5",
+      "notes": "Rules are an explicit stricter authority class and survive recovery separately from ordinary knowledge proposal handling."
+    },
+    {
+      "id": "mcp.retrieval-variants",
+      "surface": "recall_memory, get_memory_brief, know_about, get_ambient_hints",
+      "disposition": "compatibility-temporary",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "internal/mcp/server.go",
+        "internal/mcp/tools_recall.go",
+        "internal/mcp/tools_meta_memory.go"
+      ],
+      "target_release": "AR-6",
+      "notes": "Current retrieval variants have different gating and semantics. AR-6 converges normal delivery on one task-aware selection/rationale/exposure workflow.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for retrieval-exposure"
+    },
+    {
+      "id": "mcp.graph-tool",
+      "surface": "graph MCP tool",
+      "disposition": "projection",
+      "owner": "projection-governance",
+      "evidence": [
+        "internal/mcp/server.go",
+        "internal/mcp/tools_graph.go",
+        "internal/graph/store.go"
+      ],
+      "target_release": "AR-7",
+      "notes": "Graph is a source-present tool with no automatic preservation claim; retention depends on a named consumer, rebuild procedure, authoritative source, and health state."
+    },
+    {
+      "id": "mcp.state-and-continuity-tools",
+      "surface": "get_state, set_state, continuity_slot",
+      "disposition": "adjacent",
+      "owner": "state-plane",
+      "evidence": [
+        "internal/mcp/server.go",
+        "internal/mcp/tools_state.go",
+        "internal/mcp/tools_continuity_slot.go"
+      ],
+      "target_release": "AR-3",
+      "notes": "State is a supported adjacent primitive. The continuity slot has its own temporary migration record in the source inventory."
+    },
+    {
+      "id": "mcp.vault-settings-docs-issues-tools",
+      "surface": "vault, settings, docs, issues, admin, health",
+      "disposition": "adjacent",
+      "owner": "adjacent-capabilities",
+      "evidence": [
+        "internal/mcp/server.go",
+        "internal/mcp/tools_vault_consolidated.go",
+        "internal/mcp/tools_docs_consolidated.go",
+        "internal/mcp/tools_issues.go"
+      ],
+      "target_release": "AR-3",
+      "notes": "These source-present MCP contracts remain native adjacent capabilities; credentials and documents are not inferred as knowledge."
+    },
+    {
+      "id": "daemon.loom-tools",
+      "surface": "loom_submit, loom_get, loom_list, loom_cancel",
+      "disposition": "adjacent",
+      "owner": "adjacent-capabilities",
+      "evidence": [
+        "cmd/engram/wiring.go",
+        "internal/handlers/loom/module.go",
+        "internal/handlers/loom/tools.go"
+      ],
+      "target_release": "AR-3",
+      "notes": "Loom is always registered by daemon wiring and owns a separate task store; no UI consumer is required for its retention."
+    },
+    {
+      "id": "daemon.codeintel-tools",
+      "surface": "codebase_index, codebase_status, codebase_search",
+      "disposition": "adjacent",
+      "owner": "adjacent-capabilities",
+      "evidence": [
+        "cmd/engram/wiring.go",
+        "internal/handlers/codeintel/module.go",
+        "internal/mcp/tools_code_intel.go"
+      ],
+      "target_release": "AR-3",
+      "notes": "The daemon advertises index and status while the server advertises search. It is conditional on code-intelligence wiring and must not be deleted because the console lacks a route."
+    },
+    {
+      "id": "hook.session-start",
+      "surface": "Claude Code SessionStart hook",
+      "disposition": "compatibility-temporary",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "plugin/engram/hooks/hooks.json",
+        "plugin/engram/hooks/session-start.js",
+        "plugin/engram/hooks/lib.js"
+      ],
+      "target_release": "AR-6",
+      "notes": "Renders static issues, rule packets, and recent memories. Keep universal state/policy delivery only after task-aware normal retrieval is available.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for retrieval-exposure"
+    },
+    {
+      "id": "hook.stop",
+      "surface": "Claude Code Stop hook to /api/hooks/session-end",
+      "disposition": "compatibility-temporary",
+      "owner": "session-evidence",
+      "evidence": [
+        "plugin/engram/hooks/hooks.json",
+        "plugin/engram/hooks/stop.js",
+        "internal/worker/handlers_hooks.go",
+        "internal/worker/service.go"
+      ],
+      "target_release": "AR-4",
+      "notes": "The source client posts transcript-derived assistant output and always fails soft; the server handler returns 202 before asynchronous work. Replace with acknowledged durable evidence intake.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for session-evidence"
+    },
+    {
+      "id": "hook.user-prompt",
+      "surface": "Claude Code UserPromptSubmit hook",
+      "disposition": "compatibility-temporary",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "plugin/engram/hooks/hooks.json",
+        "plugin/engram/hooks/user-prompt.js",
+        "internal/worker/service.go"
+      ],
+      "target_release": "AR-6",
+      "notes": "Current source posts segment/correction support events and conditionally asks for ambient candidates under a short budget. It does not establish the target retrieval exposure contract.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for retrieval-exposure"
+    },
+    {
+      "id": "hook.pre-tool-and-pre-compact",
+      "surface": "Claude Code PreToolUse and PreCompact hooks",
+      "disposition": "compatibility-temporary",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "plugin/engram/hooks/hooks.json",
+        "plugin/engram/hooks/pre-tool-use.js",
+        "plugin/engram/hooks/pre-compact.js"
+      ],
+      "target_release": "AR-6",
+      "notes": "Current hook support and reinjection surfaces must be reconciled with the one task-aware retrieval workflow before any contraction.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for retrieval-exposure"
+    },
+    {
+      "id": "hook.subagent-stop",
+      "surface": "Claude Code SubagentStop hook",
+      "disposition": "compatibility-temporary",
+      "owner": "session-evidence",
+      "evidence": [
+        "plugin/engram/hooks/hooks.json",
+        "plugin/engram/hooks/subagent-stop.js"
+      ],
+      "target_release": "AR-4",
+      "notes": "Source registration exists. Its durable-evidence behavior must be established by the AR-4 versioned adapter contract rather than inferred from hook existence.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for session-evidence"
+    },
+    {
+      "id": "hook.session-end-propagate-outcome",
+      "surface": "Claude Code SessionEnd callback to /api/sessions/{id}/propagate-outcome",
+      "disposition": "compatibility-temporary",
+      "owner": "session-evidence",
+      "evidence": [
+        "plugin/engram/hooks/hooks.json",
+        "plugin/engram/hooks/session-end.js",
+        "internal/worker/service.go"
+      ],
+      "target_release": "AR-4",
+      "notes": "The client call is source-present but no matching route is registered in setupRoutes. The missing callback must become explicit durable outcome intake or receive versioned retirement; it is not silently deleted.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for session-evidence"
+    },
+    {
+      "id": "openclaw.backfill-session",
+      "surface": "OpenClaw session-end and pre-compaction backfill client",
+      "disposition": "compatibility-temporary",
+      "owner": "session-evidence",
+      "evidence": [
+        "plugin/openclaw-engram/src/client.ts",
+        "plugin/openclaw-engram/src/hooks/session-end.ts",
+        "plugin/openclaw-engram/src/hooks/before-compaction.ts",
+        "internal/worker/handlers_backfill.go",
+        "internal/worker/service.go"
+      ],
+      "target_release": "AR-4",
+      "notes": "Client posts /api/backfill/session, while the current handler requires run_id and returns retired zero-count persistence semantics. Replace with a supported durable intake adapter.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for session-evidence"
+    },
+    {
+      "id": "openclaw.outcome-callback",
+      "surface": "OpenClaw callback to /api/sessions/{id}/outcome",
+      "disposition": "compatibility-temporary",
+      "owner": "session-evidence",
+      "evidence": [
+        "plugin/openclaw-engram/src/client.ts",
+        "plugin/openclaw-engram/src/hooks/session-end.ts",
+        "internal/worker/service.go"
+      ],
+      "target_release": "AR-4",
+      "notes": "The current OpenClaw client calls the outcome URL, but no matching HTTP route is registered. This is a dead contract requiring a durable outcome replacement or versioned retirement.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for session-evidence"
+    },
+    {
+      "id": "http.context-inject",
+      "surface": "POST /api/context/inject",
+      "disposition": "compatibility-temporary",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_context.go"
+      ],
+      "target_release": "AR-6",
+      "notes": "Current normal HTTP context injection is a static/recent-memory compatibility path and requires canonical identity transition plus task-aware replacement.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for retrieval-exposure"
+    },
+    {
+      "id": "http.context-inject-get",
+      "surface": "GET /api/context/inject",
+      "disposition": "delete",
+      "owner": "mcp-contracts",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_context.go"
+      ],
+      "target_release": "AR-7",
+      "notes": "The route is explicitly deprecated in source in favor of POST. Remove only after source and installed-consumer compatibility evidence at the declared sunset gate."
+    },
+    {
+      "id": "http.static-session-start",
+      "surface": "GET and POST /api/context/session-start",
+      "disposition": "compatibility-temporary",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_context.go",
+        "internal/grpcserver/session_start.go"
+      ],
+      "target_release": "AR-6",
+      "notes": "HTTP compatibility wrapper around static session-start context; it remains until the query-driven packet has observation and rollback evidence.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for retrieval-exposure"
+    },
+    {
+      "id": "http.hook-support-callbacks",
+      "surface": "/api/hooks/correction, /api/hooks/code-extraction, /api/hooks/segment-check, /api/hooks/ambient-candidates",
+      "disposition": "compatibility-temporary",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "internal/worker/service.go",
+        "plugin/engram/hooks/user-prompt.js"
+      ],
+      "target_release": "AR-6",
+      "notes": "Current source registers support callbacks, with ambient registration conditional. Their future disposition follows the single retrieval/evidence contract, not hook popularity.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for retrieval-exposure"
+    },
+    {
+      "id": "http.memory-rest",
+      "surface": "/api/memories and /api/memory/* legacy-memory routes",
+      "disposition": "compatibility-temporary",
+      "owner": "knowledge-reconciliation",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_memories.go",
+        "ui/src/views/MemoriesView.vue"
+      ],
+      "target_release": "AR-5",
+      "notes": "The current REST memory surface has a direct console consumer. It stays compatible while active memory rows map to belief/revision records; UI presence is preservation evidence, not target authority.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for knowledge-reconciliation"
+    },
+    {
+      "id": "http.graph-rest",
+      "surface": "/api/graph/*",
+      "disposition": "projection",
+      "owner": "projection-governance",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_graph.go",
+        "internal/graph/store.go"
+      ],
+      "target_release": "AR-7",
+      "notes": "Current graph REST routes require a named consumer and rebuild/health contract before keeping; source registration alone grants neither authority nor deletion."
+    },
+    {
+      "id": "http.document-rest",
+      "surface": "/api/documents/*",
+      "disposition": "adjacent",
+      "owner": "adjacent-capabilities",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_documents.go"
+      ],
+      "target_release": "AR-3",
+      "notes": "Versioned document HTTP routes retain native document semantics and require identity-compatible coverage."
+    },
+    {
+      "id": "http.issue-rest",
+      "surface": "/api/issues/*",
+      "disposition": "adjacent",
+      "owner": "adjacent-capabilities",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_issues.go",
+        "ui/src/composables/useIssues.ts",
+        "ui/src/router/index.ts"
+      ],
+      "target_release": "AR-3",
+      "notes": "Issue REST has an explicit console consumer and supported native contract; it is not memory-core data."
+    },
+    {
+      "id": "http.vault-rest",
+      "surface": "/api/vault/*",
+      "disposition": "adjacent",
+      "owner": "security-privacy",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_vault.go",
+        "ui/src/composables/useVault.ts",
+        "ui/src/router/index.ts"
+      ],
+      "target_release": "AR-3",
+      "notes": "Vault REST has an explicit console consumer and stores encrypted credentials; recovery must not inspect values or turn credentials into knowledge."
+    },
+    {
+      "id": "http.state-rest",
+      "surface": "/api/state/session/{sessionID}, /api/state/project/{project}, /api/state/resume",
+      "disposition": "adjacent",
+      "owner": "state-plane",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_state.go",
+        "internal/stateplane/service.go"
+      ],
+      "target_release": "AR-3",
+      "notes": "The native State Plane retains its own current-continuation semantics and explicit fallback controls."
+    },
+    {
+      "id": "http.operability",
+      "surface": "/health, /api/health, /api/ready, /api/flags, /api/config, /api/events, /api/stats/*",
+      "disposition": "move-and-reshape",
+      "owner": "operability",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_system.go",
+        "ui/src/views/SystemView.vue",
+        "ui/src/composables/useSSE.ts"
+      ],
+      "target_release": "AR-1",
+      "notes": "Health, configuration, event stream, and stats are current operator-observability surfaces. AR-1 establishes durable capability and backlog denominators without redesigning the console."
+    },
+    {
+      "id": "http.backfill-session",
+      "surface": "POST /api/backfill/session and GET /api/backfill/status",
+      "disposition": "delete",
+      "owner": "session-evidence",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_backfill.go",
+        "plugin/openclaw-engram/src/client.ts"
+      ],
+      "target_release": "AR-7",
+      "notes": "The source handler returns a retired zero-count observation/session-summary result. Contracted removal waits for AR-4 adapter migration and observation evidence."
+    },
+    {
+      "id": "http.import-feedback",
+      "surface": "POST /api/import/feedback",
+      "disposition": "delete",
+      "owner": "knowledge-reconciliation",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_backfill.go"
+      ],
+      "target_release": "AR-7",
+      "notes": "Source keeps an explicit 410 retirement response for removed LLM feedback import. Preserve actionable retirement only through the declared compatibility sunset."
+    },
+    {
+      "id": "http.events-ingest",
+      "surface": "POST /api/events/ingest",
+      "disposition": "delete",
+      "owner": "session-evidence",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_ingest.go",
+        "plugin/openclaw-engram/src/client.ts"
+      ],
+      "target_release": "AR-7",
+      "notes": "The route remains registered but source returns an explicit removed-in-v5 response without reading payload. The OpenClaw client still has a call site, so removal needs migration or retirement evidence."
+    },
+    {
+      "id": "http.file-context-compatibility",
+      "surface": "GET /api/context/files and GET /api/context/by-file",
+      "disposition": "delete",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_context.go",
+        "internal/worker/handlers_context_file.go",
+        "plugin/openclaw-engram/src/client.ts"
+      ],
+      "target_release": "AR-7",
+      "notes": "Both current handlers expose explicit empty/deprecated v5 file-context behavior. The OpenClaw client call site prevents a source-only deletion decision before compatible replacement or retirement."
+    },
+    {
+      "id": "http.session-index-compatibility",
+      "surface": "POST /api/sessions/index and POST /api/sessions/check",
+      "disposition": "delete",
+      "owner": "session-evidence",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_sessions.go"
+      ],
+      "target_release": "AR-7",
+      "notes": "Current source accepts session-index requests but reports indexed-session capability disabled/removed. Remove after durable session-evidence intake has compatibility evidence."
+    },
+    {
+      "id": "http.search-miss-analytics",
+      "surface": "POST /api/analytics/search-misses",
+      "disposition": "delete",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_context.go"
+      ],
+      "target_release": "AR-7",
+      "notes": "The registered endpoint returns explicit deprecated empty analytics because persistence was removed. It is not a retrieval-exposure substitute."
+    },
+    {
+      "id": "http.decisions-search",
+      "surface": "POST /api/decisions/search",
+      "disposition": "delete",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/handlers_context.go",
+        "internal/mcp/server.go"
+      ],
+      "target_release": "AR-7",
+      "notes": "Source labels the route a removed decision preset and directs callers to MCP recall(action=search); retain retirement behavior only until contract sunset."
+    },
+    {
+      "id": "http.memory-triggers",
+      "surface": "POST /api/memory/triggers",
+      "disposition": "delete",
+      "owner": "retrieval-exposure",
+      "evidence": [
+        "internal/worker/service.go",
+        "internal/worker/trigger_matcher.go"
+      ],
+      "target_release": "AR-7",
+      "notes": "The backing observation/vector trigger implementations return no matches after v5 retirement. It is not a valid task-aware retrieval path."
+    },
+    {
+      "id": "http.retired-observation-route",
+      "surface": "POST /api/sessions/observations",
+      "disposition": "historical-immutable",
+      "owner": "session-evidence",
+      "evidence": [
+        "internal/worker/retired_observation_route_test.go",
+        "internal/worker/service.go"
+      ],
+      "target_release": "AR-7",
+      "notes": "The route is absent from current route registration and the source test asserts method-not-allowed behavior. This records a completed historical retirement, not a live endpoint."
+    },
+    {
+      "id": "ui.memory-and-project-consumers",
+      "surface": "console routes /memories and /projects",
+      "disposition": "compatibility-temporary",
+      "owner": "operator-console",
+      "evidence": [
+        "ui/src/router/index.ts",
+        "ui/src/views/MemoriesView.vue",
+        "ui/src/views/ProjectsView.vue"
+      ],
+      "target_release": "AR-5",
+      "notes": "Current console consumes legacy project strings, sessions, and memory rows. Preserve compatible reads during migration; AR-0 does not authorize redesign.",
+      "closure_rule": "Replacement contract is installed; every named consumer has a nonzero observed denominator or an explicit retirement result; compatibility sunset, rollback evidence, and exact source/configuration scan pass.",
+      "closure_verifier": "independent verifier for operator-console"
+    },
+    {
+      "id": "ui.issue-vault-system-consumers",
+      "surface": "console routes /issues, /vault, and /system",
+      "disposition": "adjacent",
+      "owner": "operator-console",
+      "evidence": [
+        "ui/src/router/index.ts",
+        "ui/src/composables/useIssues.ts",
+        "ui/src/composables/useVault.ts",
+        "ui/src/views/SystemView.vue"
+      ],
+      "target_release": "AR-3",
+      "notes": "Direct console consumers exist for adjacent issues, vault, and operability. Their presence is compatibility evidence only, not authority to expand working-surface scope."
+    },
+    {
+      "id": "ui.absent-retrieval-outcome-view",
+      "surface": "absence of direct console route/view for task-aware retrieval and durable outcome evidence",
+      "disposition": "quarantine-pending-proof",
+      "owner": "operator-console",
+      "evidence": [
+        "ui/src/router/index.ts",
+        "ui/src/views",
+        "internal/mcp/server.go",
+        "internal/handlers/engramcore/module.go"
+      ],
+      "target_release": "AR-1",
+      "notes": "The inspected console router/views establish no direct UI route for these surfaces. This is not deletion authority: source-present MCP and daemon consumers remain, and installed-client use cannot be proven under AR-0.",
+      "closure_rule": "A redacted inventory/fixture resolves the uncertainty into keep, move, delete, or explicitly approved compatibility; no identity, payload, or privacy inference may close this entry.",
+      "closure_verifier": "independent migration/data-integrity verifier for operator-console"
+    },
+    {
+      "id": "ui.dual-operator-console-surfaces",
+      "surface": "Vue dashboard ui/ and deployable Nuxt apps/operator-console/ operator surfaces",
+      "disposition": "quarantine-pending-proof",
+      "owner": "operator-console",
+      "evidence": [
+        "ui/package.json",
+        "ui/src/router/index.ts",
+        "apps/operator-console/package.json",
+        "apps/operator-console/pages/",
+        "apps/operator-console/composables/",
+        "apps/operator-console/scripts/mock-operator-api.mjs"
+      ],
+      "target_release": "AR-1",
+      "notes": "These are distinct source roots. Their live consumer relation, route overlap, flag/mock claims, and retention/removal disposition require AR-1 source inventory; AR-0 forbids redesign of either surface.",
+      "closure_rule": "Every route, navigation claim, mock API surface, feature-flag consumer, and backend dependency in both roots receives an adjacent/compatibility/delete disposition with consumer evidence before AR-7 contraction.",
+      "closure_verifier": "independent operator-surface inventory and contraction verifier"
+    }
+  ],
+  "entry_closure_contract": {
+    "applies_to": [
+      "compatibility-temporary",
+      "quarantine-pending-proof"
+    ],
+    "required_fields": [
+      "owner",
+      "evidence",
+      "target_release",
+      "closure_rule",
+      "closure_verifier"
+    ],
+    "zero_evidence_rule": "A target release, calendar date, empty denominator, or silent absence never closes an entry."
+  }
+}

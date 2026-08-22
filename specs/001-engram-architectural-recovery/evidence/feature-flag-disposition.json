@@ -1,0 +1,462 @@
+{
+  "inventory_version": 1,
+  "scope": "AR-0 source-fresh inventory of architecture-era feature flags and related control groups; no runtime state is asserted.",
+  "source_ref": "fb18daab8aeabb8ddc041e31c60ddbf42bb6b1a8",
+  "status": "PASS",
+  "group_count": 12,
+  "flag_identifier_count": 32,
+  "disposition_vocabulary": {
+    "remove": "Delete the flag and both alternative architecture branches after the named replacement and observation evidence exist.",
+    "convert": "Replace a mutable architecture switch with one mandatory invariant or a typed, non-architectural operational control.",
+    "detach": "Keep the accepted adjacent capability, but sever it from cognitive-era maturity gating and give it an independent stable contract and capability-health report."
+  },
+  "temporary_control_exception_rule": {
+    "rule": "A temporary control is permitted only for an operational emergency or bounded migration rollback; it MUST NOT select a competing durable architecture or weaken canonical-project, privacy, or authorization invariants.",
+    "required_metadata": [
+      "named owner",
+      "protected risk",
+      "written expiry release or UTC deadline",
+      "safe default and safe active behavior",
+      "activation and rollback criteria",
+      "observable metrics and capability-health state",
+      "both-branch test",
+      "tracked deletion task",
+      "removal evidence"
+    ],
+    "expiry_behavior": "Expiry removes the control and its dormant branch; extension requires a new recorded exception before the prior expiry.",
+    "current_exception": {
+      "identifier": "ENGRAM_INJECT_UNIFIED",
+      "reason": "Current source labels it an emergency rollback flag, but its false branch returns an explicit empty relevant section rather than a retained alternate retrieval implementation.",
+      "owner": "AR-6 retrieval-delivery owner",
+      "protected_risk": "An AR-6 task-aware delivery regression after cutover must be suppressible without restoring static recent-memory injection or widening project/privacy scope.",
+      "safe_default": "true: the canonical task-aware retrieval path is enabled. Emergency false: emit an explicit empty relevant section and capability-health degradation, never a legacy context dump.",
+      "activation_criteria": "Only an authorized AR-6 incident record with a policy/version correlation may set false; every activation emits capability health and an incident receipt.",
+      "rollback_criteria": "Return true only after the active render-budget policy, bounded packet, exposure idempotency, corpus regression, and installed rollback rehearsal pass.",
+      "metrics": [
+        "task-aware packet delivery and explicit-empty-result rate",
+        "exposure idempotency and privacy-leakage corpus results",
+        "capability-health degraded duration and incident count"
+      ],
+      "both_branch_test": "T074 exercises true canonical retrieval and false explicit-empty emergency behavior with identical canonical-project/privacy validation and no static-context fallback.",
+      "tracked_deletion_task": "T079",
+      "expiry_release": "AR-6 installed retrieval cutover; no later than AR-7 contraction",
+      "required_replacement_evidence": "Task-aware retrieval, active render-budget declaration, bounded packet, exposure recording, both-branch test, rollback rehearsal, and installed observation all pass before deleting the control."
+    },
+    "evidence": [
+      "specs/001-engram-architectural-recovery/research.md:220-246",
+      "specs/001-engram-architectural-recovery/spec.md:224-227",
+      "internal/config/config.go:72,303"
+    ]
+  },
+  "groups": [
+    {
+      "id": "vnext",
+      "flags": [
+        "ENGRAM_VNEXT_ENABLED",
+        "ENGRAM_VNEXT_F_ENABLED"
+      ],
+      "current_readers": [
+        "internal/grpcserver/session_start.go:86-142",
+        "internal/mcp/server.go:653-760,776-780,1705-1709",
+        "internal/mcp/tools_memory.go:995-1048,1450-1500",
+        "internal/mcp/tools_recall.go:191-230",
+        "internal/crystallization/candidate_gate.go:34-57",
+        "internal/worker/dream_cycle.go:68-71",
+        "internal/db/gorm/memory_store.go:1258-1262",
+        "internal/worker/handlers_system.go:362-422"
+      ],
+      "defaults": {
+        "ENGRAM_VNEXT_ENABLED": "false when unset or any value other than exact lowercase true",
+        "ENGRAM_VNEXT_F_ENABLED": "false when unset or any value other than exact lowercase true"
+      },
+      "semantic_divergence": [
+        "The two gates are not a single master/subfeature pair in current source: ENGRAM_VNEXT_F_ENABLED independently activates privacy-scope filtering and candidate routing when ENGRAM_VNEXT_ENABLED is false.",
+        "Readers are mixed per request and startup/reporting paths; the /api/flags env reporter recognizes only exact lowercase true.",
+        "The flag-off contract intentionally preserves older retrieval and write behavior, so each flag selects competing architecture rather than capability health."
+      ],
+      "disposition": "remove",
+      "owner": "AR-4 durable-evidence and AR-6 task-aware-retrieval owners; AR-7 contraction owner",
+      "target_release": "AR-7",
+      "replacement_boundary": "AR-4 durable intake and AR-6 one task-aware retrieval path replace the selected branches; AR-7 deletes flags, readers, schemas, docs, tests, mocks, routes, and UI claims together.",
+      "evidence": [
+        "internal/grpcserver/session_start.go:86-142",
+        "internal/crystallization/candidate_gate.go:34-57",
+        "internal/worker/handlers_system.go:362-422",
+        "specs/001-engram-architectural-recovery/research.md:220-246"
+      ]
+    },
+    {
+      "id": "v7",
+      "flags": [
+        "ENGRAM_V7_PLUG_ENABLED",
+        "ENGRAM_V7_S1_STATE",
+        "ENGRAM_V7_S2_METAMEM",
+        "ENGRAM_V7_S3_AMBIENT",
+        "ENGRAM_V7_S4A_DIRECTIVES_CAPTURE",
+        "ENGRAM_V7_S4B_DIRECTIVES_SURFACING",
+        "ENGRAM_V7_S5_TELEMETRY",
+        "ENGRAM_V7_S6_OUTCOME"
+      ],
+      "current_readers": [
+        "internal/cognitive/core/flag_config.go:37-125",
+        "internal/worker/service.go:759-761",
+        "internal/worker/handlers_system.go:425-446",
+        "internal/grpcserver/session_start.go:84-87",
+        "internal/mcp/tools_meta_memory.go:18-44"
+      ],
+      "defaults": {
+        "all_members": "false when unset",
+        "parser": "FlagConfig accepts true, 1, or yes after trim/lowercase; a disabled master suppresses every subsystem"
+      },
+      "semantic_divergence": [
+        "The V7 config snapshot is captured when LoadFlagConfigFromEnv is called, while some direct readers such as session-start meta-summary use exact lowercase true at request time.",
+        "Direct S2 readers do not use FlagConfig's true/1/yes parser, so an environment value of 1 or yes has inconsistent effective behavior across the same V7 group.",
+        "Master and milestone gates select cognitive subsystem implementations instead of reporting provider or operational health."
+      ],
+      "disposition": "remove",
+      "owner": "AR-5 reconciliation-and-policy owner; AR-7 contraction owner",
+      "target_release": "AR-7",
+      "replacement_boundary": "Preserve only accepted state, policy, telemetry, and outcome contracts through their authoritative AR-4 to AR-6 records; remove V7 implementation-selection gates after their replacement evidence is installed and observed.",
+      "evidence": [
+        "internal/cognitive/core/flag_config.go:8-18,37-125",
+        "internal/grpcserver/session_start.go:84-87",
+        "internal/worker/handlers_system.go:425-446",
+        "specs/001-engram-architectural-recovery/research.md:220-246"
+      ]
+    },
+    {
+      "id": "lifecycle",
+      "flags": [
+        "ENGRAM_LIFECYCLE_ENABLED"
+      ],
+      "current_readers": [
+        "internal/worker/service.go:1314-1317",
+        "internal/mcp/server.go:1075-1084",
+        "internal/mcp/tools_memory.go:1006-1048,1413-1418,1588-1592,2125-2129",
+        "internal/mcp/tools_ingest.go:98-102",
+        "internal/db/gorm/memory_store.go:897-901",
+        "internal/worker/handlers_system.go:364-371"
+      ],
+      "defaults": {
+        "ENGRAM_LIFECYCLE_ENABLED": "false when unset or any value other than exact lowercase true"
+      },
+      "semantic_divergence": [
+        "One env switch controls process startup of the sleep cycle, tool advertisement, write shape, recall filtering, and asynchronous access/stability mutation.",
+        "The same recall input name tier_filter has different lifecycle and hybrid-retrieval meanings, making flag state part of API semantics rather than an operational capability state."
+      ],
+      "disposition": "remove",
+      "owner": "AR-5 knowledge-reconciliation owner; AR-7 contraction owner",
+      "target_release": "AR-7",
+      "replacement_boundary": "AR-5 makes revision and lifecycle history authoritative; AR-7 removes the lifecycle fork only after compatibility, zero-drift observation, and rollback evidence.",
+      "evidence": [
+        "internal/worker/service.go:1314-1317",
+        "internal/mcp/tools_memory.go:1006-1048,1413-1418",
+        "docs/arch/CONFIGURATION.md:118-123",
+        "specs/001-engram-architectural-recovery/research.md:220-246"
+      ]
+    },
+    {
+      "id": "crystallization",
+      "flags": [
+        "ENGRAM_CRYSTALLIZATION_ENABLED"
+      ],
+      "current_readers": [
+        "internal/worker/service.go:1428-1434",
+        "internal/worker/handlers_hooks.go:83-97",
+        "internal/worker/sleep_cycle.go:197-220",
+        "internal/worker/handlers_system.go:364-371"
+      ],
+      "defaults": {
+        "ENGRAM_CRYSTALLIZATION_ENABLED": "false when unset or any value other than exact lowercase true"
+      },
+      "semantic_divergence": [
+        "The flag gates transcript persistence and later dream extraction together, so provider availability and a timer determine whether evidence exists at all.",
+        "The session-end route can still acknowledge with 202 while this gate prevents transcript persistence, which diverges from durable-acceptance semantics."
+      ],
+      "disposition": "remove",
+      "owner": "AR-4 durable session-evidence owner; AR-7 contraction owner",
+      "target_release": "AR-7",
+      "replacement_boundary": "AR-4 durably accepts evidence before provider work and gives it a terminal processing state; AR-7 removes the transcript/dream gate and its candidate-only branch.",
+      "evidence": [
+        "internal/worker/handlers_hooks.go:83-97",
+        "internal/worker/sleep_cycle.go:197-220",
+        "specs/001-engram-architectural-recovery/research.md:115-140",
+        "specs/001-engram-architectural-recovery/research.md:220-246"
+      ]
+    },
+    {
+      "id": "adaptive",
+      "flags": [
+        "ENGRAM_ADAPTIVE_ENABLED"
+      ],
+      "current_readers": [
+        "internal/mcp/server.go:1005-1015",
+        "internal/mcp/tools_brief.go:31-36",
+        "internal/worker/handlers_correction.go:28-32",
+        "internal/worker/handlers_extraction.go:33-37",
+        "internal/worker/handlers_reinject.go:22-26",
+        "internal/worker/handlers_segment.go:27-31",
+        "internal/worker/handlers_hooks.go:243-250",
+        "internal/worker/handlers_system.go:367-371"
+      ],
+      "defaults": {
+        "ENGRAM_ADAPTIVE_ENABLED": "false when unset or any value other than exact lowercase true"
+      },
+      "semantic_divergence": [
+        "The HTTP routes remain registered but return disabled, while MCP tool advertisement removes get_memory_brief entirely; availability semantics therefore differ by transport.",
+        "The gate couples unrelated segmentation, correction, reinjection, extraction, and brief retrieval paths rather than reporting a named provider capability."
+      ],
+      "disposition": "remove",
+      "owner": "AR-6 task-aware-retrieval owner; AR-7 contraction owner",
+      "target_release": "AR-7",
+      "replacement_boundary": "AR-6 supplies one query-driven retrieval and exposure workflow; AR-7 removes this maturity gate and retires unsupported adaptive branches or moves accepted operational dependencies behind typed capability health.",
+      "evidence": [
+        "internal/mcp/tools_brief.go:31-36",
+        "internal/worker/handlers_correction.go:28-32",
+        "internal/worker/handlers_hooks.go:243-250",
+        "specs/001-engram-architectural-recovery/research.md:193-246"
+      ]
+    },
+    {
+      "id": "rules",
+      "flags": [
+        "ENGRAM_RULE_GOVERNANCE_ENABLED",
+        "ENGRAM_RULE_ARBITER_ENABLED",
+        "ENGRAM_RULE_ROUTER_ENABLED",
+        "ENGRAM_RULE_ARBITER_BATCH_LIMIT",
+        "ENGRAM_RULE_ARBITER_TIMEOUT_MS",
+        "ENGRAM_RULE_ARBITER_INTERVAL_SECONDS",
+        "ENGRAM_RULE_ROUTER_KERNEL_MAX",
+        "ENGRAM_RULE_ROUTER_CONTEXTUAL_MAX",
+        "ENGRAM_RULE_ROUTER_MAX_RENDERED_CHARS",
+        "ENGRAM_RULE_ROUTER_TELEMETRY_BEST_EFFORT"
+      ],
+      "current_readers": [
+        "internal/config/config.go:99-139,477-521",
+        "internal/mcp/rule_governance_intent.go:28-36",
+        "internal/grpcserver/session_start.go:151-172",
+        "internal/worker/handlers_system.go:377-381"
+      ],
+      "defaults": {
+        "ENGRAM_RULE_GOVERNANCE_ENABLED": "false",
+        "ENGRAM_RULE_ARBITER_ENABLED": "false and effective only with governance enabled",
+        "ENGRAM_RULE_ROUTER_ENABLED": "false",
+        "typed_limits": "20 candidate batch, 8000 ms timeout, 300 s interval, 8 kernel rules, 12 contextual rules, 4800 rendered characters, and best-effort telemetry true"
+      },
+      "semantic_divergence": [
+        "Governance and arbiter treat only true or 1 as enabled; router uses strconv.ParseBool; governance intent also performs a raw env read before consulting Config.",
+        "The three booleans choose direct rule writes versus candidate routing and direct session-start reads versus router reads, so they are architecture selectors.",
+        "The numeric limits and telemetry setting are operational budgets, not alternate architectures; they require conversion to typed policy/retrieval budgets after the selector booleans are removed."
+      ],
+      "disposition": "convert",
+      "owner": "AR-5 policy-and-reconciliation owner; AR-6 retrieval-delivery owner; AR-7 contraction owner",
+      "target_release": "AR-7",
+      "replacement_boundary": "AR-5 makes policy a stricter knowledge class with one authoritative decision path; remove the three selector booleans and retain only explicitly typed, owned, bounded budgets with capability-health observation.",
+      "evidence": [
+        "internal/config/config.go:99-139,477-521",
+        "internal/mcp/rule_governance_intent.go:28-36",
+        "internal/grpcserver/session_start.go:151-172",
+        "specs/001-engram-architectural-recovery/research.md:167-191,220-246"
+      ]
+    },
+    {
+      "id": "injection",
+      "flags": [
+        "ENGRAM_INJECT_UNIFIED",
+        "ENGRAM_INJECTION_TOP_K",
+        "ENGRAM_ALWAYS_INJECT_LIMIT",
+        "ENGRAM_PROJECT_INJECT_LIMIT"
+      ],
+      "current_readers": [
+        "internal/config/config.go:70-73,301-304,375-380,430-448",
+        "internal/worker/handlers_context.go:923-953,1138-1142",
+        "internal/worker/handlers_system.go:290-292,377-381"
+      ],
+      "defaults": {
+        "ENGRAM_INJECT_UNIFIED": "true; settings and environment can override it",
+        "ENGRAM_INJECTION_TOP_K": "100 unless a positive integer environment value is supplied",
+        "ENGRAM_ALWAYS_INJECT_LIMIT": "20",
+        "ENGRAM_PROJECT_INJECT_LIMIT": "15"
+      },
+      "semantic_divergence": [
+        "The unified true branch derives a task-like query and calls RetrieveRelevant; false does not restore a full legacy path and instead returns an empty relevant section while preserving the HTTP shape.",
+        "ENGRAM_INJECT_UNIFIED is writable through PATCH /api/config while most maturity switches are env-only, and its source comment still says it should have been removed after two release cycles.",
+        "Top-K and injection limits are mixed between direct environment reads and Config fields, so the same delivery behavior is governed by two control planes."
+      ],
+      "disposition": "remove",
+      "owner": "AR-6 retrieval-delivery owner; AR-7 contraction owner",
+      "target_release": "AR-7",
+      "temporary_control_exception": "Only ENGRAM_INJECT_UNIFIED may remain temporarily under this inventory's temporary-control exception rule; its current false branch is safe degradation, not a supported alternate architecture.",
+      "replacement_boundary": "AR-6 task-aware delivery supplies bounded packets and exposure records; after installed rollback and observation evidence, delete the unified selector and obsolete injection tuning that belongs only to the retired path.",
+      "evidence": [
+        "internal/config/config.go:70-73,301-304,375-380,430-448",
+        "internal/worker/handlers_context.go:923-953,1138-1142",
+        "internal/worker/handlers_system.go:402-407",
+        "specs/001-engram-architectural-recovery/research.md:193-246"
+      ]
+    },
+    {
+      "id": "continuity",
+      "flags": [
+        "ENGRAM_CONTINUITY_SLOT_ENABLED"
+      ],
+      "current_readers": [
+        "internal/config/envnames.go:51-53",
+        "internal/mcp/tools_continuity_slot.go:24-41",
+        "internal/grpcserver/session_start.go:105-139"
+      ],
+      "defaults": {
+        "ENGRAM_CONTINUITY_SLOT_ENABLED": "false when unset or any value other than exact lowercase true; declared effective only with ENGRAM_VNEXT_ENABLED=true"
+      },
+      "semantic_divergence": [
+        "The MCP handler correctly requires both continuity and VNext, but session-start checks the continuity env directly only inside its VNext branch; the control is therefore split across tool and gRPC selection paths.",
+        "It reserves a memory before session-start scoring, which is static context assembly rather than task-aware retrieval."
+      ],
+      "disposition": "remove",
+      "owner": "AR-6 task-aware-retrieval owner; AR-7 contraction owner",
+      "target_release": "AR-7",
+      "replacement_boundary": "AR-6 limits session start to universal policy/state and moves relevance selection to task-aware retrieval; AR-7 removes the designated-memory selection flag and its tool/route/UI claims after migration and rollback evidence.",
+      "evidence": [
+        "internal/config/envnames.go:51-53",
+        "internal/mcp/tools_continuity_slot.go:24-41",
+        "internal/grpcserver/session_start.go:105-139",
+        "specs/001-engram-architectural-recovery/research.md:193-246"
+      ]
+    },
+    {
+      "id": "temporal_truth",
+      "flags": [
+        "ENGRAM_TEMPORAL_TRUTH_ENABLED"
+      ],
+      "current_readers": [
+        "internal/worker/handlers_temporal_truth.go:16-43",
+        "internal/worker/service.go:151-153,759-761",
+        "internal/mcp/tools_temporal_truth.go:25-28",
+        "internal/worker/handlers_system.go:367-371"
+      ],
+      "defaults": {
+        "ENGRAM_TEMPORAL_TRUTH_ENABLED": "false in .env.example; HTTP bootstrap accepts true or 1 after trim, while other readers may use their own helper"
+      },
+      "semantic_divergence": [
+        "The HTTP surface snapshots the flag at service startup and rejects disabled calls with 503; the MCP helper reads the environment directly, so their effective timing can diverge.",
+        "A temporal truth read/admission surface is outside the recovery's broad temporal-interface scope and must not be silently treated as the knowledge authority."
+      ],
+      "disposition": "detach",
+      "owner": "AR-7 adjacent-capability decision owner",
+      "target_release": "AR-7",
+      "replacement_boundary": "AR-7 makes an explicit retained-adjacent or deletion decision. If retained, its enablement becomes independently versioned capability health with named source, consumer, and no authority over canonical knowledge or retrieval.",
+      "evidence": [
+        "internal/worker/handlers_temporal_truth.go:16-43",
+        "internal/worker/service.go:151-153,759-761",
+        ".env.example:57-64",
+        "specs/001-engram-architectural-recovery/spec.md:315-322"
+      ]
+    },
+    {
+      "id": "graph",
+      "flags": [
+        "ENGRAM_GRAPH_ENABLED"
+      ],
+      "current_readers": [
+        "internal/worker/handlers_graph.go:19-23,122-147,205-206",
+        "internal/worker/service.go:151-153,759-761",
+        "internal/mcp/server.go:1098-1104",
+        "internal/worker/handlers_system.go:364-371",
+        "apps/operator-console/composables/useNav.ts:69-85",
+        "apps/operator-console/composables/useOperatorGraph.ts:14-18"
+      ],
+      "defaults": {
+        "ENGRAM_GRAPH_ENABLED": "false when unset or any value other than exact lowercase true"
+      },
+      "semantic_divergence": [
+        "REST graph handlers use a startup snapshot while MCP tool advertisement reads the environment directly, so a changed environment can present inconsistent HTTP and MCP capability state until restart.",
+        "The UI presents graph availability from /api/flags, but the source flag gates graph write/read surfaces and does not establish a graph-first knowledge authority."
+      ],
+      "disposition": "detach",
+      "owner": "AR-7 adjacent-capability decision owner",
+      "target_release": "AR-7",
+      "replacement_boundary": "AR-7 classifies graph as a rebuildable projection or retires it. If retained, move it to an independently owned adjacent capability contract with rebuild source, health denominator, and no independent knowledge-write authority.",
+      "evidence": [
+        "internal/worker/handlers_graph.go:122-147,205-206",
+        "internal/mcp/server.go:1098-1104",
+        "apps/operator-console/composables/useNav.ts:69-85",
+        "specs/001-engram-architectural-recovery/research.md:248-274"
+      ]
+    },
+    {
+      "id": "code_intelligence",
+      "flags": [
+        "ENGRAM_CODE_INTEL_ENABLED"
+      ],
+      "current_readers": [
+        "cmd/engram/wiring.go:24-48",
+        "internal/handlers/codeintel/module.go:1-8,222-239",
+        "internal/worker/service.go:1256-1262",
+        "internal/mcp/tools_code_intel.go:3-10,34-41,101-105,195-199",
+        "internal/worker/handlers_system.go:370-371"
+      ],
+      "defaults": {
+        "ENGRAM_CODE_INTEL_ENABLED": "false when unset or any value other than exact lowercase true"
+      },
+      "semantic_divergence": [
+        "The same switch separately controls daemon module registration, server store wiring, MCP advertisement, and per-call errors; all require exact lowercase true.",
+        "Code intelligence is an accepted adjacent primitive, but the flag currently treats it as a cognitive-era maturity feature with flag-off tool-surface byte identity."
+      ],
+      "disposition": "detach",
+      "owner": "AR-3 adjacent-capability identity owner; AR-7 contraction owner",
+      "target_release": "AR-7",
+      "replacement_boundary": "AR-3 applies canonical identity to this project-scoped adjacent capability. AR-7 removes maturity gating after its supported contract has independent capability health, compatibility proof, and no reliance on legacy selector identity.",
+      "evidence": [
+        "cmd/engram/wiring.go:24-48",
+        "internal/mcp/tools_code_intel.go:3-10,34-41,101-105,195-199",
+        "specs/001-engram-architectural-recovery/spec.md:153-164",
+        "specs/001-engram-architectural-recovery/research.md:248-274"
+      ]
+    },
+    {
+      "id": "source_project_enforcement",
+      "flags": [
+        "ENGRAM_ENFORCE_SOURCE_PROJECT"
+      ],
+      "current_readers": [
+        "internal/config/config.go:72-73,303-304,375-380,445-448,579-580",
+        "internal/mcp/tools_memory.go:450-454,588-592,1195-1203",
+        "internal/worker/handlers_system.go:220-221,284-285,377-378,402-407"
+      ],
+      "defaults": {
+        "source_default": "true in Config.Default",
+        "configuration_doc_default": "false in docs/arch/CONFIGURATION.md"
+      },
+      "semantic_divergence": [
+        "Source defaults to enforcement enabled, while the architecture configuration document states false; this is a source/documentation contradiction on a security boundary.",
+        "The boolean can be changed through settings, environment, and PATCH /api/config, allowing callers to choose whether source/project scope constrains store and edit operations.",
+        "AR canonical identity requires scope resolution before every project-scoped operation, so mutable enforcement is incompatible with the target invariant."
+      ],
+      "disposition": "convert",
+      "owner": "AR-3 canonical-project-identity owner",
+      "target_release": "AR-3",
+      "replacement_boundary": "Replace the mutable flag with unconditional canonical-project resolution and fail-closed authorization. Remove settings, environment, PATCH, runtime-flag, documentation, and test paths that permit disabling source/project enforcement; AR-7 verifies no former toggle consumer remains.",
+      "evidence": [
+        "internal/config/config.go:72-73,303-304,375-380,445-448",
+        "internal/mcp/tools_memory.go:450-454,1195-1203",
+        "internal/worker/handlers_system.go:284-285,402-407",
+        "docs/arch/CONFIGURATION.md:54-57",
+        "specs/001-engram-architectural-recovery/spec.md:182-191,224-227"
+      ]
+    }
+  ],
+  "entry_closure_contract": {
+    "applies_to": [
+      "compatibility-temporary",
+      "quarantine-pending-proof"
+    ],
+    "required_fields": [
+      "owner",
+      "evidence",
+      "target_release",
+      "closure_rule",
+      "closure_verifier"
+    ],
+    "zero_evidence_rule": "A target release, calendar date, empty denominator, or silent absence never closes an entry."
+  }
+}

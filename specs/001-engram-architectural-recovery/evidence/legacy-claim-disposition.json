@@ -1,0 +1,156 @@
+{
+  "schema_version": "ar0.legacy-claim-disposition.v1",
+  "scope": "Source-fresh AR-0 ledger for recovery-relevant tests, mocks, generated API claims, and current documentation claims. It stores no private payloads or secrets.",
+  "source_ref": "fb18daab8aeabb8ddc041e31c60ddbf42bb6b1a8",
+  "entry_closure_contract": {
+    "required_fields": [
+      "disposition",
+      "owner",
+      "evidence",
+      "target_release",
+      "closure_rule",
+      "closure_verifier"
+    ],
+    "rule": "A historical, compatibility, or deletion claim cannot close because a file still exists, a test is green, or a deadline passes; it closes only through replacement/retirement evidence and independent review."
+  },
+  "entries": [
+    {
+      "id": "identity-v2-process-tests",
+      "kind": "test-claim",
+      "disposition": "compatibility-temporary",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/proxy/identity_process_test.go",
+        "internal/proxy/identity_test.go",
+        "internal/db/gorm/project_identity_v2_test.go"
+      ],
+      "target_release": "AR-3",
+      "closure_rule": "V3 cross-language anchor vectors, copied-anchor refusal, merge/backfill fixtures, and compatibility-sunset evidence replace V2 contract coverage.",
+      "closure_verifier": "independent identity migration verifier"
+    },
+    {
+      "id": "dream-candidate-tests",
+      "kind": "test-claim",
+      "disposition": "move-and-reshape",
+      "owner": "knowledge-reconciliation",
+      "evidence": [
+        "internal/worker/dream_cycle_test.go",
+        "internal/crystallization/integration_test.go",
+        "internal/crystallization/candidate_gate_test.go"
+      ],
+      "target_release": "AR-5",
+      "closure_rule": "Durable ProcessingJob and reconciliation decision fixtures prove replacement behavior; candidate-only tests are retired or mapped by semantic coverage.",
+      "closure_verifier": "independent knowledge-domain verifier"
+    },
+    {
+      "id": "flag-off-byte-identity-tests",
+      "kind": "test-claim",
+      "disposition": "delete",
+      "owner": "architecture-contraction",
+      "evidence": [
+        "internal/grpcserver/session_start_scope_w4_test.go",
+        "internal/cognitive/core/flag_config_test.go",
+        "internal/worker/handlers_system_test.go"
+      ],
+      "target_release": "AR-7",
+      "closure_rule": "Mandatory-path, capability-health, and retirement behavior tests replace maturity-flag branch assertions; source/config scan proves no residual reader.",
+      "closure_verifier": "independent contraction verifier"
+    },
+    {
+      "id": "operator-console-flag-mock",
+      "kind": "mock-claim",
+      "disposition": "delete",
+      "owner": "architecture-contraction",
+      "evidence": [
+        "apps/operator-console/scripts/mock-operator-api.mjs"
+      ],
+      "target_release": "AR-7",
+      "closure_rule": "Mock flag categories and stale capability claims are removed or replaced by typed capability-health fixture contracts after current surface consumers are classified.",
+      "closure_verifier": "independent surface and contraction verifier"
+    },
+    {
+      "id": "v6-tool-list-baseline",
+      "kind": "test-fixture-claim",
+      "disposition": "historical-immutable",
+      "owner": "compatibility-evidence",
+      "evidence": [
+        "internal/cognitive/core/testdata/v6_3_0_baseline/tools_list_response.json",
+        "Makefile:34-55"
+      ],
+      "target_release": "AR-7",
+      "closure_rule": "Retain only as versioned historical compatibility evidence; it must not define current tool or architecture authority.",
+      "closure_verifier": "independent compatibility verifier"
+    },
+    {
+      "id": "swagger-session-and-candidate-claims",
+      "kind": "generated-api-claim",
+      "disposition": "compatibility-temporary",
+      "owner": "architecture-contraction",
+      "evidence": [
+        "docs/swagger.json",
+        "docs/swagger.yaml",
+        "cmd/engram-server/main.go"
+      ],
+      "target_release": "AR-7",
+      "closure_rule": "Every retained API contract has a current workflow and versioned compatibility path; dead/maturity-gated claims are regenerated, retired, or archived with status.",
+      "closure_verifier": "independent API compatibility verifier"
+    },
+    {
+      "id": "configuration-flag-documentation",
+      "kind": "documentation-claim",
+      "disposition": "compatibility-temporary",
+      "owner": "architecture-contraction",
+      "evidence": [
+        "docs/arch/CONFIGURATION.md",
+        ".env.example",
+        "internal/worker/handlers_system.go"
+      ],
+      "target_release": "AR-7",
+      "closure_rule": "Current configuration describes only typed operational policy/capability; every architecture-era flag statement is removed or clearly archived after source scan.",
+      "closure_verifier": "independent configuration/documentation verifier"
+    },
+    {
+      "id": "memory-product-readmes",
+      "kind": "documentation-claim",
+      "disposition": "compatibility-temporary",
+      "owner": "architecture-contraction",
+      "evidence": [
+        "README.md",
+        "README.ru.md",
+        "README.zh.md",
+        "plugin/engram/skills/memory/SKILL.md"
+      ],
+      "target_release": "AR-7",
+      "closure_rule": "Current guidance names one task-aware recovery path and explicit compatibility appendix; demolition/vNext/V7 claims are removed or labeled historical with source status.",
+      "closure_verifier": "independent documentation and consumer verifier"
+    },
+    {
+      "id": "current-surface-and-component-ledgers",
+      "kind": "documentation-claim",
+      "disposition": "compatibility-temporary",
+      "owner": "architecture-contraction",
+      "evidence": [
+        "docs/arch/current-surface.json",
+        "docs/arch/COMPONENTS.md",
+        "apps/operator-console/composables/useOperatorGraph.ts"
+      ],
+      "target_release": "AR-7",
+      "closure_rule": "Every retained surface has an accepted backing workflow; removed/must-build/flag-gated claims are deleted or marked historical without new surface design.",
+      "closure_verifier": "independent surface evidence verifier"
+    },
+    {
+      "id": "historical-spec-and-release-reports",
+      "kind": "historical-claim",
+      "disposition": "historical-immutable",
+      "owner": "recovery-governance",
+      "evidence": [
+        ".agent/specs/",
+        ".agent/runs/",
+        "CHANGELOG.md"
+      ],
+      "target_release": "AR-0",
+      "closure_rule": "Retain as provenance only; implementation authority transfers solely to the active Spec Kit constitution and feature artifacts after final analysis.",
+      "closure_verifier": "independent specification readiness verifier"
+    }
+  ]
+}

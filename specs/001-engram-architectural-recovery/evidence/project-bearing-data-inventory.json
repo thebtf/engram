@@ -1,0 +1,410 @@
+{
+  "schema_version": "ar0.project-bearing-data-inventory.v1",
+  "scope": "Current-source inventory only; no database, cache, filesystem, or live-client values were read.",
+  "source_truth_boundary": "A family is confirmed only where current source declares its project-bearing column, relation, or key. Runtime row existence, row counts, JSON shapes not validated by source, and deployed cache contents remain unproven under AR-0.",
+  "counts": {
+    "confirmed_relational_families": 22,
+    "confirmed_indirect_relational_families": 1,
+    "serialized_or_cache_families": 6,
+    "source_uncertain_families": 3
+  },
+  "confirmed_relational_families": [
+    {
+      "id": "sdk-sessions",
+      "storage": "sdk_sessions.project",
+      "identity_role": "session lifecycle scope",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/models.go:19-44"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "projects-registry",
+      "storage": "projects.id, git_remote, relative_path, legacy_ids",
+      "identity_role": "current selector and alias registry",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/models.go:124-140",
+        "internal/db/gorm/migrations.go:1109-1142",
+        "internal/db/gorm/project_store.go:108-292"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "memories",
+      "storage": "memories.project",
+      "identity_role": "knowledge record scope",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/models.go:252-305"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "credentials",
+      "storage": "credentials.project",
+      "identity_role": "sealed adjacent capability scope",
+      "disposition": "adjacent",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/models.go:203-221"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "behavioral-rules",
+      "storage": "behavioral_rules.project (nullable for global scope)",
+      "identity_role": "rule scope",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/models.go:335-350",
+        "pkg/models/behavioral_rule.go:9-20"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "rule-candidates",
+      "storage": "rule_candidates.source_project",
+      "identity_role": "rule-proposal source scope",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/migration_rule_governance.go:11-68",
+        "internal/db/gorm/rule_governance_store.go:117-118"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "session-segments",
+      "storage": "session_segments.project",
+      "identity_role": "session segmentation scope",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/migrations.go:3731-3753"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "session-transcripts",
+      "storage": "session_transcripts.project",
+      "identity_role": "transcript and pending-processing scope",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/migrations.go:4262-4286"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "crystallization-candidates",
+      "storage": "crystallization_candidates.affected_projects (TEXT array)",
+      "identity_role": "multi-project proposal scope",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/migrations.go:4123-4161",
+        "internal/db/gorm/candidate_store.go:23-45",
+        "internal/db/gorm/candidate_store.go:176-191"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "injection-log",
+      "storage": "injection_log.project",
+      "identity_role": "retrieval-delivery provenance scope",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/migrations.go:3415-3435"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "search-query-log",
+      "storage": "search_query_log.project",
+      "identity_role": "retrieval query telemetry scope",
+      "disposition": "projection",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/migrations.go:1320-1342"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "retrieval-stats-log",
+      "storage": "retrieval_stats_log.project",
+      "identity_role": "retrieval statistics scope",
+      "disposition": "projection",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/migrations.go:1344-1367"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "telemetry-snapshots",
+      "storage": "telemetry_snapshots.project",
+      "identity_role": "telemetry scope",
+      "disposition": "projection",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/models.go:111-122",
+        "internal/db/gorm/migrations.go:1021-1028"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "versioned-documents",
+      "storage": "versioned_documents.project",
+      "identity_role": "document namespace",
+      "disposition": "adjacent",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/migrations.go:1737-1776"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "issues",
+      "storage": "issues.source_project, issues.target_project",
+      "identity_role": "multiple project roles; neither role may be collapsed before both endpoints resolve",
+      "disposition": "adjacent",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/models.go:166-189",
+        "internal/db/gorm/migrations.go:2179-2199"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "issue-comments",
+      "storage": "issue_comments.author_project",
+      "identity_role": "issue-author provenance scope",
+      "disposition": "adjacent",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/models.go:191-201"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "code-index",
+      "storage": "code_chunks.project_id, code_index_sessions.project_id",
+      "identity_role": "FK-free code-index slug; intentionally not a projects-row reference",
+      "disposition": "projection",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/code_chunk_store.go:20-31",
+        "internal/db/gorm/code_chunk_store.go:37-41",
+        "internal/db/gorm/code_chunk_store.go:361-365",
+        "internal/db/gorm/schema_integrity_test.go:45-56"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "agent-project-state",
+      "storage": "agent_project_state.project",
+      "identity_role": "state-plane scope",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/state_store.go:61-76",
+        "internal/db/gorm/migrations.go:4746-4775"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "temporal-truth-records",
+      "storage": "temporal_truth_records.project",
+      "identity_role": "temporal fact scope",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/migration_temporal_truth.go:11-43"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "attention-events",
+      "storage": "attention_events.project",
+      "identity_role": "attention-event scope",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/migrations.go:4894-4927"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "project-continuity-slots",
+      "storage": "project_continuity_slots.project",
+      "identity_role": "one-per-project continuity designation",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/models.go:307-320",
+        "internal/db/gorm/migrations.go:4930-4953"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "knowledge-edges-via-memory",
+      "storage": "knowledge_edges.source_id and target_id resolve indirectly through memories.project",
+      "identity_role": "cross-record relation; rewrite only after both memory endpoints have canonical project keys",
+      "disposition": "projection",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/migrations.go:3593-3615",
+        "internal/db/gorm/migrations.go:3760-3770"
+      ],
+      "target_release": "AR-3"
+    }
+  ],
+  "serialized_or_cache_families": [
+    {
+      "id": "rule-activation-predicates",
+      "storage": "rule_candidates.activation_predicate_json and rule_versions.activation_predicate_json",
+      "identity_role": "serialized project selector where a project-scoped predicate is present",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/migration_rule_governance.go:16-60",
+        "internal/db/gorm/migration_rule_governance.go:77-125",
+        "internal/db/gorm/rule_governance_store.go:1483-1485"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "bulk-operation-snapshots",
+      "storage": "bulk_op_snapshots.parameters and before_state JSONB",
+      "identity_role": "snapshot payload may serialize a project-bearing memory or candidate record; the columns have no source-enforced project schema",
+      "disposition": "quarantine-pending-proof",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/snapshot_store.go:18-35",
+        "internal/db/gorm/snapshot_store.go:109-164",
+        "internal/bulkops/facade.go:35-51"
+      ],
+      "target_release": "AR-3",
+      "quarantine_reason": "AR-0 cannot inspect persisted JSON rows or infer every historical payload shape; AR-1 must capture a redacted read-only baseline and typed shape inventory before any backfill.",
+      "closure_rule": "A redacted inventory/fixture resolves the uncertainty into keep, move, delete, or explicitly approved compatibility; no identity, payload, or privacy inference may close this entry.",
+      "closure_verifier": "independent migration/data-integrity verifier for identity-migration"
+    },
+    {
+      "id": "hook-session-start-cache",
+      "storage": "plugin data cache filename derived from ProjectSelector, while requests use registered Project",
+      "identity_role": "persistent client cache key",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "plugin/engram/hooks/lib.js:900-907",
+        "plugin/engram/hooks/session-start.js:403-452"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "muxcore-slug-cache",
+      "storage": "in-memory slugCacheKey(projectID,cwd) for compatibility slug and V2 identity",
+      "identity_role": "daemon cache key",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/handlers/engramcore/slugcache.go:20-45",
+        "internal/handlers/engramcore/slugcache.go:48-117"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "openclaw-registration-caches",
+      "storage": "in-memory completedProjectRegistrations and inFlightProjectRegistrations keyed by registration key",
+      "identity_role": "client registration cache",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "plugin/openclaw-engram/src/client.ts:250-285"
+      ],
+      "target_release": "AR-3"
+    },
+    {
+      "id": "governance-import-export-project-fields",
+      "storage": "governance export options/source-project and archive manifest/content/candidate project-bearing field families; import adapters must map every declared project field through V3 resolution",
+      "identity_role": "import/export compatibility and migration boundary",
+      "disposition": "move-and-reshape",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/governance/export.go:34-84",
+        "internal/worker/handlers_backfill.go:107-247",
+        "internal/db/gorm/project_store.go:108-292"
+      ],
+      "target_release": "AR-3"
+    }
+  ],
+  "source_uncertain_families": [
+    {
+      "id": "reasoning-traces",
+      "storage": "reasoning_traces.project referenced by historical migration rewrite",
+      "identity_role": "historical trace scope if table remains deployed",
+      "disposition": "quarantine-pending-proof",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/migrations.go:2663-2684",
+        "internal/db/gorm/models.go:162-164"
+      ],
+      "target_release": "AR-3",
+      "quarantine_reason": "Current model and store were removed, but AR-0 source does not prove a live-schema drop or absence of deployed rows.",
+      "closure_rule": "A redacted inventory/fixture resolves the uncertainty into keep, move, delete, or explicitly approved compatibility; no identity, payload, or privacy inference may close this entry.",
+      "closure_verifier": "independent migration/data-integrity verifier for identity-migration"
+    },
+    {
+      "id": "knowledge-nodes",
+      "storage": "model-level KnowledgeNode.Project; current migration ownership is not established by this source pass",
+      "identity_role": "graph-node scope if persisted",
+      "disposition": "quarantine-pending-proof",
+      "owner": "identity-migration",
+      "evidence": [
+        "pkg/models/node.go:67-93",
+        "internal/db/gorm/migrations.go:3593-3615"
+      ],
+      "target_release": "AR-3",
+      "quarantine_reason": "The domain model is project-bearing, but this pass did not locate a current table definition or store binding; AR-1 must establish persistence and row liveness.",
+      "closure_rule": "A redacted inventory/fixture resolves the uncertainty into keep, move, delete, or explicitly approved compatibility; no identity, payload, or privacy inference may close this entry.",
+      "closure_verifier": "independent migration/data-integrity verifier for identity-migration"
+    },
+    {
+      "id": "untyped-project-json",
+      "storage": "unconstrained JSONB and generic payload maps outside the source-enforced fields above",
+      "identity_role": "possible embedded selector",
+      "disposition": "quarantine-pending-proof",
+      "owner": "identity-migration",
+      "evidence": [
+        "internal/db/gorm/snapshot_store.go:18-35",
+        "internal/db/gorm/state_store.go:20-72",
+        "pkg/cognitive/types.go:61-64"
+      ],
+      "target_release": "AR-3",
+      "quarantine_reason": "Without row inspection or a declared JSON schema, AR-0 must not infer identifiers from arbitrary payload bodies.",
+      "closure_rule": "A redacted inventory/fixture resolves the uncertainty into keep, move, delete, or explicitly approved compatibility; no identity, payload, or privacy inference may close this entry.",
+      "closure_verifier": "independent migration/data-integrity verifier for identity-migration"
+    }
+  ],
+  "entry_closure_contract": {
+    "applies_to": [
+      "compatibility-temporary",
+      "quarantine-pending-proof"
+    ],
+    "required_fields": [
+      "owner",
+      "evidence",
+      "target_release",
+      "closure_rule",
+      "closure_verifier"
+    ],
+    "zero_evidence_rule": "A target release, calendar date, empty denominator, or silent absence never closes an entry."
+  }
+}
