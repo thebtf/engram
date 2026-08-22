@@ -3716,6 +3716,17 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_thebtf_engram_internal_operability.ResultStatus": {
+            "type": "string",
+            "enum": [
+                "computed",
+                "not_computable"
+            ],
+            "x-enum-varnames": [
+                "Computed",
+                "NotComputable"
+            ]
+        },
         "github_com_thebtf_engram_internal_reviewpacket.CandidateAuditPolicy": {
             "type": "object",
             "properties": {
@@ -4528,6 +4539,9 @@ const docTemplate = `{
                 "unrecorded_fraction": {
                     "type": "number"
                 },
+                "unrecorded_fraction_result_status": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_internal_operability.ResultStatus"
+                },
                 "unrecorded_sessions": {
                     "type": "integer"
                 }
@@ -4718,6 +4732,9 @@ const docTemplate = `{
                 },
                 "noise_ratio": {
                     "type": "number"
+                },
+                "noise_ratio_result_status": {
+                    "$ref": "#/definitions/github_com_thebtf_engram_internal_operability.ResultStatus"
                 },
                 "outcomes": {
                     "$ref": "#/definitions/internal_worker.outcomeTelemetry"
