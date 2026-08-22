@@ -87,7 +87,7 @@ $receiptText = [IO.File]::ReadAllText($receiptPath)
 Assert-RecoverySecretSafeText -Text $receiptText
 try
 {
-    $evidence = $receiptText | ConvertFrom-Json -Depth 32
+    $evidence = $receiptText | ConvertFrom-Json -Depth 32 -DateKind String
 } catch
 {
     throw 'scenario receipt is malformed'
@@ -235,7 +235,21 @@ if ((Get-RecoverySha256 -Path $serverMarkerPath) -cne $evidence.fixture.server_m
 }
 
 $healthPath = Join-Path $context.FixtureRoot 'server/fixture-server-health.json'
-$health = Read-RecoveryJson -Path $healthPath -Context $context -Label 'fixture health receipt'
+[void](Assert-RecoveryContainedPath -Path $healthPath -RepositoryRoot $context.RepositoryRoot)
+if (-not (Test-Path -LiteralPath $healthPath -PathType Leaf))
+{
+    throw 'fixture health receipt is missing'
+}
+[void](Assert-RecoverySafeExistingPath -Path $healthPath)
+$healthText = [IO.File]::ReadAllText($healthPath)
+Assert-RecoverySecretSafeText -Text $healthText
+try
+{
+    $health = $healthText | ConvertFrom-Json -Depth 32 -DateKind String
+} catch
+{
+    throw 'fixture health receipt is malformed'
+}
 Assert-RecoveryExactProperties -Object $health -Names @('schema_version', 'fixture_id', 'fixture_root', 'run_id', 'manifest_fingerprint', 'database_identity_fingerprint', 'checked_at_utc', 'endpoint', 'health_status', 'server_version', 'server_fingerprint', 'source_commit', 'process_id', 'process_start_utc_ticks', 'port', 'scope') -Label 'fixture health receipt'
 $parsedCheckedAtUtc = [DateTimeOffset]::MinValue
 if ($health.checked_at_utc -isnot [string] -or [string]::IsNullOrWhiteSpace($health.checked_at_utc) -or
