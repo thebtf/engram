@@ -365,6 +365,31 @@ func TestResolveProjectSlug_GitRepo(t *testing.T) {
 	}
 }
 
+func TestResolveProjectIdentityV2_StripsGitRemoteUserinfo(t *testing.T) {
+	repoDir := initSyntheticGitRepo(t)
+	const rawRemote = "https://fixture-user:fixture-credential@example.invalid/acme/identity.git"
+	if output, err := exec.Command("git", "-C", repoDir, "remote", "set-url", "origin", rawRemote).CombinedOutput(); err != nil {
+		t.Fatalf("set synthetic origin: %v\n%s", err, output)
+	}
+
+	identity, err := proxy.ResolveProjectIdentityV2(repoDir)
+	if err != nil {
+		t.Fatalf("resolve identity: %v", err)
+	}
+	const want = "https://example.invalid/acme/identity.git"
+	if identity.GitRemote != want {
+		t.Fatalf("git remote=%q, want credential-free %q", identity.GitRemote, want)
+	}
+	if err := proxy.ValidateProjectIdentityV2(identity); err != nil {
+		t.Fatalf("credential-free descriptor rejected: %v", err)
+	}
+	rawIdentity := identity
+	rawIdentity.GitRemote = rawRemote
+	if err := proxy.ValidateProjectIdentityV2(rawIdentity); err == nil || strings.Contains(err.Error(), "fixture-credential") {
+		t.Fatalf("raw-userinfo descriptor error=%v", err)
+	}
+}
+
 // TestResolveProjectSlug_NonGitDir verifies that a directory without a git repo
 // falls back to a pure 6-hex-char id with an empty gitRemote.
 // Uses a fresh temp dir to avoid .engram-project side effects from other tests.

@@ -120,6 +120,18 @@ func TestRegisterAndResolve_RejectsRawVsNormalizedSelectorsAndMetadata(t *testin
 	}
 }
 
+func TestRegisterAndResolve_RejectsGitRemoteUserinfoBeforeDatabaseAccess(t *testing.T) {
+	const rawRemote = "https://fixture-user:fixture-credential@example.invalid/acme/identity.git"
+	_, err := RegisterAndResolve(context.Background(), nil, "selector", gitIdentityV2("selector", rawRemote))
+	var identityErr *ProjectIdentityError
+	if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityInvalid {
+		t.Fatalf("error=%T %v, want PROJECT_IDENTITY_INVALID before DB access", err, err)
+	}
+	if strings.Contains(err.Error(), "fixture-credential") {
+		t.Fatalf("identity error leaked credential-shaped remote: %v", err)
+	}
+}
+
 func TestRegisterAndResolve_StrictOuterSelectorRejectsBeforeDatabaseAccess(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -143,6 +155,29 @@ func TestRegisterAndResolve_StrictOuterSelectorRejectsBeforeDatabaseAccess(t *te
 				t.Fatalf("error=%T %v, want PROJECT_IDENTITY_INVALID before DB access", err, err)
 			}
 		})
+	}
+}
+
+func TestUpsertProject_RejectsGitRemoteUserinfoBeforeWrite(t *testing.T) {
+	db, cleanup := openTestDB(t)
+	defer cleanup()
+	const (
+		projectID = "project-identity-userinfo-write-fence"
+		rawRemote = "https://fixture-user:fixture-credential@example.invalid/acme/identity.git"
+	)
+	defer db.Exec(`DELETE FROM projects WHERE id = ?`, projectID)
+
+	err := UpsertProject(context.Background(), db, projectID, "", rawRemote, "", "identity")
+	var identityErr *ProjectIdentityError
+	if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityInvalid {
+		t.Fatalf("error=%T %v, want PROJECT_IDENTITY_INVALID before write", err, err)
+	}
+	var count int64
+	if err := db.Model(&Project{}).Where("id = ?", projectID).Count(&count).Error; err != nil {
+		t.Fatalf("count project rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("userinfo remote wrote %d project rows", count)
 	}
 }
 

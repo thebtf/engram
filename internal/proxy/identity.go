@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,7 +77,7 @@ func ValidateProjectIdentityV2(identity ProjectIdentityV2) error {
 		if identity.GitRemote == "" || len(identity.GitRemote) > 2048 {
 			return invalid("git_remote is required and bounded")
 		}
-		if strings.TrimSpace(identity.GitRemote) != identity.GitRemote || containsProjectIdentityControl(identity.GitRemote) {
+		if strings.TrimSpace(identity.GitRemote) != identity.GitRemote || containsProjectIdentityControl(identity.GitRemote) || gitRemoteHasUserinfo(identity.GitRemote) {
 			return invalid("git_remote is not normalized")
 		}
 		if identity.NonGitAnchor != "" || identity.AnchorShared != nil {
@@ -393,7 +394,10 @@ func getGitInfo(cwd string) (remoteURL, relativePath string, err error) {
 		}
 		return "", "", err
 	}
-	remoteURL = strings.TrimSpace(rawRemote)
+	remoteURL, err = normalizeGitRemote(strings.TrimSpace(rawRemote))
+	if err != nil {
+		return "", "", err
+	}
 	if remoteURL == "" {
 		return "", "", errGitIdentityAbsent
 	}
@@ -405,6 +409,36 @@ func getGitInfo(cwd string) (remoteURL, relativePath string, err error) {
 	relativePath = strings.TrimSpace(rawPrefix)
 
 	return remoteURL, relativePath, nil
+}
+
+func normalizeGitRemote(value string) (string, error) {
+	if !gitRemoteHasUserinfo(value) {
+		return value, nil
+	}
+	if strings.Contains(value, "://") {
+		remoteURL, err := url.Parse(value)
+		if err != nil {
+			return "", errors.New("git remote URL is malformed")
+		}
+		remoteURL.User = nil
+		return remoteURL.String(), nil
+	}
+	colon := strings.IndexByte(value, ':')
+	return value[strings.LastIndex(value[:colon], "@")+1:], nil
+}
+
+func gitRemoteHasUserinfo(value string) bool {
+	if scheme := strings.Index(value, "://"); scheme >= 0 {
+		authority := value[scheme+3:]
+		if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+			authority = authority[:end]
+		}
+		return strings.Contains(authority, "@")
+	}
+	if colon := strings.IndexByte(value, ':'); colon > 0 {
+		return strings.Contains(value[:colon], "@")
+	}
+	return false
 }
 
 func isMissingGitIdentityError(err error) bool {

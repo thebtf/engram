@@ -375,7 +375,7 @@ func ValidateProjectIdentityV2(identity ProjectIdentityV2) error {
 		return invalidProjectIdentity("exactly one identity source is required")
 	}
 	if hasGit {
-		if identity.GitRemote == "" || len(identity.GitRemote) > 2048 || strings.TrimSpace(identity.GitRemote) != identity.GitRemote || containsProjectIdentityControl(identity.GitRemote) {
+		if identity.GitRemote == "" || len(identity.GitRemote) > 2048 || strings.TrimSpace(identity.GitRemote) != identity.GitRemote || containsProjectIdentityControl(identity.GitRemote) || gitRemoteHasUserinfo(identity.GitRemote) {
 			return invalidProjectIdentity("git_remote is missing or malformed")
 		}
 		if !normalizedProjectRelativePathV2(identity.RelativePath) {
@@ -617,6 +617,20 @@ func containsProjectIdentityControl(value string) bool {
 	return strings.IndexFunc(value, unicode.IsControl) >= 0
 }
 
+func gitRemoteHasUserinfo(value string) bool {
+	if scheme := strings.Index(value, "://"); scheme >= 0 {
+		authority := value[scheme+3:]
+		if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+			authority = authority[:end]
+		}
+		return strings.Contains(authority, "@")
+	}
+	if colon := strings.IndexByte(value, ':'); colon > 0 {
+		return strings.Contains(value[:colon], "@")
+	}
+	return false
+}
+
 func nullStringValue(value string) any {
 	if value == "" {
 		return nil
@@ -637,6 +651,9 @@ func nullStringValue(value string) any {
 func UpsertProject(ctx context.Context, db *gorm.DB, newID, legacyID, gitRemote, relativePath, displayName string) error {
 	if newID == "" {
 		return fmt.Errorf("project newID must not be empty")
+	}
+	if gitRemoteHasUserinfo(gitRemote) {
+		return invalidProjectIdentity("git_remote contains userinfo")
 	}
 
 	proj := Project{
