@@ -596,13 +596,22 @@ function Get-RecoveryFixtureApplicationPath
     param([Parameter(Mandatory)][string]$Name)
 
     $paths = @(Get-Command -Name $Name -CommandType Application -ErrorAction SilentlyContinue |
-            ForEach-Object { [string]$_.Source } |
+            ForEach-Object { ([string]$_.Source).Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             Sort-Object -Unique)
     if ($paths.Count -eq 0)
     {
         return $null
     }
-    if ($paths.Count -ne 1 -or [string]::IsNullOrWhiteSpace($paths[0]))
+    if ($IsWindows)
+    {
+        $executablePaths = @($paths | Where-Object { [IO.Path]::GetFileName($_) -ieq "$Name.exe" })
+        if ($executablePaths.Count -eq 1)
+        {
+            return [string]$executablePaths[0]
+        }
+    }
+    if ($paths.Count -ne 1)
     {
         throw "fixture application command path is ambiguous: $Name"
     }
