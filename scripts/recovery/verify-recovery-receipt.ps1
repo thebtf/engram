@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'recovery-fixture-common.ps1')
 $null = Set-RecoveryFixturePsqlTransport -FixturePsqlContainer $FixturePsqlContainer
+[string[]]$rfc3339Formats = "yyyy-MM-dd'T'HH:mm:ssK", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK"
 
 function Invoke-FixtureHealth
 {
@@ -96,7 +97,7 @@ Assert-RecoveryExactProperties -Object $evidence -Names @('schema_version', 'evi
 $parsedObservedAtUtc = [DateTimeOffset]::MinValue
 if ($evidence.observed_at_utc -isnot [string] -or [string]::IsNullOrWhiteSpace($evidence.observed_at_utc) -or
     $evidence.observed_at_utc -notmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$' -or
-    -not [DateTimeOffset]::TryParseExact(($evidence.observed_at_utc -replace '(?<=\.[0-9]{7})[0-9]+(?=(?:Z|[+-][0-9]{2}:[0-9]{2})$)', ''), @("yyyy-MM-dd'T'HH:mm:ssK", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK"), [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$parsedObservedAtUtc))
+    -not [DateTimeOffset]::TryParseExact(($evidence.observed_at_utc -replace '(?<=\.[0-9]{7})[0-9]+(?=(?:Z|[+-][0-9]{2}:[0-9]{2})$)', ''), $rfc3339Formats, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$parsedObservedAtUtc))
 {
     throw 'scenario receipt observed_at_utc is invalid'
 }
@@ -239,7 +240,7 @@ Assert-RecoveryExactProperties -Object $health -Names @('schema_version', 'fixtu
 $parsedCheckedAtUtc = [DateTimeOffset]::MinValue
 if ($health.checked_at_utc -isnot [string] -or [string]::IsNullOrWhiteSpace($health.checked_at_utc) -or
     $health.checked_at_utc -notmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$' -or
-    -not [DateTimeOffset]::TryParseExact(($health.checked_at_utc -replace '(?<=\.[0-9]{7})[0-9]+(?=(?:Z|[+-][0-9]{2}:[0-9]{2})$)', ''), @("yyyy-MM-dd'T'HH:mm:ssK", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK"), [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$parsedCheckedAtUtc))
+    -not [DateTimeOffset]::TryParseExact(($health.checked_at_utc -replace '(?<=\.[0-9]{7})[0-9]+(?=(?:Z|[+-][0-9]{2}:[0-9]{2})$)', ''), $rfc3339Formats, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$parsedCheckedAtUtc))
 {
     throw 'fixture health receipt checked_at_utc is invalid'
 }
