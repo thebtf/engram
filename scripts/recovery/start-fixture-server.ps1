@@ -207,6 +207,15 @@ if ($null -eq $health)
     $startInfo.UseShellExecute = $false
     $startInfo.Environment.Clear()
     $startInfo.Environment['PATH'] = $env:PATH
+    foreach ($name in @('SystemRoot', 'WINDIR', 'ComSpec'))
+    {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ($null -ne $value)
+        {
+            $startInfo.Environment[$name] = $value
+        }
+
+    }
     $fixtureHome = Join-Path $context.FixtureRoot 'runtime-home'
     $fixtureTemp = Join-Path $context.FixtureRoot 'runtime-temp'
     New-Item -ItemType Directory -Path $fixtureHome -Force | Out-Null
