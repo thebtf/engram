@@ -8,7 +8,11 @@ $script:RecoveryFixtureID = 'synthetic-redacted-legacy'
 $script:RecoveryFixtureScriptRoot = $PSScriptRoot
 
 function Get-RecoveryRepositoryRoot {
-    (Resolve-Path -LiteralPath (Join-Path $script:RecoveryFixtureScriptRoot '..\..')).Path.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $commonDirectory = & git -C $script:RecoveryFixtureScriptRoot rev-parse --path-format=absolute --git-common-dir
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commonDirectory))
+    { throw 'unable to resolve the primary Git common directory'
+    }
+    (Resolve-Path -LiteralPath (Join-Path $commonDirectory '..')).Path.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
 }
 
 function Test-RecoveryReparsePoint
