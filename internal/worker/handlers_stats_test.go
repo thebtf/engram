@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/thebtf/engram/internal/embedding"
+	"github.com/thebtf/engram/internal/operability"
 )
 
 // minimalStore is a minimal stand-in for *gorm.Store that satisfies the field
@@ -48,13 +49,15 @@ func TestHandleStatsVnext_ServiceNotReady(t *testing.T) {
 // the Embedding field (compile-time check) and that the field is omitempty
 // (absent when nil).
 func TestHandleStatsVnext_ResponseShape(t *testing.T) {
+	noiseRatio := 0.5
 	resp := vnextStatsResponse{
-		InjectionCount: 1,
-		CitationCount:  2,
-		UncitedCount:   3,
-		NoiseRatio:     0.5,
-		WriteGateStats: map[string]int64{"active": 10},
-		GeneratedAt:    time.Now().UTC(),
+		InjectionCount:         1,
+		CitationCount:          2,
+		UncitedCount:           3,
+		NoiseRatio:             &noiseRatio,
+		NoiseRatioResultStatus: operability.Computed,
+		WriteGateStats:         map[string]int64{"active": 10},
+		GeneratedAt:            time.Now().UTC(),
 		// Embedding intentionally left nil.
 	}
 	b, err := json.Marshal(resp)
@@ -75,11 +78,41 @@ func TestHandleStatsVnext_ResponseShape(t *testing.T) {
 	// Required fields must be present, including the rank-7 project_citation_rates
 	// (NOT omitempty — an empty slice still serialises as [] so consumers can distinguish
 	// "queried, none qualified" from "field absent / old server").
-	for _, key := range []string{"injection_count", "citation_count", "uncited_count",
-		"noise_ratio", "write_gate_stats", "project_citation_rates", "generated_at"} {
+	for _, key := range []string{
+		"injection_count", "citation_count", "uncited_count",
+		"noise_ratio", "noise_ratio_result_status", "write_gate_stats", "project_citation_rates", "generated_at",
+	} {
 		if _, ok := m[key]; !ok {
 			t.Errorf("required field %q missing from JSON output", key)
 		}
+	}
+}
+
+func TestVnextMetricZeroDenominatorsAreNotComputable(t *testing.T) {
+	response := vnextStatsResponse{
+		NoiseRatioResultStatus: operability.NotComputable,
+		Outcomes: &outcomeTelemetry{
+			ByOutcome:                      map[string]int64{},
+			UnrecordedFractionResultStatus: operability.NotComputable,
+		},
+	}
+	b, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if got["noise_ratio"] != nil || got["noise_ratio_result_status"] != string(operability.NotComputable) {
+		t.Fatalf("noise ratio=%#v, want null/not_computable", got)
+	}
+	outcomes, ok := got["outcomes"].(map[string]any)
+	if !ok {
+		t.Fatalf("outcomes=%#v, want object", got["outcomes"])
+	}
+	if outcomes["unrecorded_fraction"] != nil || outcomes["unrecorded_fraction_result_status"] != string(operability.NotComputable) {
+		t.Fatalf("unrecorded fraction=%#v, want null/not_computable", outcomes)
 	}
 }
 
@@ -113,11 +146,13 @@ func TestProjectCitationRate_JSONShape(t *testing.T) {
 // TestOutcomeTelemetry_JSONShape pins the outcome-starvation telemetry fields and the
 // unrecorded-fraction math (rank-7).
 func TestOutcomeTelemetry_JSONShape(t *testing.T) {
+	fraction := 0.7
 	ot := outcomeTelemetry{
-		TotalSessions:      10,
-		UnrecordedSessions: 7,
-		UnrecordedFraction: 0.7,
-		ByOutcome:          map[string]int64{"(unrecorded)": 7, "success": 2, "failure": 1},
+		TotalSessions:                  10,
+		UnrecordedSessions:             7,
+		UnrecordedFraction:             &fraction,
+		UnrecordedFractionResultStatus: operability.Computed,
+		ByOutcome:                      map[string]int64{"(unrecorded)": 7, "success": 2, "failure": 1},
 	}
 	b, err := json.Marshal(ot)
 	if err != nil {
@@ -127,7 +162,7 @@ func TestOutcomeTelemetry_JSONShape(t *testing.T) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatalf("json.Unmarshal: %v", err)
 	}
-	for _, key := range []string{"total_sessions", "unrecorded_sessions", "unrecorded_fraction", "by_outcome"} {
+	for _, key := range []string{"total_sessions", "unrecorded_sessions", "unrecorded_fraction", "unrecorded_fraction_result_status", "by_outcome"} {
 		if _, ok := m[key]; !ok {
 			t.Errorf("outcomeTelemetry JSON missing %q", key)
 		}
@@ -144,7 +179,7 @@ func TestHandleStatsVnext_EmbeddingFieldCompiles(t *testing.T) {
 	svc := &Service{}
 	svc.initMu = sync.RWMutex{}
 	svc.initMu.RLock()
-	var _ *embedding.Store = svc.embeddingStore           // compile-time type assertion
+	var _ *embedding.Store = svc.embeddingStore               // compile-time type assertion
 	var _ *embedding.BackfillRecorder = svc.embeddingRecorder // compile-time type assertion
 	svc.initMu.RUnlock()
 }

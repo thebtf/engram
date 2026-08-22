@@ -7,6 +7,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/thebtf/engram/internal/embedding"
+	"github.com/thebtf/engram/internal/operability"
 )
 
 // embeddingTelemetry is the JSON sub-object surfaced under the "embedding" key
@@ -37,23 +38,25 @@ type projectCitationRate struct {
 // UnrecordedSessions / TotalSessions make that starvation visible as a number instead of an
 // inference: a high unrecorded fraction means the outcome-weighting is mostly running neutral.
 type outcomeTelemetry struct {
-	TotalSessions      int64            `json:"total_sessions"`
-	UnrecordedSessions int64            `json:"unrecorded_sessions"`
-	UnrecordedFraction float64          `json:"unrecorded_fraction"`
-	ByOutcome          map[string]int64 `json:"by_outcome"`
+	TotalSessions                  int64                    `json:"total_sessions"`
+	UnrecordedSessions             int64                    `json:"unrecorded_sessions"`
+	UnrecordedFraction             *float64                 `json:"unrecorded_fraction"`
+	UnrecordedFractionResultStatus operability.ResultStatus `json:"unrecorded_fraction_result_status"`
+	ByOutcome                      map[string]int64         `json:"by_outcome"`
 }
 
 // vnextStatsResponse is the JSON shape returned by GET /api/stats/vnext.
 type vnextStatsResponse struct {
-	InjectionCount       int64                 `json:"injection_count"`
-	CitationCount        int64                 `json:"citation_count"`
-	UncitedCount         int64                 `json:"uncited_count"`
-	NoiseRatio           float64               `json:"noise_ratio"`
-	WriteGateStats       map[string]int64      `json:"write_gate_stats"`
-	ProjectCitationRates []projectCitationRate `json:"project_citation_rates"`
-	Outcomes             *outcomeTelemetry     `json:"outcomes,omitempty"`
-	GeneratedAt          time.Time             `json:"generated_at"`
-	Embedding            *embeddingTelemetry   `json:"embedding,omitempty"`
+	InjectionCount         int64                    `json:"injection_count"`
+	CitationCount          int64                    `json:"citation_count"`
+	UncitedCount           int64                    `json:"uncited_count"`
+	NoiseRatio             *float64                 `json:"noise_ratio"`
+	NoiseRatioResultStatus operability.ResultStatus `json:"noise_ratio_result_status"`
+	WriteGateStats         map[string]int64         `json:"write_gate_stats"`
+	ProjectCitationRates   []projectCitationRate    `json:"project_citation_rates"`
+	Outcomes               *outcomeTelemetry        `json:"outcomes,omitempty"`
+	GeneratedAt            time.Time                `json:"generated_at"`
+	Embedding              *embeddingTelemetry      `json:"embedding,omitempty"`
 }
 
 // handleStatsVnext godoc
@@ -93,11 +96,15 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// noise_ratio = uncited / (cited + uncited); guard division-by-zero.
-	var noiseRatio float64
+	// noise_ratio = uncited / (cited + uncited). A zero denominator is not a
+	// measured zero rate, so leave the value null and state not_computable.
+	noiseRatioStatus := operability.NotComputable
+	var noiseRatio *float64
 	total := citationCount + uncitedCount
 	if total > 0 {
-		noiseRatio = float64(uncitedCount) / float64(total)
+		value := float64(uncitedCount) / float64(total)
+		noiseRatio = &value
+		noiseRatioStatus = operability.Computed
 	}
 
 	// Write-gate stats: count memories by status where not soft-deleted.
@@ -164,8 +171,12 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Outcome recording health (rank-7): makes the outcome-starvation problem (ranks 5/6 run
-	// neutral when no outcome is recorded) visible. Non-fatal: on error, leave Outcomes nil.
-	var outcomes *outcomeTelemetry
+	// neutral when no outcome is recorded) visible. An unavailable or empty observation window
+	// remains explicit rather than looking like a measured zero unrecorded fraction.
+	outcomes := &outcomeTelemetry{
+		ByOutcome:                      make(map[string]int64),
+		UnrecordedFractionResultStatus: operability.NotComputable,
+	}
 	type outcomeRow struct {
 		Outcome string
 		Count   int64
@@ -181,33 +192,34 @@ func (s *Service) handleStatsVnext(w http.ResponseWriter, r *http.Request) {
 		GROUP BY outcome`).Scan(&outcomeRows).Error; err != nil {
 		log.Debug().Err(err).Msg("stats/vnext: outcome telemetry unavailable")
 	} else {
-		ot := &outcomeTelemetry{ByOutcome: make(map[string]int64)}
 		for _, orow := range outcomeRows {
 			key := orow.Outcome
 			if key == "" {
 				key = "(unrecorded)"
 			}
-			ot.ByOutcome[key] += orow.Count
-			ot.TotalSessions += orow.Count
+			outcomes.ByOutcome[key] += orow.Count
+			outcomes.TotalSessions += orow.Count
 			if key == "(unrecorded)" {
-				ot.UnrecordedSessions += orow.Count
+				outcomes.UnrecordedSessions += orow.Count
 			}
 		}
-		if ot.TotalSessions > 0 {
-			ot.UnrecordedFraction = float64(ot.UnrecordedSessions) / float64(ot.TotalSessions)
+		if outcomes.TotalSessions > 0 {
+			value := float64(outcomes.UnrecordedSessions) / float64(outcomes.TotalSessions)
+			outcomes.UnrecordedFraction = &value
+			outcomes.UnrecordedFractionResultStatus = operability.Computed
 		}
-		outcomes = ot
 	}
 
 	resp := vnextStatsResponse{
-		InjectionCount:       injectionCount,
-		CitationCount:        citationCount,
-		UncitedCount:         uncitedCount,
-		NoiseRatio:           noiseRatio,
-		WriteGateStats:       writeGate,
-		ProjectCitationRates: projectRates,
-		Outcomes:             outcomes,
-		GeneratedAt:          time.Now().UTC(),
+		InjectionCount:         injectionCount,
+		CitationCount:          citationCount,
+		UncitedCount:           uncitedCount,
+		NoiseRatio:             noiseRatio,
+		NoiseRatioResultStatus: noiseRatioStatus,
+		WriteGateStats:         writeGate,
+		ProjectCitationRates:   projectRates,
+		Outcomes:               outcomes,
+		GeneratedAt:            time.Now().UTC(),
 	}
 
 	// Populate embedding telemetry when the embedding store is available.
