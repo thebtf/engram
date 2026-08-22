@@ -299,6 +299,7 @@ func TestWriteAR1BaselineReceiptAcceptsIgnoredUnscannedArtifacts(t *testing.T) {
 	for _, path := range []string{
 		"build/forged.bin",
 		".agent/forged.go",
+		".serena/project.local.yml",
 		"node_modules/forged.go",
 		"vendor/forged.go",
 	} {
@@ -517,7 +518,7 @@ func sourceRoot(t *testing.T) string {
 func candidateWorktree(t *testing.T) (string, string, string) {
 	t.Helper()
 	primaryRoot := t.TempDir()
-	writeFile(t, filepath.Join(primaryRoot, ".gitignore"), "build/\n.agent/\nnode_modules/\nvendor/\n")
+	writeFile(t, filepath.Join(primaryRoot, ".gitignore"), "build/\n.agent/\n.serena/\nnode_modules/\nvendor/\n")
 	writeFile(t, filepath.Join(primaryRoot, "internal", "fixture.go"), "package fixture\n\ntype ProjectRecord struct { ID string }\n\nconst raw = \"secret-token https://private.example\"\n")
 	writeFile(t, filepath.Join(primaryRoot, "scripts", "fixture.cjs"), "console.log(\"fixture\")\n")
 	writeFile(t, filepath.Join(primaryRoot, "scripts", "fixture.sh"), "#!/bin/sh\n")

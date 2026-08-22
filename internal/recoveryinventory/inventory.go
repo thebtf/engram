@@ -89,7 +89,7 @@ func sourceFiles(root string, extensions ...string) ([]sourceFile, error) {
 		}
 		if entry.IsDir() {
 			switch entry.Name() {
-			case ".git", ".agent", "node_modules", "vendor":
+			case ".git", ".agent", ".serena", "node_modules", "vendor":
 				return filepath.SkipDir
 			}
 			return nil

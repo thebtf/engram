@@ -130,6 +130,24 @@ type FixtureProjectData struct { ProjectID string }
 	}
 }
 
+func TestScanAllSkipsSerenaMetadata(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, ".serena/project.local.yml", "project: local-agent-metadata\n")
+	writeFixture(t, root, "docs/current.md", "# current claim\n")
+
+	reports, err := ScanAll(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, report := range reports {
+		for _, record := range report.Records {
+			if strings.HasPrefix(record.Path, ".serena/") {
+				t.Fatalf("Serena metadata leaked into %s inventory: %#v", report.Inventory, report.Records)
+			}
+		}
+	}
+}
+
 func TestFlagScanRespectsMultilineLexicalTruth(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "scripts/help.ps1", `$outside = $env:ENGRAM_PS_OUTSIDE

@@ -922,7 +922,7 @@ func skippedPathComponent(root, path string) bool {
 
 func skippedScanDirectory(name string) bool {
 	switch name {
-	case ".git", ".agent", "node_modules", "vendor":
+	case ".git", ".agent", ".serena", "node_modules", "vendor":
 		return true
 	default:
 		return false
