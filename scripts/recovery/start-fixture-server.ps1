@@ -165,8 +165,6 @@ if ($null -eq $health)
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $stagedServer
     $startInfo.UseShellExecute = $false
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
     $startInfo.Environment.Clear()
     $startInfo.Environment['PATH'] = $env:PATH
     $fixtureHome = Join-Path $context.FixtureRoot 'runtime-home'
@@ -185,11 +183,7 @@ if ($null -eq $health)
 
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
-    $process.add_OutputDataReceived([Diagnostics.DataReceivedEventHandler]{ param($sender, $eventArgs) [void]$sender; [void]$eventArgs })
-    $process.add_ErrorDataReceived([Diagnostics.DataReceivedEventHandler]{ param($sender, $eventArgs) [void]$sender; [void]$eventArgs })
     [void]$process.Start()
-    $process.BeginOutputReadLine()
-    $process.BeginErrorReadLine()
     $marker = [ordered]@{
         schema_version = 'engram.recovery.fixture-server.v1'
         fixture_id = $script:RecoveryFixtureID
