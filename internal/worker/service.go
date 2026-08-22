@@ -1644,6 +1644,11 @@ func (s *Service) setupRoutes() {
 	// Ready returns 200 only once initializeAsync has completed successfully.
 	s.router.Get("/api/ready", s.handleReady)
 
+	// Retired outcome callbacks remain available before readiness so stale adapters
+	// receive an actionable diagnostic instead of a transient readiness failure.
+	s.router.Post("/api/sessions/{id}/propagate-outcome", s.handleOutcomeCallbackRetirement)
+	s.router.Post("/api/sessions/{id}/outcome", s.handleOutcomeCallbackRetirement)
+
 	// MCP health counters (public — no auth required, lightweight)
 	s.router.Get("/api/mcp/health", s.mcpHealth.HandleHealth)
 

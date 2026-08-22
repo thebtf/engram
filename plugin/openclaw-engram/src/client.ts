@@ -130,6 +130,37 @@ export interface ProjectRegistrationFailure {
 export type ProjectRegistrationResult = ProjectRegistrationSuccess | ProjectRegistrationFailure;
 export type ResolvedProjectRegistrationResult = ResolvedProjectRegistrationSuccess | ProjectRegistrationFailure;
 
+export interface OutcomeRetirement {
+  contract_version: 'engram.outcome-retirement.v1';
+  code: 'OUTCOME_CALLBACK_RETIRED';
+  action: 'upgrade_outcome_adapter';
+}
+
+export type OutcomeRecordingResult = boolean | OutcomeRetirement;
+
+export function isOutcomeRetirement(result: OutcomeRecordingResult): result is OutcomeRetirement {
+  return typeof result !== 'boolean';
+}
+
+function parseOutcomeRetirement(payload: unknown): OutcomeRetirement | null {
+  if (payload === null || typeof payload !== 'object') return null;
+  const { contract_version, code, action } = payload as Record<string, unknown>;
+  if (
+    contract_version !== 'engram.outcome-retirement.v1' ||
+    code !== 'OUTCOME_CALLBACK_RETIRED' ||
+    action !== 'upgrade_outcome_adapter'
+  ) return null;
+  return { contract_version, code, action };
+}
+
+function parseOutcomeRetirementPayload(text: string): OutcomeRetirement | null {
+  try {
+    return parseOutcomeRetirement(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
 export interface ProjectRegistrationClient {
   registerAndResolveProject(identity: ProjectIdentity, selector: string): Promise<ProjectRegistrationResult>;
 }
@@ -634,13 +665,50 @@ export class EngramRestClient {
     sessionId: string,
     outcome: string,
     reason?: string,
-  ): Promise<boolean> {
-    const resp = await this.post<{ success: boolean }>(
-      `/api/sessions/${encodeURIComponent(sessionId)}/outcome`,
-      { outcome, reason: reason ?? '' },
-      3000,
-    );
-    return resp != null;
+  ): Promise<OutcomeRecordingResult> {
+    if (!this.availability.isAvailable()) return false;
+
+    const path = `/api/sessions/${encodeURIComponent(sessionId)}/outcome`;
+    const timeout = 3000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    const startMs = Date.now();
+
+    try {
+      const response = await fetch(this.baseUrl + path, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ outcome, reason: reason ?? '' }),
+        signal: controller.signal,
+      });
+      const text = await response.text();
+
+      if (response.status === 410) {
+        const retirement = parseOutcomeRetirementPayload(text);
+        if (retirement) return retirement;
+      }
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} ${response.statusText} (${Date.now() - startMs}ms): ${text.slice(0, 200)}`);
+      }
+
+      this.availability.recordSuccess();
+      return text ? JSON.parse(text) !== null : false;
+    } catch (err: unknown) {
+      const elapsedMs = Date.now() - startMs;
+      this.availability.recordFailure();
+      const msg = err instanceof Error ? err.message : String(err);
+      const isAbort = err instanceof Error && err.name === 'AbortError';
+      console.error(
+        `[engram] POST ${path} failed after ${elapsedMs}ms` +
+        `${isAbort ? ` (timeout=${timeout}ms)` : ''}: ${msg}`,
+      );
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
