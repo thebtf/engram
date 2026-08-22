@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,7 +29,7 @@ const (
 	testOutputFileEnv            = "ENGRAM_AR1_TEST_OUTPUT_FILE"
 )
 
-// ScenarioEvidence is the bounded fixture-only scenario input accepted by AR-1.
+// ScenarioEvidence is the exact fixture-only scenario input accepted by AR-1.
 type ScenarioEvidence struct {
 	SchemaVersion string               `json:"schema_version"`
 	EvidenceKind  string               `json:"evidence_kind"`
@@ -47,26 +46,42 @@ type ScenarioEvidence struct {
 
 // ScenarioFixture carries only fixture provenance. It is never copied to a baseline receipt.
 type ScenarioFixture struct {
-	FixtureID              string `json:"fixture_id"`
-	FixtureRoot            string `json:"fixture_root"`
-	ManifestFingerprint    string `json:"manifest_fingerprint"`
-	ExportReference        string `json:"export_reference"`
-	ExportFingerprint      string `json:"export_fingerprint"`
-	RestoreReference       string `json:"restore_reference"`
-	SelectorInventoryCount int    `json:"selector_inventory_count"`
+	FixtureID                   string                        `json:"fixture_id"`
+	FixtureRoot                 string                        `json:"fixture_root"`
+	RunID                       string                        `json:"run_id"`
+	ManifestFingerprint         string                        `json:"manifest_fingerprint"`
+	DatabaseIdentityFingerprint string                        `json:"database_identity_fingerprint"`
+	ExportReference             string                        `json:"export_reference"`
+	ExportFingerprint           string                        `json:"export_fingerprint"`
+	RestoreReference            string                        `json:"restore_reference"`
+	SelectorInventoryCount      int                           `json:"selector_inventory_count"`
+	StructuralFingerprints      FixtureStructuralFingerprints `json:"structural_fingerprints"`
+	ServerMarkerFingerprint     string                        `json:"server_marker_fingerprint"`
+}
+
+// FixtureStructuralFingerprints bind both synthetic fixture record families.
+type FixtureStructuralFingerprints struct {
+	Projects       string `json:"projects"`
+	LegacyPayloads string `json:"legacy_payloads"`
 }
 
 // HealthProvenance binds a scenario to its checked staged server payload.
 type HealthProvenance struct {
-	ReceiptFingerprint string `json:"receipt_fingerprint"`
-	ServerFingerprint  string `json:"server_fingerprint"`
-	Status             string `json:"status"`
+	ReceiptFingerprint   string `json:"receipt_fingerprint"`
+	ServerFingerprint    string `json:"server_fingerprint"`
+	SourceCommit         string `json:"source_commit"`
+	Status               string `json:"status"`
+	RunID                string `json:"run_id"`
+	ProcessID            int64  `json:"process_id"`
+	ProcessStartUTCTicks int64  `json:"process_start_utc_ticks"`
+	Port                 int64  `json:"port"`
 }
 
 // ScenarioCandidate identifies the source and staged payload checked by the scenario.
 type ScenarioCandidate struct {
-	SourceCommit            string `json:"source_commit"`
-	BuiltPayloadFingerprint string `json:"built_payload_fingerprint"`
+	SourceCommit             string `json:"source_commit"`
+	BuiltPayloadFingerprint  string `json:"built_payload_fingerprint"`
+	StagedPayloadFingerprint string `json:"staged_payload_fingerprint"`
 }
 
 // ScenarioBehavior is the behavior evidence AR-1 must validate, not merely record.
@@ -94,25 +109,28 @@ type SelectorOnlyContextInject struct {
 }
 
 type PostBehaviorHealth struct {
-	StatusCode int    `json:"status_code"`
-	Status     string `json:"status"`
+	StatusCode   int    `json:"status_code"`
+	Status       string `json:"status"`
+	SourceCommit string `json:"source_commit"`
 }
 
 type ScenarioObservations struct {
 	FixtureContainment          string `json:"fixture_containment"`
 	SyntheticRestore            string `json:"synthetic_restore"`
+	FixtureDatabaseBinding      string `json:"fixture_database_binding"`
+	OwnedLiveProcess            string `json:"owned_live_process"`
+	StagedPayloadProvenance     string `json:"staged_payload_provenance"`
+	RuntimeHealthProvenance     string `json:"runtime_health_provenance"`
 	FixtureServerHealth         string `json:"fixture_server_health"`
 	LiveDataObserved            bool   `json:"live_data_observed"`
 	InstalledReleaseAuthority   string `json:"installed_release_authority"`
 	AR1BaselineReceiptAuthority string `json:"ar1_baseline_receipt_authority"`
 }
 
-// AR1BaselineInput is the complete, typed evidence required to produce a receipt.
+// AR1BaselineInput is the source inventory plus raw scenario authority required for a receipt.
 type AR1BaselineInput struct {
-	SourceReports       []recoveryinventory.Report
-	Metrics             operability.BaselineReport
-	Scenario            ScenarioEvidence
-	ScenarioFingerprint string
+	SourceReports []recoveryinventory.Report
+	RawScenario   []byte
 }
 
 // SourceInventorySummary binds source-only inventory shape without re-emitting source records.
@@ -138,6 +156,10 @@ type AR1BaselineReceipt struct {
 
 // DecodeScenarioEvidence parses the exact scenario envelope and returns its content fingerprint.
 func DecodeScenarioEvidence(data []byte) (ScenarioEvidence, string, error) {
+	if err := rejectDuplicateJSONMembers(data); err != nil {
+		return ScenarioEvidence{}, "", fmt.Errorf("scenario envelope: %w", err)
+	}
+
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return ScenarioEvidence{}, "", fmt.Errorf("decode scenario envelope: %w", err)
@@ -149,20 +171,23 @@ func DecodeScenarioEvidence(data []byte) (ScenarioEvidence, string, error) {
 		name   string
 		fields []string
 	}{
-		{"fixture", []string{"fixture_id", "fixture_root", "manifest_fingerprint", "export_reference", "export_fingerprint", "restore_reference", "selector_inventory_count"}},
-		{"health", []string{"receipt_fingerprint", "server_fingerprint", "status"}},
-		{"candidate", []string{"source_commit", "built_payload_fingerprint"}},
+		{"fixture", []string{"fixture_id", "fixture_root", "run_id", "manifest_fingerprint", "database_identity_fingerprint", "export_reference", "export_fingerprint", "restore_reference", "selector_inventory_count", "structural_fingerprints", "server_marker_fingerprint"}},
+		{"health", []string{"receipt_fingerprint", "server_fingerprint", "source_commit", "status", "run_id", "process_id", "process_start_utc_ticks", "port"}},
+		{"candidate", []string{"source_commit", "built_payload_fingerprint", "staged_payload_fingerprint"}},
 		{"behavior", []string{"retired_outcome_callbacks", "selector_only_context_inject", "health_after_behavior"}},
-		{"observations", []string{"fixture_containment", "synthetic_restore", "fixture_server_health", "live_data_observed", "installed_release_authority", "ar1_baseline_receipt_authority"}},
+		{"observations", []string{"fixture_containment", "synthetic_restore", "fixture_database_binding", "owned_live_process", "staged_payload_provenance", "runtime_health_provenance", "fixture_server_health", "live_data_observed", "installed_release_authority", "ar1_baseline_receipt_authority"}},
 	} {
 		if err := requireRawObject(raw[nested.name], nested.fields...); err != nil {
 			return ScenarioEvidence{}, "", fmt.Errorf("scenario %s: %w", nested.name, err)
 		}
 	}
+	if err := requireRawObjectField(raw["fixture"], "structural_fingerprints", "projects", "legacy_payloads"); err != nil {
+		return ScenarioEvidence{}, "", fmt.Errorf("scenario structural fingerprints: %w", err)
+	}
 	if err := requireRawObjectField(raw["behavior"], "selector_only_context_inject", "path", "status_code", "error_code", "upgrade_action", "canonical_project_returned"); err != nil {
 		return ScenarioEvidence{}, "", fmt.Errorf("scenario selector behavior: %w", err)
 	}
-	if err := requireRawObjectField(raw["behavior"], "health_after_behavior", "status_code", "status"); err != nil {
+	if err := requireRawObjectField(raw["behavior"], "health_after_behavior", "status_code", "status", "source_commit"); err != nil {
 		return ScenarioEvidence{}, "", fmt.Errorf("scenario post-behavior health: %w", err)
 	}
 	if err := requireRetiredCallbacks(raw["behavior"]); err != nil {
@@ -184,46 +209,37 @@ func DecodeScenarioEvidence(data []byte) (ScenarioEvidence, string, error) {
 	return scenario, fingerprint(data), nil
 }
 
-// BuildAR1BaselineReceipt validates typed evidence and builds a deterministic receipt.
+// BuildAR1BaselineReceipt re-decodes raw scenario evidence and builds a deterministic receipt.
 func BuildAR1BaselineReceipt(input AR1BaselineInput) (AR1BaselineReceipt, error) {
-	if err := validateScenario(input.Scenario); err != nil {
+	scenario, scenarioFingerprint, err := DecodeScenarioEvidence(input.RawScenario)
+	if err != nil {
 		return AR1BaselineReceipt{}, err
-	}
-	if !validFingerprint(input.ScenarioFingerprint) {
-		return AR1BaselineReceipt{}, fmt.Errorf("invalid scenario fingerprint")
 	}
 	summaries, err := summarizeSourceReports(input.SourceReports)
 	if err != nil {
 		return AR1BaselineReceipt{}, err
 	}
-	if err := validateMetrics(input.Metrics.DurableFacts, operability.DurableRecordSource); err != nil {
-		return AR1BaselineReceipt{}, fmt.Errorf("durable metrics: %w", err)
+	processMetric, err := scenarioProcessMetric(scenario)
+	if err != nil {
+		return AR1BaselineReceipt{}, err
 	}
-	if err := validateMetrics(input.Metrics.ProcessCounters, operability.ProcessCounterSource); err != nil {
-		return AR1BaselineReceipt{}, fmt.Errorf("process metrics: %w", err)
-	}
-	if len(input.Metrics.DurableFacts)+len(input.Metrics.ProcessCounters) == 0 {
-		return AR1BaselineReceipt{}, fmt.Errorf("baseline metrics are missing")
-	}
-
 	return AR1BaselineReceipt{
 		SchemaVersion:            AR1BaselineSchemaVersion,
 		ReceiptAuthority:         AR1BaselineAuthority,
-		Scope:                    input.Scenario.Scope,
-		SourceCommit:             input.Scenario.Candidate.SourceCommit,
-		StagedPayloadFingerprint: input.Scenario.Candidate.BuiltPayloadFingerprint,
-		ScenarioFingerprint:      input.ScenarioFingerprint,
-		Health:                   input.Scenario.Health,
+		Scope:                    scenario.Scope,
+		SourceCommit:             scenario.Candidate.SourceCommit,
+		StagedPayloadFingerprint: scenario.Candidate.StagedPayloadFingerprint,
+		ScenarioFingerprint:      scenarioFingerprint,
+		Health:                   scenario.Health,
 		SourceInventories:        summaries,
-		DurableMetrics:           append([]operability.Metric(nil), input.Metrics.DurableFacts...),
-		ProcessMetrics:           append([]operability.Metric(nil), input.Metrics.ProcessCounters...),
+		DurableMetrics:           []operability.Metric{},
+		ProcessMetrics:           []operability.Metric{processMetric},
 	}, nil
 }
 
 // writeAR1BaselineReceiptFromTestEnvironment is deliberately test-harness-only.
-// It accepts an explicit candidate worktree for source scanning and a distinct
-// primary repository root for scenario and receipt ownership.
-func writeAR1BaselineReceiptFromTestEnvironment(metrics operability.BaselineReport) (AR1BaselineReceipt, error) {
+// It scans only a clean candidate Git worktree linked to the primary repository.
+func writeAR1BaselineReceiptFromTestEnvironment() (AR1BaselineReceipt, error) {
 	scenarioPath := os.Getenv(testScenarioReceiptEnv)
 	sourceRoot := os.Getenv(testSourceRootEnv)
 	primaryRoot := os.Getenv(testPrimaryRepositoryRootEnv)
@@ -239,21 +255,25 @@ func writeAR1BaselineReceiptFromTestEnvironment(metrics operability.BaselineRepo
 	if err != nil {
 		return AR1BaselineReceipt{}, fmt.Errorf("candidate source root: %w", err)
 	}
-	if err := containedPath(primary, candidate); err != nil {
-		return AR1BaselineReceipt{}, fmt.Errorf("candidate source root: %w", err)
+	if err := requireCandidateWorktreeRoot(candidate); err != nil {
+		return AR1BaselineReceipt{}, err
 	}
-	if err := containedRegularFile(primary, scenarioPath, false); err != nil {
+	if err := sameGitCommonDirectory(primary, candidate); err != nil {
+		return AR1BaselineReceipt{}, err
+	}
+	scenarioFile, err := openContainedRegularFile(primary, scenarioPath)
+	if err != nil {
 		return AR1BaselineReceipt{}, fmt.Errorf("test scenario receipt: %w", err)
 	}
-	if err := containedRegularFile(primary, outputPath, true); err != nil {
-		return AR1BaselineReceipt{}, fmt.Errorf("test output file: %w", err)
+	data, readErr := io.ReadAll(scenarioFile)
+	closeErr := scenarioFile.Close()
+	if readErr != nil {
+		return AR1BaselineReceipt{}, fmt.Errorf("read test scenario receipt: %w", readErr)
 	}
-
-	data, err := os.ReadFile(scenarioPath)
-	if err != nil {
-		return AR1BaselineReceipt{}, fmt.Errorf("read test scenario receipt: %w", err)
+	if closeErr != nil {
+		return AR1BaselineReceipt{}, fmt.Errorf("close test scenario receipt: %w", closeErr)
 	}
-	scenario, scenarioFingerprint, err := DecodeScenarioEvidence(data)
+	scenario, _, err := DecodeScenarioEvidence(data)
 	if err != nil {
 		return AR1BaselineReceipt{}, err
 	}
@@ -264,16 +284,14 @@ func writeAR1BaselineReceiptFromTestEnvironment(metrics operability.BaselineRepo
 	if commit != scenario.Candidate.SourceCommit {
 		return AR1BaselineReceipt{}, fmt.Errorf("candidate source commit %q does not match scenario commit %q", commit, scenario.Candidate.SourceCommit)
 	}
+	if err := requireCleanGitWorktree(candidate); err != nil {
+		return AR1BaselineReceipt{}, err
+	}
 	reports, err := recoveryinventory.ScanAll(candidate)
 	if err != nil {
 		return AR1BaselineReceipt{}, fmt.Errorf("scan candidate source root: %w", err)
 	}
-	receipt, err := BuildAR1BaselineReceipt(AR1BaselineInput{
-		SourceReports:       reports,
-		Metrics:             metrics,
-		Scenario:            scenario,
-		ScenarioFingerprint: scenarioFingerprint,
-	})
+	receipt, err := BuildAR1BaselineReceipt(AR1BaselineInput{SourceReports: reports, RawScenario: data})
 	if err != nil {
 		return AR1BaselineReceipt{}, err
 	}
@@ -281,8 +299,17 @@ func writeAR1BaselineReceiptFromTestEnvironment(metrics operability.BaselineRepo
 	if err != nil {
 		return AR1BaselineReceipt{}, fmt.Errorf("marshal baseline receipt: %w", err)
 	}
-	if err := os.WriteFile(outputPath, encoded, 0o600); err != nil {
-		return AR1BaselineReceipt{}, fmt.Errorf("write baseline receipt: %w", err)
+	outputFile, err := createContainedRegularFile(primary, outputPath)
+	if err != nil {
+		return AR1BaselineReceipt{}, fmt.Errorf("test output file: %w", err)
+	}
+	_, writeErr := outputFile.Write(encoded)
+	closeErr = outputFile.Close()
+	if writeErr != nil {
+		return AR1BaselineReceipt{}, fmt.Errorf("write baseline receipt: %w", writeErr)
+	}
+	if closeErr != nil {
+		return AR1BaselineReceipt{}, fmt.Errorf("close baseline receipt: %w", closeErr)
 	}
 	return receipt, nil
 }
@@ -319,69 +346,43 @@ func summarizeSourceReports(reports []recoveryinventory.Report) ([]SourceInvento
 	return summaries, nil
 }
 
-func validateMetrics(metrics []operability.Metric, source operability.MetricSource) error {
-	for _, metric := range metrics {
-		if metric.Source != source {
-			return fmt.Errorf("metric %q has source %q, want %q", metric.Name, metric.Source, source)
-		}
-		for _, value := range []string{metric.Name, metric.NumeratorName, metric.DenominatorName, metric.Scope, metric.Window, metric.Freshness} {
-			if !safeReceiptText(value) {
-				return fmt.Errorf("metric %q contains receipt-unsafe text", metric.Name)
-			}
-		}
-		expected, err := operability.EvaluateMetric(operability.MetricInput{
-			Name:             metric.Name,
-			NumeratorName:    metric.NumeratorName,
-			NumeratorValue:   metric.NumeratorValue,
-			DenominatorName:  metric.DenominatorName,
-			DenominatorValue: metric.DenominatorValue,
-			Scope:            metric.Scope,
-			Window:           metric.Window,
-			Freshness:        metric.Freshness,
-			Source:           metric.Source,
-		})
-		if err != nil {
-			return err
-		}
-		if metric.ResultStatus != expected.ResultStatus || !sameRatio(metric.Ratio, expected.Ratio) {
-			return fmt.Errorf("metric %q does not preserve %q denominator semantics", metric.Name, expected.ResultStatus)
-		}
+func scenarioProcessMetric(s ScenarioEvidence) (operability.Metric, error) {
+	checks := int64(len(s.Behavior.RetiredOutcomeCallbacks) + 2)
+	report, err := operability.BuildBaselineReport(nil, []operability.MetricInput{{
+		Name:             "scenario-behavior-coverage",
+		NumeratorName:    "validated_behavior_checks",
+		NumeratorValue:   checks,
+		DenominatorName:  "observed_behavior_checks",
+		DenominatorValue: checks,
+		Scope:            "fixture-server",
+		Window:           "scenario",
+		Freshness:        "post-behavior",
+		Source:           operability.ProcessCounterSource,
+	}})
+	if err != nil {
+		return operability.Metric{}, fmt.Errorf("derive scenario process metric: %w", err)
 	}
-	return nil
-}
-
-func sameRatio(a, b *float64) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return !math.IsNaN(*a) && !math.IsInf(*a, 0) && *a == *b
-}
-
-func safeReceiptText(value string) bool {
-	lower := strings.ToLower(value)
-	if filepath.IsAbs(value) || strings.Contains(lower, "://") {
-		return false
-	}
-	for _, forbidden := range []string{"credential", "password", "secret", "token", "api_key", "apikey", "private_key", "profile"} {
-		if strings.Contains(lower, forbidden) {
-			return false
-		}
-	}
-	return true
+	return report.ProcessCounters[0], nil
 }
 
 func validateScenario(s ScenarioEvidence) error {
-	if s.SchemaVersion != "engram.recovery.scenario-evidence.v1" || s.EvidenceKind != "fixture_scenario" || s.Release != "AR-1" || s.Scenario != "baseline" || s.Scope != "synthetic_fixture_only" {
+	if s.SchemaVersion != "engram.recovery.scenario-evidence.v2" || s.EvidenceKind != "fixture_scenario" || s.Release != "AR-1" || s.Scenario != "baseline" || s.Scope != "synthetic_fixture_only" {
 		return fmt.Errorf("scenario envelope is not the AR-1 synthetic baseline")
 	}
 	if _, err := time.Parse(time.RFC3339, s.ObservedAtUTC); err != nil {
 		return fmt.Errorf("scenario observed_at_utc: %w", err)
 	}
-	if s.Fixture.FixtureID != "synthetic-redacted-legacy" || !safeRelativeReference(s.Fixture.FixtureRoot) || !safeRelativeReference(s.Fixture.ExportReference) || !safeRelativeReference(s.Fixture.RestoreReference) || s.Fixture.SelectorInventoryCount < 0 || !validFingerprint(s.Fixture.ManifestFingerprint) || !validFingerprint(s.Fixture.ExportFingerprint) {
+	f := s.Fixture
+	if f.FixtureID != "synthetic-redacted-legacy" || !safeRelativeReference(f.FixtureRoot) || !validRunID(f.RunID) || !validFingerprint(f.ManifestFingerprint) || !validFingerprint(f.DatabaseIdentityFingerprint) || !safeRelativeReference(f.ExportReference) || !validFingerprint(f.ExportFingerprint) || !safeRelativeReference(f.RestoreReference) || f.SelectorInventoryCount < 0 || !validFingerprint(f.StructuralFingerprints.Projects) || !validFingerprint(f.StructuralFingerprints.LegacyPayloads) || !validFingerprint(f.ServerMarkerFingerprint) {
 		return fmt.Errorf("scenario fixture provenance is invalid")
 	}
-	if s.Health.Status != "ready" || !validFingerprint(s.Health.ReceiptFingerprint) || !validFingerprint(s.Health.ServerFingerprint) || !validCommit(s.Candidate.SourceCommit) || s.Candidate.BuiltPayloadFingerprint != s.Health.ServerFingerprint {
-		return fmt.Errorf("scenario health or candidate provenance is invalid")
+	h := s.Health
+	if h.Status != "ready" || !validFingerprint(h.ReceiptFingerprint) || !validFingerprint(h.ServerFingerprint) || !validCommit(h.SourceCommit) || h.RunID != f.RunID || h.ProcessID < 1 || h.ProcessStartUTCTicks < 1 || h.Port < 1024 || h.Port > 65535 {
+		return fmt.Errorf("scenario health provenance is invalid")
+	}
+	c := s.Candidate
+	if !validCommit(c.SourceCommit) || c.SourceCommit != h.SourceCommit || !validFingerprint(c.BuiltPayloadFingerprint) || c.BuiltPayloadFingerprint != h.ServerFingerprint || !validFingerprint(c.StagedPayloadFingerprint) || c.StagedPayloadFingerprint != h.ServerFingerprint {
+		return fmt.Errorf("scenario candidate provenance is invalid")
 	}
 	callbacks := []string{"/api/sessions/claude-session/propagate-outcome", "/api/sessions/openclaw-session/outcome"}
 	if len(s.Behavior.RetiredOutcomeCallbacks) != len(callbacks) {
@@ -396,11 +397,12 @@ func validateScenario(s ScenarioEvidence) error {
 	if selector.Path != "/api/context/inject" || selector.StatusCode != 409 || selector.ErrorCode != "PROJECT_IDENTITY_AMBIGUOUS" || selector.UpgradeAction != "send_project_identity_v2" || selector.CanonicalProjectReturned {
 		return fmt.Errorf("scenario selector-only behavior is invalid")
 	}
-	if s.Behavior.HealthAfterBehavior.StatusCode != 200 || s.Behavior.HealthAfterBehavior.Status != "ready" {
-		return fmt.Errorf("scenario does not prove post-behavior health")
+	postBehavior := s.Behavior.HealthAfterBehavior
+	if postBehavior.StatusCode != 200 || postBehavior.Status != "ready" || postBehavior.SourceCommit != c.SourceCommit {
+		return fmt.Errorf("scenario does not prove post-behavior health provenance")
 	}
 	o := s.Observations
-	if o.FixtureContainment != "validated" || o.SyntheticRestore != "validated" || o.FixtureServerHealth != "ready" || o.LiveDataObserved || o.InstalledReleaseAuthority != "not_claimed" || o.AR1BaselineReceiptAuthority != "not_claimed" {
+	if o.FixtureContainment != "validated" || o.SyntheticRestore != "validated" || o.FixtureDatabaseBinding != "validated" || o.OwnedLiveProcess != "validated" || o.StagedPayloadProvenance != "validated" || o.RuntimeHealthProvenance != "validated" || o.FixtureServerHealth != "ready" || o.LiveDataObserved || o.InstalledReleaseAuthority != "not_claimed" || o.AR1BaselineReceiptAuthority != "not_claimed" {
 		return fmt.Errorf("scenario fixture-only authority boundary is invalid")
 	}
 	return nil
@@ -454,6 +456,61 @@ func requireRetiredCallbacks(raw json.RawMessage) error {
 	return nil
 }
 
+func rejectDuplicateJSONMembers(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := rejectDuplicateJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return fmt.Errorf("scenario envelope has trailing content")
+	}
+	return nil
+}
+
+func rejectDuplicateJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		members := make(map[string]struct{})
+		for decoder.More() {
+			name, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			member, ok := name.(string)
+			if !ok {
+				return fmt.Errorf("JSON object member is not a string")
+			}
+			if _, duplicate := members[member]; duplicate {
+				return fmt.Errorf("duplicate JSON object member %q", member)
+			}
+			members[member] = struct{}{}
+			if err := rejectDuplicateJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		_, err := decoder.Token()
+		return err
+	case '[':
+		for decoder.More() {
+			if err := rejectDuplicateJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		_, err := decoder.Token()
+		return err
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
+	}
+}
+
 func validFingerprint(value string) bool {
 	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
 		return false
@@ -503,31 +560,148 @@ func absoluteDirectory(path string) (string, error) {
 	return root, nil
 }
 
-func containedRegularFile(root, path string, mayNotExist bool) error {
+func openContainedRegularFile(root, path string) (*os.File, error) {
+	candidate, err := absoluteContainedPath(root, path)
+	if err != nil {
+		return nil, err
+	}
+	before, err := verifyContainedRegularFile(root, candidate)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(candidate)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err == nil && (!info.Mode().IsRegular() || !os.SameFile(before, info)) {
+		err = fmt.Errorf("opened file does not match verified regular file")
+	}
+	if err == nil {
+		after, afterErr := verifyContainedRegularFile(root, candidate)
+		if afterErr != nil {
+			err = afterErr
+		} else if !os.SameFile(after, info) {
+			err = fmt.Errorf("opened file changed after verification")
+		}
+	}
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+func createContainedRegularFile(root, path string) (*os.File, error) {
+	candidate, err := absoluteContainedPath(root, path)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyContainedDirectories(root, candidate); err != nil {
+		return nil, err
+	}
+	if _, err := os.Lstat(candidate); err == nil {
+		return nil, fmt.Errorf("output path already exists")
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	file, err := os.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err == nil && !info.Mode().IsRegular() {
+		err = fmt.Errorf("created output is not a regular file")
+	}
+	if err == nil {
+		after, afterErr := verifyContainedRegularFile(root, candidate)
+		if afterErr != nil {
+			err = afterErr
+		} else if !os.SameFile(after, info) {
+			err = fmt.Errorf("created output changed after verification")
+		}
+	}
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+func absoluteContainedPath(root, path string) (string, error) {
 	candidate, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if err := containedPath(root, candidate); err != nil {
+		return "", err
+	}
+	return candidate, nil
+}
+
+func verifyContainedRegularFile(root, path string) (os.FileInfo, error) {
+	components, err := containedPathComponents(root, path)
+	if err != nil {
+		return nil, err
+	}
+	current := root
+	for index, component := range components {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return nil, err
+		}
+		if linkOrReparse(info) {
+			return nil, fmt.Errorf("path contains a link or reparse component")
+		}
+		if index < len(components)-1 && !info.IsDir() {
+			return nil, fmt.Errorf("path component is not a directory")
+		}
+		if index == len(components)-1 {
+			if !info.Mode().IsRegular() {
+				return nil, fmt.Errorf("path is not a regular file")
+			}
+			return info, nil
+		}
+	}
+	return nil, fmt.Errorf("path is not a regular file")
+}
+
+func verifyContainedDirectories(root, path string) error {
+	components, err := containedPathComponents(root, path)
 	if err != nil {
 		return err
 	}
-	info, err := os.Lstat(candidate)
-	if err != nil {
-		if !mayNotExist || !os.IsNotExist(err) {
-			return err
-		}
-		parent, err := absoluteDirectory(filepath.Dir(candidate))
+	current := root
+	for _, component := range components[:len(components)-1] {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
 		if err != nil {
 			return err
 		}
-		candidate = filepath.Join(parent, filepath.Base(candidate))
-	} else {
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("path is not a regular file")
+		if linkOrReparse(info) {
+			return fmt.Errorf("path contains a link or reparse component")
 		}
-		candidate, err = filepath.EvalSymlinks(candidate)
-		if err != nil {
-			return err
+		if !info.IsDir() {
+			return fmt.Errorf("path component is not a directory")
 		}
 	}
-	return containedPath(root, candidate)
+	return nil
+}
+
+func containedPathComponents(root, path string) ([]string, error) {
+	if err := containedPath(root, path); err != nil {
+		return nil, err
+	}
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Split(relative, string(filepath.Separator)), nil
+}
+
+func linkOrReparse(info os.FileInfo) bool {
+	return info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0
 }
 
 func containedPath(root, path string) error {
@@ -539,13 +713,234 @@ func containedPath(root, path string) error {
 }
 
 func candidateCommit(root string) (string, error) {
-	output, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	output, err := gitOutput(root, "rev-parse", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("resolve candidate source commit: %w", err)
 	}
-	commit := strings.TrimSpace(string(output))
+	commit := strings.TrimSpace(output)
 	if !validCommit(commit) {
 		return "", fmt.Errorf("candidate source commit is invalid")
 	}
 	return commit, nil
+}
+
+func requireCandidateWorktreeRoot(root string) error {
+	output, err := gitOutput(root, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("resolve candidate Git worktree root: %w", err)
+	}
+	topLevel, err := absoluteDirectory(strings.TrimSpace(output))
+	if err != nil {
+		return fmt.Errorf("resolve candidate Git worktree root: %w", err)
+	}
+	if root != topLevel {
+		return fmt.Errorf("candidate source root must equal its Git worktree root")
+	}
+	return nil
+}
+
+func sameGitCommonDirectory(primary, candidate string) error {
+	primaryCommon, err := gitCommonDirectory(primary)
+	if err != nil {
+		return fmt.Errorf("resolve primary Git common directory: %w", err)
+	}
+	candidateCommon, err := gitCommonDirectory(candidate)
+	if err != nil {
+		return fmt.Errorf("resolve candidate Git common directory: %w", err)
+	}
+	primaryInfo, err := os.Stat(primaryCommon)
+	if err != nil {
+		return fmt.Errorf("stat primary Git common directory: %w", err)
+	}
+	candidateInfo, err := os.Stat(candidateCommon)
+	if err != nil {
+		return fmt.Errorf("stat candidate Git common directory: %w", err)
+	}
+	if !os.SameFile(primaryInfo, candidateInfo) {
+		return fmt.Errorf("candidate source worktree has a different Git common directory")
+	}
+	return nil
+}
+
+func gitCommonDirectory(root string) (string, error) {
+	output, err := gitOutput(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return "", err
+	}
+	return absoluteDirectory(strings.TrimSpace(output))
+}
+
+func requireCleanGitWorktree(root string) error {
+	output, err := gitOutput(root, "status", "--porcelain=v1", "--untracked-files=all")
+	if err != nil {
+		return fmt.Errorf("read candidate source status: %w", err)
+	}
+	if output != "" {
+		return fmt.Errorf("candidate source worktree is dirty")
+	}
+	if err := requireNoHiddenTrackedScanRelevantSource(root); err != nil {
+		return err
+	}
+	if err := requireNoIgnoredScanRelevantSource(root); err != nil {
+		return err
+	}
+	return nil
+}
+
+// requireNoHiddenTrackedScanRelevantSource rejects index flags that can make
+// Git report changed scanned source as clean.
+func requireNoHiddenTrackedScanRelevantSource(root string) error {
+	output, err := gitOutput(root, "ls-files", "-v", "-z")
+	if err != nil {
+		return fmt.Errorf("list candidate tracked index entries: %w", err)
+	}
+	for _, entry := range strings.Split(output, "\x00") {
+		if entry == "" {
+			continue
+		}
+		if len(entry) < 3 || entry[1] != ' ' {
+			return fmt.Errorf("parse candidate tracked index entry")
+		}
+		if entry[0] != 'S' && (entry[0] < 'a' || entry[0] > 'z') {
+			continue
+		}
+		if scanRelevantSourcePath(entry[2:]) {
+			return fmt.Errorf("candidate source worktree has index-hidden scan-relevant source %q", filepath.ToSlash(entry[2:]))
+		}
+	}
+	return nil
+}
+
+func requireNoIgnoredScanRelevantSource(root string) error {
+	output, err := gitOutput(root, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z")
+	if err != nil {
+		return fmt.Errorf("list ignored candidate source paths: %w", err)
+	}
+	for _, ignored := range strings.Split(output, "\x00") {
+		if ignored == "" {
+			continue
+		}
+		relevant, err := ignoredScanRelevantSource(root, ignored)
+		if err != nil {
+			return fmt.Errorf("inspect ignored candidate source path %q: %w", ignored, err)
+		}
+		if relevant != "" {
+			return fmt.Errorf("candidate source worktree has ignored scan-relevant source %q", relevant)
+		}
+	}
+	return nil
+}
+
+func ignoredScanRelevantSource(root, ignored string) (string, error) {
+	relative := strings.TrimSuffix(filepath.ToSlash(ignored), "/")
+	path := filepath.Join(root, filepath.FromSlash(relative))
+	if err := containedPath(root, path); err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() && skippedScanDirectory(info.Name()) {
+		return "", nil
+	}
+	if skippedPathComponent(root, path) {
+		return "", nil
+	}
+	if !info.IsDir() {
+		if scanRelevantSourceFile(info) {
+			return filepath.ToSlash(relative), nil
+		}
+		return "", nil
+	}
+	var relevant string
+	err = filepath.Walk(path, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			if path != filepath.Join(root, filepath.FromSlash(relative)) && skippedScanDirectory(info.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !scanRelevantSourceFile(info) {
+			return nil
+		}
+		found, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		relevant = filepath.ToSlash(found)
+		return io.EOF
+	})
+	if err == io.EOF {
+		return relevant, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return "", nil
+}
+
+func scanRelevantSourceFile(info os.FileInfo) bool {
+	return info.Mode()&os.ModeSymlink == 0 && scanRelevantSourcePath(info.Name())
+}
+
+func scanRelevantSourcePath(relative string) bool {
+	components := strings.Split(filepath.ToSlash(relative), "/")
+	for _, component := range components[:len(components)-1] {
+		if skippedScanDirectory(component) {
+			return false
+		}
+	}
+	name := components[len(components)-1]
+	if strings.HasPrefix(name, ".env") {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".go", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".proto", ".json", ".yaml", ".yml", ".md", ".sh", ".ps1", ".py":
+		return true
+	default:
+		return false
+	}
+}
+
+func skippedPathComponent(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return true
+	}
+	components := strings.Split(relative, string(filepath.Separator))
+	for _, component := range components[:len(components)-1] {
+		if skippedScanDirectory(component) {
+			return true
+		}
+	}
+	return false
+}
+
+func skippedScanDirectory(name string) bool {
+	switch name {
+	case ".git", ".agent", "node_modules", "vendor":
+		return true
+	default:
+		return false
+	}
+}
+
+func gitOutput(root string, args ...string) (string, error) {
+	output, err := exec.Command("git", append([]string{"-C", root}, args...)...).Output()
+	if err != nil {
+		return "", err
+	}
+	return string(output), nil
+}
+
+func validRunID(value string) bool {
+	if len(value) != 32 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }

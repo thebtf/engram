@@ -7,23 +7,34 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
-var scriptProjectKeyPattern = regexp.MustCompile(`(?:["']([A-Za-z][A-Za-z0-9_]*)["']|\b([A-Za-z][A-Za-z0-9_]*)\??)\s*:`)
+var vueScriptBlockPattern = regexp.MustCompile(`(?is)<script(?:\s+[^>]*)?>(.*?)</script\s*>`)
 
 // ScanProjectData inventories source-declared project-bearing data families.
 // It never opens a database, cache, import, export, or job payload.
 func ScanProjectData(root string) (Report, error) {
 	report := newReport("project-bearing-data")
-	files, err := sourceFiles(root, ".go", ".js", ".mjs", ".cjs", ".ts", ".tsx")
+	files, err := sourceFiles(root, ".go", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".vue")
 	if err != nil {
 		return Report{}, err
 	}
 	for _, file := range files {
-		if err := scanProjectDataFile(&report, file); err != nil {
-			return Report{}, err
+		if isTestSource(file.relative) {
+			continue
+		}
+		var scanErr error
+		switch filepath.Ext(file.relative) {
+		case ".go":
+			scanErr = scanProjectDataFile(&report, file)
+		case ".vue":
+			scanErr = scanVueProjectDataFile(&report, file)
+		default:
+			scanErr = scanJavaScriptProjectDataFile(&report, file)
+		}
+		if scanErr != nil {
+			return Report{}, scanErr
 		}
 	}
 	report.finish()
@@ -34,10 +45,6 @@ func scanProjectDataFile(report *Report, file sourceFile) error {
 	source, err := os.ReadFile(file.absolute)
 	if err != nil {
 		return err
-	}
-	if filepath.Ext(file.relative) != ".go" {
-		scanScriptProjectData(report, file, source)
-		return nil
 	}
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, file.relative, source, 0)
@@ -78,86 +85,224 @@ func scanProjectDataFile(report *Report, file sourceFile) error {
 			}
 		}
 	}
-	ast.Inspect(parsed, func(node ast.Node) bool {
-		switch node := node.(type) {
-		case *ast.CompositeLit:
-			if _, ok := node.Type.(*ast.MapType); !ok {
-				return true
-			}
-			for _, element := range node.Elts {
-				entry, ok := element.(*ast.KeyValueExpr)
-				if !ok {
-					continue
-				}
-				key, ok := projectMapKey(entry.Key)
-				if !ok {
-					continue
-				}
-				found = true
-				report.add(projectMapRecord(file.relative, fset.Position(entry.Key.Pos()).Line, key))
-			}
-		case *ast.IndexExpr:
-			key, ok := projectMapKey(node.Index)
-			if !ok {
-				return true
-			}
-			found = true
-			report.add(projectMapRecord(file.relative, fset.Position(node.Pos()).Line, key))
-		}
-		return true
-	})
-	if !found && strings.Contains(strings.ToLower(string(source)), "project") {
+	if scanProjectBearingGoMapLiterals(report, file.relative, fset, parsed) {
+		found = true
+	}
+	if !found && projectBearingGoCode(parsed) {
 		report.add(Record{Kind: "project-data-family", Path: file.relative, Name: "unresolved-declaration", Classification: "source-uncertain"})
 	}
 	return nil
 }
 
-func scanScriptProjectData(report *Report, file sourceFile, source []byte) {
+func projectBearingGoCode(file *ast.File) bool {
 	found := false
-	for index, line := range strings.Split(string(source), "\n") {
-		for _, match := range scriptProjectKeyPattern.FindAllStringSubmatch(line, -1) {
-			key := match[1]
-			if key == "" {
-				key = match[2]
+	ast.Inspect(file, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.Ident)
+		if ok && projectBearingName(identifier.Name) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+func scanProjectBearingGoMapLiterals(report *Report, path string, fset *token.FileSet, file *ast.File) bool {
+	found := false
+	ast.Inspect(file, func(node ast.Node) bool {
+		literal, ok := node.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		if _, ok := literal.Type.(*ast.MapType); !ok {
+			return true
+		}
+		for _, element := range literal.Elts {
+			entry, ok := element.(*ast.KeyValueExpr)
+			if !ok {
+				continue
 			}
-			if !projectBearingName(key) {
+			key, ok := entry.Key.(*ast.BasicLit)
+			if !ok || key.Kind != token.STRING || !projectBearingTag(key) {
 				continue
 			}
 			found = true
-			report.add(scriptProjectRecord(file.relative, index+1, key))
+			report.add(Record{
+				Kind:           "project-bearing-data",
+				Path:           path,
+				Line:           fset.Position(key.Pos()).Line,
+				Classification: "serialized",
+			})
+		}
+		return true
+	})
+	return found
+}
+
+func scanJavaScriptProjectDataFile(report *Report, file sourceFile) error {
+	source, err := os.ReadFile(file.absolute)
+	if err != nil {
+		return err
+	}
+	scanJavaScriptProjectData(report, file, string(source), 0)
+	return nil
+}
+
+func scanVueProjectDataFile(report *Report, file sourceFile) error {
+	source, err := os.ReadFile(file.absolute)
+	if err != nil {
+		return err
+	}
+	sourceText := string(source)
+	for _, block := range vueScriptBlockPattern.FindAllStringSubmatchIndex(sourceText, -1) {
+		scriptStart, scriptEnd := block[2], block[3]
+		scanJavaScriptProjectData(report, file, sourceText[scriptStart:scriptEnd], strings.Count(sourceText[:scriptStart], "\n"))
+	}
+	return nil
+}
+
+func scanJavaScriptProjectData(report *Report, file sourceFile, source string, lineOffset int) {
+	var state javaScriptLexState
+	var templateState javaScriptTemplateProjectState
+	for index, line := range strings.Split(source, "\n") {
+		code := javaScriptProjectCodeMask(line, &state)
+		if !projectBearingJavaScriptCode(code) && !templateState.hasProjectContext(line) {
+			continue
+		}
+		report.add(Record{Kind: "project-bearing-data", Path: file.relative, Line: lineOffset + index + 1, Classification: "source-uncertain"})
+	}
+}
+
+// javaScriptTemplateProjectState ignores literal template text while retaining
+// project-bearing expressions interpolated into a template literal.
+type javaScriptTemplateProjectState struct {
+	blockComment bool
+	quote        byte
+	modes        []javaScriptTemplateProjectMode
+}
+
+type javaScriptTemplateProjectMode struct {
+	interpolation bool
+	braces        int
+}
+
+func (state *javaScriptTemplateProjectState) hasProjectContext(line string) bool {
+	found := false
+	for index := 0; index < len(line); {
+		if state.blockComment {
+			end := strings.Index(line[index:], "*/")
+			if end < 0 {
+				return found
+			}
+			state.blockComment = false
+			index += end + len("*/")
+			continue
+		}
+		if state.quote != 0 {
+			end, closed := javaScriptQuotedStringEnd(line, index, state.quote)
+			if !closed {
+				if !javaScriptContinuesString(line) {
+					state.quote = 0
+				}
+				return found
+			}
+			state.quote = 0
+			index = end
+			continue
+		}
+
+		if state.inTemplate() {
+			switch line[index] {
+			case '\\':
+				index += 2
+			case '`':
+				state.modes = state.modes[:len(state.modes)-1]
+				index++
+			case '$':
+				if index+1 < len(line) && line[index+1] == '{' {
+					state.modes = append(state.modes, javaScriptTemplateProjectMode{interpolation: true, braces: 1})
+					index += 2
+					continue
+				}
+				index++
+			default:
+				index++
+			}
+			continue
+		}
+
+		if line[index] == '/' && index+1 < len(line) {
+			switch line[index+1] {
+			case '/':
+				return found
+			case '*':
+				state.blockComment = true
+				index += 2
+				continue
+			}
+		}
+		switch line[index] {
+		case '\'', '"':
+			state.quote = line[index]
+			index++
+		case '`':
+			state.modes = append(state.modes, javaScriptTemplateProjectMode{})
+			index++
+		case '{':
+			if state.inInterpolation() {
+				state.modes[len(state.modes)-1].braces++
+			}
+			index++
+		case '}':
+			if state.inInterpolation() {
+				state.modes[len(state.modes)-1].braces--
+				if state.modes[len(state.modes)-1].braces == 0 {
+					state.modes = state.modes[:len(state.modes)-1]
+				}
+			}
+			index++
+		default:
+			end := index
+			for end < len(line) && (line[end] == '$' || line[end] == '_' || line[end] >= '0' && line[end] <= '9' || line[end] >= 'A' && line[end] <= 'Z' || line[end] >= 'a' && line[end] <= 'z') {
+				end++
+			}
+			if state.inInterpolation() && end > index && projectBearingName(line[index:end]) {
+				found = true
+			}
+			if end == index {
+				index++
+			} else {
+				index = end
+			}
 		}
 	}
-	if !found && strings.Contains(strings.ToLower(string(source)), "project") {
-		report.add(Record{Kind: "project-data-family", Path: file.relative, Name: "unresolved-declaration", Classification: "source-uncertain"})
-	}
+	return found
 }
 
-func projectMapKey(expression ast.Expr) (string, bool) {
-	literal, ok := expression.(*ast.BasicLit)
-	if !ok || literal.Kind != token.STRING {
-		return "", false
-	}
-	key, err := strconv.Unquote(literal.Value)
-	if err != nil || !projectBearingName(key) {
-		return "", false
-	}
-	return key, true
+func (state *javaScriptTemplateProjectState) inTemplate() bool {
+	return len(state.modes) > 0 && !state.modes[len(state.modes)-1].interpolation
 }
 
-func projectMapRecord(path string, line int, key string) Record {
-	classification := projectDataPath(path)
-	if classification == "" {
-		classification = "serialized-map"
-	}
-	return Record{Kind: "project-bearing-map-key", Path: path, Line: line, Name: "map." + key, Classification: classification}
+func (state *javaScriptTemplateProjectState) inInterpolation() bool {
+	return len(state.modes) > 0 && state.modes[len(state.modes)-1].interpolation
 }
 
-func scriptProjectRecord(path string, line int, key string) Record {
-	classification := projectDataPath(path)
-	if classification == "" {
-		classification = "serialized-payload"
+func javaScriptProjectCodeMask(line string, state *javaScriptLexState) string {
+	code, _ := javaScriptCodeMask(line, state)
+	masked := []byte(code)
+	for index := range masked {
+		if masked[index] != '\'' && masked[index] != '"' {
+			continue
+		}
+		end := javaScriptStringEnd(code, index)
+		blankBytes(masked, index, end)
+		index = end - 1
 	}
-	return Record{Kind: "project-bearing-payload-key", Path: path, Line: line, Name: "payload." + key, Classification: classification}
+	return string(masked)
+}
+
+func projectBearingJavaScriptCode(code string) bool {
+	lower := strings.ToLower(code)
+	return strings.Contains(lower, "project") || strings.Contains(lower, "tenant") || strings.Contains(lower, "workspace")
 }
 
 func projectBearingName(name string) bool {

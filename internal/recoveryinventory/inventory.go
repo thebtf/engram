@@ -19,7 +19,7 @@ type Record struct {
 	Line           int    `json:"line,omitempty"`
 	Name           string `json:"name,omitempty"`
 	Parser         string `json:"parser,omitempty"`
-	Default         string `json:"default,omitempty"`
+	Default        string `json:"default,omitempty"`
 	Classification string `json:"classification"`
 	ClaimOnly      bool   `json:"claim_only,omitempty"`
 }
@@ -116,12 +116,20 @@ func sourceFiles(root string, extensions ...string) ([]sourceFile, error) {
 	return files, nil
 }
 
+func sensitiveEnvironmentName(name string) bool {
+	name = "_" + strings.ToUpper(name) + "_"
+	return strings.Contains(name, "_SECRET_") ||
+		strings.Contains(name, "_PASSWORD_") ||
+		strings.Contains(name, "_CREDENTIAL_") ||
+		strings.Contains(name, "_TOKEN_") ||
+		strings.Contains(name, "_API_KEY_") ||
+		strings.Contains(name, "_APIKEY_") ||
+		strings.Contains(name, "_PRIVATE_KEY_")
+}
+
 func redactedName(name string) string {
-	lower := strings.ToLower(name)
-	for _, sensitive := range []string{"secret", "password", "credential", "token", "api_key", "apikey", "private_key"} {
-		if strings.Contains(lower, sensitive) {
-			return "redacted"
-		}
+	if sensitiveEnvironmentName(name) {
+		return "redacted"
 	}
 	return name
 }

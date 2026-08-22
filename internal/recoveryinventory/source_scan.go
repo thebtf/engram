@@ -11,12 +11,15 @@ import (
 // ScanSource inventories source structure without returning source content.
 func ScanSource(root string) (Report, error) {
 	report := newReport("current-source")
-	files, err := sourceFiles(root, ".go", ".js", ".mjs", ".ts", ".tsx", ".vue", ".proto", ".json", ".yaml", ".yml", ".md")
+	files, err := sourceFiles(root, ".go", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".proto", ".json", ".yaml", ".yml", ".md")
 	if err != nil {
 		return Report{}, err
 	}
 
 	for _, file := range files {
+		if isTestSource(file.relative) {
+			continue
+		}
 		if filepath.Ext(file.relative) != ".go" {
 			report.add(Record{Kind: "source-file", Path: file.relative, Classification: "source-declared"})
 			continue

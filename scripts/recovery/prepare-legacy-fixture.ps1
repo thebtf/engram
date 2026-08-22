@@ -1,15 +1,17 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$FixtureRoot
+    [Parameter(Mandatory)][string]$FixtureRoot,
+    [string]$FixtureDatabaseDsn = 'postgres://fixture@127.0.0.1:55432/engram_fixture?sslmode=disable',
+    [string]$FixturePsqlContainer = ''
 )
-
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'recovery-fixture-common.ps1')
-
+$null = Set-RecoveryFixturePsqlTransport -FixturePsqlContainer $FixturePsqlContainer
 $context = Get-RecoveryFixtureContext -FixtureRoot $FixtureRoot
-New-RecoveryFixtureRoot -Context $context
-
+New-RecoveryFixtureRoot -Context $context -FixtureDatabaseDsn $FixtureDatabaseDsn
+$owner = Assert-RecoveryFixtureOwner -Context $context
+$databaseIdentity = Get-RecoveryFixtureDatabaseIdentity -FixtureDatabaseDsn $FixtureDatabaseDsn
 $exports = Join-Path $context.FixtureRoot 'exports'
 $restored = Join-Path $context.FixtureRoot 'restored'
 $receipts = Join-Path $context.FixtureRoot 'receipts'
@@ -19,7 +21,6 @@ foreach ($directory in @($exports, $restored, $receipts))
     [void](Assert-RecoveryContainedPath -Path $directory -RepositoryRoot $context.RepositoryRoot)
     [void](Assert-RecoverySafeExistingPath -Path $directory)
 }
-
 # These values are intentionally synthetic fingerprints, never live selectors or payloads.
 $fixtureExport = [ordered]@{
     schema_version = 'engram.recovery.synthetic-export.v1'
@@ -33,28 +34,39 @@ $fixtureExport = [ordered]@{
 $exportPath = Join-Path $exports 'legacy-fixture.json'
 Write-RecoveryJson -Path $exportPath -Value $fixtureExport -Context $context
 $exportFingerprint = Get-RecoverySha256 -Path $exportPath
-
+$preparedExport = Read-RecoveryJson -Path $exportPath -Context $context -Label 'synthetic fixture export'
+$structuralFingerprints = Get-RecoveryFixtureStructuralFingerprints -FixtureExport $preparedExport
 $restorePath = Join-Path $restored 'legacy-fixture.json'
 Copy-Item -LiteralPath $exportPath -Destination $restorePath
 [void](Assert-RecoveryContainedPath -Path $restorePath -RepositoryRoot $context.RepositoryRoot)
 [void](Assert-RecoverySafeExistingPath -Path $restorePath)
 $restoreFingerprint = Get-RecoverySha256 -Path $restorePath
 if ($exportFingerprint -cne $restoreFingerprint)
-{ throw 'synthetic fixture restore fingerprint mismatch' 
+{
+    throw 'synthetic fixture restore fingerprint mismatch'
 }
-
 $backupReference = 'urn:engram:fixture-export:' + $exportFingerprint.Substring('sha256:'.Length)
 $restoreReference = 'urn:engram:fixture-restore:' + $restoreFingerprint.Substring('sha256:'.Length)
 $manifest = [ordered]@{
     schema_version = $script:RecoveryFixtureSchema
     fixture_id = $script:RecoveryFixtureID
     fixture_root = $context.RelativeRoot
+    run_id = $owner.run_id
     fixture_class = 'synthetic_redacted_legacy'
     created_at_utc = Get-RecoveryUtcNow
+    database = [ordered]@{
+        schema_version = $script:RecoveryFixtureDatabaseSchema
+        identity = [ordered]@{
+            cluster_identifier = $databaseIdentity.ClusterIdentifier
+            database = $databaseIdentity.Database
+            database_oid = $databaseIdentity.DatabaseOid
+        }
+        identity_fingerprint = $databaseIdentity.Fingerprint
+    }
     export = [ordered]@{
         reference = $backupReference
         fingerprint = $exportFingerprint
-        schema_version = $fixtureExport.schema_version
+        schema_version = $preparedExport.schema_version
     }
     restore = [ordered]@{
         reference = $restoreReference
@@ -62,21 +74,23 @@ $manifest = [ordered]@{
         result = 'verified_equal_to_export'
     }
     selector_inventory = @(
-        [ordered]@{ selector_fingerprint = $fixtureExport.records[0].selector_fingerprint; record_count = 1 },
-        [ordered]@{ selector_fingerprint = $fixtureExport.records[1].selector_fingerprint; record_count = 1 }
+        [ordered]@{ selector_fingerprint = $preparedExport.records[0].selector_fingerprint; record_count = 1 },
+        [ordered]@{ selector_fingerprint = $preparedExport.records[1].selector_fingerprint; record_count = 1 }
     )
-    structural_fingerprints = [ordered]@{
-        projects = 'sha256:949c27952cd67e50f2cf6c4e2e841d20c295ee79f8d04c59bb11ea89b2152a32'
-        legacy_payloads = 'sha256:98789de53ada2328e19000c886b4eb7f5319e87e83b1186448153e0a1b2de493'
-    }
+    structural_fingerprints = $structuralFingerprints
 }
-Write-RecoveryJson -Path (Join-Path $context.FixtureRoot 'fixture-manifest.json') -Value $manifest -Context $context
+$manifestPath = Join-Path $context.FixtureRoot 'fixture-manifest.json'
+Write-RecoveryJson -Path $manifestPath -Value $manifest -Context $context
+$restoredExport = Read-RecoveryJson -Path $restorePath -Context $context -Label 'synthetic fixture restore'
+Assert-RecoveryFixtureStructuralFingerprints -Manifest $manifest -FixtureExport $preparedExport -FixtureRestore $restoredExport
+[void](Set-RecoveryFixtureDatabaseBinding -Context $context -Manifest $manifest -ManifestPath $manifestPath -FixtureDatabaseDsn $FixtureDatabaseDsn)
 Assert-RecoveryFixtureTreeSafe -FixtureRoot $context.FixtureRoot
-
 $output = [ordered]@{
     schema_version = 'engram.recovery.fixture-preparation-result.v1'
     result = 'prepared'
     fixture_id = $manifest.fixture_id
+    run_id = $manifest.run_id
+    database_identity_fingerprint = $manifest.database.identity_fingerprint
     fixture_class = $manifest.fixture_class
     fixture_schema_version = $manifest.schema_version
     export_reference = $manifest.export.reference

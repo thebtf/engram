@@ -11,24 +11,32 @@ import (
 	"strings"
 )
 
-var (
-	jsEnvironmentPattern        = regexp.MustCompile(`process\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\])`)
-	jsDynamicEnvironmentPattern = regexp.MustCompile(`process\.env\s*\[\s*[^"'][^\]]*\]`)
-	shellEnvironmentPattern     = regexp.MustCompile(`\$\{?([A-Z][A-Z0-9_]*)`)
-	shellDeclarationPattern     = regexp.MustCompile(`^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)=`)
-	powerShellEnvironmentRegex  = regexp.MustCompile(`\$env:([A-Za-z_][A-Za-z0-9_]*)`)
-)
-
-// ScanFlags inventories environment readers and their source-declared parsing
-// semantics. It never reads the process environment or reports effective state.
+// ScanFlags inventories source-declared environment readers and defaults. It
+// never reads the process environment or reports effective runtime state.
 func ScanFlags(root string) (Report, error) {
 	report := newReport("feature-flags")
-	files, err := sourceFiles(root, ".go", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".sh", ".ps1")
+	files, err := sourceFiles(root, ".go", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".sh", ".ps1", ".py")
 	if err != nil {
 		return Report{}, err
 	}
 	for _, file := range files {
-		if err := scanFlagFile(&report, file); err != nil {
+		if isTestSource(file.relative) {
+			continue
+		}
+		var err error
+		switch strings.ToLower(filepath.Ext(file.relative)) {
+		case ".go":
+			err = scanFlagFile(&report, file)
+		case ".js", ".mjs", ".cjs", ".ts", ".tsx":
+			err = scanJavaScriptFlagFile(&report, file)
+		case ".sh":
+			err = scanShellFlagFile(&report, file)
+		case ".ps1":
+			err = scanPowerShellFlagFile(&report, file)
+		case ".py":
+			err = scanPythonFlagFile(&report, file)
+		}
+		if err != nil {
 			return Report{}, err
 		}
 	}
@@ -41,131 +49,44 @@ func scanFlagFile(report *Report, file sourceFile) error {
 	if err != nil {
 		return err
 	}
-	if filepath.Ext(file.relative) != ".go" {
-		scanScriptFlags(report, file, source)
-		return nil
-	}
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, file.relative, source, 0)
 	if err != nil {
 		report.add(Record{Kind: "environment-reader", Path: file.relative, Classification: "source-uncertain"})
 		return nil
 	}
-	declaredNames := declaredEnvironmentNames(parsed)
-	lines := strings.Split(string(source), "\n")
+
+	var reads []goEnvironmentRead
 	ast.Inspect(parsed, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if !ok || !isEnvironmentRead(call) || len(call.Args) != 1 {
 			return true
 		}
 		line := fset.Position(call.Pos()).Line
-		parserKind, defaultKind := flagSemantics(lines, line)
-		names := environmentReadNames(call.Args[0], declaredNames)
-		if len(names) == 0 {
-			addFlagRecord(report, file.relative, line, "source-dynamic", "environment-reader", "source-dynamic", "source-unspecified")
+		literal, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || literal.Kind != token.STRING {
+			addUncertainEnvironmentReader(report, file.relative, line)
 			return true
 		}
-		for _, name := range names {
-			addFlagRecord(report, file.relative, line, name, "environment-reader", parserKind, defaultKind)
+		name, err := strconv.Unquote(literal.Value)
+		if err != nil {
+			addUncertainEnvironmentReader(report, file.relative, line)
+			return true
 		}
+		reads = append(reads, goEnvironmentRead{call: call, name: name, line: line})
 		return true
 	})
+	for _, read := range reads {
+		parserKind, defaultKind := goEnvironmentSemantics(parsed, read.call)
+		addEnvironmentReader(report, file.relative, read.line, read.name, parserKind, defaultKind)
+	}
 	return nil
 }
 
-func scanScriptFlags(report *Report, file sourceFile, source []byte) {
-	extension := strings.ToLower(filepath.Ext(file.relative))
-	for index, text := range strings.Split(string(source), "\n") {
-		line := index + 1
-		switch extension {
-		case ".js", ".mjs", ".cjs", ".ts", ".tsx":
-			for _, match := range jsEnvironmentPattern.FindAllStringSubmatch(text, -1) {
-				name := match[1]
-				if name == "" {
-					name = match[2]
-				}
-				parserKind, defaultKind := scriptFlagSemantics(text)
-				addFlagRecord(report, file.relative, line, name, "environment-reader", parserKind, defaultKind)
-			}
-			if jsDynamicEnvironmentPattern.MatchString(text) {
-				parserKind, defaultKind := scriptFlagSemantics(text)
-				addFlagRecord(report, file.relative, line, "source-dynamic", "environment-reader", parserKind, defaultKind)
-			}
-		case ".sh":
-			for _, match := range shellEnvironmentPattern.FindAllStringSubmatch(text, -1) {
-				parserKind, defaultKind := scriptFlagSemantics(text)
-				addFlagRecord(report, file.relative, line, match[1], "environment-reader", parserKind, defaultKind)
-			}
-			if match := shellDeclarationPattern.FindStringSubmatch(text); match != nil {
-				addFlagRecord(report, file.relative, line, match[1], "environment-default", "source-default-declaration", "source-declared-default")
-			}
-		case ".ps1":
-			for _, match := range powerShellEnvironmentRegex.FindAllStringSubmatch(text, -1) {
-				parserKind, defaultKind := scriptFlagSemantics(text)
-				addFlagRecord(report, file.relative, line, match[1], "environment-reader", parserKind, defaultKind)
-			}
-		}
-	}
-}
-
-func environmentReadNames(argument ast.Expr, declared map[string][]string) []string {
-	if literal, ok := argument.(*ast.BasicLit); ok && literal.Kind == token.STRING {
-		name, err := strconv.Unquote(literal.Value)
-		if err == nil {
-			return []string{name}
-		}
-	}
-	call, ok := argument.(*ast.CallExpr)
-	if !ok {
-		return nil
-	}
-	function, ok := call.Fun.(*ast.Ident)
-	if !ok {
-		return nil
-	}
-	return declared[function.Name]
-}
-
-func declaredEnvironmentNames(file *ast.File) map[string][]string {
-	declared := make(map[string][]string)
-	for _, declaration := range file.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if !ok || function.Body == nil {
-			continue
-		}
-		ast.Inspect(function.Body, func(node ast.Node) bool {
-			result, ok := node.(*ast.ReturnStmt)
-			if !ok || len(result.Results) != 1 {
-				return true
-			}
-			literal, ok := result.Results[0].(*ast.BasicLit)
-			if !ok || literal.Kind != token.STRING {
-				return true
-			}
-			name, err := strconv.Unquote(literal.Value)
-			if err == nil {
-				declared[function.Name.Name] = append(declared[function.Name.Name], name)
-			}
-			return true
-		})
-	}
-	return declared
-}
-
-func addFlagRecord(report *Report, path string, line int, name, kind, parserKind, defaultKind string) {
-	classification := "configuration-reader"
-	if strings.HasPrefix(name, "ENGRAM_") {
-		classification = "feature-flag-reader"
-	}
-	report.add(Record{
-		Kind:           kind,
-		Path:           path,
-		Line:           line,
-		Name:           redactedName(name),
-		Parser:         parserKind,
-		Default:        defaultKind,
-		Classification: classification,
-	})
+type goEnvironmentRead struct {
+	call *ast.CallExpr
+	name string
+	line int
 }
 
 func isEnvironmentRead(call *ast.CallExpr) bool {
@@ -177,36 +98,1069 @@ func isEnvironmentRead(call *ast.CallExpr) bool {
 	return ok && packageName.Name == "os"
 }
 
-func flagSemantics(lines []string, line int) (parserKind, defaultKind string) {
-	start, end := line-3, line+2
-	if start < 0 {
-		start = 0
+var (
+	javaScriptEnvironmentRead  = regexp.MustCompile(`\bprocess\.env((\.|\?\.)([A-Za-z_][A-Za-z0-9_]*)|(\?\.|\.)?\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\])`)
+	javaScriptEnvironmentStart = regexp.MustCompile(`\bprocess\.env\b`)
+	javaScriptBracketReader    = regexp.MustCompile(`process\.env(?:\?\.|\.)?\[\s*$`)
+	powerShellEnvironmentRead  = regexp.MustCompile(`(?i)\$(?:env:([A-Za-z_][A-Za-z0-9_]*)|\{env:([A-Za-z_][A-Za-z0-9_]*)\})`)
+	powerShellEnvironmentAPI   = regexp.MustCompile(`(?i)\[(?:System\.)?Environment\]\s*::\s*(GetEnvironmentVariables?)\s*\(`)
+	pythonGetenvRead           = regexp.MustCompile(`\bos\.(getenv|environ\.get)\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["'](\s*,\s*[^)]*)?\)`)
+	pythonEnvironRead          = regexp.MustCompile(`\bos\.environ\s*\[\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\]`)
+	pythonEnvironmentStart     = regexp.MustCompile(`\bos\.(?:getenv|environ\.get)\s*\(|\bos\.environ\s*\[`)
+	pythonLiteralArgument      = regexp.MustCompile(`\bos\.(?:getenv|environ\.get)\s*\(\s*$|\bos\.environ\s*\[\s*$`)
+	shellAssignment            = regexp.MustCompile(`^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=`)
+)
+
+func scanJavaScriptFlagFile(report *Report, file sourceFile) error {
+	source, err := os.ReadFile(file.absolute)
+	if err != nil {
+		return err
 	}
-	if end > len(lines) {
-		end = len(lines)
+	var state javaScriptLexState
+	for index, line := range strings.Split(string(source), "\n") {
+		code, templateUncertain := javaScriptCodeMask(line, &state)
+		if templateUncertain {
+			addUncertainEnvironmentReader(report, file.relative, index+1)
+		}
+		for _, start := range javaScriptEnvironmentStart.FindAllStringIndex(code, -1) {
+			match := javaScriptEnvironmentRead.FindStringSubmatchIndex(code[start[0]:])
+			if match == nil || match[0] != 0 {
+				if !environmentAssignment(code, start[1]) {
+					addUncertainEnvironmentReader(report, file.relative, index+1)
+				}
+				continue
+			}
+			end := start[0] + match[1]
+			if environmentAssignment(code, end) {
+				continue
+			}
+			name := ""
+			if match[6] >= 0 {
+				name = capture(line, start[0]+match[6], start[0]+match[7])
+			} else if match[10] >= 0 {
+				name = capture(line, start[0]+match[10], start[0]+match[11])
+			}
+			if name == "" {
+				addUncertainEnvironmentReader(report, file.relative, index+1)
+				continue
+			}
+			parserKind, defaultKind := javaScriptSemantics(code, line, start[0], end)
+			addEnvironmentReader(report, file.relative, index+1, name, parserKind, defaultKind)
+		}
 	}
-	context := strings.Join(lines[start:end], "\n")
+	return nil
+}
+
+func scanShellFlagFile(report *Report, file sourceFile) error {
+	source, err := os.ReadFile(file.absolute)
+	if err != nil {
+		return err
+	}
+	declared := make(map[string]bool)
+	var state shellLexState
+	for index, line := range strings.Split(string(source), "\n") {
+		code, unsupportedHereDoc := shellCodeMaskWithState(line, &state)
+		if unsupportedHereDoc {
+			addUncertainEnvironmentReader(report, file.relative, index+1)
+		}
+		for offset := range len(code) {
+			if code[offset] != '$' || shellEscaped(code, offset) {
+				continue
+			}
+			name, defaultKind, ok := shellEnvironmentRead(code, offset)
+			if !ok || declared[name] {
+				continue
+			}
+			addEnvironmentReader(report, file.relative, index+1, name, "shell-parameter-expansion", defaultKind)
+		}
+		if match := shellAssignment.FindStringSubmatch(code); match != nil {
+			declared[match[1]] = true
+		}
+	}
+	return nil
+}
+
+func scanPowerShellFlagFile(report *Report, file sourceFile) error {
+	source, err := os.ReadFile(file.absolute)
+	if err != nil {
+		return err
+	}
+	var state powerShellLexState
+	for index, line := range strings.Split(string(source), "\n") {
+		code := powerShellCodeMaskWithState(line, &state)
+		for _, match := range powerShellEnvironmentRead.FindAllStringSubmatchIndex(code, -1) {
+			if environmentAssignment(code, match[1]) {
+				continue
+			}
+			name := capture(line, match[2], match[3])
+			if name == "" {
+				name = capture(line, match[4], match[5])
+			}
+			if name == "" {
+				addUncertainEnvironmentReader(report, file.relative, index+1)
+				continue
+			}
+			defaultKind := "empty-unset"
+			if strings.HasPrefix(strings.TrimSpace(code[match[1]:]), "??") {
+				defaultKind = "source-default-expression"
+			}
+			addEnvironmentReader(report, file.relative, index+1, name, "powershell-string", defaultKind)
+		}
+		for _, match := range powerShellEnvironmentAPI.FindAllStringSubmatchIndex(code, -1) {
+			name, literal := powerShellEnvironmentAPILiteral(line, match[1])
+			if strings.EqualFold(capture(line, match[2], match[3]), "GetEnvironmentVariables") || !literal {
+				addUncertainEnvironmentReader(report, file.relative, index+1)
+				continue
+			}
+			addEnvironmentReader(report, file.relative, index+1, name, "powershell-environment-api", "empty-unset")
+		}
+	}
+	return nil
+}
+
+func scanPythonFlagFile(report *Report, file sourceFile) error {
+	source, err := os.ReadFile(file.absolute)
+	if err != nil {
+		return err
+	}
+	var state pythonLexState
+	for index, line := range strings.Split(string(source), "\n") {
+		code := pythonCodeMask(line, &state)
+		for _, start := range pythonEnvironmentStart.FindAllStringIndex(code, -1) {
+			if match := pythonGetenvRead.FindStringSubmatchIndex(code[start[0]:]); match != nil && match[0] == 0 {
+				defaultKind := "empty-unset"
+				if match[6] >= 0 {
+					defaultKind = "source-default-expression"
+				}
+				addEnvironmentReader(report, file.relative, index+1, capture(line, start[0]+match[4], start[0]+match[5]), "python-string", defaultKind)
+				continue
+			}
+			if match := pythonEnvironRead.FindStringSubmatchIndex(code[start[0]:]); match != nil && match[0] == 0 {
+				addEnvironmentReader(report, file.relative, index+1, capture(line, start[0]+match[2], start[0]+match[3]), "python-string", "empty-unset")
+				continue
+			}
+			addUncertainEnvironmentReader(report, file.relative, index+1)
+		}
+	}
+	return nil
+}
+
+func environmentAssignment(line string, end int) bool {
+	remainder := strings.TrimSpace(line[end:])
+	return (strings.HasPrefix(remainder, "=") && !strings.HasPrefix(remainder, "==") && !strings.HasPrefix(remainder, "=>")) || strings.HasPrefix(remainder, "||=") || strings.HasPrefix(remainder, "??=")
+}
+
+func javaScriptSemantics(code, source string, start, end int) (parserKind, defaultKind string) {
+	prefix := strings.TrimSpace(code[:start])
 	switch {
-	case strings.Contains(context, "strconv.ParseBool"):
-		return "parse-bool", "source-parser-default"
-	case strings.Contains(context, "parseBool("):
-		return "boolean-helper", "source-helper-default"
-	case strings.Contains(context, "strconv.Atoi") || strings.Contains(context, "strconv.ParseInt"):
-		return "integer-parser", "source-parser-default"
-	case strings.Contains(context, "== \"true\""):
-		return "exact-lowercase-true", "false-unless-exact-true"
-	case strings.Contains(context, "strings.TrimSpace"):
-		return "trimmed-string", "source-unspecified"
+	case strings.HasSuffix(prefix, "parseInt(") || strings.HasSuffix(prefix, "Number("):
+		parserKind = "integer-parser"
+	case strings.HasSuffix(prefix, "parseFloat("):
+		parserKind = "float-parser"
+	case javaScriptExactComparison(code, source, end, "true"):
+		parserKind = "exact-lowercase-true"
+	case strings.HasSuffix(prefix, "Boolean("):
+		parserKind = "truthy-string"
 	default:
+		parserKind = "source-string"
+	}
+	remainder := strings.TrimSpace(code[end:])
+	if strings.HasPrefix(remainder, "||") || strings.HasPrefix(remainder, "??") || strings.HasPrefix(remainder, ".trim() ||") || strings.HasPrefix(remainder, ".trim() ??") || strings.HasPrefix(remainder, "?.trim() ||") || strings.HasPrefix(remainder, "?.trim() ??") {
+		return parserKind, "source-default-expression"
+	}
+	return parserKind, "empty-unset"
+}
+
+func addEnvironmentReader(report *Report, path string, line int, name, parserKind, defaultKind string) {
+	report.add(Record{
+		Kind:           "environment-reader",
+		Path:           path,
+		Line:           line,
+		Name:           redactedName(name),
+		Parser:         parserKind,
+		Default:        defaultKind,
+		Classification: environmentClassification(name),
+	})
+}
+
+func addUncertainEnvironmentReader(report *Report, path string, line int) {
+	report.add(Record{Kind: "environment-reader", Path: path, Line: line, Parser: "source-uncertain", Default: "source-unspecified", Classification: "source-uncertain"})
+}
+
+func environmentClassification(name string) string {
+	if sensitiveEnvironmentName(name) {
+		return "credential-reader"
+	}
+	upper := strings.ToUpper(name)
+	for _, marker := range []string{"AUTH", "DATABASE", "DSN", "URL", "HOST", "PORT", "PATH", "DIR", "LOG", "CONTEXT", "LIMIT", "INTERVAL", "CONN", "CONFIG", "DATA", "TIMEOUT"} {
+		if strings.Contains(upper, marker) {
+			return "configuration-reader"
+		}
+	}
+	if strings.HasSuffix(upper, "_ENABLED") || strings.Contains(upper, "_FEATURE") || strings.Contains(upper, "_FLAG") || strings.Contains(upper, "_EXPERIMENT") || strings.Contains(upper, "_BETA") || strings.Contains(upper, "_VNEXT") {
+		return "feature-flag-reader"
+	}
+	return "configuration-reader"
+}
+
+// isTestSource identifies test-only and fixture-data paths excluded from runtime inventories.
+func isTestSource(path string) bool {
+	lower := strings.ToLower(filepath.ToSlash(path))
+	for _, part := range strings.Split(lower, "/") {
+		switch part {
+		case "test", "tests", "__tests__", "testdata", "fixtures", "moduletest":
+			return true
+		}
+	}
+	base := filepath.Base(lower)
+	return strings.Contains(base, "_test.") || strings.HasSuffix(base, "_test") || strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") || strings.HasSuffix(base, ".tests.ps1") || strings.HasPrefix(base, "test_") || strings.HasPrefix(base, "playwright.config.")
+}
+
+func capture(value string, start, end int) string {
+	if start < 0 || end < 0 {
+		return ""
+	}
+	return value[start:end]
+}
+
+func goEnvironmentSemantics(file *ast.File, environmentCall *ast.CallExpr) (string, string) {
+	aliases := goEnvironmentAliases(file, environmentCall)
+	parserKind := ""
+	parserConflict := false
+	booleanKind := ""
+	booleanDefault := ""
+	booleanConflict := false
+	trimmed := false
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch node := node.(type) {
+		case *ast.CallExpr:
+			if goCallUsesEnvironmentValue(node, aliases, environmentCall) && goCallName(node) == "strings.TrimSpace" {
+				trimmed = true
+			}
+			kind := ""
+			switch goCallName(node) {
+			case "strconv.Atoi", "strconv.ParseInt", "strconv.ParseUint":
+				kind = "integer-parser"
+			case "strconv.ParseBool":
+				kind = "parse-bool"
+			}
+			if kind != "" && len(node.Args) > 0 && goCallUsesEnvironmentValue(node, aliases, environmentCall) {
+				if node.Pos() > environmentCall.Pos() || goExpressionContainsCall(node.Args[0], environmentCall) {
+					if parserKind == "" {
+						parserKind = kind
+					} else if parserKind != kind {
+						parserConflict = true
+					}
+				}
+			}
+		case *ast.BinaryExpr:
+			if node.Op == token.LOR {
+				if kind, defaultKind, ok := goBooleanExpressionSemantics(node, aliases, environmentCall); ok {
+					if booleanKind == "" {
+						booleanKind, booleanDefault = kind, defaultKind
+					} else if booleanKind != kind {
+						booleanConflict = true
+					}
+					return false
+				}
+			}
+			if node.Op == token.EQL {
+				if kind, defaultKind, ok := goBooleanExpressionSemantics(node, aliases, environmentCall); ok {
+					if booleanKind == "" {
+						booleanKind, booleanDefault = kind, defaultKind
+					} else if booleanKind != kind {
+						booleanConflict = true
+					}
+				}
+			}
+		}
+		return true
+	})
+	if parserConflict || booleanConflict {
 		return "source-uncertain", "source-unspecified"
+	}
+	if parserKind != "" {
+		return parserKind, "source-parser-default"
+	}
+	if booleanKind != "" {
+		return booleanKind, booleanDefault
+	}
+	if trimmed {
+		return "trimmed-string", "source-unspecified"
+	}
+	return "source-uncertain", "source-unspecified"
+}
+
+func goEnvironmentAliases(file *ast.File, environmentCall *ast.CallExpr) map[*ast.Object]bool {
+	aliases := make(map[*ast.Object]bool)
+	changed := true
+	for changed {
+		changed = false
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.AssignStmt:
+				for index, value := range node.Rhs {
+					if index >= len(node.Lhs) || !goAliasExpression(value, aliases, environmentCall) {
+						continue
+					}
+					if name, ok := node.Lhs[index].(*ast.Ident); ok && name.Obj != nil && !aliases[name.Obj] {
+						aliases[name.Obj] = true
+						changed = true
+					}
+				}
+			case *ast.ValueSpec:
+				for index, value := range node.Values {
+					if index >= len(node.Names) || !goAliasExpression(value, aliases, environmentCall) {
+						continue
+					}
+					if name := node.Names[index]; name.Obj != nil && !aliases[name.Obj] {
+						aliases[name.Obj] = true
+						changed = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	return aliases
+}
+
+func goAliasExpression(expression ast.Expr, aliases map[*ast.Object]bool, environmentCall *ast.CallExpr) bool {
+	switch expression := expression.(type) {
+	case *ast.Ident:
+		return aliases[expression.Obj]
+	case *ast.ParenExpr:
+		return goAliasExpression(expression.X, aliases, environmentCall)
+	case *ast.CallExpr:
+		return expression == environmentCall || (goCallName(expression) == "strings.TrimSpace" && len(expression.Args) == 1 && goAliasExpression(expression.Args[0], aliases, environmentCall))
+	}
+	return false
+}
+
+func goCallUsesEnvironmentValue(call *ast.CallExpr, aliases map[*ast.Object]bool, environmentCall *ast.CallExpr) bool {
+	for _, argument := range call.Args {
+		if goExpressionUsesEnvironmentValue(argument, aliases, environmentCall) {
+			return true
+		}
+	}
+	return false
+}
+
+func goExpressionUsesEnvironmentValue(expression ast.Expr, aliases map[*ast.Object]bool, environmentCall *ast.CallExpr) bool {
+	found := false
+	ast.Inspect(expression, func(node ast.Node) bool {
+		if node == environmentCall {
+			found = true
+			return false
+		}
+		if name, ok := node.(*ast.Ident); ok && aliases[name.Obj] {
+			found = true
+			return false
+		}
+		return !found
+	})
+	return found
+}
+
+func goExpressionContainsCall(expression ast.Expr, call *ast.CallExpr) bool {
+	found := false
+	ast.Inspect(expression, func(node ast.Node) bool {
+		if node == call {
+			found = true
+			return false
+		}
+		return !found
+	})
+	return found
+}
+
+func goCallName(call *ast.CallExpr) string {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return ""
+	}
+	packageName, ok := selector.X.(*ast.Ident)
+	if !ok {
+		return ""
+	}
+	return packageName.Name + "." + selector.Sel.Name
+}
+
+func goBooleanExpressionSemantics(expression ast.Expr, aliases map[*ast.Object]bool, environmentCall *ast.CallExpr) (string, string, bool) {
+	values, ok := goBooleanValues(expression, aliases, environmentCall)
+	if !ok {
+		return "", "", false
+	}
+	switch {
+	case len(values) == 1 && values["true"]:
+		return "exact-lowercase-true", "false-unless-exact-true", true
+	case len(values) == 2 && values["true"] && values["1"]:
+		return "exact-true-or-one", "false-unless-true-or-one", true
+	case len(values) == 1 && values["false"]:
+		return "exact-lowercase-false", "source-unspecified", true
+	case len(values) == 2 && values["false"] && values["0"]:
+		return "exact-false-or-zero", "source-unspecified", true
+	default:
+		return "", "", false
 	}
 }
 
-func scriptFlagSemantics(line string) (parserKind, defaultKind string) {
-	switch {
-	case strings.Contains(line, "??"), strings.Contains(line, "||"), strings.Contains(line, ":-"), strings.Contains(line, ":="):
-		return "source-conditional-default", "source-declared-default"
-	default:
-		return "source-uncertain", "source-unspecified"
+func goBooleanValues(expression ast.Expr, aliases map[*ast.Object]bool, environmentCall *ast.CallExpr) (map[string]bool, bool) {
+	if parenthesized, ok := expression.(*ast.ParenExpr); ok {
+		return goBooleanValues(parenthesized.X, aliases, environmentCall)
+	}
+	binary, ok := expression.(*ast.BinaryExpr)
+	if !ok {
+		return nil, false
+	}
+	if binary.Op == token.LOR {
+		left, leftOK := goBooleanValues(binary.X, aliases, environmentCall)
+		right, rightOK := goBooleanValues(binary.Y, aliases, environmentCall)
+		if !leftOK || !rightOK {
+			return nil, false
+		}
+		for value := range right {
+			left[value] = true
+		}
+		return left, true
+	}
+	if binary.Op != token.EQL {
+		return nil, false
+	}
+	if goExpressionUsesEnvironmentValue(binary.X, aliases, environmentCall) {
+		if value, ok := goStringLiteral(binary.Y); ok {
+			return map[string]bool{value: true}, true
+		}
+	}
+	if goExpressionUsesEnvironmentValue(binary.Y, aliases, environmentCall) {
+		if value, ok := goStringLiteral(binary.X); ok {
+			return map[string]bool{value: true}, true
+		}
+	}
+	return nil, false
+}
+
+func goStringLiteral(expression ast.Expr) (string, bool) {
+	literal, ok := expression.(*ast.BasicLit)
+	if !ok || literal.Kind != token.STRING {
+		return "", false
+	}
+	value, err := strconv.Unquote(literal.Value)
+	return value, err == nil
+}
+
+type pythonLexState struct {
+	quote       byte
+	tripleQuote byte
+}
+
+func pythonCodeMask(line string, state *pythonLexState) string {
+	masked := []byte(line)
+	for index := 0; index < len(masked); {
+		if state.tripleQuote != 0 {
+			end, closed := pythonTripleStringEnd(line, index, state.tripleQuote)
+			blankBytes(masked, index, end)
+			if !closed {
+				return string(masked)
+			}
+			state.tripleQuote = 0
+			index = end
+			continue
+		}
+		if state.quote != 0 {
+			end, closed := pythonStringEnd(line, index, state.quote)
+			blankBytes(masked, index, end)
+			if !closed {
+				if !pythonContinuesString(line) {
+					state.quote = 0
+				}
+				return string(masked)
+			}
+			state.quote = 0
+			index = end
+			continue
+		}
+
+		switch masked[index] {
+		case '#':
+			blankBytes(masked, index, len(masked))
+			return string(masked)
+		case '\'', '"':
+			quote := masked[index]
+			if index+2 < len(masked) && masked[index+1] == quote && masked[index+2] == quote {
+				end, closed := pythonTripleStringEnd(line, index+3, quote)
+				blankBytes(masked, index, end)
+				if !closed {
+					state.tripleQuote = quote
+					return string(masked)
+				}
+				index = end
+				continue
+			}
+			end, closed := pythonStringEnd(line, index+1, quote)
+			if !pythonLiteralArgument.Match(masked[:index]) {
+				blankBytes(masked, index, end)
+			}
+			if !closed {
+				if pythonContinuesString(line) {
+					state.quote = quote
+				}
+				return string(masked)
+			}
+			index = end
+			continue
+		}
+		index++
+	}
+	return string(masked)
+}
+
+func pythonTripleStringEnd(line string, start int, quote byte) (int, bool) {
+	for index := start; index+2 < len(line); index++ {
+		if line[index] == '\\' {
+			index++
+			continue
+		}
+		if line[index] == quote && line[index+1] == quote && line[index+2] == quote {
+			return index + 3, true
+		}
+	}
+	return len(line), false
+}
+
+func pythonStringEnd(line string, start int, quote byte) (int, bool) {
+	for index := start; index < len(line); index++ {
+		if line[index] == '\\' {
+			index++
+			continue
+		}
+		if line[index] == quote {
+			return index + 1, true
+		}
+	}
+	return len(line), false
+}
+
+func pythonContinuesString(line string) bool {
+	backslashes := 0
+	for index := len(line) - 1; index >= 0 && line[index] == '\\'; index-- {
+		backslashes++
+	}
+	return backslashes%2 == 1
+}
+
+type javaScriptLexState struct {
+	blockComment      bool
+	quote             byte
+	templateLiteral   bool
+	templateUncertain bool
+}
+
+func javaScriptCodeMask(line string, state *javaScriptLexState) (string, bool) {
+	masked := []byte(line)
+	sourceUncertain := false
+	for index := 0; index < len(masked); {
+		if state.quote != 0 {
+			end, closed := javaScriptQuotedStringEnd(line, index, state.quote)
+			blankBytes(masked, index, end)
+			if !closed {
+				if !javaScriptContinuesString(line) {
+					state.quote = 0
+				}
+				return string(masked), sourceUncertain
+			}
+			state.quote = 0
+			index = end
+			continue
+		}
+
+		if state.templateLiteral {
+			end, closed, interpolated := javaScriptTemplateEnd(line, index)
+			blankBytes(masked, index, end)
+			if interpolated && !state.templateUncertain {
+				sourceUncertain = true
+				state.templateUncertain = true
+			}
+			if !closed {
+				return string(masked), sourceUncertain
+			}
+			state.templateLiteral = false
+			state.templateUncertain = false
+			index = end
+			continue
+		}
+		if state.blockComment {
+			end := strings.Index(line[index:], "*/")
+			if end < 0 {
+				blankBytes(masked, index, len(masked))
+				return string(masked), sourceUncertain
+			}
+			end += index + len("*/")
+			blankBytes(masked, index, end)
+			index = end
+			state.blockComment = false
+			continue
+		}
+
+		switch masked[index] {
+		case '/':
+			if index+1 < len(masked) && masked[index+1] == '/' {
+				blankBytes(masked, index, len(masked))
+				return string(masked), sourceUncertain
+			}
+			if index+1 < len(masked) && masked[index+1] == '*' {
+				end := strings.Index(line[index+2:], "*/")
+				if end < 0 {
+					blankBytes(masked, index, len(masked))
+					state.blockComment = true
+					return string(masked), sourceUncertain
+				}
+				end += index + 4
+				blankBytes(masked, index, end)
+				index = end
+				continue
+			}
+		case '\'', '"':
+			quote := masked[index]
+			end, closed := javaScriptQuotedStringEnd(line, index+1, quote)
+			if !javaScriptBracketReader.Match(masked[:index]) {
+				blankBytes(masked, index, end)
+			}
+			if !closed {
+				if javaScriptContinuesString(line) {
+					state.quote = quote
+				}
+				return string(masked), sourceUncertain
+			}
+			index = end
+			continue
+		case '`':
+			end, closed, interpolated := javaScriptTemplateEnd(line, index+1)
+			blankBytes(masked, index, end)
+			if interpolated {
+				sourceUncertain = true
+			}
+			if !closed {
+				state.templateLiteral = true
+				state.templateUncertain = interpolated
+				return string(masked), sourceUncertain
+			}
+			index = end
+			continue
+		}
+		index++
+	}
+	return string(masked), sourceUncertain
+}
+
+func javaScriptTemplateEnd(line string, start int) (end int, closed, interpolated bool) {
+	for index := start; index < len(line); index++ {
+		if line[index] == '\\' {
+			index++
+			continue
+		}
+		if line[index] == '$' && index+1 < len(line) && line[index+1] == '{' {
+			interpolated = true
+			index++
+			continue
+		}
+		if line[index] == '`' {
+			return index + 1, true, interpolated
+		}
+	}
+	return len(line), false, interpolated
+}
+
+func javaScriptStringEnd(line string, start int) int {
+	end, _ := javaScriptQuotedStringEnd(line, start+1, line[start])
+	return end
+}
+
+func javaScriptQuotedStringEnd(line string, start int, quote byte) (int, bool) {
+	for index := start; index < len(line); index++ {
+		if line[index] == '\\' {
+			index++
+			continue
+		}
+		if line[index] == quote {
+			return index + 1, true
+		}
+	}
+	return len(line), false
+}
+
+func javaScriptContinuesString(line string) bool {
+	end := len(line)
+	if end > 0 && line[end-1] == '\r' {
+		end--
+	}
+	backslashes := 0
+	for index := end - 1; index >= 0 && line[index] == '\\'; index-- {
+		backslashes++
+	}
+	return backslashes%2 == 1
+}
+
+func javaScriptExactComparison(code, source string, end int, want string) bool {
+	remainder := code[end:]
+	trimmed := strings.TrimLeft(remainder, " \t")
+	if !strings.HasPrefix(trimmed, "===") {
+		return false
+	}
+	offset := end + len(remainder) - len(trimmed) + len("===")
+	for offset < len(source) && (source[offset] == ' ' || source[offset] == '\t') {
+		offset++
+	}
+	if offset >= len(source) || (source[offset] != '\'' && source[offset] != '"') {
+		return false
+	}
+	quotedEnd := javaScriptStringEnd(source, offset)
+	return quotedEnd > offset+1 && source[offset+1:quotedEnd-1] == want
+}
+
+func powerShellCodeMask(line string) string {
+	masked := []byte(line)
+	for index := 0; index < len(masked); {
+		switch masked[index] {
+		case '#':
+			blankBytes(masked, index, len(masked))
+			return string(masked)
+		case '\'':
+			end := index + 1
+			for end < len(masked) {
+				if masked[end] == '\'' {
+					end++
+					if end < len(masked) && masked[end] == '\'' {
+						end++
+						continue
+					}
+					break
+				}
+				end++
+			}
+			blankBytes(masked, index, end)
+			index = end
+			continue
+		case '"':
+			end := index + 1
+			masked[index] = ' '
+			for end < len(masked) && line[end] != '"' {
+				if line[end] == '`' {
+					masked[end] = ' '
+					end++
+					if end < len(masked) {
+						masked[end] = ' '
+						end++
+					}
+					continue
+				}
+				if line[end] == '$' {
+					if variableEnd, ok := powerShellEnvironmentEnd(line, end); ok {
+						end = variableEnd
+						continue
+					}
+				}
+				masked[end] = ' '
+				end++
+			}
+			if end < len(masked) {
+				masked[end] = ' '
+				end++
+			}
+			index = end
+			continue
+		case '`':
+			masked[index] = ' '
+			index++
+			if index < len(masked) {
+				masked[index] = ' '
+				index++
+			}
+			continue
+		}
+		index++
+	}
+	return string(masked)
+}
+
+type powerShellLexState struct {
+	hereStringQuote byte
+}
+
+func powerShellCodeMaskWithState(line string, state *powerShellLexState) string {
+	if state.hereStringQuote != 0 {
+		if powerShellHereStringEnd(line, state.hereStringQuote) {
+			state.hereStringQuote = 0
+			return ""
+		}
+		if state.hereStringQuote == '\'' {
+			return ""
+		}
+		return powerShellDoubleHereStringMask(line)
+	}
+
+	code := powerShellCodeMask(line)
+	if start, quote, ok := powerShellHereStringStart(line, code); ok {
+		state.hereStringQuote = quote
+		masked := []byte(code)
+		blankBytes(masked, start, len(masked))
+		return string(masked)
+	}
+	return code
+}
+
+func powerShellHereStringStart(line, code string) (int, byte, bool) {
+	for index := range len(line) - 1 {
+		quote := line[index+1]
+		if line[index] != '@' || (quote != '\'' && quote != '"') || code[index] != '@' || code[index+1] != ' ' || strings.TrimSpace(line[index+2:]) != "" {
+			continue
+		}
+		return index, quote, true
+	}
+	return 0, 0, false
+}
+
+func powerShellHereStringEnd(line string, quote byte) bool {
+	line = strings.TrimSuffix(line, "\r")
+	return len(line) == 2 && line[0] == quote && line[1] == '@'
+}
+
+func powerShellDoubleHereStringMask(line string) string {
+	masked := make([]byte, len(line))
+	for index := range masked {
+		masked[index] = ' '
+	}
+	for index := range len(line) {
+		if line[index] == '`' {
+			index++
+			continue
+		}
+		if line[index] != '$' {
+			continue
+		}
+		if end, ok := powerShellEnvironmentEnd(line, index); ok {
+			copy(masked[index:end], line[index:end])
+			index = end - 1
+		}
+	}
+	return string(masked)
+}
+
+func powerShellEnvironmentAPILiteral(line string, start int) (string, bool) {
+	for start < len(line) && (line[start] == ' ' || line[start] == '\t') {
+		start++
+	}
+	if start >= len(line) || (line[start] != '\'' && line[start] != '"') {
+		return "", false
+	}
+	quote := line[start]
+	for end := start + 1; end < len(line); end++ {
+		if line[end] == '`' {
+			return "", false
+		}
+		if line[end] == quote {
+			return line[start+1 : end], true
+		}
+	}
+	return "", false
+}
+
+func powerShellEnvironmentEnd(line string, start int) (int, bool) {
+	if strings.HasPrefix(strings.ToLower(line[start:]), "$env:") {
+		end := start + len("$env:")
+		for end < len(line) && isShellNamePart(line[end]) {
+			end++
+		}
+		return end, end > start+len("$env:")
+	}
+	if len(line) >= start+6 && line[start:start+2] == "${" && strings.EqualFold(line[start+2:start+6], "env:") {
+		end := start + 6
+		for end < len(line) && isShellNamePart(line[end]) {
+			end++
+		}
+		if end < len(line) && line[end] == '}' && end > start+6 {
+			return end + 1, true
+		}
+	}
+	return start, false
+}
+
+func shellCodeMask(line string) string {
+	masked := []byte(line)
+	inSingleQuote := false
+	for index := 0; index < len(masked); index++ {
+		if inSingleQuote {
+			masked[index] = ' '
+			if line[index] == '\'' {
+				inSingleQuote = false
+			}
+			continue
+		}
+		if line[index] == '\'' {
+			masked[index] = ' '
+			inSingleQuote = true
+			continue
+		}
+		if line[index] == '#' && (index == 0 || line[index-1] == ' ' || line[index-1] == '\t') {
+			blankBytes(masked, index, len(masked))
+			break
+		}
+		if line[index] == '\\' && index+1 < len(masked) {
+			masked[index] = ' '
+			masked[index+1] = ' '
+			index++
+		}
+	}
+	return string(masked)
+}
+
+type shellLexState struct {
+	hereDoc   string
+	literal   bool
+	stripTabs bool
+}
+
+func shellCodeMaskWithState(line string, state *shellLexState) (string, bool) {
+	if state.hereDoc != "" {
+		if shellHereDocEnd(line, *state) {
+			*state = shellLexState{}
+			return "", false
+		}
+		if state.literal {
+			return "", false
+		}
+		return shellCodeMask(line), false
+	}
+
+	code := shellCodeMask(line)
+	if hereDoc, found, ok := shellHereDocStart(line, code); found {
+		if ok {
+			*state = hereDoc
+		} else {
+			return code, true
+		}
+	}
+	return code, false
+}
+
+func shellHereDocStart(line, code string) (shellLexState, bool, bool) {
+	inDoubleQuote := false
+	for index := range len(code) - 1 {
+		if line[index] == '"' && !shellEscaped(line, index) {
+			inDoubleQuote = !inDoubleQuote
+			continue
+		}
+		if inDoubleQuote || code[index] != '<' || code[index+1] != '<' || (index+2 < len(code) && code[index+2] == '<') {
+			continue
+		}
+		end := index + 2
+		state := shellLexState{}
+		if end < len(line) && line[end] == '-' {
+			state.stripTabs = true
+			end++
+		}
+		for end < len(line) && (line[end] == ' ' || line[end] == '\t') {
+			end++
+		}
+		if end >= len(line) {
+			return shellLexState{}, true, false
+		}
+		if line[end] == '\'' || line[end] == '"' {
+			quote := line[end]
+			end++
+			start := end
+			for end < len(line) && line[end] != quote {
+				end++
+			}
+			if end == len(line) || start == end {
+				return shellLexState{}, true, false
+			}
+			state.hereDoc = line[start:end]
+			state.literal = true
+			return state, true, true
+		}
+		start := end
+		for end < len(line) && !strings.ContainsRune(" \t;|&<>()", rune(line[end])) {
+			end++
+		}
+		if start == end {
+			return shellLexState{}, true, false
+		}
+		state.hereDoc = line[start:end]
+		return state, true, true
+	}
+	return shellLexState{}, false, false
+}
+
+func shellHereDocEnd(line string, state shellLexState) bool {
+	line = strings.TrimSuffix(line, "\r")
+	if state.stripTabs {
+		line = strings.TrimLeft(line, "\t")
+	}
+	return line == state.hereDoc
+}
+
+func shellEnvironmentRead(code string, start int) (string, string, bool) {
+	if start+1 >= len(code) {
+		return "", "", false
+	}
+	if code[start+1] == '{' {
+		end := start + 2
+		if end >= len(code) || !isShellNameStart(code[end]) {
+			return "", "", false
+		}
+		for end < len(code) && isShellNamePart(code[end]) {
+			end++
+		}
+		name := code[start+2 : end]
+		if end >= len(code) {
+			return "", "", false
+		}
+		operator := ""
+		if code[end] == ':' {
+			end++
+		}
+		if end < len(code) && strings.ContainsRune("-=+?", rune(code[end])) {
+			operator = string(code[end])
+		}
+		switch operator {
+		case "-", "=":
+			return name, "source-default-expression", true
+		case "?":
+			return name, "required-environment", true
+		default:
+			return name, "empty-unset", true
+		}
+	}
+	if !isShellNameStart(code[start+1]) {
+		return "", "", false
+	}
+	end := start + 2
+	for end < len(code) && isShellNamePart(code[end]) {
+		end++
+	}
+	return code[start+1 : end], "empty-unset", true
+}
+
+func isShellNameStart(value byte) bool {
+	return value == '_' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
+}
+
+func isShellNamePart(value byte) bool {
+	return isShellNameStart(value) || value >= '0' && value <= '9'
+}
+
+func shellEscaped(value string, offset int) bool {
+	backslashes := 0
+	for offset > 0 && value[offset-1] == '\\' {
+		backslashes++
+		offset--
+	}
+	return backslashes%2 == 1
+}
+
+func blankBytes(value []byte, start, end int) {
+	for index := start; index < end; index++ {
+		value[index] = ' '
 	}
 }
