@@ -169,8 +169,8 @@ if ($null -eq $health)
     $startInfo.Environment['PATH'] = $env:PATH
     $fixtureHome = Join-Path $context.FixtureRoot 'runtime-home'
     $fixtureTemp = Join-Path $context.FixtureRoot 'runtime-temp'
-    New-Item -ItemType Directory -Path $fixtureHome | Out-Null
-    New-Item -ItemType Directory -Path $fixtureTemp | Out-Null
+    New-Item -ItemType Directory -Path $fixtureHome -Force | Out-Null
+    New-Item -ItemType Directory -Path $fixtureTemp -Force | Out-Null
     $startInfo.Environment['HOME'] = $fixtureHome
     $startInfo.Environment['USERPROFILE'] = $fixtureHome
     $startInfo.Environment['TEMP'] = $fixtureTemp
