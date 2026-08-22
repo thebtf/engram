@@ -49,7 +49,7 @@ safe inventories/fixtures without merging projects or deleting capability.
 - [ ] T002 [P] [US7] Add feature-flag/default/reader inventory producer in `internal/recoveryinventory/flag_scan.go` — FR-021, FR-022.
 - [ ] T003 [P] [US7] Add package/route/hook/tool and current-documentation claim scanner in `internal/recoveryinventory/surface_scan.go` — FR-021, FR-022.
 - [ ] T004 [P] [US6] Add project-bearing relational/payload/cache/job/import/export-field inventory producer in `internal/recoveryinventory/project_data_scan.go` — FR-006, FR-025.
-- [ ] T005 [US7] Add durable metric-denominator model and read-only baseline report in `internal/operability/baseline_metrics.go` — FR-019.
+- [ ] T005 [US7] Add durable metric-denominator model and read-only baseline report in `internal/operability/baseline_metrics.go`, then align existing zero-denominator HTTP metric renderers in `internal/worker/handlers_stats.go` and `internal/worker/handlers_data.go` to explicit `not_computable` semantics — FR-019.
 - [ ] T006 [P] [US5] Write failing adapter-contract tests for current automatic outcome callback routes in `internal/worker/outcome_adapter_contract_test.go` — FR-018.
 - [ ] T007 [US5] Replace silent missing-outcome callback handling with versioned actionable retirement diagnostics in `internal/worker/handlers_outcome_retirement.go` — FR-018, FR-026.
 - [ ] T008 [P] [US1] Add failing selector-only project-creation fence tests in `internal/projectidentity/legacy_fence_test.go` — FR-004.
