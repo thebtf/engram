@@ -148,7 +148,7 @@ maker lane. All other listed lanes are file-disjoint.
 | T010 | Code | Harness maker: `scripts/recovery/prepare-legacy-fixture.ps1` | None | Creates/recreates synthetic redacted fixture only under a contained, owner-marked `FixtureRoot`, with schema version, structural fingerprints, selector inventory, backup/export and restore references. |
 | T011 | Code | Harness maker: `scripts/recovery/start-fixture-server.ps1` | T010 fixture contract | Starts/attaches only the existing server against fixture-only non-secret config and emits a scoped health receipt. |
 | T012 | Code | Harness maker: `scripts/recovery/run-recovery-scenario.ps1`, `verify-recovery-receipt.ps1` | T010 and T011 | Named `AR-1/baseline` scenario emits and validates a bounded, secret-safe scenario-evidence envelope; it is not the AR-1 baseline receipt authority. |
-| T013 | Code | Receipt maker: `internal/recoveryreceipt/ar1_baseline.go` and `ar1_baseline_test.go` | Foundation T001–T005 plus verified T012 scenario evidence | The sole AR-1 baseline receipt producer validates/consumes scenario evidence plus source, metric, and health facts, binds truthful denominator states, and exposes an explicit test-harness writer invocation for T015; no new CLI/service is introduced. |
+| T013 | Code | Receipt maker: `internal/recoveryreceipt/ar1_baseline.go` and `ar1_baseline_test.go` | Foundation T001–T005 plus verified T012 scenario evidence | The sole AR-1 baseline receipt producer validates/consumes scenario evidence plus source, metric, and health facts, binds truthful denominator states, and exposes an explicit test-harness writer invocation with a candidate source-worktree root and separate primary-repository-owned output root; no new CLI/service is introduced. |
 | T014 | Review | Independent factual checker; no source edits | T001–T013 integrated exact head | Exact named scope: verifies `internal/recoveryinventory/` and `internal/worker/` source/dead-contract claims. Fence and fixture provenance remain separate reviewer/judge/T015 obligations. |
 | T015 | Test | Gate runner plus installed-dogfood observer; no source edits | Checker/review/judge clean exact head plus T013 writer | Clean exact-head build, applicable tests, isolated fixture, staged built payload, AR-1 scenario, explicit T013 receipt-writer test invocation, observation receipt, and rollback boundary succeed. |
 | T088 | Review | Root integration: traceability matrix | Each accepted T-ID | Matrix retains direct AR-1 evidence references and no unmapped accepted task. |
@@ -169,9 +169,10 @@ maker lane. All other listed lanes are file-disjoint.
   not a production backup/deploy system.
 - **Receipt lane (T013):** cannot precede its upstream facts and is meaningful
   only as the one integration receipt consumed by T015. The package's writer is
-  invoked explicitly by the focused T015 test harness with source/scenario input
-  and an owned output path; no implicit package initialization or new CLI claims
-  acceptance authority.
+  invoked explicitly by the focused T015 test harness with candidate source-root,
+  primary repository output-root, and scenario input; it verifies the candidate
+  Git head against scenario provenance. No implicit package initialization or new
+  CLI claims acceptance authority.
 - **T014/T015 and T088–T091:** acceptance/evidence gates, not mechanical
   source work; they remain separate so a green unit suite cannot self-accept
   the release.
@@ -216,8 +217,9 @@ baseline receipt together.
 2. **Wave B, serial after Wave A integration:**
    - Receipt maker: T013, bound to the integrated inventory, metric, fixture,
      and scenario facts. It supplies a typed deterministic writer and a focused
-     test-harness invocation; T015 owns running that invocation against the
-     exact fixture scenario evidence and writing the resulting receipt.
+     test-harness invocation with distinct candidate/output roots; T015 owns
+     running that invocation against exact scenario provenance and writing the
+     resulting root-owned receipt.
 
 3. **Wave C, frozen-head acceptance:**
    - Root completes T088, T089, and T091 first. T089 records stable receipt
