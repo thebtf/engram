@@ -368,25 +368,57 @@ func TestResolveProjectSlug_GitRepo(t *testing.T) {
 func TestResolveProjectIdentityV2_StripsGitRemoteUserinfo(t *testing.T) {
 	repoDir := initSyntheticGitRepo(t)
 	const rawRemote = "https://fixture-user:fixture-credential@example.invalid/acme/identity.git"
-	if output, err := exec.Command("git", "-C", repoDir, "remote", "set-url", "origin", rawRemote).CombinedOutput(); err != nil {
-		t.Fatalf("set synthetic origin: %v\n%s", err, output)
+	if _, err := exec.Command("git", "-C", repoDir, "remote", "set-url", "origin", rawRemote).CombinedOutput(); err != nil {
+		t.Fatal("set synthetic origin")
 	}
 
 	identity, err := proxy.ResolveProjectIdentityV2(repoDir)
 	if err != nil {
-		t.Fatalf("resolve identity: %v", err)
+		t.Fatal("resolve identity")
 	}
 	const want = "https://example.invalid/acme/identity.git"
 	if identity.GitRemote != want {
-		t.Fatalf("git remote=%q, want credential-free %q", identity.GitRemote, want)
+		t.Fatal("git remote was not reduced to credential-free form")
 	}
 	if err := proxy.ValidateProjectIdentityV2(identity); err != nil {
-		t.Fatalf("credential-free descriptor rejected: %v", err)
+		t.Fatal("credential-free descriptor rejected")
 	}
 	rawIdentity := identity
 	rawIdentity.GitRemote = rawRemote
 	if err := proxy.ValidateProjectIdentityV2(rawIdentity); err == nil || strings.Contains(err.Error(), "fixture-credential") {
-		t.Fatalf("raw-userinfo descriptor error=%v", err)
+		t.Fatal("raw-userinfo descriptor was not rejected safely")
+	}
+}
+
+func TestResolveProjectIdentityV2_FencesAuthorityUserinfoWithoutChangingScpOrLocalRemotes(t *testing.T) {
+	tests := []struct {
+		name       string
+		remote     string
+		wantRemote string
+		wantErr    bool
+	}{
+		{name: "malformed network authority", remote: "//fixture-user:fixture-credential@example.invalid/%zz", wantErr: true},
+		{name: "scp-like remote", remote: "fixture-user@example.invalid:repo.git", wantRemote: "fixture-user@example.invalid:repo.git"},
+		{name: "local path remote", remote: "./fixture@directory:repo.git", wantRemote: "./fixture@directory:repo.git"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoDir := initSyntheticGitRepo(t)
+			if _, err := exec.Command("git", "-C", repoDir, "remote", "set-url", "origin", tt.remote).CombinedOutput(); err != nil {
+				t.Fatal("set synthetic origin")
+			}
+			identity, err := proxy.ResolveProjectIdentityV2(repoDir)
+			if tt.wantErr {
+				if err == nil || identity.GitRemote != "" || strings.Contains(err.Error(), "fixture-credential") {
+					t.Fatal("authority userinfo was not rejected safely")
+				}
+				return
+			}
+			if err != nil || identity.GitRemote != tt.wantRemote {
+				t.Fatal("credential-free Git remote changed or was rejected")
+			}
+		})
 	}
 }
 

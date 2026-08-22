@@ -199,7 +199,7 @@ func tokenInterceptor(token string) grpc.UnaryClientInterceptor {
 func safeRemoteURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return raw
+		return "[invalid remote URL]"
 	}
 	u.User = nil
 	return u.String()

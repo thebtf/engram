@@ -121,14 +121,23 @@ func TestRegisterAndResolve_RejectsRawVsNormalizedSelectorsAndMetadata(t *testin
 }
 
 func TestRegisterAndResolve_RejectsGitRemoteUserinfoBeforeDatabaseAccess(t *testing.T) {
-	const rawRemote = "https://fixture-user:fixture-credential@example.invalid/acme/identity.git"
-	_, err := RegisterAndResolve(context.Background(), nil, "selector", gitIdentityV2("selector", rawRemote))
-	var identityErr *ProjectIdentityError
-	if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityInvalid {
-		t.Fatalf("error=%T %v, want PROJECT_IDENTITY_INVALID before DB access", err, err)
+	for _, rawRemote := range []string{
+		"https://fixture-user:fixture-credential@example.invalid/acme/identity.git",
+		"//fixture-user:fixture-credential@example.invalid/%zz",
+	} {
+		_, err := RegisterAndResolve(context.Background(), nil, "selector", gitIdentityV2("selector", rawRemote))
+		var identityErr *ProjectIdentityError
+		if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityInvalid || strings.Contains(err.Error(), "fixture-credential") {
+			t.Fatal("userinfo remote reached the database boundary or leaked")
+		}
 	}
-	if strings.Contains(err.Error(), "fixture-credential") {
-		t.Fatalf("identity error leaked credential-shaped remote: %v", err)
+}
+
+func TestValidateProjectIdentityV2_AcceptsScpAndLocalRemotesWithAt(t *testing.T) {
+	for _, remote := range []string{"fixture-user@example.invalid:repo.git", "./fixture@directory:repo.git"} {
+		if err := ValidateProjectIdentityV2(*gitIdentityV2("selector", remote)); err != nil {
+			t.Fatal("credential-free Git remote was rejected")
+		}
 	}
 }
 
@@ -161,23 +170,23 @@ func TestRegisterAndResolve_StrictOuterSelectorRejectsBeforeDatabaseAccess(t *te
 func TestUpsertProject_RejectsGitRemoteUserinfoBeforeWrite(t *testing.T) {
 	db, cleanup := openTestDB(t)
 	defer cleanup()
-	const (
-		projectID = "project-identity-userinfo-write-fence"
-		rawRemote = "https://fixture-user:fixture-credential@example.invalid/acme/identity.git"
-	)
-	defer db.Exec(`DELETE FROM projects WHERE id = ?`, projectID)
 
-	err := UpsertProject(context.Background(), db, projectID, "", rawRemote, "", "identity")
-	var identityErr *ProjectIdentityError
-	if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityInvalid {
-		t.Fatalf("error=%T %v, want PROJECT_IDENTITY_INVALID before write", err, err)
-	}
-	var count int64
-	if err := db.Model(&Project{}).Where("id = ?", projectID).Count(&count).Error; err != nil {
-		t.Fatalf("count project rows: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("userinfo remote wrote %d project rows", count)
+	for index, remote := range []string{
+		"https://fixture-user:fixture-credential@example.invalid/acme/identity.git",
+		"//fixture-user:fixture-credential@example.invalid/%zz",
+	} {
+		projectID := fmt.Sprintf("project-identity-userinfo-write-fence-%d", index)
+		defer db.Exec(`DELETE FROM projects WHERE id = ?`, projectID)
+
+		err := UpsertProject(context.Background(), db, projectID, "", remote, "", "identity")
+		var identityErr *ProjectIdentityError
+		if !errors.As(err, &identityErr) || identityErr.Code != ProjectIdentityInvalid || strings.Contains(err.Error(), "fixture-credential") {
+			t.Fatal("userinfo remote reached the durable write boundary or leaked")
+		}
+		var count int64
+		if err := db.Model(&Project{}).Where("id = ?", projectID).Count(&count).Error; err != nil || count != 0 {
+			t.Fatal("userinfo remote wrote a project row")
+		}
 	}
 }
 

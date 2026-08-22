@@ -415,30 +415,45 @@ func normalizeGitRemote(value string) (string, error) {
 	if !gitRemoteHasUserinfo(value) {
 		return value, nil
 	}
-	if strings.Contains(value, "://") {
-		remoteURL, err := url.Parse(value)
-		if err != nil {
-			return "", errors.New("git remote URL is malformed")
-		}
-		remoteURL.User = nil
-		return remoteURL.String(), nil
+	remoteURL, err := url.Parse(value)
+	if err != nil {
+		return "", errors.New("git remote URL is malformed")
 	}
-	colon := strings.IndexByte(value, ':')
-	return value[strings.LastIndex(value[:colon], "@")+1:], nil
+	remoteURL.User = nil
+	return remoteURL.String(), nil
 }
 
 func gitRemoteHasUserinfo(value string) bool {
-	if scheme := strings.Index(value, "://"); scheme >= 0 {
-		authority := value[scheme+3:]
-		if end := strings.IndexAny(authority, "/?#"); end >= 0 {
-			authority = authority[:end]
+	authority, ok := gitRemoteAuthority(value)
+	return ok && strings.Contains(authority, "@")
+}
+
+func gitRemoteAuthority(value string) (string, bool) {
+	if strings.HasPrefix(value, "//") {
+		value = value[2:]
+	} else {
+		schemeEnd := strings.Index(value, "://")
+		if schemeEnd <= 0 || !isURLScheme(value[:schemeEnd]) {
+			return "", false
 		}
-		return strings.Contains(authority, "@")
+		value = value[schemeEnd+3:]
 	}
-	if colon := strings.IndexByte(value, ':'); colon > 0 {
-		return strings.Contains(value[:colon], "@")
+	if end := strings.IndexAny(value, "/?#"); end >= 0 {
+		value = value[:end]
 	}
-	return false
+	return value, true
+}
+
+func isURLScheme(value string) bool {
+	for i := range len(value) {
+		char := value[i]
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' ||
+			i > 0 && (char >= '0' && char <= '9' || char == '+' || char == '-' || char == '.') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func isMissingGitIdentityError(err error) bool {
