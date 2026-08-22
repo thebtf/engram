@@ -7,9 +7,12 @@
 #   make lint        — run golangci-lint
 #   make clean       — remove build artefacts
 
-VERSION  := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION       := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+SOURCE_COMMIT := $(shell git rev-parse --verify HEAD 2>/dev/null || echo "")
 # Pass version into both the server entry point and the internal version package.
-LDFLAGS  := -ldflags "-X main.Version=$(VERSION) -X github.com/thebtf/engram/internal/version.Daemon=$(VERSION) -s -w" -buildvcs=false
+VERSION_LDFLAGS := -X main.Version=$(VERSION) -X github.com/thebtf/engram/internal/version.Daemon=$(VERSION)
+LDFLAGS         := -ldflags "$(VERSION_LDFLAGS) -s -w" -buildvcs=false
+SERVER_LDFLAGS  := -ldflags "$(VERSION_LDFLAGS) -X main.SourceCommit=$(SOURCE_COMMIT) -s -w" -buildvcs=false
 BUILD_DIR := bin
 PLUGIN_DIR := plugin
 
@@ -87,7 +90,7 @@ worker:
 	@echo "Building worker..."
 	@mkdir -p $(BUILD_DIR)
 	swag init -g cmd/engram-server/main.go -o docs --parseDependency --parseInternal 2>/dev/null || true
-	go build $(BUILD_TAGS) $(LDFLAGS) -o $(BUILD_DIR)/engram-server ./cmd/engram-server
+	go build $(BUILD_TAGS) $(SERVER_LDFLAGS) -o $(BUILD_DIR)/engram-server ./cmd/engram-server
 
 # MCP stdio client — the binary Claude Code launches as a subprocess.
 # CGO is disabled here because the client has no SQLite dependency.
@@ -111,21 +114,21 @@ build-all: build-linux build-darwin build-windows
 build-linux:
 	@echo "Building for Linux..."
 	@mkdir -p $(BUILD_DIR)/linux-amd64
-	GOOS=linux GOARCH=amd64 go build $(BUILD_TAGS) $(LDFLAGS) \
+	GOOS=linux GOARCH=amd64 go build $(BUILD_TAGS) $(SERVER_LDFLAGS) \
 		-o $(BUILD_DIR)/linux-amd64/engram-server ./cmd/engram-server
 
 build-darwin:
 	@echo "Building for macOS..."
 	@mkdir -p $(BUILD_DIR)/darwin-amd64 $(BUILD_DIR)/darwin-arm64
-	GOOS=darwin GOARCH=amd64 go build $(BUILD_TAGS) $(LDFLAGS) \
+	GOOS=darwin GOARCH=amd64 go build $(BUILD_TAGS) $(SERVER_LDFLAGS) \
 		-o $(BUILD_DIR)/darwin-amd64/engram-server ./cmd/engram-server
-	GOOS=darwin GOARCH=arm64 go build $(BUILD_TAGS) $(LDFLAGS) \
+	GOOS=darwin GOARCH=arm64 go build $(BUILD_TAGS) $(SERVER_LDFLAGS) \
 		-o $(BUILD_DIR)/darwin-arm64/engram-server ./cmd/engram-server
 
 build-windows:
 	@echo "Building for Windows..."
 	@mkdir -p $(BUILD_DIR)/windows-amd64
-	GOOS=windows GOARCH=amd64 go build $(BUILD_TAGS) $(LDFLAGS) \
+	GOOS=windows GOARCH=amd64 go build $(BUILD_TAGS) $(SERVER_LDFLAGS) \
 		-o $(BUILD_DIR)/windows-amd64/engram-server.exe ./cmd/engram-server
 
 # ---------------------------------------------------------------------------
