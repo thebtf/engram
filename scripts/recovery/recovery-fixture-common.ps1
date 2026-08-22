@@ -634,7 +634,7 @@ function Set-RecoveryFixturePsqlTransport
             throw 'fixture database prerequisite is missing: docker must be available for the explicit fixture container psql transport'
         }
         Assert-RecoveryFixtureDockerAuthority -DockerPath $dockerPath
-        $script:RecoveryFixturePsqlTransport = [pscustomobject]@{ FilePath = $dockerPath; Prefix = @('--context', 'default', 'exec'); ContainerName = $FixturePsqlContainer; IsDockerContainerPsql = $true }
+        $script:RecoveryFixturePsqlTransport = [pscustomobject]@{ FilePath = $dockerPath; Prefix = @('--context', 'default', 'exec', '-i'); ContainerName = $FixturePsqlContainer; IsDockerContainerPsql = $true }
         return
     }
     $psqlPath = Get-RecoveryFixtureApplicationPath -Name 'psql'
