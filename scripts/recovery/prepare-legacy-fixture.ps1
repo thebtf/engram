@@ -81,6 +81,7 @@ $manifest = [ordered]@{
 }
 $manifestPath = Join-Path $context.FixtureRoot 'fixture-manifest.json'
 Write-RecoveryJson -Path $manifestPath -Value $manifest -Context $context
+$manifest = Read-RecoveryJson -Path $manifestPath -Context $context -Label 'fixture manifest'
 $restoredExport = Read-RecoveryJson -Path $restorePath -Context $context -Label 'synthetic fixture restore'
 Assert-RecoveryFixtureStructuralFingerprints -Manifest $manifest -FixtureExport $preparedExport -FixtureRestore $restoredExport
 [void](Set-RecoveryFixtureDatabaseBinding -Context $context -Manifest $manifest -ManifestPath $manifestPath -FixtureDatabaseDsn $FixtureDatabaseDsn)
