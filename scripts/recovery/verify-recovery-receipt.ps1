@@ -113,7 +113,7 @@ if ((Get-RecoverySha256 -Path $exportPath) -cne $manifest.export.fingerprint -or
 
 $healthPath = Join-Path $context.FixtureRoot 'server/fixture-server-health.json'
 $health = Read-RecoveryJson -Path $healthPath -Context $context -Label 'fixture health receipt'
-Assert-RecoveryExactProperties -Object $health -Names @('schema_version', 'fixture_id', 'checked_at_utc', 'endpoint', 'health_status', 'server_version', 'server_fingerprint', 'scope') -Label 'fixture health receipt'
+Assert-RecoveryExactProperties -Object $health -Names @('schema_version', 'fixture_id', 'checked_at_utc', 'endpoint', 'health_status', 'server_version', 'server_fingerprint', 'source_commit', 'scope') -Label 'fixture health receipt'
 if ($health.schema_version -cne 'engram.recovery.fixture-health.v1' -or $health.fixture_id -cne $script:RecoveryFixtureID -or
     $health.endpoint -cnotmatch '^http://127\.0\.0\.1:[0-9]{4,5}/api/health$' -or $health.health_status -cne 'ready' -or
     [string]::IsNullOrWhiteSpace([string]$health.server_version) -or $health.server_fingerprint -cne $evidence.health.server_fingerprint -or
