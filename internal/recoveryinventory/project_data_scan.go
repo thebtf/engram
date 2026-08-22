@@ -6,14 +6,18 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 )
+
+var scriptProjectKeyPattern = regexp.MustCompile(`(?:["']([A-Za-z][A-Za-z0-9_]*)["']|\b([A-Za-z][A-Za-z0-9_]*)\??)\s*:`)
 
 // ScanProjectData inventories source-declared project-bearing data families.
 // It never opens a database, cache, import, export, or job payload.
 func ScanProjectData(root string) (Report, error) {
 	report := newReport("project-bearing-data")
-	files, err := sourceFiles(root, ".go")
+	files, err := sourceFiles(root, ".go", ".js", ".mjs", ".cjs", ".ts", ".tsx")
 	if err != nil {
 		return Report{}, err
 	}
@@ -30,6 +34,10 @@ func scanProjectDataFile(report *Report, file sourceFile) error {
 	source, err := os.ReadFile(file.absolute)
 	if err != nil {
 		return err
+	}
+	if filepath.Ext(file.relative) != ".go" {
+		scanScriptProjectData(report, file, source)
+		return nil
 	}
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, file.relative, source, 0)
@@ -70,10 +78,86 @@ func scanProjectDataFile(report *Report, file sourceFile) error {
 			}
 		}
 	}
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		switch node := node.(type) {
+		case *ast.CompositeLit:
+			if _, ok := node.Type.(*ast.MapType); !ok {
+				return true
+			}
+			for _, element := range node.Elts {
+				entry, ok := element.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				key, ok := projectMapKey(entry.Key)
+				if !ok {
+					continue
+				}
+				found = true
+				report.add(projectMapRecord(file.relative, fset.Position(entry.Key.Pos()).Line, key))
+			}
+		case *ast.IndexExpr:
+			key, ok := projectMapKey(node.Index)
+			if !ok {
+				return true
+			}
+			found = true
+			report.add(projectMapRecord(file.relative, fset.Position(node.Pos()).Line, key))
+		}
+		return true
+	})
 	if !found && strings.Contains(strings.ToLower(string(source)), "project") {
 		report.add(Record{Kind: "project-data-family", Path: file.relative, Name: "unresolved-declaration", Classification: "source-uncertain"})
 	}
 	return nil
+}
+
+func scanScriptProjectData(report *Report, file sourceFile, source []byte) {
+	found := false
+	for index, line := range strings.Split(string(source), "\n") {
+		for _, match := range scriptProjectKeyPattern.FindAllStringSubmatch(line, -1) {
+			key := match[1]
+			if key == "" {
+				key = match[2]
+			}
+			if !projectBearingName(key) {
+				continue
+			}
+			found = true
+			report.add(scriptProjectRecord(file.relative, index+1, key))
+		}
+	}
+	if !found && strings.Contains(strings.ToLower(string(source)), "project") {
+		report.add(Record{Kind: "project-data-family", Path: file.relative, Name: "unresolved-declaration", Classification: "source-uncertain"})
+	}
+}
+
+func projectMapKey(expression ast.Expr) (string, bool) {
+	literal, ok := expression.(*ast.BasicLit)
+	if !ok || literal.Kind != token.STRING {
+		return "", false
+	}
+	key, err := strconv.Unquote(literal.Value)
+	if err != nil || !projectBearingName(key) {
+		return "", false
+	}
+	return key, true
+}
+
+func projectMapRecord(path string, line int, key string) Record {
+	classification := projectDataPath(path)
+	if classification == "" {
+		classification = "serialized-map"
+	}
+	return Record{Kind: "project-bearing-map-key", Path: path, Line: line, Name: "map." + key, Classification: classification}
+}
+
+func scriptProjectRecord(path string, line int, key string) Record {
+	classification := projectDataPath(path)
+	if classification == "" {
+		classification = "serialized-payload"
+	}
+	return Record{Kind: "project-bearing-payload-key", Path: path, Line: line, Name: "payload." + key, Classification: classification}
 }
 
 func projectBearingName(name string) bool {
