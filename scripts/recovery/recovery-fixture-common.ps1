@@ -1544,7 +1544,11 @@ function Assert-RecoveryFixturePortUnbound
         try
         { $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop)
         } catch
-        { throw 'fixture listener state cannot be determined'
+        {
+            if ($_.FullyQualifiedErrorId -ceq 'CmdletizationQuery_NotFound,Get-NetTCPConnection')
+            { return
+            }
+            throw 'fixture listener state cannot be determined'
         }
         if ($listeners.Count -ne 0)
         { throw 'fixture server port is actively listening'
