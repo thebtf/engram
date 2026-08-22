@@ -124,11 +124,14 @@ function Assert-RecoveryFixtureOwner
     { throw 'fixture ownership marker is malformed' 
     }
     Assert-RecoveryExactProperties -Object $marker -Names @('schema_version', 'owner', 'fixture_id', 'fixture_root') -Label 'fixture ownership marker'
+    if ($marker.schema_version -isnot [string] -or $marker.owner -isnot [string] -or
+        $marker.fixture_id -isnot [string] -or $marker.fixture_root -isnot [string]) {
+        throw 'fixture ownership marker is malformed'
+    }
     if ($marker.schema_version -cne $script:RecoveryFixtureOwnerSchema -or
         $marker.owner -cne $script:RecoveryFixtureOwner -or
         $marker.fixture_id -cne $script:RecoveryFixtureID -or
-        $marker.fixture_root -cne $Context.RelativeRoot)
-    {
+        $marker.fixture_root -cne $Context.RelativeRoot) {
         throw 'fixture ownership marker is foreign'
     }
     $marker
