@@ -368,7 +368,7 @@ if ($null -eq $health)
             ProcessId = [int]$nativeLaunch.ProcessId
             StartUtcTicks = [int64]$nativeLaunch.ProcessStartUtcTicks
         }
-        $serverMarker = [ordered]@{
+        $serverMarker = [pscustomobject]@{
             schema_version = $script:RecoveryFixtureServerSchema
             fixture_id = $script:RecoveryFixtureID
             fixture_root = $context.RelativeRoot
@@ -385,6 +385,8 @@ if ($null -eq $health)
         Arm-RecoveryFixtureDatabaseServerRun -Context $context -Claim $claim -ServerMarker $serverMarker -FixtureDatabaseDsn $FixtureDatabaseDsn
         $armed = $true
         Write-RecoveryJson -Path $serverMarkerPath -Value $serverMarker -Context $context
+        $serverMarker = Read-RecoveryJson -Path $serverMarkerPath -Context $context -Label 'fixture server marker'
+        [void](Assert-RecoveryFixtureServerMarker -Context $context -Marker $serverMarker)
         Confirm-RecoveryFixtureDatabaseServerRun -Context $context -Claim $claim -ServerMarker $serverMarker -FixtureDatabaseDsn $FixtureDatabaseDsn
         $nativeLaunch.Resume()
         $nativeLaunch.DisableKillOnJobClose()
