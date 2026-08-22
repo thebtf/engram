@@ -776,12 +776,13 @@ function Get-RecoveryStringSha256
 
 function Invoke-RecoveryFixturePsqlCommand
 {
-    param([Parameter(Mandatory)][string]$FilePath, [Parameter(Mandatory)][string[]]$Arguments)
+    param([Parameter(Mandatory)][string]$FilePath, [Parameter(Mandatory)][string[]]$Arguments, [Parameter(Mandatory)][string]$StandardInput)
 
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $FilePath
     $startInfo.UseShellExecute = $false
     $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardError = $true
     foreach ($name in $script:RecoveryFixturePsqlRoutingEnvironmentNames)
     {
@@ -799,6 +800,8 @@ function Invoke-RecoveryFixturePsqlCommand
         {
             throw 'fixture database ownership command could not start'
         }
+        $process.StandardInput.Write($StandardInput)
+        $process.StandardInput.Close()
         $outputTask = $process.StandardOutput.ReadToEndAsync()
         $errorTask = $process.StandardError.ReadToEndAsync()
         $process.WaitForExit()
@@ -865,8 +868,6 @@ function Invoke-RecoveryFixturePsql
         Assert-RecoverySecretSafeText -Text $value
         [void]$arguments.Add("--set=$name=$value")
     }
-    [void]$arguments.Add('--command')
-    [void]$arguments.Add($Query)
     $commandArguments = [Collections.Generic.List[string]]::new()
     foreach ($argument in @($commandPrefix))
     {
@@ -876,7 +877,7 @@ function Invoke-RecoveryFixturePsql
     {
         [void]$commandArguments.Add([string]$argument)
     }
-    $output = @(Invoke-RecoveryFixturePsqlCommand -FilePath $transport.FilePath -Arguments $commandArguments.ToArray())
+    $output = @(Invoke-RecoveryFixturePsqlCommand -FilePath $transport.FilePath -Arguments $commandArguments.ToArray() -StandardInput $Query)
     $text = (@($output | ForEach-Object { [string]$_ }) -join "`n").Trim()
     if (-not $StructuralMetadata)
     { Assert-RecoverySecretSafeText -Text $text
