@@ -434,3 +434,34 @@ func TestCallTool_DefaultResolverRejectsMalformedSelectorsBeforeHandler(t *testi
 		})
 	}
 }
+
+func TestCallTool_UnknownSelectorOnlyFailsBeforeProjectMutation(t *testing.T) {
+	db, cleanup := testGRPCSyncDB(t)
+	defer cleanup()
+	selector := "ar1-fence-grpc-unknown"
+	db.Unscoped().Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector)
+	defer db.Unscoped().Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector)
+
+	steps := []string{}
+	srv := &Server{db: db, handler: identityOrderHandler{steps: &steps}}
+	response, err := srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: "recall", Project: selector})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("status=%v error=%v, want selector-only refusal", status.Code(err), err)
+	}
+	if response != nil {
+		t.Errorf("response=%#v, want no handler response after selector-only refusal", response)
+	}
+	if len(steps) != 0 {
+		t.Errorf("handler ran after selector-only request: %v", steps)
+	}
+
+	var count int64
+	if err := db.Unscoped().Model(&localgorm.Project{}).
+		Where(`id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector).
+		Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("selector-only gRPC request created or retained %d project/alias rows, including soft-deleted rows", count)
+	}
+}

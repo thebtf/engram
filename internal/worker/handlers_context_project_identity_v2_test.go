@@ -270,3 +270,31 @@ func TestContextInject_RejectsRawSelectorAndMetadataBeforeProjectMutation(t *tes
 		})
 	}
 }
+
+func TestContextInject_UnknownSelectorOnlyFailsBeforeProjectMutation(t *testing.T) {
+	db, cleanup := setupProjectTestDB(t)
+	defer cleanup()
+	selector := "ar1-fence-http-unknown"
+	db.Unscoped().Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector)
+	defer db.Unscoped().Exec(`DELETE FROM projects WHERE id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector)
+
+	payload, err := json.Marshal(map[string]any{"project": selector, "identity_only": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	(&Service{store: &gormdb.Store{DB: db}}).handleContextInject(rec, httptest.NewRequest(http.MethodPost, "/api/context/inject", bytes.NewReader(payload)))
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status=%d body=%s, want selector-only refusal", rec.Code, rec.Body.String())
+	}
+
+	var count int64
+	if err := db.Unscoped().Model(&gormdb.Project{}).
+		Where(`id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[]`, selector, selector).
+		Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("selector-only HTTP request created or retained %d project/alias rows, including soft-deleted rows", count)
+	}
+}
