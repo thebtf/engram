@@ -5,15 +5,12 @@ param(
     [ValidateRange(1024, 65535)][int]$Port = 38877,
     [string]$FixtureDatabaseDsn = 'postgres://fixture@127.0.0.1:55432/engram_fixture?sslmode=disable'
 )
-
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'recovery-fixture-common.ps1')
-
 function Assert-FixtureManifest
 {
     param([Parameter(Mandatory)]$Manifest, [Parameter(Mandatory)]$Context)
-
     Assert-RecoveryExactProperties -Object $Manifest -Names @('schema_version', 'fixture_id', 'fixture_root', 'fixture_class', 'created_at_utc', 'export', 'restore', 'selector_inventory', 'structural_fingerprints') -Label 'fixture manifest'
     if ($Manifest.schema_version -cne $script:RecoveryFixtureSchema -or $Manifest.fixture_id -cne $script:RecoveryFixtureID -or
         $Manifest.fixture_root -cne $Context.RelativeRoot -or $Manifest.fixture_class -cne 'synthetic_redacted_legacy')
@@ -27,11 +24,9 @@ function Assert-FixtureManifest
     { throw 'fixture manifest has invalid integrity metadata'
     }
 }
-
 function Assert-FixtureDsn
 {
     param([Parameter(Mandatory)][string]$Value)
-
     Assert-RecoverySecretSafeText -Text $Value
     try
     { $uri = [Uri]$Value
@@ -44,11 +39,9 @@ function Assert-FixtureDsn
         throw 'fixture database address must be the isolated non-secret fixture address'
     }
 }
-
 function Get-FixtureHealth
 {
     param([Parameter(Mandatory)][int]$HealthPort)
-
     $client = [Net.Http.HttpClient]::new()
     try
     {
@@ -76,13 +69,23 @@ function Get-FixtureHealth
         $client.Dispose()
     }
 }
-
+function Get-FixtureSourceCommit
+{
+    param([Parameter(Mandatory)][string]$SourceServer)
+    $sourceCommit = (& git -C (Split-Path -Parent $SourceServer) rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $sourceCommit -cnotmatch '^[0-9a-f]{40}$')
+    { throw 'fixture server source commit cannot be determined'
+    }
+    $sourceCommit
+}
 function Test-OwnedFixtureServer
 {
     param([Parameter(Mandatory)]$ServerMarker, [Parameter(Mandatory)][int]$ExpectedPort)
-
-    Assert-RecoveryExactProperties -Object $ServerMarker -Names @('schema_version', 'fixture_id', 'server_fingerprint', 'process_id', 'process_start_utc_ticks', 'port') -Label 'fixture server marker'
-    if ($ServerMarker.schema_version -isnot [string] -or $ServerMarker.fixture_id -isnot [string] -or
+    if (-not ($ServerMarker.PSObject.Properties.Name -contains 'source_commit'))
+    { return $false
+    }
+    Assert-RecoveryExactProperties -Object $ServerMarker -Names @('schema_version', 'fixture_id', 'source_commit', 'server_fingerprint', 'process_id', 'process_start_utc_ticks', 'port') -Label 'fixture server marker'
+    if ($ServerMarker.schema_version -isnot [string] -or $ServerMarker.fixture_id -isnot [string] -or $ServerMarker.source_commit -isnot [string] -or
         $ServerMarker.server_fingerprint -isnot [string] -or
         (($ServerMarker.process_id -isnot [int]) -and ($ServerMarker.process_id -isnot [long])) -or
         (($ServerMarker.process_start_utc_ticks -isnot [int]) -and ($ServerMarker.process_start_utc_ticks -isnot [long])) -or
@@ -91,7 +94,7 @@ function Test-OwnedFixtureServer
     { throw 'fixture server marker is malformed'
     }
     if ($ServerMarker.schema_version -cne 'engram.recovery.fixture-server.v1' -or $ServerMarker.fixture_id -cne $script:RecoveryFixtureID -or
-        $ServerMarker.server_fingerprint -cnotmatch '^sha256:[0-9a-f]{64}$' -or $ServerMarker.port -ne $ExpectedPort)
+        $ServerMarker.source_commit -cnotmatch '^[0-9a-f]{40}$' -or $ServerMarker.server_fingerprint -cnotmatch '^sha256:[0-9a-f]{64}$' -or $ServerMarker.port -ne $ExpectedPort)
     { throw 'fixture server marker is foreign'
     }
     try
@@ -103,11 +106,9 @@ function Test-OwnedFixtureServer
         $false
     }
 }
-
 function Remove-OwnedFixtureServerArtifacts
 {
     param([Parameter(Mandatory)]$Context, [Parameter(Mandatory)][string[]]$Paths)
-
     Assert-RecoveryFixtureTreeSafe -FixtureRoot $Context.FixtureRoot
     [void](Assert-RecoveryFixtureOwner -Context $Context)
     foreach ($path in $Paths)
@@ -123,24 +124,20 @@ function Remove-OwnedFixtureServerArtifacts
         Remove-Item -LiteralPath $path -Recurse -Force
     }
 }
-
 function Stop-OwnedFixtureServer
 {
     param([Parameter(Mandatory)]$ServerMarker)
-
     $process = Get-Process -Id ([int]$ServerMarker.process_id) -ErrorAction SilentlyContinue
     if ($null -ne $process -and $process.StartTime.ToUniversalTime().Ticks -eq [int64]$ServerMarker.process_start_utc_ticks)
     { Stop-Process -InputObject $process -Force
     }
 }
-
 $context = Get-RecoveryFixtureContext -FixtureRoot $FixtureRoot
 Assert-RecoveryFixtureTreeSafe -FixtureRoot $context.FixtureRoot
 [void](Assert-RecoveryFixtureOwner -Context $context)
 $manifest = Read-RecoveryJson -Path (Join-Path $context.FixtureRoot 'fixture-manifest.json') -Context $context -Label 'fixture manifest'
 Assert-FixtureManifest -Manifest $manifest -Context $context
 Assert-FixtureDsn -Value $FixtureDatabaseDsn
-
 if ([string]::IsNullOrWhiteSpace($ServerPath))
 {
     $ServerPath = Join-Path $context.RepositoryRoot ('bin/engram-server' + $(if ($IsWindows)
@@ -155,13 +152,10 @@ if (-not (Test-Path -LiteralPath $sourceServer -PathType Leaf))
 { throw 'built fixture server is missing'
 }
 [void](Assert-RecoverySafeExistingPath -Path $sourceServer)
-
 $serverDirectory = Join-Path $context.FixtureRoot 'server'
 $payloadDirectory = Join-Path $context.FixtureRoot 'payload'
 $serverMarkerPath = Join-Path $serverDirectory 'fixture-server.json'
 $healthPath = Join-Path $serverDirectory 'fixture-server-health.json'
-$health = $null
-
 if (Test-Path -LiteralPath $serverMarkerPath)
 {
     if (-not (Test-Path -LiteralPath $serverMarkerPath -PathType Leaf))
@@ -184,13 +178,15 @@ if (Test-Path -LiteralPath $serverMarkerPath)
         }
     } else
     {
+        if (-not ($serverMarker.PSObject.Properties.Name -contains 'source_commit'))
+        { Stop-OwnedFixtureServer -ServerMarker $serverMarker
+        }
         Remove-OwnedFixtureServerArtifacts -Context $context -Paths @($serverDirectory, $payloadDirectory)
     }
 } elseif ((Test-Path -LiteralPath $serverDirectory) -or (Test-Path -LiteralPath $payloadDirectory))
 {
     Remove-OwnedFixtureServerArtifacts -Context $context -Paths @($serverDirectory, $payloadDirectory)
 }
-
 if ($null -eq $health)
 {
     New-Item -ItemType Directory -Path $serverDirectory | Out-Null
@@ -201,7 +197,7 @@ if ($null -eq $health)
     Copy-Item -LiteralPath $sourceServer -Destination $stagedServer
     [void](Assert-RecoverySafeExistingPath -Path $stagedServer)
     $serverFingerprint = Get-RecoverySha256 -Path $stagedServer
-
+    $sourceCommit = Get-FixtureSourceCommit -SourceServer $sourceServer
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $stagedServer
     $startInfo.UseShellExecute = $false
@@ -214,7 +210,6 @@ if ($null -eq $health)
         {
             $startInfo.Environment[$name] = $value
         }
-
     }
     $fixtureHome = Join-Path $context.FixtureRoot 'runtime-home'
     $fixtureTemp = Join-Path $context.FixtureRoot 'runtime-temp'
@@ -229,20 +224,19 @@ if ($null -eq $health)
     $startInfo.Environment['ENGRAM_WORKER_HOST'] = '127.0.0.1'
     $startInfo.Environment['ENGRAM_WORKER_PORT'] = [string]$Port
     $startInfo.Environment['ENGRAM_TELEMETRY_ENABLED'] = 'false'
-
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     [void]$process.Start()
     $marker = [ordered]@{
         schema_version = 'engram.recovery.fixture-server.v1'
         fixture_id = $script:RecoveryFixtureID
+        source_commit = $sourceCommit
         server_fingerprint = $serverFingerprint
         process_id = $process.Id
         process_start_utc_ticks = $process.StartTime.ToUniversalTime().Ticks
         port = $Port
     }
     Write-RecoveryJson -Path $serverMarkerPath -Value $marker -Context $context
-
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
     while ([DateTime]::UtcNow -lt $deadline -and $null -eq $health)
     {
@@ -264,8 +258,8 @@ if ($null -eq $health)
 } else
 {
     $serverFingerprint = $serverMarker.server_fingerprint
+    $sourceCommit = $serverMarker.source_commit
 }
-
 $healthReceipt = [ordered]@{
     schema_version = 'engram.recovery.fixture-health.v1'
     fixture_id = $script:RecoveryFixtureID
@@ -274,6 +268,7 @@ $healthReceipt = [ordered]@{
     health_status = $health.status
     server_version = $health.version
     server_fingerprint = $serverFingerprint
+    source_commit = $sourceCommit
     scope = 'isolated_fixture_only'
 }
 Write-RecoveryJson -Path $healthPath -Value $healthReceipt -Context $context

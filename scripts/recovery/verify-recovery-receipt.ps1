@@ -48,6 +48,36 @@ if ($evidence.schema_version -cne 'engram.recovery.scenario-evidence.v1' -or $ev
     throw 'scenario receipt violates the fixture-only evidence contract'
 }
 
+$expectedCallbackPaths = @('/api/sessions/claude-session/propagate-outcome', '/api/sessions/openclaw-session/outcome')
+$callbacks = @($evidence.behavior.retired_outcome_callbacks)
+if ($callbacks.Count -ne $expectedCallbackPaths.Count)
+{ throw 'scenario receipt lacks retired outcome callback evidence'
+}
+for ($index = 0; $index -lt $expectedCallbackPaths.Count; $index++)
+{
+    $callback = $callbacks[$index]
+    Assert-RecoveryExactProperties -Object $callback -Names @('path', 'status_code', 'content_type', 'contract_version', 'code', 'action') -Label 'retired outcome callback evidence'
+    if ($callback.path -cne $expectedCallbackPaths[$index] -or $callback.status_code -ne 410 -or $callback.content_type -cne 'application/json' -or
+        $callback.contract_version -cne 'engram.outcome-retirement.v1' -or $callback.code -cne 'OUTCOME_CALLBACK_RETIRED' -or
+        $callback.action -cne 'upgrade_outcome_adapter')
+    { throw 'scenario receipt records a false retired outcome callback success'
+    }
+}
+
+$selector = $evidence.behavior.selector_only_context_inject
+Assert-RecoveryExactProperties -Object $selector -Names @('path', 'status_code', 'error_code', 'upgrade_action', 'canonical_project_returned') -Label 'selector-only context evidence'
+if ($selector.path -cne '/api/context/inject' -or $selector.status_code -ne 409 -or
+    $selector.error_code -cne 'PROJECT_IDENTITY_AMBIGUOUS' -or $selector.upgrade_action -cne 'send_project_identity_v2' -or
+    $selector.canonical_project_returned -ne $false)
+{ throw 'scenario receipt records a false selector-only context success'
+}
+
+Assert-RecoveryExactProperties -Object $evidence.behavior.health_after_behavior -Names @('status_code', 'status') -Label 'post-behavior health evidence'
+if ($evidence.behavior.health_after_behavior.status_code -ne 200 -or $evidence.behavior.health_after_behavior.status -cne 'ready')
+{ throw 'scenario receipt does not prove health after behavior checks'
+}
+
+
 $context = Get-RecoveryFixtureContext -FixtureRoot ([string]$evidence.fixture.fixture_root)
 if ($context.RepositoryRoot -cne $repositoryRoot)
 { throw 'receipt repository scope is invalid' 
@@ -87,15 +117,12 @@ Assert-RecoveryExactProperties -Object $health -Names @('schema_version', 'fixtu
 if ($health.schema_version -cne 'engram.recovery.fixture-health.v1' -or $health.fixture_id -cne $script:RecoveryFixtureID -or
     $health.endpoint -cnotmatch '^http://127\.0\.0\.1:[0-9]{4,5}/api/health$' -or $health.health_status -cne 'ready' -or
     [string]::IsNullOrWhiteSpace([string]$health.server_version) -or $health.server_fingerprint -cne $evidence.health.server_fingerprint -or
+    $health.source_commit -cnotmatch '^[0-9a-f]{40}$' -or $health.source_commit -cne $evidence.candidate.source_commit -or
     $health.scope -cne 'isolated_fixture_only' -or (Get-RecoverySha256 -Path $healthPath) -cne $evidence.health.receipt_fingerprint)
 {
-    throw 'scenario receipt does not match a healthy fixture server'
+    throw 'scenario receipt does not match a healthy fixture server and staged payload provenance'
 }
 
-$currentCommit = (& git -C $context.RepositoryRoot rev-parse HEAD).Trim()
-if ($LASTEXITCODE -ne 0 -or $currentCommit -cne $evidence.candidate.source_commit)
-{ throw 'scenario receipt is not bound to the current source commit' 
-}
 
 $output = [ordered]@{
     schema_version = 'engram.recovery.scenario-evidence-verification.v1'
