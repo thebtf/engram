@@ -78,34 +78,52 @@ function Get-FixtureSourceCommit
     }
     $sourceCommit
 }
-function Test-OwnedFixtureServer
-{
-    param([Parameter(Mandatory)]$ServerMarker, [Parameter(Mandatory)][int]$ExpectedPort)
-    if (-not ($ServerMarker.PSObject.Properties.Name -contains 'source_commit'))
-    { return $false
+
+function Get-OwnedFixtureServerState
+{
+    param(
+        [Parameter(Mandatory)]$ServerMarker,
+        [Parameter(Mandatory)][int]$ExpectedPort,
+        [Parameter(Mandatory)][string]$ExpectedSourceCommit,
+        [Parameter(Mandatory)][string]$ExpectedServerFingerprint
+    )
+    $isLegacy = -not ($ServerMarker.PSObject.Properties.Name -contains 'source_commit')
+    if ($isLegacy)
+    {
+        Assert-RecoveryExactProperties -Object $ServerMarker -Names @('schema_version', 'fixture_id', 'server_fingerprint', 'process_id', 'process_start_utc_ticks', 'port') -Label 'legacy fixture server marker'
+    } else
+    {
+        Assert-RecoveryExactProperties -Object $ServerMarker -Names @('schema_version', 'fixture_id', 'source_commit', 'server_fingerprint', 'process_id', 'process_start_utc_ticks', 'port') -Label 'fixture server marker'
     }
-    Assert-RecoveryExactProperties -Object $ServerMarker -Names @('schema_version', 'fixture_id', 'source_commit', 'server_fingerprint', 'process_id', 'process_start_utc_ticks', 'port') -Label 'fixture server marker'
-    if ($ServerMarker.schema_version -isnot [string] -or $ServerMarker.fixture_id -isnot [string] -or $ServerMarker.source_commit -isnot [string] -or
-        $ServerMarker.server_fingerprint -isnot [string] -or
+    if ($ServerMarker.schema_version -isnot [string] -or $ServerMarker.fixture_id -isnot [string] -or $ServerMarker.server_fingerprint -isnot [string] -or
+        (-not $isLegacy -and $ServerMarker.source_commit -isnot [string]) -or
         (($ServerMarker.process_id -isnot [int]) -and ($ServerMarker.process_id -isnot [long])) -or
         (($ServerMarker.process_start_utc_ticks -isnot [int]) -and ($ServerMarker.process_start_utc_ticks -isnot [long])) -or
         (($ServerMarker.port -isnot [int]) -and ($ServerMarker.port -isnot [long])) -or
         $ServerMarker.process_id -lt 1 -or $ServerMarker.process_id -gt [int]::MaxValue -or $ServerMarker.process_start_utc_ticks -lt 1)
     { throw 'fixture server marker is malformed'
     }
-    if ($ServerMarker.schema_version -cne 'engram.recovery.fixture-server.v1' -or $ServerMarker.fixture_id -cne $script:RecoveryFixtureID -or
-        $ServerMarker.source_commit -cnotmatch '^[0-9a-f]{40}$' -or $ServerMarker.server_fingerprint -cnotmatch '^sha256:[0-9a-f]{64}$' -or $ServerMarker.port -ne $ExpectedPort)
+    if ($ServerMarker.schema_version -cne 'engram.recovery.fixture-server.v1' -or $ServerMarker.fixture_id -cne $script:RecoveryFixtureID -or
+        $ServerMarker.server_fingerprint -cnotmatch '^sha256:[0-9a-f]{64}$' -or $ServerMarker.port -ne $ExpectedPort -or
+        (-not $isLegacy -and $ServerMarker.source_commit -cnotmatch '^[0-9a-f]{40}$'))
     { throw 'fixture server marker is foreign'
-    }
-    try
-    {
-        $process = Get-Process -Id ([int]$ServerMarker.process_id) -ErrorAction Stop
-        $process.StartTime.ToUniversalTime().Ticks -eq [int64]$ServerMarker.process_start_utc_ticks
-    } catch
-    {
-        $false
-    }
-}
+    }
+    $isRunning = $false
+    try
+    {
+        $process = Get-Process -Id ([int]$ServerMarker.process_id) -ErrorAction Stop
+        $isRunning = $process.StartTime.ToUniversalTime().Ticks -eq [int64]$ServerMarker.process_start_utc_ticks
+    } catch
+    {
+        $isRunning = $false
+    }
+    [pscustomobject]@{
+        IsLegacy = $isLegacy
+        IsRunning = $isRunning
+        MatchesExpectedCandidate = (-not $isLegacy -and $ServerMarker.source_commit -ceq $ExpectedSourceCommit -and
+            $ServerMarker.server_fingerprint -ceq $ExpectedServerFingerprint)
+    }
+}
 function Remove-OwnedFixtureServerArtifacts
 {
     param([Parameter(Mandatory)]$Context, [Parameter(Mandatory)][string[]]$Paths)
@@ -151,44 +169,49 @@ $sourceServer = Assert-RecoveryContainedPath -Path $ServerPath -RepositoryRoot $
 if (-not (Test-Path -LiteralPath $sourceServer -PathType Leaf))
 { throw 'built fixture server is missing'
 }
-[void](Assert-RecoverySafeExistingPath -Path $sourceServer)
+
+[void](Assert-RecoverySafeExistingPath -Path $sourceServer)
+$sourceCommit = Get-FixtureSourceCommit -SourceServer $sourceServer
+$sourceFingerprint = Get-RecoverySha256 -Path $sourceServer
 $serverDirectory = Join-Path $context.FixtureRoot 'server'
 $payloadDirectory = Join-Path $context.FixtureRoot 'payload'
 $serverMarkerPath = Join-Path $serverDirectory 'fixture-server.json'
 $healthPath = Join-Path $serverDirectory 'fixture-server-health.json'
+
+$health = $null
 if (Test-Path -LiteralPath $serverMarkerPath)
-{
+{
     if (-not (Test-Path -LiteralPath $serverMarkerPath -PathType Leaf))
     { throw 'fixture server marker is malformed'
     }
-    $serverMarker = Read-RecoveryJson -Path $serverMarkerPath -Context $context -Label 'fixture server marker'
-    $isRunning = Test-OwnedFixtureServer -ServerMarker $serverMarker -ExpectedPort $Port
-    if ($isRunning)
-    {
-        $stagedServer = Join-Path $payloadDirectory ([IO.Path]::GetFileName($sourceServer))
-        if (-not (Test-Path -LiteralPath $stagedServer -PathType Leaf) -or (Get-RecoverySha256 -Path $stagedServer) -cne $serverMarker.server_fingerprint)
-        {
-            throw 'fixture server payload does not match its ownership marker'
-        }
-        $health = Get-FixtureHealth -HealthPort $Port
-        if ($null -eq $health)
+    $serverMarker = Read-RecoveryJson -Path $serverMarkerPath -Context $context -Label 'fixture server marker'
+    $serverState = Get-OwnedFixtureServerState -ServerMarker $serverMarker -ExpectedPort $Port -ExpectedSourceCommit $sourceCommit -ExpectedServerFingerprint $sourceFingerprint
+    if ($serverState.IsRunning -and $serverState.MatchesExpectedCandidate)
+    {
+        $stagedServer = Join-Path $payloadDirectory ([IO.Path]::GetFileName($sourceServer))
+        if (Test-Path -LiteralPath $stagedServer -PathType Leaf)
+        {
+            [void](Assert-RecoveryContainedPath -Path $stagedServer -RepositoryRoot $context.RepositoryRoot)
+            if ((Get-RecoverySha256 -Path $stagedServer) -ceq $sourceFingerprint)
+            {
+                $health = Get-FixtureHealth -HealthPort $Port
+            }
+        }
+    }
+    if ($null -eq $health)
+    {
+        if ($serverState.IsRunning)
         {
             Stop-OwnedFixtureServer -ServerMarker $serverMarker
-            Remove-OwnedFixtureServerArtifacts -Context $context -Paths @($serverDirectory, $payloadDirectory)
-        }
-    } else
-    {
-        if (-not ($serverMarker.PSObject.Properties.Name -contains 'source_commit'))
-        { Stop-OwnedFixtureServer -ServerMarker $serverMarker
         }
         Remove-OwnedFixtureServerArtifacts -Context $context -Paths @($serverDirectory, $payloadDirectory)
-    }
-} elseif ((Test-Path -LiteralPath $serverDirectory) -or (Test-Path -LiteralPath $payloadDirectory))
-{
+    }
+} elseif ((Test-Path -LiteralPath $serverDirectory) -or (Test-Path -LiteralPath $payloadDirectory))
+{
     Remove-OwnedFixtureServerArtifacts -Context $context -Paths @($serverDirectory, $payloadDirectory)
-}
-if ($null -eq $health)
-{
+}
+if ($null -eq $health)
+{
     New-Item -ItemType Directory -Path $serverDirectory | Out-Null
     New-Item -ItemType Directory -Path $payloadDirectory | Out-Null
     [void](Assert-RecoveryContainedPath -Path $serverDirectory -RepositoryRoot $context.RepositoryRoot)
@@ -196,8 +219,11 @@ if ($null -eq $health)
     $stagedServer = Join-Path $payloadDirectory ([IO.Path]::GetFileName($sourceServer))
     Copy-Item -LiteralPath $sourceServer -Destination $stagedServer
     [void](Assert-RecoverySafeExistingPath -Path $stagedServer)
-    $serverFingerprint = Get-RecoverySha256 -Path $stagedServer
-    $sourceCommit = Get-FixtureSourceCommit -SourceServer $sourceServer
+
+    $serverFingerprint = Get-RecoverySha256 -Path $stagedServer
+    if ($serverFingerprint -cne $sourceFingerprint)
+    { throw 'staged fixture server payload does not match the supplied source candidate'
+    }
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $stagedServer
     $startInfo.UseShellExecute = $false
@@ -257,8 +283,8 @@ if ($null -eq $health)
     }
 } else
 {
-    $serverFingerprint = $serverMarker.server_fingerprint
-    $sourceCommit = $serverMarker.source_commit
+
+    $serverFingerprint = $sourceFingerprint
 }
 $healthReceipt = [ordered]@{
     schema_version = 'engram.recovery.fixture-health.v1'
