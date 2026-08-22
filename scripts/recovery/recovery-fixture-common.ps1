@@ -836,11 +836,12 @@ function Invoke-RecoveryFixturePsql
     if ($transport.IsDockerContainerPsql)
     {
         $containerId = Assert-RecoveryFixtureDockerPsqlTarget -Transport $transport
+        $commandPrefix += @($containerId, 'env')
         foreach ($name in $script:RecoveryFixturePsqlRoutingEnvironmentNames)
         {
-            $commandPrefix += @('--env', ($name + '='))
+            $commandPrefix += @('-u', $name)
         }
-        $commandPrefix += @($containerId, 'psql')
+        $commandPrefix += 'psql'
     }
     $effectiveFixtureDatabaseDsn = $FixtureDatabaseDsn
     if ($transport.IsDockerContainerPsql)
