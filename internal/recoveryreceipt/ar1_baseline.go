@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -23,9 +24,10 @@ const (
 	AR1BaselineSchemaVersion = "engram.recovery.ar1-baseline-receipt.v1"
 	AR1BaselineAuthority     = "sole_ar1_baseline_receipt"
 
-	testScenarioReceiptEnv = "ENGRAM_AR1_TEST_SCENARIO_RECEIPT"
-	testSourceRootEnv      = "ENGRAM_AR1_TEST_SOURCE_ROOT"
-	testOutputFileEnv      = "ENGRAM_AR1_TEST_OUTPUT_FILE"
+	testScenarioReceiptEnv       = "ENGRAM_AR1_TEST_SCENARIO_RECEIPT"
+	testSourceRootEnv            = "ENGRAM_AR1_TEST_SOURCE_ROOT"
+	testPrimaryRepositoryRootEnv = "ENGRAM_AR1_TEST_PRIMARY_REPOSITORY_ROOT"
+	testOutputFileEnv            = "ENGRAM_AR1_TEST_OUTPUT_FILE"
 )
 
 // ScenarioEvidence is the bounded fixture-only scenario input accepted by AR-1.
@@ -218,23 +220,32 @@ func BuildAR1BaselineReceipt(input AR1BaselineInput) (AR1BaselineReceipt, error)
 	}, nil
 }
 
-// writeAR1BaselineReceiptFromTestEnvironment is deliberately test-harness-only:
-// all paths must be explicitly provided and contained by the supplied source root.
+// writeAR1BaselineReceiptFromTestEnvironment is deliberately test-harness-only.
+// It accepts an explicit candidate worktree for source scanning and a distinct
+// primary repository root for scenario and receipt ownership.
 func writeAR1BaselineReceiptFromTestEnvironment(metrics operability.BaselineReport) (AR1BaselineReceipt, error) {
 	scenarioPath := os.Getenv(testScenarioReceiptEnv)
 	sourceRoot := os.Getenv(testSourceRootEnv)
+	primaryRoot := os.Getenv(testPrimaryRepositoryRootEnv)
 	outputPath := os.Getenv(testOutputFileEnv)
-	if scenarioPath == "" || sourceRoot == "" || outputPath == "" {
-		return AR1BaselineReceipt{}, fmt.Errorf("%s, %s, and %s are required", testScenarioReceiptEnv, testSourceRootEnv, testOutputFileEnv)
+	if scenarioPath == "" || sourceRoot == "" || primaryRoot == "" || outputPath == "" {
+		return AR1BaselineReceipt{}, fmt.Errorf("%s, %s, %s, and %s are required", testScenarioReceiptEnv, testSourceRootEnv, testPrimaryRepositoryRootEnv, testOutputFileEnv)
 	}
-	root, err := absoluteDirectory(sourceRoot)
+	primary, err := absoluteDirectory(primaryRoot)
 	if err != nil {
-		return AR1BaselineReceipt{}, err
+		return AR1BaselineReceipt{}, fmt.Errorf("primary repository root: %w", err)
 	}
-	if err := containedRegularFile(root, scenarioPath, false); err != nil {
+	candidate, err := absoluteDirectory(sourceRoot)
+	if err != nil {
+		return AR1BaselineReceipt{}, fmt.Errorf("candidate source root: %w", err)
+	}
+	if err := containedPath(primary, candidate); err != nil {
+		return AR1BaselineReceipt{}, fmt.Errorf("candidate source root: %w", err)
+	}
+	if err := containedRegularFile(primary, scenarioPath, false); err != nil {
 		return AR1BaselineReceipt{}, fmt.Errorf("test scenario receipt: %w", err)
 	}
-	if err := containedRegularFile(root, outputPath, true); err != nil {
+	if err := containedRegularFile(primary, outputPath, true); err != nil {
 		return AR1BaselineReceipt{}, fmt.Errorf("test output file: %w", err)
 	}
 
@@ -246,9 +257,16 @@ func writeAR1BaselineReceiptFromTestEnvironment(metrics operability.BaselineRepo
 	if err != nil {
 		return AR1BaselineReceipt{}, err
 	}
-	reports, err := recoveryinventory.ScanAll(root)
+	commit, err := candidateCommit(candidate)
 	if err != nil {
-		return AR1BaselineReceipt{}, fmt.Errorf("scan source root: %w", err)
+		return AR1BaselineReceipt{}, err
+	}
+	if commit != scenario.Candidate.SourceCommit {
+		return AR1BaselineReceipt{}, fmt.Errorf("candidate source commit %q does not match scenario commit %q", commit, scenario.Candidate.SourceCommit)
+	}
+	reports, err := recoveryinventory.ScanAll(candidate)
+	if err != nil {
+		return AR1BaselineReceipt{}, fmt.Errorf("scan candidate source root: %w", err)
 	}
 	receipt, err := BuildAR1BaselineReceipt(AR1BaselineInput{
 		SourceReports:       reports,
@@ -472,11 +490,15 @@ func fingerprint(data []byte) string {
 func absoluteDirectory(path string) (string, error) {
 	root, err := filepath.Abs(path)
 	if err != nil {
-		return "", fmt.Errorf("resolve source root: %w", err)
+		return "", fmt.Errorf("resolve directory: %w", err)
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve directory links: %w", err)
 	}
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
-		return "", fmt.Errorf("source root is not a directory")
+		return "", fmt.Errorf("path is not a directory")
 	}
 	return root, nil
 }
@@ -486,19 +508,44 @@ func containedRegularFile(root, path string, mayNotExist bool) error {
 	if err != nil {
 		return err
 	}
-	relative, err := filepath.Rel(root, candidate)
-	if err != nil || relative == "." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || relative == ".." {
-		return fmt.Errorf("path is outside source root")
-	}
 	info, err := os.Lstat(candidate)
 	if err != nil {
-		if mayNotExist && os.IsNotExist(err) {
-			return nil
+		if !mayNotExist || !os.IsNotExist(err) {
+			return err
 		}
-		return err
+		parent, err := absoluteDirectory(filepath.Dir(candidate))
+		if err != nil {
+			return err
+		}
+		candidate = filepath.Join(parent, filepath.Base(candidate))
+	} else {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("path is not a regular file")
+		}
+		candidate, err = filepath.EvalSymlinks(candidate)
+		if err != nil {
+			return err
+		}
 	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("path is not a regular file")
+	return containedPath(root, candidate)
+}
+
+func containedPath(root, path string) error {
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path is outside root")
 	}
 	return nil
+}
+
+func candidateCommit(root string) (string, error) {
+	output, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "", fmt.Errorf("resolve candidate source commit: %w", err)
+	}
+	commit := strings.TrimSpace(string(output))
+	if !validCommit(commit) {
+		return "", fmt.Errorf("candidate source commit is invalid")
+	}
+	return commit, nil
 }

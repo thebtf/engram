@@ -3,6 +3,7 @@ package recoveryreceipt
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -130,23 +131,47 @@ func TestDecodeScenarioEvidenceRejectsUnknownOrMalformedInput(t *testing.T) {
 }
 
 func TestWriteAR1BaselineReceiptFromTestEnvironment(t *testing.T) {
-	root := sourceRoot(t)
+	primaryRoot, candidateRoot, sourceCommit := candidateWorktree(t)
 	scenario := validScenario()
+	scenario.Candidate.SourceCommit = sourceCommit
 	encodedScenario, err := json.Marshal(scenario)
 	if err != nil {
 		t.Fatal(err)
 	}
-	scenarioPath := filepath.Join(root, "owned", "scenario.json")
-	outputPath := filepath.Join(root, "owned", "ar1-baseline.json")
+	scenarioPath := filepath.Join(primaryRoot, "owned", "scenario.json")
+	outputPath := filepath.Join(primaryRoot, "owned", "ar1-baseline.json")
 	writeFile(t, scenarioPath, string(encodedScenario))
 	t.Setenv(testScenarioReceiptEnv, scenarioPath)
-	t.Setenv(testSourceRootEnv, root)
+	t.Setenv(testSourceRootEnv, candidateRoot)
+	t.Setenv(testPrimaryRepositoryRootEnv, primaryRoot)
 	t.Setenv(testOutputFileEnv, outputPath)
 
 	receipt, err := writeAR1BaselineReceiptFromTestEnvironment(baselineMetrics(t))
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertWrittenReceipt(t, outputPath, receipt, fingerprint(encodedScenario))
+}
+
+func TestWriteAR1BaselineReceiptFromConfiguredTestEnvironment(t *testing.T) {
+	for _, env := range []string{testScenarioReceiptEnv, testSourceRootEnv, testPrimaryRepositoryRootEnv, testOutputFileEnv} {
+		if os.Getenv(env) == "" {
+			t.Skipf("configured receipt writer requires %s", env)
+		}
+	}
+
+	receipt, err := writeAR1BaselineReceiptFromTestEnvironment(baselineMetrics(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertWrittenReceipt(t, os.Getenv(testOutputFileEnv), receipt, receipt.ScenarioFingerprint)
+	if len(receipt.DurableMetrics) == 0 || receipt.DurableMetrics[0].ResultStatus != operability.NotComputable || receipt.DurableMetrics[0].Ratio != nil {
+		t.Fatalf("configured receipt lost zero-denominator truth: %#v", receipt.DurableMetrics)
+	}
+}
+
+func assertWrittenReceipt(t *testing.T, outputPath string, receipt AR1BaselineReceipt, scenarioFingerprint string) {
+	t.Helper()
 	got, err := os.ReadFile(outputPath)
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +183,7 @@ func TestWriteAR1BaselineReceiptFromTestEnvironment(t *testing.T) {
 	if !reflect.DeepEqual(receipt, decoded) {
 		t.Fatalf("written receipt differs\nwant: %#v\ngot: %#v", receipt, decoded)
 	}
-	if decoded.ReceiptAuthority != AR1BaselineAuthority || decoded.ScenarioFingerprint != fingerprint(encodedScenario) {
+	if decoded.ReceiptAuthority != AR1BaselineAuthority || decoded.ScenarioFingerprint != scenarioFingerprint {
 		t.Fatalf("written receipt is not bound to the explicit scenario: %#v", decoded)
 	}
 }
@@ -267,6 +292,26 @@ func sourceRoot(t *testing.T) string {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "internal", "fixture.go"), "package fixture\n\ntype ProjectRecord struct { ID string }\n\nconst raw = \"secret-token https://private.example\"\n")
 	return root
+}
+
+func candidateWorktree(t *testing.T) (string, string, string) {
+	t.Helper()
+	primaryRoot := t.TempDir()
+	candidateRoot := filepath.Join(primaryRoot, "candidate")
+	writeFile(t, filepath.Join(candidateRoot, "internal", "fixture.go"), "package fixture\n\ntype ProjectRecord struct { ID string }\n\nconst raw = \"secret-token https://private.example\"\n")
+	gitCommand(t, "-C", candidateRoot, "init")
+	gitCommand(t, "-C", candidateRoot, "add", ".")
+	gitCommand(t, "-C", candidateRoot, "-c", "user.name=AR1 Test", "-c", "user.email=ar1@example.invalid", "commit", "-m", "fixture")
+	return primaryRoot, candidateRoot, gitCommand(t, "-C", candidateRoot, "rev-parse", "HEAD")
+}
+
+func gitCommand(t *testing.T, args ...string) string {
+	t.Helper()
+	output, err := exec.Command("git", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func writeFile(t *testing.T, path, content string) {
