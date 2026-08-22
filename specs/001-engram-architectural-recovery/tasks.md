@@ -53,10 +53,10 @@ safe inventories/fixtures without merging projects or deleting capability.
 - [ ] T006 [P] [US5] Write failing adapter-contract tests for current automatic outcome callback routes in `internal/worker/outcome_adapter_contract_test.go` — FR-018.
 - [ ] T007 [US5] Replace silent missing-outcome callback handling with versioned actionable retirement diagnostics in `internal/worker/handlers_outcome_retirement.go` — FR-018, FR-026.
 - [ ] T008 [P] [US1] Add failing selector-only project-creation fence tests in `internal/projectidentity/legacy_fence_test.go` — FR-004.
-- [ ] T009 [US1] Enforce no-new legacy-selector project creation at existing adapter boundary in `internal/db/gorm/project_store.go` — FR-004.
-- [ ] T010 [US6] Create fixture export/restore contract harness in `scripts/recovery/prepare-legacy-fixture.ps1` — FR-025, SC-013.
-- [ ] T011 [US7] Create fixture server health command and exact built-payload provenance contract in `scripts/recovery/start-fixture-server.ps1`, `Makefile`, `cmd/engram-server/main.go`, and `internal/worker/handlers.go` — FR-019, FR-020.
-- [ ] T012 [US7] Create named scenario runner and receipt verifier in `scripts/recovery/run-recovery-scenario.ps1` and `scripts/recovery/verify-recovery-receipt.ps1` — FR-028, SC-018.
+- [ ] T009 [US1] Enforce no-new legacy-selector project creation and credential-safe remote identity evidence at existing `internal/db/gorm/project_store.go` / `internal/proxy/identity.go` adapter boundaries — FR-004.
+- [ ] T010 [US6] Create synthetic fixture export/restore and database ownership/manifest-binding contract in `scripts/recovery/prepare-legacy-fixture.ps1` and recovery helpers — FR-025, SC-013.
+- [ ] T011 [US7] Create fixture server health command, exact built-payload provenance, and owned process/run binding contract in `scripts/recovery/start-fixture-server.ps1`, `Makefile`, `cmd/engram-server/main.go`, and `internal/worker/handlers.go` — FR-019, FR-020.
+- [ ] T012 [US7] Create named scenario runner and receipt verifier that binds behavior to the live owned fixture process/payload in `scripts/recovery/run-recovery-scenario.ps1` and `scripts/recovery/verify-recovery-receipt.ps1` — FR-028, SC-018.
 - [ ] T013 [US7] Add AR-1 installed baseline receipt schema/producer in `internal/recoveryreceipt/ar1_baseline.go` — FR-019, FR-028.
 - [ ] T014 [US7] Run independent AR-1 source-inventory and dead-contract checker against `internal/recoveryinventory/` and `internal/worker/` — governance obligation.
 - [ ] T015 [US7] Run AR-1 clean-main exact-source build, fixture, installed dogfood, source-commit/payload readback, and observation receipt through `scripts/recovery/run-recovery-scenario.ps1` — SC-018.
