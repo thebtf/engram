@@ -29,7 +29,7 @@ try
 { throw 'scenario receipt is malformed' 
 }
 
-Assert-RecoveryExactProperties -Object $evidence -Names @('schema_version', 'evidence_kind', 'release', 'scenario', 'observed_at_utc', 'scope', 'fixture', 'health', 'candidate', 'observations') -Label 'scenario receipt'
+Assert-RecoveryExactProperties -Object $evidence -Names @('schema_version', 'evidence_kind', 'release', 'scenario', 'observed_at_utc', 'scope', 'fixture', 'health', 'candidate', 'behavior', 'observations') -Label 'scenario receipt'
 Assert-RecoveryExactProperties -Object $evidence.fixture -Names @('fixture_id', 'fixture_root', 'manifest_fingerprint', 'export_reference', 'export_fingerprint', 'restore_reference', 'selector_inventory_count') -Label 'scenario fixture evidence'
 Assert-RecoveryExactProperties -Object $evidence.health -Names @('receipt_fingerprint', 'server_fingerprint', 'status') -Label 'scenario health evidence'
 Assert-RecoveryExactProperties -Object $evidence.candidate -Names @('source_commit', 'built_payload_fingerprint') -Label 'scenario candidate evidence'
