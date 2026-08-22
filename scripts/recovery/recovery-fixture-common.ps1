@@ -823,7 +823,8 @@ function Invoke-RecoveryFixturePsql
     param(
         [Parameter(Mandatory)][string]$FixtureDatabaseDsn,
         [Parameter(Mandatory)][string]$Query,
-        [System.Collections.IDictionary]$Variables = @{}
+        [System.Collections.IDictionary]$Variables = @{},
+        [switch]$StructuralMetadata
     )
 
     Assert-RecoveryFixtureDatabaseDsn -Value $FixtureDatabaseDsn
@@ -877,7 +878,9 @@ function Invoke-RecoveryFixturePsql
     }
     $output = @(Invoke-RecoveryFixturePsqlCommand -FilePath $transport.FilePath -Arguments $commandArguments.ToArray())
     $text = (@($output | ForEach-Object { [string]$_ }) -join "`n").Trim()
-    Assert-RecoverySecretSafeText -Text $text
+    if (-not $StructuralMetadata)
+    { Assert-RecoverySecretSafeText -Text $text
+    }
     $text
 }
 
@@ -908,7 +911,7 @@ SELECT json_build_object(
     ), '[]'::json)
 )::text;
 "@
-    $raw = Invoke-RecoveryFixturePsql -FixtureDatabaseDsn $FixtureDatabaseDsn -Query $query
+    $raw = Invoke-RecoveryFixturePsql -FixtureDatabaseDsn $FixtureDatabaseDsn -Query $query -StructuralMetadata
     try
     { $state = $raw | ConvertFrom-Json -Depth 16
     } catch
