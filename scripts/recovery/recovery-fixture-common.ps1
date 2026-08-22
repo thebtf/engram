@@ -591,6 +591,24 @@ function Assert-RecoveryFixtureDockerAuthority
     }
 }
 
+function Get-RecoveryFixtureApplicationPath
+{
+    param([Parameter(Mandatory)][string]$Name)
+
+    $paths = @(Get-Command -Name $Name -CommandType Application -ErrorAction SilentlyContinue |
+            ForEach-Object { [string]$_.Source } |
+            Sort-Object -Unique)
+    if ($paths.Count -eq 0)
+    {
+        return $null
+    }
+    if ($paths.Count -ne 1 -or [string]::IsNullOrWhiteSpace($paths[0]))
+    {
+        throw "fixture application command path is ambiguous: $Name"
+    }
+    return [string]$paths[0]
+}
+
 function Set-RecoveryFixturePsqlTransport
 {
     param([AllowEmptyString()][string]$FixturePsqlContainer = '')
@@ -601,21 +619,21 @@ function Set-RecoveryFixturePsqlTransport
     }
     if (-not [string]::IsNullOrWhiteSpace($FixturePsqlContainer))
     {
-        $docker = Get-Command -Name 'docker' -CommandType Application -ErrorAction SilentlyContinue
-        if ($null -eq $docker)
+        $dockerPath = Get-RecoveryFixtureApplicationPath -Name 'docker'
+        if ($null -eq $dockerPath)
         {
             throw 'fixture database prerequisite is missing: docker must be available for the explicit fixture container psql transport'
         }
-        Assert-RecoveryFixtureDockerAuthority -DockerPath $docker.Source
-        $script:RecoveryFixturePsqlTransport = [pscustomobject]@{ FilePath = $docker.Source; Prefix = @('--context', 'default', 'exec'); ContainerName = $FixturePsqlContainer; IsDockerContainerPsql = $true }
+        Assert-RecoveryFixtureDockerAuthority -DockerPath $dockerPath
+        $script:RecoveryFixturePsqlTransport = [pscustomobject]@{ FilePath = $dockerPath; Prefix = @('--context', 'default', 'exec'); ContainerName = $FixturePsqlContainer; IsDockerContainerPsql = $true }
         return
     }
-    $psql = Get-Command -Name 'psql' -CommandType Application -ErrorAction SilentlyContinue
-    if ($null -eq $psql)
+    $psqlPath = Get-RecoveryFixtureApplicationPath -Name 'psql'
+    if ($null -eq $psqlPath)
     {
         throw 'fixture database prerequisite is missing: psql must be available on PATH or an explicit fixture container name must be supplied'
     }
-    $script:RecoveryFixturePsqlTransport = [pscustomobject]@{ FilePath = $psql.Source; Prefix = @(); IsDockerContainerPsql = $false }
+    $script:RecoveryFixturePsqlTransport = [pscustomobject]@{ FilePath = $psqlPath; Prefix = @(); IsDockerContainerPsql = $false }
 }
 
 function Assert-RecoveryFixtureDockerPsqlTarget
