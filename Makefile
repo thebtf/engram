@@ -19,6 +19,7 @@ PLUGIN_DIR := plugin
 # Honour host Go environment; allow caller overrides.
 GOOS   ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
+SERVER_BINARY := $(BUILD_DIR)/engram-server$(if $(filter windows,$(GOOS)),.exe)
 
 # CGO is required for the FTS5 search extension (go-sqlite3).
 export CGO_ENABLED=1
@@ -90,7 +91,7 @@ worker:
 	@echo "Building worker..."
 	@mkdir -p $(BUILD_DIR)
 	swag init -g cmd/engram-server/main.go -o docs --parseDependency --parseInternal 2>/dev/null || true
-	go build $(BUILD_TAGS) $(SERVER_LDFLAGS) -o $(BUILD_DIR)/engram-server ./cmd/engram-server
+	go build $(BUILD_TAGS) $(SERVER_LDFLAGS) -o $(SERVER_BINARY) ./cmd/engram-server
 
 # MCP stdio client — the binary Claude Code launches as a subprocess.
 # CGO is disabled here because the client has no SQLite dependency.
