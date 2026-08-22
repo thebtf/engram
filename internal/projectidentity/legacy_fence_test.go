@@ -3,6 +3,8 @@ package projectidentity_test
 import (
 	"context"
 	"errors"
+	"net"
+	"net/url"
 	"os"
 	"testing"
 
@@ -12,9 +14,18 @@ import (
 
 func openProjectIdentityTestStore(t *testing.T) *gormdb.Store {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_DSN")
+	dsn := os.Getenv("ENGRAM_RECOVERY_FIXTURE_DSN")
 	if dsn == "" {
-		t.Skip("DATABASE_DSN not set, skipping project identity integration test")
+		t.Skip("ENGRAM_RECOVERY_FIXTURE_DSN not set, skipping project identity integration test")
+	}
+	fixtureURL, err := url.Parse(dsn)
+	if err != nil || fixtureURL.User == nil {
+		t.Skip("ENGRAM_RECOVERY_FIXTURE_DSN is not the dedicated fixture endpoint")
+	}
+	_, hasPassword := fixtureURL.User.Password()
+	fixtureIP := net.ParseIP(fixtureURL.Hostname())
+	if fixtureURL.Scheme != "postgres" || fixtureURL.User.Username() != "fixture" || hasPassword || fixtureIP == nil || !fixtureIP.IsLoopback() || fixtureURL.Port() != "55432" || fixtureURL.Path != "/engram_fixture" || fixtureURL.RawPath != "" || fixtureURL.RawQuery != "sslmode=disable" || fixtureURL.Fragment != "" {
+		t.Skip("ENGRAM_RECOVERY_FIXTURE_DSN is not the dedicated fixture endpoint")
 	}
 	store, err := gormdb.NewStore(gormdb.Config{DSN: dsn, LogLevel: logger.Silent})
 	if err != nil {

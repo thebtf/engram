@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
+	"net/url"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -17,6 +20,24 @@ import (
 	"google.golang.org/grpc/status"
 	gormlib "gorm.io/gorm"
 )
+
+func setAR1FixtureDSN(t *testing.T) {
+	t.Helper()
+	dsn := os.Getenv("ENGRAM_RECOVERY_FIXTURE_DSN")
+	if dsn == "" {
+		t.Skip("ENGRAM_RECOVERY_FIXTURE_DSN not set, skipping AR-1 fixture test")
+	}
+	fixtureURL, err := url.Parse(dsn)
+	if err != nil || fixtureURL.User == nil {
+		t.Skip("ENGRAM_RECOVERY_FIXTURE_DSN is not the dedicated fixture endpoint")
+	}
+	_, hasPassword := fixtureURL.User.Password()
+	fixtureIP := net.ParseIP(fixtureURL.Hostname())
+	if fixtureURL.Scheme != "postgres" || fixtureURL.User.Username() != "fixture" || hasPassword || fixtureIP == nil || !fixtureIP.IsLoopback() || fixtureURL.Port() != "55432" || fixtureURL.Path != "/engram_fixture" || fixtureURL.RawPath != "" || fixtureURL.RawQuery != "sslmode=disable" || fixtureURL.Fragment != "" {
+		t.Skip("ENGRAM_RECOVERY_FIXTURE_DSN is not the dedicated fixture endpoint")
+	}
+	t.Setenv("DATABASE_DSN", dsn)
+}
 
 type identityOrderHandler struct {
 	steps     *[]string
@@ -436,6 +457,7 @@ func TestCallTool_DefaultResolverRejectsMalformedSelectorsBeforeHandler(t *testi
 }
 
 func TestCallTool_UnknownSelectorOnlyFailsBeforeProjectMutation(t *testing.T) {
+	setAR1FixtureDSN(t)
 	db, cleanup := testGRPCSyncDB(t)
 	defer cleanup()
 	selector := "ar1-fence-grpc-unknown"
