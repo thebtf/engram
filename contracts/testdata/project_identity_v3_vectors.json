@@ -1,0 +1,1257 @@
+{
+  "schema_version": 1,
+  "contract": "project_identity_v3",
+  "identity_version": 3,
+  "description": "Authoritative cross-language vectors for V3 anchor discovery, descriptor construction, remote normalization, and central-resolution outcomes. Input descriptors never assert a canonical project key; expected canonical keys are server response fixtures only.",
+  "vector_counts": {
+    "accepted": 18,
+    "refused": 17
+  },
+  "vectors": [
+    {
+      "id": "repository-primary-resolves",
+      "category": "valid_repository_anchor",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root",
+          "checkout_kind": "primary"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [
+            "git.example.test/Platform/Widget"
+          ],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-alpha"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "repository-worktree-equivalence",
+      "category": "repository_equivalence",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root",
+          "checkout_kind": "worktree"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [
+            "git.example.test/Platform/Widget"
+          ],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-alpha-worktree"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "repository-clone-equivalence",
+      "category": "repository_equivalence",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root",
+          "checkout_kind": "clone"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [
+            "git.example.test/Platform/Widget"
+          ],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-alpha-clone"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "repository-branch-equivalence",
+      "category": "repository_equivalence",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root",
+          "checkout_kind": "branch"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [
+            "git.example.test/Platform/Widget"
+          ],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-alpha-branch"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "repository-moved-directory-equivalence",
+      "category": "repository_equivalence",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root",
+          "checkout_kind": "moved_directory"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [
+            "git.example.test/Platform/Widget"
+          ],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-alpha-moved"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "repository-renamed-remote-equivalence",
+      "category": "repository_equivalence",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root",
+          "checkout_kind": "renamed_remote"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [
+            "forge.example.test/Platform/Widget"
+          ],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-alpha-remote-rename"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "remote-https-normalizes",
+      "category": "remote_normalization",
+      "intent": "resolve_existing",
+      "input": {
+        "remote_observations": [
+          {
+            "form": "https_url",
+            "source": "HTTPS://GIT.EXAMPLE.TEST/Platform//Widget.git",
+            "normalized": "git.example.test/Platform/Widget"
+          }
+        ],
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [
+            "git.example.test/Platform/Widget"
+          ],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-https"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "remote-ssh-url-normalizes",
+      "category": "remote_normalization",
+      "intent": "resolve_existing",
+      "input": {
+        "remote_observations": [
+          {
+            "form": "ssh_url",
+            "source": "ssh://git@GIT.EXAMPLE.TEST/Platform/Widget.git",
+            "normalized": "git.example.test/Platform/Widget"
+          }
+        ],
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [
+            "git.example.test/Platform/Widget"
+          ],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-ssh"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "remote-scp-normalizes",
+      "category": "remote_normalization",
+      "intent": "resolve_existing",
+      "input": {
+        "remote_observations": [
+          {
+            "form": "scp",
+            "source": "git@GIT.EXAMPLE.TEST:Platform/Widget.git",
+            "normalized": "git.example.test/Platform/Widget"
+          }
+        ],
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [
+            "git.example.test/Platform/Widget"
+          ],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-scp"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "remote-non-default-port-normalizes",
+      "category": "remote_normalization",
+      "intent": "resolve_existing",
+      "input": {
+        "remote_observations": [
+          {
+            "form": "ssh_url",
+            "source": "ssh://git@GIT.EXAMPLE.TEST:2222/Platform//CaseSensitive.git",
+            "normalized": "git.example.test:2222/Platform/CaseSensitive"
+          }
+        ],
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [
+            "git.example.test:2222/Platform/CaseSensitive"
+          ],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-port"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "directory-explicit-root-resolves",
+      "category": "directory_scope",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "directory",
+          "selection": "explicit_directory"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "22222222-2222-4222-8222-222222222222",
+          "name": "directory-workspace",
+          "scope": "directory"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": false,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "22222222-2222-4222-8222-222222222222",
+          "name": "directory-workspace",
+          "scope": "directory",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-directory"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "register-anchor-establishes-binding",
+      "category": "registration",
+      "intent": "register_anchor",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "33333333-3333-4333-8333-333333333333",
+          "name": "new-widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "33333333-3333-4333-8333-333333333333",
+          "name": "new-widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [
+            "git.example.test/Platform/NewWidget"
+          ],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-register"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "scoped_mutation_permitted": true,
+        "binding_established": true
+      }
+    },
+    {
+      "id": "read-filter-is-read-only",
+      "category": "explicit_intent",
+      "intent": "read_filter",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [
+            "git.example.test/Platform/Widget"
+          ],
+          "legacy_identifiers": [
+            {
+              "scheme": "binding_v2",
+              "value": "legacy-widget-42",
+              "provenance": "migrated_client_configuration"
+            },
+            {
+              "scheme": "git_remote_relative_v2",
+              "value": "git.example.test/Platform/Widget",
+              "provenance": "normalized_remote_observation"
+            }
+          ],
+          "client_instance_id": "fixture-install-read-filter"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "admin-target-uses-server-target-reference",
+      "category": "explicit_intent",
+      "intent": "admin_target",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "administrative_target": {
+          "server_issued_target_ref": "fixture-admin-target-alpha",
+          "authorization": "explicit_admin_authorized"
+        },
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [
+            "git.example.test/Platform/Widget"
+          ],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-admin"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "merged-anchor-redirects",
+      "category": "redirect",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "44444444-4444-4444-8444-444444444444",
+          "name": "merged-widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "44444444-4444-4444-8444-444444444444",
+          "name": "merged-widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-redirect"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_REDIRECTED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "redirect_reference": "fixture-merge-audit-01",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "remote-local-is-omitted",
+      "category": "remote_disposition",
+      "intent": "resolve_existing",
+      "input": {
+        "remote_observations": [
+          {
+            "form": "local_path",
+            "raw_value_persisted": false,
+            "disposition": "omitted",
+            "reason": "REMOTE_LOCAL_UNSUPPORTED"
+          }
+        ],
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-local-remote"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "remote-file-url-is-omitted",
+      "category": "remote_disposition",
+      "intent": "resolve_existing",
+      "input": {
+        "remote_observations": [
+          {
+            "form": "file_url",
+            "raw_value_persisted": false,
+            "disposition": "omitted",
+            "reason": "REMOTE_FILE_UNSUPPORTED"
+          }
+        ],
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-file-remote"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "remote-malformed-is-omitted",
+      "category": "remote_disposition",
+      "intent": "resolve_existing",
+      "input": {
+        "remote_observations": [
+          {
+            "form": "malformed",
+            "raw_value_persisted": false,
+            "disposition": "omitted",
+            "reason": "REMOTE_MALFORMED"
+          }
+        ],
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-malformed-remote"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_RESOLVED",
+        "canonical_key_may_be_exposed": true,
+        "canonical_project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "scoped_mutation_permitted": true,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "directory-root-does-not-search-upward",
+      "category": "directory_scope",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "directory",
+          "selection": "explicit_directory",
+          "anchor_present_at_scope_root": false,
+          "parent_anchor_present": true,
+          "upward_anchor_search": false
+        },
+        "anchor": null,
+        "descriptor": null
+      },
+      "expected": {
+        "outcome": "PROJECT_ONBOARDING_REQUIRED",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "missing-anchor-requires-onboarding",
+      "category": "anchor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root",
+          "anchor_present_at_scope_root": false
+        },
+        "anchor": null,
+        "descriptor": null
+      },
+      "expected": {
+        "outcome": "PROJECT_ONBOARDING_REQUIRED",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "legacy-name-only-anchor-is-invalid",
+      "category": "anchor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "name": "legacy-widget-service"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": null
+      },
+      "expected": {
+        "outcome": "PROJECT_ANCHOR_INVALID",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "anchor-unknown-field-is-invalid",
+      "category": "anchor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "55555555-5555-4555-8555-555555555555",
+          "name": "unexpected-field-widget",
+          "scope": "repository",
+          "unexpected": "not-allowed"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": null
+      },
+      "expected": {
+        "outcome": "PROJECT_ANCHOR_INVALID",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "anchor-malformed-project-id-is-invalid",
+      "category": "anchor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "not-a-uuid",
+          "name": "malformed-id-widget",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": null
+      },
+      "expected": {
+        "outcome": "PROJECT_ANCHOR_INVALID",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "anchor-wrong-version-is-invalid",
+      "category": "anchor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 2,
+          "project_id": "55555555-5555-4555-8555-555555555555",
+          "name": "wrong-version-widget",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": null
+      },
+      "expected": {
+        "outcome": "PROJECT_ANCHOR_INVALID",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "descriptor-scope-mismatch-is-refused",
+      "category": "descriptor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "directory",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-scope-mismatch"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_SCOPE_MISMATCH",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "nested-repository-without-anchor-is-unresolved",
+      "category": "nested_repository",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "nested_git_repository_root",
+          "anchor_present_at_scope_root": false,
+          "parent_repository_anchor_present": true,
+          "inherit_parent_anchor": false
+        },
+        "anchor": null,
+        "descriptor": null
+      },
+      "expected": {
+        "outcome": "PROJECT_NESTED_REPOSITORY_UNRESOLVED",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "copied-anchor-requires-decision",
+      "category": "anchor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root",
+          "copied_anchor_evidence": true
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "66666666-6666-4666-8666-666666666666",
+          "name": "copied-widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "66666666-6666-4666-8666-666666666666",
+          "name": "copied-widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [
+            "git.example.test/Forks/Widget"
+          ],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-copied"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_ANCHOR_DECISION_REQUIRED",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "unbound-anchor-requires-onboarding",
+      "category": "anchor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "77777777-7777-4777-8777-777777777777",
+          "name": "unbound-widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "77777777-7777-4777-8777-777777777777",
+          "name": "unbound-widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-unbound"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_ONBOARDING_REQUIRED",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "descriptor-version-unsupported",
+      "category": "descriptor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 4,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-unsupported-version"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_DESCRIPTOR_UNSUPPORTED",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "client-project-key-assertion-is-forbidden",
+      "category": "descriptor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-key-assertion",
+          "project_key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "descriptor-missing-client-instance-id-is-invalid",
+      "category": "descriptor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": []
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_DESCRIPTOR_INVALID",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "descriptor-invalid-client-instance-id-is-invalid",
+      "category": "descriptor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [],
+          "client_instance_id": ""
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_DESCRIPTOR_INVALID",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "descriptor-name-mismatch-is-invalid",
+      "category": "descriptor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "different-display-name",
+          "scope": "repository",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [],
+          "client_instance_id": "fixture-install-name-mismatch"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_DESCRIPTOR_INVALID",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "credential-bearing-remote-is-refused-without-raw-persistence",
+      "category": "remote_disposition",
+      "intent": "resolve_existing",
+      "input": {
+        "remote_observations": [
+          {
+            "form": "credential_bearing_url",
+            "raw_value_persisted": false,
+            "disposition": "refused",
+            "reason": "REMOTE_CREDENTIALS_PROHIBITED"
+          }
+        ],
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": null
+      },
+      "expected": {
+        "outcome": "PROJECT_DESCRIPTOR_INVALID",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "read-filter-ambiguous-legacy-identifier-is-refused",
+      "category": "legacy_identifier",
+      "intent": "read_filter",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [
+            {
+              "scheme": "manual_alias",
+              "value": "legacy-widget-alias",
+              "provenance": "operator_import"
+            }
+          ],
+          "client_instance_id": "fixture-install-ambiguous-legacy"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_IDENTITY_AMBIGUOUS",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    }
+  ]
+}
