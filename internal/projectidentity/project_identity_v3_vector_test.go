@@ -29,6 +29,13 @@ type projectIdentityV3Vector struct {
 			Disposition string `json:"disposition"`
 		} `json:"remote_observations"`
 	} `json:"input"`
+	Expected struct {
+		Outcome                  ResolutionOutcomeV3 `json:"outcome"`
+		CanonicalKeyMayBeExposed bool                `json:"canonical_key_may_be_exposed"`
+		CanonicalProjectKey      ProjectKeyV3        `json:"canonical_project_key"`
+		ScopedMutationPermitted  bool                `json:"scoped_mutation_permitted"`
+		BindingEstablished       bool                `json:"binding_established"`
+	} `json:"expected"`
 }
 
 func TestProjectIdentityV3DescriptorSeamUsesFrozenVectors(t *testing.T) {

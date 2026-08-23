@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -379,4 +380,68 @@ func TestProjectIdentityV3ResolverRedactsAdministrativeAuditAtRest(t *testing.T)
 		require.NotEqual(t, value.raw, value.persisted.String)
 		require.NotContains(t, value.persisted.String, value.raw)
 	}
+}
+
+func TestProjectIdentityV3BehaviorMatrixDB(t *testing.T) {
+	if os.Getenv("DATABASE_DSN") == "" {
+		t.Skip("DATABASE_DSN not set; V3 behavior-matrix DB denominator=0/8")
+	}
+	store, cleanup := openIntegrationTestDB(t)
+	t.Cleanup(cleanup)
+	db := store.GetDB()
+	require.NoError(t, projectIdentityV3ResolutionAttemptsMigration163().Migrate(db))
+	require.NoError(t, projectIdentityV3ResolutionAttemptAdminAuditMigration164().Migrate(db))
+
+	prefix := "t028-matrix-" + uuid.NewString()
+	anchorProjectID := uuid.NewString()
+	unboundAnchorProjectID := uuid.NewString()
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM project_resolution_attempts WHERE correlation LIKE ?", prefix+"%").Error
+		_ = db.Exec("DELETE FROM projects WHERE anchor_project_id IN (?, ?)", anchorProjectID, unboundAnchorProjectID).Error
+	})
+	resolver := projectidentity.NewResolverV3(store, &projectIdentityV3ResolverVerifier{authorized: true})
+
+	registration := resolverStoreRequest(t, projectidentity.RegisterAnchorIntentV3, anchorProjectID, prefix+"-registration")
+	registrationAuthorization, err := projectidentity.NewAuthorizationReferenceV3("t028-registration-" + uuid.NewString())
+	require.NoError(t, err)
+	registration.RegistrationAuthorization = registrationAuthorization
+	registered, err := resolver.ResolveProjectV3(context.Background(), registration)
+	require.NoError(t, err)
+	wantKey := registered.Resolution().CanonicalProjectKey()
+	require.NotEmpty(t, wantKey)
+
+	for _, test := range []struct {
+		name   string
+		remote string
+	}{
+		{name: "primary", remote: "git.example.test/Platform/Widget"},
+		{name: "worktree", remote: "git.example.test/Platform/Widget"},
+		{name: "clone", remote: "git.example.test/Platform/Widget"},
+		{name: "branch", remote: "git.example.test/Platform/Widget"},
+		{name: "moved", remote: "git.example.test/Platform/Widget"},
+		{name: "renamed-remote", remote: "forge.example.test/Platform/Widget"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := resolverStoreRequest(t, projectidentity.ResolveExistingIntentV3, anchorProjectID, prefix+"-"+test.name)
+			request.Descriptor.NormalizedGitRemotes = []string{test.remote}
+			request.Descriptor.ClientInstanceID = "t028-client-" + test.name
+			resolved, err := resolver.ResolveProjectV3(context.Background(), request)
+			require.NoError(t, err)
+			require.Equal(t, wantKey, resolved.Resolution().CanonicalProjectKey())
+		})
+	}
+
+	unbound := resolverStoreRequest(t, projectidentity.ResolveExistingIntentV3, unboundAnchorProjectID, prefix+"-unbound")
+	refused, err := resolver.ResolveProjectV3(context.Background(), unbound)
+	require.Error(t, err)
+	require.Equal(t, projectidentity.ProjectOnboardingRequiredOutcomeV3, refused.Resolution().Outcome())
+	require.Empty(t, refused.Resolution().CanonicalProjectKey())
+
+	var bindingCount, unboundCount, attemptCount int64
+	require.NoError(t, db.Model(&Project{}).Where("anchor_project_id = ?", anchorProjectID).Count(&bindingCount).Error)
+	require.NoError(t, db.Model(&Project{}).Where("anchor_project_id = ?", unboundAnchorProjectID).Count(&unboundCount).Error)
+	require.NoError(t, db.Model(&ProjectResolutionAttempt{}).Where("correlation LIKE ?", prefix+"%").Count(&attemptCount).Error)
+	require.EqualValues(t, 1, bindingCount, "topology equivalents must retain one V3 binding")
+	require.Zero(t, unboundCount, "unbound refusal must not create a binding")
+	require.EqualValues(t, 8, attemptCount, "registration, six topology reads, and one refusal must audit")
 }
