@@ -8,7 +8,7 @@
 import { AvailabilityTracker } from './availability.js';
 import type { PluginConfig } from './config.js';
 import { resolveIdentity, validateCanonicalProjectV2, validateProjectSelectorV2, type ProjectIdentity, type ProjectIdentityV2 } from './identity.js';
-import { isValidClientInstanceIdV3, type ProjectIdentityV3 } from './project-identity-v3.js';
+import { buildProjectIdentityV3, type ProjectIdentityV3 } from './project-identity-v3.js';
 
 // ---------------------------------------------------------------------------
 // Response types
@@ -321,35 +321,39 @@ export class EngramRestClient {
     identity: ProjectIdentity,
     selector: string,
   ): Promise<ProjectRegistrationResult> {
-  const descriptor = identity.projectIdentityV3;
-  let validatedSelector = selector;
-  if (descriptor) {
-   if (!isValidClientInstanceIdV3(descriptor.client_instance_id)) {
-    return projectDescriptorFailure();
-   }
-  } else {
-    try {
-      validatedSelector = validateProjectSelectorV2(selector);
-    } catch {
-      return {
-        ok: false,
-        error: {
-          code: 'PROJECT_IDENTITY_INVALID',
-          message: 'project selector is empty or malformed',
-          upgradeAction: 'regenerate_project_identity_v2',
-          httpStatus: 400,
-        },
-      };
+    const requestedDescriptor = identity.projectIdentityV3;
+    let descriptor: ProjectIdentityV3 | undefined;
+    let validatedIdentity = identity;
+    if (requestedDescriptor !== undefined) {
+      const validatedDescriptor = validateProjectDescriptorV3(requestedDescriptor);
+      if (!validatedDescriptor) return projectDescriptorFailure();
+      descriptor = validatedDescriptor;
+      validatedIdentity = { ...identity, projectIdentityV3: descriptor };
     }
-  }
+    let validatedSelector = selector;
+    if (!descriptor) {
+      try {
+        validatedSelector = validateProjectSelectorV2(selector);
+      } catch {
+        return {
+          ok: false,
+          error: {
+            code: 'PROJECT_IDENTITY_INVALID',
+            message: 'project selector is empty or malformed',
+            upgradeAction: 'regenerate_project_identity_v2',
+            httpStatus: 400,
+          },
+        };
+      }
+    }
 
-  const key = JSON.stringify(descriptor ?? [validatedSelector, identity.projectIdentityV2 ?? null]);
+    const key = JSON.stringify(descriptor ?? [validatedSelector, identity.projectIdentityV2 ?? null]);
     const completed = this.completedProjectRegistrations.get(key);
     if (completed) return completed;
     const inFlight = this.inFlightProjectRegistrations.get(key);
     if (inFlight) return inFlight;
 
-    const registration = this.performProjectRegistration(identity, validatedSelector);
+    const registration = this.performProjectRegistration(validatedIdentity, validatedSelector);
     this.inFlightProjectRegistrations.set(key, registration);
     try {
       const result = await registration;
@@ -415,7 +419,7 @@ export class EngramRestClient {
         return projectRegistrationFailure(parsed.code, parsed.message, parsed.upgradeAction, response.status);
       }
 
-   const canonical = readCanonicalProject(payload, identity.projectIdentityV3 !== undefined);
+      const canonical = readCanonicalProject(payload, identity.projectIdentityV3);
       if (!canonical) {
         this.availability.recordFailure();
         return projectRegistrationFailure(
@@ -949,20 +953,76 @@ function projectDescriptorFailure(): ProjectRegistrationFailure {
  );
 }
 
-function readCanonicalProject(payload: unknown, v3 = false): string {
-  if (!payload || typeof payload !== 'object') return '';
- let value: unknown;
- if (v3) {
-  if (!('project_resolution_v3' in payload)) return '';
-  const resolution = payload.project_resolution_v3;
-  if (!resolution || typeof resolution !== 'object' || !('project_key' in resolution)) return '';
-  value = resolution.project_key;
- } else {
-  if (!('canonical_project' in payload)) return '';
-  value = payload.canonical_project;
- }
+const V3_DESCRIPTOR_FIELDS: Record<string, true> = {
+  version: true,
+  anchor_project_id: true,
+  name: true,
+  scope: true,
+  normalized_git_remotes: true,
+  legacy_identifiers: true,
+  client_instance_id: true,
+};
+const V3_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+function validateProjectDescriptorV3(descriptor: unknown): ProjectIdentityV3 | null {
   try {
-    return validateCanonicalProjectV2(value);
+    if (typeof descriptor !== 'object' || descriptor === null || Array.isArray(descriptor)) return null;
+    const keys = Object.keys(descriptor);
+    if (keys.length !== 7 || keys.some((key) => !Object.hasOwn(V3_DESCRIPTOR_FIELDS, key))) return null;
+    if (
+      !('version' in descriptor) ||
+      !('anchor_project_id' in descriptor) ||
+      !('name' in descriptor) ||
+      !('scope' in descriptor) ||
+      !('normalized_git_remotes' in descriptor) ||
+      !('legacy_identifiers' in descriptor) ||
+      !('client_instance_id' in descriptor)
+    ) return null;
+    return buildProjectIdentityV3({
+      anchor: {
+        version: descriptor.version,
+        project_id: descriptor.anchor_project_id,
+        name: descriptor.name,
+        scope: descriptor.scope,
+      },
+      version: descriptor.version,
+      anchor_project_id: descriptor.anchor_project_id,
+      name: descriptor.name,
+      scope: descriptor.scope,
+      normalized_git_remotes: descriptor.normalized_git_remotes,
+      legacy_identifiers: descriptor.legacy_identifiers,
+      client_instance_id: descriptor.client_instance_id,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function readCanonicalProject(payload: unknown, descriptor?: ProjectIdentityV3): string {
+  if (!payload || typeof payload !== 'object') return '';
+  if (descriptor) {
+    if (!Object.hasOwn(payload, 'project_resolution_v3') || !('project_resolution_v3' in payload)) return '';
+    const resolution = payload.project_resolution_v3;
+    if (
+      !resolution ||
+      typeof resolution !== 'object' ||
+      Array.isArray(resolution) ||
+      !('outcome' in resolution) ||
+      !('project_key' in resolution) ||
+      !('resolved_scope' in resolution)
+    ) return '';
+    const { outcome, project_key, resolved_scope } = resolution;
+    if (
+      (outcome !== 'PROJECT_RESOLVED' && outcome !== 'PROJECT_REDIRECTED') ||
+      typeof project_key !== 'string' ||
+      !V3_UUID.test(project_key) ||
+      resolved_scope !== descriptor.scope
+    ) return '';
+    return project_key;
+  }
+  if (!('canonical_project' in payload)) return '';
+  try {
+    return validateCanonicalProjectV2(payload.canonical_project);
   } catch {
     return '';
   }

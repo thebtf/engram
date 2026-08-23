@@ -52,6 +52,23 @@ function writeV3DirectoryAnchor(workspace) {
   }));
 }
 
+function v3Identity(overrides = {}) {
+  return {
+    projectId: '11111111-1111-4111-8111-111111111111',
+    agentId: 'agent-a',
+    projectIdentityV3: {
+      version: 3,
+      anchor_project_id: '11111111-1111-4111-8111-111111111111',
+      name: 'openclaw-fixture',
+      scope: 'directory',
+      normalized_git_remotes: [],
+      legacy_identifiers: [],
+      client_instance_id: 'openclaw-install-1',
+      ...overrides,
+    },
+  };
+}
+
 test('registration sends full v2 metadata first, substitutes canonical, and deduplicates concurrent and late calls', async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
@@ -137,6 +154,7 @@ test('V3 shared registration and context injection send one descriptor with no V
         project_resolution_v3: {
           outcome: 'PROJECT_RESOLVED',
           project_key: '22222222-2222-4222-8222-222222222222',
+          resolved_scope: 'directory',
           correlation: 'openclaw-v3-registration',
         },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -172,6 +190,46 @@ test('V3 shared registration and context injection send one descriptor with no V
   for (const body of requests) {
     assert.equal(Object.hasOwn(body, 'project'), false);
     assert.equal(Object.hasOwn(body, 'project_identity'), false);
+  }
+});
+
+test('V3 registration fails closed on malformed resolution responses', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const malformedResolutions = [
+    {
+      outcome: 'PROJECT_ONBOARDING_REQUIRED',
+      project_key: '22222222-2222-4222-8222-222222222222',
+      resolved_scope: 'directory',
+    },
+    {
+      outcome: 'PROJECT_RESOLVED',
+      project_key: 'p2g_00112233445566778899aabbccddeeff',
+      resolved_scope: 'directory',
+    },
+    {
+      outcome: 'PROJECT_RESOLVED',
+      project_key: '22222222-2222-4222-8222-222222222222',
+      resolved_scope: 'repository',
+    },
+  ];
+  for (const resolution of malformedResolutions) {
+    let requests = 0;
+    globalThis.fetch = async () => {
+      requests++;
+      return new Response(JSON.stringify({ project_resolution_v3: resolution }), { status: 200 });
+    };
+    const result = await new EngramRestClient(clientConfig()).registerAndResolveProject(v3Identity(), 'ignored-v2-selector');
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: 'PROJECT_IDENTITY_UNAVAILABLE',
+        message: 'project identity registration response is malformed',
+        upgradeAction: 'retry_project_identity_registration',
+        httpStatus: 503,
+      },
+    });
+    assert.equal(requests, 1);
   }
 });
 
@@ -215,6 +273,32 @@ test('V3 invalid client instance IDs fail before any request', async (t) => {
     }, clientInstanceId);
     assert.equal(requests, 0, clientInstanceId);
     assert.equal(JSON.stringify(result).includes(clientInstanceId), false, clientInstanceId);
+  }
+});
+
+test('V3 registration rejects client asserted keys and malformed descriptors before fetch', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  for (const identity of [
+    v3Identity({ project_key: '22222222-2222-4222-8222-222222222222' }),
+    v3Identity({ normalized_git_remotes: ['not a canonical remote'] }),
+  ]) {
+    let requests = 0;
+    globalThis.fetch = async () => {
+      requests++;
+      return new Response(JSON.stringify({ canonical_project: 'must-not-run' }), { status: 200 });
+    };
+    const result = await new EngramRestClient(clientConfig()).registerAndResolveProject(identity, 'ignored-v2-selector');
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: 'PROJECT_DESCRIPTOR_INVALID',
+        message: 'project descriptor is invalid',
+        upgradeAction: 'repair_project_descriptor',
+        httpStatus: 400,
+      },
+    });
+    assert.equal(requests, 0);
   }
 });
 
