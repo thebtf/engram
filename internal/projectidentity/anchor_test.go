@@ -96,6 +96,7 @@ func TestNormalizeGitRemoteV3Dispositions(t *testing.T) {
 		{"not a remote", "", RemoteOmittedV3},
 		{"https://fixture-user:fixture-password@git.example.test/Platform/Widget.git", "", RemoteRefusedV3},
 		{"git:secret@GIT.EXAMPLE.TEST:Platform/Widget.git", "", RemoteRefusedV3},
+		{"git:pa:ss@GIT.EXAMPLE.TEST:Platform/Widget.git", "", RemoteRefusedV3},
 	} {
 		normalized, disposition, err := NormalizeGitRemoteV3(test.raw)
 		if err != nil {
@@ -155,8 +156,15 @@ func TestBuildDescriptorV3ValidatesOpaqueEvidence(t *testing.T) {
 		{remotes: []string{"git example.test/Platform/Widget"}, client: "fixture-install"},
 		{remotes: []string{"git.example.test/Platform/Widget.git"}, client: "fixture-install"},
 		{remotes: []string{"git.example.test/Platform/Widget/"}, client: "fixture-install"},
+		{remotes: []string{"git.example.test//Platform/Widget"}, client: "fixture-install"},
 		{legacy: []LegacyIdentifierV3{{Scheme: "unknown_v4", Value: "legacy", Provenance: "operator_import"}}, client: "fixture-install"},
 		{legacy: []LegacyIdentifierV3{{Value: "legacy", Provenance: "operator_import"}}, client: "fixture-install"},
+		{legacy: []LegacyIdentifierV3{{Scheme: "manual_alias", Value: "legacy alias", Provenance: "operator_import"}}, client: "fixture-install"},
+		{legacy: []LegacyIdentifierV3{{Scheme: "manual_alias", Value: "legacy\x00alias", Provenance: "operator_import"}}, client: "fixture-install"},
+		{legacy: []LegacyIdentifierV3{{Scheme: "manual_alias", Value: "fixture-user:fixture-password@git.example.test", Provenance: "operator_import"}}, client: "fixture-install"},
+		{legacy: []LegacyIdentifierV3{{Scheme: "manual_alias", Value: "legacy", Provenance: "operator import"}}, client: "fixture-install"},
+		{legacy: []LegacyIdentifierV3{{Scheme: "manual_alias", Value: "legacy", Provenance: "operator\x00import"}}, client: "fixture-install"},
+		{legacy: []LegacyIdentifierV3{{Scheme: "manual_alias", Value: "legacy", Provenance: "operator:token@source"}}, client: "fixture-install"},
 	} {
 		if _, err := BuildDescriptorV3(anchor, test.remotes, test.legacy, test.client); err == nil {
 			t.Fatal("BuildDescriptorV3 accepted invalid descriptor evidence")

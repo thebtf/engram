@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -199,7 +200,7 @@ func normalizeSCPRemote(value string) (string, RemoteDisposition, bool) {
 		return "", "", false
 	}
 	hostPart, path := value[:colon], value[colon+1:]
-	if credentialEnd := strings.IndexByte(path, ':'); credentialEnd > 0 && strings.Contains(path[:credentialEnd], "@") {
+	if strings.Contains(path, "@") {
 		return "", RemoteRefusedV3, true
 	}
 	if path == "" {
@@ -284,7 +285,7 @@ func BuildDescriptorV3(anchor AnchorV3, remotes []string, legacy []LegacyIdentif
 		}
 	}
 	for _, identifier := range legacy {
-		if !validLegacyIdentifierSchemeV3(identifier.Scheme) || identifier.Value == "" || identifier.Provenance == "" {
+		if !validLegacyIdentifierSchemeV3(identifier.Scheme) || !validDescriptorEvidence(identifier.Value) || !validDescriptorEvidence(string(identifier.Provenance)) {
 			return DescriptorV3{}, errDescriptorInvalidV3
 		}
 	}
@@ -314,12 +315,16 @@ func validLegacyIdentifierSchemeV3(scheme LegacyIdentifierSchemeV3) bool {
 	}
 }
 
+func validDescriptorEvidence(value string) bool {
+	return value != "" && strings.IndexFunc(value, unicode.IsSpace) == -1 && strings.IndexFunc(value, unicode.IsControl) == -1 && !strings.Contains(value, "@") && !strings.Contains(value, "://")
+}
+
 func validNormalizedRemote(remote string) bool {
 	if remote == "" || strings.TrimSpace(remote) != remote || strings.ContainsAny(remote, " \t\r\n@?#\\") || strings.Contains(remote, "://") {
 		return false
 	}
 	host, path, ok := strings.Cut(remote, "/")
-	if !ok || host == "" || path == "" || host != strings.ToLower(host) || strings.HasSuffix(path, ".git") || strings.HasSuffix(path, "/") || strings.Contains(path, "//") {
+	if !ok || host == "" || path == "" || host != strings.ToLower(host) || strings.HasPrefix(path, "/") || strings.HasSuffix(path, ".git") || strings.HasSuffix(path, "/") || strings.Contains(path, "//") {
 		return false
 	}
 	hostname, port, hasPort := strings.Cut(host, ":")
