@@ -201,16 +201,43 @@ test('V3 registration fails closed on malformed resolution responses', async (t)
       outcome: 'PROJECT_ONBOARDING_REQUIRED',
       project_key: '22222222-2222-4222-8222-222222222222',
       resolved_scope: 'directory',
+      correlation: 'openclaw-v3-registration',
     },
     {
       outcome: 'PROJECT_RESOLVED',
       project_key: 'p2g_00112233445566778899aabbccddeeff',
       resolved_scope: 'directory',
+      correlation: 'openclaw-v3-registration',
     },
     {
       outcome: 'PROJECT_RESOLVED',
       project_key: '22222222-2222-4222-8222-222222222222',
       resolved_scope: 'repository',
+      correlation: 'openclaw-v3-registration',
+    },
+    {
+      outcome: 'PROJECT_RESOLVED',
+      project_key: '22222222-2222-4222-8222-222222222222',
+      resolved_scope: 'directory',
+    },
+    {
+      outcome: 'PROJECT_RESOLVED',
+      project_key: '22222222-2222-4222-8222-222222222222',
+      resolved_scope: 'directory',
+      correlation: 'openclaw/v3-registration',
+    },
+    {
+      outcome: 'PROJECT_REDIRECTED',
+      project_key: '22222222-2222-4222-8222-222222222222',
+      resolved_scope: 'directory',
+      correlation: 'openclaw-v3-registration',
+    },
+    {
+      outcome: 'PROJECT_REDIRECTED',
+      project_key: '22222222-2222-4222-8222-222222222222',
+      resolved_scope: 'directory',
+      correlation: 'openclaw-v3-registration',
+      redirect_reference: 'redirect/reference',
     },
   ];
   for (const resolution of malformedResolutions) {

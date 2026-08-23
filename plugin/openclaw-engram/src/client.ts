@@ -964,6 +964,13 @@ const V3_DESCRIPTOR_FIELDS: Record<string, true> = {
 };
 const V3_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
+function isValidOpaqueReferenceV3(value: unknown): value is string {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    Array.from(value).length <= 256 &&
+    !/[\p{White_Space}\p{Cc}\/\\@]/u.test(value);
+}
+
 function validateProjectDescriptorV3(descriptor: unknown): ProjectIdentityV3 | null {
   try {
     if (typeof descriptor !== 'object' || descriptor === null || Array.isArray(descriptor)) return null;
@@ -1012,11 +1019,15 @@ function readCanonicalProject(payload: unknown, descriptor?: ProjectIdentityV3):
       !('resolved_scope' in resolution)
     ) return '';
     const { outcome, project_key, resolved_scope } = resolution;
+    const correlation = 'correlation' in resolution ? resolution.correlation : undefined;
+    const redirectReference = 'redirect_reference' in resolution ? resolution.redirect_reference : undefined;
     if (
       (outcome !== 'PROJECT_RESOLVED' && outcome !== 'PROJECT_REDIRECTED') ||
       typeof project_key !== 'string' ||
       !V3_UUID.test(project_key) ||
-      resolved_scope !== descriptor.scope
+      resolved_scope !== descriptor.scope ||
+      !isValidOpaqueReferenceV3(correlation) ||
+      (outcome === 'PROJECT_REDIRECTED' && !isValidOpaqueReferenceV3(redirectReference))
     ) return '';
     return project_key;
   }
