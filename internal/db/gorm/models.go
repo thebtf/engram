@@ -211,6 +211,26 @@ type ProjectResolutionAttempt struct {
 
 func (ProjectResolutionAttempt) TableName() string { return "project_resolution_attempts" }
 
+// ProjectIdentityComparison is immutable, redacted V3-versus-V2 telemetry.
+// It deliberately has no project, canonical-key, descriptor, remote, path, or
+// credential field because comparison must never become identity authority.
+type ProjectIdentityComparison struct {
+	ComparisonID        string    `gorm:"column:comparison_id;type:uuid;primaryKey;default:gen_random_uuid()"`
+	IdempotencyKey      string    `gorm:"column:idempotency_key;type:text;not null;uniqueIndex"`
+	Correlation         string    `gorm:"column:correlation;type:text;not null"`
+	V3Outcome           string    `gorm:"column:v3_outcome;type:text;not null"`
+	LegacyOutcome       string    `gorm:"column:legacy_outcome;type:text;not null"`
+	Classification      string    `gorm:"column:classification;type:text;not null"`
+	ClientInstanceID    string    `gorm:"column:client_instance_id;type:text;not null"`
+	Transport           string    `gorm:"column:transport;type:text;not null"`
+	Scope               string    `gorm:"column:scope;type:text;not null"`
+	Freshness           string    `gorm:"column:freshness;type:text;not null"`
+	EvidenceFingerprint string    `gorm:"column:evidence_fingerprint;type:text;not null"`
+	CreatedAt           time.Time `gorm:"column:created_at;type:timestamptz;not null;default:now()"`
+}
+
+func (ProjectIdentityComparison) TableName() string { return "project_identity_comparisons" }
+
 // APIToken represents a client API token for agent authentication.
 // Tokens are stored as bcrypt hashes with a prefix for fast lookup.
 type APIToken struct {
