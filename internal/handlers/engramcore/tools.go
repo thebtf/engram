@@ -83,18 +83,21 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("gRPC Initialize: %w", err)}
 	}
 	if v3Enabled {
-		if err := validateV3Resolution(resp.GetProjectResolutionV3(), resp.GetCanonicalProject()); err != nil {
+		if err := validateV3Resolution(resp.GetProjectResolutionV3(), resp.GetCanonicalProject(), v3Identity); err != nil {
 			return nil, &module.RequiredProxyToolsError{Cause: err}
 		}
 	}
 
-	tools := make([]module.ToolDef, len(resp.Tools))
-	for i, t := range resp.Tools {
-		tools[i] = module.ToolDef{
+	tools := make([]module.ToolDef, 0, len(resp.Tools))
+	for _, t := range resp.Tools {
+		if t.GetName() == projectIdentityV3RegistrationTool {
+			continue
+		}
+		tools = append(tools, module.ToolDef{
 			Name:        t.Name,
 			Description: t.Description,
 			InputSchema: t.InputSchemaJson,
-		}
+		})
 	}
 	return tools, nil
 }
@@ -146,10 +149,11 @@ func (m *Module) HandleTool(ctx context.Context, p muxcore.ProjectContext, name 
 	if err != nil {
 		return nil, v3ProxyError(err)
 	}
-	if response == nil || response.GetProjectResolutionV3() == nil {
-		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+	resolution := response.GetProjectResolutionV3()
+	if err := validateV3Resolution(resolution, resolution.GetProjectKey(), identity); err != nil {
+		return nil, err
 	}
-	result, err := protojson.Marshal(response.GetProjectResolutionV3())
+	result, err := protojson.Marshal(resolution)
 	if err != nil {
 		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
 	}
@@ -233,7 +237,7 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 		return nil, fmt.Errorf("gRPC CallTool: %w", err)
 	}
 	if v3Enabled {
-		if err := validateV3Resolution(resp.GetProjectResolutionV3(), resp.GetCanonicalProject()); err != nil {
+		if err := validateV3Resolution(resp.GetProjectResolutionV3(), resp.GetCanonicalProject(), v3Identity); err != nil {
 			return nil, err
 		}
 	}
@@ -301,10 +305,29 @@ func v3ProxyError(err error) error {
 	return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
 }
 
-// validateV3Resolution admits only a complete, server-issued canonical scope.
-// The daemon does not cache or reuse the result as a client authority.
-func validateV3Resolution(resolution *pb.ProjectResolutionResultV3, canonicalProject string) error {
-	if resolution == nil || (resolution.GetOutcome() != pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED && resolution.GetOutcome() != pb.ProjectResolutionOutcomeV3_PROJECT_REDIRECTED) || resolution.GetProjectKey() == "" || resolution.GetResolvedScope() == "" || canonicalProject != resolution.GetProjectKey() {
+// validateV3Resolution admits only a complete, server-issued canonical scope
+// consistent with the submitted descriptor. The daemon does not cache or reuse
+// the result as client authority.
+func validateV3Resolution(resolution *pb.ProjectResolutionResultV3, canonicalProject string, identity *pb.ProjectIdentityV3) error {
+	if resolution == nil || identity == nil || canonicalProject != resolution.GetProjectKey() || identity.GetScope() != resolution.GetResolvedScope() {
+		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+	}
+	projectKey, err := projectidentity.NewProjectKeyV3(resolution.GetProjectKey())
+	if err != nil {
+		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+	}
+	correlation, err := projectidentity.NewCorrelationV3(resolution.GetCorrelation())
+	if err != nil {
+		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+	}
+	if _, err := projectidentity.NewSuccessResultV3(
+		projectidentity.ResolveExistingIntentV3,
+		projectidentity.ResolutionOutcomeV3(resolution.GetOutcome().String()),
+		projectKey,
+		projectidentity.ResolvedScopeV3(resolution.GetResolvedScope()),
+		projectidentity.RedirectReferenceV3(resolution.GetRedirectReference()),
+		correlation,
+	); err != nil {
 		return &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
 	}
 	return nil

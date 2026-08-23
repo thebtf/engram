@@ -255,13 +255,34 @@ func TestV2DoesNotExposeRegistrationOrFallBackToV2(t *testing.T) {
 	}
 }
 
-func TestV2ReservedRegistrationNameDoesNotReachProxy(t *testing.T) {
-	srv := &mockEngramServer{}
+func TestV2DynamicRegistrationToolIsHiddenAndNeverProxied(t *testing.T) {
+	srv := &mockEngramServer{initResp: &pb.InitializeResponse{Tools: []*pb.ToolDefinition{
+		{Name: projectIdentityV3RegistrationTool},
+		{Name: "recall"},
+	}}}
 	grpcAddr := startMockGRPC(t, srv)
 	dispatcher, mod, project := buildContractDispatcher(t, grpcAddr)
 	mod.cache.ForceCacheEntry(project, "cached-v2-selector")
 
-	response, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcCallReq(1, projectIdentityV3RegistrationTool))
+	listed, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcListReq(1))
+	if err != nil {
+		t.Fatalf("V2 tools/list: %v", err)
+	}
+	var tools struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(listed, &tools); err != nil {
+		t.Fatalf("unmarshal V2 tools/list: %v", err)
+	}
+	if len(tools.Result.Tools) != 1 || tools.Result.Tools[0].Name != "recall" {
+		t.Fatalf("V2 tools/list=%s, want only backend recall", listed)
+	}
+
+	response, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcCallReq(2, projectIdentityV3RegistrationTool))
 	if err != nil {
 		t.Fatalf("reserved V2 tools/call: %v", err)
 	}
@@ -277,6 +298,151 @@ func TestV2ReservedRegistrationNameDoesNotReachProxy(t *testing.T) {
 	if !mod.cache.HasEntry(project.ID) {
 		t.Fatal("reserved V2 tool mutated the compatibility selector cache")
 	}
+}
+
+func TestV3RegistrationResponseValidationFailsClosed(t *testing.T) {
+	projectKey := daemonV3CanonicalProject
+	repositoryScope := "repository"
+	directoryScope := "directory"
+	tests := []struct {
+		name       string
+		resolution *pb.ProjectResolutionResultV3
+		mustHide   []string
+	}{
+		{name: "nil resolution"},
+		{
+			name: "refusal with authority",
+			resolution: &pb.ProjectResolutionResultV3{
+				Outcome:       pb.ProjectResolutionOutcomeV3_PROJECT_SCOPE_MISMATCH,
+				Correlation:   "refusal-correlation",
+				ProjectKey:    &projectKey,
+				ResolvedScope: &repositoryScope,
+			},
+			mustHide: []string{projectKey},
+		},
+		{
+			name: "invalid canonical key",
+			resolution: &pb.ProjectResolutionResultV3{
+				Outcome:       pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED,
+				Correlation:   "invalid-key-correlation",
+				ProjectKey:    stringPtr("private-client-asserted-key"),
+				ResolvedScope: &repositoryScope,
+			},
+			mustHide: []string{"private-client-asserted-key"},
+		},
+		{
+			name: "descriptor scope mismatch",
+			resolution: &pb.ProjectResolutionResultV3{
+				Outcome:       pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED,
+				Correlation:   "scope-mismatch-correlation",
+				ProjectKey:    &projectKey,
+				ResolvedScope: &directoryScope,
+			},
+			mustHide: []string{projectKey},
+		},
+		{
+			name: "unsafe correlation",
+			resolution: &pb.ProjectResolutionResultV3{
+				Outcome:       pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED,
+				Correlation:   "private/path/correlation",
+				ProjectKey:    &projectKey,
+				ResolvedScope: &repositoryScope,
+			},
+			mustHide: []string{"private/path/correlation", projectKey},
+		},
+		{
+			name: "resolved outcome with redirect reference",
+			resolution: &pb.ProjectResolutionResultV3{
+				Outcome:           pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED,
+				Correlation:       "resolved-redirect-correlation",
+				ProjectKey:        &projectKey,
+				ResolvedScope:     &repositoryScope,
+				RedirectReference: stringPtr("redirect-audit-17"),
+			},
+			mustHide: []string{"redirect-audit-17", projectKey},
+		},
+		{
+			name: "redirected outcome without reference",
+			resolution: &pb.ProjectResolutionResultV3{
+				Outcome:       pb.ProjectResolutionOutcomeV3_PROJECT_REDIRECTED,
+				Correlation:   "redirect-correlation",
+				ProjectKey:    &projectKey,
+				ResolvedScope: &repositoryScope,
+			},
+			mustHide: []string{projectKey},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := &mockEngramServer{registerResp: &pb.RegisterProjectIdentityV3Response{ProjectResolutionV3: test.resolution}}
+			grpcAddr := startMockGRPC(t, srv)
+			dispatcher, mod, project := buildV3ContractDispatcher(t, grpcAddr)
+			project.ID = "raw-mux-project-must-not-be-forwarded"
+			project.Cwd = daemonV3Repository(t)
+			mod.cache.ForceCacheEntry(project, "raw-slug-must-not-survive-invalid-registration")
+
+			response, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcCallReq(1, projectIdentityV3RegistrationTool))
+			if err != nil {
+				t.Fatalf("registration: %v", err)
+			}
+			if !strings.Contains(string(response), `"isError":true`) || !strings.Contains(string(response), "PROJECT_RESOLUTION_UNAVAILABLE") {
+				t.Fatalf("registration response=%s, want safe typed error", response)
+			}
+			for _, private := range append(test.mustHide, project.ID, project.Cwd) {
+				if strings.Contains(string(response), private) {
+					t.Fatalf("invalid registration leaked %q: %s", private, response)
+				}
+			}
+			if mod.cache.HasEntry(project.ID) {
+				t.Fatal("invalid registration retained a compatibility cache entry")
+			}
+		})
+	}
+}
+
+func TestV3RegistrationValidResponseSerializesResolution(t *testing.T) {
+	projectKey := daemonV3CanonicalProject
+	repositoryScope := "repository"
+	for _, test := range []struct {
+		name       string
+		resolution *pb.ProjectResolutionResultV3
+		outcome    string
+	}{
+		{name: "resolved", resolution: resolvedV3Response(), outcome: "PROJECT_RESOLVED"},
+		{
+			name: "redirected",
+			resolution: &pb.ProjectResolutionResultV3{
+				Outcome:           pb.ProjectResolutionOutcomeV3_PROJECT_REDIRECTED,
+				Correlation:       "redirected-correlation",
+				ProjectKey:        &projectKey,
+				ResolvedScope:     &repositoryScope,
+				RedirectReference: stringPtr("redirect-audit-17"),
+			},
+			outcome: "PROJECT_REDIRECTED",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			srv := &mockEngramServer{registerResp: &pb.RegisterProjectIdentityV3Response{ProjectResolutionV3: test.resolution}}
+			grpcAddr := startMockGRPC(t, srv)
+			dispatcher, mod, project := buildV3ContractDispatcher(t, grpcAddr)
+			project.Cwd = daemonV3Repository(t)
+			response, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcCallReq(1, projectIdentityV3RegistrationTool))
+			if err != nil {
+				t.Fatalf("registration: %v", err)
+			}
+			if !strings.Contains(string(response), `"isError":false`) || !strings.Contains(string(response), test.outcome) {
+				t.Fatalf("registration response=%s, want %s success", response, test.outcome)
+			}
+			if mod.cache.HasEntry(project.ID) {
+				t.Fatal("valid V3 registration populated a compatibility cache entry")
+			}
+		})
+	}
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func assertOnlyRegistrationTool(t *testing.T, response []byte) {
