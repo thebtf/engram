@@ -19,6 +19,7 @@ const corpus = JSON.parse(fs.readFileSync(vectorsPath, 'utf8')) as {
       descriptor?: Record<string, unknown> | null;
       remote_observations?: Array<Record<string, unknown>>;
     };
+    expected: { outcome: string };
   }>;
 };
 
@@ -27,11 +28,15 @@ const helpers = [
   'discoverProjectAnchorV3',
   'normalizeGitRemoteV3',
   'buildProjectIdentityV3',
-];
+] as const;
 
 function descriptorInput(anchor: Record<string, unknown>, descriptor: Record<string, unknown>) {
   return {
     anchor,
+    version: descriptor.version,
+    anchor_project_id: descriptor.anchor_project_id,
+    name: descriptor.name,
+    scope: descriptor.scope,
     normalized_git_remotes: descriptor.normalized_git_remotes,
     legacy_identifiers: descriptor.legacy_identifiers,
     client_instance_id: descriptor.client_instance_id,
@@ -55,9 +60,7 @@ test('OpenClaw V3 descriptor helpers consume the frozen shared vectors', () => {
     const descriptor = vector.input.descriptor;
     const remotes = vector.input.remote_observations ?? [];
     if (anchor) {
-      const invalidAnchor = anchor.version !== 3 || typeof anchor.project_id !== 'string' ||
-        typeof anchor.name !== 'string' || !['repository', 'directory'].includes(anchor.scope as string) ||
-        Object.keys(anchor).some((key) => !['version', 'project_id', 'name', 'scope'].includes(key));
+      const invalidAnchor = vector.expected.outcome === 'PROJECT_ANCHOR_INVALID';
       if (invalidAnchor) {
         assert.throws(() => v3.parseProjectAnchorV3(anchor), /PROJECT_ANCHOR_INVALID/, vector.id);
       } else {
@@ -78,10 +81,12 @@ test('OpenClaw V3 descriptor helpers consume the frozen shared vectors', () => {
 
     if (!descriptor || !anchor || anchor.version !== 3) continue;
     const hasClientKey = Object.hasOwn(descriptor, 'project_key');
+    const unsupportedVersion = descriptor.version !== 3;
     const missingClientID = typeof descriptor.client_instance_id !== 'string' || descriptor.client_instance_id === '';
     const mismatchedAnchor = descriptor.name !== anchor.name || descriptor.scope !== anchor.scope ||
       descriptor.anchor_project_id !== anchor.project_id;
-    if (hasClientKey || missingClientID || mismatchedAnchor) {
+    const expectedDescriptorRefusal = vector.expected.outcome === 'PROJECT_DESCRIPTOR_INVALID';
+    if (hasClientKey || unsupportedVersion || missingClientID || mismatchedAnchor || expectedDescriptorRefusal) {
       assert.throws(() => v3.buildProjectIdentityV3(descriptorInput(anchor, descriptor)), /PROJECT_(?:KEY_CLIENT_ASSERTION_FORBIDDEN|DESCRIPTOR_INVALID|SCOPE_MISMATCH)/, vector.id);
     } else {
       assert.deepEqual(v3.buildProjectIdentityV3(descriptorInput(anchor, descriptor)), descriptor, vector.id);
@@ -97,4 +102,35 @@ test('OpenClaw V3 directory discovery never searches upward from the selected ro
   t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
 
   assert.equal(v3.discoverProjectAnchorV3(selectedRoot), null);
+});
+
+test('OpenClaw V3 rejects credential-shaped SCP remotes without retaining input', () => {
+  assert.deepEqual(
+    v3.normalizeGitRemoteV3('git:pa:ss@GIT.EXAMPLE.TEST:Platform/Widget.git'),
+    { disposition: 'refused' },
+  );
+});
+
+test('OpenClaw V3 rejects non-canonical descriptor evidence', () => {
+  const anchor = corpus.vectors[0].input.anchor!;
+  const base = {
+    anchor,
+    normalized_git_remotes: [],
+    legacy_identifiers: [],
+    client_instance_id: 'fixture-install-edge',
+  };
+
+  assert.throws(
+    () => v3.buildProjectIdentityV3({ ...base, normalized_git_remotes: ['git.example.test//Platform/Widget'] }),
+    /PROJECT_DESCRIPTOR_INVALID/,
+  );
+  for (const value of ['legacy widget alias', 'legacy-widget\u0007alias']) {
+    assert.throws(
+      () => v3.buildProjectIdentityV3({
+        ...base,
+        legacy_identifiers: [{ scheme: 'manual_alias', value, provenance: 'operator_import' }],
+      }),
+      /PROJECT_DESCRIPTOR_INVALID/,
+    );
+  }
 });
