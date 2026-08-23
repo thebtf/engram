@@ -3,15 +3,22 @@ package grpcserver
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/thebtf/engram/internal/auth"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/projectidentity"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 	gormlib "gorm.io/gorm"
 )
 
@@ -274,5 +281,245 @@ func assertV3Refusal(t *testing.T, err error, outcome projectidentity.Resolution
 	}
 	if detail.Metadata["project_key"] != "" || detail.Metadata["raw_project"] != "" || detail.Metadata["candidate"] != "" {
 		t.Fatalf("refusal detail leaked authority: %#v", detail)
+	}
+}
+
+type grpcRegistrationStoreV3 struct {
+	binding           projectidentity.AnchorBindingV3
+	registrationCalls int
+	creates           int
+	attempts          []projectidentity.ResolutionAttemptV3
+}
+
+func (store *grpcRegistrationStoreV3) LookupAnchorBindingV3(_ context.Context, _ projectidentity.VerifiedAuthorizationV3, _ string) (projectidentity.AnchorBindingV3, error) {
+	return store.binding, nil
+}
+
+func (store *grpcRegistrationStoreV3) RegisterAnchorBindingAndRecordAttemptV3(_ context.Context, registration projectidentity.AnchorRegistrationV3, buildAttempt projectidentity.RegistrationAttemptBuilderV3) error {
+	store.registrationCalls++
+	previous := store.binding
+	if store.binding.State == projectidentity.AnchorBindingMissingV3 {
+		store.creates++
+		store.binding = projectidentity.AnchorBindingV3{
+			State:      projectidentity.AnchorBindingActiveV3,
+			ProjectKey: grpcV3ProjectKey,
+			Scope:      string(registration.Scope()),
+		}
+	}
+	attempt, err := buildAttempt(store.binding)
+	if err != nil {
+		store.binding = previous
+		store.creates--
+		return err
+	}
+	store.attempts = append(store.attempts, attempt)
+	return nil
+}
+
+func (store *grpcRegistrationStoreV3) LookupAdministrativeTargetV3(_ context.Context, _ projectidentity.VerifiedAuthorizationV3) (projectidentity.AnchorBindingV3, error) {
+	return projectidentity.AnchorBindingV3{}, nil
+}
+
+func (store *grpcRegistrationStoreV3) RecordResolutionAttemptV3(_ context.Context, attempt projectidentity.ResolutionAttemptV3) error {
+	store.attempts = append(store.attempts, attempt)
+	return nil
+}
+
+func grpcRegistrationResolverV3(t *testing.T, store *grpcRegistrationStoreV3) func(context.Context, *gormlib.DB, projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error) {
+	t.Helper()
+	return func(ctx context.Context, _ *gormlib.DB, request projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error) {
+		_, ok := auth.IdentityFrom(ctx)
+		if !ok {
+			t.Fatal("registration resolver received no authenticated identity")
+		}
+		resolver := projectidentity.NewResolverV3(store, grpcV3AuthorizationVerifier{authorization: request.RegistrationAuthorization})
+		resolved, err := resolver.ResolveProjectV3(ctx, request)
+		return resolved.Resolution(), err
+	}
+}
+
+func newRegistrationV3Client(t *testing.T, validator *auth.Validator, resolver func(context.Context, *gormlib.DB, projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error)) (pb.EngramServiceClient, func()) {
+	t.Helper()
+	listener := bufconn.Listen(bufSize)
+	server, internal := New(nil, validator)
+	internal.identityResolverV3 = resolver
+	go func() { _ = server.Serve(listener) }()
+
+	conn, err := grpc.NewClient(
+		"passthrough:///registration-v3",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial registration gRPC server: %v", err)
+	}
+	return pb.NewEngramServiceClient(conn), func() {
+		_ = conn.Close()
+		server.Stop()
+		_ = listener.Close()
+	}
+}
+
+func bearerOutgoingContext(token string) context.Context {
+	if token == "" {
+		return context.Background()
+	}
+	return metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
+}
+
+func TestRegisterProjectIdentityV3ProtoIsDescriptorOnly(t *testing.T) {
+	request := (&pb.RegisterProjectIdentityV3Request{}).ProtoReflect().Descriptor()
+	if request.Fields().Len() != 1 {
+		t.Fatalf("registration request fields=%d, want 1", request.Fields().Len())
+	}
+	field := request.Fields().ByName("project_identity_v3")
+	if field == nil || field.Number() != 1 || field.Message().FullName() != "engram.v1.ProjectIdentityV3" {
+		t.Fatalf("registration request descriptor=%v", request)
+	}
+	response := (&pb.RegisterProjectIdentityV3Response{}).ProtoReflect().Descriptor()
+	if response.Fields().Len() != 1 {
+		t.Fatalf("registration response fields=%d, want 1", response.Fields().Len())
+	}
+	field = response.Fields().ByName("project_resolution_v3")
+	if field == nil || field.Number() != 1 || field.Message().FullName() != "engram.v1.ProjectResolutionResultV3" {
+		t.Fatalf("registration response descriptor=%v", response)
+	}
+	method := request.ParentFile().Services().ByName("EngramService").Methods().ByName("RegisterProjectIdentityV3")
+	if method == nil || method.Input().FullName() != request.FullName() || method.Output().FullName() != response.FullName() {
+		t.Fatalf("registration method descriptor=%v", method)
+	}
+}
+
+func TestRegisterProjectIdentityV3MasterRegistersOnce(t *testing.T) {
+	store := &grpcRegistrationStoreV3{binding: projectidentity.AnchorBindingV3{State: projectidentity.AnchorBindingMissingV3}}
+	client, stop := newRegistrationV3Client(t, auth.NewValidator("master-secret", &stubReader{}), grpcRegistrationResolverV3(t, store))
+	defer stop()
+
+	var responses []*pb.RegisterProjectIdentityV3Response
+	for range 2 {
+		response, err := client.RegisterProjectIdentityV3(bearerOutgoingContext("master-secret"), &pb.RegisterProjectIdentityV3Request{ProjectIdentityV3: grpcV3Identity()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		responses = append(responses, response)
+	}
+	for _, response := range responses {
+		resolution := response.GetProjectResolutionV3()
+		if resolution.GetOutcome() != pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED || resolution.GetProjectKey() != grpcV3ProjectKey || resolution.GetCorrelation() == "" {
+			t.Fatalf("registration response=%#v", response)
+		}
+	}
+	if store.registrationCalls != 2 || store.creates != 1 || len(store.attempts) != 2 {
+		t.Fatalf("registration store=%#v", store)
+	}
+	for _, attempt := range store.attempts {
+		if !attempt.Valid() || attempt.Intent() != projectidentity.RegisterAnchorIntentV3 || attempt.Outcome() != projectidentity.ProjectResolvedOutcomeV3 || attempt.DescriptorVersion() != 3 || attempt.Correlation() == "" {
+			t.Fatalf("redacted registration attempt=%#v", attempt)
+		}
+	}
+}
+
+func TestRegisterProjectIdentityV3RejectsUnauthorizedAdmissions(t *testing.T) {
+	readOnlyToken := "engram_aaaa111100000000000000000000beef"
+	readOnlyValidator := auth.NewValidator("master-secret", &stubReader{rows: map[string][]gormdb.APIToken{
+		"aaaa1111": {makeKeycardRow(t, "read-only", readOnlyToken, "read-only")},
+	}})
+	for _, test := range []struct {
+		name      string
+		validator *auth.Validator
+		token     string
+		code      codes.Code
+	}{
+		{name: "missing bearer", validator: auth.NewValidator("master-secret", &stubReader{}), code: codes.Unauthenticated},
+		{name: "invalid bearer", validator: auth.NewValidator("master-secret", &stubReader{}), token: "wrong-secret", code: codes.Unauthenticated},
+		{name: "auth disabled", validator: nil, code: codes.PermissionDenied},
+		{name: "read-only client", validator: readOnlyValidator, token: readOnlyToken, code: codes.PermissionDenied},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &grpcRegistrationStoreV3{binding: projectidentity.AnchorBindingV3{State: projectidentity.AnchorBindingMissingV3}}
+			client, stop := newRegistrationV3Client(t, test.validator, grpcRegistrationResolverV3(t, store))
+			defer stop()
+
+			response, err := client.RegisterProjectIdentityV3(bearerOutgoingContext(test.token), &pb.RegisterProjectIdentityV3Request{ProjectIdentityV3: grpcV3Identity()})
+			if response != nil || status.Code(err) != test.code {
+				t.Fatalf("response=%#v status=%v error=%v", response, status.Code(err), err)
+			}
+			if store.registrationCalls != 0 || store.creates != 0 || len(store.attempts) != 0 {
+				t.Fatalf("unauthorized registration wrote state: %#v", store)
+			}
+		})
+	}
+}
+
+func TestRegisterProjectIdentityV3RejectsSessionIdentity(t *testing.T) {
+	store := &grpcRegistrationStoreV3{binding: projectidentity.AnchorBindingV3{State: projectidentity.AnchorBindingMissingV3}}
+	srv := &Server{identityResolverV3: grpcRegistrationResolverV3(t, store)}
+	response, err := srv.RegisterProjectIdentityV3(auth.WithIdentity(context.Background(), auth.Session("admin")), &pb.RegisterProjectIdentityV3Request{ProjectIdentityV3: grpcV3Identity()})
+	if response != nil || status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("response=%#v status=%v error=%v", response, status.Code(err), err)
+	}
+	if store.registrationCalls != 0 || store.creates != 0 || len(store.attempts) != 0 {
+		t.Fatalf("session identity wrote state: %#v", store)
+	}
+}
+
+func TestRegisterProjectIdentityV3RefusesInvalidOrExtraDescriptorWithoutBinding(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		identity     func() *pb.ProjectIdentityV3
+		attemptCount int
+	}{
+		{
+			name: "malformed descriptor",
+			identity: func() *pb.ProjectIdentityV3 {
+				identity := grpcV3Identity()
+				identity.ClientInstanceId = "private client instance"
+				return identity
+			},
+			attemptCount: 1,
+		},
+		{
+			name: "unknown descriptor field",
+			identity: func() *pb.ProjectIdentityV3 {
+				identity := grpcV3Identity()
+				identity.ProtoReflect().SetUnknown([]byte{0x98, 0x06, 0x01})
+				return identity
+			},
+			attemptCount: 0,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &grpcRegistrationStoreV3{binding: projectidentity.AnchorBindingV3{State: projectidentity.AnchorBindingMissingV3}}
+			client, stop := newRegistrationV3Client(t, auth.NewValidator("master-secret", &stubReader{}), grpcRegistrationResolverV3(t, store))
+			defer stop()
+
+			response, err := client.RegisterProjectIdentityV3(bearerOutgoingContext("master-secret"), &pb.RegisterProjectIdentityV3Request{ProjectIdentityV3: test.identity()})
+			if response != nil {
+				t.Fatalf("refusal returned response=%#v", response)
+			}
+			assertV3Refusal(t, err, projectidentity.ProjectDescriptorInvalidOutcomeV3, codes.InvalidArgument)
+			if strings.Contains(err.Error(), "private client instance") || store.registrationCalls != 0 || store.creates != 0 || len(store.attempts) != test.attemptCount {
+				t.Fatalf("refusal leaked or bound state: error=%v store=%#v", err, store)
+			}
+		})
+	}
+}
+
+func TestInitializeAndCallToolV3NeverRegister(t *testing.T) {
+	steps := []string{}
+	intents := []projectidentity.ResolutionIntentV3{}
+	srv := &Server{handler: identityOrderHandler{steps: &steps}}
+	srv.identityResolverV3 = func(_ context.Context, _ *gormlib.DB, request projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error) {
+		intents = append(intents, request.Intent)
+		return grpcV3Result(t, request.Intent, projectidentity.ProjectResolvedOutcomeV3)
+	}
+	if _, err := srv.Initialize(context.Background(), &pb.InitializeRequest{ProjectIdentityV3: grpcV3Identity()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.CallTool(context.Background(), &pb.CallToolRequest{ToolName: "recall", ProjectIdentityV3: grpcV3Identity()}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(intents, []projectidentity.ResolutionIntentV3{projectidentity.ResolveExistingIntentV3, projectidentity.ResolveExistingIntentV3}) {
+		t.Fatalf("normal V3 paths selected intents=%v", intents)
 	}
 }

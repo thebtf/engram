@@ -55,6 +55,10 @@ service EngramService {
   // index_session_id does not match the negotiated session) and returns a
   // receipt with counts of embedded and deleted rows.
   rpc CodeIndexUpload(stream CodeChunkUpload) returns (CodeIndexUploadReceipt);
+
+  // RegisterProjectIdentityV3 explicitly establishes a V3 anchor binding.
+  // Authentication and registration authority are derived solely by the server.
+  rpc RegisterProjectIdentityV3(RegisterProjectIdentityV3Request) returns (RegisterProjectIdentityV3Response);
 }
 
 // ---- SyncProjectState messages ----------------------------------------
@@ -442,4 +446,15 @@ message ProjectResolutionResultV3 {
   optional string project_key = 3;
   optional string resolved_scope = 4;
   optional string redirect_reference = 5;
+}
+
+// RegisterProjectIdentityV3Request is deliberately descriptor-only. It carries
+// neither project authority nor registration authorization from the client.
+message RegisterProjectIdentityV3Request {
+  ProjectIdentityV3 project_identity_v3 = 1;
+}
+
+// RegisterProjectIdentityV3Response returns the existing typed V3 resolution result.
+message RegisterProjectIdentityV3Response {
+  ProjectResolutionResultV3 project_resolution_v3 = 1;
 }

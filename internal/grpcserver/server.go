@@ -132,6 +132,34 @@ func (s *Server) Ping(_ context.Context, _ *pb.PingRequest) (*pb.PingResponse, e
 	return &pb.PingResponse{Status: "ok"}, nil
 }
 
+// RegisterProjectIdentityV3 explicitly establishes a V3 anchor binding for a
+// server-authenticated master administrator. Request credentials, canonical
+// project authority, and registration authorization are never client inputs.
+func (s *Server) RegisterProjectIdentityV3(ctx context.Context, req *pb.RegisterProjectIdentityV3Request) (*pb.RegisterProjectIdentityV3Response, error) {
+	identity, ok := auth.IdentityFrom(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "project identity authentication required")
+	}
+	if identity.Source == auth.SourceAuthDisabled {
+		return nil, status.Error(codes.PermissionDenied, "project identity registration unavailable when authentication is disabled")
+	}
+	if identity.Source != auth.SourceMaster || identity.Role != auth.RoleAdmin {
+		return nil, status.Error(codes.PermissionDenied, "project identity registration requires master admin identity")
+	}
+	if req == nil || len(req.ProtoReflect().GetUnknown()) != 0 {
+		return nil, v3RegistrationDescriptorInvalid()
+	}
+	projectIdentity := req.GetProjectIdentityV3()
+	if projectIdentity == nil || len(projectIdentity.ProtoReflect().GetUnknown()) != 0 {
+		return nil, v3RegistrationDescriptorInvalid()
+	}
+	resolution, err := s.resolveProjectIdentityV3(ctx, projectIdentity, projectidentity.RegisterAnchorIntentV3)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.RegisterProjectIdentityV3Response{ProjectResolutionV3: projectIdentityV3Proto(resolution)}, nil
+}
+
 // Initialize returns server info and the complete list of available tools.
 func (s *Server) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb.InitializeResponse, error) {
 	canonicalProject := ""
@@ -263,6 +291,14 @@ func v3AdminTargetUnavailable() error {
 	return projectIdentityV3RefusalStatus(projectidentity.ProjectDescriptorInvalidOutcomeV3, correlation)
 }
 
+func v3RegistrationDescriptorInvalid() error {
+	correlation, err := projectidentity.NewCorrelationV3(uuid.NewString())
+	if err != nil {
+		return status.Error(codes.Unavailable, "project identity resolution unavailable")
+	}
+	return projectIdentityV3RefusalStatus(projectidentity.ProjectDescriptorInvalidOutcomeV3, correlation)
+}
+
 // canonicalizeProjectArgument makes the identity-resolved project authoritative
 // for caller-scoped project fields. V2 keeps its documented target/filter
 // exceptions; V3 replaces every supported filter with server-resolved scope.
@@ -345,15 +381,19 @@ func (verifier grpcV3AuthorizationVerifier) VerifyAuthorizationV3(ctx context.Co
 	if request.Authorization() != verifier.authorization {
 		return projectidentity.AuthorizationVerificationV3{}, nil
 	}
-	if _, ok := auth.IdentityFrom(ctx); !ok {
+	identity, ok := auth.IdentityFrom(ctx)
+	if !ok {
 		return projectidentity.AuthorizationVerificationV3{}, nil
 	}
 	switch request.Intent() {
 	case projectidentity.ResolveExistingIntentV3, projectidentity.ReadFilterIntentV3:
 		return projectidentity.AuthorizationVerificationV3{Authorized: true}, nil
-	default:
-		return projectidentity.AuthorizationVerificationV3{}, nil
+	case projectidentity.RegisterAnchorIntentV3:
+		if identity.Source == auth.SourceMaster && identity.Role == auth.RoleAdmin {
+			return projectidentity.AuthorizationVerificationV3{Authorized: true}, nil
+		}
 	}
+	return projectidentity.AuthorizationVerificationV3{}, nil
 }
 
 func grpcProjectIdentityV3Request(identity *pb.ProjectIdentityV3, intent projectidentity.ResolutionIntentV3) (projectidentity.ResolveProjectRequestV3, error) {
@@ -395,6 +435,8 @@ func grpcProjectIdentityV3Request(identity *pb.ProjectIdentityV3, intent project
 	switch intent {
 	case projectidentity.ResolveExistingIntentV3:
 		request.ResolveExistingAuthorization = authorization
+	case projectidentity.RegisterAnchorIntentV3:
+		request.RegistrationAuthorization = authorization
 	case projectidentity.ReadFilterIntentV3:
 		readFilter, err := projectidentity.NewReadFilterRequirementV3(authorization, correlation)
 		if err != nil {
@@ -416,7 +458,9 @@ func (s *Server) resolveProjectIdentityV3(ctx context.Context, identity *pb.Proj
 	if resolver == nil {
 		resolver = func(ctx context.Context, db *gorm.DB, request projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error) {
 			authorization := request.ResolveExistingAuthorization
-			if request.ReadFilter != nil {
+			if request.RegistrationAuthorization != "" {
+				authorization = request.RegistrationAuthorization
+			} else if request.ReadFilter != nil {
 				authorization = request.ReadFilter.Authorization()
 			}
 			resolved, err := projectidentity.NewResolverV3(&engramgorm.Store{DB: db}, grpcV3AuthorizationVerifier{authorization: authorization}).ResolveProjectV3(ctx, request)
