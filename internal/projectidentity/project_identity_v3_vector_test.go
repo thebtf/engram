@@ -7,13 +7,6 @@ import (
 	"testing"
 )
 
-var (
-	_ = ParseAnchorV3
-	_ = DiscoverAnchorV3
-	_ = NormalizeGitRemoteV3
-	_ = BuildDescriptorV3
-)
-
 type projectIdentityV3Corpus struct {
 	Contract        string `json:"contract"`
 	IdentityVersion int    `json:"identity_version"`
@@ -21,20 +14,100 @@ type projectIdentityV3Corpus struct {
 		Accepted int `json:"accepted"`
 		Refused  int `json:"refused"`
 	} `json:"vector_counts"`
-	Vectors []struct {
-		ID    string `json:"id"`
-		Input struct {
-			Anchor     json.RawMessage `json:"anchor"`
-			Descriptor json.RawMessage `json:"descriptor"`
-			Remotes    []struct {
-				Disposition string `json:"disposition"`
-				Normalized  string `json:"normalized"`
-			} `json:"remote_observations"`
-		} `json:"input"`
-	} `json:"vectors"`
+	Vectors []projectIdentityV3Vector `json:"vectors"`
+}
+
+type projectIdentityV3Vector struct {
+	ID    string `json:"id"`
+	Input struct {
+		Anchor     json.RawMessage `json:"anchor"`
+		Descriptor json.RawMessage `json:"descriptor"`
+		Remotes    []struct {
+			Form        string `json:"form"`
+			Source      string `json:"source"`
+			Normalized  string `json:"normalized"`
+			Disposition string `json:"disposition"`
+		} `json:"remote_observations"`
+	} `json:"input"`
 }
 
 func TestProjectIdentityV3DescriptorSeamUsesFrozenVectors(t *testing.T) {
+	corpus := loadProjectIdentityV3Corpus(t)
+	valid := corpus.vector(t, "remote-https-normalizes")
+
+	anchor, err := ParseAnchorV3(valid.Input.Anchor)
+	if err != nil {
+		t.Fatalf("parse valid anchor: %v", err)
+	}
+	assertProjectIdentityV3JSON(t, valid.ID+" anchor", valid.Input.Anchor, anchor)
+
+	for _, id := range []string{"anchor-unknown-field-is-invalid", "anchor-malformed-project-id-is-invalid"} {
+		vector := corpus.vector(t, id)
+		if _, err := ParseAnchorV3(vector.Input.Anchor); err == nil {
+			t.Fatalf("%s: malformed anchor was accepted", vector.ID)
+		}
+	}
+
+	normalized := valid.Input.Remotes[0]
+	remote, disposition, err := NormalizeGitRemoteV3(normalized.Source)
+	if err != nil {
+		t.Fatalf("%s: normalize remote: %v", valid.ID, err)
+	}
+	if remote != normalized.Normalized || string(disposition) != "normalized" {
+		t.Fatalf("%s: remote = (%q, %q), want (%q, %q)", valid.ID, remote, disposition, normalized.Normalized, "normalized")
+	}
+
+	for _, test := range []struct {
+		vectorID    string
+		raw         string
+		disposition string
+	}{
+		{"remote-local-is-omitted", filepath.Join(t.TempDir(), "local-remote"), "omitted"},
+		{"credential-bearing-remote-is-refused-without-raw-persistence", "https://fixture-user:fixture-password@git.example.test/Platform/Widget.git", "refused"},
+	} {
+		vector := corpus.vector(t, test.vectorID)
+		remote, disposition, err := NormalizeGitRemoteV3(test.raw)
+		if err != nil {
+			t.Fatalf("%s: normalize remote: %v", vector.ID, err)
+		}
+		if remote != "" || string(disposition) != test.disposition {
+			t.Fatalf("%s: remote = (%q, %q), want (%q, %q)", vector.ID, remote, disposition, "", test.disposition)
+		}
+	}
+
+	var expectedDescriptor struct {
+		ClientInstanceID string `json:"client_instance_id"`
+	}
+	if err := json.Unmarshal(valid.Input.Descriptor, &expectedDescriptor); err != nil {
+		t.Fatalf("%s: decode descriptor: %v", valid.ID, err)
+	}
+	if expectedDescriptor.ClientInstanceID == "" {
+		t.Fatalf("%s: fixture has no explicit client instance ID", valid.ID)
+	}
+	descriptor, err := BuildDescriptorV3(anchor, []string{remote}, []LegacyIdentifierV3{}, expectedDescriptor.ClientInstanceID)
+	if err != nil {
+		t.Fatalf("%s: build descriptor: %v", valid.ID, err)
+	}
+	assertProjectIdentityV3JSON(t, valid.ID+" descriptor", valid.Input.Descriptor, descriptor)
+	if _, err := BuildDescriptorV3(anchor, []string{remote}, []LegacyIdentifierV3{}, ""); err == nil {
+		t.Fatalf("%s: descriptor accepted an empty client instance ID", valid.ID)
+	}
+
+	parent := t.TempDir()
+	selectedRoot := filepath.Join(parent, "selected")
+	if err := os.Mkdir(selectedRoot, 0o700); err != nil {
+		t.Fatalf("make selected root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, ".engram-project"), valid.Input.Anchor, 0o600); err != nil {
+		t.Fatalf("write parent anchor: %v", err)
+	}
+	if _, err := DiscoverAnchorV3(selectedRoot, "directory"); err == nil {
+		t.Fatal("directory discovery searched upward from the selected root")
+	}
+}
+
+func loadProjectIdentityV3Corpus(t *testing.T) projectIdentityV3Corpus {
+	t.Helper()
 	bytes, err := os.ReadFile(filepath.Join("..", "..", "contracts", "testdata", "project_identity_v3_vectors.json"))
 	if err != nil {
 		t.Fatalf("read frozen V3 vectors: %v", err)
@@ -50,35 +123,41 @@ func TestProjectIdentityV3DescriptorSeamUsesFrozenVectors(t *testing.T) {
 	if len(corpus.Vectors) != corpus.VectorCounts.Accepted+corpus.VectorCounts.Refused {
 		t.Fatalf("vector count = %d, want %d accepted + %d refused", len(corpus.Vectors), corpus.VectorCounts.Accepted, corpus.VectorCounts.Refused)
 	}
+	return corpus
+}
 
-	anchors, descriptors, normalized, omitted, refused := 0, 0, 0, 0, 0
+func (corpus projectIdentityV3Corpus) vector(t *testing.T, id string) projectIdentityV3Vector {
+	t.Helper()
 	for _, vector := range corpus.Vectors {
-		if vector.ID == "" {
-			t.Fatal("frozen V3 vectors contain an unnamed case")
-		}
-		if string(vector.Input.Anchor) != "" && string(vector.Input.Anchor) != "null" {
-			anchors++
-		}
-		if string(vector.Input.Descriptor) != "" && string(vector.Input.Descriptor) != "null" {
-			descriptors++
-		}
-		for _, remote := range vector.Input.Remotes {
-			switch remote.Disposition {
-			case "":
-				if remote.Normalized == "" {
-					t.Fatalf("%s has a remote without a normalized value or disposition", vector.ID)
-				}
-				normalized++
-			case "omitted":
-				omitted++
-			case "refused":
-				refused++
-			default:
-				t.Fatalf("%s has unknown remote disposition %q", vector.ID, remote.Disposition)
-			}
+		if vector.ID == id {
+			return vector
 		}
 	}
-	if anchors == 0 || descriptors == 0 || normalized == 0 || omitted == 0 || refused == 0 {
-		t.Fatalf("incomplete V3 helper coverage: anchors=%d descriptors=%d normalized=%d omitted=%d refused=%d", anchors, descriptors, normalized, omitted, refused)
+	t.Fatalf("frozen V3 vectors are missing %q", id)
+	return projectIdentityV3Vector{}
+}
+
+func assertProjectIdentityV3JSON(t *testing.T, label string, want json.RawMessage, got any) {
+	t.Helper()
+	var expected any
+	if err := json.Unmarshal(want, &expected); err != nil {
+		t.Fatalf("%s: decode expected JSON: %v", label, err)
 	}
+	actualBytes, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("%s: encode actual JSON: %v", label, err)
+	}
+	var actual any
+	if err := json.Unmarshal(actualBytes, &actual); err != nil {
+		t.Fatalf("%s: decode actual JSON: %v", label, err)
+	}
+	if !jsonEqual(expected, actual) {
+		t.Fatalf("%s: JSON = %s, want %s", label, actualBytes, want)
+	}
+}
+
+func jsonEqual(left, right any) bool {
+	leftBytes, _ := json.Marshal(left)
+	rightBytes, _ := json.Marshal(right)
+	return string(leftBytes) == string(rightBytes)
 }
