@@ -189,6 +189,23 @@ type ProjectMergeAuditSource struct {
 
 func (ProjectMergeAuditSource) TableName() string { return "project_merge_audit_sources" }
 
+// ProjectResolutionAttempt is the redacted immutable audit record emitted by
+// central V3 resolution. It deliberately excludes descriptor bodies, paths,
+// credentials, and private discovery evidence.
+type ProjectResolutionAttempt struct {
+	AttemptID         string         `gorm:"column:attempt_id;type:uuid;primaryKey;default:gen_random_uuid()"`
+	Correlation       string         `gorm:"column:correlation;type:text;not null"`
+	Intent            string         `gorm:"column:intent;type:text;not null"`
+	Outcome           string         `gorm:"column:outcome;type:text;not null"`
+	AnchorProjectID   sql.NullString `gorm:"column:anchor_project_id;type:uuid"`
+	DescriptorVersion int            `gorm:"column:descriptor_version;not null"`
+	Provenance        string         `gorm:"column:provenance;type:text;not null"`
+	RedirectReference sql.NullString `gorm:"column:redirect_reference;type:text"`
+	CreatedAt         time.Time      `gorm:"column:created_at;autoCreateTime"`
+}
+
+func (ProjectResolutionAttempt) TableName() string { return "project_resolution_attempts" }
+
 // APIToken represents a client API token for agent authentication.
 // Tokens are stored as bcrypt hashes with a prefix for fast lookup.
 type APIToken struct {

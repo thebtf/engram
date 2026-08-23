@@ -9,13 +9,15 @@ import (
 const resolverTestProjectKeyV3 = "aa0f4c76-f04c-4cd6-ae41-10294a4ab57d"
 
 type resolverStoreV3Fake struct {
-	anchor        AnchorBindingV3
-	admin         AnchorBindingV3
-	lookupCalls   int
-	registerCalls int
-	adminCalls    int
-	creates       int
-	registration  AnchorRegistrationV3
+	anchor             AnchorBindingV3
+	admin              AnchorBindingV3
+	lookupCalls        int
+	registerCalls      int
+	adminCalls         int
+	creates            int
+	registration       AnchorRegistrationV3
+	adminAuthorization VerifiedAuthorizationV3
+	attempts           []ResolutionAttemptV3
 }
 
 func (store *resolverStoreV3Fake) LookupAnchorBindingV3(_ context.Context, _ string) (AnchorBindingV3, error) {
@@ -37,9 +39,32 @@ func (store *resolverStoreV3Fake) RegisterAnchorBindingV3(_ context.Context, reg
 	return store.anchor, nil
 }
 
-func (store *resolverStoreV3Fake) LookupAdministrativeTargetV3(_ context.Context, _ AdministrativeTargetReferenceV3) (AnchorBindingV3, error) {
+func (store *resolverStoreV3Fake) LookupAdministrativeTargetV3(_ context.Context, authorization VerifiedAuthorizationV3) (AnchorBindingV3, error) {
 	store.adminCalls++
+	store.adminAuthorization = authorization
 	return store.admin, nil
+}
+
+func (store *resolverStoreV3Fake) RecordResolutionAttemptV3(_ context.Context, attempt ResolutionAttemptV3) error {
+	store.attempts = append(store.attempts, attempt)
+	return nil
+}
+
+type resolverVerifierV3Fake struct {
+	authorized  bool
+	adminTarget ProjectKeyV3
+	calls       int
+	lastRequest AuthorizationVerificationRequestV3
+}
+
+func (verifier *resolverVerifierV3Fake) VerifyAuthorizationV3(_ context.Context, request AuthorizationVerificationRequestV3) (AuthorizationVerificationV3, error) {
+	verifier.calls++
+	verifier.lastRequest = request
+	response := AuthorizationVerificationV3{Authorized: verifier.authorized}
+	if request.Intent() == AdminTargetIntentV3 {
+		response.AdministrativeTargetProjectKey = verifier.adminTarget
+	}
+	return response, nil
 }
 
 func TestResolveProjectV3EveryIntent(t *testing.T) {
@@ -105,7 +130,7 @@ func TestResolveProjectV3EveryIntent(t *testing.T) {
 				if err != nil {
 					t.Fatalf("new admin audit: %v", err)
 				}
-				target, err := NewAdministrativeTargetReferenceV3(resolverTestProjectKeyV3)
+				target, err := NewAdministrativeTargetReferenceV3("opaque-admin-target-17")
 				if err != nil {
 					t.Fatalf("new administrative target: %v", err)
 				}
@@ -118,6 +143,10 @@ func TestResolveProjectV3EveryIntent(t *testing.T) {
 			assert: func(t *testing.T, store *resolverStoreV3Fake, result ResolveProjectResultV3) {
 				if store.lookupCalls != 0 || store.registerCalls != 0 || store.adminCalls != 1 {
 					t.Fatalf("admin_target port calls = lookup:%d register:%d admin:%d", store.lookupCalls, store.registerCalls, store.adminCalls)
+				}
+				projectKey, ok := store.adminAuthorization.AdministrativeTargetProjectKey()
+				if !ok || projectKey != result.Resolution().CanonicalProjectKey() {
+					t.Fatalf("admin target did not receive a verified server target: %#v", store.adminAuthorization)
 				}
 				assertFirstMutationFenceV3(t, result)
 			},
@@ -132,16 +161,17 @@ func TestResolveProjectV3EveryIntent(t *testing.T) {
 			if test.configure != nil {
 				test.configure(&request)
 			}
-			result, err := NewResolverV3(store).ResolveProjectV3(context.Background(), request)
+			result, err := resolverV3(t, store).ResolveProjectV3(context.Background(), request)
 			assertResolvedV3(t, result, err)
 			test.assert(t, store, result)
+			assertResolutionAttemptV3(t, store, result.Resolution())
 		})
 	}
 }
 
 func TestResolveProjectV3RegistrationIsIdempotent(t *testing.T) {
 	store := &resolverStoreV3Fake{anchor: AnchorBindingV3{State: AnchorBindingMissingV3}}
-	resolver := NewResolverV3(store)
+	resolver := resolverV3(t, store)
 	request := resolverRequestV3(RegisterAnchorIntentV3)
 	request.RegistrationAuthorization = resolverAuthorizationV3(t)
 
@@ -152,6 +182,9 @@ func TestResolveProjectV3RegistrationIsIdempotent(t *testing.T) {
 
 	if first.Resolution().CanonicalProjectKey() != second.Resolution().CanonicalProjectKey() || store.creates != 1 || store.registerCalls != 2 {
 		t.Fatalf("registration was not idempotent: first=%q second=%q creates=%d registrations=%d", first.Resolution().CanonicalProjectKey(), second.Resolution().CanonicalProjectKey(), store.creates, store.registerCalls)
+	}
+	if len(store.attempts) != 2 {
+		t.Fatalf("registration attempts = %d, want 2", len(store.attempts))
 	}
 }
 
@@ -166,11 +199,12 @@ func TestResolveProjectV3UnboundAndCollisionRefuseWithoutMutation(t *testing.T) 
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := &resolverStoreV3Fake{anchor: test.binding}
-			result, err := NewResolverV3(store).ResolveProjectV3(context.Background(), resolverRequestV3(ResolveExistingIntentV3))
+			result, err := resolverV3(t, store).ResolveProjectV3(context.Background(), resolverRequestV3(ResolveExistingIntentV3))
 			assertRefusalV3(t, result, err, test.outcome)
 			if store.lookupCalls != 1 || store.registerCalls != 0 || store.adminCalls != 0 || store.creates != 0 {
 				t.Fatalf("refusal mutated or used another port: %#v", store)
 			}
+			assertResolutionAttemptV3(t, store, result.Resolution())
 		})
 	}
 }
@@ -216,12 +250,99 @@ func TestResolveProjectV3DescriptorAndExceptionRefusalsDoNotReachStore(t *testin
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := &resolverStoreV3Fake{anchor: resolverActiveBindingV3(), admin: resolverActiveBindingV3()}
-			result, err := NewResolverV3(store).ResolveProjectV3(context.Background(), test.request())
+			result, err := resolverV3(t, store).ResolveProjectV3(context.Background(), test.request())
 			assertRefusalV3(t, result, err, test.outcome)
 			if store.lookupCalls != 0 || store.registerCalls != 0 || store.adminCalls != 0 || store.creates != 0 {
-				t.Fatalf("precondition refusal reached persistence: %#v", store)
+				t.Fatalf("precondition refusal reached a non-audit persistence port: %#v", store)
 			}
+			assertResolutionAttemptV3(t, store, result.Resolution())
 		})
+	}
+}
+
+func TestResolveProjectV3OpaqueAuthorizationCannotAuthorize(t *testing.T) {
+	registerRequest := func(t *testing.T) ResolveProjectRequestV3 {
+		t.Helper()
+		request := resolverRequestV3(RegisterAnchorIntentV3)
+		request.RegistrationAuthorization = resolverAuthorizationV3(t)
+		return request
+	}
+	t.Run("nil verifier registration", func(t *testing.T) {
+		store := &resolverStoreV3Fake{anchor: AnchorBindingV3{State: AnchorBindingMissingV3}}
+		result, err := NewResolverV3(store, nil).ResolveProjectV3(context.Background(), registerRequest(t))
+		assertRefusalV3(t, result, err, ProjectDescriptorInvalidOutcomeV3)
+		if store.registerCalls != 0 || store.creates != 0 {
+			t.Fatalf("opaque caller authorization created a binding: %#v", store)
+		}
+		assertResolutionAttemptV3(t, store, result.Resolution())
+	})
+	t.Run("unverified server response", func(t *testing.T) {
+		store := &resolverStoreV3Fake{anchor: AnchorBindingV3{State: AnchorBindingMissingV3}}
+		result, err := NewResolverV3(store, &resolverVerifierV3Fake{}).ResolveProjectV3(context.Background(), registerRequest(t))
+		assertRefusalV3(t, result, err, ProjectDescriptorInvalidOutcomeV3)
+		if store.registerCalls != 0 || store.creates != 0 {
+			t.Fatalf("unverified authorization created a binding: %#v", store)
+		}
+		assertResolutionAttemptV3(t, store, result.Resolution())
+	})
+	t.Run("nil verifier administrative target", func(t *testing.T) {
+		store := &resolverStoreV3Fake{admin: resolverActiveBindingV3()}
+		request := resolverRequestV3(AdminTargetIntentV3)
+		audit, err := NewAdminAuditV3("admin-17", "repair-17", "approved-17", "retain-17")
+		if err != nil {
+			t.Fatalf("new admin audit: %v", err)
+		}
+		target, err := NewAdministrativeTargetReferenceV3("opaque-admin-target-17")
+		if err != nil {
+			t.Fatalf("new administrative target: %v", err)
+		}
+		requirement, err := NewAdminTargetRequirementV3(resolverAuthorizationV3(t), request.Correlation, target, audit)
+		if err != nil {
+			t.Fatalf("new admin target requirement: %v", err)
+		}
+		request.AdminTarget = &requirement
+
+		result, err := NewResolverV3(store, nil).ResolveProjectV3(context.Background(), request)
+		assertRefusalV3(t, result, err, ProjectDescriptorInvalidOutcomeV3)
+		if store.adminCalls != 0 {
+			t.Fatalf("opaque caller target reached persistence: %#v", store)
+		}
+		assertResolutionAttemptV3(t, store, result.Resolution())
+	})
+}
+
+func TestResolveProjectV3MergedAnchorRedirectsAndRecordsAttempt(t *testing.T) {
+	store := &resolverStoreV3Fake{anchor: AnchorBindingV3{
+		State:             AnchorBindingRedirectedV3,
+		ProjectKey:        resolverTestProjectKeyV3,
+		Scope:             "repository",
+		RedirectReference: "merge-audit-17",
+	}}
+	result, err := resolverV3(t, store).ResolveProjectV3(context.Background(), resolverRequestV3(ResolveExistingIntentV3))
+	if err != nil || result.Resolution().Outcome() != ProjectRedirectedOutcomeV3 || result.Resolution().CanonicalProjectKey() != resolverTestProjectKeyV3 || result.Resolution().RedirectReference() != "merge-audit-17" {
+		t.Fatalf("merged anchor result = %#v, %v", result.Resolution(), err)
+	}
+	assertFirstMutationFenceV3(t, result)
+	assertResolutionAttemptV3(t, store, result.Resolution())
+}
+
+func resolverV3(t *testing.T, store ProjectResolutionStoreV3) ResolverV3 {
+	t.Helper()
+	projectKey, err := NewProjectKeyV3(resolverTestProjectKeyV3)
+	if err != nil {
+		t.Fatalf("new resolver test project key: %v", err)
+	}
+	return NewResolverV3(store, &resolverVerifierV3Fake{authorized: true, adminTarget: projectKey})
+}
+
+func assertResolutionAttemptV3(t *testing.T, store *resolverStoreV3Fake, resolution ResolutionResultV3) {
+	t.Helper()
+	if len(store.attempts) != 1 {
+		t.Fatalf("resolution attempts = %#v, want exactly one", store.attempts)
+	}
+	attempt := store.attempts[0]
+	if !attempt.Valid() || attempt.Correlation() != resolution.Correlation() || attempt.Intent() != resolution.Intent() || attempt.Outcome() != resolution.Outcome() || attempt.Provenance() != "anchor_v3" || attempt.DescriptorVersion() != 3 {
+		t.Fatalf("redacted resolution attempt = %#v, resolution = %#v", attempt, resolution)
 	}
 }
 

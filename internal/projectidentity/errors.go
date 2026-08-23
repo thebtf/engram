@@ -231,7 +231,7 @@ func NewSuccessResultV3(intent ResolutionIntentV3, outcome ResolutionOutcomeV3, 
 	if !validOpaqueReferenceV3(string(correlation)) {
 		return ResolutionResultV3{}, errInvalidV3Reference
 	}
-	if outcome == ProjectRedirectedOutcomeV3 && (intent == ReadFilterIntentV3 || !validOpaqueReferenceV3(string(redirect))) {
+	if outcome == ProjectRedirectedOutcomeV3 && !validOpaqueReferenceV3(string(redirect)) {
 		return ResolutionResultV3{}, errInvalidV3Result
 	}
 	if outcome == ProjectResolvedOutcomeV3 && redirect != "" {
@@ -338,6 +338,18 @@ func (requirement AdminTargetRequirementV3) Correlation() CorrelationV3 {
 func (requirement AdminTargetRequirementV3) Target() AdministrativeTargetReferenceV3 {
 	return requirement.target
 }
+
+// Actor returns the required redacted administrative actor reference.
+func (audit AdminAuditV3) Actor() string { return audit.actor }
+
+// Purpose returns the required redacted administrative purpose reference.
+func (audit AdminAuditV3) Purpose() string { return audit.purpose }
+
+// Decision returns the required redacted administrative decision reference.
+func (audit AdminAuditV3) Decision() string { return audit.decision }
+
+// RetentionOrRollback returns the required redacted retention/rollback reference.
+func (audit AdminAuditV3) RetentionOrRollback() string { return audit.retentionOrRollback }
 
 func (audit AdminAuditV3) valid() bool {
 	return validOpaqueReferenceV3(audit.actor) && validOpaqueReferenceV3(audit.purpose) && validOpaqueReferenceV3(audit.decision) && validOpaqueReferenceV3(audit.retentionOrRollback)

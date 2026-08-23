@@ -4792,6 +4792,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		issueCreatorKeycardMigration160(),
 		continuitySlotMigration161(),
 		projectIdentityV3Migration162(),
+		projectIdentityV3ResolutionAttemptsMigration163(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
