@@ -50,6 +50,48 @@ func TestProjectIdentityV3ComparisonStoreRedactsAndReplaysReceipt(t *testing.T) 
 	require.Equal(t, first, second, "a repeated observation must return the original receipt")
 	require.Equal(t, projectidentity.ComparisonRefusalV3, first.Classification)
 
+	differentCorrelation, err := projectidentity.NewCorrelationV3("comparison-store-replay-" + uuid.NewString())
+	require.NoError(t, err)
+	conflictingEvidence := comparisonStoreFingerprint("conflicting-evidence-" + uuid.NewString())
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*projectidentity.ComparisonObservationV3)
+	}{
+		{name: "correlation", mutate: func(conflicting *projectidentity.ComparisonObservationV3) {
+			conflicting.Correlation = differentCorrelation
+		}},
+		{name: "v3 outcome", mutate: func(conflicting *projectidentity.ComparisonObservationV3) {
+			conflicting.V3Outcome = projectidentity.ProjectScopeMismatchOutcomeV3
+		}},
+		{name: "legacy outcome", mutate: func(conflicting *projectidentity.ComparisonObservationV3) {
+			conflicting.LegacyOutcome = projectidentity.LegacyComparisonResolvedV2
+		}},
+		{name: "client instance", mutate: func(conflicting *projectidentity.ComparisonObservationV3) {
+			conflicting.ClientInstanceID = "comparison-client-conflict-" + uuid.NewString()
+		}},
+		{name: "transport", mutate: func(conflicting *projectidentity.ComparisonObservationV3) {
+			conflicting.Transport = projectidentity.ComparisonTransportGRPCV3
+		}},
+		{name: "scope", mutate: func(conflicting *projectidentity.ComparisonObservationV3) {
+			conflicting.Scope = projectidentity.ComparisonDirectoryScopeV3
+		}},
+		{name: "freshness", mutate: func(conflicting *projectidentity.ComparisonObservationV3) {
+			conflicting.Freshness = projectidentity.ComparisonStaleV3
+		}},
+		{name: "evidence", mutate: func(conflicting *projectidentity.ComparisonObservationV3) {
+			conflicting.EvidenceFingerprint = conflictingEvidence
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			conflicting := observation
+			testCase.mutate(&conflicting)
+
+			receipt, err := projectidentity.RecordComparisonV3(context.Background(), store, conflicting)
+			require.ErrorIs(t, err, errProjectIdentityComparisonReplayConflict)
+			require.Zero(t, receipt)
+		})
+	}
+
 	var rows int64
 	require.NoError(t, db.Model(&ProjectIdentityComparison{}).Where("idempotency_key = ?", idempotencyKey).Count(&rows).Error)
 	require.EqualValues(t, 1, rows, "idempotency must leave one durable record")
@@ -62,6 +104,7 @@ func TestProjectIdentityV3ComparisonStoreRedactsAndReplaysReceipt(t *testing.T) 
 
 	var persisted ProjectIdentityComparison
 	require.NoError(t, db.Where("idempotency_key = ?", idempotencyKey).First(&persisted).Error)
+	require.Equal(t, first, comparisonReceiptV3(persisted), "conflicting replays must not overwrite the original observation")
 	persistedText := strings.Join([]string{
 		persisted.IdempotencyKey,
 		persisted.Correlation,

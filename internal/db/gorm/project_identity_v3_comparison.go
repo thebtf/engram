@@ -13,11 +13,13 @@ import (
 var (
 	errProjectIdentityComparisonStoreUnavailable = errors.New("V3 project identity comparison store is unavailable")
 	errProjectIdentityComparisonInvalid          = errors.New("invalid V3 project identity comparison")
+	errProjectIdentityComparisonReplayConflict   = errors.New("conflicting V3 project identity comparison replay")
 )
 
 // RecordComparisonV3 durably records a validated telemetry observation. The
-// unique idempotency key returns the first record unchanged on every replay;
-// this method never reads or mutates a project, binding, merge, or V2 row.
+// unique idempotency key returns the first record for an identical replay and
+// rejects a conflicting observation; this method never reads or mutates a
+// project, binding, merge, or V2 row.
 func (store *Store) RecordComparisonV3(ctx context.Context, observation projectidentity.ComparisonObservationV3) (projectidentity.ComparisonReceiptV3, error) {
 	if store == nil || store.DB == nil {
 		return projectidentity.ComparisonReceiptV3{}, errProjectIdentityComparisonStoreUnavailable
@@ -49,8 +51,24 @@ func (store *Store) RecordComparisonV3(ctx context.Context, observation projecti
 		if err := store.DB.WithContext(ctx).Where("idempotency_key = ?", observation.IdempotencyKey).First(&candidate).Error; err != nil {
 			return projectidentity.ComparisonReceiptV3{}, fmt.Errorf("load idempotent V3 project identity comparison: %w", err)
 		}
+		if !comparisonRecordMatchesObservation(candidate, observation) {
+			return projectidentity.ComparisonReceiptV3{}, errProjectIdentityComparisonReplayConflict
+		}
 	}
 	return comparisonReceiptV3(candidate), nil
+}
+
+func comparisonRecordMatchesObservation(record ProjectIdentityComparison, observation projectidentity.ComparisonObservationV3) bool {
+	return record.IdempotencyKey == observation.IdempotencyKey &&
+		record.Correlation == string(observation.Correlation) &&
+		record.V3Outcome == string(observation.V3Outcome) &&
+		record.LegacyOutcome == string(observation.LegacyOutcome) &&
+		record.Classification == string(observation.Classification()) &&
+		record.ClientInstanceID == observation.ClientInstanceID &&
+		record.Transport == string(observation.Transport) &&
+		record.Scope == string(observation.Scope) &&
+		record.Freshness == string(observation.Freshness) &&
+		record.EvidenceFingerprint == observation.EvidenceFingerprint
 }
 
 func comparisonReceiptV3(record ProjectIdentityComparison) projectidentity.ComparisonReceiptV3 {
