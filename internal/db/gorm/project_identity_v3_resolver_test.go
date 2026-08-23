@@ -58,7 +58,7 @@ func TestProjectIdentityV3ResolverStoreAuthorizationRedirectAndAudit(t *testing.
 		require.NoError(t, db.Exec(`DELETE FROM project_resolution_attempts WHERE correlation LIKE ?`, correlationPrefix+"%").Error)
 		require.NoError(t, db.Exec(`DELETE FROM project_merge_audit_sources WHERE source_project_key = ?`, sourceProjectKey).Error)
 		require.NoError(t, db.Exec(`DELETE FROM project_merge_audits WHERE target_project_key = ?`, targetProjectKey).Error)
-		require.NoError(t, db.Exec(`DELETE FROM projects WHERE project_key IN (?, ?, ?)`, sourceProjectKey, targetProjectKey).Error)
+		require.NoError(t, db.Exec(`DELETE FROM projects WHERE anchor_project_id = ? OR project_key IN (?, ?)`, registrationAnchorID, sourceProjectKey, targetProjectKey).Error)
 	})
 
 	err := store.RegisterAnchorBindingAndRecordAttemptV3(ctx, projectidentity.AnchorRegistrationV3{}, nil)

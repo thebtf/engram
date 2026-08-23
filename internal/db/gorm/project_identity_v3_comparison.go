@@ -48,9 +48,11 @@ func (store *Store) RecordComparisonV3(ctx context.Context, observation projecti
 		return projectidentity.ComparisonReceiptV3{}, fmt.Errorf("record V3 project identity comparison: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		if err := store.DB.WithContext(ctx).Where("idempotency_key = ?", observation.IdempotencyKey).First(&candidate).Error; err != nil {
+		var persisted ProjectIdentityComparison
+		if err := store.DB.WithContext(ctx).Where("idempotency_key = ?", observation.IdempotencyKey).First(&persisted).Error; err != nil {
 			return projectidentity.ComparisonReceiptV3{}, fmt.Errorf("load idempotent V3 project identity comparison: %w", err)
 		}
+		candidate = persisted
 		if !comparisonRecordMatchesObservation(candidate, observation) {
 			return projectidentity.ComparisonReceiptV3{}, errProjectIdentityComparisonReplayConflict
 		}
