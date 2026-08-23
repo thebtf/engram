@@ -963,6 +963,13 @@ const V3_DESCRIPTOR_FIELDS: Record<string, true> = {
   client_instance_id: true,
 };
 const V3_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const V3_PROJECT_RESOLUTION_FIELDS: Record<string, true> = {
+  outcome: true,
+  project_key: true,
+  resolved_scope: true,
+  correlation: true,
+  redirect_reference: true,
+};
 
 function isValidOpaqueReferenceV3(value: unknown): value is string {
   return typeof value === 'string' &&
@@ -1010,19 +1017,20 @@ function readCanonicalProject(payload: unknown, descriptor?: ProjectIdentityV3):
   if (descriptor) {
     if (!Object.hasOwn(payload, 'project_resolution_v3') || !('project_resolution_v3' in payload)) return '';
     const resolution = payload.project_resolution_v3;
+    if (!resolution || typeof resolution !== 'object' || Array.isArray(resolution)) return '';
+    const typedResolution = resolution as Record<string, unknown>;
+    const keys = Object.keys(typedResolution);
     if (
-      !resolution ||
-      typeof resolution !== 'object' ||
-      Array.isArray(resolution) ||
-      !('outcome' in resolution) ||
-      !('project_key' in resolution) ||
-      !('resolved_scope' in resolution)
+      keys.some((key) => !Object.hasOwn(V3_PROJECT_RESOLUTION_FIELDS, key)) ||
+      !Object.hasOwn(typedResolution, 'outcome') ||
+      !Object.hasOwn(typedResolution, 'project_key') ||
+      !Object.hasOwn(typedResolution, 'resolved_scope') ||
+      !Object.hasOwn(typedResolution, 'correlation')
     ) return '';
-    const { outcome, project_key, resolved_scope } = resolution;
-    const correlation = 'correlation' in resolution ? resolution.correlation : undefined;
-    const redirectReference = 'redirect_reference' in resolution ? resolution.redirect_reference : undefined;
+    const { outcome, project_key, resolved_scope, correlation, redirect_reference: redirectReference } = typedResolution;
     if (
       (outcome !== 'PROJECT_RESOLVED' && outcome !== 'PROJECT_REDIRECTED') ||
+      keys.length !== (outcome === 'PROJECT_REDIRECTED' ? 5 : 4) ||
       typeof project_key !== 'string' ||
       !V3_UUID.test(project_key) ||
       resolved_scope !== descriptor.scope ||

@@ -239,6 +239,13 @@ test('V3 registration fails closed on malformed resolution responses', async (t)
       correlation: 'openclaw-v3-registration',
       redirect_reference: 'redirect/reference',
     },
+    {
+      outcome: 'PROJECT_RESOLVED',
+      project_key: '22222222-2222-4222-8222-222222222222',
+      resolved_scope: 'directory',
+      correlation: 'openclaw-v3-registration',
+      unexpected_authority: 'must-be-rejected',
+    },
   ];
   for (const resolution of malformedResolutions) {
     let requests = 0;
