@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -39,9 +40,10 @@ import (
 )
 
 const (
-	ar2FixtureAnchorProjectID = "11111111-1111-4111-8111-111111111111"
-	ar2FixtureLegacyID        = "ar2-comparison-legacy-17"
-	ar2RuntimeFixtureOptIn    = "ENGRAM_AR2_COMPARISON_RUNTIME_FIXTURE"
+	ar2FixtureAnchorProjectID     = "11111111-1111-4111-8111-111111111111"
+	ar2FixtureLegacyID            = "ar2-comparison-legacy-17"
+	ar2FixtureBuildPreflightOptIn = "ENGRAM_AR2_FIXTURE_SERVER_BUILD_PREFLIGHT"
+	ar2RuntimeFixtureOptIn        = "ENGRAM_AR2_COMPARISON_RUNTIME_FIXTURE"
 )
 
 func TestAR2CandidateCommitRequiresCleanWorktree(t *testing.T) {
@@ -342,6 +344,29 @@ func TestAR2CandidatePayloadFingerprintRejectsUnsafeClosurePaths(t *testing.T) {
 		}
 		assertRejected(t, root, junction)
 	})
+}
+
+func TestAR2FixtureServerBuildPreflight(t *testing.T) {
+	if os.Getenv(ar2FixtureBuildPreflightOptIn) != "1" {
+		t.Skipf("fixture build preflight requires %s=1", ar2FixtureBuildPreflightOptIn)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	root := ar2FixtureRoot(t)
+	candidateCommit := ar2CandidateCommit(t, ctx, root)
+	fixtureDir, removeFixtureDir := ar2FixtureDir(t, ctx, root)
+	defer removeFixtureDir()
+	candidate := ar2StartCandidateSnapshot(t, ctx, root, fixtureDir, candidateCommit)
+	defer candidate.Close(t)
+	binary := filepath.Join(fixtureDir, "engram-server.exe")
+	if _, err := ar2Command(ctx, candidate.root, "go", "build", "-tags", "fts5", "-ldflags", "-X main.SourceCommit="+candidateCommit, "-o", binary, "./cmd/engram-server"); err != nil {
+		t.Fatal("build fixture server preflight")
+	}
+	info, err := os.Stat(binary)
+	if err != nil || info.IsDir() || info.Size() == 0 {
+		t.Fatalf("fixture server preflight did not produce a binary: %v", err)
+	}
+	t.Logf("AR-2 fixture server build preflight: candidate=%s fts5=passed", candidateCommit)
 }
 
 // TestAR2ComparisonRuntimeFixture exercises every public V3 adapter against one
@@ -1747,11 +1772,33 @@ var ar2FixtureControlAliases = map[string]struct{}{
 	"USERPROFILE":               {},
 }
 
+var ar2FixtureBuildEnvironmentAliases = map[string]struct{}{
+	"GOMODCACHE":  {},
+	"GOPATH":      {},
+	"GOTOOLCHAIN": {},
+}
+
+var ar2FixtureIsolatedPathAliases = []string{
+	"HOME",
+	"USERPROFILE",
+	"APPDATA",
+	"LOCALAPPDATA",
+	"TEMP",
+	"TMP",
+	"GOCACHE",
+	"ENGRAM_DATA_DIR",
+}
+
+const ar2FixtureCommandStderrLimit = 4096
+
 func ar2FixtureEnvironment(t *testing.T, bootstrapAdminToken string, overrides map[string]string) []string {
 	t.Helper()
 	isolated := ar2FixtureIsolatedOverrides(t.TempDir())
 	for key, value := range overrides {
 		isolated[key] = value
+	}
+	if err := ar2EnsureFixtureOverrideDirectories(isolated); err != nil {
+		t.Fatal("create isolated fixture environment directories")
 	}
 	environment, err := ar2ScrubFixtureEnvironment(os.Environ(), bootstrapAdminToken, isolated)
 	if err != nil {
@@ -1775,6 +1822,26 @@ func ar2FixtureIsolatedOverrides(root string) map[string]string {
 		"GOCACHE":         filepath.Join(root, "go-cache"),
 		"ENGRAM_DATA_DIR": filepath.Join(root, "data"),
 	}
+}
+
+func ar2EnsureFixtureOverrideDirectories(overrides map[string]string) error {
+	for _, key := range ar2FixtureIsolatedPathAliases {
+		path, found := overrides[key]
+		if !found || path == "" {
+			return fmt.Errorf("fixture environment omitted %s directory", key)
+		}
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return fmt.Errorf("create %s directory: %w", key, err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("stat %s directory: %w", key, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("fixture %s path is not a directory", key)
+		}
+	}
+	return nil
 }
 
 func ar2ScrubFixtureEnvironment(base []string, bootstrapAdminToken string, overrides map[string]string) ([]string, error) {
@@ -1875,6 +1942,9 @@ func ar2ValidateFixtureEnvironment(environment []string, bootstrapAdminToken str
 		if _, allowed := ar2FixtureControlAliases[canonical]; allowed {
 			continue
 		}
+		if _, allowed := ar2FixtureBuildEnvironmentAliases[canonical]; allowed {
+			continue
+		}
 		return fmt.Errorf("fixture environment contains non-allowlisted alias %q", key)
 	}
 	if bootstrapAdminToken == "" && adminTokenEntries != 0 {
@@ -1927,17 +1997,121 @@ func TestAR2FixtureEnvironmentScrubsCredentialAliases(t *testing.T) {
 	}
 }
 
+func TestAR2FixtureEnvironmentCreatesOverrideDirectories(t *testing.T) {
+	root := t.TempDir()
+	overrides := ar2FixtureIsolatedOverrides(root)
+	environment := ar2FixtureEnvironment(t, "", overrides)
+	values := make(map[string]string, len(environment))
+	for _, entry := range environment {
+		key, value, found := strings.Cut(entry, "=")
+		if !found {
+			t.Fatalf("fixture environment contained malformed entry %q", entry)
+		}
+		values[key] = value
+	}
+	for key, expected := range overrides {
+		actual, found := values[key]
+		if !found || actual != expected {
+			t.Fatalf("fixture environment did not preserve %s override", key)
+		}
+		info, err := os.Stat(actual)
+		if err != nil || !info.IsDir() {
+			t.Fatalf("fixture environment did not create %s directory %q: %v", key, actual, err)
+		}
+	}
+}
+
+func TestAR2CommandEnvSanitizesBoundedCredentialFailure(t *testing.T) {
+	const (
+		commandPassword = "fixture-command-password"
+		dockerPassword  = "ar2-fixture-password"
+		dsnPassword     = "fixture-dsn-password"
+	)
+	dsn := "postgres://postgres:" + dsnPassword + "@127.0.0.1:5432/engram?sslmode=disable"
+	script := filepath.Join(t.TempDir(), "failure.cmd")
+	if err := os.WriteFile(script, []byte("@echo off\r\necho "+commandPassword+" "+dockerPassword+" "+dsn+" 1>&2\r\nfor /L %%i in (1,1,256) do @echo fixture-diagnostic-padding 1>&2\r\nexit /b 23\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environment := ar2FixtureEnvironment(t, "", map[string]string{"DATABASE_DSN": dsn})
+	output, err := ar2CommandEnv(context.Background(), t.TempDir(), environment, "cmd.exe", "/C", script, "--password", commandPassword, "-e", "POSTGRES_PASSWORD="+dockerPassword)
+	if err == nil {
+		t.Fatal("failing fixture command returned nil error")
+	}
+	if output != nil {
+		t.Fatalf("failing fixture command returned stdout: %q", output)
+	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) {
+		t.Fatalf("fixture command error did not wrap ExitError: %v", err)
+	}
+	diagnostic := err.Error()
+	for _, secret := range []string{commandPassword, dockerPassword, dsnPassword, dsn} {
+		if strings.Contains(diagnostic, secret) {
+			t.Fatalf("fixture command diagnostic leaked %q: %s", secret, diagnostic)
+		}
+	}
+	if !strings.Contains(diagnostic, "[REDACTED]") {
+		t.Fatalf("fixture command diagnostic did not retain redaction marker: %s", diagnostic)
+	}
+	maxDiagnosticLength := len("cmd.exe failed: ") + len(exitError.Error()) + len(": ") + ar2FixtureCommandStderrLimit
+	if len(diagnostic) > maxDiagnosticLength {
+		t.Fatalf("fixture command diagnostic exceeded its stderr bound: got=%d want<=%d", len(diagnostic), maxDiagnosticLength)
+	}
+	if !strings.Contains(diagnostic, "...[truncated]") {
+		t.Fatalf("fixture command diagnostic did not mark truncation: %s", diagnostic)
+	}
+
+	output, err = ar2CommandEnv(context.Background(), t.TempDir(), environment, "cmd.exe", "/C", "echo fixture-stdout")
+	if err != nil {
+		t.Fatalf("successful fixture command: %v", err)
+	}
+	if strings.TrimSpace(string(output)) != "fixture-stdout" {
+		t.Fatalf("fixture command did not preserve stdout: %q", output)
+	}
+}
+
 func ar2Command(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	root, err := os.MkdirTemp("", "engram-ar2-command-")
 	if err != nil {
 		return nil, fmt.Errorf("create isolated command environment: %w", err)
 	}
 	defer os.RemoveAll(root)
-	environment, err := ar2ScrubFixtureEnvironment(os.Environ(), "", ar2FixtureIsolatedOverrides(root))
+	overrides := ar2FixtureIsolatedOverrides(root)
+	if err := ar2EnsureFixtureOverrideDirectories(overrides); err != nil {
+		return nil, fmt.Errorf("create isolated command directories: %w", err)
+	}
+	base := os.Environ()
+	environment, err := ar2ScrubFixtureEnvironment(base, "", overrides)
 	if err != nil {
 		return nil, fmt.Errorf("construct fixture command environment: %w", err)
 	}
+	if name == "go" {
+		environment = ar2FixtureGoBuildEnvironment(environment, base)
+	}
 	return ar2CommandEnv(ctx, dir, environment, name, args...)
+}
+
+func ar2FixtureGoBuildEnvironment(environment, base []string) []string {
+	values := make(map[string]string, len(ar2FixtureBuildEnvironmentAliases))
+	for _, entry := range base {
+		key, value, found := strings.Cut(entry, "=")
+		if !found || value == "" {
+			continue
+		}
+		canonical := strings.ToUpper(key)
+		if _, allowed := ar2FixtureBuildEnvironmentAliases[canonical]; allowed {
+			values[canonical] = value
+		}
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		environment = append(environment, key+"="+values[key])
+	}
+	return environment
 }
 
 func ar2CommandEnv(ctx context.Context, dir string, environment []string, name string, args ...string) ([]byte, error) {
@@ -1948,8 +2122,74 @@ func ar2CommandEnv(ctx context.Context, dir string, environment []string, name s
 	command.Dir = dir
 	command.Env = environment
 	output, err := command.Output()
-	if err != nil {
-		return nil, fmt.Errorf("%s failed", name)
+	if err == nil {
+		return output, nil
 	}
-	return output, nil
+	exitError, isExitError := err.(*exec.ExitError)
+	if !isExitError {
+		return nil, fmt.Errorf("%s failed: %w", name, err)
+	}
+	stderr := ar2SanitizeFixtureCommandStderr(exitError.Stderr, environment, args)
+	if stderr == "" {
+		return nil, fmt.Errorf("%s failed: %w", name, err)
+	}
+	return nil, fmt.Errorf("%s failed: %w: %s", name, err, stderr)
+}
+
+func ar2SanitizeFixtureCommandStderr(stderr []byte, environment, args []string) string {
+	message := strings.TrimSpace(string(stderr))
+	sensitive := ar2FixtureCommandSensitiveValues(environment, args)
+	sort.Slice(sensitive, func(left, right int) bool {
+		return len(sensitive[left]) > len(sensitive[right])
+	})
+	for _, value := range sensitive {
+		message = strings.ReplaceAll(message, value, "[REDACTED]")
+	}
+	if len(message) <= ar2FixtureCommandStderrLimit {
+		return message
+	}
+	const suffix = "...[truncated]"
+	return message[:ar2FixtureCommandStderrLimit-len(suffix)] + suffix
+}
+
+func ar2FixtureCommandSensitiveValues(environment, args []string) []string {
+	seen := make(map[string]struct{})
+	values := make([]string, 0)
+	add := func(value string) {
+		if value == "" {
+			return
+		}
+		if _, duplicate := seen[value]; duplicate {
+			return
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	for _, entry := range environment {
+		key, value, found := strings.Cut(entry, "=")
+		if found && ar2FixtureSensitiveCommandKey(key) {
+			add(value)
+		}
+	}
+	for index, argument := range args {
+		key, value, hasValue := strings.Cut(argument, "=")
+		if hasValue && ar2FixtureSensitiveCommandKey(key) {
+			add(value)
+		}
+		if ar2FixtureSensitiveCommandKey(argument) && index+1 < len(args) {
+			add(args[index+1])
+		}
+	}
+	return values
+}
+
+func ar2FixtureSensitiveCommandKey(key string) bool {
+	normalized := strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(strings.TrimLeft(key, "-")))
+	if _, credential := ar2FixtureCredentialAliases[normalized]; credential {
+		return true
+	}
+	if normalized == "DATABASE_DSN" {
+		return true
+	}
+	return strings.Contains(normalized, "PASSWORD") || strings.Contains(normalized, "TOKEN") || strings.Contains(normalized, "SECRET") || strings.Contains(normalized, "CREDENTIAL")
 }
