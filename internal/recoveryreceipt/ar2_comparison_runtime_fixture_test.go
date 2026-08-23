@@ -1773,6 +1773,7 @@ var ar2FixtureControlAliases = map[string]struct{}{
 }
 
 var ar2FixtureBuildEnvironmentAliases = map[string]struct{}{
+	"CGO_ENABLED": {},
 	"GOMODCACHE":  {},
 	"GOPATH":      {},
 	"GOTOOLCHAIN": {},
@@ -1957,7 +1958,7 @@ func ar2ValidateFixtureEnvironment(environment []string, bootstrapAdminToken str
 }
 
 func TestAR2FixtureEnvironmentScrubsCredentialAliases(t *testing.T) {
-	base := []string{"PATH=fixture", "engram_token=host-token", "api_token=host-bare-api-token", "ENGRAM_WORKSTATION_TOKEN=host-workstation", "Engram_Api_Token=host-api", "claude_plugin_option_api_token=host-hook", "ENGRAM_CLAUDE_USERCONFIG_TOKEN=host-user", "ENGRAM_AUTH_ADMIN_TOKEN=host-admin", "eNgRaM_Url=http://host-daemon.invalid", "ENGRAM_SERVER_URL=http://host-server.invalid", "VENDOR_API_KEY=host-vendor-key", "ENGRAM_CLIENT_INSTANCE_ID=host-client"}
+	base := []string{"PATH=fixture", "CGO_ENABLED=0", "engram_token=host-token", "api_token=host-bare-api-token", "ENGRAM_WORKSTATION_TOKEN=host-workstation", "Engram_Api_Token=host-api", "claude_plugin_option_api_token=host-hook", "ENGRAM_CLAUDE_USERCONFIG_TOKEN=host-user", "ENGRAM_AUTH_ADMIN_TOKEN=host-admin", "eNgRaM_Url=http://host-daemon.invalid", "ENGRAM_SERVER_URL=http://host-server.invalid", "VENDOR_API_KEY=host-vendor-key", "ENGRAM_CLIENT_INSTANCE_ID=host-client"}
 	overrides := map[string]string{"HOME": "fixture-home", "ENGRAM_CLIENT_INSTANCE_ID": "fixture-daemon-client"}
 	runtimeEnvironment, err := ar2ScrubFixtureEnvironment(base, "", overrides)
 	if err != nil {
@@ -1975,7 +1976,7 @@ func TestAR2FixtureEnvironmentScrubsCredentialAliases(t *testing.T) {
 	}
 	for _, environment := range [][]string{runtimeEnvironment, bootstrapEnvironment} {
 		joined := strings.Join(environment, "\n")
-		for _, forbidden := range []string{"host-bare-api-token", "host-daemon.invalid", "host-server.invalid", "host-vendor-key", "host-client"} {
+		for _, forbidden := range []string{"CGO_ENABLED=0", "host-bare-api-token", "host-daemon.invalid", "host-server.invalid", "host-vendor-key", "host-client"} {
 			if strings.Contains(joined, forbidden) {
 				t.Fatalf("fixture environment retained %q", forbidden)
 			}
@@ -2021,19 +2022,72 @@ func TestAR2FixtureEnvironmentCreatesOverrideDirectories(t *testing.T) {
 	}
 }
 
+func TestAR2FixtureGoBuildEnvironmentForcesCGO(t *testing.T) {
+	buildEnvironment := ar2FixtureGoBuildEnvironment(
+		[]string{"PATH=fixture"},
+		[]string{
+			"CGO_ENABLED=0",
+			"CC=host-cc",
+			"CXX=host-cxx",
+			"GOMODCACHE=host-module-cache",
+			"GOPATH=host-go-path",
+			"GOTOOLCHAIN=host-toolchain",
+		},
+	)
+	values := make(map[string]string, len(buildEnvironment))
+	for _, entry := range buildEnvironment {
+		key, value, found := strings.Cut(entry, "=")
+		if !found {
+			t.Fatalf("build environment contained malformed entry %q", entry)
+		}
+		if _, duplicate := values[key]; duplicate {
+			t.Fatalf("build environment repeated %q", key)
+		}
+		values[key] = value
+	}
+	if values["CGO_ENABLED"] != "1" {
+		t.Fatalf("build environment did not force CGO_ENABLED=1: %q", values["CGO_ENABLED"])
+	}
+	for _, key := range []string{"CC", "CXX"} {
+		if _, found := values[key]; found {
+			t.Fatalf("build environment inherited %s instead of using PATH defaults", key)
+		}
+	}
+	if err := ar2ValidateFixtureEnvironment(buildEnvironment, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAR2CommandEnvSanitizesBoundedCredentialFailure(t *testing.T) {
 	const (
-		commandPassword = "fixture-command-password"
-		dockerPassword  = "ar2-fixture-password"
-		dsnPassword     = "fixture-dsn-password"
+		commandPassword      = "fixture-command-password"
+		dockerPassword       = "ar2-fixture-password"
+		dsnPassword          = "fixture-dsn-password"
+		apiKey               = "fixture-api-key"
+		accessKey            = "fixture-access-key"
+		apiKeyAssignment     = "fixture-api-key-assignment"
+		accessKeyAssignment  = "fixture-access-key-assignment"
+		genericDSN           = "nats://fixture-generic-dsn"
+		bearerToken          = "fixture-bearer-token"
+		inlineEnvironmentKey = "fixture-inline-api-key"
 	)
 	dsn := "postgres://postgres:" + dsnPassword + "@127.0.0.1:5432/engram?sslmode=disable"
 	script := filepath.Join(t.TempDir(), "failure.cmd")
-	if err := os.WriteFile(script, []byte("@echo off\r\necho "+commandPassword+" "+dockerPassword+" "+dsn+" 1>&2\r\nfor /L %%i in (1,1,256) do @echo fixture-diagnostic-padding 1>&2\r\nexit /b 23\r\n"), 0o600); err != nil {
+	if err := os.WriteFile(script, []byte("@echo off\r\necho "+commandPassword+" "+dockerPassword+" "+dsn+" "+apiKey+" "+accessKey+" "+apiKeyAssignment+" "+accessKeyAssignment+" "+genericDSN+" "+bearerToken+" "+inlineEnvironmentKey+" 1>&2\r\nfor /L %%i in (1,1,256) do @echo fixture-diagnostic-padding 1>&2\r\nexit /b 23\r\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	environment := ar2FixtureEnvironment(t, "", map[string]string{"DATABASE_DSN": dsn})
-	output, err := ar2CommandEnv(context.Background(), t.TempDir(), environment, "cmd.exe", "/C", script, "--password", commandPassword, "-e", "POSTGRES_PASSWORD="+dockerPassword)
+	output, err := ar2CommandEnv(context.Background(), t.TempDir(), environment, "cmd.exe", "/C", script,
+		"--password", commandPassword,
+		"-e", "POSTGRES_PASSWORD="+dockerPassword,
+		"--api-key", apiKey,
+		"--access-key", accessKey,
+		"API_KEY="+apiKeyAssignment,
+		"ACCESS_KEY="+accessKeyAssignment,
+		"UPSTREAM_DSN="+genericDSN,
+		"Bearer", bearerToken,
+		"--env=API_KEY="+inlineEnvironmentKey,
+	)
 	if err == nil {
 		t.Fatal("failing fixture command returned nil error")
 	}
@@ -2045,7 +2099,7 @@ func TestAR2CommandEnvSanitizesBoundedCredentialFailure(t *testing.T) {
 		t.Fatalf("fixture command error did not wrap ExitError: %v", err)
 	}
 	diagnostic := err.Error()
-	for _, secret := range []string{commandPassword, dockerPassword, dsnPassword, dsn} {
+	for _, secret := range []string{commandPassword, dockerPassword, dsnPassword, dsn, apiKey, accessKey, apiKeyAssignment, accessKeyAssignment, genericDSN, bearerToken, inlineEnvironmentKey} {
 		if strings.Contains(diagnostic, secret) {
 			t.Fatalf("fixture command diagnostic leaked %q: %s", secret, diagnostic)
 		}
@@ -2099,10 +2153,14 @@ func ar2FixtureGoBuildEnvironment(environment, base []string) []string {
 			continue
 		}
 		canonical := strings.ToUpper(key)
+		if canonical == "CGO_ENABLED" {
+			continue
+		}
 		if _, allowed := ar2FixtureBuildEnvironmentAliases[canonical]; allowed {
 			values[canonical] = value
 		}
 	}
+	values["CGO_ENABLED"] = "1"
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)
@@ -2176,7 +2234,22 @@ func ar2FixtureCommandSensitiveValues(environment, args []string) []string {
 		if hasValue && ar2FixtureSensitiveCommandKey(key) {
 			add(value)
 		}
+		if hasValue && strings.EqualFold(strings.TrimLeft(key, "-"), "env") {
+			environmentKey, environmentValue, environmentAssignment := strings.Cut(value, "=")
+			if environmentAssignment && ar2FixtureSensitiveCommandKey(environmentKey) {
+				add(environmentValue)
+			}
+		}
 		if ar2FixtureSensitiveCommandKey(argument) && index+1 < len(args) {
+			add(args[index+1])
+		}
+		if strings.EqualFold(strings.TrimLeft(argument, "-"), "env") && index+1 < len(args) {
+			environmentKey, environmentValue, environmentAssignment := strings.Cut(args[index+1], "=")
+			if environmentAssignment && ar2FixtureSensitiveCommandKey(environmentKey) {
+				add(environmentValue)
+			}
+		}
+		if strings.EqualFold(argument, "Bearer") && index+1 < len(args) {
 			add(args[index+1])
 		}
 	}
@@ -2188,7 +2261,7 @@ func ar2FixtureSensitiveCommandKey(key string) bool {
 	if _, credential := ar2FixtureCredentialAliases[normalized]; credential {
 		return true
 	}
-	if normalized == "DATABASE_DSN" {
+	if normalized == "API_KEY" || normalized == "ACCESS_KEY" || normalized == "BEARER" || normalized == "DSN" || strings.HasSuffix(normalized, "_DSN") {
 		return true
 	}
 	return strings.Contains(normalized, "PASSWORD") || strings.Contains(normalized, "TOKEN") || strings.Contains(normalized, "SECRET") || strings.Contains(normalized, "CREDENTIAL")
