@@ -3,12 +3,13 @@ package projectidentity
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"hash"
+	"strconv"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 var errInvalidComparisonV3 = errors.New("invalid V3 comparison telemetry")
@@ -67,7 +68,7 @@ func (transport ComparisonTransportV3) valid() bool {
 }
 
 // ComparisonOriginV3 binds a non-authoritative adapter claim to the physical
-// request channel and retains an opaque attempt identifier only long enough to
+// request channel and retains an opaque retry identifier only long enough to
 // derive redacted comparison references.
 type ComparisonOriginV3 struct {
 	transport ComparisonTransportV3
@@ -76,7 +77,8 @@ type ComparisonOriginV3 struct {
 
 // NewComparisonOriginV3 accepts only labels valid for the physical channel.
 // Unknown or cross-channel claims degrade to the physical base transport.
-// Unsafe request IDs are replaced before they can contribute to a fingerprint.
+// Missing or unsafe request IDs leave the origin without retry identity so
+// best-effort comparison observation can be skipped rather than randomized.
 func NewComparisonOriginV3(physical ComparisonTransportV3, claim, requestID string) ComparisonOriginV3 {
 	base := comparisonPhysicalTransportV3(physical)
 	transport := base
@@ -94,7 +96,7 @@ func NewComparisonOriginV3(physical ComparisonTransportV3, claim, requestID stri
 		}
 	}
 	if !validOpaqueReferenceV3(requestID) {
-		requestID = uuid.NewString()
+		requestID = ""
 	}
 	return ComparisonOriginV3{transport: transport, attemptID: requestID}
 }
@@ -120,17 +122,18 @@ type ComparisonReferencesV3 struct {
 	EvidenceFingerprint string
 }
 
-// DeriveComparisonReferencesV3 derives retry-stable references from validated
-// telemetry inputs. Client instance data influences only hashes and cannot
-// select or infer the transport.
-func (origin ComparisonOriginV3) DeriveComparisonReferencesV3(clientInstanceID string, intent ResolutionIntentV3) (ComparisonReferencesV3, error) {
+// DeriveComparisonReferencesV3 derives retry-stable references from a stable
+// request identifier and fully validated anchor, descriptor, and legacy
+// evidence. The evidence influences only hashes and cannot select a transport.
+func (origin ComparisonOriginV3) DeriveComparisonReferencesV3(anchor AnchorV3, descriptor DescriptorV3, intent ResolutionIntentV3) (ComparisonReferencesV3, error) {
 	if !origin.transport.valid() || !validOpaqueReferenceV3(origin.attemptID) || !intent.Valid() {
 		return ComparisonReferencesV3{}, errInvalidComparisonV3
 	}
-	if _, err := NewCorrelationV3(clientInstanceID); err != nil {
+	evidence, err := comparisonDescriptorEvidenceFingerprintV3(anchor, descriptor)
+	if err != nil {
 		return ComparisonReferencesV3{}, errInvalidComparisonV3
 	}
-	values := []string{origin.attemptID, string(origin.transport), clientInstanceID, string(intent)}
+	values := []string{origin.attemptID, string(origin.transport), descriptor.ClientInstanceID, string(intent), evidence}
 	correlation, err := NewCorrelationV3(comparisonFingerprintV3("correlation", values...))
 	if err != nil {
 		return ComparisonReferencesV3{}, errInvalidComparisonV3
@@ -142,14 +145,40 @@ func (origin ComparisonOriginV3) DeriveComparisonReferencesV3(clientInstanceID s
 	}, nil
 }
 
-func comparisonFingerprintV3(domain string, values ...string) string {
-	hash := sha256.New()
-	_, _ = hash.Write([]byte(domain))
-	for _, value := range values {
-		_, _ = hash.Write([]byte{0})
-		_, _ = hash.Write([]byte(value))
+func comparisonDescriptorEvidenceFingerprintV3(anchor AnchorV3, descriptor DescriptorV3) (string, error) {
+	legacy, err := NewLegacyComparisonDescriptorV3(anchor, descriptor)
+	if err != nil {
+		return "", errInvalidComparisonV3
 	}
-	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+	values := []string{
+		strconv.Itoa(anchor.Version), anchor.ProjectID, anchor.Name, anchor.Scope,
+		strconv.Itoa(descriptor.Version), descriptor.AnchorProjectID, descriptor.Name, descriptor.Scope, descriptor.ClientInstanceID,
+		strconv.Itoa(len(descriptor.NormalizedGitRemotes)), strconv.Itoa(len(legacy.identifiers)),
+	}
+	values = append(values, descriptor.NormalizedGitRemotes...)
+	for _, identifier := range legacy.identifiers {
+		values = append(values, string(identifier.Scheme), identifier.Value, string(identifier.Provenance))
+	}
+	return comparisonFingerprintV3("descriptor-anchor-legacy", values...), nil
+}
+
+func comparisonFingerprintV3(domain string, values ...string) string {
+	hasher := sha256.New()
+	writeComparisonFingerprintValueV3(hasher, domain)
+	var count [8]byte
+	binary.BigEndian.PutUint64(count[:], uint64(len(values)))
+	_, _ = hasher.Write(count[:])
+	for _, value := range values {
+		writeComparisonFingerprintValueV3(hasher, value)
+	}
+	return "sha256:" + hex.EncodeToString(hasher.Sum(nil))
+}
+
+func writeComparisonFingerprintValueV3(hasher hash.Hash, value string) {
+	var size [8]byte
+	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+	_, _ = hasher.Write(size[:])
+	_, _ = hasher.Write([]byte(value))
 }
 
 // ComparisonScopeV3 records the requested V3 scope even when V3 refuses. It

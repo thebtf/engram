@@ -47,6 +47,11 @@ func grpcV3Result(t *testing.T, intent projectidentity.ResolutionIntentV3, outco
 	if err != nil {
 		t.Fatal(err)
 	}
+	return grpcV3ResultWithCorrelation(t, intent, outcome, correlation)
+}
+
+func grpcV3ResultWithCorrelation(t *testing.T, intent projectidentity.ResolutionIntentV3, outcome projectidentity.ResolutionOutcomeV3, correlation projectidentity.CorrelationV3) (projectidentity.ResolutionResultV3, error) {
+	t.Helper()
 	if outcome.IsSuccess() {
 		key, err := projectidentity.NewProjectKeyV3(grpcV3ProjectKey)
 		if err != nil {
@@ -573,8 +578,8 @@ func TestResolveProjectIdentityV3RecordsNormalComparisonsWithoutChangingResponse
 		return grpcV3Result(t, request.Intent, projectidentity.ProjectResolvedOutcomeV3)
 	}
 	response, err = failingServer.Initialize(ctx, &pb.InitializeRequest{ProjectIdentityV3: grpcV3Identity()})
-	if err != nil || response.GetProjectResolutionV3().GetOutcome() != pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED || len(failingStore.observations) != 0 {
-		t.Fatalf("observer failure changed response=%#v err=%v observations=%#v", response, err, failingStore.observations)
+	if err != nil || response.GetProjectResolutionV3().GetOutcome() != pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED || failingObserver.calls != 1 || len(failingStore.observations) != 1 || failingStore.observations[0].LegacyOutcome != projectidentity.LegacyComparisonUnavailableV2 || failingStore.observations[0].Classification() != projectidentity.ComparisonUnavailableV3 {
+		t.Fatalf("observer failure changed response=%#v err=%v observer_calls=%d observations=%#v", response, err, failingObserver.calls, failingStore.observations)
 	}
 
 	registrationObserver := &grpcComparisonObserverV3{outcome: projectidentity.LegacyComparisonResolvedV2}
@@ -586,6 +591,55 @@ func TestResolveProjectIdentityV3RecordsNormalComparisonsWithoutChangingResponse
 	registrationContext := auth.WithIdentity(ctx, auth.Admin())
 	if response, err := registrationServer.RegisterProjectIdentityV3(registrationContext, &pb.RegisterProjectIdentityV3Request{ProjectIdentityV3: grpcV3Identity()}); err != nil || response.GetProjectResolutionV3().GetOutcome() != pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED || registrationObserver.calls != 0 || len(registrationStore.observations) != 0 {
 		t.Fatalf("registration response=%#v err=%v observer_calls=%d observations=%#v", response, err, registrationObserver.calls, registrationStore.observations)
+	}
+}
+
+func TestResolveProjectIdentityV3ReplaysComparisonUnderResponseCorrelation(t *testing.T) {
+	observer := &grpcComparisonObserverV3{outcome: projectidentity.LegacyComparisonResolvedV2}
+	store := &grpcReplayComparisonStoreV3{}
+	srv := &Server{handler: identityOrderHandler{steps: &[]string{}}, comparisonObserverV3: observer, comparisonStoreV3: store}
+	srv.identityResolverV3 = func(_ context.Context, _ *gormlib.DB, request projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error) {
+		return grpcV3ResultWithCorrelation(t, request.Intent, projectidentity.ProjectResolvedOutcomeV3, request.Correlation)
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", "grpc-comparison-replay-17", "x-engram-project-identity-adapter", "daemon"))
+	first, err := srv.Initialize(ctx, &pb.InitializeRequest{ProjectIdentityV3: grpcV3Identity()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := srv.Initialize(ctx, &pb.InitializeRequest{ProjectIdentityV3: grpcV3Identity()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	correlation := first.GetProjectResolutionV3().GetCorrelation()
+	if correlation == "" || second.GetProjectResolutionV3().GetCorrelation() != correlation {
+		t.Fatalf("replayed responses must share comparison correlation: first=%#v second=%#v", first, second)
+	}
+	observations := store.observationsFor(projectidentity.CorrelationV3(correlation))
+	if len(observations) != 1 || string(observations[0].Correlation) != correlation || observer.calls != 2 {
+		t.Fatalf("correlation=%q observations=%#v observer_calls=%d", correlation, observations, observer.calls)
+	}
+}
+
+func TestResolveProjectIdentityV3SkipsComparisonWithoutStableRequestIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		ctx  context.Context
+	}{
+		{name: "missing request id", ctx: context.Background()},
+		{name: "unsafe request id", ctx: metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", "https://fixture-user:fixture-credential@example.invalid/private/request"))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			observer := &grpcComparisonObserverV3{outcome: projectidentity.LegacyComparisonResolvedV2}
+			store := &grpcComparisonStoreV3{}
+			srv := &Server{handler: identityOrderHandler{steps: &[]string{}}, comparisonObserverV3: observer, comparisonStoreV3: store}
+			srv.identityResolverV3 = func(_ context.Context, _ *gormlib.DB, request projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error) {
+				return grpcV3Result(t, request.Intent, projectidentity.ProjectResolvedOutcomeV3)
+			}
+			response, err := srv.Initialize(test.ctx, &pb.InitializeRequest{ProjectIdentityV3: grpcV3Identity()})
+			if err != nil || response.GetProjectResolutionV3().GetOutcome() != pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED || observer.calls != 0 || len(store.observations) != 0 {
+				t.Fatalf("response=%#v err=%v observer_calls=%d observations=%#v", response, err, observer.calls, store.observations)
+			}
+		})
 	}
 }
 
@@ -608,4 +662,32 @@ type grpcComparisonStoreV3 struct {
 func (store *grpcComparisonStoreV3) RecordComparisonV3(_ context.Context, observation projectidentity.ComparisonObservationV3) (projectidentity.ComparisonReceiptV3, error) {
 	store.observations = append(store.observations, observation)
 	return projectidentity.ComparisonReceiptV3{Correlation: observation.Correlation}, store.err
+}
+
+type grpcReplayComparisonStoreV3 struct {
+	observations []projectidentity.ComparisonObservationV3
+}
+
+func (store *grpcReplayComparisonStoreV3) RecordComparisonV3(_ context.Context, observation projectidentity.ComparisonObservationV3) (projectidentity.ComparisonReceiptV3, error) {
+	for _, persisted := range store.observations {
+		if persisted.IdempotencyKey != observation.IdempotencyKey {
+			continue
+		}
+		if !reflect.DeepEqual(persisted, observation) {
+			return projectidentity.ComparisonReceiptV3{}, errors.New("conflicting comparison replay")
+		}
+		return projectidentity.ComparisonReceiptV3{IdempotencyKey: persisted.IdempotencyKey, Correlation: persisted.Correlation}, nil
+	}
+	store.observations = append(store.observations, observation)
+	return projectidentity.ComparisonReceiptV3{IdempotencyKey: observation.IdempotencyKey, Correlation: observation.Correlation}, nil
+}
+
+func (store *grpcReplayComparisonStoreV3) observationsFor(correlation projectidentity.CorrelationV3) []projectidentity.ComparisonObservationV3 {
+	var observations []projectidentity.ComparisonObservationV3
+	for _, observation := range store.observations {
+		if observation.Correlation == correlation {
+			observations = append(observations, observation)
+		}
+	}
+	return observations
 }

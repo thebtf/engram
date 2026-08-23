@@ -145,33 +145,65 @@ func TestComparisonOriginV3BindsClaimToPhysicalChannelAndDerivesStableReferences
 		})
 	}
 
+	anchor, descriptor := comparisonTestDescriptorV3(t, "11111111-1111-4111-8111-111111111111", "daemon-install-17", "example.invalid/acme/engram", "legacy-comparison-17")
 	origin := NewComparisonOriginV3(ComparisonTransportGRPCV3, "daemon", "request-17")
-	first, err := origin.DeriveComparisonReferencesV3("daemon-install-17", ResolveExistingIntentV3)
+	first, err := origin.DeriveComparisonReferencesV3(anchor, descriptor, ResolveExistingIntentV3)
 	require.NoError(t, err)
-	second, err := origin.DeriveComparisonReferencesV3("daemon-install-17", ResolveExistingIntentV3)
+	second, err := origin.DeriveComparisonReferencesV3(anchor, descriptor, ResolveExistingIntentV3)
 	require.NoError(t, err)
-	require.Equal(t, first, second)
+	require.Equal(t, first, second, "a retry with the same request and evidence must reuse all references")
 
-	changedIntent, err := origin.DeriveComparisonReferencesV3("daemon-install-17", ReadFilterIntentV3)
+	changedIntent, err := origin.DeriveComparisonReferencesV3(anchor, descriptor, ReadFilterIntentV3)
 	require.NoError(t, err)
 	require.NotEqual(t, first, changedIntent)
+	clientAnchor, clientDescriptor := comparisonTestDescriptorV3(t, "33333333-3333-4333-8333-333333333333", "hook-client-install-17", "example.invalid/acme/engram", "legacy-comparison-17")
 	originWithClientLikeClaim := NewComparisonOriginV3(ComparisonTransportGRPCV3, "", "request-17")
-	clientLikeHook, err := originWithClientLikeClaim.DeriveComparisonReferencesV3("hook-client-install-17", ResolveExistingIntentV3)
+	clientLikeHook, err := originWithClientLikeClaim.DeriveComparisonReferencesV3(clientAnchor, clientDescriptor, ResolveExistingIntentV3)
 	require.NoError(t, err)
 	require.Equal(t, ComparisonTransportGRPCV3, originWithClientLikeClaim.Transport(), "client instance metadata must not infer an adapter")
 	require.NotEqual(t, first, clientLikeHook)
 }
 
-func TestComparisonOriginV3ReplacesUnsafeRequestID(t *testing.T) {
-	unsafe := "https://fixture-user:fixture-credential@example.invalid/private/request"
-	origin := NewComparisonOriginV3(ComparisonTransportGRPCV3, "daemon", unsafe)
-	require.NotEqual(t, unsafe, origin.AttemptID())
-	_, err := NewCorrelationV3(origin.AttemptID())
+func TestComparisonOriginV3BindsReferencesToRedactedValidatedEvidence(t *testing.T) {
+	projectID := "11111111-1111-4111-8111-111111111111"
+	anchor, descriptor := comparisonTestDescriptorV3(t, projectID, "daemon-install-17", "example.invalid/acme/private-repository", "legacy-private-comparison")
+	origin := NewComparisonOriginV3(ComparisonTransportGRPCV3, "daemon", "request-17")
+	first, err := origin.DeriveComparisonReferencesV3(anchor, descriptor, ResolveExistingIntentV3)
 	require.NoError(t, err)
 
-	references, err := origin.DeriveComparisonReferencesV3("daemon-install-17", ResolveExistingIntentV3)
+	otherAnchor, otherDescriptor := comparisonTestDescriptorV3(t, "33333333-3333-4333-8333-333333333333", "daemon-install-17", "example.invalid/acme/private-repository", "legacy-private-comparison")
+	otherProject, err := origin.DeriveComparisonReferencesV3(otherAnchor, otherDescriptor, ResolveExistingIntentV3)
 	require.NoError(t, err)
-	require.NotContains(t, references.IdempotencyKey, unsafe)
-	require.NotContains(t, string(references.Correlation), unsafe)
-	require.NotContains(t, references.EvidenceFingerprint, unsafe)
+	changedRemoteAnchor, changedRemote := comparisonTestDescriptorV3(t, projectID, "daemon-install-17", "example.invalid/acme/other-repository", "legacy-private-comparison")
+	otherRemote, err := origin.DeriveComparisonReferencesV3(changedRemoteAnchor, changedRemote, ResolveExistingIntentV3)
+	require.NoError(t, err)
+	changedLegacyAnchor, changedLegacy := comparisonTestDescriptorV3(t, projectID, "daemon-install-17", "example.invalid/acme/private-repository", "legacy-other-comparison")
+	otherLegacy, err := origin.DeriveComparisonReferencesV3(changedLegacyAnchor, changedLegacy, ResolveExistingIntentV3)
+	require.NoError(t, err)
+	for _, references := range []ComparisonReferencesV3{otherProject, otherRemote, otherLegacy} {
+		require.NotEqual(t, first.IdempotencyKey, references.IdempotencyKey)
+	}
+	for _, raw := range []string{anchor.ProjectID, anchor.Name, descriptor.NormalizedGitRemotes[0], descriptor.LegacyIdentifiers[0].Value} {
+		require.NotContains(t, first.IdempotencyKey, raw)
+		require.NotContains(t, string(first.Correlation), raw)
+		require.NotContains(t, first.EvidenceFingerprint, raw)
+	}
+}
+
+func TestComparisonOriginV3SkipsUnstableRequestIdentity(t *testing.T) {
+	anchor, descriptor := comparisonTestDescriptorV3(t, "11111111-1111-4111-8111-111111111111", "daemon-install-17", "example.invalid/acme/engram", "legacy-comparison-17")
+	for _, requestID := range []string{"", "https://fixture-user:fixture-credential@example.invalid/private/request"} {
+		origin := NewComparisonOriginV3(ComparisonTransportGRPCV3, "daemon", requestID)
+		require.Empty(t, origin.AttemptID())
+		_, err := origin.DeriveComparisonReferencesV3(anchor, descriptor, ResolveExistingIntentV3)
+		require.Error(t, err)
+	}
+}
+
+func comparisonTestDescriptorV3(t *testing.T, projectID, clientInstanceID, remote, legacy string) (AnchorV3, DescriptorV3) {
+	t.Helper()
+	anchor := AnchorV3{Version: 3, ProjectID: projectID, Name: "private/comparison-project", Scope: "repository"}
+	descriptor, err := BuildDescriptorV3(anchor, []string{remote}, []LegacyIdentifierV3{{Scheme: "binding_v2", Value: legacy, Provenance: "comparison-test"}}, clientInstanceID)
+	require.NoError(t, err)
+	return anchor, descriptor
 }

@@ -399,40 +399,25 @@ func (verifier grpcV3AuthorizationVerifier) VerifyAuthorizationV3(ctx context.Co
 	return projectidentity.AuthorizationVerificationV3{}, nil
 }
 
-func grpcProjectIdentityV3Request(identity *pb.ProjectIdentityV3, intent projectidentity.ResolutionIntentV3) (projectidentity.ResolveProjectRequestV3, error) {
-	correlation, err := projectidentity.NewCorrelationV3(uuid.NewString())
-	if err != nil {
+func grpcProjectIdentityV3Request(identity *pb.ProjectIdentityV3, intent projectidentity.ResolutionIntentV3, correlation projectidentity.CorrelationV3) (projectidentity.ResolveProjectRequestV3, error) {
+	if correlation == "" {
+		generated, err := projectidentity.NewCorrelationV3(uuid.NewString())
+		if err != nil {
+			return projectidentity.ResolveProjectRequestV3{}, err
+		}
+		correlation = generated
+	} else if _, err := projectidentity.NewCorrelationV3(string(correlation)); err != nil {
 		return projectidentity.ResolveProjectRequestV3{}, err
 	}
 	authorization, err := projectidentity.NewAuthorizationReferenceV3(uuid.NewString())
 	if err != nil {
 		return projectidentity.ResolveProjectRequestV3{}, err
 	}
-	legacy := make([]projectidentity.LegacyIdentifierV3, len(identity.GetLegacyIdentifiers()))
-	for index, identifier := range identity.GetLegacyIdentifiers() {
-		legacy[index] = projectidentity.LegacyIdentifierV3{
-			Scheme:     projectidentity.LegacyIdentifierSchemeV3(identifier.GetScheme()),
-			Value:      identifier.GetValue(),
-			Provenance: projectidentity.LegacyIdentifierProvenanceV3(identifier.GetProvenance()),
-		}
-	}
+	anchor, descriptor := grpcProjectIdentityV3Evidence(identity)
 	request := projectidentity.ResolveProjectRequestV3{
-		Intent: intent,
-		Anchor: projectidentity.AnchorV3{
-			Version:   int(identity.GetVersion()),
-			ProjectID: identity.GetAnchorProjectId(),
-			Name:      identity.GetName(),
-			Scope:     identity.GetScope(),
-		},
-		Descriptor: projectidentity.DescriptorV3{
-			Version:              int(identity.GetVersion()),
-			AnchorProjectID:      identity.GetAnchorProjectId(),
-			Name:                 identity.GetName(),
-			Scope:                identity.GetScope(),
-			NormalizedGitRemotes: identity.GetNormalizedGitRemotes(),
-			LegacyIdentifiers:    legacy,
-			ClientInstanceID:     identity.GetClientInstanceId(),
-		},
+		Intent:      intent,
+		Anchor:      anchor,
+		Descriptor:  descriptor,
 		Correlation: correlation,
 	}
 	switch intent {
@@ -452,8 +437,47 @@ func grpcProjectIdentityV3Request(identity *pb.ProjectIdentityV3, intent project
 	return request, nil
 }
 
+func grpcProjectIdentityV3Evidence(identity *pb.ProjectIdentityV3) (projectidentity.AnchorV3, projectidentity.DescriptorV3) {
+	legacy := make([]projectidentity.LegacyIdentifierV3, len(identity.GetLegacyIdentifiers()))
+	for index, identifier := range identity.GetLegacyIdentifiers() {
+		legacy[index] = projectidentity.LegacyIdentifierV3{
+			Scheme:     projectidentity.LegacyIdentifierSchemeV3(identifier.GetScheme()),
+			Value:      identifier.GetValue(),
+			Provenance: projectidentity.LegacyIdentifierProvenanceV3(identifier.GetProvenance()),
+		}
+	}
+	anchor := projectidentity.AnchorV3{
+		Version:   int(identity.GetVersion()),
+		ProjectID: identity.GetAnchorProjectId(),
+		Name:      identity.GetName(),
+		Scope:     identity.GetScope(),
+	}
+	return anchor, projectidentity.DescriptorV3{
+		Version:              int(identity.GetVersion()),
+		AnchorProjectID:      identity.GetAnchorProjectId(),
+		Name:                 identity.GetName(),
+		Scope:                identity.GetScope(),
+		NormalizedGitRemotes: identity.GetNormalizedGitRemotes(),
+		LegacyIdentifiers:    legacy,
+		ClientInstanceID:     identity.GetClientInstanceId(),
+	}
+}
+
 func (s *Server) resolveProjectIdentityV3(ctx context.Context, identity *pb.ProjectIdentityV3, intent projectidentity.ResolutionIntentV3) (projectidentity.ResolutionResultV3, error) {
-	request, err := grpcProjectIdentityV3Request(identity, intent)
+	var origin projectidentity.ComparisonOriginV3
+	var references projectidentity.ComparisonReferencesV3
+	comparisonEnabled := false
+	correlation := projectidentity.CorrelationV3("")
+	if intent == projectidentity.ResolveExistingIntentV3 || intent == projectidentity.ReadFilterIntentV3 {
+		origin = grpcComparisonOriginV3(ctx)
+		anchor, descriptor := grpcProjectIdentityV3Evidence(identity)
+		if derived, err := origin.DeriveComparisonReferencesV3(anchor, descriptor, intent); err == nil {
+			references = derived
+			correlation = references.Correlation
+			comparisonEnabled = true
+		}
+	}
+	request, err := grpcProjectIdentityV3Request(identity, intent, correlation)
 	if err != nil {
 		return projectidentity.ResolutionResultV3{}, status.Error(codes.Internal, "project identity resolution unavailable")
 	}
@@ -471,8 +495,8 @@ func (s *Server) resolveProjectIdentityV3(ctx context.Context, identity *pb.Proj
 		}
 	}
 	resolution, err := resolver(ctx, s.db, request)
-	if (request.Intent == projectidentity.ResolveExistingIntentV3 || request.Intent == projectidentity.ReadFilterIntentV3) && resolution.Outcome().Valid() {
-		s.observeProjectIdentityComparisonV3(ctx, request, resolution)
+	if comparisonEnabled && resolution.Outcome().Valid() {
+		s.observeProjectIdentityComparisonV3(ctx, request, resolution, origin, references)
 	}
 	if err := projectIdentityV3Error(resolution, err); err != nil {
 		return projectidentity.ResolutionResultV3{}, err
@@ -480,16 +504,10 @@ func (s *Server) resolveProjectIdentityV3(ctx context.Context, identity *pb.Proj
 	return resolution, nil
 }
 
-func (s *Server) observeProjectIdentityComparisonV3(ctx context.Context, request projectidentity.ResolveProjectRequestV3, resolution projectidentity.ResolutionResultV3) {
+func (s *Server) observeProjectIdentityComparisonV3(ctx context.Context, request projectidentity.ResolveProjectRequestV3, resolution projectidentity.ResolutionResultV3, origin projectidentity.ComparisonOriginV3, references projectidentity.ComparisonReferencesV3) {
 	descriptor, err := projectidentity.NewLegacyComparisonDescriptorV3(request.Anchor, request.Descriptor)
 	if err != nil {
 		log.Print("project identity comparison skipped: invalid descriptor")
-		return
-	}
-	origin := grpcComparisonOriginV3(ctx)
-	references, err := origin.DeriveComparisonReferencesV3(request.Descriptor.ClientInstanceID, request.Intent)
-	if err != nil {
-		log.Print("project identity comparison skipped: invalid telemetry metadata")
 		return
 	}
 	observer := s.comparisonObserverV3
@@ -499,7 +517,7 @@ func (s *Server) observeProjectIdentityComparisonV3(ctx context.Context, request
 	legacyOutcome, err := observer.ObserveLegacyOutcomeV2(ctx, descriptor)
 	if err != nil {
 		log.Print("project identity comparison observer unavailable")
-		return
+		legacyOutcome = projectidentity.LegacyComparisonUnavailableV2
 	}
 	scope := projectidentity.ComparisonRepositoryScopeV3
 	if request.Descriptor.Scope == "directory" {
@@ -507,7 +525,7 @@ func (s *Server) observeProjectIdentityComparisonV3(ctx context.Context, request
 	}
 	observation, err := projectidentity.NewComparisonObservationV3(
 		references.IdempotencyKey,
-		references.Correlation,
+		resolution.Correlation(),
 		resolution.Outcome(),
 		legacyOutcome,
 		request.Descriptor.ClientInstanceID,
