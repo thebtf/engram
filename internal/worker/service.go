@@ -125,7 +125,6 @@ type Service struct {
 	sessionIdxStore                  *sessions.Store
 	router                           *chi.Mux
 	store                            *gorm.Store
-	projectIdentityResolverV3        projectIdentityV3Resolver
 	retrievalStats                   map[string]*RetrievalStats
 	sessionStore                     *gorm.SessionStore
 	tokenStore                       *gorm.TokenStore
@@ -938,7 +937,6 @@ func (s *Service) initializeAsync() {
 	// Dedup config was removed in v5 (US11) — the SDK processor now uses fixed defaults.
 	s.initMu.Lock()
 	s.store = store
-	s.projectIdentityResolverV3 = newHTTPProjectIdentityResolverV3(store)
 	s.sessionStore = sessionStore
 	s.injectionLogStore = injectionLogStore
 	s.citationLogStore = citationLogStore

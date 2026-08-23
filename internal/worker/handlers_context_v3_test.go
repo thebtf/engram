@@ -19,51 +19,26 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 )
 
-type contextV3ResolutionStore struct {
-	binding  projectidentity.AnchorBindingV3
-	lookups  int
-	attempts []projectidentity.ResolutionAttemptV3
-}
-
-func (s *contextV3ResolutionStore) LookupAnchorBindingV3(_ context.Context, _ projectidentity.VerifiedAuthorizationV3, _ string) (projectidentity.AnchorBindingV3, error) {
-	s.lookups++
-	return s.binding, nil
-}
-
-func (*contextV3ResolutionStore) RegisterAnchorBindingAndRecordAttemptV3(context.Context, projectidentity.AnchorRegistrationV3, projectidentity.RegistrationAttemptBuilderV3) error {
-	return errors.New("registration is not an HTTP context retrieval path")
-}
-
-func (*contextV3ResolutionStore) LookupAdministrativeTargetV3(context.Context, projectidentity.VerifiedAuthorizationV3) (projectidentity.AnchorBindingV3, error) {
-	return projectidentity.AnchorBindingV3{}, errors.New("administrative lookup is not an HTTP context retrieval path")
-}
-
-func (s *contextV3ResolutionStore) RecordResolutionAttemptV3(_ context.Context, attempt projectidentity.ResolutionAttemptV3) error {
-	s.attempts = append(s.attempts, attempt)
-	return nil
-}
-
-type contextV3AuthorizationVerifier struct{}
-
-func (contextV3AuthorizationVerifier) VerifyAuthorizationV3(context.Context, projectidentity.AuthorizationVerificationRequestV3) (projectidentity.AuthorizationVerificationV3, error) {
-	return projectidentity.AuthorizationVerificationV3{Authorized: true}, nil
-}
-
-type contextV3ResolverSpy struct {
-	resolver projectidentity.ResolverV3
+type contextInjectV3Workflow struct {
 	calls    int
-	request  projectidentity.ResolveProjectRequestV3
+	ctx      context.Context
+	request  *pb.InitializeRequest
+	response *pb.InitializeResponse
+	err      error
 }
 
-func (s *contextV3ResolverSpy) ResolveProjectV3(ctx context.Context, request projectidentity.ResolveProjectRequestV3) (projectidentity.ResolveProjectResultV3, error) {
+func (*contextInjectV3Workflow) GetSessionStartContext(context.Context, *pb.GetSessionStartContextRequest) (*pb.GetSessionStartContextResponse, error) {
+	return nil, errors.New("context inject must not call session-start retrieval")
+}
+
+func (s *contextInjectV3Workflow) Initialize(ctx context.Context, request *pb.InitializeRequest) (*pb.InitializeResponse, error) {
 	s.calls++
+	s.ctx = ctx
 	s.request = request
-	return s.resolver.ResolveProjectV3(ctx, request)
-}
-
-func newContextV3ResolverSpy(binding projectidentity.AnchorBindingV3) (*contextV3ResolverSpy, *contextV3ResolutionStore) {
-	store := &contextV3ResolutionStore{binding: binding}
-	return &contextV3ResolverSpy{resolver: projectidentity.NewResolverV3(store, contextV3AuthorizationVerifier{})}, store
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.response, nil
 }
 
 func validContextProjectDescriptorV3() map[string]any {
@@ -94,14 +69,18 @@ func v3ContextInjectRequest(t *testing.T, descriptor map[string]any) *http.Reque
 }
 
 func TestContextInjectV3_ResolvesBeforeRetrievalAndIgnoresRawSelectors(t *testing.T) {
-	const projectKey = "22222222-2222-4222-8222-222222222222"
-	resolver, store := newContextV3ResolverSpy(projectidentity.AnchorBindingV3{
-		State:      projectidentity.AnchorBindingActiveV3,
-		ProjectKey: projectKey,
-		Scope:      "repository",
-	})
+	projectKey := "22222222-2222-4222-8222-222222222222"
+	resolvedScope := "repository"
+	workflow := &contextInjectV3Workflow{response: &pb.InitializeResponse{
+		ProjectResolutionV3: &pb.ProjectResolutionResultV3{
+			Outcome:       pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED,
+			ProjectKey:    &projectKey,
+			ResolvedScope: &resolvedScope,
+			Correlation:   "grpc-correlation-v3",
+		},
+	}}
 	service := newInjectTestService(true)
-	service.projectIdentityResolverV3 = resolver
+	service.grpcInternalServer = workflow
 
 	var fallbackScopes []retrievalScope
 	var retrievedProject string
@@ -123,11 +102,19 @@ func TestContextInjectV3_ResolvesBeforeRetrievalAndIgnoresRawSelectors(t *testin
 	if writer.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", writer.Code, writer.Body.String())
 	}
-	if resolver.calls != 1 || store.lookups != 1 {
-		t.Fatalf("central resolver calls=%d lookups=%d", resolver.calls, store.lookups)
+	if workflow.calls != 1 || workflow.request == nil {
+		t.Fatalf("central workflow calls=%d request=%#v", workflow.calls, workflow.request)
 	}
-	if resolver.request.Intent != projectidentity.ResolveExistingIntentV3 || resolver.request.Anchor.ProjectID != "11111111-1111-4111-8111-111111111111" {
-		t.Fatalf("unexpected resolver request: %#v", resolver.request)
+	if workflow.request.GetProject() != "" {
+		t.Fatalf("raw project bypassed central V3 workflow: %q", workflow.request.GetProject())
+	}
+	identity := workflow.request.GetProjectIdentityV3()
+	if identity == nil || identity.GetAnchorProjectId() != "11111111-1111-4111-8111-111111111111" || identity.GetClientInstanceId() != "fixture-http-client" {
+		t.Fatalf("project identity=%#v", identity)
+	}
+	caller, ok := auth.IdentityFrom(workflow.ctx)
+	if !ok || caller.KeycardID != "keycard-v3" || caller.Role != "read-only" {
+		t.Fatalf("authenticated identity was not forwarded: %#v", caller)
 	}
 	if retrievedProject != projectKey {
 		t.Fatalf("retrieval project=%q, want resolved key %q", retrievedProject, projectKey)
@@ -152,9 +139,9 @@ func TestContextInjectV3_ResolvesBeforeRetrievalAndIgnoresRawSelectors(t *testin
 }
 
 func TestContextInjectV3_RefusalStopsRetrievalAndRedactsInputs(t *testing.T) {
-	resolver, store := newContextV3ResolverSpy(projectidentity.AnchorBindingV3{State: projectidentity.AnchorBindingMissingV3})
+	workflow := &contextInjectV3Workflow{err: sessionStartV3Refusal(t, projectidentity.ProjectOnboardingRequiredOutcomeV3)}
 	service := newInjectTestService(true)
-	service.projectIdentityResolverV3 = resolver
+	service.grpcInternalServer = workflow
 	service.retrievalHooks.searchObservationsFTSFiltered = func(context.Context, string, retrievalScope, int) ([]*models.Observation, error) {
 		t.Fatal("retrieval ran after V3 refusal")
 		return nil, nil
@@ -166,8 +153,8 @@ func TestContextInjectV3_RefusalStopsRetrievalAndRedactsInputs(t *testing.T) {
 	if writer.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", writer.Code, writer.Body.String())
 	}
-	if resolver.calls != 1 || store.lookups != 1 {
-		t.Fatalf("resolver calls=%d lookups=%d", resolver.calls, store.lookups)
+	if workflow.calls != 1 {
+		t.Fatalf("central workflow calls=%d", workflow.calls)
 	}
 	var response map[string]string
 	if err := json.Unmarshal(writer.Body.Bytes(), &response); err != nil {
@@ -183,10 +170,10 @@ func TestContextInjectV3_RefusalStopsRetrievalAndRedactsInputs(t *testing.T) {
 	}
 }
 
-func TestContextInjectV3_RejectsClientProjectKeyBeforeResolver(t *testing.T) {
-	resolver, _ := newContextV3ResolverSpy(projectidentity.AnchorBindingV3{State: projectidentity.AnchorBindingActiveV3})
+func TestContextInjectV3_RejectsClientProjectKeyBeforeCentralWorkflow(t *testing.T) {
+	workflow := &contextInjectV3Workflow{}
 	service := newInjectTestService(true)
-	service.projectIdentityResolverV3 = resolver
+	service.grpcInternalServer = workflow
 	descriptor := validContextProjectDescriptorV3()
 	descriptor["project_key"] = "22222222-2222-4222-8222-222222222222"
 
@@ -196,8 +183,8 @@ func TestContextInjectV3_RejectsClientProjectKeyBeforeResolver(t *testing.T) {
 	if writer.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", writer.Code, writer.Body.String())
 	}
-	if resolver.calls != 0 {
-		t.Fatalf("client project key reached resolver %d times", resolver.calls)
+	if workflow.calls != 0 {
+		t.Fatalf("client project key reached central workflow %d times", workflow.calls)
 	}
 	var response map[string]string
 	if err := json.Unmarshal(writer.Body.Bytes(), &response); err != nil {
@@ -208,7 +195,7 @@ func TestContextInjectV3_RejectsClientProjectKeyBeforeResolver(t *testing.T) {
 	}
 }
 
-func TestContextInjectV3_MissingResolverReturnsStableUnavailableRefusal(t *testing.T) {
+func TestContextInjectV3_MissingCentralWorkflowReturnsStableUnavailableRefusal(t *testing.T) {
 	service := newInjectTestService(true)
 	writer := httptest.NewRecorder()
 	service.handleContextInject(writer, v3ContextInjectRequest(t, validContextProjectDescriptorV3()))

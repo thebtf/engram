@@ -4,9 +4,7 @@ package worker
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,42 +33,14 @@ type sessionStartContextProvider interface {
 	GetSessionStartContext(context.Context, *pb.GetSessionStartContextRequest) (*pb.GetSessionStartContextResponse, error)
 }
 
-// projectIdentityV3Resolver is the worker's narrow dependency on the central
-// V3 authority. HTTP only translates trusted request context and descriptor
-// inputs; it neither selects nor derives a project key.
-type projectIdentityV3Resolver interface {
-	ResolveProjectV3(context.Context, projectidentity.ResolveProjectRequestV3) (projectidentity.ResolveProjectResultV3, error)
+// projectIdentityV3Workflow is the central gRPC authority used by V3 HTTP
+// intake. The worker forwards the descriptor and authenticated context; it
+// never builds a resolver or derives project authority locally.
+type projectIdentityV3Workflow interface {
+	Initialize(context.Context, *pb.InitializeRequest) (*pb.InitializeResponse, error)
 }
 
 var errHTTPProjectIdentityResolverUnavailable = errors.New("HTTP project identity resolver unavailable")
-
-type httpProjectIdentityAuthorizationVerifierV3 struct{}
-
-func (httpProjectIdentityAuthorizationVerifierV3) VerifyAuthorizationV3(ctx context.Context, request projectidentity.AuthorizationVerificationRequestV3) (projectidentity.AuthorizationVerificationV3, error) {
-	authorization, err := httpProjectIdentityAuthorizationReferenceV3(ctx)
-	if err != nil || request.Authorization() != authorization {
-		return projectidentity.AuthorizationVerificationV3{}, nil
-	}
-	return projectidentity.AuthorizationVerificationV3{Authorized: true}, nil
-}
-
-func newHTTPProjectIdentityResolverV3(store *gorm.Store) projectIdentityV3Resolver {
-	if store == nil {
-		return nil
-	}
-	return projectidentity.NewResolverV3(store, httpProjectIdentityAuthorizationVerifierV3{})
-}
-
-func httpProjectIdentityAuthorizationReferenceV3(ctx context.Context) (projectidentity.AuthorizationReferenceV3, error) {
-	identity, ok := auth.IdentityFrom(ctx)
-	if !ok || identity.Role == "" || identity.Source == "" {
-		return "", errors.New("authenticated HTTP identity is required")
-	}
-	digest := sha256.Sum256([]byte(strings.Join([]string{
-		string(identity.Source), string(identity.Role), identity.KeycardID, identity.Principal, string(identity.PrincipalKind),
-	}, "\x00")))
-	return projectidentity.NewAuthorizationReferenceV3("http-auth-" + hex.EncodeToString(digest[:]))
-}
 
 type projectIdentityV3HTTPError struct {
 	outcome projectidentity.ResolutionOutcomeV3
@@ -138,40 +108,27 @@ func projectIdentityV3ProtoDescriptor(raw json.RawMessage) (*pb.ProjectIdentityV
 	}, nil
 }
 
-func httpProjectIdentityCorrelationV3(ctx context.Context) projectidentity.CorrelationV3 {
-	correlation, err := projectidentity.NewCorrelationV3("http-context-" + GetRequestID(ctx))
-	if err == nil {
-		return correlation
-	}
-	// RequestID middleware normally supplies the correlation. Direct handler
-	// callers still receive a server-generated opaque correlation.
-	correlation, _ = projectidentity.NewCorrelationV3("http-context-" + uuid.NewString())
-	return correlation
-}
-
-func (s *Service) resolveContextProjectV3(ctx context.Context, raw json.RawMessage) (projectidentity.ResolutionResultV3, error) {
-	anchor, descriptor, err := parseProjectDescriptorV3HTTP(raw)
+func (s *Service) resolveContextProjectV3(ctx context.Context, raw json.RawMessage) (*pb.ProjectResolutionResultV3, error) {
+	identity, err := projectIdentityV3ProtoDescriptor(raw)
 	if err != nil {
-		return projectidentity.ResolutionResultV3{}, err
-	}
-	authorization, err := httpProjectIdentityAuthorizationReferenceV3(ctx)
-	if err != nil {
-		return projectidentity.ResolutionResultV3{}, &projectIdentityV3HTTPError{outcome: projectidentity.ProjectDescriptorInvalidOutcomeV3}
+		return nil, err
 	}
 	s.initMu.RLock()
-	resolver := s.projectIdentityResolverV3
+	grpcSrv := s.grpcInternalServer
 	s.initMu.RUnlock()
-	if resolver == nil {
-		return projectidentity.ResolutionResultV3{}, errHTTPProjectIdentityResolverUnavailable
+	workflow, ok := grpcSrv.(projectIdentityV3Workflow)
+	if !ok || workflow == nil {
+		return nil, errHTTPProjectIdentityResolverUnavailable
 	}
-	result, err := resolver.ResolveProjectV3(ctx, projectidentity.ResolveProjectRequestV3{
-		Intent:                       projectidentity.ResolveExistingIntentV3,
-		Anchor:                       anchor,
-		Descriptor:                   descriptor,
-		Correlation:                  httpProjectIdentityCorrelationV3(ctx),
-		ResolveExistingAuthorization: authorization,
-	})
-	return result.Resolution(), err
+	response, err := workflow.Initialize(ctx, &pb.InitializeRequest{ProjectIdentityV3: identity})
+	if err != nil {
+		return nil, err
+	}
+	resolution := response.GetProjectResolutionV3()
+	if resolution == nil || resolution.GetProjectKey() == "" {
+		return nil, errHTTPProjectIdentityResolverUnavailable
+	}
+	return resolution, nil
 }
 
 type projectIdentityV3HTTPResolution struct {
@@ -182,22 +139,21 @@ type projectIdentityV3HTTPResolution struct {
 	RedirectReference string `json:"redirect_reference,omitempty"`
 }
 
-func withContextProjectResolutionV3(response map[string]any, resolution *projectidentity.ResolutionResultV3) map[string]any {
+func withContextProjectResolutionV3(response map[string]any, resolution *pb.ProjectResolutionResultV3) map[string]any {
 	if resolution == nil {
 		return response
 	}
 	response["project_resolution_v3"] = projectIdentityV3HTTPResolution{
-		Outcome: string(resolution.Outcome()),
-
-		Correlation:       string(resolution.Correlation()),
-		ProjectKey:        string(resolution.CanonicalProjectKey()),
-		ResolvedScope:     string(resolution.ResolvedScope()),
-		RedirectReference: string(resolution.RedirectReference()),
+		Outcome:           resolution.GetOutcome().String(),
+		Correlation:       resolution.GetCorrelation(),
+		ProjectKey:        resolution.GetProjectKey(),
+		ResolvedScope:     resolution.GetResolvedScope(),
+		RedirectReference: resolution.GetRedirectReference(),
 	}
 	return response
 }
 
-func writeContextInjectJSON(w http.ResponseWriter, resolution *projectidentity.ResolutionResultV3, response map[string]any) {
+func writeContextInjectJSON(w http.ResponseWriter, resolution *pb.ProjectResolutionResultV3, response map[string]any) {
 	writeJSON(w, withContextProjectResolutionV3(response, resolution))
 }
 
@@ -249,6 +205,11 @@ func mustProjectIdentityV3ResolutionError(outcome projectidentity.ResolutionOutc
 }
 
 func writeSessionStartV3HTTPError(w http.ResponseWriter, err error) {
+	var requestErr *projectIdentityV3HTTPError
+	if errors.As(err, &requestErr) {
+		writeProjectIdentityV3HTTPError(w, err)
+		return
+	}
 	if status, ok := grpcstatus.FromError(err); ok {
 		for _, detail := range status.Details() {
 			info, ok := detail.(*errdetails.ErrorInfo)
@@ -1076,24 +1037,21 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		filesBeingEdited = r.URL.Query()["files_being_edited"]
 	}
 
-	var resolutionV3 *projectidentity.ResolutionResultV3
+	var resolutionV3 *pb.ProjectResolutionResultV3
 	if projectDescriptor != nil {
 		resolved, err := s.resolveContextProjectV3(r.Context(), projectDescriptor)
 		if err != nil {
-			writeProjectIdentityV3HTTPError(w, err)
+			writeSessionStartV3HTTPError(w, err)
 			return
 		}
-		if !resolved.Outcome().IsSuccess() {
-			writeProjectIdentityV3HTTPError(w, mustProjectIdentityV3ResolutionError(resolved.Outcome()))
-			return
-		}
-		// V3 resolution is authoritative: raw project and agent selectors are not
-		// scope inputs and cannot become a fallback after the descriptor is present.
-		project = string(resolved.CanonicalProjectKey())
+		// The central V3 workflow is authoritative: raw project and agent
+		// selectors are not scope inputs and cannot become a fallback after
+		// the descriptor is present.
+		project = resolved.GetProjectKey()
 		agentID = ""
 		legacyProject = ""
 		projectIdentity = nil
-		resolutionV3 = &resolved
+		resolutionV3 = resolved
 	} else {
 		// Fall back to agent_id as session proxy when no explicit session_id provided.
 		if sessionID == "" {
