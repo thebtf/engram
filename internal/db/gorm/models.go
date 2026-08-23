@@ -128,7 +128,7 @@ type Project struct {
 	GitRemote       sql.NullString `gorm:"column:git_remote;index"`
 	RelativePath    sql.NullString `gorm:"column:relative_path"`
 	DisplayName     sql.NullString `gorm:"column:display_name"`
-	ProjectKey      sql.NullString `gorm:"column:project_key;type:uuid"`
+	ProjectKey      sql.NullString `gorm:"column:project_key;type:uuid;uniqueIndex:projects_project_key_key"`
 	AnchorProjectID sql.NullString `gorm:"column:anchor_project_id;type:uuid"`
 	IdentityScope   sql.NullString `gorm:"column:identity_scope;type:text"`
 	IdentityStatus  sql.NullString `gorm:"column:identity_status;type:text"`
@@ -163,7 +163,6 @@ func (ProjectIdentifier) TableName() string { return "project_identifiers" }
 // AR-2 provides only this additive schema; merge execution remains deferred.
 type ProjectMergeAudit struct {
 	MergeID             string         `gorm:"column:merge_id;type:uuid;primaryKey;default:gen_random_uuid()"`
-	SourceProjectKeys   pq.StringArray `gorm:"column:source_project_keys;type:uuid[];not null"`
 	TargetProjectKey    string         `gorm:"column:target_project_key;type:uuid;not null"`
 	EvidenceClass       string         `gorm:"column:evidence_class;type:text;not null"`
 	ConflictPolicy      string         `gorm:"column:conflict_policy;type:text;not null"`
@@ -180,6 +179,15 @@ type ProjectMergeAudit struct {
 }
 
 func (ProjectMergeAudit) TableName() string { return "project_merge_audits" }
+
+// ProjectMergeAuditSource is one referentially constrained source in a future
+// merge audit. PostgreSQL cannot enforce foreign keys on UUID array elements.
+type ProjectMergeAuditSource struct {
+	MergeID          string `gorm:"column:merge_id;type:uuid;primaryKey"`
+	SourceProjectKey string `gorm:"column:source_project_key;type:uuid;primaryKey"`
+}
+
+func (ProjectMergeAuditSource) TableName() string { return "project_merge_audit_sources" }
 
 // APIToken represents a client API token for agent authentication.
 // Tokens are stored as bcrypt hashes with a prefix for fast lookup.

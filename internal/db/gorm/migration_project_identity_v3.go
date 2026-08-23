@@ -36,8 +36,14 @@ func projectIdentityV3Migration162() *gormigrate.Migration {
 							CHECK (identity_status IS NULL OR identity_status IN ('active', 'merged', 'retired'));
 					END IF;
 				END $$`,
-				`CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_project_key
-					ON projects (project_key) WHERE project_key IS NOT NULL`,
+				`DO $$ BEGIN
+					IF NOT EXISTS (
+						SELECT 1 FROM pg_constraint
+						WHERE conname = 'projects_project_key_key' AND conrelid = 'projects'::regclass
+					) THEN
+						ALTER TABLE projects ADD CONSTRAINT projects_project_key_key UNIQUE (project_key);
+					END IF;
+				END $$`,
 				`CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_anchor_project_id
 					ON projects (anchor_project_id) WHERE anchor_project_id IS NOT NULL`,
 				`CREATE TABLE IF NOT EXISTS project_identifiers (
@@ -57,6 +63,15 @@ func projectIdentityV3Migration162() *gormigrate.Migration {
 					CONSTRAINT project_identifiers_status_chk CHECK (status IN ('active', 'redirected', 'retired')),
 					CONSTRAINT project_identifiers_normalized_value_not_blank CHECK (btrim(normalized_value) <> '')
 				)`,
+				`DO $$ BEGIN
+					IF NOT EXISTS (
+						SELECT 1 FROM pg_constraint
+						WHERE conname = 'project_identifiers_project_key_fkey' AND conrelid = 'project_identifiers'::regclass
+					) THEN
+						ALTER TABLE project_identifiers ADD CONSTRAINT project_identifiers_project_key_fkey
+							FOREIGN KEY (project_key) REFERENCES projects(project_key) ON DELETE RESTRICT;
+					END IF;
+				END $$`,
 				`CREATE UNIQUE INDEX IF NOT EXISTS idx_project_identifiers_live_scheme_value
 					ON project_identifiers (scheme, normalized_value)
 					WHERE status IN ('active', 'redirected')`,
@@ -64,7 +79,6 @@ func projectIdentityV3Migration162() *gormigrate.Migration {
 					ON project_identifiers (project_key)`,
 				`CREATE TABLE IF NOT EXISTS project_merge_audits (
 					merge_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-					source_project_keys UUID[] NOT NULL,
 					target_project_key UUID NOT NULL,
 					evidence_class TEXT NOT NULL,
 					conflict_policy TEXT NOT NULL,
@@ -77,11 +91,46 @@ func projectIdentityV3Migration162() *gormigrate.Migration {
 					completed_at TIMESTAMPTZ,
 					rollback_boundary TEXT NOT NULL,
 					migration_receipt_ref TEXT,
-					created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-					CONSTRAINT project_merge_audits_source_keys_not_empty CHECK (cardinality(source_project_keys) > 0)
+					created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 				)`,
+				`DO $$ BEGIN
+					IF NOT EXISTS (
+						SELECT 1 FROM pg_constraint
+						WHERE conname = 'project_merge_audits_target_project_key_fkey' AND conrelid = 'project_merge_audits'::regclass
+					) THEN
+						ALTER TABLE project_merge_audits ADD CONSTRAINT project_merge_audits_target_project_key_fkey
+							FOREIGN KEY (target_project_key) REFERENCES projects(project_key) ON DELETE RESTRICT;
+					END IF;
+				END $$`,
+				// PostgreSQL cannot enforce a foreign key on UUID array elements, so each
+				// source relationship is normalized. AR-2 does not backfill or apply merges.
+				`CREATE TABLE IF NOT EXISTS project_merge_audit_sources (
+					merge_id UUID NOT NULL,
+					source_project_key UUID NOT NULL,
+					PRIMARY KEY (merge_id, source_project_key)
+				)`,
+				`DO $$ BEGIN
+					IF NOT EXISTS (
+						SELECT 1 FROM pg_constraint
+						WHERE conname = 'project_merge_audit_sources_merge_id_fkey' AND conrelid = 'project_merge_audit_sources'::regclass
+					) THEN
+						ALTER TABLE project_merge_audit_sources ADD CONSTRAINT project_merge_audit_sources_merge_id_fkey
+							FOREIGN KEY (merge_id) REFERENCES project_merge_audits(merge_id) ON DELETE RESTRICT;
+					END IF;
+				END $$`,
+				`DO $$ BEGIN
+					IF NOT EXISTS (
+						SELECT 1 FROM pg_constraint
+						WHERE conname = 'project_merge_audit_sources_project_key_fkey' AND conrelid = 'project_merge_audit_sources'::regclass
+					) THEN
+						ALTER TABLE project_merge_audit_sources ADD CONSTRAINT project_merge_audit_sources_project_key_fkey
+							FOREIGN KEY (source_project_key) REFERENCES projects(project_key) ON DELETE RESTRICT;
+					END IF;
+				END $$`,
 				`CREATE INDEX IF NOT EXISTS idx_project_merge_audits_target_project_key
 					ON project_merge_audits (target_project_key)`,
+				`CREATE INDEX IF NOT EXISTS idx_project_merge_audit_sources_project_key
+					ON project_merge_audit_sources (source_project_key)`,
 			}
 			for _, stmt := range stmts {
 				if err := tx.Exec(stmt).Error; err != nil {
