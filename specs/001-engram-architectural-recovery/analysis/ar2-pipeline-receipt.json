@@ -81,7 +81,7 @@
     "specs/001-engram-architectural-recovery/IMPLEMENTATION-HANDOFF.md": "f424480e0809673868f8055fbc29ca9525872c4df2959b5c93ea2955290547b4",
     "specs/001-engram-architectural-recovery/IMPLEMENTATION-SESSION-PROMPT.txt": "3ae2ec32d1b0bbb7be719adef942296e3a9d1e75e581ffa20a4139133b82039f",
     "specs/001-engram-architectural-recovery/analysis/ar2-current-source-reconciliation.md": "a3672c69ff4149aca58c511a1f4c856e883b2e2b2338a29c07851fe6b0824280",
-    "specs/001-engram-architectural-recovery/analysis/ar2-d2-decomposition.md": "590c9edf391073a617927a81c9050582500181cec663c4591b195d718f7c884f",
+    "specs/001-engram-architectural-recovery/analysis/ar2-d2-decomposition.md": "19d1659da9551e3a4f155054f746ea5e40303ca3352527f356babc974c67a39c",
     "specs/001-engram-architectural-recovery/analysis/architecture-challenge-r1.md": "013f7eb010df40d79b697424adbceea812223a31c252665f3eb8eb8599386547",
     "specs/001-engram-architectural-recovery/analysis/fr-sc-task-traceability.md": "4660c31617eb6917d36f359a669e685c2686fc5da7c53168fda8b89ada3c76a8",
     "specs/001-engram-architectural-recovery/analysis/traceability-contract.md": "99963e3e9c590569b9b0c93538efd54d037c7733a4d37b17077c7e64c2a9fa51",
@@ -117,7 +117,7 @@
     "specs/001-engram-architectural-recovery/quickstart.md": "98cd325fb30313c0cbefac40c07d260c516ff52f8c7abf7935b5deed090eeecd",
     "specs/001-engram-architectural-recovery/research.md": "f73dd707bae1e46b18254fa81c81189c6d0c9278126d34e6500cb3838c6b6ffb",
     "specs/001-engram-architectural-recovery/spec.md": "ff84db1052a006eb50c350473fdf404076c36e090aa01df5b0a07d4168c8e29c",
-    "specs/001-engram-architectural-recovery/tasks.md": "9e1d188a486a716cd02ed685f9e13695eaa7afa467cdeea386cf253922eb8fd5"
+    "specs/001-engram-architectural-recovery/tasks.md": "f58e81ac86764356426e860775a0d1ec689f9bbc9b5072c59ce653224e22e770"
   },
   "artifact_origins": {
     ".agent/intake/engram-ar1-closeout-2026-08-22-r1/05-final-focused-check.json": "root-intake-or-feature-selection",

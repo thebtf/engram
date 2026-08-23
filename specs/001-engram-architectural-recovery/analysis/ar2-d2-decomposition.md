@@ -44,6 +44,10 @@ Every V3-capable entry point submits one validated descriptor to the central `in
 ### Wave B — additive schema and central authority
 
 1. **T021 and T023 (parallel):** migration maker owns GORM models/migration/store constraints and PostgreSQL behavior tests; outcome maker owns typed intent/result/error/audit-safe data in `internal/projectidentity`.
+### T021 AR-2 existing-family selection
+
+AR-2 adds nullable V3 metadata only to the existing `projects` registry: `project_key`, `anchor_project_id`, `identity_scope`, and `identity_status`. It adds new `project_identifiers` and `project_merge_audits` records. No other AR-1-inventoried existing family receives a typed key in AR-2: per-family expansion, population, compatibility observation, and cutover remain AR-3 work. This prevents an unpopulated nullable column from being misrepresented as a data migration.
+
 2. **T022 (serial):** resolver maker consumes the frozen anchor, storage, and outcome contracts. It owns resolution/registration workflow and persistence ports, including causally bound first mutation and zero-mutation refusals.
 
 **Wave B exit:** real PostgreSQL migration/repeat apply and resolver tests pass; V2 rows remain readable; no historical row is merged/backfilled.
