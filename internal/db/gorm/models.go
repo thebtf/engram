@@ -121,13 +121,17 @@ type TelemetrySnapshot struct {
 
 func (TelemetrySnapshot) TableName() string { return "telemetry_snapshots" }
 
-// Project represents a repository's stable identity record for cross-platform project ID resolution.
-// Maps a canonical git-remote-based project ID to optional legacy path-based aliases,
-// enabling zero-downtime migration when clients upgrade to git-remote IDs.
+// Project represents a repository's stable V2 identity record with optional
+// server-issued V3 identity metadata. Existing V2 rows remain readable until a
+// later resolver/register path binds the nullable V3 fields.
 type Project struct {
-	GitRemote    sql.NullString `gorm:"column:git_remote;index"`
-	RelativePath sql.NullString `gorm:"column:relative_path"`
-	DisplayName  sql.NullString `gorm:"column:display_name"`
+	GitRemote       sql.NullString `gorm:"column:git_remote;index"`
+	RelativePath    sql.NullString `gorm:"column:relative_path"`
+	DisplayName     sql.NullString `gorm:"column:display_name"`
+	ProjectKey      sql.NullString `gorm:"column:project_key;type:uuid"`
+	AnchorProjectID sql.NullString `gorm:"column:anchor_project_id;type:uuid"`
+	IdentityScope   sql.NullString `gorm:"column:identity_scope;type:text"`
+	IdentityStatus  sql.NullString `gorm:"column:identity_status;type:text"`
 	// RemovedAt marks the project as soft-deleted. NULL means live. Set by DELETE /api/projects/{id}.
 	RemovedAt *time.Time `gorm:"column:removed_at;default:null"`
 	// LastHeartbeat records the last SyncProjectState call from a daemon tracking this project.
@@ -138,6 +142,44 @@ type Project struct {
 }
 
 func (Project) TableName() string { return "projects" }
+
+// ProjectIdentifier is non-canonical evidence or a bounded compatibility
+// selector. It never substitutes for ProjectKey tenant authority.
+type ProjectIdentifier struct {
+	IdentifierID    string    `gorm:"column:identifier_id;type:uuid;primaryKey;default:gen_random_uuid()"`
+	ProjectKey      string    `gorm:"column:project_key;type:uuid;not null"`
+	Scheme          string    `gorm:"column:scheme;type:text;not null"`
+	NormalizedValue string    `gorm:"column:normalized_value;type:text;not null"`
+	Source          string    `gorm:"column:source;type:text;not null"`
+	Provenance      string    `gorm:"column:provenance;type:jsonb;not null;default:'{}'"`
+	Status          string    `gorm:"column:status;type:text;not null;default:'active'"`
+	FirstSeenAt     time.Time `gorm:"column:first_seen_at;autoCreateTime"`
+	LastSeenAt      time.Time `gorm:"column:last_seen_at;autoCreateTime"`
+}
+
+func (ProjectIdentifier) TableName() string { return "project_identifiers" }
+
+// ProjectMergeAudit records future merge evidence without applying a merge.
+// AR-2 provides only this additive schema; merge execution remains deferred.
+type ProjectMergeAudit struct {
+	MergeID             string         `gorm:"column:merge_id;type:uuid;primaryKey;default:gen_random_uuid()"`
+	SourceProjectKeys   pq.StringArray `gorm:"column:source_project_keys;type:uuid[];not null"`
+	TargetProjectKey    string         `gorm:"column:target_project_key;type:uuid;not null"`
+	EvidenceClass       string         `gorm:"column:evidence_class;type:text;not null"`
+	ConflictPolicy      string         `gorm:"column:conflict_policy;type:text;not null"`
+	BeforeTableCounts   string         `gorm:"column:before_table_counts;type:jsonb;not null;default:'{}'"`
+	AfterTableCounts    string         `gorm:"column:after_table_counts;type:jsonb;not null;default:'{}'"`
+	Fingerprints        string         `gorm:"column:fingerprints;type:jsonb;not null;default:'{}'"`
+	PrivacyResult       string         `gorm:"column:privacy_result;type:text;not null"`
+	Actor               string         `gorm:"column:actor;type:text;not null"`
+	StartedAt           time.Time      `gorm:"column:started_at;autoCreateTime"`
+	CompletedAt         *time.Time     `gorm:"column:completed_at"`
+	RollbackBoundary    string         `gorm:"column:rollback_boundary;type:text;not null"`
+	MigrationReceiptRef sql.NullString `gorm:"column:migration_receipt_ref;type:text"`
+	CreatedAt           time.Time      `gorm:"column:created_at;autoCreateTime"`
+}
+
+func (ProjectMergeAudit) TableName() string { return "project_merge_audits" }
 
 // APIToken represents a client API token for agent authentication.
 // Tokens are stored as bcrypt hashes with a prefix for fast lookup.
