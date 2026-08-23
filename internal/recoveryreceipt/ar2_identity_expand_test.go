@@ -24,10 +24,17 @@ func TestBuildAR2IdentityExpandReceiptCoversEveryTransportAndRedactsRefusals(t *
 	if err != nil {
 		t.Fatal(err)
 	}
+	expectedMigrationIDs := []string{
+		"162_project_identity_v3",
+		"163_project_identity_v3_resolution_attempts",
+		"164_project_identity_v3_resolution_attempt_admin_audit",
+		"165_project_identity_v3_comparisons",
+		"166_project_identity_v3_comparison_client_instance_privacy",
+	}
 	if !reflect.DeepEqual(input, before) {
 		t.Fatalf("receipt construction mutated its authority-free input: before=%#v after=%#v", before, input)
 	}
-	if receipt.SchemaVersion != AR2IdentityExpandSchemaVersion || receipt.ReceiptAuthority != AR2IdentityExpandAuthority || receipt.CompatibilityWindow != AR2CompatibilityWindow || receipt.Candidate != input.Candidate || !reflect.DeepEqual(receipt.MigrationIDs, input.MigrationIDs) || receipt.DescriptorVersion != 3 || receipt.V2Compatibility != AR2V2ReadCompatible || receipt.CapabilityState != AR2CapabilityAvailable {
+	if receipt.SchemaVersion != AR2IdentityExpandSchemaVersion || receipt.ReceiptAuthority != AR2IdentityExpandAuthority || receipt.CompatibilityWindow != AR2CompatibilityWindow || receipt.Candidate != input.Candidate || !reflect.DeepEqual(receipt.MigrationIDs, expectedMigrationIDs) || receipt.DescriptorVersion != 3 || receipt.V2Compatibility != AR2V2ReadCompatible || receipt.CapabilityState != AR2CapabilityAvailable {
 		t.Fatalf("receipt identity = %#v", receipt)
 	}
 	if len(receipt.SupportedAdapters) != len(input.SupportedTransports) || len(receipt.TransportCoverage) != len(input.SupportedTransports) {

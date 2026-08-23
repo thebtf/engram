@@ -20,6 +20,7 @@ var (
 		"163_project_identity_v3_resolution_attempts",
 		"164_project_identity_v3_resolution_attempt_admin_audit",
 		"165_project_identity_v3_comparisons",
+		"166_project_identity_v3_comparison_client_instance_privacy",
 	}
 	ar2SupportedTransports = []projectidentity.ComparisonTransportV3{
 		projectidentity.ComparisonTransportGRPCV3,

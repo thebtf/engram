@@ -202,6 +202,7 @@ func TestProjectIdentityV3ComparisonClientInstancePrivacyMigration166PreservesHi
 				"163_project_identity_v3_resolution_attempts",
 				"164_project_identity_v3_resolution_attempt_admin_audit",
 				"165_project_identity_v3_comparisons",
+				"166_project_identity_v3_comparison_client_instance_privacy",
 			},
 			DescriptorVersion: 3,
 			SupportedTransports: []projectidentity.ComparisonTransportV3{
