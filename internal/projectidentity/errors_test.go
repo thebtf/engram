@@ -112,6 +112,14 @@ func TestResolutionResultV3Invariants(t *testing.T) {
 		t.Fatalf("redirected result invariants failed: %#v", redirected)
 	}
 
+	adminRedirected, err := NewSuccessResultV3(AdminTargetIntentV3, ProjectRedirectedOutcomeV3, key, DirectoryResolvedScopeV3, RedirectReferenceV3("merge-audit-admin-9"), correlation)
+	if err != nil {
+		t.Fatalf("new administrative redirected result: %v", err)
+	}
+	if adminRedirected.RedirectReference() != "merge-audit-admin-9" || !adminRedirected.PermitsScopedMutation() {
+		t.Fatalf("administrative redirected result invariants failed: %#v", adminRedirected)
+	}
+
 	readOnly, err := NewSuccessResultV3(ReadFilterIntentV3, ProjectResolvedOutcomeV3, key, RepositoryResolvedScopeV3, "", correlation)
 	if err != nil {
 		t.Fatalf("new read-filter result: %v", err)
@@ -133,6 +141,7 @@ func TestResolutionResultV3Invariants(t *testing.T) {
 		{"success without scope", ResolveExistingIntentV3, ProjectResolvedOutcomeV3, key, "", ""},
 		{"redirect without reference", ResolveExistingIntentV3, ProjectRedirectedOutcomeV3, key, RepositoryResolvedScopeV3, ""},
 		{"resolved with redirect", ResolveExistingIntentV3, ProjectResolvedOutcomeV3, key, RepositoryResolvedScopeV3, "merge-audit-9"},
+		{"read filter redirect", ReadFilterIntentV3, ProjectRedirectedOutcomeV3, key, RepositoryResolvedScopeV3, "merge-audit-filter-9"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := NewSuccessResultV3(test.intent, test.outcome, test.key, test.scope, test.redirect, correlation); err == nil {

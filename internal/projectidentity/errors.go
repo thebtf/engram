@@ -231,7 +231,7 @@ func NewSuccessResultV3(intent ResolutionIntentV3, outcome ResolutionOutcomeV3, 
 	if !validOpaqueReferenceV3(string(correlation)) {
 		return ResolutionResultV3{}, errInvalidV3Reference
 	}
-	if outcome == ProjectRedirectedOutcomeV3 && !validOpaqueReferenceV3(string(redirect)) {
+	if outcome == ProjectRedirectedOutcomeV3 && (intent == ReadFilterIntentV3 || !validOpaqueReferenceV3(string(redirect))) {
 		return ResolutionResultV3{}, errInvalidV3Result
 	}
 	if outcome == ProjectResolvedOutcomeV3 && redirect != "" {
