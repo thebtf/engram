@@ -120,3 +120,58 @@ func comparisonTestFingerprint(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
+
+func TestComparisonOriginV3BindsClaimToPhysicalChannelAndDerivesStableReferences(t *testing.T) {
+	testCases := []struct {
+		name     string
+		physical ComparisonTransportV3
+		claim    string
+		want     ComparisonTransportV3
+	}{
+		{name: "grpc absent claim", physical: ComparisonTransportGRPCV3, want: ComparisonTransportGRPCV3},
+		{name: "grpc claim", physical: ComparisonTransportGRPCV3, claim: "grpc", want: ComparisonTransportGRPCV3},
+		{name: "daemon claim", physical: ComparisonTransportGRPCV3, claim: "daemon", want: ComparisonTransportDaemonV3},
+		{name: "grpc rejects cross channel hook", physical: ComparisonTransportGRPCV3, claim: "hook", want: ComparisonTransportGRPCV3},
+		{name: "grpc rejects unknown", physical: ComparisonTransportGRPCV3, claim: "unknown", want: ComparisonTransportGRPCV3},
+		{name: "http absent claim", physical: ComparisonTransportHTTPV3, want: ComparisonTransportHTTPV3},
+		{name: "hook claim", physical: ComparisonTransportHTTPV3, claim: "hook", want: ComparisonTransportHookV3},
+		{name: "openclaw claim", physical: ComparisonTransportHTTPV3, claim: "openclaw", want: ComparisonTransportOpenClawV3},
+		{name: "http rejects cross channel daemon", physical: ComparisonTransportHTTPV3, claim: "daemon", want: ComparisonTransportHTTPV3},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			origin := NewComparisonOriginV3(testCase.physical, testCase.claim, "request-17")
+			require.Equal(t, testCase.want, origin.Transport())
+		})
+	}
+
+	origin := NewComparisonOriginV3(ComparisonTransportGRPCV3, "daemon", "request-17")
+	first, err := origin.DeriveComparisonReferencesV3("daemon-install-17", ResolveExistingIntentV3)
+	require.NoError(t, err)
+	second, err := origin.DeriveComparisonReferencesV3("daemon-install-17", ResolveExistingIntentV3)
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+
+	changedIntent, err := origin.DeriveComparisonReferencesV3("daemon-install-17", ReadFilterIntentV3)
+	require.NoError(t, err)
+	require.NotEqual(t, first, changedIntent)
+	originWithClientLikeClaim := NewComparisonOriginV3(ComparisonTransportGRPCV3, "", "request-17")
+	clientLikeHook, err := originWithClientLikeClaim.DeriveComparisonReferencesV3("hook-client-install-17", ResolveExistingIntentV3)
+	require.NoError(t, err)
+	require.Equal(t, ComparisonTransportGRPCV3, originWithClientLikeClaim.Transport(), "client instance metadata must not infer an adapter")
+	require.NotEqual(t, first, clientLikeHook)
+}
+
+func TestComparisonOriginV3ReplacesUnsafeRequestID(t *testing.T) {
+	unsafe := "https://fixture-user:fixture-credential@example.invalid/private/request"
+	origin := NewComparisonOriginV3(ComparisonTransportGRPCV3, "daemon", unsafe)
+	require.NotEqual(t, unsafe, origin.AttemptID())
+	_, err := NewCorrelationV3(origin.AttemptID())
+	require.NoError(t, err)
+
+	references, err := origin.DeriveComparisonReferencesV3("daemon-install-17", ResolveExistingIntentV3)
+	require.NoError(t, err)
+	require.NotContains(t, references.IdempotencyKey, unsafe)
+	require.NotContains(t, string(references.Correlation), unsafe)
+	require.NotContains(t, references.EvidenceFingerprint, unsafe)
+}

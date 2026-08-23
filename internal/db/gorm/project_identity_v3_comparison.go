@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/projectidentity"
@@ -87,5 +88,84 @@ func comparisonReceiptV3(record ProjectIdentityComparison) projectidentity.Compa
 		Freshness:           projectidentity.ComparisonFreshnessV3(record.Freshness),
 		EvidenceFingerprint: record.EvidenceFingerprint,
 		RecordedAt:          record.CreatedAt,
+	}
+}
+
+// ObserveLegacyOutcomeV2 performs a bounded SELECT over existing inventoried
+// identifiers. It returns only a redacted outcome and never returns, locks,
+// caches, creates, or mutates a project identity row.
+func (store *Store) ObserveLegacyOutcomeV2(ctx context.Context, descriptor projectidentity.LegacyComparisonDescriptorV3) (projectidentity.LegacyComparisonOutcomeV2, error) {
+	if store == nil || store.DB == nil {
+		return projectidentity.LegacyComparisonUnavailableV2, errProjectIdentityComparisonStoreUnavailable
+	}
+	identifiers := descriptor.LegacyIdentifiers()
+	if len(identifiers) == 0 {
+		return projectidentity.LegacyComparisonUnavailableV2, nil
+	}
+	conditions := make([]string, 0, len(identifiers))
+	arguments := make([]any, 0, len(identifiers)*2)
+	for _, identifier := range identifiers {
+		conditions = append(conditions, "(scheme = ? AND normalized_value = ?)")
+		arguments = append(arguments, string(identifier.Scheme), identifier.Value)
+	}
+	var ownerCount int64
+	result := store.DB.WithContext(ctx).
+		Model(&ProjectIdentifier{}).
+		Select("COUNT(DISTINCT project_key)").
+		Where("status IN ?", []string{"active", "redirected"}).
+		Where(strings.Join(conditions, " OR "), arguments...).
+		Scan(&ownerCount)
+	if result.Error != nil {
+		return projectidentity.LegacyComparisonUnavailableV2, fmt.Errorf("observe V2 project identity comparison: %w", result.Error)
+	}
+	if ownerCount == 1 {
+		return projectidentity.LegacyComparisonResolvedV2, nil
+	}
+	return projectidentity.LegacyComparisonRefusalV2, nil
+}
+
+// ReadComparisonsByCorrelationV3 returns only persisted redacted observations.
+// A correlation may deliberately have multiple rows; exact-cardinality checks
+// belong to the receipt boundary that knows the requested evidence set.
+func (store *Store) ReadComparisonsByCorrelationV3(ctx context.Context, correlations []projectidentity.CorrelationV3) ([]projectidentity.ComparisonObservationV3, error) {
+	if store == nil || store.DB == nil {
+		return nil, errProjectIdentityComparisonStoreUnavailable
+	}
+	values := make([]string, len(correlations))
+	for index, correlation := range correlations {
+		if _, err := projectidentity.NewCorrelationV3(string(correlation)); err != nil {
+			return nil, errProjectIdentityComparisonInvalid
+		}
+		values[index] = string(correlation)
+	}
+	if len(values) == 0 {
+		return []projectidentity.ComparisonObservationV3{}, nil
+	}
+	var records []ProjectIdentityComparison
+	if err := store.DB.WithContext(ctx).Where("correlation IN ?", values).Find(&records).Error; err != nil {
+		return nil, fmt.Errorf("read V3 project identity comparisons: %w", err)
+	}
+	observations := make([]projectidentity.ComparisonObservationV3, 0, len(records))
+	for _, record := range records {
+		observation := comparisonObservationV3(record)
+		if !observation.Valid() {
+			return nil, errProjectIdentityComparisonInvalid
+		}
+		observations = append(observations, observation)
+	}
+	return observations, nil
+}
+
+func comparisonObservationV3(record ProjectIdentityComparison) projectidentity.ComparisonObservationV3 {
+	return projectidentity.ComparisonObservationV3{
+		IdempotencyKey:      record.IdempotencyKey,
+		Correlation:         projectidentity.CorrelationV3(record.Correlation),
+		V3Outcome:           projectidentity.ResolutionOutcomeV3(record.V3Outcome),
+		LegacyOutcome:       projectidentity.LegacyComparisonOutcomeV2(record.LegacyOutcome),
+		ClientInstanceID:    record.ClientInstanceID,
+		Transport:           projectidentity.ComparisonTransportV3(record.Transport),
+		Scope:               projectidentity.ComparisonScopeV3(record.Scope),
+		Freshness:           projectidentity.ComparisonFreshnessV3(record.Freshness),
+		EvidenceFingerprint: record.EvidenceFingerprint,
 	}
 }

@@ -3,6 +3,7 @@ package gorm
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"strings"
 	"testing"
@@ -49,6 +50,9 @@ func TestProjectIdentityV3ComparisonStoreRedactsAndReplaysReceipt(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, first, second, "a repeated observation must return the original receipt")
 	require.Equal(t, projectidentity.ComparisonRefusalV3, first.Classification)
+	readback, err := store.ReadComparisonsByCorrelationV3(context.Background(), []projectidentity.CorrelationV3{observation.Correlation})
+	require.NoError(t, err)
+	require.Equal(t, []projectidentity.ComparisonObservationV3{observation}, readback)
 
 	differentCorrelation, err := projectidentity.NewCorrelationV3("comparison-store-replay-" + uuid.NewString())
 	require.NoError(t, err)
@@ -143,4 +147,89 @@ func TestProjectIdentityV3ComparisonStoreRedactsAndReplaysReceipt(t *testing.T) 
 func comparisonStoreFingerprint(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func TestObserveLegacyOutcomeV2OnlyCountsValidatedInventoryOwners(t *testing.T) {
+	store, cleanup := openIntegrationTestDB(t)
+	t.Cleanup(cleanup)
+	db := store.GetDB()
+	ctx := context.Background()
+
+	projectKeys := []string{uuid.NewString(), uuid.NewString()}
+	projectIDs := []string{uuid.NewString(), uuid.NewString()}
+	for index := range projectKeys {
+		require.NoError(t, db.Create(&Project{
+			ID:         projectIDs[index],
+			ProjectKey: sql.NullString{String: projectKeys[index], Valid: true},
+		}).Error)
+	}
+	identifierValues := []string{"legacy-observer-one-" + uuid.NewString(), "legacy-observer-two-" + uuid.NewString()}
+	identifiers := []ProjectIdentifier{
+		{ProjectKey: projectKeys[0], Scheme: "binding_v2", NormalizedValue: identifierValues[0], Source: "comparison-test", Provenance: `{}`, Status: "active"},
+		{ProjectKey: projectKeys[1], Scheme: "git_hash_v2", NormalizedValue: identifierValues[1], Source: "comparison-test", Provenance: `{}`, Status: "redirected"},
+	}
+	for index := range identifiers {
+		require.NoError(t, db.Create(&identifiers[index]).Error)
+	}
+	t.Cleanup(func() {
+		_ = db.Where("identifier_id IN ?", []string{identifiers[0].IdentifierID, identifiers[1].IdentifierID}).Delete(&ProjectIdentifier{}).Error
+		_ = db.Where("id IN ?", projectIDs).Delete(&Project{}).Error
+	})
+
+	var projectsBefore, identifiersBefore, mergesBefore int64
+	require.NoError(t, db.Model(&Project{}).Count(&projectsBefore).Error)
+	require.NoError(t, db.Model(&ProjectIdentifier{}).Count(&identifiersBefore).Error)
+	require.NoError(t, db.Model(&ProjectMergeAudit{}).Count(&mergesBefore).Error)
+
+	legacyDescriptor := func(t *testing.T, legacy []projectidentity.LegacyIdentifierV3) projectidentity.LegacyComparisonDescriptorV3 {
+		t.Helper()
+		anchor := projectidentity.AnchorV3{Version: 3, ProjectID: uuid.NewString(), Name: "comparison-observer", Scope: "repository"}
+		descriptor := projectidentity.DescriptorV3{
+			Version:           3,
+			AnchorProjectID:   anchor.ProjectID,
+			Name:              anchor.Name,
+			Scope:             anchor.Scope,
+			LegacyIdentifiers: legacy,
+			ClientInstanceID:  "comparison-observer-client",
+		}
+		validated, err := projectidentity.NewLegacyComparisonDescriptorV3(anchor, descriptor)
+		require.NoError(t, err)
+		return validated
+	}
+	one := legacyDescriptor(t, []projectidentity.LegacyIdentifierV3{{Scheme: "binding_v2", Value: identifierValues[0], Provenance: "comparison-test"}})
+	zero := legacyDescriptor(t, []projectidentity.LegacyIdentifierV3{{Scheme: "binding_v2", Value: "missing-" + uuid.NewString(), Provenance: "comparison-test"}})
+	multiple := legacyDescriptor(t, []projectidentity.LegacyIdentifierV3{
+		{Scheme: "binding_v2", Value: identifierValues[0], Provenance: "comparison-test"},
+		{Scheme: "git_hash_v2", Value: identifierValues[1], Provenance: "comparison-test"},
+	})
+	noIdentifiers := legacyDescriptor(t, nil)
+
+	for _, testCase := range []struct {
+		name       string
+		descriptor projectidentity.LegacyComparisonDescriptorV3
+		want       projectidentity.LegacyComparisonOutcomeV2
+	}{
+		{name: "one live owner resolves", descriptor: one, want: projectidentity.LegacyComparisonResolvedV2},
+		{name: "zero live owners refuses", descriptor: zero, want: projectidentity.LegacyComparisonRefusalV2},
+		{name: "multiple live owners refuses", descriptor: multiple, want: projectidentity.LegacyComparisonRefusalV2},
+		{name: "no safe identifiers unavailable", descriptor: noIdentifiers, want: projectidentity.LegacyComparisonUnavailableV2},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			outcome, err := store.ObserveLegacyOutcomeV2(ctx, testCase.descriptor)
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, outcome)
+		})
+	}
+
+	unavailable, err := (&Store{}).ObserveLegacyOutcomeV2(ctx, one)
+	require.Error(t, err)
+	require.Equal(t, projectidentity.LegacyComparisonUnavailableV2, unavailable)
+
+	var projectsAfter, identifiersAfter, mergesAfter int64
+	require.NoError(t, db.Model(&Project{}).Count(&projectsAfter).Error)
+	require.NoError(t, db.Model(&ProjectIdentifier{}).Count(&identifiersAfter).Error)
+	require.NoError(t, db.Model(&ProjectMergeAudit{}).Count(&mergesAfter).Error)
+	require.Equal(t, projectsBefore, projectsAfter)
+	require.Equal(t, identifiersBefore, identifiersAfter)
+	require.Equal(t, mergesBefore, mergesAfter)
 }

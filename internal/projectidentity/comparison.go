@@ -2,9 +2,13 @@ package projectidentity
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 var errInvalidComparisonV3 = errors.New("invalid V3 comparison telemetry")
@@ -60,6 +64,92 @@ func (transport ComparisonTransportV3) valid() bool {
 	default:
 		return false
 	}
+}
+
+// ComparisonOriginV3 binds a non-authoritative adapter claim to the physical
+// request channel and retains an opaque attempt identifier only long enough to
+// derive redacted comparison references.
+type ComparisonOriginV3 struct {
+	transport ComparisonTransportV3
+	attemptID string
+}
+
+// NewComparisonOriginV3 accepts only labels valid for the physical channel.
+// Unknown or cross-channel claims degrade to the physical base transport.
+// Unsafe request IDs are replaced before they can contribute to a fingerprint.
+func NewComparisonOriginV3(physical ComparisonTransportV3, claim, requestID string) ComparisonOriginV3 {
+	base := comparisonPhysicalTransportV3(physical)
+	transport := base
+	switch base {
+	case ComparisonTransportGRPCV3:
+		if claim == string(ComparisonTransportDaemonV3) {
+			transport = ComparisonTransportDaemonV3
+		}
+	case ComparisonTransportHTTPV3:
+		switch claim {
+		case string(ComparisonTransportHookV3):
+			transport = ComparisonTransportHookV3
+		case string(ComparisonTransportOpenClawV3):
+			transport = ComparisonTransportOpenClawV3
+		}
+	}
+	if !validOpaqueReferenceV3(requestID) {
+		requestID = uuid.NewString()
+	}
+	return ComparisonOriginV3{transport: transport, attemptID: requestID}
+}
+
+func comparisonPhysicalTransportV3(physical ComparisonTransportV3) ComparisonTransportV3 {
+	if physical == ComparisonTransportHTTPV3 {
+		return ComparisonTransportHTTPV3
+	}
+	return ComparisonTransportGRPCV3
+}
+
+// Transport returns the channel-validated, non-authoritative adapter label.
+func (origin ComparisonOriginV3) Transport() ComparisonTransportV3 { return origin.transport }
+
+// AttemptID returns the safe opaque retry identifier. It is never persisted.
+func (origin ComparisonOriginV3) AttemptID() string { return origin.attemptID }
+
+// ComparisonReferencesV3 contains deterministic redacted identifiers for one
+// logical V3 operation. It has no raw request, descriptor, or canonical key.
+type ComparisonReferencesV3 struct {
+	IdempotencyKey      string
+	Correlation         CorrelationV3
+	EvidenceFingerprint string
+}
+
+// DeriveComparisonReferencesV3 derives retry-stable references from validated
+// telemetry inputs. Client instance data influences only hashes and cannot
+// select or infer the transport.
+func (origin ComparisonOriginV3) DeriveComparisonReferencesV3(clientInstanceID string, intent ResolutionIntentV3) (ComparisonReferencesV3, error) {
+	if !origin.transport.valid() || !validOpaqueReferenceV3(origin.attemptID) || !intent.Valid() {
+		return ComparisonReferencesV3{}, errInvalidComparisonV3
+	}
+	if _, err := NewCorrelationV3(clientInstanceID); err != nil {
+		return ComparisonReferencesV3{}, errInvalidComparisonV3
+	}
+	values := []string{origin.attemptID, string(origin.transport), clientInstanceID, string(intent)}
+	correlation, err := NewCorrelationV3(comparisonFingerprintV3("correlation", values...))
+	if err != nil {
+		return ComparisonReferencesV3{}, errInvalidComparisonV3
+	}
+	return ComparisonReferencesV3{
+		IdempotencyKey:      comparisonFingerprintV3("idempotency", values...),
+		Correlation:         correlation,
+		EvidenceFingerprint: comparisonFingerprintV3("evidence", values...),
+	}, nil
+}
+
+func comparisonFingerprintV3(domain string, values ...string) string {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(domain))
+	for _, value := range values {
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(value))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }
 
 // ComparisonScopeV3 records the requested V3 scope even when V3 refuses. It
@@ -196,4 +286,37 @@ func RecordComparisonV3(ctx context.Context, store ComparisonStoreV3, observatio
 		return ComparisonReceiptV3{}, errInvalidComparisonV3
 	}
 	return store.RecordComparisonV3(ctx, observation)
+}
+
+// LegacyComparisonDescriptorV3 exposes only legacy identifiers that survived
+// the same anchor/descriptor validation required by central V3 resolution.
+type LegacyComparisonDescriptorV3 struct {
+	identifiers []LegacyIdentifierV3
+}
+
+// NewLegacyComparisonDescriptorV3 creates a query-only legacy comparison
+// input. It deliberately rejects raw or partially valid descriptor evidence.
+func NewLegacyComparisonDescriptorV3(anchor AnchorV3, descriptor DescriptorV3) (LegacyComparisonDescriptorV3, error) {
+	if !validAnchorV3(anchor) || !validDescriptorV3(descriptor) || descriptor.AnchorProjectID != anchor.ProjectID || descriptor.Name != anchor.Name || descriptor.Scope != anchor.Scope {
+		return LegacyComparisonDescriptorV3{}, errInvalidComparisonV3
+	}
+	return LegacyComparisonDescriptorV3{identifiers: append([]LegacyIdentifierV3(nil), descriptor.LegacyIdentifiers...)}, nil
+}
+
+// LegacyIdentifiers returns a copy so comparison readers cannot alter the
+// validated descriptor evidence retained by the central workflow.
+func (descriptor LegacyComparisonDescriptorV3) LegacyIdentifiers() []LegacyIdentifierV3 {
+	return append([]LegacyIdentifierV3(nil), descriptor.identifiers...)
+}
+
+// LegacyComparisonObserverV2 reads only bounded compatibility outcomes. It
+// must not expose a project key or mutate V2/V3 identity state.
+type LegacyComparisonObserverV2 interface {
+	ObserveLegacyOutcomeV2(context.Context, LegacyComparisonDescriptorV3) (LegacyComparisonOutcomeV2, error)
+}
+
+// ComparisonReaderV3 supplies persisted redacted observations for receipt
+// construction. Callers must validate exact correlation coverage themselves.
+type ComparisonReaderV3 interface {
+	ReadComparisonsByCorrelationV3(context.Context, []CorrelationV3) ([]ComparisonObservationV3, error)
 }

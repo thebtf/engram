@@ -1,6 +1,7 @@
 package recoveryreceipt
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/thebtf/engram/internal/operability"
@@ -165,6 +166,47 @@ func BuildAR2IdentityExpandReceipt(input AR2IdentityExpandInput) (AR2IdentityExp
 			Preserve:        []string{"additive_schema", "v3_identifiers", "v3_resolution_audits", "v3_anchors", "comparison_evidence"},
 		},
 	}, nil
+}
+
+// BuildAR2IdentityExpandReceiptFromPersistedComparisons accepts only an exact
+// persisted correlation set. It refuses caller-injected comparisons, missing
+// records, duplicate records, and records outside the requested set.
+func BuildAR2IdentityExpandReceiptFromPersistedComparisons(ctx context.Context, reader projectidentity.ComparisonReaderV3, input AR2IdentityExpandInput, correlations []projectidentity.CorrelationV3) (AR2IdentityExpandReceipt, error) {
+	if reader == nil || len(correlations) == 0 || len(input.Comparisons) != 0 {
+		return AR2IdentityExpandReceipt{}, fmt.Errorf("invalid persisted comparison receipt input")
+	}
+	requested := make(map[projectidentity.CorrelationV3]struct{}, len(correlations))
+	for _, correlation := range correlations {
+		if _, err := projectidentity.NewCorrelationV3(string(correlation)); err != nil {
+			return AR2IdentityExpandReceipt{}, fmt.Errorf("invalid requested comparison correlation")
+		}
+		if _, duplicate := requested[correlation]; duplicate {
+			return AR2IdentityExpandReceipt{}, fmt.Errorf("duplicate requested comparison correlation")
+		}
+		requested[correlation] = struct{}{}
+	}
+	comparisons, err := reader.ReadComparisonsByCorrelationV3(ctx, correlations)
+	if err != nil {
+		return AR2IdentityExpandReceipt{}, fmt.Errorf("read persisted comparisons: %w", err)
+	}
+	found := make(map[projectidentity.CorrelationV3]struct{}, len(comparisons))
+	for _, comparison := range comparisons {
+		if !comparison.Valid() {
+			return AR2IdentityExpandReceipt{}, fmt.Errorf("invalid persisted comparison")
+		}
+		if _, requested := requested[comparison.Correlation]; !requested {
+			return AR2IdentityExpandReceipt{}, fmt.Errorf("unrequested persisted comparison correlation")
+		}
+		if _, duplicate := found[comparison.Correlation]; duplicate {
+			return AR2IdentityExpandReceipt{}, fmt.Errorf("duplicate persisted comparison correlation")
+		}
+		found[comparison.Correlation] = struct{}{}
+	}
+	if len(found) != len(requested) {
+		return AR2IdentityExpandReceipt{}, fmt.Errorf("missing persisted comparison correlation")
+	}
+	input.Comparisons = comparisons
+	return BuildAR2IdentityExpandReceipt(input)
 }
 
 func validateAR2IdentityExpandInput(input AR2IdentityExpandInput) error {

@@ -1,6 +1,7 @@
 package recoveryreceipt
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -154,4 +155,48 @@ func ar2IdentityExpandInput(t *testing.T) AR2IdentityExpandInput {
 func ar2ReceiptFingerprint(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func TestBuildAR2IdentityExpandReceiptFromPersistedComparisonsRequiresExactCorrelations(t *testing.T) {
+	input := ar2IdentityExpandInput(t)
+	persisted := append([]projectidentity.ComparisonObservationV3(nil), input.Comparisons...)
+	input.Comparisons = nil
+	correlations := make([]projectidentity.CorrelationV3, 0, len(persisted))
+	for _, comparison := range persisted {
+		correlations = append(correlations, comparison.Correlation)
+	}
+
+	receipt, err := BuildAR2IdentityExpandReceiptFromPersistedComparisons(context.Background(), persistedComparisonReaderV3{comparisons: persisted}, input, correlations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipt.TransportCoverage) != len(ar2SupportedTransports) {
+		t.Fatalf("coverage=%#v", receipt.TransportCoverage)
+	}
+
+	for _, testCase := range []struct {
+		name         string
+		reader       persistedComparisonReaderV3
+		correlations []projectidentity.CorrelationV3
+	}{
+		{name: "missing", reader: persistedComparisonReaderV3{comparisons: persisted[:len(persisted)-1]}, correlations: correlations},
+		{name: "duplicate row", reader: persistedComparisonReaderV3{comparisons: append(append([]projectidentity.ComparisonObservationV3(nil), persisted...), persisted[0])}, correlations: correlations},
+		{name: "unrequested", reader: persistedComparisonReaderV3{comparisons: persisted}, correlations: correlations[:len(correlations)-1]},
+		{name: "duplicate request", reader: persistedComparisonReaderV3{comparisons: persisted}, correlations: append(append([]projectidentity.CorrelationV3(nil), correlations...), correlations[0])},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := BuildAR2IdentityExpandReceiptFromPersistedComparisons(context.Background(), testCase.reader, input, testCase.correlations); err == nil {
+				t.Fatal("persisted comparison readback accepted a non-exact correlation set")
+			}
+		})
+	}
+}
+
+type persistedComparisonReaderV3 struct {
+	comparisons []projectidentity.ComparisonObservationV3
+	err         error
+}
+
+func (reader persistedComparisonReaderV3) ReadComparisonsByCorrelationV3(_ context.Context, _ []projectidentity.CorrelationV3) ([]projectidentity.ComparisonObservationV3, error) {
+	return append([]projectidentity.ComparisonObservationV3(nil), reader.comparisons...), reader.err
 }

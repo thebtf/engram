@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 
@@ -51,13 +52,15 @@ type ToolDef struct {
 // nil ONLY when ENGRAM_AUTH_DISABLED=true is the operator's deliberate choice.
 type Server struct {
 	pb.UnimplementedEngramServiceServer
-	handler            MCPHandler
-	mu                 sync.RWMutex       // guards validator pointer swaps
-	validator          *auth.Validator    // nil = auth disabled; read under mu.RLock
-	db                 *gorm.DB           // injected by worker after DB is ready
-	bus                *projectevents.Bus // in-process project lifecycle event bus
-	identityResolver   func(context.Context, *gorm.DB, string, *pb.ProjectIdentityV2) (string, error)
-	identityResolverV3 func(context.Context, *gorm.DB, projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error)
+	handler              MCPHandler
+	mu                   sync.RWMutex       // guards validator pointer swaps
+	validator            *auth.Validator    // nil = auth disabled; read under mu.RLock
+	db                   *gorm.DB           // injected by worker after DB is ready
+	bus                  *projectevents.Bus // in-process project lifecycle event bus
+	identityResolver     func(context.Context, *gorm.DB, string, *pb.ProjectIdentityV2) (string, error)
+	identityResolverV3   func(context.Context, *gorm.DB, projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error)
+	comparisonObserverV3 projectidentity.LegacyComparisonObserverV2
+	comparisonStoreV3    projectidentity.ComparisonStoreV3
 }
 
 // New creates a new gRPC server. The returned *grpc.Server has EngramService
@@ -468,10 +471,78 @@ func (s *Server) resolveProjectIdentityV3(ctx context.Context, identity *pb.Proj
 		}
 	}
 	resolution, err := resolver(ctx, s.db, request)
+	if (request.Intent == projectidentity.ResolveExistingIntentV3 || request.Intent == projectidentity.ReadFilterIntentV3) && resolution.Outcome().Valid() {
+		s.observeProjectIdentityComparisonV3(ctx, request, resolution)
+	}
 	if err := projectIdentityV3Error(resolution, err); err != nil {
 		return projectidentity.ResolutionResultV3{}, err
 	}
 	return resolution, nil
+}
+
+func (s *Server) observeProjectIdentityComparisonV3(ctx context.Context, request projectidentity.ResolveProjectRequestV3, resolution projectidentity.ResolutionResultV3) {
+	descriptor, err := projectidentity.NewLegacyComparisonDescriptorV3(request.Anchor, request.Descriptor)
+	if err != nil {
+		log.Print("project identity comparison skipped: invalid descriptor")
+		return
+	}
+	origin := grpcComparisonOriginV3(ctx)
+	references, err := origin.DeriveComparisonReferencesV3(request.Descriptor.ClientInstanceID, request.Intent)
+	if err != nil {
+		log.Print("project identity comparison skipped: invalid telemetry metadata")
+		return
+	}
+	observer := s.comparisonObserverV3
+	if observer == nil {
+		observer = &engramgorm.Store{DB: s.db}
+	}
+	legacyOutcome, err := observer.ObserveLegacyOutcomeV2(ctx, descriptor)
+	if err != nil {
+		log.Print("project identity comparison observer unavailable")
+		return
+	}
+	scope := projectidentity.ComparisonRepositoryScopeV3
+	if request.Descriptor.Scope == "directory" {
+		scope = projectidentity.ComparisonDirectoryScopeV3
+	}
+	observation, err := projectidentity.NewComparisonObservationV3(
+		references.IdempotencyKey,
+		references.Correlation,
+		resolution.Outcome(),
+		legacyOutcome,
+		request.Descriptor.ClientInstanceID,
+		origin.Transport(),
+		scope,
+		projectidentity.ComparisonUnknownV3,
+		references.EvidenceFingerprint,
+	)
+	if err != nil {
+		log.Print("project identity comparison skipped: invalid redacted observation")
+		return
+	}
+	store := s.comparisonStoreV3
+	if store == nil {
+		store = &engramgorm.Store{DB: s.db}
+	}
+	if _, err := projectidentity.RecordComparisonV3(ctx, store, observation); err != nil {
+		log.Print("project identity comparison store unavailable")
+	}
+}
+
+func grpcComparisonOriginV3(ctx context.Context) projectidentity.ComparisonOriginV3 {
+	var claim, requestID string
+	if metadata, ok := metadata.FromIncomingContext(ctx); ok {
+		claim = singleGRPCMetadataValueV3(metadata.Get("x-engram-project-identity-adapter"))
+		requestID = singleGRPCMetadataValueV3(metadata.Get("x-request-id"))
+	}
+	return projectidentity.NewComparisonOriginV3(projectidentity.ComparisonTransportGRPCV3, claim, requestID)
+}
+
+func singleGRPCMetadataValueV3(values []string) string {
+	if len(values) != 1 {
+		return ""
+	}
+	return values[0]
 }
 
 func projectIdentityV3Error(resolution projectidentity.ResolutionResultV3, resolverErr error) error {
