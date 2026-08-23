@@ -131,8 +131,8 @@ func TestAR2CandidatePayloadFingerprintBindsNestedExecutableArtifacts(t *testing
 			t.Fatal("write fixture payload artifact")
 		}
 	}
-	newPayload := func() (server, daemon, openClawDist, hookSource string) {
-		root := t.TempDir()
+	newPayload := func() (root, server, daemon, openClawDist, hookSource string) {
+		root = t.TempDir()
 		server = filepath.Join(root, "bin", "engram-server")
 		daemon = filepath.Join(root, "bin", "engram")
 		openClawDist = filepath.Join(root, "openclaw", "dist")
@@ -143,46 +143,127 @@ func TestAR2CandidatePayloadFingerprintBindsNestedExecutableArtifacts(t *testing
 		write(filepath.Join(openClawDist, "nested", "availability.js"), "export const state = 'available';\n")
 		write(filepath.Join(hookSource, "lib.js"), "module.exports = require('./nested/project-identity-v3.js');\n")
 		write(filepath.Join(hookSource, "nested", "project-identity-v3.js"), "module.exports = { version: 3 };\n")
-		return server, daemon, openClawDist, hookSource
+		return root, server, daemon, openClawDist, hookSource
+	}
+	artifacts := func(root, server, daemon, openClawDist, hookSource string) []ar2PayloadArtifact {
+		return []ar2PayloadArtifact{
+			{label: "server", root: root, path: server},
+			{label: "daemon", root: root, path: daemon},
+			{label: "openclaw-dist", root: root, path: openClawDist},
+			{label: "hook-source", root: root, path: hookSource},
+		}
 	}
 
-	server, daemon, openClawDist, hookSource := newPayload()
-	baseline := ar2CandidatePayloadFingerprint(t,
-		ar2PayloadArtifact{label: "server", path: server},
-		ar2PayloadArtifact{label: "daemon", path: daemon},
-		ar2PayloadArtifact{label: "openclaw-dist", path: openClawDist},
-		ar2PayloadArtifact{label: "hook-source", path: hookSource},
-	)
-	identicalServer, identicalDaemon, identicalOpenClawDist, identicalHookSource := newPayload()
-	if identical := ar2CandidatePayloadFingerprint(t,
-		ar2PayloadArtifact{label: "server", path: identicalServer},
-		ar2PayloadArtifact{label: "daemon", path: identicalDaemon},
-		ar2PayloadArtifact{label: "openclaw-dist", path: identicalOpenClawDist},
-		ar2PayloadArtifact{label: "hook-source", path: identicalHookSource},
-	); baseline != identical {
+	root, server, daemon, openClawDist, hookSource := newPayload()
+	baseline := ar2CandidatePayloadFingerprint(t, artifacts(root, server, daemon, openClawDist, hookSource)...)
+	identicalRoot, identicalServer, identicalDaemon, identicalOpenClawDist, identicalHookSource := newPayload()
+	if identical := ar2CandidatePayloadFingerprint(t, artifacts(identicalRoot, identicalServer, identicalDaemon, identicalOpenClawDist, identicalHookSource)...); baseline != identical {
 		t.Fatal("payload fingerprint included an absolute fixture path")
 	}
 
 	write(filepath.Join(openClawDist, "nested", "availability.js"), "export const state = 'unavailable';\n")
-	afterOpenClawMutation := ar2CandidatePayloadFingerprint(t,
-		ar2PayloadArtifact{label: "server", path: server},
-		ar2PayloadArtifact{label: "daemon", path: daemon},
-		ar2PayloadArtifact{label: "openclaw-dist", path: openClawDist},
-		ar2PayloadArtifact{label: "hook-source", path: hookSource},
-	)
+	afterOpenClawMutation := ar2CandidatePayloadFingerprint(t, artifacts(root, server, daemon, openClawDist, hookSource)...)
 	if afterOpenClawMutation == baseline {
 		t.Fatal("nested built OpenClaw artifact did not change payload fingerprint")
 	}
 
 	write(filepath.Join(hookSource, "nested", "project-identity-v3.js"), "module.exports = { version: 4 };\n")
-	if afterHookMutation := ar2CandidatePayloadFingerprint(t,
-		ar2PayloadArtifact{label: "server", path: server},
-		ar2PayloadArtifact{label: "daemon", path: daemon},
-		ar2PayloadArtifact{label: "openclaw-dist", path: openClawDist},
-		ar2PayloadArtifact{label: "hook-source", path: hookSource},
-	); afterHookMutation == afterOpenClawMutation {
+	if afterHookMutation := ar2CandidatePayloadFingerprint(t, artifacts(root, server, daemon, openClawDist, hookSource)...); afterHookMutation == afterOpenClawMutation {
 		t.Fatal("nested Hook source artifact did not change payload fingerprint")
 	}
+}
+
+func TestAR2CandidatePayloadFingerprintRejectsUnsafeClosurePaths(t *testing.T) {
+	write := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal("create fixture payload directory")
+		}
+		if err := os.WriteFile(path, []byte("payload"), 0o600); err != nil {
+			t.Fatal("write fixture payload artifact")
+		}
+	}
+	newPayload := func(t *testing.T) (root, payload string) {
+		t.Helper()
+		root = t.TempDir()
+		payload = filepath.Join(root, "payload")
+		write(t, filepath.Join(payload, "entry.js"))
+		return root, payload
+	}
+	assertRejected := func(t *testing.T, root, path string) {
+		t.Helper()
+		if err := ar2ValidatePayloadArtifacts(ar2PayloadArtifact{label: "payload", root: root, path: path}); err == nil {
+			t.Fatal("accepted unsafe payload closure path")
+		}
+	}
+	link := func(t *testing.T, target, path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal("create linked fixture payload directory")
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Skipf("symlinks are unavailable: %v", err)
+		}
+	}
+
+	t.Run("top-level symlink", func(t *testing.T) {
+		root, payload := newPayload(t)
+		linked := filepath.Join(root, "linked.js")
+		link(t, filepath.Join(payload, "entry.js"), linked)
+		assertRejected(t, root, linked)
+	})
+	t.Run("top-level ancestor symlink", func(t *testing.T) {
+		root := t.TempDir()
+		target := t.TempDir()
+		write(t, filepath.Join(target, "entry.js"))
+		linked := filepath.Join(root, "linked")
+		link(t, target, linked)
+		assertRejected(t, root, filepath.Join(linked, "entry.js"))
+	})
+	t.Run("nested file symlink", func(t *testing.T) {
+		root, payload := newPayload(t)
+		target := filepath.Join(t.TempDir(), "entry.js")
+		write(t, target)
+		link(t, target, filepath.Join(payload, "nested", "entry.js"))
+		assertRejected(t, root, payload)
+	})
+	t.Run("nested directory symlink", func(t *testing.T) {
+		root, payload := newPayload(t)
+		target := t.TempDir()
+		write(t, filepath.Join(target, "entry.js"))
+		link(t, target, filepath.Join(payload, "nested"))
+		assertRejected(t, root, payload)
+	})
+	t.Run("path escape", func(t *testing.T) {
+		root, _ := newPayload(t)
+		escaped := filepath.Join(t.TempDir(), "entry.js")
+		write(t, escaped)
+		assertRejected(t, root, escaped)
+	})
+	t.Run("non-regular file", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("mkfifo is unavailable on Windows")
+		}
+		root := t.TempDir()
+		pipe := filepath.Join(root, "payload.pipe")
+		if output, err := exec.Command("mkfifo", pipe).CombinedOutput(); err != nil {
+			t.Skipf("mkfifo is unavailable: %v: %s", err, output)
+		}
+		assertRejected(t, root, pipe)
+	})
+	t.Run("junction reparse component", func(t *testing.T) {
+		if runtime.GOOS != "windows" {
+			t.Skip("junctions are Windows-only")
+		}
+		root := t.TempDir()
+		target := t.TempDir()
+		write(t, filepath.Join(target, "entry.js"))
+		junction := filepath.Join(root, "junction")
+		if output, err := exec.Command("cmd", "/c", "mklink", "/J", junction, target).CombinedOutput(); err != nil {
+			t.Skipf("junctions are unavailable: %v: %s", err, output)
+		}
+		assertRejected(t, root, junction)
+	})
 }
 
 // TestAR2ComparisonRuntimeFixture exercises every public V3 adapter against one
@@ -249,7 +330,7 @@ func TestAR2ComparisonRuntimeFixture(t *testing.T) {
 	daemon := ar2StartCandidateDaemon(t, ctx, candidateRoot, fixtureDir)
 	defer daemon.Close()
 
-	attestation := ar2AttestCandidate(t, candidateCommit, server, daemon, openClawClient, filepath.Join(candidateRoot, "plugin", "engram", "hooks"))
+	attestation := ar2AttestCandidate(t, candidateRoot, candidateCommit, server, daemon, openClawClient, filepath.Join(candidateRoot, "plugin", "engram", "hooks"))
 	capture, err := newAR2ControlledFixtureCapture(attestation)
 	if err != nil {
 		t.Fatal("attest exact candidate fixture")
@@ -322,6 +403,7 @@ type ar2PostgresFixture struct {
 
 type ar2FixtureServer struct {
 	binary             string
+	payloadRoot        string
 	baseURL            string
 	grpcAddr           string
 	sourceCommit       string
@@ -332,6 +414,7 @@ type ar2FixtureServer struct {
 }
 type ar2FixtureDaemon struct {
 	binary      string
+	payloadRoot string
 	controlPath string
 	cmd         *exec.Cmd
 	done        chan struct{}
@@ -643,10 +726,11 @@ func ar2StartServer(t *testing.T, ctx context.Context, root, fixtureDir, candida
 		authDisabled = "false"
 	}
 	server := &ar2FixtureServer{
-		binary:   binary,
-		baseURL:  "http://127.0.0.1:" + strconv.Itoa(port),
-		grpcAddr: "127.0.0.1:" + strconv.Itoa(port),
-		done:     make(chan struct{}),
+		binary:      binary,
+		payloadRoot: fixtureDir,
+		baseURL:     "http://127.0.0.1:" + strconv.Itoa(port),
+		grpcAddr:    "127.0.0.1:" + strconv.Itoa(port),
+		done:        make(chan struct{}),
 	}
 	server.cmd = exec.Command(binary)
 	server.cmd.Dir = root
@@ -722,23 +806,23 @@ func ar2AssertCandidateServerHealth(t *testing.T, server *ar2FixtureServer, cand
 		t.Fatal("candidate server health is not bound to the exact source commit")
 	}
 	server.sourceCommit = health.SourceCommit
-	server.payloadFingerprint = ar2CandidatePayloadFingerprint(t, ar2PayloadArtifact{label: "server", path: server.binary})
+	server.payloadFingerprint = ar2CandidatePayloadFingerprint(t, ar2PayloadArtifact{label: "server", root: server.payloadRoot, path: server.binary})
 	if !validFingerprint(server.payloadFingerprint) {
 		t.Fatal("candidate server payload fingerprint is invalid")
 	}
 }
 
-func ar2AttestCandidate(t *testing.T, candidateCommit string, server *ar2FixtureServer, daemon *ar2FixtureDaemon, openClawClient, hookSource string) ar2CandidateAttestation {
+func ar2AttestCandidate(t *testing.T, candidateRoot, candidateCommit string, server *ar2FixtureServer, daemon *ar2FixtureDaemon, openClawClient, hookSource string) ar2CandidateAttestation {
 	t.Helper()
-	serverArtifact := ar2PayloadArtifact{label: "server", path: server.binary}
+	serverArtifact := ar2PayloadArtifact{label: "server", root: server.payloadRoot, path: server.binary}
 	if server.sourceCommit != candidateCommit || server.payloadFingerprint != ar2CandidatePayloadFingerprint(t, serverArtifact) {
 		t.Fatal("candidate server health does not bind the built server payload")
 	}
 	payloadFingerprint := ar2CandidatePayloadFingerprint(t,
 		serverArtifact,
-		ar2PayloadArtifact{label: "daemon", path: daemon.binary},
-		ar2PayloadArtifact{label: "openclaw-dist", path: filepath.Dir(openClawClient)},
-		ar2PayloadArtifact{label: "hook-source", path: hookSource},
+		ar2PayloadArtifact{label: "daemon", root: daemon.payloadRoot, path: daemon.binary},
+		ar2PayloadArtifact{label: "openclaw-dist", root: candidateRoot, path: filepath.Dir(openClawClient)},
+		ar2PayloadArtifact{label: "hook-source", root: candidateRoot, path: hookSource},
 	)
 	return ar2CandidateAttestation{
 		candidate: ar2CandidateIdentity{
@@ -932,6 +1016,7 @@ func ar2StartCandidateDaemon(t *testing.T, ctx context.Context, candidateRoot, f
 	t.Helper()
 	daemon := &ar2FixtureDaemon{
 		binary:      filepath.Join(fixtureDir, "engram-daemon.exe"),
+		payloadRoot: fixtureDir,
 		controlPath: muxserverid.DaemonControlPath(fixtureDir, "engram"),
 		done:        make(chan struct{}),
 	}
@@ -1294,6 +1379,7 @@ func ar2DeleteOwnedRows(db *gormlib.DB, correlations []projectidentity.Correlati
 
 type ar2PayloadArtifact struct {
 	label string
+	root  string
 	path  string
 }
 
@@ -1308,24 +1394,24 @@ func ar2CandidatePayloadFingerprint(t *testing.T, artifacts ...ar2PayloadArtifac
 	sort.Slice(sortedArtifacts, func(left, right int) bool {
 		return sortedArtifacts[left].label < sortedArtifacts[right].label
 	})
+	if err := ar2ValidatePayloadArtifacts(sortedArtifacts...); err != nil {
+		t.Fatal("inspect exact fixture payload artifact")
+	}
 	hasher := sha256.New()
-	for index, artifact := range sortedArtifacts {
-		if artifact.label == "" || artifact.path == "" || index > 0 && artifact.label == sortedArtifacts[index-1].label {
-			t.Fatal("invalid exact fixture payload artifact")
+	for _, artifact := range sortedArtifacts {
+		info, err := ar2ContainedPayloadInfo(artifact.root, artifact.path)
+		if err != nil {
+			t.Fatal("inspect exact fixture payload artifact")
 		}
 		ar2WritePayloadFingerprintFrame(t, hasher, "artifact")
 		ar2WritePayloadFingerprintFrame(t, hasher, artifact.label)
-		info, err := os.Lstat(artifact.path)
-		if err != nil || info.Mode()&os.ModeSymlink != 0 {
-			t.Fatal("inspect exact fixture payload artifact")
-		}
 		switch {
 		case info.Mode().IsRegular():
 			ar2WritePayloadFingerprintFrame(t, hasher, "file")
-			ar2HashPayloadFile(t, hasher, ".", artifact.path)
+			ar2HashPayloadFile(t, hasher, artifact.root, ".", artifact.path)
 		case info.IsDir():
 			ar2WritePayloadFingerprintFrame(t, hasher, "directory")
-			ar2HashPayloadDirectory(t, hasher, artifact.path)
+			ar2HashPayloadDirectory(t, hasher, artifact.root, artifact.path)
 		default:
 			t.Fatal("exact fixture payload artifact is not a regular file or directory")
 		}
@@ -1333,23 +1419,108 @@ func ar2CandidatePayloadFingerprint(t *testing.T, artifacts ...ar2PayloadArtifac
 	return "sha256:" + hex.EncodeToString(hasher.Sum(nil))
 }
 
-func ar2HashPayloadDirectory(t *testing.T, hasher io.Writer, root string) {
-	t.Helper()
-	files := make([]ar2PayloadFile, 0)
-	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+func ar2ValidatePayloadArtifacts(artifacts ...ar2PayloadArtifact) error {
+	labels := make(map[string]struct{}, len(artifacts))
+	for _, artifact := range artifacts {
+		if artifact.label == "" || artifact.root == "" || artifact.path == "" {
+			return fmt.Errorf("invalid payload artifact")
+		}
+		if _, exists := labels[artifact.label]; exists {
+			return fmt.Errorf("duplicate payload artifact label")
+		}
+		labels[artifact.label] = struct{}{}
+		info, err := ar2ContainedPayloadInfo(artifact.root, artifact.path)
+		if err != nil {
+			return err
+		}
+		switch {
+		case info.Mode().IsRegular():
+		case info.IsDir():
+			if err := ar2ValidatePayloadDirectory(artifact); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("payload artifact is not a regular file or directory")
+		}
+	}
+	return nil
+}
+
+func ar2ValidatePayloadDirectory(artifact ar2PayloadArtifact) error {
+	return filepath.WalkDir(artifact.path, func(path string, _ fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if path == root {
+		info, err := ar2ContainedPayloadInfo(artifact.root, path)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || info.Mode().IsRegular() {
 			return nil
 		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("linked payload artifact")
+		return fmt.Errorf("payload artifact is not a regular file or directory")
+	})
+}
+
+func ar2ContainedPayloadInfo(root, path string) (os.FileInfo, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := containedPath(absRoot, absPath); err != nil {
+		return nil, err
+	}
+	rootInfo, err := os.Lstat(absRoot)
+	if err != nil {
+		return nil, err
+	}
+	if linkOrReparse(rootInfo) || !rootInfo.IsDir() {
+		return nil, fmt.Errorf("payload root is not a regular directory")
+	}
+	relativePath, err := filepath.Rel(absRoot, absPath)
+	if err != nil {
+		return nil, err
+	}
+	components := strings.Split(relativePath, string(filepath.Separator))
+	current := absRoot
+	for index, component := range components {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return nil, err
 		}
-		if entry.IsDir() {
+		if linkOrReparse(info) {
+			return nil, fmt.Errorf("payload path contains a link or reparse component")
+		}
+		if index < len(components)-1 && !info.IsDir() {
+			return nil, fmt.Errorf("payload path component is not a directory")
+		}
+		if index == len(components)-1 {
+			return info, nil
+		}
+	}
+	return nil, fmt.Errorf("payload path is invalid")
+}
+
+func ar2HashPayloadDirectory(t *testing.T, hasher io.Writer, artifactRoot, root string) {
+	t.Helper()
+	files := make([]ar2PayloadFile, 0)
+	if err := filepath.WalkDir(root, func(path string, _ fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, err := ar2ContainedPayloadInfo(artifactRoot, path)
+		if err != nil {
+			return err
+		}
+		if path == root || info.IsDir() {
 			return nil
 		}
-		if !entry.Type().IsRegular() {
+		if !info.Mode().IsRegular() {
 			return fmt.Errorf("non-regular payload artifact")
 		}
 		relativePath, err := filepath.Rel(root, path)
@@ -1365,12 +1536,15 @@ func ar2HashPayloadDirectory(t *testing.T, hasher io.Writer, root string) {
 		return files[left].relativePath < files[right].relativePath
 	})
 	for _, file := range files {
-		ar2HashPayloadFile(t, hasher, file.relativePath, file.path)
+		ar2HashPayloadFile(t, hasher, artifactRoot, file.relativePath, file.path)
 	}
 }
 
-func ar2HashPayloadFile(t *testing.T, hasher io.Writer, relativePath, path string) {
+func ar2HashPayloadFile(t *testing.T, hasher io.Writer, artifactRoot, relativePath, path string) {
 	t.Helper()
+	if _, err := ar2ContainedPayloadInfo(artifactRoot, path); err != nil {
+		t.Fatal("inspect exact fixture payload artifact")
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		t.Fatal("open exact fixture payload artifact")
