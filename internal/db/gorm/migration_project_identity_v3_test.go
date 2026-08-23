@@ -5,8 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-gormigrate/gormigrate/v2"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	gormlib "gorm.io/gorm"
 )
 
 func TestProjectIdentityV3Migration162(t *testing.T) {
@@ -224,4 +226,125 @@ func TestProjectIdentityV3Migration162(t *testing.T) {
 	require.EqualValues(t, 1, identifierCount)
 	require.EqualValues(t, 1, auditCount)
 	require.EqualValues(t, 1, auditSourceCount)
+}
+
+func TestProjectIdentityV3ResolutionAttemptAdminAuditMigration164Upgrade(t *testing.T) {
+	store, cleanup := openIntegrationTestDB(t)
+	t.Cleanup(cleanup)
+	db := store.GetDB()
+	legacySchema := "t022_migration_legacy_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	freshSchema := "t022_migration_fresh_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	for _, schema := range []string{legacySchema, freshSchema} {
+		schema := schema
+		require.NoError(t, db.Exec("CREATE SCHEMA "+schema).Error)
+		t.Cleanup(func() {
+			require.NoError(t, db.Exec("DROP SCHEMA IF EXISTS "+schema+" CASCADE").Error)
+		})
+	}
+
+	migration163 := projectIdentityV3ResolutionAttemptsMigration163()
+	migration164 := projectIdentityV3ResolutionAttemptAdminAuditMigration164()
+	var upgradedShape projectResolutionAttemptSchemaShape
+	withProjectIdentityMigrationSchema(t, db, legacySchema, func(tx *gormlib.DB) {
+		require.NoError(t, gormigrate.New(tx, gormigrate.DefaultOptions, []*gormigrate.Migration{migration163}).Migrate())
+
+		var applied163, applied164, adminColumnCount int
+		require.NoError(t, tx.Raw(`SELECT COUNT(*) FROM migrations WHERE id = ?`, migration163.ID).Scan(&applied163).Error)
+		require.NoError(t, tx.Raw(`SELECT COUNT(*) FROM migrations WHERE id = ?`, migration164.ID).Scan(&applied164).Error)
+		require.NoError(t, tx.Raw(`
+			SELECT COUNT(*) FROM information_schema.columns
+			WHERE table_schema = current_schema()
+			  AND table_name = 'project_resolution_attempts'
+			  AND column_name IN ('admin_target_reference', 'admin_actor', 'admin_purpose', 'admin_decision', 'admin_retention_or_rollback')
+		`).Scan(&adminColumnCount).Error)
+		require.Equal(t, 1, applied163)
+		require.Zero(t, applied164, "a database at 163 must not claim 164 applied")
+		require.Zero(t, adminColumnCount, "the pre-164 schema reproduces the missing audit fields")
+
+		require.NoError(t, gormigrate.New(tx, gormigrate.DefaultOptions, []*gormigrate.Migration{migration163, migration164}).Migrate())
+		require.NoError(t, migration164.Migrate(tx), "migration 164 DDL must be idempotent")
+		require.NoError(t, tx.Raw(`SELECT COUNT(*) FROM migrations WHERE id = ?`, migration164.ID).Scan(&applied164).Error)
+		require.NoError(t, tx.Raw(`
+			SELECT COUNT(*) FROM information_schema.columns
+			WHERE table_schema = current_schema()
+			  AND table_name = 'project_resolution_attempts'
+			  AND column_name IN ('admin_target_reference', 'admin_actor', 'admin_purpose', 'admin_decision', 'admin_retention_or_rollback')
+		`).Scan(&adminColumnCount).Error)
+		require.Equal(t, 1, applied164)
+		require.Equal(t, 5, adminColumnCount)
+		upgradedShape = projectResolutionAttemptSchemaShapeOf(t, tx)
+	})
+
+	var freshShape projectResolutionAttemptSchemaShape
+	withProjectIdentityMigrationSchema(t, db, freshSchema, func(tx *gormlib.DB) {
+		require.NoError(t, gormigrate.New(tx, gormigrate.DefaultOptions, []*gormigrate.Migration{migration163, migration164}).Migrate())
+		freshShape = projectResolutionAttemptSchemaShapeOf(t, tx)
+	})
+
+	require.Equal(t, upgradedShape, freshShape, "a 163 upgrade and a fresh 163→164 migration must have the same table shape")
+	for _, column := range []string{
+		"admin_target_reference|text|YES",
+		"admin_actor|text|YES",
+		"admin_purpose|text|YES",
+		"admin_decision|text|YES",
+		"admin_retention_or_rollback|text|YES",
+	} {
+		require.Contains(t, upgradedShape.Columns, column)
+	}
+	require.Contains(t, upgradedShape.Constraints, "project_resolution_attempts_admin_audit_chk")
+}
+
+func withProjectIdentityMigrationSchema(t *testing.T, db *gormlib.DB, schema string, verify func(*gormlib.DB)) {
+	t.Helper()
+	tx := db.Begin()
+	require.NoError(t, tx.Error)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback().Error
+		}
+	}()
+	require.NoError(t, tx.Exec("SET LOCAL search_path TO "+schema+", public").Error)
+	verify(tx)
+	require.NoError(t, tx.Commit().Error)
+	committed = true
+}
+
+type projectResolutionAttemptSchemaShape struct {
+	Columns     []string
+	Constraints map[string]string
+}
+
+func projectResolutionAttemptSchemaShapeOf(t *testing.T, db *gormlib.DB) projectResolutionAttemptSchemaShape {
+	t.Helper()
+	var columns []struct {
+		Name     string `gorm:"column:column_name"`
+		DataType string `gorm:"column:data_type"`
+		Nullable string `gorm:"column:is_nullable"`
+	}
+	require.NoError(t, db.Raw(`
+		SELECT column_name, data_type, is_nullable
+		FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'project_resolution_attempts'
+		ORDER BY ordinal_position
+	`).Scan(&columns).Error)
+
+	shape := projectResolutionAttemptSchemaShape{Constraints: make(map[string]string)}
+	for _, column := range columns {
+		shape.Columns = append(shape.Columns, column.Name+"|"+column.DataType+"|"+column.Nullable)
+	}
+	var constraints []struct {
+		Name       string `gorm:"column:conname"`
+		Definition string `gorm:"column:definition"`
+	}
+	require.NoError(t, db.Raw(`
+		SELECT conname, pg_get_constraintdef(oid) AS definition
+		FROM pg_constraint
+		WHERE conrelid = 'project_resolution_attempts'::regclass
+		ORDER BY conname
+	`).Scan(&constraints).Error)
+	for _, constraint := range constraints {
+		shape.Constraints[constraint.Name] = constraint.Definition
+	}
+	return shape
 }
