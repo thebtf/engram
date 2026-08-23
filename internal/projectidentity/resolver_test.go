@@ -388,6 +388,26 @@ func TestResolveProjectV3MergedAnchorRedirectsAndRecordsAttempt(t *testing.T) {
 	assertResolutionAttemptV3(t, store, result.Resolution())
 }
 
+func TestResolveProjectV3ReadFilterRefusesMergedAnchor(t *testing.T) {
+	binding := resolverActiveBindingV3()
+	binding.State = AnchorBindingRedirectedV3
+	binding.RedirectReference = "merge-audit-filter-17"
+	store := &resolverStoreV3Fake{anchor: binding}
+	request := resolverRequestV3(ReadFilterIntentV3)
+	filter, err := NewReadFilterRequirementV3(resolverAuthorizationV3(t), request.Correlation)
+	if err != nil {
+		t.Fatalf("new read-filter requirement: %v", err)
+	}
+	request.ReadFilter = &filter
+
+	result, err := resolverV3(t, store).ResolveProjectV3(context.Background(), request)
+	assertRefusalV3(t, result, err, ProjectAnchorDecisionRequiredOutcomeV3)
+	if store.lookupCalls != 1 || store.registerCalls != 0 || store.adminCalls != 0 {
+		t.Fatalf("read_filter redirect port calls = lookup:%d register:%d admin:%d", store.lookupCalls, store.registerCalls, store.adminCalls)
+	}
+	assertResolutionAttemptV3(t, store, result.Resolution())
+}
+
 func resolverV3(t *testing.T, store ProjectResolutionStoreV3) ResolverV3 {
 	t.Helper()
 	projectKey, err := NewProjectKeyV3(resolverTestProjectKeyV3)
