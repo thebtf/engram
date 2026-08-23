@@ -101,8 +101,7 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 
 // Tools returns the one stable setup tool for a V3-configured daemon. V2
 // instances return no extra static tool and retain their existing surface.
-// The dispatcher routes static tools before proxy dispatch, so registration
-// never reaches CallTool.
+// V3 dispatch is static; V2 rejects the reserved name before proxy work.
 func (m *Module) Tools() []module.ToolDef {
 	if m.v3ClientInstanceID == "" {
 		return nil
@@ -162,7 +161,7 @@ func hasNoRegistrationArguments(args json.RawMessage) bool {
 		return true
 	}
 	var fields map[string]json.RawMessage
-	return json.Unmarshal(args, &fields) == nil && len(fields) == 0
+	return json.Unmarshal(args, &fields) == nil && fields != nil && len(fields) == 0
 }
 
 // ProxyHandleTool forwards a tools/call request to the engram server via
@@ -186,6 +185,10 @@ func hasNoRegistrationArguments(args json.RawMessage) bool {
 //	    sentinel and wraps with isError:true. End result is byte-identical
 //	    to v4.2.0 both in content and in the isError boolean.
 func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error) {
+	if name == projectIdentityV3RegistrationTool {
+		return nil, &module.ModuleError{Code: "PROJECT_DESCRIPTOR_UNSUPPORTED", Message: "project identity resolution refused"}
+	}
+
 	serverURL, err := m.requireServerURL(p)
 	if err != nil {
 		return nil, err
@@ -271,13 +274,12 @@ func isV3OnboardingRequired(err error) bool {
 	if !ok || grpcStatus.Code() != codes.FailedPrecondition {
 		return false
 	}
-	for _, detail := range grpcStatus.Details() {
-		info, ok := detail.(*errdetails.ErrorInfo)
-		if ok && info.GetDomain() == "engram.project_identity.v3" && info.GetReason() == string(projectidentity.ProjectOnboardingRequiredOutcomeV3) {
-			return true
-		}
+	details := grpcStatus.Details()
+	if len(details) != 1 {
+		return false
 	}
-	return false
+	info, ok := details[0].(*errdetails.ErrorInfo)
+	return ok && info.GetDomain() == "engram.project_identity.v3" && info.GetReason() == string(projectidentity.ProjectOnboardingRequiredOutcomeV3)
 }
 
 // v3ProxyError preserves only the server's typed refusal outcome. It rejects

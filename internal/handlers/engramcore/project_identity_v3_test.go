@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/thebtf/engram/internal/module"
+	"github.com/thebtf/engram/internal/projectidentity"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
@@ -152,7 +153,7 @@ func TestV3OnboardingKeepsStaticRegistrationVisibleAndResumesProxy(t *testing.T)
 	}
 }
 
-func TestV3RegistrationRejectsArgumentsWithoutCallingGRPC(t *testing.T) {
+func TestV3RegistrationRejectsNonEmptyOrNullArgumentsWithoutCallingGRPC(t *testing.T) {
 	srv := &mockEngramServer{}
 	grpcAddr := startMockGRPC(t, srv)
 	_, mod, project := buildV3ContractDispatcher(t, grpcAddr)
@@ -160,13 +161,18 @@ func TestV3RegistrationRejectsArgumentsWithoutCallingGRPC(t *testing.T) {
 	project.Cwd = daemonV3Repository(t)
 	mod.cache.ForceCacheEntry(project, "raw-slug-must-not-reach-registration")
 
-	_, err := mod.HandleTool(context.Background(), project, "project_identity.register_v3", json.RawMessage(`{"project_key":"must-not-be-accepted"}`))
-	var moduleErr *module.ModuleError
-	if !errors.As(err, &moduleErr) || moduleErr.Code != "tool_input_invalid" {
-		t.Fatalf("registration input error=%v, want safe typed refusal", err)
-	}
-	if strings.Contains(err.Error(), project.ID) || strings.Contains(err.Error(), project.Cwd) || strings.Contains(err.Error(), "must-not-be-accepted") {
-		t.Fatalf("registration argument refusal leaked private input: %v", err)
+	for _, args := range []json.RawMessage{
+		json.RawMessage(`{"project_key":"must-not-be-accepted"}`),
+		json.RawMessage(`null`),
+	} {
+		_, err := mod.HandleTool(context.Background(), project, projectIdentityV3RegistrationTool, args)
+		var moduleErr *module.ModuleError
+		if !errors.As(err, &moduleErr) || moduleErr.Code != "tool_input_invalid" {
+			t.Fatalf("registration input error=%v, want safe typed refusal", err)
+		}
+		if strings.Contains(err.Error(), project.ID) || strings.Contains(err.Error(), project.Cwd) || strings.Contains(err.Error(), "must-not-be-accepted") {
+			t.Fatalf("registration argument refusal leaked private input: %v", err)
+		}
 	}
 	srv.mu.Lock()
 	registerCalls := srv.registerCalls
@@ -197,6 +203,37 @@ func TestV3NonOnboardingRefusalFailsClosedWithoutProxyTools(t *testing.T) {
 	}
 }
 
+func TestV3MixedOnboardingRefusalFailsClosedWithoutProxyTools(t *testing.T) {
+	st, err := status.New(codes.FailedPrecondition, "project identity resolution refused").WithDetails(
+		&errdetails.ErrorInfo{
+			Domain: "engram.project_identity.v3",
+			Reason: string(projectidentity.ProjectOnboardingRequiredOutcomeV3),
+		},
+		&errdetails.ErrorInfo{
+			Domain: "engram.project_identity.v3",
+			Reason: string(projectidentity.ProjectScopeMismatchOutcomeV3),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &mockEngramServer{initErr: st.Err()}
+	grpcAddr := startMockGRPC(t, srv)
+	dispatcher, mod, project := buildV3ContractDispatcher(t, grpcAddr)
+	project.ID = "raw-mux-project-must-not-be-forwarded"
+	project.Cwd = daemonV3Repository(t)
+	mod.cache.ForceCacheEntry(project, "raw-slug-must-not-survive-refusal")
+
+	response, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcListReq(1))
+	if err != nil {
+		t.Fatalf("mixed onboarding tools/list: %v", err)
+	}
+	assertToolsListServiceUnavailable(t, response)
+	if mod.cache.HasEntry(project.ID) {
+		t.Fatal("mixed V3 refusal retained a compatibility cache entry")
+	}
+}
+
 func TestV2DoesNotExposeRegistrationOrFallBackToV2(t *testing.T) {
 	srv := &mockEngramServer{}
 	grpcAddr := startMockGRPC(t, srv)
@@ -215,6 +252,30 @@ func TestV2DoesNotExposeRegistrationOrFallBackToV2(t *testing.T) {
 	srv.mu.Unlock()
 	if registerCalls != 0 {
 		t.Fatalf("V2 registration RPC calls=%d, want 0", registerCalls)
+	}
+}
+
+func TestV2ReservedRegistrationNameDoesNotReachProxy(t *testing.T) {
+	srv := &mockEngramServer{}
+	grpcAddr := startMockGRPC(t, srv)
+	dispatcher, mod, project := buildContractDispatcher(t, grpcAddr)
+	mod.cache.ForceCacheEntry(project, "cached-v2-selector")
+
+	response, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcCallReq(1, projectIdentityV3RegistrationTool))
+	if err != nil {
+		t.Fatalf("reserved V2 tools/call: %v", err)
+	}
+	if !strings.Contains(string(response), "PROJECT_DESCRIPTOR_UNSUPPORTED") {
+		t.Fatalf("reserved V2 tools/call=%s, want safe V3-only refusal", response)
+	}
+	srv.mu.Lock()
+	callReq := srv.callReq
+	srv.mu.Unlock()
+	if callReq != nil {
+		t.Fatalf("reserved V2 tool reached backend CallTool: %#v", callReq)
+	}
+	if !mod.cache.HasEntry(project.ID) {
+		t.Fatal("reserved V2 tool mutated the compatibility selector cache")
 	}
 }
 
