@@ -5,14 +5,12 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/projectidentity"
-	"github.com/thebtf/engram/internal/recoveryreceipt"
 	gormlib "gorm.io/gorm"
 )
 
@@ -178,6 +176,11 @@ func TestProjectIdentityV3ComparisonClientInstancePrivacyMigration166PreservesHi
 		const historicalLocator = "C:private"
 		historicalCorrelation, err := insertComparison(tx, historicalLocator)
 		require.NoError(t, err, "migration 165 must reproduce the pre-166 comparison vocabulary")
+		fixtureCorrelations := [4]projectidentity.CorrelationV3{}
+		for index := range fixtureCorrelations {
+			fixtureCorrelations[index], err = insertComparison(tx, "fixture-install-166-"+uuid.NewString())
+			require.NoError(t, err, "migration 165 must seed bounded controlled-fixture evidence")
+		}
 		require.NoError(t, migration166.Migrate(tx))
 		require.NoError(t, migration166.Migrate(tx), "migration 166 DDL must be idempotent")
 
@@ -190,35 +193,6 @@ func TestProjectIdentityV3ComparisonClientInstancePrivacyMigration166PreservesHi
 		require.Len(t, readback, 1)
 		require.Equal(t, historicalLocator, readback[0].ClientInstanceID)
 		require.False(t, readback[0].Valid(), "strict validation remains unavailable for the preserved locator")
-
-		receipt, err := recoveryreceipt.BuildAR2IdentityExpandReceiptFromPersistedComparisons(context.Background(), scopedStore, recoveryreceipt.AR2IdentityExpandInput{
-			Candidate: recoveryreceipt.AR2CandidateIdentity{
-				SourceCommit:                strings.Repeat("a", 40),
-				CandidateCommit:             strings.Repeat("a", 40),
-				CandidatePayloadFingerprint: comparisonStoreFingerprint("migration-166-receipt"),
-			},
-			MigrationIDs: []string{
-				"162_project_identity_v3",
-				"163_project_identity_v3_resolution_attempts",
-				"164_project_identity_v3_resolution_attempt_admin_audit",
-				"165_project_identity_v3_comparisons",
-				"166_project_identity_v3_comparison_client_instance_privacy",
-			},
-			DescriptorVersion: 3,
-			SupportedTransports: []projectidentity.ComparisonTransportV3{
-				projectidentity.ComparisonTransportGRPCV3,
-				projectidentity.ComparisonTransportHTTPV3,
-				projectidentity.ComparisonTransportHookV3,
-				projectidentity.ComparisonTransportDaemonV3,
-				projectidentity.ComparisonTransportOpenClawV3,
-			},
-			V2Compatibility: recoveryreceipt.AR2V2ReadCompatible,
-			CapabilityState: recoveryreceipt.AR2CapabilityAvailable,
-		}, []projectidentity.CorrelationV3{historicalCorrelation})
-		require.NoError(t, err)
-		encodedReceipt, err := json.Marshal(receipt)
-		require.NoError(t, err)
-		require.NotContains(t, string(encodedReceipt), historicalLocator, "the receipt must count historical evidence without exposing it")
 
 		var constraintRows int64
 		require.NoError(t, tx.Raw(`

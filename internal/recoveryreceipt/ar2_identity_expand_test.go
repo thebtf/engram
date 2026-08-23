@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,107 +14,185 @@ import (
 	"github.com/thebtf/engram/internal/projectidentity"
 )
 
-func TestBuildAR2IdentityExpandReceiptCoversEveryTransportAndRedactsRefusals(t *testing.T) {
-	input := ar2IdentityExpandInput(t)
-	before := input
-	before.MigrationIDs = append([]string(nil), input.MigrationIDs...)
-	before.SupportedTransports = append([]projectidentity.ComparisonTransportV3(nil), input.SupportedTransports...)
-	before.Comparisons = append([]projectidentity.ComparisonObservationV3(nil), input.Comparisons...)
-
-	receipt, err := BuildAR2IdentityExpandReceipt(input)
+func TestBuildAR2IdentityExpandReceiptFromControlledFixtureRequiresExactFiveCallableCorrelations(t *testing.T) {
+	capture, observations := ar2ControlledFixtureInput(t)
+	reader := &persistedComparisonReaderV3{comparisons: observations}
+	before := capture.attestation
+	expectedRead, err := capture.ordered()
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectedMigrationIDs := []string{
-		"162_project_identity_v3",
-		"163_project_identity_v3_resolution_attempts",
-		"164_project_identity_v3_resolution_attempt_admin_audit",
-		"165_project_identity_v3_comparisons",
-		"166_project_identity_v3_comparison_client_instance_privacy",
+
+	receipt, err := buildAR2IdentityExpandReceiptFromControlledFixture(context.Background(), reader, capture)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(input, before) {
-		t.Fatalf("receipt construction mutated its authority-free input: before=%#v after=%#v", before, input)
+	if !reflect.DeepEqual(capture.attestation, before) || reader.calls != 1 || !reflect.DeepEqual(reader.requested, expectedRead[:]) {
+		t.Fatalf("receipt did not exact-read its controlled-fixture input once: capture=%#v reader=%#v", capture, reader)
 	}
-	if receipt.SchemaVersion != AR2IdentityExpandSchemaVersion || receipt.ReceiptAuthority != AR2IdentityExpandAuthority || receipt.CompatibilityWindow != AR2CompatibilityWindow || receipt.Candidate != input.Candidate || !reflect.DeepEqual(receipt.MigrationIDs, expectedMigrationIDs) || receipt.DescriptorVersion != 3 || receipt.V2Compatibility != AR2V2ReadCompatible || receipt.CapabilityState != AR2CapabilityAvailable {
+	if receipt.SchemaVersion != AR2IdentityExpandSchemaVersion || receipt.SchemaVersion == "engram.recovery.ar2-identity-expand-receipt.v1" || receipt.ReceiptAuthority != AR2IdentityExpandAuthority || receipt.EvidenceScope != ar2EvidenceScope || receipt.RuntimeLabelTrust != ar2RuntimeLabelTrust || receipt.CompatibilityWindow != AR2CompatibilityWindow || receipt.Candidate != capture.attestation.candidate || receipt.DescriptorVersion != 3 || receipt.V2Compatibility != AR2V2ReadCompatible || receipt.CapabilityState != AR2CapabilityAvailable {
 		t.Fatalf("receipt identity = %#v", receipt)
 	}
-	if len(receipt.SupportedAdapters) != len(input.SupportedTransports) || len(receipt.TransportCoverage) != len(input.SupportedTransports) {
-		t.Fatalf("supported transports/adapters = %#v / %#v", receipt.SupportedAdapters, receipt.TransportCoverage)
+	if !reflect.DeepEqual(receipt.MigrationIDs, ar2IdentityExpandMigrationIDs) || len(receipt.SupportedAdapters) != len(ar2ControlledFixtureCallables) || len(receipt.AdapterCoverage) != len(ar2ControlledFixtureCallables) {
+		t.Fatalf("receipt callable contract = %#v", receipt)
 	}
-
-	classes := map[projectidentity.ComparisonClassV3]int64{}
-	for _, coverage := range receipt.TransportCoverage {
-		if coverage.Metric.DenominatorValue == 0 || coverage.Metric.ResultStatus != operability.Computed || coverage.Metric.Ratio == nil || *coverage.Metric.Ratio != 1 {
-			t.Fatalf("%s coverage = %#v, want nonzero computed coverage", coverage.Transport, coverage)
-		}
-		classes[projectidentity.ComparisonEqualV3] += coverage.Equal
-		classes[projectidentity.ComparisonMismatchV3] += coverage.Mismatch
-		classes[projectidentity.ComparisonRefusalV3] += coverage.Refusal
-		classes[projectidentity.ComparisonUnavailableV3] += coverage.Unavailable
-	}
-	for _, class := range []projectidentity.ComparisonClassV3{
-		projectidentity.ComparisonEqualV3,
-		projectidentity.ComparisonMismatchV3,
-		projectidentity.ComparisonRefusalV3,
-		projectidentity.ComparisonUnavailableV3,
-	} {
-		if classes[class] == 0 {
-			t.Fatalf("receipt omitted explicit %s class: %#v", class, receipt.TransportCoverage)
+	for index, spec := range ar2ControlledFixtureCallables {
+		adapter := receipt.SupportedAdapters[index]
+		coverage := receipt.AdapterCoverage[index]
+		if adapter.Adapter != spec.adapter || adapter.Callable != spec.callable || adapter.PhysicalChannel != spec.physicalChannel || coverage.Adapter != spec.adapter || coverage.Callable != spec.callable || coverage.Metric.DenominatorValue != 1 || coverage.Metric.NumeratorValue != 1 || coverage.Metric.ResultStatus != operability.Computed || coverage.Metric.Ratio == nil || *coverage.Metric.Ratio != 1 {
+			t.Fatalf("callable slot %d = %#v / %#v", index, adapter, coverage)
 		}
 	}
-	if receipt.RollbackBoundary.V3AdapterAction != "disable_v3_adapter" || receipt.RollbackBoundary.ReadBoundary != "read_v2" || !reflect.DeepEqual(receipt.RollbackBoundary.Preserve, []string{"additive_schema", "v3_identifiers", "v3_resolution_audits", "v3_anchors", "comparison_evidence"}) {
-		t.Fatalf("rollback boundary = %#v", receipt.RollbackBoundary)
-	}
-
 	encoded, err := json.Marshal(receipt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{
-		`{"version":3,"anchor_project_id":"11111111-1111-4111-8111-111111111111"}`,
-		"https://fixture-user:fixture-password@git.example.test/private/repo",
-		"C:/private/repo",
-		"fixture-password",
-		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-	} {
+	for _, forbidden := range []string{"C:private", "https://fixture-user:fixture-password@git.example.test/private/repo", "fixture-password", "ar2-receipt-client"} {
 		if strings.Contains(string(encoded), forbidden) {
-			t.Fatalf("redacted refusal receipt leaked %q: %s", forbidden, encoded)
+			t.Fatalf("receipt leaked raw comparison input %q: %s", forbidden, encoded)
 		}
 	}
 }
 
-func TestBuildAR2IdentityExpandReceiptReportsZeroDenominatorAsNotComputable(t *testing.T) {
-	input := ar2IdentityExpandInput(t)
-	input.Comparisons = input.Comparisons[1:]
+func TestBuildAR2IdentityExpandReceiptFromControlledFixtureIgnoresPersistedAdapterLabels(t *testing.T) {
+	capture, observations := ar2ControlledFixtureInput(t)
+	for index := range observations {
+		observations[index].Transport = projectidentity.ComparisonTransportOpenClawV3
+	}
 
-	receipt, err := BuildAR2IdentityExpandReceipt(input)
+	receipt, err := buildAR2IdentityExpandReceiptFromControlledFixture(context.Background(), &persistedComparisonReaderV3{comparisons: observations}, capture)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var grpc AR2TransportCoverage
-	for _, coverage := range receipt.TransportCoverage {
-		if coverage.Transport == projectidentity.ComparisonTransportGRPCV3 {
-			grpc = coverage
-			break
+	for index, spec := range ar2ControlledFixtureCallables {
+		coverage := receipt.AdapterCoverage[index]
+		if coverage.Adapter != spec.adapter || coverage.Equal+coverage.Mismatch+coverage.Refusal+coverage.Unavailable != 1 {
+			t.Fatalf("persisted label selected coverage bucket at %d: %#v", index, coverage)
 		}
 	}
-	if grpc.Metric.DenominatorValue != 0 || grpc.Metric.NumeratorValue != 0 || grpc.Metric.ResultStatus != operability.NotComputable || grpc.Metric.Ratio != nil {
-		t.Fatalf("zero denominator must be not_computable, never green: %#v", grpc)
+}
+
+func TestBuildAR2IdentityExpandReceiptFromControlledFixtureRejectsUnboundPersistedCoverage(t *testing.T) {
+	_, observations := ar2ControlledFixtureInput(t)
+	capture, err := newAR2ControlledFixtureCapture(ar2FixtureCandidateAttestation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &persistedComparisonReaderV3{comparisons: observations}
+	if _, err := buildAR2IdentityExpandReceiptFromControlledFixture(context.Background(), reader, capture); err == nil {
+		t.Fatal("five persisted rows with apparent adapter labels built a trusted receipt without controlled fixture capture")
+	}
+	if reader.calls != 0 {
+		t.Fatal("unbound persisted coverage reached durable readback")
 	}
 }
 
-func TestBuildAR2IdentityExpandReceiptRejectsIncompleteSupportContract(t *testing.T) {
-	input := ar2IdentityExpandInput(t)
-	input.SupportedTransports = input.SupportedTransports[:len(input.SupportedTransports)-1]
-	if _, err := BuildAR2IdentityExpandReceipt(input); err == nil {
-		t.Fatal("receipt accepted an incomplete supported transport contract")
-	}
-}
-
-func ar2IdentityExpandInput(t *testing.T) AR2IdentityExpandInput {
-	t.Helper()
-	comparisons := make([]projectidentity.ComparisonObservationV3, 0, len(ar2SupportedTransports))
+func TestBuildAR2IdentityExpandReceiptFromControlledFixtureRejectsNonExactReadback(t *testing.T) {
+	capture, observations := ar2ControlledFixtureInput(t)
+	unrequested := observations[0]
+	unrequested.Correlation = ar2Correlation(t, "ar2-unrequested-correlation")
+	unrequested.IdempotencyKey = ar2ReceiptFingerprint("ar2-unrequested-idempotency")
+	missing := *capture
+	missing.correlations[0] = ""
+	duplicate := *capture
+	duplicate.correlations[1] = duplicate.correlations[0]
+	invalid := *capture
+	invalid.correlations[0] = "not/a-correlation"
+	unrelatedPayload := *capture
+	unrelatedPayload.attestation.runtimePayloadFingerprint = ar2ReceiptFingerprint("unrelated-candidate-payload")
+	mismatchedHealth := *capture
+	mismatchedHealth.attestation.healthSourceCommit = strings.Repeat("b", 40)
 	cases := []struct {
+		name    string
+		capture *ar2ControlledFixtureCapture
+		reader  *persistedComparisonReaderV3
+	}{
+		{name: "missing fixed slot", capture: &missing, reader: &persistedComparisonReaderV3{comparisons: observations}},
+		{name: "duplicate fixed slots", capture: &duplicate, reader: &persistedComparisonReaderV3{comparisons: observations}},
+		{name: "invalid fixed slot", capture: &invalid, reader: &persistedComparisonReaderV3{comparisons: observations}},
+		{name: "missing durable row", capture: capture, reader: &persistedComparisonReaderV3{comparisons: observations[:4]}},
+		{name: "duplicate durable row", capture: capture, reader: &persistedComparisonReaderV3{comparisons: append(append([]projectidentity.ComparisonObservationV3(nil), observations...), observations[0])}},
+		{name: "unrequested durable row", capture: capture, reader: &persistedComparisonReaderV3{comparisons: append(append([]projectidentity.ComparisonObservationV3(nil), observations[:4]...), unrequested)}},
+		{name: "reader failure", capture: capture, reader: &persistedComparisonReaderV3{err: errors.New("fixture read failed")}},
+		{name: "unrelated runtime payload", capture: &unrelatedPayload, reader: &persistedComparisonReaderV3{comparisons: observations}},
+		{name: "mismatched health commit", capture: &mismatchedHealth, reader: &persistedComparisonReaderV3{comparisons: observations}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := buildAR2IdentityExpandReceiptFromControlledFixture(context.Background(), testCase.reader, testCase.capture); err == nil {
+				t.Fatal("builder accepted non-exact controlled-fixture evidence")
+			}
+		})
+	}
+}
+
+func TestBuildAR2IdentityExpandReceiptFromControlledFixtureBindsOrderedEvidenceAndRedactsLegacyReadback(t *testing.T) {
+	capture, observations := ar2ControlledFixtureInput(t)
+	observations[0].ClientInstanceID = "C:private"
+
+	first, err := buildAR2IdentityExpandReceiptFromControlledFixture(context.Background(), &persistedComparisonReaderV3{comparisons: observations}, capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := buildAR2IdentityExpandReceiptFromControlledFixture(context.Background(), &persistedComparisonReaderV3{comparisons: observations}, capture)
+	if err != nil || first.FixtureEvidenceFingerprint != second.FixtureEvidenceFingerprint {
+		t.Fatalf("fixture evidence fingerprint is not deterministic: %#v / %#v / %v", first, second, err)
+	}
+	swapped := *capture
+	swapped.correlations[0], swapped.correlations[1] = swapped.correlations[1], swapped.correlations[0]
+	changed, err := buildAR2IdentityExpandReceiptFromControlledFixture(context.Background(), &persistedComparisonReaderV3{comparisons: observations}, &swapped)
+	if err != nil || changed.FixtureEvidenceFingerprint == first.FixtureEvidenceFingerprint {
+		t.Fatalf("ordered controlled-fixture correlations do not bind receipt evidence: %#v / %#v / %v", first, changed, err)
+	}
+	changedEvidence := append([]projectidentity.ComparisonObservationV3(nil), observations...)
+	changedEvidence[0].EvidenceFingerprint = ar2ReceiptFingerprint("changed-durable-evidence")
+	withChangedEvidence, err := buildAR2IdentityExpandReceiptFromControlledFixture(context.Background(), &persistedComparisonReaderV3{comparisons: changedEvidence}, capture)
+	if err != nil || withChangedEvidence.FixtureEvidenceFingerprint == first.FixtureEvidenceFingerprint {
+		t.Fatalf("durable evidence fingerprint does not bind receipt evidence: %#v / %#v / %v", first, withChangedEvidence, err)
+	}
+	changedClassification := append([]projectidentity.ComparisonObservationV3(nil), observations...)
+	changedClassification[0].LegacyOutcome = projectidentity.LegacyComparisonRefusalV2
+	withChangedClassification, err := buildAR2IdentityExpandReceiptFromControlledFixture(context.Background(), &persistedComparisonReaderV3{comparisons: changedClassification}, capture)
+	if err != nil || withChangedClassification.FixtureEvidenceFingerprint == first.FixtureEvidenceFingerprint {
+		t.Fatalf("durable classification does not bind receipt evidence: %#v / %#v / %v", first, withChangedClassification, err)
+	}
+	unrelatedPayload := *capture
+	unrelatedPayload.attestation.runtimePayloadFingerprint = ar2ReceiptFingerprint("unrelated-candidate-payload")
+	if _, err := buildAR2IdentityExpandReceiptFromControlledFixture(context.Background(), &persistedComparisonReaderV3{comparisons: observations}, &unrelatedPayload); err == nil {
+		t.Fatal("receipt accepted a payload that was not attested by the runtime")
+	}
+	encoded, err := json.Marshal(first)
+	if err != nil || strings.Contains(string(encoded), "C:private") {
+		t.Fatalf("receipt exposed historical locator: %s / %v", encoded, err)
+	}
+}
+
+func TestAR2ControlledFixtureCaptureRejectsSwappedCallableSlots(t *testing.T) {
+	capture, err := newAR2ControlledFixtureCapture(ar2FixtureCandidateAttestation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := capture.record(ar2ControlledFixtureCallables[1].callable, ar2Correlation(t, "ar2-receipt-grpc")); err == nil {
+		t.Fatal("swapped callable evidence slot was accepted")
+	}
+}
+
+func ar2ControlledFixtureInput(t *testing.T) (*ar2ControlledFixtureCapture, []projectidentity.ComparisonObservationV3) {
+	t.Helper()
+	capture, err := newAR2ControlledFixtureCapture(ar2FixtureCandidateAttestation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range ar2ControlledFixtureCallables {
+		if err := capture.record(spec.callable, ar2Correlation(t, "ar2-receipt-"+spec.adapter)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ordered, err := capture.ordered()
+	if err != nil {
+		t.Fatal(err)
+	}
+	classes := []struct {
 		outcome projectidentity.ResolutionOutcomeV3
 		legacy  projectidentity.LegacyComparisonOutcomeV2
 	}{
@@ -123,40 +202,50 @@ func ar2IdentityExpandInput(t *testing.T) AR2IdentityExpandInput {
 		{projectidentity.ProjectResolvedOutcomeV3, projectidentity.LegacyComparisonUnavailableV2},
 		{projectidentity.ProjectResolvedOutcomeV3, projectidentity.LegacyComparisonResolvedV2},
 	}
-	for index, transport := range ar2SupportedTransports {
-		correlation, err := projectidentity.NewCorrelationV3("ar2-receipt-correlation-" + string(transport))
-		if err != nil {
-			t.Fatal(err)
-		}
-		comparison, err := projectidentity.NewComparisonObservationV3(
-			ar2ReceiptFingerprint("idempotency-"+string(transport)),
+	observations := make([]projectidentity.ComparisonObservationV3, 0, len(ordered))
+	for index, correlation := range ordered {
+		observation, err := projectidentity.NewComparisonObservationV3(
+			ar2ReceiptFingerprint("idempotency-"+string(correlation)),
 			correlation,
-			cases[index].outcome,
-			cases[index].legacy,
-			"ar2-receipt-client-"+string(transport),
-			transport,
+			classes[index].outcome,
+			classes[index].legacy,
+			"ar2-receipt-client-"+ar2ControlledFixtureCallables[index].adapter,
+			projectidentity.ComparisonTransportOpenClawV3,
 			projectidentity.ComparisonRepositoryScopeV3,
 			projectidentity.ComparisonFreshV3,
-			ar2ReceiptFingerprint("evidence-"+string(transport)),
+			ar2ReceiptFingerprint("evidence-"+string(correlation)),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
-		comparisons = append(comparisons, comparison)
+		observations = append(observations, observation)
 	}
-	return AR2IdentityExpandInput{
-		Candidate: AR2CandidateIdentity{
-			SourceCommit:                strings.Repeat("a", 40),
-			CandidateCommit:             strings.Repeat("a", 40),
-			CandidatePayloadFingerprint: ar2ReceiptFingerprint("candidate-payload"),
+	return capture, observations
+}
+
+func ar2FixtureCandidateAttestation() ar2CandidateAttestation {
+	candidateCommit := strings.Repeat("a", 40)
+	payloadFingerprint := ar2ReceiptFingerprint("candidate-payload")
+	return ar2CandidateAttestation{
+		candidate: ar2CandidateIdentity{
+			SourceCommit:                candidateCommit,
+			CandidateCommit:             candidateCommit,
+			CandidatePayloadFingerprint: payloadFingerprint,
 		},
-		MigrationIDs:        append([]string(nil), ar2IdentityExpandMigrationIDs...),
-		DescriptorVersion:   3,
-		SupportedTransports: append([]projectidentity.ComparisonTransportV3(nil), ar2SupportedTransports...),
-		Comparisons:         comparisons,
-		V2Compatibility:     AR2V2ReadCompatible,
-		CapabilityState:     AR2CapabilityAvailable,
+		healthSourceCommit:        candidateCommit,
+		runtimePayloadFingerprint: payloadFingerprint,
+		v2Compatibility:           AR2V2ReadCompatible,
+		capabilityState:           AR2CapabilityAvailable,
 	}
+}
+
+func ar2Correlation(t *testing.T, value string) projectidentity.CorrelationV3 {
+	t.Helper()
+	correlation, err := projectidentity.NewCorrelationV3(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return correlation
 }
 
 func ar2ReceiptFingerprint(value string) string {
@@ -164,80 +253,15 @@ func ar2ReceiptFingerprint(value string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func TestBuildAR2IdentityExpandReceiptFromPersistedComparisonsRequiresExactCorrelations(t *testing.T) {
-	input := ar2IdentityExpandInput(t)
-	persisted := append([]projectidentity.ComparisonObservationV3(nil), input.Comparisons...)
-	input.Comparisons = nil
-	correlations := make([]projectidentity.CorrelationV3, 0, len(persisted))
-	for _, comparison := range persisted {
-		correlations = append(correlations, comparison.Correlation)
-	}
-
-	receipt, err := BuildAR2IdentityExpandReceiptFromPersistedComparisons(context.Background(), persistedComparisonReaderV3{comparisons: persisted}, input, correlations)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(receipt.TransportCoverage) != len(ar2SupportedTransports) {
-		t.Fatalf("coverage=%#v", receipt.TransportCoverage)
-	}
-
-	for _, testCase := range []struct {
-		name         string
-		reader       persistedComparisonReaderV3
-		correlations []projectidentity.CorrelationV3
-	}{
-		{name: "missing", reader: persistedComparisonReaderV3{comparisons: persisted[:len(persisted)-1]}, correlations: correlations},
-		{name: "duplicate row", reader: persistedComparisonReaderV3{comparisons: append(append([]projectidentity.ComparisonObservationV3(nil), persisted...), persisted[0])}, correlations: correlations},
-		{name: "unrequested", reader: persistedComparisonReaderV3{comparisons: persisted}, correlations: correlations[:len(correlations)-1]},
-		{name: "duplicate request", reader: persistedComparisonReaderV3{comparisons: persisted}, correlations: append(append([]projectidentity.CorrelationV3(nil), correlations...), correlations[0])},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			if _, err := BuildAR2IdentityExpandReceiptFromPersistedComparisons(context.Background(), testCase.reader, input, testCase.correlations); err == nil {
-				t.Fatal("persisted comparison readback accepted a non-exact correlation set")
-			}
-		})
-	}
-}
-
-func TestBuildAR2IdentityExpandReceiptFromPersistedComparisonsAcceptsLegacyLocatorReadbackOnly(t *testing.T) {
-	input := ar2IdentityExpandInput(t)
-	persisted := append([]projectidentity.ComparisonObservationV3(nil), input.Comparisons...)
-	persisted[0].ClientInstanceID = "C:private"
-	correlations := make([]projectidentity.CorrelationV3, 0, len(persisted))
-	for _, comparison := range persisted {
-		correlations = append(correlations, comparison.Correlation)
-	}
-
-	direct := input
-	direct.Comparisons = persisted
-	if _, err := BuildAR2IdentityExpandReceipt(direct); err == nil {
-		t.Fatal("direct receipt input accepted a legacy locator")
-	}
-
-	input.Comparisons = nil
-	receipt, err := BuildAR2IdentityExpandReceiptFromPersistedComparisons(context.Background(), persistedComparisonReaderV3{comparisons: persisted}, input, correlations)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(receipt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(encoded), persisted[0].ClientInstanceID) {
-		t.Fatalf("receipt exposed historical locator: %s", encoded)
-	}
-
-	persisted[0].EvidenceFingerprint = "invalid"
-	if _, err := BuildAR2IdentityExpandReceiptFromPersistedComparisons(context.Background(), persistedComparisonReaderV3{comparisons: persisted}, input, correlations); err == nil {
-		t.Fatal("persisted legacy readback accepted an invalid non-client field")
-	}
-}
-
 type persistedComparisonReaderV3 struct {
 	comparisons []projectidentity.ComparisonObservationV3
 	err         error
+	calls       int
+	requested   []projectidentity.CorrelationV3
 }
 
-func (reader persistedComparisonReaderV3) ReadComparisonsByCorrelationV3(_ context.Context, _ []projectidentity.CorrelationV3) ([]projectidentity.ComparisonObservationV3, error) {
+func (reader *persistedComparisonReaderV3) ReadComparisonsByCorrelationV3(_ context.Context, correlations []projectidentity.CorrelationV3) ([]projectidentity.ComparisonObservationV3, error) {
+	reader.calls++
+	reader.requested = append([]projectidentity.CorrelationV3(nil), correlations...)
 	return append([]projectidentity.ComparisonObservationV3(nil), reader.comparisons...), reader.err
 }
