@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/handlers/codeintel"
 	"github.com/thebtf/engram/internal/handlers/engramcore"
 	loomhandler "github.com/thebtf/engram/internal/handlers/loom"
@@ -31,7 +32,7 @@ import (
 // to pre-CR-006.
 func registerModules(reg *registry.Registry) error {
 	// Construct engramcore once — shared with codeintel below.
-	coreModule := engramcore.NewModule()
+	coreModule := engramcore.NewModuleWithClientInstanceID(os.Getenv(config.EnvClientInstanceID))
 	if err := reg.Register(coreModule); err != nil {
 		return fmt.Errorf("register engramcore: %w", err)
 	}

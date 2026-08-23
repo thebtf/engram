@@ -44,18 +44,26 @@ const moduleName = "engramcore"
 // the gRPC Initialize RPC, and the client has no static inventory of tool
 // metadata. FR-11a exists solely for this shape of module.
 type Module struct {
-	pool  *grpcPool
-	cache *slugCache
-	deps  module.ModuleDeps
+	pool               *grpcPool
+	cache              *slugCache
+	v3ClientInstanceID string
+	deps               module.ModuleDeps
 }
 
-// NewModule constructs an unstarted engramcore module. Call Init before
-// HandleTool / ProxyTools. This is the single entry point for the daemon
-// wiring in cmd/engram/main.go.
+// NewModule constructs an unstarted V2-compatible engramcore module. Call Init
+// before HandleTool / ProxyTools.
 func NewModule() *Module {
+	return NewModuleWithClientInstanceID("")
+}
+
+// NewModuleWithClientInstanceID constructs a module that submits V3
+// descriptors for every scoped proxy operation. The client instance reference
+// is configured by daemon wiring; identity resolution never generates it.
+func NewModuleWithClientInstanceID(clientInstanceID string) *Module {
 	return &Module{
-		pool:  &grpcPool{},
-		cache: &slugCache{},
+		pool:               &grpcPool{},
+		cache:              &slugCache{},
+		v3ClientInstanceID: clientInstanceID,
 	}
 }
 
@@ -100,9 +108,13 @@ func (m *Module) Shutdown(_ context.Context) error {
 // OnSessionConnect logs the first session for a project. Implements
 // module.ProjectLifecycle. Behaviour ported from engramHandler.OnProjectConnect.
 func (m *Module) OnSessionConnect(p muxcore.ProjectContext) {
-	// Trigger slug resolution eagerly so the first tools/call does not pay
-	// the git I/O cost. Ignore the return value — the cache owns it.
-	_ = m.cache.Resolve(p)
+	if m.v3ClientInstanceID == "" {
+		// V2 compatibility eagerly resolves the slug. V3 must not resolve or
+		// retain a selector before central resolution.
+		_ = m.cache.Resolve(p)
+	} else {
+		m.cache.Forget(p.ID)
+	}
 	if m.deps.Logger != nil {
 		m.deps.Logger.Info("session connected",
 			"project_id", p.ID,

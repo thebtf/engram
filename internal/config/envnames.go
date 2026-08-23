@@ -41,6 +41,11 @@ const (
 	// Empty value at daemon startup with a configured server URL is fatal (FR-4).
 	EnvWorkstationToken = "ENGRAM_TOKEN"
 
+	// EnvClientInstanceID is the explicit opaque non-secret installation
+	// reference that enables daemon V3 project descriptors. An empty value keeps
+	// the daemon on its explicit V2 compatibility branch.
+	EnvClientInstanceID = "ENGRAM_CLIENT_INSTANCE_ID"
+
 	// EnvClaudeSessionID is the Claude Code session identifier injected by the
 	// Claude Code harness into the daemon process environment on every session.
 	// The daemon reads it from p.Env (per-session override) or os.Getenv

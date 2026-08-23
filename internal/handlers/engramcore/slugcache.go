@@ -1,11 +1,16 @@
 package engramcore
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/proxy"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
@@ -92,6 +97,100 @@ func (c *slugCache) ResolveIdentity(p muxcore.ProjectContext) (*pb.ProjectIdenti
 	}
 	stored, _ := c.identities.LoadOrStore(key, identity)
 	return stored.(*pb.ProjectIdentityV2), nil
+}
+
+// projectIdentityV3InputError carries only a stable public refusal code. It
+// never retains the local anchor, path, remote, or process error.
+type projectIdentityV3InputError struct{ code string }
+
+func (e *projectIdentityV3InputError) Error() string { return e.code }
+
+func v3InputError(code string) error { return &projectIdentityV3InputError{code: code} }
+
+// ResolveIdentityV3 builds fresh V3 descriptor evidence. Unlike V2, it neither
+// reads nor retains a slug/identity cache: server resolution owns scoped state.
+func (c *slugCache) ResolveIdentityV3(p muxcore.ProjectContext, clientInstanceID string) (*pb.ProjectIdentityV3, error) {
+	c.Forget(p.ID)
+	root, err := repositoryRootV3(p.Cwd)
+	if err != nil {
+		return nil, err
+	}
+	anchor, err := projectidentity.DiscoverAnchorV3(root, "repository")
+	if err != nil {
+		return nil, v3InputError("PROJECT_ANCHOR_INVALID")
+	}
+	remotes, err := normalizedGitRemotesV3(root)
+	if err != nil {
+		return nil, err
+	}
+	descriptor, err := projectidentity.BuildDescriptorV3(anchor, remotes, nil, clientInstanceID)
+	if err != nil {
+		return nil, v3InputError("PROJECT_DESCRIPTOR_INVALID")
+	}
+	return &pb.ProjectIdentityV3{
+		Version:              uint32(descriptor.Version),
+		AnchorProjectId:      descriptor.AnchorProjectID,
+		Name:                 descriptor.Name,
+		Scope:                descriptor.Scope,
+		NormalizedGitRemotes: descriptor.NormalizedGitRemotes,
+		LegacyIdentifiers:    []*pb.ProjectLegacyIdentifierV3{},
+		ClientInstanceId:     descriptor.ClientInstanceID,
+	}, nil
+}
+
+func repositoryRootV3(cwd string) (string, error) {
+	output, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel").Output()
+	root := strings.TrimSpace(string(output))
+	if err != nil || root == "" {
+		return "", v3InputError("PROJECT_ANCHOR_INVALID")
+	}
+	return root, nil
+}
+
+func normalizedGitRemotesV3(root string) ([]string, error) {
+	output, err := exec.Command("git", "-C", root, "config", "--get-regexp", `^remote\..*\.url$`).Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return []string{}, nil
+		}
+		return nil, v3InputError("PROJECT_DESCRIPTOR_INVALID")
+	}
+
+	remotes := make([]string, 0)
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line == "" {
+			continue
+		}
+		separator := strings.IndexAny(line, "\t ")
+		if separator <= 0 {
+			return nil, v3InputError("PROJECT_DESCRIPTOR_INVALID")
+		}
+		rawRemote := strings.TrimSpace(line[separator+1:])
+		normalized, disposition, normalizeErr := projectidentity.NormalizeGitRemoteV3(rawRemote)
+		if normalizeErr != nil || disposition == projectidentity.RemoteRefusedV3 {
+			return nil, v3InputError("PROJECT_DESCRIPTOR_INVALID")
+		}
+		if disposition == projectidentity.RemoteNormalizedV3 {
+			remotes = append(remotes, normalized)
+		}
+	}
+	sort.Strings(remotes)
+	return compactStrings(remotes), nil
+}
+
+func compactStrings(values []string) []string {
+	if len(values) < 2 {
+		return values
+	}
+	end := 1
+	for _, value := range values[1:] {
+		if value != values[end-1] {
+			values[end] = value
+			end++
+		}
+	}
+	return values[:end]
 }
 
 // Forget removes every cwd-scoped cache entry for a project ID. Called from

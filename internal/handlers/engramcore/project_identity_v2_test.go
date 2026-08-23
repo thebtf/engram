@@ -25,6 +25,9 @@ func TestProxyHandleTool_FirstCallBeforeHookSendsProjectIdentityV2(t *testing.T)
 	if req == nil || req.ProjectIdentity == nil {
 		t.Fatal("first CallTool did not carry project_identity v2")
 	}
+	if req.ProjectIdentityV3 != nil {
+		t.Fatal("V2 compatibility path must not submit a V3 descriptor")
+	}
 	if req.ProjectIdentity.Version != 2 {
 		t.Fatalf("identity version=%d", req.ProjectIdentity.Version)
 	}
