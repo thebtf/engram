@@ -64,3 +64,9 @@ not claim that implementation is complete.
 - Rechecked the final FR/SC/task matrix after the T075/T076 ordering correction, including T087 coverage for SC-017 and SC-018, plus the temporary-control and adjacent-authentication requirements; the specification remains testable, measurable, and scope-safe.
 - Exact regression IDs: none.
 - Per-file checked/total: `requirements.md` 16/16.
+
+## AR-2 Delta Reconciliation
+
+- [x] Does the current-source reconciliation preserve FR-001 through FR-005 and SC-001/SC-002 without adding an implementation-era requirement outside AR-2? [AR-2 delta]
+
+- Result: **PASS** — 17/17 requirements-quality checks. The delta corrects implementation ownership and evidence gates only; it neither changes the product specification nor authorizes AR-3 work.

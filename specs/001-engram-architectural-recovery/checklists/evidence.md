@@ -89,3 +89,10 @@ analysis must still reject any missing FR/SC-to-task or task-to-requirement mapp
 - Rechecked T074/T075/T076 gate evidence and the synchronized FR/SC traceability matrix: both emergency branches, active render-budget policy, cutover dependency, installed/rollback receipts, and exact task mappings remain explicit and non-inflating.
 - Exact regression IDs: none.
 - Per-file checked/total: `evidence.md` 10/10.
+
+## AR-2 Delta Reconciliation
+
+- [x] AR2-CHK011 Does the release graph require shared cross-language vectors, an isolated real PostgreSQL fixture, typed-refusal matrix, exact candidate/payload readback, staged dogfood, rollback rehearsal, and independent factual/migration/security/transport checks? [AR-2 acceptance contract]
+- [x] AR2-CHK012 Are AR-1 synthetic-fixture receipts correctly treated as reusable containment/provenance infrastructure rather than proof of AR-2 V3 migration behavior? [Current-source reconciliation]
+
+- Result: **PASS** — 12/12 requirements-quality checks. The delta requires behavioral evidence with nonzero denominators and binds final authoritative receipts under root `.agent/intake`.

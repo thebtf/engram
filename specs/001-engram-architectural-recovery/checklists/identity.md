@@ -63,4 +63,11 @@ safe across clients and historical data.
 - Result: **PASS** — 10/10 checked; no regressions identified.
 - Rechecked T004/T032/T039/T040/T083 and the identity, merge, project-data, surface, and compatibility inventories; V3 semantics, role/import-export/cache/job coverage, authentication continuity, and privacy-safe merge gates remain explicit.
 - Exact regression IDs: none.
-- Per-file checked/total: `identity.md` 10/10.
+
+## AR-2 Delta Reconciliation
+
+- [x] AR2-CHK011 Does the exact current-source map assign V3 authority to `internal/projectidentity` while correcting hook, OpenClaw, daemon, protobuf, and generated-binding ownership? [AR-2 reconciliation]
+- [x] AR2-CHK012 Are the tracked V3 anchor, server-issued key, explicit intents, typed refusals, and no-dual-authority comparison boundary still preserved by the delta? [AR-2 intake AD-1 through AD-8]
+
+- Result: **PASS** — 12/12 requirements-quality checks. The delta records existing V2 divergence without treating it as V3 authority, corrects adapter/protobuf task paths, and retains AR-3 merge/backfill/cutover as out of scope. This is not an implementation-completion claim.
+- Per-file checked/total: `identity.md` 12/12 after AR-2 delta reconciliation; historical R4 review remains 10/10.

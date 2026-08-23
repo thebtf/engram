@@ -71,24 +71,33 @@ and emits a redacted baseline/fixture receipt.
 canonical key while legacy rows/columns remain available.
 
 - [ ] T016 [US1] Add failing cross-language V3 anchor/descriptor vectors in `contracts/testdata/project_identity_v3_vectors.json` — FR-005, SC-001.
-- [ ] T017 [US1] Implement V3 `.engram-project` anchor validation and repository/directory discovery in `internal/projectidentity/anchor.go` — FR-001, FR-003.
-- [ ] T018 [P] [US1] Implement matching hook-side V3 descriptor construction in `plugin/engram/hooks/project-identity-v3.js` — FR-005.
-- [ ] T019 [P] [US1] Implement matching OpenClaw V3 descriptor construction in `plugin/openclaw-engram/src/project-identity-v3.ts` — FR-005.
-- [ ] T020 [US1] Add cross-language vector tests in `internal/projectidentity/project_identity_v3_vector_test.go` and `plugin/engram/hooks/project-identity-v3.test.js` — FR-005, SC-001.
-- [ ] T021 [US1] Add additive Project V3, Identifier, Merge Audit, and nullable typed-key migration in `internal/db/gorm/migration_project_identity_v3.go` — FR-001, FR-025.
-- [ ] T022 [US1] Implement central `ResolveProject` application workflow in `internal/projectidentity/resolver.go` — FR-001 through FR-005.
-- [ ] T023 [US1] Add typed V3 resolution outcomes and scope/admin-filter audit boundary in `internal/projectidentity/errors.go` — FR-003, FR-004.
-- [ ] T024 [P] [US1] Adapt gRPC identity resolution to the V3 workflow in `internal/grpcserver/server.go` — FR-001, FR-005.
-- [ ] T025 [P] [US1] Adapt HTTP context/hook identity intake to the V3 workflow in `internal/worker/handlers_context.go` — FR-001, FR-005.
-- [ ] T026 [P] [US1] Adapt MCP/daemon identity boundary to the V3 workflow in `internal/mcp/server.go` and `internal/handlers/engramcore/tools.go` — FR-001, FR-005.
+- [ ] T017 [US1] Implement V3 `.engram-project` parser/validator, tracked repository-root and explicit directory discovery, and in-place Engram anchor migration in `internal/projectidentity/anchor.go` — FR-001, FR-003.
+- [ ] T018 [P] [US1] Implement matching hook-side V3 descriptor construction, explicit client-instance configuration, registration, and selector-cache migration in `plugin/engram/hooks/lib.js` and `plugin/engram/hooks/session-start.js` — FR-005.
+- [ ] T019 [P] [US1] Implement matching OpenClaw V3 descriptor construction, explicit client-instance configuration, and registration/cache migration in `plugin/openclaw-engram/src/identity.ts`, `client.ts`, `config.ts`, `index.ts`, and their actual hook consumers — FR-005.
+- [ ] T020 [US1] Add shared-vector tests in `internal/projectidentity/project_identity_v3_vector_test.go`, `plugin/engram/hooks/project-identity-v3.test.js`, and `plugin/openclaw-engram/src/project-identity-v3.test.ts` — FR-005, SC-001.
+- [ ] T021 [US1] Add additive V3 Project, Identifier, Merge Audit, and selected nullable typed-key schema in `internal/db/gorm/models.go`, `migration_project_identity_v3.go`, migration registration, and real PostgreSQL migration tests — FR-001, FR-025.
+- [ ] T022 [US1] Implement central `ResolveProject` application workflow and storage ports in `internal/projectidentity/resolver.go` — FR-001 through FR-005.
+- [ ] T023 [US1] Add typed V3 intents, outcomes, and scope/admin-filter audit boundary in `internal/projectidentity/errors.go` and related value types — FR-003, FR-004.
+- [ ] T024 [P] [US1] Adapt gRPC identity resolution through V3 protobuf schema, generated bindings, `Makefile` generation, `internal/grpcserver/server.go`, and `session_start.go` — FR-001, FR-005.
+- [ ] T025 [P] [US1] Adapt HTTP context and hook identity intake to the V3 workflow in `internal/worker/handlers_context.go` and route-level refusal tests — FR-001, FR-005.
+- [ ] T026 [P] [US1] Adapt MCP/daemon identity boundary in `internal/mcp/`, `internal/handlers/engramcore/{slugcache,module,tools,grpcpool}.go`, and `cmd/engram/wiring.go` — FR-001, FR-005.
 - [ ] T027 [US1] Add V3 dual-write/shadow-read comparison receipt in `internal/projectidentity/comparison.go` — FR-005, FR-025.
-- [ ] T028 [US1] Add fixture tests for worktree/clone/move/remote/nested/non-Git/copied/malformed/ambiguous behavior in `internal/projectidentity/resolver_integration_test.go` — FR-003, SC-001, SC-002.
+- [ ] T028 [US1] Add real-fixture behavior tests for worktree/clone/move/remote/nested/non-Git/copied/malformed/ambiguous V3 resolution in `internal/projectidentity/resolver_integration_test.go` — FR-003, SC-001, SC-002.
 - [ ] T029 [US1] Add AR-2 compatibility-window and descriptor telemetry receipt in `internal/recoveryreceipt/ar2_identity_expand.go` — FR-005, FR-019.
-- [ ] T030 [US1] Run independent AR-2 identity/security checker and installed dual-representation dogfood proof using `contracts/project-identity-v3.md` — SC-001, SC-002.
+- [ ] T030 [US1] Run independent AR-2 identity, migration, security, and transport checks plus locally staged dual-representation dogfood using `contracts/project-identity-v3.md` — SC-001, SC-002.
 
 **Independent test criterion**: All supported adapters resolve the same key for one anchored
 fixture, unsafe anchors mutate neither representation, and installed dogfood proves V3/legacy
 comparison without legacy contraction.
+
+### AR-2 Delta Dependencies
+
+- T016 freezes the versioned descriptor/vector contract before T020 writes its RED harness.
+- T017 consumes the frozen anchor fields; T018 and T019 begin only after T017/T020 establish anchor and vector semantics.
+- T021 and T023 may run in parallel after Wave A; T022 begins only after both expose the additive storage and typed-outcome seams.
+- T024, T025, and T026 are parallel adapter translations only after T022; they may not define resolver policy or mutate canonical bindings.
+- T027 precedes T028/T029 comparison evidence; T030 and T088–T091 accept only the exact integrated candidate.
+
 
 ## Phase 3 — AR-3: Project Identity Convergence and Cutover
 
@@ -198,9 +207,9 @@ disposition and no new operator-surface implementation work exists.
 
 ## Cross-Cutting Release Discipline
 
-- [ ] T088 [P] Maintain exact FR/SC-to-task traceability matrix in `specs/001-engram-architectural-recovery/analysis/fr-sc-task-traceability.md` as each release task is accepted — governance traceability obligation.
-- [ ] T089 Maintain per-release independent checker, migration verifier where applicable, and final release verifier receipt references in `specs/001-engram-architectural-recovery/analysis/pipeline-receipt.json` — governance obligation.
-- [ ] T090 Run the exact current `main` build, full applicable tests, SonarQube gate, built-payload validation, installed dogfood, and worktree housekeeping before each tag using `scripts/recovery/run-recovery-scenario.ps1` — FR-028, SC-018.
+- [ ] T088 [P] Maintain exact AR-2 FR/SC-to-task traceability, ownership paths, dependency edges, and acceptance evidence in `analysis/fr-sc-task-traceability.md`, `analysis/ar2-current-source-reconciliation.md`, and `analysis/ar2-d2-decomposition.md` — governance traceability obligation.
+- [ ] T089 Maintain AR-2 independent checker, migration verifier, reviewer, and judge receipt references in `analysis/ar2-pipeline-receipt.json` while preserving the historical AR-0 `analysis/pipeline-receipt.json` — governance obligation.
+- [ ] T090 Run the exact integrated AR-2 candidate build, applicable tests, migration/vector/payload validation, locally staged dogfood, rollback rehearsal, and worktree housekeeping before any later tag authority — FR-028, SC-018.
 - [ ] T091 Enforce no new operator working-surface design through release-plan review that emits a read-only verdict; persist that output after analysis in `specs/001-engram-architectural-recovery/analysis/spec-kit-analysis-rN.md` — FR-027.
 
 ## Parallel Opportunities

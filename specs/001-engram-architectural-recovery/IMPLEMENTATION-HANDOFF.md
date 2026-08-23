@@ -3,7 +3,16 @@
 ## Status
 
 AR-0 is complete specification authority only. Final cross-artifact analysis is PASS with zero
-CRITICAL/HIGH/MEDIUM/LOW findings. Implementation is **not authorized** by this handoff.
+CRITICAL/HIGH/MEDIUM/LOW findings. AR-0 implementation is **not authorized by this handoff alone**.
+
+## AR-2 Delta Authority
+
+The operator-authorized AR-2 intake package at
+`.agent/intake/engram-ar2-project-identity-v3-expand-2026-08-23-r1/` authorizes only T016–T030
+and applicable T088–T091 after its exact-baseline reconciliation, corrected Spec Kit ownership,
+refreshed checklists, clean AR-2 analysis, and AR-2 pipeline receipt are present. The AR-2 delta
+artifacts are release-slice authority for this candidate; they do not authorize AR-3 merge,
+backfill, cutover, production mutation, publication, or operator-surface work.
 
 ## Authoritative Inputs
 
@@ -20,7 +29,11 @@ Read these in order before any implementation decision:
 9. `analysis/fr-sc-task-traceability.md`
 10. `analysis/spec-kit-analysis-r6.md`
 11. `analysis/pipeline-receipt.json`
-12. `tasks.md`
+12. `analysis/ar2-current-source-reconciliation.md`
+13. `analysis/ar2-d2-decomposition.md`
+14. `analysis/ar2-spec-kit-analysis-r1.md`
+15. `analysis/ar2-pipeline-receipt.json`
+16. `tasks.md`
 
 Historical `.agent/specs`, reports, release claims, comments, flags, and legacy plans remain
 research inputs only unless the active artifacts above explicitly adopt them.

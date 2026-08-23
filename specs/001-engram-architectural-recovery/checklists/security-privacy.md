@@ -66,3 +66,10 @@ protect authorization, scope, secrets, and private data.
 - Result: **PASS** — 10/10 checked; no regressions identified.
 - Rechecked the temporary `ENGRAM_INJECT_UNIFIED` control's canonical-project/privacy validation and explicit-empty safe branch, plus T083's added authentication compatibility scope; authorization, redaction, privacy non-widening, quarantine, and rollback boundaries remain intact.
 - Exact regression IDs: none.
+
+## AR-2 Delta Reconciliation
+
+- [x] AR2-CHK011 Does every V3-capable adapter submit an explicit descriptor without client-selected canonical keys, credentials, raw private paths, or resolution-generated client instance IDs? [AR-2 descriptor contract]
+- [x] AR2-CHK012 Are refusal-before-scoped-access, zero mutation, read-filter/admin authorization, redacted audit, and no-key-on-refusal preserved across HTTP, gRPC, MCP, and daemon paths? [AR-2 outcomes/transport contract]
+
+- Result: **PASS** — 12/12 requirements-quality checks. The delta raises no new authorization, credential, or privacy category and preserves the existing S4 migration/production boundaries.

@@ -69,3 +69,10 @@ complete and safely ordered.
 - Rechecked the AR-3 ProcessingJob-before-backfill order, migration receipts, continuity migration/observation/contraction sequence, T074/T075/T076 ordering, rollback boundaries, and zero-denominator rules; migration policy remains explicit and fail-closed.
 - Exact regression IDs: none.
 - Per-file checked/total: `migration.md` 10/10.
+
+## AR-2 Delta Reconciliation
+
+- [x] AR2-CHK011 Does the delta bind migration `162+` to additive nullable typed-key schema, idempotent repeat apply, real PostgreSQL fixture evidence, and V2-read rollback without backfill or contraction? [AR-2 reconciliation]
+- [x] AR2-CHK012 Does the compatibility receipt require nonzero transport/comparison denominators and preserve all V3 evidence on rollback? [AR-2 acceptance contract]
+
+- Result: **PASS** — 12/12 requirements-quality checks. AR-2 expands only; AR-3 retains merge, backfill, quarantine, and authoritative cutover.

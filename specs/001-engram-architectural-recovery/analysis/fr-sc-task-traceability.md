@@ -67,6 +67,22 @@ unless their task line explicitly cites an FR or SC.
 | SC-017 | T039, T040, T083, T087 | AR-3/AR-7 |
 | SC-018 | T012, T015, T043, T057, T066, T077, T086, T087, T090 | All releases |
 
+## AR-2 Delta Owning Paths
+
+| Task | Corrected implementation ownership |
+|---|---|
+| T017 | `internal/projectidentity/anchor.go` plus tracked root anchor migration. |
+| T018 | `plugin/engram/hooks/lib.js`, `session-start.js`, and hook V3 vector tests. |
+| T019 | OpenClaw `identity.ts`, `client.ts`, `config.ts`, `index.ts`, actual hook consumers, and TypeScript vectors. |
+| T021 | GORM V3 model/migration registration/store constraints and PostgreSQL behavior tests. |
+| T022–T023 | One `internal/projectidentity` application authority for descriptors, intents, outcomes, resolution, and audit-safe refusal data. |
+| T024 | `proto/engram/v1/engram.proto`, derived `engram.pb.go`/`engram_grpc.pb.go`, `Makefile`, and gRPC translation including session start. |
+| T025 | HTTP context/hook intake and route-level typed-refusal mapping. |
+| T026 | `internal/mcp`, daemon slug/cache/module/tools/grpcpool, and `cmd/engram/wiring.go`; `cmd/engram/main.go` is not an identity owner. |
+| T027–T030 | One comparison owner, real-fixture behavior matrix, compatibility receipt, independent checks, and staged dogfood. |
+
+Direct FR/SC task-ID edges above remain unchanged; this table corrects path/owner truth proven by the AR-2 current-source reconciliation.
+
 ## Explicit Governance and Negative-Scope Tasks
 
 | Task IDs | Obligation |

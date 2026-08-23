@@ -75,3 +75,10 @@ satisfied; it never means implementation is complete.
 - Rechecked T074/T075/T076 emergency-control and render-budget/cutover ordering, T083 adjacent compatibility, and inventory closure/dependency boundaries; one-loop authority and D3 scope remain explicit.
 - Exact regression IDs: none.
 - Per-file checked/total: `architecture.md` 10/10.
+
+## AR-2 Delta Reconciliation
+
+- [x] AR2-CHK011 Does the decomposition give `internal/projectidentity` one V3 authority and confine gRPC, HTTP, MCP, daemon, hook, and OpenClaw lanes to translation/compatibility behavior? [AR-2 D2 decomposition]
+- [x] AR2-CHK012 Are schema, descriptor, intent/outcome, transport, comparison, fixture, and rollback contracts sequenced so no independent authority or hidden AR-3 scope is introduced? [AR-2 D2 decomposition]
+
+- Result: **PASS** — 12/12 requirements-quality checks. The delta is an additive, reversible AR-2 expand slice and adds no operator-surface work.
