@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-import "google/protobuf/timestamp.proto";
-
 package engram.v1;
+
+import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/thebtf/engram/proto/engram/v1;engramv1";
 
@@ -132,9 +132,9 @@ message ProjectEvent {
 
 enum ProjectEventType {
   PROJECT_EVENT_TYPE_UNSPECIFIED = 0;
-  PROJECT_EVENT_TYPE_REMOVED     = 1;
-  PROJECT_EVENT_TYPE_CREATED     = 2; // reserved for v0.2.0
-  PROJECT_EVENT_TYPE_RENAMED     = 3; // reserved for v0.2.0
+  PROJECT_EVENT_TYPE_REMOVED = 1;
+  PROJECT_EVENT_TYPE_CREATED = 2; // reserved for v0.2.0
+  PROJECT_EVENT_TYPE_RENAMED = 3; // reserved for v0.2.0
 }
 
 // ---- Session-start context messages --------------------------------------
@@ -150,6 +150,10 @@ message GetSessionStartContextRequest {
   // issues_limit is the maximum number of active issues to return, ordered by priority then newest first.
   // Zero means the server default.
   int32 issues_limit = 3;
+
+  // project_identity_v3 selects V3 central resolution. When present, project
+  // is legacy compatibility input and MUST NOT be used for scoped access.
+  ProjectIdentityV3 project_identity_v3 = 4;
 }
 
 message GetSessionStartContextResponse {
@@ -160,6 +164,9 @@ message GetSessionStartContextResponse {
   SessionStartRuleRouter rule_router = 5;
   SessionStartMetaSummary meta_summary = 6;
 
+  // project_resolution_v3 is populated only for V3 requests. Its project_key
+  // and resolved_scope are absent on a refusal.
+  ProjectResolutionResultV3 project_resolution_v3 = 7;
 }
 
 message SessionStartIssue {
@@ -271,6 +278,9 @@ message CallToolRequest {
   string session_id = 4;
   // Full versioned identity metadata. Additive: old servers ignore it.
   ProjectIdentityV2 project_identity = 5;
+  // Version 3 descriptor. Its presence selects the V3 resolver; project and
+  // project_identity are retained solely for the explicit V2 compatibility branch.
+  ProjectIdentityV3 project_identity_v3 = 6;
 }
 
 // CallToolResponse carries the result of an MCP tool call.
@@ -281,6 +291,8 @@ message CallToolResponse {
   bytes content_json = 2;
   // Server-resolved canonical selector used for this call.
   string canonical_project = 3;
+  // Present only for a V3 request that resolved successfully.
+  ProjectResolutionResultV3 project_resolution_v3 = 4;
 }
 
 // InitializeRequest is the handshake from daemon to server.
@@ -289,6 +301,8 @@ message InitializeRequest {
   string client_version = 2;
   string project = 3;
   ProjectIdentityV2 project_identity = 4;
+  // Version 3 descriptor. Its presence selects the V3 resolver.
+  ProjectIdentityV3 project_identity_v3 = 5;
 }
 
 // InitializeResponse carries server capabilities and tool definitions.
@@ -297,6 +311,8 @@ message InitializeResponse {
   string server_version = 2;
   repeated ToolDefinition tools = 3;
   string canonical_project = 4;
+  // Present only for a V3 request that resolved successfully.
+  ProjectResolutionResultV3 project_resolution_v3 = 5;
 }
 
 // ToolDefinition describes a single MCP tool.
@@ -319,12 +335,12 @@ message PingResponse {
 // chunk_type is a free-form string; the only value produced by CR-002a is
 // "line-block". AST-derived types are added in CR-002b.
 message CodeChunkMeta {
-  string chunk_id      = 1;
-  string file_path     = 2;
-  int32  byte_start    = 3;
-  int32  byte_end      = 4;
-  string language      = 5;
-  string chunk_type    = 6;
+  string chunk_id = 1;
+  string file_path = 2;
+  int32 byte_start = 3;
+  int32 byte_end = 4;
+  string language = 5;
+  string chunk_type = 6;
   string content_sha256 = 7;
 }
 
@@ -332,7 +348,7 @@ message CodeChunkMeta {
 // project. The server diffs this against its stored identity keys and returns
 // the delta (need_chunks / stale_chunks).
 message CodeIndexNegotiateRequest {
-  string project_id       = 1;
+  string project_id = 1;
   string index_session_id = 2;
   repeated CodeChunkMeta manifest = 3;
 }
@@ -344,16 +360,16 @@ message CodeIndexNegotiateRequest {
 //   stale_chunks — chunk_ids present on the server but absent from the
 //                  client manifest (will be swept at CodeIndexUpload EOF).
 message CodeIndexNegotiateResponse {
-  repeated string need_chunks   = 1;
-  repeated string stale_chunks  = 2;
+  repeated string need_chunks = 1;
+  repeated string stale_chunks = 2;
 }
 
 // CodeChunkUpload carries a single chunk payload in the CodeIndexUpload stream.
 message CodeChunkUpload {
-  string        project_id       = 1;
-  string        index_session_id = 2;
-  CodeChunkMeta meta             = 3;
-  bytes         content          = 4;
+  string project_id = 1;
+  string index_session_id = 2;
+  CodeChunkMeta meta = 3;
+  bytes content = 4;
 }
 
 // CodeIndexUploadReceipt is returned when the CodeIndexUpload stream closes.
@@ -362,9 +378,9 @@ message CodeChunkUpload {
 //   deleted  — number of stale rows swept after stream close.
 //   errors   — per-chunk error strings (non-fatal; successful chunks still count).
 message CodeIndexUploadReceipt {
-  int32           embedded = 1;
-  int32           deleted  = 2;
-  repeated string errors   = 3;
+  int32 embedded = 1;
+  int32 deleted = 2;
+  repeated string errors = 3;
 }
 
 // ProjectIdentityV2 carries one complete identity source. Git identities use
@@ -381,4 +397,49 @@ message ProjectIdentityV2 {
   string relative_path = 5;
   string non_git_anchor = 6;
   optional bool anchor_shared = 7;
+}
+
+// ProjectLegacyIdentifierV3 is non-authoritative compatibility evidence.
+message ProjectLegacyIdentifierV3 {
+  string scheme = 1;
+  string value = 2;
+  string provenance = 3;
+}
+
+// ProjectIdentityV3 is the versioned project descriptor submitted by a V3-capable client.
+// It deliberately has no project_key: clients cannot select canonical project authority.
+message ProjectIdentityV3 {
+  uint32 version = 1;
+  string anchor_project_id = 2;
+  string name = 3;
+  string scope = 4;
+  repeated string normalized_git_remotes = 5;
+  repeated ProjectLegacyIdentifierV3 legacy_identifiers = 6;
+  string client_instance_id = 7;
+}
+
+// ProjectResolutionOutcomeV3 is the closed transport representation of V3 outcomes.
+enum ProjectResolutionOutcomeV3 {
+  PROJECT_RESOLUTION_OUTCOME_V3_UNSPECIFIED = 0;
+  PROJECT_RESOLVED = 1;
+  PROJECT_REDIRECTED = 2;
+  PROJECT_ONBOARDING_REQUIRED = 3;
+  PROJECT_ANCHOR_INVALID = 4;
+  PROJECT_SCOPE_MISMATCH = 5;
+  PROJECT_NESTED_REPOSITORY_UNRESOLVED = 6;
+  PROJECT_ANCHOR_DECISION_REQUIRED = 7;
+  PROJECT_IDENTITY_AMBIGUOUS = 8;
+  PROJECT_DESCRIPTOR_UNSUPPORTED = 9;
+  PROJECT_DESCRIPTOR_INVALID = 10;
+  PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN = 11;
+}
+
+// ProjectResolutionResultV3 carries only public resolution facts. project_key,
+// resolved_scope, and redirect_reference are set only for successful outcomes.
+message ProjectResolutionResultV3 {
+  ProjectResolutionOutcomeV3 outcome = 1;
+  string correlation = 2;
+  optional string project_key = 3;
+  optional string resolved_scope = 4;
+  optional string redirect_reference = 5;
 }

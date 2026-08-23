@@ -15,9 +15,11 @@ import (
 	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
+	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/auth"
 	engramgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/worker/projectevents"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 )
@@ -49,12 +51,13 @@ type ToolDef struct {
 // nil ONLY when ENGRAM_AUTH_DISABLED=true is the operator's deliberate choice.
 type Server struct {
 	pb.UnimplementedEngramServiceServer
-	handler          MCPHandler
-	mu               sync.RWMutex       // guards validator pointer swaps
-	validator        *auth.Validator    // nil = auth disabled; read under mu.RLock
-	db               *gorm.DB           // injected by worker after DB is ready
-	bus              *projectevents.Bus // in-process project lifecycle event bus
-	identityResolver func(context.Context, *gorm.DB, string, *pb.ProjectIdentityV2) (string, error)
+	handler            MCPHandler
+	mu                 sync.RWMutex       // guards validator pointer swaps
+	validator          *auth.Validator    // nil = auth disabled; read under mu.RLock
+	db                 *gorm.DB           // injected by worker after DB is ready
+	bus                *projectevents.Bus // in-process project lifecycle event bus
+	identityResolver   func(context.Context, *gorm.DB, string, *pb.ProjectIdentityV2) (string, error)
+	identityResolverV3 func(context.Context, *gorm.DB, projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error)
 }
 
 // New creates a new gRPC server. The returned *grpc.Server has EngramService
@@ -132,7 +135,15 @@ func (s *Server) Ping(_ context.Context, _ *pb.PingRequest) (*pb.PingResponse, e
 // Initialize returns server info and the complete list of available tools.
 func (s *Server) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb.InitializeResponse, error) {
 	canonicalProject := ""
-	if req.GetProject() != "" || req.GetProjectIdentity() != nil {
+	var resolutionV3 *pb.ProjectResolutionResultV3
+	if identity := req.GetProjectIdentityV3(); identity != nil {
+		resolution, err := s.resolveProjectIdentityV3(ctx, identity, projectidentity.ResolveExistingIntentV3)
+		if err != nil {
+			return nil, err
+		}
+		canonicalProject = string(resolution.CanonicalProjectKey())
+		resolutionV3 = projectIdentityV3Proto(resolution)
+	} else if req.GetProject() != "" || req.GetProjectIdentity() != nil {
 		var err error
 		canonicalProject, err = s.resolveProjectIdentity(ctx, req.GetProject(), req.GetProjectIdentity())
 		if err != nil {
@@ -152,17 +163,26 @@ func (s *Server) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb
 	}
 
 	return &pb.InitializeResponse{
-		ServerName:       name,
-		ServerVersion:    version,
-		Tools:            tools,
-		CanonicalProject: canonicalProject,
+		ServerName:          name,
+		ServerVersion:       version,
+		Tools:               tools,
+		CanonicalProject:    canonicalProject,
+		ProjectResolutionV3: resolutionV3,
 	}, nil
 }
 
 // CallTool dispatches a single MCP tool call.
 func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.CallToolResponse, error) {
 	canonicalProject := ""
-	if req.GetProject() != "" || req.GetProjectIdentity() != nil {
+	var resolutionV3 *pb.ProjectResolutionResultV3
+	if identity := req.GetProjectIdentityV3(); identity != nil {
+		resolution, err := s.resolveProjectIdentityV3(ctx, identity, projectidentity.ResolveExistingIntentV3)
+		if err != nil {
+			return nil, err
+		}
+		canonicalProject = string(resolution.CanonicalProjectKey())
+		resolutionV3 = projectIdentityV3Proto(resolution)
+	} else if req.GetProject() != "" || req.GetProjectIdentity() != nil {
 		var err error
 		canonicalProject, err = s.resolveProjectIdentity(ctx, req.GetProject(), req.GetProjectIdentity())
 		if err != nil {
@@ -190,9 +210,10 @@ func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.Cal
 	}
 
 	return &pb.CallToolResponse{
-		IsError:          isError,
-		ContentJson:      resultJSON,
-		CanonicalProject: canonicalProject,
+		IsError:             isError,
+		ContentJson:         resultJSON,
+		CanonicalProject:    canonicalProject,
+		ProjectResolutionV3: resolutionV3,
 	}, nil
 }
 
@@ -251,6 +272,183 @@ func canonicalizeProjectArgument(toolName string, args []byte, canonicalProject 
 	}
 	values["project"] = encodedProject
 	return json.Marshal(values)
+}
+
+// grpcV3AuthorizationVerifier admits only the opaque reference generated in
+// this transport after gRPC authentication has established an identity.
+type grpcV3AuthorizationVerifier struct {
+	authorization projectidentity.AuthorizationReferenceV3
+}
+
+func (verifier grpcV3AuthorizationVerifier) VerifyAuthorizationV3(ctx context.Context, request projectidentity.AuthorizationVerificationRequestV3) (projectidentity.AuthorizationVerificationV3, error) {
+	if request.Authorization() != verifier.authorization {
+		return projectidentity.AuthorizationVerificationV3{}, nil
+	}
+	if _, ok := auth.IdentityFrom(ctx); !ok {
+		return projectidentity.AuthorizationVerificationV3{}, nil
+	}
+	switch request.Intent() {
+	case projectidentity.ResolveExistingIntentV3, projectidentity.ReadFilterIntentV3:
+		return projectidentity.AuthorizationVerificationV3{Authorized: true}, nil
+	default:
+		return projectidentity.AuthorizationVerificationV3{}, nil
+	}
+}
+
+func grpcProjectIdentityV3Request(identity *pb.ProjectIdentityV3, intent projectidentity.ResolutionIntentV3) (projectidentity.ResolveProjectRequestV3, error) {
+	correlation, err := projectidentity.NewCorrelationV3(uuid.NewString())
+	if err != nil {
+		return projectidentity.ResolveProjectRequestV3{}, err
+	}
+	authorization, err := projectidentity.NewAuthorizationReferenceV3(uuid.NewString())
+	if err != nil {
+		return projectidentity.ResolveProjectRequestV3{}, err
+	}
+	legacy := make([]projectidentity.LegacyIdentifierV3, len(identity.GetLegacyIdentifiers()))
+	for index, identifier := range identity.GetLegacyIdentifiers() {
+		legacy[index] = projectidentity.LegacyIdentifierV3{
+			Scheme:     projectidentity.LegacyIdentifierSchemeV3(identifier.GetScheme()),
+			Value:      identifier.GetValue(),
+			Provenance: projectidentity.LegacyIdentifierProvenanceV3(identifier.GetProvenance()),
+		}
+	}
+	request := projectidentity.ResolveProjectRequestV3{
+		Intent: intent,
+		Anchor: projectidentity.AnchorV3{
+			Version:   int(identity.GetVersion()),
+			ProjectID: identity.GetAnchorProjectId(),
+			Name:      identity.GetName(),
+			Scope:     identity.GetScope(),
+		},
+		Descriptor: projectidentity.DescriptorV3{
+			Version:              int(identity.GetVersion()),
+			AnchorProjectID:      identity.GetAnchorProjectId(),
+			Name:                 identity.GetName(),
+			Scope:                identity.GetScope(),
+			NormalizedGitRemotes: identity.GetNormalizedGitRemotes(),
+			LegacyIdentifiers:    legacy,
+			ClientInstanceID:     identity.GetClientInstanceId(),
+		},
+		Correlation: correlation,
+	}
+	switch intent {
+	case projectidentity.ResolveExistingIntentV3:
+		request.ResolveExistingAuthorization = authorization
+	case projectidentity.ReadFilterIntentV3:
+		readFilter, err := projectidentity.NewReadFilterRequirementV3(authorization, correlation)
+		if err != nil {
+			return projectidentity.ResolveProjectRequestV3{}, err
+		}
+		request.ReadFilter = &readFilter
+	default:
+		return projectidentity.ResolveProjectRequestV3{}, errors.New("unsupported gRPC V3 resolution intent")
+	}
+	return request, nil
+}
+
+func (s *Server) resolveProjectIdentityV3(ctx context.Context, identity *pb.ProjectIdentityV3, intent projectidentity.ResolutionIntentV3) (projectidentity.ResolutionResultV3, error) {
+	request, err := grpcProjectIdentityV3Request(identity, intent)
+	if err != nil {
+		return projectidentity.ResolutionResultV3{}, status.Error(codes.Internal, "project identity resolution unavailable")
+	}
+	resolver := s.identityResolverV3
+	if resolver == nil {
+		resolver = func(ctx context.Context, db *gorm.DB, request projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error) {
+			authorization := request.ResolveExistingAuthorization
+			if request.ReadFilter != nil {
+				authorization = request.ReadFilter.Authorization()
+			}
+			resolved, err := projectidentity.NewResolverV3(&engramgorm.Store{DB: db}, grpcV3AuthorizationVerifier{authorization: authorization}).ResolveProjectV3(ctx, request)
+			return resolved.Resolution(), err
+		}
+	}
+	resolution, err := resolver(ctx, s.db, request)
+	if err := projectIdentityV3Error(resolution, err); err != nil {
+		return projectidentity.ResolutionResultV3{}, err
+	}
+	return resolution, nil
+}
+
+func projectIdentityV3Error(resolution projectidentity.ResolutionResultV3, resolverErr error) error {
+	if resolution.IsRefusal() {
+		return projectIdentityV3RefusalStatus(resolution.Outcome(), resolution.Correlation())
+	}
+	var refusal projectidentity.ResolutionErrorV3
+	if errors.As(resolverErr, &refusal) {
+		return projectIdentityV3RefusalStatus(refusal.Outcome(), refusal.Correlation())
+	}
+	if resolverErr != nil || !resolution.Outcome().IsSuccess() {
+		return status.Error(codes.Unavailable, "project identity resolution unavailable")
+	}
+	return nil
+}
+
+func projectIdentityV3RefusalStatus(outcome projectidentity.ResolutionOutcomeV3, correlation projectidentity.CorrelationV3) error {
+	code := codes.FailedPrecondition
+	switch outcome {
+	case projectidentity.ProjectAnchorInvalidOutcomeV3,
+		projectidentity.ProjectScopeMismatchOutcomeV3,
+		projectidentity.ProjectDescriptorUnsupportedOutcomeV3,
+		projectidentity.ProjectDescriptorInvalidOutcomeV3,
+		projectidentity.ProjectKeyClientAssertionForbiddenOutcomeV3:
+		code = codes.InvalidArgument
+	}
+	st := status.New(code, "project identity resolution refused")
+	withDetails, err := st.WithDetails(&errdetails.ErrorInfo{
+		Reason:   string(outcome),
+		Domain:   "engram.project_identity.v3",
+		Metadata: map[string]string{"correlation": string(correlation)},
+	})
+	if err != nil {
+		return st.Err()
+	}
+	return withDetails.Err()
+}
+
+func projectIdentityV3Proto(resolution projectidentity.ResolutionResultV3) *pb.ProjectResolutionResultV3 {
+	result := &pb.ProjectResolutionResultV3{
+		Outcome:     projectIdentityV3OutcomeProto(resolution.Outcome()),
+		Correlation: string(resolution.Correlation()),
+	}
+	if resolution.Outcome().IsSuccess() {
+		projectKey := string(resolution.CanonicalProjectKey())
+		resolvedScope := string(resolution.ResolvedScope())
+		result.ProjectKey = &projectKey
+		result.ResolvedScope = &resolvedScope
+		if redirect := string(resolution.RedirectReference()); redirect != "" {
+			result.RedirectReference = &redirect
+		}
+	}
+	return result
+}
+
+func projectIdentityV3OutcomeProto(outcome projectidentity.ResolutionOutcomeV3) pb.ProjectResolutionOutcomeV3 {
+	switch outcome {
+	case projectidentity.ProjectResolvedOutcomeV3:
+		return pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED
+	case projectidentity.ProjectRedirectedOutcomeV3:
+		return pb.ProjectResolutionOutcomeV3_PROJECT_REDIRECTED
+	case projectidentity.ProjectOnboardingRequiredOutcomeV3:
+		return pb.ProjectResolutionOutcomeV3_PROJECT_ONBOARDING_REQUIRED
+	case projectidentity.ProjectAnchorInvalidOutcomeV3:
+		return pb.ProjectResolutionOutcomeV3_PROJECT_ANCHOR_INVALID
+	case projectidentity.ProjectScopeMismatchOutcomeV3:
+		return pb.ProjectResolutionOutcomeV3_PROJECT_SCOPE_MISMATCH
+	case projectidentity.ProjectNestedRepositoryUnresolvedOutcomeV3:
+		return pb.ProjectResolutionOutcomeV3_PROJECT_NESTED_REPOSITORY_UNRESOLVED
+	case projectidentity.ProjectAnchorDecisionRequiredOutcomeV3:
+		return pb.ProjectResolutionOutcomeV3_PROJECT_ANCHOR_DECISION_REQUIRED
+	case projectidentity.ProjectIdentityAmbiguousOutcomeV3:
+		return pb.ProjectResolutionOutcomeV3_PROJECT_IDENTITY_AMBIGUOUS
+	case projectidentity.ProjectDescriptorUnsupportedOutcomeV3:
+		return pb.ProjectResolutionOutcomeV3_PROJECT_DESCRIPTOR_UNSUPPORTED
+	case projectidentity.ProjectDescriptorInvalidOutcomeV3:
+		return pb.ProjectResolutionOutcomeV3_PROJECT_DESCRIPTOR_INVALID
+	case projectidentity.ProjectKeyClientAssertionForbiddenOutcomeV3:
+		return pb.ProjectResolutionOutcomeV3_PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN
+	default:
+		return pb.ProjectResolutionOutcomeV3_PROJECT_RESOLUTION_OUTCOME_V3_UNSPECIFIED
+	}
 }
 
 func (s *Server) resolveProjectIdentity(ctx context.Context, selector string, identity *pb.ProjectIdentityV2) (string, error) {

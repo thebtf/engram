@@ -74,6 +74,83 @@ func (ProjectEventType) EnumDescriptor() ([]byte, []int) {
 	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{0}
 }
 
+// ProjectResolutionOutcomeV3 is the closed transport representation of V3 outcomes.
+type ProjectResolutionOutcomeV3 int32
+
+const (
+	ProjectResolutionOutcomeV3_PROJECT_RESOLUTION_OUTCOME_V3_UNSPECIFIED ProjectResolutionOutcomeV3 = 0
+	ProjectResolutionOutcomeV3_PROJECT_RESOLVED                          ProjectResolutionOutcomeV3 = 1
+	ProjectResolutionOutcomeV3_PROJECT_REDIRECTED                        ProjectResolutionOutcomeV3 = 2
+	ProjectResolutionOutcomeV3_PROJECT_ONBOARDING_REQUIRED               ProjectResolutionOutcomeV3 = 3
+	ProjectResolutionOutcomeV3_PROJECT_ANCHOR_INVALID                    ProjectResolutionOutcomeV3 = 4
+	ProjectResolutionOutcomeV3_PROJECT_SCOPE_MISMATCH                    ProjectResolutionOutcomeV3 = 5
+	ProjectResolutionOutcomeV3_PROJECT_NESTED_REPOSITORY_UNRESOLVED      ProjectResolutionOutcomeV3 = 6
+	ProjectResolutionOutcomeV3_PROJECT_ANCHOR_DECISION_REQUIRED          ProjectResolutionOutcomeV3 = 7
+	ProjectResolutionOutcomeV3_PROJECT_IDENTITY_AMBIGUOUS                ProjectResolutionOutcomeV3 = 8
+	ProjectResolutionOutcomeV3_PROJECT_DESCRIPTOR_UNSUPPORTED            ProjectResolutionOutcomeV3 = 9
+	ProjectResolutionOutcomeV3_PROJECT_DESCRIPTOR_INVALID                ProjectResolutionOutcomeV3 = 10
+	ProjectResolutionOutcomeV3_PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN    ProjectResolutionOutcomeV3 = 11
+)
+
+// Enum value maps for ProjectResolutionOutcomeV3.
+var (
+	ProjectResolutionOutcomeV3_name = map[int32]string{
+		0:  "PROJECT_RESOLUTION_OUTCOME_V3_UNSPECIFIED",
+		1:  "PROJECT_RESOLVED",
+		2:  "PROJECT_REDIRECTED",
+		3:  "PROJECT_ONBOARDING_REQUIRED",
+		4:  "PROJECT_ANCHOR_INVALID",
+		5:  "PROJECT_SCOPE_MISMATCH",
+		6:  "PROJECT_NESTED_REPOSITORY_UNRESOLVED",
+		7:  "PROJECT_ANCHOR_DECISION_REQUIRED",
+		8:  "PROJECT_IDENTITY_AMBIGUOUS",
+		9:  "PROJECT_DESCRIPTOR_UNSUPPORTED",
+		10: "PROJECT_DESCRIPTOR_INVALID",
+		11: "PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN",
+	}
+	ProjectResolutionOutcomeV3_value = map[string]int32{
+		"PROJECT_RESOLUTION_OUTCOME_V3_UNSPECIFIED": 0,
+		"PROJECT_RESOLVED":                          1,
+		"PROJECT_REDIRECTED":                        2,
+		"PROJECT_ONBOARDING_REQUIRED":               3,
+		"PROJECT_ANCHOR_INVALID":                    4,
+		"PROJECT_SCOPE_MISMATCH":                    5,
+		"PROJECT_NESTED_REPOSITORY_UNRESOLVED":      6,
+		"PROJECT_ANCHOR_DECISION_REQUIRED":          7,
+		"PROJECT_IDENTITY_AMBIGUOUS":                8,
+		"PROJECT_DESCRIPTOR_UNSUPPORTED":            9,
+		"PROJECT_DESCRIPTOR_INVALID":                10,
+		"PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN":    11,
+	}
+)
+
+func (x ProjectResolutionOutcomeV3) Enum() *ProjectResolutionOutcomeV3 {
+	p := new(ProjectResolutionOutcomeV3)
+	*p = x
+	return p
+}
+
+func (x ProjectResolutionOutcomeV3) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ProjectResolutionOutcomeV3) Descriptor() protoreflect.EnumDescriptor {
+	return file_proto_engram_v1_engram_proto_enumTypes[1].Descriptor()
+}
+
+func (ProjectResolutionOutcomeV3) Type() protoreflect.EnumType {
+	return &file_proto_engram_v1_engram_proto_enumTypes[1]
+}
+
+func (x ProjectResolutionOutcomeV3) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ProjectResolutionOutcomeV3.Descriptor instead.
+func (ProjectResolutionOutcomeV3) EnumDescriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{1}
+}
+
 type SyncProjectStateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// local_project_ids is the set of ProjectContext.ID values the daemon
@@ -366,9 +443,12 @@ type GetSessionStartContextRequest struct {
 	MemoriesLimit int32 `protobuf:"varint,2,opt,name=memories_limit,json=memoriesLimit,proto3" json:"memories_limit,omitempty"`
 	// issues_limit is the maximum number of active issues to return, ordered by priority then newest first.
 	// Zero means the server default.
-	IssuesLimit   int32 `protobuf:"varint,3,opt,name=issues_limit,json=issuesLimit,proto3" json:"issues_limit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	IssuesLimit int32 `protobuf:"varint,3,opt,name=issues_limit,json=issuesLimit,proto3" json:"issues_limit,omitempty"`
+	// project_identity_v3 selects V3 central resolution. When present, project
+	// is legacy compatibility input and MUST NOT be used for scoped access.
+	ProjectIdentityV3 *ProjectIdentityV3 `protobuf:"bytes,4,opt,name=project_identity_v3,json=projectIdentityV3,proto3" json:"project_identity_v3,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *GetSessionStartContextRequest) Reset() {
@@ -422,16 +502,26 @@ func (x *GetSessionStartContextRequest) GetIssuesLimit() int32 {
 	return 0
 }
 
+func (x *GetSessionStartContextRequest) GetProjectIdentityV3() *ProjectIdentityV3 {
+	if x != nil {
+		return x.ProjectIdentityV3
+	}
+	return nil
+}
+
 type GetSessionStartContextResponse struct {
-	state         protoimpl.MessageState   `protogen:"open.v1"`
-	Issues        []*SessionStartIssue     `protobuf:"bytes,1,rep,name=issues,proto3" json:"issues,omitempty"`
-	Rules         []*SessionStartRule      `protobuf:"bytes,2,rep,name=rules,proto3" json:"rules,omitempty"`
-	Memories      []*SessionStartMemory    `protobuf:"bytes,3,rep,name=memories,proto3" json:"memories,omitempty"`
-	GeneratedAt   *timestamppb.Timestamp   `protobuf:"bytes,4,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
-	RuleRouter    *SessionStartRuleRouter  `protobuf:"bytes,5,opt,name=rule_router,json=ruleRouter,proto3" json:"rule_router,omitempty"`
-	MetaSummary   *SessionStartMetaSummary `protobuf:"bytes,6,opt,name=meta_summary,json=metaSummary,proto3" json:"meta_summary,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState   `protogen:"open.v1"`
+	Issues      []*SessionStartIssue     `protobuf:"bytes,1,rep,name=issues,proto3" json:"issues,omitempty"`
+	Rules       []*SessionStartRule      `protobuf:"bytes,2,rep,name=rules,proto3" json:"rules,omitempty"`
+	Memories    []*SessionStartMemory    `protobuf:"bytes,3,rep,name=memories,proto3" json:"memories,omitempty"`
+	GeneratedAt *timestamppb.Timestamp   `protobuf:"bytes,4,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
+	RuleRouter  *SessionStartRuleRouter  `protobuf:"bytes,5,opt,name=rule_router,json=ruleRouter,proto3" json:"rule_router,omitempty"`
+	MetaSummary *SessionStartMetaSummary `protobuf:"bytes,6,opt,name=meta_summary,json=metaSummary,proto3" json:"meta_summary,omitempty"`
+	// project_resolution_v3 is populated only for V3 requests. Its project_key
+	// and resolved_scope are absent on a refusal.
+	ProjectResolutionV3 *ProjectResolutionResultV3 `protobuf:"bytes,7,opt,name=project_resolution_v3,json=projectResolutionV3,proto3" json:"project_resolution_v3,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *GetSessionStartContextResponse) Reset() {
@@ -502,6 +592,13 @@ func (x *GetSessionStartContextResponse) GetRuleRouter() *SessionStartRuleRouter
 func (x *GetSessionStartContextResponse) GetMetaSummary() *SessionStartMetaSummary {
 	if x != nil {
 		return x.MetaSummary
+	}
+	return nil
+}
+
+func (x *GetSessionStartContextResponse) GetProjectResolutionV3() *ProjectResolutionResultV3 {
+	if x != nil {
+		return x.ProjectResolutionV3
 	}
 	return nil
 }
@@ -1387,8 +1484,11 @@ type CallToolRequest struct {
 	SessionId string `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	// Full versioned identity metadata. Additive: old servers ignore it.
 	ProjectIdentity *ProjectIdentityV2 `protobuf:"bytes,5,opt,name=project_identity,json=projectIdentity,proto3" json:"project_identity,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Version 3 descriptor. Its presence selects the V3 resolver; project and
+	// project_identity are retained solely for the explicit V2 compatibility branch.
+	ProjectIdentityV3 *ProjectIdentityV3 `protobuf:"bytes,6,opt,name=project_identity_v3,json=projectIdentityV3,proto3" json:"project_identity_v3,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *CallToolRequest) Reset() {
@@ -1456,6 +1556,13 @@ func (x *CallToolRequest) GetProjectIdentity() *ProjectIdentityV2 {
 	return nil
 }
 
+func (x *CallToolRequest) GetProjectIdentityV3() *ProjectIdentityV3 {
+	if x != nil {
+		return x.ProjectIdentityV3
+	}
+	return nil
+}
+
 // CallToolResponse carries the result of an MCP tool call.
 type CallToolResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1465,8 +1572,10 @@ type CallToolResponse struct {
 	ContentJson []byte `protobuf:"bytes,2,opt,name=content_json,json=contentJson,proto3" json:"content_json,omitempty"`
 	// Server-resolved canonical selector used for this call.
 	CanonicalProject string `protobuf:"bytes,3,opt,name=canonical_project,json=canonicalProject,proto3" json:"canonical_project,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Present only for a V3 request that resolved successfully.
+	ProjectResolutionV3 *ProjectResolutionResultV3 `protobuf:"bytes,4,opt,name=project_resolution_v3,json=projectResolutionV3,proto3" json:"project_resolution_v3,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *CallToolResponse) Reset() {
@@ -1520,6 +1629,13 @@ func (x *CallToolResponse) GetCanonicalProject() string {
 	return ""
 }
 
+func (x *CallToolResponse) GetProjectResolutionV3() *ProjectResolutionResultV3 {
+	if x != nil {
+		return x.ProjectResolutionV3
+	}
+	return nil
+}
+
 // InitializeRequest is the handshake from daemon to server.
 type InitializeRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
@@ -1527,8 +1643,10 @@ type InitializeRequest struct {
 	ClientVersion   string                 `protobuf:"bytes,2,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"`
 	Project         string                 `protobuf:"bytes,3,opt,name=project,proto3" json:"project,omitempty"`
 	ProjectIdentity *ProjectIdentityV2     `protobuf:"bytes,4,opt,name=project_identity,json=projectIdentity,proto3" json:"project_identity,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Version 3 descriptor. Its presence selects the V3 resolver.
+	ProjectIdentityV3 *ProjectIdentityV3 `protobuf:"bytes,5,opt,name=project_identity_v3,json=projectIdentityV3,proto3" json:"project_identity_v3,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *InitializeRequest) Reset() {
@@ -1589,6 +1707,13 @@ func (x *InitializeRequest) GetProjectIdentity() *ProjectIdentityV2 {
 	return nil
 }
 
+func (x *InitializeRequest) GetProjectIdentityV3() *ProjectIdentityV3 {
+	if x != nil {
+		return x.ProjectIdentityV3
+	}
+	return nil
+}
+
 // InitializeResponse carries server capabilities and tool definitions.
 type InitializeResponse struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
@@ -1596,8 +1721,10 @@ type InitializeResponse struct {
 	ServerVersion    string                 `protobuf:"bytes,2,opt,name=server_version,json=serverVersion,proto3" json:"server_version,omitempty"`
 	Tools            []*ToolDefinition      `protobuf:"bytes,3,rep,name=tools,proto3" json:"tools,omitempty"`
 	CanonicalProject string                 `protobuf:"bytes,4,opt,name=canonical_project,json=canonicalProject,proto3" json:"canonical_project,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Present only for a V3 request that resolved successfully.
+	ProjectResolutionV3 *ProjectResolutionResultV3 `protobuf:"bytes,5,opt,name=project_resolution_v3,json=projectResolutionV3,proto3" json:"project_resolution_v3,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *InitializeResponse) Reset() {
@@ -1656,6 +1783,13 @@ func (x *InitializeResponse) GetCanonicalProject() string {
 		return x.CanonicalProject
 	}
 	return ""
+}
+
+func (x *InitializeResponse) GetProjectResolutionV3() *ProjectResolutionResultV3 {
+	if x != nil {
+		return x.ProjectResolutionV3
+	}
+	return nil
 }
 
 // ToolDefinition describes a single MCP tool.
@@ -2248,6 +2382,239 @@ func (x *ProjectIdentityV2) GetAnchorShared() bool {
 	return false
 }
 
+// ProjectLegacyIdentifierV3 is non-authoritative compatibility evidence.
+type ProjectLegacyIdentifierV3 struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Scheme        string                 `protobuf:"bytes,1,opt,name=scheme,proto3" json:"scheme,omitempty"`
+	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Provenance    string                 `protobuf:"bytes,3,opt,name=provenance,proto3" json:"provenance,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProjectLegacyIdentifierV3) Reset() {
+	*x = ProjectLegacyIdentifierV3{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProjectLegacyIdentifierV3) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProjectLegacyIdentifierV3) ProtoMessage() {}
+
+func (x *ProjectLegacyIdentifierV3) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProjectLegacyIdentifierV3.ProtoReflect.Descriptor instead.
+func (*ProjectLegacyIdentifierV3) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *ProjectLegacyIdentifierV3) GetScheme() string {
+	if x != nil {
+		return x.Scheme
+	}
+	return ""
+}
+
+func (x *ProjectLegacyIdentifierV3) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+func (x *ProjectLegacyIdentifierV3) GetProvenance() string {
+	if x != nil {
+		return x.Provenance
+	}
+	return ""
+}
+
+// ProjectIdentityV3 is the versioned project descriptor submitted by a V3-capable client.
+// It deliberately has no project_key: clients cannot select canonical project authority.
+type ProjectIdentityV3 struct {
+	state                protoimpl.MessageState       `protogen:"open.v1"`
+	Version              uint32                       `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	AnchorProjectId      string                       `protobuf:"bytes,2,opt,name=anchor_project_id,json=anchorProjectId,proto3" json:"anchor_project_id,omitempty"`
+	Name                 string                       `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Scope                string                       `protobuf:"bytes,4,opt,name=scope,proto3" json:"scope,omitempty"`
+	NormalizedGitRemotes []string                     `protobuf:"bytes,5,rep,name=normalized_git_remotes,json=normalizedGitRemotes,proto3" json:"normalized_git_remotes,omitempty"`
+	LegacyIdentifiers    []*ProjectLegacyIdentifierV3 `protobuf:"bytes,6,rep,name=legacy_identifiers,json=legacyIdentifiers,proto3" json:"legacy_identifiers,omitempty"`
+	ClientInstanceId     string                       `protobuf:"bytes,7,opt,name=client_instance_id,json=clientInstanceId,proto3" json:"client_instance_id,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *ProjectIdentityV3) Reset() {
+	*x = ProjectIdentityV3{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProjectIdentityV3) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProjectIdentityV3) ProtoMessage() {}
+
+func (x *ProjectIdentityV3) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProjectIdentityV3.ProtoReflect.Descriptor instead.
+func (*ProjectIdentityV3) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *ProjectIdentityV3) GetVersion() uint32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *ProjectIdentityV3) GetAnchorProjectId() string {
+	if x != nil {
+		return x.AnchorProjectId
+	}
+	return ""
+}
+
+func (x *ProjectIdentityV3) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ProjectIdentityV3) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
+}
+
+func (x *ProjectIdentityV3) GetNormalizedGitRemotes() []string {
+	if x != nil {
+		return x.NormalizedGitRemotes
+	}
+	return nil
+}
+
+func (x *ProjectIdentityV3) GetLegacyIdentifiers() []*ProjectLegacyIdentifierV3 {
+	if x != nil {
+		return x.LegacyIdentifiers
+	}
+	return nil
+}
+
+func (x *ProjectIdentityV3) GetClientInstanceId() string {
+	if x != nil {
+		return x.ClientInstanceId
+	}
+	return ""
+}
+
+// ProjectResolutionResultV3 carries only public resolution facts. project_key,
+// resolved_scope, and redirect_reference are set only for successful outcomes.
+type ProjectResolutionResultV3 struct {
+	state             protoimpl.MessageState     `protogen:"open.v1"`
+	Outcome           ProjectResolutionOutcomeV3 `protobuf:"varint,1,opt,name=outcome,proto3,enum=engram.v1.ProjectResolutionOutcomeV3" json:"outcome,omitempty"`
+	Correlation       string                     `protobuf:"bytes,2,opt,name=correlation,proto3" json:"correlation,omitempty"`
+	ProjectKey        *string                    `protobuf:"bytes,3,opt,name=project_key,json=projectKey,proto3,oneof" json:"project_key,omitempty"`
+	ResolvedScope     *string                    `protobuf:"bytes,4,opt,name=resolved_scope,json=resolvedScope,proto3,oneof" json:"resolved_scope,omitempty"`
+	RedirectReference *string                    `protobuf:"bytes,5,opt,name=redirect_reference,json=redirectReference,proto3,oneof" json:"redirect_reference,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ProjectResolutionResultV3) Reset() {
+	*x = ProjectResolutionResultV3{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProjectResolutionResultV3) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProjectResolutionResultV3) ProtoMessage() {}
+
+func (x *ProjectResolutionResultV3) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProjectResolutionResultV3.ProtoReflect.Descriptor instead.
+func (*ProjectResolutionResultV3) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *ProjectResolutionResultV3) GetOutcome() ProjectResolutionOutcomeV3 {
+	if x != nil {
+		return x.Outcome
+	}
+	return ProjectResolutionOutcomeV3_PROJECT_RESOLUTION_OUTCOME_V3_UNSPECIFIED
+}
+
+func (x *ProjectResolutionResultV3) GetCorrelation() string {
+	if x != nil {
+		return x.Correlation
+	}
+	return ""
+}
+
+func (x *ProjectResolutionResultV3) GetProjectKey() string {
+	if x != nil && x.ProjectKey != nil {
+		return *x.ProjectKey
+	}
+	return ""
+}
+
+func (x *ProjectResolutionResultV3) GetResolvedScope() string {
+	if x != nil && x.ResolvedScope != nil {
+		return *x.ResolvedScope
+	}
+	return ""
+}
+
+func (x *ProjectResolutionResultV3) GetRedirectReference() string {
+	if x != nil && x.RedirectReference != nil {
+		return *x.RedirectReference
+	}
+	return ""
+}
+
 var File_proto_engram_v1_engram_proto protoreflect.FileDescriptor
 
 const file_proto_engram_v1_engram_proto_rawDesc = "" +
@@ -2274,11 +2641,12 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\bmetadata\x18\x06 \x03(\v2%.engram.v1.ProjectEvent.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x83\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd1\x01\n" +
 	"\x1dGetSessionStartContextRequest\x12\x18\n" +
 	"\aproject\x18\x01 \x01(\tR\aproject\x12%\n" +
 	"\x0ememories_limit\x18\x02 \x01(\x05R\rmemoriesLimit\x12!\n" +
-	"\fissues_limit\x18\x03 \x01(\x05R\vissuesLimit\"\x8e\x03\n" +
+	"\fissues_limit\x18\x03 \x01(\x05R\vissuesLimit\x12L\n" +
+	"\x13project_identity_v3\x18\x04 \x01(\v2\x1c.engram.v1.ProjectIdentityV3R\x11projectIdentityV3\"\xe8\x03\n" +
 	"\x1eGetSessionStartContextResponse\x124\n" +
 	"\x06issues\x18\x01 \x03(\v2\x1c.engram.v1.SessionStartIssueR\x06issues\x121\n" +
 	"\x05rules\x18\x02 \x03(\v2\x1b.engram.v1.SessionStartRuleR\x05rules\x129\n" +
@@ -2286,7 +2654,8 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\fgenerated_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\vgeneratedAt\x12B\n" +
 	"\vrule_router\x18\x05 \x01(\v2!.engram.v1.SessionStartRuleRouterR\n" +
 	"ruleRouter\x12E\n" +
-	"\fmeta_summary\x18\x06 \x01(\v2\".engram.v1.SessionStartMetaSummaryR\vmetaSummary\"\xb1\x05\n" +
+	"\fmeta_summary\x18\x06 \x01(\v2\".engram.v1.SessionStartMetaSummaryR\vmetaSummary\x12X\n" +
+	"\x15project_resolution_v3\x18\a \x01(\v2$.engram.v1.ProjectResolutionResultV3R\x13projectResolutionV3\"\xb1\x05\n" +
 	"\x11SessionStartIssue\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
@@ -2381,30 +2750,34 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"compatible\x18\x01 \x01(\bR\n" +
 	"compatible\x12%\n" +
 	"\x0eserver_version\x18\x02 \x01(\tR\rserverVersion\x12'\n" +
-	"\x0fincompat_reason\x18\x03 \x01(\tR\x0eincompatReason\"\xd7\x01\n" +
+	"\x0fincompat_reason\x18\x03 \x01(\tR\x0eincompatReason\"\xa5\x02\n" +
 	"\x0fCallToolRequest\x12\x1b\n" +
 	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12%\n" +
 	"\x0earguments_json\x18\x02 \x01(\fR\rargumentsJson\x12\x18\n" +
 	"\aproject\x18\x03 \x01(\tR\aproject\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x04 \x01(\tR\tsessionId\x12G\n" +
-	"\x10project_identity\x18\x05 \x01(\v2\x1c.engram.v1.ProjectIdentityV2R\x0fprojectIdentity\"}\n" +
+	"\x10project_identity\x18\x05 \x01(\v2\x1c.engram.v1.ProjectIdentityV2R\x0fprojectIdentity\x12L\n" +
+	"\x13project_identity_v3\x18\x06 \x01(\v2\x1c.engram.v1.ProjectIdentityV3R\x11projectIdentityV3\"\xd7\x01\n" +
 	"\x10CallToolResponse\x12\x19\n" +
 	"\bis_error\x18\x01 \x01(\bR\aisError\x12!\n" +
 	"\fcontent_json\x18\x02 \x01(\fR\vcontentJson\x12+\n" +
-	"\x11canonical_project\x18\x03 \x01(\tR\x10canonicalProject\"\xbe\x01\n" +
+	"\x11canonical_project\x18\x03 \x01(\tR\x10canonicalProject\x12X\n" +
+	"\x15project_resolution_v3\x18\x04 \x01(\v2$.engram.v1.ProjectResolutionResultV3R\x13projectResolutionV3\"\x8c\x02\n" +
 	"\x11InitializeRequest\x12\x1f\n" +
 	"\vclient_name\x18\x01 \x01(\tR\n" +
 	"clientName\x12%\n" +
 	"\x0eclient_version\x18\x02 \x01(\tR\rclientVersion\x12\x18\n" +
 	"\aproject\x18\x03 \x01(\tR\aproject\x12G\n" +
-	"\x10project_identity\x18\x04 \x01(\v2\x1c.engram.v1.ProjectIdentityV2R\x0fprojectIdentity\"\xba\x01\n" +
+	"\x10project_identity\x18\x04 \x01(\v2\x1c.engram.v1.ProjectIdentityV2R\x0fprojectIdentity\x12L\n" +
+	"\x13project_identity_v3\x18\x05 \x01(\v2\x1c.engram.v1.ProjectIdentityV3R\x11projectIdentityV3\"\x94\x02\n" +
 	"\x12InitializeResponse\x12\x1f\n" +
 	"\vserver_name\x18\x01 \x01(\tR\n" +
 	"serverName\x12%\n" +
 	"\x0eserver_version\x18\x02 \x01(\tR\rserverVersion\x12/\n" +
 	"\x05tools\x18\x03 \x03(\v2\x19.engram.v1.ToolDefinitionR\x05tools\x12+\n" +
-	"\x11canonical_project\x18\x04 \x01(\tR\x10canonicalProject\"r\n" +
+	"\x11canonical_project\x18\x04 \x01(\tR\x10canonicalProject\x12X\n" +
+	"\x15project_resolution_v3\x18\x05 \x01(\v2$.engram.v1.ProjectResolutionResultV3R\x13projectResolutionV3\"r\n" +
 	"\x0eToolDefinition\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12*\n" +
@@ -2450,12 +2823,50 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\rrelative_path\x18\x05 \x01(\tR\frelativePath\x12$\n" +
 	"\x0enon_git_anchor\x18\x06 \x01(\tR\fnonGitAnchor\x12(\n" +
 	"\ranchor_shared\x18\a \x01(\bH\x00R\fanchorShared\x88\x01\x01B\x10\n" +
-	"\x0e_anchor_shared*\x96\x01\n" +
+	"\x0e_anchor_shared\"i\n" +
+	"\x19ProjectLegacyIdentifierV3\x12\x16\n" +
+	"\x06scheme\x18\x01 \x01(\tR\x06scheme\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\x12\x1e\n" +
+	"\n" +
+	"provenance\x18\x03 \x01(\tR\n" +
+	"provenance\"\xbc\x02\n" +
+	"\x11ProjectIdentityV3\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\rR\aversion\x12*\n" +
+	"\x11anchor_project_id\x18\x02 \x01(\tR\x0fanchorProjectId\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12\x14\n" +
+	"\x05scope\x18\x04 \x01(\tR\x05scope\x124\n" +
+	"\x16normalized_git_remotes\x18\x05 \x03(\tR\x14normalizedGitRemotes\x12S\n" +
+	"\x12legacy_identifiers\x18\x06 \x03(\v2$.engram.v1.ProjectLegacyIdentifierV3R\x11legacyIdentifiers\x12,\n" +
+	"\x12client_instance_id\x18\a \x01(\tR\x10clientInstanceId\"\xbe\x02\n" +
+	"\x19ProjectResolutionResultV3\x12?\n" +
+	"\aoutcome\x18\x01 \x01(\x0e2%.engram.v1.ProjectResolutionOutcomeV3R\aoutcome\x12 \n" +
+	"\vcorrelation\x18\x02 \x01(\tR\vcorrelation\x12$\n" +
+	"\vproject_key\x18\x03 \x01(\tH\x00R\n" +
+	"projectKey\x88\x01\x01\x12*\n" +
+	"\x0eresolved_scope\x18\x04 \x01(\tH\x01R\rresolvedScope\x88\x01\x01\x122\n" +
+	"\x12redirect_reference\x18\x05 \x01(\tH\x02R\x11redirectReference\x88\x01\x01B\x0e\n" +
+	"\f_project_keyB\x11\n" +
+	"\x0f_resolved_scopeB\x15\n" +
+	"\x13_redirect_reference*\x96\x01\n" +
 	"\x10ProjectEventType\x12\"\n" +
 	"\x1ePROJECT_EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aPROJECT_EVENT_TYPE_REMOVED\x10\x01\x12\x1e\n" +
 	"\x1aPROJECT_EVENT_TYPE_CREATED\x10\x02\x12\x1e\n" +
-	"\x1aPROJECT_EVENT_TYPE_RENAMED\x10\x032\x85\x06\n" +
+	"\x1aPROJECT_EVENT_TYPE_RENAMED\x10\x03*\xb2\x03\n" +
+	"\x1aProjectResolutionOutcomeV3\x12-\n" +
+	")PROJECT_RESOLUTION_OUTCOME_V3_UNSPECIFIED\x10\x00\x12\x14\n" +
+	"\x10PROJECT_RESOLVED\x10\x01\x12\x16\n" +
+	"\x12PROJECT_REDIRECTED\x10\x02\x12\x1f\n" +
+	"\x1bPROJECT_ONBOARDING_REQUIRED\x10\x03\x12\x1a\n" +
+	"\x16PROJECT_ANCHOR_INVALID\x10\x04\x12\x1a\n" +
+	"\x16PROJECT_SCOPE_MISMATCH\x10\x05\x12(\n" +
+	"$PROJECT_NESTED_REPOSITORY_UNRESOLVED\x10\x06\x12$\n" +
+	" PROJECT_ANCHOR_DECISION_REQUIRED\x10\a\x12\x1e\n" +
+	"\x1aPROJECT_IDENTITY_AMBIGUOUS\x10\b\x12\"\n" +
+	"\x1ePROJECT_DESCRIPTOR_UNSUPPORTED\x10\t\x12\x1e\n" +
+	"\x1aPROJECT_DESCRIPTOR_INVALID\x10\n" +
+	"\x12*\n" +
+	"&PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN\x10\v2\x85\x06\n" +
 	"\rEngramService\x12C\n" +
 	"\bCallTool\x12\x1a.engram.v1.CallToolRequest\x1a\x1b.engram.v1.CallToolResponse\x12I\n" +
 	"\n" +
@@ -2480,95 +2891,107 @@ func file_proto_engram_v1_engram_proto_rawDescGZIP() []byte {
 	return file_proto_engram_v1_engram_proto_rawDescData
 }
 
-var file_proto_engram_v1_engram_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_engram_v1_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_proto_engram_v1_engram_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_proto_engram_v1_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_proto_engram_v1_engram_proto_goTypes = []any{
 	(ProjectEventType)(0),                  // 0: engram.v1.ProjectEventType
-	(*SyncProjectStateRequest)(nil),        // 1: engram.v1.SyncProjectStateRequest
-	(*SyncProjectStateResponse)(nil),       // 2: engram.v1.SyncProjectStateResponse
-	(*ProjectEventsRequest)(nil),           // 3: engram.v1.ProjectEventsRequest
-	(*ProjectEvent)(nil),                   // 4: engram.v1.ProjectEvent
-	(*GetSessionStartContextRequest)(nil),  // 5: engram.v1.GetSessionStartContextRequest
-	(*GetSessionStartContextResponse)(nil), // 6: engram.v1.GetSessionStartContextResponse
-	(*SessionStartIssue)(nil),              // 7: engram.v1.SessionStartIssue
-	(*SessionStartRule)(nil),               // 8: engram.v1.SessionStartRule
-	(*SessionStartRuleRouter)(nil),         // 9: engram.v1.SessionStartRuleRouter
-	(*SessionStartRulePacket)(nil),         // 10: engram.v1.SessionStartRulePacket
-	(*SessionStartMemory)(nil),             // 11: engram.v1.SessionStartMemory
-	(*SessionStartMetaTagCount)(nil),       // 12: engram.v1.SessionStartMetaTagCount
-	(*SessionStartMetaSummary)(nil),        // 13: engram.v1.SessionStartMetaSummary
-	(*NegotiateVersionRequest)(nil),        // 14: engram.v1.NegotiateVersionRequest
-	(*NegotiateVersionResponse)(nil),       // 15: engram.v1.NegotiateVersionResponse
-	(*CallToolRequest)(nil),                // 16: engram.v1.CallToolRequest
-	(*CallToolResponse)(nil),               // 17: engram.v1.CallToolResponse
-	(*InitializeRequest)(nil),              // 18: engram.v1.InitializeRequest
-	(*InitializeResponse)(nil),             // 19: engram.v1.InitializeResponse
-	(*ToolDefinition)(nil),                 // 20: engram.v1.ToolDefinition
-	(*PingRequest)(nil),                    // 21: engram.v1.PingRequest
-	(*PingResponse)(nil),                   // 22: engram.v1.PingResponse
-	(*CodeChunkMeta)(nil),                  // 23: engram.v1.CodeChunkMeta
-	(*CodeIndexNegotiateRequest)(nil),      // 24: engram.v1.CodeIndexNegotiateRequest
-	(*CodeIndexNegotiateResponse)(nil),     // 25: engram.v1.CodeIndexNegotiateResponse
-	(*CodeChunkUpload)(nil),                // 26: engram.v1.CodeChunkUpload
-	(*CodeIndexUploadReceipt)(nil),         // 27: engram.v1.CodeIndexUploadReceipt
-	(*ProjectIdentityV2)(nil),              // 28: engram.v1.ProjectIdentityV2
-	nil,                                    // 29: engram.v1.ProjectEvent.MetadataEntry
-	(*timestamppb.Timestamp)(nil),          // 30: google.protobuf.Timestamp
+	(ProjectResolutionOutcomeV3)(0),        // 1: engram.v1.ProjectResolutionOutcomeV3
+	(*SyncProjectStateRequest)(nil),        // 2: engram.v1.SyncProjectStateRequest
+	(*SyncProjectStateResponse)(nil),       // 3: engram.v1.SyncProjectStateResponse
+	(*ProjectEventsRequest)(nil),           // 4: engram.v1.ProjectEventsRequest
+	(*ProjectEvent)(nil),                   // 5: engram.v1.ProjectEvent
+	(*GetSessionStartContextRequest)(nil),  // 6: engram.v1.GetSessionStartContextRequest
+	(*GetSessionStartContextResponse)(nil), // 7: engram.v1.GetSessionStartContextResponse
+	(*SessionStartIssue)(nil),              // 8: engram.v1.SessionStartIssue
+	(*SessionStartRule)(nil),               // 9: engram.v1.SessionStartRule
+	(*SessionStartRuleRouter)(nil),         // 10: engram.v1.SessionStartRuleRouter
+	(*SessionStartRulePacket)(nil),         // 11: engram.v1.SessionStartRulePacket
+	(*SessionStartMemory)(nil),             // 12: engram.v1.SessionStartMemory
+	(*SessionStartMetaTagCount)(nil),       // 13: engram.v1.SessionStartMetaTagCount
+	(*SessionStartMetaSummary)(nil),        // 14: engram.v1.SessionStartMetaSummary
+	(*NegotiateVersionRequest)(nil),        // 15: engram.v1.NegotiateVersionRequest
+	(*NegotiateVersionResponse)(nil),       // 16: engram.v1.NegotiateVersionResponse
+	(*CallToolRequest)(nil),                // 17: engram.v1.CallToolRequest
+	(*CallToolResponse)(nil),               // 18: engram.v1.CallToolResponse
+	(*InitializeRequest)(nil),              // 19: engram.v1.InitializeRequest
+	(*InitializeResponse)(nil),             // 20: engram.v1.InitializeResponse
+	(*ToolDefinition)(nil),                 // 21: engram.v1.ToolDefinition
+	(*PingRequest)(nil),                    // 22: engram.v1.PingRequest
+	(*PingResponse)(nil),                   // 23: engram.v1.PingResponse
+	(*CodeChunkMeta)(nil),                  // 24: engram.v1.CodeChunkMeta
+	(*CodeIndexNegotiateRequest)(nil),      // 25: engram.v1.CodeIndexNegotiateRequest
+	(*CodeIndexNegotiateResponse)(nil),     // 26: engram.v1.CodeIndexNegotiateResponse
+	(*CodeChunkUpload)(nil),                // 27: engram.v1.CodeChunkUpload
+	(*CodeIndexUploadReceipt)(nil),         // 28: engram.v1.CodeIndexUploadReceipt
+	(*ProjectIdentityV2)(nil),              // 29: engram.v1.ProjectIdentityV2
+	(*ProjectLegacyIdentifierV3)(nil),      // 30: engram.v1.ProjectLegacyIdentifierV3
+	(*ProjectIdentityV3)(nil),              // 31: engram.v1.ProjectIdentityV3
+	(*ProjectResolutionResultV3)(nil),      // 32: engram.v1.ProjectResolutionResultV3
+	nil,                                    // 33: engram.v1.ProjectEvent.MetadataEntry
+	(*timestamppb.Timestamp)(nil),          // 34: google.protobuf.Timestamp
 }
 var file_proto_engram_v1_engram_proto_depIdxs = []int32{
 	0,  // 0: engram.v1.ProjectEvent.event_type:type_name -> engram.v1.ProjectEventType
-	29, // 1: engram.v1.ProjectEvent.metadata:type_name -> engram.v1.ProjectEvent.MetadataEntry
-	7,  // 2: engram.v1.GetSessionStartContextResponse.issues:type_name -> engram.v1.SessionStartIssue
-	8,  // 3: engram.v1.GetSessionStartContextResponse.rules:type_name -> engram.v1.SessionStartRule
-	11, // 4: engram.v1.GetSessionStartContextResponse.memories:type_name -> engram.v1.SessionStartMemory
-	30, // 5: engram.v1.GetSessionStartContextResponse.generated_at:type_name -> google.protobuf.Timestamp
-	9,  // 6: engram.v1.GetSessionStartContextResponse.rule_router:type_name -> engram.v1.SessionStartRuleRouter
-	13, // 7: engram.v1.GetSessionStartContextResponse.meta_summary:type_name -> engram.v1.SessionStartMetaSummary
-	30, // 8: engram.v1.SessionStartIssue.acknowledged_at:type_name -> google.protobuf.Timestamp
-	30, // 9: engram.v1.SessionStartIssue.resolved_at:type_name -> google.protobuf.Timestamp
-	30, // 10: engram.v1.SessionStartIssue.reopened_at:type_name -> google.protobuf.Timestamp
-	30, // 11: engram.v1.SessionStartIssue.closed_at:type_name -> google.protobuf.Timestamp
-	30, // 12: engram.v1.SessionStartIssue.created_at:type_name -> google.protobuf.Timestamp
-	30, // 13: engram.v1.SessionStartIssue.updated_at:type_name -> google.protobuf.Timestamp
-	30, // 14: engram.v1.SessionStartRule.created_at:type_name -> google.protobuf.Timestamp
-	30, // 15: engram.v1.SessionStartRule.updated_at:type_name -> google.protobuf.Timestamp
-	10, // 16: engram.v1.SessionStartRuleRouter.kernel:type_name -> engram.v1.SessionStartRulePacket
-	10, // 17: engram.v1.SessionStartRuleRouter.contextual:type_name -> engram.v1.SessionStartRulePacket
-	10, // 18: engram.v1.SessionStartRuleRouter.suppressed:type_name -> engram.v1.SessionStartRulePacket
-	30, // 19: engram.v1.SessionStartMemory.created_at:type_name -> google.protobuf.Timestamp
-	30, // 20: engram.v1.SessionStartMemory.updated_at:type_name -> google.protobuf.Timestamp
-	12, // 21: engram.v1.SessionStartMetaSummary.top_tags:type_name -> engram.v1.SessionStartMetaTagCount
-	30, // 22: engram.v1.SessionStartMetaSummary.oldest_created_at:type_name -> google.protobuf.Timestamp
-	30, // 23: engram.v1.SessionStartMetaSummary.newest_created_at:type_name -> google.protobuf.Timestamp
-	30, // 24: engram.v1.SessionStartMetaSummary.generated_at:type_name -> google.protobuf.Timestamp
-	28, // 25: engram.v1.CallToolRequest.project_identity:type_name -> engram.v1.ProjectIdentityV2
-	28, // 26: engram.v1.InitializeRequest.project_identity:type_name -> engram.v1.ProjectIdentityV2
-	20, // 27: engram.v1.InitializeResponse.tools:type_name -> engram.v1.ToolDefinition
-	23, // 28: engram.v1.CodeIndexNegotiateRequest.manifest:type_name -> engram.v1.CodeChunkMeta
-	23, // 29: engram.v1.CodeChunkUpload.meta:type_name -> engram.v1.CodeChunkMeta
-	16, // 30: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
-	18, // 31: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
-	21, // 32: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
-	1,  // 33: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
-	3,  // 34: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
-	5,  // 35: engram.v1.EngramService.GetSessionStartContext:input_type -> engram.v1.GetSessionStartContextRequest
-	14, // 36: engram.v1.EngramService.NegotiateVersion:input_type -> engram.v1.NegotiateVersionRequest
-	24, // 37: engram.v1.EngramService.CodeIndexNegotiate:input_type -> engram.v1.CodeIndexNegotiateRequest
-	26, // 38: engram.v1.EngramService.CodeIndexUpload:input_type -> engram.v1.CodeChunkUpload
-	17, // 39: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
-	19, // 40: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
-	22, // 41: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
-	2,  // 42: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
-	4,  // 43: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
-	6,  // 44: engram.v1.EngramService.GetSessionStartContext:output_type -> engram.v1.GetSessionStartContextResponse
-	15, // 45: engram.v1.EngramService.NegotiateVersion:output_type -> engram.v1.NegotiateVersionResponse
-	25, // 46: engram.v1.EngramService.CodeIndexNegotiate:output_type -> engram.v1.CodeIndexNegotiateResponse
-	27, // 47: engram.v1.EngramService.CodeIndexUpload:output_type -> engram.v1.CodeIndexUploadReceipt
-	39, // [39:48] is the sub-list for method output_type
-	30, // [30:39] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	33, // 1: engram.v1.ProjectEvent.metadata:type_name -> engram.v1.ProjectEvent.MetadataEntry
+	31, // 2: engram.v1.GetSessionStartContextRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
+	8,  // 3: engram.v1.GetSessionStartContextResponse.issues:type_name -> engram.v1.SessionStartIssue
+	9,  // 4: engram.v1.GetSessionStartContextResponse.rules:type_name -> engram.v1.SessionStartRule
+	12, // 5: engram.v1.GetSessionStartContextResponse.memories:type_name -> engram.v1.SessionStartMemory
+	34, // 6: engram.v1.GetSessionStartContextResponse.generated_at:type_name -> google.protobuf.Timestamp
+	10, // 7: engram.v1.GetSessionStartContextResponse.rule_router:type_name -> engram.v1.SessionStartRuleRouter
+	14, // 8: engram.v1.GetSessionStartContextResponse.meta_summary:type_name -> engram.v1.SessionStartMetaSummary
+	32, // 9: engram.v1.GetSessionStartContextResponse.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
+	34, // 10: engram.v1.SessionStartIssue.acknowledged_at:type_name -> google.protobuf.Timestamp
+	34, // 11: engram.v1.SessionStartIssue.resolved_at:type_name -> google.protobuf.Timestamp
+	34, // 12: engram.v1.SessionStartIssue.reopened_at:type_name -> google.protobuf.Timestamp
+	34, // 13: engram.v1.SessionStartIssue.closed_at:type_name -> google.protobuf.Timestamp
+	34, // 14: engram.v1.SessionStartIssue.created_at:type_name -> google.protobuf.Timestamp
+	34, // 15: engram.v1.SessionStartIssue.updated_at:type_name -> google.protobuf.Timestamp
+	34, // 16: engram.v1.SessionStartRule.created_at:type_name -> google.protobuf.Timestamp
+	34, // 17: engram.v1.SessionStartRule.updated_at:type_name -> google.protobuf.Timestamp
+	11, // 18: engram.v1.SessionStartRuleRouter.kernel:type_name -> engram.v1.SessionStartRulePacket
+	11, // 19: engram.v1.SessionStartRuleRouter.contextual:type_name -> engram.v1.SessionStartRulePacket
+	11, // 20: engram.v1.SessionStartRuleRouter.suppressed:type_name -> engram.v1.SessionStartRulePacket
+	34, // 21: engram.v1.SessionStartMemory.created_at:type_name -> google.protobuf.Timestamp
+	34, // 22: engram.v1.SessionStartMemory.updated_at:type_name -> google.protobuf.Timestamp
+	13, // 23: engram.v1.SessionStartMetaSummary.top_tags:type_name -> engram.v1.SessionStartMetaTagCount
+	34, // 24: engram.v1.SessionStartMetaSummary.oldest_created_at:type_name -> google.protobuf.Timestamp
+	34, // 25: engram.v1.SessionStartMetaSummary.newest_created_at:type_name -> google.protobuf.Timestamp
+	34, // 26: engram.v1.SessionStartMetaSummary.generated_at:type_name -> google.protobuf.Timestamp
+	29, // 27: engram.v1.CallToolRequest.project_identity:type_name -> engram.v1.ProjectIdentityV2
+	31, // 28: engram.v1.CallToolRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
+	32, // 29: engram.v1.CallToolResponse.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
+	29, // 30: engram.v1.InitializeRequest.project_identity:type_name -> engram.v1.ProjectIdentityV2
+	31, // 31: engram.v1.InitializeRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
+	21, // 32: engram.v1.InitializeResponse.tools:type_name -> engram.v1.ToolDefinition
+	32, // 33: engram.v1.InitializeResponse.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
+	24, // 34: engram.v1.CodeIndexNegotiateRequest.manifest:type_name -> engram.v1.CodeChunkMeta
+	24, // 35: engram.v1.CodeChunkUpload.meta:type_name -> engram.v1.CodeChunkMeta
+	30, // 36: engram.v1.ProjectIdentityV3.legacy_identifiers:type_name -> engram.v1.ProjectLegacyIdentifierV3
+	1,  // 37: engram.v1.ProjectResolutionResultV3.outcome:type_name -> engram.v1.ProjectResolutionOutcomeV3
+	17, // 38: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
+	19, // 39: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
+	22, // 40: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
+	2,  // 41: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
+	4,  // 42: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
+	6,  // 43: engram.v1.EngramService.GetSessionStartContext:input_type -> engram.v1.GetSessionStartContextRequest
+	15, // 44: engram.v1.EngramService.NegotiateVersion:input_type -> engram.v1.NegotiateVersionRequest
+	25, // 45: engram.v1.EngramService.CodeIndexNegotiate:input_type -> engram.v1.CodeIndexNegotiateRequest
+	27, // 46: engram.v1.EngramService.CodeIndexUpload:input_type -> engram.v1.CodeChunkUpload
+	18, // 47: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
+	20, // 48: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
+	23, // 49: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
+	3,  // 50: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
+	5,  // 51: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
+	7,  // 52: engram.v1.EngramService.GetSessionStartContext:output_type -> engram.v1.GetSessionStartContextResponse
+	16, // 53: engram.v1.EngramService.NegotiateVersion:output_type -> engram.v1.NegotiateVersionResponse
+	26, // 54: engram.v1.EngramService.CodeIndexNegotiate:output_type -> engram.v1.CodeIndexNegotiateResponse
+	28, // 55: engram.v1.EngramService.CodeIndexUpload:output_type -> engram.v1.CodeIndexUploadReceipt
+	47, // [47:56] is the sub-list for method output_type
+	38, // [38:47] is the sub-list for method input_type
+	38, // [38:38] is the sub-list for extension type_name
+	38, // [38:38] is the sub-list for extension extendee
+	0,  // [0:38] is the sub-list for field type_name
 }
 
 func init() { file_proto_engram_v1_engram_proto_init() }
@@ -2577,13 +3000,14 @@ func file_proto_engram_v1_engram_proto_init() {
 		return
 	}
 	file_proto_engram_v1_engram_proto_msgTypes[27].OneofWrappers = []any{}
+	file_proto_engram_v1_engram_proto_msgTypes[30].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_engram_v1_engram_proto_rawDesc), len(file_proto_engram_v1_engram_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   29,
+			NumEnums:      2,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
