@@ -58,9 +58,9 @@ function resolveConfigFilePath() {
 /**
  * Read and parse the engram config file.
  * Returns { server_url, api_token, client_instance_id, quiet } on success
- * (server_url/api_token/client_instance_id are trimmed strings; quiet is the raw
- * value — boolean or string — or undefined when absent). Returns null on missing
- * callers must treat null as "not configured here". Never throws.
+ * (server_url/api_token are trimmed strings; client_instance_id and quiet retain
+ * their raw config values). Returns null on missing config; callers must treat it as
+ * "not configured here". Never throws.
  */
 function readEngramConfigFile(configFilePath) {
  try {
@@ -75,7 +75,7 @@ function readEngramConfigFile(configFilePath) {
   return {
    server_url: typeof parsed.server_url === 'string' ? parsed.server_url.trim() : '',
    api_token: typeof parsed.api_token === 'string' ? parsed.api_token.trim() : '',
-   client_instance_id: typeof parsed.client_instance_id === 'string' ? parsed.client_instance_id.trim() : '',
+   client_instance_id: typeof parsed.client_instance_id === 'string' ? parsed.client_instance_id : '',
    quiet: parsed.quiet,
   };
  } catch {
@@ -109,7 +109,7 @@ async function readEngramConfigFileAsync(configFilePath, signal) {
   return {
    server_url: typeof parsed.server_url === 'string' ? parsed.server_url.trim() : '',
    api_token: typeof parsed.api_token === 'string' ? parsed.api_token.trim() : '',
-   client_instance_id: typeof parsed.client_instance_id === 'string' ? parsed.client_instance_id.trim() : '',
+   client_instance_id: typeof parsed.client_instance_id === 'string' ? parsed.client_instance_id : '',
    quiet: parsed.quiet,
   };
  } catch (error) {
@@ -1496,6 +1496,7 @@ module.exports = {
  getPluginDataDir,
  getSessionStartCachePath,
  readEngramConfigFile,
+ readEngramConfigFileAsync,
  readJSONFile,
  resolveConfigFilePath,
  resolveEngramRuntimeConfig,

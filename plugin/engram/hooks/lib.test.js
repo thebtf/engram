@@ -546,6 +546,26 @@ test('getEngramConfig resolves the explicit non-secret client instance ID', (t) 
   serverURL: 'http://env.example.test', token: 'env-token', clientInstanceID: 'env-install-alpha',
  });
 });
+test('config readers preserve raw V3 client IDs while normalizing URL and token', async (t) => {
+ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-raw-client-instance-config-'));
+ const configFile = path.join(dir, 'config.json');
+ t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+ fs.writeFileSync(configFile, JSON.stringify({
+  server_url: ' https://config.example.test/root ',
+  api_token: ' config-token ',
+  client_instance_id: ' hook-install-alpha ',
+ }));
+
+ const expected = {
+  server_url: 'https://config.example.test/root',
+  api_token: 'config-token',
+  client_instance_id: ' hook-install-alpha ',
+  quiet: undefined,
+ };
+ assert.deepEqual(lib.readEngramConfigFile(configFile), expected);
+ assert.deepEqual(await lib.readEngramConfigFileAsync(configFile), expected);
+});
+
 
 test('resolveEngramRuntimeConfig independently overlays env credentials with one async config read', async (t) => {
  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-runtime-config-'));
@@ -1112,6 +1132,73 @@ test('configured Hook V3 requires an anchor before making a registration request
  assert.doesNotMatch(result.stderr, /HANDLER_RAN/);
  assert.match(result.stderr, /REQUEST_COUNT=0/);
 });
+test('Hook V3 validates raw config client IDs before registration', (t) => {
+ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-v3-raw-client-id-'));
+ const configPath = path.join(directory, 'config.json');
+ t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+ fs.writeFileSync(path.join(directory, '.engram-project'), JSON.stringify({
+  version: 3,
+  project_id: '88888888-8888-4888-8888-888888888888',
+  name: 'hook-v3-raw-client-id',
+  scope: 'directory',
+ }));
+ const environment = { ...process.env };
+ for (const key of RUNTIME_CONFIG_ENV_KEYS) delete environment[key];
+ Object.assign(environment, {
+  ENGRAM_CONFIG_FILE: configPath,
+  ENGRAM_INTERNAL: '0',
+  ENGRAM_QUIET: '0',
+ });
+ const childScript = `
+  let requestCount = 0;
+  global.fetch = async () => {
+   requestCount += 1;
+   return { ok: true, text: async () => JSON.stringify({
+    project_resolution_v3: {
+     outcome: 'PROJECT_RESOLVED',
+     correlation: 'hook-v3-raw-client-id-correlation',
+     project_key: '99999999-9999-4999-8999-999999999999',
+     resolved_scope: 'directory',
+    },
+   }) };
+  };
+  const lib = require(process.argv[1]);
+  lib.RunHook('SessionStart', async () => {
+   process.stderr.write(' HANDLER_RAN');
+   return '';
+  }).then(() => process.stderr.write(' REQUEST_COUNT=' + requestCount));
+ `;
+ const run = (clientInstanceID) => {
+  fs.writeFileSync(configPath, JSON.stringify({
+   server_url: 'http://example.test',
+   api_token: 'test-token',
+   client_instance_id: clientInstanceID,
+  }));
+  return spawnSync(process.execPath, ['-e', childScript, require.resolve('./lib')], {
+   input: JSON.stringify({ session_id: 'v3-raw-client-id', cwd: directory }),
+   encoding: 'utf8',
+   timeout: 2000,
+   windowsHide: true,
+   env: environment,
+  });
+ };
+
+ const rejected = run(' hook-install-alpha ');
+ assert.equal(rejected.error, undefined, rejected.error ? rejected.error.message : rejected.stderr);
+ assert.equal(rejected.status, 0, rejected.stderr);
+ assert.equal(rejected.stdout.trim(), '{"continue":true}');
+ assert.match(rejected.stderr, /PROJECT_DESCRIPTOR_INVALID/);
+ assert.doesNotMatch(rejected.stderr, /HANDLER_RAN/);
+ assert.match(rejected.stderr, /REQUEST_COUNT=0/);
+
+ const accepted = run('hook-install-alpha');
+ assert.equal(accepted.error, undefined, accepted.error ? accepted.error.message : accepted.stderr);
+ assert.equal(accepted.status, 0, accepted.stderr);
+ assert.equal(accepted.stdout.trim(), '{"continue":true}');
+ assert.match(accepted.stderr, /HANDLER_RAN/);
+ assert.match(accepted.stderr, /REQUEST_COUNT=1/);
+});
+
 
 test('configured Hook V3 directory registration does not invoke legacy Git resolution', (t) => {
  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-v3-git-failure-'));
