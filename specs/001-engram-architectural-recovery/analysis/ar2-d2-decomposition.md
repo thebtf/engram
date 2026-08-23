@@ -4,6 +4,7 @@
 **Baseline:** `cfc0715f021998daea17d0fba56f5cf6191bbf9d`
 **Integration branch/worktree:** `ar-2/identity-v3-expand` / `.agent/worktrees/ar-2-identity-v3-expand`
 **Status:** execution graph for the AR-2 delta; implementation begins only after the corrected Spec Kit analysis and receipt authorize this exact candidate.
+**Governor correction:** `AR2_GOVERNOR_CORRECTION_2026-08-23_R1` fixes the Wave A test seam; T020 freezes test-only RED against named production modules before parallel T017/T018/T019.
 
 ## Release invariant
 
@@ -98,7 +99,7 @@ All three retain an explicit V2 compatibility branch at the outer boundary and r
 ### Boundary contract
 
 - Go `internal/projectidentity` exposes only `ParseAnchorV3`, `DiscoverAnchorV3`, `NormalizeGitRemoteV3`, and `BuildDescriptorV3` over JSON-compatible `AnchorV3`, `DescriptorV3`, and typed legacy-evidence values.
-- Hook JavaScript and OpenClaw TypeScript expose descriptor-only counterparts: `parseProjectAnchorV3`, `discoverProjectAnchorV3`, `normalizeGitRemoteV3`, and `buildProjectIdentityV3`.
+- Hook module `plugin/engram/hooks/project-identity-v3.js` and OpenClaw module `plugin/openclaw-engram/src/project-identity-v3.ts` expose descriptor-only counterparts: `parseProjectAnchorV3`, `discoverProjectAnchorV3`, `normalizeGitRemoteV3`, and `buildProjectIdentityV3`.
 - `ParseAnchorV3` rejects unknown/malformed fields; `DiscoverAnchorV3` receives an explicit repository or directory root and never searches upward; `NormalizeGitRemoteV3` returns a typed `normalized`, `omitted`, or `refused` disposition so local/file/malformed inputs are omitted while credential-bearing inputs are refused.
 - `BuildDescriptorV3` requires an explicit non-empty opaque `client_instance_id`, rejects a client `project_key` assertion, and never generates or persists either value. The seam does **not** resolve a canonical key, select an intent, establish a binding, mutate state, access a database/cache, or replace any V2 path.
 

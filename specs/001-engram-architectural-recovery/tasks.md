@@ -69,12 +69,13 @@ and emits a redacted baseline/fixture receipt.
 
 **Goal**: All supported adapters present one V3 anchor descriptor and new scoped workflows resolve a
 canonical key while legacy rows/columns remain available.
+**Governor correction:** `AR2_GOVERNOR_CORRECTION_2026-08-23_R1` makes T020 the active test-only seam gate and holds T017/T018/T019 until the reviewed RED commit is integrated.
 
 - [ ] T016 [US1] Add failing cross-language V3 anchor/descriptor vectors in `contracts/testdata/project_identity_v3_vectors.json` — FR-005, SC-001.
-- [ ] T017 [US1] Implement V3 `.engram-project` parser/validator, tracked repository-root and explicit directory discovery, and in-place Engram anchor migration in `internal/projectidentity/anchor.go` — FR-001, FR-003.
-- [ ] T018 [P] [US1] Implement matching hook-side V3 descriptor construction, explicit client-instance configuration, registration, and selector-cache migration in `plugin/engram/hooks/lib.js` and `plugin/engram/hooks/session-start.js` — FR-005.
-- [ ] T019 [P] [US1] Implement matching OpenClaw V3 descriptor construction, explicit client-instance configuration, and registration/cache migration in `plugin/openclaw-engram/src/identity.ts`, `client.ts`, `config.ts`, `index.ts`, and their actual hook consumers — FR-005.
-- [ ] T020 [US1] Add shared-vector tests in `internal/projectidentity/project_identity_v3_vector_test.go`, `plugin/engram/hooks/project-identity-v3.test.js`, and `plugin/openclaw-engram/src/project-identity-v3.test.ts` — FR-005, SC-001.
+- [ ] T017 [P] [US1] After T020 freezes RED evidence, implement V3 `.engram-project` parser/validator, tracked repository-root and explicit directory discovery, in-place Engram anchor migration, and the Go descriptor seam in `internal/projectidentity` — FR-001, FR-003.
+- [ ] T018 [P] [US1] After T020 freezes RED evidence, implement matching hook-side descriptor module `plugin/engram/hooks/project-identity-v3.js` and adapt `lib.js`/`session-start.js` registration and selector-cache boundaries — FR-005.
+- [ ] T019 [P] [US1] After T020 freezes RED evidence, implement matching OpenClaw descriptor module `plugin/openclaw-engram/src/project-identity-v3.ts` and adapt `identity.ts`, `client.ts`, `config.ts`, `index.ts`, and actual hook consumers — FR-005.
+- [ ] T020 [US1] Freeze test-only shared-vector RED harnesses for Go `internal/projectidentity` (`ParseAnchorV3`, `DiscoverAnchorV3`, `NormalizeGitRemoteV3`, `BuildDescriptorV3`), hook `project-identity-v3.js`, and OpenClaw `src/project-identity-v3.ts` — FR-005, SC-001.
 - [ ] T021 [US1] Add additive V3 Project, Identifier, Merge Audit, and selected nullable typed-key schema in `internal/db/gorm/models.go`, `migration_project_identity_v3.go`, migration registration, and real PostgreSQL migration tests — FR-001, FR-025.
 - [ ] T022 [US1] Implement central `ResolveProject` application workflow and storage ports in `internal/projectidentity/resolver.go` — FR-001 through FR-005.
 - [ ] T023 [US1] Add typed V3 intents, outcomes, and scope/admin-filter audit boundary in `internal/projectidentity/errors.go` and related value types — FR-003, FR-004.
@@ -92,8 +93,8 @@ comparison without legacy contraction.
 
 ### AR-2 Delta Dependencies
 
-- T016 freezes the versioned descriptor/vector contract before T020 writes its RED harness.
-- T017 consumes the frozen anchor fields; T018 and T019 begin only after T017/T020 establish anchor and vector semantics.
+- T016 freezes the versioned descriptor/vector contract before T020 captures test-only RED against the named production module seams.
+- T017, T018, and T019 begin in parallel only after the T020 RED commit is integrated and reviewed.
 - T021 and T023 may run in parallel after Wave A; T022 begins only after both expose the additive storage and typed-outcome seams.
 - T024, T025, and T026 are parallel adapter translations only after T022; they may not define resolver policy or mutate canonical bindings.
 - T027 precedes T028/T029 comparison evidence; T030 and T088–T091 accept only the exact integrated candidate.
