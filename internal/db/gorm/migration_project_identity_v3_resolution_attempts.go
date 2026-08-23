@@ -31,42 +31,12 @@ func projectIdentityV3ResolutionAttemptsMigration163() *gormigrate.Migration {
 					descriptor_version INTEGER NOT NULL CHECK (descriptor_version >= 0),
 					provenance TEXT NOT NULL CHECK (provenance = 'anchor_v3'),
 					redirect_reference TEXT,
-					admin_target_reference TEXT,
-					admin_actor TEXT,
-					admin_purpose TEXT,
-					admin_decision TEXT,
-					admin_retention_or_rollback TEXT,
 					created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 					CONSTRAINT project_resolution_attempts_redirect_chk CHECK (
 						(outcome = 'PROJECT_REDIRECTED' AND redirect_reference IS NOT NULL)
 						OR (outcome <> 'PROJECT_REDIRECTED' AND redirect_reference IS NULL)
-					),
-					CONSTRAINT project_resolution_attempts_admin_audit_chk CHECK (
-						(admin_target_reference IS NULL AND admin_actor IS NULL AND admin_purpose IS NULL AND admin_decision IS NULL AND admin_retention_or_rollback IS NULL)
-						OR (admin_target_reference IS NOT NULL AND admin_actor IS NOT NULL AND admin_purpose IS NOT NULL AND admin_decision IS NOT NULL AND admin_retention_or_rollback IS NOT NULL)
 					)
 				)`,
-				`ALTER TABLE project_resolution_attempts
-					ADD COLUMN IF NOT EXISTS admin_target_reference TEXT,
-					ADD COLUMN IF NOT EXISTS admin_actor TEXT,
-					ADD COLUMN IF NOT EXISTS admin_purpose TEXT,
-					ADD COLUMN IF NOT EXISTS admin_decision TEXT,
-					ADD COLUMN IF NOT EXISTS admin_retention_or_rollback TEXT`,
-				`DO $$
-				BEGIN
-					IF NOT EXISTS (
-						SELECT 1 FROM pg_constraint
-						WHERE conname = 'project_resolution_attempts_admin_audit_chk'
-						  AND conrelid = 'project_resolution_attempts'::regclass
-					) THEN
-						ALTER TABLE project_resolution_attempts
-							ADD CONSTRAINT project_resolution_attempts_admin_audit_chk CHECK (
-								(admin_target_reference IS NULL AND admin_actor IS NULL AND admin_purpose IS NULL AND admin_decision IS NULL AND admin_retention_or_rollback IS NULL)
-								OR (admin_target_reference IS NOT NULL AND admin_actor IS NOT NULL AND admin_purpose IS NOT NULL AND admin_decision IS NOT NULL AND admin_retention_or_rollback IS NOT NULL)
-							);
-					END IF;
-				END
-				$$`,
 				`CREATE INDEX IF NOT EXISTS idx_project_resolution_attempts_correlation
 					ON project_resolution_attempts (correlation)`,
 			} {

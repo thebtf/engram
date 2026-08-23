@@ -35,6 +35,7 @@ func TestProjectIdentityV3ResolverStoreAuthorizationRedirectAndAudit(t *testing.
 	t.Cleanup(cleanup)
 	db := store.GetDB()
 	require.NoError(t, projectIdentityV3ResolutionAttemptsMigration163().Migrate(db))
+	require.NoError(t, projectIdentityV3ResolutionAttemptAdminAuditMigration164().Migrate(db))
 	ctx := context.Background()
 	prefix := "t022-resolver-" + uuid.NewString()
 
@@ -172,6 +173,7 @@ func TestProjectIdentityV3ResolverReadFilterRejectsUnverifiedBeforeLookup(t *tes
 	t.Cleanup(cleanup)
 	db := store.GetDB()
 	require.NoError(t, projectIdentityV3ResolutionAttemptsMigration163().Migrate(db))
+	require.NoError(t, projectIdentityV3ResolutionAttemptAdminAuditMigration164().Migrate(db))
 	ctx := context.Background()
 	anchorProjectID := uuid.NewString()
 	correlationValue := "t022-read-filter-" + uuid.NewString()
@@ -212,6 +214,7 @@ func TestProjectIdentityV3ResolverRegistrationRollsBackWhenAttemptWriteFails(t *
 	t.Cleanup(cleanup)
 	db := store.GetDB()
 	require.NoError(t, projectIdentityV3ResolutionAttemptsMigration163().Migrate(db))
+	require.NoError(t, projectIdentityV3ResolutionAttemptAdminAuditMigration164().Migrate(db))
 	ctx := context.Background()
 	anchorProjectID := uuid.NewString()
 	correlationValue := "t022-attempt-failure-" + uuid.NewString()
