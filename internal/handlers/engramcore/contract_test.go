@@ -51,10 +51,16 @@ type mockEngramServer struct {
 	// callResp is the response returned by CallTool.
 	callResp *pb.CallToolResponse
 	// callErr, if non-nil, is returned as an error from CallTool.
-	callErr   error
-	initReq   *pb.InitializeRequest
-	callReq   *pb.CallToolRequest
-	initCalls int
+	callErr error
+	// registerResp is the response returned by RegisterProjectIdentityV3.
+	registerResp *pb.RegisterProjectIdentityV3Response
+	// registerErr, if non-nil, is returned by RegisterProjectIdentityV3.
+	registerErr   error
+	initReq       *pb.InitializeRequest
+	callReq       *pb.CallToolRequest
+	registerReq   *pb.RegisterProjectIdentityV3Request
+	initCalls     int
+	registerCalls int
 }
 
 func (s *mockEngramServer) Initialize(_ context.Context, req *pb.InitializeRequest) (*pb.InitializeResponse, error) {
@@ -83,6 +89,21 @@ func (s *mockEngramServer) CallTool(_ context.Context, req *pb.CallToolRequest) 
 		return &pb.CallToolResponse{}, nil
 	}
 	return s.callResp, nil
+}
+
+func (s *mockEngramServer) RegisterProjectIdentityV3(_ context.Context, req *pb.RegisterProjectIdentityV3Request) (*pb.RegisterProjectIdentityV3Response, error) {
+	s.mu.Lock()
+	s.registerReq = req
+	s.registerCalls++
+	resp, err := s.registerResp, s.registerErr
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return &pb.RegisterProjectIdentityV3Response{}, nil
+	}
+	return resp, nil
 }
 
 // startMockGRPC starts a mock gRPC server on an ephemeral port and returns the
@@ -135,16 +156,23 @@ func startDeferredMockGRPC(t *testing.T, srv *mockEngramServer) (string, func() 
 // Dispatcher bootstrap helpers for contract tests
 // ---------------------------------------------------------------------------
 
-// buildContractDispatcher creates a Dispatcher with one engramcore module whose
-// ENGRAM_URL is injected directly into the project env. The gRPC connection
-// uses plaintext (no TLS) so that it can connect to the mock server on localhost.
-//
-// The slug cache is pre-populated with a synthetic entry to avoid any git I/O
-// during the test (see ForceCacheEntry in slugcache.go).
+// buildContractDispatcher creates a V2-compatible Dispatcher with one
+// engramcore module whose ENGRAM_URL is injected directly into the project env.
 func buildContractDispatcher(t *testing.T, grpcAddr string, staticModules ...module.EngramModule) (*dispatcher.Dispatcher, *Module, muxcore.ProjectContext) {
+	return buildContractDispatcherWithClientInstanceID(t, grpcAddr, "", staticModules...)
+}
+
+// buildV3ContractDispatcher creates a Dispatcher whose core module has V3
+// selected before registry registration, so the static registration tool is
+// present in the immutable ToolProvider inventory.
+func buildV3ContractDispatcher(t *testing.T, grpcAddr string, staticModules ...module.EngramModule) (*dispatcher.Dispatcher, *Module, muxcore.ProjectContext) {
+	return buildContractDispatcherWithClientInstanceID(t, grpcAddr, "fixture-daemon-install", staticModules...)
+}
+
+func buildContractDispatcherWithClientInstanceID(t *testing.T, grpcAddr, clientInstanceID string, staticModules ...module.EngramModule) (*dispatcher.Dispatcher, *Module, muxcore.ProjectContext) {
 	t.Helper()
 
-	mod := NewModule()
+	mod := NewModuleWithClientInstanceID(clientInstanceID)
 
 	reg := registry.New()
 	for _, staticMod := range staticModules {

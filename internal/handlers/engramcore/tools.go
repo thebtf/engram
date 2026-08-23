@@ -16,10 +16,17 @@ import (
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
-const proxyToolsDiscoveryTimeout = 30 * time.Second
+const (
+	proxyToolsDiscoveryTimeout        = 30 * time.Second
+	projectIdentityV3RegistrationTool = "project_identity.register_v3"
+)
+
+var projectIdentityV3RegistrationSchema = json.RawMessage(`{"type":"object","additionalProperties":false}`)
 
 // ProxyTools fetches the dynamic tool set from the engram server via a gRPC
 // Initialize handshake. Implements module.ProxyToolProvider per FR-11a.
@@ -68,6 +75,9 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 	resp, err := client.Initialize(discoveryCtx, request, grpc.WaitForReady(true))
 	if err != nil {
 		if v3Enabled {
+			if isV3OnboardingRequired(err) {
+				return nil, nil
+			}
 			return nil, &module.RequiredProxyToolsError{Cause: v3ProxyError(err)}
 		}
 		return nil, &module.RequiredProxyToolsError{Cause: fmt.Errorf("gRPC Initialize: %w", err)}
@@ -87,6 +97,72 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 		}
 	}
 	return tools, nil
+}
+
+// Tools returns the one stable setup tool for a V3-configured daemon. V2
+// instances return no extra static tool and retain their existing surface.
+// The dispatcher routes static tools before proxy dispatch, so registration
+// never reaches CallTool.
+func (m *Module) Tools() []module.ToolDef {
+	if m.v3ClientInstanceID == "" {
+		return nil
+	}
+	return []module.ToolDef{{
+		Name:        projectIdentityV3RegistrationTool,
+		Description: "Explicitly register the current repository's V3 project identity. Takes no arguments and requires a server-authenticated master/admin identity.",
+		InputSchema: projectIdentityV3RegistrationSchema,
+	}}
+}
+
+// HandleTool executes the descriptor-only V3 registration setup operation.
+// It never constructs a V2 selector or accepts client project authority.
+func (m *Module) HandleTool(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error) {
+	if name != projectIdentityV3RegistrationTool {
+		return nil, &module.ModuleError{Code: "tool_not_found", Message: "unknown tool"}
+	}
+	if m.v3ClientInstanceID != "" {
+		m.cache.Forget(p.ID)
+	}
+	if !hasNoRegistrationArguments(args) {
+		return nil, &module.ModuleError{Code: "tool_input_invalid", Message: "project_identity.register_v3 accepts no arguments"}
+	}
+
+	identity, v3Enabled, err := m.v3Identity(p)
+	if err != nil {
+		return nil, err
+	}
+	if !v3Enabled {
+		return nil, &module.ModuleError{Code: "PROJECT_DESCRIPTOR_UNSUPPORTED", Message: "project identity resolution refused"}
+	}
+	serverURL, err := m.requireServerURL(p)
+	if err != nil {
+		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+	}
+	conn, err := m.pool.getOrDialGRPC(serverURL, m.envFor(p, config.EnvWorkstationToken))
+	if err != nil {
+		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+	}
+	response, err := pb.NewEngramServiceClient(conn).RegisterProjectIdentityV3(ctx,
+		&pb.RegisterProjectIdentityV3Request{ProjectIdentityV3: identity}, grpc.WaitForReady(true))
+	if err != nil {
+		return nil, v3ProxyError(err)
+	}
+	if response == nil || response.GetProjectResolutionV3() == nil {
+		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+	}
+	result, err := protojson.Marshal(response.GetProjectResolutionV3())
+	if err != nil {
+		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+	}
+	return result, nil
+}
+
+func hasNoRegistrationArguments(args json.RawMessage) bool {
+	if len(args) == 0 {
+		return true
+	}
+	var fields map[string]json.RawMessage
+	return json.Unmarshal(args, &fields) == nil && len(fields) == 0
 }
 
 // ProxyHandleTool forwards a tools/call request to the engram server via
@@ -188,6 +264,20 @@ func (m *Module) v3Identity(p muxcore.ProjectContext) (*pb.ProjectIdentityV3, bo
 		return nil, true, &module.ModuleError{Code: inputErr.code, Message: "project identity resolution refused"}
 	}
 	return nil, true, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
+}
+
+func isV3OnboardingRequired(err error) bool {
+	grpcStatus, ok := status.FromError(err)
+	if !ok || grpcStatus.Code() != codes.FailedPrecondition {
+		return false
+	}
+	for _, detail := range grpcStatus.Details() {
+		info, ok := detail.(*errdetails.ErrorInfo)
+		if ok && info.GetDomain() == "engram.project_identity.v3" && info.GetReason() == string(projectidentity.ProjectOnboardingRequiredOutcomeV3) {
+			return true
+		}
+	}
+	return false
 }
 
 // v3ProxyError preserves only the server's typed refusal outcome. It rejects

@@ -37,18 +37,26 @@ const moduleName = "engramcore"
 //   - module.EngramModule       — core lifecycle (Name/Init/Shutdown)
 //   - module.ProjectLifecycle   — session connect/disconnect logging
 //   - module.ProjectRemovalAware — clear slug cache on project removal
+//   - module.ToolProvider       — explicit V3 project registration
 //   - module.ProxyToolProvider  — dynamic tool set fetched from engram-server
 //
-// It deliberately does NOT implement module.ToolProvider because the engram
-// tool list is not knowable at compile time — the server returns a list via
-// the gRPC Initialize RPC, and the client has no static inventory of tool
-// metadata. FR-11a exists solely for this shape of module.
+// The static registration tool is intentionally separate from the server-owned
+// dynamic tool inventory: it is the only way an unbound V3 descriptor can
+// establish a binding. All ordinary proxy operations remain resolve-only.
 type Module struct {
 	pool               *grpcPool
 	cache              *slugCache
 	v3ClientInstanceID string
 	deps               module.ModuleDeps
 }
+
+var (
+	_ module.EngramModule        = (*Module)(nil)
+	_ module.ProjectLifecycle    = (*Module)(nil)
+	_ module.ProjectRemovalAware = (*Module)(nil)
+	_ module.ToolProvider        = (*Module)(nil)
+	_ module.ProxyToolProvider   = (*Module)(nil)
+)
 
 // NewModule constructs an unstarted V2-compatible engramcore module. Call Init
 // before HandleTool / ProxyTools.

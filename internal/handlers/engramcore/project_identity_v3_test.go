@@ -75,6 +75,192 @@ func TestProxyV3RefusalClearsCompatibilityCacheAndExposesOnlyTypedOutcome(t *tes
 	assertV3CallRequest(t, srv.callReq)
 }
 
+func TestV3OnboardingKeepsStaticRegistrationVisibleAndResumesProxy(t *testing.T) {
+	srv := &mockEngramServer{
+		initErr:      typedV3Refusal(t, "PROJECT_ONBOARDING_REQUIRED"),
+		registerResp: &pb.RegisterProjectIdentityV3Response{ProjectResolutionV3: resolvedV3Response()},
+		callResp: &pb.CallToolResponse{
+			ContentJson:         []byte(`[]`),
+			CanonicalProject:    daemonV3CanonicalProject,
+			ProjectResolutionV3: resolvedV3Response(),
+		},
+	}
+	grpcAddr := startMockGRPC(t, srv)
+	dispatcher, mod, project := buildV3ContractDispatcher(t, grpcAddr)
+	project.ID = "raw-mux-project-must-not-be-forwarded"
+	project.Cwd = daemonV3Repository(t)
+	mod.cache.ForceCacheEntry(project, "raw-slug-must-not-survive-refusal")
+
+	before, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcListReq(1))
+	if err != nil {
+		t.Fatalf("onboarding tools/list: %v", err)
+	}
+	assertOnlyRegistrationTool(t, before)
+	if mod.cache.HasEntry(project.ID) {
+		t.Fatal("onboarding refusal retained a compatibility cache entry")
+	}
+	if strings.Contains(string(before), project.ID) || strings.Contains(string(before), project.Cwd) {
+		t.Fatalf("onboarding tools/list leaked local identity material: %s", before)
+	}
+
+	for id := 2; id <= 3; id++ {
+		registration, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcCallReq(id, "project_identity.register_v3"))
+		if err != nil {
+			t.Fatalf("registration %d: %v", id, err)
+		}
+		assertRegistrationResolved(t, registration)
+	}
+
+	srv.mu.Lock()
+	srv.initErr = nil
+	srv.initResp = &pb.InitializeResponse{
+		Tools:               []*pb.ToolDefinition{{Name: "recall", Description: "recall"}},
+		CanonicalProject:    daemonV3CanonicalProject,
+		ProjectResolutionV3: resolvedV3Response(),
+	}
+	registerCalls := srv.registerCalls
+	registerReq := srv.registerReq
+	initCalls := srv.initCalls
+	callReq := srv.callReq
+	srv.mu.Unlock()
+	if initCalls != 1 || callReq != nil {
+		t.Fatalf("registration bypassed static dispatch: Initialize calls=%d CallTool request=%#v", initCalls, callReq)
+	}
+	if registerCalls != 2 {
+		t.Fatalf("registration calls=%d, want 2 to preserve server idempotency", registerCalls)
+	}
+	if registerReq == nil || registerReq.GetProjectIdentityV3() == nil {
+		t.Fatalf("registration request=%#v, want descriptor-only request", registerReq)
+	}
+	assertV3Descriptor(t, registerReq.GetProjectIdentityV3())
+	if strings.Contains(registerReq.String(), project.ID) || strings.Contains(registerReq.String(), project.Cwd) {
+		t.Fatalf("registration request leaked raw mux identity: %s", registerReq)
+	}
+
+	after, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcListReq(4))
+	if err != nil {
+		t.Fatalf("post-registration tools/list: %v", err)
+	}
+	assertRegistrationAndProxyTool(t, after, "recall")
+	if _, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcCallReq(5, "recall")); err != nil {
+		t.Fatalf("post-registration V3 tool: %v", err)
+	}
+	assertV3InitializeRequest(t, srv.initReq)
+	assertV3CallRequest(t, srv.callReq)
+	if mod.cache.HasEntry(project.ID) {
+		t.Fatal("V3 registration or normal proxy route populated a compatibility cache entry")
+	}
+}
+
+func TestV3RegistrationRejectsArgumentsWithoutCallingGRPC(t *testing.T) {
+	srv := &mockEngramServer{}
+	grpcAddr := startMockGRPC(t, srv)
+	_, mod, project := buildV3ContractDispatcher(t, grpcAddr)
+	project.ID = "raw-mux-project-must-not-be-forwarded"
+	project.Cwd = daemonV3Repository(t)
+	mod.cache.ForceCacheEntry(project, "raw-slug-must-not-reach-registration")
+
+	_, err := mod.HandleTool(context.Background(), project, "project_identity.register_v3", json.RawMessage(`{"project_key":"must-not-be-accepted"}`))
+	var moduleErr *module.ModuleError
+	if !errors.As(err, &moduleErr) || moduleErr.Code != "tool_input_invalid" {
+		t.Fatalf("registration input error=%v, want safe typed refusal", err)
+	}
+	if strings.Contains(err.Error(), project.ID) || strings.Contains(err.Error(), project.Cwd) || strings.Contains(err.Error(), "must-not-be-accepted") {
+		t.Fatalf("registration argument refusal leaked private input: %v", err)
+	}
+	srv.mu.Lock()
+	registerCalls := srv.registerCalls
+	srv.mu.Unlock()
+	if registerCalls != 0 {
+		t.Fatalf("registration RPC calls=%d, want 0", registerCalls)
+	}
+	if mod.cache.HasEntry(project.ID) {
+		t.Fatal("registration argument refusal retained a compatibility cache entry")
+	}
+}
+
+func TestV3NonOnboardingRefusalFailsClosedWithoutProxyTools(t *testing.T) {
+	srv := &mockEngramServer{initErr: typedV3Refusal(t, "PROJECT_SCOPE_MISMATCH")}
+	grpcAddr := startMockGRPC(t, srv)
+	dispatcher, mod, project := buildV3ContractDispatcher(t, grpcAddr)
+	project.ID = "raw-mux-project-must-not-be-forwarded"
+	project.Cwd = daemonV3Repository(t)
+	mod.cache.ForceCacheEntry(project, "raw-slug-must-not-survive-refusal")
+
+	response, err := dispatcher.HandleRequest(context.Background(), project, jsonrpcListReq(1))
+	if err != nil {
+		t.Fatalf("non-onboarding tools/list: %v", err)
+	}
+	assertToolsListServiceUnavailable(t, response)
+	if mod.cache.HasEntry(project.ID) {
+		t.Fatal("non-onboarding V3 refusal retained a compatibility cache entry")
+	}
+}
+
+func TestV2DoesNotExposeRegistrationOrFallBackToV2(t *testing.T) {
+	srv := &mockEngramServer{}
+	grpcAddr := startMockGRPC(t, srv)
+	_, mod, project := buildContractDispatcher(t, grpcAddr)
+
+	if tools := mod.Tools(); len(tools) != 0 {
+		t.Fatalf("V2 static tools=%v, want unchanged surface", tools)
+	}
+	_, err := mod.HandleTool(context.Background(), project, projectIdentityV3RegistrationTool, json.RawMessage(`{}`))
+	var moduleErr *module.ModuleError
+	if !errors.As(err, &moduleErr) || moduleErr.Code != "PROJECT_DESCRIPTOR_UNSUPPORTED" {
+		t.Fatalf("V2 registration error=%v, want V3-only refusal", err)
+	}
+	srv.mu.Lock()
+	registerCalls := srv.registerCalls
+	srv.mu.Unlock()
+	if registerCalls != 0 {
+		t.Fatalf("V2 registration RPC calls=%d, want 0", registerCalls)
+	}
+}
+
+func assertOnlyRegistrationTool(t *testing.T, response []byte) {
+	t.Helper()
+	var got struct {
+		Error  any `json:"error"`
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &got); err != nil {
+		t.Fatalf("unmarshal tools/list: %v", err)
+	}
+	if got.Error != nil || len(got.Result.Tools) != 1 || got.Result.Tools[0].Name != "project_identity.register_v3" {
+		t.Fatalf("onboarding tools/list=%s, want static registration tool only", response)
+	}
+}
+
+func assertRegistrationAndProxyTool(t *testing.T, response []byte, proxyName string) {
+	t.Helper()
+	var got struct {
+		Error  any `json:"error"`
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &got); err != nil {
+		t.Fatalf("unmarshal tools/list: %v", err)
+	}
+	if got.Error != nil || len(got.Result.Tools) != 2 || got.Result.Tools[0].Name != "project_identity.register_v3" || got.Result.Tools[1].Name != proxyName {
+		t.Fatalf("post-registration tools/list=%s, want static registration and proxy tool", response)
+	}
+}
+
+func assertRegistrationResolved(t *testing.T, response []byte) {
+	t.Helper()
+	if !strings.Contains(string(response), `"isError":false`) || !strings.Contains(string(response), `"PROJECT_RESOLVED"`) {
+		t.Fatalf("registration response=%s, want typed resolved outcome", response)
+	}
+}
+
 func TestProxyV3RejectsCanonicalProjectNotIssuedByResolution(t *testing.T) {
 	srv := &mockEngramServer{callResp: &pb.CallToolResponse{
 		ContentJson:         []byte(`[]`),
