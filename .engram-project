@@ -1,3 +1,6 @@
 {
-  "name": "engram"
+  "version": 3,
+  "project_id": "b42c9854-bf02-4d1b-867d-a2a096f9e4d0",
+  "name": "engram",
+  "scope": "repository"
 }
