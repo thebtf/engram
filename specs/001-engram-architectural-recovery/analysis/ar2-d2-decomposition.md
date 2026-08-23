@@ -102,6 +102,8 @@ All three retain an explicit V2 compatibility branch at the outer boundary and r
 - `ParseAnchorV3` rejects unknown/malformed fields; `DiscoverAnchorV3` receives an explicit repository or directory root and never searches upward; `NormalizeGitRemoteV3` returns a typed `normalized`, `omitted`, or `refused` disposition so local/file/malformed inputs are omitted while credential-bearing inputs are refused.
 - `BuildDescriptorV3` requires an explicit non-empty opaque `client_instance_id`, rejects a client `project_key` assertion, and never generates or persists either value. The seam does **not** resolve a canonical key, select an intent, establish a binding, mutate state, access a database/cache, or replace any V2 path.
 
+For T020/T017, the Go seam has these exact test-facing signatures: `ParseAnchorV3(raw []byte) (AnchorV3, error)`, `DiscoverAnchorV3(root, scope string) (AnchorV3, error)`, `NormalizeGitRemoteV3(raw string) (normalized string, disposition RemoteDisposition, err error)`, and `BuildDescriptorV3(anchor AnchorV3, remotes []string, legacy []LegacyIdentifierV3, clientInstanceID string) (DescriptorV3, error)`. JavaScript and TypeScript use equivalent JSON-object arguments/results and typed/throwing validation refusals. This is a test seam, not a public transport schema.
+
 ### Integration points
 
 - T017 implements the Go seam and repository/directory discovery; its discovery input is an explicit selected root, not a current-directory or parent-anchor inference.
