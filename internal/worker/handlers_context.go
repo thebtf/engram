@@ -2,8 +2,11 @@
 package worker
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,10 +16,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/injection"
+	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/pkg/models"
@@ -27,6 +32,195 @@ import (
 
 type sessionStartContextProvider interface {
 	GetSessionStartContext(context.Context, *pb.GetSessionStartContextRequest) (*pb.GetSessionStartContextResponse, error)
+}
+
+// projectIdentityV3Resolver is the worker's narrow dependency on the central
+// V3 authority. HTTP only translates trusted request context and descriptor
+// inputs; it neither selects nor derives a project key.
+type projectIdentityV3Resolver interface {
+	ResolveProjectV3(context.Context, projectidentity.ResolveProjectRequestV3) (projectidentity.ResolveProjectResultV3, error)
+}
+
+var errHTTPProjectIdentityResolverUnavailable = errors.New("HTTP project identity resolver unavailable")
+
+type httpProjectIdentityAuthorizationVerifierV3 struct{}
+
+func (httpProjectIdentityAuthorizationVerifierV3) VerifyAuthorizationV3(ctx context.Context, request projectidentity.AuthorizationVerificationRequestV3) (projectidentity.AuthorizationVerificationV3, error) {
+	authorization, err := httpProjectIdentityAuthorizationReferenceV3(ctx)
+	if err != nil || request.Authorization() != authorization {
+		return projectidentity.AuthorizationVerificationV3{}, nil
+	}
+	return projectidentity.AuthorizationVerificationV3{Authorized: true}, nil
+}
+
+func newHTTPProjectIdentityResolverV3(store *gorm.Store) projectIdentityV3Resolver {
+	if store == nil {
+		return nil
+	}
+	return projectidentity.NewResolverV3(store, httpProjectIdentityAuthorizationVerifierV3{})
+}
+
+func httpProjectIdentityAuthorizationReferenceV3(ctx context.Context) (projectidentity.AuthorizationReferenceV3, error) {
+	identity, ok := auth.IdentityFrom(ctx)
+	if !ok || identity.Role == "" || identity.Source == "" {
+		return "", errors.New("authenticated HTTP identity is required")
+	}
+	digest := sha256.Sum256([]byte(strings.Join([]string{
+		string(identity.Source), string(identity.Role), identity.KeycardID, identity.Principal, string(identity.PrincipalKind),
+	}, "\x00")))
+	return projectidentity.NewAuthorizationReferenceV3("http-auth-" + hex.EncodeToString(digest[:]))
+}
+
+type projectIdentityV3HTTPError struct {
+	outcome projectidentity.ResolutionOutcomeV3
+}
+
+func (err *projectIdentityV3HTTPError) Error() string { return string(err.outcome) }
+
+type projectDescriptorV3HTTPWire struct {
+	Version              int                                  `json:"version"`
+	AnchorProjectID      string                               `json:"anchor_project_id"`
+	Name                 string                               `json:"name"`
+	Scope                string                               `json:"scope"`
+	NormalizedGitRemotes []string                             `json:"normalized_git_remotes"`
+	LegacyIdentifiers    []projectidentity.LegacyIdentifierV3 `json:"legacy_identifiers"`
+	ClientInstanceID     string                               `json:"client_instance_id"`
+}
+
+func parseProjectDescriptorV3HTTP(raw json.RawMessage) (projectidentity.AnchorV3, projectidentity.DescriptorV3, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return projectidentity.AnchorV3{}, projectidentity.DescriptorV3{}, &projectIdentityV3HTTPError{outcome: projectidentity.ProjectDescriptorInvalidOutcomeV3}
+	}
+	if _, forbidden := fields["project_key"]; forbidden {
+		return projectidentity.AnchorV3{}, projectidentity.DescriptorV3{}, &projectIdentityV3HTTPError{outcome: projectidentity.ProjectKeyClientAssertionForbiddenOutcomeV3}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var wire projectDescriptorV3HTTPWire
+	if err := decoder.Decode(&wire); err != nil {
+		return projectidentity.AnchorV3{}, projectidentity.DescriptorV3{}, &projectIdentityV3HTTPError{outcome: projectidentity.ProjectDescriptorInvalidOutcomeV3}
+	}
+	anchor := projectidentity.AnchorV3{Version: 3, ProjectID: wire.AnchorProjectID, Name: wire.Name, Scope: wire.Scope}
+	return anchor, projectidentity.DescriptorV3{
+		Version:              wire.Version,
+		AnchorProjectID:      wire.AnchorProjectID,
+		Name:                 wire.Name,
+		Scope:                wire.Scope,
+		NormalizedGitRemotes: wire.NormalizedGitRemotes,
+		LegacyIdentifiers:    wire.LegacyIdentifiers,
+		ClientInstanceID:     wire.ClientInstanceID,
+	}, nil
+}
+
+func httpProjectIdentityCorrelationV3(ctx context.Context) projectidentity.CorrelationV3 {
+	correlation, err := projectidentity.NewCorrelationV3("http-context-" + GetRequestID(ctx))
+	if err == nil {
+		return correlation
+	}
+	// RequestID middleware normally supplies the correlation. Direct handler
+	// callers still receive a server-generated opaque correlation.
+	correlation, _ = projectidentity.NewCorrelationV3("http-context-" + uuid.NewString())
+	return correlation
+}
+
+func (s *Service) resolveContextProjectV3(ctx context.Context, raw json.RawMessage) (projectidentity.ResolutionResultV3, error) {
+	anchor, descriptor, err := parseProjectDescriptorV3HTTP(raw)
+	if err != nil {
+		return projectidentity.ResolutionResultV3{}, err
+	}
+	authorization, err := httpProjectIdentityAuthorizationReferenceV3(ctx)
+	if err != nil {
+		return projectidentity.ResolutionResultV3{}, &projectIdentityV3HTTPError{outcome: projectidentity.ProjectDescriptorInvalidOutcomeV3}
+	}
+	s.initMu.RLock()
+	resolver := s.projectIdentityResolverV3
+	s.initMu.RUnlock()
+	if resolver == nil {
+		return projectidentity.ResolutionResultV3{}, errHTTPProjectIdentityResolverUnavailable
+	}
+	result, err := resolver.ResolveProjectV3(ctx, projectidentity.ResolveProjectRequestV3{
+		Intent:                       projectidentity.ResolveExistingIntentV3,
+		Anchor:                       anchor,
+		Descriptor:                   descriptor,
+		Correlation:                  httpProjectIdentityCorrelationV3(ctx),
+		ResolveExistingAuthorization: authorization,
+	})
+	return result.Resolution(), err
+}
+
+type projectIdentityV3HTTPResolution struct {
+	Outcome           string `json:"outcome"`
+	Correlation       string `json:"correlation"`
+	ProjectKey        string `json:"project_key"`
+	ResolvedScope     string `json:"resolved_scope"`
+	RedirectReference string `json:"redirect_reference,omitempty"`
+}
+
+func withContextProjectResolutionV3(response map[string]any, resolution *projectidentity.ResolutionResultV3) map[string]any {
+	if resolution == nil {
+		return response
+	}
+	response["project_resolution_v3"] = projectIdentityV3HTTPResolution{
+		Outcome: string(resolution.Outcome()),
+
+		Correlation:       string(resolution.Correlation()),
+		ProjectKey:        string(resolution.CanonicalProjectKey()),
+		ResolvedScope:     string(resolution.ResolvedScope()),
+		RedirectReference: string(resolution.RedirectReference()),
+	}
+	return response
+}
+
+func writeContextInjectJSON(w http.ResponseWriter, resolution *projectidentity.ResolutionResultV3, response map[string]any) {
+	writeJSON(w, withContextProjectResolutionV3(response, resolution))
+}
+
+func writeProjectIdentityV3HTTPError(w http.ResponseWriter, err error) {
+	statusCode := http.StatusServiceUnavailable
+	code := "PROJECT_RESOLUTION_UNAVAILABLE"
+	message := "project resolution is temporarily unavailable"
+	action := "retry_project_resolution"
+	var resolutionErr projectidentity.ResolutionErrorV3
+	var requestErr *projectIdentityV3HTTPError
+	if errors.As(err, &resolutionErr) {
+		switch resolutionErr.Outcome() {
+		case projectidentity.ProjectDescriptorInvalidOutcomeV3:
+			statusCode, code, message, action = http.StatusBadRequest, string(resolutionErr.Outcome()), "project descriptor is invalid", "send_valid_v3_descriptor"
+		case projectidentity.ProjectKeyClientAssertionForbiddenOutcomeV3:
+			statusCode, code, message, action = http.StatusBadRequest, string(resolutionErr.Outcome()), "client project key is forbidden", "remove_project_key"
+		case projectidentity.ProjectDescriptorUnsupportedOutcomeV3:
+			statusCode, code, message, action = http.StatusBadRequest, string(resolutionErr.Outcome()), "project descriptor version is unsupported", "upgrade_to_v3"
+		case projectidentity.ProjectAnchorInvalidOutcomeV3:
+			statusCode, code, message, action = http.StatusBadRequest, string(resolutionErr.Outcome()), "project anchor is invalid", "repair_project_anchor"
+		case projectidentity.ProjectScopeMismatchOutcomeV3:
+			statusCode, code, message, action = http.StatusConflict, string(resolutionErr.Outcome()), "project scope does not match anchor", "select_correct_project_scope"
+		case projectidentity.ProjectOnboardingRequiredOutcomeV3:
+			statusCode, code, message, action = http.StatusConflict, string(resolutionErr.Outcome()), "project onboarding is required", "complete_project_onboarding"
+		case projectidentity.ProjectNestedRepositoryUnresolvedOutcomeV3:
+			statusCode, code, message, action = http.StatusConflict, string(resolutionErr.Outcome()), "nested repository requires its own anchor", "onboard_nested_repository"
+		case projectidentity.ProjectAnchorDecisionRequiredOutcomeV3:
+			statusCode, code, message, action = http.StatusConflict, string(resolutionErr.Outcome()), "project anchor decision is required", "resolve_project_anchor_decision"
+		case projectidentity.ProjectIdentityAmbiguousOutcomeV3:
+			statusCode, code, message, action = http.StatusConflict, string(resolutionErr.Outcome()), "project identity is ambiguous", "resolve_project_identity"
+		}
+	} else if errors.As(err, &requestErr) {
+		writeProjectIdentityV3HTTPError(w, mustProjectIdentityV3ResolutionError(requestErr.outcome))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"code":           code,
+		"message":        message,
+		"upgrade_action": action,
+	})
+}
+
+func mustProjectIdentityV3ResolutionError(outcome projectidentity.ResolutionOutcomeV3) error {
+	correlation, _ := projectidentity.NewCorrelationV3("http-context-" + uuid.NewString())
+	resolutionErr, _ := projectidentity.NewResolutionErrorV3(outcome, correlation)
+	return resolutionErr
 }
 
 // behavioralRulesToObservations converts behavioral rules into the observation shape
@@ -770,20 +964,22 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 	var project, agentID, cwd, legacyProject, sessionID string
 	var filesBeingEdited []string
 	var projectIdentity *gorm.ProjectIdentityV2
+	var projectDescriptor json.RawMessage
 	var identityOnly bool
 
 	if r.Method == http.MethodPost {
 		var req struct {
-			Project          string                  `json:"project"`
-			AgentID          string                  `json:"agent_id"`
-			Cwd              string                  `json:"cwd"`
-			LegacyProject    string                  `json:"legacy_project"`
-			GitRemote        string                  `json:"git_remote"`
-			RelativePath     string                  `json:"relative_path"`
-			SessionID        string                  `json:"session_id"`
-			FilesBeingEdited []string                `json:"files_being_edited"`
-			ProjectIdentity  *gorm.ProjectIdentityV2 `json:"project_identity"`
-			IdentityOnly     bool                    `json:"identity_only"`
+			Project           string                  `json:"project"`
+			AgentID           string                  `json:"agent_id"`
+			Cwd               string                  `json:"cwd"`
+			LegacyProject     string                  `json:"legacy_project"`
+			GitRemote         string                  `json:"git_remote"`
+			RelativePath      string                  `json:"relative_path"`
+			SessionID         string                  `json:"session_id"`
+			FilesBeingEdited  []string                `json:"files_being_edited"`
+			ProjectIdentity   *gorm.ProjectIdentityV2 `json:"project_identity"`
+			ProjectDescriptor json.RawMessage         `json:"project_descriptor"`
+			IdentityOnly      bool                    `json:"identity_only"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -796,9 +992,10 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		sessionID = req.SessionID
 		filesBeingEdited = req.FilesBeingEdited
 		projectIdentity = req.ProjectIdentity
+		projectDescriptor = req.ProjectDescriptor
 		identityOnly = req.IdentityOnly
 	} else {
-		// GET (deprecated — use POST)
+		// GET is the deprecated V2 compatibility route. V3 descriptors require POST.
 		project = r.URL.Query().Get("project")
 		agentID = r.URL.Query().Get("agent_id")
 		cwd = r.URL.Query().Get("cwd")
@@ -807,61 +1004,85 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		filesBeingEdited = r.URL.Query()["files_being_edited"]
 	}
 
-	// Fall back to agent_id as session proxy when no explicit session_id provided.
-	if sessionID == "" {
-		sessionID = agentID
-	}
-
-	// agent_id acts as project scope for OpenClaw agents without filesystem context.
-	if project == "" && agentID != "" {
-		project = agentID
-	}
-	if project == "" {
-		http.Error(w, "project required", http.StatusBadRequest)
-		return
-	}
-	// Validate every raw selector and the complete v2 metadata before identity
-	// registration can create a project row or append an alias.
-	if err := ValidateProjectName(project); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if legacyProject != "" {
-		if err := gorm.ValidateProjectAliasV2(legacyProject); err != nil {
-			writeProjectIdentityHTTPError(w, err)
+	var resolutionV3 *projectidentity.ResolutionResultV3
+	if projectDescriptor != nil {
+		resolved, err := s.resolveContextProjectV3(r.Context(), projectDescriptor)
+		if err != nil {
+			writeProjectIdentityV3HTTPError(w, err)
 			return
 		}
-	}
-	if projectIdentity != nil {
-		if err := gorm.ValidateProjectIdentityV2(*projectIdentity); err != nil {
-			writeProjectIdentityHTTPError(w, err)
+		if !resolved.Outcome().IsSuccess() {
+			writeProjectIdentityV3HTTPError(w, mustProjectIdentityV3ResolutionError(resolved.Outcome()))
 			return
 		}
-	}
+		// V3 resolution is authoritative: raw project and agent selectors are not
+		// scope inputs and cannot become a fallback after the descriptor is present.
+		project = string(resolved.CanonicalProjectKey())
+		agentID = ""
+		legacyProject = ""
+		projectIdentity = nil
+		resolutionV3 = &resolved
+	} else {
+		// Fall back to agent_id as session proxy when no explicit session_id provided.
+		if sessionID == "" {
+			sessionID = agentID
+		}
 
-	// Resolve/register synchronously before any retrieval or tenant mutation.
-	// Identity metadata selects a namespace; bearer/principal authorization is
-	// still enforced independently by the HTTP middleware.
-	if s.store == nil {
-		writeProjectIdentityHTTPError(w, &gorm.ProjectIdentityError{Code: gorm.ProjectIdentityUnavailable, UpgradeAction: gorm.UpgradeActionRetryProjectRegistration, Err: fmt.Errorf("project identity database is not ready")})
-		return
-	}
-	resolution, resolveErr := gorm.RegisterAndResolve(r.Context(), s.store.DB, project, projectIdentity)
-	if resolveErr != nil {
-		writeProjectIdentityHTTPError(w, resolveErr)
-		return
-	}
-	project = resolution.CanonicalProjectID
-	// Preserve the old HTTP contract: project is the canonical outer selector
-	// and legacy_project is only an alias. Never reverse them on a fresh DB.
-	if projectIdentity == nil && legacyProject != "" && legacyProject != project {
-		if err := gorm.AttachLegacyAlias(r.Context(), s.store.DB, project, legacyProject); err != nil {
-			writeProjectIdentityHTTPError(w, err)
+		// agent_id acts as project scope for OpenClaw agents without filesystem context.
+		if project == "" && agentID != "" {
+			project = agentID
+		}
+		if project == "" {
+			http.Error(w, "project required", http.StatusBadRequest)
 			return
+		}
+		// Validate every raw selector and the complete v2 metadata before identity
+		// registration can create a project row or append an alias.
+		if err := ValidateProjectName(project); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if legacyProject != "" {
+			if err := gorm.ValidateProjectAliasV2(legacyProject); err != nil {
+				writeProjectIdentityHTTPError(w, err)
+				return
+			}
+		}
+		if projectIdentity != nil {
+			if err := gorm.ValidateProjectIdentityV2(*projectIdentity); err != nil {
+				writeProjectIdentityHTTPError(w, err)
+				return
+			}
+		}
+
+		// Resolve/register synchronously before any retrieval or tenant mutation.
+		// Identity metadata selects a namespace; bearer/principal authorization is
+		// still enforced independently by the HTTP middleware.
+		if s.store == nil {
+			writeProjectIdentityHTTPError(w, &gorm.ProjectIdentityError{Code: gorm.ProjectIdentityUnavailable, UpgradeAction: gorm.UpgradeActionRetryProjectRegistration, Err: fmt.Errorf("project identity database is not ready")})
+			return
+		}
+		resolution, resolveErr := gorm.RegisterAndResolve(r.Context(), s.store.DB, project, projectIdentity)
+		if resolveErr != nil {
+			writeProjectIdentityHTTPError(w, resolveErr)
+			return
+		}
+		project = resolution.CanonicalProjectID
+		// Preserve the old HTTP contract: project is the canonical outer selector
+		// and legacy_project is only an alias. Never reverse them on a fresh DB.
+		if projectIdentity == nil && legacyProject != "" && legacyProject != project {
+			if err := gorm.AttachLegacyAlias(r.Context(), s.store.DB, project, legacyProject); err != nil {
+				writeProjectIdentityHTTPError(w, err)
+				return
+			}
 		}
 	}
 
 	if identityOnly {
+		if resolutionV3 != nil {
+			writeContextInjectJSON(w, resolutionV3, map[string]any{})
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"canonical_project": project})
 		return
@@ -1211,7 +1432,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 				Float64("exploration_ratio", explorationRatio).
 				Msg("vnext Thompson Sampling injection")
 
-			writeJSON(w, map[string]any{
+			writeContextInjectJSON(w, resolutionV3, map[string]any{
 				"strategy":           "thompson_sampling",
 				"project":            project,
 				"observations":       vnextObs,
@@ -1286,7 +1507,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 		// Recalculate token estimate accounting for condensed format savings.
 		compactTokenEstimate := estimateTokensWithLimit(clusteredObservations, fullCount) +
 			estimateTokens(guidanceObservations)
-		writeJSON(w, map[string]any{
+		writeContextInjectJSON(w, resolutionV3, map[string]any{
 			"strategy":           selectedStrategy,
 			"project":            project,
 			"observations":       compactObservationsWithLimit(clusteredObservations, fullCount),
@@ -1302,7 +1523,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			"budget_trimmed":     budgetTrimmed,
 		})
 	} else {
-		writeJSON(w, map[string]any{
+		writeContextInjectJSON(w, resolutionV3, map[string]any{
 			"project":            project,
 			"strategy":           selectedStrategy,
 			"observations":       clusteredObservations,
