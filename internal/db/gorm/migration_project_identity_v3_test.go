@@ -13,7 +13,7 @@ import (
 
 func TestProjectIdentityV3Migration162(t *testing.T) {
 	store, cleanup := openIntegrationTestDB(t)
-	defer cleanup()
+	t.Cleanup(cleanup)
 	db := store.GetDB()
 
 	// NewStore ran the migration chain. Running this migration again proves its
@@ -103,10 +103,15 @@ func TestProjectIdentityV3Migration162(t *testing.T) {
 	targetKey := uuid.NewString()
 	anchorID := uuid.NewString()
 	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM project_identifiers WHERE project_key IN (?, ?)`, sourceKey, targetKey).Error
-		_ = db.Exec(`DELETE FROM project_merge_audit_sources WHERE source_project_key IN (?, ?)`, sourceKey, targetKey).Error
-		_ = db.Exec(`DELETE FROM project_merge_audits WHERE target_project_key = ?`, targetKey).Error
-		_ = db.Exec(`DELETE FROM projects WHERE id IN (?, ?, ?, ?, ?)`, v2ID, sourceID, targetID, duplicateKeyID, duplicateAnchorID).Error
+		var remainingProjects int64
+		require.NoError(t, db.Model(&Project{}).Where("id IN ?", []string{v2ID, sourceID, targetID, duplicateKeyID, duplicateAnchorID}).Count(&remainingProjects).Error)
+		require.Zero(t, remainingProjects, "migration fixture projects must be deleted")
+	})
+	t.Cleanup(func() {
+		require.NoError(t, db.Exec(`DELETE FROM project_merge_audit_sources WHERE source_project_key IN (?, ?)`, sourceKey, targetKey).Error)
+		require.NoError(t, db.Exec(`DELETE FROM project_merge_audits WHERE target_project_key = ?`, targetKey).Error)
+		require.NoError(t, db.Exec(`DELETE FROM project_identifiers WHERE project_key IN (?, ?)`, sourceKey, targetKey).Error)
+		require.NoError(t, db.Exec(`DELETE FROM projects WHERE id IN (?, ?, ?, ?, ?)`, v2ID, sourceID, targetID, duplicateKeyID, duplicateAnchorID).Error)
 	})
 
 	// Existing V2 rows keep their original identity and have no V3 key assigned.

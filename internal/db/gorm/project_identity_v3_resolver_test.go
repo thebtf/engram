@@ -202,7 +202,15 @@ func TestProjectIdentityV3ResolverReadFilterRejectsUnverifiedBeforeLookup(t *tes
 			anchorLookupCalls++
 		}
 	}))
-	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+	t.Cleanup(func() { require.NoError(t, db.Callback().Query().Remove(callbackName)) })
+	t.Cleanup(func() {
+		var remainingAttempts int64
+		require.NoError(t, db.Model(&ProjectResolutionAttempt{}).Where("correlation = ?", correlationValue).Count(&remainingAttempts).Error)
+		require.Zero(t, remainingAttempts, "read-filter fixture attempt must be deleted")
+	})
+	t.Cleanup(func() {
+		require.NoError(t, db.Exec("DELETE FROM project_resolution_attempts WHERE correlation = ?", correlationValue).Error)
+	})
 
 	request := resolverStoreRequest(t, projectidentity.ReadFilterIntentV3, anchorProjectID, correlationValue)
 	authorization, err := projectidentity.NewAuthorizationReferenceV3("read-filter-authorization-" + uuid.NewString())
@@ -218,7 +226,6 @@ func TestProjectIdentityV3ResolverReadFilterRejectsUnverifiedBeforeLookup(t *tes
 	require.Empty(t, result.Resolution().CanonicalProjectKey())
 	require.Equal(t, 1, verifier.calls, "read_filter must ask the server verifier")
 	require.Zero(t, anchorLookupCalls, "unverified read_filter must not look up a binding")
-	require.NoError(t, db.Callback().Query().Remove(callbackName))
 
 	var bindingCount, attemptCount int64
 	require.NoError(t, db.Model(&Project{}).Where("anchor_project_id = ?", anchorProjectID).Count(&bindingCount).Error)
