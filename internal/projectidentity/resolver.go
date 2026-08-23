@@ -115,6 +115,11 @@ func (authorization VerifiedAuthorizationV3) PermitsRegistration() bool {
 	return authorization.valid && authorization.intent == RegisterAnchorIntentV3 && authorization.projectKey == ""
 }
 
+// PermitsReadFilter reports the verifier-created capability for a read-only lookup.
+func (authorization VerifiedAuthorizationV3) PermitsReadFilter() bool {
+	return authorization.valid && authorization.intent == ReadFilterIntentV3 && authorization.projectKey == ""
+}
+
 func (authorization VerifiedAuthorizationV3) AdministrativeTargetProjectKey() (ProjectKeyV3, bool) {
 	if !authorization.valid || authorization.intent != AdminTargetIntentV3 || authorization.projectKey == "" {
 		return "", false
@@ -146,13 +151,15 @@ func (command AnchorRegistrationV3) IsCausallyBoundFirstMutation() bool {
 // ResolutionAttemptV3 contains only the redacted outcome/provenance required
 // by the V3 contract. It intentionally has no descriptor body or credentials.
 type ResolutionAttemptV3 struct {
-	correlation       CorrelationV3
-	intent            ResolutionIntentV3
-	outcome           ResolutionOutcomeV3
-	anchorProjectID   string
-	descriptorVersion int
-	provenance        string
-	redirectReference RedirectReferenceV3
+	correlation          CorrelationV3
+	intent               ResolutionIntentV3
+	outcome              ResolutionOutcomeV3
+	anchorProjectID      string
+	descriptorVersion    int
+	provenance           string
+	redirectReference    RedirectReferenceV3
+	administrativeTarget AdministrativeTargetReferenceV3
+	administrativeAudit  AdminAuditV3
 }
 
 func (attempt ResolutionAttemptV3) Correlation() CorrelationV3   { return attempt.correlation }
@@ -165,6 +172,16 @@ func (attempt ResolutionAttemptV3) RedirectReference() RedirectReferenceV3 {
 	return attempt.redirectReference
 }
 
+// AdministrativeTargetReference returns the redacted opaque target used only for an auditable administrative request.
+func (attempt ResolutionAttemptV3) AdministrativeTargetReference() AdministrativeTargetReferenceV3 {
+	return attempt.administrativeTarget
+}
+
+// AdministrativeAudit returns the redacted actor, purpose, decision, and retention boundary for an administrative request.
+func (attempt ResolutionAttemptV3) AdministrativeAudit() AdminAuditV3 {
+	return attempt.administrativeAudit
+}
+
 func (attempt ResolutionAttemptV3) Valid() bool {
 	if _, err := NewCorrelationV3(string(attempt.correlation)); err != nil || !attempt.intent.Valid() || !attempt.outcome.Valid() || attempt.descriptorVersion < 0 || attempt.provenance != "anchor_v3" {
 		return false
@@ -173,17 +190,31 @@ func (attempt ResolutionAttemptV3) Valid() bool {
 		return false
 	}
 	if attempt.outcome == ProjectRedirectedOutcomeV3 {
-		return validOpaqueReferenceV3(string(attempt.redirectReference))
+		if !validOpaqueReferenceV3(string(attempt.redirectReference)) {
+			return false
+		}
+	} else if attempt.redirectReference != "" {
+		return false
 	}
-	return attempt.redirectReference == ""
+	if attempt.intent != AdminTargetIntentV3 {
+		return attempt.administrativeTarget == "" && attempt.administrativeAudit == (AdminAuditV3{})
+	}
+	if attempt.administrativeTarget == "" && attempt.administrativeAudit == (AdminAuditV3{}) {
+		return true
+	}
+	return validOpaqueReferenceV3(string(attempt.administrativeTarget)) && attempt.administrativeAudit.valid()
 }
 
-// ProjectResolutionStoreV3 is the complete V3 persistence boundary. The
-// lookup methods are read-only. RegisterAnchorBindingV3 is the sole mutation
-// port and accepts only the resolver-created first-mutation command.
+// RegistrationAttemptBuilderV3 creates the durable result audit inside the
+// registration transaction after the final binding state is known.
+type RegistrationAttemptBuilderV3 func(AnchorBindingV3) (ResolutionAttemptV3, error)
+
+// ProjectResolutionStoreV3 is the complete V3 persistence boundary. Lookup
+// methods are read-only. Registration and its durable attempt share one
+// transaction so a failed audit cannot commit a binding.
 type ProjectResolutionStoreV3 interface {
 	LookupAnchorBindingV3(context.Context, string) (AnchorBindingV3, error)
-	RegisterAnchorBindingV3(context.Context, AnchorRegistrationV3) (AnchorBindingV3, error)
+	RegisterAnchorBindingAndRecordAttemptV3(context.Context, AnchorRegistrationV3, RegistrationAttemptBuilderV3) error
 	LookupAdministrativeTargetV3(context.Context, VerifiedAuthorizationV3) (AnchorBindingV3, error)
 	RecordResolutionAttemptV3(context.Context, ResolutionAttemptV3) error
 }
@@ -239,8 +270,9 @@ func (resolver ResolverV3) ResolveProjectV3(ctx context.Context, request Resolve
 		return ResolveProjectResultV3{}, err
 	}
 	request.Correlation = correlation
+	attemptRecorded := false
 	defer func() {
-		if !result.Resolution().Outcome().Valid() {
+		if attemptRecorded || !result.Resolution().Outcome().Valid() {
 			return
 		}
 		if err := resolver.recordResolutionAttemptV3(ctx, request, result.Resolution()); err != nil {
@@ -296,13 +328,23 @@ func (resolver ResolverV3) ResolveProjectV3(ctx context.Context, request Resolve
 				valid:       true,
 			},
 		}
-		binding, err := resolver.store.RegisterAnchorBindingV3(ctx, command)
+		var registrationResult ResolveProjectResultV3
+		var registrationResultErr error
+		err = resolver.store.RegisterAnchorBindingAndRecordAttemptV3(ctx, command, func(binding AnchorBindingV3) (ResolutionAttemptV3, error) {
+			registrationResult, registrationResultErr = bindingResultV3(request, binding)
+			return newResolutionAttemptV3(request, registrationResult.Resolution())
+		})
 		if err != nil {
 			return ResolveProjectResultV3{}, errResolverStorageV3
 		}
-		return bindingResultV3(request, binding)
+		attemptRecorded = true
+		return registrationResult, registrationResultErr
 	case ReadFilterIntentV3:
 		if request.RegistrationAuthorization != "" || request.AdminTarget != nil || !validReadFilterV3(request.ReadFilter, request.Correlation) {
+			return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
+		}
+		verification, ok := resolver.verifiedAuthorizationV3(ctx, request, request.ReadFilter.Authorization())
+		if !ok || !verification.PermitsReadFilter() {
 			return refusalV3(request, ProjectDescriptorInvalidOutcomeV3)
 		}
 		return resolver.resolveAnchorV3(ctx, request)
@@ -346,7 +388,7 @@ func (resolver ResolverV3) verifiedAuthorizationV3(ctx context.Context, request 
 	}
 	capability := VerifiedAuthorizationV3{intent: request.Intent, correlation: request.Correlation, valid: true}
 	switch request.Intent {
-	case RegisterAnchorIntentV3:
+	case RegisterAnchorIntentV3, ReadFilterIntentV3:
 		if verification.AdministrativeTargetProjectKey != "" {
 			return VerifiedAuthorizationV3{}, false
 		}
@@ -366,6 +408,14 @@ func (resolver ResolverV3) recordResolutionAttemptV3(ctx context.Context, reques
 	if resolver.store == nil {
 		return errResolverStorageV3
 	}
+	attempt, err := newResolutionAttemptV3(request, resolution)
+	if err != nil {
+		return errResolverStorageV3
+	}
+	return resolver.store.RecordResolutionAttemptV3(ctx, attempt)
+}
+
+func newResolutionAttemptV3(request ResolveProjectRequestV3, resolution ResolutionResultV3) (ResolutionAttemptV3, error) {
 	anchorProjectID := ""
 	if validUUID(request.Anchor.ProjectID) {
 		anchorProjectID = request.Anchor.ProjectID
@@ -379,10 +429,14 @@ func (resolver ResolverV3) recordResolutionAttemptV3(ctx context.Context, reques
 		provenance:        "anchor_v3",
 		redirectReference: resolution.RedirectReference(),
 	}
-	if !attempt.Valid() {
-		return errResolverStorageV3
+	if request.Intent == AdminTargetIntentV3 && request.AdminTarget != nil {
+		attempt.administrativeTarget = request.AdminTarget.Target()
+		attempt.administrativeAudit = request.AdminTarget.audit
 	}
-	return resolver.store.RecordResolutionAttemptV3(ctx, attempt)
+	if !attempt.Valid() {
+		return ResolutionAttemptV3{}, errResolverStorageV3
+	}
+	return attempt, nil
 }
 
 func (resolver ResolverV3) resolveAnchorV3(ctx context.Context, request ResolveProjectRequestV3) (ResolveProjectResultV3, error) {

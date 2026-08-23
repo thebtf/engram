@@ -18,6 +18,7 @@ type resolverStoreV3Fake struct {
 	registration       AnchorRegistrationV3
 	adminAuthorization VerifiedAuthorizationV3
 	attempts           []ResolutionAttemptV3
+	recordAttemptErr   error
 }
 
 func (store *resolverStoreV3Fake) LookupAnchorBindingV3(_ context.Context, _ string) (AnchorBindingV3, error) {
@@ -25,9 +26,10 @@ func (store *resolverStoreV3Fake) LookupAnchorBindingV3(_ context.Context, _ str
 	return store.anchor, nil
 }
 
-func (store *resolverStoreV3Fake) RegisterAnchorBindingV3(_ context.Context, registration AnchorRegistrationV3) (AnchorBindingV3, error) {
+func (store *resolverStoreV3Fake) RegisterAnchorBindingAndRecordAttemptV3(_ context.Context, registration AnchorRegistrationV3, buildAttempt RegistrationAttemptBuilderV3) error {
 	store.registerCalls++
 	store.registration = registration
+	previousAnchor, previousCreates := store.anchor, store.creates
 	if store.anchor.State == AnchorBindingMissingV3 {
 		store.creates++
 		store.anchor = AnchorBindingV3{
@@ -36,7 +38,14 @@ func (store *resolverStoreV3Fake) RegisterAnchorBindingV3(_ context.Context, reg
 			Scope:      string(registration.Scope()),
 		}
 	}
-	return store.anchor, nil
+	attempt, err := buildAttempt(store.anchor)
+	if err == nil {
+		err = store.RecordResolutionAttemptV3(context.Background(), attempt)
+	}
+	if err != nil {
+		store.anchor, store.creates = previousAnchor, previousCreates
+	}
+	return err
 }
 
 func (store *resolverStoreV3Fake) LookupAdministrativeTargetV3(_ context.Context, authorization VerifiedAuthorizationV3) (AnchorBindingV3, error) {
@@ -46,6 +55,9 @@ func (store *resolverStoreV3Fake) LookupAdministrativeTargetV3(_ context.Context
 }
 
 func (store *resolverStoreV3Fake) RecordResolutionAttemptV3(_ context.Context, attempt ResolutionAttemptV3) error {
+	if store.recordAttemptErr != nil {
+		return store.recordAttemptErr
+	}
 	store.attempts = append(store.attempts, attempt)
 	return nil
 }
@@ -188,6 +200,23 @@ func TestResolveProjectV3RegistrationIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestResolveProjectV3RegistrationAuditFailureDoesNotCommitBinding(t *testing.T) {
+	store := &resolverStoreV3Fake{
+		anchor:           AnchorBindingV3{State: AnchorBindingMissingV3},
+		recordAttemptErr: errors.New("forced resolution attempt failure"),
+	}
+	request := resolverRequestV3(RegisterAnchorIntentV3)
+	request.RegistrationAuthorization = resolverAuthorizationV3(t)
+
+	result, err := resolverV3(t, store).ResolveProjectV3(context.Background(), request)
+	if !errors.Is(err, errResolverStorageV3) || result.Resolution().CanonicalProjectKey() != "" {
+		t.Fatalf("registration audit failure result = %#v, %v", result, err)
+	}
+	if store.creates != 0 || store.anchor.State != AnchorBindingMissingV3 || len(store.attempts) != 0 {
+		t.Fatalf("failed audit committed binding or attempt: %#v", store)
+	}
+}
+
 func TestResolveProjectV3UnboundAndCollisionRefuseWithoutMutation(t *testing.T) {
 	for _, test := range []struct {
 		name    string
@@ -282,6 +311,39 @@ func TestResolveProjectV3OpaqueAuthorizationCannotAuthorize(t *testing.T) {
 		assertRefusalV3(t, result, err, ProjectDescriptorInvalidOutcomeV3)
 		if store.registerCalls != 0 || store.creates != 0 {
 			t.Fatalf("unverified authorization created a binding: %#v", store)
+		}
+		assertResolutionAttemptV3(t, store, result.Resolution())
+	})
+	t.Run("nil verifier read filter", func(t *testing.T) {
+		store := &resolverStoreV3Fake{anchor: resolverActiveBindingV3()}
+		request := resolverRequestV3(ReadFilterIntentV3)
+		requirement, err := NewReadFilterRequirementV3(resolverAuthorizationV3(t), request.Correlation)
+		if err != nil {
+			t.Fatalf("new read filter requirement: %v", err)
+		}
+		request.ReadFilter = &requirement
+
+		result, err := NewResolverV3(store, nil).ResolveProjectV3(context.Background(), request)
+		assertRefusalV3(t, result, err, ProjectDescriptorInvalidOutcomeV3)
+		if store.lookupCalls != 0 || store.registerCalls != 0 || store.adminCalls != 0 {
+			t.Fatalf("opaque read filter reached persistence: %#v", store)
+		}
+		assertResolutionAttemptV3(t, store, result.Resolution())
+	})
+	t.Run("unverified server read filter", func(t *testing.T) {
+		store := &resolverStoreV3Fake{anchor: resolverActiveBindingV3()}
+		verifier := &resolverVerifierV3Fake{}
+		request := resolverRequestV3(ReadFilterIntentV3)
+		requirement, err := NewReadFilterRequirementV3(resolverAuthorizationV3(t), request.Correlation)
+		if err != nil {
+			t.Fatalf("new read filter requirement: %v", err)
+		}
+		request.ReadFilter = &requirement
+
+		result, err := NewResolverV3(store, verifier).ResolveProjectV3(context.Background(), request)
+		assertRefusalV3(t, result, err, ProjectDescriptorInvalidOutcomeV3)
+		if verifier.calls != 1 || store.lookupCalls != 0 || store.registerCalls != 0 || store.adminCalls != 0 {
+			t.Fatalf("unverified read filter reached persistence: verifier=%d store=%#v", verifier.calls, store)
 		}
 		assertResolutionAttemptV3(t, store, result.Resolution())
 	})

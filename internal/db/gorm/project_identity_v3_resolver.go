@@ -30,66 +30,68 @@ func (store *Store) LookupAnchorBindingV3(ctx context.Context, anchorProjectID s
 	return lookupAnchorBindingV3(ctx, store.DB, anchorProjectID)
 }
 
-// RegisterAnchorBindingV3 serializes the sole authorized V3 binding mutation.
-// It is idempotent for the same active anchor and rejects any command without
-// the resolver-created server verification capability.
-func (store *Store) RegisterAnchorBindingV3(ctx context.Context, registration projectidentity.AnchorRegistrationV3) (projectidentity.AnchorBindingV3, error) {
+// RegisterAnchorBindingAndRecordAttemptV3 serializes an authorized V3 binding
+// mutation and its immutable resolution attempt in one transaction.
+func (store *Store) RegisterAnchorBindingAndRecordAttemptV3(ctx context.Context, registration projectidentity.AnchorRegistrationV3, buildAttempt projectidentity.RegistrationAttemptBuilderV3) error {
 	if store == nil || store.DB == nil {
-		return projectidentity.AnchorBindingV3{}, errProjectIdentityV3StoreUnavailable
+		return errProjectIdentityV3StoreUnavailable
 	}
 	if !registration.IsCausallyBoundFirstMutation() {
-		return projectidentity.AnchorBindingV3{}, projectidentity.ErrAuthorizationVerificationRequiredV3
+		return projectidentity.ErrAuthorizationVerificationRequiredV3
 	}
-
-	var binding projectidentity.AnchorBindingV3
-	err := store.DB.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
+	if buildAttempt == nil {
+		return errProjectIdentityV3InvalidAttempt
+	}
+	return store.DB.WithContext(ctx).Transaction(func(tx *gormlib.DB) error {
 		if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended(?, 0))`, "v3-anchor:"+registration.AnchorProjectID()).Error; err != nil {
 			return err
 		}
-
-		current, err := lookupAnchorBindingV3(ctx, tx, registration.AnchorProjectID())
+		binding, err := registerAnchorBindingV3(ctx, tx, registration)
 		if err != nil {
 			return err
 		}
-		switch current.State {
-		case projectidentity.AnchorBindingActiveV3:
-			if current.Scope != string(registration.Scope()) {
-				binding = projectidentity.AnchorBindingV3{State: projectidentity.AnchorBindingDecisionRequiredV3}
-				return nil
-			}
-			binding = current
-			return nil
-		case projectidentity.AnchorBindingDecisionRequiredV3, projectidentity.AnchorBindingRedirectedV3:
-			binding = current
-			return nil
-		case projectidentity.AnchorBindingMissingV3:
-			projectKey := uuid.NewString()
-			project := Project{
-				ID:              projectKey,
-				ProjectKey:      sql.NullString{String: projectKey, Valid: true},
-				AnchorProjectID: sql.NullString{String: registration.AnchorProjectID(), Valid: true},
-				IdentityScope:   sql.NullString{String: string(registration.Scope()), Valid: true},
-				IdentityStatus:  sql.NullString{String: activeProjectIdentityStatusV3, Valid: true},
-				LegacyIDs:       pq.StringArray{},
-			}
-			if err := tx.WithContext(ctx).Create(&project).Error; err != nil {
-				return err
-			}
-			binding = projectidentity.AnchorBindingV3{
-				State:      projectidentity.AnchorBindingActiveV3,
-				ProjectKey: projectKey,
-				Scope:      string(registration.Scope()),
-			}
-			return nil
-		default:
-			binding = projectidentity.AnchorBindingV3{State: projectidentity.AnchorBindingDecisionRequiredV3}
-			return nil
+		attempt, err := buildAttempt(binding)
+		if err != nil {
+			return err
 		}
+		return recordResolutionAttemptV3(ctx, tx, attempt)
 	})
+}
+
+func registerAnchorBindingV3(ctx context.Context, db *gormlib.DB, registration projectidentity.AnchorRegistrationV3) (projectidentity.AnchorBindingV3, error) {
+	current, err := lookupAnchorBindingV3(ctx, db, registration.AnchorProjectID())
 	if err != nil {
 		return projectidentity.AnchorBindingV3{}, err
 	}
-	return binding, nil
+	switch current.State {
+	case projectidentity.AnchorBindingActiveV3:
+		if current.Scope != string(registration.Scope()) {
+			return projectidentity.AnchorBindingV3{State: projectidentity.AnchorBindingDecisionRequiredV3}, nil
+		}
+		return current, nil
+	case projectidentity.AnchorBindingDecisionRequiredV3, projectidentity.AnchorBindingRedirectedV3:
+		return current, nil
+	case projectidentity.AnchorBindingMissingV3:
+		projectKey := uuid.NewString()
+		project := Project{
+			ID:              projectKey,
+			ProjectKey:      sql.NullString{String: projectKey, Valid: true},
+			AnchorProjectID: sql.NullString{String: registration.AnchorProjectID(), Valid: true},
+			IdentityScope:   sql.NullString{String: string(registration.Scope()), Valid: true},
+			IdentityStatus:  sql.NullString{String: activeProjectIdentityStatusV3, Valid: true},
+			LegacyIDs:       pq.StringArray{},
+		}
+		if err := db.WithContext(ctx).Create(&project).Error; err != nil {
+			return projectidentity.AnchorBindingV3{}, err
+		}
+		return projectidentity.AnchorBindingV3{
+			State:      projectidentity.AnchorBindingActiveV3,
+			ProjectKey: projectKey,
+			Scope:      string(registration.Scope()),
+		}, nil
+	default:
+		return projectidentity.AnchorBindingV3{State: projectidentity.AnchorBindingDecisionRequiredV3}, nil
+	}
 }
 
 // LookupAdministrativeTargetV3 accepts only a verified server capability. The
@@ -114,6 +116,10 @@ func (store *Store) RecordResolutionAttemptV3(ctx context.Context, attempt proje
 	if store == nil || store.DB == nil {
 		return errProjectIdentityV3StoreUnavailable
 	}
+	return recordResolutionAttemptV3(ctx, store.DB, attempt)
+}
+
+func recordResolutionAttemptV3(ctx context.Context, db *gormlib.DB, attempt projectidentity.ResolutionAttemptV3) error {
 	if !attempt.Valid() {
 		return errProjectIdentityV3InvalidAttempt
 	}
@@ -131,7 +137,15 @@ func (store *Store) RecordResolutionAttemptV3(ctx context.Context, attempt proje
 	if redirect := attempt.RedirectReference(); redirect != "" {
 		record.RedirectReference = sql.NullString{String: string(redirect), Valid: true}
 	}
-	return store.DB.WithContext(ctx).Create(&record).Error
+	if target := attempt.AdministrativeTargetReference(); target != "" {
+		record.AdminTargetReference = sql.NullString{String: string(target), Valid: true}
+		audit := attempt.AdministrativeAudit()
+		record.AdminActor = sql.NullString{String: audit.Actor(), Valid: true}
+		record.AdminPurpose = sql.NullString{String: audit.Purpose(), Valid: true}
+		record.AdminDecision = sql.NullString{String: audit.Decision(), Valid: true}
+		record.AdminRetentionOrRollback = sql.NullString{String: audit.RetentionOrRollback(), Valid: true}
+	}
+	return db.WithContext(ctx).Create(&record).Error
 }
 
 func lookupAnchorBindingV3(ctx context.Context, db *gormlib.DB, anchorProjectID string) (projectidentity.AnchorBindingV3, error) {
