@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/projectidentity"
+	"github.com/thebtf/engram/internal/recoveryreceipt"
 	gormlib "gorm.io/gorm"
 )
 
@@ -158,24 +160,64 @@ func TestProjectIdentityV3ComparisonClientInstancePrivacyMigration166PreservesHi
 	migration165 := projectIdentityV3ComparisonsMigration165()
 	migration166 := projectIdentityV3ComparisonClientInstancePrivacyMigration166()
 	withProjectIdentityMigrationSchema(t, db, schema, func(tx *gormlib.DB) {
+		scopedStore := &Store{DB: tx}
 		require.NoError(t, migration165.Migrate(tx))
-		insertComparison := func(clientInstanceID string) error {
-			return tx.Exec(`
+		insertComparison := func(target *gormlib.DB, clientInstanceID string) (projectidentity.CorrelationV3, error) {
+			correlation, err := projectidentity.NewCorrelationV3("migration-166-correlation-" + uuid.NewString())
+			if err != nil {
+				return "", err
+			}
+			return correlation, target.Exec(`
 				INSERT INTO project_identity_comparisons (
 					comparison_id, idempotency_key, correlation, v3_outcome, legacy_outcome,
 					classification, client_instance_id, transport, scope, freshness, evidence_fingerprint
 				) VALUES (?, ?, ?, 'PROJECT_DESCRIPTOR_INVALID', 'refusal', 'refusal', ?, 'http', 'repository', 'fresh', ?)
-			`, uuid.NewString(), comparisonStoreFingerprint("migration-166-"+uuid.NewString()), "migration-166-correlation-"+uuid.NewString(), clientInstanceID, comparisonStoreFingerprint("migration-166-evidence-"+uuid.NewString())).Error
+			`, uuid.NewString(), comparisonStoreFingerprint("migration-166-"+uuid.NewString()), correlation, clientInstanceID, comparisonStoreFingerprint("migration-166-evidence-"+uuid.NewString())).Error
 		}
 
 		const historicalLocator = "C:private"
-		require.NoError(t, insertComparison(historicalLocator), "migration 165 must reproduce the pre-166 comparison vocabulary")
+		historicalCorrelation, err := insertComparison(tx, historicalLocator)
+		require.NoError(t, err, "migration 165 must reproduce the pre-166 comparison vocabulary")
 		require.NoError(t, migration166.Migrate(tx))
 		require.NoError(t, migration166.Migrate(tx), "migration 166 DDL must be idempotent")
 
 		var historicalRows int64
 		require.NoError(t, tx.Model(&ProjectIdentityComparison{}).Where("client_instance_id = ?", historicalLocator).Count(&historicalRows).Error)
 		require.EqualValues(t, 1, historicalRows, "the forward privacy migration must not rewrite or delete historical evidence")
+
+		readback, err := scopedStore.ReadComparisonsByCorrelationV3(context.Background(), []projectidentity.CorrelationV3{historicalCorrelation})
+		require.NoError(t, err)
+		require.Len(t, readback, 1)
+		require.Equal(t, historicalLocator, readback[0].ClientInstanceID)
+		require.False(t, readback[0].Valid(), "strict validation remains unavailable for the preserved locator")
+
+		receipt, err := recoveryreceipt.BuildAR2IdentityExpandReceiptFromPersistedComparisons(context.Background(), scopedStore, recoveryreceipt.AR2IdentityExpandInput{
+			Candidate: recoveryreceipt.AR2CandidateIdentity{
+				SourceCommit:                strings.Repeat("a", 40),
+				CandidateCommit:             strings.Repeat("a", 40),
+				CandidatePayloadFingerprint: comparisonStoreFingerprint("migration-166-receipt"),
+			},
+			MigrationIDs: []string{
+				"162_project_identity_v3",
+				"163_project_identity_v3_resolution_attempts",
+				"164_project_identity_v3_resolution_attempt_admin_audit",
+				"165_project_identity_v3_comparisons",
+			},
+			DescriptorVersion: 3,
+			SupportedTransports: []projectidentity.ComparisonTransportV3{
+				projectidentity.ComparisonTransportGRPCV3,
+				projectidentity.ComparisonTransportHTTPV3,
+				projectidentity.ComparisonTransportHookV3,
+				projectidentity.ComparisonTransportDaemonV3,
+				projectidentity.ComparisonTransportOpenClawV3,
+			},
+			V2Compatibility: recoveryreceipt.AR2V2ReadCompatible,
+			CapabilityState: recoveryreceipt.AR2CapabilityAvailable,
+		}, []projectidentity.CorrelationV3{historicalCorrelation})
+		require.NoError(t, err)
+		encodedReceipt, err := json.Marshal(receipt)
+		require.NoError(t, err)
+		require.NotContains(t, string(encodedReceipt), historicalLocator, "the receipt must count historical evidence without exposing it")
 
 		var constraintRows int64
 		require.NoError(t, tx.Raw(`
@@ -192,10 +234,31 @@ func TestProjectIdentityV3ComparisonClientInstancePrivacyMigration166PreservesHi
 		`).Scan(&validated).Error)
 		require.False(t, validated, "the new check must preserve pre-existing comparison evidence")
 
-		for _, clientInstanceID := range []string{"C:private", "http:private", "ssh:private"} {
-			require.Error(t, insertComparison(clientInstanceID), "migration 166 must reject future locator-shaped client IDs: %q", clientInstanceID)
+		futureLocatorObservation := projectidentity.ComparisonObservationV3{
+			IdempotencyKey:      comparisonStoreFingerprint("migration-166-future-record"),
+			Correlation:         historicalCorrelation,
+			V3Outcome:           projectidentity.ProjectDescriptorInvalidOutcomeV3,
+			LegacyOutcome:       projectidentity.LegacyComparisonRefusalV2,
+			ClientInstanceID:    historicalLocator,
+			Transport:           projectidentity.ComparisonTransportHTTPV3,
+			Scope:               projectidentity.ComparisonRepositoryScopeV3,
+			Freshness:           projectidentity.ComparisonFreshV3,
+			EvidenceFingerprint: comparisonStoreFingerprint("migration-166-future-record-evidence"),
 		}
-		require.NoError(t, insertComparison("fixture-install-166"), "migration 166 must preserve valid opaque IDs")
+		_, err = scopedStore.RecordComparisonV3(context.Background(), futureLocatorObservation)
+		require.ErrorIs(t, err, errProjectIdentityComparisonInvalid, "store writes must keep strict client-ID validation")
+		_, err = projectidentity.RecordComparisonV3(context.Background(), scopedStore, futureLocatorObservation)
+		require.Error(t, err, "public recording must keep strict client-ID validation")
+
+		for _, clientInstanceID := range []string{"C:private", "http:private", "ssh:private"} {
+			err := tx.Transaction(func(nested *gormlib.DB) error {
+				_, err := insertComparison(nested, clientInstanceID)
+				return err
+			})
+			require.Error(t, err, "migration 166 must reject future locator-shaped client IDs: %q", clientInstanceID)
+		}
+		_, err = insertComparison(tx, "fixture-install-166")
+		require.NoError(t, err, "migration 166 must preserve valid opaque IDs")
 	})
 }
 

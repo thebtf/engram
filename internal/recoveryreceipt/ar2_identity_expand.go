@@ -106,7 +106,11 @@ type AR2IdentityExpandReceipt struct {
 // It deliberately permits a zero transport denominator so that the receipt remains
 // honest through Metric.ResultStatus=not_computable rather than fabricating coverage.
 func BuildAR2IdentityExpandReceipt(input AR2IdentityExpandInput) (AR2IdentityExpandReceipt, error) {
-	if err := validateAR2IdentityExpandInput(input); err != nil {
+	return buildAR2IdentityExpandReceipt(input, false)
+}
+
+func buildAR2IdentityExpandReceipt(input AR2IdentityExpandInput, persistedLegacyReadback bool) (AR2IdentityExpandReceipt, error) {
+	if err := validateAR2IdentityExpandInput(input, persistedLegacyReadback); err != nil {
 		return AR2IdentityExpandReceipt{}, err
 	}
 
@@ -191,7 +195,7 @@ func BuildAR2IdentityExpandReceiptFromPersistedComparisons(ctx context.Context, 
 	}
 	found := make(map[projectidentity.CorrelationV3]struct{}, len(comparisons))
 	for _, comparison := range comparisons {
-		if !comparison.Valid() {
+		if !comparison.ValidPersistedLegacyReadback() {
 			return AR2IdentityExpandReceipt{}, fmt.Errorf("invalid persisted comparison")
 		}
 		if _, requested := requested[comparison.Correlation]; !requested {
@@ -206,10 +210,10 @@ func BuildAR2IdentityExpandReceiptFromPersistedComparisons(ctx context.Context, 
 		return AR2IdentityExpandReceipt{}, fmt.Errorf("missing persisted comparison correlation")
 	}
 	input.Comparisons = comparisons
-	return BuildAR2IdentityExpandReceipt(input)
+	return buildAR2IdentityExpandReceipt(input, true)
 }
 
-func validateAR2IdentityExpandInput(input AR2IdentityExpandInput) error {
+func validateAR2IdentityExpandInput(input AR2IdentityExpandInput, persistedLegacyReadback bool) error {
 	if !validCommit(input.Candidate.SourceCommit) || input.Candidate.SourceCommit != input.Candidate.CandidateCommit || !validFingerprint(input.Candidate.CandidatePayloadFingerprint) {
 		return fmt.Errorf("invalid exact source/candidate identity")
 	}
@@ -231,7 +235,11 @@ func validateAR2IdentityExpandInput(input AR2IdentityExpandInput) error {
 		return fmt.Errorf("capability state %q is unsupported", input.CapabilityState)
 	}
 	for _, comparison := range input.Comparisons {
-		if !comparison.Valid() || !containsTransport(input.SupportedTransports, comparison.Transport) {
+		valid := comparison.Valid()
+		if persistedLegacyReadback {
+			valid = comparison.ValidPersistedLegacyReadback()
+		}
+		if !valid || !containsTransport(input.SupportedTransports, comparison.Transport) {
 			return fmt.Errorf("comparison is not a supported redacted observation")
 		}
 	}

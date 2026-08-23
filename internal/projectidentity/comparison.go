@@ -279,12 +279,20 @@ func (observation ComparisonObservationV3) Classification() ComparisonClassV3 {
 	return ComparisonMismatchV3
 }
 
-// Valid reports whether the observation is a complete, redacted comparison boundary.
+// Valid reports whether the observation is a complete, redacted comparison boundary for a new write.
 func (observation ComparisonObservationV3) Valid() bool {
-	if !validComparisonFingerprintV3(observation.IdempotencyKey) || !validOpaqueReferenceV3(string(observation.Correlation)) || !observation.V3Outcome.Valid() || !observation.LegacyOutcome.valid() || !validClientInstanceIDV3(observation.ClientInstanceID) || !observation.Transport.valid() || !observation.Scope.valid() || !observation.Freshness.valid() || !validComparisonFingerprintV3(observation.EvidenceFingerprint) {
-		return false
-	}
-	return true
+	return observation.validWithoutClientInstanceID() && validClientInstanceIDV3(observation.ClientInstanceID)
+}
+
+// ValidPersistedLegacyReadback reports whether an immutable persisted observation
+// preserves every V3 field while allowing the pre-166 locator form only for its
+// client instance ID. It must not validate a new comparison write.
+func (observation ComparisonObservationV3) ValidPersistedLegacyReadback() bool {
+	return observation.validWithoutClientInstanceID() && validOpaqueReferenceV3(observation.ClientInstanceID)
+}
+
+func (observation ComparisonObservationV3) validWithoutClientInstanceID() bool {
+	return validComparisonFingerprintV3(observation.IdempotencyKey) && validOpaqueReferenceV3(string(observation.Correlation)) && observation.V3Outcome.Valid() && observation.LegacyOutcome.valid() && observation.Transport.valid() && observation.Scope.valid() && observation.Freshness.valid() && validComparisonFingerprintV3(observation.EvidenceFingerprint)
 }
 
 func validComparisonFingerprintV3(value string) bool {

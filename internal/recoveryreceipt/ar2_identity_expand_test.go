@@ -192,6 +192,40 @@ func TestBuildAR2IdentityExpandReceiptFromPersistedComparisonsRequiresExactCorre
 	}
 }
 
+func TestBuildAR2IdentityExpandReceiptFromPersistedComparisonsAcceptsLegacyLocatorReadbackOnly(t *testing.T) {
+	input := ar2IdentityExpandInput(t)
+	persisted := append([]projectidentity.ComparisonObservationV3(nil), input.Comparisons...)
+	persisted[0].ClientInstanceID = "C:private"
+	correlations := make([]projectidentity.CorrelationV3, 0, len(persisted))
+	for _, comparison := range persisted {
+		correlations = append(correlations, comparison.Correlation)
+	}
+
+	direct := input
+	direct.Comparisons = persisted
+	if _, err := BuildAR2IdentityExpandReceipt(direct); err == nil {
+		t.Fatal("direct receipt input accepted a legacy locator")
+	}
+
+	input.Comparisons = nil
+	receipt, err := BuildAR2IdentityExpandReceiptFromPersistedComparisons(context.Background(), persistedComparisonReaderV3{comparisons: persisted}, input, correlations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), persisted[0].ClientInstanceID) {
+		t.Fatalf("receipt exposed historical locator: %s", encoded)
+	}
+
+	persisted[0].EvidenceFingerprint = "invalid"
+	if _, err := BuildAR2IdentityExpandReceiptFromPersistedComparisons(context.Background(), persistedComparisonReaderV3{comparisons: persisted}, input, correlations); err == nil {
+		t.Fatal("persisted legacy readback accepted an invalid non-client field")
+	}
+}
+
 type persistedComparisonReaderV3 struct {
 	comparisons []projectidentity.ComparisonObservationV3
 	err         error

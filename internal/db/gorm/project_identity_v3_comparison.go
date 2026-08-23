@@ -125,8 +125,9 @@ func (store *Store) ObserveLegacyOutcomeV2(ctx context.Context, descriptor proje
 }
 
 // ReadComparisonsByCorrelationV3 returns only persisted redacted observations.
-// A correlation may deliberately have multiple rows; exact-cardinality checks
-// belong to the receipt boundary that knows the requested evidence set.
+// Pre-166 locator-shaped client IDs remain readable as immutable evidence; they
+// cannot validate a new write. Exact-cardinality checks belong to the receipt
+// boundary that knows the requested evidence set.
 func (store *Store) ReadComparisonsByCorrelationV3(ctx context.Context, correlations []projectidentity.CorrelationV3) ([]projectidentity.ComparisonObservationV3, error) {
 	if store == nil || store.DB == nil {
 		return nil, errProjectIdentityComparisonStoreUnavailable
@@ -148,7 +149,7 @@ func (store *Store) ReadComparisonsByCorrelationV3(ctx context.Context, correlat
 	observations := make([]projectidentity.ComparisonObservationV3, 0, len(records))
 	for _, record := range records {
 		observation := comparisonObservationV3(record)
-		if !observation.Valid() {
+		if !observation.ValidPersistedLegacyReadback() {
 			return nil, errProjectIdentityComparisonInvalid
 		}
 		observations = append(observations, observation)

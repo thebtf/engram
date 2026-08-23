@@ -73,6 +73,27 @@ func TestRecordComparisonV3RecordsOnlySafeTelemetry(t *testing.T) {
 	require.Equal(t, observation, store.observations[0])
 }
 
+func TestRecordComparisonV3RejectsLegacyLocator(t *testing.T) {
+	correlation, err := NewCorrelationV3("comparison-future-locator-" + uuid.NewString())
+	require.NoError(t, err)
+	observation := ComparisonObservationV3{
+		IdempotencyKey:      comparisonTestFingerprint("idempotency-" + uuid.NewString()),
+		Correlation:         correlation,
+		V3Outcome:           ProjectDescriptorInvalidOutcomeV3,
+		LegacyOutcome:       LegacyComparisonRefusalV2,
+		ClientInstanceID:    "C:private",
+		Transport:           ComparisonTransportHTTPV3,
+		Scope:               ComparisonRepositoryScopeV3,
+		Freshness:           ComparisonFreshV3,
+		EvidenceFingerprint: comparisonTestFingerprint("evidence-" + uuid.NewString()),
+	}
+	store := &comparisonStoreSpy{}
+
+	_, err = RecordComparisonV3(context.Background(), store, observation)
+	require.ErrorIs(t, err, errInvalidComparisonV3)
+	require.Empty(t, store.observations)
+}
+
 func TestComparisonObservationV3RejectsUnsafeInputs(t *testing.T) {
 	correlation, err := NewCorrelationV3("comparison-invalid-" + uuid.NewString())
 	require.NoError(t, err)
