@@ -771,6 +771,20 @@ function projectAnchorPublicationError(...errors) {
 function resolveHookProjectDescriptorV3(cwd, clientInstanceID) {
  projectIdentityV3.validateClientInstanceIDV3(clientInstanceID);
  const selectedRoot = path.resolve(cwd || '');
+ let directoryAnchor;
+ try {
+  directoryAnchor = projectIdentityV3.discoverProjectAnchorV3(selectedRoot, 'directory');
+ } catch (error) {
+  if (!error || !/^PROJECT_SCOPE_MISMATCH:/.test(error.message)) throw error;
+ }
+ if (directoryAnchor) {
+  return projectIdentityV3.buildProjectIdentityV3({
+   anchor: directoryAnchor,
+   normalized_git_remotes: [],
+   legacy_identifiers: [],
+   client_instance_id: clientInstanceID,
+  });
+ }
  let repositoryRoot;
  try {
   repositoryRoot = require('node:child_process').execFileSync(
@@ -778,12 +792,18 @@ function resolveHookProjectDescriptorV3(cwd, clientInstanceID) {
    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 3000, windowsHide: true },
   ).trim();
  } catch (error) {
-  if (isMissingGitIdentityError(error)) return null;
+  if (isMissingGitIdentityError(error)) {
+   throw new Error('PROJECT_ONBOARDING_REQUIRED: no V3 project anchor exists at the selected scope');
+  }
   throw new Error('PROJECT_IDENTITY_UNAVAILABLE: git identity resolution failed', { cause: error });
  }
- if (!repositoryRoot) return null;
+ if (!repositoryRoot) {
+  throw new Error('PROJECT_ONBOARDING_REQUIRED: no V3 project anchor exists at the selected scope');
+ }
  const anchor = projectIdentityV3.discoverProjectAnchorV3(repositoryRoot, 'repository');
- if (!anchor) return null;
+ if (!anchor) {
+  throw new Error('PROJECT_ONBOARDING_REQUIRED: no V3 project anchor exists at the selected scope');
+ }
  const git = getGitRemoteID(repositoryRoot);
  const normalized = git ? projectIdentityV3.normalizeGitRemoteV3(git.gitRemote) : null;
  if (normalized?.disposition === 'refused') {
@@ -1171,25 +1191,26 @@ async function RunHook(hookName, handler) {
  const cwd = typeof input.cwd === 'string' ? input.cwd : '';
 
  try {
-  const gitResult = getGitRemoteID(cwd);
-  const projectSelector = ProjectIDWithName(cwd);
   const context = {
    SessionID: typeof input.session_id === 'string' ? input.session_id : '',
    CWD: cwd,
    PermissionMode: typeof input.permission_mode === 'string' ? input.permission_mode : '',
    HookEventName: typeof input.hook_event_name === 'string' ? input.hook_event_name : hookName,
-   Project: projectSelector,
-   ProjectSelector: projectSelector,
-   LegacyProject: LegacyProjectID(cwd),
-   GitRemote: gitResult ? gitResult.gitRemote : '',
-   RelativePath: gitResult ? gitResult.relativePath : '',
    RawInput: rawInput,
   };
   if (runtimeEnv.clientInstanceID) {
    const descriptor = resolveHookProjectDescriptorV3(cwd, runtimeEnv.clientInstanceID);
-   if (descriptor) context.ProjectDescriptorV3 = descriptor;
-   else context.ProjectIdentityV2 = resolveProjectIdentityV2(cwd);
+   context.Project = descriptor.anchor_project_id;
+   context.ProjectSelector = descriptor.anchor_project_id;
+   context.ProjectDescriptorV3 = descriptor;
   } else {
+   const gitResult = getGitRemoteID(cwd);
+   const projectSelector = ProjectIDWithName(cwd);
+   context.Project = projectSelector;
+   context.ProjectSelector = projectSelector;
+   context.LegacyProject = LegacyProjectID(cwd);
+   context.GitRemote = gitResult ? gitResult.gitRemote : '';
+   context.RelativePath = gitResult ? gitResult.relativePath : '';
    context.ProjectIdentityV2 = resolveProjectIdentityV2(cwd);
   }
   if (hookName !== 'SessionStart' || (runtimeEnv.serverURL && runtimeEnv.token)) {
