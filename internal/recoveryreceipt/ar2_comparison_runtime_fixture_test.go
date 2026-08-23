@@ -438,24 +438,28 @@ func TestAR2ComparisonRuntimeFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal("attest exact candidate fixture")
 	}
-	if err := capture.record(ar2ControlledFixtureCallables[0].callable, ar2ResponseCorrelation(t, ar2Initialize(t, ctx, server.grpcAddr, ar2ProtoIdentity("grpc-fixture-client-17"), "grpc-fixture-attempt-17"), projectKey)); err != nil {
+	grpcCorrelation := ar2ResponseCorrelation(t, ar2Initialize(t, ctx, server.grpcAddr, ar2ProtoIdentity("grpc-fixture-client-17"), "grpc-fixture-attempt-17"), projectKey)
+	if err := ar2RecordFixtureCallable(capture, &cleanupCorrelations, ar2ControlledFixtureCallables[0].callable, grpcCorrelation); err != nil {
 		t.Fatal("capture gRPC fixture callable")
 	}
-	if err := capture.record(ar2ControlledFixtureCallables[1].callable, ar2InvokeHTTP(t, ctx, server.baseURL, ar2WireIdentity("http-fixture-client-17"), "http-fixture-attempt-17", projectKey)); err != nil {
+	httpCorrelation := ar2InvokeHTTP(t, ctx, server.baseURL, ar2WireIdentity("http-fixture-client-17"), "http-fixture-attempt-17", projectKey)
+	if err := ar2RecordFixtureCallable(capture, &cleanupCorrelations, ar2ControlledFixtureCallables[1].callable, httpCorrelation); err != nil {
 		t.Fatal("capture HTTP fixture callable")
 	}
-	if err := capture.record(ar2ControlledFixtureCallables[2].callable, ar2InvokeHook(t, ctx, candidateRoot, fixtureDir, server.baseURL, ar2WireIdentity("hook-fixture-client-17"), projectKey)); err != nil {
+	hookCorrelation := ar2InvokeHook(t, ctx, candidateRoot, fixtureDir, server.baseURL, ar2WireIdentity("hook-fixture-client-17"), projectKey)
+	if err := ar2RecordFixtureCallable(capture, &cleanupCorrelations, ar2ControlledFixtureCallables[2].callable, hookCorrelation); err != nil {
 		t.Fatal("capture Hook fixture callable")
 	}
-	if err := capture.record(ar2ControlledFixtureCallables[3].callable, ar2InvokeDaemon(t, ctx, daemon, server.grpcAddr, ar2DaemonRepository(t, fixtureDir), projectKey)); err != nil {
+	daemonCorrelation := ar2InvokeDaemon(t, ctx, daemon, server.grpcAddr, ar2DaemonRepository(t, fixtureDir), projectKey)
+	if err := ar2RecordFixtureCallable(capture, &cleanupCorrelations, ar2ControlledFixtureCallables[3].callable, daemonCorrelation); err != nil {
 		t.Fatal("capture daemon fixture callable")
 	}
-	if err := capture.record(ar2ControlledFixtureCallables[4].callable, ar2InvokeOpenClaw(t, ctx, fixtureDir, server.baseURL, ar2WireIdentity("openclaw-fixture-client-17"), projectKey, openClawClient)); err != nil {
+	openClawCorrelation := ar2InvokeOpenClaw(t, ctx, fixtureDir, server.baseURL, ar2WireIdentity("openclaw-fixture-client-17"), projectKey, openClawClient)
+	if err := ar2RecordFixtureCallable(capture, &cleanupCorrelations, ar2ControlledFixtureCallables[4].callable, openClawCorrelation); err != nil {
 		t.Fatal("capture OpenClaw fixture callable")
 	}
 
 	comparisonCorrelations := ar2FixtureCorrelationList(t, capture)
-	cleanupCorrelations = append(cleanupCorrelations, comparisonCorrelations...)
 	protectedAfter := ar2ProtectedTableCounts(t, store.GetDB())
 	expectedCallRows := int64(len(comparisonCorrelations))
 	if protectedAfter.projects != protectedBefore.projects || protectedAfter.identifiers != protectedBefore.identifiers || protectedAfter.merges != protectedBefore.merges || protectedAfter.mergeSources != protectedBefore.mergeSources || protectedAfter.comparisons != protectedBefore.comparisons+expectedCallRows || protectedAfter.attempts != protectedBefore.attempts+expectedCallRows {
@@ -1116,7 +1120,7 @@ globalThis.fetch = async (url, init = {}) => {
 		"AR2_PROJECT_KEY": projectKey,
 	}), "node", driver)
 	if err != nil {
-		t.Fatal("run actual Hook V3 HTTP callable")
+		t.Fatal(ar2WrapFixtureCommandError("run actual Hook V3 HTTP callable", err))
 	}
 	var result struct {
 		Step        string `json:"step"`
@@ -1385,7 +1389,7 @@ process.stdout.write(JSON.stringify({ step: 'openclaw', correlation }));
 		"AR2_PROJECT_KEY":     projectKey,
 	}), "node", driver)
 	if err != nil {
-		t.Fatal("run actual built OpenClaw V3 HTTP callable")
+		t.Fatal(ar2WrapFixtureCommandError("run actual built OpenClaw V3 HTTP callable", err))
 	}
 	var result struct {
 		Step        string `json:"step"`
@@ -1414,6 +1418,14 @@ func ar2BuildOpenClawClient(t *testing.T, ctx context.Context, pluginDir string)
 		t.Fatal("locate exact built OpenClaw client")
 	}
 	return clientPath
+}
+
+func ar2RecordFixtureCallable(capture *ar2ControlledFixtureCapture, cleanupCorrelations *[]projectidentity.CorrelationV3, callable string, correlation projectidentity.CorrelationV3) error {
+	if err := capture.record(callable, correlation); err != nil {
+		return err
+	}
+	*cleanupCorrelations = append(*cleanupCorrelations, correlation)
+	return nil
 }
 
 func ar2FixtureCorrelationList(t *testing.T, capture *ar2ControlledFixtureCapture) []projectidentity.CorrelationV3 {
@@ -2124,6 +2136,53 @@ func TestAR2CommandEnvSanitizesBoundedCredentialFailure(t *testing.T) {
 	}
 }
 
+func TestAR2FixtureCallableCaptureOwnsSuccessfulCorrelationsBeforeHookFailure(t *testing.T) {
+	capture, err := newAR2ControlledFixtureCapture(ar2FixtureCandidateAttestation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cleanupCorrelations []projectidentity.CorrelationV3
+	grpcCorrelation := ar2Correlation(t, "ar2-fixture-cleanup-grpc")
+	httpCorrelation := ar2Correlation(t, "ar2-fixture-cleanup-http")
+	if err := ar2RecordFixtureCallable(capture, &cleanupCorrelations, ar2ControlledFixtureCallables[0].callable, grpcCorrelation); err != nil {
+		t.Fatal(err)
+	}
+	if err := ar2RecordFixtureCallable(capture, &cleanupCorrelations, ar2ControlledFixtureCallables[1].callable, httpCorrelation); err != nil {
+		t.Fatal(err)
+	}
+	if capture.next != 2 {
+		t.Fatalf("fixture capture before Hook failure advanced to slot %d", capture.next)
+	}
+	if len(cleanupCorrelations) != 2 || cleanupCorrelations[0] != grpcCorrelation || cleanupCorrelations[1] != httpCorrelation {
+		t.Fatalf("cleanup ownership after Hook failure = %#v", cleanupCorrelations)
+	}
+}
+
+func TestAR2WrapFixtureCommandErrorRetainsSanitizedDiagnostic(t *testing.T) {
+	const secret = "fixture-hook-diagnostic-secret"
+	script := filepath.Join(t.TempDir(), "failure.cmd")
+	if err := os.WriteFile(script, []byte("@echo off\r\necho "+secret+" 1>&2\r\nexit /b 23\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, commandErr := ar2CommandEnv(context.Background(), t.TempDir(), ar2FixtureEnvironment(t, "", nil), "cmd.exe", "/C", script, "--api-key", secret)
+	if commandErr == nil {
+		t.Fatal("failing fixture command returned nil error")
+	}
+	wrapped := ar2WrapFixtureCommandError("run actual Hook V3 HTTP callable", commandErr)
+	if !errors.Is(wrapped, commandErr) {
+		t.Fatal("wrapped Hook diagnostic did not retain the child error")
+	}
+	diagnostic := wrapped.Error()
+	for _, expected := range []string{"run actual Hook V3 HTTP callable", "[REDACTED]"} {
+		if !strings.Contains(diagnostic, expected) {
+			t.Fatalf("wrapped Hook diagnostic omitted %q: %s", expected, diagnostic)
+		}
+	}
+	if strings.Contains(diagnostic, secret) {
+		t.Fatalf("wrapped Hook diagnostic leaked %q: %s", secret, diagnostic)
+	}
+}
+
 func ar2Command(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	root, err := os.MkdirTemp("", "engram-ar2-command-")
 	if err != nil {
@@ -2192,6 +2251,10 @@ func ar2CommandEnv(ctx context.Context, dir string, environment []string, name s
 		return nil, fmt.Errorf("%s failed: %w", name, err)
 	}
 	return nil, fmt.Errorf("%s failed: %w: %s", name, err, stderr)
+}
+
+func ar2WrapFixtureCommandError(operation string, err error) error {
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func ar2SanitizeFixtureCommandStderr(stderr []byte, environment, args []string) string {
