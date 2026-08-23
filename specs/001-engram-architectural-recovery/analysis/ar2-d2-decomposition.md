@@ -91,6 +91,41 @@ All three retain an explicit V2 compatibility branch at the outer boundary and r
 | Transport | Does every V3-capable gRPC/HTTP/MCP/daemon path invoke the one resolver and preserve typed outcomes? | Entry-point tests, generated parity, context propagation evidence. |
 | Blind judge | Does the exact integrated candidate satisfy the frozen AR-2 contract without scope expansion? | Fresh read-only verdict bound to candidate HEAD. |
 
+## T020 V3 Test Seam — D1
+
+**Rung justification:** this is a reversible, AR-2-local test boundary whose consumers are the T017 Go anchor maker and the T018/T019 adapter makers; a wrong shape blocks three test suites but does not create a new subsystem.
+
+### Boundary contract
+
+- Go `internal/projectidentity` exposes only `ParseAnchorV3`, `DiscoverAnchorV3`, `NormalizeGitRemoteV3`, and `BuildDescriptorV3` over JSON-compatible `AnchorV3`, `DescriptorV3`, and typed legacy-evidence values.
+- Hook JavaScript and OpenClaw TypeScript expose descriptor-only counterparts: `parseProjectAnchorV3`, `discoverProjectAnchorV3`, `normalizeGitRemoteV3`, and `buildProjectIdentityV3`.
+- `ParseAnchorV3` rejects unknown/malformed fields; `DiscoverAnchorV3` receives an explicit repository or directory root and never searches upward; `NormalizeGitRemoteV3` returns a typed `normalized`, `omitted`, or `refused` disposition so local/file/malformed inputs are omitted while credential-bearing inputs are refused.
+- `BuildDescriptorV3` requires an explicit non-empty opaque `client_instance_id`, rejects a client `project_key` assertion, and never generates or persists either value. The seam does **not** resolve a canonical key, select an intent, establish a binding, mutate state, access a database/cache, or replace any V2 path.
+
+### Integration points
+
+- T017 implements the Go seam and repository/directory discovery; its discovery input is an explicit selected root, not a current-directory or parent-anchor inference.
+- T018 implements the JavaScript seam in hook identity construction; T019 implements the TypeScript seam in OpenClaw identity construction.
+- T022 owns resolver intent/outcome, canonical key exposure, registration, and mutation causality; T020 must not pre-implement those assertions.
+
+### Test plan
+
+- T020 loads `contracts/testdata/project_identity_v3_vectors.json` directly in Go, JavaScript, and TypeScript.
+- Its RED checks cover anchor field validation, remote normalization/disposition, descriptor field parity, explicit client instance IDs, and local refusal/no-leak behavior.
+- T022/T028 consume the same vectors for resolution outcome, binding, canonical-key exposure, and zero-mutation assertions.
+
+### Challenge-LITE
+
+**REVISE applied:** the original broad harness would have invented resolver APIs. The corrected seam is descriptor-only, includes the explicit discovery/disposition boundaries, and keeps resolver outcomes in T022/T028.
+
+- Keep the four helper families (selected): parse, explicit discovery, normalization with disposition, and construction separate validation, filesystem selection, and adapter parity without a wrapper/factory.
+- Collapse parse/discovery into one loader: rejected because it obscures pure validation versus filesystem discovery and weakens T017/T020 boundaries.
+- Use a neutral fixture runner: rejected because it adds a harness/dependency and hides per-language API parity.
+
+### Checker commitment
+
+One independent vector checker reruns the three focused T020 harnesses after T017/T018/T019 implementations exist and verifies that the shared corpus—not test-local rule copies—drives all three outcomes.
+
 ## Replan rule
 
 A returned maker contradiction changes only the affected unstarted wave: correct the owning Spec Kit task/checklist/analysis, update this dependency graph, rerun its deterministic validation, then re-dispatch the smallest affected lane. It never authorizes AR-3 merge/backfill/cutover, UI work, production mutation, or an unbounded rewrite.
