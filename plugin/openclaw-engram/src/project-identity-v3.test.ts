@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import * as identity from './identity.js';
+import * as v3 from './project-identity-v3.js';
 
 const here = __dirname;
 const vectorsPath = path.resolve(here, '../../../contracts/testdata/project_identity_v3_vectors.json');
@@ -22,8 +22,6 @@ const corpus = JSON.parse(fs.readFileSync(vectorsPath, 'utf8')) as {
   }>;
 };
 
-type V3Helpers = Record<string, (value: unknown) => unknown>;
-const v3 = identity as unknown as V3Helpers;
 const helpers = [
   'parseProjectAnchorV3',
   'discoverProjectAnchorV3',

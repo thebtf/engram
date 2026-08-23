@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const lib = require('./lib');
+const v3 = require('./project-identity-v3.js');
 const vectorsPath = path.resolve(__dirname, '../../../contracts/testdata/project_identity_v3_vectors.json');
 const corpus = JSON.parse(fs.readFileSync(vectorsPath, 'utf8'));
 const helpers = [
@@ -26,7 +26,7 @@ function descriptorInput(anchor, descriptor) {
 
 for (const helper of helpers) {
   test(`V3 descriptor seam exports ${helper}`, () => {
-    assert.equal(typeof lib[helper], 'function', `${helper} is required by the frozen V3 vectors`);
+    assert.equal(typeof v3[helper], 'function', `${helper} is required by the frozen V3 vectors`);
   });
 }
 
@@ -42,14 +42,14 @@ test('hook V3 descriptor helpers consume the frozen shared vectors', () => {
         typeof anchor.name !== 'string' || !['repository', 'directory'].includes(anchor.scope) ||
         Object.keys(anchor).some((key) => !['version', 'project_id', 'name', 'scope'].includes(key));
       if (invalidAnchor) {
-        assert.throws(() => lib.parseProjectAnchorV3(anchor), /PROJECT_ANCHOR_INVALID/, vector.id);
+        assert.throws(() => v3.parseProjectAnchorV3(anchor), /PROJECT_ANCHOR_INVALID/, vector.id);
       } else {
-        assert.deepEqual(lib.parseProjectAnchorV3(anchor), anchor, vector.id);
+        assert.deepEqual(v3.parseProjectAnchorV3(anchor), anchor, vector.id);
       }
     }
 
     for (const remote of remotes) {
-      const normalized = lib.normalizeGitRemoteV3(remote);
+      const normalized = v3.normalizeGitRemoteV3(remote);
       const disposition = remote.disposition || 'normalized';
       assert.equal(normalized.disposition, disposition, vector.id);
       if (disposition === 'normalized') assert.equal(normalized.value, remote.normalized, vector.id);
@@ -65,9 +65,9 @@ test('hook V3 descriptor helpers consume the frozen shared vectors', () => {
     const mismatchedAnchor = descriptor.name !== anchor.name || descriptor.scope !== anchor.scope ||
       descriptor.anchor_project_id !== anchor.project_id;
     if (hasClientKey || missingClientID || mismatchedAnchor) {
-      assert.throws(() => lib.buildProjectIdentityV3(descriptorInput(anchor, descriptor)), /PROJECT_(?:KEY_CLIENT_ASSERTION_FORBIDDEN|DESCRIPTOR_INVALID|SCOPE_MISMATCH)/, vector.id);
+      assert.throws(() => v3.buildProjectIdentityV3(descriptorInput(anchor, descriptor)), /PROJECT_(?:KEY_CLIENT_ASSERTION_FORBIDDEN|DESCRIPTOR_INVALID|SCOPE_MISMATCH)/, vector.id);
     } else {
-      assert.deepEqual(lib.buildProjectIdentityV3(descriptorInput(anchor, descriptor)), descriptor, vector.id);
+      assert.deepEqual(v3.buildProjectIdentityV3(descriptorInput(anchor, descriptor)), descriptor, vector.id);
     }
   }
 });
@@ -79,5 +79,5 @@ test('hook V3 directory discovery never searches upward from the selected root',
   fs.writeFileSync(path.join(parent, '.engram-project'), JSON.stringify(corpus.vectors[0].input.anchor));
   t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
 
-  assert.equal(lib.discoverProjectAnchorV3(selectedRoot), null);
+  assert.equal(v3.discoverProjectAnchorV3(selectedRoot), null);
 });
