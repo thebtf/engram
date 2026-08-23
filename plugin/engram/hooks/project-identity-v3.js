@@ -203,6 +203,7 @@ function validateLegacyIdentifiers(identifiers) {
     if (!isPlainObject(identifier) || Object.keys(identifier).length !== LEGACY_IDENTIFIER_KEYS.size ||
       Object.keys(identifier).some((key) => !LEGACY_IDENTIFIER_KEYS.has(key)) ||
       !LEGACY_SCHEMES.has(identifier.scheme) || !isSafeText(identifier.value) ||
+      (identifier.scheme === 'manual_alias' && /\s/u.test(identifier.value)) ||
       !isSafeText(identifier.provenance) || hasCredentialShape(identifier.value) ||
       hasCredentialShape(identifier.provenance)) {
       throw descriptorInvalid('legacy identifier is malformed');

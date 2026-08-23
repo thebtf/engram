@@ -98,7 +98,7 @@ test('hook V3 refuses noncanonical remote separators in descriptors', () => {
 
 test('hook V3 refuses whitespace or control manual-alias evidence', () => {
   const { anchor, descriptor } = corpus.vectors[0].input;
-  for (const value of ['manual alias ', 'manual\u0000alias']) {
+  for (const value of ['legacy widget alias', 'manual alias ', 'manual\u0000alias']) {
     assert.throws(
       () => v3.buildProjectIdentityV3({
         ...descriptorInput(anchor, descriptor),
