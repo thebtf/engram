@@ -770,7 +770,13 @@ func gitCommonDirectory(root string) (string, error) {
 	return absoluteDirectory(strings.TrimSpace(output))
 }
 
+type ignoredScanRelevantSourceAllowance func(relative string) bool
+
 func requireCleanGitWorktree(root string) error {
+	return requireCleanGitWorktreeWithIgnoredScanRelevantSourceAllowance(root, nil)
+}
+
+func requireCleanGitWorktreeWithIgnoredScanRelevantSourceAllowance(root string, allowance ignoredScanRelevantSourceAllowance) error {
 	output, err := gitOutput(root, "status", "--porcelain=v1", "--untracked-files=all")
 	if err != nil {
 		return fmt.Errorf("read candidate source status: %w", err)
@@ -781,7 +787,7 @@ func requireCleanGitWorktree(root string) error {
 	if err := requireNoHiddenTrackedScanRelevantSource(root); err != nil {
 		return err
 	}
-	if err := requireNoIgnoredScanRelevantSource(root); err != nil {
+	if err := requireNoIgnoredScanRelevantSource(root, allowance); err != nil {
 		return err
 	}
 	return nil
@@ -811,7 +817,7 @@ func requireNoHiddenTrackedScanRelevantSource(root string) error {
 	return nil
 }
 
-func requireNoIgnoredScanRelevantSource(root string) error {
+func requireNoIgnoredScanRelevantSource(root string, allowance ignoredScanRelevantSourceAllowance) error {
 	output, err := gitOutput(root, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z")
 	if err != nil {
 		return fmt.Errorf("list ignored candidate source paths: %w", err)
@@ -820,7 +826,7 @@ func requireNoIgnoredScanRelevantSource(root string) error {
 		if ignored == "" {
 			continue
 		}
-		relevant, err := ignoredScanRelevantSource(root, ignored)
+		relevant, err := ignoredScanRelevantSource(root, ignored, allowance)
 		if err != nil {
 			return fmt.Errorf("inspect ignored candidate source path %q: %w", ignored, err)
 		}
@@ -831,7 +837,7 @@ func requireNoIgnoredScanRelevantSource(root string) error {
 	return nil
 }
 
-func ignoredScanRelevantSource(root, ignored string) (string, error) {
+func ignoredScanRelevantSource(root, ignored string, allowance ignoredScanRelevantSourceAllowance) (string, error) {
 	relative := strings.TrimSuffix(filepath.ToSlash(ignored), "/")
 	path := filepath.Join(root, filepath.FromSlash(relative))
 	if err := containedPath(root, path); err != nil {
@@ -847,7 +853,7 @@ func ignoredScanRelevantSource(root, ignored string) (string, error) {
 	if skippedPathComponent(root, path) {
 		return "", nil
 	}
-	if allowedIgnoredGeneratedArtifactPath(relative) {
+	if allowance != nil && allowance(relative) {
 		return "", nil
 	}
 	if !info.IsDir() {
@@ -874,7 +880,7 @@ func ignoredScanRelevantSource(root, ignored string) (string, error) {
 		if err != nil {
 			return err
 		}
-		if allowedIgnoredGeneratedArtifactPath(filepath.ToSlash(found)) {
+		if allowance != nil && allowance(filepath.ToSlash(found)) {
 			return nil
 		}
 		relevant = filepath.ToSlash(found)
@@ -909,16 +915,6 @@ func scanRelevantSourcePath(relative string) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func allowedIgnoredGeneratedArtifactPath(path string) bool {
-	canonical := filepath.ToSlash(filepath.Clean(path))
-	switch canonical {
-	case ".specify/feature.json", "plugin/openclaw-engram/dist":
-		return true
-	default:
-		return strings.HasPrefix(canonical, "plugin/openclaw-engram/dist/")
 	}
 }
 

@@ -121,6 +121,64 @@ func TestAR2CandidateCommitRequiresCleanWorktree(t *testing.T) {
 	}
 }
 
+func TestAR2CandidateCommitAllowsOnlyFixtureGeneratedArtifacts(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	for _, testCase := range []struct {
+		name    string
+		files   map[string]string
+		allowed bool
+	}{
+		{
+			name: "allows exact generated metadata and output",
+			files: map[string]string{
+				".specify/feature.json":                 "{}\n",
+				"plugin/openclaw-engram/dist/client.js": "export {};\n",
+			},
+			allowed: true,
+		},
+		{
+			name: "rejects generated metadata near miss",
+			files: map[string]string{
+				".specify/feature-copy.json": "{}\n",
+			},
+		},
+		{
+			name: "rejects OpenClaw output near miss",
+			files: map[string]string{
+				"plugin/openclaw-engram/dist-evil/client.js": "export {};\n",
+			},
+		},
+		{
+			name: "rejects arbitrary ignored source",
+			files: map[string]string{
+				"ignored/forged.go": "package ignored\n",
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := ar2CandidateTestWorktree(t, ctx)
+			for path, content := range testCase.files {
+				if err := os.MkdirAll(filepath.Dir(filepath.Join(root, filepath.FromSlash(path))), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(path)), []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			_, err := ar2CandidateCommitFromWorktree(ctx, root)
+			if testCase.allowed && err != nil {
+				t.Fatalf("fixture generated artifacts refused: %v", err)
+			}
+			if !testCase.allowed && err == nil {
+				t.Fatal("fixture candidate guard accepted noncanonical ignored source")
+			}
+		})
+	}
+}
+
 func TestAR2OpenClawSnapshotPathGuards(t *testing.T) {
 	candidateRoot := t.TempDir()
 	openClawDist, err := ar2ExactSnapshotOpenClawDist(candidateRoot, filepath.Join(candidateRoot, "plugin", "openclaw-engram", "dist", "client.js"))
@@ -589,10 +647,18 @@ func ar2CandidateCommitFromWorktree(ctx context.Context, root string) (string, e
 	if err := requireCandidateWorktreeRoot(root); err != nil {
 		return "", fmt.Errorf("validate candidate worktree root: %w", err)
 	}
-	if err := requireCleanGitWorktree(root); err != nil {
+	if err := requireCleanGitWorktreeWithIgnoredScanRelevantSourceAllowance(root, ar2FixtureIgnoredScanRelevantSourceAllowance); err != nil {
 		return "", fmt.Errorf("validate clean candidate worktree: %w", err)
 	}
 	return candidateCommit(root)
+}
+
+func ar2FixtureIgnoredScanRelevantSourceAllowance(relative string) bool {
+	canonical := filepath.ToSlash(filepath.Clean(relative))
+	if canonical == ".specify/feature.json" || canonical == "plugin/openclaw-engram/dist" {
+		return true
+	}
+	return strings.HasPrefix(canonical, "plugin/openclaw-engram/dist/")
 }
 
 func ar2CandidateTestWorktree(t *testing.T, ctx context.Context) string {
@@ -605,7 +671,7 @@ func ar2CandidateTestWorktree(t *testing.T, ctx context.Context) string {
 		t.Fatal("create candidate fixture source directory")
 	}
 	for path, content := range map[string]string{
-		".gitignore":          "ignored/\n",
+		".gitignore":          "ignored/\n.specify/\nplugin/openclaw-engram/dist/\nplugin/openclaw-engram/dist-evil/\n",
 		"tracked.txt":         "clean\n",
 		"internal/fixture.go": "package internal\n",
 	} {

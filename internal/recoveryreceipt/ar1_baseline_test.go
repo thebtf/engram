@@ -313,30 +313,31 @@ func TestWriteAR1BaselineReceiptAcceptsIgnoredUnscannedArtifacts(t *testing.T) {
 	assertWrittenReceipt(t, outputPath, receipt, fingerprint(raw))
 }
 
-func TestWriteAR1BaselineReceiptAllowsOnlyKnownIgnoredGeneratedArtifacts(t *testing.T) {
-	t.Run("allows canonical generated artifacts", func(t *testing.T) {
-		primaryRoot, candidateRoot, sourceCommit := candidateWorktree(t)
-		raw, outputPath := configureWriter(t, primaryRoot, candidateRoot, sourceCommit)
-		for path, content := range map[string]string{
-			".specify/feature.json":                 "{}\n",
-			"plugin/openclaw-engram/dist/client.js": "export {};\n",
-		} {
-			writeFile(t, filepath.Join(candidateRoot, filepath.FromSlash(path)), content)
-		}
+func TestWriteAR1BaselineReceiptRejectsKnownIgnoredGeneratedArtifacts(t *testing.T) {
+	for sourcePath, content := range map[string]string{
+		".specify/feature.json":                 "{}\n",
+		"plugin/openclaw-engram/dist/client.js": "export {};\n",
+	} {
+		t.Run(sourcePath, func(t *testing.T) {
+			primaryRoot, candidateRoot, sourceCommit := candidateWorktree(t)
+			configureWriter(t, primaryRoot, candidateRoot, sourceCommit)
+			writeFile(t, filepath.Join(candidateRoot, filepath.FromSlash(sourcePath)), content)
 
-		receipt, err := writeAR1BaselineReceiptFromTestEnvironment()
-		if err != nil {
-			t.Fatal(err)
-		}
-		assertWrittenReceipt(t, outputPath, receipt, fingerprint(raw))
-	})
+			_, err := writeAR1BaselineReceiptFromTestEnvironment()
+			if err == nil || !strings.Contains(err.Error(), sourcePath) {
+				t.Fatalf("refusal = %v, want ignored scan-relevant source %q", err, sourcePath)
+			}
+		})
+	}
+}
 
+func TestWriteAR1BaselineReceiptRejectsIgnoredGeneratedArtifactNearMisses(t *testing.T) {
 	for _, sourcePath := range []string{
 		".specify/other.json",
 		"plugin/openclaw-engram/dist-evil/client.js",
 		"build/actual.go",
 	} {
-		t.Run("rejects "+sourcePath, func(t *testing.T) {
+		t.Run(sourcePath, func(t *testing.T) {
 			primaryRoot, candidateRoot, sourceCommit := candidateWorktree(t)
 			configureWriter(t, primaryRoot, candidateRoot, sourceCommit)
 			writeFile(t, filepath.Join(candidateRoot, filepath.FromSlash(sourcePath)), "package generated\n")
