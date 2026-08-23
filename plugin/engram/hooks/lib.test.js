@@ -422,7 +422,10 @@ const RUNTIME_CONFIG_ENV_KEYS = [
  'ENGRAM_URL', 'ENGRAM_SERVER_URL', 'CLAUDE_PLUGIN_OPTION_server_url',
  'CLAUDE_PLUGIN_OPTION_SERVER_URL', 'ENGRAM_CLAUDE_USERCONFIG_URL',
  'ENGRAM_TOKEN', 'CLAUDE_PLUGIN_OPTION_api_token', 'CLAUDE_PLUGIN_OPTION_API_TOKEN',
- 'ENGRAM_CLAUDE_USERCONFIG_TOKEN', ...QUIET_ENV_ALIASES,
+ 'ENGRAM_CLAUDE_USERCONFIG_TOKEN',
+ 'ENGRAM_CLIENT_INSTANCE_ID', 'CLAUDE_PLUGIN_OPTION_client_instance_id',
+ 'CLAUDE_PLUGIN_OPTION_CLIENT_INSTANCE_ID', 'ENGRAM_CLAUDE_USERCONFIG_CLIENT_INSTANCE_ID',
+ ...QUIET_ENV_ALIASES,
 ];
 
 function setRuntimeConfigEnv(t, values) {
@@ -518,6 +521,30 @@ test('explicit falsey quiet env overrides config-file quiet:true', (t) => {
   ENGRAM_CONFIG_FILE: cfgPath,
   ENGRAM_QUIET: '0',
  }), 'false', 'ENGRAM_QUIET=0 must override config-file quiet:true');
+});
+
+test('getEngramConfig resolves the explicit non-secret client instance ID', (t) => {
+ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-client-instance-config-'));
+ const configFile = path.join(dir, 'config.json');
+ fs.writeFileSync(configFile, JSON.stringify({
+  server_url: 'http://config.example.test',
+  api_token: 'config-token',
+  client_instance_id: 'config-install-alpha',
+ }));
+ t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+ setRuntimeConfigEnv(t, {
+  ENGRAM_CONFIG_FILE: configFile,
+  ENGRAM_URL: 'http://env.example.test',
+  ENGRAM_TOKEN: 'env-token',
+ });
+
+ assert.deepEqual(lib.getEngramConfig(), {
+  serverURL: 'http://env.example.test', token: 'env-token', clientInstanceID: 'config-install-alpha',
+ });
+ process.env.ENGRAM_CLIENT_INSTANCE_ID = 'env-install-alpha';
+ assert.deepEqual(lib.getEngramConfig(), {
+  serverURL: 'http://env.example.test', token: 'env-token', clientInstanceID: 'env-install-alpha',
+ });
 });
 
 test('resolveEngramRuntimeConfig independently overlays env credentials with one async config read', async (t) => {
@@ -864,12 +891,12 @@ test('registerProjectIdentityV2 passes options to custom requests and mutates on
  };
 
  await assert.rejects(
-  () => lib.registerProjectIdentityV2(context, requestFn, requestOptions),
+  () => lib.registerProjectIdentity(context, requestFn, requestOptions),
   /PROJECT_IDENTITY_UNAVAILABLE/,
  );
  assert.equal(context.Project, 'legacy-selector');
 
- await lib.registerProjectIdentityV2(context, requestFn, requestOptions);
+ await lib.registerProjectIdentity(context, requestFn, requestOptions);
 
  assert.equal(context.Project, 'canonical-v2');
  assert.equal(calls.length, 2);
@@ -898,7 +925,7 @@ test('registerProjectIdentityV2 does not mutate context after a late abort', asy
  const controller = new AbortController();
 
  await assert.rejects(
-  () => lib.registerProjectIdentityV2(context, async () => {
+  () => lib.registerProjectIdentity(context, async () => {
    controller.abort();
    return { canonical_project: 'canonical-v2' };
   }, { signal: controller.signal }),
@@ -906,6 +933,139 @@ test('registerProjectIdentityV2 does not mutate context after a late abort', asy
  );
 
  assert.equal(context.Project, 'legacy-selector');
+});
+
+test('V3 registration builds and sends only the shared descriptor', async (t) => {
+ const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-hook-v3-registration-'));
+ t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+ execFileSync('git', ['init', '--quiet', repo]);
+ fs.writeFileSync(path.join(repo, '.engram-project'), JSON.stringify({
+  version: 3,
+  project_id: '11111111-1111-4111-8111-111111111111',
+  name: 'hook-v3',
+  scope: 'repository',
+ }));
+ execFileSync('git', ['-C', repo, 'add', '.engram-project']);
+ execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://git.example.test/Platform/Hook.git']);
+
+ const descriptor = lib.resolveHookProjectDescriptorV3(repo, 'hook-install-alpha');
+ const context = { Project: 'local-selector', ProjectDescriptorV3: descriptor };
+ const calls = [];
+ await lib.registerProjectIdentity(context, async (_method, endpoint, body) => {
+  calls.push({ endpoint, body });
+  return {
+   project_resolution_v3: {
+    outcome: 'PROJECT_RESOLVED',
+    correlation: 'hook-v3-correlation',
+    project_key: '22222222-2222-4222-8222-222222222222',
+    resolved_scope: 'repository',
+   }
+  };
+ });
+
+ assert.equal(calls.length, 1);
+ assert.equal(calls[0].endpoint, '/api/context/inject');
+ assert.equal(calls[0].body.identity_only, true);
+ assert.deepEqual(calls[0].body.project_descriptor, descriptor);
+ assert.equal(Object.hasOwn(calls[0].body, 'project'), false);
+ assert.equal(Object.hasOwn(calls[0].body, 'legacy_project'), false);
+ assert.equal(context.Project, '22222222-2222-4222-8222-222222222222');
+});
+
+test('session start sends a V3 descriptor without a project selector', async (t) => {
+ const { handleSessionStart, buildCachedSessionStartPayload } = require('./session-start');
+ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-session-start-v3-'));
+ const originalRequestPost = lib.requestPost;
+ const originalEngramDataDir = process.env.ENGRAM_DATA_DIR;
+ const originalEngramURL = process.env.ENGRAM_URL;
+ const originalEngramToken = process.env.ENGRAM_TOKEN;
+ const descriptor = {
+  version: 3,
+  anchor_project_id: '11111111-1111-4111-8111-111111111111',
+  name: 'hook-v3',
+  scope: 'repository',
+  normalized_git_remotes: ['git.example.test/Platform/Hook'],
+  legacy_identifiers: [],
+  client_instance_id: 'hook-install-alpha',
+ };
+ const postCalls = [];
+ process.env.ENGRAM_DATA_DIR = tmpDir;
+ process.env.ENGRAM_URL = 'http://example.test/mcp';
+ process.env.ENGRAM_TOKEN = 'test-token';
+ lib.requestPost = async (endpoint, body) => {
+  postCalls.push({ endpoint, body });
+  return endpoint === '/api/context/session-start' ? buildCachedSessionStartPayload() : {};
+ };
+ t.after(() => {
+  lib.requestPost = originalRequestPost;
+  if (originalEngramDataDir === undefined) delete process.env.ENGRAM_DATA_DIR;
+  else process.env.ENGRAM_DATA_DIR = originalEngramDataDir;
+  if (originalEngramURL === undefined) delete process.env.ENGRAM_URL;
+  else process.env.ENGRAM_URL = originalEngramURL;
+  if (originalEngramToken === undefined) delete process.env.ENGRAM_TOKEN;
+  else process.env.ENGRAM_TOKEN = originalEngramToken;
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+ });
+
+ await handleSessionStart({
+  Project: '22222222-2222-4222-8222-222222222222',
+  ProjectSelector: 'local-selector',
+  ProjectDescriptorV3: descriptor,
+  SessionID: 'sess-v3',
+ }, {});
+
+ const request = postCalls.find((call) => call.endpoint === '/api/context/session-start');
+ assert.ok(request, 'expected a V3 session-start POST');
+ assert.equal(request.body.session_id, 'sess-v3');
+ assert.deepEqual(request.body.project_descriptor, descriptor);
+ assert.equal(Object.hasOwn(request.body, 'project'), false);
+});
+
+test('V3 registration rejects an invalid client instance before requesting', async () => {
+ const context = {
+  Project: 'local-selector', ProjectDescriptorV3: {
+   version: 3,
+   anchor_project_id: '11111111-1111-4111-8111-111111111111',
+   name: 'hook-v3',
+   scope: 'repository',
+   normalized_git_remotes: [],
+   legacy_identifiers: [],
+   client_instance_id: '/private/operator/path',
+  }
+ };
+ let requests = 0;
+ await assert.rejects(
+  () => lib.registerProjectIdentity(context, async () => {
+   requests += 1;
+   return {};
+  }),
+  /PROJECT_DESCRIPTOR_INVALID/,
+ );
+ assert.equal(requests, 0);
+});
+
+test('V3 registration refuses a client-asserted project key before requesting', async () => {
+ const context = {
+  ProjectDescriptorV3: {
+   version: 3,
+   anchor_project_id: '11111111-1111-4111-8111-111111111111',
+   name: 'hook-v3',
+   scope: 'repository',
+   normalized_git_remotes: [],
+   legacy_identifiers: [],
+   client_instance_id: 'hook-install-alpha',
+   project_key: '22222222-2222-4222-8222-222222222222',
+  }
+ };
+ let requests = 0;
+ await assert.rejects(
+  () => lib.registerProjectIdentity(context, async () => {
+   requests += 1;
+   return {};
+  }),
+  /PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN/,
+ );
+ assert.equal(requests, 0);
 });
 
 test('requestGet aborts a pending fetch when its private timeout expires', async (t) => {

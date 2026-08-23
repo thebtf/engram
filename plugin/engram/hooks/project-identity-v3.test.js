@@ -12,6 +12,7 @@ const helpers = [
   'discoverProjectAnchorV3',
   'normalizeGitRemoteV3',
   'buildProjectIdentityV3',
+  'validateProjectDescriptorV3',
 ];
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -117,4 +118,36 @@ test('hook V3 refuses whitespace or control manual-alias evidence', () => {
       /PROJECT_DESCRIPTOR_INVALID/,
     );
   }
+});
+
+test('hook V3 rejects private or locator-like client instance IDs', () => {
+  const { anchor, descriptor } = corpus.vectors[0].input;
+  for (const clientInstanceID of [
+    '/private/operator/path',
+    'C:\\private\\operator',
+    'operator session',
+    'operator\u0000session',
+    'https://operator.example.test',
+    'operator:token@host',
+  ]) {
+    assert.throws(
+      () => v3.buildProjectIdentityV3({
+        ...descriptorInput(anchor, descriptor),
+        client_instance_id: clientInstanceID,
+      }),
+      /PROJECT_DESCRIPTOR_INVALID/,
+      clientInstanceID,
+    );
+  }
+});
+
+test('hook V3 descriptor validation refuses a client-asserted project key', () => {
+  const { descriptor } = corpus.vectors[0].input;
+  assert.throws(
+    () => v3.validateProjectDescriptorV3({
+      ...descriptor,
+      project_key: '22222222-2222-4222-8222-222222222222',
+    }),
+    /PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN/,
+  );
 });

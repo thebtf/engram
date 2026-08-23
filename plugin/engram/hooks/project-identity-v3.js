@@ -15,6 +15,7 @@ const DESCRIPTOR_KEYS = new Set([
   'legacy_identifiers',
   'client_instance_id',
 ]);
+const WIRE_DESCRIPTOR_KEYS = new Set([...DESCRIPTOR_KEYS].filter((key) => key !== 'anchor'));
 const LEGACY_IDENTIFIER_KEYS = new Set(['scheme', 'value', 'provenance']);
 const LEGACY_SCHEMES = new Set([
   'anchor_v3',
@@ -52,6 +53,14 @@ function hasCredentialShape(value) {
   const urlUserInfo = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]*)@/i.exec(value);
   if (urlUserInfo) return urlUserInfo[1].toLowerCase() !== 'ssh' || urlUserInfo[2] !== 'git';
   return /^[^@/\s]+:[^@/\s]*@/.test(value);
+}
+
+function validateClientInstanceIDV3(value) {
+  if (!isSafeText(value, 256) || /[\s/\\@]/u.test(value) || hasCredentialShape(value) ||
+    /^[a-z][a-z0-9+.-]*:/i.test(value)) {
+    throw descriptorInvalid('client instance ID is malformed');
+  }
+  return value;
 }
 
 function parseProjectAnchorV3(raw) {
@@ -233,10 +242,10 @@ function buildProjectIdentityV3(input) {
   if (input.scope != null && input.scope !== anchor.scope) {
     throw new Error('PROJECT_SCOPE_MISMATCH: descriptor scope differs from anchor');
   }
-  if (!Array.isArray(input.normalized_git_remotes) || !isSafeText(input.client_instance_id) ||
-    hasCredentialShape(input.client_instance_id)) {
+  if (!Array.isArray(input.normalized_git_remotes)) {
     throw descriptorInvalid('descriptor evidence is malformed');
   }
+  validateClientInstanceIDV3(input.client_instance_id);
   if (!input.normalized_git_remotes.every(isCanonicalRemote)) {
     throw descriptorInvalid('normalized git remote is malformed');
   }
@@ -252,9 +261,31 @@ function buildProjectIdentityV3(input) {
   };
 }
 
+function validateProjectDescriptorV3(descriptor) {
+  if (!isPlainObject(descriptor)) throw descriptorInvalid('descriptor must be an object');
+  if (Object.hasOwn(descriptor, 'project_key')) {
+    throw new Error('PROJECT_KEY_CLIENT_ASSERTION_FORBIDDEN: client project key is forbidden');
+  }
+  const keys = Object.keys(descriptor);
+  if (keys.length !== WIRE_DESCRIPTOR_KEYS.size || keys.some((key) => !WIRE_DESCRIPTOR_KEYS.has(key))) {
+    throw descriptorInvalid('descriptor fields are invalid');
+  }
+  return buildProjectIdentityV3({
+    ...descriptor,
+    anchor: {
+      version: 3,
+      project_id: descriptor.anchor_project_id,
+      name: descriptor.name,
+      scope: descriptor.scope,
+    },
+  });
+}
+
 module.exports = {
   parseProjectAnchorV3,
   discoverProjectAnchorV3,
   normalizeGitRemoteV3,
   buildProjectIdentityV3,
+  validateClientInstanceIDV3,
+  validateProjectDescriptorV3,
 };

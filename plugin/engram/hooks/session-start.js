@@ -383,11 +383,14 @@ function renderSessionStartFallback(cachedPayload, cachePath, project) {
   return formatNoCacheBanner();
 }
 
-async function fetchSessionStartPayload(project, sessionID) {
+async function fetchSessionStartPayload(project, projectDescriptor, sessionID) {
   // POST with session_id so the server records this primary injection event to
   // injection_log + increments injection_count (CR-001: revive feedback loop).
-  // The response shape is identical to the legacy GET, so rendering is unchanged.
-  return lib.requestPost('/api/context/session-start', { project, session_id: sessionID || '' }, 5000);
+  // V3 resolves only the descriptor; V2 retains its explicit project branch.
+  const body = { session_id: sessionID || '' };
+  if (projectDescriptor) body.project_descriptor = projectDescriptor;
+  else body.project = project;
+  return lib.requestPost('/api/context/session-start', body, 5000);
 }
 
 function buildCachedSessionStartPayload(overrides = {}) {
@@ -408,6 +411,7 @@ async function handleSessionStart(ctx, input) {
 
   const project = typeof ctx.Project === 'string' ? ctx.Project : '';
   const cacheProject = typeof ctx.ProjectSelector === 'string' && ctx.ProjectSelector !== '' ? ctx.ProjectSelector : project;
+  const projectDescriptor = ctx.ProjectDescriptorV3 ? lib.validateProjectDescriptorV3(ctx.ProjectDescriptorV3) : null;
 
   // Crash-safe session tracking (gstack-insights FR-8)
   const sessionID = typeof ctx.SessionID === 'string' ? ctx.SessionID : '';
@@ -448,7 +452,7 @@ async function handleSessionStart(ctx, input) {
   }
 
   try {
-    const payload = await fetchSessionStartPayload(project, sessionID);
+    const payload = await fetchSessionStartPayload(project, projectDescriptor, sessionID);
     cacheSessionStartPayload(cacheProject, payload);
 
     const rules = Array.isArray(payload && payload.rules) ? payload.rules : [];
