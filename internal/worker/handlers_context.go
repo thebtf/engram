@@ -26,6 +26,7 @@ import (
 	"github.com/thebtf/engram/internal/worker/sdk"
 	"github.com/thebtf/engram/pkg/models"
 	pb "github.com/thebtf/engram/proto/engram/v1"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 )
@@ -110,6 +111,30 @@ func parseProjectDescriptorV3HTTP(raw json.RawMessage) (projectidentity.AnchorV3
 		NormalizedGitRemotes: wire.NormalizedGitRemotes,
 		LegacyIdentifiers:    wire.LegacyIdentifiers,
 		ClientInstanceID:     wire.ClientInstanceID,
+	}, nil
+}
+
+func projectIdentityV3ProtoDescriptor(raw json.RawMessage) (*pb.ProjectIdentityV3, error) {
+	_, descriptor, err := parseProjectDescriptorV3HTTP(raw)
+	if err != nil {
+		return nil, err
+	}
+	legacyIdentifiers := make([]*pb.ProjectLegacyIdentifierV3, len(descriptor.LegacyIdentifiers))
+	for i, identifier := range descriptor.LegacyIdentifiers {
+		legacyIdentifiers[i] = &pb.ProjectLegacyIdentifierV3{
+			Scheme:     string(identifier.Scheme),
+			Value:      identifier.Value,
+			Provenance: string(identifier.Provenance),
+		}
+	}
+	return &pb.ProjectIdentityV3{
+		Version:              uint32(descriptor.Version),
+		AnchorProjectId:      descriptor.AnchorProjectID,
+		Name:                 descriptor.Name,
+		Scope:                descriptor.Scope,
+		NormalizedGitRemotes: descriptor.NormalizedGitRemotes,
+		LegacyIdentifiers:    legacyIdentifiers,
+		ClientInstanceId:     descriptor.ClientInstanceID,
 	}, nil
 }
 
@@ -221,6 +246,19 @@ func mustProjectIdentityV3ResolutionError(outcome projectidentity.ResolutionOutc
 	correlation, _ := projectidentity.NewCorrelationV3("http-context-" + uuid.NewString())
 	resolutionErr, _ := projectidentity.NewResolutionErrorV3(outcome, correlation)
 	return resolutionErr
+}
+
+func writeSessionStartV3HTTPError(w http.ResponseWriter, err error) {
+	if status, ok := grpcstatus.FromError(err); ok {
+		for _, detail := range status.Details() {
+			info, ok := detail.(*errdetails.ErrorInfo)
+			if ok && info.Domain == "engram.project_identity.v3" {
+				writeProjectIdentityV3HTTPError(w, &projectIdentityV3HTTPError{outcome: projectidentity.ResolutionOutcomeV3(info.Reason)})
+				return
+			}
+		}
+	}
+	writeProjectIdentityV3HTTPError(w, errHTTPProjectIdentityResolverUnavailable)
 }
 
 // behavioralRulesToObservations converts behavioral rules into the observation shape
@@ -764,10 +802,12 @@ func sessionStartMemoriesToMaps(memories []*pb.SessionStartMemory) []map[string]
 // @Tags Context
 // @Produce json
 // @Security ApiKeyAuth
-// @Param project query string false "Project slug (required)"
-// @Param body body object false "POST body: {project, memories_limit, issues_limit}"
+// @Param project query string false "Project slug (required without project_descriptor)"
+// @Param body body object false "POST body: {project, project_descriptor, memories_limit, issues_limit}"
 // @Success 200 {object} sessionStartCompatibilityResponse
-// @Failure 400 {string} string "project required"
+// @Failure 400 {object} map[string]string "invalid V3 project descriptor"
+// @Failure 409 {object} map[string]string "V3 project resolution refused"
+// @Failure 503 {object} map[string]string "V3 project resolution unavailable"
 // @Failure 500 {string} string "internal error"
 // @Router /api/context/session-start [post]
 // @Router /api/context/session-start [get]
@@ -779,13 +819,15 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 	sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
 	memoriesLimit := int32(0)
 	issuesLimit := int32(0)
+	var projectIdentityV3 *pb.ProjectIdentityV3
 
 	if r.Method == http.MethodPost && r.Body != nil {
 		var body struct {
-			Project       string `json:"project"`
-			SessionID     string `json:"session_id"`
-			MemoriesLimit int32  `json:"memories_limit"`
-			IssuesLimit   int32  `json:"issues_limit"`
+			Project           string          `json:"project"`
+			SessionID         string          `json:"session_id"`
+			MemoriesLimit     int32           `json:"memories_limit"`
+			IssuesLimit       int32           `json:"issues_limit"`
+			ProjectDescriptor json.RawMessage `json:"project_descriptor"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -799,15 +841,25 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 		}
 		memoriesLimit = body.MemoriesLimit
 		issuesLimit = body.IssuesLimit
+		if len(body.ProjectDescriptor) > 0 {
+			var err error
+			projectIdentityV3, err = projectIdentityV3ProtoDescriptor(body.ProjectDescriptor)
+			if err != nil {
+				writeProjectIdentityV3HTTPError(w, err)
+				return
+			}
+		}
 	}
 
-	if project == "" {
-		http.Error(w, "project required", http.StatusBadRequest)
-		return
-	}
-	if err := ValidateProjectName(project); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if projectIdentityV3 == nil {
+		if project == "" {
+			http.Error(w, "project required", http.StatusBadRequest)
+			return
+		}
+		if err := ValidateProjectName(project); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	// grpcInternalServer is set during init; guard before use.
@@ -815,22 +867,42 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 	grpcSrv := s.grpcInternalServer
 	s.initMu.RUnlock()
 	if grpcSrv == nil {
+		if projectIdentityV3 != nil {
+			writeSessionStartV3HTTPError(w, errHTTPProjectIdentityResolverUnavailable)
+			return
+		}
 		http.Error(w, "session-start service unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
+	requestProject := project
+	if projectIdentityV3 != nil {
+		requestProject = ""
+	}
 	resp, err := grpcSrv.GetSessionStartContext(r.Context(), &pb.GetSessionStartContextRequest{
-		Project:       project,
-		MemoriesLimit: memoriesLimit,
-		IssuesLimit:   issuesLimit,
+		Project:           requestProject,
+		MemoriesLimit:     memoriesLimit,
+		IssuesLimit:       issuesLimit,
+		ProjectIdentityV3: projectIdentityV3,
 	})
 	if err != nil {
+		if projectIdentityV3 != nil {
+			writeSessionStartV3HTTPError(w, err)
+			return
+		}
 		if st, ok := grpcstatus.FromError(err); ok {
 			http.Error(w, st.Message(), grpcCodeToHTTP(st.Code()))
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if projectIdentityV3 != nil {
+		project = resp.GetProjectResolutionV3().GetProjectKey()
+		if project == "" {
+			writeSessionStartV3HTTPError(w, errHTTPProjectIdentityResolverUnavailable)
+			return
+		}
 	}
 
 	generatedAt := ""

@@ -13,6 +13,10 @@ import (
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/pkg/models"
+	pb "github.com/thebtf/engram/proto/engram/v1"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 type contextV3ResolutionStore struct {
@@ -218,5 +222,163 @@ func TestContextInjectV3_MissingResolverReturnsStableUnavailableRefusal(t *testi
 	}
 	if len(response) != 3 || response["code"] != "PROJECT_RESOLUTION_UNAVAILABLE" || response["upgrade_action"] != "retry_project_resolution" {
 		t.Fatalf("refusal=%v", response)
+	}
+}
+
+type sessionStartV3Provider struct {
+	calls    int
+	ctx      context.Context
+	request  *pb.GetSessionStartContextRequest
+	response *pb.GetSessionStartContextResponse
+	err      error
+}
+
+func (s *sessionStartV3Provider) GetSessionStartContext(ctx context.Context, request *pb.GetSessionStartContextRequest) (*pb.GetSessionStartContextResponse, error) {
+	s.calls++
+	s.ctx = ctx
+	s.request = request
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.response, nil
+}
+
+func v3SessionStartRequest(t *testing.T, descriptor map[string]any) *http.Request {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"project":            "attacker-selected-project",
+		"agent_id":           "attacker-selected-agent",
+		"project_descriptor": descriptor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/context/session-start", bytes.NewReader(body))
+	return req.WithContext(auth.WithIdentity(req.Context(), auth.Client("read-only", "keycard-v3")))
+}
+
+func TestSessionStartV3_ForwardsDescriptorAndIgnoresRawSelectors(t *testing.T) {
+	projectKey := "22222222-2222-4222-8222-222222222222"
+	provider := &sessionStartV3Provider{response: &pb.GetSessionStartContextResponse{
+		ProjectResolutionV3: &pb.ProjectResolutionResultV3{
+			Outcome:    pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED,
+			ProjectKey: &projectKey,
+		},
+	}}
+	service := &Service{grpcInternalServer: provider}
+
+	writer := httptest.NewRecorder()
+	service.handleSessionStartContextStatic(writer, v3SessionStartRequest(t, validContextProjectDescriptorV3()))
+
+	if writer.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", writer.Code, writer.Body.String())
+	}
+	if provider.calls != 1 || provider.request == nil {
+		t.Fatalf("session-start calls=%d request=%#v", provider.calls, provider.request)
+	}
+	if provider.request.GetProject() != "" {
+		t.Fatalf("raw project bypassed V3 resolver: %q", provider.request.GetProject())
+	}
+	identity := provider.request.GetProjectIdentityV3()
+	if identity == nil || identity.GetAnchorProjectId() != "11111111-1111-4111-8111-111111111111" || identity.GetClientInstanceId() != "fixture-http-client" {
+		t.Fatalf("project identity=%#v", identity)
+	}
+	caller, ok := auth.IdentityFrom(provider.ctx)
+	if !ok || caller.KeycardID != "keycard-v3" || caller.Role != "read-only" {
+		t.Fatalf("authenticated identity was not forwarded: %#v", caller)
+	}
+}
+
+func sessionStartV3Refusal(t *testing.T, outcome projectidentity.ResolutionOutcomeV3) error {
+	t.Helper()
+	status, err := grpcstatus.New(codes.FailedPrecondition, "raw project resolution diagnostic").WithDetails(&errdetails.ErrorInfo{
+		Reason:   string(outcome),
+		Domain:   "engram.project_identity.v3",
+		Metadata: map[string]string{"correlation": "correlation-v3"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return status.Err()
+}
+
+func TestSessionStartV3_RefusalsAreTypedAndRedacted(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		descriptor map[string]any
+		err        error
+		status     int
+		code       string
+		calls      int
+	}{
+		{
+			name: "client key assertion",
+			descriptor: func() map[string]any {
+				descriptor := validContextProjectDescriptorV3()
+				descriptor["project_key"] = "22222222-2222-4222-8222-222222222222"
+				return descriptor
+			}(),
+			status: http.StatusBadRequest,
+			code:   string(projectidentity.ProjectKeyClientAssertionForbiddenOutcomeV3),
+			calls:  0,
+		},
+		{
+			name:       "resolver refusal",
+			descriptor: validContextProjectDescriptorV3(),
+			err:        sessionStartV3Refusal(t, projectidentity.ProjectOnboardingRequiredOutcomeV3),
+			status:     http.StatusConflict,
+			code:       string(projectidentity.ProjectOnboardingRequiredOutcomeV3),
+			calls:      1,
+		},
+		{
+			name:       "resolver unavailable",
+			descriptor: validContextProjectDescriptorV3(),
+			err:        grpcstatus.Error(codes.Unavailable, "raw session-start backend diagnostic"),
+			status:     http.StatusServiceUnavailable,
+			code:       "PROJECT_RESOLUTION_UNAVAILABLE",
+			calls:      1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &sessionStartV3Provider{err: test.err}
+			service := &Service{grpcInternalServer: provider}
+			writer := httptest.NewRecorder()
+
+			service.handleSessionStartContextStatic(writer, v3SessionStartRequest(t, test.descriptor))
+
+			if writer.Code != test.status {
+				t.Fatalf("status=%d body=%s", writer.Code, writer.Body.String())
+			}
+			if provider.calls != test.calls {
+				t.Fatalf("calls=%d, want %d", provider.calls, test.calls)
+			}
+			var response map[string]string
+			if err := json.Unmarshal(writer.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if len(response) != 3 || response["code"] != test.code {
+				t.Fatalf("refusal=%v", response)
+			}
+			for _, forbidden := range []string{"attacker-selected-project", "attacker-selected-agent", "22222222-2222", "raw project resolution diagnostic", "raw session-start backend diagnostic"} {
+				if strings.Contains(writer.Body.String(), forbidden) {
+					t.Fatalf("V3 refusal leaked %q: %s", forbidden, writer.Body.String())
+				}
+			}
+		})
+	}
+}
+
+func TestSessionStartV3_AbsentRetainsProjectCompatibility(t *testing.T) {
+	provider := &sessionStartV3Provider{response: &pb.GetSessionStartContextResponse{}}
+	service := &Service{grpcInternalServer: provider}
+	writer := httptest.NewRecorder()
+
+	service.handleSessionStartContextStatic(writer, httptest.NewRequest(http.MethodGet, "/api/context/session-start?project=legacy-project", nil))
+
+	if writer.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", writer.Code, writer.Body.String())
+	}
+	if provider.request == nil || provider.request.GetProject() != "legacy-project" || provider.request.GetProjectIdentityV3() != nil {
+		t.Fatalf("compatibility request=%#v", provider.request)
 	}
 }
