@@ -30,6 +30,14 @@ func (verifier *projectIdentityV3ResolverVerifier) VerifyAuthorizationV3(_ conte
 	return response, nil
 }
 
+func TestProjectIdentityV3ResolverLookupRejectsUnverifiedCapability(t *testing.T) {
+	store, cleanup := openIntegrationTestDB(t)
+	t.Cleanup(cleanup)
+
+	_, err := store.LookupAnchorBindingV3(context.Background(), projectidentity.VerifiedAuthorizationV3{}, uuid.NewString())
+	require.ErrorIs(t, err, projectidentity.ErrAuthorizationVerificationRequiredV3, "direct adapter lookup must reject an unverified capability")
+}
+
 func TestProjectIdentityV3ResolverStoreAuthorizationRedirectAndAudit(t *testing.T) {
 	store, cleanup := openIntegrationTestDB(t)
 	t.Cleanup(cleanup)
@@ -154,11 +162,20 @@ func TestProjectIdentityV3ResolverStoreAuthorizationRedirectAndAudit(t *testing.
 		SELECT admin_target_reference, admin_actor, admin_purpose, admin_decision, admin_retention_or_rollback
 		FROM project_resolution_attempts
 		WHERE correlation = ?`, adminRequest.Correlation).Scan(&adminAttempt).Error)
-	require.Equal(t, string(opaqueTarget), adminAttempt.AdminTargetReference)
-	require.Equal(t, audit.Actor(), adminAttempt.AdminActor)
-	require.Equal(t, audit.Purpose(), adminAttempt.AdminPurpose)
-	require.Equal(t, audit.Decision(), adminAttempt.AdminDecision)
-	require.Equal(t, audit.RetentionOrRollback(), adminAttempt.AdminRetentionOrRollback)
+	for _, value := range []struct {
+		persisted string
+		raw       string
+	}{
+		{adminAttempt.AdminTargetReference, string(opaqueTarget)},
+		{adminAttempt.AdminActor, audit.Actor()},
+		{adminAttempt.AdminPurpose, audit.Purpose()},
+		{adminAttempt.AdminDecision, audit.Decision()},
+		{adminAttempt.AdminRetentionOrRollback, audit.RetentionOrRollback()},
+	} {
+		require.NotEmpty(t, value.persisted)
+		require.NotEqual(t, value.raw, value.persisted)
+		require.NotContains(t, value.persisted, value.raw)
+	}
 	var sensitiveColumns int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*) FROM information_schema.columns
@@ -209,6 +226,40 @@ func TestProjectIdentityV3ResolverReadFilterRejectsUnverifiedBeforeLookup(t *tes
 	require.EqualValues(t, 1, attemptCount, "unverified read_filter refusal must remain auditable")
 }
 
+func TestProjectIdentityV3ResolverResolveExistingRejectsUnverifiedBeforeLookup(t *testing.T) {
+	store, cleanup := openIntegrationTestDB(t)
+	t.Cleanup(cleanup)
+	db := store.GetDB()
+	require.NoError(t, projectIdentityV3ResolutionAttemptsMigration163().Migrate(db))
+	require.NoError(t, projectIdentityV3ResolutionAttemptAdminAuditMigration164().Migrate(db))
+	ctx := context.Background()
+	correlationValue := "t022-resolve-existing-" + uuid.NewString()
+	callbackName := "t022_resolve_existing_lookup_" + uuid.NewString()[:8]
+	var anchorLookupCalls int
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gormlib.DB) {
+		if tx.Statement.Table == "projects" {
+			anchorLookupCalls++
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM project_resolution_attempts WHERE correlation = ?", correlationValue).Error
+	})
+
+	request := resolverStoreRequest(t, projectidentity.ResolveExistingIntentV3, uuid.NewString(), correlationValue)
+	verifier := &projectIdentityV3ResolverVerifier{}
+	result, err := projectidentity.NewResolverV3(store, verifier).ResolveProjectV3(ctx, request)
+	require.Error(t, err)
+	require.Equal(t, projectidentity.ProjectDescriptorInvalidOutcomeV3, result.Resolution().Outcome())
+	require.Empty(t, result.Resolution().CanonicalProjectKey())
+	require.Equal(t, 1, verifier.calls, "resolve_existing must ask the server verifier")
+	require.Zero(t, anchorLookupCalls, "unverified resolve_existing must not look up a binding")
+
+	var attemptCount int64
+	require.NoError(t, db.Model(&ProjectResolutionAttempt{}).Where("correlation = ?", correlationValue).Count(&attemptCount).Error)
+	require.EqualValues(t, 1, attemptCount, "unverified resolve_existing refusal must remain auditable")
+}
+
 func TestProjectIdentityV3ResolverRegistrationRollsBackWhenAttemptWriteFails(t *testing.T) {
 	store, cleanup := openIntegrationTestDB(t)
 	t.Cleanup(cleanup)
@@ -252,9 +303,80 @@ func resolverStoreRequest(t *testing.T, intent projectidentity.ResolutionIntentV
 	descriptor, err := projectidentity.BuildDescriptorV3(anchor, nil, nil, "client-"+uuid.NewString())
 	correlation, err := projectidentity.NewCorrelationV3(correlationValue)
 	require.NoError(t, err)
-	return projectidentity.ResolveProjectRequestV3{Intent: intent, Anchor: anchor, Descriptor: descriptor, Correlation: correlation}
+	request := projectidentity.ResolveProjectRequestV3{Intent: intent, Anchor: anchor, Descriptor: descriptor, Correlation: correlation}
+	if intent == projectidentity.ResolveExistingIntentV3 {
+		authorization, err := projectidentity.NewAuthorizationReferenceV3("resolve-existing-authorization-" + uuid.NewString())
+		require.NoError(t, err)
+		request.ResolveExistingAuthorization = authorization
+	}
+	return request
 }
 
 func nullString(value string) sql.NullString {
 	return sql.NullString{String: value, Valid: true}
+}
+
+func TestProjectIdentityV3ResolverRedactsAdministrativeAuditAtRest(t *testing.T) {
+	store, cleanup := openIntegrationTestDB(t)
+	t.Cleanup(cleanup)
+	db := store.GetDB()
+	require.NoError(t, projectIdentityV3ResolutionAttemptsMigration163().Migrate(db))
+	require.NoError(t, projectIdentityV3ResolutionAttemptAdminAuditMigration164().Migrate(db))
+	ctx := context.Background()
+	correlationValue := "t022-admin-redaction-" + uuid.NewString()
+	anchorProjectID := uuid.NewString()
+	projectKey := uuid.NewString()
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM project_resolution_attempts WHERE correlation = ?", correlationValue).Error
+		_ = db.Exec("DELETE FROM projects WHERE project_key = ?", projectKey).Error
+	})
+	require.NoError(t, db.Create(&Project{
+		ID:              "t022-admin-redaction-" + uuid.NewString(),
+		ProjectKey:      nullString(projectKey),
+		AnchorProjectID: nullString(anchorProjectID),
+		IdentityScope:   nullString("repository"),
+		IdentityStatus:  nullString(activeProjectIdentityStatusV3),
+	}).Error)
+
+	request := resolverStoreRequest(t, projectidentity.AdminTargetIntentV3, anchorProjectID, correlationValue)
+	rawTarget := "target-secret-" + uuid.NewString()
+	rawActor := "actor-secret-" + uuid.NewString()
+	rawPurpose := "purpose-secret-" + uuid.NewString()
+	rawDecision := "decision-secret-" + uuid.NewString()
+	rawRetention := "retention-secret-" + uuid.NewString()
+	target, err := projectidentity.NewAdministrativeTargetReferenceV3(rawTarget)
+	require.NoError(t, err)
+	audit, err := projectidentity.NewAdminAuditV3(rawActor, rawPurpose, rawDecision, rawRetention)
+	require.NoError(t, err)
+	authorization, err := projectidentity.NewAuthorizationReferenceV3("admin-authorization-" + uuid.NewString())
+	require.NoError(t, err)
+	requirement, err := projectidentity.NewAdminTargetRequirementV3(authorization, request.Correlation, target, audit)
+	require.NoError(t, err)
+	request.AdminTarget = &requirement
+	verifiedProjectKey, err := projectidentity.NewProjectKeyV3(projectKey)
+	require.NoError(t, err)
+
+	result, err := projectidentity.NewResolverV3(store, &projectIdentityV3ResolverVerifier{authorized: true, adminTarget: verifiedProjectKey}).ResolveProjectV3(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, projectidentity.ProjectResolvedOutcomeV3, result.Resolution().Outcome())
+	var attempt ProjectResolutionAttempt
+	require.NoError(t, db.Where("correlation = ?", correlationValue).First(&attempt).Error)
+	require.Equal(t, correlationValue, attempt.Correlation)
+	require.Equal(t, string(projectidentity.AdminTargetIntentV3), attempt.Intent)
+	require.Equal(t, string(projectidentity.ProjectResolvedOutcomeV3), attempt.Outcome)
+	for _, value := range []struct {
+		persisted sql.NullString
+		raw       string
+	}{
+		{attempt.AdminTargetReference, rawTarget},
+		{attempt.AdminActor, rawActor},
+		{attempt.AdminPurpose, rawPurpose},
+		{attempt.AdminDecision, rawDecision},
+		{attempt.AdminRetentionOrRollback, rawRetention},
+	} {
+		require.True(t, value.persisted.Valid)
+		require.NotEmpty(t, value.persisted.String)
+		require.NotEqual(t, value.raw, value.persisted.String)
+		require.NotContains(t, value.persisted.String, value.raw)
+	}
 }

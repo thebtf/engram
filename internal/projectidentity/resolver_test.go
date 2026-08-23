@@ -9,20 +9,22 @@ import (
 const resolverTestProjectKeyV3 = "aa0f4c76-f04c-4cd6-ae41-10294a4ab57d"
 
 type resolverStoreV3Fake struct {
-	anchor             AnchorBindingV3
-	admin              AnchorBindingV3
-	lookupCalls        int
-	registerCalls      int
-	adminCalls         int
-	creates            int
-	registration       AnchorRegistrationV3
-	adminAuthorization VerifiedAuthorizationV3
-	attempts           []ResolutionAttemptV3
-	recordAttemptErr   error
+	anchor              AnchorBindingV3
+	admin               AnchorBindingV3
+	lookupCalls         int
+	lookupAuthorization VerifiedAuthorizationV3
+	registerCalls       int
+	adminCalls          int
+	creates             int
+	registration        AnchorRegistrationV3
+	adminAuthorization  VerifiedAuthorizationV3
+	attempts            []ResolutionAttemptV3
+	recordAttemptErr    error
 }
 
-func (store *resolverStoreV3Fake) LookupAnchorBindingV3(_ context.Context, _ string) (AnchorBindingV3, error) {
+func (store *resolverStoreV3Fake) LookupAnchorBindingV3(_ context.Context, authorization VerifiedAuthorizationV3, _ string) (AnchorBindingV3, error) {
 	store.lookupCalls++
+	store.lookupAuthorization = authorization
 	return store.anchor, nil
 }
 
@@ -90,8 +92,8 @@ func TestResolveProjectV3EveryIntent(t *testing.T) {
 			name:   "resolve existing",
 			intent: ResolveExistingIntentV3,
 			assert: func(t *testing.T, store *resolverStoreV3Fake, result ResolveProjectResultV3) {
-				if store.lookupCalls != 1 || store.registerCalls != 0 || store.adminCalls != 0 {
-					t.Fatalf("resolve_existing port calls = lookup:%d register:%d admin:%d", store.lookupCalls, store.registerCalls, store.adminCalls)
+				if store.lookupCalls != 1 || !store.lookupAuthorization.PermitsAnchorLookup() || store.registerCalls != 0 || store.adminCalls != 0 {
+					t.Fatalf("resolve_existing port calls = lookup:%d authorization=%#v register:%d admin:%d", store.lookupCalls, store.lookupAuthorization, store.registerCalls, store.adminCalls)
 				}
 				assertFirstMutationFenceV3(t, result)
 			},
@@ -123,8 +125,8 @@ func TestResolveProjectV3EveryIntent(t *testing.T) {
 				request.ReadFilter = &requirement
 			},
 			assert: func(t *testing.T, store *resolverStoreV3Fake, result ResolveProjectResultV3) {
-				if store.lookupCalls != 1 || store.registerCalls != 0 || store.adminCalls != 0 {
-					t.Fatalf("read_filter port calls = lookup:%d register:%d admin:%d", store.lookupCalls, store.registerCalls, store.adminCalls)
+				if store.lookupCalls != 1 || !store.lookupAuthorization.PermitsAnchorLookup() || store.registerCalls != 0 || store.adminCalls != 0 {
+					t.Fatalf("read_filter port calls = lookup:%d authorization=%#v register:%d admin:%d", store.lookupCalls, store.lookupAuthorization, store.registerCalls, store.adminCalls)
 				}
 				if result.Resolution().RedirectReference() != "" {
 					t.Fatalf("read_filter redirected: %#v", result.Resolution())
@@ -373,6 +375,18 @@ func TestResolveProjectV3OpaqueAuthorizationCannotAuthorize(t *testing.T) {
 	})
 }
 
+func TestResolveProjectV3ResolveExistingRejectsUnverifiedBeforeLookup(t *testing.T) {
+	store := &resolverStoreV3Fake{anchor: resolverActiveBindingV3()}
+	verifier := &resolverVerifierV3Fake{}
+
+	result, err := NewResolverV3(store, verifier).ResolveProjectV3(context.Background(), resolverRequestV3(ResolveExistingIntentV3))
+	assertRefusalV3(t, result, err, ProjectDescriptorInvalidOutcomeV3)
+	if verifier.calls != 1 || store.lookupCalls != 0 || store.registerCalls != 0 || store.adminCalls != 0 {
+		t.Fatalf("unverified resolve_existing reached persistence: verifier=%d store=%#v", verifier.calls, store)
+	}
+	assertResolutionAttemptV3(t, store, result.Resolution())
+}
+
 func TestResolveProjectV3MergedAnchorRedirectsAndRecordsAttempt(t *testing.T) {
 	store := &resolverStoreV3Fake{anchor: AnchorBindingV3{
 		State:             AnchorBindingRedirectedV3,
@@ -443,7 +457,15 @@ func resolverRequestV3(intent ResolutionIntentV3) ResolveProjectRequestV3 {
 	if err != nil {
 		panic(err)
 	}
-	return ResolveProjectRequestV3{Intent: intent, Anchor: anchor, Descriptor: descriptor, Correlation: correlation}
+	request := ResolveProjectRequestV3{Intent: intent, Anchor: anchor, Descriptor: descriptor, Correlation: correlation}
+	if intent == ResolveExistingIntentV3 {
+		authorization, err := NewAuthorizationReferenceV3("resolve-existing-authorization-17")
+		if err != nil {
+			panic(err)
+		}
+		request.ResolveExistingAuthorization = authorization
+	}
+	return request
 }
 
 func resolverActiveBindingV3() AnchorBindingV3 {

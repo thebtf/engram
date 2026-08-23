@@ -2,7 +2,9 @@ package gorm
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 
 	"github.com/google/uuid"
@@ -21,9 +23,13 @@ var (
 	errProjectIdentityV3InvalidAttempt   = errors.New("invalid V3 project resolution attempt")
 )
 
-// LookupAnchorBindingV3 reads only the V3 anchor binding. It never falls back
-// to V2 IDs, remotes, names, paths, identifiers, caches, or scoped records.
-func (store *Store) LookupAnchorBindingV3(ctx context.Context, anchorProjectID string) (projectidentity.AnchorBindingV3, error) {
+// LookupAnchorBindingV3 reads only the V3 anchor binding after the resolver
+// supplies a server-verified capability. It never falls back to V2 IDs,
+// remotes, names, paths, identifiers, caches, or scoped records.
+func (store *Store) LookupAnchorBindingV3(ctx context.Context, authorization projectidentity.VerifiedAuthorizationV3, anchorProjectID string) (projectidentity.AnchorBindingV3, error) {
+	if !authorization.PermitsAnchorLookup() {
+		return projectidentity.AnchorBindingV3{}, projectidentity.ErrAuthorizationVerificationRequiredV3
+	}
 	if store == nil || store.DB == nil {
 		return projectidentity.AnchorBindingV3{}, errProjectIdentityV3StoreUnavailable
 	}
@@ -138,14 +144,20 @@ func recordResolutionAttemptV3(ctx context.Context, db *gormlib.DB, attempt proj
 		record.RedirectReference = sql.NullString{String: string(redirect), Valid: true}
 	}
 	if target := attempt.AdministrativeTargetReference(); target != "" {
-		record.AdminTargetReference = sql.NullString{String: string(target), Valid: true}
+		record.AdminTargetReference = sql.NullString{String: redactResolutionAttemptAdministrativeValueV3(string(target)), Valid: true}
 		audit := attempt.AdministrativeAudit()
-		record.AdminActor = sql.NullString{String: audit.Actor(), Valid: true}
-		record.AdminPurpose = sql.NullString{String: audit.Purpose(), Valid: true}
-		record.AdminDecision = sql.NullString{String: audit.Decision(), Valid: true}
-		record.AdminRetentionOrRollback = sql.NullString{String: audit.RetentionOrRollback(), Valid: true}
+		record.AdminActor = sql.NullString{String: redactResolutionAttemptAdministrativeValueV3(audit.Actor()), Valid: true}
+		record.AdminPurpose = sql.NullString{String: redactResolutionAttemptAdministrativeValueV3(audit.Purpose()), Valid: true}
+		record.AdminDecision = sql.NullString{String: redactResolutionAttemptAdministrativeValueV3(audit.Decision()), Valid: true}
+		record.AdminRetentionOrRollback = sql.NullString{String: redactResolutionAttemptAdministrativeValueV3(audit.RetentionOrRollback()), Valid: true}
 	}
 	return db.WithContext(ctx).Create(&record).Error
+}
+
+// redactResolutionAttemptAdministrativeValueV3 preserves an opaque audit fingerprint without persisting caller input.
+func redactResolutionAttemptAdministrativeValueV3(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func lookupAnchorBindingV3(ctx context.Context, db *gormlib.DB, anchorProjectID string) (projectidentity.AnchorBindingV3, error) {
