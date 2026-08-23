@@ -8,6 +8,7 @@
 import { AvailabilityTracker } from './availability.js';
 import type { PluginConfig } from './config.js';
 import { resolveIdentity, validateCanonicalProjectV2, validateProjectSelectorV2, type ProjectIdentity, type ProjectIdentityV2 } from './identity.js';
+import { isValidClientInstanceIdV3, type ProjectIdentityV3 } from './project-identity-v3.js';
 
 // ---------------------------------------------------------------------------
 // Response types
@@ -115,6 +116,7 @@ export interface ProjectRegistrationSuccess {
 export interface ResolvedProjectRegistrationSuccess extends ProjectRegistrationSuccess {
   projectSelector: string;
   projectIdentityV2?: ProjectIdentityV2;
+ projectIdentityV3?: ProjectIdentityV3;
 }
 
 export interface ProjectRegistrationFailure {
@@ -163,6 +165,7 @@ function parseOutcomeRetirementPayload(text: string): OutcomeRetirement | null {
 
 export interface ProjectRegistrationClient {
   registerAndResolveProject(identity: ProjectIdentity, selector: string): Promise<ProjectRegistrationResult>;
+ readonly clientInstanceId?: string;
 }
 
 /**
@@ -176,19 +179,24 @@ export async function resolveAndRegisterProject(
   configuredProject?: string,
 ): Promise<ResolvedProjectRegistrationResult> {
   try {
-    const identity: ProjectIdentity = configuredProject !== undefined
+  const clientInstanceId = client.clientInstanceId;
+  const identity: ProjectIdentity = clientInstanceId !== undefined
+   ? resolveIdentity(agentId, workspaceDir, clientInstanceId)
+   : configuredProject !== undefined
       ? { projectId: configuredProject, agentId }
       : resolveIdentity(agentId, workspaceDir);
-    const selector = configuredProject ?? identity.projectId;
+  const selector = clientInstanceId !== undefined ? identity.projectId : configuredProject ?? identity.projectId;
     const registration = await client.registerAndResolveProject(identity, selector);
     if (!registration.ok) return registration;
     return {
       ...registration,
       projectSelector: selector,
+   ...(identity.projectIdentityV3 ? { projectIdentityV3: identity.projectIdentityV3 } : {}),
       ...(identity.projectIdentityV2 ? { projectIdentityV2: identity.projectIdentityV2 } : {}),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+  if (message === 'PROJECT_DESCRIPTOR_INVALID') return projectDescriptorFailure();
     const invalid = message.startsWith('PROJECT_IDENTITY_INVALID:');
     return projectRegistrationFailure(
       invalid ? 'PROJECT_IDENTITY_INVALID' : 'PROJECT_IDENTITY_UNAVAILABLE',
@@ -284,7 +292,9 @@ export class EngramRestClient {
   private readonly defaultTimeoutMs: number;
   private readonly completedProjectRegistrations = new Map<string, ProjectRegistrationResult>();
   private readonly inFlightProjectRegistrations = new Map<string, Promise<ProjectRegistrationResult>>();
+ private readonly v3ContextDescriptors = new Map<string, ProjectIdentityV3>();
   readonly availability: AvailabilityTracker;
+ readonly clientInstanceId?: string;
 
   constructor(config: PluginConfig) {
     // Extract origin from potentially path-bearing URL
@@ -292,6 +302,7 @@ export class EngramRestClient {
     this.token = config.token;
     this.defaultTimeoutMs = config.timeoutMs;
     this.availability = new AvailabilityTracker();
+  this.clientInstanceId = config.clientInstanceId;
   }
 
   // ---------------------------------------------------------------------------
@@ -310,7 +321,13 @@ export class EngramRestClient {
     identity: ProjectIdentity,
     selector: string,
   ): Promise<ProjectRegistrationResult> {
-    let validatedSelector: string;
+  const descriptor = identity.projectIdentityV3;
+  let validatedSelector = selector;
+  if (descriptor) {
+   if (!isValidClientInstanceIdV3(descriptor.client_instance_id)) {
+    return projectDescriptorFailure();
+   }
+  } else {
     try {
       validatedSelector = validateProjectSelectorV2(selector);
     } catch {
@@ -324,8 +341,9 @@ export class EngramRestClient {
         },
       };
     }
+  }
 
-    const key = JSON.stringify([validatedSelector, identity.projectIdentityV2 ?? null]);
+  const key = JSON.stringify(descriptor ?? [validatedSelector, identity.projectIdentityV2 ?? null]);
     const completed = this.completedProjectRegistrations.get(key);
     if (completed) return completed;
     const inFlight = this.inFlightProjectRegistrations.get(key);
@@ -335,6 +353,7 @@ export class EngramRestClient {
     this.inFlightProjectRegistrations.set(key, registration);
     try {
       const result = await registration;
+   if (result.ok && descriptor) this.v3ContextDescriptors.set(selector, descriptor);
       if (result.ok || result.error.httpStatus === 400 || result.error.httpStatus === 409) {
         this.completedProjectRegistrations.set(key, result);
       }
@@ -361,7 +380,12 @@ export class EngramRestClient {
     const url = this.baseUrl + path;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.defaultTimeoutMs);
-    const body = {
+  const body = identity.projectIdentityV3
+   ? {
+    project_descriptor: identity.projectIdentityV3,
+    identity_only: true,
+   }
+   : {
       project: selector,
       ...(identity.projectIdentityV2 ? { project_identity: identity.projectIdentityV2 } : {}),
       identity_only: true,
@@ -391,7 +415,7 @@ export class EngramRestClient {
         return projectRegistrationFailure(parsed.code, parsed.message, parsed.upgradeAction, response.status);
       }
 
-      const canonical = readCanonicalProject(payload);
+   const canonical = readCanonicalProject(payload, identity.projectIdentityV3 !== undefined);
       if (!canonical) {
         this.availability.recordFailure();
         return projectRegistrationFailure(
@@ -427,9 +451,12 @@ export class EngramRestClient {
     project?: string,
     projectIdentityV2?: ProjectIdentityV2,
   ): Promise<ContextInjectResponse | null> {
-    // Inject returns large payloads (80KB+) with vector search — needs more than default 5s.
-    // Timeout failures here trigger availability cooldown, blocking ALL engram tools for 60s.
-    return this.post<ContextInjectResponse>('/api/context/inject', {
+  // A V3 context request only reuses the descriptor carried through successful registration.
+  const projectDescriptor = project ? this.v3ContextDescriptors.get(project) : undefined;
+  if (this.clientInstanceId !== undefined && !projectDescriptor) return null;
+  return this.post<ContextInjectResponse>('/api/context/inject', projectDescriptor
+   ? { project_descriptor: projectDescriptor }
+   : {
       agent_id: agentId,
       ...(cwd ? { cwd } : {}),
       ...(project ? { project } : {}),
@@ -913,9 +940,27 @@ function projectRegistrationFailure(
   return { ok: false, error: { code, message, upgradeAction, httpStatus } };
 }
 
-function readCanonicalProject(payload: unknown): string {
+function projectDescriptorFailure(): ProjectRegistrationFailure {
+ return projectRegistrationFailure(
+  'PROJECT_DESCRIPTOR_INVALID',
+  'project descriptor is invalid',
+  'repair_project_descriptor',
+  400,
+ );
+}
+
+function readCanonicalProject(payload: unknown, v3 = false): string {
   if (!payload || typeof payload !== 'object') return '';
-  const value = (payload as { canonical_project?: unknown }).canonical_project;
+ let value: unknown;
+ if (v3) {
+  if (!('project_resolution_v3' in payload)) return '';
+  const resolution = payload.project_resolution_v3;
+  if (!resolution || typeof resolution !== 'object' || !('project_key' in resolution)) return '';
+  value = resolution.project_key;
+ } else {
+  if (!('canonical_project' in payload)) return '';
+  value = payload.canonical_project;
+ }
   try {
     return validateCanonicalProjectV2(value);
   } catch {

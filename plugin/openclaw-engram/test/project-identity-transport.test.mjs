@@ -39,8 +39,17 @@ function gitIdentity() {
   };
 }
 
-function clientConfig(token = 'test-token') {
-  return { url: 'http://engram.test:37777', token, timeoutMs: 1000 };
+function clientConfig(token = 'test-token', extra = {}) {
+  return { url: 'http://engram.test:37777', token, timeoutMs: 1000, ...extra };
+}
+
+function writeV3DirectoryAnchor(workspace) {
+  fs.writeFileSync(path.join(workspace, '.engram-project'), JSON.stringify({
+    version: 3,
+    project_id: '11111111-1111-4111-8111-111111111111',
+    name: 'openclaw-fixture',
+    scope: 'directory',
+  }));
 }
 
 test('registration sends full v2 metadata first, substitutes canonical, and deduplicates concurrent and late calls', async (t) => {
@@ -108,6 +117,105 @@ test('before-agent-start repeats the original selector and v2 metadata for conte
   assert.equal(requests[1].project, requests[0].project);
   assert.notEqual(requests[1].project, 'p2n_00112233445566778899aabbccddeeff');
   assert.deepEqual(requests[1].project_identity, requests[0].project_identity);
+});
+
+test('V3 shared registration and context injection send one descriptor with no V2 fallback', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-v3-context-'));
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+  writeV3DirectoryAnchor(workspace);
+
+  const requests = [];
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init.body));
+    requests.push(body);
+    if (body.identity_only) {
+      return new Response(JSON.stringify({
+        project_resolution_v3: {
+          outcome: 'PROJECT_RESOLVED',
+          project_key: '22222222-2222-4222-8222-222222222222',
+          correlation: 'openclaw-v3-registration',
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({ observations: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const client = new EngramRestClient(clientConfig('test-token', { clientInstanceId: 'openclaw-install-1' }));
+  await handleBeforeAgentStart(
+    { initialPrompt: 'hello' },
+    { agentId: 'agent-a', sessionId: 'session-a', workspaceDir: workspace },
+    client,
+    { tokenBudget: 1000, project: 'ignored-v2-selector' },
+  );
+
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0], {
+    project_descriptor: {
+      version: 3,
+      anchor_project_id: '11111111-1111-4111-8111-111111111111',
+      name: 'openclaw-fixture',
+      scope: 'directory',
+      normalized_git_remotes: [],
+      legacy_identifiers: [],
+      client_instance_id: 'openclaw-install-1',
+    },
+    identity_only: true,
+  });
+  assert.deepEqual(requests[1].project_descriptor, requests[0].project_descriptor);
+  for (const body of requests) {
+    assert.equal(Object.hasOwn(body, 'project'), false);
+    assert.equal(Object.hasOwn(body, 'project_identity'), false);
+  }
+});
+
+test('V3 invalid client instance IDs fail before any request', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-v3-client-instance-'));
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+  writeV3DirectoryAnchor(workspace);
+
+  for (const clientInstanceId of [
+    '/private/operator/path',
+    'C:\\private\\operator',
+    'credential@private',
+    'install / private',
+    'install\u0007private',
+  ]) {
+    assert.throws(
+      () => parseConfig({ url: 'http://engram.test:37777', token: 'test-token', clientInstanceId }),
+      /opaque non-secret installation reference/,
+      clientInstanceId,
+    );
+    let requests = 0;
+    globalThis.fetch = async () => {
+      requests++;
+      return new Response(JSON.stringify({ canonical_project: 'must-not-run' }), { status: 200 });
+    };
+    const client = new EngramRestClient(clientConfig('test-token', { clientInstanceId }));
+    const result = await resolveAndRegisterProject(client, 'agent-a', workspace);
+
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: 'PROJECT_DESCRIPTOR_INVALID',
+        message: 'project descriptor is invalid',
+        upgradeAction: 'repair_project_descriptor',
+        httpStatus: 400,
+      },
+    }, clientInstanceId);
+    assert.equal(requests, 0, clientInstanceId);
+    assert.equal(JSON.stringify(result).includes(clientInstanceId), false, clientInstanceId);
+  }
 });
 
 test('before-tool-call registration shares the 500ms file-context deadline', async () => {

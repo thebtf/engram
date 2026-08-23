@@ -72,6 +72,10 @@ function isSafeText(value: string): boolean {
     !value.includes('@') && !/^[^/:\s@]+:[^@\s]+@/u.test(value);
 }
 
+export function isValidClientInstanceIdV3(value: unknown): value is string {
+  return typeof value === 'string' && Array.from(value).length <= 256 && isSafeText(value) && !/[\\/]/u.test(value);
+}
+
 function isValidAnchorName(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && Array.from(value).length <= 256 && !CONTROL.test(value);
 }
@@ -229,7 +233,7 @@ export function buildProjectIdentityV3(input: DescriptorInputV3): ProjectIdentit
   const remotes = fields.normalized_git_remotes ?? [];
   const legacy = fields.legacy_identifiers ?? [];
   if (!Array.isArray(remotes) || !remotes.every(isValidNormalizedRemote) || !Array.isArray(legacy) || !legacy.every(isValidLegacyIdentifier) ||
-    typeof fields.client_instance_id !== 'string' || !isSafeText(fields.client_instance_id)) descriptorInvalid();
+    !isValidClientInstanceIdV3(fields.client_instance_id)) descriptorInvalid();
   return {
     version: 3,
     anchor_project_id: anchor.project_id,

@@ -134,3 +134,26 @@ test('OpenClaw V3 rejects non-canonical descriptor evidence', () => {
     );
   }
 });
+
+test('OpenClaw V3 rejects non-opaque client instance IDs', () => {
+  const anchor = corpus.vectors[0].input.anchor!;
+  const base = {
+    anchor,
+    normalized_git_remotes: [],
+    legacy_identifiers: [],
+  };
+
+  for (const client_instance_id of [
+    '/private/operator/path',
+    'C:\\private\\operator',
+    'install / private',
+    'install\u0007private',
+    'credential@private',
+  ]) {
+    assert.throws(
+      () => v3.buildProjectIdentityV3({ ...base, client_instance_id }),
+      /PROJECT_DESCRIPTOR_INVALID/,
+      client_instance_id,
+    );
+  }
+});
