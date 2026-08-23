@@ -100,6 +100,27 @@ func TestProjectIdentityV3DescriptorSeamUsesFrozenVectors(t *testing.T) {
 		t.Fatalf("%s: descriptor accepted an empty client instance ID", valid.ID)
 	}
 
+	for _, vectorID := range []string{
+		"descriptor-drive-colon-client-instance-id-is-invalid",
+		"descriptor-http-scheme-client-instance-id-is-invalid",
+		"descriptor-ssh-scheme-client-instance-id-is-invalid",
+	} {
+		vector := corpus.vector(t, vectorID)
+		anchor, err := ParseAnchorV3(vector.Input.Anchor)
+		if err != nil {
+			t.Fatalf("%s: parse anchor: %v", vector.ID, err)
+		}
+		var descriptor struct {
+			ClientInstanceID string `json:"client_instance_id"`
+		}
+		if err := json.Unmarshal(vector.Input.Descriptor, &descriptor); err != nil {
+			t.Fatalf("%s: decode descriptor: %v", vector.ID, err)
+		}
+		if _, err := BuildDescriptorV3(anchor, nil, nil, descriptor.ClientInstanceID); err == nil {
+			t.Fatalf("%s: descriptor accepted a locator-shaped client instance ID", vector.ID)
+		}
+	}
+
 	parent := t.TempDir()
 	selectedRoot := filepath.Join(parent, "selected")
 	if err := os.Mkdir(selectedRoot, 0o700); err != nil {

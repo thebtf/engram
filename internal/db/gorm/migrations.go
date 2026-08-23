@@ -4795,6 +4795,7 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		projectIdentityV3ResolutionAttemptsMigration163(),
 		projectIdentityV3ResolutionAttemptAdminAuditMigration164(),
 		projectIdentityV3ComparisonsMigration165(),
+		projectIdentityV3ComparisonClientInstancePrivacyMigration166(),
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)

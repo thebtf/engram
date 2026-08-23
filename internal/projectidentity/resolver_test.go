@@ -265,6 +265,33 @@ func TestResolveProjectV3DescriptorAndExceptionRefusalsDoNotReachStore(t *testin
 			outcome: ProjectDescriptorInvalidOutcomeV3,
 		},
 		{
+			name: "descriptor drive-colon client evidence invalid",
+			request: func() ResolveProjectRequestV3 {
+				request := resolverRequestV3(ResolveExistingIntentV3)
+				request.Descriptor.ClientInstanceID = "C:private"
+				return request
+			},
+			outcome: ProjectDescriptorInvalidOutcomeV3,
+		},
+		{
+			name: "descriptor http-scheme client evidence invalid",
+			request: func() ResolveProjectRequestV3 {
+				request := resolverRequestV3(ResolveExistingIntentV3)
+				request.Descriptor.ClientInstanceID = "http:private"
+				return request
+			},
+			outcome: ProjectDescriptorInvalidOutcomeV3,
+		},
+		{
+			name: "descriptor ssh-scheme client evidence invalid",
+			request: func() ResolveProjectRequestV3 {
+				request := resolverRequestV3(ResolveExistingIntentV3)
+				request.Descriptor.ClientInstanceID = "ssh:private"
+				return request
+			},
+			outcome: ProjectDescriptorInvalidOutcomeV3,
+		},
+		{
 			name: "read filter lacks authorization correlation",
 			request: func() ResolveProjectRequestV3 {
 				return resolverRequestV3(ReadFilterIntentV3)

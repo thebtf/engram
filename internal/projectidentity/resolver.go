@@ -463,7 +463,7 @@ func validDescriptorV3(descriptor DescriptorV3) bool {
 	if descriptor.Version != 3 || !validUUID(descriptor.AnchorProjectID) || descriptor.Name == "" || descriptor.Scope == "" {
 		return false
 	}
-	if _, err := NewCorrelationV3(descriptor.ClientInstanceID); err != nil {
+	if !validClientInstanceIDV3(descriptor.ClientInstanceID) {
 		return false
 	}
 	for _, remote := range descriptor.NormalizedGitRemotes {

@@ -281,7 +281,7 @@ func (observation ComparisonObservationV3) Classification() ComparisonClassV3 {
 
 // Valid reports whether the observation is a complete, redacted comparison boundary.
 func (observation ComparisonObservationV3) Valid() bool {
-	if !validComparisonFingerprintV3(observation.IdempotencyKey) || !validOpaqueReferenceV3(string(observation.Correlation)) || !observation.V3Outcome.Valid() || !observation.LegacyOutcome.valid() || !validOpaqueReferenceV3(observation.ClientInstanceID) || !observation.Transport.valid() || !observation.Scope.valid() || !observation.Freshness.valid() || !validComparisonFingerprintV3(observation.EvidenceFingerprint) {
+	if !validComparisonFingerprintV3(observation.IdempotencyKey) || !validOpaqueReferenceV3(string(observation.Correlation)) || !observation.V3Outcome.Valid() || !observation.LegacyOutcome.valid() || !validClientInstanceIDV3(observation.ClientInstanceID) || !observation.Transport.valid() || !observation.Scope.valid() || !observation.Freshness.valid() || !validComparisonFingerprintV3(observation.EvidenceFingerprint) {
 		return false
 	}
 	return true

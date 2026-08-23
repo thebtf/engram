@@ -5,7 +5,7 @@
   "description": "Authoritative cross-language vectors for V3 anchor discovery, descriptor construction, remote normalization, and central-resolution outcomes. Input descriptors never assert a canonical project key; expected canonical keys are server response fixtures only.",
   "vector_counts": {
     "accepted": 18,
-    "refused": 21
+    "refused": 24
   },
   "vectors": [
     {
@@ -1136,6 +1136,108 @@
           "normalized_git_remotes": [],
           "legacy_identifiers": [],
           "client_instance_id": ""
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_DESCRIPTOR_INVALID",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "descriptor-drive-colon-client-instance-id-is-invalid",
+      "category": "descriptor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [],
+          "client_instance_id": "C:private"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_DESCRIPTOR_INVALID",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "descriptor-http-scheme-client-instance-id-is-invalid",
+      "category": "descriptor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [],
+          "client_instance_id": "http:private"
+        }
+      },
+      "expected": {
+        "outcome": "PROJECT_DESCRIPTOR_INVALID",
+        "canonical_key_may_be_exposed": false,
+        "scoped_mutation_permitted": false,
+        "binding_established": false
+      }
+    },
+    {
+      "id": "descriptor-ssh-scheme-client-instance-id-is-invalid",
+      "category": "descriptor_refusal",
+      "intent": "resolve_existing",
+      "input": {
+        "scope_root": {
+          "kind": "repository",
+          "selection": "git_repository_root"
+        },
+        "anchor": {
+          "version": 3,
+          "project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository"
+        },
+        "anchor_location": "scope_root/.engram-project",
+        "anchor_tracked": true,
+        "descriptor": {
+          "version": 3,
+          "anchor_project_id": "11111111-1111-4111-8111-111111111111",
+          "name": "widget-service",
+          "scope": "repository",
+          "normalized_git_remotes": [],
+          "legacy_identifiers": [],
+          "client_instance_id": "ssh:private"
         }
       },
       "expected": {

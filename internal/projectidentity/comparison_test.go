@@ -86,6 +86,9 @@ func TestComparisonObservationV3RejectsUnsafeInputs(t *testing.T) {
 		{name: "raw idempotency key", idempotency: "raw-idempotency", client: "comparison-client", evidence: comparisonTestFingerprint("evidence")},
 		{name: "raw descriptor fingerprint", idempotency: comparisonTestFingerprint("idempotency"), client: "comparison-client", evidence: "https://user:credential@example.invalid/private/repo"},
 		{name: "path client", idempotency: comparisonTestFingerprint("idempotency"), client: "C:/private/repo", evidence: comparisonTestFingerprint("evidence")},
+		{name: "drive-colon client", idempotency: comparisonTestFingerprint("idempotency"), client: "C:private", evidence: comparisonTestFingerprint("evidence")},
+		{name: "http-scheme client", idempotency: comparisonTestFingerprint("idempotency"), client: "http:private", evidence: comparisonTestFingerprint("evidence")},
+		{name: "ssh-scheme client", idempotency: comparisonTestFingerprint("idempotency"), client: "ssh:private", evidence: comparisonTestFingerprint("evidence")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := NewComparisonObservationV3(test.idempotency, correlation, ProjectDescriptorInvalidOutcomeV3, LegacyComparisonRefusalV2, test.client, ComparisonTransportHookV3, ComparisonDirectoryScopeV3, ComparisonFreshV3, test.evidence)

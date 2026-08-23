@@ -360,3 +360,28 @@ func validOpaqueReferenceV3(value string) bool {
 		return unicode.IsSpace(r) || unicode.IsControl(r) || strings.ContainsRune("/\\@", r)
 	}) == -1
 }
+
+func validClientInstanceIDV3(value string) bool {
+	if !validOpaqueReferenceV3(value) {
+		return false
+	}
+	if !asciiLetterV3(value[0]) {
+		return true
+	}
+	for index := 1; index < len(value); index++ {
+		character := value[index]
+		switch {
+		case asciiLetterV3(character), character >= '0' && character <= '9', character == '+', character == '.', character == '-':
+			continue
+		case character == ':':
+			return false
+		default:
+			return true
+		}
+	}
+	return true
+}
+
+func asciiLetterV3(character byte) bool {
+	return character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z'
+}

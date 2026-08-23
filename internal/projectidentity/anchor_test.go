@@ -143,6 +143,11 @@ func TestBuildDescriptorV3ValidatesOpaqueEvidence(t *testing.T) {
 	if strings.Contains(string(emptyEncoded), ":null") {
 		t.Fatalf("descriptor encoded absent evidence as null: %s", emptyEncoded)
 	}
+	for _, clientInstanceID := range []string{"fixture-install", "123-client", "_opaque"} {
+		if _, err := BuildDescriptorV3(anchor, nil, nil, clientInstanceID); err != nil {
+			t.Fatalf("BuildDescriptorV3 rejected valid client instance ID %q: %v", clientInstanceID, err)
+		}
+	}
 
 	for _, test := range []struct {
 		remotes []string
@@ -150,6 +155,9 @@ func TestBuildDescriptorV3ValidatesOpaqueEvidence(t *testing.T) {
 		client  string
 	}{
 		{client: ""},
+		{client: "C:private"},
+		{client: "http:private"},
+		{client: "ssh:private"},
 		{remotes: []string{"https://git.example.test/Platform/Widget.git"}, client: "fixture-install"},
 		{remotes: []string{"GIT.EXAMPLE.TEST/Platform/Widget"}, client: "fixture-install"},
 		{remotes: []string{"git.example.test:invalid/Platform/Widget"}, client: "fixture-install"},

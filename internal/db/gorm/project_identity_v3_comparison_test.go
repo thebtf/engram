@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/projectidentity"
+	gormlib "gorm.io/gorm"
 )
 
 func TestProjectIdentityV3ComparisonStoreRedactsAndReplaysReceipt(t *testing.T) {
@@ -142,6 +143,60 @@ func TestProjectIdentityV3ComparisonStoreRedactsAndReplaysReceipt(t *testing.T) 
 	invalid.EvidenceFingerprint = "https://fixture-user:fixture-credential@example.invalid/private/repo"
 	_, err = store.RecordComparisonV3(context.Background(), invalid)
 	require.Error(t, err, "direct storage calls must reject writes before a valid comparison boundary")
+}
+
+func TestProjectIdentityV3ComparisonClientInstancePrivacyMigration166PreservesHistoryAndRejectsFutureLocators(t *testing.T) {
+	store, cleanup := openIntegrationTestDB(t)
+	t.Cleanup(cleanup)
+	db := store.GetDB()
+	schema := "t027_migration_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	require.NoError(t, db.Exec("CREATE SCHEMA "+schema).Error)
+	t.Cleanup(func() {
+		require.NoError(t, db.Exec("DROP SCHEMA IF EXISTS "+schema+" CASCADE").Error)
+	})
+
+	migration165 := projectIdentityV3ComparisonsMigration165()
+	migration166 := projectIdentityV3ComparisonClientInstancePrivacyMigration166()
+	withProjectIdentityMigrationSchema(t, db, schema, func(tx *gormlib.DB) {
+		require.NoError(t, migration165.Migrate(tx))
+		insertComparison := func(clientInstanceID string) error {
+			return tx.Exec(`
+				INSERT INTO project_identity_comparisons (
+					comparison_id, idempotency_key, correlation, v3_outcome, legacy_outcome,
+					classification, client_instance_id, transport, scope, freshness, evidence_fingerprint
+				) VALUES (?, ?, ?, 'PROJECT_DESCRIPTOR_INVALID', 'refusal', 'refusal', ?, 'http', 'repository', 'fresh', ?)
+			`, uuid.NewString(), comparisonStoreFingerprint("migration-166-"+uuid.NewString()), "migration-166-correlation-"+uuid.NewString(), clientInstanceID, comparisonStoreFingerprint("migration-166-evidence-"+uuid.NewString())).Error
+		}
+
+		const historicalLocator = "C:private"
+		require.NoError(t, insertComparison(historicalLocator), "migration 165 must reproduce the pre-166 comparison vocabulary")
+		require.NoError(t, migration166.Migrate(tx))
+		require.NoError(t, migration166.Migrate(tx), "migration 166 DDL must be idempotent")
+
+		var historicalRows int64
+		require.NoError(t, tx.Model(&ProjectIdentityComparison{}).Where("client_instance_id = ?", historicalLocator).Count(&historicalRows).Error)
+		require.EqualValues(t, 1, historicalRows, "the forward privacy migration must not rewrite or delete historical evidence")
+
+		var constraintRows int64
+		require.NoError(t, tx.Raw(`
+			SELECT COUNT(*) FROM pg_constraint
+			WHERE conrelid = 'project_identity_comparisons'::regclass
+				AND conname = 'project_identity_comparisons_client_instance_privacy_chk'
+		`).Scan(&constraintRows).Error)
+		require.EqualValues(t, 1, constraintRows, "migration 166 must install the privacy check")
+		var validated bool
+		require.NoError(t, tx.Raw(`
+			SELECT convalidated FROM pg_constraint
+			WHERE conrelid = 'project_identity_comparisons'::regclass
+				AND conname = 'project_identity_comparisons_client_instance_privacy_chk'
+		`).Scan(&validated).Error)
+		require.False(t, validated, "the new check must preserve pre-existing comparison evidence")
+
+		for _, clientInstanceID := range []string{"C:private", "http:private", "ssh:private"} {
+			require.Error(t, insertComparison(clientInstanceID), "migration 166 must reject future locator-shaped client IDs: %q", clientInstanceID)
+		}
+		require.NoError(t, insertComparison("fixture-install-166"), "migration 166 must preserve valid opaque IDs")
+	})
 }
 
 func comparisonStoreFingerprint(value string) string {

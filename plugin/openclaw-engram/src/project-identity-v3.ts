@@ -73,7 +73,7 @@ function isSafeText(value: string): boolean {
 }
 
 export function isValidClientInstanceIdV3(value: unknown): value is string {
-  return typeof value === 'string' && Array.from(value).length <= 256 && isSafeText(value) && !/[\\/]/u.test(value);
+  return typeof value === 'string' && Array.from(value).length <= 256 && isSafeText(value) && !/[\\/]/u.test(value) && !/^[a-z][a-z0-9+.-]*:/iu.test(value);
 }
 
 function isValidAnchorName(value: unknown): value is string {

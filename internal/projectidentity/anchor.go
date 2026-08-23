@@ -276,7 +276,7 @@ func normalizedRemote(host, rawPath string) (string, bool) {
 
 // BuildDescriptorV3 constructs the non-authoritative, non-persistent V3 request descriptor.
 func BuildDescriptorV3(anchor AnchorV3, remotes []string, legacy []LegacyIdentifierV3, clientInstanceID string) (DescriptorV3, error) {
-	if !validAnchorV3(anchor) || strings.TrimSpace(clientInstanceID) == "" {
+	if !validAnchorV3(anchor) || !validClientInstanceIDV3(clientInstanceID) {
 		return DescriptorV3{}, errDescriptorInvalidV3
 	}
 	for _, remote := range remotes {
