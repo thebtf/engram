@@ -68,6 +68,7 @@ All fields are set under `plugins.entries.engram.config`:
 | `url` | string | `http://localhost:37777` | Engram server base URL |
 | `token` | string | *(required)* | Bearer token for API authentication |
 | `project` | string | *(auto-detected)* | Project scope override; defaults to workspace identity |
+| `clientInstanceId` | string | *(optional)* | Opaque non-secret installation reference that enables V3 identity |
 | `contextLimit` | number | `10` | Maximum observations injected per prompt turn |
 | `sessionContextLimit` | number | `20` | Maximum observations injected at session start |
 | `tokenBudget` | number | `2000` | Token budget for context injection (~4 chars/token) |

@@ -68,6 +68,115 @@ func v3ContextInjectRequest(t *testing.T, descriptor map[string]any) *http.Reque
 	return req.WithContext(auth.WithIdentity(req.Context(), auth.Client("read-only", "keycard-v3")))
 }
 
+func v3SearchRequest(t *testing.T, descriptor map[string]any) *http.Request {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"project":            "attacker-selected-project",
+		"agent_id":           "attacker-selected-agent",
+		"query":              "descriptor-backed query",
+		"project_descriptor": descriptor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/context/search", bytes.NewReader(body))
+	return req.WithContext(auth.WithIdentity(req.Context(), auth.Client("read-only", "keycard-v3")))
+}
+
+func TestSearchByPromptV3_ResolvesBeforeRetrievalAndIgnoresRawSelectors(t *testing.T) {
+	projectKey := "22222222-2222-4222-8222-222222222222"
+	workflow := &contextInjectV3Workflow{response: &pb.InitializeResponse{
+		ProjectResolutionV3: &pb.ProjectResolutionResultV3{
+			Outcome:    pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED,
+			ProjectKey: &projectKey,
+		},
+	}}
+	service := newInjectTestService(true)
+	service.grpcInternalServer = workflow
+	var retrievedProject, retrievedAgent string
+	service.retrievalHooks.retrieveRelevant = func(ctx context.Context, project, _ string, _ RetrievalOptions) ([]*models.Observation, map[int64]float64, error) {
+		retrievedProject = project
+		state, ok := ctx.Value(retrievalContextKey{}).(retrievalContextState)
+		if !ok {
+			t.Fatal("retrieval context missing")
+		}
+		retrievedAgent = state.agentID
+		return []*models.Observation{{ID: 1}}, map[int64]float64{1: 0.9}, nil
+	}
+
+	writer := httptest.NewRecorder()
+	service.handleSearchByPrompt(writer, v3SearchRequest(t, validContextProjectDescriptorV3()))
+
+	if writer.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", writer.Code, writer.Body.String())
+	}
+	if workflow.calls != 1 || workflow.request == nil {
+		t.Fatalf("central workflow calls=%d request=%#v", workflow.calls, workflow.request)
+	}
+	if workflow.request.GetProject() != "" || workflow.request.GetProjectIdentityV3() == nil {
+		t.Fatalf("raw V3 project bypassed central workflow: %#v", workflow.request)
+	}
+	if retrievedProject != projectKey || retrievedAgent != "" {
+		t.Fatalf("retrieval scope project=%q agent=%q", retrievedProject, retrievedAgent)
+	}
+}
+
+func TestSearchByPromptV3_RefusalStopsRetrievalAndRedactsInputs(t *testing.T) {
+	workflow := &contextInjectV3Workflow{err: sessionStartV3Refusal(t, projectidentity.ProjectOnboardingRequiredOutcomeV3)}
+	service := newInjectTestService(true)
+	service.grpcInternalServer = workflow
+	service.retrievalHooks.retrieveRelevant = func(context.Context, string, string, RetrievalOptions) ([]*models.Observation, map[int64]float64, error) {
+		t.Fatal("retrieval ran after V3 refusal")
+		return nil, nil, nil
+	}
+
+	writer := httptest.NewRecorder()
+	service.handleSearchByPrompt(writer, v3SearchRequest(t, validContextProjectDescriptorV3()))
+
+	if writer.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", writer.Code, writer.Body.String())
+	}
+	if workflow.calls != 1 {
+		t.Fatalf("central workflow calls=%d", workflow.calls)
+	}
+	var response map[string]string
+	if err := json.Unmarshal(writer.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response) != 3 || response["code"] != string(projectidentity.ProjectOnboardingRequiredOutcomeV3) {
+		t.Fatalf("refusal=%v", response)
+	}
+	for _, forbidden := range []string{"attacker-selected-project", "attacker-selected-agent", "descriptor-backed query", "raw project resolution diagnostic"} {
+		if strings.Contains(writer.Body.String(), forbidden) {
+			t.Fatalf("V3 refusal leaked %q: %s", forbidden, writer.Body.String())
+		}
+	}
+}
+
+func TestSearchByPromptV3_AbsentRetainsLegacyGETScope(t *testing.T) {
+	service := newInjectTestService(true)
+	var retrievedProject, retrievedAgent string
+	service.retrievalHooks.retrieveRelevant = func(ctx context.Context, project, _ string, _ RetrievalOptions) ([]*models.Observation, map[int64]float64, error) {
+		retrievedProject = project
+		state, ok := ctx.Value(retrievalContextKey{}).(retrievalContextState)
+		if !ok {
+			t.Fatal("retrieval context missing")
+		}
+		retrievedAgent = state.agentID
+		return []*models.Observation{{ID: 1}}, map[int64]float64{1: 0.9}, nil
+	}
+
+	writer := httptest.NewRecorder()
+	service.handleSearchByPrompt(writer, httptest.NewRequest(http.MethodGet, "/api/context/search?project=legacy-project&agent_id=legacy-agent&query=legacy-query", nil))
+
+	if writer.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", writer.Code, writer.Body.String())
+	}
+	if retrievedProject != "legacy-project" || retrievedAgent != "legacy-agent" {
+		t.Fatalf("legacy retrieval scope project=%q agent=%q", retrievedProject, retrievedAgent)
+	}
+}
+
 func TestContextInjectV3_ResolvesBeforeRetrievalAndIgnoresRawSelectors(t *testing.T) {
 	projectKey := "22222222-2222-4222-8222-222222222222"
 	resolvedScope := "repository"

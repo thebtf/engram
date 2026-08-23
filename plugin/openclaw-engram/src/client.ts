@@ -357,7 +357,10 @@ export class EngramRestClient {
     this.inFlightProjectRegistrations.set(key, registration);
     try {
       const result = await registration;
-   if (result.ok && descriptor) this.v3ContextDescriptors.set(selector, descriptor);
+      if (result.ok && descriptor) {
+        this.v3ContextDescriptors.set(selector, descriptor);
+        this.v3ContextDescriptors.set(result.canonicalProject, descriptor);
+      }
       if (result.ok || result.error.httpStatus === 400 || result.error.httpStatus === 409) {
         this.completedProjectRegistrations.set(key, result);
       }
@@ -445,6 +448,16 @@ export class EngramRestClient {
     }
   }
 
+  private scopedProjectRequest<T extends { project: string; agent_id?: string }>(
+    body: T,
+  ): T | (Omit<T, 'project' | 'agent_id'> & { project_descriptor: ProjectIdentityV3 }) | null {
+    if (this.clientInstanceId === undefined) return body;
+    const descriptor = this.v3ContextDescriptors.get(body.project);
+    if (!descriptor) return null;
+    const { project: _, agent_id: _agentID, ...request } = body;
+    return { ...request, project_descriptor: descriptor };
+  }
+
   /**
    * Fetch session context for injection (static session-level context).
    * POST /api/context/inject
@@ -483,7 +496,8 @@ export class EngramRestClient {
     preset?: string;
   }): Promise<ContextSearchResponse | null> {
     // Context search does vector query (embedding + pgvector) — needs more than default 5s.
-    return this.post<ContextSearchResponse>('/api/context/search', body, 15_000);
+    const request = this.scopedProjectRequest(body);
+    return request ? this.post<ContextSearchResponse>('/api/context/search', request, 15_000) : null;
   }
 
   /**
@@ -591,6 +605,7 @@ export class EngramRestClient {
     observations: BulkObservationInput[],
     sessionId?: string,
   ): Promise<BulkImportResponse | null> {
+    if (this.clientInstanceId !== undefined) return null;
     if (observations.length === 0) return { imported: 0, skipped_duplicates: 0 };
 
     // All observations in a batch must share the same project.
@@ -769,11 +784,12 @@ export class EngramRestClient {
     mode: 'recent' | 'anchor' | 'query',
     params?: { query?: string; anchor_id?: number; limit?: number },
   ): Promise<Observation[]> {
-    const body: Record<string, unknown> = { project, mode };
+    const body: { project: string; mode: 'recent' | 'anchor' | 'query'; query?: string; anchor_id?: number; limit?: number } = { project, mode };
     if (params?.query) body.query = params.query;
     if (params?.anchor_id) body.anchor_id = params.anchor_id;
     if (params?.limit) body.limit = params.limit;
-    const resp = await this.post<{ observations: Observation[] }>('/api/context/search', body, 15_000);
+    const request = this.scopedProjectRequest(body);
+    const resp = request ? await this.post<{ observations: Observation[] }>('/api/context/search', request, 15_000) : null;
     return resp?.observations ?? [];
   }
 

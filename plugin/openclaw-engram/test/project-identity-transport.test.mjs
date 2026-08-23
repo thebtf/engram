@@ -193,6 +193,118 @@ test('V3 shared registration and context injection send one descriptor with no V
   }
 });
 
+test('V3 search and timeline send the cached descriptor for selector and canonical keys', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const requests = [];
+  const descriptor = v3Identity().projectIdentityV3;
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(String(init.body));
+    requests.push({ path: new URL(String(url)).pathname, body });
+    if (body.identity_only) {
+      return new Response(JSON.stringify({
+        project_resolution_v3: {
+          outcome: 'PROJECT_RESOLVED',
+          project_key: '22222222-2222-4222-8222-222222222222',
+          resolved_scope: 'directory',
+          correlation: 'openclaw-v3-registration',
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({ observations: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const client = new EngramRestClient(clientConfig('test-token', { clientInstanceId: 'openclaw-install-1' }));
+  const registration = await client.registerAndResolveProject(v3Identity(), 'anchor-selector');
+  assert.equal(registration.ok, true);
+  if (!registration.ok) return;
+
+  await client.searchContext({ project: 'anchor-selector', query: 'selector lookup', agent_id: 'attacker-agent' });
+  await client.searchContext({ project: registration.canonicalProject, query: 'canonical lookup', agent_id: 'attacker-agent' });
+  await client.getTimeline(registration.canonicalProject, 'query', { query: 'timeline lookup' });
+
+  assert.deepEqual(requests.map(({ path }) => path), [
+    '/api/context/inject',
+    '/api/context/search',
+    '/api/context/search',
+    '/api/context/search',
+  ]);
+  for (const { body } of requests.slice(1)) {
+    assert.deepEqual(body.project_descriptor, descriptor);
+    assert.equal(Object.hasOwn(body, 'project'), false);
+    assert.equal(Object.hasOwn(body, 'agent_id'), false);
+  }
+});
+
+test('V3 stale scoped requests and bulk import fail closed before fetch', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let fetches = 0;
+  globalThis.fetch = async () => {
+    fetches++;
+    return new Response('{}', { status: 200 });
+  };
+
+  const client = new EngramRestClient(clientConfig('test-token', { clientInstanceId: 'openclaw-install-1' }));
+  const search = await client.searchContext({ project: 'stale-canonical-project', query: 'must not fetch' });
+  const timeline = await client.getTimeline('stale-canonical-project', 'query', { query: 'must not fetch' });
+  const imported = await client.bulkImport([{
+    project: 'stale-canonical-project',
+    title: 'must not fetch',
+    content: 'must not fetch',
+    type: 'note',
+  }]);
+
+  assert.equal(search, null);
+  assert.deepEqual(timeline, []);
+  assert.equal(imported, null);
+  assert.equal(fetches, 0);
+});
+
+test('V2 scoped requests preserve raw selector and bulk import transport', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ path: new URL(String(url)).pathname, body: JSON.parse(String(init.body)) });
+    return new Response(JSON.stringify({ observations: [], imported: 1, skipped_duplicates: 0 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  const client = new EngramRestClient(clientConfig());
+  await client.searchContext({ project: 'legacy-project', query: 'legacy search', agent_id: 'legacy-agent' });
+  await client.getTimeline('legacy-project', 'query', { query: 'legacy timeline' });
+  await client.bulkImport([{
+    project: 'legacy-project',
+    title: 'legacy import',
+    content: 'legacy import',
+    type: 'note',
+  }]);
+
+  assert.deepEqual(requests, [
+    {
+      path: '/api/context/search',
+      body: { project: 'legacy-project', query: 'legacy search', agent_id: 'legacy-agent' },
+    },
+    {
+      path: '/api/context/search',
+      body: { project: 'legacy-project', mode: 'query', query: 'legacy timeline' },
+    },
+    {
+      path: '/api/observations/bulk-import',
+      body: {
+        project: 'legacy-project',
+        observations: [{ type: 'note', title: 'legacy import', narrative: 'legacy import' }],
+      },
+    },
+  ]);
+});
+
 test('V3 registration fails closed on malformed resolution responses', async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });

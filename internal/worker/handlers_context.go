@@ -294,10 +294,11 @@ func memoriesToObservations(mems []*models.Memory) []*models.Observation {
 // @Param cwd query string false "Working directory (ignored server-side)"
 // @Param agent_id query string false "Agent ID (acts as project scope if project empty)"
 // @Param limit query int false "Number of results (default 50, max 200)"
-// @Param body body object false "POST body: {project, query, agent_id, cwd, limit}"
+// @Param body body object false "POST body: {project, query, agent_id, cwd, limit, project_descriptor}"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {string} string "project and query required"
-// @Failure 500 {string} string "internal error"
+// @Failure 409 {object} map[string]string "V3 project resolution refused"
+// @Failure 503 {object} map[string]string "V3 project resolution unavailable"
 // @Router /api/context/search [get]
 // @Router /api/context/search [post]
 func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
@@ -311,12 +312,13 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 	var obsTypeFilter string
 	if r.Method == http.MethodPost && r.Body != nil {
 		var body struct {
-			Project          string   `json:"project"`
-			Query            string   `json:"query"`
-			Cwd              string   `json:"cwd"`
-			AgentID          string   `json:"agent_id"`
-			ObsType          string   `json:"obs_type"`
-			FilesBeingEdited []string `json:"files_being_edited"`
+			Project           string          `json:"project"`
+			Query             string          `json:"query"`
+			Cwd               string          `json:"cwd"`
+			AgentID           string          `json:"agent_id"`
+			ObsType           string          `json:"obs_type"`
+			FilesBeingEdited  []string        `json:"files_being_edited"`
+			ProjectDescriptor json.RawMessage `json:"project_descriptor"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
 			if body.Project != "" {
@@ -341,6 +343,16 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 			if project == "" && agentID != "" {
 				project = agentID
 			}
+		}
+
+		if body.ProjectDescriptor != nil {
+			resolved, err := s.resolveContextProjectV3(r.Context(), body.ProjectDescriptor)
+			if err != nil {
+				writeSessionStartV3HTTPError(w, err)
+				return
+			}
+			project = resolved.GetProjectKey()
+			agentID = ""
 		}
 	}
 
