@@ -548,6 +548,9 @@ func (s *Server) observeProjectIdentityComparisonV3(ctx context.Context, request
 }
 
 func grpcComparisonOriginV3(ctx context.Context) projectidentity.ComparisonOriginV3 {
+	if origin, ok := projectidentity.ComparisonOriginFromContextV3(ctx); ok {
+		return origin
+	}
 	var claim, requestID string
 	if metadata, ok := metadata.FromIncomingContext(ctx); ok {
 		claim = singleGRPCMetadataValueV3(metadata.Get("x-engram-project-identity-adapter"))

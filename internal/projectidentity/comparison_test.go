@@ -164,6 +164,17 @@ func TestComparisonOriginV3BindsClaimToPhysicalChannelAndDerivesStableReferences
 	require.NotEqual(t, first, clientLikeHook)
 }
 
+func TestWithHTTPComparisonOriginV3BindsOnlyHTTPClaims(t *testing.T) {
+	origin, ok := ComparisonOriginFromContextV3(WithHTTPComparisonOriginV3(context.Background(), "hook", "http-attempt-17"))
+	require.True(t, ok)
+	require.Equal(t, ComparisonTransportHookV3, origin.Transport())
+	require.Equal(t, "http-attempt-17", origin.AttemptID())
+
+	crossChannel, ok := ComparisonOriginFromContextV3(WithHTTPComparisonOriginV3(context.Background(), "daemon", "http-attempt-17"))
+	require.True(t, ok)
+	require.Equal(t, ComparisonTransportHTTPV3, crossChannel.Transport())
+}
+
 func TestComparisonOriginV3BindsReferencesToRedactedValidatedEvidence(t *testing.T) {
 	projectID := "11111111-1111-4111-8111-111111111111"
 	anchor, descriptor := comparisonTestDescriptorV3(t, projectID, "daemon-install-17", "example.invalid/acme/private-repository", "legacy-private-comparison")

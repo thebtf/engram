@@ -930,8 +930,20 @@ function isProjectIdentityTransportOffline(error) {
  return ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT'].includes(code);
 }
 
-function buildRequestHeaders(includeJsonBody = false, token) {
- const headers = {};
+const OPAQUE_REQUEST_ID = /^[^\s\p{Cc}/\\@]{1,256}$/u;
+
+function hookRequestID(options) {
+ const requestID = options && options.requestID;
+ return typeof requestID === 'string' && OPAQUE_REQUEST_ID.test(requestID)
+  ? requestID
+  : crypto.randomUUID();
+}
+
+function buildRequestHeaders(includeJsonBody = false, token, requestID) {
+ const headers = {
+  'X-Engram-Project-Identity-Adapter': 'hook',
+  'X-Request-ID': requestID,
+ };
  const resolvedToken = token === undefined ? configuredPluginEnv(
   'ENGRAM_TOKEN',
   'CLAUDE_PLUGIN_OPTION_api_token',
@@ -1120,7 +1132,7 @@ async function request(method, endpoint, body, timeoutMs = 10000, options = {}) 
   }
   if (externalSignal) externalSignal.addEventListener('abort', abort, { once: true });
 
-  const headers = buildRequestHeaders(body !== undefined, options.token);
+  const headers = buildRequestHeaders(body !== undefined, options.token, hookRequestID(options));
   const response = await fetch(url, {
    method,
    headers,

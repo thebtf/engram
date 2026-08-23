@@ -868,6 +868,26 @@ test('requestPost uses per-request credentials without promoting them to env', a
  assert.equal(process.env.ENGRAM_TOKEN, undefined);
 });
 
+test('requestPost marks hook attempts and reuses a valid retry ID', async (t) => {
+ const originalFetch = global.fetch;
+ const headers = [];
+ global.fetch = async (_url, init) => {
+  headers.push(init.headers);
+  return { ok: true, text: async () => '{}' };
+ };
+ t.after(() => { global.fetch = originalFetch; });
+
+ const retry = { requestID: 'hook-retry-attempt-17' };
+ await lib.requestPost('/api/context/inject', {}, 10, retry);
+ await lib.requestPost('/api/context/inject', {}, 10, retry);
+ await lib.requestPost('/api/context/inject', {}, 10, { requestID: 'https://fixture-user:fixture-credential@example.invalid/private/request' });
+
+ assert.equal(headers[0]['X-Engram-Project-Identity-Adapter'], 'hook');
+ assert.equal(headers[0]['X-Request-ID'], retry.requestID);
+ assert.equal(headers[1]['X-Request-ID'], retry.requestID);
+ assert.match(headers[2]['X-Request-ID'], /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+});
+
 test('requestPost removes its relay listener after an aborted request', async (t) => {
  const originalFetch = global.fetch;
  const controller = new AbortController();

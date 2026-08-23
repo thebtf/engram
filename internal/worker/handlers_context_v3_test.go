@@ -121,6 +121,44 @@ func TestSearchByPromptV3_ResolvesBeforeRetrievalAndIgnoresRawSelectors(t *testi
 	}
 }
 
+func TestSearchByPromptV3PassesChannelValidatedHTTPOrigin(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		claims []string
+		want   projectidentity.ComparisonTransportV3
+	}{
+		{name: "direct http", claims: []string{"http"}, want: projectidentity.ComparisonTransportHTTPV3},
+		{name: "hook", claims: []string{"hook"}, want: projectidentity.ComparisonTransportHookV3},
+		{name: "openclaw", claims: []string{"openclaw"}, want: projectidentity.ComparisonTransportOpenClawV3},
+		{name: "cross channel", claims: []string{"daemon"}, want: projectidentity.ComparisonTransportHTTPV3},
+		{name: "ambiguous", claims: []string{"hook", "openclaw"}, want: projectidentity.ComparisonTransportHTTPV3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			projectKey := "22222222-2222-4222-8222-222222222222"
+			workflow := &contextInjectV3Workflow{response: &pb.InitializeResponse{ProjectResolutionV3: &pb.ProjectResolutionResultV3{
+				Outcome:    pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED,
+				ProjectKey: &projectKey,
+			}}}
+			service := newInjectTestService(true)
+			service.grpcInternalServer = workflow
+			service.retrievalHooks.retrieveRelevant = func(context.Context, string, string, RetrievalOptions) ([]*models.Observation, map[int64]float64, error) {
+				return nil, nil, nil
+			}
+			req := v3SearchRequest(t, validContextProjectDescriptorV3())
+			for _, claim := range test.claims {
+				req.Header.Add(comparisonAdapterHeaderV3, claim)
+			}
+			req.Header.Set("X-Request-ID", "http-bridge-attempt-17")
+
+			RequestID(http.HandlerFunc(service.handleSearchByPrompt)).ServeHTTP(httptest.NewRecorder(), req)
+			origin, ok := projectidentity.ComparisonOriginFromContextV3(workflow.ctx)
+			if !ok || origin.Transport() != test.want || origin.AttemptID() != "http-bridge-attempt-17" {
+				t.Fatalf("origin=%#v present=%t want_transport=%q", origin, ok, test.want)
+			}
+		})
+	}
+}
+
 func TestSearchByPromptV3_RefusalStopsRetrievalAndRedactsInputs(t *testing.T) {
 	workflow := &contextInjectV3Workflow{err: sessionStartV3Refusal(t, projectidentity.ProjectOnboardingRequiredOutcomeV3)}
 	service := newInjectTestService(true)

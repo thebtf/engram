@@ -58,6 +58,23 @@ type projectDescriptorV3HTTPWire struct {
 	ClientInstanceID     string                               `json:"client_instance_id"`
 }
 
+const comparisonAdapterHeaderV3 = "X-Engram-Project-Identity-Adapter"
+
+func httpComparisonContextV3(r *http.Request) context.Context {
+	requestID := GetRequestID(r.Context())
+	if len(r.Header.Values("X-Request-ID")) > 1 {
+		requestID = ""
+	}
+	return projectidentity.WithHTTPComparisonOriginV3(r.Context(), singleHTTPHeaderValueV3(r.Header.Values(comparisonAdapterHeaderV3)), requestID)
+}
+
+func singleHTTPHeaderValueV3(values []string) string {
+	if len(values) != 1 {
+		return ""
+	}
+	return values[0]
+}
+
 func parseProjectDescriptorV3HTTP(raw json.RawMessage) (projectidentity.AnchorV3, projectidentity.DescriptorV3, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
@@ -346,7 +363,7 @@ func (s *Service) handleSearchByPrompt(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if body.ProjectDescriptor != nil {
-			resolved, err := s.resolveContextProjectV3(r.Context(), body.ProjectDescriptor)
+			resolved, err := s.resolveContextProjectV3(httpComparisonContextV3(r), body.ProjectDescriptor)
 			if err != nil {
 				writeSessionStartV3HTTPError(w, err)
 				return
@@ -852,7 +869,11 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 	if projectIdentityV3 != nil {
 		requestProject = ""
 	}
-	resp, err := grpcSrv.GetSessionStartContext(r.Context(), &pb.GetSessionStartContextRequest{
+	requestCtx := r.Context()
+	if projectIdentityV3 != nil {
+		requestCtx = httpComparisonContextV3(r)
+	}
+	resp, err := grpcSrv.GetSessionStartContext(requestCtx, &pb.GetSessionStartContextRequest{
 		Project:           requestProject,
 		MemoriesLimit:     memoriesLimit,
 		IssuesLimit:       issuesLimit,
@@ -1051,7 +1072,7 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 
 	var resolutionV3 *pb.ProjectResolutionResultV3
 	if projectDescriptor != nil {
-		resolved, err := s.resolveContextProjectV3(r.Context(), projectDescriptor)
+		resolved, err := s.resolveContextProjectV3(httpComparisonContextV3(r), projectDescriptor)
 		if err != nil {
 			writeSessionStartV3HTTPError(w, err)
 			return

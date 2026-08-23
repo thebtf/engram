@@ -594,6 +594,47 @@ func TestResolveProjectIdentityV3RecordsNormalComparisonsWithoutChangingResponse
 	}
 }
 
+func TestResolveProjectIdentityV3RecordsChannelValidatedOrigins(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		ctx       context.Context
+		transport projectidentity.ComparisonTransportV3
+		observed  bool
+	}{
+		{name: "direct grpc", ctx: metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", "grpc-attempt-17")), transport: projectidentity.ComparisonTransportGRPCV3, observed: true},
+		{name: "daemon grpc", ctx: metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", "daemon-attempt-17", "x-engram-project-identity-adapter", "daemon")), transport: projectidentity.ComparisonTransportDaemonV3, observed: true},
+		{name: "direct http", ctx: projectidentity.WithHTTPComparisonOriginV3(context.Background(), "http", "http-attempt-17"), transport: projectidentity.ComparisonTransportHTTPV3, observed: true},
+		{name: "hook http", ctx: projectidentity.WithHTTPComparisonOriginV3(context.Background(), "hook", "hook-attempt-17"), transport: projectidentity.ComparisonTransportHookV3, observed: true},
+		{name: "openclaw http", ctx: projectidentity.WithHTTPComparisonOriginV3(context.Background(), "openclaw", "openclaw-attempt-17"), transport: projectidentity.ComparisonTransportOpenClawV3, observed: true},
+		{name: "http rejects cross channel", ctx: projectidentity.WithHTTPComparisonOriginV3(context.Background(), "daemon", "http-cross-channel-17"), transport: projectidentity.ComparisonTransportHTTPV3, observed: true},
+		{name: "grpc rejects cross channel", ctx: metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", "grpc-cross-channel-17", "x-engram-project-identity-adapter", "hook")), transport: projectidentity.ComparisonTransportGRPCV3, observed: true},
+		{name: "unsafe request id skips telemetry", ctx: projectidentity.WithHTTPComparisonOriginV3(context.Background(), "hook", "https://fixture-user:fixture-credential@example.invalid/private/request"), observed: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			observer := &grpcComparisonObserverV3{outcome: projectidentity.LegacyComparisonResolvedV2}
+			store := &grpcComparisonStoreV3{}
+			srv := &Server{handler: identityOrderHandler{steps: &[]string{}}, comparisonObserverV3: observer, comparisonStoreV3: store}
+			srv.identityResolverV3 = func(_ context.Context, _ *gormlib.DB, request projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error) {
+				return grpcV3Result(t, request.Intent, projectidentity.ProjectResolvedOutcomeV3)
+			}
+
+			response, err := srv.Initialize(test.ctx, &pb.InitializeRequest{ProjectIdentityV3: grpcV3Identity()})
+			if err != nil || response.GetProjectResolutionV3().GetOutcome() != pb.ProjectResolutionOutcomeV3_PROJECT_RESOLVED {
+				t.Fatalf("response=%#v err=%v", response, err)
+			}
+			if !test.observed {
+				if observer.calls != 0 || len(store.observations) != 0 {
+					t.Fatalf("unsafe telemetry observer_calls=%d observations=%#v", observer.calls, store.observations)
+				}
+				return
+			}
+			if observer.calls != 1 || len(store.observations) != 1 || store.observations[0].Transport != test.transport {
+				t.Fatalf("transport=%q observer_calls=%d observations=%#v", test.transport, observer.calls, store.observations)
+			}
+		})
+	}
+}
+
 func TestResolveProjectIdentityV3ReplaysComparisonUnderResponseCorrelation(t *testing.T) {
 	observer := &grpcComparisonObserverV3{outcome: projectidentity.LegacyComparisonResolvedV2}
 	store := &grpcReplayComparisonStoreV3{}

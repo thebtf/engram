@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/projectidentity"
@@ -17,6 +18,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -27,6 +29,16 @@ const (
 )
 
 var projectIdentityV3RegistrationSchema = json.RawMessage(`{"type":"object","additionalProperties":false}`)
+
+func daemonComparisonContextV3(ctx context.Context) context.Context {
+	outgoing, _ := metadata.FromOutgoingContext(ctx)
+	outgoing = outgoing.Copy()
+	if len(outgoing.Get("x-request-id")) != 1 {
+		outgoing.Set("x-request-id", uuid.NewString())
+	}
+	outgoing.Set("x-engram-project-identity-adapter", "daemon")
+	return metadata.NewOutgoingContext(ctx, outgoing)
+}
 
 // ProxyTools fetches the dynamic tool set from the engram server via a gRPC
 // Initialize handshake. Implements module.ProxyToolProvider per FR-11a.
@@ -62,6 +74,7 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 	request := &pb.InitializeRequest{ClientName: "engram-daemon", ClientVersion: daemonClientVersion}
 	if v3Enabled {
 		request.ProjectIdentityV3 = v3Identity
+		discoveryCtx = daemonComparisonContextV3(discoveryCtx)
 	} else {
 		project := m.cache.Resolve(p)
 		projectIdentity, identityErr := m.cache.ResolveIdentity(p)
@@ -144,7 +157,7 @@ func (m *Module) HandleTool(ctx context.Context, p muxcore.ProjectContext, name 
 	if err != nil {
 		return nil, &module.ModuleError{Code: "PROJECT_RESOLUTION_UNAVAILABLE", Message: "project identity resolution unavailable"}
 	}
-	response, err := pb.NewEngramServiceClient(conn).RegisterProjectIdentityV3(ctx,
+	response, err := pb.NewEngramServiceClient(conn).RegisterProjectIdentityV3(daemonComparisonContextV3(ctx),
 		&pb.RegisterProjectIdentityV3Request{ProjectIdentityV3: identity}, grpc.WaitForReady(true))
 	if err != nil {
 		return nil, v3ProxyError(err)
@@ -219,6 +232,7 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 	request := &pb.CallToolRequest{ToolName: name, ArgumentsJson: args, SessionId: sessionID}
 	if v3Enabled {
 		request.ProjectIdentityV3 = v3Identity
+		ctx = daemonComparisonContextV3(ctx)
 	} else {
 		project := m.cache.Resolve(p)
 		projectIdentity, identityErr := m.cache.ResolveIdentity(p)

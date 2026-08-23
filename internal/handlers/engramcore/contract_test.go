@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -55,17 +56,21 @@ type mockEngramServer struct {
 	// registerResp is the response returned by RegisterProjectIdentityV3.
 	registerResp *pb.RegisterProjectIdentityV3Response
 	// registerErr, if non-nil, is returned by RegisterProjectIdentityV3.
-	registerErr   error
-	initReq       *pb.InitializeRequest
-	callReq       *pb.CallToolRequest
-	registerReq   *pb.RegisterProjectIdentityV3Request
-	initCalls     int
-	registerCalls int
+	registerErr      error
+	initReq          *pb.InitializeRequest
+	callReq          *pb.CallToolRequest
+	registerReq      *pb.RegisterProjectIdentityV3Request
+	initMetadata     metadata.MD
+	callMetadata     metadata.MD
+	registerMetadata metadata.MD
+	initCalls        int
+	registerCalls    int
 }
 
-func (s *mockEngramServer) Initialize(_ context.Context, req *pb.InitializeRequest) (*pb.InitializeResponse, error) {
+func (s *mockEngramServer) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb.InitializeResponse, error) {
 	s.mu.Lock()
 	s.initReq = req
+	s.initMetadata, _ = metadata.FromIncomingContext(ctx)
 	s.initCalls++
 	resp, err := s.initResp, s.initErr
 	s.mu.Unlock()
@@ -78,9 +83,10 @@ func (s *mockEngramServer) Initialize(_ context.Context, req *pb.InitializeReque
 	return resp, nil
 }
 
-func (s *mockEngramServer) CallTool(_ context.Context, req *pb.CallToolRequest) (*pb.CallToolResponse, error) {
+func (s *mockEngramServer) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.CallToolResponse, error) {
 	s.mu.Lock()
 	s.callReq = req
+	s.callMetadata, _ = metadata.FromIncomingContext(ctx)
 	s.mu.Unlock()
 	if s.callErr != nil {
 		return nil, s.callErr
@@ -91,9 +97,10 @@ func (s *mockEngramServer) CallTool(_ context.Context, req *pb.CallToolRequest) 
 	return s.callResp, nil
 }
 
-func (s *mockEngramServer) RegisterProjectIdentityV3(_ context.Context, req *pb.RegisterProjectIdentityV3Request) (*pb.RegisterProjectIdentityV3Response, error) {
+func (s *mockEngramServer) RegisterProjectIdentityV3(ctx context.Context, req *pb.RegisterProjectIdentityV3Request) (*pb.RegisterProjectIdentityV3Response, error) {
 	s.mu.Lock()
 	s.registerReq = req
+	s.registerMetadata, _ = metadata.FromIncomingContext(ctx)
 	s.registerCalls++
 	resp, err := s.registerResp, s.registerErr
 	s.mu.Unlock()

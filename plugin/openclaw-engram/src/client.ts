@@ -5,6 +5,7 @@
  * No method ever throws to its caller — engram failures must not block agent operation.
  */
 
+import { randomUUID } from 'node:crypto';
 import { AvailabilityTracker } from './availability.js';
 import type { PluginConfig } from './config.js';
 import { resolveIdentity, validateCanonicalProjectV2, validateProjectSelectorV2, type ProjectIdentity, type ProjectIdentityV2 } from './identity.js';
@@ -404,6 +405,8 @@ export class EngramRestClient {
         headers: {
           'Authorization': `Bearer ${this.token}`,
           'Content-Type': 'application/json',
+          'X-Engram-Project-Identity-Adapter': 'openclaw',
+          'X-Request-ID': randomUUID(),
         },
         body: JSON.stringify(body),
         signal: controller.signal,
@@ -726,6 +729,8 @@ export class EngramRestClient {
         headers: {
           Authorization: `Bearer ${this.token}`,
           'Content-Type': 'application/json',
+          'X-Engram-Project-Identity-Adapter': 'openclaw',
+          'X-Request-ID': randomUUID(),
         },
         body: JSON.stringify({ outcome, reason: reason ?? '' }),
         signal: controller.signal,
@@ -894,6 +899,8 @@ export class EngramRestClient {
     try {
       const headers: Record<string, string> = {
         'Authorization': `Bearer ${this.token}`,
+        'X-Engram-Project-Identity-Adapter': 'openclaw',
+        'X-Request-ID': randomUUID(),
       };
       if (body !== undefined) {
         headers['Content-Type'] = 'application/json';

@@ -148,7 +148,7 @@ test('V3 shared registration and context injection send one descriptor with no V
   const requests = [];
   globalThis.fetch = async (_url, init) => {
     const body = JSON.parse(String(init.body));
-    requests.push(body);
+    requests.push({ body, headers: init.headers });
     if (body.identity_only) {
       return new Response(JSON.stringify({
         project_resolution_v3: {
@@ -174,7 +174,7 @@ test('V3 shared registration and context injection send one descriptor with no V
   );
 
   assert.equal(requests.length, 2);
-  assert.deepEqual(requests[0], {
+  assert.deepEqual(requests[0].body, {
     project_descriptor: {
       version: 3,
       anchor_project_id: '11111111-1111-4111-8111-111111111111',
@@ -186,8 +186,10 @@ test('V3 shared registration and context injection send one descriptor with no V
     },
     identity_only: true,
   });
-  assert.deepEqual(requests[1].project_descriptor, requests[0].project_descriptor);
-  for (const body of requests) {
+  assert.deepEqual(requests[1].body.project_descriptor, requests[0].body.project_descriptor);
+  for (const { body, headers } of requests) {
+    assert.equal(headers['X-Engram-Project-Identity-Adapter'], 'openclaw');
+    assert.match(headers['X-Request-ID'], /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     assert.equal(Object.hasOwn(body, 'project'), false);
     assert.equal(Object.hasOwn(body, 'project_identity'), false);
   }

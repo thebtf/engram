@@ -97,6 +97,9 @@ func TestSecurityHeaders_OptionsReturns204(t *testing.T) {
 	if rec.Header().Get("Access-Control-Allow-Methods") == "" {
 		t.Error("Access-Control-Allow-Methods must be set for preflight")
 	}
+	if !strings.Contains(rec.Header().Get("Access-Control-Allow-Headers"), comparisonAdapterHeaderV3) {
+		t.Error("CORS must permit the comparison adapter header")
+	}
 }
 
 // ---------------------------------------------------------------------------

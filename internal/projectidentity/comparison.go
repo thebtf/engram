@@ -114,6 +114,21 @@ func (origin ComparisonOriginV3) Transport() ComparisonTransportV3 { return orig
 // AttemptID returns the safe opaque retry identifier. It is never persisted.
 func (origin ComparisonOriginV3) AttemptID() string { return origin.attemptID }
 
+// WithHTTPComparisonOriginV3 marks an in-process HTTP bridge without allowing
+// wire metadata to claim a different physical channel.
+func WithHTTPComparisonOriginV3(ctx context.Context, claim, requestID string) context.Context {
+	return context.WithValue(ctx, comparisonOriginContextKeyV3{}, NewComparisonOriginV3(ComparisonTransportHTTPV3, claim, requestID))
+}
+
+// ComparisonOriginFromContextV3 returns the physical origin installed by an
+// in-process bridge, if any.
+func ComparisonOriginFromContextV3(ctx context.Context) (ComparisonOriginV3, bool) {
+	origin, ok := ctx.Value(comparisonOriginContextKeyV3{}).(ComparisonOriginV3)
+	return origin, ok
+}
+
+type comparisonOriginContextKeyV3 struct{}
+
 // ComparisonReferencesV3 contains deterministic redacted identifiers for one
 // logical V3 operation. It has no raw request, descriptor, or canonical key.
 type ComparisonReferencesV3 struct {

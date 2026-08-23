@@ -7,14 +7,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/projectidentity"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -48,6 +51,51 @@ func TestProxyV3DescriptorForwardsWithoutV2Fallback(t *testing.T) {
 		t.Fatalf("V3 CallTool: %v", err)
 	}
 	assertV3CallRequest(t, srv.callReq)
+}
+
+func TestProxyV3CarriesStableDaemonComparisonMetadata(t *testing.T) {
+	srv := &mockEngramServer{
+		initResp:     &pb.InitializeResponse{CanonicalProject: daemonV3CanonicalProject, ProjectResolutionV3: resolvedV3Response()},
+		callResp:     &pb.CallToolResponse{ContentJson: []byte(`[]`), CanonicalProject: daemonV3CanonicalProject, ProjectResolutionV3: resolvedV3Response()},
+		registerResp: &pb.RegisterProjectIdentityV3Response{ProjectResolutionV3: resolvedV3Response()},
+	}
+	grpcAddr := startMockGRPC(t, srv)
+	_, mod, project := buildV3ContractDispatcher(t, grpcAddr)
+	project.Cwd = daemonV3Repository(t)
+	if _, err := mod.ProxyTools(context.Background(), project); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mod.ProxyHandleTool(context.Background(), project, "recall", json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mod.HandleTool(context.Background(), project, projectIdentityV3RegistrationTool, json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, received := range []metadata.MD{srv.initMetadata, srv.callMetadata, srv.registerMetadata} {
+		assertDaemonComparisonMetadata(t, received)
+	}
+
+	first := daemonComparisonContextV3(context.Background())
+	second := daemonComparisonContextV3(first)
+	firstMetadata, _ := metadata.FromOutgoingContext(first)
+	secondMetadata, _ := metadata.FromOutgoingContext(second)
+	if !reflect.DeepEqual(firstMetadata.Get("x-request-id"), secondMetadata.Get("x-request-id")) {
+		t.Fatalf("replay request IDs differ: first=%q second=%q", firstMetadata.Get("x-request-id"), secondMetadata.Get("x-request-id"))
+	}
+}
+
+func assertDaemonComparisonMetadata(t *testing.T, received metadata.MD) {
+	t.Helper()
+	if got := received.Get("x-engram-project-identity-adapter"); len(got) != 1 || got[0] != "daemon" {
+		t.Fatalf("adapter metadata=%q", got)
+	}
+	requestIDs := received.Get("x-request-id")
+	if len(requestIDs) != 1 {
+		t.Fatalf("request IDs=%q", requestIDs)
+	}
+	if _, err := uuid.Parse(requestIDs[0]); err != nil {
+		t.Fatalf("request ID=%q err=%v", requestIDs[0], err)
+	}
 }
 
 func TestProxyV3RefusalClearsCompatibilityCacheAndExposesOnlyTypedOutcome(t *testing.T) {
