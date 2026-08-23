@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"debug/buildinfo"
 	"encoding/json"
@@ -491,7 +492,6 @@ func TestWriteMuxcoreDaemonVersionMarkerWaitsForPredecessorLock(t *testing.T) {
 	if filepath.Clean(filepath.Dir(lockPath)) != filepath.Clean(dir) || filepath.Clean(lockPath) == filepath.Clean(ambientLockPath) {
 		t.Fatalf("isolated muxcore lock path = %q, ambient path = %q", lockPath, ambientLockPath)
 	}
-	readyCtx, cancelReady := context.WithTimeout(context.Background(), time.Second)
 	cmd := exec.Command(os.Args[0], "-test.run=^TestMuxcoreDaemonLockHolderProcess$", "-test.v=false")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -501,10 +501,34 @@ func TestWriteMuxcoreDaemonVersionMarkerWaitsForPredecessorLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	cmd.Env = append(os.Environ(), "ENGRAM_TEST_MUXCORE_LOCK_HOLDER=1")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+
+	// The subprocess is this test binary, including the -cover shape when the
+	// parent runs under coverage. Keep that startup allowance bounded, but do
+	// not spend it before Windows creates the child process.
+	readyCtx, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelReady()
+	type readiness struct {
+		line string
+		err  error
+	}
+	readyCh := make(chan readiness, 1)
+	stdoutDrained := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(stdout)
+		line, err := reader.ReadString('\n')
+		readyCh <- readiness{line: line, err: err}
+		if err == nil {
+			_, err = io.Copy(io.Discard, reader)
+		}
+		stdoutDrained <- err
+	}()
+
 	released := false
 	var releaseErr error
 	release := func() error {
@@ -512,39 +536,29 @@ func TestWriteMuxcoreDaemonVersionMarkerWaitsForPredecessorLock(t *testing.T) {
 			return releaseErr
 		}
 		released = true
-		releaseErr = errors.Join(stdin.Close(), cmd.Wait())
+		releaseErr = errors.Join(stdin.Close(), <-stdoutDrained, cmd.Wait())
 		return releaseErr
 	}
 	t.Cleanup(func() {
 		wasReleased := released
 		if err := release(); err != nil && !wasReleased {
-			t.Error(err)
+			t.Errorf("release lock holder: %v; stderr = %q", err, stderr.String())
 		}
 	})
-	type readiness struct {
-		line string
-		err  error
-	}
-	readyCh := make(chan readiness, 1)
-	go func() {
-		line, err := bufio.NewReader(stdout).ReadString('\n')
-		readyCh <- readiness{line: line, err: err}
-	}()
 	select {
 	case ready := <-readyCh:
 		if ready.err != nil || ready.line != "ready\n" {
 			if releaseErr := release(); releaseErr != nil {
-				t.Fatalf("lock holder readiness = %q, %v; release = %v", ready.line, ready.err, releaseErr)
+				t.Fatalf("lock holder readiness = %q, %v; release = %v; stderr = %q", ready.line, ready.err, releaseErr, stderr.String())
 			}
-			t.Fatalf("lock holder readiness = %q, %v", ready.line, ready.err)
+			t.Fatalf("lock holder readiness = %q, %v; stderr = %q", ready.line, ready.err, stderr.String())
 		}
 	case <-readyCtx.Done():
 		killErr := cmd.Process.Kill()
 		releaseErr := release()
 		ready := <-readyCh
-		t.Fatalf("lock holder readiness timed out: %v; kill = %v; release = %v; read = %q, %v", readyCtx.Err(), killErr, releaseErr, ready.line, ready.err)
+		t.Fatalf("lock holder readiness timed out: %v; kill = %v; release = %v; read = %q, %v; stderr = %q", readyCtx.Err(), killErr, releaseErr, ready.line, ready.err, stderr.String())
 	}
-	cancelReady()
 
 	markerPath := filepath.Join(dir, "daemon.marker.json")
 	successorExe := filepath.Join(dir, "engram.exe")
