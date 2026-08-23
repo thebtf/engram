@@ -144,7 +144,8 @@ function normalizeRemoteParts(host, port, remotePath) {
 
 function normalizeGitRemoteV3(observation) {
   if (isPlainObject(observation)) {
-    if (observation.form === 'credential_bearing_url') return emptyRemote('refused');
+    if (observation.form === 'credential_bearing_url' ||
+      observation.form === 'credential_bearing_scp_multi_colon') return emptyRemote('refused');
     if (!Object.hasOwn(observation, 'source')) return emptyRemote('omitted');
     observation = observation.source;
   }

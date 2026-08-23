@@ -61,7 +61,7 @@ test('hook V3 descriptor helpers consume the frozen shared vectors', () => {
     const missingClientID = typeof descriptor.client_instance_id !== 'string' || descriptor.client_instance_id === '';
     const mismatchedAnchor = descriptor.version !== 3 || descriptor.name !== anchor.name ||
       descriptor.scope !== anchor.scope || descriptor.anchor_project_id !== anchor.project_id;
-    if (hasClientKey || missingClientID || mismatchedAnchor) {
+    if (hasClientKey || missingClientID || mismatchedAnchor || vector.category === 'descriptor_refusal') {
       assert.throws(() => v3.buildProjectIdentityV3(descriptorInput(anchor, descriptor)), /PROJECT_(?:KEY_CLIENT_ASSERTION_FORBIDDEN|DESCRIPTOR_INVALID|DESCRIPTOR_UNSUPPORTED|SCOPE_MISMATCH)/, vector.id);
     } else {
       assert.deepEqual(v3.buildProjectIdentityV3(descriptorInput(anchor, descriptor)), descriptor, vector.id);
@@ -79,10 +79,16 @@ test('hook V3 directory discovery never searches upward from the selected root',
   assert.equal(v3.discoverProjectAnchorV3(selectedRoot), null);
 });
 
-test('hook V3 refuses multi-colon SCP credential syntax without retaining it', () => {
-  const normalized = v3.normalizeGitRemoteV3('git:pa:ss@GIT.EXAMPLE.TEST:Platform/Widget.git');
+test('hook V3 refuses redacted multi-colon SCP credential metadata without retaining it', () => {
+  const vector = corpus.vectors.find(
+    ({ id }) => id === 'credential-bearing-scp-multi-colon-is-refused-without-raw-persistence',
+  );
+  const remote = vector.input.remote_observations[0];
+  const normalized = v3.normalizeGitRemoteV3(remote);
+  assert.equal(Object.hasOwn(remote, 'source'), false);
   assert.deepEqual(normalized, { disposition: 'refused', value: '' });
-  assert.doesNotMatch(JSON.stringify(normalized), /pa:ss|GIT\.EXAMPLE\.TEST/);
+  assert.equal(Object.hasOwn(normalized, 'raw_value'), false);
+  assert.equal(Object.hasOwn(normalized, 'source'), false);
 });
 
 test('hook V3 refuses noncanonical remote separators in descriptors', () => {
