@@ -495,7 +495,12 @@ func bindingResultV3(request ResolveProjectRequestV3, binding AnchorBindingV3) (
 		return refusalV3(request, ProjectOnboardingRequiredOutcomeV3)
 	case AnchorBindingDecisionRequiredV3:
 		return refusalV3(request, ProjectAnchorDecisionRequiredOutcomeV3)
-	case AnchorBindingActiveV3, AnchorBindingRedirectedV3:
+	case AnchorBindingRedirectedV3:
+		if request.Intent == ReadFilterIntentV3 {
+			return refusalV3(request, ProjectAnchorDecisionRequiredOutcomeV3)
+		}
+		fallthrough
+	case AnchorBindingActiveV3:
 		projectKey, err := NewProjectKeyV3(binding.ProjectKey)
 		if err != nil {
 			return refusalV3(request, ProjectAnchorDecisionRequiredOutcomeV3)
