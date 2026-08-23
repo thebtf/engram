@@ -313,6 +313,42 @@ func TestWriteAR1BaselineReceiptAcceptsIgnoredUnscannedArtifacts(t *testing.T) {
 	assertWrittenReceipt(t, outputPath, receipt, fingerprint(raw))
 }
 
+func TestWriteAR1BaselineReceiptAllowsOnlyKnownIgnoredGeneratedArtifacts(t *testing.T) {
+	t.Run("allows canonical generated artifacts", func(t *testing.T) {
+		primaryRoot, candidateRoot, sourceCommit := candidateWorktree(t)
+		raw, outputPath := configureWriter(t, primaryRoot, candidateRoot, sourceCommit)
+		for path, content := range map[string]string{
+			".specify/feature.json":                 "{}\n",
+			"plugin/openclaw-engram/dist/client.js": "export {};\n",
+		} {
+			writeFile(t, filepath.Join(candidateRoot, filepath.FromSlash(path)), content)
+		}
+
+		receipt, err := writeAR1BaselineReceiptFromTestEnvironment()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertWrittenReceipt(t, outputPath, receipt, fingerprint(raw))
+	})
+
+	for _, sourcePath := range []string{
+		".specify/other.json",
+		"plugin/openclaw-engram/dist-evil/client.js",
+		"build/actual.go",
+	} {
+		t.Run("rejects "+sourcePath, func(t *testing.T) {
+			primaryRoot, candidateRoot, sourceCommit := candidateWorktree(t)
+			configureWriter(t, primaryRoot, candidateRoot, sourceCommit)
+			writeFile(t, filepath.Join(candidateRoot, filepath.FromSlash(sourcePath)), "package generated\n")
+
+			_, err := writeAR1BaselineReceiptFromTestEnvironment()
+			if err == nil || !strings.Contains(err.Error(), sourcePath) {
+				t.Fatalf("refusal = %v, want ignored scan-relevant source %q", err, sourcePath)
+			}
+		})
+	}
+}
+
 func TestWriteAR1BaselineReceiptRejectsExistingOutputFile(t *testing.T) {
 	primaryRoot, candidateRoot, sourceCommit := candidateWorktree(t)
 	_, outputPath := configureWriter(t, primaryRoot, candidateRoot, sourceCommit)
@@ -518,7 +554,7 @@ func sourceRoot(t *testing.T) string {
 func candidateWorktree(t *testing.T) (string, string, string) {
 	t.Helper()
 	primaryRoot := t.TempDir()
-	writeFile(t, filepath.Join(primaryRoot, ".gitignore"), "build/\n.agent/\n.serena/\nnode_modules/\nvendor/\n")
+	writeFile(t, filepath.Join(primaryRoot, ".gitignore"), "build/\n.specify/\nplugin/openclaw-engram/dist/\nplugin/openclaw-engram/dist-evil/\n.agent/\n.serena/\nnode_modules/\nvendor/\n")
 	writeFile(t, filepath.Join(primaryRoot, "internal", "fixture.go"), "package fixture\n\ntype ProjectRecord struct { ID string }\n\nconst raw = \"secret-token https://private.example\"\n")
 	writeFile(t, filepath.Join(primaryRoot, "scripts", "fixture.cjs"), "console.log(\"fixture\")\n")
 	writeFile(t, filepath.Join(primaryRoot, "scripts", "fixture.sh"), "#!/bin/sh\n")

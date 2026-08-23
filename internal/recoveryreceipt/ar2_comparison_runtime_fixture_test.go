@@ -121,6 +121,26 @@ func TestAR2CandidateCommitRequiresCleanWorktree(t *testing.T) {
 	}
 }
 
+func TestAR2OpenClawSnapshotPathGuards(t *testing.T) {
+	candidateRoot := t.TempDir()
+	openClawDist, err := ar2ExactSnapshotOpenClawDist(candidateRoot, filepath.Join(candidateRoot, "plugin", "openclaw-engram", "dist", "client.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ar2RequireNoInheritedOpenClawDist(candidateRoot); err != nil {
+		t.Fatalf("fresh candidate snapshot refused: %v", err)
+	}
+	if err := os.MkdirAll(openClawDist, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ar2RequireNoInheritedOpenClawDist(candidateRoot); err == nil {
+		t.Fatal("accepted inherited OpenClaw dist")
+	}
+	if _, err := ar2ExactSnapshotOpenClawDist(candidateRoot, filepath.Join(candidateRoot, "plugin", "openclaw-engram", "dist-evil", "client.js")); err == nil {
+		t.Fatal("accepted noncanonical OpenClaw dist path")
+	}
+}
+
 func TestAR2CandidatePayloadFingerprintBindsNestedExecutableArtifacts(t *testing.T) {
 	write := func(path, content string) {
 		t.Helper()
@@ -474,7 +494,29 @@ func ar2StartCandidateSnapshot(t *testing.T, ctx context.Context, sourceRoot, fi
 		snapshot.Close(t)
 		t.Fatal("candidate snapshot is not the exact clean commit")
 	}
+	if err := ar2RequireNoInheritedOpenClawDist(snapshot.root); err != nil {
+		snapshot.Close(t)
+		t.Fatal("candidate snapshot inherited OpenClaw dist before build")
+	}
 	return snapshot
+}
+
+func ar2RequireNoInheritedOpenClawDist(candidateRoot string) error {
+	dist := filepath.Join(candidateRoot, "plugin", "openclaw-engram", "dist")
+	if _, err := os.Lstat(dist); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect candidate snapshot OpenClaw dist: %w", err)
+	}
+	return fmt.Errorf("candidate snapshot inherited OpenClaw dist")
+}
+
+func ar2ExactSnapshotOpenClawDist(candidateRoot, openClawClient string) (string, error) {
+	dist := filepath.Join(candidateRoot, "plugin", "openclaw-engram", "dist")
+	if filepath.Clean(openClawClient) != filepath.Join(dist, "client.js") {
+		return "", fmt.Errorf("OpenClaw client is not the exact snapshot dist client")
+	}
+	return dist, nil
 }
 
 func (snapshot *ar2CandidateSnapshot) Close(t *testing.T) {
@@ -818,10 +860,15 @@ func ar2AttestCandidate(t *testing.T, candidateRoot, candidateCommit string, ser
 	if server.sourceCommit != candidateCommit || server.payloadFingerprint != ar2CandidatePayloadFingerprint(t, serverArtifact) {
 		t.Fatal("candidate server health does not bind the built server payload")
 	}
+	openClawDist, err := ar2ExactSnapshotOpenClawDist(candidateRoot, openClawClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	payloadFingerprint := ar2CandidatePayloadFingerprint(t,
 		serverArtifact,
 		ar2PayloadArtifact{label: "daemon", root: daemon.payloadRoot, path: daemon.binary},
-		ar2PayloadArtifact{label: "openclaw-dist", root: candidateRoot, path: filepath.Dir(openClawClient)},
+		ar2PayloadArtifact{label: "openclaw-dist", root: candidateRoot, path: openClawDist},
 		ar2PayloadArtifact{label: "hook-source", root: candidateRoot, path: hookSource},
 	)
 	return ar2CandidateAttestation{

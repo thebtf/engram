@@ -847,6 +847,9 @@ func ignoredScanRelevantSource(root, ignored string) (string, error) {
 	if skippedPathComponent(root, path) {
 		return "", nil
 	}
+	if allowedIgnoredGeneratedArtifactPath(relative) {
+		return "", nil
+	}
 	if !info.IsDir() {
 		if scanRelevantSourceFile(info) {
 			return filepath.ToSlash(relative), nil
@@ -870,6 +873,9 @@ func ignoredScanRelevantSource(root, ignored string) (string, error) {
 		found, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
+		}
+		if allowedIgnoredGeneratedArtifactPath(filepath.ToSlash(found)) {
+			return nil
 		}
 		relevant = filepath.ToSlash(found)
 		return io.EOF
@@ -903,6 +909,16 @@ func scanRelevantSourcePath(relative string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func allowedIgnoredGeneratedArtifactPath(path string) bool {
+	canonical := filepath.ToSlash(filepath.Clean(path))
+	switch canonical {
+	case ".specify/feature.json", "plugin/openclaw-engram/dist":
+		return true
+	default:
+		return strings.HasPrefix(canonical, "plugin/openclaw-engram/dist/")
 	}
 }
 
