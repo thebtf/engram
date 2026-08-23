@@ -199,6 +199,9 @@ func normalizeSCPRemote(value string) (string, RemoteDisposition, bool) {
 		return "", "", false
 	}
 	hostPart, path := value[:colon], value[colon+1:]
+	if credentialEnd := strings.IndexByte(path, ':'); credentialEnd > 0 && strings.Contains(path[:credentialEnd], "@") {
+		return "", RemoteRefusedV3, true
+	}
 	if path == "" {
 		return "", RemoteOmittedV3, true
 	}
@@ -281,7 +284,7 @@ func BuildDescriptorV3(anchor AnchorV3, remotes []string, legacy []LegacyIdentif
 		}
 	}
 	for _, identifier := range legacy {
-		if identifier.Scheme == "" || identifier.Value == "" || identifier.Provenance == "" {
+		if !validLegacyIdentifierSchemeV3(identifier.Scheme) || identifier.Value == "" || identifier.Provenance == "" {
 			return DescriptorV3{}, errDescriptorInvalidV3
 		}
 	}
@@ -302,10 +305,36 @@ func BuildDescriptorV3(anchor AnchorV3, remotes []string, legacy []LegacyIdentif
 	}, nil
 }
 
+func validLegacyIdentifierSchemeV3(scheme LegacyIdentifierSchemeV3) bool {
+	switch scheme {
+	case "anchor_v3", "binding_v2", "git_remote_relative_v2", "git_hash_v2", "path_hash_v1", "legacy_slug", "non_git_anchor_v2", "manual_alias":
+		return true
+	default:
+		return false
+	}
+}
+
 func validNormalizedRemote(remote string) bool {
-	if remote == "" || strings.ContainsAny(remote, "@?#\\") || strings.Contains(remote, "://") {
+	if remote == "" || strings.TrimSpace(remote) != remote || strings.ContainsAny(remote, " \t\r\n@?#\\") || strings.Contains(remote, "://") {
 		return false
 	}
 	host, path, ok := strings.Cut(remote, "/")
-	return ok && host != "" && path != "" && !strings.HasSuffix(path, ".git") && !strings.Contains(path, "//")
+	if !ok || host == "" || path == "" || host != strings.ToLower(host) || strings.HasSuffix(path, ".git") || strings.HasSuffix(path, "/") || strings.Contains(path, "//") {
+		return false
+	}
+	hostname, port, hasPort := strings.Cut(host, ":")
+	if hostname == "" || strings.Contains(hostname, ":") || (hasPort && (port == "" || strings.Trim(port, "0123456789") != "")) {
+		return false
+	}
+	for _, label := range strings.Split(hostname, ".") {
+		if label == "" || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, character := range label {
+			if character != '-' && (character < 'a' || character > 'z') && (character < '0' || character > '9') {
+				return false
+			}
+		}
+	}
+	return true
 }

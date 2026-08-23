@@ -95,6 +95,7 @@ func TestNormalizeGitRemoteV3Dispositions(t *testing.T) {
 		{"file:///tmp/repository", "", RemoteOmittedV3},
 		{"not a remote", "", RemoteOmittedV3},
 		{"https://fixture-user:fixture-password@git.example.test/Platform/Widget.git", "", RemoteRefusedV3},
+		{"git:secret@GIT.EXAMPLE.TEST:Platform/Widget.git", "", RemoteRefusedV3},
 	} {
 		normalized, disposition, err := NormalizeGitRemoteV3(test.raw)
 		if err != nil {
@@ -149,6 +150,12 @@ func TestBuildDescriptorV3ValidatesOpaqueEvidence(t *testing.T) {
 	}{
 		{client: ""},
 		{remotes: []string{"https://git.example.test/Platform/Widget.git"}, client: "fixture-install"},
+		{remotes: []string{"GIT.EXAMPLE.TEST/Platform/Widget"}, client: "fixture-install"},
+		{remotes: []string{"git.example.test:invalid/Platform/Widget"}, client: "fixture-install"},
+		{remotes: []string{"git example.test/Platform/Widget"}, client: "fixture-install"},
+		{remotes: []string{"git.example.test/Platform/Widget.git"}, client: "fixture-install"},
+		{remotes: []string{"git.example.test/Platform/Widget/"}, client: "fixture-install"},
+		{legacy: []LegacyIdentifierV3{{Scheme: "unknown_v4", Value: "legacy", Provenance: "operator_import"}}, client: "fixture-install"},
 		{legacy: []LegacyIdentifierV3{{Value: "legacy", Provenance: "operator_import"}}, client: "fixture-install"},
 	} {
 		if _, err := BuildDescriptorV3(anchor, test.remotes, test.legacy, test.client); err == nil {
