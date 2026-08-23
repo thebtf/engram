@@ -1542,7 +1542,8 @@ func ar2HashPayloadDirectory(t *testing.T, hasher io.Writer, artifactRoot, root 
 
 func ar2HashPayloadFile(t *testing.T, hasher io.Writer, artifactRoot, relativePath, path string) {
 	t.Helper()
-	if _, err := ar2ContainedPayloadInfo(artifactRoot, path); err != nil {
+	expectedInfo, err := ar2ContainedPayloadInfo(artifactRoot, path)
+	if err != nil {
 		t.Fatal("inspect exact fixture payload artifact")
 	}
 	file, err := os.Open(path)
@@ -1550,7 +1551,7 @@ func ar2HashPayloadFile(t *testing.T, hasher io.Writer, artifactRoot, relativePa
 		t.Fatal("open exact fixture payload artifact")
 	}
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
+	if err != nil || !info.Mode().IsRegular() || !os.SameFile(expectedInfo, info) {
 		_ = file.Close()
 		t.Fatal("inspect exact fixture payload artifact")
 	}
