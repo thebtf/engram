@@ -223,6 +223,9 @@
   },
   "analysis": {
     "first_pass": "specs/001-engram-architectural-recovery/analysis/ar2-spec-kit-analysis-r1.md",
-    "first_pass_disposition": "AR2-HIGH-001 remediated by this separate receipt; a fresh R2 must close the delta."
+    "first_pass_disposition": "AR2-HIGH-001 recorded the expected absence of this output receipt and is resolved by the bound receipt plus the final R2 judgment.",
+    "final_pass": "specs/001-engram-architectural-recovery/analysis/ar2-spec-kit-analysis-r2.md",
+    "final_pass_verdict": "PASS",
+    "unresolved_critical_high": 0
   }
 }
