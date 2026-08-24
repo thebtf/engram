@@ -1096,7 +1096,15 @@ func ar2HookDriverSource() string {
 const hook = require(process.env.AR2_HOOK_LIB);
 const nativeFetch = globalThis.fetch;
 const descriptor = JSON.parse(process.env.AR2_DESCRIPTOR);
-const expectedBody = JSON.stringify({ project_descriptor: descriptor, identity_only: true });
+const canonicalizeJSON = (value) => {
+  if (Array.isArray(value)) return value.map(canonicalizeJSON);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalizeJSON(value[key])]));
+  }
+  return value;
+};
+const closedSemanticPayload = (value) => JSON.stringify(canonicalizeJSON(value));
+const expectedPayload = closedSemanticPayload({ project_descriptor: descriptor, identity_only: true });
 const HookDriverAssertionError = class extends Error {
   constructor(code, message) {
     super(message);
@@ -1109,7 +1117,13 @@ globalThis.fetch = async (url, init = {}) => {
   requests += 1;
   if (requests !== 1 || url !== process.env.AR2_SERVER_URL + '/api/context/inject' || init.method !== 'POST') throw new HookDriverAssertionError(%q, 'unexpected Hook request');
   const headers = Object.fromEntries(new Headers(init.headers).entries());
-  if (Object.keys(headers).sort().join(',') !== 'content-type,x-engram-project-identity-adapter,x-request-id' || headers['content-type'] !== 'application/json' || headers['x-engram-project-identity-adapter'] !== 'hook' || headers['x-request-id'] !== 'hook-fixture-attempt-17' || String(init.body) !== expectedBody) throw new HookDriverAssertionError(%q, 'unexpected Hook request body or headers');
+  let bodyMatches = false;
+  try {
+    bodyMatches = closedSemanticPayload(JSON.parse(String(init.body))) === expectedPayload;
+  } catch {
+    bodyMatches = false;
+  }
+  if (Object.keys(headers).sort().join(',') !== 'content-type,x-engram-project-identity-adapter,x-request-id' || headers['content-type'] !== 'application/json' || headers['x-engram-project-identity-adapter'] !== 'hook' || headers['x-request-id'] !== 'hook-fixture-attempt-17' || !bodyMatches) throw new HookDriverAssertionError(%q, 'unexpected Hook request body or headers');
   const response = await nativeFetch(url, init);
   const body = await response.clone().json();
   const resolution = body?.project_resolution_v3;
@@ -2207,7 +2221,7 @@ await fetch(process.env.AR2_SERVER_URL + '/api/context/inject', {
 			code:     "AR2_HOOK_DRIVER_UNEXPECTED_REQUEST",
 		},
 		{
-			name: "request body or headers mismatch",
+			name: "malformed JSON request body",
 			hookBody: `await fetch(process.env.AR2_SERVER_URL + '/api/context/inject', {
   method: 'POST',
   headers: {
@@ -2217,7 +2231,62 @@ await fetch(process.env.AR2_SERVER_URL + '/api/context/inject', {
   },
   body: 'wrong',
 });`,
-			code: "AR2_HOOK_DRIVER_REQUEST_BODY_OR_HEADERS_MISMATCH",
+			code: ar2HookDriverBodyOrHeadersMismatchCode,
+		},
+		{
+			name: "semantically reordered descriptor is accepted",
+			hookBody: `const response = await fetch(process.env.AR2_SERVER_URL + '/api/context/inject', {
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    'x-engram-project-identity-adapter': 'hook',
+    'x-request-id': 'hook-fixture-attempt-17',
+  },
+  body: '{"identity_only":true,"project_descriptor":{"name":"fixture-hook-descriptor","scope":"repository"}}',
+});
+const body = await response.json();
+context.Project = body.project_resolution_v3.project_key;`,
+			resolverResponse: validResponse,
+			success:          true,
+		},
+		{
+			name: "missing descriptor property fails semantic mismatch",
+			hookBody: `await fetch(process.env.AR2_SERVER_URL + '/api/context/inject', {
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    'x-engram-project-identity-adapter': 'hook',
+    'x-request-id': 'hook-fixture-attempt-17',
+  },
+  body: '{"project_descriptor":{"scope":"repository"},"identity_only":true}',
+});`,
+			code: ar2HookDriverBodyOrHeadersMismatchCode,
+		},
+		{
+			name: "extra payload property fails semantic mismatch",
+			hookBody: `await fetch(process.env.AR2_SERVER_URL + '/api/context/inject', {
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    'x-engram-project-identity-adapter': 'hook',
+    'x-request-id': 'hook-fixture-attempt-17',
+  },
+  body: '{"project_descriptor":{"scope":"repository","name":"fixture-hook-descriptor"},"identity_only":true,"extra":"unexpected"}',
+});`,
+			code: ar2HookDriverBodyOrHeadersMismatchCode,
+		},
+		{
+			name: "payload value change fails semantic mismatch",
+			hookBody: `await fetch(process.env.AR2_SERVER_URL + '/api/context/inject', {
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    'x-engram-project-identity-adapter': 'hook',
+    'x-request-id': 'hook-fixture-attempt-17',
+  },
+  body: '{"project_descriptor":{"scope":"repository","name":"fixture-hook-descriptor"},"identity_only":false}',
+});`,
+			code: ar2HookDriverBodyOrHeadersMismatchCode,
 		},
 		{
 			name:             "resolver response mismatch",
