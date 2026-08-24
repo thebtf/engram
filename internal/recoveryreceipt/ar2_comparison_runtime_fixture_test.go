@@ -370,6 +370,29 @@ func TestAR2FixtureServerBuildPreflight(t *testing.T) {
 	t.Logf("AR-2 fixture server build preflight: candidate=%s fts5=passed", candidateCommit)
 }
 
+func TestAR2DaemonRepositoryBuildsAcceptedV3Descriptor(t *testing.T) {
+	repo := ar2DaemonRepository(t, t.TempDir())
+	anchor, err := projectidentity.DiscoverAnchorV3(repo, "repository")
+	if err != nil {
+		t.Fatalf("discover daemon repository V3 anchor: %v", err)
+	}
+	rawRemote, err := ar2Command(context.Background(), repo, "git", "remote", "get-url", "origin")
+	if err != nil {
+		t.Fatal("read daemon repository origin")
+	}
+	remote, disposition, err := projectidentity.NormalizeGitRemoteV3(strings.TrimSpace(string(rawRemote)))
+	if err != nil || disposition != projectidentity.RemoteNormalizedV3 {
+		t.Fatalf("normalize daemon repository origin = %q, %q, %v", remote, disposition, err)
+	}
+	descriptor, err := projectidentity.BuildDescriptorV3(anchor, []string{remote}, nil, "ar2-daemon-fixture-client-17")
+	if err != nil {
+		t.Fatalf("build daemon repository V3 descriptor: %v", err)
+	}
+	if descriptor.AnchorProjectID != ar2FixtureAnchorProjectID || descriptor.Name != "ar2-comparison-project" || descriptor.Scope != "repository" || len(descriptor.NormalizedGitRemotes) != 1 || descriptor.NormalizedGitRemotes[0] != "example.invalid/acme/engram" {
+		t.Fatalf("daemon repository V3 descriptor = %#v", descriptor)
+	}
+}
+
 // TestAR2ComparisonRuntimeFixture exercises every public V3 adapter against one
 // disposable pgvector PostgreSQL instance. It intentionally collects only resolver
 // responses and persisted redacted rows; no ComparisonObservation is test-injected.
@@ -1179,11 +1202,20 @@ func ar2DaemonRepository(t *testing.T, fixtureDir string) string {
 	if err := os.MkdirAll(repo, 0o700); err != nil {
 		t.Fatal("create daemon repository fixture")
 	}
-	anchor := fmt.Sprintf(`{"version":3,"project_id":%q,"name":"ar2-comparison-project","scope":"repository"}\n`, ar2FixtureAnchorProjectID)
-	if err := os.WriteFile(filepath.Join(repo, ".engram-project"), []byte(anchor), 0o600); err != nil {
+	anchor, err := json.Marshal(projectidentity.AnchorV3{
+		Version:   3,
+		ProjectID: ar2FixtureAnchorProjectID,
+		Name:      "ar2-comparison-project",
+		Scope:     "repository",
+	})
+	if err != nil {
+		t.Fatal("marshal daemon V3 anchor")
+	}
+	anchor = append(anchor, '\n')
+	if err := os.WriteFile(filepath.Join(repo, ".engram-project"), anchor, 0o600); err != nil {
 		t.Fatal("write daemon V3 anchor")
 	}
-	for _, arguments := range [][]string{{"init"}, {"remote", "add", "origin", "https://example.invalid/acme/engram.git"}} {
+	for _, arguments := range [][]string{{"init"}, {"remote", "add", "origin", "https://example.invalid/acme/engram.git"}, {"add", ".engram-project"}} {
 		if _, err := ar2Command(context.Background(), repo, "git", arguments...); err != nil {
 			t.Fatal("prepare daemon repository fixture")
 		}
