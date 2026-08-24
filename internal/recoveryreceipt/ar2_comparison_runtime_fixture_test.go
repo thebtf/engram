@@ -1423,31 +1423,7 @@ func TestAR2ReadJSONRPCResponseHandlesToolsListFrames(t *testing.T) {
 func ar2InvokeOpenClaw(t *testing.T, ctx context.Context, fixtureDir, baseURL string, descriptor map[string]any, projectKey, clientPath string) projectidentity.CorrelationV3 {
 	t.Helper()
 	driver := filepath.Join(fixtureDir, "openclaw-driver.mjs")
-	driverSource := `
-import { pathToFileURL } from 'node:url';
-const { EngramRestClient } = await import(pathToFileURL(process.env.AR2_OPENCLAW_CLIENT).href);
-const nativeFetch = globalThis.fetch;
-const descriptor = JSON.parse(process.env.AR2_DESCRIPTOR);
-const expectedBody = JSON.stringify({ project_descriptor: descriptor, identity_only: true });
-let requests = 0;
-let correlation = '';
-globalThis.fetch = async (url, init = {}) => {
-  requests += 1;
-  if (requests !== 1 || url !== process.env.AR2_SERVER_URL + '/api/context/inject' || init.method !== 'POST') throw new Error('unexpected OpenClaw request');
-  const headers = Object.fromEntries(new Headers(init.headers).entries());
-  if (Object.keys(headers).sort().join(',') !== 'authorization,content-type,x-engram-project-identity-adapter,x-request-id' || headers.authorization !== 'Bearer' || headers['content-type'] !== 'application/json' || headers['x-engram-project-identity-adapter'] !== 'openclaw' || !headers['x-request-id'] || String(init.body) !== expectedBody) throw new Error('unexpected OpenClaw request body or headers');
-  const response = await nativeFetch(url, init);
-  const body = await response.clone().json();
-  const resolution = body?.project_resolution_v3;
-  if (!response.ok || resolution?.outcome !== 'PROJECT_RESOLVED' || resolution?.project_key !== process.env.AR2_PROJECT_KEY || resolution?.resolved_scope !== descriptor.scope || typeof resolution?.correlation !== 'string' || !resolution.correlation) throw new Error('unexpected OpenClaw resolver response');
-  correlation = resolution.correlation;
-  return response;
-};
-const client = new EngramRestClient({ url: process.env.AR2_SERVER_URL, token: '', timeoutMs: 5000, clientInstanceId: 'openclaw-fixture-client-17' });
-const result = await client.registerAndResolveProject({ projectId: 'ar2-openclaw-fixture', agentId: 'ar2-openclaw-agent', projectIdentityV3: descriptor }, 'ar2-openclaw-selector');
-if (requests !== 1 || !result.ok || result.canonicalProject !== process.env.AR2_PROJECT_KEY || !correlation) throw new Error('OpenClaw resolver result missing');
-process.stdout.write(JSON.stringify({ step: 'openclaw', correlation }));
-`
+	driverSource := ar2OpenClawDriverSource()
 	if err := os.WriteFile(driver, []byte(driverSource), 0o600); err != nil {
 		t.Fatal("write OpenClaw runtime driver")
 	}
@@ -1472,6 +1448,302 @@ process.stdout.write(JSON.stringify({ step: 'openclaw', correlation }));
 		t.Fatal("built OpenClaw V3 callable did not capture a resolver correlation")
 	}
 	return correlation
+}
+
+const (
+	ar2OpenClawDriverFailureCode                  = "AR2_OPENCLAW_DRIVER_FAILURE"
+	ar2OpenClawDriverUnexpectedRequestCode        = "AR2_OPENCLAW_DRIVER_UNEXPECTED_REQUEST"
+	ar2OpenClawDriverRequestShapeMismatchCode     = "AR2_OPENCLAW_DRIVER_REQUEST_SHAPE_MISMATCH"
+	ar2OpenClawDriverResolverResponseMismatchCode = "AR2_OPENCLAW_DRIVER_RESOLVER_RESPONSE_MISMATCH"
+	ar2OpenClawDriverResolverResultMissingCode    = "AR2_OPENCLAW_DRIVER_RESOLVER_RESULT_MISSING"
+)
+
+func ar2OpenClawDriverSource() string {
+	return fmt.Sprintf(`
+import { pathToFileURL } from 'node:url';
+const callable = %q;
+const nativeFetch = globalThis.fetch;
+let responseStatus = null;
+let requestShape = 'not_observed';
+let resultOrErrorCategory = 'not_observed';
+class OpenClawFixtureAssertionError extends Error {
+  constructor(code, shape, category) {
+    super(code);
+    this.code = code;
+    this.requestShape = shape;
+    this.resultOrErrorCategory = category;
+  }
+}
+const failure = (code, shape, category) => {
+  requestShape = shape;
+  resultOrErrorCategory = category;
+  return new OpenClawFixtureAssertionError(code, shape, category);
+};
+try {
+  const { EngramRestClient } = await import(pathToFileURL(process.env.AR2_OPENCLAW_CLIENT).href);
+  const descriptor = JSON.parse(process.env.AR2_DESCRIPTOR);
+  const canonicalizeJSON = (value) => {
+    if (Array.isArray(value)) return value.map(canonicalizeJSON);
+    if (value !== null && typeof value === 'object') {
+      return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalizeJSON(value[key])]));
+    }
+    return value;
+  };
+  const closedSemanticPayload = (value) => JSON.stringify(canonicalizeJSON(value));
+  const expectedPayload = closedSemanticPayload({ project_descriptor: descriptor, identity_only: true });
+  let requests = 0;
+  let correlation = '';
+  globalThis.fetch = async (url, init = {}) => {
+    requests += 1;
+    if (requests !== 1 || url !== process.env.AR2_SERVER_URL + '/api/context/inject' || init.method !== 'POST') {
+      throw failure(%q, 'unexpected', 'not_observed');
+    }
+    const headers = Object.fromEntries(new Headers(init.headers).entries());
+    if (Object.keys(headers).sort().join(',') !== 'authorization,content-type,x-engram-project-identity-adapter,x-request-id' || headers.authorization !== 'Bearer' || headers['content-type'] !== 'application/json' || headers['x-engram-project-identity-adapter'] !== 'openclaw' || !headers['x-request-id']) {
+      throw failure(%q, 'mismatch', 'not_observed');
+    }
+    let payload;
+    try {
+      payload = closedSemanticPayload(JSON.parse(String(init.body)));
+    } catch {
+      throw failure(%q, 'malformed', 'not_observed');
+    }
+    if (payload !== expectedPayload) {
+      throw failure(%q, 'mismatch', 'not_observed');
+    }
+    requestShape = 'matched';
+    const response = await nativeFetch(url, init);
+    responseStatus = response.status;
+    let body;
+    try {
+      body = await response.clone().json();
+    } catch {
+      throw failure(%q, requestShape, 'response_parse_error');
+    }
+    const resolution = body?.project_resolution_v3;
+    if (!response.ok || resolution?.outcome !== 'PROJECT_RESOLVED' || resolution?.project_key !== process.env.AR2_PROJECT_KEY || resolution?.resolved_scope !== descriptor.scope || typeof resolution?.correlation !== 'string' || !resolution.correlation) {
+      throw failure(%q, requestShape, 'resolver_response_mismatch');
+    }
+    correlation = resolution.correlation;
+    return response;
+  };
+  const client = new EngramRestClient({ url: process.env.AR2_SERVER_URL, token: '', timeoutMs: 5000, clientInstanceId: 'openclaw-fixture-client-17' });
+  const result = await client.registerAndResolveProject({ projectId: 'ar2-openclaw-fixture', agentId: 'ar2-openclaw-agent', projectIdentityV3: descriptor }, 'ar2-openclaw-selector');
+  if (requests !== 1) {
+    throw failure(%q, 'unexpected', 'not_observed');
+  }
+  if (!result || typeof result !== 'object') {
+    throw failure(%q, requestShape, 'missing_result');
+  }
+  if (!result.ok) {
+    throw failure(%q, requestShape, resultOrErrorCategory === 'not_observed' ? 'typed_error' : resultOrErrorCategory);
+  }
+  if (result.canonicalProject !== process.env.AR2_PROJECT_KEY || !correlation) {
+    throw failure(%q, requestShape, 'result_mismatch');
+  }
+  process.stdout.write(JSON.stringify({ step: 'openclaw', correlation }));
+} catch (error) {
+  const known = error instanceof OpenClawFixtureAssertionError;
+  const code = known ? error.code : %q;
+  if (known) {
+    requestShape = error.requestShape;
+    resultOrErrorCategory = error.resultOrErrorCategory;
+  } else {
+    resultOrErrorCategory = 'untyped_error';
+  }
+  process.stderr.write(JSON.stringify({ code, callable, response_status: responseStatus, request_shape: requestShape, result_or_error_category: resultOrErrorCategory }) + '\n');
+  process.exitCode = 1;
+}
+`, ar2ControlledFixtureCallables[4].callable,
+		ar2OpenClawDriverUnexpectedRequestCode,
+		ar2OpenClawDriverRequestShapeMismatchCode,
+		ar2OpenClawDriverRequestShapeMismatchCode,
+		ar2OpenClawDriverRequestShapeMismatchCode,
+		ar2OpenClawDriverResolverResponseMismatchCode,
+		ar2OpenClawDriverResolverResponseMismatchCode,
+		ar2OpenClawDriverUnexpectedRequestCode,
+		ar2OpenClawDriverResolverResultMissingCode,
+		ar2OpenClawDriverResolverResultMissingCode,
+		ar2OpenClawDriverResolverResultMissingCode,
+		ar2OpenClawDriverFailureCode)
+}
+
+func TestAR2OpenClawDriverClosedPayloadAndDiagnostics(t *testing.T) {
+	const (
+		projectKey  = "fixture-openclaw-project-key"
+		descriptor  = `{"scope":"repository","name":"fixture-openclaw-descriptor","legacy_identifiers":["fixture-legacy-a","fixture-legacy-b"]}`
+		correlation = "fixture-openclaw-correlation"
+	)
+	validResponse := `{"project_resolution_v3":{"outcome":"PROJECT_RESOLVED","project_key":"fixture-openclaw-project-key","resolved_scope":"repository","correlation":"fixture-openclaw-correlation"}}`
+	validResult := `{"ok":true,"canonicalProject":"fixture-openclaw-project-key"}`
+	typedErrorSecret := "fixture-openclaw-typed-error-secret"
+	clientSource := func(body, result string) string {
+		return fmt.Sprintf(`
+export class EngramRestClient {
+  constructor() {}
+  async registerAndResolveProject() {
+    await fetch(process.env.AR2_SERVER_URL + '/api/context/inject', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer',
+        'Content-Type': 'application/json',
+        'X-Engram-Project-Identity-Adapter': 'openclaw',
+        'X-Request-ID': 'openclaw-fixture-attempt-17',
+      },
+      body: %q,
+    });
+    return JSON.parse(%q);
+  }
+}
+`, body, result)
+	}
+	type diagnostic struct {
+		Code                  string `json:"code"`
+		Callable              string `json:"callable"`
+		ResponseStatus        *int   `json:"response_status"`
+		RequestShape          string `json:"request_shape"`
+		ResultOrErrorCategory string `json:"result_or_error_category"`
+	}
+	for _, testCase := range []struct {
+		name                 string
+		body                 string
+		result               string
+		responseStatus       int
+		resolverResponse     string
+		success              bool
+		wantCode             string
+		wantResponseStatus   *int
+		wantRequestShape     string
+		wantResultOrCategory string
+	}{
+		{
+			name:    "semantically reordered closed payload is accepted",
+			body:    `{"identity_only":true,"project_descriptor":{"legacy_identifiers":["fixture-legacy-a","fixture-legacy-b"],"name":"fixture-openclaw-descriptor","scope":"repository"}}`,
+			result:  validResult,
+			success: true,
+		},
+		{
+			name:                 "changed scalar is rejected",
+			body:                 `{"project_descriptor":{"scope":"repository","name":"fixture-openclaw-descriptor","legacy_identifiers":["fixture-legacy-a","fixture-legacy-b"]},"identity_only":false}`,
+			result:               validResult,
+			wantCode:             ar2OpenClawDriverRequestShapeMismatchCode,
+			wantRequestShape:     "mismatch",
+			wantResultOrCategory: "not_observed",
+		},
+		{
+			name:                 "extra closed payload property is rejected",
+			body:                 `{"project_descriptor":{"scope":"repository","name":"fixture-openclaw-descriptor","legacy_identifiers":["fixture-legacy-a","fixture-legacy-b"]},"identity_only":true,"extra":"unexpected"}`,
+			result:               validResult,
+			wantCode:             ar2OpenClawDriverRequestShapeMismatchCode,
+			wantRequestShape:     "mismatch",
+			wantResultOrCategory: "not_observed",
+		},
+		{
+			name:                 "missing closed payload property is rejected",
+			body:                 `{"project_descriptor":{"scope":"repository","name":"fixture-openclaw-descriptor","legacy_identifiers":["fixture-legacy-a","fixture-legacy-b"]}}`,
+			result:               validResult,
+			wantCode:             ar2OpenClawDriverRequestShapeMismatchCode,
+			wantRequestShape:     "mismatch",
+			wantResultOrCategory: "not_observed",
+		},
+		{
+			name:                 "changed array order is rejected",
+			body:                 `{"project_descriptor":{"scope":"repository","name":"fixture-openclaw-descriptor","legacy_identifiers":["fixture-legacy-b","fixture-legacy-a"]},"identity_only":true}`,
+			result:               validResult,
+			wantCode:             ar2OpenClawDriverRequestShapeMismatchCode,
+			wantRequestShape:     "mismatch",
+			wantResultOrCategory: "not_observed",
+		},
+		{
+			name:                 "malformed JSON is rejected",
+			body:                 "malformed-json",
+			result:               validResult,
+			wantCode:             ar2OpenClawDriverRequestShapeMismatchCode,
+			wantRequestShape:     "malformed",
+			wantResultOrCategory: "not_observed",
+		},
+		{
+			name:                 "typed client error retains bounded category",
+			body:                 `{"project_descriptor":{"scope":"repository","name":"fixture-openclaw-descriptor","legacy_identifiers":["fixture-legacy-a","fixture-legacy-b"]},"identity_only":true}`,
+			result:               `{"ok":false,"error":{"code":"PROJECT_IDENTITY_UNAVAILABLE","message":"` + typedErrorSecret + `","upgradeAction":"retry_project_identity_registration","httpStatus":503}}`,
+			wantCode:             ar2OpenClawDriverResolverResultMissingCode,
+			wantResponseStatus:   func() *int { status := http.StatusOK; return &status }(),
+			wantRequestShape:     "matched",
+			wantResultOrCategory: "typed_error",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				status := testCase.responseStatus
+				if status == 0 {
+					status = http.StatusOK
+				}
+				response := testCase.resolverResponse
+				if response == "" {
+					response = validResponse
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(status)
+				_, _ = io.WriteString(writer, response)
+			}))
+			defer server.Close()
+
+			fixtureDir := t.TempDir()
+			driver := filepath.Join(fixtureDir, "openclaw-driver.mjs")
+			if err := os.WriteFile(driver, []byte(ar2OpenClawDriverSource()), 0o600); err != nil {
+				t.Fatal("write OpenClaw diagnostic driver")
+			}
+			client := filepath.Join(fixtureDir, "client.mjs")
+			if err := os.WriteFile(client, []byte(clientSource(testCase.body, testCase.result)), 0o600); err != nil {
+				t.Fatal("write OpenClaw diagnostic client")
+			}
+			output, err := ar2CommandEnv(context.Background(), fixtureDir, ar2FixtureEnvironment(t, "", map[string]string{
+				"AR2_DESCRIPTOR":      descriptor,
+				"AR2_OPENCLAW_CLIENT": client,
+				"AR2_PROJECT_KEY":     projectKey,
+				"AR2_SERVER_URL":      server.URL,
+			}), "node", driver)
+			if testCase.success {
+				if err != nil {
+					t.Fatalf("successful OpenClaw driver: %v", err)
+				}
+				var result struct {
+					Step        string `json:"step"`
+					Correlation string `json:"correlation"`
+				}
+				if err := json.Unmarshal(output, &result); err != nil || result.Step != "openclaw" || result.Correlation != correlation {
+					t.Fatalf("successful OpenClaw driver output = %q, %v", output, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("failing OpenClaw driver returned nil error")
+			}
+			if len(output) != 0 {
+				t.Fatalf("failing OpenClaw driver emitted stdout: %q", output)
+			}
+			diagnosticText := err.Error()
+			index := strings.LastIndex(diagnosticText, `{"code":`)
+			if index < 0 {
+				t.Fatalf("OpenClaw driver omitted structured diagnostic: %s", diagnosticText)
+			}
+			var actual diagnostic
+			if err := json.Unmarshal([]byte(diagnosticText[index:]), &actual); err != nil {
+				t.Fatalf("decode OpenClaw diagnostic: %v: %s", err, diagnosticText)
+			}
+			if actual.Code != testCase.wantCode || actual.Callable != ar2ControlledFixtureCallables[4].callable || actual.RequestShape != testCase.wantRequestShape || actual.ResultOrErrorCategory != testCase.wantResultOrCategory {
+				t.Fatalf("OpenClaw diagnostic = %#v", actual)
+			}
+			if (actual.ResponseStatus == nil) != (testCase.wantResponseStatus == nil) || actual.ResponseStatus != nil && *actual.ResponseStatus != *testCase.wantResponseStatus {
+				t.Fatalf("OpenClaw response status = %#v, want %#v", actual.ResponseStatus, testCase.wantResponseStatus)
+			}
+			for _, forbidden := range []string{descriptor, projectKey, server.URL, typedErrorSecret} {
+				if strings.Contains(diagnosticText, forbidden) {
+					t.Fatalf("OpenClaw diagnostic leaked %q: %s", forbidden, diagnosticText)
+				}
+			}
+		})
+	}
 }
 
 func ar2BuildOpenClawClient(t *testing.T, ctx context.Context, pluginDir string) string {
