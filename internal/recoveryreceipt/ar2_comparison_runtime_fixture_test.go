@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1081,36 +1082,58 @@ func ar2InvokeHTTP(t *testing.T, ctx context.Context, baseURL string, descriptor
 	return correlation
 }
 
-func ar2InvokeHook(t *testing.T, ctx context.Context, root, fixtureDir, baseURL string, descriptor map[string]any, projectKey string) projectidentity.CorrelationV3 {
-	t.Helper()
-	driver := filepath.Join(fixtureDir, "hook-driver.cjs")
-	source := `
+const (
+	ar2HookDriverFailureCode                  = "AR2_HOOK_DRIVER_FAILURE"
+	ar2HookDriverFailureMessage               = "Hook driver failed"
+	ar2HookDriverUnexpectedRequestCode        = "AR2_HOOK_DRIVER_UNEXPECTED_REQUEST"
+	ar2HookDriverBodyOrHeadersMismatchCode    = "AR2_HOOK_DRIVER_REQUEST_BODY_OR_HEADERS_MISMATCH"
+	ar2HookDriverResolverResponseMismatchCode = "AR2_HOOK_DRIVER_RESOLVER_RESPONSE_MISMATCH"
+	ar2HookDriverResolverResultMissingCode    = "AR2_HOOK_DRIVER_RESOLVER_RESULT_MISSING"
+)
+
+func ar2HookDriverSource() string {
+	return fmt.Sprintf(`
 const hook = require(process.env.AR2_HOOK_LIB);
 const nativeFetch = globalThis.fetch;
 const descriptor = JSON.parse(process.env.AR2_DESCRIPTOR);
 const expectedBody = JSON.stringify({ project_descriptor: descriptor, identity_only: true });
+const HookDriverAssertionError = class extends Error {
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+};
 let requests = 0;
 let correlation = '';
 globalThis.fetch = async (url, init = {}) => {
   requests += 1;
-  if (requests !== 1 || url !== process.env.AR2_SERVER_URL + '/api/context/inject' || init.method !== 'POST') throw new Error('unexpected Hook request');
+  if (requests !== 1 || url !== process.env.AR2_SERVER_URL + '/api/context/inject' || init.method !== 'POST') throw new HookDriverAssertionError(%q, 'unexpected Hook request');
   const headers = Object.fromEntries(new Headers(init.headers).entries());
-  if (Object.keys(headers).sort().join(',') !== 'content-type,x-engram-project-identity-adapter,x-request-id' || headers['content-type'] !== 'application/json' || headers['x-engram-project-identity-adapter'] !== 'hook' || headers['x-request-id'] !== 'hook-fixture-attempt-17' || String(init.body) !== expectedBody) throw new Error('unexpected Hook request body or headers');
+  if (Object.keys(headers).sort().join(',') !== 'content-type,x-engram-project-identity-adapter,x-request-id' || headers['content-type'] !== 'application/json' || headers['x-engram-project-identity-adapter'] !== 'hook' || headers['x-request-id'] !== 'hook-fixture-attempt-17' || String(init.body) !== expectedBody) throw new HookDriverAssertionError(%q, 'unexpected Hook request body or headers');
   const response = await nativeFetch(url, init);
   const body = await response.clone().json();
   const resolution = body?.project_resolution_v3;
-  if (!response.ok || resolution?.outcome !== 'PROJECT_RESOLVED' || resolution?.project_key !== process.env.AR2_PROJECT_KEY || resolution?.resolved_scope !== descriptor.scope || typeof resolution?.correlation !== 'string' || !resolution.correlation) throw new Error('unexpected Hook resolver response');
+  if (!response.ok || resolution?.outcome !== 'PROJECT_RESOLVED' || resolution?.project_key !== process.env.AR2_PROJECT_KEY || resolution?.resolved_scope !== descriptor.scope || typeof resolution?.correlation !== 'string' || !resolution.correlation) throw new HookDriverAssertionError(%q, 'unexpected Hook resolver response');
   correlation = resolution.correlation;
   return response;
 };
 (async () => {
   const context = { ProjectDescriptorV3: descriptor };
   await hook.registerProjectIdentityV3(context, undefined, { serverURL: process.env.AR2_SERVER_URL, requestID: 'hook-fixture-attempt-17' });
-  if (requests !== 1 || !correlation || context.Project !== process.env.AR2_PROJECT_KEY) throw new Error('Hook resolver result missing');
+  if (requests !== 1 || !correlation || context.Project !== process.env.AR2_PROJECT_KEY) throw new HookDriverAssertionError(%q, 'Hook resolver result missing');
   process.stdout.write(JSON.stringify({ step: 'hook', correlation }));
-})().catch(() => process.exit(1));
-`
-	if err := os.WriteFile(driver, []byte(source), 0o600); err != nil {
+})().catch((error) => {
+  const code = error instanceof HookDriverAssertionError ? error.code : %q;
+  process.stderr.write(JSON.stringify({ code, message: %q }) + '\n');
+  process.exitCode = 1;
+});
+`, ar2HookDriverUnexpectedRequestCode, ar2HookDriverBodyOrHeadersMismatchCode, ar2HookDriverResolverResponseMismatchCode, ar2HookDriverResolverResultMissingCode, ar2HookDriverFailureCode, ar2HookDriverFailureMessage)
+}
+
+func ar2InvokeHook(t *testing.T, ctx context.Context, root, fixtureDir, baseURL string, descriptor map[string]any, projectKey string) projectidentity.CorrelationV3 {
+	t.Helper()
+	driver := filepath.Join(fixtureDir, "hook-driver.cjs")
+	if err := os.WriteFile(driver, []byte(ar2HookDriverSource()), 0o600); err != nil {
 		t.Fatal("write Hook runtime driver")
 	}
 	output, err := ar2CommandEnv(ctx, root, ar2FixtureEnvironment(t, "", map[string]string{
@@ -2136,6 +2159,181 @@ func TestAR2CommandEnvSanitizesBoundedCredentialFailure(t *testing.T) {
 	}
 }
 
+func TestAR2HookDriverDiagnosticClassification(t *testing.T) {
+	const (
+		bootstrapAdminToken = "fixture-hook-bootstrap-token"
+		projectKey          = "fixture-hook-project-key"
+		descriptor          = `{"scope":"repository","name":"fixture-hook-descriptor"}`
+		correlation         = "fixture-hook-correlation"
+	)
+	validResponse := `{"project_resolution_v3":{"outcome":"PROJECT_RESOLVED","project_key":"fixture-hook-project-key","resolved_scope":"repository","correlation":"fixture-hook-correlation"}}`
+	validRequest := `
+const descriptor = JSON.parse(process.env.AR2_DESCRIPTOR);
+const response = await fetch(process.env.AR2_SERVER_URL + '/api/context/inject', {
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    'x-engram-project-identity-adapter': 'hook',
+    'x-request-id': 'hook-fixture-attempt-17',
+  },
+  body: JSON.stringify({ project_descriptor: descriptor, identity_only: true }),
+});
+const body = await response.json();
+context.Project = body.project_resolution_v3.project_key;
+`
+	validRequestWithoutResult := `
+const descriptor = JSON.parse(process.env.AR2_DESCRIPTOR);
+await fetch(process.env.AR2_SERVER_URL + '/api/context/inject', {
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    'x-engram-project-identity-adapter': 'hook',
+    'x-request-id': 'hook-fixture-attempt-17',
+  },
+  body: JSON.stringify({ project_descriptor: descriptor, identity_only: true }),
+});
+`
+
+	for _, testCase := range []struct {
+		name             string
+		hookBody         string
+		resolverResponse string
+		code             string
+		success          bool
+	}{
+		{
+			name:     "unexpected request",
+			hookBody: `await fetch(process.env.AR2_SERVER_URL + '/unexpected', { method: 'POST' });`,
+			code:     "AR2_HOOK_DRIVER_UNEXPECTED_REQUEST",
+		},
+		{
+			name: "request body or headers mismatch",
+			hookBody: `await fetch(process.env.AR2_SERVER_URL + '/api/context/inject', {
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    'x-engram-project-identity-adapter': 'hook',
+    'x-request-id': 'hook-fixture-attempt-17',
+  },
+  body: 'wrong',
+});`,
+			code: "AR2_HOOK_DRIVER_REQUEST_BODY_OR_HEADERS_MISMATCH",
+		},
+		{
+			name:             "resolver response mismatch",
+			hookBody:         validRequest,
+			resolverResponse: `{}`,
+			code:             "AR2_HOOK_DRIVER_RESOLVER_RESPONSE_MISMATCH",
+		},
+		{
+			name:             "resolver result missing",
+			hookBody:         validRequestWithoutResult,
+			resolverResponse: validResponse,
+			code:             "AR2_HOOK_DRIVER_RESOLVER_RESULT_MISSING",
+		},
+		{
+			name:     "unknown Hook rejection remains generic and redacted",
+			hookBody: `throw new Error(["fixture simulated Hook rejection", process.env.AR2_DESCRIPTOR, process.env.AR2_PROJECT_KEY, process.env.AR2_SERVER_URL, "fixture-hook-bootstrap-token"].join('|'));`,
+			code:     ar2HookDriverFailureCode,
+		},
+		{
+			name:             "successful Hook result remains unchanged",
+			hookBody:         validRequest,
+			resolverResponse: validResponse,
+			success:          true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(writer, testCase.resolverResponse)
+			}))
+			defer server.Close()
+
+			fixtureDir := t.TempDir()
+			driver := filepath.Join(fixtureDir, "hook-driver.cjs")
+			if err := os.WriteFile(driver, []byte(ar2HookDriverSource()), 0o600); err != nil {
+				t.Fatal("write Hook diagnostic driver")
+			}
+			hook := filepath.Join(fixtureDir, "hook.cjs")
+			hookSource := "module.exports = { registerProjectIdentityV3: async (context) => {" + testCase.hookBody + "} };\n"
+			if err := os.WriteFile(hook, []byte(hookSource), 0o600); err != nil {
+				t.Fatal("write Hook diagnostic module")
+			}
+
+			output, err := ar2CommandEnv(context.Background(), fixtureDir, ar2FixtureEnvironment(t, "", map[string]string{
+				"AR2_DESCRIPTOR":  descriptor,
+				"AR2_HOOK_LIB":    hook,
+				"AR2_PROJECT_KEY": projectKey,
+				"AR2_SERVER_URL":  server.URL,
+			}), "node", driver)
+			if testCase.success {
+				if err != nil {
+					t.Fatalf("successful Hook driver: %v", err)
+				}
+				var result struct {
+					Step        string `json:"step"`
+					Correlation string `json:"correlation"`
+				}
+				if err := json.Unmarshal(output, &result); err != nil || result.Step != "hook" || result.Correlation != correlation {
+					t.Fatalf("successful Hook driver output = %q, %v", output, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("failing Hook driver returned nil error")
+			}
+			if len(output) != 0 {
+				t.Fatalf("failing Hook driver emitted stdout: %q", output)
+			}
+			var exitError *exec.ExitError
+			if !errors.As(err, &exitError) {
+				t.Fatalf("Hook driver error did not wrap ExitError: %v", err)
+			}
+			diagnostic := err.Error()
+			for _, expected := range []string{testCase.code, ar2HookDriverFailureMessage} {
+				if !strings.Contains(diagnostic, expected) {
+					t.Fatalf("Hook driver omitted stable diagnostic %q: %s", expected, diagnostic)
+				}
+			}
+			if testCase.code != ar2HookDriverFailureCode && strings.Contains(diagnostic, ar2HookDriverFailureCode) {
+				t.Fatalf("known Hook assertion used generic failure code: %s", diagnostic)
+			}
+			for _, forbidden := range []string{"fixture simulated Hook rejection", descriptor, projectKey, server.URL, bootstrapAdminToken} {
+				if strings.Contains(diagnostic, forbidden) {
+					t.Fatalf("Hook driver leaked %q: %s", forbidden, diagnostic)
+				}
+			}
+		})
+	}
+}
+
+func TestAR2FixtureDiagnosticSanitizerRedactsHookControls(t *testing.T) {
+	const (
+		bootstrapAdminToken = "fixture-sanitizer-bootstrap-token"
+		projectKey          = "fixture-sanitizer-project-key"
+		serverURL           = "http://fixture-sanitizer-server.invalid:37777"
+		descriptor          = `{"scope":"repository","name":"fixture-sanitizer-descriptor"}`
+		credential          = "fixture-sanitizer-password"
+	)
+	dsn := "postgres://fixture:" + credential + "@fixture.invalid/engram"
+	environment := ar2FixtureEnvironment(t, bootstrapAdminToken, map[string]string{
+		"AR2_DESCRIPTOR":  descriptor,
+		"AR2_PROJECT_KEY": projectKey,
+		"AR2_SERVER_URL":  serverURL,
+		"DATABASE_DSN":    dsn,
+	})
+	diagnostic := ar2SanitizeFixtureCommandStderr([]byte(strings.Join([]string{bootstrapAdminToken, projectKey, serverURL, descriptor, dsn}, " ")), environment, nil)
+	for _, forbidden := range []string{bootstrapAdminToken, projectKey, serverURL, descriptor, dsn, credential} {
+		if strings.Contains(diagnostic, forbidden) {
+			t.Fatalf("fixture diagnostic sanitizer leaked %q: %s", forbidden, diagnostic)
+		}
+	}
+	if strings.Count(diagnostic, "[REDACTED]") != 5 {
+		t.Fatalf("fixture diagnostic sanitizer did not redact every Hook control value: %s", diagnostic)
+	}
+}
+
 func TestAR2FixtureCallableCaptureOwnsSuccessfulCorrelationsBeforeHookFailure(t *testing.T) {
 	capture, err := newAR2ControlledFixtureCapture(ar2FixtureCandidateAttestation())
 	if err != nil {
@@ -2288,7 +2486,7 @@ func ar2FixtureCommandSensitiveValues(environment, args []string) []string {
 	}
 	for _, entry := range environment {
 		key, value, found := strings.Cut(entry, "=")
-		if found && ar2FixtureSensitiveCommandKey(key) {
+		if found && ar2FixtureDiagnosticSensitiveEnvironmentKey(key) {
 			add(value)
 		}
 	}
@@ -2317,6 +2515,15 @@ func ar2FixtureCommandSensitiveValues(environment, args []string) []string {
 		}
 	}
 	return values
+}
+
+func ar2FixtureDiagnosticSensitiveEnvironmentKey(key string) bool {
+	if ar2FixtureSensitiveCommandKey(key) {
+		return true
+	}
+	normalized := strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(strings.TrimLeft(key, "-")))
+	_, control := ar2FixtureControlAliases[normalized]
+	return control
 }
 
 func ar2FixtureSensitiveCommandKey(key string) bool {
