@@ -28,6 +28,7 @@ const {
   parseArgs,
   parseFixtureSnapshot,
   runBoundedChild,
+  scratchServerEnvironment,
   scenarioObservation,
   runProbe,
   snapshotActiveProfile,
@@ -383,6 +384,18 @@ test("scenario projection contradicts any measured candidate direct fallback", (
   assert.equal(observation.state, "CONTRADICTED");
   assert.equal(observation.passed, false);
   assert.equal(observation.counts.direct_fallback_attempts, 1);
+});
+
+test("scratch server uses live worker host and port variables", () => {
+  const root = path.join("scratch", "server");
+  const environment = scratchServerEnvironment(root, 45678, "postgres://fixture", "engram_fixture", baseDeps({
+    env: { ENGRAM_LISTEN_ADDR: "production:37777", GITHUB_TOKEN: "never-inherited", PATH: "safe" },
+  }));
+  assert.equal(environment.ENGRAM_WORKER_HOST, "127.0.0.1");
+  assert.equal(environment.ENGRAM_WORKER_PORT, "45678");
+  assert.equal(environment.ENGRAM_LISTEN_ADDR, undefined);
+  assert.equal(environment.GITHUB_TOKEN, undefined);
+  assert.equal(environment.DATABASE_DSN, "postgres://fixture");
 });
 
 test("scratch directory creation rejects an intermediate symbolic link or junction", (t) => {

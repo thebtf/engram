@@ -1809,13 +1809,8 @@ function randomLoopbackPort(deps) {
   });
 }
 
-async function startServer(options, matrix, dsn, root, deps) {
-  if (typeof deps.startServer === "function") return deps.startServer(options, matrix, dsn, root);
-  const port = await randomLoopbackPort(deps);
-  const serverRoot = deps.path.join(root, "server");
-  createExclusiveDirectory(serverRoot, deps);
-  const adminToken = `engram_${deps.randomBytes(16).toString("hex")}`;
-  const env = childEnvironment(deps.env, {
+function scratchServerEnvironment(serverRoot, port, dsn, adminToken, deps) {
+  return childEnvironment(deps.env, {
     HOME: serverRoot,
     USERPROFILE: serverRoot,
     LOCALAPPDATA: deps.path.join(serverRoot, "localappdata"),
@@ -1823,7 +1818,8 @@ async function startServer(options, matrix, dsn, root, deps) {
     TMP: deps.path.join(serverRoot, "tmp"),
     TMPDIR: deps.path.join(serverRoot, "tmp"),
     ENGRAM_DATA_DIR: deps.path.join(serverRoot, "data"),
-    ENGRAM_LISTEN_ADDR: `127.0.0.1:${port}`,
+    ENGRAM_WORKER_HOST: "127.0.0.1",
+    ENGRAM_WORKER_PORT: String(port),
     DATABASE_DSN: dsn,
     ENGRAM_AUTH_ADMIN_TOKEN: adminToken,
     ENGRAM_HAP_01B_RELAY_ENABLED: "true",
@@ -1832,6 +1828,15 @@ async function startServer(options, matrix, dsn, root, deps) {
     ENGRAM_V7_PLUG_ENABLED: "true",
     ENGRAM_V7_S3_AMBIENT: "true",
   });
+}
+
+async function startServer(options, matrix, dsn, root, deps) {
+  if (typeof deps.startServer === "function") return deps.startServer(options, matrix, dsn, root);
+  const port = await randomLoopbackPort(deps);
+  const serverRoot = deps.path.join(root, "server");
+  createExclusiveDirectory(serverRoot, deps);
+  const adminToken = `engram_${deps.randomBytes(16).toString("hex")}`;
+  const env = scratchServerEnvironment(serverRoot, port, dsn, adminToken, deps);
   const child = deps.spawn(matrix.candidate_server_path, [], { cwd: options.cwd, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: deps.platform !== "win32" });
   try {
     await waitForTcpHealth({ host: "127.0.0.1", port }, options.timeouts.startup_timeout_ms, deps);
@@ -2761,6 +2766,7 @@ module.exports = {
   turnIsComplete,
   sessionTranscriptProjection,
   snapshotActiveProfile,
+  scratchServerEnvironment,
   writeJsonExclusive,
   extractArchive,
 };
