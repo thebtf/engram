@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"sync"
@@ -121,6 +122,7 @@ func (l *Listener) serve(ctx context.Context) {
 		if err != nil {
 			return
 		}
+		log.Print("legacy relay connection accepted")
 		select {
 		case l.semaphore <- struct{}{}:
 			l.workers.Add(1)
