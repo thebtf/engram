@@ -916,6 +916,12 @@ function resolveProfileFiles(profile, deps, env = deps.env) {
   throw lastError || new ProbeError("PROFILE_REGISTRY_UNAVAILABLE", "scratch profile registry could not be resolved");
 }
 
+/**
+  * Resolve the one Engram plugin OMP actually enabled, then bind the runtime
+  * path back to the owned staging tree and its frozen digest. OMP `plugin link`
+  * may expose a junction/symlink under the profile; that link is accepted only
+  * when its real target is the runner-owned staging directory.
+  */
 function resolveLinkedPluginList(value, profileRoot, expectedVersion, expectedTree, expectedTarget, deps) {
   requireExactKeys(value, ["npm", "marketplace"], "OMP plugin list", "OMP_PLUGIN_LIST_INVALID");
   if (!Array.isArray(value.npm) || !Array.isArray(value.marketplace)) fail("OMP_PLUGIN_LIST_INVALID", "OMP plugin list collections are invalid");
@@ -946,11 +952,61 @@ function resolveLinkedPluginList(value, profileRoot, expectedVersion, expectedTr
   return Object.freeze({ version: selected.version, installPath, dataPath: "", configPath: "", install_tree_sha256: tree.sha256 });
 }
 
+/**
+  * Allocate mutable plugin data outside the installed package link. This avoids
+  * writing configuration through a package junction while still passing the
+  * canonical `PLUGIN_DATA` boundary to OMP and `run-engram.js`.
+  */
 function scratchPluginDataEnvironment(profileRoot, env, deps) {
   const pluginData = deps.path.join(profileRoot, "plugin-data", "engram");
   ensureDirectory(pluginData, deps, "PLUGIN_DATA_UNSAFE");
   return Object.freeze({ pluginData, env: Object.freeze({ ...env, PLUGIN_DATA: pluginData }) });
 }
+
+/**
+  * Publish the manifest-bound client into the plugin's content-addressed object
+  * store before OMP starts the MCP wrapper.
+  *
+  * The object layout, policy parsing, hash verification, staging, and create-only
+  * publication are delegated to the plugin's existing `ensure-binary.js`
+  * implementation. The qualification runner only supplies the already-built
+  * client as the legacy import source, then re-verifies the returned object.
+  * This keeps the daemon and MCP child on one exact executable path without
+  * weakening the production ChildImageGate.
+  */
+function seedInstalledClientObject(runtime, pluginRoot, pluginData, mode, deps) {
+  const candidate = mode === "new";
+  const sourcePath = candidate ? runtime.matrix.candidate_client_path : runtime.matrix.baseline_client_path;
+  const expectedSha256 = candidate ? runtime.matrix.artifact.client_object_sha256 : runtime.matrix.artifact.baseline_client_object_sha256;
+  const source = digestRegularFile(sourcePath, deps, "INSTALLED_CLIENT_INVALID");
+  if (source.sha256 !== expectedSha256) fail("INSTALLED_CLIENT_INVALID", "built client differs from the frozen artifact matrix");
+
+  let bootstrap;
+  try { bootstrap = require(deps.path.join(pluginRoot, "scripts", "ensure-binary.js")); } catch { fail("INSTALLED_CLIENT_INVALID", "plugin binary bootstrap helper is unavailable"); }
+  const policy = bootstrap.loadPolicy(pluginRoot, { platform: deps.platform, arch: deps.arch });
+  const target = policy?.target?.desired;
+  if (!target || target.sha256 !== expectedSha256 || target.size !== source.size) {
+    fail("INSTALLED_CLIENT_INVALID", "bootstrap policy does not authorize the frozen client object");
+  }
+
+  const roots = bootstrap.objectRoots(pluginData);
+  const legacyPath = deps.path.join(roots.bin, deps.platform === "win32" ? "engram.exe" : "engram");
+  assertNoSymlinkComponents(legacyPath, deps, "INSTALLED_CLIENT_INVALID");
+  try {
+    deps.fs.copyFileSync(sourcePath, legacyPath, deps.fs.constants.COPYFILE_EXCL);
+    if (deps.platform !== "win32") deps.fs.chmodSync(legacyPath, 0o755);
+  } catch {
+    fail("INSTALLED_CLIENT_INVALID", "could not seed the exact client import source");
+  }
+  const installedPath = bootstrap.importLegacy(roots, target);
+  if (!installedPath || bootstrap.verifyObject(roots, target) !== installedPath) {
+    fail("INSTALLED_CLIENT_INVALID", "plugin bootstrap did not publish the exact client object");
+  }
+  const installed = digestRegularFile(installedPath, deps, "INSTALLED_CLIENT_INVALID");
+  if (installed.sha256 !== expectedSha256 || installed.size !== source.size) fail("INSTALLED_CLIENT_INVALID", "installed client object changed after publication");
+  return installedPath;
+}
+
 
 function activeEnvelopeFiles(env, deps) {
   const profile = typeof env.OMP_PROFILE === "string" && env.OMP_PROFILE.trim()
@@ -1916,10 +1972,20 @@ async function waitForLocator(locatorPath, options, deps) {
   fail("RELAY_LOCATOR_TIMEOUT", "candidate daemon did not publish its owned relay locator");
 }
 
+/**
+  * Produce one stable client identity for every process participating in an OMP
+  * scenario. The extension and MCP wrapper must present the same value or the
+  * daemon cannot correlate descriptor evidence with the accepted child.
+  */
 function scenarioClientInstanceID(runtime, scenarioRoot) {
   return `hap01c-${sha256(`${runtime.options.run_id}:${scenarioRoot}`).slice(0, 20)}`;
 }
 
+/**
+  * Build the OMP callback environment without inheriting host credentials.
+  * Observer paths stay in scratch, while the shared client identity is visible
+  * to both the extension process and the plugin-managed MCP child.
+  */
 function scratchOmpTurnEnvironment(runtime, scenarioRoot, plugin, observerPath, workspace) {
   return {
     ...plugin.env,
@@ -1946,9 +2012,9 @@ function scratchDaemonEnvironment(runtime, scenarioRoot, baseEnv, candidate) {
   return environment;
 }
 
-async function startDaemon(runtime, scenarioRoot, variant, deps) {
+async function startDaemon(runtime, scenarioRoot, variant, deps, binaryOverride = "") {
   const candidate = variant === "candidate";
-  const binary = candidate ? runtime.matrix.candidate_client_path : runtime.matrix.baseline_client_path;
+  const binary = binaryOverride || (candidate ? runtime.matrix.candidate_client_path : runtime.matrix.baseline_client_path);
   const daemonRoot = deps.path.join(scenarioRoot, "daemon");
   createExclusiveDirectory(daemonRoot, deps);
   const env = scratchEnvironment(daemonRoot, runtime.options.scratch_profile, deps);
@@ -1969,6 +2035,7 @@ async function startDaemon(runtime, scenarioRoot, variant, deps) {
     throw withCleanupResidue(error, stopped ? 0 : 1);
   }
 }
+
 
 function scratchPluginConfig(runtime, mode) {
   return mode === "new"
@@ -1991,6 +2058,12 @@ function replaceScratchPluginConfig(runtime, plugin, deps) {
   writeAtomicJson(plugin.config_path, scratchPluginConfig(runtime, plugin.mode), deps);
 }
 
+/**
+  * Point the plugin-managed MCP child at the daemon already elected for this
+  * scenario. Muxcore derives its daemon namespace from the temporary directory;
+  * sharing TEMP/TMP/TMPDIR and ENGRAM_DATA_DIR prevents a second, uncorrelated
+  * daemon from being spawned behind the qualification runner.
+  */
 function bindPluginDaemonNamespace(plugin, daemonEnv) {
   for (const key of ["TEMP", "TMP", "TMPDIR", "ENGRAM_DATA_DIR"]) {
     if (typeof daemonEnv[key] !== "string" || !daemonEnv[key]) fail("DAEMON_NAMESPACE_INVALID", "scratch daemon namespace is incomplete");
@@ -2024,11 +2097,18 @@ async function linkScratchPlugin(runtime, scenarioRoot, pluginRoot, mode, deps) 
   const expectedTree = mode === "new" ? runtime.matrix.artifact.install_tree_sha256 : runtime.matrix.artifact.baseline_plugin_install_tree_sha256;
   const installed = resolveLinkedPluginList(parseJson(Buffer.from(listOutput), "OMP_PLUGIN_LIST_INVALID"), profileRoot, expectedVersion, expectedTree, installRoot, deps);
   const pluginDataBinding = scratchPluginDataEnvironment(profileRoot, env, deps);
+  const clientObjectPath = seedInstalledClientObject(runtime, pluginRoot, pluginDataBinding.pluginData, mode, deps);
   const configPath = deps.path.join(pluginDataBinding.pluginData, "config.json");
   writeSecretJson(configPath, scratchPluginConfig(runtime, mode), deps);
-  return Object.freeze({ env: pluginDataBinding.env, profile_root: profileRoot, plugin_root: installed.installPath, plugin_data: pluginDataBinding.pluginData, config_path: configPath, mode });
+  return Object.freeze({ env: pluginDataBinding.env, profile_root: profileRoot, plugin_root: installed.installPath, plugin_data: pluginDataBinding.pluginData, client_object_path: clientObjectPath, config_path: configPath, mode });
+
 }
 
+/**
+  * Return the minimal real OMP turn arguments. Tools remain enabled so plugin
+  * MCP discovery can start `run-engram.js`; the deterministic local model emits
+  * no tool calls, and LSP/title side effects remain disabled.
+  */
 function ompTurnArguments(runtime, sessionDirectory) {
   return [
     "--profile", runtime.options.scratch_profile,
@@ -2206,9 +2286,10 @@ async function openRelayScenario(runtime, scenarioID, daemonVariant, pluginVaria
   let daemon = null;
   let relayTap = null;
   try {
-    daemon = await startDaemon(runtime, scenarioRoot, daemonVariant, deps);
     const pluginRoot = pluginVariant === "candidate" ? runtime.matrix.candidate_plugin_root : runtime.matrix.baseline_plugin_root;
     const linkedPlugin = await linkScratchPlugin(runtime, scenarioRoot, pluginRoot, pluginVariant === "candidate" ? "new" : "old", deps);
+    const sharedExecutable = daemonVariant === "candidate" && pluginVariant === "candidate" ? linkedPlugin.client_object_path : "";
+    daemon = await startDaemon(runtime, scenarioRoot, daemonVariant, deps, sharedExecutable);
     const plugin = bindPluginDaemonNamespace(linkedPlugin, daemon.env);
     if (daemon.locator) {
       const logicalEndpoint = deps.path.join(scenarioRoot, "taps", "relay-tap.sock");
@@ -2843,6 +2924,7 @@ module.exports = {
   runInvalidationSubcase,
   runProbe,
   scratchPluginDataEnvironment,
+  seedInstalledClientObject,
   bindPluginDaemonNamespace,
   ompTurnArguments,
   runScenario,

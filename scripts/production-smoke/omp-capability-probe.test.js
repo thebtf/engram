@@ -34,6 +34,7 @@ const {
   runBoundedChild,
   scratchServerEnvironment,
   scratchDaemonEnvironment,
+  seedInstalledClientObject,
   scratchOmpTurnEnvironment,
   scratchPluginDataEnvironment,
   stablePostgresProbeCount,
@@ -539,6 +540,47 @@ test("scratch plugin data stays outside the installed plugin link", (t) => {
   assert.equal(binding.env.PLUGIN_DATA, binding.pluginData);
   assert.equal(binding.env.OMP_PROFILE, "scratch");
   assert.equal(fs.lstatSync(binding.pluginData).isDirectory(), true);
+});
+
+test("seeds the exact client through the repository bootstrap object store", (t) => {
+  const assets = {
+    "win32-x64": "engram-windows-amd64.exe",
+    "linux-x64": "engram-linux-amd64",
+    "darwin-arm64": "engram-darwin-arm64",
+  };
+  const platformKey = `${process.platform}-${process.arch}`;
+  if (!Object.hasOwn(assets, platformKey)) {
+    t.skip(`unsupported bootstrap test platform ${platformKey}`);
+    return;
+  }
+  const root = temporaryRoot(t);
+  const pluginRoot = path.join(root, "plugin");
+  const pluginData = path.join(root, "plugin-data");
+  const scripts = path.join(pluginRoot, "scripts");
+  const manifestRoot = path.join(pluginRoot, ".omp-plugin");
+  fs.mkdirSync(scripts, { recursive: true });
+  fs.mkdirSync(manifestRoot, { recursive: true });
+  const repositoryRoot = path.resolve(__dirname, "..", "..");
+  fs.copyFileSync(path.join(repositoryRoot, "plugin", "engram", "scripts", "ensure-binary.js"), path.join(scripts, "ensure-binary.js"));
+  fs.copyFileSync(path.join(repositoryRoot, "plugin", "engram", "scripts", "bootstrap-policy.js"), path.join(scripts, "bootstrap-policy.js"));
+  writeJson(path.join(manifestRoot, "plugin.json"), { version: "6.48.0" });
+  const clientPath = path.join(root, process.platform === "win32" ? "candidate.exe" : "candidate");
+  fs.writeFileSync(clientPath, "exact candidate client bytes");
+  const clientSha256 = digest(fs.readFileSync(clientPath));
+  const policyModule = require(path.join(scripts, "bootstrap-policy.js"));
+  const targets = Object.fromEntries(Object.entries(assets).map(([key, asset]) => [key, { version: "6.48.0", asset, size: 1, sha256: digest(key) }]));
+  targets[platformKey] = { version: "6.48.0", asset: assets[platformKey], size: fs.statSync(clientPath).size, sha256: clientSha256 };
+  fs.writeFileSync(path.join(pluginRoot, "bootstrap-targets.json"), `${JSON.stringify(policyModule.createPolicy("6.48.0", targets), null, 2)}\n`);
+  const runtime = {
+    matrix: {
+      candidate_client_path: clientPath,
+      baseline_client_path: clientPath,
+      artifact: { client_object_sha256: clientSha256, baseline_client_object_sha256: clientSha256 },
+    },
+  };
+  const installed = seedInstalledClientObject(runtime, pluginRoot, pluginData, "new", baseDeps({ platform: process.platform, arch: process.arch }));
+  assert.equal(digest(fs.readFileSync(installed)), clientSha256);
+  assert.equal(installed.includes(path.join("objects", "sha256", clientSha256)), true);
 });
 
 
