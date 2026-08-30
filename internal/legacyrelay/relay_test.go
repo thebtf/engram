@@ -168,8 +168,8 @@ func TestCapabilityRejectsCrossSessionExpiryAndProcessReuse(t *testing.T) {
 		t.Fatalf("Issue: %v", err)
 	}
 	reuseKey := registrationReuseKey{
-		generation: generation, hostSession: hostSession, hostProcess: host,
-		child: childBinding, adapter: adapter, descriptor: descriptor,
+		generation: generation, hostSession: hostSession, adapter: adapter,
+		descriptor: descriptor, peerPID: host.PID(),
 	}
 	reused, reusedProject, ok := registry.reuseRegistration(reuseKey)
 	if !ok || reused != capability || reusedProject != project {
@@ -199,6 +199,10 @@ func TestCapabilityRejectsCrossSessionExpiryAndProcessReuse(t *testing.T) {
 		Capability: capability, Route: RouteSessionStartContext, Generation: generation, HostSession: hostSession, Adapter: adapter, PeerPID: host.PID(),
 	}); !errors.Is(err, ErrCapabilityInvalid) {
 		t.Fatalf("Validate reused host error = %v, want ErrCapabilityInvalid", err)
+	}
+	reuseKey.hostSession = hostSession
+	if _, _, ok := registry.reuseRegistration(reuseKey); ok {
+		t.Fatal("reuseRegistration accepted a reused host process")
 	}
 
 	inspector.processes[host.PID()] = host

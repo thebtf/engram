@@ -163,22 +163,21 @@ func (r *Relay) dispatchIdentity(ctx context.Context, conn net.Conn, request Ide
 	if err != nil || peerPID <= 0 {
 		return newResponse(request, noDelivery{reason: noDeliveryBootstrapUnavailable})
 	}
+	if capability, project, ok := r.capabilities.reuseRegistration(registrationReuseKey{
+		generation:  r.generation,
+		hostSession: request.HostSession(),
+		adapter:     request.Adapter(),
+		descriptor:  request.Descriptor(),
+		peerPID:     peerPID,
+	}); ok && ctx.Err() == nil {
+		return newResponse(request, identityDelivery{capability: capability, project: project})
+	}
 	selection, err := r.bootstrapper.SelectPeer(peerPID)
 	if errors.Is(err, ErrBootstrapAmbiguous) {
 		return newResponse(request, noDelivery{reason: noDeliveryBootstrapAmbiguous})
 	}
 	if err != nil {
 		return newResponse(request, noDelivery{reason: noDeliveryBootstrapUnavailable})
-	}
-	if capability, project, ok := r.capabilities.reuseRegistration(registrationReuseKey{
-		generation:  r.generation,
-		hostSession: request.HostSession(),
-		hostProcess: selection.Host(),
-		child:       selection.Child(),
-		adapter:     request.Adapter(),
-		descriptor:  request.Descriptor(),
-	}); ok && ctx.Err() == nil {
-		return newResponse(request, identityDelivery{capability: capability, project: project})
 	}
 	if r.gateway == nil {
 		return newResponse(request, noDelivery{reason: noDeliveryServerUnavailable})

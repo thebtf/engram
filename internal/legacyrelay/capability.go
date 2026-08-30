@@ -119,21 +119,21 @@ func sameCapabilityBinding(left, right CapabilityBinding) bool {
 type registrationReuseKey struct {
 	generation  DaemonGeneration
 	hostSession HostSessionRef
-	hostProcess ProcessIdentity
-	child       ChildBinding
 	adapter     AdapterAttestation
 	descriptor  ProjectIdentityV3Descriptor
+	peerPID     int
 }
 
 func (key registrationReuseKey) valid() bool {
-	return key.generation.valid() && key.hostSession.valid() && key.hostProcess.valid() &&
-		key.child.valid() && key.adapter.valid() && key.descriptor.valid()
+	return key.generation.valid() && key.hostSession.valid() && key.adapter.valid() &&
+		key.descriptor.valid() && key.peerPID > 0
 }
 
 // reuseRegistration returns an existing live capability without repeating
-// server resolution. Child replacement, credential invalidation, process
-// reuse, daemon generation changes, descriptor changes, and expiry all prevent
-// reuse through the same registry invariants used by data-plane validation.
+// ancestry traversal or server resolution. The original binding already
+// proved ancestry; unchanged host and child process incarnations preserve that
+// authority. Child replacement, credential invalidation, process reuse, daemon
+// generation changes, descriptor changes, and expiry all prevent reuse.
 func (r *CapabilityRegistry) reuseRegistration(key registrationReuseKey) (Capability, CanonicalProjectRef, bool) {
 	if r == nil || !key.valid() {
 		return Capability{}, CanonicalProjectRef{}, false
@@ -148,7 +148,6 @@ func (r *CapabilityRegistry) reuseRegistration(key registrationReuseKey) (Capabi
 	for token, record := range r.records {
 		binding := record.binding
 		if binding.Generation != key.generation || binding.HostSession != key.hostSession ||
-			!sameProcess(binding.HostProcess, key.hostProcess) || binding.Child != key.child ||
 			binding.Adapter != key.adapter || !bytes.Equal(binding.Descriptor.raw, key.descriptor.raw) {
 			continue
 		}
@@ -156,7 +155,7 @@ func (r *CapabilityRegistry) reuseRegistration(key registrationReuseKey) (Capabi
 			delete(r.records, token)
 			continue
 		}
-		liveHost, hostErr := r.inspector.Inspect(binding.HostProcess.pid)
+		liveHost, hostErr := r.inspector.Inspect(key.peerPID)
 		liveChild, childErr := r.inspector.Inspect(binding.Child.process.pid)
 		if hostErr != nil || childErr != nil || !sameProcess(binding.HostProcess, liveHost) || !sameProcess(binding.Child.process, liveChild) {
 			delete(r.records, token)
