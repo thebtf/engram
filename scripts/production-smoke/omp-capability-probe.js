@@ -2080,6 +2080,19 @@ function bindPluginDaemonNamespace(plugin, daemonEnv) {
   });
 }
 
+/**
+  * Anchor the lexical cwd reported by OMP for a linked plugin.
+  *
+  * On Windows, OMP exposes the package through a profile-local junction. The
+  * MCP session reports that lexical path, so an anchor beside the source staging
+  * tree is not discoverable. Placing the same V3 anchor in the link's parent
+  * keeps runtime metadata outside the immutable package while making it visible
+  * to the child resolver before proxy-tool discovery.
+  */
+function writeInstalledPluginParentAnchor(runtime, installPath, deps) {
+  return writeScenarioProjectAnchor(runtime, deps.path.dirname(installPath), deps);
+}
+
 async function linkScratchPlugin(runtime, scenarioRoot, pluginRoot, mode, deps) {
   const profileRoot = deps.path.join(scenarioRoot, "omp");
   const env = scratchEnvironment(profileRoot, runtime.options.scratch_profile, deps);
@@ -2096,6 +2109,7 @@ async function linkScratchPlugin(runtime, scenarioRoot, pluginRoot, mode, deps) 
   const expectedVersion = packagePayload(pluginRoot, deps).version;
   const expectedTree = mode === "new" ? runtime.matrix.artifact.install_tree_sha256 : runtime.matrix.artifact.baseline_plugin_install_tree_sha256;
   const installed = resolveLinkedPluginList(parseJson(Buffer.from(listOutput), "OMP_PLUGIN_LIST_INVALID"), profileRoot, expectedVersion, expectedTree, installRoot, deps);
+  writeInstalledPluginParentAnchor(runtime, installed.installPath, deps);
   const pluginDataBinding = scratchPluginDataEnvironment(profileRoot, env, deps);
   const clientObjectPath = seedInstalledClientObject(runtime, pluginRoot, pluginDataBinding.pluginData, mode, deps);
   const configPath = deps.path.join(pluginDataBinding.pluginData, "config.json");
@@ -2941,6 +2955,7 @@ module.exports = {
   scratchPluginDataEnvironment,
   seedInstalledClientObject,
   writeScenarioProjectAnchor,
+  writeInstalledPluginParentAnchor,
   bindPluginDaemonNamespace,
   ompTurnArguments,
   runScenario,

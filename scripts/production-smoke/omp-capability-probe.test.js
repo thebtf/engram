@@ -40,6 +40,7 @@ const {
   stablePostgresProbeCount,
   scenarioObservation,
   writeScenarioProjectAnchor,
+  writeInstalledPluginParentAnchor,
   runProbe,
   snapshotActiveProfile,
   turnIsComplete,
@@ -596,6 +597,11 @@ test("scenario and workspace share one authorized V3 project anchor", (t) => {
   assert.deepEqual(JSON.parse(fs.readFileSync(scenarioAnchor, "utf8")), expected);
   assert.deepEqual(JSON.parse(fs.readFileSync(workspaceAnchor, "utf8")), expected);
   assert.equal(path.dirname(scenarioAnchor), scenarioRoot);
+  const installedPath = path.join(scenarioRoot, "omp", "home", ".omp", "profiles", "scratch", "plugins", "node_modules", "engram");
+  fs.mkdirSync(path.dirname(installedPath), { recursive: true });
+  const installedParentAnchor = writeInstalledPluginParentAnchor(runtime, installedPath, baseDeps());
+  assert.deepEqual(JSON.parse(fs.readFileSync(installedParentAnchor, "utf8")), expected);
+  assert.equal(path.dirname(installedParentAnchor), path.dirname(installedPath));
 });
 
 
