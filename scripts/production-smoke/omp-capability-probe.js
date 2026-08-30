@@ -2290,7 +2290,7 @@ async function createInstalledRelay(pluginRoot, clientEnv, deps) {
     { relativePath: "extensions/engram-memory.mjs", filePath: deps.path.join(pluginRoot, "extensions", "engram-memory.mjs") },
     { relativePath: "extensions/legacy-relay.mjs", filePath: deps.path.join(pluginRoot, "extensions", "legacy-relay.mjs") },
   ];
-  return relayModule.createLegacyRelay({ env: clientEnv, platform: deps.platform, artifactFiles });
+    return relayModule.createLegacyRelay({ env: clientEnv, platform: deps.platform, artifactFiles, net: deps.net });
 }
 
 function routeToken(record) {
