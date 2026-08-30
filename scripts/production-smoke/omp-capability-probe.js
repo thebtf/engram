@@ -946,20 +946,10 @@ function resolveLinkedPluginList(value, profileRoot, expectedVersion, expectedTr
   return Object.freeze({ version: selected.version, installPath, dataPath: "", configPath: "", install_tree_sha256: tree.sha256 });
 }
 
-function resolvePluginData(pluginRoot, entry, scratchRoot, deps) {
-  if (entry.dataPath) return deps.path.resolve(entry.dataPath);
-  const conventional = deps.path.join(scratchRoot, "plugins", "data", "engram-engram");
-  try {
-    const launcher = require(deps.path.join(pluginRoot, "scripts", "run-engram.js"));
-    for (const name of ["resolvePluginData", "inferCodexPluginDataDir"]) {
-      if (typeof launcher[name] !== "function") continue;
-      const candidate = launcher[name](pluginRoot);
-      if (typeof candidate === "string" && candidate) return deps.path.resolve(candidate);
-    }
-  } catch {
-    // The artifact is only inspected; its launcher never executes in the runner process.
-  }
-  return conventional;
+function scratchPluginDataEnvironment(profileRoot, env, deps) {
+  const pluginData = deps.path.join(profileRoot, "plugin-data", "engram");
+  ensureDirectory(pluginData, deps, "PLUGIN_DATA_UNSAFE");
+  return Object.freeze({ pluginData, env: Object.freeze({ ...env, PLUGIN_DATA: pluginData }) });
 }
 
 function activeEnvelopeFiles(env, deps) {
@@ -1993,12 +1983,10 @@ async function linkScratchPlugin(runtime, scenarioRoot, pluginRoot, mode, deps) 
   const expectedVersion = packagePayload(pluginRoot, deps).version;
   const expectedTree = mode === "new" ? runtime.matrix.artifact.install_tree_sha256 : runtime.matrix.artifact.baseline_plugin_install_tree_sha256;
   const installed = resolveLinkedPluginList(parseJson(Buffer.from(listOutput), "OMP_PLUGIN_LIST_INVALID"), profileRoot, expectedVersion, expectedTree, installRoot, deps);
-  const pluginData = resolvePluginData(installed.installPath, installed, deps.path.join(profileRoot, "home", ".omp"), deps);
-  if (!isInside(profileRoot, pluginData, deps.path)) fail("PLUGIN_DATA_UNSAFE", "scratch plugin data root escapes the scenario profile");
-  ensureDirectory(pluginData, deps, "PLUGIN_DATA_UNSAFE");
-  const configPath = deps.path.join(pluginData, "config.json");
+  const pluginDataBinding = scratchPluginDataEnvironment(profileRoot, env, deps);
+  const configPath = deps.path.join(pluginDataBinding.pluginData, "config.json");
   writeSecretJson(configPath, scratchPluginConfig(runtime, mode), deps);
-  return Object.freeze({ env, profile_root: profileRoot, plugin_root: installed.installPath, plugin_data: pluginData, config_path: configPath, mode });
+  return Object.freeze({ env: pluginDataBinding.env, profile_root: profileRoot, plugin_root: installed.installPath, plugin_data: pluginDataBinding.pluginData, config_path: configPath, mode });
 }
 
 async function runOmpTurn(runtime, scenarioRoot, plugin, directCredentials, deps) {
@@ -2815,6 +2803,7 @@ module.exports = {
   runCapabilityInvalidationScenario,
   runInvalidationSubcase,
   runProbe,
+  scratchPluginDataEnvironment,
   runScenario,
   turnIsComplete,
   sessionTranscriptProjection,

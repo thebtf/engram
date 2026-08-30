@@ -31,6 +31,7 @@ const {
   resolveLinkedPluginList,
   runBoundedChild,
   scratchServerEnvironment,
+  scratchPluginDataEnvironment,
   stablePostgresProbeCount,
   scenarioObservation,
   runProbe,
@@ -486,6 +487,16 @@ test("accepts only an OMP plugin link to the owned staging tree", (t) => {
   const listed = { npm: [{ name: "engram", version: "6.48.0", path: link, manifest: { extensions: ["./extensions/engram-memory.mjs"], version: "6.48.0" }, enabled: true }], marketplace: [] };
   assert.equal(resolveLinkedPluginList(listed, profileRoot, "6.48.0", expectedTree, staging, baseDeps()).installPath, link);
   assert.throws(() => resolveLinkedPluginList(listed, profileRoot, "6.48.0", expectedTree, path.join(root, "foreign"), baseDeps()), ProbeError);
+});
+
+test("scratch plugin data stays outside the installed plugin link", (t) => {
+  const root = temporaryRoot(t);
+  const profileRoot = path.join(root, "profile");
+  const binding = scratchPluginDataEnvironment(profileRoot, { OMP_PROFILE: "scratch" }, baseDeps());
+  assert.equal(binding.pluginData, path.join(profileRoot, "plugin-data", "engram"));
+  assert.equal(binding.env.PLUGIN_DATA, binding.pluginData);
+  assert.equal(binding.env.OMP_PROFILE, "scratch");
+  assert.equal(fs.lstatSync(binding.pluginData).isDirectory(), true);
 });
 
 
