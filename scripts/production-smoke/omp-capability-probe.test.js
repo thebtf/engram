@@ -587,17 +587,17 @@ test("seeds the exact client through the repository bootstrap object store", (t)
   assert.equal(installed.includes(path.join("objects", "sha256", clientSha256)), true);
 });
 
-test("scratch repository and workspace share one authorized V3 anchor", (t) => {
+test("scratch qualification admits one explicit V3 anchor scope", (t) => {
   const root = temporaryRoot(t);
   const repositoryRoot = path.join(root, "repository");
   const workspace = path.join(repositoryRoot, "workspace");
   fs.mkdirSync(workspace, { recursive: true });
   const runtime = { seed: { anchor_project_id: "11111111-1111-4111-8111-111111111111" } };
   const repositoryAnchor = writeScenarioProjectAnchor(runtime, repositoryRoot, baseDeps(), "repository");
-  const workspaceAnchor = writeScenarioProjectAnchor(runtime, workspace, baseDeps());
   const common = { version: 3, project_id: runtime.seed.anchor_project_id, name: "hap-01c" };
   assert.deepEqual(JSON.parse(fs.readFileSync(repositoryAnchor, "utf8")), { ...common, scope: "repository" });
-  assert.deepEqual(JSON.parse(fs.readFileSync(workspaceAnchor, "utf8")), { ...common, scope: "directory" });
+  assert.equal(fs.existsSync(path.join(workspace, ".engram-project")), false);
+  assert.throws(() => writeScenarioProjectAnchor(runtime, workspace, baseDeps()), ProbeError);
   assert.throws(() => writeScenarioProjectAnchor(runtime, root, baseDeps(), "global"), ProbeError);
 });
 
