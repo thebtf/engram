@@ -454,11 +454,38 @@ test("resolves the exact installed OMP plugin tree from plugin list JSON", (t) =
     npm: [{ name: "engram", version: "6.48.0", path: installed, manifest: { extensions: ["./extensions/engram-memory.mjs"], version: "6.48.0" }, enabledFeatures: null, enabled: true }],
     marketplace: [],
   };
-  const resolved = resolveLinkedPluginList(listed, profileRoot, "6.48.0", expectedTree, baseDeps());
+  const resolved = resolveLinkedPluginList(listed, profileRoot, "6.48.0", expectedTree, installed, baseDeps());
   assert.equal(resolved.installPath, installed);
   const outside = structuredClone(listed);
   outside.npm[0].path = path.join(root, "outside");
-  assert.throws(() => resolveLinkedPluginList(outside, profileRoot, "6.48.0", expectedTree, baseDeps()), ProbeError);
+  assert.throws(() => resolveLinkedPluginList(outside, profileRoot, "6.48.0", expectedTree, installed, baseDeps()), ProbeError);
+});
+
+test("accepts only an OMP plugin link to the owned staging tree", (t) => {
+  const root = temporaryRoot(t);
+  const profileRoot = path.join(root, "profile");
+  const staging = path.join(root, "owned-staging");
+  const link = path.join(profileRoot, "plugins", "node_modules", "engram");
+  fs.mkdirSync(path.join(staging, "extensions"), { recursive: true });
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  writeJson(path.join(staging, "package.json"), { name: "engram", version: "6.48.0" });
+  fs.writeFileSync(path.join(staging, "extensions", "engram-memory.mjs"), "entry");
+  try {
+    fs.symlinkSync(staging, link, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (error && (error.code === "EPERM" || error.code === "EACCES")) {
+      t.skip("host does not permit plugin link creation");
+      return;
+    }
+    throw error;
+  }
+  t.after(() => {
+    try { fs.unlinkSync(link); } catch { try { fs.rmdirSync(link); } catch { /* temporaryRoot owns final cleanup */ } }
+  });
+  const expectedTree = directoryTreeDigest(staging, baseDeps()).sha256;
+  const listed = { npm: [{ name: "engram", version: "6.48.0", path: link, manifest: { extensions: ["./extensions/engram-memory.mjs"], version: "6.48.0" }, enabled: true }], marketplace: [] };
+  assert.equal(resolveLinkedPluginList(listed, profileRoot, "6.48.0", expectedTree, staging, baseDeps()).installPath, link);
+  assert.throws(() => resolveLinkedPluginList(listed, profileRoot, "6.48.0", expectedTree, path.join(root, "foreign"), baseDeps()), ProbeError);
 });
 
 

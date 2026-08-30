@@ -916,7 +916,7 @@ function resolveProfileFiles(profile, deps, env = deps.env) {
   throw lastError || new ProbeError("PROFILE_REGISTRY_UNAVAILABLE", "scratch profile registry could not be resolved");
 }
 
-function resolveLinkedPluginList(value, profileRoot, expectedVersion, expectedTree, deps) {
+function resolveLinkedPluginList(value, profileRoot, expectedVersion, expectedTree, expectedTarget, deps) {
   requireExactKeys(value, ["npm", "marketplace"], "OMP plugin list", "OMP_PLUGIN_LIST_INVALID");
   if (!Array.isArray(value.npm) || !Array.isArray(value.marketplace)) fail("OMP_PLUGIN_LIST_INVALID", "OMP plugin list collections are invalid");
   const entries = [...value.npm, ...value.marketplace].filter((entry) => isPlainObject(entry) && entry.name === "engram" && entry.enabled !== false);
@@ -932,7 +932,16 @@ function resolveLinkedPluginList(value, profileRoot, expectedVersion, expectedTr
   }
   const installPath = deps.path.resolve(selected.path);
   if (!isInside(profileRoot, installPath, deps.path)) fail("OMP_PLUGIN_LIST_INVALID", "OMP plugin install path escapes the scratch profile");
-  const tree = directoryTreeDigest(installPath, deps);
+  let stat;
+  try { stat = deps.fs.lstatSync(installPath); } catch { fail("OMP_PLUGIN_LIST_INVALID", "OMP plugin install path is unavailable"); }
+  let treeRoot = installPath;
+  if (stat.isSymbolicLink()) {
+    try { treeRoot = deps.fs.realpathSync(installPath); } catch { fail("OMP_PLUGIN_LIST_INVALID", "OMP plugin link target is unavailable"); }
+    if (!samePath(treeRoot, expectedTarget, deps.path)) fail("OMP_PLUGIN_LIST_INVALID", "OMP plugin link targets foreign bytes");
+  } else if (!stat.isDirectory()) {
+    fail("OMP_PLUGIN_LIST_INVALID", "OMP plugin install path is not a directory");
+  }
+  const tree = directoryTreeDigest(treeRoot, deps);
   if (tree.sha256 !== expectedTree) fail("OMP_PLUGIN_LIST_INVALID", "OMP plugin install tree differs from the frozen source bytes");
   return Object.freeze({ version: selected.version, installPath, dataPath: "", configPath: "", install_tree_sha256: tree.sha256 });
 }
@@ -1983,7 +1992,7 @@ async function linkScratchPlugin(runtime, scenarioRoot, pluginRoot, mode, deps) 
   const listOutput = await commandOutput(runtime.options.omp_command, ["--profile", runtime.options.scratch_profile, "plugin", "list", "--json"], runtime.options.cwd, env, runtime.options.timeouts.startup_timeout_ms, deps, "OMP_PLUGIN_LIST_INVALID", "scratch OMP plugin list");
   const expectedVersion = packagePayload(pluginRoot, deps).version;
   const expectedTree = mode === "new" ? runtime.matrix.artifact.install_tree_sha256 : runtime.matrix.artifact.baseline_plugin_install_tree_sha256;
-  const installed = resolveLinkedPluginList(parseJson(Buffer.from(listOutput), "OMP_PLUGIN_LIST_INVALID"), profileRoot, expectedVersion, expectedTree, deps);
+  const installed = resolveLinkedPluginList(parseJson(Buffer.from(listOutput), "OMP_PLUGIN_LIST_INVALID"), profileRoot, expectedVersion, expectedTree, installRoot, deps);
   const pluginData = resolvePluginData(installed.installPath, installed, deps.path.join(profileRoot, "home", ".omp"), deps);
   if (!isInside(profileRoot, pluginData, deps.path)) fail("PLUGIN_DATA_UNSAFE", "scratch plugin data root escapes the scenario profile");
   ensureDirectory(pluginData, deps, "PLUGIN_DATA_UNSAFE");
