@@ -54,7 +54,7 @@ class FakeSocket extends EventEmitter {
     queueMicrotask(() => this.emit('connect'));
   }
 
-  end(frame) {
+  write(frame) {
     let projected;
     try {
       projected = this.responder(Buffer.from(frame), this.endpoint);
@@ -116,16 +116,19 @@ test('real Windows named-pipe relay round trip uses the muxcore logical-path map
 
   const server = net.createServer((socket) => {
     let requestBytes = Buffer.alloc(0);
+    let answered = false;
     socket.on('data', (chunk) => {
+      if (answered) return;
       requestBytes = Buffer.concat([requestBytes, chunk]);
       const newline = requestBytes.indexOf(0x0a);
       if (newline < 0) return;
+      answered = true;
       const request = JSON.parse(requestBytes.subarray(0, newline));
-      socket.end(`${response(request, {
+      setTimeout(() => socket.end(`${response(request, {
         kind: 'OK',
         sessionCapability: capability,
         canonicalProjectRef: 'canonical-project-ref',
-      })}\n`);
+      })}\n`), 200);
     });
   });
   await new Promise((resolve, reject) => {

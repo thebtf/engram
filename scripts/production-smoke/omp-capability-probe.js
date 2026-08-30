@@ -1256,7 +1256,7 @@ function createRelayTap(options, deps) {
         try { socket.end(); } catch { /* closed peer */ }
       });
       upstreamSocket.once("connect", () => {
-        try { upstreamSocket.end(buffered); } catch { closeUpstream(); try { socket.end(); } catch { /* closed peer */ } }
+                try { upstreamSocket.write(buffered); } catch { closeUpstream(); try { socket.end(); } catch { /* closed peer */ } }
       });
       upstreamSocket.on("data", (responseChunk) => {
         const bytes = Buffer.from(responseChunk);

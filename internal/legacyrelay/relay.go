@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"log"
 	"net"
 	"time"
 )
@@ -97,24 +96,20 @@ func (r *Relay) ServeConn(parent context.Context, conn net.Conn) {
 	}
 	receivedAt := r.now()
 	if receivedAt.IsZero() {
-		log.Print("legacy relay frame unavailable stage=clock")
 		return
 	}
 	_ = conn.SetDeadline(receivedAt.Add(r.safetyDeadline))
 	reader := bufio.NewReaderSize(conn, r.maxFrameBytes+1)
 	request, err := ReadRequestFrame(reader, r.maxFrameBytes, receivedAt)
 	if err != nil {
-		log.Print("legacy relay frame unavailable stage=request")
 		return
 	}
 	effectiveDeadline, ok := r.effectiveDeadline(parent, request.DeadlineUnixMs(), receivedAt)
 	if !ok || parent.Err() != nil {
-		log.Print("legacy relay frame unavailable stage=deadline")
 		r.writeTerminalResponse(conn, newResponse(request, noDelivery{reason: noDeliveryDeadlineElapsed}))
 		return
 	}
 	if err := conn.SetDeadline(effectiveDeadline); err != nil {
-		log.Print("legacy relay frame unavailable stage=set_deadline")
 		r.writeTerminalResponse(conn, newResponse(request, noDelivery{reason: noDeliveryDeadlineElapsed}))
 		return
 	}
@@ -138,12 +133,9 @@ func (r *Relay) effectiveDeadline(parent context.Context, deadlineUnixMs int64, 
 func (r *Relay) writeTerminalResponse(conn net.Conn, response responseEnvelope) {
 	frame, err := EncodeResponseFrame(response)
 	if err != nil || len(frame) > r.maxFrameBytes {
-		log.Print("legacy relay frame unavailable stage=response_encode")
 		return
 	}
-	if err := writeLine(conn, frame); err != nil {
-		log.Print("legacy relay frame unavailable stage=response_write")
-	}
+	_ = writeLine(conn, frame)
 }
 
 func (r *Relay) dispatch(ctx context.Context, conn net.Conn, request IncomingRequest) responseEnvelope {
@@ -169,20 +161,16 @@ func (r *Relay) dispatch(ctx context.Context, conn net.Conn, request IncomingReq
 func (r *Relay) dispatchIdentity(ctx context.Context, conn net.Conn, request IdentityRegistrationRequest) responseEnvelope {
 	peerPID, err := r.peerResolver.PeerPID(conn)
 	if err != nil || peerPID <= 0 {
-		log.Print("legacy relay identity unavailable stage=peer")
 		return newResponse(request, noDelivery{reason: noDeliveryBootstrapUnavailable})
 	}
 	selection, err := r.bootstrapper.SelectPeer(peerPID)
 	if errors.Is(err, ErrBootstrapAmbiguous) {
-		log.Print("legacy relay identity unavailable stage=bootstrap_ambiguous")
 		return newResponse(request, noDelivery{reason: noDeliveryBootstrapAmbiguous})
 	}
 	if err != nil {
-		log.Print("legacy relay identity unavailable stage=bootstrap_unavailable")
 		return newResponse(request, noDelivery{reason: noDeliveryBootstrapUnavailable})
 	}
 	if r.gateway == nil {
-		log.Print("legacy relay identity unavailable stage=gateway_missing")
 		return newResponse(request, noDelivery{reason: noDeliveryServerUnavailable})
 	}
 	registered, err := r.gateway.RegisterIdentity(ctx, IdentityRegistrationCall{
@@ -191,16 +179,7 @@ func (r *Relay) dispatchIdentity(ctx context.Context, conn net.Conn, request Ide
 		bootstrap:      selection,
 		deadlineUnixMs: request.DeadlineUnixMs(),
 	})
-	if err != nil {
-		log.Print("legacy relay identity unavailable stage=gateway_error")
-		return newResponse(request, noDelivery{reason: noDeliveryServerUnavailable})
-	}
-	if !registered.valid() {
-		log.Print("legacy relay identity unavailable stage=registration_invalid")
-		return newResponse(request, noDelivery{reason: noDeliveryServerUnavailable})
-	}
-	if ctx.Err() != nil {
-		log.Print("legacy relay identity unavailable stage=registration_deadline")
+	if err != nil || !registered.valid() || ctx.Err() != nil {
 		return newResponse(request, noDelivery{reason: noDeliveryServerUnavailable})
 	}
 	capability, err := r.capabilities.Issue(CapabilityBinding{
@@ -214,12 +193,7 @@ func (r *Relay) dispatchIdentity(ctx context.Context, conn net.Conn, request Ide
 		Credential:  registered.Credential(),
 		Routes:      registered.Routes(),
 	})
-	if err != nil {
-		log.Print("legacy relay identity unavailable stage=capability")
-		return newResponse(request, noDelivery{reason: noDeliveryServerUnavailable})
-	}
-	if ctx.Err() != nil {
-		log.Print("legacy relay identity unavailable stage=capability_deadline")
+	if err != nil || ctx.Err() != nil {
 		return newResponse(request, noDelivery{reason: noDeliveryServerUnavailable})
 	}
 	return newResponse(request, identityDelivery{capability: capability, project: registered.Project()})

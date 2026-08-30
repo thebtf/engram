@@ -267,7 +267,7 @@ function socketRequest(endpoint, bytes) {
     const socket = net.createConnection({ path: endpoint });
     let response = Buffer.alloc(0);
     socket.once("error", reject);
-    socket.once("connect", () => socket.end(bytes));
+    socket.once("connect", () => socket.write(bytes));
     socket.on("data", (chunk) => { response = Buffer.concat([response, Buffer.from(chunk)]); });
     socket.once("end", () => resolve(response));
   });
@@ -739,11 +739,14 @@ test("RelayTap forwards normal bytes unchanged, redacts records, fails closed on
   let upstreamCalls = 0;
   const upstream = net.createServer((socket) => {
     let input = Buffer.alloc(0);
+    let answered = false;
     socket.on("data", (chunk) => {
+      if (answered) return;
       input = Buffer.concat([input, Buffer.from(chunk)]);
       if (input.indexOf(0x0a) < 0) return;
+      answered = true;
       upstreamCalls += 1;
-      socket.end(relayResponse(input));
+      setTimeout(() => socket.end(relayResponse(input)), 200);
     });
   });
   await listen(upstream, upstreamPhysical);

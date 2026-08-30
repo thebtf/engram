@@ -649,7 +649,7 @@ function connectOnce({ locator, route, body, deadlineUnixMs, artifactDigest, net
         const frame = Buffer.allocUnsafe(request.serialized.length + 1);
         request.serialized.copy(frame);
         frame[frame.length - 1] = 0x0a;
-        socket.end(frame);
+        socket.write(frame);
       } catch {
         finish(noDelivery(route, 'DIAL_FAILED'));
       }
