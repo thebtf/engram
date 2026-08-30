@@ -125,13 +125,16 @@ func (l *Listener) serve(ctx context.Context) {
 		log.Print("legacy relay connection accepted")
 		select {
 		case l.semaphore <- struct{}{}:
+			log.Print("legacy relay connection queued")
 			l.workers.Add(1)
 			go func(conn net.Conn) {
+				log.Print("legacy relay connection serving")
 				defer l.workers.Done()
 				defer func() { <-l.semaphore }()
 				l.relay.ServeConn(ctx, conn)
 			}(connection)
 		default:
+			log.Print("legacy relay connection saturated")
 			_ = connection.Close()
 		}
 	}
