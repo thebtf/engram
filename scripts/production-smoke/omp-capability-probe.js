@@ -1745,6 +1745,12 @@ async function snapshotFixture(runtime, label, deps) {
   return snapshot;
 }
 
+function stablePostgresProbeCount(current, result) {
+  const succeeded = Boolean(result?.started && !result.error && !result.timed_out && !result.close_unconfirmed && result.exit_code === 0 &&
+    Buffer.from(result.stdout || "").toString("utf8").trim() === "1");
+  return succeeded ? current + 1 : 0;
+}
+
 async function startPostgres(options, matrix, root, deps) {
   if (typeof deps.startPostgres === "function") return deps.startPostgres(options, matrix, root);
   const container = `hap01c-${options.run_id}`;
@@ -1778,13 +1784,19 @@ async function startPostgres(options, matrix, root, deps) {
     const port = Number(match[1]);
     const dsn = `postgres://hap01c:${password}@127.0.0.1:${port}/${database}?sslmode=disable`;
     const deadline = deps.now() + options.timeouts.startup_timeout_ms;
-    let ready = false;
-    while (deps.now() < deadline) {
-      const result = await runProcess({ command: "docker", args: ["exec", container, "pg_isready", "-U", "hap01c", "-d", database], cwd: options.cwd, env: childEnvironment(deps.env, {}), timeout_ms: 5_000 }, deps);
-      if (result.started && !result.error && result.exit_code === 0) { ready = true; break; }
-      await deps.sleep(250);
+    let stableProbes = 0;
+    while (deps.now() < deadline && stableProbes < 2) {
+      const result = await runProcess({
+        command: "docker",
+        args: ["exec", container, "psql", "--username", "hap01c", "--dbname", database, "--tuples-only", "--no-align", "--command", "SELECT 1"],
+        cwd: options.cwd,
+        env: childEnvironment(deps.env, {}),
+        timeout_ms: 5_000,
+      }, deps);
+      stableProbes = stablePostgresProbeCount(stableProbes, result);
+      if (stableProbes < 2) await deps.sleep(stableProbes === 1 ? 1_500 : 250);
     }
-    if (!ready) fail("POSTGRES_START_TIMEOUT", "scratch postgres did not become ready");
+    if (stableProbes < 2) fail("POSTGRES_START_TIMEOUT", "scratch postgres did not remain query-ready");
     return Object.freeze({ dsn, image_sha256: imageMatch[1], async close() { await removeContainer(); return true; } });
   } catch (error) {
     let residue = 0;
@@ -2777,5 +2789,6 @@ module.exports = {
   snapshotActiveProfile,
   scratchServerEnvironment,
   writeJsonExclusive,
+  stablePostgresProbeCount,
   extractArchive,
 };

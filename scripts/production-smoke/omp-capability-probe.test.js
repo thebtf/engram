@@ -30,6 +30,7 @@ const {
   parseFixtureSnapshot,
   runBoundedChild,
   scratchServerEnvironment,
+  stablePostgresProbeCount,
   scenarioObservation,
   runProbe,
   snapshotActiveProfile,
@@ -412,6 +413,14 @@ test("long-lived child logs are drained without consuming MCP stdout", () => {
   drainChildOutput(child, { stdout: false, stderr: true });
   assert.equal(stdoutResumes, 1);
   assert.equal(stderrResumes, 2);
+});
+
+test("PostgreSQL readiness requires consecutive successful SQL probes", () => {
+  const success = { started: true, error: false, timed_out: false, close_unconfirmed: false, exit_code: 0, stdout: Buffer.from("1\n") };
+  const failure = { started: true, error: false, timed_out: false, close_unconfirmed: false, exit_code: 1, stdout: Buffer.alloc(0) };
+  assert.equal(stablePostgresProbeCount(0, success), 1);
+  assert.equal(stablePostgresProbeCount(1, success), 2);
+  assert.equal(stablePostgresProbeCount(1, failure), 0);
 });
 
 test("scratch directory creation rejects an intermediate symbolic link or junction", (t) => {
