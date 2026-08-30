@@ -180,8 +180,8 @@ test('ambient uses the session descriptor cache and refreshes identity without d
     'IDENTITY_REGISTRATION',
     'AMBIENT_CANDIDATES',
   ]);
-  assert.equal(calls[2].deadlineUnixMs, 1_200);
-  assert.equal(calls[3].deadlineUnixMs, 1_200);
+  assert.equal(calls[2].deadlineUnixMs, 1_500);
+  assert.equal(calls[3].deadlineUnixMs, 1_500);
   assert.deepEqual(calls[3].body, {
     hostSessionRef: 'session-3',
     sessionCapability,

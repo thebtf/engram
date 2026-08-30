@@ -11,7 +11,7 @@ const lib = require('../hooks/lib.js');
 const { buildSessionStartContext } = require('../hooks/session-start.js');
 
 const sessionStartTimeoutMs = 5000;
-const ambientTimeoutMs = 200;
+const ambientTimeoutMs = 500;
 const hiddenContextLimit = 12000;
 const descriptorCacheLimit = 64;
 const quietEnvironmentKeys = Object.freeze([
