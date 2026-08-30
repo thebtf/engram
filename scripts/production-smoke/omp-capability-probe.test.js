@@ -15,6 +15,7 @@ const { buildQualificationRecord } = require("./omp-capability-record.js");
 const {
   ADAPTER_REVISION,
   ARTIFACT_MANIFEST,
+  bindPluginDaemonNamespace,
   ProbeError,
   adapterDigest,
   buildQualificationInput,
@@ -499,6 +500,7 @@ test("accepts only an OMP plugin link to the owned staging tree", (t) => {
     }
     throw error;
   }
+
   t.after(() => {
     try { fs.unlinkSync(link); } catch { try { fs.rmdirSync(link); } catch { /* temporaryRoot owns final cleanup */ } }
   });
@@ -506,6 +508,18 @@ test("accepts only an OMP plugin link to the owned staging tree", (t) => {
   const listed = { npm: [{ name: "engram", version: "6.48.0", path: link, manifest: { extensions: ["./extensions/engram-memory.mjs"], version: "6.48.0" }, enabled: true }], marketplace: [] };
   assert.equal(resolveLinkedPluginList(listed, profileRoot, "6.48.0", expectedTree, staging, baseDeps()).installPath, link);
   assert.throws(() => resolveLinkedPluginList(listed, profileRoot, "6.48.0", expectedTree, path.join(root, "foreign"), baseDeps()), ProbeError);
+});
+test("OMP plugin children share the elected scratch daemon namespace", () => {
+  const plugin = { env: { HOME: "profile-home", TEMP: "plugin-temp", PLUGIN_DATA: "plugin-data" }, mode: "new" };
+  const daemonEnv = { TEMP: "daemon-temp", TMP: "daemon-tmp", TMPDIR: "daemon-tmpdir", ENGRAM_DATA_DIR: "daemon-data" };
+  const bound = bindPluginDaemonNamespace(plugin, daemonEnv);
+  assert.equal(bound.env.HOME, "profile-home");
+  assert.equal(bound.env.PLUGIN_DATA, "plugin-data");
+  assert.equal(bound.env.TEMP, "daemon-temp");
+  assert.equal(bound.env.TMP, "daemon-tmp");
+  assert.equal(bound.env.TMPDIR, "daemon-tmpdir");
+  assert.equal(bound.env.ENGRAM_DATA_DIR, "daemon-data");
+  assert.equal(Object.isFrozen(bound.env), true);
 });
 
 test("scratch plugin data stays outside the installed plugin link", (t) => {

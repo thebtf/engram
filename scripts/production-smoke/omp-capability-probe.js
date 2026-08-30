@@ -1991,6 +1991,22 @@ function replaceScratchPluginConfig(runtime, plugin, deps) {
   writeAtomicJson(plugin.config_path, scratchPluginConfig(runtime, plugin.mode), deps);
 }
 
+function bindPluginDaemonNamespace(plugin, daemonEnv) {
+  for (const key of ["TEMP", "TMP", "TMPDIR", "ENGRAM_DATA_DIR"]) {
+    if (typeof daemonEnv[key] !== "string" || !daemonEnv[key]) fail("DAEMON_NAMESPACE_INVALID", "scratch daemon namespace is incomplete");
+  }
+  return Object.freeze({
+    ...plugin,
+    env: Object.freeze({
+      ...plugin.env,
+      TEMP: daemonEnv.TEMP,
+      TMP: daemonEnv.TMP,
+      TMPDIR: daemonEnv.TMPDIR,
+      ENGRAM_DATA_DIR: daemonEnv.ENGRAM_DATA_DIR,
+    }),
+  });
+}
+
 async function linkScratchPlugin(runtime, scenarioRoot, pluginRoot, mode, deps) {
   const profileRoot = deps.path.join(scenarioRoot, "omp");
   const env = scratchEnvironment(profileRoot, runtime.options.scratch_profile, deps);
@@ -2189,7 +2205,8 @@ async function openRelayScenario(runtime, scenarioID, daemonVariant, pluginVaria
   try {
     daemon = await startDaemon(runtime, scenarioRoot, daemonVariant, deps);
     const pluginRoot = pluginVariant === "candidate" ? runtime.matrix.candidate_plugin_root : runtime.matrix.baseline_plugin_root;
-    const plugin = await linkScratchPlugin(runtime, scenarioRoot, pluginRoot, pluginVariant === "candidate" ? "new" : "old", deps);
+    const linkedPlugin = await linkScratchPlugin(runtime, scenarioRoot, pluginRoot, pluginVariant === "candidate" ? "new" : "old", deps);
+    const plugin = bindPluginDaemonNamespace(linkedPlugin, daemon.env);
     if (daemon.locator) {
       const logicalEndpoint = deps.path.join(scenarioRoot, "taps", "relay-tap.sock");
       const clientLocator = deps.path.join(plugin.env.LOCALAPPDATA, "engram", "run", "hap-01b", RELAY_LOCATOR_NAME);
@@ -2823,6 +2840,7 @@ module.exports = {
   runInvalidationSubcase,
   runProbe,
   scratchPluginDataEnvironment,
+  bindPluginDaemonNamespace,
   runScenario,
   turnIsComplete,
   sessionTranscriptProjection,
