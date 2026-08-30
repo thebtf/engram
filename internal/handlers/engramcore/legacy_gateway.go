@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 
 	"github.com/thebtf/engram/internal/legacyrelay"
@@ -45,15 +46,15 @@ func NewLegacyRelayGateway(module *Module, children *legacyrelay.ChildRegistry, 
 func (g *LegacyRelayGateway) RegisterIdentity(ctx context.Context, call legacyrelay.IdentityRegistrationCall) (legacyrelay.RegistrationResult, error) {
 	config, err := g.configFor(call.Bootstrap().Child(), true)
 	if err != nil {
-		return legacyrelay.RegistrationResult{}, err
+		return relayRegistrationUnavailable("child_config", err)
 	}
 	identity, err := decodeRelayDescriptor(call.Descriptor())
 	if err != nil {
-		return legacyrelay.RegistrationResult{}, err
+		return relayRegistrationUnavailable("descriptor", err)
 	}
 	connection, err := g.module.pool.getOrDialGRPC(config.serverURL, config.registrationToken)
 	if err != nil {
-		return legacyrelay.RegistrationResult{}, fmt.Errorf("relay registration gRPC connection: %w", err)
+		return relayRegistrationUnavailable("grpc_connection", fmt.Errorf("relay registration gRPC connection: %w", err))
 	}
 	response, err := pb.NewEngramServiceClient(connection).RegisterProjectIdentityV3(
 		daemonComparisonContextV3(ctx),
@@ -64,43 +65,52 @@ func (g *LegacyRelayGateway) RegisterIdentity(ctx context.Context, call legacyre
 		if code := status.Code(err); code == codes.Unauthenticated || code == codes.PermissionDenied {
 			g.module.pool.closeTokenHash(hashToken(config.registrationToken))
 		}
-		return legacyrelay.RegistrationResult{}, fmt.Errorf("relay project registration: %w", err)
+		return relayRegistrationUnavailable("project_registration", fmt.Errorf("relay project registration: %w", err))
 	}
 	resolution := response.GetProjectResolutionV3()
 	canonicalProject := resolution.GetProjectKey()
 	if err := validateV3Resolution(resolution, canonicalProject, identity); err != nil {
-		return legacyrelay.RegistrationResult{}, err
+		return relayRegistrationUnavailable("resolution", err)
 	}
 	projectToken, ok := config.projectTokens[canonicalProject]
 	if !ok {
-		return legacyrelay.RegistrationResult{}, errors.New("relay project keycard is unavailable")
+		return relayRegistrationUnavailable("project_keycard", errors.New("relay project keycard is unavailable"))
 	}
 	credential, err := relayCredentialRef(config.serverURL, canonicalProject, projectToken)
 	if err != nil {
-		return legacyrelay.RegistrationResult{}, err
+		return relayRegistrationUnavailable("credential", err)
 	}
 	currentConfig, err := g.configFor(call.Bootstrap().Child(), false)
 	if err != nil {
-		return legacyrelay.RegistrationResult{}, err
+		return relayRegistrationUnavailable("current_child_config", err)
 	}
 	currentToken, ok := currentConfig.projectTokens[canonicalProject]
 	if !ok {
-		return legacyrelay.RegistrationResult{}, errors.New("relay project keycard changed during registration")
+		return relayRegistrationUnavailable("current_project_keycard", errors.New("relay project keycard changed during registration"))
 	}
 	currentCredential, err := relayCredentialRef(currentConfig.serverURL, canonicalProject, currentToken)
 	if err != nil || currentCredential != credential {
-		return legacyrelay.RegistrationResult{}, errors.New("relay project keycard changed during registration")
+		return relayRegistrationUnavailable("current_credential", errors.New("relay project keycard changed during registration"))
 	}
 	g.rememberCredential(call.Bootstrap().Child(), credential, hashToken(currentToken))
 	project, err := legacyrelay.NewCanonicalProjectRef(canonicalProject)
 	if err != nil {
-		return legacyrelay.RegistrationResult{}, err
+		return relayRegistrationUnavailable("canonical_project", err)
 	}
 	routes, err := legacyrelay.NewRouteSet(legacyrelay.RouteSessionStartContext, legacyrelay.RouteAmbientCandidates)
 	if err != nil {
-		return legacyrelay.RegistrationResult{}, err
+		return relayRegistrationUnavailable("routes", err)
 	}
-	return legacyrelay.NewRegistrationResult(project, credential, routes)
+	result, err := legacyrelay.NewRegistrationResult(project, credential, routes)
+	if err != nil {
+		return relayRegistrationUnavailable("result", err)
+	}
+	return result, nil
+}
+
+func relayRegistrationUnavailable(stage string, err error) (legacyrelay.RegistrationResult, error) {
+	log.Printf("legacy relay identity registration unavailable stage=%s", stage)
+	return legacyrelay.RegistrationResult{}, err
 }
 
 func (g *LegacyRelayGateway) GetSessionStartContext(ctx context.Context, call legacyrelay.SessionStartCall) (legacyrelay.SessionStartPayload, error) {
