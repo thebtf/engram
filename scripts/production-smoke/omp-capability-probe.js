@@ -2110,18 +2110,6 @@ function bindPluginDaemonNamespace(plugin, daemonEnv) {
   });
 }
 
-/**
-  * Anchor the lexical cwd reported by OMP for a linked plugin.
-  *
-  * On Windows, OMP exposes the package through a profile-local junction. The
-  * MCP session reports that lexical path, so an anchor beside the source staging
-  * tree is not discoverable. Placing the same V3 anchor in the link's parent
-  * keeps runtime metadata outside the immutable package while making it visible
-  * to the child resolver before proxy-tool discovery.
-  */
-function writeInstalledPluginParentAnchor(runtime, installPath, deps) {
-  return writeScenarioProjectAnchor(runtime, deps.path.dirname(installPath), deps);
-}
 
 async function linkScratchPlugin(runtime, scenarioRoot, pluginRoot, mode, deps) {
   const profileRoot = deps.path.join(scenarioRoot, "omp");
@@ -2139,7 +2127,6 @@ async function linkScratchPlugin(runtime, scenarioRoot, pluginRoot, mode, deps) 
   const expectedVersion = packagePayload(pluginRoot, deps).version;
   const expectedTree = mode === "new" ? runtime.matrix.artifact.install_tree_sha256 : runtime.matrix.artifact.baseline_plugin_install_tree_sha256;
   const installed = resolveLinkedPluginList(parseJson(Buffer.from(listOutput), "OMP_PLUGIN_LIST_INVALID"), profileRoot, expectedVersion, expectedTree, installRoot, deps);
-  writeInstalledPluginParentAnchor(runtime, installed.installPath, deps);
   const pluginDataBinding = scratchPluginDataEnvironment(profileRoot, env, deps);
   const clientObjectPath = seedInstalledClientObject(runtime, pluginRoot, pluginDataBinding.pluginData, mode, deps);
   const configPath = deps.path.join(pluginDataBinding.pluginData, "config.json");
@@ -2166,20 +2153,22 @@ function ompTurnArguments(runtime, sessionDirectory) {
 }
 
 /**
-  * Write the same V3 directory anchor at every cwd used by the scenario.
+  * Write a strict V3 anchor at a runtime-owned boundary.
   *
-  * OMP launches the Engram MCP wrapper from the linked package directory, while
-  * the model turn runs from `workspace/`. A parent anchor lets both descendants
-  * resolve the fixture's authorized anchor project without mutating the frozen
-  * plugin package or relying on a hashed fallback project identifier.
+  * The scratch Git root receives a `repository` anchor because the daemon's
+  * proxy-tool discovery resolves `git rev-parse --show-toplevel` and then asks
+  * for repository scope. The model workspace receives a `directory` anchor for
+  * the OMP extension. Both descriptors carry the same authorized anchor ID and
+  * converge on the fixture's canonical project.
   */
-function writeScenarioProjectAnchor(runtime, directory, deps) {
+function writeScenarioProjectAnchor(runtime, directory, deps, scope = "directory") {
+  if (scope !== "directory" && scope !== "repository") fail("SCRATCH_PROJECT_INVALID", "unsupported project anchor scope");
   const anchorPath = deps.path.join(directory, ".engram-project");
   writeSecretJson(anchorPath, {
     version: 3,
     project_id: runtime.seed.anchor_project_id,
     name: "hap-01c",
-    scope: "directory",
+    scope,
   }, deps);
   return anchorPath;
 }
@@ -2341,7 +2330,6 @@ async function openRelayScenario(runtime, scenarioID, daemonVariant, pluginVaria
   const scenarioRoot = deps.path.join(runtime.options.scratch_dir, "scenarios", scenarioID);
   ensureDirectory(deps.path.dirname(scenarioRoot), deps, "OWNED_DIRECTORY_INVALID");
   createExclusiveDirectory(scenarioRoot, deps);
-  writeScenarioProjectAnchor(runtime, scenarioRoot, deps);
   let daemon = null;
   let relayTap = null;
   try {
@@ -2713,6 +2701,7 @@ async function createRuntime(options, matrix, deps) {
     const seedRequestFile = deps.path.join(root, "seed-request.json");
     const secretsFile = deps.path.join(root, "keycards.json");
     const seed = fixtureRequest(options, deps, legacyProjectID);
+    writeScenarioProjectAnchor({ seed }, options.scratch_dir, deps, "repository");
     writeSecretText(dsnFile, postgres.dsn, deps);
     writeSecretJson(seedRequestFile, seed, deps);
     await invokeFixture("seed", [
@@ -2986,7 +2975,6 @@ module.exports = {
   scratchPluginDataEnvironment,
   seedInstalledClientObject,
   writeScenarioProjectAnchor,
-  writeInstalledPluginParentAnchor,
   initializeScratchWorktree,
   muxcoreProjectID,
   bindPluginDaemonNamespace,
