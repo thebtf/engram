@@ -31,6 +31,7 @@ const {
   resolveLinkedPluginList,
   runBoundedChild,
   scratchServerEnvironment,
+  scratchDaemonEnvironment,
   scratchPluginDataEnvironment,
   stablePostgresProbeCount,
   scenarioObservation,
@@ -398,8 +399,22 @@ test("scratch server uses live worker host and port variables", () => {
   assert.equal(environment.ENGRAM_WORKER_HOST, "127.0.0.1");
   assert.equal(environment.ENGRAM_WORKER_PORT, "45678");
   assert.equal(environment.ENGRAM_LISTEN_ADDR, undefined);
+
   assert.equal(environment.GITHUB_TOKEN, undefined);
   assert.equal(environment.DATABASE_DSN, "postgres://fixture");
+});
+test("scratch daemon uses the server tap address rather than its observer handle", () => {
+  const runtime = {
+    options: { run_id: "daemon-run" },
+    server_tap_address: { url: "http://127.0.0.1:45678" },
+    server_tap: { mark() { throw new Error("not an address"); } },
+    secrets: { ordinary_token: "engram_fixture" },
+    matrix: { candidate: { adapter_sha256: "a".repeat(64) } },
+  };
+  const environment = scratchDaemonEnvironment(runtime, "scenario", { PATH: "safe" }, true);
+  assert.equal(environment.ENGRAM_URL, runtime.server_tap_address.url);
+  assert.equal(environment.ENGRAM_HAP_01B_RELAY_ENABLED, "true");
+  assert.equal(environment.ENGRAM_HAP_01B_ADAPTER_SHA256, "a".repeat(64));
 });
 
 test("long-lived child logs are drained without consuming MCP stdout", () => {

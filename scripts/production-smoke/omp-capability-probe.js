@@ -1916,24 +1916,30 @@ async function waitForLocator(locatorPath, options, deps) {
   fail("RELAY_LOCATOR_TIMEOUT", "candidate daemon did not publish its owned relay locator");
 }
 
+function scratchDaemonEnvironment(runtime, scenarioRoot, baseEnv, candidate) {
+  const environment = {
+    ...baseEnv,
+    ENGRAM_URL: runtime.server_tap_address.url,
+    ENGRAM_TOKEN: runtime.secrets.ordinary_token,
+    ENGRAM_CLIENT_INSTANCE_ID: `hap01c-${sha256(`${runtime.options.run_id}:${scenarioRoot}`).slice(0, 20)}`,
+  };
+  if (candidate) {
+    environment.ENGRAM_HAP_01B_RELAY_ENABLED = "true";
+    environment.ENGRAM_HAP_01B_RELAY_REVISION = ADAPTER_REVISION;
+    environment.ENGRAM_HAP_01B_LEGACY_DIRECT_ENFORCEMENT = "true";
+    environment.ENGRAM_HAP_01B_ADAPTER_SHA256 = runtime.matrix.candidate.adapter_sha256;
+  }
+  return environment;
+}
+
 async function startDaemon(runtime, scenarioRoot, variant, deps) {
   const candidate = variant === "candidate";
   const binary = candidate ? runtime.matrix.candidate_client_path : runtime.matrix.baseline_client_path;
   const daemonRoot = deps.path.join(scenarioRoot, "daemon");
   createExclusiveDirectory(daemonRoot, deps);
   const env = scratchEnvironment(daemonRoot, runtime.options.scratch_profile, deps);
-  const additions = {
-    ENGRAM_URL: runtime.server_tap.url,
-    ENGRAM_TOKEN: runtime.secrets.ordinary_token,
-    ENGRAM_CLIENT_INSTANCE_ID: `hap01c-${sha256(`${runtime.options.run_id}:${scenarioRoot}`).slice(0, 20)}`,
-  };
-  if (candidate) {
-    additions.ENGRAM_HAP_01B_RELAY_ENABLED = "true";
-    additions.ENGRAM_HAP_01B_RELAY_REVISION = ADAPTER_REVISION;
-    additions.ENGRAM_HAP_01B_LEGACY_DIRECT_ENFORCEMENT = "true";
-    additions.ENGRAM_HAP_01B_ADAPTER_SHA256 = runtime.matrix.candidate.adapter_sha256;
-  }
-  const child = deps.spawn(binary, ["--muxcore-daemon"], { cwd: runtime.options.cwd, env: { ...env, ...additions }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: deps.platform !== "win32" });
+  const childEnv = scratchDaemonEnvironment(runtime, scenarioRoot, env, candidate);
+  const child = deps.spawn(binary, ["--muxcore-daemon"], { cwd: runtime.options.cwd, env: childEnv, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: deps.platform !== "win32" });
   drainChildOutput(child);
   const locatorPath = deps.path.join(env.LOCALAPPDATA, "engram", "run", "hap-01b", RELAY_LOCATOR_NAME);
   try {
@@ -1953,7 +1959,7 @@ async function startDaemon(runtime, scenarioRoot, variant, deps) {
 function scratchPluginConfig(runtime, mode) {
   return mode === "new"
     ? {
-      server_url: runtime.server_tap.url,
+      server_url: runtime.server_tap_address.url,
       api_token: runtime.secrets.ordinary_token,
       hap_01b: {
         relay_enabled: true,
@@ -1964,7 +1970,7 @@ function scratchPluginConfig(runtime, mode) {
         project_tokens: { [runtime.seed.canonical_project_key]: runtime.secrets.project_token },
       },
     }
-    : { server_url: runtime.server_tap.url, api_token: runtime.secrets.legacy_direct_token };
+    : { server_url: runtime.server_tap_address.url, api_token: runtime.secrets.legacy_direct_token };
 }
 
 function replaceScratchPluginConfig(runtime, plugin, deps) {
@@ -2013,7 +2019,7 @@ async function runOmpTurn(runtime, scenarioRoot, plugin, directCredentials, deps
     HAP_01C_OBSERVER_SCRATCH_CWD: workspace,
   };
   if (directCredentials) {
-    env.ENGRAM_URL = runtime.server_tap.url;
+    env.ENGRAM_URL = runtime.server_tap_address.url;
     env.ENGRAM_TOKEN = runtime.secrets.legacy_direct_token;
   }
   const args = [
@@ -2547,7 +2553,7 @@ async function createRuntime(options, matrix, deps) {
     ], options, deps);
     const secrets = readFixtureSecrets(secretsFile, options, deps);
     return {
-      options, matrix, deps, model, postgres, server, server_tap: tapAddress, serverTap,
+      options, matrix, deps, model, postgres, server, server_tap_address: tapAddress, server_tap: serverTap,
       fixture_root: root, dsn_file: dsnFile, seed_request_file: seedRequestFile, secrets_file: secretsFile,
       seed, secrets,
       async close() { return closeResourceStack(resources); },
@@ -2813,6 +2819,7 @@ module.exports = {
   sessionTranscriptProjection,
   snapshotActiveProfile,
   scratchServerEnvironment,
+  scratchDaemonEnvironment,
   writeJsonExclusive,
   stablePostgresProbeCount,
   extractArchive,
