@@ -624,13 +624,19 @@ async function extractArchive(archive, destination, options, deps) {
   if (typeof deps.extractArchive === "function") return deps.extractArchive(archive, destination, options);
   createExclusiveDirectory(destination, deps);
   const extension = deps.path.basename(archive).toLowerCase();
-  const spec = extension.endsWith(".zip")
-    ? {
-      command: process.platform === "win32" ? "powershell.exe" : "powershell",
-      args: ["-NoProfile", "-NonInteractive", "-Command", "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force", archive, destination],
-    }
-    : { command: "tar", args: ["-xzf", archive, "-C", destination] };
-  requireProcessSuccess(await runProcess({ ...spec, cwd: options.cwd, env: childEnvironment(deps.env, {}, deps), timeout_ms: options.timeouts.startup_timeout_ms }, deps), "ARCHIVE_EXTRACTION_FAILED", "archive extraction");
+  let spec;
+  if (extension.endsWith(".zip") && deps.platform === "win32") {
+    spec = {
+      command: "powershell.exe",
+      args: ["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; Expand-Archive -LiteralPath $env:HAP_01C_ARCHIVE -DestinationPath $env:HAP_01C_DESTINATION -Force"],
+      env: childEnvironment(deps.env, { HAP_01C_ARCHIVE: archive, HAP_01C_DESTINATION: destination }, deps),
+    };
+  } else if (extension.endsWith(".zip")) {
+    spec = { command: "unzip", args: ["-qq", archive, "-d", destination], env: childEnvironment(deps.env, {}, deps) };
+  } else {
+    spec = { command: "tar", args: ["-xzf", archive, "-C", destination], env: childEnvironment(deps.env, {}, deps) };
+  }
+  requireProcessSuccess(await runProcess({ ...spec, cwd: options.cwd, timeout_ms: options.timeouts.startup_timeout_ms }, deps), "ARCHIVE_EXTRACTION_FAILED", "archive extraction");
 }
 
 function packagePayload(root, deps) {
@@ -2756,4 +2762,5 @@ module.exports = {
   sessionTranscriptProjection,
   snapshotActiveProfile,
   writeJsonExclusive,
+  extractArchive,
 };

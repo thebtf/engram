@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const { spawn, spawnSync } = require("node:child_process");
 const test = require("node:test");
 const { EventEmitter } = require("node:events");
 const { PassThrough } = require("node:stream");
@@ -20,6 +21,7 @@ const {
   childEnvironment,
   createExclusiveDirectory,
   createRelayTap,
+  extractArchive,
   createServerTap,
   directoryTreeDigest,
   inspectArtifactMatrix,
@@ -401,6 +403,25 @@ test("scratch directory creation rejects an intermediate symbolic link or juncti
   assert.equal(fs.existsSync(path.join(target, "escaped")), false);
 });
 
+
+test("extracts a Windows ZIP through environment-bound literal paths", async (t) => {
+  if (process.platform !== "win32") {
+    t.skip("Windows Expand-Archive contract");
+    return;
+  }
+  const root = temporaryRoot(t);
+  const source = path.join(root, "payload with spaces.txt");
+  const archive = path.join(root, "archive with spaces.zip");
+  const destination = path.join(root, "expanded with spaces");
+  fs.writeFileSync(source, "zip payload");
+  const created = spawnSync("powershell.exe", [
+    "-NoProfile", "-NonInteractive", "-Command",
+    "$ErrorActionPreference='Stop'; Compress-Archive -LiteralPath $env:HAP_TEST_SOURCE -DestinationPath $env:HAP_TEST_ARCHIVE",
+  ], { env: { ...process.env, HAP_TEST_SOURCE: source, HAP_TEST_ARCHIVE: archive }, encoding: "utf8", windowsHide: true });
+  assert.equal(created.status, 0, created.stderr);
+  await extractArchive(archive, destination, { cwd: root, timeouts: { startup_timeout_ms: 10_000 } }, baseDeps({ env: process.env, platform: "win32", spawn }));
+  assert.equal(fs.readFileSync(path.join(destination, path.basename(source)), "utf8"), "zip payload");
+});
 test("inspects exact candidate bytes and rejects an extra hand-labeled archive", async (t) => {
   const root = temporaryRoot(t);
   const candidate = path.join(root, "candidate");
