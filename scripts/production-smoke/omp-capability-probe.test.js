@@ -406,6 +406,9 @@ test("scratch server uses live worker host and port variables", () => {
   }));
   assert.equal(environment.ENGRAM_WORKER_HOST, "127.0.0.1");
   assert.equal(environment.ENGRAM_WORKER_PORT, "45678");
+  assert.equal(environment.ENGRAM_V7_PLUG_ENABLED, "true");
+  assert.equal(environment.ENGRAM_V7_S2_METAMEM, "true");
+  assert.equal(environment.ENGRAM_V7_S3_AMBIENT, "true");
   assert.equal(environment.ENGRAM_LISTEN_ADDR, undefined);
 
   assert.equal(environment.GITHUB_TOKEN, undefined);

@@ -1256,7 +1256,7 @@ function createRelayTap(options, deps) {
         try { socket.end(); } catch { /* closed peer */ }
       });
       upstreamSocket.once("connect", () => {
-                try { upstreamSocket.write(buffered); } catch { closeUpstream(); try { socket.end(); } catch { /* closed peer */ } }
+        try { upstreamSocket.write(buffered); } catch { closeUpstream(); try { socket.end(); } catch { /* closed peer */ } }
       });
       upstreamSocket.on("data", (responseChunk) => {
         const bytes = Buffer.from(responseChunk);
@@ -1970,6 +1970,7 @@ function scratchServerEnvironment(serverRoot, port, dsn, adminToken, deps) {
     ENGRAM_HAP_01B_RELAY_REVISION: ADAPTER_REVISION,
     ENGRAM_HAP_01B_LEGACY_DIRECT_ENFORCEMENT: "true",
     ENGRAM_V7_PLUG_ENABLED: "true",
+    ENGRAM_V7_S2_METAMEM: "true",
     ENGRAM_V7_S3_AMBIENT: "true",
   });
 }
@@ -2216,7 +2217,7 @@ function makeDescriptor(runtime, scenarioID) {
     version: 3,
     anchor_project_id: runtime.seed.anchor_project_id,
     name: "hap-01c",
-        scope: "repository",
+    scope: "repository",
     normalized_git_remotes: [],
     legacy_identifiers: [],
     client_instance_id: `hap01c-${sha256(`${runtime.options.run_id}:${scenarioID}`).slice(0, 24)}`,
@@ -2290,7 +2291,7 @@ async function createInstalledRelay(pluginRoot, clientEnv, deps) {
     { relativePath: "extensions/engram-memory.mjs", filePath: deps.path.join(pluginRoot, "extensions", "engram-memory.mjs") },
     { relativePath: "extensions/legacy-relay.mjs", filePath: deps.path.join(pluginRoot, "extensions", "legacy-relay.mjs") },
   ];
-    return relayModule.createLegacyRelay({ env: clientEnv, platform: deps.platform, artifactFiles, net: deps.net });
+  return relayModule.createLegacyRelay({ env: clientEnv, platform: deps.platform, artifactFiles, net: deps.net });
 }
 
 function routeToken(record) {
@@ -2552,10 +2553,10 @@ async function prepareRelayCapability(runtime, subcase, deps) {
     const descriptor = makeDescriptor(runtime, `capability-${subcase}`, deps);
     const deadline = deps.now() + runtime.options.timeouts.relay_timeout_ms;
     const identity = await relay.call("IDENTITY_REGISTRATION", { hostSessionRef: sessionReference(runtime, subcase), projectIdentityV3: descriptor }, deadline);
-        if (!identity || identity.kind !== "OK" || typeof identity.sessionCapability !== "string" || identity.sessionCapability.length === 0) {
-            const reason = identity?.kind === "NO_DELIVERY" && typeof identity.reason === "string" && /^[A-Z][A-Z0-9_]{0,95}$/.test(identity.reason) ? identity.reason : "FAILED";
-            fail(`CAPABILITY_SETUP_${reason}`, "candidate relay did not issue a capability");
-        }
+    if (!identity || identity.kind !== "OK" || typeof identity.sessionCapability !== "string" || identity.sessionCapability.length === 0) {
+      const reason = identity?.kind === "NO_DELIVERY" && typeof identity.reason === "string" && /^[A-Z][A-Z0-9_]{0,95}$/.test(identity.reason) ? identity.reason : "FAILED";
+      fail(`CAPABILITY_SETUP_${reason}`, "candidate relay did not issue a capability");
+    }
     return Object.freeze({ scenario, shim, relay, descriptor, capability: identity.sessionCapability, deadline });
   } catch (error) {
     await rethrowAfterCleanup(error, [shim, scenario].filter(Boolean));
@@ -2628,7 +2629,7 @@ async function runInvalidationSubcase(runtime, id, deps) {
       try { if (!await replacementShim.close()) extraCleanup += 1; } catch { extraCleanup += 1; }
     }
     if (session) extraCleanup += await closeRelayCapability(session);
-        return Object.freeze({ id, passed: false, route_attempts: 0, routes: [], server_dispatches: 0, proof_digest: sha256(`${id}:${safeErrorCode(error)}`), cleanup_residue: extraCleanup + cleanupResidueFrom(error), failure_code: safeErrorCode(error) });
+    return Object.freeze({ id, passed: false, route_attempts: 0, routes: [], server_dispatches: 0, proof_digest: sha256(`${id}:${safeErrorCode(error)}`), cleanup_residue: extraCleanup + cleanupResidueFrom(error), failure_code: safeErrorCode(error) });
   }
 }
 
