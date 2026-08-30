@@ -26,6 +26,8 @@ const {
   createServerTap,
   drainChildOutput,
   directoryTreeDigest,
+  initializeScratchWorktree,
+  muxcoreProjectID,
   ompTurnArguments,
   inspectArtifactMatrix,
   parseArgs,
@@ -602,6 +604,19 @@ test("scenario and workspace share one authorized V3 project anchor", (t) => {
   const installedParentAnchor = writeInstalledPluginParentAnchor(runtime, installedPath, baseDeps());
   assert.deepEqual(JSON.parse(fs.readFileSync(installedParentAnchor, "utf8")), expected);
   assert.equal(path.dirname(installedParentAnchor), path.dirname(installedPath));
+});
+
+test("scratch worktree produces the muxcore project identifier", async (t) => {
+  const root = temporaryRoot(t);
+  const scratch = path.join(root, "scratch-project");
+  fs.mkdirSync(scratch);
+  const options = { cwd: root, scratch_dir: scratch, timeouts: { startup_timeout_ms: 10_000 } };
+  const deps = baseDeps({ env: process.env, platform: process.platform, spawn });
+  const projectID = await initializeScratchWorktree(options, deps);
+  const canonical = (process.platform === "win32" ? fs.realpathSync(scratch).toLowerCase() : fs.realpathSync(scratch));
+  assert.equal(projectID, digest(canonical).slice(0, 16));
+  assert.equal(projectID, muxcoreProjectID(scratch, deps));
+  assert.equal(fs.lstatSync(path.join(scratch, ".git")).isDirectory(), true);
 });
 
 

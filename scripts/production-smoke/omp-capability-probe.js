@@ -1742,14 +1742,44 @@ function fixtureRoot(options, deps) {
   return deps.path.join(options.scratch_dir, "fixture", `hap01c-${options.run_id}`);
 }
 
-function fixtureRequest(options, deps) {
+/**
+  * Reproduce muxcore's public `ProjectContextID` contract for the scratch root:
+  * canonical real path, lowercase on Windows, SHA-256, first 16 hex digits.
+  * The server fixture stores this value as the bounded legacy identifier that
+  * proxy-tool discovery receives from muxcore before V3 relay registration.
+  */
+function muxcoreProjectID(root, deps) {
+  let canonical;
+  try { canonical = deps.fs.realpathSync(root); } catch { fail("SCRATCH_PROJECT_INVALID", "scratch project root cannot be canonicalized"); }
+  if (deps.platform === "win32") canonical = canonical.toLowerCase();
+  return sha256(canonical).slice(0, 16);
+}
+
+/**
+  * Create a real, empty Git worktree boundary so every scenario cwd resolves to
+  * one muxcore project ID. Using `git init` follows muxcore's documented
+  * worktree-root algorithm and avoids inventing a project-id override.
+  */
+async function initializeScratchWorktree(options, deps) {
+  requireProcessSuccess(await runProcess({
+    command: "git",
+    args: ["init", "--quiet", options.scratch_dir],
+    cwd: options.cwd,
+    env: childEnvironment(deps.env, {}),
+    timeout_ms: options.timeouts.startup_timeout_ms,
+  }, deps), "SCRATCH_PROJECT_INVALID", "scratch project initialization");
+  requireDirectory(deps.path.join(options.scratch_dir, ".git"), deps, "SCRATCH_PROJECT_INVALID");
+  return muxcoreProjectID(options.scratch_dir, deps);
+}
+
+function fixtureRequest(options, deps, legacyProjectID) {
   const uuid = deps.randomUUID;
-  const legacyWorkspace = deps.path.resolve(options.scratch_dir, "scenarios", "old_plugin_new_daemon", "workspace");
+  if (typeof legacyProjectID !== "string" || !/^[a-f0-9]{16}$/.test(legacyProjectID)) fail("FIXTURE_REQUEST_INVALID", "muxcore project identity is invalid");
   return Object.freeze({
     run_id: options.run_id,
     anchor_project_id: uuid(),
     canonical_project_key: uuid(),
-    legacy_project_id: sha256(legacyWorkspace).slice(0, 6),
+    legacy_project_id: legacyProjectID,
   });
 }
 
@@ -2667,6 +2697,7 @@ async function createRuntime(options, matrix, deps) {
   if (typeof deps.createRuntime === "function") return deps.createRuntime(options, matrix);
   const resources = [];
   try {
+    const legacyProjectID = await initializeScratchWorktree(options, deps);
     const model = await createLocalModelFixture(options.scratch_dir, deps);
     resources.push(model);
     const postgres = await startPostgres(options, matrix, options.scratch_dir, deps);
@@ -2681,7 +2712,7 @@ async function createRuntime(options, matrix, deps) {
     const dsnFile = deps.path.join(root, "dsn.txt");
     const seedRequestFile = deps.path.join(root, "seed-request.json");
     const secretsFile = deps.path.join(root, "keycards.json");
-    const seed = fixtureRequest(options, deps);
+    const seed = fixtureRequest(options, deps, legacyProjectID);
     writeSecretText(dsnFile, postgres.dsn, deps);
     writeSecretJson(seedRequestFile, seed, deps);
     await invokeFixture("seed", [
@@ -2956,6 +2987,8 @@ module.exports = {
   seedInstalledClientObject,
   writeScenarioProjectAnchor,
   writeInstalledPluginParentAnchor,
+  initializeScratchWorktree,
+  muxcoreProjectID,
   bindPluginDaemonNamespace,
   ompTurnArguments,
   runScenario,
