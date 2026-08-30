@@ -113,6 +113,60 @@ func sameCapabilityBinding(left, right CapabilityBinding) bool {
 		left.Routes == right.Routes
 }
 
+// registrationReuseKey is the complete caller-observable portion of an
+// identity registration binding. Project and credential authority remain in
+// the existing capability record and are never accepted from the caller.
+type registrationReuseKey struct {
+	generation  DaemonGeneration
+	hostSession HostSessionRef
+	hostProcess ProcessIdentity
+	child       ChildBinding
+	adapter     AdapterAttestation
+	descriptor  ProjectIdentityV3Descriptor
+}
+
+func (key registrationReuseKey) valid() bool {
+	return key.generation.valid() && key.hostSession.valid() && key.hostProcess.valid() &&
+		key.child.valid() && key.adapter.valid() && key.descriptor.valid()
+}
+
+// reuseRegistration returns an existing live capability without repeating
+// server resolution. Child replacement, credential invalidation, process
+// reuse, daemon generation changes, descriptor changes, and expiry all prevent
+// reuse through the same registry invariants used by data-plane validation.
+func (r *CapabilityRegistry) reuseRegistration(key registrationReuseKey) (Capability, CanonicalProjectRef, bool) {
+	if r == nil || !key.valid() {
+		return Capability{}, CanonicalProjectRef{}, false
+	}
+	now := r.now()
+	if now.IsZero() {
+		return Capability{}, CanonicalProjectRef{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pruneExpiredLocked(now)
+	for token, record := range r.records {
+		binding := record.binding
+		if binding.Generation != key.generation || binding.HostSession != key.hostSession ||
+			!sameProcess(binding.HostProcess, key.hostProcess) || binding.Child != key.child ||
+			binding.Adapter != key.adapter || !bytes.Equal(binding.Descriptor.raw, key.descriptor.raw) {
+			continue
+		}
+		if !r.children.current(binding.Child) {
+			delete(r.records, token)
+			continue
+		}
+		liveHost, hostErr := r.inspector.Inspect(binding.HostProcess.pid)
+		liveChild, childErr := r.inspector.Inspect(binding.Child.process.pid)
+		if hostErr != nil || childErr != nil || !sameProcess(binding.HostProcess, liveHost) || !sameProcess(binding.Child.process, liveChild) {
+			delete(r.records, token)
+			continue
+		}
+		return Capability{encoded: token}, binding.Project, true
+	}
+	return Capability{}, CanonicalProjectRef{}, false
+}
+
 // CapabilityCheck contains exactly the current peer/session/route facts that
 // must agree with an in-memory record before data-plane gateway dispatch.
 type CapabilityCheck struct {

@@ -148,6 +148,7 @@ func TestCapabilityRejectsCrossSessionExpiryAndProcessReuse(t *testing.T) {
 	adapter := mustAdapter(t)
 	project := mustProject(t, "0b7f7fe6-9990-4fa0-9225-a7f02670f96c")
 	credential := mustCredential(t, "daemon-project-keycard-ref")
+	descriptor := mustDescriptor(t)
 	routes, err := NewRouteSet(RouteSessionStartContext, RouteAmbientCandidates)
 	if err != nil {
 		t.Fatalf("NewRouteSet: %v", err)
@@ -158,13 +159,25 @@ func TestCapabilityRejectsCrossSessionExpiryAndProcessReuse(t *testing.T) {
 		HostProcess: host,
 		Child:       childBinding,
 		Adapter:     adapter,
-		Descriptor:  mustDescriptor(t),
+		Descriptor:  descriptor,
 		Project:     project,
 		Credential:  credential,
 		Routes:      routes,
 	})
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
+	}
+	reuseKey := registrationReuseKey{
+		generation: generation, hostSession: hostSession, hostProcess: host,
+		child: childBinding, adapter: adapter, descriptor: descriptor,
+	}
+	reused, reusedProject, ok := registry.reuseRegistration(reuseKey)
+	if !ok || reused != capability || reusedProject != project {
+		t.Fatalf("reuseRegistration = %#v, %#v, %t; want original capability and project", reused, reusedProject, ok)
+	}
+	reuseKey.hostSession = mustHostSession(t, "other-host-session")
+	if _, _, ok := registry.reuseRegistration(reuseKey); ok {
+		t.Fatal("reuseRegistration accepted a cross-session key")
 	}
 
 	lease, err := registry.Validate(CapabilityCheck{
@@ -355,6 +368,23 @@ func TestRelayPreservesCallerAbsoluteDeadlineForGateway(t *testing.T) {
 	if !gateway.contextHasDeadline || gateway.contextDeadline.UnixMilli() != deadlineUnixMs {
 		t.Fatalf("gateway context deadline = %v, want original absolute deadline %d", gateway.contextDeadline, deadlineUnixMs)
 	}
+	secondClient, secondServer := net.Pipe()
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		relay.ServeConn(context.Background(), secondServer)
+	}()
+	if _, err := fmt.Fprint(secondClient, testIdentityFrame(deadlineUnixMs, "")+"\n"); err != nil {
+		t.Fatalf("write repeated request: %v", err)
+	}
+	if _, err := bufio.NewReader(secondClient).ReadString('\n'); err != nil {
+		t.Fatalf("read repeated terminal response: %v", err)
+	}
+	_ = secondClient.Close()
+	<-secondDone
+	if gateway.calls != 1 {
+		t.Fatalf("gateway registration calls = %d, want one server resolution", gateway.calls)
+	}
 }
 
 func TestLocatorRoundTripUsesStrictProtocolAndGeneration(t *testing.T) {
@@ -409,9 +439,11 @@ type deadlineRecordingGateway struct {
 	deadlineUnixMs     int64
 	contextDeadline    time.Time
 	contextHasDeadline bool
+	calls              int
 }
 
 func (g *deadlineRecordingGateway) RegisterIdentity(ctx context.Context, call IdentityRegistrationCall) (RegistrationResult, error) {
+	g.calls += 1
 	g.deadlineUnixMs = call.DeadlineUnixMs()
 	g.contextDeadline, g.contextHasDeadline = ctx.Deadline()
 	project, err := NewCanonicalProjectRef("0b7f7fe6-9990-4fa0-9225-a7f02670f96c")
