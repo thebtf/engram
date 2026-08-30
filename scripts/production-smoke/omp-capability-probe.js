@@ -640,6 +640,12 @@ async function extractArchive(archive, destination, options, deps) {
   requireProcessSuccess(await runProcess({ ...spec, cwd: options.cwd, timeout_ms: options.timeouts.startup_timeout_ms }, deps), "ARCHIVE_EXTRACTION_FAILED", "archive extraction");
 }
 
+function pluginVersion(root, deps) {
+  const packageJson = parseJson(regularFileBytes(deps.path.join(root, "package.json"), deps, "ARTIFACT_MANIFEST_INVALID"), "ARTIFACT_MANIFEST_INVALID");
+  if (packageJson.name !== "engram" || typeof packageJson.version !== "string" || !SEMVER.test(packageJson.version)) fail("ARTIFACT_MANIFEST_INVALID", "plugin package identity is invalid");
+  return packageJson.version;
+}
+
 function packagePayload(root, deps) {
   const packagePath = deps.path.join(root, "package.json");
   const entryPath = deps.path.join(root, "extensions", "engram-memory.mjs");
@@ -2151,7 +2157,7 @@ async function linkScratchPlugin(runtime, scenarioRoot, pluginRoot, mode, deps) 
     timeout_ms: runtime.options.timeouts.startup_timeout_ms,
   }, deps), "OMP_PLUGIN_LINK_FAILED", "scratch OMP plugin link");
   const listOutput = await commandOutput(runtime.options.omp_command, ["--profile", runtime.options.scratch_profile, "plugin", "list", "--json"], runtime.options.cwd, env, runtime.options.timeouts.startup_timeout_ms, deps, "OMP_PLUGIN_LIST_INVALID", "scratch OMP plugin list");
-  const expectedVersion = packagePayload(pluginRoot, deps).version;
+  const expectedVersion = pluginVersion(pluginRoot, deps);
   const expectedTree = mode === "new" ? runtime.matrix.artifact.install_tree_sha256 : runtime.matrix.artifact.baseline_plugin_install_tree_sha256;
   const installed = resolveLinkedPluginList(parseJson(Buffer.from(listOutput), "OMP_PLUGIN_LIST_INVALID"), profileRoot, expectedVersion, expectedTree, installRoot, deps);
   const pluginDataBinding = scratchPluginDataEnvironment(profileRoot, env, deps);
@@ -3016,6 +3022,7 @@ module.exports = {
   sessionTranscriptProjection,
   telemetryDelta,
   snapshotActiveProfile,
+  pluginVersion,
   scratchServerEnvironment,
   scratchDaemonEnvironment,
   scratchOmpTurnEnvironment,

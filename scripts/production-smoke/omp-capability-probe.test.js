@@ -33,6 +33,7 @@ const {
   inspectArtifactMatrix,
   parseArgs,
   parseFixtureSnapshot,
+  pluginVersion,
   resolveLinkedPluginList,
   runBoundedChild,
   scratchServerEnvironment,
@@ -643,10 +644,19 @@ test("extracts a Windows ZIP through environment-bound literal paths", async (t)
     "-NoProfile", "-NonInteractive", "-Command",
     "$ErrorActionPreference='Stop'; Compress-Archive -LiteralPath $env:HAP_TEST_SOURCE -DestinationPath $env:HAP_TEST_ARCHIVE",
   ], { env: { ...process.env, HAP_TEST_SOURCE: source, HAP_TEST_ARCHIVE: archive }, encoding: "utf8", windowsHide: true });
+
   assert.equal(created.status, 0, created.stderr);
   await extractArchive(archive, destination, { cwd: root, timeouts: { startup_timeout_ms: 10_000 } }, baseDeps({ env: process.env, platform: "win32", spawn }));
   assert.equal(fs.readFileSync(path.join(destination, path.basename(source)), "utf8"), "zip payload");
 });
+
+test("baseline plugin version detection does not require the new relay payload", (t) => {
+  const root = temporaryRoot(t);
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "engram", version: "6.48.0" }));
+  assert.equal(pluginVersion(root, baseDeps()), "6.48.0");
+  assert.equal(fs.existsSync(path.join(root, "extensions", "legacy-relay.mjs")), false);
+});
+
 test("inspects exact candidate bytes and rejects an extra hand-labeled archive", async (t) => {
   const root = temporaryRoot(t);
   const candidate = path.join(root, "candidate");
