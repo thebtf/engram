@@ -2216,7 +2216,7 @@ function makeDescriptor(runtime, scenarioID) {
     version: 3,
     anchor_project_id: runtime.seed.anchor_project_id,
     name: "hap-01c",
-    scope: "directory",
+        scope: "repository",
     normalized_git_remotes: [],
     legacy_identifiers: [],
     client_instance_id: `hap01c-${sha256(`${runtime.options.run_id}:${scenarioID}`).slice(0, 24)}`,
