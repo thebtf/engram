@@ -1727,13 +1727,17 @@ function readFixtureSecrets(filePath, options, deps) {
   return value;
 }
 
+function fixtureRedactedID(kind, value) {
+  return sha256(`${kind}\0${value}`);
+}
+
 function parseFixtureSnapshot(filePath, options, deps) {
   const value = parseJson(regularFileBytes(filePath, deps, "FIXTURE_SNAPSHOT_INVALID"), "FIXTURE_SNAPSHOT_INVALID");
   requireExactKeys(value, [
     "schema", "run_id_sha256", "resolution_attempts", "registration_attempts", "session_start_attempts", "target_memory_injection_count",
     "memory_rows", "rule_rows", "active_project_token_count", "revoked_project_token_count", "ambient_delivery_available", "ambient_delivery_unavailable_reason",
   ], "fixture snapshot", "FIXTURE_SNAPSHOT_INVALID");
-  if (value.schema !== "hap-01c-fixture-snapshot/1" || value.run_id_sha256 !== sha256(options.run_id) || value.ambient_delivery_available !== false || value.ambient_delivery_unavailable_reason !== "NO_DURABLE_AMBIENT_ATTEMPT_COUNTER") {
+  if (value.schema !== "hap-01c-fixture-snapshot/1" || value.run_id_sha256 !== fixtureRedactedID("run", options.run_id) || value.ambient_delivery_available !== false || value.ambient_delivery_unavailable_reason !== "NO_DURABLE_AMBIENT_ATTEMPT_COUNTER") {
     fail("FIXTURE_SNAPSHOT_INVALID", "fixture snapshot is not the fixed HAP-01C shape");
   }
   for (const key of ["resolution_attempts", "registration_attempts", "session_start_attempts", "target_memory_injection_count", "memory_rows", "rule_rows", "active_project_token_count", "revoked_project_token_count"]) {

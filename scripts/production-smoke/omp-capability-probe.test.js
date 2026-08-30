@@ -759,7 +759,7 @@ test("fixture snapshots are closed and probe source contains no direct REST HAP 
   const snapshot = path.join(root, "snapshot.json");
   writeJson(snapshot, {
     schema: "hap-01c-fixture-snapshot/1",
-    run_id_sha256: digest("fixture-run"),
+    run_id_sha256: digest("run\0fixture-run"),
     resolution_attempts: 0,
     registration_attempts: 0,
     session_start_attempts: 0,
@@ -772,6 +772,10 @@ test("fixture snapshots are closed and probe source contains no direct REST HAP 
     ambient_delivery_unavailable_reason: "NO_DURABLE_AMBIENT_ATTEMPT_COUNTER",
   });
   assert.equal(parseFixtureSnapshot(snapshot, { run_id: "fixture-run" }, baseDeps()).ambient_delivery_available, false);
+  const rawHash = JSON.parse(fs.readFileSync(snapshot, "utf8"));
+  rawHash.run_id_sha256 = digest("fixture-run");
+  writeJson(snapshot, rawHash);
+  assert.throws(() => parseFixtureSnapshot(snapshot, { run_id: "fixture-run" }, baseDeps()), ProbeError);
   const source = fs.readFileSync(path.join(__dirname, "omp-capability-probe.js"), "utf8");
   assert.doesNotMatch(source, /createLoopbackFixture|safeRequestProjection|\/api\/context\//);
 });
