@@ -299,15 +299,19 @@ function relayFrame(generation, route = "IDENTITY_REGISTRATION") {
 
 function relayResponse(request) {
   const frame = JSON.parse(request.subarray(0, request.length - 1).toString("utf8"));
-  return Buffer.from(`${JSON.stringify({
+  const result = {
     protocol: frame.protocol,
     requestId: frame.requestId,
     daemonGeneration: frame.daemonGeneration,
     route: frame.route,
     kind: "OK",
-    sessionCapability: Buffer.alloc(32, 9).toString("base64url"),
-    canonicalProjectRef: "canonical-project",
-  })}\n`);
+  };
+  if (frame.route === "AMBIENT_CANDIDATES") result.additionalContext = "bounded ambient context";
+  else {
+    result.sessionCapability = Buffer.alloc(32, 9).toString("base64url");
+    result.canonicalProjectRef = "canonical-project";
+  }
+  return Buffer.from(`${JSON.stringify(result)}\n`);
 }
 
 test("bounded OMP child recognizes a model sentinel split across stdout chunks", async () => {
@@ -772,6 +776,12 @@ test("RelayTap forwards normal bytes unchanged, redacts records, fails closed on
   assert.equal(normalObservation.records[0].outcome, "OK");
   assert.doesNotMatch(JSON.stringify(normalObservation), /raw-request-id|raw-host-session|fixture-client|current-generation/);
 
+  const ambientMark = tap.mark();
+  await socketRequest(physicalEndpoint(logical), relayFrame("current-generation", "AMBIENT_CANDIDATES"));
+  const ambientObservation = tap.snapshot(ambientMark);
+  assert.equal(ambientObservation.records[0].ambient_delivery_committed, true);
+  assert.doesNotMatch(JSON.stringify(ambientObservation), /bounded ambient context/);
+
   const staleMark = tap.mark();
   tap.armStaleGeneration("stale-generation");
   const staleResponse = await socketRequest(physicalEndpoint(logical), relayFrame("stale-generation"));
@@ -882,11 +892,13 @@ test("runProbe cleans only its owned scratch root and writes a record from injec
   assert.equal(fs.existsSync(path.join(options.evidence_dir, "redacted-observations.json")), true);
 });
 
-test("telemetry delta counts both durable session-start writes without inventing ambient persistence", () => {
+test("telemetry delta combines durable session-start and body-free ambient attempt evidence", () => {
   const before = { session_start_attempts: 3, target_memory_injection_count: 7 };
   const after = { session_start_attempts: 4, target_memory_injection_count: 8 };
-  assert.equal(telemetryDelta(before, after), 2);
-  assert.equal(telemetryDelta(after, before), 0);
+  const ambient = [{ callback: "before_agent_start", route: "AMBIENT_CANDIDATES", outcome: "OK", ambient_delivery_committed: true }];
+  assert.equal(telemetryDelta(before, after, ambient), 2);
+  assert.equal(telemetryDelta(before, after, [{ ...ambient[0], ambient_delivery_committed: false }]), 1);
+  assert.equal(telemetryDelta(after, before, []), 0);
 });
 
 test("fixture snapshots are closed and probe source contains no direct REST HAP fallback", (t) => {

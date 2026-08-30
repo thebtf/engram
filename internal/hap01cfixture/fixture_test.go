@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/auth"
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/pkg/models"
 )
 
 func TestOpenRefusesUnsafeDSNBeforeConnecting(t *testing.T) {
@@ -340,11 +341,19 @@ func TestFixtureSeedRotateAndSnapshotIntegration(t *testing.T) {
 		t.Fatalf("replacement project keycard did not validate: %v", err)
 	}
 
+	var target models.Memory
+	if err := fixture.store.GetDB().Where("project = ? AND source_agent = ?", request.CanonicalProjectKey, fixtureSourceAgent).First(&target).Error; err != nil {
+		t.Fatalf("read target memory: %v", err)
+	}
+	if err := gormdb.NewInjectionLogStore(fixture.store).Record(context.Background(), "01a-hap01c-omp-session", request.CanonicalProjectKey, []int64{target.ID}); err != nil {
+		t.Fatalf("record OMP-shaped session telemetry: %v", err)
+	}
+
 	snapshot, err := fixture.Snapshot(context.Background(), requestFile)
 	if err != nil {
 		t.Fatalf("snapshot fixture: %v", err)
 	}
-	if snapshot.MemoryRows != 1 || snapshot.RuleRows != 1 || snapshot.ActiveProjectTokenCount != 1 || snapshot.RevokedProjectTokenCount != 3 {
+	if snapshot.MemoryRows != 1 || snapshot.RuleRows != 1 || snapshot.SessionStartAttempts != 1 || snapshot.ActiveProjectTokenCount != 1 || snapshot.RevokedProjectTokenCount != 3 {
 		t.Fatalf("unexpected snapshot receipt: %#v", snapshot)
 	}
 	if snapshot.AmbientDeliveryAvailable || snapshot.AmbientDeliveryUnavailableReason != "NO_DURABLE_AMBIENT_ATTEMPT_COUNTER" {
@@ -358,12 +367,11 @@ func cleanupFixtureRows(t *testing.T, fixture *Fixture, request seedRequest) {
 		return
 	}
 	db := fixture.store.GetDB()
-	prefix := fixtureSessionPrefix(fixture.runID) + "%"
 	statements := []struct {
 		query string
 		args  []interface{}
 	}{
-		{`DELETE FROM injection_log WHERE session_id LIKE ?`, []interface{}{prefix}},
+		{`DELETE FROM injection_log WHERE project = ?`, []interface{}{request.CanonicalProjectKey}},
 		{`DELETE FROM attention_events WHERE project = ?`, []interface{}{request.CanonicalProjectKey}},
 		{`DELETE FROM agent_session_state WHERE session_id = ?`, []interface{}{fixtureSessionID(fixture.runID)}},
 		{`DELETE FROM behavioral_rules WHERE project = ? AND edited_by = ?`, []interface{}{request.CanonicalProjectKey, fixtureSourceAgent}},

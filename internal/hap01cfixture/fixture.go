@@ -897,10 +897,8 @@ func (f *Fixture) Snapshot(ctx context.Context, requestFile string) (SnapshotRec
 		Count(&receipt.RegistrationAttempts).Error; err != nil {
 		return SnapshotReceipt{}, boundary("SNAPSHOT_FAILED")
 	}
-
-	sessionPattern := escapeLike(fixtureSessionPrefix(f.runID)) + "%"
 	if err := db.Table("injection_log").
-		Where("session_id LIKE ? ESCAPE '\\'", sessionPattern).
+		Where("project = ?", request.CanonicalProjectKey).
 		Count(&receipt.SessionStartAttempts).Error; err != nil {
 		return SnapshotReceipt{}, boundary("SNAPSHOT_FAILED")
 	}

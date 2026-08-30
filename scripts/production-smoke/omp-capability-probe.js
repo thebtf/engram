@@ -1131,13 +1131,16 @@ function parseRelayFrame(bytes) {
   }
 }
 
-function relayOutcome(bytes, expected) {
+function relayResponseObservation(bytes, expected) {
   const newline = bytes.indexOf(0x0a);
   if (newline < 0) return null;
   try {
     const response = JSON.parse(bytes.subarray(0, newline).toString("utf8"));
-    if (!isPlainObject(response) || response.protocol !== RELAY_PROTOCOL || response.route !== expected.route || response.requestId !== expected.requestId || response.daemonGeneration !== expected.daemonGeneration) return null;
-    return RELAY_OUTCOMES.has(response.kind) ? response.kind : null;
+    if (!isPlainObject(response) || response.protocol !== RELAY_PROTOCOL || response.route !== expected.route || response.requestId !== expected.requestId || response.daemonGeneration !== expected.daemonGeneration || !RELAY_OUTCOMES.has(response.kind)) return null;
+    return {
+      outcome: response.kind,
+      ambient_delivery_committed: expected.route === "AMBIENT_CANDIDATES" && response.kind === "OK" && typeof response.additionalContext === "string" && Buffer.byteLength(response.additionalContext) > 0,
+    };
   } catch {
     return null;
   }
@@ -1169,6 +1172,7 @@ function createRelayTap(options, deps) {
       outcome: "NO_DELIVERY",
       request_sha256: sha256(Buffer.from(JSON.stringify(frame))),
       response_sha256: null,
+      ambient_delivery_committed: false,
     };
     records.push(record);
     return record;
@@ -1262,24 +1266,27 @@ function createRelayTap(options, deps) {
       upstreamSocket.on("data", (responseChunk) => {
         const bytes = Buffer.from(responseChunk);
         if (response.length < MAX_PROXY_FRAME_BYTES) response = Buffer.concat([response, bytes.subarray(0, MAX_PROXY_FRAME_BYTES - response.length)]);
-        const outcome = relayOutcome(response, frame);
-        if (outcome) {
-          record.outcome = outcome;
+        const observation = relayResponseObservation(response, frame);
+        if (observation) {
+          record.outcome = observation.outcome;
+          record.ambient_delivery_committed = observation.ambient_delivery_committed;
           record.response_sha256 = sha256(response);
         }
         try { socket.write(bytes); } catch { /* peer closed */ }
       });
       upstreamSocket.once("end", () => {
-        const outcome = relayOutcome(response, frame);
-        record.outcome = outcome || "NO_DELIVERY";
+        const observation = relayResponseObservation(response, frame);
+        record.outcome = observation?.outcome || "NO_DELIVERY";
+        record.ambient_delivery_committed = observation?.ambient_delivery_committed || false;
         record.response_sha256 = response.length ? sha256(response) : null;
         try { socket.end(); } catch { /* peer closed */ }
       });
       upstreamSocket.once("close", () => {
         if (upstreamSocket) activeUpstreams.delete(upstreamSocket);
         if (!record.response_sha256) {
-          const outcome = relayOutcome(response, frame);
-          record.outcome = outcome || "NO_DELIVERY";
+          const observation = relayResponseObservation(response, frame);
+          record.outcome = observation?.outcome || "NO_DELIVERY";
+          record.ambient_delivery_committed = observation?.ambient_delivery_committed || false;
           record.response_sha256 = response.length ? sha256(response) : null;
         }
       });
@@ -2387,10 +2394,10 @@ async function openRelayScenario(runtime, scenarioID, daemonVariant, pluginVaria
   }
 }
 
-function telemetryDelta(before, after) {
+function telemetryDelta(before, after, relayRecords) {
   const sessionStartAttempts = Math.max(0, after.session_start_attempts - before.session_start_attempts);
-  const targetMemoryInjections = Math.max(0, after.target_memory_injection_count - before.target_memory_injection_count);
-  return sessionStartAttempts + targetMemoryInjections;
+  const ambientAttempts = relayRecords.filter((record) => record.callback === "before_agent_start" && record.route === "AMBIENT_CANDIDATES" && record.outcome === "OK" && record.ambient_delivery_committed).length;
+  return sessionStartAttempts + ambientAttempts;
 }
 
 async function executeNewRelayTurn(runtime, id, mode, deps) {
@@ -2405,7 +2412,7 @@ async function executeNewRelayTurn(runtime, id, mode, deps) {
     const server = runtime.server_tap.snapshot(serverMark);
     const cleanupResidue = await scenario.close();
     scenario = null;
-    return Object.freeze({ turn, tap, server, telemetry_attempts: telemetryDelta(before, after), cleanup_residue: cleanupResidue });
+    return Object.freeze({ turn, tap, server, telemetry_attempts: telemetryDelta(before, after, tap.records), cleanup_residue: cleanupResidue });
   } catch (error) {
     if (scenario) await rethrowAfterCleanup(error, [scenario]);
     throw error;
