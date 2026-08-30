@@ -422,6 +422,11 @@ func (ta *TokenAuth) Middleware(next http.Handler) http.Handler {
 				return
 			}
 
+			if !hapHTTPRouteAllowed(id, r.Method, r.URL.Path) {
+				http.Error(w, "forbidden: HAP keycard class is not allowed on this HTTP route", http.StatusForbidden)
+				return
+			}
+
 			// Read-only scope gate (FR-6 inheriting v5 behaviour). Applies
 			// to client keycards only — operator key is always admin.
 			if id.Source == authpkg.SourceClient && id.Role == authpkg.RoleReadOnly {

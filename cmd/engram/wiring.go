@@ -30,14 +30,15 @@ import (
 //
 // Flag-OFF: codeintel is NOT registered; the daemon tool surface is byte-identical
 // to pre-CR-006.
-func registerModules(reg *registry.Registry) error {
-	// Construct engramcore once — shared with codeintel below.
+func registerModules(reg *registry.Registry) (*engramcore.Module, error) {
+	// Construct engramcore once — shared with codeintel and the private relay
+	// gateway. It remains the sole ProxyToolProvider.
 	coreModule := engramcore.NewModuleWithClientInstanceID(os.Getenv(config.EnvClientInstanceID))
 	if err := reg.Register(coreModule); err != nil {
-		return fmt.Errorf("register engramcore: %w", err)
+		return nil, fmt.Errorf("register engramcore: %w", err)
 	}
 	if err := reg.Register(loomhandler.NewModule()); err != nil {
-		return fmt.Errorf("register loom: %w", err)
+		return nil, fmt.Errorf("register loom: %w", err)
 	}
 
 	// Register codeintel only when ENGRAM_CODE_INTEL_ENABLED=true.
@@ -45,9 +46,9 @@ func registerModules(reg *registry.Registry) error {
 	// when the flag is off — no tool conflict checks, no extra allocations.
 	if os.Getenv("ENGRAM_CODE_INTEL_ENABLED") == "true" {
 		if err := reg.Register(codeintel.NewModule(coreModule)); err != nil {
-			return fmt.Errorf("register codeintel: %w", err)
+			return nil, fmt.Errorf("register codeintel: %w", err)
 		}
 	}
 
-	return nil
+	return coreModule, nil
 }

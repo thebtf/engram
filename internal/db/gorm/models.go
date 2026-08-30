@@ -241,6 +241,7 @@ type APIToken struct {
 	Scope         string     `gorm:"type:text;not null;default:read-write"`
 	Principal     string     `gorm:"type:text;not null;default:''" json:"principal"`
 	PrincipalKind string     `gorm:"type:text;not null;default:'human'" json:"principal_kind"`
+	ExpiresAt     *time.Time `gorm:"column:expires_at" json:"expires_at,omitempty"`
 	CreatedAt     time.Time  `gorm:"not null;default:now()"`
 	LastUsedAt    *time.Time `gorm:"column:last_used_at"`
 	RequestCount  int64      `gorm:"not null;default:0"`

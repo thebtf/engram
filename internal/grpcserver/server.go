@@ -21,7 +21,9 @@ import (
 	engramgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/projectidentity"
+	"github.com/thebtf/engram/internal/worker/ambientcore"
 	"github.com/thebtf/engram/internal/worker/projectevents"
+	"github.com/thebtf/engram/internal/worker/sessioncompat"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 )
 
@@ -52,15 +54,17 @@ type ToolDef struct {
 // nil ONLY when ENGRAM_AUTH_DISABLED=true is the operator's deliberate choice.
 type Server struct {
 	pb.UnimplementedEngramServiceServer
-	handler              MCPHandler
-	mu                   sync.RWMutex       // guards validator pointer swaps
-	validator            *auth.Validator    // nil = auth disabled; read under mu.RLock
-	db                   *gorm.DB           // injected by worker after DB is ready
-	bus                  *projectevents.Bus // in-process project lifecycle event bus
-	identityResolver     func(context.Context, *gorm.DB, string, *pb.ProjectIdentityV2) (string, error)
-	identityResolverV3   func(context.Context, *gorm.DB, projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error)
-	comparisonObserverV3 projectidentity.LegacyComparisonObserverV2
-	comparisonStoreV3    projectidentity.ComparisonStoreV3
+	handler               MCPHandler
+	mu                    sync.RWMutex       // guards mutable server dependencies
+	validator             *auth.Validator    // nil = auth disabled; read under mu.RLock
+	db                    *gorm.DB           // injected by worker after DB is ready
+	bus                   *projectevents.Bus // in-process project lifecycle event bus
+	ambientDependencies   ambientcore.Dependencies
+	sessionStartCommitter sessioncompat.DeliveryCommitter
+	identityResolver      func(context.Context, *gorm.DB, string, *pb.ProjectIdentityV2) (string, error)
+	identityResolverV3    func(context.Context, *gorm.DB, projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error)
+	comparisonObserverV3  projectidentity.LegacyComparisonObserverV2
+	comparisonStoreV3     projectidentity.ComparisonStoreV3
 }
 
 // New creates a new gRPC server. The returned *grpc.Server has EngramService
@@ -130,6 +134,38 @@ func (s *Server) SetBus(bus *projectevents.Bus) {
 	s.bus = bus
 }
 
+// SetAmbientDependencies wires the worker-owned, bounded ambient core into
+// the private bridge facade. The zero value intentionally fails open.
+func (s *Server) SetAmbientDependencies(dependencies ambientcore.Dependencies) {
+	s.mu.Lock()
+	s.ambientDependencies = dependencies
+	s.mu.Unlock()
+}
+
+func (s *Server) currentAmbientDependencies() ambientcore.Dependencies {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ambientDependencies
+}
+
+// SetSessionStartDeliveryCommitter wires attempted-delivery recording for
+// relay session-start responses. The response is committed before transport
+// acknowledgement, preserving existing delivery semantics.
+func (s *Server) SetSessionStartDeliveryCommitter(committer sessioncompat.DeliveryCommitter) {
+	s.mu.Lock()
+	s.sessionStartCommitter = committer
+	s.mu.Unlock()
+}
+
+func (s *Server) commitRelaySessionStartDelivery(hostSessionRef, canonicalProject string, memories []*pb.SessionStartMemory) {
+	s.mu.RLock()
+	committer := s.sessionStartCommitter
+	s.mu.RUnlock()
+	if committer != nil {
+		committer.CommitSessionStartDelivery(hostSessionRef, canonicalProject, memories)
+	}
+}
+
 // Ping is a lightweight health check. Auth is intentionally skipped for Ping.
 func (s *Server) Ping(_ context.Context, _ *pb.PingRequest) (*pb.PingResponse, error) {
 	return &pb.PingResponse{Status: "ok"}, nil
@@ -139,15 +175,8 @@ func (s *Server) Ping(_ context.Context, _ *pb.PingRequest) (*pb.PingResponse, e
 // server-authenticated master administrator. Request credentials, canonical
 // project authority, and registration authorization are never client inputs.
 func (s *Server) RegisterProjectIdentityV3(ctx context.Context, req *pb.RegisterProjectIdentityV3Request) (*pb.RegisterProjectIdentityV3Response, error) {
-	identity, ok := auth.IdentityFrom(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "project identity authentication required")
-	}
-	if identity.Source == auth.SourceAuthDisabled {
-		return nil, status.Error(codes.PermissionDenied, "project identity registration unavailable when authentication is disabled")
-	}
-	if identity.Source != auth.SourceMaster || identity.Role != auth.RoleAdmin {
-		return nil, status.Error(codes.PermissionDenied, "project identity registration requires master admin identity")
+	if err := s.authorizeRegistrationIdentity(ctx, req); err != nil {
+		return nil, err
 	}
 	if req == nil || len(req.ProtoReflect().GetUnknown()) != 0 {
 		return nil, v3RegistrationDescriptorInvalid()
@@ -155,6 +184,9 @@ func (s *Server) RegisterProjectIdentityV3(ctx context.Context, req *pb.Register
 	projectIdentity := req.GetProjectIdentityV3()
 	if projectIdentity == nil || len(projectIdentity.ProtoReflect().GetUnknown()) != 0 {
 		return nil, v3RegistrationDescriptorInvalid()
+	}
+	if req.GetRelayRevision() != "" {
+		ctx = withHAPRelayRegistration(ctx)
 	}
 	resolution, err := s.resolveProjectIdentityV3(ctx, projectIdentity, projectidentity.RegisterAnchorIntentV3)
 	if err != nil {
@@ -165,6 +197,9 @@ func (s *Server) RegisterProjectIdentityV3(ctx context.Context, req *pb.Register
 
 // Initialize returns server info and the complete list of available tools.
 func (s *Server) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb.InitializeResponse, error) {
+	if err := rejectHAPCredentialWithoutProject(ctx); err != nil {
+		return nil, err
+	}
 	canonicalProject := ""
 	var resolutionV3 *pb.ProjectResolutionResultV3
 	if identity := req.GetProjectIdentityV3(); identity != nil {
@@ -204,6 +239,9 @@ func (s *Server) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb
 
 // CallTool dispatches a single MCP tool call.
 func (s *Server) CallTool(ctx context.Context, req *pb.CallToolRequest) (*pb.CallToolResponse, error) {
+	if err := rejectHAPCredentialWithoutProject(ctx); err != nil {
+		return nil, err
+	}
 	canonicalProject := ""
 	var resolutionV3 *pb.ProjectResolutionResultV3
 	if identity := req.GetProjectIdentityV3(); identity != nil {
@@ -392,7 +430,8 @@ func (verifier grpcV3AuthorizationVerifier) VerifyAuthorizationV3(ctx context.Co
 	case projectidentity.ResolveExistingIntentV3, projectidentity.ReadFilterIntentV3:
 		return projectidentity.AuthorizationVerificationV3{Authorized: true}, nil
 	case projectidentity.RegisterAnchorIntentV3:
-		if identity.Source == auth.SourceMaster && identity.Role == auth.RoleAdmin {
+		if (identity.Source == auth.SourceMaster && identity.Role == auth.RoleAdmin) ||
+			(isHAPRelayRegistration(ctx) && identity.IsHAPRegistrationService()) {
 			return projectidentity.AuthorizationVerificationV3{Authorized: true}, nil
 		}
 	}

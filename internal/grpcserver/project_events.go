@@ -27,6 +27,9 @@ var globalEventSeq atomic.Uint64
 // v0.1.0 does NOT support since_event_id replay. A non-empty value returns
 // OUT_OF_RANGE per the proto contract.
 func (s *Server) ProjectEvents(req *pb.ProjectEventsRequest, stream grpc.ServerStreamingServer[pb.ProjectEvent]) error {
+	if err := rejectHAPCredentialWithoutProject(stream.Context()); err != nil {
+		return err
+	}
 	if req.GetSinceEventId() != "" {
 		return status.Error(codes.OutOfRange,
 			"since_event_id replay is not supported in v0.1.0; reconnect without since_event_id")

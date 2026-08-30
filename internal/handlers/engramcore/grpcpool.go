@@ -116,6 +116,26 @@ func (p *grpcPool) closeAll() {
 	})
 }
 
+// closeTokenHash removes and closes only connections authenticated with one
+// credential hash. Relay rotation must not disrupt unrelated project or normal
+// daemon connections that share the same address/TLS policy.
+func (p *grpcPool) closeTokenHash(tokenHash string) {
+	if p == nil || tokenHash == "" {
+		return
+	}
+	p.conns.Range(func(keyValue, connectionValue any) bool {
+		key, keyOK := keyValue.(connKey)
+		connection, connectionOK := connectionValue.(*grpc.ClientConn)
+		if !keyOK || !connectionOK || key.tokenHash != tokenHash {
+			return true
+		}
+		if p.conns.CompareAndDelete(key, connection) {
+			_ = connection.Close()
+		}
+		return true
+	})
+}
+
 // parseGRPCAddr extracts host:port from a URL. Ported verbatim.
 //
 // Example: "http://unleashed.lan:37777" → "unleashed.lan:37777".

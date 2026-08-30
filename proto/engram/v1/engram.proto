@@ -37,6 +37,10 @@ service EngramService {
   // No ranking or LLM filtering is applied; the server returns SQL-backed entities only.
   rpc GetSessionStartContext(GetSessionStartContextRequest) returns (GetSessionStartContextResponse);
 
+  // GetAmbientCandidates returns bounded same-turn ambient context through the
+  // existing service. It is private to the credential-neutral legacy bridge.
+  rpc GetAmbientCandidates(GetAmbientCandidatesRequest) returns (GetAmbientCandidatesResponse);
+
   // NegotiateVersion validates MAJOR-version compatibility between client and server.
   rpc NegotiateVersion(NegotiateVersionRequest) returns (NegotiateVersionResponse);
 
@@ -158,6 +162,14 @@ message GetSessionStartContextRequest {
   // project_identity_v3 selects V3 central resolution. When present, project
   // is legacy compatibility input and MUST NOT be used for scoped access.
   ProjectIdentityV3 project_identity_v3 = 4;
+
+  // host_session_ref is the opaque host-session reference bound by the relay.
+  // Its presence selects the private bridge compatibility branch.
+  string host_session_ref = 5;
+
+  // relay_revision is the installed private relay revision. The server admits
+  // it only when the dedicated relay gate accepts this exact revision.
+  string relay_revision = 6;
 }
 
 message GetSessionStartContextResponse {
@@ -452,9 +464,28 @@ message ProjectResolutionResultV3 {
 // neither project authority nor registration authorization from the client.
 message RegisterProjectIdentityV3Request {
   ProjectIdentityV3 project_identity_v3 = 1;
+
+  // relay_revision selects the additive registration branch used only by the
+  // private bridge. An omitted value preserves existing registration behavior.
+  string relay_revision = 2;
 }
 
 // RegisterProjectIdentityV3Response returns the existing typed V3 resolution result.
 message RegisterProjectIdentityV3Response {
   ProjectResolutionResultV3 project_resolution_v3 = 1;
+}
+
+// GetAmbientCandidatesRequest contains only relay-bound callback facts. It has
+// no raw project selector: the V3 descriptor is resolved by the server.
+message GetAmbientCandidatesRequest {
+  ProjectIdentityV3 project_identity_v3 = 1;
+  string host_session_ref = 2;
+  string query_text = 3;
+  int32 limit = 4;
+  string relay_revision = 5;
+}
+
+// GetAmbientCandidatesResponse returns only bounded, untrusted ambient text.
+message GetAmbientCandidatesResponse {
+  string additional_context = 1;
 }

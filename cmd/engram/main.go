@@ -38,6 +38,7 @@ import (
 	"github.com/thebtf/engram/internal/module/lifecycle"
 	"github.com/thebtf/engram/internal/module/registry"
 	"github.com/thebtf/engram/internal/version"
+	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	muxcontrol "github.com/thebtf/mcp-mux/muxcore/control"
 	"github.com/thebtf/mcp-mux/muxcore/engine"
 	"github.com/thebtf/mcp-mux/muxcore/ipc"
@@ -959,10 +960,10 @@ func muxcoreBaseConfig() engine.Config {
 	}
 }
 
-func muxcoreDaemonConfig(disp *dispatcher.Dispatcher) engine.Config {
+func muxcoreDaemonConfig(handler muxcore.SessionHandler) engine.Config {
 	cfg := muxcoreBaseConfig()
 	cfg.Persistent = true // daemon owns durable module/background state
-	cfg.SessionHandler = disp
+	cfg.SessionHandler = handler
 	return cfg
 }
 
@@ -1089,7 +1090,8 @@ func main() {
 
 	// --- Framework wiring ------------------------------------------------
 	reg := registry.New()
-	if err := registerModules(reg); err != nil {
+	coreModule, err := registerModules(reg)
+	if err != nil {
 		logger.Error("module registration failed", "error", err)
 		os.Exit(1)
 	}
@@ -1101,6 +1103,16 @@ func main() {
 	)
 
 	disp := dispatcher.NewWithVersion(reg, logger, daemonVersion)
+	relayBaseDir, err := legacyRelayRuntimeBaseDir()
+	if err != nil {
+		logger.Error("legacy relay runtime path failed", "error", err)
+		os.Exit(1)
+	}
+	relayRuntime, err := prepareLegacyRelay(coreModule, disp, relayBaseDir)
+	if err != nil {
+		logger.Error("legacy relay preparation failed", "error", err)
+		os.Exit(1)
+	}
 	pipeline := lifecycle.New(reg, logger)
 
 	// Init context is distinct from daemon context — see design.md §3.2
@@ -1119,7 +1131,7 @@ func main() {
 	// and muxcore.ProjectLifecycle (OnProjectConnect/OnProjectDisconnect).
 	// muxcore type-asserts on the SessionHandler to detect the optional
 	// lifecycle methods — see muxcore.ProjectLifecycle docs.
-	eng, err := engine.New(muxcoreDaemonConfig(disp))
+	eng, err := engine.New(muxcoreDaemonConfig(relayRuntime.handler))
 	if err != nil {
 		logger.Error("engine.New failed", "error", err)
 		_ = pipeline.ShutdownAll(daemonCtx)
@@ -1182,6 +1194,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := relayRuntime.start(daemonCtx, expected.DaemonGeneration); err != nil {
+		_ = pipeline.ShutdownAll(daemonCtx)
+		logger.Error("legacy relay start failed", "error", err)
+		os.Exit(1)
+	}
+	defer relayRuntime.close()
+
 	// Start only after muxcore readiness so losing daemon-spawn candidates do
 	// not publish a stale PID or contend for Engram's restart control surface.
 	sockPath := control.SocketPath(dd)
@@ -1193,6 +1212,7 @@ func main() {
 		func(cmd string) string {
 			switch cmd {
 			case "graceful-restart":
+				_ = relayRuntime.close()
 				go handleGracefulRestart(logger, pipeline, disp, filepath.Join(dd, "modules"))
 				return "ACK"
 			default:
@@ -1229,6 +1249,7 @@ func main() {
 
 	if err := <-runErr; err != nil && !isExpectedContextShutdown(daemonCtx, err) {
 		logger.Error("engine.Run terminated", "error", err)
+		_ = relayRuntime.close()
 		sevBridge.Stop()
 		_ = pipeline.ShutdownAll(daemonCtx)
 		os.Exit(1)
@@ -1236,6 +1257,9 @@ func main() {
 
 	logger.Info("engram daemon shutting down")
 	sevBridge.Stop()
+	if err := relayRuntime.close(); err != nil {
+		logger.Error("legacy relay shutdown error", "error", err)
+	}
 	if err := pipeline.ShutdownAll(daemonCtx); err != nil {
 		logger.Error("lifecycle Shutdown error", "error", err)
 	}

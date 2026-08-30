@@ -22,6 +22,7 @@ import (
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/scope"
 	"github.com/thebtf/engram/internal/worker/sdk"
+	"github.com/thebtf/engram/internal/worker/sessioncompat"
 	"github.com/thebtf/engram/pkg/models"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -683,108 +684,7 @@ func compactObservationsWithLimit(observations []*models.Observation, fullCount 
 	return result
 }
 
-type sessionStartCompatibilityResponse struct {
-	Issues      []map[string]any `json:"issues"`
-	Rules       []map[string]any `json:"rules"`
-	Memories    []map[string]any `json:"memories"`
-	GeneratedAt string           `json:"generated_at"`
-}
-
-func sessionStartIssuesToMaps(issues []*pb.SessionStartIssue) []map[string]any {
-	result := make([]map[string]any, 0, len(issues))
-	for _, issue := range issues {
-		if issue == nil {
-			continue
-		}
-		entry := map[string]any{
-			"id":             issue.GetId(),
-			"title":          issue.GetTitle(),
-			"body":           issue.GetBody(),
-			"status":         issue.GetStatus(),
-			"priority":       issue.GetPriority(),
-			"type":           issue.GetType(),
-			"source_project": issue.GetSourceProject(),
-			"target_project": issue.GetTargetProject(),
-			"source_agent":   issue.GetSourceAgent(),
-			"labels":         append([]string(nil), issue.GetLabels()...),
-			"comment_count":  issue.GetCommentCount(),
-		}
-		if ts := issue.GetAcknowledgedAt(); ts != nil {
-			entry["acknowledged_at"] = ts.AsTime().UTC().Format(time.RFC3339)
-		}
-		if ts := issue.GetResolvedAt(); ts != nil {
-			entry["resolved_at"] = ts.AsTime().UTC().Format(time.RFC3339)
-		}
-		if ts := issue.GetReopenedAt(); ts != nil {
-			entry["reopened_at"] = ts.AsTime().UTC().Format(time.RFC3339)
-		}
-		if ts := issue.GetClosedAt(); ts != nil {
-			entry["closed_at"] = ts.AsTime().UTC().Format(time.RFC3339)
-		}
-		if ts := issue.GetCreatedAt(); ts != nil {
-			entry["created_at"] = ts.AsTime().UTC().Format(time.RFC3339)
-		}
-		if ts := issue.GetUpdatedAt(); ts != nil {
-			entry["updated_at"] = ts.AsTime().UTC().Format(time.RFC3339)
-		}
-		result = append(result, entry)
-	}
-	return result
-}
-
-func sessionStartRulesToMaps(rules []*pb.SessionStartRule) []map[string]any {
-	result := make([]map[string]any, 0, len(rules))
-	for _, rule := range rules {
-		if rule == nil {
-			continue
-		}
-		entry := map[string]any{
-			"id":        rule.GetId(),
-			"project":   rule.GetProject(),
-			"content":   rule.GetContent(),
-			"edited_by": rule.GetEditedBy(),
-			"priority":  rule.GetPriority(),
-			"version":   rule.GetVersion(),
-			"narrative": rule.GetContent(),
-			"title":     rule.GetContent(),
-			"facts":     []string{},
-		}
-		if ts := rule.GetCreatedAt(); ts != nil {
-			entry["created_at"] = ts.AsTime().UTC().Format(time.RFC3339)
-		}
-		if ts := rule.GetUpdatedAt(); ts != nil {
-			entry["updated_at"] = ts.AsTime().UTC().Format(time.RFC3339)
-		}
-		result = append(result, entry)
-	}
-	return result
-}
-
-func sessionStartMemoriesToMaps(memories []*pb.SessionStartMemory) []map[string]any {
-	result := make([]map[string]any, 0, len(memories))
-	for _, memory := range memories {
-		if memory == nil {
-			continue
-		}
-		entry := map[string]any{
-			"id":           memory.GetId(),
-			"project":      memory.GetProject(),
-			"content":      memory.GetContent(),
-			"tags":         append([]string(nil), memory.GetTags()...),
-			"source_agent": memory.GetSourceAgent(),
-			"edited_by":    memory.GetEditedBy(),
-			"version":      memory.GetVersion(),
-		}
-		if ts := memory.GetCreatedAt(); ts != nil {
-			entry["created_at"] = ts.AsTime().UTC().Format(time.RFC3339)
-		}
-		if ts := memory.GetUpdatedAt(); ts != nil {
-			entry["updated_at"] = ts.AsTime().UTC().Format(time.RFC3339)
-		}
-		result = append(result, entry)
-	}
-	return result
-}
+type sessionStartCompatibilityResponse = sessioncompat.Payload
 
 // handleSessionStartContextStatic godoc
 // @Summary Get static session-start context
@@ -850,6 +750,9 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if s.rejectLegacyDirectDelivery(w, r.Context(), project) {
+			return
+		}
 	}
 
 	// grpcInternalServer is set during init; guard before use.
@@ -897,54 +800,13 @@ func (s *Service) handleSessionStartContextStatic(w http.ResponseWriter, r *http
 			writeSessionStartV3HTTPError(w, errHTTPProjectIdentityResolverUnavailable)
 			return
 		}
-	}
-
-	generatedAt := ""
-	if ts := resp.GetGeneratedAt(); ts != nil {
-		generatedAt = ts.AsTime().UTC().Format(time.RFC3339)
-	}
-
-	// CR-001 (revive feedback loop): this is the PRIMARY live injection event for
-	// Claude Code. Record the injected memory IDs to injection_log and increment
-	// memories.injection_count so session-end citation detection has rows to match
-	// against. Without this, injection_log stays empty, processCitationsAsync
-	// early-returns ("no injection records found"), and injection_count/citation_count
-	// are 0 forever. Fire-and-forget, mirroring handleContextInject's legacy-path
-	// recorder. Memory IDs ONLY (not rule IDs) to keep injection_count semantics clean.
-	if sessionID != "" {
-		s.initMu.RLock()
-		injLogStore := s.injectionLogStore
-		memStore := s.memoryStore
-		s.initMu.RUnlock()
-		if injLogStore != nil {
-			ids := collectSessionStartMemoryIDs(resp.GetMemories())
-			if len(ids) > 0 {
-				capturedSessionID := sessionID
-				capturedProject := project
-				s.wg.Add(1)
-				go func() {
-					defer s.wg.Done()
-					recCtx, cancel := s.detachedContext(30 * time.Second)
-					defer cancel()
-					if err := injLogStore.Record(recCtx, capturedSessionID, capturedProject, ids); err != nil {
-						log.Warn().Err(err).Str("session_id", capturedSessionID).Msg("injection_log: session-start record failed")
-					}
-					if memStore != nil {
-						if err := memStore.BatchIncrementInjected(recCtx, ids); err != nil {
-							log.Warn().Err(err).Str("session_id", capturedSessionID).Msg("injection_count: session-start increment failed")
-						}
-					}
-				}()
-			}
+		if s.rejectLegacyDirectDelivery(w, r.Context(), project) {
+			return
 		}
 	}
 
-	writeJSON(w, sessionStartCompatibilityResponse{
-		Issues:      sessionStartIssuesToMaps(resp.GetIssues()),
-		Rules:       sessionStartRulesToMaps(resp.GetRules()),
-		Memories:    sessionStartMemoriesToMaps(resp.GetMemories()),
-		GeneratedAt: generatedAt,
-	})
+	s.CommitSessionStartDelivery(sessionID, project, resp.GetMemories())
+	writeJSON(w, sessioncompat.FromResponse(resp))
 }
 
 // detachedContext returns a timeout context for fire-and-forget background work
@@ -968,26 +830,7 @@ func (s *Service) detachedContext(timeout time.Duration) (context.Context, conte
 // without a database. Rule IDs are intentionally NOT collected here: only memory
 // IDs feed injection_count, matching handleContextInject.
 func collectSessionStartMemoryIDs(memories []*pb.SessionStartMemory) []int64 {
-	if len(memories) == 0 {
-		return nil
-	}
-	ids := make([]int64, 0, len(memories))
-	seen := make(map[int64]struct{}, len(memories))
-	for _, m := range memories {
-		if m == nil {
-			continue
-		}
-		id := m.GetId()
-		if id == 0 {
-			continue
-		}
-		if _, dup := seen[id]; dup {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
-	}
-	return ids
+	return sessioncompat.MemoryIDs(memories)
 }
 
 // grpcCodeToHTTP maps gRPC status codes to HTTP status codes for error forwarding.
@@ -1118,9 +961,12 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Resolve/register synchronously before any retrieval or tenant mutation.
-		// Identity metadata selects a namespace; bearer/principal authorization is
-		// still enforced independently by the HTTP middleware.
+		// Under legacy-direct enforcement, resolve and authorize the existing
+		// canonical project before RegisterAndResolve can create identity state or
+		// append an alias. Default-off keeps the historical registration path.
+		if s.rejectLegacyDirectDelivery(w, r.Context(), project) {
+			return
+		}
 		if s.store == nil {
 			writeProjectIdentityHTTPError(w, &gorm.ProjectIdentityError{Code: gorm.ProjectIdentityUnavailable, UpgradeAction: gorm.UpgradeActionRetryProjectRegistration, Err: fmt.Errorf("project identity database is not ready")})
 			return
@@ -1139,6 +985,9 @@ func (s *Service) handleContextInject(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	if s.rejectLegacyDirectDelivery(w, r.Context(), project) {
+		return
 	}
 
 	if identityOnly {

@@ -42,6 +42,10 @@ type sessionStartMemoryPager interface {
 // The payload is SQL-backed only: active issues, behavioral rules, recent memories,
 // plus the timestamp when the response was generated.
 func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionStartContextRequest) (*pb.GetSessionStartContextResponse, error) {
+	relayRequest, err := validateRelaySessionStart(ctx, req)
+	if err != nil {
+		return nil, err
+	}
 	project := req.GetProject()
 	var resolutionV3 *pb.ProjectResolutionResultV3
 	if identity := req.GetProjectIdentityV3(); identity != nil {
@@ -53,6 +57,13 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 		resolutionV3 = projectIdentityV3Proto(resolution)
 	} else if project == "" {
 		return nil, status.Error(codes.InvalidArgument, "project must not be empty")
+	}
+	if relayRequest {
+		if err := requireProjectServiceMatch(ctx, project); err != nil {
+			return nil, err
+		}
+	} else if err := s.requireLegacyDirectMatch(ctx, project); err != nil {
+		return nil, err
 	}
 	if req.GetMemoriesLimit() < 0 {
 		return nil, status.Error(codes.InvalidArgument, "memories_limit must be >= 0")
@@ -195,6 +206,9 @@ func (s *Server) GetSessionStartContext(ctx context.Context, req *pb.GetSessionS
 			return nil, status.Error(codes.Internal, "failed to summarize session-start memories")
 		}
 		response.MetaSummary = summary
+	}
+	if relayRequest {
+		s.commitRelaySessionStartDelivery(req.GetHostSessionRef(), project, response.GetMemories())
 	}
 	return response, nil
 }

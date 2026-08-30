@@ -25,6 +25,7 @@ const (
 	EngramService_SyncProjectState_FullMethodName          = "/engram.v1.EngramService/SyncProjectState"
 	EngramService_ProjectEvents_FullMethodName             = "/engram.v1.EngramService/ProjectEvents"
 	EngramService_GetSessionStartContext_FullMethodName    = "/engram.v1.EngramService/GetSessionStartContext"
+	EngramService_GetAmbientCandidates_FullMethodName      = "/engram.v1.EngramService/GetAmbientCandidates"
 	EngramService_NegotiateVersion_FullMethodName          = "/engram.v1.EngramService/NegotiateVersion"
 	EngramService_CodeIndexNegotiate_FullMethodName        = "/engram.v1.EngramService/CodeIndexNegotiate"
 	EngramService_CodeIndexUpload_FullMethodName           = "/engram.v1.EngramService/CodeIndexUpload"
@@ -58,6 +59,9 @@ type EngramServiceClient interface {
 	// GetSessionStartContext returns static session-start context entities for a project.
 	// No ranking or LLM filtering is applied; the server returns SQL-backed entities only.
 	GetSessionStartContext(ctx context.Context, in *GetSessionStartContextRequest, opts ...grpc.CallOption) (*GetSessionStartContextResponse, error)
+	// GetAmbientCandidates returns bounded same-turn ambient context through the
+	// existing service. It is private to the credential-neutral legacy bridge.
+	GetAmbientCandidates(ctx context.Context, in *GetAmbientCandidatesRequest, opts ...grpc.CallOption) (*GetAmbientCandidatesResponse, error)
 	// NegotiateVersion validates MAJOR-version compatibility between client and server.
 	NegotiateVersion(ctx context.Context, in *NegotiateVersionRequest, opts ...grpc.CallOption) (*NegotiateVersionResponse, error)
 	// CodeIndexNegotiate performs a delta negotiation: the client sends its full
@@ -154,6 +158,16 @@ func (c *engramServiceClient) GetSessionStartContext(ctx context.Context, in *Ge
 	return out, nil
 }
 
+func (c *engramServiceClient) GetAmbientCandidates(ctx context.Context, in *GetAmbientCandidatesRequest, opts ...grpc.CallOption) (*GetAmbientCandidatesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetAmbientCandidatesResponse)
+	err := c.cc.Invoke(ctx, EngramService_GetAmbientCandidates_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *engramServiceClient) NegotiateVersion(ctx context.Context, in *NegotiateVersionRequest, opts ...grpc.CallOption) (*NegotiateVersionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(NegotiateVersionResponse)
@@ -224,6 +238,9 @@ type EngramServiceServer interface {
 	// GetSessionStartContext returns static session-start context entities for a project.
 	// No ranking or LLM filtering is applied; the server returns SQL-backed entities only.
 	GetSessionStartContext(context.Context, *GetSessionStartContextRequest) (*GetSessionStartContextResponse, error)
+	// GetAmbientCandidates returns bounded same-turn ambient context through the
+	// existing service. It is private to the credential-neutral legacy bridge.
+	GetAmbientCandidates(context.Context, *GetAmbientCandidatesRequest) (*GetAmbientCandidatesResponse, error)
 	// NegotiateVersion validates MAJOR-version compatibility between client and server.
 	NegotiateVersion(context.Context, *NegotiateVersionRequest) (*NegotiateVersionResponse, error)
 	// CodeIndexNegotiate performs a delta negotiation: the client sends its full
@@ -268,6 +285,9 @@ func (UnimplementedEngramServiceServer) ProjectEvents(*ProjectEventsRequest, grp
 }
 func (UnimplementedEngramServiceServer) GetSessionStartContext(context.Context, *GetSessionStartContextRequest) (*GetSessionStartContextResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetSessionStartContext not implemented")
+}
+func (UnimplementedEngramServiceServer) GetAmbientCandidates(context.Context, *GetAmbientCandidatesRequest) (*GetAmbientCandidatesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetAmbientCandidates not implemented")
 }
 func (UnimplementedEngramServiceServer) NegotiateVersion(context.Context, *NegotiateVersionRequest) (*NegotiateVersionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method NegotiateVersion not implemented")
@@ -403,6 +423,24 @@ func _EngramService_GetSessionStartContext_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EngramService_GetAmbientCandidates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAmbientCandidatesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServiceServer).GetAmbientCandidates(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngramService_GetAmbientCandidates_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServiceServer).GetAmbientCandidates(ctx, req.(*GetAmbientCandidatesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _EngramService_NegotiateVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(NegotiateVersionRequest)
 	if err := dec(in); err != nil {
@@ -490,6 +528,10 @@ var EngramService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetSessionStartContext",
 			Handler:    _EngramService_GetSessionStartContext_Handler,
+		},
+		{
+			MethodName: "GetAmbientCandidates",
+			Handler:    _EngramService_GetAmbientCandidates_Handler,
 		},
 		{
 			MethodName: "NegotiateVersion",

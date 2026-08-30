@@ -373,14 +373,18 @@ func bearerOutgoingContext(token string) context.Context {
 	return metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
 }
 
-func TestRegisterProjectIdentityV3ProtoIsDescriptorOnly(t *testing.T) {
+func TestRegisterProjectIdentityV3ProtoIsAdditive(t *testing.T) {
 	request := (&pb.RegisterProjectIdentityV3Request{}).ProtoReflect().Descriptor()
-	if request.Fields().Len() != 1 {
-		t.Fatalf("registration request fields=%d, want 1", request.Fields().Len())
+	if request.Fields().Len() != 2 {
+		t.Fatalf("registration request fields=%d, want 2", request.Fields().Len())
 	}
 	field := request.Fields().ByName("project_identity_v3")
 	if field == nil || field.Number() != 1 || field.Message().FullName() != "engram.v1.ProjectIdentityV3" {
 		t.Fatalf("registration request descriptor=%v", request)
+	}
+	field = request.Fields().ByName("relay_revision")
+	if field == nil || field.Number() != 2 || field.Kind().String() != "string" {
+		t.Fatalf("registration relay revision descriptor=%v", request)
 	}
 	response := (&pb.RegisterProjectIdentityV3Response{}).ProtoReflect().Descriptor()
 	if response.Fields().Len() != 1 {

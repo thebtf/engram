@@ -57,6 +57,7 @@ import (
 	"github.com/thebtf/engram/internal/telemetry"
 	"github.com/thebtf/engram/internal/update"
 	"github.com/thebtf/engram/internal/watcher"
+	"github.com/thebtf/engram/internal/worker/ambientcore"
 	"github.com/thebtf/engram/internal/worker/projectevents"
 	"github.com/thebtf/engram/internal/worker/reaper"
 	"github.com/thebtf/engram/internal/worker/sdk"
@@ -147,18 +148,19 @@ type Service struct {
 	citationLogStore                 *gorm.CitationLogStore
 	injectionTracker                 *injection.Tracker
 	injectionLogStore                *gorm.InjectionLogStore
-	candidateStore                   *gorm.CandidateStore         // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	candidateQueueEnabled            bool                         // cached at startup; handlers must not read env per request
-	graphEnabled                     bool                         // cached at startup; graph REST handlers must not read env per request
-	temporalTruthEnabled             bool                         // cached at startup; temporal truth REST handlers must not read env per request
-	candidateReviewStoreSeam         candidateReviewStore         // test seam for REST candidate queue handlers
-	candidateReviewSnapshotStoreSeam candidateReviewSnapshotStore // test seam for candidate pre-action snapshots
-	graphEdgeStoreSeam               graphEdgeStore               // test seam for graph REST handlers
-	graphNodeStoreSeam               graphNodeStore               // test seam for graph REST handlers
-	snapshotStore                    *gorm.SnapshotStore          // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	writelintTokenStore              writelint.TokenStore         // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	redactionRules                   []redaction.CompiledRule     // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
-	transcriptStore                  *gorm.TranscriptStore        // T003: session transcript persistence (flag-gated via ENGRAM_CRYSTALLIZATION_ENABLED)
+	candidateStore                   *gorm.CandidateStore                          // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	candidateQueueEnabled            bool                                          // cached at startup; handlers must not read env per request
+	graphEnabled                     bool                                          // cached at startup; graph REST handlers must not read env per request
+	temporalTruthEnabled             bool                                          // cached at startup; temporal truth REST handlers must not read env per request
+	candidateReviewStoreSeam         candidateReviewStore                          // test seam for REST candidate queue handlers
+	candidateReviewSnapshotStoreSeam candidateReviewSnapshotStore                  // test seam for candidate pre-action snapshots
+	graphEdgeStoreSeam               graphEdgeStore                                // test seam for graph REST handlers
+	graphNodeStoreSeam               graphNodeStore                                // test seam for graph REST handlers
+	snapshotStore                    *gorm.SnapshotStore                           // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	legacyDirectProjectResolver      func(context.Context, string) (string, error) // test seam; production uses strict DB lookup
+	writelintTokenStore              writelint.TokenStore                          // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	redactionRules                   []redaction.CompiledRule                      // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
+	transcriptStore                  *gorm.TranscriptStore                         // T003: session transcript persistence (flag-gated via ENGRAM_CRYSTALLIZATION_ENABLED)
 	// transcriptCreatorOverride is a test seam: when non-nil it replaces
 	// transcriptStore in the handleSessionEnd persistence goroutine, letting unit
 	// tests assert the real handler path (redact → Create) without a live DB.
@@ -1283,6 +1285,13 @@ func (s *Service) initializeAsync() {
 	grpcSrv, grpcInternalSrv := grpcserver.New(adapter, grpcValidator)
 	grpcInternalSrv.SetDB(store.DB)
 	grpcInternalSrv.SetBus(s.eventBus)
+	grpcInternalSrv.SetAmbientDependencies(ambientcore.Dependencies{
+		Registry: s.cognitiveRegistry,
+		Meter:    s.cognitiveMeter,
+		Queue:    s.cognitiveQueue,
+		Flags:    s.flagConfig,
+	})
+	grpcInternalSrv.SetSessionStartDeliveryCommitter(s)
 	s.initMu.Lock()
 	s.grpcServer = grpcSrv
 	s.grpcInternalServer = grpcInternalSrv

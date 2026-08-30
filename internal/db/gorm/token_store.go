@@ -21,13 +21,21 @@ func NewTokenStore(store *Store) *TokenStore {
 }
 
 // Create stores a new API token record.
-func (s *TokenStore) Create(ctx context.Context, name, tokenHash, tokenPrefix, scope string) (*APIToken, error) {
-	return s.CreateWithPrincipal(ctx, name, tokenHash, tokenPrefix, scope, "", "")
+func (s *TokenStore) Create(ctx context.Context, name, tokenHash, tokenPrefix, scope string, expiresAt ...*time.Time) (*APIToken, error) {
+	return s.CreateWithPrincipal(ctx, name, tokenHash, tokenPrefix, scope, "", "", expiresAt...)
 }
 
 // CreateWithPrincipal stores a new API token record with optional principal
 // metadata. Empty principal preserves legacy keycard semantics.
-func (s *TokenStore) CreateWithPrincipal(ctx context.Context, name, tokenHash, tokenPrefix, scope, principal, principalKind string) (*APIToken, error) {
+func (s *TokenStore) CreateWithPrincipal(ctx context.Context, name, tokenHash, tokenPrefix, scope, principal, principalKind string, expiresAt ...*time.Time) (*APIToken, error) {
+	if len(expiresAt) > 1 {
+		return nil, fmt.Errorf("invalid_expires_at: at most one expiry is allowed")
+	}
+	var expiry *time.Time
+	if len(expiresAt) == 1 && expiresAt[0] != nil {
+		value := expiresAt[0].UTC()
+		expiry = &value
+	}
 	principal = strings.TrimSpace(principal)
 	principalKind = strings.TrimSpace(principalKind)
 	if principal == "" && principalKind != "" {
@@ -43,6 +51,7 @@ func (s *TokenStore) CreateWithPrincipal(ctx context.Context, name, tokenHash, t
 		Scope:         scope,
 		Principal:     principal,
 		PrincipalKind: principalKind,
+		ExpiresAt:     expiry,
 	}
 
 	if err := s.db.WithContext(ctx).Create(token).Error; err != nil {

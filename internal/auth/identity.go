@@ -3,6 +3,8 @@
 // source of truth for token-based authentication across HTTP and gRPC transports.
 package auth
 
+import "time"
+
 // Source identifies the authentication path that produced an Identity. It is set
 // by the validator (for header/Bearer paths) or by middleware directly (for
 // session-cookie / forward-auth paths).
@@ -93,6 +95,10 @@ type Identity struct {
 	// PrincipalKind classifies Principal when Principal is non-empty. Empty when
 	// no principal is assigned.
 	PrincipalKind PrincipalKind
+
+	// ExpiresAt is copied from api_tokens.expires_at for client keycards. Nil
+	// preserves the legacy non-expiring keycard behavior.
+	ExpiresAt *time.Time
 }
 
 // Admin returns an Identity for a successful master-token match.
@@ -111,18 +117,30 @@ func Client(scope string, keycardID string) Identity {
 // with optional principal metadata. Empty principal keeps the legacy identity
 // shape; non-empty principal with an empty kind defaults to "human".
 func ClientWithPrincipal(scope string, keycardID string, principal string, principalKind PrincipalKind) Identity {
+	return ClientWithPrincipalExpiry(scope, keycardID, principal, principalKind, nil)
+}
+
+// ClientWithPrincipalExpiry returns a client identity with an optional copied
+// expiry. The copy keeps Identity value-like even when its source token model
+// is later reused or mutated by a caller.
+func ClientWithPrincipalExpiry(scope string, keycardID string, principal string, principalKind PrincipalKind, expiresAt *time.Time) Identity {
 	if principal == "" {
 		principalKind = ""
 	} else if principalKind == "" {
 		principalKind = PrincipalKindHuman
 	}
-	return Identity{
+	identity := Identity{
 		Role:          Role(scope),
 		Source:        SourceClient,
 		KeycardID:     keycardID,
 		Principal:     principal,
 		PrincipalKind: principalKind,
 	}
+	if expiresAt != nil {
+		expiry := expiresAt.UTC()
+		identity.ExpiresAt = &expiry
+	}
+	return identity
 }
 
 // Session returns an Identity for a successful session-cookie authentication.

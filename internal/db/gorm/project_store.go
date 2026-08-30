@@ -714,3 +714,26 @@ func ResolveProjectID(ctx context.Context, db *gorm.DB, projectID string) string
 	}
 	return canonicalID
 }
+
+// ResolveProjectIDStrict resolves one canonical project or legacy alias without
+// mutation. It fails closed on missing or ambiguous rows and is used by
+// credential-class enforcement where returning the caller input would turn a
+// selector into authority.
+func ResolveProjectIDStrict(ctx context.Context, db *gorm.DB, projectID string) (string, error) {
+	if db == nil || strings.TrimSpace(projectID) != projectID || projectID == "" {
+		return "", fmt.Errorf("project identity unavailable")
+	}
+	var canonicalIDs []string
+	if err := db.WithContext(ctx).
+		Raw(`SELECT id FROM projects
+			WHERE removed_at IS NULL
+			  AND (id = ? OR COALESCE(legacy_ids, ARRAY[]::TEXT[]) @> ARRAY[?]::TEXT[])
+			LIMIT 2`, projectID, projectID).
+		Scan(&canonicalIDs).Error; err != nil {
+		return "", fmt.Errorf("resolve canonical project: %w", err)
+	}
+	if len(canonicalIDs) != 1 || canonicalIDs[0] == "" {
+		return "", fmt.Errorf("project identity is missing or ambiguous")
+	}
+	return canonicalIDs[0], nil
+}
