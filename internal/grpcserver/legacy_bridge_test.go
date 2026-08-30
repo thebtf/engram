@@ -157,6 +157,9 @@ func TestGenericGRPCRejectsEveryHAPCredentialClass(t *testing.T) {
 	})
 	require.Nil(t, response)
 	require.Equal(t, codes.PermissionDenied, status.Code(err))
+	negotiated, err := server.NegotiateVersion(auth.WithIdentity(context.Background(), registration), &pb.NegotiateVersionRequest{ClientVersion: "v1.0.0"})
+	require.Nil(t, negotiated)
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
 
 	future := time.Now().UTC().Add(time.Hour)
 	legacy := auth.ClientWithPrincipalExpiry("read-write", "legacy-keycard", auth.LegacyDirectPrincipal(grpcV3ProjectKey), auth.PrincipalKindAgent, &future)

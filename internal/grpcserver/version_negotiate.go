@@ -13,7 +13,11 @@ import (
 
 // NegotiateVersion validates MAJOR-version compatibility between a client and the server.
 // Versions may optionally start with a leading "v" and must include at least a major segment.
-func (s *Server) NegotiateVersion(_ context.Context, req *pb.NegotiateVersionRequest) (*pb.NegotiateVersionResponse, error) {
+func (s *Server) NegotiateVersion(ctx context.Context, req *pb.NegotiateVersionRequest) (*pb.NegotiateVersionResponse, error) {
+	if err := rejectHAPCredentialWithoutProject(ctx); err != nil {
+		return nil, err
+	}
+
 	if req.GetClientVersion() == "" {
 		return nil, status.Error(codes.InvalidArgument, "client_version must not be empty")
 	}
