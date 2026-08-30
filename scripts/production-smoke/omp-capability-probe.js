@@ -1809,6 +1809,11 @@ function randomLoopbackPort(deps) {
   });
 }
 
+function drainChildOutput(child, { stdout = true, stderr = true } = {}) {
+  if (stdout && typeof child?.stdout?.resume === "function") child.stdout.resume();
+  if (stderr && typeof child?.stderr?.resume === "function") child.stderr.resume();
+}
+
 function scratchServerEnvironment(serverRoot, port, dsn, adminToken, deps) {
   return childEnvironment(deps.env, {
     HOME: serverRoot,
@@ -1838,6 +1843,7 @@ async function startServer(options, matrix, dsn, root, deps) {
   const adminToken = `engram_${deps.randomBytes(16).toString("hex")}`;
   const env = scratchServerEnvironment(serverRoot, port, dsn, adminToken, deps);
   const child = deps.spawn(matrix.candidate_server_path, [], { cwd: options.cwd, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: deps.platform !== "win32" });
+  drainChildOutput(child);
   try {
     await waitForTcpHealth({ host: "127.0.0.1", port }, options.timeouts.startup_timeout_ms, deps);
   } catch (error) {
@@ -1892,6 +1898,7 @@ async function startDaemon(runtime, scenarioRoot, variant, deps) {
     additions.ENGRAM_HAP_01B_ADAPTER_SHA256 = runtime.matrix.candidate.adapter_sha256;
   }
   const child = deps.spawn(binary, ["--muxcore-daemon"], { cwd: runtime.options.cwd, env: { ...env, ...additions }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: deps.platform !== "win32" });
+  drainChildOutput(child);
   const locatorPath = deps.path.join(env.LOCALAPPDATA, "engram", "run", "hap-01b", RELAY_LOCATOR_NAME);
   try {
     const locator = candidate ? await waitForLocator(locatorPath, runtime.options, deps) : null;
@@ -2043,6 +2050,7 @@ async function openMcpShim(runtime, plugin, scenarioID, deps) {
     ENGRAM_CLIENT_INSTANCE_ID: makeDescriptor(runtime, scenarioID, deps).client_instance_id,
   };
   const child = deps.spawn("node", [deps.path.join(plugin.plugin_root, "scripts", "run-engram.js")], { cwd: plugin.plugin_root, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: deps.platform !== "win32" });
+  drainChildOutput(child, { stdout: false, stderr: true });
   try {
     const send = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
     const initializePending = waitForMcpResponse(child, 1, runtime.options.timeouts.startup_timeout_ms, deps);
@@ -2749,6 +2757,7 @@ module.exports = {
   createExclusiveDirectory,
   createRelayTap,
   createServerTap,
+  drainChildOutput,
   directoryTreeDigest,
   inspectArtifactMatrix,
   main,

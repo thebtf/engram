@@ -23,6 +23,7 @@ const {
   createRelayTap,
   extractArchive,
   createServerTap,
+  drainChildOutput,
   directoryTreeDigest,
   inspectArtifactMatrix,
   parseArgs,
@@ -396,6 +397,21 @@ test("scratch server uses live worker host and port variables", () => {
   assert.equal(environment.ENGRAM_LISTEN_ADDR, undefined);
   assert.equal(environment.GITHUB_TOKEN, undefined);
   assert.equal(environment.DATABASE_DSN, "postgres://fixture");
+});
+
+test("long-lived child logs are drained without consuming MCP stdout", () => {
+  let stdoutResumes = 0;
+  let stderrResumes = 0;
+  const child = {
+    stdout: { resume: () => { stdoutResumes += 1; } },
+    stderr: { resume: () => { stderrResumes += 1; } },
+  };
+  drainChildOutput(child);
+  assert.equal(stdoutResumes, 1);
+  assert.equal(stderrResumes, 1);
+  drainChildOutput(child, { stdout: false, stderr: true });
+  assert.equal(stdoutResumes, 1);
+  assert.equal(stderrResumes, 2);
 });
 
 test("scratch directory creation rejects an intermediate symbolic link or junction", (t) => {
