@@ -41,6 +41,7 @@ const {
   scratchOmpTurnEnvironment,
   scratchPluginDataEnvironment,
   stablePostgresProbeCount,
+  telemetryDelta,
   scenarioObservation,
   writeScenarioProjectAnchor,
   runProbe,
@@ -879,6 +880,13 @@ test("runProbe cleans only its owned scratch root and writes a record from injec
   assert.equal(fs.existsSync(options.scratch_dir), false);
   assert.equal(fs.existsSync(path.join(options.evidence_dir, "record.json")), true);
   assert.equal(fs.existsSync(path.join(options.evidence_dir, "redacted-observations.json")), true);
+});
+
+test("telemetry delta counts both durable session-start writes without inventing ambient persistence", () => {
+  const before = { session_start_attempts: 3, target_memory_injection_count: 7 };
+  const after = { session_start_attempts: 4, target_memory_injection_count: 8 };
+  assert.equal(telemetryDelta(before, after), 2);
+  assert.equal(telemetryDelta(after, before), 0);
 });
 
 test("fixture snapshots are closed and probe source contains no direct REST HAP fallback", (t) => {

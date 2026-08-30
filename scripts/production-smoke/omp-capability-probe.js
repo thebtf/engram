@@ -2388,7 +2388,9 @@ async function openRelayScenario(runtime, scenarioID, daemonVariant, pluginVaria
 }
 
 function telemetryDelta(before, after) {
-  return Math.max(0, after.target_memory_injection_count - before.target_memory_injection_count);
+  const sessionStartAttempts = Math.max(0, after.session_start_attempts - before.session_start_attempts);
+  const targetMemoryInjections = Math.max(0, after.target_memory_injection_count - before.target_memory_injection_count);
+  return sessionStartAttempts + targetMemoryInjections;
 }
 
 async function executeNewRelayTurn(runtime, id, mode, deps) {
@@ -3005,6 +3007,7 @@ module.exports = {
   runScenario,
   turnIsComplete,
   sessionTranscriptProjection,
+  telemetryDelta,
   snapshotActiveProfile,
   scratchServerEnvironment,
   scratchDaemonEnvironment,
