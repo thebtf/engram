@@ -1772,6 +1772,23 @@ async function initializeScratchWorktree(options, deps) {
   return muxcoreProjectID(options.scratch_dir, deps);
 }
 
+
+/**
+  * Stage the repository anchor in the scratch Git index.
+  *
+  * Engram's V3 repository resolver intentionally accepts only tracked anchors.
+  * Staging the run-owned file satisfies that security contract without creating
+  * a commit, touching user Git state, or weakening production validation.
+  */
+async function trackScratchRepositoryAnchor(options, deps) {
+  requireProcessSuccess(await runProcess({
+    command: "git",
+    args: ["-C", options.scratch_dir, "add", "--", ".engram-project"],
+    cwd: options.cwd,
+    env: childEnvironment(deps.env, {}),
+    timeout_ms: options.timeouts.startup_timeout_ms,
+  }, deps), "SCRATCH_PROJECT_INVALID", "scratch repository anchor tracking");
+}
 function fixtureRequest(options, deps, legacyProjectID) {
   const uuid = deps.randomUUID;
   if (typeof legacyProjectID !== "string" || !/^[a-f0-9]{16}$/.test(legacyProjectID)) fail("FIXTURE_REQUEST_INVALID", "muxcore project identity is invalid");
@@ -2702,6 +2719,7 @@ async function createRuntime(options, matrix, deps) {
     const secretsFile = deps.path.join(root, "keycards.json");
     const seed = fixtureRequest(options, deps, legacyProjectID);
     writeScenarioProjectAnchor({ seed }, options.scratch_dir, deps, "repository");
+    await trackScratchRepositoryAnchor(options, deps);
     writeSecretText(dsnFile, postgres.dsn, deps);
     writeSecretJson(seedRequestFile, seed, deps);
     await invokeFixture("seed", [
@@ -2976,6 +2994,7 @@ module.exports = {
   seedInstalledClientObject,
   writeScenarioProjectAnchor,
   initializeScratchWorktree,
+  trackScratchRepositoryAnchor,
   muxcoreProjectID,
   bindPluginDaemonNamespace,
   ompTurnArguments,

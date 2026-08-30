@@ -27,6 +27,7 @@ const {
   drainChildOutput,
   directoryTreeDigest,
   initializeScratchWorktree,
+  trackScratchRepositoryAnchor,
   muxcoreProjectID,
   ompTurnArguments,
   inspectArtifactMatrix,
@@ -611,6 +612,11 @@ test("scratch worktree produces the muxcore project identifier", async (t) => {
   assert.equal(projectID, digest(canonical).slice(0, 16));
   assert.equal(projectID, muxcoreProjectID(scratch, deps));
   assert.equal(fs.lstatSync(path.join(scratch, ".git")).isDirectory(), true);
+  const runtime = { seed: { anchor_project_id: "11111111-1111-4111-8111-111111111111" } };
+  writeScenarioProjectAnchor(runtime, scratch, deps, "repository");
+  await trackScratchRepositoryAnchor(options, deps);
+  const tracked = spawnSync("git", ["-C", scratch, "ls-files", "--error-unmatch", "--", ".engram-project"], { encoding: "utf8", windowsHide: true });
+  assert.equal(tracked.status, 0, tracked.stderr);
 });
 
 
