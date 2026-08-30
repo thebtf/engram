@@ -26,6 +26,7 @@ const {
   createServerTap,
   drainChildOutput,
   directoryTreeDigest,
+  ompTurnArguments,
   inspectArtifactMatrix,
   parseArgs,
   parseFixtureSnapshot,
@@ -520,6 +521,14 @@ test("OMP plugin children share the elected scratch daemon namespace", () => {
   assert.equal(bound.env.TMPDIR, "daemon-tmpdir");
   assert.equal(bound.env.ENGRAM_DATA_DIR, "daemon-data");
   assert.equal(Object.isFrozen(bound.env), true);
+});
+
+test("OMP turn keeps plugin MCP startup enabled", () => {
+  const args = ompTurnArguments({ options: { scratch_profile: "scratch" } }, "session-dir");
+  assert.equal(args.includes("--no-tools"), false);
+  assert.equal(args.includes("--no-lsp"), true);
+  assert.equal(args.includes("--extension"), true);
+  assert.equal(args.includes("-p"), true);
 });
 
 test("scratch plugin data stays outside the installed plugin link", (t) => {

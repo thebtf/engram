@@ -2029,6 +2029,18 @@ async function linkScratchPlugin(runtime, scenarioRoot, pluginRoot, mode, deps) 
   return Object.freeze({ env: pluginDataBinding.env, profile_root: profileRoot, plugin_root: installed.installPath, plugin_data: pluginDataBinding.pluginData, config_path: configPath, mode });
 }
 
+function ompTurnArguments(runtime, sessionDirectory) {
+  return [
+    "--profile", runtime.options.scratch_profile,
+    "--session-dir", sessionDirectory,
+    "--no-lsp",
+    "--no-title",
+    "--model", MODEL_SELECTOR,
+    "--extension", OBSERVER_FILE,
+    "-p", `Reply exactly ${MODEL_SENTINEL}.`,
+  ];
+}
+
 async function runOmpTurn(runtime, scenarioRoot, plugin, directCredentials, deps) {
   const observerPath = deps.path.join(scenarioRoot, "observer.ndjson");
   const sessionDirectory = deps.path.join(scenarioRoot, "session");
@@ -2047,16 +2059,7 @@ async function runOmpTurn(runtime, scenarioRoot, plugin, directCredentials, deps
     env.ENGRAM_URL = runtime.server_tap_address.url;
     env.ENGRAM_TOKEN = runtime.secrets.legacy_direct_token;
   }
-  const args = [
-    "--profile", runtime.options.scratch_profile,
-    "--session-dir", sessionDirectory,
-    "--no-tools",
-    "--no-lsp",
-    "--no-title",
-    "--model", MODEL_SELECTOR,
-    "--extension", OBSERVER_FILE,
-    "-p", `Reply exactly ${MODEL_SENTINEL}.`,
-  ];
+  const args = ompTurnArguments(runtime, sessionDirectory);
   const child = await runBoundedChild({ command: runtime.options.omp_command, args, cwd: workspace, env, timeout_ms: runtime.options.timeouts.turn_timeout_ms }, MODEL_SENTINEL, deps);
   const observer = observerProjection(observerPath, deps);
   const transcript = sessionTranscriptProjection(sessionDirectory, deps);
@@ -2841,6 +2844,7 @@ module.exports = {
   runProbe,
   scratchPluginDataEnvironment,
   bindPluginDaemonNamespace,
+  ompTurnArguments,
   runScenario,
   turnIsComplete,
   sessionTranscriptProjection,
