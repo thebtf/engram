@@ -863,3 +863,34 @@ func TestContract_ToolsCall_UnknownTool_Returns32601(t *testing.T) {
 		t.Errorf("error.code: got %d, want -32601", got.Error.Code)
 	}
 }
+
+func TestHAP01SourceDiagnostic_LocalMCPInitializeDoesNotReachBackend(t *testing.T) {
+	t.Parallel()
+
+	srv := &mockEngramServer{initResp: &pb.InitializeResponse{ServerName: "fixture-server", ServerVersion: "fixture-version"}}
+	grpcAddr := startMockGRPC(t, srv)
+	disp, _, project := buildContractDispatcher(t, grpcAddr)
+	response, err := disp.HandleRequest(context.Background(), project, jsonrpcInitReq(1))
+	if err != nil {
+		t.Fatalf("HandleRequest: %v", err)
+	}
+	var projection struct {
+		Result struct {
+			ServerInfo struct {
+				Name string `json:"name"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response, &projection); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if projection.Result.ServerInfo.Name != "engram" {
+		t.Fatalf("local initialize server name = %q, want engram", projection.Result.ServerInfo.Name)
+	}
+	srv.mu.Lock()
+	initCalls := srv.initCalls
+	srv.mu.Unlock()
+	if initCalls != 0 {
+		t.Fatalf("local MCP initialize reached backend %d times", initCalls)
+	}
+}

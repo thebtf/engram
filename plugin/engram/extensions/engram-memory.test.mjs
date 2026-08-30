@@ -722,3 +722,11 @@ test('ambientMessage fails open within its shared budget when async config readi
     restore();
   }
 });
+
+test('HAP-01 source diagnostic labels callback wiring as non-installed evidence', () => {
+  const source = fs.readFileSync(extensionPath, 'utf8');
+  assert.match(source, /pi\.on\('session_start'/);
+  assert.match(source, /pi\.on\('before_agent_start'/);
+  assert.match(source, /\/api\/context\/session-start/);
+  assert.match(source, /token: config\.token/);
+});

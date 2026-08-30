@@ -563,3 +563,10 @@ function restoreEnv(key, value) {
 function expandMcpArgsForTest(args, pluginRoot) {
   return args.map((arg) => arg.replace("${CLAUDE_PLUGIN_ROOT}", pluginRoot.replaceAll("\\", "/")));
 }
+
+test("HAP-01 source diagnostic keeps launcher credential resolution out of installed proof", () => {
+  const source = fs.readFileSync(path.join(__dirname, "run-engram.js"), "utf8");
+  assert.match(source, /"ENGRAM_TOKEN"/);
+  assert.match(source, /configFile\.api_token/);
+  assert.match(source, /process\.env\.ENGRAM_TOKEN = token/);
+});
