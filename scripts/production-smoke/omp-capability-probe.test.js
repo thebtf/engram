@@ -28,6 +28,7 @@ const {
   inspectArtifactMatrix,
   parseArgs,
   parseFixtureSnapshot,
+  resolveLinkedPluginList,
   runBoundedChild,
   scratchServerEnvironment,
   stablePostgresProbeCount,
@@ -439,6 +440,25 @@ test("scratch directory creation rejects an intermediate symbolic link or juncti
   }
   assert.throws(() => createExclusiveDirectory(path.join(link, "escaped"), baseDeps()), ProbeError);
   assert.equal(fs.existsSync(path.join(target, "escaped")), false);
+});
+
+test("resolves the exact installed OMP plugin tree from plugin list JSON", (t) => {
+  const root = temporaryRoot(t);
+  const profileRoot = path.join(root, "profile");
+  const installed = path.join(profileRoot, "home", ".omp", "profiles", "scratch", "plugins", "node_modules", "engram");
+  fs.mkdirSync(path.join(installed, "extensions"), { recursive: true });
+  writeJson(path.join(installed, "package.json"), { name: "engram", version: "6.48.0", omp: { extensions: ["./extensions/engram-memory.mjs"] } });
+  fs.writeFileSync(path.join(installed, "extensions", "engram-memory.mjs"), "entry");
+  const expectedTree = directoryTreeDigest(installed, baseDeps()).sha256;
+  const listed = {
+    npm: [{ name: "engram", version: "6.48.0", path: installed, manifest: { extensions: ["./extensions/engram-memory.mjs"], version: "6.48.0" }, enabledFeatures: null, enabled: true }],
+    marketplace: [],
+  };
+  const resolved = resolveLinkedPluginList(listed, profileRoot, "6.48.0", expectedTree, baseDeps());
+  assert.equal(resolved.installPath, installed);
+  const outside = structuredClone(listed);
+  outside.npm[0].path = path.join(root, "outside");
+  assert.throws(() => resolveLinkedPluginList(outside, profileRoot, "6.48.0", expectedTree, baseDeps()), ProbeError);
 });
 
 

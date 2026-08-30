@@ -916,6 +916,27 @@ function resolveProfileFiles(profile, deps, env = deps.env) {
   throw lastError || new ProbeError("PROFILE_REGISTRY_UNAVAILABLE", "scratch profile registry could not be resolved");
 }
 
+function resolveLinkedPluginList(value, profileRoot, expectedVersion, expectedTree, deps) {
+  requireExactKeys(value, ["npm", "marketplace"], "OMP plugin list", "OMP_PLUGIN_LIST_INVALID");
+  if (!Array.isArray(value.npm) || !Array.isArray(value.marketplace)) fail("OMP_PLUGIN_LIST_INVALID", "OMP plugin list collections are invalid");
+  const entries = [...value.npm, ...value.marketplace].filter((entry) => isPlainObject(entry) && entry.name === "engram" && entry.enabled !== false);
+  if (entries.length !== 1) fail("OMP_PLUGIN_LIST_INVALID", "OMP plugin list must select exactly one enabled engram plugin");
+  const selected = entries[0];
+  if (selected.version !== expectedVersion || !SEMVER.test(selected.version) || typeof selected.path !== "string" || !selected.path) {
+    fail("OMP_PLUGIN_LIST_INVALID", "OMP plugin list selected an invalid engram identity");
+  }
+  requireExactKeys(selected.manifest, ["extensions", "version"], "OMP plugin manifest", "OMP_PLUGIN_LIST_INVALID");
+  if (selected.manifest.version !== expectedVersion || !Array.isArray(selected.manifest.extensions) ||
+    selected.manifest.extensions.length !== 1 || selected.manifest.extensions[0] !== "./extensions/engram-memory.mjs") {
+    fail("OMP_PLUGIN_LIST_INVALID", "OMP plugin manifest differs from the installed extension contract");
+  }
+  const installPath = deps.path.resolve(selected.path);
+  if (!isInside(profileRoot, installPath, deps.path)) fail("OMP_PLUGIN_LIST_INVALID", "OMP plugin install path escapes the scratch profile");
+  const tree = directoryTreeDigest(installPath, deps);
+  if (tree.sha256 !== expectedTree) fail("OMP_PLUGIN_LIST_INVALID", "OMP plugin install tree differs from the frozen source bytes");
+  return Object.freeze({ version: selected.version, installPath, dataPath: "", configPath: "", install_tree_sha256: tree.sha256 });
+}
+
 function resolvePluginData(pluginRoot, entry, scratchRoot, deps) {
   if (entry.dataPath) return deps.path.resolve(entry.dataPath);
   const conventional = deps.path.join(scratchRoot, "plugins", "data", "engram-engram");
@@ -1959,14 +1980,16 @@ async function linkScratchPlugin(runtime, scenarioRoot, pluginRoot, mode, deps) 
     env,
     timeout_ms: runtime.options.timeouts.startup_timeout_ms,
   }, deps), "OMP_PLUGIN_LINK_FAILED", "scratch OMP plugin link");
-  const profileFiles = resolveProfileFiles(runtime.options.scratch_profile, deps, env);
-  if (!samePath(profileFiles.registryEntry.installPath, installRoot, deps.path)) fail("OMP_PLUGIN_LINK_FAILED", "scratch OMP profile resolved a foreign plugin root");
-  const pluginData = resolvePluginData(installRoot, profileFiles.registryEntry, deps.path.join(profileRoot, "home", ".omp"), deps);
+  const listOutput = await commandOutput(runtime.options.omp_command, ["--profile", runtime.options.scratch_profile, "plugin", "list", "--json"], runtime.options.cwd, env, runtime.options.timeouts.startup_timeout_ms, deps, "OMP_PLUGIN_LIST_INVALID", "scratch OMP plugin list");
+  const expectedVersion = packagePayload(pluginRoot, deps).version;
+  const expectedTree = mode === "new" ? runtime.matrix.artifact.install_tree_sha256 : runtime.matrix.artifact.baseline_plugin_install_tree_sha256;
+  const installed = resolveLinkedPluginList(parseJson(Buffer.from(listOutput), "OMP_PLUGIN_LIST_INVALID"), profileRoot, expectedVersion, expectedTree, deps);
+  const pluginData = resolvePluginData(installed.installPath, installed, deps.path.join(profileRoot, "home", ".omp"), deps);
   if (!isInside(profileRoot, pluginData, deps.path)) fail("PLUGIN_DATA_UNSAFE", "scratch plugin data root escapes the scenario profile");
   ensureDirectory(pluginData, deps, "PLUGIN_DATA_UNSAFE");
   const configPath = deps.path.join(pluginData, "config.json");
   writeSecretJson(configPath, scratchPluginConfig(runtime, mode), deps);
-  return Object.freeze({ env, profile_root: profileRoot, plugin_root: installRoot, plugin_data: pluginData, config_path: configPath, mode });
+  return Object.freeze({ env, profile_root: profileRoot, plugin_root: installed.installPath, plugin_data: pluginData, config_path: configPath, mode });
 }
 
 async function runOmpTurn(runtime, scenarioRoot, plugin, directCredentials, deps) {
@@ -2791,4 +2814,5 @@ module.exports = {
   writeJsonExclusive,
   stablePostgresProbeCount,
   extractArchive,
+  resolveLinkedPluginList,
 };
