@@ -2121,18 +2121,32 @@ function ompTurnArguments(runtime, sessionDirectory) {
   ];
 }
 
+/**
+  * Write the same V3 directory anchor at every cwd used by the scenario.
+  *
+  * OMP launches the Engram MCP wrapper from the linked package directory, while
+  * the model turn runs from `workspace/`. A parent anchor lets both descendants
+  * resolve the fixture's authorized anchor project without mutating the frozen
+  * plugin package or relying on a hashed fallback project identifier.
+  */
+function writeScenarioProjectAnchor(runtime, directory, deps) {
+  const anchorPath = deps.path.join(directory, ".engram-project");
+  writeSecretJson(anchorPath, {
+    version: 3,
+    project_id: runtime.seed.anchor_project_id,
+    name: "hap-01c",
+    scope: "directory",
+  }, deps);
+  return anchorPath;
+}
+
 async function runOmpTurn(runtime, scenarioRoot, plugin, directCredentials, deps) {
   const observerPath = deps.path.join(scenarioRoot, "observer.ndjson");
   const sessionDirectory = deps.path.join(scenarioRoot, "session");
   createExclusiveDirectory(sessionDirectory, deps);
   const workspace = deps.path.join(scenarioRoot, "workspace");
   createExclusiveDirectory(workspace, deps);
-  writeSecretJson(deps.path.join(workspace, ".engram-project"), {
-    version: 3,
-    project_id: runtime.seed.anchor_project_id,
-    name: "hap-01c",
-    scope: "directory",
-  }, deps);
+  writeScenarioProjectAnchor(runtime, workspace, deps);
   writeModelConfig(plugin.env.PI_CODING_AGENT_DIR, runtime.model.url, deps);
   const env = scratchOmpTurnEnvironment(runtime, scenarioRoot, plugin, observerPath, workspace);
   if (directCredentials) {
@@ -2283,6 +2297,7 @@ async function openRelayScenario(runtime, scenarioID, daemonVariant, pluginVaria
   const scenarioRoot = deps.path.join(runtime.options.scratch_dir, "scenarios", scenarioID);
   ensureDirectory(deps.path.dirname(scenarioRoot), deps, "OWNED_DIRECTORY_INVALID");
   createExclusiveDirectory(scenarioRoot, deps);
+  writeScenarioProjectAnchor(runtime, scenarioRoot, deps);
   let daemon = null;
   let relayTap = null;
   try {
@@ -2925,6 +2940,7 @@ module.exports = {
   runProbe,
   scratchPluginDataEnvironment,
   seedInstalledClientObject,
+  writeScenarioProjectAnchor,
   bindPluginDaemonNamespace,
   ompTurnArguments,
   runScenario,

@@ -39,6 +39,7 @@ const {
   scratchPluginDataEnvironment,
   stablePostgresProbeCount,
   scenarioObservation,
+  writeScenarioProjectAnchor,
   runProbe,
   snapshotActiveProfile,
   turnIsComplete,
@@ -581,6 +582,20 @@ test("seeds the exact client through the repository bootstrap object store", (t)
   const installed = seedInstalledClientObject(runtime, pluginRoot, pluginData, "new", baseDeps({ platform: process.platform, arch: process.arch }));
   assert.equal(digest(fs.readFileSync(installed)), clientSha256);
   assert.equal(installed.includes(path.join("objects", "sha256", clientSha256)), true);
+});
+
+test("scenario and workspace share one authorized V3 project anchor", (t) => {
+  const root = temporaryRoot(t);
+  const scenarioRoot = path.join(root, "scenario");
+  const workspace = path.join(scenarioRoot, "workspace");
+  fs.mkdirSync(workspace, { recursive: true });
+  const runtime = { seed: { anchor_project_id: "11111111-1111-4111-8111-111111111111" } };
+  const scenarioAnchor = writeScenarioProjectAnchor(runtime, scenarioRoot, baseDeps());
+  const workspaceAnchor = writeScenarioProjectAnchor(runtime, workspace, baseDeps());
+  const expected = { version: 3, project_id: runtime.seed.anchor_project_id, name: "hap-01c", scope: "directory" };
+  assert.deepEqual(JSON.parse(fs.readFileSync(scenarioAnchor, "utf8")), expected);
+  assert.deepEqual(JSON.parse(fs.readFileSync(workspaceAnchor, "utf8")), expected);
+  assert.equal(path.dirname(scenarioAnchor), scenarioRoot);
 });
 
 
