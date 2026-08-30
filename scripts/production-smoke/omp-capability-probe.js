@@ -2552,7 +2552,10 @@ async function prepareRelayCapability(runtime, subcase, deps) {
     const descriptor = makeDescriptor(runtime, `capability-${subcase}`, deps);
     const deadline = deps.now() + runtime.options.timeouts.relay_timeout_ms;
     const identity = await relay.call("IDENTITY_REGISTRATION", { hostSessionRef: sessionReference(runtime, subcase), projectIdentityV3: descriptor }, deadline);
-    if (!identity || identity.kind !== "OK" || typeof identity.sessionCapability !== "string" || identity.sessionCapability.length === 0) fail("CAPABILITY_SETUP_FAILED", "candidate relay did not issue a capability");
+        if (!identity || identity.kind !== "OK" || typeof identity.sessionCapability !== "string" || identity.sessionCapability.length === 0) {
+            const reason = identity?.kind === "NO_DELIVERY" && typeof identity.reason === "string" && /^[A-Z][A-Z0-9_]{0,95}$/.test(identity.reason) ? identity.reason : "FAILED";
+            fail(`CAPABILITY_SETUP_${reason}`, "candidate relay did not issue a capability");
+        }
     return Object.freeze({ scenario, shim, relay, descriptor, capability: identity.sessionCapability, deadline });
   } catch (error) {
     await rethrowAfterCleanup(error, [shim, scenario].filter(Boolean));
@@ -2625,7 +2628,7 @@ async function runInvalidationSubcase(runtime, id, deps) {
       try { if (!await replacementShim.close()) extraCleanup += 1; } catch { extraCleanup += 1; }
     }
     if (session) extraCleanup += await closeRelayCapability(session);
-    return Object.freeze({ id, passed: false, route_attempts: 0, routes: [], server_dispatches: 0, proof_digest: sha256(`${id}:${safeErrorCode(error)}`), cleanup_residue: extraCleanup + cleanupResidueFrom(error) });
+        return Object.freeze({ id, passed: false, route_attempts: 0, routes: [], server_dispatches: 0, proof_digest: sha256(`${id}:${safeErrorCode(error)}`), cleanup_residue: extraCleanup + cleanupResidueFrom(error), failure_code: safeErrorCode(error) });
   }
 }
 
