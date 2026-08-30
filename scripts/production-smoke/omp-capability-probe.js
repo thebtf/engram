@@ -47,6 +47,7 @@ const DEFAULT_TIMEOUTS = Object.freeze({
 });
 const CHILD_SETTLE_GRACE_MS = 1_500;
 const MODEL_SENTINEL = "HAP01C_MODEL_SENTINEL";
+const MODEL_PROMPT = "HAP-01C qualification fixture memory.";
 const MODEL_NAME = "hap-01c-local";
 const MODEL_PROVIDER = "hap-01c-local";
 const MODEL_SELECTOR = `${MODEL_PROVIDER}/${MODEL_NAME}`;
@@ -1796,6 +1797,7 @@ function fixtureRequest(options, deps, legacyProjectID) {
     run_id: options.run_id,
     anchor_project_id: uuid(),
     canonical_project_key: uuid(),
+    ambient_query_text: MODEL_PROMPT,
     legacy_project_id: legacyProjectID,
   });
 }
@@ -2166,7 +2168,7 @@ function ompTurnArguments(runtime, sessionDirectory) {
     "--no-title",
     "--model", MODEL_SELECTOR,
     "--extension", OBSERVER_FILE,
-    "-p", `Reply exactly ${MODEL_SENTINEL}.`,
+    "-p", MODEL_PROMPT,
   ];
 }
 

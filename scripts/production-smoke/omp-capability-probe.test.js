@@ -537,6 +537,7 @@ test("OMP turn keeps plugin MCP startup enabled", () => {
   assert.equal(args.includes("--no-lsp"), true);
   assert.equal(args.includes("--extension"), true);
   assert.equal(args.includes("-p"), true);
+  assert.equal(args[args.indexOf("-p") + 1], "HAP-01C qualification fixture memory.");
 });
 
 test("scratch plugin data stays outside the installed plugin link", (t) => {

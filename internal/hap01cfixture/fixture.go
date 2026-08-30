@@ -42,9 +42,10 @@ const (
 	snapshotReceiptSchema = "hap-01c-fixture-snapshot/1"
 	secretsSchema         = "hap-01c-fixture-secrets/1"
 
-	maxDSNBytes     = 4 * 1024
-	maxRequestBytes = 8 * 1024
-	maxSecretsBytes = 16 * 1024
+	maxDSNBytes          = 4 * 1024
+	maxRequestBytes      = 8 * 1024
+	maxSecretsBytes      = 16 * 1024
+	maxAmbientQueryBytes = 512
 
 	fixtureSourceAgent = "hap01c-fixture"
 	legacyDirectTTL    = time.Hour
@@ -357,6 +358,7 @@ type seedRequest struct {
 	AnchorProjectID     string
 	CanonicalProjectKey string
 	LegacyProjectID     string
+	AmbientQueryText    string
 }
 
 type keycardClass string
@@ -461,7 +463,7 @@ func (f *Fixture) Seed(ctx context.Context, requestFile, secretsOut string) (See
 		memoryStore := gormdb.NewMemoryStore(txStore)
 		createdMemory, err = memoryStore.Create(ctx, &models.Memory{
 			Project:             request.CanonicalProjectKey,
-			Content:             "HAP-01C qualification fixture memory.",
+			Content:             request.AmbientQueryText,
 			SourceAgent:         fixtureSourceAgent,
 			Tags:                []string{fixtureTag(f.runID), "hap01c"},
 			PrivacyScope:        "project",
@@ -910,12 +912,12 @@ func (f *Fixture) Snapshot(ctx context.Context, requestFile string) (SnapshotRec
 	if err := db.Raw(`
 		SELECT COALESCE(SUM(injection_count), 0)
 		FROM memories
-		WHERE project = ? AND source_agent = ? AND tags @> ?::jsonb
-	`, request.CanonicalProjectKey, fixtureSourceAgent, string(tagJSON)).Scan(&receipt.TargetMemoryInjectionCount).Error; err != nil {
+		WHERE project = ? AND source_agent = ? AND tags @> ?::jsonb AND content = ?
+	`, request.CanonicalProjectKey, fixtureSourceAgent, string(tagJSON), request.AmbientQueryText).Scan(&receipt.TargetMemoryInjectionCount).Error; err != nil {
 		return SnapshotReceipt{}, boundary("SNAPSHOT_FAILED")
 	}
 	if err := db.Table("memories").
-		Where("project = ? AND source_agent = ? AND tags @> ?::jsonb", request.CanonicalProjectKey, fixtureSourceAgent, string(tagJSON)).
+		Where("project = ? AND source_agent = ? AND tags @> ?::jsonb AND content = ?", request.CanonicalProjectKey, fixtureSourceAgent, string(tagJSON), request.AmbientQueryText).
 		Count(&receipt.MemoryRows).Error; err != nil {
 		return SnapshotReceipt{}, boundary("SNAPSHOT_FAILED")
 	}
@@ -956,6 +958,7 @@ func readSeedRequest(path, expectedRunID string) (seedRequest, error) {
 		"anchor_project_id",
 		"canonical_project_key",
 		"legacy_project_id",
+		"ambient_query_text",
 	})
 	if err != nil {
 		return seedRequest{}, boundary("INVALID_SEED_REQUEST")
@@ -965,11 +968,13 @@ func readSeedRequest(path, expectedRunID string) (seedRequest, error) {
 		AnchorProjectID:     values["anchor_project_id"],
 		CanonicalProjectKey: values["canonical_project_key"],
 		LegacyProjectID:     values["legacy_project_id"],
+		AmbientQueryText:    values["ambient_query_text"],
 	}
 	if request.RunID != expectedRunID || ValidateRunID(request.RunID) != nil ||
 		!validCanonicalUUID(request.AnchorProjectID) ||
 		!validCanonicalUUID(request.CanonicalProjectKey) ||
-		!legacyIDPattern.MatchString(request.LegacyProjectID) {
+		!legacyIDPattern.MatchString(request.LegacyProjectID) ||
+		strings.TrimSpace(request.AmbientQueryText) == "" || len(request.AmbientQueryText) > maxAmbientQueryBytes {
 		return seedRequest{}, boundary("INVALID_SEED_REQUEST")
 	}
 	return request, nil
