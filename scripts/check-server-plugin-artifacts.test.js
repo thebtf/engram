@@ -7,6 +7,7 @@ const test = require("node:test");
 const root = path.resolve(__dirname, "..");
 const manifestPath = path.join(root, "plugin", "engram", "package.json");
 const extensionPath = path.join(root, "plugin", "engram", "extensions", "engram-memory.mjs");
+const relayHelperPath = path.join(root, "plugin", "engram", "extensions", "legacy-relay.mjs");
 const version = JSON.parse(fs.readFileSync(manifestPath, "utf8")).version;
 function expectedArchives(expectedVersion = version) {
   const normalizedVersion = expectedVersion.replace(/^v/, "");
@@ -81,7 +82,7 @@ function writeZip(archiveRoot, archivePath, entries) {
   fs.writeFileSync(archivePath, Buffer.concat([...records, directory, end]));
 }
 
-function buildArchive(archiveRoot, archivePath, entries = ["package.json", "extensions/engram-memory.mjs"]) {
+function buildArchive(archiveRoot, archivePath, entries = ["package.json", "extensions/engram-memory.mjs", "extensions/legacy-relay.mjs"]) {
   if (archivePath.endsWith(".tar.gz")) {
     run("tar", ["-czf", archivePath, "-C", archiveRoot, ...entries]);
   } else {
@@ -98,6 +99,7 @@ function createFixture() {
   fs.mkdirSync(dist);
   fs.copyFileSync(manifestPath, path.join(archiveRoot, "package.json"));
   fs.copyFileSync(extensionPath, path.join(archiveRoot, "extensions", "engram-memory.mjs"));
+  fs.copyFileSync(relayHelperPath, path.join(archiveRoot, "extensions", "legacy-relay.mjs"));
   return { archiveRoot, dist, temporary };
 }
 
@@ -150,7 +152,7 @@ test("server-plugin archive gate rejects duplicate or non-canonical OMP entry pa
   const fixture = createFixture();
   try {
     buildExpectedMatrix(fixture);
-    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]), ["package.json", "package.json", "extensions/engram-memory.mjs"]);
+    buildArchive(fixture.archiveRoot, path.join(fixture.dist, expectedArchives()[0]), ["package.json", "package.json", "extensions/engram-memory.mjs", "extensions/legacy-relay.mjs"]);
     const duplicate = gate(fixture.dist);
     assert.notEqual(duplicate.status, 0);
     assert.match(`${duplicate.stderr}\n${duplicate.stdout}`, /exactly one canonical package\.json/);
@@ -228,15 +230,19 @@ test("release configuration and direct installers retain canonical OMP payload p
   const goreleaser = fs.readFileSync(path.join(root, ".goreleaser.yaml"), "utf8");
   assert.match(goreleaser, /- src: plugin\/engram\/package\.json\s+dst: \.\s+strip_parent: true/);
   assert.match(goreleaser, /- src: plugin\/engram\/extensions\/engram-memory\.mjs\s+dst: extensions\s+strip_parent: true/);
+  assert.match(goreleaser, /- src: plugin\/engram\/extensions\/legacy-relay\.mjs\s+dst: extensions\s+strip_parent: true/);
 
   const shellInstaller = fs.readFileSync(path.join(root, "scripts", "install.sh"), "utf8");
   assert.match(shellInstaller, /\[\[ -f "\$tmp_dir\/package\.json" \]\]/);
   assert.match(shellInstaller, /cp "\$tmp_dir\/package\.json" "\$INSTALL_DIR\//);
   assert.match(shellInstaller, /cp "\$tmp_dir\/extensions\/engram-memory\.mjs" "\$INSTALL_DIR\/extensions\//);
+  assert.match(shellInstaller, /cp "\$tmp_dir\/extensions\/legacy-relay\.mjs" "\$INSTALL_DIR\/extensions\//);
 
   const powerShellInstaller = fs.readFileSync(path.join(root, "scripts", "install.ps1"), "utf8");
   assert.match(powerShellInstaller, /Join-Path \$TempDir "package\.json"/);
   assert.match(powerShellInstaller, /Join-Path \$TempDir "extensions\\engram-memory\.mjs"/);
+  assert.match(powerShellInstaller, /Join-Path \$TempDir "extensions\\legacy-relay\.mjs"/);
   assert.match(powerShellInstaller, /Copy-Item \$ManifestPath "\$InstallDir\\package\.json"/);
   assert.match(powerShellInstaller, /Copy-Item \$ExtensionPath "\$InstallDir\\extensions\\engram-memory\.mjs"/);
+  assert.match(powerShellInstaller, /Copy-Item \$RelayHelperPath "\$InstallDir\\extensions\\legacy-relay\.mjs"/);
 });

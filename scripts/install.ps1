@@ -114,8 +114,12 @@ function Install-Release {
             Write-Err "Release archive is missing required OMP package.json"
         }
         $ExtensionPath = Join-Path $TempDir "extensions\engram-memory.mjs"
+        $RelayHelperPath = Join-Path $TempDir "extensions\legacy-relay.mjs"
         if (-not (Test-Path -LiteralPath $ExtensionPath -PathType Leaf)) {
             Write-Err "Release archive is missing required OMP extension"
+        }
+        if (-not (Test-Path -LiteralPath $RelayHelperPath -PathType Leaf)) {
+            Write-Err "Release archive is missing required OMP relay helper"
         }
 
         # This validator is part of the trusted installer, not the release archive.
@@ -223,6 +227,7 @@ for (const [key, asset] of Object.entries(assets)) {
         Copy-Item $PolicyPath "$InstallDir\bootstrap-targets.json" -Force -ErrorAction Stop
         Copy-Item $ManifestPath "$InstallDir\package.json" -Force -ErrorAction Stop
         Copy-Item $ExtensionPath "$InstallDir\extensions\engram-memory.mjs" -Force -ErrorAction Stop
+        Copy-Item $RelayHelperPath "$InstallDir\extensions\legacy-relay.mjs" -Force -ErrorAction Stop
 
         Copy-Item "$TempDir\.claude-plugin\*" "$InstallDir\.claude-plugin\" -Force
 

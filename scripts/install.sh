@@ -178,6 +178,8 @@ download_release() {
         || error "Release archive is missing required OMP package.json"
     [[ -f "$tmp_dir/extensions/engram-memory.mjs" ]] \
         || error "Release archive is missing required OMP extension"
+    [[ -f "$tmp_dir/extensions/legacy-relay.mjs" ]] \
+        || error "Release archive is missing required OMP relay helper"
     # This validator is part of the trusted installer, not the release archive.
     # A release payload must never be allowed to validate its own policy.
     node - "$tmp_dir/bootstrap-targets.json" "${version#v}" <<'NODE' \
@@ -283,6 +285,8 @@ NODE
         || error "Failed to copy OMP package manifest from release archive"
     cp "$tmp_dir/extensions/engram-memory.mjs" "$INSTALL_DIR/extensions/" \
         || error "Failed to copy OMP extension from release archive"
+    cp "$tmp_dir/extensions/legacy-relay.mjs" "$INSTALL_DIR/extensions/" \
+        || error "Failed to copy OMP relay helper from release archive"
 
     cp "$tmp_dir/.claude-plugin/"* "$INSTALL_DIR/.claude-plugin/"
 

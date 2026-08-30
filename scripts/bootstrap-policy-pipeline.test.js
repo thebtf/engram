@@ -35,6 +35,7 @@ function directInstallerFixture(temp) {
   fs.copyFileSync(path.join(root, "plugin", "engram", "scripts", "register-plugin.js"), path.join(archiveRoot, "scripts", "register-plugin.js"));
   fs.writeFileSync(path.join(archiveRoot, "package.json"), "{}\n");
   fs.writeFileSync(path.join(archiveRoot, "extensions", "engram-memory.mjs"), "export {};\n");
+  fs.writeFileSync(path.join(archiveRoot, "extensions", "legacy-relay.mjs"), "export {};\n");
   fs.writeFileSync(path.join(archiveRoot, ".claude-plugin", "plugin.json"), "{}\n");
   fs.copyFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), path.join(archiveRoot, "bootstrap-targets.json"));
   const archive = path.join(temp, "release.tar.gz");
@@ -1751,7 +1752,7 @@ function writeZip(archiveRoot, archivePath, entries) {
 }
 
 function buildServerArchive(archiveRoot, archivePath) {
-  const entries = ["package.json", "extensions/engram-memory.mjs", "bootstrap-targets.json"];
+  const entries = ["package.json", "extensions/engram-memory.mjs", "extensions/legacy-relay.mjs", "bootstrap-targets.json"];
   if (archivePath.endsWith(".tar.gz")) {
     const archived = spawnSync("tar", ["-czf", archivePath, "-C", archiveRoot, ...entries], { encoding: "utf8" });
     assert.equal(archived.status, 0, archived.stderr);
@@ -1784,6 +1785,7 @@ test("generator check mode and combined artifact gate accept only the shared tar
     fs.mkdirSync(path.join(archiveRoot, "extensions"), { recursive: true });
     fs.copyFileSync(path.join(root, "plugin", "engram", "package.json"), path.join(archiveRoot, "package.json"));
     fs.copyFileSync(path.join(root, "plugin", "engram", "extensions", "engram-memory.mjs"), path.join(archiveRoot, "extensions", "engram-memory.mjs"));
+    fs.copyFileSync(path.join(root, "plugin", "engram", "extensions", "legacy-relay.mjs"), path.join(archiveRoot, "extensions", "legacy-relay.mjs"));
     fs.copyFileSync(policyPath, path.join(archiveRoot, "bootstrap-targets.json"));
     const archives = [
       `engram_${currentVersion}_linux_amd64.tar.gz`,
@@ -1828,6 +1830,7 @@ test("direct installer rejects archive self-validation before install mutation",
     fs.writeFileSync(path.join(archiveRoot, ".claude-plugin", "plugin.json"), "{}\n");
     fs.writeFileSync(path.join(archiveRoot, "package.json"), "{}\n");
     fs.writeFileSync(path.join(archiveRoot, "extensions", "engram-memory.mjs"), "export {};\n");
+    fs.writeFileSync(path.join(archiveRoot, "extensions", "legacy-relay.mjs"), "export {};\n");
     const validPolicy = fs.readFileSync(path.join(root, "plugin", "engram", "bootstrap-targets.json"), "utf8");
     const duplicatePolicy = validPolicy.replace('"schema_version": 1,', '"schema_version": 1,\n  "\\u0073chema_version": 1,');
     fs.writeFileSync(path.join(archiveRoot, "bootstrap-targets.json"), duplicatePolicy);

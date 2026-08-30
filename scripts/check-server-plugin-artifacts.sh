@@ -4,6 +4,7 @@ set -euo pipefail
 
 source_manifest="plugin/engram/package.json"
 source_extension="plugin/engram/extensions/engram-memory.mjs"
+source_relay_helper="plugin/engram/extensions/legacy-relay.mjs"
 dist="dist"
 version=""
 while [[ $# -gt 0 ]]; do
@@ -15,7 +16,7 @@ while [[ $# -gt 0 ]]; do
 done
 version="${version#v}"
 
-[[ -n "$version" && -f "$source_manifest" && -f "$source_extension" && -d "$dist" ]] \
+[[ -n "$version" && -f "$source_manifest" && -f "$source_extension" && -f "$source_relay_helper" && -d "$dist" ]] \
   || { echo 'release version, source OMP payload, or split dist is missing' >&2; exit 1; }
 
 work_dir="$(mktemp -d)"
@@ -76,7 +77,7 @@ extract_entry() {
 
 for archive in "${archives[@]}"; do
   mapfile -t entries < <(archive_entries "$archive")
-  for entry in package.json extensions/engram-memory.mjs; do
+  for entry in package.json extensions/engram-memory.mjs extensions/legacy-relay.mjs; do
     matches=0
     for candidate in "${entries[@]}"; do
       if [[ "$candidate" == "$entry" ]]; then
@@ -88,11 +89,14 @@ for archive in "${archives[@]}"; do
 
   manifest="$work_dir/package.json"
   extension="$work_dir/engram-memory.mjs"
+  relay_helper="$work_dir/legacy-relay.mjs"
   extract_entry "$archive" package.json "$manifest"
   extract_entry "$archive" extensions/engram-memory.mjs "$extension"
+  extract_entry "$archive" extensions/legacy-relay.mjs "$relay_helper"
   validate_manifest "$manifest"
   cmp -s "$source_manifest" "$manifest" || { echo "archive OMP package manifest differs from tagged source: $archive" >&2; exit 1; }
   cmp -s "$source_extension" "$extension" || { echo "archive OMP extension differs from tagged source: $archive" >&2; exit 1; }
+  cmp -s "$source_relay_helper" "$relay_helper" || { echo "archive OMP relay helper differs from tagged source: $archive" >&2; exit 1; }
 done
 
 printf 'verified OMP payload in %d server-plugin archive(s)\n' "${#archives[@]}"

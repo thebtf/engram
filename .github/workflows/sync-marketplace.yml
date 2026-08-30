@@ -74,7 +74,8 @@ jobs:
           fi
           node trusted-validator/plugin/engram/scripts/bootstrap-policy.js validate plugin/engram/bootstrap-targets.json "$VERSION"
           PACKAGE_MANIFEST="plugin/engram/package.json"
-          EXTENSION="plugin/engram/extensions/engram-memory.mjs"
+          EXTENSION_ENTRY="plugin/engram/extensions/engram-memory.mjs"
+          RELAY_HELPER="plugin/engram/extensions/legacy-relay.mjs"
           if [ ! -f "$PACKAGE_MANIFEST" ]; then
             echo "::error::OMP package manifest missing: $PACKAGE_MANIFEST"
             exit 1
@@ -92,8 +93,12 @@ jobs:
             echo "::error::OMP package must declare exactly ./extensions/engram-memory.mjs"
             exit 1
           fi
-          if [ ! -f "$EXTENSION" ]; then
-            echo "::error::OMP extension missing: $EXTENSION"
+          if [ ! -f "$EXTENSION_ENTRY" ]; then
+            echo "::error::OMP extension missing: $EXTENSION_ENTRY"
+            exit 1
+          fi
+          if [ ! -f "$RELAY_HELPER" ]; then
+            echo "::error::OMP relay helper missing: $RELAY_HELPER"
             exit 1
           fi
           OMP_MANIFEST="plugin/engram/.omp-plugin/plugin.json"
@@ -142,11 +147,14 @@ jobs:
           for ROOT in marketplace/engram marketplace/plugins/engram; do
             test -f "$ROOT/package.json"
             test -f "$ROOT/extensions/engram-memory.mjs"
+            test -f "$ROOT/extensions/legacy-relay.mjs"
             cmp plugin/engram/package.json "$ROOT/package.json"
             cmp plugin/engram/extensions/engram-memory.mjs "$ROOT/extensions/engram-memory.mjs"
+            cmp plugin/engram/extensions/legacy-relay.mjs "$ROOT/extensions/legacy-relay.mjs"
           done
           cmp marketplace/engram/package.json marketplace/plugins/engram/package.json
           cmp marketplace/engram/extensions/engram-memory.mjs marketplace/plugins/engram/extensions/engram-memory.mjs
+          cmp marketplace/engram/extensions/legacy-relay.mjs marketplace/plugins/engram/extensions/legacy-relay.mjs
           jq --arg version "$VERSION" '
             .version = $version
             | .plugins |= map(.version = $version | .source = "./engram")
