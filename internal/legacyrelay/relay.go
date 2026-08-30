@@ -97,20 +97,24 @@ func (r *Relay) ServeConn(parent context.Context, conn net.Conn) {
 	}
 	receivedAt := r.now()
 	if receivedAt.IsZero() {
+		log.Print("legacy relay frame unavailable stage=clock")
 		return
 	}
 	_ = conn.SetDeadline(receivedAt.Add(r.safetyDeadline))
 	reader := bufio.NewReaderSize(conn, r.maxFrameBytes+1)
 	request, err := ReadRequestFrame(reader, r.maxFrameBytes, receivedAt)
 	if err != nil {
+		log.Print("legacy relay frame unavailable stage=request")
 		return
 	}
 	effectiveDeadline, ok := r.effectiveDeadline(parent, request.DeadlineUnixMs(), receivedAt)
 	if !ok || parent.Err() != nil {
+		log.Print("legacy relay frame unavailable stage=deadline")
 		r.writeTerminalResponse(conn, newResponse(request, noDelivery{reason: noDeliveryDeadlineElapsed}))
 		return
 	}
 	if err := conn.SetDeadline(effectiveDeadline); err != nil {
+		log.Print("legacy relay frame unavailable stage=set_deadline")
 		r.writeTerminalResponse(conn, newResponse(request, noDelivery{reason: noDeliveryDeadlineElapsed}))
 		return
 	}
@@ -134,9 +138,12 @@ func (r *Relay) effectiveDeadline(parent context.Context, deadlineUnixMs int64, 
 func (r *Relay) writeTerminalResponse(conn net.Conn, response responseEnvelope) {
 	frame, err := EncodeResponseFrame(response)
 	if err != nil || len(frame) > r.maxFrameBytes {
+		log.Print("legacy relay frame unavailable stage=response_encode")
 		return
 	}
-	_ = writeLine(conn, frame)
+	if err := writeLine(conn, frame); err != nil {
+		log.Print("legacy relay frame unavailable stage=response_write")
+	}
 }
 
 func (r *Relay) dispatch(ctx context.Context, conn net.Conn, request IncomingRequest) responseEnvelope {
