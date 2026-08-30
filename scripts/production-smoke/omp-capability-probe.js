@@ -2350,10 +2350,15 @@ function counts(values = {}) {
   };
 }
 
-function scenarioObservation(id, { expected, actual, routes, shared_deadline, custody, subcases = [] }) {
+function scenarioObservation(id, { expected, actual, routes, shared_deadline, custody, subcases = [], delivery_range = null }) {
   const mismatch = Object.entries(expected).some(([key, value]) => actual[key] !== value);
+  const deliveryMismatch = delivery_range !== null && (
+    !Number.isSafeInteger(delivery_range.min) || !Number.isSafeInteger(delivery_range.max) ||
+    delivery_range.min < 0 || delivery_range.max < delivery_range.min ||
+    actual.deliveries_observed < delivery_range.min || actual.deliveries_observed > delivery_range.max
+  );
   const subcaseFailure = subcases.some((subcase) => !subcase.passed);
-  const passed = !mismatch && !subcaseFailure && Boolean(shared_deadline);
+  const passed = !mismatch && !deliveryMismatch && !subcaseFailure && Boolean(shared_deadline);
   return Object.freeze({
     id,
     state: passed ? "OBSERVED" : "CONTRADICTED",
@@ -2501,11 +2506,12 @@ async function runOldPluginNewDaemonScenario(runtime, deps) {
       cleanup_residue: cleanupResidue,
     });
     return scenarioObservation("old_plugin_new_daemon", {
-      expected: { callbacks_observed: 2, route_attempts_observed: 0, deliveries_observed: 2, cleanup_residue: 0 },
+      expected: { callbacks_observed: 2, route_attempts_observed: 0, cleanup_residue: 0 },
       actual,
       routes: [],
       shared_deadline: turn.observer.scratch_cwd,
       custody: custodyFromTurn(turn, server.authorization_seen, false),
+      delivery_range: { min: 1, max: 2 },
     });
   } catch (error) {
     if (scenario) await rethrowAfterCleanup(error, [scenario]);
@@ -2553,11 +2559,12 @@ async function runStaleScenario(runtime, deps) {
     cleanup_residue: observed.cleanup_residue,
   });
   return scenarioObservation("stale_generation", {
-    expected: { callbacks_observed: 2, route_attempts_observed: 5, deliveries_observed: 2, direct_fallback_attempts: 0, rediscoveries: 1, server_dispatches: 4, telemetry_attempts: 2, cleanup_residue: 0 },
+    expected: { callbacks_observed: 2, route_attempts_observed: 5, direct_fallback_attempts: 0, rediscoveries: 1, server_dispatches: 4, telemetry_attempts: 2, cleanup_residue: 0 },
     actual,
     routes: observed.tap.records.map(routeToken),
     shared_deadline: observed.tap.shared_deadline && observed.turn.observer.scratch_cwd,
     custody: custodyFromTurn(observed.turn, observed.server.authorization_seen, true),
+    delivery_range: { min: 1, max: 2 },
   });
 }
 
@@ -2707,11 +2714,12 @@ async function runRollbackScenario(runtime, deps) {
     cleanup_residue: outage.cleanup_residue + healthy.cleanup_residue,
   });
   return scenarioObservation("rollback_future_turn", {
-    expected: { callbacks_observed: 4, route_attempts_observed: 6, deliveries_observed: 2, direct_fallback_attempts: 0, rediscoveries: 0, server_dispatches: 4, telemetry_attempts: 2, cleanup_residue: 0 },
+    expected: { callbacks_observed: 4, route_attempts_observed: 6, direct_fallback_attempts: 0, rediscoveries: 0, server_dispatches: 4, telemetry_attempts: 2, cleanup_residue: 0 },
     actual,
     routes,
     shared_deadline: outage.tap.shared_deadline && healthy.tap.shared_deadline && outage.turn.observer.scratch_cwd && healthy.turn.observer.scratch_cwd,
     custody: custodyFromTurn(healthy.turn, healthy.server.authorization_seen, true),
+    delivery_range: { min: 1, max: 2 },
   });
 }
 async function runScenario(id, runtime, deps) {

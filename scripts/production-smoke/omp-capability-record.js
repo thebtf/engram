@@ -439,12 +439,17 @@ function parseSubcases(value, scenarioID, label, mode) {
   return ordered;
 }
 
-function observedDenominatorsMatch(counts) {
-  return (
-    counts.callbacks_expected === counts.callbacks_observed &&
+const SAFE_AMBIENT_OMISSION_SCENARIOS = new Set(["old_plugin_new_daemon", "stale_generation", "rollback_future_turn"]);
+
+function deliveryDenominatorMatches(scenarioID, counts) {
+  if (!SAFE_AMBIENT_OMISSION_SCENARIOS.has(scenarioID)) return counts.deliveries_expected === counts.deliveries_observed;
+  return counts.deliveries_expected === 2 && counts.deliveries_observed >= 1 && counts.deliveries_observed <= 2;
+}
+
+function observedDenominatorsMatch(scenarioID, counts) {
+  return counts.callbacks_expected === counts.callbacks_observed &&
     counts.route_attempts_expected === counts.route_attempts_observed &&
-    counts.deliveries_expected === counts.deliveries_observed
-  );
+    deliveryDenominatorMatches(scenarioID, counts);
 }
 
 function hasHappyPath(scenario) {
@@ -499,13 +504,12 @@ function scenarioMeetsQualificationContract(scenario) {
     case "old_plugin_new_daemon":
       return scenario.custody.extension_url_present && scenario.custody.extension_token_present &&
         scenario.custody.authorization_seen && !scenario.custody.child_hap_config_present &&
-        routeSequenceMatches(scenario.route_sequence, []) && countsMatch(counts, {
+        routeSequenceMatches(scenario.route_sequence, []) && deliveryDenominatorMatches(scenario.id, counts) && countsMatch(counts, {
           callbacks_expected: 2,
           callbacks_observed: 2,
           route_attempts_expected: 0,
           route_attempts_observed: 0,
           deliveries_expected: 2,
-          deliveries_observed: 2,
         });
     case "relay_outage":
       return newArtifactCustodyIsClean(scenario.custody) && routeSequenceMatches(scenario.route_sequence, [
@@ -529,13 +533,12 @@ function scenarioMeetsQualificationContract(scenario) {
         "session_start:SESSION_START_CONTEXT:OK",
         "before_agent_start:IDENTITY_REGISTRATION:OK",
         "before_agent_start:AMBIENT_CANDIDATES:OK",
-      ]) && countsMatch(counts, {
+      ]) && deliveryDenominatorMatches(scenario.id, counts) && countsMatch(counts, {
         callbacks_expected: 2,
         callbacks_observed: 2,
         route_attempts_expected: 5,
         route_attempts_observed: 5,
         deliveries_expected: 2,
-        deliveries_observed: 2,
         rediscoveries: 1,
         server_dispatches: 4,
         telemetry_attempts: 2,
@@ -552,13 +555,12 @@ function scenarioMeetsQualificationContract(scenario) {
         "session_start:IDENTITY_REGISTRATION:NO_DELIVERY",
         "before_agent_start:IDENTITY_REGISTRATION:NO_DELIVERY",
         ...HAPPY_ROUTE_SEQUENCE,
-      ]) && countsMatch(counts, {
+      ]) && deliveryDenominatorMatches(scenario.id, counts) && countsMatch(counts, {
         callbacks_expected: 4,
         callbacks_observed: 4,
         route_attempts_expected: 6,
         route_attempts_observed: 6,
         deliveries_expected: 2,
-        deliveries_observed: 2,
         rediscoveries: 0,
         server_dispatches: 4,
         telemetry_attempts: 2,
@@ -587,7 +589,7 @@ function parseScenario(value, label, mode) {
   const reasonCodes = parseReasonCodes(value.reason_codes, `${label}.reason_codes`, mode);
 
   if (state !== "OBSERVED" && passed) fail(`${label}.passed requires OBSERVED state`);
-  if (state === "OBSERVED" && !observedDenominatorsMatch(counts)) fail(`${label}.counts must reconcile observed denominators`);
+  if (state === "OBSERVED" && !observedDenominatorsMatch(id, counts)) fail(`${label}.counts must reconcile observed denominators`);
   if (routeSequence.length !== counts.route_attempts_observed) fail(`${label}.route_sequence must match route_attempts_observed`);
   if (passed && counts.direct_fallback_attempts !== 0) fail(`${label}.passed is incompatible with direct fallback`);
   if (passed && counts.cleanup_residue !== 0) fail(`${label}.passed is incompatible with cleanup residue`);

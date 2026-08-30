@@ -336,6 +336,20 @@ test("HAP-01C exposes the exact schema constants and builds an immutable qualifi
   assert.equal(Object.isFrozen(record.evidence_refs), true);
 });
 
+test("safe ambient omission keeps partial rollout, stale recovery, and rollback qualified", () => {
+  const input = qualificationInput();
+  for (const id of ["old_plugin_new_daemon", "stale_generation", "rollback_future_turn"]) {
+    findScenario(input, id).counts.deliveries_observed = 1;
+  }
+  const record = buildQualificationRecord(input);
+  assert.equal(record.disposition, "QUALIFIED");
+  assert.equal(record.scenarios.filter((item) => item.counts.deliveries_observed === 1).length, 3);
+
+  assertBuildRejects((invalid) => {
+    findScenario(invalid, "rollback_future_turn").counts.deliveries_observed = 0;
+  });
+});
+
 test("qualification derives disposition, gaps, and reasons from the complete record", () => {
   const record = buildQualificationRecord(qualificationInput());
   assert.equal(deriveDisposition(record), "QUALIFIED");

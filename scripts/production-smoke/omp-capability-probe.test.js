@@ -406,6 +406,19 @@ test("scenario projection contradicts any measured candidate direct fallback", (
   assert.equal(observation.counts.direct_fallback_attempts, 1);
 });
 
+test("scenario projection admits only bounded safe ambient omission", () => {
+  const base = {
+    expected: { callbacks_observed: 2 },
+    routes: [],
+    shared_deadline: true,
+    custody: cleanCustody(),
+    delivery_range: { min: 1, max: 2 },
+  };
+  assert.equal(scenarioObservation("old_plugin_new_daemon", { ...base, actual: counts({ callbacks_observed: 2, deliveries_expected: 2, deliveries_observed: 1 }) }).passed, true);
+  assert.equal(scenarioObservation("old_plugin_new_daemon", { ...base, actual: counts({ callbacks_observed: 2, deliveries_expected: 2, deliveries_observed: 0 }) }).passed, false);
+  assert.equal(scenarioObservation("old_plugin_new_daemon", { ...base, actual: counts({ callbacks_observed: 2, deliveries_expected: 2, deliveries_observed: 3 }) }).passed, false);
+});
+
 test("scratch server uses live worker host and port variables", () => {
   const root = path.join("scratch", "server");
   const environment = scratchServerEnvironment(root, 45678, "postgres://fixture", "engram_fixture", baseDeps({
