@@ -52,8 +52,9 @@ const (
 )
 
 var (
-	runIDPattern    = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,55}$`)
-	legacyIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,55}$`)
+	runIDPattern          = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,55}$`)
+	legacyDirectIDPattern = regexp.MustCompile(`^[a-f0-9]{6}$`)
+	legacyIDPattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,55}$`)
 )
 
 // BoundaryError reports a refusal at the fixture's safety boundary. Its text is
@@ -354,11 +355,12 @@ type KeycardReceipt struct {
 }
 
 type seedRequest struct {
-	RunID               string
-	AnchorProjectID     string
-	CanonicalProjectKey string
-	LegacyProjectID     string
-	AmbientQueryText    string
+	RunID                 string
+	AnchorProjectID       string
+	CanonicalProjectKey   string
+	LegacyProjectID       string
+	LegacyDirectProjectID string
+	AmbientQueryText      string
 }
 
 type keycardClass string
@@ -419,7 +421,7 @@ func (f *Fixture) Seed(ctx context.Context, requestFile, secretsOut string) (See
 			AnchorProjectID: validNullString(request.AnchorProjectID),
 			IdentityScope:   validNullString("repository"),
 			IdentityStatus:  validNullString("active"),
-			LegacyIDs:       pq.StringArray{request.LegacyProjectID},
+			LegacyIDs:       pq.StringArray{request.LegacyProjectID, request.LegacyDirectProjectID},
 			DisplayName:     validNullString("hap01c-" + f.runID),
 		}
 		if err := tx.Create(project).Error; err != nil {
@@ -956,22 +958,25 @@ func readSeedRequest(path, expectedRunID string) (seedRequest, error) {
 		"anchor_project_id",
 		"canonical_project_key",
 		"legacy_project_id",
+		"legacy_direct_project_id",
 		"ambient_query_text",
 	})
 	if err != nil {
 		return seedRequest{}, boundary("INVALID_SEED_REQUEST")
 	}
 	request := seedRequest{
-		RunID:               values["run_id"],
-		AnchorProjectID:     values["anchor_project_id"],
-		CanonicalProjectKey: values["canonical_project_key"],
-		LegacyProjectID:     values["legacy_project_id"],
-		AmbientQueryText:    values["ambient_query_text"],
+		RunID:                 values["run_id"],
+		AnchorProjectID:       values["anchor_project_id"],
+		CanonicalProjectKey:   values["canonical_project_key"],
+		LegacyProjectID:       values["legacy_project_id"],
+		LegacyDirectProjectID: values["legacy_direct_project_id"],
+		AmbientQueryText:      values["ambient_query_text"],
 	}
 	if request.RunID != expectedRunID || ValidateRunID(request.RunID) != nil ||
 		!validCanonicalUUID(request.AnchorProjectID) ||
 		!validCanonicalUUID(request.CanonicalProjectKey) ||
 		!legacyIDPattern.MatchString(request.LegacyProjectID) ||
+		!legacyDirectIDPattern.MatchString(request.LegacyDirectProjectID) ||
 		strings.TrimSpace(request.AmbientQueryText) == "" || len(request.AmbientQueryText) > maxAmbientQueryBytes {
 		return seedRequest{}, boundary("INVALID_SEED_REQUEST")
 	}

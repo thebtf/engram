@@ -113,7 +113,7 @@ func TestSeedRequestRequiresExactClosedObject(t *testing.T) {
 		projectID = "22222222-2222-2222-2222-222222222222"
 	)
 	requestPath := filepath.Join(t.TempDir(), "request.json")
-	valid := []byte(`{"run_id":"fixture-run","anchor_project_id":"` + anchorID + `","canonical_project_key":"` + projectID + `","legacy_project_id":"legacy-fixture","ambient_query_text":"HAP-01C qualification fixture memory."}`)
+	valid := []byte(`{"run_id":"fixture-run","anchor_project_id":"` + anchorID + `","canonical_project_key":"` + projectID + `","legacy_project_id":"legacy-fixture","legacy_direct_project_id":"abcdef","ambient_query_text":"HAP-01C qualification fixture memory."}`)
 	if err := os.WriteFile(requestPath, valid, 0o644); err != nil {
 		t.Fatalf("write request: %v", err)
 	}
@@ -121,15 +121,17 @@ func TestSeedRequestRequiresExactClosedObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read valid request: %v", err)
 	}
-	if request.CanonicalProjectKey != projectID || request.AnchorProjectID != anchorID || request.AmbientQueryText != "HAP-01C qualification fixture memory." {
+	if request.CanonicalProjectKey != projectID || request.AnchorProjectID != anchorID || request.LegacyDirectProjectID != "abcdef" || request.AmbientQueryText != "HAP-01C qualification fixture memory." {
 		t.Fatalf("read request = %#v", request)
 	}
 
 	for _, invalid := range [][]byte{
-		[]byte(`{"run_id":"fixture-run","anchor_project_id":"` + anchorID + `","canonical_project_key":"` + projectID + `","legacy_project_id":"legacy-fixture","ambient_query_text":"HAP-01C qualification fixture memory.","extra":"x"}`),
-		[]byte(`{"run_id":"fixture-run","run_id":"fixture-run","anchor_project_id":"` + anchorID + `","canonical_project_key":"` + projectID + `","legacy_project_id":"legacy-fixture","ambient_query_text":"HAP-01C qualification fixture memory."}`),
-		[]byte(`{"run_id":"fixture-run","anchor_project_id":"` + anchorID + `","canonical_project_key":"` + projectID + `","legacy_project_id":"legacy-fixture"}`),
-		[]byte(`{"run_id":"fixture-run","anchor_project_id":"` + anchorID + `","canonical_project_key":"` + projectID + `","legacy_project_id":"legacy-fixture","ambient_query_text":""}`),
+		[]byte(`{"run_id":"fixture-run","anchor_project_id":"` + anchorID + `","canonical_project_key":"` + projectID + `","legacy_project_id":"legacy-fixture","legacy_direct_project_id":"abcdef","ambient_query_text":"HAP-01C qualification fixture memory.","extra":"x"}`),
+		[]byte(`{"run_id":"fixture-run","run_id":"fixture-run","anchor_project_id":"` + anchorID + `","canonical_project_key":"` + projectID + `","legacy_project_id":"legacy-fixture","legacy_direct_project_id":"abcdef","ambient_query_text":"HAP-01C qualification fixture memory."}`),
+		[]byte(`{"run_id":"fixture-run","anchor_project_id":"` + anchorID + `","canonical_project_key":"` + projectID + `","legacy_project_id":"legacy-fixture","ambient_query_text":"HAP-01C qualification fixture memory."}`),
+		[]byte(`{"run_id":"fixture-run","anchor_project_id":"` + anchorID + `","canonical_project_key":"` + projectID + `","legacy_project_id":"legacy-fixture","legacy_direct_project_id":"abcdef"}`),
+		[]byte(`{"run_id":"fixture-run","anchor_project_id":"` + anchorID + `","canonical_project_key":"` + projectID + `","legacy_project_id":"legacy-fixture","legacy_direct_project_id":"abcdef","ambient_query_text":""}`),
+		[]byte(`{"run_id":"fixture-run","anchor_project_id":"` + anchorID + `","canonical_project_key":"` + projectID + `","legacy_project_id":"legacy-fixture","legacy_direct_project_id":"too-long","ambient_query_text":"HAP-01C qualification fixture memory."}`),
 	} {
 		if err := os.WriteFile(requestPath, invalid, 0o644); err != nil {
 			t.Fatalf("rewrite request: %v", err)
@@ -208,18 +210,20 @@ func TestFixtureSeedRotateAndSnapshotIntegration(t *testing.T) {
 	secretsFile := filepath.Join(directory, "keycards.json")
 	writePrivateFixtureFile(t, dsnFile, []byte(dsn))
 	request := seedRequest{
-		RunID:               runID,
-		AnchorProjectID:     uuid.NewString(),
-		CanonicalProjectKey: uuid.NewString(),
-		LegacyProjectID:     "legacy-" + strings.ReplaceAll(uuid.NewString(), "-", ""),
-		AmbientQueryText:    "HAP-01C qualification fixture memory.",
+		RunID:                 runID,
+		AnchorProjectID:       uuid.NewString(),
+		CanonicalProjectKey:   uuid.NewString(),
+		LegacyProjectID:       "legacy-" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+		LegacyDirectProjectID: "abcdef",
+		AmbientQueryText:      "HAP-01C qualification fixture memory.",
 	}
 	requestJSON, err := json.Marshal(map[string]string{
-		"run_id":                request.RunID,
-		"anchor_project_id":     request.AnchorProjectID,
-		"canonical_project_key": request.CanonicalProjectKey,
-		"legacy_project_id":     request.LegacyProjectID,
-		"ambient_query_text":    request.AmbientQueryText,
+		"run_id":                   request.RunID,
+		"anchor_project_id":        request.AnchorProjectID,
+		"canonical_project_key":    request.CanonicalProjectKey,
+		"legacy_project_id":        request.LegacyProjectID,
+		"ambient_query_text":       request.AmbientQueryText,
+		"legacy_direct_project_id": request.LegacyDirectProjectID,
 	})
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)

@@ -1770,6 +1770,15 @@ function muxcoreProjectID(root, deps) {
 }
 
 /**
+  * Reproduce the pre-cutover OMP extension's no-remote project selector:
+  * resolved cwd, SHA-256, first 6 hex digits. The isolated fixture binds this
+  * selector as a legacy ID so old direct callbacks resolve to the same project.
+  */
+function legacyDirectProjectID(root, deps) {
+  return sha256(deps.path.resolve(root)).slice(0, 6);
+}
+
+/**
   * Create a real, empty Git worktree boundary so every scenario cwd resolves to
   * one muxcore project ID. Using `git init` follows muxcore's documented
   * worktree-root algorithm and avoids inventing a project-id override.
@@ -1811,6 +1820,7 @@ function fixtureRequest(options, deps, legacyProjectID) {
     anchor_project_id: uuid(),
     canonical_project_key: uuid(),
     ambient_query_text: MODEL_PROMPT,
+    legacy_direct_project_id: legacyDirectProjectID(options.scratch_dir, deps),
     legacy_project_id: legacyProjectID,
   });
 }
@@ -3026,6 +3036,7 @@ module.exports = {
   scratchServerEnvironment,
   scratchDaemonEnvironment,
   scratchOmpTurnEnvironment,
+  legacyDirectProjectID,
   writeJsonExclusive,
   stablePostgresProbeCount,
   extractArchive,

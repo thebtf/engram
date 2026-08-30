@@ -29,6 +29,7 @@ const {
   initializeScratchWorktree,
   trackScratchRepositoryAnchor,
   muxcoreProjectID,
+  legacyDirectProjectID,
   ompTurnArguments,
   inspectArtifactMatrix,
   parseArgs,
@@ -621,6 +622,7 @@ test("scratch worktree produces the muxcore project identifier", async (t) => {
   const canonical = (process.platform === "win32" ? fs.realpathSync(scratch).toLowerCase() : fs.realpathSync(scratch));
   assert.equal(projectID, digest(canonical).slice(0, 16));
   assert.equal(projectID, muxcoreProjectID(scratch, deps));
+  assert.equal(legacyDirectProjectID(scratch, deps), digest(path.resolve(scratch)).slice(0, 6));
   assert.equal(fs.lstatSync(path.join(scratch, ".git")).isDirectory(), true);
   const runtime = { seed: { anchor_project_id: "11111111-1111-4111-8111-111111111111" } };
   writeScenarioProjectAnchor(runtime, scratch, deps, "repository");
