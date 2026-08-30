@@ -32,6 +32,7 @@ const {
   runBoundedChild,
   scratchServerEnvironment,
   scratchDaemonEnvironment,
+  scratchOmpTurnEnvironment,
   scratchPluginDataEnvironment,
   stablePostgresProbeCount,
   scenarioObservation,
@@ -415,6 +416,9 @@ test("scratch daemon uses the server tap address rather than its observer handle
   assert.equal(environment.ENGRAM_URL, runtime.server_tap_address.url);
   assert.equal(environment.ENGRAM_HAP_01B_RELAY_ENABLED, "true");
   assert.equal(environment.ENGRAM_HAP_01B_ADAPTER_SHA256, "a".repeat(64));
+  const turnEnvironment = scratchOmpTurnEnvironment(runtime, "scenario", { env: { OMP_PROFILE: "scratch" } }, "observer.ndjson", "workspace");
+  assert.equal(turnEnvironment.ENGRAM_CLIENT_INSTANCE_ID, environment.ENGRAM_CLIENT_INSTANCE_ID);
+  assert.equal(turnEnvironment.OMP_PROFILE, "scratch");
 });
 
 test("long-lived child logs are drained without consuming MCP stdout", () => {

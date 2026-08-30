@@ -1916,12 +1916,26 @@ async function waitForLocator(locatorPath, options, deps) {
   fail("RELAY_LOCATOR_TIMEOUT", "candidate daemon did not publish its owned relay locator");
 }
 
+function scenarioClientInstanceID(runtime, scenarioRoot) {
+  return `hap01c-${sha256(`${runtime.options.run_id}:${scenarioRoot}`).slice(0, 20)}`;
+}
+
+function scratchOmpTurnEnvironment(runtime, scenarioRoot, plugin, observerPath, workspace) {
+  return {
+    ...plugin.env,
+    GIT_CEILING_DIRECTORIES: workspace,
+    HAP_01C_OBSERVER_FILE: observerPath,
+    HAP_01C_OBSERVER_SCRATCH_CWD: workspace,
+    ENGRAM_CLIENT_INSTANCE_ID: scenarioClientInstanceID(runtime, scenarioRoot),
+  };
+}
+
 function scratchDaemonEnvironment(runtime, scenarioRoot, baseEnv, candidate) {
   const environment = {
     ...baseEnv,
     ENGRAM_URL: runtime.server_tap_address.url,
     ENGRAM_TOKEN: runtime.secrets.ordinary_token,
-    ENGRAM_CLIENT_INSTANCE_ID: `hap01c-${sha256(`${runtime.options.run_id}:${scenarioRoot}`).slice(0, 20)}`,
+    ENGRAM_CLIENT_INSTANCE_ID: scenarioClientInstanceID(runtime, scenarioRoot),
   };
   if (candidate) {
     environment.ENGRAM_HAP_01B_RELAY_ENABLED = "true";
@@ -2012,12 +2026,7 @@ async function runOmpTurn(runtime, scenarioRoot, plugin, directCredentials, deps
     scope: "directory",
   }, deps);
   writeModelConfig(plugin.env.PI_CODING_AGENT_DIR, runtime.model.url, deps);
-  const env = {
-    ...plugin.env,
-    GIT_CEILING_DIRECTORIES: workspace,
-    HAP_01C_OBSERVER_FILE: observerPath,
-    HAP_01C_OBSERVER_SCRATCH_CWD: workspace,
-  };
+  const env = scratchOmpTurnEnvironment(runtime, scenarioRoot, plugin, observerPath, workspace);
   if (directCredentials) {
     env.ENGRAM_URL = runtime.server_tap_address.url;
     env.ENGRAM_TOKEN = runtime.secrets.legacy_direct_token;
@@ -2820,6 +2829,7 @@ module.exports = {
   snapshotActiveProfile,
   scratchServerEnvironment,
   scratchDaemonEnvironment,
+  scratchOmpTurnEnvironment,
   writeJsonExclusive,
   stablePostgresProbeCount,
   extractArchive,
