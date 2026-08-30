@@ -2350,7 +2350,7 @@ function counts(values = {}) {
   };
 }
 
-function scenarioObservation(id, { expected, actual, routes, shared_deadline, custody, subcases = [], delivery_range = null }) {
+function scenarioObservation(id, { expected, actual, routes, shared_deadline, custody, subcases = [], delivery_range = null, delivery_partition_valid = true }) {
   const mismatch = Object.entries(expected).some(([key, value]) => actual[key] !== value);
   const deliveryMismatch = delivery_range !== null && (
     !Number.isSafeInteger(delivery_range.min) || !Number.isSafeInteger(delivery_range.max) ||
@@ -2358,7 +2358,7 @@ function scenarioObservation(id, { expected, actual, routes, shared_deadline, cu
     actual.deliveries_observed < delivery_range.min || actual.deliveries_observed > delivery_range.max
   );
   const subcaseFailure = subcases.some((subcase) => !subcase.passed);
-  const passed = !mismatch && !deliveryMismatch && !subcaseFailure && Boolean(shared_deadline);
+  const passed = !mismatch && !deliveryMismatch && Boolean(delivery_partition_valid) && !subcaseFailure && Boolean(shared_deadline);
   return Object.freeze({
     id,
     state: passed ? "OBSERVED" : "CONTRADICTED",
@@ -2720,6 +2720,7 @@ async function runRollbackScenario(runtime, deps) {
     shared_deadline: outage.tap.shared_deadline && healthy.tap.shared_deadline && outage.turn.observer.scratch_cwd && healthy.turn.observer.scratch_cwd,
     custody: custodyFromTurn(healthy.turn, healthy.server.authorization_seen, true),
     delivery_range: { min: 1, max: 2 },
+    delivery_partition_valid: outage.turn.transcript.custom_message_count === 0 && healthy.turn.transcript.custom_message_count >= 1 && healthy.turn.transcript.custom_message_count <= 2,
   });
 }
 async function runScenario(id, runtime, deps) {

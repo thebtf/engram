@@ -416,6 +416,7 @@ test("scenario projection admits only bounded safe ambient omission", () => {
   };
   assert.equal(scenarioObservation("old_plugin_new_daemon", { ...base, actual: counts({ callbacks_observed: 2, deliveries_expected: 2, deliveries_observed: 1 }) }).passed, true);
   assert.equal(scenarioObservation("old_plugin_new_daemon", { ...base, actual: counts({ callbacks_observed: 2, deliveries_expected: 2, deliveries_observed: 0 }) }).passed, false);
+  assert.equal(scenarioObservation("rollback_future_turn", { ...base, actual: counts({ callbacks_observed: 2, deliveries_expected: 2, deliveries_observed: 1 }), delivery_partition_valid: false }).passed, false);
   assert.equal(scenarioObservation("old_plugin_new_daemon", { ...base, actual: counts({ callbacks_observed: 2, deliveries_expected: 2, deliveries_observed: 3 }) }).passed, false);
 });
 
