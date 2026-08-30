@@ -2,328 +2,659 @@
 
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
-const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const { EventEmitter } = require("node:events");
+const { PassThrough } = require("node:stream");
 
+const { buildQualificationRecord } = require("./omp-capability-record.js");
 const {
-  CALLBACK_MAX_TIME_SECONDS,
-  MCP_SEQUENCE,
+  ADAPTER_REVISION,
+  ARTIFACT_MANIFEST,
   ProbeError,
-  assertSafeEvidence,
-  callbackEnvironment,
-  callbackSpec,
-  classifyDaemonRuntime,
+  adapterDigest,
+  buildQualificationInput,
+  childEnvironment,
   createExclusiveDirectory,
-  discoverMuxcoreArtifacts,
-  inspectInstalledArtifacts,
+  createRelayTap,
+  createServerTap,
+  directoryTreeDigest,
+  inspectArtifactMatrix,
   parseArgs,
-  parseBootstrapPolicy,
-  resolveProfileFiles,
-  runDaemonMcp,
+  parseFixtureSnapshot,
+  runBoundedChild,
+  scenarioObservation,
   runProbe,
-  safeRequestProjection,
-  sessionTranscriptProjection,
-  writeJsonExclusive,
+  snapshotActiveProfile,
+  turnIsComplete,
 } = require("./omp-capability-probe.js");
 
-function sha(value) {
-  return crypto.createHash("sha256").update(value).digest("hex");
-}
+const digest = (value) => crypto.createHash("sha256").update(value).digest("hex");
+const gitObject = (character) => character.repeat(40);
 
 function temporaryRoot(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hap01-probe-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hap01c-probe-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
 
 function writeJson(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(value), "utf8");
-}
-
-function fixtureFiles(t) {
-  const root = temporaryRoot(t);
-  const pluginRoot = path.join(root, "plugin");
-  const pluginData = path.join(root, "plugin-data");
-  const configuration = path.join(root, "config.json");
-  const bytes = Buffer.from("installed daemon fixture bytes");
-  const target = {
-    version: "6.48.0",
-    asset: "engram-windows-amd64.exe",
-    size: bytes.length,
-    sha256: sha(bytes),
-  };
-  writeJson(path.join(pluginRoot, "package.json"), {
-    name: "engram",
-    version: "6.48.0",
-    omp: { extensions: ["./extensions/engram-memory.mjs"] },
-  });
-  writeJson(path.join(pluginRoot, ".omp-plugin", "plugin.json"), {
-    name: "engram",
-    version: "6.48.0",
-    mcpServers: { engram: { type: "stdio", command: "node", args: ["./scripts/run-engram.js"], cwd: ".", timeout: 60000 } },
-  });
-  fs.mkdirSync(path.join(pluginRoot, "extensions"), { recursive: true });
-  fs.writeFileSync(path.join(pluginRoot, "extensions", "engram-memory.mjs"), "export default () => {};", "utf8");
-  writeJson(path.join(pluginRoot, "bootstrap-targets.json"), {
-    schema_version: 1,
-    package_version: "6.48.0",
-    targets: { "win32-x64": { desired: target } },
-  });
-  const object = path.join(pluginData, "bin", "objects", "sha256", target.sha256, target.asset);
-  fs.mkdirSync(path.dirname(object), { recursive: true });
-  fs.writeFileSync(object, bytes);
-  writeJson(configuration, { server_url: "http://fixture.invalid:37777", api_token: "fixture-token" });
-  const registry = path.join(root, "installed_plugins.json");
-  const lock = path.join(root, "omp-plugins.lock.json");
-  writeJson(registry, {
-    profiles: {
-      fixture: {
-        plugins: {
-          "engram@engram": [{ version: "6.48.0", installPath: pluginRoot, dataPath: pluginData, configPath: configuration }],
-        },
-        enabledPlugins: { "engram@engram": true },
-      },
-    },
-  });
-  writeJson(lock, {
-    profiles: {
-      fixture: {
-        plugins: { "engram@engram": [{ version: "6.48.0", installPath: pluginRoot }] },
-      },
-    },
-  });
-  return { root, pluginRoot, pluginData, configuration, registry, lock, object, target };
-}
-
-function profileFiles(files) {
-  return {
-    registryPath: files.registry,
-    lockPath: files.lock,
-    registryEntry: { version: "6.48.0", installPath: files.pluginRoot, dataPath: files.pluginData, configPath: files.configuration, enabled: true },
-    lockEntry: { version: "6.48.0", installPath: files.pluginRoot, dataPath: "", configPath: "", enabled: true },
-  };
+  fs.writeFileSync(filePath, `${JSON.stringify(value)}\n`, { mode: 0o600 });
 }
 
 function baseDeps(overrides = {}) {
   return {
     fs,
+    net,
     path,
-    os,
-    platform: "win32",
-    arch: "x64",
     env: {},
-    now: () => 100,
-    randomBytes: () => Buffer.alloc(16, 7),
+    platform: process.platform,
+    arch: "x64",
+    now: () => Date.now(),
+    sleep: async () => { },
+    randomBytes: (length) => Buffer.alloc(length, 7),
+    randomUUID: crypto.randomUUID,
+    cwd: () => process.cwd(),
+    setTimeout,
+    clearTimeout,
     ...overrides,
   };
 }
 
-test("requires contained evidence paths and exclusive owned directories", (t) => {
-  const root = temporaryRoot(t);
-  const run = "safe-run";
-  const options = parseArgs(["--profile", "fixture", "--run-id", run, "--evidence-dir", `.agent/runs/hap-01/${run}`], root, path);
-  assert.equal(options.evidence_dir, path.join(root, ".agent", "runs", "hap-01", run));
-  assert.throws(() => parseArgs(["--profile", "fixture", "--run-id", run, "--evidence-dir", "../escape"], root, path), ProbeError);
-  const deps = baseDeps();
-  createExclusiveDirectory(options.evidence_dir, deps);
-  assert.throws(() => createExclusiveDirectory(options.evidence_dir, deps), /owned run directory already exists/);
-  writeJsonExclusive(path.join(options.evidence_dir, "receipt.json"), { schema: "fixture" }, deps);
-  assert.throws(() => writeJsonExclusive(path.join(options.evidence_dir, "receipt.json"), { schema: "fixture" }, deps), /evidence file already exists/);
-});
-
-test("rejects registry and lock version mismatches", (t) => {
-  const files = fixtureFiles(t);
-  writeJson(files.lock, { profiles: { fixture: { plugins: { "engram@engram": [{ version: "6.47.9", installPath: files.pluginRoot }] } } } });
-  assert.throws(
-    () => resolveProfileFiles("fixture", baseDeps({ env: { OMP_PROFILE_REGISTRY: files.registry, OMP_PLUGIN_LOCK: files.lock } })),
-    (error) => error instanceof ProbeError && error.code === "PROFILE_LOCK_MISMATCH",
-  );
-});
-test("discovers the active OMP profile layout and lock plugin alias", (t) => {
-  const files = fixtureFiles(t);
-  const profileRoot = path.join(files.root, ".omp", "profiles", "fixture");
-  const pluginsRoot = path.join(profileRoot, "plugins");
-  const registry = path.join(pluginsRoot, "installed_plugins.json");
-  const lock = path.join(pluginsRoot, "omp-plugins.lock.json");
-  writeJson(registry, {
-    version: 2,
-    plugins: { "engram@engram": [{ version: "6.48.0", installPath: files.pluginRoot }] },
-  });
-  writeJson(lock, { plugins: { engram: { version: "6.48.0", enabled: true } }, settings: {} });
-  const resolved = resolveProfileFiles("fixture", baseDeps({
-    env: { PI_CODING_AGENT_DIR: path.join(profileRoot, "agent") },
-  }));
-  assert.equal(resolved.registryPath, registry);
-  assert.equal(resolved.lockPath, lock);
-  assert.equal(resolved.registryEntry.version, "6.48.0");
-  assert.equal(resolved.lockEntry.version, "6.48.0");
-});
-
-test("authenticates the policy-selected object rather than trusting its location", (t) => {
-  const files = fixtureFiles(t);
-  const inspected = inspectInstalledArtifacts(profileFiles(files), baseDeps());
-  assert.equal(inspected.artifact.daemon_object_sha256, files.target.sha256);
-  fs.writeFileSync(files.object, "tampered installed daemon");
-  assert.throws(
-    () => inspectInstalledArtifacts(profileFiles(files), baseDeps()),
-    (error) => error instanceof ProbeError && error.code === "POLICY_OBJECT_MISMATCH",
-  );
-  assert.throws(
-    () => parseBootstrapPolicy(Buffer.from(JSON.stringify({ schema_version: 1, package_version: "6.48.1", targets: {} })), "6.48.0", "win32", "x64"),
-    (error) => error instanceof ProbeError && error.code === "BOOTSTRAP_POLICY_INVALID",
-  );
-});
-
-test("clears inherited credentials and keeps request projection structural", () => {
-  const environment = callbackEnvironment({
-    ENGRAM_TOKEN: "inherited-token",
-    CLAUDE_PLUGIN_OPTION_API_TOKEN: "another-token",
-    NODE_OPTIONS: "--require unsafe.js",
-    KEEP: "safe",
-  }, "http://127.0.0.1:1234", "synthetic-token");
-  assert.deepEqual(environment.env, {
-    KEEP: "safe",
-    ENGRAM_URL: "http://127.0.0.1:1234",
-    ENGRAM_TOKEN: "synthetic-token",
-    ENGRAM_QUIET: "0",
-  });
-  const projection = safeRequestProjection(
-    { url: "/api/context/session-start?leak=never", method: "POST", headers: { authorization: "Bearer raw-secret" } },
-    JSON.stringify({ prompt: "raw prompt", session_id: "session-1", nested: { source: "private" } }),
-    sha("body"),
-    1,
-    10,
-    200,
-    baseDeps({ now: () => 35 }),
-  );
-  assert.deepEqual(projection.body_keys, ["nested", "prompt", "session_id"]);
-  assert.deepEqual(projection.field_lengths, { nested: 1, prompt: 10, session_id: 9 });
-  assert.equal(projection.authorization_present, true);
-  assert.doesNotMatch(JSON.stringify(projection), /raw-secret|raw prompt|private/);
-  assert.throws(() => assertSafeEvidence({ token: "never" }), /prohibited raw field/);
-});
-
-test("projects transcript metadata without retaining model text", (t) => {
-  const root = temporaryRoot(t);
-  fs.writeFileSync(path.join(root, "session.jsonl"), `${JSON.stringify({
-    type: "custom_message",
-    customType: "engram-memory",
-    content: "UNTRUSTED_REFERENCE customer text",
-  })}\n`, "utf8");
-  const projection = sessionTranscriptProjection(root, baseDeps());
-  assert.equal(projection.custom_message_count, 1);
-  assert.equal(projection.untrusted_reference_present, true);
-  assert.equal(projection.tool_control_semantics_present, false);
-  assert.doesNotMatch(JSON.stringify(projection), /customer text/);
-});
-
-test("correlates muxcore marker and descriptor through hashes only", (t) => {
-  const root = temporaryRoot(t);
-  writeJson(path.join(root, "muxcore-daemon-registry", "engram-fixture.json"), { engine_name: "engram", pid: 42, daemon_control_path: "private-control" });
-  writeJson(path.join(root, "engram-muxd.ctl.sock.marker.json"), {
-    schema_version: 2,
-    pid: 42,
-    daemon_generation: "private-generation",
-    exe: "C:/private/engram.exe",
-  });
-  const projection = discoverMuxcoreArtifacts(baseDeps({ tempDir: root }), true);
-  assert.equal(projection.correlated, true);
-  assert.equal(projection.descriptor.reachable, true);
-  assert.match(projection.marker.marker_binding_sha256, /^[a-f0-9]{64}$/);
-  assert.doesNotMatch(JSON.stringify(projection), /private-generation|private-control|C:\//i);
-});
-
-test("MCP sends tools/list only after local initialize and requires it for daemon proof", async () => {
-  const child = new EventEmitter();
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
-  child.kill = () => true;
-  const writes = [];
-  child.stdin = {
-    write(line) {
-      const message = JSON.parse(line);
-      writes.push(message);
-      if (message.id === 1) queueMicrotask(() => child.stdout.emit("data", Buffer.from('{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{}}}\n')));
-      if (message.id === 2) queueMicrotask(() => {
-        child.stdout.emit("data", Buffer.from('{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}\n'));
-        child.emit("close", 0);
-      });
-    },
-    end() { },
-  };
-  const result = await runDaemonMcp({ command: "installed-daemon", cwd: ".", env: {}, timeout_ms: 1000 }, baseDeps({
-    spawn: () => child,
-    setTimeout,
-    clearTimeout,
-  }));
-  assert.deepEqual(result.sequence, MCP_SEQUENCE);
-  assert.deepEqual(writes.map((message) => message.method), MCP_SEQUENCE);
-  assert.equal(classifyDaemonRuntime(result).state, "UNAVAILABLE");
-  assert.equal(classifyDaemonRuntime({
-    sequence: ["initialize"],
-    tools_list: { received: false, error_code: null },
-    authenticated_subject_proof_sha256: sha("subject"),
-  }).state, "UNAVAILABLE");
-});
-
-test("probe preserves evidence while cleaning scratch and leaves profile inputs unchanged", async (t) => {
-  const files = fixtureFiles(t);
-  const options = {
-    cwd: files.root,
-    profile: "fixture",
-    run_id: "probe-run",
-    evidence_dir: path.join(files.root, ".agent", "runs", "hap-01", "probe-run"),
-    scratch_dir: path.join(files.root, ".agent", "tmp", "hap-01", "probe-run"),
-  };
-  createExclusiveDirectory(options.evidence_dir, baseDeps());
-  const originalRegistry = fs.readFileSync(files.registry, "utf8");
-  const originalLock = fs.readFileSync(files.lock, "utf8");
-  const originalConfig = fs.readFileSync(files.configuration, "utf8");
-  const fixture = {
-    requests: [
-      { order: 1, method: "POST", path: "/api/context/inject", authorization_present: true, body_keys: ["project"], field_lengths: { project: 7 }, body_sha256: sha("one"), status: 200, timing_ms: 1 },
-      { order: 2, method: "POST", path: "/api/context/session-start", authorization_present: true, body_keys: ["project", "session_id"], field_lengths: { project: 7, session_id: 9 }, body_sha256: sha("two"), status: 200, timing_ms: 2 },
-      { order: 3, method: "POST", path: "/api/hooks/ambient-candidates", authorization_present: true, body_keys: ["prompt", "session_id"], field_lengths: { prompt: 20, session_id: 9 }, body_sha256: sha("three"), status: 200, timing_ms: 3 },
+function recordArtifact() {
+  return {
+    version: "6.49.0-rc.1",
+    package_sha256: "1".repeat(64),
+    extension_entry_sha256: "2".repeat(64),
+    relay_helper_sha256: "3".repeat(64),
+    adapter_sha256: "4".repeat(64),
+    daemon_object_sha256: "5".repeat(64),
+    fixture_object_sha256: digest("fixture bytes"),
+    omp_command_sha256: digest("omp bytes"),
+    postgres_image_sha256: "d".repeat(64),
+    client_object_sha256: "6".repeat(64),
+    bootstrap_targets_sha256: "7".repeat(64),
+    baseline_source_commit: gitObject("b"),
+    baseline_source_tree: gitObject("e"),
+    baseline_plugin_install_tree_sha256: "c".repeat(64),
+    baseline_client_object_sha256: "f".repeat(64),
+    install_tree_sha256: "8".repeat(64),
+    archives: [
+      { name: "engram_6.49.0-rc.1_darwin_arm64.tar.gz", platform: "darwin", arch: "arm64", size: 1, sha256: "9".repeat(64) },
+      { name: "engram_6.49.0-rc.1_linux_amd64.tar.gz", platform: "linux", arch: "amd64", size: 2, sha256: "a".repeat(64) },
+      { name: "engram_6.49.0-rc.1_windows_amd64.zip", platform: "win32", arch: "amd64", size: 3, sha256: "b".repeat(64) },
     ],
-    async start() { return { port: 43123 }; },
-    async close() { },
   };
-  const result = await runProbe(options, baseDeps({
-    env: { ENGRAM_URL: "http://fixture.invalid:37777", ENGRAM_TOKEN: "real-token" },
-    resolveProfileFiles: () => profileFiles(files),
-    resolveActiveConfig: () => ({ endpoint: "http://fixture.invalid:37777", token: "real-token", configPath: files.configuration, config_digest: sha(originalConfig) }),
-    createFixture: () => fixture,
-    runChild: async (spec) => {
-      assert.deepEqual(spec.args, ["--profile", "fixture", "--session-dir", options.scratch_dir, "--no-tools", "--max-time", String(CALLBACK_MAX_TIME_SECONDS), "-p", "Reply exactly HAP01_CALLBACK_SENTINEL."]);
-      assert.equal(spec.env.NODE_OPTIONS, undefined);
-      assert.equal(spec.args.includes("--extension"), false);
-      assert.equal(spec.args.includes("--no-extensions"), false);
-      fs.writeFileSync(path.join(spec.cwd, "transcript.jsonl"), `${JSON.stringify({ type: "custom_message", customType: "engram-memory", content: "HAP01_REFERENCE_DATA" })}\n`, "utf8");
-      return { started: true, error: false, exit_code: 0, timed_out: false, close_unconfirmed: false, stdout_bytes: 0, stderr_bytes: 0, sentinel_present: false };
+}
+
+function matrixFixture() {
+  const artifact = recordArtifact();
+  return {
+    candidate: {
+      source_commit: gitObject("c"),
+      source_tree: gitObject("d"),
+      design_sha256: "e".repeat(64),
+      adapter_revision: ADAPTER_REVISION,
+      adapter_sha256: artifact.adapter_sha256,
     },
-    runDaemon: async () => ({
-      sequence: MCP_SEQUENCE,
-      initialize: { received: true, error_code: null, result_keys: ["serverInfo"], tools_count: null, content_sha256: sha("initialize") },
-      tools_list: { received: true, error_code: null, result_keys: ["tools"], tools_count: 0, content_sha256: sha("tools") },
-      authenticated_subject_proof_sha256: null,
-      child: { started: true, error: false, exit_code: 0, timed_out: false, close_unconfirmed: false, stderr_bytes: 0 },
-    }),
-    tempDir: path.join(files.root, "tmp"),
+    fixture_object_sha256: digest("fixture bytes"),
+    artifact,
+    matrix_sha256: "f".repeat(64),
+  };
+}
+
+function cleanCustody() {
+  return {
+    extension_url_present: false,
+    extension_token_present: false,
+    extension_config_path_present: false,
+    authorization_seen: false,
+    child_hap_config_present: true,
+  };
+}
+
+function counts(overrides = {}) {
+  return {
+    callbacks_expected: 0,
+    callbacks_observed: 0,
+    route_attempts_expected: 0,
+    route_attempts_observed: 0,
+    deliveries_expected: 0,
+    deliveries_observed: 0,
+    direct_fallback_attempts: 0,
+    rediscoveries: 0,
+    server_dispatches: 0,
+    telemetry_attempts: 0,
+    cleanup_residue: 0,
+    ...overrides,
+  };
+}
+
+function scenarioFixture(id) {
+  const common = { id, state: "OBSERVED", passed: true, shared_deadline: true, custody: cleanCustody(), subcases: [], reason_codes: [] };
+  switch (id) {
+    case "new_new_happy":
+      return {
+        ...common,
+        counts: counts({ callbacks_expected: 2, callbacks_observed: 2, route_attempts_expected: 4, route_attempts_observed: 4, deliveries_expected: 2, deliveries_observed: 2, server_dispatches: 4, telemetry_attempts: 2 }),
+        route_sequence: [
+          "session_start:IDENTITY_REGISTRATION:OK",
+          "session_start:SESSION_START_CONTEXT:OK",
+          "before_agent_start:IDENTITY_REGISTRATION:OK",
+          "before_agent_start:AMBIENT_CANDIDATES:OK",
+        ],
+      };
+    case "new_plugin_old_daemon":
+      return { ...common, counts: counts({ callbacks_expected: 2, callbacks_observed: 2 }), route_sequence: [] };
+    case "old_plugin_new_daemon":
+      return {
+        ...common,
+        counts: counts({ callbacks_expected: 2, callbacks_observed: 2, deliveries_expected: 2, deliveries_observed: 2, server_dispatches: 2 }),
+        route_sequence: [],
+        custody: { extension_url_present: true, extension_token_present: true, extension_config_path_present: false, authorization_seen: true, child_hap_config_present: false },
+      };
+    case "relay_outage":
+      return {
+        ...common,
+        counts: counts({ callbacks_expected: 2, callbacks_observed: 2, route_attempts_expected: 2, route_attempts_observed: 2 }),
+        route_sequence: ["session_start:IDENTITY_REGISTRATION:NO_DELIVERY", "before_agent_start:IDENTITY_REGISTRATION:NO_DELIVERY"],
+      };
+    case "stale_generation":
+      return {
+        ...common,
+        counts: counts({ callbacks_expected: 2, callbacks_observed: 2, route_attempts_expected: 5, route_attempts_observed: 5, deliveries_expected: 2, deliveries_observed: 2, rediscoveries: 1, server_dispatches: 4, telemetry_attempts: 2 }),
+        route_sequence: [
+          "session_start:IDENTITY_REGISTRATION:NO_DELIVERY",
+          "session_start:IDENTITY_REGISTRATION:OK",
+          "session_start:SESSION_START_CONTEXT:OK",
+          "before_agent_start:IDENTITY_REGISTRATION:OK",
+          "before_agent_start:AMBIENT_CANDIDATES:OK",
+        ],
+      };
+    case "capability_invalidation":
+      return {
+        ...common,
+        counts: counts({ route_attempts_expected: 4, route_attempts_observed: 4 }),
+        route_sequence: Array.from({ length: 4 }, () => "session_start:SESSION_START_CONTEXT:NO_DELIVERY"),
+        subcases: ["adapter_mismatch", "expiry", "process_exit", "project_keycard_rotation"].map((subcase) => ({
+          id: subcase,
+          passed: true,
+          route_attempts: 1,
+          server_dispatches: 0,
+          reason_codes: [],
+        })),
+      };
+    case "rollback_future_turn":
+      return {
+        ...common,
+        counts: counts({ callbacks_expected: 4, callbacks_observed: 4, route_attempts_expected: 6, route_attempts_observed: 6, deliveries_expected: 2, deliveries_observed: 2, server_dispatches: 4, telemetry_attempts: 2 }),
+        route_sequence: [
+          "session_start:IDENTITY_REGISTRATION:NO_DELIVERY",
+          "before_agent_start:IDENTITY_REGISTRATION:NO_DELIVERY",
+          "session_start:IDENTITY_REGISTRATION:OK",
+          "session_start:SESSION_START_CONTEXT:OK",
+          "before_agent_start:IDENTITY_REGISTRATION:OK",
+          "before_agent_start:AMBIENT_CANDIDATES:OK",
+        ],
+      };
+    default:
+      throw new Error(`unknown fixture scenario ${id}`);
+  }
+}
+
+function allScenarios() {
+  return [
+    "new_new_happy",
+    "new_plugin_old_daemon",
+    "old_plugin_new_daemon",
+    "relay_outage",
+    "stale_generation",
+    "capability_invalidation",
+    "rollback_future_turn",
+  ].map(scenarioFixture);
+}
+
+function qualificationRecord(before = "a".repeat(64), after = before) {
+  const matrix = matrixFixture();
+  return buildQualificationRecord(buildQualificationInput(
+    { run_id: "hap01c-run", platform: "win32", arch: "x64", scratch_profile: "hap01c-test" },
+    matrix,
+    allScenarios(),
+    { sha256: before, file_count: 3 },
+    { sha256: after, file_count: 3 },
+    0,
+  ));
+}
+
+function physicalEndpoint(logical) {
+  if (process.platform !== "win32") return logical;
+  return `\\\\.\\pipe\\mcp-mux-${digest(logical.toLowerCase()).slice(0, 32)}`;
+}
+
+function listen(server, endpoint) {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(endpoint, () => resolve());
+  });
+}
+
+function close(server) {
+  return new Promise((resolve) => server.close(resolve));
+}
+
+function socketRequest(endpoint, bytes) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ path: endpoint });
+    let response = Buffer.alloc(0);
+    socket.once("error", reject);
+    socket.once("connect", () => socket.end(bytes));
+    socket.on("data", (chunk) => { response = Buffer.concat([response, Buffer.from(chunk)]); });
+    socket.once("end", () => resolve(response));
+  });
+}
+
+function relayFrame(generation, route = "IDENTITY_REGISTRATION") {
+  return Buffer.from(`${JSON.stringify({
+    protocol: "engram-legacy-relay/1",
+    requestId: "raw-request-id-never-retained",
+    daemonGeneration: generation,
+    adapter: { revision: ADAPTER_REVISION, installedArtifactSha256: "a".repeat(64) },
+    route,
+    deadlineUnixMs: Date.now() + 5_000,
+    body: {
+      hostSessionRef: "raw-host-session-never-retained",
+      projectIdentityV3: {
+        version: 3,
+        anchor_project_id: "11111111-1111-4111-8111-111111111111",
+        name: "fixture",
+        scope: "directory",
+        normalized_git_remotes: [],
+        legacy_identifiers: [],
+        client_instance_id: "fixture-client",
+      },
+    },
+  })}\n`);
+}
+
+function relayResponse(request) {
+  const frame = JSON.parse(request.subarray(0, request.length - 1).toString("utf8"));
+  return Buffer.from(`${JSON.stringify({
+    protocol: frame.protocol,
+    requestId: frame.requestId,
+    daemonGeneration: frame.daemonGeneration,
+    route: frame.route,
+    kind: "OK",
+    sessionCapability: Buffer.alloc(32, 9).toString("base64url"),
+    canonicalProjectRef: "canonical-project",
+  })}\n`);
+}
+
+test("bounded OMP child recognizes a model sentinel split across stdout chunks", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = () => true;
+  const pending = runBoundedChild({ command: "omp", args: [], cwd: process.cwd(), env: {}, timeout_ms: 1_000 }, "HAP_01C_MODEL_OK", baseDeps({
+    spawn: () => child,
   }));
-  assert.equal(result.record.disposition, "UNQUALIFIED");
-  assert.equal(result.record.guarantees.direct_credential_disabled.state, "CONTRADICTED");
-  assert.equal(result.receipt.effects.profile_registry_unchanged, true);
-  assert.equal(result.receipt.effects.configuration_unchanged, true);
-  assert.equal(result.receipt.effects.scratch_cleaned, true);
+  child.stdout.write("HAP_01C_");
+  child.stdout.write("MODEL_OK\n");
+  child.emit("close", 0, null);
+  const result = await pending;
+  assert.equal(result.sentinel_present, true);
+  assert.equal(result.exit_code, 0);
+  assert.equal(result.timed_out, false);
+});
+
+test("parses only contained HAP-01C roots and enforces the real capability TTL floor", () => {
+  const root = path.join(os.tmpdir(), "hap01c-parse-root");
+  const args = [
+    "--run-id", "safe-run",
+    "--artifact-root", "artifacts",
+    "--omp-command", "bin/omp.exe",
+    "--postgres-image", "postgres:17-pgvector",
+    "--baseline-source", "baseline",
+    "--baseline-commit", "a".repeat(40),
+    "--fixture-command", "bin/hap-01c-fixture.exe",
+  ];
+  const parsed = parseArgs(args, root, path);
+  assert.equal(parsed.evidence_dir, path.join(root, ".agent", "runs", "hap-01c", "safe-run"));
+  assert.equal(parsed.scratch_dir, path.join(root, ".agent", "tmp", "hap-01c", "safe-run"));
+  assert.throws(() => parseArgs([...args, "--evidence-root", "../escape"], root, path), ProbeError);
+  assert.throws(() => parseArgs([...args, "--expiry-wait-ms", "1"], root, path), ProbeError);
+});
+
+test("uses a canonical active-profile envelope and makes a changed envelope unqualified", (t) => {
+  const root = temporaryRoot(t);
+  const profileRoot = path.join(root, "home", ".omp", "profiles", "active", "plugins");
+  writeJson(path.join(profileRoot, "installed_plugins.json"), { plugins: {} });
+  writeJson(path.join(profileRoot, "omp-plugins.lock.json"), { plugins: {} });
+  const deps = baseDeps({ env: { HOME: path.join(root, "home"), OMP_PROFILE: "active", ENGRAM_URL: "never-retained" } });
+  const first = snapshotActiveProfile(deps);
+  writeJson(path.join(profileRoot, "omp-plugins.lock.json"), { plugins: { changed: true } });
+  const second = snapshotActiveProfile(deps);
+  assert.notEqual(first.sha256, second.sha256);
+  const record = qualificationRecord(first.sha256, second.sha256);
+  assert.equal(record.disposition, "UNQUALIFIED");
+});
+
+test("installed-runtime proof requires a clean child exit, sentinel, and complete transcript", () => {
+  const completeChild = { started: true, error: false, exit_code: 0, timed_out: false, close_unconfirmed: false, sentinel_present: true };
+  const completeTranscript = { complete: true, file_count: 1 };
+  assert.equal(turnIsComplete(completeChild, completeTranscript), true);
+  for (const [child, transcript] of [
+    [{ ...completeChild, exit_code: 1 }, completeTranscript],
+    [{ ...completeChild, timed_out: true }, completeTranscript],
+    [{ ...completeChild, close_unconfirmed: true }, completeTranscript],
+    [{ ...completeChild, sentinel_present: false }, completeTranscript],
+    [completeChild, { ...completeTranscript, complete: false }],
+    [completeChild, { ...completeTranscript, file_count: 0 }],
+  ]) assert.equal(turnIsComplete(child, transcript), false);
+});
+
+test("scratch children inherit only the explicit neutral environment allowlist", () => {
+  const child = childEnvironment({
+    PATH: "safe-path",
+    SystemRoot: "C:\\Windows",
+    PI_CONFIG_DIR: "active-profile",
+    PI_CONFIG_FILES: "active-settings.json",
+    COPILOT_GITHUB_TOKEN: "real-copilot-token",
+    CURSOR_ACCESS_TOKEN: "real-cursor-token",
+    OMP_PROFILE: "active",
+    ENGRAM_TOKEN: "real-engram-token",
+  }, { HOME: "scratch-home", OMP_PROFILE: "scratch" });
+  assert.deepEqual(child, { PATH: "safe-path", SystemRoot: "C:\\Windows", HOME: "scratch-home", OMP_PROFILE: "scratch" });
+});
+
+test("scenario projection contradicts any measured candidate direct fallback", () => {
+  const observation = scenarioObservation("relay_outage", {
+    expected: { direct_fallback_attempts: 0 },
+    actual: counts({ direct_fallback_attempts: 1 }),
+    routes: [],
+    shared_deadline: true,
+    custody: cleanCustody(),
+  });
+  assert.equal(observation.state, "CONTRADICTED");
+  assert.equal(observation.passed, false);
+  assert.equal(observation.counts.direct_fallback_attempts, 1);
+});
+
+test("scratch directory creation rejects an intermediate symbolic link or junction", (t) => {
+  const root = temporaryRoot(t);
+  const target = path.join(root, "foreign");
+  const link = path.join(root, "linked");
+  fs.mkdirSync(target);
+  try {
+    fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    if (error && (error.code === "EPERM" || error.code === "EACCES")) {
+      t.skip("host does not permit scratch symlink creation");
+      return;
+    }
+    throw error;
+  }
+  assert.throws(() => createExclusiveDirectory(path.join(link, "escaped"), baseDeps()), ProbeError);
+  assert.equal(fs.existsSync(path.join(target, "escaped")), false);
+});
+
+test("inspects exact candidate bytes and rejects an extra hand-labeled archive", async (t) => {
+  const root = temporaryRoot(t);
+  const candidate = path.join(root, "candidate");
+  const source = path.join(candidate, "source");
+  const plugin = path.join(candidate, "plugin");
+  const dist = path.join(candidate, "dist");
+  const baseline = path.join(root, "baseline");
+  fs.mkdirSync(source, { recursive: true });
+  fs.mkdirSync(path.join(plugin, "extensions"), { recursive: true });
+  fs.mkdirSync(dist, { recursive: true });
+  fs.mkdirSync(path.join(baseline, "plugin"), { recursive: true });
+  fs.writeFileSync(path.join(candidate, "design.json"), "design bytes");
+  writeJson(path.join(plugin, "package.json"), { name: "engram", version: "6.49.0" });
+  fs.writeFileSync(path.join(plugin, "extensions", "engram-memory.mjs"), "entry bytes");
+  fs.writeFileSync(path.join(plugin, "extensions", "legacy-relay.mjs"), "helper bytes");
+  writeJson(path.join(plugin, "bootstrap-targets.json"), { schema_version: 1 });
+  fs.writeFileSync(path.join(candidate, "engram-server.exe"), "server bytes");
+  fs.writeFileSync(path.join(candidate, "engram-client.exe"), "client bytes");
+  fs.writeFileSync(path.join(baseline, "client.exe"), "baseline client");
+  fs.writeFileSync(path.join(candidate, "hap-01c-fixture.exe"), "fixture bytes");
+  const artifact = {
+    version: "6.49.0",
+    package_sha256: digest(fs.readFileSync(path.join(plugin, "package.json"))),
+    extension_entry_sha256: digest(fs.readFileSync(path.join(plugin, "extensions", "engram-memory.mjs"))),
+    relay_helper_sha256: digest(fs.readFileSync(path.join(plugin, "extensions", "legacy-relay.mjs"))),
+    bootstrap_targets_sha256: digest(fs.readFileSync(path.join(plugin, "bootstrap-targets.json"))),
+    server_sha256: digest("server bytes"),
+    client_sha256: digest("client bytes"),
+    fixture_sha256: digest("fixture bytes"),
+    omp_command_sha256: digest("omp bytes"),
+    postgres_image: "pgvector/pgvector:pg17",
+    postgres_image_sha256: digest("postgres image"),
+    install_tree_sha256: directoryTreeDigest(plugin, baseDeps()).sha256,
+  };
+  const adapter = adapterDigest(path.join(plugin, "extensions", "engram-memory.mjs"), path.join(plugin, "extensions", "legacy-relay.mjs"), baseDeps());
+  for (const name of ["engram_6.49.0_darwin_arm64.tar.gz", "engram_6.49.0_linux_amd64.tar.gz", "engram_6.49.0_windows_amd64.zip"]) fs.writeFileSync(path.join(dist, name), name);
+  writeJson(path.join(root, ARTIFACT_MANIFEST), {
+    schema: "hap-01c-artifact-matrix/1",
+    candidate: {
+      source_path: "candidate/source",
+      source_commit: "1".repeat(40),
+      source_tree: "2".repeat(40),
+      design_path: "candidate/design.json",
+      design_sha256: digest("design bytes"),
+      adapter_revision: ADAPTER_REVISION,
+      adapter_sha256: adapter,
+    },
+    artifact: {
+      version: artifact.version,
+      package_path: "candidate/plugin",
+      server_path: "candidate/engram-server.exe",
+      client_path: "candidate/engram-client.exe",
+      archives_dir: "candidate/dist",
+      fixture_path: "candidate/hap-01c-fixture.exe",
+      ...artifact,
+    },
+    baseline: {
+      source_commit: "3".repeat(40),
+      source_tree: "4".repeat(40),
+      plugin_path: "baseline/plugin",
+      client_path: "baseline/client.exe",
+      plugin_install_tree_sha256: directoryTreeDigest(path.join(baseline, "plugin"), baseDeps()).sha256,
+      client_sha256: digest("baseline client"),
+    },
+  });
+  const options = {
+    artifact_root: root,
+    baseline_source: baseline,
+    baseline_commit: "3".repeat(40),
+    postgres_image: "pgvector/pgvector:pg17",
+    cwd: root,
+    fixture_command: path.join(candidate, "hap-01c-fixture.exe"),
+    platform: "win32",
+    arch: "x64",
+    timeouts: { startup_timeout_ms: 1_000 },
+  };
+  const deps = baseDeps({ gitIdentity: async (sourcePath) => sourcePath === source ? { source_commit: "1".repeat(40), source_tree: "2".repeat(40) } : { source_commit: "3".repeat(40), source_tree: "4".repeat(40) } });
+  const foreign = path.join(root, "foreign-baseline-entry");
+  fs.writeFileSync(foreign, "foreign");
+  const linked = path.join(baseline, "plugin", "linked-entry");
+  try {
+    fs.symlinkSync(foreign, linked, "file");
+    await assert.rejects(() => inspectArtifactMatrix(options, deps), ProbeError);
+    fs.rmSync(linked, { force: true });
+  } catch (error) {
+    if (!error || (error.code !== "EPERM" && error.code !== "EACCES")) throw error;
+  }
+  const matrix = await inspectArtifactMatrix(options, deps);
+  assert.equal(matrix.artifact.adapter_sha256, adapter);
+  assert.equal(matrix.artifact.archives.length, 3);
+  fs.writeFileSync(path.join(dist, "hand-labeled-extra.zip"), "not admitted");
+  await assert.rejects(() => inspectArtifactMatrix(options, deps), ProbeError);
+});
+
+test("RelayTap forwards normal bytes unchanged, redacts records, fails closed on outage, and rediscoveries once", async (t) => {
+  const root = temporaryRoot(t);
+  const upstreamLogical = path.join(root, "upstream.sock");
+  const upstreamPhysical = physicalEndpoint(upstreamLogical);
+  let upstreamCalls = 0;
+  const upstream = net.createServer((socket) => {
+    let input = Buffer.alloc(0);
+    socket.on("data", (chunk) => {
+      input = Buffer.concat([input, Buffer.from(chunk)]);
+      if (input.indexOf(0x0a) < 0) return;
+      upstreamCalls += 1;
+      socket.end(relayResponse(input));
+    });
+  });
+  await listen(upstream, upstreamPhysical);
+  t.after(() => close(upstream));
+
+  const logical = path.join(root, "nested", "tap.sock");
+  const locator = path.join(root, "locator.json");
+  const tap = createRelayTap({ logical_endpoint: logical }, baseDeps({ platform: process.platform }));
+  await tap.start();
+  t.after(() => tap.close());
+  tap.installLocator({ protocol: "engram-legacy-relay/1", daemon_generation: "current-generation", endpoint: upstreamLogical }, locator);
+
+  const normal = relayFrame("current-generation");
+  const normalResponse = await socketRequest(physicalEndpoint(logical), normal);
+  assert.deepEqual(JSON.parse(normalResponse.toString("utf8")).kind, "OK");
+  const normalObservation = tap.snapshot();
+  assert.equal(upstreamCalls, 1);
+  assert.equal(normalObservation.records[0].outcome, "OK");
+  assert.doesNotMatch(JSON.stringify(normalObservation), /raw-request-id|raw-host-session|fixture-client|current-generation/);
+
+  const staleMark = tap.mark();
+  tap.armStaleGeneration("stale-generation");
+  const staleResponse = await socketRequest(physicalEndpoint(logical), relayFrame("stale-generation"));
+  assert.equal(JSON.parse(staleResponse.toString("utf8")).reason, "STALE_GENERATION");
+  await socketRequest(physicalEndpoint(logical), relayFrame("current-generation"));
+  const staleObservation = tap.snapshot(staleMark);
+  assert.deepEqual(staleObservation.records.map((item) => item.outcome), ["NO_DELIVERY", "OK"]);
+  assert.equal(staleObservation.rediscoveries, 1);
+
+  const outageMark = tap.mark();
+  tap.setMode("outage");
+  await socketRequest(physicalEndpoint(logical), relayFrame("current-generation"));
+  const outage = tap.snapshot(outageMark);
+  assert.equal(outage.records.length, 1);
+  assert.equal(outage.server_dispatches, 0);
+});
+
+test("ServerTap retains only observable HTTP method/path/status and authorization presence", async (t) => {
+  const target = net.createServer((socket) => {
+    socket.on("data", () => socket.end("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+  });
+  await listen(target, { host: "127.0.0.1", port: 0 });
+  t.after(() => close(target));
+  const targetAddress = target.address();
+  const tap = createServerTap({ target_host: "127.0.0.1", target_port: targetAddress.port }, baseDeps());
+  const endpoint = await tap.start();
+  t.after(() => tap.close());
+  const response = await new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: endpoint.host, port: endpoint.port });
+    let bytes = Buffer.alloc(0);
+    socket.once("error", reject);
+    socket.once("connect", () => socket.end("GET /durable HTTP/1.1\r\nHost: loopback\r\nAuthorization: Bearer raw-secret\r\nConnection: close\r\n\r\n"));
+    socket.on("data", (chunk) => { bytes = Buffer.concat([bytes, Buffer.from(chunk)]); });
+    socket.once("end", () => resolve(bytes));
+  });
+  assert.match(response.toString("latin1"), /^HTTP\/1\.1 204/);
+  const observation = tap.snapshot();
+  assert.deepEqual(observation.records, [{ method: "GET", path: "/durable", authorization_present: true, status: 204 }]);
+  assert.doesNotMatch(JSON.stringify(observation), /raw-secret|Host:/);
+});
+
+test("record assembly binds exact seven scenario denominators, custody, and invalidation subcases", () => {
+  const record = qualificationRecord();
+  assert.equal(record.disposition, "QUALIFIED");
+  assert.deepEqual(record.scenarios.map((scenario) => scenario.id), [
+    "new_new_happy",
+    "new_plugin_old_daemon",
+    "old_plugin_new_daemon",
+    "relay_outage",
+    "stale_generation",
+    "capability_invalidation",
+    "rollback_future_turn",
+  ]);
+  const oldPlugin = record.scenarios.find((scenario) => scenario.id === "old_plugin_new_daemon");
+  assert.equal(oldPlugin.custody.extension_url_present, true);
+  assert.equal(oldPlugin.custody.authorization_seen, true);
+  assert.equal(oldPlugin.custody.child_hap_config_present, false);
+  const invalidation = record.scenarios.find((scenario) => scenario.id === "capability_invalidation");
+  assert.deepEqual(invalidation.subcases.map((subcase) => [subcase.id, subcase.route_attempts, subcase.server_dispatches]), [
+    ["adapter_mismatch", 1, 0],
+    ["expiry", 1, 0],
+    ["process_exit", 1, 0],
+    ["project_keycard_rotation", 1, 0],
+  ]);
+});
+
+test("runProbe cleans only its owned scratch root and writes a record from injected runtime evidence", async (t) => {
+  const root = temporaryRoot(t);
+  fs.mkdirSync(path.join(root, "artifact-root"));
+  fs.mkdirSync(path.join(root, "baseline"));
+  fs.mkdirSync(path.join(root, "bin"));
+  fs.writeFileSync(path.join(root, "artifact-root", "hap-01c-fixture.exe"), "fixture bytes");
+  fs.writeFileSync(path.join(root, "bin", "omp.exe"), "omp bytes");
+  const options = parseArgs([
+    "--run-id", "runner-cleanup",
+    "--artifact-root", "artifact-root",
+    "--omp-command", "bin/omp.exe",
+    "--postgres-image", "postgres:17-pgvector",
+    "--baseline-source", "baseline",
+    "--baseline-commit", "a".repeat(40),
+    "--fixture-command", "artifact-root/hap-01c-fixture.exe",
+  ], root, path);
+  let closed = false;
+  const result = await runProbe(options, baseDeps({
+    inspectArtifactMatrix: async () => matrixFixture(),
+    snapshotActiveProfile: () => ({ sha256: "c".repeat(64), file_count: 0 }),
+    createRuntime: async (receivedOptions) => {
+      for (const name of ["keycards.json", "dsn.txt", "seed-request.json"]) fs.writeFileSync(path.join(receivedOptions.scratch_dir, name), "secret", { mode: 0o600 });
+      return {
+        options: receivedOptions,
+        secrets_file: path.join(receivedOptions.scratch_dir, "keycards.json"),
+        dsn_file: path.join(receivedOptions.scratch_dir, "dsn.txt"),
+        seed_request_file: path.join(receivedOptions.scratch_dir, "seed-request.json"),
+        postgres: { image_sha256: "d".repeat(64) },
+        async close() { closed = true; return 0; },
+      };
+    },
+    runScenario: async (id) => scenarioFixture(id),
+  }));
+  assert.equal(result.failure, undefined, JSON.stringify(result.failure));
+  assert.equal(result.record.disposition, "QUALIFIED");
+  assert.equal(result.receipt.omp_command_sha256, digest("omp bytes"));
+  assert.equal(result.receipt.fixture_command_sha256, digest("fixture bytes"));
+  assert.equal(result.receipt.postgres_image_sha256, "d".repeat(64));
+  assert.equal(closed, true);
   assert.equal(fs.existsSync(options.scratch_dir), false);
-  assert.equal(fs.existsSync(path.join(options.evidence_dir, "receipt.json")), true);
   assert.equal(fs.existsSync(path.join(options.evidence_dir, "record.json")), true);
-  assert.equal(fs.readFileSync(files.registry, "utf8"), originalRegistry);
-  assert.equal(fs.readFileSync(files.lock, "utf8"), originalLock);
-  assert.equal(fs.readFileSync(files.configuration, "utf8"), originalConfig);
-  assert.doesNotMatch(JSON.stringify(result.receipt), /real-token|fixture-token|[A-Za-z]:[\\/]/i);
+  assert.equal(fs.existsSync(path.join(options.evidence_dir, "redacted-observations.json")), true);
+});
+
+test("fixture snapshots are closed and probe source contains no direct REST HAP fallback", (t) => {
+  const root = temporaryRoot(t);
+  const snapshot = path.join(root, "snapshot.json");
+  writeJson(snapshot, {
+    schema: "hap-01c-fixture-snapshot/1",
+    run_id_sha256: digest("fixture-run"),
+    resolution_attempts: 0,
+    registration_attempts: 0,
+    session_start_attempts: 0,
+    target_memory_injection_count: 0,
+    memory_rows: 0,
+    rule_rows: 0,
+    active_project_token_count: 1,
+    revoked_project_token_count: 0,
+    ambient_delivery_available: false,
+    ambient_delivery_unavailable_reason: "NO_DURABLE_AMBIENT_ATTEMPT_COUNTER",
+  });
+  assert.equal(parseFixtureSnapshot(snapshot, { run_id: "fixture-run" }, baseDeps()).ambient_delivery_available, false);
+  const source = fs.readFileSync(path.join(__dirname, "omp-capability-probe.js"), "utf8");
+  assert.doesNotMatch(source, /createLoopbackFixture|safeRequestProjection|\/api\/context\//);
 });
