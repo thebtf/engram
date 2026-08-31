@@ -103,6 +103,62 @@ func TestBootstrapSelectsOnlyOneLiveAcceptedDescendant(t *testing.T) {
 	}
 }
 
+func TestBootstrapSelectionRuntimeInstanceRefIsOpaqueAndProjectIndependent(t *testing.T) {
+	initial := selectedRuntimeInstanceRef(t, "host-incarnation", "child-incarnation", "daemon-generation", "diagnostic-project-one", map[string]string{
+		"PWD":     "/workspace/one",
+		"PROJECT": "project-one",
+	})
+	sameRuntime := selectedRuntimeInstanceRef(t, "host-incarnation", "child-incarnation", "daemon-generation", "diagnostic-project-two", map[string]string{
+		"PWD":     "/workspace/two",
+		"PROJECT": "project-two",
+	})
+	if initial != sameRuntime {
+		t.Fatalf("runtime reference changed with diagnostic project or cwd: %q != %q", initial.Value(), sameRuntime.Value())
+	}
+	if !initial.valid() {
+		t.Fatalf("runtime reference is not opaque-valid: %q", initial.Value())
+	}
+	for _, forbidden := range []string{"host-incarnation", "child-incarnation", "daemon-generation", "diagnostic-project", "/workspace"} {
+		if strings.Contains(initial.Value(), forbidden) {
+			t.Fatalf("runtime reference leaked %q: %q", forbidden, initial.Value())
+		}
+	}
+
+	for name, changed := range map[string]RuntimeInstanceRef{
+		"host incarnation":  selectedRuntimeInstanceRef(t, "next-host-incarnation", "child-incarnation", "daemon-generation", "diagnostic-project-one", nil),
+		"child incarnation": selectedRuntimeInstanceRef(t, "host-incarnation", "next-child-incarnation", "daemon-generation", "diagnostic-project-one", nil),
+		"daemon generation": selectedRuntimeInstanceRef(t, "host-incarnation", "child-incarnation", "next-daemon-generation", "diagnostic-project-one", nil),
+	} {
+		if changed == initial {
+			t.Fatalf("runtime reference did not change for %s", name)
+		}
+	}
+}
+
+func selectedRuntimeInstanceRef(t *testing.T, hostIncarnation, childIncarnation, generation, diagnosticProject string, env map[string]string) RuntimeInstanceRef {
+	t.Helper()
+	host := mustProcess(t, 100, hostIncarnation, "/opt/omp", 1)
+	child := mustProcess(t, 200, childIncarnation, "/opt/engram", host.PID())
+	inspector := &fakeProcessInspector{processes: map[int]ProcessIdentity{host.PID(): host, child.PID(): child}}
+	children := NewChildRegistry(inspector, ChildImageGateFunc(func(ProcessImage) bool { return true }))
+	if _, err := children.Observe(child.PID(), diagnosticProject, env); err != nil {
+		t.Fatalf("observe child: %v", err)
+	}
+	selection, err := NewBootstrapper(children, inspector, 8).SelectPeer(host.PID())
+	if err != nil {
+		t.Fatalf("select peer: %v", err)
+	}
+	daemonGeneration, err := NewDaemonGeneration(generation)
+	if err != nil {
+		t.Fatalf("daemon generation: %v", err)
+	}
+	reference, err := selection.RuntimeInstanceRef(daemonGeneration)
+	if err != nil {
+		t.Fatalf("derive runtime reference: %v", err)
+	}
+	return reference
+}
+
 func TestBootstrapRejectsReusedOrExitedChild(t *testing.T) {
 	host := mustProcess(t, 100, "host-incarnation", "/opt/omp", 1)
 	child := mustProcess(t, 200, "child-incarnation", "/opt/engram", 100)

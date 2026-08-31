@@ -305,6 +305,8 @@ func TestBridgeProtoFieldsAndGeneratedServiceMethodSet(t *testing.T) {
 	}
 	sort.Strings(methods)
 	require.Equal(t, []string{
+		"Advise",
+		"Bind",
 		"CallTool",
 		"CodeIndexNegotiate",
 		"CodeIndexUpload",
@@ -312,6 +314,7 @@ func TestBridgeProtoFieldsAndGeneratedServiceMethodSet(t *testing.T) {
 		"GetSessionStartContext",
 		"Initialize",
 		"NegotiateVersion",
+		"Observe",
 		"Ping",
 		"ProjectEvents",
 		"RegisterProjectIdentityV3",

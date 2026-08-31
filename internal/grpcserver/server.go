@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/auth"
 	engramgorm "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/hostadvisor"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/worker/ambientcore"
@@ -65,6 +66,7 @@ type Server struct {
 	identityResolverV3    func(context.Context, *gorm.DB, projectidentity.ResolveProjectRequestV3) (projectidentity.ResolutionResultV3, error)
 	comparisonObserverV3  projectidentity.LegacyComparisonObserverV2
 	comparisonStoreV3     projectidentity.ComparisonStoreV3
+	hostAdvisorRegistry   *hostadvisor.Registry
 }
 
 // New creates a new gRPC server. The returned *grpc.Server has EngramService
@@ -112,6 +114,20 @@ func (s *Server) SetValidator(v *auth.Validator) {
 	s.mu.Lock()
 	s.validator = v
 	s.mu.Unlock()
+}
+
+// SetHostAdvisorRegistry installs or removes the private host-advisor registry.
+// A nil registry is the deliberate default-dark posture.
+func (s *Server) SetHostAdvisorRegistry(registry *hostadvisor.Registry) {
+	s.mu.Lock()
+	s.hostAdvisorRegistry = registry
+	s.mu.Unlock()
+}
+
+func (s *Server) currentHostAdvisorRegistry() *hostadvisor.Registry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.hostAdvisorRegistry
 }
 
 // currentValidator returns the live validator under read lock.
@@ -228,12 +244,15 @@ func (s *Server) Initialize(ctx context.Context, req *pb.InitializeRequest) (*pb
 		}
 	}
 
+	proof := initializeAuthenticatedSubjectProof(ctx)
+
 	return &pb.InitializeResponse{
-		ServerName:          name,
-		ServerVersion:       version,
-		Tools:               tools,
-		CanonicalProject:    canonicalProject,
-		ProjectResolutionV3: resolutionV3,
+		ServerName:                      name,
+		ServerVersion:                   version,
+		Tools:                           tools,
+		CanonicalProject:                canonicalProject,
+		ProjectResolutionV3:             resolutionV3,
+		AuthenticatedSubjectProofSha256: proof,
 	}, nil
 }
 

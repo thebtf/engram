@@ -63,6 +63,14 @@ service EngramService {
   // RegisterProjectIdentityV3 explicitly establishes a V3 anchor binding.
   // Authentication and registration authority are derived solely by the server.
   rpc RegisterProjectIdentityV3(RegisterProjectIdentityV3Request) returns (RegisterProjectIdentityV3Response);
+  // Bind establishes a private host-advisor capability binding.
+  rpc Bind(HostAdvisorBindRequest) returns (HostAdvisorBindResponse);
+
+  // Advise is reserved for the host-advisor delivery semantics owned by HAP-03.
+  rpc Advise(HostAdvisorAdviseRequest) returns (HostAdvisorAdviseResponse);
+
+  // Observe is reserved for host-advisor observation semantics owned by HAP-03.
+  rpc Observe(HostAdvisorObserveRequest) returns (HostAdvisorObserveResponse);
 }
 
 // ---- SyncProjectState messages ----------------------------------------
@@ -329,6 +337,8 @@ message InitializeResponse {
   string canonical_project = 4;
   // Present only for a V3 request that resolved successfully.
   ProjectResolutionResultV3 project_resolution_v3 = 5;
+  // Present only for an eligible authenticated workstation keycard.
+  bytes authenticated_subject_proof_sha256 = 6;
 }
 
 // ToolDefinition describes a single MCP tool.
@@ -489,3 +499,146 @@ message GetAmbientCandidatesRequest {
 message GetAmbientCandidatesResponse {
   string additional_context = 1;
 }
+
+// HostAdvisorHostFamily identifies the host family that owns callback facts.
+enum HostAdvisorHostFamily {
+  HOST_ADVISOR_HOST_FAMILY_UNSPECIFIED = 0;
+  HOST_ADVISOR_HOST_FAMILY_OMP = 1;
+  HOST_ADVISOR_HOST_FAMILY_CLAUDE_CODE = 2;
+  HOST_ADVISOR_HOST_FAMILY_CODEX = 3;
+}
+
+// HostAdvisorArtifactKind identifies the proven artifact source.
+enum HostAdvisorArtifactKind {
+  HOST_ADVISOR_ARTIFACT_KIND_UNSPECIFIED = 0;
+  HOST_ADVISOR_ARTIFACT_KIND_INSTALLED = 1;
+  HOST_ADVISOR_ARTIFACT_KIND_SOURCE = 2;
+}
+
+// HostAdvisorSemantic identifies a closed host callback semantic.
+enum HostAdvisorSemantic {
+  HOST_ADVISOR_SEMANTIC_UNSPECIFIED = 0;
+  HOST_ADVISOR_SEMANTIC_BEFORE_AGENT_START = 1;
+  HOST_ADVISOR_SEMANTIC_TOOL_RESULT = 2;
+  HOST_ADVISOR_SEMANTIC_TOOL_ACTION = 3;
+  HOST_ADVISOR_SEMANTIC_SESSION_FINALIZATION = 4;
+}
+
+// HostAdvisorAction identifies a closed action capability.
+enum HostAdvisorAction {
+  HOST_ADVISOR_ACTION_UNSPECIFIED = 0;
+  HOST_ADVISOR_ACTION_EMIT_ADVICE = 1;
+  HOST_ADVISOR_ACTION_ADAPTER_ATTESTATION = 2;
+  HOST_ADVISOR_ACTION_ALLOW = 3;
+  HOST_ADVISOR_ACTION_BLOCK = 4;
+  HOST_ADVISOR_ACTION_REWRITE = 5;
+}
+
+// HostAdvisorContextInjectionMode identifies a closed host context surface.
+enum HostAdvisorContextInjectionMode {
+  HOST_ADVISOR_CONTEXT_INJECTION_MODE_UNSPECIFIED = 0;
+  HOST_ADVISOR_CONTEXT_INJECTION_MODE_HIDDEN_UNTRUSTED_MESSAGE = 1;
+  HOST_ADVISOR_CONTEXT_INJECTION_MODE_DEVELOPER_CONTEXT = 2;
+  HOST_ADVISOR_CONTEXT_INJECTION_MODE_ADDITIONAL_CONTEXT = 3;
+}
+
+// HostAdvisorCallbackOrdering identifies the observed callback ordering.
+enum HostAdvisorCallbackOrdering {
+  HOST_ADVISOR_CALLBACK_ORDERING_UNSPECIFIED = 0;
+  HOST_ADVISOR_CALLBACK_ORDERING_BEFORE_FIRST_ACTION = 1;
+  HOST_ADVISOR_CALLBACK_ORDERING_AFTER_TOOL_RESULT = 2;
+  HOST_ADVISOR_CALLBACK_ORDERING_OTHER_PROVEN_ORDER = 3;
+}
+
+// HostAdvisorAcknowledgement identifies the strongest host acknowledgement.
+enum HostAdvisorAcknowledgement {
+  HOST_ADVISOR_ACKNOWLEDGEMENT_UNSPECIFIED = 0;
+  HOST_ADVISOR_ACKNOWLEDGEMENT_NONE = 1;
+  HOST_ADVISOR_ACKNOWLEDGEMENT_ADAPTER_ATTESTED = 2;
+  HOST_ADVISOR_ACKNOWLEDGEMENT_HOST_ACKNOWLEDGED = 3;
+  HOST_ADVISOR_ACKNOWLEDGEMENT_CONSUMPTION_OBSERVED = 4;
+}
+
+message HostAdvisorProtocolRange {
+  uint32 min_version = 1;
+  uint32 max_version = 2;
+}
+
+message HostAdvisorHost {
+  HostAdvisorHostFamily family = 1;
+  string host_version = 2;
+  string adapter_id = 3;
+  string adapter_version = 4;
+  string runtime_instance_ref = 5;
+}
+
+message HostAdvisorArtifact {
+  HostAdvisorArtifactKind kind = 1;
+  bytes digest_sha256 = 2;
+}
+
+message HostAdvisorEvidenceRef {
+  HostAdvisorArtifact artifact = 1;
+  string runtime_probe_receipt_id = 2;
+}
+
+message HostAdvisorCorrelation {
+  bool session = 1;
+  bool turn = 2;
+  bool tool_action = 3;
+  bool stable_phase_anchor = 4;
+}
+
+message HostAdvisorCallback {
+  bool awaited = 1;
+  uint32 deadline_ms = 2;
+  HostAdvisorCallbackOrdering ordering = 3;
+}
+
+message HostCapability {
+  HostAdvisorSemantic semantic = 1;
+  repeated HostAdvisorAction allowed_actions = 2;
+  repeated HostAdvisorContextInjectionMode context_injection_modes = 3;
+  HostAdvisorCorrelation correlation = 4;
+  HostAdvisorCallback callback = 5;
+  HostAdvisorAcknowledgement acknowledgement = 6;
+}
+
+message HostHello {
+  HostAdvisorProtocolRange protocol_range = 1;
+  HostAdvisorHost host = 2;
+  repeated HostCapability requested_capabilities = 3;
+  HostAdvisorEvidenceRef evidence_ref = 4;
+}
+
+message AcceptedCapabilitySnapshot {
+  string snapshot_id = 1;
+  bytes contract_sha256 = 2;
+  uint64 revision = 3;
+  string capability_revision = 4;
+  repeated HostCapability capabilities = 5;
+}
+
+message HostBinding {
+  string binding_id = 1;
+  AcceptedCapabilitySnapshot capability_snapshot = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  uint32 callback_deadline_ms = 4;
+  bytes authenticated_subject_proof_sha256 = 5;
+}
+
+message HostAdvisorBindRequest {
+  HostHello hello = 1;
+}
+
+message HostAdvisorBindResponse {
+  HostBinding binding = 1;
+}
+
+message HostAdvisorAdviseRequest {}
+
+message HostAdvisorAdviseResponse {}
+
+message HostAdvisorObserveRequest {}
+
+message HostAdvisorObserveResponse {}

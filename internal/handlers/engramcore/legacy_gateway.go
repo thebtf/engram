@@ -22,19 +22,40 @@ type LegacyRelayGateway struct {
 	module           *Module
 	children         *legacyrelay.ChildRegistry
 	capabilities     *legacyrelay.CapabilityRegistry
+	advisorProfile   *AdvisorClientProfile
+	advisorBindings  *advisorBindingCache
 	mu               sync.Mutex
 	known            map[string]string
 	childCredentials map[legacyrelay.ChildBinding]map[string]legacyrelay.CredentialRef
 }
 
+// NewLegacyRelayGateway preserves the current HAP-01B construction path. A
+// nil advisor profile leaves the HAP-02 prewarm seam dark.
 func NewLegacyRelayGateway(module *Module, children *legacyrelay.ChildRegistry, capabilities *legacyrelay.CapabilityRegistry) (*LegacyRelayGateway, error) {
+	return NewLegacyRelayGatewayWithAdvisorProfile(module, children, capabilities, nil)
+}
+
+// NewLegacyRelayGatewayWithAdvisorProfile injects an immutable, non-secret
+// HAP-02 client profile for a future qualified caller. No production wiring
+// supplies one in this slice.
+func NewLegacyRelayGatewayWithAdvisorProfile(module *Module, children *legacyrelay.ChildRegistry, capabilities *legacyrelay.CapabilityRegistry, profile *AdvisorClientProfile) (*LegacyRelayGateway, error) {
 	if module == nil || children == nil || capabilities == nil {
 		return nil, errors.New("legacy relay gateway dependencies are missing")
+	}
+	var advisorProfile *AdvisorClientProfile
+	if profile != nil {
+		if !profile.valid() {
+			return nil, errors.New("advisor client profile is invalid")
+		}
+		profileCopy := *profile
+		advisorProfile = &profileCopy
 	}
 	gateway := &LegacyRelayGateway{
 		module:           module,
 		children:         children,
 		capabilities:     capabilities,
+		advisorProfile:   advisorProfile,
+		advisorBindings:  newAdvisorBindingCache(),
 		known:            make(map[string]string),
 		childCredentials: make(map[legacyrelay.ChildBinding]map[string]legacyrelay.CredentialRef),
 	}
@@ -208,6 +229,9 @@ func (g *LegacyRelayGateway) rememberCredential(child legacyrelay.ChildBinding, 
 }
 
 func (g *LegacyRelayGateway) invalidateChild(child legacyrelay.ChildBinding) {
+	if g.advisorBindings != nil {
+		g.advisorBindings.removeChild(child)
+	}
 	g.mu.Lock()
 	credentials := g.childCredentials[child]
 	delete(g.childCredentials, child)

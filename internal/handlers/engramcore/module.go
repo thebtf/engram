@@ -46,6 +46,7 @@ const moduleName = "engramcore"
 type Module struct {
 	pool               *grpcPool
 	cache              *slugCache
+	advisorProofs      *advisorProofCache
 	v3ClientInstanceID string
 	deps               module.ModuleDeps
 }
@@ -71,6 +72,7 @@ func NewModuleWithClientInstanceID(clientInstanceID string) *Module {
 	return &Module{
 		pool:               &grpcPool{},
 		cache:              &slugCache{},
+		advisorProofs:      newAdvisorProofCache(),
 		v3ClientInstanceID: clientInstanceID,
 	}
 }
@@ -103,6 +105,7 @@ func (m *Module) Init(_ context.Context, deps module.ModuleDeps) error {
 // connections is idempotent so concurrent Shutdown calls are safe.
 func (m *Module) Shutdown(_ context.Context) error {
 	m.pool.closeAll()
+	m.advisorProofs.clear()
 	if m.deps.Logger != nil {
 		m.deps.Logger.Info("engramcore module shut down")
 	}

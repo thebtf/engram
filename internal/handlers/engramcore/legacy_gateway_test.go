@@ -34,6 +34,7 @@ type relayGatewayMockServer struct {
 	ambientAuth     string
 	sessionCalls    int
 	ambientCalls    int
+	bindCalls       int
 	sessionErr      error
 }
 
@@ -70,6 +71,13 @@ func (s *relayGatewayMockServer) GetAmbientCandidates(ctx context.Context, reque
 	s.ambientAuth = incomingAuthorization(ctx)
 	s.ambientCalls++
 	return &pb.GetAmbientCandidatesResponse{AdditionalContext: "bounded ambient"}, nil
+}
+
+func (s *relayGatewayMockServer) Bind(context.Context, *pb.HostAdvisorBindRequest) (*pb.HostAdvisorBindResponse, error) {
+	s.mu.Lock()
+	s.bindCalls++
+	s.mu.Unlock()
+	return nil, status.Error(codes.Unimplemented, "Bind must not be called by the current legacy routes")
 }
 
 func incomingAuthorization(ctx context.Context) string {
@@ -228,6 +236,7 @@ type legacyGatewayFixture struct {
 	relay    *legacyrelay.Relay
 	server   *relayGatewayMockServer
 	module   *Module
+	gateway  *LegacyRelayGateway
 	children *legacyrelay.ChildRegistry
 	child    legacyrelay.ProcessIdentity
 	env      map[string]string
@@ -277,7 +286,7 @@ func newLegacyGatewayFixture(t *testing.T) *legacyGatewayFixture {
 		t.Fatalf("relay: %v", err)
 	}
 	t.Cleanup(module.pool.closeAll)
-	return &legacyGatewayFixture{relay: relay, server: server, module: module, children: children, child: child, env: env}
+	return &legacyGatewayFixture{relay: relay, server: server, module: module, gateway: gateway, children: children, child: child, env: env}
 }
 
 type gatewayWireResponse struct {

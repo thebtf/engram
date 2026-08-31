@@ -112,6 +112,13 @@ func (m *Module) ProxyTools(ctx context.Context, p muxcore.ProjectContext) ([]mo
 			InputSchema: t.InputSchemaJson,
 		})
 	}
+	// The proof becomes usable only after the existing response validation and
+	// complete tools-list projection above have succeeded. Empty is the
+	// old-server-compatible case; malformed non-empty values fail closed.
+	if err := m.advisorProofs.record(serverURL, token, resp.GetAuthenticatedSubjectProofSha256()); err != nil {
+		return nil, &module.RequiredProxyToolsError{Cause: err}
+	}
+
 	return tools, nil
 }
 

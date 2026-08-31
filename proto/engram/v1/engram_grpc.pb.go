@@ -30,6 +30,9 @@ const (
 	EngramService_CodeIndexNegotiate_FullMethodName        = "/engram.v1.EngramService/CodeIndexNegotiate"
 	EngramService_CodeIndexUpload_FullMethodName           = "/engram.v1.EngramService/CodeIndexUpload"
 	EngramService_RegisterProjectIdentityV3_FullMethodName = "/engram.v1.EngramService/RegisterProjectIdentityV3"
+	EngramService_Bind_FullMethodName                      = "/engram.v1.EngramService/Bind"
+	EngramService_Advise_FullMethodName                    = "/engram.v1.EngramService/Advise"
+	EngramService_Observe_FullMethodName                   = "/engram.v1.EngramService/Observe"
 )
 
 // EngramServiceClient is the client API for EngramService service.
@@ -79,6 +82,12 @@ type EngramServiceClient interface {
 	// RegisterProjectIdentityV3 explicitly establishes a V3 anchor binding.
 	// Authentication and registration authority are derived solely by the server.
 	RegisterProjectIdentityV3(ctx context.Context, in *RegisterProjectIdentityV3Request, opts ...grpc.CallOption) (*RegisterProjectIdentityV3Response, error)
+	// Bind establishes a private host-advisor capability binding.
+	Bind(ctx context.Context, in *HostAdvisorBindRequest, opts ...grpc.CallOption) (*HostAdvisorBindResponse, error)
+	// Advise is reserved for the host-advisor delivery semantics owned by HAP-03.
+	Advise(ctx context.Context, in *HostAdvisorAdviseRequest, opts ...grpc.CallOption) (*HostAdvisorAdviseResponse, error)
+	// Observe is reserved for host-advisor observation semantics owned by HAP-03.
+	Observe(ctx context.Context, in *HostAdvisorObserveRequest, opts ...grpc.CallOption) (*HostAdvisorObserveResponse, error)
 }
 
 type engramServiceClient struct {
@@ -211,6 +220,36 @@ func (c *engramServiceClient) RegisterProjectIdentityV3(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *engramServiceClient) Bind(ctx context.Context, in *HostAdvisorBindRequest, opts ...grpc.CallOption) (*HostAdvisorBindResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostAdvisorBindResponse)
+	err := c.cc.Invoke(ctx, EngramService_Bind_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramServiceClient) Advise(ctx context.Context, in *HostAdvisorAdviseRequest, opts ...grpc.CallOption) (*HostAdvisorAdviseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostAdvisorAdviseResponse)
+	err := c.cc.Invoke(ctx, EngramService_Advise_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramServiceClient) Observe(ctx context.Context, in *HostAdvisorObserveRequest, opts ...grpc.CallOption) (*HostAdvisorObserveResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HostAdvisorObserveResponse)
+	err := c.cc.Invoke(ctx, EngramService_Observe_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EngramServiceServer is the server API for EngramService service.
 // All implementations must embed UnimplementedEngramServiceServer
 // for forward compatibility.
@@ -258,6 +297,12 @@ type EngramServiceServer interface {
 	// RegisterProjectIdentityV3 explicitly establishes a V3 anchor binding.
 	// Authentication and registration authority are derived solely by the server.
 	RegisterProjectIdentityV3(context.Context, *RegisterProjectIdentityV3Request) (*RegisterProjectIdentityV3Response, error)
+	// Bind establishes a private host-advisor capability binding.
+	Bind(context.Context, *HostAdvisorBindRequest) (*HostAdvisorBindResponse, error)
+	// Advise is reserved for the host-advisor delivery semantics owned by HAP-03.
+	Advise(context.Context, *HostAdvisorAdviseRequest) (*HostAdvisorAdviseResponse, error)
+	// Observe is reserved for host-advisor observation semantics owned by HAP-03.
+	Observe(context.Context, *HostAdvisorObserveRequest) (*HostAdvisorObserveResponse, error)
 	mustEmbedUnimplementedEngramServiceServer()
 }
 
@@ -300,6 +345,15 @@ func (UnimplementedEngramServiceServer) CodeIndexUpload(grpc.ClientStreamingServ
 }
 func (UnimplementedEngramServiceServer) RegisterProjectIdentityV3(context.Context, *RegisterProjectIdentityV3Request) (*RegisterProjectIdentityV3Response, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterProjectIdentityV3 not implemented")
+}
+func (UnimplementedEngramServiceServer) Bind(context.Context, *HostAdvisorBindRequest) (*HostAdvisorBindResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Bind not implemented")
+}
+func (UnimplementedEngramServiceServer) Advise(context.Context, *HostAdvisorAdviseRequest) (*HostAdvisorAdviseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Advise not implemented")
+}
+func (UnimplementedEngramServiceServer) Observe(context.Context, *HostAdvisorObserveRequest) (*HostAdvisorObserveResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Observe not implemented")
 }
 func (UnimplementedEngramServiceServer) mustEmbedUnimplementedEngramServiceServer() {}
 func (UnimplementedEngramServiceServer) testEmbeddedByValue()                       {}
@@ -502,6 +556,60 @@ func _EngramService_RegisterProjectIdentityV3_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EngramService_Bind_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostAdvisorBindRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServiceServer).Bind(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngramService_Bind_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServiceServer).Bind(ctx, req.(*HostAdvisorBindRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EngramService_Advise_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostAdvisorAdviseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServiceServer).Advise(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngramService_Advise_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServiceServer).Advise(ctx, req.(*HostAdvisorAdviseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EngramService_Observe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HostAdvisorObserveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServiceServer).Observe(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngramService_Observe_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServiceServer).Observe(ctx, req.(*HostAdvisorObserveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EngramService_ServiceDesc is the grpc.ServiceDesc for EngramService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -544,6 +652,18 @@ var EngramService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RegisterProjectIdentityV3",
 			Handler:    _EngramService_RegisterProjectIdentityV3_Handler,
+		},
+		{
+			MethodName: "Bind",
+			Handler:    _EngramService_Bind_Handler,
+		},
+		{
+			MethodName: "Advise",
+			Handler:    _EngramService_Advise_Handler,
+		},
+		{
+			MethodName: "Observe",
+			Handler:    _EngramService_Observe_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

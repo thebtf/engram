@@ -1,5 +1,20 @@
 package legacyrelay
 
+import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+)
+
+// RuntimeInstanceRef is an opaque host-runtime reference. Its value never
+// exposes process facts, diagnostic project identity, or a working directory.
+type RuntimeInstanceRef struct{ value string }
+
+func (r RuntimeInstanceRef) Value() string { return r.value }
+func (r RuntimeInstanceRef) valid() bool {
+	return validOpaqueReference(r.value, maxOpaqueReferenceBytes)
+}
+
 // BootstrapSelection contains only the direct OMP/child process observations
 // needed to bind a capability. It deliberately retains no ancestry chain.
 type BootstrapSelection struct {
@@ -9,6 +24,26 @@ type BootstrapSelection struct {
 
 func (s BootstrapSelection) Host() ProcessIdentity { return s.host }
 func (s BootstrapSelection) Child() ChildBinding   { return s.child }
+
+// RuntimeInstanceRef derives a stable reference for this accepted OMP peer,
+// child-process incarnation, and daemon lifecycle. It intentionally accepts no
+// project, cwd, session, or environment input.
+func (s BootstrapSelection) RuntimeInstanceRef(generation DaemonGeneration) (RuntimeInstanceRef, error) {
+	if !s.valid() || !generation.valid() {
+		return RuntimeInstanceRef{}, ErrBootstrapUnavailable
+	}
+
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("engram.host-advisor.runtime-instance/v1\x00"))
+	for _, part := range [...]string{s.host.incarnation, s.child.process.incarnation, generation.Value()} {
+		var length [4]byte
+		binary.BigEndian.PutUint32(length[:], uint32(len(part)))
+		_, _ = hash.Write(length[:])
+		_, _ = hash.Write([]byte(part))
+	}
+	return RuntimeInstanceRef{value: "sha256-" + hex.EncodeToString(hash.Sum(nil))}, nil
+}
+
 func (s BootstrapSelection) valid() bool {
 	return s.host.valid() && s.child.valid()
 }
