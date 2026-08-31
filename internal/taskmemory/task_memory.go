@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"math"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -13,13 +14,15 @@ import (
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/scope"
+	"github.com/thebtf/engram/internal/vectordim"
 	"github.com/thebtf/engram/pkg/models"
 )
 
 const (
-	MaxPreparedCandidates = 8
-	MaxTaskQueryRunes     = 4096
-	PreparationRevision   = "task-memory-prepare/1"
+	MaxPreparedCandidates     = 8
+	MaxTaskQueryRunes         = 4096
+	PreparationRevision       = "task-memory-prepare/1"
+	maxQueryEmbeddingDuration = 600 * time.Millisecond
 )
 
 // MaxCandidateLookups bounds pre-ranked exact references before authorization.
@@ -183,6 +186,11 @@ type AuthorityResolver interface {
 	ResolveTaskAuthority(context.Context, ProjectEvidenceV3) (AuthorizedTaskContext, error)
 }
 
+// QueryEmbedder is the minimal query-embedding seam shared with the existing client.
+type QueryEmbedder interface {
+	Embed(context.Context, []string) ([][]float32, error)
+}
+
 // CandidateSourceTier identifies the retrieval leg that produced a candidate reference.
 type CandidateSourceTier uint8
 
@@ -318,12 +326,13 @@ func cloneVisibilityOptions(options scope.MemoryVisibilityOptions) scope.MemoryV
 	return copied
 }
 
-// AuthorizedCandidateQuery is a closed, provider-facing lexical retrieval query.
+// AuthorizedCandidateQuery is a closed, provider-facing retrieval query.
 type AuthorizedCandidateQuery struct {
 	canonicalProject string
 	query            string
 	limit            int
 	accessPolicy     AccessPolicy
+	vector           []float32
 }
 
 func (q AuthorizedCandidateQuery) CanonicalProject() string {
@@ -342,9 +351,27 @@ func (q AuthorizedCandidateQuery) AccessPolicy() AccessPolicy {
 	return q.accessPolicy.copy()
 }
 
+// Vector returns an immutable copy of the validated query embedding, when present.
+func (q AuthorizedCandidateQuery) Vector() []float32 {
+	if q.vector == nil {
+		return nil
+	}
+	vector := make([]float32, len(q.vector))
+	copy(vector, q.vector)
+	return vector
+}
+
+// VectorEnabled reports whether this query carries one validated query embedding.
+func (q AuthorizedCandidateQuery) VectorEnabled() bool {
+	return q.vector != nil && validEmbeddingVector(q.vector)
+}
+
 // Valid reports whether this query was constructed by an authorized Preparer.
 func (q AuthorizedCandidateQuery) Valid() bool {
 	if strings.TrimSpace(q.canonicalProject) == "" || strings.TrimSpace(q.canonicalProject) != q.canonicalProject || q.limit != MaxPreparedCandidates {
+		return false
+	}
+	if q.vector != nil && !validEmbeddingVector(q.vector) {
 		return false
 	}
 	normalized, err := normalizeTaskQuery(q.query)
@@ -363,13 +390,34 @@ func (q AuthorizedCandidateQuery) Valid() bool {
 		validPrincipalKind(caller.PrincipalKind)
 }
 
-func newAuthorizedCandidateQuery(context AuthorizedTaskContext, query string) AuthorizedCandidateQuery {
+func newAuthorizedCandidateQuery(context AuthorizedTaskContext, query string, vector []float32) AuthorizedCandidateQuery {
+	var copiedVector []float32
+	if vector != nil {
+		copiedVector = make([]float32, len(vector))
+		copy(copiedVector, vector)
+	}
 	return AuthorizedCandidateQuery{
 		canonicalProject: string(context.CanonicalProject()),
 		query:            query,
 		limit:            MaxPreparedCandidates,
 		accessPolicy:     NewAccessPolicy(context),
+		vector:           copiedVector,
 	}
+}
+
+func validEmbeddingVector(vector []float32) bool {
+	if len(vector) != vectordim.Dimension {
+		return false
+	}
+	normSquared := float64(0)
+	for _, value := range vector {
+		converted := float64(value)
+		if math.IsNaN(converted) || math.IsInf(converted, 0) {
+			return false
+		}
+		normSquared += converted * converted
+	}
+	return normSquared > 0 && !math.IsInf(normSquared, 0)
 }
 
 // CandidateSnapshot is an immutable candidate result from one provider read.
@@ -425,7 +473,7 @@ func (s CandidateSnapshot) valid() bool {
 			return false
 		}
 		for _, candidate := range s.candidates {
-			if !candidate.valid() {
+			if !candidate.valid() || (candidate.tier != CandidateFTS && candidate.tier != CandidateVector) {
 				return false
 			}
 		}
@@ -442,7 +490,7 @@ func (s CandidateSnapshot) valid() bool {
 	return true
 }
 
-// AuthorizedCandidateProvider supplies one authorized lexical candidate snapshot.
+// AuthorizedCandidateProvider supplies one authorized candidate snapshot.
 type AuthorizedCandidateProvider interface {
 	Snapshot(context.Context, AuthorizedCandidateQuery) (CandidateSnapshot, error)
 }
@@ -501,10 +549,11 @@ type PrepareRequest struct {
 	Task    TaskFacts
 }
 
-// PreparerConfig configures the authority and candidate read seams.
+// PreparerConfig configures the authority, candidate read, and optional embedding seams.
 type PreparerConfig struct {
 	Authority      AuthorityResolver
 	Candidates     AuthorizedCandidateProvider
+	Embedder       QueryEmbedder
 	RedactionRules []redaction.CompiledRule
 	MaxDuration    time.Duration
 }
@@ -512,6 +561,7 @@ type PreparerConfig struct {
 type preparer struct {
 	authority      AuthorityResolver
 	candidates     AuthorizedCandidateProvider
+	embedder       QueryEmbedder
 	redactionRules []redaction.CompiledRule
 	maxDuration    time.Duration
 }
@@ -530,6 +580,7 @@ func NewPreparer(config PreparerConfig) (Preparer, error) {
 	return &preparer{
 		authority:      config.Authority,
 		candidates:     config.Candidates,
+		embedder:       config.Embedder,
 		redactionRules: append([]redaction.CompiledRule(nil), config.RedactionRules...),
 		maxDuration:    maxDuration,
 	}, nil
@@ -545,7 +596,7 @@ func (p *preparer) Prepare(ctx context.Context, request PrepareRequest) (Prepare
 		return PreparedTaskMemory{}, ErrUnavailable
 	}
 
-	query, err := sanitizePreparedQuery(request.Task.Query(), p.redactionRules)
+	query, containsSecret, err := sanitizePreparedQuery(request.Task.Query(), p.redactionRules)
 	if err != nil {
 		return PreparedTaskMemory{}, err
 	}
@@ -559,7 +610,11 @@ func (p *preparer) Prepare(ctx context.Context, request PrepareRequest) (Prepare
 	if !authority.valid() {
 		return PreparedTaskMemory{}, ErrUnauthorized
 	}
-	queryForProvider := newAuthorizedCandidateQuery(authority, query)
+	vector, err := p.embedQueryVector(preparedContext, query, containsSecret)
+	if err != nil {
+		return PreparedTaskMemory{}, err
+	}
+	queryForProvider := newAuthorizedCandidateQuery(authority, query, vector)
 
 	first, err := p.snapshot(preparedContext, queryForProvider)
 	if err != nil {
@@ -583,36 +638,61 @@ func (p *preparer) Prepare(ctx context.Context, request PrepareRequest) (Prepare
 }
 
 func (p *preparer) snapshot(ctx context.Context, query AuthorizedCandidateQuery) (CandidateSnapshot, error) {
-	snapshot, err := p.candidates.Snapshot(ctx, query)
-	if err != nil || ctx.Err() != nil {
+	if ctx.Err() != nil {
 		return CandidateSnapshot{}, ErrUnavailable
 	}
-	if len(snapshot.candidates) > MaxPreparedCandidates {
+	snapshot, err := p.candidates.Snapshot(ctx, query)
+	if err != nil || ctx.Err() != nil {
 		return CandidateSnapshot{}, ErrUnavailable
 	}
 	copied := CandidateSnapshot{
 		mode:       snapshot.mode,
 		candidates: append([]AuthorizedCandidateRef(nil), snapshot.candidates...),
 	}
-	if !copied.valid() || !validLexicalSnapshot(copied) {
+	if !copied.valid() {
 		return CandidateSnapshot{}, ErrUnavailable
 	}
 	return copied, nil
 }
 
-func sanitizePreparedQuery(query string, rules []redaction.CompiledRule) (string, error) {
+func (p *preparer) embedQueryVector(ctx context.Context, query string, containsSecret bool) ([]float32, error) {
+	if ctx.Err() != nil {
+		return nil, ErrUnavailable
+	}
+	if containsSecret || p.embedder == nil {
+		return nil, nil
+	}
+	embedContext, cancel := context.WithTimeout(ctx, maxQueryEmbeddingDuration)
+	vectors, err := p.embedder.Embed(embedContext, []string{query})
+	embedTimedOut := embedContext.Err() != nil
+	cancel()
+	if ctx.Err() != nil {
+		return nil, ErrUnavailable
+	}
+	if err != nil || embedTimedOut || len(vectors) != 1 || !validEmbeddingVector(vectors[0]) {
+		return nil, nil
+	}
+	return vectors[0], nil
+}
+
+func sanitizePreparedQuery(query string, rules []redaction.CompiledRule) (string, bool, error) {
 	normalized, err := normalizeTaskQuery(query)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	if privacy.ContainsSecrets(normalized) {
+	containsSecret := privacy.ContainsSecrets(normalized)
+	if containsSecret {
 		normalized = privacy.RedactSecrets(normalized)
 	}
 	scrubbed, _, err := redaction.ScrubCompiled(normalized, rules)
 	if err != nil {
-		return "", ErrInvalidRequest
+		return "", false, ErrInvalidRequest
 	}
-	return normalizeTaskQuery(scrubbed)
+	sanitized, err := normalizeTaskQuery(scrubbed)
+	if err != nil {
+		return "", false, err
+	}
+	return sanitized, containsSecret, nil
 }
 
 func normalizeTaskQuery(query string) (string, error) {
@@ -624,29 +704,6 @@ func normalizeTaskQuery(query string) (string, error) {
 		return "", ErrInvalidRequest
 	}
 	return query, nil
-}
-
-func validLexicalSnapshot(snapshot CandidateSnapshot) bool {
-	switch snapshot.mode {
-	case RetrievalEmpty:
-		return len(snapshot.candidates) == 0
-	case RetrievalExact:
-		for _, candidate := range snapshot.candidates {
-			if candidate.tier != CandidateExact {
-				return false
-			}
-		}
-		return len(snapshot.candidates) > 0
-	case RetrievalLexicalDegraded:
-		for _, candidate := range snapshot.candidates {
-			if candidate.tier != CandidateFTS {
-				return false
-			}
-		}
-		return len(snapshot.candidates) > 0
-	default:
-		return false
-	}
 }
 
 func snapshotsEqual(left, right CandidateSnapshot) bool {

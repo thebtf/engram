@@ -5,8 +5,10 @@ import (
 	"fmt"
 
 	"github.com/lib/pq"
+	"github.com/pgvector/pgvector-go"
 	"gorm.io/gorm"
 
+	"github.com/thebtf/engram/internal/rankfusion"
 	"github.com/thebtf/engram/internal/taskmemory"
 )
 
@@ -178,8 +180,95 @@ const taskMemoryFTSSQL = `
 	LIMIT ?
 `
 
-// Snapshot returns exact matches when present; otherwise it returns the bounded
-// FTS snapshot. All candidate references are read-only ID/version/tier values.
+const taskMemoryVectorSimilarityThreshold = 0.7
+
+const taskMemoryVectorSQL = `
+	WITH authorized_chunks AS (
+		SELECT m.id, m.version, c.embedding <=> ?::vector AS distance
+		FROM content_chunks c
+		JOIN memories m ON m.id = c.memory_id
+		WHERE ` + taskMemoryCandidateAccessSQL + `
+		  AND c.embedding IS NOT NULL
+	),
+	ranked AS (
+		SELECT id, version, MIN(distance) AS distance
+		FROM authorized_chunks
+		GROUP BY id, version
+	)
+	SELECT id, version
+	FROM ranked
+	WHERE 1 - distance >= ?
+	ORDER BY distance ASC, id ASC
+	LIMIT ?
+`
+
+func taskMemoryLexicalSnapshot(fts []taskmemory.AuthorizedCandidateRef) (taskmemory.CandidateSnapshot, error) {
+	if len(fts) == 0 {
+		snapshot, err := taskmemory.NewCandidateSnapshot(taskmemory.RetrievalEmpty, nil)
+		if err != nil {
+			return taskmemory.CandidateSnapshot{}, fmt.Errorf("new empty task memory snapshot: %w", err)
+		}
+		return snapshot, nil
+	}
+	snapshot, err := taskmemory.NewCandidateSnapshot(taskmemory.RetrievalLexicalDegraded, fts)
+	if err != nil {
+		return taskmemory.CandidateSnapshot{}, fmt.Errorf("new FTS task memory snapshot: %w", err)
+	}
+	return snapshot, nil
+}
+
+func taskMemoryHybridCandidateRefs(
+	fts []taskmemory.AuthorizedCandidateRef,
+	vectors []taskmemory.AuthorizedCandidateRef,
+	limit int,
+) ([]taskmemory.AuthorizedCandidateRef, error) {
+	ftsIDs := make([]int64, 0, len(fts))
+	ftsRanks := make(map[int64]int, len(fts))
+	ftsRefs := make(map[int64]taskmemory.AuthorizedCandidateRef, len(fts))
+	for rank, ref := range fts {
+		id := ref.ID()
+		ftsIDs = append(ftsIDs, id)
+		ftsRanks[id] = rank
+		ftsRefs[id] = ref
+	}
+
+	vectorIDs := make([]int64, 0, len(vectors))
+	vectorRanks := make(map[int64]int, len(vectors))
+	vectorRefs := make(map[int64]taskmemory.AuthorizedCandidateRef, len(vectors))
+	for rank, ref := range vectors {
+		id := ref.ID()
+		vectorIDs = append(vectorIDs, id)
+		vectorRanks[id] = rank
+		vectorRefs[id] = ref
+	}
+
+	fusedIDs := rankfusion.RRF(ftsIDs, vectorIDs, 60)
+	if len(fusedIDs) > limit {
+		fusedIDs = fusedIDs[:limit]
+	}
+	refs := make([]taskmemory.AuthorizedCandidateRef, 0, len(fusedIDs))
+	for _, id := range fusedIDs {
+		ftsRank, inFTS := ftsRanks[id]
+		vectorRank, inVector := vectorRanks[id]
+		if !inFTS && !inVector {
+			return nil, fmt.Errorf("fused task memory candidate %d has no source", id)
+		}
+		source := vectorRefs[id]
+		tier := taskmemory.CandidateVector
+		if inFTS && (!inVector || ftsRank <= vectorRank) {
+			source = ftsRefs[id]
+			tier = taskmemory.CandidateFTS
+		}
+		ref, err := taskmemory.NewAuthorizedCandidateRef(source.ID(), source.Version(), tier)
+		if err != nil {
+			return nil, fmt.Errorf("new fused task memory candidate reference: %w", err)
+		}
+		refs = append(refs, ref)
+	}
+	return refs, nil
+}
+
+// Snapshot returns exact matches when present; otherwise it returns bounded lexical or hybrid candidate references.
 func (s *TaskMemoryCandidateStore) Snapshot(
 	ctx context.Context,
 	query taskmemory.AuthorizedCandidateQuery,
@@ -212,17 +301,35 @@ func (s *TaskMemoryCandidateStore) Snapshot(
 	if err != nil {
 		return taskmemory.CandidateSnapshot{}, fmt.Errorf("task memory FTS candidates: %w", err)
 	}
-	if len(fts) == 0 {
+	if !query.VectorEnabled() {
+		return taskMemoryLexicalSnapshot(fts)
+	}
+
+	vector := pgvector.NewVector(query.Vector())
+	vectorArgs := make([]any, 0, len(access.args)+3)
+	vectorArgs = append(vectorArgs, vector)
+	vectorArgs = append(vectorArgs, access.args...)
+	vectorArgs = append(vectorArgs, taskMemoryVectorSimilarityThreshold, query.Limit())
+	vectors, err := s.loadCandidateRefs(ctx, taskMemoryVectorSQL, vectorArgs, taskmemory.CandidateVector)
+	if err != nil {
+		// Vector lookup is best-effort after FTS so store failure preserves lexical retrieval.
+		return taskMemoryLexicalSnapshot(fts)
+	}
+
+	hybrid, err := taskMemoryHybridCandidateRefs(fts, vectors, query.Limit())
+	if err != nil {
+		return taskmemory.CandidateSnapshot{}, fmt.Errorf("fuse task memory candidates: %w", err)
+	}
+	if len(hybrid) == 0 {
 		snapshot, err := taskmemory.NewCandidateSnapshot(taskmemory.RetrievalEmpty, nil)
 		if err != nil {
 			return taskmemory.CandidateSnapshot{}, fmt.Errorf("new empty task memory snapshot: %w", err)
 		}
 		return snapshot, nil
 	}
-
-	snapshot, err := taskmemory.NewCandidateSnapshot(taskmemory.RetrievalLexicalDegraded, fts)
+	snapshot, err := taskmemory.NewCandidateSnapshot(taskmemory.RetrievalHybrid, hybrid)
 	if err != nil {
-		return taskmemory.CandidateSnapshot{}, fmt.Errorf("new FTS task memory snapshot: %w", err)
+		return taskmemory.CandidateSnapshot{}, fmt.Errorf("new hybrid task memory snapshot: %w", err)
 	}
 	return snapshot, nil
 }

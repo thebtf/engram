@@ -3,6 +3,7 @@ package taskmemory
 import (
 	"context"
 	"errors"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/redaction"
+	"github.com/thebtf/engram/internal/vectordim"
 	"github.com/thebtf/engram/pkg/models"
 )
 
@@ -28,6 +30,29 @@ func (r *recordingAuthorityResolver) ResolveTaskAuthority(ctx context.Context, e
 		r.deadline = deadline
 	}
 	return r.authority, r.err
+}
+
+type recordingQueryEmbedder struct {
+	vectors      [][]float32
+	err          error
+	calls        int
+	texts        [][]string
+	calledAt     time.Time
+	deadline     time.Time
+	beforeReturn func()
+}
+
+func (e *recordingQueryEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	e.calls++
+	e.calledAt = time.Now()
+	e.texts = append(e.texts, append([]string(nil), texts...))
+	if deadline, ok := ctx.Deadline(); ok {
+		e.deadline = deadline
+	}
+	if e.beforeReturn != nil {
+		e.beforeReturn()
+	}
+	return e.vectors, e.err
 }
 
 type scriptedCandidateProvider struct {
@@ -191,6 +216,45 @@ func TestCandidateSnapshotAndPreparedCandidatesAreCopied(t *testing.T) {
 	}
 }
 
+func TestAuthorizedCandidateQueryVectorValidationAndOwnership(t *testing.T) {
+	vector := testEmbeddingVector()
+	query := newAuthorizedCandidateQuery(testAuthority(t, "alice", "agent"), "vector task", vector)
+	if !query.Valid() || !query.VectorEnabled() {
+		t.Fatalf("valid query=%#v", query)
+	}
+	vector[0] = 0.9
+	if got := query.Vector(); len(got) != vectordim.Dimension {
+		t.Fatalf("query vector length=%d", len(got))
+	} else if got[0] != 0.5 {
+		t.Fatalf("query vector first value=%v", got[0])
+	}
+	view := query.Vector()
+	view[0] = 0.8
+	if got := query.Vector()[0]; got != 0.5 {
+		t.Fatalf("query vector exposed mutable storage=%v", got)
+	}
+
+	withoutVector := newAuthorizedCandidateQuery(testAuthority(t, "alice", "agent"), "lexical task", nil)
+	if !withoutVector.Valid() || withoutVector.VectorEnabled() || withoutVector.Vector() != nil {
+		t.Fatalf("lexical query=%#v", withoutVector)
+	}
+
+	nonFinite := testEmbeddingVector()
+	nonFinite[1] = float32(math.NaN())
+	for _, vector := range [][]float32{
+		{},
+		make([]float32, vectordim.Dimension-1),
+		make([]float32, vectordim.Dimension),
+		nonFinite,
+	} {
+		malformed := query
+		malformed.vector = vector
+		if malformed.Valid() || malformed.VectorEnabled() {
+			t.Fatalf("malformed vector accepted: len=%d", len(vector))
+		}
+	}
+}
+
 func TestAccessPolicyUsesCurrentScopeAndDomainOracle(t *testing.T) {
 	allowedContext := testAuthority(t, "alice", "agent")
 	policy := NewAccessPolicy(allowedContext)
@@ -254,16 +318,63 @@ func TestPreparerConfigAndExactRepeatStability(t *testing.T) {
 	}
 }
 
+func TestPreparerEmbedsOneSanitizedVectorWithBoundedDeadline(t *testing.T) {
+	rules, err := redaction.CompileRules([]redaction.Rule{{ID: "private-note", Pattern: "private-note", Replacement: "[SCRUBBED]"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hybrid := testSnapshot(t, RetrievalHybrid,
+		testCandidate(t, 1, CandidateFTS),
+		testCandidate(t, 2, CandidateVector),
+	)
+	resolver := &recordingAuthorityResolver{authority: testAuthority(t, "alice", "agent")}
+	provider := &scriptedCandidateProvider{snapshots: []CandidateSnapshot{hybrid, hybrid}}
+	embedder := &recordingQueryEmbedder{vectors: [][]float32{testEmbeddingVector()}}
+	prepared, err := testPreparerWithEmbedder(t, resolver, provider, embedder, rules).Prepare(context.Background(), testPrepareRequest(t, " private-note semantic task "))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if embedder.calls != 1 || !reflect.DeepEqual(embedder.texts, [][]string{{"[SCRUBBED] semantic task"}}) {
+		t.Fatalf("embed calls=%d texts=%#v", embedder.calls, embedder.texts)
+	}
+	if embedder.deadline.IsZero() || !embedder.deadline.After(embedder.calledAt) || embedder.deadline.After(embedder.calledAt.Add(maxQueryEmbeddingDuration)) {
+		t.Fatalf("embedding deadline=%v calledAt=%v", embedder.deadline, embedder.calledAt)
+	}
+	if provider.calls != 2 || len(provider.queries) != 2 || !provider.queries[0].VectorEnabled() || !provider.queries[1].VectorEnabled() {
+		t.Fatalf("provider calls=%d queries=%#v", provider.calls, provider.queries)
+	}
+	if prepared.Mode() != RetrievalHybrid || prepared.Stability().method != StabilityMatchedDoubleRead || prepared.Stability().readCount != 2 {
+		t.Fatalf("prepared=%#v", prepared)
+	}
+}
+
+func TestPreparerUsesShorterCallerDeadlineForEmbedding(t *testing.T) {
+	snapshot := testSnapshot(t, RetrievalHybrid, testCandidate(t, 1, CandidateVector))
+	resolver := &recordingAuthorityResolver{authority: testAuthority(t, "alice", "agent")}
+	provider := &scriptedCandidateProvider{snapshots: []CandidateSnapshot{snapshot, snapshot}}
+	embedder := &recordingQueryEmbedder{vectors: [][]float32{testEmbeddingVector()}}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	if _, err := testPreparerWithEmbedder(t, resolver, provider, embedder, nil).Prepare(ctx, testPrepareRequest(t, "short deadline")); err != nil {
+		t.Fatal(err)
+	}
+	if !embedder.deadline.Equal(deadline) {
+		t.Fatalf("embedding deadline=%v want caller deadline=%v", embedder.deadline, deadline)
+	}
+}
+
 func TestPreparerAcceptsMatchingEmptySnapshots(t *testing.T) {
 	empty := testSnapshot(t, RetrievalEmpty)
 	resolver := &recordingAuthorityResolver{authority: testAuthority(t, "", "")}
 	provider := &scriptedCandidateProvider{snapshots: []CandidateSnapshot{empty, empty}}
-	prepared, err := testPreparer(t, resolver, provider, nil).Prepare(context.Background(), testPrepareRequest(t, "empty task"))
+	embedder := &recordingQueryEmbedder{vectors: [][]float32{testEmbeddingVector()}}
+	prepared, err := testPreparerWithEmbedder(t, resolver, provider, embedder, nil).Prepare(context.Background(), testPrepareRequest(t, "empty task"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if provider.calls != 2 || prepared.Mode() != RetrievalEmpty || len(prepared.Candidates()) != 0 || prepared.Stability().method != StabilityMatchedDoubleRead {
-		t.Fatalf("prepared=%#v calls=%d", prepared, provider.calls)
+	if embedder.calls != 1 || provider.calls != 2 || !provider.queries[0].VectorEnabled() || prepared.Mode() != RetrievalEmpty || len(prepared.Candidates()) != 0 || prepared.Stability().method != StabilityMatchedDoubleRead {
+		t.Fatalf("prepared=%#v embedding calls=%d provider calls=%d", prepared, embedder.calls, provider.calls)
 	}
 }
 
@@ -299,6 +410,66 @@ func TestPreparerRefusesUnstableCandidates(t *testing.T) {
 	}
 }
 
+func TestPreparerDegradesUnavailableAndMalformedEmbeddingsToLexical(t *testing.T) {
+	nonFinite := testEmbeddingVector()
+	nonFinite[1] = float32(math.Inf(1))
+	for _, testCase := range []struct {
+		name    string
+		vectors [][]float32
+		err     error
+	}{
+		{name: "error", err: errors.New("embedding unavailable")},
+		{name: "empty cardinality"},
+		{name: "multiple vectors", vectors: [][]float32{testEmbeddingVector(), testEmbeddingVector()}},
+		{name: "empty vector", vectors: [][]float32{{}}},
+		{name: "wrong dimension", vectors: [][]float32{make([]float32, vectordim.Dimension-1)}},
+		{name: "zero vector", vectors: [][]float32{make([]float32, vectordim.Dimension)}},
+		{name: "non-finite vector", vectors: [][]float32{nonFinite}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			lexical := testSnapshot(t, RetrievalLexicalDegraded, testCandidate(t, 5, CandidateFTS))
+			resolver := &recordingAuthorityResolver{authority: testAuthority(t, "alice", "agent")}
+			provider := &scriptedCandidateProvider{snapshots: []CandidateSnapshot{lexical, lexical}}
+			embedder := &recordingQueryEmbedder{vectors: testCase.vectors, err: testCase.err}
+			prepared, err := testPreparerWithEmbedder(t, resolver, provider, embedder, nil).Prepare(context.Background(), testPrepareRequest(t, "lexical fallback"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if embedder.calls != 1 || provider.calls != 2 || prepared.Mode() != RetrievalLexicalDegraded || provider.queries[0].VectorEnabled() || provider.queries[0].Vector() != nil {
+				t.Fatalf("prepared=%#v embedding calls=%d provider calls=%d query=%#v", prepared, embedder.calls, provider.calls, provider.queries[0])
+			}
+		})
+	}
+}
+
+func TestPreparerUsesLexicalSnapshotsWhenEmbedderIsAbsent(t *testing.T) {
+	lexical := testSnapshot(t, RetrievalLexicalDegraded, testCandidate(t, 5, CandidateFTS))
+	resolver := &recordingAuthorityResolver{authority: testAuthority(t, "alice", "agent")}
+	provider := &scriptedCandidateProvider{snapshots: []CandidateSnapshot{lexical, lexical}}
+	prepared, err := testPreparer(t, resolver, provider, nil).Prepare(context.Background(), testPrepareRequest(t, "disabled embedder"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 2 || len(provider.queries) != 2 || provider.queries[0].VectorEnabled() || provider.queries[0].Vector() != nil || prepared.Mode() != RetrievalLexicalDegraded {
+		t.Fatalf("prepared=%#v provider calls=%d queries=%#v", prepared, provider.calls, provider.queries)
+	}
+}
+
+func TestPreparerReportsCallerCancellationAsUnavailable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resolver := &recordingAuthorityResolver{authority: testAuthority(t, "alice", "agent")}
+	provider := &scriptedCandidateProvider{}
+	embedder := &recordingQueryEmbedder{
+		vectors:      [][]float32{testEmbeddingVector()},
+		beforeReturn: cancel,
+	}
+	_, err := testPreparerWithEmbedder(t, resolver, provider, embedder, nil).Prepare(ctx, testPrepareRequest(t, "cancelled caller"))
+	if !errors.Is(err, ErrUnavailable) || embedder.calls != 1 || provider.calls != 0 {
+		t.Fatalf("error=%v embedding calls=%d provider calls=%d", err, embedder.calls, provider.calls)
+	}
+}
+
 func TestPreparerRejectsMalformedProviderSnapshots(t *testing.T) {
 	overLimit := make([]AuthorizedCandidateRef, MaxPreparedCandidates+1)
 	for index := range overLimit {
@@ -308,7 +479,7 @@ func TestPreparerRejectsMalformedProviderSnapshots(t *testing.T) {
 		{mode: RetrievalExact, candidates: overLimit},
 		{mode: RetrievalExact, candidates: []AuthorizedCandidateRef{{id: 1, version: 1, tier: CandidateExact}, {id: 1, version: 2, tier: CandidateExact}}},
 		{mode: RetrievalExact, candidates: []AuthorizedCandidateRef{{id: 1, version: 1, tier: CandidateSourceTier(99)}}},
-		{mode: RetrievalHybrid, candidates: []AuthorizedCandidateRef{{id: 1, version: 1, tier: CandidateVector}}},
+		{mode: RetrievalHybrid, candidates: []AuthorizedCandidateRef{{id: 1, version: 1, tier: CandidateExact}}},
 	} {
 		resolver := &recordingAuthorityResolver{authority: testAuthority(t, "alice", "agent")}
 		provider := &scriptedCandidateProvider{snapshots: []CandidateSnapshot{snapshot}}
@@ -331,12 +502,13 @@ func TestPreparerRedactsTransientQueryWithoutMetadata(t *testing.T) {
 	snapshot := testSnapshot(t, RetrievalExact, testCandidate(t, 7, CandidateExact))
 	provider := &scriptedCandidateProvider{snapshots: []CandidateSnapshot{snapshot, snapshot}}
 	secret := "sk-abcdefghijklmnopqrstuvwx"
-	prepared, err := testPreparer(t, resolver, provider, rules).Prepare(context.Background(), testPrepareRequest(t, "private-note "+secret))
+	embedder := &recordingQueryEmbedder{vectors: [][]float32{testEmbeddingVector()}}
+	prepared, err := testPreparerWithEmbedder(t, resolver, provider, embedder, rules).Prepare(context.Background(), testPrepareRequest(t, "private-note "+secret))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(provider.queries) != 2 {
-		t.Fatalf("queries=%d", len(provider.queries))
+	if embedder.calls != 0 || len(provider.queries) != 2 || provider.queries[0].VectorEnabled() {
+		t.Fatalf("embedding calls=%d queries=%d", embedder.calls, len(provider.queries))
 	}
 	query := provider.queries[0].Query()
 	if strings.Contains(query, secret) || strings.Contains(query, "private-note") || !strings.Contains(query, "[SCRUBBED]") || !strings.Contains(query, "[REDACTED:") {
@@ -354,9 +526,10 @@ func TestPreparerRedactsTransientQueryWithoutMetadata(t *testing.T) {
 	}
 	blockedResolver := &recordingAuthorityResolver{authority: testAuthority(t, "alice", "agent")}
 	blockedProvider := &scriptedCandidateProvider{snapshots: []CandidateSnapshot{snapshot, snapshot}}
-	_, err = testPreparer(t, blockedResolver, blockedProvider, fullRules).Prepare(context.Background(), testPrepareRequest(t, "fully redacted"))
-	if !errors.Is(err, ErrInvalidRequest) || blockedResolver.calls != 0 || blockedProvider.calls != 0 {
-		t.Fatalf("error=%v resolver calls=%d provider calls=%d", err, blockedResolver.calls, blockedProvider.calls)
+	blockedEmbedder := &recordingQueryEmbedder{vectors: [][]float32{testEmbeddingVector()}}
+	_, err = testPreparerWithEmbedder(t, blockedResolver, blockedProvider, blockedEmbedder, fullRules).Prepare(context.Background(), testPrepareRequest(t, "fully redacted"))
+	if !errors.Is(err, ErrInvalidRequest) || blockedResolver.calls != 0 || blockedProvider.calls != 0 || blockedEmbedder.calls != 0 {
+		t.Fatalf("error=%v resolver calls=%d provider calls=%d embedding calls=%d", err, blockedResolver.calls, blockedProvider.calls, blockedEmbedder.calls)
 	}
 }
 
@@ -438,7 +611,12 @@ func testSnapshot(t *testing.T, mode RetrievalMode, candidates ...AuthorizedCand
 
 func testPreparer(t *testing.T, resolver AuthorityResolver, provider AuthorizedCandidateProvider, rules []redaction.CompiledRule) Preparer {
 	t.Helper()
-	preparer, err := NewPreparer(PreparerConfig{Authority: resolver, Candidates: provider, RedactionRules: rules})
+	return testPreparerWithEmbedder(t, resolver, provider, nil, rules)
+}
+
+func testPreparerWithEmbedder(t *testing.T, resolver AuthorityResolver, provider AuthorizedCandidateProvider, embedder QueryEmbedder, rules []redaction.CompiledRule) Preparer {
+	t.Helper()
+	preparer, err := NewPreparer(PreparerConfig{Authority: resolver, Candidates: provider, Embedder: embedder, RedactionRules: rules})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,4 +646,10 @@ func testPrepareRequest(t *testing.T, query string) PrepareRequest {
 		},
 		Task: facts,
 	}
+}
+
+func testEmbeddingVector() []float32 {
+	vector := make([]float32, vectordim.Dimension)
+	vector[0] = 0.5
+	return vector
 }

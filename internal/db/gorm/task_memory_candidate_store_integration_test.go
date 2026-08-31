@@ -3,16 +3,21 @@ package gorm
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/pgvector/pgvector-go"
 	"github.com/stretchr/testify/require"
 	gormlib "gorm.io/gorm"
 
 	"github.com/thebtf/engram/internal/projectidentity"
+	"github.com/thebtf/engram/internal/rankfusion"
 	"github.com/thebtf/engram/internal/taskmemory"
+	"github.com/thebtf/engram/internal/vectordim"
 )
 
 const (
@@ -59,12 +64,25 @@ func (p *taskMemoryCapturingProvider) Snapshot(ctx context.Context, query taskme
 	return p.store.Snapshot(ctx, query)
 }
 
+type taskMemoryTestEmbedder struct {
+	vector []float32
+}
+
+func (e taskMemoryTestEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	vectors := make([][]float32, len(texts))
+	for index := range texts {
+		vectors[index] = append([]float32(nil), e.vector...)
+	}
+	return vectors, nil
+}
+
 func taskMemoryFixtureDB(t *testing.T) (*gormlib.DB, func()) {
 	t.Helper()
 	db, closeDB := openTestDB(t)
 	tx := db.Begin()
 	require.NoError(t, tx.Error)
 	require.NoError(t, tx.Exec(`CREATE TEMPORARY TABLE memories (LIKE public.memories INCLUDING DEFAULTS INCLUDING GENERATED) ON COMMIT DROP`).Error)
+	require.NoError(t, tx.Exec(`CREATE TEMPORARY TABLE content_chunks (LIKE public.content_chunks INCLUDING GENERATED) ON COMMIT DROP`).Error)
 	return tx, func() {
 		_ = tx.Rollback().Error
 		closeDB()
@@ -103,11 +121,24 @@ func taskMemoryTestContext(t *testing.T) taskmemory.AuthorizedTaskContext {
 
 func taskMemoryCapturedQuery(t *testing.T, db *gormlib.DB, queryText string) taskmemory.AuthorizedCandidateQuery {
 	t.Helper()
+	return taskMemoryCapturedQueryWithEmbedder(t, db, queryText, nil)
+}
+
+func taskMemoryCapturedVectorQuery(t *testing.T, db *gormlib.DB, queryText string, vector []float32) taskmemory.AuthorizedCandidateQuery {
+	t.Helper()
+	query := taskMemoryCapturedQueryWithEmbedder(t, db, queryText, taskMemoryTestEmbedder{vector: vector})
+	require.True(t, query.VectorEnabled())
+	return query
+}
+
+func taskMemoryCapturedQueryWithEmbedder(t *testing.T, db *gormlib.DB, queryText string, embedder taskmemory.QueryEmbedder) taskmemory.AuthorizedCandidateQuery {
+	t.Helper()
 	store := NewTaskMemoryCandidateStore(&Store{DB: db})
 	provider := &taskMemoryCapturingProvider{store: store}
 	preparer, err := taskmemory.NewPreparer(taskmemory.PreparerConfig{
 		Authority:  taskMemoryTestAuthority{authority: taskMemoryTestContext(t)},
 		Candidates: provider,
+		Embedder:   embedder,
 	})
 	require.NoError(t, err)
 
@@ -242,6 +273,32 @@ func taskMemorySeedFixtures(t *testing.T, db *gormlib.DB, fixtures []taskMemoryF
 	}
 }
 
+type taskMemoryChunkFixture struct {
+	ID        int64
+	MemoryID  int64
+	Seq       int
+	Name      string
+	Embedding []float32
+}
+
+func taskMemoryUnitVector(cosine float32) []float32 {
+	vector := make([]float32, vectordim.Dimension)
+	vector[0] = cosine
+	vector[1] = float32(math.Sqrt(1 - float64(cosine)*float64(cosine)))
+	return vector
+}
+
+func taskMemorySeedChunks(t *testing.T, db *gormlib.DB, fixtures []taskMemoryChunkFixture) {
+	t.Helper()
+	createdAt := time.Now().UTC().Add(-time.Minute)
+	for _, fixture := range fixtures {
+		require.NoError(t, db.Exec(`
+			INSERT INTO content_chunks (id, memory_id, seq, text, embedding, model, created_at)
+			VALUES (?, ?, ?, '', ?::vector, 'task-memory-test', ?)
+		`, fixture.ID, fixture.MemoryID, fixture.Seq, pgvector.NewVector(fixture.Embedding), createdAt).Error, "insert chunk fixture %s", fixture.Name)
+	}
+}
+
 func taskMemoryOracleAllows(query taskmemory.AuthorizedCandidateQuery, row *Memory) bool {
 	if row.Project != query.CanonicalProject() || row.Status != "active" || row.DeletedAt != nil {
 		return false
@@ -322,6 +379,45 @@ func taskMemoryAssertFTSOracleEquivalent(t *testing.T, db *gormlib.DB, query tas
 	taskMemoryAssertOracleEquivalent(t, query, all, sqlVisible)
 }
 
+func taskMemoryAssertVectorOracleEquivalent(t *testing.T, db *gormlib.DB, query taskmemory.AuthorizedCandidateQuery) {
+	t.Helper()
+	require.True(t, query.VectorEnabled())
+	require.Equal(t, 0.7, taskMemoryVectorSimilarityThreshold)
+	vector := pgvector.NewVector(query.Vector())
+
+	var all []Memory
+	require.NoError(t, db.Raw(`
+		WITH ranked AS (
+			SELECT m.id, MIN(c.embedding <=> ?::vector) AS distance
+			FROM content_chunks c
+			JOIN memories m ON m.id = c.memory_id
+			WHERE c.embedding IS NOT NULL
+			GROUP BY m.id
+		)
+		SELECT m.*
+		FROM memories m
+		JOIN ranked ON ranked.id = m.id
+		WHERE 1 - ranked.distance >= ?
+	`, vector, 0.7).Scan(&all).Error)
+
+	access := taskMemoryCandidateAccess(query)
+	args := make([]any, 0, len(access.args)+3)
+	args = append(args, vector)
+	args = append(args, access.args...)
+	args = append(args, 0.7, query.Limit())
+	var sqlVisible []taskMemoryCandidateRow
+	require.NoError(t, db.Raw(taskMemoryVectorSQL, args...).Scan(&sqlVisible).Error)
+
+	want := taskMemoryOracleIDSet(query, all)
+	require.NotEmpty(t, want, "the vector fixture must retain a nonzero oracle-allowed denominator")
+	require.LessOrEqual(t, len(want), query.Limit(), "the vector oracle must fit the prepared candidate bound")
+	got := make(map[int64]struct{}, len(sqlVisible))
+	for _, row := range sqlVisible {
+		got[row.ID] = struct{}{}
+	}
+	require.Equal(t, want, got, "vector SQL access projection must match the existing scope/domain oracle")
+}
+
 func taskMemoryAssertByRefOracleEquivalent(t *testing.T, db *gormlib.DB, query taskmemory.AuthorizedCandidateQuery, lookups []taskmemory.CandidateLookup) {
 	t.Helper()
 	ids := make([]int64, len(lookups))
@@ -370,6 +466,14 @@ func taskMemoryAssertFixtureRefs(t *testing.T, refs []taskmemory.AuthorizedCandi
 	}
 }
 
+func taskMemoryCandidateRefIDs(refs []taskmemory.AuthorizedCandidateRef) []int64 {
+	ids := make([]int64, len(refs))
+	for index, ref := range refs {
+		ids[index] = ref.ID()
+	}
+	return ids
+}
+
 func taskMemoryLookup(t *testing.T, id int64, tier taskmemory.CandidateSourceTier) taskmemory.CandidateLookup {
 	t.Helper()
 	lookup, err := taskmemory.NewCandidateLookup(id, tier)
@@ -399,14 +503,25 @@ func TestTaskMemoryCandidateStore_ExactScopeBeforeRankingLimitAndOrder(t *testin
 	denied := taskMemoryDeniedFixtures("exact", queryText, 1101, base.Add(20*time.Minute))
 	taskMemorySeedFixtures(t, db, append(append([]taskMemoryFixture{}, allowed...), denied...))
 
-	query := taskMemoryCapturedQuery(t, db, queryText)
+	query := taskMemoryCapturedVectorQuery(t, db, queryText, taskMemoryUnitVector(1))
 	taskMemoryAssertExactOracleEquivalent(t, db, query, queryText)
 
 	store := NewTaskMemoryCandidateStore(&Store{DB: db})
+	callbacks := db.Callback().Row()
+	callbackName := fmt.Sprintf("task_memory_exact_vector_%d", time.Now().UnixNano())
+	vectorQueries := 0
+	require.NoError(t, callbacks.Before("gorm:row").Register(callbackName, func(tx *gormlib.DB) {
+		if strings.Contains(strings.ToLower(tx.Statement.SQL.String()), "content_chunks") {
+			vectorQueries++
+		}
+	}))
+	defer func() { require.NoError(t, callbacks.Remove(callbackName)) }()
+
 	first, err := store.Snapshot(context.Background(), query)
 	require.NoError(t, err)
 	second, err := store.Snapshot(context.Background(), query)
 	require.NoError(t, err)
+	require.Zero(t, vectorQueries, "exact candidates must short-circuit vector retrieval")
 	require.Equal(t, first.Candidates(), second.Candidates(), "exact ordering must be deterministic")
 	require.Equal(t, taskmemory.RetrievalExact, first.Mode())
 	taskMemoryAssertFixtureRefs(t, first.Candidates(), taskMemoryNewest(expectedAllowed, taskmemory.MaxPreparedCandidates), taskmemory.CandidateExact)
@@ -440,6 +555,141 @@ func TestTaskMemoryCandidateStore_FTSScopeBeforeRankingAndOrder(t *testing.T) {
 	require.Equal(t, first.Candidates(), second.Candidates(), "FTS ordering must be deterministic")
 	require.Equal(t, taskmemory.RetrievalLexicalDegraded, first.Mode())
 	taskMemoryAssertFixtureRefs(t, first.Candidates(), taskMemoryNewest(allowed, len(allowed)), taskmemory.CandidateFTS)
+}
+
+func TestTaskMemoryCandidateStore_VectorScopeBeforeRankingLimitDedupeAndOrder(t *testing.T) {
+	db, cleanup := taskMemoryFixtureDB(t)
+	defer cleanup()
+
+	const queryText = "isolated semantic query"
+	base := time.Now().UTC().Add(-30 * time.Minute)
+	allowed := taskMemoryAllowedFixtures("vector", "semantic candidate material", 4001, 2, base)
+	allowed[0].Name = "vector-allowed-primary"
+	allowed[1].Name = "vector-allowed-secondary"
+	belowThreshold := taskMemoryAllowedFixtures("vector", "semantic candidate material", 4011, 1, base)[0]
+	belowThreshold.Name = "vector-allowed-below-threshold"
+	hidden := taskMemoryDeniedFixtures("vector-hidden", "semantic candidate material", 4101, base.Add(20*time.Minute))
+	hidden[0].Name = "vector-hidden-cross-project"
+	hidden[3].Name = "vector-hidden-private-workstation"
+	taskMemorySeedFixtures(t, db, append(append(append([]taskMemoryFixture{}, allowed...), belowThreshold), hidden...))
+
+	chunks := []taskMemoryChunkFixture{
+		{ID: 9001, MemoryID: allowed[0].ID, Seq: 0, Name: "vector-allowed-primary-lower", Embedding: taskMemoryUnitVector(0.75)},
+		{ID: 9002, MemoryID: allowed[0].ID, Seq: 1, Name: "vector-allowed-primary-best", Embedding: taskMemoryUnitVector(0.80)},
+		{ID: 9003, MemoryID: allowed[1].ID, Seq: 0, Name: "vector-allowed-secondary", Embedding: taskMemoryUnitVector(0.78)},
+		{ID: 9004, MemoryID: belowThreshold.ID, Seq: 0, Name: "vector-allowed-below-threshold", Embedding: taskMemoryUnitVector(0.69)},
+	}
+	for index, fixture := range hidden {
+		chunks = append(chunks, taskMemoryChunkFixture{
+			ID:        9100 + int64(index),
+			MemoryID:  fixture.ID,
+			Seq:       0,
+			Name:      fixture.Name,
+			Embedding: taskMemoryUnitVector(0.99),
+		})
+	}
+	taskMemorySeedChunks(t, db, chunks)
+	require.Greater(t, len(hidden), taskmemory.MaxPreparedCandidates, "higher-similarity hidden rows must outnumber the vector limit")
+
+	query := taskMemoryCapturedVectorQuery(t, db, queryText, taskMemoryUnitVector(1))
+	taskMemoryAssertVectorOracleEquivalent(t, db, query)
+
+	store := NewTaskMemoryCandidateStore(&Store{DB: db})
+	first, err := store.Snapshot(context.Background(), query)
+	require.NoError(t, err)
+	second, err := store.Snapshot(context.Background(), query)
+	require.NoError(t, err)
+	require.Equal(t, first.Candidates(), second.Candidates(), "vector ordering must be deterministic")
+	require.Equal(t, taskmemory.RetrievalHybrid, first.Mode())
+	taskMemoryAssertFixtureRefs(t, first.Candidates(), allowed, taskmemory.CandidateVector)
+
+	returned := make(map[int64]struct{}, len(first.Candidates()))
+	for _, ref := range first.Candidates() {
+		returned[ref.ID()] = struct{}{}
+	}
+	require.NotContains(t, returned, belowThreshold.ID, "below-threshold vectors must not become candidates")
+	for _, fixture := range hidden {
+		require.NotContains(t, returned, fixture.ID, "hidden vector %s must not consume rank or limit", fixture.Name)
+	}
+}
+
+func TestTaskMemoryCandidateStore_HybridRRFOrderAndTierMapping(t *testing.T) {
+	db, cleanup := taskMemoryFixtureDB(t)
+	defer cleanup()
+
+	const queryText = "hybrid fusion token"
+	base := time.Now().UTC().Add(-30 * time.Minute)
+	equalRank := taskMemoryAllowedFixtures("hybrid-equal", "hybrid fusion token hybrid fusion token hybrid fusion token hybrid fusion token", 5001, 1, base)[0]
+	equalRank.Name = "hybrid-allowed-equal-rank"
+	ftsOnly := taskMemoryAllowedFixtures("hybrid-fts", "hybrid fusion token hybrid fusion token", 5002, 1, base)[0]
+	ftsOnly.Name = "hybrid-allowed-fts-only"
+	betterVector := taskMemoryAllowedFixtures("hybrid-vector", "hybrid fusion token candidate", 5003, 1, base)[0]
+	betterVector.Name = "hybrid-allowed-better-vector-rank"
+	vectorOnly := taskMemoryAllowedFixtures("hybrid-semantic", "semantic neighbor material", 5004, 1, base)[0]
+	vectorOnly.Name = "hybrid-allowed-vector-only"
+	equalRank.CreatedAt = base.Add(3 * time.Minute)
+	ftsOnly.CreatedAt = base.Add(2 * time.Minute)
+	betterVector.CreatedAt = base.Add(time.Minute)
+	taskMemorySeedFixtures(t, db, []taskMemoryFixture{equalRank, ftsOnly, betterVector, vectorOnly})
+	taskMemorySeedChunks(t, db, []taskMemoryChunkFixture{
+		{ID: 9201, MemoryID: equalRank.ID, Seq: 0, Name: equalRank.Name, Embedding: taskMemoryUnitVector(1)},
+		{ID: 9202, MemoryID: betterVector.ID, Seq: 0, Name: betterVector.Name, Embedding: taskMemoryUnitVector(0.99)},
+		{ID: 9203, MemoryID: vectorOnly.ID, Seq: 0, Name: vectorOnly.Name, Embedding: taskMemoryUnitVector(0.90)},
+	})
+
+	query := taskMemoryCapturedVectorQuery(t, db, queryText, taskMemoryUnitVector(1))
+	taskMemoryAssertVectorOracleEquivalent(t, db, query)
+	expectedIDs := rankfusion.RRF(
+		[]int64{equalRank.ID, ftsOnly.ID, betterVector.ID},
+		[]int64{equalRank.ID, betterVector.ID, vectorOnly.ID},
+		60,
+	)
+	require.Equal(t, []int64{equalRank.ID, betterVector.ID, ftsOnly.ID, vectorOnly.ID}, expectedIDs, "fixture ranks must exercise the deterministic RRF order")
+	expectedTiers := map[int64]taskmemory.CandidateSourceTier{
+		equalRank.ID:    taskmemory.CandidateFTS,
+		ftsOnly.ID:      taskmemory.CandidateFTS,
+		betterVector.ID: taskmemory.CandidateVector,
+		vectorOnly.ID:   taskmemory.CandidateVector,
+	}
+
+	store := NewTaskMemoryCandidateStore(&Store{DB: db})
+	first, err := store.Snapshot(context.Background(), query)
+	require.NoError(t, err)
+	second, err := store.Snapshot(context.Background(), query)
+	require.NoError(t, err)
+	require.Equal(t, taskmemory.RetrievalHybrid, first.Mode())
+	require.Equal(t, first.Candidates(), second.Candidates(), "hybrid fusion must be deterministic")
+	require.Equal(t, expectedIDs, taskMemoryCandidateRefIDs(first.Candidates()))
+	for index, ref := range first.Candidates() {
+		require.Equal(t, expectedTiers[ref.ID()], ref.SourceTier(), "candidate %d", index)
+	}
+}
+
+func TestTaskMemoryCandidateStore_VectorStoreErrorDegradesToLexical(t *testing.T) {
+	db, cleanup := taskMemoryFixtureDB(t)
+	defer cleanup()
+
+	const queryText = "vector fallback lexical"
+	allowed := taskMemoryAllowedFixtures("vector-fallback", "vector fallback lexical material", 6001, 1, time.Now().UTC().Add(-time.Minute))
+	taskMemorySeedFixtures(t, db, allowed)
+	query := taskMemoryCapturedVectorQuery(t, db, queryText, taskMemoryUnitVector(1))
+
+	callbacks := db.Callback().Row()
+	callbackName := fmt.Sprintf("task_memory_vector_error_%d", time.Now().UnixNano())
+	vectorReads := 0
+	require.NoError(t, callbacks.Before("gorm:row").Register(callbackName, func(tx *gormlib.DB) {
+		if strings.Contains(strings.ToLower(tx.Statement.SQL.String()), "content_chunks") {
+			vectorReads++
+			tx.AddError(fmt.Errorf("forced task-memory vector candidate failure"))
+		}
+	}))
+	defer func() { require.NoError(t, callbacks.Remove(callbackName)) }()
+	store := NewTaskMemoryCandidateStore(&Store{DB: db})
+	snapshot, err := store.Snapshot(context.Background(), query)
+	require.NoError(t, err)
+	require.Equal(t, 1, vectorReads, "the vector leg must be attempted once")
+	require.Equal(t, taskmemory.RetrievalLexicalDegraded, snapshot.Mode())
+	taskMemoryAssertFixtureRefs(t, snapshot.Candidates(), allowed, taskmemory.CandidateFTS)
 }
 
 func TestTaskMemoryCandidateStore_ByRefScopeBeforeOrderLimitAndIndistinguishability(t *testing.T) {
@@ -511,6 +761,27 @@ type taskMemoryReadState struct {
 	UpdatedAt time.Time
 }
 
+type taskMemoryChunkReadState struct {
+	ID        int64
+	MemoryID  int64
+	Seq       int
+	Text      string
+	Embedding string
+	Model     string
+	CreatedAt time.Time
+}
+
+func taskMemoryChunkReadStateOf(t *testing.T, db *gormlib.DB) []taskMemoryChunkReadState {
+	t.Helper()
+	var state []taskMemoryChunkReadState
+	require.NoError(t, db.Raw(`
+		SELECT id, memory_id, seq, text, embedding::text AS embedding, model, created_at
+		FROM content_chunks
+		ORDER BY id
+	`).Scan(&state).Error)
+	return state
+}
+
 func taskMemoryReadStateOf(t *testing.T, db *gormlib.DB) []taskMemoryReadState {
 	t.Helper()
 	var state []taskMemoryReadState
@@ -535,14 +806,19 @@ func TestTaskMemoryCandidateStore_ReadsCreateNoTaskMemorySchemaOrWrites(t *testi
 	db, cleanup := taskMemoryFixtureDB(t)
 	defer cleanup()
 
-	fixture := taskMemoryAllowedFixtures("read-only", "read only task memory", 4001, 1, time.Now().UTC().Add(-time.Minute))
+	fixture := taskMemoryAllowedFixtures("read-only", "read only task memory material", 4001, 1, time.Now().UTC().Add(-time.Minute))
 	taskMemorySeedFixtures(t, db, fixture)
+	taskMemorySeedChunks(t, db, []taskMemoryChunkFixture{
+		{ID: 9901, MemoryID: fixture[0].ID, Seq: 0, Name: "read-only-vector", Embedding: taskMemoryUnitVector(1)},
+	})
 	beforeRows := taskMemoryReadStateOf(t, db)
+	beforeChunks := taskMemoryChunkReadStateOf(t, db)
 	beforeSchema := taskMemoryPublicSchemaCount(t, db)
 
-	_ = taskMemoryCapturedQuery(t, db, fixture[0].Content)
+	_ = taskMemoryCapturedVectorQuery(t, db, "read only task memory", taskMemoryUnitVector(1))
 
 	require.Equal(t, beforeRows, taskMemoryReadStateOf(t, db), "candidate reads must not mutate memory rows")
+	require.Equal(t, beforeChunks, taskMemoryChunkReadStateOf(t, db), "candidate reads must not mutate content chunks")
 	require.Equal(t, beforeSchema, taskMemoryPublicSchemaCount(t, db), "candidate reads must not create TaskMemory schema")
 }
 
