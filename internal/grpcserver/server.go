@@ -20,6 +20,7 @@ import (
 	"github.com/thebtf/engram/internal/auth"
 	engramgorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/hostadvisor"
+	"github.com/thebtf/engram/internal/intervention"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/projectidentity"
 	"github.com/thebtf/engram/internal/worker/ambientcore"
@@ -67,6 +68,7 @@ type Server struct {
 	comparisonObserverV3  projectidentity.LegacyComparisonObserverV2
 	comparisonStoreV3     projectidentity.ComparisonStoreV3
 	hostAdvisorRegistry   *hostadvisor.Registry
+	interventionAdvisor   intervention.Advisor
 }
 
 // New creates a new gRPC server. The returned *grpc.Server has EngramService
@@ -128,6 +130,20 @@ func (s *Server) currentHostAdvisorRegistry() *hostadvisor.Registry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.hostAdvisorRegistry
+}
+
+// SetInterventionAdvisor installs or removes the private intervention runtime.
+// A nil advisor is the deliberate typed-unavailable default-dark posture.
+func (s *Server) SetInterventionAdvisor(advisor intervention.Advisor) {
+	s.mu.Lock()
+	s.interventionAdvisor = advisor
+	s.mu.Unlock()
+}
+
+func (s *Server) currentInterventionAdvisor() intervention.Advisor {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.interventionAdvisor
 }
 
 // currentValidator returns the live validator under read lock.

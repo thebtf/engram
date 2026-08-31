@@ -9,6 +9,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/hostadvisor"
+	"github.com/thebtf/engram/internal/intervention"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -28,6 +29,33 @@ func (hostAdvisorMCPHandler) ToolDefinitions() []ToolDef {
 
 func (hostAdvisorMCPHandler) ServerInfo() (string, string) {
 	return "engram", "test-version"
+}
+
+type recordingInterventionAdvisor struct {
+	advise        func(context.Context, intervention.AdviseInput) (intervention.Decision, error)
+	observe       func(context.Context, intervention.ObserveInput) (intervention.ObservationAck, error)
+	adviseCalls   int
+	observeCalls  int
+	adviseInputs  []intervention.AdviseInput
+	observeInputs []intervention.ObserveInput
+}
+
+func (a *recordingInterventionAdvisor) Advise(ctx context.Context, input intervention.AdviseInput) (intervention.Decision, error) {
+	a.adviseCalls++
+	a.adviseInputs = append(a.adviseInputs, input)
+	if a.advise == nil {
+		return intervention.Decision{}, errors.New("unexpected advise call")
+	}
+	return a.advise(ctx, input)
+}
+
+func (a *recordingInterventionAdvisor) Observe(ctx context.Context, input intervention.ObserveInput) (intervention.ObservationAck, error) {
+	a.observeCalls++
+	a.observeInputs = append(a.observeInputs, input)
+	if a.observe == nil {
+		return intervention.ObservationAck{}, errors.New("unexpected observe call")
+	}
+	return a.observe(ctx, input)
 }
 
 func TestHostAdvisorInitializeAndBindShareAuthenticatedSubjectProof(t *testing.T) {
@@ -195,7 +223,7 @@ func TestHostAdvisorBindMapsStrictBoundaryAndCatalogErrors(t *testing.T) {
 	}
 }
 
-func TestHostAdvisorDescriptorsStayOnOneServiceAndDarkMethodsUnimplemented(t *testing.T) {
+func TestHostAdvisorDescriptorsStayOnOneServiceAndUseFinalEnvelopes(t *testing.T) {
 	file := pb.File_proto_engram_v1_engram_proto
 	services := file.Services()
 	if services.Len() != 1 {
@@ -215,28 +243,52 @@ func TestHostAdvisorDescriptorsStayOnOneServiceAndDarkMethodsUnimplemented(t *te
 	if proof == nil || proof.Number() != 6 || proof.Kind() != protoreflect.BytesKind {
 		t.Fatalf("Initialize proof descriptor = %#v", proof)
 	}
-	for _, messageName := range []protoreflect.Name{"HostAdvisorBindRequest", "HostAdvisorBindResponse", "HostAdvisorAdviseRequest", "HostAdvisorAdviseResponse", "HostAdvisorObserveRequest", "HostAdvisorObserveResponse"} {
+
+	requireField := func(messageName, fieldName protoreflect.Name, number protoreflect.FieldNumber, kind protoreflect.Kind) protoreflect.FieldDescriptor {
+		t.Helper()
 		message := file.Messages().ByName(messageName)
 		if message == nil {
-			t.Fatalf("missing %s message", messageName)
+			t.Fatalf("missing %s", messageName)
 		}
-		for fieldIndex := range message.Fields().Len() {
-			fieldName := string(message.Fields().Get(fieldIndex).Name())
-			for _, forbidden := range []string{"packet", "iep", "task_memory", "delivery_receipt", "occurrence", "observation"} {
-				if fieldName == forbidden {
-					t.Fatalf("%s unexpectedly has %s", messageName, fieldName)
-				}
-			}
+		field := message.Fields().ByName(fieldName)
+		if field == nil || field.Number() != number || field.Kind() != kind {
+			t.Fatalf("%s.%s descriptor = %#v", messageName, fieldName, field)
+		}
+		return field
+	}
+
+	requireField("HostAdvisorAdviseRequest", "binding_id", 1, protoreflect.StringKind)
+	if field := requireField("HostAdvisorAdviseRequest", "project_evidence", 2, protoreflect.MessageKind); field.Message().FullName() != "engram.v1.ProjectIdentityV3" {
+		t.Fatalf("project evidence descriptor = %#v", field)
+	}
+	if field := requireField("HostAdvisorAdviseRequest", "occurrence", 3, protoreflect.MessageKind); field.Message().FullName() != "engram.v1.HostAdvisorOccurrence" {
+		t.Fatalf("occurrence descriptor = %#v", field)
+	}
+	advise := file.Messages().ByName("HostAdvisorAdviseResponse")
+	if advise == nil || advise.Oneofs().ByName("decision") == nil {
+		t.Fatalf("Advise response descriptor = %#v", advise)
+	}
+	for _, fieldName := range []protoreflect.Name{"emit", "abstain", "delivery_ambiguous", "unavailable"} {
+		field := advise.Fields().ByName(fieldName)
+		if field == nil || field.Kind() != protoreflect.MessageKind || field.ContainingOneof() != advise.Oneofs().ByName("decision") {
+			t.Fatalf("Advise decision field %s = %#v", fieldName, field)
 		}
 	}
 
-	server := &Server{}
-	if _, err := server.Advise(context.Background(), &pb.HostAdvisorAdviseRequest{}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("Advise status = %v, error = %v", status.Code(err), err)
+	requireField("HostAdvisorObserveRequest", "binding_id", 1, protoreflect.StringKind)
+	observe := file.Messages().ByName("HostAdvisorObserveRequest")
+	if observe == nil || observe.Oneofs().ByName("target") == nil {
+		t.Fatalf("Observe request descriptor = %#v", observe)
 	}
-	if _, err := server.Observe(context.Background(), &pb.HostAdvisorObserveRequest{}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("Observe status = %v, error = %v", status.Code(err), err)
+	for _, fieldName := range []protoreflect.Name{"receipt_bound", "channel_gap"} {
+		field := observe.Fields().ByName(fieldName)
+		if field == nil || field.Kind() != protoreflect.MessageKind || field.ContainingOneof() != observe.Oneofs().ByName("target") {
+			t.Fatalf("Observe target field %s = %#v", fieldName, field)
+		}
 	}
+	requireField("HostAdvisorObserveResponse", "state", 1, protoreflect.EnumKind)
+	requireField("HostAdvisorObserveResponse", "observation_id", 2, protoreflect.StringKind)
+	requireField("HostAdvisorObserveResponse", "reason", 3, protoreflect.EnumKind)
 }
 
 func TestAuthenticatedSubjectDigestUsesOnlyIdentityFacts(t *testing.T) {
@@ -271,7 +323,353 @@ func TestAuthenticatedSubjectDigestUsesOnlyIdentityFacts(t *testing.T) {
 	}
 }
 
+func TestHostAdvisorAdviseDelegatesFinalDecisionAndFailsClosed(t *testing.T) {
+	clock := time.Now().UTC()
+	profile := grpcAdvisorProfileWithCallbackDeadline(t, 500*time.Millisecond)
+	server := &Server{handler: hostAdvisorMCPHandler{}}
+	server.SetHostAdvisorRegistry(grpcAdvisorRegistry(t, profile, &clock))
+
+	expiresAt := clock.Add(time.Hour)
+	identity := auth.ClientWithPrincipalExpiry("read-write", "workstation-keycard", "agent/example", auth.PrincipalKindAgent, &expiresAt)
+	ctx := auth.WithIdentity(context.Background(), identity)
+	bound, err := server.Bind(ctx, &pb.HostAdvisorBindRequest{Hello: grpcAdvisorHello(profile, "runtime-one")})
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	bindingID := bound.GetBinding().GetBindingId()
+	emit := grpcAdvisorEmitDecision(t, clock.Add(time.Minute))
+	advisor := &recordingInterventionAdvisor{
+		advise: func(_ context.Context, input intervention.AdviseInput) (intervention.Decision, error) {
+			if input.Occurrence().SessionRef() != "session-one" || input.Occurrence().PhaseAnchorRef() != "turn-one" {
+				t.Fatalf("occurrence projection = %#v", input.Occurrence())
+			}
+			if input.ProjectEvidence().Anchor.ProjectID != grpcV3Identity().GetAnchorProjectId() {
+				t.Fatalf("project evidence projection = %#v", input.ProjectEvidence())
+			}
+			return emit, nil
+		},
+	}
+	server.SetInterventionAdvisor(advisor)
+
+	response, err := server.Advise(ctx, grpcAdvisorAdviseRequest(bindingID))
+	if err != nil {
+		t.Fatalf("Advise: %v", err)
+	}
+	if advisor.adviseCalls != 1 {
+		t.Fatalf("advisor calls = %d, want 1", advisor.adviseCalls)
+	}
+	if response.GetEmit() == nil || response.GetEmit().GetPacket() == nil || response.GetEmit().GetPacket().GetPresentation().GetBoundedText() != "Use the exact receipt-bound reference." {
+		t.Fatalf("emit response = %#v", response)
+	}
+	if response.GetEmit().GetReceipt().GetReceiptId() != response.GetEmit().GetPacket().GetReceipt().GetReceiptId() {
+		t.Fatal("emit receipt and packet receipt diverged")
+	}
+
+	missing, err := server.Advise(ctx, grpcAdvisorAdviseRequest("missing-binding"))
+	if err != nil {
+		t.Fatalf("missing binding Advise: %v", err)
+	}
+	if missing.GetUnavailable() == nil || missing.GetUnavailable().GetCode() != pb.HostAdvisorUnavailableCode_HOST_ADVISOR_UNAVAILABLE_CODE_BINDING_UNAVAILABLE {
+		t.Fatalf("missing binding response = %#v", missing)
+	}
+	if advisor.adviseCalls != 1 {
+		t.Fatal("missing binding reached the advisor")
+	}
+
+	clock = clock.Add(2 * time.Minute)
+	expired, err := server.Advise(ctx, grpcAdvisorAdviseRequest(bindingID))
+	if err != nil {
+		t.Fatalf("expired binding Advise: %v", err)
+	}
+	if expired.GetUnavailable() == nil || expired.GetUnavailable().GetCode() != pb.HostAdvisorUnavailableCode_HOST_ADVISOR_UNAVAILABLE_CODE_BINDING_UNAVAILABLE {
+		t.Fatalf("expired binding response = %#v", expired)
+	}
+	if advisor.adviseCalls != 1 {
+		t.Fatal("expired binding reached the advisor")
+	}
+}
+
+func TestHostAdvisorAdviseRejectsMalformedOrForgedOccurrence(t *testing.T) {
+	clock := time.Now().UTC()
+	profile := grpcAdvisorProfileWithCallbackDeadline(t, 500*time.Millisecond)
+	server := &Server{handler: hostAdvisorMCPHandler{}}
+	server.SetHostAdvisorRegistry(grpcAdvisorRegistry(t, profile, &clock))
+	expiresAt := clock.Add(time.Hour)
+	ctx := auth.WithIdentity(context.Background(), auth.ClientWithPrincipalExpiry("read-write", "workstation-keycard", "agent/example", auth.PrincipalKindAgent, &expiresAt))
+	bound, err := server.Bind(ctx, &pb.HostAdvisorBindRequest{Hello: grpcAdvisorHello(profile, "runtime-one")})
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	advisor := &recordingInterventionAdvisor{advise: func(context.Context, intervention.AdviseInput) (intervention.Decision, error) {
+		return grpcAdvisorEmitDecision(t, clock.Add(time.Minute)), nil
+	}}
+	server.SetInterventionAdvisor(advisor)
+
+	unknown := grpcAdvisorAdviseRequest(bound.GetBinding().GetBindingId())
+	unknown.ProtoReflect().SetUnknown([]byte{0x20, 0x01})
+	forged := grpcAdvisorAdviseRequest(bound.GetBinding().GetBindingId())
+	forged.Occurrence.Predecessor = grpcAdvisorReceiptIdentity("forged-predecessor", 9)
+	badPath := grpcAdvisorAdviseRequest(bound.GetBinding().GetBindingId())
+	badPath.Occurrence.BeforeAgentStart.Facts[0].Value = "../outside"
+
+	for name, request := range map[string]*pb.HostAdvisorAdviseRequest{
+		"unknown wire field": unknown,
+		"forged predecessor": forged,
+		"invalid path fact":  badPath,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := server.Advise(ctx, request); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("status = %v, error = %v", status.Code(err), err)
+			}
+		})
+	}
+	if advisor.adviseCalls != 0 {
+		t.Fatalf("malformed requests reached advisor %d times", advisor.adviseCalls)
+	}
+}
+
+func TestHostAdvisorAdviseOmitsLatePacketAsDeliveryAmbiguous(t *testing.T) {
+	clock := time.Now().UTC()
+	profile := grpcAdvisorProfileWithCallbackDeadline(t, 400*time.Millisecond)
+	server := &Server{handler: hostAdvisorMCPHandler{}}
+	server.SetHostAdvisorRegistry(grpcAdvisorRegistry(t, profile, &clock))
+	expiresAt := clock.Add(time.Hour)
+	ctx := auth.WithIdentity(context.Background(), auth.ClientWithPrincipalExpiry("read-write", "workstation-keycard", "agent/example", auth.PrincipalKindAgent, &expiresAt))
+	bound, err := server.Bind(ctx, &pb.HostAdvisorBindRequest{Hello: grpcAdvisorHello(profile, "runtime-one")})
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	emit := grpcAdvisorEmitDecision(t, clock.Add(time.Minute))
+	server.SetInterventionAdvisor(&recordingInterventionAdvisor{advise: func(callbackContext context.Context, _ intervention.AdviseInput) (intervention.Decision, error) {
+		<-callbackContext.Done()
+		return emit, nil
+	}})
+
+	response, err := server.Advise(ctx, grpcAdvisorAdviseRequest(bound.GetBinding().GetBindingId()))
+	if err != nil {
+		t.Fatalf("Advise: %v", err)
+	}
+	if response.GetDeliveryAmbiguous() == nil || response.GetDeliveryAmbiguous().GetReceipt().GetReceiptId() != "receipt-one" {
+		t.Fatalf("late response = %#v", response)
+	}
+	if response.GetEmit() != nil {
+		t.Fatal("late response leaked a packet")
+	}
+}
+
+func TestHostAdvisorObserveSeparatesReceiptAndChannelTargets(t *testing.T) {
+	clock := time.Now().UTC()
+	profile := grpcAdvisorProfileWithCallbackDeadline(t, 500*time.Millisecond)
+	server := &Server{handler: hostAdvisorMCPHandler{}}
+	server.SetHostAdvisorRegistry(grpcAdvisorRegistry(t, profile, &clock))
+	expiresAt := clock.Add(time.Hour)
+	ctx := auth.WithIdentity(context.Background(), auth.ClientWithPrincipalExpiry("read-write", "workstation-keycard", "agent/example", auth.PrincipalKindAgent, &expiresAt))
+	bound, err := server.Bind(ctx, &pb.HostAdvisorBindRequest{Hello: grpcAdvisorHello(profile, "runtime-one")})
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	bindingID := bound.GetBinding().GetBindingId()
+	advisor := &recordingInterventionAdvisor{}
+	advisor.observe = func(_ context.Context, input intervention.ObserveInput) (intervention.ObservationAck, error) {
+		switch input.TargetKind() {
+		case intervention.ObservationTargetReceiptBound:
+			target, ok := input.ReceiptBound()
+			if !ok || target.Receipt().ID() != "receipt-one" {
+				t.Fatalf("receipt target = %#v", input)
+			}
+			return intervention.NewAcceptedObservationAck("observation-one", intervention.ObservationReasonAcceptedAttestation)
+		case intervention.ObservationTargetChannelGap:
+			target, ok := input.ChannelGap()
+			if !ok || target.SemanticGap() != intervention.SemanticGapCallbackUnavailable {
+				t.Fatalf("channel gap target = %#v", input)
+			}
+			return intervention.NewAcceptedObservationAck("observation-two", intervention.ObservationReasonAcceptedSemanticGap)
+		default:
+			return intervention.ObservationAck{}, errors.New("unexpected observation target")
+		}
+	}
+	server.SetInterventionAdvisor(advisor)
+
+	receiptBound := &pb.HostAdvisorObserveRequest{
+		BindingId: bindingID,
+		Target: &pb.HostAdvisorObserveRequest_ReceiptBound{ReceiptBound: &pb.HostAdvisorReceiptBoundObservation{
+			DecisionReceipt:      grpcAdvisorReceiptIdentity("receipt-one", 1),
+			ObservationAnchorRef: "observation-anchor-one",
+			Evidence: &pb.HostAdvisorReceiptBoundObservation_AdapterAttested{AdapterAttested: &pb.HostAdvisorAdapterAttestation{
+				Kind: pb.HostAdvisorAttestationKind_HOST_ADVISOR_ATTESTATION_KIND_DECISION_RECEIVED,
+			}},
+		}},
+	}
+	receiptResponse, err := server.Observe(ctx, receiptBound)
+	if err != nil {
+		t.Fatalf("receipt Observe: %v", err)
+	}
+	if receiptResponse.GetState() != pb.HostAdvisorObservationState_HOST_ADVISOR_OBSERVATION_STATE_ACCEPTED || receiptResponse.GetObservationId() != "observation-one" || receiptResponse.GetReason() != pb.HostAdvisorObservationReason_HOST_ADVISOR_OBSERVATION_REASON_ACCEPTED_ATTESTATION {
+		t.Fatalf("receipt observation response = %#v", receiptResponse)
+	}
+
+	channelGap := &pb.HostAdvisorObserveRequest{
+		BindingId: bindingID,
+		Target: &pb.HostAdvisorObserveRequest_ChannelGap{ChannelGap: &pb.HostAdvisorChannelSemanticGap{
+			ObservationAnchorRef: "observation-anchor-two",
+			AdapterSemanticGap: &pb.HostAdvisorAdapterSemanticGap{
+				Code: pb.HostAdvisorSemanticGapCode_HOST_ADVISOR_SEMANTIC_GAP_CODE_CALLBACK_UNAVAILABLE,
+			},
+		}},
+	}
+	channelResponse, err := server.Observe(ctx, channelGap)
+	if err != nil {
+		t.Fatalf("channel Observe: %v", err)
+	}
+	if channelResponse.GetState() != pb.HostAdvisorObservationState_HOST_ADVISOR_OBSERVATION_STATE_ACCEPTED || channelResponse.GetObservationId() != "observation-two" || channelResponse.GetReason() != pb.HostAdvisorObservationReason_HOST_ADVISOR_OBSERVATION_REASON_ACCEPTED_SEMANTIC_GAP {
+		t.Fatalf("channel observation response = %#v", channelResponse)
+	}
+	if advisor.observeCalls != 2 {
+		t.Fatalf("observe calls = %d, want 2", advisor.observeCalls)
+	}
+
+	missing, err := server.Observe(ctx, &pb.HostAdvisorObserveRequest{BindingId: "missing-binding", Target: channelGap.Target})
+	if err != nil {
+		t.Fatalf("missing binding Observe: %v", err)
+	}
+	if missing.GetState() != pb.HostAdvisorObservationState_HOST_ADVISOR_OBSERVATION_STATE_UNAVAILABLE || missing.GetReason() != pb.HostAdvisorObservationReason_HOST_ADVISOR_OBSERVATION_REASON_DEPENDENCY_UNAVAILABLE || missing.GetObservationId() != "" {
+		t.Fatalf("missing binding observation response = %#v", missing)
+	}
+	if advisor.observeCalls != 2 {
+		t.Fatal("missing observation binding reached the advisor")
+	}
+}
+
+func TestHostAdvisorObserveRejectsMalformedEnvelope(t *testing.T) {
+	clock := time.Now().UTC()
+	profile := grpcAdvisorProfileWithCallbackDeadline(t, 500*time.Millisecond)
+	server := &Server{handler: hostAdvisorMCPHandler{}}
+	server.SetHostAdvisorRegistry(grpcAdvisorRegistry(t, profile, &clock))
+	expiresAt := clock.Add(time.Hour)
+	ctx := auth.WithIdentity(context.Background(), auth.ClientWithPrincipalExpiry("read-write", "workstation-keycard", "agent/example", auth.PrincipalKindAgent, &expiresAt))
+	bound, err := server.Bind(ctx, &pb.HostAdvisorBindRequest{Hello: grpcAdvisorHello(profile, "runtime-one")})
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	advisor := &recordingInterventionAdvisor{observe: func(context.Context, intervention.ObserveInput) (intervention.ObservationAck, error) {
+		return intervention.NewRejectedObservationAck(), nil
+	}}
+	server.SetInterventionAdvisor(advisor)
+
+	unknown := &pb.HostAdvisorObserveRequest{BindingId: bound.GetBinding().GetBindingId()}
+	unknown.ProtoReflect().SetUnknown([]byte{0x20, 0x01})
+	missingEvidence := &pb.HostAdvisorObserveRequest{
+		BindingId: bound.GetBinding().GetBindingId(),
+		Target: &pb.HostAdvisorObserveRequest_ReceiptBound{ReceiptBound: &pb.HostAdvisorReceiptBoundObservation{
+			DecisionReceipt:      grpcAdvisorReceiptIdentity("receipt-one", 1),
+			ObservationAnchorRef: "observation-anchor-one",
+		}},
+	}
+	for name, request := range map[string]*pb.HostAdvisorObserveRequest{
+		"unknown wire field": unknown,
+		"missing evidence":   missingEvidence,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := server.Observe(ctx, request); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("status = %v, error = %v", status.Code(err), err)
+			}
+		})
+	}
+	if advisor.observeCalls != 0 {
+		t.Fatalf("malformed observations reached advisor %d times", advisor.observeCalls)
+	}
+}
+
+func TestHostAdvisorAdviseAndObserveAuthenticateBeforeEnvelopeParsing(t *testing.T) {
+	server := &Server{handler: hostAdvisorMCPHandler{}}
+	calls := map[string]func(context.Context) error{
+		"advise": func(ctx context.Context) error {
+			_, err := server.Advise(ctx, nil)
+			return err
+		},
+		"observe": func(ctx context.Context) error {
+			_, err := server.Observe(ctx, nil)
+			return err
+		},
+	}
+	for name, call := range calls {
+		t.Run(name+" missing identity", func(t *testing.T) {
+			if err := call(context.Background()); status.Code(err) != codes.Unauthenticated {
+				t.Fatalf("status = %v, error = %v", status.Code(err), err)
+			}
+		})
+		t.Run(name+" ineligible identity", func(t *testing.T) {
+			ctx := auth.WithIdentity(context.Background(), auth.AuthDisabled())
+			if err := call(ctx); status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("status = %v, error = %v", status.Code(err), err)
+			}
+		})
+	}
+}
+
+func grpcAdvisorAdviseRequest(bindingID string) *pb.HostAdvisorAdviseRequest {
+	return &pb.HostAdvisorAdviseRequest{
+		BindingId:       bindingID,
+		ProjectEvidence: grpcV3Identity(),
+		Occurrence: &pb.HostAdvisorOccurrence{
+			Phase:          pb.HostAdvisorSemantic_HOST_ADVISOR_SEMANTIC_BEFORE_AGENT_START,
+			SessionRef:     "session-one",
+			PhaseAnchorRef: "turn-one",
+			BeforeAgentStart: &pb.HostAdvisorBeforeAgentStartFacts{
+				TaskQuery: "Review the intervention path",
+				Facts: []*pb.HostAdvisorTypedFact{
+					{Kind: pb.HostAdvisorFactKind_HOST_ADVISOR_FACT_KIND_PATH, Value: "internal/grpcserver"},
+					{Kind: pb.HostAdvisorFactKind_HOST_ADVISOR_FACT_KIND_KEYWORD, Value: "advisor"},
+					{Kind: pb.HostAdvisorFactKind_HOST_ADVISOR_FACT_KIND_TOOL, Value: "read"},
+				},
+			},
+		},
+	}
+}
+
+func grpcAdvisorEmitDecision(t *testing.T, expiresAt time.Time) intervention.Decision {
+	t.Helper()
+	receipt, err := intervention.NewReceiptIdentity("receipt-one", grpcAdvisorInterventionDigest(1))
+	if err != nil {
+		t.Fatalf("NewReceiptIdentity: %v", err)
+	}
+	knowledge, err := intervention.NewKnowledgeReference(42, 3, intervention.CandidateTierExact, grpcAdvisorInterventionDigest(2))
+	if err != nil {
+		t.Fatalf("NewKnowledgeReference: %v", err)
+	}
+	presentation, err := intervention.NewUntrustedReferencePresentation("Use the exact receipt-bound reference.")
+	if err != nil {
+		t.Fatalf("NewUntrustedReferencePresentation: %v", err)
+	}
+	packet, err := intervention.NewPacket(receipt, expiresAt, knowledge, presentation)
+	if err != nil {
+		t.Fatalf("NewPacket: %v", err)
+	}
+	decision, err := intervention.NewEmitDecision(receipt, packet)
+	if err != nil {
+		t.Fatalf("NewEmitDecision: %v", err)
+	}
+	return decision
+}
+
+func grpcAdvisorReceiptIdentity(id string, seed byte) *pb.HostAdvisorReceiptIdentity {
+	digest := grpcAdvisorInterventionDigest(seed)
+	return &pb.HostAdvisorReceiptIdentity{ReceiptId: id, IntegritySha256: append([]byte(nil), digest[:]...)}
+}
+
+func grpcAdvisorInterventionDigest(seed byte) [32]byte {
+	var digest [32]byte
+	for index := range digest {
+		digest[index] = seed + byte(index)
+	}
+	return digest
+}
+
 func grpcAdvisorProfile(t *testing.T) hostadvisor.AcceptedProfile {
+	return grpcAdvisorProfileWithCallbackDeadline(t, 250*time.Millisecond)
+}
+
+func grpcAdvisorProfileWithCallbackDeadline(t *testing.T, callbackDeadline time.Duration) hostadvisor.AcceptedProfile {
 	t.Helper()
 	profile, err := hostadvisor.NewOMPAdvisor1Profile(hostadvisor.OMPAdvisor1ProfileSpec{
 		HostVersion:             "omp-1.0.0",
@@ -281,7 +679,7 @@ func grpcAdvisorProfile(t *testing.T) hostadvisor.AcceptedProfile {
 		RuntimeProbeReceiptID:   "probe-receipt-one",
 		SnapshotID:              "snapshot-one",
 		SnapshotRevision:        1,
-		CallbackDeadline:        250 * time.Millisecond,
+		CallbackDeadline:        callbackDeadline,
 		BindingTTL:              time.Minute,
 	})
 	if err != nil {

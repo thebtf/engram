@@ -106,6 +106,14 @@ func (r *Registry) Bind(subject AuthenticatedSubject, hello HostHello) (HostBind
 		adapterID:          normalized.host.AdapterID,
 		runtimeInstanceRef: normalized.host.RuntimeInstanceRef,
 	}
+	channelWriter := newDigestWriter("engram.host-advisor.channel/v1")
+	channelWriter.uint32(uint32(normalized.host.Family))
+	channelWriter.text(normalized.host.AdapterID)
+	channelWriter.text(normalized.host.RuntimeInstanceRef)
+	boundChannel := BoundChannel{
+		hostFamily: normalized.host.Family,
+		commitment: channelWriter.sum(),
+	}
 	material := materialDigest(subject, profile, normalized)
 
 	r.mu.Lock()
@@ -140,6 +148,7 @@ func (r *Registry) Bind(subject AuthenticatedSubject, hello HostHello) (HostBind
 		expiresAt:        expiresAt,
 		callbackDeadline: profileCallbackDeadline(profile),
 		subject:          subject,
+		channel:          boundChannel,
 	}
 
 	if hasOld {

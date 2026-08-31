@@ -635,10 +635,199 @@ message HostAdvisorBindResponse {
   HostBinding binding = 1;
 }
 
-message HostAdvisorAdviseRequest {}
+// HostAdvisorFactKind identifies a bounded occurrence fact.
+enum HostAdvisorFactKind {
+  HOST_ADVISOR_FACT_KIND_UNSPECIFIED = 0;
+  HOST_ADVISOR_FACT_KIND_KEYWORD = 1;
+  HOST_ADVISOR_FACT_KIND_PATH = 2;
+  HOST_ADVISOR_FACT_KIND_TOOL = 3;
+}
 
-message HostAdvisorAdviseResponse {}
+// HostAdvisorCandidateTier identifies the selected knowledge source tier.
+enum HostAdvisorCandidateTier {
+  HOST_ADVISOR_CANDIDATE_TIER_UNSPECIFIED = 0;
+  HOST_ADVISOR_CANDIDATE_TIER_EXACT = 1;
+  HOST_ADVISOR_CANDIDATE_TIER_FTS = 2;
+  HOST_ADVISOR_CANDIDATE_TIER_VECTOR = 3;
+}
 
-message HostAdvisorObserveRequest {}
+// HostAdvisorAbstentionReason identifies a final non-delivery decision.
+enum HostAdvisorAbstentionReason {
+  HOST_ADVISOR_ABSTENTION_REASON_UNSPECIFIED = 0;
+  HOST_ADVISOR_ABSTENTION_REASON_NO_CANDIDATES = 1;
+  HOST_ADVISOR_ABSTENTION_REASON_POLICY_OBSERVING = 2;
+  HOST_ADVISOR_ABSTENTION_REASON_POLICY_SHADOW = 3;
+  HOST_ADVISOR_ABSTENTION_REASON_POLICY_CANARY_BUDGET = 4;
+  HOST_ADVISOR_ABSTENTION_REASON_EVIDENCE_INSUFFICIENT = 5;
+  HOST_ADVISOR_ABSTENTION_REASON_HARM_BOUND = 6;
+  HOST_ADVISOR_ABSTENTION_REASON_POLICY_SUPPRESSED = 7;
+  HOST_ADVISOR_ABSTENTION_REASON_TASK_FIT = 8;
+  HOST_ADVISOR_ABSTENTION_REASON_ACTIONABILITY = 9;
+  HOST_ADVISOR_ABSTENTION_REASON_EVIDENCE_STATE = 10;
+  HOST_ADVISOR_ABSTENTION_REASON_ALREADY_VISIBLE = 11;
+  HOST_ADVISOR_ABSTENTION_REASON_CONTEXT_BUDGET = 12;
+  HOST_ADVISOR_ABSTENTION_REASON_AMBIGUOUS_CONFLICT = 13;
+}
 
-message HostAdvisorObserveResponse {}
+// HostAdvisorUnavailableCode identifies a typed unavailable outcome.
+enum HostAdvisorUnavailableCode {
+  HOST_ADVISOR_UNAVAILABLE_CODE_UNSPECIFIED = 0;
+  HOST_ADVISOR_UNAVAILABLE_CODE_BINDING_UNAVAILABLE = 1;
+  HOST_ADVISOR_UNAVAILABLE_CODE_CAPABILITY_UNAVAILABLE = 2;
+  HOST_ADVISOR_UNAVAILABLE_CODE_FACTS_INVALID = 3;
+  HOST_ADVISOR_UNAVAILABLE_CODE_PREDECESSOR_INVALID = 4;
+  HOST_ADVISOR_UNAVAILABLE_CODE_DEADLINE_EXPIRED = 5;
+  HOST_ADVISOR_UNAVAILABLE_CODE_REPLAY_CONFLICT = 6;
+  HOST_ADVISOR_UNAVAILABLE_CODE_DEPENDENCY_UNAVAILABLE = 7;
+  HOST_ADVISOR_UNAVAILABLE_CODE_RECEIPT_UNAVAILABLE = 8;
+}
+
+// HostAdvisorObservationState identifies the final observation acknowledgement.
+enum HostAdvisorObservationState {
+  HOST_ADVISOR_OBSERVATION_STATE_UNSPECIFIED = 0;
+  HOST_ADVISOR_OBSERVATION_STATE_ACCEPTED = 1;
+  HOST_ADVISOR_OBSERVATION_STATE_DUPLICATE = 2;
+  HOST_ADVISOR_OBSERVATION_STATE_REJECTED = 3;
+  HOST_ADVISOR_OBSERVATION_STATE_UNAVAILABLE = 4;
+}
+
+// HostAdvisorObservationReason identifies the closed observation disposition.
+enum HostAdvisorObservationReason {
+  HOST_ADVISOR_OBSERVATION_REASON_UNSPECIFIED = 0;
+  HOST_ADVISOR_OBSERVATION_REASON_ACCEPTED_ATTESTATION = 1;
+  HOST_ADVISOR_OBSERVATION_REASON_ACCEPTED_SEMANTIC_GAP = 2;
+  HOST_ADVISOR_OBSERVATION_REASON_DUPLICATE = 3;
+  HOST_ADVISOR_OBSERVATION_REASON_INVALID_TARGET = 4;
+  HOST_ADVISOR_OBSERVATION_REASON_RECEIPT_UNAVAILABLE = 5;
+  HOST_ADVISOR_OBSERVATION_REASON_DEPENDENCY_UNAVAILABLE = 6;
+}
+
+// HostAdvisorAttestationKind identifies a closed receipt-bound adapter fact.
+enum HostAdvisorAttestationKind {
+  HOST_ADVISOR_ATTESTATION_KIND_UNSPECIFIED = 0;
+  HOST_ADVISOR_ATTESTATION_KIND_DECISION_RECEIVED = 1;
+  HOST_ADVISOR_ATTESTATION_KIND_UNTRUSTED_REFERENCE_PRESENTED = 2;
+}
+
+// HostAdvisorSemanticGapCode identifies a closed adapter semantic gap.
+enum HostAdvisorSemanticGapCode {
+  HOST_ADVISOR_SEMANTIC_GAP_CODE_UNSPECIFIED = 0;
+  HOST_ADVISOR_SEMANTIC_GAP_CODE_CALLBACK_UNAVAILABLE = 1;
+  HOST_ADVISOR_SEMANTIC_GAP_CODE_CONTEXT_INJECTION_UNAVAILABLE = 2;
+  HOST_ADVISOR_SEMANTIC_GAP_CODE_RECEIPT_CORRELATION_UNAVAILABLE = 3;
+}
+
+message HostAdvisorTypedFact {
+  HostAdvisorFactKind kind = 1;
+  string value = 2;
+}
+
+message HostAdvisorBeforeAgentStartFacts {
+  string task_query = 1;
+  repeated HostAdvisorTypedFact facts = 2;
+}
+
+message HostAdvisorReceiptIdentity {
+  string receipt_id = 1;
+  bytes integrity_sha256 = 2;
+}
+
+message HostAdvisorOccurrence {
+  HostAdvisorSemantic phase = 1;
+  string session_ref = 2;
+  string phase_anchor_ref = 3;
+  HostAdvisorBeforeAgentStartFacts before_agent_start = 4;
+  HostAdvisorReceiptIdentity predecessor = 5;
+}
+
+message HostAdvisorAdviseRequest {
+  string binding_id = 1;
+  // Untrusted, evidence-only project ingress; never the canonical project.
+  ProjectIdentityV3 project_evidence = 2;
+  HostAdvisorOccurrence occurrence = 3;
+}
+
+message HostAdvisorKnowledgeReference {
+  int64 memory_id = 1;
+  uint32 memory_version = 2;
+  HostAdvisorCandidateTier source_tier = 3;
+  bytes text_sha256 = 4;
+}
+
+message HostAdvisorPresentation {
+  HostAdvisorContextInjectionMode injection_mode = 1;
+  string bounded_text = 2;
+}
+
+message HostAdvisorPacket {
+  HostAdvisorReceiptIdentity receipt = 1;
+  google.protobuf.Timestamp expires_at = 2;
+  HostAdvisorKnowledgeReference knowledge = 3;
+  HostAdvisorPresentation presentation = 4;
+}
+
+message HostAdvisorEmit {
+  HostAdvisorReceiptIdentity receipt = 1;
+  HostAdvisorPacket packet = 2;
+}
+
+message HostAdvisorAbstain {
+  HostAdvisorReceiptIdentity receipt = 1;
+  HostAdvisorAbstentionReason reason = 2;
+}
+
+message HostAdvisorDeliveryAmbiguous {
+  HostAdvisorReceiptIdentity receipt = 1;
+}
+
+message HostAdvisorUnavailable {
+  string correlation_id = 1;
+  google.protobuf.Timestamp expires_at = 2;
+  HostAdvisorUnavailableCode code = 3;
+}
+
+message HostAdvisorAdviseResponse {
+  oneof decision {
+    HostAdvisorEmit emit = 1;
+    HostAdvisorAbstain abstain = 2;
+    HostAdvisorDeliveryAmbiguous delivery_ambiguous = 3;
+    HostAdvisorUnavailable unavailable = 4;
+  }
+}
+
+message HostAdvisorAdapterAttestation {
+  HostAdvisorAttestationKind kind = 1;
+}
+
+message HostAdvisorAdapterSemanticGap {
+  HostAdvisorSemanticGapCode code = 1;
+}
+
+message HostAdvisorReceiptBoundObservation {
+  HostAdvisorReceiptIdentity decision_receipt = 1;
+  string observation_anchor_ref = 2;
+  oneof evidence {
+    HostAdvisorAdapterAttestation adapter_attested = 3;
+    HostAdvisorAdapterSemanticGap adapter_semantic_gap = 4;
+  }
+}
+
+// A channel-only semantic gap carries no project evidence or receipt identity.
+message HostAdvisorChannelSemanticGap {
+  string observation_anchor_ref = 1;
+  HostAdvisorAdapterSemanticGap adapter_semantic_gap = 2;
+}
+
+message HostAdvisorObserveRequest {
+  string binding_id = 1;
+  oneof target {
+    HostAdvisorReceiptBoundObservation receipt_bound = 2;
+    HostAdvisorChannelSemanticGap channel_gap = 3;
+  }
+}
+
+message HostAdvisorObserveResponse {
+  HostAdvisorObservationState state = 1;
+  string observation_id = 2;
+  HostAdvisorObservationReason reason = 3;
+}

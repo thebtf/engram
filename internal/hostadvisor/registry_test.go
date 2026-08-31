@@ -96,8 +96,43 @@ func TestRegistryExactRetryPreservesOriginalBindingAndExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exact retry: %v", err)
 	}
-	if first.ID() != second.ID() || !first.ExpiresAt().Equal(second.ExpiresAt()) || first.Snapshot().ContractDigest() != second.Snapshot().ContractDigest() || first.CallbackDeadline() != second.CallbackDeadline() {
+	if first.ID() != second.ID() || !first.ExpiresAt().Equal(second.ExpiresAt()) || first.Snapshot().ContractDigest() != second.Snapshot().ContractDigest() || first.CallbackDeadline() != second.CallbackDeadline() || first.Channel() != second.Channel() {
 		t.Fatalf("exact retry changed binding: first=%#v second=%#v", first, second)
+	}
+}
+
+func TestRegistryBindingChannelOwnsNormalizedHostValues(t *testing.T) {
+	clock := time.Date(2026, time.August, 31, 12, 0, 0, 0, time.UTC)
+	profile := fixtureProfile(t)
+	registry := fixtureRegistry(t, []AcceptedProfile{profile}, 1, &clock, bindingIDs("binding-one"))
+	subject := fixtureSubject(t, 1)
+	hello := fixtureHello(profile, "runtime-one")
+
+	binding, err := registry.Bind(subject, hello)
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	hello.Host.Family = 0
+	hello.Host.AdapterID = "changed-adapter"
+	hello.Host.RuntimeInstanceRef = "changed-runtime"
+
+	channelWriter := newDigestWriter("engram.host-advisor.channel/v1")
+	channelWriter.uint32(uint32(profile.HostFamily))
+	channelWriter.text(profile.AdapterID)
+	channelWriter.text("runtime-one")
+	want := BoundChannel{
+		hostFamily: profile.HostFamily,
+		commitment: channelWriter.sum(),
+	}
+	if got := binding.Channel(); got != want {
+		t.Fatalf("bound channel = %#v, want %#v", got, want)
+	}
+	active, err := registry.RequireActive(subject, binding.ID())
+	if err != nil {
+		t.Fatalf("RequireActive: %v", err)
+	}
+	if got := active.Channel(); got != want {
+		t.Fatalf("active channel = %#v, want %#v", got, want)
 	}
 }
 
@@ -121,6 +156,9 @@ func TestRegistryReplacesSameChannelOnValidMaterialChange(t *testing.T) {
 	}
 	if first.ID() == second.ID() {
 		t.Fatalf("material change reused binding ID %q", first.ID())
+	}
+	if first.Channel() != second.Channel() {
+		t.Fatalf("same-channel replacement changed channel: first=%#v second=%#v", first.Channel(), second.Channel())
 	}
 	if _, err := registry.RequireActive(subject, first.ID()); !errors.Is(err, ErrBindingUnavailable) {
 		t.Fatalf("old binding error = %v, want unavailable", err)
@@ -349,6 +387,44 @@ func TestRegistrySeparatesSubjectAndAdapterChannels(t *testing.T) {
 	}
 	if _, err := registry.RequireActive(fixtureSubject(t, 2), one.ID()); !errors.Is(err, ErrBindingUnavailable) {
 		t.Fatalf("cross-subject binding error = %v, want unavailable", err)
+	}
+}
+
+func TestRegistryBindingChannelsDistinguishRuntimeAndAdapter(t *testing.T) {
+	clock := time.Date(2026, time.August, 31, 12, 0, 0, 0, time.UTC)
+	profile := fixtureProfile(t)
+	adapterSpec := fixtureProfileSpec()
+	adapterSpec.AdapterID = "omp-adapter-two"
+	adapterSpec.SnapshotID = "snapshot-adapter-two"
+	adapterSpec.SnapshotRevision = 2
+	adapterProfile := fixtureProfileFromSpec(t, adapterSpec)
+	registry := fixtureRegistry(t, []AcceptedProfile{profile, adapterProfile}, 3, &clock, bindingIDs("binding-one", "binding-two", "binding-three"))
+	subject := fixtureSubject(t, 1)
+
+	first, err := registry.Bind(subject, fixtureHello(profile, "runtime-one"))
+	if err != nil {
+		t.Fatalf("first Bind: %v", err)
+	}
+	runtimeChanged, err := registry.Bind(subject, fixtureHello(profile, "runtime-two"))
+	if err != nil {
+		t.Fatalf("runtime Bind: %v", err)
+	}
+	adapterChanged, err := registry.Bind(subject, fixtureHello(adapterProfile, "runtime-one"))
+	if err != nil {
+		t.Fatalf("adapter Bind: %v", err)
+	}
+
+	if first.Channel() == runtimeChanged.Channel() {
+		t.Fatalf("runtime-distinct channels match: %#v", first.Channel())
+	}
+	if first.Channel() == adapterChanged.Channel() {
+		t.Fatalf("adapter-distinct channels match: %#v", first.Channel())
+	}
+	if adapterChanged.Channel().Commitment() == first.Channel().Commitment() {
+		t.Fatal("adapter change did not change protected channel commitment")
+	}
+	if runtimeChanged.Channel().Commitment() == first.Channel().Commitment() {
+		t.Fatal("runtime change did not change protected channel commitment")
 	}
 }
 

@@ -176,6 +176,24 @@ type HostIdentity struct {
 	RuntimeInstanceRef string
 }
 
+// BoundChannel is the immutable normalized host-channel commitment stored with
+// a binding. Raw adapter and runtime references never survive in HostBinding.
+type BoundChannel struct {
+	hostFamily HostFamily
+	commitment Digest
+}
+
+// HostFamily returns the recognized host family for the bound channel.
+func (c BoundChannel) HostFamily() HostFamily {
+	return c.hostFamily
+}
+
+// Commitment returns the deterministic commitment to adapter and runtime
+// identity without exposing either raw value.
+func (c BoundChannel) Commitment() Digest {
+	return c.commitment
+}
+
 // HostHello is the complete binding material supplied by the authenticated daemon.
 type HostHello struct {
 	Protocol  ProtocolRange
@@ -261,6 +279,7 @@ type HostBinding struct {
 	expiresAt        time.Time
 	callbackDeadline time.Duration
 	subject          AuthenticatedSubject
+	channel          BoundChannel
 }
 
 // ID returns the opaque binding reference.
@@ -286,6 +305,11 @@ func (b HostBinding) CallbackDeadline() time.Duration {
 // Subject returns the server-derived binding subject.
 func (b HostBinding) Subject() AuthenticatedSubject {
 	return b.subject
+}
+
+// Channel returns the immutable normalized host channel for the binding.
+func (b HostBinding) Channel() BoundChannel {
+	return b.channel
 }
 
 func cloneCapabilities(capabilities []Capability) []Capability {

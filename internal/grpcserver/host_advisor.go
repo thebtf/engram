@@ -7,8 +7,12 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/hostadvisor"
+	"github.com/thebtf/engram/internal/intervention"
+	"github.com/thebtf/engram/internal/projectidentity"
+	"github.com/thebtf/engram/internal/taskmemory"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -24,8 +28,7 @@ const (
 )
 
 // Bind admits only a validated ordinary workstation keycard into the installed
-// host-advisor registry. Advise and Observe intentionally remain provided by
-// the embedded generated UnimplementedEngramServiceServer until HAP-03.
+// host-advisor registry.
 func (s *Server) Bind(ctx context.Context, request *pb.HostAdvisorBindRequest) (*pb.HostAdvisorBindResponse, error) {
 	subject, err := bindAuthenticatedSubject(ctx)
 	if err != nil {
@@ -44,6 +47,310 @@ func (s *Server) Bind(ctx context.Context, request *pb.HostAdvisorBindRequest) (
 		return nil, hostAdvisorRegistryError(err)
 	}
 	return &pb.HostAdvisorBindResponse{Binding: hostBindingProto(binding)}, nil
+}
+
+// Advise validates one bound BEFORE_AGENT_START occurrence before delegating
+// the immutable input to the injected intervention runtime.
+func (s *Server) Advise(ctx context.Context, request *pb.HostAdvisorAdviseRequest) (*pb.HostAdvisorAdviseResponse, error) {
+	if ctx == nil {
+		return nil, hostAdvisorInvalidArgument()
+	}
+	enteredAt := time.Now().UTC()
+	subject, err := bindAuthenticatedSubject(ctx)
+	if err != nil {
+		return nil, err
+	}
+	project, occurrence, err := hostAdvisorAdviseValuesFromProto(request)
+	if err != nil {
+		return nil, hostAdvisorInvalidArgument()
+	}
+
+	binding, active := s.activeHostAdvisorBinding(subject, request.GetBindingId())
+	if !active {
+		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, time.Time{}, intervention.UnavailableBinding)
+	}
+	bindingFacts, err := intervention.NewBindingFacts(binding)
+	if err != nil || !bindingFacts.LiveAt(enteredAt) {
+		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, binding.ExpiresAt(), intervention.UnavailableBinding)
+	}
+	if !bindingFacts.AllowsAdvise() {
+		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, bindingFacts.ExpiresAt(), intervention.UnavailableCapability)
+	}
+
+	deadline, err := intervention.NewEffectiveDeadline(ctx, enteredAt, bindingFacts)
+	if err != nil || !deadline.AllowsEntry(enteredAt) {
+		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, bindingFacts.ExpiresAt(), intervention.UnavailableDeadline)
+	}
+	input, err := intervention.NewAdviseInput(bindingFacts, project, occurrence)
+	if err != nil {
+		return nil, hostAdvisorInvalidArgument()
+	}
+	advisor := s.currentInterventionAdvisor()
+	if advisor == nil {
+		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, deadline.Deadline(), intervention.UnavailableDependency)
+	}
+	if !deadline.AllowsWork(time.Now().UTC()) {
+		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, deadline.Deadline(), intervention.UnavailableDeadline)
+	}
+	callbackContext, cancel := context.WithDeadline(ctx, deadline.Deadline())
+	defer cancel()
+	decision, err := advisor.Advise(callbackContext, input)
+	if err != nil {
+		code := intervention.UnavailableDependency
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(callbackContext.Err(), context.DeadlineExceeded) {
+			code = intervention.UnavailableDeadline
+		}
+		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, deadline.Deadline(), code)
+	}
+	if !decision.Valid() {
+		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, deadline.Deadline(), intervention.UnavailableDependency)
+	}
+	if !deadline.AllowsResponse(time.Now().UTC()) {
+		if receipt, _, emitted := decision.Emit(); emitted {
+			ambiguous, err := intervention.NewDeliveryAmbiguousDecision(receipt)
+			if err == nil {
+				return hostAdvisorDecisionProto(ambiguous)
+			}
+		}
+		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, deadline.Deadline(), intervention.UnavailableDeadline)
+	}
+	response, err := hostAdvisorDecisionProto(decision)
+	if err != nil {
+		return s.hostAdvisorAdviseUnavailable(ctx, enteredAt, deadline.Deadline(), intervention.UnavailableDependency)
+	}
+	return response, nil
+}
+
+// Observe validates an adapter attestation or semantic gap on the independently
+// admitted BEFORE_AGENT_START channel. It never resolves project evidence.
+func (s *Server) Observe(ctx context.Context, request *pb.HostAdvisorObserveRequest) (*pb.HostAdvisorObserveResponse, error) {
+	if ctx == nil {
+		return nil, hostAdvisorInvalidArgument()
+	}
+	subject, err := bindAuthenticatedSubject(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if hostAdvisorMessageMalformed(request) || proto.Size(request) > intervention.MaxWireBytes {
+		return nil, hostAdvisorInvalidArgument()
+	}
+	binding, active := s.activeHostAdvisorBinding(subject, request.GetBindingId())
+	if !active {
+		return hostAdvisorObserveUnavailable()
+	}
+	bindingFacts, err := intervention.NewBindingFacts(binding)
+	if err != nil || !bindingFacts.LiveAt(time.Now().UTC()) || !bindingFacts.AllowsObserve() {
+		return hostAdvisorObserveUnavailable()
+	}
+	input, err := hostAdvisorObserveInputFromProto(request, bindingFacts)
+	if err != nil {
+		return nil, hostAdvisorInvalidArgument()
+	}
+	advisor := s.currentInterventionAdvisor()
+	if advisor == nil {
+		return hostAdvisorObserveUnavailable()
+	}
+	acknowledgement, err := advisor.Observe(ctx, input)
+	if err != nil || !acknowledgement.Valid() {
+		return hostAdvisorObserveUnavailable()
+	}
+	response, err := hostAdvisorObservationAckProto(acknowledgement)
+	if err != nil {
+		return hostAdvisorObserveUnavailable()
+	}
+	return response, nil
+}
+
+func (s *Server) activeHostAdvisorBinding(subject hostadvisor.AuthenticatedSubject, bindingID string) (hostadvisor.HostBinding, bool) {
+	registry := s.currentHostAdvisorRegistry()
+	if registry == nil {
+		return hostadvisor.HostBinding{}, false
+	}
+	binding, err := registry.RequireActive(subject, hostadvisor.BindingID(bindingID))
+	return binding, err == nil
+}
+
+func (s *Server) hostAdvisorAdviseUnavailable(ctx context.Context, enteredAt, expiry time.Time, code intervention.UnavailableCode) (*pb.HostAdvisorAdviseResponse, error) {
+	if expiry.IsZero() {
+		expiry = enteredAt.Add(intervention.HardDeadlineCap)
+	}
+	if contextDeadline, hasDeadline := ctx.Deadline(); hasDeadline && contextDeadline.Before(expiry) {
+		expiry = contextDeadline
+	}
+	decision, err := intervention.NewUnavailableDecision(uuid.NewString(), expiry, code)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "host advisor unavailable response failed")
+	}
+	return hostAdvisorDecisionProto(decision)
+}
+
+func hostAdvisorObserveUnavailable() (*pb.HostAdvisorObserveResponse, error) {
+	acknowledgement, err := intervention.NewUnavailableObservationAck(intervention.ObservationReasonDependencyUnavailable)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "host advisor unavailable acknowledgement failed")
+	}
+	return hostAdvisorObservationAckProto(acknowledgement)
+}
+
+func hostAdvisorAdviseValuesFromProto(request *pb.HostAdvisorAdviseRequest) (taskmemory.ProjectEvidenceV3, intervention.BeforeAgentStartOccurrence, error) {
+	if hostAdvisorMessageMalformed(request) || proto.Size(request) > intervention.MaxWireBytes {
+		return taskmemory.ProjectEvidenceV3{}, intervention.BeforeAgentStartOccurrence{}, intervention.ErrInvalidInput
+	}
+	project, err := hostAdvisorProjectEvidenceFromProto(request.GetProjectEvidence())
+	if err != nil {
+		return taskmemory.ProjectEvidenceV3{}, intervention.BeforeAgentStartOccurrence{}, err
+	}
+	occurrence, err := hostAdvisorOccurrenceFromProto(request.GetOccurrence())
+	if err != nil {
+		return taskmemory.ProjectEvidenceV3{}, intervention.BeforeAgentStartOccurrence{}, err
+	}
+	return project, occurrence, nil
+}
+
+func hostAdvisorProjectEvidenceFromProto(value *pb.ProjectIdentityV3) (taskmemory.ProjectEvidenceV3, error) {
+	if hostAdvisorMessageMalformed(value) {
+		return taskmemory.ProjectEvidenceV3{}, intervention.ErrInvalidInput
+	}
+	for _, identifier := range value.GetLegacyIdentifiers() {
+		if hostAdvisorMessageMalformed(identifier) {
+			return taskmemory.ProjectEvidenceV3{}, intervention.ErrInvalidInput
+		}
+	}
+	anchor, descriptor := grpcProjectIdentityV3Evidence(value)
+	validated, err := projectidentity.BuildDescriptorV3(anchor, descriptor.NormalizedGitRemotes, descriptor.LegacyIdentifiers, descriptor.ClientInstanceID)
+	if err != nil {
+		return taskmemory.ProjectEvidenceV3{}, intervention.ErrInvalidInput
+	}
+	return taskmemory.ProjectEvidenceV3{Anchor: anchor, Descriptor: validated}, nil
+}
+
+func hostAdvisorOccurrenceFromProto(value *pb.HostAdvisorOccurrence) (intervention.BeforeAgentStartOccurrence, error) {
+	if hostAdvisorMessageMalformed(value) || value.GetPredecessor() != nil || value.GetPhase() != pb.HostAdvisorSemantic_HOST_ADVISOR_SEMANTIC_BEFORE_AGENT_START {
+		return intervention.BeforeAgentStartOccurrence{}, intervention.ErrInvalidInput
+	}
+	beforeAgentStart := value.GetBeforeAgentStart()
+	if hostAdvisorMessageMalformed(beforeAgentStart) {
+		return intervention.BeforeAgentStartOccurrence{}, intervention.ErrInvalidInput
+	}
+	typedFacts := make([]intervention.TypedFact, len(beforeAgentStart.GetFacts()))
+	for index, fact := range beforeAgentStart.GetFacts() {
+		if hostAdvisorMessageMalformed(fact) {
+			return intervention.BeforeAgentStartOccurrence{}, intervention.ErrInvalidInput
+		}
+		kind, ok := hostAdvisorFactKindFromProto(fact.GetKind())
+		if !ok {
+			return intervention.BeforeAgentStartOccurrence{}, intervention.ErrInvalidInput
+		}
+		parsed, err := intervention.NewTypedFact(kind, fact.GetValue())
+		if err != nil {
+			return intervention.BeforeAgentStartOccurrence{}, intervention.ErrInvalidInput
+		}
+		typedFacts[index] = parsed
+	}
+	facts, err := intervention.NewBeforeAgentStartFacts(beforeAgentStart.GetTaskQuery(), typedFacts)
+	if err != nil {
+		return intervention.BeforeAgentStartOccurrence{}, intervention.ErrInvalidInput
+	}
+	return intervention.NewBeforeAgentStartOccurrence(value.GetSessionRef(), value.GetPhaseAnchorRef(), facts)
+}
+
+func hostAdvisorFactKindFromProto(kind pb.HostAdvisorFactKind) (intervention.FactKind, bool) {
+	switch kind {
+	case pb.HostAdvisorFactKind_HOST_ADVISOR_FACT_KIND_KEYWORD:
+		return intervention.FactKindKeyword, true
+	case pb.HostAdvisorFactKind_HOST_ADVISOR_FACT_KIND_PATH:
+		return intervention.FactKindPath, true
+	case pb.HostAdvisorFactKind_HOST_ADVISOR_FACT_KIND_TOOL:
+		return intervention.FactKindTool, true
+	default:
+		return 0, false
+	}
+}
+
+func hostAdvisorObserveInputFromProto(request *pb.HostAdvisorObserveRequest, binding intervention.BindingFacts) (intervention.ObserveInput, error) {
+	if hostAdvisorMessageMalformed(request) || proto.Size(request) > intervention.MaxWireBytes {
+		return intervention.ObserveInput{}, intervention.ErrInvalidInput
+	}
+	switch target := request.GetTarget().(type) {
+	case *pb.HostAdvisorObserveRequest_ReceiptBound:
+		if target.ReceiptBound == nil || hostAdvisorMessageMalformed(target.ReceiptBound) {
+			return intervention.ObserveInput{}, intervention.ErrInvalidInput
+		}
+		receipt, err := hostAdvisorReceiptIdentityFromProto(target.ReceiptBound.GetDecisionReceipt())
+		if err != nil {
+			return intervention.ObserveInput{}, err
+		}
+		switch evidence := target.ReceiptBound.GetEvidence().(type) {
+		case *pb.HostAdvisorReceiptBoundObservation_AdapterAttested:
+			if evidence.AdapterAttested == nil || hostAdvisorMessageMalformed(evidence.AdapterAttested) {
+				return intervention.ObserveInput{}, intervention.ErrInvalidInput
+			}
+			attestation, ok := hostAdvisorAttestationKindFromProto(evidence.AdapterAttested.GetKind())
+			if !ok {
+				return intervention.ObserveInput{}, intervention.ErrInvalidInput
+			}
+			return intervention.NewObserveReceiptAttestation(binding, receipt, target.ReceiptBound.GetObservationAnchorRef(), attestation)
+		case *pb.HostAdvisorReceiptBoundObservation_AdapterSemanticGap:
+			if evidence.AdapterSemanticGap == nil || hostAdvisorMessageMalformed(evidence.AdapterSemanticGap) {
+				return intervention.ObserveInput{}, intervention.ErrInvalidInput
+			}
+			gap, ok := hostAdvisorSemanticGapCodeFromProto(evidence.AdapterSemanticGap.GetCode())
+			if !ok {
+				return intervention.ObserveInput{}, intervention.ErrInvalidInput
+			}
+			return intervention.NewObserveReceiptSemanticGap(binding, receipt, target.ReceiptBound.GetObservationAnchorRef(), gap)
+		default:
+			return intervention.ObserveInput{}, intervention.ErrInvalidInput
+		}
+	case *pb.HostAdvisorObserveRequest_ChannelGap:
+		if target.ChannelGap == nil || hostAdvisorMessageMalformed(target.ChannelGap) {
+			return intervention.ObserveInput{}, intervention.ErrInvalidInput
+		}
+		gapWire := target.ChannelGap.GetAdapterSemanticGap()
+		if hostAdvisorMessageMalformed(gapWire) {
+			return intervention.ObserveInput{}, intervention.ErrInvalidInput
+		}
+		gap, ok := hostAdvisorSemanticGapCodeFromProto(gapWire.GetCode())
+		if !ok {
+			return intervention.ObserveInput{}, intervention.ErrInvalidInput
+		}
+		return intervention.NewObserveChannelSemanticGap(binding, target.ChannelGap.GetObservationAnchorRef(), gap)
+	default:
+		return intervention.ObserveInput{}, intervention.ErrInvalidInput
+	}
+}
+
+func hostAdvisorReceiptIdentityFromProto(value *pb.HostAdvisorReceiptIdentity) (intervention.ReceiptIdentity, error) {
+	if hostAdvisorMessageMalformed(value) || len(value.GetIntegritySha256()) != sha256.Size {
+		return intervention.ReceiptIdentity{}, intervention.ErrInvalidInput
+	}
+	var integrity [sha256.Size]byte
+	copy(integrity[:], value.GetIntegritySha256())
+	return intervention.NewReceiptIdentity(value.GetReceiptId(), integrity)
+}
+
+func hostAdvisorAttestationKindFromProto(kind pb.HostAdvisorAttestationKind) (intervention.AttestationKind, bool) {
+	switch kind {
+	case pb.HostAdvisorAttestationKind_HOST_ADVISOR_ATTESTATION_KIND_DECISION_RECEIVED:
+		return intervention.AttestationDecisionReceived, true
+	case pb.HostAdvisorAttestationKind_HOST_ADVISOR_ATTESTATION_KIND_UNTRUSTED_REFERENCE_PRESENTED:
+		return intervention.AttestationUntrustedReferencePresented, true
+	default:
+		return 0, false
+	}
+}
+
+func hostAdvisorSemanticGapCodeFromProto(code pb.HostAdvisorSemanticGapCode) (intervention.SemanticGapCode, bool) {
+	switch code {
+	case pb.HostAdvisorSemanticGapCode_HOST_ADVISOR_SEMANTIC_GAP_CODE_CALLBACK_UNAVAILABLE:
+		return intervention.SemanticGapCallbackUnavailable, true
+	case pb.HostAdvisorSemanticGapCode_HOST_ADVISOR_SEMANTIC_GAP_CODE_CONTEXT_INJECTION_UNAVAILABLE:
+		return intervention.SemanticGapContextInjectionUnavailable, true
+	case pb.HostAdvisorSemanticGapCode_HOST_ADVISOR_SEMANTIC_GAP_CODE_RECEIPT_CORRELATION_UNAVAILABLE:
+		return intervention.SemanticGapReceiptCorrelationUnavailable, true
+	default:
+		return 0, false
+	}
 }
 
 func initializeAuthenticatedSubjectProof(ctx context.Context) []byte {
@@ -508,5 +815,232 @@ func acknowledgementProto(acknowledgement hostadvisor.Acknowledgement) pb.HostAd
 		return pb.HostAdvisorAcknowledgement_HOST_ADVISOR_ACKNOWLEDGEMENT_CONSUMPTION_OBSERVED
 	default:
 		return pb.HostAdvisorAcknowledgement_HOST_ADVISOR_ACKNOWLEDGEMENT_UNSPECIFIED
+	}
+}
+
+func hostAdvisorDecisionProto(decision intervention.Decision) (*pb.HostAdvisorAdviseResponse, error) {
+	if !decision.Valid() {
+		return nil, intervention.ErrInvalidInput
+	}
+	switch decision.Kind() {
+	case intervention.DecisionEmit:
+		receipt, packet, ok := decision.Emit()
+		if !ok {
+			return nil, intervention.ErrInvalidInput
+		}
+		packetProto, err := hostAdvisorPacketProto(packet)
+		if err != nil {
+			return nil, err
+		}
+		return &pb.HostAdvisorAdviseResponse{Decision: &pb.HostAdvisorAdviseResponse_Emit{Emit: &pb.HostAdvisorEmit{
+			Receipt: hostAdvisorReceiptIdentityProto(receipt),
+			Packet:  packetProto,
+		}}}, nil
+	case intervention.DecisionAbstain:
+		receipt, reason, ok := decision.Abstain()
+		if !ok {
+			return nil, intervention.ErrInvalidInput
+		}
+		reasonProto, ok := hostAdvisorAbstentionReasonProto(reason)
+		if !ok {
+			return nil, intervention.ErrInvalidInput
+		}
+		return &pb.HostAdvisorAdviseResponse{Decision: &pb.HostAdvisorAdviseResponse_Abstain{Abstain: &pb.HostAdvisorAbstain{
+			Receipt: hostAdvisorReceiptIdentityProto(receipt),
+			Reason:  reasonProto,
+		}}}, nil
+	case intervention.DecisionDeliveryAmbiguous:
+		receipt, ok := decision.DeliveryAmbiguous()
+		if !ok {
+			return nil, intervention.ErrInvalidInput
+		}
+		return &pb.HostAdvisorAdviseResponse{Decision: &pb.HostAdvisorAdviseResponse_DeliveryAmbiguous{DeliveryAmbiguous: &pb.HostAdvisorDeliveryAmbiguous{
+			Receipt: hostAdvisorReceiptIdentityProto(receipt),
+		}}}, nil
+	case intervention.DecisionUnavailable:
+		unavailable, ok := decision.Unavailable()
+		if !ok {
+			return nil, intervention.ErrInvalidInput
+		}
+		code, ok := hostAdvisorUnavailableCodeProto(unavailable.Code())
+		if !ok {
+			return nil, intervention.ErrInvalidInput
+		}
+		return &pb.HostAdvisorAdviseResponse{Decision: &pb.HostAdvisorAdviseResponse_Unavailable{Unavailable: &pb.HostAdvisorUnavailable{
+			CorrelationId: unavailable.CorrelationID(),
+			ExpiresAt:     timestamppb.New(unavailable.ExpiresAt()),
+			Code:          code,
+		}}}, nil
+	default:
+		return nil, intervention.ErrInvalidInput
+	}
+}
+
+func hostAdvisorPacketProto(packet intervention.Packet) (*pb.HostAdvisorPacket, error) {
+	knowledge := packet.Knowledge()
+	tier, ok := hostAdvisorCandidateTierProto(knowledge.Tier())
+	if !ok {
+		return nil, intervention.ErrInvalidInput
+	}
+	presentation := packet.Presentation()
+	injectionMode, ok := hostAdvisorPresentationModeProto(presentation.InjectionMode())
+	if !ok {
+		return nil, intervention.ErrInvalidInput
+	}
+	return &pb.HostAdvisorPacket{
+		Receipt:   hostAdvisorReceiptIdentityProto(packet.Receipt()),
+		ExpiresAt: timestamppb.New(packet.ExpiresAt()),
+		Knowledge: &pb.HostAdvisorKnowledgeReference{
+			MemoryId:      knowledge.MemoryID(),
+			MemoryVersion: knowledge.MemoryVersion(),
+			SourceTier:    tier,
+			TextSha256:    knowledge.TextDigest().Bytes(),
+		},
+		Presentation: &pb.HostAdvisorPresentation{
+			InjectionMode: injectionMode,
+			BoundedText:   presentation.Text(),
+		},
+	}, nil
+}
+
+func hostAdvisorReceiptIdentityProto(receipt intervention.ReceiptIdentity) *pb.HostAdvisorReceiptIdentity {
+	return &pb.HostAdvisorReceiptIdentity{
+		ReceiptId:       receipt.ID(),
+		IntegritySha256: receipt.IntegrityDigest().Bytes(),
+	}
+}
+
+func hostAdvisorAbstentionReasonProto(reason intervention.AbstentionReason) (pb.HostAdvisorAbstentionReason, bool) {
+	switch reason {
+	case intervention.AbstentionNoCandidates:
+		return pb.HostAdvisorAbstentionReason_HOST_ADVISOR_ABSTENTION_REASON_NO_CANDIDATES, true
+	case intervention.AbstentionPolicyObserving:
+		return pb.HostAdvisorAbstentionReason_HOST_ADVISOR_ABSTENTION_REASON_POLICY_OBSERVING, true
+	case intervention.AbstentionPolicyShadow:
+		return pb.HostAdvisorAbstentionReason_HOST_ADVISOR_ABSTENTION_REASON_POLICY_SHADOW, true
+	case intervention.AbstentionPolicyCanaryBudget:
+		return pb.HostAdvisorAbstentionReason_HOST_ADVISOR_ABSTENTION_REASON_POLICY_CANARY_BUDGET, true
+	case intervention.AbstentionEvidenceInsufficient:
+		return pb.HostAdvisorAbstentionReason_HOST_ADVISOR_ABSTENTION_REASON_EVIDENCE_INSUFFICIENT, true
+	case intervention.AbstentionHarmBound:
+		return pb.HostAdvisorAbstentionReason_HOST_ADVISOR_ABSTENTION_REASON_HARM_BOUND, true
+	case intervention.AbstentionPolicySuppressed:
+		return pb.HostAdvisorAbstentionReason_HOST_ADVISOR_ABSTENTION_REASON_POLICY_SUPPRESSED, true
+	case intervention.AbstentionTaskFit:
+		return pb.HostAdvisorAbstentionReason_HOST_ADVISOR_ABSTENTION_REASON_TASK_FIT, true
+	case intervention.AbstentionActionability:
+		return pb.HostAdvisorAbstentionReason_HOST_ADVISOR_ABSTENTION_REASON_ACTIONABILITY, true
+	case intervention.AbstentionEvidenceState:
+		return pb.HostAdvisorAbstentionReason_HOST_ADVISOR_ABSTENTION_REASON_EVIDENCE_STATE, true
+	case intervention.AbstentionAlreadyVisible:
+		return pb.HostAdvisorAbstentionReason_HOST_ADVISOR_ABSTENTION_REASON_ALREADY_VISIBLE, true
+	case intervention.AbstentionContextBudget:
+		return pb.HostAdvisorAbstentionReason_HOST_ADVISOR_ABSTENTION_REASON_CONTEXT_BUDGET, true
+	case intervention.AbstentionAmbiguousConflict:
+		return pb.HostAdvisorAbstentionReason_HOST_ADVISOR_ABSTENTION_REASON_AMBIGUOUS_CONFLICT, true
+	default:
+		return pb.HostAdvisorAbstentionReason_HOST_ADVISOR_ABSTENTION_REASON_UNSPECIFIED, false
+	}
+}
+
+func hostAdvisorUnavailableCodeProto(code intervention.UnavailableCode) (pb.HostAdvisorUnavailableCode, bool) {
+	switch code {
+	case intervention.UnavailableBinding:
+		return pb.HostAdvisorUnavailableCode_HOST_ADVISOR_UNAVAILABLE_CODE_BINDING_UNAVAILABLE, true
+	case intervention.UnavailableCapability:
+		return pb.HostAdvisorUnavailableCode_HOST_ADVISOR_UNAVAILABLE_CODE_CAPABILITY_UNAVAILABLE, true
+	case intervention.UnavailableFacts:
+		return pb.HostAdvisorUnavailableCode_HOST_ADVISOR_UNAVAILABLE_CODE_FACTS_INVALID, true
+	case intervention.UnavailablePredecessor:
+		return pb.HostAdvisorUnavailableCode_HOST_ADVISOR_UNAVAILABLE_CODE_PREDECESSOR_INVALID, true
+	case intervention.UnavailableDeadline:
+		return pb.HostAdvisorUnavailableCode_HOST_ADVISOR_UNAVAILABLE_CODE_DEADLINE_EXPIRED, true
+	case intervention.UnavailableReplayConflict:
+		return pb.HostAdvisorUnavailableCode_HOST_ADVISOR_UNAVAILABLE_CODE_REPLAY_CONFLICT, true
+	case intervention.UnavailableDependency:
+		return pb.HostAdvisorUnavailableCode_HOST_ADVISOR_UNAVAILABLE_CODE_DEPENDENCY_UNAVAILABLE, true
+	case intervention.UnavailableReceipt:
+		return pb.HostAdvisorUnavailableCode_HOST_ADVISOR_UNAVAILABLE_CODE_RECEIPT_UNAVAILABLE, true
+	default:
+		return pb.HostAdvisorUnavailableCode_HOST_ADVISOR_UNAVAILABLE_CODE_UNSPECIFIED, false
+	}
+}
+
+func hostAdvisorCandidateTierProto(tier intervention.CandidateTier) (pb.HostAdvisorCandidateTier, bool) {
+	switch tier {
+	case intervention.CandidateTierExact:
+		return pb.HostAdvisorCandidateTier_HOST_ADVISOR_CANDIDATE_TIER_EXACT, true
+	case intervention.CandidateTierFTS:
+		return pb.HostAdvisorCandidateTier_HOST_ADVISOR_CANDIDATE_TIER_FTS, true
+	case intervention.CandidateTierVector:
+		return pb.HostAdvisorCandidateTier_HOST_ADVISOR_CANDIDATE_TIER_VECTOR, true
+	default:
+		return pb.HostAdvisorCandidateTier_HOST_ADVISOR_CANDIDATE_TIER_UNSPECIFIED, false
+	}
+}
+
+func hostAdvisorPresentationModeProto(mode intervention.ContextInjectionMode) (pb.HostAdvisorContextInjectionMode, bool) {
+	switch mode {
+	case intervention.ContextInjectionHiddenUntrustedMessage:
+		return pb.HostAdvisorContextInjectionMode_HOST_ADVISOR_CONTEXT_INJECTION_MODE_HIDDEN_UNTRUSTED_MESSAGE, true
+	default:
+		return pb.HostAdvisorContextInjectionMode_HOST_ADVISOR_CONTEXT_INJECTION_MODE_UNSPECIFIED, false
+	}
+}
+
+func hostAdvisorObservationAckProto(acknowledgement intervention.ObservationAck) (*pb.HostAdvisorObserveResponse, error) {
+	if !acknowledgement.Valid() {
+		return nil, intervention.ErrInvalidInput
+	}
+	state, ok := hostAdvisorObservationStateProto(acknowledgement.State())
+	if !ok {
+		return nil, intervention.ErrInvalidInput
+	}
+	reason, ok := hostAdvisorObservationReasonProto(acknowledgement.Reason())
+	if !ok {
+		return nil, intervention.ErrInvalidInput
+	}
+	observationID, hasObservationID := acknowledgement.ObservationID()
+	if (acknowledgement.State() == intervention.ObservationAccepted || acknowledgement.State() == intervention.ObservationDuplicate) != hasObservationID {
+		return nil, intervention.ErrInvalidInput
+	}
+	return &pb.HostAdvisorObserveResponse{
+		State:         state,
+		ObservationId: observationID,
+		Reason:        reason,
+	}, nil
+}
+
+func hostAdvisorObservationStateProto(state intervention.ObservationState) (pb.HostAdvisorObservationState, bool) {
+	switch state {
+	case intervention.ObservationAccepted:
+		return pb.HostAdvisorObservationState_HOST_ADVISOR_OBSERVATION_STATE_ACCEPTED, true
+	case intervention.ObservationDuplicate:
+		return pb.HostAdvisorObservationState_HOST_ADVISOR_OBSERVATION_STATE_DUPLICATE, true
+	case intervention.ObservationRejected:
+		return pb.HostAdvisorObservationState_HOST_ADVISOR_OBSERVATION_STATE_REJECTED, true
+	case intervention.ObservationUnavailable:
+		return pb.HostAdvisorObservationState_HOST_ADVISOR_OBSERVATION_STATE_UNAVAILABLE, true
+	default:
+		return pb.HostAdvisorObservationState_HOST_ADVISOR_OBSERVATION_STATE_UNSPECIFIED, false
+	}
+}
+
+func hostAdvisorObservationReasonProto(reason intervention.ObservationReason) (pb.HostAdvisorObservationReason, bool) {
+	switch reason {
+	case intervention.ObservationReasonAcceptedAttestation:
+		return pb.HostAdvisorObservationReason_HOST_ADVISOR_OBSERVATION_REASON_ACCEPTED_ATTESTATION, true
+	case intervention.ObservationReasonAcceptedSemanticGap:
+		return pb.HostAdvisorObservationReason_HOST_ADVISOR_OBSERVATION_REASON_ACCEPTED_SEMANTIC_GAP, true
+	case intervention.ObservationReasonDuplicate:
+		return pb.HostAdvisorObservationReason_HOST_ADVISOR_OBSERVATION_REASON_DUPLICATE, true
+	case intervention.ObservationReasonInvalidTarget:
+		return pb.HostAdvisorObservationReason_HOST_ADVISOR_OBSERVATION_REASON_INVALID_TARGET, true
+	case intervention.ObservationReasonReceiptUnavailable:
+		return pb.HostAdvisorObservationReason_HOST_ADVISOR_OBSERVATION_REASON_RECEIPT_UNAVAILABLE, true
+	case intervention.ObservationReasonDependencyUnavailable:
+		return pb.HostAdvisorObservationReason_HOST_ADVISOR_OBSERVATION_REASON_DEPENDENCY_UNAVAILABLE, true
+	default:
+		return pb.HostAdvisorObservationReason_HOST_ADVISOR_OBSERVATION_REASON_UNSPECIFIED, false
 	}
 }
