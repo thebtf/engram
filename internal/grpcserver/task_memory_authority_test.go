@@ -65,8 +65,8 @@ func TestResolveTaskMemoryAuthorityRejectsAuthenticationFailures(t *testing.T) {
 				return grpcV3Result(t, request.Intent, projectidentity.ProjectResolvedOutcomeV3)
 			}}
 			_, err := server.ResolveTaskMemoryAuthority(test.ctx, evidence)
-			if status.Code(err) != test.code || calls != 1 {
-				t.Fatalf("error=%v code=%v calls=%d", err, status.Code(err), calls)
+			if status.Code(err) != test.code || calls != 0 {
+				t.Fatalf("error=%v code=%v resolver_calls=%d, want no V3 resolution", err, status.Code(err), calls)
 			}
 		})
 	}

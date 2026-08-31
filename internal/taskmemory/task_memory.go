@@ -79,6 +79,9 @@ func NewAuthenticatedCaller(source, role, workstationID, principal, principalKin
 		expiry := expiresAt.UTC()
 		caller.expiresAt = &expiry
 	}
+	if caller.expiresAt != nil && !time.Now().UTC().Before(*caller.expiresAt) {
+		return AuthenticatedCaller{}, ErrUnauthorized
+	}
 	if !caller.valid() {
 		return AuthenticatedCaller{}, ErrUnauthorized
 	}

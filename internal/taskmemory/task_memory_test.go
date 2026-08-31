@@ -107,11 +107,7 @@ func TestAuthenticatedCallerAndAuthorityValidation(t *testing.T) {
 	}
 
 	expired := time.Now().UTC().Add(-time.Second)
-	expiredCaller, err := NewAuthenticatedCaller("client", "read-write", "ws-a", "", "", &expired)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewAuthorizedTaskContext(expiredCaller, testResolution(t, projectidentity.ReadFilterIntentV3, projectidentity.ProjectResolvedOutcomeV3), ""); !errors.Is(err, ErrUnauthorized) {
+	if _, err := NewAuthenticatedCaller("client", "read-write", "ws-a", "", "", &expired); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("expired caller error=%v", err)
 	}
 	if _, err := NewAuthorizedTaskContext(caller, testResolution(t, projectidentity.ResolveExistingIntentV3, projectidentity.ProjectResolvedOutcomeV3), ""); !errors.Is(err, ErrUnauthorized) {

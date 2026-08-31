@@ -14,7 +14,7 @@ import (
 	pb "github.com/thebtf/engram/proto/engram/v1"
 )
 
-// ResolveTaskMemoryAuthority adapts gRPC V3 resolution and authenticated context to task-memory authority.
+// ResolveTaskMemoryAuthority adapts authenticated context and gRPC V3 resolution to task-memory authority.
 func (s *Server) ResolveTaskMemoryAuthority(ctx context.Context, evidence taskmemory.ProjectEvidenceV3) (taskmemory.AuthorizedTaskContext, error) {
 	if s == nil {
 		return taskmemory.AuthorizedTaskContext{}, status.Error(codes.Unavailable, "task memory authority unavailable")
@@ -27,28 +27,6 @@ func (s *Server) ResolveTaskMemoryAuthority(ctx context.Context, evidence taskme
 		evidence.Anchor.Name != evidence.Descriptor.Name ||
 		evidence.Anchor.Scope != evidence.Descriptor.Scope {
 		return taskmemory.AuthorizedTaskContext{}, status.Error(codes.InvalidArgument, "task memory project evidence is invalid")
-	}
-
-	legacyIdentifiers := make([]*pb.ProjectLegacyIdentifierV3, len(evidence.Descriptor.LegacyIdentifiers))
-	for index, identifier := range evidence.Descriptor.LegacyIdentifiers {
-		legacyIdentifiers[index] = &pb.ProjectLegacyIdentifierV3{
-			Scheme:     string(identifier.Scheme),
-			Value:      identifier.Value,
-			Provenance: string(identifier.Provenance),
-		}
-	}
-	identity := &pb.ProjectIdentityV3{
-		Version:              uint32(evidence.Anchor.Version),
-		AnchorProjectId:      evidence.Anchor.ProjectID,
-		Name:                 evidence.Anchor.Name,
-		Scope:                evidence.Anchor.Scope,
-		NormalizedGitRemotes: append([]string(nil), evidence.Descriptor.NormalizedGitRemotes...),
-		LegacyIdentifiers:    legacyIdentifiers,
-		ClientInstanceId:     evidence.Descriptor.ClientInstanceID,
-	}
-	resolution, err := s.resolveProjectIdentityV3(ctx, identity, projectidentity.ReadFilterIntentV3)
-	if err != nil {
-		return taskmemory.AuthorizedTaskContext{}, err
 	}
 
 	authenticated, ok := auth.IdentityFrom(ctx)
@@ -73,6 +51,28 @@ func (s *Server) ResolveTaskMemoryAuthority(ctx context.Context, evidence taskme
 			return taskmemory.AuthorizedTaskContext{}, status.Error(codes.PermissionDenied, "task memory authority denied")
 		}
 		return taskmemory.AuthorizedTaskContext{}, status.Error(codes.Unavailable, "task memory authority unavailable")
+	}
+
+	legacyIdentifiers := make([]*pb.ProjectLegacyIdentifierV3, len(evidence.Descriptor.LegacyIdentifiers))
+	for index, identifier := range evidence.Descriptor.LegacyIdentifiers {
+		legacyIdentifiers[index] = &pb.ProjectLegacyIdentifierV3{
+			Scheme:     string(identifier.Scheme),
+			Value:      identifier.Value,
+			Provenance: string(identifier.Provenance),
+		}
+	}
+	identity := &pb.ProjectIdentityV3{
+		Version:              uint32(evidence.Anchor.Version),
+		AnchorProjectId:      evidence.Anchor.ProjectID,
+		Name:                 evidence.Anchor.Name,
+		Scope:                evidence.Anchor.Scope,
+		NormalizedGitRemotes: append([]string(nil), evidence.Descriptor.NormalizedGitRemotes...),
+		LegacyIdentifiers:    legacyIdentifiers,
+		ClientInstanceId:     evidence.Descriptor.ClientInstanceID,
+	}
+	resolution, err := s.resolveProjectIdentityV3(ctx, identity, projectidentity.ReadFilterIntentV3)
+	if err != nil {
+		return taskmemory.AuthorizedTaskContext{}, err
 	}
 	authority, err := taskmemory.NewAuthorizedTaskContext(caller, resolution, auditcontext.SourceSession(ctx))
 	if err != nil {
