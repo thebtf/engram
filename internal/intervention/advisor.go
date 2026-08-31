@@ -11,44 +11,52 @@ import (
 // UUIDSource allocates one canonical UUID for receipt or correlation identity.
 type UUIDSource func() (string, error)
 
-// RuntimeAdvisorConfig supplies the bounded T02 runtime dependencies.
+// RuntimeAdvisorConfig supplies the bounded T02/T03 runtime dependencies.
 type RuntimeAdvisorConfig struct {
-	Preparer     taskmemory.Preparer
-	ReceiptStore ReceiptStore
-	KeyProvider  KeyProvider
-	Clock        func() time.Time
-	NewUUID      UUIDSource
+	Preparer       taskmemory.Preparer
+	ReceiptStore   ReceiptStore
+	KeyProvider    KeyProvider
+	PolicyReader   PolicyReader
+	PolicyVersions PolicySemanticVersions
+	Clock          func() time.Time
+	NewUUID        UUIDSource
 }
 
-// RuntimeAdvisor implements the permanent T02 no-candidate tracer. It has no
-// policy, materialization, packet construction, or Observe persistence path.
+// RuntimeAdvisor performs receipt replay, T02 no-candidate abstention, and
+// T03 policy-state abstention. It has no request-time compiler, materialization,
+// packet construction, or Observe persistence path.
 type RuntimeAdvisor struct {
-	preparer    taskmemory.Preparer
-	receipts    ReceiptStore
-	keyProvider KeyProvider
-	clock       func() time.Time
-	newUUID     UUIDSource
+	preparer       taskmemory.Preparer
+	receipts       ReceiptStore
+	keyProvider    KeyProvider
+	policyReader   PolicyReader
+	policyVersions PolicySemanticVersions
+	clock          func() time.Time
+	newUUID        UUIDSource
 }
 
 var _ Advisor = (*RuntimeAdvisor)(nil)
 
-// NewRuntimeAdvisor constructs the concrete T02 advisor only when every
-// required boundary dependency is explicit.
+// NewRuntimeAdvisor constructs the concrete advisor only when every required
+// dependency is explicit. The policy reader remains optional to preserve T02.
 func NewRuntimeAdvisor(config RuntimeAdvisorConfig) (*RuntimeAdvisor, error) {
-	if config.Preparer == nil || config.ReceiptStore == nil || config.KeyProvider == nil || config.Clock == nil || config.NewUUID == nil {
+	if config.Preparer == nil || config.ReceiptStore == nil || config.KeyProvider == nil || config.Clock == nil || config.NewUUID == nil ||
+		(config.PolicyReader != nil && !config.PolicyVersions.Valid()) {
 		return nil, ErrInvalidInput
 	}
 	return &RuntimeAdvisor{
-		preparer:    config.Preparer,
-		receipts:    config.ReceiptStore,
-		keyProvider: config.KeyProvider,
-		clock:       config.Clock,
-		newUUID:     config.NewUUID,
+		preparer:       config.Preparer,
+		receipts:       config.ReceiptStore,
+		keyProvider:    config.KeyProvider,
+		policyReader:   config.PolicyReader,
+		policyVersions: config.PolicyVersions,
+		clock:          config.Clock,
+		newUUID:        config.NewUUID,
 	}, nil
 }
 
-// Advise prepares exactly once, then handles immutable receipt replay before
-// the sole T02 authorable no-candidate abstention.
+// Advise prepares exactly once, resolves immutable receipt replay first, then
+// writes only the accepted T02/T03 abstention receipt shapes.
 func (a *RuntimeAdvisor) Advise(ctx context.Context, input AdviseInput) (Decision, error) {
 	if a == nil || ctx == nil || !input.binding.valid() || !input.binding.AllowsAdvise() || !input.occurrence.valid() {
 		return Decision{}, ErrInvalidInput
@@ -83,13 +91,36 @@ func (a *RuntimeAdvisor) Advise(ctx context.Context, input AdviseInput) (Decisio
 	}
 
 	candidates := prepared.Candidates()
-	if len(candidates) > taskmemory.MaxPreparedCandidates || len(candidates) != 0 {
+	if len(candidates) > taskmemory.MaxPreparedCandidates {
+		return a.unavailable(ctx, input, UnavailableDependency)
+	}
+	if len(candidates) == 0 {
+		if !a.hasCommitAndResponseReserve(ctx) {
+			return a.unavailable(ctx, input, UnavailableDeadline)
+		}
+		return a.commitAbstention(ctx, input, epoch, axis, AbstentionNoCandidates, 0)
+	}
+	if a.policyReader == nil {
 		return a.unavailable(ctx, input, UnavailableDependency)
 	}
 	if !a.hasCommitAndResponseReserve(ctx) {
 		return a.unavailable(ctx, input, UnavailableDeadline)
 	}
+	policies, err := a.policyReader.ReadCandidatePolicies(ctx, prepared.Context(), candidates, a.policyVersions)
+	if err != nil {
+		return a.unavailable(ctx, input, UnavailableDependency)
+	}
+	reason, ok := reduceCandidatePolicyStates(epoch, candidates, policies)
+	if !ok {
+		return a.unavailable(ctx, input, UnavailableDependency)
+	}
+	if !a.hasCommitAndResponseReserve(ctx) {
+		return a.unavailable(ctx, input, UnavailableDeadline)
+	}
+	return a.commitAbstention(ctx, input, epoch, axis, reason, len(candidates))
+}
 
+func (a *RuntimeAdvisor) commitAbstention(ctx context.Context, input AdviseInput, epoch KeyEpoch, axis ReceiptAxis, reason AbstentionReason, evaluatedCount int) (Decision, error) {
 	receiptID, err := a.nextUUID()
 	if err != nil {
 		return a.unavailable(ctx, input, UnavailableDependency)
@@ -102,7 +133,13 @@ func (a *RuntimeAdvisor) Advise(ctx context.Context, input AdviseInput) (Decisio
 	if createdAt.IsZero() {
 		return a.unavailable(ctx, input, UnavailableDependency)
 	}
-	receipt, err := NewNoCandidatesReceipt(ctx, epoch, axis, receiptID, operationID, createdAt)
+
+	var receipt Receipt
+	if reason == AbstentionNoCandidates {
+		receipt, err = NewNoCandidatesReceipt(ctx, epoch, axis, receiptID, operationID, createdAt)
+	} else {
+		receipt, err = NewPolicyAbstentionReceipt(ctx, epoch, axis, receiptID, operationID, createdAt, reason, evaluatedCount)
+	}
 	if err != nil {
 		return a.unavailable(ctx, input, UnavailableDeadline)
 	}
@@ -122,6 +159,45 @@ func (a *RuntimeAdvisor) Advise(ctx context.Context, input AdviseInput) (Decisio
 		return a.mapVerifiedReplay(ctx, input, verified)
 	}
 	return a.replay(ctx, input, epoch, axis, winner)
+}
+
+func reduceCandidatePolicyStates(epoch KeyEpoch, candidates []taskmemory.AuthorizedCandidateRef, policies []CandidatePolicy) (AbstentionReason, bool) {
+	if !epoch.valid() || len(candidates) == 0 || len(candidates) > taskmemory.MaxPreparedCandidates || len(candidates) != len(policies) {
+		return 0, false
+	}
+	anyValid := false
+	anyInsufficientOrMissing := false
+	for index, candidate := range candidates {
+		policy := policies[index]
+		ref := policy.Ref()
+		if ref.ID() != candidate.ID() || ref.Version() != candidate.Version() || ref.SourceTier() != candidate.SourceTier() {
+			return 0, false
+		}
+		state := policy.State()
+		if state == CandidatePolicyValid || state == CandidatePolicyInsufficient {
+			scope, present := policy.CurrentScope()
+			currentCommitment, err := epoch.DerivePolicyScope(scope)
+			if !present || err != nil || !sameDigestConstantTime(currentCommitment, policy.ScopeCommitment()) {
+				state = CandidatePolicySourceStale
+			}
+		}
+		switch state {
+		case CandidatePolicyValid:
+			anyValid = true
+		case CandidatePolicyInsufficient, CandidatePolicyMissing:
+			anyInsufficientOrMissing = true
+		case CandidatePolicySourceStale:
+		default:
+			return 0, false
+		}
+	}
+	if anyValid {
+		return AbstentionPolicyObserving, true
+	}
+	if anyInsufficientOrMissing {
+		return AbstentionEvidenceInsufficient, true
+	}
+	return AbstentionEvidenceState, true
 }
 
 // Observe remains deliberately unavailable until migration 172 introduces the

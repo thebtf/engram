@@ -4962,6 +4962,107 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackInterventionReceiptMigration168,
 		},
+		// Migration 169 intentionally remains an inline gormigrate literal. migrationmeta
+		// reads Migrate bodies in this file to derive the live data model.
+		{
+			ID: "169_intervention_evidence_policies",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS intervention_evidence_policies (
+						policy_id BYTEA PRIMARY KEY,
+						policy_version BYTEA NOT NULL,
+						scope_commitment BYTEA NOT NULL,
+						descriptor_commitment BYTEA NOT NULL,
+						memory_id BIGINT NOT NULL,
+						memory_version INTEGER NOT NULL,
+						canonical_project UUID NOT NULL,
+						descriptor JSONB NOT NULL,
+						descriptor_status TEXT NOT NULL,
+						descriptor_origin TEXT NOT NULL,
+						compiler_version TEXT NOT NULL,
+						algorithm_version TEXT NOT NULL,
+						normalization_version TEXT NOT NULL,
+						parameter_version TEXT NOT NULL,
+						created_from_event BYTEA NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL,
+						CONSTRAINT intervention_evidence_policies_policy_version_unique
+							UNIQUE (policy_version),
+						CONSTRAINT intervention_evidence_policies_source_semantic_unique
+							UNIQUE (
+								memory_id,
+								memory_version,
+								scope_commitment,
+								descriptor_commitment,
+								compiler_version,
+								algorithm_version,
+								normalization_version,
+								parameter_version
+							),
+						CONSTRAINT intervention_evidence_policies_commitment_width
+							CHECK (
+								octet_length(policy_id) = 32
+								AND octet_length(policy_version) = 32
+								AND octet_length(scope_commitment) = 32
+								AND octet_length(descriptor_commitment) = 32
+								AND octet_length(created_from_event) = 32
+							),
+						CONSTRAINT intervention_evidence_policies_source_pointer
+							CHECK (memory_id > 0 AND memory_version > 0),
+						CONSTRAINT intervention_evidence_policies_descriptor_shape
+							CHECK (jsonb_typeof(descriptor) = 'object'),
+						CONSTRAINT intervention_evidence_policies_descriptor_status
+							CHECK (descriptor_status IN ('valid', 'insufficient')),
+						CONSTRAINT intervention_evidence_policies_descriptor_origin
+							CHECK (descriptor_origin = 'deterministic'),
+						CONSTRAINT intervention_evidence_policies_semantic_versions
+							CHECK (
+								btrim(compiler_version) <> ''
+								AND compiler_version = btrim(compiler_version)
+								AND compiler_version !~ '[[:cntrl:]]'
+								AND btrim(algorithm_version) <> ''
+								AND algorithm_version = btrim(algorithm_version)
+								AND algorithm_version !~ '[[:cntrl:]]'
+								AND btrim(normalization_version) <> ''
+								AND normalization_version = btrim(normalization_version)
+								AND normalization_version !~ '[[:cntrl:]]'
+								AND btrim(parameter_version) <> ''
+								AND parameter_version = btrim(parameter_version)
+								AND parameter_version !~ '[[:cntrl:]]'
+							),
+						CONSTRAINT intervention_evidence_policies_created_at_precision
+							CHECK (created_at = date_trunc('microseconds', created_at))
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_intervention_evidence_policies_reader_current
+						ON intervention_evidence_policies (
+							memory_id,
+							memory_version,
+							compiler_version,
+							algorithm_version,
+							normalization_version,
+							parameter_version,
+							descriptor_status
+						)`,
+					`CREATE INDEX IF NOT EXISTS idx_intervention_evidence_policies_project_status
+						ON intervention_evidence_policies (canonical_project, descriptor_status)`,
+					`CREATE INDEX IF NOT EXISTS idx_intervention_evidence_policies_created_at
+						ON intervention_evidence_policies (created_at)`,
+					`DROP TRIGGER IF EXISTS intervention_evidence_policies_reject_mutation ON intervention_evidence_policies`,
+					`CREATE TRIGGER intervention_evidence_policies_reject_mutation
+						BEFORE UPDATE OR DELETE ON intervention_evidence_policies
+						FOR EACH ROW EXECUTE FUNCTION task_memory_reject_immutable_mutation()`,
+					`DROP TRIGGER IF EXISTS intervention_evidence_policies_reject_truncate ON intervention_evidence_policies`,
+					`CREATE TRIGGER intervention_evidence_policies_reject_truncate
+						BEFORE TRUNCATE ON intervention_evidence_policies
+						FOR EACH STATEMENT EXECUTE FUNCTION task_memory_reject_immutable_mutation()`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 169: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackInterventionPolicyMigration169,
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -4991,6 +5092,27 @@ func rollbackInterventionReceiptMigration168(tx *gorm.DB) error {
 			if err := rollbackTx.Exec(stmt).Error; err != nil {
 				return fmt.Errorf("migration 168 rollback: %w", err)
 			}
+		}
+		return nil
+	})
+}
+
+func rollbackInterventionPolicyMigration169(tx *gorm.DB) error {
+	return tx.Transaction(func(rollbackTx *gorm.DB) error {
+		if !rollbackTx.Migrator().HasTable("intervention_evidence_policies") {
+			return nil
+		}
+
+		var retainedRows int64
+		if err := rollbackTx.Table("intervention_evidence_policies").Count(&retainedRows).Error; err != nil {
+			return fmt.Errorf("migration 169 rollback preflight: %w", err)
+		}
+		if retainedRows > 0 {
+			return fmt.Errorf("migration 169 rollback blocked: %d retained intervention_evidence_policies rows", retainedRows)
+		}
+
+		if err := rollbackTx.Exec(`DROP TABLE IF EXISTS intervention_evidence_policies`).Error; err != nil {
+			return fmt.Errorf("migration 169 rollback: %w", err)
 		}
 		return nil
 	})

@@ -53,9 +53,9 @@ The list below is generated. Do not edit it by hand; run `go run ./tools/gen-dat
 <!-- BEGIN GENERATED TABLES -->
 Generated from `internal/db/gorm/migrations.go`.
 
-Migration count: **139**.
+Migration count: **140**.
 
-Live table count: **39**.
+Live table count: **40**.
 
 | Table | Creating migration |
 | --- | --- |
@@ -98,4 +98,5 @@ Live table count: **39**.
 | `attention_events` | `158_attention_events` |
 | `project_continuity_slots` | `161_project_continuity_slots` |
 | `task_memory_intervention_receipts` | `168_task_memory_intervention_receipts` |
+| `intervention_evidence_policies` | `169_intervention_evidence_policies` |
 <!-- END GENERATED TABLES -->

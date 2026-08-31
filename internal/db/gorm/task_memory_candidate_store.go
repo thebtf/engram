@@ -91,24 +91,54 @@ const taskMemoryCandidateAccessSQL = `
 	)
 `
 
+// taskMemoryCandidateAccessFromContext shares the retrieval access predicate
+// with policy reads while keeping the authorized task context as the authority
+// source instead of rebuilding an untrusted query.
+func taskMemoryCandidateAccessFromContext(authority taskmemory.AuthorizedTaskContext) taskMemoryAccessPredicate {
+	caller := authority.KeycardContext()
+	return taskMemoryCandidateAccessWithKeycard(
+		string(authority.CanonicalProject()),
+		caller.WorkstationID,
+		caller.SessionID,
+		caller.Principal,
+		caller.PrincipalKind,
+	)
+}
+
 func taskMemoryCandidateAccess(query taskmemory.AuthorizedCandidateQuery) taskMemoryAccessPredicate {
 	caller := query.AccessPolicy().KeycardContext()
+	return taskMemoryCandidateAccessWithKeycard(
+		query.CanonicalProject(),
+		caller.WorkstationID,
+		caller.SessionID,
+		caller.Principal,
+		caller.PrincipalKind,
+	)
+}
+
+func taskMemoryCandidateAccessWithKeycard(
+	canonicalProject string,
+	workstationID string,
+	sessionID string,
+	principal string,
+	principalKind string,
+) taskMemoryAccessPredicate {
 	return taskMemoryAccessPredicate{
 		sql: taskMemoryCandidateAccessSQL,
 		args: []any{
-			query.CanonicalProject(),
-			caller.WorkstationID,
-			caller.WorkstationID,
-			caller.SessionID,
-			caller.SessionID,
-			caller.Principal,
-			caller.PrincipalKind,
-			caller.Principal,
-			caller.PrincipalKind,
-			caller.Principal,
-			caller.PrincipalKind,
-			caller.Principal,
-			caller.PrincipalKind,
+			canonicalProject,
+			workstationID,
+			workstationID,
+			sessionID,
+			sessionID,
+			principal,
+			principalKind,
+			principal,
+			principalKind,
+			principal,
+			principalKind,
+			principal,
+			principalKind,
 		},
 	}
 }

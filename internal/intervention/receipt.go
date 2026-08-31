@@ -287,6 +287,43 @@ func NewNoCandidatesReceipt(ctx context.Context, epoch KeyEpoch, axis ReceiptAxi
 	return signReceipt(epoch, record)
 }
 
+// NewPolicyAbstentionReceipt creates one T03-only receipt-backed abstention
+// for a nonempty prepared candidate set. It never selects a candidate.
+func NewPolicyAbstentionReceipt(ctx context.Context, epoch KeyEpoch, axis ReceiptAxis, receiptID, operationID string, createdAt time.Time, reason AbstentionReason, evaluatedCount int) (Receipt, error) {
+	if ctx == nil || !epoch.valid() || !axis.valid() || !validT03PolicyAbstentionReason(reason) ||
+		evaluatedCount < 1 || evaluatedCount > maxReceiptSnapshotRefs {
+		return Receipt{}, ErrInvalidInput
+	}
+	expiresAt, hasDeadline := ctx.Deadline()
+	if !hasDeadline {
+		return Receipt{}, ErrInvalidInput
+	}
+	record := ReceiptPersistenceRecord{
+		ReceiptID:            receiptID,
+		OperationID:          operationID,
+		KeyEpochCommitment:   epoch.EpochCommitment(),
+		ChannelKey:           [32]byte(axis.channelKey),
+		HostFamily:           axis.hostFamily,
+		CanonicalProject:     axis.canonicalProject,
+		ActorPrincipal:       axis.actorPrincipal,
+		ActorKind:            axis.actorKind,
+		Workstation:          axis.workstation,
+		SessionKey:           [32]byte(axis.sessionKey),
+		OccurrenceKey:        [32]byte(axis.occurrenceKey),
+		ContentCommitment:    [32]byte(axis.contentCommitment),
+		CapabilityCommitment: [32]byte(axis.capabilityCommitment),
+		Outcome:              ReceiptOutcomeAbstain,
+		ClosedReason:         &reason,
+		DecisionMode:         ReceiptDecisionModeNone,
+		EvaluatedCount:       evaluatedCount,
+		EligibleCount:        0,
+		SnapshotRefsJSON:     []byte("[]"),
+		CreatedAt:            normalizeReceiptTimestamp(createdAt),
+		ExpiresAt:            normalizeReceiptTimestamp(expiresAt),
+	}
+	return signReceipt(epoch, record)
+}
+
 // RestoreUnverifiedReceipt copies and structurally validates one persistence
 // projection loaded from storage. Its facts remain untrusted until
 // VerifyTrusted authenticates them against the current KeyEpoch.
@@ -461,10 +498,32 @@ func validReceiptPersistenceRecord(record ReceiptPersistenceRecord, requireInteg
 			record.EvaluatedCount > 0 &&
 			((record.DecisionMode == ReceiptDecisionModeEligible && record.EligibleCount > 0) || record.DecisionMode == ReceiptDecisionModeCanary)
 	case ReceiptOutcomeAbstain:
-		return record.ClosedReason != nil &&
-			validAbstentionReason(*record.ClosedReason) &&
-			record.Selection == nil &&
-			record.DecisionMode == ReceiptDecisionModeNone
+		return validReceiptAbstentionRecord(record)
+	default:
+		return false
+	}
+}
+
+func validReceiptAbstentionRecord(record ReceiptPersistenceRecord) bool {
+	if record.ClosedReason == nil || !validAbstentionReason(*record.ClosedReason) ||
+		record.Selection != nil || record.DecisionMode != ReceiptDecisionModeNone ||
+		!bytes.Equal(record.SnapshotRefsJSON, []byte("[]")) || record.EligibleCount != 0 {
+		return false
+	}
+	switch *record.ClosedReason {
+	case AbstentionNoCandidates:
+		return record.EvaluatedCount == 0
+	case AbstentionPolicyObserving, AbstentionEvidenceInsufficient, AbstentionEvidenceState:
+		return record.EvaluatedCount >= 1 && record.EvaluatedCount <= maxReceiptSnapshotRefs
+	default:
+		return false
+	}
+}
+
+func validT03PolicyAbstentionReason(reason AbstentionReason) bool {
+	switch reason {
+	case AbstentionPolicyObserving, AbstentionEvidenceInsufficient, AbstentionEvidenceState:
+		return true
 	default:
 		return false
 	}

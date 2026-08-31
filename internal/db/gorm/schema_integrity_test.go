@@ -12,49 +12,55 @@ import (
 	"github.com/thebtf/engram/internal/db/gorm/migrationmeta"
 )
 
+const interventionEvidencePoliciesMemoryIDWhitelistReason = "immutable policy history must survive hard PurgeProject; no memory FK or cascade"
+
+// Explicit FK-less whitelist. The source of truth being tested is the
+// migrations.go ledger: current live CREATE TABLE statements plus later
+// ALTER TABLE ADD CONSTRAINT statements. Session identifiers here are
+// external Claude/SDK session IDs, not dashboard sessions.id references.
+var schemaIntegrityEntityIDWhitelist = map[string]string{
+	"citation_log.session_id":          "external SDK session identifier (TEXT), not a row FK",
+	"injection_log.session_id":         "external SDK session identifier (TEXT), not a row FK",
+	"rule_injection_events.session_id": "external SDK session identifier (TEXT), not a row FK",
+	// observation_injections.session_id was removed in CR-3: migration 138 drops
+	// observation_injections, so a whitelist key for a non-existent table is dead.
+	"retrieval_stats_log.query_id":          "analytics correlation identifier, not a table FK",
+	"search_query_log.session_id":           "external SDK session identifier (TEXT), not a row FK",
+	"session_transcripts.session_id":        "external SDK session identifier (TEXT), not a row FK",
+	"session_transcripts.claude_session_id": "external Claude session identifier (TEXT), not a row FK",
+	"sdk_sessions.claude_session_id":        "external Claude session identifier (TEXT), not a row FK",
+	"agent_session_state.session_id":        "external SDK session identifier (TEXT), not a row FK",
+	"attention_events.session_id":           "external SDK session identifier (TEXT), not a row FK",
+	// session_segments.session_id is an external-session-string (TEXT, not a
+	// FK to sdk_sessions.id). The former reasoning_traces.sdk_session_id entry
+	// was removed in CR-2b: migration 137 drops reasoning_traces, so a whitelist
+	// key for a non-existent table is dead.
+	"session_segments.session_id":           "external SDK session identifier (TEXT), not a row FK",
+	"telemetry_snapshots.last_operation_id": "opaque operation identifier",
+	// Self-referential version-tree pointers: a version row may reference a
+	// parent/superseded version that has been pruned, so a hard FK with no
+	// ON DELETE would block legitimate version cleanup. Intentionally FK-less.
+	"versioned_documents.parent_version_id":     "self-referential version-tree pointer; parent may be pruned, no enforced FK",
+	"versioned_documents.supersedes_version_id": "self-referential version-tree pointer; superseded row may be pruned, no enforced FK",
+	// code_chunks.project_id is a git-remote-derived TEXT slug from
+	// proxy.ResolveProjectSlug, NOT a row reference to the projects table.
+	// Two worktrees of the same repo share one code index via the same slug.
+	// A hard FK to projects(id) would break that identity contract and would
+	// couple code indexing to project registration. Intentionally FK-free.
+	// See ADR-001 §3.3 (engram-absorption/adr/ADR-001-ci-a-topology.md).
+	"code_chunks.project_id": "git-remote-derived TEXT slug (ResolveProjectSlug), not a row FK — see ADR-001 §3.3",
+	// code_index_sessions.project_id is the same git-slug as code_chunks
+	// (CR-003 sweep-authorization record), not a row FK to projects. FK-free
+	// for the same identity reason — see ADR-001 §6.
+	"code_index_sessions.project_id": "git-remote-derived TEXT slug (ResolveProjectSlug), not a row FK — see ADR-001 §6",
+	// Policy evidence is append-only source history. A hard memory FK or cascade
+	// would erase this evidence when PurgeProject deletes the source memory.
+	"intervention_evidence_policies.memory_id": interventionEvidencePoliciesMemoryIDWhitelistReason,
+}
+
 func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing.T) {
 	schema := migrationSchema(t)
-
-	// Explicit FK-less whitelist. The source of truth being tested is the
-	// migrations.go ledger: current live CREATE TABLE statements plus later
-	// ALTER TABLE ADD CONSTRAINT statements. Session identifiers here are
-	// external Claude/SDK session IDs, not dashboard sessions.id references.
-	whitelist := map[string]string{
-		"citation_log.session_id":          "external SDK session identifier (TEXT), not a row FK",
-		"injection_log.session_id":         "external SDK session identifier (TEXT), not a row FK",
-		"rule_injection_events.session_id": "external SDK session identifier (TEXT), not a row FK",
-		// observation_injections.session_id was removed in CR-3: migration 138 drops
-		// observation_injections, so a whitelist key for a non-existent table is dead.
-		"retrieval_stats_log.query_id":          "analytics correlation identifier, not a table FK",
-		"search_query_log.session_id":           "external SDK session identifier (TEXT), not a row FK",
-		"session_transcripts.session_id":        "external SDK session identifier (TEXT), not a row FK",
-		"session_transcripts.claude_session_id": "external Claude session identifier (TEXT), not a row FK",
-		"sdk_sessions.claude_session_id":        "external Claude session identifier (TEXT), not a row FK",
-		"agent_session_state.session_id":        "external SDK session identifier (TEXT), not a row FK",
-		"attention_events.session_id":           "external SDK session identifier (TEXT), not a row FK",
-		// session_segments.session_id is an external-session-string (TEXT, not a
-		// FK to sdk_sessions.id). The former reasoning_traces.sdk_session_id entry
-		// was removed in CR-2b: migration 137 drops reasoning_traces, so a whitelist
-		// key for a non-existent table is dead.
-		"session_segments.session_id":           "external SDK session identifier (TEXT), not a row FK",
-		"telemetry_snapshots.last_operation_id": "opaque operation identifier",
-		// Self-referential version-tree pointers: a version row may reference a
-		// parent/superseded version that has been pruned, so a hard FK with no
-		// ON DELETE would block legitimate version cleanup. Intentionally FK-less.
-		"versioned_documents.parent_version_id":     "self-referential version-tree pointer; parent may be pruned, no enforced FK",
-		"versioned_documents.supersedes_version_id": "self-referential version-tree pointer; superseded row may be pruned, no enforced FK",
-		// code_chunks.project_id is a git-remote-derived TEXT slug from
-		// proxy.ResolveProjectSlug, NOT a row reference to the projects table.
-		// Two worktrees of the same repo share one code index via the same slug.
-		// A hard FK to projects(id) would break that identity contract and would
-		// couple code indexing to project registration. Intentionally FK-free.
-		// See ADR-001 §3.3 (engram-absorption/adr/ADR-001-ci-a-topology.md).
-		"code_chunks.project_id": "git-remote-derived TEXT slug (ResolveProjectSlug), not a row FK — see ADR-001 §3.3",
-		// code_index_sessions.project_id is the same git-slug as code_chunks
-		// (CR-003 sweep-authorization record), not a row FK to projects. FK-free
-		// for the same identity reason — see ADR-001 §6.
-		"code_index_sessions.project_id": "git-remote-derived TEXT slug (ResolveProjectSlug), not a row FK — see ADR-001 §6",
-	}
+	whitelist := schemaIntegrityEntityIDWhitelist
 
 	domainEntities := domainEntityNames(schema)
 	var violations []string
@@ -104,6 +110,12 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 		"dangling entity *_id drift changed vs known-debt baseline. A NEW entry is a regression "+
 			"(add a FK or a whitelist reason). A removed entry means a CR cleaned it — delete it from "+
 			"the baseline in this test (that edit is the CR's GREEN proof). Got %v", violations)
+}
+
+func TestSchemaIntegrity_InterventionEvidencePoliciesMemoryIDWhitelist(t *testing.T) {
+	reason, found := schemaIntegrityEntityIDWhitelist["intervention_evidence_policies.memory_id"]
+	require.True(t, found, "immutable intervention policy source pointer must be explicitly FK-less")
+	require.Equal(t, interventionEvidencePoliciesMemoryIDWhitelistReason, reason)
 }
 
 func domainEntityNames(schema *migrationmeta.Schema) map[string]bool {

@@ -3,6 +3,7 @@ package grpcserver
 import (
 	"context"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -216,6 +217,8 @@ func openT02HostAdvisorStore(t *testing.T) (*gormdb.Store, *gormdb.InterventionR
 	adminConfig, err := pgx.ParseConfig(dsn)
 	require.NoError(t, err)
 	adminSQL := stdlib.OpenDB(*adminConfig)
+	_, err = adminSQL.ExecContext(context.Background(), `CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public`)
+	require.NoError(t, err)
 	require.NoError(t, adminSQL.Ping())
 	schema := "hap03_t02_grpc_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	_, err = adminSQL.ExecContext(context.Background(), "CREATE SCHEMA "+schema)
@@ -233,16 +236,29 @@ func openT02HostAdvisorStore(t *testing.T) (*gormdb.Store, *gormdb.InterventionR
 		_ = adminSQL.Close()
 	})
 
-	testConfig := *adminConfig
-	testConfig.RuntimeParams = make(map[string]string, len(adminConfig.RuntimeParams)+2)
-	for key, value := range adminConfig.RuntimeParams {
-		testConfig.RuntimeParams[key] = value
-	}
-	testConfig.RuntimeParams["application_name"] = "engram_hap03_t02_grpc"
-	testConfig.RuntimeParams["search_path"] = schema + ", public"
-	store, err = gormdb.NewStore(gormdb.Config{DSN: testConfig.ConnString(), MaxConns: 8, LogLevel: logger.Silent})
+	testDSN, err := t02SchemaDSN(dsn, schema)
 	require.NoError(t, err)
+	store, err = gormdb.NewStore(gormdb.Config{DSN: testDSN, MaxConns: 8, LogLevel: logger.Silent})
+	require.NoError(t, err)
+	var actualSchema string
+	require.NoError(t, store.GetDB().Raw(`SELECT current_schema()`).Scan(&actualSchema).Error)
+	require.Equal(t, schema, actualSchema, "gRPC fixture must use its isolated schema, not public")
 	return store, gormdb.NewInterventionReceiptStore(store.GetDB())
+}
+
+func t02SchemaDSN(dsn, schema string) (string, error) {
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		parsed, err := url.Parse(dsn)
+		if err != nil {
+			return "", err
+		}
+		query := parsed.Query()
+		query.Set("options", "-csearch_path="+schema+",public")
+		query.Set("application_name", "engram_hap03_t02_grpc")
+		parsed.RawQuery = query.Encode()
+		return parsed.String(), nil
+	}
+	return dsn + " application_name=engram_hap03_t02_grpc options='-c search_path=" + schema + ",public'", nil
 }
 
 func t02ExistingVaultKeyProvider(t *testing.T) (intervention.KeyProvider, intervention.KeyEpoch) {

@@ -139,6 +139,28 @@ func (e KeyEpoch) DeriveOccurrence(identity OccurrenceIdentity) (Digest, error) 
 	return encoder.sum(), nil
 }
 
+// DerivePolicyScope commits the normalized immutable source access scope with
+// the existing occurrence-key material. It does not introduce a Vault key.
+func (e KeyEpoch) DerivePolicyScope(scope SourceMemoryScope) (Digest, error) {
+	if !e.valid() || !scope.valid() {
+		return Digest{}, ErrInvalidInput
+	}
+	encoder := newHMACEncoder(e.occurrence)
+	encoder.text(policyScopeDerivationDomain)
+	encoder.text(scope.canonicalProject)
+	encoder.text(scope.privacyScope)
+	encoder.text(scope.sourceWorkstationID)
+	encoder.uint32(uint32(len(scope.sourceSessions)))
+	for _, session := range scope.sourceSessions {
+		encoder.text(session)
+	}
+	encoder.text(scope.ownerPrincipal)
+	encoder.text(scope.ownerPrincipalKind)
+	encoder.text(scope.agentVisibility)
+	encoder.text(scope.domain)
+	return encoder.sum(), nil
+}
+
 // DeriveContent commits only the canonical task/query facts and the explicit
 // H03 predecessor-absent marker. It intentionally excludes binding, authority,
 // session, anchor, and policy material.

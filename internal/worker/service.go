@@ -114,53 +114,55 @@ const maxRecentQueries = 100
 
 // Service is the main worker service orchestrator.
 type Service struct {
-	startTime                        time.Time
-	ctx                              context.Context
-	initError                        error
-	server                           *http.Server
-	sessionManager                   *session.Manager
-	sseBroadcaster                   *sse.Broadcaster
-	processor                        *sdk.Processor
-	mcpHealth                        *mcp.MCPHealth
-	collectionRegistry               *collections.Registry
-	sessionIdxStore                  *sessions.Store
-	router                           *chi.Mux
-	store                            *gorm.Store
-	retrievalStats                   map[string]*RetrievalStats
-	sessionStore                     *gorm.SessionStore
-	tokenStore                       *gorm.TokenStore
-	cancel                           context.CancelFunc
-	cachedObsCounts                  map[string]cachedCount
-	config                           *config.Config
-	staleQueue                       chan staleVerifyRequest
-	configWatcher                    *watcher.Watcher
-	updater                          *update.Updater
-	similarityTelemetry              *telemetry.SimilarityTelemetry
-	rateLimiter                      *PerClientRateLimiter
-	tokenAuth                        *TokenAuth
-	expensiveOpLimiter               *ExpensiveOperationLimiter
-	logBuffer                        *logbuf.RingBuffer
-	backfillTracker                  *backfillTracker
-	grpcServer                       *googlegrpc.Server
-	grpcInternalServer               sessionStartContextProvider
-	searchQueryLogStore              *gorm.SearchQueryLogStore
-	retrievalStatsLogStore           *gorm.RetrievalStatsLogStore
-	citationLogStore                 *gorm.CitationLogStore
-	injectionTracker                 *injection.Tracker
-	injectionLogStore                *gorm.InjectionLogStore
-	candidateStore                   *gorm.CandidateStore                          // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	candidateQueueEnabled            bool                                          // cached at startup; handlers must not read env per request
-	graphEnabled                     bool                                          // cached at startup; graph REST handlers must not read env per request
-	temporalTruthEnabled             bool                                          // cached at startup; temporal truth REST handlers must not read env per request
-	candidateReviewStoreSeam         candidateReviewStore                          // test seam for REST candidate queue handlers
-	candidateReviewSnapshotStoreSeam candidateReviewSnapshotStore                  // test seam for candidate pre-action snapshots
-	graphEdgeStoreSeam               graphEdgeStore                                // test seam for graph REST handlers
-	graphNodeStoreSeam               graphNodeStore                                // test seam for graph REST handlers
-	snapshotStore                    *gorm.SnapshotStore                           // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	legacyDirectProjectResolver      func(context.Context, string) (string, error) // test seam; production uses strict DB lookup
-	writelintTokenStore              writelint.TokenStore                          // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
-	redactionRules                   []redaction.CompiledRule                      // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
-	transcriptStore                  *gorm.TranscriptStore                         // T003: session transcript persistence (flag-gated via ENGRAM_CRYSTALLIZATION_ENABLED)
+	startTime                           time.Time
+	ctx                                 context.Context
+	initError                           error
+	server                              *http.Server
+	sessionManager                      *session.Manager
+	sseBroadcaster                      *sse.Broadcaster
+	processor                           *sdk.Processor
+	mcpHealth                           *mcp.MCPHealth
+	collectionRegistry                  *collections.Registry
+	sessionIdxStore                     *sessions.Store
+	router                              *chi.Mux
+	store                               *gorm.Store
+	retrievalStats                      map[string]*RetrievalStats
+	sessionStore                        *gorm.SessionStore
+	tokenStore                          *gorm.TokenStore
+	cancel                              context.CancelFunc
+	cachedObsCounts                     map[string]cachedCount
+	config                              *config.Config
+	staleQueue                          chan staleVerifyRequest
+	configWatcher                       *watcher.Watcher
+	updater                             *update.Updater
+	similarityTelemetry                 *telemetry.SimilarityTelemetry
+	rateLimiter                         *PerClientRateLimiter
+	tokenAuth                           *TokenAuth
+	expensiveOpLimiter                  *ExpensiveOperationLimiter
+	logBuffer                           *logbuf.RingBuffer
+	backfillTracker                     *backfillTracker
+	grpcServer                          *googlegrpc.Server
+	grpcInternalServer                  sessionStartContextProvider
+	searchQueryLogStore                 *gorm.SearchQueryLogStore
+	retrievalStatsLogStore              *gorm.RetrievalStatsLogStore
+	citationLogStore                    *gorm.CitationLogStore
+	injectionTracker                    *injection.Tracker
+	injectionLogStore                   *gorm.InjectionLogStore
+	candidateStore                      *gorm.CandidateStore                          // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	candidateQueueEnabled               bool                                          // cached at startup; handlers must not read env per request
+	graphEnabled                        bool                                          // cached at startup; graph REST handlers must not read env per request
+	temporalTruthEnabled                bool                                          // cached at startup; temporal truth REST handlers must not read env per request
+	candidateReviewStoreSeam            candidateReviewStore                          // test seam for REST candidate queue handlers
+	candidateReviewSnapshotStoreSeam    candidateReviewSnapshotStore                  // test seam for candidate pre-action snapshots
+	graphEdgeStoreSeam                  graphEdgeStore                                // test seam for graph REST handlers
+	graphNodeStoreSeam                  graphNodeStore                                // test seam for graph REST handlers
+	snapshotStore                       *gorm.SnapshotStore                           // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	legacyDirectProjectResolver         func(context.Context, string) (string, error) // test seam; production uses strict DB lookup
+	writelintTokenStore                 writelint.TokenStore                          // Milestone-F TG5: non-nil when ENGRAM_VNEXT_F_ENABLED=true
+	redactionRules                      []redaction.CompiledRule                      // Milestone-F TG5: compiled at startup from ENGRAM_REDACTION_RULES_PATH
+	interventionReconciler              policyReconciler                              // optional automatic policy compiler/reconciler
+	interventionReconcilerTickerFactory interventionReconcilerTickerFactory           // test seam; nil uses the fixed one-minute ticker
+	transcriptStore                     *gorm.TranscriptStore                         // T003: session transcript persistence (flag-gated via ENGRAM_CRYSTALLIZATION_ENABLED)
 	// transcriptCreatorOverride is a test seam: when non-nil it replaces
 	// transcriptStore in the handleSessionEnd persistence goroutine, letting unit
 	// tests assert the real handler path (redact → Create) without a live DB.
@@ -961,6 +963,19 @@ func (s *Service) initializeAsync() {
 	s.processor = processor
 	s.initMu.Unlock()
 
+	// Redaction rules are compiled exactly once at startup. The ordered slice is
+	// retained for existing vNext consumers and copied once for policy compilation.
+	rulesPath := os.Getenv("ENGRAM_REDACTION_RULES_PATH")
+	compiledRules, rErr := redaction.LoadRulesFromPath(rulesPath)
+	if rErr != nil {
+		log.Warn().Err(rErr).Str("path", rulesPath).Msg("redaction: failed to load rules, layer disabled")
+	} else if len(compiledRules) > 0 {
+		log.Info().Int("rules", len(compiledRules)).Str("path", rulesPath).Msg("redaction: rules loaded")
+	}
+	s.initMu.Lock()
+	s.redactionRules = compiledRules
+	s.initMu.Unlock()
+
 	// Wire crystallization candidate storage only when the candidate flag is enabled.
 	// The dream cycle additionally checks both flags and writer availability before
 	// it reads transcripts or constructs an extractor.
@@ -972,19 +987,6 @@ func (s *Service) initializeAsync() {
 		snapshotStore := gorm.NewSnapshotStore(store.GetDB())
 		s.initMu.Lock()
 		s.snapshotStore = snapshotStore
-		s.initMu.Unlock()
-
-		// TG5 — redaction layer (ADR-F-004, EC-F9: startup-only, no hot-reload).
-		// Rules are compiled once here; any rule-change requires a process restart.
-		rulesPath := os.Getenv("ENGRAM_REDACTION_RULES_PATH")
-		compiledRules, rErr := redaction.LoadRulesFromPath(rulesPath)
-		if rErr != nil {
-			log.Warn().Err(rErr).Str("path", rulesPath).Msg("redaction: failed to load rules, layer disabled")
-		} else if len(compiledRules) > 0 {
-			log.Info().Int("rules", len(compiledRules)).Str("path", rulesPath).Msg("redaction: rules loaded")
-		}
-		s.initMu.Lock()
-		s.redactionRules = compiledRules
 		s.initMu.Unlock()
 
 		// TG5 — write-lint TokenStore.
@@ -1331,6 +1333,13 @@ func (s *Service) initializeAsync() {
 	if processor != nil {
 		s.wg.Add(1)
 		go s.processQueue()
+	}
+
+	// Policy reconciliation is optional: unavailable existing key material,
+	// invalid configured redaction rules, or another dependency leaves it absent
+	// without affecting server readiness.
+	if rErr == nil {
+		s.initializeInterventionReconciler(store)
 	}
 
 	// Critical initialization has completed, including installation of the

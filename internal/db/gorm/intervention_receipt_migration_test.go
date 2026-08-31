@@ -33,6 +33,7 @@ func openInterventionReceiptMigrationTestDB(t *testing.T) (*gormlib.DB, string) 
 	require.NoError(t, err, "open dedicated admin connection")
 	adminSQL, err := adminDB.DB()
 	require.NoError(t, err, "resolve dedicated admin pool")
+	require.NoError(t, adminDB.Exec(`CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public`).Error, "install pgvector in stable public schema")
 
 	schema := "intervention_receipt_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	require.NoError(t, adminDB.Exec("CREATE SCHEMA "+schema).Error, "create isolated receipt schema")
@@ -279,21 +280,24 @@ func TestInterventionReceiptMigration168RejectsMutation(t *testing.T) {
 func TestInterventionReceiptMigration168RollbackEmptyReappliesAndAbsentSucceeds(t *testing.T) {
 	db, _ := openInterventionReceiptMigrationTestDB(t)
 
+	require.NoError(t, rollbackInterventionPolicyMigration169(db), "empty policy table must roll back before its shared function owner")
 	require.NoError(t, rollbackInterventionReceiptMigration168(db), "empty receipt table must roll back")
 	assertInterventionReceiptTableAbsent(t, db)
-	require.Zero(t, interventionReceiptImmutableFunctionCount(t, db), "empty rollback must remove the immutable trigger function")
+	require.Zero(t, interventionReceiptImmutableFunctionCount(t, db), "ordered empty rollback must remove the immutable trigger function")
 
-	require.NoError(t, db.Exec(`DELETE FROM migrations WHERE id = ?`, interventionReceiptMigrationID).Error)
-	require.NoError(t, runMigrations(db), "removing migration 168 marker must exercise the inline reapply path")
+	require.NoError(t, db.Exec(`DELETE FROM migrations WHERE id IN (?, ?)`, interventionReceiptMigrationID, interventionPolicyMigrationID).Error)
+	require.NoError(t, runMigrations(db), "removing migration 168-169 markers must exercise ordered inline reapply")
 	var tableCount int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*)
 		FROM information_schema.tables
-		WHERE table_schema = current_schema() AND table_name = 'task_memory_intervention_receipts'
+		WHERE table_schema = current_schema()
+		  AND table_name IN ('task_memory_intervention_receipts', 'intervention_evidence_policies')
 	`).Scan(&tableCount).Error)
-	require.Equal(t, 1, tableCount, "migration 168 must recreate its table after an empty rollback")
+	require.Equal(t, 2, tableCount, "migrations 168-169 must recreate both additive tables")
 
-	require.NoError(t, rollbackInterventionReceiptMigration168(db), "empty re-created table must roll back")
+	require.NoError(t, rollbackInterventionPolicyMigration169(db), "empty re-created policy table must roll back")
+	require.NoError(t, rollbackInterventionReceiptMigration168(db), "empty re-created receipt table must roll back")
 	require.NoError(t, rollbackInterventionReceiptMigration168(db), "absent receipt table rollback must succeed")
 	assertInterventionReceiptTableAbsent(t, db)
 }
