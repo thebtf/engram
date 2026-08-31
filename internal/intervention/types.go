@@ -254,13 +254,14 @@ func hostFamilyFromBinding(family hostadvisor.HostFamily) (HostFamily, bool) {
 // It intentionally excludes binding ID and adapter version, which must not
 // affect channel or occurrence identity.
 type BindingFacts struct {
-	subject           Digest
-	hostFamily        HostFamily
-	channelCommitment Digest
-	expiresAt         time.Time
-	callbackDuration  time.Duration
-	adviseAllowed     bool
-	observeAllowed    bool
+	subject              Digest
+	hostFamily           HostFamily
+	channelCommitment    Digest
+	capabilityCommitment Digest
+	expiresAt            time.Time
+	callbackDuration     time.Duration
+	adviseAllowed        bool
+	observeAllowed       bool
 }
 
 // NewBindingFacts projects a current HAP-02 binding without retaining its ID.
@@ -275,18 +276,20 @@ func NewBindingFacts(binding hostadvisor.HostBinding) (BindingFacts, error) {
 		return BindingFacts{}, ErrInvalidInput
 	}
 
+	snapshot := binding.Snapshot()
 	channel := binding.Channel()
 	hostFamily, validFamily := hostFamilyFromBinding(channel.HostFamily())
 	channelCommitment := Digest(channel.Commitment())
+	capabilityCommitment := Digest(snapshot.ContractDigest())
 	expiresAt := binding.ExpiresAt().UTC()
 	callbackDuration := binding.CallbackDeadline()
-	if !validFamily || channelCommitment == (Digest{}) || expiresAt.IsZero() || callbackDuration <= 0 || callbackDuration%time.Millisecond != 0 {
+	if !validFamily || channelCommitment == (Digest{}) || capabilityCommitment == (Digest{}) || expiresAt.IsZero() || callbackDuration <= 0 || callbackDuration%time.Millisecond != 0 {
 		return BindingFacts{}, ErrInvalidInput
 	}
 
 	adviseAllowed := false
 	observeAllowed := false
-	for _, capability := range binding.Snapshot().Capabilities() {
+	for _, capability := range snapshot.Capabilities() {
 		if capability.Semantic != hostadvisor.SemanticBeforeAgentStart || capability.Callback.Deadline != callbackDuration {
 			continue
 		}
@@ -302,13 +305,14 @@ func NewBindingFacts(binding hostadvisor.HostBinding) (BindingFacts, error) {
 	}
 
 	return BindingFacts{
-		subject:           subject,
-		hostFamily:        hostFamily,
-		channelCommitment: channelCommitment,
-		expiresAt:         expiresAt,
-		callbackDuration:  callbackDuration,
-		adviseAllowed:     adviseAllowed,
-		observeAllowed:    observeAllowed,
+		subject:              subject,
+		hostFamily:           hostFamily,
+		channelCommitment:    channelCommitment,
+		capabilityCommitment: capabilityCommitment,
+		expiresAt:            expiresAt,
+		callbackDuration:     callbackDuration,
+		adviseAllowed:        adviseAllowed,
+		observeAllowed:       observeAllowed,
 	}, nil
 }
 
@@ -325,6 +329,11 @@ func (f BindingFacts) HostFamily() HostFamily {
 // ChannelCommitment returns the protected adapter/runtime channel identity.
 func (f BindingFacts) ChannelCommitment() Digest {
 	return f.channelCommitment
+}
+
+// CapabilityCommitment returns the protected accepted capability contract digest.
+func (f BindingFacts) CapabilityCommitment() Digest {
+	return f.capabilityCommitment
 }
 
 // ExpiresAt returns the accepted binding expiry in UTC.
@@ -356,7 +365,7 @@ func (f BindingFacts) LiveAt(at time.Time) bool {
 }
 
 func (f BindingFacts) valid() bool {
-	return f.subject != (Digest{}) && f.hostFamily != 0 && f.channelCommitment != (Digest{}) && !f.expiresAt.IsZero() && f.callbackDuration > 0 && f.callbackDuration%time.Millisecond == 0
+	return f.subject != (Digest{}) && f.hostFamily != 0 && f.channelCommitment != (Digest{}) && f.capabilityCommitment != (Digest{}) && !f.expiresAt.IsZero() && f.callbackDuration > 0 && f.callbackDuration%time.Millisecond == 0
 }
 
 func containsHostAction(actions []hostadvisor.Action, wanted hostadvisor.Action) bool {

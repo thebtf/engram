@@ -4797,12 +4797,203 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 		projectIdentityV3ComparisonsMigration165(),
 		projectIdentityV3ComparisonClientInstancePrivacyMigration166(),
 		apiTokenExpiryMigration167(),
+		// Migration 168 intentionally remains an inline gormigrate literal. migrationmeta
+		// reads Migrate bodies in this file to derive the live data model.
+		{
+			ID: "168_task_memory_intervention_receipts",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE OR REPLACE FUNCTION task_memory_reject_immutable_mutation()
+					RETURNS trigger
+					LANGUAGE plpgsql
+					AS $$
+					BEGIN
+						RAISE EXCEPTION '% rows are immutable and reject %', TG_TABLE_NAME, TG_OP
+							USING ERRCODE = '55000';
+						RETURN NULL;
+					END;
+					$$`,
+					`CREATE TABLE IF NOT EXISTS task_memory_intervention_receipts (
+						receipt_id UUID PRIMARY KEY,
+						operation_id UUID NOT NULL,
+						key_epoch_commitment BYTEA NOT NULL,
+						integrity_digest BYTEA NOT NULL,
+						channel_key BYTEA NOT NULL,
+						host_family TEXT NOT NULL,
+						canonical_project UUID NOT NULL,
+						actor_principal TEXT NOT NULL,
+						actor_kind TEXT NOT NULL,
+						workstation TEXT NOT NULL,
+						session_key BYTEA NOT NULL,
+						occurrence_key BYTEA NOT NULL,
+						content_commitment BYTEA NOT NULL,
+						capability_snapshot_commitment BYTEA NOT NULL,
+						outcome TEXT NOT NULL,
+						closed_reason TEXT,
+						decision_mode TEXT NOT NULL,
+						evaluated_count SMALLINT NOT NULL,
+						eligible_count SMALLINT NOT NULL,
+						snapshot_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+						selected_memory_id BIGINT,
+						selected_memory_version INTEGER,
+						selected_policy_id BYTEA,
+						selected_snapshot_id UUID,
+						selected_snapshot_version BIGINT,
+						selected_text_digest BYTEA,
+						created_at TIMESTAMPTZ NOT NULL,
+						expires_at TIMESTAMPTZ NOT NULL,
+						CONSTRAINT task_memory_intervention_receipts_operation_unique
+							UNIQUE (operation_id),
+						CONSTRAINT task_memory_intervention_receipts_occurrence_unique
+							UNIQUE (channel_key, canonical_project, actor_principal, actor_kind, workstation, occurrence_key),
+						CONSTRAINT task_memory_intervention_receipts_commitment_width
+							CHECK (
+								octet_length(key_epoch_commitment) = 32
+								AND octet_length(integrity_digest) = 32
+								AND octet_length(channel_key) = 32
+								AND octet_length(session_key) = 32
+								AND octet_length(occurrence_key) = 32
+								AND octet_length(content_commitment) = 32
+								AND octet_length(capability_snapshot_commitment) = 32
+							),
+						CONSTRAINT task_memory_intervention_receipts_host_family
+							CHECK (host_family IN ('omp', 'claude_code', 'codex')),
+						CONSTRAINT task_memory_intervention_receipts_actor_pair
+							CHECK (
+								(actor_principal = '' AND actor_kind = '')
+								OR (
+									octet_length(actor_principal) BETWEEN 1 AND 128
+									AND actor_principal = btrim(actor_principal)
+									AND actor_principal !~ '[[:cntrl:]]'
+									AND actor_kind IN ('human', 'agent', 'service')
+								)
+							),
+						CONSTRAINT task_memory_intervention_receipts_workstation
+							CHECK (
+								octet_length(workstation) BETWEEN 1 AND 128
+								AND workstation = btrim(workstation)
+								AND workstation !~ '[[:cntrl:]]'
+							),
+						CONSTRAINT task_memory_intervention_receipts_counts
+							CHECK (eligible_count BETWEEN 0 AND evaluated_count AND evaluated_count BETWEEN 0 AND 8),
+						CONSTRAINT task_memory_intervention_receipts_snapshot_refs
+							CHECK (
+								CASE
+									WHEN jsonb_typeof(snapshot_refs) = 'array' THEN jsonb_array_length(snapshot_refs) <= 8
+									ELSE false
+								END
+							),
+						CONSTRAINT task_memory_intervention_receipts_selected_version
+							CHECK (
+								(selected_memory_id IS NULL OR selected_memory_id > 0)
+								AND (selected_memory_version IS NULL OR selected_memory_version > 0)
+								AND (selected_policy_id IS NULL OR octet_length(selected_policy_id) = 32)
+								AND (selected_snapshot_version IS NULL OR selected_snapshot_version > 0)
+								AND (selected_text_digest IS NULL OR octet_length(selected_text_digest) = 32)
+							),
+						CONSTRAINT task_memory_intervention_receipts_outcome_shape
+							CHECK (
+								(
+									outcome = 'emit'
+									AND closed_reason IS NULL
+									AND decision_mode IN ('eligible', 'canary')
+									AND selected_memory_id IS NOT NULL
+									AND selected_memory_version IS NOT NULL
+									AND selected_policy_id IS NOT NULL
+									AND selected_snapshot_id IS NOT NULL
+									AND selected_snapshot_version IS NOT NULL
+									AND selected_text_digest IS NOT NULL
+								)
+								OR (
+									outcome = 'abstain'
+									AND closed_reason IN (
+										'no_candidates',
+										'policy_observing',
+										'policy_shadow',
+										'policy_canary_budget',
+										'evidence_insufficient',
+										'harm_bound',
+										'policy_suppressed',
+										'task_fit',
+										'actionability',
+										'evidence_state',
+										'already_visible',
+										'context_budget',
+										'ambiguous_conflict'
+									)
+									AND decision_mode = 'none'
+									AND selected_memory_id IS NULL
+									AND selected_memory_version IS NULL
+									AND selected_policy_id IS NULL
+									AND selected_snapshot_id IS NULL
+									AND selected_snapshot_version IS NULL
+									AND selected_text_digest IS NULL
+								)
+							),
+						CONSTRAINT task_memory_intervention_receipts_expiry
+							CHECK (
+								created_at = date_trunc('microseconds', created_at)
+								AND expires_at = date_trunc('microseconds', expires_at)
+								AND expires_at > created_at
+							)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_task_memory_intervention_receipts_session_visibility
+						ON task_memory_intervention_receipts (session_key, selected_memory_id, selected_memory_version)
+						WHERE outcome = 'emit' AND selected_memory_id IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_task_memory_intervention_receipts_canary_policy
+						ON task_memory_intervention_receipts (selected_policy_id)
+						WHERE outcome = 'emit' AND decision_mode = 'canary' AND selected_policy_id IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_task_memory_intervention_receipts_expires_at
+						ON task_memory_intervention_receipts (expires_at)`,
+					`DROP TRIGGER IF EXISTS task_memory_intervention_receipts_reject_mutation ON task_memory_intervention_receipts`,
+					`CREATE TRIGGER task_memory_intervention_receipts_reject_mutation
+						BEFORE UPDATE OR DELETE ON task_memory_intervention_receipts
+						FOR EACH ROW EXECUTE FUNCTION task_memory_reject_immutable_mutation()`,
+					`DROP TRIGGER IF EXISTS task_memory_intervention_receipts_reject_truncate ON task_memory_intervention_receipts`,
+					`CREATE TRIGGER task_memory_intervention_receipts_reject_truncate
+						BEFORE TRUNCATE ON task_memory_intervention_receipts
+						FOR EACH STATEMENT EXECUTE FUNCTION task_memory_reject_immutable_mutation()`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 168: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackInterventionReceiptMigration168,
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
 	}
 
 	return nil
+}
+
+func rollbackInterventionReceiptMigration168(tx *gorm.DB) error {
+	return tx.Transaction(func(rollbackTx *gorm.DB) error {
+		if !rollbackTx.Migrator().HasTable("task_memory_intervention_receipts") {
+			return nil
+		}
+
+		var retainedRows int64
+		if err := rollbackTx.Table("task_memory_intervention_receipts").Count(&retainedRows).Error; err != nil {
+			return fmt.Errorf("migration 168 rollback preflight: %w", err)
+		}
+		if retainedRows > 0 {
+			return fmt.Errorf("migration 168 rollback blocked: %d retained task_memory_intervention_receipts rows", retainedRows)
+		}
+
+		for _, stmt := range []string{
+			`DROP TABLE IF EXISTS task_memory_intervention_receipts`,
+			`DROP FUNCTION IF EXISTS task_memory_reject_immutable_mutation()`,
+		} {
+			if err := rollbackTx.Exec(stmt).Error; err != nil {
+				return fmt.Errorf("migration 168 rollback: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 func candidateReviewSnapshotOpTypeMigration153() *gormigrate.Migration {

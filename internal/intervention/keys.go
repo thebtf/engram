@@ -9,6 +9,7 @@ import (
 
 const (
 	channelDerivationDomain    = "engram.host-channel/v1"
+	sessionDerivationDomain    = "engram.host-session/v1"
 	occurrenceDerivationDomain = "engram.host-occurrence/v1"
 	contentDerivationDomain    = "engram.host-content/v1"
 )
@@ -104,6 +105,22 @@ func (e KeyEpoch) DeriveChannel(binding BindingFacts) (Digest, error) {
 	return encoder.sum(), nil
 }
 
+// DeriveSessionKey commits the stable host session without phase-specific identity.
+func (e KeyEpoch) DeriveSessionKey(identity OccurrenceIdentity) (Digest, error) {
+	if !e.valid() || !identity.valid() {
+		return Digest{}, ErrInvalidInput
+	}
+	encoder := newHMACEncoder(e.occurrence)
+	encoder.text(sessionDerivationDomain)
+	encoder.digest(identity.subject)
+	encoder.text(identity.canonicalProject)
+	encoder.text(identity.actorPrincipal)
+	encoder.text(identity.actorKind)
+	encoder.text(identity.workstation)
+	encoder.text(identity.occurrence.sessionRef)
+	return encoder.sum(), nil
+}
+
 // DeriveOccurrence commits the binding-independent authorized occurrence axis.
 func (e KeyEpoch) DeriveOccurrence(identity OccurrenceIdentity) (Digest, error) {
 	if !e.valid() || !identity.valid() {
@@ -174,6 +191,12 @@ func (e hmacEncoder) digest(value Digest) {
 func (e hmacEncoder) uint32(value uint32) {
 	var encoded [4]byte
 	binary.BigEndian.PutUint32(encoded[:], value)
+	_, _ = e.mac.Write(encoded[:])
+}
+
+func (e hmacEncoder) int64(value int64) {
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], uint64(value))
 	_, _ = e.mac.Write(encoded[:])
 }
 

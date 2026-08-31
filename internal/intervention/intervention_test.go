@@ -90,6 +90,9 @@ func TestBindingFactsProjectionAndIndependentCapabilities(t *testing.T) {
 	if facts.Subject() != Digest(testBytes(19)) || facts.HostFamily() != HostFamilyOMP || facts.ChannelCommitment() == (Digest{}) {
 		t.Fatalf("binding projection = %#v", facts)
 	}
+	if got, want := facts.CapabilityCommitment(), Digest(binding.Snapshot().ContractDigest()); got != want {
+		t.Fatalf("CapabilityCommitment() = %x, want %x", got, want)
+	}
 	if !facts.AllowsAdvise() || !facts.AllowsObserve() || !facts.LiveAt(interventionTestTime) {
 		t.Fatalf("binding capability projection was not admitted")
 	}
@@ -119,6 +122,10 @@ func TestKeyEpochDerivationsAreSeparatedAndStableAcrossRebind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeriveChannel() error = %v", err)
 	}
+	sessionKey, err := epoch.DeriveSessionKey(identity)
+	if err != nil {
+		t.Fatalf("DeriveSessionKey() error = %v", err)
+	}
 	occurrenceKey, err := epoch.DeriveOccurrence(identity)
 	if err != nil {
 		t.Fatalf("DeriveOccurrence() error = %v", err)
@@ -127,8 +134,8 @@ func TestKeyEpochDerivationsAreSeparatedAndStableAcrossRebind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeriveContent() error = %v", err)
 	}
-	if channel == occurrenceKey || channel == content || occurrenceKey == content {
-		t.Fatalf("domain-separated commitments collided: channel=%x occurrence=%x content=%x", channel, occurrenceKey, content)
+	if channel == sessionKey || channel == occurrenceKey || channel == content || sessionKey == occurrenceKey || sessionKey == content || occurrenceKey == content {
+		t.Fatalf("domain-separated commitments collided: channel=%x session=%x occurrence=%x content=%x", channel, sessionKey, occurrenceKey, content)
 	}
 
 	rebound := binding
@@ -158,12 +165,30 @@ func TestKeyEpochDerivationsAreSeparatedAndStableAcrossRebind(t *testing.T) {
 	otherAnchor := fixtureOccurrence(t, "task query", occurrence.Facts().Facts())
 	otherAnchor.phaseAnchorRef = "turn-2"
 	otherIdentity := fixtureOccurrenceIdentity(binding, otherAnchor)
+	otherSession, err := epoch.DeriveSessionKey(otherIdentity)
+	if err != nil {
+		t.Fatalf("other anchor session key error = %v", err)
+	}
+	if otherSession != sessionKey {
+		t.Fatal("session key included a forbidden phase anchor")
+	}
 	otherOccurrence, err := epoch.DeriveOccurrence(otherIdentity)
 	if err != nil {
-		t.Fatalf("other anchor DeriveOccurrence() error = %v", err)
+		t.Fatalf("other anchor occurrence key error = %v", err)
 	}
 	if otherOccurrence == occurrenceKey {
 		t.Fatal("occurrence commitment ignored phase anchor")
+	}
+
+	otherSessionOccurrence := occurrence
+	otherSessionOccurrence.sessionRef = "session-2"
+	otherSessionIdentity := fixtureOccurrenceIdentity(binding, otherSessionOccurrence)
+	differentSession, err := epoch.DeriveSessionKey(otherSessionIdentity)
+	if err != nil {
+		t.Fatalf("other session key error = %v", err)
+	}
+	if differentSession == sessionKey {
+		t.Fatal("session commitment ignored host session identity")
 	}
 	otherContent, err := epoch.DeriveContent(otherAnchor)
 	if err != nil {
@@ -439,13 +464,14 @@ func fixtureHostBinding(t *testing.T) hostadvisor.HostBinding {
 
 func fixtureBindingFacts() BindingFacts {
 	return BindingFacts{
-		subject:           Digest(testBytes(19)),
-		hostFamily:        HostFamilyOMP,
-		channelCommitment: Digest(testBytes(20)),
-		expiresAt:         interventionTestTime.Add(time.Hour),
-		callbackDuration:  time.Second,
-		adviseAllowed:     true,
-		observeAllowed:    true,
+		subject:              Digest(testBytes(19)),
+		hostFamily:           HostFamilyOMP,
+		channelCommitment:    Digest(testBytes(20)),
+		capabilityCommitment: Digest(testBytes(21)),
+		expiresAt:            interventionTestTime.Add(time.Hour),
+		callbackDuration:     time.Second,
+		adviseAllowed:        true,
+		observeAllowed:       true,
 	}
 }
 
