@@ -728,7 +728,116 @@ func TestUCIPublishRejectsIncompleteOrMutableArtifact(t *testing.T) {
 			TextForSearch: string(artifact.Body[:1]),
 		})
 		require.Error(t, err, "a sealed artifact cannot gain a later fact")
+		require.Error(t, fixture.db.Model(&UCIParseArtifact{}).
+			Where("artifact_id = ?", artifact.Artifact.ArtifactID).
+			Update("diagnostics", `{"changed":true}`).Error, "sealed artifact metadata must remain immutable")
+		require.Error(t, fixture.db.Model(&UCIChunk{}).
+			Where("chunk_id = ?", artifact.Chunk.ChunkID).
+			Update("text_for_search", "changed").Error, "sealed artifact facts must remain immutable")
 	})
+}
+
+func TestUCIPublishRequiresProvenArtifactsAndWorkingTree(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	artifact := fixture.admitArtifact(t, fixture.source.SourceID, "proof-required", "func Proven() {}\n", UCIParseArtifactComplete)
+	memberships := []ucidomain.IndexMembership{uciPublicationPresentMembership("main.go", artifact)}
+	replacements := []ucidomain.IndexEdgeReplacement{{SourcePath: "main.go"}}
+
+	unprovenPart := uciPublicationPart(nil, memberships, nil, replacements)
+	unprovenDraft := newUCIPublicationDraft([]ucidomain.IndexPart{unprovenPart}, memberships, replacements)
+	caller := fixture.caller("proof-required")
+	unprovenBuild := fixture.begin(t, fixture.publisher, caller, "proof-required", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	unprovenAck := fixture.stage(t, fixture.publisher, caller, unprovenBuild.Build, 0, unprovenPart)
+	_, err := fixture.publisher.Finalize(context.Background(), caller, ucidomain.IndexFinalizeInput{
+		Build:    unprovenBuild.Build,
+		Manifest: fixture.manifest(t, []ucidomain.IndexPartAck{unprovenAck}, unprovenDraft),
+	})
+	require.Error(t, err, "an unsealed membership artifact requires an admitted proof")
+	fixture.assertNoCurrentView(t, fixture.checkout)
+	fixture.expireBuild(t, unprovenBuild.Build, fixture.checkout)
+
+	target := fixture.admitArtifact(t, fixture.source.SourceID, "symbol-target", "func Target() {}\n", UCIParseArtifactComplete)
+	symbolMembers := []ucidomain.IndexMembership{
+		uciPublicationPresentMembership("main.go", artifact),
+		uciPublicationPresentMembership("target.go", target),
+	}
+	badEdge := uciPublicationResolvedEdge(artifact, "main.go", target, "target.go")
+	missingSymbol := "missing-symbol"
+	badEdge.Target.SymbolKey = &missingSymbol
+	symbolReplacements := []ucidomain.IndexEdgeReplacement{
+		{SourcePath: "main.go", Edges: []ucidomain.IndexEdge{badEdge}},
+		{SourcePath: "target.go"},
+	}
+	badPart := uciPublicationPart([]uciPublicationArtifact{artifact, target}, symbolMembers, nil, symbolReplacements)
+	symbolBuild := fixture.begin(t, fixture.publisher, caller, "symbol-required", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	_, err = fixture.stagePart(fixture.publisher, caller, symbolBuild.Build, 0, badPart)
+	require.Error(t, err, "graph symbol endpoints must name admitted artifact facts")
+	fixture.assertBuildPartCount(t, symbolBuild.Build.BuildID, 0)
+	fixture.expireBuild(t, symbolBuild.Build, fixture.checkout)
+
+	require.NoError(t, fixture.db.Model(&UCICheckout{}).Where("checkout_id = ?", fixture.checkout.CheckoutID).
+		Update("kind", UCICheckoutCommitReader).Error)
+	var before UCICheckout
+	require.NoError(t, fixture.db.Where("checkout_id = ?", fixture.checkout.CheckoutID).First(&before).Error)
+	beforeEpoch := before.LeaseEpoch
+	_, err = fixture.publisher.Begin(context.Background(), caller, fixture.beginInput("commit-reader", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial))
+	require.Error(t, err, "the first release must not publish through read-only commit_reader checkouts")
+	var after UCICheckout
+	require.NoError(t, fixture.db.Where("checkout_id = ?", fixture.checkout.CheckoutID).First(&after).Error)
+	require.Equal(t, beforeEpoch, after.LeaseEpoch)
+	fixture.assertNoCurrentView(t, fixture.checkout)
+}
+
+func TestUCIPublishSealingRevalidatesAfterConcurrentFactWrite(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	artifact := fixture.admitArtifact(t, fixture.source.SourceID, "concurrent-seal", "func Concurrent() {}\n", UCIParseArtifactComplete)
+	memberships := []ucidomain.IndexMembership{uciPublicationPresentMembership("main.go", artifact)}
+	replacements := []ucidomain.IndexEdgeReplacement{{SourcePath: "main.go"}}
+	part := uciPublicationPart([]uciPublicationArtifact{artifact}, memberships, nil, replacements)
+	draft := newUCIPublicationDraft([]ucidomain.IndexPart{part}, memberships, replacements)
+	caller := fixture.caller("concurrent-seal")
+	build := fixture.begin(t, fixture.publisher, caller, "concurrent-seal", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	ack := fixture.stage(t, fixture.publisher, caller, build.Build, 0, part)
+
+	lockTx := fixture.db.Begin()
+	require.NoError(t, lockTx.Error)
+	t.Cleanup(func() { _ = lockTx.Rollback().Error })
+	concurrentDefinition := UCIDefinition{
+		DefinitionID:       uuid.NewString(),
+		ArtifactID:         artifact.Artifact.ArtifactID,
+		LocalSymbolKey:     "ConcurrentLateFact",
+		Kind:               "function",
+		Name:               "ConcurrentLateFact",
+		QualifiedLocalName: "fixture.ConcurrentLateFact",
+		Signature:          "func ConcurrentLateFact()",
+		ByteStart:          0,
+		ByteEnd:            1,
+		LineStart:          1,
+		LineEnd:            1,
+		CreatedAt:          time.Now().UTC(),
+	}
+	require.NoError(t, lockTx.Create(&concurrentDefinition).Error)
+
+	peerDB, peerApplicationName := fixture.openPeerDB(t)
+	peerPublisher := fixture.newPublisher(t, peerDB)
+	type finalizeResult struct {
+		published ucidomain.IndexPublishedView
+		err       error
+	}
+	finished := make(chan finalizeResult, 1)
+	go func() {
+		published, err := peerPublisher.Finalize(context.Background(), caller, ucidomain.IndexFinalizeInput{
+			Build:    build.Build,
+			Manifest: fixture.manifest(t, []ucidomain.IndexPartAck{ack}, draft),
+		})
+		finished <- finalizeResult{published: published, err: err}
+	}()
+	fixture.waitForPeerLock(t, peerApplicationName)
+	require.NoError(t, lockTx.Commit().Error)
+	result := <-finished
+	require.Error(t, result.err, "Finalize must revalidate facts after acquiring the artifact seal lock")
+	require.Empty(t, result.published.Context.ViewID)
+	fixture.assertNoCurrentView(t, fixture.checkout)
 }
 
 func TestUCIPublishScopedEndpointsAndChangedCallee(t *testing.T) {
@@ -1476,7 +1585,7 @@ func (fixture *uciPublicationFixture) expireBuild(t *testing.T, build ucidomain.
 	t.Helper()
 
 	require.NoError(t, fixture.db.Exec(`UPDATE ci_jobs SET lease_expiry = clock_timestamp() - interval '1 microsecond' WHERE job_id = ?`, build.BuildID).Error)
-	require.NoError(t, fixture.db.Exec(`UPDATE ci_checkouts SET lease_expires_at = clock_timestamp() - interval '1 microsecond' WHERE checkout_id = ?`, checkout.CheckoutID).Error)
+	require.NoError(t, fixture.db.Exec(`UPDATE ci_checkouts SET lease_expires_at = clock_timestamp() - interval '1 microsecond' WHERE checkout_id = ? AND owner_instance IS NOT NULL`, checkout.CheckoutID).Error)
 }
 
 func (fixture *uciPublicationFixture) openPeerDB(t *testing.T) (*gormlib.DB, string) {

@@ -6102,6 +6102,207 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackUCIIndexProjectionMigration172,
 		},
+		// Migration 173 is additive: it binds the existing projection tables into the fenced publication state machine.
+		{
+			ID: "173_uci_fenced_publication",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`ALTER TABLE ci_parse_artifacts ADD COLUMN IF NOT EXISTS facts_digest TEXT`,
+					`ALTER TABLE ci_parse_artifacts ADD COLUMN IF NOT EXISTS sealed_at TIMESTAMPTZ`,
+					`DO $$
+					BEGIN
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_parse_artifacts_facts_digest_chk'
+								AND conrelid = 'ci_parse_artifacts'::regclass
+						) THEN
+							ALTER TABLE ci_parse_artifacts
+								ADD CONSTRAINT ci_parse_artifacts_facts_digest_chk
+								CHECK (facts_digest IS NULL OR facts_digest ~ '^sha256:[0-9a-f]{64}$');
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_parse_artifacts_sealed_pair_chk'
+								AND conrelid = 'ci_parse_artifacts'::regclass
+						) THEN
+							ALTER TABLE ci_parse_artifacts
+								ADD CONSTRAINT ci_parse_artifacts_sealed_pair_chk
+								CHECK ((facts_digest IS NULL) = (sealed_at IS NULL));
+						END IF;
+					END $$`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS publication_key TEXT`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS requested_by TEXT`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS incarnation_id UUID`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS profile_id UUID`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS expected_parent_view_id UUID`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS manifest_mode TEXT`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS sealed_manifest JSONB`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS finalize_binding_digest TEXT`,
+					`ALTER TABLE ci_jobs ADD COLUMN IF NOT EXISTS result_view_id UUID`,
+					`DO $$
+					BEGIN
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_publication_key_chk' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_publication_key_chk CHECK (
+								publication_key IS NULL OR (
+									btrim(publication_key) <> '' AND publication_key = btrim(publication_key)
+									AND publication_key !~ '[[:cntrl:]]'
+								)
+							);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_requested_by_chk' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_requested_by_chk CHECK (
+								requested_by IS NULL OR (
+									btrim(requested_by) <> '' AND requested_by = btrim(requested_by)
+									AND requested_by !~ '[[:cntrl:]]'
+								)
+							);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_manifest_mode_chk' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_manifest_mode_chk CHECK (
+								manifest_mode IS NULL OR manifest_mode IN ('full', 'delta')
+							);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_sealed_manifest_object_chk' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_sealed_manifest_object_chk CHECK (
+								sealed_manifest IS NULL OR jsonb_typeof(sealed_manifest) = 'object'
+							);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_finalize_binding_digest_chk' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_finalize_binding_digest_chk CHECK (
+								finalize_binding_digest IS NULL OR finalize_binding_digest ~ '^sha256:[0-9a-f]{64}$'
+							);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_publication_profile_fkey' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_publication_profile_fkey
+								FOREIGN KEY (profile_id) REFERENCES ci_profiles (profile_id);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_publication_parent_scope_fkey' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_publication_parent_scope_fkey
+								FOREIGN KEY (expected_parent_view_id, checkout_id, source_id, incarnation_id)
+								REFERENCES ci_views (view_id, checkout_id, source_id, incarnation_id);
+						END IF;
+						IF NOT EXISTS (
+							SELECT 1 FROM pg_constraint
+							WHERE conname = 'ci_jobs_publication_result_scope_fkey' AND conrelid = 'ci_jobs'::regclass
+						) THEN
+							ALTER TABLE ci_jobs ADD CONSTRAINT ci_jobs_publication_result_scope_fkey
+								FOREIGN KEY (result_view_id, checkout_id, source_id, incarnation_id)
+								REFERENCES ci_views (view_id, checkout_id, source_id, incarnation_id);
+						END IF;
+					END $$`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_ci_jobs_publication_key
+						ON ci_jobs (source_id, checkout_id, publication_key)
+						WHERE publication_key IS NOT NULL`,
+					`CREATE TABLE IF NOT EXISTS ci_index_build_parts (
+						build_id UUID NOT NULL,
+						sequence INTEGER NOT NULL,
+						part_digest TEXT NOT NULL,
+						payload JSONB NOT NULL,
+						payload_bytes BIGINT NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_index_build_parts_pkey PRIMARY KEY (build_id, sequence),
+						CONSTRAINT ci_index_build_parts_build_fkey FOREIGN KEY (build_id) REFERENCES ci_jobs (job_id),
+						CONSTRAINT ci_index_build_parts_sequence_chk CHECK (sequence >= 0),
+						CONSTRAINT ci_index_build_parts_digest_chk CHECK (part_digest ~ '^sha256:[0-9a-f]{64}$'),
+						CONSTRAINT ci_index_build_parts_payload_object_chk CHECK (jsonb_typeof(payload) = 'object'),
+						CONSTRAINT ci_index_build_parts_payload_bytes_chk CHECK (payload_bytes >= 0)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_index_build_parts_build_sequence
+						ON ci_index_build_parts (build_id, sequence)`,
+					`CREATE UNIQUE INDEX IF NOT EXISTS idx_ci_resolved_edges_current_checkout_key
+						ON ci_resolved_edges (checkout_id, edge_key)
+						WHERE valid_to_generation IS NULL`,
+					`CREATE OR REPLACE FUNCTION uci_reject_sealed_artifact_mutation()
+					RETURNS trigger LANGUAGE plpgsql AS $$
+					BEGIN
+						IF TG_OP = 'INSERT' THEN
+							IF NEW.facts_digest IS NOT NULL OR NEW.sealed_at IS NOT NULL THEN
+								RAISE EXCEPTION 'new UCI artifact cannot be pre-sealed' USING ERRCODE = '55000';
+							END IF;
+							RETURN NEW;
+						END IF;
+						IF OLD.sealed_at IS NOT NULL THEN
+							RAISE EXCEPTION 'sealed UCI artifact is immutable' USING ERRCODE = '55000';
+						END IF;
+						IF TG_OP = 'DELETE' THEN
+							RETURN OLD;
+						END IF;
+						RETURN NEW;
+					END;
+					$$`,
+					`DROP TRIGGER IF EXISTS ci_parse_artifacts_sealed_guard ON ci_parse_artifacts`,
+					`CREATE TRIGGER ci_parse_artifacts_sealed_guard
+						BEFORE INSERT OR UPDATE OR DELETE ON ci_parse_artifacts
+						FOR EACH ROW EXECUTE FUNCTION uci_reject_sealed_artifact_mutation()`,
+					`CREATE OR REPLACE FUNCTION uci_reject_sealed_artifact_fact_mutation()
+					RETURNS trigger LANGUAGE plpgsql AS $$
+					DECLARE
+						fact_artifact_id UUID;
+						artifact_sealed_at TIMESTAMPTZ;
+					BEGIN
+						IF TG_OP = 'INSERT' THEN
+							fact_artifact_id := NEW.artifact_id;
+						ELSE
+							fact_artifact_id := OLD.artifact_id;
+							IF TG_OP = 'UPDATE' AND NEW.artifact_id IS DISTINCT FROM OLD.artifact_id THEN
+								RAISE EXCEPTION 'UCI artifact fact binding is immutable' USING ERRCODE = '55000';
+							END IF;
+						END IF;
+						SELECT sealed_at INTO artifact_sealed_at
+						FROM ci_parse_artifacts
+						WHERE artifact_id = fact_artifact_id
+						FOR UPDATE;
+						IF artifact_sealed_at IS NOT NULL THEN
+							RAISE EXCEPTION 'sealed UCI artifact facts are immutable' USING ERRCODE = '55000';
+						END IF;
+						IF TG_OP = 'DELETE' THEN
+							RETURN OLD;
+						END IF;
+						RETURN NEW;
+					END;
+					$$`,
+					`DROP TRIGGER IF EXISTS ci_definitions_sealed_artifact_guard ON ci_definitions`,
+					`CREATE TRIGGER ci_definitions_sealed_artifact_guard
+						BEFORE INSERT OR UPDATE OR DELETE ON ci_definitions
+						FOR EACH ROW EXECUTE FUNCTION uci_reject_sealed_artifact_fact_mutation()`,
+					`DROP TRIGGER IF EXISTS ci_reference_sites_sealed_artifact_guard ON ci_reference_sites`,
+					`CREATE TRIGGER ci_reference_sites_sealed_artifact_guard
+						BEFORE INSERT OR UPDATE OR DELETE ON ci_reference_sites
+						FOR EACH ROW EXECUTE FUNCTION uci_reject_sealed_artifact_fact_mutation()`,
+					`DROP TRIGGER IF EXISTS ci_chunks_sealed_artifact_guard ON ci_chunks`,
+					`CREATE TRIGGER ci_chunks_sealed_artifact_guard
+						BEFORE INSERT OR UPDATE OR DELETE ON ci_chunks
+						FOR EACH ROW EXECUTE FUNCTION uci_reject_sealed_artifact_fact_mutation()`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 173: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackUCIFencedPublicationMigration173,
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -6239,6 +6440,12 @@ func rollbackUCIContextRegistryMigration171(tx *gorm.DB) error {
 // projections and durable UCI evidence. Removing a binary never reconstructs
 // evidence or safely reverses a published storage authority boundary.
 func rollbackUCIIndexProjectionMigration172(tx *gorm.DB) error {
+	return nil
+}
+
+// rollbackUCIFencedPublicationMigration173 deliberately keeps published history and its
+// append-only staging evidence. A binary rollback cannot reconstruct a prior current View.
+func rollbackUCIFencedPublicationMigration173(tx *gorm.DB) error {
 	return nil
 }
 

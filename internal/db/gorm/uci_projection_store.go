@@ -1,18 +1,27 @@
 package gorm
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
+	ucidomain "github.com/thebtf/engram/internal/uci"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-var errUCIProjectionStoreNotConfigured = errors.New("uci projection store not configured")
+var (
+	errUCIProjectionStoreNotConfigured = errors.New("uci projection store not configured")
+	errUCIProjectionImmutable          = errors.New("UCI_PROJECTION_IMMUTABLE")
+)
 
 // UCIProjectionStore persists rebuildable shared code artifacts. It deliberately
 // does not expose a current-view setter or publication lifecycle methods: those
@@ -62,6 +71,9 @@ func (s *UCIProjectionStore) UpsertBlob(ctx context.Context, in UpsertUCIBlobInp
 		if in.SafeContent == nil || int64(len(in.SafeContent)) != in.ByteLength {
 			return nil, fmt.Errorf("uci projection blob: stored content must match byte_length")
 		}
+		if digestUCIBytes(in.SafeContent) != in.ContentDigest {
+			return nil, fmt.Errorf("uci projection blob: content_digest does not match stored bytes")
+		}
 	} else if in.SafeContent != nil {
 		return nil, fmt.Errorf("uci projection blob: metadata-only or excluded content must not carry source bytes")
 	}
@@ -92,6 +104,9 @@ func (s *UCIProjectionStore) UpsertBlob(ctx context.Context, in UpsertUCIBlobInp
 		Where("source_id = ? AND protection_domain = ? AND content_digest = ?", in.SourceID, in.ProtectionDomain, in.ContentDigest).
 		First(&existing).Error; err != nil {
 		return nil, fmt.Errorf("uci projection load existing blob: %w", err)
+	}
+	if !sameUCIBlobPayload(existing, row) {
+		return nil, errUCIProjectionImmutable
 	}
 	return &existing, nil
 }
@@ -179,6 +194,9 @@ func (s *UCIProjectionStore) UpsertParseArtifact(ctx context.Context, in UpsertU
 	).First(&existing).Error; err != nil {
 		return nil, fmt.Errorf("uci projection load existing parse artifact: %w", err)
 	}
+	if existing.Status != row.Status || existing.Diagnostics != row.Diagnostics {
+		return nil, errUCIProjectionImmutable
+	}
 	return &existing, nil
 }
 
@@ -219,6 +237,9 @@ func (s *UCIProjectionStore) UpsertDefinition(ctx context.Context, in UpsertUCID
 	if err := validateUCIProjectionSpan(in.ByteStart, in.ByteEnd, in.LineStart, in.LineEnd); err != nil {
 		return nil, err
 	}
+	if _, err := s.loadMutableUCIArtifact(ctx, in.ArtifactID); err != nil {
+		return nil, err
+	}
 
 	row := &UCIDefinition{
 		DefinitionID:       uuid.NewString(),
@@ -247,6 +268,11 @@ func (s *UCIProjectionStore) UpsertDefinition(ctx context.Context, in UpsertUCID
 	var existing UCIDefinition
 	if err := s.db.WithContext(ctx).Where("artifact_id = ? AND local_symbol_key = ?", in.ArtifactID, in.LocalSymbolKey).First(&existing).Error; err != nil {
 		return nil, fmt.Errorf("uci projection load existing definition: %w", err)
+	}
+	if existing.Kind != row.Kind || existing.Name != row.Name || existing.QualifiedLocalName != row.QualifiedLocalName ||
+		existing.Signature != row.Signature || existing.ByteStart != row.ByteStart || existing.ByteEnd != row.ByteEnd ||
+		existing.LineStart != row.LineStart || existing.LineEnd != row.LineEnd {
+		return nil, errUCIProjectionImmutable
 	}
 	return &existing, nil
 }
@@ -293,6 +319,9 @@ func (s *UCIProjectionStore) UpsertReferenceSite(ctx context.Context, in UpsertU
 	if err != nil {
 		return nil, err
 	}
+	if _, err := s.loadMutableUCIArtifact(ctx, in.ArtifactID); err != nil {
+		return nil, err
+	}
 
 	row := &UCIReferenceSite{
 		ReferenceSiteID: uuid.NewString(),
@@ -318,6 +347,10 @@ func (s *UCIProjectionStore) UpsertReferenceSite(ctx context.Context, in UpsertU
 	var existing UCIReferenceSite
 	if err := s.db.WithContext(ctx).Where("artifact_id = ? AND site_key = ?", in.ArtifactID, in.SiteKey).First(&existing).Error; err != nil {
 		return nil, fmt.Errorf("uci projection load existing reference site: %w", err)
+	}
+	if !sameUCIOptionalString(existing.OwnerSymbolKey, row.OwnerSymbolKey) || existing.RawTarget != row.RawTarget ||
+		existing.Relation != row.Relation || existing.SyntaxSpan != row.SyntaxSpan || existing.ResolverHints != row.ResolverHints {
+		return nil, errUCIProjectionImmutable
 	}
 	return &existing, nil
 }
@@ -366,6 +399,13 @@ func (s *UCIProjectionStore) UpsertChunk(ctx context.Context, in UpsertUCIChunkI
 	if err != nil {
 		return nil, err
 	}
+	artifact, err := s.loadMutableUCIArtifact(ctx, in.ArtifactID)
+	if err != nil {
+		return nil, err
+	}
+	if artifact.SourceID != in.SourceID {
+		return nil, fmt.Errorf("uci projection chunk: artifact source mismatch")
+	}
 
 	row := &UCIChunk{
 		ChunkID:       uuid.NewString(),
@@ -380,6 +420,19 @@ func (s *UCIProjectionStore) UpsertChunk(ctx context.Context, in UpsertUCIChunkI
 		TextForSearch: in.TextForSearch,
 		CreatedAt:     time.Now().UTC(),
 	}
+	var existing UCIChunk
+	err = s.db.WithContext(ctx).Where("artifact_id = ? AND ordinal = ?", in.ArtifactID, in.Ordinal).First(&existing).Error
+	if err == nil {
+		if !sameUCIOptionalString(existing.SymbolKey, row.SymbolKey) || existing.ChunkKind != row.ChunkKind ||
+			existing.ByteStart != row.ByteStart || existing.ByteEnd != row.ByteEnd || existing.ContentDigest != row.ContentDigest ||
+			existing.TextForSearch != row.TextForSearch {
+			return nil, errUCIProjectionImmutable
+		}
+		return &existing, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("uci projection load existing chunk: %w", err)
+	}
 	result := s.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "artifact_id"}, {Name: "ordinal"}, {Name: "content_digest"}},
 		DoNothing: true,
@@ -390,9 +443,13 @@ func (s *UCIProjectionStore) UpsertChunk(ctx context.Context, in UpsertUCIChunkI
 	if result.RowsAffected != 0 {
 		return row, nil
 	}
-	var existing UCIChunk
-	if err := s.db.WithContext(ctx).Where("artifact_id = ? AND ordinal = ? AND content_digest = ?", in.ArtifactID, in.Ordinal, in.ContentDigest).First(&existing).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("artifact_id = ? AND ordinal = ?", in.ArtifactID, in.Ordinal).First(&existing).Error; err != nil {
 		return nil, fmt.Errorf("uci projection load existing chunk: %w", err)
+	}
+	if !sameUCIOptionalString(existing.SymbolKey, row.SymbolKey) || existing.ChunkKind != row.ChunkKind ||
+		existing.ByteStart != row.ByteStart || existing.ByteEnd != row.ByteEnd || existing.ContentDigest != row.ContentDigest ||
+		existing.TextForSearch != row.TextForSearch {
+		return nil, errUCIProjectionImmutable
 	}
 	return &existing, nil
 }
@@ -714,4 +771,1636 @@ func validateUCIProjectionSpan(byteStart, byteEnd int64, lineStart, lineEnd int)
 		return fmt.Errorf("uci projection: invalid line span")
 	}
 	return nil
+}
+
+func digestUCIBytes(value []byte) string {
+	sum := sha256.Sum256(value)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func sameUCIBlobPayload(existing UCIBlob, candidate *UCIBlob) bool {
+	return existing.SourceID == candidate.SourceID &&
+		existing.ProtectionDomain == candidate.ProtectionDomain &&
+		existing.ContentDigest == candidate.ContentDigest &&
+		existing.ByteLength == candidate.ByteLength &&
+		existing.Encoding == candidate.Encoding &&
+		existing.StorageState == candidate.StorageState &&
+		bytes.Equal(existing.SafeContent, candidate.SafeContent)
+}
+
+func (s *UCIProjectionStore) loadMutableUCIArtifact(ctx context.Context, artifactID string) (*UCIParseArtifact, error) {
+	var artifact UCIParseArtifact
+	if err := s.db.WithContext(ctx).Where("artifact_id = ?", artifactID).First(&artifact).Error; err != nil {
+		return nil, fmt.Errorf("uci projection load artifact: %w", err)
+	}
+	if artifact.SealedAt != nil {
+		return nil, errUCIProjectionImmutable
+	}
+	return &artifact, nil
+}
+
+// DescribeIndexArtifact recomputes the source-scoped proof for one admitted artifact.
+// It is read-only and does not seal the artifact.
+func (s *UCIProjectionStore) DescribeIndexArtifact(ctx context.Context, sourceID, artifactID string) (ucidomain.IndexArtifactProof, error) {
+	if err := s.requireDB("describe index artifact"); err != nil {
+		return ucidomain.IndexArtifactProof{}, err
+	}
+	if err := validateUCIUUID("source_id", sourceID); err != nil {
+		return ucidomain.IndexArtifactProof{}, err
+	}
+	if err := validateUCIUUID("artifact_id", artifactID); err != nil {
+		return ucidomain.IndexArtifactProof{}, err
+	}
+
+	var artifact UCIParseArtifact
+	if err := s.db.WithContext(ctx).Where("source_id = ? AND artifact_id = ?", sourceID, artifactID).First(&artifact).Error; err != nil {
+		return ucidomain.IndexArtifactProof{}, fmt.Errorf("uci projection describe artifact: %w", err)
+	}
+	var blob UCIBlob
+	if err := s.db.WithContext(ctx).Where("source_id = ? AND blob_id = ?", sourceID, artifact.BlobID).First(&blob).Error; err != nil {
+		return ucidomain.IndexArtifactProof{}, fmt.Errorf("uci projection describe blob: %w", err)
+	}
+	if blob.StorageState != UCIBlobStored || blob.SafeContent == nil || int64(len(blob.SafeContent)) != blob.ByteLength || digestUCIBytes(blob.SafeContent) != blob.ContentDigest {
+		return ucidomain.IndexArtifactProof{}, errUCIProjectionImmutable
+	}
+
+	hash := sha256.New()
+	header, err := json.Marshal(struct {
+		Version                 int                    `json:"version"`
+		Kind                    string                 `json:"kind"`
+		SourceID                string                 `json:"source_id"`
+		ArtifactID              string                 `json:"artifact_id"`
+		BlobID                  string                 `json:"blob_id"`
+		ContentDigest           string                 `json:"content_digest"`
+		ByteLength              int64                  `json:"byte_length"`
+		Language                string                 `json:"language"`
+		ParserRevision          string                 `json:"parser_revision"`
+		GrammarDigest           string                 `json:"grammar_digest"`
+		ExtractionProfileDigest string                 `json:"extraction_profile_digest"`
+		Status                  UCIParseArtifactStatus `json:"status"`
+		Diagnostics             json.RawMessage        `json:"diagnostics"`
+	}{
+		Version:                 1,
+		Kind:                    "artifact_facts",
+		SourceID:                sourceID,
+		ArtifactID:              artifact.ArtifactID,
+		BlobID:                  artifact.BlobID,
+		ContentDigest:           blob.ContentDigest,
+		ByteLength:              blob.ByteLength,
+		Language:                artifact.Language,
+		ParserRevision:          artifact.ParserRevision,
+		GrammarDigest:           artifact.GrammarDigest,
+		ExtractionProfileDigest: artifact.ExtractionProfileDigest,
+		Status:                  artifact.Status,
+		Diagnostics:             json.RawMessage(artifact.Diagnostics),
+	})
+	if err != nil {
+		return ucidomain.IndexArtifactProof{}, fmt.Errorf("uci projection encode artifact facts: %w", err)
+	}
+	_, _ = hash.Write(header)
+
+	definitions, err := s.hashUCIDefinitions(ctx, hash, artifact.ArtifactID, blob.ByteLength)
+	if err != nil {
+		return ucidomain.IndexArtifactProof{}, err
+	}
+	references, err := s.hashUCIReferenceSites(ctx, hash, artifact.ArtifactID, blob.ByteLength)
+	if err != nil {
+		return ucidomain.IndexArtifactProof{}, err
+	}
+	chunks, err := s.hashUCIChunks(ctx, hash, artifact.ArtifactID, blob)
+	if err != nil {
+		return ucidomain.IndexArtifactProof{}, err
+	}
+
+	factsDigest := "sha256:" + hex.EncodeToString(hash.Sum(nil))
+	if artifact.SealedAt != nil && (artifact.FactsDigest == nil || *artifact.FactsDigest != factsDigest) {
+		return ucidomain.IndexArtifactProof{}, errUCIProjectionImmutable
+	}
+	return ucidomain.IndexArtifactProof{
+		ArtifactID:         artifact.ArtifactID,
+		ContentDigest:      ucidomain.IndexDigest(blob.ContentDigest),
+		FactsDigest:        ucidomain.IndexDigest(factsDigest),
+		DefinitionCount:    definitions,
+		ReferenceSiteCount: references,
+		ChunkCount:         chunks,
+	}, nil
+}
+
+func (s *UCIProjectionStore) hashUCIDefinitions(ctx context.Context, hash interface{ Write([]byte) (int, error) }, artifactID string, byteLength int64) (uint64, error) {
+	if _, err := hash.Write([]byte("|definitions|")); err != nil {
+		return 0, err
+	}
+	rows, err := s.db.WithContext(ctx).Where("artifact_id = ?", artifactID).Order("local_symbol_key ASC, definition_id ASC").Model(&UCIDefinition{}).Rows()
+	if err != nil {
+		return 0, fmt.Errorf("uci projection describe definitions: %w", err)
+	}
+	defer rows.Close()
+	var count uint64
+	for rows.Next() {
+		var definition UCIDefinition
+		if err := s.db.ScanRows(rows, &definition); err != nil {
+			return 0, fmt.Errorf("uci projection scan definition: %w", err)
+		}
+		if err := validateUCIProjectionSpan(definition.ByteStart, definition.ByteEnd, definition.LineStart, definition.LineEnd); err != nil || definition.ByteEnd > byteLength {
+			return 0, errUCIProjectionImmutable
+		}
+		encoded, err := json.Marshal(struct {
+			LocalSymbolKey     string `json:"local_symbol_key"`
+			Kind               string `json:"kind"`
+			Name               string `json:"name"`
+			QualifiedLocalName string `json:"qualified_local_name"`
+			Signature          string `json:"signature"`
+			ByteStart          int64  `json:"byte_start"`
+			ByteEnd            int64  `json:"byte_end"`
+			LineStart          int    `json:"line_start"`
+			LineEnd            int    `json:"line_end"`
+		}{
+			LocalSymbolKey:     definition.LocalSymbolKey,
+			Kind:               definition.Kind,
+			Name:               definition.Name,
+			QualifiedLocalName: definition.QualifiedLocalName,
+			Signature:          definition.Signature,
+			ByteStart:          definition.ByteStart,
+			ByteEnd:            definition.ByteEnd,
+			LineStart:          definition.LineStart,
+			LineEnd:            definition.LineEnd,
+		})
+		if err != nil {
+			return 0, err
+		}
+		_, _ = hash.Write(encoded)
+		_, _ = hash.Write([]byte{'\n'})
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("uci projection iterate definitions: %w", err)
+	}
+	return count, nil
+}
+
+func (s *UCIProjectionStore) hashUCIReferenceSites(ctx context.Context, hash interface{ Write([]byte) (int, error) }, artifactID string, byteLength int64) (uint64, error) {
+	if _, err := hash.Write([]byte("|reference_sites|")); err != nil {
+		return 0, err
+	}
+	rows, err := s.db.WithContext(ctx).Where("artifact_id = ?", artifactID).Order("site_key ASC, reference_site_id ASC").Model(&UCIReferenceSite{}).Rows()
+	if err != nil {
+		return 0, fmt.Errorf("uci projection describe reference sites: %w", err)
+	}
+	defer rows.Close()
+	var count uint64
+	for rows.Next() {
+		var reference UCIReferenceSite
+		if err := s.db.ScanRows(rows, &reference); err != nil {
+			return 0, fmt.Errorf("uci projection scan reference site: %w", err)
+		}
+		syntaxSpan, err := normalizeUCIArtifactJSONObject(reference.SyntaxSpan, byteLength)
+		if err != nil {
+			return 0, errUCIProjectionImmutable
+		}
+		resolverHints, err := normalizeUCIArtifactJSONObject(reference.ResolverHints, -1)
+		if err != nil {
+			return 0, errUCIProjectionImmutable
+		}
+		encoded, err := json.Marshal(struct {
+			SiteKey        string  `json:"site_key"`
+			OwnerSymbolKey *string `json:"owner_symbol_key"`
+			RawTarget      string  `json:"raw_target"`
+			Relation       string  `json:"relation"`
+			SyntaxSpan     string  `json:"syntax_span"`
+			ResolverHints  string  `json:"resolver_hints"`
+		}{
+			SiteKey:        reference.SiteKey,
+			OwnerSymbolKey: reference.OwnerSymbolKey,
+			RawTarget:      reference.RawTarget,
+			Relation:       reference.Relation,
+			SyntaxSpan:     syntaxSpan,
+			ResolverHints:  resolverHints,
+		})
+		if err != nil {
+			return 0, err
+		}
+		_, _ = hash.Write(encoded)
+		_, _ = hash.Write([]byte{'\n'})
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("uci projection iterate reference sites: %w", err)
+	}
+	return count, nil
+}
+
+func (s *UCIProjectionStore) hashUCIChunks(ctx context.Context, hash interface{ Write([]byte) (int, error) }, artifactID string, blob UCIBlob) (uint64, error) {
+	if _, err := hash.Write([]byte("|chunks|")); err != nil {
+		return 0, err
+	}
+	rows, err := s.db.WithContext(ctx).Where("artifact_id = ?", artifactID).Order("ordinal ASC, chunk_id ASC").Model(&UCIChunk{}).Rows()
+	if err != nil {
+		return 0, fmt.Errorf("uci projection describe chunks: %w", err)
+	}
+	defer rows.Close()
+	var count uint64
+	for rows.Next() {
+		var chunk UCIChunk
+		if err := s.db.ScanRows(rows, &chunk); err != nil {
+			return 0, fmt.Errorf("uci projection scan chunk: %w", err)
+		}
+		if chunk.ByteStart < 0 || chunk.ByteEnd < chunk.ByteStart || chunk.ByteEnd > blob.ByteLength {
+			return 0, errUCIProjectionImmutable
+		}
+		if digestUCIBytes(blob.SafeContent[chunk.ByteStart:chunk.ByteEnd]) != chunk.ContentDigest {
+			return 0, errUCIProjectionImmutable
+		}
+		encoded, err := json.Marshal(struct {
+			SymbolKey     *string `json:"symbol_key"`
+			ChunkKind     string  `json:"chunk_kind"`
+			Ordinal       int     `json:"ordinal"`
+			ByteStart     int64   `json:"byte_start"`
+			ByteEnd       int64   `json:"byte_end"`
+			ContentDigest string  `json:"content_digest"`
+			TextForSearch string  `json:"text_for_search"`
+		}{
+			SymbolKey:     chunk.SymbolKey,
+			ChunkKind:     chunk.ChunkKind,
+			Ordinal:       chunk.Ordinal,
+			ByteStart:     chunk.ByteStart,
+			ByteEnd:       chunk.ByteEnd,
+			ContentDigest: chunk.ContentDigest,
+			TextForSearch: chunk.TextForSearch,
+		})
+		if err != nil {
+			return 0, err
+		}
+		_, _ = hash.Write(encoded)
+		_, _ = hash.Write([]byte{'\n'})
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("uci projection iterate chunks: %w", err)
+	}
+	return count, nil
+}
+
+func normalizeUCIArtifactJSONObject(value string, byteLength int64) (string, error) {
+	var object map[string]any
+	if err := json.Unmarshal([]byte(value), &object); err != nil || object == nil {
+		return "", errUCIProjectionImmutable
+	}
+	if byteLength >= 0 {
+		byteStart, hasByteStart := object["byte_start"].(float64)
+		byteEnd, hasByteEnd := object["byte_end"].(float64)
+		lineStart, hasLineStart := object["line_start"].(float64)
+		lineEnd, hasLineEnd := object["line_end"].(float64)
+		if hasByteStart || hasByteEnd || hasLineStart || hasLineEnd {
+			if !hasByteStart || !hasByteEnd || !hasLineStart || !hasLineEnd ||
+				byteStart < 0 || byteEnd < byteStart || byteEnd > float64(byteLength) ||
+				lineStart < 1 || lineEnd < lineStart ||
+				byteStart != float64(int64(byteStart)) || byteEnd != float64(int64(byteEnd)) ||
+				lineStart != float64(int64(lineStart)) || lineEnd != float64(int64(lineEnd)) {
+				return "", errUCIProjectionImmutable
+			}
+		}
+	}
+	normalized, err := json.Marshal(object)
+	if err != nil {
+		return "", err
+	}
+	return string(normalized), nil
+}
+
+var (
+	errUCIPublicationRejected            = errors.New("UCI_PUBLICATION_REJECTED")
+	errUCIPublicationIdempotencyMismatch = errors.New("IDEMPOTENCY_MISMATCH")
+	errUCIPublicationLeaseStale          = errors.New("LEASE_STALE")
+	errUCIPublicationBuildIncomplete     = errors.New("BUILD_INCOMPLETE")
+)
+
+type uciPublisher struct {
+	store      *UCIProjectionStore
+	authorizer ucidomain.ContextAuthorizer
+	limits     ucidomain.IndexPublicationLimits
+}
+
+// Publisher creates the server-owned implementation of the fenced publication API.
+func (s *UCIProjectionStore) Publisher(authorizer ucidomain.ContextAuthorizer, limits ucidomain.IndexPublicationLimits) (ucidomain.IndexStore, error) {
+	if err := s.requireDB("create publisher"); err != nil {
+		return nil, err
+	}
+	if authorizer == nil || !validUCIPublicationLimits(limits) {
+		return nil, errUCIPublicationRejected
+	}
+	return &uciPublisher{store: s, authorizer: authorizer, limits: limits}, nil
+}
+
+func (publisher *uciPublisher) Begin(ctx context.Context, caller ucidomain.IndexCaller, input ucidomain.IndexBeginInput) (ucidomain.IndexBeginResult, error) {
+	if publisher == nil || ctx == nil || !validUCIPublicationCaller(caller) || !validUCIPublicationBegin(input) {
+		return ucidomain.IndexBeginResult{}, errUCIPublicationRejected
+	}
+	if err := publisher.authorize(ctx, caller, input.Scope); err != nil {
+		return ucidomain.IndexBeginResult{}, errUCIPublicationRejected
+	}
+	bindingDigest, err := canonicalUCIPublicationBeginDigest(caller, input)
+	if err != nil {
+		return ucidomain.IndexBeginResult{}, errUCIPublicationRejected
+	}
+
+	var result ucidomain.IndexBeginResult
+	err = publisher.store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		checkout, err := lockUCIPublicationCheckout(ctx, tx, input.Scope)
+		if err != nil {
+			return err
+		}
+
+		job, found, err := lockUCIPublicationJobByKey(ctx, tx, input.Scope, input.BuildKey)
+		if err != nil {
+			return err
+		}
+		if found {
+			if !sameUCIPublicationBegin(*job, caller, input, bindingDigest) {
+				return errUCIPublicationIdempotencyMismatch
+			}
+			build, err := indexBuildRefFromJob(*job, input.Scope)
+			if err != nil {
+				return errUCIPublicationRejected
+			}
+			result.Build = build
+			if job.LeaseExpiry != nil {
+				result.LeaseExpiresAt = job.LeaseExpiry.UTC()
+			}
+			if job.ResultViewID != nil {
+				published, err := loadUCIPublishedViewForJob(ctx, tx, *job)
+				if err != nil {
+					return err
+				}
+				result.Published = &published
+			}
+			return nil
+		}
+
+		var profile UCIAnalysisProfile
+		if err := tx.WithContext(ctx).Where("profile_id = ?", input.ProfileID).First(&profile).Error; err != nil {
+			return errUCIPublicationRejected
+		}
+		current, err := loadUCICurrentViewForCheckout(ctx, tx, checkout)
+		if err != nil {
+			return err
+		}
+		if !matchesUCIPublicationParent(input.ExpectedParent, current, input.Scope, input.ProfileID) {
+			return errUCIPublicationRejected
+		}
+		now, err := uciDatabaseClock(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if checkout.LeaseExpiresAt != nil && checkout.LeaseExpiresAt.After(now) {
+			return errUCIPublicationLeaseStale
+		}
+		nextEpoch := checkout.LeaseEpoch + 1
+		leaseExpiry := now.Add(publisher.limits.LeaseTTL)
+		if err := tx.WithContext(ctx).Model(&UCICheckout{}).Where("checkout_id = ?", checkout.CheckoutID).Updates(map[string]any{
+			"lease_epoch":      nextEpoch,
+			"owner_instance":   caller.OwnerInstance,
+			"lease_expires_at": leaseExpiry,
+			"updated_at":       now,
+		}).Error; err != nil {
+			return fmt.Errorf("uci publication acquire checkout lease: %w", err)
+		}
+		expectedParentID := uciPublicationParentID(input.ExpectedParent)
+		checkoutID := input.Scope.CheckoutID
+		incarnationID := input.Scope.IncarnationID
+		profileID := input.ProfileID
+		requestedBy := caller.Principal
+		publicationKey := input.BuildKey
+		manifestMode := string(input.Mode)
+		leaseOwner := caller.OwnerInstance
+		epoch := nextEpoch
+		newJob := UCIJob{
+			JobID:                uuid.NewString(),
+			SourceID:             input.Scope.SourceID,
+			CheckoutID:           &checkoutID,
+			JobKind:              string(input.JobKind),
+			InputFingerprint:     bindingDigest,
+			OwnerEpoch:           &epoch,
+			State:                UCIJobRunning,
+			Attempt:              1,
+			LeaseOwner:           &leaseOwner,
+			LeaseExpiry:          &leaseExpiry,
+			Counts:               `{}`,
+			PublicationKey:       &publicationKey,
+			RequestedBy:          &requestedBy,
+			IncarnationID:        &incarnationID,
+			ProfileID:            &profileID,
+			ExpectedParentViewID: expectedParentID,
+			ManifestMode:         &manifestMode,
+			CreatedAt:            now,
+			UpdatedAt:            now,
+		}
+		if err := tx.WithContext(ctx).Create(&newJob).Error; err != nil {
+			return fmt.Errorf("uci publication create build: %w", err)
+		}
+		result = ucidomain.IndexBeginResult{
+			Build: ucidomain.IndexBuildRef{
+				BuildID:       newJob.JobID,
+				Scope:         input.Scope,
+				OwnerInstance: caller.OwnerInstance,
+				LeaseEpoch:    nextEpoch,
+			},
+			LeaseExpiresAt: leaseExpiry,
+		}
+		return nil
+	})
+	if err != nil {
+		return ucidomain.IndexBeginResult{}, err
+	}
+	return result, nil
+}
+
+func (publisher *uciPublisher) authorize(ctx context.Context, caller ucidomain.IndexCaller, scope ucidomain.IndexScope) error {
+	if publisher.authorizer == nil {
+		return errUCIPublicationRejected
+	}
+	if err := publisher.authorizer.AuthorizeContext(ctx, ucidomain.ContextAccess{
+		AuthRealm:  caller.AuthRealm,
+		Principal:  caller.Principal,
+		SourceID:   scope.SourceID,
+		CheckoutID: scope.CheckoutID,
+	}); err != nil {
+		return errUCIPublicationRejected
+	}
+	return nil
+}
+
+func validUCIPublicationLimits(limits ucidomain.IndexPublicationLimits) bool {
+	return limits.LeaseTTL > 0 && limits.MaxPartBytes > 0 && limits.MaxParts > 0 &&
+		limits.MaxBuildBytes >= limits.MaxPartBytes && limits.MaxManifestEntries > 0 &&
+		limits.MaxEdges > 0 && limits.MaxArtifactBytes > 0
+}
+
+func validUCIPublicationCaller(caller ucidomain.IndexCaller) bool {
+	return validUCIPublicationText(caller.AuthRealm) && validUCIPublicationText(caller.Principal) && validUCIPublicationText(caller.OwnerInstance)
+}
+
+func validUCIPublicationBegin(input ucidomain.IndexBeginInput) bool {
+	if !validUCIPublicationText(input.BuildKey) || !validUCIPublicationScope(input.Scope) || validateUCIUUID("profile_id", input.ProfileID) != nil {
+		return false
+	}
+	if input.Mode != ucidomain.IndexManifestFull && input.Mode != ucidomain.IndexManifestDelta {
+		return false
+	}
+	if input.JobKind != ucidomain.IndexJobInitial && input.JobKind != ucidomain.IndexJobReconcile && input.JobKind != ucidomain.IndexJobRecovery {
+		return false
+	}
+	return validUCIPublicationParent(input.ExpectedParent, input.Scope, input.ProfileID)
+}
+
+func validUCIPublicationScope(scope ucidomain.IndexScope) bool {
+	return validateUCIUUID("source_id", scope.SourceID) == nil && validateUCIUUID("checkout_id", scope.CheckoutID) == nil && validateUCIUUID("incarnation_id", scope.IncarnationID) == nil
+}
+
+func validUCIPublicationParent(parent *ucidomain.ContextRef, scope ucidomain.IndexScope, profileID string) bool {
+	if parent == nil {
+		return true
+	}
+	return validateUCIUUID("parent_source_id", parent.SourceID) == nil &&
+		validateUCIUUID("parent_checkout_id", parent.CheckoutID) == nil &&
+		validateUCIUUID("parent_view_id", parent.ViewID) == nil &&
+		validateUCIUUID("parent_profile_id", parent.AnalysisProfileID) == nil &&
+		parent.Generation > 0 && parent.SourceID == scope.SourceID && parent.CheckoutID == scope.CheckoutID &&
+		(profileID == "" || parent.AnalysisProfileID == profileID)
+}
+
+func validUCIPublicationText(value string) bool {
+	return validateUCIRequiredText("publication_value", value) == nil
+}
+
+func lockUCIPublicationCheckout(ctx context.Context, tx *gorm.DB, scope ucidomain.IndexScope) (*UCICheckout, error) {
+	var checkout UCICheckout
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("checkout_id = ? AND source_id = ?", scope.CheckoutID, scope.SourceID).First(&checkout).Error; err != nil {
+		return nil, errUCIPublicationRejected
+	}
+	if checkout.IncarnationID != scope.IncarnationID || checkout.Kind != UCICheckoutWorkingTree {
+		return nil, errUCIPublicationRejected
+	}
+	return &checkout, nil
+}
+
+func lockUCIPublicationJobByKey(ctx context.Context, tx *gorm.DB, scope ucidomain.IndexScope, key string) (*UCIJob, bool, error) {
+	var job UCIJob
+	err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+		"source_id = ? AND checkout_id = ? AND publication_key = ?", scope.SourceID, scope.CheckoutID, key,
+	).First(&job).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("uci publication lock build by key: %w", err)
+	}
+	return &job, true, nil
+}
+
+func loadUCICurrentViewForCheckout(ctx context.Context, tx *gorm.DB, checkout *UCICheckout) (*UCIView, error) {
+	if checkout.CurrentViewID == nil {
+		return nil, nil
+	}
+	var view UCIView
+	if err := tx.WithContext(ctx).Where("view_id = ?", *checkout.CurrentViewID).First(&view).Error; err != nil {
+		return nil, fmt.Errorf("uci publication load current view: %w", err)
+	}
+	return &view, nil
+}
+
+func matchesUCIPublicationParent(parent *ucidomain.ContextRef, current *UCIView, scope ucidomain.IndexScope, profileID string) bool {
+	if parent == nil {
+		return current == nil
+	}
+	if current == nil || !validUCIPublicationParent(parent, scope, profileID) {
+		return false
+	}
+	return current.ViewID == parent.ViewID && current.SourceID == parent.SourceID && current.CheckoutID == parent.CheckoutID &&
+		current.ProfileID == parent.AnalysisProfileID && current.Generation == parent.Generation && current.IncarnationID == scope.IncarnationID
+}
+
+func uciPublicationParentID(parent *ucidomain.ContextRef) *string {
+	if parent == nil {
+		return nil
+	}
+	value := parent.ViewID
+	return &value
+}
+
+func sameUCIPublicationBegin(job UCIJob, caller ucidomain.IndexCaller, input ucidomain.IndexBeginInput, bindingDigest string) bool {
+	return job.PublicationKey != nil && *job.PublicationKey == input.BuildKey &&
+		job.RequestedBy != nil && *job.RequestedBy == caller.Principal &&
+		job.CheckoutID != nil && *job.CheckoutID == input.Scope.CheckoutID && job.SourceID == input.Scope.SourceID &&
+		job.IncarnationID != nil && *job.IncarnationID == input.Scope.IncarnationID &&
+		job.ProfileID != nil && *job.ProfileID == input.ProfileID && job.JobKind == string(input.JobKind) &&
+		job.ManifestMode != nil && *job.ManifestMode == string(input.Mode) && job.InputFingerprint == bindingDigest &&
+		sameUCIOptionalString(job.ExpectedParentViewID, uciPublicationParentID(input.ExpectedParent))
+}
+
+func indexBuildRefFromJob(job UCIJob, scope ucidomain.IndexScope) (ucidomain.IndexBuildRef, error) {
+	if job.OwnerEpoch == nil || job.LeaseOwner == nil || !validUCIPublicationScope(scope) {
+		return ucidomain.IndexBuildRef{}, errUCIPublicationRejected
+	}
+	return ucidomain.IndexBuildRef{
+		BuildID:       job.JobID,
+		Scope:         scope,
+		OwnerInstance: *job.LeaseOwner,
+		LeaseEpoch:    *job.OwnerEpoch,
+	}, nil
+}
+
+func loadUCIPublishedViewForJob(ctx context.Context, tx *gorm.DB, job UCIJob) (ucidomain.IndexPublishedView, error) {
+	if job.ResultViewID == nil {
+		return ucidomain.IndexPublishedView{}, errUCIPublicationRejected
+	}
+	var view UCIView
+	if err := tx.WithContext(ctx).Where("view_id = ?", *job.ResultViewID).First(&view).Error; err != nil {
+		return ucidomain.IndexPublishedView{}, fmt.Errorf("uci publication load durable result: %w", err)
+	}
+	if view.PublishedAt == nil {
+		return ucidomain.IndexPublishedView{}, errUCIPublicationRejected
+	}
+	return ucidomain.IndexPublishedView{
+		BuildID:        job.JobID,
+		Context:        uciContextRefFromView(view),
+		ManifestDigest: ucidomain.IndexDigest(view.ManifestDigest),
+		AcceptedFSSeq:  view.ObservedFSSeq,
+		PublishedAt:    view.PublishedAt.UTC(),
+	}, nil
+}
+
+func uciContextRefFromView(view UCIView) ucidomain.ContextRef {
+	return ucidomain.ContextRef{
+		SourceID:          view.SourceID,
+		CheckoutID:        view.CheckoutID,
+		ViewID:            view.ViewID,
+		AnalysisProfileID: view.ProfileID,
+		Generation:        view.Generation,
+	}
+}
+
+func uciDatabaseClock(ctx context.Context, db *gorm.DB) (time.Time, error) {
+	var now time.Time
+	if err := db.WithContext(ctx).Raw("SELECT clock_timestamp()").Scan(&now).Error; err != nil {
+		return time.Time{}, fmt.Errorf("uci publication database clock: %w", err)
+	}
+	return now.UTC(), nil
+}
+
+func canonicalUCIPublicationBeginDigest(caller ucidomain.IndexCaller, input ucidomain.IndexBeginInput) (string, error) {
+	return canonicalUCIPublicationDigest("begin", struct {
+		Caller         ucidomain.IndexCaller       `json:"caller"`
+		BuildKey       string                      `json:"build_key"`
+		Scope          ucidomain.IndexScope        `json:"scope"`
+		ProfileID      string                      `json:"profile_id"`
+		ExpectedParent *ucidomain.ContextRef       `json:"expected_parent"`
+		Mode           ucidomain.IndexManifestMode `json:"mode"`
+		JobKind        ucidomain.IndexJobKind      `json:"job_kind"`
+	}{
+		Caller:         caller,
+		BuildKey:       input.BuildKey,
+		Scope:          input.Scope,
+		ProfileID:      input.ProfileID,
+		ExpectedParent: input.ExpectedParent,
+		Mode:           input.Mode,
+		JobKind:        input.JobKind,
+	})
+}
+
+func canonicalUCIPublicationDigest(kind string, value any) (string, error) {
+	encoded, err := json.Marshal(struct {
+		Kind    string `json:"kind"`
+		Value   any    `json:"value"`
+		Version int    `json:"version"`
+	}{Kind: kind, Value: value, Version: 1})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(encoded)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+func (publisher *uciPublisher) Stage(ctx context.Context, caller ucidomain.IndexCaller, input ucidomain.IndexStageInput) (ucidomain.IndexPartAck, error) {
+	if publisher == nil || ctx == nil || !validUCIPublicationCaller(caller) || !validUCIPublicationBuild(input.Build) {
+		return ucidomain.IndexPartAck{}, errUCIPublicationRejected
+	}
+	if err := publisher.authorize(ctx, caller, input.Build.Scope); err != nil {
+		return ucidomain.IndexPartAck{}, errUCIPublicationRejected
+	}
+	computedDigest, err := ucidomain.DigestIndexPart(input.Part)
+	if err != nil || computedDigest != input.Digest {
+		return ucidomain.IndexPartAck{}, errUCIPublicationRejected
+	}
+	payload, err := json.Marshal(input.Part)
+	if err != nil || int64(len(payload)) > publisher.limits.MaxPartBytes {
+		return ucidomain.IndexPartAck{}, errUCIPublicationRejected
+	}
+
+	var preflight UCIJob
+	if err := publisher.store.db.WithContext(ctx).Where(
+		"job_id = ? AND source_id = ? AND checkout_id = ?", input.Build.BuildID, input.Build.Scope.SourceID, input.Build.Scope.CheckoutID,
+	).First(&preflight).Error; err != nil || preflight.ProfileID == nil {
+		return ucidomain.IndexPartAck{}, errUCIPublicationRejected
+	}
+	if err := publisher.validateStagedPart(ctx, input.Build.Scope, *preflight.ProfileID, input.Part); err != nil {
+		return ucidomain.IndexPartAck{}, errUCIPublicationRejected
+	}
+
+	var acknowledgement ucidomain.IndexPartAck
+	err = publisher.store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		checkout, err := lockUCIPublicationCheckout(ctx, tx, input.Build.Scope)
+		if err != nil {
+			return err
+		}
+		job, err := lockUCIPublicationJobByID(ctx, tx, input.Build.BuildID)
+		if err != nil {
+			return err
+		}
+		if !matchesUCIPublicationBuild(*job, checkout, caller, input.Build) {
+			return errUCIPublicationRejected
+		}
+		var existing UCIIndexBuildPart
+		err = tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+			"build_id = ? AND sequence = ?", input.Build.BuildID, input.Sequence,
+		).First(&existing).Error
+		if err == nil {
+			if existing.PartDigest != string(input.Digest) {
+				return errUCIPublicationIdempotencyMismatch
+			}
+			acknowledgement = ucidomain.IndexPartAck{BuildID: input.Build.BuildID, Sequence: input.Sequence, Digest: input.Digest}
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("uci publication load staged part: %w", err)
+		}
+		now, err := uciDatabaseClock(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if !activeUCIPublicationLease(*job, checkout, caller, input.Build, now) {
+			return errUCIPublicationLeaseStale
+		}
+		var partCount int64
+		if err := tx.WithContext(ctx).Model(&UCIIndexBuildPart{}).Where("build_id = ?", input.Build.BuildID).Count(&partCount).Error; err != nil {
+			return fmt.Errorf("uci publication count staged parts: %w", err)
+		}
+		if partCount >= int64(publisher.limits.MaxParts) || input.Sequence != uint32(partCount) {
+			return errUCIPublicationBuildIncomplete
+		}
+		var totalBytes int64
+		if err := tx.WithContext(ctx).Model(&UCIIndexBuildPart{}).Where("build_id = ?", input.Build.BuildID).Select("COALESCE(SUM(payload_bytes), 0)").Scan(&totalBytes).Error; err != nil {
+			return fmt.Errorf("uci publication total staged bytes: %w", err)
+		}
+		if totalBytes > publisher.limits.MaxBuildBytes-int64(len(payload)) {
+			return errUCIPublicationBuildIncomplete
+		}
+		row := UCIIndexBuildPart{
+			BuildID:      input.Build.BuildID,
+			Sequence:     input.Sequence,
+			PartDigest:   string(input.Digest),
+			Payload:      string(payload),
+			PayloadBytes: int64(len(payload)),
+			CreatedAt:    now,
+		}
+		if err := tx.WithContext(ctx).Create(&row).Error; err != nil {
+			return fmt.Errorf("uci publication store staged part: %w", err)
+		}
+		acknowledgement = ucidomain.IndexPartAck{BuildID: input.Build.BuildID, Sequence: input.Sequence, Digest: input.Digest}
+		return nil
+	})
+	if err != nil {
+		return ucidomain.IndexPartAck{}, err
+	}
+	return acknowledgement, nil
+}
+
+func validUCIPublicationBuild(build ucidomain.IndexBuildRef) bool {
+	return validateUCIUUID("build_id", build.BuildID) == nil && validUCIPublicationScope(build.Scope) &&
+		validUCIPublicationText(build.OwnerInstance) && build.LeaseEpoch > 0
+}
+
+func lockUCIPublicationJobByID(ctx context.Context, tx *gorm.DB, buildID string) (*UCIJob, error) {
+	var job UCIJob
+	if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("job_id = ?", buildID).First(&job).Error; err != nil {
+		return nil, errUCIPublicationRejected
+	}
+	return &job, nil
+}
+
+func matchesUCIPublicationBuild(job UCIJob, checkout *UCICheckout, caller ucidomain.IndexCaller, build ucidomain.IndexBuildRef) bool {
+	return job.SourceID == build.Scope.SourceID && job.CheckoutID != nil && *job.CheckoutID == build.Scope.CheckoutID &&
+		job.IncarnationID != nil && *job.IncarnationID == build.Scope.IncarnationID &&
+		job.OwnerEpoch != nil && *job.OwnerEpoch == build.LeaseEpoch && job.LeaseOwner != nil &&
+		*job.LeaseOwner == build.OwnerInstance && caller.OwnerInstance == build.OwnerInstance && checkout.LeaseEpoch == build.LeaseEpoch
+}
+
+func activeUCIPublicationLease(job UCIJob, checkout *UCICheckout, caller ucidomain.IndexCaller, build ucidomain.IndexBuildRef, now time.Time) bool {
+	return job.State == UCIJobRunning && job.LeaseExpiry != nil && job.LeaseExpiry.After(now) &&
+		checkout.LeaseExpiresAt != nil && checkout.LeaseExpiresAt.After(now) &&
+		matchesUCIPublicationBuild(job, checkout, caller, build)
+}
+
+func (publisher *uciPublisher) validateStagedPart(ctx context.Context, scope ucidomain.IndexScope, profileID string, part ucidomain.IndexPart) error {
+	proofs := make(map[string]ucidomain.IndexArtifactProof, len(part.Artifacts))
+	for _, expected := range part.Artifacts {
+		actual, err := publisher.store.DescribeIndexArtifact(ctx, scope.SourceID, expected.ArtifactID)
+		if err != nil || !sameUCIIndexArtifactProof(actual, expected) {
+			return errUCIPublicationRejected
+		}
+		if err := publisher.validateArtifactProfile(ctx, scope.SourceID, expected.ArtifactID, profileID); err != nil {
+			return err
+		}
+		if err := publisher.validateArtifactSize(ctx, scope.SourceID, expected.ArtifactID); err != nil {
+			return err
+		}
+		proofs[expected.ArtifactID] = expected
+	}
+	for _, replacement := range part.EdgeReplacements {
+		for _, edge := range replacement.Edges {
+			if err := publisher.validateStagedEdge(ctx, scope.SourceID, profileID, edge); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func sameUCIIndexArtifactProof(left, right ucidomain.IndexArtifactProof) bool {
+	return left.ArtifactID == right.ArtifactID && left.ContentDigest == right.ContentDigest && left.FactsDigest == right.FactsDigest &&
+		left.DefinitionCount == right.DefinitionCount && left.ReferenceSiteCount == right.ReferenceSiteCount && left.ChunkCount == right.ChunkCount
+}
+
+func (publisher *uciPublisher) validateArtifactProfile(ctx context.Context, sourceID, artifactID, profileID string) error {
+	var row UCIParseArtifact
+	if err := publisher.store.db.WithContext(ctx).Where("source_id = ? AND artifact_id = ?", sourceID, artifactID).First(&row).Error; err != nil {
+		return errUCIPublicationRejected
+	}
+	var profile UCIAnalysisProfile
+	if err := publisher.store.db.WithContext(ctx).Where("profile_id = ?", profileID).First(&profile).Error; err != nil {
+		return errUCIPublicationRejected
+	}
+	if row.ExtractionProfileDigest != profile.ParserBundleDigest {
+		return errUCIPublicationRejected
+	}
+	return nil
+}
+
+func (publisher *uciPublisher) validateArtifactSize(ctx context.Context, sourceID, artifactID string) error {
+	var row struct {
+		ByteLength int64 `gorm:"column:byte_length"`
+	}
+	if err := publisher.store.db.WithContext(ctx).Raw(`
+		SELECT blob.byte_length
+		FROM ci_parse_artifacts AS artifact
+		JOIN ci_blobs AS blob ON blob.source_id = artifact.source_id AND blob.blob_id = artifact.blob_id
+		WHERE artifact.source_id = ? AND artifact.artifact_id = ?
+	`, sourceID, artifactID).Scan(&row).Error; err != nil || row.ByteLength > publisher.limits.MaxArtifactBytes {
+		return errUCIPublicationRejected
+	}
+	return nil
+}
+
+func (publisher *uciPublisher) validateStagedEdge(ctx context.Context, sourceID, profileID string, edge ucidomain.IndexEdge) error {
+	if err := publisher.validateArtifactProfile(ctx, sourceID, edge.SourceArtifactID, profileID); err != nil {
+		return err
+	}
+	if edge.SourceSymbolKey != nil {
+		if err := publisher.validateArtifactSymbol(ctx, edge.SourceArtifactID, *edge.SourceSymbolKey); err != nil {
+			return err
+		}
+	}
+	var source struct {
+		ByteLength int64 `gorm:"column:byte_length"`
+	}
+	if err := publisher.store.db.WithContext(ctx).Raw(`
+		SELECT blob.byte_length
+		FROM ci_parse_artifacts AS artifact
+		JOIN ci_blobs AS blob ON blob.source_id = artifact.source_id AND blob.blob_id = artifact.blob_id
+		WHERE artifact.source_id = ? AND artifact.artifact_id = ?
+	`, sourceID, edge.SourceArtifactID).Scan(&source).Error; err != nil || edge.Evidence.Span.ByteEnd > source.ByteLength {
+		return errUCIPublicationRejected
+	}
+	if edge.Target != nil {
+		if err := publisher.validateArtifactProfile(ctx, sourceID, edge.Target.ArtifactID, profileID); err != nil {
+			return err
+		}
+		if edge.Target.SymbolKey != nil {
+			if err := publisher.validateArtifactSymbol(ctx, edge.Target.ArtifactID, *edge.Target.SymbolKey); err != nil {
+				return err
+			}
+		}
+	}
+	if edge.Evidence.ReferenceSiteID != nil {
+		var reference UCIReferenceSite
+		if err := publisher.store.db.WithContext(ctx).Where("reference_site_id = ? AND artifact_id = ?", *edge.Evidence.ReferenceSiteID, edge.SourceArtifactID).First(&reference).Error; err != nil {
+			return errUCIPublicationRejected
+		}
+		if reference.Relation != string(edge.Relation) || !sameUCIOptionalString(reference.OwnerSymbolKey, edge.SourceSymbolKey) {
+			return errUCIPublicationRejected
+		}
+	}
+	return nil
+}
+
+func (publisher *uciPublisher) validateArtifactSymbol(ctx context.Context, artifactID, symbolKey string) error {
+	var count int64
+	if err := publisher.store.db.WithContext(ctx).Model(&UCIDefinition{}).
+		Where("artifact_id = ? AND local_symbol_key = ?", artifactID, symbolKey).Count(&count).Error; err != nil || count != 1 {
+		return errUCIPublicationRejected
+	}
+	return nil
+}
+
+func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.IndexCaller, input ucidomain.IndexFinalizeInput) (ucidomain.IndexPublishedView, error) {
+	if publisher == nil || ctx == nil || !validUCIPublicationCaller(caller) || !validUCIPublicationBuild(input.Build) ||
+		!validUCIPublicationManifest(input.Manifest) || !validUCIPublicationParent(input.ExpectedParent, input.Build.Scope, "") {
+		return ucidomain.IndexPublishedView{}, errUCIPublicationRejected
+	}
+	if err := publisher.authorize(ctx, caller, input.Build.Scope); err != nil {
+		return ucidomain.IndexPublishedView{}, errUCIPublicationRejected
+	}
+	finalizeDigest, err := canonicalUCIPublicationFinalizeDigest(caller, input)
+	if err != nil {
+		return ucidomain.IndexPublishedView{}, errUCIPublicationRejected
+	}
+
+	var preflight UCIJob
+	if err := publisher.store.db.WithContext(ctx).Where(
+		"job_id = ? AND source_id = ? AND checkout_id = ?", input.Build.BuildID, input.Build.Scope.SourceID, input.Build.Scope.CheckoutID,
+	).First(&preflight).Error; err != nil {
+		return ucidomain.IndexPublishedView{}, errUCIPublicationRejected
+	}
+	if preflight.ResultViewID != nil {
+		if preflight.FinalizeBindingDigest == nil || *preflight.FinalizeBindingDigest != finalizeDigest {
+			return ucidomain.IndexPublishedView{}, errUCIPublicationIdempotencyMismatch
+		}
+		return publisher.loadPublishedResult(ctx, preflight)
+	}
+	if preflight.ProfileID == nil || preflight.ManifestMode == nil || !sameUCIOptionalString(preflight.ExpectedParentViewID, uciPublicationParentID(input.ExpectedParent)) {
+		return ucidomain.IndexPublishedView{}, errUCIPublicationRejected
+	}
+	candidate, err := publisher.prepareUCIPublicationCandidate(ctx, preflight, input)
+	if err != nil {
+		return ucidomain.IndexPublishedView{}, err
+	}
+
+	var published ucidomain.IndexPublishedView
+	err = publisher.store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		checkout, err := lockUCIPublicationCheckout(ctx, tx, input.Build.Scope)
+		if err != nil {
+			return err
+		}
+		job, err := lockUCIPublicationJobByID(ctx, tx, input.Build.BuildID)
+		if err != nil {
+			return err
+		}
+		// A durable result is replayed before evaluating lease freshness so a lost ACK cannot rewind current.
+		if job.ResultViewID != nil {
+			if job.FinalizeBindingDigest == nil || *job.FinalizeBindingDigest != finalizeDigest {
+				return errUCIPublicationIdempotencyMismatch
+			}
+			published, err = loadUCIPublishedViewForJob(ctx, tx, *job)
+			return err
+		}
+		if !matchesUCIPublicationBuild(*job, checkout, caller, input.Build) ||
+			!sameUCIOptionalString(job.ExpectedParentViewID, uciPublicationParentID(input.ExpectedParent)) ||
+			job.ProfileID == nil {
+			return errUCIPublicationRejected
+		}
+		current, err := loadUCICurrentViewForCheckout(ctx, tx, checkout)
+		if err != nil {
+			return err
+		}
+		if !matchesUCIPublicationParent(input.ExpectedParent, current, input.Build.Scope, *job.ProfileID) {
+			return errUCIPublicationRejected
+		}
+		now, err := uciDatabaseClock(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if !activeUCIPublicationLease(*job, checkout, caller, input.Build, now) {
+			return errUCIPublicationLeaseStale
+		}
+		nextGeneration := int64(1)
+		if current != nil {
+			nextGeneration = current.Generation + 1
+		}
+		if err := publisher.sealUCIPublicationArtifacts(ctx, tx, input.Build.Scope.SourceID, candidate.ArtifactProofs, now); err != nil {
+			return err
+		}
+		if err := applyUCIPublicationMemberships(ctx, tx, input.Build.Scope, nextGeneration, candidate.CurrentMemberships, candidate.Memberships); err != nil {
+			return err
+		}
+		if err := applyUCIPublicationEdges(ctx, tx, input.Build.Scope, nextGeneration, candidate.CurrentEdges, candidate.EdgeReplacements); err != nil {
+			return err
+		}
+		coverageJSON, err := marshalUCIPublicationCoverage(input.Manifest.Coverage)
+		if err != nil {
+			return err
+		}
+		publishedAt := now
+		view := UCIView{
+			ViewID:         uuid.NewString(),
+			CheckoutID:     input.Build.Scope.CheckoutID,
+			SourceID:       input.Build.Scope.SourceID,
+			IncarnationID:  input.Build.Scope.IncarnationID,
+			Generation:     nextGeneration,
+			ProfileID:      *job.ProfileID,
+			HeadOID:        input.Manifest.Observation.HeadOID,
+			ObjectFormat:   input.Manifest.Observation.ObjectFormat,
+			RefLabel:       input.Manifest.Observation.RefLabel,
+			Dirty:          input.Manifest.Observation.Dirty,
+			ObservedFSSeq:  input.Manifest.Observation.ObservedFSSeq,
+			ScanStart:      input.Manifest.Observation.ScanStart.UTC(),
+			ScanEnd:        input.Manifest.Observation.ScanEnd.UTC(),
+			ManifestDigest: string(input.Manifest.ManifestDigest),
+			State:          UCIViewPublished,
+			CoverageJSON:   coverageJSON,
+			PublishedAt:    &publishedAt,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		}
+		if err := tx.WithContext(ctx).Create(&view).Error; err != nil {
+			return fmt.Errorf("uci publication create view: %w", err)
+		}
+		if err := tx.WithContext(ctx).Model(&UCICheckout{}).Where("checkout_id = ?", checkout.CheckoutID).Updates(map[string]any{
+			"current_view_id":  view.ViewID,
+			"owner_instance":   nil,
+			"lease_expires_at": nil,
+			"updated_at":       now,
+		}).Error; err != nil {
+			return fmt.Errorf("uci publication switch current pointer: %w", err)
+		}
+		if current != nil {
+			if err := tx.WithContext(ctx).Model(&UCIView{}).Where("view_id = ?", current.ViewID).Updates(map[string]any{
+				"state":      UCIViewSuperseded,
+				"updated_at": now,
+			}).Error; err != nil {
+				return fmt.Errorf("uci publication supersede parent: %w", err)
+			}
+		}
+		sealedManifest, err := json.Marshal(input.Manifest)
+		if err != nil {
+			return err
+		}
+		resultViewID := view.ViewID
+		if err := tx.WithContext(ctx).Model(&UCIJob{}).Where("job_id = ?", job.JobID).Updates(map[string]any{
+			"state":                   UCIJobSucceeded,
+			"result_view_id":          resultViewID,
+			"sealed_manifest":         string(sealedManifest),
+			"finalize_binding_digest": finalizeDigest,
+			"updated_at":              now,
+		}).Error; err != nil {
+			return fmt.Errorf("uci publication store result: %w", err)
+		}
+		published = ucidomain.IndexPublishedView{
+			BuildID:        job.JobID,
+			Context:        uciContextRefFromView(view),
+			ManifestDigest: input.Manifest.ManifestDigest,
+			AcceptedFSSeq:  input.Manifest.Observation.ObservedFSSeq,
+			PublishedAt:    publishedAt,
+		}
+		return nil
+	})
+	if err != nil {
+		return ucidomain.IndexPublishedView{}, err
+	}
+	return published, nil
+}
+
+func (publisher *uciPublisher) loadPublishedResult(ctx context.Context, job UCIJob) (ucidomain.IndexPublishedView, error) {
+	var published ucidomain.IndexPublishedView
+	err := publisher.store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		published, err = loadUCIPublishedViewForJob(ctx, tx, job)
+		return err
+	})
+	if err != nil {
+		return ucidomain.IndexPublishedView{}, err
+	}
+	return published, nil
+}
+
+type uciPublicationCandidate struct {
+	ArtifactProofs     map[string]ucidomain.IndexArtifactProof
+	CurrentMemberships map[string]UCIMembership
+	Memberships        map[string]ucidomain.IndexMembership
+	CurrentEdges       map[string][]UCIResolvedEdge
+	EdgeReplacements   map[string]ucidomain.IndexEdgeReplacement
+	DeletedPaths       map[string]struct{}
+}
+
+func validUCIPublicationManifest(manifest ucidomain.IndexManifestCompletion) bool {
+	if validateUCIDigest("parts_digest", string(manifest.PartsDigest)) != nil ||
+		validateUCIDigest("manifest_digest", string(manifest.ManifestDigest)) != nil ||
+		validateUCIDigest("edges_digest", string(manifest.EdgesDigest)) != nil ||
+		manifest.ScanOutcome != ucidomain.IndexScanComplete || !manifest.CensusComplete ||
+		manifest.Observation.ObservedFSSeq < 0 || manifest.Observation.ScanStart.IsZero() || manifest.Observation.ScanEnd.IsZero() ||
+		manifest.Observation.ScanEnd.Before(manifest.Observation.ScanStart) {
+		return false
+	}
+	if manifest.Observation.HeadOID != nil {
+		if manifest.Observation.ObjectFormat == nil || (*manifest.Observation.ObjectFormat != "sha1" && *manifest.Observation.ObjectFormat != "sha256") {
+			return false
+		}
+		length := 40
+		if *manifest.Observation.ObjectFormat == "sha256" {
+			length = 64
+		}
+		if !isUCILowerHex(*manifest.Observation.HeadOID, length) {
+			return false
+		}
+	}
+	if manifest.Observation.RefLabel != nil && !validUCIPublicationText(*manifest.Observation.RefLabel) {
+		return false
+	}
+	return validUCIPublicationCoverage(manifest.Coverage)
+}
+
+func validUCIPublicationCoverage(coverage ucidomain.IndexCoverage) bool {
+	valid := func(value ucidomain.IndexCoverageState) bool {
+		return value == ucidomain.IndexCoverageComplete || value == ucidomain.IndexCoveragePartial || value == ucidomain.IndexCoverageUnavailable
+	}
+	return valid(coverage.Structural) && valid(coverage.Lexical) && valid(coverage.Vector)
+}
+
+func canonicalUCIPublicationFinalizeDigest(caller ucidomain.IndexCaller, input ucidomain.IndexFinalizeInput) (string, error) {
+	return canonicalUCIPublicationDigest("finalize", struct {
+		Caller         ucidomain.IndexCaller             `json:"caller"`
+		Build          ucidomain.IndexBuildRef           `json:"build"`
+		ExpectedParent *ucidomain.ContextRef             `json:"expected_parent"`
+		Manifest       ucidomain.IndexManifestCompletion `json:"manifest"`
+	}{Caller: caller, Build: input.Build, ExpectedParent: input.ExpectedParent, Manifest: input.Manifest})
+}
+
+func (publisher *uciPublisher) prepareUCIPublicationCandidate(ctx context.Context, job UCIJob, input ucidomain.IndexFinalizeInput) (*uciPublicationCandidate, error) {
+	if job.ProfileID == nil || job.ManifestMode == nil {
+		return nil, errUCIPublicationRejected
+	}
+	parts, acknowledgements, err := loadUCIPublicationParts(ctx, publisher.store.db, job.JobID)
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) != int(input.Manifest.PartCount) || len(parts) > int(publisher.limits.MaxParts) {
+		return nil, errUCIPublicationBuildIncomplete
+	}
+	partsDigest, err := ucidomain.DigestIndexParts(acknowledgements)
+	if err != nil || partsDigest != input.Manifest.PartsDigest {
+		return nil, errUCIPublicationBuildIncomplete
+	}
+	currentMemberships, currentEdges, err := loadUCIPublicationCurrentProjection(ctx, publisher.store.db, input.Build.Scope)
+	if err != nil {
+		return nil, err
+	}
+	mode := ucidomain.IndexManifestMode(*job.ManifestMode)
+	if mode != ucidomain.IndexManifestFull && mode != ucidomain.IndexManifestDelta {
+		return nil, errUCIPublicationRejected
+	}
+	candidate := &uciPublicationCandidate{
+		ArtifactProofs:     make(map[string]ucidomain.IndexArtifactProof),
+		CurrentMemberships: currentMemberships,
+		Memberships:        make(map[string]ucidomain.IndexMembership),
+		CurrentEdges:       currentEdges,
+		EdgeReplacements:   make(map[string]ucidomain.IndexEdgeReplacement),
+		DeletedPaths:       make(map[string]struct{}),
+	}
+	if mode == ucidomain.IndexManifestDelta {
+		for path, membership := range currentMemberships {
+			candidate.Memberships[path] = indexMembershipFromRow(membership)
+		}
+		for sourcePath, rows := range currentEdges {
+			replacement, err := indexEdgeReplacementFromRows(sourcePath, rows)
+			if err != nil {
+				return nil, errUCIPublicationRejected
+			}
+			candidate.EdgeReplacements[sourcePath] = replacement
+		}
+	}
+
+	seenMemberships := make(map[string]struct{})
+	seenDeletions := make(map[string]struct{})
+	seenReplacements := make(map[string]struct{})
+	for _, part := range parts {
+		if err := publisher.validateStagedPart(ctx, input.Build.Scope, *job.ProfileID, part); err != nil {
+			return nil, err
+		}
+		for _, proof := range part.Artifacts {
+			if existing, exists := candidate.ArtifactProofs[proof.ArtifactID]; exists && !sameUCIIndexArtifactProof(existing, proof) {
+				return nil, errUCIPublicationRejected
+			}
+			candidate.ArtifactProofs[proof.ArtifactID] = proof
+		}
+		if mode == ucidomain.IndexManifestFull && len(part.Deletions) != 0 {
+			return nil, errUCIPublicationRejected
+		}
+		for _, membership := range part.Memberships {
+			if _, exists := seenMemberships[membership.PathKey]; exists {
+				return nil, errUCIPublicationRejected
+			}
+			if _, deleted := seenDeletions[membership.PathKey]; deleted {
+				return nil, errUCIPublicationRejected
+			}
+			seenMemberships[membership.PathKey] = struct{}{}
+			candidate.Memberships[membership.PathKey] = membership
+		}
+		for _, deletion := range part.Deletions {
+			if !deletion.ConfirmedMissing {
+				return nil, errUCIPublicationRejected
+			}
+			if _, exists := seenDeletions[deletion.PathKey]; exists {
+				return nil, errUCIPublicationRejected
+			}
+			if _, membership := seenMemberships[deletion.PathKey]; membership {
+				return nil, errUCIPublicationRejected
+			}
+			seenDeletions[deletion.PathKey] = struct{}{}
+			delete(candidate.Memberships, deletion.PathKey)
+			candidate.DeletedPaths[deletion.PathKey] = struct{}{}
+		}
+		for _, replacement := range part.EdgeReplacements {
+			if _, exists := seenReplacements[replacement.SourcePath]; exists {
+				return nil, errUCIPublicationRejected
+			}
+			seenReplacements[replacement.SourcePath] = struct{}{}
+			candidate.EdgeReplacements[replacement.SourcePath] = replacement
+		}
+	}
+	if uint64(len(candidate.Memberships)) > publisher.limits.MaxManifestEntries {
+		return nil, errUCIPublicationBuildIncomplete
+	}
+	if len(candidate.Memberships) == 0 && mode != ucidomain.IndexManifestFull {
+		return nil, errUCIPublicationRejected
+	}
+	if err := validateUCIPublicationCandidateShape(candidate, mode); err != nil {
+		return nil, err
+	}
+	if err := publisher.validateUCIPublicationCandidateArtifacts(ctx, input.Build.Scope, *job.ProfileID, candidate); err != nil {
+		return nil, err
+	}
+	if err := validateUCIPublicationCandidateEdges(candidate); err != nil {
+		return nil, err
+	}
+	memberships := sortedUCIPublicationMemberships(candidate.Memberships)
+	replacements := sortedUCIPublicationReplacements(candidate.EdgeReplacements)
+	manifestDigest, err := ucidomain.DigestIndexManifest(memberships)
+	if err != nil || uint64(len(memberships)) != input.Manifest.EntryCount || manifestDigest != input.Manifest.ManifestDigest {
+		return nil, errUCIPublicationBuildIncomplete
+	}
+	edgeCount := uint64(0)
+	for _, replacement := range replacements {
+		edgeCount += uint64(len(replacement.Edges))
+	}
+	edgesDigest, err := ucidomain.DigestIndexEdges(replacements)
+	if err != nil || edgeCount != input.Manifest.EdgeCount || edgeCount > publisher.limits.MaxEdges || edgesDigest != input.Manifest.EdgesDigest {
+		return nil, errUCIPublicationBuildIncomplete
+	}
+	return candidate, nil
+}
+
+func loadUCIPublicationParts(ctx context.Context, db *gorm.DB, buildID string) ([]ucidomain.IndexPart, []ucidomain.IndexPartAck, error) {
+	var rows []UCIIndexBuildPart
+	if err := db.WithContext(ctx).Where("build_id = ?", buildID).Order("sequence ASC").Find(&rows).Error; err != nil {
+		return nil, nil, fmt.Errorf("uci publication load staged parts: %w", err)
+	}
+	parts := make([]ucidomain.IndexPart, 0, len(rows))
+	acks := make([]ucidomain.IndexPartAck, 0, len(rows))
+	for sequence, row := range rows {
+		if row.Sequence != uint32(sequence) || validateUCIDigest("part_digest", row.PartDigest) != nil {
+			return nil, nil, errUCIPublicationBuildIncomplete
+		}
+		var part ucidomain.IndexPart
+		if err := json.Unmarshal([]byte(row.Payload), &part); err != nil {
+			return nil, nil, errUCIPublicationBuildIncomplete
+		}
+		digest, err := ucidomain.DigestIndexPart(part)
+		if err != nil || string(digest) != row.PartDigest {
+			return nil, nil, errUCIPublicationBuildIncomplete
+		}
+		parts = append(parts, part)
+		acks = append(acks, ucidomain.IndexPartAck{BuildID: buildID, Sequence: row.Sequence, Digest: digest})
+	}
+	return parts, acks, nil
+}
+
+func loadUCIPublicationCurrentProjection(ctx context.Context, db *gorm.DB, scope ucidomain.IndexScope) (map[string]UCIMembership, map[string][]UCIResolvedEdge, error) {
+	var membershipRows []UCIMembership
+	if err := db.WithContext(ctx).Where("source_id = ? AND checkout_id = ? AND valid_to_generation IS NULL", scope.SourceID, scope.CheckoutID).Find(&membershipRows).Error; err != nil {
+		return nil, nil, fmt.Errorf("uci publication load current memberships: %w", err)
+	}
+	memberships := make(map[string]UCIMembership, len(membershipRows))
+	for _, membership := range membershipRows {
+		if _, duplicate := memberships[membership.PathKey]; duplicate {
+			return nil, nil, errUCIPublicationRejected
+		}
+		memberships[membership.PathKey] = membership
+	}
+	var edgeRows []UCIResolvedEdge
+	if err := db.WithContext(ctx).Where("source_id = ? AND checkout_id = ? AND valid_to_generation IS NULL", scope.SourceID, scope.CheckoutID).Order("source_path ASC, edge_key ASC").Find(&edgeRows).Error; err != nil {
+		return nil, nil, fmt.Errorf("uci publication load current edges: %w", err)
+	}
+	edges := make(map[string][]UCIResolvedEdge)
+	for _, edge := range edgeRows {
+		edges[edge.SourcePath] = append(edges[edge.SourcePath], edge)
+	}
+	return memberships, edges, nil
+}
+
+func indexMembershipFromRow(row UCIMembership) ucidomain.IndexMembership {
+	return ucidomain.IndexMembership{
+		PathKey:     row.PathKey,
+		DisplayPath: row.DisplayPath,
+		Mode:        row.Mode,
+		State:       ucidomain.IndexFileState(row.FileState),
+		ArtifactID:  row.ArtifactID,
+	}
+}
+
+func indexEdgeReplacementFromRows(sourcePath string, rows []UCIResolvedEdge) (ucidomain.IndexEdgeReplacement, error) {
+	edges := make([]ucidomain.IndexEdge, 0, len(rows))
+	for _, row := range rows {
+		var evidence ucidomain.IndexEdgeEvidence
+		if err := json.Unmarshal([]byte(row.EvidenceJSON), &evidence); err != nil {
+			return ucidomain.IndexEdgeReplacement{}, err
+		}
+		var target *ucidomain.IndexEdgeTarget
+		if row.TargetPath != nil && row.TargetArtifact != nil {
+			target = &ucidomain.IndexEdgeTarget{PathKey: *row.TargetPath, ArtifactID: *row.TargetArtifact, SymbolKey: row.TargetSymbol}
+		}
+		edges = append(edges, ucidomain.IndexEdge{
+			EdgeKey:          row.EdgeKey,
+			SourceArtifactID: row.SourceArtifact,
+			SourceSymbolKey:  row.SourceSymbol,
+			Target:           target,
+			Relation:         ucidomain.IndexRelation(row.Relation),
+			EvidenceKind:     ucidomain.IndexEvidenceKind(row.EvidenceKind),
+			ResolutionState:  ucidomain.IndexResolutionState(row.ResolutionState),
+			ResolverRevision: row.ResolverRevision,
+			Evidence:         evidence,
+		})
+	}
+	return ucidomain.IndexEdgeReplacement{SourcePath: sourcePath, Edges: edges}, nil
+}
+
+func validateUCIPublicationCandidateShape(candidate *uciPublicationCandidate, mode ucidomain.IndexManifestMode) error {
+	for sourcePath, replacement := range candidate.EdgeReplacements {
+		_, member := candidate.Memberships[sourcePath]
+		_, deleted := candidate.DeletedPaths[sourcePath]
+		if mode == ucidomain.IndexManifestFull && !member {
+			return errUCIPublicationRejected
+		}
+		if mode == ucidomain.IndexManifestDelta && !member && !deleted {
+			return errUCIPublicationRejected
+		}
+		if !member && len(replacement.Edges) != 0 {
+			return errUCIPublicationRejected
+		}
+	}
+	if mode == ucidomain.IndexManifestFull {
+		if len(candidate.EdgeReplacements) != len(candidate.Memberships) {
+			return errUCIPublicationRejected
+		}
+		for path := range candidate.Memberships {
+			if _, exists := candidate.EdgeReplacements[path]; !exists {
+				return errUCIPublicationRejected
+			}
+		}
+	}
+	return nil
+}
+
+func (publisher *uciPublisher) validateUCIPublicationCandidateArtifacts(ctx context.Context, scope ucidomain.IndexScope, profileID string, candidate *uciPublicationCandidate) error {
+	var profile UCIAnalysisProfile
+	if err := publisher.store.db.WithContext(ctx).Where("profile_id = ?", profileID).First(&profile).Error; err != nil {
+		return errUCIPublicationRejected
+	}
+	referenced := make(map[string]struct{})
+	for _, membership := range candidate.Memberships {
+		if membership.State != ucidomain.IndexFilePresent || membership.ArtifactID == nil {
+			continue
+		}
+		artifactID := *membership.ArtifactID
+		if _, exists := referenced[artifactID]; exists {
+			continue
+		}
+		referenced[artifactID] = struct{}{}
+		var artifact UCIParseArtifact
+		if err := publisher.store.db.WithContext(ctx).Where("source_id = ? AND artifact_id = ?", scope.SourceID, artifactID).First(&artifact).Error; err != nil {
+			return errUCIPublicationRejected
+		}
+		if artifact.ExtractionProfileDigest != profile.ParserBundleDigest ||
+			(artifact.Status != UCIParseArtifactComplete && artifact.Status != UCIParseArtifactPartial) {
+			return errUCIPublicationRejected
+		}
+		if artifact.SealedAt == nil {
+			if _, proven := candidate.ArtifactProofs[artifactID]; !proven {
+				return errUCIPublicationRejected
+			}
+		} else if artifact.FactsDigest == nil {
+			return errUCIPublicationRejected
+		}
+		if err := publisher.validateArtifactSize(ctx, scope.SourceID, artifactID); err != nil {
+			return err
+		}
+	}
+	for artifactID := range candidate.ArtifactProofs {
+		if _, used := referenced[artifactID]; !used {
+			return errUCIPublicationRejected
+		}
+	}
+	return nil
+}
+
+func validateUCIPublicationCandidateEdges(candidate *uciPublicationCandidate) error {
+	seenEdgeKeys := make(map[string]struct{})
+	for sourcePath, replacement := range candidate.EdgeReplacements {
+		sourceMembership, sourceExists := candidate.Memberships[sourcePath]
+		for _, edge := range replacement.Edges {
+			if _, duplicate := seenEdgeKeys[edge.EdgeKey]; duplicate {
+				return errUCIPublicationRejected
+			}
+			seenEdgeKeys[edge.EdgeKey] = struct{}{}
+			if !sourceExists || sourceMembership.State != ucidomain.IndexFilePresent || sourceMembership.ArtifactID == nil || *sourceMembership.ArtifactID != edge.SourceArtifactID {
+				return errUCIPublicationRejected
+			}
+			if edge.Target == nil {
+				continue
+			}
+			targetMembership, targetExists := candidate.Memberships[edge.Target.PathKey]
+			if !targetExists || targetMembership.State != ucidomain.IndexFilePresent || targetMembership.ArtifactID == nil || *targetMembership.ArtifactID != edge.Target.ArtifactID {
+				return errUCIPublicationRejected
+			}
+		}
+	}
+	return nil
+}
+
+func sortedUCIPublicationMemberships(memberships map[string]ucidomain.IndexMembership) []ucidomain.IndexMembership {
+	paths := make([]string, 0, len(memberships))
+	for path := range memberships {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	result := make([]ucidomain.IndexMembership, 0, len(paths))
+	for _, path := range paths {
+		result = append(result, memberships[path])
+	}
+	return result
+}
+
+func sortedUCIPublicationReplacements(replacements map[string]ucidomain.IndexEdgeReplacement) []ucidomain.IndexEdgeReplacement {
+	paths := make([]string, 0, len(replacements))
+	for path := range replacements {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	result := make([]ucidomain.IndexEdgeReplacement, 0, len(paths))
+	for _, path := range paths {
+		result = append(result, replacements[path])
+	}
+	return result
+}
+
+func (publisher *uciPublisher) sealUCIPublicationArtifacts(ctx context.Context, tx *gorm.DB, sourceID string, proofs map[string]ucidomain.IndexArtifactProof, now time.Time) error {
+	artifactIDs := make([]string, 0, len(proofs))
+	for artifactID := range proofs {
+		artifactIDs = append(artifactIDs, artifactID)
+	}
+	sort.Strings(artifactIDs)
+	transactionalStore := &UCIProjectionStore{db: tx}
+	for _, artifactID := range artifactIDs {
+		proof := proofs[artifactID]
+		var artifact UCIParseArtifact
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("source_id = ? AND artifact_id = ?", sourceID, artifactID).First(&artifact).Error; err != nil {
+			return errUCIPublicationRejected
+		}
+		if (artifact.SealedAt == nil) != (artifact.FactsDigest == nil) {
+			return errUCIProjectionImmutable
+		}
+		actual, err := transactionalStore.DescribeIndexArtifact(ctx, sourceID, artifactID)
+		if err != nil || !sameUCIIndexArtifactProof(actual, proof) {
+			return errUCIPublicationRejected
+		}
+		if artifact.SealedAt != nil {
+			continue
+		}
+		factsDigest := string(proof.FactsDigest)
+		result := tx.WithContext(ctx).Model(&UCIParseArtifact{}).Where("artifact_id = ? AND sealed_at IS NULL", artifactID).Updates(map[string]any{
+			"facts_digest": factsDigest,
+			"sealed_at":    now,
+		})
+		if result.Error != nil {
+			return fmt.Errorf("uci publication seal artifact: %w", result.Error)
+		}
+		if result.RowsAffected != 1 {
+			return errUCIProjectionImmutable
+		}
+	}
+	return nil
+}
+
+func applyUCIPublicationMemberships(ctx context.Context, tx *gorm.DB, scope ucidomain.IndexScope, generation int64, current map[string]UCIMembership, candidate map[string]ucidomain.IndexMembership) error {
+	paths := unionUCIPublicationPaths(current, candidate)
+	now, err := uciDatabaseClock(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, path := range paths {
+		existing, hasExisting := current[path]
+		next, hasNext := candidate[path]
+		if hasExisting && (!hasNext || !sameUCIPublicationMembership(existing, next)) {
+			if err := tx.WithContext(ctx).Model(&UCIMembership{}).Where("membership_id = ? AND valid_to_generation IS NULL", existing.MembershipID).Updates(map[string]any{
+				"valid_to_generation": generation,
+			}).Error; err != nil {
+				return fmt.Errorf("uci publication close membership: %w", err)
+			}
+		}
+		if hasNext && (!hasExisting || !sameUCIPublicationMembership(existing, next)) {
+			row := UCIMembership{
+				MembershipID:        uuid.NewString(),
+				SourceID:            scope.SourceID,
+				CheckoutID:          scope.CheckoutID,
+				PathKey:             next.PathKey,
+				DisplayPath:         next.DisplayPath,
+				ArtifactID:          cloneUCIOptionalString(next.ArtifactID),
+				FileState:           UCIFileState(next.State),
+				Mode:                next.Mode,
+				ValidFromGeneration: generation,
+				CreatedAt:           now,
+			}
+			if err := tx.WithContext(ctx).Create(&row).Error; err != nil {
+				return fmt.Errorf("uci publication insert membership: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func applyUCIPublicationEdges(ctx context.Context, tx *gorm.DB, scope ucidomain.IndexScope, generation int64, current map[string][]UCIResolvedEdge, candidate map[string]ucidomain.IndexEdgeReplacement) error {
+	paths := make(map[string]struct{}, len(current)+len(candidate))
+	for path := range current {
+		paths[path] = struct{}{}
+	}
+	for path := range candidate {
+		paths[path] = struct{}{}
+	}
+	orderedPaths := make([]string, 0, len(paths))
+	for path := range paths {
+		orderedPaths = append(orderedPaths, path)
+	}
+	sort.Strings(orderedPaths)
+	now, err := uciDatabaseClock(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, path := range orderedPaths {
+		existing := current[path]
+		next, hasNext := candidate[path]
+		unchanged := hasNext && sameUCIPublicationEdgeReplacement(existing, next)
+		if unchanged {
+			continue
+		}
+		if len(existing) != 0 {
+			if err := tx.WithContext(ctx).Model(&UCIResolvedEdge{}).Where(
+				"checkout_id = ? AND source_path = ? AND valid_to_generation IS NULL", scope.CheckoutID, path,
+			).Updates(map[string]any{"valid_to_generation": generation}).Error; err != nil {
+				return fmt.Errorf("uci publication close edges: %w", err)
+			}
+		}
+		if !hasNext {
+			continue
+		}
+		for _, edge := range next.Edges {
+			evidenceJSON, err := json.Marshal(edge.Evidence)
+			if err != nil {
+				return err
+			}
+			var targetPath, targetArtifact, targetSymbol *string
+			if edge.Target != nil {
+				targetPath = cloneUCIOptionalString(&edge.Target.PathKey)
+				targetArtifact = cloneUCIOptionalString(&edge.Target.ArtifactID)
+				targetSymbol = cloneUCIOptionalString(edge.Target.SymbolKey)
+			}
+			row := UCIResolvedEdge{
+				ResolvedEdgeID:      uuid.NewString(),
+				SourceID:            scope.SourceID,
+				CheckoutID:          scope.CheckoutID,
+				EdgeKey:             edge.EdgeKey,
+				SourcePath:          next.SourcePath,
+				SourceArtifact:      edge.SourceArtifactID,
+				SourceSymbol:        cloneUCIOptionalString(edge.SourceSymbolKey),
+				TargetPath:          targetPath,
+				TargetArtifact:      targetArtifact,
+				TargetSymbol:        targetSymbol,
+				Relation:            string(edge.Relation),
+				EvidenceKind:        UCIResolvedEdgeEvidenceKind(edge.EvidenceKind),
+				ResolverRevision:    edge.ResolverRevision,
+				EvidenceJSON:        string(evidenceJSON),
+				ResolutionState:     UCIResolvedEdgeState(edge.ResolutionState),
+				ValidFromGeneration: generation,
+				CreatedAt:           now,
+			}
+			if err := tx.WithContext(ctx).Create(&row).Error; err != nil {
+				return fmt.Errorf("uci publication insert edge: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func unionUCIPublicationPaths(current map[string]UCIMembership, candidate map[string]ucidomain.IndexMembership) []string {
+	paths := make(map[string]struct{}, len(current)+len(candidate))
+	for path := range current {
+		paths[path] = struct{}{}
+	}
+	for path := range candidate {
+		paths[path] = struct{}{}
+	}
+	ordered := make([]string, 0, len(paths))
+	for path := range paths {
+		ordered = append(ordered, path)
+	}
+	sort.Strings(ordered)
+	return ordered
+}
+
+func sameUCIPublicationMembership(existing UCIMembership, next ucidomain.IndexMembership) bool {
+	return existing.PathKey == next.PathKey && existing.DisplayPath == next.DisplayPath && existing.Mode == next.Mode &&
+		UCIFileState(next.State) == existing.FileState && sameUCIOptionalString(existing.ArtifactID, next.ArtifactID)
+}
+
+func sameUCIPublicationEdgeReplacement(existing []UCIResolvedEdge, next ucidomain.IndexEdgeReplacement) bool {
+	current, err := indexEdgeReplacementFromRows(next.SourcePath, existing)
+	if err != nil {
+		return false
+	}
+	currentDigest, err := ucidomain.DigestIndexEdges([]ucidomain.IndexEdgeReplacement{current})
+	if err != nil {
+		return false
+	}
+	nextDigest, err := ucidomain.DigestIndexEdges([]ucidomain.IndexEdgeReplacement{next})
+	return err == nil && currentDigest == nextDigest
+}
+
+func cloneUCIOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func marshalUCIPublicationCoverage(coverage ucidomain.IndexCoverage) (string, error) {
+	encoded, err := json.Marshal(map[string]any{
+		"structural":            string(coverage.Structural),
+		"lexical":               string(coverage.Lexical),
+		"vector":                string(coverage.Vector),
+		"excluded_files":        coverage.ExcludedFiles,
+		"unreadable_files":      coverage.UnreadableFiles,
+		"unresolved_references": coverage.UnresolvedReferences,
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }

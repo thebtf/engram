@@ -112,6 +112,8 @@ type UCIParseArtifact struct {
 	ExtractionProfileDigest string                 `gorm:"column:extraction_profile_digest;type:text;not null"`
 	Status                  UCIParseArtifactStatus `gorm:"column:status;type:text;not null"`
 	Diagnostics             string                 `gorm:"column:diagnostics;type:jsonb;not null"`
+	FactsDigest             *string                `gorm:"column:facts_digest;type:text"`
+	SealedAt                *time.Time             `gorm:"column:sealed_at;type:timestamptz"`
 	CreatedAt               time.Time              `gorm:"column:created_at;type:timestamptz;not null"`
 }
 
@@ -252,27 +254,48 @@ type UCIChunkEmbedding struct {
 
 func (UCIChunkEmbedding) TableName() string { return "ci_chunk_embeddings" }
 
-// UCIJob is persisted workflow state. Fenced acquisition and publication are intentionally later work.
+// UCIJob is persisted workflow state, including a fenced publication build when publication_key is set.
 type UCIJob struct {
-	JobID            string      `gorm:"column:job_id;type:uuid;primaryKey"`
-	SourceID         string      `gorm:"column:source_id;type:uuid;not null"`
-	CheckoutID       *string     `gorm:"column:checkout_id;type:uuid"`
-	JobKind          string      `gorm:"column:job_kind;type:text;not null"`
-	InputFingerprint string      `gorm:"column:input_fingerprint;type:text;not null"`
-	OwnerEpoch       *int64      `gorm:"column:owner_epoch"`
-	TargetGeneration *int64      `gorm:"column:target_generation"`
-	State            UCIJobState `gorm:"column:state;type:text;not null"`
-	Attempt          int         `gorm:"column:attempt;not null"`
-	RetryAfter       *time.Time  `gorm:"column:retry_after;type:timestamptz"`
-	LeaseOwner       *string     `gorm:"column:lease_owner;type:text"`
-	LeaseExpiry      *time.Time  `gorm:"column:lease_expiry;type:timestamptz"`
-	ErrorCode        *string     `gorm:"column:error_code;type:text"`
-	Counts           string      `gorm:"column:counts;type:jsonb;not null"`
-	CreatedAt        time.Time   `gorm:"column:created_at;type:timestamptz;not null"`
-	UpdatedAt        time.Time   `gorm:"column:updated_at;type:timestamptz;not null"`
+	JobID                 string      `gorm:"column:job_id;type:uuid;primaryKey"`
+	SourceID              string      `gorm:"column:source_id;type:uuid;not null"`
+	CheckoutID            *string     `gorm:"column:checkout_id;type:uuid"`
+	JobKind               string      `gorm:"column:job_kind;type:text;not null"`
+	InputFingerprint      string      `gorm:"column:input_fingerprint;type:text;not null"`
+	OwnerEpoch            *int64      `gorm:"column:owner_epoch"`
+	TargetGeneration      *int64      `gorm:"column:target_generation"`
+	State                 UCIJobState `gorm:"column:state;type:text;not null"`
+	Attempt               int         `gorm:"column:attempt;not null"`
+	RetryAfter            *time.Time  `gorm:"column:retry_after;type:timestamptz"`
+	LeaseOwner            *string     `gorm:"column:lease_owner;type:text"`
+	LeaseExpiry           *time.Time  `gorm:"column:lease_expiry;type:timestamptz"`
+	ErrorCode             *string     `gorm:"column:error_code;type:text"`
+	Counts                string      `gorm:"column:counts;type:jsonb;not null"`
+	PublicationKey        *string     `gorm:"column:publication_key;type:text"`
+	RequestedBy           *string     `gorm:"column:requested_by;type:text"`
+	IncarnationID         *string     `gorm:"column:incarnation_id;type:uuid"`
+	ProfileID             *string     `gorm:"column:profile_id;type:uuid"`
+	ExpectedParentViewID  *string     `gorm:"column:expected_parent_view_id;type:uuid"`
+	ManifestMode          *string     `gorm:"column:manifest_mode;type:text"`
+	SealedManifest        *string     `gorm:"column:sealed_manifest;type:jsonb"`
+	FinalizeBindingDigest *string     `gorm:"column:finalize_binding_digest;type:text"`
+	ResultViewID          *string     `gorm:"column:result_view_id;type:uuid"`
+	CreatedAt             time.Time   `gorm:"column:created_at;type:timestamptz;not null"`
+	UpdatedAt             time.Time   `gorm:"column:updated_at;type:timestamptz;not null"`
 }
 
 func (UCIJob) TableName() string { return "ci_jobs" }
+
+// UCIIndexBuildPart is one immutable, sequenced frame belonging to a publication build.
+type UCIIndexBuildPart struct {
+	BuildID      string    `gorm:"column:build_id;type:uuid;primaryKey"`
+	Sequence     uint32    `gorm:"column:sequence;primaryKey"`
+	PartDigest   string    `gorm:"column:part_digest;type:text;not null"`
+	Payload      string    `gorm:"column:payload;type:jsonb;not null"`
+	PayloadBytes int64     `gorm:"column:payload_bytes;not null"`
+	CreatedAt    time.Time `gorm:"column:created_at;type:timestamptz;not null"`
+}
+
+func (UCIIndexBuildPart) TableName() string { return "ci_index_build_parts" }
 
 // UCIAnalysis is a rebuildable result pinned to a specific View.
 type UCIAnalysis struct {
