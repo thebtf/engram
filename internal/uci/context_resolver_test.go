@@ -39,6 +39,7 @@ func TestUCIContextResolverRejectsInvalidOrMismatchedContextRefs(t *testing.T) {
 		name                 string
 		ref                  ContextRef
 		catalogFailures      []contextResolverCatalogFailure
+		catalogRecords       []contextResolverCatalogRecord
 		wantCode             string
 		wantRef              *ContextRef
 		wantAuthorizerCalls  int
@@ -77,6 +78,17 @@ func TestUCIContextResolverRejectsInvalidOrMismatchedContextRefs(t *testing.T) {
 			wantCatalogCallCount: 1,
 		},
 		{
+			name: "catalog canonical tuple mismatch",
+			ref:  mismatched,
+			catalogRecords: []contextResolverCatalogRecord{{
+				lookup: mismatched,
+				record: ContextRecord{Ref: canonical, AuthRealm: contextResolverTestRealm},
+			}},
+			wantCode:             "CONTEXT_MISMATCH",
+			wantAuthorizerCalls:  0,
+			wantCatalogCallCount: 1,
+		},
+		{
 			name:                 "space omitted",
 			ref:                  withoutSpace,
 			wantRef:              &withoutSpace,
@@ -85,7 +97,7 @@ func TestUCIContextResolverRejectsInvalidOrMismatchedContextRefs(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			catalog := &contextResolverCatalogFake{failures: test.catalogFailures}
+			catalog := &contextResolverCatalogFake{failures: test.catalogFailures, records: test.catalogRecords}
 			authorizer := &contextResolverAuthorizerFake{}
 			resolver := NewContextResolver(catalog, authorizer)
 			ref := test.ref
@@ -179,6 +191,12 @@ func TestUCIContextResolverBindsExplicitAuthorizedContext(t *testing.T) {
 	if authorizer.calls != 2 {
 		t.Fatalf("authorizer calls = %d, want 2", authorizer.calls)
 	}
+	wantAccess := contextResolverTestAccess(contextResolverTestPrincipal, ref)
+	for index, access := range authorizer.accesses {
+		if access != wantAccess {
+			t.Fatalf("authorizer access %d = %#v, want %#v", index, access, wantAccess)
+		}
+	}
 }
 
 func TestUCIContextResolverKeepsClientBindingsIsolated(t *testing.T) {
@@ -245,6 +263,12 @@ func TestUCIContextResolverReauthorizesEveryReuse(t *testing.T) {
 	assertContextResolverCatalogCalls(t, catalog, ref, ref)
 	if authorizer.calls != 2 {
 		t.Fatalf("authorizer calls = %d, want 2", authorizer.calls)
+	}
+	_, err = resolver.Resolve(context.Background(), contextResolverTestInput(contextResolverTestClientA, contextResolverTestPrincipal, nil, nil))
+	assertContextResolverCode(t, err, "CONTEXT_REQUIRED")
+	assertContextResolverCatalogCalls(t, catalog, ref, ref)
+	if authorizer.calls != 2 {
+		t.Fatalf("authorizer calls after revoked binding = %d, want 2", authorizer.calls)
 	}
 }
 
@@ -362,8 +386,14 @@ type contextResolverCatalogFailure struct {
 	err error
 }
 
+type contextResolverCatalogRecord struct {
+	lookup ContextRef
+	record ContextRecord
+}
+
 type contextResolverCatalogFake struct {
 	failures []contextResolverCatalogFailure
+	records  []contextResolverCatalogRecord
 	calls    []ContextRef
 }
 
@@ -371,22 +401,27 @@ func (catalog *contextResolverCatalogFake) LoadContext(_ context.Context, ref Co
 	catalog.calls = append(catalog.calls, ref)
 	for _, failure := range catalog.failures {
 		if contextResolverRefsEqual(ref, failure.ref) {
-			var empty ContextRecord
-			return empty, failure.err
+			return ContextRecord{}, failure.err
 		}
 	}
-	var empty ContextRecord
-	return empty, nil
+	for _, stored := range catalog.records {
+		if contextResolverRefsEqual(ref, stored.lookup) {
+			return stored.record, nil
+		}
+	}
+	return ContextRecord{Ref: ref, AuthRealm: contextResolverTestRealm}, nil
 }
 
 type contextResolverAuthorizerFake struct {
 	failures []error
 	calls    int
+	accesses []ContextAccess
 }
 
-func (authorizer *contextResolverAuthorizerFake) AuthorizeContext(_ context.Context, _ ContextAccess) error {
+func (authorizer *contextResolverAuthorizerFake) AuthorizeContext(_ context.Context, access ContextAccess) error {
 	call := authorizer.calls
 	authorizer.calls++
+	authorizer.accesses = append(authorizer.accesses, access)
 	if call < len(authorizer.failures) {
 		return authorizer.failures[call]
 	}
@@ -400,6 +435,15 @@ func contextResolverTestInput(clientSessionID, principal string, ref *ContextRef
 		Principal:       principal,
 		Ref:             ref,
 		Candidates:      candidates,
+	}
+}
+
+func contextResolverTestAccess(principal string, ref ContextRef) ContextAccess {
+	return ContextAccess{
+		AuthRealm:  contextResolverTestRealm,
+		Principal:  principal,
+		SourceID:   ref.SourceID,
+		CheckoutID: ref.CheckoutID,
 	}
 }
 
