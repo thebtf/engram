@@ -3,6 +3,7 @@ package codeintel_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/handlers/codeintel"
+	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/moduletest"
 	"github.com/thebtf/engram/internal/uci"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
@@ -27,27 +29,63 @@ type fakeCore struct {
 
 	statusResponse []byte
 	statusErr      error
+
+	bindings      map[string]uci.IndexBinding
+	resolveCalled int
+	proxyCalled   int
 }
 
 func (f *fakeCore) ResolveIndexTarget(_ context.Context, clientSessionID string, _ muxcore.ProjectContext, contextHandle string) (codeintel.ResolvedIndexTarget, error) {
-	spaceID := "11111111-1111-4111-8111-111111111111"
+	f.mu.Lock()
+	f.resolveCalled++
+	binding, found := f.bindings[contextHandle]
+	if !found {
+		binding = fakeDefaultIndexBinding()
+	}
+	binding = binding.Clone()
+	f.mu.Unlock()
+
 	return codeintel.ResolvedIndexTarget{
 		ClientSessionID: clientSessionID,
 		ContextHandle:   contextHandle,
-		Context: uci.ContextRef{
-			SpaceID:           &spaceID,
-			SourceID:          "22222222-2222-4222-8222-222222222222",
-			CheckoutID:        "33333333-3333-4333-8333-333333333333",
-			ViewID:            "44444444-4444-4444-8444-444444444444",
-			AnalysisProfileID: "55555555-5555-4555-8555-555555555555",
-			Generation:        1,
-		},
+		Binding:         binding,
+	}, nil
+}
+
+func fakeDefaultIndexBinding() uci.IndexBinding {
+	spaceID := "11111111-1111-4111-8111-111111111111"
+	context := uci.ContextRef{
+		SpaceID:           &spaceID,
+		SourceID:          "22222222-2222-4222-8222-222222222222",
+		CheckoutID:        "33333333-3333-4333-8333-333333333333",
+		ViewID:            "44444444-4444-4444-8444-444444444444",
+		AnalysisProfileID: "55555555-5555-4555-8555-555555555555",
+		Generation:        1,
+	}
+	return uci.IndexBinding{
+		Context: &context,
 		Scope: uci.IndexScope{
-			SourceID:      "22222222-2222-4222-8222-222222222222",
-			CheckoutID:    "33333333-3333-4333-8333-333333333333",
+			SourceID:      context.SourceID,
+			CheckoutID:    context.CheckoutID,
 			IncarnationID: "66666666-6666-4666-8666-666666666666",
 		},
-	}, nil
+		ProfileID:     context.AnalysisProfileID,
+		LocalRootID:   "fake-local-root",
+		WorkstationID: "fake-workstation",
+	}
+}
+
+func fakeNoViewIndexBinding(checkoutID, incarnationID string) uci.IndexBinding {
+	return uci.IndexBinding{
+		Scope: uci.IndexScope{
+			SourceID:      "22222222-2222-4222-8222-222222222222",
+			CheckoutID:    checkoutID,
+			IncarnationID: incarnationID,
+		},
+		ProfileID:     "55555555-5555-4555-8555-555555555555",
+		LocalRootID:   "fake-local-root",
+		WorkstationID: "fake-workstation",
+	}
 }
 
 func (f *fakeCore) IndexCodebase(_ context.Context, target codeintel.ResolvedIndexTarget, _ string) (*codeintel.IndexResult, error) {
@@ -63,12 +101,24 @@ func (f *fakeCore) IndexCodebase(_ context.Context, target codeintel.ResolvedInd
 	if err != nil {
 		return nil, err
 	}
-	return &codeintel.IndexResult{Context: target.Context, Uploaded: 5, Embedded: 3, Deleted: 1}, nil
+	context := target.ContextClone()
+	if context == nil {
+		binding := target.BindingClone()
+		context = &uci.ContextRef{
+			SourceID:          binding.Scope.SourceID,
+			CheckoutID:        binding.Scope.CheckoutID,
+			ViewID:            "77777777-7777-4777-8777-777777777777",
+			AnalysisProfileID: binding.ProfileID,
+			Generation:        1,
+		}
+	}
+	return &codeintel.IndexResult{Context: *context, Uploaded: 5, Embedded: 3, Deleted: 1}, nil
 }
 
 func (f *fakeCore) ProxyHandleTool(_ context.Context, _ codeintel.ResolvedIndexTarget, _ string, _ json.RawMessage) (json.RawMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.proxyCalled++
 	if f.statusErr != nil {
 		return nil, f.statusErr
 	}
@@ -80,6 +130,12 @@ func (f *fakeCore) ProxyHandleTool(_ context.Context, _ codeintel.ResolvedIndexT
 		"embedded_chunks": int64(8),
 		"last_indexed_at": "2026-06-16T00:00:00Z",
 	})
+}
+
+func (f *fakeCore) callCounts() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.resolveCalled, f.proxyCalled
 }
 
 // newTestModule constructs a codeintel.Module backed by a fakeCore so tests can
@@ -97,12 +153,28 @@ func testProjectContext(id, cwd string) muxcore.ProjectContext {
 }
 
 func testIndexArgs(p muxcore.ProjectContext) json.RawMessage {
-	payload, _ := json.Marshal(map[string]any{"context_handle": "handle-" + p.ID, "root": p.Cwd})
+	return testIndexArgsForHandle(p, "handle-"+p.ID)
+}
+
+func testIndexArgsForHandle(p muxcore.ProjectContext, contextHandle string) json.RawMessage {
+	payload, _ := json.Marshal(map[string]any{"context_handle": contextHandle, "root": p.Cwd})
 	return payload
 }
 
 func testStatusArgs(p muxcore.ProjectContext) json.RawMessage {
-	payload, _ := json.Marshal(map[string]any{"context_handle": "handle-" + p.ID})
+	return testStatusArgsForHandle("handle-" + p.ID)
+}
+
+func testStatusArgsForHandle(contextHandle string) json.RawMessage {
+	payload, _ := json.Marshal(map[string]any{"context_handle": contextHandle})
+	return payload
+}
+
+func testStatusArgsWithBarrier(contextHandle, token string, waitMS int64) json.RawMessage {
+	payload, _ := json.Marshal(map[string]any{
+		"context_handle": contextHandle,
+		"after_barrier":  map[string]any{"token": token, "wait_ms": waitMS},
+	})
 	return payload
 }
 
@@ -321,6 +393,161 @@ func TestCodebaseStatus_TransitionsRunningToIdle(t *testing.T) {
 		}
 	}
 	assert.Equal(t, "idle", finalStatus, "codebase_status must transition to idle after index completes")
+}
+
+func TestCodebaseIndex_NoViewBindingsUseDistinctScopeKeys(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+
+	const (
+		handleA = "handle-no-view-a"
+		handleB = "handle-no-view-b"
+	)
+	core := &fakeCore{
+		indexDelay: 500 * time.Millisecond,
+		bindings: map[string]uci.IndexBinding{
+			handleA: fakeNoViewIndexBinding("33333333-3333-4333-8333-333333333333", "66666666-6666-4666-8666-666666666666"),
+			handleB: fakeNoViewIndexBinding("88888888-8888-4888-8888-888888888888", "99999999-9999-4999-8999-999999999999"),
+		},
+	}
+	mod := newTestModule(core)
+	h := moduletest.New(t)
+	require.NoError(t, h.Register(mod))
+	h.Freeze()
+
+	p := testProjectContext("proj-no-view", t.TempDir())
+	for _, args := range []json.RawMessage{
+		testIndexArgsForHandle(p, handleA),
+		testIndexArgsForHandle(p, handleB),
+	} {
+		raw, err := h.CallToolWithProject(context.Background(), p, "codebase_index", args)
+		require.NoError(t, err)
+		var started map[string]any
+		require.NoError(t, json.Unmarshal(raw, &started))
+		require.Equal(t, "started", started["status"])
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	statusByHandle := map[string]string{}
+	for time.Now().Before(deadline) {
+		for _, contextHandle := range []string{handleA, handleB} {
+			raw, err := h.CallToolWithProject(context.Background(), p, "codebase_status", testStatusArgsForHandle(contextHandle))
+			if err != nil {
+				continue
+			}
+			var status map[string]any
+			if json.Unmarshal(raw, &status) == nil {
+				statusByHandle[contextHandle], _ = status["status"].(string)
+			}
+		}
+		if statusByHandle[handleA] == "idle" && statusByHandle[handleB] == "idle" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.Equal(t, "idle", statusByHandle[handleA])
+	require.Equal(t, "idle", statusByHandle[handleB])
+
+	core.mu.Lock()
+	called := core.indexCalled
+	core.mu.Unlock()
+	require.Equal(t, 2, called, "no-View bindings with distinct scopes must not share liveness state")
+}
+
+func TestCodebaseStatusRejectsInvalidAfterBarrierBeforeResolution(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	p := testProjectContext("proj-status-validation", t.TempDir())
+
+	for _, test := range []struct {
+		name string
+		args json.RawMessage
+	}{
+		{name: "null", args: json.RawMessage(`{"context_handle":"handle-proj-status-validation","after_barrier":null}`)},
+		{name: "unknown field", args: json.RawMessage(`{"context_handle":"handle-proj-status-validation","after_barrier":{"token":"barrier","wait_ms":1,"sequence":1}}`)},
+		{name: "empty token", args: testStatusArgsWithBarrier("handle-proj-status-validation", "", 1)},
+		{name: "oversized token", args: testStatusArgsWithBarrier("handle-proj-status-validation", strings.Repeat("x", 2_049), 1)},
+		{name: "zero wait", args: testStatusArgsWithBarrier("handle-proj-status-validation", "barrier", 0)},
+		{name: "oversized wait", args: testStatusArgsWithBarrier("handle-proj-status-validation", "barrier", 60_001)},
+		{name: "project", args: json.RawMessage(`{"context_handle":"handle-proj-status-validation","project":"forbidden"}`)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			core := &fakeCore{}
+			mod := newTestModule(core)
+			raw, err := mod.HandleTool(context.Background(), p, "codebase_status", test.args)
+			require.Nil(t, raw)
+			require.Error(t, err)
+			resolveCalls, proxyCalls := core.callCounts()
+			require.Zero(t, resolveCalls, "invalid after_barrier must fail before target resolution")
+			require.Zero(t, proxyCalls, "invalid after_barrier must fail before status proxying")
+		})
+	}
+}
+
+func TestCodebaseStatusSchemaMirrorsStrictBarrierContract(t *testing.T) {
+	mod := newTestModule(&fakeCore{})
+	var schema map[string]any
+	for _, tool := range mod.Tools() {
+		if tool.Name == "codebase_status" {
+			require.NoError(t, json.Unmarshal(tool.InputSchema, &schema))
+			break
+		}
+	}
+	require.NotNil(t, schema)
+	require.Equal(t, false, schema["additionalProperties"])
+	require.Equal(t, []any{"context_handle"}, schema["required"])
+
+	properties, ok := schema["properties"].(map[string]any)
+	require.True(t, ok)
+	require.Len(t, properties, 2)
+	barrier, ok := properties["after_barrier"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, false, barrier["additionalProperties"])
+	require.Equal(t, []any{"token", "wait_ms"}, barrier["required"])
+	barrierProperties, ok := barrier["properties"].(map[string]any)
+	require.True(t, ok)
+	token, ok := barrierProperties["token"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, float64(2_048), token["maxLength"])
+	waitMS, ok := barrierProperties["wait_ms"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, float64(1), waitMS["minimum"])
+	require.Equal(t, float64(60_000), waitMS["maximum"])
+}
+
+func TestCodebaseStatusPropagatesProxyIsError(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	expected := &module.ProxyIsError{RawContent: json.RawMessage(`{"type":"text","text":"server rejected status"}`)}
+	mod := newTestModule(&fakeCore{statusErr: expected})
+	p := testProjectContext("proj-proxy-is-error", t.TempDir())
+
+	raw, err := mod.HandleTool(context.Background(), p, "codebase_status", testStatusArgs(p))
+	require.Nil(t, raw)
+	require.Same(t, expected, err, "the dispatcher must receive the original ProxyIsError sentinel")
+}
+
+func TestCodebaseStatusDegradesGenericProxyFailure(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	mod := newTestModule(&fakeCore{statusErr: context.DeadlineExceeded})
+	p := testProjectContext("proj-generic-proxy-error", t.TempDir())
+
+	raw, err := mod.HandleTool(context.Background(), p, "codebase_status", testStatusArgs(p))
+	require.NoError(t, err)
+	var status map[string]any
+	require.NoError(t, json.Unmarshal(raw, &status))
+	require.Equal(t, "never_indexed", status["status"])
+	require.Equal(t, false, status["server_counts_available"])
+	require.Contains(t, status["server_counts_error"], context.DeadlineExceeded.Error())
+}
+
+func TestCodebaseStatusPreservesCallerCancellation(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	mod := newTestModule(&fakeCore{statusErr: context.Canceled})
+	p := testProjectContext("proj-cancelled-status", t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	raw, err := mod.HandleTool(ctx, p, "codebase_status", testStatusArgs(p))
+	require.Nil(t, raw)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 // TestCodebaseIndex_FlagOffReturnsError verifies that tools return an error

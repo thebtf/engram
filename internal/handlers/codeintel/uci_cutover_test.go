@@ -54,6 +54,9 @@ type uciCutoverServerStatus struct {
 	Edges            []uciCutoverEdge           `json:"edges"`
 	EvidenceRecorder uciCutoverEvidenceRecorder `json:"evidence_recorder"`
 	TotalChunks      int                        `json:"total_chunks"`
+	EmbeddedChunks   int                        `json:"embedded_chunks"`
+	LastIndexedAt    string                     `json:"last_indexed_at"`
+	Freshness        uci.QueryFreshness         `json:"freshness"`
 }
 
 type uciCutoverStatus struct {
@@ -65,6 +68,14 @@ type uciCutoverStatus struct {
 	Edges            []uciCutoverEdge           `json:"edges"`
 	EvidenceRecorder uciCutoverEvidenceRecorder `json:"evidence_recorder"`
 	TotalChunks      int                        `json:"total_chunks"`
+	EmbeddedChunks   int                        `json:"embedded_chunks"`
+	LastIndexedAt    string                     `json:"last_indexed_at"`
+	Freshness        uci.QueryFreshness         `json:"freshness"`
+}
+
+type uciCutoverAfterBarrier struct {
+	Token  string `json:"token"`
+	WaitMS int64  `json:"wait_ms"`
 }
 
 type uciCutoverStart struct {
@@ -149,7 +160,10 @@ func newUCICutoverCore(targets []codeintel.ResolvedIndexTarget, statuses map[uci
 	for _, target := range targets {
 		key := uciCutoverKeyForTarget(target)
 		core.targets[key] = target
-		core.results[key] = codeintel.IndexResult{Context: target.Context}
+		binding := target.BindingClone()
+		if binding.Context != nil {
+			core.results[key] = codeintel.IndexResult{Context: *binding.Context}
+		}
 		core.gates[key] = newUCICutoverGate()
 	}
 	return core
@@ -321,24 +335,46 @@ func newUCICutoverFixture(t *testing.T) *uciCutoverFixture {
 
 	contextA := uciCutoverContext("30000000-0000-4000-8000-000000000001", "40000000-0000-4000-8000-000000000001", 1)
 	contextB := uciCutoverContext("30000000-0000-4000-8000-000000000002", "40000000-0000-4000-8000-000000000002", 2)
-	targetA := codeintel.ResolvedIndexTarget{
-		ClientSessionID: uciCutoverSessionA,
-		ContextHandle:   uciCutoverHandleA,
-		Context:         contextA,
-		Scope: uci.IndexScope{
-			SourceID:      contextA.SourceID,
-			CheckoutID:    contextA.CheckoutID,
-			IncarnationID: "50000000-0000-4000-8000-000000000001",
+	targetA := uciCutoverResolvedTarget(
+		uciCutoverSessionA,
+		uciCutoverHandleA,
+		contextA,
+		"50000000-0000-4000-8000-000000000001",
+	)
+	targetB := uciCutoverResolvedTarget(
+		uciCutoverSessionB,
+		uciCutoverHandleB,
+		contextB,
+		"50000000-0000-4000-8000-000000000002",
+	)
+
+	pendingChanges := int64(0)
+	freshnessA := uci.QueryFreshness{
+		State:          uci.QueryFreshnessObservedCurrent,
+		Method:         uci.QueryFreshnessWatchWatermark,
+		PendingChanges: &pendingChanges,
+		EnrichmentWatermark: uci.QueryEnrichmentWatermark{
+			Sequence: 1,
+			State:    uci.QueryEnrichmentCurrent,
+		},
+		Barrier: &uci.QueryBarrier{
+			Scope:      uci.QueryBarrierScope{Kind: uci.QueryBarrierPaths, PathCount: 1},
+			DeadlineMS: 25,
+			State:      uci.QueryBarrierSatisfied,
 		},
 	}
-	targetB := codeintel.ResolvedIndexTarget{
-		ClientSessionID: uciCutoverSessionB,
-		ContextHandle:   uciCutoverHandleB,
-		Context:         contextB,
-		Scope: uci.IndexScope{
-			SourceID:      contextB.SourceID,
-			CheckoutID:    contextB.CheckoutID,
-			IncarnationID: "50000000-0000-4000-8000-000000000002",
+	freshnessB := uci.QueryFreshness{
+		State:          uci.QueryFreshnessCatchingUp,
+		Method:         uci.QueryFreshnessWatchWatermark,
+		PendingChanges: &pendingChanges,
+		EnrichmentWatermark: uci.QueryEnrichmentWatermark{
+			Sequence: 2,
+			State:    uci.QueryEnrichmentPending,
+		},
+		Barrier: &uci.QueryBarrier{
+			Scope:      uci.QueryBarrierScope{Kind: uci.QueryBarrierPaths, PathCount: 1},
+			DeadlineMS: 25,
+			State:      uci.QueryBarrierStale,
 		},
 	}
 
@@ -354,7 +390,10 @@ func newUCICutoverFixture(t *testing.T) *uciCutoverFixture {
 			State:           "healthy",
 			LastFailureCode: "NONE",
 		},
-		TotalChunks: 0,
+		TotalChunks:    23,
+		EmbeddedChunks: 17,
+		LastIndexedAt:  "2026-09-05T12:00:00Z",
+		Freshness:      freshnessA,
 	}
 	statusB := uciCutoverServerStatus{
 		Context: contextB,
@@ -368,8 +407,12 @@ func newUCICutoverFixture(t *testing.T) *uciCutoverFixture {
 			State:           "degraded",
 			LastFailureCode: "COMPLETION_EVIDENCE_UNAVAILABLE",
 		},
-		TotalChunks: 0,
+		TotalChunks:    23,
+		EmbeddedChunks: 19,
+		LastIndexedAt:  "2026-09-05T12:01:00Z",
+		Freshness:      freshnessB,
 	}
+
 	core := newUCICutoverCore(
 		[]codeintel.ResolvedIndexTarget{targetA, targetB},
 		map[uciCutoverTargetKey]json.RawMessage{
@@ -477,9 +520,36 @@ func TestUCICutoverKeepsSameProjectCallersIsolated(t *testing.T) {
 	require.Len(t, fixture.core.indexCallsSnapshot(), 2, "client C must not reach index execution")
 }
 
+func TestUCICutoverStatusForwardsFreshnessAndStrictBarrier(t *testing.T) {
+	fixture := newUCICutoverFixture(t)
+	wantBarrier := uciCutoverAfterBarrier{Token: "uci-status-barrier", WaitMS: 25}
+
+	raw, err := fixture.call(fixture.projectA, "codebase_status", map[string]any{
+		"context_handle": uciCutoverHandleA,
+		"after_barrier":  wantBarrier,
+	})
+	require.NoError(t, err)
+	var status uciCutoverStatus
+	require.NoError(t, json.Unmarshal(raw, &status))
+	require.Equal(t, fixture.statusA.Context, status.Context)
+	require.Equal(t, fixture.statusA.Rows, status.Rows)
+	require.Equal(t, fixture.statusA.Edges, status.Edges)
+	require.Equal(t, fixture.statusA.EvidenceRecorder, status.EvidenceRecorder)
+	require.Equal(t, fixture.statusA.TotalChunks, status.TotalChunks)
+	require.Equal(t, fixture.statusA.EmbeddedChunks, status.EmbeddedChunks)
+	require.Equal(t, fixture.statusA.LastIndexedAt, status.LastIndexedAt)
+	require.Equal(t, fixture.statusA.Freshness, status.Freshness)
+
+	calls := fixture.core.proxyCallsSnapshot()
+	require.Len(t, calls, 1)
+	requireUCICutoverProxyArgs(t, calls[0], &wantBarrier)
+}
+
 func TestUCICutoverRejectsMismatchedIndexResult(t *testing.T) {
 	fixture := newUCICutoverFixture(t)
-	fixture.core.setResult(fixture.targetA, codeintel.IndexResult{Context: fixture.targetB.Context})
+	contextB := fixture.targetB.ContextClone()
+	require.NotNil(t, contextB)
+	fixture.core.setResult(fixture.targetA, codeintel.IndexResult{Context: *contextB})
 
 	started, err := fixture.start(fixture.projectA, fixture.rootA, uciCutoverHandleA)
 	require.NoError(t, err)
@@ -553,6 +623,24 @@ func (fixture *uciCutoverFixture) call(project muxcore.ProjectContext, name stri
 	return fixture.harness.CallToolWithProject(context.Background(), project, name, raw)
 }
 
+func uciCutoverResolvedTarget(clientSessionID, contextHandle string, context uci.ContextRef, incarnationID string) codeintel.ResolvedIndexTarget {
+	return codeintel.ResolvedIndexTarget{
+		ClientSessionID: clientSessionID,
+		ContextHandle:   contextHandle,
+		Binding: uci.IndexBinding{
+			Context: &context,
+			Scope: uci.IndexScope{
+				SourceID:      context.SourceID,
+				CheckoutID:    context.CheckoutID,
+				IncarnationID: incarnationID,
+			},
+			ProfileID:     context.AnalysisProfileID,
+			LocalRootID:   "uci-cutover-root",
+			WorkstationID: "uci-cutover-workstation",
+		},
+	}
+}
+
 func uciCutoverContext(checkoutID, viewID string, generation int64) uci.ContextRef {
 	spaceID := "10000000-0000-4000-8000-000000000001"
 	return uci.ContextRef{
@@ -619,23 +707,40 @@ func requireUCICutoverProxyCalls(t *testing.T, calls []uciCutoverProxyCall, targ
 	require.NotEmpty(t, calls)
 	seen := make(map[uciCutoverTargetKey]bool, len(targets))
 	for _, call := range calls {
-		require.Equal(t, "codebase_status", call.Name)
-		var args map[string]json.RawMessage
-		require.NoError(t, json.Unmarshal(call.Args, &args))
-		require.NotContains(t, args, "project", "raw project must not be a status/proxy authority")
-
-		var contextHandle string
-		require.NoError(t, json.Unmarshal(args["context_handle"], &contextHandle))
-		require.Equal(t, call.Target.ContextHandle, contextHandle)
-
-		var reference uci.ContextRef
-		require.NoError(t, json.Unmarshal(args["context"], &reference))
-		require.Equal(t, call.Target.Context, reference)
+		requireUCICutoverProxyArgs(t, call, nil)
 		seen[uciCutoverKeyForTarget(call.Target)] = true
 	}
 	for _, target := range targets {
 		require.Truef(t, seen[uciCutoverKeyForTarget(target)], "missing typed proxy call for session=%q handle=%q", target.ClientSessionID, target.ContextHandle)
 	}
+}
+
+func requireUCICutoverProxyArgs(t *testing.T, call uciCutoverProxyCall, wantBarrier *uciCutoverAfterBarrier) {
+	t.Helper()
+	require.Equal(t, "codebase_status", call.Name)
+	var args map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(call.Args, &args))
+	for _, forbidden := range []string{"context", "project", "cwd", "root", "path"} {
+		require.NotContains(t, args, forbidden, "status proxy must not receive %q", forbidden)
+	}
+
+	rawContextHandle, found := args["context_handle"]
+	require.True(t, found)
+	var contextHandle string
+	require.NoError(t, json.Unmarshal(rawContextHandle, &contextHandle))
+	require.Equal(t, call.Target.ContextHandle, contextHandle)
+
+	if wantBarrier == nil {
+		require.Len(t, args, 1)
+		require.NotContains(t, args, "after_barrier")
+		return
+	}
+	require.Len(t, args, 2)
+	rawBarrier, found := args["after_barrier"]
+	require.True(t, found)
+	var barrier uciCutoverAfterBarrier
+	require.NoError(t, json.Unmarshal(rawBarrier, &barrier))
+	require.Equal(t, *wantBarrier, barrier)
 }
 
 func requireUCICutoverStatus(t *testing.T, got uciCutoverStatus, want, forbidden uciCutoverServerStatus) {
@@ -648,6 +753,9 @@ func requireUCICutoverStatus(t *testing.T, got uciCutoverStatus, want, forbidden
 	require.Equal(t, want.Edges, got.Edges)
 	require.Equal(t, want.EvidenceRecorder, got.EvidenceRecorder)
 	require.Equal(t, want.TotalChunks, got.TotalChunks)
+	require.Equal(t, want.EmbeddedChunks, got.EmbeddedChunks)
+	require.Equal(t, want.LastIndexedAt, got.LastIndexedAt)
+	require.Equal(t, want.Freshness, got.Freshness)
 	require.Len(t, got.Rows, 1)
 	require.Equal(t, uciCutoverRelativePath, got.Rows[0].RelativePath)
 	require.Equal(t, uciCutoverLabel, got.Rows[0].Label)

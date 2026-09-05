@@ -5,9 +5,8 @@
 //   - codebase_status: reports index liveness (daemon-side) merged with server-side
 //     chunk counts via the engramcore gRPC proxy.
 //
-// codebase_search is registered on the SERVER side (internal/mcp/tools_code_intel.go)
-// because it needs direct access to the gorm.CodeChunkStore in the server process.
-// This module provides only codebase_index and codebase_status (liveness layer).
+// codebase_search is registered on the SERVER side. This module owns only
+// codebase_index and codebase_status: daemon liveness plus scoped status proxying.
 //
 // # Architecture (daemon-side)
 //
@@ -58,26 +57,33 @@ var (
 	_ module.ToolProvider = (*Module)(nil)
 )
 
-const moduleName = "codeintel"
+const (
+	moduleName = "codeintel"
+
+	codebaseStatusAfterBarrierMaxTokenLength       = 2_048
+	codebaseStatusAfterBarrierMaxWaitMS      int64 = 60_000
+)
 
 // runCounter is an atomic counter used to generate monotonically-increasing
 // run IDs within the daemon lifetime. Using a counter instead of UUID/time
 // keeps run IDs small and avoids importing additional packages.
 var runCounter atomic.Int64
 
-// indexStateKey isolates state by the client session and the complete resolved
-// UCI target. ContextRef contributes immutable View identity and profile;
-// IndexScope adds the checkout incarnation.
+// indexStateKey isolates state by exact client session and server-authorized
+// binding. Scope identifies the checkout incarnation; an optional Context
+// contributes only real View identity, never a synthetic View for no-View bindings.
 type indexStateKey struct {
-	ClientSessionID        string
-	ContextHasSpaceID      bool
-	ContextSpaceID         string
-	ContextSourceID        string
-	ContextCheckoutID      string
-	ContextViewID          string
-	ContextAnalysisProfile string
-	ContextGeneration      int64
-	ScopeIncarnationID     string
+	ClientSessionID    string
+	ScopeSourceID      string
+	ScopeCheckoutID    string
+	ScopeIncarnationID string
+	ProfileID          string
+
+	ContextPresent    bool
+	ContextHasSpaceID bool
+	ContextSpaceID    string
+	ContextViewID     string
+	ContextGeneration int64
 }
 
 // indexState holds one resolved target's index run state.
@@ -210,6 +216,25 @@ func (m *Module) Tools() []module.ToolDef {
 				"type":        "string",
 				"description": "Opaque handle returned for this client by codebase_context.",
 			},
+			"after_barrier": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"required":             []string{"token", "wait_ms"},
+				"properties": map[string]any{
+					"token": map[string]any{
+						"type":        "string",
+						"description": "Opaque server-issued read-your-save barrier token.",
+						"minLength":   1,
+						"maxLength":   codebaseStatusAfterBarrierMaxTokenLength,
+					},
+					"wait_ms": map[string]any{
+						"type":        "integer",
+						"description": "Maximum barrier wait in milliseconds.",
+						"minimum":     1,
+						"maximum":     codebaseStatusAfterBarrierMaxWaitMS,
+					},
+				},
+			},
 		},
 	})
 
@@ -247,8 +272,24 @@ type codebaseIndexArgs struct {
 	Root          *string `json:"root"`
 }
 
-type contextHandleArgs struct {
-	ContextHandle *string `json:"context_handle"`
+type codebaseStatusArgs struct {
+	ContextHandle *string                         `json:"context_handle"`
+	AfterBarrier  *codebaseStatusAfterBarrierArgs `json:"after_barrier"`
+}
+
+type codebaseStatusAfterBarrierArgs struct {
+	Token  *string `json:"token"`
+	WaitMS *int64  `json:"wait_ms"`
+}
+
+type codebaseStatusProxyArgs struct {
+	ContextHandle string                      `json:"context_handle"`
+	AfterBarrier  *codebaseStatusAfterBarrier `json:"after_barrier,omitempty"`
+}
+
+type codebaseStatusAfterBarrier struct {
+	Token  string `json:"token"`
+	WaitMS int64  `json:"wait_ms"`
 }
 
 func parseIndexArgs(args json.RawMessage) (string, string, error) {
@@ -269,12 +310,36 @@ func parseIndexArgs(args json.RawMessage) (string, string, error) {
 	return contextHandle, *parsed.Root, nil
 }
 
-func parseContextHandleArgs(tool string, args json.RawMessage) (string, error) {
-	var parsed contextHandleArgs
-	if err := decodeStrictToolArgs(tool, args, &parsed); err != nil {
-		return "", err
+func parseStatusArgs(args json.RawMessage) (string, *codebaseStatusAfterBarrier, error) {
+	var parsed codebaseStatusArgs
+	if err := decodeStrictToolArgs("codebase_status", args, &parsed); err != nil {
+		return "", nil, err
 	}
-	return requiredContextHandle(tool, parsed.ContextHandle)
+	contextHandle, err := requiredContextHandle("codebase_status", parsed.ContextHandle)
+	if err != nil {
+		return "", nil, err
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(bytes.TrimSpace(args), &fields); err != nil {
+		return "", nil, fmt.Errorf("codebase_status: invalid args: %w", err)
+	}
+	if _, found := fields["after_barrier"]; !found {
+		return contextHandle, nil, nil
+	}
+	if parsed.AfterBarrier == nil {
+		return "", nil, fmt.Errorf("codebase_status: after_barrier must not be null")
+	}
+	if parsed.AfterBarrier.Token == nil || !validCodeintelIdentity(*parsed.AfterBarrier.Token, codebaseStatusAfterBarrierMaxTokenLength) {
+		return "", nil, fmt.Errorf("codebase_status: invalid after_barrier token")
+	}
+	if parsed.AfterBarrier.WaitMS == nil || *parsed.AfterBarrier.WaitMS < 1 || *parsed.AfterBarrier.WaitMS > codebaseStatusAfterBarrierMaxWaitMS {
+		return "", nil, fmt.Errorf("codebase_status: after_barrier wait_ms must be between 1 and %d", codebaseStatusAfterBarrierMaxWaitMS)
+	}
+	return contextHandle, &codebaseStatusAfterBarrier{
+		Token:  *parsed.AfterBarrier.Token,
+		WaitMS: *parsed.AfterBarrier.WaitMS,
+	}, nil
 }
 
 func decodeStrictToolArgs(tool string, args json.RawMessage, target any) error {
@@ -324,34 +389,33 @@ func requestedTargetMatches(target ResolvedIndexTarget, clientSessionID, context
 }
 
 func indexKeyFor(target ResolvedIndexTarget) indexStateKey {
+	binding := target.BindingClone()
 	key := indexStateKey{
-		ClientSessionID:        target.ClientSessionID,
-		ContextSourceID:        target.Context.SourceID,
-		ContextCheckoutID:      target.Context.CheckoutID,
-		ContextViewID:          target.Context.ViewID,
-		ContextAnalysisProfile: target.Context.AnalysisProfileID,
-		ContextGeneration:      target.Context.Generation,
-		ScopeIncarnationID:     target.Scope.IncarnationID,
+		ClientSessionID:    target.ClientSessionID,
+		ScopeSourceID:      binding.Scope.SourceID,
+		ScopeCheckoutID:    binding.Scope.CheckoutID,
+		ScopeIncarnationID: binding.Scope.IncarnationID,
+		ProfileID:          binding.ProfileID,
 	}
-	if target.Context.SpaceID != nil {
-		key.ContextHasSpaceID = true
-		key.ContextSpaceID = *target.Context.SpaceID
+	if context := target.ContextClone(); context != nil {
+		key.ContextPresent = true
+		key.ContextViewID = context.ViewID
+		key.ContextGeneration = context.Generation
+		if context.SpaceID != nil {
+			key.ContextHasSpaceID = true
+			key.ContextSpaceID = *context.SpaceID
+		}
 	}
 	return key
 }
 
-func sameContextRef(left, right uci.ContextRef) bool {
-	if (left.SpaceID == nil) != (right.SpaceID == nil) {
+func indexResultMatchesBinding(result *IndexResult, binding uci.IndexBinding) bool {
+	if result == nil {
 		return false
 	}
-	if left.SpaceID != nil && *left.SpaceID != *right.SpaceID {
-		return false
-	}
-	return left.SourceID == right.SourceID &&
-		left.CheckoutID == right.CheckoutID &&
-		left.ViewID == right.ViewID &&
-		left.AnalysisProfileID == right.AnalysisProfileID &&
-		left.Generation == right.Generation
+	context := result.Context
+	binding.Context = &context
+	return binding.Validate() == nil
 }
 
 func decodeServerStatusPayload(raw json.RawMessage) (map[string]json.RawMessage, error) {
@@ -483,7 +547,7 @@ func (m *Module) handleIndex(ctx context.Context, p muxcore.ProjectContext, args
 			})
 			return
 		}
-		if result == nil || !sameContextRef(result.Context, target.Context) {
+		if !indexResultMatchesBinding(result, target.BindingClone()) {
 			err := fmt.Errorf("codebase_index: index result context does not match resolved target")
 			if logger != nil {
 				logger.Error("codeintel: index run rejected",
@@ -531,7 +595,7 @@ func (m *Module) handleIndex(ctx context.Context, p muxcore.ProjectContext, args
 // -----------------------------------------------------------------------
 
 func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, args json.RawMessage) (json.RawMessage, error) {
-	contextHandle, err := parseContextHandleArgs("codebase_status", args)
+	contextHandle, afterBarrier, err := parseStatusArgs(args)
 	if err != nil {
 		return nil, err
 	}
@@ -560,32 +624,33 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 		}
 	}
 
-	statusArgs, err := json.Marshal(struct {
-		ContextHandle string         `json:"context_handle"`
-		Context       uci.ContextRef `json:"context"`
-	}{
+	statusArgs, err := json.Marshal(codebaseStatusProxyArgs{
 		ContextHandle: target.ContextHandle,
-		Context:       target.Context,
+		AfterBarrier:  afterBarrier,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("codebase_status: marshal proxy args: %w", err)
 	}
 	serverRaw, proxyErr := m.core.ProxyHandleTool(ctx, target, "codebase_status", statusArgs)
 	if proxyErr != nil {
+		if proxyIsError, ok := proxyErr.(*module.ProxyIsError); ok {
+			return nil, proxyIsError
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		result["server_counts_available"] = false
 		result["server_counts_error"] = proxyErr.Error()
 	} else {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		serverPayload, payloadErr := decodeServerStatusPayload(serverRaw)
 		if payloadErr != nil {
 			result["server_counts_available"] = false
 			result["server_counts_error"] = payloadErr.Error()
 		} else {
-			for _, key := range []string{"total_chunks", "embedded_chunks", "last_indexed_at"} {
-				if value, found := serverPayload[key]; found {
-					result[key] = value
-				}
-			}
-			for _, key := range []string{"context", "rows", "edges", "evidence_recorder"} {
+			for _, key := range []string{"total_chunks", "embedded_chunks", "last_indexed_at", "context", "rows", "edges", "evidence_recorder", "freshness"} {
 				if value, found := serverPayload[key]; found {
 					result[key] = value
 				}
