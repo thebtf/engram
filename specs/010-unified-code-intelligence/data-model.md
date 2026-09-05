@@ -52,7 +52,7 @@
 | Entity | Identity and key fields | Ownership | Invariants |
 |---|---|---|---|
 | **Exposure** | Server UUID `exposure_id`; unique opaque `exposure_ref`; opaque `request_ref`, `context_ref`, actor ref, client-session ref, and idempotency key; authorized realm, Source, Checkout, and View IDs; `operation_kind`, `result_state`, `retrieval_mode`, `coverage_state`, `evidence_source`, `certainty`, and `recorded_at`. | Additive PostgreSQL `ci_exposures` projection, written through the UCI-owned `ExposureRecorder` port. | `operation_kind` is `code_search`, `code_graph`, or `versioned_read`. `result_state` is `ok`, `empty`, `partial`, `stale`, or `unavailable`. It is written only after the server authorizes the full context. It contains no source body, query text, absolute path, secret, tool output, or unauthorized ID. |
-| **Completion evidence** | Server UUID `completion_evidence_id`; parent `exposure_id`; opaque supported-host and callback refs; `outcome`, `occurred_at`, and opaque idempotency key. | Optional append-only `ci_completion_evidence` child record. | `outcome` is `succeeded`, `failed`, or `abandoned`. Only a verified supported-host callback may write it. Without a qualifying child, the exposure completion state is explicitly `unknown`; a response, timeout, or missing callback never manufactures `succeeded`. |
+| **Completion evidence** | Server UUID `completion_evidence_id`; parent `exposure_id`; opaque supported-host and callback refs; `outcome`, `occurred_at`, and opaque idempotency key. | Optional append-only `ci_completion_evidence` child record. | The closed supported-host `outcome` set is `succeeded`, `partial`, `failed`, or `abandoned`. Only a verified supported-host callback may write it. Without a qualifying child, the exposure completion state is explicitly `unknown`; a response, timeout, or missing callback never manufactures an outcome. Completion is distinct from retrieval `result_state` and `coverage_state`. |
 
 `retrieval_mode` is `exact`, `lexical`, `hybrid`, `graph`, or `unavailable`. `coverage_state` is `complete`, `partial`, or `unavailable`. `evidence_source` is `exact`, `fts`, `vector`, `graph`, `mixed`, or `none`. `certainty` is `established`, `partial`, or `unavailable`. These fields describe the authorized result, not an access grant or a source-body record.
 
@@ -121,8 +121,8 @@ queued -> leased/running -> succeeded
 authorized search | graph | versioned read
   -> record idempotently after authorization
   -> return ExposureReceipt(exposure_ref, completion_state=unknown)
-  -> no supported callback: completion_state remains unknown
-  -> verified supported-host callback: append completion evidence
+  -> no qualifying callback: completion_state remains unknown
+  -> verified supported-host callback: append succeeded|partial|failed|abandoned evidence
 ```
 
 - An unsupported host cannot write completion evidence. The server rejects the callback without changing the exposure.
@@ -149,7 +149,7 @@ This transaction is the only path that makes a new current View visible. A globa
 - B-tree indexes cover checkout/path/generation membership, edges in both directions, views by checkout/generation, and jobs by state/retry. GIN serves FTS; exact names/symbol keys use B-tree. Additional JSONB indexes need acceptance-corpus evidence.
 - Vector search first computes the authorized View candidate universe, then exact scoped distance or an ANN strategy proved against that baseline. It never takes global top-N and filters inaccessible results afterward.
 - `ci_exposures` has unique `exposure_ref` and unique `(auth_realm, client_session_ref, idempotency_key)` keys. Its Source, Checkout, and View columns use a composite invariant that keeps the tuple in one authorized realm and source.
-- `ci_completion_evidence` references one exposure and has unique `(exposure_id, supported_host_ref, idempotency_key)`. It is append-only and accepts only the closed supported-host outcome values.
+- `ci_completion_evidence` references one exposure and has unique `(exposure_id, supported_host_ref, idempotency_key)`. It is append-only and accepts only `succeeded`, `partial`, `failed`, or `abandoned` verified supported-host outcomes.
 
 ## Migration and Rollback Semantics
 

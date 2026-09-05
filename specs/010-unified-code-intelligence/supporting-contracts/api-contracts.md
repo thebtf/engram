@@ -94,11 +94,11 @@ Coverage=complete означает полноту поддержанного ext
 
 ### Retrieval exposure and completion
 
-`exposure` is a closed object with only `exposure_ref` and `completion_state`. `exposure_ref` is a bounded opaque value beginning `uci-exp_`; it is the only value a later supported-host callback can bind. `completion_state` is `unknown`, `succeeded`, `failed`, or `abandoned`. It is `unknown` unless a verified supported-host callback has written completion evidence.
+`exposure` is a closed object with only `exposure_ref` and `completion_state`. `exposure_ref` is a bounded opaque value beginning `uci-exp_`; it is the only value a later supported-host callback can bind. `completion_state` is `unknown`, `succeeded`, `partial`, `failed`, or `abandoned`. It is `unknown` unless a verified supported-host callback has written qualifying completion evidence.
 
-The UCI-owned recorder stores opaque request, context, actor, and client-session refs; authorized Source, Checkout, and View refs; operation kind; result state; retrieval and coverage modes; evidence source; certainty; timestamp; and idempotency key. It stores no source body, query text, absolute path, secret, tool output, or unauthorized ID. Its operation kinds are `code_search`, `code_graph`, and `versioned_read`. Its result states are `ok`, `empty`, `partial`, `stale`, and `unavailable`.
+The UCI-owned recorder stores opaque request, context, actor, and client-session refs; authorized Source, Checkout, and View refs; operation kind; result state; retrieval and coverage modes; evidence source; certainty; timestamp; and idempotency key. It stores no source body, query text, absolute path, secret, tool output, or unauthorized ID. Its operation kinds are `code_search`, `code_graph`, and `versioned_read`. Its result states are `ok`, `empty`, `partial`, `stale`, and `unavailable`. Retrieval result state and coverage do not determine host completion.
 
-Only a verified callback from a host that declares this capability can append `succeeded`, `failed`, or `abandoned` completion evidence for an `exposure_ref`. A host without that callback leaves completion `unknown`. The server never infers success from a response, elapsed time, or absent callback. Exposure and completion records are UCI projections, not authorization, View, or product-success authority.
+Only a verified callback from a host that declares this capability can append `succeeded`, `partial`, `failed`, or `abandoned` completion evidence for an `exposure_ref`. A host without that callback leaves completion `unknown`. The server never infers an outcome from a response, elapsed time, or absent callback. Exposure and completion records are UCI projections, not authorization, View, or product-success authority.
 
 ## Свежесть и наблюдение
 

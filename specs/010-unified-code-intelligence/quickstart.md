@@ -32,7 +32,7 @@ Record the following before running the first RED fixture:
 2. Slice 5 requires a real approved embedding provider/model/profile for semantic acceptance. A fake embedder can validate transport shape only and cannot satisfy conceptual-search acceptance.
 3. Slice 6 requires a CGO-capable parser build environment, generated parser-bundle identity, and pinned grammar/license/SBOM evidence.
 4. The protobuf-generated state and built native artifacts belong to their Slice 4/6 build and transport gates. They are not Slice-0 prerequisites.
-5. A completion callback is optional only where the installed host does not support it. The no-callback case is a required explicit `unknown` assertion, not a synthetic success path.
+5. A completion callback is optional only where the installed host does not support it. The no-callback case is a required explicit `unknown` assertion. A verified supported-host callback must also prove a `partial` completion outcome without treating retrieval result state or coverage as host completion.
 
 ## Focused RED/GREEN Gate
 
@@ -76,7 +76,7 @@ Run only the gate appropriate to the completed slice before continuing. The exac
 | Fenced PostgreSQL publication | `go test ./internal/db/gorm/... -run 'TestUCI(Publish|Lease|Replay|DeleteAll)'` | Incomplete upload does not switch current; old epoch is rejected; lost-ACK replay is idempotent; failed scan is not delete-all. |
 | Go AST, structured/text extraction, FTS, and graph | `go test ./internal/... -run 'TestUCI(Go|StructuredText|ViewPinned|Graph)'` | Go facts plus Markdown headings/links, JSON/YAML keys/local references, SQL DDL text facts without execution, and OpenAPI paths/operations/local references without external fetches cite the same View. Malformed syntax is fresh and partial. |
 | Native MCP isolation and installation harness | `go test ./cmd/engram/... -run 'TestUCI(Install|StandardClient|ClientContext|TwoClient)'` | Slice 4's Windows-safe disposable installation and standard-MCP-client harness uses the built daemon/server and standard clients. Per-client defaults stay isolated through connect/select/reconnect and existing tool names route through typed context. |
-| Authorization, exposure, and completion | `go test ./tests/uci/acceptance -run '^TestUCIAuthorizationMatrix$'` | Every authorized search, graph result, and versioned read records one idempotent opaque exposure after context authorization. Denials record nothing. Unsupported/no-callback completion remains `unknown`; only a supported host appends completion evidence. |
+| Authorization, exposure, and completion | `go test ./tests/uci/acceptance -run '^TestUCIAuthorizationMatrix$'` | Every authorized search, graph result, and versioned read records one idempotent opaque exposure after context authorization. Denials record nothing. Unsupported/no-callback completion remains `unknown`; a verified supported host records `partial` independently of retrieval result state and coverage. |
 | Real vector | `go test ./internal/... -run 'TestUCI(Semantic|VectorProfile)'` | Provider-generated conceptual result is profile/View scoped; disabled provider returns visible lexical-only/degraded state. |
 | JS / TS / TSX parser bundle | `go test ./internal/... -run 'TestUCI(TreeSitter|TypeScript|TSX)'` | Pinned bundle records its digest; JS/TS/TSX aliases/re-exports report correct coverage or explicit partial status. |
 | Watcher / recovery | `go test ./internal/... -run 'TestUCI(Watcher|Recovery|Reconcile)'` | Save/delete/rename/overflow/restart/offline paths reconcile current bytes, preserve the unaffected worktree, and do not re-embed unchanged input. |
@@ -108,7 +108,7 @@ Use the versioned Windows-safe disposable installation and standard-MCP-client h
 2. Connect client A and client B concurrently to one daemon, rooted in the adversarial primary/linked worktrees. Attach client C after both are bound.
 3. Run `codebase_context` resolution (or ordinary CWD resolution), index/reconcile, exact/FTS/semantic search, `codebase_graph`, and `codebase_read` for each client.
 4. Confirm that every result identifies a consistent Source/Checkout/View, and that A/B never observe the other dirty state. Confirm that each authorized search, graph result, and versioned read returns one opaque exposure ref.
-5. Run a supported-host callback case and an unsupported/no-callback case. The supported callback binds completion to that ref. The other case remains `unknown`; neither case exposes source content through the record.
+5. Run a verified supported-host `partial` callback case and an unsupported/no-callback case. The callback binds `partial` completion to its exposure ref; the other case remains `unknown`. Neither completion state changes retrieval result state or coverage, and neither case exposes source content through the record.
 6. Repeat denied, revoked, mismatched, ambiguous, private-checkout, stale-view, pagination, and graph-hop cases. A refusal must disclose no outside body, identifier, count, relationship, local Windows path, or exposure reference.
 
 Expected installed-path evidence is a redacted receipt containing built artifact hashes, fixture Source/Checkout/View IDs and manifests, two-client/third-client results, authorization-negative outcomes, opaque exposure refs with explicit completion state, and the exact command/harness version. This is required for SC-06; unit tests do not substitute for it.
@@ -129,7 +129,7 @@ A UCI-1 claim requires one exact-head evidence package, not a collection of unre
 - installed Windows two-client proof from the Slice 4 harness;
 - actual semantic provider result and separate degraded-mode evidence;
 - authorization-negative matrix;
-- authorized search/graph/read exposure evidence, including idempotent replay, no-record denial, a supported-host completion callback, and an explicit `unknown` no-callback case;
+- authorized search/graph/read exposure evidence, including idempotent replay, no-record denial, a verified supported-host `partial` completion callback, and an explicit `unknown` no-callback case;
 - all assigned UCI-1 acceptance scenarios and the 12-task baseline/value outcome;
 - restart/recovery and retention/rollback evidence;
 - exact candidate build/regression checks and the repository’s mandatory exact-head SonarQube Quality Gate `OK` before tag/publication;

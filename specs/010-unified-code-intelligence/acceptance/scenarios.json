@@ -370,6 +370,15 @@
       "action": "Extract/query",
       "expected": "Declared resolver semantics and explicit unresolved cases",
       "runtime_result": "not_run"
+    },
+    {
+      "id": "U42",
+      "milestone": "UCI-1",
+      "area": "exposure_completion",
+      "arrange": "Authorized exposure with a verified supported-host partial callback and a separate authorized exposure with no qualifying callback",
+      "action": "Record completion evidence and read both exposure receipts",
+      "expected": "Callback-backed receipt is partial; no-callback receipt remains unknown; neither completion state changes retrieval result_state or coverage",
+      "runtime_result": "not_run"
     }
   ]
 }

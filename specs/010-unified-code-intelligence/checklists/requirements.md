@@ -20,7 +20,7 @@
 - [x] SC-01 through SC-08 are measurable and bind their measurement to a defined fixture, product-task set, acceptance profile, or installed-path exercise.
 - [x] Success criteria are outcome-oriented and technology-agnostic; they measure correctness, isolation, timeliness, installed use, and developer value rather than prescribing an implementation mechanism.
 - [x] All P1 and P2 user journeys include independent test paths and concrete acceptance scenarios.
-- [x] Identity, client isolation, source-state consistency, updates, recovery, degradation, malformed content, authorization, privacy, traversal limits, authorized retrieval exposure, and supported-host completion boundaries are identified.
+- [x] Identity, client isolation, source-state consistency, updates, recovery, degradation, malformed content, authorization, privacy, traversal limits, authorized retrieval exposure, and closed supported-host completion boundaries (`succeeded`, `partial`, `failed`, `abandoned`, with no-callback `unknown`) are identified.
 - [x] The specification declares UCI-1 in-scope behavior, retained UCI-2/UCI-3 deferrals, explicit exclusions, and non-widening authorization boundaries.
 - [x] Dependencies and assumptions identify the governing constitution, authorized installation boundary, adopted working contracts, acceptance corpus, baseline, and semantic-provider condition.
 

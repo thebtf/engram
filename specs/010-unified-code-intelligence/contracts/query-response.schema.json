@@ -288,6 +288,7 @@
           "enum": [
             "unknown",
             "succeeded",
+            "partial",
             "failed",
             "abandoned"
           ]

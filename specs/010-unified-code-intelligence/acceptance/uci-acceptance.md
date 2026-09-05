@@ -21,6 +21,7 @@ Graph и search одного ответа используют согласов�
 Новый file version не возвращает old embedding hit под current path. Semantic positive query реально использует provider-generated vector; lexical fallback честный и отдельно проверен.
 Incomplete upload/EOF/crash не переключает current pointer. Old lease epoch не может publish. Lost ACK/replay same build не дублирует изменения. Delete-all отличим от failed scan.
 Watcher restart/overflow/offline/reconnect восстанавливают текущее состояние. Неизменённые artifacts не пере-embed-ятся после каждого запуска или нового worktree.
+Для exposure completion: без qualifying callback receipt остаётся `unknown`; verified supported host может записать только `succeeded`/`partial`/`failed`/`abandoned`. `partial` completion не является retrieval `result_state` или coverage и не меняет их.
 
 ## Матрица источников и Git
 

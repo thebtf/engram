@@ -83,7 +83,7 @@ ci_exposures(exposure_id, exposure_ref, auth_realm, source_id, checkout_id, view
              evidence_source=exact|fts|vector|graph|mixed|none,
              certainty=established|partial|unavailable, recorded_at, idempotency_key)
 ci_completion_evidence(completion_evidence_id, exposure_id, supported_host_ref, callback_ref,
-                       outcome=succeeded|failed|abandoned, occurred_at, idempotency_key)
+                       outcome=succeeded|partial|failed|abandoned, occurred_at, idempotency_key)
 ```
 
 `ci_blobs.safe_content` необязателен для исключённого файла; query endpoints не разрешают произвольное скачивание blob по hash. Источник с обнаруженным секретом по умолчанию получает metadata-only excluded state, без исходного body в server/index/provider. Coverage отражает исключение; scanner не обещает распознать любые секреты.
@@ -96,7 +96,7 @@ Directory/docs/config nodes могут использовать такую же 
 
 The row is not an access grant, a View-selection mechanism, a publish record, or a product-success receipt. It cannot create authority or change a View. A retry with the same opaque idempotency key returns the same exposure reference.
 
-`ci_completion_evidence` is an optional append-only child relation. Only a verified callback from a host that supports this capability may add `succeeded`, `failed`, or `abandoned`. Without that row, completion is `unknown`; the server never turns a response, timeout, or absent callback into success.
+`ci_completion_evidence` is an optional append-only child relation. Only a verified callback from a host that supports this capability may add `succeeded`, `partial`, `failed`, or `abandoned`. Without that row, completion is `unknown`; the server never turns a response, timeout, or absent callback into an outcome. This host-completion state is independent of retrieval `result_state` and `coverage_state`.
 
 ## Ключи, FK и индексы
 
