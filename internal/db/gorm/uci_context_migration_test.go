@@ -26,8 +26,8 @@ type uciAppliedMigration struct {
 }
 
 // TestUCIContextMigrationsReserve171And172 binds the UCI allocation to the
-// migration chain that actually ran in an isolated PostgreSQL schema. Migration
-// 172 may remain reserved until the projection slice lands.
+// migration chain that actually ran in an isolated PostgreSQL schema and keeps
+// both reserved IDs fixed while later forward migrations remain legal.
 func TestUCIContextMigrationsReserve171And172(t *testing.T) {
 	db, schema := openInterventionReceiptMigrationTestDB(t)
 
@@ -62,8 +62,6 @@ func TestUCIContextMigrationsReserve171And172(t *testing.T) {
 			require.Equal(t, uciContextRegistryMigrationID, migration.ID, "migration sequence 171 was allocated by an intervening migration")
 		case 172:
 			require.Equal(t, uciIndexProjectionMigrationID, migration.ID, "migration sequence 172 was allocated by an intervening migration")
-		default:
-			t.Fatalf("migration %q was allocated after the observed boundary before UCI migrations 171 and 172 completed; re-evaluate the plan", migration.ID)
 		}
 	}
 
@@ -72,6 +70,8 @@ func TestUCIContextMigrationsReserve171And172(t *testing.T) {
 
 	_, contextRegistryApplied := ids[uciContextRegistryMigrationID]
 	require.True(t, contextRegistryApplied, "UCI context migration is unimplemented: isolated schema %q reached %q but did not apply %q", schema, uciMigrationRegistryBoundaryID, uciContextRegistryMigrationID)
+	_, indexProjectionApplied := ids[uciIndexProjectionMigrationID]
+	require.True(t, indexProjectionApplied, "UCI projection migration is unimplemented: isolated schema %q did not apply %q after %q", schema, uciIndexProjectionMigrationID, uciContextRegistryMigrationID)
 }
 
 func uciMigrationSequence(t *testing.T, id string) int {
