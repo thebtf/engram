@@ -3,8 +3,8 @@
 **Purpose**: Review the completeness, clarity, consistency, and measurability of UCI-1A+B requirements before task generation.
 **Created**: 2026-09-05
 **Feature**: [Unified Code Intelligence](../spec.md)
-**Approved specification commit**: `c3d41d2575847d8e4e4313cc0a55acfbb1419327`
-**Reviewed plan commit**: `489f887d7e0ff25a8a6374a927c5f6dd2eb197e3`
+**Approved specification commit**: `049bf920648060ae1b6b5a572cc2c9faa70c964f`
+**Reviewed plan commit**: `049bf920648060ae1b6b5a572cc2c9faa70c964f`
 **Constitution**: 1.1.0
 **Reviewer**: UCIPlanArchitectReview
 
@@ -56,10 +56,11 @@
 - [x] CHK022 Are the twelve product tasks, baseline timing, correct-source evidence, top-five target, and reduced-reading target defined before tuning, without substituting tool availability for measured developer value? [Acceptance Criteria Quality; Spec §SC-03, §SC-07; Acceptance §Продуктовые задачи; Plan §Single Release Map; Quickstart §Release Evidence Gate]
 - [x] CHK023 Are UCI-1A+B defined as one releasable outcome, while UCI-2/3 remain traceable deferred requirements and Code UI requires a separate accepted feature rather than becoming a UCI-1 prerequisite? [Scope Consistency; Spec §FR-12, §SC-08, §Scope Boundaries; Plan §Single Release Map, §Deferred Boundary; Constitution §XII]
 - [x] CHK024 Are Memory R1's preserved project/Space and receipt semantics, migration-170 boundary, and required revalidation before resumption explicit, without implying that UCI-1 completes Memory R1 or its later domain migration? [Compatibility, Dependency Clarity; Spec §FR-11; Plan §Migration and Cutover Plan, §Deferred Boundary; Research §R-01; Migration §MIG-4; Constitution §Sync Impact Report]
+- [x] CHK025 Are UCI-owned exposure and completion requirements explicit about Source/Checkout/View authorization before idempotent, scoped, non-content recording for every code search, graph result, and versioned read; no record on refusal; verified supported-host `succeeded`/`partial`/`failed`/`abandoned` versus no-callback `unknown`; and completion remaining distinct from retrieval result state and coverage without granting authority? [Completeness, Consistency, Ownership; Spec §FR-04; Data model §Retrieval Exposure and Completion Evidence, §Context Resolution and Request Invariant; API §Retrieval exposure and completion; Constitution §VII, §VIII]
 
 ## Notes
 
-- Review result: 24 requirements-quality questions reviewed, 24 satisfied, and no unresolved requirements-quality findings in this bounded checklist.
+- Review result: 25 requirements-quality questions reviewed, 25 satisfied, and no unresolved requirements-quality findings in this bounded checklist.
 - These markers do not claim that any behavior has been implemented, tested, installed, or released. They do not satisfy Memory R1's required revalidation before resumption.
 - This review binds the specification and plan commits named above. Changed requirements or planning bytes require review of the affected criteria; an earlier marker does not prove successor content.
 - `/speckit.implement` reads checklist checkbox state as a gate and must not modify markers. Leave an item unchecked if later review finds that it needs clarification or correction.
