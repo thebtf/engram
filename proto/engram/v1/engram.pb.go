@@ -6299,6 +6299,10 @@ type FinalizeCodeIndexRequest struct {
 	ScanOutcome                string                 `protobuf:"bytes,14,opt,name=scan_outcome,json=scanOutcome,proto3" json:"scan_outcome,omitempty"`
 	CompleteCensus             bool                   `protobuf:"varint,15,opt,name=complete_census,json=completeCensus,proto3" json:"complete_census,omitempty"`
 	CoverageJson               []byte                 `protobuf:"bytes,16,opt,name=coverage_json,json=coverageJson,proto3" json:"coverage_json,omitempty"`
+	HeadOid                    *string                `protobuf:"bytes,17,opt,name=head_oid,json=headOid,proto3,oneof" json:"head_oid,omitempty"`
+	ObjectFormat               *string                `protobuf:"bytes,18,opt,name=object_format,json=objectFormat,proto3,oneof" json:"object_format,omitempty"`
+	RefLabel                   *string                `protobuf:"bytes,19,opt,name=ref_label,json=refLabel,proto3,oneof" json:"ref_label,omitempty"`
+	Dirty                      *bool                  `protobuf:"varint,20,opt,name=dirty,proto3,oneof" json:"dirty,omitempty"`
 	unknownFields              protoimpl.UnknownFields
 	sizeCache                  protoimpl.SizeCache
 }
@@ -6443,6 +6447,34 @@ func (x *FinalizeCodeIndexRequest) GetCoverageJson() []byte {
 		return x.CoverageJson
 	}
 	return nil
+}
+
+func (x *FinalizeCodeIndexRequest) GetHeadOid() string {
+	if x != nil && x.HeadOid != nil {
+		return *x.HeadOid
+	}
+	return ""
+}
+
+func (x *FinalizeCodeIndexRequest) GetObjectFormat() string {
+	if x != nil && x.ObjectFormat != nil {
+		return *x.ObjectFormat
+	}
+	return ""
+}
+
+func (x *FinalizeCodeIndexRequest) GetRefLabel() string {
+	if x != nil && x.RefLabel != nil {
+		return *x.RefLabel
+	}
+	return ""
+}
+
+func (x *FinalizeCodeIndexRequest) GetDirty() bool {
+	if x != nil && x.Dirty != nil {
+		return *x.Dirty
+	}
+	return false
 }
 
 type FinalizeCodeIndexResponse struct {
@@ -7261,7 +7293,7 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x11accepted_sequence\x18\x02 \x01(\x04R\x10acceptedSequence\x12.\n" +
 	"\x13accepted_part_count\x18\x03 \x01(\x04R\x11acceptedPartCount\x12\x1f\n" +
 	"\vpart_digest\x18\x04 \x01(\tR\n" +
-	"partDigest\"\xf6\x05\n" +
+	"partDigest\"\xb4\a\n" +
 	"\x18FinalizeCodeIndexRequest\x12/\n" +
 	"\x05scope\x18\x01 \x01(\v2\x19.engram.v1.CodeIndexScopeR\x05scope\x12\x19\n" +
 	"\bbuild_id\x18\x02 \x01(\tR\abuildId\x12\x1f\n" +
@@ -7281,7 +7313,16 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x11scan_completed_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\x0fscanCompletedAt\x12!\n" +
 	"\fscan_outcome\x18\x0e \x01(\tR\vscanOutcome\x12'\n" +
 	"\x0fcomplete_census\x18\x0f \x01(\bR\x0ecompleteCensus\x12#\n" +
-	"\rcoverage_json\x18\x10 \x01(\fR\fcoverageJson\"\xdd\x01\n" +
+	"\rcoverage_json\x18\x10 \x01(\fR\fcoverageJson\x12\x1e\n" +
+	"\bhead_oid\x18\x11 \x01(\tH\x00R\aheadOid\x88\x01\x01\x12(\n" +
+	"\robject_format\x18\x12 \x01(\tH\x01R\fobjectFormat\x88\x01\x01\x12 \n" +
+	"\tref_label\x18\x13 \x01(\tH\x02R\brefLabel\x88\x01\x01\x12\x19\n" +
+	"\x05dirty\x18\x14 \x01(\bH\x03R\x05dirty\x88\x01\x01B\v\n" +
+	"\t_head_oidB\x10\n" +
+	"\x0e_object_formatB\f\n" +
+	"\n" +
+	"_ref_labelB\b\n" +
+	"\x06_dirty\"\xdd\x01\n" +
 	"\x19FinalizeCodeIndexResponse\x12B\n" +
 	"\x11published_context\x18\x01 \x01(\v2\x15.engram.v1.ContextRefR\x10publishedContext\x12\x19\n" +
 	"\bbuild_id\x18\x02 \x01(\tR\abuildId\x12\x1f\n" +
@@ -7750,6 +7791,7 @@ func file_proto_engram_v1_engram_proto_init() {
 		(*HostAdvisorObserveRequest_ChannelGap)(nil),
 	}
 	file_proto_engram_v1_engram_proto_msgTypes[66].OneofWrappers = []any{}
+	file_proto_engram_v1_engram_proto_msgTypes[74].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

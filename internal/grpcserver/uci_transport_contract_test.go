@@ -3,6 +3,7 @@ package grpcserver
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -183,6 +184,10 @@ func TestUCITransportContractRequiresScopedAdditions(t *testing.T) {
 		uciTransportFieldSpec{name: "scan_outcome", number: 14, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
 		uciTransportFieldSpec{name: "complete_census", number: 15, kind: protoreflect.BoolKind, cardinality: protoreflect.Optional},
 		uciTransportFieldSpec{name: "coverage_json", number: 16, kind: protoreflect.BytesKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "head_oid", number: 17, kind: protoreflect.StringKind, cardinality: protoreflect.Optional, proto3Optional: true},
+		uciTransportFieldSpec{name: "object_format", number: 18, kind: protoreflect.StringKind, cardinality: protoreflect.Optional, proto3Optional: true},
+		uciTransportFieldSpec{name: "ref_label", number: 19, kind: protoreflect.StringKind, cardinality: protoreflect.Optional, proto3Optional: true},
+		uciTransportFieldSpec{name: "dirty", number: 20, kind: protoreflect.BoolKind, cardinality: protoreflect.Optional, proto3Optional: true},
 	)
 	requireUCITransportFields(t, file, "FinalizeCodeIndexResponse",
 		uciTransportFieldSpec{name: "published_context", number: 1, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.ContextRef"},
@@ -295,6 +300,7 @@ const (
 	uciTransportContractProfileID     = "55555555-5555-4555-8555-555555555555"
 	uciTransportContractIncarnationID = "66666666-6666-4666-8666-666666666666"
 	uciTransportContractDigest        = "sha256:" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	uciTransportContractHeadOID       = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 )
 
 func TestUCITransportContractDelegatesValidatedRequests(t *testing.T) {
@@ -379,6 +385,21 @@ func TestUCITransportContractAcceptsCompleteNoViewHandleBinding(t *testing.T) {
 	}
 	if bound.GetContextHandle() != uciTransportContractBindHandleRequest().GetContextHandle() || bound.GetIndexScope() == nil || bound.GetLocalRootId() == "" || bound.GetWorkstationId() == "" {
 		t.Fatalf("incomplete no-View binding = %#v", bound)
+	}
+}
+
+func TestUCITransportContractAcceptsUnbornHeadObservation(t *testing.T) {
+	runtime := &uciTransportContractFake{}
+	server := &Server{}
+	server.SetUCITransport(runtime)
+	request := uciTransportContractFinalizeRequest()
+	request.HeadOid = nil
+
+	if _, err := server.FinalizeCodeIndex(context.Background(), request); err != nil {
+		t.Fatalf("FinalizeCodeIndex() error = %v", err)
+	}
+	if runtime.finalizeRequest == nil {
+		t.Fatal("FinalizeCodeIndex did not delegate an unborn-head observation")
 	}
 }
 
@@ -576,6 +597,16 @@ func uciTransportContractScope() *pb.CodeIndexScope {
 	}
 }
 
+func uciTransportContractStringPointer(value string) *string {
+	copy := value
+	return &copy
+}
+
+func uciTransportContractBoolPointer(value bool) *bool {
+	copy := value
+	return &copy
+}
+
 func uciTransportContractBindRequest() *pb.BindCodeContextRequest {
 	return &pb.BindCodeContextRequest{ClientSessionId: "client-session", RequestedContext: uciTransportContractContext()}
 }
@@ -622,6 +653,10 @@ func uciTransportContractFinalizeRequest() *pb.FinalizeCodeIndexRequest {
 		ScanOutcome:                "complete",
 		CompleteCensus:             true,
 		CoverageJson:               []byte(`{"structural":"complete"}`),
+		HeadOid:                    uciTransportContractStringPointer(uciTransportContractHeadOID),
+		ObjectFormat:               uciTransportContractStringPointer("sha1"),
+		RefLabel:                   uciTransportContractStringPointer("main"),
+		Dirty:                      uciTransportContractBoolPointer(false),
 	}
 }
 
@@ -724,6 +759,42 @@ func TestUCITransportContractRejectsClosedInputsAndInvalidRuntimeResponses(t *te
 		{name: "coverage is not an object", invoke: func(server *Server) error {
 			request := uciTransportContractFinalizeRequest()
 			request.CoverageJson = []byte("[]")
+			_, err := server.FinalizeCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "missing dirty presence", invoke: func(server *Server) error {
+			request := uciTransportContractFinalizeRequest()
+			request.Dirty = nil
+			_, err := server.FinalizeCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "unsupported object format", invoke: func(server *Server) error {
+			request := uciTransportContractFinalizeRequest()
+			request.ObjectFormat = uciTransportContractStringPointer("sha512")
+			_, err := server.FinalizeCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "head requires object format", invoke: func(server *Server) error {
+			request := uciTransportContractFinalizeRequest()
+			request.ObjectFormat = nil
+			_, err := server.FinalizeCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "head length must match object format", invoke: func(server *Server) error {
+			request := uciTransportContractFinalizeRequest()
+			request.ObjectFormat = uciTransportContractStringPointer("sha256")
+			_, err := server.FinalizeCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "invalid ref label", invoke: func(server *Server) error {
+			request := uciTransportContractFinalizeRequest()
+			request.RefLabel = uciTransportContractStringPointer(" main")
+			_, err := server.FinalizeCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "ref label exceeds bound", invoke: func(server *Server) error {
+			request := uciTransportContractFinalizeRequest()
+			request.RefLabel = uciTransportContractStringPointer(strings.Repeat("r", maxUCITransportIdentifierBytes+1))
 			_, err := server.FinalizeCodeIndex(context.Background(), request)
 			return err
 		}},

@@ -34,6 +34,9 @@ const (
 	uciClientTestIncarnationB         = "99999999-9999-4999-8999-999999999999"
 	uciClientTestFrameDigest          = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	uciClientTestAggregatePartsDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	uciClientTestHeadOID              = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	uciClientTestObjectFormat         = "sha1"
+	uciClientTestRefLabel             = "main"
 	uciClientTestServerBuildID        = "server-build"
 	uciClientTestLocalRootID          = "local-root-a"
 	uciClientTestWorkstationID        = "workstation-a"
@@ -108,6 +111,11 @@ func TestUCIClientForwardsBoundScopeAndBuild(t *testing.T) {
 	require.Equal(t, begin.GetBuildId(), rpc.finalizeRequests[0].GetBuildId())
 	require.Equal(t, begin.GetLeaseEpoch(), rpc.finalizeRequests[0].GetLeaseEpoch())
 	require.Equal(t, staged.GetPartDigest(), rpc.finalizeRequests[0].GetPartsDigest())
+	require.Equal(t, uciClientTestHeadOID, rpc.finalizeRequests[0].GetHeadOid())
+	require.Equal(t, uciClientTestObjectFormat, rpc.finalizeRequests[0].GetObjectFormat())
+	require.Equal(t, uciClientTestRefLabel, rpc.finalizeRequests[0].GetRefLabel())
+	require.NotNil(t, rpc.finalizeRequests[0].Dirty)
+	require.False(t, rpc.finalizeRequests[0].GetDirty())
 	require.Len(t, rpc.queryRequests, 1)
 	requireUCIClientContextEqual(t, reference, rpc.queryRequests[0].GetContext())
 	require.Len(t, rpc.exploreRequests, 1)
@@ -258,6 +266,56 @@ func TestUCIClientRejectsInconsistentStageFrames(t *testing.T) {
 			require.Zero(t, rpc.stageOpenCalls, "invalid frames must not open the generated client stream")
 		})
 	}
+}
+
+func TestUCIClientValidatesFinalizeObservation(t *testing.T) {
+	newRequest := func() *pb.FinalizeCodeIndexRequest {
+		return uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA(), uciClientTestAggregatePartsDigest)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*pb.FinalizeCodeIndexRequest)
+	}{
+		{name: "missing dirty presence", mutate: func(request *pb.FinalizeCodeIndexRequest) { request.Dirty = nil }},
+		{name: "head without object format", mutate: func(request *pb.FinalizeCodeIndexRequest) { request.ObjectFormat = nil }},
+		{name: "unsupported object format", mutate: func(request *pb.FinalizeCodeIndexRequest) {
+			objectFormat := "sha512"
+			request.ObjectFormat = &objectFormat
+		}},
+		{name: "sha256 head with sha1 length", mutate: func(request *pb.FinalizeCodeIndexRequest) {
+			objectFormat := "sha256"
+			request.ObjectFormat = &objectFormat
+		}},
+		{name: "invalid head object id", mutate: func(request *pb.FinalizeCodeIndexRequest) {
+			headOID := "not-a-head"
+			request.HeadOid = &headOID
+		}},
+		{name: "invalid ref label", mutate: func(request *pb.FinalizeCodeIndexRequest) {
+			refLabel := ""
+			request.RefLabel = &refLabel
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rpc := &uciClientRPCFake{}
+			request := newRequest()
+			test.mutate(request)
+			_, err := newUCIClient(rpc).Finalize(context.Background(), request)
+			require.Error(t, err)
+			require.Empty(t, rpc.finalizeRequests)
+		})
+	}
+
+	t.Run("accepts omitted optional observations", func(t *testing.T) {
+		request := newRequest()
+		request.HeadOid = nil
+		request.ObjectFormat = nil
+		request.RefLabel = nil
+		rpc := &uciClientRPCFake{}
+		_, err := newUCIClient(rpc).Finalize(context.Background(), request)
+		require.NoError(t, err)
+		require.Len(t, rpc.finalizeRequests, 1)
+	})
 }
 
 func TestUCIClientPropagatesCancellation(t *testing.T) {
@@ -848,6 +906,10 @@ func uciClientTestStageFrame(scope *pb.CodeIndexScope, buildID string, leaseEpoc
 
 func uciClientTestFinalizeRequest(scope *pb.CodeIndexScope, buildID string, leaseEpoch uint64, expectedParent *pb.ContextRef, partsDigest string) *pb.FinalizeCodeIndexRequest {
 	startedAt := time.Date(2026, time.September, 5, 12, 0, 0, 0, time.UTC)
+	headOID := uciClientTestHeadOID
+	objectFormat := uciClientTestObjectFormat
+	refLabel := uciClientTestRefLabel
+	dirty := false
 	return &pb.FinalizeCodeIndexRequest{
 		Scope:                      scope,
 		BuildId:                    buildID,
@@ -865,6 +927,10 @@ func uciClientTestFinalizeRequest(scope *pb.CodeIndexScope, buildID string, leas
 		ScanOutcome:                "complete",
 		CompleteCensus:             true,
 		CoverageJson:               []byte(`{"structural":"complete"}`),
+		HeadOid:                    &headOID,
+		ObjectFormat:               &objectFormat,
+		RefLabel:                   &refLabel,
+		Dirty:                      &dirty,
 	}
 }
 

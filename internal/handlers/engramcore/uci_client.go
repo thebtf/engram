@@ -447,7 +447,8 @@ func (client *uciClient) Stage(ctx context.Context, frames []*pb.StageCodeIndexF
 }
 
 // Finalize forwards PartsDigest unchanged. Callers must use the aggregate
-// returned by Stage, never derive it from raw frame payload digests.
+// returned by Stage, never derive it from raw frame payload digests. Optional
+// checkout observations retain their wire presence; Dirty must be explicit.
 func (client *uciClient) Finalize(ctx context.Context, request *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error) {
 	const operation = "Finalize"
 	if err := uciClientContextError(operation, ctx); err != nil {
@@ -653,6 +654,7 @@ func validUCIClientFinalizeRequest(request *pb.FinalizeCodeIndexRequest) bool {
 		!validUCIClientSHA256Digest(request.GetPartsDigest()) ||
 		!validUCIClientSHA256Digest(request.GetManifestDigest()) ||
 		!validUCIClientSHA256Digest(request.GetEdgesDigest()) ||
+		!validUCIClientFinalizeObservation(request) ||
 		!validUCIClientScanOutcome(request.GetScanOutcome()) ||
 		!validUCIClientJSONObject(request.GetCoverageJson(), maxUCIClientCoverageBytes) ||
 		!validUCIClientTimestamp(request.GetScanStartedAt()) ||
@@ -663,6 +665,40 @@ func validUCIClientFinalizeRequest(request *pb.FinalizeCodeIndexRequest) bool {
 		return false
 	}
 	return request.GetExpectedParent() == nil || validUCIClientContextRef(request.GetExpectedParent())
+}
+
+func validUCIClientFinalizeObservation(request *pb.FinalizeCodeIndexRequest) bool {
+	if request == nil || request.Dirty == nil {
+		return false
+	}
+	if request.ObjectFormat != nil && *request.ObjectFormat != "sha1" && *request.ObjectFormat != "sha256" {
+		return false
+	}
+	if request.HeadOid != nil {
+		if request.ObjectFormat == nil {
+			return false
+		}
+		length := 40
+		if *request.ObjectFormat == "sha256" {
+			length = 64
+		}
+		if !validUCIClientLowerHex(*request.HeadOid, length) {
+			return false
+		}
+	}
+	return request.RefLabel == nil || validUCIClientIdentifier(*request.RefLabel, maxUCIClientFinalizeBytes)
+}
+
+func validUCIClientLowerHex(value string, length int) bool {
+	if len(value) != length {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func validUCIClientQueryRequest(request *pb.QueryCodeRequest) bool {

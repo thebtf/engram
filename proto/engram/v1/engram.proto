@@ -937,6 +937,10 @@ message FinalizeCodeIndexRequest {
   string scan_outcome = 14;
   bool complete_census = 15;
   bytes coverage_json = 16;
+  optional string head_oid = 17;
+  optional string object_format = 18;
+  optional string ref_label = 19;
+  optional bool dirty = 20;
 }
 
 message FinalizeCodeIndexResponse {

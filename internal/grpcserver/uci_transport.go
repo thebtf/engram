@@ -411,7 +411,8 @@ func validateUCIFinalizeCodeIndexRequest(request *pb.FinalizeCodeIndexRequest) e
 		!validUCIScanOutcome(request.GetScanOutcome()) ||
 		!validUCICoverageJSON(request.GetCoverageJson()) ||
 		!validUCITimestamp(request.GetScanStartedAt()) ||
-		!validUCITimestamp(request.GetScanCompletedAt()) {
+		!validUCITimestamp(request.GetScanCompletedAt()) ||
+		!validUCIFinalizeObservation(request) {
 		return uciTransportInvalidArgument()
 	}
 	if request.GetScanCompletedAt().AsTime().Before(request.GetScanStartedAt().AsTime()) {
@@ -421,6 +422,20 @@ func validateUCIFinalizeCodeIndexRequest(request *pb.FinalizeCodeIndexRequest) e
 		return uciTransportInvalidArgument()
 	}
 	return nil
+}
+
+func validUCIFinalizeObservation(request *pb.FinalizeCodeIndexRequest) bool {
+	if request == nil || request.Dirty == nil {
+		return false
+	}
+	if request.ObjectFormat != nil && !validUCIObjectFormat(*request.ObjectFormat) {
+		return false
+	}
+	if request.HeadOid != nil &&
+		(request.ObjectFormat == nil || !validUCIHeadOID(*request.HeadOid, *request.ObjectFormat)) {
+		return false
+	}
+	return request.RefLabel == nil || validUCIIdentifier(*request.RefLabel, maxUCITransportIdentifierBytes)
 }
 
 func validateUCIQueryCodeRequest(request *pb.QueryCodeRequest) error {
@@ -481,6 +496,26 @@ func validUCIIndexScope(scope *pb.CodeIndexScope) bool {
 		validUCIUUID(scope.GetCheckoutId()) &&
 		validUCIUUID(scope.GetIncarnationId()) &&
 		validUCIUUID(scope.GetAnalysisProfileId())
+}
+
+func validUCIObjectFormat(value string) bool {
+	return value == "sha1" || value == "sha256"
+}
+
+func validUCIHeadOID(value, objectFormat string) bool {
+	wantLength := 40
+	if objectFormat == "sha256" {
+		wantLength = 64
+	}
+	if len(value) != wantLength {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func validUCITimestamp(timestamp *timestamppb.Timestamp) bool {
