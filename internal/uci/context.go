@@ -51,6 +51,22 @@ type ContextCatalog interface {
 	LoadContext(ctx context.Context, ref ContextRef) (ContextRecord, error)
 }
 
+// ContextMetadata is safe display data for an already-resolved ContextRef.
+// It deliberately omits authority inputs and private checkout locators.
+type ContextMetadata struct {
+	Source   string
+	Checkout string
+	View     string
+}
+
+// ContextDirectory supplies bounded owner-scoped context discovery and safe
+// display metadata without making labels, paths, or local workstation data an
+// authority input.
+type ContextDirectory interface {
+	ListAuthorizedContexts(ctx context.Context, authRealm, principal string, limit int) ([]ContextRef, error)
+	LoadContextMetadata(ctx context.Context, ref ContextRef) (ContextMetadata, error)
+}
+
 // IndexBinding is the server-authorized index target for one checkout incarnation.
 // Context is nil only when a registered checkout has no current published View.
 type IndexBinding struct {

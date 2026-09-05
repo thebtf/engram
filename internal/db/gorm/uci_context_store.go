@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/uci"
@@ -14,16 +15,414 @@ import (
 )
 
 var (
-	ErrUCIAliasConflict             = errors.New("uci context alias conflict")
-	errUCIContextStoreNotConfigured = errors.New("uci context store not configured")
+	ErrUCIAliasConflict              = errors.New("uci context alias conflict")
+	errUCIContextStoreNotConfigured  = errors.New("uci context store not configured")
+	errUCIContextCatalogNotFound     = errors.New("uci context catalog entry not found")
+	errUCIContextAuthorizationDenied = errors.New("uci context authorization denied")
 )
+
+const uciContextListMax = 64
 
 type UCIContextStore struct {
 	db *gorm.DB
 }
 
+// UCIContextAuthorizer authorizes only the recorded owner of an active checkout.
+// Broader Source grants intentionally remain unavailable until a source-grant
+// authority is modeled in PostgreSQL.
+type UCIContextAuthorizer struct {
+	contexts *UCIContextStore
+}
+
 func NewUCIContextStore(db *gorm.DB) *UCIContextStore {
 	return &UCIContextStore{db: db}
+}
+
+// NewUCIContextAuthorizer binds owner-only context authorization to one
+// authoritative context store.
+func NewUCIContextAuthorizer(contexts *UCIContextStore) *UCIContextAuthorizer {
+	return &UCIContextAuthorizer{contexts: contexts}
+}
+
+var (
+	_ uci.ContextCatalog    = (*UCIContextStore)(nil)
+	_ uci.ContextDirectory  = (*UCIContextStore)(nil)
+	_ uci.ContextAuthorizer = (*UCIContextAuthorizer)(nil)
+)
+
+// LoadContext resolves an exact published or historical-published View tuple
+// from the authoritative registry. A ContextRef is never inferred from a
+// locator, path, or current checkout pointer.
+func (s *UCIContextStore) LoadContext(ctx context.Context, ref uci.ContextRef) (uci.ContextRecord, error) {
+	if err := s.requireDB("load context"); err != nil {
+		return uci.ContextRecord{}, err
+	}
+	if err := requireUCIContextRequest(ctx, "load context"); err != nil {
+		return uci.ContextRecord{}, err
+	}
+	if err := validateUCIContextRef(ref); err != nil {
+		return uci.ContextRecord{}, fmt.Errorf("uci context load context: %w", err)
+	}
+
+	row, err := s.loadUCIContextCatalogRow(ctx, ref)
+	if err != nil {
+		return uci.ContextRecord{}, err
+	}
+	if err := validateUCIContextCatalogRow(row); err != nil {
+		return uci.ContextRecord{}, fmt.Errorf("uci context load context: stored context is invalid: %w", err)
+	}
+	return uci.ContextRecord{Ref: cloneUCIContextRef(ref), AuthRealm: row.AuthRealm}, nil
+}
+
+// ListAuthorizedContexts returns current published ContextRefs for exactly one
+// active realm/principal owner in stable source, checkout, then view ID order.
+// Limits must be within [1, uciContextListMax] and are rejected rather than clamped.
+func (s *UCIContextStore) ListAuthorizedContexts(ctx context.Context, authRealm, principal string, limit int) ([]uci.ContextRef, error) {
+	if err := s.requireDB("list authorized contexts"); err != nil {
+		return nil, err
+	}
+	if err := requireUCIContextRequest(ctx, "list authorized contexts"); err != nil {
+		return nil, err
+	}
+	if err := validateUCIContextOwner(authRealm, principal); err != nil {
+		return nil, errUCIContextAuthorizationDenied
+	}
+	if limit < 1 || limit > uciContextListMax {
+		return nil, fmt.Errorf("uci context list authorized contexts: limit must be between 1 and %d", uciContextListMax)
+	}
+
+	var rows []uciAuthorizedContextRow
+	result := s.db.WithContext(ctx).Raw(`
+		SELECT
+			source.source_id,
+			checkout.checkout_id,
+			view_row.view_id,
+			view_row.profile_id,
+			view_row.generation,
+			source.auth_realm,
+			checkout.owner_principal,
+			checkout.workstation_id
+		FROM sources AS source
+		JOIN ci_checkouts AS checkout
+			ON checkout.source_id = source.source_id
+		JOIN ci_views AS view_row
+			ON view_row.view_id = checkout.current_view_id
+			AND view_row.checkout_id = checkout.checkout_id
+			AND view_row.source_id = checkout.source_id
+			AND view_row.incarnation_id = checkout.incarnation_id
+		JOIN ci_profiles AS profile
+			ON profile.profile_id = view_row.profile_id
+		WHERE source.auth_realm = ?
+			AND source.state = ?
+			AND checkout.owner_principal = ?
+			AND checkout.state IN (?, ?, ?)
+			AND view_row.state = ?
+		ORDER BY source.source_id ASC, checkout.checkout_id ASC, view_row.view_id ASC
+		LIMIT ?
+	`, authRealm, UCISourceActive, principal,
+		UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp,
+		UCIViewPublished, limit).Scan(&rows)
+	if result.Error != nil {
+		return nil, fmt.Errorf("uci context list authorized contexts: %w", result.Error)
+	}
+
+	refs := make([]uci.ContextRef, 0, len(rows))
+	for _, row := range rows {
+		if err := validateUCIAuthorizedContextRow(row, authRealm, principal); err != nil {
+			return nil, fmt.Errorf("uci context list authorized contexts: stored context is invalid: %w", err)
+		}
+		ref := uci.ContextRef{
+			SourceID:          row.SourceID,
+			CheckoutID:        row.CheckoutID,
+			ViewID:            row.ViewID,
+			AnalysisProfileID: row.ProfileID,
+			Generation:        row.Generation,
+		}
+		if err := validateUCIContextRef(ref); err != nil {
+			return nil, fmt.Errorf("uci context list authorized contexts: stored reference is invalid: %w", err)
+		}
+		refs = append(refs, ref)
+	}
+	return refs, nil
+}
+
+// LoadContextMetadata returns only safe display labels for an already-resolved
+// context. It never returns a locator, workstation, owner, or other authority
+// evidence, and it does not use labels as an authority selector.
+func (s *UCIContextStore) LoadContextMetadata(ctx context.Context, ref uci.ContextRef) (uci.ContextMetadata, error) {
+	if err := s.requireDB("load context metadata"); err != nil {
+		return uci.ContextMetadata{}, err
+	}
+	if err := requireUCIContextRequest(ctx, "load context metadata"); err != nil {
+		return uci.ContextMetadata{}, err
+	}
+	if err := validateUCIContextRef(ref); err != nil {
+		return uci.ContextMetadata{}, fmt.Errorf("uci context load context metadata: %w", err)
+	}
+
+	row, err := s.loadUCIContextCatalogRow(ctx, ref)
+	if err != nil {
+		return uci.ContextMetadata{}, err
+	}
+	if err := validateUCIContextCatalogRow(row); err != nil {
+		return uci.ContextMetadata{}, fmt.Errorf("uci context load context metadata: stored context is invalid: %w", err)
+	}
+	metadata, err := uciContextMetadataFromRow(row)
+	if err != nil {
+		return uci.ContextMetadata{}, fmt.Errorf("uci context load context metadata: stored labels are invalid: %w", err)
+	}
+	return metadata, nil
+}
+
+// AuthorizeContext allows only the stored owner of an active checkout in the
+// source's exact realm. The lack of a source-grant table is intentional: this
+// method must remain restrictive until that authority exists.
+func (authorizer *UCIContextAuthorizer) AuthorizeContext(ctx context.Context, access uci.ContextAccess) error {
+	if authorizer == nil || authorizer.contexts == nil {
+		return errUCIContextAuthorizationDenied
+	}
+	if err := authorizer.contexts.requireDB("authorize context"); err != nil {
+		return err
+	}
+	if err := requireUCIContextRequest(ctx, "authorize context"); err != nil {
+		return err
+	}
+	if err := validateUCIContextAccess(access); err != nil {
+		return errUCIContextAuthorizationDenied
+	}
+
+	var row uciContextAuthorizationRow
+	result := authorizer.contexts.db.WithContext(ctx).Raw(`
+		SELECT
+			source.auth_realm,
+			checkout.owner_principal,
+			checkout.workstation_id
+		FROM sources AS source
+		JOIN ci_checkouts AS checkout
+			ON checkout.source_id = source.source_id
+		WHERE source.source_id = ?
+			AND checkout.checkout_id = ?
+			AND source.auth_realm = ?
+			AND checkout.owner_principal = ?
+			AND source.state = ?
+			AND checkout.state IN (?, ?, ?)
+		LIMIT 1
+	`, access.SourceID, access.CheckoutID, access.AuthRealm, access.Principal,
+		UCISourceActive, UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp).Scan(&row)
+	if result.Error != nil {
+		return fmt.Errorf("uci context authorize context: %w", result.Error)
+	}
+	if result.RowsAffected != 1 ||
+		row.AuthRealm != access.AuthRealm ||
+		row.OwnerPrincipal != access.Principal ||
+		validateUCIContextOwner(row.AuthRealm, row.OwnerPrincipal) != nil ||
+		validateUCIRequiredText("workstation_id", row.WorkstationID) != nil {
+		return errUCIContextAuthorizationDenied
+	}
+	return nil
+}
+
+type uciContextCatalogRow struct {
+	AuthRealm      string          `gorm:"column:auth_realm"`
+	SourceLabel    string          `gorm:"column:source_label"`
+	OwnerPrincipal string          `gorm:"column:owner_principal"`
+	WorkstationID  string          `gorm:"column:workstation_id"`
+	CheckoutKind   UCICheckoutKind `gorm:"column:checkout_kind"`
+	ViewLabel      string          `gorm:"column:view_label"`
+}
+
+type uciAuthorizedContextRow struct {
+	SourceID       string `gorm:"column:source_id"`
+	CheckoutID     string `gorm:"column:checkout_id"`
+	ViewID         string `gorm:"column:view_id"`
+	ProfileID      string `gorm:"column:profile_id"`
+	Generation     int64  `gorm:"column:generation"`
+	AuthRealm      string `gorm:"column:auth_realm"`
+	OwnerPrincipal string `gorm:"column:owner_principal"`
+	WorkstationID  string `gorm:"column:workstation_id"`
+}
+
+type uciContextAuthorizationRow struct {
+	AuthRealm      string `gorm:"column:auth_realm"`
+	OwnerPrincipal string `gorm:"column:owner_principal"`
+	WorkstationID  string `gorm:"column:workstation_id"`
+}
+
+func (s *UCIContextStore) loadUCIContextCatalogRow(ctx context.Context, ref uci.ContextRef) (uciContextCatalogRow, error) {
+	query := `
+		SELECT
+			source.auth_realm,
+			source.display_name AS source_label,
+			checkout.owner_principal,
+			checkout.workstation_id,
+			checkout.kind AS checkout_kind,
+			CASE
+				WHEN view_row.ref_label IS NOT NULL THEN view_row.ref_label
+				WHEN view_row.head_oid IS NULL THEN 'unborn'
+				ELSE 'detached'
+			END AS view_label
+		FROM ci_views AS view_row
+		JOIN ci_checkouts AS checkout
+			ON checkout.checkout_id = view_row.checkout_id
+			AND checkout.source_id = view_row.source_id
+			AND checkout.incarnation_id = view_row.incarnation_id
+		JOIN sources AS source
+			ON source.source_id = checkout.source_id
+		JOIN ci_profiles AS profile
+			ON profile.profile_id = view_row.profile_id
+		WHERE view_row.view_id = ?
+			AND view_row.source_id = ?
+			AND view_row.checkout_id = ?
+			AND view_row.profile_id = ?
+			AND view_row.generation = ?
+			AND source.state = ?
+			AND checkout.state IN (?, ?, ?)
+			AND view_row.state IN (?, ?)
+	`
+	arguments := []any{
+		ref.ViewID,
+		ref.SourceID,
+		ref.CheckoutID,
+		ref.AnalysisProfileID,
+		ref.Generation,
+		UCISourceActive,
+		UCICheckoutRegistered,
+		UCICheckoutWatching,
+		UCICheckoutCatchingUp,
+		UCIViewPublished,
+		UCIViewSuperseded,
+	}
+	if ref.SpaceID != nil {
+		query += `
+			AND EXISTS (
+				SELECT 1
+				FROM spaces AS space
+				JOIN space_sources AS membership
+					ON membership.space_id = space.space_id
+					AND membership.source_id = source.source_id
+					AND membership.auth_realm = source.auth_realm
+				WHERE space.space_id = ?
+					AND space.auth_realm = source.auth_realm
+					AND space.state = ?
+			)
+		`
+		arguments = append(arguments, *ref.SpaceID, UCISpaceActive)
+	}
+	query += " LIMIT 1"
+
+	var row uciContextCatalogRow
+	result := s.db.WithContext(ctx).Raw(query, arguments...).Scan(&row)
+	if result.Error != nil {
+		return uciContextCatalogRow{}, fmt.Errorf("uci context load catalog row: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return uciContextCatalogRow{}, errUCIContextCatalogNotFound
+	}
+	return row, nil
+}
+
+func uciContextMetadataFromRow(row uciContextCatalogRow) (uci.ContextMetadata, error) {
+	if !validUCIContextDisplayLabel(row.SourceLabel) ||
+		!validUCIContextDisplayLabel(row.ViewLabel) ||
+		!isUCICheckoutKind(row.CheckoutKind) {
+		return uci.ContextMetadata{}, errors.New("invalid context display metadata")
+	}
+	return uci.ContextMetadata{
+		Source:   row.SourceLabel,
+		Checkout: string(row.CheckoutKind),
+		View:     row.ViewLabel,
+	}, nil
+}
+
+func validateUCIContextCatalogRow(row uciContextCatalogRow) error {
+	if err := validateUCIContextOwner(row.AuthRealm, row.OwnerPrincipal); err != nil {
+		return err
+	}
+	if err := validateUCIRequiredText("workstation_id", row.WorkstationID); err != nil {
+		return err
+	}
+	if !isUCICheckoutKind(row.CheckoutKind) {
+		return errors.New("checkout kind is invalid")
+	}
+	return nil
+}
+
+func validateUCIAuthorizedContextRow(row uciAuthorizedContextRow, authRealm, principal string) error {
+	if row.AuthRealm != authRealm || row.OwnerPrincipal != principal {
+		return errors.New("owner scope does not match")
+	}
+	if err := validateUCIContextOwner(row.AuthRealm, row.OwnerPrincipal); err != nil {
+		return err
+	}
+	return validateUCIRequiredText("workstation_id", row.WorkstationID)
+}
+
+func validateUCIContextAccess(access uci.ContextAccess) error {
+	if err := validateUCIContextOwner(access.AuthRealm, access.Principal); err != nil {
+		return err
+	}
+	if err := validateUCIUUID("source_id", access.SourceID); err != nil {
+		return err
+	}
+	return validateUCIUUID("checkout_id", access.CheckoutID)
+}
+
+func validateUCIContextOwner(authRealm, principal string) error {
+	if err := validateUCIRequiredText("auth_realm", authRealm); err != nil {
+		return err
+	}
+	// Master, browser-session, and authentication-disabled identities have no
+	// single workstation-bound principal and therefore cannot use owner-only UCI.
+	switch authRealm {
+	case "master", "session", "auth-disabled":
+		return errors.New("auth realm has no owner-only workstation identity")
+	}
+	return validateUCIRequiredText("principal", principal)
+}
+
+func validateUCIContextRef(ref uci.ContextRef) error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"source_id", ref.SourceID},
+		{"checkout_id", ref.CheckoutID},
+		{"view_id", ref.ViewID},
+		{"analysis_profile_id", ref.AnalysisProfileID},
+	} {
+		if err := validateUCIUUID(field.name, field.value); err != nil {
+			return err
+		}
+	}
+	if ref.SpaceID != nil {
+		if err := validateUCIUUID("space_id", *ref.SpaceID); err != nil {
+			return err
+		}
+	}
+	if ref.Generation <= 0 {
+		return errors.New("generation must be positive")
+	}
+	return nil
+}
+
+func cloneUCIContextRef(ref uci.ContextRef) uci.ContextRef {
+	copy := ref
+	if ref.SpaceID != nil {
+		spaceID := *ref.SpaceID
+		copy.SpaceID = &spaceID
+	}
+	return copy
+}
+
+func validUCIContextDisplayLabel(value string) bool {
+	return len(value) <= 256 && utf8.ValidString(value) && validateUCIRequiredText("display_label", value) == nil
+}
+
+func requireUCIContextRequest(ctx context.Context, operation string) error {
+	if ctx == nil {
+		return fmt.Errorf("uci context %s: context is required", operation)
+	}
+	return ctx.Err()
 }
 
 func (s *UCIContextStore) CreateSpace(ctx context.Context, in CreateSpaceInput) (*UCISpace, error) {
