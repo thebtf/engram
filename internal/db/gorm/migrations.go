@@ -5157,6 +5157,327 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackInterventionContextReferenceMigration170,
 		},
+		// Migration 171 intentionally remains an inline gormigrate literal. migrationmeta
+		// reads Migrate bodies in this file to derive the live data model.
+		{
+			ID: "171_uci_context_registry",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`CREATE TABLE IF NOT EXISTS spaces (
+						space_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						auth_realm TEXT NOT NULL,
+						display_name TEXT NOT NULL,
+						state TEXT NOT NULL DEFAULT 'active',
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT spaces_auth_realm_chk CHECK (
+							btrim(auth_realm) <> ''
+							AND auth_realm = btrim(auth_realm)
+							AND auth_realm !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT spaces_display_name_chk CHECK (
+							btrim(display_name) <> ''
+							AND display_name = btrim(display_name)
+							AND display_name !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT spaces_state_chk CHECK (state IN ('active', 'retired')),
+						CONSTRAINT spaces_space_realm_unique UNIQUE (space_id, auth_realm)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_spaces_realm_state
+						ON spaces (auth_realm, state)`,
+					`CREATE TABLE IF NOT EXISTS sources (
+						source_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						auth_realm TEXT NOT NULL,
+						kind TEXT NOT NULL,
+						display_name TEXT NOT NULL,
+						state TEXT NOT NULL DEFAULT 'active',
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT sources_auth_realm_chk CHECK (
+							btrim(auth_realm) <> ''
+							AND auth_realm = btrim(auth_realm)
+							AND auth_realm !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT sources_kind_chk CHECK (kind IN ('git', 'directory', 'document_set')),
+						CONSTRAINT sources_display_name_chk CHECK (
+							btrim(display_name) <> ''
+							AND display_name = btrim(display_name)
+							AND display_name !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT sources_state_chk CHECK (state IN ('active', 'offline', 'retired')),
+						CONSTRAINT sources_source_realm_unique UNIQUE (source_id, auth_realm)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_sources_realm_state
+						ON sources (auth_realm, state)`,
+					`CREATE TABLE IF NOT EXISTS space_sources (
+						auth_realm TEXT NOT NULL,
+						space_id UUID NOT NULL,
+						source_id UUID NOT NULL,
+						display_order INTEGER NOT NULL DEFAULT 0,
+						PRIMARY KEY (space_id, source_id),
+						CONSTRAINT space_sources_auth_realm_chk CHECK (
+							btrim(auth_realm) <> ''
+							AND auth_realm = btrim(auth_realm)
+							AND auth_realm !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT space_sources_display_order_chk CHECK (display_order >= 0),
+						CONSTRAINT space_sources_space_realm_fkey
+							FOREIGN KEY (space_id, auth_realm)
+							REFERENCES spaces (space_id, auth_realm),
+						CONSTRAINT space_sources_source_realm_fkey
+							FOREIGN KEY (source_id, auth_realm)
+							REFERENCES sources (source_id, auth_realm)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_space_sources_space_order
+						ON space_sources (space_id, display_order, source_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_space_sources_source_order
+						ON space_sources (source_id, display_order, space_id)`,
+					`CREATE TABLE IF NOT EXISTS legacy_context_aliases (
+						alias_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						auth_realm TEXT NOT NULL,
+						legacy_domain TEXT NOT NULL,
+						scheme TEXT NOT NULL,
+						value TEXT NOT NULL,
+						client_namespace TEXT NOT NULL DEFAULT '',
+						space_id UUID,
+						source_id UUID,
+						mapping_state TEXT NOT NULL,
+						revision BIGINT NOT NULL DEFAULT 1,
+						provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT legacy_context_aliases_auth_realm_chk CHECK (
+							btrim(auth_realm) <> ''
+							AND auth_realm = btrim(auth_realm)
+							AND auth_realm !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT legacy_context_aliases_legacy_domain_chk CHECK (
+							btrim(legacy_domain) <> ''
+							AND legacy_domain = btrim(legacy_domain)
+							AND legacy_domain !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT legacy_context_aliases_scheme_chk CHECK (
+							btrim(scheme) <> ''
+							AND scheme = btrim(scheme)
+							AND scheme !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT legacy_context_aliases_value_chk CHECK (
+							btrim(value) <> ''
+							AND value = btrim(value)
+							AND value !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT legacy_context_aliases_client_namespace_chk CHECK (
+							client_namespace = btrim(client_namespace)
+							AND client_namespace !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT legacy_context_aliases_mapping_state_chk
+							CHECK (mapping_state IN ('resolved', 'ambiguous', 'unmapped', 'retired')),
+						CONSTRAINT legacy_context_aliases_revision_chk CHECK (revision > 0),
+						CONSTRAINT legacy_context_aliases_provenance_object_chk
+							CHECK (jsonb_typeof(provenance) = 'object'),
+						CONSTRAINT legacy_context_aliases_target_chk CHECK (
+							(mapping_state = 'resolved' AND (space_id IS NOT NULL OR source_id IS NOT NULL))
+							OR (mapping_state = 'unmapped' AND space_id IS NULL AND source_id IS NULL)
+							OR mapping_state IN ('ambiguous', 'retired')
+						),
+						CONSTRAINT legacy_context_aliases_key_unique
+							UNIQUE (auth_realm, legacy_domain, scheme, value, client_namespace),
+						CONSTRAINT legacy_context_aliases_space_realm_fkey
+							FOREIGN KEY (space_id, auth_realm)
+							REFERENCES spaces (space_id, auth_realm),
+						CONSTRAINT legacy_context_aliases_source_realm_fkey
+							FOREIGN KEY (source_id, auth_realm)
+							REFERENCES sources (source_id, auth_realm)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_legacy_context_aliases_space
+						ON legacy_context_aliases (space_id)
+						WHERE space_id IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_legacy_context_aliases_source
+						ON legacy_context_aliases (source_id)
+						WHERE source_id IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_legacy_context_aliases_lookup_state
+						ON legacy_context_aliases (auth_realm, legacy_domain, scheme, value, client_namespace, mapping_state)`,
+					`CREATE TABLE IF NOT EXISTS ci_profiles (
+						profile_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						parser_bundle_digest TEXT NOT NULL,
+						resolver_revision TEXT NOT NULL,
+						chunker_revision TEXT NOT NULL,
+						ignore_policy_digest TEXT NOT NULL,
+						build_context_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+						secret_policy_revision TEXT NOT NULL,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_profiles_parser_bundle_digest_chk
+							CHECK (parser_bundle_digest ~ '^sha256:[0-9a-f]{64}$'),
+						CONSTRAINT ci_profiles_resolver_revision_chk CHECK (
+							btrim(resolver_revision) <> ''
+							AND resolver_revision = btrim(resolver_revision)
+							AND resolver_revision !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_profiles_chunker_revision_chk CHECK (
+							btrim(chunker_revision) <> ''
+							AND chunker_revision = btrim(chunker_revision)
+							AND chunker_revision !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_profiles_ignore_policy_digest_chk
+							CHECK (ignore_policy_digest ~ '^sha256:[0-9a-f]{64}$'),
+						CONSTRAINT ci_profiles_build_context_object_chk
+							CHECK (jsonb_typeof(build_context_json) = 'object'),
+						CONSTRAINT ci_profiles_secret_policy_revision_chk CHECK (
+							btrim(secret_policy_revision) <> ''
+							AND secret_policy_revision = btrim(secret_policy_revision)
+							AND secret_policy_revision !~ '[[:cntrl:]]'
+						)
+					)`,
+					`CREATE TABLE IF NOT EXISTS ci_checkouts (
+						checkout_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						source_id UUID NOT NULL,
+						workstation_id TEXT NOT NULL,
+						incarnation_id UUID NOT NULL,
+						kind TEXT NOT NULL,
+						owner_principal TEXT NOT NULL,
+						locator_ref TEXT NOT NULL,
+						current_view_id UUID,
+						state TEXT NOT NULL DEFAULT 'registered',
+						lease_epoch BIGINT NOT NULL DEFAULT 0,
+						owner_instance TEXT,
+						lease_expires_at TIMESTAMPTZ,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_checkouts_source_fkey FOREIGN KEY (source_id)
+							REFERENCES sources (source_id),
+						CONSTRAINT ci_checkouts_incarnation_unique UNIQUE (incarnation_id),
+						CONSTRAINT ci_checkouts_checkout_source_incarnation_unique
+							UNIQUE (checkout_id, source_id, incarnation_id),
+						CONSTRAINT ci_checkouts_workstation_id_chk CHECK (
+							btrim(workstation_id) <> ''
+							AND workstation_id = btrim(workstation_id)
+							AND workstation_id !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_checkouts_kind_chk CHECK (kind IN ('working_tree', 'commit_reader')),
+						CONSTRAINT ci_checkouts_owner_principal_chk CHECK (
+							btrim(owner_principal) <> ''
+							AND owner_principal = btrim(owner_principal)
+							AND owner_principal !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_checkouts_locator_ref_chk CHECK (
+							btrim(locator_ref) <> ''
+							AND locator_ref = btrim(locator_ref)
+							AND locator_ref !~ '[[:cntrl:]]'
+						),
+						CONSTRAINT ci_checkouts_state_chk CHECK (
+							state IN ('configured', 'registered', 'watching', 'catching_up', 'offline', 'unregistered')
+						),
+						CONSTRAINT ci_checkouts_lease_epoch_chk CHECK (lease_epoch >= 0),
+						CONSTRAINT ci_checkouts_owner_instance_chk CHECK (
+							owner_instance IS NULL OR (
+								btrim(owner_instance) <> ''
+								AND owner_instance = btrim(owner_instance)
+								AND owner_instance !~ '[[:cntrl:]]'
+							)
+						),
+						CONSTRAINT ci_checkouts_lease_window_chk CHECK (
+							lease_expires_at IS NULL OR owner_instance IS NOT NULL
+						),
+						CONSTRAINT ci_checkouts_commit_reader_pointer_chk
+							CHECK (kind <> 'commit_reader' OR current_view_id IS NULL)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_checkouts_source_state
+						ON ci_checkouts (source_id, state)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_checkouts_source_workstation
+						ON ci_checkouts (source_id, workstation_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_checkouts_current_view
+						ON ci_checkouts (current_view_id)
+						WHERE current_view_id IS NOT NULL`,
+					`CREATE TABLE IF NOT EXISTS ci_views (
+						view_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+						checkout_id UUID NOT NULL,
+						source_id UUID NOT NULL,
+						incarnation_id UUID NOT NULL,
+						generation BIGINT NOT NULL,
+						profile_id UUID NOT NULL,
+						head_oid TEXT,
+						object_format TEXT,
+						ref_label TEXT,
+						dirty BOOLEAN NOT NULL DEFAULT false,
+						observed_fs_seq BIGINT NOT NULL DEFAULT 0,
+						scan_start TIMESTAMPTZ NOT NULL,
+						scan_end TIMESTAMPTZ NOT NULL,
+						manifest_digest TEXT NOT NULL,
+						state TEXT NOT NULL DEFAULT 'staging',
+						coverage_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+						published_at TIMESTAMPTZ,
+						created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+						CONSTRAINT ci_views_checkout_generation_unique UNIQUE (checkout_id, generation),
+						CONSTRAINT ci_views_view_checkout_source_incarnation_unique
+							UNIQUE (view_id, checkout_id, source_id, incarnation_id),
+						CONSTRAINT ci_views_source_fkey FOREIGN KEY (source_id)
+							REFERENCES sources (source_id),
+						CONSTRAINT ci_views_checkout_source_incarnation_fkey
+							FOREIGN KEY (checkout_id, source_id, incarnation_id)
+							REFERENCES ci_checkouts (checkout_id, source_id, incarnation_id),
+						CONSTRAINT ci_views_profile_fkey FOREIGN KEY (profile_id)
+							REFERENCES ci_profiles (profile_id),
+						CONSTRAINT ci_views_generation_chk CHECK (generation >= 1),
+						CONSTRAINT ci_views_observed_fs_seq_chk CHECK (observed_fs_seq >= 0),
+						CONSTRAINT ci_views_scan_window_chk CHECK (scan_end >= scan_start),
+						CONSTRAINT ci_views_manifest_digest_chk
+							CHECK (manifest_digest ~ '^sha256:[0-9a-f]{64}$'),
+						CONSTRAINT ci_views_state_chk CHECK (
+							state IN ('staging', 'published', 'superseded', 'retired')
+						),
+						CONSTRAINT ci_views_object_format_chk CHECK (
+							object_format IS NULL OR object_format IN ('sha1', 'sha256')
+						),
+						CONSTRAINT ci_views_head_oid_chk CHECK (
+							head_oid IS NULL OR (
+								(object_format = 'sha1' AND head_oid ~ '^[0-9a-f]{40}$')
+								OR (object_format = 'sha256' AND head_oid ~ '^[0-9a-f]{64}$')
+							)
+						),
+						CONSTRAINT ci_views_ref_label_chk CHECK (
+							ref_label IS NULL OR (
+								btrim(ref_label) <> ''
+								AND ref_label = btrim(ref_label)
+								AND ref_label !~ '[[:cntrl:]]'
+							)
+						),
+						CONSTRAINT ci_views_coverage_object_chk
+							CHECK (jsonb_typeof(coverage_json) = 'object'),
+						CONSTRAINT ci_views_published_at_chk CHECK (
+							(state = 'staging' AND published_at IS NULL)
+							OR (state IN ('published', 'superseded', 'retired') AND published_at IS NOT NULL)
+						)
+					)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_views_checkout_generation
+						ON ci_views (checkout_id, generation DESC)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_views_source_state
+						ON ci_views (source_id, state)`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_views_profile
+						ON ci_views (profile_id)`,
+					`DO $$
+					BEGIN
+						IF NOT EXISTS (
+							SELECT 1
+							FROM pg_constraint
+							WHERE conname = 'ci_checkouts_current_view_fkey'
+								AND conrelid = 'ci_checkouts'::regclass
+						) THEN
+							ALTER TABLE ci_checkouts
+								ADD CONSTRAINT ci_checkouts_current_view_fkey
+								FOREIGN KEY (current_view_id, checkout_id, source_id, incarnation_id)
+								REFERENCES ci_views (view_id, checkout_id, source_id, incarnation_id);
+						END IF;
+					END $$`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 171: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackUCIContextRegistryMigration171,
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -5284,6 +5605,10 @@ func rollbackInterventionContextReferenceMigration170(tx *gorm.DB) error {
 		}
 		return nil
 	})
+}
+
+func rollbackUCIContextRegistryMigration171(tx *gorm.DB) error {
+	return nil
 }
 
 func candidateReviewSnapshotOpTypeMigration153() *gormigrate.Migration {
