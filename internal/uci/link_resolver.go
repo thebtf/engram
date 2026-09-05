@@ -10,7 +10,7 @@ import (
 
 const (
 	graphMaxDepth               = 64
-	graphMaxVisited             = 4_096
+	graphMaxVisited             = 5_000
 	graphMaxFilterRelations     = 32
 	graphMaxFilterEvidenceKinds = 4
 )

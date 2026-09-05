@@ -749,6 +749,9 @@ func TestReadOnlyToolAllowed_DispatchAndActionInventory(t *testing.T) {
 		{"rule_governance_usefulness", `{}`},
 		{"codebase_search", `{}`},
 		{"codebase_status", `{}`},
+		{"codebase_context", `{"action":"resolve"}`},
+		{"codebase_read", `{}`},
+		{"codebase_graph", `{}`},
 	}
 	denied := []struct{ name, args string }{
 		{"recall", `{"action":"future"}`},

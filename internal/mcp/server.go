@@ -1082,6 +1082,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	if codeIntelEnabled() && s.hasCodebaseReadApplication() {
 		tools = append(tools, codebaseReadTool())
 	}
+	if codeIntelEnabled() && s.hasCodebaseGraphApplication() {
+		tools = append(tools, codebaseGraphTool())
+	}
 
 	// Ambient fallback polling — advertise only when the S3 flag is on and the queue seam is wired.
 	if ambientHintsEnabledFromEnv() && s.hintQueue != nil {
@@ -1290,6 +1293,9 @@ var readOnlyToolAllowlist = map[string]map[string]struct{}{
 	"rule_governance_snapshots":    nil,
 	"rule_governance_usefulness":   nil,
 	"codebase_search":              nil,
+	"codebase_context":             nil,
+	"codebase_read":                nil,
+	"codebase_graph":               nil,
 	"codebase_status":              nil,
 	"recall": {
 		"search": {},
@@ -1490,6 +1496,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleCodebaseContext(ctx, args)
 	case "codebase_read":
 		return s.handleCodebaseRead(ctx, args)
+	case "codebase_graph":
+		return s.handleCodebaseGraph(ctx, args)
 	}
 
 	return "", fmt.Errorf("unknown tool: %s", name)
