@@ -350,7 +350,8 @@ func newUCIContextIntegrationFixture(t *testing.T) *uciContextIntegrationFixture
 
 func (fixture *uciContextIntegrationFixture) clientContext(sessionID, principal string) context.Context {
 	identity := auth.ClientWithPrincipal("read-write", uciContextIntegrationRealm, principal, auth.PrincipalKindAgent)
-	return auditcontext.WithSourceSession(auth.WithIdentity(context.Background(), identity), sessionID)
+	ctx := auth.WithIdentity(context.Background(), identity)
+	return metadata.NewIncomingContext(ctx, metadata.Pairs(auditcontext.SourceSessionMetadataKey, sessionID))
 }
 
 type uciContextIntegrationCatalog struct {

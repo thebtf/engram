@@ -12,8 +12,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/thebtf/engram/internal/auditcontext"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -78,6 +80,7 @@ func (client *uciClient) Bind(ctx context.Context, request *pb.BindCodeContextRe
 	if err := uciClientContextError(operation, ctx); err != nil {
 		return nil, err
 	}
+	ctx = uciClientOutgoingContext(ctx)
 	if err := client.available(operation); err != nil {
 		return nil, err
 	}
@@ -110,6 +113,7 @@ func (client *uciClient) Begin(ctx context.Context, request *pb.BeginCodeIndexRe
 	if err := uciClientContextError(operation, ctx); err != nil {
 		return nil, err
 	}
+	ctx = uciClientOutgoingContext(ctx)
 	if err := client.available(operation); err != nil {
 		return nil, err
 	}
@@ -142,6 +146,7 @@ func (client *uciClient) Stage(ctx context.Context, frames []*pb.StageCodeIndexF
 	if err := uciClientContextError(operation, ctx); err != nil {
 		return nil, err
 	}
+	ctx = uciClientOutgoingContext(ctx)
 	if err := client.available(operation); err != nil {
 		return nil, err
 	}
@@ -196,6 +201,7 @@ func (client *uciClient) Finalize(ctx context.Context, request *pb.FinalizeCodeI
 	if err := uciClientContextError(operation, ctx); err != nil {
 		return nil, err
 	}
+	ctx = uciClientOutgoingContext(ctx)
 	if err := client.available(operation); err != nil {
 		return nil, err
 	}
@@ -228,6 +234,7 @@ func (client *uciClient) Query(ctx context.Context, request *pb.QueryCodeRequest
 	if err := uciClientContextError(operation, ctx); err != nil {
 		return nil, err
 	}
+	ctx = uciClientOutgoingContext(ctx)
 	if err := client.available(operation); err != nil {
 		return nil, err
 	}
@@ -260,6 +267,7 @@ func (client *uciClient) Explore(ctx context.Context, request *pb.ExploreCodeReq
 	if err := uciClientContextError(operation, ctx); err != nil {
 		return nil, err
 	}
+	ctx = uciClientOutgoingContext(ctx)
 	if err := client.available(operation); err != nil {
 		return nil, err
 	}
@@ -292,6 +300,14 @@ func (client *uciClient) available(operation string) error {
 		return uciClientError(operation, errUCIClientUnavailable)
 	}
 	return nil
+}
+
+func uciClientOutgoingContext(ctx context.Context) context.Context {
+	sessionID := auditcontext.SourceSession(ctx)
+	if sessionID == "" {
+		return ctx
+	}
+	return metadata.AppendToOutgoingContext(ctx, auditcontext.SourceSessionMetadataKey, sessionID)
 }
 
 func uciClientContextError(operation string, ctx context.Context) error {

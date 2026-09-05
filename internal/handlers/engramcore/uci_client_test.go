@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/auditcontext"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -97,6 +99,24 @@ func TestUCIClientForwardsBoundScopeAndBuild(t *testing.T) {
 	requireUCIClientContextEqual(t, reference, rpc.queryRequests[0].GetContext())
 	require.Len(t, rpc.exploreRequests, 1)
 	requireUCIClientContextEqual(t, reference, rpc.exploreRequests[0].GetContext())
+}
+
+func TestUCIClientPropagatesSourceSessionMetadata(t *testing.T) {
+	rpc := &uciClientRPCFake{bind: func(ctx context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
+		outgoing, ok := metadata.FromOutgoingContext(ctx)
+		require.True(t, ok)
+		require.Equal(t, []string{"client-a"}, outgoing.Get(auditcontext.SourceSessionMetadataKey))
+		return &pb.BindCodeContextResponse{
+			ContextHandle: "context-handle-client-a",
+			Context:       request.GetRequestedContext(),
+		}, nil
+	}}
+	ctx := auditcontext.WithSourceSession(context.Background(), "client-a")
+	_, err := newUCIClient(rpc).Bind(ctx, &pb.BindCodeContextRequest{
+		ClientSessionId:  "client-a",
+		RequestedContext: uciClientTestContextA(),
+	})
+	require.NoError(t, err)
 }
 
 func TestUCIClientKeepsSessionsAndWorktreesIndependent(t *testing.T) {

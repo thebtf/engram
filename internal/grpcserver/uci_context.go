@@ -5,12 +5,14 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"strings"
 
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
 	"github.com/thebtf/engram/internal/uci"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -316,15 +318,43 @@ func contextAwareCallerFrom(ctx context.Context) (contextAwareCaller, error) {
 	if !found {
 		return contextAwareCaller{}, contextAwareClosedError(uci.ContextMismatch)
 	}
+	clientSessionID, ok := contextAwareSourceSession(ctx)
+	if !ok {
+		return contextAwareCaller{}, contextAwareClosedError(uci.ContextMismatch)
+	}
 	caller := contextAwareCaller{
-		clientSessionID: auditcontext.SourceSession(ctx),
+		clientSessionID: clientSessionID,
 		authRealm:       string(identity.Source),
 		principal:       identity.Principal,
 	}
-	if caller.clientSessionID == "" || caller.authRealm == "" || caller.principal == "" {
+	if caller.authRealm == "" || caller.principal == "" {
 		return contextAwareCaller{}, contextAwareClosedError(uci.ContextMismatch)
 	}
 	return caller, nil
+}
+
+func contextAwareSourceSession(ctx context.Context) (string, bool) {
+	carried := auditcontext.SourceSession(ctx)
+	var received string
+	if incoming, found := metadata.FromIncomingContext(ctx); found {
+		values := incoming.Get(auditcontext.SourceSessionMetadataKey)
+		if len(values) > 1 {
+			return "", false
+		}
+		if len(values) == 1 {
+			received = strings.TrimSpace(values[0])
+			if received == "" || received != values[0] {
+				return "", false
+			}
+		}
+	}
+	if carried != "" && received != "" && carried != received {
+		return "", false
+	}
+	if carried != "" {
+		return carried, true
+	}
+	return received, received != ""
 }
 
 func (transport *contextAwareUCITransport) resolveBound(ctx context.Context, caller contextAwareCaller) (uci.AuthorizedContext, error) {

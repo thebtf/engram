@@ -6,6 +6,9 @@ import (
 	"strings"
 )
 
+// SourceSessionMetadataKey carries the originating MCP client session across native gRPC calls.
+const SourceSessionMetadataKey = "x-engram-source-session"
+
 type (
 	actorKey         struct{}
 	sourceSessionKey struct{}
