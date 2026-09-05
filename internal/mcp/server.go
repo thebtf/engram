@@ -64,6 +64,10 @@ type Server struct {
 	snapshotStore                 *gorm.SnapshotStore       // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	reviewLoopCandidateStoreSeam  reviewLoopCandidateLister // CR-008 test seam for review metrics/queue reads
 	codeChunkStore                *gorm.CodeChunkStore      // CR-006: non-nil when ENGRAM_CODE_INTEL_ENABLED=true
+	codebaseContextMu             sync.Mutex
+	codebaseContextApplication    codebaseContextApplication
+	codebaseContextHandles        map[string]*codebaseContextClientHandles
+	codebaseContextEpoch          uint64
 	ruleGovernanceStore           ruleGovernanceCandidateWriter
 	ruleGovernanceReadStore       ruleGovernanceReadStore
 	ruleInjectionTelemetry        ruleInjectionTelemetryReader
@@ -285,6 +289,17 @@ func (s *Server) SetRerankClient(client *reranking.Client) {
 // (s.store.GetDB()) to share the connection pool.
 func (s *Server) SetStatsDB(db *gormlib.DB) {
 	s.statsDB = db
+}
+
+// SetCodebaseContextApplication wires the client-scoped UCI context adapter.
+// Replacing the application invalidates every opaque handle from the prior adapter.
+func (s *Server) SetCodebaseContextApplication(application codebaseContextApplication) {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+
+	s.codebaseContextApplication = application
+	s.codebaseContextHandles = make(map[string]*codebaseContextClientHandles)
+	s.codebaseContextEpoch++
 }
 
 // HandleRequest dispatches a JSON-RPC request and returns the response.
@@ -1066,6 +1081,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	if codeIntelEnabled() && s.codeChunkStore != nil {
 		tools = append(tools, codebaseSearchTool())
 	}
+	if codeIntelEnabled() && s.hasCodebaseContextApplication() {
+		tools = append(tools, codebaseContextTool())
+	}
 
 	// Ambient fallback polling — advertise only when the S3 flag is on and the queue seam is wired.
 	if ambientHintsEnabledFromEnv() && s.hintQueue != nil {
@@ -1470,6 +1488,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleCodebaseSearch(ctx, args)
 	case "codebase_status":
 		return s.handleCodebaseStatus(ctx, args)
+	case "codebase_context":
+		return s.handleCodebaseContext(ctx, args)
 	}
 
 	return "", fmt.Errorf("unknown tool: %s", name)
