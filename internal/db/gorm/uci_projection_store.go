@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -680,6 +681,621 @@ func (s *UCIProjectionStore) LinkChunkEmbedding(ctx context.Context, in LinkUCIC
 	return &existing, nil
 }
 
+const uciSemanticPathIndependentFingerprint = "path-independent"
+
+var _ ucidomain.SemanticStore = (*UCIProjectionStore)(nil)
+
+// LookupCandidateEmbedding returns only an exact, current candidate embedding.
+// The selected_candidate CTE binds Source, Checkout, View, generation, profile,
+// artifact bytes, and membership before it joins any reusable vector rows.
+func (s *UCIProjectionStore) LookupCandidateEmbedding(ctx context.Context, authorized ucidomain.AuthorizedContext, profile ucidomain.VectorProfile, candidate ucidomain.QueryCandidate) ([]float32, bool, error) {
+	if err := s.requireDB("lookup semantic candidate embedding"); err != nil {
+		return nil, false, err
+	}
+	ref := authorized.Ref()
+	if err := validateUCISemanticCandidate(ref, profile, candidate); err != nil {
+		return nil, false, err
+	}
+	_, inputDigest, err := ucidomain.SemanticEmbeddingInput(profile, candidate)
+	if err != nil {
+		return nil, false, fmt.Errorf("uci projection semantic input: %w", err)
+	}
+	query, arguments := buildUCISemanticLookupSQL(ref, profile, candidate, inputDigest)
+	var row uciSemanticVectorRow
+	result := s.db.WithContext(ctx).Raw(query, arguments...).Scan(&row)
+	if result.Error != nil {
+		return nil, false, fmt.Errorf("uci projection lookup semantic candidate embedding: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return nil, false, nil
+	}
+	vector := row.Vector.Slice()
+	if err := validateUCISemanticVector(vector, profile.Dimension); err != nil {
+		return nil, false, fmt.Errorf("uci projection lookup semantic candidate embedding: stored vector is invalid: %w", err)
+	}
+	return append([]float32(nil), vector...), true, nil
+}
+
+// StoreCandidateEmbedding persists one provider-validated vector and links it
+// only to a candidate still visible in the exact authorized View.
+func (s *UCIProjectionStore) StoreCandidateEmbedding(ctx context.Context, authorized ucidomain.AuthorizedContext, profile ucidomain.VectorProfile, candidate ucidomain.QueryCandidate, vector []float32) error {
+	if err := s.requireDB("store semantic candidate embedding"); err != nil {
+		return err
+	}
+	ref := authorized.Ref()
+	if err := validateUCISemanticCandidate(ref, profile, candidate); err != nil {
+		return err
+	}
+	if err := validateUCISemanticVector(vector, profile.Dimension); err != nil {
+		return fmt.Errorf("uci projection store semantic candidate embedding: %w", err)
+	}
+	_, inputDigest, err := ucidomain.SemanticEmbeddingInput(profile, candidate)
+	if err != nil {
+		return fmt.Errorf("uci projection semantic input: %w", err)
+	}
+	candidateRow, found, err := s.loadUCISemanticCurrentCandidate(ctx, ref, candidate)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("uci projection store semantic candidate embedding: candidate is not current in the authorized view")
+	}
+
+	embeddingProfile, err := s.UpsertEmbeddingProfile(ctx, UpsertUCIEmbeddingProfileInput{
+		AnalysisProfileID:     ref.AnalysisProfileID,
+		ProviderRef:           profile.ProviderRef,
+		Model:                 profile.Model,
+		Dimension:             profile.Dimension,
+		PreprocessingRevision: profile.PreprocessingRevision,
+		IncludeRelativePath:   profile.IncludeRelativePath,
+	})
+	if err != nil {
+		return fmt.Errorf("uci projection store semantic embedding profile: %w", err)
+	}
+	copyVector := pgvector.NewVector(append([]float32(nil), vector...))
+	embedding, err := s.UpsertEmbedding(ctx, UpsertUCIEmbeddingInput{
+		EmbeddingProfileID:   embeddingProfile.EmbeddingProfileID,
+		EmbeddingInputDigest: string(inputDigest),
+		Vector:               &copyVector,
+		SourceID:             ref.SourceID,
+		ProtectionDomain:     candidateRow.ProtectionDomain,
+		CompletionSeq:        ref.Generation,
+		Status:               UCIEmbeddingReady,
+	})
+	if err != nil {
+		return fmt.Errorf("uci projection store semantic embedding: %w", err)
+	}
+	if embedding.Status != UCIEmbeddingReady || embedding.Vector == nil {
+		return fmt.Errorf("uci projection store semantic embedding: existing embedding is not ready")
+	}
+	if _, err := s.LinkChunkEmbedding(ctx, LinkUCIChunkEmbeddingInput{
+		SourceID:                ref.SourceID,
+		ChunkID:                 candidateRow.ChunkID,
+		EmbeddingID:             embedding.EmbeddingID,
+		RelativePathFingerprint: uciSemanticRelativePathFingerprint(profile, candidate.RelativePath),
+		EmbeddingProfileID:      embeddingProfile.EmbeddingProfileID,
+		EmbeddingInputDigest:    string(inputDigest),
+	}); err != nil {
+		return fmt.Errorf("uci projection link semantic candidate embedding: %w", err)
+	}
+	return nil
+}
+
+// SelectSemanticCandidates ranks vectors inside the authorized current View.
+// It never ranks globally and filters afterward: the selected_view CTE is the
+// first relation in both coverage and pgvector-distance queries.
+func (s *UCIProjectionStore) SelectSemanticCandidates(ctx context.Context, authorized ucidomain.AuthorizedContext, profile ucidomain.VectorProfile, vector []float32, spec ucidomain.QuerySpec) (ucidomain.SemanticStoreResult, error) {
+	if err := s.requireDB("select semantic candidates"); err != nil {
+		return ucidomain.SemanticStoreResult{}, err
+	}
+	ref := authorized.Ref()
+	if err := validateUCIQueryContext(ref); err != nil {
+		return ucidomain.SemanticStoreResult{}, err
+	}
+	if err := validateUCISemanticProfile(profile); err != nil {
+		return ucidomain.SemanticStoreResult{}, err
+	}
+	if err := validateUCISemanticVector(vector, profile.Dimension); err != nil {
+		return ucidomain.SemanticStoreResult{}, err
+	}
+	if err := validateUCIQuerySpec(spec); err != nil {
+		return ucidomain.SemanticStoreResult{}, err
+	}
+
+	metadata, found, err := s.loadUCIQueryViewMetadata(ctx, ref)
+	if err != nil {
+		return ucidomain.SemanticStoreResult{}, err
+	}
+	if !found || metadata.State == UCIViewRetired || metadata.State == UCIViewStaging {
+		return ucidomain.SemanticStoreResult{Coverage: ucidomain.IndexCoverageUnavailable}, nil
+	}
+	coverage, coverageOK := parseUCIQueryCoverage(metadata.Structural)
+	if !coverageOK || coverage == ucidomain.IndexCoverageUnavailable {
+		return ucidomain.SemanticStoreResult{Coverage: ucidomain.IndexCoverageUnavailable}, nil
+	}
+	vectorState, vectorStateOK := parseUCIQueryCoverage(metadata.Vector)
+	if coverage != ucidomain.IndexCoverageComplete || !vectorStateOK || vectorState != ucidomain.IndexCoverageComplete {
+		return ucidomain.SemanticStoreResult{Coverage: coverage, VectorCoverage: 0}, nil
+	}
+
+	coverageQuery, coverageArguments, err := buildUCISemanticCoverageSQL(ref, profile, spec)
+	if err != nil {
+		return ucidomain.SemanticStoreResult{}, err
+	}
+	var coverageRow uciSemanticCoverageRow
+	if err := s.db.WithContext(ctx).Raw(coverageQuery, coverageArguments...).Scan(&coverageRow).Error; err != nil {
+		return ucidomain.SemanticStoreResult{}, fmt.Errorf("uci projection select semantic coverage: %w", err)
+	}
+	if coverageRow.TotalCandidates < 0 || coverageRow.CompatibleCandidates < 0 || coverageRow.CompatibleCandidates > coverageRow.TotalCandidates {
+		return ucidomain.SemanticStoreResult{}, fmt.Errorf("uci projection select semantic coverage: invalid counts")
+	}
+	vectorCoverage := float64(1)
+	if coverageRow.TotalCandidates != 0 {
+		vectorCoverage = float64(coverageRow.CompatibleCandidates) / float64(coverageRow.TotalCandidates)
+	}
+	result := ucidomain.SemanticStoreResult{
+		Coverage:       coverage,
+		VectorCoverage: vectorCoverage,
+	}
+	if vectorCoverage < 1 {
+		return result, nil
+	}
+
+	query, arguments, err := buildUCISemanticCandidatesSQL(ref, profile, vector, spec)
+	if err != nil {
+		return ucidomain.SemanticStoreResult{}, err
+	}
+	var rows []uciQueryCandidateRow
+	if err := s.db.WithContext(ctx).Raw(query, arguments...).Scan(&rows).Error; err != nil {
+		return ucidomain.SemanticStoreResult{}, fmt.Errorf("uci projection select semantic candidates: %w", err)
+	}
+	result.Candidates = make([]ucidomain.QueryCandidate, 0, len(rows))
+	for _, row := range rows {
+		candidate, ok := row.queryCandidate(ref)
+		if ok {
+			result.Candidates = append(result.Candidates, candidate)
+		}
+	}
+	return result, nil
+}
+
+type uciSemanticVectorRow struct {
+	Vector pgvector.Vector `gorm:"column:vector"`
+}
+
+type uciSemanticCurrentCandidateRow struct {
+	ChunkID          string `gorm:"column:chunk_id"`
+	ProtectionDomain string `gorm:"column:protection_domain"`
+}
+
+type uciSemanticCoverageRow struct {
+	TotalCandidates      int64 `gorm:"column:total_candidates"`
+	CompatibleCandidates int64 `gorm:"column:compatible_candidates"`
+}
+
+func (s *UCIProjectionStore) loadUCISemanticCurrentCandidate(ctx context.Context, ref ucidomain.ContextRef, candidate ucidomain.QueryCandidate) (uciSemanticCurrentCandidateRow, bool, error) {
+	cte, arguments := buildUCISemanticCurrentCandidateCTE(ref, candidate)
+	var row uciSemanticCurrentCandidateRow
+	result := s.db.WithContext(ctx).Raw(cte+`
+		SELECT chunk_id, protection_domain
+		FROM scoped_candidate
+		LIMIT 1`, arguments...).Scan(&row)
+	if result.Error != nil {
+		return uciSemanticCurrentCandidateRow{}, false, fmt.Errorf("uci projection load semantic current candidate: %w", result.Error)
+	}
+	return row, result.RowsAffected != 0, nil
+}
+
+func buildUCISemanticLookupSQL(ref ucidomain.ContextRef, profile ucidomain.VectorProfile, candidate ucidomain.QueryCandidate, inputDigest ucidomain.IndexDigest) (string, []any) {
+	cte, arguments := buildUCISemanticCurrentCandidateCTE(ref, candidate)
+	arguments = append(arguments,
+		profile.ProviderRef,
+		profile.Model,
+		profile.Dimension,
+		profile.PreprocessingRevision,
+		profile.IncludeRelativePath,
+		uciSemanticPathIndependentFingerprint,
+		string(inputDigest),
+		string(inputDigest),
+		UCIEmbeddingReady,
+	)
+	return cte + `
+		SELECT embedding.vector
+		FROM scoped_candidate AS candidate
+		JOIN ci_embedding_profiles AS profile_row
+			ON profile_row.analysis_profile_id = candidate.analysis_profile_id
+			AND profile_row.provider_ref = ?
+			AND profile_row.model = ?
+			AND profile_row.dimension = ?
+			AND profile_row.preprocessing_revision = ?
+			AND profile_row.include_relative_path = ?
+		JOIN ci_chunk_embeddings AS chunk_embedding
+			ON chunk_embedding.source_id = candidate.source_id
+			AND chunk_embedding.chunk_id = candidate.chunk_id
+			AND chunk_embedding.relative_path_fingerprint = CASE WHEN profile_row.include_relative_path THEN candidate.relative_path ELSE ? END
+			AND chunk_embedding.embedding_profile_id = profile_row.embedding_profile_id
+			AND chunk_embedding.embedding_input_digest = ?
+		JOIN ci_embeddings AS embedding
+			ON embedding.source_id = candidate.source_id
+			AND embedding.embedding_id = chunk_embedding.embedding_id
+			AND embedding.embedding_profile_id = profile_row.embedding_profile_id
+			AND embedding.embedding_input_digest = ?
+			AND embedding.protection_domain = candidate.protection_domain
+		WHERE embedding.status = ?
+			AND embedding.vector IS NOT NULL
+		ORDER BY embedding.embedding_id ASC
+		LIMIT 1`, arguments
+}
+
+func buildUCISemanticCurrentCandidateCTE(ref ucidomain.ContextRef, candidate ucidomain.QueryCandidate) (string, []any) {
+	arguments := []any{
+		ref.ViewID,
+		ref.SourceID,
+		ref.CheckoutID,
+		ref.AnalysisProfileID,
+		ref.Generation,
+		UCIViewPublished,
+		UCIViewSuperseded,
+		UCIBlobStored,
+		UCIFilePresent,
+		UCIParseArtifactComplete,
+		UCIParseArtifactPartial,
+		candidate.Proof.ArtifactID,
+		string(candidate.Proof.ContentDigest),
+		string(candidate.Proof.FactsDigest),
+		candidate.RelativePath,
+		candidate.Span.ByteStart,
+		candidate.Span.ByteEnd,
+		candidate.EntityKey,
+		candidate.Language,
+		candidate.Text,
+	}
+	return `
+		WITH selected_view AS (
+			SELECT
+				view_row.source_id,
+				view_row.checkout_id,
+				view_row.generation,
+				view_row.profile_id AS analysis_profile_id,
+				profile.parser_bundle_digest
+			FROM ci_views AS view_row
+			JOIN ci_profiles AS profile ON profile.profile_id = view_row.profile_id
+			WHERE view_row.view_id = ?
+				AND view_row.source_id = ?
+				AND view_row.checkout_id = ?
+				AND view_row.profile_id = ?
+				AND view_row.generation = ?
+				AND view_row.state IN (?, ?)
+		),
+		scoped_candidate AS (
+			SELECT
+				view_row.source_id,
+				view_row.analysis_profile_id,
+				chunk.chunk_id,
+				membership.display_path AS relative_path,
+				blob.protection_domain
+			FROM selected_view AS view_row
+			JOIN ci_memberships AS membership
+				ON membership.source_id = view_row.source_id
+				AND membership.checkout_id = view_row.checkout_id
+				AND membership.valid_from_generation <= view_row.generation
+				AND (membership.valid_to_generation IS NULL OR membership.valid_to_generation > view_row.generation)
+			JOIN ci_parse_artifacts AS artifact
+				ON artifact.source_id = membership.source_id
+				AND artifact.artifact_id = membership.artifact_id
+				AND artifact.extraction_profile_digest = view_row.parser_bundle_digest
+			JOIN ci_blobs AS blob
+				ON blob.source_id = artifact.source_id
+				AND blob.blob_id = artifact.blob_id
+			JOIN ci_chunks AS chunk
+				ON chunk.source_id = artifact.source_id
+				AND chunk.artifact_id = artifact.artifact_id
+			LEFT JOIN ci_definitions AS definition
+				ON definition.artifact_id = chunk.artifact_id
+				AND definition.local_symbol_key = chunk.symbol_key
+			WHERE blob.storage_state = ?
+				AND membership.file_state = ?
+				AND artifact.status IN (?, ?)
+				AND artifact.sealed_at IS NOT NULL
+				AND artifact.facts_digest IS NOT NULL
+				AND artifact.artifact_id = ?
+				AND blob.content_digest = ?
+				AND artifact.facts_digest = ?
+				AND membership.display_path = ?
+				AND chunk.byte_start = ?
+				AND chunk.byte_end = ?
+				AND COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key || ':' || chunk.ordinal::text) = ?
+				AND artifact.language = ?
+				AND chunk.text_for_search = ?
+		)
+`, arguments
+}
+
+func buildUCISemanticScopedCandidatesSQL(ref ucidomain.ContextRef, spec ucidomain.QuerySpec) (string, []any, error) {
+	conditions := []string{
+		"blob.storage_state = ?",
+		"membership.file_state = ?",
+		"artifact.status IN (?, ?)",
+		"artifact.sealed_at IS NOT NULL",
+		"artifact.facts_digest IS NOT NULL",
+	}
+	predicateArguments := []any{UCIBlobStored, UCIFilePresent, UCIParseArtifactComplete, UCIParseArtifactPartial}
+	if len(spec.Filter.Languages) != 0 {
+		placeholders := make([]string, len(spec.Filter.Languages))
+		for index, language := range spec.Filter.Languages {
+			placeholders[index] = "?"
+			predicateArguments = append(predicateArguments, language)
+		}
+		conditions = append(conditions, "artifact.language IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	arguments := []any{
+		ref.ViewID,
+		ref.SourceID,
+		ref.CheckoutID,
+		ref.AnalysisProfileID,
+		ref.Generation,
+		UCIViewPublished,
+		UCIViewSuperseded,
+		uciQueryStoreMaxExcerptBytes,
+	}
+	arguments = append(arguments, predicateArguments...)
+	return `
+		WITH selected_view AS (
+			SELECT
+				view_row.source_id,
+				view_row.checkout_id,
+				view_row.generation,
+				view_row.profile_id AS analysis_profile_id,
+				profile.parser_bundle_digest
+			FROM ci_views AS view_row
+			JOIN ci_profiles AS profile ON profile.profile_id = view_row.profile_id
+			WHERE view_row.view_id = ?
+				AND view_row.source_id = ?
+				AND view_row.checkout_id = ?
+				AND view_row.profile_id = ?
+				AND view_row.generation = ?
+				AND view_row.state IN (?, ?)
+		),
+		scoped_candidates AS (
+			SELECT
+				view_row.source_id,
+				view_row.checkout_id,
+				view_row.analysis_profile_id,
+				artifact.artifact_id,
+				blob.content_digest AS chunk_content_digest,
+				artifact.facts_digest,
+				(SELECT COUNT(*) FROM ci_definitions AS proof_definition WHERE proof_definition.artifact_id = artifact.artifact_id) AS definition_count,
+				(SELECT COUNT(*) FROM ci_reference_sites AS proof_reference WHERE proof_reference.artifact_id = artifact.artifact_id) AS reference_site_count,
+				(SELECT COUNT(*) FROM ci_chunks AS proof_chunk WHERE proof_chunk.artifact_id = artifact.artifact_id) AS chunk_count,
+				COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key || ':' || chunk.ordinal::text) AS entity_key,
+				COALESCE(definition.name, '') AS local_name,
+				COALESCE(definition.qualified_local_name, '') AS qualified_symbol,
+				membership.display_path AS relative_path,
+				chunk.byte_start,
+				chunk.byte_end,
+				array_length(regexp_split_to_array(
+					convert_from(substring(blob.safe_content FROM 1 FOR chunk.byte_start::integer), replace(upper(blob.encoding), '-', '')),
+					E'\n'
+				), 1) AS line_start,
+				array_length(regexp_split_to_array(
+					convert_from(substring(blob.safe_content FROM 1 FOR chunk.byte_end::integer), replace(upper(blob.encoding), '-', '')),
+					E'\n'
+				), 1) AS line_end,
+				CASE WHEN octet_length(chunk.text_for_search) <= ? THEN chunk.text_for_search ELSE '' END AS text,
+				chunk.chunk_kind,
+				artifact.language,
+				chunk.chunk_id,
+				blob.protection_domain
+			FROM selected_view AS view_row
+			JOIN ci_memberships AS membership
+				ON membership.source_id = view_row.source_id
+				AND membership.checkout_id = view_row.checkout_id
+				AND membership.valid_from_generation <= view_row.generation
+				AND (membership.valid_to_generation IS NULL OR membership.valid_to_generation > view_row.generation)
+			JOIN ci_parse_artifacts AS artifact
+				ON artifact.source_id = membership.source_id
+				AND artifact.artifact_id = membership.artifact_id
+				AND artifact.extraction_profile_digest = view_row.parser_bundle_digest
+			JOIN ci_blobs AS blob
+				ON blob.source_id = artifact.source_id
+				AND blob.blob_id = artifact.blob_id
+			JOIN ci_chunks AS chunk
+				ON chunk.source_id = artifact.source_id
+				AND chunk.artifact_id = artifact.artifact_id
+			LEFT JOIN ci_definitions AS definition
+				ON definition.artifact_id = chunk.artifact_id
+				AND definition.local_symbol_key = chunk.symbol_key
+			WHERE ` + strings.Join(conditions, "\n\t\t\t\tAND ") + `
+		)
+`, arguments, nil
+}
+
+func buildUCISemanticCoverageSQL(ref ucidomain.ContextRef, profile ucidomain.VectorProfile, spec ucidomain.QuerySpec) (string, []any, error) {
+	cte, arguments, err := buildUCISemanticScopedCandidatesSQL(ref, spec)
+	if err != nil {
+		return "", nil, err
+	}
+	arguments = append(arguments,
+		profile.ProviderRef,
+		profile.Model,
+		profile.Dimension,
+		profile.PreprocessingRevision,
+		profile.IncludeRelativePath,
+		uciSemanticPathIndependentFingerprint,
+		UCIEmbeddingReady,
+	)
+	return cte + `
+		SELECT
+			COUNT(*) AS total_candidates,
+			COUNT(*) FILTER (WHERE EXISTS (
+				SELECT 1
+				FROM ci_embedding_profiles AS profile_row
+				JOIN ci_chunk_embeddings AS chunk_embedding
+					ON chunk_embedding.source_id = candidate.source_id
+					AND chunk_embedding.chunk_id = candidate.chunk_id
+					AND chunk_embedding.relative_path_fingerprint = CASE WHEN profile_row.include_relative_path THEN candidate.relative_path ELSE ? END
+					AND chunk_embedding.embedding_profile_id = profile_row.embedding_profile_id
+				JOIN ci_embeddings AS embedding
+					ON embedding.source_id = candidate.source_id
+					AND embedding.embedding_id = chunk_embedding.embedding_id
+					AND embedding.embedding_profile_id = profile_row.embedding_profile_id
+					AND embedding.embedding_input_digest = chunk_embedding.embedding_input_digest
+					AND embedding.protection_domain = candidate.protection_domain
+					AND embedding.status = ?
+					AND embedding.vector IS NOT NULL
+				WHERE profile_row.analysis_profile_id = candidate.analysis_profile_id
+					AND profile_row.provider_ref = ?
+					AND profile_row.model = ?
+					AND profile_row.dimension = ?
+					AND profile_row.preprocessing_revision = ?
+					AND profile_row.include_relative_path = ?
+			)) AS compatible_candidates
+		FROM scoped_candidates AS candidate`, append(arguments[:len(arguments)-7],
+			uciSemanticPathIndependentFingerprint,
+			UCIEmbeddingReady,
+			profile.ProviderRef,
+			profile.Model,
+			profile.Dimension,
+			profile.PreprocessingRevision,
+			profile.IncludeRelativePath,
+		), nil
+}
+
+func buildUCISemanticCandidatesSQL(ref ucidomain.ContextRef, profile ucidomain.VectorProfile, vector []float32, spec ucidomain.QuerySpec) (string, []any, error) {
+	cte, scopeArguments, err := buildUCISemanticScopedCandidatesSQL(ref, spec)
+	if err != nil {
+		return "", nil, err
+	}
+	arguments := make([]any, 0, len(scopeArguments)+10)
+	arguments = append(arguments, pgvector.NewVector(vector))
+	arguments = append(arguments, scopeArguments...)
+	arguments = append(arguments,
+		profile.ProviderRef,
+		profile.Model,
+		profile.Dimension,
+		profile.PreprocessingRevision,
+		profile.IncludeRelativePath,
+		uciSemanticPathIndependentFingerprint,
+		UCIEmbeddingReady,
+		spec.Limit+1,
+		spec.Offset,
+	)
+	scopedCTE := strings.TrimPrefix(strings.TrimSpace(cte), "WITH ")
+	return `
+		WITH query_vector AS (SELECT ?::vector AS vector), ` + scopedCTE + `
+		SELECT
+			candidate.artifact_id,
+			candidate.chunk_content_digest,
+			candidate.facts_digest,
+			candidate.definition_count,
+			candidate.reference_site_count,
+			candidate.chunk_count,
+			candidate.entity_key,
+			candidate.local_name,
+			candidate.qualified_symbol,
+			candidate.relative_path,
+			candidate.byte_start,
+			candidate.byte_end,
+			candidate.line_start,
+			candidate.line_end,
+			candidate.text,
+			candidate.chunk_kind,
+			candidate.language,
+			1 - (embedding.vector <=> query_vector.vector) AS score
+		FROM scoped_candidates AS candidate
+		JOIN ci_embedding_profiles AS profile_row
+			ON profile_row.analysis_profile_id = candidate.analysis_profile_id
+			AND profile_row.provider_ref = ?
+			AND profile_row.model = ?
+			AND profile_row.dimension = ?
+			AND profile_row.preprocessing_revision = ?
+			AND profile_row.include_relative_path = ?
+		JOIN ci_chunk_embeddings AS chunk_embedding
+			ON chunk_embedding.source_id = candidate.source_id
+			AND chunk_embedding.chunk_id = candidate.chunk_id
+			AND chunk_embedding.relative_path_fingerprint = CASE WHEN profile_row.include_relative_path THEN candidate.relative_path ELSE ? END
+			AND chunk_embedding.embedding_profile_id = profile_row.embedding_profile_id
+		JOIN ci_embeddings AS embedding
+			ON embedding.source_id = candidate.source_id
+			AND embedding.embedding_id = chunk_embedding.embedding_id
+			AND embedding.embedding_profile_id = profile_row.embedding_profile_id
+			AND embedding.embedding_input_digest = chunk_embedding.embedding_input_digest
+			AND embedding.protection_domain = candidate.protection_domain
+			AND embedding.status = ?
+			AND embedding.vector IS NOT NULL
+		CROSS JOIN query_vector
+		ORDER BY
+			embedding.vector <=> query_vector.vector ASC,
+			candidate.relative_path ASC,
+			candidate.byte_start ASC,
+			candidate.entity_key ASC,
+			candidate.chunk_id ASC
+		LIMIT ? OFFSET ?`, arguments, nil
+}
+
+func validateUCISemanticCandidate(ref ucidomain.ContextRef, profile ucidomain.VectorProfile, candidate ucidomain.QueryCandidate) error {
+	if err := validateUCIQueryContext(ref); err != nil {
+		return err
+	}
+	if err := validateUCISemanticProfile(profile); err != nil {
+		return err
+	}
+	if !sameUCISemanticContext(ref, candidate.Context) {
+		return fmt.Errorf("uci projection semantic candidate: candidate context does not match authorized context")
+	}
+	if _, _, err := ucidomain.SemanticEmbeddingInput(profile, candidate); err != nil {
+		return fmt.Errorf("uci projection semantic candidate: %w", err)
+	}
+	return nil
+}
+
+func validateUCISemanticProfile(profile ucidomain.VectorProfile) error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"provider_ref", profile.ProviderRef},
+		{"model", profile.Model},
+		{"preprocessing_revision", profile.PreprocessingRevision},
+	} {
+		if err := validateUCIRequiredText(field.name, field.value); err != nil {
+			return err
+		}
+	}
+	if profile.Dimension != 1536 {
+		return fmt.Errorf("uci projection semantic profile: dimension must be 1536")
+	}
+	return nil
+}
+
+func validateUCISemanticVector(vector []float32, dimension int) error {
+	if len(vector) != dimension {
+		return fmt.Errorf("vector dimension = %d, want %d", len(vector), dimension)
+	}
+	for index, value := range vector {
+		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+			return fmt.Errorf("vector contains non-finite value at index %d", index)
+		}
+	}
+	return nil
+}
+
+func sameUCISemanticContext(left, right ucidomain.ContextRef) bool {
+	return sameUCIOptionalString(left.SpaceID, right.SpaceID) &&
+		left.SourceID == right.SourceID &&
+		left.CheckoutID == right.CheckoutID &&
+		left.ViewID == right.ViewID &&
+		left.AnalysisProfileID == right.AnalysisProfileID &&
+		left.Generation == right.Generation
+}
+
+func uciSemanticRelativePathFingerprint(profile ucidomain.VectorProfile, relativePath string) string {
+	if !profile.IncludeRelativePath {
+		return uciSemanticPathIndependentFingerprint
+	}
+	return relativePath
+}
+
 // StoreUCIAnalysisInput persists a rebuildable analysis pinned to a View.
 type StoreUCIAnalysisInput struct {
 	ViewID            string
@@ -822,6 +1438,7 @@ type uciQueryViewMetadata struct {
 	State      UCIViewState `gorm:"column:state"`
 	Structural string       `gorm:"column:structural"`
 	Lexical    string       `gorm:"column:lexical"`
+	Vector     string       `gorm:"column:vector"`
 }
 
 func (s *UCIProjectionStore) loadUCIQueryViewMetadata(ctx context.Context, ref ucidomain.ContextRef) (uciQueryViewMetadata, bool, error) {
@@ -830,7 +1447,8 @@ func (s *UCIProjectionStore) loadUCIQueryViewMetadata(ctx context.Context, ref u
 		SELECT
 			view_row.state,
 			COALESCE(view_row.coverage_json->>'structural', '') AS structural,
-			COALESCE(view_row.coverage_json->>'lexical', '') AS lexical
+			COALESCE(view_row.coverage_json->>'lexical', '') AS lexical,
+			COALESCE(view_row.coverage_json->>'vector', '') AS vector
 		FROM ci_views AS view_row
 		WHERE view_row.view_id = ?
 			AND view_row.source_id = ?

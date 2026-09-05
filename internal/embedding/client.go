@@ -19,6 +19,24 @@ import (
 // ErrEmbeddingDisabled is returned when no embedding URL is configured.
 var ErrEmbeddingDisabled = fmt.Errorf("embedding: disabled (ENGRAM_EMBEDDING_URL not set)")
 
+const (
+	maxEmbeddingResponseBytes = 32 << 20
+	maxEmbeddingErrorBytes    = 4 << 10
+)
+
+type embeddingHTTPStatusError struct {
+	code int
+	body string
+}
+
+func (err *embeddingHTTPStatusError) Error() string {
+	return fmt.Sprintf("embedding: HTTP %d: %s", err.code, err.body)
+}
+
+func (err *embeddingHTTPStatusError) StatusCode() int {
+	return err.code
+}
+
 // normalizeEmbeddingBaseURL strips a trailing "/v1" path segment (and any
 // surrounding slashes) so that operators may supply either:
 //
@@ -228,15 +246,23 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 			continue
 		}
 
-		respBody, readErr := io.ReadAll(resp.Body)
+		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxEmbeddingResponseBytes+1))
 		resp.Body.Close()
 		if readErr != nil {
 			lastErr = readErr
 			continue
 		}
+		if len(respBody) > maxEmbeddingResponseBytes {
+			lastErr = fmt.Errorf("embedding: response exceeds %d bytes", maxEmbeddingResponseBytes)
+			continue
+		}
 
 		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("embedding: HTTP %d: %s", resp.StatusCode, string(respBody))
+			detail := respBody
+			if len(detail) > maxEmbeddingErrorBytes {
+				detail = detail[:maxEmbeddingErrorBytes]
+			}
+			lastErr = &embeddingHTTPStatusError{code: resp.StatusCode, body: string(detail)}
 			continue
 		}
 
