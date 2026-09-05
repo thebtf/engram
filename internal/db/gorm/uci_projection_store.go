@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/token"
 	"math"
 	"sort"
 	"strings"
@@ -115,6 +116,9 @@ func (s *UCIProjectionStore) UpsertBlob(ctx context.Context, in UpsertUCIBlobInp
 
 // UpsertUCIParseArtifactInput names a complete immutable parser cache key.
 type UpsertUCIParseArtifactInput struct {
+	// ArtifactID optionally pins a deterministic caller-derived UUID. When empty,
+	// the store preserves its historical random-ID behavior.
+	ArtifactID              string
 	SourceID                string
 	BlobID                  string
 	Language                string
@@ -131,6 +135,11 @@ func (s *UCIProjectionStore) UpsertParseArtifact(ctx context.Context, in UpsertU
 	}
 	if err := validateUCIUUID("source_id", in.SourceID); err != nil {
 		return nil, err
+	}
+	if in.ArtifactID != "" {
+		if err := validateUCIUUID("artifact_id", in.ArtifactID); err != nil {
+			return nil, err
+		}
 	}
 	if err := validateUCIUUID("blob_id", in.BlobID); err != nil {
 		return nil, err
@@ -160,8 +169,13 @@ func (s *UCIProjectionStore) UpsertParseArtifact(ctx context.Context, in UpsertU
 		return nil, err
 	}
 
+	artifactID := in.ArtifactID
+	if artifactID == "" {
+		artifactID = uuid.NewString()
+	}
+
 	row := &UCIParseArtifact{
-		ArtifactID:              uuid.NewString(),
+		ArtifactID:              artifactID,
 		SourceID:                in.SourceID,
 		BlobID:                  in.BlobID,
 		Language:                in.Language,
@@ -172,17 +186,7 @@ func (s *UCIProjectionStore) UpsertParseArtifact(ctx context.Context, in UpsertU
 		Diagnostics:             diagnostics,
 		CreatedAt:               time.Now().UTC(),
 	}
-	result := s.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{
-			{Name: "source_id"},
-			{Name: "blob_id"},
-			{Name: "language"},
-			{Name: "parser_revision"},
-			{Name: "grammar_digest"},
-			{Name: "extraction_profile_digest"},
-		},
-		DoNothing: true,
-	}).Create(row)
+	result := s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(row)
 	if result.Error != nil {
 		return nil, fmt.Errorf("uci projection upsert parse artifact: %w", result.Error)
 	}
@@ -190,13 +194,29 @@ func (s *UCIProjectionStore) UpsertParseArtifact(ctx context.Context, in UpsertU
 		return row, nil
 	}
 	var existing UCIParseArtifact
-	if err := s.db.WithContext(ctx).Where(
+	err = s.db.WithContext(ctx).Where(
 		"source_id = ? AND blob_id = ? AND language = ? AND parser_revision = ? AND grammar_digest = ? AND extraction_profile_digest = ?",
 		in.SourceID, in.BlobID, in.Language, in.ParserRevision, in.GrammarDigest, in.ExtractionProfileDigest,
-	).First(&existing).Error; err != nil {
+	).First(&existing).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) && in.ArtifactID != "" {
+			var occupied UCIParseArtifact
+			occupiedErr := s.db.WithContext(ctx).Where("artifact_id = ?", in.ArtifactID).First(&occupied).Error
+			if occupiedErr == nil {
+				return nil, errUCIProjectionImmutable
+			}
+			if !errors.Is(occupiedErr, gorm.ErrRecordNotFound) {
+				return nil, fmt.Errorf("uci projection load requested parse artifact: %w", occupiedErr)
+			}
+		}
 		return nil, fmt.Errorf("uci projection load existing parse artifact: %w", err)
 	}
-	if existing.Status != row.Status || existing.Diagnostics != row.Diagnostics {
+	existingDiagnostics, err := normalizeUCIJSONObject("diagnostics", existing.Diagnostics)
+	if err != nil {
+		return nil, errUCIProjectionImmutable
+	}
+	if (in.ArtifactID != "" && existing.ArtifactID != in.ArtifactID) ||
+		existing.Status != row.Status || existingDiagnostics != row.Diagnostics {
 		return nil, errUCIProjectionImmutable
 	}
 	return &existing, nil
@@ -281,13 +301,16 @@ func (s *UCIProjectionStore) UpsertDefinition(ctx context.Context, in UpsertUCID
 
 // UpsertUCIReferenceSiteInput describes an immutable observed reference site.
 type UpsertUCIReferenceSiteInput struct {
-	ArtifactID     string
-	SiteKey        string
-	OwnerSymbolKey *string
-	RawTarget      string
-	Relation       string
-	SyntaxSpan     string
-	ResolverHints  string
+	// ReferenceSiteID optionally pins a deterministic caller-derived UUID. When
+	// empty, the store preserves its historical random-ID behavior.
+	ReferenceSiteID string
+	ArtifactID      string
+	SiteKey         string
+	OwnerSymbolKey  *string
+	RawTarget       string
+	Relation        string
+	SyntaxSpan      string
+	ResolverHints   string
 }
 
 func (s *UCIProjectionStore) UpsertReferenceSite(ctx context.Context, in UpsertUCIReferenceSiteInput) (*UCIReferenceSite, error) {
@@ -296,6 +319,11 @@ func (s *UCIProjectionStore) UpsertReferenceSite(ctx context.Context, in UpsertU
 	}
 	if err := validateUCIUUID("artifact_id", in.ArtifactID); err != nil {
 		return nil, err
+	}
+	if in.ReferenceSiteID != "" {
+		if err := validateUCIUUID("reference_site_id", in.ReferenceSiteID); err != nil {
+			return nil, err
+		}
 	}
 	for _, field := range []struct {
 		name  string
@@ -325,8 +353,13 @@ func (s *UCIProjectionStore) UpsertReferenceSite(ctx context.Context, in UpsertU
 		return nil, err
 	}
 
+	referenceSiteID := in.ReferenceSiteID
+	if referenceSiteID == "" {
+		referenceSiteID = uuid.NewString()
+	}
+
 	row := &UCIReferenceSite{
-		ReferenceSiteID: uuid.NewString(),
+		ReferenceSiteID: referenceSiteID,
 		ArtifactID:      in.ArtifactID,
 		SiteKey:         in.SiteKey,
 		OwnerSymbolKey:  ownerSymbolKey,
@@ -336,10 +369,7 @@ func (s *UCIProjectionStore) UpsertReferenceSite(ctx context.Context, in UpsertU
 		ResolverHints:   resolverHints,
 		CreatedAt:       time.Now().UTC(),
 	}
-	result := s.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "artifact_id"}, {Name: "site_key"}},
-		DoNothing: true,
-	}).Create(row)
+	result := s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(row)
 	if result.Error != nil {
 		return nil, fmt.Errorf("uci projection upsert reference site: %w", result.Error)
 	}
@@ -347,11 +377,31 @@ func (s *UCIProjectionStore) UpsertReferenceSite(ctx context.Context, in UpsertU
 		return row, nil
 	}
 	var existing UCIReferenceSite
-	if err := s.db.WithContext(ctx).Where("artifact_id = ? AND site_key = ?", in.ArtifactID, in.SiteKey).First(&existing).Error; err != nil {
+	err = s.db.WithContext(ctx).Where("artifact_id = ? AND site_key = ?", in.ArtifactID, in.SiteKey).First(&existing).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) && in.ReferenceSiteID != "" {
+			var occupied UCIReferenceSite
+			occupiedErr := s.db.WithContext(ctx).Where("reference_site_id = ?", in.ReferenceSiteID).First(&occupied).Error
+			if occupiedErr == nil {
+				return nil, errUCIProjectionImmutable
+			}
+			if !errors.Is(occupiedErr, gorm.ErrRecordNotFound) {
+				return nil, fmt.Errorf("uci projection load requested reference site: %w", occupiedErr)
+			}
+		}
 		return nil, fmt.Errorf("uci projection load existing reference site: %w", err)
 	}
-	if !sameUCIOptionalString(existing.OwnerSymbolKey, row.OwnerSymbolKey) || existing.RawTarget != row.RawTarget ||
-		existing.Relation != row.Relation || existing.SyntaxSpan != row.SyntaxSpan || existing.ResolverHints != row.ResolverHints {
+	existingSyntaxSpan, err := normalizeUCIJSONObject("syntax_span", existing.SyntaxSpan)
+	if err != nil {
+		return nil, errUCIProjectionImmutable
+	}
+	existingResolverHints, err := normalizeUCIJSONObject("resolver_hints", existing.ResolverHints)
+	if err != nil {
+		return nil, errUCIProjectionImmutable
+	}
+	if (in.ReferenceSiteID != "" && existing.ReferenceSiteID != in.ReferenceSiteID) ||
+		!sameUCIOptionalString(existing.OwnerSymbolKey, row.OwnerSymbolKey) || existing.RawTarget != row.RawTarget ||
+		existing.Relation != row.Relation || existingSyntaxSpan != row.SyntaxSpan || existingResolverHints != row.ResolverHints {
 		return nil, errUCIProjectionImmutable
 	}
 	return &existing, nil
@@ -454,6 +504,442 @@ func (s *UCIProjectionStore) UpsertChunk(ctx context.Context, in UpsertUCIChunkI
 		return nil, errUCIProjectionImmutable
 	}
 	return &existing, nil
+}
+
+const uciIndexAdmissionProtectionDomain = "source-private"
+
+// AdmitIndexFrame admits one frame through the packed admission transaction.
+func (s *UCIProjectionStore) AdmitIndexFrame(ctx context.Context, sourceID, profileID string, frame ucidomain.IndexAdmissionFrame) (ucidomain.IndexPart, error) {
+	parts, err := s.AdmitIndexFrames(ctx, sourceID, profileID, []ucidomain.IndexAdmissionFrame{frame})
+	if err != nil {
+		return ucidomain.IndexPart{}, err
+	}
+	if len(parts) != 1 {
+		return ucidomain.IndexPart{}, fmt.Errorf("uci index admission: expected exactly one admitted part")
+	}
+	return parts[0], nil
+}
+
+// AdmitIndexFrames validates a complete packed build before any durable write,
+// then atomically records every artifact and fact before returning canonical
+// parts for staging. Cross-frame edges therefore never observe a partially
+// admitted target catalog.
+func (s *UCIProjectionStore) AdmitIndexFrames(ctx context.Context, sourceID, profileID string, frames []ucidomain.IndexAdmissionFrame) ([]ucidomain.IndexPart, error) {
+	if err := s.requireDB("admit index frames"); err != nil {
+		return nil, err
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("uci index admission: context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := validateUCIUUID("source_id", sourceID); err != nil {
+		return nil, err
+	}
+	if err := validateUCIUUID("profile_id", profileID); err != nil {
+		return nil, err
+	}
+	if len(frames) == 0 || len(frames) > ucidomain.IndexAdmissionMaxFrames {
+		return nil, fmt.Errorf("uci index admission: invalid packed frame count")
+	}
+
+	canonicalFrames := make([]ucidomain.IndexAdmissionFrame, len(frames))
+	for index, frame := range frames {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		canonical, err := frame.Canonicalize()
+		if err != nil {
+			return nil, fmt.Errorf("uci index admission: validate frame %d: %w", index, err)
+		}
+		if canonical.Profile.ID != profileID {
+			return nil, fmt.Errorf("uci index admission: frame profile does not match authorized profile")
+		}
+		for _, artifact := range canonical.Artifacts {
+			expectedID, err := ucidomain.DeriveIndexAdmissionArtifactID(sourceID, artifact.ContentDigest, artifact.Profile)
+			if err != nil {
+				return nil, fmt.Errorf("uci index admission: derive artifact ID: %w", err)
+			}
+			if artifact.ArtifactID != expectedID {
+				return nil, fmt.Errorf("uci index admission: artifact ID does not match authorized source")
+			}
+			for _, definition := range artifact.Definitions {
+				if _, err := uciIndexAdmissionDefinitionName(definition); err != nil {
+					return nil, err
+				}
+			}
+		}
+		canonicalFrames[index] = canonical
+	}
+	if err := ucidomain.ValidateIndexAdmissionFrames(canonicalFrames); err != nil {
+		return nil, fmt.Errorf("uci index admission: validate packed build: %w", err)
+	}
+
+	var admitted []ucidomain.IndexPart
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		store := &UCIProjectionStore{db: tx}
+		bindings := make(ucidomain.IndexAdmissionReferenceBindings)
+		for _, frame := range canonicalFrames {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := store.validateUCIIndexAdmissionProfile(ctx, profileID, frame); err != nil {
+				return err
+			}
+			frameBindings, err := frame.ReferenceBindings()
+			if err != nil {
+				return fmt.Errorf("uci index admission: derive reference bindings: %w", err)
+			}
+			for key, referenceSiteID := range frameBindings {
+				if existing, found := bindings[key]; found && existing != referenceSiteID {
+					return errUCIProjectionImmutable
+				}
+				bindings[key] = referenceSiteID
+			}
+		}
+
+		proofs := make(map[string]ucidomain.IndexArtifactProof)
+		for _, frame := range canonicalFrames {
+			for _, artifact := range frame.Artifacts {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				proof, err := store.admitUCIIndexAdmissionArtifact(ctx, sourceID, artifact, bindings)
+				if err != nil {
+					return err
+				}
+				proofs[artifact.ArtifactID] = proof
+			}
+		}
+
+		admitted = make([]ucidomain.IndexPart, len(canonicalFrames))
+		for frameIndex, frame := range canonicalFrames {
+			part, err := frame.IndexPart(bindings)
+			if err != nil {
+				return fmt.Errorf("uci index admission: canonical publication part: %w", err)
+			}
+			for artifactIndex := range part.Artifacts {
+				proof, found := proofs[part.Artifacts[artifactIndex].ArtifactID]
+				if !found {
+					return fmt.Errorf("uci index admission: missing stored artifact proof")
+				}
+				part.Artifacts[artifactIndex] = proof
+			}
+			if _, err := ucidomain.DigestIndexPart(part); err != nil {
+				return fmt.Errorf("uci index admission: validate stored publication part: %w", err)
+			}
+			admitted[frameIndex] = part
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return admitted, nil
+}
+
+func (s *UCIProjectionStore) validateUCIIndexAdmissionProfile(ctx context.Context, profileID string, frame ucidomain.IndexAdmissionFrame) error {
+	var profile UCIAnalysisProfile
+	if err := s.db.WithContext(ctx).Where("profile_id = ?", profileID).First(&profile).Error; err != nil {
+		return fmt.Errorf("uci index admission: load profile: %w", err)
+	}
+	for _, artifact := range frame.Artifacts {
+		if string(artifact.Profile.ExtractionProfileDigest) != profile.ParserBundleDigest {
+			return fmt.Errorf("uci index admission: artifact profile does not match authorized profile")
+		}
+	}
+	return nil
+}
+
+func (s *UCIProjectionStore) admitUCIIndexAdmissionArtifact(ctx context.Context, sourceID string, artifact ucidomain.IndexAdmissionArtifact, bindings ucidomain.IndexAdmissionReferenceBindings) (ucidomain.IndexArtifactProof, error) {
+	status, err := uciIndexAdmissionArtifactStatus(artifact.Status)
+	if err != nil {
+		return ucidomain.IndexArtifactProof{}, err
+	}
+	diagnostics, err := marshalUCIIndexAdmissionDiagnostics(artifact.Diagnostics)
+	if err != nil {
+		return ucidomain.IndexArtifactProof{}, err
+	}
+	blob, err := s.UpsertBlob(ctx, UpsertUCIBlobInput{
+		SourceID:         sourceID,
+		ProtectionDomain: uciIndexAdmissionProtectionDomain,
+		ContentDigest:    string(artifact.ContentDigest),
+		ByteLength:       int64(len(artifact.Body)),
+		SafeContent:      artifact.Body,
+		Encoding:         "utf-8",
+		StorageState:     UCIBlobStored,
+	})
+	if err != nil {
+		return ucidomain.IndexArtifactProof{}, fmt.Errorf("uci index admission: upsert blob: %w", err)
+	}
+	stored, err := s.UpsertParseArtifact(ctx, UpsertUCIParseArtifactInput{
+		ArtifactID:              artifact.ArtifactID,
+		SourceID:                sourceID,
+		BlobID:                  blob.BlobID,
+		Language:                string(artifact.Profile.Language),
+		ParserRevision:          artifact.Profile.ParserRevision,
+		GrammarDigest:           string(artifact.Profile.GrammarDigest),
+		ExtractionProfileDigest: string(artifact.Profile.ExtractionProfileDigest),
+		Status:                  status,
+		Diagnostics:             diagnostics,
+	})
+	if err != nil {
+		return ucidomain.IndexArtifactProof{}, fmt.Errorf("uci index admission: upsert artifact: %w", err)
+	}
+	if stored.ArtifactID != artifact.ArtifactID || stored.SourceID != sourceID {
+		return ucidomain.IndexArtifactProof{}, errUCIProjectionImmutable
+	}
+
+	if stored.SealedAt == nil {
+		if err := s.storeUCIIndexAdmissionFacts(ctx, sourceID, artifact, bindings); err != nil {
+			return ucidomain.IndexArtifactProof{}, err
+		}
+	}
+	if err := s.verifyUCIIndexAdmissionFacts(ctx, artifact, bindings); err != nil {
+		return ucidomain.IndexArtifactProof{}, err
+	}
+	proof, err := s.DescribeIndexArtifact(ctx, sourceID, artifact.ArtifactID)
+	if err != nil {
+		return ucidomain.IndexArtifactProof{}, fmt.Errorf("uci index admission: describe stored artifact: %w", err)
+	}
+	return proof, nil
+}
+
+func (s *UCIProjectionStore) storeUCIIndexAdmissionFacts(ctx context.Context, sourceID string, artifact ucidomain.IndexAdmissionArtifact, bindings ucidomain.IndexAdmissionReferenceBindings) error {
+	for _, definition := range artifact.Definitions {
+		name, err := uciIndexAdmissionDefinitionName(definition)
+		if err != nil {
+			return err
+		}
+		if _, err := s.UpsertDefinition(ctx, UpsertUCIDefinitionInput{
+			ArtifactID:         artifact.ArtifactID,
+			LocalSymbolKey:     definition.LocalSymbolKey,
+			Kind:               definition.Kind,
+			Name:               name,
+			QualifiedLocalName: definition.SymbolKey,
+			Signature:          "",
+			ByteStart:          definition.Span.ByteStart,
+			ByteEnd:            definition.Span.ByteEnd,
+			LineStart:          definition.Span.LineStart,
+			LineEnd:            definition.Span.LineEnd,
+		}); err != nil {
+			return fmt.Errorf("uci index admission: upsert definition: %w", err)
+		}
+	}
+	for _, reference := range artifact.References {
+		binding := ucidomain.IndexAdmissionReferenceKey{ArtifactID: artifact.ArtifactID, SiteKey: reference.SiteKey}
+		referenceSiteID, found := bindings[binding]
+		if !found {
+			return fmt.Errorf("uci index admission: missing reference binding")
+		}
+		syntaxSpan, err := marshalUCIIndexAdmissionSpan(reference.Span)
+		if err != nil {
+			return err
+		}
+		resolverHints, err := marshalUCIIndexAdmissionReferenceHints(reference)
+		if err != nil {
+			return err
+		}
+		if _, err := s.UpsertReferenceSite(ctx, UpsertUCIReferenceSiteInput{
+			ReferenceSiteID: referenceSiteID,
+			ArtifactID:      artifact.ArtifactID,
+			SiteKey:         reference.SiteKey,
+			OwnerSymbolKey:  reference.OwnerSymbolKey,
+			RawTarget:       reference.RawTarget,
+			Relation:        string(reference.Relation),
+			SyntaxSpan:      syntaxSpan,
+			ResolverHints:   resolverHints,
+		}); err != nil {
+			return fmt.Errorf("uci index admission: upsert reference site: %w", err)
+		}
+	}
+	for _, chunk := range artifact.Chunks {
+		if _, err := s.UpsertChunk(ctx, UpsertUCIChunkInput{
+			SourceID:      sourceID,
+			ArtifactID:    artifact.ArtifactID,
+			SymbolKey:     chunk.SymbolKey,
+			ChunkKind:     chunk.Kind,
+			Ordinal:       chunk.Ordinal,
+			ByteStart:     chunk.Span.ByteStart,
+			ByteEnd:       chunk.Span.ByteEnd,
+			ContentDigest: string(chunk.ContentDigest),
+			TextForSearch: chunk.Text,
+		}); err != nil {
+			return fmt.Errorf("uci index admission: upsert chunk: %w", err)
+		}
+	}
+	return nil
+}
+
+func uciIndexAdmissionDefinitionName(definition ucidomain.IndexAdmissionDefinition) (string, error) {
+	localKey := definition.LocalSymbolKey
+	var expectedKind, name string
+	switch {
+	case strings.HasPrefix(localKey, "pkg:"):
+		expectedKind = "package"
+		name = strings.TrimPrefix(localKey, "pkg:")
+	case strings.HasPrefix(localKey, "type:"):
+		expectedKind = "type"
+		name = strings.TrimPrefix(localKey, "type:")
+	case strings.HasPrefix(localKey, "func:"):
+		expectedKind = "function"
+		name = strings.TrimPrefix(localKey, "func:")
+	case strings.HasPrefix(localKey, "method:"):
+		expectedKind = "method"
+		receiverAndName := strings.TrimPrefix(localKey, "method:")
+		separator := strings.LastIndex(receiverAndName, ".")
+		if separator <= 0 || separator == len(receiverAndName)-1 || !uciIndexAdmissionGoReceiver(receiverAndName[:separator]) {
+			return "", fmt.Errorf("uci index admission: unparseable Go definition key %q", localKey)
+		}
+		name = receiverAndName[separator+1:]
+	default:
+		return "", fmt.Errorf("uci index admission: unparseable Go definition key %q", localKey)
+	}
+	if definition.Kind != expectedKind || !token.IsIdentifier(name) {
+		return "", fmt.Errorf("uci index admission: unparseable Go definition key %q", localKey)
+	}
+	return name, nil
+}
+
+func uciIndexAdmissionGoReceiver(receiver string) bool {
+	for _, segment := range strings.Split(receiver, ".") {
+		if !token.IsIdentifier(segment) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *UCIProjectionStore) verifyUCIIndexAdmissionFacts(ctx context.Context, artifact ucidomain.IndexAdmissionArtifact, bindings ucidomain.IndexAdmissionReferenceBindings) error {
+	var definitions []UCIDefinition
+	if err := s.db.WithContext(ctx).Where("artifact_id = ?", artifact.ArtifactID).Order("local_symbol_key ASC").Find(&definitions).Error; err != nil {
+		return fmt.Errorf("uci index admission: load definitions: %w", err)
+	}
+	if len(definitions) != len(artifact.Definitions) {
+		return fmt.Errorf("uci index admission: stored definition count differs: %w", errUCIProjectionImmutable)
+	}
+	for index, expected := range artifact.Definitions {
+		name, err := uciIndexAdmissionDefinitionName(expected)
+		if err != nil {
+			return err
+		}
+		actual := definitions[index]
+		if actual.LocalSymbolKey != expected.LocalSymbolKey || actual.Kind != expected.Kind ||
+			actual.Name != name || actual.QualifiedLocalName != expected.SymbolKey || actual.Signature != "" ||
+			actual.ByteStart != expected.Span.ByteStart || actual.ByteEnd != expected.Span.ByteEnd ||
+			actual.LineStart != expected.Span.LineStart || actual.LineEnd != expected.Span.LineEnd {
+			return fmt.Errorf("uci index admission: stored definition differs: %w", errUCIProjectionImmutable)
+		}
+	}
+
+	var references []UCIReferenceSite
+	if err := s.db.WithContext(ctx).Where("artifact_id = ?", artifact.ArtifactID).Order("site_key ASC").Find(&references).Error; err != nil {
+		return fmt.Errorf("uci index admission: load reference sites: %w", err)
+	}
+	if len(references) != len(artifact.References) {
+		return fmt.Errorf("uci index admission: stored reference count differs: %w", errUCIProjectionImmutable)
+	}
+	for index, expected := range artifact.References {
+		binding := ucidomain.IndexAdmissionReferenceKey{ArtifactID: artifact.ArtifactID, SiteKey: expected.SiteKey}
+		referenceSiteID, found := bindings[binding]
+		if !found {
+			return fmt.Errorf("uci index admission: stored reference has no deterministic binding: %w", errUCIProjectionImmutable)
+		}
+		syntaxSpan, err := marshalUCIIndexAdmissionSpan(expected.Span)
+		if err != nil {
+			return err
+		}
+		resolverHints, err := marshalUCIIndexAdmissionReferenceHints(expected)
+		if err != nil {
+			return err
+		}
+		actual := references[index]
+		actualSyntaxSpan, err := normalizeUCIJSONObject("syntax_span", actual.SyntaxSpan)
+		if err != nil {
+			return errUCIProjectionImmutable
+		}
+		actualResolverHints, err := normalizeUCIJSONObject("resolver_hints", actual.ResolverHints)
+		if err != nil {
+			return errUCIProjectionImmutable
+		}
+		if actual.ReferenceSiteID != referenceSiteID || actual.SiteKey != expected.SiteKey ||
+			!sameUCIOptionalString(actual.OwnerSymbolKey, expected.OwnerSymbolKey) ||
+			actual.RawTarget != expected.RawTarget || actual.Relation != string(expected.Relation) ||
+			actualSyntaxSpan != syntaxSpan || actualResolverHints != resolverHints {
+			return fmt.Errorf("uci index admission: stored reference differs: %w", errUCIProjectionImmutable)
+		}
+	}
+
+	var chunks []UCIChunk
+	if err := s.db.WithContext(ctx).Where("artifact_id = ?", artifact.ArtifactID).Order("ordinal ASC").Find(&chunks).Error; err != nil {
+		return fmt.Errorf("uci index admission: load chunks: %w", err)
+	}
+	if len(chunks) != len(artifact.Chunks) {
+		return fmt.Errorf("uci index admission: stored chunk count differs: %w", errUCIProjectionImmutable)
+	}
+	for index, expected := range artifact.Chunks {
+		actual := chunks[index]
+		if !sameUCIOptionalString(actual.SymbolKey, expected.SymbolKey) || actual.ChunkKind != expected.Kind || actual.Ordinal != expected.Ordinal ||
+			actual.ByteStart != expected.Span.ByteStart || actual.ByteEnd != expected.Span.ByteEnd ||
+			actual.ContentDigest != string(expected.ContentDigest) || actual.TextForSearch != expected.Text {
+			return fmt.Errorf("uci index admission: stored chunk differs: %w", errUCIProjectionImmutable)
+		}
+	}
+	return nil
+}
+
+func uciIndexAdmissionArtifactStatus(status ucidomain.IndexAdmissionArtifactStatus) (UCIParseArtifactStatus, error) {
+	switch status {
+	case ucidomain.IndexAdmissionArtifactComplete:
+		return UCIParseArtifactComplete, nil
+	case ucidomain.IndexAdmissionArtifactPartial:
+		return UCIParseArtifactPartial, nil
+	default:
+		return "", fmt.Errorf("uci index admission: unsupported artifact status")
+	}
+}
+
+func marshalUCIIndexAdmissionDiagnostics(diagnostics []ucidomain.IndexAdmissionDiagnostic) (string, error) {
+	encoded, err := json.Marshal(struct {
+		Items []ucidomain.IndexAdmissionDiagnostic `json:"items"`
+	}{Items: diagnostics})
+	if err != nil {
+		return "", fmt.Errorf("uci index admission: encode diagnostics: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func marshalUCIIndexAdmissionSpan(span ucidomain.IndexSpan) (string, error) {
+	encoded, err := json.Marshal(struct {
+		ByteEnd   int64 `json:"byte_end"`
+		ByteStart int64 `json:"byte_start"`
+		LineEnd   int   `json:"line_end"`
+		LineStart int   `json:"line_start"`
+	}{
+		ByteEnd:   span.ByteEnd,
+		ByteStart: span.ByteStart,
+		LineEnd:   span.LineEnd,
+		LineStart: span.LineStart,
+	})
+	if err != nil {
+		return "", fmt.Errorf("uci index admission: encode source span: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func marshalUCIIndexAdmissionReferenceHints(reference ucidomain.IndexAdmissionReference) (string, error) {
+	encoded, err := json.Marshal(struct {
+		Kind      string `json:"kind"`
+		SymbolKey string `json:"symbol_key"`
+	}{
+		Kind:      reference.Kind,
+		SymbolKey: reference.SymbolKey,
+	})
+	if err != nil {
+		return "", fmt.Errorf("uci index admission: encode reference hints: %w", err)
+	}
+	return string(encoded), nil
 }
 
 // UpsertUCIEmbeddingProfileInput names a versioned semantic space for an analysis profile.
@@ -2337,6 +2823,38 @@ func indexBuildRefFromJob(job UCIJob, scope ucidomain.IndexScope) (ucidomain.Ind
 		OwnerInstance: *job.LeaseOwner,
 		LeaseEpoch:    *job.OwnerEpoch,
 	}, nil
+}
+
+// LoadIndexBuildRef returns the server-recorded lease capability for an exact
+// publication build. Stage and Finalize use it to recover the durable owner
+// because their transport requests deliberately carry no owner instance.
+func (s *UCIProjectionStore) LoadIndexBuildRef(ctx context.Context, scope ucidomain.IndexScope, profileID, buildID string, leaseEpoch int64) (ucidomain.IndexBuildRef, error) {
+	if err := s.requireDB("load index build"); err != nil {
+		return ucidomain.IndexBuildRef{}, err
+	}
+	if ctx == nil {
+		return ucidomain.IndexBuildRef{}, errUCIPublicationRejected
+	}
+	if err := ctx.Err(); err != nil {
+		return ucidomain.IndexBuildRef{}, err
+	}
+	if !validUCIPublicationScope(scope) || validateUCIUUID("profile_id", profileID) != nil ||
+		validateUCIUUID("build_id", buildID) != nil || leaseEpoch <= 0 {
+		return ucidomain.IndexBuildRef{}, errUCIPublicationRejected
+	}
+
+	var job UCIJob
+	if err := s.db.WithContext(ctx).Where(
+		"job_id = ? AND source_id = ? AND checkout_id = ? AND incarnation_id = ? AND profile_id = ? AND owner_epoch = ?",
+		buildID, scope.SourceID, scope.CheckoutID, scope.IncarnationID, profileID, leaseEpoch,
+	).First(&job).Error; err != nil {
+		return ucidomain.IndexBuildRef{}, fmt.Errorf("uci projection load index build: %w", err)
+	}
+	build, err := indexBuildRefFromJob(job, scope)
+	if err != nil || build.BuildID != buildID || build.LeaseEpoch != leaseEpoch {
+		return ucidomain.IndexBuildRef{}, errUCIPublicationRejected
+	}
+	return build, nil
 }
 
 func loadUCIPublishedViewForJob(ctx context.Context, tx *gorm.DB, job UCIJob) (ucidomain.IndexPublishedView, error) {

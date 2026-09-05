@@ -1,0 +1,1003 @@
+package codeintel_test
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/thebtf/engram/internal/handlers/codeintel"
+	"github.com/thebtf/engram/internal/handlers/engramcore"
+	"github.com/thebtf/engram/internal/uci"
+	pb "github.com/thebtf/engram/proto/engram/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	_ "modernc.org/sqlite"
+)
+
+const (
+	preparedSourceID           = "11111111-1111-4111-8111-111111111111"
+	preparedCheckoutID         = "22222222-2222-4222-8222-222222222222"
+	preparedIncarnationID      = "33333333-3333-4333-8333-333333333333"
+	preparedProfileID          = "44444444-4444-4444-8444-444444444444"
+	preparedParentViewID       = "55555555-5555-4555-8555-555555555555"
+	preparedPublishedView      = "66666666-6666-4666-8666-666666666666"
+	preparedBuildID            = "77777777-7777-4777-8777-777777777777"
+	preparedRootID             = "root:prepared-index"
+	preparedWorkstationID      = "workstation:prepared-index"
+	preparedClientID           = "client:prepared-index"
+	preparedParserBundleDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+)
+
+type preparedIndexScanner struct {
+	calls  int
+	root   string
+	result uci.ScannerResult
+	err    error
+	onScan func()
+}
+
+func (scanner *preparedIndexScanner) Scan(_ context.Context, evidence uci.AuthorizedRootEvidence) (uci.ScannerResult, error) {
+	scanner.calls++
+	scanner.root = evidence.RootPath
+	if scanner.onScan != nil {
+		scanner.onScan()
+	}
+	if scanner.err != nil {
+		return uci.ScannerResult{}, scanner.err
+	}
+	return scanner.result, nil
+}
+
+type preparedIndexClient struct {
+	binding   uci.IndexBinding
+	published uci.ContextRef
+
+	beginRequests    []*pb.BeginCodeIndexRequest
+	stagePayloadSets [][][]byte
+	finalRequests    []*pb.FinalizeCodeIndexRequest
+	stageCalls       int
+	finalizeCalls    int
+	stageErr         error
+	stageNoAck       bool
+	finalizeErr      error
+	finalizeNoAck    bool
+	partDigest       string
+	onBegin          func()
+	onStage          func()
+}
+
+func (client *preparedIndexClient) Begin(_ context.Context, request *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error) {
+	client.beginRequests = append(client.beginRequests, request)
+	if request.GetOwnerInstance() != preparedClientID {
+		return nil, errors.New("unexpected begin owner")
+	}
+	if request.GetScope().GetSourceId() != client.binding.Scope.SourceID ||
+		request.GetScope().GetCheckoutId() != client.binding.Scope.CheckoutID ||
+		request.GetScope().GetIncarnationId() != client.binding.Scope.IncarnationID ||
+		request.GetScope().GetAnalysisProfileId() != client.binding.ProfileID {
+		return nil, errors.New("unexpected begin scope")
+	}
+	if client.onBegin != nil {
+		client.onBegin()
+	}
+	return &pb.BeginCodeIndexResponse{
+		Scope:          request.GetScope(),
+		BuildId:        preparedBuildID,
+		LeaseEpoch:     1,
+		LeaseExpiresAt: timestamppb.New(time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)),
+	}, nil
+}
+
+func (client *preparedIndexClient) Stage(_ context.Context, frames []*pb.StageCodeIndexFrame) (*pb.StageCodeIndexResponse, error) {
+	client.stageCalls++
+	if client.stageErr != nil {
+		return nil, client.stageErr
+	}
+	if client.stageNoAck {
+		return nil, nil
+	}
+	if len(frames) == 0 {
+		return nil, errors.New("empty stage")
+	}
+	payloads := make([][]byte, len(frames))
+	decodedFrames := make([]uci.IndexAdmissionFrame, len(frames))
+	for index, frame := range frames {
+		if frame.GetBuildId() != preparedBuildID || frame.GetLeaseEpoch() != 1 || frame.GetSequence() != uint64(index) {
+			return nil, fmt.Errorf("invalid stage frame %d", index)
+		}
+		if frame.GetScope().GetSourceId() != client.binding.Scope.SourceID ||
+			frame.GetScope().GetCheckoutId() != client.binding.Scope.CheckoutID ||
+			frame.GetScope().GetIncarnationId() != client.binding.Scope.IncarnationID ||
+			frame.GetScope().GetAnalysisProfileId() != client.binding.ProfileID {
+			return nil, fmt.Errorf("invalid stage scope %d", index)
+		}
+		if string(uci.DigestIndexAdmissionPayload(frame.GetPayload())) != frame.GetPayloadDigest() {
+			return nil, fmt.Errorf("invalid stage digest %d", index)
+		}
+		decoded, err := uci.DecodeIndexAdmissionFrame(frame.GetPayload())
+		if err != nil {
+			return nil, err
+		}
+		payloads[index] = append([]byte(nil), frame.GetPayload()...)
+		decodedFrames[index] = decoded
+	}
+	if err := uci.ValidateIndexAdmissionFramesForBinding(decodedFrames, client.binding); err != nil {
+		return nil, err
+	}
+	for _, frame := range decodedFrames {
+		for _, artifact := range frame.Artifacts {
+			if artifact.Profile.ExtractionProfileDigest != uci.IndexDigest(preparedParserBundleDigest) {
+				return nil, errors.New("artifact profile does not match selected parser bundle")
+			}
+		}
+	}
+	acks := make([]uci.IndexPartAck, len(decodedFrames))
+	for index, decoded := range decodedFrames {
+		part, err := decoded.PublicationPart()
+		if err != nil {
+			return nil, err
+		}
+		digest, err := uci.DigestIndexPart(part)
+		if err != nil {
+			return nil, err
+		}
+		acks[index] = uci.IndexPartAck{BuildID: preparedBuildID, Sequence: uint32(index), Digest: digest}
+	}
+	partDigest, err := uci.DigestIndexParts(acks)
+	if err != nil {
+		return nil, err
+	}
+	client.partDigest = string(partDigest)
+	client.stagePayloadSets = append(client.stagePayloadSets, payloads)
+	if client.onStage != nil {
+		client.onStage()
+	}
+	return &pb.StageCodeIndexResponse{
+		BuildId:           preparedBuildID,
+		AcceptedSequence:  uint64(len(frames) - 1),
+		AcceptedPartCount: uint64(len(frames)),
+		PartDigest:        string(partDigest),
+	}, nil
+}
+
+func (client *preparedIndexClient) Finalize(_ context.Context, request *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error) {
+	client.finalizeCalls++
+	client.finalRequests = append(client.finalRequests, request)
+	if client.finalizeErr != nil {
+		return nil, client.finalizeErr
+	}
+	if client.finalizeNoAck {
+		return nil, nil
+	}
+	if len(client.stagePayloadSets) == 0 {
+		return nil, errors.New("finalize before stage")
+	}
+	if request.GetPartsDigest() != client.partDigest {
+		return nil, errors.New("finalize parts digest did not use stage acknowledgement")
+	}
+	manifestDigest, edgesDigest, entryCount, edgeCount, err := preparedFinalizationDigests(client.stagePayloadSets[len(client.stagePayloadSets)-1])
+	if err != nil {
+		return nil, err
+	}
+	if request.GetManifestDigest() != string(manifestDigest) || request.GetEdgesDigest() != string(edgesDigest) ||
+		request.GetManifestEntryCount() != entryCount || request.GetEdgeCount() != edgeCount {
+		return nil, errors.New("finalize manifest does not match deterministic admission parts")
+	}
+	return &pb.FinalizeCodeIndexResponse{
+		PublishedContext: &pb.ContextRef{
+			SourceId:          client.published.SourceID,
+			CheckoutId:        client.published.CheckoutID,
+			ViewId:            client.published.ViewID,
+			Generation:        client.published.Generation,
+			AnalysisProfileId: client.published.AnalysisProfileID,
+		},
+		BuildId:                    preparedBuildID,
+		LeaseEpoch:                 1,
+		AcceptedFilesystemSequence: request.GetObservedFilesystemSequence(),
+	}, nil
+}
+
+func preparedFinalizationDigests(payloads [][]byte) (uci.IndexDigest, uci.IndexDigest, uint64, uint64, error) {
+	if err := uci.ValidateIndexAdmissionPayloads(payloads); err != nil {
+		return "", "", 0, 0, err
+	}
+	memberships := make([]uci.IndexMembership, 0)
+	replacements := make([]uci.IndexEdgeReplacement, 0)
+	var edgeCount uint64
+	for _, payload := range payloads {
+		frame, err := uci.DecodeIndexAdmissionFrame(payload)
+		if err != nil {
+			return "", "", 0, 0, err
+		}
+		part, err := frame.PublicationPart()
+		if err != nil {
+			return "", "", 0, 0, err
+		}
+		memberships = append(memberships, part.Memberships...)
+		for _, replacement := range part.EdgeReplacements {
+			edgeCount += uint64(len(replacement.Edges))
+		}
+		replacements = append(replacements, part.EdgeReplacements...)
+	}
+	manifestDigest, err := uci.DigestIndexManifest(memberships)
+	if err != nil {
+		return "", "", 0, 0, err
+	}
+	edgesDigest, err := uci.DigestIndexEdges(replacements)
+	if err != nil {
+		return "", "", 0, 0, err
+	}
+	return manifestDigest, edgesDigest, uint64(len(memberships)), edgeCount, nil
+}
+
+func TestUCIPreparedIndexPublishesGoFramesAndReplaysExactInputs(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	fixture.scanner.result.Files = []uci.ScannerFile{
+		{
+			Path:  "call.go",
+			State: uci.IndexFilePresent,
+			Body:  []byte("package sample\n\nfunc Target() {}\n\nfunc Caller() {\n\tTarget()\n}\n"),
+		},
+		{
+			Path:  "notes.txt",
+			State: uci.IndexFilePresent,
+			Body:  []byte("unsupported source\n"),
+		},
+		{
+			Path:      "protected.go",
+			State:     uci.IndexFileExcluded,
+			Exclusion: uci.ScannerExclusionProtected,
+		},
+	}
+	fixture.scanner.result.Coverage.ExcludedFiles = 1
+
+	first, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	require.Equal(t, fixture.published, first.Context)
+	require.Equal(t, 1, first.Uploaded)
+	require.Zero(t, first.Embedded)
+	require.Zero(t, first.Deleted)
+	require.Equal(t, []string{
+		"notes.txt: source language is unsupported",
+		"protected.go: source is excluded",
+	}, first.Errors)
+	require.Equal(t, 1, fixture.scanner.calls)
+	require.Equal(t, fixture.root, fixture.scanner.root)
+	require.Len(t, fixture.client.beginRequests, 1)
+	require.Equal(t, "reconcile", fixture.client.beginRequests[0].GetJobKind())
+	require.Equal(t, fixture.parent.ViewID, fixture.client.beginRequests[0].GetExpectedParent().GetViewId())
+	require.Len(t, fixture.client.stagePayloadSets, 1)
+	require.Len(t, fixture.client.stagePayloadSets[0], 1, "small artifacts must share one bounded frame")
+
+	frame, err := uci.DecodeIndexAdmissionFrame(fixture.client.stagePayloadSets[0][0])
+	require.NoError(t, err)
+	require.Len(t, frame.Artifacts, 1)
+	require.Equal(t, uci.IndexAdmissionLanguageGo, frame.Artifacts[0].Profile.Language)
+	require.Equal(t, uci.IndexDigest(preparedParserBundleDigest), frame.Artifacts[0].Profile.ExtractionProfileDigest)
+	expectedArtifactID, err := uci.DeriveIndexAdmissionArtifactID(preparedSourceID, frame.Artifacts[0].ContentDigest, frame.Artifacts[0].Profile)
+	require.NoError(t, err)
+	require.Equal(t, expectedArtifactID, frame.Artifacts[0].ArtifactID)
+	require.Len(t, frame.Memberships, 3)
+	preparedRequireMembership(t, frame, "call.go", uci.IndexAdmissionMembershipPresent, true)
+	preparedRequireMembership(t, frame, "notes.txt", uci.IndexAdmissionMembershipUnsupported, false)
+	preparedRequireMembership(t, frame, "protected.go", uci.IndexAdmissionMembershipProtected, false)
+	require.Len(t, frame.EdgeReplacements, 3)
+	part, err := frame.PublicationPart()
+	require.NoError(t, err)
+	require.Len(t, part.EdgeReplacements, 3)
+	callEdge := preparedRequireResolvedCall(t, part, "call.go")
+	require.Equal(t, "func:Caller", *callEdge.SourceSymbolKey)
+	require.Equal(t, "func:Target", *callEdge.Target.SymbolKey)
+	coverage := preparedCoverage(t, fixture.client.finalRequests[0])
+	require.Equal(t, uci.IndexCoveragePartial, coverage.Lexical)
+	require.Equal(t, uint64(2), coverage.ExcludedFiles)
+
+	state, found, err := fixture.registry.Snapshot(context.Background(), preparedCheckoutID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, int64(4), state.LastReconciledSequence)
+	require.Empty(t, state.DirtyPaths)
+
+	second, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	require.Equal(t, 2, fixture.scanner.calls)
+	require.Len(t, fixture.client.beginRequests, 2)
+	require.Equal(t, fixture.client.beginRequests[0].GetBuildKey(), fixture.client.beginRequests[1].GetBuildKey())
+	require.Len(t, fixture.client.stagePayloadSets, 2)
+	require.Equal(t, fixture.client.stagePayloadSets[0], fixture.client.stagePayloadSets[1])
+}
+
+func TestUCIPreparedIndexPublishesInitialIndexWithoutView(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	fixture.target.Binding.Context = nil
+	fixture.client.binding.Context = nil
+	fixture.scanner.result.Files = []uci.ScannerFile{{
+		Path:  "initial.go",
+		State: uci.IndexFilePresent,
+		Body:  []byte("package sample\nfunc Initial() {}\n"),
+	}}
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	require.Equal(t, fixture.published, result.Context)
+	require.Len(t, fixture.client.beginRequests, 1)
+	require.Equal(t, "initial_index", fixture.client.beginRequests[0].GetJobKind())
+	require.Nil(t, fixture.client.beginRequests[0].GetExpectedParent())
+	require.Len(t, fixture.client.finalRequests, 1)
+	require.Nil(t, fixture.client.finalRequests[0].GetExpectedParent())
+}
+
+func TestUCIPreparedIndexForwardsDirtyAndUnbornWorktreeObservations(t *testing.T) {
+	headOID := strings.Repeat("a", 40)
+	sha1 := "sha1"
+	sha256 := "sha256"
+	main := "main"
+	testCases := []struct {
+		name         string
+		headOID      *string
+		objectFormat *string
+		refLabel     *string
+		dirty        bool
+	}{
+		{
+			name:         "dirty detached worktree",
+			headOID:      &headOID,
+			objectFormat: &sha1,
+			dirty:        true,
+		},
+		{
+			name:         "unborn head",
+			objectFormat: &sha256,
+			refLabel:     &main,
+			dirty:        false,
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newPreparedIndexFixture(t)
+			fixture.scanner.result.Files = []uci.ScannerFile{{
+				Path:  "main.go",
+				State: uci.IndexFilePresent,
+				Body:  []byte("package sample\nfunc Main() {}\n"),
+			}}
+			observation := fixture.scanner.result.Observation
+			observation.HeadOID = testCase.headOID
+			observation.ObjectFormat = testCase.objectFormat
+			observation.RefLabel = testCase.refLabel
+			observation.Dirty = testCase.dirty
+			fixture.scanner.result.Observation = observation
+
+			_, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+			require.NoError(t, err)
+			require.Len(t, fixture.client.finalRequests, 1)
+			request := fixture.client.finalRequests[0]
+			preparedRequireOptionalString(t, request.HeadOid, testCase.headOID, "head_oid")
+			preparedRequireOptionalString(t, request.ObjectFormat, testCase.objectFormat, "object_format")
+			preparedRequireOptionalString(t, request.RefLabel, testCase.refLabel, "ref_label")
+			require.NotNil(t, request.Dirty)
+			require.Equal(t, testCase.dirty, *request.Dirty)
+		})
+	}
+}
+
+func TestUCIPreparedIndexRefusesUnprovenLocalEvidenceBeforeScanning(t *testing.T) {
+	t.Run("root hint", func(t *testing.T) {
+		fixture := newPreparedIndexFixture(t)
+		_, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, filepath.Join(fixture.root, "other"), fixture.client)
+		require.Error(t, err)
+		preparedRequireNoPublication(t, fixture)
+	})
+
+	t.Run("unapproved root", func(t *testing.T) {
+		fixture := newPreparedIndexFixture(t)
+		fixture.target.Binding.LocalRootID = "root:unapproved"
+		_, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+		require.Error(t, err)
+		preparedRequireNoPublication(t, fixture)
+	})
+
+	t.Run("divergent worktree", func(t *testing.T) {
+		fixture := newPreparedIndexFixture(t)
+		checkoutID := "99999999-9999-4999-8999-999999999999"
+		divergentRootID := "root:divergent"
+		require.NoError(t, fixture.registry.RecordApprovedRoot(context.Background(), codeintel.UCILocalApprovedRoot{
+			RootID:                  divergentRootID,
+			SourceID:                preparedSourceID,
+			CommonGitDirFingerprint: "sha256:common-git:divergent",
+			RootPath:                t.TempDir(),
+		}))
+		_, err := fixture.registry.RegisterCheckout(context.Background(), codeintel.UCILocalCheckoutRegistration{
+			RootID:                   divergentRootID,
+			SourceID:                 preparedSourceID,
+			CheckoutID:               checkoutID,
+			IncarnationID:            preparedIncarnationID,
+			CommonGitDirFingerprint:  "sha256:common-git:divergent",
+			PrivateGitDirFingerprint: "sha256:private-git:divergent",
+			WorkstationID:            preparedWorkstationID,
+			ClientInstanceID:         preparedClientID,
+		})
+		require.NoError(t, err)
+		fixture.target.Binding.Context = nil
+		fixture.target.Binding.Scope.CheckoutID = checkoutID
+		_, err = fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+		require.Error(t, err)
+		preparedRequireNoPublication(t, fixture)
+	})
+
+	t.Run("workstation", func(t *testing.T) {
+		fixture := newPreparedIndexFixture(t)
+		fixture.target.Binding.WorkstationID = "workstation:other"
+		_, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+		require.Error(t, err)
+		preparedRequireNoPublication(t, fixture)
+	})
+
+	t.Run("server incarnation", func(t *testing.T) {
+		fixture := newPreparedIndexFixture(t)
+		fixture.target.Binding.Scope.IncarnationID = "88888888-8888-4888-8888-888888888888"
+		_, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+		require.Error(t, err)
+		preparedRequireNoPublication(t, fixture)
+	})
+
+	t.Run("client instance", func(t *testing.T) {
+		fixture := newPreparedIndexFixture(t)
+		wrongClient, err := codeintel.NewUCIPreparedIndexCollaborator(codeintel.UCIPreparedIndexConfig{
+			WorkstationID:      preparedWorkstationID,
+			ClientInstanceID:   "client:other",
+			ParserBundleDigest: preparedParserBundleDigest,
+			Registry:           fixture.registry,
+			Scanner:            fixture.scanner,
+			GoProfile: uci.GoExtractionProfile{
+				ProfileKey: "go-structure-v1",
+				ParserKey:  "go-parser-v1",
+			},
+		})
+		require.NoError(t, err)
+		_, err = wrongClient.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+		require.Error(t, err)
+		preparedRequireNoPublication(t, fixture)
+	})
+}
+
+func TestUCIPreparedIndexRequiresSelectedParserBundleDigest(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	_, err := codeintel.NewUCIPreparedIndexCollaborator(codeintel.UCIPreparedIndexConfig{
+		WorkstationID:    preparedWorkstationID,
+		ClientInstanceID: preparedClientID,
+		Registry:         fixture.registry,
+		Scanner:          fixture.scanner,
+		GoProfile: uci.GoExtractionProfile{
+			ProfileKey: "go-structure-v1",
+			ParserKey:  "go-parser-v1",
+		},
+	})
+	require.Error(t, err)
+
+	wrongBundle, err := codeintel.NewUCIPreparedIndexCollaborator(codeintel.UCIPreparedIndexConfig{
+		WorkstationID:      preparedWorkstationID,
+		ClientInstanceID:   preparedClientID,
+		ParserBundleDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		Registry:           fixture.registry,
+		Scanner:            fixture.scanner,
+		GoProfile: uci.GoExtractionProfile{
+			ProfileKey: "go-structure-v1",
+			ParserKey:  "go-parser-v1",
+		},
+	})
+	require.NoError(t, err)
+	fixture.scanner.result.Files = []uci.ScannerFile{{
+		Path:  "main.go",
+		State: uci.IndexFilePresent,
+		Body:  []byte("package sample\nfunc Main() {}\n"),
+	}}
+	_, err = wrongBundle.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.Error(t, err)
+	require.Equal(t, 1, fixture.scanner.calls)
+	require.Len(t, fixture.client.beginRequests, 1)
+	require.Equal(t, 1, fixture.client.stageCalls)
+	require.Zero(t, fixture.client.finalizeCalls)
+	state, found, snapshotErr := fixture.registry.Snapshot(context.Background(), preparedCheckoutID)
+	require.NoError(t, snapshotErr)
+	require.True(t, found)
+	require.Zero(t, state.LastReconciledSequence)
+	require.NotEmpty(t, state.DirtyPaths)
+}
+
+func TestUCIPreparedIndexLeavesLocalStateDirtyWithoutDurableAcknowledgement(t *testing.T) {
+	testCases := []struct {
+		name              string
+		configure         func(*preparedIndexClient)
+		expectsFinalizing bool
+	}{
+		{
+			name: "stage error",
+			configure: func(client *preparedIndexClient) {
+				client.stageErr = errors.New("stage unavailable")
+			},
+		},
+		{
+			name: "stage no acknowledgement",
+			configure: func(client *preparedIndexClient) {
+				client.stageNoAck = true
+			},
+		},
+		{
+			name: "finalize error",
+			configure: func(client *preparedIndexClient) {
+				client.finalizeErr = errors.New("finalize unavailable")
+			},
+			expectsFinalizing: true,
+		},
+		{
+			name: "finalize no acknowledgement",
+			configure: func(client *preparedIndexClient) {
+				client.finalizeNoAck = true
+			},
+			expectsFinalizing: true,
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newPreparedIndexFixture(t)
+			fixture.scanner.result.Files = []uci.ScannerFile{{
+				Path:  "main.go",
+				State: uci.IndexFilePresent,
+				Body:  []byte("package sample\nfunc Main() {}\n"),
+			}}
+			testCase.configure(fixture.client)
+
+			_, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+			require.Error(t, err)
+			require.Equal(t, 1, fixture.scanner.calls)
+			require.Len(t, fixture.client.beginRequests, 1)
+			require.Equal(t, 1, fixture.client.stageCalls)
+			if testCase.expectsFinalizing {
+				require.Equal(t, 1, fixture.client.finalizeCalls)
+				require.Len(t, fixture.client.stagePayloadSets, 1)
+			} else {
+				require.Zero(t, fixture.client.finalizeCalls)
+				require.Empty(t, fixture.client.stagePayloadSets)
+			}
+
+			state, found, snapshotErr := fixture.registry.Snapshot(context.Background(), preparedCheckoutID)
+			require.NoError(t, snapshotErr)
+			require.True(t, found)
+			require.Zero(t, state.LastReconciledSequence)
+			require.NotEmpty(t, state.DirtyPaths)
+		})
+	}
+}
+
+func TestUCIPreparedIndexStopsAtCanceledTransition(t *testing.T) {
+	tests := []struct {
+		name          string
+		configure     func(*preparedIndexFixture, context.CancelFunc)
+		beginCalls    int
+		stageCalls    int
+		finalizeCalls int
+	}{
+		{
+			name: "after scan",
+			configure: func(fixture *preparedIndexFixture, cancel context.CancelFunc) {
+				fixture.scanner.result.Files = nil
+				fixture.scanner.onScan = cancel
+			},
+		},
+		{
+			name: "after begin",
+			configure: func(fixture *preparedIndexFixture, cancel context.CancelFunc) {
+				fixture.client.onBegin = cancel
+			},
+			beginCalls: 1,
+		},
+		{
+			name: "after stage",
+			configure: func(fixture *preparedIndexFixture, cancel context.CancelFunc) {
+				fixture.client.onStage = cancel
+			},
+			beginCalls: 1,
+			stageCalls: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newPreparedIndexFixture(t)
+			fixture.scanner.result.Files = []uci.ScannerFile{{
+				Path:  "main.go",
+				State: uci.IndexFilePresent,
+				Body:  []byte("package sample\nfunc Main() {}\n"),
+			}}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			test.configure(&fixture, cancel)
+
+			result, err := fixture.collaborator.IndexPreparedCodebase(ctx, fixture.target, fixture.root, fixture.client)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Nil(t, result)
+			require.Equal(t, test.beginCalls, len(fixture.client.beginRequests))
+			require.Equal(t, test.stageCalls, fixture.client.stageCalls)
+			require.Equal(t, test.finalizeCalls, fixture.client.finalizeCalls)
+
+			state, found, snapshotErr := fixture.registry.Snapshot(context.Background(), preparedCheckoutID)
+			require.NoError(t, snapshotErr)
+			require.True(t, found)
+			require.Zero(t, state.LastReconciledSequence)
+			require.NotEmpty(t, state.DirtyPaths)
+		})
+	}
+}
+
+func TestUCIPreparedIndexPacksGloballyValidCrossFrameGoCall(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	padding := strings.Repeat("x", 260_000)
+	fixture.scanner.result.Files = []uci.ScannerFile{
+		{
+			Path:  "call.go",
+			State: uci.IndexFilePresent,
+			Body:  []byte("package sample\nfunc Caller() { Target() }\n//" + padding + "\n"),
+		},
+		{
+			Path:  "target.go",
+			State: uci.IndexFilePresent,
+			Body:  []byte("package sample\nfunc Target() {}\n//" + padding + "\n"),
+		},
+	}
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Uploaded)
+	require.Len(t, fixture.client.stagePayloadSets, 1)
+	frames := preparedFrames(t, fixture.client.stagePayloadSets[0])
+	require.Len(t, frames, 2)
+	require.NoError(t, uci.ValidateIndexAdmissionFramesForBinding(frames, fixture.target.Binding))
+
+	sourceFrame := preparedFrameIndex(t, frames, "call.go")
+	targetFrame := preparedFrameIndex(t, frames, "target.go")
+	require.NotEqual(t, sourceFrame, targetFrame)
+	rawEdge := preparedResolvedAdmissionCall(t, frames[sourceFrame], "call.go")
+	require.NotNil(t, rawEdge.SourceSymbolKey)
+	require.Equal(t, "func:Caller", *rawEdge.SourceSymbolKey)
+	require.NotNil(t, rawEdge.Target)
+	require.Equal(t, "target.go", rawEdge.Target.PathKey)
+	publicationPart, err := frames[sourceFrame].PublicationPart()
+	require.NoError(t, err)
+	publishedEdge := preparedPublicationEdge(t, publicationPart, "call.go", rawEdge.EdgeKey)
+	expectedReferenceID, err := uci.DeriveIndexAdmissionReferenceSiteID(rawEdge.SourceArtifactID, rawEdge.Evidence.ReferenceSiteKey)
+	require.NoError(t, err)
+	require.Equal(t, expectedReferenceID, *publishedEdge.Evidence.ReferenceSiteID)
+	require.NotNil(t, publishedEdge.SourceSymbolKey)
+	require.Equal(t, "func:Caller", *publishedEdge.SourceSymbolKey)
+
+	coverage := preparedCoverage(t, fixture.client.finalRequests[0])
+	require.Zero(t, coverage.UnresolvedReferences)
+}
+
+func TestUCIPreparedIndexLeavesAmbiguousGoCallsUnresolved(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	fixture.scanner.result.Files = []uci.ScannerFile{
+		{Path: "caller.go", State: uci.IndexFilePresent, Body: []byte("package sample\nfunc Caller() { Target() }\n")},
+		{Path: "left.go", State: uci.IndexFilePresent, Body: []byte("package sample\nfunc Target() {}\n")},
+		{Path: "right.go", State: uci.IndexFilePresent, Body: []byte("package sample\nfunc Target() {}\n")},
+	}
+
+	_, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	frames := preparedFrames(t, fixture.client.stagePayloadSets[0])
+	callerFrame := preparedFrameIndex(t, frames, "caller.go")
+	for _, replacement := range frames[callerFrame].EdgeReplacements {
+		if replacement.SourcePath == "caller.go" {
+			require.Empty(t, replacement.Edges)
+		}
+	}
+	coverage := preparedCoverage(t, fixture.client.finalRequests[0])
+	require.Equal(t, uint64(1), coverage.UnresolvedReferences)
+}
+
+func TestUCIPreparedIndexLeavesOwnerlessGoCallsUnresolved(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	fixture.scanner.result.Files = []uci.ScannerFile{
+		{Path: "initializer.go", State: uci.IndexFilePresent, Body: []byte("package sample\nvar _ = Target()\n")},
+		{Path: "target.go", State: uci.IndexFilePresent, Body: []byte("package sample\nfunc Target() {}\n")},
+	}
+
+	_, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	frames := preparedFrames(t, fixture.client.stagePayloadSets[0])
+	initializerFrame := preparedFrameIndex(t, frames, "initializer.go")
+	for _, replacement := range frames[initializerFrame].EdgeReplacements {
+		if replacement.SourcePath == "initializer.go" {
+			require.Empty(t, replacement.Edges)
+		}
+	}
+	coverage := preparedCoverage(t, fixture.client.finalRequests[0])
+	require.Equal(t, uint64(1), coverage.UnresolvedReferences)
+}
+
+func TestUCIPreparedIndexRecomputesUnresolvedReferenceCoverage(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	fixture.scanner.result.Coverage.UnresolvedReferences = 99
+	fixture.scanner.result.Files = []uci.ScannerFile{
+		{Path: "caller.go", State: uci.IndexFilePresent, Body: []byte("package sample\nfunc Caller() { Target() }\n")},
+		{Path: "left.go", State: uci.IndexFilePresent, Body: []byte("package sample\nfunc Target() {}\n")},
+		{Path: "right.go", State: uci.IndexFilePresent, Body: []byte("package sample\nfunc Target() {}\n")},
+	}
+
+	_, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	coverage := preparedCoverage(t, fixture.client.finalRequests[0])
+	require.Equal(t, uint64(1), coverage.UnresolvedReferences)
+}
+
+func TestUCIPreparedIndexClonesBindingBeforeScanning(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	fixture.scanner.result.Files = []uci.ScannerFile{{
+		Path:  "main.go",
+		State: uci.IndexFilePresent,
+		Body:  []byte("package sample\nfunc Main() {}\n"),
+	}}
+	originalParent := *fixture.target.Binding.Context
+	fixture.scanner.onScan = func() {
+		fixture.target.Binding.Context.ViewID = preparedPublishedView
+	}
+
+	_, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	require.Equal(t, preparedPublishedView, fixture.target.Binding.Context.ViewID)
+	require.Len(t, fixture.client.beginRequests, 1)
+	require.Equal(t, originalParent.ViewID, fixture.client.beginRequests[0].GetExpectedParent().GetViewId())
+}
+
+type preparedIndexFixture struct {
+	collaborator *codeintel.UCIPreparedIndexCollaborator
+	registry     *codeintel.UCILocalRegistry
+	scanner      *preparedIndexScanner
+	client       *preparedIndexClient
+	target       engramcore.ResolvedIndexTarget
+	root         string
+	parent       uci.ContextRef
+	published    uci.ContextRef
+}
+
+func newPreparedIndexFixture(t *testing.T) preparedIndexFixture {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	registry, err := codeintel.NewUCILocalRegistry(db)
+	require.NoError(t, err)
+	root := t.TempDir()
+	require.NoError(t, registry.RecordApprovedRoot(context.Background(), codeintel.UCILocalApprovedRoot{
+		RootID:                  preparedRootID,
+		SourceID:                preparedSourceID,
+		CommonGitDirFingerprint: "sha256:common-git:prepared",
+		RootPath:                root,
+	}))
+	_, err = registry.RegisterCheckout(context.Background(), codeintel.UCILocalCheckoutRegistration{
+		RootID:                   preparedRootID,
+		SourceID:                 preparedSourceID,
+		CheckoutID:               preparedCheckoutID,
+		IncarnationID:            preparedIncarnationID,
+		CommonGitDirFingerprint:  "sha256:common-git:prepared",
+		PrivateGitDirFingerprint: "sha256:private-git:prepared",
+		WorkstationID:            preparedWorkstationID,
+		ClientInstanceID:         preparedClientID,
+	})
+	require.NoError(t, err)
+	_, err = registry.RecordDirty(context.Background(), codeintel.UCILocalDirtyChange{
+		CheckoutID:   preparedCheckoutID,
+		RelativePath: "call.go",
+		Sequence:     4,
+	})
+	require.NoError(t, err)
+
+	parent := uci.ContextRef{
+		SourceID:          preparedSourceID,
+		CheckoutID:        preparedCheckoutID,
+		ViewID:            preparedParentViewID,
+		AnalysisProfileID: preparedProfileID,
+		Generation:        1,
+	}
+	binding := uci.IndexBinding{
+		Context: &parent,
+		Scope: uci.IndexScope{
+			SourceID:      preparedSourceID,
+			CheckoutID:    preparedCheckoutID,
+			IncarnationID: preparedIncarnationID,
+		},
+		ProfileID:     preparedProfileID,
+		LocalRootID:   preparedRootID,
+		WorkstationID: preparedWorkstationID,
+	}
+	published := uci.ContextRef{
+		SourceID:          preparedSourceID,
+		CheckoutID:        preparedCheckoutID,
+		ViewID:            preparedPublishedView,
+		AnalysisProfileID: preparedProfileID,
+		Generation:        2,
+	}
+	scanner := &preparedIndexScanner{result: uci.ScannerResult{
+		Census: uci.ScannerCensus{Outcome: uci.IndexScanComplete, Complete: true, CanDeleteAll: true},
+		Observation: uci.IndexObservation{
+			ObservedFSSeq: 4,
+			ScanStart:     time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC),
+			ScanEnd:       time.Date(2026, 9, 5, 12, 0, 1, 0, time.UTC),
+		},
+		Coverage: uci.IndexCoverage{Structural: uci.IndexCoverageComplete},
+	}}
+	collaborator, err := codeintel.NewUCIPreparedIndexCollaborator(codeintel.UCIPreparedIndexConfig{
+		WorkstationID:      preparedWorkstationID,
+		ClientInstanceID:   preparedClientID,
+		ParserBundleDigest: preparedParserBundleDigest,
+		Registry:           registry,
+		Scanner:            scanner,
+		GoProfile: uci.GoExtractionProfile{
+			ProfileKey: "go-structure-v1",
+			ParserKey:  "go-parser-v1",
+		},
+	})
+	require.NoError(t, err)
+	return preparedIndexFixture{
+		collaborator: collaborator,
+		registry:     registry,
+		scanner:      scanner,
+		client:       &preparedIndexClient{binding: binding, published: published},
+		target: engramcore.ResolvedIndexTarget{
+			ClientSessionID: "session:prepared-index",
+			ContextHandle:   "handle:prepared-index",
+			Binding:         binding,
+		},
+		root:      root,
+		parent:    parent,
+		published: published,
+	}
+}
+
+func preparedRequireMembership(t *testing.T, frame uci.IndexAdmissionFrame, path string, state uci.IndexAdmissionMembershipState, hasArtifact bool) {
+	t.Helper()
+	for _, membership := range frame.Memberships {
+		if membership.PathKey != path {
+			continue
+		}
+		require.Equal(t, state, membership.State)
+		if hasArtifact {
+			require.NotNil(t, membership.ArtifactID)
+		} else {
+			require.Nil(t, membership.ArtifactID)
+		}
+		return
+	}
+	require.Failf(t, "membership missing", "path %q not found", path)
+}
+
+func preparedRequireResolvedCall(t *testing.T, part uci.IndexPart, sourcePath string) uci.IndexEdge {
+	t.Helper()
+	for _, replacement := range part.EdgeReplacements {
+		if replacement.SourcePath != sourcePath {
+			continue
+		}
+		for _, edge := range replacement.Edges {
+			if edge.Relation == uci.IndexRelation("calls") && edge.ResolutionState == uci.IndexResolutionState("resolved") {
+				require.NotNil(t, edge.SourceSymbolKey)
+				require.NotNil(t, edge.Target)
+				require.NotNil(t, edge.Target.SymbolKey)
+				require.NotNil(t, edge.Evidence.ReferenceSiteID)
+				return edge
+			}
+		}
+	}
+	require.Fail(t, "expected a resolved same-source Go call edge")
+	return uci.IndexEdge{}
+}
+
+func preparedCoverage(t *testing.T, request *pb.FinalizeCodeIndexRequest) uci.IndexCoverage {
+	t.Helper()
+	var coverage uci.IndexCoverage
+	require.NotNil(t, request)
+	require.NoError(t, json.Unmarshal(request.GetCoverageJson(), &coverage))
+	return coverage
+}
+
+func preparedRequireOptionalString(t *testing.T, got, want *string, field string) {
+	t.Helper()
+	if want == nil {
+		require.Nil(t, got, field)
+		return
+	}
+	require.NotNil(t, got, field)
+	require.Equal(t, *want, *got, field)
+}
+
+func preparedFrames(t *testing.T, payloads [][]byte) []uci.IndexAdmissionFrame {
+	t.Helper()
+	frames := make([]uci.IndexAdmissionFrame, len(payloads))
+	for index, payload := range payloads {
+		frame, err := uci.DecodeIndexAdmissionFrame(payload)
+		require.NoError(t, err)
+		frames[index] = frame
+	}
+	return frames
+}
+
+func preparedFrameIndex(t *testing.T, frames []uci.IndexAdmissionFrame, path string) int {
+	t.Helper()
+	for frameIndex, frame := range frames {
+		for _, membership := range frame.Memberships {
+			if membership.PathKey == path {
+				return frameIndex
+			}
+		}
+	}
+	require.Failf(t, "membership missing", "path %q not found", path)
+	return -1
+}
+
+func preparedResolvedAdmissionCall(t *testing.T, frame uci.IndexAdmissionFrame, sourcePath string) uci.IndexAdmissionEdge {
+	t.Helper()
+	for _, replacement := range frame.EdgeReplacements {
+		if replacement.SourcePath != sourcePath {
+			continue
+		}
+		for _, edge := range replacement.Edges {
+			if edge.Relation == uci.IndexRelation("calls") && edge.ResolutionState == uci.IndexResolutionState("resolved") {
+				return edge
+			}
+		}
+	}
+	require.Fail(t, "expected a resolved same-source Go call edge")
+	return uci.IndexAdmissionEdge{}
+}
+
+func preparedPublicationEdge(t *testing.T, part uci.IndexPart, sourcePath, edgeKey string) uci.IndexEdge {
+	t.Helper()
+	for _, replacement := range part.EdgeReplacements {
+		if replacement.SourcePath != sourcePath {
+			continue
+		}
+		for _, edge := range replacement.Edges {
+			if edge.EdgeKey == edgeKey {
+				return edge
+			}
+		}
+	}
+	require.Failf(t, "published edge missing", "edge %q from %q not found", edgeKey, sourcePath)
+	return uci.IndexEdge{}
+}
+
+func preparedRequireNoPublication(t *testing.T, fixture preparedIndexFixture) {
+	t.Helper()
+	require.Zero(t, fixture.scanner.calls)
+	require.Empty(t, fixture.client.beginRequests)
+	require.Zero(t, fixture.client.stageCalls)
+	require.Zero(t, fixture.client.finalizeCalls)
+}
+
+func TestUCIPreparedIndexExcludesGoArtifactWhoseSafeFrameCannotFit(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	fixture.scanner.result.Files = []uci.ScannerFile{{
+		Path:  "large.go",
+		State: uci.IndexFilePresent,
+		Body:  []byte("package sample\n//" + strings.Repeat("x", uci.IndexAdmissionMaxArtifactBodyBytes-32)),
+	}}
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	require.Zero(t, result.Uploaded)
+	require.Contains(t, result.Errors, "large.go: safe encoded artifact cannot fit a frame")
+	require.Len(t, fixture.client.stagePayloadSets, 1)
+	frame, err := uci.DecodeIndexAdmissionFrame(fixture.client.stagePayloadSets[0][0])
+	require.NoError(t, err)
+	preparedRequireMembership(t, frame, "large.go", uci.IndexAdmissionMembershipUnsupported, false)
+	require.Empty(t, frame.Artifacts)
+	coverage := preparedCoverage(t, fixture.client.finalRequests[0])
+	require.Equal(t, uci.IndexCoveragePartial, coverage.Lexical)
+	require.Equal(t, uint64(1), coverage.ExcludedFiles)
+}

@@ -1,0 +1,1022 @@
+package codeintel
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"path"
+	"sort"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/thebtf/engram/internal/handlers/engramcore"
+	"github.com/thebtf/engram/internal/uci"
+	pb "github.com/thebtf/engram/proto/engram/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// UCIPreparedIndexScanner is the read-only scanner boundary used by the
+// prepared index collaborator. It never selects a source or checkout.
+type UCIPreparedIndexScanner interface {
+	Scan(context.Context, uci.AuthorizedRootEvidence) (uci.ScannerResult, error)
+}
+
+// UCIPreparedIndexConfig binds one prepared index collaborator to the exact
+// daemon identity, selected server parser bundle, and local operational
+// evidence it is allowed to use.
+type UCIPreparedIndexConfig struct {
+	WorkstationID      string
+	ClientInstanceID   string
+	ParserBundleDigest uci.IndexDigest
+	Registry           *UCILocalRegistry
+	Scanner            UCIPreparedIndexScanner
+	GoProfile          uci.GoExtractionProfile
+}
+
+// UCIPreparedIndexCollaborator prepares and publishes immutable UCI admission
+// frames for server-authorized targets. It has no project selector or path
+// authority: the server binding and local registry jointly determine its root.
+type UCIPreparedIndexCollaborator struct {
+	workstationID      string
+	clientInstanceID   string
+	parserBundleDigest uci.IndexDigest
+	registry           *UCILocalRegistry
+	scanner            UCIPreparedIndexScanner
+	goProfile          uci.GoExtractionProfile
+}
+
+// NewUCIPreparedIndexCollaborator constructs the daemon-side prepared-index
+// collaborator with a domain-validated versioned Go extraction profile.
+func NewUCIPreparedIndexCollaborator(config UCIPreparedIndexConfig) (*UCIPreparedIndexCollaborator, error) {
+	if !validUCIPreparedIndexIdentity(config.WorkstationID) {
+		return nil, fmt.Errorf("uci prepared index: workstation identity is invalid")
+	}
+	if !validUCIPreparedIndexIdentity(config.ClientInstanceID) {
+		return nil, fmt.Errorf("uci prepared index: client instance identity is invalid")
+	}
+	if config.Registry == nil {
+		return nil, fmt.Errorf("uci prepared index: local registry is required")
+	}
+	if config.Scanner == nil {
+		return nil, fmt.Errorf("uci prepared index: scanner is required")
+	}
+	if !validUCIPreparedIndexDigest(config.ParserBundleDigest) {
+		return nil, fmt.Errorf("uci prepared index: parser bundle digest is invalid")
+	}
+	if _, err := uci.GoIndexAdmissionArtifactProfile(config.GoProfile); err != nil {
+		return nil, fmt.Errorf("uci prepared index: Go extraction profile is invalid: %w", err)
+	}
+	return &UCIPreparedIndexCollaborator{
+		workstationID:      config.WorkstationID,
+		clientInstanceID:   config.ClientInstanceID,
+		parserBundleDigest: config.ParserBundleDigest,
+		registry:           config.Registry,
+		scanner:            config.Scanner,
+		goProfile:          config.GoProfile,
+	}, nil
+}
+
+type uciPreparedLocalTarget struct {
+	binding          uci.IndexBinding
+	root             UCILocalApprovedRoot
+	checkout         UCILocalCheckoutRecord
+	observedSequence int64
+}
+
+func (collaborator *UCIPreparedIndexCollaborator) resolveLocalTarget(ctx context.Context, binding uci.IndexBinding, rootHint string) (uciPreparedLocalTarget, error) {
+	if collaborator == nil || collaborator.registry == nil {
+		return uciPreparedLocalTarget{}, fmt.Errorf("uci prepared index: collaborator is unavailable")
+	}
+	if ctx == nil {
+		return uciPreparedLocalTarget{}, fmt.Errorf("uci prepared index: context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return uciPreparedLocalTarget{}, err
+	}
+	binding = binding.Clone()
+	if err := binding.Validate(); err != nil {
+		return uciPreparedLocalTarget{}, fmt.Errorf("uci prepared index: server binding is invalid: %w", err)
+	}
+	if binding.WorkstationID != collaborator.workstationID {
+		return uciPreparedLocalTarget{}, fmt.Errorf("uci prepared index: binding workstation does not match collaborator")
+	}
+
+	root, found, err := collaborator.registry.ApprovedRoot(ctx, binding.LocalRootID)
+	if err != nil {
+		return uciPreparedLocalTarget{}, fmt.Errorf("uci prepared index: load approved root: %w", err)
+	}
+	if !found || root.RootID != binding.LocalRootID || root.SourceID != binding.Scope.SourceID {
+		return uciPreparedLocalTarget{}, fmt.Errorf("uci prepared index: binding root is not approved for the source")
+	}
+	if rootHint != root.RootPath {
+		return uciPreparedLocalTarget{}, fmt.Errorf("uci prepared index: root hint does not exactly match the approved root")
+	}
+
+	checkout, found, err := collaborator.registry.Snapshot(ctx, binding.Scope.CheckoutID)
+	if err != nil {
+		return uciPreparedLocalTarget{}, fmt.Errorf("uci prepared index: load local checkout: %w", err)
+	}
+	if !found ||
+		checkout.RootID != binding.LocalRootID ||
+		checkout.SourceID != binding.Scope.SourceID ||
+		checkout.CheckoutID != binding.Scope.CheckoutID ||
+		checkout.IncarnationID != binding.Scope.IncarnationID ||
+		checkout.CommonGitDirFingerprint != root.CommonGitDirFingerprint ||
+		checkout.WorkstationID != binding.WorkstationID ||
+		checkout.WorkstationID != collaborator.workstationID ||
+		checkout.ClientInstanceID != collaborator.clientInstanceID {
+		return uciPreparedLocalTarget{}, fmt.Errorf("uci prepared index: local checkout does not match the server binding")
+	}
+	return uciPreparedLocalTarget{
+		binding:          binding,
+		root:             root,
+		checkout:         checkout,
+		observedSequence: checkout.DirtySequence,
+	}, nil
+}
+
+func (collaborator *UCIPreparedIndexCollaborator) scanCurrent(ctx context.Context, local uciPreparedLocalTarget) (uci.ScannerResult, error) {
+	if collaborator == nil || collaborator.scanner == nil {
+		return uci.ScannerResult{}, fmt.Errorf("uci prepared index: scanner is unavailable")
+	}
+	scan, err := collaborator.scanner.Scan(ctx, uci.AuthorizedRootEvidence{RootPath: local.root.RootPath})
+	if err != nil {
+		return uci.ScannerResult{}, fmt.Errorf("uci prepared index: scan approved root: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return uci.ScannerResult{}, err
+	}
+	if scan.Census.Outcome != uci.IndexScanComplete || !scan.Census.Complete || !scan.Census.CanDeleteAll || scan.Coverage.Structural != uci.IndexCoverageComplete {
+		return uci.ScannerResult{}, fmt.Errorf("uci prepared index: scan is not a complete census")
+	}
+	scan.Observation.ObservedFSSeq = local.observedSequence
+	return scan, nil
+}
+
+const (
+	uciPreparedMembershipMode        = "unknown"
+	uciPreparedGoResolverRevision    = "uci-prepared-go-call/v1"
+	uciPreparedGoResolverRule        = "go-direct-call/v1"
+	uciPreparedGoResolverExplanation = "unique same-package Go function declaration"
+)
+
+type uciPreparedAdmissionFile struct {
+	path         string
+	membership   uci.IndexAdmissionMembership
+	artifact     *uci.IndexAdmissionArtifact
+	emitArtifact bool
+	edges        []uci.IndexAdmissionEdge
+	errors       []string
+}
+
+type uciPreparedAdmissionPlan struct {
+	frames   []uci.IndexAdmissionFrame
+	payloads [][]byte
+	coverage uci.IndexCoverage
+	errors   []string
+	uploaded int
+}
+
+func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionPlan(ctx context.Context, local uciPreparedLocalTarget, scan uci.ScannerResult) (uciPreparedAdmissionPlan, error) {
+	profile, err := uci.GoIndexAdmissionArtifactProfile(collaborator.goProfile)
+	if err != nil {
+		return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: configure Go admission profile: %w", err)
+	}
+	profile.ExtractionProfileDigest = collaborator.parserBundleDigest
+
+	files := append([]uci.ScannerFile(nil), scan.Files...)
+	sort.Slice(files, func(left, right int) bool {
+		return files[left].Path < files[right].Path
+	})
+	prepared := make([]uciPreparedAdmissionFile, 0, len(files))
+	seenPaths := make(map[string]struct{}, len(files))
+
+	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return uciPreparedAdmissionPlan{}, err
+		}
+		if _, found := seenPaths[file.Path]; found {
+			return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: scanner repeated path %q", file.Path)
+		}
+		seenPaths[file.Path] = struct{}{}
+
+		preparedFile, _, err := collaborator.prepareAdmissionFile(local.binding.Scope.SourceID, profile, file)
+		if err != nil {
+			return uciPreparedAdmissionPlan{}, err
+		}
+		prepared = append(prepared, preparedFile)
+	}
+
+	unresolved, err := uciPreparedAddResolvedGoCallEdges(prepared)
+	if err != nil {
+		return uciPreparedAdmissionPlan{}, err
+	}
+
+	var frames []uci.IndexAdmissionFrame
+	for {
+		var dropped uint64
+		frames, prepared, dropped, err = uciPreparedPackFrames(local.binding.ProfileID, prepared)
+		if err != nil {
+			return uciPreparedAdmissionPlan{}, err
+		}
+		if ^uint64(0)-unresolved < dropped {
+			return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: unresolved reference count overflow")
+		}
+		unresolved += dropped
+
+		discarded := uciPreparedDiscardUnavailableEdges(prepared)
+		if discarded == 0 {
+			break
+		}
+		if ^uint64(0)-unresolved < discarded {
+			return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: unresolved reference count overflow")
+		}
+		unresolved += discarded
+	}
+
+	coverage, err := uciPreparedCoverageForFiles(scan.Coverage, prepared)
+	if err != nil {
+		return uciPreparedAdmissionPlan{}, err
+	}
+	if ^uint64(0)-coverage.UnresolvedReferences < unresolved {
+		return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: unresolved reference count overflow")
+	}
+	coverage.UnresolvedReferences += unresolved
+	if err := uci.ValidateIndexAdmissionFramesForBinding(frames, local.binding); err != nil {
+		return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: validate complete packed build: %w", err)
+	}
+
+	payloads := make([][]byte, 0, len(frames))
+	artifactIDs := make(map[string]struct{})
+	errors := make([]string, 0)
+	for _, preparedFile := range prepared {
+		errors = append(errors, preparedFile.errors...)
+	}
+	for index, frame := range frames {
+		encoded, err := uci.EncodeIndexAdmissionFrame(frame)
+		if err != nil {
+			return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: encode frame %d: %w", index, err)
+		}
+		payloads = append(payloads, encoded)
+		for _, artifact := range frame.Artifacts {
+			artifactIDs[artifact.ArtifactID] = struct{}{}
+		}
+	}
+	if err := uci.ValidateIndexAdmissionPayloads(payloads); err != nil {
+		return uciPreparedAdmissionPlan{}, fmt.Errorf("uci prepared index: validate packed frames: %w", err)
+	}
+
+	sort.Strings(errors)
+	errors = uciPreparedUniqueStrings(errors)
+	return uciPreparedAdmissionPlan{
+		frames:   frames,
+		payloads: payloads,
+		coverage: coverage,
+		errors:   errors,
+		uploaded: len(artifactIDs),
+	}, nil
+}
+
+func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionFile(sourceID string, profile uci.IndexAdmissionArtifactProfile, file uci.ScannerFile) (uciPreparedAdmissionFile, bool, error) {
+	prepared := uciPreparedAdmissionFile{
+		path: file.Path,
+		membership: uci.IndexAdmissionMembership{
+			PathKey:     file.Path,
+			DisplayPath: file.Path,
+			Mode:        uciPreparedMembershipMode,
+		},
+	}
+	switch file.State {
+	case uci.IndexFileExcluded:
+		prepared.membership.State = uciPreparedExcludedMembershipState(file.Exclusion)
+		prepared.errors = append(prepared.errors, file.Path+": source is excluded")
+		return prepared, true, nil
+	case uci.IndexFileUnreadable:
+		prepared.membership.State = uci.IndexAdmissionMembershipUnreadable
+		prepared.errors = append(prepared.errors, file.Path+": source is unreadable")
+		return prepared, true, nil
+	case uci.IndexFilePresent:
+		if path.Ext(file.Path) != ".go" {
+			prepared.membership.State = uci.IndexAdmissionMembershipUnsupported
+			prepared.errors = append(prepared.errors, file.Path+": source language is unsupported")
+			return prepared, true, nil
+		}
+		if len(file.Body) > uci.IndexAdmissionMaxArtifactBodyBytes {
+			prepared.membership.State = uci.IndexAdmissionMembershipUnsupported
+			prepared.errors = append(prepared.errors, file.Path+": source exceeds the safe admission body limit")
+			return prepared, true, nil
+		}
+
+		extracted := uci.ExtractGo(file.Body, collaborator.goProfile)
+		artifact, err := uci.NewIndexAdmissionArtifactFromGo(sourceID, profile, file.Body, extracted)
+		if err != nil {
+			return uciPreparedAdmissionFile{}, false, fmt.Errorf("uci prepared index: normalize Go source %q: %w", file.Path, err)
+		}
+		artifactID := artifact.ArtifactID
+		prepared.membership.State = uci.IndexAdmissionMembershipPresent
+		prepared.membership.ArtifactID = &artifactID
+		prepared.artifact = &artifact
+		if artifact.Status == uci.IndexAdmissionArtifactPartial {
+			prepared.errors = append(prepared.errors, file.Path+": Go extraction is partial")
+			return prepared, true, nil
+		}
+		return prepared, false, nil
+	default:
+		return uciPreparedAdmissionFile{}, false, fmt.Errorf("uci prepared index: scanner returned unsupported state %q for %q", file.State, file.Path)
+	}
+}
+
+func uciPreparedExcludedMembershipState(exclusion uci.ScannerExclusion) uci.IndexAdmissionMembershipState {
+	if exclusion == uci.ScannerExclusionProtected {
+		return uci.IndexAdmissionMembershipProtected
+	}
+	return uci.IndexAdmissionMembershipExcluded
+}
+
+func uciPreparedPackFrames(profileID string, files []uciPreparedAdmissionFile) ([]uci.IndexAdmissionFrame, []uciPreparedAdmissionFile, uint64, error) {
+	files = append([]uciPreparedAdmissionFile(nil), files...)
+	var dropped uint64
+	for {
+		uciPreparedAssignArtifactOwners(files)
+		frames, packed, attemptDropped, totalBytes, err := uciPreparedPackFrameAttempt(profileID, files)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		if ^uint64(0)-dropped < attemptDropped {
+			return nil, nil, 0, fmt.Errorf("uci prepared index: unresolved reference count overflow")
+		}
+		dropped += attemptDropped
+		files = packed
+		if len(frames) <= uci.IndexAdmissionMaxFrames && totalBytes <= uci.IndexAdmissionMaxTotalEncodedBytes {
+			return frames, files, dropped, nil
+		}
+
+		artifactIndex := uciPreparedLastRetainedArtifact(files)
+		if artifactIndex < 0 {
+			return nil, nil, 0, fmt.Errorf("uci prepared index: membership metadata exceeds admission frame or total limits")
+		}
+		artifactID := files[artifactIndex].artifact.ArtifactID
+		var capacityDropped uint64
+		files, capacityDropped = uciPreparedMarkArtifactUnsupported(files, artifactID, "source exceeds aggregate admission capacity")
+		if ^uint64(0)-dropped < capacityDropped {
+			return nil, nil, 0, fmt.Errorf("uci prepared index: unresolved reference count overflow")
+		}
+		dropped += capacityDropped
+	}
+}
+
+func uciPreparedPackFrameAttempt(profileID string, files []uciPreparedAdmissionFile) ([]uci.IndexAdmissionFrame, []uciPreparedAdmissionFile, uint64, int, error) {
+	newFrame := func() uci.IndexAdmissionFrame {
+		return uci.IndexAdmissionFrame{
+			Version: uci.IndexAdmissionFrameVersion,
+			Profile: uci.IndexAdmissionProfile{ID: profileID},
+		}
+	}
+	if len(files) == 0 {
+		frame := newFrame()
+		encoded, err := uci.EncodeIndexAdmissionFrame(frame)
+		if err != nil {
+			return nil, nil, 0, 0, fmt.Errorf("uci prepared index: encode empty frame: %w", err)
+		}
+		return []uci.IndexAdmissionFrame{frame}, files, 0, len(encoded), nil
+	}
+
+	frames := make([]uci.IndexAdmissionFrame, 0, 1)
+	current := newFrame()
+	var dropped uint64
+	for index := range files {
+		for {
+			candidate := uciPreparedAppendAdmissionFile(current, files[index])
+			if _, err := uci.EncodeIndexAdmissionFrame(candidate); err == nil {
+				current = candidate
+				break
+			} else if !uciPreparedFrameCapacityError(err) {
+				return nil, nil, 0, 0, fmt.Errorf("uci prepared index: pack %q: %w", files[index].path, err)
+			}
+			if len(current.Memberships) != 0 {
+				frames = append(frames, current)
+				current = newFrame()
+				continue
+			}
+
+			fitted, fileDropped, err := uciPreparedFitAdmissionFile(current, files[index])
+			if err != nil {
+				return nil, nil, 0, 0, err
+			}
+			if ^uint64(0)-dropped < fileDropped {
+				return nil, nil, 0, 0, fmt.Errorf("uci prepared index: unresolved reference count overflow")
+			}
+			dropped += fileDropped
+			files[index] = fitted
+		}
+	}
+	frames = append(frames, current)
+
+	totalBytes := 0
+	for index, frame := range frames {
+		encoded, err := uci.EncodeIndexAdmissionFrame(frame)
+		if err != nil {
+			return nil, nil, 0, 0, fmt.Errorf("uci prepared index: encode packed frame %d: %w", index, err)
+		}
+		if len(encoded) > uci.IndexAdmissionMaxTotalEncodedBytes-totalBytes {
+			totalBytes = uci.IndexAdmissionMaxTotalEncodedBytes + 1
+			break
+		}
+		totalBytes += len(encoded)
+	}
+	return frames, files, dropped, totalBytes, nil
+}
+
+func uciPreparedAssignArtifactOwners(files []uciPreparedAdmissionFile) {
+	owners := make(map[string]struct{})
+	for index := range files {
+		files[index].emitArtifact = false
+		if files[index].membership.State != uci.IndexAdmissionMembershipPresent || files[index].artifact == nil {
+			continue
+		}
+		artifactID := files[index].artifact.ArtifactID
+		if _, found := owners[artifactID]; found {
+			continue
+		}
+		owners[artifactID] = struct{}{}
+		files[index].emitArtifact = true
+	}
+}
+
+func uciPreparedLastRetainedArtifact(files []uciPreparedAdmissionFile) int {
+	for index := len(files) - 1; index >= 0; index-- {
+		if files[index].emitArtifact && files[index].artifact != nil {
+			return index
+		}
+	}
+	return -1
+}
+
+func uciPreparedMarkArtifactUnsupported(files []uciPreparedAdmissionFile, artifactID, reason string) ([]uciPreparedAdmissionFile, uint64) {
+	var dropped uint64
+	for index := range files {
+		if files[index].artifact == nil || files[index].artifact.ArtifactID != artifactID {
+			continue
+		}
+		dropped += uint64(len(files[index].edges))
+		files[index] = uciPreparedUnsupportedFile(files[index], files[index].path+": "+reason)
+	}
+	return files, dropped
+}
+
+func uciPreparedFitAdmissionFile(frame uci.IndexAdmissionFrame, prepared uciPreparedAdmissionFile) (uciPreparedAdmissionFile, uint64, error) {
+	edges := append([]uci.IndexAdmissionEdge(nil), prepared.edges...)
+	sort.Slice(edges, func(left, right int) bool {
+		return edges[left].EdgeKey < edges[right].EdgeKey
+	})
+	withoutEdges := prepared
+	withoutEdges.edges = nil
+	if _, err := uci.EncodeIndexAdmissionFrame(uciPreparedAppendAdmissionFile(frame, withoutEdges)); err == nil {
+		fitCount := 0
+		low, high := 0, len(edges)
+		for low <= high {
+			middle := low + (high-low)/2
+			candidate := prepared
+			candidate.edges = edges[:middle]
+			if _, err := uci.EncodeIndexAdmissionFrame(uciPreparedAppendAdmissionFile(frame, candidate)); err == nil {
+				fitCount = middle
+				low = middle + 1
+			} else if uciPreparedFrameCapacityError(err) {
+				high = middle - 1
+			} else {
+				return uciPreparedAdmissionFile{}, 0, fmt.Errorf("uci prepared index: pack %q: %w", prepared.path, err)
+			}
+		}
+		prepared.edges = append([]uci.IndexAdmissionEdge(nil), edges[:fitCount]...)
+		dropped := uint64(len(edges) - fitCount)
+		if dropped != 0 {
+			prepared.errors = append(prepared.errors, prepared.path+": Go call resolution exceeds the safe admission frame limit")
+		}
+		return prepared, dropped, nil
+	} else if !uciPreparedFrameCapacityError(err) {
+		return uciPreparedAdmissionFile{}, 0, fmt.Errorf("uci prepared index: pack %q: %w", prepared.path, err)
+	}
+	if prepared.artifact == nil || !prepared.emitArtifact {
+		return uciPreparedAdmissionFile{}, 0, fmt.Errorf("uci prepared index: membership %q cannot fit a frame", prepared.path)
+	}
+	return uciPreparedUnsupportedFile(prepared, prepared.path+": safe encoded artifact cannot fit a frame"), uint64(len(edges)), nil
+}
+
+func uciPreparedAppendAdmissionFile(frame uci.IndexAdmissionFrame, prepared uciPreparedAdmissionFile) uci.IndexAdmissionFrame {
+	copy := frame.Clone()
+	if prepared.artifact != nil && prepared.emitArtifact && !uciPreparedFrameHasArtifact(copy, prepared.artifact.ArtifactID) {
+		copy.Artifacts = append(copy.Artifacts, *prepared.artifact)
+	}
+	copy.Memberships = append(copy.Memberships, prepared.membership)
+	copy.EdgeReplacements = append(copy.EdgeReplacements, uci.IndexAdmissionEdgeReplacement{
+		SourcePath: prepared.path,
+		Edges:      append([]uci.IndexAdmissionEdge(nil), prepared.edges...),
+	})
+	return copy
+}
+
+func uciPreparedFrameHasArtifact(frame uci.IndexAdmissionFrame, artifactID string) bool {
+	for _, artifact := range frame.Artifacts {
+		if artifact.ArtifactID == artifactID {
+			return true
+		}
+	}
+	return false
+}
+
+func uciPreparedUnsupportedFile(prepared uciPreparedAdmissionFile, message string) uciPreparedAdmissionFile {
+	prepared.artifact = nil
+	prepared.emitArtifact = false
+	prepared.edges = nil
+	prepared.membership.State = uci.IndexAdmissionMembershipUnsupported
+	prepared.membership.ArtifactID = nil
+	prepared.errors = append(prepared.errors, message)
+	return prepared
+}
+
+func uciPreparedFrameCapacityError(err error) bool {
+	return err != nil && (strings.Contains(err.Error(), "frame exceeds") ||
+		strings.Contains(err.Error(), "frame collection exceeds limit") ||
+		strings.Contains(err.Error(), "edge replacement exceeds limit"))
+}
+
+func uciPreparedDiscardUnavailableEdges(files []uciPreparedAdmissionFile) uint64 {
+	artifactByPath := make(map[string]string, len(files))
+	for _, prepared := range files {
+		if prepared.membership.State == uci.IndexAdmissionMembershipPresent && prepared.artifact != nil {
+			artifactByPath[prepared.path] = prepared.artifact.ArtifactID
+		}
+	}
+
+	var dropped uint64
+	for index := range files {
+		prepared := &files[index]
+		if prepared.membership.State != uci.IndexAdmissionMembershipPresent || prepared.artifact == nil {
+			dropped += uint64(len(prepared.edges))
+			prepared.edges = nil
+			continue
+		}
+		retained := make([]uci.IndexAdmissionEdge, 0, len(prepared.edges))
+		for _, edge := range prepared.edges {
+			if edge.SourceArtifactID != prepared.artifact.ArtifactID || edge.Target == nil || artifactByPath[edge.Target.PathKey] != edge.Target.ArtifactID {
+				dropped++
+				continue
+			}
+			retained = append(retained, edge)
+		}
+		prepared.edges = retained
+	}
+	return dropped
+}
+
+func uciPreparedAddResolvedGoCallEdges(files []uciPreparedAdmissionFile) (uint64, error) {
+	type definitionTarget struct {
+		path       string
+		artifactID string
+		localKey   string
+	}
+	definitions := make(map[string][]definitionTarget)
+	for _, prepared := range files {
+		if prepared.artifact == nil || prepared.membership.State != uci.IndexAdmissionMembershipPresent {
+			continue
+		}
+		for _, definition := range prepared.artifact.Definitions {
+			if definition.Kind != "function" || !strings.HasPrefix(definition.LocalSymbolKey, "func:") {
+				continue
+			}
+			definitions[definition.SymbolKey] = append(definitions[definition.SymbolKey], definitionTarget{
+				path:       prepared.path,
+				artifactID: prepared.artifact.ArtifactID,
+				localKey:   definition.LocalSymbolKey,
+			})
+		}
+	}
+
+	var unresolved uint64
+	for index := range files {
+		prepared := &files[index]
+		if prepared.artifact == nil || prepared.membership.State != uci.IndexAdmissionMembershipPresent {
+			continue
+		}
+		for _, reference := range prepared.artifact.References {
+			if reference.Kind != "call" {
+				continue
+			}
+			targetSymbol, established := uciPreparedGoCallTargetSymbol(reference)
+			if !established {
+				unresolved++
+				continue
+			}
+			if reference.OwnerSymbolKey == nil {
+				unresolved++
+				continue
+			}
+			sourceSymbolKey := *reference.OwnerSymbolKey
+			targets := definitions[targetSymbol]
+			if len(targets) != 1 {
+				unresolved++
+				continue
+			}
+			target := targets[0]
+			targetSymbolKey := target.localKey
+			prepared.edges = append(prepared.edges, uci.IndexAdmissionEdge{
+				EdgeKey:          uciPreparedEdgeKey(prepared.path, reference.SiteKey, target.path, target.localKey),
+				SourceArtifactID: prepared.artifact.ArtifactID,
+				SourceSymbolKey:  &sourceSymbolKey,
+				Target: &uci.IndexAdmissionEdgeTarget{
+					PathKey:    target.path,
+					ArtifactID: target.artifactID,
+					SymbolKey:  &targetSymbolKey,
+				},
+				Relation:         uci.IndexRelation("calls"),
+				EvidenceKind:     uci.IndexEvidenceKind("resolved"),
+				ResolutionState:  uci.IndexResolutionState("resolved"),
+				ResolverRevision: uciPreparedGoResolverRevision,
+				Evidence: uci.IndexAdmissionEdgeEvidence{
+					ReferenceSiteKey: reference.SiteKey,
+					Span:             reference.Span,
+					RuleKey:          uciPreparedGoResolverRule,
+					Explanation:      uciPreparedGoResolverExplanation,
+				},
+			})
+		}
+	}
+	return unresolved, nil
+}
+
+func uciPreparedGoCallTargetSymbol(reference uci.IndexAdmissionReference) (string, bool) {
+	if reference.Kind != "call" {
+		return "", false
+	}
+	separator := strings.LastIndex(reference.SymbolKey, "/call:")
+	if separator < 0 {
+		return "", false
+	}
+	return reference.SymbolKey[:separator] + "/func:" + reference.SymbolKey[separator+len("/call:"):], true
+}
+
+func uciPreparedEdgeKey(sourcePath, siteKey, targetPath, targetSymbol string) string {
+	sum := sha256.Sum256([]byte(sourcePath + "\x00" + siteKey + "\x00" + targetPath + "\x00" + targetSymbol))
+	return "go-call:" + hex.EncodeToString(sum[:])
+}
+
+func uciPreparedUniqueStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	unique := values[:0]
+	for _, value := range values {
+		if len(unique) == 0 || unique[len(unique)-1] != value {
+			unique = append(unique, value)
+		}
+	}
+	return unique
+}
+
+func uciPreparedCoverageForFiles(scanCoverage uci.IndexCoverage, files []uciPreparedAdmissionFile) (uci.IndexCoverage, error) {
+	coverage := scanCoverage
+	coverage.Lexical = uci.IndexCoverageComplete
+	coverage.Vector = uci.IndexCoverageUnavailable
+	coverage.ExcludedFiles = 0
+	coverage.UnreadableFiles = 0
+	coverage.UnresolvedReferences = 0
+	for _, prepared := range files {
+		switch prepared.membership.State {
+		case uci.IndexAdmissionMembershipPresent:
+			if prepared.artifact == nil {
+				return uci.IndexCoverage{}, fmt.Errorf("uci prepared index: present membership %q has no artifact", prepared.path)
+			}
+			if prepared.artifact.Status == uci.IndexAdmissionArtifactPartial {
+				coverage.Lexical = uci.IndexCoveragePartial
+			}
+		case uci.IndexAdmissionMembershipUnreadable:
+			coverage.UnreadableFiles++
+			coverage.Lexical = uci.IndexCoveragePartial
+		case uci.IndexAdmissionMembershipExcluded, uci.IndexAdmissionMembershipUnsupported, uci.IndexAdmissionMembershipProtected:
+			coverage.ExcludedFiles++
+			coverage.Lexical = uci.IndexCoveragePartial
+		default:
+			return uci.IndexCoverage{}, fmt.Errorf("uci prepared index: unsupported membership state %q", prepared.membership.State)
+		}
+	}
+	return coverage, nil
+}
+
+var _ engramcore.PreparedIndexCollaborator = (*UCIPreparedIndexCollaborator)(nil)
+
+type uciPreparedPublication struct {
+	memberships    []uci.IndexMembership
+	replacements   []uci.IndexEdgeReplacement
+	manifestDigest uci.IndexDigest
+	edgesDigest    uci.IndexDigest
+	edgeCount      uint64
+}
+
+// IndexPreparedCodebase scans the root already bound by the server, turns its
+// current bytes into private source-fact frames, and publishes only the real
+// ContextRef returned by Finalize.
+func (collaborator *UCIPreparedIndexCollaborator) IndexPreparedCodebase(ctx context.Context, target engramcore.ResolvedIndexTarget, rootHint string, client engramcore.UCIIndexClient) (*engramcore.IndexResult, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("uci prepared index: context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if client == nil {
+		return nil, fmt.Errorf("uci prepared index: publication client is required")
+	}
+
+	local, err := collaborator.resolveLocalTarget(ctx, target.BindingClone(), rootHint)
+	if err != nil {
+		return nil, err
+	}
+	if local.observedSequence < 0 {
+		return nil, fmt.Errorf("uci prepared index: local observed sequence is invalid")
+	}
+	scan, err := collaborator.scanCurrent(ctx, local)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := collaborator.prepareAdmissionPlan(ctx, local, scan)
+	if err != nil {
+		return nil, err
+	}
+	publication, err := plan.publication()
+	if err != nil {
+		return nil, err
+	}
+	buildKey, err := uciPreparedBuildKey(local, scan, plan, publication)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	scope := uciPreparedProtoScope(local.binding)
+	parent := uciPreparedProtoContext(local.binding.Context)
+	jobKind := "reconcile"
+	if parent == nil {
+		jobKind = "initial_index"
+	}
+	begin, err := client.Begin(ctx, &pb.BeginCodeIndexRequest{
+		Scope:          scope,
+		OwnerInstance:  collaborator.clientInstanceID,
+		BuildKey:       buildKey,
+		ExpectedParent: parent,
+		ManifestMode:   "full",
+		JobKind:        jobKind,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("uci prepared index: begin publication: %w", err)
+	}
+	if !uciPreparedBeginMatches(begin, scope) {
+		return nil, fmt.Errorf("uci prepared index: server returned an invalid build")
+	}
+
+	frames := make([]*pb.StageCodeIndexFrame, len(plan.payloads))
+	for index, payload := range plan.payloads {
+		frames[index] = &pb.StageCodeIndexFrame{
+			Scope:         scope,
+			BuildId:       begin.GetBuildId(),
+			LeaseEpoch:    begin.GetLeaseEpoch(),
+			Sequence:      uint64(index),
+			PayloadDigest: string(uci.DigestIndexAdmissionPayload(payload)),
+			Payload:       payload,
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	staged, err := client.Stage(ctx, frames)
+	if err != nil {
+		return nil, fmt.Errorf("uci prepared index: stage publication: %w", err)
+	}
+	if !uciPreparedStageMatches(staged, begin, len(frames)) {
+		return nil, fmt.Errorf("uci prepared index: server returned an invalid stage acknowledgement")
+	}
+
+	coverageJSON, err := json.Marshal(plan.coverage)
+	if err != nil {
+		return nil, fmt.Errorf("uci prepared index: encode coverage: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	finalized, err := client.Finalize(ctx, &pb.FinalizeCodeIndexRequest{
+		Scope:                      scope,
+		BuildId:                    begin.GetBuildId(),
+		LeaseEpoch:                 begin.GetLeaseEpoch(),
+		ExpectedParent:             parent,
+		ManifestPartCount:          uint64(len(plan.payloads)),
+		PartsDigest:                staged.GetPartDigest(),
+		ManifestEntryCount:         uint64(len(publication.memberships)),
+		ManifestDigest:             string(publication.manifestDigest),
+		EdgeCount:                  publication.edgeCount,
+		EdgesDigest:                string(publication.edgesDigest),
+		ObservedFilesystemSequence: uint64(local.observedSequence),
+		ScanStartedAt:              timestamppb.New(scan.Observation.ScanStart),
+		ScanCompletedAt:            timestamppb.New(scan.Observation.ScanEnd),
+		ScanOutcome:                string(scan.Census.Outcome),
+		CompleteCensus:             scan.Census.Complete,
+		CoverageJson:               coverageJSON,
+		HeadOid:                    scan.Observation.HeadOID,
+		ObjectFormat:               scan.Observation.ObjectFormat,
+		RefLabel:                   scan.Observation.RefLabel,
+		Dirty:                      &scan.Observation.Dirty,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("uci prepared index: finalize publication: %w", err)
+	}
+	published, err := uciPreparedPublishedContext(finalized, local.binding, begin, local.observedSequence)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := collaborator.registry.MarkReconciled(ctx, local.binding.Scope.CheckoutID, local.observedSequence); err != nil {
+		return nil, fmt.Errorf("uci prepared index: acknowledge durable publication: %w", err)
+	}
+	return &engramcore.IndexResult{
+		Context:  published,
+		Uploaded: plan.uploaded,
+		Embedded: 0,
+		Deleted:  0,
+		Errors:   append([]string(nil), plan.errors...),
+	}, nil
+}
+
+func (plan uciPreparedAdmissionPlan) publication() (uciPreparedPublication, error) {
+	publication := uciPreparedPublication{
+		memberships:  make([]uci.IndexMembership, 0),
+		replacements: make([]uci.IndexEdgeReplacement, 0),
+	}
+	seenMemberships := make(map[string]struct{})
+	seenReplacements := make(map[string]struct{})
+	for frameIndex, frame := range plan.frames {
+		part, err := frame.PublicationPart()
+		if err != nil {
+			return uciPreparedPublication{}, fmt.Errorf("uci prepared index: derive publication part %d: %w", frameIndex, err)
+		}
+		for _, membership := range part.Memberships {
+			if _, found := seenMemberships[membership.PathKey]; found {
+				return uciPreparedPublication{}, fmt.Errorf("uci prepared index: duplicate packed membership %q", membership.PathKey)
+			}
+			seenMemberships[membership.PathKey] = struct{}{}
+			publication.memberships = append(publication.memberships, membership)
+		}
+		for _, replacement := range part.EdgeReplacements {
+			if _, found := seenReplacements[replacement.SourcePath]; found {
+				return uciPreparedPublication{}, fmt.Errorf("uci prepared index: duplicate packed edge replacement %q", replacement.SourcePath)
+			}
+			seenReplacements[replacement.SourcePath] = struct{}{}
+			if ^uint64(0)-publication.edgeCount < uint64(len(replacement.Edges)) {
+				return uciPreparedPublication{}, fmt.Errorf("uci prepared index: edge count overflow")
+			}
+			publication.edgeCount += uint64(len(replacement.Edges))
+			publication.replacements = append(publication.replacements, replacement)
+		}
+	}
+	manifestDigest, err := uci.DigestIndexManifest(publication.memberships)
+	if err != nil {
+		return uciPreparedPublication{}, fmt.Errorf("uci prepared index: digest manifest: %w", err)
+	}
+	edgesDigest, err := uci.DigestIndexEdges(publication.replacements)
+	if err != nil {
+		return uciPreparedPublication{}, fmt.Errorf("uci prepared index: digest edges: %w", err)
+	}
+	publication.manifestDigest = manifestDigest
+	publication.edgesDigest = edgesDigest
+	return publication, nil
+}
+
+func uciPreparedBuildKey(local uciPreparedLocalTarget, scan uci.ScannerResult, plan uciPreparedAdmissionPlan, publication uciPreparedPublication) (string, error) {
+	payloadDigests := make([]string, len(plan.payloads))
+	for index, payload := range plan.payloads {
+		payloadDigests[index] = string(uci.DigestIndexAdmissionPayload(payload))
+	}
+	encoded, err := json.Marshal(struct {
+		Version        string               `json:"version"`
+		Scope          uci.IndexScope       `json:"scope"`
+		ProfileID      string               `json:"profile_id"`
+		ExpectedParent *uci.ContextRef      `json:"expected_parent,omitempty"`
+		PayloadDigests []string             `json:"payload_digests"`
+		ManifestDigest uci.IndexDigest      `json:"manifest_digest"`
+		EdgesDigest    uci.IndexDigest      `json:"edges_digest"`
+		EdgeCount      uint64               `json:"edge_count"`
+		Observation    uci.IndexObservation `json:"observation"`
+		Coverage       uci.IndexCoverage    `json:"coverage"`
+	}{
+		Version:        "uci-prepared-build/v1",
+		Scope:          local.binding.Scope,
+		ProfileID:      local.binding.ProfileID,
+		ExpectedParent: local.binding.Context,
+		PayloadDigests: payloadDigests,
+		ManifestDigest: publication.manifestDigest,
+		EdgesDigest:    publication.edgesDigest,
+		EdgeCount:      publication.edgeCount,
+		Observation:    scan.Observation,
+		Coverage:       plan.coverage,
+	})
+	if err != nil {
+		return "", fmt.Errorf("uci prepared index: encode build identity: %w", err)
+	}
+	sum := sha256.Sum256(encoded)
+	return "uci-prepared-v1:" + hex.EncodeToString(sum[:]), nil
+}
+
+func uciPreparedProtoScope(binding uci.IndexBinding) *pb.CodeIndexScope {
+	return &pb.CodeIndexScope{
+		SourceId:          binding.Scope.SourceID,
+		CheckoutId:        binding.Scope.CheckoutID,
+		IncarnationId:     binding.Scope.IncarnationID,
+		AnalysisProfileId: binding.ProfileID,
+	}
+}
+
+func uciPreparedProtoContext(contextRef *uci.ContextRef) *pb.ContextRef {
+	if contextRef == nil {
+		return nil
+	}
+	result := &pb.ContextRef{
+		SourceId:          contextRef.SourceID,
+		CheckoutId:        contextRef.CheckoutID,
+		ViewId:            contextRef.ViewID,
+		Generation:        contextRef.Generation,
+		AnalysisProfileId: contextRef.AnalysisProfileID,
+	}
+	if contextRef.SpaceID != nil {
+		spaceID := *contextRef.SpaceID
+		result.SpaceId = &spaceID
+	}
+	return result
+}
+
+func uciPreparedBeginMatches(response *pb.BeginCodeIndexResponse, scope *pb.CodeIndexScope) bool {
+	return response != nil && response.GetBuildId() != "" && response.GetLeaseEpoch() != 0 && uciPreparedScopesMatch(response.GetScope(), scope)
+}
+
+func uciPreparedStageMatches(response *pb.StageCodeIndexResponse, begin *pb.BeginCodeIndexResponse, count int) bool {
+	return response != nil && begin != nil && count > 0 && response.GetBuildId() == begin.GetBuildId() &&
+		response.GetAcceptedSequence() == uint64(count-1) && response.GetAcceptedPartCount() == uint64(count) && response.GetPartDigest() != ""
+}
+
+func uciPreparedPublishedContext(response *pb.FinalizeCodeIndexResponse, binding uci.IndexBinding, begin *pb.BeginCodeIndexResponse, observedSequence int64) (uci.ContextRef, error) {
+	if observedSequence < 0 || response == nil || begin == nil || response.GetBuildId() != begin.GetBuildId() || response.GetLeaseEpoch() != begin.GetLeaseEpoch() || response.GetAcceptedFilesystemSequence() != uint64(observedSequence) {
+		return uci.ContextRef{}, fmt.Errorf("uci prepared index: server returned an invalid finalized build")
+	}
+	contextRef := response.GetPublishedContext()
+	if contextRef == nil {
+		return uci.ContextRef{}, fmt.Errorf("uci prepared index: server returned no published context")
+	}
+	result := uci.ContextRef{
+		SourceID:          contextRef.GetSourceId(),
+		CheckoutID:        contextRef.GetCheckoutId(),
+		ViewID:            contextRef.GetViewId(),
+		Generation:        contextRef.GetGeneration(),
+		AnalysisProfileID: contextRef.GetAnalysisProfileId(),
+	}
+	if contextRef.SpaceId != nil {
+		spaceID := contextRef.GetSpaceId()
+		result.SpaceID = &spaceID
+	}
+	validated := binding.Clone()
+	validated.Context = &result
+	if err := validated.Validate(); err != nil {
+		return uci.ContextRef{}, fmt.Errorf("uci prepared index: published context does not match binding: %w", err)
+	}
+	return result, nil
+}
+
+func uciPreparedScopesMatch(left, right *pb.CodeIndexScope) bool {
+	return left != nil && right != nil && left.GetSourceId() == right.GetSourceId() && left.GetCheckoutId() == right.GetCheckoutId() &&
+		left.GetIncarnationId() == right.GetIncarnationId() && left.GetAnalysisProfileId() == right.GetAnalysisProfileId()
+}
+
+func validUCIPreparedIndexIdentity(value string) bool {
+	if value == "" || len(value) > uciLocalMaxOpaqueIDBytes || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, runeValue := range value {
+		if runeValue < 0x20 || runeValue == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func validUCIPreparedIndexDigest(value uci.IndexDigest) bool {
+	encoded := string(value)
+	if len(encoded) != len("sha256:")+sha256.Size*2 || !strings.HasPrefix(encoded, "sha256:") {
+		return false
+	}
+	for _, character := range encoded[len("sha256:"):] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}

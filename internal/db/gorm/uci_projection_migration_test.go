@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
 	"github.com/stretchr/testify/require"
+	"github.com/thebtf/engram/internal/uci"
 	gormlib "gorm.io/gorm"
 )
 
@@ -192,7 +193,7 @@ func TestUCIProjectionMigration172ProjectionStoreKeepsScopeAndCallerOwnership(t 
 	blobInput := UpsertUCIBlobInput{
 		SourceID:         fixture.source.SourceID,
 		ProtectionDomain: "source-private",
-		ContentDigest:    uciProjectionDigest("1"),
+		ContentDigest:    digestUCIBytes(safeContent),
 		ByteLength:       int64(len(safeContent)),
 		SafeContent:      safeContent,
 		Encoding:         "utf-8",
@@ -394,66 +395,39 @@ func TestUCIProjectionMigration172EvidenceStoreCanonicalRetryIntegrityAndRetenti
 	ctx := context.Background()
 	recordedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
 
-	input := UCIExposureInput{
-		AuthRealm:        fixture.authRealm,
-		SourceID:         fixture.source.SourceID,
-		CheckoutID:       fixture.checkout.CheckoutID,
-		ViewID:           fixture.view.ViewID,
-		ClientRef:        uuid.NewString(),
-		ClientSessionRef: uuid.NewString(),
-		RequestRef:       uuid.NewString(),
-		OperationKind:    UCIExposureCodeSearch,
-		ResultState:      UCIExposureResultUnavailable,
-		RetrievalMode:    UCIRetrievalUnavailable,
-		CoverageState:    UCICoverageUnavailable,
-		EvidenceSource:   UCIEvidenceNone,
-		Certainty:        UCICertaintyUnavailable,
-		IdempotencyKey:   uuid.NewString(),
-		RecordedAt:       recordedAt,
-	}
-
-	first, err := store.RecordExposure(ctx, input)
+	input := uciProjectionExposureRecord(t, fixture, recordedAt)
+	first, err := store.AppendExposure(ctx, input)
 	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(first.ExposureRef, uciExposureRefPrefix))
-	second, err := store.RecordExposure(ctx, input)
+	require.True(t, uci.ValidExposureRef(first.ExposureRef))
+	second, err := store.AppendExposure(ctx, input)
 	require.NoError(t, err)
-	require.Equal(t, first.ExposureID, second.ExposureID, "exact retry must return the original exposure")
+	require.Equal(t, first.ExposureRef, second.ExposureRef, "exact retry must return the original exposure")
 
 	mismatchedExposure := input
-	mismatchedExposure.RequestRef = uuid.NewString()
-	staleExposure, err := store.RecordExposure(ctx, mismatchedExposure)
-	require.ErrorIs(t, err, ErrUCIIdempotencyMismatch)
-	require.Nil(t, staleExposure, "a mismatched retry must not disclose the prior exposure")
+	mismatchedExposure.RequestRef = "sha256:" + strings.Repeat("e", 64)
+	uciProjectionBindExposureRecord(t, &mismatchedExposure)
+	staleExposure, err := store.AppendExposure(ctx, mismatchedExposure)
+	require.ErrorIs(t, err, uci.ErrIdempotencyMismatch)
+	require.Empty(t, staleExposure.ExposureRef, "a mismatched retry must not disclose the prior exposure")
 
-	_, err = store.RecordCompletion(ctx, UCICompletionInput{
-		SupportedHostRef: uuid.NewString(),
-		CallbackRef:      uuid.NewString(),
-		Outcome:          UCICompletionPartial,
-		IdempotencyKey:   uuid.NewString(),
-	})
+	_, err = store.AppendCompletion(ctx, uci.CompletionEvidence{})
 	require.Error(t, err, "completion recording must reject a missing opaque exposure reference before lookup")
-	completionInput := UCICompletionInput{
-		ExposureRef:      first.ExposureRef,
-		SupportedHostRef: uuid.NewString(),
-		CallbackRef:      uuid.NewString(),
-		Outcome:          UCICompletionPartial,
-		IdempotencyKey:   uuid.NewString(),
-		OccurredAt:       recordedAt,
-	}
-	completion, err := store.RecordCompletion(ctx, completionInput)
+	completionInput := uciProjectionCompletionEvidence(t, first.ExposureRef, recordedAt)
+	completion, err := store.AppendCompletion(ctx, completionInput)
 	require.NoError(t, err)
-	completionRetry, err := store.RecordCompletion(ctx, completionInput)
+	completionRetry, err := store.AppendCompletion(ctx, completionInput)
 	require.NoError(t, err)
-	require.Equal(t, completion.CompletionEvidenceID, completionRetry.CompletionEvidenceID, "exact retry must return the original completion")
+	require.Equal(t, completion.BindingDigest, completionRetry.BindingDigest, "exact retry must return the original completion")
 	completionState, err := store.CompletionState(ctx, first.ExposureRef)
 	require.NoError(t, err)
-	require.Equal(t, UCICompletionState(UCICompletionPartial), completionState)
+	require.Equal(t, uci.QueryCompletionPartial, completionState)
 
 	mismatchedCompletion := completionInput
 	mismatchedCompletion.CallbackRef = uuid.NewString()
-	staleCompletion, err := store.RecordCompletion(ctx, mismatchedCompletion)
-	require.ErrorIs(t, err, ErrUCIIdempotencyMismatch)
-	require.Nil(t, staleCompletion, "a mismatched callback must not disclose the prior child")
+	uciProjectionBindCompletionEvidence(t, &mismatchedCompletion)
+	staleCompletion, err := store.AppendCompletion(ctx, mismatchedCompletion)
+	require.ErrorIs(t, err, uci.ErrIdempotencyMismatch)
+	require.Empty(t, staleCompletion.ExposureRef, "a mismatched callback must not disclose the prior child")
 	require.NoError(t, store.VerifyIntegrity(ctx), "normal PostgreSQL restore verification must accept canonical retained evidence")
 
 	pruned, err := store.PruneExpired(ctx, time.Now().UTC(), 1)
@@ -473,7 +447,7 @@ func TestUCIProjectionMigration172EvidenceStoreCanonicalRetryIntegrityAndRetenti
 
 	corrupt := UCIExposure{
 		ExposureID:               uuid.NewString(),
-		ExposureRef:              uciExposureRefPrefix + uuid.NewString(),
+		ExposureRef:              uci.NewExposureRef(),
 		AuthRealm:                fixture.authRealm,
 		SourceID:                 fixture.source.SourceID,
 		CheckoutID:               fixture.checkout.CheckoutID,
@@ -493,6 +467,57 @@ func TestUCIProjectionMigration172EvidenceStoreCanonicalRetryIntegrityAndRetenti
 	}
 	require.NoError(t, fixture.db.Create(&corrupt).Error, "syntactically valid restored evidence can still fail canonical verification")
 	require.ErrorIs(t, store.VerifyIntegrity(ctx), ErrUCIEvidenceIntegrity)
+}
+
+func uciProjectionExposureRecord(t *testing.T, fixture *uciProjectionMigrationFixture, recordedAt time.Time) uci.ExposureRecord {
+	t.Helper()
+	record := uci.ExposureRecord{
+		AuthRealm:        fixture.authRealm,
+		SourceID:         fixture.source.SourceID,
+		CheckoutID:       fixture.checkout.CheckoutID,
+		ViewID:           fixture.view.ViewID,
+		ClientRef:        "sha256:" + strings.Repeat("a", 64),
+		ClientSessionRef: "sha256:" + strings.Repeat("b", 64),
+		RequestRef:       "sha256:" + strings.Repeat("c", 64),
+		Operation:        uci.ExposureOperationCodeSearch,
+		Result:           uci.ExposureResultUnavailable,
+		Retrieval:        uci.ExposureRetrievalUnavailable,
+		Coverage:         uci.ExposureCoverageUnavailable,
+		Evidence:         uci.ExposureEvidenceNone,
+		Certainty:        uci.ExposureCertaintyUnavailable,
+		IdempotencyKey:   "sha256:" + strings.Repeat("d", 64),
+		RecordedAt:       recordedAt,
+	}
+	uciProjectionBindExposureRecord(t, &record)
+	return record
+}
+
+func uciProjectionBindExposureRecord(t *testing.T, record *uci.ExposureRecord) {
+	t.Helper()
+	digest, err := uci.CanonicalExposureBindingDigest(*record)
+	require.NoError(t, err)
+	record.BindingDigest = digest
+}
+
+func uciProjectionCompletionEvidence(t *testing.T, exposureRef string, occurredAt time.Time) uci.CompletionEvidence {
+	t.Helper()
+	evidence := uci.CompletionEvidence{
+		ExposureRef:      exposureRef,
+		SupportedHostRef: uuid.NewString(),
+		CallbackRef:      uuid.NewString(),
+		Outcome:          uci.CompletionPartial,
+		IdempotencyKey:   uuid.NewString(),
+		OccurredAt:       occurredAt,
+	}
+	uciProjectionBindCompletionEvidence(t, &evidence)
+	return evidence
+}
+
+func uciProjectionBindCompletionEvidence(t *testing.T, evidence *uci.CompletionEvidence) {
+	t.Helper()
+	digest, err := uci.CanonicalCompletionBindingDigest(*evidence)
+	require.NoError(t, err)
+	evidence.BindingDigest = digest
 }
 
 func openUCIProjectionMigrationFixture(t *testing.T) *uciProjectionMigrationFixture {

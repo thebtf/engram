@@ -104,6 +104,58 @@ func TestIndexAdmissionGoReferenceOwnersAreNarrowAndFactBound(t *testing.T) {
 	}
 }
 
+func TestIndexAdmissionRejectsEdgeRelationMismatchedToSourceReference(t *testing.T) {
+	t.Parallel()
+	sourceFrame, targetFrame := indexAdmissionTestSplitFrames(t)
+	edge := &sourceFrame.EdgeReplacements[0].Edges[0]
+	if edge.Relation == IndexRelation("calls") {
+		edge.Relation = IndexRelation("imports")
+	} else {
+		edge.Relation = IndexRelation("calls")
+	}
+	if err := ValidateIndexAdmissionFrames([]IndexAdmissionFrame{sourceFrame, targetFrame}); err == nil {
+		t.Fatal("ValidateIndexAdmissionFrames() accepted an edge relation that differs from its source reference")
+	}
+}
+
+func TestIndexAdmissionGoDefinitionChunksBindEachFunction(t *testing.T) {
+	t.Parallel()
+	source := []byte("package sample\n\nfunc Caller() {}\n\nfunc Target() {}\n")
+	artifact := indexAdmissionTestArtifact(t, indexAdmissionTestSourceA, source)
+
+	functions := 0
+	for _, definition := range artifact.Definitions {
+		if definition.Kind != "function" {
+			continue
+		}
+		functions++
+		var matched *IndexAdmissionChunk
+		for index := range artifact.Chunks {
+			chunk := &artifact.Chunks[index]
+			if chunk.SymbolKey != nil && *chunk.SymbolKey == definition.LocalSymbolKey {
+				matched = chunk
+				break
+			}
+		}
+		if matched == nil {
+			t.Fatalf("function %q has no symbol-bound chunk", definition.LocalSymbolKey)
+		}
+		if matched.Span != definition.Span {
+			t.Fatalf("function chunk span = %#v, want %#v", matched.Span, definition.Span)
+		}
+		text, err := indexAdmissionTextAtSpan(source, definition.Span)
+		if err != nil {
+			t.Fatalf("definition text error = %v", err)
+		}
+		if matched.Text != text || matched.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
+			t.Fatalf("function chunk does not exactly bind %q", definition.LocalSymbolKey)
+		}
+	}
+	if functions != 2 {
+		t.Fatalf("function definitions = %d, want 2", functions)
+	}
+}
+
 func TestIndexAdmissionEncodeCanonicalizesCollections(t *testing.T) {
 	t.Parallel()
 	frame := indexAdmissionTestFrame(t)

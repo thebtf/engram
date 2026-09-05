@@ -682,20 +682,52 @@ func NewIndexAdmissionArtifactFromGo(sourceID string, profile IndexAdmissionArti
 			Span:           reference.Span,
 		})
 	}
-	for ordinal, chunk := range extracted.Chunks {
+	for _, diagnostic := range extracted.Diagnostics {
+		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
+			Code:    diagnostic.Code,
+			Span:    diagnostic.Span,
+			Message: diagnostic.Message,
+		})
+	}
+
+	chunkLimitReached := false
+	for _, definition := range artifact.Definitions {
+		if len(artifact.Chunks) == indexAdmissionMaxChunksPerArtifact {
+			chunkLimitReached = true
+			break
+		}
+		text, err := indexAdmissionTextAtSpan(source, definition.Span)
+		if err != nil {
+			return IndexAdmissionArtifact{}, err
+		}
+		symbolKey := definition.LocalSymbolKey
 		artifact.Chunks = append(artifact.Chunks, IndexAdmissionChunk{
-			Ordinal:       ordinal,
+			Ordinal:       len(artifact.Chunks),
+			SymbolKey:     &symbolKey,
+			Kind:          "definition",
+			Span:          definition.Span,
+			ContentDigest: indexAdmissionDigestBytes([]byte(text)),
+			Text:          text,
+		})
+	}
+	for _, chunk := range extracted.Chunks {
+		if len(artifact.Chunks) == indexAdmissionMaxChunksPerArtifact {
+			chunkLimitReached = true
+			break
+		}
+		artifact.Chunks = append(artifact.Chunks, IndexAdmissionChunk{
+			Ordinal:       len(artifact.Chunks),
 			Kind:          "source",
 			Span:          chunk.Span,
 			ContentDigest: chunk.ContentDigest,
 			Text:          chunk.Text,
 		})
 	}
-	for _, diagnostic := range extracted.Diagnostics {
+	if chunkLimitReached {
+		artifact.Status = IndexAdmissionArtifactPartial
 		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
-			Code:    diagnostic.Code,
-			Span:    diagnostic.Span,
-			Message: diagnostic.Message,
+			Code:    "CHUNK_LIMIT",
+			Message: "symbol and source chunks exceeded the admission limit",
 		})
 	}
 	canonical, err := indexAdmissionCanonicalizeArtifact(artifact)
@@ -1143,6 +1175,9 @@ func indexAdmissionValidateEdge(edge IndexAdmissionEdge, sourceArtifactID string
 	reference, found := indexAdmissionReferenceByKey(sourceArtifact.References, edge.Evidence.ReferenceSiteKey)
 	if !found || edge.Evidence.Span != reference.Span {
 		return fmt.Errorf("uci index admission: edge evidence is not bound to source reference")
+	}
+	if edge.Relation != reference.Relation {
+		return fmt.Errorf("uci index admission: edge relation does not match source reference")
 	}
 	if reference.OwnerSymbolKey == nil {
 		if edge.SourceSymbolKey != nil {
