@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -9,7 +10,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gormdb "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/uci"
+	"gorm.io/driver/postgres"
+	gormlib "gorm.io/gorm"
+	"gorm.io/gorm/logger"
+	_ "modernc.org/sqlite"
 )
 
 const (
@@ -51,9 +57,10 @@ type uciCodeIntelCompatibilityApplication struct {
 	queryResponses  map[string]uci.QueryResponse
 	statusSnapshots map[string]codebaseStatusSnapshot
 
-	aliasCalls  []uciCodeIntelCompatibilityAliasCall
-	searchCalls []uciCodeIntelCompatibilitySearchCall
-	statusCalls []uci.ContextRef
+	aliasCalls           []uciCodeIntelCompatibilityAliasCall
+	searchCalls          []uciCodeIntelCompatibilitySearchCall
+	statusCalls          []uci.ContextRef
+	afterAliasResolution func()
 }
 
 var (
@@ -120,6 +127,9 @@ func (application *uciCodeIntelCompatibilityApplication) ResolveLegacyProject(_ 
 	target, found := application.aliases[project]
 	if !found {
 		return uci.AliasTarget{}, errors.New("compatibility project fixture is not mapped")
+	}
+	if application.afterAliasResolution != nil {
+		application.afterAliasResolution()
 	}
 	return target, nil
 }
@@ -305,6 +315,180 @@ func TestUCICodeIntelCompatibilityToolSchemasAdvertiseContextHandleWithoutProjec
 	}
 }
 
+func TestUCINoMixedQueryPath(t *testing.T) {
+	t.Run("current default and explicit handles use UCI without a legacy chunk store", func(t *testing.T) {
+		fixture := newUCICodeIntelCompatibilityFixture(t)
+		require.Nil(t, fixture.server.legacyUnscopedCodeChunkStore, "the UCI fixture must not wire the raw-project reader")
+		handleA := fixture.selectContext(t, fixture.clientA, fixture.refA)
+
+		defaultSearch, _ := requireUCICodeIntelQueryResponse(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{
+			"query":       uciCodeIntelCompatibilityQuery,
+			"path_prefix": uciCodeIntelCompatibilityPathPrefix,
+			"project":     uciCodeIntelCompatibilityProject,
+		}), fixture.refA, uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityBodyB)
+		explicitSearch, _ := requireUCICodeIntelQueryResponse(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", uciCodeIntelCompatibilitySearchArguments(handleA, uciCodeIntelCompatibilityProject, 10)), fixture.refA, uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityBodyB)
+		requireUCICodeIntelStatus(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{
+			"project": uciCodeIntelCompatibilityProject,
+		}), fixture.refA, 17, 11, "healthy", "NONE")
+		requireUCICodeIntelStatus(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{
+			"context_handle": handleA,
+			"project":        uciCodeIntelCompatibilityProject,
+		}), fixture.refA, 17, 11, "healthy", "NONE")
+
+		assert.NotContains(t, defaultSearch, "legacy_unscoped")
+		assert.NotContains(t, explicitSearch, "legacy_unscoped")
+		require.Len(t, fixture.application.aliasCalls, 4)
+		require.Len(t, fixture.application.searchCalls, 2)
+		assert.Equal(t, fixture.refA, fixture.application.searchCalls[0].ref)
+		assert.Equal(t, fixture.refA, fixture.application.searchCalls[1].ref)
+		require.Len(t, fixture.application.statusCalls, 2)
+		assert.Equal(t, fixture.refA, fixture.application.statusCalls[0])
+		assert.Equal(t, fixture.refA, fixture.application.statusCalls[1])
+	})
+
+	t.Run("project compatibility evidence cannot select another source or view", func(t *testing.T) {
+		fixture := newUCICodeIntelCompatibilityFixture(t)
+		handleA := fixture.selectContext(t, fixture.clientA, fixture.refA)
+		fixture.selectContext(t, fixture.clientB, fixture.refB)
+
+		_, current := requireUCICodeIntelQueryResponse(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{
+			"query":       uciCodeIntelCompatibilityQuery,
+			"path_prefix": uciCodeIntelCompatibilityPathPrefix,
+			"project":     uciCodeIntelCompatibilityProject,
+		}), fixture.refA, uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityBodyB)
+		require.NotNil(t, current.Contexts)
+		assert.Equal(t, fixture.refA.ViewID, (*current.Contexts)[0].ViewID, "the same legacy project must not select B's current view")
+		require.Len(t, fixture.application.aliasCalls, 1)
+		assert.Equal(t, fixture.refA, fixture.application.aliasCalls[0].ref)
+		require.Len(t, fixture.application.searchCalls, 1)
+		assert.Equal(t, fixture.refA, fixture.application.searchCalls[0].ref)
+
+		conflictingSearch := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", uciCodeIntelCompatibilitySearchArguments(handleA, uciCodeIntelCompatibilityConflict, 10))
+		requireUCICodeIntelSuppressedQueryError(t, conflictingSearch, "CONTEXT_MISMATCH", fixture)
+		conflictingStatus := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{
+			"context_handle": handleA,
+			"project":        uciCodeIntelCompatibilityConflict,
+		})
+		requireUCICodeIntelSafeToolError(t, conflictingStatus, "CONTEXT_MISMATCH", fixture)
+		require.Len(t, fixture.application.aliasCalls, 3)
+		require.Len(t, fixture.application.searchCalls, 1, "conflicting compatibility evidence must not select a raw-project result")
+		require.Empty(t, fixture.application.statusCalls, "conflicting compatibility evidence must not select a raw-project status")
+	})
+
+	t.Run("closed context, epoch, and application failures never fall back", func(t *testing.T) {
+		t.Run("missing UCI application", func(t *testing.T) {
+			fixture := newUCICodeIntelCompatibilityFixture(t)
+			fixture.server.SetCodebaseContextApplication(nil)
+			require.Nil(t, fixture.server.legacyUnscopedCodeChunkStore)
+
+			search := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{
+				"query":       uciCodeIntelCompatibilityQuery,
+				"path_prefix": uciCodeIntelCompatibilityPathPrefix,
+				"project":     uciCodeIntelCompatibilityProject,
+			})
+			requireUCICodeIntelSuppressedQueryError(t, search, "CONTEXT_REQUIRED", fixture)
+			status := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{
+				"project": uciCodeIntelCompatibilityProject,
+			})
+			requireUCICodeIntelSafeToolError(t, status, "CONTEXT_REQUIRED", fixture)
+			require.Empty(t, fixture.application.aliasCalls)
+			require.Empty(t, fixture.application.searchCalls)
+			require.Empty(t, fixture.application.statusCalls)
+		})
+
+		t.Run("unbound current context", func(t *testing.T) {
+			fixture := newUCICodeIntelCompatibilityFixture(t)
+			require.Nil(t, fixture.server.legacyUnscopedCodeChunkStore)
+
+			search := callUCICodeIntel(t, fixture.server, fixture.clientC, "codebase_search", map[string]any{
+				"query":       uciCodeIntelCompatibilityQuery,
+				"path_prefix": uciCodeIntelCompatibilityPathPrefix,
+				"project":     uciCodeIntelCompatibilityProject,
+			})
+			requireUCICodeIntelSuppressedQueryError(t, search, "CONTEXT_REQUIRED", fixture)
+			status := callUCICodeIntel(t, fixture.server, fixture.clientC, "codebase_status", map[string]any{
+				"project": uciCodeIntelCompatibilityProject,
+			})
+			requireUCICodeIntelSafeToolError(t, status, "CONTEXT_REQUIRED", fixture)
+			require.Len(t, fixture.application.resolveInputs, 2)
+			require.Empty(t, fixture.application.aliasCalls)
+			require.Empty(t, fixture.application.searchCalls)
+			require.Empty(t, fixture.application.statusCalls)
+		})
+
+		t.Run("selected context without an intelligence application", func(t *testing.T) {
+			fixture := newUCICodeIntelCompatibilityFixture(t)
+			fixture.selectContext(t, fixture.clientA, fixture.refA)
+			resolvesBefore := len(fixture.application.resolveInputs)
+			fixture.server.SetCodebaseContextApplication(fixture.uciCodebaseContextFixture.application)
+			require.Nil(t, fixture.server.legacyUnscopedCodeChunkStore)
+
+			search := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{
+				"query":       uciCodeIntelCompatibilityQuery,
+				"path_prefix": uciCodeIntelCompatibilityPathPrefix,
+				"project":     uciCodeIntelCompatibilityProject,
+			})
+			requireUCICodeIntelSuppressedQueryError(t, search, "CONTEXT_REQUIRED", fixture)
+			status := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{
+				"project": uciCodeIntelCompatibilityProject,
+			})
+			requireUCICodeIntelSafeToolError(t, status, "CONTEXT_REQUIRED", fixture)
+			require.Len(t, fixture.application.resolveInputs, resolvesBefore+2)
+			require.Empty(t, fixture.application.aliasCalls)
+			require.Empty(t, fixture.application.searchCalls)
+			require.Empty(t, fixture.application.statusCalls)
+		})
+
+		t.Run("epoch changes after compatibility evidence", func(t *testing.T) {
+			t.Run("search", func(t *testing.T) {
+				fixture := newUCICodeIntelCompatibilityFixture(t)
+				handleA := fixture.selectContext(t, fixture.clientA, fixture.refA)
+				fixture.application.afterAliasResolution = func() {
+					fixture.server.SetCodebaseContextApplication(fixture.application)
+				}
+
+				response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", uciCodeIntelCompatibilitySearchArguments(handleA, uciCodeIntelCompatibilityProject, 10))
+				requireUCICodeIntelSuppressedQueryError(t, response, "CONTEXT_MISMATCH", fixture)
+				require.Len(t, fixture.application.aliasCalls, 1)
+				require.Empty(t, fixture.application.searchCalls)
+				require.Empty(t, fixture.application.statusCalls)
+			})
+
+			t.Run("status", func(t *testing.T) {
+				fixture := newUCICodeIntelCompatibilityFixture(t)
+				handleA := fixture.selectContext(t, fixture.clientA, fixture.refA)
+				fixture.application.afterAliasResolution = func() {
+					fixture.server.SetCodebaseContextApplication(fixture.application)
+				}
+
+				response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{
+					"context_handle": handleA,
+					"project":        uciCodeIntelCompatibilityProject,
+				})
+				requireUCICodeIntelSafeToolError(t, response, "CONTEXT_MISMATCH", fixture)
+				require.Len(t, fixture.application.aliasCalls, 1)
+				require.Empty(t, fixture.application.searchCalls)
+				require.Empty(t, fixture.application.statusCalls)
+			})
+		})
+	})
+
+	t.Run("intentional legacy endpoints are visibly unscoped", func(t *testing.T) {
+		t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+		server := NewServer(ServerOptions{Version: "uci-legacy-unscoped"})
+		server.SetLegacyUnscopedCodeChunkStore(newUCICodeIntelLegacyUnscopedStore(t))
+
+		requireUCICodeIntelLegacyUnscopedResponse(t, callUCICodeIntel(t, server, context.Background(), "codebase_search_legacy_unscoped", map[string]any{
+			"query":   "needle",
+			"project": "legacy-project",
+			"limit":   1,
+		}))
+		requireUCICodeIntelLegacyUnscopedResponse(t, callUCICodeIntel(t, server, context.Background(), "codebase_status_legacy_unscoped", map[string]any{
+			"project": "legacy-project",
+		}))
+	})
+}
+
 func (fixture *uciCodeIntelCompatibilityFixture) selectContext(t *testing.T, client context.Context, ref uci.ContextRef) string {
 	t.Helper()
 	payload := decodeUCICodebaseContextResponse(t, callUCICodebaseContext(t, fixture.server, client, uciCodebaseContextSelectArgs(ref)))
@@ -362,6 +546,7 @@ func requireUCICodeIntelQueryResponse(t *testing.T, response *Response, wantRef 
 	assert.Equal(t, wantExcerpt, (*payload.Items)[0].Excerpt)
 	assert.NotContains(t, text, forbiddenExcerpt)
 	assert.NotContains(t, text, `"project"`, "a raw legacy project selector must not become query authority or output")
+	assert.NotContains(t, text, "legacy_unscoped", "current UCI query responses must not claim legacy retrieval semantics")
 	return text, payload
 }
 
@@ -391,6 +576,7 @@ func requireUCICodeIntelStatus(t *testing.T, response *Response, wantRef uci.Con
 	assert.Equal(t, wantFailureCode, recorder["last_failure_code"])
 	assert.NotContains(t, text, `"project"`, "status must not echo legacy project text as authority")
 	assert.NotContains(t, text, "private_locator")
+	assert.NotContains(t, text, "legacy_unscoped", "current UCI status responses must not claim legacy retrieval semantics")
 	return payload
 }
 
@@ -428,6 +614,18 @@ func requireUCICodeIntelSafeToolError(t *testing.T, response *Response, wantCode
 	requireUCICodeIntelNoLeaks(t, string(raw), fixture)
 }
 
+func requireUCICodeIntelLegacyUnscopedResponse(t *testing.T, response *Response) {
+	t.Helper()
+	text := uciCodeIntelToolText(t, response)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(text), &payload))
+	assert.Equal(t, "legacy_unscoped", payload["retrieval_mode"])
+
+	var current uci.QueryResponse
+	assert.Error(t, json.Unmarshal([]byte(text), &current), "legacy responses must not decode as the strict current UCI View response schema")
+	assert.Nil(t, current.Contexts)
+}
+
 func uciCodeIntelToolText(t *testing.T, response *Response) string {
 	t.Helper()
 	require.Nil(t, response.Error)
@@ -460,6 +658,40 @@ func requireUCICodeIntelNoLeaks(t *testing.T, raw string, fixture *uciCodeIntelC
 	} {
 		assert.NotContains(t, raw, forbidden, "closed failures must not disclose %q", forbidden)
 	}
+}
+
+func newUCICodeIntelLegacyUnscopedStore(t *testing.T) *gormdb.CodeChunkStore {
+	t.Helper()
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	db, err := gormlib.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gormlib.Config{
+		DisableAutomaticPing: true,
+		Logger:               logger.Default.LogMode(logger.Silent),
+	})
+	require.NoError(t, err)
+	_, err = sqlDB.Exec(`
+		CREATE TABLE code_chunks (
+			id INTEGER PRIMARY KEY,
+			project_id TEXT NOT NULL,
+			file_path TEXT NOT NULL,
+			byte_start INTEGER NOT NULL,
+			byte_end INTEGER NOT NULL,
+			language TEXT NOT NULL,
+			chunk_type TEXT NOT NULL,
+			content TEXT NOT NULL,
+			content_sha256 TEXT NOT NULL,
+			index_session_id TEXT NOT NULL,
+			embedding BLOB,
+			created_at DATETIME,
+			updated_at DATETIME
+		)
+	`)
+	require.NoError(t, err)
+	return gormdb.NewCodeChunkStore(db)
 }
 
 func uciCodeIntelCompatibilityQueryResponse(t *testing.T, ref uci.ContextRef, excerpt, exposureRef, digest string) uci.QueryResponse {
