@@ -1,14 +1,5 @@
-package embedding
-
-// Import-cycle analysis (CR-004):
-//
-//   internal/embedding → (does NOT import) internal/db/gorm
-//   internal/db/gorm   → (does NOT import) internal/embedding
-//
-// Placing CodeBackfill here adds internal/db/gorm as a new dependency of
-// internal/embedding. No cycle is introduced because the dependency graph
-// remains a DAG: db/gorm has no path back to embedding.
-// internal/worker/service.go already imports both packages independently.
+// Package codeembedding backfills embeddings for persisted code chunks.
+package codeembedding
 
 import (
 	"context"
@@ -19,6 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	db_gorm "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/embedding"
 )
 
 // expectedDim is the vector dimension required by the code_chunks table.
@@ -27,7 +19,7 @@ import (
 // serves both. Persisting a wrong-dimension vector would corrupt the pgvector
 // column or fail at INSERT time, so vectors that do not match are skipped with a
 // logged warning.
-const expectedDim = EmbeddingDim
+const expectedDim = embedding.EmbeddingDim
 
 // codeChunkSource is the minimal CodeChunkStore surface the backfill loop needs.
 // *db_gorm.CodeChunkStore satisfies it; tests supply a fake so the loop logic
@@ -37,7 +29,7 @@ type codeChunkSource interface {
 	UpdateEmbedding(ctx context.Context, id int64, vec pgvector.Vector) error
 }
 
-// embedder is the minimal embed surface the backfill loop needs. *Client
+// embedder is the minimal embed surface the backfill loop needs. *embedding.Client
 // satisfies it; tests supply a fake returning canned (or wrong-dim, or empty)
 // vectors to drive the guard paths.
 type embedder interface {
@@ -61,7 +53,7 @@ type embedder interface {
 // CodeBackfill is the production entrypoint: it nil-checks the concrete
 // dependencies and delegates to runCodeBackfill, which is written against
 // interfaces so the loop is unit-testable with fakes.
-func CodeBackfill(ctx context.Context, store *db_gorm.CodeChunkStore, client *Client, batchSize int, rec *BackfillRecorder) error {
+func CodeBackfill(ctx context.Context, store *db_gorm.CodeChunkStore, client *embedding.Client, batchSize int, rec *embedding.BackfillRecorder) error {
 	if store == nil {
 		return nil
 	}
@@ -73,8 +65,8 @@ func CodeBackfill(ctx context.Context, store *db_gorm.CodeChunkStore, client *Cl
 
 // runCodeBackfill is the interface-driven loop body. See CodeBackfill for the
 // behavioural contract; this split exists only so tests can drive the loop with
-// a fake source and embedder.
-func runCodeBackfill(ctx context.Context, store codeChunkSource, client embedder, batchSize int, rec *BackfillRecorder) error {
+// fakes.
+func runCodeBackfill(ctx context.Context, store codeChunkSource, client embedder, batchSize int, rec *embedding.BackfillRecorder) error {
 	if batchSize <= 0 {
 		batchSize = 50
 	}

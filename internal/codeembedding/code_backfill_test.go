@@ -1,4 +1,4 @@
-package embedding
+package codeembedding
 
 // Unit tests for CodeBackfill guards that do NOT require a PostgreSQL
 // connection. The dimension-mismatch guard, hot-loop backoff, and persistence
@@ -14,6 +14,7 @@ import (
 	"github.com/pgvector/pgvector-go"
 
 	db_gorm "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/embedding"
 )
 
 // TestExpectedDim_IsCorrect verifies the expectedDim constant matches the
@@ -116,7 +117,7 @@ func (e *fakeEmbedder) Embed(_ context.Context, texts []string) ([][]float32, er
 
 // runWithDeadline runs runCodeBackfill in a goroutine and fails if it does not
 // return within d (i.e. it hot-looped instead of backing off / completing).
-func runWithDeadline(t *testing.T, d time.Duration, ctx context.Context, src codeChunkSource, emb embedder, rec *BackfillRecorder) error {
+func runWithDeadline(t *testing.T, d time.Duration, ctx context.Context, src codeChunkSource, emb embedder, rec *embedding.BackfillRecorder) error {
 	t.Helper()
 	done := make(chan error, 1)
 	go func() { done <- runCodeBackfill(ctx, src, emb, 50, rec) }()
@@ -138,7 +139,7 @@ func TestRunCodeBackfill_HappyPath(t *testing.T) {
 		{ID: 2, Content: "func B(){}"},
 	})
 	emb := &fakeEmbedder{vecLen: expectedDim}
-	rec := &BackfillRecorder{}
+	rec := &embedding.BackfillRecorder{}
 
 	err := runWithDeadline(t, 5*time.Second, context.Background(), src, emb, rec)
 	if err != nil {
@@ -160,7 +161,7 @@ func TestRunCodeBackfill_ZeroVectorsBacksOff(t *testing.T) {
 	t.Parallel()
 	src := newFakeCodeSource([]*db_gorm.CodeChunk{{ID: 1, Content: "x"}})
 	emb := &fakeEmbedder{emptyReturn: true} // always returns zero vectors
-	rec := &BackfillRecorder{}
+	rec := &embedding.BackfillRecorder{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	// Cancel shortly after the first embed call so we land inside the 5s backoff.
@@ -198,7 +199,7 @@ func TestRunCodeBackfill_UniformDimMismatchDisables(t *testing.T) {
 		{ID: 2, Content: "b"},
 	})
 	emb := &fakeEmbedder{vecLen: 4096} // wrong dim for every row (the realistic case)
-	rec := &BackfillRecorder{}
+	rec := &embedding.BackfillRecorder{}
 
 	// No cancel: the deterministic-disable guard must return nil by itself.
 	err := runWithDeadline(t, 3*time.Second, context.Background(), src, emb, rec)
@@ -225,7 +226,7 @@ func TestRunCodeBackfill_PartialMismatchBacksOff(t *testing.T) {
 	t.Parallel()
 	src := newFakeCodeSource([]*db_gorm.CodeChunk{{ID: 1, Content: "x"}, {ID: 2, Content: "y"}})
 	emb := &mixedFailEmbedder{} // row 0: wrong dim, row 1: empty vector
-	rec := &BackfillRecorder{}
+	rec := &embedding.BackfillRecorder{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {

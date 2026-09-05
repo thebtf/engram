@@ -30,6 +30,7 @@ import (
 
 	gochunking "github.com/thebtf/engram/internal/chunking/golang"
 	mdchunking "github.com/thebtf/engram/internal/chunking/markdown"
+	"github.com/thebtf/engram/internal/codeembedding"
 	cognitivecore "github.com/thebtf/engram/internal/cognitive/core"
 	"github.com/thebtf/engram/internal/cognitive/s1state"
 	"github.com/thebtf/engram/internal/cognitive/s2meta"
@@ -1229,7 +1230,7 @@ func (s *Service) initializeAsync() {
 		// Gated by this else-branch so it is a no-op when ENGRAM_EMBEDDING_URL is unset (flag-dark).
 		go func() {
 			cbStore := gorm.NewCodeChunkStore(store.GetDB())
-			if cbErr := embedding.CodeBackfill(s.ctx, cbStore, embClient, 50, embRec); cbErr != nil {
+			if cbErr := codeembedding.CodeBackfill(s.ctx, cbStore, embClient, 50, embRec); cbErr != nil {
 				log.Warn().Err(cbErr).Msg("code embedding backfill: stopped")
 			}
 		}()

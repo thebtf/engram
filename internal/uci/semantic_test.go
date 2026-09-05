@@ -1,16 +1,11 @@
 package uci
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"reflect"
 	"sort"
@@ -22,6 +17,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pgvector/pgvector-go"
+	"github.com/thebtf/engram/internal/embedding"
 )
 
 const semanticEmbeddingDimension = 1536
@@ -249,13 +245,17 @@ func TestUCISemanticRealProviderConceptualHitMatchesScopedPostgresBaseline(t *te
 			{candidate: wrongPreprocessingCandidate, profile: wrongPreprocessing, currentDigest: wrongPreprocessingCandidate.Proof.ContentDigest},
 		}
 
-		seedTexts := make([]string, len(seeds))
-		for index := range seeds {
-			seedTexts[index] = seeds[index].candidate.Text
+		seedInputs := make([]string, len(seeds))
+		for index, seed := range seeds {
+			input, _, err := SemanticEmbeddingInput(seed.profile, seed.candidate)
+			if err != nil {
+				t.Fatalf("build canonical semantic input for seed %q: %v", seed.candidate.EntityKey, err)
+			}
+			seedInputs[index] = input
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		seedVectors, err := real.provider.Embed(ctx, seedTexts)
+		seedVectors, err := real.provider.Embed(ctx, seedInputs)
 		if err != nil {
 			t.Fatalf("real provider Embed(seed corpus) error = %v", err)
 		}
@@ -395,119 +395,37 @@ func (err semanticTestStatusError) StatusCode() int {
 	return err.code
 }
 
-// semanticLiveEmbedder is test-only. It calls the configured OpenAI-compatible
-// provider with the same ENGRAM_EMBEDDING_* contract as internal/embedding;
-// production UCI receives SemanticEmbedder by injection from an outer adapter
-// to avoid the embedding -> gorm -> uci import cycle.
-type semanticLiveEmbedder struct {
-	baseURL    string
-	model      string
-	apiKey     string
-	httpClient *http.Client
+// semanticRecordingEmbedder delegates to the production embedding client while
+// recording UCI inputs for the real-provider fixture's query assertion.
+type semanticRecordingEmbedder struct {
+	client *embedding.Client
 
 	mu     sync.Mutex
 	inputs [][]string
 }
 
-type semanticLiveEmbeddingRequest struct {
-	Input      []string `json:"input"`
-	Model      string   `json:"model"`
-	Dimensions int      `json:"dimensions"`
-}
+var _ SemanticEmbedder = (*semanticRecordingEmbedder)(nil)
 
-type semanticLiveEmbeddingResponse struct {
-	Data []struct {
-		Embedding []float32 `json:"embedding"`
-		Index     int       `json:"index"`
-	} `json:"data"`
-}
-
-var _ SemanticEmbedder = (*semanticLiveEmbedder)(nil)
-
-func newSemanticLiveEmbedderFromEnvironment() (*semanticLiveEmbedder, error) {
-	baseURL := semanticNormalizeEmbeddingBaseURL(strings.TrimSpace(os.Getenv("ENGRAM_EMBEDDING_URL")))
-	if baseURL == "" {
-		return nil, fmt.Errorf("ENGRAM_EMBEDDING_URL is required")
-	}
-	model := strings.TrimSpace(os.Getenv("ENGRAM_EMBEDDING_MODEL"))
-	if model == "" {
-		return nil, fmt.Errorf("ENGRAM_EMBEDDING_MODEL is required")
-	}
-	return &semanticLiveEmbedder{
-		baseURL:    baseURL,
-		model:      model,
-		apiKey:     strings.TrimSpace(os.Getenv("ENGRAM_EMBEDDING_API_KEY")),
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-	}, nil
-}
-
-func semanticNormalizeEmbeddingBaseURL(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return strings.TrimRight(raw, "/")
-	}
-	path := strings.TrimRight(parsed.Path, "/")
-	if strings.HasSuffix(path, "/v1") {
-		parsed.Path = path[:len(path)-3]
-	} else {
-		parsed.Path = path
-	}
-	return strings.TrimRight(parsed.String(), "/")
-}
-
-func (provider *semanticLiveEmbedder) Model() string {
-	return provider.model
-}
-
-func (provider *semanticLiveEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
-	if len(texts) == 0 {
-		return nil, nil
-	}
-	body, err := json.Marshal(semanticLiveEmbeddingRequest{
-		Input:      texts,
-		Model:      provider.model,
-		Dimensions: semanticEmbeddingDimension,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("marshal real embedding request: %w", err)
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.baseURL+"/v1/embeddings", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("construct real embedding request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	if provider.apiKey != "" {
-		request.Header.Set("Authorization", "Bearer "+provider.apiKey)
-	}
-	response, err := provider.httpClient.Do(request)
+func newSemanticRecordingEmbedderFromEnvironment() (*semanticRecordingEmbedder, error) {
+	client, err := embedding.NewClientWithSettings(context.Background(), nil)
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
-	responseBody, err := io.ReadAll(response.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read real embedding response: %w", err)
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, semanticTestStatusError{code: response.StatusCode}
-	}
-	var decoded semanticLiveEmbeddingResponse
-	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return nil, fmt.Errorf("decode real embedding response: %w", err)
-	}
-	vectors := make([][]float32, len(texts))
-	for _, item := range decoded.Data {
-		if item.Index >= 0 && item.Index < len(vectors) {
-			vectors[item.Index] = append([]float32(nil), item.Embedding...)
-		}
-	}
+	return &semanticRecordingEmbedder{client: client}, nil
+}
+
+func (provider *semanticRecordingEmbedder) Model() string {
+	return provider.client.Model()
+}
+
+func (provider *semanticRecordingEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	provider.mu.Lock()
 	provider.inputs = append(provider.inputs, append([]string(nil), texts...))
 	provider.mu.Unlock()
-	return vectors, nil
+	return provider.client.Embed(ctx, texts)
 }
 
-func (provider *semanticLiveEmbedder) LastInput() []string {
+func (provider *semanticRecordingEmbedder) LastInput() []string {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
 	if len(provider.inputs) == 0 {
@@ -856,7 +774,7 @@ func (store *semanticPostgresStore) LastSelectCall() (semanticPostgresSelectCall
 
 type semanticRealProviderFixture struct {
 	profile  VectorProfile
-	provider *semanticLiveEmbedder
+	provider *semanticRecordingEmbedder
 	store    *semanticPostgresStore
 }
 
@@ -885,7 +803,7 @@ func newSemanticRealProviderFixture(t *testing.T) semanticRealProviderFixture {
 		t.Skip("real semantic-provider success requires " + strings.Join(prerequisites, ", ") + "; set ENGRAM_EMBEDDING_API_KEY too when the configured provider requires bearer authentication")
 	}
 
-	provider, err := newSemanticLiveEmbedderFromEnvironment()
+	provider, err := newSemanticRecordingEmbedderFromEnvironment()
 	if err != nil {
 		t.Fatalf("construct configured real semantic test provider: %v", err)
 	}
