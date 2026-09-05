@@ -49,6 +49,7 @@ type Module struct {
 	advisorProofs      *advisorProofCache
 	v3ClientInstanceID string
 	deps               module.ModuleDeps
+	preparedIndex      PreparedIndexCollaborator
 }
 
 var (
@@ -69,11 +70,24 @@ func NewModule() *Module {
 // descriptors for every scoped proxy operation. The client instance reference
 // is configured by daemon wiring; identity resolution never generates it.
 func NewModuleWithClientInstanceID(clientInstanceID string) *Module {
+	return newModule(clientInstanceID, nil)
+}
+
+// NewModuleWithPreparedIndexCollaborator constructs a module with the narrow
+// UCI prepared-target/index seam. A nil collaborator is intentionally closed:
+// UCI code indexing returns SOURCE_UNAVAILABLE until a scanner/registry owner
+// supplies authoritative targets and prepared manifests.
+func NewModuleWithPreparedIndexCollaborator(clientInstanceID string, collaborator PreparedIndexCollaborator) *Module {
+	return newModule(clientInstanceID, collaborator)
+}
+
+func newModule(clientInstanceID string, collaborator PreparedIndexCollaborator) *Module {
 	return &Module{
 		pool:               &grpcPool{},
 		cache:              &slugCache{},
 		advisorProofs:      newAdvisorProofCache(),
 		v3ClientInstanceID: clientInstanceID,
+		preparedIndex:      collaborator,
 	}
 }
 

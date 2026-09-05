@@ -11,44 +11,44 @@
 //
 // # Architecture (daemon-side)
 //
-// The module owns an in-memory sync.Map of per-project indexState values that track
-// running/idle/error state for each project. HandleTool is synchronous and bounded
-// <1s: codebase_index spawns a background goroutine (DaemonCtx-scoped) and returns
-// immediately with {status:"started",run_id:<id>}.
+// The module owns an in-memory sync.Map of per-resolved-target indexState
+// values. A target is bound to one client session, immutable ContextRef, and
+// checkout incarnation. HandleTool resolves that target synchronously, then
+// codebase_index starts daemon-scoped background work and returns immediately.
 //
-// # codebase_status design decision (V1)
+// # codebase_status design decision
 //
-// This module's codebase_status returns ONLY daemon-side liveness (status/run_id/error).
-// Chunk counts (total_chunks/embedded_chunks/last_indexed_at) come from the server-side
-// codebase_status handler via the engramcore ProxyHandleTool call. The daemon merges
-// both payloads and returns the combined result.
-//
-// If the server-side proxy call fails (network blip, flag-off on server), the daemon
-// returns the liveness-only payload with a note that server counts are unavailable.
-// This is acceptable V1 behaviour — the index process state is always authoritative
-// from the daemon.
+// This module reports daemon-side liveness and merges server-side scoped status
+// through the typed engramcore proxy. Server failure degrades only the server
+// payload; the daemon state remains authoritative for the resolved target.
 //
 // # Concurrency
 //
-// sync.Map is used for indexStates so no global lock is needed for tool calls.
-// Per-project CAS (LoadOrStore) prevents double-indexing: a second codebase_index
-// call for the same project while one is running returns {status:"already_running"}.
+// The short admission critical section is keyed by the full resolved target, so
+// distinct client sessions, contexts, or checkout incarnations index independently.
 //
 // CLEAN-ROOM: no AGPL source referenced during implementation.
 package codeintel
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
+	"github.com/thebtf/engram/internal/auditcontext"
+	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/handlers/engramcore"
 	"github.com/thebtf/engram/internal/module"
+	"github.com/thebtf/engram/internal/uci"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
 
@@ -65,9 +65,23 @@ const moduleName = "codeintel"
 // keeps run IDs small and avoids importing additional packages.
 var runCounter atomic.Int64
 
-// indexState holds the per-project index run state.
-// The Status field uses string constants: statusNeverIndexed, statusRunning,
-// statusIdle, statusError.
+// indexStateKey isolates state by the client session and the complete resolved
+// UCI target. ContextRef contributes immutable View identity and profile;
+// IndexScope adds the checkout incarnation.
+type indexStateKey struct {
+	ClientSessionID        string
+	ContextHasSpaceID      bool
+	ContextSpaceID         string
+	ContextSourceID        string
+	ContextCheckoutID      string
+	ContextViewID          string
+	ContextAnalysisProfile string
+	ContextGeneration      int64
+	ScopeIncarnationID     string
+}
+
+// indexState holds one resolved target's index run state.
+// The Status field uses string constants: statusRunning, statusIdle, statusError.
 type indexState struct {
 	StartedAt time.Time
 	Err       string
@@ -81,56 +95,37 @@ const (
 	statusError   = "error"
 )
 
-// CoreProvider is the interface the codeintel module uses from the engramcore
-// module. Defined as an interface here so tests can supply a fake without
-// importing engramcore (which would require a live gRPC server).
-//
-// *engramcore.Module satisfies this interface. Tests use a local fakeCore.
+// ResolvedIndexTarget and IndexResult are aliases for the canonical typed
+// engramcore contract. They remain visible here so codeintel tests can inject
+// fakes without importing a concrete daemon module.
+type (
+	ResolvedIndexTarget = engramcore.ResolvedIndexTarget
+	IndexResult         = engramcore.IndexResult
+)
+
+// CoreProvider is the typed engramcore contract consumed by codeintel.
+// *engramcore.UCIIndexAdapter satisfies this interface; tests may inject a fake.
 type CoreProvider interface {
-	// IndexCodebase triggers a full code index run via the gRPC server.
-	IndexCodebase(ctx context.Context, p muxcore.ProjectContext, root string) (*IndexResult, error)
-	// ProxyHandleTool forwards a tool call to the engram server via gRPC.
-	// Used to fetch server-side codebase_status chunk counts.
-	ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error)
+	ResolveIndexTarget(ctx context.Context, clientSessionID string, p muxcore.ProjectContext, contextHandle string) (ResolvedIndexTarget, error)
+	IndexCodebase(ctx context.Context, target ResolvedIndexTarget, root string) (*IndexResult, error)
+	ProxyHandleTool(ctx context.Context, target ResolvedIndexTarget, name string, args json.RawMessage) (json.RawMessage, error)
 }
 
-// IndexResult mirrors engramcore.CodeIndexResult, re-declared here so the
-// codeintel package can expose it without importing engramcore (avoiding a
-// circular dependency in tests).
-//
-// The adapter in module.go converts *engramcore.CodeIndexResult to *IndexResult
-// when the concrete *engramcore.Module is wired. For the test fakeCore the
-// conversion is not needed — fakeCore returns *IndexResult directly.
-type IndexResult struct {
-	Embedded int
-	Deleted  int
-	Uploaded int
-	Errors   []string
-}
-
-// engramCoreAdapter wraps *engramcore.Module to satisfy CoreProvider.
-// This adapter is used only when the real engramcore module is wired
-// (production path). The conversion from CodeIndexResult → IndexResult is
-// trivial and allocation-cheap (a struct copy).
+// engramCoreAdapter keeps codeintel dependent on the narrow typed contract.
 type engramCoreAdapter struct {
-	m *engramcore.Module
+	adapter *engramcore.UCIIndexAdapter
 }
 
-func (a *engramCoreAdapter) IndexCodebase(ctx context.Context, p muxcore.ProjectContext, root string) (*IndexResult, error) {
-	r, err := a.m.IndexCodebase(ctx, p, root)
-	if err != nil {
-		return nil, err
-	}
-	return &IndexResult{
-		Embedded: r.Embedded,
-		Deleted:  r.Deleted,
-		Uploaded: r.Uploaded,
-		Errors:   r.Errors,
-	}, nil
+func (a *engramCoreAdapter) ResolveIndexTarget(ctx context.Context, clientSessionID string, p muxcore.ProjectContext, contextHandle string) (ResolvedIndexTarget, error) {
+	return a.adapter.ResolveIndexTarget(ctx, clientSessionID, p, contextHandle)
 }
 
-func (a *engramCoreAdapter) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, name string, args json.RawMessage) (json.RawMessage, error) {
-	return a.m.ProxyHandleTool(ctx, p, name, args)
+func (a *engramCoreAdapter) IndexCodebase(ctx context.Context, target ResolvedIndexTarget, root string) (*IndexResult, error) {
+	return a.adapter.IndexCodebase(ctx, target, root)
+}
+
+func (a *engramCoreAdapter) ProxyHandleTool(ctx context.Context, target ResolvedIndexTarget, name string, args json.RawMessage) (json.RawMessage, error) {
+	return a.adapter.ProxyHandleTool(ctx, target, name, args)
 }
 
 // Module is the codeintel tenant of the engram modular daemon framework.
@@ -138,25 +133,18 @@ func (a *engramCoreAdapter) ProxyHandleTool(ctx context.Context, p muxcore.Proje
 type Module struct {
 	core CoreProvider
 	deps module.ModuleDeps
-	// indexStates maps projectID → *indexState. Reads (handleStatus) use the
-	// lock-free sync.Map fast path. The admit-or-reject transition in handleIndex
-	// is serialised by startMu because LoadOrStore alone cannot make the
-	// "idle/error → running" replacement atomic: two concurrent callers could
-	// both observe a non-running state and both spawn a goroutine. startMu closes
-	// that TOCTOU window so at most one index goroutine runs per project.
-	indexStates sync.Map
+	// indexStates maps an exact resolved target to its liveness state. startMu
+	// protects only admission for a single state transition; index work itself
+	// remains concurrent for disjoint target keys.
+	indexStates sync.Map // indexStateKey -> *indexState
 	startMu     sync.Mutex
 }
 
 // NewModule constructs an unstarted Module backed by a real *engramcore.Module.
-// core MUST be the engramcore module registered in the same daemon — it is used
-// to call IndexCodebase and to proxy the server-side codebase_status for chunk
-// counts.
-//
-// NewModule does NOT register the module; call cmd/engram/wiring.go's
-// registerModules to place it in the registry.
+// The typed UCI adapter resolves targets, indexes prepared sources, and proxies
+// the server-side status payload.
 func NewModule(core *engramcore.Module) *Module {
-	return &Module{core: &engramCoreAdapter{m: core}}
+	return &Module{core: &engramCoreAdapter{adapter: engramcore.NewUCIIndexAdapter(core)}}
 }
 
 // NewModuleWithCore constructs an unstarted Module backed by any CoreProvider.
@@ -199,20 +187,28 @@ func (m *Module) Shutdown(_ context.Context) error {
 // codebase_status. Called once at registration time.
 func (m *Module) Tools() []module.ToolDef {
 	indexSchema, _ := json.Marshal(map[string]any{
-		"type": "object",
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"context_handle"},
 		"properties": map[string]any{
+			"context_handle": map[string]any{
+				"type":        "string",
+				"description": "Opaque handle returned for this client by codebase_context.",
+			},
 			"root": map[string]any{
 				"type":        "string",
-				"description": "Absolute path to the project root to index. Defaults to the current working directory of the session.",
+				"description": "Optional local working root. Target authority comes only from context_handle.",
 			},
 		},
 	})
 	statusSchema, _ := json.Marshal(map[string]any{
-		"type": "object",
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"context_handle"},
 		"properties": map[string]any{
-			"project": map[string]any{
+			"context_handle": map[string]any{
 				"type":        "string",
-				"description": "Project ID (defaults to the current session project)",
+				"description": "Opaque handle returned for this client by codebase_context.",
 			},
 		},
 	})
@@ -220,12 +216,12 @@ func (m *Module) Tools() []module.ToolDef {
 	return []module.ToolDef{
 		{
 			Name:        "codebase_index",
-			Description: "Trigger an async code index run for the current project. Returns immediately with a run_id. Poll codebase_status to track progress. Requires ENGRAM_CODE_INTEL_ENABLED=true.",
+			Description: "Trigger an async code index run for one resolved context. Returns immediately with a run_id. Poll codebase_status to track progress. Requires ENGRAM_CODE_INTEL_ENABLED=true.",
 			InputSchema: indexSchema,
 		},
 		{
 			Name:        "codebase_status",
-			Description: "Report the code index status for the current project: run state, run_id, chunk counts, and last indexed time. Requires ENGRAM_CODE_INTEL_ENABLED=true.",
+			Description: "Report code index liveness and scoped server evidence for one resolved context. Requires ENGRAM_CODE_INTEL_ENABLED=true.",
 			InputSchema: statusSchema,
 		},
 	}
@@ -246,41 +242,168 @@ func (m *Module) HandleTool(ctx context.Context, p muxcore.ProjectContext, name 
 	}
 }
 
+type codebaseIndexArgs struct {
+	ContextHandle *string `json:"context_handle"`
+	Root          *string `json:"root"`
+}
+
+type contextHandleArgs struct {
+	ContextHandle *string `json:"context_handle"`
+}
+
+func parseIndexArgs(args json.RawMessage) (string, string, error) {
+	var parsed codebaseIndexArgs
+	if err := decodeStrictToolArgs("codebase_index", args, &parsed); err != nil {
+		return "", "", err
+	}
+	contextHandle, err := requiredContextHandle("codebase_index", parsed.ContextHandle)
+	if err != nil {
+		return "", "", err
+	}
+	if parsed.Root == nil {
+		return contextHandle, "", nil
+	}
+	if *parsed.Root == "" {
+		return "", "", fmt.Errorf("codebase_index: root must not be empty")
+	}
+	return contextHandle, *parsed.Root, nil
+}
+
+func parseContextHandleArgs(tool string, args json.RawMessage) (string, error) {
+	var parsed contextHandleArgs
+	if err := decodeStrictToolArgs(tool, args, &parsed); err != nil {
+		return "", err
+	}
+	return requiredContextHandle(tool, parsed.ContextHandle)
+}
+
+func decodeStrictToolArgs(tool string, args json.RawMessage, target any) error {
+	if len(bytes.TrimSpace(args)) == 0 {
+		return fmt.Errorf("%s: context_handle is required", tool)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(args))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("%s: invalid args: %w", tool, err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("%s: multiple JSON values", tool)
+	}
+	return nil
+}
+
+func requiredContextHandle(tool string, contextHandle *string) (string, error) {
+	if contextHandle == nil || !validCodeintelIdentity(*contextHandle, 128) {
+		return "", fmt.Errorf("%s: context_handle is required", tool)
+	}
+	return *contextHandle, nil
+}
+
+func clientSessionID(p muxcore.ProjectContext) (string, error) {
+	sessionID, found := p.Env[config.EnvClaudeSessionID]
+	if !found || !validCodeintelIdentity(sessionID, 256) {
+		return "", fmt.Errorf("codeintel: %s is required in the per-session environment", config.EnvClaudeSessionID)
+	}
+	return sessionID, nil
+}
+
+func validCodeintelIdentity(value string, maxBytes int) bool {
+	if value == "" || len(value) > maxBytes || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func requestedTargetMatches(target ResolvedIndexTarget, clientSessionID, contextHandle string) bool {
+	return target.ClientSessionID == clientSessionID && target.ContextHandle == contextHandle
+}
+
+func indexKeyFor(target ResolvedIndexTarget) indexStateKey {
+	key := indexStateKey{
+		ClientSessionID:        target.ClientSessionID,
+		ContextSourceID:        target.Context.SourceID,
+		ContextCheckoutID:      target.Context.CheckoutID,
+		ContextViewID:          target.Context.ViewID,
+		ContextAnalysisProfile: target.Context.AnalysisProfileID,
+		ContextGeneration:      target.Context.Generation,
+		ScopeIncarnationID:     target.Scope.IncarnationID,
+	}
+	if target.Context.SpaceID != nil {
+		key.ContextHasSpaceID = true
+		key.ContextSpaceID = *target.Context.SpaceID
+	}
+	return key
+}
+
+func sameContextRef(left, right uci.ContextRef) bool {
+	if (left.SpaceID == nil) != (right.SpaceID == nil) {
+		return false
+	}
+	if left.SpaceID != nil && *left.SpaceID != *right.SpaceID {
+		return false
+	}
+	return left.SourceID == right.SourceID &&
+		left.CheckoutID == right.CheckoutID &&
+		left.ViewID == right.ViewID &&
+		left.AnalysisProfileID == right.AnalysisProfileID &&
+		left.Generation == right.Generation
+}
+
+func decodeServerStatusPayload(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	var block struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &block); err == nil && block.Text != "" {
+		raw = json.RawMessage(block.Text)
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
+		return nil, fmt.Errorf("failed to parse server response")
+	}
+	return payload, nil
+}
+
 // -----------------------------------------------------------------------
 // handleIndex
 // -----------------------------------------------------------------------
 
-// handleIndex implements the codebase_index tool. Returns {status:"started",
-// run_id:<id>} immediately after spawning a background goroutine. If an index
-// run is already in progress for this project, returns {status:"already_running",
-// run_id:<id>} without spawning a second goroutine.
-func (m *Module) handleIndex(_ context.Context, p muxcore.ProjectContext, args json.RawMessage) (json.RawMessage, error) {
-	var params struct {
-		Root string `json:"root"`
+// handleIndex implements codebase_index. It resolves the client-owned target,
+// then returns {status:"started",run_id:<id>} after starting daemon-scoped work.
+// A second request is already_running only when it resolves to the same target.
+func (m *Module) handleIndex(ctx context.Context, p muxcore.ProjectContext, args json.RawMessage) (json.RawMessage, error) {
+	contextHandle, root, err := parseIndexArgs(args)
+	if err != nil {
+		return nil, err
 	}
-	if args != nil {
-		_ = json.Unmarshal(args, &params)
+	clientSessionID, err := clientSessionID(p)
+	if err != nil {
+		return nil, err
 	}
-	root := params.Root
+	if m.core == nil {
+		return nil, fmt.Errorf("SOURCE_UNAVAILABLE: typed code index core is unavailable")
+	}
+	target, err := m.core.ResolveIndexTarget(ctx, clientSessionID, p, contextHandle)
+	if err != nil {
+		return nil, err
+	}
+	if !requestedTargetMatches(target, clientSessionID, contextHandle) {
+		return nil, fmt.Errorf("codebase_index: resolved target does not match the requesting client handle")
+	}
+
 	if root == "" {
 		root = p.Cwd
 	}
 	if root == "" {
-		return nil, fmt.Errorf("codebase_index: root is required (set via 'root' param or ensure session has a Cwd)")
+		return nil, fmt.Errorf("codebase_index: current session working directory is required")
 	}
 
-	projectID := p.ID
-	if projectID == "" {
-		return nil, fmt.Errorf("codebase_index: project ID missing from session context")
-	}
-
-	// Admit-or-reject under startMu so the "is one already running? if not, mark
-	// running" decision is atomic. sync.Map.LoadOrStore cannot do this alone: it
-	// is atomic only for the absent→present insert, not for the idle/error→running
-	// replacement, so two callers racing on a just-finished project could both be
-	// admitted. startMu is held only for the O(1) state check + store, never
-	// across the index goroutine, so it does not serialise across projects in any
-	// meaningful way.
+	key := indexKeyFor(target)
 	newRunID := fmt.Sprintf("run-%d", runCounter.Add(1))
 	newState := &indexState{
 		Status:    statusRunning,
@@ -289,9 +412,8 @@ func (m *Module) handleIndex(_ context.Context, p muxcore.ProjectContext, args j
 	}
 
 	m.startMu.Lock()
-	if raw, ok := m.indexStates.Load(projectID); ok {
+	if raw, ok := m.indexStates.Load(key); ok {
 		if existing := raw.(*indexState); existing.Status == statusRunning {
-			// Another goroutine is already indexing this project — reject.
 			m.startMu.Unlock()
 			out, _ := json.Marshal(map[string]any{
 				"status": "already_running",
@@ -300,14 +422,14 @@ func (m *Module) handleIndex(_ context.Context, p muxcore.ProjectContext, args j
 			return out, nil
 		}
 	}
-	// No run in progress (absent, idle, or errored): claim the slot.
-	m.indexStates.Store(projectID, newState)
+	m.indexStates.Store(key, newState)
 	m.startMu.Unlock()
 
-	// Capture what we need in the closure; do not capture m.deps.DaemonCtx
-	// via the call-site ctx (which is session-scoped and will be cancelled
-	// before the goroutine finishes).
 	daemonCtx := m.deps.DaemonCtx
+	if daemonCtx == nil {
+		daemonCtx = context.Background()
+	}
+	daemonCtx = auditcontext.WithSourceSession(daemonCtx, target.ClientSessionID)
 	logger := m.deps.Logger
 	core := m.core
 	runID := newRunID
@@ -316,68 +438,85 @@ func (m *Module) handleIndex(_ context.Context, p muxcore.ProjectContext, args j
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				// Panic recovery: log stack and mark state as error.
 				if logger != nil {
 					logger.Error("codeintel: index goroutine panicked",
-						"project_id", projectID,
+						"client_session_id", target.ClientSessionID,
+						"context_handle", target.ContextHandle,
 						"run_id", runID,
 						"panic", fmt.Sprintf("%v", r),
 						"stack", string(debug.Stack()),
 					)
 				}
-				errState := &indexState{
+				states.Store(key, &indexState{
 					Status:    statusError,
 					RunID:     runID,
 					StartedAt: newState.StartedAt,
 					Err:       fmt.Sprintf("panic: %v", r),
-				}
-				states.Store(projectID, errState)
+				})
 			}
 		}()
 
 		if logger != nil {
 			logger.Info("codeintel: starting index run",
-				"project_id", projectID,
+				"client_session_id", target.ClientSessionID,
+				"context_handle", target.ContextHandle,
 				"run_id", runID,
 				"root", root,
 			)
 		}
 
-		result, err := core.IndexCodebase(daemonCtx, p, root)
-
-		if err != nil {
+		result, indexErr := core.IndexCodebase(daemonCtx, target, root)
+		if indexErr != nil {
 			if logger != nil {
 				logger.Error("codeintel: index run failed",
-					"project_id", projectID,
+					"client_session_id", target.ClientSessionID,
+					"context_handle", target.ContextHandle,
+					"run_id", runID,
+					"error", indexErr.Error(),
+				)
+			}
+			states.Store(key, &indexState{
+				Status:    statusError,
+				RunID:     runID,
+				StartedAt: newState.StartedAt,
+				Err:       indexErr.Error(),
+			})
+			return
+		}
+		if result == nil || !sameContextRef(result.Context, target.Context) {
+			err := fmt.Errorf("codebase_index: index result context does not match resolved target")
+			if logger != nil {
+				logger.Error("codeintel: index run rejected",
+					"client_session_id", target.ClientSessionID,
+					"context_handle", target.ContextHandle,
 					"run_id", runID,
 					"error", err.Error(),
 				)
 			}
-			errState := &indexState{
+			states.Store(key, &indexState{
 				Status:    statusError,
 				RunID:     runID,
 				StartedAt: newState.StartedAt,
 				Err:       err.Error(),
-			}
-			states.Store(projectID, errState)
+			})
 			return
 		}
 
 		if logger != nil {
 			logger.Info("codeintel: index run complete",
-				"project_id", projectID,
+				"client_session_id", target.ClientSessionID,
+				"context_handle", target.ContextHandle,
 				"run_id", runID,
 				"uploaded", result.Uploaded,
 				"embedded", result.Embedded,
 				"deleted", result.Deleted,
 			)
 		}
-		idleState := &indexState{
+		states.Store(key, &indexState{
 			Status:    statusIdle,
 			RunID:     runID,
 			StartedAt: newState.StartedAt,
-		}
-		states.Store(projectID, idleState)
+		})
 	}()
 
 	out, _ := json.Marshal(map[string]any{
@@ -391,34 +530,28 @@ func (m *Module) handleIndex(_ context.Context, p muxcore.ProjectContext, args j
 // handleStatus
 // -----------------------------------------------------------------------
 
-// handleStatus implements the codebase_status tool. It merges:
-//  1. Daemon-side liveness from m.indexStates (status / run_id / error).
-//  2. Server-side chunk counts fetched via the engramcore proxy.
-//
-// If the server-side call fails, the daemon returns liveness-only with a
-// note that server counts are unavailable. This is the V1 acceptable fallback.
 func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, args json.RawMessage) (json.RawMessage, error) {
-	projectID := p.ID
-	if projectID == "" {
-		// Try args.project as a fallback.
-		var params struct {
-			Project string `json:"project"`
-		}
-		if args != nil {
-			_ = json.Unmarshal(args, &params)
-		}
-		projectID = params.Project
+	contextHandle, err := parseContextHandleArgs("codebase_status", args)
+	if err != nil {
+		return nil, err
 	}
-	if projectID == "" {
-		return nil, fmt.Errorf("codebase_status: project ID missing from session context")
+	clientSessionID, err := clientSessionID(p)
+	if err != nil {
+		return nil, err
+	}
+	if m.core == nil {
+		return nil, fmt.Errorf("SOURCE_UNAVAILABLE: typed code index core is unavailable")
+	}
+	target, err := m.core.ResolveIndexTarget(ctx, clientSessionID, p, contextHandle)
+	if err != nil {
+		return nil, err
+	}
+	if !requestedTargetMatches(target, clientSessionID, contextHandle) {
+		return nil, fmt.Errorf("codebase_status: resolved target does not match the requesting client handle")
 	}
 
-	// --- Daemon-side liveness ---
-	result := map[string]any{
-		"project": projectID,
-		"status":  "never_indexed",
-	}
-	if raw, ok := m.indexStates.Load(projectID); ok {
+	result := map[string]any{"status": "never_indexed"}
+	if raw, ok := m.indexStates.Load(indexKeyFor(target)); ok {
 		state := raw.(*indexState)
 		result["status"] = state.Status
 		result["run_id"] = state.RunID
@@ -427,52 +560,37 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 		}
 	}
 
-	// --- Server-side counts via engramcore proxy ---
-	// We call the server's codebase_status tool via ProxyHandleTool. This
-	// round-trip is acceptable because HandleTool has a 30 s budget from the
-	// dispatcher, and the proxy call should complete in <1 s on a healthy
-	// network. If it fails we degrade gracefully.
-	statusArgs, _ := json.Marshal(map[string]any{"project": projectID})
-	serverRaw, proxyErr := m.core.ProxyHandleTool(ctx, p, "codebase_status", statusArgs)
+	statusArgs, err := json.Marshal(struct {
+		ContextHandle string         `json:"context_handle"`
+		Context       uci.ContextRef `json:"context"`
+	}{
+		ContextHandle: target.ContextHandle,
+		Context:       target.Context,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("codebase_status: marshal proxy args: %w", err)
+	}
+	serverRaw, proxyErr := m.core.ProxyHandleTool(ctx, target, "codebase_status", statusArgs)
 	if proxyErr != nil {
-		// Degraded: return liveness only.
 		result["server_counts_available"] = false
 		result["server_counts_error"] = proxyErr.Error()
-	} else if serverRaw != nil {
-		// Merge server payload into our result. The server returns a JSON object;
-		// we extract the fields we care about.
-		var serverPayload map[string]any
-		// serverRaw is the MCP inner block: {"type":"text","text":"<json>"}
-		// ProxyHandleTool returns the raw block; we need to extract the text.
-		var block struct {
-			Text string `json:"text"`
-		}
-		if err := json.Unmarshal(serverRaw, &block); err == nil && block.Text != "" {
-			if err2 := json.Unmarshal([]byte(block.Text), &serverPayload); err2 == nil {
-				for _, key := range []string{"total_chunks", "embedded_chunks", "last_indexed_at"} {
-					if v, exists := serverPayload[key]; exists {
-						result[key] = v
-					}
-				}
-				result["server_counts_available"] = true
-			} else {
-				result["server_counts_available"] = false
-				result["server_counts_error"] = "failed to parse server response"
-			}
+	} else {
+		serverPayload, payloadErr := decodeServerStatusPayload(serverRaw)
+		if payloadErr != nil {
+			result["server_counts_available"] = false
+			result["server_counts_error"] = payloadErr.Error()
 		} else {
-			// serverRaw might already be the text directly (not wrapped in a block)
-			// if called from a test context. Try to unmarshal directly.
-			if err3 := json.Unmarshal(serverRaw, &serverPayload); err3 == nil {
-				for _, key := range []string{"total_chunks", "embedded_chunks", "last_indexed_at"} {
-					if v, exists := serverPayload[key]; exists {
-						result[key] = v
-					}
+			for _, key := range []string{"total_chunks", "embedded_chunks", "last_indexed_at"} {
+				if value, found := serverPayload[key]; found {
+					result[key] = value
 				}
-				result["server_counts_available"] = true
-			} else {
-				result["server_counts_available"] = false
-				result["server_counts_error"] = "failed to parse server response"
 			}
+			for _, key := range []string{"context", "rows", "edges", "evidence_recorder"} {
+				if value, found := serverPayload[key]; found {
+					result[key] = value
+				}
+			}
+			result["server_counts_available"] = true
 		}
 	}
 

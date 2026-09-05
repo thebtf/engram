@@ -13,7 +13,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/thebtf/engram/internal/auditcontext"
+	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/module"
+	"github.com/thebtf/engram/internal/uci"
 	pb "github.com/thebtf/engram/proto/engram/v1"
+	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
@@ -55,6 +59,52 @@ var (
 	errUCIClientInvalidResponse = errors.New("response is invalid")
 )
 
+// ResolvedIndexTarget is the fully authorized UCI identity for one index run.
+// Its connection details remain private to engramcore so callers cannot turn a
+// raw project selector into authority after resolution.
+type ResolvedIndexTarget struct {
+	ClientSessionID string
+	ContextHandle   string
+	Context         uci.ContextRef
+	Scope           uci.IndexScope
+
+	connection *grpc.ClientConn
+}
+
+// IndexResult is the prepared indexer's result. Context must be the exact
+// immutable ContextRef supplied by the resolved target.
+type IndexResult struct {
+	Context  uci.ContextRef
+	Embedded int
+	Deleted  int
+	Uploaded int
+	Errors   []string
+}
+
+// PreparedIndexTarget is the authoritative context and checkout incarnation
+// discovered by the future registry/scanner owner before any UCI publication.
+type PreparedIndexTarget struct {
+	Context uci.ContextRef
+	Scope   uci.IndexScope
+}
+
+// UCIIndexClient is the narrow transport surface a prepared indexer uses to
+// publish its already-authoritative manifest. It intentionally exposes no
+// legacy CodeIndexNegotiate or CodeIndexUpload methods.
+type UCIIndexClient interface {
+	Begin(context.Context, *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error)
+	Stage(context.Context, []*pb.StageCodeIndexFrame) (*pb.StageCodeIndexResponse, error)
+	Finalize(context.Context, *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error)
+}
+
+// PreparedIndexCollaborator supplies handle-owned targets and real prepared
+// index work. It is absent until the scanner and registry can authoritatively
+// discover a checkout incarnation and manifest.
+type PreparedIndexCollaborator interface {
+	PrepareIndexTarget(context.Context, string, muxcore.ProjectContext, string) (PreparedIndexTarget, error)
+	IndexPreparedCodebase(context.Context, ResolvedIndexTarget, string, UCIIndexClient) (*IndexResult, error)
+}
+
 // uciClientRPC is the generated EngramService surface used by the UCI adapter.
 type uciClientRPC interface {
 	BindCodeContext(context.Context, *pb.BindCodeContextRequest, ...grpc.CallOption) (*pb.BindCodeContextResponse, error)
@@ -73,6 +123,198 @@ type uciClient struct {
 
 func newUCIClient(rpc uciClientRPC) *uciClient {
 	return &uciClient{rpc: rpc}
+}
+
+var _ UCIIndexClient = (*uciClient)(nil)
+
+// UCIIndexAdapter owns typed code-index operations over one engramcore module.
+// It sits beside the legacy raw-project proxy because the two incompatible
+// ProxyHandleTool signatures must not share a receiver.
+type UCIIndexAdapter struct {
+	module *Module
+}
+
+// NewUCIIndexAdapter returns the typed UCI adapter for one existing module.
+func NewUCIIndexAdapter(module *Module) *UCIIndexAdapter {
+	return &UCIIndexAdapter{module: module}
+}
+
+// ResolveIndexTarget resolves an opaque client-owned handle before codeintel
+// admits work. It binds the prepared context through the existing UCI client
+// and retains only typed target authority for subsequent operations.
+func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, clientSessionID string, project muxcore.ProjectContext, contextHandle string) (ResolvedIndexTarget, error) {
+	if err := uciClientContextError("ResolveIndexTarget", ctx); err != nil {
+		return ResolvedIndexTarget{}, err
+	}
+	if !validUCIClientIdentifier(clientSessionID, maxUCIClientIdentifierBytes) || !validUCIClientIdentifier(contextHandle, 128) {
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("resolved context handle is unavailable")
+	}
+	if a == nil || a.module == nil || a.module.preparedIndex == nil {
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("prepared index target is unavailable")
+	}
+	m := a.module
+
+	prepared, err := m.preparedIndex.PrepareIndexTarget(ctx, clientSessionID, project, contextHandle)
+	if err != nil {
+		return ResolvedIndexTarget{}, err
+	}
+	if !validPreparedIndexTarget(prepared) {
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("prepared index target is invalid")
+	}
+
+	serverURL, err := m.requireServerURL(project)
+	if err != nil {
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("UCI server is unavailable")
+	}
+	token := m.envFor(project, config.EnvWorkstationToken)
+	conn, err := m.pool.getOrDialGRPC(serverURL, token)
+	if err != nil {
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("UCI server is unavailable")
+	}
+
+	requestedContext := uciClientProtoContextRef(prepared.Context)
+	bound, err := newUCIClient(pb.NewEngramServiceClient(conn)).Bind(
+		auditcontext.WithSourceSession(ctx, clientSessionID),
+		&pb.BindCodeContextRequest{ClientSessionId: clientSessionID, RequestedContext: requestedContext},
+	)
+	if err != nil {
+		return ResolvedIndexTarget{}, err
+	}
+	if !sameUCIClientContextRef(requestedContext, bound.GetContext()) {
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("UCI bound a different context")
+	}
+
+	return ResolvedIndexTarget{
+		ClientSessionID: clientSessionID,
+		ContextHandle:   contextHandle,
+		Context:         cloneUCIIndexContext(prepared.Context),
+		Scope:           prepared.Scope,
+		connection:      conn,
+	}, nil
+}
+
+// IndexCodebase executes only prepared UCI index work. Without the injected
+// collaborator it fails closed rather than scanning raw project bytes or
+// publishing an invented empty census.
+func (a *UCIIndexAdapter) IndexCodebase(ctx context.Context, target ResolvedIndexTarget, root string) (*IndexResult, error) {
+	if err := uciClientContextError("IndexCodebase", ctx); err != nil {
+		return nil, err
+	}
+	if a == nil || a.module == nil || a.module.preparedIndex == nil || root == "" || !validResolvedIndexTarget(target) {
+		return nil, uciIndexSourceUnavailable("prepared code index is unavailable")
+	}
+	conn, err := a.connectionForResolvedIndexTarget(target)
+	if err != nil {
+		return nil, err
+	}
+	result, err := a.module.preparedIndex.IndexPreparedCodebase(
+		auditcontext.WithSourceSession(ctx, target.ClientSessionID),
+		target,
+		root,
+		newUCIClient(pb.NewEngramServiceClient(conn)),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, uciIndexSourceUnavailable("prepared indexer returned no result")
+	}
+	return result, nil
+}
+
+// ProxyHandleTool forwards a typed target call without a raw project field.
+// The caller owns the typed context arguments; this method supplies only the
+// per-session provenance and connection established during resolution.
+func (a *UCIIndexAdapter) ProxyHandleTool(ctx context.Context, target ResolvedIndexTarget, name string, args json.RawMessage) (json.RawMessage, error) {
+	if err := uciClientContextError("ProxyHandleTool", ctx); err != nil {
+		return nil, err
+	}
+	if a == nil || a.module == nil || name == "" || !validResolvedIndexTarget(target) {
+		return nil, uciIndexSourceUnavailable("resolved target is unavailable")
+	}
+	conn, err := a.connectionForResolvedIndexTarget(target)
+	if err != nil {
+		return nil, err
+	}
+	ctx = uciClientOutgoingContext(auditcontext.WithSourceSession(ctx, target.ClientSessionID))
+	response, err := pb.NewEngramServiceClient(conn).CallTool(ctx, &pb.CallToolRequest{
+		ToolName:      name,
+		ArgumentsJson: args,
+		SessionId:     target.ClientSessionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gRPC CallTool: %w", err)
+	}
+	if response == nil {
+		return nil, uciIndexSourceUnavailable("UCI status proxy returned no response")
+	}
+	block, moduleErr := buildInnerBlock(response.ContentJson)
+	if moduleErr != nil {
+		return nil, moduleErr
+	}
+	if response.IsError {
+		return nil, &module.ProxyIsError{RawContent: block}
+	}
+	return block, nil
+}
+
+func (a *UCIIndexAdapter) connectionForResolvedIndexTarget(target ResolvedIndexTarget) (*grpc.ClientConn, error) {
+	if a == nil || a.module == nil || target.connection == nil || !validResolvedIndexTarget(target) {
+		return nil, uciIndexSourceUnavailable("resolved target is unavailable")
+	}
+	return target.connection, nil
+}
+
+func validPreparedIndexTarget(target PreparedIndexTarget) bool {
+	context := uciClientProtoContextRef(target.Context)
+	scope := uciClientProtoIndexScope(target.Scope, target.Context.AnalysisProfileID)
+	return validUCIClientContextRef(context) &&
+		validUCIClientIndexScope(scope) &&
+		target.Context.SourceID == target.Scope.SourceID &&
+		target.Context.CheckoutID == target.Scope.CheckoutID
+}
+
+func validResolvedIndexTarget(target ResolvedIndexTarget) bool {
+	return validUCIClientIdentifier(target.ClientSessionID, maxUCIClientIdentifierBytes) &&
+		validUCIClientIdentifier(target.ContextHandle, 128) &&
+		validPreparedIndexTarget(PreparedIndexTarget{Context: target.Context, Scope: target.Scope})
+}
+
+func uciClientProtoContextRef(reference uci.ContextRef) *pb.ContextRef {
+	result := &pb.ContextRef{
+		SourceId:          reference.SourceID,
+		CheckoutId:        reference.CheckoutID,
+		ViewId:            reference.ViewID,
+		AnalysisProfileId: reference.AnalysisProfileID,
+		Generation:        reference.Generation,
+	}
+	if reference.SpaceID != nil {
+		spaceID := *reference.SpaceID
+		result.SpaceId = &spaceID
+	}
+	return result
+}
+
+func uciClientProtoIndexScope(scope uci.IndexScope, analysisProfileID string) *pb.CodeIndexScope {
+	return &pb.CodeIndexScope{
+		SourceId:          scope.SourceID,
+		CheckoutId:        scope.CheckoutID,
+		IncarnationId:     scope.IncarnationID,
+		AnalysisProfileId: analysisProfileID,
+	}
+}
+
+func cloneUCIIndexContext(reference uci.ContextRef) uci.ContextRef {
+	copy := reference
+	if reference.SpaceID != nil {
+		spaceID := *reference.SpaceID
+		copy.SpaceID = &spaceID
+	}
+	return copy
+}
+
+func uciIndexSourceUnavailable(message string) error {
+	return &module.ModuleError{Code: string(uci.QueryErrorSourceUnavailable), Message: message}
 }
 
 func (client *uciClient) Bind(ctx context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {

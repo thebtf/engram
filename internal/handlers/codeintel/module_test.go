@@ -11,27 +11,46 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/handlers/codeintel"
 	"github.com/thebtf/engram/internal/moduletest"
+	"github.com/thebtf/engram/internal/uci"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
 
-// fakeCore is a minimal stand-in for *engramcore.Module that allows the
-// codeintel module to be tested without a live gRPC server. It exposes the
-// same methods the codeintel module calls: IndexCodebase and ProxyHandleTool.
+// fakeCore is a typed UCI stand-in for the daemon module tests.
 type fakeCore struct {
 	mu          sync.Mutex
 	indexCalled int
 	indexDelay  time.Duration
 	indexErr    error
 
-	// statusResponse is returned by ProxyHandleTool for codebase_status calls.
 	statusResponse []byte
 	statusErr      error
 }
 
-// IndexCodebase records the call and returns the configured result.
-func (f *fakeCore) IndexCodebase(_ context.Context, _ muxcore.ProjectContext, _ string) (*codeintel.IndexResult, error) {
+func (f *fakeCore) ResolveIndexTarget(_ context.Context, clientSessionID string, _ muxcore.ProjectContext, contextHandle string) (codeintel.ResolvedIndexTarget, error) {
+	spaceID := "11111111-1111-4111-8111-111111111111"
+	return codeintel.ResolvedIndexTarget{
+		ClientSessionID: clientSessionID,
+		ContextHandle:   contextHandle,
+		Context: uci.ContextRef{
+			SpaceID:           &spaceID,
+			SourceID:          "22222222-2222-4222-8222-222222222222",
+			CheckoutID:        "33333333-3333-4333-8333-333333333333",
+			ViewID:            "44444444-4444-4444-8444-444444444444",
+			AnalysisProfileID: "55555555-5555-4555-8555-555555555555",
+			Generation:        1,
+		},
+		Scope: uci.IndexScope{
+			SourceID:      "22222222-2222-4222-8222-222222222222",
+			CheckoutID:    "33333333-3333-4333-8333-333333333333",
+			IncarnationID: "66666666-6666-4666-8666-666666666666",
+		},
+	}, nil
+}
+
+func (f *fakeCore) IndexCodebase(_ context.Context, target codeintel.ResolvedIndexTarget, _ string) (*codeintel.IndexResult, error) {
 	f.mu.Lock()
 	delay := f.indexDelay
 	err := f.indexErr
@@ -44,11 +63,10 @@ func (f *fakeCore) IndexCodebase(_ context.Context, _ muxcore.ProjectContext, _ 
 	if err != nil {
 		return nil, err
 	}
-	return &codeintel.IndexResult{Uploaded: 5, Embedded: 3, Deleted: 1}, nil
+	return &codeintel.IndexResult{Context: target.Context, Uploaded: 5, Embedded: 3, Deleted: 1}, nil
 }
 
-// ProxyHandleTool returns the configured status response for codebase_status calls.
-func (f *fakeCore) ProxyHandleTool(_ context.Context, _ muxcore.ProjectContext, _ string, _ json.RawMessage) (json.RawMessage, error) {
+func (f *fakeCore) ProxyHandleTool(_ context.Context, _ codeintel.ResolvedIndexTarget, _ string, _ json.RawMessage) (json.RawMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.statusErr != nil {
@@ -57,7 +75,6 @@ func (f *fakeCore) ProxyHandleTool(_ context.Context, _ muxcore.ProjectContext, 
 	if f.statusResponse != nil {
 		return f.statusResponse, nil
 	}
-	// Default: return a minimal server payload.
 	return json.Marshal(map[string]any{
 		"total_chunks":    int64(10),
 		"embedded_chunks": int64(8),
@@ -69,6 +86,24 @@ func (f *fakeCore) ProxyHandleTool(_ context.Context, _ muxcore.ProjectContext, 
 // run without a live gRPC server.
 func newTestModule(core codeintel.CoreProvider) *codeintel.Module {
 	return codeintel.NewModuleWithCore(core)
+}
+
+func testProjectContext(id, cwd string) muxcore.ProjectContext {
+	return muxcore.ProjectContext{
+		ID:  id,
+		Cwd: cwd,
+		Env: map[string]string{config.EnvClaudeSessionID: id + "-session"},
+	}
+}
+
+func testIndexArgs(p muxcore.ProjectContext) json.RawMessage {
+	payload, _ := json.Marshal(map[string]any{"context_handle": "handle-" + p.ID, "root": p.Cwd})
+	return payload
+}
+
+func testStatusArgs(p muxcore.ProjectContext) json.RawMessage {
+	payload, _ := json.Marshal(map[string]any{"context_handle": "handle-" + p.ID})
+	return payload
 }
 
 // -----------------------------------------------------------------------
@@ -87,8 +122,8 @@ func TestCodebaseIndex_ReturnsStartedImmediately(t *testing.T) {
 	require.NoError(t, h.Register(mod))
 	h.Freeze()
 
-	p := muxcore.ProjectContext{ID: "proj-1", Cwd: t.TempDir()}
-	args, _ := json.Marshal(map[string]any{"root": p.Cwd})
+	p := testProjectContext("proj-1", t.TempDir())
+	args := testIndexArgs(p)
 
 	start := time.Now()
 	raw, err := h.CallToolWithProject(context.Background(), p, "codebase_index", args)
@@ -119,7 +154,7 @@ func drainIndex(t *testing.T, h *moduletest.Harness, p muxcore.ProjectContext) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		raw, err := h.CallToolWithProject(context.Background(), p, "codebase_status", nil)
+		raw, err := h.CallToolWithProject(context.Background(), p, "codebase_status", testStatusArgs(p))
 		if err == nil {
 			var st map[string]any
 			if json.Unmarshal(raw, &st) == nil {
@@ -146,8 +181,8 @@ func TestCodebaseIndex_ConcurrentCallReturnsAlreadyRunning(t *testing.T) {
 	require.NoError(t, h.Register(mod))
 	h.Freeze()
 
-	p := muxcore.ProjectContext{ID: "proj-concurrent", Cwd: t.TempDir()}
-	args, _ := json.Marshal(map[string]any{"root": p.Cwd})
+	p := testProjectContext("proj-concurrent", t.TempDir())
+	args := testIndexArgs(p)
 
 	// First call — should start.
 	raw1, err := h.CallToolWithProject(context.Background(), p, "codebase_index", args)
@@ -183,8 +218,8 @@ func TestCodebaseIndex_RaceAdmitsExactlyOne(t *testing.T) {
 	require.NoError(t, h.Register(mod))
 	h.Freeze()
 
-	p := muxcore.ProjectContext{ID: "proj-race", Cwd: t.TempDir()}
-	args, _ := json.Marshal(map[string]any{"root": p.Cwd})
+	p := testProjectContext("proj-race", t.TempDir())
+	args := testIndexArgs(p)
 
 	const n = 16
 	var wg sync.WaitGroup
@@ -237,8 +272,8 @@ func TestCodebaseStatus_ReturnsNeverIndexedBeforeFirstRun(t *testing.T) {
 	require.NoError(t, h.Register(mod))
 	h.Freeze()
 
-	p := muxcore.ProjectContext{ID: "proj-new", Cwd: t.TempDir()}
-	raw, err := h.CallToolWithProject(context.Background(), p, "codebase_status", nil)
+	p := testProjectContext("proj-new", t.TempDir())
+	raw, err := h.CallToolWithProject(context.Background(), p, "codebase_status", testStatusArgs(p))
 	require.NoError(t, err)
 	var result map[string]any
 	require.NoError(t, json.Unmarshal(raw, &result))
@@ -257,8 +292,8 @@ func TestCodebaseStatus_TransitionsRunningToIdle(t *testing.T) {
 	require.NoError(t, h.Register(mod))
 	h.Freeze()
 
-	p := muxcore.ProjectContext{ID: "proj-transition", Cwd: t.TempDir()}
-	args, _ := json.Marshal(map[string]any{"root": p.Cwd})
+	p := testProjectContext("proj-transition", t.TempDir())
+	args := testIndexArgs(p)
 
 	// Start the index.
 	raw, err := h.CallToolWithProject(context.Background(), p, "codebase_index", args)
@@ -272,7 +307,7 @@ func TestCodebaseStatus_TransitionsRunningToIdle(t *testing.T) {
 	var finalStatus string
 	for time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
-		raw2, err2 := h.CallToolWithProject(context.Background(), p, "codebase_status", nil)
+		raw2, err2 := h.CallToolWithProject(context.Background(), p, "codebase_status", testStatusArgs(p))
 		if err2 != nil {
 			continue
 		}
@@ -301,8 +336,8 @@ func TestCodebaseIndex_FlagOffReturnsError(t *testing.T) {
 	require.NoError(t, h.Register(mod))
 	h.Freeze()
 
-	p := muxcore.ProjectContext{ID: "proj-flagoff", Cwd: t.TempDir()}
-	args, _ := json.Marshal(map[string]any{"root": p.Cwd})
+	p := testProjectContext("proj-flagoff", t.TempDir())
+	args := testIndexArgs(p)
 
 	_, err := h.CallToolWithProject(context.Background(), p, "codebase_index", args)
 	require.Error(t, err, "codebase_index must return an error when flag is off")

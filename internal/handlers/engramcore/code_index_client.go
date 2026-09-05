@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-// CodeIndexResult summarises the outcome of a full index-negotiate-upload cycle.
+// CodeIndexResult is retained only by the T049 legacy raw-index compatibility flow.
 type CodeIndexResult struct {
 	// Embedded is the number of chunks successfully upserted on the server.
 	Embedded int
@@ -26,20 +26,10 @@ type CodeIndexResult struct {
 	Errors []string
 }
 
-// IndexCodebase walks root, negotiates with the engram server, uploads the
-// delta chunks the server does not yet have, and returns a CodeIndexResult.
-//
-// Sequence (two-RPC split, ADR-001 §6):
-//
-//  1. BuildManifest to get full chunk metadata + content.
-//  2. CodeIndexNegotiate → server returns need_chunks (delta) and stale_chunks
-//     (informational). The server stamps surviving rows with the new session id.
-//  3. Stream only the needed chunks via CodeIndexUpload. On stream close the
-//     server sweeps stale rows and returns a receipt.
-//
-// Embedding is performed server-side by CR-004; this method sets no embeddings.
-// This method is NOT yet wired to an MCP tool; CR-006 adds the tool binding.
-func (m *Module) IndexCodebase(ctx context.Context, p muxcore.ProjectContext, root string) (*CodeIndexResult, error) {
+// IndexCodebaseLegacy is the compatibility-only raw project index flow kept
+// for T049 deletion. New codeintel paths must use the typed UCI
+// Module.IndexCodebase contract in uci_client.go instead.
+func (m *Module) IndexCodebaseLegacy(ctx context.Context, p muxcore.ProjectContext, root string) (*CodeIndexResult, error) {
 	serverURL, err := m.requireServerURL(p)
 	if err != nil {
 		return nil, err
