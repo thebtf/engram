@@ -1,0 +1,656 @@
+package codeintel_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/handlers/codeintel"
+	"github.com/thebtf/engram/internal/moduletest"
+	"github.com/thebtf/engram/internal/uci"
+	muxcore "github.com/thebtf/mcp-mux/muxcore"
+)
+
+const (
+	uciCutoverSharedProjectID = "uci-cutover-shared-project"
+	uciCutoverSessionA        = "uci-cutover-client-a"
+	uciCutoverSessionB        = "uci-cutover-client-b"
+	uciCutoverSessionC        = "uci-cutover-client-c"
+	uciCutoverHandleA         = "uci-cutover-handle-a"
+	uciCutoverHandleB         = "uci-cutover-handle-b"
+	uciCutoverRelativePath    = "internal/shared.go"
+	uciCutoverLabel           = "SharedTarget"
+)
+
+type uciCutoverRow struct {
+	RelativePath string `json:"relative_path"`
+	Label        string `json:"label"`
+	Body         string `json:"body"`
+}
+
+type uciCutoverEdge struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type uciCutoverEvidenceRecorder struct {
+	State           string `json:"state"`
+	LastFailureCode string `json:"last_failure_code"`
+}
+
+type uciCutoverServerStatus struct {
+	Context          uci.ContextRef             `json:"context"`
+	Rows             []uciCutoverRow            `json:"rows"`
+	Edges            []uciCutoverEdge           `json:"edges"`
+	EvidenceRecorder uciCutoverEvidenceRecorder `json:"evidence_recorder"`
+	TotalChunks      int                        `json:"total_chunks"`
+}
+
+type uciCutoverStatus struct {
+	Status           string                     `json:"status"`
+	RunID            string                     `json:"run_id"`
+	Error            string                     `json:"error"`
+	Context          uci.ContextRef             `json:"context"`
+	Rows             []uciCutoverRow            `json:"rows"`
+	Edges            []uciCutoverEdge           `json:"edges"`
+	EvidenceRecorder uciCutoverEvidenceRecorder `json:"evidence_recorder"`
+	TotalChunks      int                        `json:"total_chunks"`
+}
+
+type uciCutoverStart struct {
+	Status string `json:"status"`
+	RunID  string `json:"run_id"`
+}
+
+type uciCutoverTargetKey struct {
+	ClientSessionID string
+	ContextHandle   string
+}
+
+type uciCutoverResolveCall struct {
+	ClientSessionID string
+	ContextHandle   string
+	Project         muxcore.ProjectContext
+	Target          codeintel.ResolvedIndexTarget
+	Resolved        bool
+}
+
+type uciCutoverIndexCall struct {
+	Target codeintel.ResolvedIndexTarget
+	Root   string
+}
+
+type uciCutoverProxyCall struct {
+	Target codeintel.ResolvedIndexTarget
+	Name   string
+	Args   json.RawMessage
+}
+
+type uciCutoverGate struct {
+	started   chan struct{}
+	release   chan struct{}
+	completed chan struct{}
+
+	startedOnce   sync.Once
+	releaseOnce   sync.Once
+	completedOnce sync.Once
+}
+
+func newUCICutoverGate() *uciCutoverGate {
+	return &uciCutoverGate{
+		started:   make(chan struct{}),
+		release:   make(chan struct{}),
+		completed: make(chan struct{}),
+	}
+}
+
+func (gate *uciCutoverGate) markStarted() {
+	gate.startedOnce.Do(func() { close(gate.started) })
+}
+
+func (gate *uciCutoverGate) releaseRun() {
+	gate.releaseOnce.Do(func() { close(gate.release) })
+}
+
+func (gate *uciCutoverGate) markCompleted() {
+	gate.completedOnce.Do(func() { close(gate.completed) })
+}
+
+type uciCutoverCore struct {
+	mu sync.Mutex
+
+	targets  map[uciCutoverTargetKey]codeintel.ResolvedIndexTarget
+	results  map[uciCutoverTargetKey]codeintel.IndexResult
+	statuses map[uciCutoverTargetKey]json.RawMessage
+	gates    map[uciCutoverTargetKey]*uciCutoverGate
+
+	resolveCalls []uciCutoverResolveCall
+	indexCalls   []uciCutoverIndexCall
+	proxyCalls   []uciCutoverProxyCall
+}
+
+func newUCICutoverCore(targets []codeintel.ResolvedIndexTarget, statuses map[uciCutoverTargetKey]json.RawMessage) *uciCutoverCore {
+	core := &uciCutoverCore{
+		targets:  make(map[uciCutoverTargetKey]codeintel.ResolvedIndexTarget, len(targets)),
+		results:  make(map[uciCutoverTargetKey]codeintel.IndexResult, len(targets)),
+		statuses: statuses,
+		gates:    make(map[uciCutoverTargetKey]*uciCutoverGate, len(targets)),
+	}
+	for _, target := range targets {
+		key := uciCutoverKeyForTarget(target)
+		core.targets[key] = target
+		core.results[key] = codeintel.IndexResult{Context: target.Context}
+		core.gates[key] = newUCICutoverGate()
+	}
+	return core
+}
+
+func (core *uciCutoverCore) ResolveIndexTarget(_ context.Context, clientSessionID string, project muxcore.ProjectContext, contextHandle string) (codeintel.ResolvedIndexTarget, error) {
+	key := uciCutoverTargetKey{ClientSessionID: clientSessionID, ContextHandle: contextHandle}
+
+	core.mu.Lock()
+	target, found := core.targets[key]
+	core.resolveCalls = append(core.resolveCalls, uciCutoverResolveCall{
+		ClientSessionID: clientSessionID,
+		ContextHandle:   contextHandle,
+		Project:         project,
+		Target:          target,
+		Resolved:        found,
+	})
+	core.mu.Unlock()
+
+	if project.Env[config.EnvClaudeSessionID] != clientSessionID {
+		return codeintel.ResolvedIndexTarget{}, fmt.Errorf("resolver received client session %q outside ProjectContext environment", clientSessionID)
+	}
+	if !found {
+		return codeintel.ResolvedIndexTarget{}, fmt.Errorf("context handle %q is not owned by client session %q", contextHandle, clientSessionID)
+	}
+	return target, nil
+}
+
+func (core *uciCutoverCore) IndexCodebase(ctx context.Context, target codeintel.ResolvedIndexTarget, root string) (*codeintel.IndexResult, error) {
+	key := uciCutoverKeyForTarget(target)
+
+	core.mu.Lock()
+	expected, found := core.targets[key]
+	result, hasResult := core.results[key]
+	gate := core.gates[key]
+	core.indexCalls = append(core.indexCalls, uciCutoverIndexCall{Target: target, Root: root})
+	core.mu.Unlock()
+
+	if !found || !reflect.DeepEqual(expected, target) {
+		return nil, fmt.Errorf("index received an unrecognized typed target")
+	}
+	if !hasResult || gate == nil {
+		return nil, fmt.Errorf("index has no configured result for typed target")
+	}
+	if root == "" {
+		return nil, fmt.Errorf("index root is empty")
+	}
+
+	gate.markStarted()
+	select {
+	case <-gate.release:
+	case <-ctx.Done():
+		gate.markCompleted()
+		return nil, ctx.Err()
+	}
+	gate.markCompleted()
+	return &result, nil
+}
+
+func (core *uciCutoverCore) ProxyHandleTool(_ context.Context, target codeintel.ResolvedIndexTarget, name string, args json.RawMessage) (json.RawMessage, error) {
+	key := uciCutoverKeyForTarget(target)
+
+	core.mu.Lock()
+	expected, found := core.targets[key]
+	payload, hasPayload := core.statuses[key]
+	core.proxyCalls = append(core.proxyCalls, uciCutoverProxyCall{
+		Target: target,
+		Name:   name,
+		Args:   append(json.RawMessage(nil), args...),
+	})
+	core.mu.Unlock()
+
+	if !found || !reflect.DeepEqual(expected, target) {
+		return nil, fmt.Errorf("proxy received an unrecognized typed target")
+	}
+	if name != "codebase_status" || !hasPayload {
+		return nil, fmt.Errorf("unexpected typed proxy call %q", name)
+	}
+	return append(json.RawMessage(nil), payload...), nil
+}
+
+func (core *uciCutoverCore) setResult(target codeintel.ResolvedIndexTarget, result codeintel.IndexResult) {
+	core.mu.Lock()
+	core.results[uciCutoverKeyForTarget(target)] = result
+	core.mu.Unlock()
+}
+
+func (core *uciCutoverCore) awaitStarted(t *testing.T, target codeintel.ResolvedIndexTarget) {
+	t.Helper()
+	uciCutoverAwait(t, core.gateFor(t, target).started, "index fake start")
+}
+
+func (core *uciCutoverCore) release(t *testing.T, target codeintel.ResolvedIndexTarget) {
+	t.Helper()
+	core.gateFor(t, target).releaseRun()
+}
+
+func (core *uciCutoverCore) awaitCompleted(t *testing.T, target codeintel.ResolvedIndexTarget) {
+	t.Helper()
+	uciCutoverAwait(t, core.gateFor(t, target).completed, "index fake completion")
+}
+
+func (core *uciCutoverCore) releaseAll() {
+	core.mu.Lock()
+	gates := make([]*uciCutoverGate, 0, len(core.gates))
+	for _, gate := range core.gates {
+		gates = append(gates, gate)
+	}
+	core.mu.Unlock()
+	for _, gate := range gates {
+		gate.releaseRun()
+	}
+}
+
+func (core *uciCutoverCore) gateFor(t *testing.T, target codeintel.ResolvedIndexTarget) *uciCutoverGate {
+	t.Helper()
+	key := uciCutoverKeyForTarget(target)
+	core.mu.Lock()
+	gate := core.gates[key]
+	core.mu.Unlock()
+	require.NotNil(t, gate, "missing fake gate for typed target")
+	return gate
+}
+
+func (core *uciCutoverCore) resolveCallsSnapshot() []uciCutoverResolveCall {
+	core.mu.Lock()
+	defer core.mu.Unlock()
+	return append([]uciCutoverResolveCall(nil), core.resolveCalls...)
+}
+
+func (core *uciCutoverCore) indexCallsSnapshot() []uciCutoverIndexCall {
+	core.mu.Lock()
+	defer core.mu.Unlock()
+	return append([]uciCutoverIndexCall(nil), core.indexCalls...)
+}
+
+func (core *uciCutoverCore) proxyCallsSnapshot() []uciCutoverProxyCall {
+	core.mu.Lock()
+	defer core.mu.Unlock()
+	return append([]uciCutoverProxyCall(nil), core.proxyCalls...)
+}
+
+type uciCutoverFixture struct {
+	t       *testing.T
+	harness *moduletest.Harness
+	core    *uciCutoverCore
+
+	projectA muxcore.ProjectContext
+	projectB muxcore.ProjectContext
+	projectC muxcore.ProjectContext
+	rootA    string
+	rootB    string
+	targetA  codeintel.ResolvedIndexTarget
+	targetB  codeintel.ResolvedIndexTarget
+	statusA  uciCutoverServerStatus
+	statusB  uciCutoverServerStatus
+}
+
+func newUCICutoverFixture(t *testing.T) *uciCutoverFixture {
+	t.Helper()
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	t.Setenv(config.EnvClaudeSessionID, "host-global-session-must-not-be-used")
+
+	rootBase := filepath.Join(t.TempDir(), "compatible", "worktree")
+	rootA := filepath.Join(rootBase, "checkout-a")
+	rootB := filepath.Join(rootBase, "checkout-b")
+	require.NoError(t, os.MkdirAll(rootA, 0o755))
+	require.NoError(t, os.MkdirAll(rootB, 0o755))
+
+	contextA := uciCutoverContext("30000000-0000-4000-8000-000000000001", "40000000-0000-4000-8000-000000000001", 1)
+	contextB := uciCutoverContext("30000000-0000-4000-8000-000000000002", "40000000-0000-4000-8000-000000000002", 2)
+	targetA := codeintel.ResolvedIndexTarget{
+		ClientSessionID: uciCutoverSessionA,
+		ContextHandle:   uciCutoverHandleA,
+		Context:         contextA,
+		Scope: uci.IndexScope{
+			SourceID:      contextA.SourceID,
+			CheckoutID:    contextA.CheckoutID,
+			IncarnationID: "50000000-0000-4000-8000-000000000001",
+		},
+	}
+	targetB := codeintel.ResolvedIndexTarget{
+		ClientSessionID: uciCutoverSessionB,
+		ContextHandle:   uciCutoverHandleB,
+		Context:         contextB,
+		Scope: uci.IndexScope{
+			SourceID:      contextB.SourceID,
+			CheckoutID:    contextB.CheckoutID,
+			IncarnationID: "50000000-0000-4000-8000-000000000002",
+		},
+	}
+
+	statusA := uciCutoverServerStatus{
+		Context: contextA,
+		Rows: []uciCutoverRow{{
+			RelativePath: uciCutoverRelativePath,
+			Label:        uciCutoverLabel,
+			Body:         "saved-body-A",
+		}},
+		Edges: []uciCutoverEdge{{From: uciCutoverLabel, To: "A-Callee"}},
+		EvidenceRecorder: uciCutoverEvidenceRecorder{
+			State:           "healthy",
+			LastFailureCode: "NONE",
+		},
+		TotalChunks: 0,
+	}
+	statusB := uciCutoverServerStatus{
+		Context: contextB,
+		Rows: []uciCutoverRow{{
+			RelativePath: uciCutoverRelativePath,
+			Label:        uciCutoverLabel,
+			Body:         "saved-body-B",
+		}},
+		Edges: []uciCutoverEdge{{From: uciCutoverLabel, To: "B-Callee"}},
+		EvidenceRecorder: uciCutoverEvidenceRecorder{
+			State:           "degraded",
+			LastFailureCode: "COMPLETION_EVIDENCE_UNAVAILABLE",
+		},
+		TotalChunks: 0,
+	}
+	core := newUCICutoverCore(
+		[]codeintel.ResolvedIndexTarget{targetA, targetB},
+		map[uciCutoverTargetKey]json.RawMessage{
+			uciCutoverKeyForTarget(targetA): uciCutoverStatusJSON(t, statusA),
+			uciCutoverKeyForTarget(targetB): uciCutoverStatusJSON(t, statusB),
+		},
+	)
+
+	mod := codeintel.NewModuleWithCore(core)
+	harness := moduletest.New(t)
+	require.NoError(t, harness.Register(mod))
+	harness.Freeze()
+	t.Cleanup(core.releaseAll)
+
+	projectA := muxcore.ProjectContext{
+		ID:  uciCutoverSharedProjectID,
+		Cwd: rootA,
+		Env: map[string]string{config.EnvClaudeSessionID: uciCutoverSessionA},
+	}
+	projectB := muxcore.ProjectContext{
+		ID:  uciCutoverSharedProjectID,
+		Cwd: rootB,
+		Env: map[string]string{config.EnvClaudeSessionID: uciCutoverSessionB},
+	}
+	projectC := muxcore.ProjectContext{
+		ID:  uciCutoverSharedProjectID,
+		Cwd: rootA,
+		Env: map[string]string{config.EnvClaudeSessionID: uciCutoverSessionC},
+	}
+
+	return &uciCutoverFixture{
+		t:        t,
+		harness:  harness,
+		core:     core,
+		projectA: projectA,
+		projectB: projectB,
+		projectC: projectC,
+		rootA:    rootA,
+		rootB:    rootB,
+		targetA:  targetA,
+		targetB:  targetB,
+		statusA:  statusA,
+		statusB:  statusB,
+	}
+}
+
+func TestUCICutoverKeepsSameProjectCallersIsolated(t *testing.T) {
+	fixture := newUCICutoverFixture(t)
+
+	startedA, err := fixture.start(fixture.projectA, fixture.rootA, uciCutoverHandleA)
+	require.NoError(t, err)
+	require.Equal(t, "started", startedA.Status)
+	require.NotEmpty(t, startedA.RunID)
+	fixture.core.awaitStarted(t, fixture.targetA)
+
+	repeatedA, err := fixture.start(fixture.projectA, fixture.rootA, uciCutoverHandleA)
+	require.NoError(t, err)
+	require.Equal(t, "already_running", repeatedA.Status)
+	require.Equal(t, startedA.RunID, repeatedA.RunID)
+
+	startedB, err := fixture.start(fixture.projectB, fixture.rootB, uciCutoverHandleB)
+	require.NoError(t, err)
+	require.Equal(t, "started", startedB.Status)
+	require.NotEmpty(t, startedB.RunID)
+	require.NotEqual(t, startedA.RunID, startedB.RunID)
+	fixture.core.awaitStarted(t, fixture.targetB)
+
+	indexCalls := fixture.core.indexCallsSnapshot()
+	require.Len(t, indexCalls, 2, "only the two distinct typed targets may start index work")
+	requireUCICutoverIndexCall(t, indexCalls[0], fixture.targetA, fixture.rootA)
+	requireUCICutoverIndexCall(t, indexCalls[1], fixture.targetB, fixture.rootB)
+
+	fixture.core.release(t, fixture.targetA)
+	fixture.core.awaitCompleted(t, fixture.targetA)
+	statusA := fixture.waitForStatus(fixture.projectA, uciCutoverHandleA, "idle")
+
+	fixture.core.release(t, fixture.targetB)
+	fixture.core.awaitCompleted(t, fixture.targetB)
+	statusB := fixture.waitForStatus(fixture.projectB, uciCutoverHandleB, "idle")
+
+	requireUCICutoverStatus(t, statusA, fixture.statusA, fixture.statusB)
+	requireUCICutoverStatus(t, statusB, fixture.statusB, fixture.statusA)
+	require.Equal(t, statusA.TotalChunks, statusB.TotalChunks, "recorder health must not be inferred from chunk counts")
+	require.NotEqual(t, statusA.EvidenceRecorder, statusB.EvidenceRecorder, "daemon must preserve each authorized context's exact secret-free recorder health")
+
+	resolveCalls := fixture.core.resolveCallsSnapshot()
+	requireUCICutoverResolveCalls(t, resolveCalls, fixture.targetA)
+	requireUCICutoverResolveCalls(t, resolveCalls, fixture.targetB)
+	requireUCICutoverProxyCalls(t, fixture.core.proxyCallsSnapshot(), fixture.targetA, fixture.targetB)
+
+	_, err = fixture.call(fixture.projectC, "codebase_index", map[string]any{
+		"root":           fixture.rootA,
+		"context_handle": uciCutoverHandleA,
+	})
+	require.Error(t, err, "client C must not start an A-owned context through the shared project ID")
+	_, err = fixture.call(fixture.projectC, "codebase_status", map[string]any{
+		"context_handle": uciCutoverHandleA,
+	})
+	require.Error(t, err, "client C must not query an A-owned context through the shared project ID")
+
+	statusAAfterC := fixture.waitForStatus(fixture.projectA, uciCutoverHandleA, "idle")
+	statusBAfterC := fixture.waitForStatus(fixture.projectB, uciCutoverHandleB, "idle")
+	require.Equal(t, statusA, statusAAfterC, "client C must not mutate A's state or default")
+	require.Equal(t, statusB, statusBAfterC, "client C must not mutate B's state or default")
+	require.Len(t, fixture.core.indexCallsSnapshot(), 2, "client C must not reach index execution")
+}
+
+func TestUCICutoverRejectsMismatchedIndexResult(t *testing.T) {
+	fixture := newUCICutoverFixture(t)
+	fixture.core.setResult(fixture.targetA, codeintel.IndexResult{Context: fixture.targetB.Context})
+
+	started, err := fixture.start(fixture.projectA, fixture.rootA, uciCutoverHandleA)
+	require.NoError(t, err)
+	require.Equal(t, "started", started.Status)
+	fixture.core.awaitStarted(t, fixture.targetA)
+	fixture.core.release(t, fixture.targetA)
+	fixture.core.awaitCompleted(t, fixture.targetA)
+
+	status := fixture.waitForStatus(fixture.projectA, uciCutoverHandleA, "error")
+	require.NotEmpty(t, status.Error)
+	require.NotEqual(t, "idle", status.Status, "a mismatched returned ContextRef must not become idle success")
+
+	indexCalls := fixture.core.indexCallsSnapshot()
+	require.Len(t, indexCalls, 1)
+	requireUCICutoverIndexCall(t, indexCalls[0], fixture.targetA, fixture.rootA)
+}
+
+func (fixture *uciCutoverFixture) start(project muxcore.ProjectContext, root, contextHandle string) (uciCutoverStart, error) {
+	raw, err := fixture.call(project, "codebase_index", map[string]any{
+		"root":           root,
+		"context_handle": contextHandle,
+	})
+	if err != nil {
+		return uciCutoverStart{}, err
+	}
+	var started uciCutoverStart
+	if err := json.Unmarshal(raw, &started); err != nil {
+		return uciCutoverStart{}, fmt.Errorf("decode codebase_index result: %w", err)
+	}
+	return started, nil
+}
+
+func (fixture *uciCutoverFixture) waitForStatus(project muxcore.ProjectContext, contextHandle, wantStatus string) uciCutoverStatus {
+	fixture.t.Helper()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+
+	for {
+		status, err := fixture.status(project, contextHandle)
+		if err == nil && status.Status == wantStatus {
+			return status
+		}
+		select {
+		case <-deadline.C:
+			fixture.t.Fatalf("codebase_status for %q did not reach %q", contextHandle, wantStatus)
+			return uciCutoverStatus{}
+		default:
+			runtime.Gosched()
+		}
+	}
+}
+
+func (fixture *uciCutoverFixture) status(project muxcore.ProjectContext, contextHandle string) (uciCutoverStatus, error) {
+	raw, err := fixture.call(project, "codebase_status", map[string]any{"context_handle": contextHandle})
+	if err != nil {
+		return uciCutoverStatus{}, err
+	}
+	var status uciCutoverStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return uciCutoverStatus{}, fmt.Errorf("decode codebase_status result: %w", err)
+	}
+	return status, nil
+}
+
+func (fixture *uciCutoverFixture) call(project muxcore.ProjectContext, name string, args any) (json.RawMessage, error) {
+	fixture.t.Helper()
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s args: %w", name, err)
+	}
+	return fixture.harness.CallToolWithProject(context.Background(), project, name, raw)
+}
+
+func uciCutoverContext(checkoutID, viewID string, generation int64) uci.ContextRef {
+	spaceID := "10000000-0000-4000-8000-000000000001"
+	return uci.ContextRef{
+		SpaceID:           &spaceID,
+		SourceID:          "20000000-0000-4000-8000-000000000001",
+		CheckoutID:        checkoutID,
+		ViewID:            viewID,
+		AnalysisProfileID: "60000000-0000-4000-8000-000000000001",
+		Generation:        generation,
+	}
+}
+
+func uciCutoverKeyForTarget(target codeintel.ResolvedIndexTarget) uciCutoverTargetKey {
+	return uciCutoverTargetKey{
+		ClientSessionID: target.ClientSessionID,
+		ContextHandle:   target.ContextHandle,
+	}
+}
+
+func uciCutoverStatusJSON(t *testing.T, status uciCutoverServerStatus) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(status)
+	require.NoError(t, err)
+	return raw
+}
+
+func uciCutoverAwait(t *testing.T, signal <-chan struct{}, operation string) {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-signal:
+	case <-timer.C:
+		t.Fatalf("timed out waiting for %s", operation)
+	}
+}
+
+func requireUCICutoverIndexCall(t *testing.T, got uciCutoverIndexCall, want codeintel.ResolvedIndexTarget, root string) {
+	t.Helper()
+	require.Equal(t, want, got.Target)
+	require.Equal(t, root, got.Root)
+}
+
+func requireUCICutoverResolveCalls(t *testing.T, calls []uciCutoverResolveCall, want codeintel.ResolvedIndexTarget) {
+	t.Helper()
+	found := false
+	for _, call := range calls {
+		if !call.Resolved {
+			continue
+		}
+		require.Equal(t, call.ClientSessionID, call.Project.Env[config.EnvClaudeSessionID], "module must derive the client session from ProjectContext.Env")
+		if call.ClientSessionID != want.ClientSessionID || call.ContextHandle != want.ContextHandle {
+			continue
+		}
+		found = true
+		require.Equal(t, uciCutoverSharedProjectID, call.Project.ID)
+		require.Equal(t, want, call.Target)
+	}
+	require.Truef(t, found, "missing typed resolve call for session=%q handle=%q", want.ClientSessionID, want.ContextHandle)
+}
+
+func requireUCICutoverProxyCalls(t *testing.T, calls []uciCutoverProxyCall, targets ...codeintel.ResolvedIndexTarget) {
+	t.Helper()
+	require.NotEmpty(t, calls)
+	seen := make(map[uciCutoverTargetKey]bool, len(targets))
+	for _, call := range calls {
+		require.Equal(t, "codebase_status", call.Name)
+		var args map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(call.Args, &args))
+		require.NotContains(t, args, "project", "raw project must not be a status/proxy authority")
+
+		var contextHandle string
+		require.NoError(t, json.Unmarshal(args["context_handle"], &contextHandle))
+		require.Equal(t, call.Target.ContextHandle, contextHandle)
+
+		var reference uci.ContextRef
+		require.NoError(t, json.Unmarshal(args["context"], &reference))
+		require.Equal(t, call.Target.Context, reference)
+		seen[uciCutoverKeyForTarget(call.Target)] = true
+	}
+	for _, target := range targets {
+		require.Truef(t, seen[uciCutoverKeyForTarget(target)], "missing typed proxy call for session=%q handle=%q", target.ClientSessionID, target.ContextHandle)
+	}
+}
+
+func requireUCICutoverStatus(t *testing.T, got uciCutoverStatus, want, forbidden uciCutoverServerStatus) {
+	t.Helper()
+	require.Equal(t, "idle", got.Status)
+	require.NotEmpty(t, got.RunID)
+	require.Equal(t, want.Context, got.Context)
+	require.NotEqual(t, forbidden.Context, got.Context)
+	require.Equal(t, want.Rows, got.Rows)
+	require.Equal(t, want.Edges, got.Edges)
+	require.Equal(t, want.EvidenceRecorder, got.EvidenceRecorder)
+	require.Equal(t, want.TotalChunks, got.TotalChunks)
+	require.Len(t, got.Rows, 1)
+	require.Equal(t, uciCutoverRelativePath, got.Rows[0].RelativePath)
+	require.Equal(t, uciCutoverLabel, got.Rows[0].Label)
+	require.NotContains(t, got.Rows[0].Body, forbidden.Rows[0].Body)
+	require.NotContains(t, got.Edges, forbidden.Edges[0])
+}
