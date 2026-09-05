@@ -5843,6 +5843,7 @@ type BindCodeContextRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	ClientSessionId  string                 `protobuf:"bytes,1,opt,name=client_session_id,json=clientSessionId,proto3" json:"client_session_id,omitempty"`
 	RequestedContext *ContextRef            `protobuf:"bytes,2,opt,name=requested_context,json=requestedContext,proto3" json:"requested_context,omitempty"`
+	ContextHandle    string                 `protobuf:"bytes,3,opt,name=context_handle,json=contextHandle,proto3" json:"context_handle,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -5891,10 +5892,20 @@ func (x *BindCodeContextRequest) GetRequestedContext() *ContextRef {
 	return nil
 }
 
+func (x *BindCodeContextRequest) GetContextHandle() string {
+	if x != nil {
+		return x.ContextHandle
+	}
+	return ""
+}
+
 type BindCodeContextResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ContextHandle string                 `protobuf:"bytes,1,opt,name=context_handle,json=contextHandle,proto3" json:"context_handle,omitempty"`
 	Context       *ContextRef            `protobuf:"bytes,2,opt,name=context,proto3" json:"context,omitempty"`
+	IndexScope    *CodeIndexScope        `protobuf:"bytes,3,opt,name=index_scope,json=indexScope,proto3" json:"index_scope,omitempty"`
+	LocalRootId   string                 `protobuf:"bytes,4,opt,name=local_root_id,json=localRootId,proto3" json:"local_root_id,omitempty"`
+	WorkstationId string                 `protobuf:"bytes,5,opt,name=workstation_id,json=workstationId,proto3" json:"workstation_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5941,6 +5952,27 @@ func (x *BindCodeContextResponse) GetContext() *ContextRef {
 		return x.Context
 	}
 	return nil
+}
+
+func (x *BindCodeContextResponse) GetIndexScope() *CodeIndexScope {
+	if x != nil {
+		return x.IndexScope
+	}
+	return nil
+}
+
+func (x *BindCodeContextResponse) GetLocalRootId() string {
+	if x != nil {
+		return x.LocalRootId
+	}
+	return ""
+}
+
+func (x *BindCodeContextResponse) GetWorkstationId() string {
+	if x != nil {
+		return x.WorkstationId
+	}
+	return ""
 }
 
 type BeginCodeIndexRequest struct {
@@ -6184,9 +6216,11 @@ type StageCodeIndexResponse struct {
 	BuildId           string                 `protobuf:"bytes,1,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
 	AcceptedSequence  uint64                 `protobuf:"varint,2,opt,name=accepted_sequence,json=acceptedSequence,proto3" json:"accepted_sequence,omitempty"`
 	AcceptedPartCount uint64                 `protobuf:"varint,3,opt,name=accepted_part_count,json=acceptedPartCount,proto3" json:"accepted_part_count,omitempty"`
-	PartDigest        string                 `protobuf:"bytes,4,opt,name=part_digest,json=partDigest,proto3" json:"part_digest,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Aggregate DigestIndexParts across every canonical frame acknowledged in this
+	// complete client stream. Send unchanged as FinalizeCodeIndexRequest.parts_digest.
+	PartDigest    string `protobuf:"bytes,4,opt,name=part_digest,json=partDigest,proto3" json:"part_digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StageCodeIndexResponse) Reset() {
@@ -7189,13 +7223,18 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\vcheckout_id\x18\x02 \x01(\tR\n" +
 	"checkoutId\x12%\n" +
 	"\x0eincarnation_id\x18\x03 \x01(\tR\rincarnationId\x12.\n" +
-	"\x13analysis_profile_id\x18\x04 \x01(\tR\x11analysisProfileId\"\x88\x01\n" +
+	"\x13analysis_profile_id\x18\x04 \x01(\tR\x11analysisProfileId\"\xaf\x01\n" +
 	"\x16BindCodeContextRequest\x12*\n" +
 	"\x11client_session_id\x18\x01 \x01(\tR\x0fclientSessionId\x12B\n" +
-	"\x11requested_context\x18\x02 \x01(\v2\x15.engram.v1.ContextRefR\x10requestedContext\"q\n" +
+	"\x11requested_context\x18\x02 \x01(\v2\x15.engram.v1.ContextRefR\x10requestedContext\x12%\n" +
+	"\x0econtext_handle\x18\x03 \x01(\tR\rcontextHandle\"\xf8\x01\n" +
 	"\x17BindCodeContextResponse\x12%\n" +
 	"\x0econtext_handle\x18\x01 \x01(\tR\rcontextHandle\x12/\n" +
-	"\acontext\x18\x02 \x01(\v2\x15.engram.v1.ContextRefR\acontext\"\x8c\x02\n" +
+	"\acontext\x18\x02 \x01(\v2\x15.engram.v1.ContextRefR\acontext\x12:\n" +
+	"\vindex_scope\x18\x03 \x01(\v2\x19.engram.v1.CodeIndexScopeR\n" +
+	"indexScope\x12\"\n" +
+	"\rlocal_root_id\x18\x04 \x01(\tR\vlocalRootId\x12%\n" +
+	"\x0eworkstation_id\x18\x05 \x01(\tR\rworkstationId\"\x8c\x02\n" +
 	"\x15BeginCodeIndexRequest\x12/\n" +
 	"\x05scope\x18\x01 \x01(\v2\x19.engram.v1.CodeIndexScopeR\x05scope\x12%\n" +
 	"\x0eowner_instance\x18\x02 \x01(\tR\rownerInstance\x12\x1b\n" +
@@ -7627,65 +7666,66 @@ var file_proto_engram_v1_engram_proto_depIdxs = []int32{
 	14,  // 93: engram.v1.HostAdvisorObserveResponse.reason:type_name -> engram.v1.HostAdvisorObservationReason
 	83,  // 94: engram.v1.BindCodeContextRequest.requested_context:type_name -> engram.v1.ContextRef
 	83,  // 95: engram.v1.BindCodeContextResponse.context:type_name -> engram.v1.ContextRef
-	84,  // 96: engram.v1.BeginCodeIndexRequest.scope:type_name -> engram.v1.CodeIndexScope
-	83,  // 97: engram.v1.BeginCodeIndexRequest.expected_parent:type_name -> engram.v1.ContextRef
-	84,  // 98: engram.v1.BeginCodeIndexResponse.scope:type_name -> engram.v1.CodeIndexScope
-	98,  // 99: engram.v1.BeginCodeIndexResponse.lease_expires_at:type_name -> google.protobuf.Timestamp
-	84,  // 100: engram.v1.StageCodeIndexFrame.scope:type_name -> engram.v1.CodeIndexScope
-	84,  // 101: engram.v1.FinalizeCodeIndexRequest.scope:type_name -> engram.v1.CodeIndexScope
-	83,  // 102: engram.v1.FinalizeCodeIndexRequest.expected_parent:type_name -> engram.v1.ContextRef
-	98,  // 103: engram.v1.FinalizeCodeIndexRequest.scan_started_at:type_name -> google.protobuf.Timestamp
-	98,  // 104: engram.v1.FinalizeCodeIndexRequest.scan_completed_at:type_name -> google.protobuf.Timestamp
-	83,  // 105: engram.v1.FinalizeCodeIndexResponse.published_context:type_name -> engram.v1.ContextRef
-	83,  // 106: engram.v1.QueryCodeRequest.context:type_name -> engram.v1.ContextRef
-	83,  // 107: engram.v1.QueryCodeResponse.context:type_name -> engram.v1.ContextRef
-	83,  // 108: engram.v1.ExploreCodeRequest.context:type_name -> engram.v1.ContextRef
-	83,  // 109: engram.v1.ExploreCodeResponse.context:type_name -> engram.v1.ContextRef
-	32,  // 110: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
-	34,  // 111: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
-	37,  // 112: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
-	17,  // 113: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
-	19,  // 114: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
-	21,  // 115: engram.v1.EngramService.GetSessionStartContext:input_type -> engram.v1.GetSessionStartContextRequest
-	50,  // 116: engram.v1.EngramService.GetAmbientCandidates:input_type -> engram.v1.GetAmbientCandidatesRequest
-	30,  // 117: engram.v1.EngramService.NegotiateVersion:input_type -> engram.v1.NegotiateVersionRequest
-	40,  // 118: engram.v1.EngramService.CodeIndexNegotiate:input_type -> engram.v1.CodeIndexNegotiateRequest
-	42,  // 119: engram.v1.EngramService.CodeIndexUpload:input_type -> engram.v1.CodeChunkUpload
-	48,  // 120: engram.v1.EngramService.RegisterProjectIdentityV3:input_type -> engram.v1.RegisterProjectIdentityV3Request
-	62,  // 121: engram.v1.EngramService.Bind:input_type -> engram.v1.HostAdvisorBindRequest
-	68,  // 122: engram.v1.EngramService.Advise:input_type -> engram.v1.HostAdvisorAdviseRequest
-	81,  // 123: engram.v1.EngramService.Observe:input_type -> engram.v1.HostAdvisorObserveRequest
-	85,  // 124: engram.v1.EngramService.BindCodeContext:input_type -> engram.v1.BindCodeContextRequest
-	87,  // 125: engram.v1.EngramService.BeginCodeIndex:input_type -> engram.v1.BeginCodeIndexRequest
-	89,  // 126: engram.v1.EngramService.StageCodeIndex:input_type -> engram.v1.StageCodeIndexFrame
-	91,  // 127: engram.v1.EngramService.FinalizeCodeIndex:input_type -> engram.v1.FinalizeCodeIndexRequest
-	93,  // 128: engram.v1.EngramService.QueryCode:input_type -> engram.v1.QueryCodeRequest
-	95,  // 129: engram.v1.EngramService.ExploreCode:input_type -> engram.v1.ExploreCodeRequest
-	33,  // 130: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
-	35,  // 131: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
-	38,  // 132: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
-	18,  // 133: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
-	20,  // 134: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
-	22,  // 135: engram.v1.EngramService.GetSessionStartContext:output_type -> engram.v1.GetSessionStartContextResponse
-	51,  // 136: engram.v1.EngramService.GetAmbientCandidates:output_type -> engram.v1.GetAmbientCandidatesResponse
-	31,  // 137: engram.v1.EngramService.NegotiateVersion:output_type -> engram.v1.NegotiateVersionResponse
-	41,  // 138: engram.v1.EngramService.CodeIndexNegotiate:output_type -> engram.v1.CodeIndexNegotiateResponse
-	43,  // 139: engram.v1.EngramService.CodeIndexUpload:output_type -> engram.v1.CodeIndexUploadReceipt
-	49,  // 140: engram.v1.EngramService.RegisterProjectIdentityV3:output_type -> engram.v1.RegisterProjectIdentityV3Response
-	63,  // 141: engram.v1.EngramService.Bind:output_type -> engram.v1.HostAdvisorBindResponse
-	76,  // 142: engram.v1.EngramService.Advise:output_type -> engram.v1.HostAdvisorAdviseResponse
-	82,  // 143: engram.v1.EngramService.Observe:output_type -> engram.v1.HostAdvisorObserveResponse
-	86,  // 144: engram.v1.EngramService.BindCodeContext:output_type -> engram.v1.BindCodeContextResponse
-	88,  // 145: engram.v1.EngramService.BeginCodeIndex:output_type -> engram.v1.BeginCodeIndexResponse
-	90,  // 146: engram.v1.EngramService.StageCodeIndex:output_type -> engram.v1.StageCodeIndexResponse
-	92,  // 147: engram.v1.EngramService.FinalizeCodeIndex:output_type -> engram.v1.FinalizeCodeIndexResponse
-	94,  // 148: engram.v1.EngramService.QueryCode:output_type -> engram.v1.QueryCodeResponse
-	96,  // 149: engram.v1.EngramService.ExploreCode:output_type -> engram.v1.ExploreCodeResponse
-	130, // [130:150] is the sub-list for method output_type
-	110, // [110:130] is the sub-list for method input_type
-	110, // [110:110] is the sub-list for extension type_name
-	110, // [110:110] is the sub-list for extension extendee
-	0,   // [0:110] is the sub-list for field type_name
+	84,  // 96: engram.v1.BindCodeContextResponse.index_scope:type_name -> engram.v1.CodeIndexScope
+	84,  // 97: engram.v1.BeginCodeIndexRequest.scope:type_name -> engram.v1.CodeIndexScope
+	83,  // 98: engram.v1.BeginCodeIndexRequest.expected_parent:type_name -> engram.v1.ContextRef
+	84,  // 99: engram.v1.BeginCodeIndexResponse.scope:type_name -> engram.v1.CodeIndexScope
+	98,  // 100: engram.v1.BeginCodeIndexResponse.lease_expires_at:type_name -> google.protobuf.Timestamp
+	84,  // 101: engram.v1.StageCodeIndexFrame.scope:type_name -> engram.v1.CodeIndexScope
+	84,  // 102: engram.v1.FinalizeCodeIndexRequest.scope:type_name -> engram.v1.CodeIndexScope
+	83,  // 103: engram.v1.FinalizeCodeIndexRequest.expected_parent:type_name -> engram.v1.ContextRef
+	98,  // 104: engram.v1.FinalizeCodeIndexRequest.scan_started_at:type_name -> google.protobuf.Timestamp
+	98,  // 105: engram.v1.FinalizeCodeIndexRequest.scan_completed_at:type_name -> google.protobuf.Timestamp
+	83,  // 106: engram.v1.FinalizeCodeIndexResponse.published_context:type_name -> engram.v1.ContextRef
+	83,  // 107: engram.v1.QueryCodeRequest.context:type_name -> engram.v1.ContextRef
+	83,  // 108: engram.v1.QueryCodeResponse.context:type_name -> engram.v1.ContextRef
+	83,  // 109: engram.v1.ExploreCodeRequest.context:type_name -> engram.v1.ContextRef
+	83,  // 110: engram.v1.ExploreCodeResponse.context:type_name -> engram.v1.ContextRef
+	32,  // 111: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
+	34,  // 112: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
+	37,  // 113: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
+	17,  // 114: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
+	19,  // 115: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
+	21,  // 116: engram.v1.EngramService.GetSessionStartContext:input_type -> engram.v1.GetSessionStartContextRequest
+	50,  // 117: engram.v1.EngramService.GetAmbientCandidates:input_type -> engram.v1.GetAmbientCandidatesRequest
+	30,  // 118: engram.v1.EngramService.NegotiateVersion:input_type -> engram.v1.NegotiateVersionRequest
+	40,  // 119: engram.v1.EngramService.CodeIndexNegotiate:input_type -> engram.v1.CodeIndexNegotiateRequest
+	42,  // 120: engram.v1.EngramService.CodeIndexUpload:input_type -> engram.v1.CodeChunkUpload
+	48,  // 121: engram.v1.EngramService.RegisterProjectIdentityV3:input_type -> engram.v1.RegisterProjectIdentityV3Request
+	62,  // 122: engram.v1.EngramService.Bind:input_type -> engram.v1.HostAdvisorBindRequest
+	68,  // 123: engram.v1.EngramService.Advise:input_type -> engram.v1.HostAdvisorAdviseRequest
+	81,  // 124: engram.v1.EngramService.Observe:input_type -> engram.v1.HostAdvisorObserveRequest
+	85,  // 125: engram.v1.EngramService.BindCodeContext:input_type -> engram.v1.BindCodeContextRequest
+	87,  // 126: engram.v1.EngramService.BeginCodeIndex:input_type -> engram.v1.BeginCodeIndexRequest
+	89,  // 127: engram.v1.EngramService.StageCodeIndex:input_type -> engram.v1.StageCodeIndexFrame
+	91,  // 128: engram.v1.EngramService.FinalizeCodeIndex:input_type -> engram.v1.FinalizeCodeIndexRequest
+	93,  // 129: engram.v1.EngramService.QueryCode:input_type -> engram.v1.QueryCodeRequest
+	95,  // 130: engram.v1.EngramService.ExploreCode:input_type -> engram.v1.ExploreCodeRequest
+	33,  // 131: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
+	35,  // 132: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
+	38,  // 133: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
+	18,  // 134: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
+	20,  // 135: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
+	22,  // 136: engram.v1.EngramService.GetSessionStartContext:output_type -> engram.v1.GetSessionStartContextResponse
+	51,  // 137: engram.v1.EngramService.GetAmbientCandidates:output_type -> engram.v1.GetAmbientCandidatesResponse
+	31,  // 138: engram.v1.EngramService.NegotiateVersion:output_type -> engram.v1.NegotiateVersionResponse
+	41,  // 139: engram.v1.EngramService.CodeIndexNegotiate:output_type -> engram.v1.CodeIndexNegotiateResponse
+	43,  // 140: engram.v1.EngramService.CodeIndexUpload:output_type -> engram.v1.CodeIndexUploadReceipt
+	49,  // 141: engram.v1.EngramService.RegisterProjectIdentityV3:output_type -> engram.v1.RegisterProjectIdentityV3Response
+	63,  // 142: engram.v1.EngramService.Bind:output_type -> engram.v1.HostAdvisorBindResponse
+	76,  // 143: engram.v1.EngramService.Advise:output_type -> engram.v1.HostAdvisorAdviseResponse
+	82,  // 144: engram.v1.EngramService.Observe:output_type -> engram.v1.HostAdvisorObserveResponse
+	86,  // 145: engram.v1.EngramService.BindCodeContext:output_type -> engram.v1.BindCodeContextResponse
+	88,  // 146: engram.v1.EngramService.BeginCodeIndex:output_type -> engram.v1.BeginCodeIndexResponse
+	90,  // 147: engram.v1.EngramService.StageCodeIndex:output_type -> engram.v1.StageCodeIndexResponse
+	92,  // 148: engram.v1.EngramService.FinalizeCodeIndex:output_type -> engram.v1.FinalizeCodeIndexResponse
+	94,  // 149: engram.v1.EngramService.QueryCode:output_type -> engram.v1.QueryCodeResponse
+	96,  // 150: engram.v1.EngramService.ExploreCode:output_type -> engram.v1.ExploreCodeResponse
+	131, // [131:151] is the sub-list for method output_type
+	111, // [111:131] is the sub-list for method input_type
+	111, // [111:111] is the sub-list for extension type_name
+	111, // [111:111] is the sub-list for extension extendee
+	0,   // [0:111] is the sub-list for field type_name
 }
 
 func init() { file_proto_engram_v1_engram_proto_init() }

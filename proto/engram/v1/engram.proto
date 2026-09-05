@@ -875,11 +875,15 @@ message CodeIndexScope {
 message BindCodeContextRequest {
   string client_session_id = 1;
   ContextRef requested_context = 2;
+  string context_handle = 3;
 }
 
 message BindCodeContextResponse {
   string context_handle = 1;
   ContextRef context = 2;
+  CodeIndexScope index_scope = 3;
+  string local_root_id = 4;
+  string workstation_id = 5;
 }
 
 message BeginCodeIndexRequest {
@@ -911,6 +915,8 @@ message StageCodeIndexResponse {
   string build_id = 1;
   uint64 accepted_sequence = 2;
   uint64 accepted_part_count = 3;
+  // Aggregate DigestIndexParts across every canonical frame acknowledged in this
+  // complete client stream. Send unchanged as FinalizeCodeIndexRequest.parts_digest.
   string part_digest = 4;
 }
 

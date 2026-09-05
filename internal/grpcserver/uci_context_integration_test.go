@@ -46,6 +46,10 @@ const (
 	uciContextIntegrationIncarnationA           = "60000000-0000-4000-8000-000000000001"
 	uciContextIntegrationIncarnationB           = "60000000-0000-4000-8000-000000000002"
 	uciContextIntegrationPrivateIncarnation     = "60000000-0000-4000-8000-000000000003"
+	uciContextIntegrationLocalRootA             = "70000000-0000-4000-8000-000000000001"
+	uciContextIntegrationLocalRootB             = "70000000-0000-4000-8000-000000000002"
+	uciContextIntegrationWorkstationA           = "80000000-0000-4000-8000-000000000001"
+	uciContextIntegrationWorkstationB           = "80000000-0000-4000-8000-000000000002"
 	uciContextIntegrationLegacySelector         = "legacy-project-selector"
 	uciContextIntegrationConflictingSelector    = "legacy-project-selector-conflict"
 	uciContextIntegrationDigest                 = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -61,7 +65,7 @@ func TestUCIContextIntegrationLegacySelectorUsesBoundCheckout(t *testing.T) {
 		RequestedContext: uciContextIntegrationProtoRef(fixture.refA),
 	})
 	require.NoError(t, err)
-	requireUCIContextIntegrationProtoRef(t, fixture.refA, bound.GetContext())
+	requireUCIContextIntegrationBinding(t, fixture.bindingA, bound)
 	require.Len(t, fixture.catalog.calls, 1)
 	require.Len(t, fixture.authorizer.accesses, 1)
 
@@ -184,15 +188,17 @@ func TestUCIContextIntegrationRoutesIndependentBindingsToDistinctPublicationAndQ
 		frames: []*pb.StageCodeIndexFrame{uciContextIntegrationStageFrame(scopeA, beginA.GetBuildId(), beginA.GetLeaseEpoch())},
 	}
 	require.NoError(t, fixture.server.StageCodeIndex(stageA))
+	require.NotNil(t, stageA.response)
 	stageB := &uciContextIntegrationStageStream{
 		ctx:    ctxB,
 		frames: []*pb.StageCodeIndexFrame{uciContextIntegrationStageFrame(scopeB, beginB.GetBuildId(), beginB.GetLeaseEpoch())},
 	}
 	require.NoError(t, fixture.server.StageCodeIndex(stageB))
+	require.NotNil(t, stageB.response)
 
-	finalizedA, err := fixture.server.FinalizeCodeIndex(ctxA, uciContextIntegrationFinalizeRequest(scopeA, beginA, boundA.GetContext()))
+	finalizedA, err := fixture.server.FinalizeCodeIndex(ctxA, uciContextIntegrationFinalizeRequest(scopeA, beginA, boundA.GetContext(), stageA.response.GetPartDigest()))
 	require.NoError(t, err)
-	finalizedB, err := fixture.server.FinalizeCodeIndex(ctxB, uciContextIntegrationFinalizeRequest(scopeB, beginB, boundB.GetContext()))
+	finalizedB, err := fixture.server.FinalizeCodeIndex(ctxB, uciContextIntegrationFinalizeRequest(scopeB, beginB, boundB.GetContext(), stageB.response.GetPartDigest()))
 	require.NoError(t, err)
 	queriedA, err := fixture.server.QueryCode(ctxA, uciContextIntegrationProtoQueryRequest(finalizedA.GetPublishedContext()))
 	require.NoError(t, err)
@@ -207,6 +213,8 @@ func TestUCIContextIntegrationRoutesIndependentBindingsToDistinctPublicationAndQ
 	requirePublicationTarget(t, fixture.publication.beginCalls, fixture.refA, scopeA, fixture.refB, scopeB)
 	requirePublicationTarget(t, fixture.publication.stageCalls, fixture.refA, scopeA, fixture.refB, scopeB)
 	requirePublicationTarget(t, fixture.publication.finalizeCalls, fixture.refA, scopeA, fixture.refB, scopeB)
+	require.Equal(t, stageA.response.GetPartDigest(), fixture.publication.finalizeCalls[0].partsDigest)
+	require.Equal(t, stageB.response.GetPartDigest(), fixture.publication.finalizeCalls[1].partsDigest)
 	require.Len(t, fixture.publication.stageCalls, 2)
 	require.Equal(t, []byte(uciContextIntegrationSharedPathAndLabelJSON), fixture.publication.stageCalls[0].payload)
 	require.Equal(t, fixture.publication.stageCalls[0].payload, fixture.publication.stageCalls[1].payload, "same path and label must not collapse distinct checkout routes")
@@ -215,11 +223,23 @@ func TestUCIContextIntegrationRoutesIndependentBindingsToDistinctPublicationAndQ
 	require.Equal(t, fixture.refB, fixture.query.calls[1].ref)
 	require.Equal(t, "SharedSymbol", fixture.query.calls[0].query)
 	require.Equal(t, fixture.query.calls[0].query, fixture.query.calls[1].query)
-	require.Len(t, fixture.catalog.calls, 10, "each binding and publication/query access must resolve the caller context")
-	require.Len(t, fixture.authorizer.accesses, 10, "each resolved caller context must be authorized")
+	require.Len(t, fixture.catalog.calls, 4, "requested bindings and explicit queries reload canonical Views")
+	require.Len(t, fixture.authorizer.accesses, 4, "requested bindings and explicit queries authorize canonical Views")
 	for index, access := range fixture.authorizer.accesses {
 		require.Equal(t, fixture.catalog.calls[index].SourceID, access.SourceID)
 		require.Equal(t, fixture.catalog.calls[index].CheckoutID, access.CheckoutID)
+	}
+	require.Len(t, fixture.handles.scopeAuthorizations, 6, "begin, stage, and finalize reauthorize each exact client scope through the handle owner")
+	for index, authorization := range fixture.handles.scopeAuthorizations {
+		wantBinding := fixture.bindingA
+		wantClient := uciContextIntegrationClientA
+		if index%2 == 1 {
+			wantBinding = fixture.bindingB
+			wantClient = uciContextIntegrationClientB
+		}
+		require.Equal(t, wantClient, authorization.clientSessionID)
+		require.Equal(t, wantBinding.Scope, authorization.scope)
+		require.Equal(t, wantBinding.ProfileID, authorization.profileID)
 	}
 }
 
@@ -239,11 +259,145 @@ func TestUCIContextIntegrationExplicitQueryDoesNotReplaceSelectedDefault(t *test
 	scopeA := uciContextIntegrationScope(fixture.refA, uciContextIntegrationIncarnationA)
 	begin, err := fixture.server.BeginCodeIndex(ctx, uciContextIntegrationBeginRequest(scopeA))
 	require.NoError(t, err)
-	require.Equal(t, "build-"+fixture.refA.CheckoutID[:8], begin.GetBuildId())
+	require.Equal(t, uciContextIntegrationIncarnationA, begin.GetBuildId())
 	require.Len(t, fixture.query.calls, 1)
 	require.Equal(t, fixture.refB, fixture.query.calls[0].ref)
 	require.Len(t, fixture.publication.beginCalls, 1)
 	require.Equal(t, fixture.refA, fixture.publication.beginCalls[0].ref)
+}
+
+func TestUCIContextIntegrationHandlePreservesSelectedDefault(t *testing.T) {
+	fixture := newUCIContextIntegrationFixture(t)
+	ctx := fixture.clientContext(uciContextIntegrationClientA, uciContextIntegrationPrincipalA)
+
+	_, err := fixture.server.BindCodeContext(ctx, &pb.BindCodeContextRequest{
+		ClientSessionId:  uciContextIntegrationClientA,
+		RequestedContext: uciContextIntegrationProtoRef(fixture.refA),
+	})
+	require.NoError(t, err)
+	fixture.handles.register(uciContextIntegrationClientA, "context-handle-b", fixture.bindingB)
+	catalogCalls := len(fixture.catalog.calls)
+	authorizerCalls := len(fixture.authorizer.accesses)
+
+	bound, err := fixture.server.BindCodeContext(ctx, &pb.BindCodeContextRequest{
+		ClientSessionId: uciContextIntegrationClientA,
+		ContextHandle:   "context-handle-b",
+	})
+	require.NoError(t, err)
+	requireUCIContextIntegrationBinding(t, fixture.bindingB, bound)
+	require.Len(t, fixture.handles.authorizations, 1)
+	require.Equal(t, uciContextIntegrationClientA, fixture.handles.authorizations[0].clientSessionID)
+	require.Equal(t, "context-handle-b", fixture.handles.authorizations[0].handle)
+	require.Len(t, fixture.handles.issues, 1, "only the handle owner may issue requested-context handles")
+	require.Len(t, fixture.runtime.bindingCalls, 1, "a handle branch must not ask the binding catalog to resolve another context")
+	require.Len(t, fixture.catalog.calls, catalogCalls, "a handle branch must not replace the selected resolver binding")
+	require.Len(t, fixture.authorizer.accesses, authorizerCalls, "a handle branch must reauthorize through the handle owner")
+
+	_, err = fixture.server.BeginCodeIndex(ctx, uciContextIntegrationBeginRequest(uciContextIntegrationScope(fixture.refA, uciContextIntegrationIncarnationA)))
+	require.NoError(t, err)
+	require.Len(t, fixture.publication.beginCalls, 1)
+	require.Equal(t, fixture.refA, fixture.publication.beginCalls[0].ref, "the selected default must remain the requested A context")
+}
+
+func TestUCIContextIntegrationHandleAcceptsCompleteNoViewBinding(t *testing.T) {
+	fixture := newUCIContextIntegrationFixture(t)
+	ctx := fixture.clientContext(uciContextIntegrationClientA, uciContextIntegrationPrincipalA)
+	binding := uciContextIntegrationNoViewBinding(
+		fixture.refA,
+		uciContextIntegrationIncarnationA,
+		uciContextIntegrationLocalRootA,
+		uciContextIntegrationWorkstationA,
+	)
+	fixture.handles.register(uciContextIntegrationClientA, "registered-no-view", binding)
+
+	bound, err := fixture.server.BindCodeContext(ctx, &pb.BindCodeContextRequest{
+		ClientSessionId: uciContextIntegrationClientA,
+		ContextHandle:   "registered-no-view",
+	})
+	require.NoError(t, err)
+	requireUCIContextIntegrationBinding(t, binding, bound)
+	require.Len(t, fixture.handles.authorizations, 1)
+	require.Empty(t, fixture.catalog.calls, "a server-authorized no-View handle must not resolve raw context input")
+	require.Empty(t, fixture.authorizer.accesses)
+	require.Empty(t, fixture.runtime.bindingCalls)
+}
+
+func TestUCIContextIntegrationNoViewHandleBeginsInitialIndex(t *testing.T) {
+	fixture := newUCIContextIntegrationFixture(t)
+	ctx := fixture.clientContext(uciContextIntegrationClientA, uciContextIntegrationPrincipalA)
+	binding := uciContextIntegrationNoViewBinding(
+		fixture.refA,
+		uciContextIntegrationIncarnationA,
+		uciContextIntegrationLocalRootA,
+		uciContextIntegrationWorkstationA,
+	)
+	fixture.handles.register(uciContextIntegrationClientA, "registered-no-view", binding)
+
+	_, err := fixture.server.BindCodeContext(ctx, &pb.BindCodeContextRequest{
+		ClientSessionId: uciContextIntegrationClientA,
+		ContextHandle:   "registered-no-view",
+	})
+	require.NoError(t, err)
+	scope := uciContextIntegrationScope(fixture.refA, uciContextIntegrationIncarnationA)
+	begin, err := fixture.server.BeginCodeIndex(ctx, uciContextIntegrationBeginRequest(scope))
+	require.NoError(t, err)
+	require.True(t, proto.Equal(scope, begin.GetScope()))
+	require.Len(t, fixture.handles.scopeAuthorizations, 1)
+	require.Equal(t, uciContextIntegrationClientA, fixture.handles.scopeAuthorizations[0].clientSessionID)
+	require.Equal(t, binding.Scope, fixture.handles.scopeAuthorizations[0].scope)
+	require.Equal(t, binding.ProfileID, fixture.handles.scopeAuthorizations[0].profileID)
+	require.Len(t, fixture.publication.beginCalls, 1)
+	require.Nil(t, fixture.publication.beginCalls[0].binding.Context)
+	require.Equal(t, binding.Scope, fixture.publication.beginCalls[0].binding.Scope)
+	require.Equal(t, binding.ProfileID, fixture.publication.beginCalls[0].binding.ProfileID)
+
+	withParent := uciContextIntegrationBeginRequest(uciContextIntegrationScope(fixture.refA, uciContextIntegrationIncarnationA))
+	withParent.ExpectedParent = uciContextIntegrationProtoRef(fixture.refA)
+	begin, err = fixture.server.BeginCodeIndex(ctx, withParent)
+	require.Nil(t, begin)
+	requireUCIContextIntegrationClosedStatus(t, err, codes.FailedPrecondition, uci.ContextMismatch)
+	require.Len(t, fixture.publication.beginCalls, 1, "a no-View binding must reject expected_parent before the runtime")
+}
+
+func TestUCIContextIntegrationUnownedIndexScopeStopsBeforeRuntime(t *testing.T) {
+	fixture := newUCIContextIntegrationFixture(t)
+	ctx := fixture.clientContext(uciContextIntegrationClientA, uciContextIntegrationPrincipalA)
+	_, err := fixture.server.BindCodeContext(ctx, &pb.BindCodeContextRequest{
+		ClientSessionId:  uciContextIntegrationClientA,
+		RequestedContext: uciContextIntegrationProtoRef(fixture.refA),
+	})
+	require.NoError(t, err)
+
+	begin, err := fixture.server.BeginCodeIndex(ctx, uciContextIntegrationBeginRequest(uciContextIntegrationScope(fixture.refB, uciContextIntegrationIncarnationB)))
+	require.Nil(t, begin)
+	require.Error(t, err)
+	require.Len(t, fixture.handles.scopeAuthorizations, 1)
+	require.Equal(t, uciContextIntegrationClientA, fixture.handles.scopeAuthorizations[0].clientSessionID)
+	require.Empty(t, fixture.publication.beginCalls, "an unowned scope must not reach the publication runtime")
+}
+
+func TestUCIContextIntegrationHandleRejectsIncompleteNoViewBinding(t *testing.T) {
+	fixture := newUCIContextIntegrationFixture(t)
+	ctx := fixture.clientContext(uciContextIntegrationClientA, uciContextIntegrationPrincipalA)
+	binding := uciContextIntegrationNoViewBinding(
+		fixture.refA,
+		uciContextIntegrationIncarnationA,
+		uciContextIntegrationLocalRootA,
+		uciContextIntegrationWorkstationA,
+	)
+	binding.LocalRootID = ""
+	fixture.handles.register(uciContextIntegrationClientA, "incomplete-no-view", binding)
+
+	bound, err := fixture.server.BindCodeContext(ctx, &pb.BindCodeContextRequest{
+		ClientSessionId: uciContextIntegrationClientA,
+		ContextHandle:   "incomplete-no-view",
+	})
+	require.Nil(t, bound)
+	require.Equal(t, codes.Internal, status.Code(err))
+	require.Len(t, fixture.handles.authorizations, 1)
+	require.Empty(t, fixture.catalog.calls)
+	require.Empty(t, fixture.authorizer.accesses)
+	require.Empty(t, fixture.runtime.bindingCalls)
 }
 
 func TestUCIContextIntegrationBeginParentConflictStopsBeforePublication(t *testing.T) {
@@ -278,6 +432,9 @@ type uciContextIntegrationFixture struct {
 	publication *uciContextIntegrationPublication
 	query       *uciContextIntegrationQuery
 	runtime     *uciContextIntegrationRuntime
+	handles     *uciContextIntegrationHandlePort
+	bindingA    uci.IndexBinding
+	bindingB    uci.IndexBinding
 	refA        uci.ContextRef
 	refB        uci.ContextRef
 	privateRef  uci.ContextRef
@@ -310,6 +467,19 @@ func newUCIContextIntegrationFixture(t *testing.T) *uciContextIntegrationFixture
 		uciContextIntegrationPrivateProfile,
 		3,
 	)
+	bindingA := uciContextIntegrationBinding(
+		refA,
+		uciContextIntegrationIncarnationA,
+		uciContextIntegrationLocalRootA,
+		uciContextIntegrationWorkstationA,
+	)
+	bindingB := uciContextIntegrationBinding(
+		refB,
+		uciContextIntegrationIncarnationB,
+		uciContextIntegrationLocalRootB,
+		uciContextIntegrationWorkstationB,
+	)
+	handles := &uciContextIntegrationHandlePort{bindings: make(map[uciContextIntegrationHandleKey]uci.IndexBinding)}
 	fixture := &uciContextIntegrationFixture{
 		catalog: &uciContextIntegrationCatalog{records: map[uciContextIntegrationRefKey]uci.ContextRecord{
 			uciContextIntegrationKey(refA):       {Ref: refA, AuthRealm: uciContextIntegrationRealm},
@@ -334,16 +504,24 @@ func newUCIContextIntegrationFixture(t *testing.T) *uciContextIntegrationFixture
 		refA:        refA,
 		refB:        refB,
 		privateRef:  privateRef,
+		handles:     handles,
+		bindingA:    bindingA,
+		bindingB:    bindingB,
 	}
 	fixture.runtime = &uciContextIntegrationRuntime{
 		publication: fixture.publication,
 		query:       fixture.query,
+		bindings: map[uciContextIntegrationRefKey]uci.IndexBinding{
+			uciContextIntegrationKey(refA): bindingA,
+			uciContextIntegrationKey(refB): bindingB,
+		},
 	}
 	_, fixture.server = New(nil, nil)
 	fixture.server.SetUCITransport(NewContextAwareUCITransport(
 		uci.NewContextResolver(fixture.catalog, fixture.authorizer),
 		uci.NewAliasResolver(fixture.aliases.Lookup),
 		fixture.runtime,
+		fixture.handles,
 	))
 	return fixture
 }
@@ -398,24 +576,42 @@ func (aliases *uciContextIntegrationAliases) Lookup(_ context.Context, key uci.L
 }
 
 type uciContextIntegrationRuntime struct {
-	publication *uciContextIntegrationPublication
-	query       *uciContextIntegrationQuery
+	publication  *uciContextIntegrationPublication
+	query        *uciContextIntegrationQuery
+	bindings     map[uciContextIntegrationRefKey]uci.IndexBinding
+	bindingCalls []uci.IndexBindingSelector
+}
+
+func (runtime *uciContextIntegrationRuntime) LoadIndexBinding(_ context.Context, selector uci.IndexBindingSelector) (uci.IndexBinding, error) {
+	selector = selector.Clone()
+	runtime.bindingCalls = append(runtime.bindingCalls, selector)
+	if err := selector.Validate(); err != nil {
+		return uci.IndexBinding{}, err
+	}
+	if selector.Context == nil {
+		return uci.IndexBinding{}, errors.New("no-View binding is handle-owned")
+	}
+	binding, found := runtime.bindings[uciContextIntegrationKey(*selector.Context)]
+	if !found {
+		return uci.IndexBinding{}, errors.New("unknown UCI index binding")
+	}
+	return binding.Clone(), nil
 }
 
 func (runtime *uciContextIntegrationRuntime) LegacyCodeIndexNegotiate(_ context.Context, authorized uci.AuthorizedContext, request *pb.CodeIndexNegotiateRequest) (*pb.CodeIndexNegotiateResponse, error) {
 	return runtime.publication.LegacyNegotiate(authorized, request), nil
 }
 
-func (runtime *uciContextIntegrationRuntime) BeginCodeIndex(_ context.Context, authorized uci.AuthorizedContext, request *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error) {
-	return runtime.publication.Begin(authorized, request), nil
+func (runtime *uciContextIntegrationRuntime) BeginCodeIndex(_ context.Context, binding uci.IndexBinding, request *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error) {
+	return runtime.publication.Begin(binding, request), nil
 }
 
-func (runtime *uciContextIntegrationRuntime) StageCodeIndex(_ context.Context, authorized uci.AuthorizedContext, frames []*pb.StageCodeIndexFrame) (*pb.StageCodeIndexResponse, error) {
-	return runtime.publication.Stage(authorized, frames), nil
+func (runtime *uciContextIntegrationRuntime) StageCodeIndex(_ context.Context, binding uci.IndexBinding, frames []*pb.StageCodeIndexFrame) (*pb.StageCodeIndexResponse, error) {
+	return runtime.publication.Stage(binding, frames), nil
 }
 
-func (runtime *uciContextIntegrationRuntime) FinalizeCodeIndex(_ context.Context, authorized uci.AuthorizedContext, request *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error) {
-	return runtime.publication.Finalize(authorized, request), nil
+func (runtime *uciContextIntegrationRuntime) FinalizeCodeIndex(_ context.Context, binding uci.IndexBinding, request *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error) {
+	return runtime.publication.Finalize(binding, request), nil
 }
 
 func (runtime *uciContextIntegrationRuntime) QueryCode(_ context.Context, authorized uci.AuthorizedContext, request *pb.QueryCodeRequest) (*pb.QueryCodeResponse, error) {
@@ -426,10 +622,80 @@ func (runtime *uciContextIntegrationRuntime) ExploreCode(_ context.Context, auth
 	return runtime.query.Explore(authorized, request), nil
 }
 
+type uciContextIntegrationHandleKey struct {
+	clientSessionID string
+	handle          string
+}
+
+type uciContextIntegrationHandleAuthorization struct {
+	clientSessionID string
+	handle          string
+}
+
+type uciContextIntegrationScopeAuthorization struct {
+	clientSessionID string
+	scope           uci.IndexScope
+	profileID       string
+}
+
+type uciContextIntegrationHandleIssue struct {
+	clientSessionID string
+	binding         uci.IndexBinding
+}
+
+type uciContextIntegrationHandlePort struct {
+	bindings            map[uciContextIntegrationHandleKey]uci.IndexBinding
+	authorizations      []uciContextIntegrationHandleAuthorization
+	issues              []uciContextIntegrationHandleIssue
+	scopeAuthorizations []uciContextIntegrationScopeAuthorization
+}
+
+func (port *uciContextIntegrationHandlePort) AuthorizeCodeContextHandle(_ context.Context, clientSessionID, handle string) (uci.IndexBinding, error) {
+	port.authorizations = append(port.authorizations, uciContextIntegrationHandleAuthorization{clientSessionID: clientSessionID, handle: handle})
+	binding, found := port.bindings[uciContextIntegrationHandleKey{clientSessionID: clientSessionID, handle: handle}]
+	if !found {
+		return uci.IndexBinding{}, errors.New("unknown context handle")
+	}
+	return binding.Clone(), nil
+}
+
+func (port *uciContextIntegrationHandlePort) AuthorizeCodeIndexScope(_ context.Context, clientSessionID string, scope uci.IndexScope, profileID string) (uci.IndexBinding, error) {
+	port.scopeAuthorizations = append(port.scopeAuthorizations, uciContextIntegrationScopeAuthorization{
+		clientSessionID: clientSessionID,
+		scope:           scope,
+		profileID:       profileID,
+	})
+	for key, binding := range port.bindings {
+		if key.clientSessionID == clientSessionID && binding.Scope == scope && binding.ProfileID == profileID {
+			return binding.Clone(), nil
+		}
+	}
+	return uci.IndexBinding{}, errors.New("unowned index scope")
+}
+
+func (port *uciContextIntegrationHandlePort) IssueCodeContextHandle(_ context.Context, clientSessionID string, binding uci.IndexBinding) (string, error) {
+	binding = binding.Clone()
+	port.issues = append(port.issues, uciContextIntegrationHandleIssue{clientSessionID: clientSessionID, binding: binding})
+	handle := "context-handle-" + binding.Scope.CheckoutID[:8]
+	port.register(clientSessionID, handle, binding)
+	return handle, nil
+}
+
+func (port *uciContextIntegrationHandlePort) register(clientSessionID, handle string, binding uci.IndexBinding) {
+	if port.bindings == nil {
+		port.bindings = make(map[uciContextIntegrationHandleKey]uci.IndexBinding)
+	}
+	port.bindings[uciContextIntegrationHandleKey{clientSessionID: clientSessionID, handle: handle}] = binding.Clone()
+}
+
+var _ CodeContextHandlePort = (*uciContextIntegrationHandlePort)(nil)
+
 type uciContextIntegrationPublicationCall struct {
-	ref     uci.ContextRef
-	scope   *pb.CodeIndexScope
-	payload []byte
+	ref         uci.ContextRef
+	scope       *pb.CodeIndexScope
+	payload     []byte
+	partsDigest string
+	binding     uci.IndexBinding
 }
 
 type uciContextIntegrationPublication struct {
@@ -445,25 +711,36 @@ func (publication *uciContextIntegrationPublication) LegacyNegotiate(authorized 
 	return &pb.CodeIndexNegotiateResponse{NeedChunks: []string{"needed-" + ref.CheckoutID[:8]}}
 }
 
-func (publication *uciContextIntegrationPublication) Begin(authorized uci.AuthorizedContext, request *pb.BeginCodeIndexRequest) *pb.BeginCodeIndexResponse {
-	ref := authorized.Ref()
+func uciContextIntegrationPublicationRef(binding uci.IndexBinding) uci.ContextRef {
+	if binding.Context == nil {
+		return uci.ContextRef{}
+	}
+	return *binding.Context
+}
+
+func (publication *uciContextIntegrationPublication) Begin(binding uci.IndexBinding, request *pb.BeginCodeIndexRequest) *pb.BeginCodeIndexResponse {
+	binding = binding.Clone()
+	ref := uciContextIntegrationPublicationRef(binding)
 	publication.beginCalls = append(publication.beginCalls, uciContextIntegrationPublicationCall{
-		ref:   ref,
-		scope: proto.Clone(request.GetScope()).(*pb.CodeIndexScope),
+		ref:     ref,
+		binding: binding,
+		scope:   proto.Clone(request.GetScope()).(*pb.CodeIndexScope),
 	})
 	return &pb.BeginCodeIndexResponse{
 		Scope:          request.GetScope(),
-		BuildId:        "build-" + ref.CheckoutID[:8],
+		BuildId:        binding.Scope.IncarnationID,
 		LeaseEpoch:     7,
 		LeaseExpiresAt: timestamppb.New(time.Date(2026, time.September, 5, 12, 0, 0, 0, time.UTC)),
 	}
 }
 
-func (publication *uciContextIntegrationPublication) Stage(authorized uci.AuthorizedContext, frames []*pb.StageCodeIndexFrame) *pb.StageCodeIndexResponse {
-	ref := authorized.Ref()
+func (publication *uciContextIntegrationPublication) Stage(binding uci.IndexBinding, frames []*pb.StageCodeIndexFrame) *pb.StageCodeIndexResponse {
+	binding = binding.Clone()
+	ref := uciContextIntegrationPublicationRef(binding)
 	first := frames[0]
 	publication.stageCalls = append(publication.stageCalls, uciContextIntegrationPublicationCall{
 		ref:     ref,
+		binding: binding,
 		scope:   proto.Clone(first.GetScope()).(*pb.CodeIndexScope),
 		payload: append([]byte(nil), first.GetPayload()...),
 	})
@@ -471,22 +748,46 @@ func (publication *uciContextIntegrationPublication) Stage(authorized uci.Author
 		BuildId:           first.GetBuildId(),
 		AcceptedSequence:  frames[len(frames)-1].GetSequence(),
 		AcceptedPartCount: uint64(len(frames)),
-		PartDigest:        first.GetPayloadDigest(),
+		PartDigest:        uciContextIntegrationStagedPartsDigest(frames),
 	}
 }
 
-func (publication *uciContextIntegrationPublication) Finalize(authorized uci.AuthorizedContext, request *pb.FinalizeCodeIndexRequest) *pb.FinalizeCodeIndexResponse {
-	ref := authorized.Ref()
+// uciContextIntegrationStagedPartsDigest mirrors the runtime's canonical
+// complete-stream acknowledgement aggregate.
+func uciContextIntegrationStagedPartsDigest(frames []*pb.StageCodeIndexFrame) string {
+	acks := make([]uci.IndexPartAck, len(frames))
+	for index, frame := range frames {
+		acks[index] = uci.IndexPartAck{
+			BuildID:  frame.GetBuildId(),
+			Sequence: uint32(frame.GetSequence()),
+			Digest:   uci.IndexDigest(frame.GetPayloadDigest()),
+		}
+	}
+	digest, err := uci.DigestIndexParts(acks)
+	if err != nil {
+		return ""
+	}
+	return string(digest)
+}
+
+func (publication *uciContextIntegrationPublication) Finalize(binding uci.IndexBinding, request *pb.FinalizeCodeIndexRequest) *pb.FinalizeCodeIndexResponse {
+	binding = binding.Clone()
+	ref := uciContextIntegrationPublicationRef(binding)
 	publication.finalizeCalls = append(publication.finalizeCalls, uciContextIntegrationPublicationCall{
-		ref:   ref,
-		scope: proto.Clone(request.GetScope()).(*pb.CodeIndexScope),
+		ref:         ref,
+		binding:     binding,
+		scope:       proto.Clone(request.GetScope()).(*pb.CodeIndexScope),
+		partsDigest: request.GetPartsDigest(),
 	})
-	return &pb.FinalizeCodeIndexResponse{
-		PublishedContext:           uciContextIntegrationProtoRef(ref),
+	response := &pb.FinalizeCodeIndexResponse{
 		BuildId:                    request.GetBuildId(),
 		LeaseEpoch:                 request.GetLeaseEpoch(),
 		AcceptedFilesystemSequence: request.GetObservedFilesystemSequence(),
 	}
+	if binding.Context != nil {
+		response.PublishedContext = uciContextIntegrationProtoRef(*binding.Context)
+	}
+	return response
 }
 
 type uciContextIntegrationQueryCall struct {
@@ -601,6 +902,27 @@ func uciContextIntegrationScope(ref uci.ContextRef, incarnationID string) *pb.Co
 	}
 }
 
+func uciContextIntegrationBinding(ref uci.ContextRef, incarnationID, localRootID, workstationID string) uci.IndexBinding {
+	contextRef := ref
+	return uci.IndexBinding{
+		Context: &contextRef,
+		Scope: uci.IndexScope{
+			SourceID:      ref.SourceID,
+			CheckoutID:    ref.CheckoutID,
+			IncarnationID: incarnationID,
+		},
+		ProfileID:     ref.AnalysisProfileID,
+		LocalRootID:   localRootID,
+		WorkstationID: workstationID,
+	}
+}
+
+func uciContextIntegrationNoViewBinding(ref uci.ContextRef, incarnationID, localRootID, workstationID string) uci.IndexBinding {
+	binding := uciContextIntegrationBinding(ref, incarnationID, localRootID, workstationID)
+	binding.Context = nil
+	return binding
+}
+
 func uciContextIntegrationBeginRequest(scope *pb.CodeIndexScope) *pb.BeginCodeIndexRequest {
 	return &pb.BeginCodeIndexRequest{
 		Scope:         scope,
@@ -622,7 +944,7 @@ func uciContextIntegrationStageFrame(scope *pb.CodeIndexScope, buildID string, l
 	}
 }
 
-func uciContextIntegrationFinalizeRequest(scope *pb.CodeIndexScope, begin *pb.BeginCodeIndexResponse, expectedParent *pb.ContextRef) *pb.FinalizeCodeIndexRequest {
+func uciContextIntegrationFinalizeRequest(scope *pb.CodeIndexScope, begin *pb.BeginCodeIndexResponse, expectedParent *pb.ContextRef, partsDigest string) *pb.FinalizeCodeIndexRequest {
 	startedAt := time.Date(2026, time.September, 5, 11, 59, 0, 0, time.UTC)
 	return &pb.FinalizeCodeIndexRequest{
 		Scope:                      scope,
@@ -630,7 +952,7 @@ func uciContextIntegrationFinalizeRequest(scope *pb.CodeIndexScope, begin *pb.Be
 		LeaseEpoch:                 begin.GetLeaseEpoch(),
 		ExpectedParent:             expectedParent,
 		ManifestPartCount:          1,
-		PartsDigest:                uciContextIntegrationDigest,
+		PartsDigest:                partsDigest,
 		ManifestEntryCount:         1,
 		ManifestDigest:             uciContextIntegrationDigest,
 		EdgeCount:                  0,
@@ -677,6 +999,25 @@ func requireUCIContextIntegrationClosedStatus(t *testing.T, err error, grpcCode 
 func requireUCIContextIntegrationProtoRef(t *testing.T, want uci.ContextRef, got *pb.ContextRef) {
 	t.Helper()
 	require.True(t, proto.Equal(uciContextIntegrationProtoRef(want), got), "context got=%v want=%v", got, want)
+}
+
+func requireUCIContextIntegrationBinding(t *testing.T, want uci.IndexBinding, got *pb.BindCodeContextResponse) {
+	t.Helper()
+	require.NoError(t, want.Validate())
+	require.NotNil(t, got)
+	if want.Context == nil {
+		require.Nil(t, got.GetContext())
+	} else {
+		requireUCIContextIntegrationProtoRef(t, *want.Context, got.GetContext())
+	}
+	require.True(t, proto.Equal(&pb.CodeIndexScope{
+		SourceId:          want.Scope.SourceID,
+		CheckoutId:        want.Scope.CheckoutID,
+		IncarnationId:     want.Scope.IncarnationID,
+		AnalysisProfileId: want.ProfileID,
+	}, got.GetIndexScope()), "scope got=%v want=%v", got.GetIndexScope(), want.Scope)
+	require.Equal(t, want.LocalRootID, got.GetLocalRootId())
+	require.Equal(t, want.WorkstationID, got.GetWorkstationId())
 }
 
 func requirePublicationTarget(t *testing.T, calls []uciContextIntegrationPublicationCall, firstRef uci.ContextRef, firstScope *pb.CodeIndexScope, secondRef uci.ContextRef, secondScope *pb.CodeIndexScope) {

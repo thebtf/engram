@@ -33,7 +33,7 @@ const (
 	maxUCITransportQueryBytes        = 16 << 10
 	maxUCITransportContinuationBytes = 4 << 10
 	maxUCITransportExploreBytes      = 8 << 10
-	maxUCITransportResponseBytes     = 4 << 10
+	maxUCITransportResponseBytes     = 5 << 10
 	maxUCITransportQueryResults      = 1000
 	maxUCITransportQueryResultBytes  = 1 << 20
 	maxUCITransportDeadlineMS        = 30_000
@@ -115,9 +115,9 @@ func (s *Server) BeginCodeIndex(ctx context.Context, request *pb.BeginCodeIndexR
 	return response, nil
 }
 
-// StageCodeIndex collects a complete ordered stream before one runtime call.
-// It never acknowledges a partial stream or closes successfully before the
-// runtime accepts every validated frame.
+// StageCodeIndex collects one complete ordered client stream before one runtime
+// call. A successful part_digest is the server-canonical aggregate for every
+// accepted frame and is passed unchanged to FinalizeCodeIndex.parts_digest.
 func (s *Server) StageCodeIndex(stream pb.EngramService_StageCodeIndexServer) error {
 	if stream == nil {
 		return uciTransportInvalidArgument()
@@ -304,10 +304,26 @@ func contextMatchesUCIIndexScope(reference *pb.ContextRef, scope *pb.CodeIndexSc
 }
 
 func validUCIBindCodeContextResponse(request *pb.BindCodeContextRequest, response *pb.BindCodeContextResponse) bool {
-	return response != nil && validUCIMessage(response, maxUCITransportResponseBytes) &&
-		validUCIIdentifier(response.GetContextHandle(), maxUCITransportIdentifierBytes) &&
-		validUCIContextRef(response.GetContext()) &&
-		sameUCIContextRef(request.GetRequestedContext(), response.GetContext())
+	if request == nil || response == nil ||
+		!validUCIMessage(response, maxUCITransportResponseBytes) ||
+		!validUCIIdentifier(response.GetContextHandle(), maxUCITransportIdentifierBytes) ||
+		!validUCIIndexScope(response.GetIndexScope()) ||
+		!validUCIIdentifier(response.GetLocalRootId(), maxUCITransportIdentifierBytes) ||
+		!validUCIIdentifier(response.GetWorkstationId(), maxUCITransportIdentifierBytes) {
+		return false
+	}
+	if response.GetContext() != nil &&
+		(!validUCIContextRef(response.GetContext()) || !contextMatchesUCIIndexScope(response.GetContext(), response.GetIndexScope())) {
+		return false
+	}
+	switch {
+	case request.GetRequestedContext() != nil && request.GetContextHandle() == "":
+		return response.GetContext() != nil && sameUCIContextRef(request.GetRequestedContext(), response.GetContext())
+	case request.GetRequestedContext() == nil && request.GetContextHandle() != "":
+		return response.GetContextHandle() == request.GetContextHandle()
+	default:
+		return false
+	}
 }
 
 func validUCIBeginCodeIndexResponse(request *pb.BeginCodeIndexRequest, response *pb.BeginCodeIndexResponse) bool {
@@ -351,8 +367,16 @@ func validUCIExploreCodeResponse(request *pb.ExploreCodeRequest, response *pb.Ex
 
 func validateUCIBindCodeContextRequest(request *pb.BindCodeContextRequest) error {
 	if request == nil || !validUCIMessage(request, maxUCITransportBindBytes) ||
-		!validUCIIdentifier(request.GetClientSessionId(), maxUCITransportIdentifierBytes) ||
-		!validUCIContextRef(request.GetRequestedContext()) {
+		!validUCIIdentifier(request.GetClientSessionId(), maxUCITransportIdentifierBytes) {
+		return uciTransportInvalidArgument()
+	}
+	switch {
+	case request.GetRequestedContext() != nil && request.GetContextHandle() == "":
+		if !validUCIContextRef(request.GetRequestedContext()) {
+			return uciTransportInvalidArgument()
+		}
+	case request.GetRequestedContext() == nil && validUCIIdentifier(request.GetContextHandle(), maxUCITransportIdentifierBytes):
+	default:
 		return uciTransportInvalidArgument()
 	}
 	return nil

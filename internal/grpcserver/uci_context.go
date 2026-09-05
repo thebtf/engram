@@ -2,8 +2,6 @@ package grpcserver
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"strings"
 
@@ -20,17 +18,26 @@ import (
 const (
 	legacyCodeIndexAliasDomain = "project"
 	legacyCodeIndexAliasScheme = "project_id"
-	contextAwareHandleBytes    = 32
 )
 
 // ContextAwareUCIRuntime is the scoped UCI runtime used after context resolution.
 type ContextAwareUCIRuntime interface {
+	uci.IndexBindingCatalog
 	LegacyCodeIndexNegotiate(context.Context, uci.AuthorizedContext, *pb.CodeIndexNegotiateRequest) (*pb.CodeIndexNegotiateResponse, error)
-	BeginCodeIndex(context.Context, uci.AuthorizedContext, *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error)
-	StageCodeIndex(context.Context, uci.AuthorizedContext, []*pb.StageCodeIndexFrame) (*pb.StageCodeIndexResponse, error)
-	FinalizeCodeIndex(context.Context, uci.AuthorizedContext, *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error)
+	BeginCodeIndex(context.Context, uci.IndexBinding, *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error)
+	StageCodeIndex(context.Context, uci.IndexBinding, []*pb.StageCodeIndexFrame) (*pb.StageCodeIndexResponse, error)
+	FinalizeCodeIndex(context.Context, uci.IndexBinding, *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error)
 	QueryCode(context.Context, uci.AuthorizedContext, *pb.QueryCodeRequest) (*pb.QueryCodeResponse, error)
 	ExploreCode(context.Context, uci.AuthorizedContext, *pb.ExploreCodeRequest) (*pb.ExploreCodeResponse, error)
+}
+
+// CodeContextHandlePort owns opaque client-session context handles. It accepts
+// no project, CWD, or path authority, and reauthorization must not replace the
+// resolver's selected default.
+type CodeContextHandlePort interface {
+	AuthorizeCodeContextHandle(context.Context, string, string) (uci.IndexBinding, error)
+	IssueCodeContextHandle(context.Context, string, uci.IndexBinding) (string, error)
+	AuthorizeCodeIndexScope(context.Context, string, uci.IndexScope, string) (uci.IndexBinding, error)
 }
 
 // legacyCodeIndexNegotiator is an optional adapter for the legacy negotiate RPC.
@@ -42,14 +49,16 @@ type contextAwareUCITransport struct {
 	resolver      *uci.ContextResolver
 	aliasResolver *uci.AliasResolver
 	runtime       ContextAwareUCIRuntime
+	handlePort    CodeContextHandlePort
 }
 
 // NewContextAwareUCITransport creates the UCI adapter that resolves each call's context.
-func NewContextAwareUCITransport(resolver *uci.ContextResolver, aliasResolver *uci.AliasResolver, runtime ContextAwareUCIRuntime) UCITransport {
+func NewContextAwareUCITransport(resolver *uci.ContextResolver, aliasResolver *uci.AliasResolver, runtime ContextAwareUCIRuntime, handlePort CodeContextHandlePort) UCITransport {
 	return &contextAwareUCITransport{
 		resolver:      resolver,
 		aliasResolver: aliasResolver,
 		runtime:       runtime,
+		handlePort:    handlePort,
 	}
 }
 
@@ -75,8 +84,32 @@ func (transport *contextAwareUCITransport) BindCodeContext(ctx context.Context, 
 	if request.GetClientSessionId() != caller.clientSessionID {
 		return nil, contextAwareClosedError(uci.ContextMismatch)
 	}
+	if handle := request.GetContextHandle(); handle != "" {
+		return transport.bindCodeContextHandle(ctx, caller, handle)
+	}
+	return transport.bindRequestedCodeContext(ctx, caller, contextAwareContextRefFromProto(request.GetRequestedContext()))
+}
 
-	reference := contextAwareContextRefFromProto(request.GetRequestedContext())
+func (transport *contextAwareUCITransport) bindCodeContextHandle(ctx context.Context, caller contextAwareCaller, handle string) (*pb.BindCodeContextResponse, error) {
+	port, err := transport.contextAwareHandlePort()
+	if err != nil {
+		return nil, err
+	}
+	binding, err := port.AuthorizeCodeContextHandle(ctx, caller.clientSessionID, handle)
+	if err != nil {
+		return nil, contextAwareRuntimeError(ctx, err)
+	}
+	if err := uciTransportContextError(ctx); err != nil {
+		return nil, err
+	}
+	binding, err = contextAwareValidatedIndexBinding(ctx, binding)
+	if err != nil {
+		return nil, err
+	}
+	return contextAwareBindCodeContextResponse(handle, binding), nil
+}
+
+func (transport *contextAwareUCITransport) bindRequestedCodeContext(ctx context.Context, caller contextAwareCaller, reference uci.ContextRef) (*pb.BindCodeContextResponse, error) {
 	authorized, err := transport.bindExplicit(ctx, caller, reference)
 	if err != nil {
 		return nil, err
@@ -84,15 +117,38 @@ func (transport *contextAwareUCITransport) BindCodeContext(ctx context.Context, 
 	if err := uciTransportContextError(ctx); err != nil {
 		return nil, err
 	}
-
-	handle, err := newContextAwareHandle()
+	runtime, err := transport.contextAwareRuntime()
 	if err != nil {
-		return nil, status.Error(codes.Internal, "UCI context handle generation failed")
+		return nil, err
 	}
-	return &pb.BindCodeContextResponse{
-		ContextHandle: handle,
-		Context:       contextAwareProtoContextRef(authorized.Ref()),
-	}, nil
+	authorizedRef := authorized.Ref()
+	selector := uci.IndexBindingSelector{Context: &authorizedRef}
+	binding, err := runtime.LoadIndexBinding(ctx, selector.Clone())
+	if err != nil {
+		return nil, contextAwareRuntimeError(ctx, err)
+	}
+	if err := uciTransportContextError(ctx); err != nil {
+		return nil, err
+	}
+	binding, err = contextAwareValidatedIndexBinding(ctx, binding)
+	if err != nil {
+		return nil, err
+	}
+	if binding.Context == nil || !contextAwareContextRefsEqual(authorizedRef, *binding.Context) {
+		return nil, status.Error(codes.Internal, "UCI context binding does not match authorized context")
+	}
+	port, err := transport.contextAwareHandlePort()
+	if err != nil {
+		return nil, err
+	}
+	handle, err := port.IssueCodeContextHandle(ctx, caller.clientSessionID, binding.Clone())
+	if err != nil {
+		return nil, contextAwareRuntimeError(ctx, err)
+	}
+	if err := uciTransportContextError(ctx); err != nil {
+		return nil, err
+	}
+	return contextAwareBindCodeContextResponse(handle, binding), nil
 }
 
 func (transport *contextAwareUCITransport) BeginCodeIndex(ctx context.Context, request *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error) {
@@ -103,14 +159,11 @@ func (transport *contextAwareUCITransport) BeginCodeIndex(ctx context.Context, r
 	if err != nil {
 		return nil, err
 	}
-	authorized, err := transport.resolveBound(ctx, caller)
+	binding, err := transport.authorizeCodeIndexScope(ctx, caller, request.GetScope())
 	if err != nil {
 		return nil, err
 	}
-	if !contextAwareScopeMatchesRef(request.GetScope(), authorized.Ref()) {
-		return nil, contextAwareClosedError(uci.ContextMismatch)
-	}
-	if parent := request.GetExpectedParent(); parent != nil && !contextAwareProtoRefMatches(authorized.Ref(), parent) {
+	if !contextAwareExpectedParentMatchesBinding(request.GetExpectedParent(), binding) {
 		return nil, contextAwareClosedError(uci.ContextMismatch)
 	}
 	runtime, err := transport.contextAwareRuntime()
@@ -118,7 +171,7 @@ func (transport *contextAwareUCITransport) BeginCodeIndex(ctx context.Context, r
 		return nil, err
 	}
 
-	response, err := runtime.BeginCodeIndex(ctx, authorized, proto.Clone(request).(*pb.BeginCodeIndexRequest))
+	response, err := runtime.BeginCodeIndex(ctx, binding.Clone(), proto.Clone(request).(*pb.BeginCodeIndexRequest))
 	if err != nil {
 		return nil, contextAwareRuntimeError(ctx, err)
 	}
@@ -136,12 +189,9 @@ func (transport *contextAwareUCITransport) StageCodeIndex(ctx context.Context, f
 	if err != nil {
 		return nil, err
 	}
-	authorized, err := transport.resolveBound(ctx, caller)
+	binding, err := transport.authorizeCodeIndexScope(ctx, caller, frames[0].GetScope())
 	if err != nil {
 		return nil, err
-	}
-	if !contextAwareScopeMatchesRef(frames[0].GetScope(), authorized.Ref()) {
-		return nil, contextAwareClosedError(uci.ContextMismatch)
 	}
 	runtime, err := transport.contextAwareRuntime()
 	if err != nil {
@@ -155,7 +205,7 @@ func (transport *contextAwareUCITransport) StageCodeIndex(ctx context.Context, f
 		}
 		clonedFrames[index] = proto.Clone(frame).(*pb.StageCodeIndexFrame)
 	}
-	response, err := runtime.StageCodeIndex(ctx, authorized, clonedFrames)
+	response, err := runtime.StageCodeIndex(ctx, binding.Clone(), clonedFrames)
 	if err != nil {
 		return nil, contextAwareRuntimeError(ctx, err)
 	}
@@ -173,15 +223,11 @@ func (transport *contextAwareUCITransport) FinalizeCodeIndex(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
-	authorized, err := transport.resolveBound(ctx, caller)
+	binding, err := transport.authorizeCodeIndexScope(ctx, caller, request.GetScope())
 	if err != nil {
 		return nil, err
 	}
-	resolvedRef := authorized.Ref()
-	if !contextAwareScopeMatchesRef(request.GetScope(), resolvedRef) {
-		return nil, contextAwareClosedError(uci.ContextMismatch)
-	}
-	if parent := request.GetExpectedParent(); parent != nil && !contextAwareProtoRefMatches(resolvedRef, parent) {
+	if !contextAwareExpectedParentMatchesBinding(request.GetExpectedParent(), binding) {
 		return nil, contextAwareClosedError(uci.ContextMismatch)
 	}
 	runtime, err := transport.contextAwareRuntime()
@@ -189,7 +235,7 @@ func (transport *contextAwareUCITransport) FinalizeCodeIndex(ctx context.Context
 		return nil, err
 	}
 
-	response, err := runtime.FinalizeCodeIndex(ctx, authorized, proto.Clone(request).(*pb.FinalizeCodeIndexRequest))
+	response, err := runtime.FinalizeCodeIndex(ctx, binding.Clone(), proto.Clone(request).(*pb.FinalizeCodeIndexRequest))
 	if err != nil {
 		return nil, contextAwareRuntimeError(ctx, err)
 	}
@@ -410,6 +456,43 @@ func (transport *contextAwareUCITransport) contextAwareRuntime() (ContextAwareUC
 	return transport.runtime, nil
 }
 
+func (transport *contextAwareUCITransport) contextAwareHandlePort() (CodeContextHandlePort, error) {
+	if transport == nil || transport.handlePort == nil {
+		return nil, uciTransportUnavailable()
+	}
+	return transport.handlePort, nil
+}
+
+func (transport *contextAwareUCITransport) authorizeCodeIndexScope(ctx context.Context, caller contextAwareCaller, scope *pb.CodeIndexScope) (uci.IndexBinding, error) {
+	port, err := transport.contextAwareHandlePort()
+	if err != nil {
+		return uci.IndexBinding{}, err
+	}
+	binding, err := port.AuthorizeCodeIndexScope(ctx, caller.clientSessionID, contextAwareIndexScopeFromProto(scope), scope.GetAnalysisProfileId())
+	if err != nil {
+		return uci.IndexBinding{}, contextAwareRuntimeError(ctx, err)
+	}
+	if err := uciTransportContextError(ctx); err != nil {
+		return uci.IndexBinding{}, err
+	}
+	binding, err = contextAwareValidatedIndexBinding(ctx, binding)
+	if err != nil {
+		return uci.IndexBinding{}, err
+	}
+	if !contextAwareIndexScopeMatchesBinding(scope, binding) {
+		return uci.IndexBinding{}, contextAwareClosedError(uci.ContextMismatch)
+	}
+	return binding, nil
+}
+
+func contextAwareValidatedIndexBinding(ctx context.Context, binding uci.IndexBinding) (uci.IndexBinding, error) {
+	binding = binding.Clone()
+	if err := binding.Validate(); err != nil {
+		return uci.IndexBinding{}, contextAwareRuntimeError(ctx, err)
+	}
+	return binding, nil
+}
+
 func contextAwareContextRefFromProto(reference *pb.ContextRef) uci.ContextRef {
 	if reference == nil {
 		return uci.ContextRef{}
@@ -443,11 +526,42 @@ func contextAwareProtoContextRef(reference uci.ContextRef) *pb.ContextRef {
 	return result
 }
 
-func contextAwareScopeMatchesRef(scope *pb.CodeIndexScope, reference uci.ContextRef) bool {
+func contextAwareProtoIndexScope(scope uci.IndexScope, profileID string) *pb.CodeIndexScope {
+	return &pb.CodeIndexScope{
+		SourceId:          scope.SourceID,
+		CheckoutId:        scope.CheckoutID,
+		IncarnationId:     scope.IncarnationID,
+		AnalysisProfileId: profileID,
+	}
+}
+
+func contextAwareBindCodeContextResponse(handle string, binding uci.IndexBinding) *pb.BindCodeContextResponse {
+	response := &pb.BindCodeContextResponse{
+		ContextHandle: handle,
+		IndexScope:    contextAwareProtoIndexScope(binding.Scope, binding.ProfileID),
+		LocalRootId:   binding.LocalRootID,
+		WorkstationId: binding.WorkstationID,
+	}
+	if binding.Context != nil {
+		response.Context = contextAwareProtoContextRef(*binding.Context)
+	}
+	return response
+}
+
+func contextAwareIndexScopeFromProto(scope *pb.CodeIndexScope) uci.IndexScope {
+	return uci.IndexScope{
+		SourceID:      scope.GetSourceId(),
+		CheckoutID:    scope.GetCheckoutId(),
+		IncarnationID: scope.GetIncarnationId(),
+	}
+}
+
+func contextAwareIndexScopeMatchesBinding(scope *pb.CodeIndexScope, binding uci.IndexBinding) bool {
 	return scope != nil &&
-		scope.GetSourceId() == reference.SourceID &&
-		scope.GetCheckoutId() == reference.CheckoutID &&
-		scope.GetAnalysisProfileId() == reference.AnalysisProfileID
+		scope.GetSourceId() == binding.Scope.SourceID &&
+		scope.GetCheckoutId() == binding.Scope.CheckoutID &&
+		scope.GetIncarnationId() == binding.Scope.IncarnationID &&
+		scope.GetAnalysisProfileId() == binding.ProfileID
 }
 
 func contextAwareProtoRefMatches(reference uci.ContextRef, candidate *pb.ContextRef) bool {
@@ -462,6 +576,24 @@ func contextAwareProtoRefMatches(reference uci.ContextRef, candidate *pb.Context
 		reference.ViewID == candidate.GetViewId() &&
 		reference.AnalysisProfileID == candidate.GetAnalysisProfileId() &&
 		reference.Generation == candidate.GetGeneration()
+}
+
+func contextAwareContextRefsEqual(left, right uci.ContextRef) bool {
+	if (left.SpaceID == nil) != (right.SpaceID == nil) {
+		return false
+	}
+	if left.SpaceID != nil && *left.SpaceID != *right.SpaceID {
+		return false
+	}
+	return left.SourceID == right.SourceID &&
+		left.CheckoutID == right.CheckoutID &&
+		left.ViewID == right.ViewID &&
+		left.AnalysisProfileID == right.AnalysisProfileID &&
+		left.Generation == right.Generation
+}
+
+func contextAwareExpectedParentMatchesBinding(parent *pb.ContextRef, binding uci.IndexBinding) bool {
+	return parent == nil || (binding.Context != nil && contextAwareProtoRefMatches(*binding.Context, parent))
 }
 
 func contextAwareAliasMatchesRef(target uci.AliasTarget, reference uci.ContextRef) bool {
@@ -497,12 +629,4 @@ func contextAwareClosedError(code uci.ContextErrorCode) error {
 	default:
 		return status.Error(codes.Internal, "UCI context resolution failed")
 	}
-}
-
-func newContextAwareHandle() (string, error) {
-	bytes := make([]byte, contextAwareHandleBytes)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(bytes), nil
 }

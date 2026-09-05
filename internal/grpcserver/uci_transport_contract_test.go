@@ -129,10 +129,14 @@ func TestUCITransportContractRequiresScopedAdditions(t *testing.T) {
 	requireUCITransportFields(t, file, "BindCodeContextRequest",
 		uciTransportFieldSpec{name: "client_session_id", number: 1, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
 		uciTransportFieldSpec{name: "requested_context", number: 2, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.ContextRef"},
+		uciTransportFieldSpec{name: "context_handle", number: 3, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
 	)
 	requireUCITransportFields(t, file, "BindCodeContextResponse",
 		uciTransportFieldSpec{name: "context_handle", number: 1, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
 		uciTransportFieldSpec{name: "context", number: 2, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.ContextRef"},
+		uciTransportFieldSpec{name: "index_scope", number: 3, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.CodeIndexScope"},
+		uciTransportFieldSpec{name: "local_root_id", number: 4, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+		uciTransportFieldSpec{name: "workstation_id", number: 5, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
 	)
 	requireUCITransportFields(t, file, "BeginCodeIndexRequest",
 		uciTransportFieldSpec{name: "scope", number: 1, kind: protoreflect.MessageKind, cardinality: protoreflect.Optional, message: "engram.v1.CodeIndexScope"},
@@ -358,6 +362,26 @@ func TestUCITransportContractDelegatesValidatedRequests(t *testing.T) {
 	}
 }
 
+func TestUCITransportContractAcceptsCompleteNoViewHandleBinding(t *testing.T) {
+	runtime := &uciTransportContractFake{}
+	response := uciTransportContractBindResponse()
+	response.Context = nil
+	runtime.bindResponse = response
+	server := &Server{}
+	server.SetUCITransport(runtime)
+
+	bound, err := server.BindCodeContext(context.Background(), uciTransportContractBindHandleRequest())
+	if err != nil {
+		t.Fatalf("BindCodeContext() error = %v", err)
+	}
+	if bound.GetContext() != nil {
+		t.Fatalf("no-View binding context = %v, want nil", bound.GetContext())
+	}
+	if bound.GetContextHandle() != uciTransportContractBindHandleRequest().GetContextHandle() || bound.GetIndexScope() == nil || bound.GetLocalRootId() == "" || bound.GetWorkstationId() == "" {
+		t.Fatalf("incomplete no-View binding = %#v", bound)
+	}
+}
+
 func TestUCITransportContractStagesOnlyValidatedConsistentFrames(t *testing.T) {
 	server := &Server{}
 	runtime := &uciTransportContractFake{}
@@ -437,7 +461,7 @@ func (fake *uciTransportContractFake) BindCodeContext(_ context.Context, request
 	if fake.bindResponse != nil {
 		return fake.bindResponse, nil
 	}
-	return &pb.BindCodeContextResponse{ContextHandle: "context-handle", Context: uciTransportContractContext()}, nil
+	return uciTransportContractBindResponse(), nil
 }
 
 func (fake *uciTransportContractFake) BeginCodeIndex(_ context.Context, request *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error) {
@@ -556,6 +580,20 @@ func uciTransportContractBindRequest() *pb.BindCodeContextRequest {
 	return &pb.BindCodeContextRequest{ClientSessionId: "client-session", RequestedContext: uciTransportContractContext()}
 }
 
+func uciTransportContractBindHandleRequest() *pb.BindCodeContextRequest {
+	return &pb.BindCodeContextRequest{ClientSessionId: "client-session", ContextHandle: "context-handle"}
+}
+
+func uciTransportContractBindResponse() *pb.BindCodeContextResponse {
+	return &pb.BindCodeContextResponse{
+		ContextHandle: "context-handle",
+		Context:       uciTransportContractContext(),
+		IndexScope:    uciTransportContractScope(),
+		LocalRootId:   "local-root-id",
+		WorkstationId: "workstation-id",
+	}
+}
+
 func uciTransportContractBeginRequest() *pb.BeginCodeIndexRequest {
 	return &pb.BeginCodeIndexRequest{
 		Scope:         uciTransportContractScope(),
@@ -623,6 +661,22 @@ func TestUCITransportContractRejectsClosedInputsAndInvalidRuntimeResponses(t *te
 		{name: "control identifier", invoke: func(server *Server) error {
 			request := uciTransportContractBindRequest()
 			request.ClientSessionId = "client\x00session"
+			_, err := server.BindCodeContext(context.Background(), request)
+			return err
+		}},
+		{name: "missing bind selector", invoke: func(server *Server) error {
+			_, err := server.BindCodeContext(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-session"})
+			return err
+		}},
+		{name: "multiple bind selectors", invoke: func(server *Server) error {
+			request := uciTransportContractBindRequest()
+			request.ContextHandle = "context-handle"
+			_, err := server.BindCodeContext(context.Background(), request)
+			return err
+		}},
+		{name: "invalid context handle", invoke: func(server *Server) error {
+			request := uciTransportContractBindHandleRequest()
+			request.ContextHandle = "context\x00handle"
 			_, err := server.BindCodeContext(context.Background(), request)
 			return err
 		}},
@@ -699,10 +753,33 @@ func TestUCITransportContractRejectsClosedInputsAndInvalidRuntimeResponses(t *te
 	}{
 		{name: "bind context mismatch", invoke: func(server *Server, runtime *uciTransportContractFake) error {
 			request := uciTransportContractBindRequest()
-			responseContext := uciTransportContractContext()
-			responseContext.Generation++
-			runtime.bindResponse = &pb.BindCodeContextResponse{ContextHandle: "context-handle", Context: responseContext}
+			response := uciTransportContractBindResponse()
+			response.Context.Generation++
+			runtime.bindResponse = response
 			_, err := server.BindCodeContext(context.Background(), request)
+			return err
+		}},
+		{name: "bind requested context omits view", invoke: func(server *Server, runtime *uciTransportContractFake) error {
+			response := uciTransportContractBindResponse()
+			response.Context = nil
+			runtime.bindResponse = response
+			_, err := server.BindCodeContext(context.Background(), uciTransportContractBindRequest())
+			return err
+		}},
+		{name: "bind handle changes opaque handle", invoke: func(server *Server, runtime *uciTransportContractFake) error {
+			response := uciTransportContractBindResponse()
+			response.Context = nil
+			response.ContextHandle = "other-handle"
+			runtime.bindResponse = response
+			_, err := server.BindCodeContext(context.Background(), uciTransportContractBindHandleRequest())
+			return err
+		}},
+		{name: "bind no-View omits root evidence", invoke: func(server *Server, runtime *uciTransportContractFake) error {
+			response := uciTransportContractBindResponse()
+			response.Context = nil
+			response.LocalRootId = ""
+			runtime.bindResponse = response
+			_, err := server.BindCodeContext(context.Background(), uciTransportContractBindHandleRequest())
 			return err
 		}},
 		{name: "begin scope mismatch", invoke: func(server *Server, runtime *uciTransportContractFake) error {
