@@ -6,6 +6,9 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +17,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -34,19 +38,9 @@ type parserManifest struct {
 }
 
 type parserToolchain struct {
-	ModuleGoVersion string                    `json:"module_go_version"`
-	RequiresCGO     bool                      `json:"requires_cgo"`
-	CGOSources      []string                  `json:"cgo_sources"`
-	ObservedHost    observedToolchainEvidence `json:"observed_host"`
-}
-
-type observedToolchainEvidence struct {
-	GoVersion          string `json:"go_version"`
-	GOOS               string `json:"goos"`
-	GOARCH             string `json:"goarch"`
-	CGOEnabled         bool   `json:"cgo_enabled"`
-	BuildEvidenceState string `json:"build_evidence_state"`
-	Note               string `json:"note"`
+	ModuleGoVersion string   `json:"module_go_version"`
+	RequiresCGO     bool     `json:"requires_cgo"`
+	CGOSources      []string `json:"cgo_sources"`
 }
 
 type parserDependency struct {
@@ -93,15 +87,42 @@ type bundleDigestManifest struct {
 }
 
 type parserTargetEvidence struct {
-	GOOS          string `json:"goos"`
-	GOARCH        string `json:"goarch"`
-	EvidenceState string `json:"evidence_state"`
-	RequiredGate  string `json:"required_gate"`
+	GOOS                    string                    `json:"goos"`
+	GOARCH                  string                    `json:"goarch"`
+	SupportStatus           string                    `json:"support_status"`
+	EvidenceState           string                    `json:"evidence_state"`
+	BuildCommand            string                    `json:"build_command"`
+	CGOToolchainRequirement string                    `json:"cgo_toolchain_requirement"`
+	SourceProbe             parserSourceProbeEvidence `json:"source_probe"`
+}
+
+type parserSourceProbeEvidence struct {
+	Code                     string `json:"code"`
+	BuildState               string `json:"build_state"`
+	SmokeState               string `json:"smoke_state"`
+	ObservedProtocolRevision string `json:"observed_protocol_revision"`
+	ObservedBundleDigest     string `json:"observed_bundle_digest"`
+	ObservedCoverage         string `json:"observed_coverage"`
+	BlockerDetail            string `json:"blocker_detail"`
+}
+
+type parserSourceGrammar struct {
+	GoBindingImport string
+	BindingSymbol   string
+}
+
+type parserSourceContract struct {
+	ImportPaths    map[string]string
+	Grammars       map[string]parserSourceGrammar
+	StaticInputs   []string
+	BundleFunction *ast.FuncDecl
 }
 
 var (
-	exactVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+	exactVersion = regexp.MustCompile(`^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$`)
 	exactCommit  = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	sha256Digest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	goChecksum   = regexp.MustCompile(`^h1:[A-Za-z0-9+/]+={0,2}$`)
 
 	expectedDependencies = []parserDependency{
 		{
@@ -187,6 +208,13 @@ var (
 		},
 	}
 
+	expectedCGOSources = []string{
+		"https://github.com/tree-sitter/go-tree-sitter/blob/adc13ffd8b2c0b01b878fda9f7c422ce0df5fad3/tree_sitter.go",
+		"https://github.com/tree-sitter/tree-sitter-javascript/blob/44c892e0be055ac465d5eeddae6d3e194424e7de/bindings/go/binding.go",
+		"https://github.com/tree-sitter/tree-sitter-typescript/blob/f975a621f4e7f532fe322e13c4f79495e0a7b2e7/bindings/go/typescript.go",
+		"https://github.com/tree-sitter/tree-sitter-typescript/blob/f975a621f4e7f532fe322e13c4f79495e0a7b2e7/bindings/go/tsx.go",
+	}
+
 	expectedStaticInputs = []string{
 		"uci-tree-sitter-bundle/v1",
 		"github.com/tree-sitter/go-tree-sitter@v0.25.0",
@@ -196,28 +224,72 @@ var (
 
 	expectedTargets = []parserTargetEvidence{
 		{
-			GOOS:          "windows",
-			GOARCH:        "amd64",
-			EvidenceState: "not_run",
-			RequiredGate:  "CGO_ENABLED=1 go build ./tools/uci-parser",
+			GOOS:                    "windows",
+			GOARCH:                  "amd64",
+			SupportStatus:           "source_probe_passed",
+			EvidenceState:           "passed",
+			BuildCommand:            "CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build ./tools/uci-parser",
+			CGOToolchainRequirement: "a C compiler capable of GOOS/GOARCH configured as CC",
+			SourceProbe: parserSourceProbeEvidence{
+				Code:                     "source_build_and_javascript_smoke_passed",
+				BuildState:               "passed",
+				SmokeState:               "passed",
+				ObservedProtocolRevision: "uci-tree-sitter/v1",
+				ObservedBundleDigest:     "sha256:39b46e870ecf93bb942e5ccc043626f2ec40d3d3bfeb8b7ea4e230f05df827ba",
+				ObservedCoverage:         "complete",
+				BlockerDetail:            "",
+			},
 		},
 		{
-			GOOS:          "linux",
-			GOARCH:        "amd64",
-			EvidenceState: "not_run",
-			RequiredGate:  "GOOS=linux GOARCH=amd64 CGO_ENABLED=1 CC=<linux-amd64-c-compiler> go build ./tools/uci-parser",
+			GOOS:                    "linux",
+			GOARCH:                  "amd64",
+			SupportStatus:           "source_probe_passed",
+			EvidenceState:           "passed",
+			BuildCommand:            "CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build ./tools/uci-parser",
+			CGOToolchainRequirement: "a C compiler capable of GOOS/GOARCH configured as CC",
+			SourceProbe: parserSourceProbeEvidence{
+				Code:                     "source_build_and_javascript_smoke_passed",
+				BuildState:               "passed",
+				SmokeState:               "passed",
+				ObservedProtocolRevision: "uci-tree-sitter/v1",
+				ObservedBundleDigest:     "sha256:2e286303d97702c827ffb5acf682adb0f8682e2ce8f29c5b6ccebb6723ff6dad",
+				ObservedCoverage:         "complete",
+				BlockerDetail:            "",
+			},
 		},
 		{
-			GOOS:          "darwin",
-			GOARCH:        "amd64",
-			EvidenceState: "not_run",
-			RequiredGate:  "GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 CC=<darwin-amd64-c-compiler> go build ./tools/uci-parser",
+			GOOS:                    "darwin",
+			GOARCH:                  "amd64",
+			SupportStatus:           "not_claimed",
+			EvidenceState:           "blocked",
+			BuildCommand:            "CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build ./tools/uci-parser",
+			CGOToolchainRequirement: "a C compiler capable of GOOS/GOARCH configured as CC",
+			SourceProbe: parserSourceProbeEvidence{
+				Code:                     "blocked_missing_cross_c_toolchain",
+				BuildState:               "blocked",
+				SmokeState:               "not_run",
+				ObservedProtocolRevision: "",
+				ObservedBundleDigest:     "",
+				ObservedCoverage:         "",
+				BlockerDetail:            "host clang target rejects -arch",
+			},
 		},
 		{
-			GOOS:          "darwin",
-			GOARCH:        "arm64",
-			EvidenceState: "not_run",
-			RequiredGate:  "GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 CC=<darwin-arm64-c-compiler> go build ./tools/uci-parser",
+			GOOS:                    "darwin",
+			GOARCH:                  "arm64",
+			SupportStatus:           "not_claimed",
+			EvidenceState:           "blocked",
+			BuildCommand:            "CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build ./tools/uci-parser",
+			CGOToolchainRequirement: "a C compiler capable of GOOS/GOARCH configured as CC",
+			SourceProbe: parserSourceProbeEvidence{
+				Code:                     "blocked_missing_cross_c_toolchain",
+				BuildState:               "blocked",
+				SmokeState:               "not_run",
+				ObservedProtocolRevision: "",
+				ObservedBundleDigest:     "",
+				ObservedCoverage:         "",
+				BlockerDetail:            "host clang target rejects -arch",
+			},
 		},
 	}
 )
@@ -228,31 +300,37 @@ func TestParserManifestProvenance(t *testing.T) {
 	manifestBytes := readParserFile(t, manifestPath)
 	manifest := parseParserManifest(t, manifestBytes)
 
-	if manifest.SchemaVersion != 1 {
-		t.Fatalf("schema_version = %d, want 1", manifest.SchemaVersion)
-	}
-	if manifest.Component != "uci-parser" {
-		t.Fatalf("component = %q, want uci-parser", manifest.Component)
-	}
-	if manifest.ParserProtocolRevision != "uci-tree-sitter/v1" {
-		t.Fatalf("parser_protocol_revision = %q, want uci-tree-sitter/v1", manifest.ParserProtocolRevision)
-	}
-	if manifest.BundleSchemaRevision != "uci-tree-sitter-bundle/v1" {
-		t.Fatalf("bundle_schema_revision = %q, want uci-tree-sitter-bundle/v1", manifest.BundleSchemaRevision)
-	}
+	assertManifestIdentity(t, manifest)
 	assertNoFloatingProvenance(t, manifestBytes, manifest.Dependencies)
 	assertToolchainProvenance(t, manifest.Toolchain)
 	assertDependencyProvenance(t, repoRoot, manifest.Dependencies, manifest.Toolchain.ModuleGoVersion)
 	assertCompiledGrammars(t, manifest.CompiledGrammars)
-	assertBundleDigestProvenance(t, manifest.BundleDigest)
-	assertTargetEvidence(t, manifest.Targets)
-	assertParserSourceIdentity(t, repoRoot, manifest)
-	assertParentProtocolIdentity(t, repoRoot, manifest)
+
+	source := inspectParserSource(t, repoRoot)
+	assertParserSourceIdentity(t, manifest, source)
+	assertBundleDigestProvenance(t, manifest, source)
+	assertTargetEvidence(t, manifest)
+	assertParentProtocolIdentity(t, manifest)
+}
+
+func assertManifestIdentity(t *testing.T, manifest parserManifest) {
+	t.Helper()
+
+	if manifest.SchemaVersion != 3 {
+		t.Fatalf("schema_version = %d, want 3", manifest.SchemaVersion)
+	}
+	if manifest.Component != "uci-parser" {
+		t.Fatalf("component = %q, want uci-parser", manifest.Component)
+	}
+	if manifest.BundleSchemaRevision != "uci-tree-sitter-bundle/v1" {
+		t.Fatalf("bundle_schema_revision = %q, want uci-tree-sitter-bundle/v1", manifest.BundleSchemaRevision)
+	}
 }
 
 func parseParserManifest(t *testing.T, data []byte) parserManifest {
 	t.Helper()
 
+	assertManifestShape(t, data)
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var manifest parserManifest
@@ -266,6 +344,87 @@ func parseParserManifest(t *testing.T, data []byte) parserManifest {
 	return manifest
 }
 
+func assertManifestShape(t *testing.T, data []byte) {
+	t.Helper()
+
+	root := strictJSONObject(t, data, "manifest",
+		"schema_version",
+		"component",
+		"parser_protocol_revision",
+		"bundle_schema_revision",
+		"toolchain",
+		"dependencies",
+		"compiled_grammars",
+		"bundle_digest",
+		"targets",
+	)
+	toolchain := strictJSONObject(t, root["toolchain"], "toolchain", "module_go_version", "requires_cgo", "cgo_sources")
+	_ = strictJSONArray(t, toolchain["cgo_sources"], "toolchain.cgo_sources")
+
+	for index, rawDependency := range strictJSONArray(t, root["dependencies"], "dependencies") {
+		label := "dependencies[" + strconv.Itoa(index) + "]"
+		dependency := strictJSONObject(t, rawDependency, label, "module", "version", "checksums", "source", "license")
+		strictJSONObject(t, dependency["checksums"], label+".checksums", "module", "go_mod")
+		strictJSONObject(t, dependency["source"], label+".source", "repository_url", "source_url", "tag", "commit", "module_info_url")
+		strictJSONObject(t, dependency["license"], label+".license", "spdx", "url", "sha256")
+	}
+
+	for index, rawGrammar := range strictJSONArray(t, root["compiled_grammars"], "compiled_grammars") {
+		strictJSONObject(t, rawGrammar, "compiled_grammars["+strconv.Itoa(index)+"]", "language", "module", "go_binding_import", "binding_symbol")
+	}
+
+	digest := strictJSONObject(t, root["bundle_digest"], "bundle_digest", "algorithm", "prefix", "input_encoding", "static_inputs", "static_input_digest", "runtime_input_recipe")
+	_ = strictJSONArray(t, digest["static_inputs"], "bundle_digest.static_inputs")
+	_ = strictJSONArray(t, digest["runtime_input_recipe"], "bundle_digest.runtime_input_recipe")
+
+	for index, rawTarget := range strictJSONArray(t, root["targets"], "targets") {
+		label := "targets[" + strconv.Itoa(index) + "]"
+		target := strictJSONObject(t, rawTarget, label, "goos", "goarch", "support_status", "evidence_state", "build_command", "cgo_toolchain_requirement", "source_probe")
+		strictJSONObject(t, target["source_probe"], label+".source_probe", "code", "build_state", "smoke_state", "observed_protocol_revision", "observed_bundle_digest", "observed_coverage", "blocker_detail")
+	}
+}
+
+func strictJSONObject(t *testing.T, raw []byte, label string, requiredKeys ...string) map[string]json.RawMessage {
+	t.Helper()
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		t.Fatalf("decode %s as object: %v", label, err)
+	}
+	if object == nil {
+		t.Fatalf("%s must be an object", label)
+	}
+	allowed := make(map[string]struct{}, len(requiredKeys))
+	for _, key := range requiredKeys {
+		allowed[key] = struct{}{}
+		if _, found := object[key]; !found {
+			t.Fatalf("%s is missing required field %q", label, key)
+		}
+	}
+	if len(object) != len(allowed) {
+		t.Fatalf("%s has %d fields, want exactly %d", label, len(object), len(allowed))
+	}
+	for key := range object {
+		if _, allowed := allowed[key]; !allowed {
+			t.Fatalf("%s contains unknown field %q", label, key)
+		}
+	}
+	return object
+}
+
+func strictJSONArray(t *testing.T, raw []byte, label string) []json.RawMessage {
+	t.Helper()
+
+	var values []json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil {
+		t.Fatalf("decode %s as array: %v", label, err)
+	}
+	if values == nil {
+		t.Fatalf("%s must be an array", label)
+	}
+	return values
+}
+
 func assertNoFloatingProvenance(t *testing.T, rawManifest []byte, dependencies []parserDependency) {
 	t.Helper()
 
@@ -276,7 +435,7 @@ func assertNoFloatingProvenance(t *testing.T, rawManifest []byte, dependencies [
 	}
 	for _, dependency := range dependencies {
 		if !exactVersion.MatchString(dependency.Version) {
-			t.Fatalf("%s version %q is not an exact release version", dependency.Module, dependency.Version)
+			t.Fatalf("%s version %q is not a canonical exact release version", dependency.Module, dependency.Version)
 		}
 		if dependency.Source.Tag != dependency.Version {
 			t.Fatalf("%s source tag %q does not match version %q", dependency.Module, dependency.Source.Tag, dependency.Version)
@@ -284,41 +443,39 @@ func assertNoFloatingProvenance(t *testing.T, rawManifest []byte, dependencies [
 		if !exactCommit.MatchString(dependency.Source.Commit) {
 			t.Fatalf("%s source commit %q is not a full immutable commit", dependency.Module, dependency.Source.Commit)
 		}
+		if !goChecksum.MatchString(dependency.Checksums.Module) || !goChecksum.MatchString(dependency.Checksums.GoMod) {
+			t.Fatalf("%s has a noncanonical Go module checksum", dependency.Module)
+		}
+		if dependency.License.SPDX != "MIT" || !sha256Digest.MatchString(dependency.License.SHA256) {
+			t.Fatalf("%s has noncanonical MIT license evidence %#v", dependency.Module, dependency.License)
+		}
 	}
 }
 
 func assertToolchainProvenance(t *testing.T, toolchain parserToolchain) {
 	t.Helper()
 
-	expectedCGOSources := []string{
-		"https://github.com/tree-sitter/go-tree-sitter/blob/adc13ffd8b2c0b01b878fda9f7c422ce0df5fad3/tree_sitter.go",
-		"https://github.com/tree-sitter/tree-sitter-javascript/blob/44c892e0be055ac465d5eeddae6d3e194424e7de/bindings/go/binding.go",
-		"https://github.com/tree-sitter/tree-sitter-typescript/blob/f975a621f4e7f532fe322e13c4f79495e0a7b2e7/bindings/go/typescript.go",
-		"https://github.com/tree-sitter/tree-sitter-typescript/blob/f975a621f4e7f532fe322e13c4f79495e0a7b2e7/bindings/go/tsx.go",
+	if toolchain.ModuleGoVersion != "1.26.6" {
+		t.Fatalf("module_go_version = %q, want 1.26.6", toolchain.ModuleGoVersion)
 	}
 	if !toolchain.RequiresCGO {
 		t.Fatal("parser manifest must declare the CGO requirement")
 	}
+	assertNoDuplicateStrings(t, "cgo_sources", toolchain.CGOSources)
 	if !reflect.DeepEqual(toolchain.CGOSources, expectedCGOSources) {
 		t.Fatalf("cgo_sources = %#v, want %#v", toolchain.CGOSources, expectedCGOSources)
-	}
-	if got, want := toolchain.ObservedHost, (observedToolchainEvidence{
-		GoVersion:          "go1.26.6",
-		GOOS:               "windows",
-		GOARCH:             "amd64",
-		CGOEnabled:         true,
-		BuildEvidenceState: "not_run",
-		Note:               "Toolchain facts were observed only; no uci-parser build or test was executed for this manifest.",
-	}); !reflect.DeepEqual(got, want) {
-		t.Fatalf("observed_host = %#v, want %#v", got, want)
 	}
 }
 
 func assertDependencyProvenance(t *testing.T, repoRoot string, dependencies []parserDependency, manifestGoVersion string) {
 	t.Helper()
 
+	assertNoDuplicateDependencies(t, dependencies)
 	if !reflect.DeepEqual(dependencies, expectedDependencies) {
 		t.Fatalf("dependencies = %#v, want %#v", dependencies, expectedDependencies)
+	}
+	for _, dependency := range dependencies {
+		assertCanonicalDependency(t, dependency)
 	}
 
 	goModPath := filepath.Join(repoRoot, "go.mod")
@@ -334,8 +491,11 @@ func assertDependencyProvenance(t *testing.T, repoRoot string, dependencies []pa
 		t.Fatalf("go.mod Go version = %q, want %q", got, want)
 	}
 
-	requirements := make(map[string]*modfile.Require)
+	requirements := make(map[string]*modfile.Require, len(goMod.Require))
 	for _, requirement := range goMod.Require {
+		if _, exists := requirements[requirement.Mod.Path]; exists {
+			t.Fatalf("go.mod repeats requirement %s", requirement.Mod.Path)
+		}
 		requirements[requirement.Mod.Path] = requirement
 	}
 	checksums := parseGoSum(t, filepath.Join(repoRoot, "go.sum"))
@@ -359,6 +519,27 @@ func assertDependencyProvenance(t *testing.T, repoRoot string, dependencies []pa
 	}
 	if got, want := manifestGoVersion, goMod.Go.Version; got != want {
 		t.Fatalf("manifest toolchain Go version = %q, want go.mod Go version %q", got, want)
+	}
+}
+
+func assertCanonicalDependency(t *testing.T, dependency parserDependency) {
+	t.Helper()
+
+	repositoryName, found := strings.CutPrefix(dependency.Module, "github.com/tree-sitter/")
+	if !found || repositoryName == "" {
+		t.Fatalf("bundled dependency %q is not a tree-sitter module", dependency.Module)
+	}
+	if got, want := dependency.Source.RepositoryURL, "https://github.com/tree-sitter/"+repositoryName; got != want {
+		t.Fatalf("%s repository_url = %q, want %q", dependency.Module, got, want)
+	}
+	if got, want := dependency.Source.SourceURL, dependency.Source.RepositoryURL+"/tree/"+dependency.Source.Commit; got != want {
+		t.Fatalf("%s source_url = %q, want %q", dependency.Module, got, want)
+	}
+	if got, want := dependency.Source.ModuleInfoURL, "https://proxy.golang.org/"+dependency.Module+"/@v/"+dependency.Version+".info"; got != want {
+		t.Fatalf("%s module_info_url = %q, want %q", dependency.Module, got, want)
+	}
+	if got, want := dependency.License.URL, "https://raw.githubusercontent.com/tree-sitter/"+repositoryName+"/"+dependency.Source.Commit+"/LICENSE"; got != want {
+		t.Fatalf("%s license URL = %q, want %q", dependency.Module, got, want)
 	}
 }
 
@@ -386,22 +567,343 @@ func parseGoSum(t *testing.T, path string) map[string]string {
 func assertCompiledGrammars(t *testing.T, grammars []compiledGrammar) {
 	t.Helper()
 
+	assertNoDuplicateGrammars(t, grammars)
 	if !reflect.DeepEqual(grammars, expectedGrammars) {
 		t.Fatalf("compiled_grammars = %#v, want %#v", grammars, expectedGrammars)
 	}
+	for _, grammar := range grammars {
+		if !strings.HasPrefix(grammar.GoBindingImport, grammar.Module+"/") {
+			t.Fatalf("grammar %q binding import %q is outside module %q", grammar.Language, grammar.GoBindingImport, grammar.Module)
+		}
+	}
 }
 
-func assertBundleDigestProvenance(t *testing.T, digest bundleDigestManifest) {
+func inspectParserSource(t *testing.T, repoRoot string) parserSourceContract {
 	t.Helper()
 
+	parserPath := filepath.Join(repoRoot, "tools", "uci-parser", "main.go")
+	parserFile := parseGoSource(t, parserPath)
+	imports := parserImportPaths(t, parserFile)
+	languages := uciLanguageConstants(t, filepath.Join(repoRoot, "internal", "uci", "treesitter_worker.go"))
+	grammarFunction := sourceFunction(t, parserFile, "parserLanguage")
+	bundleFunction := sourceFunction(t, parserFile, "bundleDigest")
+
+	return parserSourceContract{
+		ImportPaths:    imports,
+		Grammars:       parserGrammarBindings(t, grammarFunction, imports, languages),
+		StaticInputs:   bundleStaticInputs(t, bundleFunction),
+		BundleFunction: bundleFunction,
+	}
+}
+
+func parseGoSource(t *testing.T, path string) *ast.File {
+	t.Helper()
+
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	return file
+}
+
+func parserImportPaths(t *testing.T, source *ast.File) map[string]string {
+	t.Helper()
+
+	imports := make(map[string]string, len(source.Imports))
+	for _, spec := range source.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			t.Fatalf("unquote parser import %q: %v", spec.Path.Value, err)
+		}
+		alias := importAlias(spec, importPath)
+		if previous, exists := imports[alias]; exists {
+			t.Fatalf("parser import alias %q maps to both %q and %q", alias, previous, importPath)
+		}
+		imports[alias] = importPath
+	}
+	return imports
+}
+
+func importAlias(spec *ast.ImportSpec, importPath string) string {
+	if spec.Name != nil {
+		return spec.Name.Name
+	}
+	if slash := strings.LastIndex(importPath, "/"); slash >= 0 {
+		importPath = importPath[slash+1:]
+	}
+	return strings.ReplaceAll(importPath, "-", "_")
+}
+
+func sourceFunction(t *testing.T, source *ast.File, name string) *ast.FuncDecl {
+	t.Helper()
+
+	for _, declaration := range source.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if ok && function.Name.Name == name {
+			return function
+		}
+	}
+	t.Fatalf("parser source does not define %s", name)
+	return nil
+}
+
+func uciLanguageConstants(t *testing.T, path string) map[string]string {
+	t.Helper()
+
+	source := parseGoSource(t, path)
+	languages := make(map[string]string)
+	for _, declaration := range source.Decls {
+		group, ok := declaration.(*ast.GenDecl)
+		if !ok || group.Tok != token.CONST {
+			continue
+		}
+		for _, declarationSpec := range group.Specs {
+			specification, ok := declarationSpec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for index, name := range specification.Names {
+				if !strings.HasPrefix(name.Name, "TreeSitterLanguage") {
+					continue
+				}
+				if index >= len(specification.Values) {
+					t.Fatalf("UCI language constant %s has no explicit string value", name.Name)
+				}
+				literal, ok := specification.Values[index].(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					t.Fatalf("UCI language constant %s is not a string literal", name.Name)
+				}
+				value, err := strconv.Unquote(literal.Value)
+				if err != nil {
+					t.Fatalf("unquote UCI language constant %s: %v", name.Name, err)
+				}
+				if previous, exists := languages[name.Name]; exists {
+					t.Fatalf("UCI language constant %s repeats value %q", name.Name, previous)
+				}
+				languages[name.Name] = value
+			}
+		}
+	}
+	if len(languages) == 0 {
+		t.Fatal("UCI source declares no TreeSitterLanguage constants")
+	}
+	return languages
+}
+
+func parserGrammarBindings(t *testing.T, function *ast.FuncDecl, imports map[string]string, languages map[string]string) map[string]parserSourceGrammar {
+	t.Helper()
+
+	var languageSwitch *ast.SwitchStmt
+	for _, statement := range function.Body.List {
+		candidate, ok := statement.(*ast.SwitchStmt)
+		if !ok {
+			continue
+		}
+		if languageSwitch != nil {
+			t.Fatal("parserLanguage contains multiple switches")
+		}
+		languageSwitch = candidate
+	}
+	if languageSwitch == nil {
+		t.Fatal("parserLanguage contains no language switch")
+	}
+
+	bindings := make(map[string]parserSourceGrammar)
+	for _, statement := range languageSwitch.Body.List {
+		clause, ok := statement.(*ast.CaseClause)
+		if !ok {
+			t.Fatal("parserLanguage switch contains a non-case clause")
+		}
+		if len(clause.List) == 0 {
+			continue
+		}
+		if len(clause.List) != 1 {
+			t.Fatal("parserLanguage switch case must name exactly one UCI language constant")
+		}
+		constant := uciLanguageSelector(t, clause.List[0], imports)
+		language, found := languages[constant]
+		if !found {
+			t.Fatalf("parserLanguage references unknown UCI language constant %q", constant)
+		}
+		binding := grammarBindingCall(t, clause.Body, imports)
+		if _, exists := bindings[language]; exists {
+			t.Fatalf("parserLanguage repeats grammar binding for %q", language)
+		}
+		bindings[language] = binding
+	}
+	if len(bindings) == 0 {
+		t.Fatal("parserLanguage declares no grammar bindings")
+	}
+	return bindings
+}
+
+func uciLanguageSelector(t *testing.T, expression ast.Expr, imports map[string]string) string {
+	t.Helper()
+
+	selector, ok := expression.(*ast.SelectorExpr)
+	if !ok {
+		t.Fatalf("parserLanguage case %#v is not a UCI language selector", expression)
+	}
+	packageName, ok := selector.X.(*ast.Ident)
+	if !ok || imports[packageName.Name] != "github.com/thebtf/engram/internal/uci" {
+		t.Fatalf("parserLanguage case %#v is not from the UCI package", expression)
+	}
+	return selector.Sel.Name
+}
+
+func grammarBindingCall(t *testing.T, statements []ast.Stmt, imports map[string]string) parserSourceGrammar {
+	t.Helper()
+
+	var bindings []parserSourceGrammar
+	ast.Inspect(&ast.BlockStmt{List: statements}, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		packageName, ok := selector.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		importPath := imports[packageName.Name]
+		if !strings.HasPrefix(importPath, "github.com/tree-sitter/") || importPath == "github.com/tree-sitter/go-tree-sitter" {
+			return true
+		}
+		bindings = append(bindings, parserSourceGrammar{
+			GoBindingImport: importPath,
+			BindingSymbol:   selector.Sel.Name,
+		})
+		return true
+	})
+	if len(bindings) != 1 {
+		t.Fatalf("parserLanguage case has %d grammar binding calls, want 1", len(bindings))
+	}
+	return bindings[0]
+}
+
+func bundleStaticInputs(t *testing.T, function *ast.FuncDecl) []string {
+	t.Helper()
+
+	for _, statement := range function.Body.List {
+		assignment, ok := statement.(*ast.AssignStmt)
+		if !ok || len(assignment.Lhs) != 1 || len(assignment.Rhs) != 1 {
+			continue
+		}
+		name, ok := assignment.Lhs[0].(*ast.Ident)
+		if !ok || name.Name != "parts" {
+			continue
+		}
+		literal, ok := assignment.Rhs[0].(*ast.CompositeLit)
+		if !ok {
+			t.Fatal("bundleDigest initializes parts with a non-literal value")
+		}
+		var inputs []string
+		dynamicInputSeen := false
+		for _, element := range literal.Elts {
+			value, ok := element.(*ast.BasicLit)
+			if !ok || value.Kind != token.STRING {
+				dynamicInputSeen = true
+				continue
+			}
+			if dynamicInputSeen {
+				t.Fatal("bundleDigest places a static input after a runtime input")
+			}
+			input, err := strconv.Unquote(value.Value)
+			if err != nil {
+				t.Fatalf("unquote bundle static input %q: %v", value.Value, err)
+			}
+			inputs = append(inputs, input)
+		}
+		if len(inputs) == 0 {
+			t.Fatal("bundleDigest has no static provenance inputs")
+		}
+		return inputs
+	}
+	t.Fatal("bundleDigest does not initialize parts")
+	return nil
+}
+
+func assertParserSourceIdentity(t *testing.T, manifest parserManifest, source parserSourceContract) {
+	t.Helper()
+
+	assertParserTreeSitterImports(t, source.ImportPaths, manifest.Dependencies)
+	if len(source.Grammars) != len(manifest.CompiledGrammars) {
+		t.Fatalf("parser source has %d grammar bindings, manifest has %d", len(source.Grammars), len(manifest.CompiledGrammars))
+	}
+	for _, grammar := range manifest.CompiledGrammars {
+		binding, found := source.Grammars[grammar.Language]
+		if !found {
+			t.Fatalf("parser source does not bind manifest grammar %q", grammar.Language)
+		}
+		if binding.GoBindingImport != grammar.GoBindingImport || binding.BindingSymbol != grammar.BindingSymbol {
+			t.Fatalf("parser source grammar %q = %#v, want binding import/symbol %q/%q", grammar.Language, binding, grammar.GoBindingImport, grammar.BindingSymbol)
+		}
+		if got := dependencyModuleForImport(t, binding.GoBindingImport, manifest.Dependencies); got != grammar.Module {
+			t.Fatalf("parser source grammar %q resolves to module %q, want %q", grammar.Language, got, grammar.Module)
+		}
+	}
+}
+
+func assertParserTreeSitterImports(t *testing.T, imports map[string]string, dependencies []parserDependency) {
+	t.Helper()
+
+	actualModules := make([]string, 0, len(dependencies))
+	for _, importPath := range imports {
+		if !strings.HasPrefix(importPath, "github.com/tree-sitter/") {
+			continue
+		}
+		actualModules = append(actualModules, dependencyModuleForImport(t, importPath, dependencies))
+	}
+	sort.Strings(actualModules)
+	assertNoDuplicateStrings(t, "tree-sitter parser imports", actualModules)
+
+	expectedModules := make([]string, 0, len(dependencies))
+	for _, dependency := range dependencies {
+		expectedModules = append(expectedModules, dependency.Module)
+	}
+	sort.Strings(expectedModules)
+	if !reflect.DeepEqual(actualModules, expectedModules) {
+		t.Fatalf("tree-sitter parser import modules = %#v, want %#v", actualModules, expectedModules)
+	}
+}
+
+func dependencyModuleForImport(t *testing.T, importPath string, dependencies []parserDependency) string {
+	t.Helper()
+
+	var matches []string
+	for _, dependency := range dependencies {
+		if importPath == dependency.Module || strings.HasPrefix(importPath, dependency.Module+"/") {
+			matches = append(matches, dependency.Module)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("parser import %q maps to %d manifest modules, want 1", importPath, len(matches))
+	}
+	return matches[0]
+}
+
+func assertBundleDigestProvenance(t *testing.T, manifest parserManifest, source parserSourceContract) {
+	t.Helper()
+
+	digest := manifest.BundleDigest
 	if digest.Algorithm != "sha256" || digest.Prefix != "sha256:" {
 		t.Fatalf("bundle digest algorithm/prefix = %q/%q, want sha256/sha256:", digest.Algorithm, digest.Prefix)
 	}
 	if digest.InputEncoding != "sort lexical; for each UTF-8 input, append its uint32 big-endian byte length then its bytes" {
 		t.Fatalf("unexpected bundle input encoding %q", digest.InputEncoding)
 	}
+	assertNoDuplicateStrings(t, "bundle static inputs", digest.StaticInputs)
 	if !reflect.DeepEqual(digest.StaticInputs, expectedStaticInputs) {
 		t.Fatalf("bundle static inputs = %#v, want %#v", digest.StaticInputs, expectedStaticInputs)
+	}
+	if !reflect.DeepEqual(digest.StaticInputs, source.StaticInputs) {
+		t.Fatalf("bundle source static inputs = %#v, want manifest %#v", source.StaticInputs, digest.StaticInputs)
+	}
+	if len(digest.StaticInputs) == 0 || digest.StaticInputs[0] != manifest.BundleSchemaRevision {
+		t.Fatalf("bundle static inputs must begin with bundle schema revision %q", manifest.BundleSchemaRevision)
 	}
 	if got, want := digest.RuntimeInputRecipe, []string{
 		"go=runtime.Version()",
@@ -410,15 +912,105 @@ func assertBundleDigestProvenance(t *testing.T, digest bundleDigestManifest) {
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("bundle runtime input recipe = %#v, want %#v", got, want)
 	}
+	assertBundleRuntimeInputs(t, source.BundleFunction)
 	if got, want := staticBundleInputDigest(digest.StaticInputs), digest.StaticInputDigest; got != want {
 		t.Fatalf("static bundle input digest = %q, want %q", got, want)
 	}
-	if digest.StaticInputDigest != "sha256:4c87311d322669ef5a02a6384d46caa30fcfca8f777e3aa81848c297147d2d13" {
-		t.Fatalf("static bundle input digest = %q, want pinned digest", digest.StaticInputDigest)
+	if !sha256Digest.MatchString(digest.StaticInputDigest) {
+		t.Fatalf("static bundle input digest %q is noncanonical", digest.StaticInputDigest)
+	}
+	if got, want := bundleDigest(), runtimeBundleDigest(digest.StaticInputs); got != want {
+		t.Fatalf("runtime bundle digest = %q, want manifest-derived %q", got, want)
 	}
 }
 
+func assertBundleRuntimeInputs(t *testing.T, function *ast.FuncDecl) {
+	t.Helper()
+
+	requiredCalls := map[string]bool{
+		"runtime.Version":     false,
+		"debug.ReadBuildInfo": false,
+	}
+	requiredSelectors := map[string]bool{
+		"runtime.GOOS":   false,
+		"runtime.GOARCH": false,
+	}
+	requiredLiterals := map[string]bool{
+		"go=":       false,
+		"target=":   false,
+		"build-go=": false,
+	}
+	ast.Inspect(function.Body, func(node ast.Node) bool {
+		switch node := node.(type) {
+		case *ast.CallExpr:
+			if name, found := qualifiedSelector(node.Fun); found {
+				if _, required := requiredCalls[name]; required {
+					requiredCalls[name] = true
+				}
+			}
+		case *ast.SelectorExpr:
+			if name, found := qualifiedSelector(node); found {
+				if _, required := requiredSelectors[name]; required {
+					requiredSelectors[name] = true
+				}
+			}
+		case *ast.BasicLit:
+			if node.Kind != token.STRING {
+				return true
+			}
+			value, err := strconv.Unquote(node.Value)
+			if err != nil {
+				t.Fatalf("unquote bundle source literal %q: %v", node.Value, err)
+			}
+			if _, required := requiredLiterals[value]; required {
+				requiredLiterals[value] = true
+			}
+		}
+		return true
+	})
+	for name, found := range requiredCalls {
+		if !found {
+			t.Fatalf("bundleDigest no longer reads %s", name)
+		}
+	}
+	for name, found := range requiredSelectors {
+		if !found {
+			t.Fatalf("bundleDigest no longer includes %s", name)
+		}
+	}
+	for literal, found := range requiredLiterals {
+		if !found {
+			t.Fatalf("bundleDigest no longer includes %q", literal)
+		}
+	}
+}
+
+func qualifiedSelector(expression ast.Expr) (string, bool) {
+	selector, ok := expression.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	packageName, ok := selector.X.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	return packageName.Name + "." + selector.Sel.Name, true
+}
+
 func staticBundleInputDigest(inputs []string) string {
+	return digestInputs(inputs)
+}
+
+func runtimeBundleDigest(staticInputs []string) ucidomain.IndexDigest {
+	parts := append([]string(nil), staticInputs...)
+	parts = append(parts, "go="+runtime.Version(), "target="+runtime.GOOS+"/"+runtime.GOARCH)
+	if build, ok := debug.ReadBuildInfo(); ok && build.GoVersion != "" {
+		parts = append(parts, "build-go="+build.GoVersion)
+	}
+	return ucidomain.IndexDigest(digestInputs(parts))
+}
+
+func digestInputs(inputs []string) string {
 	parts := append([]string(nil), inputs...)
 	sort.Strings(parts)
 	state := sha256.New()
@@ -431,83 +1023,133 @@ func staticBundleInputDigest(inputs []string) string {
 	return "sha256:" + hex.EncodeToString(state.Sum(nil))
 }
 
-func assertTargetEvidence(t *testing.T, targets []parserTargetEvidence) {
+func assertTargetEvidence(t *testing.T, manifest parserManifest) {
 	t.Helper()
 
+	targets := manifest.Targets
+	assertNoDuplicateTargets(t, targets)
 	if !reflect.DeepEqual(targets, expectedTargets) {
 		t.Fatalf("target matrix = %#v, want %#v", targets, expectedTargets)
 	}
 	for _, target := range targets {
-		if target.EvidenceState != "not_run" {
-			t.Fatalf("target %s/%s claims %q without an executed build receipt", target.GOOS, target.GOARCH, target.EvidenceState)
+		if strings.ContainsAny(target.BuildCommand, "<>") || strings.Contains(strings.ToLower(target.BuildCommand), "latest") {
+			t.Fatalf("target %s/%s build command is not a deterministic pinned command: %q", target.GOOS, target.GOARCH, target.BuildCommand)
 		}
+		if got, want := target.BuildCommand, targetBuildCommand(target.GOOS, target.GOARCH); got != want {
+			t.Fatalf("target %s/%s build command = %q, want %q", target.GOOS, target.GOARCH, got, want)
+		}
+		if target.CGOToolchainRequirement != "a C compiler capable of GOOS/GOARCH configured as CC" {
+			t.Fatalf("target %s/%s CGO toolchain requirement = %q", target.GOOS, target.GOARCH, target.CGOToolchainRequirement)
+		}
+		assertSourceProbeEvidence(t, manifest, target)
 	}
 }
 
-func assertParserSourceIdentity(t *testing.T, _ string, manifest parserManifest) {
+func assertSourceProbeEvidence(t *testing.T, manifest parserManifest, target parserTargetEvidence) {
 	t.Helper()
 
-	wantDigest := runtimeBundleDigest(manifest.BundleDigest.StaticInputs)
-	if got := bundleDigest(); got != wantDigest {
-		t.Fatalf("runtime bundle digest = %q, want manifest-derived %q", got, wantDigest)
-	}
-	probeSources := map[string][]byte{
-		"javascript": []byte("export const value = 1;\n"),
-		"typescript": []byte("export interface Value { id: string }\n"),
-		"tsx":        []byte("export const Value = () => <div />;\n"),
-	}
-	for _, grammar := range manifest.CompiledGrammars {
-		language := ucidomain.TreeSitterLanguage(grammar.Language)
-		loaded, supported := parserLanguage(language)
-		if !supported || loaded == nil {
-			t.Fatalf("compiled grammar %q is unavailable", grammar.Language)
+	probe := target.SourceProbe
+	switch probe.Code {
+	case "source_build_and_javascript_smoke_passed":
+		if (target.GOOS != "windows" && target.GOOS != "linux") || target.GOARCH != "amd64" {
+			t.Fatalf("source probe pass is only recorded for windows/amd64 or linux/amd64, got %s/%s", target.GOOS, target.GOARCH)
 		}
-		response := extract(ucidomain.TreeSitterWorkerWireRequest{
-			Version:    ucidomain.TreeSitterWorkerProtocolVersion,
-			Language:   language,
-			ProfileKey: "manifest-runtime-probe-v1",
-			Source:     probeSources[grammar.Language],
-		})
-		if response.BundleDigest != wantDigest {
-			t.Fatalf("%s response bundle digest = %q, want %q", grammar.Language, response.BundleDigest, wantDigest)
+		if target.SupportStatus != "source_probe_passed" || target.EvidenceState != "passed" {
+			t.Fatalf("source probe pass status for %s/%s = %q/%q, want source_probe_passed/passed", target.GOOS, target.GOARCH, target.SupportStatus, target.EvidenceState)
 		}
-		if response.Coverage == ucidomain.IndexCoverageUnavailable {
-			t.Fatalf("compiled grammar %q returned unavailable coverage: %#v", grammar.Language, response.Diagnostics)
+		if probe.BuildState != "passed" || probe.SmokeState != "passed" {
+			t.Fatalf("source probe pass build/smoke state for %s/%s = %q/%q, want passed/passed", target.GOOS, target.GOARCH, probe.BuildState, probe.SmokeState)
 		}
+		if probe.ObservedProtocolRevision != manifest.ParserProtocolRevision {
+			t.Fatalf("source probe pass protocol for %s/%s = %q, want %q", target.GOOS, target.GOARCH, probe.ObservedProtocolRevision, manifest.ParserProtocolRevision)
+		}
+		if !sha256Digest.MatchString(probe.ObservedBundleDigest) {
+			t.Fatalf("source probe pass bundle digest for %s/%s %q is noncanonical", target.GOOS, target.GOARCH, probe.ObservedBundleDigest)
+		}
+		if probe.ObservedCoverage != "complete" {
+			t.Fatalf("source probe pass coverage for %s/%s = %q, want complete", target.GOOS, target.GOARCH, probe.ObservedCoverage)
+		}
+		if probe.BlockerDetail != "" {
+			t.Fatalf("source probe pass for %s/%s records an unexpected blocker %q", target.GOOS, target.GOARCH, probe.BlockerDetail)
+		}
+	case "blocked_missing_cross_c_toolchain":
+		if target.GOOS != "linux" && target.GOOS != "darwin" {
+			t.Fatalf("cross-C-toolchain blocker is not valid for %s/%s", target.GOOS, target.GOARCH)
+		}
+		if target.SupportStatus != "not_claimed" || target.EvidenceState != "blocked" {
+			t.Fatalf("blocked target %s/%s status = %q/%q, want not_claimed/blocked", target.GOOS, target.GOARCH, target.SupportStatus, target.EvidenceState)
+		}
+		if probe.BuildState != "blocked" || probe.SmokeState != "not_run" {
+			t.Fatalf("blocked target %s/%s build/smoke state = %q/%q, want blocked/not_run", target.GOOS, target.GOARCH, probe.BuildState, probe.SmokeState)
+		}
+		if probe.ObservedProtocolRevision != "" || probe.ObservedBundleDigest != "" || probe.ObservedCoverage != "" {
+			t.Fatalf("blocked target %s/%s must not claim smoke output %#v", target.GOOS, target.GOARCH, probe)
+		}
+		if strings.TrimSpace(probe.BlockerDetail) == "" {
+			t.Fatalf("blocked target %s/%s is missing its cross-C-toolchain detail", target.GOOS, target.GOARCH)
+		}
+	default:
+		t.Fatalf("target %s/%s has unknown source probe code %q", target.GOOS, target.GOARCH, probe.Code)
 	}
 }
 
-func runtimeBundleDigest(staticInputs []string) ucidomain.IndexDigest {
-	parts := append([]string(nil), staticInputs...)
-	parts = append(parts, "go="+runtime.Version(), "target="+runtime.GOOS+"/"+runtime.GOARCH)
-	if build, ok := debug.ReadBuildInfo(); ok && build.GoVersion != "" {
-		parts = append(parts, "build-go="+build.GoVersion)
-	}
-	sort.Strings(parts)
-	state := sha256.New()
-	for _, part := range parts {
-		var length [4]byte
-		binary.BigEndian.PutUint32(length[:], uint32(len(part)))
-		_, _ = state.Write(length[:])
-		_, _ = state.Write([]byte(part))
-	}
-	return ucidomain.IndexDigest("sha256:" + hex.EncodeToString(state.Sum(nil)))
+func targetBuildCommand(goos, goarch string) string {
+	return "CGO_ENABLED=1 GOOS=" + goos + " GOARCH=" + goarch + " go build ./tools/uci-parser"
 }
 
-func assertParentProtocolIdentity(t *testing.T, _ string, manifest parserManifest) {
+func assertParentProtocolIdentity(t *testing.T, manifest parserManifest) {
 	t.Helper()
+
 	if got := ucidomain.TreeSitterWorkerProtocolVersion; got != manifest.ParserProtocolRevision {
 		t.Fatalf("parent protocol revision = %q, want %q", got, manifest.ParserProtocolRevision)
 	}
-	wantLanguages := map[string]ucidomain.TreeSitterLanguage{
-		"javascript": ucidomain.TreeSitterLanguageJavaScript,
-		"typescript": ucidomain.TreeSitterLanguageTypeScript,
-		"tsx":        ucidomain.TreeSitterLanguageTSX,
+}
+
+func assertNoDuplicateDependencies(t *testing.T, dependencies []parserDependency) {
+	t.Helper()
+
+	keys := make([]string, 0, len(dependencies))
+	for _, dependency := range dependencies {
+		keys = append(keys, dependency.Module)
 	}
-	for _, grammar := range manifest.CompiledGrammars {
-		if got, found := wantLanguages[grammar.Language]; !found || string(got) != grammar.Language {
-			t.Fatalf("parent worker does not expose manifest language %q", grammar.Language)
+	assertNoDuplicateStrings(t, "dependency modules", keys)
+}
+
+func assertNoDuplicateGrammars(t *testing.T, grammars []compiledGrammar) {
+	t.Helper()
+
+	languages := make([]string, 0, len(grammars))
+	bindings := make([]string, 0, len(grammars))
+	for _, grammar := range grammars {
+		languages = append(languages, grammar.Language)
+		bindings = append(bindings, grammar.GoBindingImport+"\x00"+grammar.BindingSymbol)
+	}
+	assertNoDuplicateStrings(t, "grammar languages", languages)
+	assertNoDuplicateStrings(t, "grammar bindings", bindings)
+}
+
+func assertNoDuplicateTargets(t *testing.T, targets []parserTargetEvidence) {
+	t.Helper()
+
+	keys := make([]string, 0, len(targets))
+	for _, target := range targets {
+		keys = append(keys, target.GOOS+"/"+target.GOARCH)
+	}
+	assertNoDuplicateStrings(t, "target pairs", keys)
+}
+
+func assertNoDuplicateStrings(t *testing.T, label string, values []string) {
+	t.Helper()
+
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value == "" {
+			t.Fatalf("%s contains an empty entry", label)
 		}
+		if _, exists := seen[value]; exists {
+			t.Fatalf("%s contains duplicate entry %q", label, value)
+		}
+		seen[value] = struct{}{}
 	}
 }
 

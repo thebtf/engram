@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "component": "uci-parser",
   "parser_protocol_revision": "uci-tree-sitter/v1",
   "bundle_schema_revision": "uci-tree-sitter-bundle/v1",
@@ -11,15 +11,7 @@
       "https://github.com/tree-sitter/tree-sitter-javascript/blob/44c892e0be055ac465d5eeddae6d3e194424e7de/bindings/go/binding.go",
       "https://github.com/tree-sitter/tree-sitter-typescript/blob/f975a621f4e7f532fe322e13c4f79495e0a7b2e7/bindings/go/typescript.go",
       "https://github.com/tree-sitter/tree-sitter-typescript/blob/f975a621f4e7f532fe322e13c4f79495e0a7b2e7/bindings/go/tsx.go"
-    ],
-    "observed_host": {
-      "go_version": "go1.26.6",
-      "goos": "windows",
-      "goarch": "amd64",
-      "cgo_enabled": true,
-      "build_evidence_state": "not_run",
-      "note": "Toolchain facts were observed only; no uci-parser build or test was executed for this manifest."
-    }
+    ]
   },
   "dependencies": [
     {
@@ -124,26 +116,70 @@
     {
       "goos": "windows",
       "goarch": "amd64",
-      "evidence_state": "not_run",
-      "required_gate": "CGO_ENABLED=1 go build ./tools/uci-parser"
+      "support_status": "source_probe_passed",
+      "evidence_state": "passed",
+      "build_command": "CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build ./tools/uci-parser",
+      "cgo_toolchain_requirement": "a C compiler capable of GOOS/GOARCH configured as CC",
+      "source_probe": {
+        "code": "source_build_and_javascript_smoke_passed",
+        "build_state": "passed",
+        "smoke_state": "passed",
+        "observed_protocol_revision": "uci-tree-sitter/v1",
+        "observed_bundle_digest": "sha256:39b46e870ecf93bb942e5ccc043626f2ec40d3d3bfeb8b7ea4e230f05df827ba",
+        "observed_coverage": "complete",
+        "blocker_detail": ""
+      }
     },
     {
       "goos": "linux",
       "goarch": "amd64",
-      "evidence_state": "not_run",
-      "required_gate": "GOOS=linux GOARCH=amd64 CGO_ENABLED=1 CC=<linux-amd64-c-compiler> go build ./tools/uci-parser"
+      "support_status": "source_probe_passed",
+      "evidence_state": "passed",
+      "build_command": "CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build ./tools/uci-parser",
+      "cgo_toolchain_requirement": "a C compiler capable of GOOS/GOARCH configured as CC",
+      "source_probe": {
+        "code": "source_build_and_javascript_smoke_passed",
+        "build_state": "passed",
+        "smoke_state": "passed",
+        "observed_protocol_revision": "uci-tree-sitter/v1",
+        "observed_bundle_digest": "sha256:2e286303d97702c827ffb5acf682adb0f8682e2ce8f29c5b6ccebb6723ff6dad",
+        "observed_coverage": "complete",
+        "blocker_detail": ""
+      }
     },
     {
       "goos": "darwin",
       "goarch": "amd64",
-      "evidence_state": "not_run",
-      "required_gate": "GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 CC=<darwin-amd64-c-compiler> go build ./tools/uci-parser"
+      "support_status": "not_claimed",
+      "evidence_state": "blocked",
+      "build_command": "CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build ./tools/uci-parser",
+      "cgo_toolchain_requirement": "a C compiler capable of GOOS/GOARCH configured as CC",
+      "source_probe": {
+        "code": "blocked_missing_cross_c_toolchain",
+        "build_state": "blocked",
+        "smoke_state": "not_run",
+        "observed_protocol_revision": "",
+        "observed_bundle_digest": "",
+        "observed_coverage": "",
+        "blocker_detail": "host clang target rejects -arch"
+      }
     },
     {
       "goos": "darwin",
       "goarch": "arm64",
-      "evidence_state": "not_run",
-      "required_gate": "GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 CC=<darwin-arm64-c-compiler> go build ./tools/uci-parser"
+      "support_status": "not_claimed",
+      "evidence_state": "blocked",
+      "build_command": "CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build ./tools/uci-parser",
+      "cgo_toolchain_requirement": "a C compiler capable of GOOS/GOARCH configured as CC",
+      "source_probe": {
+        "code": "blocked_missing_cross_c_toolchain",
+        "build_state": "blocked",
+        "smoke_state": "not_run",
+        "observed_protocol_revision": "",
+        "observed_bundle_digest": "",
+        "observed_coverage": "",
+        "blocker_detail": "host clang target rejects -arch"
+      }
     }
   ]
 }
