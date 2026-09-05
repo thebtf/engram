@@ -1079,6 +1079,9 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	if codeIntelEnabled() && s.hasCodebaseContextApplication() {
 		tools = append(tools, codebaseContextTool())
 	}
+	if codeIntelEnabled() && s.hasCodebaseReadApplication() {
+		tools = append(tools, codebaseReadTool())
+	}
 
 	// Ambient fallback polling — advertise only when the S3 flag is on and the queue seam is wired.
 	if ambientHintsEnabledFromEnv() && s.hintQueue != nil {
@@ -1485,6 +1488,8 @@ func (s *Server) callTool(ctx context.Context, name string, args json.RawMessage
 		return s.handleCodebaseStatus(ctx, args)
 	case "codebase_context":
 		return s.handleCodebaseContext(ctx, args)
+	case "codebase_read":
+		return s.handleCodebaseRead(ctx, args)
 	}
 
 	return "", fmt.Errorf("unknown tool: %s", name)
