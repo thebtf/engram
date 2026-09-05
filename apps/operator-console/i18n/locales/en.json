@@ -1,6 +1,5 @@
 {
   "_note": "EN is the first translation target. Keys mirror ru.json exactly. A missing key here falls back to the RU string (i18n.config fallbackLocale), so a partial translation still renders a coherent console. This file is the worked example of 'translate a screen' — the developer extends it screen by screen as pages are keyed.",
-
   "common": {
     "show": "Show",
     "hide": "Hide",
@@ -14,14 +13,12 @@
     "clearSelection": "Clear selection",
     "loadingShort": "…"
   },
-
   "honesty": {
     "live": "live",
     "dormant": "behind flag",
     "stale": "tombstone",
     "mustbuild": "must build"
   },
-
   "errors": {
     "diagnosis": {
       "unauthorized": "Sign in again to continue.",
@@ -33,11 +30,9 @@
       "invalid-response": "The Engram server returned an unreadable response."
     }
   },
-
   "switchRow": {
     "restartRequired": "restart"
   },
-
   "shell": {
     "brandHome": "Home — Overview",
     "collapseNav": "Collapse navigation",
@@ -68,7 +63,11 @@
     "authLocked": "login required",
     "authUnknown": "session unknown",
     "online": "online",
-    "backend": { "ready": "console reachable · server ready", "degraded": "console reachable · server degraded", "unavailable": "console reachable · server unavailable" },
+    "backend": {
+      "ready": "console reachable · server ready",
+      "degraded": "console reachable · server degraded",
+      "unavailable": "console reachable · server unavailable"
+    },
     "postgres": "PostgreSQL 17 · pgvector",
     "statusDegradation": "degradation",
     "statusNoise": "noise",
@@ -77,7 +76,6 @@
     "reviewQueue": "{count} in review | {count} in review",
     "uptime": "running {value}"
   },
-
   "profileModal": {
     "aria": "Operator profile",
     "close": "Close profile",
@@ -95,7 +93,6 @@
     "current": "current",
     "sessionsMustBuildBody": "Full session listing and revoke actions stay mustbuild until an auth sessions endpoint exists."
   },
-
   "nav": {
     "groups": {
       "workspace": "Workspace",
@@ -126,7 +123,6 @@
       "booksPipeline": "processing pipeline"
     }
   },
-
   "overview": {
     "pageTitle": "Overview",
     "pageSubtitle": "Summary across memory, product, and service. Cards lead to their sections.",
@@ -190,23 +186,42 @@
       "service": "Service"
     },
     "cards": {
-      "memory": { "sub": "{active} active · {noise} in noise" },
-      "queue": { "sub": "memory candidates waiting for a decision" },
-      "noise": { "sub": "share of noisy injections" },
-      "graph": { "sub": "concept graph and transitions" },
-      "books": { "sub": "author-domain and terminology ingest" },
-      "rules": { "sub": "operator always-inject directives" },
+      "memory": {
+        "sub": "{active} active · {noise} in noise"
+      },
+      "queue": {
+        "sub": "memory candidates waiting for a decision"
+      },
+      "noise": {
+        "sub": "share of noisy injections"
+      },
+      "graph": {
+        "sub": "concept graph and transitions"
+      },
+      "books": {
+        "sub": "author-domain and terminology ingest"
+      },
+      "rules": {
+        "sub": "operator always-inject directives"
+      },
       "issues": {
         "sub": "{open} open · {work} in progress · {total} total",
         "openBadge": "{n} open"
       },
-      "projects": { "sub": "{n} active session(s)" },
-      "health": { "sub": "{ok} model(s) ok · {degraded} degraded" },
-      "secrets": { "sub": "keys in vault · encryption enabled" },
-      "access": { "sub": "users, login providers, roles" }
+      "projects": {
+        "sub": "{n} active session(s)"
+      },
+      "health": {
+        "sub": "{ok} model(s) ok · {degraded} degraded"
+      },
+      "secrets": {
+        "sub": "keys in vault · encryption enabled"
+      },
+      "access": {
+        "sub": "users, login providers, roles"
+      }
     }
   },
-
   "memory": {
     "title": "Memory",
     "subtitle": "Engram knowledge working list: what to use in answers, what to verify, what to remove as noise.",
@@ -376,7 +391,6 @@
       "mustBuildNote": "bulk actions are waiting for server endpoints; selected records can be cleared"
     }
   },
-
   "queue": {
     "title": "Review queue",
     "subtitle": "Memory candidates: promote useful knowledge, reject noise, or mark older candidates as superseded.",
@@ -410,20 +424,20 @@
     },
     "countInFilter": "{shown} candidates · {selected} selected",
     "rowsLabel": "Rows",
-  "allRows": "All",
-  "pageRange": "{from}–{to} of {total}",
-  "pagination": {
-    "first": "Go to first page",
-    "previous": "Go to previous page",
-    "current": "Current page {page}",
-    "next": "Go to next page",
-    "last": "Go to last page"
-  },
-  "aria": {
-    "toggleCandidate": "Select candidate {id}",
-    "action": "{action}: candidate {id}"
-  },
-  "table": {
+    "allRows": "All",
+    "pageRange": "{from}–{to} of {total}",
+    "pagination": {
+      "first": "Go to first page",
+      "previous": "Go to previous page",
+      "current": "Current page {page}",
+      "next": "Go to next page",
+      "last": "Go to last page"
+    },
+    "aria": {
+      "toggleCandidate": "Select candidate {id}",
+      "action": "{action}: candidate {id}"
+    },
+    "table": {
       "candidate": "Candidate · target · project · age",
       "confidence": "Confidence",
       "actions": "Decision"
@@ -576,7 +590,16 @@
       "body": "Trusted OIDC proxies configured: {proxies}. Invite use is single-use and session revoke is a soft, audited lifecycle event."
     },
     "state": {
-      "runtime": { "pending": "pending", "live": "live", "empty": "empty", "gated": "gated", "unauthorized": "unauthorized", "forbidden": "forbidden", "error": "error", "stale-snapshot": "stale-snapshot" },
+      "runtime": {
+        "pending": "pending",
+        "live": "live",
+        "empty": "empty",
+        "gated": "gated",
+        "unauthorized": "unauthorized",
+        "forbidden": "forbidden",
+        "error": "error",
+        "stale-snapshot": "stale-snapshot"
+      },
       "pending": "Loading access surface…",
       "error": "Could not load access surface: {message}",
       "stale": "Showing the last proven access snapshot from {updatedAt}; refresh failed: {message}",
@@ -617,6 +640,55 @@
         "muted": "Muted"
       }
     },
+    "keycards": {
+      "title": "Workstation keycards",
+      "subtitle": "Issue, list, and revoke workstation credentials through the current admin browser session.",
+      "pending": "Loading workstation keycards…",
+      "errorTitle": "Could not load workstation keycards",
+      "error": "Keycard operation is unavailable: {message}",
+      "form": {
+        "name": "Workstation name",
+        "namePlaceholder": "for example: studio-laptop",
+        "scope": "Scope",
+        "principal": "Principal",
+        "principalPlaceholder": "for example: operator/alice",
+        "principalKind": "Principal kind",
+        "expiresAt": "Expires at",
+        "expiresAtHint": "Optional. The server validates the final expiration.",
+        "submit": "Issue keycard"
+      },
+      "scopes": {
+        "readWrite": "Read / write",
+        "readOnly": "Read only"
+      },
+      "principalKinds": {
+        "human": "Human",
+        "agent": "Agent",
+        "service": "Service"
+      },
+      "reveal": {
+        "title": "Copy this keycard now",
+        "body": "The raw keycard is returned only once and never appears in the keycard list, URL, or browser storage.",
+        "copyHint": "Use the copy control beside the keycard, then dismiss this panel.",
+        "dismiss": "Dismiss"
+      },
+      "columns": {
+        "name": "Workstation",
+        "identity": "Identity",
+        "scope": "Scope",
+        "expires": "Expires",
+        "activity": "Activity",
+        "status": "Status",
+        "actions": "Actions"
+      },
+      "status": {
+        "active": "Active",
+        "revoked": "Revoked",
+        "expired": "Expired"
+      },
+      "requestCount": "Requests: {count} · errors: {errors}",
+      "empty": "No workstation keycards recorded yet."
+    },
     "invitations": {
       "title": "Invitations",
       "subtitle": "Issue expiring single-use invites and revoke them without deleting the audit trail.",
@@ -644,15 +716,15 @@
         "expired": "Expired",
         "revoked": "Revoked"
       },
-    "empty": "No invitations recorded yet.",
-    "reveal": {
-      "title": "Copy this invitation now",
-      "body": "This code is shown once and will not appear in invitation history.",
-      "copy": "Copy code",
-      "copySuccess": "Code copied.",
-      "copyError": "Could not copy the code. Copy it manually before closing this notice.",
-      "dismiss": "Dismiss"
-    }
+      "empty": "No invitations recorded yet.",
+      "reveal": {
+        "title": "Copy this invitation now",
+        "body": "This code is shown once and will not appear in invitation history.",
+        "copy": "Copy code",
+        "copySuccess": "Code copied.",
+        "copyError": "Could not copy the code. Copy it manually before closing this notice.",
+        "dismiss": "Dismiss"
+      }
     },
     "users": {
       "title": "Users",
@@ -754,6 +826,9 @@
       "userEnabled": "Enabled {email}.",
       "sessionRevokedReason": "operator revoked session from access page",
       "sessionRevoked": "Revoked session for {email}.",
+      "keycardInvalid": "Provide a workstation name and principal before issuing a keycard.",
+      "keycardCreated": "Workstation keycard issued. Copy it now; it will not be shown again.",
+      "keycardRevoked": "Revoked workstation keycard {name}.",
       "error": "Operation failed: {message}"
     }
   },
@@ -773,7 +848,16 @@
       "project": "Graph project"
     },
     "state": {
-      "runtime": { "pending": "pending", "live": "live", "empty": "empty", "gated": "gated", "unauthorized": "unauthorized", "forbidden": "forbidden", "error": "error", "stale-snapshot": "stale-snapshot" },
+      "runtime": {
+        "pending": "pending",
+        "live": "live",
+        "empty": "empty",
+        "gated": "gated",
+        "unauthorized": "unauthorized",
+        "forbidden": "forbidden",
+        "error": "error",
+        "stale-snapshot": "stale-snapshot"
+      },
       "pending": "Loading graph data…",
       "error": "Could not load graph data: {message}",
       "stale": "Showing the last proven graph snapshot from {updatedAt}; refresh failed: {message}",
@@ -927,7 +1011,6 @@
       "edge": "{source} — {type} → {target}"
     }
   },
-
   "rules": {
     "title": "Behavior rules",
     "subtitle": "Rules enter every new session context from top to bottom. Set the order by dragging — higher rules apply earlier.",
@@ -1008,7 +1091,6 @@
       "disable": "Disable rule"
     }
   },
-
   "issues": {
     "title": "Issues",
     "subtitle": "Issue journal with priority, type, status, route, and comment count.",
@@ -1264,7 +1346,6 @@
       "task": "task"
     }
   },
-
   "secrets": {
     "title": "Secrets",
     "subtitle": "Keys and credentials: values are hidden in the list, revealing is an explicit action.",
@@ -1335,7 +1416,6 @@
     "copySecret": "Copy",
     "hideSecret": "Hide"
   },
-
   "projects": {
     "title": "Projects & sessions",
     "subtitle": "Projects on this server, recent working sessions, and honest boundaries for what can be opened now.",
@@ -1413,7 +1493,6 @@
       "codeIntel": "Code-intelligence summary is still available only through the tool surface."
     }
   },
-
   "health": {
     "title": "Health",
     "subtitle": "Live server snapshot: readiness, selfcheck, vectors, vNext metrics, and update channel.",
@@ -1463,7 +1542,6 @@
       "model": "Model"
     }
   },
-
   "settings": {
     "title": "Settings",
     "subtitle": "Read-only runtime config and actions that require explicit operator confirmation.",
@@ -1483,7 +1561,9 @@
         "detailsTitle": "Implementation details",
         "detailsBody": "The Access page is the live administration surface; this Settings tab does not provide a separate policy editor."
       },
-      "evidence": { "title": "Implementation details" },
+      "evidence": {
+        "title": "Implementation details"
+      },
       "groups": {
         "basic": "Basic",
         "models": "Models",
@@ -1772,7 +1852,6 @@
       "updateAvailable": "available"
     }
   },
-
   "searchPage": {
     "title": "Search",
     "subtitle": "Live context search over Engram server observations, with recent/analytics telemetry and an honest tombstone for old collection search.",
@@ -1813,7 +1892,6 @@
       "body": "Legacy search_collection is not wired as a working UI search; it is a removed/stale surface kept only as evidence."
     }
   },
-
   "noisePage": {
     "title": "Noise & usefulness",
     "subtitle": "Live retrieval/search telemetry: what agents saw, what they used, and where data is sparse or unrecorded.",
@@ -1856,7 +1934,6 @@
       "body": "The server exposes a snapshot today, but no time-series endpoint for the noise trend chart yet."
     }
   },
-
   "booksPage": {
     "title": "Books as context",
     "subtitle": "Upload or paste a source text, let the books pipeline chunk it through the markdown adapter, and track the job until produced documents land in Documents.",
@@ -1918,7 +1995,6 @@
       "loadError": "Unknown books pipeline error"
     }
   },
-
   "sectionStub": {
     "state": {
       "live": "This section is connected but has no expanded view yet.",
@@ -1927,7 +2003,6 @@
       "mustbuild": "This section needs to be built."
     }
   },
-
   "deferred": {
     "queue": {
       "title": "Review queue",

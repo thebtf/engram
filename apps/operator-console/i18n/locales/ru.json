@@ -1,6 +1,5 @@
 {
   "_note": "RU is the contract language — these strings mirror the .od/index.html mockup verbatim. This file is the localization seam (the i18n analogue of useMockData.ts): every visible string has a key here, components read it via t(). When the mockup changes a string, change it here and mark the section drifted in PARITY.json. Key convention: [area].[element], areas mirror nav section ids.",
-
   "common": {
     "show": "Показать",
     "hide": "Скрыть",
@@ -14,14 +13,12 @@
     "clearSelection": "Снять выбор",
     "loadingShort": "…"
   },
-
   "honesty": {
     "live": "работает",
     "dormant": "за флагом",
     "stale": "надгробие",
     "mustbuild": "нужно построить"
   },
-
   "errors": {
     "diagnosis": {
       "unauthorized": "Войдите снова, чтобы продолжить.",
@@ -33,11 +30,9 @@
       "invalid-response": "Сервер Engram вернул нечитаемый ответ."
     }
   },
-
   "switchRow": {
     "restartRequired": "restart"
   },
-
   "shell": {
     "brandHome": "На главную — Обзор",
     "collapseNav": "Свернуть меню",
@@ -68,7 +63,11 @@
     "authLocked": "требуется вход",
     "authUnknown": "сессия неизвестна",
     "online": "онлайн",
-    "backend": { "ready": "console reachable · server ready", "degraded": "console reachable · server degraded", "unavailable": "console reachable · server unavailable" },
+    "backend": {
+      "ready": "console reachable · server ready",
+      "degraded": "console reachable · server degraded",
+      "unavailable": "console reachable · server unavailable"
+    },
     "postgres": "PostgreSQL 17 · pgvector",
     "statusDegradation": "деградация",
     "statusNoise": "шум",
@@ -77,7 +76,6 @@
     "reviewQueue": "на проверку {count} | на проверку {count} | на проверку {count}",
     "uptime": "работает {value}"
   },
-
   "profileModal": {
     "aria": "Профиль оператора",
     "close": "Закрыть профиль",
@@ -95,7 +93,6 @@
     "current": "текущая",
     "sessionsMustBuildBody": "Полный список сессий и revoke-действия остаются mustbuild до появления auth sessions endpoint."
   },
-
   "nav": {
     "groups": {
       "workspace": "Рабочее место",
@@ -126,7 +123,6 @@
       "booksPipeline": "конвейер обработки"
     }
   },
-
   "overview": {
     "pageTitle": "Обзор",
     "pageSubtitle": "Сводка по всей памяти, продукту и сервису. Карточки ведут в свои разделы.",
@@ -190,23 +186,42 @@
       "service": "Сервис"
     },
     "cards": {
-      "memory": { "sub": "{active} активных · {noise} в шуме" },
-      "queue": { "sub": "кандидаты в память, ждут решения" },
-      "noise": { "sub": "доля шумовых инъекций" },
-      "graph": { "sub": "граф концептов и переходов" },
-      "books": { "sub": "загрузка авторских доменов и терминов" },
-      "rules": { "sub": "always-inject директивы оператора" },
+      "memory": {
+        "sub": "{active} активных · {noise} в шуме"
+      },
+      "queue": {
+        "sub": "кандидаты в память, ждут решения"
+      },
+      "noise": {
+        "sub": "доля шумовых инъекций"
+      },
+      "graph": {
+        "sub": "граф концептов и переходов"
+      },
+      "books": {
+        "sub": "загрузка авторских доменов и терминов"
+      },
+      "rules": {
+        "sub": "always-inject директивы оператора"
+      },
       "issues": {
         "sub": "{open} открытых · {work} в работе · {total} всего",
         "openBadge": "{n} открыто"
       },
-      "projects": { "sub": "{n} активных сесси(й)" },
-      "health": { "sub": "{ok} модел(и) ok · {degraded} деградирует" },
-      "secrets": { "sub": "ключи в vault · шифрование включено" },
-      "access": { "sub": "пользователи, провайдеры входа, роли" }
+      "projects": {
+        "sub": "{n} активных сесси(й)"
+      },
+      "health": {
+        "sub": "{ok} модел(и) ok · {degraded} деградирует"
+      },
+      "secrets": {
+        "sub": "ключи в vault · шифрование включено"
+      },
+      "access": {
+        "sub": "пользователи, провайдеры входа, роли"
+      }
     }
   },
-
   "memory": {
     "title": "Память",
     "subtitle": "Рабочий список знаний Engram: что использовать в ответах, что проверить, что убрать как шум.",
@@ -376,7 +391,6 @@
       "mustBuildNote": "bulk-действия ждут серверные endpoints; выбранные записи можно снять"
     }
   },
-
   "queue": {
     "title": "На проверку",
     "subtitle": "Кандидаты в память: что повысить до знания, что отклонить, что заменить более свежей записью.",
@@ -410,20 +424,20 @@
     },
     "countInFilter": "{shown} кандидатов · выбрано {selected}",
     "rowsLabel": "Строк",
-  "allRows": "Все",
-  "pageRange": "{from}–{to} из {total}",
-  "pagination": {
-    "first": "Перейти на первую страницу",
-    "previous": "Перейти на предыдущую страницу",
-    "current": "Текущая страница {page}",
-    "next": "Перейти на следующую страницу",
-    "last": "Перейти на последнюю страницу"
-  },
-  "aria": {
-    "toggleCandidate": "Выбрать кандидата {id}",
-    "action": "{action}: кандидат {id}"
-  },
-  "table": {
+    "allRows": "Все",
+    "pageRange": "{from}–{to} из {total}",
+    "pagination": {
+      "first": "Перейти на первую страницу",
+      "previous": "Перейти на предыдущую страницу",
+      "current": "Текущая страница {page}",
+      "next": "Перейти на следующую страницу",
+      "last": "Перейти на последнюю страницу"
+    },
+    "aria": {
+      "toggleCandidate": "Выбрать кандидата {id}",
+      "action": "{action}: кандидат {id}"
+    },
+    "table": {
       "candidate": "Кандидат · назначение · проект · давность",
       "confidence": "Уверенность",
       "actions": "Решение"
@@ -576,7 +590,16 @@
       "body": "Доверенных OIDC-прокси настроено: {proxies}. Приглашение одноразовое, а revoke сессии остаётся мягким и аудируемым lifecycle-событием."
     },
     "state": {
-      "runtime": { "pending": "pending", "live": "live", "empty": "empty", "gated": "gated", "unauthorized": "unauthorized", "forbidden": "forbidden", "error": "error", "stale-snapshot": "stale-snapshot" },
+      "runtime": {
+        "pending": "pending",
+        "live": "live",
+        "empty": "empty",
+        "gated": "gated",
+        "unauthorized": "unauthorized",
+        "forbidden": "forbidden",
+        "error": "error",
+        "stale-snapshot": "stale-snapshot"
+      },
       "pending": "Загружаем поверхность доступа…",
       "error": "Не удалось загрузить поверхность доступа: {message}",
       "stale": "Показан последний подтверждённый снимок доступа от {updatedAt}; обновление не удалось: {message}",
@@ -617,6 +640,55 @@
         "muted": "Muted"
       }
     },
+    "keycards": {
+      "title": "Ключи рабочих станций",
+      "subtitle": "Выдавай, просматривай и отзывай ключи рабочих станций через текущую браузерную сессию администратора.",
+      "pending": "Загружаем ключи рабочих станций…",
+      "errorTitle": "Не удалось загрузить ключи рабочих станций",
+      "error": "Операция с ключом недоступна: {message}",
+      "form": {
+        "name": "Имя рабочей станции",
+        "namePlaceholder": "например: studio-laptop",
+        "scope": "Права",
+        "principal": "Субъект",
+        "principalPlaceholder": "например: operator/alice",
+        "principalKind": "Тип субъекта",
+        "expiresAt": "Срок действия",
+        "expiresAtHint": "Необязательно. Окончательный срок проверяет сервер.",
+        "submit": "Выдать ключ"
+      },
+      "scopes": {
+        "readWrite": "Чтение и запись",
+        "readOnly": "Только чтение"
+      },
+      "principalKinds": {
+        "human": "Человек",
+        "agent": "Агент",
+        "service": "Сервис"
+      },
+      "reveal": {
+        "title": "Скопируй ключ сейчас",
+        "body": "Полный ключ возвращается один раз и не появляется в списке, URL или хранилище браузера.",
+        "copyHint": "Используй кнопку копирования рядом с ключом, затем закрой эту панель.",
+        "dismiss": "Закрыть"
+      },
+      "columns": {
+        "name": "Рабочая станция",
+        "identity": "Субъект",
+        "scope": "Права",
+        "expires": "Срок",
+        "activity": "Активность",
+        "status": "Статус",
+        "actions": "Действия"
+      },
+      "status": {
+        "active": "Активен",
+        "revoked": "Отозван",
+        "expired": "Истёк"
+      },
+      "requestCount": "Запросов: {count} · ошибок: {errors}",
+      "empty": "Ключей рабочих станций пока нет."
+    },
     "invitations": {
       "title": "Приглашения",
       "subtitle": "Выдавайте одноразовые приглашения с expiry и отзывайте их без удаления audit trail.",
@@ -644,15 +716,15 @@
         "expired": "Истекло",
         "revoked": "Отозвано"
       },
-    "empty": "Приглашений пока нет.",
-    "reveal": {
-      "title": "Скопируйте приглашение сейчас",
-      "body": "Код показан один раз и не появится в истории приглашений.",
-      "copy": "Скопировать код",
-      "copySuccess": "Код скопирован.",
-      "copyError": "Не удалось скопировать код. Скопируйте его вручную, прежде чем закрыть это сообщение.",
-      "dismiss": "Закрыть"
-    }
+      "empty": "Приглашений пока нет.",
+      "reveal": {
+        "title": "Скопируйте приглашение сейчас",
+        "body": "Код показан один раз и не появится в истории приглашений.",
+        "copy": "Скопировать код",
+        "copySuccess": "Код скопирован.",
+        "copyError": "Не удалось скопировать код. Скопируйте его вручную, прежде чем закрыть это сообщение.",
+        "dismiss": "Закрыть"
+      }
     },
     "users": {
       "title": "Пользователи",
@@ -754,6 +826,9 @@
       "userEnabled": "Пользователь {email} включён.",
       "sessionRevokedReason": "operator revoked session from access page",
       "sessionRevoked": "Сессия пользователя {email} отозвана.",
+      "keycardInvalid": "Перед выдачей ключа укажи имя рабочей станции и субъект.",
+      "keycardCreated": "Ключ рабочей станции выдан. Скопируй его сейчас: повторно он не появится.",
+      "keycardRevoked": "Ключ рабочей станции {name} отозван.",
       "error": "Операция не выполнена: {message}"
     }
   },
@@ -773,7 +848,16 @@
       "project": "Проект графа"
     },
     "state": {
-      "runtime": { "pending": "pending", "live": "live", "empty": "empty", "gated": "gated", "unauthorized": "unauthorized", "forbidden": "forbidden", "error": "error", "stale-snapshot": "stale-snapshot" },
+      "runtime": {
+        "pending": "pending",
+        "live": "live",
+        "empty": "empty",
+        "gated": "gated",
+        "unauthorized": "unauthorized",
+        "forbidden": "forbidden",
+        "error": "error",
+        "stale-snapshot": "stale-snapshot"
+      },
       "pending": "Загружаем граф…",
       "error": "Не удалось загрузить граф: {message}",
       "stale": "Показан последний подтверждённый снимок графа от {updatedAt}; обновление не удалось: {message}",
@@ -927,7 +1011,6 @@
       "edge": "{source} — {type} → {target}"
     }
   },
-
   "rules": {
     "title": "Правила поведения",
     "subtitle": "Правила попадают в контекст каждой новой сессии сверху вниз. Порядок задаёте перетаскиванием — что выше, то применяется раньше.",
@@ -1008,7 +1091,6 @@
       "disable": "Отключить правило"
     }
   },
-
   "issues": {
     "title": "Задачи",
     "subtitle": "Журнал задач с приоритетом, типом, состоянием, маршрутом и количеством комментариев.",
@@ -1264,7 +1346,6 @@
       "task": "задача"
     }
   },
-
   "secrets": {
     "title": "Секреты",
     "subtitle": "Ключи и доступы: значения не показываются в списке, раскрытие — явным действием.",
@@ -1335,7 +1416,6 @@
     "copySecret": "Скопировать",
     "hideSecret": "Скрыть"
   },
-
   "projects": {
     "title": "Проекты и сессии",
     "subtitle": "Проекты на этом сервере, последние рабочие сессии и честные границы того, что можно открыть сейчас.",
@@ -1413,7 +1493,6 @@
       "codeIntel": "Сводка code-intel пока доступна только через инструментальную поверхность."
     }
   },
-
   "health": {
     "title": "Состояние",
     "subtitle": "Живой срез сервера: readiness, selfcheck, векторы, vNext-метрики и update channel.",
@@ -1463,7 +1542,6 @@
       "model": "Модель"
     }
   },
-
   "settings": {
     "title": "Настройки",
     "subtitle": "Read-only runtime config и действия, которые требуют явного подтверждения оператора.",
@@ -1483,7 +1561,9 @@
         "detailsTitle": "Технические сведения",
         "detailsBody": "Страница «Доступ» — рабочая поверхность администрирования; отдельного редактора политик в настройках нет."
       },
-      "evidence": { "title": "Технические сведения" },
+      "evidence": {
+        "title": "Технические сведения"
+      },
       "groups": {
         "basic": "Основное",
         "models": "Модели",
@@ -1772,7 +1852,6 @@
       "updateAvailable": "available"
     }
   },
-
   "searchPage": {
     "title": "Поиск",
     "subtitle": "Живой контекстный поиск по серверным наблюдениям Engram, с recent/analytics и честным надгробием старого collection search.",
@@ -1813,7 +1892,6 @@
       "body": "Legacy search_collection не подключается как рабочий UI-поиск; это удалённая/старая поверхность, оставленная только как evidence."
     }
   },
-
   "noisePage": {
     "title": "Шум и польза",
     "subtitle": "Живой срез retrieval/search telemetry: что показывали агентам, что реально использовали, где данные sparse или не записаны.",
@@ -1856,7 +1934,6 @@
       "body": "Сейчас сервер отдаёт snapshot, но не отдаёт time-series для графика тренда шума."
     }
   },
-
   "booksPage": {
     "title": "Книги-контекст",
     "subtitle": "Загрузите или вставьте текст источника, дайте books-конвейеру разбить его через markdown-адаптер и отслеживайте job, пока документы не появятся в разделе Documents.",
@@ -1918,7 +1995,6 @@
       "loadError": "Неизвестная ошибка books-конвейера"
     }
   },
-
   "sectionStub": {
     "state": {
       "live": "Раздел подключён, но пока без расширенного представления.",
@@ -1927,7 +2003,6 @@
       "mustbuild": "Раздел нужно построить."
     }
   },
-
   "deferred": {
     "queue": {
       "title": "На проверку",

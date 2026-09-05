@@ -8,6 +8,12 @@ import {
   type OperatorAccessSession,
   type OperatorAccessUser,
 } from '../composables/useOperatorAccess'
+import {
+  useOperatorKeycards,
+  type OperatorKeycard,
+  type OperatorKeycardPrincipalKind,
+  type OperatorKeycardScope,
+} from '../composables/useOperatorKeycards'
 
 const { t } = useI18n()
 const {
@@ -35,10 +41,32 @@ const {
   revokeSession,
 } = useOperatorAccess()
 
+const {
+  keycards,
+  loadState: keycardLoadState,
+  error: keycardError,
+  refresh: refreshKeycards,
+  createKeycard,
+  revokeKeycard,
+} = useOperatorKeycards()
+
 const inviteForm = ref({
   email: '',
   role: 'operator',
   expiresInHours: 72,
+})
+const keycardForm = ref<{
+  name: string
+  scope: OperatorKeycardScope
+  principal: string
+  principalKind: OperatorKeycardPrincipalKind
+  expiresAt: string
+}>({
+  name: '',
+  scope: 'read-write',
+  principal: '',
+  principalKind: 'human',
+  expiresAt: '',
 })
 const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
 const inviteBusy = ref(false)
@@ -48,6 +76,9 @@ const sessionActionID = ref<string | null>(null)
 const localAuthBlocked = ref(false)
 const revealedInvitationCode = ref('')
 const copyNotice = ref<'success' | 'error' | null>(null)
+const keycardBusy = ref(false)
+const keycardActionID = ref<string | null>(null)
+const revealedKeycardToken = ref('')
 const route = useRoute()
 
 const enabledProviderCount = computed(() => providers.filter((provider) => provider.enabled).length)
@@ -72,6 +103,9 @@ const accessMutationDisabled = computed(() => !['live', 'empty'].includes(access
 const accessCapability = computed(() => 'live')
 const accessRuntimeLabel = computed(() => t(`access.state.runtime.${accessPresentation.value}`))
 const currentRoleLabel = computed(() => selectedUser.value ? roleLabel(selectedUser.value.role) : '')
+const keycardPending = computed(() => keycardLoadState.value.kind === 'pending')
+const keycardErrorMessage = computed(() => keycardError.value ? t(operatorDiagnosisKey(keycardError.value)) : '')
+const keycardMutationDisabled = computed(() => accessMutationDisabled.value || keycardLoadState.value.kind !== 'live')
 
 function relativeTime(value: string | null | undefined) {
   if (!value) return '—'
@@ -161,6 +195,10 @@ function clearInvitationReveal() {
   copyNotice.value = null
 }
 
+function clearKeycardReveal() {
+  revealedKeycardToken.value = ''
+}
+
 async function copyInvitationCode() {
   if (!revealedInvitationCode.value || !navigator.clipboard?.writeText) {
     copyNotice.value = 'error'
@@ -174,8 +212,87 @@ async function copyInvitationCode() {
   }
 }
 
+function keycardExpiry(value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const parsed = new Date(trimmed)
+  return Number.isNaN(parsed.getTime()) ? trimmed : parsed.toISOString()
+}
+
+function keycardStatus(keycard: OperatorKeycard): 'active' | 'revoked' | 'expired' {
+  if (keycard.revoked) return 'revoked'
+  if (keycard.expiresAt && Date.parse(keycard.expiresAt) <= Date.now()) return 'expired'
+  return 'active'
+}
+
+function keycardTone(keycard: OperatorKeycard) {
+  const status = keycardStatus(keycard)
+  switch (status) {
+    case 'active':
+      return 'live'
+    case 'revoked':
+      return 'warn'
+    case 'expired':
+      return 'muted'
+    default: {
+      const exhaustive: never = status
+      return exhaustive
+    }
+  }
+}
+
+async function submitKeycard() {
+  if (keycardBusy.value || keycardMutationDisabled.value) return
+  clearKeycardReveal()
+  const name = keycardForm.value.name.trim()
+  const principal = keycardForm.value.principal.trim()
+  if (!name || !principal) {
+    notice.value = { kind: 'error', text: t('access.notice.keycardInvalid') }
+    return
+  }
+
+  keycardBusy.value = true
+  try {
+    const result = await createKeycard({
+      name,
+      scope: keycardForm.value.scope,
+      principal,
+      principalKind: keycardForm.value.principalKind,
+      expiresAt: keycardExpiry(keycardForm.value.expiresAt),
+    })
+    if (result.kind === 'success') {
+      keycardForm.value.name = ''
+      keycardForm.value.principal = ''
+      keycardForm.value.expiresAt = ''
+      revealedKeycardToken.value = result.data.token
+      notice.value = { kind: 'success', text: t('access.notice.keycardCreated') }
+      return
+    }
+    await handleMutationFailure(result.error)
+  } finally {
+    keycardBusy.value = false
+  }
+}
+
+async function onRevokeKeycard(keycard: OperatorKeycard) {
+  if (keycardActionID.value === keycard.id || keycardMutationDisabled.value) return
+  keycardActionID.value = keycard.id
+  try {
+    const result = await revokeKeycard(keycard.id)
+    if (result.kind === 'success') {
+      notice.value = { kind: 'success', text: t('access.notice.keycardRevoked', { name: keycard.name }) }
+      return
+    }
+    await handleMutationFailure(result.error)
+  } finally {
+    keycardActionID.value = null
+  }
+}
+
 watch(() => route.fullPath, clearInvitationReveal)
+watch(() => route.fullPath, clearKeycardReveal)
 onBeforeUnmount(clearInvitationReveal)
+onBeforeUnmount(clearKeycardReveal)
 
 async function handleMutationFailure(error: Pick<OperatorSourceError, 'message' | 'status' | 'category'>) {
   if (error.status === 401 || error.status === 403) {
@@ -384,6 +501,110 @@ async function selectUser(user: OperatorAccessUser) {
               </dl>
             </article>
           </div>
+        </section>
+
+        <section class="panel keycards-panel" data-testid="keycards-panel">
+          <div class="panel-head">
+            <div>
+              <h2>{{ t('access.keycards.title') }}</h2>
+              <p>{{ t('access.keycards.subtitle') }}</p>
+            </div>
+            <button class="tbtn" type="button" :disabled="keycardPending" @click="refreshKeycards">{{ t('access.actions.refresh') }}</button>
+          </div>
+          <div v-if="revealedKeycardToken" class="keycard-reveal" data-testid="keycard-reveal" role="status" aria-live="polite">
+            <strong>{{ t('access.keycards.reveal.title') }}</strong>
+            <p>{{ t('access.keycards.reveal.body') }}</p>
+            <RevealSecret :value="revealedKeycardToken" :seconds="30" @hide="clearKeycardReveal" />
+            <p>{{ t('access.keycards.reveal.copyHint') }}</p>
+            <div class="reveal-actions">
+              <button class="act" data-testid="keycard-dismiss" type="button" @click="clearKeycardReveal">{{ t('access.keycards.reveal.dismiss') }}</button>
+            </div>
+          </div>
+          <section v-if="keycardPending" class="keycard-state" role="status">
+            <span>{{ t('access.keycards.pending') }}</span>
+          </section>
+          <section v-else-if="keycardError" class="keycard-state error" role="alert">
+            <strong>{{ t('access.keycards.errorTitle') }}</strong>
+            <p>{{ t('access.keycards.error', { message: keycardErrorMessage }) }}</p>
+            <details><summary>{{ t('access.state.technicalEvidence') }}</summary><code>{{ keycardError.method }} {{ keycardError.path }} · {{ keycardError.status || 'network' }}</code></details>
+            <button class="tbtn" type="button" @click="refreshKeycards">{{ t('access.actions.retry') }}</button>
+          </section>
+          <template v-else>
+            <form class="keycard-form" @submit.prevent="submitKeycard">
+              <label>
+                <span>{{ t('access.keycards.form.name') }}</span>
+                <input id="access-keycard-name" v-model="keycardForm.name" name="access-keycard-name" class="input" type="text" autocomplete="off" required :disabled="keycardMutationDisabled" :placeholder="t('access.keycards.form.namePlaceholder')">
+              </label>
+              <label>
+                <span>{{ t('access.keycards.form.scope') }}</span>
+                <select id="access-keycard-scope" v-model="keycardForm.scope" name="access-keycard-scope" class="select" :disabled="keycardMutationDisabled">
+                  <option value="read-write">{{ t('access.keycards.scopes.readWrite') }}</option>
+                  <option value="read-only">{{ t('access.keycards.scopes.readOnly') }}</option>
+                </select>
+              </label>
+              <label>
+                <span>{{ t('access.keycards.form.principal') }}</span>
+                <input id="access-keycard-principal" v-model="keycardForm.principal" name="access-keycard-principal" class="input" type="text" autocomplete="off" required :disabled="keycardMutationDisabled" :placeholder="t('access.keycards.form.principalPlaceholder')">
+              </label>
+              <label>
+                <span>{{ t('access.keycards.form.principalKind') }}</span>
+                <select id="access-keycard-principal-kind" v-model="keycardForm.principalKind" name="access-keycard-principal-kind" class="select" :disabled="keycardMutationDisabled">
+                  <option value="human">{{ t('access.keycards.principalKinds.human') }}</option>
+                  <option value="agent">{{ t('access.keycards.principalKinds.agent') }}</option>
+                  <option value="service">{{ t('access.keycards.principalKinds.service') }}</option>
+                </select>
+              </label>
+              <label>
+                <span>{{ t('access.keycards.form.expiresAt') }}</span>
+                <input id="access-keycard-expires-at" v-model="keycardForm.expiresAt" name="access-keycard-expires-at" class="input" type="datetime-local" :disabled="keycardMutationDisabled">
+                <small>{{ t('access.keycards.form.expiresAtHint') }}</small>
+              </label>
+              <button class="act primary" data-testid="keycard-issue" type="submit" :disabled="keycardBusy || keycardMutationDisabled">{{ keycardBusy ? t('access.actions.working') : t('access.keycards.form.submit') }}</button>
+            </form>
+            <table class="tbl">
+              <thead>
+                <tr>
+                  <th>{{ t('access.keycards.columns.name') }}</th>
+                  <th>{{ t('access.keycards.columns.identity') }}</th>
+                  <th>{{ t('access.keycards.columns.scope') }}</th>
+                  <th>{{ t('access.keycards.columns.expires') }}</th>
+                  <th>{{ t('access.keycards.columns.activity') }}</th>
+                  <th>{{ t('access.keycards.columns.status') }}</th>
+                  <th class="right">{{ t('access.keycards.columns.actions') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="!keycards.length">
+                  <td colspan="7" class="empty-row">{{ t('access.keycards.empty') }}</td>
+                </tr>
+                <tr v-for="keycard in keycards" :key="keycard.id" :data-status="keycardStatus(keycard)" :data-testid="`keycard-row-${keycard.id}`">
+                  <td>
+                    <div class="row-main">{{ keycard.name }}</div>
+                    <div class="row-sub mono">{{ keycard.tokenPrefix ? `engram_${keycard.tokenPrefix}…` : '—' }}</div>
+                  </td>
+                  <td>
+                    <div class="row-main">{{ keycard.principal || '—' }}</div>
+                    <div class="row-sub">{{ keycard.principalKind || '—' }}</div>
+                  </td>
+                  <td class="mono small">{{ keycard.scope || '—' }}</td>
+                  <td>
+                    <div class="row-main">{{ relativeTime(keycard.expiresAt) }}</div>
+                    <div class="row-sub">{{ absoluteTime(keycard.expiresAt) }}</div>
+                  </td>
+                  <td>
+                    <div class="row-main">{{ relativeTime(keycard.lastUsedAt) }}</div>
+                    <div class="row-sub">{{ t('access.keycards.requestCount', { count: keycard.requestCount, errors: keycard.errorCount }) }}</div>
+                  </td>
+                  <td><span class="pill" :data-kind="keycardTone(keycard)">{{ t(`access.keycards.status.${keycardStatus(keycard)}`) }}</span></td>
+                  <td class="right">
+                    <button class="act danger" :data-testid="`keycard-revoke-${keycard.id}`" :disabled="keycardActionID === keycard.id || keycard.revoked || keycardMutationDisabled" @click="onRevokeKeycard(keycard)">
+                      {{ keycardActionID === keycard.id ? t('access.actions.working') : t('access.actions.revoke') }}
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </template>
         </section>
 
         <section class="panel invites-panel">
@@ -677,9 +898,12 @@ async function selectUser(user: OperatorAccessUser) {
 .page-head p { margin:0; color:var(--muted); font-size:var(--text-sm); }
 .access-brief { display:grid; grid-template-columns:repeat(4, minmax(120px, 180px)) minmax(260px, 1fr); gap:12px; }
 .metric, .brief-copy, .panel, .guard-panel, .statebar { border:1px solid var(--border); border-radius:var(--r-md); background:var(--surface); }
-.invite-reveal { display:grid; gap:8px; margin:0 16px 16px; padding:14px; border:1px solid color-mix(in oklab,var(--accent),transparent 48%); border-radius:var(--r-sm); background:color-mix(in oklab,var(--accent),transparent 92%); }
-.invite-reveal p { margin:0; color:var(--fg-2); font-size:var(--text-sm); }
+.invite-reveal, .keycard-reveal, .keycard-state { display:grid; gap:8px; margin:0 16px 16px; padding:14px; border:1px solid color-mix(in oklab,var(--accent),transparent 48%); border-radius:var(--r-sm); background:color-mix(in oklab,var(--accent),transparent 92%); }
+.invite-reveal p, .keycard-reveal p, .keycard-state p { margin:0; color:var(--fg-2); font-size:var(--text-sm); }
 .invite-reveal code { overflow-wrap:anywhere; font-family:var(--font-mono); color:var(--fg); }
+.keycard-reveal, .keycard-state { margin:0; }
+.keycard-state.error { border-color:color-mix(in oklab,var(--state-warn),transparent 45%); }
+.keycard-reveal :deep(.reveal) { margin-top:0; }
 .reveal-actions { display:flex; gap:8px; flex-wrap:wrap; }
 .metric, .brief-copy, .guard-panel, .statebar { padding:14px; }
 .metric { display:flex; flex-direction:column; gap:3px; }
@@ -695,7 +919,7 @@ async function selectUser(user: OperatorAccessUser) {
 .statebar[data-kind="success"] { border-color:color-mix(in oklab,var(--class-live),transparent 45%); }
 .access-grid { display:grid; grid-template-columns:minmax(0, 1.25fr) minmax(0, 1.25fr) minmax(300px, .9fr); gap:12px; align-items:start; }
 .panel { padding:14px; display:flex; flex-direction:column; gap:12px; }
-.providers-panel, .invites-panel, .users-panel, .sessions-panel, .audit-panel { grid-column:span 2; }
+.providers-panel, .keycards-panel, .invites-panel, .users-panel, .sessions-panel, .audit-panel { grid-column:span 2; }
 .roles-panel, .drilldown-panel { grid-column:3; }
 .panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
 .panel-head h2 { margin:0; font-size:var(--text-sm); font-weight:900; letter-spacing:.04em; text-transform:uppercase; }
@@ -708,6 +932,9 @@ async function selectUser(user: OperatorAccessUser) {
 .provider-card p, .role-card p { margin:0; color:var(--muted); font-size:var(--text-xs); }
 .role-card strong { font-family:var(--font-mono); font-size:var(--text-xl); color:var(--fg); }
 .invite-form { display:grid; grid-template-columns:minmax(0, 1.5fr) 180px 180px 160px; gap:10px; align-items:end; }
+.keycard-form { display:grid; grid-template-columns:minmax(150px, 1.3fr) minmax(120px, .8fr) minmax(150px, 1.2fr) minmax(120px, .8fr) minmax(180px, 1fr) auto; gap:10px; align-items:end; }
+.keycard-form label { display:flex; flex-direction:column; gap:6px; color:var(--muted); font-size:var(--text-xs); }
+.keycard-form small { color:var(--muted); font-size:var(--text-xs); }
 .invite-form label { display:flex; flex-direction:column; gap:6px; color:var(--muted); font-size:var(--text-xs); }
 .select, .input { min-height:34px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--surface); color:var(--fg); padding:0 10px; font-size:var(--text-sm); }
 .tbl { width:100%; border-collapse:collapse; font-size:var(--text-sm); }
@@ -745,11 +972,11 @@ tr.selected { background:color-mix(in oklab,var(--accent),transparent 92%); }
   .access-brief { grid-template-columns:repeat(2, minmax(0, 1fr)); }
   .brief-copy { grid-column:1 / -1; }
   .access-grid { grid-template-columns:1fr; }
-  .providers-panel, .invites-panel, .users-panel, .sessions-panel, .audit-panel, .roles-panel, .drilldown-panel { grid-column:auto; }
+  .providers-panel, .keycards-panel, .invites-panel, .users-panel, .sessions-panel, .audit-panel, .roles-panel, .drilldown-panel { grid-column:auto; }
   .drilldown-panel { position:static; }
 }
 @media (max-width: 860px) {
-  .invite-form, .providers-grid, .roles-grid { grid-template-columns:1fr; }
+  .invite-form, .keycard-form, .providers-grid, .roles-grid { grid-template-columns:1fr; }
   .page-head, .statebar { flex-direction:column; align-items:stretch; }
   .actions-cell { justify-content:flex-start; }
 }

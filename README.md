@@ -30,7 +30,7 @@ Since then, the v6 line rebuilt governance on top of that stable core: per-works
 | **v6.31.0** | **Native State Plane + Principal Explorer (CR-006 + CR-007, MPL-1/2)** — Engram-native session/goal/task/project state plane with deterministic resume packet; principal/domain/project memory explorer + principal-scoped briefs; CR-005 contract hardening. |
 | **v6.30.0** | **Agent Knowledge & Experience Layer foundations (ENG-MPL-1)** — native state plane, principal briefs, packet-centric review loop, first-class experience retrieval with applicability gates, forgetting taxonomy, and selective temporal truth contracts. |
 | **v6.29.0** | **Rule Governance Telemetry (RG-3)** — lifecycle health, exception queues, transition controls, rollback-aware snapshots, and usefulness telemetry landed on top of the rule-governance milestones. |
-| **v6.0.0** | **BREAKING** — Two-tier token authentication: per-workstation keycards via dashboard `/tokens`, daemon fail-fast on missing token, issuance hardened to browser session. |
+| **v6.0.0** | **BREAKING** — Two-tier token authentication: per-workstation keycards via dashboard `/access`, daemon fail-fast on missing token, issuance hardened to browser session. |
 | **v5.0.0** | Cleaned Baseline — static-only storage, observations split, session-start gRPC + cache fallback |
 | **v4.4.0** | Loom tenant — background task execution and daemon-side project event bridge |
 | **v4.0.0** | Daemon architecture — muxcore engine, gRPC transport, local persistent daemon, auto-binary plugin |
@@ -44,11 +44,11 @@ Engram v6 separates two credential tiers, each pinned to a single host class:
 | Tier | Name | Lives in | Purpose | Issuance |
 |---|---|---|---|---|
 | **1 — Operator key** | `ENGRAM_AUTH_ADMIN_TOKEN` | Server-host environment ONLY (Docker, compose) | Admin-grade access for migrations, server-internal RPCs, dashboard bootstrap | Operator-managed (Docker env) |
-| **2 — Worker keycard** | `ENGRAM_TOKEN` | Workstation `~/.claude/settings.json` env | Daemon ↔ server gRPC, regular MCP tool calls | Generated via dashboard `/tokens` page (admin-only browser session) |
+| **2 — Worker keycard** | `ENGRAM_TOKEN` | Workstation `~/.claude/settings.json` env | Daemon ↔ server gRPC, regular MCP tool calls | Generated from the dashboard `/access` Keycards panel (admin-only browser session) |
 
 Operator keys NEVER appear on workstations. Worker keycards NEVER appear on the server host. There is no `OR`-fallback between the two names — the daemon ignores the admin name; the server ignores the workstation name. Workstation startup with `ENGRAM_URL` set but `ENGRAM_TOKEN` empty exits non-zero with an actionable error. Keycard issuance requires a browser admin session — bearer callers get 403 on `/api/auth/tokens`.
 
-Migration from v5.x: open `<server-url>/tokens`, log in as admin, generate a keycard, paste it via `/engram:setup`. See [CHANGELOG.md](CHANGELOG.md) for full migration steps.
+Migration from v5.x: open `<server-url>/access`, sign in as an admin in the browser, generate a keycard, then paste that keycard via `/engram:setup`. See [CHANGELOG.md](CHANGELOG.md) for full migration steps.
 <!-- redoc:end:whats-new -->
 
 ---
@@ -156,15 +156,14 @@ The exact agent-host configuration file is host-specific; the invariant is the
 command, stdio transport, and the two workstation variables above. Confirm the
 host lists Engram's tools before relying on it for session continuity.
 
-### Keycard issuance limitation
+### Issue a workstation keycard
 
-The server implements authenticated admin token issuance at `/api/auth/tokens`,
-but the currently promoted Nuxt `/access` page is an access-administration
-surface, not an accepted browser keycard-issuance workflow. The local daemon and
-some older text still refer to `/tokens`; that browser route is not present in
-the promoted console. Obtain a per-workstation keycard only through your
-operator's verified administrative procedure; this README deliberately does not
-invent an Access/Settings click path.
+1. In an authenticated admin browser session, open `<server-url>/access`.
+2. In **Workstation keycards**, set the workstation name, scope, principal, principal kind, and optional expiry; the server validates the final request.
+3. Copy the raw keycard immediately. It is returned once, does not appear in the keycard list, and must become the workstation's `ENGRAM_TOKEN`.
+4. Revoke the keycard from the same panel when that workstation is retired or compromised.
+
+The Access panel uses the browser-session-admin `GET`, `POST`, and `DELETE` routes at `/api/auth/tokens`. The operator credential remains only in server-host deployment configuration; never put `ENGRAM_AUTH_ADMIN_TOKEN` into the workstation environment, daemon, plugin, or agent-host setup.
 
 ## Use Engram
 
@@ -202,10 +201,11 @@ Known corrections from that ledger:
   expected to serve `pages/health.vue`, but that direct load was not replayed
   in this batch (`apps/operator-console/node_modules` is not installed here) —
   treat it as the likely remedy, not a confirmed one, until replayed.
-- **`/access`:** this is a live access-administration page (providers,
-  invitations, users, roles, sessions, audit log). It is *not* a keycard
-  issuance wizard. See "Keycard issuance limitation" above for what remains
-  unaccepted.
+- **`/access`:** this is the live access-administration page for providers,
+  invitations, users, roles, sessions, audit log, and workstation keycards.
+  From an authenticated admin browser session, use its **Workstation keycards**
+  panel to issue, copy once, and revoke `ENGRAM_TOKEN` credentials. `/tokens`
+  is not a promoted console route.
 - **`/settings`:** on mount it opens the general-settings modal and, if you
   land on `/settings` directly, immediately redirects to `/`. There is no
   separate settings screen; refreshing or deep-linking to `/settings` reopens
@@ -381,7 +381,7 @@ What changed across v6:
 
 Upgrade steps:
 1. upgrade the plugin and daemon to the target `v6.x` release
-2. open `<server-url>/tokens`, issue a workstation keycard, and configure `ENGRAM_TOKEN`
+2. open `<server-url>/access`, issue a workstation keycard from **Workstation keycards**, and configure `ENGRAM_TOKEN`
 3. restart Claude Code and the daemon
 4. verify plugin update detection, session-start cache fallback, and the current server version
 
