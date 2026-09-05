@@ -2,6 +2,7 @@ package uci
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 )
@@ -48,6 +49,99 @@ type ContextRecord struct {
 // ContextCatalog reloads a canonical context tuple from the authoritative catalog.
 type ContextCatalog interface {
 	LoadContext(ctx context.Context, ref ContextRef) (ContextRecord, error)
+}
+
+// IndexBinding is the server-authorized index target for one checkout incarnation.
+// Context is nil only when a registered checkout has no current published View.
+type IndexBinding struct {
+	Context       *ContextRef
+	Scope         IndexScope
+	ProfileID     string
+	LocalRootID   string
+	WorkstationID string
+}
+
+// Clone returns a defensive copy of the index binding.
+func (binding IndexBinding) Clone() IndexBinding {
+	copy := binding
+	if binding.Context != nil {
+		contextRef := binding.Context.clone()
+		copy.Context = &contextRef
+	}
+	return copy
+}
+
+// Validate checks the complete binding shape. Catalog implementations additionally
+// prove that a non-nil Context names a real View.
+func (binding IndexBinding) Validate() error {
+	if !validIndexScope(binding.Scope) {
+		return fmt.Errorf("uci index binding: invalid scope")
+	}
+	if !canonicalContextUUID(binding.ProfileID) {
+		return fmt.Errorf("uci index binding: invalid profile")
+	}
+	if !validContextIdentityText(binding.LocalRootID) {
+		return fmt.Errorf("uci index binding: invalid local root")
+	}
+	if !validContextIdentityText(binding.WorkstationID) {
+		return fmt.Errorf("uci index binding: invalid workstation")
+	}
+	if binding.Context == nil {
+		return nil
+	}
+	if !binding.Context.valid() ||
+		binding.Context.SourceID != binding.Scope.SourceID ||
+		binding.Context.CheckoutID != binding.Scope.CheckoutID ||
+		binding.Context.AnalysisProfileID != binding.ProfileID {
+		return fmt.Errorf("uci index binding: context does not match scope and profile")
+	}
+	return nil
+}
+
+// IndexBindingSelector supplies an already-authorized View or a registered checkout.
+// Exactly one selector is permitted. A checkout selector includes the requested
+// analysis profile because an unindexed checkout has no View from which to derive it.
+type IndexBindingSelector struct {
+	Context   *ContextRef
+	Scope     *IndexScope
+	ProfileID string
+}
+
+// Clone returns a defensive copy of the selector.
+func (selector IndexBindingSelector) Clone() IndexBindingSelector {
+	copy := selector
+	if selector.Context != nil {
+		contextRef := selector.Context.clone()
+		copy.Context = &contextRef
+	}
+	if selector.Scope != nil {
+		scope := *selector.Scope
+		copy.Scope = &scope
+	}
+	return copy
+}
+
+// Validate checks that the selector has exactly one valid selection form.
+func (selector IndexBindingSelector) Validate() error {
+	switch {
+	case selector.Context != nil && selector.Scope == nil:
+		if selector.ProfileID != "" || !selector.Context.valid() {
+			return fmt.Errorf("uci index binding selector: invalid context selector")
+		}
+	case selector.Context == nil && selector.Scope != nil:
+		if !validIndexScope(*selector.Scope) || !canonicalContextUUID(selector.ProfileID) {
+			return fmt.Errorf("uci index binding selector: invalid checkout selector")
+		}
+	default:
+		return fmt.Errorf("uci index binding selector: exactly one selector is required")
+	}
+	return nil
+}
+
+// IndexBindingCatalog reloads a server-authorized index binding from the
+// authoritative checkout registry. It never derives authority from a local path.
+type IndexBindingCatalog interface {
+	LoadIndexBinding(ctx context.Context, selector IndexBindingSelector) (IndexBinding, error)
 }
 
 // ContextAccess contains the catalog-validated scope presented to the authorizer.

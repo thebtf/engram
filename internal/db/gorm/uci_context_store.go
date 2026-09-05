@@ -286,6 +286,22 @@ func (s *UCIContextStore) GetCurrentView(ctx context.Context, checkoutID string)
 	return &row, nil
 }
 
+// LoadIndexBinding reloads an already-authorized View or registered checkout
+// selector from the server-owned registry without deriving authority from paths.
+func (s *UCIContextStore) LoadIndexBinding(ctx context.Context, selector uci.IndexBindingSelector) (uci.IndexBinding, error) {
+	if err := s.requireDB("load index binding"); err != nil {
+		return uci.IndexBinding{}, err
+	}
+	selector = selector.Clone()
+	if err := selector.Validate(); err != nil {
+		return uci.IndexBinding{}, fmt.Errorf("uci context load index binding: %w", err)
+	}
+	if selector.Context != nil {
+		return s.loadUCIIndexBindingForContext(ctx, *selector.Context)
+	}
+	return s.loadUCIIndexBindingForCheckout(ctx, *selector.Scope, selector.ProfileID)
+}
+
 func (s *UCIContextStore) ListCheckoutsBySource(ctx context.Context, sourceID string) ([]UCICheckout, error) {
 	if err := s.requireDB("list checkouts"); err != nil {
 		return nil, err
@@ -554,6 +570,175 @@ func sameUCILegacyContextAliasPayload(existing, candidate *UCILegacyContextAlias
 		provenance == candidate.Provenance &&
 		sameUCIOptionalString(existing.SpaceID, candidate.SpaceID) &&
 		sameUCIOptionalString(existing.SourceID, candidate.SourceID), nil
+}
+
+func (s *UCIContextStore) loadUCIIndexBindingForContext(ctx context.Context, ref uci.ContextRef) (uci.IndexBinding, error) {
+	source, checkout, err := s.loadUCIIndexBindingCheckout(ctx, ref.SourceID, ref.CheckoutID, "")
+	if err != nil {
+		return uci.IndexBinding{}, err
+	}
+	if err := s.validateUCIIndexBindingSpace(ctx, source, ref.SpaceID); err != nil {
+		return uci.IndexBinding{}, err
+	}
+	if _, err := s.loadUCIIndexBindingProfile(ctx, ref.AnalysisProfileID); err != nil {
+		return uci.IndexBinding{}, err
+	}
+
+	var view UCIView
+	if err := s.db.WithContext(ctx).Where("view_id = ?", ref.ViewID).First(&view).Error; err != nil {
+		return uci.IndexBinding{}, fmt.Errorf("uci context load index binding: view %q: %w", ref.ViewID, err)
+	}
+	if view.CheckoutID != checkout.CheckoutID ||
+		view.SourceID != source.SourceID ||
+		view.IncarnationID != checkout.IncarnationID ||
+		view.ProfileID != ref.AnalysisProfileID ||
+		view.Generation != ref.Generation {
+		return uci.IndexBinding{}, fmt.Errorf("uci context load index binding: view does not match authorized context")
+	}
+	if view.State != UCIViewPublished {
+		return uci.IndexBinding{}, fmt.Errorf("uci context load index binding: view state %q is not published", view.State)
+	}
+	return uciIndexBindingFromRows(checkout, ref.AnalysisProfileID, &view, ref.SpaceID)
+}
+
+func (s *UCIContextStore) loadUCIIndexBindingForCheckout(ctx context.Context, scope uci.IndexScope, profileID string) (uci.IndexBinding, error) {
+	_, checkout, err := s.loadUCIIndexBindingCheckout(ctx, scope.SourceID, scope.CheckoutID, scope.IncarnationID)
+	if err != nil {
+		return uci.IndexBinding{}, err
+	}
+	if _, err := s.loadUCIIndexBindingProfile(ctx, profileID); err != nil {
+		return uci.IndexBinding{}, err
+	}
+
+	view, err := s.loadUCICurrentIndexBindingView(ctx, checkout)
+	if err != nil {
+		return uci.IndexBinding{}, err
+	}
+	if view != nil && view.ProfileID != profileID {
+		return uci.IndexBinding{}, fmt.Errorf("uci context load index binding: current view profile %q does not match selector profile %q", view.ProfileID, profileID)
+	}
+	return uciIndexBindingFromRows(checkout, profileID, view, nil)
+}
+
+func (s *UCIContextStore) loadUCIIndexBindingCheckout(ctx context.Context, sourceID, checkoutID, incarnationID string) (*UCISource, *UCICheckout, error) {
+	var source UCISource
+	if err := s.db.WithContext(ctx).Where("source_id = ?", sourceID).First(&source).Error; err != nil {
+		return nil, nil, fmt.Errorf("uci context load index binding: source %q: %w", sourceID, err)
+	}
+	if source.State != UCISourceActive {
+		return nil, nil, fmt.Errorf("uci context load index binding: source state %q is not active", source.State)
+	}
+	if err := validateUCIRequiredText("auth_realm", source.AuthRealm); err != nil {
+		return nil, nil, fmt.Errorf("uci context load index binding: source realm: %w", err)
+	}
+
+	var checkout UCICheckout
+	if err := s.db.WithContext(ctx).Where("checkout_id = ?", checkoutID).First(&checkout).Error; err != nil {
+		return nil, nil, fmt.Errorf("uci context load index binding: checkout %q: %w", checkoutID, err)
+	}
+	if checkout.SourceID != source.SourceID {
+		return nil, nil, fmt.Errorf("uci context load index binding: checkout source does not match selector source")
+	}
+	if incarnationID != "" && checkout.IncarnationID != incarnationID {
+		return nil, nil, fmt.Errorf("uci context load index binding: checkout incarnation does not match selector incarnation")
+	}
+	if !isUCIIndexBindingCheckoutState(checkout.State) {
+		return nil, nil, fmt.Errorf("uci context load index binding: checkout state %q is not registered", checkout.State)
+	}
+	return &source, &checkout, nil
+}
+
+func (s *UCIContextStore) loadUCIIndexBindingProfile(ctx context.Context, profileID string) (*UCIAnalysisProfile, error) {
+	var profile UCIAnalysisProfile
+	if err := s.db.WithContext(ctx).Where("profile_id = ?", profileID).First(&profile).Error; err != nil {
+		return nil, fmt.Errorf("uci context load index binding: profile %q: %w", profileID, err)
+	}
+	return &profile, nil
+}
+
+func (s *UCIContextStore) loadUCICurrentIndexBindingView(ctx context.Context, checkout *UCICheckout) (*UCIView, error) {
+	if checkout.CurrentViewID == nil {
+		return nil, nil
+	}
+	var view UCIView
+	if err := s.db.WithContext(ctx).Where("view_id = ?", *checkout.CurrentViewID).First(&view).Error; err != nil {
+		return nil, fmt.Errorf("uci context load index binding: current view %q: %w", *checkout.CurrentViewID, err)
+	}
+	if view.CheckoutID != checkout.CheckoutID || view.SourceID != checkout.SourceID || view.IncarnationID != checkout.IncarnationID {
+		return nil, fmt.Errorf("uci context load index binding: current view does not match checkout")
+	}
+	if view.State != UCIViewPublished {
+		return nil, fmt.Errorf("uci context load index binding: current view state %q is not published", view.State)
+	}
+	return &view, nil
+}
+
+func (s *UCIContextStore) validateUCIIndexBindingSpace(ctx context.Context, source *UCISource, spaceID *string) error {
+	if spaceID == nil {
+		return nil
+	}
+	var space UCISpace
+	if err := s.db.WithContext(ctx).Where("space_id = ?", *spaceID).First(&space).Error; err != nil {
+		return fmt.Errorf("uci context load index binding: space %q: %w", *spaceID, err)
+	}
+	if space.State != UCISpaceActive {
+		return fmt.Errorf("uci context load index binding: space state %q is not active", space.State)
+	}
+	if space.AuthRealm != source.AuthRealm {
+		return fmt.Errorf("uci context load index binding: space and source realms differ")
+	}
+	var link UCISpaceSource
+	if err := s.db.WithContext(ctx).
+		Where("space_id = ? AND source_id = ? AND auth_realm = ?", space.SpaceID, source.SourceID, source.AuthRealm).
+		First(&link).Error; err != nil {
+		return fmt.Errorf("uci context load index binding: space source relationship: %w", err)
+	}
+	return nil
+}
+
+func uciIndexBindingFromRows(checkout *UCICheckout, profileID string, view *UCIView, spaceID *string) (uci.IndexBinding, error) {
+	binding := uci.IndexBinding{
+		Scope: uci.IndexScope{
+			SourceID:      checkout.SourceID,
+			CheckoutID:    checkout.CheckoutID,
+			IncarnationID: checkout.IncarnationID,
+		},
+		ProfileID:     profileID,
+		LocalRootID:   checkout.LocatorRef,
+		WorkstationID: checkout.WorkstationID,
+	}
+	if view != nil {
+		contextRef := uci.ContextRef{
+			SpaceID:           cloneUCIIndexBindingSpaceID(spaceID),
+			SourceID:          view.SourceID,
+			CheckoutID:        view.CheckoutID,
+			ViewID:            view.ViewID,
+			AnalysisProfileID: view.ProfileID,
+			Generation:        view.Generation,
+		}
+		binding.Context = &contextRef
+	}
+	if err := binding.Validate(); err != nil {
+		return uci.IndexBinding{}, fmt.Errorf("uci context load index binding: invalid stored binding: %w", err)
+	}
+	return binding.Clone(), nil
+}
+
+func cloneUCIIndexBindingSpaceID(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func isUCIIndexBindingCheckoutState(state UCICheckoutState) bool {
+	switch state {
+	case UCICheckoutRegistered, UCICheckoutWatching, UCICheckoutCatchingUp:
+		return true
+	default:
+		return false
+	}
 }
 
 func uciViewFromInput(in CreateViewInput) (*UCIView, error) {
