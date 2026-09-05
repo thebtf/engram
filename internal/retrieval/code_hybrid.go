@@ -1,16 +1,18 @@
 package retrieval
 
-// code_hybrid.go implements CodeHybridSearch: concurrent FTS + vector retrieval
-// over the code_chunks table, fused with RRF (Reciprocal Rank Fusion).
+// code_hybrid.go implements LegacyUnscopedCodeHybridSearch: concurrent FTS +
+// vector retrieval over raw code_chunks project IDs, fused with RRF.
+//
+// This is an explicitly invoked compatibility reader. It has no UCI
+// AuthorizedContext, View, or QueryResponse semantics. Current UCI retrieval
+// must stay in the codebase intelligence application.
 //
 // Import-cycle decision: internal/db/gorm does NOT import internal/retrieval
 // (verified: no such import exists in any non-test file under internal/db/gorm).
 // internal/retrieval imports internal/db/gorm only in _test files, which are
 // compile-time-isolated. Therefore the interface below can reference
-// gorm.CodeSearchResult directly without forming a cycle. The CodeHit local
-// type is still defined here as the external result shape so that callers
-// (CR-006 worker) depend on the retrieval package, not the gorm package, for
-// search results — same pattern hybrid.go uses with models.Memory vs gorm rows.
+// gorm.CodeSearchResult directly without forming a cycle. The local hit type
+// keeps compatibility callers dependent on retrieval rather than gorm.
 
 import (
 	"context"
@@ -21,14 +23,13 @@ import (
 	gormdb "github.com/thebtf/engram/internal/db/gorm"
 )
 
-// CodeSearchStoreInterface is the minimal interface CodeHybridSearch requires
-// from the code chunk persistence layer. Keeping it here (rather than in the
-// gorm package) preserves the retrieval package as the public API surface for
-// search callers and enables fake implementations in tests without importing gorm.
+// LegacyUnscopedCodeSearchStore is the minimal raw-project persistence surface
+// used by LegacyUnscopedCodeHybridSearch. It is legacy-only and must not back a
+// UCI View-scoped query.
 //
 // Both methods return gorm.CodeSearchResult because internal/db/gorm is a safe
 // dependency for internal/retrieval (no import cycle — see file header).
-type CodeSearchStoreInterface interface {
+type LegacyUnscopedCodeSearchStore interface {
 	// SearchCodeFTS returns FTS-ranked code chunks for projectID matching query.
 	// Uses 'simple' text-search config to match the content_tsv generated column.
 	SearchCodeFTS(ctx context.Context, projectID, query string, limit int) ([]gormdb.CodeSearchResult, error)
@@ -38,10 +39,10 @@ type CodeSearchStoreInterface interface {
 	FindSimilarCode(ctx context.Context, projectID string, queryVec []float32, limit int, threshold float64) ([]gormdb.CodeSearchResult, error)
 }
 
-// CodeHit is the result element returned by CodeHybridSearch.
-// It carries the RRF-fused rank plus the per-hit score from the best
+// LegacyUnscopedCodeHit is a result element from the raw-project compatibility
+// reader. It carries the RRF-fused rank plus the per-hit score from the best
 // available source (vector similarity when present, FTS rank otherwise).
-type CodeHit struct {
+type LegacyUnscopedCodeHit struct {
 	ID        int64
 	FilePath  string
 	ByteStart int
@@ -55,8 +56,8 @@ type CodeHit struct {
 	Score float64
 }
 
-// CodeHybridOptions configures an individual CodeHybridSearch call.
-type CodeHybridOptions struct {
+// LegacyUnscopedCodeHybridOptions configures one raw-project compatibility read.
+type LegacyUnscopedCodeHybridOptions struct {
 	// QueryVec is the dense embedding of the query string. When nil or empty
 	// the vector leg is skipped and retrieval degrades gracefully to FTS-only.
 	QueryVec []float32
@@ -73,14 +74,12 @@ type CodeHybridOptions struct {
 	DenseOnly bool
 }
 
-// CodeHybridSearch runs hybrid (FTS + vector) retrieval over the code_chunks
-// table for a project and query string, fusing results with Reciprocal Rank
+// LegacyUnscopedCodeHybridSearch runs hybrid (FTS + vector) retrieval over raw
+// code_chunks project IDs and query strings, fusing results with Reciprocal Rank
 // Fusion (RRF, k=60) via the shared retrieval.RRF function.
 //
-// Concurrency model: both legs run concurrently via errgroup, mirroring
-// HybridSearch in hybrid.go. A failure in either leg is non-fatal: the
-// goroutine logs nothing (degrade silently, matching the FTS-degrade pattern in
-// hybrid.go) and the other leg's results are returned alone.
+// It is not a UCI query path and must be reached only from the explicitly named
+// legacy_unscoped MCP boundary.
 //
 // Degradation behaviour:
 //   - QueryVec empty → FTS-only (vector leg skipped, not an error).
@@ -88,22 +87,22 @@ type CodeHybridOptions struct {
 //   - Either leg errors → degrade to the other leg's results.
 //   - Both legs fail → empty result, no error.
 //
-// limit <= 0 defaults to 10. projectID or query empty returns an error.
-func CodeHybridSearch(
+// projectID or query empty, or limit less than one, returns an error.
+func LegacyUnscopedCodeHybridSearch(
 	ctx context.Context,
 	projectID, query string,
 	limit int,
-	store CodeSearchStoreInterface,
-	opts CodeHybridOptions,
-) ([]CodeHit, error) {
+	store LegacyUnscopedCodeSearchStore,
+	opts LegacyUnscopedCodeHybridOptions,
+) ([]LegacyUnscopedCodeHit, error) {
 	if projectID == "" {
-		return nil, fmt.Errorf("code_hybrid_search: projectID must not be empty")
+		return nil, fmt.Errorf("legacy_unscoped_code_hybrid_search: projectID must not be empty")
 	}
 	if query == "" {
-		return nil, fmt.Errorf("code_hybrid_search: query must not be empty")
+		return nil, fmt.Errorf("legacy_unscoped_code_hybrid_search: query must not be empty")
 	}
-	if limit <= 0 {
-		limit = 10
+	if limit < 1 {
+		return nil, fmt.Errorf("legacy_unscoped_code_hybrid_search: limit must be at least 1")
 	}
 
 	const (
@@ -172,9 +171,9 @@ func CodeHybridSearch(
 
 	// Build a lookup map from both legs. Prefer the vector score when a chunk
 	// appears in both legs (cosine similarity is better calibrated than ts_rank_cd).
-	hitMap := make(map[int64]CodeHit, len(ftsResults)+len(vecResults))
+	hitMap := make(map[int64]LegacyUnscopedCodeHit, len(ftsResults)+len(vecResults))
 	for _, r := range ftsResults {
-		hitMap[r.ID] = CodeHit{
+		hitMap[r.ID] = LegacyUnscopedCodeHit{
 			ID:        r.ID,
 			FilePath:  r.FilePath,
 			ByteStart: r.ByteStart,
@@ -186,7 +185,7 @@ func CodeHybridSearch(
 	}
 	for _, r := range vecResults {
 		// Overwrite any FTS entry: vector similarity is preferred for the Score field.
-		hitMap[r.ID] = CodeHit{
+		hitMap[r.ID] = LegacyUnscopedCodeHit{
 			ID:        r.ID,
 			FilePath:  r.FilePath,
 			ByteStart: r.ByteStart,
@@ -198,7 +197,7 @@ func CodeHybridSearch(
 	}
 
 	// Materialise results in RRF order, capped at limit.
-	out := make([]CodeHit, 0, limit)
+	out := make([]LegacyUnscopedCodeHit, 0, limit)
 	for _, id := range fusedIDs {
 		if len(out) >= limit {
 			break

@@ -1,10 +1,13 @@
 // Package mcp — code intelligence MCP tools (CR-006).
 //
-// Exposes the existing codebase_search and codebase_status tool names when
-// ENGRAM_CODE_INTEL_ENABLED=true. Legacy callers retain their raw-project route
-// only until a client-scoped UCI application has been selected. UCI callers are
-// resolved through an opaque client-local context handle or their current binding.
-
+// codebase_search and codebase_status are current UCI-only entry points.
+// They resolve an opaque client-local context handle or current binding before
+// invoking the UCI application; project is compatibility evidence only.
+//
+// The internal legacy-unscoped handlers below remain rollback-only code. They
+// are not MCP tool definitions or Server ToolCall endpoints; their JSON stays
+// visibly labeled legacy_unscoped for direct rollback tests and future T081.
+//
 // Flag contract: when ENGRAM_CODE_INTEL_ENABLED != "true", none of these tools
 // appear in tools/list and any tools/call for them returns "unknown tool".
 // The ListTools output MUST be byte-identical to the pre-CR-006 surface when
@@ -35,8 +38,9 @@ func codeIntelEnabled() bool {
 }
 
 const (
-	codebaseSearchDefaultLimit = 10
-	codebaseSearchMaxLimit     = 50
+	codebaseSearchDefaultLimit          = 10
+	codebaseSearchMaxLimit              = 50
+	legacyUnscopedCodebaseRetrievalMode = "legacy_unscoped"
 )
 
 // codebaseIntelligenceApplication is an optional capability of the existing
@@ -65,20 +69,19 @@ type codebaseStatusSnapshot struct {
 	EvidenceRecorder codebaseEvidenceRecorderHealth
 }
 
-// SetCodeChunkStore wires the code chunk store into the MCP server.
-// Must be called when ENGRAM_CODE_INTEL_ENABLED=true to enable codebase_search
-// and codebase_status. When nil, the server still starts; those two tools are
-// simply absent from tools/list (guarded by the nil check below).
-func (s *Server) SetCodeChunkStore(cs *gorm.CodeChunkStore) {
-	s.codeChunkStore = cs
+// SetLegacyUnscopedCodeChunkStore wires the intentionally invoked raw-project
+// compatibility reader. Current UCI dispatch never consults this store.
+func (s *Server) SetLegacyUnscopedCodeChunkStore(cs *gorm.CodeChunkStore) {
+	s.legacyUnscopedCodeChunkStore = cs
 }
 
-// codebaseSearchTool returns the codebase_search tool definition.
-// Advertised only when codeIntelEnabled() && s.codeChunkStore != nil.
+// codebaseSearchTool returns the current UCI-only codebase_search definition.
+// Direct calls always fail closed through UCI resolution; they never select or
+// retrieve by raw project ID, including when the legacy store is unavailable.
 func codebaseSearchTool() Tool {
 	return Tool{
 		Name:        "codebase_search",
-		Description: "Search the indexed codebase. UCI calls resolve the caller's opaque context handle or current binding before search; legacy project is compatibility evidence only, never selection authority.",
+		Description: "Search the codebase within an authorized UCI context. The optional project is compatibility evidence only and never selection authority.",
 		tier:        tierCore,
 		InputSchema: map[string]any{
 			"type":                 "object",
@@ -113,8 +116,7 @@ func codebaseSearchTool() Tool {
 	}
 }
 
-// codebaseStatusTool returns the codebase_status tool definition.
-// Advertised only when codeIntelEnabled() && s.codeChunkStore != nil.
+// codebaseStatusTool returns the current UCI-only codebase_status definition.
 func codebaseStatusTool() Tool {
 	return Tool{
 		Name:        "codebase_status",
@@ -137,169 +139,163 @@ func codebaseStatusTool() Tool {
 	}
 }
 
-// handleCodebaseSearch dispatches either the client-scoped UCI route or the
-// explicitly retained raw-project legacy route.
+// handleCodebaseSearch always dispatches through the current UCI route.
 func (s *Server) handleCodebaseSearch(ctx context.Context, args json.RawMessage) (string, error) {
 	if !codeIntelEnabled() {
 		return "", fmt.Errorf("codebase_search requires ENGRAM_CODE_INTEL_ENABLED=true")
 	}
-	if s.hasCodebaseContextApplication() || codebaseArgsSelectUCI(args) {
-		return s.handleUCICodebaseSearch(ctx, args)
-	}
-	return s.handleLegacyCodebaseSearch(ctx, args)
+	return s.handleUCICodebaseSearch(ctx, args)
 }
 
-// handleLegacyCodebaseSearch preserves the pre-UCI raw-project behavior for
-// callers that have not selected a UCI context.
-func (s *Server) handleLegacyCodebaseSearch(ctx context.Context, args json.RawMessage) (string, error) {
+// handleLegacyUnscopedCodebaseSearch preserves raw-project retrieval for
+// internal rollback only. It is not a Server ToolCall endpoint.
+func (s *Server) handleLegacyUnscopedCodebaseSearch(ctx context.Context, args json.RawMessage) (string, error) {
 	if !codeIntelEnabled() {
-		return "", fmt.Errorf("codebase_search requires ENGRAM_CODE_INTEL_ENABLED=true")
+		return "", errors.New("legacy unscoped code search requires ENGRAM_CODE_INTEL_ENABLED=true")
 	}
-	if s.codeChunkStore == nil {
-		return "", fmt.Errorf("codebase_search: code chunk store not wired")
-	}
-
-	var params struct {
-		Query   string `json:"query"`
-		Limit   int    `json:"limit"`
-		Project string `json:"project"`
-	}
-	if args != nil {
-		if err := json.Unmarshal(args, &params); err != nil {
-			return "", fmt.Errorf("codebase_search: invalid args: %w", err)
-		}
-	}
-	if params.Query == "" {
-		return "", fmt.Errorf("codebase_search: query is required")
-	}
-	if params.Limit <= 0 {
-		params.Limit = 10
-	}
-	if params.Limit > 50 {
-		params.Limit = 50
+	if s.legacyUnscopedCodeChunkStore == nil {
+		return "", errors.New("legacy unscoped code search: code chunk store not wired")
 	}
 
-	// Project ID resolution: use the explicit arg when provided, otherwise derive
-	// from the context. For server-side tools the project context is not available
-	// the same way as in the daemon, so we require the caller to supply it when
-	// the tool is used from a direct gRPC/HTTP path. In V1 we accept the
-	// project field as the authoritative project ID (same convention as the
-	// store/recall tools that accept a "project" param).
-	projectID := params.Project
-	if projectID == "" {
-		return "", fmt.Errorf("codebase_search: project ID is required (supply via 'project' param)")
-	}
-
-	// V1: FTS-only mode. QueryVec is empty, which causes CodeHybridSearch to
-	// skip the vector leg and run FTS only. This is explicitly documented as
-	// acceptable for V1 — see file header note.
-	opts := retrieval.CodeHybridOptions{
-		QueryVec: nil, // FTS-only for V1
-	}
-
-	hits, err := retrieval.CodeHybridSearch(ctx, projectID, params.Query, params.Limit, s.codeChunkStore, opts)
+	params, err := decodeLegacyUnscopedCodebaseSearchArgs(args)
 	if err != nil {
-		return "", fmt.Errorf("codebase_search: %w", err)
+		return "", fmt.Errorf("legacy unscoped code search: invalid args: %w", err)
 	}
 
-	// Format results as a JSON array. Each element carries the fields a
-	// SocratiCode-compatible client expects: file_path, byte_start, byte_end,
-	// language, content, score.
-	type hitResult struct {
-		ID        int64   `json:"id"`
-		FilePath  string  `json:"file_path"`
-		ByteStart int     `json:"byte_start"`
-		ByteEnd   int     `json:"byte_end"`
-		Language  string  `json:"language"`
-		Content   string  `json:"content"`
-		Score     float64 `json:"score"`
+	hits, err := retrieval.LegacyUnscopedCodeHybridSearch(
+		ctx,
+		params.Project,
+		params.Query,
+		params.Limit,
+		s.legacyUnscopedCodeChunkStore,
+		retrieval.LegacyUnscopedCodeHybridOptions{},
+	)
+	if err != nil {
+		return "", fmt.Errorf("legacy unscoped code search: %w", err)
 	}
 
-	results := make([]hitResult, len(hits))
-	for i, h := range hits {
-		results[i] = hitResult{
-			ID:        h.ID,
-			FilePath:  h.FilePath,
-			ByteStart: h.ByteStart,
-			ByteEnd:   h.ByteEnd,
-			Language:  h.Language,
-			Content:   h.Content,
-			Score:     h.Score,
+	results := make([]legacyUnscopedCodebaseSearchHit, len(hits))
+	for i, hit := range hits {
+		results[i] = legacyUnscopedCodebaseSearchHit{
+			ID:        hit.ID,
+			FilePath:  hit.FilePath,
+			ByteStart: hit.ByteStart,
+			ByteEnd:   hit.ByteEnd,
+			Language:  hit.Language,
+			Content:   hit.Content,
+			Score:     hit.Score,
 		}
 	}
 
-	out, err := json.Marshal(map[string]any{
-		"results": results,
-		"count":   len(results),
-		"query":   params.Query,
-		"project": projectID,
+	encoded, err := json.Marshal(legacyUnscopedCodebaseSearchResponse{
+		RetrievalMode: legacyUnscopedCodebaseRetrievalMode,
+		Results:       results,
+		Count:         len(results),
+		Query:         params.Query,
+		Project:       params.Project,
 	})
 	if err != nil {
-		return "", fmt.Errorf("codebase_search: marshal results: %w", err)
+		return "", fmt.Errorf("legacy unscoped code search: marshal results: %w", err)
 	}
-	return string(out), nil
+	return string(encoded), nil
 }
 
-// handleCodebaseStatus dispatches either the client-scoped UCI route or the
-// explicitly retained raw-project legacy route.
+// handleCodebaseStatus always dispatches through the current UCI route.
 func (s *Server) handleCodebaseStatus(ctx context.Context, args json.RawMessage) (string, error) {
 	if !codeIntelEnabled() {
 		return "", fmt.Errorf("codebase_status requires ENGRAM_CODE_INTEL_ENABLED=true")
 	}
-	if s.hasCodebaseContextApplication() || codebaseArgsSelectUCI(args) {
-		return s.handleUCICodebaseStatus(ctx, args)
-	}
-	return s.handleLegacyCodebaseStatus(ctx, args)
+	return s.handleUCICodebaseStatus(ctx, args)
 }
 
-// handleLegacyCodebaseStatus preserves the pre-UCI raw-project behavior for
-// callers that have not selected a UCI context.
-func (s *Server) handleLegacyCodebaseStatus(ctx context.Context, args json.RawMessage) (string, error) {
+// handleLegacyUnscopedCodebaseStatus preserves raw-project status for internal
+// rollback only. It is not a Server ToolCall endpoint.
+func (s *Server) handleLegacyUnscopedCodebaseStatus(ctx context.Context, args json.RawMessage) (string, error) {
 	if !codeIntelEnabled() {
-		return "", fmt.Errorf("codebase_status requires ENGRAM_CODE_INTEL_ENABLED=true")
+		return "", errors.New("legacy unscoped code status requires ENGRAM_CODE_INTEL_ENABLED=true")
 	}
-	if s.codeChunkStore == nil {
-		return "", fmt.Errorf("codebase_status: code chunk store not wired")
-	}
-
-	var params struct {
-		Project string `json:"project"`
-	}
-	if args != nil {
-		_ = json.Unmarshal(args, &params)
-	}
-	projectID := params.Project
-	if projectID == "" {
-		return "", fmt.Errorf("codebase_status: project ID is required (supply via 'project' param)")
+	if s.legacyUnscopedCodeChunkStore == nil {
+		return "", errors.New("legacy unscoped code status: code chunk store not wired")
 	}
 
-	total, err := s.codeChunkStore.CountByProject(ctx, projectID)
+	params, err := decodeLegacyUnscopedCodebaseStatusArgs(args)
 	if err != nil {
-		return "", fmt.Errorf("codebase_status count_total: %w", err)
-	}
-	embedded, err := s.codeChunkStore.CountEmbeddedByProject(ctx, projectID)
-	if err != nil {
-		return "", fmt.Errorf("codebase_status count_embedded: %w", err)
-	}
-	lastAt, hasAt, err := s.codeChunkStore.MaxUpdatedAtByProject(ctx, projectID)
-	if err != nil {
-		return "", fmt.Errorf("codebase_status max_updated_at: %w", err)
+		return "", fmt.Errorf("legacy unscoped code status: invalid args: %w", err)
 	}
 
-	result := map[string]any{
-		"project":         projectID,
-		"total_chunks":    total,
-		"embedded_chunks": embedded,
+	total, err := s.legacyUnscopedCodeChunkStore.CountByProject(ctx, params.Project)
+	if err != nil {
+		return "", fmt.Errorf("legacy unscoped code status: count total: %w", err)
+	}
+	embedded, err := s.legacyUnscopedCodeChunkStore.CountEmbeddedByProject(ctx, params.Project)
+	if err != nil {
+		return "", fmt.Errorf("legacy unscoped code status: count embedded: %w", err)
+	}
+	lastAt, hasAt, err := s.legacyUnscopedCodeChunkStore.MaxUpdatedAtByProject(ctx, params.Project)
+	if err != nil {
+		return "", fmt.Errorf("legacy unscoped code status: max updated at: %w", err)
+	}
+
+	response := legacyUnscopedCodebaseStatusResponse{
+		RetrievalMode:  legacyUnscopedCodebaseRetrievalMode,
+		Project:        params.Project,
+		TotalChunks:    total,
+		EmbeddedChunks: embedded,
 	}
 	if hasAt {
-		result["last_indexed_at"] = lastAt.Format(time.RFC3339)
+		response.LastIndexedAt = lastAt.Format(time.RFC3339)
 	}
-
-	out, err := json.Marshal(result)
+	encoded, err := json.Marshal(response)
 	if err != nil {
-		return "", fmt.Errorf("codebase_status: marshal: %w", err)
+		return "", fmt.Errorf("legacy unscoped code status: marshal status: %w", err)
 	}
-	return string(out), nil
+	return string(encoded), nil
+}
+
+type legacyUnscopedCodebaseSearchArgs struct {
+	Query   *string `json:"query"`
+	Limit   *int    `json:"limit"`
+	Project *string `json:"project"`
+}
+
+type legacyUnscopedCodebaseSearchInput struct {
+	Query   string
+	Limit   int
+	Project string
+}
+
+type legacyUnscopedCodebaseStatusArgs struct {
+	Project *string `json:"project"`
+}
+
+type legacyUnscopedCodebaseStatusInput struct {
+	Project string
+}
+
+type legacyUnscopedCodebaseSearchHit struct {
+	ID        int64   `json:"id"`
+	FilePath  string  `json:"file_path"`
+	ByteStart int     `json:"byte_start"`
+	ByteEnd   int     `json:"byte_end"`
+	Language  string  `json:"language"`
+	Content   string  `json:"content"`
+	Score     float64 `json:"score"`
+}
+
+type legacyUnscopedCodebaseSearchResponse struct {
+	RetrievalMode string                            `json:"retrieval_mode"`
+	Results       []legacyUnscopedCodebaseSearchHit `json:"results"`
+	Count         int                               `json:"count"`
+	Query         string                            `json:"query"`
+	Project       string                            `json:"project"`
+}
+
+type legacyUnscopedCodebaseStatusResponse struct {
+	RetrievalMode  string `json:"retrieval_mode"`
+	Project        string `json:"project"`
+	TotalChunks    int64  `json:"total_chunks"`
+	EmbeddedChunks int64  `json:"embedded_chunks"`
+	LastIndexedAt  string `json:"last_indexed_at,omitempty"`
 }
 
 type codebaseSearchArgs struct {
@@ -322,18 +318,6 @@ type codebaseStatusResponse struct {
 	TotalChunks      int64                          `json:"total_chunks"`
 	EmbeddedChunks   int64                          `json:"embedded_chunks"`
 	EvidenceRecorder codebaseEvidenceRecorderHealth `json:"evidence_recorder"`
-}
-
-func codebaseArgsSelectUCI(raw json.RawMessage) bool {
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return false
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil {
-		return false
-	}
-	_, selected := fields["context_handle"]
-	return selected
 }
 
 func decodeCodebaseSearchArgs(raw json.RawMessage) (codebaseSearchArgs, error) {
@@ -366,6 +350,42 @@ func decodeCodebaseStatusArgs(raw json.RawMessage) (codebaseStatusArgs, error) {
 		return codebaseStatusArgs{}, errors.New("invalid context handle")
 	}
 	return args, nil
+}
+
+func decodeLegacyUnscopedCodebaseSearchArgs(raw json.RawMessage) (legacyUnscopedCodebaseSearchInput, error) {
+	var args legacyUnscopedCodebaseSearchArgs
+	if _, err := decodeStrictCodebaseArgs(raw, &args); err != nil {
+		return legacyUnscopedCodebaseSearchInput{}, err
+	}
+	if args.Query == nil || *args.Query == "" {
+		return legacyUnscopedCodebaseSearchInput{}, errors.New("query is required")
+	}
+	if args.Project == nil || *args.Project == "" {
+		return legacyUnscopedCodebaseSearchInput{}, errors.New("project is required")
+	}
+	input := legacyUnscopedCodebaseSearchInput{
+		Query:   *args.Query,
+		Limit:   codebaseSearchDefaultLimit,
+		Project: *args.Project,
+	}
+	if args.Limit != nil {
+		if *args.Limit < 1 || *args.Limit > codebaseSearchMaxLimit {
+			return legacyUnscopedCodebaseSearchInput{}, fmt.Errorf("limit must be between 1 and %d", codebaseSearchMaxLimit)
+		}
+		input.Limit = *args.Limit
+	}
+	return input, nil
+}
+
+func decodeLegacyUnscopedCodebaseStatusArgs(raw json.RawMessage) (legacyUnscopedCodebaseStatusInput, error) {
+	var args legacyUnscopedCodebaseStatusArgs
+	if _, err := decodeStrictCodebaseArgs(raw, &args); err != nil {
+		return legacyUnscopedCodebaseStatusInput{}, err
+	}
+	if args.Project == nil || *args.Project == "" {
+		return legacyUnscopedCodebaseStatusInput{}, errors.New("project is required")
+	}
+	return legacyUnscopedCodebaseStatusInput{Project: *args.Project}, nil
 }
 
 func decodeStrictCodebaseArgs(raw json.RawMessage, target any) (map[string]json.RawMessage, error) {

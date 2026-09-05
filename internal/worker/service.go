@@ -1257,12 +1257,11 @@ func (s *Service) initializeAsync() {
 	s.segmentStore = segmentStore
 	s.initMu.Unlock()
 
-	// Wire code intelligence store into MCP server (CR-006).
-	// Gated on ENGRAM_CODE_INTEL_ENABLED=true; flag-off leaves codeChunkStore nil
-	// so tools/list is byte-identical to pre-CR-006 when the flag is off.
+	// Wire the explicitly invoked raw-project compatibility reader. Current UCI
+	// dispatch never consults this store for context selection or retrieval.
 	if os.Getenv("ENGRAM_CODE_INTEL_ENABLED") == "true" {
-		codeChunkStore := gorm.NewCodeChunkStore(store.GetDB())
-		mcpServer.SetCodeChunkStore(codeChunkStore)
+		legacyUnscopedCodeChunkStore := gorm.NewCodeChunkStore(store.GetDB())
+		mcpServer.SetLegacyUnscopedCodeChunkStore(legacyUnscopedCodeChunkStore)
 	}
 
 	// Wire gRPC server: create adapter over mcpServer and register with the server.

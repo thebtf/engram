@@ -275,7 +275,7 @@ func TestUCITwoRealWorktreesRemainIsolated(t *testing.T) {
 	})
 
 	mcpServer := mcp.NewServer(mcp.ServerOptions{Version: "uci-t001"})
-	mcpServer.SetCodeChunkStore(dbgorm.NewCodeChunkStore(store.DB))
+	mcpServer.SetLegacyUnscopedCodeChunkStore(dbgorm.NewCodeChunkStore(store.DB))
 	grpcServer, internalServer := grpcserver.New(&uciT001MCPAdapter{server: mcpServer}, nil)
 	internalServer.SetDB(store.DB)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

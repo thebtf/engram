@@ -63,7 +63,7 @@ type Server struct {
 	candidateStore                *gorm.CandidateStore      // Milestone-F TG4: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	snapshotStore                 *gorm.SnapshotStore       // Milestone-F TG6: non-nil when ENGRAM_VNEXT_F_ENABLED=true
 	reviewLoopCandidateStoreSeam  reviewLoopCandidateLister // CR-008 test seam for review metrics/queue reads
-	codeChunkStore                *gorm.CodeChunkStore      // CR-006: non-nil when ENGRAM_CODE_INTEL_ENABLED=true
+	legacyUnscopedCodeChunkStore  *gorm.CodeChunkStore      // explicitly invoked raw-project compatibility reader only
 	codebaseContextMu             sync.Mutex
 	codebaseContextApplication    codebaseContextApplication
 	codebaseContextHandles        map[string]*codebaseContextClientHandles
@@ -1066,19 +1066,14 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		tools = append(tools, bulkOpsTools()...)
 	}
 
-	// Code intelligence tools (CR-006) — advertise only when ENGRAM_CODE_INTEL_ENABLED=true
-	// AND the code chunk store is wired. Flag-off path is byte-identical to pre-CR-006.
+	// Code intelligence tools (CR-006) retain the established public surface.
+	// codebase_search is advertised only when its backing store is wired.
+	// The raw-project compatibility reader is internal rollback code and is never
+	// advertised or dispatched as a public MCP tool.
 	//
-	// Only codebase_search is advertised as a server-side tool. codebase_status is
-	// deliberately NOT advertised here: it is the daemon-side static tool's name
-	// (internal/handlers/codeintel), and the daemon merges its in-memory run state
-	// with the server's chunk counts by calling THIS server's codebase_status
-	// handler over the engramcore proxy. Advertising it on both the daemon (static)
-	// and the server (proxied) would surface a DUPLICATE codebase_status entry in
-	// the daemon's tools/list (the dispatcher appends proxy tools without dedup).
-	// The handler + callTool case stay registered so the daemon's proxy call still
-	// resolves; only the external advertisement is suppressed.
-	if codeIntelEnabled() && s.codeChunkStore != nil {
+	// codebase_status is deliberately not advertised here because the daemon-side
+	// static tool owns that name and proxies scoped status to this handler.
+	if codeIntelEnabled() && s.legacyUnscopedCodeChunkStore != nil {
 		tools = append(tools, codebaseSearchTool())
 	}
 	if codeIntelEnabled() && s.hasCodebaseContextApplication() {

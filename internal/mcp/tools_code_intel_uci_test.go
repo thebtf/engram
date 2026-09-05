@@ -473,19 +473,31 @@ func TestUCINoMixedQueryPath(t *testing.T) {
 		})
 	})
 
-	t.Run("intentional legacy endpoints are visibly unscoped", func(t *testing.T) {
+	t.Run("legacy handlers remain explicitly unscoped but are not public tools", func(t *testing.T) {
 		t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 		server := NewServer(ServerOptions{Version: "uci-legacy-unscoped"})
 		server.SetLegacyUnscopedCodeChunkStore(newUCICodeIntelLegacyUnscopedStore(t))
 
-		requireUCICodeIntelLegacyUnscopedResponse(t, callUCICodeIntel(t, server, context.Background(), "codebase_search_legacy_unscoped", map[string]any{
+		searchArguments := map[string]any{
 			"query":   "needle",
 			"project": "legacy-project",
 			"limit":   1,
-		}))
-		requireUCICodeIntelLegacyUnscopedResponse(t, callUCICodeIntel(t, server, context.Background(), "codebase_status_legacy_unscoped", map[string]any{
-			"project": "legacy-project",
-		}))
+		}
+		searchRaw, err := json.Marshal(searchArguments)
+		require.NoError(t, err)
+		searchText, err := server.handleLegacyUnscopedCodebaseSearch(context.Background(), searchRaw)
+		require.NoError(t, err)
+		requireUCICodeIntelLegacyUnscopedResponse(t, searchText)
+
+		statusArguments := map[string]any{"project": "legacy-project"}
+		statusRaw, err := json.Marshal(statusArguments)
+		require.NoError(t, err)
+		statusText, err := server.handleLegacyUnscopedCodebaseStatus(context.Background(), statusRaw)
+		require.NoError(t, err)
+		requireUCICodeIntelLegacyUnscopedResponse(t, statusText)
+
+		requireUCICodeIntelLegacyToolNotPublic(t, server, "codebase_search_legacy_unscoped", searchArguments)
+		requireUCICodeIntelLegacyToolNotPublic(t, server, "codebase_status_legacy_unscoped", statusArguments)
 	})
 }
 
@@ -614,9 +626,8 @@ func requireUCICodeIntelSafeToolError(t *testing.T, response *Response, wantCode
 	requireUCICodeIntelNoLeaks(t, string(raw), fixture)
 }
 
-func requireUCICodeIntelLegacyUnscopedResponse(t *testing.T, response *Response) {
+func requireUCICodeIntelLegacyUnscopedResponse(t *testing.T, text string) {
 	t.Helper()
-	text := uciCodeIntelToolText(t, response)
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal([]byte(text), &payload))
 	assert.Equal(t, "legacy_unscoped", payload["retrieval_mode"])
@@ -624,6 +635,22 @@ func requireUCICodeIntelLegacyUnscopedResponse(t *testing.T, response *Response)
 	var current uci.QueryResponse
 	assert.Error(t, json.Unmarshal([]byte(text), &current), "legacy responses must not decode as the strict current UCI View response schema")
 	assert.Nil(t, current.Contexts)
+}
+
+func requireUCICodeIntelLegacyToolNotPublic(t *testing.T, server *Server, name string, arguments map[string]any) {
+	t.Helper()
+	tools := server.ListTools()
+	toolNames := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		toolNames = append(toolNames, tool.Name)
+	}
+	assert.NotContains(t, toolNames, name, "%s must not have a public tool schema", name)
+
+	response := callUCICodeIntel(t, server, context.Background(), name, arguments)
+	require.NotNil(t, response.Error)
+	require.Nil(t, response.Result)
+	assert.Contains(t, response.Error.Message, "unknown tool")
+	assert.Contains(t, response.Error.Message, name)
 }
 
 func uciCodeIntelToolText(t *testing.T, response *Response) string {
