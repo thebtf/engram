@@ -1,10 +1,18 @@
 package grpcserver
 
 import (
+	"context"
+	"io"
 	"testing"
+	"time"
 
 	pb "github.com/thebtf/engram/proto/engram/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type uciTransportMethodSpec struct {
@@ -272,5 +280,474 @@ func requireUCITransportFields(t *testing.T, file protoreflect.FileDescriptor, m
 		if got := field.Message(); got == nil || got.FullName() != protoreflect.FullName(spec.message) {
 			t.Fatalf("%s.%s message = %v, want %s", messageName, spec.name, got, spec.message)
 		}
+	}
+}
+
+const (
+	uciTransportContractSpaceID       = "11111111-1111-4111-8111-111111111111"
+	uciTransportContractSourceID      = "22222222-2222-4222-8222-222222222222"
+	uciTransportContractCheckoutID    = "33333333-3333-4333-8333-333333333333"
+	uciTransportContractViewID        = "44444444-4444-4444-8444-444444444444"
+	uciTransportContractProfileID     = "55555555-5555-4555-8555-555555555555"
+	uciTransportContractIncarnationID = "66666666-6666-4666-8666-666666666666"
+	uciTransportContractDigest        = "sha256:" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+)
+
+func TestUCITransportContractDelegatesValidatedRequests(t *testing.T) {
+	ctx := context.Background()
+	server := &Server{}
+	if _, err := server.BindCodeContext(ctx, uciTransportContractBindRequest()); status.Code(err) != codes.Unavailable {
+		t.Fatalf("default-dark BindCodeContext code = %s, want %s", status.Code(err), codes.Unavailable)
+	}
+
+	runtime := &uciTransportContractFake{}
+	server.SetUCITransport(runtime)
+
+	if _, err := server.BindCodeContext(ctx, uciTransportContractBindRequest()); err != nil {
+		t.Fatalf("BindCodeContext() error = %v", err)
+	}
+	if runtime.bindRequest == nil {
+		t.Fatal("BindCodeContext did not delegate")
+	}
+
+	begin := uciTransportContractBeginRequest()
+	if begin.GetExpectedParent() != nil {
+		t.Fatal("initial BeginCodeIndex request fabricated an expected parent")
+	}
+	if _, err := server.BeginCodeIndex(ctx, begin); err != nil {
+		t.Fatalf("BeginCodeIndex() error = %v", err)
+	}
+	if runtime.beginRequest != begin {
+		t.Fatal("BeginCodeIndex did not delegate the validated request")
+	}
+
+	if _, err := server.FinalizeCodeIndex(ctx, uciTransportContractFinalizeRequest()); err != nil {
+		t.Fatalf("FinalizeCodeIndex() error = %v", err)
+	}
+	if runtime.finalizeRequest == nil {
+		t.Fatal("FinalizeCodeIndex did not delegate")
+	}
+
+	if _, err := server.QueryCode(ctx, uciTransportContractQueryRequest()); err != nil {
+		t.Fatalf("QueryCode() error = %v", err)
+	}
+	if runtime.queryRequest == nil {
+		t.Fatal("QueryCode did not delegate")
+	}
+
+	if _, err := server.ExploreCode(ctx, uciTransportContractExploreRequest()); err != nil {
+		t.Fatalf("ExploreCode() error = %v", err)
+	}
+	if runtime.exploreRequest == nil {
+		t.Fatal("ExploreCode did not delegate")
+	}
+
+	runtime.queryErr = status.Error(codes.PermissionDenied, "runtime denied")
+	if _, err := server.QueryCode(ctx, uciTransportContractQueryRequest()); status.Code(err) != codes.PermissionDenied || status.Convert(err).Message() != "runtime denied" {
+		t.Fatalf("QueryCode runtime status = %v, want preserved PermissionDenied", err)
+	}
+
+	runtime.exploreRequest = nil
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := server.ExploreCode(canceled, uciTransportContractExploreRequest()); status.Code(err) != codes.Canceled {
+		t.Fatalf("canceled ExploreCode code = %s, want %s", status.Code(err), codes.Canceled)
+	}
+	if runtime.exploreRequest != nil {
+		t.Fatal("canceled ExploreCode reached the runtime")
+	}
+}
+
+func TestUCITransportContractStagesOnlyValidatedConsistentFrames(t *testing.T) {
+	server := &Server{}
+	runtime := &uciTransportContractFake{}
+	server.SetUCITransport(runtime)
+
+	for _, test := range []struct {
+		name   string
+		frames []*pb.StageCodeIndexFrame
+	}{
+		{name: "empty EOF", frames: nil},
+		{name: "first sequence is not zero", frames: []*pb.StageCodeIndexFrame{uciTransportContractStageFrame(1)}},
+		{name: "sequence gap", frames: []*pb.StageCodeIndexFrame{uciTransportContractStageFrame(0), uciTransportContractStageFrame(2)}},
+		{name: "scope changes", frames: func() []*pb.StageCodeIndexFrame {
+			frames := []*pb.StageCodeIndexFrame{uciTransportContractStageFrame(0), uciTransportContractStageFrame(1)}
+			frames[1].Scope.CheckoutId = "77777777-7777-4777-8777-777777777777"
+			return frames
+		}()},
+		{name: "build changes", frames: func() []*pb.StageCodeIndexFrame {
+			frames := []*pb.StageCodeIndexFrame{uciTransportContractStageFrame(0), uciTransportContractStageFrame(1)}
+			frames[1].BuildId = "other-build"
+			return frames
+		}()},
+		{name: "lease changes", frames: func() []*pb.StageCodeIndexFrame {
+			frames := []*pb.StageCodeIndexFrame{uciTransportContractStageFrame(0), uciTransportContractStageFrame(1)}
+			frames[1].LeaseEpoch++
+			return frames
+		}()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stream := &uciTransportContractStageStream{ctx: context.Background(), frames: test.frames}
+			if err := server.StageCodeIndex(stream); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("StageCodeIndex() code = %s, want %s", status.Code(err), codes.InvalidArgument)
+			}
+			if stream.response != nil {
+				t.Fatal("invalid stream received a close response")
+			}
+		})
+	}
+	if runtime.stageCalls != 0 {
+		t.Fatalf("runtime received %d invalid stage calls", runtime.stageCalls)
+	}
+
+	frames := []*pb.StageCodeIndexFrame{uciTransportContractStageFrame(0), uciTransportContractStageFrame(1)}
+	stream := &uciTransportContractStageStream{ctx: context.Background(), frames: frames}
+	if err := server.StageCodeIndex(stream); err != nil {
+		t.Fatalf("StageCodeIndex() error = %v", err)
+	}
+	if runtime.stageCalls != 1 || len(runtime.stageFrames) != len(frames) {
+		t.Fatalf("runtime stage delegation = calls:%d frames:%d, want 1/%d", runtime.stageCalls, len(runtime.stageFrames), len(frames))
+	}
+	if stream.response == nil || stream.response.GetAcceptedSequence() != 1 || stream.response.GetAcceptedPartCount() != 2 {
+		t.Fatalf("stage close response = %#v", stream.response)
+	}
+}
+
+type uciTransportContractFake struct {
+	calls            int
+	bindRequest      *pb.BindCodeContextRequest
+	bindResponse     *pb.BindCodeContextResponse
+	beginRequest     *pb.BeginCodeIndexRequest
+	beginResponse    *pb.BeginCodeIndexResponse
+	stageFrames      []*pb.StageCodeIndexFrame
+	stageCalls       int
+	stageResponse    *pb.StageCodeIndexResponse
+	finalizeRequest  *pb.FinalizeCodeIndexRequest
+	finalizeResponse *pb.FinalizeCodeIndexResponse
+	queryRequest     *pb.QueryCodeRequest
+	queryResponse    *pb.QueryCodeResponse
+	exploreRequest   *pb.ExploreCodeRequest
+	exploreResponse  *pb.ExploreCodeResponse
+	queryErr         error
+}
+
+func (fake *uciTransportContractFake) BindCodeContext(_ context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
+	fake.calls++
+	fake.bindRequest = request
+	if fake.bindResponse != nil {
+		return fake.bindResponse, nil
+	}
+	return &pb.BindCodeContextResponse{ContextHandle: "context-handle", Context: uciTransportContractContext()}, nil
+}
+
+func (fake *uciTransportContractFake) BeginCodeIndex(_ context.Context, request *pb.BeginCodeIndexRequest) (*pb.BeginCodeIndexResponse, error) {
+	fake.calls++
+	fake.beginRequest = request
+	if fake.beginResponse != nil {
+		return fake.beginResponse, nil
+	}
+	return &pb.BeginCodeIndexResponse{Scope: request.GetScope(), BuildId: "server-build", LeaseEpoch: 7, LeaseExpiresAt: timestamppb.Now()}, nil
+}
+
+func (fake *uciTransportContractFake) StageCodeIndex(_ context.Context, frames []*pb.StageCodeIndexFrame) (*pb.StageCodeIndexResponse, error) {
+	fake.calls++
+	fake.stageCalls++
+	fake.stageFrames = frames
+	if fake.stageResponse != nil {
+		return fake.stageResponse, nil
+	}
+	return &pb.StageCodeIndexResponse{
+		BuildId:           frames[0].GetBuildId(),
+		AcceptedSequence:  frames[len(frames)-1].GetSequence(),
+		AcceptedPartCount: uint64(len(frames)),
+		PartDigest:        uciTransportContractDigest,
+	}, nil
+}
+
+func (fake *uciTransportContractFake) FinalizeCodeIndex(_ context.Context, request *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error) {
+	fake.calls++
+	fake.finalizeRequest = request
+	if fake.finalizeResponse != nil {
+		return fake.finalizeResponse, nil
+	}
+	return &pb.FinalizeCodeIndexResponse{
+		PublishedContext:           uciTransportContractContext(),
+		BuildId:                    request.GetBuildId(),
+		LeaseEpoch:                 request.GetLeaseEpoch(),
+		AcceptedFilesystemSequence: request.GetObservedFilesystemSequence(),
+	}, nil
+}
+
+func (fake *uciTransportContractFake) QueryCode(_ context.Context, request *pb.QueryCodeRequest) (*pb.QueryCodeResponse, error) {
+	fake.calls++
+	fake.queryRequest = request
+	if fake.queryErr != nil {
+		return nil, fake.queryErr
+	}
+	if fake.queryResponse != nil {
+		return fake.queryResponse, nil
+	}
+	return &pb.QueryCodeResponse{Context: request.GetContext(), ResponseJson: []byte(`{"status":"ok"}`)}, nil
+}
+
+func (fake *uciTransportContractFake) ExploreCode(_ context.Context, request *pb.ExploreCodeRequest) (*pb.ExploreCodeResponse, error) {
+	fake.calls++
+	fake.exploreRequest = request
+	if fake.exploreResponse != nil {
+		return fake.exploreResponse, nil
+	}
+	return &pb.ExploreCodeResponse{Context: request.GetContext(), ResponseJson: []byte(`{"status":"ok"}`)}, nil
+}
+
+var _ UCITransport = (*uciTransportContractFake)(nil)
+
+type uciTransportContractStageStream struct {
+	ctx      context.Context
+	frames   []*pb.StageCodeIndexFrame
+	position int
+	response *pb.StageCodeIndexResponse
+}
+
+func (stream *uciTransportContractStageStream) SetHeader(metadata.MD) error  { return nil }
+func (stream *uciTransportContractStageStream) SendHeader(metadata.MD) error { return nil }
+func (stream *uciTransportContractStageStream) SetTrailer(metadata.MD)       {}
+func (stream *uciTransportContractStageStream) Context() context.Context     { return stream.ctx }
+func (stream *uciTransportContractStageStream) SendMsg(any) error            { return nil }
+func (stream *uciTransportContractStageStream) RecvMsg(any) error            { return nil }
+
+func (stream *uciTransportContractStageStream) Recv() (*pb.StageCodeIndexFrame, error) {
+	if stream.position >= len(stream.frames) {
+		return nil, io.EOF
+	}
+	frame := stream.frames[stream.position]
+	stream.position++
+	return frame, nil
+}
+
+func (stream *uciTransportContractStageStream) SendAndClose(response *pb.StageCodeIndexResponse) error {
+	stream.response = response
+	return nil
+}
+
+var _ grpc.ClientStreamingServer[pb.StageCodeIndexFrame, pb.StageCodeIndexResponse] = (*uciTransportContractStageStream)(nil)
+
+func uciTransportContractContext() *pb.ContextRef {
+	spaceID := uciTransportContractSpaceID
+	return &pb.ContextRef{
+		SpaceId:           &spaceID,
+		SourceId:          uciTransportContractSourceID,
+		CheckoutId:        uciTransportContractCheckoutID,
+		ViewId:            uciTransportContractViewID,
+		Generation:        1,
+		AnalysisProfileId: uciTransportContractProfileID,
+	}
+}
+
+func uciTransportContractScope() *pb.CodeIndexScope {
+	return &pb.CodeIndexScope{
+		SourceId:          uciTransportContractSourceID,
+		CheckoutId:        uciTransportContractCheckoutID,
+		IncarnationId:     uciTransportContractIncarnationID,
+		AnalysisProfileId: uciTransportContractProfileID,
+	}
+}
+
+func uciTransportContractBindRequest() *pb.BindCodeContextRequest {
+	return &pb.BindCodeContextRequest{ClientSessionId: "client-session", RequestedContext: uciTransportContractContext()}
+}
+
+func uciTransportContractBeginRequest() *pb.BeginCodeIndexRequest {
+	return &pb.BeginCodeIndexRequest{
+		Scope:         uciTransportContractScope(),
+		OwnerInstance: "daemon-instance",
+		BuildKey:      "client-build-key",
+		ManifestMode:  "full",
+		JobKind:       "initial_index",
+	}
+}
+
+func uciTransportContractFinalizeRequest() *pb.FinalizeCodeIndexRequest {
+	startedAt := time.Date(2026, time.September, 5, 12, 0, 0, 0, time.UTC)
+	return &pb.FinalizeCodeIndexRequest{
+		Scope:                      uciTransportContractScope(),
+		BuildId:                    "server-build",
+		LeaseEpoch:                 7,
+		ManifestPartCount:          2,
+		PartsDigest:                uciTransportContractDigest,
+		ManifestEntryCount:         3,
+		ManifestDigest:             uciTransportContractDigest,
+		EdgeCount:                  4,
+		EdgesDigest:                uciTransportContractDigest,
+		ObservedFilesystemSequence: 9,
+		ScanStartedAt:              timestamppb.New(startedAt),
+		ScanCompletedAt:            timestamppb.New(startedAt.Add(time.Second)),
+		ScanOutcome:                "complete",
+		CompleteCensus:             true,
+		CoverageJson:               []byte(`{"structural":"complete"}`),
+	}
+}
+
+func uciTransportContractQueryRequest() *pb.QueryCodeRequest {
+	return &pb.QueryCodeRequest{Context: uciTransportContractContext(), Query: "needle", MaxResults: 10, MaxBytes: 1024, DeadlineMs: 1_000}
+}
+
+func uciTransportContractExploreRequest() *pb.ExploreCodeRequest {
+	return &pb.ExploreCodeRequest{
+		Context:         uciTransportContractContext(),
+		Operation:       "impact",
+		Subject:         "needle",
+		MaxDepth:        4,
+		MaxVisitedNodes: 100,
+		MaxResultNodes:  10,
+		MaxResultEdges:  20,
+		DeadlineMs:      1_000,
+	}
+}
+
+func uciTransportContractStageFrame(sequence uint64) *pb.StageCodeIndexFrame {
+	return &pb.StageCodeIndexFrame{
+		Scope:         uciTransportContractScope(),
+		BuildId:       "server-build",
+		LeaseEpoch:    7,
+		Sequence:      sequence,
+		PayloadDigest: uciTransportContractDigest,
+		Payload:       []byte("payload"),
+	}
+}
+
+func TestUCITransportContractRejectsClosedInputsAndInvalidRuntimeResponses(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		invoke func(*Server) error
+	}{
+		{name: "control identifier", invoke: func(server *Server) error {
+			request := uciTransportContractBindRequest()
+			request.ClientSessionId = "client\x00session"
+			_, err := server.BindCodeContext(context.Background(), request)
+			return err
+		}},
+		{name: "invalid manifest mode", invoke: func(server *Server) error {
+			request := uciTransportContractBeginRequest()
+			request.ManifestMode = "snapshot"
+			_, err := server.BeginCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "invalid job kind", invoke: func(server *Server) error {
+			request := uciTransportContractBeginRequest()
+			request.JobKind = "backfill"
+			_, err := server.BeginCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "invalid payload digest", invoke: func(server *Server) error {
+			frame := uciTransportContractStageFrame(0)
+			frame.PayloadDigest = "sha256:UPPERCASE"
+			return server.StageCodeIndex(&uciTransportContractStageStream{ctx: context.Background(), frames: []*pb.StageCodeIndexFrame{frame}})
+		}},
+		{name: "invalid parts digest", invoke: func(server *Server) error {
+			request := uciTransportContractFinalizeRequest()
+			request.PartsDigest = "digest"
+			_, err := server.FinalizeCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "invalid manifest digest", invoke: func(server *Server) error {
+			request := uciTransportContractFinalizeRequest()
+			request.ManifestDigest = "digest"
+			_, err := server.FinalizeCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "invalid edges digest", invoke: func(server *Server) error {
+			request := uciTransportContractFinalizeRequest()
+			request.EdgesDigest = "digest"
+			_, err := server.FinalizeCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "invalid scan outcome", invoke: func(server *Server) error {
+			request := uciTransportContractFinalizeRequest()
+			request.ScanOutcome = "unknown"
+			_, err := server.FinalizeCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "coverage is not an object", invoke: func(server *Server) error {
+			request := uciTransportContractFinalizeRequest()
+			request.CoverageJson = []byte("[]")
+			_, err := server.FinalizeCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "unsupported explore operation", invoke: func(server *Server) error {
+			request := uciTransportContractExploreRequest()
+			request.Operation = "traverse"
+			_, err := server.ExploreCode(context.Background(), request)
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &uciTransportContractFake{}
+			server := &Server{}
+			server.SetUCITransport(runtime)
+			if err := test.invoke(server); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("rejection code = %s, want %s", status.Code(err), codes.InvalidArgument)
+			}
+			if runtime.calls != 0 {
+				t.Fatalf("invalid request reached runtime %d times", runtime.calls)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name   string
+		invoke func(*Server, *uciTransportContractFake) error
+	}{
+		{name: "bind context mismatch", invoke: func(server *Server, runtime *uciTransportContractFake) error {
+			request := uciTransportContractBindRequest()
+			responseContext := uciTransportContractContext()
+			responseContext.Generation++
+			runtime.bindResponse = &pb.BindCodeContextResponse{ContextHandle: "context-handle", Context: responseContext}
+			_, err := server.BindCodeContext(context.Background(), request)
+			return err
+		}},
+		{name: "begin scope mismatch", invoke: func(server *Server, runtime *uciTransportContractFake) error {
+			request := uciTransportContractBeginRequest()
+			scope := uciTransportContractScope()
+			scope.CheckoutId = "77777777-7777-4777-8777-777777777777"
+			runtime.beginResponse = &pb.BeginCodeIndexResponse{Scope: scope, BuildId: "server-build", LeaseEpoch: 7, LeaseExpiresAt: timestamppb.Now()}
+			_, err := server.BeginCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "stage acknowledgement mismatch", invoke: func(server *Server, runtime *uciTransportContractFake) error {
+			runtime.stageResponse = &pb.StageCodeIndexResponse{BuildId: "server-build", AcceptedSequence: 0, AcceptedPartCount: 1, PartDigest: uciTransportContractDigest}
+			return server.StageCodeIndex(&uciTransportContractStageStream{ctx: context.Background(), frames: []*pb.StageCodeIndexFrame{uciTransportContractStageFrame(0), uciTransportContractStageFrame(1)}})
+		}},
+		{name: "finalize build mismatch", invoke: func(server *Server, runtime *uciTransportContractFake) error {
+			request := uciTransportContractFinalizeRequest()
+			runtime.finalizeResponse = &pb.FinalizeCodeIndexResponse{PublishedContext: uciTransportContractContext(), BuildId: "other-build", LeaseEpoch: request.GetLeaseEpoch(), AcceptedFilesystemSequence: request.GetObservedFilesystemSequence()}
+			_, err := server.FinalizeCodeIndex(context.Background(), request)
+			return err
+		}},
+		{name: "query payload is not an object", invoke: func(server *Server, runtime *uciTransportContractFake) error {
+			request := uciTransportContractQueryRequest()
+			runtime.queryResponse = &pb.QueryCodeResponse{Context: request.GetContext(), ResponseJson: []byte("[]")}
+			_, err := server.QueryCode(context.Background(), request)
+			return err
+		}},
+		{name: "explore context mismatch", invoke: func(server *Server, runtime *uciTransportContractFake) error {
+			request := uciTransportContractExploreRequest()
+			responseContext := uciTransportContractContext()
+			responseContext.Generation++
+			runtime.exploreResponse = &pb.ExploreCodeResponse{Context: responseContext, ResponseJson: []byte(`{"status":"ok"}`)}
+			_, err := server.ExploreCode(context.Background(), request)
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &uciTransportContractFake{}
+			server := &Server{}
+			server.SetUCITransport(runtime)
+			if err := test.invoke(server, runtime); status.Code(err) != codes.Internal {
+				t.Fatalf("invalid response code = %s, want %s", status.Code(err), codes.Internal)
+			}
+			if runtime.calls != 1 {
+				t.Fatalf("invalid response runtime calls = %d, want 1", runtime.calls)
+			}
+		})
 	}
 }

@@ -5683,6 +5683,1098 @@ func (x *HostAdvisorObserveResponse) GetReason() HostAdvisorObservationReason {
 	return HostAdvisorObservationReason_HOST_ADVISOR_OBSERVATION_REASON_UNSPECIFIED
 }
 
+// ContextRef identifies an immutable View-pinned UCI context. space_id is
+// optional because a Source can be authorized without being selected through a Space.
+type ContextRef struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	SpaceId           *string                `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3,oneof" json:"space_id,omitempty"`
+	SourceId          string                 `protobuf:"bytes,2,opt,name=source_id,json=sourceId,proto3" json:"source_id,omitempty"`
+	CheckoutId        string                 `protobuf:"bytes,3,opt,name=checkout_id,json=checkoutId,proto3" json:"checkout_id,omitempty"`
+	ViewId            string                 `protobuf:"bytes,4,opt,name=view_id,json=viewId,proto3" json:"view_id,omitempty"`
+	Generation        int64                  `protobuf:"varint,5,opt,name=generation,proto3" json:"generation,omitempty"`
+	AnalysisProfileId string                 `protobuf:"bytes,6,opt,name=analysis_profile_id,json=analysisProfileId,proto3" json:"analysis_profile_id,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ContextRef) Reset() {
+	*x = ContextRef{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[66]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContextRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContextRef) ProtoMessage() {}
+
+func (x *ContextRef) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[66]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContextRef.ProtoReflect.Descriptor instead.
+func (*ContextRef) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *ContextRef) GetSpaceId() string {
+	if x != nil && x.SpaceId != nil {
+		return *x.SpaceId
+	}
+	return ""
+}
+
+func (x *ContextRef) GetSourceId() string {
+	if x != nil {
+		return x.SourceId
+	}
+	return ""
+}
+
+func (x *ContextRef) GetCheckoutId() string {
+	if x != nil {
+		return x.CheckoutId
+	}
+	return ""
+}
+
+func (x *ContextRef) GetViewId() string {
+	if x != nil {
+		return x.ViewId
+	}
+	return ""
+}
+
+func (x *ContextRef) GetGeneration() int64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *ContextRef) GetAnalysisProfileId() string {
+	if x != nil {
+		return x.AnalysisProfileId
+	}
+	return ""
+}
+
+// CodeIndexScope identifies a checkout-only UCI build target. It deliberately
+// has no view_id or generation: an initial index has no published View yet.
+type CodeIndexScope struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	SourceId          string                 `protobuf:"bytes,1,opt,name=source_id,json=sourceId,proto3" json:"source_id,omitempty"`
+	CheckoutId        string                 `protobuf:"bytes,2,opt,name=checkout_id,json=checkoutId,proto3" json:"checkout_id,omitempty"`
+	IncarnationId     string                 `protobuf:"bytes,3,opt,name=incarnation_id,json=incarnationId,proto3" json:"incarnation_id,omitempty"`
+	AnalysisProfileId string                 `protobuf:"bytes,4,opt,name=analysis_profile_id,json=analysisProfileId,proto3" json:"analysis_profile_id,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *CodeIndexScope) Reset() {
+	*x = CodeIndexScope{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[67]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CodeIndexScope) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CodeIndexScope) ProtoMessage() {}
+
+func (x *CodeIndexScope) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[67]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CodeIndexScope.ProtoReflect.Descriptor instead.
+func (*CodeIndexScope) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{67}
+}
+
+func (x *CodeIndexScope) GetSourceId() string {
+	if x != nil {
+		return x.SourceId
+	}
+	return ""
+}
+
+func (x *CodeIndexScope) GetCheckoutId() string {
+	if x != nil {
+		return x.CheckoutId
+	}
+	return ""
+}
+
+func (x *CodeIndexScope) GetIncarnationId() string {
+	if x != nil {
+		return x.IncarnationId
+	}
+	return ""
+}
+
+func (x *CodeIndexScope) GetAnalysisProfileId() string {
+	if x != nil {
+		return x.AnalysisProfileId
+	}
+	return ""
+}
+
+type BindCodeContextRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ClientSessionId  string                 `protobuf:"bytes,1,opt,name=client_session_id,json=clientSessionId,proto3" json:"client_session_id,omitempty"`
+	RequestedContext *ContextRef            `protobuf:"bytes,2,opt,name=requested_context,json=requestedContext,proto3" json:"requested_context,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *BindCodeContextRequest) Reset() {
+	*x = BindCodeContextRequest{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[68]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BindCodeContextRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BindCodeContextRequest) ProtoMessage() {}
+
+func (x *BindCodeContextRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[68]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BindCodeContextRequest.ProtoReflect.Descriptor instead.
+func (*BindCodeContextRequest) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{68}
+}
+
+func (x *BindCodeContextRequest) GetClientSessionId() string {
+	if x != nil {
+		return x.ClientSessionId
+	}
+	return ""
+}
+
+func (x *BindCodeContextRequest) GetRequestedContext() *ContextRef {
+	if x != nil {
+		return x.RequestedContext
+	}
+	return nil
+}
+
+type BindCodeContextResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ContextHandle string                 `protobuf:"bytes,1,opt,name=context_handle,json=contextHandle,proto3" json:"context_handle,omitempty"`
+	Context       *ContextRef            `protobuf:"bytes,2,opt,name=context,proto3" json:"context,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BindCodeContextResponse) Reset() {
+	*x = BindCodeContextResponse{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[69]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BindCodeContextResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BindCodeContextResponse) ProtoMessage() {}
+
+func (x *BindCodeContextResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[69]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BindCodeContextResponse.ProtoReflect.Descriptor instead.
+func (*BindCodeContextResponse) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{69}
+}
+
+func (x *BindCodeContextResponse) GetContextHandle() string {
+	if x != nil {
+		return x.ContextHandle
+	}
+	return ""
+}
+
+func (x *BindCodeContextResponse) GetContext() *ContextRef {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+type BeginCodeIndexRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Scope          *CodeIndexScope        `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	OwnerInstance  string                 `protobuf:"bytes,2,opt,name=owner_instance,json=ownerInstance,proto3" json:"owner_instance,omitempty"`
+	BuildKey       string                 `protobuf:"bytes,3,opt,name=build_key,json=buildKey,proto3" json:"build_key,omitempty"`
+	ExpectedParent *ContextRef            `protobuf:"bytes,4,opt,name=expected_parent,json=expectedParent,proto3" json:"expected_parent,omitempty"`
+	ManifestMode   string                 `protobuf:"bytes,5,opt,name=manifest_mode,json=manifestMode,proto3" json:"manifest_mode,omitempty"`
+	JobKind        string                 `protobuf:"bytes,6,opt,name=job_kind,json=jobKind,proto3" json:"job_kind,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *BeginCodeIndexRequest) Reset() {
+	*x = BeginCodeIndexRequest{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[70]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BeginCodeIndexRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BeginCodeIndexRequest) ProtoMessage() {}
+
+func (x *BeginCodeIndexRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[70]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BeginCodeIndexRequest.ProtoReflect.Descriptor instead.
+func (*BeginCodeIndexRequest) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{70}
+}
+
+func (x *BeginCodeIndexRequest) GetScope() *CodeIndexScope {
+	if x != nil {
+		return x.Scope
+	}
+	return nil
+}
+
+func (x *BeginCodeIndexRequest) GetOwnerInstance() string {
+	if x != nil {
+		return x.OwnerInstance
+	}
+	return ""
+}
+
+func (x *BeginCodeIndexRequest) GetBuildKey() string {
+	if x != nil {
+		return x.BuildKey
+	}
+	return ""
+}
+
+func (x *BeginCodeIndexRequest) GetExpectedParent() *ContextRef {
+	if x != nil {
+		return x.ExpectedParent
+	}
+	return nil
+}
+
+func (x *BeginCodeIndexRequest) GetManifestMode() string {
+	if x != nil {
+		return x.ManifestMode
+	}
+	return ""
+}
+
+func (x *BeginCodeIndexRequest) GetJobKind() string {
+	if x != nil {
+		return x.JobKind
+	}
+	return ""
+}
+
+type BeginCodeIndexResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Scope          *CodeIndexScope        `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	BuildId        string                 `protobuf:"bytes,2,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	LeaseEpoch     uint64                 `protobuf:"varint,3,opt,name=lease_epoch,json=leaseEpoch,proto3" json:"lease_epoch,omitempty"`
+	LeaseExpiresAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=lease_expires_at,json=leaseExpiresAt,proto3" json:"lease_expires_at,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *BeginCodeIndexResponse) Reset() {
+	*x = BeginCodeIndexResponse{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[71]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BeginCodeIndexResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BeginCodeIndexResponse) ProtoMessage() {}
+
+func (x *BeginCodeIndexResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[71]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BeginCodeIndexResponse.ProtoReflect.Descriptor instead.
+func (*BeginCodeIndexResponse) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{71}
+}
+
+func (x *BeginCodeIndexResponse) GetScope() *CodeIndexScope {
+	if x != nil {
+		return x.Scope
+	}
+	return nil
+}
+
+func (x *BeginCodeIndexResponse) GetBuildId() string {
+	if x != nil {
+		return x.BuildId
+	}
+	return ""
+}
+
+func (x *BeginCodeIndexResponse) GetLeaseEpoch() uint64 {
+	if x != nil {
+		return x.LeaseEpoch
+	}
+	return 0
+}
+
+func (x *BeginCodeIndexResponse) GetLeaseExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LeaseExpiresAt
+	}
+	return nil
+}
+
+type StageCodeIndexFrame struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Scope         *CodeIndexScope        `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	BuildId       string                 `protobuf:"bytes,2,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	LeaseEpoch    uint64                 `protobuf:"varint,3,opt,name=lease_epoch,json=leaseEpoch,proto3" json:"lease_epoch,omitempty"`
+	Sequence      uint64                 `protobuf:"varint,4,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	PayloadDigest string                 `protobuf:"bytes,5,opt,name=payload_digest,json=payloadDigest,proto3" json:"payload_digest,omitempty"`
+	Payload       []byte                 `protobuf:"bytes,6,opt,name=payload,proto3" json:"payload,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StageCodeIndexFrame) Reset() {
+	*x = StageCodeIndexFrame{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[72]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StageCodeIndexFrame) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StageCodeIndexFrame) ProtoMessage() {}
+
+func (x *StageCodeIndexFrame) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[72]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StageCodeIndexFrame.ProtoReflect.Descriptor instead.
+func (*StageCodeIndexFrame) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{72}
+}
+
+func (x *StageCodeIndexFrame) GetScope() *CodeIndexScope {
+	if x != nil {
+		return x.Scope
+	}
+	return nil
+}
+
+func (x *StageCodeIndexFrame) GetBuildId() string {
+	if x != nil {
+		return x.BuildId
+	}
+	return ""
+}
+
+func (x *StageCodeIndexFrame) GetLeaseEpoch() uint64 {
+	if x != nil {
+		return x.LeaseEpoch
+	}
+	return 0
+}
+
+func (x *StageCodeIndexFrame) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *StageCodeIndexFrame) GetPayloadDigest() string {
+	if x != nil {
+		return x.PayloadDigest
+	}
+	return ""
+}
+
+func (x *StageCodeIndexFrame) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+type StageCodeIndexResponse struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	BuildId           string                 `protobuf:"bytes,1,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	AcceptedSequence  uint64                 `protobuf:"varint,2,opt,name=accepted_sequence,json=acceptedSequence,proto3" json:"accepted_sequence,omitempty"`
+	AcceptedPartCount uint64                 `protobuf:"varint,3,opt,name=accepted_part_count,json=acceptedPartCount,proto3" json:"accepted_part_count,omitempty"`
+	PartDigest        string                 `protobuf:"bytes,4,opt,name=part_digest,json=partDigest,proto3" json:"part_digest,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *StageCodeIndexResponse) Reset() {
+	*x = StageCodeIndexResponse{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[73]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StageCodeIndexResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StageCodeIndexResponse) ProtoMessage() {}
+
+func (x *StageCodeIndexResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[73]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StageCodeIndexResponse.ProtoReflect.Descriptor instead.
+func (*StageCodeIndexResponse) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{73}
+}
+
+func (x *StageCodeIndexResponse) GetBuildId() string {
+	if x != nil {
+		return x.BuildId
+	}
+	return ""
+}
+
+func (x *StageCodeIndexResponse) GetAcceptedSequence() uint64 {
+	if x != nil {
+		return x.AcceptedSequence
+	}
+	return 0
+}
+
+func (x *StageCodeIndexResponse) GetAcceptedPartCount() uint64 {
+	if x != nil {
+		return x.AcceptedPartCount
+	}
+	return 0
+}
+
+func (x *StageCodeIndexResponse) GetPartDigest() string {
+	if x != nil {
+		return x.PartDigest
+	}
+	return ""
+}
+
+type FinalizeCodeIndexRequest struct {
+	state                      protoimpl.MessageState `protogen:"open.v1"`
+	Scope                      *CodeIndexScope        `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	BuildId                    string                 `protobuf:"bytes,2,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	LeaseEpoch                 uint64                 `protobuf:"varint,3,opt,name=lease_epoch,json=leaseEpoch,proto3" json:"lease_epoch,omitempty"`
+	ExpectedParent             *ContextRef            `protobuf:"bytes,4,opt,name=expected_parent,json=expectedParent,proto3" json:"expected_parent,omitempty"`
+	ManifestPartCount          uint64                 `protobuf:"varint,5,opt,name=manifest_part_count,json=manifestPartCount,proto3" json:"manifest_part_count,omitempty"`
+	PartsDigest                string                 `protobuf:"bytes,6,opt,name=parts_digest,json=partsDigest,proto3" json:"parts_digest,omitempty"`
+	ManifestEntryCount         uint64                 `protobuf:"varint,7,opt,name=manifest_entry_count,json=manifestEntryCount,proto3" json:"manifest_entry_count,omitempty"`
+	ManifestDigest             string                 `protobuf:"bytes,8,opt,name=manifest_digest,json=manifestDigest,proto3" json:"manifest_digest,omitempty"`
+	EdgeCount                  uint64                 `protobuf:"varint,9,opt,name=edge_count,json=edgeCount,proto3" json:"edge_count,omitempty"`
+	EdgesDigest                string                 `protobuf:"bytes,10,opt,name=edges_digest,json=edgesDigest,proto3" json:"edges_digest,omitempty"`
+	ObservedFilesystemSequence uint64                 `protobuf:"varint,11,opt,name=observed_filesystem_sequence,json=observedFilesystemSequence,proto3" json:"observed_filesystem_sequence,omitempty"`
+	ScanStartedAt              *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=scan_started_at,json=scanStartedAt,proto3" json:"scan_started_at,omitempty"`
+	ScanCompletedAt            *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=scan_completed_at,json=scanCompletedAt,proto3" json:"scan_completed_at,omitempty"`
+	ScanOutcome                string                 `protobuf:"bytes,14,opt,name=scan_outcome,json=scanOutcome,proto3" json:"scan_outcome,omitempty"`
+	CompleteCensus             bool                   `protobuf:"varint,15,opt,name=complete_census,json=completeCensus,proto3" json:"complete_census,omitempty"`
+	CoverageJson               []byte                 `protobuf:"bytes,16,opt,name=coverage_json,json=coverageJson,proto3" json:"coverage_json,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
+}
+
+func (x *FinalizeCodeIndexRequest) Reset() {
+	*x = FinalizeCodeIndexRequest{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[74]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FinalizeCodeIndexRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FinalizeCodeIndexRequest) ProtoMessage() {}
+
+func (x *FinalizeCodeIndexRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[74]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FinalizeCodeIndexRequest.ProtoReflect.Descriptor instead.
+func (*FinalizeCodeIndexRequest) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{74}
+}
+
+func (x *FinalizeCodeIndexRequest) GetScope() *CodeIndexScope {
+	if x != nil {
+		return x.Scope
+	}
+	return nil
+}
+
+func (x *FinalizeCodeIndexRequest) GetBuildId() string {
+	if x != nil {
+		return x.BuildId
+	}
+	return ""
+}
+
+func (x *FinalizeCodeIndexRequest) GetLeaseEpoch() uint64 {
+	if x != nil {
+		return x.LeaseEpoch
+	}
+	return 0
+}
+
+func (x *FinalizeCodeIndexRequest) GetExpectedParent() *ContextRef {
+	if x != nil {
+		return x.ExpectedParent
+	}
+	return nil
+}
+
+func (x *FinalizeCodeIndexRequest) GetManifestPartCount() uint64 {
+	if x != nil {
+		return x.ManifestPartCount
+	}
+	return 0
+}
+
+func (x *FinalizeCodeIndexRequest) GetPartsDigest() string {
+	if x != nil {
+		return x.PartsDigest
+	}
+	return ""
+}
+
+func (x *FinalizeCodeIndexRequest) GetManifestEntryCount() uint64 {
+	if x != nil {
+		return x.ManifestEntryCount
+	}
+	return 0
+}
+
+func (x *FinalizeCodeIndexRequest) GetManifestDigest() string {
+	if x != nil {
+		return x.ManifestDigest
+	}
+	return ""
+}
+
+func (x *FinalizeCodeIndexRequest) GetEdgeCount() uint64 {
+	if x != nil {
+		return x.EdgeCount
+	}
+	return 0
+}
+
+func (x *FinalizeCodeIndexRequest) GetEdgesDigest() string {
+	if x != nil {
+		return x.EdgesDigest
+	}
+	return ""
+}
+
+func (x *FinalizeCodeIndexRequest) GetObservedFilesystemSequence() uint64 {
+	if x != nil {
+		return x.ObservedFilesystemSequence
+	}
+	return 0
+}
+
+func (x *FinalizeCodeIndexRequest) GetScanStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ScanStartedAt
+	}
+	return nil
+}
+
+func (x *FinalizeCodeIndexRequest) GetScanCompletedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ScanCompletedAt
+	}
+	return nil
+}
+
+func (x *FinalizeCodeIndexRequest) GetScanOutcome() string {
+	if x != nil {
+		return x.ScanOutcome
+	}
+	return ""
+}
+
+func (x *FinalizeCodeIndexRequest) GetCompleteCensus() bool {
+	if x != nil {
+		return x.CompleteCensus
+	}
+	return false
+}
+
+func (x *FinalizeCodeIndexRequest) GetCoverageJson() []byte {
+	if x != nil {
+		return x.CoverageJson
+	}
+	return nil
+}
+
+type FinalizeCodeIndexResponse struct {
+	state                      protoimpl.MessageState `protogen:"open.v1"`
+	PublishedContext           *ContextRef            `protobuf:"bytes,1,opt,name=published_context,json=publishedContext,proto3" json:"published_context,omitempty"`
+	BuildId                    string                 `protobuf:"bytes,2,opt,name=build_id,json=buildId,proto3" json:"build_id,omitempty"`
+	LeaseEpoch                 uint64                 `protobuf:"varint,3,opt,name=lease_epoch,json=leaseEpoch,proto3" json:"lease_epoch,omitempty"`
+	AcceptedFilesystemSequence uint64                 `protobuf:"varint,4,opt,name=accepted_filesystem_sequence,json=acceptedFilesystemSequence,proto3" json:"accepted_filesystem_sequence,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
+}
+
+func (x *FinalizeCodeIndexResponse) Reset() {
+	*x = FinalizeCodeIndexResponse{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[75]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FinalizeCodeIndexResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FinalizeCodeIndexResponse) ProtoMessage() {}
+
+func (x *FinalizeCodeIndexResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[75]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FinalizeCodeIndexResponse.ProtoReflect.Descriptor instead.
+func (*FinalizeCodeIndexResponse) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{75}
+}
+
+func (x *FinalizeCodeIndexResponse) GetPublishedContext() *ContextRef {
+	if x != nil {
+		return x.PublishedContext
+	}
+	return nil
+}
+
+func (x *FinalizeCodeIndexResponse) GetBuildId() string {
+	if x != nil {
+		return x.BuildId
+	}
+	return ""
+}
+
+func (x *FinalizeCodeIndexResponse) GetLeaseEpoch() uint64 {
+	if x != nil {
+		return x.LeaseEpoch
+	}
+	return 0
+}
+
+func (x *FinalizeCodeIndexResponse) GetAcceptedFilesystemSequence() uint64 {
+	if x != nil {
+		return x.AcceptedFilesystemSequence
+	}
+	return 0
+}
+
+type QueryCodeRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Context           *ContextRef            `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
+	Query             string                 `protobuf:"bytes,2,opt,name=query,proto3" json:"query,omitempty"`
+	MaxResults        uint32                 `protobuf:"varint,3,opt,name=max_results,json=maxResults,proto3" json:"max_results,omitempty"`
+	MaxBytes          uint32                 `protobuf:"varint,4,opt,name=max_bytes,json=maxBytes,proto3" json:"max_bytes,omitempty"`
+	DeadlineMs        uint32                 `protobuf:"varint,5,opt,name=deadline_ms,json=deadlineMs,proto3" json:"deadline_ms,omitempty"`
+	ContinuationToken string                 `protobuf:"bytes,6,opt,name=continuation_token,json=continuationToken,proto3" json:"continuation_token,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *QueryCodeRequest) Reset() {
+	*x = QueryCodeRequest{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[76]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueryCodeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueryCodeRequest) ProtoMessage() {}
+
+func (x *QueryCodeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[76]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueryCodeRequest.ProtoReflect.Descriptor instead.
+func (*QueryCodeRequest) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{76}
+}
+
+func (x *QueryCodeRequest) GetContext() *ContextRef {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+func (x *QueryCodeRequest) GetQuery() string {
+	if x != nil {
+		return x.Query
+	}
+	return ""
+}
+
+func (x *QueryCodeRequest) GetMaxResults() uint32 {
+	if x != nil {
+		return x.MaxResults
+	}
+	return 0
+}
+
+func (x *QueryCodeRequest) GetMaxBytes() uint32 {
+	if x != nil {
+		return x.MaxBytes
+	}
+	return 0
+}
+
+func (x *QueryCodeRequest) GetDeadlineMs() uint32 {
+	if x != nil {
+		return x.DeadlineMs
+	}
+	return 0
+}
+
+func (x *QueryCodeRequest) GetContinuationToken() string {
+	if x != nil {
+		return x.ContinuationToken
+	}
+	return ""
+}
+
+type QueryCodeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Context       *ContextRef            `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
+	ResponseJson  []byte                 `protobuf:"bytes,2,opt,name=response_json,json=responseJson,proto3" json:"response_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueryCodeResponse) Reset() {
+	*x = QueryCodeResponse{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[77]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueryCodeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueryCodeResponse) ProtoMessage() {}
+
+func (x *QueryCodeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[77]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueryCodeResponse.ProtoReflect.Descriptor instead.
+func (*QueryCodeResponse) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{77}
+}
+
+func (x *QueryCodeResponse) GetContext() *ContextRef {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+func (x *QueryCodeResponse) GetResponseJson() []byte {
+	if x != nil {
+		return x.ResponseJson
+	}
+	return nil
+}
+
+type ExploreCodeRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Context           *ContextRef            `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
+	Operation         string                 `protobuf:"bytes,2,opt,name=operation,proto3" json:"operation,omitempty"`
+	Subject           string                 `protobuf:"bytes,3,opt,name=subject,proto3" json:"subject,omitempty"`
+	MaxDepth          uint32                 `protobuf:"varint,4,opt,name=max_depth,json=maxDepth,proto3" json:"max_depth,omitempty"`
+	MaxVisitedNodes   uint32                 `protobuf:"varint,5,opt,name=max_visited_nodes,json=maxVisitedNodes,proto3" json:"max_visited_nodes,omitempty"`
+	MaxResultNodes    uint32                 `protobuf:"varint,6,opt,name=max_result_nodes,json=maxResultNodes,proto3" json:"max_result_nodes,omitempty"`
+	MaxResultEdges    uint32                 `protobuf:"varint,7,opt,name=max_result_edges,json=maxResultEdges,proto3" json:"max_result_edges,omitempty"`
+	DeadlineMs        uint32                 `protobuf:"varint,8,opt,name=deadline_ms,json=deadlineMs,proto3" json:"deadline_ms,omitempty"`
+	ContinuationToken string                 `protobuf:"bytes,9,opt,name=continuation_token,json=continuationToken,proto3" json:"continuation_token,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ExploreCodeRequest) Reset() {
+	*x = ExploreCodeRequest{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[78]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExploreCodeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExploreCodeRequest) ProtoMessage() {}
+
+func (x *ExploreCodeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[78]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExploreCodeRequest.ProtoReflect.Descriptor instead.
+func (*ExploreCodeRequest) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{78}
+}
+
+func (x *ExploreCodeRequest) GetContext() *ContextRef {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+func (x *ExploreCodeRequest) GetOperation() string {
+	if x != nil {
+		return x.Operation
+	}
+	return ""
+}
+
+func (x *ExploreCodeRequest) GetSubject() string {
+	if x != nil {
+		return x.Subject
+	}
+	return ""
+}
+
+func (x *ExploreCodeRequest) GetMaxDepth() uint32 {
+	if x != nil {
+		return x.MaxDepth
+	}
+	return 0
+}
+
+func (x *ExploreCodeRequest) GetMaxVisitedNodes() uint32 {
+	if x != nil {
+		return x.MaxVisitedNodes
+	}
+	return 0
+}
+
+func (x *ExploreCodeRequest) GetMaxResultNodes() uint32 {
+	if x != nil {
+		return x.MaxResultNodes
+	}
+	return 0
+}
+
+func (x *ExploreCodeRequest) GetMaxResultEdges() uint32 {
+	if x != nil {
+		return x.MaxResultEdges
+	}
+	return 0
+}
+
+func (x *ExploreCodeRequest) GetDeadlineMs() uint32 {
+	if x != nil {
+		return x.DeadlineMs
+	}
+	return 0
+}
+
+func (x *ExploreCodeRequest) GetContinuationToken() string {
+	if x != nil {
+		return x.ContinuationToken
+	}
+	return ""
+}
+
+type ExploreCodeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Context       *ContextRef            `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
+	ResponseJson  []byte                 `protobuf:"bytes,2,opt,name=response_json,json=responseJson,proto3" json:"response_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExploreCodeResponse) Reset() {
+	*x = ExploreCodeResponse{}
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[79]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExploreCodeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExploreCodeResponse) ProtoMessage() {}
+
+func (x *ExploreCodeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_engram_v1_engram_proto_msgTypes[79]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExploreCodeResponse.ProtoReflect.Descriptor instead.
+func (*ExploreCodeResponse) Descriptor() ([]byte, []int) {
+	return file_proto_engram_v1_engram_proto_rawDescGZIP(), []int{79}
+}
+
+func (x *ExploreCodeResponse) GetContext() *ContextRef {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+func (x *ExploreCodeResponse) GetResponseJson() []byte {
+	if x != nil {
+		return x.ResponseJson
+	}
+	return nil
+}
+
 var File_proto_engram_v1_engram_proto protoreflect.FileDescriptor
 
 const file_proto_engram_v1_engram_proto_rawDesc = "" +
@@ -6079,7 +7171,110 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x1aHostAdvisorObserveResponse\x12<\n" +
 	"\x05state\x18\x01 \x01(\x0e2&.engram.v1.HostAdvisorObservationStateR\x05state\x12%\n" +
 	"\x0eobservation_id\x18\x02 \x01(\tR\robservationId\x12?\n" +
-	"\x06reason\x18\x03 \x01(\x0e2'.engram.v1.HostAdvisorObservationReasonR\x06reason*\x96\x01\n" +
+	"\x06reason\x18\x03 \x01(\x0e2'.engram.v1.HostAdvisorObservationReasonR\x06reason\"\xe0\x01\n" +
+	"\n" +
+	"ContextRef\x12\x1e\n" +
+	"\bspace_id\x18\x01 \x01(\tH\x00R\aspaceId\x88\x01\x01\x12\x1b\n" +
+	"\tsource_id\x18\x02 \x01(\tR\bsourceId\x12\x1f\n" +
+	"\vcheckout_id\x18\x03 \x01(\tR\n" +
+	"checkoutId\x12\x17\n" +
+	"\aview_id\x18\x04 \x01(\tR\x06viewId\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x05 \x01(\x03R\n" +
+	"generation\x12.\n" +
+	"\x13analysis_profile_id\x18\x06 \x01(\tR\x11analysisProfileIdB\v\n" +
+	"\t_space_id\"\xa5\x01\n" +
+	"\x0eCodeIndexScope\x12\x1b\n" +
+	"\tsource_id\x18\x01 \x01(\tR\bsourceId\x12\x1f\n" +
+	"\vcheckout_id\x18\x02 \x01(\tR\n" +
+	"checkoutId\x12%\n" +
+	"\x0eincarnation_id\x18\x03 \x01(\tR\rincarnationId\x12.\n" +
+	"\x13analysis_profile_id\x18\x04 \x01(\tR\x11analysisProfileId\"\x88\x01\n" +
+	"\x16BindCodeContextRequest\x12*\n" +
+	"\x11client_session_id\x18\x01 \x01(\tR\x0fclientSessionId\x12B\n" +
+	"\x11requested_context\x18\x02 \x01(\v2\x15.engram.v1.ContextRefR\x10requestedContext\"q\n" +
+	"\x17BindCodeContextResponse\x12%\n" +
+	"\x0econtext_handle\x18\x01 \x01(\tR\rcontextHandle\x12/\n" +
+	"\acontext\x18\x02 \x01(\v2\x15.engram.v1.ContextRefR\acontext\"\x8c\x02\n" +
+	"\x15BeginCodeIndexRequest\x12/\n" +
+	"\x05scope\x18\x01 \x01(\v2\x19.engram.v1.CodeIndexScopeR\x05scope\x12%\n" +
+	"\x0eowner_instance\x18\x02 \x01(\tR\rownerInstance\x12\x1b\n" +
+	"\tbuild_key\x18\x03 \x01(\tR\bbuildKey\x12>\n" +
+	"\x0fexpected_parent\x18\x04 \x01(\v2\x15.engram.v1.ContextRefR\x0eexpectedParent\x12#\n" +
+	"\rmanifest_mode\x18\x05 \x01(\tR\fmanifestMode\x12\x19\n" +
+	"\bjob_kind\x18\x06 \x01(\tR\ajobKind\"\xcb\x01\n" +
+	"\x16BeginCodeIndexResponse\x12/\n" +
+	"\x05scope\x18\x01 \x01(\v2\x19.engram.v1.CodeIndexScopeR\x05scope\x12\x19\n" +
+	"\bbuild_id\x18\x02 \x01(\tR\abuildId\x12\x1f\n" +
+	"\vlease_epoch\x18\x03 \x01(\x04R\n" +
+	"leaseEpoch\x12D\n" +
+	"\x10lease_expires_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x0eleaseExpiresAt\"\xdf\x01\n" +
+	"\x13StageCodeIndexFrame\x12/\n" +
+	"\x05scope\x18\x01 \x01(\v2\x19.engram.v1.CodeIndexScopeR\x05scope\x12\x19\n" +
+	"\bbuild_id\x18\x02 \x01(\tR\abuildId\x12\x1f\n" +
+	"\vlease_epoch\x18\x03 \x01(\x04R\n" +
+	"leaseEpoch\x12\x1a\n" +
+	"\bsequence\x18\x04 \x01(\x04R\bsequence\x12%\n" +
+	"\x0epayload_digest\x18\x05 \x01(\tR\rpayloadDigest\x12\x18\n" +
+	"\apayload\x18\x06 \x01(\fR\apayload\"\xb1\x01\n" +
+	"\x16StageCodeIndexResponse\x12\x19\n" +
+	"\bbuild_id\x18\x01 \x01(\tR\abuildId\x12+\n" +
+	"\x11accepted_sequence\x18\x02 \x01(\x04R\x10acceptedSequence\x12.\n" +
+	"\x13accepted_part_count\x18\x03 \x01(\x04R\x11acceptedPartCount\x12\x1f\n" +
+	"\vpart_digest\x18\x04 \x01(\tR\n" +
+	"partDigest\"\xf6\x05\n" +
+	"\x18FinalizeCodeIndexRequest\x12/\n" +
+	"\x05scope\x18\x01 \x01(\v2\x19.engram.v1.CodeIndexScopeR\x05scope\x12\x19\n" +
+	"\bbuild_id\x18\x02 \x01(\tR\abuildId\x12\x1f\n" +
+	"\vlease_epoch\x18\x03 \x01(\x04R\n" +
+	"leaseEpoch\x12>\n" +
+	"\x0fexpected_parent\x18\x04 \x01(\v2\x15.engram.v1.ContextRefR\x0eexpectedParent\x12.\n" +
+	"\x13manifest_part_count\x18\x05 \x01(\x04R\x11manifestPartCount\x12!\n" +
+	"\fparts_digest\x18\x06 \x01(\tR\vpartsDigest\x120\n" +
+	"\x14manifest_entry_count\x18\a \x01(\x04R\x12manifestEntryCount\x12'\n" +
+	"\x0fmanifest_digest\x18\b \x01(\tR\x0emanifestDigest\x12\x1d\n" +
+	"\n" +
+	"edge_count\x18\t \x01(\x04R\tedgeCount\x12!\n" +
+	"\fedges_digest\x18\n" +
+	" \x01(\tR\vedgesDigest\x12@\n" +
+	"\x1cobserved_filesystem_sequence\x18\v \x01(\x04R\x1aobservedFilesystemSequence\x12B\n" +
+	"\x0fscan_started_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\rscanStartedAt\x12F\n" +
+	"\x11scan_completed_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\x0fscanCompletedAt\x12!\n" +
+	"\fscan_outcome\x18\x0e \x01(\tR\vscanOutcome\x12'\n" +
+	"\x0fcomplete_census\x18\x0f \x01(\bR\x0ecompleteCensus\x12#\n" +
+	"\rcoverage_json\x18\x10 \x01(\fR\fcoverageJson\"\xdd\x01\n" +
+	"\x19FinalizeCodeIndexResponse\x12B\n" +
+	"\x11published_context\x18\x01 \x01(\v2\x15.engram.v1.ContextRefR\x10publishedContext\x12\x19\n" +
+	"\bbuild_id\x18\x02 \x01(\tR\abuildId\x12\x1f\n" +
+	"\vlease_epoch\x18\x03 \x01(\x04R\n" +
+	"leaseEpoch\x12@\n" +
+	"\x1caccepted_filesystem_sequence\x18\x04 \x01(\x04R\x1aacceptedFilesystemSequence\"\xe7\x01\n" +
+	"\x10QueryCodeRequest\x12/\n" +
+	"\acontext\x18\x01 \x01(\v2\x15.engram.v1.ContextRefR\acontext\x12\x14\n" +
+	"\x05query\x18\x02 \x01(\tR\x05query\x12\x1f\n" +
+	"\vmax_results\x18\x03 \x01(\rR\n" +
+	"maxResults\x12\x1b\n" +
+	"\tmax_bytes\x18\x04 \x01(\rR\bmaxBytes\x12\x1f\n" +
+	"\vdeadline_ms\x18\x05 \x01(\rR\n" +
+	"deadlineMs\x12-\n" +
+	"\x12continuation_token\x18\x06 \x01(\tR\x11continuationToken\"i\n" +
+	"\x11QueryCodeResponse\x12/\n" +
+	"\acontext\x18\x01 \x01(\v2\x15.engram.v1.ContextRefR\acontext\x12#\n" +
+	"\rresponse_json\x18\x02 \x01(\fR\fresponseJson\"\xea\x02\n" +
+	"\x12ExploreCodeRequest\x12/\n" +
+	"\acontext\x18\x01 \x01(\v2\x15.engram.v1.ContextRefR\acontext\x12\x1c\n" +
+	"\toperation\x18\x02 \x01(\tR\toperation\x12\x18\n" +
+	"\asubject\x18\x03 \x01(\tR\asubject\x12\x1b\n" +
+	"\tmax_depth\x18\x04 \x01(\rR\bmaxDepth\x12*\n" +
+	"\x11max_visited_nodes\x18\x05 \x01(\rR\x0fmaxVisitedNodes\x12(\n" +
+	"\x10max_result_nodes\x18\x06 \x01(\rR\x0emaxResultNodes\x12(\n" +
+	"\x10max_result_edges\x18\a \x01(\rR\x0emaxResultEdges\x12\x1f\n" +
+	"\vdeadline_ms\x18\b \x01(\rR\n" +
+	"deadlineMs\x12-\n" +
+	"\x12continuation_token\x18\t \x01(\tR\x11continuationToken\"k\n" +
+	"\x13ExploreCodeResponse\x12/\n" +
+	"\acontext\x18\x01 \x01(\v2\x15.engram.v1.ContextRefR\acontext\x12#\n" +
+	"\rresponse_json\x18\x02 \x01(\fR\fresponseJson*\x96\x01\n" +
 	"\x10ProjectEventType\x12\"\n" +
 	"\x1ePROJECT_EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aPROJECT_EVENT_TYPE_REMOVED\x10\x01\x12\x1e\n" +
@@ -6196,7 +7391,7 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"*HOST_ADVISOR_SEMANTIC_GAP_CODE_UNSPECIFIED\x10\x00\x127\n" +
 	"3HOST_ADVISOR_SEMANTIC_GAP_CODE_CALLBACK_UNAVAILABLE\x10\x01\x12@\n" +
 	"<HOST_ADVISOR_SEMANTIC_GAP_CODE_CONTEXT_INJECTION_UNAVAILABLE\x10\x02\x12B\n" +
-	">HOST_ADVISOR_SEMANTIC_GAP_CODE_RECEIPT_CORRELATION_UNAVAILABLE\x10\x032\xe2\t\n" +
+	">HOST_ADVISOR_SEMANTIC_GAP_CODE_RECEIPT_CORRELATION_UNAVAILABLE\x10\x032\xe0\r\n" +
 	"\rEngramService\x12C\n" +
 	"\bCallTool\x12\x1a.engram.v1.CallToolRequest\x1a\x1b.engram.v1.CallToolResponse\x12I\n" +
 	"\n" +
@@ -6212,7 +7407,13 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x19RegisterProjectIdentityV3\x12+.engram.v1.RegisterProjectIdentityV3Request\x1a,.engram.v1.RegisterProjectIdentityV3Response\x12M\n" +
 	"\x04Bind\x12!.engram.v1.HostAdvisorBindRequest\x1a\".engram.v1.HostAdvisorBindResponse\x12S\n" +
 	"\x06Advise\x12#.engram.v1.HostAdvisorAdviseRequest\x1a$.engram.v1.HostAdvisorAdviseResponse\x12V\n" +
-	"\aObserve\x12$.engram.v1.HostAdvisorObserveRequest\x1a%.engram.v1.HostAdvisorObserveResponseB3Z1github.com/thebtf/engram/proto/engram/v1;engramv1b\x06proto3"
+	"\aObserve\x12$.engram.v1.HostAdvisorObserveRequest\x1a%.engram.v1.HostAdvisorObserveResponse\x12X\n" +
+	"\x0fBindCodeContext\x12!.engram.v1.BindCodeContextRequest\x1a\".engram.v1.BindCodeContextResponse\x12U\n" +
+	"\x0eBeginCodeIndex\x12 .engram.v1.BeginCodeIndexRequest\x1a!.engram.v1.BeginCodeIndexResponse\x12U\n" +
+	"\x0eStageCodeIndex\x12\x1e.engram.v1.StageCodeIndexFrame\x1a!.engram.v1.StageCodeIndexResponse(\x01\x12^\n" +
+	"\x11FinalizeCodeIndex\x12#.engram.v1.FinalizeCodeIndexRequest\x1a$.engram.v1.FinalizeCodeIndexResponse\x12F\n" +
+	"\tQueryCode\x12\x1b.engram.v1.QueryCodeRequest\x1a\x1c.engram.v1.QueryCodeResponse\x12L\n" +
+	"\vExploreCode\x12\x1d.engram.v1.ExploreCodeRequest\x1a\x1e.engram.v1.ExploreCodeResponseB3Z1github.com/thebtf/engram/proto/engram/v1;engramv1b\x06proto3"
 
 var (
 	file_proto_engram_v1_engram_proto_rawDescOnce sync.Once
@@ -6227,7 +7428,7 @@ func file_proto_engram_v1_engram_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_engram_v1_engram_proto_enumTypes = make([]protoimpl.EnumInfo, 17)
-var file_proto_engram_v1_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 67)
+var file_proto_engram_v1_engram_proto_msgTypes = make([]protoimpl.MessageInfo, 81)
 var file_proto_engram_v1_engram_proto_goTypes = []any{
 	(ProjectEventType)(0),                      // 0: engram.v1.ProjectEventType
 	(ProjectResolutionOutcomeV3)(0),            // 1: engram.v1.ProjectResolutionOutcomeV3
@@ -6312,37 +7513,51 @@ var file_proto_engram_v1_engram_proto_goTypes = []any{
 	(*HostAdvisorChannelSemanticGap)(nil),      // 80: engram.v1.HostAdvisorChannelSemanticGap
 	(*HostAdvisorObserveRequest)(nil),          // 81: engram.v1.HostAdvisorObserveRequest
 	(*HostAdvisorObserveResponse)(nil),         // 82: engram.v1.HostAdvisorObserveResponse
-	nil,                                        // 83: engram.v1.ProjectEvent.MetadataEntry
-	(*timestamppb.Timestamp)(nil),              // 84: google.protobuf.Timestamp
+	(*ContextRef)(nil),                         // 83: engram.v1.ContextRef
+	(*CodeIndexScope)(nil),                     // 84: engram.v1.CodeIndexScope
+	(*BindCodeContextRequest)(nil),             // 85: engram.v1.BindCodeContextRequest
+	(*BindCodeContextResponse)(nil),            // 86: engram.v1.BindCodeContextResponse
+	(*BeginCodeIndexRequest)(nil),              // 87: engram.v1.BeginCodeIndexRequest
+	(*BeginCodeIndexResponse)(nil),             // 88: engram.v1.BeginCodeIndexResponse
+	(*StageCodeIndexFrame)(nil),                // 89: engram.v1.StageCodeIndexFrame
+	(*StageCodeIndexResponse)(nil),             // 90: engram.v1.StageCodeIndexResponse
+	(*FinalizeCodeIndexRequest)(nil),           // 91: engram.v1.FinalizeCodeIndexRequest
+	(*FinalizeCodeIndexResponse)(nil),          // 92: engram.v1.FinalizeCodeIndexResponse
+	(*QueryCodeRequest)(nil),                   // 93: engram.v1.QueryCodeRequest
+	(*QueryCodeResponse)(nil),                  // 94: engram.v1.QueryCodeResponse
+	(*ExploreCodeRequest)(nil),                 // 95: engram.v1.ExploreCodeRequest
+	(*ExploreCodeResponse)(nil),                // 96: engram.v1.ExploreCodeResponse
+	nil,                                        // 97: engram.v1.ProjectEvent.MetadataEntry
+	(*timestamppb.Timestamp)(nil),              // 98: google.protobuf.Timestamp
 }
 var file_proto_engram_v1_engram_proto_depIdxs = []int32{
 	0,   // 0: engram.v1.ProjectEvent.event_type:type_name -> engram.v1.ProjectEventType
-	83,  // 1: engram.v1.ProjectEvent.metadata:type_name -> engram.v1.ProjectEvent.MetadataEntry
+	97,  // 1: engram.v1.ProjectEvent.metadata:type_name -> engram.v1.ProjectEvent.MetadataEntry
 	46,  // 2: engram.v1.GetSessionStartContextRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
 	23,  // 3: engram.v1.GetSessionStartContextResponse.issues:type_name -> engram.v1.SessionStartIssue
 	24,  // 4: engram.v1.GetSessionStartContextResponse.rules:type_name -> engram.v1.SessionStartRule
 	27,  // 5: engram.v1.GetSessionStartContextResponse.memories:type_name -> engram.v1.SessionStartMemory
-	84,  // 6: engram.v1.GetSessionStartContextResponse.generated_at:type_name -> google.protobuf.Timestamp
+	98,  // 6: engram.v1.GetSessionStartContextResponse.generated_at:type_name -> google.protobuf.Timestamp
 	25,  // 7: engram.v1.GetSessionStartContextResponse.rule_router:type_name -> engram.v1.SessionStartRuleRouter
 	29,  // 8: engram.v1.GetSessionStartContextResponse.meta_summary:type_name -> engram.v1.SessionStartMetaSummary
 	47,  // 9: engram.v1.GetSessionStartContextResponse.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
-	84,  // 10: engram.v1.SessionStartIssue.acknowledged_at:type_name -> google.protobuf.Timestamp
-	84,  // 11: engram.v1.SessionStartIssue.resolved_at:type_name -> google.protobuf.Timestamp
-	84,  // 12: engram.v1.SessionStartIssue.reopened_at:type_name -> google.protobuf.Timestamp
-	84,  // 13: engram.v1.SessionStartIssue.closed_at:type_name -> google.protobuf.Timestamp
-	84,  // 14: engram.v1.SessionStartIssue.created_at:type_name -> google.protobuf.Timestamp
-	84,  // 15: engram.v1.SessionStartIssue.updated_at:type_name -> google.protobuf.Timestamp
-	84,  // 16: engram.v1.SessionStartRule.created_at:type_name -> google.protobuf.Timestamp
-	84,  // 17: engram.v1.SessionStartRule.updated_at:type_name -> google.protobuf.Timestamp
+	98,  // 10: engram.v1.SessionStartIssue.acknowledged_at:type_name -> google.protobuf.Timestamp
+	98,  // 11: engram.v1.SessionStartIssue.resolved_at:type_name -> google.protobuf.Timestamp
+	98,  // 12: engram.v1.SessionStartIssue.reopened_at:type_name -> google.protobuf.Timestamp
+	98,  // 13: engram.v1.SessionStartIssue.closed_at:type_name -> google.protobuf.Timestamp
+	98,  // 14: engram.v1.SessionStartIssue.created_at:type_name -> google.protobuf.Timestamp
+	98,  // 15: engram.v1.SessionStartIssue.updated_at:type_name -> google.protobuf.Timestamp
+	98,  // 16: engram.v1.SessionStartRule.created_at:type_name -> google.protobuf.Timestamp
+	98,  // 17: engram.v1.SessionStartRule.updated_at:type_name -> google.protobuf.Timestamp
 	26,  // 18: engram.v1.SessionStartRuleRouter.kernel:type_name -> engram.v1.SessionStartRulePacket
 	26,  // 19: engram.v1.SessionStartRuleRouter.contextual:type_name -> engram.v1.SessionStartRulePacket
 	26,  // 20: engram.v1.SessionStartRuleRouter.suppressed:type_name -> engram.v1.SessionStartRulePacket
-	84,  // 21: engram.v1.SessionStartMemory.created_at:type_name -> google.protobuf.Timestamp
-	84,  // 22: engram.v1.SessionStartMemory.updated_at:type_name -> google.protobuf.Timestamp
+	98,  // 21: engram.v1.SessionStartMemory.created_at:type_name -> google.protobuf.Timestamp
+	98,  // 22: engram.v1.SessionStartMemory.updated_at:type_name -> google.protobuf.Timestamp
 	28,  // 23: engram.v1.SessionStartMetaSummary.top_tags:type_name -> engram.v1.SessionStartMetaTagCount
-	84,  // 24: engram.v1.SessionStartMetaSummary.oldest_created_at:type_name -> google.protobuf.Timestamp
-	84,  // 25: engram.v1.SessionStartMetaSummary.newest_created_at:type_name -> google.protobuf.Timestamp
-	84,  // 26: engram.v1.SessionStartMetaSummary.generated_at:type_name -> google.protobuf.Timestamp
+	98,  // 24: engram.v1.SessionStartMetaSummary.oldest_created_at:type_name -> google.protobuf.Timestamp
+	98,  // 25: engram.v1.SessionStartMetaSummary.newest_created_at:type_name -> google.protobuf.Timestamp
+	98,  // 26: engram.v1.SessionStartMetaSummary.generated_at:type_name -> google.protobuf.Timestamp
 	44,  // 27: engram.v1.CallToolRequest.project_identity:type_name -> engram.v1.ProjectIdentityV2
 	46,  // 28: engram.v1.CallToolRequest.project_identity_v3:type_name -> engram.v1.ProjectIdentityV3
 	47,  // 29: engram.v1.CallToolResponse.project_resolution_v3:type_name -> engram.v1.ProjectResolutionResultV3
@@ -6373,7 +7588,7 @@ var file_proto_engram_v1_engram_proto_depIdxs = []int32{
 	55,  // 54: engram.v1.HostHello.evidence_ref:type_name -> engram.v1.HostAdvisorEvidenceRef
 	58,  // 55: engram.v1.AcceptedCapabilitySnapshot.capabilities:type_name -> engram.v1.HostCapability
 	60,  // 56: engram.v1.HostBinding.capability_snapshot:type_name -> engram.v1.AcceptedCapabilitySnapshot
-	84,  // 57: engram.v1.HostBinding.expires_at:type_name -> google.protobuf.Timestamp
+	98,  // 57: engram.v1.HostBinding.expires_at:type_name -> google.protobuf.Timestamp
 	59,  // 58: engram.v1.HostAdvisorBindRequest.hello:type_name -> engram.v1.HostHello
 	61,  // 59: engram.v1.HostAdvisorBindResponse.binding:type_name -> engram.v1.HostBinding
 	9,   // 60: engram.v1.HostAdvisorTypedFact.kind:type_name -> engram.v1.HostAdvisorFactKind
@@ -6386,7 +7601,7 @@ var file_proto_engram_v1_engram_proto_depIdxs = []int32{
 	10,  // 67: engram.v1.HostAdvisorKnowledgeReference.source_tier:type_name -> engram.v1.HostAdvisorCandidateTier
 	6,   // 68: engram.v1.HostAdvisorPresentation.injection_mode:type_name -> engram.v1.HostAdvisorContextInjectionMode
 	66,  // 69: engram.v1.HostAdvisorPacket.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
-	84,  // 70: engram.v1.HostAdvisorPacket.expires_at:type_name -> google.protobuf.Timestamp
+	98,  // 70: engram.v1.HostAdvisorPacket.expires_at:type_name -> google.protobuf.Timestamp
 	69,  // 71: engram.v1.HostAdvisorPacket.knowledge:type_name -> engram.v1.HostAdvisorKnowledgeReference
 	70,  // 72: engram.v1.HostAdvisorPacket.presentation:type_name -> engram.v1.HostAdvisorPresentation
 	66,  // 73: engram.v1.HostAdvisorEmit.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
@@ -6394,7 +7609,7 @@ var file_proto_engram_v1_engram_proto_depIdxs = []int32{
 	66,  // 75: engram.v1.HostAdvisorAbstain.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
 	11,  // 76: engram.v1.HostAdvisorAbstain.reason:type_name -> engram.v1.HostAdvisorAbstentionReason
 	66,  // 77: engram.v1.HostAdvisorDeliveryAmbiguous.receipt:type_name -> engram.v1.HostAdvisorReceiptIdentity
-	84,  // 78: engram.v1.HostAdvisorUnavailable.expires_at:type_name -> google.protobuf.Timestamp
+	98,  // 78: engram.v1.HostAdvisorUnavailable.expires_at:type_name -> google.protobuf.Timestamp
 	12,  // 79: engram.v1.HostAdvisorUnavailable.code:type_name -> engram.v1.HostAdvisorUnavailableCode
 	72,  // 80: engram.v1.HostAdvisorAdviseResponse.emit:type_name -> engram.v1.HostAdvisorEmit
 	73,  // 81: engram.v1.HostAdvisorAdviseResponse.abstain:type_name -> engram.v1.HostAdvisorAbstain
@@ -6410,39 +7625,67 @@ var file_proto_engram_v1_engram_proto_depIdxs = []int32{
 	80,  // 91: engram.v1.HostAdvisorObserveRequest.channel_gap:type_name -> engram.v1.HostAdvisorChannelSemanticGap
 	13,  // 92: engram.v1.HostAdvisorObserveResponse.state:type_name -> engram.v1.HostAdvisorObservationState
 	14,  // 93: engram.v1.HostAdvisorObserveResponse.reason:type_name -> engram.v1.HostAdvisorObservationReason
-	32,  // 94: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
-	34,  // 95: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
-	37,  // 96: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
-	17,  // 97: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
-	19,  // 98: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
-	21,  // 99: engram.v1.EngramService.GetSessionStartContext:input_type -> engram.v1.GetSessionStartContextRequest
-	50,  // 100: engram.v1.EngramService.GetAmbientCandidates:input_type -> engram.v1.GetAmbientCandidatesRequest
-	30,  // 101: engram.v1.EngramService.NegotiateVersion:input_type -> engram.v1.NegotiateVersionRequest
-	40,  // 102: engram.v1.EngramService.CodeIndexNegotiate:input_type -> engram.v1.CodeIndexNegotiateRequest
-	42,  // 103: engram.v1.EngramService.CodeIndexUpload:input_type -> engram.v1.CodeChunkUpload
-	48,  // 104: engram.v1.EngramService.RegisterProjectIdentityV3:input_type -> engram.v1.RegisterProjectIdentityV3Request
-	62,  // 105: engram.v1.EngramService.Bind:input_type -> engram.v1.HostAdvisorBindRequest
-	68,  // 106: engram.v1.EngramService.Advise:input_type -> engram.v1.HostAdvisorAdviseRequest
-	81,  // 107: engram.v1.EngramService.Observe:input_type -> engram.v1.HostAdvisorObserveRequest
-	33,  // 108: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
-	35,  // 109: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
-	38,  // 110: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
-	18,  // 111: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
-	20,  // 112: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
-	22,  // 113: engram.v1.EngramService.GetSessionStartContext:output_type -> engram.v1.GetSessionStartContextResponse
-	51,  // 114: engram.v1.EngramService.GetAmbientCandidates:output_type -> engram.v1.GetAmbientCandidatesResponse
-	31,  // 115: engram.v1.EngramService.NegotiateVersion:output_type -> engram.v1.NegotiateVersionResponse
-	41,  // 116: engram.v1.EngramService.CodeIndexNegotiate:output_type -> engram.v1.CodeIndexNegotiateResponse
-	43,  // 117: engram.v1.EngramService.CodeIndexUpload:output_type -> engram.v1.CodeIndexUploadReceipt
-	49,  // 118: engram.v1.EngramService.RegisterProjectIdentityV3:output_type -> engram.v1.RegisterProjectIdentityV3Response
-	63,  // 119: engram.v1.EngramService.Bind:output_type -> engram.v1.HostAdvisorBindResponse
-	76,  // 120: engram.v1.EngramService.Advise:output_type -> engram.v1.HostAdvisorAdviseResponse
-	82,  // 121: engram.v1.EngramService.Observe:output_type -> engram.v1.HostAdvisorObserveResponse
-	108, // [108:122] is the sub-list for method output_type
-	94,  // [94:108] is the sub-list for method input_type
-	94,  // [94:94] is the sub-list for extension type_name
-	94,  // [94:94] is the sub-list for extension extendee
-	0,   // [0:94] is the sub-list for field type_name
+	83,  // 94: engram.v1.BindCodeContextRequest.requested_context:type_name -> engram.v1.ContextRef
+	83,  // 95: engram.v1.BindCodeContextResponse.context:type_name -> engram.v1.ContextRef
+	84,  // 96: engram.v1.BeginCodeIndexRequest.scope:type_name -> engram.v1.CodeIndexScope
+	83,  // 97: engram.v1.BeginCodeIndexRequest.expected_parent:type_name -> engram.v1.ContextRef
+	84,  // 98: engram.v1.BeginCodeIndexResponse.scope:type_name -> engram.v1.CodeIndexScope
+	98,  // 99: engram.v1.BeginCodeIndexResponse.lease_expires_at:type_name -> google.protobuf.Timestamp
+	84,  // 100: engram.v1.StageCodeIndexFrame.scope:type_name -> engram.v1.CodeIndexScope
+	84,  // 101: engram.v1.FinalizeCodeIndexRequest.scope:type_name -> engram.v1.CodeIndexScope
+	83,  // 102: engram.v1.FinalizeCodeIndexRequest.expected_parent:type_name -> engram.v1.ContextRef
+	98,  // 103: engram.v1.FinalizeCodeIndexRequest.scan_started_at:type_name -> google.protobuf.Timestamp
+	98,  // 104: engram.v1.FinalizeCodeIndexRequest.scan_completed_at:type_name -> google.protobuf.Timestamp
+	83,  // 105: engram.v1.FinalizeCodeIndexResponse.published_context:type_name -> engram.v1.ContextRef
+	83,  // 106: engram.v1.QueryCodeRequest.context:type_name -> engram.v1.ContextRef
+	83,  // 107: engram.v1.QueryCodeResponse.context:type_name -> engram.v1.ContextRef
+	83,  // 108: engram.v1.ExploreCodeRequest.context:type_name -> engram.v1.ContextRef
+	83,  // 109: engram.v1.ExploreCodeResponse.context:type_name -> engram.v1.ContextRef
+	32,  // 110: engram.v1.EngramService.CallTool:input_type -> engram.v1.CallToolRequest
+	34,  // 111: engram.v1.EngramService.Initialize:input_type -> engram.v1.InitializeRequest
+	37,  // 112: engram.v1.EngramService.Ping:input_type -> engram.v1.PingRequest
+	17,  // 113: engram.v1.EngramService.SyncProjectState:input_type -> engram.v1.SyncProjectStateRequest
+	19,  // 114: engram.v1.EngramService.ProjectEvents:input_type -> engram.v1.ProjectEventsRequest
+	21,  // 115: engram.v1.EngramService.GetSessionStartContext:input_type -> engram.v1.GetSessionStartContextRequest
+	50,  // 116: engram.v1.EngramService.GetAmbientCandidates:input_type -> engram.v1.GetAmbientCandidatesRequest
+	30,  // 117: engram.v1.EngramService.NegotiateVersion:input_type -> engram.v1.NegotiateVersionRequest
+	40,  // 118: engram.v1.EngramService.CodeIndexNegotiate:input_type -> engram.v1.CodeIndexNegotiateRequest
+	42,  // 119: engram.v1.EngramService.CodeIndexUpload:input_type -> engram.v1.CodeChunkUpload
+	48,  // 120: engram.v1.EngramService.RegisterProjectIdentityV3:input_type -> engram.v1.RegisterProjectIdentityV3Request
+	62,  // 121: engram.v1.EngramService.Bind:input_type -> engram.v1.HostAdvisorBindRequest
+	68,  // 122: engram.v1.EngramService.Advise:input_type -> engram.v1.HostAdvisorAdviseRequest
+	81,  // 123: engram.v1.EngramService.Observe:input_type -> engram.v1.HostAdvisorObserveRequest
+	85,  // 124: engram.v1.EngramService.BindCodeContext:input_type -> engram.v1.BindCodeContextRequest
+	87,  // 125: engram.v1.EngramService.BeginCodeIndex:input_type -> engram.v1.BeginCodeIndexRequest
+	89,  // 126: engram.v1.EngramService.StageCodeIndex:input_type -> engram.v1.StageCodeIndexFrame
+	91,  // 127: engram.v1.EngramService.FinalizeCodeIndex:input_type -> engram.v1.FinalizeCodeIndexRequest
+	93,  // 128: engram.v1.EngramService.QueryCode:input_type -> engram.v1.QueryCodeRequest
+	95,  // 129: engram.v1.EngramService.ExploreCode:input_type -> engram.v1.ExploreCodeRequest
+	33,  // 130: engram.v1.EngramService.CallTool:output_type -> engram.v1.CallToolResponse
+	35,  // 131: engram.v1.EngramService.Initialize:output_type -> engram.v1.InitializeResponse
+	38,  // 132: engram.v1.EngramService.Ping:output_type -> engram.v1.PingResponse
+	18,  // 133: engram.v1.EngramService.SyncProjectState:output_type -> engram.v1.SyncProjectStateResponse
+	20,  // 134: engram.v1.EngramService.ProjectEvents:output_type -> engram.v1.ProjectEvent
+	22,  // 135: engram.v1.EngramService.GetSessionStartContext:output_type -> engram.v1.GetSessionStartContextResponse
+	51,  // 136: engram.v1.EngramService.GetAmbientCandidates:output_type -> engram.v1.GetAmbientCandidatesResponse
+	31,  // 137: engram.v1.EngramService.NegotiateVersion:output_type -> engram.v1.NegotiateVersionResponse
+	41,  // 138: engram.v1.EngramService.CodeIndexNegotiate:output_type -> engram.v1.CodeIndexNegotiateResponse
+	43,  // 139: engram.v1.EngramService.CodeIndexUpload:output_type -> engram.v1.CodeIndexUploadReceipt
+	49,  // 140: engram.v1.EngramService.RegisterProjectIdentityV3:output_type -> engram.v1.RegisterProjectIdentityV3Response
+	63,  // 141: engram.v1.EngramService.Bind:output_type -> engram.v1.HostAdvisorBindResponse
+	76,  // 142: engram.v1.EngramService.Advise:output_type -> engram.v1.HostAdvisorAdviseResponse
+	82,  // 143: engram.v1.EngramService.Observe:output_type -> engram.v1.HostAdvisorObserveResponse
+	86,  // 144: engram.v1.EngramService.BindCodeContext:output_type -> engram.v1.BindCodeContextResponse
+	88,  // 145: engram.v1.EngramService.BeginCodeIndex:output_type -> engram.v1.BeginCodeIndexResponse
+	90,  // 146: engram.v1.EngramService.StageCodeIndex:output_type -> engram.v1.StageCodeIndexResponse
+	92,  // 147: engram.v1.EngramService.FinalizeCodeIndex:output_type -> engram.v1.FinalizeCodeIndexResponse
+	94,  // 148: engram.v1.EngramService.QueryCode:output_type -> engram.v1.QueryCodeResponse
+	96,  // 149: engram.v1.EngramService.ExploreCode:output_type -> engram.v1.ExploreCodeResponse
+	130, // [130:150] is the sub-list for method output_type
+	110, // [110:130] is the sub-list for method input_type
+	110, // [110:110] is the sub-list for extension type_name
+	110, // [110:110] is the sub-list for extension extendee
+	0,   // [0:110] is the sub-list for field type_name
 }
 
 func init() { file_proto_engram_v1_engram_proto_init() }
@@ -6466,13 +7709,14 @@ func file_proto_engram_v1_engram_proto_init() {
 		(*HostAdvisorObserveRequest_ReceiptBound)(nil),
 		(*HostAdvisorObserveRequest_ChannelGap)(nil),
 	}
+	file_proto_engram_v1_engram_proto_msgTypes[66].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_engram_v1_engram_proto_rawDesc), len(file_proto_engram_v1_engram_proto_rawDesc)),
 			NumEnums:      17,
-			NumMessages:   67,
+			NumMessages:   81,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

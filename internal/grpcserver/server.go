@@ -69,6 +69,7 @@ type Server struct {
 	comparisonStoreV3     projectidentity.ComparisonStoreV3
 	hostAdvisorRegistry   *hostadvisor.Registry
 	interventionAdvisor   intervention.Advisor
+	uciTransport          UCITransport
 }
 
 // New creates a new gRPC server. The returned *grpc.Server has EngramService
@@ -144,6 +145,20 @@ func (s *Server) currentInterventionAdvisor() intervention.Advisor {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.interventionAdvisor
+}
+
+// SetUCITransport installs or removes the private scoped-UCI runtime. A nil
+// transport deliberately leaves the UCI RPCs dark with typed Unavailable errors.
+func (s *Server) SetUCITransport(transport UCITransport) {
+	s.mu.Lock()
+	s.uciTransport = transport
+	s.mu.Unlock()
+}
+
+func (s *Server) currentUCITransport() UCITransport {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.uciTransport
 }
 
 // currentValidator returns the live validator under read lock.
@@ -861,11 +876,9 @@ func (s *Server) authInterceptor(
 	return handler(ctx, req)
 }
 
-// streamAuthInterceptor is the streaming gRPC server interceptor. Ping is not
-// streaming; SyncProjectState is unary; ProjectEvents is the only streaming
-// method on the engram surface. The interceptor validates the bearer at stream
-// open. Per-event re-validation (FR-6 revocation honour mid-stream) lives in
-// the ProjectEvents emitter (see project_events.go).
+// streamAuthInterceptor is the streaming gRPC server interceptor. ProjectEvents
+// and StageCodeIndex authenticate when their streams open. Per-event revocation
+// checks apply only to the long-lived ProjectEvents emitter (see project_events.go).
 func (s *Server) streamAuthInterceptor(
 	srv any,
 	ss grpc.ServerStream,

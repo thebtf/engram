@@ -71,6 +71,24 @@ service EngramService {
 
   // Observe is reserved for host-advisor observation semantics owned by HAP-03.
   rpc Observe(HostAdvisorObserveRequest) returns (HostAdvisorObserveResponse);
+
+  // BindCodeContext resolves a scoped immutable code context for one client session.
+  rpc BindCodeContext(BindCodeContextRequest) returns (BindCodeContextResponse);
+
+  // BeginCodeIndex starts a fenced, checkout-scoped index build.
+  rpc BeginCodeIndex(BeginCodeIndexRequest) returns (BeginCodeIndexResponse);
+
+  // StageCodeIndex receives ordered parts for one fenced index build.
+  rpc StageCodeIndex(stream StageCodeIndexFrame) returns (StageCodeIndexResponse);
+
+  // FinalizeCodeIndex explicitly publishes a completed staged manifest.
+  rpc FinalizeCodeIndex(FinalizeCodeIndexRequest) returns (FinalizeCodeIndexResponse);
+
+  // QueryCode returns a bounded result payload for one pinned context.
+  rpc QueryCode(QueryCodeRequest) returns (QueryCodeResponse);
+
+  // ExploreCode returns a bounded graph payload for one pinned context.
+  rpc ExploreCode(ExploreCodeRequest) returns (ExploreCodeResponse);
 }
 
 // ---- SyncProjectState messages ----------------------------------------
@@ -832,4 +850,123 @@ message HostAdvisorObserveResponse {
   HostAdvisorObservationState state = 1;
   string observation_id = 2;
   HostAdvisorObservationReason reason = 3;
+}
+
+// ContextRef identifies an immutable View-pinned UCI context. space_id is
+// optional because a Source can be authorized without being selected through a Space.
+message ContextRef {
+  optional string space_id = 1;
+  string source_id = 2;
+  string checkout_id = 3;
+  string view_id = 4;
+  int64 generation = 5;
+  string analysis_profile_id = 6;
+}
+
+// CodeIndexScope identifies a checkout-only UCI build target. It deliberately
+// has no view_id or generation: an initial index has no published View yet.
+message CodeIndexScope {
+  string source_id = 1;
+  string checkout_id = 2;
+  string incarnation_id = 3;
+  string analysis_profile_id = 4;
+}
+
+message BindCodeContextRequest {
+  string client_session_id = 1;
+  ContextRef requested_context = 2;
+}
+
+message BindCodeContextResponse {
+  string context_handle = 1;
+  ContextRef context = 2;
+}
+
+message BeginCodeIndexRequest {
+  CodeIndexScope scope = 1;
+  string owner_instance = 2;
+  string build_key = 3;
+  ContextRef expected_parent = 4;
+  string manifest_mode = 5;
+  string job_kind = 6;
+}
+
+message BeginCodeIndexResponse {
+  CodeIndexScope scope = 1;
+  string build_id = 2;
+  uint64 lease_epoch = 3;
+  google.protobuf.Timestamp lease_expires_at = 4;
+}
+
+message StageCodeIndexFrame {
+  CodeIndexScope scope = 1;
+  string build_id = 2;
+  uint64 lease_epoch = 3;
+  uint64 sequence = 4;
+  string payload_digest = 5;
+  bytes payload = 6;
+}
+
+message StageCodeIndexResponse {
+  string build_id = 1;
+  uint64 accepted_sequence = 2;
+  uint64 accepted_part_count = 3;
+  string part_digest = 4;
+}
+
+message FinalizeCodeIndexRequest {
+  CodeIndexScope scope = 1;
+  string build_id = 2;
+  uint64 lease_epoch = 3;
+  ContextRef expected_parent = 4;
+  uint64 manifest_part_count = 5;
+  string parts_digest = 6;
+  uint64 manifest_entry_count = 7;
+  string manifest_digest = 8;
+  uint64 edge_count = 9;
+  string edges_digest = 10;
+  uint64 observed_filesystem_sequence = 11;
+  google.protobuf.Timestamp scan_started_at = 12;
+  google.protobuf.Timestamp scan_completed_at = 13;
+  string scan_outcome = 14;
+  bool complete_census = 15;
+  bytes coverage_json = 16;
+}
+
+message FinalizeCodeIndexResponse {
+  ContextRef published_context = 1;
+  string build_id = 2;
+  uint64 lease_epoch = 3;
+  uint64 accepted_filesystem_sequence = 4;
+}
+
+message QueryCodeRequest {
+  ContextRef context = 1;
+  string query = 2;
+  uint32 max_results = 3;
+  uint32 max_bytes = 4;
+  uint32 deadline_ms = 5;
+  string continuation_token = 6;
+}
+
+message QueryCodeResponse {
+  ContextRef context = 1;
+  bytes response_json = 2;
+}
+
+message ExploreCodeRequest {
+  ContextRef context = 1;
+  string operation = 2;
+  string subject = 3;
+  uint32 max_depth = 4;
+  uint32 max_visited_nodes = 5;
+  uint32 max_result_nodes = 6;
+  uint32 max_result_edges = 7;
+  uint32 deadline_ms = 8;
+  string continuation_token = 9;
+}
+
+message ExploreCodeResponse {
+  ContextRef context = 1;
+  bytes response_json = 2;
 }

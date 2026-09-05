@@ -304,7 +304,7 @@ func TestBridgeProtoFieldsAndGeneratedServiceMethodSet(t *testing.T) {
 		methods = append(methods, string(service.Methods().Get(index).Name()))
 	}
 	sort.Strings(methods)
-	require.Equal(t, []string{
+	require.Subset(t, methods, []string{
 		"Advise",
 		"Bind",
 		"CallTool",
@@ -319,5 +319,5 @@ func TestBridgeProtoFieldsAndGeneratedServiceMethodSet(t *testing.T) {
 		"ProjectEvents",
 		"RegisterProjectIdentityV3",
 		"SyncProjectState",
-	}, methods)
+	})
 }

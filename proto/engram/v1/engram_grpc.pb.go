@@ -33,6 +33,12 @@ const (
 	EngramService_Bind_FullMethodName                      = "/engram.v1.EngramService/Bind"
 	EngramService_Advise_FullMethodName                    = "/engram.v1.EngramService/Advise"
 	EngramService_Observe_FullMethodName                   = "/engram.v1.EngramService/Observe"
+	EngramService_BindCodeContext_FullMethodName           = "/engram.v1.EngramService/BindCodeContext"
+	EngramService_BeginCodeIndex_FullMethodName            = "/engram.v1.EngramService/BeginCodeIndex"
+	EngramService_StageCodeIndex_FullMethodName            = "/engram.v1.EngramService/StageCodeIndex"
+	EngramService_FinalizeCodeIndex_FullMethodName         = "/engram.v1.EngramService/FinalizeCodeIndex"
+	EngramService_QueryCode_FullMethodName                 = "/engram.v1.EngramService/QueryCode"
+	EngramService_ExploreCode_FullMethodName               = "/engram.v1.EngramService/ExploreCode"
 )
 
 // EngramServiceClient is the client API for EngramService service.
@@ -88,6 +94,18 @@ type EngramServiceClient interface {
 	Advise(ctx context.Context, in *HostAdvisorAdviseRequest, opts ...grpc.CallOption) (*HostAdvisorAdviseResponse, error)
 	// Observe is reserved for host-advisor observation semantics owned by HAP-03.
 	Observe(ctx context.Context, in *HostAdvisorObserveRequest, opts ...grpc.CallOption) (*HostAdvisorObserveResponse, error)
+	// BindCodeContext resolves a scoped immutable code context for one client session.
+	BindCodeContext(ctx context.Context, in *BindCodeContextRequest, opts ...grpc.CallOption) (*BindCodeContextResponse, error)
+	// BeginCodeIndex starts a fenced, checkout-scoped index build.
+	BeginCodeIndex(ctx context.Context, in *BeginCodeIndexRequest, opts ...grpc.CallOption) (*BeginCodeIndexResponse, error)
+	// StageCodeIndex receives ordered parts for one fenced index build.
+	StageCodeIndex(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[StageCodeIndexFrame, StageCodeIndexResponse], error)
+	// FinalizeCodeIndex explicitly publishes a completed staged manifest.
+	FinalizeCodeIndex(ctx context.Context, in *FinalizeCodeIndexRequest, opts ...grpc.CallOption) (*FinalizeCodeIndexResponse, error)
+	// QueryCode returns a bounded result payload for one pinned context.
+	QueryCode(ctx context.Context, in *QueryCodeRequest, opts ...grpc.CallOption) (*QueryCodeResponse, error)
+	// ExploreCode returns a bounded graph payload for one pinned context.
+	ExploreCode(ctx context.Context, in *ExploreCodeRequest, opts ...grpc.CallOption) (*ExploreCodeResponse, error)
 }
 
 type engramServiceClient struct {
@@ -250,6 +268,69 @@ func (c *engramServiceClient) Observe(ctx context.Context, in *HostAdvisorObserv
 	return out, nil
 }
 
+func (c *engramServiceClient) BindCodeContext(ctx context.Context, in *BindCodeContextRequest, opts ...grpc.CallOption) (*BindCodeContextResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BindCodeContextResponse)
+	err := c.cc.Invoke(ctx, EngramService_BindCodeContext_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramServiceClient) BeginCodeIndex(ctx context.Context, in *BeginCodeIndexRequest, opts ...grpc.CallOption) (*BeginCodeIndexResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BeginCodeIndexResponse)
+	err := c.cc.Invoke(ctx, EngramService_BeginCodeIndex_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramServiceClient) StageCodeIndex(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[StageCodeIndexFrame, StageCodeIndexResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EngramService_ServiceDesc.Streams[2], EngramService_StageCodeIndex_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[StageCodeIndexFrame, StageCodeIndexResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EngramService_StageCodeIndexClient = grpc.ClientStreamingClient[StageCodeIndexFrame, StageCodeIndexResponse]
+
+func (c *engramServiceClient) FinalizeCodeIndex(ctx context.Context, in *FinalizeCodeIndexRequest, opts ...grpc.CallOption) (*FinalizeCodeIndexResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FinalizeCodeIndexResponse)
+	err := c.cc.Invoke(ctx, EngramService_FinalizeCodeIndex_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramServiceClient) QueryCode(ctx context.Context, in *QueryCodeRequest, opts ...grpc.CallOption) (*QueryCodeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(QueryCodeResponse)
+	err := c.cc.Invoke(ctx, EngramService_QueryCode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engramServiceClient) ExploreCode(ctx context.Context, in *ExploreCodeRequest, opts ...grpc.CallOption) (*ExploreCodeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExploreCodeResponse)
+	err := c.cc.Invoke(ctx, EngramService_ExploreCode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EngramServiceServer is the server API for EngramService service.
 // All implementations must embed UnimplementedEngramServiceServer
 // for forward compatibility.
@@ -303,6 +384,18 @@ type EngramServiceServer interface {
 	Advise(context.Context, *HostAdvisorAdviseRequest) (*HostAdvisorAdviseResponse, error)
 	// Observe is reserved for host-advisor observation semantics owned by HAP-03.
 	Observe(context.Context, *HostAdvisorObserveRequest) (*HostAdvisorObserveResponse, error)
+	// BindCodeContext resolves a scoped immutable code context for one client session.
+	BindCodeContext(context.Context, *BindCodeContextRequest) (*BindCodeContextResponse, error)
+	// BeginCodeIndex starts a fenced, checkout-scoped index build.
+	BeginCodeIndex(context.Context, *BeginCodeIndexRequest) (*BeginCodeIndexResponse, error)
+	// StageCodeIndex receives ordered parts for one fenced index build.
+	StageCodeIndex(grpc.ClientStreamingServer[StageCodeIndexFrame, StageCodeIndexResponse]) error
+	// FinalizeCodeIndex explicitly publishes a completed staged manifest.
+	FinalizeCodeIndex(context.Context, *FinalizeCodeIndexRequest) (*FinalizeCodeIndexResponse, error)
+	// QueryCode returns a bounded result payload for one pinned context.
+	QueryCode(context.Context, *QueryCodeRequest) (*QueryCodeResponse, error)
+	// ExploreCode returns a bounded graph payload for one pinned context.
+	ExploreCode(context.Context, *ExploreCodeRequest) (*ExploreCodeResponse, error)
 	mustEmbedUnimplementedEngramServiceServer()
 }
 
@@ -354,6 +447,24 @@ func (UnimplementedEngramServiceServer) Advise(context.Context, *HostAdvisorAdvi
 }
 func (UnimplementedEngramServiceServer) Observe(context.Context, *HostAdvisorObserveRequest) (*HostAdvisorObserveResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Observe not implemented")
+}
+func (UnimplementedEngramServiceServer) BindCodeContext(context.Context, *BindCodeContextRequest) (*BindCodeContextResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BindCodeContext not implemented")
+}
+func (UnimplementedEngramServiceServer) BeginCodeIndex(context.Context, *BeginCodeIndexRequest) (*BeginCodeIndexResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BeginCodeIndex not implemented")
+}
+func (UnimplementedEngramServiceServer) StageCodeIndex(grpc.ClientStreamingServer[StageCodeIndexFrame, StageCodeIndexResponse]) error {
+	return status.Error(codes.Unimplemented, "method StageCodeIndex not implemented")
+}
+func (UnimplementedEngramServiceServer) FinalizeCodeIndex(context.Context, *FinalizeCodeIndexRequest) (*FinalizeCodeIndexResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FinalizeCodeIndex not implemented")
+}
+func (UnimplementedEngramServiceServer) QueryCode(context.Context, *QueryCodeRequest) (*QueryCodeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method QueryCode not implemented")
+}
+func (UnimplementedEngramServiceServer) ExploreCode(context.Context, *ExploreCodeRequest) (*ExploreCodeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExploreCode not implemented")
 }
 func (UnimplementedEngramServiceServer) mustEmbedUnimplementedEngramServiceServer() {}
 func (UnimplementedEngramServiceServer) testEmbeddedByValue()                       {}
@@ -610,6 +721,103 @@ func _EngramService_Observe_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EngramService_BindCodeContext_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BindCodeContextRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServiceServer).BindCodeContext(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngramService_BindCodeContext_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServiceServer).BindCodeContext(ctx, req.(*BindCodeContextRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EngramService_BeginCodeIndex_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BeginCodeIndexRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServiceServer).BeginCodeIndex(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngramService_BeginCodeIndex_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServiceServer).BeginCodeIndex(ctx, req.(*BeginCodeIndexRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EngramService_StageCodeIndex_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(EngramServiceServer).StageCodeIndex(&grpc.GenericServerStream[StageCodeIndexFrame, StageCodeIndexResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EngramService_StageCodeIndexServer = grpc.ClientStreamingServer[StageCodeIndexFrame, StageCodeIndexResponse]
+
+func _EngramService_FinalizeCodeIndex_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FinalizeCodeIndexRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServiceServer).FinalizeCodeIndex(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngramService_FinalizeCodeIndex_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServiceServer).FinalizeCodeIndex(ctx, req.(*FinalizeCodeIndexRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EngramService_QueryCode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryCodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServiceServer).QueryCode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngramService_QueryCode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServiceServer).QueryCode(ctx, req.(*QueryCodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EngramService_ExploreCode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExploreCodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngramServiceServer).ExploreCode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngramService_ExploreCode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngramServiceServer).ExploreCode(ctx, req.(*ExploreCodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EngramService_ServiceDesc is the grpc.ServiceDesc for EngramService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -665,6 +873,26 @@ var EngramService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Observe",
 			Handler:    _EngramService_Observe_Handler,
 		},
+		{
+			MethodName: "BindCodeContext",
+			Handler:    _EngramService_BindCodeContext_Handler,
+		},
+		{
+			MethodName: "BeginCodeIndex",
+			Handler:    _EngramService_BeginCodeIndex_Handler,
+		},
+		{
+			MethodName: "FinalizeCodeIndex",
+			Handler:    _EngramService_FinalizeCodeIndex_Handler,
+		},
+		{
+			MethodName: "QueryCode",
+			Handler:    _EngramService_QueryCode_Handler,
+		},
+		{
+			MethodName: "ExploreCode",
+			Handler:    _EngramService_ExploreCode_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -675,6 +903,11 @@ var EngramService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "CodeIndexUpload",
 			Handler:       _EngramService_CodeIndexUpload_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "StageCodeIndex",
+			Handler:       _EngramService_StageCodeIndex_Handler,
 			ClientStreams: true,
 		},
 	},
