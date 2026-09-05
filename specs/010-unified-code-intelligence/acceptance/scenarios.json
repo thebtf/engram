@@ -379,6 +379,33 @@
       "action": "Record completion evidence and read both exposure receipts",
       "expected": "Callback-backed receipt is partial; no-callback receipt remains unknown; neither completion state changes retrieval result_state or coverage",
       "runtime_result": "not_run"
+    },
+    {
+      "id": "U43",
+      "milestone": "UCI-1",
+      "area": "evidence",
+      "arrange": "Authorized closed code search and unavailable UCI exposure recorder before the initial append",
+      "action": "Request search, then read scoped codebase_status",
+      "expected": "Query returns status unavailable, EXPOSURE_UNAVAILABLE, exposure null, and no result body/items; no evidence row exists; status reports recorder unavailable with the closed failure code",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U44",
+      "milestone": "UCI-1",
+      "area": "evidence",
+      "arrange": "Existing exposure key for one authorized client/session and a second request reuses that key with a changed request ref, Source/Checkout/View, operation, or closed result metadata",
+      "action": "Submit the second search, graph, or versioned-read request",
+      "expected": "IDEMPOTENCY_MISMATCH is non-disclosing; no new row or stale exposure receipt is returned, no result body/items are returned, and recorder health is unchanged",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U45",
+      "milestone": "UCI-1",
+      "area": "evidence",
+      "arrange": "Completion callback reuses one exposure/verified-host/idempotency key with a different verified callback ref or outcome",
+      "action": "Submit the second verified supported-host callback",
+      "expected": "IDEMPOTENCY_MISMATCH returns only to the callback; no child row or stale completion record is returned, and the parent exposure remains unchanged without manufactured completion",
+      "runtime_result": "not_run"
     }
   ]
 }

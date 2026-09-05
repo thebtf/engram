@@ -6,7 +6,7 @@
 
 **Decision**: Treat `170_task_memory_context_reference_receipts` as the observed current migration high-water mark. UCI starts with additive migration `171_uci_context_registry`, followed by `172_uci_index_projection`, unless an approved intervening migration exists when implementation begins. No UCI plan may reserve or alter migrations 168–170.
 
-**Rationale**: `internal/db/gorm/migrations.go` currently registers 168, 169, and 170, with 170 last in that contiguous current range. The adopted migration contract explicitly forbids planning from presumed 170–172 numbers. UCI needs an expand-first registry before `ci_*` projection tables exist.
+**Rationale**: `internal/db/gorm/migrations.go` currently registers 168, 169, and 170, with 170 last in that contiguous current range. The adopted migration contract explicitly forbids planning from presumed 170–172 numbers. UCI needs an expand-first registry before `ci_*` code projections and durable UCI evidence tables exist.
 
 **Alternatives considered**:
 
@@ -39,9 +39,9 @@
 
 ## R-04 — PostgreSQL and SQLite Have Different Roles
 
-**Decision**: PostgreSQL 17 plus pgvector owns all canonical UCI registry and rebuildable code projections. A fresh daemon-local SQLite registry owns only approved root evidence, local instance/worktree fingerprints, persistent dirty-set, watcher configuration, and recovery checkpoint state.
+**Decision**: PostgreSQL 17 plus pgvector owns all canonical UCI registry records, rebuildable code projections, and durable UCI evidence. A fresh daemon-local SQLite registry owns only approved root evidence, local instance/worktree fingerprints, persistent dirty-set, watcher configuration, and recovery checkpoint state.
 
-**Rationale**: The existing project uses PostgreSQL as the authoritative store and already depends on `pgvector-go`. `modernc.org/sqlite` currently supports the Loom tenant’s local `tasks.db`; that store must not be repurposed as shared UCI query/graph state. The adopted storage contract requires server-side `ci_*` tables, atomic publish, and an intentionally non-authoritative local registry.
+**Rationale**: The existing project uses PostgreSQL as the authoritative store and already depends on `pgvector-go`. `modernc.org/sqlite` currently supports the Loom tenant’s local `tasks.db`; that store must not be repurposed as shared UCI query/graph state. The adopted storage contract requires server-side `ci_*` code tables, `uci_exposures`/`uci_completion_evidence` durable evidence tables, atomic publish, and an intentionally non-authoritative local registry.
 
 **Alternatives considered**:
 
@@ -131,16 +131,17 @@
 
 ## R-11 — Retrieval Exposure and Completion Ownership
 
-**Decision**: Add a UCI-owned `ExposureRecorder` port plus additive `ci_exposures` and optional `ci_completion_evidence` projections. Record an authorized search, graph result, or versioned read after Source/Checkout/View authorization. The record is idempotent, scoped, and non-content. A missing qualifying callback leaves completion explicitly `unknown`; a verified supported-host callback may establish only `succeeded`, `partial`, `failed`, or `abandoned`, independently of retrieval result state and coverage.
+**Decision**: Add a UCI-owned `ExposureRecorder` port and append-only `uci_exposures`/`uci_completion_evidence` durable evidence. The canonical exposure source is the authorized closed search, graph, or versioned-read decision at the shared MCP boundary. The canonical completion source is a verified supported-host callback. The evidence is idempotent, scoped, non-content, backed up and restored as normal PostgreSQL data, and integrity-verified; it is not a rebuildable code projection. A missing qualifying callback leaves completion explicitly `unknown`; a verified supported-host callback may establish only `succeeded`, `partial`, `failed`, or `abandoned`, independently of retrieval result state and coverage.
 
 **Rationale**: The current code-intelligence route has no generic retrieval exposure or completion recorder. Existing product-specific records do not carry the authorized Source/Checkout/View tuple, closed result metadata, or verified host-callback condition required here. Reusing them would either omit UCI context or promote an unrelated record into UCI authority.
 
 **Alternatives considered**:
 
-- Reuse an existing product-specific receipt or log: rejected because it has different ownership and does not satisfy the UCI authorization, idempotency, and non-content contract.
+- Reuse an existing product-specific receipt or log: rejected because it has different ownership and does not satisfy the UCI authorization, idempotency, integrity, retention, and non-content contract.
+- Rebuild exposure rows from code corpus or request logs: rejected because the canonical event is the authorized closed decision and the corpus cannot recreate it.
 - Infer completion from a successful response, elapsed time, a retrieval `partial` result, coverage, or a missing callback: rejected because only an actual verified supported-host callback can establish completion evidence.
 
-**Implementation boundary**: The shared MCP query/read/graph boundary calls the port only after `AuthorizedContext` succeeds and a closed result state exists. The PostgreSQL projection holds opaque request/actor/client-session refs, authorized context refs, operation/result/retrieval/coverage/evidence/certainty metadata, timestamp, and idempotency key. It holds no source body, query text, absolute path, secret, tool output, or unauthorized ID. Exposure data cannot authorize a request, choose a View, or certify product success.
+**Implementation boundary**: The shared MCP query/read/graph boundary calls the port only after `AuthorizedContext` succeeds and a closed result state exists. `ExposureInput` contains opaque client/session/request refs, authorized Source/Checkout/View refs, operation/result/retrieval/coverage/evidence/certainty metadata, timestamp, and idempotency key. The canonical SHA-256 binding digest covers that exact non-content input. Completion binds its exposure, verified host/callback refs, outcome, and idempotency key. Exact retry returns the original record. A different digest returns `IDEMPOTENCY_MISMATCH`, creates nothing, and returns no stale record. Initial append failure returns `EXPOSURE_UNAVAILABLE`, `status: unavailable`, `exposure: null`, and no result body/items. Completion append failure returns `COMPLETION_EVIDENCE_UNAVAILABLE` only to the callback without modifying the exposure or manufacturing completion. Scoped secret-free health is `healthy`, `degraded`, or `unavailable` with a closed last failure code. Evidence holds no source body, query text, absolute path, secret, tool output, or unauthorized ID. It cannot authorize a request, choose or publish a View, or certify product success.
 
 ## Resolved Research Ledger
 
@@ -156,6 +157,6 @@
 | Protobuf ownership | Additive messages/RPCs within the existing `EngramService`; no tag reuse or second service. | `plan.md` execution slice 4 |
 | Real vector proof | Provider-generated vector, scoped exact PostgreSQL baseline, profile health surfaced. | `quickstart.md` |
 | Watcher/recovery | Dedicated watcher, persisted dirty state/jobs, fenced atomic publication. | `data-model.md` transitions |
-| Retrieval exposure/completion | No generic recorder exists. UCI owns an idempotent non-content exposure projection after authorization; verified supported-host evidence can establish `succeeded`, `partial`, `failed`, or `abandoned`, while no qualifying callback remains `unknown`. This is separate from retrieval result state and coverage. | `data-model.md`, `supporting-contracts/api-contracts.md`, and `supporting-contracts/storage-and-indexing.md` |
+| Retrieval exposure/completion | No generic recorder exists. UCI owns durable append-only non-content evidence from authorized closed MCP decisions and verified supported-host callbacks. Canonical binding digests distinguish exact retry from mismatch; no-callback remains `unknown`; recorder failure suppresses the result body; and evidence has no authority. | `data-model.md`, `supporting-contracts/api-contracts.md`, and `supporting-contracts/storage-and-indexing.md` |
 
 There are no unresolved planning questions in UCI-1A+B.

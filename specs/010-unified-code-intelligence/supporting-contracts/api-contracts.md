@@ -46,7 +46,7 @@ Diff требует два explicit view refs того же source либо яв
 
 Принимает source/view/entity или source/view/path+span. Возвращает точный versioned excerpt из pinned source artifact и source hash. Для рабочего файла перед изменением агент запрашивает `verify_working_copy=true`: daemon сравнивает actual hash, а mismatch предлагает current view/targeted re-read. Read endpoint не редактирует файл и не выдаёт current disk body под старой citation.
 
-Every authorized `codebase_search`, `codebase_graph`, and `codebase_read` response carries one UCI exposure receipt. The shared boundary records it only after the server authorizes Source, Checkout, and View. A context or permission refusal records nothing and returns `exposure: null`.
+Every authorized `codebase_search`, `codebase_graph`, and `codebase_read` response carries one UCI exposure receipt only after the shared boundary authorizes Source, Checkout, and View and the evidence append succeeds. A context or permission refusal records nothing and returns `exposure: null`. An initial evidence failure returns only the closed unavailable envelope: `EXPOSURE_UNAVAILABLE`, `status: unavailable`, `exposure: null`, and no result body or items.
 
 ### codebase_index
 
@@ -55,7 +55,18 @@ Remove — явно destructive index-operation с отдельным прове
 
 ### codebase_status
 
-Source/checkout/view, detected HEAD/ref и observed watermark; watch mode/last successful reconcile, queue sizes, structural/FTS state, parser coverage, unresolved-reference count, vector profile/coverage/backlog, enrichment lag, supported languages, last failure code. Counts всегда scoped.
+Source/checkout/view, detected HEAD/ref и observed watermark; watch mode/last successful reconcile, queue sizes, structural/FTS state, parser coverage, unresolved-reference count, vector profile/coverage/backlog, enrichment lag, supported languages, last failure code, and scoped evidence-recorder health. Counts всегда scoped. `evidence_recorder` is secret-free and only appears after the caller resolves an authorized context:
+
+```json
+{
+  "evidence_recorder": {
+    "state": "healthy",
+    "last_failure_code": "NONE"
+  }
+}
+```
+
+`state` is one of `healthy`, `degraded`, or `unavailable`. `last_failure_code` is one of `NONE`, `EXPOSURE_UNAVAILABLE`, or `COMPLETION_EVIDENCE_UNAVAILABLE`. A successful initial exposure append is healthy. A failed completion append is degraded. An initial exposure append failure or evidence-integrity failure is unavailable. `IDEMPOTENCY_MISMATCH` is a caller error and does not change health. The status surface never includes a database error, connection string, secret, source body, query, or private locator.
 Состояния `configured`, `registered`, `watching`, `building`, `published`, `catching_up`, `offline`, `partial`, `unsupported` различаются. HTTP health и число chunks не заменяют эти состояния. Ни credentials, ни полный env, ни raw prompt не возвращаются.
 
 ## Query envelope
@@ -96,10 +107,23 @@ Coverage=complete означает полноту поддержанного ext
 
 `exposure` is a closed object with only `exposure_ref` and `completion_state`. `exposure_ref` is a bounded opaque value beginning `uci-exp_`; it is the only value a later supported-host callback can bind. `completion_state` is `unknown`, `succeeded`, `partial`, `failed`, or `abandoned`. It is `unknown` unless a verified supported-host callback has written qualifying completion evidence.
 
-The UCI-owned recorder stores opaque request, context, actor, and client-session refs; authorized Source, Checkout, and View refs; operation kind; result state; retrieval and coverage modes; evidence source; certainty; timestamp; and idempotency key. It stores no source body, query text, absolute path, secret, tool output, or unauthorized ID. Its operation kinds are `code_search`, `code_graph`, and `versioned_read`. Its result states are `ok`, `empty`, `partial`, `stale`, and `unavailable`. Retrieval result state and coverage do not determine host completion.
+`ExposureRecorder` is the UCI evidence owner. It records durable, append-only, non-content rows in `uci_exposures` and `uci_completion_evidence`; they are not code projections. The exposure source is the authorized closed search, graph, or versioned-read decision at the shared MCP boundary. The completion source is a verified supported-host callback. The tables never grant access, select or publish a View, or certify product success.
 
-Only a verified callback from a host that declares this capability can append `succeeded`, `partial`, `failed`, or `abandoned` completion evidence for an `exposure_ref`. A host without that callback leaves completion `unknown`. The server never infers an outcome from a response, elapsed time, or absent callback. Exposure and completion records are UCI projections, not authorization, View, or product-success authority.
+`ExposureInput` stores opaque `client_ref`, `client_session_ref`, and `request_ref`; authorized Source, Checkout, and View refs; operation kind; result state; retrieval and coverage modes; evidence source; certainty; timestamp; and idempotency key. It stores no source body, query text, absolute path, secret, tool output, or unauthorized ID. The canonical SHA-256 binding digest includes exactly those opaque refs, `auth_realm`, the authorized Source/Checkout/View tuple, closed result metadata, and the idempotency key. The completion digest includes its exposure, verified host/callback refs, outcome, and idempotency key. Canonical JSON is versioned UTF-8 with lexically sorted member names, no insignificant whitespace, and explicit nulls.
 
+On reuse of an exposure key `(auth_realm, client_session_ref, idempotency_key)` or completion key `(exposure_id, supported_host_ref, idempotency_key)`, the recorder compares the stored binding digest. An exact retry returns the original record. A different binding returns non-disclosing `IDEMPOTENCY_MISMATCH`, creates nothing, and returns no stale exposure or completion record. For a query exposure mismatch, the response is `status: unavailable`, `exposure: null`, `error.code: IDEMPOTENCY_MISMATCH`, and no result body or items. For a completion mismatch, only the callback receives `IDEMPOTENCY_MISMATCH` and no completion child. A mismatch cannot change recorder health.
+
+If the initial exposure append fails, the query returns `status: unavailable`, `error.code: EXPOSURE_UNAVAILABLE`, `exposure: null`, and no result body or items. A completion append failure returns only this callback envelope and does not alter the parent exposure or manufacture completion:
+
+```json
+{
+  "schema": "engram.uci-completion/1",
+  "status": "unavailable",
+  "error": {"code": "COMPLETION_EVIDENCE_UNAVAILABLE"}
+}
+```
+
+Only a verified callback from a host that declares this capability can append `succeeded`, `partial`, `failed`, or `abandoned` completion evidence. A host without that callback leaves completion `unknown`. The server never infers an outcome from a response, elapsed time, or absent callback. Retrieval result state and coverage do not determine host completion.
 ## Свежесть и наблюдение
 
 `observed_current` — обработаны все известные события до watermark при работоспособном watcher; не гарантия отсутствия неизвестной внешней записи после него. `after_barrier` покрывает указанные paths/hashes до server ACK, либо возвращает timeout/stale.
@@ -109,7 +133,7 @@ Only a verified callback from a host that declares this capability can append `s
 
 ## Ошибки
 
-Закрытые codes: `CONTEXT_REQUIRED`, `CONTEXT_MISMATCH`, `VIEW_RETIRED`, `SOURCE_UNAVAILABLE`, `CHECKOUT_OFFLINE`, `INDEX_CATCHING_UP`, `PARSER_UNSUPPORTED`, `PARSER_PARTIAL`, `VECTOR_UNAVAILABLE`, `PROFILE_MISMATCH`, `BUDGET_EXCEEDED`, `LEASE_STALE`, `BUILD_INCOMPLETE`, `PERMISSION_DENIED`.
+Закрытые query codes: `CONTEXT_REQUIRED`, `CONTEXT_MISMATCH`, `VIEW_RETIRED`, `SOURCE_UNAVAILABLE`, `CHECKOUT_OFFLINE`, `INDEX_CATCHING_UP`, `PARSER_UNSUPPORTED`, `PARSER_PARTIAL`, `VECTOR_UNAVAILABLE`, `PROFILE_MISMATCH`, `BUDGET_EXCEEDED`, `LEASE_STALE`, `BUILD_INCOMPLETE`, `PERMISSION_DENIED`, `EXPOSURE_UNAVAILABLE`, `IDEMPOTENCY_MISMATCH`. The completion callback additionally returns only `COMPLETION_EVIDENCE_UNAVAILABLE` when its append cannot complete. `IDEMPOTENCY_MISMATCH` is non-disclosing and returns neither an existing evidence record nor result content.
 Permission failure не раскрывает факт существования чужого source/view. Data absence не смешивается с transport failure. Незнакомые поля/invalid enum/negative limits отклоняются до expensive work. Цифры больше установленных maxima не «улучшаются» silent clamp: документированная validation error.
 
 ## Внутренние интерфейсы
@@ -126,13 +150,13 @@ LinkResolver.Resolve(manifest, changed_facts, prior_sites) -> ScopedEdges
 SearchService.Query(AuthorizedContext, PinnedViewSet, QuerySpec) -> QueryResult
 GraphService.Explore(AuthorizedContext, PinnedViewSet, GraphSpec) -> GraphResult
 SourceReader.Read(AuthorizedContext, VersionedSpan) -> ExactExcerpt
-ExposureRecorder.Record(AuthorizedContext, ExposureInput) -> ExposureReceipt
-ExposureRecorder.RecordCompletion(VerifiedSupportedHostCallback) -> CompletionEvidence
+ExposureRecorder.Record(AuthorizedContext, ExposureInput) -> ExposureReceipt | EXPOSURE_UNAVAILABLE | IDEMPOTENCY_MISMATCH
+ExposureRecorder.RecordCompletion(VerifiedSupportedHostCallback) -> CompletionEvidence | COMPLETION_EVIDENCE_UNAVAILABLE | IDEMPOTENCY_MISMATCH
 ```
 
 AuthorizedContext создаёт только auth/resolver boundary; запрос не сериализует привилегии. Domain code не импортирует transport DTO, а handlers не строят ad-hoc SQL по caller project strings.
 
-`ExposureRecorder` belongs to the UCI domain. `ExposureInput` contains only the closed non-content fields defined above. `Record` runs after context authorization and uses the caller’s opaque idempotency key. `RecordCompletion` validates the host capability and the opaque exposure reference before it writes an append-only child record. No existing general-purpose recorder is assumed or promoted by this contract.
+`ExposureRecorder` belongs to the UCI domain and owns durable evidence lifecycle, retention handoff, integrity verification, and scoped secret-free health. `ExposureInput` contains only the closed non-content fields defined above. `Record` runs after context authorization, computes the canonical binding digest, and returns a receipt only after append success. `RecordCompletion` validates host capability and the opaque exposure reference, computes the completion digest, and appends one child record. No existing general-purpose recorder is assumed or promoted by this contract. PostgreSQL backup/restore preserves evidence rows; a restore verifier checks digests, FKs, context invariants, and closed enums before health can return to `healthy`.
 Parse products — untrusted computational input: server проверяет bounds, ownership, relation vocabulary, target membership и content digests до persistence. Скомпрометированный workstation остаётся TCB своего разрешённого source input; schema validation не доказывает истинность его файлов и не даёт доступа к другим sources.
 
 ## Приватный transport

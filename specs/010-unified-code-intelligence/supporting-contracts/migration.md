@@ -17,6 +17,8 @@ Status: Working supporting contract for feature 010. The intake source remains r
 Для каждого legacy identifier различить домен, scheme, количество строк, разрешённый current owner/scope, source evidence и ambiguity. Одинаковая строка в двух разных схемах не сливает источники. Product-only project без Git является нормальным Space.
 Перед изменением authority tables иметь проверенный backup/restore путь существующей БД. Read-only dry-run migration возвращает ожидаемые counts и ambiguous mappings, не credentials/body. В этом проектном проходе реальные production counts не получены.
 
+`uci_exposures` и `uci_completion_evidence` — normal PostgreSQL evidence data, не rebuildable index projection. Backup/restore включает их как есть; после restore verifier проверяет append-only lifecycle, canonical binding digests, Source/Checkout/View relation, completion FK и closed enums. Нельзя replay code corpus или request log для восстановления evidence.
+
 ## MIG-1. Expand context registry
 
 Добавить spaces, sources, checkout/view registry и typed aliases отдельными forward migrations с актуальными номерами. Не менять уже применённые migration168/169 и не брать предполагаемые170–172 без проверки HEAD.
@@ -25,7 +27,7 @@ Status: Working supporting contract for feature 010. The intake source remains r
 
 ## MIG-2. Новый индекс, не backfill выдуманной истории
 
-Создать `ci_*` storage и новые source/view APIs. Для разрешённых активных checkout выполнить реальную начальную индексацию. Все новые writes идут checkout-scoped и публикуются atomic finalize. Старые handlers не пишут в `ci_*` и не выполняют там project-wide sweep.
+Создать `ci_*` code-projection storage, `uci_exposures`/`uci_completion_evidence` durable evidence storage и новые source/view APIs. Для разрешённых активных checkout выполнить реальную начальную индексацию. Все новые index writes идут checkout-scoped и публикуются atomic finalize. Старые handlers не пишут в `ci_*` и не выполняют там project-wide sweep. Shared MCP boundary пишет UCI evidence только после authorized closed search/graph/read decision.
 `code_chunks` и старые embeddings остаются `legacy_unscoped`. Это rebuildable projection, поэтому правильная миграция — пересобрать из source. Reuse старого embedding возможен только при доказанном совпадении точных input bytes, model/preprocessing/dimension и разрешённого source; неизвестный profile означает no reuse.
 Установка новой версии не означает автоматического сканирования всех путей, найденных в старой БД. Выбрать current authorized roots и known indexed sources, остальные пометить pending discovery/offline. Неактуальные пути не становятся пустыми индексами.
 
@@ -76,8 +78,8 @@ Backfill не лечит неоднозначный origin угадывание�
 
 ## Rollback
 
-До domain cutover: отключить новый code route, оставить `ci_*` inert, предметные данные не меняются. Старый single-index path доступен только с явной legacy limitation, не как корректный multi-worktree fallback.
-После expand/dual-write, но до contract: переключить application boundary на прежний routing с mapping, сохранить новые поля/историю. Проверить доступность старого binary с добавленной схемой на backup copy; не считать forward-compatible по предположению.
+До domain cutover: отключить новый code route, оставить `ci_*` code projections inert и `uci_*` evidence tables empty, предметные данные не меняются. Старый single-index path доступен только с явной legacy limitation, не как корректный multi-worktree fallback.
+После expand/dual-write, но до contract: переключить application boundary на прежний routing с mapping, сохранить новые поля/историю. Проверить доступность старого binary с добавленной схемой на backup copy; не считать forward-compatible по предположению. UCI evidence восстанавливается только normal PostgreSQL backup/restore с integrity verification, не corpus rebuild.
 После destructive derived index contraction: переиндексация источников допустима. После изменения authority schema восстановление использует проверенный backup/forward repair; этого не путать с простым «откатить Docker image». Никакой rollback не возвращает секреты в extension и не смешивает current checkout data.
 
 ## Почему миграция не должна снова стать церемонией

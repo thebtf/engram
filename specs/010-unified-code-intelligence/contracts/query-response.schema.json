@@ -6,15 +6,7 @@
   "required": [
     "schema",
     "status",
-    "contexts",
-    "freshness",
-    "retrieval",
-    "coverage",
-    "exposure",
-    "items",
-    "truncated",
-    "warnings",
-    "continuation"
+    "exposure"
   ],
   "properties": {
     "schema": {
@@ -291,6 +283,35 @@
             "partial",
             "failed",
             "abandoned"
+          ]
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "CONTEXT_REQUIRED",
+            "CONTEXT_MISMATCH",
+            "VIEW_RETIRED",
+            "SOURCE_UNAVAILABLE",
+            "CHECKOUT_OFFLINE",
+            "INDEX_CATCHING_UP",
+            "PARSER_UNSUPPORTED",
+            "PARSER_PARTIAL",
+            "VECTOR_UNAVAILABLE",
+            "PROFILE_MISMATCH",
+            "BUDGET_EXCEEDED",
+            "LEASE_STALE",
+            "BUILD_INCOMPLETE",
+            "PERMISSION_DENIED",
+            "EXPOSURE_UNAVAILABLE",
+            "IDEMPOTENCY_MISMATCH"
           ]
         }
       }
@@ -605,6 +626,46 @@
         "properties": {
           "status": {
             "enum": [
+              "ok",
+              "empty",
+              "partial",
+              "stale"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "contexts",
+          "freshness",
+          "retrieval",
+          "coverage",
+          "items",
+          "truncated",
+          "warnings",
+          "continuation"
+        ],
+        "properties": {
+          "exposure": {
+            "type": "object"
+          }
+        },
+        "not": {
+          "required": [
+            "error"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "unavailable",
               "context_required",
               "forbidden"
             ]
@@ -615,16 +676,147 @@
         ]
       },
       "then": {
+        "required": [
+          "error"
+        ],
         "properties": {
           "exposure": {
             "type": "null"
           }
+        },
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "contexts"
+              ]
+            },
+            {
+              "required": [
+                "freshness"
+              ]
+            },
+            {
+              "required": [
+                "retrieval"
+              ]
+            },
+            {
+              "required": [
+                "coverage"
+              ]
+            },
+            {
+              "required": [
+                "items"
+              ]
+            },
+            {
+              "required": [
+                "truncated"
+              ]
+            },
+            {
+              "required": [
+                "warnings"
+              ]
+            },
+            {
+              "required": [
+                "continuation"
+              ]
+            },
+            {
+              "required": [
+                "graph"
+              ]
+            }
+          ]
         }
-      },
-      "else": {
+      }
+    },
+    {
+      "if": {
         "properties": {
-          "exposure": {
-            "type": "object"
+          "status": {
+            "const": "unavailable"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "error": {
+            "properties": {
+              "code": {
+                "enum": [
+                  "VIEW_RETIRED",
+                  "SOURCE_UNAVAILABLE",
+                  "CHECKOUT_OFFLINE",
+                  "INDEX_CATCHING_UP",
+                  "PARSER_UNSUPPORTED",
+                  "PARSER_PARTIAL",
+                  "VECTOR_UNAVAILABLE",
+                  "PROFILE_MISMATCH",
+                  "BUDGET_EXCEEDED",
+                  "LEASE_STALE",
+                  "BUILD_INCOMPLETE",
+                  "EXPOSURE_UNAVAILABLE",
+                  "IDEMPOTENCY_MISMATCH"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "context_required"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "error": {
+            "properties": {
+              "code": {
+                "enum": [
+                  "CONTEXT_REQUIRED",
+                  "CONTEXT_MISMATCH"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "forbidden"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "error": {
+            "properties": {
+              "code": {
+                "const": "PERMISSION_DENIED"
+              }
+            }
           }
         }
       }

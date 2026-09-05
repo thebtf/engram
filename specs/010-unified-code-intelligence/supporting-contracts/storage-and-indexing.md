@@ -74,16 +74,18 @@ ci_jobs(job_id, source_id, checkout_id?, job_kind, input_fingerprint,
 ci_analyses(analysis_id, view_id, kind, algorithm_revision, input_digest,
             artifact_refs, result_json, state)
 
-ci_exposures(exposure_id, exposure_ref, auth_realm, source_id, checkout_id, view_id,
-             request_ref, context_ref, actor_ref, client_session_ref,
-             operation_kind=code_search|code_graph|versioned_read,
-             result_state=ok|empty|partial|stale|unavailable,
-             retrieval_mode=exact|lexical|hybrid|graph|unavailable,
-             coverage_state=complete|partial|unavailable,
-             evidence_source=exact|fts|vector|graph|mixed|none,
-             certainty=established|partial|unavailable, recorded_at, idempotency_key)
-ci_completion_evidence(completion_evidence_id, exposure_id, supported_host_ref, callback_ref,
-                       outcome=succeeded|partial|failed|abandoned, occurred_at, idempotency_key)
+uci_exposures(exposure_id, exposure_ref, auth_realm, source_id, checkout_id, view_id,
+              client_ref, client_session_ref, request_ref,
+              operation_kind=code_search|code_graph|versioned_read,
+              result_state=ok|empty|partial|stale|unavailable,
+              retrieval_mode=exact|lexical|hybrid|graph|unavailable,
+              coverage_state=complete|partial|unavailable,
+              evidence_source=exact|fts|vector|graph|mixed|none,
+              certainty=established|partial|unavailable, idempotency_key,
+              idempotency_binding_digest, recorded_at)
+uci_completion_evidence(completion_evidence_id, exposure_id, supported_host_ref, callback_ref,
+                        outcome=succeeded|partial|failed|abandoned, idempotency_key,
+                        idempotency_binding_digest, occurred_at)
 ```
 
 `ci_blobs.safe_content` необязателен для исключённого файла; query endpoints не разрешают произвольное скачивание blob по hash. Источник с обнаруженным секретом по умолчанию получает metadata-only excluded state, без исходного body в server/index/provider. Coverage отражает исключение; scanner не обещает распознать любые секреты.
@@ -92,11 +94,13 @@ Directory/docs/config nodes могут использовать такую же 
 
 ## Retrieval exposure and completion
 
-`ci_exposures` is an additive UCI projection. The shared MCP search, graph, and versioned-read boundary inserts one row only after it authorizes the Source, Checkout, and View and determines a closed result state. The row uses opaque request, actor, and client-session refs plus the authorized context tuple. It stores no source body, query text, absolute path, secret, tool output, or unauthorized ID.
+`uci_exposures` and `uci_completion_evidence` are durable, append-only UCI evidence, not rebuildable index projections. `ExposureRecorder` is the named UCI evidence owner and the only application writer. The canonical exposure source is the authorized closed search, graph, or versioned-read decision at the shared MCP boundary. The canonical completion source is a verified supported-host callback. Neither table is an access grant, a View-selection mechanism, a publish record, or a product-success receipt. Neither can create authority, change a View, or publish a View.
 
-The row is not an access grant, a View-selection mechanism, a publish record, or a product-success receipt. It cannot create authority or change a View. A retry with the same opaque idempotency key returns the same exposure reference.
+The exposure stores only opaque `client_ref`, `client_session_ref`, and `request_ref`; the authorized Source/Checkout/View tuple; the closed operation/result/retrieval/coverage/evidence/certainty metadata; timestamp; idempotency key; and canonical non-content binding digest. It stores no source body, query text, absolute path, secret, tool output, or unauthorized ID. The completion child stores only its exposure, verified host/callback refs, closed outcome, timestamp, idempotency key, and canonical non-content binding digest.
 
-`ci_completion_evidence` is an optional append-only child relation. Only a verified callback from a host that supports this capability may add `succeeded`, `partial`, `failed`, or `abandoned`. Without that row, completion is `unknown`; the server never turns a response, timeout, or absent callback into an outcome. This host-completion state is independent of retrieval `result_state` and `coverage_state`.
+The exposure digest is SHA-256 over versioned canonical UTF-8 JSON with lexically sorted member names, no insignificant whitespace, and explicit nulls. It binds `auth_realm`, `client_ref`, `client_session_ref`, `request_ref`, `source_id`, `checkout_id`, `view_id`, `operation_kind`, `result_state`, `retrieval_mode`, `coverage_state`, `evidence_source`, `certainty`, and `idempotency_key`. The completion digest binds `exposure_id`, `supported_host_ref`, `callback_ref`, `outcome`, and `idempotency_key`. A retry returns the original record only when its stored digest matches. A mismatch returns non-disclosing `IDEMPOTENCY_MISMATCH`, creates nothing, and returns no stale exposure or completion record.
+
+An initial exposure append failure returns `EXPOSURE_UNAVAILABLE` with `status: unavailable`, `exposure: null`, and no result body or items. A completion append failure returns `COMPLETION_EVIDENCE_UNAVAILABLE` to the callback only; it does not change the original exposure or manufacture completion. Without a qualifying child, completion remains `unknown`; the server never turns a response, timeout, or absent callback into an outcome. This host-completion state is independent of retrieval `result_state` and `coverage_state`.
 
 ## Ключи, FK и индексы
 
@@ -106,7 +110,7 @@ Definition/ref/chunk rows ссылаются на существующий artif
 Обязательные B-tree: membership checkout/path/interval; edges checkout/source endpoint/interval и reverse target endpoint/interval; jobs state/retry_after; views checkout/generation. GIN на lexical tsv; exact names и symbol keys — B-tree. `ci_embeddings` dimension1536 по существующему решению Engram; другой model той же размерности всё равно отдельный profile. Новый dimension — отдельная явная миграция, не смешивание векторами.
 Широкие secondary JSONB indexes не создавать заранее. Explain Analyze на acceptance corpus определяет нужные дополнительные индексы.
 
-`ci_exposures` requires unique `exposure_ref` and unique `(auth_realm, client_session_ref, idempotency_key)`. Its Source/Checkout/View keys must prove one authorized realm/source tuple. `ci_completion_evidence` has an FK to `ci_exposures` and unique `(exposure_id, supported_host_ref, idempotency_key)`. B-tree indexes serve both idempotency lookups and callback binding. Neither table needs a content, query, path, or tool-output index.
+`uci_exposures` requires unique `exposure_ref`, unique `(auth_realm, client_session_ref, idempotency_key)`, and `idempotency_binding_digest`. Its Source/Checkout/View keys must prove one authorized realm/source tuple. `uci_completion_evidence` has an FK to `uci_exposures`, unique `(exposure_id, supported_host_ref, idempotency_key)`, and `idempotency_binding_digest`. B-tree indexes serve idempotency lookups and callback binding. Neither table needs a content, query, path, or tool-output index.
 
 ## Что такое опубликованный view
 
@@ -156,7 +160,8 @@ Relation к удалённому symbol не сохраняется как curre
 
 Начальные параметры: current view всегда сохраняется; последние32 поколения плюс published views за24h, временные query pins до30min. Это configurable policy, а не вечный event journal. Большая pinned история требует квоты и явного решения.
 GC сохраняет artifacts, достижимые из retained view/pin/valid analysis. Temporal history не удаляется, пока нужный pinned view опирается на interval. Jobs с obsolete input отменяются либо оставляют только reuse cache в лимите. GC batch small, не full-table lock.
-Exposure metadata follows its own bounded retention policy and may outlive a response only as non-content evidence. GC must preserve a completion child while its parent is retained, then remove both under the same policy. Retention never turns an exposure into an authorization record or a source-content archive.
+UCI evidence имеет отдельный configured bounded retention period. Пока запись retained, `uci_exposures` и `uci_completion_evidence` append-only; retention transaction удаляет completion child перед parent без update retained record. Evidence не становится authorization record или source-content archive.
+Обычный PostgreSQL backup/restore включает evidence tables как данные, а не пересоздаёт их из code corpus. Restore verifier пересчитывает каждый canonical binding digest, проверяет FK completion→exposure, Source/Checkout/View realm invariant и closed enums. Любая ошибка integrity оставляет recorder `unavailable`; она не даёт fabricated record или stale receipt.
 Unregister checkout не удаляет Source и предметные данные. Explicit source erase проверяет полномочия и удаляет index-derived bodies/embeddings/annotations согласно policy. Privacy revocation применяется к старым view/pins немедленно в query boundary; pinned history не является обходом ACL.
 
 ## Уточнения cache keys и capture policy

@@ -21,7 +21,9 @@ Graph и search одного ответа используют согласов�
 Новый file version не возвращает old embedding hit под current path. Semantic positive query реально использует provider-generated vector; lexical fallback честный и отдельно проверен.
 Incomplete upload/EOF/crash не переключает current pointer. Old lease epoch не может publish. Lost ACK/replay same build не дублирует изменения. Delete-all отличим от failed scan.
 Watcher restart/overflow/offline/reconnect восстанавливают текущее состояние. Неизменённые artifacts не пере-embed-ятся после каждого запуска или нового worktree.
-Для exposure completion: без qualifying callback receipt остаётся `unknown`; verified supported host может записать только `succeeded`/`partial`/`failed`/`abandoned`. `partial` completion не является retrieval `result_state` или coverage и не меняет их.
+Для exposure completion: без qualifying callback receipt остаётся `unknown`; verified supported host может записать только `succeeded`/`partial`/`failed`/`abandoned`. `partial` completion не является retrieval `result_state` или coverage и не меняет их. Exposure/completion rows — durable append-only non-content UCI evidence, не rebuildable index projection и не authority.
+
+Если initial exposure append недоступен, query возвращает только `EXPOSURE_UNAVAILABLE`, `status: unavailable`, `exposure: null` и без result body/items. Exact retry возвращает original receipt только при равном canonical binding digest; изменение client/session/request/context/result либо host/callback/outcome возвращает non-disclosing `IDEMPOTENCY_MISMATCH`, не добавляет row и не возвращает stale receipt. Completion append failure возвращает `COMPLETION_EVIDENCE_UNAVAILABLE` только callback, не меняет parent exposure и не создаёт completion. `codebase_status` для разрешённого scope показывает только secret-free recorder `healthy`/`degraded`/`unavailable` и closed last failure code. U42 проверяет known/unknown completion, U43 — unavailable exposure recorder, U44 — exposure mismatch, U45 — completion mismatch.
 
 ## Матрица источников и Git
 
@@ -65,5 +67,5 @@ Revoked ACL проверяется для pinned historical views, query cache, 
 
 ## Один финальный отчёт
 
-На candidate: точные commit/tree и hashes установленных artifacts; актуальные source/view IDs и manifests synthetic fixtures; migration/restart/fault/isolation results; 12 task results со всеми failures; SLO sample counts/p95/max и resource counters; versions/provider profiles без ключей; independent correctness/security findings; exact SonarQube/regression; known limitations и rollback.
+На candidate: точные commit/tree и hashes установленных artifacts; актуальные source/view IDs и manifests synthetic fixtures; migration/restart/fault/isolation results; UCI evidence backup/restore and integrity-verifier result; recorder health/failure and exact/mismatch idempotency results; 12 task results со всеми failures; SLO sample counts/p95/max и resource counters; versions/provider profiles без ключей; independent correctness/security findings; exact SonarQube/regression; known limitations и rollback.
 Не собирать новый approval packet на каждую строку docs. Но после изменения выпускаемых байтов нельзя выдавать старые результаты за свежие. Реальная приёмка делает один работающий продукт, а не имитирует его десятком отчётов.

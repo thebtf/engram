@@ -294,5 +294,27 @@
       "warnings": [],
       "continuation": null
     }
+  },
+  {
+    "name": "synthetic_exposure_recorder_unavailable",
+    "response": {
+      "schema": "engram.code-query/1",
+      "status": "unavailable",
+      "exposure": null,
+      "error": {
+        "code": "EXPOSURE_UNAVAILABLE"
+      }
+    }
+  },
+  {
+    "name": "synthetic_exposure_idempotency_mismatch",
+    "response": {
+      "schema": "engram.code-query/1",
+      "status": "unavailable",
+      "exposure": null,
+      "error": {
+        "code": "IDEMPOTENCY_MISMATCH"
+      }
+    }
   }
 ]

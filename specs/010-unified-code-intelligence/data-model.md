@@ -4,11 +4,11 @@
 
 ## Authority Boundary
 
-- **PostgreSQL 17 is authoritative** for code-context registry records and all durable, rebuildable `ci_*` projections. A source file is still external source material; PostgreSQL records the authorized, observed, versioned facts used to answer a request.
+- **PostgreSQL 17 is authoritative** for code-context registry records, rebuildable `ci_*` code projections, and durable UCI evidence. A source file is still external source material; PostgreSQL records the authorized, observed, versioned facts used to answer a request.
 - **The daemon-local SQLite registry is operational only**: approved root and filesystem evidence, common/private Git-dir fingerprints, local instance identity, dirty-set, watcher state, reconciliation checkpoints, and bounded offline recovery metadata. It neither grants access nor answers search/graph queries.
 - **The daemon owns local discovery; the server owns authorization and publication**. Parser output is untrusted computational input. The server validates bounds, ownership, relation vocabulary, source/profile membership, content digests, ACL epoch, and lease epoch before persisting it.
 - **Existing product records remain separate**. A Space can retain product knowledge; the memory graph/knowledge edges do not become the syntax graph, and legacy `code_chunks` remain `legacy_unscoped` rather than acquiring invented Checkout/View history.
-- **UCI exposure data remains a projection**. `ci_exposures` and optional `ci_completion_evidence` record authorized retrieval facts. They do not grant access, select a Source, Checkout, or View, establish a current View, or become a product-success authority.
+- **UCI evidence is durable, not a projection**. `uci_exposures` and `uci_completion_evidence` are append-only non-content evidence owned by the UCI `ExposureRecorder`. Their canonical sources are the authorized closed search, graph, or versioned-read decision at the shared MCP boundary and a verified supported-host callback. Normal PostgreSQL backup and restore preserves the records, and integrity verification validates them. They never grant access, select a Source, Checkout, or View, establish a current View, publish a View, or certify product success.
 
 ## Canonical Context Entities
 
@@ -51,12 +51,16 @@
 
 | Entity | Identity and key fields | Ownership | Invariants |
 |---|---|---|---|
-| **Exposure** | Server UUID `exposure_id`; unique opaque `exposure_ref`; opaque `request_ref`, `context_ref`, actor ref, client-session ref, and idempotency key; authorized realm, Source, Checkout, and View IDs; `operation_kind`, `result_state`, `retrieval_mode`, `coverage_state`, `evidence_source`, `certainty`, and `recorded_at`. | Additive PostgreSQL `ci_exposures` projection, written through the UCI-owned `ExposureRecorder` port. | `operation_kind` is `code_search`, `code_graph`, or `versioned_read`. `result_state` is `ok`, `empty`, `partial`, `stale`, or `unavailable`. It is written only after the server authorizes the full context. It contains no source body, query text, absolute path, secret, tool output, or unauthorized ID. |
-| **Completion evidence** | Server UUID `completion_evidence_id`; parent `exposure_id`; opaque supported-host and callback refs; `outcome`, `occurred_at`, and opaque idempotency key. | Optional append-only `ci_completion_evidence` child record. | The closed supported-host `outcome` set is `succeeded`, `partial`, `failed`, or `abandoned`. Only a verified supported-host callback may write it. Without a qualifying child, the exposure completion state is explicitly `unknown`; a response, timeout, or missing callback never manufactures an outcome. Completion is distinct from retrieval `result_state` and `coverage_state`. |
+| **Exposure** | Server UUID `exposure_id`; unique opaque `exposure_ref`; opaque `client_ref`, `client_session_ref`, and `request_ref`; authorized realm, Source, Checkout, and View IDs; `operation_kind`, `result_state`, `retrieval_mode`, `coverage_state`, `evidence_source`, `certainty`, `idempotency_key`, `idempotency_binding_digest`, and `recorded_at`. | Append-only PostgreSQL `uci_exposures` evidence. The UCI `ExposureRecorder` is its named owner and only application writer. | Its canonical source is the authorized closed decision at the shared MCP search, graph, or versioned-read boundary. `operation_kind` is `code_search`, `code_graph`, or `versioned_read`. `result_state` is `ok`, `empty`, `partial`, `stale`, or `unavailable`. It is written only after the server authorizes the full context. It contains no source body, query text, absolute path, secret, tool output, or unauthorized ID. |
+| **Completion evidence** | Server UUID `completion_evidence_id`; parent `exposure_id`; opaque verified `supported_host_ref` and `callback_ref`; `outcome`, opaque `idempotency_key`, `idempotency_binding_digest`, and `occurred_at`. | Append-only PostgreSQL `uci_completion_evidence` child evidence. The UCI `ExposureRecorder` owns the write path. | Its canonical source is one verified supported-host callback. The closed `outcome` set is `succeeded`, `partial`, `failed`, or `abandoned`. Without a qualifying child, the exposure completion state is explicitly `unknown`; a response, timeout, or missing callback never manufactures an outcome. Completion is distinct from retrieval `result_state` and `coverage_state`. |
 
 `retrieval_mode` is `exact`, `lexical`, `hybrid`, `graph`, or `unavailable`. `coverage_state` is `complete`, `partial`, or `unavailable`. `evidence_source` is `exact`, `fts`, `vector`, `graph`, `mixed`, or `none`. `certainty` is `established`, `partial`, or `unavailable`. These fields describe the authorized result, not an access grant or a source-body record.
 
-The unique idempotency scope is `(auth_realm, client_session_ref, idempotency_key)`. A retry returns the original opaque `exposure_ref` and cannot create a second exposure. Completion evidence is unique on `(exposure_id, supported_host_ref, idempotency_key)` and is likewise idempotent.
+The server computes each `idempotency_binding_digest` as SHA-256 of a versioned canonical UTF-8 JSON object with lexically sorted member names, no insignificant whitespace, and explicit `null` values. An exposure object contains exactly `version`, `kind`, `auth_realm`, `client_ref`, `client_session_ref`, `request_ref`, `source_id`, `checkout_id`, `view_id`, `operation_kind`, `result_state`, `retrieval_mode`, `coverage_state`, `evidence_source`, `certainty`, and `idempotency_key`. A completion object contains exactly `version`, `kind`, `exposure_id`, `supported_host_ref`, `callback_ref`, `outcome`, and `idempotency_key`. The digest is non-content metadata and is not a public response field.
+
+The exposure idempotency lookup is unique on `(auth_realm, client_session_ref, idempotency_key)`. The completion lookup is unique on `(exposure_id, supported_host_ref, idempotency_key)`. On a matching key, the recorder compares the stored and recomputed binding digest. An exact match returns the original record. A different digest returns non-disclosing `IDEMPOTENCY_MISMATCH`, creates nothing, and returns neither a stale exposure nor a stale completion record.
+
+The scoped recorder health is `healthy`, `degraded`, or `unavailable` with closed `last_failure_code` `NONE`, `EXPOSURE_UNAVAILABLE`, or `COMPLETION_EVIDENCE_UNAVAILABLE`. A successful initial exposure write is `healthy`. A completion-write failure is `degraded`. A failed initial exposure write is `unavailable`; the query returns `status: unavailable`, `EXPOSURE_UNAVAILABLE`, `exposure: null`, and no result body or items. An idempotency mismatch does not change health. A failed completion write returns `COMPLETION_EVIDENCE_UNAVAILABLE` only to the callback and cannot change the original exposure or manufacture completion.
 
 ## Context Resolution and Request Invariant
 
@@ -64,7 +68,7 @@ The unique idempotency scope is `(auth_realm, client_session_ref, idempotency_ke
 2. The daemon resolves only local checkout evidence from that client’s CWD using read-only, argument-safe Git plumbing and local registry evidence.
 3. The server verifies principal/realm, Source grant, Checkout grant, incarnation continuity, alias mapping, and requested View relation; it produces the canonical ContextRef.
 4. Only then may exact lookup, FTS, semantic candidate generation, graph traversal, source read, job enqueue, cache lookup, or pagination execute.
-5. After an authorized search, graph, or read result has a closed result state, the shared MCP boundary invokes `ExposureRecorder` and returns its opaque reference. A failed or refused context creates no exposure.
+5. After an authorized search, graph, or read result has a closed result state, the shared MCP boundary invokes `ExposureRecorder`. It returns the opaque reference only after the append succeeds. If the initial append cannot succeed, it returns the closed `EXPOSURE_UNAVAILABLE` failure envelope with `status: unavailable`, `exposure: null`, and no result body or items. A failed or refused context creates no exposure.
 6. Search and graph facts returned together share the same pinned View; any ACL epoch change before response causes reauthorization or refusal.
 
 A failed, mismatched, or ambiguous resolution produces a closed, non-disclosing result. It does not create an exposure or reveal another source’s path, identifier, count, content, embedding, or edge.
@@ -118,16 +122,25 @@ queued -> leased/running -> succeeded
 ### Exposure and Completion
 
 ```text
-authorized search | graph | versioned read
-  -> record idempotently after authorization
+authorized closed search | graph | versioned read decision
+  -> canonical exposure binding digest
+  -> append uci_exposures evidence
   -> return ExposureReceipt(exposure_ref, completion_state=unknown)
+  -> exact retry: return original receipt
+  -> digest mismatch: IDEMPOTENCY_MISMATCH, no record or stale receipt
+  -> initial write failure: EXPOSURE_UNAVAILABLE, unavailable response, no result body/items
   -> no qualifying callback: completion_state remains unknown
-  -> verified supported-host callback: append succeeded|partial|failed|abandoned evidence
+  -> verified supported-host callback
+     -> canonical completion binding digest
+     -> append succeeded|partial|failed|abandoned evidence
+     -> completion mismatch: IDEMPOTENCY_MISMATCH, no child or stale completion record
+     -> completion write failure: COMPLETION_EVIDENCE_UNAVAILABLE to callback only
 ```
 
 - An unsupported host cannot write completion evidence. The server rejects the callback without changing the exposure.
-- A completion record does not certify a View, grant access, or replace UCI acceptance evidence.
-- The recorder stores only the closed metadata fields in the Exposure table. It never stores source content, request text, tool output, absolute paths, secrets, or unauthorized selectors.
+- A completion record does not certify a View, grant access, publish a View, or replace UCI acceptance evidence.
+- The recorder stores only the closed metadata fields in the evidence tables. It never stores source content, request text, tool output, absolute paths, secrets, or unauthorized selectors.
+- Evidence records are append-only during their retention window. Retention may remove an expired completion child and parent together, but it never rewrites a retained record or reconstructs one from source data.
 
 ## Publication Transaction and Consistency
 
@@ -148,21 +161,22 @@ This transaction is the only path that makes a new current View visible. A globa
 - Definitions/reference sites/chunks must reference an existing parse artifact. An edge endpoint must resolve into the query View’s membership.
 - B-tree indexes cover checkout/path/generation membership, edges in both directions, views by checkout/generation, and jobs by state/retry. GIN serves FTS; exact names/symbol keys use B-tree. Additional JSONB indexes need acceptance-corpus evidence.
 - Vector search first computes the authorized View candidate universe, then exact scoped distance or an ANN strategy proved against that baseline. It never takes global top-N and filters inaccessible results afterward.
-- `ci_exposures` has unique `exposure_ref` and unique `(auth_realm, client_session_ref, idempotency_key)` keys. Its Source, Checkout, and View columns use a composite invariant that keeps the tuple in one authorized realm and source.
-- `ci_completion_evidence` references one exposure and has unique `(exposure_id, supported_host_ref, idempotency_key)`. It is append-only and accepts only `succeeded`, `partial`, `failed`, or `abandoned` verified supported-host outcomes.
+- `uci_exposures` has unique `exposure_ref` and unique `(auth_realm, client_session_ref, idempotency_key)` keys. It stores `idempotency_binding_digest`; every key reuse compares that digest before it may return the original record. Its Source, Checkout, and View columns use a composite invariant that keeps the tuple in one authorized realm and source.
+- `uci_completion_evidence` references one exposure and has unique `(exposure_id, supported_host_ref, idempotency_key)`. It stores `idempotency_binding_digest`, is append-only, and accepts only `succeeded`, `partial`, `failed`, or `abandoned` verified supported-host outcomes. A key reuse returns the original child only when the binding digest matches.
 
 ## Migration and Rollback Semantics
 
-- Add Space/Source/Checkout/View/alias registry state before UCI projections. The observed migration baseline is 170; UCI allocates forward migrations after it. The additive UCI projection includes `ci_exposures` and `ci_completion_evidence`; neither changes product-domain authority.
+- Add Space/Source/Checkout/View/alias registry state before UCI code projections and UCI evidence. The observed migration baseline is 170; UCI allocates forward migrations after it. The additive migration includes `uci_exposures` and `uci_completion_evidence` as durable evidence tables, not code projections; neither changes product-domain authority.
 - One unambiguous legacy canonical project maps to one Space with preserved legacy routing facts. A verified source binding may be added later. Ambiguity does not manufacture a source or mutate UCI state.
 - Existing `code_chunks` and embeddings retain `legacy_unscoped` provenance. They are not assigned an invented checkout, HEAD, View, or privacy relationship.
-- Before UCI cutover, disable the new route and retain `ci_*` inert; product-domain records remain untouched. After expand/cutover but before contraction, restore the prior compatibility route while keeping added schema/history.
-- A future derived-data contraction may rebuild code projections from authorized sources only after backup/restore, migration receipt, zero-drift observation, compatibility sunset, and rollback evidence. UCI-1 does not own that contraction.
+- Before UCI cutover, disable the new route and retain `ci_*` code projections inert. The UCI evidence tables are empty until the authorized shared MCP boundary records an event. After expand/cutover but before contraction, restore the prior compatibility route while keeping added schema/history.
+- A future derived-data contraction may rebuild code projections from authorized sources only after backup/restore, migration receipt, zero-drift observation, compatibility sunset, and rollback evidence. UCI evidence is never rebuilt from the corpus; its recovery path is normal PostgreSQL backup and restore plus integrity verification. UCI-1 does not own that contraction.
 
 ## Retention and Privacy
 
 - Keep the current View, recent generations, short-lived pins, and artifacts reachable from retained Views; never GC an artifact required by a valid historical View.
 - A privacy/access revocation is enforced at the query boundary for current and historical Views, pins, pagination, cache lookup, and graph hops.
 - Excluded source and detected secrets remain metadata-only by default; raw bodies, local absolute paths, prompt text, tokens, provider keys, and opaque private locators do not enter status, logs, exports, or embedding input.
-- Exposure and completion rows retain only bounded opaque correlation and authorized context metadata. They retain no source body, query text, absolute path, secret, tool output, or unauthorized identifier.
+- UCI evidence retains only bounded opaque correlation, authorized context, closed result, and completion metadata for its configured bounded retention period. A retention transaction deletes an expired completion child before its expired parent and never changes retained rows. Normal PostgreSQL backups include both evidence tables. Restore verification checks every binding digest, realm/source context invariant, completion foreign key, closed enum, and append-only rule; an integrity failure leaves the recorder `unavailable` rather than recreating evidence.
+
 - A user-facing code URI is a locator of the form `engram://source/<source>/view/<view>/entity/<entity>`; it is not a bearer capability.
