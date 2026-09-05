@@ -1,10 +1,10 @@
 <!--
 Sync Impact Report
-- Version change: scaffold (unversioned) -> 1.0.0
-- Modified principles: none; this is the first ratified Spec Kit constitution.
-- Added sections: Core Principles, Architecture and Data Constraints, Delivery and Evidence Gates.
-- Removed sections: placeholder scaffold text only.
-- Follow-up TODOs: none.
+- Version change: 1.0.0 -> 1.1.0
+- Modified principles: III. Stable Project Identity Precedes Scoped Access -> III. Stable Typed Context Precedes Scoped Access; VII. Retrieval Is Task-Aware and Bounded expanded for view-pinned code retrieval.
+- Added sections: none.
+- Removed sections: none.
+- Follow-up TODOs: UCI-2 Code UI requires a separate accepted Spec Kit feature under Principle XII; Working Agent Memory R1 must be revalidated against the accepted Space/Source/Checkout/View contract before resumption.
 -->
 
 # Engram Constitution
@@ -21,10 +21,14 @@ A capability required for Engram's accepted product outcome MUST be active by co
 Configuration MAY express deployment variability, external-provider availability, or a
 time-bounded emergency stop, but MUST NOT hide incomplete architecture behind a feature flag.
 
-### III. Stable Project Identity Precedes Scoped Access
-Every project-scoped read, write, event, job, cache, and audit record MUST carry one
-server-resolved canonical project key. Paths, names, remotes, hashes, and historical slugs are
-evidence or identifiers, never tenant keys; ambiguity MUST fail closed before mutation.
+### III. Stable Typed Context Precedes Scoped Access
+Every scoped read, write, event, job, cache, and audit record MUST carry the server-resolved
+typed context required by its domain. Product knowledge MAY retain a canonical project or Space;
+code intelligence MUST use an authorized Source, Checkout, and pinned View, with Space only as
+optional grouping. Paths, labels, remotes, branches, hashes, and legacy slugs are evidence,
+locators, or typed aliases, never tenant keys or checkout authority. Ambiguity MUST fail closed
+before ranking, body access, traversal, or mutation. A legacy project key MUST NOT select a
+working tree or View by itself.
 
 ### IV. Authority Models Stay Distinct
 State, evidence, knowledge, and projections MUST have separate owners and lifecycles. Current
@@ -43,11 +47,14 @@ proposal MUST record one terminal decision: create, strengthen, revise, supersed
 contradiction-pending, reject-noise, reject-policy, or no-op-duplicate. Blind append is forbidden
 as the default knowledge operation.
 
-### VII. Retrieval Is Task-Aware and Bounded
-Automatic retrieval MUST receive an actual task, query, or defined topic shift; filter by canonical
-project, scope, validity, privacy, and principal before ranking; return a bounded packet; explain
-selection; and record exposure. Session start MAY include only current state and universal policy,
-not a recent-memory dump substituted for retrieval.
+### VII. Retrieval Is Task-Aware, View-Pinned, and Bounded
+Automatic knowledge retrieval MUST receive an actual task, query, or defined topic shift; filter
+by the domain's server-resolved identity, scope, validity, privacy, and principal before ranking;
+return a bounded packet; explain selection; and record exposure. Code search, graph, and source
+reads MUST authorize Source and Checkout before candidate selection and MUST pin one immutable
+View per Source. Search and graph facts returned together MUST come from the same View. Session
+start MAY include only current state and universal policy, not a recent-memory dump substituted
+for retrieval.
 
 ### VIII. Feedback Is Automatic and Epistemically Honest
 Engram MUST record retrieval exposure and supported-host completion evidence automatically.
@@ -95,6 +102,9 @@ contracts.
   MUST NOT introduce a new network service.
 - Application workflows own transport-independent use cases; adapters validate input and call one
   workflow; repositories receive resolved typed identity, not raw project strings.
+- Code-derived indexes and graphs MUST use server-resolved Source, Checkout, and View identity;
+  product domains MAY continue through versioned canonical-project or Space compatibility until
+  their own migration is accepted. Compatibility aliases MUST NOT select code authority directly.
 - Providers, embeddings, reranking, graphs, summaries, and caches are capability or projection
   concerns. Their absence MUST be visible as health state and MUST NOT block durable evidence
   acceptance or select a second domain workflow.
@@ -133,4 +143,4 @@ or removes a governing principle; a MINOR version adds or materially expands one
 clarifies without changing meaning. Every release and implementation review MUST check conformance
 to this constitution, preserve evidence of any exception, and reject scope expansion by workaround.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-21 | **Last Amended**: 2026-08-21
+**Version**: 1.1.0 | **Ratified**: 2026-08-21 | **Last Amended**: 2026-09-05
