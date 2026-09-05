@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 var (
@@ -15,6 +16,7 @@ var (
 	_ RecoveryLocalStatePort    = (*recoveryTestLocalState)(nil)
 	_ RecoveryPublisher         = (*recoveryTestPublisher)(nil)
 	_ RecoveryEmbeddingEnsurer  = (*recoveryTestEmbeddingEnsurer)(nil)
+	_ RecoveryUpdateRecorder    = (*recoveryTestUpdateRecorder)(nil)
 )
 
 var (
@@ -291,6 +293,118 @@ func TestUCIIncarnationMoveContinuityAndRecreatedCheckoutLeaveOldViewHistorical(
 	fixture.requireSourceCalls(t, 4)
 }
 
+func TestUCIRecoveryUpdateAccountingRecordsHealthyStagesAndCounters(t *testing.T) {
+	fixture := newRecoveryIntegrationFixture(t)
+	recorder := fixture.enableRecoveryUpdateRecording(t, true)
+	artifact := fixture.reconcile.artifact(941, "symbol:recovery-accounting-healthy", "RecoveryAccountingHealthy")
+
+	fixture.local.set(fixture.reconcile.scopeA, 1, true)
+	fixture.source.queue(fixture.rootA, fixture.currentBytes("a.go", artifact, recoveryTestObservation("main", true)))
+	result := fixture.recover(t, fixture.request(fixture.reconcile.scopeA, fixture.reconcile.profileID, fixture.rootA, "recovery-accounting-healthy", nil))
+	update := recorder.only(t)
+
+	if update.Scope != fixture.reconcile.scopeA || update.ProfileID != fixture.reconcile.profileID || update.ObservedFSSeq != 1 {
+		t.Fatalf("healthy accounting identity = %#v, want scope %#v profile %q sequence 1", update, fixture.reconcile.scopeA, fixture.reconcile.profileID)
+	}
+	if update.Outcome != RecoveryUpdateOutcomeHealthy || update.FailureStage != RecoveryUpdateFailureNone || update.ScanOutcome != IndexScanComplete || update.Coverage.Structural != IndexCoverageComplete {
+		t.Fatalf("healthy accounting state = %#v", update)
+	}
+	if update.View == nil || !reconcileTestPublishedEqual(*update.View, result.View) {
+		t.Fatalf("healthy accounting View = %#v, want %#v", update.View, result.View)
+	}
+	if update.ProviderCalls != (RecoveryProviderCallCounters{Measured: true, Before: 0, After: 1}) || update.EmbeddingCandidateCount != 1 || update.EmbeddedCandidateCount != 1 {
+		t.Fatalf("healthy accounting counters = %#v candidates %d/%d, want provider 0->1 and candidates 1/1", update.ProviderCalls, update.EmbeddedCandidateCount, update.EmbeddingCandidateCount)
+	}
+	requireRecoveryUpdateMeasuredTiming(t, "scan", update.Scan)
+	requireRecoveryUpdateMeasuredTiming(t, "structural/FTS", update.StructuralFTS)
+	requireRecoveryUpdateMeasuredTiming(t, "embedding readiness", update.EmbeddingReadiness)
+	requireRecoveryUpdateMeasuredTiming(t, "local acknowledgement", update.LocalACK)
+	if !update.StructuralFTS.StartedAt.Equal(update.Scan.StartedAt) || !update.EmbeddingReadiness.StartedAt.Equal(update.Scan.StartedAt) || !update.LocalACK.StartedAt.Equal(update.Scan.StartedAt) || update.StructuralFTS.CompletedAt.Before(update.Scan.CompletedAt) || update.EmbeddingReadiness.CompletedAt.Before(update.StructuralFTS.CompletedAt) || update.LocalACK.CompletedAt.Before(update.EmbeddingReadiness.CompletedAt) {
+		t.Fatalf("healthy accounting stage order is not cumulative: scan=%#v structural=%#v embedding=%#v ack=%#v", update.Scan, update.StructuralFTS, update.EmbeddingReadiness, update.LocalACK)
+	}
+}
+
+func TestUCIRecoveryUpdateAccountingRetainsScanFailureWithoutView(t *testing.T) {
+	fixture := newRecoveryIntegrationFixture(t)
+	recorder := fixture.enableRecoveryUpdateRecording(t, true)
+
+	fixture.local.set(fixture.reconcile.scopeA, 1, true)
+	fixture.source.fail(fixture.rootA, errRecoveryTestScan)
+	fixture.requireRecoveryError(t, fixture.request(fixture.reconcile.scopeA, fixture.reconcile.profileID, fixture.rootA, "recovery-accounting-scan-failure", nil))
+	update := recorder.only(t)
+
+	if update.Outcome != RecoveryUpdateOutcomeFailed || update.FailureStage != RecoveryUpdateFailureScan || update.ScanOutcome != IndexScanFailed || update.View != nil {
+		t.Fatalf("scan-failure accounting = %#v, want retained failed scan without View", update)
+	}
+	if update.StructuralFTS.Measured || update.EmbeddingReadiness.Measured || update.LocalACK.Measured || update.ProviderCalls != (RecoveryProviderCallCounters{Measured: true, Before: 0, After: 0}) {
+		t.Fatalf("scan-failure accounting fabricated later stage or counter state: %#v", update)
+	}
+	requireRecoveryUpdateMeasuredTiming(t, "scan", update.Scan)
+}
+
+func TestUCIRecoveryUpdateAccountingMarksEmbeddingFailureDegradedAfterStructuralView(t *testing.T) {
+	fixture := newRecoveryIntegrationFixture(t)
+	recorder := fixture.enableRecoveryUpdateRecording(t, true)
+	artifact := fixture.reconcile.artifact(942, "symbol:recovery-accounting-embedding", "RecoveryAccountingEmbedding")
+
+	fixture.local.set(fixture.reconcile.scopeA, 1, true)
+	fixture.embeddings.failNext(errors.New("recovery test: embedding unavailable"))
+	fixture.source.queue(fixture.rootA, fixture.currentBytes("a.go", artifact, recoveryTestObservation("main", true)))
+	fixture.requireRecoveryError(t, fixture.request(fixture.reconcile.scopeA, fixture.reconcile.profileID, fixture.rootA, "recovery-accounting-embedding-failure", nil))
+	update := recorder.only(t)
+	durable := fixture.currentPublished(t, fixture.reconcile.scopeA.CheckoutID)
+
+	if update.Outcome != RecoveryUpdateOutcomeDegraded || update.FailureStage != RecoveryUpdateFailureEmbedding || update.View == nil || !reconcileTestPublishedEqual(*update.View, durable) {
+		t.Fatalf("embedding-failure accounting = %#v, want degraded retained structural View %#v", update, durable)
+	}
+	if !update.StructuralFTS.Measured || update.EmbeddingReadiness.Measured || update.LocalACK.Measured || update.EmbeddedCandidateCount != 0 {
+		t.Fatalf("embedding-failure stages = %#v, want structural only", update)
+	}
+	requireRecoveryUpdateMeasuredTiming(t, "scan", update.Scan)
+	requireRecoveryUpdateMeasuredTiming(t, "structural/FTS", update.StructuralFTS)
+}
+
+func TestUCIRecoveryUpdateAccountingMarksACKFailureUnavailable(t *testing.T) {
+	fixture := newRecoveryIntegrationFixture(t)
+	recorder := fixture.enableRecoveryUpdateRecording(t, true)
+	artifact := fixture.reconcile.artifact(943, "symbol:recovery-accounting-ack", "RecoveryAccountingACK")
+
+	fixture.local.set(fixture.reconcile.scopeA, 1, true)
+	fixture.local.failNextMark(errors.New("recovery test: local acknowledgement unavailable"))
+	fixture.source.queue(fixture.rootA, fixture.currentBytes("a.go", artifact, recoveryTestObservation("main", true)))
+	fixture.requireRecoveryError(t, fixture.request(fixture.reconcile.scopeA, fixture.reconcile.profileID, fixture.rootA, "recovery-accounting-ack-failure", nil))
+	update := recorder.only(t)
+	durable := fixture.currentPublished(t, fixture.reconcile.scopeA.CheckoutID)
+
+	if update.Outcome != RecoveryUpdateOutcomeUnavailable || update.FailureStage != RecoveryUpdateFailureLocalACK || update.View == nil || !reconcileTestPublishedEqual(*update.View, durable) {
+		t.Fatalf("ACK-failure accounting = %#v, want unavailable retained durable View %#v", update, durable)
+	}
+	if !update.StructuralFTS.Measured || !update.EmbeddingReadiness.Measured || update.LocalACK.Measured || update.ProviderCalls != (RecoveryProviderCallCounters{Measured: true, Before: 0, After: 1}) {
+		t.Fatalf("ACK-failure stages/counters = %#v", update)
+	}
+	if got := fixture.local.sequence(fixture.reconcile.scopeA.CheckoutID); got != 0 {
+		t.Fatalf("failed local acknowledgement advanced sequence to %d", got)
+	}
+}
+
+func TestUCIRecoveryUpdateAccountingDoesNotClassifyUnmeasuredProviderSuccessHealthy(t *testing.T) {
+	fixture := newRecoveryIntegrationFixture(t)
+	recorder := fixture.enableRecoveryUpdateRecording(t, false)
+	artifact := fixture.reconcile.artifact(944, "symbol:recovery-accounting-unmeasured", "RecoveryAccountingUnmeasured")
+
+	fixture.local.set(fixture.reconcile.scopeA, 1, true)
+	fixture.source.queue(fixture.rootA, fixture.currentBytes("a.go", artifact, recoveryTestObservation("main", true)))
+	result := fixture.recover(t, fixture.request(fixture.reconcile.scopeA, fixture.reconcile.profileID, fixture.rootA, "recovery-accounting-unmeasured", nil))
+	update := recorder.only(t)
+
+	if update.Outcome != RecoveryUpdateOutcomeUnavailable || update.FailureStage != RecoveryUpdateFailureAccounting || update.ProviderCalls.Measured || update.View == nil || !reconcileTestPublishedEqual(*update.View, result.View) {
+		t.Fatalf("unmeasured-provider accounting = %#v, want unavailable accounting result after successful recovery", update)
+	}
+	if !update.StructuralFTS.Measured || !update.EmbeddingReadiness.Measured || !update.LocalACK.Measured {
+		t.Fatalf("unmeasured-provider accounting lost actual completed stages: %#v", update)
+	}
+}
+
 type recoveryIntegrationFixture struct {
 	reconcile  *reconcileTestFixture
 	source     *recoveryTestCurrentByteSource
@@ -315,10 +429,23 @@ func newRecoveryIntegrationFixture(t *testing.T) *recoveryIntegrationFixture {
 		publisher:  publisher,
 		local:      local,
 		embeddings: embeddings,
-		service:    NewRecoveryService(source, publisher, local, embeddings),
+		service:    NewRecoveryService(source, publisher, local, embeddings, nil),
 		rootA:      `C:\fixture\checkout-a`,
 		rootB:      `C:\fixture\checkout-b`,
 	}
+}
+
+func (fixture *recoveryIntegrationFixture) enableRecoveryUpdateRecording(t *testing.T, providerCountersMeasured bool) *recoveryTestUpdateRecorder {
+	t.Helper()
+	recorder := &recoveryTestUpdateRecorder{embeddings: fixture.embeddings, providerCountersMeasured: providerCountersMeasured}
+	fixture.service.updates = recorder
+	startedAt := time.Date(2026, time.September, 5, 12, 0, 0, 0, time.UTC)
+	var tick int64
+	fixture.service.now = func() time.Time {
+		tick++
+		return startedAt.Add(time.Duration(tick) * time.Millisecond)
+	}
+	return recorder
 }
 
 func (fixture *recoveryIntegrationFixture) request(scope IndexScope, profileID, root, buildKey string, parent *ContextRef) RecoveryRequest {
@@ -543,6 +670,7 @@ func (publisher *recoveryTestPublisher) loseNextAcknowledgement() {
 type recoveryTestLocalState struct {
 	mu      sync.Mutex
 	records map[string]RecoveryLocalState
+	markErr error
 }
 
 func newRecoveryTestLocalState() *recoveryTestLocalState {
@@ -571,6 +699,12 @@ func (state *recoveryTestLocalState) replace(scope IndexScope, dirtySequence int
 	}
 }
 
+func (state *recoveryTestLocalState) failNextMark(err error) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.markErr = err
+}
+
 func (state *recoveryTestLocalState) Snapshot(ctx context.Context, checkoutID string) (RecoveryLocalState, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return RecoveryLocalState{}, false, err
@@ -587,6 +721,11 @@ func (state *recoveryTestLocalState) MarkReconciled(ctx context.Context, checkou
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if state.markErr != nil {
+		err := state.markErr
+		state.markErr = nil
+		return err
+	}
 	record, found := state.records[checkoutID]
 	if !found {
 		return fmt.Errorf("recovery test: checkout %q is not locally registered", checkoutID)
@@ -621,6 +760,7 @@ type recoveryTestEmbeddingEnsurer struct {
 	mu        sync.Mutex
 	cached    map[recoveryTestEmbeddingKey]struct{}
 	providers int
+	nextErr   error
 }
 
 func newRecoveryTestEmbeddingEnsurer(profile VectorProfile) *recoveryTestEmbeddingEnsurer {
@@ -644,6 +784,11 @@ func (ensurer *recoveryTestEmbeddingEnsurer) EnsureCandidateEmbedding(ctx contex
 	key := recoveryTestEmbeddingKey{profile: ensurer.profile, input: input}
 	ensurer.mu.Lock()
 	defer ensurer.mu.Unlock()
+	if ensurer.nextErr != nil {
+		err := ensurer.nextErr
+		ensurer.nextErr = nil
+		return err
+	}
 	if _, found := ensurer.cached[key]; found {
 		return nil
 	}
@@ -652,8 +797,52 @@ func (ensurer *recoveryTestEmbeddingEnsurer) EnsureCandidateEmbedding(ctx contex
 	return nil
 }
 
+func (ensurer *recoveryTestEmbeddingEnsurer) failNext(err error) {
+	ensurer.mu.Lock()
+	defer ensurer.mu.Unlock()
+	ensurer.nextErr = err
+}
+
 func (ensurer *recoveryTestEmbeddingEnsurer) providerCalls() int {
 	ensurer.mu.Lock()
 	defer ensurer.mu.Unlock()
 	return ensurer.providers
+}
+
+type recoveryTestUpdateRecorder struct {
+	embeddings               *recoveryTestEmbeddingEnsurer
+	providerCountersMeasured bool
+
+	mu      sync.Mutex
+	records []RecoveryUpdateAccounting
+}
+
+func (recorder *recoveryTestUpdateRecorder) ProviderCallCount() (int64, bool) {
+	if !recorder.providerCountersMeasured {
+		return 0, false
+	}
+	return int64(recorder.embeddings.providerCalls()), true
+}
+
+func (recorder *recoveryTestUpdateRecorder) RecordRecoveryUpdate(update RecoveryUpdateAccounting) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.records = append(recorder.records, cloneRecoveryUpdateAccounting(update))
+}
+
+func (recorder *recoveryTestUpdateRecorder) only(t *testing.T) RecoveryUpdateAccounting {
+	t.Helper()
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if len(recorder.records) != 1 {
+		t.Fatalf("recovery update records = %d, want 1", len(recorder.records))
+	}
+	return cloneRecoveryUpdateAccounting(recorder.records[0])
+}
+
+func requireRecoveryUpdateMeasuredTiming(t *testing.T, name string, timing RecoveryUpdateTiming) {
+	t.Helper()
+	if !timing.Measured || timing.StartedAt.IsZero() || timing.CompletedAt.IsZero() || timing.CompletedAt.Before(timing.StartedAt) || timing.Latency != timing.CompletedAt.Sub(timing.StartedAt) {
+		t.Fatalf("%s timing = %#v, want an actual timestamp interval", name, timing)
+	}
 }
