@@ -286,7 +286,7 @@ func TestUCIGraphReportsAmbiguityUnresolvedSitesAndChangedCalleeInvalidation(t *
 
 	t.Run("unresolved target remains evidence labeled unknown", func(t *testing.T) {
 		store := fixture.store()
-		store.unresolvedTargets["missing-call"] = []GraphUnresolvedSite{
+		store.unresolvedTargets[graphTestTargetKey(GraphTarget{Name: "missing-call"})] = []GraphUnresolvedSite{
 			graphTestUnresolved(fixture.worker, "may_call", fixture.worker),
 		}
 		service := NewGraphService(store)
