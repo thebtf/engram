@@ -68,11 +68,12 @@ func normalizeEmbeddingBaseURL(raw string) string {
 
 // Client communicates with a LiteLLM-compatible /v1/embeddings endpoint.
 type Client struct {
-	baseURL    string
-	model      string
-	apiKey     string
-	dimensions int
-	httpClient *http.Client
+	baseURL        string
+	model          string
+	apiKey         string
+	dimensions     int
+	retryBaseDelay time.Duration
+	httpClient     *http.Client
 }
 
 // NewClient creates an embedding Client from environment variables.
@@ -153,10 +154,11 @@ func NewClientWithSettings(ctx context.Context, resolver SettingsResolver) (*Cli
 		}
 	}
 	return &Client{
-		baseURL:    baseURL,
-		model:      model,
-		apiKey:     resolveSetting(ctx, resolver, "ENGRAM_EMBEDDING_API_KEY", SettingKeyEmbedAPIKey),
-		dimensions: dimensions,
+		baseURL:        baseURL,
+		model:          model,
+		apiKey:         resolveSetting(ctx, resolver, "ENGRAM_EMBEDDING_API_KEY", SettingKeyEmbedAPIKey),
+		dimensions:     dimensions,
+		retryBaseDelay: time.Second,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -235,7 +237,7 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error)
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(time.Duration(1<<attempt) * time.Second):
+			case <-time.After(time.Duration(1<<attempt) * c.retryBaseDelay):
 			}
 			req.Body = io.NopCloser(bytes.NewReader(body))
 		}
