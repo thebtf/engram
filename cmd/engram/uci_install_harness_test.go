@@ -63,6 +63,7 @@ func TestUCIInstallHarnessRunsBuiltComponentsThroughExternalStdio(t *testing.T) 
 		{role: "daemon", want: request.Daemon},
 		{role: "parser", want: request.Parser},
 	} {
+		uciWaitForInstallHarnessAudit(t, auditDir, component.role)
 		audit := uciReadInstallHarnessAudit(t, auditDir, component.role)
 		if audit.PID <= 0 || audit.PID == os.Getpid() {
 			t.Fatalf("%s process PID = %d; harness must launch an external child", component.role, audit.PID)
@@ -206,8 +207,13 @@ func TestUCIInstallHarnessProcessHelper(t *testing.T) {
 
 	switch audit.Role {
 	case "server", "parser":
-		select {}
+		for {
+			time.Sleep(time.Hour)
+		}
 	case "daemon":
+		auditDir := os.Getenv(uciInstallHarnessHelperAuditDir)
+		uciWaitForInstallHarnessAudit(t, auditDir, "server")
+		uciWaitForInstallHarnessAudit(t, auditDir, "parser")
 		uciServeInstallHarnessMCP(t, &audit)
 	default:
 		t.Fatalf("unknown UCI install-harness helper role %q", audit.Role)
@@ -351,7 +357,9 @@ func uciServeInstallHarnessMCP(t *testing.T, audit *uciInstallHarnessChildAudit)
 		uciWriteInstallHarnessAudit(t, *audit)
 
 		if *uciInstallHarnessHelperMode == "stall" && request.Method == "initialize" {
-			select {}
+			for {
+				time.Sleep(time.Hour)
+			}
 		}
 		switch request.Method {
 		case "initialize":
