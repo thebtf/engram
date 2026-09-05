@@ -6,7 +6,7 @@ description: "Dependency-ordered implementation tasks for Unified Code Intellige
 
 **Input**: `spec.md`, `plan.md`, `research.md`, `data-model.md`, `quickstart.md`, `contracts/`, `supporting-contracts/`, `acceptance/`, `checklists/`, and intake provenance at `.agent/intake/engram-code-intelligence-2026-09-05-r1/tasks.md`.
 
-**Prerequisites**: Historical approved specification commit `c3d41d2575847d8e4e4313cc0a55acfbb1419327`; historical approved plan commit `489f887d7e0ff25a8a6374a927c5f6dd2eb197e3`; Constitution 1.1.0; reviewer admission checklist 25/25. The historical commits preserve the original C1/I1 approval provenance. This later re-analysis remediation does not rewrite that review boundary.
+**Prerequisites**: Historical approved specification commit `c3d41d2575847d8e4e4313cc0a55acfbb1419327`; historical approved plan commit `489f887d7e0ff25a8a6374a927c5f6dd2eb197e3`; Constitution 1.1.0; final specification/plan recheck commit `e08952a870735f0b27530351e871447b2eaa2266`; reviewer admission checklist 26/26. The historical commits preserve the original approval provenance, while the named recheck and current checklist cover the later C1/C2/H1/I1/RS-04/RS-05 corrections without rewriting that history.
 
 **Tests**: Required. Every behavioral slice starts with a focused RED against an existing or contract-backed seam, then ends with the named GREEN proof. A missing symbol, disabled capability, missing tool, incomplete index, direct-service substitute, or test-only transport is not acceptable behavioral evidence where the task says otherwise.
 
