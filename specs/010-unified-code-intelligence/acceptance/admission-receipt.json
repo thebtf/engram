@@ -1,0 +1,128 @@
+{
+  "schema": "engram.uci.admission-receipt/1",
+  "recorded_at": "2026-09-05T07:21:33Z",
+  "feature": "Unified Code Intelligence UCI-1A+B",
+  "branch": "uci/unified-code-intelligence-r1",
+  "constitution": "1.1.0",
+  "historical_provenance": [
+    {
+      "kind": "original_specification_approval_header",
+      "commit": "c3d41d2575847d8e4e4313cc0a55acfbb1419327",
+      "tree": "a504ead33e0498a5296f5d3c02089906b3174f56",
+      "recorded_in": "plan.md:4"
+    },
+    {
+      "kind": "original_plan_approval",
+      "commit": "489f887d7e0ff25a8a6374a927c5f6dd2eb197e3",
+      "tree": "66681e2c9a39e9f7a3ba8eacda4fcb1384fac359",
+      "recorded_in": "tasks.md:9"
+    }
+  ],
+  "gates": [
+    {
+      "gate": "clarify",
+      "commit": "e08952a870735f0b27530351e871447b2eaa2266",
+      "tree": "a7f42ddc32cd678e7c3d3b00c88e4c4290825688",
+      "verdict": "PASS",
+      "reviewer": "UCIClarifyScout",
+      "covered_paths": [
+        "spec.md",
+        "plan.md",
+        "research.md",
+        "data-model.md",
+        "quickstart.md",
+        "tasks.md",
+        "contracts/",
+        "supporting-contracts/",
+        "acceptance/",
+        "checklists/requirements.md"
+      ]
+    },
+    {
+      "gate": "review-spec",
+      "commit": "e08952a870735f0b27530351e871447b2eaa2266",
+      "tree": "a7f42ddc32cd678e7c3d3b00c88e4c4290825688",
+      "verdict": "APPROVE",
+      "reviewer": "UCISpecArchitectReview",
+      "resolved_findings": [
+        "RS-04",
+        "RS-05"
+      ]
+    },
+    {
+      "gate": "review-plan",
+      "commit": "e08952a870735f0b27530351e871447b2eaa2266",
+      "tree": "a7f42ddc32cd678e7c3d3b00c88e4c4290825688",
+      "verdict": "APPROVE",
+      "reviewer": "UCIPlanArchitectReview",
+      "resolved_findings": [
+        "RP-01",
+        "RP-02",
+        "RP-03",
+        "C1",
+        "C2",
+        "H1",
+        "I1",
+        "M1"
+      ]
+    },
+    {
+      "gate": "requirements-checklists",
+      "artifact_commit": "82b696f8ac1759f00381964a3fff00f81ec6d50f",
+      "artifact_tree": "8dcfeb07bc3c0f475fa04be8923fdb808c8d102f",
+      "reviewed_specification_and_plan_commit": "e08952a870735f0b27530351e871447b2eaa2266",
+      "verdict": "PASS",
+      "counts": {
+        "requirements": "16/16",
+        "uci_admission": "26/26"
+      },
+      "reviewer": "UCIPlanArchitectReview"
+    },
+    {
+      "gate": "speckit-analyze",
+      "commit": "56e9a507b78700da323714bf82f32893684462ae",
+      "tree": "f4d03a4ce9eb57b323fdc530fefe2333bb8ef672",
+      "verdict": "PASS",
+      "reviewer": "UCIAnalyzePlanner",
+      "finding_counts": {
+        "critical": 0,
+        "high": 0,
+        "medium": 0
+      },
+      "coverage": "20/20 FR/SC",
+      "task_inventory": "94/94",
+      "dependency_graph": "valid T001 through T086; T087 through T094 remain deferred non-prerequisites"
+    }
+  ],
+  "post_gate_path_transitions": [
+    {
+      "from": "e08952a870735f0b27530351e871447b2eaa2266",
+      "to": "82b696f8ac1759f00381964a3fff00f81ec6d50f",
+      "changed_paths": [
+        "checklists/uci-admission.md"
+      ],
+      "purpose": "Persist reviewer-owned CHK026 and 26/26 result."
+    },
+    {
+      "from": "82b696f8ac1759f00381964a3fff00f81ec6d50f",
+      "to": "56e9a507b78700da323714bf82f32893684462ae",
+      "changed_paths": [
+        "tasks.md"
+      ],
+      "purpose": "Bind final e08952a8 recheck and 26/26 checklist without rewriting historical c3/489 provenance."
+    }
+  ],
+  "validated_document_counts": {
+    "schema_examples": "8/8",
+    "acceptance_scenarios": "46/46",
+    "uci_1_scenarios": "36/36",
+    "task_ids": "94/94",
+    "invalid_unavailable_branch_mutations_rejected": "5/5"
+  },
+  "receipt_semantics": {
+    "analyzed_input_commit": "56e9a507b78700da323714bf82f32893684462ae",
+    "receipt_is_self_excluded": true,
+    "statement": "This receipt is added after the analyzed input commit and does not describe that pre-receipt commit as current HEAD. Before implementation, verify that the only path added after the analyzed input is this receipt."
+  },
+  "scope_boundary": "This receipt admits planning into implementation only. It does not claim implementation, runtime behavior, installation, production readiness, migration execution, release, deployment, tag, push, or publication."
+}
