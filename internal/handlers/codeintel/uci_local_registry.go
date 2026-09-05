@@ -2,9 +2,7 @@ package codeintel
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"path"
@@ -13,15 +11,17 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
 
 const (
-	uciLocalRegistrySchemaVersion = 1
+	uciLocalRegistrySchemaVersion = 2
 	uciLocalSQLiteBusyTimeoutMS   = 5000
 
 	uciLocalMaxOpaqueIDBytes      = 512
 	uciLocalMaxFingerprintBytes   = 512
+	uciLocalMaxRootPathBytes      = 4096
 	uciLocalMaxRelativePathBytes  = 4096
 	uciLocalMaxDirtyPaths         = int64(4096)
 	uciLocalMaxRecoveryDirtyPaths = int64(4096)
@@ -48,32 +48,21 @@ type UCILocalApprovedRoot struct {
 	RootID                  string
 	SourceID                string
 	CommonGitDirFingerprint string
-}
-
-// UCILocalContinuityEvidence proves the prior local checkout facts needed to
-// retain an incarnation across an otherwise compatible re-registration.
-type UCILocalContinuityEvidence struct {
-	PreviousCheckoutID       string
-	PreviousIncarnationID    string
-	RootID                   string
-	SourceID                 string
-	CommonGitDirFingerprint  string
-	PrivateGitDirFingerprint string
-	WorkstationID            string
-	ClientInstanceID         string
+	RootPath                string
 }
 
 // UCILocalCheckoutRegistration binds opaque server identifiers to local
-// workstation evidence without making either a source of authority.
+// workstation evidence without making either a source of authority. The
+// server supplies IncarnationID; this registry never creates one.
 type UCILocalCheckoutRegistration struct {
 	RootID                   string
 	SourceID                 string
 	CheckoutID               string
+	IncarnationID            string
 	CommonGitDirFingerprint  string
 	PrivateGitDirFingerprint string
 	WorkstationID            string
 	ClientInstanceID         string
-	Continuity               *UCILocalContinuityEvidence
 }
 
 // UCILocalDirtyChange is one coalescible path change observed by a watcher.
@@ -149,18 +138,26 @@ func (registry *UCILocalRegistry) RecordApprovedRoot(ctx context.Context, root U
 			return err
 		}
 		if found {
-			if existing == root {
+			if existing.SourceID != root.SourceID || existing.CommonGitDirFingerprint != root.CommonGitDirFingerprint {
+				return errors.New("uci local registry: root ID is already bound to different evidence")
+			}
+			if existing.RootPath == root.RootPath {
 				return nil
 			}
-			return errors.New("uci local registry: root ID is already bound to different evidence")
+			_, err = conn.ExecContext(ctx, `
+				UPDATE uci_local_approved_roots
+				SET local_root_path = ?
+				WHERE root_id = ?`, root.RootPath, root.RootID)
+			return uciLocalRegistryOperationError("update approved root path", err)
 		}
 		_, err = conn.ExecContext(ctx, `
 			INSERT INTO uci_local_approved_roots (
-				root_id, server_source_id, common_git_dir_fingerprint
-			) VALUES (?, ?, ?)`,
+				root_id, server_source_id, common_git_dir_fingerprint, local_root_path
+			) VALUES (?, ?, ?, ?)`,
 			root.RootID,
 			root.SourceID,
 			root.CommonGitDirFingerprint,
+			root.RootPath,
 		)
 		return uciLocalRegistryOperationError("record approved root", err)
 	})
@@ -186,8 +183,8 @@ func (registry *UCILocalRegistry) ApprovedRoot(ctx context.Context, rootID strin
 }
 
 // RegisterCheckout persists workstation evidence for one opaque checkout. An
-// exact retry keeps state. A changed record retains its incarnation only when
-// the supplied continuity evidence exactly proves its prior identity.
+// exact retry keeps state. A changed server incarnation resets dirty and
+// recovery state; changed local evidence with the same incarnation is refused.
 func (registry *UCILocalRegistry) RegisterCheckout(ctx context.Context, registration UCILocalCheckoutRegistration) (UCILocalCheckoutRecord, error) {
 	if err := validateUCILocalCheckoutRegistration(registration); err != nil {
 		return UCILocalCheckoutRecord{}, err
@@ -211,20 +208,7 @@ func (registry *UCILocalRegistry) RegisterCheckout(ctx context.Context, registra
 			return err
 		}
 		if !found {
-			incarnationID, err := newUCILocalIncarnationID()
-			if err != nil {
-				return err
-			}
-			if continuity := registration.Continuity; continuity != nil {
-				prior, priorFound, err := loadUCILocalCheckout(ctx, conn, continuity.PreviousCheckoutID)
-				if err != nil {
-					return err
-				}
-				if priorFound && continuityMatchesUCILocalCheckout(prior, registration) {
-					incarnationID = prior.IncarnationID
-				}
-			}
-			if err := insertUCILocalCheckout(ctx, conn, registration, incarnationID, true); err != nil {
+			if err := insertUCILocalCheckout(ctx, conn, registration, true); err != nil {
 				return err
 			}
 			result, _, err = loadUCILocalCheckout(ctx, conn, registration.CheckoutID)
@@ -235,23 +219,14 @@ func (registry *UCILocalRegistry) RegisterCheckout(ctx context.Context, registra
 			result = existing
 			return nil
 		}
-
-		preserveIncarnation := continuityMatchesUCILocalCheckout(existing, registration)
-		incarnationID := existing.IncarnationID
-		if !preserveIncarnation {
-			incarnationID, err = newUCILocalIncarnationID()
-			if err != nil {
-				return err
-			}
+		if existing.IncarnationID == registration.IncarnationID {
+			return errors.New("uci local registry: checkout evidence changed without a new server incarnation")
 		}
-
-		if err := updateUCILocalCheckout(ctx, conn, registration, incarnationID, !preserveIncarnation); err != nil {
+		if err := replaceUCILocalCheckout(ctx, conn, registration); err != nil {
 			return err
 		}
-		if !preserveIncarnation {
-			if err := resetUCILocalCheckoutOperationalState(ctx, conn, registration.CheckoutID); err != nil {
-				return err
-			}
+		if err := resetUCILocalCheckoutOperationalState(ctx, conn, registration.CheckoutID); err != nil {
+			return err
 		}
 
 		result, _, err = loadUCILocalCheckout(ctx, conn, registration.CheckoutID)
@@ -559,20 +534,32 @@ func (registry *UCILocalRegistry) initialize(ctx context.Context) error {
 			return uciLocalRegistryOperationError("apply schema", err)
 		}
 	}
-	if _, err := conn.ExecContext(ctx, `
-		INSERT INTO uci_local_registry_schema (singleton, version)
-		VALUES (1, ?)
-		ON CONFLICT(singleton) DO NOTHING`, uciLocalRegistrySchemaVersion); err != nil {
-		return uciLocalRegistryOperationError("record schema version", err)
-	}
 
 	var version int
-	if err := conn.QueryRowContext(ctx, `
-		SELECT version FROM uci_local_registry_schema WHERE singleton = 1`).Scan(&version); err != nil {
+	err = conn.QueryRowContext(ctx, `
+		SELECT version FROM uci_local_registry_schema WHERE singleton = 1`).Scan(&version)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		if _, err := conn.ExecContext(ctx, `
+			INSERT INTO uci_local_registry_schema (singleton, version)
+			VALUES (1, ?)`, uciLocalRegistrySchemaVersion); err != nil {
+			return uciLocalRegistryOperationError("record schema version", err)
+		}
+		version = uciLocalRegistrySchemaVersion
+	case err != nil:
 		return uciLocalRegistryOperationError("read schema version", err)
 	}
-	if version != uciLocalRegistrySchemaVersion {
-		return fmt.Errorf("uci local registry: unsupported schema version %d", version)
+
+	for version != uciLocalRegistrySchemaVersion {
+		switch version {
+		case 1:
+			if err := migrateUCILocalRegistryV1ToV2(ctx, conn); err != nil {
+				return err
+			}
+			version = 2
+		default:
+			return fmt.Errorf("uci local registry: unsupported schema version %d", version)
+		}
 	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return uciLocalRegistryOperationError("commit schema transaction", err)
@@ -676,7 +663,8 @@ var uciLocalRegistrySchema = []string{
 	`CREATE TABLE IF NOT EXISTS uci_local_approved_roots (
 		root_id TEXT PRIMARY KEY,
 		server_source_id TEXT NOT NULL,
-		common_git_dir_fingerprint TEXT NOT NULL
+		common_git_dir_fingerprint TEXT NOT NULL,
+		local_root_path TEXT NOT NULL
 	)`,
 	`CREATE TABLE IF NOT EXISTS uci_local_checkouts (
 		server_checkout_id TEXT PRIMARY KEY,
@@ -715,13 +703,26 @@ var uciLocalRegistrySchema = []string{
 	)`,
 }
 
+func migrateUCILocalRegistryV1ToV2(ctx context.Context, conn *sql.Conn) error {
+	if _, err := conn.ExecContext(ctx, `
+		ALTER TABLE uci_local_approved_roots
+		ADD COLUMN local_root_path TEXT NOT NULL DEFAULT ''`); err != nil {
+		return uciLocalRegistryOperationError("migrate schema v1 to v2", err)
+	}
+	_, err := conn.ExecContext(ctx, `
+		UPDATE uci_local_registry_schema
+		SET version = ?
+		WHERE singleton = 1`, uciLocalRegistrySchemaVersion)
+	return uciLocalRegistryOperationError("record schema migration", err)
+}
+
 func loadUCILocalApprovedRoot(ctx context.Context, conn *sql.Conn, rootID string) (UCILocalApprovedRoot, bool, error) {
 	var root UCILocalApprovedRoot
 	err := conn.QueryRowContext(ctx, `
-		SELECT root_id, server_source_id, common_git_dir_fingerprint
+		SELECT root_id, server_source_id, common_git_dir_fingerprint, local_root_path
 		FROM uci_local_approved_roots
 		WHERE root_id = ?`, rootID,
-	).Scan(&root.RootID, &root.SourceID, &root.CommonGitDirFingerprint)
+	).Scan(&root.RootID, &root.SourceID, &root.CommonGitDirFingerprint, &root.RootPath)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UCILocalApprovedRoot{}, false, nil
 	}
@@ -841,7 +842,7 @@ func loadUCILocalCheckout(ctx context.Context, conn *sql.Conn, checkoutID string
 	return record, true, nil
 }
 
-func insertUCILocalCheckout(ctx context.Context, conn *sql.Conn, registration UCILocalCheckoutRegistration, incarnationID string, rescanRequired bool) error {
+func insertUCILocalCheckout(ctx context.Context, conn *sql.Conn, registration UCILocalCheckoutRegistration, rescanRequired bool) error {
 	rescan := 0
 	if rescanRequired {
 		rescan = 1
@@ -867,40 +868,13 @@ func insertUCILocalCheckout(ctx context.Context, conn *sql.Conn, registration UC
 		registration.PrivateGitDirFingerprint,
 		registration.WorkstationID,
 		registration.ClientInstanceID,
-		incarnationID,
+		registration.IncarnationID,
 		rescan,
 	)
 	return uciLocalRegistryOperationError("insert checkout", err)
 }
 
-func updateUCILocalCheckout(ctx context.Context, conn *sql.Conn, registration UCILocalCheckoutRegistration, incarnationID string, resetState bool) error {
-	if resetState {
-		_, err := conn.ExecContext(ctx, `
-			UPDATE uci_local_checkouts
-			SET
-				root_id = ?,
-				server_source_id = ?,
-				common_git_dir_fingerprint = ?,
-				private_git_dir_fingerprint = ?,
-				workstation_id = ?,
-				client_instance_id = ?,
-				incarnation_id = ?,
-				dirty_sequence = 0,
-				last_reconciled_sequence = 0,
-				rescan_required = 1
-			WHERE server_checkout_id = ?`,
-			registration.RootID,
-			registration.SourceID,
-			registration.CommonGitDirFingerprint,
-			registration.PrivateGitDirFingerprint,
-			registration.WorkstationID,
-			registration.ClientInstanceID,
-			incarnationID,
-			registration.CheckoutID,
-		)
-		return uciLocalRegistryOperationError("replace checkout incarnation", err)
-	}
-
+func replaceUCILocalCheckout(ctx context.Context, conn *sql.Conn, registration UCILocalCheckoutRegistration) error {
 	_, err := conn.ExecContext(ctx, `
 		UPDATE uci_local_checkouts
 		SET
@@ -910,7 +884,10 @@ func updateUCILocalCheckout(ctx context.Context, conn *sql.Conn, registration UC
 			private_git_dir_fingerprint = ?,
 			workstation_id = ?,
 			client_instance_id = ?,
-			incarnation_id = ?
+			incarnation_id = ?,
+			dirty_sequence = 0,
+			last_reconciled_sequence = 0,
+			rescan_required = 1
 		WHERE server_checkout_id = ?`,
 		registration.RootID,
 		registration.SourceID,
@@ -918,10 +895,10 @@ func updateUCILocalCheckout(ctx context.Context, conn *sql.Conn, registration UC
 		registration.PrivateGitDirFingerprint,
 		registration.WorkstationID,
 		registration.ClientInstanceID,
-		incarnationID,
+		registration.IncarnationID,
 		registration.CheckoutID,
 	)
-	return uciLocalRegistryOperationError("update checkout evidence", err)
+	return uciLocalRegistryOperationError("replace checkout incarnation", err)
 }
 
 func resetUCILocalCheckoutOperationalState(ctx context.Context, conn *sql.Conn, checkoutID string) error {
@@ -970,31 +947,11 @@ func sameUCILocalRegistration(record UCILocalCheckoutRecord, registration UCILoc
 	return record.RootID == registration.RootID &&
 		record.SourceID == registration.SourceID &&
 		record.CheckoutID == registration.CheckoutID &&
+		record.IncarnationID == registration.IncarnationID &&
 		record.CommonGitDirFingerprint == registration.CommonGitDirFingerprint &&
 		record.PrivateGitDirFingerprint == registration.PrivateGitDirFingerprint &&
 		record.WorkstationID == registration.WorkstationID &&
 		record.ClientInstanceID == registration.ClientInstanceID
-}
-
-func continuityMatchesUCILocalCheckout(record UCILocalCheckoutRecord, registration UCILocalCheckoutRegistration) bool {
-	continuity := registration.Continuity
-	if continuity == nil {
-		return false
-	}
-	if registration.SourceID != record.SourceID ||
-		registration.CommonGitDirFingerprint != record.CommonGitDirFingerprint ||
-		registration.PrivateGitDirFingerprint != record.PrivateGitDirFingerprint ||
-		registration.WorkstationID != record.WorkstationID {
-		return false
-	}
-	return continuity.PreviousCheckoutID == record.CheckoutID &&
-		continuity.PreviousIncarnationID == record.IncarnationID &&
-		continuity.RootID == record.RootID &&
-		continuity.SourceID == record.SourceID &&
-		continuity.CommonGitDirFingerprint == record.CommonGitDirFingerprint &&
-		continuity.PrivateGitDirFingerprint == record.PrivateGitDirFingerprint &&
-		continuity.WorkstationID == record.WorkstationID &&
-		continuity.ClientInstanceID == record.ClientInstanceID
 }
 
 func sameUCILocalOfflineRecovery(left, right UCILocalOfflineRecovery) bool {
@@ -1035,7 +992,7 @@ func validateUCILocalApprovedRoot(root UCILocalApprovedRoot) error {
 			return err
 		}
 	}
-	return nil
+	return validateUCILocalAbsoluteRootPath(root.RootPath)
 }
 
 func validateUCILocalCheckoutRegistration(registration UCILocalCheckoutRegistration) error {
@@ -1055,6 +1012,24 @@ func validateUCILocalCheckoutRegistration(registration UCILocalCheckoutRegistrat
 		if err := validateUCILocalValue(field.name, field.value, field.limit); err != nil {
 			return err
 		}
+	}
+	return validateUCILocalIncarnationID(registration.IncarnationID)
+}
+
+func validateUCILocalAbsoluteRootPath(rootPath string) error {
+	if err := validateUCILocalValue("root_path", rootPath, uciLocalMaxRootPathBytes); err != nil {
+		return err
+	}
+	if !filepath.IsAbs(rootPath) {
+		return errors.New("uci local registry: root_path must be absolute")
+	}
+	return nil
+}
+
+func validateUCILocalIncarnationID(value string) error {
+	parsed, err := uuid.Parse(value)
+	if err != nil || parsed == uuid.Nil || parsed.String() != value {
+		return errors.New("uci local registry: incarnation_id must be a canonical non-nil UUID")
 	}
 	return nil
 }
@@ -1126,14 +1101,6 @@ func normalizeUCILocalRelativePath(raw string) (string, error) {
 		return "", errors.New("uci local registry: relative path exceeds its bound")
 	}
 	return normalized, nil
-}
-
-func newUCILocalIncarnationID() (string, error) {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", uciLocalRegistryOperationError("create incarnation identifier", err)
-	}
-	return hex.EncodeToString(bytes), nil
 }
 
 func uciLocalRegistryOperationError(operation string, err error) error {

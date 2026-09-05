@@ -24,13 +24,16 @@ const (
 	uciLocalPrivateGit   = "sha256:private-git-dir:4a1c"
 	uciLocalWorkstation  = "workstation:opaque:alpha"
 	uciLocalClient       = "client-instance:opaque:alpha-1"
+	uciLocalIncarnationA = "11111111-1111-4111-8111-111111111111"
+	uciLocalIncarnationB = "22222222-2222-4222-8222-222222222222"
+	uciLocalIncarnationC = "33333333-3333-4333-8333-333333333333"
 )
 
 func TestUCILocalRegistryRecordsOnlyOperationalIdentityFacts(t *testing.T) {
 	ctx := context.Background()
 	db, registry := newUCILocalRegistry(t)
 
-	root := uciLocalApprovedRoot()
+	root := uciLocalApprovedRoot(t)
 	require.NoError(t, registry.RecordApprovedRoot(ctx, root))
 
 	persistedRoot, found, err := registry.ApprovedRoot(ctx, root.RootID)
@@ -40,6 +43,9 @@ func TestUCILocalRegistryRecordsOnlyOperationalIdentityFacts(t *testing.T) {
 	conflictingRoot := root
 	conflictingRoot.SourceID = "source:opaque:conflict"
 	require.Error(t, registry.RecordApprovedRoot(ctx, conflictingRoot), "an opaque root ID must not be rebound to another source")
+	conflictingRoot = root
+	conflictingRoot.CommonGitDirFingerprint = "sha256:common-git-dir:conflict"
+	require.Error(t, registry.RecordApprovedRoot(ctx, conflictingRoot), "an opaque root ID must not be rebound to another common Git identity")
 	persistedRoot, found, err = registry.ApprovedRoot(ctx, root.RootID)
 	require.NoError(t, err)
 	require.True(t, found)
@@ -59,73 +65,207 @@ func TestUCILocalRegistryRecordsOnlyOperationalIdentityFacts(t *testing.T) {
 	require.Equal(t, uciLocalPrivateGit, checkout.PrivateGitDirFingerprint)
 	require.Equal(t, uciLocalWorkstation, checkout.WorkstationID)
 	require.Equal(t, uciLocalClient, checkout.ClientInstanceID)
-	require.NotEmpty(t, checkout.IncarnationID)
+	require.Equal(t, uciLocalIncarnationA, checkout.IncarnationID)
 
 	assertUCILocalRegistryNarrowSurface(t, db)
 }
 
-func TestUCILocalRegistryIssuesAndPreservesIncarnationsOnlyWithContinuity(t *testing.T) {
+func TestUCILocalRegistryPreservesExactServerRegistration(t *testing.T) {
 	ctx := context.Background()
 	_, registry := newUCILocalRegistry(t)
-	require.NoError(t, registry.RecordApprovedRoot(ctx, uciLocalApprovedRoot()))
+	require.NoError(t, registry.RecordApprovedRoot(ctx, uciLocalApprovedRoot(t)))
 
-	initialRegistration := uciLocalRegistration(uciLocalCheckoutID)
-	first, err := registry.RegisterCheckout(ctx, initialRegistration)
+	registration := uciLocalRegistration(uciLocalCheckoutID)
+	first, err := registry.RegisterCheckout(ctx, registration)
 	require.NoError(t, err)
-	require.NotEmpty(t, first.IncarnationID)
+	require.Equal(t, registration.IncarnationID, first.IncarnationID)
 
-	exactReplay, err := registry.RegisterCheckout(ctx, initialRegistration)
+	state, err := registry.RecordDirty(ctx, codeintel.UCILocalDirtyChange{
+		CheckoutID:   first.CheckoutID,
+		RelativePath: "internal/changed.go",
+		Sequence:     1,
+	})
 	require.NoError(t, err)
-	require.Equal(t, first.IncarnationID, exactReplay.IncarnationID, "an exact registration replay must preserve the local incarnation")
-
-	moveRegistration := uciLocalRegistration("checkout:opaque:moved")
-	moveRegistration.Continuity = &codeintel.UCILocalContinuityEvidence{
-		PreviousCheckoutID:       first.CheckoutID,
-		PreviousIncarnationID:    first.IncarnationID,
-		RootID:                   first.RootID,
-		SourceID:                 first.SourceID,
-		CommonGitDirFingerprint:  first.CommonGitDirFingerprint,
-		PrivateGitDirFingerprint: first.PrivateGitDirFingerprint,
-		WorkstationID:            first.WorkstationID,
-		ClientInstanceID:         first.ClientInstanceID,
+	recovery := codeintel.UCILocalOfflineRecovery{
+		CheckoutID:         first.CheckoutID,
+		FromSequence:       2,
+		ThroughSequence:    2,
+		MaxDirtyPaths:      2,
+		ObservedDirtyPaths: 1,
 	}
-	moved, err := registry.RegisterCheckout(ctx, moveRegistration)
+	state, err = registry.RecordOfflineRecovery(ctx, recovery)
 	require.NoError(t, err)
-	require.Equal(t, first.IncarnationID, moved.IncarnationID, "only exact local continuity evidence may preserve a moved checkout incarnation")
-	require.Equal(t, moveRegistration.CheckoutID, moved.CheckoutID)
+
+	replayed, err := registry.RegisterCheckout(ctx, registration)
+	require.NoError(t, err)
+	require.Equal(t, registration.IncarnationID, replayed.IncarnationID)
+	require.Equal(t, state.DirtySequence, replayed.DirtySequence)
+	require.Equal(t, state.DirtyPaths, replayed.DirtyPaths)
+	require.Equal(t, recovery, replayed.OfflineRecovery)
+}
+
+func TestUCILocalRegistryResetsStateForChangedServerIncarnation(t *testing.T) {
+	ctx := context.Background()
+	_, registry := newUCILocalRegistry(t)
+	require.NoError(t, registry.RecordApprovedRoot(ctx, uciLocalApprovedRoot(t)))
+
+	registration := uciLocalRegistration(uciLocalCheckoutID)
+	first, err := registry.RegisterCheckout(ctx, registration)
+	require.NoError(t, err)
+	_, err = registry.RecordDirty(ctx, codeintel.UCILocalDirtyChange{
+		CheckoutID:   first.CheckoutID,
+		RelativePath: "internal/recreated.go",
+		Sequence:     1,
+	})
+	require.NoError(t, err)
+	_, err = registry.RecordOfflineRecovery(ctx, codeintel.UCILocalOfflineRecovery{
+		CheckoutID:         first.CheckoutID,
+		FromSequence:       2,
+		ThroughSequence:    2,
+		MaxDirtyPaths:      2,
+		ObservedDirtyPaths: 1,
+	})
+	require.NoError(t, err)
+
+	recreated := registration
+	recreated.IncarnationID = uciLocalIncarnationB
+	recreated.PrivateGitDirFingerprint = "sha256:private-git-dir:recreated"
+	replaced, err := registry.RegisterCheckout(ctx, recreated)
+	require.NoError(t, err)
+	require.Equal(t, recreated.IncarnationID, replaced.IncarnationID)
+	require.Zero(t, replaced.DirtySequence)
+	require.Empty(t, replaced.DirtyPaths)
+	require.True(t, replaced.RescanRequired)
+	require.Empty(t, replaced.RescanCauses)
+	require.Zero(t, replaced.OfflineRecovery)
+}
+
+func TestUCILocalRegistryStartsNewStateForCopy(t *testing.T) {
+	ctx := context.Background()
+	_, registry := newUCILocalRegistry(t)
+	require.NoError(t, registry.RecordApprovedRoot(ctx, uciLocalApprovedRoot(t)))
+
+	original, err := registry.RegisterCheckout(ctx, uciLocalRegistration(uciLocalCheckoutID))
+	require.NoError(t, err)
+	_, err = registry.RecordDirty(ctx, codeintel.UCILocalDirtyChange{
+		CheckoutID:   original.CheckoutID,
+		RelativePath: "internal/original.go",
+		Sequence:     1,
+	})
+	require.NoError(t, err)
 
 	copyRegistration := uciLocalRegistration("checkout:opaque:copy")
+	copyRegistration.IncarnationID = uciLocalIncarnationC
 	copyRecord, err := registry.RegisterCheckout(ctx, copyRegistration)
 	require.NoError(t, err)
-	require.NotEqual(t, first.IncarnationID, copyRecord.IncarnationID, "a copy without continuity evidence is a new local incarnation")
+	require.Equal(t, copyRegistration.IncarnationID, copyRecord.IncarnationID)
+	require.Zero(t, copyRecord.DirtySequence)
+	require.Empty(t, copyRecord.DirtyPaths)
+	require.True(t, copyRecord.RescanRequired)
+}
 
-	recreatedRegistration := initialRegistration
-	recreatedRegistration.PrivateGitDirFingerprint = "sha256:private-git-dir:recreated"
-	recreated, err := registry.RegisterCheckout(ctx, recreatedRegistration)
-	require.NoError(t, err)
-	require.NotEqual(t, first.IncarnationID, recreated.IncarnationID, "a recreated checkout at the same opaque ID must not inherit its incarnation")
+func TestUCILocalRegistryUpdatesOnlyLocalRootPathForVerifiedMove(t *testing.T) {
+	ctx := context.Background()
+	_, registry := newUCILocalRegistry(t)
+	root := uciLocalApprovedRoot(t)
+	require.NoError(t, registry.RecordApprovedRoot(ctx, root))
 
-	mismatchedMove := moveRegistration
-	mismatchedMove.CheckoutID = "checkout:opaque:mismatched-move"
-	mismatchedMove.PrivateGitDirFingerprint = "sha256:private-git-dir:not-continuous"
-	mismatched, err := registry.RegisterCheckout(ctx, mismatchedMove)
+	registration := uciLocalRegistration(uciLocalCheckoutID)
+	checkout, err := registry.RegisterCheckout(ctx, registration)
 	require.NoError(t, err)
-	require.NotEqual(t, first.IncarnationID, mismatched.IncarnationID, "partial continuity evidence must not preserve an incarnation")
+	state, err := registry.RecordDirty(ctx, codeintel.UCILocalDirtyChange{
+		CheckoutID:   checkout.CheckoutID,
+		RelativePath: "internal/moved.go",
+		Sequence:     1,
+	})
+	require.NoError(t, err)
 
-	otherWorkstationMove := moveRegistration
-	otherWorkstationMove.CheckoutID = "checkout:opaque:other-workstation"
-	otherWorkstationMove.WorkstationID = "workstation:opaque:beta"
-	otherWorkstation, err := registry.RegisterCheckout(ctx, otherWorkstationMove)
+	movedRoot := root
+	movedRoot.RootPath = t.TempDir()
+	require.NoError(t, registry.RecordApprovedRoot(ctx, movedRoot))
+	persistedRoot, found, err := registry.ApprovedRoot(ctx, root.RootID)
 	require.NoError(t, err)
-	require.NotEqual(t, first.IncarnationID, otherWorkstation.IncarnationID, "a workstation change is not a continuous local checkout")
+	require.True(t, found)
+	require.Equal(t, movedRoot, persistedRoot)
 
-	lostDBPath := filepath.Join(t.TempDir(), "lost-registry.sqlite")
-	lostDB, lostRegistry := openUCILocalRegistry(t, lostDBPath)
-	t.Cleanup(func() { _ = lostDB.Close() })
-	require.NoError(t, lostRegistry.RecordApprovedRoot(ctx, uciLocalApprovedRoot()))
-	afterLostDB, err := lostRegistry.RegisterCheckout(ctx, initialRegistration)
+	replayed, err := registry.RegisterCheckout(ctx, registration)
 	require.NoError(t, err)
-	require.NotEqual(t, first.IncarnationID, afterLostDB.IncarnationID, "a lost local database has no continuity evidence and must issue a new incarnation")
+	require.Equal(t, registration.IncarnationID, replayed.IncarnationID)
+	require.Equal(t, state.DirtySequence, replayed.DirtySequence)
+	require.Equal(t, state.DirtyPaths, replayed.DirtyPaths)
+}
+
+func TestUCILocalRegistryRefusesMismatchedEvidenceForSameServerIncarnation(t *testing.T) {
+	ctx := context.Background()
+	_, registry := newUCILocalRegistry(t)
+	require.NoError(t, registry.RecordApprovedRoot(ctx, uciLocalApprovedRoot(t)))
+
+	registration := uciLocalRegistration(uciLocalCheckoutID)
+	checkout, err := registry.RegisterCheckout(ctx, registration)
+	require.NoError(t, err)
+	baseline, err := registry.RecordDirty(ctx, codeintel.UCILocalDirtyChange{
+		CheckoutID:   checkout.CheckoutID,
+		RelativePath: "internal/retained.go",
+		Sequence:     1,
+	})
+	require.NoError(t, err)
+
+	mismatch := registration
+	mismatch.PrivateGitDirFingerprint = "sha256:private-git-dir:mismatch"
+	_, err = registry.RegisterCheckout(ctx, mismatch)
+	require.Error(t, err)
+	current, found, err := registry.Snapshot(ctx, checkout.CheckoutID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, baseline, current)
+
+	invalid := registration
+	invalid.IncarnationID = strings.ToUpper("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+	_, err = registry.RegisterCheckout(ctx, invalid)
+	require.Error(t, err)
+}
+
+func TestUCILocalRegistryMigratesV1DatabaseTransactionally(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "registry.sqlite"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	seedUCILocalRegistryV1(t, db)
+
+	registry, err := codeintel.NewUCILocalRegistry(db)
+	require.NoError(t, err)
+
+	var version int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT version FROM uci_local_registry_schema WHERE singleton = 1`).Scan(&version))
+	require.Equal(t, 2, version)
+
+	root, found, err := registry.ApprovedRoot(ctx, uciLocalRootID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Empty(t, root.RootPath)
+	root.RootPath = t.TempDir()
+	require.NoError(t, registry.RecordApprovedRoot(ctx, root))
+
+	persistedRoot, found, err := registry.ApprovedRoot(ctx, uciLocalRootID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, root, persistedRoot)
+	checkout, found, err := registry.Snapshot(ctx, uciLocalCheckoutID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, uciLocalIncarnationA, checkout.IncarnationID)
+	require.Equal(t, int64(4), checkout.DirtySequence)
+	require.Equal(t, map[string]int64{"internal/legacy.go": 4}, checkout.DirtyPaths)
+	require.Equal(t, codeintel.UCILocalOfflineRecovery{
+		CheckoutID:         uciLocalCheckoutID,
+		FromSequence:       5,
+		ThroughSequence:    5,
+		MaxDirtyPaths:      2,
+		ObservedDirtyPaths: 1,
+	}, checkout.OfflineRecovery)
+
+	_, err = codeintel.NewUCILocalRegistry(db)
+	require.NoError(t, err)
 }
 
 func TestUCILocalRegistryCoalescesDirtyStateAndTracksReconciliation(t *testing.T) {
@@ -233,7 +373,8 @@ func TestUCILocalRegistryRecoversCurrentStateAcrossCrashWithoutEventRetention(t 
 	path := filepath.Join(t.TempDir(), "registry.sqlite")
 
 	db, registry := openUCILocalRegistry(t, path)
-	require.NoError(t, registry.RecordApprovedRoot(ctx, uciLocalApprovedRoot()))
+	root := uciLocalApprovedRoot(t)
+	require.NoError(t, registry.RecordApprovedRoot(ctx, root))
 	checkout, err := registry.RegisterCheckout(ctx, uciLocalRegistration(uciLocalCheckoutID))
 	require.NoError(t, err)
 
@@ -260,7 +401,7 @@ func TestUCILocalRegistryRecoversCurrentStateAcrossCrashWithoutEventRetention(t 
 	persistedRoot, found, err := reopenedRegistry.ApprovedRoot(ctx, uciLocalRootID)
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, uciLocalApprovedRoot(), persistedRoot)
+	require.Equal(t, root, persistedRoot)
 
 	afterCrash, found, err := reopenedRegistry.Snapshot(ctx, checkout.CheckoutID)
 	require.NoError(t, err)
@@ -356,17 +497,19 @@ func openUCILocalRegistry(t *testing.T, path string) (*sql.DB, *codeintel.UCILoc
 func registerUCILocalCheckout(t *testing.T, registry *codeintel.UCILocalRegistry) codeintel.UCILocalCheckoutRecord {
 	t.Helper()
 	ctx := context.Background()
-	require.NoError(t, registry.RecordApprovedRoot(ctx, uciLocalApprovedRoot()))
+	require.NoError(t, registry.RecordApprovedRoot(ctx, uciLocalApprovedRoot(t)))
 	checkout, err := registry.RegisterCheckout(ctx, uciLocalRegistration(uciLocalCheckoutID))
 	require.NoError(t, err)
 	return checkout
 }
 
-func uciLocalApprovedRoot() codeintel.UCILocalApprovedRoot {
+func uciLocalApprovedRoot(t *testing.T) codeintel.UCILocalApprovedRoot {
+	t.Helper()
 	return codeintel.UCILocalApprovedRoot{
 		RootID:                  uciLocalRootID,
 		SourceID:                uciLocalSourceID,
 		CommonGitDirFingerprint: uciLocalCommonGitDir,
+		RootPath:                t.TempDir(),
 	}
 }
 
@@ -375,6 +518,7 @@ func uciLocalRegistration(checkoutID string) codeintel.UCILocalCheckoutRegistrat
 		RootID:                   uciLocalRootID,
 		SourceID:                 uciLocalSourceID,
 		CheckoutID:               checkoutID,
+		IncarnationID:            uciLocalIncarnationA,
 		CommonGitDirFingerprint:  uciLocalCommonGitDir,
 		PrivateGitDirFingerprint: uciLocalPrivateGit,
 		WorkstationID:            uciLocalWorkstation,
@@ -413,14 +557,17 @@ func assertUCILocalRegistryNarrowSurface(t *testing.T, db *sql.DB) {
 		require.Falsef(t, found, "local operational state must not expose %s", forbiddenMethod)
 	}
 
+	rootEvidence := reflect.TypeOf(codeintel.UCILocalApprovedRoot{})
+	_, found := rootEvidence.FieldByName("RootPath")
+	require.True(t, found, "only approved-root evidence may retain its local root path")
 	for _, operationalType := range []reflect.Type{
-		reflect.TypeOf(codeintel.UCILocalApprovedRoot{}),
 		reflect.TypeOf(codeintel.UCILocalCheckoutRegistration{}),
-		reflect.TypeOf(codeintel.UCILocalContinuityEvidence{}),
 		reflect.TypeOf(codeintel.UCILocalCheckoutRecord{}),
 		reflect.TypeOf(codeintel.UCILocalDirtyChange{}),
 		reflect.TypeOf(codeintel.UCILocalOfflineRecovery{}),
 	} {
+		_, found := operationalType.FieldByName("RootPath")
+		require.Falsef(t, found, "%s must not expose its local root path", operationalType.Name())
 		for _, forbiddenField := range []string{"Token", "AccessToken", "SourceBody", "PrivateSourceBody", "RawSource", "ContentBody"} {
 			_, found := operationalType.FieldByName(forbiddenField)
 			require.Falsef(t, found, "%s must not retain %s", operationalType.Name(), forbiddenField)
@@ -447,4 +594,105 @@ func uciLocalRegistrySchema(t *testing.T, db *sql.DB) string {
 	}
 	require.NoError(t, rows.Err())
 	return strings.Join(statements, "\n")
+}
+
+func seedUCILocalRegistryV1(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, statement := range []string{
+		`CREATE TABLE uci_local_registry_schema (
+			singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+			version INTEGER NOT NULL
+		)`,
+		`CREATE TABLE uci_local_approved_roots (
+			root_id TEXT PRIMARY KEY,
+			server_source_id TEXT NOT NULL,
+			common_git_dir_fingerprint TEXT NOT NULL
+		)`,
+		`CREATE TABLE uci_local_checkouts (
+			server_checkout_id TEXT PRIMARY KEY,
+			root_id TEXT NOT NULL,
+			server_source_id TEXT NOT NULL,
+			common_git_dir_fingerprint TEXT NOT NULL,
+			private_git_dir_fingerprint TEXT NOT NULL,
+			workstation_id TEXT NOT NULL,
+			client_instance_id TEXT NOT NULL,
+			incarnation_id TEXT NOT NULL,
+			dirty_sequence INTEGER NOT NULL DEFAULT 0 CHECK (dirty_sequence >= 0),
+			last_reconciled_sequence INTEGER NOT NULL DEFAULT 0 CHECK (last_reconciled_sequence >= 0),
+			rescan_required INTEGER NOT NULL DEFAULT 0 CHECK (rescan_required IN (0, 1)),
+			FOREIGN KEY (root_id) REFERENCES uci_local_approved_roots(root_id)
+		)`,
+		`CREATE TABLE uci_local_dirty_paths (
+			server_checkout_id TEXT NOT NULL,
+			relative_path TEXT NOT NULL,
+			sequence INTEGER NOT NULL CHECK (sequence > 0),
+			PRIMARY KEY (server_checkout_id, relative_path),
+			FOREIGN KEY (server_checkout_id) REFERENCES uci_local_checkouts(server_checkout_id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE uci_local_rescan_causes (
+			server_checkout_id TEXT NOT NULL,
+			cause TEXT NOT NULL,
+			PRIMARY KEY (server_checkout_id, cause),
+			FOREIGN KEY (server_checkout_id) REFERENCES uci_local_checkouts(server_checkout_id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE uci_local_offline_recovery (
+			server_checkout_id TEXT PRIMARY KEY,
+			from_sequence INTEGER NOT NULL CHECK (from_sequence >= 0),
+			through_sequence INTEGER NOT NULL CHECK (through_sequence >= from_sequence),
+			max_dirty_paths INTEGER NOT NULL CHECK (max_dirty_paths > 0),
+			observed_dirty_paths INTEGER NOT NULL CHECK (observed_dirty_paths >= 0),
+			FOREIGN KEY (server_checkout_id) REFERENCES uci_local_checkouts(server_checkout_id) ON DELETE CASCADE
+		)`,
+	} {
+		_, err := db.Exec(statement)
+		require.NoError(t, err)
+	}
+	_, err := db.Exec(`INSERT INTO uci_local_registry_schema (singleton, version) VALUES (1, 1)`)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO uci_local_approved_roots (
+			root_id, server_source_id, common_git_dir_fingerprint
+		) VALUES (?, ?, ?)`,
+		uciLocalRootID,
+		uciLocalSourceID,
+		uciLocalCommonGitDir,
+	)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO uci_local_checkouts (
+			server_checkout_id,
+			root_id,
+			server_source_id,
+			common_git_dir_fingerprint,
+			private_git_dir_fingerprint,
+			workstation_id,
+			client_instance_id,
+			incarnation_id,
+			dirty_sequence,
+			last_reconciled_sequence,
+			rescan_required
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 4, 2, 1)`,
+		uciLocalCheckoutID,
+		uciLocalRootID,
+		uciLocalSourceID,
+		uciLocalCommonGitDir,
+		uciLocalPrivateGit,
+		uciLocalWorkstation,
+		uciLocalClient,
+		uciLocalIncarnationA,
+	)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO uci_local_dirty_paths (server_checkout_id, relative_path, sequence)
+		VALUES (?, ?, ?)`, uciLocalCheckoutID, "internal/legacy.go", 4)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO uci_local_rescan_causes (server_checkout_id, cause)
+		VALUES (?, ?)`, uciLocalCheckoutID, codeintel.UCILocalRescanRestart)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO uci_local_offline_recovery (
+			server_checkout_id, from_sequence, through_sequence, max_dirty_paths, observed_dirty_paths
+		) VALUES (?, ?, ?, ?, ?)`, uciLocalCheckoutID, 5, 5, 2, 1)
+	require.NoError(t, err)
 }
