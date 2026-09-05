@@ -69,7 +69,13 @@ Source/checkout/view, detected HEAD/ref и observed watermark; watch mode/last s
     "generation": 18,
     "profile_id": "44444444-4444-4444-8444-444444444444"
   }],
-  "freshness": {"state": "observed_current", "method": "watch_watermark", "pending_changes": 0},
+  "freshness": {
+    "state": "observed_current",
+    "method": "watch_watermark",
+    "pending_changes": 0,
+    "enrichment_watermark": {"sequence": 18, "state": "current"},
+    "barrier": null
+  },
   "retrieval": {"mode": "hybrid", "vector_coverage": 0.94, "degradation_reasons": []},
   "coverage": {"structural": "partial", "unresolved_sites": 3, "unsupported_files": 0},
   "items": [],
@@ -86,7 +92,8 @@ Coverage=complete означает полноту поддержанного ext
 ## Свежесть и наблюдение
 
 `observed_current` — обработаны все известные события до watermark при работоспособном watcher; не гарантия отсутствия неизвестной внешней записи после него. `after_barrier` покрывает указанные paths/hashes до server ACK, либо возвращает timeout/stale.
-`pinned_view` намеренно исторический и остаётся consistent, но не current. Barrier scope и deadline видны в result. Server-only клиент не может подтвердить новые локальные bytes без daemon.
+`freshness.enrichment_watermark` содержит ограниченные `sequence` и `state` выбранного View. Он не содержит path, hash, absolute private locator или secret. `freshness.barrier` равен `null`, когда read-your-save barrier не применим. В противном случае он содержит только тип scope, число paths, `deadline_ms` и `state`.
+`pinned_view` намеренно исторический и остаётся consistent, но не current. Server-only клиент не может подтвердить новые локальные bytes без daemon.
 Во время catch-up default выдаёт последний coherent view с `status=stale` и причиной. `require fresh` не должен бесконечно ждать: bounded wait, затем typed result. Нельзя тихо переключиться на другой checkout ради более свежих результатов.
 
 ## Ошибки

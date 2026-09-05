@@ -1,17 +1,26 @@
 {
-  "status": "PASS_DOCUMENT_CONTRACT_CHECKS_ONLY",
+  "status": "PASS",
   "date": "2026-09-05",
-  "schema_examples_validated": 3,
-  "document_json_blocks_parsed": 3,
-  "acceptance_cases_defined": 40,
+  "validated_at": "2026-09-05T03:31:28Z",
+  "schema_examples_expected": 4,
+  "document_json_blocks_expected": 3,
+  "acceptance_cases_expected": 41,
   "runtime_tests_executed": false,
   "production_modified": false,
   "source_implementation_modified": false,
+  "evidence": {
+    "json_syntax": "PASS 4/4",
+    "schema_examples": "PASS 4/4",
+    "scenario_milestones": "PASS 41/41",
+    "requirements_checklist": "PASS 16/16"
+  },
   "checks": [
-    "closed JSON schema and positive examples",
+    "closed JSON schema and four response examples",
+    "enrichment watermark and applicable barrier scope, deadline, and state",
     "reference/source/view membership in examples",
     "valid span and relative path examples",
     "unique acceptance identifiers",
+    "UCI-1 milestone selection includes U25, U29, U36, and U39",
     "internal document references"
   ]
 }

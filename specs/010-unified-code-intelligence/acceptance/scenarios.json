@@ -220,11 +220,11 @@
     },
     {
       "id": "U25",
-      "milestone": "UCI-2",
+      "milestone": "UCI-1",
       "area": "graph",
-      "arrange": "TS aliases/re-exports; C# overload/partial; Python relative import",
+      "arrange": "TS aliases/re-exports",
       "action": "Extract/query",
-      "expected": "Declared resolver semantics and explicit unresolved cases",
+      "expected": "Declared TS resolver semantics and explicit unresolved cases",
       "runtime_result": "not_run"
     },
     {
@@ -256,7 +256,7 @@
     },
     {
       "id": "U29",
-      "milestone": "UCI-2",
+      "milestone": "UCI-1",
       "area": "graph",
       "arrange": "Dense/cyclic graph exceeds budgets",
       "action": "Path/impact",
@@ -319,8 +319,8 @@
     },
     {
       "id": "U36",
-      "milestone": "UCI-3",
-      "area": "migration",
+      "milestone": "UCI-1",
+      "area": "context",
       "arrange": "Legacy client without cwd and two possible checkout",
       "action": "Search/mutate",
       "expected": "CONTEXT_REQUIRED, not arbitrary main/latest",
@@ -346,7 +346,7 @@
     },
     {
       "id": "U39",
-      "milestone": "UCI-2",
+      "milestone": "UCI-1",
       "area": "git",
       "arrange": "Submodule/nested .agent repository",
       "action": "Parent index",
@@ -360,6 +360,15 @@
       "arrange": "Post-save exact path barrier",
       "action": "Bounded wait then query",
       "expected": "Satisfy required hashes/seq or typed stale/timeout",
+      "runtime_result": "not_run"
+    },
+    {
+      "id": "U41",
+      "milestone": "UCI-2",
+      "area": "graph",
+      "arrange": "C# overload/partial; Python relative import",
+      "action": "Extract/query",
+      "expected": "Declared resolver semantics and explicit unresolved cases",
       "runtime_result": "not_run"
     }
   ]
