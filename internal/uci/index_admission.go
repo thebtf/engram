@@ -127,14 +127,16 @@ type IndexAdmissionDefinition struct {
 }
 
 // IndexAdmissionReference is a normalized, source-grounded reference site.
+// OwnerSymbolKey, when present, names its artifact-local caller definition;
 // RawTarget must be exactly the artifact body slice named by Span.
 type IndexAdmissionReference struct {
-	SiteKey   string        `json:"site_key"`
-	Kind      string        `json:"kind"`
-	SymbolKey string        `json:"symbol_key"`
-	RawTarget string        `json:"raw_target"`
-	Relation  IndexRelation `json:"relation"`
-	Span      IndexSpan     `json:"span"`
+	SiteKey        string        `json:"site_key"`
+	Kind           string        `json:"kind"`
+	SymbolKey      string        `json:"symbol_key"`
+	OwnerSymbolKey *string       `json:"owner_symbol_key"`
+	RawTarget      string        `json:"raw_target"`
+	Relation       IndexRelation `json:"relation"`
+	Span           IndexSpan     `json:"span"`
 }
 
 // IndexAdmissionChunk is a searchable excerpt that must exactly match Body at
@@ -671,12 +673,13 @@ func NewIndexAdmissionArtifactFromGo(sourceID string, profile IndexAdmissionArti
 			return IndexAdmissionArtifact{}, err
 		}
 		artifact.References = append(artifact.References, IndexAdmissionReference{
-			SiteKey:   indexAdmissionGoReferenceSiteKey(reference),
-			Kind:      reference.Kind,
-			SymbolKey: reference.SymbolKey,
-			RawTarget: rawTarget,
-			Relation:  relation,
-			Span:      reference.Span,
+			SiteKey:        indexAdmissionGoReferenceSiteKey(reference),
+			Kind:           reference.Kind,
+			SymbolKey:      reference.SymbolKey,
+			OwnerSymbolKey: indexAdmissionGoReferenceOwner(artifact.Definitions, reference.Span),
+			RawTarget:      rawTarget,
+			Relation:       relation,
+			Span:           reference.Span,
 		})
 	}
 	for ordinal, chunk := range extracted.Chunks {
@@ -885,6 +888,14 @@ func indexAdmissionCanonicalizeArtifact(artifact IndexAdmissionArtifact) (IndexA
 		}
 		if index > 0 && artifact.References[index-1].SiteKey == reference.SiteKey {
 			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: duplicate reference site key")
+		}
+		if reference.OwnerSymbolKey != nil {
+			if !indexAdmissionValidKey(*reference.OwnerSymbolKey) {
+				return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: invalid reference owner symbol")
+			}
+			if _, found := definitions[*reference.OwnerSymbolKey]; !found {
+				return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: reference owner symbol is not defined by artifact")
+			}
 		}
 		if err := indexAdmissionValidateSourceSpan(artifact.Body, lineStarts, reference.Span); err != nil {
 			return IndexAdmissionArtifact{}, err
@@ -1133,6 +1144,13 @@ func indexAdmissionValidateEdge(edge IndexAdmissionEdge, sourceArtifactID string
 	if !found || edge.Evidence.Span != reference.Span {
 		return fmt.Errorf("uci index admission: edge evidence is not bound to source reference")
 	}
+	if reference.OwnerSymbolKey == nil {
+		if edge.SourceSymbolKey != nil {
+			return fmt.Errorf("uci index admission: edge source symbol does not match reference owner")
+		}
+	} else if edge.SourceSymbolKey == nil || *edge.SourceSymbolKey != *reference.OwnerSymbolKey {
+		return fmt.Errorf("uci index admission: edge source symbol does not match reference owner")
+	}
 	if edge.ResolutionState != IndexResolutionState("resolved") {
 		return nil
 	}
@@ -1270,6 +1288,9 @@ func indexAdmissionCloneArtifacts(artifacts []IndexAdmissionArtifact) []IndexAdm
 		copy[index].References = append([]IndexAdmissionReference(nil), artifact.References...)
 		if artifact.References != nil && copy[index].References == nil {
 			copy[index].References = []IndexAdmissionReference{}
+		}
+		for referenceIndex := range copy[index].References {
+			copy[index].References[referenceIndex].OwnerSymbolKey = indexAdmissionCopyStringPointer(artifact.References[referenceIndex].OwnerSymbolKey)
 		}
 		copy[index].Chunks = append([]IndexAdmissionChunk(nil), artifact.Chunks...)
 		if artifact.Chunks != nil && copy[index].Chunks == nil {
@@ -1509,6 +1530,36 @@ func indexAdmissionReferenceByKey(references []IndexAdmissionReference, siteKey 
 		return IndexAdmissionReference{}, false
 	}
 	return references[index], true
+}
+
+func indexAdmissionGoReferenceOwner(definitions []IndexAdmissionDefinition, reference IndexSpan) *string {
+	var owner string
+	var ownerWidth int64
+	found := false
+	ambiguous := false
+	for _, definition := range definitions {
+		if definition.Kind != "function" && definition.Kind != "method" {
+			continue
+		}
+		if definition.Span.ByteStart > reference.ByteStart || reference.ByteEnd > definition.Span.ByteEnd {
+			continue
+		}
+		width := definition.Span.ByteEnd - definition.Span.ByteStart
+		if !found || width < ownerWidth {
+			owner = definition.LocalSymbolKey
+			ownerWidth = width
+			found = true
+			ambiguous = false
+			continue
+		}
+		if width == ownerWidth && definition.LocalSymbolKey != owner {
+			ambiguous = true
+		}
+	}
+	if !found || ambiguous {
+		return nil
+	}
+	return indexAdmissionStringPointer(owner)
 }
 
 func indexAdmissionGoReferenceRelation(kind string) (IndexRelation, error) {

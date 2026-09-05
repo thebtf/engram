@@ -43,22 +43,64 @@ func TestIndexAdmissionArtifactIdentityIsDeterministicAndSourceScoped(t *testing
 	}
 
 	frame := indexAdmissionTestFrame(t)
-	binding := IndexBinding{
-		Scope: IndexScope{
-			SourceID:      indexAdmissionTestSourceA,
-			CheckoutID:    indexAdmissionTestCheckout,
-			IncarnationID: indexAdmissionTestEpoch,
-		},
-		ProfileID:     indexAdmissionTestProfile,
-		LocalRootID:   "local-root",
-		WorkstationID: "workstation",
-	}
+	binding := indexAdmissionTestBinding()
 	if err := ValidateIndexAdmissionFrameForBinding(frame, binding); err != nil {
 		t.Fatalf("ValidateIndexAdmissionFrameForBinding() error = %v", err)
 	}
 	binding.Scope.SourceID = indexAdmissionTestSourceB
 	if err := ValidateIndexAdmissionFrameForBinding(frame, binding); err == nil {
 		t.Fatal("ValidateIndexAdmissionFrameForBinding() accepted an artifact under another Source")
+	}
+}
+
+func TestIndexAdmissionGoReferenceOwnersAreNarrowAndFactBound(t *testing.T) {
+	t.Parallel()
+	artifact := indexAdmissionTestArtifact(t, indexAdmissionTestSourceA, []byte(indexAdmissionTestGoSourceA()))
+	callIndex := -1
+	for index, reference := range artifact.References {
+		if reference.Kind == "import" {
+			if reference.OwnerSymbolKey != nil {
+				t.Fatalf("import owner = %q, want nil", *reference.OwnerSymbolKey)
+			}
+			continue
+		}
+		if reference.OwnerSymbolKey == nil || *reference.OwnerSymbolKey != "func:Run" {
+			t.Fatalf("reference %#v owner = %v, want func:Run", reference, reference.OwnerSymbolKey)
+		}
+		if reference.Kind == "call" {
+			callIndex = index
+		}
+	}
+	if callIndex < 0 {
+		t.Fatal("fixture has no Go call reference")
+	}
+	originalDigest, err := DigestIndexAdmissionArtifactFacts(artifact)
+	if err != nil {
+		t.Fatalf("DigestIndexAdmissionArtifactFacts() error = %v", err)
+	}
+	changed := artifact
+	changed.References = append([]IndexAdmissionReference(nil), artifact.References...)
+	packageOwner := "pkg:source"
+	changed.References[callIndex].OwnerSymbolKey = &packageOwner
+	changedDigest, err := DigestIndexAdmissionArtifactFacts(changed)
+	if err != nil {
+		t.Fatalf("DigestIndexAdmissionArtifactFacts(changed) error = %v", err)
+	}
+	if originalDigest == changedDigest {
+		t.Fatal("reference owner was omitted from canonical facts digest")
+	}
+
+	frame := indexAdmissionTestFrame(t)
+	unknownOwner := "func:missing"
+	frame.Artifacts[0].References[callIndex].OwnerSymbolKey = &unknownOwner
+	if err := ValidateIndexAdmissionFrame(frame); err == nil {
+		t.Fatal("ValidateIndexAdmissionFrame() accepted an undefined reference owner")
+	}
+
+	sourceFrame, targetFrame := indexAdmissionTestSplitFrames(t)
+	sourceFrame.EdgeReplacements[0].Edges[0].SourceSymbolKey = nil
+	if err := ValidateIndexAdmissionFrames([]IndexAdmissionFrame{sourceFrame, targetFrame}); err == nil {
+		t.Fatal("ValidateIndexAdmissionFrames() accepted edge caller that differs from reference owner")
 	}
 }
 
@@ -189,6 +231,7 @@ func TestIndexAdmissionRejectsCrossArtifactEdgeTarget(t *testing.T) {
 		Edges: []IndexAdmissionEdge{{
 			EdgeKey:          "source-to-target",
 			SourceArtifactID: source.ArtifactID,
+			SourceSymbolKey:  reference.OwnerSymbolKey,
 			Target: &IndexAdmissionEdgeTarget{
 				PathKey:    "target.go",
 				ArtifactID: source.ArtifactID,
@@ -332,6 +375,21 @@ func TestIndexAdmissionCloneDoesNotShareMutableState(t *testing.T) {
 	if *frame.Memberships[0].ArtifactID == cloneArtifactID {
 		t.Fatal("Clone() shares membership artifact pointer")
 	}
+	ownerIndex := -1
+	for index, reference := range clone.Artifacts[0].References {
+		if reference.OwnerSymbolKey != nil {
+			ownerIndex = index
+			break
+		}
+	}
+	if ownerIndex < 0 {
+		t.Fatal("fixture has no owned reference")
+	}
+	cloneOwner := "func:Changed"
+	*clone.Artifacts[0].References[ownerIndex].OwnerSymbolKey = cloneOwner
+	if *frame.Artifacts[0].References[ownerIndex].OwnerSymbolKey == cloneOwner {
+		t.Fatal("Clone() shares reference owner pointer")
+	}
 }
 
 func TestIndexAdmissionPublicationPartUsesDeterministicReferenceIDs(t *testing.T) {
@@ -344,6 +402,7 @@ func TestIndexAdmissionPublicationPartUsesDeterministicReferenceIDs(t *testing.T
 		Edges: []IndexAdmissionEdge{{
 			EdgeKey:          "self-reference",
 			SourceArtifactID: source.ArtifactID,
+			SourceSymbolKey:  reference.OwnerSymbolKey,
 			Relation:         reference.Relation,
 			EvidenceKind:     IndexEvidenceKind("extracted"),
 			ResolutionState:  IndexResolutionState("unresolved"),
@@ -426,6 +485,7 @@ func indexAdmissionTestSplitFrames(t *testing.T) (IndexAdmissionFrame, IndexAdmi
 		Edges: []IndexAdmissionEdge{{
 			EdgeKey:          "source-to-target",
 			SourceArtifactID: source.ArtifactID,
+			SourceSymbolKey:  reference.OwnerSymbolKey,
 			Target: &IndexAdmissionEdgeTarget{
 				PathKey:    "target.go",
 				ArtifactID: targetID,
