@@ -415,7 +415,7 @@ func (a *recordingAdvisor) Observe(_ context.Context, input ObserveInput) (Obser
 
 func fixtureHostBinding(t *testing.T) hostadvisor.HostBinding {
 	t.Helper()
-	profile, err := hostadvisor.NewOMPAdvisor1Profile(hostadvisor.OMPAdvisor1ProfileSpec{
+	profile, err := hostadvisor.NewOMPAdvisor2Profile(hostadvisor.OMPAdvisor1ProfileSpec{
 		HostVersion:             "1.0.0",
 		AdapterID:               "omp-adapter",
 		AdapterVersion:          "1.0.0",
@@ -427,7 +427,7 @@ func fixtureHostBinding(t *testing.T) hostadvisor.HostBinding {
 		BindingTTL:              time.Hour,
 	})
 	if err != nil {
-		t.Fatalf("NewOMPAdvisor1Profile() error = %v", err)
+		t.Fatalf("NewOMPAdvisor2Profile() error = %v", err)
 	}
 	registry, err := hostadvisor.NewRegistry(hostadvisor.RegistryConfig{
 		Profiles:    []hostadvisor.AcceptedProfile{profile},
@@ -528,7 +528,7 @@ func mustReceipt(t *testing.T, id string, integrity byte) ReceiptIdentity {
 
 func mustKnowledgeReference(t *testing.T, memoryID int64, version uint32, tier CandidateTier, digest byte) KnowledgeReference {
 	t.Helper()
-	reference, err := NewKnowledgeReference(memoryID, version, tier, testBytes(digest))
+	reference, err := NewKnowledgeReference(memoryID, version, "00000000-0000-4000-8000-000000000001", tier, testBytes(digest))
 	if err != nil {
 		t.Fatalf("NewKnowledgeReference() error = %v", err)
 	}

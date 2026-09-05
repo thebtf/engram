@@ -61,6 +61,46 @@ func TestInterventionReceiptStoreLookupAndCommit(t *testing.T) {
 	require.Equal(t, trustedCommitted.PersistenceRecord(), trustedFound.PersistenceRecord())
 }
 
+func TestInterventionReceiptStoreRoundTripsContextReferenceSelection(t *testing.T) {
+	db, _ := openInterventionReceiptMigrationTestDB(t)
+	store := NewInterventionReceiptStore(db)
+	fixture := newInterventionReceiptStoreFixture(t)
+	axis := fixture.axis(t)
+	createdAt := time.Now().UTC().Truncate(time.Microsecond)
+	ctx, cancel := context.WithDeadline(context.Background(), createdAt.Add(time.Minute))
+	defer cancel()
+	reference, err := taskmemory.NewAuthorizedCandidateRef(91, 3, taskmemory.CandidateExact)
+	require.NoError(t, err)
+	materialized, err := taskmemory.NewMaterializedCandidate(reference, fixture.canonicalProject, "Use the immutable retry receipt.")
+	require.NoError(t, err)
+	receipt, err := intervention.NewContextReferenceReceipt(ctx, fixture.epoch, axis, uuid.NewString(), uuid.NewString(), createdAt, materialized, 1)
+	require.NoError(t, err)
+
+	committed, inserted, err := store.Commit(context.Background(), receipt)
+	require.NoError(t, err)
+	require.True(t, inserted)
+	require.True(t, committed.Verify(fixture.epoch))
+	record := committed.PersistenceRecord()
+	require.Equal(t, intervention.ReceiptDecisionModeContextReference, record.DecisionMode)
+	require.EqualValues(t, 0, record.EligibleCount)
+	require.NotNil(t, record.Selection)
+	memoryID, memoryVersion, sourceProject, sourceTier, textDigest, ok := record.Selection.ContextReference()
+	require.True(t, ok)
+	require.EqualValues(t, reference.ID(), memoryID)
+	require.EqualValues(t, reference.Version(), memoryVersion)
+	require.Equal(t, fixture.canonicalProject, sourceProject)
+	require.Equal(t, intervention.CandidateTierExact, sourceTier)
+	require.Equal(t, intervention.Digest(materialized.TextDigest()), textDigest)
+	_, _, _, _, _, _, learned := record.Selection.LearnedIntervention()
+	require.False(t, learned, "context receipts must not rehydrate learned-policy fields")
+
+	found, exists, err := store.Lookup(context.Background(), axis)
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.Equal(t, record, found.PersistenceRecord())
+	require.True(t, found.Verify(fixture.epoch))
+}
+
 func TestInterventionReceiptStoreRejectsRestoredReceiptsBeforeSQL(t *testing.T) {
 	db, _ := openInterventionReceiptMigrationTestDB(t)
 	store := NewInterventionReceiptStore(db)

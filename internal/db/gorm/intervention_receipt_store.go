@@ -37,6 +37,8 @@ const interventionReceiptColumns = `
 	snapshot_refs,
 	selected_memory_id,
 	selected_memory_version,
+	selected_source_project,
+	selected_source_tier,
 	selected_policy_id,
 	selected_snapshot_id,
 	selected_snapshot_version,
@@ -56,7 +58,7 @@ const interventionReceiptLookupSQL = `
 
 const interventionReceiptInsertSQL = `
 	INSERT INTO task_memory_intervention_receipts (` + interventionReceiptColumns + `)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT ON CONSTRAINT task_memory_intervention_receipts_occurrence_unique DO NOTHING
 	RETURNING ` + interventionReceiptColumns
 
@@ -345,6 +347,8 @@ type interventionReceiptRow struct {
 	SnapshotRefs                 []byte         `gorm:"column:snapshot_refs"`
 	SelectedMemoryID             sql.NullInt64  `gorm:"column:selected_memory_id"`
 	SelectedMemoryVersion        sql.NullInt64  `gorm:"column:selected_memory_version"`
+	SelectedSourceProject        sql.NullString `gorm:"column:selected_source_project"`
+	SelectedSourceTier           sql.NullInt64  `gorm:"column:selected_source_tier"`
 	SelectedPolicyID             []byte         `gorm:"column:selected_policy_id"`
 	SelectedSnapshotID           sql.NullString `gorm:"column:selected_snapshot_id"`
 	SelectedSnapshotVersion      sql.NullInt64  `gorm:"column:selected_snapshot_version"`
@@ -397,14 +401,34 @@ func interventionReceiptRowFromRecord(record intervention.ReceiptPersistenceReco
 		}
 		row.ClosedReason = sql.NullString{String: closedReason, Valid: true}
 	}
-	if record.Selection != nil {
-		selection := *record.Selection
-		row.SelectedMemoryID = sql.NullInt64{Int64: selection.MemoryID, Valid: true}
-		row.SelectedMemoryVersion = sql.NullInt64{Int64: int64(selection.MemoryVersion), Valid: true}
-		row.SelectedPolicyID = interventionReceiptDigestBytes(selection.PolicyID)
-		row.SelectedSnapshotID = sql.NullString{String: selection.SnapshotID, Valid: true}
-		row.SelectedSnapshotVersion = sql.NullInt64{Int64: selection.SnapshotVersion, Valid: true}
-		row.SelectedTextDigest = interventionReceiptDigestBytes(selection.TextDigest)
+	if record.Selection == nil {
+		return row, nil
+	}
+
+	switch record.DecisionMode {
+	case intervention.ReceiptDecisionModeContextReference:
+		memoryID, memoryVersion, sourceProject, sourceTier, textDigest, ok := record.Selection.ContextReference()
+		if !ok {
+			return interventionReceiptRow{}, fmt.Errorf("invalid context-reference selection: %w", intervention.ErrInvalidInput)
+		}
+		row.SelectedMemoryID = sql.NullInt64{Int64: memoryID, Valid: true}
+		row.SelectedMemoryVersion = sql.NullInt64{Int64: int64(memoryVersion), Valid: true}
+		row.SelectedSourceProject = sql.NullString{String: sourceProject, Valid: true}
+		row.SelectedSourceTier = sql.NullInt64{Int64: int64(sourceTier), Valid: true}
+		row.SelectedTextDigest = interventionReceiptDigestBytes([32]byte(textDigest))
+	case intervention.ReceiptDecisionModeEligible, intervention.ReceiptDecisionModeCanary:
+		memoryID, memoryVersion, policyID, snapshotID, snapshotVersion, textDigest, ok := record.Selection.LearnedIntervention()
+		if !ok {
+			return interventionReceiptRow{}, fmt.Errorf("invalid learned-intervention selection: %w", intervention.ErrInvalidInput)
+		}
+		row.SelectedMemoryID = sql.NullInt64{Int64: memoryID, Valid: true}
+		row.SelectedMemoryVersion = sql.NullInt64{Int64: int64(memoryVersion), Valid: true}
+		row.SelectedPolicyID = interventionReceiptDigestBytes([32]byte(policyID))
+		row.SelectedSnapshotID = sql.NullString{String: snapshotID, Valid: true}
+		row.SelectedSnapshotVersion = sql.NullInt64{Int64: snapshotVersion, Valid: true}
+		row.SelectedTextDigest = interventionReceiptDigestBytes([32]byte(textDigest))
+	default:
+		return interventionReceiptRow{}, fmt.Errorf("invalid intervention receipt selected decision mode: %w", intervention.ErrInvalidInput)
 	}
 	return row, nil
 }
@@ -462,17 +486,18 @@ func (row interventionReceiptRow) receipt() (intervention.Receipt, error) {
 
 	selectionPresent := row.SelectedMemoryID.Valid ||
 		row.SelectedMemoryVersion.Valid ||
+		row.SelectedSourceProject.Valid ||
+		row.SelectedSourceTier.Valid ||
 		row.SelectedPolicyID != nil ||
 		row.SelectedSnapshotID.Valid ||
 		row.SelectedSnapshotVersion.Valid ||
 		row.SelectedTextDigest != nil
 	var selection *intervention.ReceiptSelectionRecord
 	if selectionPresent {
-		if !row.SelectedMemoryID.Valid || !row.SelectedMemoryVersion.Valid || row.SelectedPolicyID == nil ||
-			!row.SelectedSnapshotID.Valid || !row.SelectedSnapshotVersion.Valid || row.SelectedTextDigest == nil {
+		if !row.SelectedMemoryID.Valid || !row.SelectedMemoryVersion.Valid || row.SelectedTextDigest == nil {
 			return intervention.Receipt{}, fmt.Errorf("persisted intervention receipt has a partial selected reference")
 		}
-		policyID, err := interventionReceiptDigestFromBytes("selected_policy_id", row.SelectedPolicyID)
+		memoryVersion, err := interventionReceiptMemoryVersion(row.SelectedMemoryVersion.Int64)
 		if err != nil {
 			return intervention.Receipt{}, err
 		}
@@ -480,14 +505,43 @@ func (row interventionReceiptRow) receipt() (intervention.Receipt, error) {
 		if err != nil {
 			return intervention.Receipt{}, err
 		}
-		selection = &intervention.ReceiptSelectionRecord{
-			MemoryID:        row.SelectedMemoryID.Int64,
-			MemoryVersion:   int(row.SelectedMemoryVersion.Int64),
-			PolicyID:        policyID,
-			SnapshotID:      row.SelectedSnapshotID.String,
-			SnapshotVersion: row.SelectedSnapshotVersion.Int64,
-			TextDigest:      textDigest,
+
+		var parsed intervention.ReceiptSelectionRecord
+		switch decisionMode {
+		case intervention.ReceiptDecisionModeContextReference:
+			if !row.SelectedSourceProject.Valid || !row.SelectedSourceTier.Valid || row.SelectedPolicyID != nil || row.SelectedSnapshotID.Valid || row.SelectedSnapshotVersion.Valid {
+				return intervention.Receipt{}, fmt.Errorf("persisted context reference receipt has a mixed selected reference")
+			}
+			parsed, err = intervention.NewContextReferenceReceiptSelection(
+				row.SelectedMemoryID.Int64,
+				memoryVersion,
+				row.SelectedSourceProject.String,
+				intervention.CandidateTier(row.SelectedSourceTier.Int64),
+				intervention.Digest(textDigest),
+			)
+		case intervention.ReceiptDecisionModeEligible, intervention.ReceiptDecisionModeCanary:
+			if row.SelectedSourceProject.Valid || row.SelectedSourceTier.Valid || row.SelectedPolicyID == nil || !row.SelectedSnapshotID.Valid || !row.SelectedSnapshotVersion.Valid {
+				return intervention.Receipt{}, fmt.Errorf("persisted learned intervention receipt has a mixed selected reference")
+			}
+			policyID, err := interventionReceiptDigestFromBytes("selected_policy_id", row.SelectedPolicyID)
+			if err != nil {
+				return intervention.Receipt{}, err
+			}
+			parsed, err = intervention.NewLearnedInterventionReceiptSelection(
+				row.SelectedMemoryID.Int64,
+				memoryVersion,
+				intervention.Digest(policyID),
+				row.SelectedSnapshotID.String,
+				row.SelectedSnapshotVersion.Int64,
+				intervention.Digest(textDigest),
+			)
+		default:
+			return intervention.Receipt{}, fmt.Errorf("persisted intervention receipt has a selected reference for a non-emitted mode")
 		}
+		if err != nil {
+			return intervention.Receipt{}, fmt.Errorf("restore persisted intervention receipt selection: %w", err)
+		}
+		selection = &parsed
 	}
 
 	return intervention.RestoreUnverifiedReceipt(intervention.ReceiptPersistenceRecord{
@@ -517,6 +571,13 @@ func (row interventionReceiptRow) receipt() (intervention.Receipt, error) {
 	})
 }
 
+func interventionReceiptMemoryVersion(value int64) (int, error) {
+	if value < 1 || value > int64(^uint(0)>>1) {
+		return 0, fmt.Errorf("persisted intervention receipt has an invalid selected memory version")
+	}
+	return int(value), nil
+}
+
 func (row interventionReceiptRow) insertArguments() []any {
 	var closedReason any
 	if row.ClosedReason.Valid {
@@ -529,6 +590,14 @@ func (row interventionReceiptRow) insertArguments() []any {
 	var selectedMemoryVersion any
 	if row.SelectedMemoryVersion.Valid {
 		selectedMemoryVersion = row.SelectedMemoryVersion.Int64
+	}
+	var selectedSourceProject any
+	if row.SelectedSourceProject.Valid {
+		selectedSourceProject = row.SelectedSourceProject.String
+	}
+	var selectedSourceTier any
+	if row.SelectedSourceTier.Valid {
+		selectedSourceTier = row.SelectedSourceTier.Int64
 	}
 	var selectedPolicyID any
 	if row.SelectedPolicyID != nil {
@@ -569,6 +638,8 @@ func (row interventionReceiptRow) insertArguments() []any {
 		string(row.SnapshotRefs),
 		selectedMemoryID,
 		selectedMemoryVersion,
+		selectedSourceProject,
+		selectedSourceTier,
 		selectedPolicyID,
 		selectedSnapshotID,
 		selectedSnapshotVersion,
@@ -600,7 +671,7 @@ func interventionReceiptDigestBytes(value [32]byte) []byte {
 
 func interventionReceiptCanonicalUUID(value string) bool {
 	parsed, err := uuid.Parse(value)
-	return err == nil && parsed.String() == value
+	return err == nil && parsed != uuid.Nil && parsed.String() == value
 }
 
 func interventionReceiptOpaqueText(value string) bool {
@@ -686,6 +757,8 @@ func interventionReceiptDecisionModeText(mode intervention.ReceiptDecisionMode) 
 		return "canary", nil
 	case intervention.ReceiptDecisionModeNone:
 		return "none", nil
+	case intervention.ReceiptDecisionModeContextReference:
+		return "context_reference", nil
 	default:
 		return "", fmt.Errorf("invalid intervention receipt decision mode: %w", intervention.ErrInvalidInput)
 	}
@@ -699,6 +772,8 @@ func interventionReceiptDecisionModeFromText(value string) (intervention.Receipt
 		return intervention.ReceiptDecisionModeCanary, nil
 	case "none":
 		return intervention.ReceiptDecisionModeNone, nil
+	case "context_reference":
+		return intervention.ReceiptDecisionModeContextReference, nil
 	default:
 		return 0, fmt.Errorf("persisted intervention receipt has invalid decision mode %q", value)
 	}

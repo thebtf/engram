@@ -699,6 +699,8 @@ func actionFromProto(action pb.HostAdvisorAction) (hostadvisor.Action, bool) {
 		return hostadvisor.ActionBlock, true
 	case pb.HostAdvisorAction_HOST_ADVISOR_ACTION_REWRITE:
 		return hostadvisor.ActionRewrite, true
+	case pb.HostAdvisorAction_HOST_ADVISOR_ACTION_EMIT_CONTEXT_REFERENCE:
+		return hostadvisor.ActionEmitContextReference, true
 	default:
 		return hostadvisor.ActionUnspecified, false
 	}
@@ -772,6 +774,8 @@ func actionProto(action hostadvisor.Action) pb.HostAdvisorAction {
 		return pb.HostAdvisorAction_HOST_ADVISOR_ACTION_BLOCK
 	case hostadvisor.ActionRewrite:
 		return pb.HostAdvisorAction_HOST_ADVISOR_ACTION_REWRITE
+	case hostadvisor.ActionEmitContextReference:
+		return pb.HostAdvisorAction_HOST_ADVISOR_ACTION_EMIT_CONTEXT_REFERENCE
 	default:
 		return pb.HostAdvisorAction_HOST_ADVISOR_ACTION_UNSPECIFIED
 	}
@@ -895,6 +899,7 @@ func hostAdvisorPacketProto(packet intervention.Packet) (*pb.HostAdvisorPacket, 
 			MemoryVersion: knowledge.MemoryVersion(),
 			SourceTier:    tier,
 			TextSha256:    knowledge.TextDigest().Bytes(),
+			SourceProject: knowledge.SourceProject(),
 		},
 		Presentation: &pb.HostAdvisorPresentation{
 			InjectionMode: injectionMode,

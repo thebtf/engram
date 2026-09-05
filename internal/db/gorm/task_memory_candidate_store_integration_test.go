@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"math"
 	"sort"
@@ -800,6 +801,43 @@ func taskMemoryPublicSchemaCount(t *testing.T, db *gormlib.DB) int {
 		  AND c.relname LIKE 'task_memory%'
 	`).Scan(&count).Error)
 	return count
+}
+
+func TestTaskMemoryCandidateStoreMaterializeRevalidatesExactReferenceAndAccess(t *testing.T) {
+	db, cleanup := taskMemoryFixtureDB(t)
+	defer cleanup()
+
+	secret := "abc123def456ghi789jkl012mno345pqr678"
+	content := "Register the retry callback before the first action. api_key=" + secret
+	allowed := taskMemoryAllowedFixtures("materialize", content, 4501, 1, time.Now().UTC().Add(-time.Minute))
+	denied := taskMemoryDeniedFixtures("materialize", content, 4601, time.Now().UTC().Add(-time.Minute))
+	taskMemorySeedFixtures(t, db, append(allowed, denied...))
+
+	store := NewTaskMemoryCandidateStore(&Store{DB: db})
+	authority := taskMemoryTestContext(t)
+	reference, err := taskmemory.NewAuthorizedCandidateRef(allowed[0].ID, allowed[0].Version, taskmemory.CandidateExact)
+	require.NoError(t, err)
+	materialized, found, err := store.Materialize(context.Background(), authority, reference)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, reference, materialized.Reference())
+	require.Equal(t, taskMemoryTestProject, materialized.SourceProject())
+	expectedDigest := sha256.Sum256([]byte(content))
+	require.Equal(t, expectedDigest, materialized.TextDigest())
+	require.NotContains(t, materialized.Excerpt(), secret)
+	require.Contains(t, materialized.Excerpt(), "[REDACTED:")
+
+	stale, err := taskmemory.NewAuthorizedCandidateRef(allowed[0].ID, allowed[0].Version+1, taskmemory.CandidateExact)
+	require.NoError(t, err)
+	_, found, err = store.Materialize(context.Background(), authority, stale)
+	require.NoError(t, err)
+	require.False(t, found, "version drift must be indistinguishable from absence")
+
+	deniedReference, err := taskmemory.NewAuthorizedCandidateRef(denied[1].ID, denied[1].Version, taskmemory.CandidateFTS)
+	require.NoError(t, err)
+	_, found, err = store.Materialize(context.Background(), authority, deniedReference)
+	require.NoError(t, err)
+	require.False(t, found, "ACL loss must be indistinguishable from absence")
 }
 
 func TestTaskMemoryCandidateStore_ReadsCreateNoTaskMemorySchemaOrWrites(t *testing.T) {

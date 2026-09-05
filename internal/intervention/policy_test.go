@@ -262,7 +262,7 @@ func TestPolicyCompilerProducesClosedInsufficientDescriptors(t *testing.T) {
 		want    PolicyInsufficiencyReason
 	}{
 		{name: "oversized", content: strings.Repeat("a", maxPolicySourceBytes+1), want: PolicyInsufficiencySourceOversized},
-		{name: "line oversized", content: strings.Repeat("a", MaxPresentationBytes+1), want: PolicyInsufficiencyLineOversized},
+		{name: "line oversized", content: strings.Repeat("a", MaxPolicyLiteralBytes+1), want: PolicyInsufficiencyLineOversized},
 		{name: "secret", content: "api_key=" + strings.Repeat("a", 36), want: PolicyInsufficiencyContainsSecret},
 		{name: "redaction", content: "blocked safe text", rules: redactionRules, want: PolicyInsufficiencyRedactionMatch},
 		{name: "empty line", content: "   ", want: PolicyInsufficiencyNoSafeLine},

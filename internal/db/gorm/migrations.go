@@ -5063,6 +5063,100 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 			},
 			Rollback: rollbackInterventionPolicyMigration169,
 		},
+		// Migration 170 intentionally remains an inline gormigrate literal. migrationmeta
+		// reads Migrate bodies in this file to derive the live data model.
+		{
+			ID: "170_task_memory_context_reference_receipts",
+			Migrate: func(tx *gorm.DB) error {
+				for _, stmt := range []string{
+					`ALTER TABLE task_memory_intervention_receipts
+						ADD COLUMN IF NOT EXISTS selected_source_project UUID`,
+					`ALTER TABLE task_memory_intervention_receipts
+						ADD COLUMN IF NOT EXISTS selected_source_tier SMALLINT`,
+					`ALTER TABLE task_memory_intervention_receipts
+						DROP CONSTRAINT IF EXISTS task_memory_intervention_receipts_selected_source`,
+					`ALTER TABLE task_memory_intervention_receipts
+						ADD CONSTRAINT task_memory_intervention_receipts_selected_source
+						CHECK (
+							(selected_source_project IS NULL AND selected_source_tier IS NULL)
+							OR (
+								selected_source_project IS NOT NULL
+								AND selected_source_project <> '00000000-0000-0000-0000-000000000000'::uuid
+								AND selected_source_tier IN (1, 2, 3)
+							)
+						)`,
+					`ALTER TABLE task_memory_intervention_receipts
+						DROP CONSTRAINT IF EXISTS task_memory_intervention_receipts_outcome_shape`,
+					`ALTER TABLE task_memory_intervention_receipts
+						ADD CONSTRAINT task_memory_intervention_receipts_outcome_shape
+						CHECK (
+							(
+								outcome = 'emit'
+								AND closed_reason IS NULL
+								AND decision_mode IN ('eligible', 'canary')
+								AND selected_memory_id IS NOT NULL
+								AND selected_memory_version IS NOT NULL
+								AND selected_source_project IS NULL
+								AND selected_source_tier IS NULL
+								AND selected_policy_id IS NOT NULL
+								AND selected_snapshot_id IS NOT NULL
+								AND selected_snapshot_version IS NOT NULL
+								AND selected_text_digest IS NOT NULL
+							)
+							OR (
+								outcome = 'emit'
+								AND closed_reason IS NULL
+								AND decision_mode = 'context_reference'
+								AND evaluated_count BETWEEN 1 AND 8
+								AND eligible_count = 0
+								AND snapshot_refs = '[]'::jsonb
+								AND selected_memory_id IS NOT NULL
+								AND selected_memory_version BETWEEN 1 AND 4294967295
+								AND selected_source_project IS NOT NULL
+								AND selected_source_project = canonical_project
+								AND selected_source_tier IS NOT NULL
+								AND selected_policy_id IS NULL
+								AND selected_snapshot_id IS NULL
+								AND selected_snapshot_version IS NULL
+								AND selected_text_digest IS NOT NULL
+							)
+							OR (
+								outcome = 'abstain'
+								AND closed_reason IN (
+									'no_candidates',
+									'policy_observing',
+									'policy_shadow',
+									'policy_canary_budget',
+									'evidence_insufficient',
+									'harm_bound',
+									'policy_suppressed',
+									'task_fit',
+									'actionability',
+									'evidence_state',
+									'already_visible',
+									'context_budget',
+									'ambiguous_conflict'
+								)
+								AND decision_mode = 'none'
+								AND selected_memory_id IS NULL
+								AND selected_memory_version IS NULL
+								AND selected_source_project IS NULL
+								AND selected_source_tier IS NULL
+								AND selected_policy_id IS NULL
+								AND selected_snapshot_id IS NULL
+								AND selected_snapshot_version IS NULL
+								AND selected_text_digest IS NULL
+							)
+						)`,
+				} {
+					if err := tx.Exec(stmt).Error; err != nil {
+						return fmt.Errorf("migration 170: %w", err)
+					}
+				}
+				return nil
+			},
+			Rollback: rollbackInterventionContextReferenceMigration170,
+		},
 	})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("run gormigrate migrations: %w", err)
@@ -5113,6 +5207,80 @@ func rollbackInterventionPolicyMigration169(tx *gorm.DB) error {
 
 		if err := rollbackTx.Exec(`DROP TABLE IF EXISTS intervention_evidence_policies`).Error; err != nil {
 			return fmt.Errorf("migration 169 rollback: %w", err)
+		}
+		return nil
+	})
+}
+
+func rollbackInterventionContextReferenceMigration170(tx *gorm.DB) error {
+	return tx.Transaction(func(rollbackTx *gorm.DB) error {
+		if !rollbackTx.Migrator().HasTable("task_memory_intervention_receipts") {
+			return nil
+		}
+
+		var retainedRows int64
+		if err := rollbackTx.Table("task_memory_intervention_receipts").
+			Where("decision_mode = ?", "context_reference").
+			Count(&retainedRows).Error; err != nil {
+			return fmt.Errorf("migration 170 rollback preflight: %w", err)
+		}
+		if retainedRows > 0 {
+			return fmt.Errorf("migration 170 rollback blocked: %d retained context_reference task_memory_intervention_receipts rows", retainedRows)
+		}
+
+		for _, stmt := range []string{
+			`ALTER TABLE task_memory_intervention_receipts
+				DROP CONSTRAINT IF EXISTS task_memory_intervention_receipts_selected_source`,
+			`ALTER TABLE task_memory_intervention_receipts
+				DROP CONSTRAINT IF EXISTS task_memory_intervention_receipts_outcome_shape`,
+			`ALTER TABLE task_memory_intervention_receipts
+				ADD CONSTRAINT task_memory_intervention_receipts_outcome_shape
+				CHECK (
+					(
+						outcome = 'emit'
+						AND closed_reason IS NULL
+						AND decision_mode IN ('eligible', 'canary')
+						AND selected_memory_id IS NOT NULL
+						AND selected_memory_version IS NOT NULL
+						AND selected_policy_id IS NOT NULL
+						AND selected_snapshot_id IS NOT NULL
+						AND selected_snapshot_version IS NOT NULL
+						AND selected_text_digest IS NOT NULL
+					)
+					OR (
+						outcome = 'abstain'
+						AND closed_reason IN (
+							'no_candidates',
+							'policy_observing',
+							'policy_shadow',
+							'policy_canary_budget',
+							'evidence_insufficient',
+							'harm_bound',
+							'policy_suppressed',
+							'task_fit',
+							'actionability',
+							'evidence_state',
+							'already_visible',
+							'context_budget',
+							'ambiguous_conflict'
+						)
+						AND decision_mode = 'none'
+						AND selected_memory_id IS NULL
+						AND selected_memory_version IS NULL
+						AND selected_policy_id IS NULL
+						AND selected_snapshot_id IS NULL
+						AND selected_snapshot_version IS NULL
+						AND selected_text_digest IS NULL
+					)
+				)`,
+			`ALTER TABLE task_memory_intervention_receipts
+				DROP COLUMN IF EXISTS selected_source_tier`,
+			`ALTER TABLE task_memory_intervention_receipts
+				DROP COLUMN IF EXISTS selected_source_project`,
+		} {
+			if err := rollbackTx.Exec(stmt).Error; err != nil {
+				return fmt.Errorf("migration 170 rollback: %w", err)
+			}
 		}
 		return nil
 	})

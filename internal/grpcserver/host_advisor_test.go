@@ -87,7 +87,7 @@ func TestHostAdvisorInitializeAndBindShareAuthenticatedSubjectProof(t *testing.T
 		t.Fatalf("binding response = %#v", bound.GetBinding())
 	}
 	capabilities := bound.GetBinding().GetCapabilitySnapshot().GetCapabilities()
-	if len(capabilities) != 1 || len(capabilities[0].GetAllowedActions()) != 2 || capabilities[0].GetAllowedActions()[0] != pb.HostAdvisorAction_HOST_ADVISOR_ACTION_EMIT_ADVICE || capabilities[0].GetAllowedActions()[1] != pb.HostAdvisorAction_HOST_ADVISOR_ACTION_ADAPTER_ATTESTATION {
+	if len(capabilities) != 1 || len(capabilities[0].GetAllowedActions()) != 2 || capabilities[0].GetAllowedActions()[0] != pb.HostAdvisorAction_HOST_ADVISOR_ACTION_ADAPTER_ATTESTATION || capabilities[0].GetAllowedActions()[1] != pb.HostAdvisorAction_HOST_ADVISOR_ACTION_EMIT_CONTEXT_REFERENCE {
 		t.Fatalf("accepted capability = %#v", capabilities)
 	}
 }
@@ -274,6 +274,9 @@ func TestHostAdvisorDescriptorsStayOnOneServiceAndUseFinalEnvelopes(t *testing.T
 			t.Fatalf("Advise decision field %s = %#v", fieldName, field)
 		}
 	}
+	requireField("HostAdvisorKnowledgeReference", "memory_id", 1, protoreflect.Int64Kind)
+	requireField("HostAdvisorKnowledgeReference", "memory_version", 2, protoreflect.Uint32Kind)
+	requireField("HostAdvisorKnowledgeReference", "source_project", 5, protoreflect.StringKind)
 
 	requireField("HostAdvisorObserveRequest", "binding_id", 1, protoreflect.StringKind)
 	observe := file.Messages().ByName("HostAdvisorObserveRequest")
@@ -386,6 +389,31 @@ func TestHostAdvisorAdviseDelegatesFinalDecisionAndFailsClosed(t *testing.T) {
 	}
 	if advisor.adviseCalls != 1 {
 		t.Fatal("expired binding reached the advisor")
+	}
+}
+
+func TestHostAdvisorAdviseRefusesLegacyAdviceCapability(t *testing.T) {
+	clock := time.Now().UTC()
+	profile := grpcAdvisorLegacyProfileWithCallbackDeadline(t, 500*time.Millisecond)
+	server := &Server{handler: hostAdvisorMCPHandler{}}
+	server.SetHostAdvisorRegistry(grpcAdvisorRegistry(t, profile, &clock))
+	expiresAt := clock.Add(time.Hour)
+	ctx := auth.WithIdentity(context.Background(), auth.ClientWithPrincipalExpiry("read-write", "workstation-keycard", "agent/example", auth.PrincipalKindAgent, &expiresAt))
+	bound, err := server.Bind(ctx, &pb.HostAdvisorBindRequest{Hello: grpcAdvisorHello(profile, "runtime-one")})
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	server.SetInterventionAdvisor(&recordingInterventionAdvisor{advise: func(context.Context, intervention.AdviseInput) (intervention.Decision, error) {
+		t.Fatal("legacy capability reached the advisor")
+		return intervention.Decision{}, nil
+	}})
+
+	response, err := server.Advise(ctx, grpcAdvisorAdviseRequest(bound.GetBinding().GetBindingId()))
+	if err != nil {
+		t.Fatalf("Advise: %v", err)
+	}
+	if response.GetUnavailable() == nil || response.GetUnavailable().GetCode() != pb.HostAdvisorUnavailableCode_HOST_ADVISOR_UNAVAILABLE_CODE_CAPABILITY_UNAVAILABLE {
+		t.Fatalf("legacy capability response = %#v", response)
 	}
 }
 
@@ -633,7 +661,7 @@ func grpcAdvisorEmitDecision(t *testing.T, expiresAt time.Time) intervention.Dec
 	if err != nil {
 		t.Fatalf("NewReceiptIdentity: %v", err)
 	}
-	knowledge, err := intervention.NewKnowledgeReference(42, 3, intervention.CandidateTierExact, grpcAdvisorInterventionDigest(2))
+	knowledge, err := intervention.NewKnowledgeReference(42, 3, grpcV3ProjectKey, intervention.CandidateTierExact, grpcAdvisorInterventionDigest(2))
 	if err != nil {
 		t.Fatalf("NewKnowledgeReference: %v", err)
 	}
@@ -670,6 +698,25 @@ func grpcAdvisorProfile(t *testing.T) hostadvisor.AcceptedProfile {
 }
 
 func grpcAdvisorProfileWithCallbackDeadline(t *testing.T, callbackDeadline time.Duration) hostadvisor.AcceptedProfile {
+	t.Helper()
+	profile, err := hostadvisor.NewOMPAdvisor2Profile(hostadvisor.OMPAdvisor1ProfileSpec{
+		HostVersion:             "omp-1.0.0",
+		AdapterID:               "omp-adapter",
+		AdapterVersion:          "adapter-1.0.0",
+		InstalledArtifactDigest: grpcAdvisorDigest(1),
+		RuntimeProbeReceiptID:   "probe-receipt-one",
+		SnapshotID:              "snapshot-one",
+		SnapshotRevision:        1,
+		CallbackDeadline:        callbackDeadline,
+		BindingTTL:              time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("NewOMPAdvisor2Profile: %v", err)
+	}
+	return profile
+}
+
+func grpcAdvisorLegacyProfileWithCallbackDeadline(t *testing.T, callbackDeadline time.Duration) hostadvisor.AcceptedProfile {
 	t.Helper()
 	profile, err := hostadvisor.NewOMPAdvisor1Profile(hostadvisor.OMPAdvisor1ProfileSpec{
 		HostVersion:             "omp-1.0.0",
@@ -711,6 +758,8 @@ func grpcAdvisorHello(profile hostadvisor.AcceptedProfile, runtimeRef string) *p
 			actions[index] = pb.HostAdvisorAction_HOST_ADVISOR_ACTION_EMIT_ADVICE
 		case hostadvisor.ActionAdapterAttestation:
 			actions[index] = pb.HostAdvisorAction_HOST_ADVISOR_ACTION_ADAPTER_ATTESTATION
+		case hostadvisor.ActionEmitContextReference:
+			actions[index] = pb.HostAdvisorAction_HOST_ADVISOR_ACTION_EMIT_CONTEXT_REFERENCE
 		}
 	}
 	modes := make([]pb.HostAdvisorContextInjectionMode, len(capability.InjectionModes))

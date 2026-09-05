@@ -8,6 +8,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/thebtf/engram/internal/privacy"
@@ -19,10 +20,11 @@ import (
 )
 
 const (
-	MaxPreparedCandidates     = 8
-	MaxTaskQueryRunes         = 4096
-	PreparationRevision       = "task-memory-prepare/1"
-	maxQueryEmbeddingDuration = 600 * time.Millisecond
+	MaxPreparedCandidates       = 8
+	MaxTaskQueryRunes           = 4096
+	MaxMaterializedExcerptBytes = 768
+	PreparationRevision         = "task-memory-prepare/1"
+	maxQueryEmbeddingDuration   = 600 * time.Millisecond
 )
 
 // MaxCandidateLookups bounds pre-ranked exact references before authorization.
@@ -181,6 +183,11 @@ func (c AuthorizedTaskContext) valid() bool {
 	return c.canonicalProject != "" && c.resolvedScope != "" && c.correlation != "" && c.workstation.id != ""
 }
 
+// Valid reports whether this authority was produced by the task-memory boundary.
+func (c AuthorizedTaskContext) Valid() bool {
+	return c.valid()
+}
+
 // AuthorityResolver resolves V3 evidence into a scoped read authority.
 type AuthorityResolver interface {
 	ResolveTaskAuthority(context.Context, ProjectEvidenceV3) (AuthorizedTaskContext, error)
@@ -270,6 +277,141 @@ func (c AuthorizedCandidateRef) SourceTier() CandidateSourceTier {
 
 func (c AuthorizedCandidateRef) valid() bool {
 	return c.id > 0 && c.version > 0 && validCandidateTier(c.tier)
+}
+
+// Valid reports whether this exact candidate reference can cross a trusted read boundary.
+func (c AuthorizedCandidateRef) Valid() bool {
+	return c.valid()
+}
+
+// MaterializedCandidate is the sealed, body-free result of an exact authorized
+// candidate materialization. It retains only the source pointer, SHA-256 of the
+// exact stored text, and one safe bounded excerpt.
+type MaterializedCandidate struct {
+	reference     AuthorizedCandidateRef
+	sourceProject projectidentity.ProjectKeyV3
+	excerpt       string
+	textDigest    [sha256.Size]byte
+}
+
+// NewMaterializedCandidate derives a safe context-reference value from the
+// exact source text. Secret values are redacted before excerpting while the
+// digest remains bound to the unmodified source text.
+func NewMaterializedCandidate(reference AuthorizedCandidateRef, sourceProject string, sourceText string) (MaterializedCandidate, error) {
+	project, err := projectidentity.NewProjectKeyV3(sourceProject)
+	if err != nil || !reference.valid() || !utf8.ValidString(sourceText) {
+		return MaterializedCandidate{}, ErrInvalidRequest
+	}
+	excerpt, ok := materializedExcerpt(privacy.RedactSecrets(sourceText))
+	if !ok {
+		return MaterializedCandidate{}, ErrInvalidRequest
+	}
+	candidate := MaterializedCandidate{
+		reference:     reference,
+		sourceProject: project,
+		excerpt:       excerpt,
+		textDigest:    sha256.Sum256([]byte(sourceText)),
+	}
+	if !candidate.valid() {
+		return MaterializedCandidate{}, ErrInvalidRequest
+	}
+	return candidate, nil
+}
+
+// Reference returns the exact authorized source pointer without exposing the
+// source body.
+func (c MaterializedCandidate) Reference() AuthorizedCandidateRef {
+	return c.reference
+}
+
+// SourceProject returns the canonical project that owned the materialized row.
+func (c MaterializedCandidate) SourceProject() string {
+	return string(c.sourceProject)
+}
+
+// Excerpt returns the safe bounded excerpt, never the full source body.
+func (c MaterializedCandidate) Excerpt() string {
+	return c.excerpt
+}
+
+// TextDigest returns the SHA-256 of the exact stored source text.
+func (c MaterializedCandidate) TextDigest() [sha256.Size]byte {
+	return c.textDigest
+}
+
+// Valid reports whether the sealed materialization has every exact source fact.
+func (c MaterializedCandidate) Valid() bool {
+	return c.valid()
+}
+
+func (c MaterializedCandidate) valid() bool {
+	return c.reference.valid() && c.sourceProject != "" &&
+		validMaterializedExcerpt(c.excerpt) && c.textDigest != ([sha256.Size]byte{})
+}
+
+func validMaterializedExcerpt(value string) bool {
+	if value == "" || len(value) > MaxMaterializedExcerptBytes || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func materializedExcerpt(source string) (string, bool) {
+	for _, paragraph := range strings.Split(source, "\n\n") {
+		paragraph = strings.Join(strings.Fields(paragraph), " ")
+		if paragraph == "" {
+			continue
+		}
+		if len(paragraph) <= MaxMaterializedExcerptBytes {
+			return paragraph, true
+		}
+		if sentence, ok := firstBoundedSentence(paragraph); ok {
+			return sentence, true
+		}
+	}
+	return "", false
+}
+
+func firstBoundedSentence(paragraph string) (string, bool) {
+	for index, runeValue := range paragraph {
+		if !isSentenceTerminator(runeValue) {
+			continue
+		}
+		end := index + utf8.RuneLen(runeValue)
+		for end < len(paragraph) {
+			runeValue, width := utf8.DecodeRuneInString(paragraph[end:])
+			if !strings.ContainsRune("\"'”’)]}", runeValue) {
+				break
+			}
+			end += width
+		}
+		sentence := strings.TrimSpace(paragraph[:end])
+		if len(sentence) <= MaxMaterializedExcerptBytes {
+			return sentence, true
+		}
+		return "", false
+	}
+	return "", false
+}
+
+func isSentenceTerminator(value rune) bool {
+	switch value {
+	case '.', '!', '?', '。', '！', '？':
+		return true
+	default:
+		return false
+	}
+}
+
+// Materializer exposes exact authorized materialization. false is the single
+// indistinguishable result for denied, missing, and version-drifted references.
+type Materializer interface {
+	Materialize(context.Context, AuthorizedTaskContext, AuthorizedCandidateRef) (MaterializedCandidate, bool, error)
 }
 
 func validCandidateTier(tier CandidateSourceTier) bool {

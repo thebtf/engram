@@ -96,6 +96,7 @@ const (
 	ActionAllow
 	ActionBlock
 	ActionRewrite
+	ActionEmitContextReference
 )
 
 // InjectionMode is the closed set of host context injection surfaces.

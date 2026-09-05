@@ -532,6 +532,7 @@ enum HostAdvisorAction {
   HOST_ADVISOR_ACTION_ALLOW = 3;
   HOST_ADVISOR_ACTION_BLOCK = 4;
   HOST_ADVISOR_ACTION_REWRITE = 5;
+  HOST_ADVISOR_ACTION_EMIT_CONTEXT_REFERENCE = 6;
 }
 
 // HostAdvisorContextInjectionMode identifies a closed host context surface.
@@ -752,6 +753,7 @@ message HostAdvisorKnowledgeReference {
   uint32 memory_version = 2;
   HostAdvisorCandidateTier source_tier = 3;
   bytes text_sha256 = 4;
+  string source_project = 5;
 }
 
 message HostAdvisorPresentation {

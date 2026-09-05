@@ -314,12 +314,13 @@ func (HostAdvisorSemantic) EnumDescriptor() ([]byte, []int) {
 type HostAdvisorAction int32
 
 const (
-	HostAdvisorAction_HOST_ADVISOR_ACTION_UNSPECIFIED         HostAdvisorAction = 0
-	HostAdvisorAction_HOST_ADVISOR_ACTION_EMIT_ADVICE         HostAdvisorAction = 1
-	HostAdvisorAction_HOST_ADVISOR_ACTION_ADAPTER_ATTESTATION HostAdvisorAction = 2
-	HostAdvisorAction_HOST_ADVISOR_ACTION_ALLOW               HostAdvisorAction = 3
-	HostAdvisorAction_HOST_ADVISOR_ACTION_BLOCK               HostAdvisorAction = 4
-	HostAdvisorAction_HOST_ADVISOR_ACTION_REWRITE             HostAdvisorAction = 5
+	HostAdvisorAction_HOST_ADVISOR_ACTION_UNSPECIFIED            HostAdvisorAction = 0
+	HostAdvisorAction_HOST_ADVISOR_ACTION_EMIT_ADVICE            HostAdvisorAction = 1
+	HostAdvisorAction_HOST_ADVISOR_ACTION_ADAPTER_ATTESTATION    HostAdvisorAction = 2
+	HostAdvisorAction_HOST_ADVISOR_ACTION_ALLOW                  HostAdvisorAction = 3
+	HostAdvisorAction_HOST_ADVISOR_ACTION_BLOCK                  HostAdvisorAction = 4
+	HostAdvisorAction_HOST_ADVISOR_ACTION_REWRITE                HostAdvisorAction = 5
+	HostAdvisorAction_HOST_ADVISOR_ACTION_EMIT_CONTEXT_REFERENCE HostAdvisorAction = 6
 )
 
 // Enum value maps for HostAdvisorAction.
@@ -331,14 +332,16 @@ var (
 		3: "HOST_ADVISOR_ACTION_ALLOW",
 		4: "HOST_ADVISOR_ACTION_BLOCK",
 		5: "HOST_ADVISOR_ACTION_REWRITE",
+		6: "HOST_ADVISOR_ACTION_EMIT_CONTEXT_REFERENCE",
 	}
 	HostAdvisorAction_value = map[string]int32{
-		"HOST_ADVISOR_ACTION_UNSPECIFIED":         0,
-		"HOST_ADVISOR_ACTION_EMIT_ADVICE":         1,
-		"HOST_ADVISOR_ACTION_ADAPTER_ATTESTATION": 2,
-		"HOST_ADVISOR_ACTION_ALLOW":               3,
-		"HOST_ADVISOR_ACTION_BLOCK":               4,
-		"HOST_ADVISOR_ACTION_REWRITE":             5,
+		"HOST_ADVISOR_ACTION_UNSPECIFIED":            0,
+		"HOST_ADVISOR_ACTION_EMIT_ADVICE":            1,
+		"HOST_ADVISOR_ACTION_ADAPTER_ATTESTATION":    2,
+		"HOST_ADVISOR_ACTION_ALLOW":                  3,
+		"HOST_ADVISOR_ACTION_BLOCK":                  4,
+		"HOST_ADVISOR_ACTION_REWRITE":                5,
+		"HOST_ADVISOR_ACTION_EMIT_CONTEXT_REFERENCE": 6,
 	}
 )
 
@@ -4777,6 +4780,7 @@ type HostAdvisorKnowledgeReference struct {
 	MemoryVersion uint32                   `protobuf:"varint,2,opt,name=memory_version,json=memoryVersion,proto3" json:"memory_version,omitempty"`
 	SourceTier    HostAdvisorCandidateTier `protobuf:"varint,3,opt,name=source_tier,json=sourceTier,proto3,enum=engram.v1.HostAdvisorCandidateTier" json:"source_tier,omitempty"`
 	TextSha256    []byte                   `protobuf:"bytes,4,opt,name=text_sha256,json=textSha256,proto3" json:"text_sha256,omitempty"`
+	SourceProject string                   `protobuf:"bytes,5,opt,name=source_project,json=sourceProject,proto3" json:"source_project,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4837,6 +4841,13 @@ func (x *HostAdvisorKnowledgeReference) GetTextSha256() []byte {
 		return x.TextSha256
 	}
 	return nil
+}
+
+func (x *HostAdvisorKnowledgeReference) GetSourceProject() string {
+	if x != nil {
+		return x.SourceProject
+	}
+	return ""
 }
 
 type HostAdvisorPresentation struct {
@@ -6006,14 +6017,15 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"\x10project_evidence\x18\x02 \x01(\v2\x1c.engram.v1.ProjectIdentityV3R\x0fprojectEvidence\x12@\n" +
 	"\n" +
 	"occurrence\x18\x03 \x01(\v2 .engram.v1.HostAdvisorOccurrenceR\n" +
-	"occurrence\"\xca\x01\n" +
+	"occurrence\"\xf1\x01\n" +
 	"\x1dHostAdvisorKnowledgeReference\x12\x1b\n" +
 	"\tmemory_id\x18\x01 \x01(\x03R\bmemoryId\x12%\n" +
 	"\x0ememory_version\x18\x02 \x01(\rR\rmemoryVersion\x12D\n" +
 	"\vsource_tier\x18\x03 \x01(\x0e2#.engram.v1.HostAdvisorCandidateTierR\n" +
 	"sourceTier\x12\x1f\n" +
 	"\vtext_sha256\x18\x04 \x01(\fR\n" +
-	"textSha256\"\x8f\x01\n" +
+	"textSha256\x12%\n" +
+	"\x0esource_project\x18\x05 \x01(\tR\rsourceProject\"\x8f\x01\n" +
 	"\x17HostAdvisorPresentation\x12Q\n" +
 	"\x0einjection_mode\x18\x01 \x01(\x0e2*.engram.v1.HostAdvisorContextInjectionModeR\rinjectionMode\x12!\n" +
 	"\fbounded_text\x18\x02 \x01(\tR\vboundedText\"\x9f\x02\n" +
@@ -6101,14 +6113,15 @@ const file_proto_engram_v1_engram_proto_rawDesc = "" +
 	"(HOST_ADVISOR_SEMANTIC_BEFORE_AGENT_START\x10\x01\x12%\n" +
 	"!HOST_ADVISOR_SEMANTIC_TOOL_RESULT\x10\x02\x12%\n" +
 	"!HOST_ADVISOR_SEMANTIC_TOOL_ACTION\x10\x03\x12.\n" +
-	"*HOST_ADVISOR_SEMANTIC_SESSION_FINALIZATION\x10\x04*\xe9\x01\n" +
+	"*HOST_ADVISOR_SEMANTIC_SESSION_FINALIZATION\x10\x04*\x99\x02\n" +
 	"\x11HostAdvisorAction\x12#\n" +
 	"\x1fHOST_ADVISOR_ACTION_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fHOST_ADVISOR_ACTION_EMIT_ADVICE\x10\x01\x12+\n" +
 	"'HOST_ADVISOR_ACTION_ADAPTER_ATTESTATION\x10\x02\x12\x1d\n" +
 	"\x19HOST_ADVISOR_ACTION_ALLOW\x10\x03\x12\x1d\n" +
 	"\x19HOST_ADVISOR_ACTION_BLOCK\x10\x04\x12\x1f\n" +
-	"\x1bHOST_ADVISOR_ACTION_REWRITE\x10\x05*\x8f\x02\n" +
+	"\x1bHOST_ADVISOR_ACTION_REWRITE\x10\x05\x12.\n" +
+	"*HOST_ADVISOR_ACTION_EMIT_CONTEXT_REFERENCE\x10\x06*\x8f\x02\n" +
 	"\x1fHostAdvisorContextInjectionMode\x123\n" +
 	"/HOST_ADVISOR_CONTEXT_INJECTION_MODE_UNSPECIFIED\x10\x00\x12@\n" +
 	"<HOST_ADVISOR_CONTEXT_INJECTION_MODE_HIDDEN_UNTRUSTED_MESSAGE\x10\x01\x129\n" +

@@ -31,6 +31,13 @@ type taskMemoryCandidateRow struct {
 	Version int   `gorm:"column:version"`
 }
 
+type taskMemoryMaterializedRow struct {
+	ID      int64  `gorm:"column:id"`
+	Version int    `gorm:"column:version"`
+	Project string `gorm:"column:project"`
+	Content string `gorm:"column:content"`
+}
+
 type taskMemoryAccessPredicate struct {
 	sql  string
 	args []any
@@ -428,3 +435,52 @@ func (s *TaskMemoryCandidateStore) GetAuthorizedByRefs(
 	}
 	return refs, nil
 }
+
+const taskMemoryMaterializeSQL = `
+	SELECT m.id, m.version, m.project, m.content
+	FROM memories m
+	WHERE m.id = ?
+	  AND m.version = ?
+	  AND ` + taskMemoryCandidateAccessSQL + `
+	LIMIT 1
+`
+
+// Materialize repeats the exact ID, version, active-status, and scope checks in
+// the same SQL statement that reads the source body. Missing, denied, and
+// version-drifted references all return found=false without source detail.
+func (s *TaskMemoryCandidateStore) Materialize(
+	ctx context.Context,
+	authority taskmemory.AuthorizedTaskContext,
+	reference taskmemory.AuthorizedCandidateRef,
+) (taskmemory.MaterializedCandidate, bool, error) {
+	if s == nil || s.db == nil || ctx == nil || !authority.Valid() || !reference.Valid() {
+		return taskmemory.MaterializedCandidate{}, false, taskmemory.ErrInvalidRequest
+	}
+	if err := ctx.Err(); err != nil {
+		return taskmemory.MaterializedCandidate{}, false, err
+	}
+
+	access := taskMemoryCandidateAccessFromContext(authority)
+	args := make([]any, 0, len(access.args)+2)
+	args = append(args, reference.ID(), reference.Version())
+	args = append(args, access.args...)
+
+	var rows []taskMemoryMaterializedRow
+	if err := s.db.WithContext(ctx).Raw(taskMemoryMaterializeSQL, args...).Scan(&rows).Error; err != nil {
+		return taskmemory.MaterializedCandidate{}, false, fmt.Errorf("materialize authorized task memory candidate: %w", err)
+	}
+	if len(rows) == 0 {
+		return taskmemory.MaterializedCandidate{}, false, nil
+	}
+	if len(rows) != 1 || rows[0].ID != reference.ID() || rows[0].Version != reference.Version() {
+		return taskmemory.MaterializedCandidate{}, false, fmt.Errorf("materialize authorized task memory candidate: exact reference mismatch")
+	}
+
+	materialized, err := taskmemory.NewMaterializedCandidate(reference, rows[0].Project, rows[0].Content)
+	if err != nil {
+		return taskmemory.MaterializedCandidate{}, false, nil
+	}
+	return materialized, true, nil
+}
+
+var _ taskmemory.Materializer = (*TaskMemoryCandidateStore)(nil)

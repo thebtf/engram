@@ -11,9 +11,10 @@ import (
 // UUIDSource allocates one canonical UUID for receipt or correlation identity.
 type UUIDSource func() (string, error)
 
-// RuntimeAdvisorConfig supplies the bounded T02/T03 runtime dependencies.
+// RuntimeAdvisorConfig supplies the bounded T02/T03/M1 runtime dependencies.
 type RuntimeAdvisorConfig struct {
 	Preparer       taskmemory.Preparer
+	Materializer   taskmemory.Materializer
 	ReceiptStore   ReceiptStore
 	KeyProvider    KeyProvider
 	PolicyReader   PolicyReader
@@ -22,11 +23,12 @@ type RuntimeAdvisorConfig struct {
 	NewUUID        UUIDSource
 }
 
-// RuntimeAdvisor performs receipt replay, T02 no-candidate abstention, and
-// T03 policy-state abstention. It has no request-time compiler, materialization,
-// packet construction, or Observe persistence path.
+// RuntimeAdvisor performs receipt replay, M1 exact materialization, T02
+// no-candidate abstention, and T03 policy-state abstention. It has no
+// request-time compiler or Observe persistence path.
 type RuntimeAdvisor struct {
 	preparer       taskmemory.Preparer
+	materializer   taskmemory.Materializer
 	receipts       ReceiptStore
 	keyProvider    KeyProvider
 	policyReader   PolicyReader
@@ -46,6 +48,7 @@ func NewRuntimeAdvisor(config RuntimeAdvisorConfig) (*RuntimeAdvisor, error) {
 	}
 	return &RuntimeAdvisor{
 		preparer:       config.Preparer,
+		materializer:   config.Materializer,
 		receipts:       config.ReceiptStore,
 		keyProvider:    config.KeyProvider,
 		policyReader:   config.PolicyReader,
@@ -56,7 +59,8 @@ func NewRuntimeAdvisor(config RuntimeAdvisorConfig) (*RuntimeAdvisor, error) {
 }
 
 // Advise prepares exactly once, resolves immutable receipt replay first, then
-// writes only the accepted T02/T03 abstention receipt shapes.
+// materializes ranked context references before falling back to accepted T02/T03
+// abstention shapes.
 func (a *RuntimeAdvisor) Advise(ctx context.Context, input AdviseInput) (Decision, error) {
 	if a == nil || ctx == nil || !input.binding.valid() || !input.binding.AllowsAdvise() || !input.occurrence.valid() {
 		return Decision{}, ErrInvalidInput
@@ -99,6 +103,29 @@ func (a *RuntimeAdvisor) Advise(ctx context.Context, input AdviseInput) (Decisio
 			return a.unavailable(ctx, input, UnavailableDeadline)
 		}
 		return a.commitAbstention(ctx, input, epoch, axis, AbstentionNoCandidates, 0)
+	}
+	if a.materializer != nil {
+		for index, candidate := range candidates {
+			if !a.hasCommitAndResponseReserve(ctx) {
+				return a.unavailable(ctx, input, UnavailableDeadline)
+			}
+			materialized, found, err := a.materializer.Materialize(ctx, prepared.Context(), candidate)
+			if err != nil {
+				return a.unavailable(ctx, input, unavailableCodeForContext(ctx, UnavailableDependency))
+			}
+			if !found || !materialized.Valid() {
+				continue
+			}
+			reference := materialized.Reference()
+			if reference.ID() != candidate.ID() || reference.Version() != candidate.Version() || reference.SourceTier() != candidate.SourceTier() {
+				continue
+			}
+			return a.commitContextReference(ctx, input, epoch, axis, materialized, index+1)
+		}
+		if !a.hasCommitAndResponseReserve(ctx) {
+			return a.unavailable(ctx, input, UnavailableDeadline)
+		}
+		return a.commitAbstention(ctx, input, epoch, axis, AbstentionEvidenceInsufficient, len(candidates))
 	}
 	if a.policyReader == nil {
 		return a.unavailable(ctx, input, UnavailableDependency)
@@ -159,6 +186,74 @@ func (a *RuntimeAdvisor) commitAbstention(ctx context.Context, input AdviseInput
 		return a.mapVerifiedReplay(ctx, input, verified)
 	}
 	return a.replay(ctx, input, epoch, axis, winner)
+}
+
+func (a *RuntimeAdvisor) commitContextReference(ctx context.Context, input AdviseInput, epoch KeyEpoch, axis ReceiptAxis, materialized taskmemory.MaterializedCandidate, evaluatedCount int) (Decision, error) {
+	receiptID, err := a.nextUUID()
+	if err != nil {
+		return a.unavailable(ctx, input, UnavailableDependency)
+	}
+	operationID, err := a.nextUUID()
+	if err != nil {
+		return a.unavailable(ctx, input, UnavailableDependency)
+	}
+	createdAt := a.clock().UTC()
+	if createdAt.IsZero() {
+		return a.unavailable(ctx, input, UnavailableDependency)
+	}
+	receipt, err := NewContextReferenceReceipt(ctx, epoch, axis, receiptID, operationID, createdAt, materialized, evaluatedCount)
+	if err != nil {
+		return a.unavailable(ctx, input, unavailableCodeForContext(ctx, UnavailableDependency))
+	}
+
+	winner, inserted, err := a.receipts.Commit(ctx, receipt)
+	if err != nil {
+		return a.unavailable(ctx, input, unavailableCodeForContext(ctx, UnavailableReceipt))
+	}
+	if !inserted {
+		return a.replay(ctx, input, epoch, axis, winner)
+	}
+	verified, code, ok := verifiedReceiptForReplay(epoch, axis, winner)
+	if !ok || !sameReceiptIdentity(verified, receipt) {
+		if !ok {
+			return a.unavailable(ctx, input, code)
+		}
+		return a.unavailable(ctx, input, UnavailableReceipt)
+	}
+	return emitContextReference(verified, materialized)
+}
+
+func emitContextReference(receipt Receipt, materialized taskmemory.MaterializedCandidate) (Decision, error) {
+	if !materialized.Valid() {
+		return Decision{}, ErrInvalidInput
+	}
+	identity := receipt.Identity()
+	record := receipt.PersistenceRecord()
+	if !identity.valid() || record.Outcome != ReceiptOutcomeEmit || record.DecisionMode != ReceiptDecisionModeContextReference || record.Selection == nil {
+		return Decision{}, ErrInvalidInput
+	}
+	memoryID, memoryVersion, sourceProject, sourceTier, textDigest, ok := record.Selection.ContextReference()
+	if !ok {
+		return Decision{}, ErrInvalidInput
+	}
+	reference := materialized.Reference()
+	tier, ok := candidateTierFromTaskMemory(reference.SourceTier())
+	if !ok || memoryID != reference.ID() || memoryVersion != reference.Version() || sourceProject != materialized.SourceProject() || sourceTier != tier || textDigest != Digest(materialized.TextDigest()) {
+		return Decision{}, ErrInvalidInput
+	}
+	knowledge, err := NewKnowledgeReference(memoryID, uint32(memoryVersion), sourceProject, sourceTier, [32]byte(textDigest))
+	if err != nil {
+		return Decision{}, err
+	}
+	presentation, err := NewUntrustedReferencePresentation(materialized.Excerpt())
+	if err != nil {
+		return Decision{}, err
+	}
+	packet, err := NewPacket(identity, record.ExpiresAt, knowledge, presentation)
+	if err != nil {
+		return Decision{}, err
+	}
+	return NewEmitDecision(identity, packet)
 }
 
 func reduceCandidatePolicyStates(epoch KeyEpoch, candidates []taskmemory.AuthorizedCandidateRef, policies []CandidatePolicy) (AbstentionReason, bool) {

@@ -50,21 +50,29 @@ func validCandidateTier(tier CandidateTier) bool {
 	}
 }
 
-// KnowledgeReference is the one exact-version source reference permitted in a packet.
+// KnowledgeReference is the one exact-version, exact-project source reference
+// permitted in a packet.
 type KnowledgeReference struct {
 	memoryID      int64
 	memoryVersion uint32
+	sourceProject string
 	tier          CandidateTier
 	textDigest    Digest
 }
 
 // NewKnowledgeReference validates one exact-version protected knowledge reference.
-func NewKnowledgeReference(memoryID int64, memoryVersion uint32, tier CandidateTier, textDigest [32]byte) (KnowledgeReference, error) {
+func NewKnowledgeReference(memoryID int64, memoryVersion uint32, sourceProject string, tier CandidateTier, textDigest [32]byte) (KnowledgeReference, error) {
 	digest, validDigest := digestFromArray(textDigest)
-	if memoryID <= 0 || memoryVersion == 0 || !validCandidateTier(tier) || !validDigest {
+	if memoryID <= 0 || memoryVersion == 0 || !validCanonicalUUID(sourceProject) || !validCandidateTier(tier) || !validDigest {
 		return KnowledgeReference{}, ErrInvalidInput
 	}
-	return KnowledgeReference{memoryID: memoryID, memoryVersion: memoryVersion, tier: tier, textDigest: digest}, nil
+	return KnowledgeReference{
+		memoryID:      memoryID,
+		memoryVersion: memoryVersion,
+		sourceProject: sourceProject,
+		tier:          tier,
+		textDigest:    digest,
+	}, nil
 }
 
 // MemoryID returns the exact source memory ID.
@@ -75,6 +83,11 @@ func (r KnowledgeReference) MemoryID() int64 {
 // MemoryVersion returns the exact source memory version.
 func (r KnowledgeReference) MemoryVersion() uint32 {
 	return r.memoryVersion
+}
+
+// SourceProject returns the canonical project that owns the source memory.
+func (r KnowledgeReference) SourceProject() string {
+	return r.sourceProject
 }
 
 // Tier returns the closed retrieval-source tier.
@@ -88,7 +101,7 @@ func (r KnowledgeReference) TextDigest() Digest {
 }
 
 func (r KnowledgeReference) valid() bool {
-	return r.memoryID > 0 && r.memoryVersion > 0 && validCandidateTier(r.tier) && r.textDigest != (Digest{})
+	return r.memoryID > 0 && r.memoryVersion > 0 && validCanonicalUUID(r.sourceProject) && validCandidateTier(r.tier) && r.textDigest != (Digest{})
 }
 
 // ContextInjectionMode identifies the only T01 packet rendering surface.
@@ -105,7 +118,7 @@ type Presentation struct {
 
 // NewUntrustedReferencePresentation constructs the only legal packet presentation.
 func NewUntrustedReferencePresentation(text string) (Presentation, error) {
-	if !validText(text, MaxPresentationBytes) {
+	if !validText(text, MaxReferencePresentationBytes) {
 		return Presentation{}, ErrInvalidInput
 	}
 	return Presentation{text: text}, nil
@@ -122,7 +135,7 @@ func (p Presentation) Text() string {
 }
 
 func (p Presentation) valid() bool {
-	return validText(p.text, MaxPresentationBytes)
+	return validText(p.text, MaxReferencePresentationBytes)
 }
 
 // Packet is the complete one-reference H03 emitted packet value.

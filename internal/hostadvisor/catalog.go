@@ -15,6 +15,7 @@ import (
 
 const (
 	ompAdvisor1CapabilityRevision = "omp-advisor-1"
+	ompAdvisor2CapabilityRevision = "omp-advisor-2"
 	ompAdvisor1ProtocolVersion    = uint32(1)
 	maxAdvisorTextBytes           = 512
 	maxAdvisorCapabilities        = 4
@@ -22,10 +23,21 @@ const (
 	maxAdvisorInjectionModes      = 3
 )
 
-// NewOMPAdvisor1Profile constructs the only HAP-02 OMP capability profile.
-// The capability row is code-owned; callers provide only immutable host evidence
-// and explicit timing/snapshot facts obtained outside this package.
+// NewOMPAdvisor1Profile constructs the legacy HAP-02 OMP capability profile.
+// It remains available only so existing adapters can bind and then fail closed
+// at the context-reference action boundary.
 func NewOMPAdvisor1Profile(spec OMPAdvisor1ProfileSpec) (AcceptedProfile, error) {
+	return newOMPAdvisorProfile(spec, ompAdvisor1CapabilityRevision, []Action{ActionEmitAdvice, ActionAdapterAttestation})
+}
+
+// NewOMPAdvisor2Profile constructs the M1 context-reference OMP capability
+// profile. The action is distinct from legacy generic advice so old adapters
+// cannot silently receive reference packets.
+func NewOMPAdvisor2Profile(spec OMPAdvisor1ProfileSpec) (AcceptedProfile, error) {
+	return newOMPAdvisorProfile(spec, ompAdvisor2CapabilityRevision, []Action{ActionAdapterAttestation, ActionEmitContextReference})
+}
+
+func newOMPAdvisorProfile(spec OMPAdvisor1ProfileSpec, capabilityRevision string, actions []Action) (AcceptedProfile, error) {
 	if spec.CallbackDeadline <= 0 || spec.CallbackDeadline%time.Millisecond != 0 || spec.CallbackDeadline.Milliseconds() > math.MaxUint32 {
 		return AcceptedProfile{}, fmt.Errorf("%w: omp callback deadline must be a positive whole millisecond", ErrInvalidInput)
 	}
@@ -34,7 +46,7 @@ func NewOMPAdvisor1Profile(spec OMPAdvisor1ProfileSpec) (AcceptedProfile, error)
 	}
 
 	profile := AcceptedProfile{
-		CapabilityRevision: ompAdvisor1CapabilityRevision,
+		CapabilityRevision: capabilityRevision,
 		SnapshotID:         spec.SnapshotID,
 		SnapshotRevision:   spec.SnapshotRevision,
 		Protocol: ProtocolRange{
@@ -52,7 +64,7 @@ func NewOMPAdvisor1Profile(spec OMPAdvisor1ProfileSpec) (AcceptedProfile, error)
 		},
 		Capabilities: []Capability{{
 			Semantic:       SemanticBeforeAgentStart,
-			Actions:        []Action{ActionEmitAdvice, ActionAdapterAttestation},
+			Actions:        actions,
 			InjectionModes: []InjectionMode{InjectionModeHiddenUntrustedMessage},
 			Correlation: Correlation{
 				Session:           true,
@@ -110,14 +122,22 @@ func normalizeProfile(profile AcceptedProfile) (AcceptedProfile, error) {
 		}
 		prior = capability.Semantic
 	}
-	if !isOMPAdvisor1Profile(profile) {
+	if !isOMPAdvisor1Profile(profile) && !isOMPAdvisor2Profile(profile) {
 		return AcceptedProfile{}, fmt.Errorf("%w: profile capability contract is not code-owned", ErrInvalidInput)
 	}
 	return profile, nil
 }
 
 func isOMPAdvisor1Profile(profile AcceptedProfile) bool {
-	if profile.CapabilityRevision != ompAdvisor1CapabilityRevision ||
+	return isOMPAdvisorProfile(profile, ompAdvisor1CapabilityRevision, []Action{ActionEmitAdvice, ActionAdapterAttestation})
+}
+
+func isOMPAdvisor2Profile(profile AcceptedProfile) bool {
+	return isOMPAdvisorProfile(profile, ompAdvisor2CapabilityRevision, []Action{ActionAdapterAttestation, ActionEmitContextReference})
+}
+
+func isOMPAdvisorProfile(profile AcceptedProfile, capabilityRevision string, actions []Action) bool {
+	if profile.CapabilityRevision != capabilityRevision ||
 		profile.Protocol != (ProtocolRange{Min: ompAdvisor1ProtocolVersion, Max: ompAdvisor1ProtocolVersion}) ||
 		profile.HostFamily != HostFamilyOMP || profile.Evidence.ArtifactKind != ArtifactKindInstalled ||
 		len(profile.Capabilities) != 1 {
@@ -125,7 +145,7 @@ func isOMPAdvisor1Profile(profile AcceptedProfile) bool {
 	}
 	capability := profile.Capabilities[0]
 	return capability.Semantic == SemanticBeforeAgentStart &&
-		slices.Equal(capability.Actions, []Action{ActionEmitAdvice, ActionAdapterAttestation}) &&
+		slices.Equal(capability.Actions, actions) &&
 		slices.Equal(capability.InjectionModes, []InjectionMode{InjectionModeHiddenUntrustedMessage}) &&
 		capability.Correlation == (Correlation{Session: true, Turn: true, StablePhaseAnchor: true}) &&
 		capability.Callback.Awaited && capability.Callback.Deadline > 0 &&
@@ -247,7 +267,7 @@ func validSemantic(semantic Semantic) bool {
 
 func validAction(action Action) bool {
 	switch action {
-	case ActionEmitAdvice, ActionAdapterAttestation, ActionAllow, ActionBlock, ActionRewrite:
+	case ActionEmitAdvice, ActionAdapterAttestation, ActionAllow, ActionBlock, ActionRewrite, ActionEmitContextReference:
 		return true
 	default:
 		return false

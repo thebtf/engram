@@ -27,8 +27,10 @@ const (
 	MaxTypedFactsBytes = 2048
 	// MaxWireBytes is the HAP-03 private unary payload cap enforced at transport ingress.
 	MaxWireBytes = 16 * 1024
-	// MaxPresentationBytes bounds an emitted untrusted-reference presentation.
-	MaxPresentationBytes = 256
+	// MaxPolicyLiteralBytes preserves the existing learned-policy literal cap.
+	MaxPolicyLiteralBytes = 256
+	// MaxReferencePresentationBytes bounds an emitted untrusted memory reference.
+	MaxReferencePresentationBytes = 2048
 )
 
 var ErrInvalidInput = errors.New("intervention input is invalid")
@@ -293,7 +295,7 @@ func NewBindingFacts(binding hostadvisor.HostBinding) (BindingFacts, error) {
 		if capability.Semantic != hostadvisor.SemanticBeforeAgentStart || capability.Callback.Deadline != callbackDuration {
 			continue
 		}
-		if containsHostAction(capability.Actions, hostadvisor.ActionEmitAdvice) &&
+		if containsHostAction(capability.Actions, hostadvisor.ActionEmitContextReference) &&
 			containsHostInjectionMode(capability.InjectionModes, hostadvisor.InjectionModeHiddenUntrustedMessage) &&
 			capability.Correlation.Session && capability.Correlation.Turn && capability.Correlation.StablePhaseAnchor &&
 			capability.Callback.Awaited && capability.Callback.Ordering == hostadvisor.CallbackOrderingBeforeFirstAction {
@@ -347,7 +349,7 @@ func (f BindingFacts) CallbackDuration() time.Duration {
 }
 
 // AllowsAdvise reports whether the binding independently grants the full
-// BEFORE_AGENT_START/EMIT_ADVICE admission subset. It does not require
+// BEFORE_AGENT_START/EMIT_CONTEXT_REFERENCE admission subset. It does not require
 // ADAPTER_ATTESTATION.
 func (f BindingFacts) AllowsAdvise() bool {
 	return f.valid() && f.adviseAllowed

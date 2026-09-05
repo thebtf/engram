@@ -834,7 +834,7 @@ func (c *PolicyCompiler) compileDescriptor(source SourceMemoryVersion) (PolicyDe
 	if literal == "" {
 		return insufficientPolicyDescriptor(PolicyInsufficiencyNoSafeLine)
 	}
-	if len(literal) > MaxPresentationBytes {
+	if len(literal) > MaxPolicyLiteralBytes {
 		return insufficientPolicyDescriptor(PolicyInsufficiencyLineOversized)
 	}
 	if !norm.NFC.IsNormalString(literal) {

@@ -149,6 +149,97 @@ func TestRuntimeAdvisorLeavesNonemptyCandidatesUnavailable(t *testing.T) {
 	}
 }
 
+func TestRuntimeAdvisorContextReferenceMaterializationIsMemoryOnly(t *testing.T) {
+	now := interventionTestTime
+	epoch := fixtureKeyEpoch(t)
+
+	t.Run("inserted winner emits exact materialization before policy", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(context.Background(), now.Add(time.Second))
+		defer cancel()
+		prepared := runtimePreparedTaskMemory(t, 1)
+		candidate := prepared.Candidates()[0]
+		materialized, err := taskmemory.NewMaterializedCandidate(candidate, string(prepared.Context().CanonicalProject()), "Use the exact retry reference.")
+		if err != nil {
+			t.Fatal(err)
+		}
+		order := []string{}
+		preparer := &runtimeRecordingPreparer{prepared: prepared, order: &order}
+		store := &runtimeReceiptStore{order: &order}
+		reader := &runtimePolicyReader{order: &order}
+		materializer := &runtimeMaterializer{materialized: materialized, found: true, order: &order}
+		advisor := newRuntimeAdvisorWithMaterializer(t, preparer, store, epoch, now, materializer, reader)
+
+		decision, err := advisor.Advise(ctx, runtimeAdviseInput(t, "context reference"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		receipt, packet, ok := decision.Emit()
+		if !ok || !receipt.valid() || packet.Knowledge().MemoryID() != candidate.ID() || packet.Knowledge().MemoryVersion() != uint32(candidate.Version()) {
+			t.Fatalf("context-reference decision = %#v", decision)
+		}
+		if reader.calls != 0 || materializer.calls != 1 || store.commitCalls != 1 {
+			t.Fatalf("reader=%d materializer=%d commits=%d", reader.calls, materializer.calls, store.commitCalls)
+		}
+		if got, want := fmt.Sprint(order), fmt.Sprint([]string{"prepare", "lookup", "materialize", "commit"}); got != want {
+			t.Fatalf("operation order = %s, want %s", got, want)
+		}
+		record := store.committed.PersistenceRecord()
+		memoryID, memoryVersion, sourceProject, sourceTier, textDigest, selected := record.Selection.ContextReference()
+		if record.DecisionMode != ReceiptDecisionModeContextReference || record.EligibleCount != 0 || !selected ||
+			memoryID != candidate.ID() || memoryVersion != candidate.Version() || sourceProject != string(prepared.Context().CanonicalProject()) || sourceTier != CandidateTierExact || textDigest != Digest(materialized.TextDigest()) {
+			t.Fatalf("context-reference receipt = %#v", record)
+		}
+	})
+
+	t.Run("commit loser never returns a body", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(context.Background(), now.Add(time.Second))
+		defer cancel()
+		input := runtimeAdviseInput(t, "context reference loser")
+		prepared := runtimePreparedTaskMemory(t, 1)
+		candidate := prepared.Candidates()[0]
+		materialized, err := taskmemory.NewMaterializedCandidate(candidate, string(prepared.Context().CanonicalProject()), "Use the exact retry reference.")
+		if err != nil {
+			t.Fatal(err)
+		}
+		axis := runtimeAxis(t, epoch, input, prepared)
+		winner, err := NewContextReferenceReceipt(ctx, epoch, axis, "40000000-0000-4000-8000-000000000009", "40000000-0000-4000-8000-000000000010", now, materialized, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := &runtimeReceiptStore{commitReceipt: winner}
+		advisor := newRuntimeAdvisorWithMaterializer(t, &runtimeRecordingPreparer{prepared: prepared}, store, epoch, now, &runtimeMaterializer{materialized: materialized, found: true}, nil)
+
+		decision, err := advisor.Advise(ctx, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if receipt, ok := decision.DeliveryAmbiguous(); !ok || receipt != winner.Identity() {
+			t.Fatalf("commit-loser decision = %#v", decision)
+		}
+		if _, _, ok := decision.Emit(); ok {
+			t.Fatal("commit loser returned a packet body")
+		}
+	})
+
+	t.Run("unsafe or absent materialization abstains without policy fallback", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(context.Background(), now.Add(time.Second))
+		defer cancel()
+		prepared := runtimePreparedTaskMemory(t, 1)
+		reader := &runtimePolicyReader{policies: runtimeCandidatePolicies(t, epoch, prepared.Candidates(), []CandidatePolicyState{CandidatePolicyValid})}
+		store := &runtimeReceiptStore{}
+		advisor := newRuntimeAdvisorWithMaterializer(t, &runtimeRecordingPreparer{prepared: prepared}, store, epoch, now, &runtimeMaterializer{}, reader)
+
+		decision, err := advisor.Advise(ctx, runtimeAdviseInput(t, "unsafe context reference"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, reason, ok := decision.Abstain()
+		if !ok || reason != AbstentionEvidenceInsufficient || reader.calls != 0 {
+			t.Fatalf("unsafe materialization decision = %#v, policy calls = %d", decision, reader.calls)
+		}
+	})
+}
+
 func TestRuntimeAdvisorDeadlineBeforeStoreWritesNothing(t *testing.T) {
 	now := interventionTestTime
 	ctx, cancel := context.WithDeadline(context.Background(), now.Add(CommitReserve+ResponseReserve-time.Microsecond))
@@ -298,6 +389,22 @@ func (p runtimeCandidateProvider) Snapshot(_ context.Context, _ taskmemory.Autho
 	return p.snapshot, nil
 }
 
+type runtimeMaterializer struct {
+	materialized taskmemory.MaterializedCandidate
+	found        bool
+	err          error
+	calls        int
+	order        *[]string
+}
+
+func (m *runtimeMaterializer) Materialize(_ context.Context, _ taskmemory.AuthorizedTaskContext, _ taskmemory.AuthorizedCandidateRef) (taskmemory.MaterializedCandidate, bool, error) {
+	m.calls++
+	if m.order != nil {
+		*m.order = append(*m.order, "materialize")
+	}
+	return m.materialized, m.found, m.err
+}
+
 func runtimePreparedTaskMemory(t *testing.T, candidateCount int) taskmemory.PreparedTaskMemory {
 	t.Helper()
 	var candidates []taskmemory.AuthorizedCandidateRef
@@ -364,6 +471,31 @@ func newRuntimeAdvisorForTest(t *testing.T, preparer taskmemory.Preparer, store 
 			return fmt.Sprintf("40000000-0000-4000-8000-%012d", sequence), nil
 		},
 	})
+	if err != nil {
+		t.Fatalf("NewRuntimeAdvisor() error = %v", err)
+	}
+	return advisor
+}
+
+func newRuntimeAdvisorWithMaterializer(t *testing.T, preparer taskmemory.Preparer, store ReceiptStore, epoch KeyEpoch, now time.Time, materializer taskmemory.Materializer, reader PolicyReader) *RuntimeAdvisor {
+	t.Helper()
+	sequence := 0
+	config := RuntimeAdvisorConfig{
+		Preparer:     preparer,
+		Materializer: materializer,
+		ReceiptStore: store,
+		KeyProvider:  NewStaticKeyProvider(epoch),
+		Clock:        func() time.Time { return now },
+		NewUUID: func() (string, error) {
+			sequence++
+			return fmt.Sprintf("50000000-0000-4000-8000-%012d", sequence), nil
+		},
+	}
+	if reader != nil {
+		config.PolicyReader = reader
+		config.PolicyVersions = mustPolicyCompiler(t, nil).Versions()
+	}
+	advisor, err := NewRuntimeAdvisor(config)
 	if err != nil {
 		t.Fatalf("NewRuntimeAdvisor() error = %v", err)
 	}

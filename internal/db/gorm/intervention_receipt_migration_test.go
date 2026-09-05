@@ -16,7 +16,10 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-const interventionReceiptMigrationID = "168_task_memory_intervention_receipts"
+const (
+	interventionReceiptMigrationID                 = "168_task_memory_intervention_receipts"
+	interventionReceiptContextReferenceMigrationID = "170_task_memory_context_reference_receipts"
+)
 
 // openInterventionReceiptMigrationTestDB creates a schema that is private to one
 // test. Immutable receipt rows are never deleted individually: the test pool is
@@ -140,6 +143,8 @@ func TestInterventionReceiptMigration168Schema(t *testing.T) {
 		"snapshot_refs":                  {"jsonb", "NO"},
 		"selected_memory_id":             {"bigint", "YES"},
 		"selected_memory_version":        {"integer", "YES"},
+		"selected_source_project":        {"uuid", "YES"},
+		"selected_source_tier":           {"smallint", "YES"},
 		"selected_policy_id":             {"bytea", "YES"},
 		"selected_snapshot_id":           {"uuid", "YES"},
 		"selected_snapshot_version":      {"bigint", "YES"},
@@ -193,6 +198,7 @@ func TestInterventionReceiptMigration168Schema(t *testing.T) {
 		"task_memory_intervention_receipts_snapshot_refs",
 		"task_memory_intervention_receipts_selected_version",
 		"task_memory_intervention_receipts_outcome_shape",
+		"task_memory_intervention_receipts_selected_source",
 		"task_memory_intervention_receipts_expiry",
 	} {
 		require.Containsf(t, constraintDefinitions, required, "required migration 168 constraint %q", required)
@@ -208,6 +214,8 @@ func TestInterventionReceiptMigration168Schema(t *testing.T) {
 	require.Contains(t, constraintDefinitions["task_memory_intervention_receipts_selected_version"], "octet_length(selected_text_digest) = 32")
 	require.Contains(t, constraintDefinitions["task_memory_intervention_receipts_outcome_shape"], "outcome = 'emit'")
 	require.Contains(t, constraintDefinitions["task_memory_intervention_receipts_outcome_shape"], "outcome = 'abstain'")
+	require.Contains(t, constraintDefinitions["task_memory_intervention_receipts_outcome_shape"], "context_reference")
+	require.Contains(t, constraintDefinitions["task_memory_intervention_receipts_outcome_shape"], "selected_source_project = canonical_project")
 
 	var indexes []interventionReceiptIndex
 	require.NoError(t, db.Raw(`
@@ -277,16 +285,73 @@ func TestInterventionReceiptMigration168RejectsMutation(t *testing.T) {
 	require.EqualValues(t, 1, count, "all three immutable operations must leave the receipt intact")
 }
 
+func TestInterventionReceiptMigration170ReappliesWithoutRewritingLegacyRows(t *testing.T) {
+	db, _ := openInterventionReceiptMigrationTestDB(t)
+	legacy := newInterventionReceiptFixture()
+	require.NoError(t, legacy.insert(db))
+
+	var before struct {
+		ReceiptID      string `gorm:"column:receipt_id"`
+		DecisionMode   string `gorm:"column:decision_mode"`
+		Outcome        string `gorm:"column:outcome"`
+		ClosedReason   string `gorm:"column:closed_reason"`
+		EvaluatedCount int    `gorm:"column:evaluated_count"`
+	}
+	require.NoError(t, db.Raw(`
+		SELECT receipt_id, decision_mode, outcome, closed_reason, evaluated_count
+		FROM task_memory_intervention_receipts
+		WHERE receipt_id = ?
+	`, legacy.ReceiptID).Scan(&before).Error)
+
+	require.NoError(t, rollbackInterventionContextReferenceMigration170(db), "legacy-only ledger must roll back migration 170")
+	require.NoError(t, db.Exec("DELETE FROM migrations WHERE id = ?", interventionReceiptContextReferenceMigrationID).Error)
+	require.NoError(t, runMigrations(db), "migration 170 must reapply over retained legacy rows")
+
+	var after struct {
+		ReceiptID      string `gorm:"column:receipt_id"`
+		DecisionMode   string `gorm:"column:decision_mode"`
+		Outcome        string `gorm:"column:outcome"`
+		ClosedReason   string `gorm:"column:closed_reason"`
+		EvaluatedCount int    `gorm:"column:evaluated_count"`
+	}
+	require.NoError(t, db.Raw(`
+		SELECT receipt_id, decision_mode, outcome, closed_reason, evaluated_count
+		FROM task_memory_intervention_receipts
+		WHERE receipt_id = ?
+	`, legacy.ReceiptID).Scan(&after).Error)
+	require.Equal(t, before, after, "migration 170 must extend—not rewrite—the retained legacy ledger")
+
+	var sourced int
+	require.NoError(t, db.Raw(`
+		SELECT COUNT(*)
+		FROM task_memory_intervention_receipts
+		WHERE receipt_id = ? AND selected_source_project IS NOT NULL
+	`, legacy.ReceiptID).Scan(&sourced).Error)
+	require.Zero(t, sourced, "legacy rows must remain free of M1 source fields")
+}
+
+func TestInterventionReceiptMigration170RejectsMismatchedSourceAndBlocksRollback(t *testing.T) {
+	db, _ := openInterventionReceiptMigrationTestDB(t)
+	mismatched := newInterventionReceiptFixture()
+	require.Error(t, insertContextReferenceReceiptFixture(db, mismatched, uuid.NewString()), "context source project must match the ledger project")
+
+	contextReceipt := newInterventionReceiptFixture()
+	require.NoError(t, insertContextReferenceReceiptFixture(db, contextReceipt, contextReceipt.CanonicalProject))
+	err := rollbackInterventionContextReferenceMigration170(db)
+	require.ErrorContains(t, err, "1 retained context_reference task_memory_intervention_receipts rows")
+}
+
 func TestInterventionReceiptMigration168RollbackEmptyReappliesAndAbsentSucceeds(t *testing.T) {
 	db, _ := openInterventionReceiptMigrationTestDB(t)
 
+	require.NoError(t, rollbackInterventionContextReferenceMigration170(db), "empty context-reference migration must roll back before its receipt-table owner")
 	require.NoError(t, rollbackInterventionPolicyMigration169(db), "empty policy table must roll back before its shared function owner")
 	require.NoError(t, rollbackInterventionReceiptMigration168(db), "empty receipt table must roll back")
 	assertInterventionReceiptTableAbsent(t, db)
 	require.Zero(t, interventionReceiptImmutableFunctionCount(t, db), "ordered empty rollback must remove the immutable trigger function")
 
-	require.NoError(t, db.Exec(`DELETE FROM migrations WHERE id IN (?, ?)`, interventionReceiptMigrationID, interventionPolicyMigrationID).Error)
-	require.NoError(t, runMigrations(db), "removing migration 168-169 markers must exercise ordered inline reapply")
+	require.NoError(t, db.Exec(`DELETE FROM migrations WHERE id IN (?, ?, ?)`, interventionReceiptMigrationID, interventionPolicyMigrationID, interventionReceiptContextReferenceMigrationID).Error)
+	require.NoError(t, runMigrations(db), "removing migration 168-170 markers must exercise ordered inline reapply")
 	var tableCount int
 	require.NoError(t, db.Raw(`
 		SELECT COUNT(*)
@@ -294,8 +359,9 @@ func TestInterventionReceiptMigration168RollbackEmptyReappliesAndAbsentSucceeds(
 		WHERE table_schema = current_schema()
 		  AND table_name IN ('task_memory_intervention_receipts', 'intervention_evidence_policies')
 	`).Scan(&tableCount).Error)
-	require.Equal(t, 2, tableCount, "migrations 168-169 must recreate both additive tables")
+	require.Equal(t, 2, tableCount, "migrations 168-170 must recreate both additive tables")
 
+	require.NoError(t, rollbackInterventionContextReferenceMigration170(db), "empty re-created context-reference migration must roll back")
 	require.NoError(t, rollbackInterventionPolicyMigration169(db), "empty re-created policy table must roll back")
 	require.NoError(t, rollbackInterventionReceiptMigration168(db), "empty re-created receipt table must roll back")
 	require.NoError(t, rollbackInterventionReceiptMigration168(db), "absent receipt table rollback must succeed")
@@ -391,6 +457,62 @@ func newInterventionReceiptFixture() interventionReceiptFixture {
 		CreatedAt:                    createdAt,
 		ExpiresAt:                    createdAt.Add(time.Minute),
 	}
+}
+
+func insertContextReferenceReceiptFixture(db *gormlib.DB, fixture interventionReceiptFixture, sourceProject string) error {
+	return db.Exec(`
+		INSERT INTO task_memory_intervention_receipts (
+			receipt_id,
+			operation_id,
+			key_epoch_commitment,
+			integrity_digest,
+			channel_key,
+			host_family,
+			canonical_project,
+			actor_principal,
+			actor_kind,
+			workstation,
+			session_key,
+			occurrence_key,
+			content_commitment,
+			capability_snapshot_commitment,
+			outcome,
+			closed_reason,
+			decision_mode,
+			evaluated_count,
+			eligible_count,
+			snapshot_refs,
+			selected_memory_id,
+			selected_memory_version,
+			selected_source_project,
+			selected_source_tier,
+			selected_policy_id,
+			selected_snapshot_id,
+			selected_snapshot_version,
+			selected_text_digest,
+			created_at,
+			expires_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'emit', NULL, 'context_reference', 1, 0, '[]', 1, 1, ?, 1, NULL, NULL, NULL, ?, ?, ?)
+	`,
+		fixture.ReceiptID,
+		fixture.OperationID,
+		fixture.KeyEpochCommitment,
+		fixture.IntegrityDigest,
+		fixture.ChannelKey,
+		fixture.HostFamily,
+		fixture.CanonicalProject,
+		fixture.ActorPrincipal,
+		fixture.ActorKind,
+		fixture.Workstation,
+		fixture.SessionKey,
+		fixture.OccurrenceKey,
+		fixture.ContentCommitment,
+		fixture.CapabilitySnapshotCommitment,
+		sourceProject,
+		fixture.IntegrityDigest,
+		fixture.CreatedAt,
+		fixture.ExpiresAt,
+	).Error
 }
 
 func interventionReceiptFixtureDigest(seed byte) []byte {

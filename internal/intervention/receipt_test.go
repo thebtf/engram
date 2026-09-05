@@ -117,7 +117,18 @@ func TestReceiptIntegrityCoversSelectionAndNullableMarkers(t *testing.T) {
 	}
 
 	tamperedRecord := receipt.PersistenceRecord()
-	tamperedRecord.Selection.TextDigest[0] ^= 0x80
+	tamperedSelection, err := NewLearnedInterventionReceiptSelection(
+		1,
+		1,
+		Digest(testBytes(51)),
+		"20000000-0000-4000-8000-000000000001",
+		1,
+		Digest(testBytes(53)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tamperedRecord.Selection = &tamperedSelection
 	tampered, err := RestoreUnverifiedReceipt(tamperedRecord)
 	if err != nil {
 		t.Fatalf("RestoreUnverifiedReceipt(tampered selection) error = %v", err)
@@ -142,6 +153,52 @@ func TestReceiptIntegrityCoversSelectionAndNullableMarkers(t *testing.T) {
 	}
 	if receipt.Verify(epoch) && abstain.Identity() == receipt.Identity() {
 		t.Fatal("outcome and nullable-field changes retained the original integrity")
+	}
+}
+
+func TestReceiptSelectionVariantsAreSealedAndModeMatched(t *testing.T) {
+	axis := receiptTestAxis(t, fixtureKeyEpoch(t))
+	contextSelection, err := NewContextReferenceReceiptSelection(
+		1,
+		1,
+		axis.CanonicalProject(),
+		CandidateTierExact,
+		Digest(testBytes(71)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, _, ok := contextSelection.ContextReference(); !ok {
+		t.Fatal("context-reference selection lost its exact source projection")
+	}
+	if _, _, _, _, _, _, ok := contextSelection.LearnedIntervention(); ok {
+		t.Fatal("context-reference selection exposed learned-policy fields")
+	}
+
+	learnedSelection, err := NewLearnedInterventionReceiptSelection(
+		1,
+		1,
+		Digest(testBytes(72)),
+		"20000000-0000-4000-8000-000000000001",
+		1,
+		Digest(testBytes(73)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, _, _, ok := learnedSelection.LearnedIntervention(); !ok {
+		t.Fatal("learned selection lost its policy projection")
+	}
+	if _, _, _, _, _, ok := learnedSelection.ContextReference(); ok {
+		t.Fatal("learned selection exposed context-reference fields")
+	}
+
+	ctx, cancel := receiptTestContext(t)
+	defer cancel()
+	record := mustEmittedReceipt(t, ctx, fixtureKeyEpoch(t), axis, "10000000-0000-4000-8000-000000000007", "10000000-0000-4000-8000-000000000008").PersistenceRecord()
+	record.Selection = &contextSelection
+	if _, err := RestoreUnverifiedReceipt(record); err == nil {
+		t.Fatal("learned decision mode accepted a context-reference selection")
 	}
 }
 
@@ -210,14 +267,18 @@ func mustEmittedReceipt(t *testing.T, ctx context.Context, epoch KeyEpoch, axis 
 	record.EvaluatedCount = 1
 	record.EligibleCount = 1
 	record.SnapshotRefsJSON = []byte(`[{"snapshot_id":"20000000-0000-4000-8000-000000000001","snapshot_version":1}]`)
-	record.Selection = &ReceiptSelectionRecord{
-		MemoryID:        1,
-		MemoryVersion:   1,
-		PolicyID:        testBytes(51),
-		SnapshotID:      "20000000-0000-4000-8000-000000000001",
-		SnapshotVersion: 1,
-		TextDigest:      testBytes(52),
+	selection, err := NewLearnedInterventionReceiptSelection(
+		1,
+		1,
+		Digest(testBytes(51)),
+		"20000000-0000-4000-8000-000000000001",
+		1,
+		Digest(testBytes(52)),
+	)
+	if err != nil {
+		t.Fatalf("NewLearnedInterventionReceiptSelection() error = %v", err)
 	}
+	record.Selection = &selection
 	receipt, err := signReceipt(epoch, record)
 	if err != nil {
 		t.Fatalf("signReceipt() error = %v", err)

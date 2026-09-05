@@ -2,6 +2,7 @@ package taskmemory
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"math"
 	"reflect"
@@ -213,6 +214,35 @@ func TestCandidateSnapshotAndPreparedCandidatesAreCopied(t *testing.T) {
 	preparedView[0] = second
 	if got := prepared.Candidates(); len(got) != 1 || got[0].ID() != first.ID() {
 		t.Fatalf("prepared candidates=%#v", got)
+	}
+}
+
+func TestMaterializedCandidateSealsExactSourceAndSafeExcerpt(t *testing.T) {
+	reference := testCandidate(t, 41, CandidateExact)
+	secret := "abc123def456ghi789jkl012mno345pqr678"
+	source := "Register the retry callback before the first action. api_key=" + secret
+	materialized, err := NewMaterializedCandidate(reference, "11111111-1111-4111-8111-111111111111", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if materialized.Reference() != reference || materialized.SourceProject() != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("materialized source = %#v", materialized)
+	}
+	if got := materialized.Excerpt(); strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED:") || len([]byte(got)) > MaxMaterializedExcerptBytes {
+		t.Fatalf("unsafe or unbounded excerpt = %q", got)
+	}
+	if want := sha256.Sum256([]byte(source)); materialized.TextDigest() != want {
+		t.Fatalf("text digest = %x, want %x", materialized.TextDigest(), want)
+	}
+
+	for _, source := range []string{
+		"",
+		"unsafe\x00control",
+		strings.Repeat("é", MaxMaterializedExcerptBytes/2+1),
+	} {
+		if _, err := NewMaterializedCandidate(reference, "11111111-1111-4111-8111-111111111111", source); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("unsafe source %q error = %v", source, err)
+		}
 	}
 }
 
