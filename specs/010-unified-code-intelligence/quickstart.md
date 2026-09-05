@@ -7,14 +7,14 @@ This is a future implementation and acceptance guide, not an execution receipt. 
 - Use a disposable native Windows environment, an isolated PostgreSQL 17 fixture/database with pgvector, and disposable Git repositories/worktrees. Never point UCI migration, scanner, or recovery tests at production data.
 - Use authorized synthetic/fixture source only. Do not place credentials, `.env` files, session transcripts, or private unapproved material in the corpus.
 - Run Git through argument vectors; never build shell command strings from source paths, branch names, remotes, or file content.
-- The current `make install` target calls POSIX-oriented lifecycle commands (`pkill`, `lsof`) and is not accepted as a native Windows installation proof. A UCI implementation slice must provide a Windows-safe disposable install/standard-client harness before UCI-1 acceptance.
+- Slice 4 owns a Windows-safe disposable installation and standard-MCP-client harness. Slice 8 uses the same versioned harness. The current `make install` target calls POSIX-oriented lifecycle commands (`pkill`, `lsof`) and cannot prove a native Windows installation.
 
-## Prerequisites
+## Slice-0 RED prerequisites
 
-Record the following before running a future validation pass:
+Record the following before running the first RED fixture:
 
-1. Candidate source identity: feature branch, exact commit/tree, generated protobuf state, and parser bundle digest.
-2. Go 1.26.6, Git, a supported Windows amd64 toolchain, CGO-capable parser build environment, and the project’s normal build dependencies. Typical inspection commands are:
+1. Candidate source identity: feature branch and exact commit/tree.
+2. Go 1.26.6, Git, a supported Windows amd64 toolchain, and the project dependencies that exercise the existing daemon/server path. Typical inspection commands are:
 
    ```powershell
    go version
@@ -22,13 +22,20 @@ Record the following before running a future validation pass:
    go env GOOS GOARCH CGO_ENABLED
    ```
 
-3. Isolated PostgreSQL 17 with pgvector, migrations applied only to the fixture, and an explicit fixture connection configuration. Record schema/migration versions without credentials.
-4. A real approved embedding provider/model/profile for semantic acceptance. A fake embedder may validate transport shape only; it cannot satisfy conceptual-search acceptance.
-5. Three standard MCP clients capable of connecting to one daemon, plus a real Git repository and a linked worktree that uses a `.git` pointer file. The fixture must support separate saved dirty contents while retaining the same source/path/symbol/HEAD adversarial shape.
+3. An isolated PostgreSQL 17 fixture/database with the existing code-chunk store wired to the disposable server. Apply migrations only to the fixture and record schema/migration versions without credentials.
+4. A real approved Git repository and a linked worktree that uses a `.git` pointer file. The fixture must retain separate saved dirty contents while preserving the same source/path/symbol/HEAD adversarial shape.
+5. `ENGRAM_CODE_INTEL_ENABLED=true` for the disposable daemon and server fixture before tool discovery or tool calls.
+
+## Later-slice prerequisites
+
+1. Slice 4 creates and focus-tests the Windows-safe disposable installation and standard-MCP-client harness. It supplies three standard MCP clients for the installed two-client/third-client acceptance path.
+2. Slice 5 requires a real approved embedding provider/model/profile for semantic acceptance. A fake embedder can validate transport shape only and cannot satisfy conceptual-search acceptance.
+3. Slice 6 requires a CGO-capable parser build environment, generated parser-bundle identity, and pinned grammar/license/SBOM evidence.
+4. The protobuf-generated state and built native artifacts belong to their Slice 4/6 build and transport gates. They are not Slice-0 prerequisites.
 
 ## Focused RED/GREEN Gate
 
-The first executable slice adds a focused test next to the existing daemon code-intelligence adapter. The intended command after that test exists is:
+Slice 0 adds a focused test next to the existing daemon code-intelligence adapter. Run the intended command only after that slice creates the test:
 
 ```powershell
 go test ./internal/handlers/codeintel -run '^TestUCITwoRealWorktreesRemainIsolated$'
@@ -36,14 +43,16 @@ go test ./internal/handlers/codeintel -run '^TestUCITwoRealWorktreesRemainIsolat
 
 ### Fixture Setup
 
-1. Create a temporary primary repository, commit a common base, and create a linked worktree with Git argument vectors.
-2. In both worktrees, retain the same relative file path, symbol name, branch label, and committed HEAD; write different **saved dirty** bodies and different callees.
-3. Start one daemon/server fixture backed by the isolated PostgreSQL fixture. Bind two independent client contexts with different CWDs; then attach a third client.
-4. Use the existing public `codebase_index` and `codebase_search` tool names. Do not make the test pass through a new test-only UCI helper.
+1. Start the disposable daemon/server fixture with `ENGRAM_CODE_INTEL_ENABLED=true` and the existing code-chunk store wired.
+2. Create a temporary primary repository, commit a common base, and create a linked worktree with Git argument vectors.
+3. In both worktrees, retain the same relative file path, symbol name, branch label, and committed HEAD. Write different **saved dirty** bodies and different callees.
+4. Bind two independent client contexts with different CWDs. For A and then B, invoke the existing `codebase_index`, assert the asynchronous `started` dispatch, and poll the existing `codebase_status` to `idle` without an error before its fixture deadline.
+5. Invoke the existing `codebase_search` from both contexts after the bounded index completions. Attach a third client after the first two contexts are bound.
+6. Evaluate two-worktree isolation only after the activation, index dispatch, status completion, and search dispatch checks pass.
 
 ### RED Evidence
 
-Before the registry/mapping cutover, this test must demonstrate the old raw-project collision or absence of required Source/Checkout/View response information. The expected failure is behavioral: legacy code indexes state by raw project string and cannot retain two distinct dirty worktree views. A compile-only missing-symbol failure is not sufficient RED evidence.
+Before the registry/mapping cutover, the activation, tool-dispatch, and bounded-completion assertions must pass. The test then demonstrates the old raw-project collision or absence of required Source/Checkout/View response information. The expected RED is behavioral: legacy code indexes state by raw project string and cannot retain two distinct dirty worktree views. A disabled flag, missing tool, incomplete index, or compile-only missing-symbol failure is not sufficient RED evidence.
 
 ### GREEN Evidence
 
@@ -61,19 +70,20 @@ Run only the gate appropriate to the completed slice before continuing. The exac
 
 | Slice | Intended future command | Expected evidence |
 |---|---|---|
+| Slice 0 existing-seam RED | `go test ./internal/handlers/codeintel -run '^TestUCITwoRealWorktreesRemainIsolated$'` | `ENGRAM_CODE_INTEL_ENABLED=true`; existing `codebase_index` and `codebase_search` dispatch; bounded `codebase_status` reaches `idle`; then the legacy path fails on worktree isolation. |
 | Registry / compatibility | `go test ./internal/... -run 'TestUCI(Context|Alias|Checkout)'` | Authorized resolution succeeds; mismatched, ambiguous, private, revoked, and legacy-only paths fail before content lookup. |
 | Fenced PostgreSQL publication | `go test ./internal/db/gorm/... -run 'TestUCI(Publish|Lease|Replay|DeleteAll)'` | Incomplete upload does not switch current; old epoch is rejected; lost-ACK replay is idempotent; failed scan is not delete-all. |
-| Go parser / FTS / graph | `go test ./internal/... -run 'TestUCI(Go|ViewPinned|Graph)'` | Exact/FTS/graph facts cite the same View; malformed syntax is fresh and partial; unchanged caller is re-resolved after callee change. |
-| Native MCP isolation | `go test ./cmd/engram/... -run 'TestUCI(ClientContext|TwoClient)'` | Per-client defaults stay isolated through connect/select/reconnect and existing tool names route through typed context. |
+| Go AST, structured/text extraction, FTS, and graph | `go test ./internal/... -run 'TestUCI(Go|StructuredText|ViewPinned|Graph)'` | Go facts plus Markdown headings/links, JSON/YAML keys/local references, SQL DDL text facts without execution, and OpenAPI paths/operations/local references without external fetches cite the same View. Malformed syntax is fresh and partial. |
+| Native MCP isolation and installation harness | `go test ./cmd/engram/... -run 'TestUCI(Install|StandardClient|ClientContext|TwoClient)'` | Slice 4's Windows-safe disposable installation and standard-MCP-client harness uses the built daemon/server and standard clients. Per-client defaults stay isolated through connect/select/reconnect and existing tool names route through typed context. |
 | Real vector | `go test ./internal/... -run 'TestUCI(Semantic|VectorProfile)'` | Provider-generated conceptual result is profile/View scoped; disabled provider returns visible lexical-only/degraded state. |
 | JS / TS / TSX parser bundle | `go test ./internal/... -run 'TestUCI(TreeSitter|TypeScript|TSX)'` | Pinned bundle records its digest; JS/TS/TSX aliases/re-exports report correct coverage or explicit partial status. |
 | Watcher / recovery | `go test ./internal/... -run 'TestUCI(Watcher|Recovery|Reconcile)'` | Save/delete/rename/overflow/restart/offline paths reconcile current bytes, preserve the unaffected worktree, and do not re-embed unchanged input. |
 
-The commands are intentionally scoped placeholders for packages/tests created by their named slices. They are not evidence that those packages or tests exist today. The current repository-wide commands remain `make proto`, `make build-windows`, `make engram`, and `make test`; use them only when the owning implementation/release stage authorizes them.
+Each command pattern belongs to the named slice. A pattern becomes runnable when that slice adds its package and test. It does not prove that the package, test, or release evidence exists today. The current repository-wide commands remain `make proto`, `make build-windows`, `make engram`, and `make test`; use them only when the owning implementation/release stage authorizes them.
 
 ## Build and Transport Gate
 
-After the protobuf and parser changes exist:
+After the relevant Slice 4 transport and Slice 6 parser changes exist:
 
 ```powershell
 make proto
@@ -90,7 +100,7 @@ Record:
 
 ## Native Installed Two-Client Gate
 
-Use the Windows-safe disposable installation harness introduced by implementation, not a direct Go service call or a module fake.
+Use the versioned Windows-safe disposable installation and standard-MCP-client harness that Slice 4 introduces. Do not use a direct Go service call or a module fake.
 
 1. Install the built server, daemon, and parser worker in a disposable native target.
 2. Connect client A and client B concurrently to one daemon, rooted in the adversarial primary/linked worktrees. Attach client C after both are bound.
@@ -112,8 +122,8 @@ Expected installed-path evidence is a redacted receipt containing built artifact
 A UCI-1 claim requires one exact-head evidence package, not a collection of unrelated green unit logs:
 
 - real PostgreSQL registry/publication/lease/replay evidence;
-- parser bundle and supported-language coverage evidence;
-- installed Windows two-client proof;
+- parser bundle, supported-language coverage, and structured/text minimum coverage evidence;
+- installed Windows two-client proof from the Slice 4 harness;
 - actual semantic provider result and separate degraded-mode evidence;
 - authorization-negative matrix;
 - all assigned UCI-1 acceptance scenarios and the 12-task baseline/value outcome;

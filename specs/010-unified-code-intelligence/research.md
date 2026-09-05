@@ -48,15 +48,17 @@
 - Local SQLite as the primary source/graph/vector database: rejected because it bypasses server authorization, durable shared publication, and source/view history.
 - New graph service, Qdrant, or broker: rejected by the adopted storage contract and constitution’s single modular-monolith constraint.
 
-## R-05 — Parsing, Language Scope, and Licensing Boundary
+## R-05 — Parsing, structured/text scope, and licensing boundary
 
-**Decision**: Use the Go standard library for the first Go tracer. For JavaScript, TypeScript, and TSX, ship a bounded local parser worker built with the official `github.com/tree-sitter/go-tree-sitter` binding and pinned `tree-sitter-javascript` / `tree-sitter-typescript` grammars. The worker receives bounded source bytes plus a profile and emits facts/diagnostics only; it has no server/admin key, no repository plugin loading, no package installation, no source execution, and no network API.
+**Decision**: Use the Go standard library for the first Go tracer. For JavaScript, TypeScript, and TSX, ship a bounded local parser worker built with the official `github.com/tree-sitter/go-tree-sitter` binding and pinned `tree-sitter-javascript` / `tree-sitter-typescript` grammars. Slice 3 also owns the UCI-1 structured/text minimum: Markdown headings/links, JSON/YAML keys and local references, SQL DDL parsed as text only, and OpenAPI paths/operations/local references without external-ref fetches. The worker receives bounded source bytes plus a profile and emits facts/diagnostics only; it has no server/admin key, no repository plugin loading, no package installation, no source execution, and no network API.
 
-**Rationale**: The adopted retrieval contract requires Go AST first and Tree-sitter for JS/TS/TSX, plus a build-verified parser bundle. The official Go binding documents CGO use and explicit object closure; the core binding and the JavaScript/TypeScript grammar repositories publish MIT licenses. This meets the clean-room and bundle-pinning boundary while avoiding an external parser service.
+**Rationale**: The adopted retrieval contract requires Go AST first, Tree-sitter for JS/TS/TSX, and build-verified parser bundles. It also defines the structured/text facts that UCI-1 must extract. The official Go binding documents CGO use and explicit object closure; the core binding and the JavaScript/TypeScript grammar repositories publish MIT licenses. This meets the clean-room and bundle-pinning boundary while avoiding an external parser service. SQL text extraction and local OpenAPI resolution preserve the same boundary because neither executes a query nor fetches an external document.
 
 **Alternatives considered**:
 
-- Parse JS/TS/TSX through `npm install`, TypeScript compiler startup, project scripts, or remote parser service: rejected because it executes or trusts project-controlled behavior and adds uncontrolled availability/authority.
+- Parse JS/TS/TSX through `npm install`, TypeScript compiler startup, project scripts, or a remote parser service: rejected because it executes or trusts project-controlled behavior and adds uncontrolled availability/authority.
+- Execute SQL or fetch an OpenAPI external reference as part of extraction: rejected because the input is untrusted source material, not a request to access another system or document.
+- Treat broad document enrichment, richer navigation, or Code UI as the structured/text minimum: rejected because those belong to UCI-2.
 - Claim a loaded grammar equals supported language behavior: rejected because grammar presence does not validate resolver coverage, build targets, or versioned bundle provenance.
 
 **External evidence (accessed 2026-09-05)**:
@@ -67,20 +69,21 @@
 - JavaScript grammar license: <https://raw.githubusercontent.com/tree-sitter/tree-sitter-javascript/master/LICENSE> — MIT.
 - TypeScript grammar license: <https://raw.githubusercontent.com/tree-sitter/tree-sitter-typescript/master/LICENSE> — MIT.
 
-**Implementation boundary**: pin actual module/grammar revisions and preserve license/SBOM evidence with the parser bundle; build and run Windows amd64, Linux amd64, and supported macOS checks before claiming support.
+**Implementation boundary**: Pin actual module/grammar revisions and preserve license/SBOM evidence with the parser bundle. Build and run Windows amd64, Linux amd64, and supported macOS checks before claiming support. Gate the structured/text adapters in the Slice 3 extraction test; they do not need the semantic provider, parser bundle, or installed-client prerequisites of later slices.
 
 ## R-06 — Native Windows Real-Worktree Test Strategy
 
-**Decision**: The first RED/GREEN test creates a real Git repository and a linked worktree under `t.TempDir()` using argument-vector Git invocation, commits a shared base, and then writes divergent saved dirty bodies/callees. It drives two concurrent daemon contexts and later two standard stdio MCP clients against the same daemon. The fixture includes the required Windows path, `.git` file, CRLF/LF, path-space/Cyrillic/long-path, case, branch transition, move/recreate, and restart cases at their relevant stages.
+**Decision**: Slice 0 creates a real Git repository and a linked worktree under `t.TempDir()` using argument-vector Git invocation, commits a shared base, and then writes divergent saved dirty bodies/callees. It sets `ENGRAM_CODE_INTEL_ENABLED=true`, drives the existing `codebase_index`, `codebase_status`, and `codebase_search` seams, and waits for bounded terminal `idle` status before asserting the two-worktree collision. The first RED has no parser bundle, real semantic provider, or installed-client prerequisite. Slice 4 later adds the Windows-safe disposable installation and standard-MCP-client harness. Slice 8 consumes that versioned harness for installed acceptance.
 
-**Rationale**: `internal/projectidentity/resolver_integration_test.go` already creates a primary repo and `git worktree add` with `os/exec` argument vectors. Its topology matrix demonstrates a reusable native Git fixture pattern. The acceptance contract explicitly says package tests and direct service calls do not replace the installed Windows two-client proof.
+**Rationale**: `internal/projectidentity/resolver_integration_test.go` already creates a primary repo and `git worktree add` with `os/exec` argument vectors. Its topology matrix demonstrates a reusable native Git fixture pattern. The current code-intelligence path returns from `codebase_index` asynchronously and exposes `codebase_status` for bounded completion. The acceptance contract explicitly says package tests and direct service calls do not replace the installed Windows two-client proof.
 
 **Alternatives considered**:
 
 - Mock a worktree or copy a directory: rejected because it cannot test a linked worktree’s `.git` file/common-dir/private-git-dir semantics.
 - Use shell-concatenated Git commands: rejected because paths with spaces/Unicode and untrusted Git metadata require argument-safe plumbing.
+- Let disabled tools, a missing tool, or an unfinished index make the RED pass: rejected because that does not prove the raw-project isolation defect.
 
-**First proof shape**: the RED test calls actual existing MCP tool names (`codebase_index`, `codebase_search`) through the daemon/server seam; it does not invent an unimplemented UCI production type. It uses a common legacy selector on purpose so the old code proves its collision. The later installed test is a distinct release gate.
+**First proof shape**: The RED test calls actual existing MCP tool names through the daemon/server seam. It indexes A and B serially so the current `already_running` guard cannot be mistaken for isolation. It uses a common legacy selector on purpose so the old code proves its collision. The later installed test is a distinct release gate that consumes the Slice 4 harness.
 
 ## R-07 — Transport and Protobuf Ownership
 
@@ -117,9 +120,9 @@
 
 ## R-10 — Scope Boundary and Deferred Work
 
-**Decision**: UCI-1 ships the adopted Go/JS/TS/TSX plus structured/text minimum, native two-client proof, real semantic path, and recovery. UCI-2 retains the Code UI and broader navigation/language work. UCI-3 retains broad product-domain address migration and legacy index retirement.
+**Decision**: UCI-1 ships the adopted Go/JS/TS/TSX scope plus Markdown headings/links, JSON/YAML keys/local references, SQL DDL text extraction without execution, and OpenAPI paths/operations/local references without external fetches. It also ships the native two-client proof, real semantic path, and recovery. UCI-2 retains the Code UI and broader navigation/language work. UCI-3 retains broad product-domain address migration and legacy index retirement.
 
-**Rationale**: The accepted spec explicitly makes UCI-1A+B one release and makes Code UI separately accepted UCI-2 surface work. The plan must shape UCI-1 so future Code UI can consume Source/Checkout/View selectors but must not design or implement that surface.
+**Rationale**: The accepted spec makes UCI-1A+B one release and makes Code UI separately accepted UCI-2 surface work. The plan must shape UCI-1 so future Code UI can consume Source/Checkout/View selectors but must not design or implement that surface.
 
 **Alternatives considered**:
 
@@ -134,8 +137,9 @@
 | Code-index entry points | Current daemon adapter, gRPC client/server, MCP handlers, legacy walker/store/retrieval are all identified as migration seams. | `plan.md` source map |
 | Context ownership | Per transport client/session binding; server authorizes canonical context. | `data-model.md` ownership and invariants |
 | PostgreSQL / SQLite roles | PostgreSQL authority; SQLite local operational journal only. | `data-model.md` authority boundary |
-| Parser dependency / licenses | Standard Go AST; pinned MIT Tree-sitter binding and JS/TS grammars in a bounded local worker. | `plan.md` and this record |
-| Windows worktree proof | Real linked Git worktree fixture first, installed two-client proof at release. | `quickstart.md` |
+| Parser dependency / structured-text scope | Standard Go AST; pinned MIT Tree-sitter binding and JS/TS grammars; Slice 3 owns the defined Markdown/JSON/YAML/SQL/OpenAPI minimum with SQL text-only and no external OpenAPI fetch. | `plan.md`, `quickstart.md`, and this record |
+| Slice-0 activation and completion | The RED enables the current capability, proves `codebase_index`/`codebase_search` dispatch, waits for existing `codebase_status` completion, and then asserts isolation. | `plan.md` and `quickstart.md` |
+| Windows worktree and installed proof | Slice 0 uses a real linked Git worktree. Slice 4 owns the Windows-safe disposable installation and standard-MCP-client harness. Slice 8 consumes that harness for the installed two-client proof. | `plan.md` and `quickstart.md` |
 | Protobuf ownership | Additive messages/RPCs within the existing `EngramService`; no tag reuse or second service. | `plan.md` execution slice 4 |
 | Real vector proof | Provider-generated vector, scoped exact PostgreSQL baseline, profile health surfaced. | `quickstart.md` |
 | Watcher/recovery | Dedicated watcher, persisted dirty state/jobs, fenced atomic publication. | `data-model.md` transitions |
