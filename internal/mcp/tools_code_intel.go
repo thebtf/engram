@@ -38,9 +38,11 @@ func codeIntelEnabled() bool {
 }
 
 const (
-	codebaseSearchDefaultLimit          = 10
-	codebaseSearchMaxLimit              = 50
-	legacyUnscopedCodebaseRetrievalMode = "legacy_unscoped"
+	codebaseSearchDefaultLimit                = 10
+	codebaseSearchMaxLimit                    = 50
+	codebaseAfterBarrierMaxTokenLength        = 2_048
+	codebaseAfterBarrierMaxWaitMS       int64 = 60_000
+	legacyUnscopedCodebaseRetrievalMode       = "legacy_unscoped"
 )
 
 // codebaseIntelligenceApplication is an optional capability of the existing
@@ -50,6 +52,10 @@ type codebaseIntelligenceApplication interface {
 	ResolveLegacyProject(context.Context, uci.AuthorizedContext, string) (uci.AliasTarget, error)
 	SearchCodebase(context.Context, uci.AuthorizedContext, codebaseSearchInput) (uci.QueryResponse, error)
 	CodebaseStatus(context.Context, uci.AuthorizedContext) (codebaseStatusSnapshot, error)
+}
+
+type codebaseFreshnessApplication interface {
+	CodebaseFreshness(context.Context, uci.AuthorizedContext, string) (uci.QueryFreshness, error)
 }
 
 type codebaseSearchInput struct {
@@ -111,6 +117,7 @@ func codebaseSearchTool() Tool {
 					"type":        "string",
 					"description": "Optional legacy compatibility evidence only; it never selects a UCI context",
 				},
+				"after_barrier": codebaseAfterBarrierSchema(),
 			},
 		},
 	}
@@ -134,6 +141,29 @@ func codebaseStatusTool() Tool {
 					"type":        "string",
 					"description": "Optional legacy compatibility evidence only; it never selects a UCI context",
 				},
+				"after_barrier": codebaseAfterBarrierSchema(),
+			},
+		},
+	}
+}
+
+func codebaseAfterBarrierSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"token", "wait_ms"},
+		"properties": map[string]any{
+			"token": map[string]any{
+				"type":        "string",
+				"description": "Opaque server-issued read-your-save barrier token",
+				"minLength":   1,
+				"maxLength":   codebaseAfterBarrierMaxTokenLength,
+			},
+			"wait_ms": map[string]any{
+				"type":        "integer",
+				"description": "Maximum barrier wait in milliseconds",
+				"minimum":     1,
+				"maximum":     codebaseAfterBarrierMaxWaitMS,
 			},
 		},
 	}
@@ -298,19 +328,28 @@ type legacyUnscopedCodebaseStatusResponse struct {
 	LastIndexedAt  string `json:"last_indexed_at,omitempty"`
 }
 
+type codebaseAfterBarrierArgs struct {
+	Token  string `json:"token"`
+	WaitMS int64  `json:"wait_ms"`
+}
+
 type codebaseSearchArgs struct {
-	ContextHandle    *string `json:"context_handle"`
-	Query            *string `json:"query"`
-	PathPrefix       *string `json:"path_prefix"`
-	Limit            *int    `json:"limit"`
-	Project          *string `json:"project"`
+	ContextHandle    *string                   `json:"context_handle"`
+	Query            *string                   `json:"query"`
+	PathPrefix       *string                   `json:"path_prefix"`
+	Limit            *int                      `json:"limit"`
+	Project          *string                   `json:"project"`
+	AfterBarrier     *codebaseAfterBarrierArgs `json:"after_barrier"`
 	hasContextHandle bool
+	hasAfterBarrier  bool
 }
 
 type codebaseStatusArgs struct {
-	ContextHandle    *string `json:"context_handle"`
-	Project          *string `json:"project"`
+	ContextHandle    *string                   `json:"context_handle"`
+	Project          *string                   `json:"project"`
+	AfterBarrier     *codebaseAfterBarrierArgs `json:"after_barrier"`
 	hasContextHandle bool
+	hasAfterBarrier  bool
 }
 
 type codebaseStatusResponse struct {
@@ -318,6 +357,7 @@ type codebaseStatusResponse struct {
 	TotalChunks      int64                          `json:"total_chunks"`
 	EmbeddedChunks   int64                          `json:"embedded_chunks"`
 	EvidenceRecorder codebaseEvidenceRecorderHealth `json:"evidence_recorder"`
+	Freshness        *uci.QueryFreshness            `json:"freshness,omitempty"`
 }
 
 func decodeCodebaseSearchArgs(raw json.RawMessage) (codebaseSearchArgs, error) {
@@ -327,11 +367,15 @@ func decodeCodebaseSearchArgs(raw json.RawMessage) (codebaseSearchArgs, error) {
 		return codebaseSearchArgs{}, err
 	}
 	_, args.hasContextHandle = fields["context_handle"]
+	_, args.hasAfterBarrier = fields["after_barrier"]
 	if args.Query == nil || *args.Query == "" {
 		return codebaseSearchArgs{}, errors.New("query is required")
 	}
 	if args.hasContextHandle && (args.ContextHandle == nil || !validCodebaseContextHandle(*args.ContextHandle)) {
 		return codebaseSearchArgs{}, errors.New("invalid context handle")
+	}
+	if err := validateCodebaseAfterBarrier(args.AfterBarrier, args.hasAfterBarrier); err != nil {
+		return codebaseSearchArgs{}, err
 	}
 	if args.Limit != nil && (*args.Limit < 1 || *args.Limit > codebaseSearchMaxLimit) {
 		return codebaseSearchArgs{}, fmt.Errorf("limit must be between 1 and %d", codebaseSearchMaxLimit)
@@ -346,10 +390,31 @@ func decodeCodebaseStatusArgs(raw json.RawMessage) (codebaseStatusArgs, error) {
 		return codebaseStatusArgs{}, err
 	}
 	_, args.hasContextHandle = fields["context_handle"]
+	_, args.hasAfterBarrier = fields["after_barrier"]
 	if args.hasContextHandle && (args.ContextHandle == nil || !validCodebaseContextHandle(*args.ContextHandle)) {
 		return codebaseStatusArgs{}, errors.New("invalid context handle")
 	}
+	if err := validateCodebaseAfterBarrier(args.AfterBarrier, args.hasAfterBarrier); err != nil {
+		return codebaseStatusArgs{}, err
+	}
 	return args, nil
+}
+
+func validateCodebaseAfterBarrier(afterBarrier *codebaseAfterBarrierArgs, present bool) error {
+	if !present {
+		return nil
+	}
+	if afterBarrier == nil || !validCodebaseAfterBarrierToken(afterBarrier.Token) {
+		return errors.New("invalid after_barrier token")
+	}
+	if afterBarrier.WaitMS < 1 || afterBarrier.WaitMS > codebaseAfterBarrierMaxWaitMS {
+		return fmt.Errorf("after_barrier wait_ms must be between 1 and %d", codebaseAfterBarrierMaxWaitMS)
+	}
+	return nil
+}
+
+func validCodebaseAfterBarrierToken(token string) bool {
+	return len(token) <= codebaseAfterBarrierMaxTokenLength && codebaseContextIdentityText(token)
 }
 
 func decodeLegacyUnscopedCodebaseSearchArgs(raw json.RawMessage) (legacyUnscopedCodebaseSearchInput, error) {
@@ -422,6 +487,43 @@ func (args codebaseSearchArgs) searchInput() codebaseSearchInput {
 	return input
 }
 
+func codebaseFreshness(ctx context.Context, application codebaseIntelligenceApplication, authorized uci.AuthorizedContext, afterBarrier *codebaseAfterBarrierArgs) (*uci.QueryFreshness, uci.QueryFreshnessDisposition, error) {
+	freshnessApplication, ok := application.(codebaseFreshnessApplication)
+	if !ok {
+		if afterBarrier != nil {
+			return nil, "", errors.New("UCI freshness capability is unavailable")
+		}
+		return nil, "", nil
+	}
+
+	token := ""
+	freshnessContext := ctx
+	var cancel context.CancelFunc
+	if afterBarrier != nil {
+		token = afterBarrier.Token
+		freshnessContext, cancel = context.WithTimeout(ctx, time.Duration(afterBarrier.WaitMS)*time.Millisecond)
+	}
+	if cancel != nil {
+		defer cancel()
+	}
+
+	freshness, err := freshnessApplication.CodebaseFreshness(freshnessContext, authorized, token)
+	if err != nil {
+		if parentErr := ctx.Err(); parentErr != nil {
+			return nil, "", parentErr
+		}
+		return nil, "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+	disposition, err := uci.ClassifyQueryFreshness(freshness)
+	if err != nil {
+		return nil, "", err
+	}
+	return &freshness, disposition, nil
+}
+
 func (s *Server) handleUCICodebaseSearch(ctx context.Context, raw json.RawMessage) (string, error) {
 	args, err := decodeCodebaseSearchArgs(raw)
 	if err != nil {
@@ -438,14 +540,50 @@ func (s *Server) handleUCICodebaseSearch(ctx context.Context, raw json.RawMessag
 		return codebaseSearchContextRefusal(uci.ContextMismatch)
 	}
 
+	freshness, disposition, err := codebaseFreshness(ctx, application, authorized, args.AfterBarrier)
+	if err != nil {
+		if code, isContextFailure := codebaseContextErrorCode(err); isContextFailure {
+			return codebaseSearchContextRefusal(code)
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		return "", errors.New("codebase_search: UCI freshness unavailable")
+	}
+	if !s.codebaseContextEpochCurrent(epoch) {
+		return codebaseSearchContextRefusal(uci.ContextMismatch)
+	}
+
 	response, err := application.SearchCodebase(ctx, authorized, args.searchInput())
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
 		if code, isContextFailure := codebaseContextErrorCode(err); isContextFailure {
 			return codebaseSearchContextRefusal(code)
 		}
 		return "", errors.New("codebase_search: UCI application unavailable")
 	}
-	if !s.codebaseContextEpochCurrent(epoch) || !codebaseQueryResponseMatchesContext(response, authorized) {
+	matchesContext := codebaseQueryResponseMatchesContext(response, authorized)
+	if freshness != nil {
+		matchesContext = codebaseQueryResponseHasExactContext(response, authorized)
+	}
+	if !s.codebaseContextEpochCurrent(epoch) || !matchesContext {
+		return codebaseSearchContextRefusal(uci.ContextMismatch)
+	}
+	if freshness != nil {
+		if disposition == uci.QueryFreshnessDispositionOffline && !codebaseOfflineResponseRecorded(response) {
+			return "", errors.New("codebase_search: invalid offline UCI response")
+		}
+		response.Freshness = freshness
+		if disposition == uci.QueryFreshnessDispositionStale {
+			switch response.Status {
+			case uci.QueryStatusOK, uci.QueryStatusEmpty, uci.QueryStatusPartial, uci.QueryStatusStale:
+				response.Status = uci.QueryStatusStale
+			}
+		}
+	}
+	if !s.codebaseContextEpochCurrent(epoch) {
 		return codebaseSearchContextRefusal(uci.ContextMismatch)
 	}
 	return marshalValidatedCodebaseQueryResponse(response)
@@ -467,8 +605,25 @@ func (s *Server) handleUCICodebaseStatus(ctx context.Context, raw json.RawMessag
 		return "", codebaseContextClosedError(uci.ContextMismatch)
 	}
 
+	freshness, _, err := codebaseFreshness(ctx, application, authorized, args.AfterBarrier)
+	if err != nil {
+		if code, isContextFailure := codebaseContextErrorCode(err); isContextFailure {
+			return "", codebaseContextClosedError(code)
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		return "", errors.New("codebase_status: UCI freshness unavailable")
+	}
+	if !s.codebaseContextEpochCurrent(epoch) {
+		return "", codebaseContextClosedError(uci.ContextMismatch)
+	}
+
 	snapshot, err := application.CodebaseStatus(ctx, authorized)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
 		if code, isContextFailure := codebaseContextErrorCode(err); isContextFailure {
 			return "", codebaseContextClosedError(code)
 		}
@@ -483,6 +638,7 @@ func (s *Server) handleUCICodebaseStatus(ctx context.Context, raw json.RawMessag
 		TotalChunks:      snapshot.TotalChunks,
 		EmbeddedChunks:   snapshot.EmbeddedChunks,
 		EvidenceRecorder: snapshot.EvidenceRecorder,
+		Freshness:        freshness,
 	})
 	if err != nil {
 		return "", errors.New("codebase_status: marshal UCI response")
@@ -621,10 +777,21 @@ func codebaseQueryResponseMatchesContext(response uci.QueryResponse, authorized 
 	if response.Status == uci.QueryStatusUnavailable && response.Contexts == nil {
 		return true
 	}
+	return codebaseQueryResponseHasExactContext(response, authorized)
+}
+
+func codebaseQueryResponseHasExactContext(response uci.QueryResponse, authorized uci.AuthorizedContext) bool {
 	if response.Contexts == nil || len(*response.Contexts) != 1 {
 		return false
 	}
 	return codebaseQueryContextMatchesRef((*response.Contexts)[0], authorized.Ref())
+}
+
+func codebaseOfflineResponseRecorded(response uci.QueryResponse) bool {
+	return response.Status == uci.QueryStatusUnavailable &&
+		response.Error != nil && response.Error.Code == uci.QueryErrorCheckoutOffline &&
+		response.Items != nil && len(*response.Items) == 0 &&
+		response.Exposure != nil
 }
 
 func codebaseQueryContextMatchesRef(context uci.QueryContextRef, ref uci.ContextRef) bool {

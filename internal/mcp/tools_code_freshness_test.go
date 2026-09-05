@@ -171,7 +171,7 @@ func TestUCIFreshnessPublicStatesAreScopedAndClosed(t *testing.T) {
 			queryStatus:      uci.QueryStatusUnavailable,
 			hasQueryError:    true,
 			queryError:       uci.QueryErrorCheckoutOffline,
-			wantSearchCalls:  0,
+			wantSearchCalls:  1,
 			wantWatermarkSeq: 7,
 		},
 		{
@@ -197,6 +197,14 @@ func TestUCIFreshnessPublicStatesAreScopedAndClosed(t *testing.T) {
 			}
 			handle := fixture.selectContext(t, fixture.clientA, target)
 			fixture.application.setPlan(target, "", uciFreshnessTestPlan{freshness: test.freshness})
+			if test.queryStatus == uci.QueryStatusUnavailable {
+				response := fixture.application.queryResponses[target.CheckoutID]
+				emptyItems := uci.QueryItems{}
+				response.Status = uci.QueryStatusUnavailable
+				response.Error = &uci.QueryError{Code: uci.QueryErrorCheckoutOffline}
+				response.Items = &emptyItems
+				fixture.application.queryResponses[target.CheckoutID] = response
+			}
 
 			status := requireUCIFreshnessStatus(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_status", map[string]any{
 				"context_handle": handle,
