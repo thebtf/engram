@@ -74,9 +74,9 @@ func NewModuleWithClientInstanceID(clientInstanceID string) *Module {
 }
 
 // NewModuleWithPreparedIndexCollaborator constructs a module with the narrow
-// UCI prepared-target/index seam. A nil collaborator is intentionally closed:
-// UCI code indexing returns SOURCE_UNAVAILABLE until a scanner/registry owner
-// supplies authoritative targets and prepared manifests.
+// UCI server-binding/prepared-index seam. A nil collaborator still permits
+// server-authorized resolution and status proxying; only prepared local index
+// work returns SOURCE_UNAVAILABLE until a scanner owner is supplied.
 func NewModuleWithPreparedIndexCollaborator(clientInstanceID string, collaborator PreparedIndexCollaborator) *Module {
 	return newModule(clientInstanceID, collaborator)
 }

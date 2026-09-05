@@ -2,12 +2,20 @@ package engramcore
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auditcontext"
+	"github.com/thebtf/engram/internal/config"
+	"github.com/thebtf/engram/internal/module"
+	"github.com/thebtf/engram/internal/uci"
 	pb "github.com/thebtf/engram/proto/engram/v1"
+	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
@@ -15,18 +23,21 @@ import (
 )
 
 const (
-	uciClientTestSpaceID       = "11111111-1111-4111-8111-111111111111"
-	uciClientTestSourceID      = "22222222-2222-4222-8222-222222222222"
-	uciClientTestCheckoutAID   = "33333333-3333-4333-8333-333333333333"
-	uciClientTestCheckoutBID   = "77777777-7777-4777-8777-777777777777"
-	uciClientTestViewAID       = "44444444-4444-4444-8444-444444444444"
-	uciClientTestViewBID       = "88888888-8888-4888-8888-888888888888"
-	uciClientTestProfileID     = "55555555-5555-4555-8555-555555555555"
-	uciClientTestIncarnationA  = "66666666-6666-4666-8666-666666666666"
-	uciClientTestIncarnationB  = "99999999-9999-4999-8999-999999999999"
-	uciClientTestDigest        = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	uciClientTestServerBuildID = "server-build"
-	uciClientTestLeaseEpoch    = uint64(7)
+	uciClientTestSpaceID              = "11111111-1111-4111-8111-111111111111"
+	uciClientTestSourceID             = "22222222-2222-4222-8222-222222222222"
+	uciClientTestCheckoutAID          = "33333333-3333-4333-8333-333333333333"
+	uciClientTestCheckoutBID          = "77777777-7777-4777-8777-777777777777"
+	uciClientTestViewAID              = "44444444-4444-4444-8444-444444444444"
+	uciClientTestViewBID              = "88888888-8888-4888-8888-888888888888"
+	uciClientTestProfileID            = "55555555-5555-4555-8555-555555555555"
+	uciClientTestIncarnationA         = "66666666-6666-4666-8666-666666666666"
+	uciClientTestIncarnationB         = "99999999-9999-4999-8999-999999999999"
+	uciClientTestFrameDigest          = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	uciClientTestAggregatePartsDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	uciClientTestServerBuildID        = "server-build"
+	uciClientTestLocalRootID          = "local-root-a"
+	uciClientTestWorkstationID        = "workstation-a"
+	uciClientTestLeaseEpoch           = uint64(7)
 )
 
 func TestUCIClientForwardsBoundScopeAndBuild(t *testing.T) {
@@ -59,9 +70,10 @@ func TestUCIClientForwardsBoundScopeAndBuild(t *testing.T) {
 	require.Equal(t, begin.GetBuildId(), staged.GetBuildId())
 	require.Equal(t, uint64(1), staged.GetAcceptedSequence())
 	require.Equal(t, uint64(2), staged.GetAcceptedPartCount())
-	require.Equal(t, uciClientTestDigest, staged.GetPartDigest())
+	require.Equal(t, uciClientTestAggregatePartsDigest, staged.GetPartDigest())
+	require.NotEqual(t, frames[0].GetPayloadDigest(), staged.GetPartDigest())
 
-	finalize := uciClientTestFinalizeRequest(scope, begin.GetBuildId(), begin.GetLeaseEpoch(), reference)
+	finalize := uciClientTestFinalizeRequest(scope, begin.GetBuildId(), begin.GetLeaseEpoch(), reference, staged.GetPartDigest())
 	published, err := client.Finalize(ctx, finalize)
 	require.NoError(t, err)
 	requireUCIClientContextEqual(t, reference, published.GetPublishedContext())
@@ -95,6 +107,7 @@ func TestUCIClientForwardsBoundScopeAndBuild(t *testing.T) {
 	requireUCIClientScopeEqual(t, scope, rpc.finalizeRequests[0].GetScope())
 	require.Equal(t, begin.GetBuildId(), rpc.finalizeRequests[0].GetBuildId())
 	require.Equal(t, begin.GetLeaseEpoch(), rpc.finalizeRequests[0].GetLeaseEpoch())
+	require.Equal(t, staged.GetPartDigest(), rpc.finalizeRequests[0].GetPartsDigest())
 	require.Len(t, rpc.queryRequests, 1)
 	requireUCIClientContextEqual(t, reference, rpc.queryRequests[0].GetContext())
 	require.Len(t, rpc.exploreRequests, 1)
@@ -106,10 +119,7 @@ func TestUCIClientPropagatesSourceSessionMetadata(t *testing.T) {
 		outgoing, ok := metadata.FromOutgoingContext(ctx)
 		require.True(t, ok)
 		require.Equal(t, []string{"client-a"}, outgoing.Get(auditcontext.SourceSessionMetadataKey))
-		return &pb.BindCodeContextResponse{
-			ContextHandle: "context-handle-client-a",
-			Context:       request.GetRequestedContext(),
-		}, nil
+		return uciClientTestBindResponse(request), nil
 	}}
 	ctx := auditcontext.WithSourceSession(context.Background(), "client-a")
 	_, err := newUCIClient(rpc).Bind(ctx, &pb.BindCodeContextRequest{
@@ -117,6 +127,49 @@ func TestUCIClientPropagatesSourceSessionMetadata(t *testing.T) {
 		RequestedContext: uciClientTestContextA(),
 	})
 	require.NoError(t, err)
+}
+
+func TestUCIClientAcceptsCompleteNoViewHandleBinding(t *testing.T) {
+	const contextHandle = "opaque-context-handle"
+	rpc := &uciClientRPCFake{}
+
+	bound, err := newUCIClient(rpc).Bind(context.Background(), &pb.BindCodeContextRequest{
+		ClientSessionId: "client-a",
+		ContextHandle:   contextHandle,
+	})
+	require.NoError(t, err)
+	require.Equal(t, contextHandle, bound.GetContextHandle())
+	require.Nil(t, bound.GetContext())
+	requireUCIClientScopeEqual(t, uciClientTestScopeA(), bound.GetIndexScope())
+	require.Equal(t, uciClientTestLocalRootID, bound.GetLocalRootId())
+	require.Equal(t, uciClientTestWorkstationID, bound.GetWorkstationId())
+}
+
+func TestUCIClientRejectsIncompleteOrMismatchedHandleBinding(t *testing.T) {
+	const contextHandle = "opaque-context-handle"
+	for _, test := range []struct {
+		name   string
+		mutate func(*pb.BindCodeContextResponse)
+	}{
+		{name: "different handle", mutate: func(response *pb.BindCodeContextResponse) { response.ContextHandle = "other-handle" }},
+		{name: "missing scope", mutate: func(response *pb.BindCodeContextResponse) { response.IndexScope = nil }},
+		{name: "missing local root", mutate: func(response *pb.BindCodeContextResponse) { response.LocalRootId = "" }},
+		{name: "missing workstation", mutate: func(response *pb.BindCodeContextResponse) { response.WorkstationId = "" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rpc := &uciClientRPCFake{bind: func(_ context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
+				response := uciClientTestBindResponse(request)
+				test.mutate(response)
+				return response, nil
+			}}
+
+			_, err := newUCIClient(rpc).Bind(context.Background(), &pb.BindCodeContextRequest{
+				ClientSessionId: "client-a",
+				ContextHandle:   contextHandle,
+			})
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestUCIClientKeepsSessionsAndWorktreesIndependent(t *testing.T) {
@@ -225,7 +278,7 @@ func TestUCIClientPropagatesCancellation(t *testing.T) {
 			return err
 		}},
 		{name: "Finalize", invoke: func(client *uciClient, ctx context.Context) error {
-			_, err := client.Finalize(ctx, uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA()))
+			_, err := client.Finalize(ctx, uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA(), uciClientTestAggregatePartsDigest))
 			return err
 		}},
 		{name: "Query", invoke: func(client *uciClient, ctx context.Context) error {
@@ -282,7 +335,7 @@ func TestUCIClientRejectsNilOrMalformedResponses(t *testing.T) {
 				AcceptedFilesystemSequence: request.GetObservedFilesystemSequence(),
 			}, nil
 		}}
-		_, err := newUCIClient(rpc).Finalize(context.Background(), uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA()))
+		_, err := newUCIClient(rpc).Finalize(context.Background(), uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA(), uciClientTestAggregatePartsDigest))
 		require.Error(t, err)
 	})
 
@@ -308,7 +361,9 @@ func TestUCIClientRejectsMismatchedResponseBindings(t *testing.T) {
 		rpc := &uciClientRPCFake{bind: func(_ context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
 			responseContext := proto.Clone(request.GetRequestedContext()).(*pb.ContextRef)
 			responseContext.Generation++
-			return &pb.BindCodeContextResponse{ContextHandle: "context-handle-client-a", Context: responseContext}, nil
+			response := uciClientTestBindResponse(request)
+			response.Context = responseContext
+			return response, nil
 		}}
 		_, err := newUCIClient(rpc).Bind(context.Background(), &pb.BindCodeContextRequest{ClientSessionId: "client-a", RequestedContext: uciClientTestContextA()})
 		require.Error(t, err)
@@ -333,7 +388,7 @@ func TestUCIClientRejectsMismatchedResponseBindings(t *testing.T) {
 				BuildId:           "other-build",
 				AcceptedSequence:  frames[len(frames)-1].GetSequence(),
 				AcceptedPartCount: uint64(len(frames)),
-				PartDigest:        uciClientTestDigest,
+				PartDigest:        uciClientTestAggregatePartsDigest,
 			}, nil
 		}}}
 		_, err := newUCIClient(rpc).Stage(context.Background(), []*pb.StageCodeIndexFrame{uciClientTestStageFrame(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, 0)})
@@ -349,7 +404,7 @@ func TestUCIClientRejectsMismatchedResponseBindings(t *testing.T) {
 				AcceptedFilesystemSequence: request.GetObservedFilesystemSequence(),
 			}, nil
 		}}
-		_, err := newUCIClient(rpc).Finalize(context.Background(), uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA()))
+		_, err := newUCIClient(rpc).Finalize(context.Background(), uciClientTestFinalizeRequest(uciClientTestScopeA(), uciClientTestServerBuildID, uciClientTestLeaseEpoch, uciClientTestContextA(), uciClientTestAggregatePartsDigest))
 		require.Error(t, err)
 	})
 
@@ -368,6 +423,176 @@ func TestUCIClientRejectsMismatchedResponseBindings(t *testing.T) {
 		_, err := newUCIClient(rpc).Explore(context.Background(), uciClientTestExploreRequest(uciClientTestContextA()))
 		require.Error(t, err)
 	})
+}
+
+func TestUCIIndexAdapterBindsBeforeCollaboratorWithServerBinding(t *testing.T) {
+	const (
+		clientSessionID = "client-a"
+		contextHandle   = "opaque-context-handle"
+		rootHint        = "server-authorized-root-hint"
+	)
+	boundContext := uciClientTestContextA()
+	server := &uciIndexAdapterGRPCServer{
+		bind: func(_ context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
+			response := uciClientTestBindResponse(request)
+			response.Context = proto.Clone(boundContext).(*pb.ContextRef)
+			response.IndexScope = uciClientTestScopeA()
+			return response, nil
+		},
+	}
+	serverURL := startUCIIndexAdapterGRPC(t, server)
+	published := uciClientTestPublishedContext()
+	collaborator := &uciIndexCollaboratorFake{
+		result:        &IndexResult{Context: published, Embedded: 3, Deleted: 1, Uploaded: 4},
+		mutateBinding: true,
+	}
+	mod := NewModuleWithPreparedIndexCollaborator("", collaborator)
+	t.Cleanup(mod.pool.closeAll)
+	adapter := NewUCIIndexAdapter(mod)
+	project := uciClientTestProject(serverURL)
+
+	target, err := adapter.ResolveIndexTarget(context.Background(), clientSessionID, project, contextHandle)
+	require.NoError(t, err)
+	require.Equal(t, uciClientTestIndexBinding(boundContext), target.Binding)
+	requests := server.bindRequestsSnapshot()
+	require.Len(t, requests, 1)
+	require.Equal(t, clientSessionID, requests[0].GetClientSessionId())
+	require.Equal(t, contextHandle, requests[0].GetContextHandle())
+	require.Nil(t, requests[0].GetRequestedContext(), "project and CWD must not become binding authority")
+	calls, _, _, _ := collaborator.snapshot()
+	require.Zero(t, calls, "the collaborator cannot prepare authority before server Bind")
+
+	result, err := adapter.IndexCodebase(context.Background(), target, rootHint)
+	require.NoError(t, err)
+	require.Equal(t, &IndexResult{Context: published, Embedded: 3, Deleted: 1, Uploaded: 4}, result)
+	calls, received, receivedRoot, receivedClient := collaborator.snapshot()
+	require.Equal(t, 1, calls)
+	require.Equal(t, uciClientTestIndexBinding(boundContext), received.Binding)
+	require.Equal(t, rootHint, receivedRoot)
+	require.NotNil(t, receivedClient)
+	require.NotNil(t, target.Binding.Context)
+	require.Equal(t, int64(1), target.Binding.Context.Generation, "collaborator mutation must not alter the resolved binding")
+}
+
+func TestUCIIndexAdapterResolvesNoViewAndProxiesWithoutCollaborator(t *testing.T) {
+	const contextHandle = "registered-no-view"
+	server := &uciIndexAdapterGRPCServer{
+		call: func(context.Context, *pb.CallToolRequest) (*pb.CallToolResponse, error) {
+			return &pb.CallToolResponse{IsError: true, ContentJson: []byte("server error text")}, nil
+		},
+	}
+	serverURL := startUCIIndexAdapterGRPC(t, server)
+	mod := NewModuleWithClientInstanceID("")
+	t.Cleanup(mod.pool.closeAll)
+	adapter := NewUCIIndexAdapter(mod)
+
+	target, err := adapter.ResolveIndexTarget(context.Background(), "client-a", uciClientTestProject(serverURL), contextHandle)
+	require.NoError(t, err)
+	require.Nil(t, target.Binding.Context)
+	require.NoError(t, target.Binding.Validate())
+
+	_, err = adapter.IndexCodebase(context.Background(), target, "server-authorized-root-hint")
+	require.Error(t, err, "indexing still requires a prepared-index collaborator")
+	block, err := adapter.ProxyHandleTool(context.Background(), target, "codebase_status", json.RawMessage(`{}`))
+	require.Nil(t, block)
+	var proxyErr *module.ProxyIsError
+	require.True(t, errors.As(err, &proxyErr))
+	require.JSONEq(t, `{"type":"text","text":"server error text"}`, string(proxyErr.RawContent))
+	require.Len(t, server.callRequestsSnapshot(), 1)
+}
+
+type uciIndexAdapterGRPCServer struct {
+	pb.UnimplementedEngramServiceServer
+	mu sync.Mutex
+
+	bind func(context.Context, *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error)
+	call func(context.Context, *pb.CallToolRequest) (*pb.CallToolResponse, error)
+
+	bindRequests []*pb.BindCodeContextRequest
+	callRequests []*pb.CallToolRequest
+}
+
+func (server *uciIndexAdapterGRPCServer) BindCodeContext(ctx context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
+	server.mu.Lock()
+	server.bindRequests = append(server.bindRequests, proto.Clone(request).(*pb.BindCodeContextRequest))
+	bind := server.bind
+	server.mu.Unlock()
+	if bind != nil {
+		return bind(ctx, request)
+	}
+	return uciClientTestBindResponse(request), nil
+}
+
+func (server *uciIndexAdapterGRPCServer) CallTool(ctx context.Context, request *pb.CallToolRequest) (*pb.CallToolResponse, error) {
+	server.mu.Lock()
+	server.callRequests = append(server.callRequests, proto.Clone(request).(*pb.CallToolRequest))
+	call := server.call
+	server.mu.Unlock()
+	if call != nil {
+		return call(ctx, request)
+	}
+	return &pb.CallToolResponse{}, nil
+}
+
+func (server *uciIndexAdapterGRPCServer) bindRequestsSnapshot() []*pb.BindCodeContextRequest {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	requests := make([]*pb.BindCodeContextRequest, len(server.bindRequests))
+	for index, request := range server.bindRequests {
+		requests[index] = proto.Clone(request).(*pb.BindCodeContextRequest)
+	}
+	return requests
+}
+
+func (server *uciIndexAdapterGRPCServer) callRequestsSnapshot() []*pb.CallToolRequest {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	requests := make([]*pb.CallToolRequest, len(server.callRequests))
+	for index, request := range server.callRequests {
+		requests[index] = proto.Clone(request).(*pb.CallToolRequest)
+	}
+	return requests
+}
+
+func startUCIIndexAdapterGRPC(t *testing.T, server *uciIndexAdapterGRPCServer) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	grpcServer := grpc.NewServer()
+	pb.RegisterEngramServiceServer(grpcServer, server)
+	go func() { _ = grpcServer.Serve(listener) }()
+	t.Cleanup(grpcServer.GracefulStop)
+	return listener.Addr().String()
+}
+
+type uciIndexCollaboratorFake struct {
+	mu sync.Mutex
+
+	result        *IndexResult
+	mutateBinding bool
+	calls         int
+	target        ResolvedIndexTarget
+	rootHint      string
+	client        UCIIndexClient
+}
+
+func (fake *uciIndexCollaboratorFake) IndexPreparedCodebase(_ context.Context, target ResolvedIndexTarget, rootHint string, client UCIIndexClient) (*IndexResult, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.calls++
+	fake.target = target.Clone()
+	fake.rootHint = rootHint
+	fake.client = client
+	if fake.mutateBinding && target.Binding.Context != nil {
+		target.Binding.Context.Generation++
+	}
+	return fake.result, nil
+}
+
+func (fake *uciIndexCollaboratorFake) snapshot() (int, ResolvedIndexTarget, string, UCIIndexClient) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return fake.calls, fake.target.Clone(), fake.rootHint, fake.client
 }
 
 type uciClientRPCFake struct {
@@ -391,10 +616,7 @@ func (fake *uciClientRPCFake) BindCodeContext(ctx context.Context, request *pb.B
 	if fake.bind != nil {
 		return fake.bind(ctx, request)
 	}
-	return &pb.BindCodeContextResponse{
-		ContextHandle: "context-handle-" + request.GetClientSessionId(),
-		Context:       request.GetRequestedContext(),
-	}, nil
+	return uciClientTestBindResponse(request), nil
 }
 
 func (fake *uciClientRPCFake) BeginCodeIndex(ctx context.Context, request *pb.BeginCodeIndexRequest, _ ...grpc.CallOption) (*pb.BeginCodeIndexResponse, error) {
@@ -475,7 +697,7 @@ func (stream *uciClientStageStream) CloseAndRecv() (*pb.StageCodeIndexResponse, 
 		BuildId:           stream.sent[0].GetBuildId(),
 		AcceptedSequence:  stream.sent[len(stream.sent)-1].GetSequence(),
 		AcceptedPartCount: uint64(len(stream.sent)),
-		PartDigest:        uciClientTestDigest,
+		PartDigest:        uciClientTestAggregatePartsDigest,
 	}, nil
 }
 
@@ -516,6 +738,93 @@ func uciClientTestScope(checkoutID, incarnationID string) *pb.CodeIndexScope {
 	}
 }
 
+func uciClientTestBindResponse(request *pb.BindCodeContextRequest) *pb.BindCodeContextResponse {
+	response := &pb.BindCodeContextResponse{
+		ContextHandle: "context-handle-" + request.GetClientSessionId(),
+		Context:       request.GetRequestedContext(),
+		IndexScope:    uciClientTestScopeA(),
+		LocalRootId:   uciClientTestLocalRootID,
+		WorkstationId: uciClientTestWorkstationID,
+	}
+	if request.GetContextHandle() != "" {
+		response.ContextHandle = request.GetContextHandle()
+		return response
+	}
+	response.IndexScope = uciClientTestScopeForContext(request.GetRequestedContext())
+	return response
+}
+
+func uciClientTestScopeForContext(reference *pb.ContextRef) *pb.CodeIndexScope {
+	scope := uciClientTestScopeA()
+	if reference == nil {
+		return scope
+	}
+	if reference.GetCheckoutId() == uciClientTestCheckoutBID {
+		scope.IncarnationId = uciClientTestIncarnationB
+	}
+	scope.SourceId = reference.GetSourceId()
+	scope.CheckoutId = reference.GetCheckoutId()
+	scope.AnalysisProfileId = reference.GetAnalysisProfileId()
+	return scope
+}
+
+func uciClientTestIndexBinding(reference *pb.ContextRef) uci.IndexBinding {
+	scope := uciClientTestScopeForContext(reference)
+	binding := uci.IndexBinding{
+		Scope: uci.IndexScope{
+			SourceID:      scope.GetSourceId(),
+			CheckoutID:    scope.GetCheckoutId(),
+			IncarnationID: scope.GetIncarnationId(),
+		},
+		ProfileID:     scope.GetAnalysisProfileId(),
+		LocalRootID:   uciClientTestLocalRootID,
+		WorkstationID: uciClientTestWorkstationID,
+	}
+	if reference != nil {
+		contextRef := uciClientTestDomainContext(reference)
+		binding.Context = &contextRef
+	}
+	return binding
+}
+
+func uciClientTestDomainContext(reference *pb.ContextRef) uci.ContextRef {
+	contextRef := uci.ContextRef{
+		SourceID:          reference.GetSourceId(),
+		CheckoutID:        reference.GetCheckoutId(),
+		ViewID:            reference.GetViewId(),
+		AnalysisProfileID: reference.GetAnalysisProfileId(),
+		Generation:        reference.GetGeneration(),
+	}
+	if reference.SpaceId != nil {
+		spaceID := reference.GetSpaceId()
+		contextRef.SpaceID = &spaceID
+	}
+	return contextRef
+}
+
+func uciClientTestPublishedContext() uci.ContextRef {
+	spaceID := uciClientTestSpaceID
+	return uci.ContextRef{
+		SpaceID:           &spaceID,
+		SourceID:          uciClientTestSourceID,
+		CheckoutID:        uciClientTestCheckoutAID,
+		ViewID:            uciClientTestViewBID,
+		AnalysisProfileID: uciClientTestProfileID,
+		Generation:        2,
+	}
+}
+
+func uciClientTestProject(serverURL string) muxcore.ProjectContext {
+	return muxcore.ProjectContext{
+		ID:  "untrusted-project-selector",
+		Cwd: "untrusted-cwd",
+		Env: map[string]string{
+			config.EnvServerURL:        "http://" + serverURL,
+			config.EnvWorkstationToken: "fixture-token",
+		},
+	}
+}
+
 func uciClientTestBeginRequest(scope *pb.CodeIndexScope, ownerInstance, buildKey string) *pb.BeginCodeIndexRequest {
 	return &pb.BeginCodeIndexRequest{
 		Scope:         scope,
@@ -532,12 +841,12 @@ func uciClientTestStageFrame(scope *pb.CodeIndexScope, buildID string, leaseEpoc
 		BuildId:       buildID,
 		LeaseEpoch:    leaseEpoch,
 		Sequence:      sequence,
-		PayloadDigest: uciClientTestDigest,
+		PayloadDigest: uciClientTestFrameDigest,
 		Payload:       []byte("payload"),
 	}
 }
 
-func uciClientTestFinalizeRequest(scope *pb.CodeIndexScope, buildID string, leaseEpoch uint64, expectedParent *pb.ContextRef) *pb.FinalizeCodeIndexRequest {
+func uciClientTestFinalizeRequest(scope *pb.CodeIndexScope, buildID string, leaseEpoch uint64, expectedParent *pb.ContextRef, partsDigest string) *pb.FinalizeCodeIndexRequest {
 	startedAt := time.Date(2026, time.September, 5, 12, 0, 0, 0, time.UTC)
 	return &pb.FinalizeCodeIndexRequest{
 		Scope:                      scope,
@@ -545,11 +854,11 @@ func uciClientTestFinalizeRequest(scope *pb.CodeIndexScope, buildID string, leas
 		LeaseEpoch:                 leaseEpoch,
 		ExpectedParent:             expectedParent,
 		ManifestPartCount:          2,
-		PartsDigest:                uciClientTestDigest,
+		PartsDigest:                partsDigest,
 		ManifestEntryCount:         3,
-		ManifestDigest:             uciClientTestDigest,
+		ManifestDigest:             uciClientTestFrameDigest,
 		EdgeCount:                  4,
-		EdgesDigest:                uciClientTestDigest,
+		EdgesDigest:                uciClientTestFrameDigest,
 		ObservedFilesystemSequence: 9,
 		ScanStartedAt:              timestamppb.New(startedAt),
 		ScanCompletedAt:            timestamppb.New(startedAt.Add(time.Second)),

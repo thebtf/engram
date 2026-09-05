@@ -60,32 +60,45 @@ var (
 )
 
 // ResolvedIndexTarget is the fully authorized UCI identity for one index run.
-// Its connection details remain private to engramcore so callers cannot turn a
-// raw project selector into authority after resolution.
+// Binding is cloned from the server response and may have no Context only for a
+// registered checkout that has no published View. Its connection remains private
+// so callers cannot turn a raw project selector into authority after resolution.
 type ResolvedIndexTarget struct {
 	ClientSessionID string
 	ContextHandle   string
-	Context         uci.ContextRef
-	Scope           uci.IndexScope
+	Binding         uci.IndexBinding
 
 	connection *grpc.ClientConn
 }
 
-// IndexResult is the prepared indexer's result. Context must be the exact
-// immutable ContextRef supplied by the resolved target.
+// Clone returns a target with an independently owned server binding.
+func (target ResolvedIndexTarget) Clone() ResolvedIndexTarget {
+	clone := target
+	clone.Binding = target.Binding.Clone()
+	return clone
+}
+
+// BindingClone returns the server-authorized binding without exposing its
+// mutable Context pointer.
+func (target ResolvedIndexTarget) BindingClone() uci.IndexBinding {
+	return target.Binding.Clone()
+}
+
+// ContextClone returns the resolved View when one exists, or nil for a valid
+// registered checkout that has not yet published a View.
+func (target ResolvedIndexTarget) ContextClone() *uci.ContextRef {
+	return target.Binding.Clone().Context
+}
+
+// IndexResult is the prepared indexer's result. Context must be the real,
+// newly published ContextRef from successful server-side finalization; this
+// adapter never synthesizes a parent or View.
 type IndexResult struct {
 	Context  uci.ContextRef
 	Embedded int
 	Deleted  int
 	Uploaded int
 	Errors   []string
-}
-
-// PreparedIndexTarget is the authoritative context and checkout incarnation
-// discovered by the future registry/scanner owner before any UCI publication.
-type PreparedIndexTarget struct {
-	Context uci.ContextRef
-	Scope   uci.IndexScope
 }
 
 // UCIIndexClient is the narrow transport surface a prepared indexer uses to
@@ -97,11 +110,10 @@ type UCIIndexClient interface {
 	Finalize(context.Context, *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error)
 }
 
-// PreparedIndexCollaborator supplies handle-owned targets and real prepared
-// index work. It is absent until the scanner and registry can authoritatively
-// discover a checkout incarnation and manifest.
+// PreparedIndexCollaborator performs local prepared index work for a target
+// already authorized by the server. It must not select Context, Scope, or a
+// checkout incarnation.
 type PreparedIndexCollaborator interface {
-	PrepareIndexTarget(context.Context, string, muxcore.ProjectContext, string) (PreparedIndexTarget, error)
 	IndexPreparedCodebase(context.Context, ResolvedIndexTarget, string, UCIIndexClient) (*IndexResult, error)
 }
 
@@ -139,9 +151,8 @@ func NewUCIIndexAdapter(module *Module) *UCIIndexAdapter {
 	return &UCIIndexAdapter{module: module}
 }
 
-// ResolveIndexTarget resolves an opaque client-owned handle before codeintel
-// admits work. It binds the prepared context through the existing UCI client
-// and retains only typed target authority for subsequent operations.
+// ResolveIndexTarget validates an opaque client-owned handle, binds it at the
+// configured server, and retains only the server-authorized target authority.
 func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, clientSessionID string, project muxcore.ProjectContext, contextHandle string) (ResolvedIndexTarget, error) {
 	if err := uciClientContextError("ResolveIndexTarget", ctx); err != nil {
 		return ResolvedIndexTarget{}, err
@@ -149,18 +160,10 @@ func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, clientSessionI
 	if !validUCIClientIdentifier(clientSessionID, maxUCIClientIdentifierBytes) || !validUCIClientIdentifier(contextHandle, 128) {
 		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("resolved context handle is unavailable")
 	}
-	if a == nil || a.module == nil || a.module.preparedIndex == nil {
-		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("prepared index target is unavailable")
+	if a == nil || a.module == nil {
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("UCI server is unavailable")
 	}
 	m := a.module
-
-	prepared, err := m.preparedIndex.PrepareIndexTarget(ctx, clientSessionID, project, contextHandle)
-	if err != nil {
-		return ResolvedIndexTarget{}, err
-	}
-	if !validPreparedIndexTarget(prepared) {
-		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("prepared index target is invalid")
-	}
 
 	serverURL, err := m.requireServerURL(project)
 	if err != nil {
@@ -172,23 +175,22 @@ func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, clientSessionI
 		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("UCI server is unavailable")
 	}
 
-	requestedContext := uciClientProtoContextRef(prepared.Context)
 	bound, err := newUCIClient(pb.NewEngramServiceClient(conn)).Bind(
 		auditcontext.WithSourceSession(ctx, clientSessionID),
-		&pb.BindCodeContextRequest{ClientSessionId: clientSessionID, RequestedContext: requestedContext},
+		&pb.BindCodeContextRequest{ClientSessionId: clientSessionID, ContextHandle: contextHandle},
 	)
 	if err != nil {
 		return ResolvedIndexTarget{}, err
 	}
-	if !sameUCIClientContextRef(requestedContext, bound.GetContext()) {
-		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("UCI bound a different context")
+	binding, err := uciClientIndexBindingFromBindResponse(bound)
+	if err != nil {
+		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("UCI binding is invalid")
 	}
 
 	return ResolvedIndexTarget{
 		ClientSessionID: clientSessionID,
 		ContextHandle:   contextHandle,
-		Context:         cloneUCIIndexContext(prepared.Context),
-		Scope:           prepared.Scope,
+		Binding:         binding,
 		connection:      conn,
 	}, nil
 }
@@ -196,11 +198,11 @@ func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, clientSessionI
 // IndexCodebase executes only prepared UCI index work. Without the injected
 // collaborator it fails closed rather than scanning raw project bytes or
 // publishing an invented empty census.
-func (a *UCIIndexAdapter) IndexCodebase(ctx context.Context, target ResolvedIndexTarget, root string) (*IndexResult, error) {
+func (a *UCIIndexAdapter) IndexCodebase(ctx context.Context, target ResolvedIndexTarget, rootHint string) (*IndexResult, error) {
 	if err := uciClientContextError("IndexCodebase", ctx); err != nil {
 		return nil, err
 	}
-	if a == nil || a.module == nil || a.module.preparedIndex == nil || root == "" || !validResolvedIndexTarget(target) {
+	if a == nil || a.module == nil || a.module.preparedIndex == nil || rootHint == "" || !validResolvedIndexTarget(target) {
 		return nil, uciIndexSourceUnavailable("prepared code index is unavailable")
 	}
 	conn, err := a.connectionForResolvedIndexTarget(target)
@@ -209,15 +211,15 @@ func (a *UCIIndexAdapter) IndexCodebase(ctx context.Context, target ResolvedInde
 	}
 	result, err := a.module.preparedIndex.IndexPreparedCodebase(
 		auditcontext.WithSourceSession(ctx, target.ClientSessionID),
-		target,
-		root,
+		target.Clone(),
+		rootHint,
 		newUCIClient(pb.NewEngramServiceClient(conn)),
 	)
 	if err != nil {
 		return nil, err
 	}
-	if result == nil {
-		return nil, uciIndexSourceUnavailable("prepared indexer returned no result")
+	if !validUCIIndexResult(result, target) {
+		return nil, uciIndexSourceUnavailable("prepared indexer returned invalid result")
 	}
 	return result, nil
 }
@@ -265,52 +267,55 @@ func (a *UCIIndexAdapter) connectionForResolvedIndexTarget(target ResolvedIndexT
 	return target.connection, nil
 }
 
-func validPreparedIndexTarget(target PreparedIndexTarget) bool {
-	context := uciClientProtoContextRef(target.Context)
-	scope := uciClientProtoIndexScope(target.Scope, target.Context.AnalysisProfileID)
-	return validUCIClientContextRef(context) &&
-		validUCIClientIndexScope(scope) &&
-		target.Context.SourceID == target.Scope.SourceID &&
-		target.Context.CheckoutID == target.Scope.CheckoutID
-}
-
 func validResolvedIndexTarget(target ResolvedIndexTarget) bool {
 	return validUCIClientIdentifier(target.ClientSessionID, maxUCIClientIdentifierBytes) &&
 		validUCIClientIdentifier(target.ContextHandle, 128) &&
-		validPreparedIndexTarget(PreparedIndexTarget{Context: target.Context, Scope: target.Scope})
+		target.Binding.Validate() == nil
 }
 
-func uciClientProtoContextRef(reference uci.ContextRef) *pb.ContextRef {
-	result := &pb.ContextRef{
-		SourceId:          reference.SourceID,
-		CheckoutId:        reference.CheckoutID,
-		ViewId:            reference.ViewID,
-		AnalysisProfileId: reference.AnalysisProfileID,
-		Generation:        reference.Generation,
+func validUCIIndexResult(result *IndexResult, target ResolvedIndexTarget) bool {
+	if result == nil {
+		return false
 	}
-	if reference.SpaceID != nil {
-		spaceID := *reference.SpaceID
-		result.SpaceId = &spaceID
-	}
-	return result
+	binding := target.Binding
+	context := result.Context
+	binding.Context = &context
+	return binding.Validate() == nil
 }
 
-func uciClientProtoIndexScope(scope uci.IndexScope, analysisProfileID string) *pb.CodeIndexScope {
-	return &pb.CodeIndexScope{
-		SourceId:          scope.SourceID,
-		CheckoutId:        scope.CheckoutID,
-		IncarnationId:     scope.IncarnationID,
-		AnalysisProfileId: analysisProfileID,
+func uciClientIndexBindingFromBindResponse(response *pb.BindCodeContextResponse) (uci.IndexBinding, error) {
+	if response == nil {
+		return uci.IndexBinding{}, errUCIClientEmptyResponse
 	}
-}
-
-func cloneUCIIndexContext(reference uci.ContextRef) uci.ContextRef {
-	copy := reference
-	if reference.SpaceID != nil {
-		spaceID := *reference.SpaceID
-		copy.SpaceID = &spaceID
+	scope := response.GetIndexScope()
+	binding := uci.IndexBinding{
+		Scope: uci.IndexScope{
+			SourceID:      scope.GetSourceId(),
+			CheckoutID:    scope.GetCheckoutId(),
+			IncarnationID: scope.GetIncarnationId(),
+		},
+		ProfileID:     scope.GetAnalysisProfileId(),
+		LocalRootID:   response.GetLocalRootId(),
+		WorkstationID: response.GetWorkstationId(),
 	}
-	return copy
+	if context := response.GetContext(); context != nil {
+		contextRef := uci.ContextRef{
+			SourceID:          context.GetSourceId(),
+			CheckoutID:        context.GetCheckoutId(),
+			ViewID:            context.GetViewId(),
+			AnalysisProfileID: context.GetAnalysisProfileId(),
+			Generation:        context.GetGeneration(),
+		}
+		if context.SpaceId != nil {
+			spaceID := context.GetSpaceId()
+			contextRef.SpaceID = &spaceID
+		}
+		binding.Context = &contextRef
+	}
+	if err := binding.Validate(); err != nil {
+		return uci.IndexBinding{}, err
+	}
+	return binding.Clone(), nil
 }
 
 func uciIndexSourceUnavailable(message string) error {
@@ -383,6 +388,9 @@ func (client *uciClient) Begin(ctx context.Context, request *pb.BeginCodeIndexRe
 	return response, nil
 }
 
+// Stage sends one contiguous full stream and returns the server's aggregate
+// digest of canonical per-frame acknowledgements. Frame PayloadDigest values
+// remain raw-frame digests and are not used to derive the aggregate.
 func (client *uciClient) Stage(ctx context.Context, frames []*pb.StageCodeIndexFrame) (*pb.StageCodeIndexResponse, error) {
 	const operation = "Stage"
 	if err := uciClientContextError(operation, ctx); err != nil {
@@ -438,6 +446,8 @@ func (client *uciClient) Stage(ctx context.Context, frames []*pb.StageCodeIndexF
 	return response, nil
 }
 
+// Finalize forwards PartsDigest unchanged. Callers must use the aggregate
+// returned by Stage, never derive it from raw frame payload digests.
 func (client *uciClient) Finalize(ctx context.Context, request *pb.FinalizeCodeIndexRequest) (*pb.FinalizeCodeIndexResponse, error) {
 	const operation = "Finalize"
 	if err := uciClientContextError(operation, ctx); err != nil {
@@ -584,9 +594,18 @@ func uciClientIsNil(value any) bool {
 }
 
 func validUCIClientBindRequest(request *pb.BindCodeContextRequest) bool {
-	return request != nil && validUCIClientMessage(request, maxUCIClientBindBytes) &&
-		validUCIClientIdentifier(request.GetClientSessionId(), maxUCIClientIdentifierBytes) &&
-		validUCIClientContextRef(request.GetRequestedContext())
+	if request == nil || !validUCIClientMessage(request, maxUCIClientBindBytes) ||
+		!validUCIClientIdentifier(request.GetClientSessionId(), maxUCIClientIdentifierBytes) {
+		return false
+	}
+	switch {
+	case request.GetRequestedContext() != nil && request.GetContextHandle() == "":
+		return validUCIClientContextRef(request.GetRequestedContext())
+	case request.GetRequestedContext() == nil && request.GetContextHandle() != "":
+		return validUCIClientIdentifier(request.GetContextHandle(), 128)
+	default:
+		return false
+	}
 }
 
 func validUCIClientBeginRequest(request *pb.BeginCodeIndexRequest) bool {
@@ -670,10 +689,21 @@ func validUCIClientExploreRequest(request *pb.ExploreCodeRequest) bool {
 }
 
 func validUCIClientBindResponse(request *pb.BindCodeContextRequest, response *pb.BindCodeContextResponse) bool {
-	return response != nil && validUCIClientMessage(response, maxUCIClientResponseBytes) &&
-		validUCIClientIdentifier(response.GetContextHandle(), maxUCIClientIdentifierBytes) &&
-		validUCIClientContextRef(response.GetContext()) &&
-		sameUCIClientContextRef(request.GetRequestedContext(), response.GetContext())
+	if request == nil || response == nil || !validUCIClientMessage(response, maxUCIClientResponseBytes) ||
+		!validUCIClientIdentifier(response.GetContextHandle(), maxUCIClientIdentifierBytes) ||
+		!validUCIClientIndexScope(response.GetIndexScope()) ||
+		!validUCIClientIdentifier(response.GetLocalRootId(), maxUCIClientIdentifierBytes) ||
+		!validUCIClientIdentifier(response.GetWorkstationId(), maxUCIClientIdentifierBytes) {
+		return false
+	}
+	context := response.GetContext()
+	if context != nil && (!validUCIClientContextRef(context) || !contextMatchesUCIClientIndexScope(context, response.GetIndexScope())) {
+		return false
+	}
+	if request.GetContextHandle() != "" {
+		return request.GetRequestedContext() == nil && response.GetContextHandle() == request.GetContextHandle()
+	}
+	return request.GetContextHandle() == "" && context != nil && sameUCIClientContextRef(request.GetRequestedContext(), context)
 }
 
 func validUCIClientBeginResponse(request *pb.BeginCodeIndexRequest, response *pb.BeginCodeIndexResponse) bool {
