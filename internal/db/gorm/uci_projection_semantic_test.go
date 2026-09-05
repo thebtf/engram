@@ -162,6 +162,65 @@ func TestUCIProjectionStoreSemanticMethodsKeepVectorsScopedAndCovered(t *testing
 	require.Equal(t, complete, repeated)
 }
 
+func TestUCIProjectionStoreSelectCandidatesScopesLiteralPathPrefixBeforeLimit(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	ctx := context.Background()
+
+	outside := fixture.admitArtifact(t, fixture.source.SourceID, "path-prefix-outside", "// outside\nfunc PathPrefixNeedle() {}\n", UCIParseArtifactComplete)
+	literal := fixture.admitArtifact(t, fixture.source.SourceID, "path-prefix-literal", "// literal\nfunc PathPrefixNeedle() {}\n", UCIParseArtifactComplete)
+	nested := fixture.admitArtifact(t, fixture.source.SourceID, "path-prefix-nested", "// nested\nfunc PathPrefixNeedle() {}\n", UCIParseArtifactComplete)
+	wildcard := fixture.admitArtifact(t, fixture.source.SourceID, "path-prefix-wildcard", "// wildcard\nfunc PathPrefixNeedle() {}\n", UCIParseArtifactComplete)
+	primary := uciSemanticPublish(t, fixture, "path-prefix-primary", fixture.checkout, nil, ucidomain.IndexJobInitial,
+		[]uciPublicationArtifact{outside, literal, nested, wildcard},
+		[]ucidomain.IndexMembership{
+			uciPublicationPresentMembership("a-before.go", outside),
+			uciPublicationPresentMembership("src/special%_dir/target.go", literal),
+			uciPublicationPresentMembership("src/special%_dir/nested/child.go", nested),
+			uciPublicationPresentMembership("src/special!xdir/wildcard.go", wildcard),
+		},
+	)
+
+	sibling := fixture.admitArtifact(t, fixture.source.SourceID, "path-prefix-sibling", "// sibling\nfunc PathPrefixNeedle() {}\n", UCIParseArtifactComplete)
+	siblingView := uciSemanticPublish(t, fixture, "path-prefix-sibling", fixture.sibling, nil, ucidomain.IndexJobInitial,
+		[]uciPublicationArtifact{sibling},
+		[]ucidomain.IndexMembership{uciPublicationPresentMembership("src/special%_dir/foreign.go", sibling)},
+	)
+	require.Equal(t, primary.Context.SourceID, siblingView.Context.SourceID)
+	require.NotEqual(t, primary.Context.ViewID, siblingView.Context.ViewID)
+
+	authorized := uciSemanticAuthorize(t, fixture, primary.Context)
+	directory, err := fixture.projection.SelectCandidates(ctx, authorized, ucidomain.QuerySpec{
+		Mode:   ucidomain.QueryModeFTS,
+		Text:   "PathPrefixNeedle",
+		Filter: ucidomain.QueryFilter{PathPrefix: "src/special%_dir"},
+		Order:  ucidomain.QueryOrderPath,
+		Limit:  1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, ucidomain.IndexCoverageComplete, directory.Coverage)
+	require.Len(t, directory.Candidates, 2, "the store returns limit+1 after filtering inside the selected View")
+	paths := make([]string, 0, len(directory.Candidates))
+	for _, candidate := range directory.Candidates {
+		paths = append(paths, candidate.RelativePath)
+		require.NotEqual(t, outside.Artifact.ArtifactID, candidate.Proof.ArtifactID, "a globally earlier nonmatching row must not consume the limit")
+		require.NotEqual(t, wildcard.Artifact.ArtifactID, candidate.Proof.ArtifactID, "percent and underscore must be literal prefix characters")
+		require.NotEqual(t, sibling.Artifact.ArtifactID, candidate.Proof.ArtifactID, "another View of the same source must never enter the selected universe")
+	}
+	require.ElementsMatch(t, []string{"src/special%_dir/target.go", "src/special%_dir/nested/child.go"}, paths)
+
+	file, err := fixture.projection.SelectCandidates(ctx, authorized, ucidomain.QuerySpec{
+		Mode:   ucidomain.QueryModeFTS,
+		Text:   "PathPrefixNeedle",
+		Filter: ucidomain.QueryFilter{PathPrefix: "src/special%_dir/target.go"},
+		Order:  ucidomain.QueryOrderPath,
+		Limit:  1,
+	})
+	require.NoError(t, err)
+	require.Len(t, file.Candidates, 1)
+	require.Equal(t, literal.Artifact.ArtifactID, file.Candidates[0].Proof.ArtifactID)
+	require.Equal(t, "src/special%_dir/target.go", file.Candidates[0].RelativePath)
+}
+
 func uciSemanticPublish(t *testing.T, fixture *uciPublicationFixture, key string, checkout *UCICheckout, parent *ucidomain.ContextRef, jobKind ucidomain.IndexJobKind, artifacts []uciPublicationArtifact, memberships []ucidomain.IndexMembership) ucidomain.IndexPublishedView {
 	t.Helper()
 

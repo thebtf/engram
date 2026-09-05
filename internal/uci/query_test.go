@@ -365,6 +365,15 @@ func TestUCIQueryContinuationBindsClientViewProfileQueryFilterAndOrder(t *testin
 			}(),
 		},
 		{
+			name:       "path prefix",
+			authorized: authorizedA,
+			spec: func() QuerySpec {
+				changed := nextSpec
+				changed.Filter.PathPrefix = "ordered"
+				return changed
+			}(),
+		},
+		{
 			name:       "order",
 			authorized: authorizedA,
 			spec: func() QuerySpec {
@@ -382,6 +391,94 @@ func TestUCIQueryContinuationBindsClientViewProfileQueryFilterAndOrder(t *testin
 	}
 	if got := len(store.calls); got != callCount {
 		t.Fatalf("store calls after rejected continuations = %d, want %d", got, callCount)
+	}
+}
+
+func TestUCIQueryPathPrefixNormalizesAndScopesCandidates(t *testing.T) {
+	fixture := newQueryTestFixture()
+	store := &queryTestStore{candidates: []QueryCandidate{
+		queryTestCandidate(fixture.contextA, "70000000-0000-4000-8000-000000000051", "a", "PathPrefixNeedle", "fixture.api.Handler", "src/api/handler.go", "func PathPrefixNeedle() {}", 1),
+		queryTestCandidate(fixture.contextA, "70000000-0000-4000-8000-000000000052", "b", "PathPrefixNeedle", "fixture.api.Router", "src/api/nested/router.go", "func PathPrefixNeedle() {}", 2),
+		queryTestCandidate(fixture.contextA, "70000000-0000-4000-8000-000000000053", "c", "PathPrefixNeedle", "fixture.apix.Sibling", "src/apix/sibling.go", "func PathPrefixNeedle() {}", 3),
+		queryTestCandidate(fixture.contextA, "70000000-0000-4000-8000-000000000054", "d", "PathPrefixNeedle", "fixture.api.File", "src/api.go", "func PathPrefixNeedle() {}", 4),
+	}}
+	service := NewQueryService(store)
+	spec := QuerySpec{
+		ClientSessionID: "query-client-a",
+		Mode:            QueryModeFTS,
+		Text:            "PathPrefixNeedle",
+		Filter:          QueryFilter{PathPrefix: "./src//api/", Languages: []string{"go"}},
+		Order:           QueryOrderPath,
+		Limit:           10,
+	}
+
+	result, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), spec)
+	if err != nil {
+		t.Fatalf("Query() directory prefix error = %v", err)
+	}
+	paths := make([]string, 0, len(queryTestItems(t, result)))
+	for _, item := range queryTestItems(t, result) {
+		paths = append(paths, item.Path)
+	}
+	if want := []string{"src/api/handler.go", "src/api/nested/router.go"}; !reflect.DeepEqual(paths, want) {
+		t.Fatalf("directory prefix paths = %#v, want %#v", paths, want)
+	}
+	if got := store.calls[0].Spec.Filter.PathPrefix; got != "src/api" {
+		t.Fatalf("store path prefix = %q, want normalized %q", got, "src/api")
+	}
+	if got := spec.Filter.PathPrefix; got != "./src//api/" {
+		t.Fatalf("caller path prefix mutated to %q", got)
+	}
+
+	fileSpec := spec
+	fileSpec.Filter.PathPrefix = "src/api/handler.go"
+	fileResult, err := service.Query(context.Background(), newAuthorizedContext(fixture.contextA), fileSpec)
+	if err != nil {
+		t.Fatalf("Query() file prefix error = %v", err)
+	}
+	fileItems := queryTestItems(t, fileResult)
+	if len(fileItems) != 1 || fileItems[0].Path != "src/api/handler.go" {
+		t.Fatalf("file prefix items = %#v, want exact file", fileItems)
+	}
+}
+
+func TestUCIPathPrefixNormalization(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "empty", input: "", want: ""},
+		{name: "current directory", input: ".", want: ""},
+		{name: "slash normalized directory", input: "./internal//uci/", want: "internal/uci"},
+		{name: "literal like metacharacters", input: "src/special%_dir", want: "src/special%_dir"},
+		{name: "absolute", input: "/workspace/internal", wantErr: true},
+		{name: "traversal", input: "internal/../outside", wantErr: true},
+		{name: "parent", input: "..", wantErr: true},
+		{name: "windows drive", input: "C:/workspace/internal", wantErr: true},
+		{name: "windows backslash", input: `internal\uci`, wantErr: true},
+		{name: "unc", input: `\\server\share`, wantErr: true},
+		{name: "nul", input: "internal\x00uci", wantErr: true},
+		{name: "control", input: "internal/\u0085", wantErr: true},
+		{name: "invalid utf8", input: string([]byte{'a', 0xff}), wantErr: true},
+		{name: "overlong", input: strings.Repeat("a", queryMaxPath+1), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := NormalizeQueryPathPrefix(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("NormalizeQueryPathPrefix(%q) error = nil", tc.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NormalizeQueryPathPrefix(%q) error = %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Fatalf("NormalizeQueryPathPrefix(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -624,6 +721,9 @@ func queryTestDigest(character string) IndexDigest {
 
 func queryTestCandidateMatches(candidate QueryCandidate, spec QuerySpec) bool {
 	if len(spec.Filter.Languages) != 0 && !queryTestContains(spec.Filter.Languages, candidate.Language) {
+		return false
+	}
+	if prefix := spec.Filter.PathPrefix; prefix != "" && candidate.RelativePath != prefix && !strings.HasPrefix(candidate.RelativePath, prefix+"/") {
 		return false
 	}
 

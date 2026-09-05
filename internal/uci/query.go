@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"path"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -48,7 +49,10 @@ const (
 
 // QueryFilter limits candidates without widening the selected View.
 type QueryFilter struct {
-	Languages []string
+	// PathPrefix is an optional canonical slash-separated path below the selected View.
+	// An empty value has no path restriction.
+	PathPrefix string
+	Languages  []string
 }
 
 // QuerySpec is an untrusted query request presented after context authorization.
@@ -248,6 +252,12 @@ func normalizeQuerySpec(spec QuerySpec) (QuerySpec, error) {
 		}
 	}
 
+	pathPrefix, err := NormalizeQueryPathPrefix(spec.Filter.PathPrefix)
+	if err != nil {
+		return QuerySpec{}, err
+	}
+	normalized.Filter.PathPrefix = pathPrefix
+
 	if spec.Continuation != nil {
 		token := *spec.Continuation
 		if len(token) == 0 || len(token) > queryMaxContinuation || !utf8.ValidString(token) || strings.TrimSpace(token) != token {
@@ -256,6 +266,43 @@ func normalizeQuerySpec(spec QuerySpec) (QuerySpec, error) {
 		normalized.Continuation = &token
 	}
 	return normalized, nil
+}
+
+// NormalizeQueryPathPrefix closes an untrusted repository-relative path prefix
+// without consulting a filesystem or any context authority. Empty and current
+// directory prefixes denote no path restriction.
+func NormalizeQueryPathPrefix(value string) (string, error) {
+	if !queryBoundedText(value, 0, queryMaxPath) || strings.IndexByte(value, 0) >= 0 {
+		return "", fmt.Errorf("uci query: path prefix is invalid")
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return "", fmt.Errorf("uci query: path prefix is invalid")
+		}
+	}
+	if value == "" {
+		return "", nil
+	}
+	if strings.Contains(value, "\\") || path.IsAbs(value) || queryPathPrefixWindowsVolume(value) {
+		return "", fmt.Errorf("uci query: path prefix is invalid")
+	}
+	for _, component := range strings.Split(value, "/") {
+		if component == ".." || strings.Contains(component, ":") {
+			return "", fmt.Errorf("uci query: path prefix is invalid")
+		}
+	}
+	normalized := path.Clean(value)
+	if normalized == "." {
+		return "", nil
+	}
+	if normalized == ".." || strings.HasPrefix(normalized, "../") || path.IsAbs(normalized) || queryPathPrefixWindowsVolume(normalized) {
+		return "", fmt.Errorf("uci query: path prefix is invalid")
+	}
+	return normalized, nil
+}
+
+func queryPathPrefixWindowsVolume(value string) bool {
+	return len(value) >= 2 && value[1] == ':' && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z'))
 }
 
 func validQueryIdentity(value string, maximum int) bool {
@@ -568,7 +615,7 @@ func queryContinuationPayloadFor(ref ContextRef, spec QuerySpec, offset int) que
 		Generation:      ref.Generation,
 		Mode:            spec.Mode,
 		QueryDigest:     queryContinuationDigest("text", []string{spec.Text}),
-		FilterDigest:    queryContinuationDigest("languages", spec.Filter.Languages),
+		FilterDigest:    queryFilterContinuationDigest(spec.Filter),
 		Order:           spec.Order,
 		Offset:          offset,
 	}
@@ -604,6 +651,18 @@ func queryContinuationDigest(kind string, values []string) string {
 	for _, value := range values {
 		_, _ = hash.Write([]byte{0})
 		_, _ = hash.Write([]byte(value))
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func queryFilterContinuationDigest(filter QueryFilter) string {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("uci-query-continuation/filter"))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(filter.PathPrefix))
+	for _, language := range filter.Languages {
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(language))
 	}
 	return hex.EncodeToString(hash.Sum(nil))
 }

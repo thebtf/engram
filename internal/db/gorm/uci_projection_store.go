@@ -2025,6 +2025,10 @@ func buildUCIQueryCandidatesSQL(ref ucidomain.ContextRef, spec ucidomain.QuerySp
 		"artifact.sealed_at IS NOT NULL",
 		"artifact.facts_digest IS NOT NULL",
 	}
+	if prefix := spec.Filter.PathPrefix; prefix != "" {
+		conditions = append(conditions, `(membership.display_path = ? OR membership.display_path LIKE ? ESCAPE '\')`)
+		predicateArguments = append(predicateArguments, prefix, escapeUCIQueryLike(prefix)+"/%")
+	}
 
 	if len(spec.Filter.Languages) != 0 {
 		placeholders := make([]string, len(spec.Filter.Languages))
@@ -2189,6 +2193,10 @@ func validateUCIQuerySpec(spec ucidomain.QuerySpec) error {
 		if strings.TrimSpace(language) == "" || strings.TrimSpace(language) != language {
 			return fmt.Errorf("uci projection query: invalid language filter")
 		}
+	}
+	normalizedPathPrefix, err := ucidomain.NormalizeQueryPathPrefix(spec.Filter.PathPrefix)
+	if err != nil || normalizedPathPrefix != spec.Filter.PathPrefix {
+		return fmt.Errorf("uci projection query: invalid path prefix")
 	}
 	return nil
 }

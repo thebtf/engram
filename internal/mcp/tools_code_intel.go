@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"time"
+	"unicode/utf8"
 
 	gorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/retrieval"
@@ -100,7 +101,7 @@ func codebaseSearchTool() Tool {
 				},
 				"path_prefix": map[string]any{
 					"type":        "string",
-					"description": "Optional relative path prefix for the UCI search runtime",
+					"description": "Optional relative path prefix that filters only the already-authorized UCI View",
 				},
 				"limit": map[string]any{
 					"type":        "number",
@@ -342,6 +343,7 @@ type codebaseSearchArgs struct {
 	AfterBarrier     *codebaseAfterBarrierArgs `json:"after_barrier"`
 	hasContextHandle bool
 	hasAfterBarrier  bool
+	hasPathPrefix    bool
 }
 
 type codebaseStatusArgs struct {
@@ -368,8 +370,19 @@ func decodeCodebaseSearchArgs(raw json.RawMessage) (codebaseSearchArgs, error) {
 	}
 	_, args.hasContextHandle = fields["context_handle"]
 	_, args.hasAfterBarrier = fields["after_barrier"]
+	_, args.hasPathPrefix = fields["path_prefix"]
 	if args.Query == nil || *args.Query == "" {
 		return codebaseSearchArgs{}, errors.New("query is required")
+	}
+	if args.hasPathPrefix {
+		if args.PathPrefix == nil {
+			return codebaseSearchArgs{}, errors.New("invalid path prefix")
+		}
+		normalized, err := uci.NormalizeQueryPathPrefix(*args.PathPrefix)
+		if err != nil {
+			return codebaseSearchArgs{}, errors.New("invalid path prefix")
+		}
+		args.PathPrefix = &normalized
 	}
 	if args.hasContextHandle && (args.ContextHandle == nil || !validCodebaseContextHandle(*args.ContextHandle)) {
 		return codebaseSearchArgs{}, errors.New("invalid context handle")
@@ -457,6 +470,9 @@ func decodeStrictCodebaseArgs(raw json.RawMessage, target any) (map[string]json.
 	input := bytes.TrimSpace(raw)
 	if len(input) == 0 {
 		input = []byte("{}")
+	}
+	if !utf8.Valid(input) {
+		return nil, errors.New("arguments must be valid UTF-8")
 	}
 	if input[0] != '{' {
 		return nil, errors.New("arguments must be an object")

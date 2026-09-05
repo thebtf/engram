@@ -298,6 +298,57 @@ func TestUCICodeIntelCompatibilityRejectsOversizedLimitBeforeApplication(t *test
 	require.Len(t, fixture.application.searchCalls, queriesBefore, "oversized limits must be rejected, never silently clamped")
 }
 
+func TestUCICodeIntelCompatibilityNormalizesAndRejectsPathPrefixBeforeApplication(t *testing.T) {
+	fixture := newUCICodeIntelCompatibilityFixture(t)
+	handle := fixture.selectContext(t, fixture.clientA, fixture.refA)
+
+	valid := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{
+		"context_handle": handle,
+		"query":          uciCodeIntelCompatibilityQuery,
+		"path_prefix":    "./internal//",
+		"limit":          10,
+	})
+	requireUCICodeIntelQueryResponse(t, valid, fixture.refA, uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityBodyB)
+	require.Len(t, fixture.application.searchCalls, 1)
+	require.Equal(t, CodebaseSearchInput{
+		Query:      uciCodeIntelCompatibilityQuery,
+		PathPrefix: "internal",
+		Limit:      10,
+	}, fixture.application.searchCalls[0].input)
+
+	resolvesBefore := len(fixture.application.resolveInputs)
+	aliasesBefore := len(fixture.application.aliasCalls)
+	queriesBefore := len(fixture.application.searchCalls)
+	for _, tc := range []struct {
+		name       string
+		pathPrefix any
+	}{
+		{name: "null", pathPrefix: nil},
+		{name: "absolute", pathPrefix: "/workspace/internal"},
+		{name: "traversal", pathPrefix: "internal/../outside"},
+		{name: "windows", pathPrefix: `C:\workspace\internal`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", map[string]any{
+				"context_handle": handle,
+				"query":          uciCodeIntelCompatibilityQuery,
+				"path_prefix":    tc.pathPrefix,
+			})
+			require.NotNil(t, response.Error)
+			require.Nil(t, response.Result)
+			assert.Contains(t, strings.ToLower(response.Error.Message), "path prefix")
+			require.Len(t, fixture.application.resolveInputs, resolvesBefore, "invalid path prefix must fail before context resolution")
+			require.Len(t, fixture.application.aliasCalls, aliasesBefore)
+			require.Len(t, fixture.application.searchCalls, queriesBefore, "invalid path prefix must not reach the application")
+		})
+	}
+
+	rawInvalidUTF8 := append([]byte(`{"query":"`+uciCodeIntelCompatibilityQuery+`","path_prefix":"`), byte(0xff))
+	rawInvalidUTF8 = append(rawInvalidUTF8, []byte(`"}`)...)
+	_, err := decodeCodebaseSearchArgs(rawInvalidUTF8)
+	require.Error(t, err, "invalid UTF-8 path prefix must not be normalized through JSON replacement")
+}
+
 func TestUCICodeIntelCompatibilityToolSchemasAdvertiseContextHandleWithoutProjectAuthority(t *testing.T) {
 	for _, tool := range []Tool{codebaseSearchTool(), codebaseStatusTool()} {
 		tool := tool
