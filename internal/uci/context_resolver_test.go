@@ -22,6 +22,38 @@ const (
 	contextResolverTestProfile   = "50000000-0000-4000-8000-000000000001"
 )
 
+func TestUCIContextResolverRejectsUnnormalizedIdentityFields(t *testing.T) {
+	ref := contextResolverTestRefA()
+	for _, test := range []struct {
+		name      string
+		clientID  string
+		authRealm string
+		principal string
+	}{
+		{name: "blank client", authRealm: contextResolverTestRealm, principal: contextResolverTestPrincipal},
+		{name: "padded client", clientID: " client ", authRealm: contextResolverTestRealm, principal: contextResolverTestPrincipal},
+		{name: "padded realm", clientID: contextResolverTestClientA, authRealm: " realm ", principal: contextResolverTestPrincipal},
+		{name: "control principal", clientID: contextResolverTestClientA, authRealm: contextResolverTestRealm, principal: "principal\nprivate"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			catalog := &contextResolverCatalogFake{}
+			authorizer := &contextResolverAuthorizerFake{}
+			resolver := NewContextResolver(catalog, authorizer)
+
+			_, err := resolver.Resolve(context.Background(), ResolveContextInput{
+				ClientSessionID: test.clientID,
+				AuthRealm:       test.authRealm,
+				Principal:       test.principal,
+				Ref:             &ref,
+			})
+			assertContextResolverCode(t, err, "CONTEXT_MISMATCH")
+			if len(catalog.calls) != 0 || authorizer.calls != 0 {
+				t.Fatalf("invalid identity input reached catalog/authorizer: catalog=%d authorizer=%d", len(catalog.calls), authorizer.calls)
+			}
+		})
+	}
+}
+
 func TestUCIContextResolverRejectsInvalidOrMismatchedContextRefs(t *testing.T) {
 	canonical := contextResolverTestRefA()
 	withoutSpace := canonical
