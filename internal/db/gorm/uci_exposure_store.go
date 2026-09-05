@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/thebtf/engram/internal/uci"
 	"gorm.io/gorm"
 )
 
@@ -33,11 +34,21 @@ const (
 // already-authorized metadata; it does not select contexts, grant access, or
 // publish Views.
 type UCIExposureStore struct {
-	db *gorm.DB
+	db     *gorm.DB
+	health uci.ExposureHealthTracker
 }
 
 func NewUCIExposureStore(db *gorm.DB) *UCIExposureStore {
-	return &UCIExposureStore{db: db}
+	return NewUCIExposureStoreWithHealth(db, uci.NewExposureHealthController(db != nil))
+}
+
+// NewUCIExposureStoreWithHealth binds recorder-scoped health without aggregating
+// daemon or indexer state.
+func NewUCIExposureStoreWithHealth(db *gorm.DB, health uci.ExposureHealthTracker) *UCIExposureStore {
+	if health == nil {
+		health = uci.NewExposureHealthController(db != nil)
+	}
+	return &UCIExposureStore{db: db, health: health}
 }
 
 // UCIExposureInput is the complete, non-content input to one authorized result receipt.
@@ -78,8 +89,14 @@ type UCIEvidencePruneResult struct {
 
 // RecordExposure appends one exposure, returning the stored original row for an exact retry.
 // A key reuse with any different canonical binding returns only ErrUCIIdempotencyMismatch.
-func (s *UCIExposureStore) RecordExposure(ctx context.Context, in UCIExposureInput) (*UCIExposure, error) {
+func (s *UCIExposureStore) RecordExposure(ctx context.Context, in UCIExposureInput) (exposure *UCIExposure, err error) {
+	attempted := false
+	defer func() {
+		s.observeInitialExposureResult(attempted, err)
+	}()
+
 	if err := s.requireDB("record exposure"); err != nil {
+		s.markInitialExposureFailure()
 		return nil, err
 	}
 	normalized, err := normalizeUCIExposureInput(in)
@@ -91,6 +108,7 @@ func (s *UCIExposureStore) RecordExposure(ctx context.Context, in UCIExposureInp
 		return nil, err
 	}
 
+	attempted = true
 	existing, found, err := s.findExposureByIdempotency(ctx, normalized.AuthRealm, normalized.ClientSessionRef, normalized.IdempotencyKey)
 	if err != nil {
 		return nil, err
@@ -136,8 +154,16 @@ func (s *UCIExposureStore) RecordExposure(ctx context.Context, in UCIExposureInp
 }
 
 // RecordCompletion appends a verified supported-host callback evidence row.
-func (s *UCIExposureStore) RecordCompletion(ctx context.Context, in UCICompletionInput) (*UCICompletionEvidence, error) {
+func (s *UCIExposureStore) RecordCompletion(ctx context.Context, in UCICompletionInput) (completion *UCICompletionEvidence, err error) {
+	attempted := false
+	defer func() {
+		s.observeCompletionResult(attempted, err)
+	}()
+
 	if err := s.requireDB("record completion"); err != nil {
+		if s != nil && s.health != nil {
+			s.health.RecordCompletionFailure()
+		}
 		return nil, err
 	}
 	if !isUCIExposureRef(in.ExposureRef) {
@@ -148,6 +174,7 @@ func (s *UCIExposureStore) RecordCompletion(ctx context.Context, in UCICompletio
 		return nil, err
 	}
 
+	attempted = true
 	var exposure UCIExposure
 	if err := s.db.WithContext(ctx).Where("exposure_ref = ?", normalized.ExposureRef).First(&exposure).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -253,7 +280,13 @@ func (s *UCIExposureStore) PruneExpired(ctx context.Context, before time.Time, l
 // VerifyIntegrity is the normal PostgreSQL backup/restore verification path for
 // durable UCI evidence. It checks stored canonical digests, closed values, tuple
 // reachability, completion parents, and the database append-only guards.
-func (s *UCIExposureStore) VerifyIntegrity(ctx context.Context) error {
+func (s *UCIExposureStore) VerifyIntegrity(ctx context.Context) (err error) {
+	defer func() {
+		if err != nil {
+			s.markIntegrityFailure()
+		}
+	}()
+
 	if err := s.requireDB("verify evidence integrity"); err != nil {
 		return err
 	}
@@ -267,17 +300,17 @@ func (s *UCIExposureStore) VerifyIntegrity(ctx context.Context) error {
 
 	var brokenTupleCount int64
 	if err := s.db.WithContext(ctx).Raw(`
-		SELECT COUNT(*)
-		FROM uci_exposures AS exposure
-		LEFT JOIN ci_views AS view_row
-			ON view_row.view_id = exposure.view_id
-			AND view_row.checkout_id = exposure.checkout_id
-			AND view_row.source_id = exposure.source_id
-		LEFT JOIN sources AS source_row
-			ON source_row.source_id = exposure.source_id
-			AND source_row.auth_realm = exposure.auth_realm
-		WHERE view_row.view_id IS NULL OR source_row.source_id IS NULL
-	`).Scan(&brokenTupleCount).Error; err != nil {
+        SELECT COUNT(*)
+        FROM uci_exposures AS exposure
+        LEFT JOIN ci_views AS view_row
+            ON view_row.view_id = exposure.view_id
+            AND view_row.checkout_id = exposure.checkout_id
+            AND view_row.source_id = exposure.source_id
+        LEFT JOIN sources AS source_row
+            ON source_row.source_id = exposure.source_id
+            AND source_row.auth_realm = exposure.auth_realm
+        WHERE view_row.view_id IS NULL OR source_row.source_id IS NULL
+    `).Scan(&brokenTupleCount).Error; err != nil {
 		return fmt.Errorf("uci evidence integrity check exposure tuple: %w", err)
 	}
 	if brokenTupleCount != 0 {
@@ -286,11 +319,11 @@ func (s *UCIExposureStore) VerifyIntegrity(ctx context.Context) error {
 
 	var orphanCompletionCount int64
 	if err := s.db.WithContext(ctx).Raw(`
-		SELECT COUNT(*)
-		FROM uci_completion_evidence AS completion
-		LEFT JOIN uci_exposures AS exposure ON exposure.exposure_id = completion.exposure_id
-		WHERE exposure.exposure_id IS NULL
-	`).Scan(&orphanCompletionCount).Error; err != nil {
+        SELECT COUNT(*)
+        FROM uci_completion_evidence AS completion
+        LEFT JOIN uci_exposures AS exposure ON exposure.exposure_id = completion.exposure_id
+        WHERE exposure.exposure_id IS NULL
+    `).Scan(&orphanCompletionCount).Error; err != nil {
 		return fmt.Errorf("uci evidence integrity check completion parent: %w", err)
 	}
 	if orphanCompletionCount != 0 {
@@ -299,17 +332,17 @@ func (s *UCIExposureStore) VerifyIntegrity(ctx context.Context) error {
 
 	var guardCount int64
 	if err := s.db.WithContext(ctx).Raw(`
-		SELECT COUNT(*)
-		FROM pg_trigger AS trigger_row
-		JOIN pg_class AS relation ON relation.oid = trigger_row.tgrelid
-		JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-		WHERE namespace.nspname = current_schema()
-			AND relation.relname IN ('uci_exposures', 'uci_completion_evidence')
-			AND trigger_row.tgname IN ('uci_exposures_append_only_guard', 'uci_completion_evidence_append_only_guard')
-			AND trigger_row.tgenabled <> 'D'
-			AND pg_get_triggerdef(trigger_row.oid) LIKE '%uci_evidence_reject_mutation%'
-			AND NOT trigger_row.tgisinternal
-	`).Scan(&guardCount).Error; err != nil {
+        SELECT COUNT(*)
+        FROM pg_trigger AS trigger_row
+        JOIN pg_class AS relation ON relation.oid = trigger_row.tgrelid
+        JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = current_schema()
+            AND relation.relname IN ('uci_exposures', 'uci_completion_evidence')
+            AND trigger_row.tgname IN ('uci_exposures_append_only_guard', 'uci_completion_evidence_append_only_guard')
+            AND trigger_row.tgenabled <> 'D'
+            AND pg_get_triggerdef(trigger_row.oid) LIKE '%uci_evidence_reject_mutation%'
+            AND NOT trigger_row.tgisinternal
+    `).Scan(&guardCount).Error; err != nil {
 		return fmt.Errorf("uci evidence integrity check append-only guard: %w", err)
 	}
 	if guardCount != 2 {
@@ -609,4 +642,49 @@ func uciCanonicalBindingDigest(payload map[string]any) (string, error) {
 	canonical := bytes.TrimSuffix(encoded.Bytes(), []byte{'\n'})
 	sum := sha256.Sum256(canonical)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+func (s *UCIExposureStore) observeInitialExposureResult(attempted bool, err error) {
+	if !attempted || s == nil || s.health == nil {
+		return
+	}
+	if err == nil {
+		s.health.RecordInitialExposureSuccess()
+		return
+	}
+	if errors.Is(err, ErrUCIIdempotencyMismatch) {
+		s.health.RecordIdempotencyMismatch()
+		return
+	}
+	s.health.RecordInitialExposureFailure()
+}
+
+func (s *UCIExposureStore) observeCompletionResult(attempted bool, err error) {
+	if !attempted || s == nil || s.health == nil {
+		return
+	}
+	if err == nil {
+		s.health.RecordCompletionSuccess()
+		return
+	}
+	if errors.Is(err, ErrUCIIdempotencyMismatch) {
+		s.health.RecordIdempotencyMismatch()
+		return
+	}
+	if errors.Is(err, ErrUCIExposureNotFound) {
+		return
+	}
+	s.health.RecordCompletionFailure()
+}
+
+func (s *UCIExposureStore) markInitialExposureFailure() {
+	if s != nil && s.health != nil {
+		s.health.RecordInitialExposureFailure()
+	}
+}
+
+func (s *UCIExposureStore) markIntegrityFailure() {
+	if s != nil && s.health != nil {
+		s.health.RecordIntegrityFailure()
+	}
 }
