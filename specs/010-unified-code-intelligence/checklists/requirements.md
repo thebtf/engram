@@ -20,7 +20,7 @@
 - [x] SC-01 through SC-08 are measurable and bind their measurement to a defined fixture, product-task set, acceptance profile, or installed-path exercise.
 - [x] Success criteria are outcome-oriented and technology-agnostic; they measure correctness, isolation, timeliness, installed use, and developer value rather than prescribing an implementation mechanism.
 - [x] All P1 and P2 user journeys include independent test paths and concrete acceptance scenarios.
-- [x] Identity, client isolation, source-state consistency, updates, recovery, degradation, malformed content, authorization, privacy, traversal limits, and durable non-content UCI evidence are identified. Evidence has named ownership and canonical sources, append-only retention/backup/integrity rules, closed recorder health/failure behavior, exact-versus-mismatch idempotency, no-record refusal, verified supported-host completion boundaries (`succeeded`, `partial`, `failed`, `abandoned`, with no-callback `unknown`), and no access/View/publication/product-success authority.
+- [x] Identity, client isolation, source-state consistency, updates, recovery, degradation, malformed content, authorization, privacy, traversal limits, and durable non-content UCI evidence are identified. Evidence has named ownership and canonical sources, append-only retention/backup/integrity rules, closed recorder health/failure behavior, exact-versus-mismatch idempotency, explicit separation of a recordable authorized unavailable outcome from exposure-recorder failure, no-record refusal, verified supported-host completion boundaries (`succeeded`, `partial`, `failed`, `abandoned`, with no-callback `unknown`), and no access/View/publication/product-success authority.
 - [x] The specification declares UCI-1 in-scope behavior, retained UCI-2/UCI-3 deferrals, explicit exclusions, and non-widening authorization boundaries.
 - [x] Dependencies and assumptions identify the governing constitution, authorized installation boundary, adopted working contracts, acceptance corpus, baseline, and semantic-provider condition.
 
@@ -33,8 +33,8 @@
 
 ## Review Notes
 
-- Review iteration: 2 of 3.
+- Review iteration: 3 of 3.
 - Active template resolved through the installed Spec Kit convention to `.specify/templates/spec-template.md` (core top layer).
-- Result: **PASS** — 16/16 requirements-quality checks remain satisfied after the C1, C2, H1, and I1 corrections.
+- Result: **PASS** — 16/16 requirements-quality checks remain satisfied after the C1, C2, H1, I1, and RS-05 corrections.
 - The supporting contracts retain the intake’s detailed identity, storage, retrieval/graph, API, migration, acceptance, and UCI-owned durable non-content evidence design so the product-focused main specification does not collapse them into generic prose.
 - Exact remaining clarification topics: none.

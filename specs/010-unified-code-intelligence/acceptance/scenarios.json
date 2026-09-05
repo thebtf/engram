@@ -406,6 +406,15 @@
       "action": "Submit the second verified supported-host callback",
       "expected": "IDEMPOTENCY_MISMATCH returns only to the callback; no child row or stale completion record is returned, and the parent exposure remains unchanged without manufactured completion",
       "runtime_result": "not_run"
+    },
+    {
+      "id": "U46",
+      "milestone": "UCI-1",
+      "area": "evidence",
+      "arrange": "Authorized Source/Checkout/View and a closed unavailable result while the UCI exposure recorder remains healthy",
+      "action": "Return the unavailable search, graph, or versioned-read decision",
+      "expected": "Response keeps status unavailable with its closed source/index error, empty result items, the authorized contextual envelope, and one opaque exposure receipt; this remains distinct from EXPOSURE_UNAVAILABLE or IDEMPOTENCY_MISMATCH, which return exposure null and suppress the contextual envelope",
+      "runtime_result": "not_run"
     }
   ]
 }

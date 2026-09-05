@@ -46,7 +46,7 @@ Diff требует два explicit view refs того же source либо яв
 
 Принимает source/view/entity или source/view/path+span. Возвращает точный versioned excerpt из pinned source artifact и source hash. Для рабочего файла перед изменением агент запрашивает `verify_working_copy=true`: daemon сравнивает actual hash, а mismatch предлагает current view/targeted re-read. Read endpoint не редактирует файл и не выдаёт current disk body под старой citation.
 
-Every authorized `codebase_search`, `codebase_graph`, and `codebase_read` response carries one UCI exposure receipt only after the shared boundary authorizes Source, Checkout, and View and the evidence append succeeds. A context or permission refusal records nothing and returns `exposure: null`. An initial evidence failure returns only the closed unavailable envelope: `EXPOSURE_UNAVAILABLE`, `status: unavailable`, `exposure: null`, and no result body or items.
+Every authorized `codebase_search`, `codebase_graph`, and `codebase_read` response carries one UCI exposure receipt only after the shared boundary authorizes Source, Checkout, and View and the evidence append succeeds. This includes a closed authorized `status: unavailable` result: it returns its contextual envelope, closed source/index error, empty `items`, and opaque exposure receipt while recorder health remains `healthy`. A context or permission refusal records nothing and returns `exposure: null`. An initial evidence failure is distinct and returns only the closed failure envelope: `EXPOSURE_UNAVAILABLE`, `status: unavailable`, `exposure: null`, and no contextual envelope, result body, or items.
 
 ### codebase_index
 
@@ -99,7 +99,7 @@ Source/checkout/view, detected HEAD/ref и observed watermark; watch mode/last s
 }
 ```
 
-`status=partial` может иметь пустой список при демонстрации формы, но в actual engine означает неполную возможность/покрытие; не подменяет `empty` при полном корректном запросе. Response schema в `contracts/` закрепляет поля; semantic invariants проверяются отдельно.
+`status=partial` may have an empty list when demonstrating the shape, but in the actual engine it means incomplete capability or coverage; it does not replace `empty` for a complete correct request. A closed authorized `status=unavailable` response has an empty `items` array, retains its authorized context/freshness/retrieval/coverage envelope and opaque exposure receipt, and carries one closed source/index error. Only `EXPOSURE_UNAVAILABLE`, `IDEMPOTENCY_MISMATCH`, context refusal, or permission refusal suppresses that envelope and returns `exposure: null`. The response schema under `contracts/` fixes these fields; semantic invariants are checked separately.
 Каждый search hit содержит entity_key, source/view IDs, relative path, byte/line span, artifact/content digest, kind/language, excerpt, match_sources и optional score. Score не называется confidence. Graph edges содержат source/target entity refs, evidence kind, relation и evidence citations; все refs принадлежат contexts ответа.
 Coverage=complete означает полноту поддержанного extractor contract, не все семантически возможные связи языка. Отдельный `resolution_limits` в warnings поясняет dynamic/DI limitations.
 

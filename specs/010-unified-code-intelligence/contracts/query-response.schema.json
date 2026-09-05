@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Engram code-query response contract, designed not implemented",
+  "$comment": "This schema covers query responses only. COMPLETION_EVIDENCE_UNAVAILABLE is valid only on the separate verified supported-host completion callback and is intentionally excluded from this query error enum.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -665,7 +666,6 @@
         "properties": {
           "status": {
             "enum": [
-              "unavailable",
               "context_required",
               "forbidden"
             ]
@@ -747,29 +747,121 @@
         ]
       },
       "then": {
-        "properties": {
-          "error": {
+        "required": [
+          "error"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "contexts",
+              "freshness",
+              "retrieval",
+              "coverage",
+              "items",
+              "truncated",
+              "warnings",
+              "continuation"
+            ],
             "properties": {
-              "code": {
-                "enum": [
-                  "VIEW_RETIRED",
-                  "SOURCE_UNAVAILABLE",
-                  "CHECKOUT_OFFLINE",
-                  "INDEX_CATCHING_UP",
-                  "PARSER_UNSUPPORTED",
-                  "PARSER_PARTIAL",
-                  "VECTOR_UNAVAILABLE",
-                  "PROFILE_MISMATCH",
-                  "BUDGET_EXCEEDED",
-                  "LEASE_STALE",
-                  "BUILD_INCOMPLETE",
-                  "EXPOSURE_UNAVAILABLE",
-                  "IDEMPOTENCY_MISMATCH"
-                ]
+              "exposure": {
+                "type": "object"
+              },
+              "error": {
+                "properties": {
+                  "code": {
+                    "enum": [
+                      "VIEW_RETIRED",
+                      "SOURCE_UNAVAILABLE",
+                      "CHECKOUT_OFFLINE",
+                      "INDEX_CATCHING_UP",
+                      "PARSER_UNSUPPORTED",
+                      "PARSER_PARTIAL",
+                      "VECTOR_UNAVAILABLE",
+                      "PROFILE_MISMATCH",
+                      "BUDGET_EXCEEDED",
+                      "LEASE_STALE",
+                      "BUILD_INCOMPLETE"
+                    ]
+                  }
+                }
+              },
+              "items": {
+                "maxItems": 0
               }
+            },
+            "not": {
+              "required": [
+                "graph"
+              ]
+            }
+          },
+          {
+            "properties": {
+              "exposure": {
+                "type": "null"
+              },
+              "error": {
+                "properties": {
+                  "code": {
+                    "enum": [
+                      "EXPOSURE_UNAVAILABLE",
+                      "IDEMPOTENCY_MISMATCH"
+                    ]
+                  }
+                }
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "contexts"
+                  ]
+                },
+                {
+                  "required": [
+                    "freshness"
+                  ]
+                },
+                {
+                  "required": [
+                    "retrieval"
+                  ]
+                },
+                {
+                  "required": [
+                    "coverage"
+                  ]
+                },
+                {
+                  "required": [
+                    "items"
+                  ]
+                },
+                {
+                  "required": [
+                    "truncated"
+                  ]
+                },
+                {
+                  "required": [
+                    "warnings"
+                  ]
+                },
+                {
+                  "required": [
+                    "continuation"
+                  ]
+                },
+                {
+                  "required": [
+                    "graph"
+                  ]
+                }
+              ]
             }
           }
-        }
+        ]
       }
     },
     {
