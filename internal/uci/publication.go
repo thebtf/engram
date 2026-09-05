@@ -260,6 +260,22 @@ type IndexPublicationLimits struct {
 	MaxArtifactBytes   int64
 }
 
+// DefaultIndexPublicationLimits returns the first-release production bounds.
+// Payload and artifact limits share the admission hard caps; manifest and edge
+// counts match the private transport bounds for the documented large-repository
+// profile. A fresh value prevents callers from mutating shared policy state.
+func DefaultIndexPublicationLimits() IndexPublicationLimits {
+	return IndexPublicationLimits{
+		LeaseTTL:           5 * time.Minute,
+		MaxPartBytes:       IndexAdmissionMaxEncodedFrameBytes,
+		MaxParts:           IndexAdmissionMaxFrames,
+		MaxBuildBytes:      IndexAdmissionMaxTotalEncodedBytes,
+		MaxManifestEntries: 1_000_000,
+		MaxEdges:           5_000_000,
+		MaxArtifactBytes:   IndexAdmissionMaxArtifactBodyBytes,
+	}
+}
+
 // IndexStore owns the fenced durable publication state machine.
 type IndexStore interface {
 	Begin(ctx context.Context, caller IndexCaller, input IndexBeginInput) (IndexBeginResult, error)
