@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/thebtf/engram/internal/uci"
 	"gorm.io/gorm"
 )
 
@@ -336,6 +337,45 @@ func (s *UCIContextStore) LookupLegacyContextAliases(ctx context.Context, key Le
 		return nil, fmt.Errorf("uci context lookup legacy context aliases: %w", err)
 	}
 	return rows, nil
+}
+
+// LookupLegacyAliasRecords adapts stored aliases to the typed compatibility resolver contract.
+func (s *UCIContextStore) LookupLegacyAliasRecords(ctx context.Context, key uci.LegacyAliasKey) ([]uci.LegacyAliasRecord, error) {
+	rows, err := s.LookupLegacyContextAliases(ctx, LegacyContextAliasKey{
+		AuthRealm:       key.AuthRealm,
+		LegacyDomain:    key.LegacyDomain,
+		Scheme:          key.Scheme,
+		Value:           key.Value,
+		ClientNamespace: key.ClientNamespace,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	records := make([]uci.LegacyAliasRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, uci.LegacyAliasRecord{
+			Key: uci.LegacyAliasKey{
+				AuthRealm:       row.AuthRealm,
+				LegacyDomain:    row.LegacyDomain,
+				Scheme:          row.Scheme,
+				Value:           row.Value,
+				ClientNamespace: row.ClientNamespace,
+			},
+			State:    string(row.MappingState),
+			SpaceID:  copyUCIAliasTarget(row.SpaceID),
+			SourceID: copyUCIAliasTarget(row.SourceID),
+		})
+	}
+	return records, nil
+}
+
+func copyUCIAliasTarget(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func (s *UCIContextStore) CreateSpaceWithLegacyAlias(ctx context.Context, spaceIn CreateSpaceInput, aliasIn LegacyContextAliasInput) (*UCISpace, *UCILegacyContextAlias, error) {

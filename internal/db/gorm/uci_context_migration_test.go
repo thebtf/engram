@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	gormlib "gorm.io/gorm"
+
+	ucidomain "github.com/thebtf/engram/internal/uci"
 )
 
 const (
@@ -308,6 +310,19 @@ func TestUCIContextStoreMigrationAliasesAreIdempotentAtomicAndInputSafe(t *testi
 	require.Equal(t, first.AliasID, aliases[0].AliasID)
 	require.Equal(t, int64(1), aliases[0].Revision, "conflicting retry must not overwrite the existing alias")
 	require.JSONEq(t, first.Provenance, aliases[0].Provenance)
+	domainAliases, err := store.LookupLegacyAliasRecords(ctx, ucidomain.LegacyAliasKey{
+		AuthRealm:       aliasInput.AuthRealm,
+		LegacyDomain:    aliasInput.LegacyDomain,
+		Scheme:          aliasInput.Scheme,
+		Value:           aliasInput.Value,
+		ClientNamespace: aliasInput.ClientNamespace,
+	})
+	require.NoError(t, err)
+	require.Len(t, domainAliases, 1)
+	require.Equal(t, "resolved", domainAliases[0].State)
+	require.Equal(t, targetSpaceID, *domainAliases[0].SpaceID)
+	require.Nil(t, domainAliases[0].SourceID)
+	require.NotSame(t, first.SpaceID, domainAliases[0].SpaceID, "domain adapter must not expose store-owned target pointers")
 
 	crossRealm := aliasInput
 	crossRealm.AuthRealm = otherRealm
