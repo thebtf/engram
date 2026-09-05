@@ -20,7 +20,7 @@
 - [x] SC-01 through SC-08 are measurable and bind their measurement to a defined fixture, product-task set, acceptance profile, or installed-path exercise.
 - [x] Success criteria are outcome-oriented and technology-agnostic; they measure correctness, isolation, timeliness, installed use, and developer value rather than prescribing an implementation mechanism.
 - [x] All P1 and P2 user journeys include independent test paths and concrete acceptance scenarios.
-- [x] Identity, client isolation, source-state consistency, updates, recovery, degradation, malformed content, authorization, privacy, and traversal-limit edge cases are identified.
+- [x] Identity, client isolation, source-state consistency, updates, recovery, degradation, malformed content, authorization, privacy, traversal limits, authorized retrieval exposure, and supported-host completion boundaries are identified.
 - [x] The specification declares UCI-1 in-scope behavior, retained UCI-2/UCI-3 deferrals, explicit exclusions, and non-widening authorization boundaries.
 - [x] Dependencies and assumptions identify the governing constitution, authorized installation boundary, adopted working contracts, acceptance corpus, baseline, and semantic-provider condition.
 
@@ -33,8 +33,8 @@
 
 ## Review Notes
 
-- Review iteration: 1 of 3.
+- Review iteration: 2 of 3.
 - Active template resolved through the installed Spec Kit convention to `.specify/templates/spec-template.md` (core top layer).
-- Result: **PASS** — 16/16 requirements-quality checks satisfied.
-- The supporting contracts retain the intake’s detailed identity, storage, retrieval/graph, API, migration, and acceptance design so the product-focused main specification does not collapse them into generic prose.
+- Result: **PASS** — 16/16 requirements-quality checks remain satisfied after the C1 retrieval-exposure and I1 readiness corrections.
+- The supporting contracts retain the intake’s detailed identity, storage, retrieval/graph, API, migration, acceptance, and UCI-owned non-content exposure design so the product-focused main specification does not collapse them into generic prose.
 - Exact remaining clarification topics: none.

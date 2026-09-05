@@ -73,11 +73,30 @@ ci_jobs(job_id, source_id, checkout_id?, job_kind, input_fingerprint,
         lease_owner?, lease_expiry?, error_code?, counts)
 ci_analyses(analysis_id, view_id, kind, algorithm_revision, input_digest,
             artifact_refs, result_json, state)
+
+ci_exposures(exposure_id, exposure_ref, auth_realm, source_id, checkout_id, view_id,
+             request_ref, context_ref, actor_ref, client_session_ref,
+             operation_kind=code_search|code_graph|versioned_read,
+             result_state=ok|empty|partial|stale|unavailable,
+             retrieval_mode=exact|lexical|hybrid|graph|unavailable,
+             coverage_state=complete|partial|unavailable,
+             evidence_source=exact|fts|vector|graph|mixed|none,
+             certainty=established|partial|unavailable, recorded_at, idempotency_key)
+ci_completion_evidence(completion_evidence_id, exposure_id, supported_host_ref, callback_ref,
+                       outcome=succeeded|failed|abandoned, occurred_at, idempotency_key)
 ```
 
 `ci_blobs.safe_content` необязателен для исключённого файла; query endpoints не разрешают произвольное скачивание blob по hash. Источник с обнаруженным секретом по умолчанию получает metadata-only excluded state, без исходного body в server/index/provider. Coverage отражает исключение; scanner не обещает распознать любые секреты.
 `ci_definitions` и `ci_reference_sites` — content-derived facts без привязки к абсолютному пути worktree. Semantic resolution зависит от относительного path/module environment и хранится отдельно в view-scoped edges.
 Directory/docs/config nodes могут использовать такую же local definition форму с kind document/section/table/endpoint/config_key. Нельзя превращать хранимый JSONB результата анализа в универсальную изменяемую базу графа.
+
+## Retrieval exposure and completion
+
+`ci_exposures` is an additive UCI projection. The shared MCP search, graph, and versioned-read boundary inserts one row only after it authorizes the Source, Checkout, and View and determines a closed result state. The row uses opaque request, actor, and client-session refs plus the authorized context tuple. It stores no source body, query text, absolute path, secret, tool output, or unauthorized ID.
+
+The row is not an access grant, a View-selection mechanism, a publish record, or a product-success receipt. It cannot create authority or change a View. A retry with the same opaque idempotency key returns the same exposure reference.
+
+`ci_completion_evidence` is an optional append-only child relation. Only a verified callback from a host that supports this capability may add `succeeded`, `failed`, or `abandoned`. Without that row, completion is `unknown`; the server never turns a response, timeout, or absent callback into success.
 
 ## Ключи, FK и индексы
 
@@ -86,6 +105,8 @@ Membership intervals полузакрытые `[from,to)`, `from>=1`, `to>from` 
 Definition/ref/chunk rows ссылаются на существующий artifact; один chunk span не выходит за byte_length. Edge endpoints разрешаются только в membership выбранного view; relation/provenance enums закрыты. Unresolved site не имеет выдуманного target.
 Обязательные B-tree: membership checkout/path/interval; edges checkout/source endpoint/interval и reverse target endpoint/interval; jobs state/retry_after; views checkout/generation. GIN на lexical tsv; exact names и symbol keys — B-tree. `ci_embeddings` dimension1536 по существующему решению Engram; другой model той же размерности всё равно отдельный profile. Новый dimension — отдельная явная миграция, не смешивание векторами.
 Широкие secondary JSONB indexes не создавать заранее. Explain Analyze на acceptance corpus определяет нужные дополнительные индексы.
+
+`ci_exposures` requires unique `exposure_ref` and unique `(auth_realm, client_session_ref, idempotency_key)`. Its Source/Checkout/View keys must prove one authorized realm/source tuple. `ci_completion_evidence` has an FK to `ci_exposures` and unique `(exposure_id, supported_host_ref, idempotency_key)`. B-tree indexes serve both idempotency lookups and callback binding. Neither table needs a content, query, path, or tool-output index.
 
 ## Что такое опубликованный view
 
@@ -135,6 +156,7 @@ Relation к удалённому symbol не сохраняется как curre
 
 Начальные параметры: current view всегда сохраняется; последние32 поколения плюс published views за24h, временные query pins до30min. Это configurable policy, а не вечный event journal. Большая pinned история требует квоты и явного решения.
 GC сохраняет artifacts, достижимые из retained view/pin/valid analysis. Temporal history не удаляется, пока нужный pinned view опирается на interval. Jobs с obsolete input отменяются либо оставляют только reuse cache в лимите. GC batch small, не full-table lock.
+Exposure metadata follows its own bounded retention policy and may outlive a response only as non-content evidence. GC must preserve a completion child while its parent is retained, then remove both under the same policy. Retention never turns an exposure into an authorization record or a source-content archive.
 Unregister checkout не удаляет Source и предметные данные. Explicit source erase проверяет полномочия и удаляет index-derived bodies/embeddings/annotations согласно policy. Privacy revocation применяется к старым view/pins немедленно в query boundary; pinned history не является обходом ACL.
 
 ## Уточнения cache keys и capture policy

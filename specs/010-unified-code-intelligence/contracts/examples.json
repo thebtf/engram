@@ -33,6 +33,10 @@
         "unresolved_sites": 0,
         "unsupported_files": 0
       },
+      "exposure": {
+        "exposure_ref": "uci-exp_01JHYBRID000000000000001",
+        "completion_state": "unknown"
+      },
       "items": [
         {
           "ref": {
@@ -98,6 +102,10 @@
         "unresolved_sites": 0,
         "unsupported_files": 0
       },
+      "exposure": {
+        "exposure_ref": "uci-exp_01JEMPTY0000000000000001",
+        "completion_state": "unknown"
+      },
       "items": [],
       "truncated": false,
       "warnings": [],
@@ -137,6 +145,10 @@
         "structural": "complete",
         "unresolved_sites": 0,
         "unsupported_files": 0
+      },
+      "exposure": {
+        "exposure_ref": "uci-exp_01JGRAPH0000000000000001",
+        "completion_state": "unknown"
       },
       "items": [],
       "truncated": false,
@@ -226,6 +238,10 @@
         "structural": "partial",
         "unresolved_sites": 0,
         "unsupported_files": 0
+      },
+      "exposure": {
+        "exposure_ref": "uci-exp_01JSTALE0000000000000001",
+        "completion_state": "unknown"
       },
       "items": [],
       "truncated": false,

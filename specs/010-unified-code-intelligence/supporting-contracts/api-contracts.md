@@ -46,6 +46,8 @@ Diff требует два explicit view refs того же source либо яв
 
 Принимает source/view/entity или source/view/path+span. Возвращает точный versioned excerpt из pinned source artifact и source hash. Для рабочего файла перед изменением агент запрашивает `verify_working_copy=true`: daemon сравнивает actual hash, а mismatch предлагает current view/targeted re-read. Read endpoint не редактирует файл и не выдаёт current disk body под старой citation.
 
+Every authorized `codebase_search`, `codebase_graph`, and `codebase_read` response carries one UCI exposure receipt. The shared boundary records it only after the server authorizes Source, Checkout, and View. A context or permission refusal records nothing and returns `exposure: null`.
+
 ### codebase_index
 
 `action=start|reconcile|pause|resume|remove`, context selector и optional paths для read-your-save barrier. Start разрешён только для зарегистрированного/авторизованного source root, не произвольного server path. Returns job_id немедленно; индексирование не блокирует MCP handshake.
@@ -78,6 +80,7 @@ Source/checkout/view, detected HEAD/ref и observed watermark; watch mode/last s
   },
   "retrieval": {"mode": "hybrid", "vector_coverage": 0.94, "degradation_reasons": []},
   "coverage": {"structural": "partial", "unresolved_sites": 3, "unsupported_files": 0},
+  "exposure": {"exposure_ref": "uci-exp_01JAPI000000000000000001", "completion_state": "unknown"},
   "items": [],
   "truncated": false,
   "warnings": ["Некоторые dynamic calls не разрешены"],
@@ -88,6 +91,14 @@ Source/checkout/view, detected HEAD/ref и observed watermark; watch mode/last s
 `status=partial` может иметь пустой список при демонстрации формы, но в actual engine означает неполную возможность/покрытие; не подменяет `empty` при полном корректном запросе. Response schema в `contracts/` закрепляет поля; semantic invariants проверяются отдельно.
 Каждый search hit содержит entity_key, source/view IDs, relative path, byte/line span, artifact/content digest, kind/language, excerpt, match_sources и optional score. Score не называется confidence. Graph edges содержат source/target entity refs, evidence kind, relation и evidence citations; все refs принадлежат contexts ответа.
 Coverage=complete означает полноту поддержанного extractor contract, не все семантически возможные связи языка. Отдельный `resolution_limits` в warnings поясняет dynamic/DI limitations.
+
+### Retrieval exposure and completion
+
+`exposure` is a closed object with only `exposure_ref` and `completion_state`. `exposure_ref` is a bounded opaque value beginning `uci-exp_`; it is the only value a later supported-host callback can bind. `completion_state` is `unknown`, `succeeded`, `failed`, or `abandoned`. It is `unknown` unless a verified supported-host callback has written completion evidence.
+
+The UCI-owned recorder stores opaque request, context, actor, and client-session refs; authorized Source, Checkout, and View refs; operation kind; result state; retrieval and coverage modes; evidence source; certainty; timestamp; and idempotency key. It stores no source body, query text, absolute path, secret, tool output, or unauthorized ID. Its operation kinds are `code_search`, `code_graph`, and `versioned_read`. Its result states are `ok`, `empty`, `partial`, `stale`, and `unavailable`.
+
+Only a verified callback from a host that declares this capability can append `succeeded`, `failed`, or `abandoned` completion evidence for an `exposure_ref`. A host without that callback leaves completion `unknown`. The server never infers success from a response, elapsed time, or absent callback. Exposure and completion records are UCI projections, not authorization, View, or product-success authority.
 
 ## Свежесть и наблюдение
 
@@ -115,9 +126,13 @@ LinkResolver.Resolve(manifest, changed_facts, prior_sites) -> ScopedEdges
 SearchService.Query(AuthorizedContext, PinnedViewSet, QuerySpec) -> QueryResult
 GraphService.Explore(AuthorizedContext, PinnedViewSet, GraphSpec) -> GraphResult
 SourceReader.Read(AuthorizedContext, VersionedSpan) -> ExactExcerpt
+ExposureRecorder.Record(AuthorizedContext, ExposureInput) -> ExposureReceipt
+ExposureRecorder.RecordCompletion(VerifiedSupportedHostCallback) -> CompletionEvidence
 ```
 
 AuthorizedContext создаёт только auth/resolver boundary; запрос не сериализует привилегии. Domain code не импортирует transport DTO, а handlers не строят ad-hoc SQL по caller project strings.
+
+`ExposureRecorder` belongs to the UCI domain. `ExposureInput` contains only the closed non-content fields defined above. `Record` runs after context authorization and uses the caller’s opaque idempotency key. `RecordCompletion` validates the host capability and the opaque exposure reference before it writes an append-only child record. No existing general-purpose recorder is assumed or promoted by this contract.
 Parse products — untrusted computational input: server проверяет bounds, ownership, relation vocabulary, target membership и content digests до persistence. Скомпрометированный workstation остаётся TCB своего разрешённого source input; schema validation не доказывает истинность его файлов и не даёт доступа к другим sources.
 
 ## Приватный transport

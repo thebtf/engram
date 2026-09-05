@@ -129,6 +129,19 @@
 - Build the Code UI as acceptance visualization: rejected by Constitution Principle XII and the feature boundary.
 - Require UCI-2/3 completion before UCI-1: rejected because it prevents the first useful two-worktree vertical from shipping.
 
+## R-11 — Retrieval Exposure and Completion Ownership
+
+**Decision**: Add a UCI-owned `ExposureRecorder` port plus additive `ci_exposures` and optional `ci_completion_evidence` projections. Record an authorized search, graph result, or versioned read after Source/Checkout/View authorization. The record is idempotent, scoped, and non-content. A missing supported-host callback leaves completion explicitly `unknown`.
+
+**Rationale**: The current code-intelligence route has no generic retrieval exposure or completion recorder. Existing product-specific records do not carry the authorized Source/Checkout/View tuple, closed result metadata, or verified host-callback condition required here. Reusing them would either omit UCI context or promote an unrelated record into UCI authority.
+
+**Alternatives considered**:
+
+- Reuse an existing product-specific receipt or log: rejected because it has different ownership and does not satisfy the UCI authorization, idempotency, and non-content contract.
+- Infer completion from a successful response, elapsed time, or a missing callback: rejected because only an actual supported-host callback can establish completion evidence.
+
+**Implementation boundary**: The shared MCP query/read/graph boundary calls the port only after `AuthorizedContext` succeeds and a closed result state exists. The PostgreSQL projection holds opaque request/actor/client-session refs, authorized context refs, operation/result/retrieval/coverage/evidence/certainty metadata, timestamp, and idempotency key. It holds no source body, query text, absolute path, secret, tool output, or unauthorized ID. Exposure data cannot authorize a request, choose a View, or certify product success.
+
 ## Resolved Research Ledger
 
 | Question | Resolution | Planning artifact |
@@ -143,5 +156,6 @@
 | Protobuf ownership | Additive messages/RPCs within the existing `EngramService`; no tag reuse or second service. | `plan.md` execution slice 4 |
 | Real vector proof | Provider-generated vector, scoped exact PostgreSQL baseline, profile health surfaced. | `quickstart.md` |
 | Watcher/recovery | Dedicated watcher, persisted dirty state/jobs, fenced atomic publication. | `data-model.md` transitions |
+| Retrieval exposure/completion | No generic recorder exists. UCI owns an idempotent non-content exposure projection after authorization; supported-host callback evidence is optional and otherwise completion is `unknown`. | `data-model.md`, `supporting-contracts/api-contracts.md`, and `supporting-contracts/storage-and-indexing.md` |
 
 There are no unresolved planning questions in UCI-1A+B.

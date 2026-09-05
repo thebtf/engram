@@ -1,7 +1,7 @@
 {
   "status": "PASS",
   "date": "2026-09-05",
-  "validated_at": "2026-09-05T03:31:28Z",
+  "validated_at": "2026-09-05T05:28:37Z",
   "schema_examples_expected": 4,
   "document_json_blocks_expected": 3,
   "acceptance_cases_expected": 41,
@@ -11,16 +11,22 @@
   "evidence": {
     "json_syntax": "PASS 4/4",
     "schema_examples": "PASS 4/4",
+    "exposure_contract": "PASS 4/4",
     "scenario_milestones": "PASS 41/41",
-    "requirements_checklist": "PASS 16/16"
+    "requirements_checklist": "PASS 16/16",
+    "task_inventory": "PASS 94/94",
+    "coverage_matrix": "PASS 20/20"
   },
   "checks": [
-    "closed JSON schema and four response examples",
+    "closed JSON schema and four response examples with bounded opaque exposure refs",
+    "explicit unknown completion without a supported-host callback",
+    "authorization-refusal exposure null and non-content exposure fields",
     "enrichment watermark and applicable barrier scope, deadline, and state",
     "reference/source/view membership in examples",
     "valid span and relative path examples",
     "unique acceptance identifiers",
     "UCI-1 milestone selection includes U25, U29, U36, and U39",
+    "C1 task ownership and I1 dependency readiness wording",
     "internal document references"
   ]
 }

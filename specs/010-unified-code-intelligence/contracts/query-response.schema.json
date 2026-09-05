@@ -10,6 +10,7 @@
     "freshness",
     "retrieval",
     "coverage",
+    "exposure",
     "items",
     "truncated",
     "warnings",
@@ -263,6 +264,33 @@
             "null"
           ],
           "minimum": 0
+        }
+      }
+    },
+    "exposure": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "exposure_ref",
+        "completion_state"
+      ],
+      "properties": {
+        "exposure_ref": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 128,
+          "pattern": "^uci-exp_[A-Za-z0-9_-]+$"
+        },
+        "completion_state": {
+          "enum": [
+            "unknown",
+            "succeeded",
+            "failed",
+            "abandoned"
+          ]
         }
       }
     },
@@ -569,5 +597,36 @@
       ],
       "maxLength": 2048
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "context_required",
+              "forbidden"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "exposure": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "exposure": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  ]
 }
