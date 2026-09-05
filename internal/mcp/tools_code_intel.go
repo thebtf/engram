@@ -45,34 +45,34 @@ const (
 	legacyUnscopedCodebaseRetrievalMode       = "legacy_unscoped"
 )
 
-// codebaseIntelligenceApplication is an optional capability of the existing
+// CodebaseIntelligenceApplication is an optional capability of the existing
 // client-scoped context application. Keeping it separate preserves the context
 // selection seam for callers that do not provide code-intelligence runtime.
-type codebaseIntelligenceApplication interface {
+type CodebaseIntelligenceApplication interface {
 	ResolveLegacyProject(context.Context, uci.AuthorizedContext, string) (uci.AliasTarget, error)
-	SearchCodebase(context.Context, uci.AuthorizedContext, codebaseSearchInput) (uci.QueryResponse, error)
-	CodebaseStatus(context.Context, uci.AuthorizedContext) (codebaseStatusSnapshot, error)
+	SearchCodebase(context.Context, uci.AuthorizedContext, CodebaseSearchInput) (uci.QueryResponse, error)
+	CodebaseStatus(context.Context, uci.AuthorizedContext) (CodebaseStatusSnapshot, error)
 }
 
-type codebaseFreshnessApplication interface {
+type CodebaseFreshnessApplication interface {
 	CodebaseFreshness(context.Context, uci.AuthorizedContext, string) (uci.QueryFreshness, error)
 }
 
-type codebaseSearchInput struct {
+type CodebaseSearchInput struct {
 	Query      string
 	PathPrefix string
 	Limit      int
 }
 
-type codebaseEvidenceRecorderHealth struct {
+type CodebaseEvidenceRecorderHealth struct {
 	State           string `json:"state"`
 	LastFailureCode string `json:"last_failure_code"`
 }
 
-type codebaseStatusSnapshot struct {
+type CodebaseStatusSnapshot struct {
 	TotalChunks      int64
 	EmbeddedChunks   int64
-	EvidenceRecorder codebaseEvidenceRecorderHealth
+	EvidenceRecorder CodebaseEvidenceRecorderHealth
 }
 
 // SetLegacyUnscopedCodeChunkStore wires the intentionally invoked raw-project
@@ -356,7 +356,7 @@ type codebaseStatusResponse struct {
 	Context          uci.QueryContextRef            `json:"context"`
 	TotalChunks      int64                          `json:"total_chunks"`
 	EmbeddedChunks   int64                          `json:"embedded_chunks"`
-	EvidenceRecorder codebaseEvidenceRecorderHealth `json:"evidence_recorder"`
+	EvidenceRecorder CodebaseEvidenceRecorderHealth `json:"evidence_recorder"`
 	Freshness        *uci.QueryFreshness            `json:"freshness,omitempty"`
 }
 
@@ -476,8 +476,8 @@ func decodeStrictCodebaseArgs(raw json.RawMessage, target any) (map[string]json.
 	return fields, nil
 }
 
-func (args codebaseSearchArgs) searchInput() codebaseSearchInput {
-	input := codebaseSearchInput{Query: *args.Query, Limit: codebaseSearchDefaultLimit}
+func (args codebaseSearchArgs) searchInput() CodebaseSearchInput {
+	input := CodebaseSearchInput{Query: *args.Query, Limit: codebaseSearchDefaultLimit}
 	if args.PathPrefix != nil {
 		input.PathPrefix = *args.PathPrefix
 	}
@@ -487,8 +487,8 @@ func (args codebaseSearchArgs) searchInput() codebaseSearchInput {
 	return input
 }
 
-func codebaseFreshness(ctx context.Context, application codebaseIntelligenceApplication, authorized uci.AuthorizedContext, afterBarrier *codebaseAfterBarrierArgs) (*uci.QueryFreshness, uci.QueryFreshnessDisposition, error) {
-	freshnessApplication, ok := application.(codebaseFreshnessApplication)
+func codebaseFreshness(ctx context.Context, application CodebaseIntelligenceApplication, authorized uci.AuthorizedContext, afterBarrier *codebaseAfterBarrierArgs) (*uci.QueryFreshness, uci.QueryFreshnessDisposition, error) {
+	freshnessApplication, ok := application.(CodebaseFreshnessApplication)
 	if !ok {
 		if afterBarrier != nil {
 			return nil, "", errors.New("UCI freshness capability is unavailable")
@@ -509,6 +509,9 @@ func codebaseFreshness(ctx context.Context, application codebaseIntelligenceAppl
 
 	freshness, err := freshnessApplication.CodebaseFreshness(freshnessContext, authorized, token)
 	if err != nil {
+		if childErr := freshnessContext.Err(); childErr != nil {
+			return nil, "", childErr
+		}
 		if parentErr := ctx.Err(); parentErr != nil {
 			return nil, "", parentErr
 		}
@@ -548,6 +551,9 @@ func (s *Server) handleUCICodebaseSearch(ctx context.Context, raw json.RawMessag
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
 		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return "", err
+		}
 		return "", errors.New("codebase_search: UCI freshness unavailable")
 	}
 	if !s.codebaseContextEpochCurrent(epoch) {
@@ -564,15 +570,11 @@ func (s *Server) handleUCICodebaseSearch(ctx context.Context, raw json.RawMessag
 		}
 		return "", errors.New("codebase_search: UCI application unavailable")
 	}
-	matchesContext := codebaseQueryResponseMatchesContext(response, authorized)
-	if freshness != nil {
-		matchesContext = codebaseQueryResponseHasExactContext(response, authorized)
-	}
-	if !s.codebaseContextEpochCurrent(epoch) || !matchesContext {
+	if !codebaseQueryResponseHasExactContext(response, authorized) {
 		return codebaseSearchContextRefusal(uci.ContextMismatch)
 	}
-	if freshness != nil {
-		if disposition == uci.QueryFreshnessDispositionOffline && !codebaseOfflineResponseRecorded(response) {
+	if freshness != nil && (response.Freshness == nil || response.Freshness.State != uci.QueryFreshnessHistorical) {
+		if disposition == uci.QueryFreshnessDispositionOffline && !codebaseOfflineResponseRecordable(response) {
 			return "", errors.New("codebase_search: invalid offline UCI response")
 		}
 		response.Freshness = freshness
@@ -583,10 +585,9 @@ func (s *Server) handleUCICodebaseSearch(ctx context.Context, raw json.RawMessag
 			}
 		}
 	}
-	if !s.codebaseContextEpochCurrent(epoch) {
-		return codebaseSearchContextRefusal(uci.ContextMismatch)
-	}
-	return marshalValidatedCodebaseQueryResponse(response)
+	return s.releaseCodebaseQueryResponse(ctx, epoch, authorized, uci.ExposureOperationCodeSearch, response, func(candidate uci.QueryResponse) bool {
+		return codebaseQueryResponseHasExactContext(candidate, authorized)
+	}, "codebase_search")
 }
 
 func (s *Server) handleUCICodebaseStatus(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -613,6 +614,9 @@ func (s *Server) handleUCICodebaseStatus(ctx context.Context, raw json.RawMessag
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
 		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return "", err
+		}
 		return "", errors.New("codebase_status: UCI freshness unavailable")
 	}
 	if !s.codebaseContextEpochCurrent(epoch) {
@@ -632,6 +636,7 @@ func (s *Server) handleUCICodebaseStatus(ctx context.Context, raw json.RawMessag
 	if !s.codebaseContextEpochCurrent(epoch) {
 		return "", codebaseContextClosedError(uci.ContextMismatch)
 	}
+	snapshot.EvidenceRecorder = s.codebaseExposureRecorderHealth()
 
 	encoded, err := json.Marshal(codebaseStatusResponse{
 		Context:          codebaseQueryContextRef(authorized.Ref()),
@@ -646,14 +651,140 @@ func (s *Server) handleUCICodebaseStatus(ctx context.Context, raw json.RawMessag
 	return string(encoded), nil
 }
 
-func (s *Server) resolveCodebaseIntelligenceContext(ctx context.Context, contextHandle *string) (codebaseIntelligenceApplication, uci.AuthorizedContext, uint64, uci.ContextErrorCode) {
+func (s *Server) hasCodebaseIntelligenceApplication() bool {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+	_, ok := s.codebaseContextApplication.(CodebaseIntelligenceApplication)
+	return ok
+}
+
+// releaseCodebaseQueryResponse is the single release boundary for authorized
+// query results. It validates an application-owned pre-exposure response,
+// re-resolves the caller's authority, and atomically records the receipt
+// against the same context epoch before any contextual data is serialized.
+func (s *Server) releaseCodebaseQueryResponse(
+	ctx context.Context,
+	epoch uint64,
+	authorized uci.AuthorizedContext,
+	operation uci.ExposureOperation,
+	response uci.QueryResponse,
+	matches func(uci.QueryResponse) bool,
+	tool string,
+) (string, error) {
+	if !s.codebaseContextEpochCurrent(epoch) {
+		return codebaseSearchContextRefusal(uci.ContextMismatch)
+	}
+
+	reauthorized, contextCode := s.reauthorizeCodebaseContext(ctx, epoch, authorized)
+	if contextCode != "" {
+		return codebaseSearchContextRefusal(contextCode)
+	}
+
+	switch response.Status {
+	case uci.QueryStatusContextRequired, uci.QueryStatusForbidden:
+		if err := response.Validate(); err != nil {
+			return "", fmt.Errorf("%s: invalid UCI response", tool)
+		}
+		return marshalValidatedCodebaseQueryResponse(response)
+	}
+	if !matches(response) || response.ValidatePreExposure() != nil {
+		return "", fmt.Errorf("%s: invalid UCI response", tool)
+	}
+
+	input, err := codebaseExposureInput(ctx, operation, response)
+	if err != nil {
+		return codebaseExposureFailureResponse(uci.QueryErrorExposureUnavailable)
+	}
+	receipt, current, err := s.recordCodebaseExposure(ctx, epoch, reauthorized, input)
+	if !current {
+		return codebaseSearchContextRefusal(uci.ContextMismatch)
+	}
+	if err != nil {
+		if errors.Is(err, uci.ErrIdempotencyMismatch) {
+			return codebaseExposureFailureResponse(uci.QueryErrorIdempotencyMismatch)
+		}
+		return codebaseExposureFailureResponse(uci.QueryErrorExposureUnavailable)
+	}
+
+	response.Exposure = &receipt
+	if err := response.Validate(); err != nil {
+		return "", fmt.Errorf("%s: invalid released UCI response", tool)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return "", fmt.Errorf("%s: marshal UCI response", tool)
+	}
+	return string(encoded), nil
+}
+
+func (s *Server) reauthorizeCodebaseContext(ctx context.Context, epoch uint64, authorized uci.AuthorizedContext) (uci.AuthorizedContext, uci.ContextErrorCode) {
+	input, err := codebaseContextCallerInput(ctx)
+	if err != nil {
+		return uci.AuthorizedContext{}, uci.ContextMismatch
+	}
+	want := authorized.Ref()
+	input.Ref = &want
+	application, currentEpoch, found := s.codebaseContextApplicationSnapshot()
+	if !found || currentEpoch != epoch {
+		return uci.AuthorizedContext{}, uci.ContextMismatch
+	}
+
+	reauthorized, err := application.Resolve(ctx, input)
+	if err != nil {
+		return uci.AuthorizedContext{}, codebaseContextFailureCode(err)
+	}
+	if codebaseContextKey(reauthorized.Ref()) != codebaseContextKey(want) || !s.codebaseContextEpochCurrent(epoch) {
+		return uci.AuthorizedContext{}, uci.ContextMismatch
+	}
+	return reauthorized, ""
+}
+
+// recordCodebaseExposure establishes the release linearization point: replacing
+// the context application cannot race an already re-authorized durable append.
+func (s *Server) recordCodebaseExposure(ctx context.Context, epoch uint64, authorized uci.AuthorizedContext, input uci.ExposureInput) (uci.QueryExposure, bool, error) {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+	if s.codebaseContextApplication == nil || s.codebaseContextEpoch != epoch {
+		return uci.QueryExposure{}, false, nil
+	}
+	if s.uciExposureRecorder == nil {
+		return uci.QueryExposure{}, true, uci.ErrExposureUnavailable
+	}
+	receipt, err := s.uciExposureRecorder.Record(ctx, authorized, input)
+	return receipt, true, err
+}
+
+func codebaseExposureFailureResponse(code uci.QueryErrorCode) (string, error) {
+	return marshalValidatedCodebaseQueryResponse(uci.QueryResponse{
+		Schema: uci.QueryResponseSchema,
+		Status: uci.QueryStatusUnavailable,
+		Error:  &uci.QueryError{Code: code},
+	})
+}
+
+func (s *Server) codebaseExposureRecorderHealth() CodebaseEvidenceRecorderHealth {
+	recorder := s.uciExposureRecorderSnapshot()
+	if recorder == nil {
+		return CodebaseEvidenceRecorderHealth{
+			State:           string(uci.ExposureHealthUnavailable),
+			LastFailureCode: string(uci.ExposureHealthFailureExposureUnavailable),
+		}
+	}
+	snapshot := recorder.Health()
+	return CodebaseEvidenceRecorderHealth{
+		State:           string(snapshot.State),
+		LastFailureCode: string(snapshot.LastFailureCode),
+	}
+}
+
+func (s *Server) resolveCodebaseIntelligenceContext(ctx context.Context, contextHandle *string) (CodebaseIntelligenceApplication, uci.AuthorizedContext, uint64, uci.ContextErrorCode) {
 	input, err := codebaseContextCallerInput(ctx)
 	if err != nil {
 		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
 	}
 
 	var (
-		application codebaseContextApplication
+		application CodebaseContextApplication
 		epoch       uint64
 		expected    *uci.ContextRef
 	)
@@ -684,14 +815,14 @@ func (s *Server) resolveCodebaseIntelligenceContext(ctx context.Context, context
 	if expected != nil && codebaseContextKey(authorized.Ref()) != codebaseContextKey(*expected) {
 		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
 	}
-	intelligence, ok := application.(codebaseIntelligenceApplication)
+	intelligence, ok := application.(CodebaseIntelligenceApplication)
 	if !ok {
 		return nil, uci.AuthorizedContext{}, 0, uci.ContextRequired
 	}
 	return intelligence, authorized, epoch, ""
 }
 
-func resolveCodebaseCompatibilityEvidence(ctx context.Context, application codebaseIntelligenceApplication, authorized uci.AuthorizedContext, project *string) uci.ContextErrorCode {
+func resolveCodebaseCompatibilityEvidence(ctx context.Context, application CodebaseIntelligenceApplication, authorized uci.AuthorizedContext, project *string) uci.ContextErrorCode {
 	if project == nil {
 		return ""
 	}
@@ -787,11 +918,11 @@ func codebaseQueryResponseHasExactContext(response uci.QueryResponse, authorized
 	return codebaseQueryContextMatchesRef((*response.Contexts)[0], authorized.Ref())
 }
 
-func codebaseOfflineResponseRecorded(response uci.QueryResponse) bool {
+func codebaseOfflineResponseRecordable(response uci.QueryResponse) bool {
 	return response.Status == uci.QueryStatusUnavailable &&
 		response.Error != nil && response.Error.Code == uci.QueryErrorCheckoutOffline &&
 		response.Items != nil && len(*response.Items) == 0 &&
-		response.Exposure != nil
+		response.Exposure == nil
 }
 
 func codebaseQueryContextMatchesRef(context uci.QueryContextRef, ref uci.ContextRef) bool {

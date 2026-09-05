@@ -25,6 +25,7 @@ import (
 	"github.com/thebtf/engram/internal/graph"
 	"github.com/thebtf/engram/internal/redaction"
 	"github.com/thebtf/engram/internal/reranking"
+	"github.com/thebtf/engram/internal/uci"
 	"github.com/thebtf/engram/internal/writelint"
 	"github.com/thebtf/engram/pkg/models"
 	gormlib "gorm.io/gorm"
@@ -65,9 +66,10 @@ type Server struct {
 	reviewLoopCandidateStoreSeam  reviewLoopCandidateLister // CR-008 test seam for review metrics/queue reads
 	legacyUnscopedCodeChunkStore  *gorm.CodeChunkStore      // explicitly invoked raw-project compatibility reader only
 	codebaseContextMu             sync.Mutex
-	codebaseContextApplication    codebaseContextApplication
+	codebaseContextApplication    CodebaseContextApplication
 	codebaseContextHandles        map[string]*codebaseContextClientHandles
 	codebaseContextEpoch          uint64
+	uciExposureRecorder           *uci.ExposureRecorder
 	ruleGovernanceStore           ruleGovernanceCandidateWriter
 	ruleGovernanceReadStore       ruleGovernanceReadStore
 	ruleInjectionTelemetry        ruleInjectionTelemetryReader
@@ -293,13 +295,41 @@ func (s *Server) SetStatsDB(db *gormlib.DB) {
 
 // SetCodebaseContextApplication wires the client-scoped UCI context adapter.
 // Replacing the application invalidates every opaque handle from the prior adapter.
-func (s *Server) SetCodebaseContextApplication(application codebaseContextApplication) {
+func (s *Server) SetCodebaseContextApplication(application CodebaseContextApplication) {
 	s.codebaseContextMu.Lock()
 	defer s.codebaseContextMu.Unlock()
 
 	s.codebaseContextApplication = application
 	s.codebaseContextHandles = make(map[string]*codebaseContextClientHandles)
 	s.codebaseContextEpoch++
+}
+
+// SetUCIExposureRecorder wires the shared durable exposure boundary for every
+// released code search, graph, and versioned-read response.
+func (s *Server) SetUCIExposureRecorder(recorder *uci.ExposureRecorder) {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+	s.uciExposureRecorder = recorder
+}
+
+// uciExposureRecorderSnapshot returns the current recorder without exposing
+// the mutable server field to request handlers.
+func (s *Server) uciExposureRecorderSnapshot() *uci.ExposureRecorder {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+	return s.uciExposureRecorder
+}
+
+// RecordUCICompletion accepts only an explicit verified supported-host
+// callback. A missing recorder or append failure returns the closed callback
+// error without changing the parent receipt.
+func (s *Server) RecordUCICompletion(ctx context.Context, callback uci.VerifiedSupportedHostCallback) error {
+	recorder := s.uciExposureRecorderSnapshot()
+	if recorder == nil {
+		return uci.ErrCompletionEvidenceUnavailable
+	}
+	_, err := recorder.RecordCompletion(ctx, callback)
+	return err
 }
 
 // HandleRequest dispatches a JSON-RPC request and returns the response.
@@ -1067,13 +1097,11 @@ func (s *Server) handleToolsList(req *Request) *Response {
 	}
 
 	// Code intelligence tools (CR-006) retain the established public surface.
-	// codebase_search is advertised only when its backing store is wired.
-	// The raw-project compatibility reader is internal rollback code and is never
-	// advertised or dispatched as a public MCP tool.
-	//
-	// codebase_status is deliberately not advertised here because the daemon-side
-	// static tool owns that name and proxies scoped status to this handler.
-	if codeIntelEnabled() && s.legacyUnscopedCodeChunkStore != nil {
+	// Code intelligence tools are advertised only when the current scoped UCI
+	// application implements their public capability. The raw-project store is
+	// rollback-only and never controls current tool discovery or dispatch.
+	// codebase_status remains daemon-owned and is not advertised here.
+	if codeIntelEnabled() && s.hasCodebaseIntelligenceApplication() {
 		tools = append(tools, codebaseSearchTool())
 	}
 	if codeIntelEnabled() && s.hasCodebaseContextApplication() {
@@ -1241,7 +1269,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 		}
 	}
 
-	result, err := s.callTool(ctx, params.Name, params.Arguments)
+	result, err := s.callTool(contextWithUCIRequestID(ctx, req.ID), params.Name, params.Arguments)
 	if err != nil {
 		event := log.Error().Err(err).Str("tool", params.Name)
 		if identity, ok := auth.IdentityFrom(ctx); ok {

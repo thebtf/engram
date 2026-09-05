@@ -29,16 +29,16 @@ const (
 	codebaseGraphMaxContinuation   = 2_048
 )
 
-// codebaseGraphApplication is an optional UCI capability of the existing
-// client-scoped context application. It owns graph traversal, evidence,
-// continuation binding, and the closed response/exposure receipt.
-type codebaseGraphApplication interface {
-	ExploreCodebase(context.Context, uci.AuthorizedContext, codebaseGraphInput) (uci.QueryResponse, error)
+// CodebaseGraphApplication is an optional UCI capability of the existing
+// client-scoped context application. It owns graph traversal, evidence, and
+// continuation binding, then returns an unreleased pre-exposure response.
+type CodebaseGraphApplication interface {
+	ExploreCodebase(context.Context, uci.AuthorizedContext, CodebaseGraphInput) (uci.QueryResponse, error)
 }
 
-// codebaseGraphInput is the fully normalized graph request forwarded after the
+// CodebaseGraphInput is the fully normalized graph request forwarded after the
 // MCP boundary has verified every explicit Source/View selector.
-type codebaseGraphInput struct {
+type CodebaseGraphInput struct {
 	Action       uci.GraphAction
 	Target       uci.GraphTarget
 	Destination  *uci.GraphTarget
@@ -259,6 +259,9 @@ func (s *Server) handleCodebaseGraph(ctx context.Context, raw json.RawMessage) (
 		if ctxErr := operationCtx.Err(); ctxErr != nil {
 			return "", ctxErr
 		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return "", err
+		}
 		return "", errors.New("codebase_graph: UCI freshness unavailable")
 	}
 	if !s.codebaseContextEpochCurrent(epoch) {
@@ -282,10 +285,12 @@ func (s *Server) handleCodebaseGraph(ctx context.Context, raw json.RawMessage) (
 		return codebaseSearchContextRefusal(uci.ContextMismatch)
 	}
 	if response.Status == uci.QueryStatusContextRequired || response.Status == uci.QueryStatusForbidden {
-		return marshalValidatedCodebaseGraphResponse(response, authorized, input)
+		return s.releaseCodebaseQueryResponse(operationCtx, epoch, authorized, uci.ExposureOperationCodeGraph, response, func(candidate uci.QueryResponse) bool {
+			return validCodebaseGraphPreExposureResponse(candidate, authorized, input)
+		}, "codebase_graph")
 	}
-	if freshness != nil {
-		if disposition == uci.QueryFreshnessDispositionOffline && !codebaseOfflineResponseRecorded(response) {
+	if freshness != nil && (response.Freshness == nil || response.Freshness.State != uci.QueryFreshnessHistorical) {
+		if disposition == uci.QueryFreshnessDispositionOffline && !codebaseOfflineResponseRecordable(response) {
 			return "", errors.New("codebase_graph: invalid offline UCI response")
 		}
 		response.Freshness = freshness
@@ -296,10 +301,9 @@ func (s *Server) handleCodebaseGraph(ctx context.Context, raw json.RawMessage) (
 			}
 		}
 	}
-	if !s.codebaseContextEpochCurrent(epoch) {
-		return codebaseSearchContextRefusal(uci.ContextMismatch)
-	}
-	return marshalValidatedCodebaseGraphResponse(response, authorized, input)
+	return s.releaseCodebaseQueryResponse(operationCtx, epoch, authorized, uci.ExposureOperationCodeGraph, response, func(candidate uci.QueryResponse) bool {
+		return validCodebaseGraphPreExposureResponse(candidate, authorized, input)
+	}, "codebase_graph")
 }
 
 func decodeCodebaseGraphArgs(raw json.RawMessage) (codebaseGraphArgs, error) {
@@ -552,19 +556,19 @@ func validCodebaseGraphContinuation(value string) bool {
 	return len(value) > 0 && len(value) <= codebaseGraphMaxContinuation && utf8.ValidString(value) && codebaseContextIdentityText(value)
 }
 
-func (args codebaseGraphArgs) graphInput(ref uci.ContextRef, deadline time.Time) (codebaseGraphInput, bool) {
+func (args codebaseGraphArgs) graphInput(ref uci.ContextRef, deadline time.Time) (CodebaseGraphInput, bool) {
 	if args.target.sourceID != ref.SourceID || args.target.viewID != ref.ViewID {
-		return codebaseGraphInput{}, false
+		return CodebaseGraphInput{}, false
 	}
 	var destination *uci.GraphTarget
 	if args.destination != nil {
 		if args.destination.sourceID != ref.SourceID || args.destination.viewID != ref.ViewID {
-			return codebaseGraphInput{}, false
+			return CodebaseGraphInput{}, false
 		}
 		value := args.destination.target
 		destination = &value
 	}
-	return codebaseGraphInput{
+	return CodebaseGraphInput{
 		Action:      args.action,
 		Target:      args.target.target,
 		Destination: destination,
@@ -634,14 +638,14 @@ func codebaseGraphRelationNames() []string {
 	}
 }
 
-func (s *Server) resolveCodebaseGraphContext(ctx context.Context, contextHandle *string) (codebaseGraphApplication, uci.AuthorizedContext, uint64, uci.ContextErrorCode) {
+func (s *Server) resolveCodebaseGraphContext(ctx context.Context, contextHandle *string) (CodebaseGraphApplication, uci.AuthorizedContext, uint64, uci.ContextErrorCode) {
 	input, err := codebaseContextCallerInput(ctx)
 	if err != nil {
 		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
 	}
 
 	var (
-		application codebaseContextApplication
+		application CodebaseContextApplication
 		epoch       uint64
 		expected    *uci.ContextRef
 	)
@@ -674,26 +678,26 @@ func (s *Server) resolveCodebaseGraphContext(ctx context.Context, contextHandle 
 	if expected != nil && codebaseContextKey(authorized.Ref()) != codebaseContextKey(*expected) {
 		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
 	}
-	graph, ok := application.(codebaseGraphApplication)
+	graph, ok := application.(CodebaseGraphApplication)
 	if !ok {
 		return nil, uci.AuthorizedContext{}, 0, uci.ContextRequired
 	}
 	return graph, authorized, epoch, ""
 }
 
-func resolveCodebaseGraphCompatibilityEvidence(ctx context.Context, application codebaseGraphApplication, authorized uci.AuthorizedContext, project *string) uci.ContextErrorCode {
+func resolveCodebaseGraphCompatibilityEvidence(ctx context.Context, application CodebaseGraphApplication, authorized uci.AuthorizedContext, project *string) uci.ContextErrorCode {
 	if project == nil {
 		return ""
 	}
-	intelligence, ok := application.(codebaseIntelligenceApplication)
+	intelligence, ok := application.(CodebaseIntelligenceApplication)
 	if !ok {
 		return uci.ContextRequired
 	}
 	return resolveCodebaseCompatibilityEvidence(ctx, intelligence, authorized, project)
 }
 
-func codebaseGraphFreshness(ctx context.Context, application codebaseGraphApplication, authorized uci.AuthorizedContext, afterBarrier *codebaseAfterBarrierArgs) (*uci.QueryFreshness, uci.QueryFreshnessDisposition, error) {
-	intelligence, ok := application.(codebaseIntelligenceApplication)
+func codebaseGraphFreshness(ctx context.Context, application CodebaseGraphApplication, authorized uci.AuthorizedContext, afterBarrier *codebaseAfterBarrierArgs) (*uci.QueryFreshness, uci.QueryFreshnessDisposition, error) {
+	intelligence, ok := application.(CodebaseIntelligenceApplication)
 	if !ok {
 		if afterBarrier != nil {
 			return nil, "", errors.New("UCI freshness capability is unavailable")
@@ -706,7 +710,7 @@ func codebaseGraphFreshness(ctx context.Context, application codebaseGraphApplic
 func (s *Server) hasCodebaseGraphApplication() bool {
 	s.codebaseContextMu.Lock()
 	defer s.codebaseContextMu.Unlock()
-	_, ok := s.codebaseContextApplication.(codebaseGraphApplication)
+	_, ok := s.codebaseContextApplication.(CodebaseGraphApplication)
 	return ok
 }
 
@@ -721,28 +725,18 @@ func codebaseGraphResponseMatchesContext(response uci.QueryResponse, authorized 
 	}
 }
 
-func marshalValidatedCodebaseGraphResponse(response uci.QueryResponse, authorized uci.AuthorizedContext, input codebaseGraphInput) (string, error) {
-	if err := response.Validate(); err != nil || !validCodebaseGraphResponse(response, authorized, input) {
-		return "", errors.New("codebase_graph: invalid UCI response")
+func validCodebaseGraphPreExposureResponse(response uci.QueryResponse, authorized uci.AuthorizedContext, input CodebaseGraphInput) bool {
+	if response.Exposure != nil {
+		return false
 	}
-	encoded, err := json.Marshal(response)
-	if err != nil {
-		return "", errors.New("codebase_graph: marshal UCI response")
-	}
-	return string(encoded), nil
-}
-
-func validCodebaseGraphResponse(response uci.QueryResponse, authorized uci.AuthorizedContext, input codebaseGraphInput) bool {
 	switch response.Status {
-	case uci.QueryStatusContextRequired, uci.QueryStatusForbidden:
-		return true
 	case uci.QueryStatusUnavailable:
 		return response.Retrieval != nil && response.Retrieval.Mode == uci.QueryRetrievalGraph &&
-			response.Exposure != nil && response.Items != nil && len(*response.Items) == 0 &&
+			response.Items != nil && len(*response.Items) == 0 &&
 			response.Graph == nil && codebaseQueryResponseHasExactContext(response, authorized)
 	case uci.QueryStatusOK, uci.QueryStatusEmpty, uci.QueryStatusPartial, uci.QueryStatusStale:
 		return response.Retrieval != nil && response.Retrieval.Mode == uci.QueryRetrievalGraph &&
-			response.Exposure != nil && response.Items != nil && len(*response.Items) == 0 &&
+			response.Items != nil && len(*response.Items) == 0 &&
 			response.Graph != nil && len(response.Graph.Nodes) <= input.Budget.MaxNodes &&
 			len(response.Graph.Edges) <= input.Budget.MaxEdges && codebaseQueryResponseHasExactContext(response, authorized)
 	default:

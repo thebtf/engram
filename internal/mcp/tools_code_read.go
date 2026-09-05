@@ -15,24 +15,24 @@ const (
 	codebaseReadMaxBytes        = 8_192
 )
 
-// codebaseReadApplication is an optional UCI capability of the existing
+// CodebaseReadApplication is an optional UCI capability of the existing
 // client-scoped context application. It receives only an authorized immutable
-// context and a View-grounded selector; it owns stored-byte retrieval, optional
-// working-copy metadata, and the already-recorded exposure receipt.
-type codebaseReadApplication interface {
-	ReadCodebase(context.Context, uci.AuthorizedContext, codebaseReadInput) (uci.QueryResponse, error)
+// context and a View-grounded selector, then returns an unreleased
+// pre-exposure response for the MCP boundary to record and release.
+type CodebaseReadApplication interface {
+	ReadCodebase(context.Context, uci.AuthorizedContext, CodebaseReadInput) (uci.QueryResponse, error)
 }
 
-// codebaseReadCompatibilityApplication is needed only when a caller supplies
+// CodebaseReadCompatibilityApplication is needed only when a caller supplies
 // legacy project evidence. The project is never a context selector.
-type codebaseReadCompatibilityApplication interface {
+type CodebaseReadCompatibilityApplication interface {
 	ResolveLegacyProject(context.Context, uci.AuthorizedContext, string) (uci.AliasTarget, error)
 }
 
-// codebaseReadInput is the fully validated source selector forwarded to UCI.
+// CodebaseReadInput is the fully validated source selector forwarded to UCI.
 // MaxBytes bounds one exact stored span; callers cannot request truncation or
 // replacement with current working-copy bytes.
-type codebaseReadInput struct {
+type CodebaseReadInput struct {
 	Ref               uci.QueryEntityRef
 	Span              uci.QuerySpan
 	ContentDigest     uci.QueryContentDigest
@@ -164,10 +164,9 @@ func (s *Server) handleCodebaseRead(ctx context.Context, raw json.RawMessage) (s
 	if !s.codebaseContextEpochCurrent(epoch) {
 		return codebaseSearchContextRefusal(uci.ContextMismatch)
 	}
-	if !codebaseQueryResponseHasExactContext(response, authorized) {
-		return codebaseSearchContextRefusal(uci.ContextMismatch)
-	}
-	return marshalValidatedCodebaseReadResponse(response, authorized, input)
+	return s.releaseCodebaseQueryResponse(ctx, epoch, authorized, uci.ExposureOperationVersionedRead, response, func(candidate uci.QueryResponse) bool {
+		return validCodebaseReadPreExposureResponse(candidate, authorized, input)
+	}, "codebase_read")
 }
 
 func decodeCodebaseReadArgs(raw json.RawMessage) (codebaseReadArgs, error) {
@@ -207,13 +206,13 @@ func decodeCodebaseReadArgs(raw json.RawMessage) (codebaseReadArgs, error) {
 	return args, nil
 }
 
-func (args codebaseReadArgs) readInput() codebaseReadInput {
+func (args codebaseReadArgs) readInput() CodebaseReadInput {
 	maxBytes := codebaseReadDefaultMaxBytes
 	if args.MaxBytes != nil {
 		maxBytes = *args.MaxBytes
 	}
 	verifyWorkingCopy := args.VerifyWorkingCopy != nil && *args.VerifyWorkingCopy
-	return codebaseReadInput{
+	return CodebaseReadInput{
 		Ref: uci.QueryEntityRef{
 			SourceID:  *args.Ref.SourceID,
 			ViewID:    *args.Ref.ViewID,
@@ -243,14 +242,14 @@ func validCodebaseReadContentDigest(value string) bool {
 	return true
 }
 
-func (s *Server) resolveCodebaseReadContext(ctx context.Context, contextHandle *string) (codebaseReadApplication, uci.AuthorizedContext, uint64, uci.ContextErrorCode) {
+func (s *Server) resolveCodebaseReadContext(ctx context.Context, contextHandle *string) (CodebaseReadApplication, uci.AuthorizedContext, uint64, uci.ContextErrorCode) {
 	input, err := codebaseContextCallerInput(ctx)
 	if err != nil {
 		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
 	}
 
 	var (
-		application codebaseContextApplication
+		application CodebaseContextApplication
 		epoch       uint64
 		expected    *uci.ContextRef
 	)
@@ -283,21 +282,21 @@ func (s *Server) resolveCodebaseReadContext(ctx context.Context, contextHandle *
 	if expected != nil && codebaseContextKey(authorized.Ref()) != codebaseContextKey(*expected) {
 		return nil, uci.AuthorizedContext{}, 0, uci.ContextMismatch
 	}
-	reader, ok := application.(codebaseReadApplication)
+	reader, ok := application.(CodebaseReadApplication)
 	if !ok {
 		return nil, uci.AuthorizedContext{}, 0, uci.ContextRequired
 	}
 	return reader, authorized, epoch, ""
 }
 
-func resolveCodebaseReadCompatibilityEvidence(ctx context.Context, application codebaseReadApplication, authorized uci.AuthorizedContext, project *string) uci.ContextErrorCode {
+func resolveCodebaseReadCompatibilityEvidence(ctx context.Context, application CodebaseReadApplication, authorized uci.AuthorizedContext, project *string) uci.ContextErrorCode {
 	if project == nil {
 		return ""
 	}
 	if *project == "" {
 		return uci.ContextMismatch
 	}
-	resolver, ok := application.(codebaseReadCompatibilityApplication)
+	resolver, ok := application.(CodebaseReadCompatibilityApplication)
 	if !ok {
 		return uci.ContextRequired
 	}
@@ -311,7 +310,7 @@ func resolveCodebaseReadCompatibilityEvidence(ctx context.Context, application c
 	return ""
 }
 
-func codebaseReadInputMatchesContext(input codebaseReadInput, authorized uci.AuthorizedContext) bool {
+func codebaseReadInputMatchesContext(input CodebaseReadInput, authorized uci.AuthorizedContext) bool {
 	ref := authorized.Ref()
 	return input.Ref.SourceID == ref.SourceID && input.Ref.ViewID == ref.ViewID
 }
@@ -319,23 +318,12 @@ func codebaseReadInputMatchesContext(input codebaseReadInput, authorized uci.Aut
 func (s *Server) hasCodebaseReadApplication() bool {
 	s.codebaseContextMu.Lock()
 	defer s.codebaseContextMu.Unlock()
-	_, ok := s.codebaseContextApplication.(codebaseReadApplication)
+	_, ok := s.codebaseContextApplication.(CodebaseReadApplication)
 	return ok
 }
 
-func marshalValidatedCodebaseReadResponse(response uci.QueryResponse, authorized uci.AuthorizedContext, input codebaseReadInput) (string, error) {
-	if err := response.Validate(); err != nil || !validCodebaseReadResponse(response, authorized, input) {
-		return "", errors.New("codebase_read: invalid UCI response")
-	}
-	encoded, err := json.Marshal(response)
-	if err != nil {
-		return "", errors.New("codebase_read: marshal UCI response")
-	}
-	return string(encoded), nil
-}
-
-func validCodebaseReadResponse(response uci.QueryResponse, authorized uci.AuthorizedContext, input codebaseReadInput) bool {
-	if response.Exposure == nil || response.Graph != nil {
+func validCodebaseReadPreExposureResponse(response uci.QueryResponse, authorized uci.AuthorizedContext, input CodebaseReadInput) bool {
+	if response.Exposure != nil || response.Graph != nil {
 		return false
 	}
 

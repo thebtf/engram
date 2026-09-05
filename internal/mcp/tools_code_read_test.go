@@ -30,26 +30,26 @@ type uciCodeReadArtifact struct {
 
 type uciCodeReadCall struct {
 	ref   uci.ContextRef
-	input codebaseReadInput
+	input CodebaseReadInput
 }
 
 // uciCodeReadApplication adds only the versioned-read capability to the
 // established context/search fake. It has no filesystem access: every response
-// is an already-closed application result keyed to an AuthorizedContext.
+// is an unreleased application result keyed to an AuthorizedContext.
 type uciCodeReadApplication struct {
 	*uciCodeIntelCompatibilityApplication
 
-	readResponse func(uci.AuthorizedContext, codebaseReadInput) (uci.QueryResponse, error)
+	readResponse func(uci.AuthorizedContext, CodebaseReadInput) (uci.QueryResponse, error)
 	readCalls    []uciCodeReadCall
 }
 
 var (
-	_ codebaseContextApplication      = (*uciCodeReadApplication)(nil)
-	_ codebaseIntelligenceApplication = (*uciCodeReadApplication)(nil)
-	_ codebaseReadApplication         = (*uciCodeReadApplication)(nil)
+	_ CodebaseContextApplication      = (*uciCodeReadApplication)(nil)
+	_ CodebaseIntelligenceApplication = (*uciCodeReadApplication)(nil)
+	_ CodebaseReadApplication         = (*uciCodeReadApplication)(nil)
 )
 
-func (application *uciCodeReadApplication) ReadCodebase(_ context.Context, authorized uci.AuthorizedContext, input codebaseReadInput) (uci.QueryResponse, error) {
+func (application *uciCodeReadApplication) ReadCodebase(_ context.Context, authorized uci.AuthorizedContext, input CodebaseReadInput) (uci.QueryResponse, error) {
 	application.readCalls = append(application.readCalls, uciCodeReadCall{ref: authorized.Ref(), input: input})
 	if application.readResponse == nil {
 		return uci.QueryResponse{}, errors.New("code read fixture has no response")
@@ -140,7 +140,7 @@ func TestUCICodebaseReadReturnsExactStoredArtifactForAuthorizedContext(t *testin
 	fixture := newUCICodeReadFixture(t)
 	artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
 	expected := uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "uci-exp_read-a", nil, false)
-	fixture.application.readResponse = func(_ uci.AuthorizedContext, _ codebaseReadInput) (uci.QueryResponse, error) {
+	fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
 		return expected, nil
 	}
 
@@ -150,16 +150,18 @@ func TestUCICodebaseReadReturnsExactStoredArtifactForAuthorizedContext(t *testin
 	response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_read", arguments)
 
 	text, payload := requireUCICodeReadResponse(t, response, fixture.refA, artifact, "uci-exp_read-a", nil)
-	expectedJSON, err := json.Marshal(expected)
+	expectedRelease := expected
+	expectedRelease.Exposure = payload.Exposure
+	expectedJSON, err := json.Marshal(expectedRelease)
 	require.NoError(t, err)
-	assert.JSONEq(t, string(expectedJSON), text, "MCP must release the application-owned closed response unchanged")
+	assert.JSONEq(t, string(expectedJSON), text, "MCP must append a recorder-owned receipt to the application response")
 	assert.NotContains(t, text, uciCodeReadTestCurrentDiskBody)
 	assert.NotContains(t, text, uciCodebaseContextPrivateLocatorA)
 	assert.NotContains(t, text, uciCodebaseContextPrivateLocatorB)
 
 	require.Len(t, fixture.application.readCalls, 1)
 	assert.Equal(t, fixture.refA, fixture.application.readCalls[0].ref)
-	assert.Equal(t, codebaseReadInput{
+	assert.Equal(t, CodebaseReadInput{
 		Ref:           artifact.Ref,
 		Span:          artifact.Span,
 		ContentDigest: artifact.ContentDigest,
@@ -178,7 +180,7 @@ func TestUCICodebaseReadWorkingCopyVerificationIsMetadataOnly(t *testing.T) {
 			fixture := newUCICodeReadFixture(t)
 			artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
 			expected := uciCodeReadQueryResponse(t, fixture.refA, &artifact, uci.QueryStatusOK, "uci-exp_read-working-copy", []string{state}, false)
-			fixture.application.readResponse = func(_ uci.AuthorizedContext, _ codebaseReadInput) (uci.QueryResponse, error) {
+			fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
 				return expected, nil
 			}
 
@@ -192,7 +194,7 @@ func TestUCICodebaseReadWorkingCopyVerificationIsMetadataOnly(t *testing.T) {
 			assert.NotContains(t, text, uciCodeReadTestCurrentDiskBody, "working-copy verification must not substitute local disk bytes")
 			assert.NotContains(t, text, `"working_copy":`, "verification state belongs in response metadata, not a new body channel")
 			require.Len(t, fixture.application.readCalls, 1)
-			assert.Equal(t, codebaseReadInput{
+			assert.Equal(t, CodebaseReadInput{
 				Ref:               artifact.Ref,
 				Span:              artifact.Span,
 				ContentDigest:     artifact.ContentDigest,
@@ -210,7 +212,7 @@ func TestUCICodebaseReadStaleDigestAndHistoricalViewNeverFallBackToDisk(t *testi
 		artifact := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
 		staleDigest := uciCodeReadDigest(uciCodeReadTestCurrentDiskBody)
 		expected := uciCodeReadQueryResponse(t, fixture.refA, nil, uci.QueryStatusEmpty, "uci-exp_read-stale", nil, false)
-		fixture.application.readResponse = func(_ uci.AuthorizedContext, input codebaseReadInput) (uci.QueryResponse, error) {
+		fixture.application.readResponse = func(_ uci.AuthorizedContext, input CodebaseReadInput) (uci.QueryResponse, error) {
 			assert.Equal(t, staleDigest, input.ContentDigest)
 			return expected, nil
 		}
@@ -232,7 +234,7 @@ func TestUCICodebaseReadStaleDigestAndHistoricalViewNeverFallBackToDisk(t *testi
 		fixture := newUCICodeReadFixture(t)
 		historicalArtifact := uciCodeReadArtifactFor(fixture.refA, "package fixture\nfunc HistoricalView() {}\n", "fixture.HistoricalView")
 		expected := uciCodeReadQueryResponse(t, fixture.refA, &historicalArtifact, uci.QueryStatusOK, "uci-exp_read-historical", []string{"working_copy_mismatch"}, true)
-		fixture.application.readResponse = func(_ uci.AuthorizedContext, _ codebaseReadInput) (uci.QueryResponse, error) {
+		fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
 			return expected, nil
 		}
 
@@ -425,7 +427,7 @@ func TestUCICodebaseReadRejectsUnclosedOrInexactApplicationResponses(t *testing.
 		fixture := newUCICodeReadFixture(t)
 		requested := uciCodeReadArtifactFor(fixture.refA, uciCodeReadTestStoredArtifact, "fixture.StoredVersion")
 		foreignArtifact := uciCodeReadArtifactFor(fixture.refB, "package fixture\nfunc ForeignResponse() {}\n", "fixture.ForeignResponse")
-		fixture.application.readResponse = func(_ uci.AuthorizedContext, _ codebaseReadInput) (uci.QueryResponse, error) {
+		fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
 			return uciCodeReadQueryResponse(t, fixture.refB, &foreignArtifact, uci.QueryStatusOK, "uci-exp_read-foreign", nil, false), nil
 		}
 
@@ -447,18 +449,19 @@ func TestUCICodebaseReadRejectsUnclosedOrInexactApplicationResponses(t *testing.
 				wrong.Ref.EntityKey = "fixture.WrongCitation"
 				wrong.Excerpt = "func WrongCitation() {}\n"
 				wrong.ContentDigest = uciCodeReadDigest(wrong.Excerpt)
-				fixture.application.readResponse = func(_ uci.AuthorizedContext, _ codebaseReadInput) (uci.QueryResponse, error) {
+				fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
 					return uciCodeReadQueryResponse(t, fixture.refA, &wrong, uci.QueryStatusOK, "uci-exp_read-wrong-citation", nil, false), nil
 				}
 				return wrong.Excerpt
 			},
 		},
 		{
-			name: "missing application owned exposure receipt",
+			name: "application-supplied exposure receipt",
 			configure: func(t *testing.T, fixture *uciCodeReadFixture, requested uciCodeReadArtifact) string {
-				response := uciCodeReadQueryResponse(t, fixture.refA, &requested, uci.QueryStatusOK, "uci-exp_read-will-be-removed", nil, false)
-				response.Exposure = nil
-				fixture.application.readResponse = func(_ uci.AuthorizedContext, _ codebaseReadInput) (uci.QueryResponse, error) {
+				response := uciCodeReadQueryResponse(t, fixture.refA, &requested, uci.QueryStatusOK, "", nil, false)
+				response.Exposure = &uci.QueryExposure{ExposureRef: uci.NewExposureRef(), CompletionState: uci.QueryCompletionUnknown}
+				require.NoError(t, response.Validate(), "test fixture must form a syntactically valid but already-released response")
+				fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
 					return response, nil
 				}
 				return requested.Excerpt
@@ -469,8 +472,8 @@ func TestUCICodebaseReadRejectsUnclosedOrInexactApplicationResponses(t *testing.
 			configure: func(t *testing.T, fixture *uciCodeReadFixture, requested uciCodeReadArtifact) string {
 				response := uciCodeReadQueryResponse(t, fixture.refA, &requested, uci.QueryStatusOK, "uci-exp_read-over-budget", nil, false)
 				(*response.Items)[0].Excerpt = strings.Repeat("x", len(requested.Excerpt)+1)
-				require.NoError(t, response.Validate(), "the application response remains a valid UCI envelope; MCP owns caller budget enforcement")
-				fixture.application.readResponse = func(_ uci.AuthorizedContext, _ codebaseReadInput) (uci.QueryResponse, error) {
+				require.NoError(t, response.ValidatePreExposure(), "the application response remains recordable; MCP owns the caller cap")
+				fixture.application.readResponse = func(_ uci.AuthorizedContext, _ CodebaseReadInput) (uci.QueryResponse, error) {
 					return response, nil
 				}
 				return (*response.Items)[0].Excerpt
@@ -540,7 +543,7 @@ func uciCodeReadArguments(handle string, artifact uciCodeReadArtifact) map[strin
 	}
 }
 
-func uciCodeReadQueryResponse(t *testing.T, ref uci.ContextRef, artifact *uciCodeReadArtifact, status uci.QueryResponseStatus, exposureRef string, warnings []string, historical bool) uci.QueryResponse {
+func uciCodeReadQueryResponse(t *testing.T, ref uci.ContextRef, artifact *uciCodeReadArtifact, status uci.QueryResponseStatus, _ string, warnings []string, historical bool) uci.QueryResponse {
 	t.Helper()
 
 	zero := int64(0)
@@ -594,16 +597,12 @@ func uciCodeReadQueryResponse(t *testing.T, ref uci.ContextRef, artifact *uciCod
 			UnresolvedSites:  &zero,
 			UnsupportedFiles: &zero,
 		},
-		Exposure: &uci.QueryExposure{
-			ExposureRef:     exposureRef,
-			CompletionState: uci.QueryCompletionUnknown,
-		},
 		Items:        &items,
 		Truncated:    &truncated,
 		Warnings:     &queryWarnings,
 		Continuation: &uci.QueryContinuation{},
 	}
-	require.NoError(t, response.Validate(), "test application must return a closed UCI response")
+	require.NoError(t, response.ValidatePreExposure(), "test application must return a recordable UCI response")
 	return response
 }
 
@@ -618,7 +617,7 @@ func uciCodeReadTool(t *testing.T, tools []Tool) Tool {
 	return Tool{}
 }
 
-func requireUCICodeReadResponse(t *testing.T, response *Response, wantRef uci.ContextRef, wantArtifact uciCodeReadArtifact, wantExposure string, wantWarnings []string) (string, uci.QueryResponse) {
+func requireUCICodeReadResponse(t *testing.T, response *Response, wantRef uci.ContextRef, wantArtifact uciCodeReadArtifact, _ string, wantWarnings []string) (string, uci.QueryResponse) {
 	t.Helper()
 
 	text := uciCodeIntelToolText(t, response)
@@ -632,7 +631,7 @@ func requireUCICodeReadResponse(t *testing.T, response *Response, wantRef uci.Co
 	require.NotNil(t, payload.Retrieval)
 	assert.Equal(t, uci.QueryRetrievalExact, payload.Retrieval.Mode)
 	require.NotNil(t, payload.Exposure)
-	assert.Equal(t, wantExposure, payload.Exposure.ExposureRef)
+	assert.True(t, uci.ValidExposureRef(payload.Exposure.ExposureRef))
 	assert.Equal(t, uci.QueryCompletionUnknown, payload.Exposure.CompletionState)
 	require.NotNil(t, payload.Items)
 	require.Len(t, *payload.Items, 1)
@@ -651,7 +650,7 @@ func requireUCICodeReadResponse(t *testing.T, response *Response, wantRef uci.Co
 	return text, payload
 }
 
-func requireUCICodeReadEmptyResponse(t *testing.T, response *Response, wantRef uci.ContextRef, wantExposure string) (string, uci.QueryResponse) {
+func requireUCICodeReadEmptyResponse(t *testing.T, response *Response, wantRef uci.ContextRef, _ string) (string, uci.QueryResponse) {
 	t.Helper()
 
 	text := uciCodeIntelToolText(t, response)
@@ -663,7 +662,7 @@ func requireUCICodeReadEmptyResponse(t *testing.T, response *Response, wantRef u
 	require.Len(t, *payload.Contexts, 1)
 	assertUCICodeReadContext(t, (*payload.Contexts)[0], wantRef)
 	require.NotNil(t, payload.Exposure)
-	assert.Equal(t, wantExposure, payload.Exposure.ExposureRef)
+	assert.True(t, uci.ValidExposureRef(payload.Exposure.ExposureRef))
 	require.NotNil(t, payload.Items)
 	assert.Empty(t, *payload.Items)
 	return text, payload

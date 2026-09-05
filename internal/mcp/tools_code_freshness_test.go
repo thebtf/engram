@@ -59,7 +59,7 @@ type uciFreshnessStatusPayload struct {
 	Context          uci.QueryContextRef            `json:"context"`
 	TotalChunks      int64                          `json:"total_chunks"`
 	EmbeddedChunks   int64                          `json:"embedded_chunks"`
-	EvidenceRecorder codebaseEvidenceRecorderHealth `json:"evidence_recorder"`
+	EvidenceRecorder CodebaseEvidenceRecorderHealth `json:"evidence_recorder"`
 	Freshness        uci.QueryFreshness             `json:"freshness"`
 }
 
@@ -211,7 +211,7 @@ func TestUCIFreshnessPublicStatesAreScopedAndClosed(t *testing.T) {
 			}), target, test.freshness)
 			assert.Equal(t, int64(17), status.TotalChunks)
 			assert.Equal(t, int64(11), status.EmbeddedChunks)
-			assert.Equal(t, codebaseEvidenceRecorderHealth{State: "healthy", LastFailureCode: "NONE"}, status.EvidenceRecorder)
+			assert.Equal(t, CodebaseEvidenceRecorderHealth{State: "healthy", LastFailureCode: "NONE"}, status.EvidenceRecorder)
 
 			response := requireUCIFreshnessQuery(t, callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", uciFreshnessSearchArguments(handle, nil)), target, test.freshness, test.queryStatus, test.hasQueryError, test.queryError)
 			if test.queryStatus == uci.QueryStatusUnavailable {

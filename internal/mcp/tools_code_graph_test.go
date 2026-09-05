@@ -26,7 +26,7 @@ const (
 
 type uciCodeGraphCall struct {
 	ref         uci.ContextRef
-	input       codebaseGraphInput
+	input       CodebaseGraphInput
 	deadline    time.Time
 	hasDeadline bool
 }
@@ -54,20 +54,20 @@ type uciCodeGraphApplicationFake struct {
 	*uciCodeIntelCompatibilityApplication
 
 	mu             sync.Mutex
-	response       func(context.Context, uci.AuthorizedContext, codebaseGraphInput) (uci.QueryResponse, error)
+	response       func(context.Context, uci.AuthorizedContext, CodebaseGraphInput) (uci.QueryResponse, error)
 	calls          []uciCodeGraphCall
 	freshnessPlans map[string]uciCodeGraphFreshnessPlan
 	freshnessCalls []uciCodeGraphFreshnessCall
 }
 
 var (
-	_ codebaseContextApplication      = (*uciCodeGraphApplicationFake)(nil)
-	_ codebaseIntelligenceApplication = (*uciCodeGraphApplicationFake)(nil)
-	_ codebaseFreshnessApplication    = (*uciCodeGraphApplicationFake)(nil)
-	_ codebaseGraphApplication        = (*uciCodeGraphApplicationFake)(nil)
+	_ CodebaseContextApplication      = (*uciCodeGraphApplicationFake)(nil)
+	_ CodebaseIntelligenceApplication = (*uciCodeGraphApplicationFake)(nil)
+	_ CodebaseFreshnessApplication    = (*uciCodeGraphApplicationFake)(nil)
+	_ CodebaseGraphApplication        = (*uciCodeGraphApplicationFake)(nil)
 )
 
-func (application *uciCodeGraphApplicationFake) ExploreCodebase(ctx context.Context, authorized uci.AuthorizedContext, input codebaseGraphInput) (uci.QueryResponse, error) {
+func (application *uciCodeGraphApplicationFake) ExploreCodebase(ctx context.Context, authorized uci.AuthorizedContext, input CodebaseGraphInput) (uci.QueryResponse, error) {
 	deadline, hasDeadline := ctx.Deadline()
 
 	application.mu.Lock()
@@ -288,7 +288,7 @@ func TestUCICodebaseGraphAllActionsForwardOnlyAuthorizedTargets(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newUCICodeGraphFixture(t)
 			expected := uciCodeGraphResponse(t, fixture.refA, uciCodeGraphResponseOptions{})
-			fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ codebaseGraphInput) (uci.QueryResponse, error) {
+			fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ CodebaseGraphInput) (uci.QueryResponse, error) {
 				return expected, nil
 			}
 
@@ -335,7 +335,7 @@ func TestUCICodebaseGraphAllActionsForwardOnlyAuthorizedTargets(t *testing.T) {
 func TestUCICodebaseGraphUsesOnlyTheCallersCurrentBindingWhenHandleIsOmitted(t *testing.T) {
 	fixture := newUCICodeGraphFixture(t)
 	expected := uciCodeGraphResponse(t, fixture.refA, uciCodeGraphResponseOptions{})
-	fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ codebaseGraphInput) (uci.QueryResponse, error) {
+	fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ CodebaseGraphInput) (uci.QueryResponse, error) {
 		return expected, nil
 	}
 
@@ -467,7 +467,7 @@ func TestUCICodebaseGraphBindsTargetAndPathDestinationToTheSelectedSourceAndView
 func TestUCICodebaseGraphForwardsClosedFiltersAndEveryTraversalBudget(t *testing.T) {
 	fixture := newUCICodeGraphFixture(t)
 	expected := uciCodeGraphResponse(t, fixture.refA, uciCodeGraphResponseOptions{})
-	fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ codebaseGraphInput) (uci.QueryResponse, error) {
+	fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ CodebaseGraphInput) (uci.QueryResponse, error) {
 		return expected, nil
 	}
 
@@ -624,7 +624,7 @@ func TestUCICodebaseGraphRejectsOpenFiltersAndUnboundedTraversalBeforeApplicatio
 func TestUCICodebaseGraphAppliesFreshnessBarrierBeforeTraversal(t *testing.T) {
 	fixture := newUCICodeGraphFixture(t)
 	expected := uciCodeGraphResponse(t, fixture.refA, uciCodeGraphResponseOptions{})
-	fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ codebaseGraphInput) (uci.QueryResponse, error) {
+	fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ CodebaseGraphInput) (uci.QueryResponse, error) {
 		return expected, nil
 	}
 	freshness := uciFreshnessBarrierSatisfied(fixture.refA.Generation, 25)
@@ -648,11 +648,8 @@ func TestUCICodebaseGraphAppliesFreshnessBarrierBeforeTraversal(t *testing.T) {
 
 func TestUCICodebaseGraphPreservesHistoricalContextWithoutCurrentLocatorFallback(t *testing.T) {
 	fixture := newUCICodeGraphFixture(t)
-	expected := uciCodeGraphResponse(t, fixture.refA, uciCodeGraphResponseOptions{
-		Historical:  true,
-		ExposureRef: "uci-exp_graph-history",
-	})
-	fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ codebaseGraphInput) (uci.QueryResponse, error) {
+	expected := uciCodeGraphResponse(t, fixture.refA, uciCodeGraphResponseOptions{Historical: true})
+	fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ CodebaseGraphInput) (uci.QueryResponse, error) {
 		return expected, nil
 	}
 	fixture.application.setFreshnessPlan(fixture.refA, "", uciCodeGraphFreshnessPlan{freshness: uciFreshnessHistorical(fixture.refA.Generation)})
@@ -714,7 +711,7 @@ func TestUCICodebaseGraphReleasesAmbiguousPartialAndCappedApplicationOutcomes(t 
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newUCICodeGraphFixture(t)
 			expected := uciCodeGraphResponse(t, fixture.refA, test.options)
-			fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ codebaseGraphInput) (uci.QueryResponse, error) {
+			fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ CodebaseGraphInput) (uci.QueryResponse, error) {
 				return expected, nil
 			}
 
@@ -862,7 +859,7 @@ func TestUCICodebaseGraphRejectsUnknownLocatorAndEditArgumentsBeforeApplication(
 func TestUCICodebaseGraphSuppressesApplicationResultsAfterEpochChange(t *testing.T) {
 	fixture := newUCICodeGraphFixture(t)
 	expected := uciCodeGraphResponse(t, fixture.refA, uciCodeGraphResponseOptions{})
-	fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ codebaseGraphInput) (uci.QueryResponse, error) {
+	fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ CodebaseGraphInput) (uci.QueryResponse, error) {
 		fixture.server.SetCodebaseContextApplication(fixture.application)
 		return expected, nil
 	}
@@ -876,7 +873,7 @@ func TestUCICodebaseGraphSuppressesApplicationResultsAfterEpochChange(t *testing
 func TestUCICodebaseGraphPreservesCallerCancellation(t *testing.T) {
 	fixture := newUCICodeGraphFixture(t)
 	started := make(chan struct{}, 1)
-	fixture.application.response = func(ctx context.Context, _ uci.AuthorizedContext, _ codebaseGraphInput) (uci.QueryResponse, error) {
+	fixture.application.response = func(ctx context.Context, _ uci.AuthorizedContext, _ CodebaseGraphInput) (uci.QueryResponse, error) {
 		select {
 		case started <- struct{}{}:
 		default:
@@ -918,10 +915,10 @@ func TestUCICodebaseGraphPreservesCallerCancellation(t *testing.T) {
 }
 
 func TestUCICodebaseGraphReleasesOnlyExactClosedBoundedApplicationResponses(t *testing.T) {
-	t.Run("exact graph response retains identity bounds labels and application exposure", func(t *testing.T) {
+	t.Run("exact graph response retains identity bounds and gains a recorder receipt", func(t *testing.T) {
 		fixture := newUCICodeGraphFixture(t)
 		expected := uciCodeGraphResponse(t, fixture.refA, uciCodeGraphResponseOptions{})
-		fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ codebaseGraphInput) (uci.QueryResponse, error) {
+		fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ CodebaseGraphInput) (uci.QueryResponse, error) {
 			return expected, nil
 		}
 
@@ -931,11 +928,13 @@ func TestUCICodebaseGraphReleasesOnlyExactClosedBoundedApplicationResponses(t *t
 		arguments["max_edges"] = 1
 		response := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_graph", arguments)
 		text, payload := requireUCICodeGraphResponse(t, response, fixture, fixture.refA, uci.QueryStatusOK)
-		expectedJSON, err := json.Marshal(expected)
+		expectedRelease := expected
+		expectedRelease.Exposure = payload.Exposure
+		expectedJSON, err := json.Marshal(expectedRelease)
 		require.NoError(t, err)
 		assert.JSONEq(t, string(expectedJSON), text)
 		require.NotNil(t, payload.Exposure)
-		assert.Equal(t, "uci-exp_graph", payload.Exposure.ExposureRef)
+		assert.True(t, uci.ValidExposureRef(payload.Exposure.ExposureRef))
 		require.NotNil(t, payload.Graph)
 		require.Len(t, payload.Graph.Nodes, 2)
 		require.Len(t, payload.Graph.Edges, 1)
@@ -946,8 +945,8 @@ func TestUCICodebaseGraphReleasesOnlyExactClosedBoundedApplicationResponses(t *t
 
 	t.Run("different application response context is denied", func(t *testing.T) {
 		fixture := newUCICodeGraphFixture(t)
-		foreign := uciCodeGraphResponse(t, fixture.refB, uciCodeGraphResponseOptions{ExposureRef: "uci-exp_graph-foreign"})
-		fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ codebaseGraphInput) (uci.QueryResponse, error) {
+		foreign := uciCodeGraphResponse(t, fixture.refB, uciCodeGraphResponseOptions{})
+		fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ CodebaseGraphInput) (uci.QueryResponse, error) {
 			return foreign, nil
 		}
 
@@ -961,9 +960,9 @@ func TestUCICodebaseGraphReleasesOnlyExactClosedBoundedApplicationResponses(t *t
 		configure func(*testing.T, *uci.QueryResponse, map[string]any, *uciCodeGraphFixture)
 	}{
 		{
-			name: "missing application exposure",
+			name: "application-supplied exposure receipt",
 			configure: func(_ *testing.T, response *uci.QueryResponse, _ map[string]any, _ *uciCodeGraphFixture) {
-				response.Exposure = nil
+				response.Exposure = &uci.QueryExposure{ExposureRef: uci.NewExposureRef(), CompletionState: uci.QueryCompletionUnknown}
 			},
 		},
 		{
@@ -1015,7 +1014,7 @@ func TestUCICodebaseGraphReleasesOnlyExactClosedBoundedApplicationResponses(t *t
 				})
 				arguments["max_nodes"] = 3
 				arguments["max_edges"] = 1
-				require.NoError(t, response.Validate(), "the application response remains closed; MCP owns the caller cap")
+				require.NoError(t, response.ValidatePreExposure(), "the application response remains recordable; MCP owns the caller cap")
 			},
 		},
 	} {
@@ -1026,7 +1025,7 @@ func TestUCICodebaseGraphReleasesOnlyExactClosedBoundedApplicationResponses(t *t
 			handle := fixture.selectContext(t, fixture.clientA, fixture.refA)
 			arguments := uciCodeGraphArguments(handle, uci.GraphActionExplain, fixture.refA)
 			test.configure(t, &applicationResponse, arguments, fixture)
-			fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ codebaseGraphInput) (uci.QueryResponse, error) {
+			fixture.application.response = func(_ context.Context, _ uci.AuthorizedContext, _ CodebaseGraphInput) (uci.QueryResponse, error) {
 				return applicationResponse, nil
 			}
 
@@ -1071,7 +1070,6 @@ type uciCodeGraphResponseOptions struct {
 	Truncated    bool
 	Continuation *string
 	Historical   bool
-	ExposureRef  string
 }
 
 func uciCodeGraphResponse(t *testing.T, ref uci.ContextRef, options uciCodeGraphResponseOptions) uci.QueryResponse {
@@ -1088,10 +1086,6 @@ func uciCodeGraphResponse(t *testing.T, ref uci.ContextRef, options uciCodeGraph
 	stop := options.Stop
 	if stop == "" {
 		stop = uci.QueryGraphComplete
-	}
-	exposureRef := options.ExposureRef
-	if exposureRef == "" {
-		exposureRef = "uci-exp_graph"
 	}
 
 	nodes, edges := options.Nodes, options.Edges
@@ -1139,10 +1133,6 @@ func uciCodeGraphResponse(t *testing.T, ref uci.ContextRef, options uciCodeGraph
 			UnresolvedSites:  &zero,
 			UnsupportedFiles: &zero,
 		},
-		Exposure: &uci.QueryExposure{
-			ExposureRef:     exposureRef,
-			CompletionState: uci.QueryCompletionUnknown,
-		},
 		Items: &items,
 		Graph: &uci.QueryGraph{
 			Nodes:      nodes,
@@ -1153,7 +1143,7 @@ func uciCodeGraphResponse(t *testing.T, ref uci.ContextRef, options uciCodeGraph
 		Warnings:     &warnings,
 		Continuation: &uci.QueryContinuation{Value: options.Continuation},
 	}
-	require.NoError(t, response.Validate(), "graph test application must begin with a closed UCI response")
+	require.NoError(t, response.ValidatePreExposure(), "graph test application must begin with a recordable UCI response")
 	return response
 }
 

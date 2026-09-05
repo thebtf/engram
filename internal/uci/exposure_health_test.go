@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
 
-	"github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/uci"
 )
 
@@ -134,20 +134,22 @@ func TestExposureHealthControllerConcurrentTransitions(t *testing.T) {
 	}
 }
 
-func TestUCIExposureStoreReportsUnavailableAndIntegrityFailuresWithoutDB(t *testing.T) {
+func TestExposureRecorderReportsCompletionFailureWithoutStore(t *testing.T) {
 	health := &exposureHealthControllerFake{}
-	store := gorm.NewUCIExposureStoreWithHealth(nil, health)
+	recorder := uci.NewExposureRecorder(nil, health)
 
-	if _, err := store.RecordExposure(context.Background(), gorm.UCIExposureInput{}); err == nil {
-		t.Fatal("RecordExposure without a configured store unexpectedly succeeded")
+	_, err := recorder.RecordCompletion(context.Background(), uci.VerifiedSupportedHostCallback{
+		ExposureRef:      uci.NewExposureRef(),
+		SupportedHostRef: "supported-host",
+		CallbackRef:      "callback",
+		Outcome:          uci.CompletionSucceeded,
+		IdempotencyKey:   "callback-idempotency",
+		OccurredAt:       time.Unix(1, 0).UTC(),
+	})
+	if err == nil {
+		t.Fatal("RecordCompletion without a configured recorder store unexpectedly succeeded")
 	}
-	if _, err := store.RecordCompletion(context.Background(), gorm.UCICompletionInput{}); err == nil {
-		t.Fatal("RecordCompletion without a configured store unexpectedly succeeded")
-	}
-	if err := store.VerifyIntegrity(context.Background()); err == nil {
-		t.Fatal("VerifyIntegrity without a configured store unexpectedly succeeded")
-	}
-	if got, want := health.events, []string{"initial-exposure-failure", "completion-failure", "integrity-failure"}; !equalStrings(got, want) {
+	if got, want := health.events, []string{"completion-failure"}; !equalStrings(got, want) {
 		t.Fatalf("health events = %#v, want %#v", got, want)
 	}
 }

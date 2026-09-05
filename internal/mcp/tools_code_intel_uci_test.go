@@ -34,7 +34,8 @@ const (
 
 type uciCodeIntelCompatibilityFixture struct {
 	*uciCodebaseContextFixture
-	application *uciCodeIntelCompatibilityApplication
+	application   *uciCodeIntelCompatibilityApplication
+	exposureStore *uciCodebaseExposureStoreFake
 }
 
 type uciCodeIntelCompatibilityAliasCall struct {
@@ -44,7 +45,7 @@ type uciCodeIntelCompatibilityAliasCall struct {
 
 type uciCodeIntelCompatibilitySearchCall struct {
 	ref   uci.ContextRef
-	input codebaseSearchInput
+	input CodebaseSearchInput
 }
 
 // uciCodeIntelCompatibilityApplication composes T021's existing UCI context
@@ -55,7 +56,7 @@ type uciCodeIntelCompatibilityApplication struct {
 
 	aliases         map[string]uci.AliasTarget
 	queryResponses  map[string]uci.QueryResponse
-	statusSnapshots map[string]codebaseStatusSnapshot
+	statusSnapshots map[string]CodebaseStatusSnapshot
 
 	aliasCalls           []uciCodeIntelCompatibilityAliasCall
 	searchCalls          []uciCodeIntelCompatibilitySearchCall
@@ -64,8 +65,8 @@ type uciCodeIntelCompatibilityApplication struct {
 }
 
 var (
-	_ codebaseContextApplication      = (*uciCodeIntelCompatibilityApplication)(nil)
-	_ codebaseIntelligenceApplication = (*uciCodeIntelCompatibilityApplication)(nil)
+	_ CodebaseContextApplication      = (*uciCodeIntelCompatibilityApplication)(nil)
+	_ CodebaseIntelligenceApplication = (*uciCodeIntelCompatibilityApplication)(nil)
 )
 
 func newUCICodeIntelCompatibilityFixture(t *testing.T) *uciCodeIntelCompatibilityFixture {
@@ -91,11 +92,11 @@ func newUCICodeIntelCompatibilityFixture(t *testing.T) *uciCodeIntelCompatibilit
 			contextFixture.refA.CheckoutID: uciCodeIntelCompatibilityQueryResponse(t, contextFixture.refA, uciCodeIntelCompatibilityBodyA, uciCodeIntelCompatibilityExposureA, uciCodeIntelCompatibilityDigestA),
 			contextFixture.refB.CheckoutID: uciCodeIntelCompatibilityQueryResponse(t, contextFixture.refB, uciCodeIntelCompatibilityBodyB, uciCodeIntelCompatibilityExposureB, uciCodeIntelCompatibilityDigestB),
 		},
-		statusSnapshots: map[string]codebaseStatusSnapshot{
+		statusSnapshots: map[string]CodebaseStatusSnapshot{
 			contextFixture.refA.CheckoutID: {
 				TotalChunks:    17,
 				EmbeddedChunks: 11,
-				EvidenceRecorder: codebaseEvidenceRecorderHealth{
+				EvidenceRecorder: CodebaseEvidenceRecorderHealth{
 					State:           "healthy",
 					LastFailureCode: "NONE",
 				},
@@ -103,7 +104,7 @@ func newUCICodeIntelCompatibilityFixture(t *testing.T) *uciCodeIntelCompatibilit
 			contextFixture.refB.CheckoutID: {
 				TotalChunks:    31,
 				EmbeddedChunks: 19,
-				EvidenceRecorder: codebaseEvidenceRecorderHealth{
+				EvidenceRecorder: CodebaseEvidenceRecorderHealth{
 					State:           "degraded",
 					LastFailureCode: "COMPLETION_EVIDENCE_UNAVAILABLE",
 				},
@@ -111,13 +112,15 @@ func newUCICodeIntelCompatibilityFixture(t *testing.T) *uciCodeIntelCompatibilit
 		},
 	}
 
-	// This is intentionally the only test injection: the existing setter owns
-	// the client-scoped opaque handle table, while this fake implements its
-	// optional UCI query/status port.
+	// The scoped application owns context authority; the recorder is an
+	// independent shared boundary that receives only released query metadata.
 	contextFixture.server.SetCodebaseContextApplication(application)
+	recorder, exposureStore := newUCICodebaseExposureRecorder()
+	contextFixture.server.SetUCIExposureRecorder(recorder)
 	return &uciCodeIntelCompatibilityFixture{
 		uciCodebaseContextFixture: contextFixture,
 		application:               application,
+		exposureStore:             exposureStore,
 	}
 }
 
@@ -134,7 +137,7 @@ func (application *uciCodeIntelCompatibilityApplication) ResolveLegacyProject(_ 
 	return target, nil
 }
 
-func (application *uciCodeIntelCompatibilityApplication) SearchCodebase(_ context.Context, authorized uci.AuthorizedContext, input codebaseSearchInput) (uci.QueryResponse, error) {
+func (application *uciCodeIntelCompatibilityApplication) SearchCodebase(_ context.Context, authorized uci.AuthorizedContext, input CodebaseSearchInput) (uci.QueryResponse, error) {
 	ref := authorized.Ref()
 	application.searchCalls = append(application.searchCalls, uciCodeIntelCompatibilitySearchCall{ref: ref, input: input})
 	response, found := application.queryResponses[ref.CheckoutID]
@@ -144,12 +147,12 @@ func (application *uciCodeIntelCompatibilityApplication) SearchCodebase(_ contex
 	return response, nil
 }
 
-func (application *uciCodeIntelCompatibilityApplication) CodebaseStatus(_ context.Context, authorized uci.AuthorizedContext) (codebaseStatusSnapshot, error) {
+func (application *uciCodeIntelCompatibilityApplication) CodebaseStatus(_ context.Context, authorized uci.AuthorizedContext) (CodebaseStatusSnapshot, error) {
 	ref := authorized.Ref()
 	application.statusCalls = append(application.statusCalls, ref)
 	snapshot, found := application.statusSnapshots[ref.CheckoutID]
 	if !found {
-		return codebaseStatusSnapshot{}, errors.New("status fixture is not mapped to the authorized checkout")
+		return CodebaseStatusSnapshot{}, errors.New("status fixture is not mapped to the authorized checkout")
 	}
 	return snapshot, nil
 }
@@ -168,12 +171,16 @@ func TestUCICodeIntelCompatibilitySearchAndStatusKeepClientContextsDistinct(t *t
 	textB, responseB := requireUCICodeIntelQueryResponse(t, searchB, fixture.refB, uciCodeIntelCompatibilityBodyB, uciCodeIntelCompatibilityBodyA)
 	assert.NotEqual(t, textA, textB, "identical query/path labels must remain bound to distinct selected views")
 
-	expectedA, err := json.Marshal(fixture.application.queryResponses[fixture.refA.CheckoutID])
+	expectedA := fixture.application.queryResponses[fixture.refA.CheckoutID]
+	expectedA.Exposure = responseA.Exposure
+	expectedAJSON, err := json.Marshal(expectedA)
 	require.NoError(t, err)
-	expectedB, err := json.Marshal(fixture.application.queryResponses[fixture.refB.CheckoutID])
+	expectedB := fixture.application.queryResponses[fixture.refB.CheckoutID]
+	expectedB.Exposure = responseB.Exposure
+	expectedBJSON, err := json.Marshal(expectedB)
 	require.NoError(t, err)
-	assert.JSONEq(t, string(expectedA), textA, "codebase_search must expose the closed UCI response for A only")
-	assert.JSONEq(t, string(expectedB), textB, "codebase_search must expose the closed UCI response for B only")
+	assert.JSONEq(t, string(expectedAJSON), textA, "codebase_search must append one recorder-owned receipt for A only")
+	assert.JSONEq(t, string(expectedBJSON), textB, "codebase_search must append one recorder-owned receipt for B only")
 	assert.NotEqual(t, responseA.Contexts, responseB.Contexts)
 
 	require.Len(t, fixture.application.aliasCalls, 2)
@@ -193,7 +200,7 @@ func TestUCICodeIntelCompatibilitySearchAndStatusKeepClientContextsDistinct(t *t
 	statusB := requireUCICodeIntelStatus(t, callUCICodeIntel(t, fixture.server, fixture.clientB, "codebase_status", map[string]any{
 		"context_handle": handleB,
 		"project":        uciCodeIntelCompatibilityProject,
-	}), fixture.refB, 31, 19, "degraded", "COMPLETION_EVIDENCE_UNAVAILABLE")
+	}), fixture.refB, 31, 19, "healthy", "NONE")
 	assert.NotEqual(t, statusA["total_chunks"], statusB["total_chunks"], "status counts must remain scoped to the authorized context")
 	require.Len(t, fixture.application.statusCalls, 2)
 	assert.Equal(t, fixture.refA, fixture.application.statusCalls[0])
@@ -721,7 +728,7 @@ func newUCICodeIntelLegacyUnscopedStore(t *testing.T) *gormdb.CodeChunkStore {
 	return gormdb.NewCodeChunkStore(db)
 }
 
-func uciCodeIntelCompatibilityQueryResponse(t *testing.T, ref uci.ContextRef, excerpt, exposureRef, digest string) uci.QueryResponse {
+func uciCodeIntelCompatibilityQueryResponse(t *testing.T, ref uci.ContextRef, excerpt, _ string, digest string) uci.QueryResponse {
 	t.Helper()
 	zero := int64(0)
 	truncated := false
@@ -776,15 +783,11 @@ func uciCodeIntelCompatibilityQueryResponse(t *testing.T, ref uci.ContextRef, ex
 			UnresolvedSites:  &zero,
 			UnsupportedFiles: &zero,
 		},
-		Exposure: &uci.QueryExposure{
-			ExposureRef:     exposureRef,
-			CompletionState: uci.QueryCompletionUnknown,
-		},
 		Items:        &items,
 		Truncated:    &truncated,
 		Warnings:     &warnings,
 		Continuation: &continuation,
 	}
-	require.NoError(t, response.Validate(), "fixture must begin as a valid closed UCI QueryResponse")
+	require.NoError(t, response.ValidatePreExposure(), "fixture must begin as a valid recordable UCI QueryResponse")
 	return response
 }

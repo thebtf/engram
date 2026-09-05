@@ -3,6 +3,7 @@ package uci
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -418,9 +419,21 @@ func (response *QueryResponse) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Validate enforces the complete closed query state machine after decoding or
-// before a response is emitted.
+// Validate enforces the complete released query state machine after decoding or
+// immediately before a response crosses an external boundary.
 func (response QueryResponse) Validate() error {
+	return response.validate(false)
+}
+
+// ValidatePreExposure accepts exactly one internal state: a fully closed,
+// already-authorized contextual result without an exposure receipt. It exists
+// only between application completion and the MCP exposure boundary; it never
+// accepts refusals or recorder-failure envelopes.
+func (response QueryResponse) ValidatePreExposure() error {
+	return response.validate(true)
+}
+
+func (response QueryResponse) validate(preExposure bool) error {
 	if response.Schema != QueryResponseSchema {
 		return fmt.Errorf("uci query response: unsupported schema %q", response.Schema)
 	}
@@ -433,10 +446,7 @@ func (response QueryResponse) Validate() error {
 		if response.Error != nil {
 			return fmt.Errorf("uci query response: successful status %q cannot contain an error", response.Status)
 		}
-		if response.Exposure == nil {
-			return fmt.Errorf("uci query response: successful status %q requires an exposure receipt", response.Status)
-		}
-		if err := response.Exposure.Validate(); err != nil {
+		if err := response.validateExposure(preExposure, "successful"); err != nil {
 			return err
 		}
 		if _, err := response.validateContextual(); err != nil {
@@ -455,6 +465,9 @@ func (response QueryResponse) Validate() error {
 			return err
 		}
 		if response.Error.Code.isRecorderFailure() {
+			if preExposure {
+				return errors.New("uci query response: pre-exposure state must be an authorized contextual result")
+			}
 			if response.Exposure != nil {
 				return fmt.Errorf("uci query response: recorder failure cannot expose a receipt")
 			}
@@ -463,10 +476,7 @@ func (response QueryResponse) Validate() error {
 		if !response.Error.Code.isAuthorizedUnavailable() {
 			return fmt.Errorf("uci query response: unavailable status cannot use error %q", response.Error.Code)
 		}
-		if response.Exposure == nil {
-			return fmt.Errorf("uci query response: authorized unavailable status requires an exposure receipt")
-		}
-		if err := response.Exposure.Validate(); err != nil {
+		if err := response.validateExposure(preExposure, "authorized unavailable"); err != nil {
 			return err
 		}
 		if _, err := response.validateContextual(); err != nil {
@@ -481,6 +491,9 @@ func (response QueryResponse) Validate() error {
 		return nil
 
 	case QueryStatusContextRequired:
+		if preExposure {
+			return errors.New("uci query response: pre-exposure state must be an authorized contextual result")
+		}
 		if response.Exposure != nil {
 			return fmt.Errorf("uci query response: context refusal cannot expose a receipt")
 		}
@@ -499,6 +512,9 @@ func (response QueryResponse) Validate() error {
 		return nil
 
 	case QueryStatusForbidden:
+		if preExposure {
+			return errors.New("uci query response: pre-exposure state must be an authorized contextual result")
+		}
 		if response.Exposure != nil {
 			return fmt.Errorf("uci query response: forbidden status cannot expose a receipt")
 		}
@@ -518,6 +534,19 @@ func (response QueryResponse) Validate() error {
 	}
 
 	return fmt.Errorf("uci query response: invalid status %q", response.Status)
+}
+
+func (response QueryResponse) validateExposure(preExposure bool, state string) error {
+	if preExposure {
+		if response.Exposure != nil {
+			return fmt.Errorf("uci query response: pre-exposure %s result cannot contain an exposure receipt", state)
+		}
+		return nil
+	}
+	if response.Exposure == nil {
+		return fmt.Errorf("uci query response: %s result requires an exposure receipt", state)
+	}
+	return response.Exposure.Validate()
 }
 
 func (response QueryResponse) validateContextual() (queryContextSet, error) {
