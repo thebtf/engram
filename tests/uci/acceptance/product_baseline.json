@@ -1,0 +1,113 @@
+{
+  "schema_version": "engram.uci-product-baseline/v1",
+  "tasks": [
+    {
+      "id": "UCI-P01",
+      "question": "Где сохраняется отдельное несохранённое изменение рабочей копии без смешения с другой?",
+      "method": "bounded_file_search_read",
+      "budget": {
+        "max_tools": 4,
+        "max_reads": 6
+      }
+    },
+    {
+      "id": "UCI-P02",
+      "question": "Как запрос проходит от поиска к объяснению зависимостей в текущем снимке исходников?",
+      "method": "bounded_file_search_read",
+      "budget": {
+        "max_tools": 5,
+        "max_reads": 7
+      }
+    },
+    {
+      "id": "UCI-P03",
+      "question": "Почему старый векторный результат не должен отвечать за файл после нового сохранения?",
+      "method": "bounded_file_search_read",
+      "budget": {
+        "max_tools": 4,
+        "max_reads": 6
+      }
+    },
+    {
+      "id": "UCI-P04",
+      "question": "Где английский обработчик связывает русское описание ошибки с кодом восстановления индекса?",
+      "method": "bounded_file_search_read",
+      "budget": {
+        "max_tools": 4,
+        "max_reads": 6
+      }
+    },
+    {
+      "id": "UCI-P05",
+      "question": "Read the declared UCI SLO profile entry point.",
+      "method": "bounded_file_search_read",
+      "budget": {
+        "max_tools": 2,
+        "max_reads": 2
+      }
+    },
+    {
+      "id": "UCI-P06",
+      "question": "Read the UCI product-task acceptance specification section.",
+      "method": "bounded_file_search_read",
+      "budget": {
+        "max_tools": 2,
+        "max_reads": 2
+      }
+    },
+    {
+      "id": "UCI-P07",
+      "question": "What source changes can reach the published current view after a saved update?",
+      "method": "bounded_file_search_read",
+      "budget": {
+        "max_tools": 5,
+        "max_reads": 7
+      }
+    },
+    {
+      "id": "UCI-P08",
+      "question": "Which callers are affected when a scoped authorization decision changes?",
+      "method": "bounded_file_search_read",
+      "budget": {
+        "max_tools": 5,
+        "max_reads": 7
+      }
+    },
+    {
+      "id": "UCI-P09",
+      "question": "Where does the documented source/view contract map to its API schema?",
+      "method": "bounded_file_search_read",
+      "budget": {
+        "max_tools": 5,
+        "max_reads": 6
+      }
+    },
+    {
+      "id": "UCI-P10",
+      "question": "Which implementation and schema enforce the recorded embedding profile boundary?",
+      "method": "bounded_file_search_read",
+      "budget": {
+        "max_tools": 5,
+        "max_reads": 6
+      }
+    },
+    {
+      "id": "UCI-P11",
+      "question": "How do two worktrees with the same path retain different saved dirty bodies?",
+      "method": "bounded_file_search_read",
+      "budget": {
+        "max_tools": 6,
+        "max_reads": 8
+      }
+    },
+    {
+      "id": "UCI-P12",
+      "question": "After a saved increment and restart, which view is current and which recovery state is visible?",
+      "method": "bounded_file_search_read",
+      "budget": {
+        "max_tools": 6,
+        "max_reads": 8
+      }
+    }
+  ]
+}

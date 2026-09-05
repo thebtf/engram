@@ -1,0 +1,441 @@
+{
+  "schema_version": "engram.uci-product-tasks/v1",
+  "corpus_manifest": {
+    "status": "unresolved",
+    "commit": "",
+    "dirty_manifest": ""
+  },
+  "provider_profile": {
+    "status": "unresolved",
+    "provider": "",
+    "model": "",
+    "profile": ""
+  },
+  "tasks": [
+    {
+      "id": "UCI-P01",
+      "category": "conceptual",
+      "question": "Где сохраняется отдельное несохранённое изменение рабочей копии без смешения с другой?",
+      "exact_hints": [],
+      "allowed_execution_modes": [
+        "semantic_search",
+        "bounded_read"
+      ],
+      "direct_read_eligible": false,
+      "semantic_requirement": "provider_generated_vector_required",
+      "evidence": {
+        "required": [
+          {
+            "kind": "path_span",
+            "reference": "fixture://uci-product-corpus/dirty-view-storage"
+          }
+        ],
+        "alternatives": [
+          {
+            "kind": "relation_path",
+            "reference": "fixture://uci-product-corpus/dirty-view-storage-alternative"
+          }
+        ]
+      },
+      "budget": {
+        "max_tools": 4,
+        "max_reads": 6
+      },
+      "outcomes": {
+        "success": "provider vector result cites required evidence",
+        "partial": "visible degraded or partial evidence with reason",
+        "failure": "missing required evidence or lexical-only semantic claim"
+      }
+    },
+    {
+      "id": "UCI-P02",
+      "category": "conceptual",
+      "question": "Как запрос проходит от поиска к объяснению зависимостей в текущем снимке исходников?",
+      "exact_hints": [],
+      "allowed_execution_modes": [
+        "semantic_search",
+        "graph",
+        "bounded_read"
+      ],
+      "direct_read_eligible": false,
+      "semantic_requirement": "provider_generated_vector_required",
+      "evidence": {
+        "required": [
+          {
+            "kind": "relation_path",
+            "reference": "fixture://uci-product-corpus/search-to-explain"
+          }
+        ],
+        "alternatives": [
+          {
+            "kind": "path_span",
+            "reference": "fixture://uci-product-corpus/search-to-explain-alternative"
+          }
+        ]
+      },
+      "budget": {
+        "max_tools": 5,
+        "max_reads": 7
+      },
+      "outcomes": {
+        "success": "provider vector result and view-bound relation evidence agree",
+        "partial": "bounded traversal reports partial or capped evidence",
+        "failure": "unbound graph path or lexical-only semantic claim"
+      }
+    },
+    {
+      "id": "UCI-P03",
+      "category": "conceptual",
+      "question": "Почему старый векторный результат не должен отвечать за файл после нового сохранения?",
+      "exact_hints": [],
+      "allowed_execution_modes": [
+        "semantic_search",
+        "bounded_read"
+      ],
+      "direct_read_eligible": false,
+      "semantic_requirement": "provider_generated_vector_required",
+      "evidence": {
+        "required": [
+          {
+            "kind": "path_span",
+            "reference": "fixture://uci-product-corpus/current-version-vector"
+          }
+        ],
+        "alternatives": [
+          {
+            "kind": "relation_path",
+            "reference": "fixture://uci-product-corpus/current-version-vector-alternative"
+          }
+        ]
+      },
+      "budget": {
+        "max_tools": 4,
+        "max_reads": 6
+      },
+      "outcomes": {
+        "success": "provider vector evidence is current-view bound",
+        "partial": "explicit stale or degraded state is returned",
+        "failure": "old-version hit is called current or lexical-only semantic claim"
+      }
+    },
+    {
+      "id": "UCI-P04",
+      "category": "conceptual",
+      "question": "Где английский обработчик связывает русское описание ошибки с кодом восстановления индекса?",
+      "exact_hints": [],
+      "allowed_execution_modes": [
+        "semantic_search",
+        "bounded_read"
+      ],
+      "direct_read_eligible": false,
+      "semantic_requirement": "provider_generated_vector_required",
+      "evidence": {
+        "required": [
+          {
+            "kind": "path_span",
+            "reference": "fixture://uci-product-corpus/ru-en-recovery"
+          }
+        ],
+        "alternatives": [
+          {
+            "kind": "relation_path",
+            "reference": "fixture://uci-product-corpus/ru-en-recovery-alternative"
+          }
+        ]
+      },
+      "budget": {
+        "max_tools": 4,
+        "max_reads": 6
+      },
+      "outcomes": {
+        "success": "provider vector bridges Russian question to English source evidence",
+        "partial": "visible unsupported or partial extraction state",
+        "failure": "keyword shortcut or lexical-only semantic claim"
+      }
+    },
+    {
+      "id": "UCI-P05",
+      "category": "exact",
+      "question": "Read the declared UCI SLO profile entry point.",
+      "exact_hints": [
+        "RunUCISLOProfile"
+      ],
+      "allowed_execution_modes": [
+        "direct_read",
+        "bounded_file_search_read"
+      ],
+      "direct_read_eligible": true,
+      "semantic_requirement": "not_required",
+      "evidence": {
+        "required": [
+          {
+            "kind": "path_span",
+            "reference": "tests/uci/acceptance/slo_runner.go:RunUCISLOProfile"
+          }
+        ],
+        "alternatives": [
+          {
+            "kind": "path_span",
+            "reference": "tests/uci/acceptance/slo_test.go:TestUCISLOProfile"
+          }
+        ]
+      },
+      "budget": {
+        "max_tools": 2,
+        "max_reads": 2
+      },
+      "outcomes": {
+        "success": "exact declaration or permitted test entry point is read",
+        "partial": "file is present but span is unavailable",
+        "failure": "direct read is replaced with forced graph or semantic work"
+      }
+    },
+    {
+      "id": "UCI-P06",
+      "category": "exact",
+      "question": "Read the UCI product-task acceptance specification section.",
+      "exact_hints": [
+        "Продуктовые задачи"
+      ],
+      "allowed_execution_modes": [
+        "direct_read",
+        "bounded_file_search_read"
+      ],
+      "direct_read_eligible": true,
+      "semantic_requirement": "not_required",
+      "evidence": {
+        "required": [
+          {
+            "kind": "path_span",
+            "reference": "specs/010-unified-code-intelligence/acceptance/uci-acceptance.md:Продуктовые задачи"
+          }
+        ],
+        "alternatives": [
+          {
+            "kind": "path_span",
+            "reference": "specs/010-unified-code-intelligence/quickstart.md:Semantic, Watcher, and Recovery Gate"
+          }
+        ]
+      },
+      "budget": {
+        "max_tools": 2,
+        "max_reads": 2
+      },
+      "outcomes": {
+        "success": "exact section or permitted quickstart section is read",
+        "partial": "section is present with incomplete span extraction",
+        "failure": "direct read is replaced with forced graph or semantic work"
+      }
+    },
+    {
+      "id": "UCI-P07",
+      "category": "multi_hop",
+      "question": "What source changes can reach the published current view after a saved update?",
+      "exact_hints": [],
+      "allowed_execution_modes": [
+        "graph",
+        "bounded_read"
+      ],
+      "direct_read_eligible": false,
+      "semantic_requirement": "not_required",
+      "evidence": {
+        "required": [
+          {
+            "kind": "relation_path",
+            "reference": "fixture://uci-product-corpus/save-to-published-view"
+          }
+        ],
+        "alternatives": [
+          {
+            "kind": "path_span",
+            "reference": "fixture://uci-product-corpus/save-to-published-view-alternative"
+          }
+        ]
+      },
+      "budget": {
+        "max_tools": 5,
+        "max_reads": 7
+      },
+      "outcomes": {
+        "success": "bounded multi-hop path reaches a current-view publication boundary",
+        "partial": "path is explicitly capped, partial, or unresolved",
+        "failure": "single unrelated span is claimed as impact proof"
+      }
+    },
+    {
+      "id": "UCI-P08",
+      "category": "multi_hop",
+      "question": "Which callers are affected when a scoped authorization decision changes?",
+      "exact_hints": [],
+      "allowed_execution_modes": [
+        "graph",
+        "bounded_read"
+      ],
+      "direct_read_eligible": false,
+      "semantic_requirement": "not_required",
+      "evidence": {
+        "required": [
+          {
+            "kind": "relation_path",
+            "reference": "fixture://uci-product-corpus/authorization-impact"
+          }
+        ],
+        "alternatives": [
+          {
+            "kind": "path_span",
+            "reference": "fixture://uci-product-corpus/authorization-impact-alternative"
+          }
+        ]
+      },
+      "budget": {
+        "max_tools": 5,
+        "max_reads": 7
+      },
+      "outcomes": {
+        "success": "bounded impact path includes authorization evidence",
+        "partial": "ambiguous or capped path remains non-conclusive",
+        "failure": "hidden or unauthorized candidates are counted"
+      }
+    },
+    {
+      "id": "UCI-P09",
+      "category": "code_doc_schema",
+      "question": "Where does the documented source/view contract map to its API schema?",
+      "exact_hints": [],
+      "allowed_execution_modes": [
+        "graph",
+        "bounded_read"
+      ],
+      "direct_read_eligible": false,
+      "semantic_requirement": "not_required",
+      "evidence": {
+        "required": [
+          {
+            "kind": "relation_path",
+            "reference": "fixture://uci-product-corpus/doc-to-source-view-schema"
+          }
+        ],
+        "alternatives": [
+          {
+            "kind": "path_span",
+            "reference": "fixture://uci-product-corpus/doc-to-source-view-schema-alternative"
+          }
+        ]
+      },
+      "budget": {
+        "max_tools": 5,
+        "max_reads": 6
+      },
+      "outcomes": {
+        "success": "code, documentation, and schema relation is evidenced",
+        "partial": "broken documentation link is reported as partial",
+        "failure": "documentation claim alone is called executable fact"
+      }
+    },
+    {
+      "id": "UCI-P10",
+      "category": "code_doc_schema",
+      "question": "Which implementation and schema enforce the recorded embedding profile boundary?",
+      "exact_hints": [],
+      "allowed_execution_modes": [
+        "graph",
+        "bounded_read"
+      ],
+      "direct_read_eligible": false,
+      "semantic_requirement": "not_required",
+      "evidence": {
+        "required": [
+          {
+            "kind": "relation_path",
+            "reference": "fixture://uci-product-corpus/profile-code-schema"
+          }
+        ],
+        "alternatives": [
+          {
+            "kind": "path_span",
+            "reference": "fixture://uci-product-corpus/profile-code-schema-alternative"
+          }
+        ]
+      },
+      "budget": {
+        "max_tools": 5,
+        "max_reads": 6
+      },
+      "outcomes": {
+        "success": "code and schema evidence identify the same profile boundary",
+        "partial": "unsupported or partial extraction is explicit",
+        "failure": "different profile spaces are merged without evidence"
+      }
+    },
+    {
+      "id": "UCI-P11",
+      "category": "worktree_comparison",
+      "question": "How do two worktrees with the same path retain different saved dirty bodies?",
+      "exact_hints": [],
+      "allowed_execution_modes": [
+        "graph",
+        "bounded_read"
+      ],
+      "direct_read_eligible": false,
+      "semantic_requirement": "not_required",
+      "evidence": {
+        "required": [
+          {
+            "kind": "relation_path",
+            "reference": "fixture://uci-product-corpus/two-worktree-dirty-comparison"
+          }
+        ],
+        "alternatives": [
+          {
+            "kind": "path_span",
+            "reference": "fixture://uci-product-corpus/two-worktree-dirty-comparison-alternative"
+          }
+        ]
+      },
+      "budget": {
+        "max_tools": 6,
+        "max_reads": 8
+      },
+      "outcomes": {
+        "success": "evidence distinguishes both worktree views and bodies",
+        "partial": "one view is unavailable with explicit status",
+        "failure": "one worktree update is attributed to the other"
+      }
+    },
+    {
+      "id": "UCI-P12",
+      "category": "post_increment_restart",
+      "question": "After a saved increment and restart, which view is current and which recovery state is visible?",
+      "exact_hints": [],
+      "allowed_execution_modes": [
+        "graph",
+        "bounded_read"
+      ],
+      "direct_read_eligible": false,
+      "semantic_requirement": "not_required",
+      "evidence": {
+        "required": [
+          {
+            "kind": "relation_path",
+            "reference": "fixture://uci-product-corpus/increment-restart-current-view"
+          }
+        ],
+        "alternatives": [
+          {
+            "kind": "path_span",
+            "reference": "fixture://uci-product-corpus/increment-restart-current-view-alternative"
+          }
+        ]
+      },
+      "budget": {
+        "max_tools": 6,
+        "max_reads": 8
+      },
+      "outcomes": {
+        "success": "post-restart evidence binds the incremented current view",
+        "partial": "restart or offline recovery state is explicit",
+        "failure": "stale view is presented as current"
+      }
+    }
+  ]
+}
