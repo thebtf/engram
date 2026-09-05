@@ -30,8 +30,20 @@ func NewContextResolver(catalog ContextCatalog, authorizer ContextAuthorizer) *C
 	}
 }
 
-// Resolve validates a client selector, reloads the canonical record, authorizes it, and binds it when selected.
+// Resolve validates, authorizes, and selects a context for one client session.
 func (resolver *ContextResolver) Resolve(ctx context.Context, input ResolveContextInput) (AuthorizedContext, error) {
+	return resolver.resolve(ctx, input, true)
+}
+
+// Authorize validates one explicit context without changing the client's selected default.
+func (resolver *ContextResolver) Authorize(ctx context.Context, input ResolveContextInput) (AuthorizedContext, error) {
+	if input.Ref == nil || len(input.Candidates) != 0 {
+		return AuthorizedContext{}, newContextError(ContextMismatch, nil)
+	}
+	return resolver.resolve(ctx, input, false)
+}
+
+func (resolver *ContextResolver) resolve(ctx context.Context, input ResolveContextInput, bindSelection bool) (AuthorizedContext, error) {
 	if resolver == nil || ctx == nil ||
 		!validContextIdentityText(input.ClientSessionID) ||
 		!validContextIdentityText(input.AuthRealm) ||
@@ -48,10 +60,10 @@ func (resolver *ContextResolver) Resolve(ctx context.Context, input ResolveConte
 	switch {
 	case input.Ref != nil:
 		ref = input.Ref.clone()
-		bind = true
+		bind = bindSelection
 	case len(input.Candidates) == 1:
 		ref = input.Candidates[0].clone()
-		bind = true
+		bind = bindSelection
 	case len(input.Candidates) > 1:
 		return AuthorizedContext{}, newContextError(ContextRequired, nil)
 	default:
@@ -112,6 +124,21 @@ func (resolver *ContextResolver) Resolve(ctx context.Context, input ResolveConte
 		resolver.mu.Unlock()
 	}
 	return newAuthorizedContext(ref), nil
+}
+
+// BoundContext returns a cloned existing client binding without resolving or authorizing it.
+func (resolver *ContextResolver) BoundContext(clientSessionID string) (ContextRef, bool) {
+	if resolver == nil || !validContextIdentityText(clientSessionID) {
+		return ContextRef{}, false
+	}
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+
+	binding, found := resolver.bindings[clientSessionID]
+	if !found {
+		return ContextRef{}, false
+	}
+	return binding.ref.clone(), true
 }
 
 func (resolver *ContextResolver) clearBinding(clientSessionID string, version uint64) {

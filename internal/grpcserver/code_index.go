@@ -44,6 +44,14 @@ func (s *Server) CodeIndexNegotiate(ctx context.Context, req *pb.CodeIndexNegoti
 	if err := rejectHAPCredentialWithoutProject(ctx); err != nil {
 		return nil, err
 	}
+	if transport, ok := s.currentUCITransport().(legacyCodeIndexNegotiator); ok {
+		response, err := transport.LegacyCodeIndexNegotiate(ctx, req)
+		if err != nil {
+			return nil, uciTransportHandlerError(ctx, err)
+		}
+		return response, nil
+	}
+
 	if s.db == nil {
 		return nil, status.Error(codes.Unavailable, "database not ready")
 	}

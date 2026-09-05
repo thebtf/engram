@@ -223,6 +223,53 @@ func TestUCIContextIntegrationRoutesIndependentBindingsToDistinctPublicationAndQ
 	}
 }
 
+func TestUCIContextIntegrationExplicitQueryDoesNotReplaceSelectedDefault(t *testing.T) {
+	fixture := newUCIContextIntegrationFixture(t)
+	ctx := fixture.clientContext(uciContextIntegrationClientA, uciContextIntegrationPrincipalA)
+	_, err := fixture.server.BindCodeContext(ctx, &pb.BindCodeContextRequest{
+		ClientSessionId:  uciContextIntegrationClientA,
+		RequestedContext: uciContextIntegrationProtoRef(fixture.refA),
+	})
+	require.NoError(t, err)
+
+	queried, err := fixture.server.QueryCode(ctx, uciContextIntegrationQueryRequest(fixture.refB))
+	require.NoError(t, err)
+	requireUCIContextIntegrationProtoRef(t, fixture.refB, queried.GetContext())
+
+	scopeA := uciContextIntegrationScope(fixture.refA, uciContextIntegrationIncarnationA)
+	begin, err := fixture.server.BeginCodeIndex(ctx, uciContextIntegrationBeginRequest(scopeA))
+	require.NoError(t, err)
+	require.Equal(t, "build-"+fixture.refA.CheckoutID[:8], begin.GetBuildId())
+	require.Len(t, fixture.query.calls, 1)
+	require.Equal(t, fixture.refB, fixture.query.calls[0].ref)
+	require.Len(t, fixture.publication.beginCalls, 1)
+	require.Equal(t, fixture.refA, fixture.publication.beginCalls[0].ref)
+}
+
+func TestUCIContextIntegrationBeginParentConflictStopsBeforePublication(t *testing.T) {
+	fixture := newUCIContextIntegrationFixture(t)
+	ctx := fixture.clientContext(uciContextIntegrationClientA, uciContextIntegrationPrincipalA)
+	_, err := fixture.server.BindCodeContext(ctx, &pb.BindCodeContextRequest{
+		ClientSessionId:  uciContextIntegrationClientA,
+		RequestedContext: uciContextIntegrationProtoRef(fixture.refA),
+	})
+	require.NoError(t, err)
+
+	request := uciContextIntegrationBeginRequest(uciContextIntegrationScope(fixture.refA, uciContextIntegrationIncarnationA))
+	request.ExpectedParent = uciContextIntegrationProtoRef(fixture.refB)
+	response, err := fixture.server.BeginCodeIndex(ctx, request)
+	require.Nil(t, response)
+	requireUCIContextIntegrationClosedStatus(t, err, codes.FailedPrecondition, uci.ContextMismatch,
+		fixture.refA.SourceID,
+		fixture.refA.CheckoutID,
+		fixture.refA.ViewID,
+		fixture.refB.SourceID,
+		fixture.refB.CheckoutID,
+		fixture.refB.ViewID,
+	)
+	require.Empty(t, fixture.publication.beginCalls)
+}
+
 type uciContextIntegrationFixture struct {
 	server      *Server
 	catalog     *uciContextIntegrationCatalog
