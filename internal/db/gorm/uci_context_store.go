@@ -695,10 +695,11 @@ func (s *UCIContextStore) LoadIndexBinding(ctx context.Context, selector uci.Ind
 	if err := selector.Validate(); err != nil {
 		return uci.IndexBinding{}, fmt.Errorf("uci context load index binding: %w", err)
 	}
-	if selector.Context != nil {
-		return s.loadUCIIndexBindingForContext(ctx, *selector.Context)
+	if ref, pinned := selector.Context(); pinned {
+		return s.loadUCIIndexBindingForContext(ctx, ref)
 	}
-	return s.loadUCIIndexBindingForCheckout(ctx, *selector.Scope, selector.ProfileID)
+	checkout, _ := selector.Checkout()
+	return s.loadUCIIndexBindingForCheckout(ctx, checkout.Scope, checkout.ProfileID)
 }
 
 func (s *UCIContextStore) ListCheckoutsBySource(ctx context.Context, sourceID string) ([]UCICheckout, error) {

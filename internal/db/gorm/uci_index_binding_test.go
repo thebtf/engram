@@ -13,7 +13,7 @@ import (
 
 func TestUCIContextStoreLoadIndexBindingFromAuthorizedView(t *testing.T) {
 	fixture := newUCIIndexBindingFixture(t, true)
-	selector := fixture.viewSelector()
+	selector := fixture.viewSelector(t)
 
 	binding, err := fixture.store.LoadIndexBinding(fixture.ctx, selector)
 	require.NoError(t, err)
@@ -29,19 +29,23 @@ func TestUCIContextStoreLoadIndexBindingFromAuthorizedView(t *testing.T) {
 	require.Equal(t, fixture.view.Generation, binding.Context.Generation)
 	require.Equal(t, fixture.profile.ProfileID, binding.Context.AnalysisProfileID)
 	require.Equal(t, fixture.space.SpaceID, *binding.Context.SpaceID)
-	require.NotSame(t, selector.Context, binding.Context)
-	require.NotSame(t, selector.Context.SpaceID, binding.Context.SpaceID)
 
-	checkoutBinding, err := fixture.store.LoadIndexBinding(fixture.ctx, fixture.checkoutSelector(fixture.profile.ProfileID))
+	checkoutBinding, err := fixture.store.LoadIndexBinding(fixture.ctx, fixture.checkoutSelector(t, fixture.profile.ProfileID))
 	require.NoError(t, err)
 	require.NoError(t, checkoutBinding.Validate())
 	require.NotNil(t, checkoutBinding.Context)
 	require.Equal(t, fixture.view.ViewID, checkoutBinding.Context.ViewID)
 	require.Equal(t, fixture.view.Generation, checkoutBinding.Context.Generation)
 	require.Nil(t, checkoutBinding.Context.SpaceID, "checkout selection must not infer a Space from a path or label")
-
+	selectedRef, pinned := selector.Context()
+	require.True(t, pinned)
 	boundSpaceID := *binding.Context.SpaceID
-	*selector.Context.SpaceID = uuid.NewString()
+	*selectedRef.SpaceID = uuid.NewString()
+	replacement, err := ucidomain.ContextIndexBindingSelector(selectedRef)
+	require.NoError(t, err)
+	reloaded, err := fixture.store.LoadIndexBinding(fixture.ctx, replacement)
+	require.Error(t, err)
+	require.Nil(t, reloaded.Context)
 	require.Equal(t, boundSpaceID, *binding.Context.SpaceID, "binding must not retain caller-owned context pointers")
 
 	clone := binding.Clone()
@@ -54,7 +58,7 @@ func TestUCIContextStoreLoadIndexBindingFromAuthorizedView(t *testing.T) {
 func TestUCIContextStoreLoadIndexBindingForRegisteredCheckoutWithoutView(t *testing.T) {
 	fixture := newUCIIndexBindingFixture(t, false)
 
-	binding, err := fixture.store.LoadIndexBinding(fixture.ctx, fixture.checkoutSelector(fixture.profile.ProfileID))
+	binding, err := fixture.store.LoadIndexBinding(fixture.ctx, fixture.checkoutSelector(t, fixture.profile.ProfileID))
 	require.NoError(t, err)
 	require.NoError(t, binding.Validate())
 	require.Nil(t, binding.Context, "a registered unindexed checkout has no current View rather than a lookup error")
@@ -75,8 +79,11 @@ func TestUCIContextStoreLoadIndexBindingRejectsMismatches(t *testing.T) {
 			DisplayName: "other-source-" + uuid.NewString(),
 		})
 		require.NoError(t, err)
-		selector := fixture.viewSelector()
-		selector.Context.SourceID = otherSource.SourceID
+		ref, ok := fixture.viewSelector(t).Context()
+		require.True(t, ok)
+		ref.SourceID = otherSource.SourceID
+		selector, err := ucidomain.ContextIndexBindingSelector(ref)
+		require.NoError(t, err)
 
 		_, err = fixture.store.LoadIndexBinding(fixture.ctx, selector)
 		require.Error(t, err)
@@ -87,7 +94,7 @@ func TestUCIContextStoreLoadIndexBindingRejectsMismatches(t *testing.T) {
 		otherProfile, err := fixture.store.CreateProfile(fixture.ctx, newUCIContextMigrationProfileInput(uuid.NewString()))
 		require.NoError(t, err)
 
-		_, err = fixture.store.LoadIndexBinding(fixture.ctx, fixture.checkoutSelector(otherProfile.ProfileID))
+		_, err = fixture.store.LoadIndexBinding(fixture.ctx, fixture.checkoutSelector(t, otherProfile.ProfileID))
 		require.Error(t, err)
 	})
 
@@ -97,7 +104,7 @@ func TestUCIContextStoreLoadIndexBindingRejectsMismatches(t *testing.T) {
 			Where("checkout_id = ?", fixture.checkout.CheckoutID).
 			Update("state", UCICheckoutOffline).Error)
 
-		_, err := fixture.store.LoadIndexBinding(fixture.ctx, fixture.checkoutSelector(fixture.profile.ProfileID))
+		_, err := fixture.store.LoadIndexBinding(fixture.ctx, fixture.checkoutSelector(t, fixture.profile.ProfileID))
 		require.Error(t, err)
 	})
 
@@ -108,8 +115,11 @@ func TestUCIContextStoreLoadIndexBindingRejectsMismatches(t *testing.T) {
 			DisplayName: "other-space-" + uuid.NewString(),
 		})
 		require.NoError(t, err)
-		selector := fixture.viewSelector()
-		selector.Context.SpaceID = &otherSpace.SpaceID
+		ref, ok := fixture.viewSelector(t).Context()
+		require.True(t, ok)
+		ref.SpaceID = &otherSpace.SpaceID
+		selector, err := ucidomain.ContextIndexBindingSelector(ref)
+		require.NoError(t, err)
 
 		_, err = fixture.store.LoadIndexBinding(fixture.ctx, selector)
 		require.Error(t, err)
@@ -180,23 +190,31 @@ func newUCIIndexBindingFixture(t *testing.T, publishCurrentView bool) uciIndexBi
 	return fixture
 }
 
-func (fixture uciIndexBindingFixture) viewSelector() ucidomain.IndexBindingSelector {
+func (fixture uciIndexBindingFixture) viewSelector(t *testing.T) ucidomain.IndexBindingSelector {
+	t.Helper()
 	spaceID := fixture.space.SpaceID
-	return ucidomain.IndexBindingSelector{Context: &ucidomain.ContextRef{
+	selector, err := ucidomain.ContextIndexBindingSelector(ucidomain.ContextRef{
 		SpaceID:           &spaceID,
 		SourceID:          fixture.source.SourceID,
 		CheckoutID:        fixture.checkout.CheckoutID,
 		ViewID:            fixture.view.ViewID,
 		AnalysisProfileID: fixture.profile.ProfileID,
 		Generation:        fixture.view.Generation,
-	}}
+	})
+	require.NoError(t, err)
+	return selector
 }
 
-func (fixture uciIndexBindingFixture) checkoutSelector(profileID string) ucidomain.IndexBindingSelector {
-	scope := ucidomain.IndexScope{
-		SourceID:      fixture.source.SourceID,
-		CheckoutID:    fixture.checkout.CheckoutID,
-		IncarnationID: fixture.checkout.IncarnationID,
-	}
-	return ucidomain.IndexBindingSelector{Scope: &scope, ProfileID: profileID}
+func (fixture uciIndexBindingFixture) checkoutSelector(t *testing.T, profileID string) ucidomain.IndexBindingSelector {
+	t.Helper()
+	selector, err := ucidomain.CheckoutIndexBindingSelector(ucidomain.RegisteredCheckoutSelector{
+		Scope: ucidomain.IndexScope{
+			SourceID:      fixture.source.SourceID,
+			CheckoutID:    fixture.checkout.CheckoutID,
+			IncarnationID: fixture.checkout.IncarnationID,
+		},
+		ProfileID: profileID,
+	})
+	require.NoError(t, err)
+	return selector
 }

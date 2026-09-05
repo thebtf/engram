@@ -16,25 +16,126 @@ import (
 	"github.com/thebtf/engram/internal/uci"
 )
 
-const codebaseContextMaxHandlesPerClient = 32
+const (
+	codebaseContextMaxHandlesPerClient = 32
+	codebaseContextListLimit           = 64
+)
 
-// codebaseContextApplication is the narrow UCI application seam exposed to MCP.
-// UCI retains resolution defaults and authorization; MCP only owns opaque handles.
-type codebaseContextApplication interface {
+// CodebaseContextApplication is the narrow UCI application seam exposed to
+// MCP. UCI retains resolution defaults and authorization; MCP owns only opaque
+// handle bytes and their bounded per-client registry.
+type CodebaseContextApplication interface {
 	Resolve(context.Context, uci.ResolveContextInput) (uci.AuthorizedContext, error)
 	List(context.Context, uci.ResolveContextInput) ([]uci.ContextRef, error)
 	Project(context.Context, uci.ContextRef) (map[string]string, error)
 }
 
-type codebaseContextArgs struct {
-	Action            *string `json:"action"`
-	ContextHandle     *string `json:"context_handle"`
-	SpaceID           *string `json:"space_id"`
+// codebaseContextIndexApplication is an optional capability needed only by the
+// registered-checkout bootstrap path. It is intentionally separate from the
+// published-View surface so query/read/graph applications do not gain a
+// no-View contract by accident.
+type codebaseContextIndexApplication interface {
+	ResolveIndexBinding(context.Context, uci.ResolveIndexBindingInput) (uci.AuthorizedIndexBinding, error)
+	AuthorizeIndexBinding(context.Context, uci.ResolveIndexBindingInput) (uci.AuthorizedIndexBinding, error)
+	BoundSelector(string) (uci.IndexBindingSelector, bool)
+	ForgetClient(string)
+}
+
+// UCIContextApplication composes the real resolver and safe display directory
+// for the production MCP server. It implements no query, graph, or read
+// capability; those remain unavailable until their recorder-owned applications
+// are composed separately.
+type UCIContextApplication struct {
+	resolver  *uci.ContextResolver
+	directory uci.ContextDirectory
+}
+
+// NewUCIContextApplication creates the production MCP context application.
+func NewUCIContextApplication(resolver *uci.ContextResolver, directory uci.ContextDirectory) (*UCIContextApplication, error) {
+	if resolver == nil || directory == nil {
+		return nil, errors.New("UCI context application is not configured")
+	}
+	return &UCIContextApplication{resolver: resolver, directory: directory}, nil
+}
+
+func (application *UCIContextApplication) Resolve(ctx context.Context, input uci.ResolveContextInput) (uci.AuthorizedContext, error) {
+	if application == nil || application.resolver == nil {
+		return uci.AuthorizedContext{}, errors.New("UCI context application is not configured")
+	}
+	return application.resolver.Resolve(ctx, input)
+}
+
+func (application *UCIContextApplication) List(ctx context.Context, input uci.ResolveContextInput) ([]uci.ContextRef, error) {
+	if application == nil || application.directory == nil {
+		return nil, errors.New("UCI context application is not configured")
+	}
+	return application.directory.ListAuthorizedContexts(ctx, input.AuthRealm, input.Principal, codebaseContextListLimit)
+}
+
+func (application *UCIContextApplication) Project(ctx context.Context, ref uci.ContextRef) (map[string]string, error) {
+	if application == nil || application.directory == nil {
+		return nil, errors.New("UCI context application is not configured")
+	}
+	metadata, err := application.directory.LoadContextMetadata(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		"source":   metadata.Source,
+		"checkout": metadata.Checkout,
+		"view":     metadata.View,
+	}, nil
+}
+
+func (application *UCIContextApplication) ResolveIndexBinding(ctx context.Context, input uci.ResolveIndexBindingInput) (uci.AuthorizedIndexBinding, error) {
+	if application == nil || application.resolver == nil {
+		return uci.AuthorizedIndexBinding{}, errors.New("UCI context application is not configured")
+	}
+	return application.resolver.ResolveIndexBinding(ctx, input)
+}
+
+func (application *UCIContextApplication) AuthorizeIndexBinding(ctx context.Context, input uci.ResolveIndexBindingInput) (uci.AuthorizedIndexBinding, error) {
+	if application == nil || application.resolver == nil {
+		return uci.AuthorizedIndexBinding{}, errors.New("UCI context application is not configured")
+	}
+	return application.resolver.AuthorizeIndexBinding(ctx, input)
+}
+
+func (application *UCIContextApplication) BoundSelector(clientSessionID string) (uci.IndexBindingSelector, bool) {
+	if application == nil || application.resolver == nil {
+		return uci.IndexBindingSelector{}, false
+	}
+	return application.resolver.BoundSelector(clientSessionID)
+}
+
+func (application *UCIContextApplication) ForgetClient(clientSessionID string) {
+	if application != nil && application.resolver != nil {
+		application.resolver.ForgetClient(clientSessionID)
+	}
+}
+
+var (
+	_ CodebaseContextApplication      = (*UCIContextApplication)(nil)
+	_ codebaseContextIndexApplication = (*UCIContextApplication)(nil)
+)
+
+type codebaseContextCheckoutArgs struct {
 	SourceID          *string `json:"source_id"`
 	CheckoutID        *string `json:"checkout_id"`
-	ViewID            *string `json:"view_id"`
+	IncarnationID     *string `json:"incarnation_id"`
 	AnalysisProfileID *string `json:"analysis_profile_id"`
-	Generation        *int64  `json:"generation"`
+}
+
+type codebaseContextArgs struct {
+	Action            *string                      `json:"action"`
+	ContextHandle     *string                      `json:"context_handle"`
+	SpaceID           *string                      `json:"space_id"`
+	SourceID          *string                      `json:"source_id"`
+	CheckoutID        *string                      `json:"checkout_id"`
+	ViewID            *string                      `json:"view_id"`
+	AnalysisProfileID *string                      `json:"analysis_profile_id"`
+	Generation        *int64                       `json:"generation"`
+	Checkout          *codebaseContextCheckoutArgs `json:"checkout"`
 }
 
 type codebaseContextRefKey struct {
@@ -47,28 +148,61 @@ type codebaseContextRefKey struct {
 	generation        int64
 }
 
+type codebaseContextScopeKey struct {
+	sourceID      string
+	checkoutID    string
+	incarnationID string
+	profileID     string
+}
+
+type codebaseContextSelectorKey struct {
+	kind  uint8
+	ref   codebaseContextRefKey
+	scope codebaseContextScopeKey
+}
+
 type codebaseContextHandleEntry struct {
-	key codebaseContextRefKey
-	ref uci.ContextRef
+	key      codebaseContextSelectorKey
+	selector uci.IndexBindingSelector
+	scope    *codebaseContextScopeKey
 }
 
 type codebaseContextClientHandles struct {
-	byHandle map[string]codebaseContextHandleEntry
-	byRef    map[codebaseContextRefKey]string
-	order    []string
+	byHandle   map[string]codebaseContextHandleEntry
+	bySelector map[codebaseContextSelectorKey]string
+	byScope    map[codebaseContextScopeKey]uint32
+	order      []string
 }
 
-type codebaseContextPayload struct {
-	ContextHandle     string  `json:"context_handle"`
+type codebaseContextRefPayload struct {
 	SpaceID           *string `json:"space_id,omitempty"`
 	SourceID          string  `json:"source_id"`
 	CheckoutID        string  `json:"checkout_id"`
 	ViewID            string  `json:"view_id"`
 	AnalysisProfileID string  `json:"analysis_profile_id"`
 	Generation        int64   `json:"generation"`
-	Source            string  `json:"source"`
-	Checkout          string  `json:"checkout"`
-	View              string  `json:"view"`
+}
+
+type codebaseContextPayload struct {
+	ContextHandle     string                     `json:"context_handle"`
+	BindingKind       string                     `json:"binding_kind"`
+	Context           *codebaseContextRefPayload `json:"context"`
+	SpaceID           *string                    `json:"space_id,omitempty"`
+	SourceID          string                     `json:"source_id"`
+	CheckoutID        string                     `json:"checkout_id"`
+	IncarnationID     string                     `json:"incarnation_id,omitempty"`
+	ViewID            string                     `json:"view_id,omitempty"`
+	AnalysisProfileID string                     `json:"analysis_profile_id"`
+	Generation        int64                      `json:"generation,omitempty"`
+	Source            string                     `json:"source"`
+	Checkout          string                     `json:"checkout"`
+	View              string                     `json:"view,omitempty"`
+}
+
+type codebaseContextSelection struct {
+	ref      *uci.ContextRef
+	handle   string
+	checkout *uci.RegisteredCheckoutSelector
 }
 
 func codebaseContextTool() Tool {
@@ -84,7 +218,7 @@ func codebaseContextTool() Tool {
 				"action": map[string]any{
 					"type":        "string",
 					"enum":        []string{"resolve", "list", "select"},
-					"description": "resolve reuses the caller binding; list returns authorized contexts; select chooses a typed reference or opaque handle",
+					"description": "resolve reuses the caller binding; list returns authorized contexts; select chooses a typed reference, registered checkout, or opaque handle",
 				},
 				"context_handle": map[string]any{
 					"type":        "string",
@@ -115,6 +249,17 @@ func codebaseContextTool() Tool {
 					"minimum":     1,
 					"description": "ContextRef generation for action=select",
 				},
+				"checkout": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"required":             []string{"source_id", "checkout_id", "incarnation_id", "analysis_profile_id"},
+					"properties": map[string]any{
+						"source_id":           map[string]any{"type": "string"},
+						"checkout_id":         map[string]any{"type": "string"},
+						"incarnation_id":      map[string]any{"type": "string"},
+						"analysis_profile_id": map[string]any{"type": "string"},
+					},
+				},
 			},
 		},
 	}
@@ -142,6 +287,17 @@ func (s *Server) handleCodebaseContext(ctx context.Context, raw json.RawMessage)
 		application, epoch, ok := s.codebaseContextApplicationSnapshot()
 		if !ok {
 			return "", fmt.Errorf("unknown tool: codebase_context")
+		}
+		if indexApplication, ok := application.(codebaseContextIndexApplication); ok {
+			if selector, selected := indexApplication.BoundSelector(input.ClientSessionID); selected {
+				if _, checkout := selector.Checkout(); checkout {
+					binding, err := indexApplication.ResolveIndexBinding(ctx, codebaseContextIndexInput(input, nil))
+					if err != nil {
+						return "", codebaseContextApplicationError(err)
+					}
+					return s.presentCodebaseContextBinding(ctx, application, epoch, input.ClientSessionID, selector, binding.Binding())
+				}
+			}
 		}
 		resolved, err := application.Resolve(ctx, input)
 		if err != nil {
@@ -183,17 +339,35 @@ func (s *Server) handleCodebaseContext(ctx context.Context, raw json.RawMessage)
 }
 
 func (s *Server) selectCodebaseContext(ctx context.Context, input uci.ResolveContextInput, args codebaseContextArgs) (string, error) {
-	ref, handle, err := args.selection()
+	selection, err := args.selection()
 	if err != nil {
 		return "", codebaseContextClosedError(uci.ContextMismatch)
 	}
 
-	if handle != "" {
-		application, epoch, resolvedRef, found := s.codebaseContextRefForHandle(input.ClientSessionID, handle)
+	if selection.handle != "" {
+		application, epoch, selector, found := s.codebaseContextSelectorForHandle(input.ClientSessionID, selection.handle)
 		if !found {
 			return "", codebaseContextClosedError(uci.ContextMismatch)
 		}
-		input.Ref = &resolvedRef
+		if checkout, following := selector.Checkout(); following {
+			indexApplication, ok := application.(codebaseContextIndexApplication)
+			if !ok {
+				return "", codebaseContextClosedError(uci.ContextMismatch)
+			}
+			binding, err := indexApplication.ResolveIndexBinding(ctx, codebaseContextIndexInput(input, &selector))
+			if err != nil {
+				return "", codebaseContextApplicationError(err)
+			}
+			if current, ok := selector.Checkout(); !ok || current != checkout {
+				return "", codebaseContextClosedError(uci.ContextMismatch)
+			}
+			return s.presentCodebaseContextBinding(ctx, application, epoch, input.ClientSessionID, selector, binding.Binding())
+		}
+		ref, pinned := selector.Context()
+		if !pinned {
+			return "", codebaseContextClosedError(uci.ContextMismatch)
+		}
+		input.Ref = &ref
 		resolved, err := application.Resolve(ctx, input)
 		if err != nil {
 			return "", codebaseContextApplicationError(err)
@@ -205,7 +379,23 @@ func (s *Server) selectCodebaseContext(ctx context.Context, input uci.ResolveCon
 	if !ok {
 		return "", fmt.Errorf("unknown tool: codebase_context")
 	}
-	input.Ref = ref
+	if selection.checkout != nil {
+		indexApplication, ok := application.(codebaseContextIndexApplication)
+		if !ok {
+			return "", codebaseContextClosedError(uci.ContextMismatch)
+		}
+		selector, err := uci.CheckoutIndexBindingSelector(*selection.checkout)
+		if err != nil {
+			return "", codebaseContextClosedError(uci.ContextMismatch)
+		}
+		binding, err := indexApplication.ResolveIndexBinding(ctx, codebaseContextIndexInput(input, &selector))
+		if err != nil {
+			return "", codebaseContextApplicationError(err)
+		}
+		return s.presentCodebaseContextBinding(ctx, application, epoch, input.ClientSessionID, selector, binding.Binding())
+	}
+
+	input.Ref = selection.ref
 	resolved, err := application.Resolve(ctx, input)
 	if err != nil {
 		return "", codebaseContextApplicationError(err)
@@ -213,7 +403,17 @@ func (s *Server) selectCodebaseContext(ctx context.Context, input uci.ResolveCon
 	return s.presentCodebaseContext(ctx, application, epoch, input.ClientSessionID, resolved.Ref())
 }
 
-func (s *Server) presentCodebaseContext(ctx context.Context, application codebaseContextApplication, epoch uint64, clientSessionID string, ref uci.ContextRef) (string, error) {
+func codebaseContextIndexInput(input uci.ResolveContextInput, selector *uci.IndexBindingSelector) uci.ResolveIndexBindingInput {
+	return uci.ResolveIndexBindingInput{
+		ClientSessionID: input.ClientSessionID,
+		AuthRealm:       input.AuthRealm,
+		Principal:       input.Principal,
+		WorkstationID:   input.WorkstationID,
+		Selector:        selector,
+	}
+}
+
+func (s *Server) presentCodebaseContext(ctx context.Context, application CodebaseContextApplication, epoch uint64, clientSessionID string, ref uci.ContextRef) (string, error) {
 	payload, err := s.codebaseContextPayload(ctx, application, epoch, clientSessionID, ref)
 	if err != nil {
 		return "", err
@@ -225,7 +425,19 @@ func (s *Server) presentCodebaseContext(ctx context.Context, application codebas
 	return string(encoded), nil
 }
 
-func (s *Server) codebaseContextPayload(ctx context.Context, application codebaseContextApplication, epoch uint64, clientSessionID string, ref uci.ContextRef) (codebaseContextPayload, error) {
+func (s *Server) presentCodebaseContextBinding(ctx context.Context, application CodebaseContextApplication, epoch uint64, clientSessionID string, selector uci.IndexBindingSelector, binding uci.IndexBinding) (string, error) {
+	payload, err := s.codebaseContextBindingPayload(ctx, application, epoch, clientSessionID, selector, binding)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", codebaseContextClosedError(uci.ContextMismatch)
+	}
+	return string(encoded), nil
+}
+
+func (s *Server) codebaseContextPayload(ctx context.Context, application CodebaseContextApplication, epoch uint64, clientSessionID string, ref uci.ContextRef) (codebaseContextPayload, error) {
 	if !s.codebaseContextEpochCurrent(epoch) {
 		return codebaseContextPayload{}, codebaseContextClosedError(uci.ContextMismatch)
 	}
@@ -233,15 +445,18 @@ func (s *Server) codebaseContextPayload(ctx context.Context, application codebas
 	if err != nil || !validCodebaseContextMetadata(metadata) {
 		return codebaseContextPayload{}, codebaseContextClosedError(uci.ContextMismatch)
 	}
-	if !s.codebaseContextEpochCurrent(epoch) {
+	selector, err := uci.ContextIndexBindingSelector(ref)
+	if err != nil {
 		return codebaseContextPayload{}, codebaseContextClosedError(uci.ContextMismatch)
 	}
-	handle, ok := s.codebaseContextHandleFor(clientSessionID, ref, epoch)
-	if !ok {
+	handle, ok := s.codebaseContextHandleForSelector(clientSessionID, selector, nil, epoch)
+	if !ok || !s.codebaseContextEpochCurrent(epoch) {
 		return codebaseContextPayload{}, codebaseContextClosedError(uci.ContextMismatch)
 	}
 	return codebaseContextPayload{
 		ContextHandle:     handle,
+		BindingKind:       "context",
+		Context:           codebaseContextRefPayloadFor(ref),
 		SpaceID:           copyCodebaseContextSpaceID(ref.SpaceID),
 		SourceID:          ref.SourceID,
 		CheckoutID:        ref.CheckoutID,
@@ -252,6 +467,58 @@ func (s *Server) codebaseContextPayload(ctx context.Context, application codebas
 		Checkout:          metadata["checkout"],
 		View:              metadata["view"],
 	}, nil
+}
+
+func (s *Server) codebaseContextBindingPayload(ctx context.Context, application CodebaseContextApplication, epoch uint64, clientSessionID string, selector uci.IndexBindingSelector, binding uci.IndexBinding) (codebaseContextPayload, error) {
+	binding = binding.Clone()
+	if !codebaseContextBindingMatchesSelector(binding, selector) || !s.codebaseContextEpochCurrent(epoch) {
+		return codebaseContextPayload{}, codebaseContextClosedError(uci.ContextMismatch)
+	}
+	handle, ok := s.codebaseContextHandleForSelector(clientSessionID, selector, &binding, epoch)
+	if !ok || !s.codebaseContextEpochCurrent(epoch) {
+		return codebaseContextPayload{}, codebaseContextClosedError(uci.ContextMismatch)
+	}
+
+	payload := codebaseContextPayload{
+		ContextHandle:     handle,
+		BindingKind:       "checkout",
+		SourceID:          binding.Scope.SourceID,
+		CheckoutID:        binding.Scope.CheckoutID,
+		IncarnationID:     binding.Scope.IncarnationID,
+		AnalysisProfileID: binding.ProfileID,
+		// The only no-View display facts are server-authorized opaque IDs. They
+		// deliberately do not expose locator, root, workstation, or owner data.
+		Source:   binding.Scope.SourceID,
+		Checkout: binding.Scope.CheckoutID,
+	}
+	if binding.Context == nil {
+		return payload, nil
+	}
+
+	ref := cloneCodebaseContextRef(*binding.Context)
+	metadata, err := application.Project(ctx, ref)
+	if err != nil || !validCodebaseContextMetadata(metadata) {
+		return codebaseContextPayload{}, codebaseContextClosedError(uci.ContextMismatch)
+	}
+	payload.Context = codebaseContextRefPayloadFor(ref)
+	payload.SpaceID = copyCodebaseContextSpaceID(ref.SpaceID)
+	payload.ViewID = ref.ViewID
+	payload.Generation = ref.Generation
+	payload.Source = metadata["source"]
+	payload.Checkout = metadata["checkout"]
+	payload.View = metadata["view"]
+	return payload, nil
+}
+
+func codebaseContextRefPayloadFor(ref uci.ContextRef) *codebaseContextRefPayload {
+	return &codebaseContextRefPayload{
+		SpaceID:           copyCodebaseContextSpaceID(ref.SpaceID),
+		SourceID:          ref.SourceID,
+		CheckoutID:        ref.CheckoutID,
+		ViewID:            ref.ViewID,
+		AnalysisProfileID: ref.AnalysisProfileID,
+		Generation:        ref.Generation,
+	}
 }
 
 func decodeCodebaseContextArgs(raw json.RawMessage) (codebaseContextArgs, error) {
@@ -276,19 +543,36 @@ func decodeCodebaseContextArgs(raw json.RawMessage) (codebaseContextArgs, error)
 }
 
 func (args codebaseContextArgs) hasSelector() bool {
-	return args.ContextHandle != nil || args.SpaceID != nil || args.SourceID != nil || args.CheckoutID != nil || args.ViewID != nil || args.AnalysisProfileID != nil || args.Generation != nil
+	return args.ContextHandle != nil || args.SpaceID != nil || args.SourceID != nil || args.CheckoutID != nil || args.ViewID != nil || args.AnalysisProfileID != nil || args.Generation != nil || args.Checkout != nil
 }
 
-func (args codebaseContextArgs) selection() (*uci.ContextRef, string, error) {
+func (args codebaseContextArgs) selection() (codebaseContextSelection, error) {
 	typed := args.SpaceID != nil || args.SourceID != nil || args.CheckoutID != nil || args.ViewID != nil || args.AnalysisProfileID != nil || args.Generation != nil
 	if args.ContextHandle != nil {
-		if typed || !validCodebaseContextHandle(*args.ContextHandle) {
-			return nil, "", errors.New("ambiguous selector")
+		if typed || args.Checkout != nil || !validCodebaseContextHandle(*args.ContextHandle) {
+			return codebaseContextSelection{}, errors.New("ambiguous selector")
 		}
-		return nil, *args.ContextHandle, nil
+		return codebaseContextSelection{handle: *args.ContextHandle}, nil
+	}
+	if args.Checkout != nil {
+		if typed || args.Checkout.SourceID == nil || args.Checkout.CheckoutID == nil || args.Checkout.IncarnationID == nil || args.Checkout.AnalysisProfileID == nil {
+			return codebaseContextSelection{}, errors.New("incomplete checkout selector")
+		}
+		selection := uci.RegisteredCheckoutSelector{
+			Scope: uci.IndexScope{
+				SourceID:      *args.Checkout.SourceID,
+				CheckoutID:    *args.Checkout.CheckoutID,
+				IncarnationID: *args.Checkout.IncarnationID,
+			},
+			ProfileID: *args.Checkout.AnalysisProfileID,
+		}
+		if _, err := uci.CheckoutIndexBindingSelector(selection); err != nil {
+			return codebaseContextSelection{}, err
+		}
+		return codebaseContextSelection{checkout: &selection}, nil
 	}
 	if !typed || args.SourceID == nil || args.CheckoutID == nil || args.ViewID == nil || args.AnalysisProfileID == nil || args.Generation == nil {
-		return nil, "", errors.New("incomplete selector")
+		return codebaseContextSelection{}, errors.New("incomplete selector")
 	}
 	ref := uci.ContextRef{
 		SpaceID:           copyCodebaseContextSpaceID(args.SpaceID),
@@ -298,7 +582,10 @@ func (args codebaseContextArgs) selection() (*uci.ContextRef, string, error) {
 		AnalysisProfileID: *args.AnalysisProfileID,
 		Generation:        *args.Generation,
 	}
-	return &ref, "", nil
+	if _, err := uci.ContextIndexBindingSelector(ref); err != nil {
+		return codebaseContextSelection{}, err
+	}
+	return codebaseContextSelection{ref: &ref}, nil
 }
 
 func codebaseContextCallerInput(ctx context.Context) (uci.ResolveContextInput, error) {
@@ -307,17 +594,67 @@ func codebaseContextCallerInput(ctx context.Context) (uci.ResolveContextInput, e
 	}
 	sessionID := sessionFromContext(ctx)
 	identity, ok := auth.IdentityFrom(ctx)
-	if !ok || !codebaseContextIdentityText(sessionID) || !codebaseContextIdentityText(identity.Principal) {
+	authRealm := string(identity.Source)
+	if !ok || !codebaseContextIdentityText(sessionID) || !codebaseContextIdentityText(authRealm) || !codebaseContextIdentityText(identity.Principal) || !codebaseContextIdentityText(identity.WorkstationID()) {
 		return uci.ResolveContextInput{}, errors.New("invalid caller")
 	}
 	if identity.PrincipalKind != "" && !auth.IsValidPrincipalKind(identity.PrincipalKind) {
 		return uci.ResolveContextInput{}, errors.New("invalid caller")
 	}
 	principal, _, ok := identity.MemoryOwner()
-	if !ok || !codebaseContextIdentityText(principal) {
+	if !ok || !codebaseContextIdentityText(principal) || principal != identity.Principal {
 		return uci.ResolveContextInput{}, errors.New("invalid caller")
 	}
-	return uci.ResolveContextInput{ClientSessionID: sessionID, Principal: principal}, nil
+	return uci.ResolveContextInput{
+		ClientSessionID: sessionID,
+		AuthRealm:       authRealm,
+		Principal:       principal,
+		WorkstationID:   identity.WorkstationID(),
+	}, nil
+}
+
+type uciRequestIDContextKey struct{}
+
+func contextWithUCIRequestID(ctx context.Context, requestID any) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	encoded, err := json.Marshal(requestID)
+	if err != nil {
+		return context.WithValue(ctx, uciRequestIDContextKey{}, "")
+	}
+	return context.WithValue(ctx, uciRequestIDContextKey{}, string(encoded))
+}
+
+func uciRequestIDFromContext(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	requestID, ok := ctx.Value(uciRequestIDContextKey{}).(string)
+	return requestID, ok && codebaseContextIdentityText(requestID)
+}
+
+func codebaseExposureInput(ctx context.Context, operation uci.ExposureOperation, response uci.QueryResponse) (uci.ExposureInput, error) {
+	caller, err := codebaseContextCallerInput(ctx)
+	if err != nil {
+		return uci.ExposureInput{}, err
+	}
+	identity, ok := auth.IdentityFrom(ctx)
+	if !ok || !codebaseContextIdentityText(identity.WorkstationID()) {
+		return uci.ExposureInput{}, errors.New("invalid exposure caller")
+	}
+	requestID, ok := uciRequestIDFromContext(ctx)
+	if !ok {
+		return uci.ExposureInput{}, errors.New("missing request identity")
+	}
+	return uci.ExposureInput{
+		AuthRealm:     caller.AuthRealm,
+		ClientKeycard: identity.WorkstationID(),
+		ClientSession: caller.ClientSessionID,
+		RequestID:     requestID,
+		Operation:     operation,
+		Response:      response,
+	}, nil
 }
 
 func codebaseContextIdentityText(value string) bool {
@@ -375,7 +712,7 @@ func (s *Server) hasCodebaseContextApplication() bool {
 	return s.codebaseContextApplication != nil
 }
 
-func (s *Server) codebaseContextApplicationSnapshot() (codebaseContextApplication, uint64, bool) {
+func (s *Server) codebaseContextApplicationSnapshot() (CodebaseContextApplication, uint64, bool) {
 	s.codebaseContextMu.Lock()
 	defer s.codebaseContextMu.Unlock()
 	if s.codebaseContextApplication == nil {
@@ -390,27 +727,63 @@ func (s *Server) codebaseContextEpochCurrent(epoch uint64) bool {
 	return s.codebaseContextApplication != nil && s.codebaseContextEpoch == epoch
 }
 
-func (s *Server) codebaseContextRefForHandle(clientSessionID, handle string) (codebaseContextApplication, uint64, uci.ContextRef, bool) {
+func (s *Server) codebaseContextRegistryEpoch() uint64 {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+	return s.codebaseContextEpoch
+}
+
+func (s *Server) codebaseContextRegistryEpochCurrent(epoch uint64) bool {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+	return s.codebaseContextEpoch == epoch
+}
+
+// codebaseContextRefForHandle preserves the existing View-only capability for
+// MCP query/read/graph helpers. Checkout-following handles have no synthetic
+// View; those tools stay unavailable until their own applications explicitly
+// support the no-View transition.
+func (s *Server) codebaseContextRefForHandle(clientSessionID, handle string) (CodebaseContextApplication, uint64, uci.ContextRef, bool) {
+	application, epoch, selector, found := s.codebaseContextSelectorForHandle(clientSessionID, handle)
+	if !found {
+		return nil, 0, uci.ContextRef{}, false
+	}
+	ref, pinned := selector.Context()
+	if !pinned {
+		return nil, 0, uci.ContextRef{}, false
+	}
+	return application, epoch, ref, true
+}
+
+func (s *Server) codebaseContextSelectorForHandle(clientSessionID, handle string) (CodebaseContextApplication, uint64, uci.IndexBindingSelector, bool) {
 	s.codebaseContextMu.Lock()
 	defer s.codebaseContextMu.Unlock()
 	if s.codebaseContextApplication == nil {
-		return nil, 0, uci.ContextRef{}, false
+		return nil, 0, uci.IndexBindingSelector{}, false
 	}
-	client, found := s.codebaseContextHandles[clientSessionID]
-	if !found {
-		return nil, 0, uci.ContextRef{}, false
+	client := s.codebaseContextHandles[clientSessionID]
+	if client == nil {
+		return nil, 0, uci.IndexBindingSelector{}, false
 	}
 	entry, found := client.byHandle[handle]
 	if !found {
-		return nil, 0, uci.ContextRef{}, false
+		return nil, 0, uci.IndexBindingSelector{}, false
 	}
-	return s.codebaseContextApplication, s.codebaseContextEpoch, cloneCodebaseContextRef(entry.ref), true
+	return s.codebaseContextApplication, s.codebaseContextEpoch, entry.selector.Clone(), true
 }
 
-func (s *Server) codebaseContextHandleFor(clientSessionID string, ref uci.ContextRef, epoch uint64) (string, bool) {
+func (s *Server) codebaseContextHandleForSelector(clientSessionID string, selector uci.IndexBindingSelector, binding *uci.IndexBinding, epoch uint64) (string, bool) {
+	if err := selector.Validate(); err != nil || (binding != nil && !codebaseContextBindingMatchesSelector(*binding, selector)) {
+		return "", false
+	}
+	key, ok := codebaseContextSelectorKeyFor(selector)
+	if !ok {
+		return "", false
+	}
+
 	s.codebaseContextMu.Lock()
-	defer s.codebaseContextMu.Unlock()
-	if s.codebaseContextApplication == nil || s.codebaseContextEpoch != epoch {
+	if s.codebaseContextEpoch != epoch {
+		s.codebaseContextMu.Unlock()
 		return "", false
 	}
 	if s.codebaseContextHandles == nil {
@@ -419,31 +792,175 @@ func (s *Server) codebaseContextHandleFor(clientSessionID string, ref uci.Contex
 	client := s.codebaseContextHandles[clientSessionID]
 	if client == nil {
 		client = &codebaseContextClientHandles{
-			byHandle: make(map[string]codebaseContextHandleEntry),
-			byRef:    make(map[codebaseContextRefKey]string),
+			byHandle:   make(map[string]codebaseContextHandleEntry),
+			bySelector: make(map[codebaseContextSelectorKey]string),
+			byScope:    make(map[codebaseContextScopeKey]uint32),
 		}
 		s.codebaseContextHandles[clientSessionID] = client
 	}
-	key := codebaseContextKey(ref)
-	if handle, found := client.byRef[key]; found {
+	if handle, found := client.bySelector[key]; found {
+		if binding != nil {
+			s.codebaseContextSetEntryScope(client, handle, *binding)
+		}
+		s.codebaseContextMu.Unlock()
 		return handle, true
 	}
+
+	forgotten := false
 	if len(client.order) >= codebaseContextMaxHandlesPerClient {
 		oldest := client.order[0]
 		client.order = client.order[1:]
-		if oldEntry, found := client.byHandle[oldest]; found {
-			delete(client.byHandle, oldest)
-			delete(client.byRef, oldEntry.key)
-		}
+		s.codebaseContextRemoveEntry(client, oldest)
+		forgotten = true
 	}
 	handle, err := newCodebaseContextHandle(client.byHandle)
 	if err != nil {
+		s.codebaseContextMu.Unlock()
 		return "", false
 	}
-	client.byHandle[handle] = codebaseContextHandleEntry{key: key, ref: cloneCodebaseContextRef(ref)}
-	client.byRef[key] = handle
+	entry := codebaseContextHandleEntry{key: key, selector: selector.Clone()}
+	client.byHandle[handle] = entry
+	client.bySelector[key] = handle
 	client.order = append(client.order, handle)
+	if binding != nil {
+		s.codebaseContextSetEntryScope(client, handle, *binding)
+	}
+	application := s.codebaseContextApplication
+	s.codebaseContextMu.Unlock()
+
+	// A bounded registry eviction invalidates the same client's resolver default
+	// rather than allowing an evicted selection to remain an ambient authority.
+	if forgotten {
+		if indexApplication, ok := application.(codebaseContextIndexApplication); ok {
+			indexApplication.ForgetClient(clientSessionID)
+		}
+	}
 	return handle, true
+}
+
+func (s *Server) codebaseContextSetEntryScope(client *codebaseContextClientHandles, handle string, binding uci.IndexBinding) {
+	entry, found := client.byHandle[handle]
+	if !found || binding.Validate() != nil {
+		return
+	}
+	scope := codebaseContextScopeKeyForBinding(binding)
+	if entry.scope != nil && *entry.scope == scope {
+		return
+	}
+	if entry.scope != nil {
+		s.codebaseContextRemoveScope(client, *entry.scope)
+	}
+	entry.scope = &scope
+	client.byHandle[handle] = entry
+	client.byScope[scope]++
+}
+
+func (s *Server) codebaseContextRemoveEntry(client *codebaseContextClientHandles, handle string) {
+	entry, found := client.byHandle[handle]
+	if !found {
+		return
+	}
+	delete(client.byHandle, handle)
+	delete(client.bySelector, entry.key)
+	if entry.scope != nil {
+		s.codebaseContextRemoveScope(client, *entry.scope)
+	}
+}
+
+func (s *Server) codebaseContextRemoveScope(client *codebaseContextClientHandles, scope codebaseContextScopeKey) {
+	if client.byScope[scope] <= 1 {
+		delete(client.byScope, scope)
+		return
+	}
+	client.byScope[scope]--
+}
+
+func (s *Server) codebaseContextHandleSelector(clientSessionID, handle string) (uint64, uci.IndexBindingSelector, bool) {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+	client := s.codebaseContextHandles[clientSessionID]
+	if client == nil {
+		return 0, uci.IndexBindingSelector{}, false
+	}
+	entry, found := client.byHandle[handle]
+	if !found {
+		return 0, uci.IndexBindingSelector{}, false
+	}
+	return s.codebaseContextEpoch, entry.selector.Clone(), true
+}
+
+func (s *Server) codebaseContextHandleCurrent(clientSessionID, handle string, epoch uint64, selector uci.IndexBindingSelector, binding uci.IndexBinding) bool {
+	if !codebaseContextBindingMatchesSelector(binding, selector) {
+		return false
+	}
+	key, ok := codebaseContextSelectorKeyFor(selector)
+	if !ok {
+		return false
+	}
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+	if s.codebaseContextEpoch != epoch {
+		return false
+	}
+	client := s.codebaseContextHandles[clientSessionID]
+	if client == nil {
+		return false
+	}
+	entry, found := client.byHandle[handle]
+	if !found || entry.key != key {
+		return false
+	}
+	s.codebaseContextSetEntryScope(client, handle, binding)
+	return true
+}
+
+func (s *Server) codebaseContextScopeAdmitted(clientSessionID string, scope codebaseContextScopeKey, epoch uint64) bool {
+	s.codebaseContextMu.Lock()
+	defer s.codebaseContextMu.Unlock()
+	if s.codebaseContextEpoch != epoch {
+		return false
+	}
+	client := s.codebaseContextHandles[clientSessionID]
+	return client != nil && client.byScope[scope] > 0
+}
+
+func codebaseContextSelectorKeyFor(selector uci.IndexBindingSelector) (codebaseContextSelectorKey, bool) {
+	if ref, pinned := selector.Context(); pinned {
+		return codebaseContextSelectorKey{kind: 1, ref: codebaseContextKey(ref)}, true
+	}
+	checkout, following := selector.Checkout()
+	if !following {
+		return codebaseContextSelectorKey{}, false
+	}
+	return codebaseContextSelectorKey{
+		kind: 2,
+		scope: codebaseContextScopeKey{
+			sourceID:      checkout.Scope.SourceID,
+			checkoutID:    checkout.Scope.CheckoutID,
+			incarnationID: checkout.Scope.IncarnationID,
+			profileID:     checkout.ProfileID,
+		},
+	}, true
+}
+
+func codebaseContextScopeKeyForBinding(binding uci.IndexBinding) codebaseContextScopeKey {
+	return codebaseContextScopeKey{
+		sourceID:      binding.Scope.SourceID,
+		checkoutID:    binding.Scope.CheckoutID,
+		incarnationID: binding.Scope.IncarnationID,
+		profileID:     binding.ProfileID,
+	}
+}
+
+func codebaseContextBindingMatchesSelector(binding uci.IndexBinding, selector uci.IndexBindingSelector) bool {
+	if binding.Validate() != nil || selector.Validate() != nil {
+		return false
+	}
+	if ref, pinned := selector.Context(); pinned {
+		return binding.Context != nil && codebaseContextRefsEqual(*binding.Context, ref)
+	}
+	checkout, following := selector.Checkout()
+	return following && binding.Scope == checkout.Scope && binding.ProfileID == checkout.ProfileID
 }
 
 func newCodebaseContextHandle(existing map[string]codebaseContextHandleEntry) (string, error) {
@@ -473,6 +990,10 @@ func codebaseContextKey(ref uci.ContextRef) codebaseContextRefKey {
 		key.spaceID = *ref.SpaceID
 	}
 	return key
+}
+
+func codebaseContextRefsEqual(left, right uci.ContextRef) bool {
+	return codebaseContextKey(left) == codebaseContextKey(right)
 }
 
 func cloneCodebaseContextRef(ref uci.ContextRef) uci.ContextRef {

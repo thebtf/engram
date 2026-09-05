@@ -452,8 +452,15 @@ func uciContextAuthorityAccess(fixture uciIndexBindingFixture) uci.ContextAccess
 }
 
 func uciContextAuthorityRef(fixture uciIndexBindingFixture) uci.ContextRef {
-	selector := fixture.viewSelector()
-	return *selector.Context
+	spaceID := fixture.space.SpaceID
+	return uci.ContextRef{
+		SpaceID:           &spaceID,
+		SourceID:          fixture.source.SourceID,
+		CheckoutID:        fixture.checkout.CheckoutID,
+		ViewID:            fixture.view.ViewID,
+		AnalysisProfileID: fixture.profile.ProfileID,
+		Generation:        fixture.view.Generation,
+	}
 }
 
 func uciContextAuthorityPublishView(t *testing.T, fixture uciIndexBindingFixture, checkout *UCICheckout, generation int64) *UCIView {

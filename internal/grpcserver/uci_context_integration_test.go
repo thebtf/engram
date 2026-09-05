@@ -53,6 +53,9 @@ const (
 	uciContextIntegrationLegacySelector         = "legacy-project-selector"
 	uciContextIntegrationConflictingSelector    = "legacy-project-selector-conflict"
 	uciContextIntegrationDigest                 = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	uciContextIntegrationHeadOID                = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	uciContextIntegrationObjectFormat           = "sha1"
+	uciContextIntegrationRefLabel               = "main"
 	uciContextIntegrationSharedPathAndLabelJSON = `{"path":"same/path.go","label":"same-label"}`
 )
 
@@ -215,6 +218,8 @@ func TestUCIContextIntegrationRoutesIndependentBindingsToDistinctPublicationAndQ
 	requirePublicationTarget(t, fixture.publication.finalizeCalls, fixture.refA, scopeA, fixture.refB, scopeB)
 	require.Equal(t, stageA.response.GetPartDigest(), fixture.publication.finalizeCalls[0].partsDigest)
 	require.Equal(t, stageB.response.GetPartDigest(), fixture.publication.finalizeCalls[1].partsDigest)
+	requireUCIContextIntegrationObservedViewFacts(t, fixture.publication.finalizeCalls[0].finalize)
+	requireUCIContextIntegrationObservedViewFacts(t, fixture.publication.finalizeCalls[1].finalize)
 	require.Len(t, fixture.publication.stageCalls, 2)
 	require.Equal(t, []byte(uciContextIntegrationSharedPathAndLabelJSON), fixture.publication.stageCalls[0].payload)
 	require.Equal(t, fixture.publication.stageCalls[0].payload, fixture.publication.stageCalls[1].payload, "same path and label must not collapse distinct checkout routes")
@@ -518,7 +523,7 @@ func newUCIContextIntegrationFixture(t *testing.T) *uciContextIntegrationFixture
 	}
 	_, fixture.server = New(nil, nil)
 	fixture.server.SetUCITransport(NewContextAwareUCITransport(
-		uci.NewContextResolver(fixture.catalog, fixture.authorizer),
+		uci.NewContextResolver(fixture.catalog, fixture.authorizer, fixture.runtime),
 		uci.NewAliasResolver(fixture.aliases.Lookup),
 		fixture.runtime,
 		fixture.handles,
@@ -588,10 +593,11 @@ func (runtime *uciContextIntegrationRuntime) LoadIndexBinding(_ context.Context,
 	if err := selector.Validate(); err != nil {
 		return uci.IndexBinding{}, err
 	}
-	if selector.Context == nil {
+	ref, pinned := selector.Context()
+	if !pinned {
 		return uci.IndexBinding{}, errors.New("no-View binding is handle-owned")
 	}
-	binding, found := runtime.bindings[uciContextIntegrationKey(*selector.Context)]
+	binding, found := runtime.bindings[uciContextIntegrationKey(ref)]
 	if !found {
 		return uci.IndexBinding{}, errors.New("unknown UCI index binding")
 	}
@@ -696,6 +702,7 @@ type uciContextIntegrationPublicationCall struct {
 	payload     []byte
 	partsDigest string
 	binding     uci.IndexBinding
+	finalize    *pb.FinalizeCodeIndexRequest
 }
 
 type uciContextIntegrationPublication struct {
@@ -778,6 +785,7 @@ func (publication *uciContextIntegrationPublication) Finalize(binding uci.IndexB
 		binding:     binding,
 		scope:       proto.Clone(request.GetScope()).(*pb.CodeIndexScope),
 		partsDigest: request.GetPartsDigest(),
+		finalize:    proto.Clone(request).(*pb.FinalizeCodeIndexRequest),
 	})
 	response := &pb.FinalizeCodeIndexResponse{
 		BuildId:                    request.GetBuildId(),
@@ -879,6 +887,11 @@ func uciContextIntegrationStringPointer(value string) *string {
 	return &copy
 }
 
+func uciContextIntegrationBoolPointer(value bool) *bool {
+	copy := value
+	return &copy
+}
+
 func uciContextIntegrationProtoRef(ref uci.ContextRef) *pb.ContextRef {
 	result := &pb.ContextRef{
 		SourceId:          ref.SourceID,
@@ -963,6 +976,10 @@ func uciContextIntegrationFinalizeRequest(scope *pb.CodeIndexScope, begin *pb.Be
 		ScanOutcome:                "complete",
 		CompleteCensus:             true,
 		CoverageJson:               []byte(`{"structural":"complete"}`),
+		HeadOid:                    uciContextIntegrationStringPointer(uciContextIntegrationHeadOID),
+		ObjectFormat:               uciContextIntegrationStringPointer(uciContextIntegrationObjectFormat),
+		RefLabel:                   uciContextIntegrationStringPointer(uciContextIntegrationRefLabel),
+		Dirty:                      uciContextIntegrationBoolPointer(false),
 	}
 }
 
@@ -1018,6 +1035,16 @@ func requireUCIContextIntegrationBinding(t *testing.T, want uci.IndexBinding, go
 	}, got.GetIndexScope()), "scope got=%v want=%v", got.GetIndexScope(), want.Scope)
 	require.Equal(t, want.LocalRootID, got.GetLocalRootId())
 	require.Equal(t, want.WorkstationID, got.GetWorkstationId())
+}
+
+func requireUCIContextIntegrationObservedViewFacts(t *testing.T, request *pb.FinalizeCodeIndexRequest) {
+	t.Helper()
+	require.NotNil(t, request)
+	require.Equal(t, uciContextIntegrationHeadOID, request.GetHeadOid())
+	require.Equal(t, uciContextIntegrationObjectFormat, request.GetObjectFormat())
+	require.Equal(t, uciContextIntegrationRefLabel, request.GetRefLabel())
+	require.NotNil(t, request.Dirty, "dirty=false must retain protobuf presence")
+	require.False(t, request.GetDirty())
 }
 
 func requirePublicationTarget(t *testing.T, calls []uciContextIntegrationPublicationCall, firstRef uci.ContextRef, firstScope *pb.CodeIndexScope, secondRef uci.ContextRef, secondScope *pb.CodeIndexScope) {

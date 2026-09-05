@@ -184,7 +184,7 @@ func uciSemanticAuthorize(t *testing.T, fixture *uciPublicationFixture, ref ucid
 
 	resolver := ucidomain.NewContextResolver(uciSemanticCatalog{
 		ref.ViewID: {Ref: ref, AuthRealm: fixture.realm},
-	}, fixture.authorizer)
+	}, fixture.authorizer, nil)
 	authorized, err := resolver.Authorize(context.Background(), ucidomain.ResolveContextInput{
 		ClientSessionID: "semantic-client-" + fixture.token + "-" + ref.ViewID,
 		AuthRealm:       fixture.realm,

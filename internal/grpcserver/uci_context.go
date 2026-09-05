@@ -7,6 +7,7 @@ import (
 
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
+	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
 	pb "github.com/thebtf/engram/proto/engram/v1"
 	"google.golang.org/grpc/codes"
@@ -71,6 +72,7 @@ type contextAwareCaller struct {
 	clientSessionID string
 	authRealm       string
 	principal       string
+	workstationID   string
 }
 
 func (transport *contextAwareUCITransport) BindCodeContext(ctx context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
@@ -95,7 +97,7 @@ func (transport *contextAwareUCITransport) bindCodeContextHandle(ctx context.Con
 	if err != nil {
 		return nil, err
 	}
-	binding, err := port.AuthorizeCodeContextHandle(ctx, caller.clientSessionID, handle)
+	binding, err := port.AuthorizeCodeContextHandle(contextAwarePortContext(ctx, caller), caller.clientSessionID, handle)
 	if err != nil {
 		return nil, contextAwareRuntimeError(ctx, err)
 	}
@@ -122,8 +124,11 @@ func (transport *contextAwareUCITransport) bindRequestedCodeContext(ctx context.
 		return nil, err
 	}
 	authorizedRef := authorized.Ref()
-	selector := uci.IndexBindingSelector{Context: &authorizedRef}
-	binding, err := runtime.LoadIndexBinding(ctx, selector.Clone())
+	selector, selectorErr := uci.ContextIndexBindingSelector(authorizedRef)
+	if selectorErr != nil {
+		return nil, contextAwareClosedError(uci.ContextMismatch)
+	}
+	binding, err := runtime.LoadIndexBinding(ctx, selector)
 	if err != nil {
 		return nil, contextAwareRuntimeError(ctx, err)
 	}
@@ -141,7 +146,7 @@ func (transport *contextAwareUCITransport) bindRequestedCodeContext(ctx context.
 	if err != nil {
 		return nil, err
 	}
-	handle, err := port.IssueCodeContextHandle(ctx, caller.clientSessionID, binding.Clone())
+	handle, err := port.IssueCodeContextHandle(contextAwarePortContext(ctx, caller), caller.clientSessionID, binding.Clone())
 	if err != nil {
 		return nil, contextAwareRuntimeError(ctx, err)
 	}
@@ -227,7 +232,7 @@ func (transport *contextAwareUCITransport) FinalizeCodeIndex(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
-	if !contextAwareExpectedParentMatchesBinding(request.GetExpectedParent(), binding) {
+	if !contextAwareFinalizeParentMatchesScope(request.GetExpectedParent(), binding) {
 		return nil, contextAwareClosedError(uci.ContextMismatch)
 	}
 	runtime, err := transport.contextAwareRuntime()
@@ -368,12 +373,18 @@ func contextAwareCallerFrom(ctx context.Context) (contextAwareCaller, error) {
 	if !ok {
 		return contextAwareCaller{}, contextAwareClosedError(uci.ContextMismatch)
 	}
+	principal, _, owned := identity.MemoryOwner()
+	workstationID := identity.WorkstationID()
+	if !owned || principal != identity.Principal || !validUCIIdentifier(principal, maxUCITransportIdentifierBytes) || !validUCIIdentifier(workstationID, maxUCITransportIdentifierBytes) {
+		return contextAwareCaller{}, contextAwareClosedError(uci.ContextMismatch)
+	}
 	caller := contextAwareCaller{
 		clientSessionID: clientSessionID,
 		authRealm:       string(identity.Source),
-		principal:       identity.Principal,
+		principal:       principal,
+		workstationID:   workstationID,
 	}
-	if caller.authRealm == "" || caller.principal == "" {
+	if caller.authRealm == "" {
 		return contextAwareCaller{}, contextAwareClosedError(uci.ContextMismatch)
 	}
 	return caller, nil
@@ -403,6 +414,11 @@ func contextAwareSourceSession(ctx context.Context) (string, bool) {
 	return received, received != ""
 }
 
+func contextAwarePortContext(ctx context.Context, caller contextAwareCaller) context.Context {
+	ctx = auditcontext.WithSourceSession(ctx, caller.clientSessionID)
+	return mcp.ContextWithSession(ctx, caller.clientSessionID)
+}
+
 func (transport *contextAwareUCITransport) resolveBound(ctx context.Context, caller contextAwareCaller) (uci.AuthorizedContext, error) {
 	return transport.resolve(ctx, caller, nil)
 }
@@ -419,6 +435,7 @@ func (transport *contextAwareUCITransport) authorizeExplicit(ctx context.Context
 		ClientSessionID: caller.clientSessionID,
 		AuthRealm:       caller.authRealm,
 		Principal:       caller.principal,
+		WorkstationID:   caller.workstationID,
 		Ref:             &reference,
 	})
 	if err != nil {
@@ -438,6 +455,7 @@ func (transport *contextAwareUCITransport) resolve(ctx context.Context, caller c
 		ClientSessionID: caller.clientSessionID,
 		AuthRealm:       caller.authRealm,
 		Principal:       caller.principal,
+		WorkstationID:   caller.workstationID,
 		Ref:             reference,
 	})
 	if err != nil {
@@ -468,7 +486,7 @@ func (transport *contextAwareUCITransport) authorizeCodeIndexScope(ctx context.C
 	if err != nil {
 		return uci.IndexBinding{}, err
 	}
-	binding, err := port.AuthorizeCodeIndexScope(ctx, caller.clientSessionID, contextAwareIndexScopeFromProto(scope), scope.GetAnalysisProfileId())
+	binding, err := port.AuthorizeCodeIndexScope(contextAwarePortContext(ctx, caller), caller.clientSessionID, contextAwareIndexScopeFromProto(scope), scope.GetAnalysisProfileId())
 	if err != nil {
 		return uci.IndexBinding{}, contextAwareRuntimeError(ctx, err)
 	}
@@ -596,6 +614,13 @@ func contextAwareExpectedParentMatchesBinding(parent *pb.ContextRef, binding uci
 	return parent == nil || (binding.Context != nil && contextAwareProtoRefMatches(*binding.Context, parent))
 }
 
+func contextAwareFinalizeParentMatchesScope(parent *pb.ContextRef, binding uci.IndexBinding) bool {
+	return parent == nil || (validUCIContextRef(parent) &&
+		parent.GetSourceId() == binding.Scope.SourceID &&
+		parent.GetCheckoutId() == binding.Scope.CheckoutID &&
+		parent.GetAnalysisProfileId() == binding.ProfileID)
+}
+
 func contextAwareAliasMatchesRef(target uci.AliasTarget, reference uci.ContextRef) bool {
 	if target.SpaceID != nil && (reference.SpaceID == nil || *target.SpaceID != *reference.SpaceID) {
 		return false
@@ -614,10 +639,28 @@ func contextAwareRuntimeError(ctx context.Context, err error) error {
 	if errors.As(err, &closed) {
 		return contextAwareClosedError(closed.Code())
 	}
+	if contextAwareTrustedClosedStatus(err) {
+		return err
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return status.FromContextError(err).Err()
 	}
 	return status.Error(codes.Internal, "UCI context runtime failed")
+}
+
+func contextAwareTrustedClosedStatus(err error) bool {
+	grpcStatus, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	switch grpcStatus.Code() {
+	case codes.FailedPrecondition:
+		return grpcStatus.Message() == string(uci.ContextRequired) || grpcStatus.Message() == string(uci.ContextMismatch)
+	case codes.PermissionDenied:
+		return grpcStatus.Message() == string(uci.PermissionDenied)
+	default:
+		return false
+	}
 }
 
 func contextAwareClosedError(code uci.ContextErrorCode) error {

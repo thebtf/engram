@@ -457,7 +457,7 @@ func newUCIAuthorizationMatrixFixture(t *testing.T) *uciAuthorizationMatrixFixtu
 		},
 		health: health,
 	}
-	application.resolver = uci.NewContextResolver(catalog, authorizer)
+	application.resolver = uci.NewContextResolver(catalog, authorizer, nil)
 
 	server := mcp.NewServer(mcp.ServerOptions{Version: "uci-authorization-matrix"})
 	server.SetCodebaseContextApplication(application)

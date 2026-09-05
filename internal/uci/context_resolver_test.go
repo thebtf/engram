@@ -8,18 +8,20 @@ import (
 )
 
 const (
-	contextResolverTestRealm     = "uci-test-realm"
-	contextResolverTestPrincipal = "uci-test-principal"
-	contextResolverTestClientA   = "uci-test-client-a"
-	contextResolverTestClientB   = "uci-test-client-b"
-	contextResolverTestSpaceA    = "10000000-0000-4000-8000-000000000001"
-	contextResolverTestSourceA   = "20000000-0000-4000-8000-000000000001"
-	contextResolverTestSourceB   = "20000000-0000-4000-8000-000000000002"
-	contextResolverTestCheckoutA = "30000000-0000-4000-8000-000000000001"
-	contextResolverTestCheckoutB = "30000000-0000-4000-8000-000000000002"
-	contextResolverTestViewA     = "40000000-0000-4000-8000-000000000001"
-	contextResolverTestViewB     = "40000000-0000-4000-8000-000000000002"
-	contextResolverTestProfile   = "50000000-0000-4000-8000-000000000001"
+	contextResolverTestRealm       = "uci-test-realm"
+	contextResolverTestPrincipal   = "uci-test-principal"
+	contextResolverTestClientA     = "uci-test-client-a"
+	contextResolverTestClientB     = "uci-test-client-b"
+	contextResolverTestSpaceA      = "10000000-0000-4000-8000-000000000001"
+	contextResolverTestSourceA     = "20000000-0000-4000-8000-000000000001"
+	contextResolverTestSourceB     = "20000000-0000-4000-8000-000000000002"
+	contextResolverTestCheckoutA   = "30000000-0000-4000-8000-000000000001"
+	contextResolverTestCheckoutB   = "30000000-0000-4000-8000-000000000002"
+	contextResolverTestViewA       = "40000000-0000-4000-8000-000000000001"
+	contextResolverTestViewB       = "40000000-0000-4000-8000-000000000002"
+	contextResolverTestProfile     = "50000000-0000-4000-8000-000000000001"
+	contextResolverTestIncarnation = "60000000-0000-4000-8000-000000000001"
+	contextResolverTestWorkstation = "context-resolver-workstation"
 )
 
 func TestUCIContextResolverRejectsUnnormalizedIdentityFields(t *testing.T) {
@@ -38,7 +40,7 @@ func TestUCIContextResolverRejectsUnnormalizedIdentityFields(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			catalog := &contextResolverCatalogFake{}
 			authorizer := &contextResolverAuthorizerFake{}
-			resolver := NewContextResolver(catalog, authorizer)
+			resolver := NewContextResolver(catalog, authorizer, nil)
 
 			_, err := resolver.Resolve(context.Background(), ResolveContextInput{
 				ClientSessionID: test.clientID,
@@ -131,7 +133,7 @@ func TestUCIContextResolverRejectsInvalidOrMismatchedContextRefs(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			catalog := &contextResolverCatalogFake{failures: test.catalogFailures, records: test.catalogRecords}
 			authorizer := &contextResolverAuthorizerFake{}
-			resolver := NewContextResolver(catalog, authorizer)
+			resolver := NewContextResolver(catalog, authorizer, nil)
 			ref := test.ref
 
 			resolved, err := resolver.Resolve(context.Background(), contextResolverTestInput(contextResolverTestClientA, contextResolverTestPrincipal, &ref, nil))
@@ -183,7 +185,7 @@ func TestUCIContextResolverRequiresExactlyOneCandidateWithoutBinding(t *testing.
 		t.Run(test.name, func(t *testing.T) {
 			catalog := &contextResolverCatalogFake{}
 			authorizer := &contextResolverAuthorizerFake{}
-			resolver := NewContextResolver(catalog, authorizer)
+			resolver := NewContextResolver(catalog, authorizer, nil)
 
 			resolved, err := resolver.Resolve(context.Background(), contextResolverTestInput(contextResolverTestClientA, contextResolverTestPrincipal, nil, test.candidates))
 			if test.wantCode != "" {
@@ -206,7 +208,7 @@ func TestUCIContextResolverBindsExplicitAuthorizedContext(t *testing.T) {
 	ref := contextResolverTestRefA()
 	catalog := &contextResolverCatalogFake{}
 	authorizer := &contextResolverAuthorizerFake{}
-	resolver := NewContextResolver(catalog, authorizer)
+	resolver := NewContextResolver(catalog, authorizer, nil)
 
 	bound, err := resolver.Resolve(context.Background(), contextResolverTestInput(contextResolverTestClientA, contextResolverTestPrincipal, &ref, nil))
 	if err != nil {
@@ -236,7 +238,7 @@ func TestUCIContextResolverKeepsClientBindingsIsolated(t *testing.T) {
 	refB := contextResolverTestRefB()
 	catalog := &contextResolverCatalogFake{}
 	authorizer := &contextResolverAuthorizerFake{}
-	resolver := NewContextResolver(catalog, authorizer)
+	resolver := NewContextResolver(catalog, authorizer, nil)
 
 	for _, binding := range []struct {
 		client    string
@@ -282,7 +284,7 @@ func TestUCIContextResolverReauthorizesEveryReuse(t *testing.T) {
 		nil,
 		errors.New("revoked principal uci-test-principal for C:\\private\\worktree"),
 	}}
-	resolver := NewContextResolver(catalog, authorizer)
+	resolver := NewContextResolver(catalog, authorizer, nil)
 
 	bound, err := resolver.Resolve(context.Background(), contextResolverTestInput(contextResolverTestClientA, contextResolverTestPrincipal, &ref, nil))
 	if err != nil {
@@ -301,6 +303,85 @@ func TestUCIContextResolverReauthorizesEveryReuse(t *testing.T) {
 	assertContextResolverCatalogCalls(t, catalog, ref, ref)
 	if authorizer.calls != 2 {
 		t.Fatalf("authorizer calls after revoked binding = %d, want 2", authorizer.calls)
+	}
+}
+
+func TestUCIContextResolverCheckoutDefaultFollowsPublicationWithoutRebinding(t *testing.T) {
+	scope := IndexScope{
+		SourceID:      contextResolverTestSourceA,
+		CheckoutID:    contextResolverTestCheckoutA,
+		IncarnationID: contextResolverTestIncarnation,
+	}
+	initial := IndexBinding{
+		Scope:         scope,
+		ProfileID:     contextResolverTestProfile,
+		LocalRootID:   "context-resolver-root",
+		WorkstationID: contextResolverTestWorkstation,
+	}
+	indexCatalog := &contextResolverIndexCatalogFake{binding: initial}
+	resolver := NewContextResolver(&contextResolverCatalogFake{}, &contextResolverAuthorizerFake{}, indexCatalog)
+	selector, err := CheckoutIndexBindingSelector(RegisteredCheckoutSelector{Scope: scope, ProfileID: contextResolverTestProfile})
+	if err != nil {
+		t.Fatalf("CheckoutIndexBindingSelector() error = %v", err)
+	}
+	indexInput := ResolveIndexBindingInput{
+		ClientSessionID: contextResolverTestClientA,
+		AuthRealm:       contextResolverTestRealm,
+		Principal:       contextResolverTestPrincipal,
+		WorkstationID:   contextResolverTestWorkstation,
+		Selector:        &selector,
+	}
+	resolved, err := resolver.ResolveIndexBinding(context.Background(), indexInput)
+	if err != nil {
+		t.Fatalf("initial ResolveIndexBinding() error = %v", err)
+	}
+	if got := resolved.Binding(); got.Context != nil {
+		t.Fatalf("initial binding context = %#v, want nil", got.Context)
+	}
+	bound, found := resolver.BoundSelector(contextResolverTestClientA)
+	if !found {
+		t.Fatal("checkout selection was not bound")
+	}
+	if checkout, following := bound.Checkout(); !following || checkout.Scope != scope || checkout.ProfileID != contextResolverTestProfile {
+		t.Fatalf("bound selector = %#v, want fixed checkout selection", bound)
+	}
+
+	contextInput := contextResolverTestInput(contextResolverTestClientA, contextResolverTestPrincipal, nil, nil)
+	contextInput.WorkstationID = contextResolverTestWorkstation
+	_, err = resolver.Resolve(context.Background(), contextInput)
+	assertContextResolverCode(t, err, "CONTEXT_REQUIRED")
+	if _, found := resolver.BoundSelector(contextResolverTestClientA); !found {
+		t.Fatal("no-View resolve cleared a valid checkout selection")
+	}
+
+	published := initial.Clone()
+	ref := contextResolverTestRefA()
+	ref.SpaceID = nil
+	published.Context = &ref
+	indexCatalog.binding = published
+	followed, err := resolver.ResolveIndexBinding(context.Background(), ResolveIndexBindingInput{
+		ClientSessionID: contextResolverTestClientA,
+		AuthRealm:       contextResolverTestRealm,
+		Principal:       contextResolverTestPrincipal,
+		WorkstationID:   contextResolverTestWorkstation,
+	})
+	if err != nil {
+		t.Fatalf("followed ResolveIndexBinding() error = %v", err)
+	}
+	if got := followed.Binding(); got.Context == nil || !contextResolverRefsEqual(*got.Context, ref) {
+		t.Fatalf("followed binding = %#v, want current published %v", got, ref)
+	}
+	resolvedContext, err := resolver.Resolve(context.Background(), contextInput)
+	if err != nil {
+		t.Fatalf("published Resolve() error = %v", err)
+	}
+	assertContextResolverRef(t, resolvedContext.Ref(), ref)
+	bound, found = resolver.BoundSelector(contextResolverTestClientA)
+	if !found {
+		t.Fatal("checkout selection was cleared after publication")
+	}
+	if _, following := bound.Checkout(); !following {
+		t.Fatalf("publication rewrote checkout selection into %#v", bound)
 	}
 }
 
@@ -327,7 +408,7 @@ func TestUCIContextResolverDeniesRevokedAndPrivateContexts(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			catalog := &contextResolverCatalogFake{}
 			authorizer := &contextResolverAuthorizerFake{failures: []error{test.err}}
-			resolver := NewContextResolver(catalog, authorizer)
+			resolver := NewContextResolver(catalog, authorizer, nil)
 			ref := test.ref
 
 			_, err := resolver.Resolve(context.Background(), contextResolverTestInput(contextResolverTestClientA, contextResolverTestPrincipal, &ref, nil))
@@ -400,7 +481,7 @@ func TestUCIContextResolverErrorsAreNonDisclosing(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			catalog := &contextResolverCatalogFake{failures: test.catalogFailures}
 			authorizer := &contextResolverAuthorizerFake{failures: []error{test.authorizerError}}
-			resolver := NewContextResolver(catalog, authorizer)
+			resolver := NewContextResolver(catalog, authorizer, nil)
 
 			_, err := resolver.Resolve(context.Background(), test.input)
 			assertContextResolverCode(t, err, test.wantCode)
@@ -427,6 +508,27 @@ type contextResolverCatalogFake struct {
 	failures []contextResolverCatalogFailure
 	records  []contextResolverCatalogRecord
 	calls    []ContextRef
+}
+
+type contextResolverIndexCatalogFake struct {
+	binding IndexBinding
+	calls   []IndexBindingSelector
+}
+
+func (catalog *contextResolverIndexCatalogFake) LoadIndexBinding(_ context.Context, selector IndexBindingSelector) (IndexBinding, error) {
+	selector = selector.Clone()
+	catalog.calls = append(catalog.calls, selector)
+	if err := selector.Validate(); err != nil {
+		return IndexBinding{}, err
+	}
+	if ref, pinned := selector.Context(); pinned {
+		if catalog.binding.Context == nil || !contextResolverRefsEqual(ref, *catalog.binding.Context) {
+			return IndexBinding{}, errors.New("unexpected pinned selector")
+		}
+	} else if checkout, following := selector.Checkout(); !following || checkout.Scope != catalog.binding.Scope || checkout.ProfileID != catalog.binding.ProfileID {
+		return IndexBinding{}, errors.New("unexpected checkout selector")
+	}
+	return catalog.binding.Clone(), nil
 }
 
 func (catalog *contextResolverCatalogFake) LoadContext(_ context.Context, ref ContextRef) (ContextRecord, error) {
