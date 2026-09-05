@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -754,6 +755,376 @@ func (s *UCIProjectionStore) StoreAnalysis(ctx context.Context, in StoreUCIAnaly
 		return nil, fmt.Errorf("uci projection load existing analysis: %w", err)
 	}
 	return &existing, nil
+}
+
+const uciQueryStoreMaxExcerptBytes = 8 << 10
+
+// SelectCandidates implements the UCI query store port. The selected_view CTE
+// binds every candidate predicate to the exact authorized source, checkout,
+// view, generation, and analysis profile before any ranking or limiting occurs.
+func (s *UCIProjectionStore) SelectCandidates(ctx context.Context, authorized ucidomain.AuthorizedContext, spec ucidomain.QuerySpec) (ucidomain.QueryStoreResult, error) {
+	if err := s.requireDB("select query candidates"); err != nil {
+		return ucidomain.QueryStoreResult{}, err
+	}
+	ref := authorized.Ref()
+	if err := validateUCIQueryContext(ref); err != nil {
+		return ucidomain.QueryStoreResult{}, err
+	}
+	if err := validateUCIQuerySpec(spec); err != nil {
+		return ucidomain.QueryStoreResult{}, err
+	}
+
+	metadata, found, err := s.loadUCIQueryViewMetadata(ctx, ref)
+	if err != nil {
+		return ucidomain.QueryStoreResult{}, err
+	}
+	if !found || metadata.State == UCIViewRetired || metadata.State == UCIViewStaging {
+		return uciUnavailableQueryResult(ucidomain.QueryErrorBuildIncomplete), nil
+	}
+	coverage, ok := parseUCIQueryCoverage(metadata.Structural)
+	if !ok || coverage == ucidomain.IndexCoverageUnavailable {
+		return uciUnavailableQueryResult(ucidomain.QueryErrorBuildIncomplete), nil
+	}
+	if spec.Mode == ucidomain.QueryModeFTS {
+		lexical, lexicalOK := parseUCIQueryCoverage(metadata.Lexical)
+		if !lexicalOK || lexical == ucidomain.IndexCoverageUnavailable {
+			return uciUnavailableQueryResult(ucidomain.QueryErrorParserUnsupported), nil
+		}
+		if lexical == ucidomain.IndexCoveragePartial && coverage == ucidomain.IndexCoverageComplete {
+			coverage = ucidomain.IndexCoveragePartial
+		}
+	}
+
+	query, arguments, err := buildUCIQueryCandidatesSQL(ref, spec)
+	if err != nil {
+		return ucidomain.QueryStoreResult{}, err
+	}
+	var rows []uciQueryCandidateRow
+	if err := s.db.WithContext(ctx).Raw(query, arguments...).Scan(&rows).Error; err != nil {
+		return ucidomain.QueryStoreResult{}, fmt.Errorf("uci projection select query candidates: %w", err)
+	}
+
+	candidates := make([]ucidomain.QueryCandidate, 0, len(rows))
+	for _, row := range rows {
+		candidate, ok := row.queryCandidate(ref)
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+	return ucidomain.QueryStoreResult{
+		Candidates: candidates,
+		Coverage:   coverage,
+	}, nil
+}
+
+type uciQueryViewMetadata struct {
+	State      UCIViewState `gorm:"column:state"`
+	Structural string       `gorm:"column:structural"`
+	Lexical    string       `gorm:"column:lexical"`
+}
+
+func (s *UCIProjectionStore) loadUCIQueryViewMetadata(ctx context.Context, ref ucidomain.ContextRef) (uciQueryViewMetadata, bool, error) {
+	var metadata uciQueryViewMetadata
+	result := s.db.WithContext(ctx).Raw(`
+		SELECT
+			view_row.state,
+			COALESCE(view_row.coverage_json->>'structural', '') AS structural,
+			COALESCE(view_row.coverage_json->>'lexical', '') AS lexical
+		FROM ci_views AS view_row
+		WHERE view_row.view_id = ?
+			AND view_row.source_id = ?
+			AND view_row.checkout_id = ?
+			AND view_row.profile_id = ?
+			AND view_row.generation = ?
+	`, ref.ViewID, ref.SourceID, ref.CheckoutID, ref.AnalysisProfileID, ref.Generation).Scan(&metadata)
+	if result.Error != nil {
+		return uciQueryViewMetadata{}, false, fmt.Errorf("uci projection load query view: %w", result.Error)
+	}
+	return metadata, result.RowsAffected != 0, nil
+}
+
+type uciQueryCandidateRow struct {
+	ArtifactID         string  `gorm:"column:artifact_id"`
+	ChunkContentDigest string  `gorm:"column:chunk_content_digest"`
+	FactsDigest        string  `gorm:"column:facts_digest"`
+	DefinitionCount    int64   `gorm:"column:definition_count"`
+	ReferenceSiteCount int64   `gorm:"column:reference_site_count"`
+	ChunkCount         int64   `gorm:"column:chunk_count"`
+	EntityKey          string  `gorm:"column:entity_key"`
+	LocalName          string  `gorm:"column:local_name"`
+	QualifiedSymbol    string  `gorm:"column:qualified_symbol"`
+	RelativePath       string  `gorm:"column:relative_path"`
+	ByteStart          int64   `gorm:"column:byte_start"`
+	ByteEnd            int64   `gorm:"column:byte_end"`
+	LineStart          int     `gorm:"column:line_start"`
+	LineEnd            int     `gorm:"column:line_end"`
+	Text               string  `gorm:"column:text"`
+	ChunkKind          string  `gorm:"column:chunk_kind"`
+	Language           string  `gorm:"column:language"`
+	Score              float64 `gorm:"column:score"`
+}
+
+func (row uciQueryCandidateRow) queryCandidate(ref ucidomain.ContextRef) (ucidomain.QueryCandidate, bool) {
+	if validateUCIUUID("artifact_id", row.ArtifactID) != nil || row.ByteStart < 0 || row.ByteEnd <= row.ByteStart || row.LineStart < 1 || row.LineEnd < row.LineStart ||
+		row.EntityKey == "" || row.RelativePath == "" || row.Language == "" || !isUCIDigest(row.ChunkContentDigest) {
+		return ucidomain.QueryCandidate{}, false
+	}
+	if row.DefinitionCount < 0 || row.ReferenceSiteCount < 0 || row.ChunkCount < 0 {
+		return ucidomain.QueryCandidate{}, false
+	}
+	return ucidomain.QueryCandidate{
+		Context: ref,
+		Proof: ucidomain.IndexArtifactProof{
+			ArtifactID:         row.ArtifactID,
+			ContentDigest:      ucidomain.IndexDigest(row.ChunkContentDigest),
+			FactsDigest:        ucidomain.IndexDigest(row.FactsDigest),
+			DefinitionCount:    uint64(row.DefinitionCount),
+			ReferenceSiteCount: uint64(row.ReferenceSiteCount),
+			ChunkCount:         uint64(row.ChunkCount),
+		},
+		EntityKey:       row.EntityKey,
+		LocalName:       row.LocalName,
+		QualifiedSymbol: row.QualifiedSymbol,
+		RelativePath:    row.RelativePath,
+		Span: ucidomain.IndexSpan{
+			ByteStart: row.ByteStart,
+			ByteEnd:   row.ByteEnd,
+			LineStart: row.LineStart,
+			LineEnd:   row.LineEnd,
+		},
+		Text:     row.Text,
+		Kind:     uciQueryItemKind(row.ChunkKind),
+		Language: row.Language,
+		Score:    row.Score,
+	}, true
+}
+
+func buildUCIQueryCandidatesSQL(ref ucidomain.ContextRef, spec ucidomain.QuerySpec) (string, []any, error) {
+	cteArguments := []any{
+		ref.ViewID,
+		ref.SourceID,
+		ref.CheckoutID,
+		ref.AnalysisProfileID,
+		ref.Generation,
+		UCIViewPublished,
+		UCIViewSuperseded,
+	}
+	scoreArguments := []any(nil)
+	excerptArguments := []any{uciQueryStoreMaxExcerptBytes}
+	predicateArguments := []any{UCIBlobStored, UCIFilePresent, UCIParseArtifactComplete, UCIParseArtifactPartial}
+	score := "0::double precision AS score"
+	conditions := []string{
+		"blob.storage_state = ?",
+		"membership.file_state = ?",
+		"artifact.status IN (?, ?)",
+		"artifact.sealed_at IS NOT NULL",
+		"artifact.facts_digest IS NOT NULL",
+	}
+
+	if len(spec.Filter.Languages) != 0 {
+		placeholders := make([]string, len(spec.Filter.Languages))
+		for index, language := range spec.Filter.Languages {
+			placeholders[index] = "?"
+			predicateArguments = append(predicateArguments, language)
+		}
+		conditions = append(conditions, "artifact.language IN ("+strings.Join(placeholders, ", ")+")")
+	}
+
+	switch spec.Mode {
+	case ucidomain.QueryModeExactLocalName:
+		conditions = append(conditions, "definition.name = ?")
+		predicateArguments = append(predicateArguments, spec.Text)
+	case ucidomain.QueryModeExactQualifiedSymbol:
+		conditions = append(conditions, "definition.qualified_local_name = ?")
+		predicateArguments = append(predicateArguments, spec.Text)
+	case ucidomain.QueryModeExactRelativePath:
+		conditions = append(conditions, "membership.display_path = ?")
+		predicateArguments = append(predicateArguments, spec.Text)
+	case ucidomain.QueryModeFTS:
+		terms := spec.FTSTerms()
+		if len(terms) == 0 {
+			return "", nil, fmt.Errorf("uci projection query FTS: no searchable terms")
+		}
+		score = "ts_rank_cd(chunk.content_tsv, plainto_tsquery('simple', ?)) AS score"
+		scoreArguments = append(scoreArguments, spec.Text)
+		for _, term := range terms {
+			pattern := "%" + escapeUCIQueryLike(term) + "%"
+			conditions = append(conditions, `(
+				chunk.content_tsv @@ plainto_tsquery('simple', ?)
+				OR chunk.text_for_search ILIKE ? ESCAPE '\'
+				OR COALESCE(definition.name, '') ILIKE ? ESCAPE '\'
+				OR COALESCE(definition.qualified_local_name, '') ILIKE ? ESCAPE '\'
+				OR membership.display_path ILIKE ? ESCAPE '\'
+			)`)
+			predicateArguments = append(predicateArguments, term, pattern, pattern, pattern, pattern)
+		}
+	default:
+		return "", nil, fmt.Errorf("uci projection query: unsupported mode %q", spec.Mode)
+	}
+
+	order := "membership.display_path ASC, chunk.byte_start ASC, entity_key ASC, chunk.chunk_id ASC"
+	if spec.Order == ucidomain.QueryOrderRelevance {
+		order = "score DESC, membership.display_path ASC, chunk.byte_start ASC, entity_key ASC, chunk.chunk_id ASC"
+	}
+	arguments := append(cteArguments, excerptArguments...)
+	arguments = append(arguments, scoreArguments...)
+	arguments = append(arguments, predicateArguments...)
+	arguments = append(arguments, spec.Limit+1, spec.Offset)
+	query := `
+		WITH selected_view AS (
+			SELECT
+				view_row.view_id,
+				view_row.source_id,
+				view_row.checkout_id,
+				view_row.generation,
+				view_row.profile_id,
+				profile.parser_bundle_digest
+			FROM ci_views AS view_row
+			JOIN ci_profiles AS profile ON profile.profile_id = view_row.profile_id
+			WHERE view_row.view_id = ?
+				AND view_row.source_id = ?
+				AND view_row.checkout_id = ?
+				AND view_row.profile_id = ?
+				AND view_row.generation = ?
+				AND view_row.state IN (?, ?)
+		)
+		SELECT
+			artifact.artifact_id,
+			blob.content_digest AS chunk_content_digest,
+			artifact.facts_digest,
+			(SELECT COUNT(*) FROM ci_definitions AS proof_definition WHERE proof_definition.artifact_id = artifact.artifact_id) AS definition_count,
+			(SELECT COUNT(*) FROM ci_reference_sites AS proof_reference WHERE proof_reference.artifact_id = artifact.artifact_id) AS reference_site_count,
+			(SELECT COUNT(*) FROM ci_chunks AS proof_chunk WHERE proof_chunk.artifact_id = artifact.artifact_id) AS chunk_count,
+			COALESCE(NULLIF(definition.qualified_local_name, ''), NULLIF(chunk.symbol_key, ''), membership.path_key || ':' || chunk.ordinal::text) AS entity_key,
+			COALESCE(definition.name, '') AS local_name,
+			COALESCE(definition.qualified_local_name, '') AS qualified_symbol,
+			membership.display_path AS relative_path,
+			chunk.byte_start,
+			chunk.byte_end,
+			array_length(regexp_split_to_array(
+				convert_from(substring(blob.safe_content FROM 1 FOR chunk.byte_start::integer), replace(upper(blob.encoding), '-', '')),
+				E'\n'
+			), 1) AS line_start,
+			array_length(regexp_split_to_array(
+				convert_from(substring(blob.safe_content FROM 1 FOR chunk.byte_end::integer), replace(upper(blob.encoding), '-', '')),
+				E'\n'
+			), 1) AS line_end,
+			CASE WHEN octet_length(chunk.text_for_search) <= ? THEN chunk.text_for_search ELSE '' END AS text,
+			chunk.chunk_kind,
+			artifact.language,
+			` + score + `
+		FROM selected_view AS view_row
+		JOIN ci_memberships AS membership
+			ON membership.source_id = view_row.source_id
+			AND membership.checkout_id = view_row.checkout_id
+			AND membership.valid_from_generation <= view_row.generation
+			AND (membership.valid_to_generation IS NULL OR membership.valid_to_generation > view_row.generation)
+		JOIN ci_parse_artifacts AS artifact
+			ON artifact.source_id = membership.source_id
+			AND artifact.artifact_id = membership.artifact_id
+			AND artifact.extraction_profile_digest = view_row.parser_bundle_digest
+		JOIN ci_blobs AS blob
+			ON blob.source_id = artifact.source_id
+			AND blob.blob_id = artifact.blob_id
+		JOIN ci_chunks AS chunk
+			ON chunk.source_id = artifact.source_id
+			AND chunk.artifact_id = artifact.artifact_id
+		LEFT JOIN ci_definitions AS definition
+			ON definition.artifact_id = chunk.artifact_id
+			AND definition.local_symbol_key = chunk.symbol_key
+		WHERE ` + strings.Join(conditions, "\n\t\t\tAND ") + `
+		ORDER BY ` + order + `
+		LIMIT ? OFFSET ?`
+	return query, arguments, nil
+}
+
+func validateUCIQueryContext(ref ucidomain.ContextRef) error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"source_id", ref.SourceID},
+		{"checkout_id", ref.CheckoutID},
+		{"view_id", ref.ViewID},
+		{"analysis_profile_id", ref.AnalysisProfileID},
+	} {
+		if err := validateUCIUUID(field.name, field.value); err != nil {
+			return err
+		}
+	}
+	if ref.SpaceID != nil {
+		if err := validateUCIUUID("space_id", *ref.SpaceID); err != nil {
+			return err
+		}
+	}
+	if ref.Generation < 1 {
+		return fmt.Errorf("uci projection query: generation must be positive")
+	}
+	return nil
+}
+
+func validateUCIQuerySpec(spec ucidomain.QuerySpec) error {
+	if spec.Limit < 1 || spec.Limit > 50 || spec.Offset < 0 || strings.TrimSpace(spec.Text) == "" || strings.TrimSpace(spec.Text) != spec.Text {
+		return fmt.Errorf("uci projection query: invalid request")
+	}
+	switch spec.Mode {
+	case ucidomain.QueryModeExactLocalName, ucidomain.QueryModeExactQualifiedSymbol, ucidomain.QueryModeExactRelativePath, ucidomain.QueryModeFTS:
+	default:
+		return fmt.Errorf("uci projection query: unsupported mode %q", spec.Mode)
+	}
+	switch spec.Order {
+	case ucidomain.QueryOrderPath, ucidomain.QueryOrderRelevance:
+	default:
+		return fmt.Errorf("uci projection query: unsupported order %q", spec.Order)
+	}
+	if len(spec.Filter.Languages) > 32 {
+		return fmt.Errorf("uci projection query: language filter exceeds limit")
+	}
+	for _, language := range spec.Filter.Languages {
+		if strings.TrimSpace(language) == "" || strings.TrimSpace(language) != language {
+			return fmt.Errorf("uci projection query: invalid language filter")
+		}
+	}
+	return nil
+}
+
+func parseUCIQueryCoverage(value string) (ucidomain.IndexCoverageState, bool) {
+	switch ucidomain.IndexCoverageState(value) {
+	case ucidomain.IndexCoverageComplete:
+		return ucidomain.IndexCoverageComplete, true
+	case ucidomain.IndexCoveragePartial:
+		return ucidomain.IndexCoveragePartial, true
+	case ucidomain.IndexCoverageUnavailable:
+		return ucidomain.IndexCoverageUnavailable, true
+	default:
+		return "", false
+	}
+}
+
+func uciUnavailableQueryResult(code ucidomain.QueryErrorCode) ucidomain.QueryStoreResult {
+	return ucidomain.QueryStoreResult{
+		Coverage:    ucidomain.IndexCoverageUnavailable,
+		Unavailable: &ucidomain.QueryError{Code: code},
+	}
+}
+
+func uciQueryItemKind(chunkKind string) ucidomain.QueryItemKind {
+	switch strings.ToLower(chunkKind) {
+	case "document", "doc":
+		return ucidomain.QueryItemDocument
+	case "schema":
+		return ucidomain.QueryItemSchema
+	case "config", "configuration":
+		return ucidomain.QueryItemConfig
+	default:
+		return ucidomain.QueryItemCode
+	}
+}
+
+func escapeUCIQueryLike(value string) string {
+	replacer := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_")
+	return replacer.Replace(value)
 }
 
 func (s *UCIProjectionStore) requireDB(operation string) error {
