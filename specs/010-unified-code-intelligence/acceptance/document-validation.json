@@ -1,0 +1,17 @@
+{
+  "status": "PASS_DOCUMENT_CONTRACT_CHECKS_ONLY",
+  "date": "2026-09-05",
+  "schema_examples_validated": 3,
+  "document_json_blocks_parsed": 3,
+  "acceptance_cases_defined": 40,
+  "runtime_tests_executed": false,
+  "production_modified": false,
+  "source_implementation_modified": false,
+  "checks": [
+    "closed JSON schema and positive examples",
+    "reference/source/view membership in examples",
+    "valid span and relative path examples",
+    "unique acceptance identifiers",
+    "internal document references"
+  ]
+}
