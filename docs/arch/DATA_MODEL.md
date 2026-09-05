@@ -53,9 +53,9 @@ The list below is generated. Do not edit it by hand; run `go run ./tools/gen-dat
 <!-- BEGIN GENERATED TABLES -->
 Generated from `internal/db/gorm/migrations.go`.
 
-Migration count: **142**.
+Migration count: **143**.
 
-Live table count: **47**.
+Live table count: **61**.
 
 | Table | Creating migration |
 | --- | --- |
@@ -106,4 +106,18 @@ Live table count: **47**.
 | `sources` | `171_uci_context_registry` |
 | `space_sources` | `171_uci_context_registry` |
 | `spaces` | `171_uci_context_registry` |
+| `ci_analyses` | `172_uci_index_projection` |
+| `ci_blobs` | `172_uci_index_projection` |
+| `ci_chunk_embeddings` | `172_uci_index_projection` |
+| `ci_chunks` | `172_uci_index_projection` |
+| `ci_definitions` | `172_uci_index_projection` |
+| `ci_embedding_profiles` | `172_uci_index_projection` |
+| `ci_embeddings` | `172_uci_index_projection` |
+| `ci_jobs` | `172_uci_index_projection` |
+| `ci_memberships` | `172_uci_index_projection` |
+| `ci_parse_artifacts` | `172_uci_index_projection` |
+| `ci_reference_sites` | `172_uci_index_projection` |
+| `ci_resolved_edges` | `172_uci_index_projection` |
+| `uci_completion_evidence` | `172_uci_index_projection` |
+| `uci_exposures` | `172_uci_index_projection` |
 <!-- END GENERATED TABLES -->

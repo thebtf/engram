@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pgvector/pgvector-go"
 	"github.com/stretchr/testify/require"
 	gormlib "gorm.io/gorm"
 )
@@ -35,6 +36,7 @@ type uciProjectionMigrationFixture struct {
 	authRealm     string
 	source        *UCISource
 	checkout      *UCICheckout
+	profile       *UCIAnalysisProfile
 	otherCheckout *UCICheckout
 	view          *UCIView
 	otherView     *UCIView
@@ -181,6 +183,138 @@ func TestUCIProjectionMigration172ProjectionSchemaEnforcesScopedTemporalIndexes(
 	assertUCIProjectionIndex(t, db, "ci_jobs", "state", "retry_after")
 }
 
+func TestUCIProjectionMigration172ProjectionStoreKeepsScopeAndCallerOwnership(t *testing.T) {
+	fixture := openUCIProjectionMigrationFixture(t)
+	store := NewUCIProjectionStore(fixture.db)
+	ctx := context.Background()
+
+	safeContent := []byte("package fixture\n")
+	blobInput := UpsertUCIBlobInput{
+		SourceID:         fixture.source.SourceID,
+		ProtectionDomain: "source-private",
+		ContentDigest:    uciProjectionDigest("1"),
+		ByteLength:       int64(len(safeContent)),
+		SafeContent:      safeContent,
+		Encoding:         "utf-8",
+		StorageState:     UCIBlobStored,
+	}
+	blob, err := store.UpsertBlob(ctx, blobInput)
+	require.NoError(t, err)
+	safeContent[0] = 'X'
+	require.Equal(t, byte('p'), blob.SafeContent[0], "blob output must not alias caller-owned content")
+	blobRetryInput := blobInput
+	blobRetryInput.SafeContent = []byte("package fixture\n")
+	blobRetry, err := store.UpsertBlob(ctx, blobRetryInput)
+	require.NoError(t, err)
+	require.Equal(t, blob.BlobID, blobRetry.BlobID)
+	var storedBlob UCIBlob
+	require.NoError(t, fixture.db.Where("blob_id = ?", blob.BlobID).First(&storedBlob).Error)
+	require.Equal(t, byte('p'), storedBlob.SafeContent[0], "stored blob must not alias caller-owned content")
+	metadataOnly := blobInput
+	metadataOnly.ContentDigest = uciProjectionDigest("0")
+	metadataOnly.StorageState = UCIBlobMetadataOnly
+	metadataOnly.SafeContent = []byte("must not persist")
+	metadataOnly.ByteLength = int64(len(metadataOnly.SafeContent))
+	_, err = store.UpsertBlob(ctx, metadataOnly)
+	require.Error(t, err, "metadata-only blobs must reject source bytes before SQL")
+
+	artifactInput := UpsertUCIParseArtifactInput{
+		SourceID:                fixture.source.SourceID,
+		BlobID:                  blob.BlobID,
+		Language:                "go",
+		ParserRevision:          "go-ast-v1",
+		GrammarDigest:           uciProjectionDigest("2"),
+		ExtractionProfileDigest: uciProjectionDigest("3"),
+		Status:                  UCIParseArtifactComplete,
+		Diagnostics:             `{}`,
+	}
+	artifact, err := store.UpsertParseArtifact(ctx, artifactInput)
+	require.NoError(t, err)
+	crossSourceArtifact := artifactInput
+	crossSourceArtifact.SourceID = fixture.otherCheckout.SourceID
+	_, err = store.UpsertParseArtifact(ctx, crossSourceArtifact)
+	require.Error(t, err, "parse artifacts must not pair a blob with another Source")
+
+	chunk, err := store.UpsertChunk(ctx, UpsertUCIChunkInput{
+		SourceID:      fixture.source.SourceID,
+		ArtifactID:    artifact.ArtifactID,
+		ChunkKind:     "definition",
+		Ordinal:       0,
+		ByteStart:     0,
+		ByteEnd:       int64(len(blobRetryInput.SafeContent)),
+		ContentDigest: uciProjectionDigest("4"),
+		TextForSearch: "func SharedTarget()",
+	})
+	require.NoError(t, err)
+
+	embeddingProfile, err := store.UpsertEmbeddingProfile(ctx, UpsertUCIEmbeddingProfileInput{
+		AnalysisProfileID:     fixture.profile.ProfileID,
+		ProviderRef:           "provider-fixture",
+		Model:                 "embedding-fixture",
+		Dimension:             1536,
+		PreprocessingRevision: "preprocess-v1",
+		IncludeRelativePath:   true,
+	})
+	require.NoError(t, err)
+	values := make([]float32, 1536)
+	values[0] = 1
+	inputVector := pgvector.NewVector(values)
+	embedding, err := store.UpsertEmbedding(ctx, UpsertUCIEmbeddingInput{
+		EmbeddingProfileID:   embeddingProfile.EmbeddingProfileID,
+		EmbeddingInputDigest: uciProjectionDigest("5"),
+		Vector:               &inputVector,
+		SourceID:             fixture.source.SourceID,
+		ProtectionDomain:     "source-private",
+		CompletionSeq:        1,
+		Status:               UCIEmbeddingReady,
+	})
+	require.NoError(t, err)
+	inputVector.Slice()[0] = 9
+	require.Equal(t, float32(1), embedding.Vector.Slice()[0], "embedding output must not alias caller-owned vector storage")
+	shortVector := pgvector.NewVector([]float32{1, 2})
+	_, err = store.UpsertEmbedding(ctx, UpsertUCIEmbeddingInput{
+		EmbeddingProfileID:   embeddingProfile.EmbeddingProfileID,
+		EmbeddingInputDigest: uciProjectionDigest("6"),
+		Vector:               &shortVector,
+		SourceID:             fixture.source.SourceID,
+		ProtectionDomain:     "source-private",
+		Status:               UCIEmbeddingReady,
+	})
+	require.Error(t, err, "embedding vectors must match the profile dimension before SQL")
+
+	linked, err := store.LinkChunkEmbedding(ctx, LinkUCIChunkEmbeddingInput{
+		SourceID:                fixture.source.SourceID,
+		ChunkID:                 chunk.ChunkID,
+		EmbeddingID:             embedding.EmbeddingID,
+		RelativePathFingerprint: uciProjectionDigest("7"),
+		EmbeddingProfileID:      embeddingProfile.EmbeddingProfileID,
+		EmbeddingInputDigest:    embedding.EmbeddingInputDigest,
+	})
+	require.NoError(t, err)
+	crossSourceLink := LinkUCIChunkEmbeddingInput{
+		SourceID:                fixture.otherCheckout.SourceID,
+		ChunkID:                 linked.ChunkID,
+		EmbeddingID:             linked.EmbeddingID,
+		RelativePathFingerprint: uciProjectionDigest("8"),
+		EmbeddingProfileID:      linked.EmbeddingProfileID,
+		EmbeddingInputDigest:    linked.EmbeddingInputDigest,
+	}
+	_, err = store.LinkChunkEmbedding(ctx, crossSourceLink)
+	require.Error(t, err, "chunk embeddings must not cross Source scope")
+
+	analysis, err := store.StoreAnalysis(ctx, StoreUCIAnalysisInput{
+		ViewID:            fixture.view.ViewID,
+		Kind:              "impact",
+		AlgorithmRevision: "impact-v1",
+		InputDigest:       uciProjectionDigest("9"),
+		ArtifactRefs:      `{"artifact_id":"` + artifact.ArtifactID + `"}`,
+		ResultJSON:        `{"bounded":true}`,
+		State:             UCIAnalysisReady,
+	})
+	require.NoError(t, err)
+	require.Equal(t, fixture.view.ViewID, analysis.ViewID)
+}
+
 func TestUCIProjectionMigration172EvidenceSchemaIsAppendOnlyAndNonContent(t *testing.T) {
 	fixture := openUCIProjectionMigrationFixture(t)
 	db := fixture.db
@@ -252,6 +386,113 @@ func TestUCIProjectionMigration172EvidenceSchemaIsAppendOnlyAndNonContent(t *tes
 	require.Error(t, db.Exec(`UPDATE uci_exposures SET certainty = 'partial' WHERE exposure_id = ?`, exposure.ExposureID).Error, "retained exposure evidence must reject mutation")
 	require.Error(t, db.Exec(`UPDATE uci_completion_evidence SET outcome = 'failed' WHERE completion_evidence_id = ?`, completion.CompletionEvidenceID).Error, "retained completion evidence must reject mutation")
 	require.Error(t, db.Exec(`DELETE FROM uci_completion_evidence WHERE completion_evidence_id = ?`, completion.CompletionEvidenceID).Error, "retained completion evidence must reject ordinary deletion")
+}
+
+func TestUCIProjectionMigration172EvidenceStoreCanonicalRetryIntegrityAndRetention(t *testing.T) {
+	fixture := openUCIProjectionMigrationFixture(t)
+	store := NewUCIExposureStore(fixture.db)
+	ctx := context.Background()
+	recordedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+
+	input := UCIExposureInput{
+		AuthRealm:        fixture.authRealm,
+		SourceID:         fixture.source.SourceID,
+		CheckoutID:       fixture.checkout.CheckoutID,
+		ViewID:           fixture.view.ViewID,
+		ClientRef:        uuid.NewString(),
+		ClientSessionRef: uuid.NewString(),
+		RequestRef:       uuid.NewString(),
+		OperationKind:    UCIExposureCodeSearch,
+		ResultState:      UCIExposureResultUnavailable,
+		RetrievalMode:    UCIRetrievalUnavailable,
+		CoverageState:    UCICoverageUnavailable,
+		EvidenceSource:   UCIEvidenceNone,
+		Certainty:        UCICertaintyUnavailable,
+		IdempotencyKey:   uuid.NewString(),
+		RecordedAt:       recordedAt,
+	}
+
+	first, err := store.RecordExposure(ctx, input)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(first.ExposureRef, uciExposureRefPrefix))
+	second, err := store.RecordExposure(ctx, input)
+	require.NoError(t, err)
+	require.Equal(t, first.ExposureID, second.ExposureID, "exact retry must return the original exposure")
+
+	mismatchedExposure := input
+	mismatchedExposure.RequestRef = uuid.NewString()
+	staleExposure, err := store.RecordExposure(ctx, mismatchedExposure)
+	require.ErrorIs(t, err, ErrUCIIdempotencyMismatch)
+	require.Nil(t, staleExposure, "a mismatched retry must not disclose the prior exposure")
+
+	_, err = store.RecordCompletion(ctx, UCICompletionInput{
+		SupportedHostRef: uuid.NewString(),
+		CallbackRef:      uuid.NewString(),
+		Outcome:          UCICompletionPartial,
+		IdempotencyKey:   uuid.NewString(),
+	})
+	require.Error(t, err, "completion recording must reject a missing opaque exposure reference before lookup")
+	completionInput := UCICompletionInput{
+		ExposureRef:      first.ExposureRef,
+		SupportedHostRef: uuid.NewString(),
+		CallbackRef:      uuid.NewString(),
+		Outcome:          UCICompletionPartial,
+		IdempotencyKey:   uuid.NewString(),
+		OccurredAt:       recordedAt,
+	}
+	completion, err := store.RecordCompletion(ctx, completionInput)
+	require.NoError(t, err)
+	completionRetry, err := store.RecordCompletion(ctx, completionInput)
+	require.NoError(t, err)
+	require.Equal(t, completion.CompletionEvidenceID, completionRetry.CompletionEvidenceID, "exact retry must return the original completion")
+	completionState, err := store.CompletionState(ctx, first.ExposureRef)
+	require.NoError(t, err)
+	require.Equal(t, UCICompletionState(UCICompletionPartial), completionState)
+
+	mismatchedCompletion := completionInput
+	mismatchedCompletion.CallbackRef = uuid.NewString()
+	staleCompletion, err := store.RecordCompletion(ctx, mismatchedCompletion)
+	require.ErrorIs(t, err, ErrUCIIdempotencyMismatch)
+	require.Nil(t, staleCompletion, "a mismatched callback must not disclose the prior child")
+	require.NoError(t, store.VerifyIntegrity(ctx), "normal PostgreSQL restore verification must accept canonical retained evidence")
+
+	pruned, err := store.PruneExpired(ctx, time.Now().UTC(), 1)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), pruned.ExposuresDeleted)
+	require.Equal(t, int64(1), pruned.CompletionsDeleted, "retention must delete the child before its parent")
+	require.NoError(t, store.VerifyIntegrity(ctx), "empty retained evidence still requires append-only guards")
+	tx := fixture.db.Begin()
+	require.NoError(t, tx.Error)
+	txStore := NewUCIExposureStore(tx)
+	_, err = txStore.PruneExpired(ctx, time.Now().UTC().Add(-24*time.Hour), 1)
+	require.NoError(t, err)
+	var retentionMode string
+	require.NoError(t, tx.Raw(`SELECT current_setting('app.uci_evidence_retention', true)`).Scan(&retentionMode).Error)
+	require.Equal(t, "off", retentionMode, "retention privilege must be reset before returning to its caller transaction")
+	require.NoError(t, tx.Rollback().Error)
+
+	corrupt := UCIExposure{
+		ExposureID:               uuid.NewString(),
+		ExposureRef:              uciExposureRefPrefix + uuid.NewString(),
+		AuthRealm:                fixture.authRealm,
+		SourceID:                 fixture.source.SourceID,
+		CheckoutID:               fixture.checkout.CheckoutID,
+		ViewID:                   fixture.view.ViewID,
+		ClientRef:                uuid.NewString(),
+		ClientSessionRef:         uuid.NewString(),
+		RequestRef:               uuid.NewString(),
+		OperationKind:            UCIExposureCodeSearch,
+		ResultState:              UCIExposureResultOK,
+		RetrievalMode:            UCIRetrievalExact,
+		CoverageState:            UCICoverageComplete,
+		EvidenceSource:           UCIEvidenceExact,
+		Certainty:                UCICertaintyEstablished,
+		IdempotencyKey:           uuid.NewString(),
+		IdempotencyBindingDigest: uciProjectionDigest("f"),
+		RecordedAt:               time.Now().UTC(),
+	}
+	require.NoError(t, fixture.db.Create(&corrupt).Error, "syntactically valid restored evidence can still fail canonical verification")
+	require.ErrorIs(t, store.VerifyIntegrity(ctx), ErrUCIEvidenceIntegrity)
 }
 
 func openUCIProjectionMigrationFixture(t *testing.T) *uciProjectionMigrationFixture {
@@ -347,6 +588,7 @@ func openUCIProjectionMigrationFixture(t *testing.T) *uciProjectionMigrationFixt
 		otherCheckout: otherCheckout,
 		view:          view,
 		otherView:     otherView,
+		profile:       profile,
 		stagingView:   stagingView,
 		projectID:     projectID,
 		chunk:         chunk,
