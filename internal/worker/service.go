@@ -1081,6 +1081,14 @@ func (s *Service) initializeAsync() {
 		ChunkManager:       chunkManager,
 	})
 
+	// Build the one real UCI authority before any transport can discover MCP tools.
+	codeIntelEnabled := os.Getenv("ENGRAM_CODE_INTEL_ENABLED") == "true"
+	uciContext, err := composeUCIContext(codeIntelEnabled, store.GetDB(), mcpServer)
+	if err != nil {
+		s.setInitError(fmt.Errorf("compose UCI context: %w", err))
+		return
+	}
+
 	// Wire versioned document store into MCP server for collaborative document tools.
 	mcpServer.SetVersionedDocumentStore(versionedDocumentStore)
 	s.initMu.Lock()
@@ -1259,7 +1267,7 @@ func (s *Service) initializeAsync() {
 
 	// Wire the explicitly invoked raw-project compatibility reader. Current UCI
 	// dispatch never consults this store for context selection or retrieval.
-	if os.Getenv("ENGRAM_CODE_INTEL_ENABLED") == "true" {
+	if codeIntelEnabled {
 		legacyUnscopedCodeChunkStore := gorm.NewCodeChunkStore(store.GetDB())
 		mcpServer.SetLegacyUnscopedCodeChunkStore(legacyUnscopedCodeChunkStore)
 	}
@@ -1284,6 +1292,9 @@ func (s *Service) initializeAsync() {
 		s.tokenAuth.SetValidator(grpcValidator)
 	}
 	grpcSrv, grpcInternalSrv := grpcserver.New(adapter, grpcValidator)
+	if uciContext != nil {
+		grpcInternalSrv.SetUCITransport(uciContext.transport)
+	}
 	grpcInternalSrv.SetDB(store.DB)
 	grpcInternalSrv.SetBus(s.eventBus)
 	grpcInternalSrv.SetAmbientDependencies(ambientcore.Dependencies{
