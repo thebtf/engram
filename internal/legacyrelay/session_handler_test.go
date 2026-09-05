@@ -3,6 +3,7 @@ package legacyrelay
 import (
 	"context"
 	"testing"
+	"time"
 
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
 )
@@ -20,6 +21,35 @@ func (n *trackingNext) HandleRequest(context.Context, muxcore.ProjectContext, []
 
 func (n *trackingNext) OnProjectConnect(muxcore.ProjectContext) { n.connects++ }
 func (n *trackingNext) OnProjectDisconnect(string)              { n.disconnects++ }
+
+type trackingMetaNext struct {
+	plainRequests      int
+	plainNotifications int
+	metaRequests       int
+	metaNotifications  int
+	requestMeta        muxcore.SessionMeta
+	notificationMeta   muxcore.SessionMeta
+}
+
+func (n *trackingMetaNext) HandleRequest(context.Context, muxcore.ProjectContext, []byte) ([]byte, error) {
+	n.plainRequests++
+	return []byte(`{"plain":true}`), nil
+}
+
+func (n *trackingMetaNext) HandleRequestWithSessionMeta(_ context.Context, _ muxcore.ProjectContext, meta muxcore.SessionMeta, _ []byte) ([]byte, error) {
+	n.metaRequests++
+	n.requestMeta = meta
+	return []byte(`{"meta":true}`), nil
+}
+
+func (n *trackingMetaNext) HandleNotification(context.Context, muxcore.ProjectContext, []byte) {
+	n.plainNotifications++
+}
+
+func (n *trackingMetaNext) HandleNotificationWithSessionMeta(_ context.Context, _ muxcore.ProjectContext, meta muxcore.SessionMeta, _ []byte) {
+	n.metaNotifications++
+	n.notificationMeta = meta
+}
 
 func TestSessionTrackingHandlerObservesPeerWithoutChangingMCPResponse(t *testing.T) {
 	child := mustProcess(t, 220, "child-incarnation", "/opt/engram", 110)
@@ -46,6 +76,45 @@ func TestSessionTrackingHandlerObservesPeerWithoutChangingMCPResponse(t *testing
 	config, ok := children.ConfigFor(records[0].binding.ConfigRef())
 	if !ok || config["CHILD_ONLY"] != "yes" {
 		t.Fatalf("child config=%v ok=%v", config, ok)
+	}
+}
+
+func TestSessionTrackingHandlerForwardsRequestMetaToCapableNext(t *testing.T) {
+	child := mustProcess(t, 220, "child-incarnation", "/opt/engram", 110)
+	children := NewChildRegistry(&fakeProcessInspector{processes: map[int]ProcessIdentity{220: child}}, ChildImageGateFunc(func(ProcessImage) bool { return true }))
+	next := &trackingMetaNext{}
+	handler, err := NewSessionTrackingHandler(next, children)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := muxcore.SessionMeta{Conn: muxcore.ConnInfo{PeerPid: child.PID()}, TenantID: "transport-tag", AuthorizedAt: time.Now()}
+	response, err := handler.HandleRequestWithSessionMeta(context.Background(), muxcore.ProjectContext{ID: "diagnostic-project"}, meta, []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(response) != `{"meta":true}` || next.metaRequests != 1 || next.plainRequests != 0 {
+		t.Fatalf("response=%s meta=%d plain=%d", response, next.metaRequests, next.plainRequests)
+	}
+	if next.requestMeta != meta {
+		t.Fatalf("forwarded request meta = %#v, want %#v", next.requestMeta, meta)
+	}
+}
+
+func TestSessionTrackingHandlerForwardsNotificationMetaToCapableNext(t *testing.T) {
+	child := mustProcess(t, 220, "child-incarnation", "/opt/engram", 110)
+	children := NewChildRegistry(&fakeProcessInspector{processes: map[int]ProcessIdentity{220: child}}, ChildImageGateFunc(func(ProcessImage) bool { return true }))
+	next := &trackingMetaNext{}
+	handler, err := NewSessionTrackingHandler(next, children)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := muxcore.SessionMeta{Conn: muxcore.ConnInfo{PeerPid: child.PID()}, TenantID: "transport-tag", AuthorizedAt: time.Now()}
+	handler.HandleNotificationWithSessionMeta(context.Background(), muxcore.ProjectContext{ID: "diagnostic-project"}, meta, []byte(`{}`))
+	if next.metaNotifications != 1 || next.plainNotifications != 0 {
+		t.Fatalf("meta=%d plain=%d", next.metaNotifications, next.plainNotifications)
+	}
+	if next.notificationMeta != meta {
+		t.Fatalf("forwarded notification meta = %#v, want %#v", next.notificationMeta, meta)
 	}
 }
 

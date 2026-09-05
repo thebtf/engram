@@ -129,7 +129,7 @@ func TestUCIClientPropagatesSourceSessionMetadata(t *testing.T) {
 		require.Equal(t, []string{"client-a"}, outgoing.Get(auditcontext.SourceSessionMetadataKey))
 		return uciClientTestBindResponse(request), nil
 	}}
-	ctx := auditcontext.WithSourceSession(context.Background(), "client-a")
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "client-a")
 	_, err := newUCIClient(rpc).Bind(ctx, &pb.BindCodeContextRequest{
 		ClientSessionId:  "client-a",
 		RequestedContext: uciClientTestContextA(),
@@ -508,8 +508,9 @@ func TestUCIIndexAdapterBindsBeforeCollaboratorWithServerBinding(t *testing.T) {
 	t.Cleanup(mod.pool.closeAll)
 	adapter := NewUCIIndexAdapter(mod)
 	project := uciClientTestProject(serverURL)
+	ctx := auditcontext.WithUCITransportSession(context.Background(), clientSessionID)
 
-	target, err := adapter.ResolveIndexTarget(context.Background(), clientSessionID, project, contextHandle)
+	target, err := adapter.ResolveIndexTarget(ctx, project, contextHandle)
 	require.NoError(t, err)
 	require.Equal(t, uciClientTestIndexBinding(boundContext), target.Binding)
 	requests := server.bindRequestsSnapshot()
@@ -520,7 +521,7 @@ func TestUCIIndexAdapterBindsBeforeCollaboratorWithServerBinding(t *testing.T) {
 	calls, _, _, _ := collaborator.snapshot()
 	require.Zero(t, calls, "the collaborator cannot prepare authority before server Bind")
 
-	result, err := adapter.IndexCodebase(context.Background(), target, rootHint)
+	result, err := adapter.IndexCodebase(ctx, target, rootHint)
 	require.NoError(t, err)
 	require.Equal(t, &IndexResult{Context: published, Embedded: 3, Deleted: 1, Uploaded: 4}, result)
 	calls, received, receivedRoot, receivedClient := collaborator.snapshot()
@@ -533,7 +534,10 @@ func TestUCIIndexAdapterBindsBeforeCollaboratorWithServerBinding(t *testing.T) {
 }
 
 func TestUCIIndexAdapterResolvesNoViewAndProxiesWithoutCollaborator(t *testing.T) {
-	const contextHandle = "registered-no-view"
+	const (
+		contextHandle   = "registered-no-view"
+		clientSessionID = "client-a"
+	)
 	server := &uciIndexAdapterGRPCServer{
 		call: func(context.Context, *pb.CallToolRequest) (*pb.CallToolResponse, error) {
 			return &pb.CallToolResponse{IsError: true, ContentJson: []byte("server error text")}, nil
@@ -543,20 +547,81 @@ func TestUCIIndexAdapterResolvesNoViewAndProxiesWithoutCollaborator(t *testing.T
 	mod := NewModuleWithClientInstanceID("")
 	t.Cleanup(mod.pool.closeAll)
 	adapter := NewUCIIndexAdapter(mod)
+	ctx := auditcontext.WithUCITransportSession(context.Background(), clientSessionID)
 
-	target, err := adapter.ResolveIndexTarget(context.Background(), "client-a", uciClientTestProject(serverURL), contextHandle)
+	target, err := adapter.ResolveIndexTarget(ctx, uciClientTestProject(serverURL), contextHandle)
 	require.NoError(t, err)
 	require.Nil(t, target.Binding.Context)
 	require.NoError(t, target.Binding.Validate())
 
-	_, err = adapter.IndexCodebase(context.Background(), target, "server-authorized-root-hint")
+	_, err = adapter.IndexCodebase(ctx, target, "server-authorized-root-hint")
 	require.Error(t, err, "indexing still requires a prepared-index collaborator")
-	block, err := adapter.ProxyHandleTool(context.Background(), target, "codebase_status", json.RawMessage(`{}`))
+	block, err := adapter.ProxyHandleTool(ctx, target, "codebase_status", json.RawMessage(`{}`))
 	require.Nil(t, block)
 	var proxyErr *module.ProxyIsError
 	require.True(t, errors.As(err, &proxyErr))
 	require.JSONEq(t, `{"type":"text","text":"server error text"}`, string(proxyErr.RawContent))
 	require.Len(t, server.callRequestsSnapshot(), 1)
+}
+
+func TestUCIIndexAdapterForwardsTransportTagAcrossBindAndProxy(t *testing.T) {
+	const (
+		transportTag  = "transport-tag-a"
+		contextHandle = "transport-context-handle"
+	)
+	server := &uciIndexAdapterGRPCServer{}
+	serverURL := startUCIIndexAdapterGRPC(t, server)
+	mod := NewModuleWithClientInstanceID("")
+	t.Cleanup(mod.pool.closeAll)
+	adapter := NewUCIIndexAdapter(mod)
+	ctx := auditcontext.WithUCITransportSession(context.Background(), transportTag)
+
+	target, err := adapter.ResolveIndexTarget(ctx, uciClientTestProject(serverURL), contextHandle)
+	require.NoError(t, err)
+	_, err = adapter.ProxyHandleTool(ctx, target, "codebase_status", json.RawMessage(`{}`))
+	require.NoError(t, err)
+
+	bindRequests := server.bindRequestsSnapshot()
+	callRequests := server.callRequestsSnapshot()
+	require.Len(t, bindRequests, 1)
+	require.Len(t, callRequests, 1)
+	require.Equal(t, transportTag, bindRequests[0].GetClientSessionId())
+	require.Equal(t, transportTag, callRequests[0].GetSessionId())
+	bindMetadata, callMetadata := server.metadataSnapshot()
+	require.Equal(t, []string{transportTag}, bindMetadata.Get(auditcontext.SourceSessionMetadataKey))
+	require.Equal(t, []string{transportTag}, callMetadata.Get(auditcontext.SourceSessionMetadataKey))
+}
+
+func TestUCIIndexAdapterRejectsMissingTransportTagBeforeBind(t *testing.T) {
+	server := &uciIndexAdapterGRPCServer{}
+	serverURL := startUCIIndexAdapterGRPC(t, server)
+	mod := NewModuleWithClientInstanceID("")
+	t.Cleanup(mod.pool.closeAll)
+	_, err := NewUCIIndexAdapter(mod).ResolveIndexTarget(context.Background(), uciClientTestProject(serverURL), "context-handle")
+	require.Error(t, err)
+	require.Empty(t, server.bindRequestsSnapshot())
+}
+
+func TestUCIIndexAdapterRejectsMissingTransportTagForBoundTarget(t *testing.T) {
+	const transportTag = "transport-tag-a"
+	server := &uciIndexAdapterGRPCServer{}
+	serverURL := startUCIIndexAdapterGRPC(t, server)
+	mod := NewModuleWithClientInstanceID("")
+	t.Cleanup(mod.pool.closeAll)
+	adapter := NewUCIIndexAdapter(mod)
+	project := uciClientTestProject(serverURL)
+	project.Env[config.EnvClaudeSessionID] = "host-session-must-not-be-used"
+	tagged := auditcontext.WithUCITransportSession(context.Background(), transportTag)
+
+	target, err := adapter.ResolveIndexTarget(tagged, project, "context-handle")
+	require.NoError(t, err)
+	result, err := adapter.IndexCodebase(context.Background(), target, "server-authorized-root-hint")
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "UCI transport session")
+	block, err := adapter.ProxyHandleTool(context.Background(), target, "codebase_status", json.RawMessage(`{}`))
+	require.Nil(t, block)
+	require.ErrorContains(t, err, "UCI transport session")
+	require.Empty(t, server.callRequestsSnapshot(), "missing transport context must fail before CallTool")
 }
 
 type uciIndexAdapterGRPCServer struct {
@@ -568,11 +633,15 @@ type uciIndexAdapterGRPCServer struct {
 
 	bindRequests []*pb.BindCodeContextRequest
 	callRequests []*pb.CallToolRequest
+	bindMetadata metadata.MD
+	callMetadata metadata.MD
 }
 
 func (server *uciIndexAdapterGRPCServer) BindCodeContext(ctx context.Context, request *pb.BindCodeContextRequest) (*pb.BindCodeContextResponse, error) {
 	server.mu.Lock()
 	server.bindRequests = append(server.bindRequests, proto.Clone(request).(*pb.BindCodeContextRequest))
+	server.bindMetadata, _ = metadata.FromIncomingContext(ctx)
+	server.bindMetadata = server.bindMetadata.Copy()
 	bind := server.bind
 	server.mu.Unlock()
 	if bind != nil {
@@ -584,6 +653,8 @@ func (server *uciIndexAdapterGRPCServer) BindCodeContext(ctx context.Context, re
 func (server *uciIndexAdapterGRPCServer) CallTool(ctx context.Context, request *pb.CallToolRequest) (*pb.CallToolResponse, error) {
 	server.mu.Lock()
 	server.callRequests = append(server.callRequests, proto.Clone(request).(*pb.CallToolRequest))
+	server.callMetadata, _ = metadata.FromIncomingContext(ctx)
+	server.callMetadata = server.callMetadata.Copy()
 	call := server.call
 	server.mu.Unlock()
 	if call != nil {
@@ -610,6 +681,12 @@ func (server *uciIndexAdapterGRPCServer) callRequestsSnapshot() []*pb.CallToolRe
 		requests[index] = proto.Clone(request).(*pb.CallToolRequest)
 	}
 	return requests
+}
+
+func (server *uciIndexAdapterGRPCServer) metadataSnapshot() (metadata.MD, metadata.MD) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	return server.bindMetadata.Copy(), server.callMetadata.Copy()
 }
 
 func startUCIIndexAdapterGRPC(t *testing.T, server *uciIndexAdapterGRPCServer) string {

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/handlers/codeintel"
 	"github.com/thebtf/engram/internal/module"
@@ -30,15 +31,21 @@ type fakeCore struct {
 	statusResponse []byte
 	statusErr      error
 
-	bindings      map[string]uci.IndexBinding
-	resolveCalled int
-	proxyCalled   int
+	bindings       map[string]uci.IndexBinding
+	resolveBinding func(int, string) uci.IndexBinding
+	resolveCalled  int
+	proxyCalled    int
 }
 
-func (f *fakeCore) ResolveIndexTarget(_ context.Context, clientSessionID string, _ muxcore.ProjectContext, contextHandle string) (codeintel.ResolvedIndexTarget, error) {
+func (f *fakeCore) ResolveIndexTarget(ctx context.Context, _ muxcore.ProjectContext, contextHandle string) (codeintel.ResolvedIndexTarget, error) {
 	f.mu.Lock()
 	f.resolveCalled++
+	resolveCall := f.resolveCalled
 	binding, found := f.bindings[contextHandle]
+	if f.resolveBinding != nil {
+		binding = f.resolveBinding(resolveCall, contextHandle)
+		found = true
+	}
 	if !found {
 		binding = fakeDefaultIndexBinding()
 	}
@@ -46,7 +53,7 @@ func (f *fakeCore) ResolveIndexTarget(_ context.Context, clientSessionID string,
 	f.mu.Unlock()
 
 	return codeintel.ResolvedIndexTarget{
-		ClientSessionID: clientSessionID,
+		ClientSessionID: auditcontext.UCITransportSession(ctx),
 		ContextHandle:   contextHandle,
 		Binding:         binding,
 	}, nil
@@ -148,8 +155,12 @@ func testProjectContext(id, cwd string) muxcore.ProjectContext {
 	return muxcore.ProjectContext{
 		ID:  id,
 		Cwd: cwd,
-		Env: map[string]string{config.EnvClaudeSessionID: id + "-session"},
+		Env: map[string]string{config.EnvClaudeSessionID: id + "-host-session-must-not-be-used"},
 	}
+}
+
+func testTransportContext(p muxcore.ProjectContext) context.Context {
+	return auditcontext.WithUCITransportSession(context.Background(), "transport-"+p.ID)
 }
 
 func testIndexArgs(p muxcore.ProjectContext) json.RawMessage {
@@ -198,7 +209,7 @@ func TestCodebaseIndex_ReturnsStartedImmediately(t *testing.T) {
 	args := testIndexArgs(p)
 
 	start := time.Now()
-	raw, err := h.CallToolWithProject(context.Background(), p, "codebase_index", args)
+	raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_index", args)
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
@@ -226,7 +237,7 @@ func drainIndex(t *testing.T, h *moduletest.Harness, p muxcore.ProjectContext) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		raw, err := h.CallToolWithProject(context.Background(), p, "codebase_status", testStatusArgs(p))
+		raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_status", testStatusArgs(p))
 		if err == nil {
 			var st map[string]any
 			if json.Unmarshal(raw, &st) == nil {
@@ -257,14 +268,14 @@ func TestCodebaseIndex_ConcurrentCallReturnsAlreadyRunning(t *testing.T) {
 	args := testIndexArgs(p)
 
 	// First call — should start.
-	raw1, err := h.CallToolWithProject(context.Background(), p, "codebase_index", args)
+	raw1, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_index", args)
 	require.NoError(t, err)
 	var r1 map[string]any
 	require.NoError(t, json.Unmarshal(raw1, &r1))
 	require.Equal(t, "started", r1["status"], "first call must return 'started'")
 
 	// Second call — should see the running state.
-	raw2, err := h.CallToolWithProject(context.Background(), p, "codebase_index", args)
+	raw2, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_index", args)
 	require.NoError(t, err)
 	var r2 map[string]any
 	require.NoError(t, json.Unmarshal(raw2, &r2))
@@ -300,7 +311,7 @@ func TestCodebaseIndex_RaceAdmitsExactlyOne(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			raw, err := h.CallToolWithProject(context.Background(), p, "codebase_index", args)
+			raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_index", args)
 			if err != nil {
 				return
 			}
@@ -337,7 +348,10 @@ func TestCodebaseIndex_RaceAdmitsExactlyOne(t *testing.T) {
 func TestCodebaseStatus_ReturnsNeverIndexedBeforeFirstRun(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 
-	core := &fakeCore{}
+	const contextHandle = "handle-proj-new"
+	core := &fakeCore{bindings: map[string]uci.IndexBinding{
+		contextHandle: fakeNoViewIndexBinding("33333333-3333-4333-8333-333333333333", "66666666-6666-4666-8666-666666666666"),
+	}}
 	mod := newTestModule(core)
 
 	h := moduletest.New(t)
@@ -345,11 +359,15 @@ func TestCodebaseStatus_ReturnsNeverIndexedBeforeFirstRun(t *testing.T) {
 	h.Freeze()
 
 	p := testProjectContext("proj-new", t.TempDir())
-	raw, err := h.CallToolWithProject(context.Background(), p, "codebase_status", testStatusArgs(p))
+	raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_status", testStatusArgsForHandle(contextHandle))
 	require.NoError(t, err)
 	var result map[string]any
 	require.NoError(t, json.Unmarshal(raw, &result))
 	assert.Equal(t, "never_indexed", result["status"])
+	assert.Equal(t, false, result["server_counts_available"])
+	assert.Nil(t, result["current_context"])
+	_, proxyCalls := core.callCounts()
+	assert.Zero(t, proxyCalls, "no-View status must not proxy before publication")
 }
 
 // TestCodebaseStatus_TransitionsRunningToIdle verifies that codebase_status
@@ -368,7 +386,7 @@ func TestCodebaseStatus_TransitionsRunningToIdle(t *testing.T) {
 	args := testIndexArgs(p)
 
 	// Start the index.
-	raw, err := h.CallToolWithProject(context.Background(), p, "codebase_index", args)
+	raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_index", args)
 	require.NoError(t, err)
 	var startResult map[string]any
 	require.NoError(t, json.Unmarshal(raw, &startResult))
@@ -379,7 +397,7 @@ func TestCodebaseStatus_TransitionsRunningToIdle(t *testing.T) {
 	var finalStatus string
 	for time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
-		raw2, err2 := h.CallToolWithProject(context.Background(), p, "codebase_status", testStatusArgs(p))
+		raw2, err2 := h.CallToolWithProject(testTransportContext(p), p, "codebase_status", testStatusArgs(p))
 		if err2 != nil {
 			continue
 		}
@@ -419,7 +437,7 @@ func TestCodebaseIndex_NoViewBindingsUseDistinctScopeKeys(t *testing.T) {
 		testIndexArgsForHandle(p, handleA),
 		testIndexArgsForHandle(p, handleB),
 	} {
-		raw, err := h.CallToolWithProject(context.Background(), p, "codebase_index", args)
+		raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_index", args)
 		require.NoError(t, err)
 		var started map[string]any
 		require.NoError(t, json.Unmarshal(raw, &started))
@@ -428,15 +446,19 @@ func TestCodebaseIndex_NoViewBindingsUseDistinctScopeKeys(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	statusByHandle := map[string]string{}
+	sawRunningByHandle := map[string]bool{}
 	for time.Now().Before(deadline) {
 		for _, contextHandle := range []string{handleA, handleB} {
-			raw, err := h.CallToolWithProject(context.Background(), p, "codebase_status", testStatusArgsForHandle(contextHandle))
+			raw, err := h.CallToolWithProject(testTransportContext(p), p, "codebase_status", testStatusArgsForHandle(contextHandle))
 			if err != nil {
 				continue
 			}
 			var status map[string]any
 			if json.Unmarshal(raw, &status) == nil {
 				statusByHandle[contextHandle], _ = status["status"].(string)
+				if statusByHandle[contextHandle] == "running" {
+					sawRunningByHandle[contextHandle] = true
+				}
 			}
 		}
 		if statusByHandle[handleA] == "idle" && statusByHandle[handleB] == "idle" {
@@ -446,11 +468,87 @@ func TestCodebaseIndex_NoViewBindingsUseDistinctScopeKeys(t *testing.T) {
 	}
 	require.Equal(t, "idle", statusByHandle[handleA])
 	require.Equal(t, "idle", statusByHandle[handleB])
+	require.True(t, sawRunningByHandle[handleA], "no-View liveness must expose running before completion")
+	require.True(t, sawRunningByHandle[handleB], "no-View liveness must expose running before completion")
 
 	core.mu.Lock()
 	called := core.indexCalled
 	core.mu.Unlock()
 	require.Equal(t, 2, called, "no-View bindings with distinct scopes must not share liveness state")
+	_, proxyCalls := core.callCounts()
+	require.Zero(t, proxyCalls, "no-View status must remain locally observable without a View-dependent server proxy")
+}
+
+func TestCodebaseStatusKeepsRunAcrossNoViewPublication(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	noView := fakeNoViewIndexBinding("33333333-3333-4333-8333-333333333333", "66666666-6666-4666-8666-666666666666")
+	published := noView.Clone()
+	published.Context = &uci.ContextRef{
+		SourceID:          noView.Scope.SourceID,
+		CheckoutID:        noView.Scope.CheckoutID,
+		ViewID:            "44444444-4444-4444-8444-444444444444",
+		AnalysisProfileID: noView.ProfileID,
+		Generation:        1,
+	}
+	var isPublished atomic.Bool
+	core := &fakeCore{resolveBinding: func(_ int, _ string) uci.IndexBinding {
+		if isPublished.Load() {
+			return published
+		}
+		return noView
+	}}
+	mod := newTestModule(core)
+	h := moduletest.New(t)
+	require.NoError(t, h.Register(mod))
+	h.Freeze()
+	p := testProjectContext("proj-no-view-publication", t.TempDir())
+	ctx := testTransportContext(p)
+	contextHandle := "handle-" + p.ID
+
+	raw, err := h.CallToolWithProject(ctx, p, "codebase_index", testIndexArgsForHandle(p, contextHandle))
+	require.NoError(t, err)
+	var started map[string]any
+	require.NoError(t, json.Unmarshal(raw, &started))
+	runID, _ := started["run_id"].(string)
+	require.NotEmpty(t, runID)
+	drainIndex(t, h, p)
+
+	raw, err = h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsForHandle(contextHandle))
+	require.NoError(t, err)
+	var local map[string]any
+	require.NoError(t, json.Unmarshal(raw, &local))
+	require.Equal(t, "idle", local["status"])
+	require.Equal(t, runID, local["run_id"])
+	require.Equal(t, false, local["server_counts_available"])
+	require.Nil(t, local["current_context"])
+	_, proxyCalls := core.callCounts()
+	require.Zero(t, proxyCalls, "no-View status must return liveness before server proxying")
+
+	isPublished.Store(true)
+	raw, err = h.CallToolWithProject(ctx, p, "codebase_status", testStatusArgsForHandle(contextHandle))
+	require.NoError(t, err)
+	var afterPublication map[string]any
+	require.NoError(t, json.Unmarshal(raw, &afterPublication))
+	require.Equal(t, "idle", afterPublication["status"])
+	require.Equal(t, runID, afterPublication["run_id"], "published View must retain the no-View run state")
+	require.Equal(t, true, afterPublication["server_counts_available"])
+	_, proxyCalls = core.callCounts()
+	require.Equal(t, 1, proxyCalls, "published View must reach the server status proxy")
+}
+
+func TestCodebaseToolsRejectMissingTransportSessionWithoutEnvironmentFallback(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	core := &fakeCore{}
+	mod := newTestModule(core)
+	p := testProjectContext("proj-missing-transport", t.TempDir())
+
+	raw, err := mod.HandleTool(context.Background(), p, "codebase_status", testStatusArgs(p))
+	require.Nil(t, raw)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "UCI transport session")
+	resolveCalls, proxyCalls := core.callCounts()
+	require.Zero(t, resolveCalls)
+	require.Zero(t, proxyCalls)
 }
 
 func TestCodebaseStatusRejectsInvalidAfterBarrierBeforeResolution(t *testing.T) {
@@ -519,7 +617,7 @@ func TestCodebaseStatusPropagatesProxyIsError(t *testing.T) {
 	mod := newTestModule(&fakeCore{statusErr: expected})
 	p := testProjectContext("proj-proxy-is-error", t.TempDir())
 
-	raw, err := mod.HandleTool(context.Background(), p, "codebase_status", testStatusArgs(p))
+	raw, err := mod.HandleTool(testTransportContext(p), p, "codebase_status", testStatusArgs(p))
 	require.Nil(t, raw)
 	require.Same(t, expected, err, "the dispatcher must receive the original ProxyIsError sentinel")
 }
@@ -529,7 +627,7 @@ func TestCodebaseStatusDegradesGenericProxyFailure(t *testing.T) {
 	mod := newTestModule(&fakeCore{statusErr: context.DeadlineExceeded})
 	p := testProjectContext("proj-generic-proxy-error", t.TempDir())
 
-	raw, err := mod.HandleTool(context.Background(), p, "codebase_status", testStatusArgs(p))
+	raw, err := mod.HandleTool(testTransportContext(p), p, "codebase_status", testStatusArgs(p))
 	require.NoError(t, err)
 	var status map[string]any
 	require.NoError(t, json.Unmarshal(raw, &status))
@@ -542,7 +640,7 @@ func TestCodebaseStatusPreservesCallerCancellation(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	mod := newTestModule(&fakeCore{statusErr: context.Canceled})
 	p := testProjectContext("proj-cancelled-status", t.TempDir())
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(testTransportContext(p))
 	cancel()
 
 	raw, err := mod.HandleTool(ctx, p, "codebase_status", testStatusArgs(p))

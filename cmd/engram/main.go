@@ -38,7 +38,6 @@ import (
 	"github.com/thebtf/engram/internal/module/lifecycle"
 	"github.com/thebtf/engram/internal/module/registry"
 	"github.com/thebtf/engram/internal/version"
-	muxcore "github.com/thebtf/mcp-mux/muxcore"
 	muxcontrol "github.com/thebtf/mcp-mux/muxcore/control"
 	"github.com/thebtf/mcp-mux/muxcore/engine"
 	"github.com/thebtf/mcp-mux/muxcore/ipc"
@@ -53,9 +52,6 @@ import (
 var daemonVersion = version.Daemon
 
 const (
-	muxcoreDaemonFlag            = "--muxcore-daemon"
-	muxcoreEmbeddedVersion       = "v0.29.1"
-	muxcoreNamespace             = "engram"
 	muxcoreDaemonCompatEpoch     = 1
 	legacyDaemonVersion          = "v6.46.4"
 	legacyEngramCommandPath      = "github.com/thebtf/engram/cmd/engram"
@@ -944,27 +940,6 @@ func writeMuxcoreMarkerAtomically(path string, payload []byte) error {
 		return fmt.Errorf("publish muxcore marker: %w", err)
 	}
 	return nil
-}
-
-func muxcoreBaseConfig() engine.Config {
-	return engine.Config{
-		Name:         "engram",
-		Namespace:    muxcoreNamespace,
-		DaemonFlag:   muxcoreDaemonFlag,
-		SkipSnapshot: true,
-		Registry: &muxregistry.Config{
-			ProductName:    "engram",
-			MuxcoreVersion: muxcoreEmbeddedVersion,
-			Capabilities:   muxregistry.Capabilities{ListOwners: true},
-		},
-	}
-}
-
-func muxcoreDaemonConfig(handler muxcore.SessionHandler) engine.Config {
-	cfg := muxcoreBaseConfig()
-	cfg.Persistent = true // daemon owns durable module/background state
-	cfg.SessionHandler = handler
-	return cfg
 }
 
 func muxcoreShimConfig() engine.Config {

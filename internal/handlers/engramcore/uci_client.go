@@ -153,11 +153,15 @@ func NewUCIIndexAdapter(module *Module) *UCIIndexAdapter {
 
 // ResolveIndexTarget validates an opaque client-owned handle, binds it at the
 // configured server, and retains only the server-authorized target authority.
-func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, clientSessionID string, project muxcore.ProjectContext, contextHandle string) (ResolvedIndexTarget, error) {
+func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, project muxcore.ProjectContext, contextHandle string) (ResolvedIndexTarget, error) {
 	if err := uciClientContextError("ResolveIndexTarget", ctx); err != nil {
 		return ResolvedIndexTarget{}, err
 	}
-	if !validUCIClientIdentifier(clientSessionID, maxUCIClientIdentifierBytes) || !validUCIClientIdentifier(contextHandle, 128) {
+	clientSessionID, err := requireUCITransportSession(ctx)
+	if err != nil {
+		return ResolvedIndexTarget{}, err
+	}
+	if !validUCIClientIdentifier(contextHandle, 128) {
 		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("resolved context handle is unavailable")
 	}
 	if a == nil || a.module == nil {
@@ -175,8 +179,7 @@ func (a *UCIIndexAdapter) ResolveIndexTarget(ctx context.Context, clientSessionI
 		return ResolvedIndexTarget{}, uciIndexSourceUnavailable("UCI server is unavailable")
 	}
 
-	bound, err := newUCIClient(pb.NewEngramServiceClient(conn)).Bind(
-		auditcontext.WithSourceSession(ctx, clientSessionID),
+	bound, err := newUCIClient(pb.NewEngramServiceClient(conn)).Bind(ctx,
 		&pb.BindCodeContextRequest{ClientSessionId: clientSessionID, ContextHandle: contextHandle},
 	)
 	if err != nil {
@@ -202,7 +205,11 @@ func (a *UCIIndexAdapter) IndexCodebase(ctx context.Context, target ResolvedInde
 	if err := uciClientContextError("IndexCodebase", ctx); err != nil {
 		return nil, err
 	}
-	if a == nil || a.module == nil || a.module.preparedIndex == nil || rootHint == "" || !validResolvedIndexTarget(target) {
+	clientSessionID, err := requireUCITransportSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if a == nil || a.module == nil || a.module.preparedIndex == nil || rootHint == "" || !validResolvedIndexTarget(target) || target.ClientSessionID != clientSessionID {
 		return nil, uciIndexSourceUnavailable("prepared code index is unavailable")
 	}
 	conn, err := a.connectionForResolvedIndexTarget(target)
@@ -210,7 +217,7 @@ func (a *UCIIndexAdapter) IndexCodebase(ctx context.Context, target ResolvedInde
 		return nil, err
 	}
 	result, err := a.module.preparedIndex.IndexPreparedCodebase(
-		auditcontext.WithSourceSession(ctx, target.ClientSessionID),
+		ctx,
 		target.Clone(),
 		rootHint,
 		newUCIClient(pb.NewEngramServiceClient(conn)),
@@ -231,18 +238,22 @@ func (a *UCIIndexAdapter) ProxyHandleTool(ctx context.Context, target ResolvedIn
 	if err := uciClientContextError("ProxyHandleTool", ctx); err != nil {
 		return nil, err
 	}
-	if a == nil || a.module == nil || name == "" || !validResolvedIndexTarget(target) {
+	clientSessionID, err := requireUCITransportSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if a == nil || a.module == nil || name == "" || !validResolvedIndexTarget(target) || target.ClientSessionID != clientSessionID {
 		return nil, uciIndexSourceUnavailable("resolved target is unavailable")
 	}
 	conn, err := a.connectionForResolvedIndexTarget(target)
 	if err != nil {
 		return nil, err
 	}
-	ctx = uciClientOutgoingContext(auditcontext.WithSourceSession(ctx, target.ClientSessionID))
+	ctx = uciClientOutgoingContext(ctx)
 	response, err := pb.NewEngramServiceClient(conn).CallTool(ctx, &pb.CallToolRequest{
 		ToolName:      name,
 		ArgumentsJson: args,
-		SessionId:     target.ClientSessionID,
+		SessionId:     clientSessionID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("gRPC CallTool: %w", err)
@@ -555,12 +566,23 @@ func (client *uciClient) available(operation string) error {
 	return nil
 }
 
+func requireUCITransportSession(ctx context.Context) (string, error) {
+	sessionID := auditcontext.UCITransportSession(ctx)
+	if !auditcontext.ValidUCITransportSession(sessionID) {
+		return "", &module.ModuleError{Code: "UCI_TRANSPORT_SESSION_REQUIRED", Message: "UCI transport session is unavailable"}
+	}
+	return sessionID, nil
+}
+
 func uciClientOutgoingContext(ctx context.Context) context.Context {
-	sessionID := auditcontext.SourceSession(ctx)
-	if sessionID == "" {
+	sessionID := auditcontext.UCITransportSession(ctx)
+	if !auditcontext.ValidUCITransportSession(sessionID) {
 		return ctx
 	}
-	return metadata.AppendToOutgoingContext(ctx, auditcontext.SourceSessionMetadataKey, sessionID)
+	outgoing, _ := metadata.FromOutgoingContext(ctx)
+	outgoing = outgoing.Copy()
+	outgoing.Set(auditcontext.SourceSessionMetadataKey, sessionID)
+	return metadata.NewOutgoingContext(ctx, outgoing)
 }
 
 func uciClientContextError(operation string, ctx context.Context) error {

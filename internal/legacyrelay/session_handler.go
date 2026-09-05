@@ -29,6 +29,9 @@ func (h *SessionTrackingHandler) HandleRequest(ctx context.Context, project muxc
 
 func (h *SessionTrackingHandler) HandleRequestWithSessionMeta(ctx context.Context, project muxcore.ProjectContext, meta muxcore.SessionMeta, request []byte) ([]byte, error) {
 	h.observe(project, meta)
+	if next, ok := h.next.(muxcore.SessionHandlerWithSessionMeta); ok {
+		return next.HandleRequestWithSessionMeta(ctx, project, meta, request)
+	}
 	return h.next.HandleRequest(ctx, project, request)
 }
 
@@ -40,6 +43,10 @@ func (h *SessionTrackingHandler) HandleNotification(ctx context.Context, project
 
 func (h *SessionTrackingHandler) HandleNotificationWithSessionMeta(ctx context.Context, project muxcore.ProjectContext, meta muxcore.SessionMeta, notification []byte) {
 	h.observe(project, meta)
+	if next, ok := h.next.(muxcore.NotificationHandlerWithSessionMeta); ok {
+		next.HandleNotificationWithSessionMeta(ctx, project, meta, notification)
+		return
+	}
 	h.HandleNotification(ctx, project, notification)
 }
 

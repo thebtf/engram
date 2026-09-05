@@ -213,51 +213,66 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 		return nil, &module.ModuleError{Code: "PROJECT_DESCRIPTOR_UNSUPPORTED", Message: "project identity resolution refused"}
 	}
 
+	var (
+		err       error
+		sessionID string
+	)
+	uciTool := isUCIProxyTool(name)
+	if uciTool {
+		sessionID, err = requireUCITransportSession(ctx)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Non-UCI tools retain their established V2/V3 source-session forwarding.
+		sessionID = m.envFor(p, config.EnvClaudeSessionID)
+	}
+
 	serverURL, err := m.requireServerURL(p)
 	if err != nil {
 		return nil, err
 	}
 	token := m.envFor(p, config.EnvWorkstationToken)
-	v3Identity, v3Enabled, err := m.v3Identity(p)
-	if err != nil {
-		return nil, err
-	}
-
 	conn, err := m.pool.getOrDialGRPC(serverURL, token)
 	if err != nil {
 		return nil, fmt.Errorf("gRPC connect: %w", err)
 	}
 	client := pb.NewEngramServiceClient(conn)
-
-	// Finding 2 (codex second review): propagate the Claude session ID so the
-	// server-side audit helpers record the correct SourceSessionID.  The value
-	// comes from p.Env (per-session override) with os.Getenv fallback via
-	// envFor, which mirrors the token-resolution pattern used on the same call
-	// path.  An empty string is safe — the server only sets the context value
-	// when SessionId is non-empty (grpcserver/server.go).
-	sessionID := m.envFor(p, config.EnvClaudeSessionID)
 	request := &pb.CallToolRequest{ToolName: name, ArgumentsJson: args, SessionId: sessionID}
-	if v3Enabled {
-		request.ProjectIdentityV3 = v3Identity
-		ctx = daemonComparisonContextV3(ctx)
+
+	var (
+		v3Identity *pb.ProjectIdentityV3
+		v3Enabled  bool
+	)
+	if uciTool {
+		ctx = uciClientOutgoingContext(ctx)
 	} else {
-		project := m.cache.Resolve(p)
-		projectIdentity, identityErr := m.cache.ResolveIdentity(p)
-		if identityErr != nil {
-			return nil, fmt.Errorf("project identity v2: %w", identityErr)
+		v3Identity, v3Enabled, err = m.v3Identity(p)
+		if err != nil {
+			return nil, err
 		}
-		request.Project = project
-		request.ProjectIdentity = projectIdentity
+		if v3Enabled {
+			request.ProjectIdentityV3 = v3Identity
+			ctx = daemonComparisonContextV3(ctx)
+		} else {
+			project := m.cache.Resolve(p)
+			projectIdentity, identityErr := m.cache.ResolveIdentity(p)
+			if identityErr != nil {
+				return nil, fmt.Errorf("project identity v2: %w", identityErr)
+			}
+			request.Project = project
+			request.ProjectIdentity = projectIdentity
+		}
 	}
 
 	resp, err := client.CallTool(ctx, request)
 	if err != nil {
-		if v3Enabled {
+		if !uciTool && v3Enabled {
 			return nil, v3ProxyError(err)
 		}
 		return nil, fmt.Errorf("gRPC CallTool: %w", err)
 	}
-	if v3Enabled {
+	if !uciTool && v3Enabled {
 		if err := validateV3Resolution(resp.GetProjectResolutionV3(), resp.GetCanonicalProject(), v3Identity); err != nil {
 			return nil, err
 		}
@@ -275,6 +290,15 @@ func (m *Module) ProxyHandleTool(ctx context.Context, p muxcore.ProjectContext, 
 		return nil, &module.ProxyIsError{RawContent: block}
 	}
 	return block, nil
+}
+
+func isUCIProxyTool(name string) bool {
+	switch name {
+	case "codebase_context", "codebase_index", "codebase_status", "codebase_search", "codebase_read", "codebase_graph":
+		return true
+	default:
+		return false
+	}
 }
 
 // v3Identity selects V3 only when wiring supplied an explicit client instance

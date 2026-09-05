@@ -11,9 +11,9 @@
 // # Architecture (daemon-side)
 //
 // The module owns an in-memory sync.Map of per-resolved-target indexState
-// values. A target is bound to one client session, immutable ContextRef, and
-// checkout incarnation. HandleTool resolves that target synchronously, then
-// codebase_index starts daemon-scoped background work and returns immediately.
+// values. A target is bound to one client transport and checkout incarnation.
+// HandleTool resolves that target synchronously, then codebase_index starts
+// daemon-scoped work and returns immediately.
 //
 // # codebase_status design decision
 //
@@ -23,8 +23,8 @@
 //
 // # Concurrency
 //
-// The short admission critical section is keyed by the full resolved target, so
-// distinct client sessions, contexts, or checkout incarnations index independently.
+// The short admission critical section is keyed by the client transport plus
+// server-authorized source, checkout incarnation, and profile.
 //
 // CLEAN-ROOM: no AGPL source referenced during implementation.
 package codeintel
@@ -44,7 +44,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/thebtf/engram/internal/auditcontext"
-	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/handlers/engramcore"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/uci"
@@ -69,21 +68,15 @@ const (
 // keeps run IDs small and avoids importing additional packages.
 var runCounter atomic.Int64
 
-// indexStateKey isolates state by exact client session and server-authorized
-// binding. Scope identifies the checkout incarnation; an optional Context
-// contributes only real View identity, never a synthetic View for no-View bindings.
+// indexStateKey isolates state by exact client transport and server-authorized
+// source, checkout incarnation, and profile. A publication from no View to a
+// real View preserves the same daemon liveness entry.
 type indexStateKey struct {
 	ClientSessionID    string
 	ScopeSourceID      string
 	ScopeCheckoutID    string
 	ScopeIncarnationID string
 	ProfileID          string
-
-	ContextPresent    bool
-	ContextHasSpaceID bool
-	ContextSpaceID    string
-	ContextViewID     string
-	ContextGeneration int64
 }
 
 // indexState holds one resolved target's index run state.
@@ -112,7 +105,7 @@ type (
 // CoreProvider is the typed engramcore contract consumed by codeintel.
 // *engramcore.UCIIndexAdapter satisfies this interface; tests may inject a fake.
 type CoreProvider interface {
-	ResolveIndexTarget(ctx context.Context, clientSessionID string, p muxcore.ProjectContext, contextHandle string) (ResolvedIndexTarget, error)
+	ResolveIndexTarget(ctx context.Context, p muxcore.ProjectContext, contextHandle string) (ResolvedIndexTarget, error)
 	IndexCodebase(ctx context.Context, target ResolvedIndexTarget, root string) (*IndexResult, error)
 	ProxyHandleTool(ctx context.Context, target ResolvedIndexTarget, name string, args json.RawMessage) (json.RawMessage, error)
 }
@@ -122,8 +115,8 @@ type engramCoreAdapter struct {
 	adapter *engramcore.UCIIndexAdapter
 }
 
-func (a *engramCoreAdapter) ResolveIndexTarget(ctx context.Context, clientSessionID string, p muxcore.ProjectContext, contextHandle string) (ResolvedIndexTarget, error) {
-	return a.adapter.ResolveIndexTarget(ctx, clientSessionID, p, contextHandle)
+func (a *engramCoreAdapter) ResolveIndexTarget(ctx context.Context, p muxcore.ProjectContext, contextHandle string) (ResolvedIndexTarget, error) {
+	return a.adapter.ResolveIndexTarget(ctx, p, contextHandle)
 }
 
 func (a *engramCoreAdapter) IndexCodebase(ctx context.Context, target ResolvedIndexTarget, root string) (*IndexResult, error) {
@@ -364,10 +357,10 @@ func requiredContextHandle(tool string, contextHandle *string) (string, error) {
 	return *contextHandle, nil
 }
 
-func clientSessionID(p muxcore.ProjectContext) (string, error) {
-	sessionID, found := p.Env[config.EnvClaudeSessionID]
-	if !found || !validCodeintelIdentity(sessionID, 256) {
-		return "", fmt.Errorf("codeintel: %s is required in the per-session environment", config.EnvClaudeSessionID)
+func clientSessionID(ctx context.Context) (string, error) {
+	sessionID := auditcontext.UCITransportSession(ctx)
+	if !auditcontext.ValidUCITransportSession(sessionID) {
+		return "", fmt.Errorf("codeintel: UCI transport session is required")
 	}
 	return sessionID, nil
 }
@@ -390,23 +383,13 @@ func requestedTargetMatches(target ResolvedIndexTarget, clientSessionID, context
 
 func indexKeyFor(target ResolvedIndexTarget) indexStateKey {
 	binding := target.BindingClone()
-	key := indexStateKey{
+	return indexStateKey{
 		ClientSessionID:    target.ClientSessionID,
 		ScopeSourceID:      binding.Scope.SourceID,
 		ScopeCheckoutID:    binding.Scope.CheckoutID,
 		ScopeIncarnationID: binding.Scope.IncarnationID,
 		ProfileID:          binding.ProfileID,
 	}
-	if context := target.ContextClone(); context != nil {
-		key.ContextPresent = true
-		key.ContextViewID = context.ViewID
-		key.ContextGeneration = context.Generation
-		if context.SpaceID != nil {
-			key.ContextHasSpaceID = true
-			key.ContextSpaceID = *context.SpaceID
-		}
-	}
-	return key
 }
 
 func indexResultMatchesBinding(result *IndexResult, binding uci.IndexBinding) bool {
@@ -445,14 +428,14 @@ func (m *Module) handleIndex(ctx context.Context, p muxcore.ProjectContext, args
 	if err != nil {
 		return nil, err
 	}
-	clientSessionID, err := clientSessionID(p)
+	clientSessionID, err := clientSessionID(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if m.core == nil {
 		return nil, fmt.Errorf("SOURCE_UNAVAILABLE: typed code index core is unavailable")
 	}
-	target, err := m.core.ResolveIndexTarget(ctx, clientSessionID, p, contextHandle)
+	target, err := m.core.ResolveIndexTarget(ctx, p, contextHandle)
 	if err != nil {
 		return nil, err
 	}
@@ -493,7 +476,7 @@ func (m *Module) handleIndex(ctx context.Context, p muxcore.ProjectContext, args
 	if daemonCtx == nil {
 		daemonCtx = context.Background()
 	}
-	daemonCtx = auditcontext.WithSourceSession(daemonCtx, target.ClientSessionID)
+	daemonCtx = auditcontext.WithUCITransportSession(daemonCtx, clientSessionID)
 	logger := m.deps.Logger
 	core := m.core
 	runID := newRunID
@@ -599,14 +582,14 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 	if err != nil {
 		return nil, err
 	}
-	clientSessionID, err := clientSessionID(p)
+	clientSessionID, err := clientSessionID(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if m.core == nil {
 		return nil, fmt.Errorf("SOURCE_UNAVAILABLE: typed code index core is unavailable")
 	}
-	target, err := m.core.ResolveIndexTarget(ctx, clientSessionID, p, contextHandle)
+	target, err := m.core.ResolveIndexTarget(ctx, p, contextHandle)
 	if err != nil {
 		return nil, err
 	}
@@ -622,6 +605,18 @@ func (m *Module) handleStatus(ctx context.Context, p muxcore.ProjectContext, arg
 		if state.Err != "" {
 			result["error"] = state.Err
 		}
+	}
+	if target.ContextClone() == nil {
+		if afterBarrier != nil {
+			return nil, fmt.Errorf("codebase_status: after_barrier requires a published View")
+		}
+		result["server_counts_available"] = false
+		result["current_context"] = nil
+		out, marshalErr := json.Marshal(result)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("codebase_status: marshal: %w", marshalErr)
+		}
+		return out, nil
 	}
 
 	statusArgs, err := json.Marshal(codebaseStatusProxyArgs{

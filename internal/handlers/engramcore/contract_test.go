@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/config"
 	loomhandler "github.com/thebtf/engram/internal/handlers/loom"
 	"github.com/thebtf/engram/internal/module"
@@ -683,6 +684,93 @@ func TestContract_ToolsCall_Success_MatchesV42(t *testing.T) {
 	}
 	if got.Result.Content[0].Text != "tool result text" {
 		t.Errorf("content.text: got %q, want %q", got.Result.Content[0].Text, "tool result text")
+	}
+}
+
+func TestProxyHandleToolUsesTransportTagForUCITools(t *testing.T) {
+	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
+	grpcAddr := startMockGRPC(t, srv)
+	_, mod, project := buildContractDispatcher(t, grpcAddr)
+	project.Env[config.EnvClaudeSessionID] = "host-session-must-not-be-used"
+	project.Cwd = "untrusted-cwd-must-not-be-inspected"
+	mod.cache.Forget(project.ID)
+	t.Setenv("PATH", t.TempDir())
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "transport-tag-a")
+
+	_, err := mod.ProxyHandleTool(ctx, project, "codebase_context", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("UCI proxy call: %v", err)
+	}
+	srv.mu.Lock()
+	request := srv.callReq
+	metadata := srv.callMetadata.Copy()
+	srv.mu.Unlock()
+	if request == nil || request.GetSessionId() != "transport-tag-a" {
+		t.Fatalf("UCI CallTool session ID = %#v, want transport tag", request)
+	}
+	if request.GetProject() != "" || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil {
+		t.Fatalf("UCI CallTool carried project-derived authority: %#v", request)
+	}
+	if got := metadata.Get(auditcontext.SourceSessionMetadataKey); len(got) != 1 || got[0] != "transport-tag-a" {
+		t.Fatalf("UCI CallTool source metadata = %v, want transport tag", got)
+	}
+
+	_, err = mod.ProxyHandleTool(context.Background(), project, "codebase_context", json.RawMessage(`{}`))
+	if err == nil {
+		t.Fatal("UCI proxy accepted a request without a transport tag")
+	}
+	srv.mu.Lock()
+	requestAfterMissingTag := srv.callReq
+	srv.mu.Unlock()
+	if requestAfterMissingTag != request {
+		t.Fatal("UCI proxy dispatched a request without a transport tag")
+	}
+}
+
+func TestProxyHandleToolSkipsProjectV3ForUCITools(t *testing.T) {
+	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
+	grpcAddr := startMockGRPC(t, srv)
+	_, mod, project := buildV3ContractDispatcher(t, grpcAddr)
+	project.ID = "project-authority-must-not-be-forwarded"
+	project.Cwd = "untrusted-cwd-must-not-be-inspected"
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "transport-tag-v3")
+
+	_, err := mod.ProxyHandleTool(ctx, project, "codebase_context", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("UCI V3 proxy call: %v", err)
+	}
+	srv.mu.Lock()
+	request := srv.callReq
+	registerRequest := srv.registerReq
+	srv.mu.Unlock()
+	if request == nil || request.GetSessionId() != "transport-tag-v3" {
+		t.Fatalf("UCI V3 CallTool session ID = %#v, want transport tag", request)
+	}
+	if request.GetProject() != "" || request.GetProjectIdentity() != nil || request.GetProjectIdentityV3() != nil || registerRequest != nil {
+		t.Fatalf("UCI V3 call reached project identity resolution: request=%#v registration=%#v", request, registerRequest)
+	}
+}
+
+func TestProxyHandleToolPreservesLegacySessionForNonUCITools(t *testing.T) {
+	srv := &mockEngramServer{callResp: &pb.CallToolResponse{ContentJson: []byte(`[]`)}}
+	grpcAddr := startMockGRPC(t, srv)
+	_, mod, project := buildContractDispatcher(t, grpcAddr)
+	project.Env[config.EnvClaudeSessionID] = "legacy-host-session"
+	ctx := auditcontext.WithUCITransportSession(context.Background(), "transport-tag-a")
+
+	_, err := mod.ProxyHandleTool(ctx, project, "memory_store", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("non-UCI proxy call: %v", err)
+	}
+	srv.mu.Lock()
+	request := srv.callReq
+	metadata := srv.callMetadata.Copy()
+	srv.mu.Unlock()
+	if request == nil || request.GetSessionId() != "legacy-host-session" {
+		t.Fatalf("non-UCI CallTool session ID = %#v, want legacy host session", request)
+	}
+	if got := metadata.Get(auditcontext.SourceSessionMetadataKey); len(got) != 0 {
+		t.Fatalf("non-UCI CallTool unexpectedly forwarded transport metadata %v", got)
 	}
 }
 

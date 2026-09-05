@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/module"
 	"github.com/thebtf/engram/internal/module/registry"
 	muxcore "github.com/thebtf/mcp-mux/muxcore"
@@ -248,6 +249,45 @@ func TestHandleRequest_ToolsCall_RoutesToCorrectModule(t *testing.T) {
 	}
 	if atomic.LoadInt32(&callsB) != 1 {
 		t.Errorf("m2 should have been called exactly once, got %d", callsB)
+	}
+}
+
+func TestHandleRequestWithSessionMetaCarriesOnlyAuthorizedTransportTag(t *testing.T) {
+	var observed string
+	d := buildDispatcher(t, &fakeMod{
+		name:  "capture",
+		tools: []module.ToolDef{{Name: "capture.tag"}},
+		handleFn: func(ctx context.Context, _ muxcore.ProjectContext, _ string, _ json.RawMessage) (json.RawMessage, error) {
+			observed = auditcontext.UCITransportSession(ctx)
+			return json.RawMessage(`"ok"`), nil
+		},
+	})
+	req := jsonrpcReq(8, "tools/call", map[string]any{"name": "capture.tag", "arguments": map[string]any{}})
+
+	resp, err := d.HandleRequestWithSessionMeta(context.Background(), projectCtx("p1"), muxcore.SessionMeta{
+		TenantID:     "transport-tag-a",
+		AuthorizedAt: time.Now(),
+	}, req)
+	if err != nil {
+		t.Fatalf("HandleRequestWithSessionMeta: %v", err)
+	}
+	if got := parseResp(t, resp); got.Error != nil {
+		t.Fatalf("unexpected JSON-RPC error: %+v", got.Error)
+	}
+	if observed != "transport-tag-a" {
+		t.Fatalf("observed transport tag = %q, want transport-tag-a", observed)
+	}
+
+	observed = "sentinel"
+	resp, err = d.HandleRequestWithSessionMeta(context.Background(), projectCtx("p1"), muxcore.SessionMeta{TenantID: "transport-tag-b"}, req)
+	if err != nil {
+		t.Fatalf("unauthorized HandleRequestWithSessionMeta: %v", err)
+	}
+	if got := parseResp(t, resp); got.Error != nil {
+		t.Fatalf("unauthorized request changed normal tool behavior: %+v", got.Error)
+	}
+	if observed != "" {
+		t.Fatalf("unauthorized transport tag reached tool as %q", observed)
 	}
 }
 
