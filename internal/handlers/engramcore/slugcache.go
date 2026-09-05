@@ -80,6 +80,16 @@ func (c *slugCache) Resolve(p muxcore.ProjectContext) string {
 	return id
 }
 
+// ResolveCompatibilityEvidence derives one non-authoritative legacy selector
+// without retaining it or substituting a project ID when derivation fails.
+func (c *slugCache) ResolveCompatibilityEvidence(p muxcore.ProjectContext) (string, error) {
+	slug, _, _, err := proxy.ResolveProjectSlug(p.Cwd)
+	if err != nil || slug == "" {
+		return "", errors.New("compatibility evidence unavailable")
+	}
+	return slug, nil
+}
+
 // ResolveIdentity returns stable v2 metadata for the given project and cwd.
 // The first successful resolution is reused until OnProjectRemoved calls
 // Forget, avoiding synchronous git subprocesses on every tool request.
