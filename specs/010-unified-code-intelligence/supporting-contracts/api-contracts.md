@@ -133,7 +133,7 @@ Only a verified callback from a host that declares this capability can append `s
 
 ## Ошибки
 
-Закрытые query codes: `CONTEXT_REQUIRED`, `CONTEXT_MISMATCH`, `VIEW_RETIRED`, `SOURCE_UNAVAILABLE`, `CHECKOUT_OFFLINE`, `INDEX_CATCHING_UP`, `PARSER_UNSUPPORTED`, `PARSER_PARTIAL`, `VECTOR_UNAVAILABLE`, `PROFILE_MISMATCH`, `BUDGET_EXCEEDED`, `LEASE_STALE`, `BUILD_INCOMPLETE`, `PERMISSION_DENIED`, `EXPOSURE_UNAVAILABLE`, `IDEMPOTENCY_MISMATCH`. The completion callback additionally returns only `COMPLETION_EVIDENCE_UNAVAILABLE` when its append cannot complete. `IDEMPOTENCY_MISMATCH` is non-disclosing and returns neither an existing evidence record nor result content.
+Закрытые query/index codes: `CONTEXT_REQUIRED`, `CONTEXT_MISMATCH`, `VIEW_RETIRED`, `SOURCE_UNAVAILABLE`, `CHECKOUT_OFFLINE`, `INDEX_CATCHING_UP`, `PARSER_UNSUPPORTED`, `PARSER_PARTIAL`, `VECTOR_UNAVAILABLE`, `PROFILE_MISMATCH`, `BUDGET_EXCEEDED`, `LEASE_STALE`, `BUILD_INCOMPLETE`, `INDEX_CAPACITY_EXCEEDED`, `PERMISSION_DENIED`, `EXPOSURE_UNAVAILABLE`, `IDEMPOTENCY_MISMATCH`. The completion callback additionally returns only `COMPLETION_EVIDENCE_UNAVAILABLE` when its append cannot complete. `IDEMPOTENCY_MISMATCH` is non-disclosing and returns no stale receipt.
 Permission failure не раскрывает факт существования чужого source/view. Data absence не смешивается с transport failure. Незнакомые поля/invalid enum/negative limits отклоняются до expensive work. Цифры больше установленных maxima не «улучшаются» silent clamp: документированная validation error.
 
 ## Внутренние интерфейсы
@@ -162,7 +162,7 @@ Parse products — untrusted computational input: server проверяет boun
 ## Приватный transport
 
 Существующий EngramService получает методы Bind/BeginIndex/StageIndex/FinalizeIndex/QueryCode/ExploreCode либо эквивалентные scoped additions. Точные protobuf номера выбираются по актуальному файлу; существующие field numbers не переиспользуются. Нет второго `.proto` service с дублированными identity/auth/receipt системами.
-Large data идут chunked/staged с caps; первый frame привязывает build/source/checkout/epoch, каждый следующий обязан совпадать. Финальный explicit manifest count+digest отделён от EOF. Cancellation/partial upload оставляют предыдущий published view неизменным.
+Large data идут в bounded complete-record frames под caps; первый frame привязывает build/source/checkout/epoch, каждый следующий обязан совпадать. UCI admission v1 не дробит один artifact или один replace-all edge record и не продолжает build несколькими Stage batches: не представимый целиком record/build получает `INDEX_CAPACITY_EXCEEDED` без публикации. Финальный explicit manifest count+digest отделён от EOF. Cancellation/partial upload оставляют предыдущий published view неизменным.
 Index publication metadata — обычное состояние derived index, не новый IEP immutable decision receipt для каждой правки файла. Provenance сохраняется достаточно для воспроизводимости; ceremony-ledger не нужен.
 
 ## REST и UI

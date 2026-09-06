@@ -154,7 +154,7 @@ Relation к удалённому symbol не сохраняется как curre
 
 Справедливость по checkout: interactive/current-source work выше idle history/enrichment. Default ограничить тяжёлые parse/embedding workers и их DB concurrency; не занимать весь существующий pool из10 connections. Один активный source с тысячами файлов не должен вытеснять другие сессии.
 Все разрешённые checkout обнаруживаются автоматически, но stale/offline/неиспользуемые worktrees не получают бесконечные watchers. Active bindings держат watch; idle retention/polling policy видима через status. Query к idle tree запускает catch-up, не выдаёт old state как fresh.
-Лимиты file bytes/chunks/symbols/edges, pending jobs и per-source disk quota обязательны. Limit reached сообщает partial coverage и путь/причину; не тихое усечение хвоста функции.
+Лимиты file bytes/chunks/symbols/edges, admission frames/build bytes, pending jobs и per-source disk quota обязательны. Неподдерживаемый язык или неполное извлечение остаются явным coverage outcome, но исчерпание transport/publication capacity возвращает закрытый `INDEX_CAPACITY_EXCEEDED` до Begin/finalize, не переклассифицирует файл как unsupported и не публикует уменьшенный View; предыдущий View и local dirty/rescan evidence сохраняются.
 
 ## Retention и удаление
 
