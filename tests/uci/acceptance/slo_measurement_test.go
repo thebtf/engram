@@ -829,7 +829,7 @@ func uciSLOCorpusCounts(fixture *uciRetrievalSliceFixture) (int, int, error) {
 	err := fixture.store.GetDB().WithContext(fixture.context).Raw(`
 		SELECT
 			COUNT(*) AS files,
-			COALESCE(SUM(cardinality(regexp_split_to_array(convert_from(blob.safe_content, blob.encoding), chr(10))), 0) AS lines
+			COALESCE(SUM(cardinality(regexp_split_to_array(convert_from(blob.safe_content, blob.encoding), chr(10)))), 0) AS lines
 		FROM ci_memberships AS membership
 		JOIN ci_parse_artifacts AS artifact
 			ON artifact.source_id = membership.source_id
