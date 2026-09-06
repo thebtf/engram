@@ -302,6 +302,9 @@ func TestParserManifestProvenance(t *testing.T) {
 	manifestPath := filepath.Join(repoRoot, "tools", "uci-parser", "manifest.json")
 	manifestBytes := readParserFile(t, manifestPath)
 	manifest := parseParserManifest(t, manifestBytes)
+	if got, want := bundleDigest(), ucidomain.TreeSitterBundleDigest(); got != want {
+		t.Fatalf("parser bundle digest = %q, shared parent digest %q", got, want)
+	}
 
 	assertManifestIdentity(t, manifest)
 	assertNoFloatingProvenance(t, manifestBytes, manifest.Dependencies)
@@ -590,8 +593,8 @@ func inspectParserSource(t *testing.T, repoRoot string) parserSourceContract {
 	imports := parserImportPaths(t, parserFile)
 	languages := uciLanguageConstants(t, filepath.Join(repoRoot, "internal", "uci", "treesitter_worker.go"))
 	grammarFunction := sourceFunction(t, parserFile, "parserLanguage")
-	bundleFunction := sourceFunction(t, parserFile, "bundleDigest")
-
+	workerFile := parseGoSource(t, filepath.Join(repoRoot, "internal", "uci", "treesitter_worker.go"))
+	bundleFunction := sourceFunction(t, workerFile, "TreeSitterBundleDigest")
 	return parserSourceContract{
 		ImportPaths:    imports,
 		Grammars:       parserGrammarBindings(t, grammarFunction, imports, languages),
@@ -838,12 +841,25 @@ func bundleStaticInput(t *testing.T, expression ast.Expr) (string, bool) {
 			t.Fatalf("unquote bundle static input %q: %v", expression.Value, err)
 		}
 		return input, true
+	case *ast.Ident:
+		switch expression.Name {
+		case "TreeSitterBundleSchemaRevision":
+			return ucidomain.TreeSitterBundleSchemaRevision, true
+		case "TreeSitterWorkerProtocolVersion":
+			return ucidomain.TreeSitterWorkerProtocolVersion, true
+		case "TreeSitterFactsExtractionContractRevision":
+			return ucidomain.TreeSitterFactsExtractionContractRevision, true
+		default:
+			return "", false
+		}
 	case *ast.SelectorExpr:
 		selector, found := qualifiedSelector(expression)
 		if !found {
 			return "", false
 		}
 		switch selector {
+		case "uci.TreeSitterBundleSchemaRevision":
+			return ucidomain.TreeSitterBundleSchemaRevision, true
 		case "uci.TreeSitterWorkerProtocolVersion":
 			return ucidomain.TreeSitterWorkerProtocolVersion, true
 		case "uci.TreeSitterFactsExtractionContractRevision":

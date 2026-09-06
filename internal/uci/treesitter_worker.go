@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +27,7 @@ const (
 	// TreeSitterWorkerProtocolVersion is the single framed child-process protocol.
 	TreeSitterWorkerProtocolVersion           = "uci-tree-sitter/v2"
 	TreeSitterFactsExtractionContractRevision = "uci-tree-sitter-facts/v2"
+	TreeSitterBundleSchemaRevision            = "uci-tree-sitter-bundle/v2"
 	treeSitterWorkerMaxIdentifierBytes        = 4 << 10
 	treeSitterWorkerHardMaxInputBytes         = 4 << 20
 	treeSitterWorkerHardMaxOutputBytes        = 16 << 20
@@ -35,6 +39,33 @@ const (
 	treeSitterWorkerMaxDiagnostics            = 16
 	treeSitterWorkerMaxDiagnosticBytes        = 512
 )
+
+// TreeSitterBundleDigest returns the exact parser bundle identity shared by
+// the parent worker, installed harness, and parser executable for this build.
+func TreeSitterBundleDigest() IndexDigest {
+	parts := []string{
+		TreeSitterBundleSchemaRevision,
+		TreeSitterWorkerProtocolVersion,
+		TreeSitterFactsExtractionContractRevision,
+		"github.com/tree-sitter/go-tree-sitter@v0.25.0",
+		"github.com/tree-sitter/tree-sitter-javascript@v0.25.0",
+		"github.com/tree-sitter/tree-sitter-typescript@v0.23.2",
+		"go=" + runtime.Version(),
+		"target=" + runtime.GOOS + "/" + runtime.GOARCH,
+	}
+	if build, ok := debug.ReadBuildInfo(); ok && build.GoVersion != "" {
+		parts = append(parts, "build-go="+build.GoVersion)
+	}
+	sort.Strings(parts)
+	state := sha256.New()
+	for _, part := range parts {
+		var length [4]byte
+		binary.BigEndian.PutUint32(length[:], uint32(len(part)))
+		_, _ = state.Write(length[:])
+		_, _ = state.Write([]byte(part))
+	}
+	return IndexDigest("sha256:" + hex.EncodeToString(state.Sum(nil)))
+}
 
 var (
 	// ErrTreeSitterBundleMismatch reports a child whose compiled parser bundle

@@ -4,15 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"runtime"
-	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -272,28 +269,7 @@ func parserLanguage(language uci.TreeSitterLanguage) (*tree_sitter.Language, boo
 }
 
 func bundleDigest() uci.IndexDigest {
-	parts := []string{
-		"uci-tree-sitter-bundle/v2",
-		uci.TreeSitterWorkerProtocolVersion,
-		uci.TreeSitterFactsExtractionContractRevision,
-		"github.com/tree-sitter/go-tree-sitter@v0.25.0",
-		"github.com/tree-sitter/tree-sitter-javascript@v0.25.0",
-		"github.com/tree-sitter/tree-sitter-typescript@v0.23.2",
-		"go=" + runtime.Version(),
-		"target=" + runtime.GOOS + "/" + runtime.GOARCH,
-	}
-	if build, ok := debug.ReadBuildInfo(); ok && build.GoVersion != "" {
-		parts = append(parts, "build-go="+build.GoVersion)
-	}
-	sort.Strings(parts)
-	state := sha256.New()
-	for _, part := range parts {
-		var length [4]byte
-		binary.BigEndian.PutUint32(length[:], uint32(len(part)))
-		_, _ = state.Write(length[:])
-		_, _ = state.Write([]byte(part))
-	}
-	return uci.IndexDigest("sha256:" + hex.EncodeToString(state.Sum(nil)))
+	return uci.TreeSitterBundleDigest()
 }
 
 type parserScope struct {
