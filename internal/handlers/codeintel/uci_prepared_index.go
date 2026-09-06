@@ -878,7 +878,21 @@ func (collaborator *UCIPreparedIndexCollaborator) IndexPreparedCodebase(ctx cont
 		return nil, fmt.Errorf("uci prepared index: server returned an invalid stage acknowledgement")
 	}
 
-	coverageJSON, err := json.Marshal(plan.coverage)
+	coverageJSON, err := json.Marshal(struct {
+		Structural           uci.IndexCoverageState `json:"structural"`
+		Lexical              uci.IndexCoverageState `json:"lexical"`
+		Vector               uci.IndexCoverageState `json:"vector"`
+		ExcludedFiles        uint64                 `json:"excluded_files"`
+		UnreadableFiles      uint64                 `json:"unreadable_files"`
+		UnresolvedReferences uint64                 `json:"unresolved_references"`
+	}{
+		Structural:           plan.coverage.Structural,
+		Lexical:              plan.coverage.Lexical,
+		Vector:               plan.coverage.Vector,
+		ExcludedFiles:        plan.coverage.ExcludedFiles,
+		UnreadableFiles:      plan.coverage.UnreadableFiles,
+		UnresolvedReferences: plan.coverage.UnresolvedReferences,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("uci prepared index: encode coverage: %w", err)
 	}

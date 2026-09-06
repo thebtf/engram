@@ -907,10 +907,24 @@ func preparedRequireResolvedCall(t *testing.T, part uci.IndexPart, sourcePath st
 
 func preparedCoverage(t *testing.T, request *pb.FinalizeCodeIndexRequest) uci.IndexCoverage {
 	t.Helper()
-	var coverage uci.IndexCoverage
 	require.NotNil(t, request)
-	require.NoError(t, json.Unmarshal(request.GetCoverageJson(), &coverage))
-	return coverage
+	var wire struct {
+		Structural           uci.IndexCoverageState `json:"structural"`
+		Lexical              uci.IndexCoverageState `json:"lexical"`
+		Vector               uci.IndexCoverageState `json:"vector"`
+		ExcludedFiles        uint64                 `json:"excluded_files"`
+		UnreadableFiles      uint64                 `json:"unreadable_files"`
+		UnresolvedReferences uint64                 `json:"unresolved_references"`
+	}
+	require.NoError(t, json.Unmarshal(request.GetCoverageJson(), &wire))
+	return uci.IndexCoverage{
+		Structural:           wire.Structural,
+		Lexical:              wire.Lexical,
+		Vector:               wire.Vector,
+		ExcludedFiles:        wire.ExcludedFiles,
+		UnreadableFiles:      wire.UnreadableFiles,
+		UnresolvedReferences: wire.UnresolvedReferences,
+	}
 }
 
 func preparedRequireOptionalString(t *testing.T, got, want *string, field string) {
