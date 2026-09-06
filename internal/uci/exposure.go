@@ -107,16 +107,17 @@ const (
 )
 
 // ExposureInput contains only the metadata needed to derive one non-content
-// receipt. ClientKeycard, ClientSession, and RequestID are used only to derive
-// opaque hashes and are never included in ExposureRecord.
+// receipt. ClientKeycard, ClientSession, RequestID, and RequestBindingDigest are
+// used only to derive opaque hashes and are never included in ExposureRecord.
 type ExposureInput struct {
-	AuthRealm     string
-	ClientKeycard string
-	ClientSession string
-	RequestID     string
-	Operation     ExposureOperation
-	Response      QueryResponse
-	RecordedAt    time.Time
+	AuthRealm            string
+	ClientKeycard        string
+	ClientSession        string
+	RequestID            string
+	RequestBindingDigest string
+	Operation            ExposureOperation
+	Response             QueryResponse
+	RecordedAt           time.Time
 }
 
 // ExposureRecord is the complete durable, non-content representation of one
@@ -413,7 +414,13 @@ func deriveExposureRecord(authorized AuthorizedContext, input ExposureInput) (Ex
 	if err != nil {
 		return ExposureRecord{}, err
 	}
-	requestRef, err := opaqueExposureHash("request", input.RequestID)
+	requestRef, err := opaqueExposureHash("request", struct {
+		RequestID     string `json:"request_id"`
+		BindingDigest string `json:"binding_digest"`
+	}{
+		RequestID:     input.RequestID,
+		BindingDigest: input.RequestBindingDigest,
+	})
 	if err != nil {
 		return ExposureRecord{}, err
 	}
@@ -555,6 +562,9 @@ func validateExposureInput(input ExposureInput) error {
 		if !validExposureText(field.value) {
 			return fmt.Errorf("uci exposure: invalid %s", field.name)
 		}
+	}
+	if !validExposureDigest(input.RequestBindingDigest) {
+		return errors.New("uci exposure: invalid request binding digest")
 	}
 	if !input.Operation.valid() {
 		return fmt.Errorf("uci exposure: unsupported operation %q", input.Operation)

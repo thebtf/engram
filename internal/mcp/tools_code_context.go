@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -708,25 +710,41 @@ func authorizeCodebaseExplicitSelector(ctx context.Context, application Codebase
 	return authorized, binding, ""
 }
 
-type uciRequestIDContextKey struct{}
+type uciRequestIdentityContextKey struct{}
 
-func contextWithUCIRequestID(ctx context.Context, requestID any) context.Context {
+type uciRequestIdentity struct {
+	requestID     string
+	bindingDigest string
+}
+
+func contextWithUCIRequestIdentity(ctx context.Context, requestID any, tool string, arguments json.RawMessage) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	encoded, err := json.Marshal(requestID)
+	encodedID, err := json.Marshal(requestID)
 	if err != nil {
-		return context.WithValue(ctx, uciRequestIDContextKey{}, "")
+		return context.WithValue(ctx, uciRequestIdentityContextKey{}, uciRequestIdentity{})
 	}
-	return context.WithValue(ctx, uciRequestIDContextKey{}, string(encoded))
+	encodedBinding, err := json.Marshal(struct {
+		Tool      string          `json:"tool"`
+		Arguments json.RawMessage `json:"arguments"`
+	}{Tool: tool, Arguments: arguments})
+	if err != nil {
+		return context.WithValue(ctx, uciRequestIdentityContextKey{}, uciRequestIdentity{})
+	}
+	digest := sha256.Sum256(encodedBinding)
+	return context.WithValue(ctx, uciRequestIdentityContextKey{}, uciRequestIdentity{
+		requestID:     string(encodedID),
+		bindingDigest: "sha256:" + hex.EncodeToString(digest[:]),
+	})
 }
 
-func uciRequestIDFromContext(ctx context.Context) (string, bool) {
+func uciRequestIdentityFromContext(ctx context.Context) (uciRequestIdentity, bool) {
 	if ctx == nil {
-		return "", false
+		return uciRequestIdentity{}, false
 	}
-	requestID, ok := ctx.Value(uciRequestIDContextKey{}).(string)
-	return requestID, ok && codebaseContextIdentityText(requestID)
+	identity, ok := ctx.Value(uciRequestIdentityContextKey{}).(uciRequestIdentity)
+	return identity, ok && codebaseContextIdentityText(identity.requestID) && codebaseContextIdentityText(identity.bindingDigest)
 }
 
 func codebaseExposureInput(ctx context.Context, operation uci.ExposureOperation, response uci.QueryResponse) (uci.ExposureInput, error) {
@@ -738,17 +756,18 @@ func codebaseExposureInput(ctx context.Context, operation uci.ExposureOperation,
 	if !ok || !codebaseContextIdentityText(identity.WorkstationID()) {
 		return uci.ExposureInput{}, errors.New("invalid exposure caller")
 	}
-	requestID, ok := uciRequestIDFromContext(ctx)
+	request, ok := uciRequestIdentityFromContext(ctx)
 	if !ok {
 		return uci.ExposureInput{}, errors.New("missing request identity")
 	}
 	return uci.ExposureInput{
-		AuthRealm:     caller.AuthRealm,
-		ClientKeycard: identity.WorkstationID(),
-		ClientSession: caller.ClientSessionID,
-		RequestID:     requestID,
-		Operation:     operation,
-		Response:      response,
+		AuthRealm:            caller.AuthRealm,
+		ClientKeycard:        identity.WorkstationID(),
+		ClientSession:        caller.ClientSessionID,
+		RequestID:            request.requestID,
+		RequestBindingDigest: request.bindingDigest,
+		Operation:            operation,
+		Response:             response,
 	}, nil
 }
 

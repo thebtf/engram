@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/thebtf/engram/internal/uci"
 )
 
@@ -81,6 +83,25 @@ func TestUCIExposureSearchAppendsOneOpaqueReceiptAndExactRetryReusesIt(t *testin
 	}
 	if got := fixture.exposureStore.exposureCount(); got != 1 {
 		t.Fatalf("durable exposure rows = %d, want 1", got)
+	}
+
+	mismatchedArguments := uciCodeIntelCompatibilitySearchArguments(handle, uciCodeIntelCompatibilityProject, 10)
+	mismatchedArguments["query"] = "changed request body under the same JSON-RPC id"
+	mismatch := callUCICodeIntel(t, fixture.server, fixture.clientA, "codebase_search", mismatchedArguments)
+	mismatchText := uciCodeIntelToolText(t, mismatch)
+	var mismatchPayload uci.QueryResponse
+	require.NoError(t, json.Unmarshal([]byte(mismatchText), &mismatchPayload))
+	require.NoError(t, mismatchPayload.Validate())
+	require.Equal(t, uci.QueryStatusUnavailable, mismatchPayload.Status)
+	require.NotNil(t, mismatchPayload.Error)
+	require.Equal(t, uci.QueryErrorIdempotencyMismatch, mismatchPayload.Error.Code)
+	require.Nil(t, mismatchPayload.Contexts)
+	require.Nil(t, mismatchPayload.Exposure)
+	require.Nil(t, mismatchPayload.Items)
+	require.Nil(t, mismatchPayload.Graph)
+	requireUCICodeIntelNoLeaks(t, mismatchText, fixture)
+	if got := fixture.exposureStore.exposureCount(); got != 1 {
+		t.Fatalf("durable exposure rows after changed same-ID request = %d, want 1", got)
 	}
 
 	fixture.exposureStore.mu.Lock()

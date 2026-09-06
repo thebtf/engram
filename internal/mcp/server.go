@@ -1269,7 +1269,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req *Request) *Response {
 		}
 	}
 
-	result, err := s.callTool(contextWithUCIRequestID(ctx, req.ID), params.Name, params.Arguments)
+	result, err := s.callTool(contextWithUCIRequestIdentity(ctx, req.ID, params.Name, params.Arguments), params.Name, params.Arguments)
 	if err != nil {
 		event := log.Error().Err(err).Str("tool", params.Name)
 		if identity, ok := auth.IdentityFrom(ctx); ok {

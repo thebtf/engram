@@ -45,13 +45,14 @@ func TestExposureRecorderDerivesOpaqueIdentityAndExactRetries(t *testing.T) {
 	contextRef := exposureTestContextRef()
 	authorized := newAuthorizedContext(contextRef)
 	input := ExposureInput{
-		AuthRealm:     "client",
-		ClientKeycard: "keycard-1",
-		ClientSession: "session-1",
-		RequestID:     "\"request-1\"",
-		Operation:     ExposureOperationCodeSearch,
-		Response:      exposureTestResponse(QueryStatusOK),
-		RecordedAt:    time.Unix(1, 0).UTC(),
+		AuthRealm:            "client",
+		ClientKeycard:        "keycard-1",
+		ClientSession:        "session-1",
+		RequestID:            "\"request-1\"",
+		RequestBindingDigest: "sha256:" + strings.Repeat("a", 64),
+		Operation:            ExposureOperationCodeSearch,
+		Response:             exposureTestResponse(QueryStatusOK),
+		RecordedAt:           time.Unix(1, 0).UTC(),
 	}
 
 	first, err := recorder.Record(context.Background(), authorized, input)
@@ -80,7 +81,7 @@ func TestExposureRecorderDerivesOpaqueIdentityAndExactRetries(t *testing.T) {
 	}
 
 	mismatched := input
-	mismatched.Response = exposureTestResponse(QueryStatusPartial)
+	mismatched.RequestBindingDigest = "sha256:" + strings.Repeat("b", 64)
 	if _, err := recorder.Record(context.Background(), authorized, mismatched); !errors.Is(err, ErrIdempotencyMismatch) {
 		t.Fatalf("Record() changed binding error = %v, want %v", err, ErrIdempotencyMismatch)
 	}
@@ -92,12 +93,13 @@ func TestExposureRecorderDerivesOpaqueIdentityAndExactRetries(t *testing.T) {
 func TestExposureRecorderMapsInitialAndCompletionFailures(t *testing.T) {
 	contextRef := exposureTestContextRef()
 	input := ExposureInput{
-		AuthRealm:     "client",
-		ClientKeycard: "keycard-2",
-		ClientSession: "session-2",
-		RequestID:     "2",
-		Operation:     ExposureOperationVersionedRead,
-		Response:      exposureTestResponse(QueryStatusOK),
+		AuthRealm:            "client",
+		ClientKeycard:        "keycard-2",
+		ClientSession:        "session-2",
+		RequestID:            "2",
+		RequestBindingDigest: "sha256:" + strings.Repeat("c", 64),
+		Operation:            ExposureOperationVersionedRead,
+		Response:             exposureTestResponse(QueryStatusOK),
 	}
 
 	initialStore := &exposureStoreFake{exposureErr: errors.New("append failed")}
