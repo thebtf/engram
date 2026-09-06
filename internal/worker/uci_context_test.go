@@ -13,6 +13,7 @@ import (
 	"github.com/thebtf/engram/internal/auditcontext"
 	"github.com/thebtf/engram/internal/auth"
 	gormstore "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/grpcserver"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
@@ -27,7 +28,7 @@ func TestComposeUCIContextDisabledKeepsMCPToolsDark(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	mcpServer := mcp.NewServer(mcp.ServerOptions{Version: "uci-context-disabled"})
 
-	composition, err := composeUCIContext(false, nil, mcpServer)
+	composition, err := composeUCIContext(false, nil, mcpServer, workerUCISemanticConfig())
 
 	require.NoError(t, err)
 	require.Nil(t, composition)
@@ -40,7 +41,7 @@ func TestComposeUCIContextEnabledRejectsMissingDependencies(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	mcpServer := mcp.NewServer(mcp.ServerOptions{Version: "uci-context-missing-dependency"})
 
-	composition, err := composeUCIContext(true, nil, mcpServer)
+	composition, err := composeUCIContext(true, nil, mcpServer, workerUCISemanticConfig())
 
 	require.Nil(t, composition)
 	require.ErrorContains(t, err, "requires a database")
@@ -53,10 +54,11 @@ func TestComposeUCIContextEnabledInstallsCompositeViewCapabilities(t *testing.T)
 
 	// This exercises constructor composition only; no store operation runs against
 	// the zero-value DB in this test.
-	composition, err := composeUCIContext(true, &gormlib.DB{}, mcpServer)
+	composition, err := composeUCIContext(true, &gormlib.DB{}, mcpServer, workerUCISemanticConfig())
 
 	require.NoError(t, err)
 	require.NotNil(t, composition)
+	require.NotNil(t, composition.application.semanticService)
 	for _, name := range []string{"codebase_context", "codebase_search", "codebase_read", "codebase_graph"} {
 		require.Truef(t, workerUCIHasMCPTool(mcpServer, name), "composite composition did not advertise %q", name)
 	}
@@ -73,7 +75,7 @@ func TestComposeUCIContextSharesMCPCheckoutHandleWithPrivateGRPC(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
 	store := openWorkerUCIContextCompositionStore(t)
 	mcpServer := mcp.NewServer(mcp.ServerOptions{Version: "uci-context-integration"})
-	composition, err := composeUCIContext(true, store.GetDB(), mcpServer)
+	composition, err := composeUCIContext(true, store.GetDB(), mcpServer, workerUCISemanticConfig())
 	require.NoError(t, err)
 
 	token := strings.ReplaceAll(uuid.NewString(), "-", "")
@@ -130,6 +132,65 @@ func TestComposeUCIContextSharesMCPCheckoutHandleWithPrivateGRPC(t *testing.T) {
 	require.Equal(t, workstationID, bound.GetWorkstationId())
 }
 
+func TestUCISemanticProfileUsesOpaqueCacheIdentity(t *testing.T) {
+	ctx := context.Background()
+	const (
+		endpointA = "https://vectors-a.example.test/v1"
+		endpointB = "https://vectors-b.example.test/v1"
+		modelA    = "settings-model-a"
+		modelB    = "settings-model-b"
+		apiKey    = "uci-profile-api-key-secret"
+	)
+	t.Setenv("ENGRAM_EMBEDDING_URL", "")
+	t.Setenv("ENGRAM_EMBEDDING_MODEL", "")
+	t.Setenv("ENGRAM_EMBEDDING_API_KEY", apiKey)
+
+	disabled := newUCISemanticProfile(ctx, nil, nil, uciSemanticPreprocessingRevision)
+	require.Equal(t, uciSemanticProviderUnavailableRef, disabled.ProviderRef)
+	require.Equal(t, uciSemanticDefaultEmbeddingModel, disabled.Model)
+	require.Equal(t, embedding.EmbeddingDim, disabled.Dimension)
+	require.Equal(t, uciSemanticPreprocessingRevision, disabled.PreprocessingRevision)
+	require.True(t, disabled.IncludeRelativePath)
+
+	settings := workerUCIEmbeddingSettings{
+		embedding.SettingKeyEmbedURL:   endpointA,
+		embedding.SettingKeyEmbedModel: modelA,
+	}
+	profile := newUCISemanticProfile(ctx, settings, nil, uciSemanticPreprocessingRevision)
+	require.Equal(t, modelA, profile.Model)
+	require.Equal(t, embedding.EmbeddingDim, profile.Dimension)
+	require.Equal(t, uciSemanticPreprocessingRevision, profile.PreprocessingRevision)
+	require.True(t, profile.IncludeRelativePath)
+	encoded, err := json.Marshal(profile)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), endpointA)
+	require.NotContains(t, string(encoded), apiKey)
+
+	endpointChanged := newUCISemanticProfile(ctx, workerUCIEmbeddingSettings{
+		embedding.SettingKeyEmbedURL:   endpointB,
+		embedding.SettingKeyEmbedModel: modelA,
+	}, nil, uciSemanticPreprocessingRevision)
+	modelChanged := newUCISemanticProfile(ctx, workerUCIEmbeddingSettings{
+		embedding.SettingKeyEmbedURL:   endpointA,
+		embedding.SettingKeyEmbedModel: modelB,
+	}, nil, uciSemanticPreprocessingRevision)
+	preprocessingChanged := newUCISemanticProfile(ctx, settings, nil, "uci-semantic-preprocess/identity-v2")
+	require.NotEqual(t, profile, endpointChanged)
+	require.NotEqual(t, profile, modelChanged)
+	require.NotEqual(t, profile, preprocessingChanged)
+
+	t.Setenv("ENGRAM_EMBEDDING_URL", endpointB)
+	t.Setenv("ENGRAM_EMBEDDING_MODEL", modelB)
+	envProfile := newUCISemanticProfile(ctx, settings, nil, uciSemanticPreprocessingRevision)
+	require.Equal(t, modelB, envProfile.Model)
+	require.NotEqual(t, profile.ProviderRef, envProfile.ProviderRef)
+
+	sharedClient, err := embedding.NewClientWithSettings(ctx, settings)
+	require.NoError(t, err)
+	clientProfile := newUCISemanticProfile(ctx, settings, sharedClient, uciSemanticPreprocessingRevision)
+	require.Equal(t, sharedClient.Model(), clientProfile.Model)
+}
+
 func workerUCIHasMCPTool(server *mcp.Server, name string) bool {
 	for _, tool := range server.ListTools() {
 		if tool.Name == name {
@@ -179,6 +240,17 @@ func workerUCISelectCheckout(t *testing.T, server *mcp.Server, ctx context.Conte
 
 func workerUCIContextDigest(character string) string {
 	return "sha256:" + strings.Repeat(character, 64)
+}
+
+func workerUCISemanticConfig() uciSemanticConfig {
+	return newUCISemanticConfig(context.Background(), nil, nil, nil)
+}
+
+type workerUCIEmbeddingSettings map[string]string
+
+func (settings workerUCIEmbeddingSettings) Get(_ context.Context, key string) (string, bool) {
+	value, ok := settings[key]
+	return value, ok
 }
 
 func openWorkerUCIContextCompositionStore(t *testing.T) *gormstore.Store {

@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thebtf/engram/internal/auth"
 	gormstore "github.com/thebtf/engram/internal/db/gorm"
+	"github.com/thebtf/engram/internal/embedding"
 	"github.com/thebtf/engram/internal/mcp"
 	"github.com/thebtf/engram/internal/uci"
 	gormlib "gorm.io/gorm"
@@ -21,9 +25,11 @@ import (
 
 func TestUCIApplicationMCPUsesExactPostgreSQLViews(t *testing.T) {
 	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	t.Setenv("ENGRAM_EMBEDDING_URL", "")
+	t.Setenv("ENGRAM_EMBEDDING_MODEL", "")
 	store := openWorkerUCIContextCompositionStore(t)
 	server := mcp.NewServer(mcp.ServerOptions{Version: "uci-application-postgres"})
-	composition, err := composeUCIContext(true, store.GetDB(), server)
+	composition, err := composeUCIContext(true, store.GetDB(), server, workerUCISemanticConfig())
 	require.NoError(t, err)
 
 	fixture := newWorkerUCIApplicationFixture(t, composition)
@@ -62,6 +68,9 @@ func TestUCIApplicationMCPUsesExactPostgreSQLViews(t *testing.T) {
 	})
 	searchResponse := workerUCIApplicationQueryResponse(t, search)
 	require.NoError(t, searchResponse.Validate())
+	require.NotNil(t, searchResponse.Retrieval)
+	require.Equal(t, uci.QueryRetrievalLexical, searchResponse.Retrieval.Mode)
+	require.Contains(t, searchResponse.Retrieval.DegradationReasons, "vector_provider_unavailable")
 	require.NotNil(t, searchResponse.Contexts, "search response: %s", workerUCIApplicationToolText(t, search))
 	require.Equal(t, fixture.current.Context.ViewID, (*searchResponse.Contexts)[0].ViewID)
 	require.NotNil(t, searchResponse.Exposure, "MCP must append evidence before releasing a code search")
@@ -187,6 +196,79 @@ func TestUCIApplicationMCPUsesExactPostgreSQLViews(t *testing.T) {
 	require.Nil(t, suppressedResponse.Contexts)
 	require.Nil(t, suppressedResponse.Exposure)
 	require.Equal(t, beforeFailure, workerUCIApplicationExposureCount(t, store.GetDB()))
+}
+
+func TestUCIApplicationUsesConfiguredSharedEmbeddingClient(t *testing.T) {
+	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
+	const model = "worker-uci-shared-embedding"
+	var providerCalls atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/embeddings" {
+			t.Errorf("embedding request = %s %s, want POST /v1/embeddings", request.Method, request.URL.Path)
+			http.Error(writer, "unexpected embedding request", http.StatusBadRequest)
+			return
+		}
+		var payload struct {
+			Model      string   `json:"model"`
+			Dimensions int      `json:"dimensions"`
+			Input      []string `json:"input"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Errorf("decode embedding request: %v", err)
+			http.Error(writer, "invalid embedding request", http.StatusBadRequest)
+			return
+		}
+		if payload.Model != model || payload.Dimensions != embedding.EmbeddingDim || len(payload.Input) != 1 {
+			t.Errorf("embedding request payload = %#v", payload)
+			http.Error(writer, "unexpected embedding payload", http.StatusBadRequest)
+			return
+		}
+		providerCalls.Add(1)
+		vector := make([]float32, embedding.EmbeddingDim)
+		vector[0] = 1
+		writer.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(writer).Encode(map[string]any{
+			"data": []map[string]any{{
+				"embedding": vector,
+				"index":     0,
+			}},
+		}); err != nil {
+			t.Errorf("encode embedding response: %v", err)
+		}
+	}))
+	t.Cleanup(provider.Close)
+	t.Setenv("ENGRAM_EMBEDDING_URL", provider.URL)
+	t.Setenv("ENGRAM_EMBEDDING_MODEL", model)
+
+	sharedClient, err := embedding.NewClientWithSettings(context.Background(), nil)
+	require.NoError(t, err)
+	semantic := newUCISemanticConfig(context.Background(), nil, sharedClient, sharedClient)
+
+	store := openWorkerUCIContextCompositionStore(t)
+	server := mcp.NewServer(mcp.ServerOptions{Version: "uci-application-shared-embedding"})
+	composition, err := composeUCIContext(true, store.GetDB(), server, semantic)
+	require.NoError(t, err)
+	require.NotNil(t, composition.application.semanticService)
+
+	fixture := newWorkerUCIApplicationFixture(t, composition)
+	identity := auth.ClientWithPrincipal("read-write", fixture.workstationID, fixture.principal, auth.PrincipalKindAgent)
+	caller := auth.WithIdentity(mcp.ContextWithSession(context.Background(), fixture.clientSessionID), identity)
+	handle := workerUCISelectCheckout(t, server, caller, fixture.source.SourceID, fixture.checkout, fixture.profile.ProfileID)
+	search := workerUCIApplicationToolResponse(t, server, caller, "codebase_search", map[string]any{
+		"context_handle": handle,
+		"query":          "SearchNeedle",
+		"path_prefix":    "internal/",
+		"limit":          10,
+	})
+	response := workerUCIApplicationQueryResponse(t, search)
+	require.NoError(t, response.Validate())
+	require.NotNil(t, response.Retrieval)
+	require.Equal(t, uci.QueryRetrievalLexical, response.Retrieval.Mode)
+	require.Contains(t, response.Retrieval.DegradationReasons, "vector_coverage_incomplete")
+	require.NotContains(t, response.Retrieval.DegradationReasons, "vector_provider_unavailable")
+	require.NotNil(t, response.Items)
+	require.NotEmpty(t, *response.Items)
+	require.Equal(t, int32(1), providerCalls.Load())
 }
 
 func TestUCIApplicationGraphResponseKeepsNonconclusiveOutcomesExplicit(t *testing.T) {

@@ -1082,13 +1082,7 @@ func (s *Service) initializeAsync() {
 		ChunkManager:       chunkManager,
 	})
 
-	// Build the one real UCI authority before any transport can discover MCP tools.
 	codeIntelEnabled := os.Getenv("ENGRAM_CODE_INTEL_ENABLED") == "true"
-	uciContext, err := composeUCIContext(codeIntelEnabled, store.GetDB(), mcpServer)
-	if err != nil {
-		s.setInitError(fmt.Errorf("compose UCI context: %w", err))
-		return
-	}
 
 	// Wire versioned document store into MCP server for collaborative document tools.
 	mcpServer.SetVersionedDocumentStore(versionedDocumentStore)
@@ -1196,8 +1190,10 @@ func (s *Service) initializeAsync() {
 	migrateEnvToSettingsStore(s.ctx, settingsStore, s.getVault)
 
 	// Initialize embedding client and store (optional — disabled if ENGRAM_EMBEDDING_URL unset).
+	var uciEmbeddingClient *embedding.Client
 	embClient, embErr := embedding.NewClientWithSettings(s.ctx, settingsRes)
 	if embErr != nil {
+		embClient = nil
 		if errors.Is(embErr, embedding.ErrEmbeddingDisabled) {
 			log.Info().Msg("embedding: disabled (ENGRAM_EMBEDDING_URL not set)")
 		} else {
@@ -1211,6 +1207,7 @@ func (s *Service) initializeAsync() {
 		// server still runs (embedding is optional); recall degrades to FTS-only.
 		log.Error().Err(dimErr).Msg("embedding: dimension assert failed — embedding path DISABLED (fix schema or EmbeddingDim)")
 	} else {
+		uciEmbeddingClient = embClient
 		embStore := embedding.NewStore(store.GetDB())
 		embRec := &embedding.BackfillRecorder{}
 		mcpServer.SetEmbeddingStores(embClient, embStore)
@@ -1240,6 +1237,22 @@ func (s *Service) initializeAsync() {
 		s.embeddingStore = embStore
 		s.embeddingRecorder = embRec
 		s.initMu.Unlock()
+	}
+
+	// Compose UCI after settings resolution and shared embedding initialization,
+	// before MCP or gRPC transports can expose its application.
+	var uciContext *uciContextComposition
+	if codeIntelEnabled {
+		uciContext, err = composeUCIContext(
+			codeIntelEnabled,
+			store.GetDB(),
+			mcpServer,
+			newUCISemanticConfig(s.ctx, settingsRes, embClient, uciEmbeddingClient),
+		)
+		if err != nil {
+			s.setInitError(fmt.Errorf("compose UCI context: %w", err))
+			return
+		}
 	}
 
 	// Rank-4: initialize the cross-encoder rerank client (optional — disabled if
