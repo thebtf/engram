@@ -31,8 +31,18 @@ type uciStandardMCPDriver interface {
 	InitializeAndList(context.Context, uciMCPStdioProcess) ([]string, error)
 }
 
+// uciInstallHarnessScenario selects a lifecycle without creating another
+// installer. The zero value remains the original T017 standard-MCP proof.
+type uciInstallHarnessScenario string
+
+const (
+	uciInstallHarnessScenarioStandardMCP uciInstallHarnessScenario = "standard_mcp"
+	uciInstallHarnessScenarioMaterialize uciInstallHarnessScenario = "materialize"
+)
+
 type uciInstallHarnessRequest struct {
 	Version          string
+	Scenario         uciInstallHarnessScenario
 	InstallRoot      string
 	Server           uciInstallHarnessCommand
 	Daemon           uciInstallHarnessCommand
@@ -43,7 +53,31 @@ type uciInstallHarnessRequest struct {
 }
 
 type uciInstallHarnessResult struct {
-	ToolNames []string
+	ToolNames    []string
+	Installation *uciInstallHarnessInstallation
+}
+
+// uciInstallHarnessInstallation is the materialized T017 installer state used
+// by the installed acceptance driver. It owns the Windows child tree and must
+// be closed by a materialize caller.
+type uciInstallHarnessInstallation struct {
+	installRoot string
+	components  map[string]uciInstallHarnessComponent
+	environment []string
+	tree        *uciInstallHarnessProcessTree
+	launchMu    sync.Mutex
+	processesMu sync.Mutex
+	processes   []*uciStartedInstallHarnessProcess
+	closeOnce   sync.Once
+	closeErr    error
+}
+
+type uciInstalledHarnessLaunchRequest struct {
+	Role             string
+	Args             []string
+	WorkingDirectory string
+	Environment      []string
+	WithStdio        bool
 }
 
 type uciInstallHarnessComponent struct {
@@ -65,64 +99,46 @@ type uciStartedInstallHarnessProcess struct {
 
 // runUCIInstallHarness proves the installed Windows execution path by copying
 // each component to a disposable root and exercising the daemon through its
-// real standard-I/O MCP channel.
+// real standard-I/O MCP channel. Materialize mode intentionally stops after
+// the same install step so the installed acceptance driver can own the normal
+// shim/daemon election without creating a second installer.
 func runUCIInstallHarness(ctx context.Context, request uciInstallHarnessRequest) (result uciInstallHarnessResult, err error) {
 	if err := uciValidateInstallHarnessRequest(ctx, request); err != nil {
 		return uciInstallHarnessResult{}, err
 	}
 
-	components, err := uciPrepareInstallHarnessComponents(request)
+	scenario, err := uciInstallHarnessRequestScenario(request)
 	if err != nil {
 		return uciInstallHarnessResult{}, err
 	}
-	if err := ctx.Err(); err != nil {
-		return uciInstallHarnessResult{}, fmt.Errorf("UCI install harness context before installation: %w", err)
+	installation, err := newUCIInstallHarnessInstallation(ctx, request)
+	if err != nil {
+		return uciInstallHarnessResult{}, err
 	}
-
-	if err := os.Mkdir(request.InstallRoot, 0o700); err != nil {
-		return uciInstallHarnessResult{}, fmt.Errorf("create UCI install root %q: %w", request.InstallRoot, err)
+	if scenario == uciInstallHarnessScenarioMaterialize {
+		return uciInstallHarnessResult{Installation: installation}, nil
 	}
-
-	var tree *uciInstallHarnessProcessTree
-	var processes []*uciStartedInstallHarnessProcess
 	defer func() {
-		if cleanupErr := uciCleanupInstallHarness(tree, processes); cleanupErr != nil {
+		if cleanupErr := installation.Close(); cleanupErr != nil {
 			err = errors.Join(err, cleanupErr)
-		}
-		if removeErr := os.RemoveAll(request.InstallRoot); removeErr != nil {
-			err = errors.Join(err, fmt.Errorf("remove UCI install root %q: %w", request.InstallRoot, removeErr))
 		}
 	}()
 
-	for _, component := range components {
-		if err := uciMaterializeInstallHarnessComponent(component); err != nil {
-			return uciInstallHarnessResult{}, err
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return uciInstallHarnessResult{}, fmt.Errorf("UCI install harness context before launch: %w", err)
-	}
-
-	tree, err = newUCIInstallHarnessProcessTree()
-	if err != nil {
-		return uciInstallHarnessResult{}, err
-	}
-
-	environment := uciInstallHarnessEnvironment(request.Environment)
 	var daemon *uciStartedInstallHarnessProcess
-	for _, component := range components {
-		if err := ctx.Err(); err != nil {
-			return uciInstallHarnessResult{}, fmt.Errorf("UCI install harness context while launching %s: %w", component.role, err)
+	for _, role := range []string{"server", "daemon", "parser"} {
+		component, found := installation.components[role]
+		if !found {
+			return uciInstallHarnessResult{}, fmt.Errorf("UCI install harness %s component is unavailable", role)
 		}
-
-		process, startErr := uciStartInstalledHarnessComponent(tree, component, environment, component.role == "daemon")
-		if process != nil {
-			processes = append(processes, process)
-		}
+		process, startErr := installation.Start(ctx, uciInstalledHarnessLaunchRequest{
+			Role:      role,
+			Args:      component.command.Args,
+			WithStdio: role == "daemon",
+		})
 		if startErr != nil {
 			return uciInstallHarnessResult{}, startErr
 		}
-		if component.role == "daemon" {
+		if role == "daemon" {
 			daemon = process
 		}
 	}
@@ -153,6 +169,120 @@ func runUCIInstallHarness(ctx context.Context, request uciInstallHarnessRequest)
 	return uciInstallHarnessResult{ToolNames: append([]string(nil), toolNames...)}, nil
 }
 
+func uciInstallHarnessRequestScenario(request uciInstallHarnessRequest) (uciInstallHarnessScenario, error) {
+	switch request.Scenario {
+	case "", uciInstallHarnessScenarioStandardMCP:
+		return uciInstallHarnessScenarioStandardMCP, nil
+	case uciInstallHarnessScenarioMaterialize:
+		return uciInstallHarnessScenarioMaterialize, nil
+	default:
+		return "", fmt.Errorf("UCI install harness scenario = %q", request.Scenario)
+	}
+}
+
+func newUCIInstallHarnessInstallation(ctx context.Context, request uciInstallHarnessRequest) (_ *uciInstallHarnessInstallation, err error) {
+	components, err := uciPrepareInstallHarnessComponents(request)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("UCI install harness context before installation: %w", err)
+	}
+	if err := os.Mkdir(request.InstallRoot, 0o700); err != nil {
+		return nil, fmt.Errorf("create UCI install root %q: %w", request.InstallRoot, err)
+	}
+	installed := false
+	defer func() {
+		if err != nil && installed {
+			_ = os.RemoveAll(request.InstallRoot)
+		}
+	}()
+	installed = true
+
+	for _, component := range components {
+		if err := uciMaterializeInstallHarnessComponent(component); err != nil {
+			return nil, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("UCI install harness context before launch: %w", err)
+	}
+	tree, err := newUCIInstallHarnessProcessTree()
+	if err != nil {
+		return nil, err
+	}
+
+	byRole := make(map[string]uciInstallHarnessComponent, len(components))
+	for _, component := range components {
+		byRole[component.role] = component
+	}
+	return &uciInstallHarnessInstallation{
+		installRoot: request.InstallRoot,
+		components:  byRole,
+		environment: uciInstallHarnessEnvironment(request.Environment),
+		tree:        tree,
+	}, nil
+}
+
+func (installation *uciInstallHarnessInstallation) Executable(role string) (string, error) {
+	if installation == nil {
+		return "", errors.New("UCI install harness installation is nil")
+	}
+	component, found := installation.components[role]
+	if !found {
+		return "", fmt.Errorf("UCI install harness component %q is unavailable", role)
+	}
+	return component.installedExecutable, nil
+}
+
+func (installation *uciInstallHarnessInstallation) Start(ctx context.Context, request uciInstalledHarnessLaunchRequest) (*uciStartedInstallHarnessProcess, error) {
+	if installation == nil || installation.tree == nil {
+		return nil, errors.New("UCI install harness installation is unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("UCI install harness context while launching %s: %w", request.Role, err)
+	}
+	installation.launchMu.Lock()
+	defer installation.launchMu.Unlock()
+	component, found := installation.components[request.Role]
+	if !found {
+		return nil, fmt.Errorf("UCI install harness component %q is unavailable", request.Role)
+	}
+	component.command.Args = append([]string(nil), request.Args...)
+	environment := append([]string(nil), installation.environment...)
+	environment = append(environment, request.Environment...)
+	process, err := uciStartInstalledHarnessComponent(installation.tree, component, environment, request.WorkingDirectory, request.WithStdio)
+	if process != nil {
+		installation.processesMu.Lock()
+		installation.processes = append(installation.processes, process)
+		installation.processesMu.Unlock()
+	}
+	return process, err
+}
+
+func (installation *uciInstallHarnessInstallation) Close() error {
+	if installation == nil {
+		return nil
+	}
+	installation.closeOnce.Do(func() {
+		installation.processesMu.Lock()
+		processes := append([]*uciStartedInstallHarnessProcess(nil), installation.processes...)
+		installation.processesMu.Unlock()
+		installation.closeErr = uciCleanupInstallHarness(installation.tree, processes)
+		if removeErr := os.RemoveAll(installation.installRoot); removeErr != nil {
+			installation.closeErr = errors.Join(installation.closeErr, fmt.Errorf("remove UCI install root %q: %w", installation.installRoot, removeErr))
+		}
+	})
+	return installation.closeErr
+}
+
+func (installation *uciInstallHarnessInstallation) ObservedPIDsForExecutable(executable string) []int {
+	if installation == nil || installation.tree == nil {
+		return nil
+	}
+	return installation.tree.ObservedPIDsForExecutable(executable)
+}
+
 func uciValidateInstallHarnessRequest(ctx context.Context, request uciInstallHarnessRequest) error {
 	if uciInstallHarnessNilInterface(ctx) {
 		return errors.New("UCI install harness context is nil")
@@ -162,6 +292,10 @@ func uciValidateInstallHarnessRequest(ctx context.Context, request uciInstallHar
 	}
 	if request.Version != uciInstallHarnessVersionV1 {
 		return fmt.Errorf("UCI install harness version = %q, want %q", request.Version, uciInstallHarnessVersionV1)
+	}
+	scenario, err := uciInstallHarnessRequestScenario(request)
+	if err != nil {
+		return err
 	}
 	if request.InstallRoot == "" {
 		return errors.New("UCI install harness install root is empty")
@@ -187,7 +321,7 @@ func uciValidateInstallHarnessRequest(ctx context.Context, request uciInstallHar
 	if request.ReadinessTimeout <= 0 {
 		return fmt.Errorf("UCI install harness readiness timeout = %s, want a positive duration", request.ReadinessTimeout)
 	}
-	if uciInstallHarnessNilInterface(request.MCPDriver) {
+	if scenario == uciInstallHarnessScenarioStandardMCP && uciInstallHarnessNilInterface(request.MCPDriver) {
 		return errors.New("UCI install harness MCP driver is nil")
 	}
 	if _, err := os.Lstat(request.InstallRoot); err == nil {
@@ -269,13 +403,17 @@ func uciInstallHarnessEnvironment(entries []string) []string {
 	return environment
 }
 
-func uciStartInstalledHarnessComponent(tree *uciInstallHarnessProcessTree, component uciInstallHarnessComponent, environment []string, withStdio bool) (started *uciStartedInstallHarnessProcess, err error) {
+func uciStartInstalledHarnessComponent(tree *uciInstallHarnessProcessTree, component uciInstallHarnessComponent, environment []string, workingDirectory string, withStdio bool) (started *uciStartedInstallHarnessProcess, err error) {
 	if tree == nil {
 		return nil, errors.New("UCI install harness process tree is nil")
 	}
 
 	arguments := append([]string(nil), component.command.Args...)
 	command := exec.Command(component.installedExecutable, arguments...)
+	if err := uciConfigureInstallHarnessCommand(command); err != nil {
+		return nil, fmt.Errorf("configure installed UCI %s process tree: %w", component.role, err)
+	}
+	command.Dir = workingDirectory
 	command.Env = append([]string(nil), environment...)
 	command.Stderr = os.Stderr
 

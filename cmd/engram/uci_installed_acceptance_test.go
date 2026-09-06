@@ -16,10 +16,6 @@ import (
 const (
 	uciInstalledAcceptanceTestPostgresDSNEnv = "ENGRAM_UCI_INSTALLED_TEST_DATABASE_DSN"
 
-	uciInstalledAcceptanceClientA = "client-a"
-	uciInstalledAcceptanceClientB = "client-b"
-	uciInstalledAcceptanceClientC = "client-c"
-
 	uciInstalledAcceptanceArtifactServer = "server"
 	uciInstalledAcceptanceArtifactDaemon = "daemon"
 	uciInstalledAcceptanceArtifactParser = "parser"
