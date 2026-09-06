@@ -117,6 +117,62 @@ type PreparedIndexCollaborator interface {
 	IndexPreparedCodebase(context.Context, ResolvedIndexTarget, string, UCIIndexClient) (*IndexResult, error)
 }
 
+// PreparedIndexConfiguration binds a prepared index collaborator to the
+// daemon identities and deterministic parser bundle that constructed it. The
+// configuration is write-once: replacing a collaborator after startup could
+// mix a checkout's local evidence with a different workstation or profile.
+type PreparedIndexConfiguration struct {
+	WorkstationID      string
+	ClientInstanceID   string
+	ParserBundleDigest string
+}
+
+func (configuration PreparedIndexConfiguration) valid() bool {
+	return validUCIClientIdentifier(configuration.WorkstationID, maxUCIClientIdentifierBytes) &&
+		validUCIClientIdentifier(configuration.ClientInstanceID, maxUCIClientIdentifierBytes) &&
+		validUCIClientSHA256Digest(configuration.ParserBundleDigest)
+}
+
+// ConfigurePreparedIndexCollaborator installs the daemon-local prepared-index
+// collaborator before the first index request. It never replaces an existing
+// collaborator, including one supplied by the existing injection constructor.
+func (m *Module) ConfigurePreparedIndexCollaborator(configuration PreparedIndexConfiguration, collaborator PreparedIndexCollaborator) error {
+	if m == nil {
+		return errors.New("uci prepared index: module is unavailable")
+	}
+	if !configuration.valid() {
+		return errors.New("uci prepared index: collaborator configuration is invalid")
+	}
+	if uciClientIsNil(collaborator) {
+		return errors.New("uci prepared index: collaborator is required")
+	}
+
+	m.preparedIndexMu.Lock()
+	defer m.preparedIndexMu.Unlock()
+	if m.shuttingDown {
+		return errors.New("uci prepared index: module is shutting down")
+	}
+	if !uciClientIsNil(m.preparedIndex) || m.preparedIndexConfiguration != nil {
+		return errors.New("uci prepared index: collaborator is already configured")
+	}
+	configured := configuration
+	m.preparedIndex = collaborator
+	m.preparedIndexConfiguration = &configured
+	return nil
+}
+
+func (m *Module) preparedIndexCollaborator() PreparedIndexCollaborator {
+	if m == nil {
+		return nil
+	}
+	m.preparedIndexMu.RLock()
+	defer m.preparedIndexMu.RUnlock()
+	if m.shuttingDown || uciClientIsNil(m.preparedIndex) {
+		return nil
+	}
+	return m.preparedIndex
+}
+
 // uciClientRPC is the generated EngramService surface used by the UCI adapter.
 type uciClientRPC interface {
 	BindCodeContext(context.Context, *pb.BindCodeContextRequest, ...grpc.CallOption) (*pb.BindCodeContextResponse, error)
@@ -209,14 +265,18 @@ func (a *UCIIndexAdapter) IndexCodebase(ctx context.Context, target ResolvedInde
 	if err != nil {
 		return nil, err
 	}
-	if a == nil || a.module == nil || a.module.preparedIndex == nil || rootHint == "" || !validResolvedIndexTarget(target) || target.ClientSessionID != clientSessionID {
+	if a == nil || a.module == nil || rootHint == "" || !validResolvedIndexTarget(target) || target.ClientSessionID != clientSessionID {
+		return nil, uciIndexSourceUnavailable("prepared code index is unavailable")
+	}
+	collaborator := a.module.preparedIndexCollaborator()
+	if collaborator == nil {
 		return nil, uciIndexSourceUnavailable("prepared code index is unavailable")
 	}
 	conn, err := a.connectionForResolvedIndexTarget(target)
 	if err != nil {
 		return nil, err
 	}
-	result, err := a.module.preparedIndex.IndexPreparedCodebase(
+	result, err := collaborator.IndexPreparedCodebase(
 		ctx,
 		target.Clone(),
 		rootHint,

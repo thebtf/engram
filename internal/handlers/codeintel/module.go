@@ -130,8 +130,9 @@ func (a *engramCoreAdapter) ProxyHandleTool(ctx context.Context, target Resolved
 // Module is the codeintel tenant of the engram modular daemon framework.
 // It implements module.EngramModule and module.ToolProvider.
 type Module struct {
-	core CoreProvider
-	deps module.ModuleDeps
+	core    CoreProvider
+	runtime *uciRuntime
+	deps    module.ModuleDeps
 	// indexStates maps an exact resolved target to its liveness state. startMu
 	// protects only admission for a single state transition; index work itself
 	// remains concurrent for disjoint target keys.
@@ -140,10 +141,25 @@ type Module struct {
 }
 
 // NewModule constructs an unstarted Module backed by a real *engramcore.Module.
-// The typed UCI adapter resolves targets, indexes prepared sources, and proxies
-// the server-side status payload.
+// It preserves the existing injection-friendly constructor. Ordinary daemon
+// wiring must use NewModuleWithRuntimeConfig so local SQLite/scanner resources
+// are owned by this module before an index can reach engramcore.
 func NewModule(core *engramcore.Module) *Module {
 	return &Module{core: &engramCoreAdapter{adapter: engramcore.NewUCIIndexAdapter(core)}}
+}
+
+// NewModuleWithRuntimeConfig constructs the ordinary daemon composition. The
+// runtime opens its owned local registry during Init and configures the already
+// registered engramcore module before requests are dispatched.
+func NewModuleWithRuntimeConfig(core *engramcore.Module, configuration UCIRuntimeConfig) (*Module, error) {
+	runtime, err := newUCIRuntime(core, configuration)
+	if err != nil {
+		return nil, err
+	}
+	return &Module{
+		core:    &engramCoreAdapter{adapter: engramcore.NewUCIIndexAdapter(core)},
+		runtime: runtime,
+	}, nil
 }
 
 // NewModuleWithCore constructs an unstarted Module backed by any CoreProvider.
@@ -159,23 +175,33 @@ func NewModuleWithCore(core CoreProvider) *Module {
 // Name returns the stable module identifier.
 func (m *Module) Name() string { return moduleName }
 
-// Init captures ModuleDeps for later use. No blocking initialisation.
+// Init captures ModuleDeps and starts the production runtime when one was
+// selected by daemon wiring. No request can observe codeintel before Init
+// returns, so engramcore receives its prepared collaborator before indexing.
 func (m *Module) Init(_ context.Context, deps module.ModuleDeps) error {
 	m.deps = deps
+	if m.runtime != nil {
+		if err := m.runtime.Start(deps); err != nil {
+			return fmt.Errorf("initialise codeintel runtime: %w", err)
+		}
+	}
 	if deps.Logger != nil {
 		deps.Logger.Info("codeintel module initialised")
 	}
 	return nil
 }
 
-// Shutdown is a no-op: background goroutines are bound to DaemonCtx, which is
-// cancelled by the framework before Shutdown is called, so they will exit on
-// their own. We do not wait for them here to keep shutdown fast (<1 s).
-func (m *Module) Shutdown(_ context.Context) error {
+// Shutdown stops watcher resources before closing the module-owned SQLite
+// registry. Index goroutines use DaemonCtx and are cancelled by the framework.
+func (m *Module) Shutdown(ctx context.Context) error {
+	var shutdownErr error
+	if m.runtime != nil {
+		shutdownErr = m.runtime.Close(ctx)
+	}
 	if m.deps.Logger != nil {
 		m.deps.Logger.Info("codeintel module shut down")
 	}
-	return nil
+	return shutdownErr
 }
 
 // -----------------------------------------------------------------------
@@ -448,6 +474,15 @@ func (m *Module) handleIndex(ctx context.Context, p muxcore.ProjectContext, args
 	}
 	if root == "" {
 		return nil, fmt.Errorf("codebase_index: current session working directory is required")
+	}
+	if m.runtime != nil {
+		if p.Cwd == "" {
+			return nil, fmt.Errorf("codebase_index: selected session working directory is required")
+		}
+		root, err = m.runtime.Prepare(ctx, target, p.Cwd, root)
+		if err != nil {
+			return nil, fmt.Errorf("codebase_index: prepare authorized worktree: %w", err)
+		}
 	}
 
 	key := indexKeyFor(target)

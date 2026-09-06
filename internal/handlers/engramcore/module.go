@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/thebtf/engram/internal/config"
 	"github.com/thebtf/engram/internal/module"
@@ -49,7 +50,11 @@ type Module struct {
 	advisorProofs      *advisorProofCache
 	v3ClientInstanceID string
 	deps               module.ModuleDeps
-	preparedIndex      PreparedIndexCollaborator
+
+	preparedIndexMu            sync.RWMutex
+	preparedIndex              PreparedIndexCollaborator
+	preparedIndexConfiguration *PreparedIndexConfiguration
+	shuttingDown               bool
 }
 
 var (
@@ -118,6 +123,9 @@ func (m *Module) Init(_ context.Context, deps module.ModuleDeps) error {
 // module is typically registered first so it drains last. Closing gRPC
 // connections is idempotent so concurrent Shutdown calls are safe.
 func (m *Module) Shutdown(_ context.Context) error {
+	m.preparedIndexMu.Lock()
+	m.shuttingDown = true
+	m.preparedIndexMu.Unlock()
 	m.pool.closeAll()
 	m.advisorProofs.clear()
 	if m.deps.Logger != nil {

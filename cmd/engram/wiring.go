@@ -45,7 +45,14 @@ func registerModules(reg *registry.Registry) (*engramcore.Module, error) {
 	// The flag is checked here so the registry/dispatcher path is unchanged
 	// when the flag is off — no tool conflict checks, no extra allocations.
 	if os.Getenv("ENGRAM_CODE_INTEL_ENABLED") == "true" {
-		if err := reg.Register(codeintel.NewModule(coreModule)); err != nil {
+		codeintelModule, err := codeintel.NewModuleWithRuntimeConfig(
+			coreModule,
+			codeintel.RuntimeConfigFromEnvironment(),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("configure codeintel runtime: %w", err)
+		}
+		if err := reg.Register(codeintelModule); err != nil {
 			return nil, fmt.Errorf("register codeintel: %w", err)
 		}
 	}
