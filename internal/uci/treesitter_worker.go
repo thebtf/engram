@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -21,17 +22,18 @@ import (
 
 const (
 	// TreeSitterWorkerProtocolVersion is the single framed child-process protocol.
-	TreeSitterWorkerProtocolVersion    = "uci-tree-sitter/v1"
-	treeSitterWorkerMaxIdentifierBytes = 4 << 10
-	treeSitterWorkerHardMaxInputBytes  = 4 << 20
-	treeSitterWorkerHardMaxOutputBytes = 16 << 20
-	treeSitterWorkerMaxProfileBytes    = 256
-	treeSitterWorkerMaxDefinitions     = 2_048
-	treeSitterWorkerMaxReferences      = 8_192
-	treeSitterWorkerMaxChunks          = 64
-	treeSitterWorkerMaxChunkBytes      = 64 << 10
-	treeSitterWorkerMaxDiagnostics     = 16
-	treeSitterWorkerMaxDiagnosticBytes = 512
+	TreeSitterWorkerProtocolVersion           = "uci-tree-sitter/v2"
+	TreeSitterFactsExtractionContractRevision = "uci-tree-sitter-facts/v2"
+	treeSitterWorkerMaxIdentifierBytes        = 4 << 10
+	treeSitterWorkerHardMaxInputBytes         = 4 << 20
+	treeSitterWorkerHardMaxOutputBytes        = 16 << 20
+	treeSitterWorkerMaxProfileBytes           = 256
+	treeSitterWorkerMaxDefinitions            = 2_048
+	treeSitterWorkerMaxReferences             = 8_192
+	treeSitterWorkerMaxChunks                 = 64
+	treeSitterWorkerMaxChunkBytes             = 64 << 10
+	treeSitterWorkerMaxDiagnostics            = 16
+	treeSitterWorkerMaxDiagnosticBytes        = 512
 )
 
 var (
@@ -106,6 +108,7 @@ type TreeSitterArtifact struct {
 // TreeSitterDefinition records one syntactically declared source symbol.
 type TreeSitterDefinition struct {
 	Kind      string    `json:"kind"`
+	Name      string    `json:"name"`
 	SymbolKey string    `json:"symbol_key"`
 	LocalKey  string    `json:"local_key"`
 	Span      IndexSpan `json:"span"`
@@ -523,7 +526,7 @@ func treeSitterValidateArtifact(source []byte, artifact TreeSitterArtifact) erro
 	lineStarts := goLineStarts(source)
 	definitions := make(map[string]struct{}, len(artifact.Definitions))
 	for _, definition := range artifact.Definitions {
-		if definition.Kind == "" || definition.SymbolKey == "" || definition.LocalKey == "" || !treeSitterBoundedText(definition.Kind, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(definition.SymbolKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(definition.LocalKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterSpanValid(source, lineStarts, definition.Span, false) {
+		if definition.Kind == "" || definition.Name == "" || definition.SymbolKey == "" || definition.LocalKey == "" || !treeSitterBoundedText(definition.Kind, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(definition.Name, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(definition.SymbolKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(definition.LocalKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterSpanValid(source, lineStarts, definition.Span, false) || !treeSitterDefinitionNameSourceValid(source, definition) {
 			return fmt.Errorf("%w: invalid definition", ErrTreeSitterProtocol)
 		}
 		if _, exists := definitions[definition.SymbolKey]; exists {
@@ -533,14 +536,19 @@ func treeSitterValidateArtifact(source []byte, artifact TreeSitterArtifact) erro
 	}
 
 	references := make(map[string]struct{}, len(artifact.References))
+	referenceSites := make(map[string]struct{}, len(artifact.References))
 	for _, reference := range artifact.References {
-		if reference.Kind == "" || reference.SymbolKey == "" || reference.LocalKey == "" || reference.RawTarget == "" || reference.TargetKey != "" || !treeSitterBoundedText(reference.Kind, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(reference.SymbolKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(reference.LocalKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(reference.OwnerLocalKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(reference.RawTarget, treeSitterWorkerMaxIdentifierBytes) || !treeSitterReferenceResolutionValid(reference.Resolution) || !treeSitterSpanValid(source, lineStarts, reference.Span, false) {
+		if reference.Kind == "" || reference.SymbolKey == "" || reference.LocalKey == "" || reference.RawTarget == "" || reference.TargetKey != "" || !treeSitterReferenceKindValid(reference.Kind) || !treeSitterBoundedText(reference.SymbolKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(reference.LocalKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(reference.OwnerLocalKey, treeSitterWorkerMaxIdentifierBytes) || !treeSitterBoundedText(reference.RawTarget, treeSitterWorkerMaxIdentifierBytes) || !treeSitterReferenceResolutionValid(reference.Resolution) || !treeSitterSpanValid(source, lineStarts, reference.Span, false) || !treeSitterReferenceSiteIdentityValid(reference) {
 			return fmt.Errorf("%w: invalid reference", ErrTreeSitterProtocol)
 		}
 		if _, exists := references[reference.SymbolKey]; exists {
 			return fmt.Errorf("%w: duplicate reference symbol key", ErrTreeSitterProtocol)
 		}
+		if _, exists := referenceSites[reference.LocalKey]; exists {
+			return fmt.Errorf("%w: duplicate reference site key", ErrTreeSitterProtocol)
+		}
 		references[reference.SymbolKey] = struct{}{}
+		referenceSites[reference.LocalKey] = struct{}{}
 	}
 
 	for _, diagnostic := range artifact.Diagnostics {
@@ -612,6 +620,51 @@ func treeSitterReferenceResolutionValid(resolution IndexResolutionState) bool {
 	}
 }
 
+// TreeSitterReferenceSiteKey derives the immutable occurrence identity for one
+// parser-owned syntax site. Semantic spelling stays in the prefix; byte span
+// distinguishes every concrete source occurrence.
+func TreeSitterReferenceSiteKey(semanticKey string, span IndexSpan) string {
+	return semanticKey + treeSitterReferenceSiteSuffix(span)
+}
+
+func treeSitterDefinitionNameSourceValid(source []byte, definition TreeSitterDefinition) bool {
+	start, end := int(definition.Span.ByteStart), int(definition.Span.ByteEnd)
+	if start < 0 || end < start || end > len(source) || len(definition.Name) > end-start {
+		return false
+	}
+	for offset := start; offset+len(definition.Name) <= end; offset++ {
+		matched := true
+		for index := range len(definition.Name) {
+			if source[offset+index] != definition.Name[index] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func treeSitterReferenceKindValid(kind string) bool {
+	switch kind {
+	case "import", "import_alias", "reexport", "reexport_alias", "export_alias", "call", "reference", "jsx_reference":
+		return true
+	default:
+		return false
+	}
+}
+
+func treeSitterReferenceSiteIdentityValid(reference TreeSitterReferenceSite) bool {
+	suffix := treeSitterReferenceSiteSuffix(reference.Span)
+	return len(reference.LocalKey) > len(suffix) && len(reference.SymbolKey) > len(suffix) && strings.HasSuffix(reference.LocalKey, suffix) && strings.HasSuffix(reference.SymbolKey, suffix)
+}
+
+func treeSitterReferenceSiteSuffix(span IndexSpan) string {
+	return "@" + strconv.FormatInt(span.ByteStart, 10) + ":" + strconv.FormatInt(span.ByteEnd, 10)
+}
+
 func treeSitterFinalizeArtifact(source []byte, profileKey string, artifact TreeSitterArtifact) TreeSitterArtifact {
 	artifact.Definitions = append([]TreeSitterDefinition(nil), artifact.Definitions...)
 	artifact.References = append([]TreeSitterReferenceSite(nil), artifact.References...)
@@ -660,7 +713,7 @@ func treeSitterArtifactID(contentDigest IndexDigest, profileKey string, language
 
 func treeSitterFactsDigest(profileKey string, artifact TreeSitterArtifact) IndexDigest {
 	state := sha256.New()
-	goWriteHashString(state, "uci-tree-sitter-facts/v1")
+	goWriteHashString(state, TreeSitterFactsExtractionContractRevision)
 	goWriteHashString(state, TreeSitterWorkerProtocolVersion)
 	goWriteHashString(state, profileKey)
 	goWriteHashString(state, string(artifact.Language))
@@ -671,6 +724,7 @@ func treeSitterFactsDigest(profileKey string, artifact TreeSitterArtifact) Index
 	goWriteHashUint64(state, uint64(len(artifact.Definitions)))
 	for _, definition := range artifact.Definitions {
 		goWriteHashString(state, definition.Kind)
+		goWriteHashString(state, definition.Name)
 		goWriteHashString(state, definition.SymbolKey)
 		goWriteHashString(state, definition.LocalKey)
 		goWriteHashSpan(state, definition.Span)
@@ -709,6 +763,9 @@ func treeSitterDefinitionLess(left, right TreeSitterDefinition) bool {
 	}
 	if left.Kind != right.Kind {
 		return left.Kind < right.Kind
+	}
+	if left.Name != right.Name {
+		return left.Name < right.Name
 	}
 	if left.SymbolKey != right.SymbolKey {
 		return left.SymbolKey < right.SymbolKey

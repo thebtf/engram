@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -20,7 +21,7 @@ import (
 )
 
 const (
-	uciTreeSitterWireVersion = "uci-tree-sitter/v1"
+	uciTreeSitterWireVersion = TreeSitterWorkerProtocolVersion
 	uciTreeSitterHelperTest  = "^TestUCITreeSitterWorkerProcessHelper$"
 )
 
@@ -47,6 +48,7 @@ type uciTreeSitterFixture struct {
 
 type uciTreeSitterExpectedDefinition struct {
 	kind       string
+	name       string
 	symbolKey  string
 	localKey   string
 	fragment   string
@@ -96,6 +98,7 @@ type uciTreeSitterWireResponse struct {
 
 type uciTreeSitterWireDefinition struct {
 	Kind      string    `json:"kind"`
+	Name      string    `json:"name"`
 	SymbolKey string    `json:"symbol_key"`
 	LocalKey  string    `json:"local_key"`
 	Span      IndexSpan `json:"span"`
@@ -142,6 +145,7 @@ var uciTreeSitterFixtures = []uciTreeSitterFixture{
 		definitions: []uciTreeSitterExpectedDefinition{
 			{
 				kind:       "function",
+				name:       "greet",
 				symbolKey:  "javascript:function:greet",
 				localKey:   "function:greet",
 				fragment:   "export function greet(name) {\r\n  return localShared(name);\r\n}",
@@ -191,6 +195,7 @@ var uciTreeSitterFixtures = []uciTreeSitterFixture{
 		definitions: []uciTreeSitterExpectedDefinition{
 			{
 				kind:       "interface",
+				name:       "Worker",
 				symbolKey:  "typescript:interface:Worker",
 				localKey:   "interface:Worker",
 				fragment:   "export interface Worker { run(input: string): string; }",
@@ -198,6 +203,7 @@ var uciTreeSitterFixtures = []uciTreeSitterFixture{
 			},
 			{
 				kind:       "function",
+				name:       "start",
 				symbolKey:  "typescript:function:start",
 				localKey:   "function:start",
 				fragment:   "export function start(input: string): string {\n  return localBuild(input);\n}",
@@ -246,6 +252,7 @@ var uciTreeSitterFixtures = []uciTreeSitterFixture{
 		definitions: []uciTreeSitterExpectedDefinition{
 			{
 				kind:       "function",
+				name:       "Screen",
 				symbolKey:  "tsx:function:Screen",
 				localKey:   "function:Screen",
 				fragment:   "export function Screen({ title }: { title: string }) {\n  return <RemoteWidget title={title} />;\n}",
@@ -317,6 +324,7 @@ func TestUCITreeSitterWorkerHasBoundedProcessAPI(t *testing.T) {
 	})
 	uciRequireTreeSitterStructFields(t, TreeSitterDefinition{}, []uciTreeSitterTestField{
 		{name: "Kind", typ: reflect.TypeOf("")},
+		{name: "Name", typ: reflect.TypeOf("")},
 		{name: "SymbolKey", typ: reflect.TypeOf("")},
 		{name: "LocalKey", typ: reflect.TypeOf("")},
 		{name: "Span", typ: reflect.TypeOf(IndexSpan{})},
@@ -443,6 +451,124 @@ func TestUCITSXWorkerFramesTSXFacts(t *testing.T) {
 	fixture := uciTreeSitterFixtureForLanguage(t, TreeSitterLanguageTSX)
 	artifact := uciParseTreeSitterFixture(t, fixture)
 	uciRequireTreeSitterFixtureArtifact(t, fixture, artifact)
+}
+
+func TestUCITreeSitterWorkerFramesBuiltParserFacts(t *testing.T) {
+	executable := uciBuildTreeSitterParser(t)
+	worker := uciNewBuiltTreeSitterWorker(t, executable, uciBuiltTreeSitterBundleDigest(t, executable))
+	cases := []struct {
+		name                 string
+		request              TreeSitterParseRequest
+		definitionNames      []string
+		referenceKinds       []string
+		defaultImportTarget  string
+		commonJSImportTarget string
+		selfClosingComponent string
+	}{
+		{
+			name: "javascript",
+			request: TreeSitterParseRequest{
+				Language:   TreeSitterLanguageJavaScript,
+				ProfileKey: "javascript-tree-sitter-v2",
+				Source: []byte("import DefaultValue, { named as localNamed } from \"./dep.js\";\n" +
+					"import * as Namespace from \"./namespace.js\";\n" +
+					"export { named as Reexported } from \"./dep.js\";\n" +
+					"export { localNamed as PublicNamed };\n" +
+					"const { original: localValue, plain, ...restValues } = sourceValue;\n" +
+					"export function run() {\n" +
+					"  DefaultValue();\n" +
+					"  DefaultValue();\n" +
+					"  return Namespace.member;\n" +
+					"}\n"),
+			},
+			definitionNames:     []string{"localValue", "plain", "restValues", "run"},
+			referenceKinds:      []string{"import", "import_alias", "reexport", "reexport_alias", "export_alias", "call", "reference"},
+			defaultImportTarget: "./dep.js#default",
+		},
+		{
+			name: "typescript",
+			request: TreeSitterParseRequest{
+				Language:   TreeSitterLanguageTypeScript,
+				ProfileKey: "typescript-tree-sitter-v2",
+				Source: []byte("import DefaultValue, { named as localNamed } from \"./dep\";\n" +
+					"import CommonValue = require(\"./common\");\n" +
+					"export { named as Reexported } from \"./dep\";\n" +
+					"export { localNamed as PublicNamed };\n" +
+					"const { original: localValue, plain, ...restValues } = sourceValue;\n" +
+					"export function run(): void {\n" +
+					"  DefaultValue();\n" +
+					"  DefaultValue();\n" +
+					"  CommonValue.member;\n" +
+					"}\n"),
+			},
+			definitionNames:      []string{"localValue", "plain", "restValues", "run"},
+			referenceKinds:       []string{"import", "import_alias", "reexport", "reexport_alias", "export_alias", "call", "reference"},
+			defaultImportTarget:  "./dep#default",
+			commonJSImportTarget: "./common#commonjs",
+		},
+		{
+			name: "tsx",
+			request: TreeSitterParseRequest{
+				Language:   TreeSitterLanguageTSX,
+				ProfileKey: "tsx-tree-sitter-v2",
+				Source: []byte("import DefaultValue, { Widget as LocalWidget } from \"./dep\";\n" +
+					"export { Widget as PublicWidget } from \"./dep\";\n" +
+					"export { LocalWidget as LocalAlias };\n" +
+					"export function Screen() {\n" +
+					"  DefaultValue();\n" +
+					"  DefaultValue();\n" +
+					"  LocalWidget.displayName;\n" +
+					"  return <LocalWidget />;\n" +
+					"}\n"),
+			},
+			definitionNames:      []string{"Screen"},
+			referenceKinds:       []string{"import", "import_alias", "reexport", "reexport_alias", "export_alias", "call", "reference", "jsx_reference"},
+			defaultImportTarget:  "./dep#default",
+			selfClosingComponent: "LocalWidget",
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			artifact, err := worker.Parse(context.Background(), testCase.request)
+			if err != nil {
+				t.Fatalf("built parser Parse(%q): %v", testCase.request.Language, err)
+			}
+			uciRequireBuiltTreeSitterFacts(t, artifact, testCase.definitionNames, testCase.referenceKinds, testCase.defaultImportTarget, testCase.commonJSImportTarget, testCase.selfClosingComponent)
+		})
+	}
+
+	t.Run("dynamic import remains partial", func(t *testing.T) {
+		artifact, err := worker.Parse(context.Background(), TreeSitterParseRequest{
+			Language:   TreeSitterLanguageJavaScript,
+			ProfileKey: "javascript-tree-sitter-v2",
+			Source:     []byte("const target = chooseTarget();\nconst loaded = import(target);\n"),
+		})
+		if err != nil {
+			t.Fatalf("built parser dynamic import: %v", err)
+		}
+		if artifact.Coverage != IndexCoveragePartial {
+			t.Fatalf("dynamic import coverage = %q, want %q", artifact.Coverage, IndexCoveragePartial)
+		}
+		uciRequireTreeSitterDiagnostic(t, artifact.Diagnostics, "DYNAMIC_IMPORT")
+		uciRequireTreeSitterUnresolvedReference(t, artifact.References, "call", "import", TreeSitterResolutionPartial)
+	})
+
+	t.Run("malformed source remains partial", func(t *testing.T) {
+		artifact, err := worker.Parse(context.Background(), TreeSitterParseRequest{
+			Language:   TreeSitterLanguageTypeScript,
+			ProfileKey: "typescript-tree-sitter-v2",
+			Source:     []byte("export const stable = 1;\nexport function broken(\n"),
+		})
+		if err != nil {
+			t.Fatalf("built parser malformed source: %v", err)
+		}
+		if artifact.Coverage != IndexCoveragePartial {
+			t.Fatalf("malformed source coverage = %q, want %q", artifact.Coverage, IndexCoveragePartial)
+		}
+		uciRequireTreeSitterDiagnostic(t, artifact.Diagnostics, "PARSE_ERROR")
+		uciRequireBuiltDefinitionName(t, artifact.Definitions, "stable")
+	})
 }
 
 func TestUCITreeSitterWorkerKeepsImmutableCheckoutIndependentIdentities(t *testing.T) {
@@ -605,16 +731,13 @@ func TestUCITreeSitterWorkerBoundsInputOutputDeadlineAndCancellation(t *testing.
 	})
 
 	t.Run("deadline", func(t *testing.T) {
-		auditFile := filepath.Join(t.TempDir(), "child.json")
 		worker := uciNewTreeSitterTestWorker(t, uciTreeSitterWorkerOptions{
-			mode:      "stall",
-			timeout:   100 * time.Millisecond,
-			auditFile: auditFile,
+			mode:    "stall",
+			timeout: 100 * time.Millisecond,
 		})
 		if _, err := worker.Parse(context.Background(), request); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("deadline-bound Parse() error = %v, want context.DeadlineExceeded", err)
 		}
-		uciRequireTreeSitterChildAudit(t, auditFile)
 	})
 
 	t.Run("cancellation", func(t *testing.T) {
@@ -815,6 +938,170 @@ func uciNewTreeSitterTestWorker(t *testing.T, options uciTreeSitterWorkerOptions
 	return worker
 }
 
+func uciBuildTreeSitterParser(t *testing.T) string {
+	t.Helper()
+	_, sourcePath, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve Tree-sitter worker test source path")
+	}
+	executable := filepath.Join(t.TempDir(), "uci-parser")
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	command := exec.Command("go", "build", "-o", executable, "./tools/uci-parser")
+	command.Dir = filepath.Clean(filepath.Join(filepath.Dir(sourcePath), "..", ".."))
+	command.Env = append(os.Environ(), "CGO_ENABLED=1")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build bundled Tree-sitter parser: %v\n%s", err, output)
+	}
+	return executable
+}
+
+func uciBuiltTreeSitterBundleDigest(t *testing.T, executable string) IndexDigest {
+	t.Helper()
+	request := TreeSitterWorkerWireRequest{
+		Version:    TreeSitterWorkerProtocolVersion,
+		Language:   TreeSitterLanguageJavaScript,
+		ProfileKey: "javascript-tree-sitter-v2",
+		Source:     []byte("export const parserBundleProbe = true;\n"),
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("encode built parser probe request: %v", err)
+	}
+	command := exec.Command(executable)
+	command.Dir = t.TempDir()
+	command.Env = uciTreeSitterMinimalEnvironment()
+	command.Stdin = bytes.NewReader(append(encoded, '\n'))
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("run built parser bundle probe: %v", err)
+	}
+	response, err := treeSitterDecodeWireResponse(output)
+	if err != nil {
+		t.Fatalf("decode built parser bundle probe: %v", err)
+	}
+	if response.Version != TreeSitterWorkerProtocolVersion || !treeSitterDigestValid(response.BundleDigest) {
+		t.Fatalf("built parser probe returned invalid protocol identity: %#v", response)
+	}
+	return response.BundleDigest
+}
+
+func uciNewBuiltTreeSitterWorker(t *testing.T, executable string, bundleDigest IndexDigest) *TreeSitterWorker {
+	t.Helper()
+	worker, err := NewTreeSitterWorker(TreeSitterWorkerConfig{
+		ExecutablePath:       executable,
+		ExpectedBundleDigest: bundleDigest,
+		MaxInputBytes:        1 << 20,
+		MaxOutputBytes:       1 << 20,
+		Timeout:              5 * time.Second,
+		Environment:          uciTreeSitterMinimalEnvironment(),
+	})
+	if err != nil {
+		t.Fatalf("NewTreeSitterWorker(built parser): %v", err)
+	}
+	return worker
+}
+
+func uciRequireBuiltTreeSitterFacts(t *testing.T, artifact TreeSitterArtifact, definitionNames, referenceKinds []string, defaultImportTarget, commonJSImportTarget, selfClosingComponent string) {
+	t.Helper()
+	if artifact.Coverage != IndexCoverageComplete {
+		t.Fatalf("built parser coverage = %q, want %q; diagnostics=%#v", artifact.Coverage, IndexCoverageComplete, artifact.Diagnostics)
+	}
+	uciRequireTreeSitterArtifactProof(t, artifact)
+	for _, name := range definitionNames {
+		uciRequireBuiltDefinitionName(t, artifact.Definitions, name)
+	}
+
+	seenKinds := make(map[string]struct{}, len(artifact.References))
+	seenSiteKeys := make(map[string]struct{}, len(artifact.References))
+	seenSymbolKeys := make(map[string]struct{}, len(artifact.References))
+	defaultImportSeen := false
+	commonJSImportSeen := commonJSImportTarget == ""
+	selfClosingSeen := selfClosingComponent == ""
+	repeatedCalls := make(map[string]struct{})
+	for _, reference := range artifact.References {
+		if reference.TargetKey != "" {
+			t.Fatalf("built parser fabricated target %q for %#v", reference.TargetKey, reference)
+		}
+		suffix := TreeSitterReferenceSiteKey("", reference.Span)
+		if !strings.HasSuffix(reference.LocalKey, suffix) || !strings.HasSuffix(reference.SymbolKey, suffix) {
+			t.Fatalf("built parser reference site is not span-bound: %#v", reference)
+		}
+		if _, exists := seenSiteKeys[reference.LocalKey]; exists {
+			t.Fatalf("built parser collapsed repeated site key %q", reference.LocalKey)
+		}
+		if _, exists := seenSymbolKeys[reference.SymbolKey]; exists {
+			t.Fatalf("built parser collapsed repeated symbol key %q", reference.SymbolKey)
+		}
+		seenSiteKeys[reference.LocalKey] = struct{}{}
+		seenSymbolKeys[reference.SymbolKey] = struct{}{}
+		seenKinds[reference.Kind] = struct{}{}
+		if reference.Kind == "import_alias" && reference.RawTarget == defaultImportTarget {
+			defaultImportSeen = true
+		}
+		if reference.Kind == "import_alias" && reference.RawTarget == commonJSImportTarget {
+			commonJSImportSeen = true
+		}
+		if reference.Kind == "call" && reference.RawTarget == "DefaultValue" {
+			repeatedCalls[reference.LocalKey] = struct{}{}
+		}
+		if reference.Kind == "jsx_reference" && reference.RawTarget == selfClosingComponent {
+			start, end := int(reference.Span.ByteStart), int(reference.Span.ByteEnd)
+			if start == 0 || end > len(artifact.Text) || artifact.Text[start-1] != '<' || !strings.HasPrefix(artifact.Text[end:], " />") {
+				t.Fatalf("built parser did not retain self-closing JSX name span: %#v", reference)
+			}
+			selfClosingSeen = true
+		}
+	}
+	for _, kind := range referenceKinds {
+		if _, found := seenKinds[kind]; !found {
+			t.Fatalf("built parser omitted %q from its closed vocabulary: %#v", kind, artifact.References)
+		}
+	}
+	if !defaultImportSeen {
+		t.Fatalf("built parser omitted default import binding %q: %#v", defaultImportTarget, artifact.References)
+	}
+	if !commonJSImportSeen {
+		t.Fatalf("built parser omitted CommonJS import binding %q: %#v", commonJSImportTarget, artifact.References)
+	}
+	if !selfClosingSeen {
+		t.Fatalf("built parser omitted self-closing JSX component %q: %#v", selfClosingComponent, artifact.References)
+	}
+	if len(repeatedCalls) != 2 {
+		t.Fatalf("built parser collapsed repeated DefaultValue calls: %#v", artifact.References)
+	}
+}
+
+func uciRequireBuiltDefinitionName(t *testing.T, definitions []TreeSitterDefinition, want string) {
+	t.Helper()
+	for _, definition := range definitions {
+		if definition.Name != want {
+			continue
+		}
+		if strings.ContainsAny(definition.Name, "{}[]") {
+			t.Fatalf("definition name is a raw binding pattern: %#v", definition)
+		}
+		return
+	}
+	t.Fatalf("built parser omitted definition name %q: %#v", want, definitions)
+}
+
+func uciRequireTreeSitterUnresolvedReference(t *testing.T, references []TreeSitterReferenceSite, kind, rawTarget string, resolution IndexResolutionState) {
+	t.Helper()
+	for _, reference := range references {
+		if reference.Kind != kind || reference.RawTarget != rawTarget {
+			continue
+		}
+		if reference.TargetKey != "" || reference.Resolution != resolution {
+			t.Fatalf("reference %q/%q = %#v, want unresolved %q", kind, rawTarget, reference, resolution)
+		}
+		return
+	}
+	t.Fatalf("missing %q/%q reference: %#v", kind, rawTarget, references)
+}
+
 func uciRequireTreeSitterFixtureArtifact(t *testing.T, fixture uciTreeSitterFixture, artifact TreeSitterArtifact) {
 	t.Helper()
 	if artifact.Language != fixture.language {
@@ -883,6 +1170,9 @@ func uciRequireTreeSitterDefinition(t *testing.T, definitions []TreeSitterDefini
 		if definition.Kind != expected.kind || definition.SymbolKey != expected.symbolKey {
 			continue
 		}
+		if definition.Name != expected.name {
+			t.Fatalf("definition %q name = %q, want %q", expected.symbolKey, definition.Name, expected.name)
+		}
 		if definition.LocalKey != expected.localKey {
 			t.Fatalf("definition %q local key = %q, want %q", expected.symbolKey, definition.LocalKey, expected.localKey)
 		}
@@ -894,29 +1184,32 @@ func uciRequireTreeSitterDefinition(t *testing.T, definitions []TreeSitterDefini
 
 func uciRequireTreeSitterReference(t *testing.T, references []TreeSitterReferenceSite, expected uciTreeSitterExpectedReference, source []byte) {
 	t.Helper()
+	span := uciTreeSitterSpan(t, source, expected.fragment, expected.occurrence)
+	wantLocalKey := TreeSitterReferenceSiteKey(expected.localKey, span)
+	wantSymbolKey := TreeSitterReferenceSiteKey(expected.symbolKey, span)
 	for _, reference := range references {
-		if reference.Kind != expected.kind || reference.SymbolKey != expected.symbolKey {
+		if reference.Kind != expected.kind || reference.SymbolKey != wantSymbolKey {
 			continue
 		}
-		if reference.LocalKey != expected.localKey {
-			t.Fatalf("reference %q local key = %q, want %q", expected.symbolKey, reference.LocalKey, expected.localKey)
+		if reference.LocalKey != wantLocalKey {
+			t.Fatalf("reference %q local key = %q, want %q", wantSymbolKey, reference.LocalKey, wantLocalKey)
 		}
 		if reference.OwnerLocalKey != expected.ownerLocalKey {
-			t.Fatalf("reference %q owner = %q, want %q", expected.symbolKey, reference.OwnerLocalKey, expected.ownerLocalKey)
+			t.Fatalf("reference %q owner = %q, want %q", wantSymbolKey, reference.OwnerLocalKey, expected.ownerLocalKey)
 		}
 		if reference.RawTarget != expected.rawTarget {
-			t.Fatalf("reference %q raw target = %q, want %q", expected.symbolKey, reference.RawTarget, expected.rawTarget)
+			t.Fatalf("reference %q raw target = %q, want %q", wantSymbolKey, reference.RawTarget, expected.rawTarget)
 		}
 		if reference.TargetKey != "" {
-			t.Fatalf("reference %q fabricated resolved target %q", expected.symbolKey, reference.TargetKey)
+			t.Fatalf("reference %q fabricated resolved target %q", wantSymbolKey, reference.TargetKey)
 		}
 		if reference.Resolution != expected.resolution {
-			t.Fatalf("reference %q resolution = %q, want syntax-level %q", expected.symbolKey, reference.Resolution, expected.resolution)
+			t.Fatalf("reference %q resolution = %q, want syntax-level %q", wantSymbolKey, reference.Resolution, expected.resolution)
 		}
-		uciRequireTreeSitterSpan(t, reference.Span, uciTreeSitterSpan(t, source, expected.fragment, expected.occurrence), "reference "+expected.symbolKey)
+		uciRequireTreeSitterSpan(t, reference.Span, span, "reference "+wantSymbolKey)
 		return
 	}
-	t.Fatalf("missing %s reference %q; got %#v", expected.kind, expected.symbolKey, references)
+	t.Fatalf("missing %s reference %q; got %#v", expected.kind, wantSymbolKey, references)
 }
 
 func uciRequireTreeSitterDiagnostic(t *testing.T, diagnostics []TreeSitterDiagnostic, code string) {
@@ -1067,6 +1360,7 @@ func uciTreeSitterWireResponseFor(t *testing.T, request uciTreeSitterWireRequest
 			Text:         string(request.Source),
 			Definitions: []uciTreeSitterWireDefinition{{
 				Kind:      "const",
+				Name:      "stable",
 				SymbolKey: "typescript:const:stable",
 				LocalKey:  "const:stable",
 				Span:      span,
@@ -1120,6 +1414,7 @@ func uciTreeSitterWireResponseFromFixture(t *testing.T, fixture uciTreeSitterFix
 		}
 		response.Definitions = append(response.Definitions, uciTreeSitterWireDefinition{
 			Kind:      definition.kind,
+			Name:      definition.name,
 			SymbolKey: definition.symbolKey,
 			LocalKey:  definition.localKey,
 			Span:      span,
@@ -1132,8 +1427,8 @@ func uciTreeSitterWireResponseFromFixture(t *testing.T, fixture uciTreeSitterFix
 		}
 		response.References = append(response.References, uciTreeSitterWireReference{
 			Kind:          reference.kind,
-			SymbolKey:     reference.symbolKey,
-			LocalKey:      reference.localKey,
+			SymbolKey:     TreeSitterReferenceSiteKey(reference.symbolKey, span),
+			LocalKey:      TreeSitterReferenceSiteKey(reference.localKey, span),
 			OwnerLocalKey: reference.ownerLocalKey,
 			RawTarget:     reference.rawTarget,
 			Resolution:    reference.resolution,

@@ -26,15 +26,16 @@ import (
 )
 
 type parserManifest struct {
-	SchemaVersion          int                    `json:"schema_version"`
-	Component              string                 `json:"component"`
-	ParserProtocolRevision string                 `json:"parser_protocol_revision"`
-	BundleSchemaRevision   string                 `json:"bundle_schema_revision"`
-	Toolchain              parserToolchain        `json:"toolchain"`
-	Dependencies           []parserDependency     `json:"dependencies"`
-	CompiledGrammars       []compiledGrammar      `json:"compiled_grammars"`
-	BundleDigest           bundleDigestManifest   `json:"bundle_digest"`
-	Targets                []parserTargetEvidence `json:"targets"`
+	SchemaVersion                   int                    `json:"schema_version"`
+	Component                       string                 `json:"component"`
+	ParserProtocolRevision          string                 `json:"parser_protocol_revision"`
+	FactsExtractionContractRevision string                 `json:"facts_extraction_contract_revision"`
+	BundleSchemaRevision            string                 `json:"bundle_schema_revision"`
+	Toolchain                       parserToolchain        `json:"toolchain"`
+	Dependencies                    []parserDependency     `json:"dependencies"`
+	CompiledGrammars                []compiledGrammar      `json:"compiled_grammars"`
+	BundleDigest                    bundleDigestManifest   `json:"bundle_digest"`
+	Targets                         []parserTargetEvidence `json:"targets"`
 }
 
 type parserToolchain struct {
@@ -216,7 +217,9 @@ var (
 	}
 
 	expectedStaticInputs = []string{
-		"uci-tree-sitter-bundle/v1",
+		"uci-tree-sitter-bundle/v2",
+		"uci-tree-sitter/v2",
+		"uci-tree-sitter-facts/v2",
 		"github.com/tree-sitter/go-tree-sitter@v0.25.0",
 		"github.com/tree-sitter/tree-sitter-javascript@v0.25.0",
 		"github.com/tree-sitter/tree-sitter-typescript@v0.23.2",
@@ -226,35 +229,35 @@ var (
 		{
 			GOOS:                    "windows",
 			GOARCH:                  "amd64",
-			SupportStatus:           "source_probe_passed",
-			EvidenceState:           "passed",
+			SupportStatus:           "not_claimed",
+			EvidenceState:           "not_reverified",
 			BuildCommand:            "CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build ./tools/uci-parser",
 			CGOToolchainRequirement: "a C compiler capable of GOOS/GOARCH configured as CC",
 			SourceProbe: parserSourceProbeEvidence{
-				Code:                     "source_build_and_javascript_smoke_passed",
-				BuildState:               "passed",
-				SmokeState:               "passed",
-				ObservedProtocolRevision: "uci-tree-sitter/v1",
-				ObservedBundleDigest:     "sha256:39b46e870ecf93bb942e5ccc043626f2ec40d3d3bfeb8b7ea4e230f05df827ba",
-				ObservedCoverage:         "complete",
-				BlockerDetail:            "",
+				Code:                     "not_reverified_after_facts_contract_revision",
+				BuildState:               "not_run",
+				SmokeState:               "not_run",
+				ObservedProtocolRevision: "",
+				ObservedBundleDigest:     "",
+				ObservedCoverage:         "",
+				BlockerDetail:            "The prior source probe covered uci-tree-sitter/v1 and does not cover facts extraction contract uci-tree-sitter-facts/v2.",
 			},
 		},
 		{
 			GOOS:                    "linux",
 			GOARCH:                  "amd64",
-			SupportStatus:           "source_probe_passed",
-			EvidenceState:           "passed",
+			SupportStatus:           "not_claimed",
+			EvidenceState:           "not_reverified",
 			BuildCommand:            "CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build ./tools/uci-parser",
 			CGOToolchainRequirement: "a C compiler capable of GOOS/GOARCH configured as CC",
 			SourceProbe: parserSourceProbeEvidence{
-				Code:                     "source_build_and_javascript_smoke_passed",
-				BuildState:               "passed",
-				SmokeState:               "passed",
-				ObservedProtocolRevision: "uci-tree-sitter/v1",
-				ObservedBundleDigest:     "sha256:2e286303d97702c827ffb5acf682adb0f8682e2ce8f29c5b6ccebb6723ff6dad",
-				ObservedCoverage:         "complete",
-				BlockerDetail:            "",
+				Code:                     "not_reverified_after_facts_contract_revision",
+				BuildState:               "not_run",
+				SmokeState:               "not_run",
+				ObservedProtocolRevision: "",
+				ObservedBundleDigest:     "",
+				ObservedCoverage:         "",
+				BlockerDetail:            "The prior source probe covered uci-tree-sitter/v1 and does not cover facts extraction contract uci-tree-sitter-facts/v2.",
 			},
 		},
 		{
@@ -316,14 +319,14 @@ func TestParserManifestProvenance(t *testing.T) {
 func assertManifestIdentity(t *testing.T, manifest parserManifest) {
 	t.Helper()
 
-	if manifest.SchemaVersion != 3 {
-		t.Fatalf("schema_version = %d, want 3", manifest.SchemaVersion)
+	if manifest.SchemaVersion != 4 {
+		t.Fatalf("schema_version = %d, want 4", manifest.SchemaVersion)
 	}
 	if manifest.Component != "uci-parser" {
 		t.Fatalf("component = %q, want uci-parser", manifest.Component)
 	}
-	if manifest.BundleSchemaRevision != "uci-tree-sitter-bundle/v1" {
-		t.Fatalf("bundle_schema_revision = %q, want uci-tree-sitter-bundle/v1", manifest.BundleSchemaRevision)
+	if manifest.ParserProtocolRevision != "uci-tree-sitter/v2" || manifest.FactsExtractionContractRevision != "uci-tree-sitter-facts/v2" || manifest.BundleSchemaRevision != "uci-tree-sitter-bundle/v2" {
+		t.Fatalf("unexpected parser identity: protocol=%q facts=%q bundle=%q", manifest.ParserProtocolRevision, manifest.FactsExtractionContractRevision, manifest.BundleSchemaRevision)
 	}
 }
 
@@ -351,6 +354,7 @@ func assertManifestShape(t *testing.T, data []byte) {
 		"schema_version",
 		"component",
 		"parser_protocol_revision",
+		"facts_extraction_contract_revision",
 		"bundle_schema_revision",
 		"toolchain",
 		"dependencies",
@@ -803,17 +807,13 @@ func bundleStaticInputs(t *testing.T, function *ast.FuncDecl) []string {
 		var inputs []string
 		dynamicInputSeen := false
 		for _, element := range literal.Elts {
-			value, ok := element.(*ast.BasicLit)
-			if !ok || value.Kind != token.STRING {
+			input, static := bundleStaticInput(t, element)
+			if !static {
 				dynamicInputSeen = true
 				continue
 			}
 			if dynamicInputSeen {
 				t.Fatal("bundleDigest places a static input after a runtime input")
-			}
-			input, err := strconv.Unquote(value.Value)
-			if err != nil {
-				t.Fatalf("unquote bundle static input %q: %v", value.Value, err)
 			}
 			inputs = append(inputs, input)
 		}
@@ -824,6 +824,36 @@ func bundleStaticInputs(t *testing.T, function *ast.FuncDecl) []string {
 	}
 	t.Fatal("bundleDigest does not initialize parts")
 	return nil
+}
+
+func bundleStaticInput(t *testing.T, expression ast.Expr) (string, bool) {
+	t.Helper()
+	switch expression := expression.(type) {
+	case *ast.BasicLit:
+		if expression.Kind != token.STRING {
+			return "", false
+		}
+		input, err := strconv.Unquote(expression.Value)
+		if err != nil {
+			t.Fatalf("unquote bundle static input %q: %v", expression.Value, err)
+		}
+		return input, true
+	case *ast.SelectorExpr:
+		selector, found := qualifiedSelector(expression)
+		if !found {
+			return "", false
+		}
+		switch selector {
+		case "uci.TreeSitterWorkerProtocolVersion":
+			return ucidomain.TreeSitterWorkerProtocolVersion, true
+		case "uci.TreeSitterFactsExtractionContractRevision":
+			return ucidomain.TreeSitterFactsExtractionContractRevision, true
+		default:
+			return "", false
+		}
+	default:
+		return "", false
+	}
 }
 
 func assertParserSourceIdentity(t *testing.T, manifest parserManifest, source parserSourceContract) {
@@ -902,8 +932,8 @@ func assertBundleDigestProvenance(t *testing.T, manifest parserManifest, source 
 	if !reflect.DeepEqual(digest.StaticInputs, source.StaticInputs) {
 		t.Fatalf("bundle source static inputs = %#v, want manifest %#v", source.StaticInputs, digest.StaticInputs)
 	}
-	if len(digest.StaticInputs) == 0 || digest.StaticInputs[0] != manifest.BundleSchemaRevision {
-		t.Fatalf("bundle static inputs must begin with bundle schema revision %q", manifest.BundleSchemaRevision)
+	if len(digest.StaticInputs) < 3 || digest.StaticInputs[0] != manifest.BundleSchemaRevision || digest.StaticInputs[1] != manifest.ParserProtocolRevision || digest.StaticInputs[2] != manifest.FactsExtractionContractRevision {
+		t.Fatalf("bundle static inputs must bind bundle, protocol, and facts revisions: %#v", digest.StaticInputs)
 	}
 	if got, want := digest.RuntimeInputRecipe, []string{
 		"go=runtime.Version()",
@@ -1072,6 +1102,22 @@ func assertSourceProbeEvidence(t *testing.T, manifest parserManifest, target par
 		if probe.BlockerDetail != "" {
 			t.Fatalf("source probe pass for %s/%s records an unexpected blocker %q", target.GOOS, target.GOARCH, probe.BlockerDetail)
 		}
+	case "not_reverified_after_facts_contract_revision":
+		if (target.GOOS != "windows" && target.GOOS != "linux") || target.GOARCH != "amd64" {
+			t.Fatalf("unreverified source probe is only recorded for windows/amd64 or linux/amd64, got %s/%s", target.GOOS, target.GOARCH)
+		}
+		if target.SupportStatus != "not_claimed" || target.EvidenceState != "not_reverified" {
+			t.Fatalf("unreverified source probe status for %s/%s = %q/%q, want not_claimed/not_reverified", target.GOOS, target.GOARCH, target.SupportStatus, target.EvidenceState)
+		}
+		if probe.BuildState != "not_run" || probe.SmokeState != "not_run" {
+			t.Fatalf("unreverified source probe build/smoke state for %s/%s = %q/%q, want not_run/not_run", target.GOOS, target.GOARCH, probe.BuildState, probe.SmokeState)
+		}
+		if probe.ObservedProtocolRevision != "" || probe.ObservedBundleDigest != "" || probe.ObservedCoverage != "" {
+			t.Fatalf("unreverified source probe must not claim current smoke output %#v", probe)
+		}
+		if !strings.Contains(probe.BlockerDetail, manifest.FactsExtractionContractRevision) || !strings.Contains(probe.BlockerDetail, "uci-tree-sitter/v1") {
+			t.Fatalf("unreverified source probe lacks precise prior/current contract provenance %q", probe.BlockerDetail)
+		}
 	case "blocked_missing_cross_c_toolchain":
 		if target.GOOS != "linux" && target.GOOS != "darwin" {
 			t.Fatalf("cross-C-toolchain blocker is not valid for %s/%s", target.GOOS, target.GOARCH)
@@ -1088,8 +1134,6 @@ func assertSourceProbeEvidence(t *testing.T, manifest parserManifest, target par
 		if strings.TrimSpace(probe.BlockerDetail) == "" {
 			t.Fatalf("blocked target %s/%s is missing its cross-C-toolchain detail", target.GOOS, target.GOARCH)
 		}
-	default:
-		t.Fatalf("target %s/%s has unknown source probe code %q", target.GOOS, target.GOARCH, probe.Code)
 	}
 }
 
@@ -1099,9 +1143,11 @@ func targetBuildCommand(goos, goarch string) string {
 
 func assertParentProtocolIdentity(t *testing.T, manifest parserManifest) {
 	t.Helper()
-
 	if got := ucidomain.TreeSitterWorkerProtocolVersion; got != manifest.ParserProtocolRevision {
 		t.Fatalf("parent protocol revision = %q, want %q", got, manifest.ParserProtocolRevision)
+	}
+	if got := ucidomain.TreeSitterFactsExtractionContractRevision; got != manifest.FactsExtractionContractRevision {
+		t.Fatalf("parent facts extraction contract revision = %q, want %q", got, manifest.FactsExtractionContractRevision)
 	}
 }
 

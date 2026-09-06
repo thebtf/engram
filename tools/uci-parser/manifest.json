@@ -1,8 +1,9 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "component": "uci-parser",
-  "parser_protocol_revision": "uci-tree-sitter/v1",
-  "bundle_schema_revision": "uci-tree-sitter-bundle/v1",
+  "parser_protocol_revision": "uci-tree-sitter/v2",
+  "facts_extraction_contract_revision": "uci-tree-sitter-facts/v2",
+  "bundle_schema_revision": "uci-tree-sitter-bundle/v2",
   "toolchain": {
     "module_go_version": "1.26.6",
     "requires_cgo": true,
@@ -100,12 +101,14 @@
     "prefix": "sha256:",
     "input_encoding": "sort lexical; for each UTF-8 input, append its uint32 big-endian byte length then its bytes",
     "static_inputs": [
-      "uci-tree-sitter-bundle/v1",
+      "uci-tree-sitter-bundle/v2",
+      "uci-tree-sitter/v2",
+      "uci-tree-sitter-facts/v2",
       "github.com/tree-sitter/go-tree-sitter@v0.25.0",
       "github.com/tree-sitter/tree-sitter-javascript@v0.25.0",
       "github.com/tree-sitter/tree-sitter-typescript@v0.23.2"
     ],
-    "static_input_digest": "sha256:4c87311d322669ef5a02a6384d46caa30fcfca8f777e3aa81848c297147d2d13",
+    "static_input_digest": "sha256:ab0a63e3330576f2cf52382092ee196e93f0696faeecea24847823071a1e1d78",
     "runtime_input_recipe": [
       "go=runtime.Version()",
       "target=runtime.GOOS/runtime.GOARCH",
@@ -116,35 +119,35 @@
     {
       "goos": "windows",
       "goarch": "amd64",
-      "support_status": "source_probe_passed",
-      "evidence_state": "passed",
+      "support_status": "not_claimed",
+      "evidence_state": "not_reverified",
       "build_command": "CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build ./tools/uci-parser",
       "cgo_toolchain_requirement": "a C compiler capable of GOOS/GOARCH configured as CC",
       "source_probe": {
-        "code": "source_build_and_javascript_smoke_passed",
-        "build_state": "passed",
-        "smoke_state": "passed",
-        "observed_protocol_revision": "uci-tree-sitter/v1",
-        "observed_bundle_digest": "sha256:39b46e870ecf93bb942e5ccc043626f2ec40d3d3bfeb8b7ea4e230f05df827ba",
-        "observed_coverage": "complete",
-        "blocker_detail": ""
+        "code": "not_reverified_after_facts_contract_revision",
+        "build_state": "not_run",
+        "smoke_state": "not_run",
+        "observed_protocol_revision": "",
+        "observed_bundle_digest": "",
+        "observed_coverage": "",
+        "blocker_detail": "The prior source probe covered uci-tree-sitter/v1 and does not cover facts extraction contract uci-tree-sitter-facts/v2."
       }
     },
     {
       "goos": "linux",
       "goarch": "amd64",
-      "support_status": "source_probe_passed",
-      "evidence_state": "passed",
+      "support_status": "not_claimed",
+      "evidence_state": "not_reverified",
       "build_command": "CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build ./tools/uci-parser",
       "cgo_toolchain_requirement": "a C compiler capable of GOOS/GOARCH configured as CC",
       "source_probe": {
-        "code": "source_build_and_javascript_smoke_passed",
-        "build_state": "passed",
-        "smoke_state": "passed",
-        "observed_protocol_revision": "uci-tree-sitter/v1",
-        "observed_bundle_digest": "sha256:2e286303d97702c827ffb5acf682adb0f8682e2ce8f29c5b6ccebb6723ff6dad",
-        "observed_coverage": "complete",
-        "blocker_detail": ""
+        "code": "not_reverified_after_facts_contract_revision",
+        "build_state": "not_run",
+        "smoke_state": "not_run",
+        "observed_protocol_revision": "",
+        "observed_bundle_digest": "",
+        "observed_coverage": "",
+        "blocker_detail": "The prior source probe covered uci-tree-sitter/v1 and does not cover facts extraction contract uci-tree-sitter-facts/v2."
       }
     },
     {
