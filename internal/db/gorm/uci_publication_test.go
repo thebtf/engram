@@ -434,6 +434,290 @@ func TestUCIReplayFinalizeAfterLostACKAndLaterPublish(t *testing.T) {
 	require.Error(t, err, "a changed Finalize binding must not replay another result")
 }
 
+func TestUCIPublishSemanticNoOpReusesCurrentView(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	main := fixture.admitArtifact(t, fixture.source.SourceID, "no-op-main", "func Main() {}\n", UCIParseArtifactComplete)
+	target := fixture.admitArtifact(t, fixture.source.SourceID, "no-op-target", "func Target() {}\n", UCIParseArtifactComplete)
+	memberships := []ucidomain.IndexMembership{
+		uciPublicationPresentMembership("main.go", main),
+		uciPublicationPresentMembership("target.go", target),
+	}
+	replacements := []ucidomain.IndexEdgeReplacement{
+		{SourcePath: "main.go", Edges: []ucidomain.IndexEdge{uciPublicationResolvedEdge(main, "main.go", target, "target.go")}},
+		{SourcePath: "target.go"},
+	}
+	draft := newUCIPublicationDraft(
+		[]ucidomain.IndexPart{uciPublicationPart([]uciPublicationArtifact{main, target}, memberships, nil, replacements)},
+		memberships,
+		replacements,
+	)
+	caller := fixture.caller("no-op-owner")
+	firstBuild := fixture.begin(t, fixture.publisher, caller, "no-op-first", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+	firstAcks := fixture.stageDraft(t, fixture.publisher, caller, firstBuild.Build, draft.parts)
+	firstManifest := fixture.manifest(t, firstAcks, draft)
+	first, err := fixture.publisher.Finalize(context.Background(), caller, ucidomain.IndexFinalizeInput{
+		Build:    firstBuild.Build,
+		Manifest: firstManifest,
+	})
+	require.NoError(t, err)
+
+	secondBuild := fixture.begin(t, fixture.publisher, caller, "no-op-rescan", fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(first), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile)
+	secondAcks := fixture.stageDraft(t, fixture.publisher, caller, secondBuild.Build, draft.parts)
+	secondManifest := fixture.manifest(t, secondAcks, draft)
+	secondManifest.Observation.ScanStart = firstManifest.Observation.ScanStart.Add(time.Minute)
+	secondManifest.Observation.ScanEnd = secondManifest.Observation.ScanStart.Add(2 * time.Second)
+	require.NotEqual(t, firstManifest.PartsDigest, secondManifest.PartsDigest, "a distinct build must retain its build-bound staged-parts digest")
+
+	var membershipsBefore, edgesBefore int64
+	require.NoError(t, fixture.db.Model(&UCIMembership{}).Where("checkout_id = ?", fixture.checkout.CheckoutID).Count(&membershipsBefore).Error)
+	require.NoError(t, fixture.db.Model(&UCIResolvedEdge{}).Where("checkout_id = ?", fixture.checkout.CheckoutID).Count(&edgesBefore).Error)
+	input := ucidomain.IndexFinalizeInput{
+		Build:          secondBuild.Build,
+		ExpectedParent: uciPublicationParent(first),
+		Manifest:       secondManifest,
+	}
+	reused, err := fixture.publisher.Finalize(context.Background(), caller, input)
+	require.NoError(t, err)
+	require.Equal(t, secondBuild.Build.BuildID, reused.BuildID)
+	require.Equal(t, first.Context, reused.Context)
+	require.Equal(t, first.ManifestDigest, reused.ManifestDigest)
+	require.Equal(t, first.AcceptedFSSeq, reused.AcceptedFSSeq)
+	require.Equal(t, first.PublishedAt, reused.PublishedAt)
+	fixture.assertViewCount(t, fixture.checkout, 1)
+
+	var membershipsAfter, edgesAfter int64
+	require.NoError(t, fixture.db.Model(&UCIMembership{}).Where("checkout_id = ?", fixture.checkout.CheckoutID).Count(&membershipsAfter).Error)
+	require.NoError(t, fixture.db.Model(&UCIResolvedEdge{}).Where("checkout_id = ?", fixture.checkout.CheckoutID).Count(&edgesAfter).Error)
+	require.Equal(t, membershipsBefore, membershipsAfter)
+	require.Equal(t, edgesBefore, edgesAfter)
+	fixture.assertPublicationJobResult(t, secondBuild.Build.BuildID, first.Context.ViewID)
+
+	var checkout UCICheckout
+	require.NoError(t, fixture.db.Where("checkout_id = ?", fixture.checkout.CheckoutID).First(&checkout).Error)
+	require.NotNil(t, checkout.CurrentViewID)
+	require.Equal(t, first.Context.ViewID, *checkout.CurrentViewID)
+	require.Nil(t, checkout.OwnerInstance)
+	require.Nil(t, checkout.LeaseExpiresAt)
+	var current UCIView
+	require.NoError(t, fixture.db.Where("view_id = ?", first.Context.ViewID).First(&current).Error)
+	require.Equal(t, UCIViewPublished, current.State)
+
+	var job UCIJob
+	require.NoError(t, fixture.db.Where("job_id = ?", secondBuild.Build.BuildID).First(&job).Error)
+	require.NotNil(t, job.FinalizeBindingDigest)
+	require.NotNil(t, job.SealedManifest)
+	var sealed ucidomain.IndexManifestCompletion
+	require.NoError(t, json.Unmarshal([]byte(*job.SealedManifest), &sealed))
+	require.Equal(t, secondManifest, sealed)
+
+	replayed, err := fixture.publisher.Finalize(context.Background(), caller, input)
+	require.NoError(t, err)
+	require.Equal(t, reused, replayed)
+	fixture.assertViewCount(t, fixture.checkout, 1)
+	var membershipsAfterReplay, edgesAfterReplay int64
+	require.NoError(t, fixture.db.Model(&UCIMembership{}).Where("checkout_id = ?", fixture.checkout.CheckoutID).Count(&membershipsAfterReplay).Error)
+	require.NoError(t, fixture.db.Model(&UCIResolvedEdge{}).Where("checkout_id = ?", fixture.checkout.CheckoutID).Count(&edgesAfterReplay).Error)
+	require.Equal(t, membershipsBefore, membershipsAfterReplay)
+	require.Equal(t, edgesBefore, edgesAfterReplay)
+}
+
+func TestUCIPublishSemanticChangesCreateNewView(t *testing.T) {
+	identityDraft := func(_ *testing.T, _ *uciPublicationFixture, _ uciPublicationArtifact, _ uciPublicationArtifact, draft uciPublicationDraft) uciPublicationDraft {
+		return draft
+	}
+	tests := []struct {
+		name           string
+		draft          func(*testing.T, *uciPublicationFixture, uciPublicationArtifact, uciPublicationArtifact, uciPublicationDraft) uciPublicationDraft
+		mutateManifest func(*ucidomain.IndexManifestCompletion)
+	}{
+		{
+			name: "advanced filesystem sequence",
+			draft: func(_ *testing.T, _ *uciPublicationFixture, _ uciPublicationArtifact, _ uciPublicationArtifact, draft uciPublicationDraft) uciPublicationDraft {
+				draft.fsSeq = 2
+				return draft
+			},
+		},
+		{
+			name: "changed edge digest",
+			draft: func(_ *testing.T, _ *uciPublicationFixture, main, target uciPublicationArtifact, draft uciPublicationDraft) uciPublicationDraft {
+				replacements := []ucidomain.IndexEdgeReplacement{{SourcePath: "main.go"}, {SourcePath: "target.go"}}
+				return newUCIPublicationDraft(
+					[]ucidomain.IndexPart{uciPublicationPart([]uciPublicationArtifact{main, target}, draft.memberships, nil, replacements)},
+					draft.memberships,
+					replacements,
+				)
+			},
+		},
+		{
+			name: "changed coverage",
+			draft: func(_ *testing.T, _ *uciPublicationFixture, _ uciPublicationArtifact, _ uciPublicationArtifact, draft uciPublicationDraft) uciPublicationDraft {
+				draft.coverage.ExcludedFiles = 1
+				return draft
+			},
+		},
+		{
+			name:  "changed head",
+			draft: identityDraft,
+			mutateManifest: func(manifest *ucidomain.IndexManifestCompletion) {
+				head := strings.Repeat("b", 40)
+				manifest.Observation.HeadOID = &head
+			},
+		},
+		{
+			name:  "changed object format",
+			draft: identityDraft,
+			mutateManifest: func(manifest *ucidomain.IndexManifestCompletion) {
+				head := strings.Repeat("b", 64)
+				objectFormat := "sha256"
+				manifest.Observation.HeadOID = &head
+				manifest.Observation.ObjectFormat = &objectFormat
+			},
+		},
+		{
+			name:  "changed ref label",
+			draft: identityDraft,
+			mutateManifest: func(manifest *ucidomain.IndexManifestCompletion) {
+				refLabel := "refs/heads/no-op-different"
+				manifest.Observation.RefLabel = &refLabel
+			},
+		},
+		{
+			name:  "changed dirty state",
+			draft: identityDraft,
+			mutateManifest: func(manifest *ucidomain.IndexManifestCompletion) {
+				manifest.Observation.Dirty = true
+			},
+		},
+		{
+			name: "changed manifest digest",
+			draft: func(t *testing.T, fixture *uciPublicationFixture, _ uciPublicationArtifact, target uciPublicationArtifact, _ uciPublicationDraft) uciPublicationDraft {
+				changedMain := fixture.admitArtifact(t, fixture.source.SourceID, "semantic-change-main", "func MainChanged() {}\n", UCIParseArtifactComplete)
+				memberships := []ucidomain.IndexMembership{
+					uciPublicationPresentMembership("main.go", changedMain),
+					uciPublicationPresentMembership("target.go", target),
+				}
+				replacements := []ucidomain.IndexEdgeReplacement{
+					{SourcePath: "main.go", Edges: []ucidomain.IndexEdge{uciPublicationResolvedEdge(changedMain, "main.go", target, "target.go")}},
+					{SourcePath: "target.go"},
+				}
+				return newUCIPublicationDraft(
+					[]ucidomain.IndexPart{uciPublicationPart([]uciPublicationArtifact{changedMain, target}, memberships, nil, replacements)},
+					memberships,
+					replacements,
+				)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := openUCIPublicationFixture(t)
+			main := fixture.admitArtifact(t, fixture.source.SourceID, "semantic-main", "func Main() {}\n", UCIParseArtifactComplete)
+			target := fixture.admitArtifact(t, fixture.source.SourceID, "semantic-target", "func Target() {}\n", UCIParseArtifactComplete)
+			memberships := []ucidomain.IndexMembership{
+				uciPublicationPresentMembership("main.go", main),
+				uciPublicationPresentMembership("target.go", target),
+			}
+			replacements := []ucidomain.IndexEdgeReplacement{
+				{SourcePath: "main.go", Edges: []ucidomain.IndexEdge{uciPublicationResolvedEdge(main, "main.go", target, "target.go")}},
+				{SourcePath: "target.go"},
+			}
+			firstDraft := newUCIPublicationDraft(
+				[]ucidomain.IndexPart{uciPublicationPart([]uciPublicationArtifact{main, target}, memberships, nil, replacements)},
+				memberships,
+				replacements,
+			)
+			caller := fixture.caller("semantic-owner")
+			_, first := fixture.publish(t, fixture.publisher, caller, "semantic-first", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial, firstDraft)
+
+			secondDraft := test.draft(t, fixture, main, target, firstDraft)
+			secondBuild := fixture.begin(t, fixture.publisher, caller, "semantic-change-"+test.name, fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(first), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile)
+			secondAcks := fixture.stageDraft(t, fixture.publisher, caller, secondBuild.Build, secondDraft.parts)
+			manifest := fixture.manifest(t, secondAcks, secondDraft)
+			if test.mutateManifest != nil {
+				test.mutateManifest(&manifest)
+			}
+			second, err := fixture.publisher.Finalize(context.Background(), caller, ucidomain.IndexFinalizeInput{
+				Build:          secondBuild.Build,
+				ExpectedParent: uciPublicationParent(first),
+				Manifest:       manifest,
+			})
+			require.NoError(t, err)
+			require.NotEqual(t, first.Context.ViewID, second.Context.ViewID)
+			require.Equal(t, first.Context.Generation+1, second.Context.Generation)
+			require.Equal(t, manifest.Observation.ObservedFSSeq, second.AcceptedFSSeq)
+			fixture.assertViewCount(t, fixture.checkout, 2)
+			fixture.assertCurrentProjection(t, fixture.checkout, second, secondDraft.memberships, secondDraft.replacements, secondDraft.coverage)
+		})
+	}
+}
+
+func TestUCIPublishUnverifiablePriorManifestCreatesNewView(t *testing.T) {
+	tests := []struct {
+		name    string
+		corrupt func(*uciPublicationFixture, string)
+	}{
+		{
+			name: "missing sealed manifest",
+			corrupt: func(fixture *uciPublicationFixture, buildID string) {
+				require.NoError(t, fixture.db.Exec(`UPDATE ci_jobs SET sealed_manifest = NULL WHERE job_id = ?`, buildID).Error)
+			},
+		},
+		{
+			name: "malformed sealed manifest",
+			corrupt: func(fixture *uciPublicationFixture, buildID string) {
+				require.NoError(t, fixture.db.Exec(`UPDATE ci_jobs SET sealed_manifest = jsonb_build_object('PartCount', 1) WHERE job_id = ?`, buildID).Error)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := openUCIPublicationFixture(t)
+			main := fixture.admitArtifact(t, fixture.source.SourceID, "unverifiable-main", "func Main() {}\n", UCIParseArtifactComplete)
+			target := fixture.admitArtifact(t, fixture.source.SourceID, "unverifiable-target", "func Target() {}\n", UCIParseArtifactComplete)
+			memberships := []ucidomain.IndexMembership{
+				uciPublicationPresentMembership("main.go", main),
+				uciPublicationPresentMembership("target.go", target),
+			}
+			replacements := []ucidomain.IndexEdgeReplacement{
+				{SourcePath: "main.go", Edges: []ucidomain.IndexEdge{uciPublicationResolvedEdge(main, "main.go", target, "target.go")}},
+				{SourcePath: "target.go"},
+			}
+			draft := newUCIPublicationDraft(
+				[]ucidomain.IndexPart{uciPublicationPart([]uciPublicationArtifact{main, target}, memberships, nil, replacements)},
+				memberships,
+				replacements,
+			)
+			caller := fixture.caller("unverifiable-owner")
+			firstBuild := fixture.begin(t, fixture.publisher, caller, "unverifiable-first", fixture.checkout, fixture.profile.ProfileID, nil, ucidomain.IndexManifestFull, ucidomain.IndexJobInitial)
+			firstAcks := fixture.stageDraft(t, fixture.publisher, caller, firstBuild.Build, draft.parts)
+			firstManifest := fixture.manifest(t, firstAcks, draft)
+			first, err := fixture.publisher.Finalize(context.Background(), caller, ucidomain.IndexFinalizeInput{
+				Build:    firstBuild.Build,
+				Manifest: firstManifest,
+			})
+			require.NoError(t, err)
+			test.corrupt(fixture, firstBuild.Build.BuildID)
+
+			secondBuild := fixture.begin(t, fixture.publisher, caller, "unverifiable-second", fixture.checkout, fixture.profile.ProfileID, uciPublicationParent(first), ucidomain.IndexManifestFull, ucidomain.IndexJobReconcile)
+			secondAcks := fixture.stageDraft(t, fixture.publisher, caller, secondBuild.Build, draft.parts)
+			secondManifest := fixture.manifest(t, secondAcks, draft)
+			secondManifest.Observation.ScanStart = firstManifest.Observation.ScanStart.Add(time.Minute)
+			secondManifest.Observation.ScanEnd = secondManifest.Observation.ScanStart.Add(2 * time.Second)
+			second, err := fixture.publisher.Finalize(context.Background(), caller, ucidomain.IndexFinalizeInput{
+				Build:          secondBuild.Build,
+				ExpectedParent: uciPublicationParent(first),
+				Manifest:       secondManifest,
+			})
+			require.NoError(t, err)
+			require.NotEqual(t, first.Context.ViewID, second.Context.ViewID)
+			fixture.assertViewCount(t, fixture.checkout, 2)
+			fixture.assertCurrentProjection(t, fixture.checkout, second, memberships, replacements, draft.coverage)
+		})
+	}
+}
+
 func TestUCIDeleteAllRequiresCompleteFullCensus(t *testing.T) {
 	fixture := openUCIPublicationFixture(t)
 	artifact := fixture.admitArtifact(t, fixture.source.SourceID, "delete-all", "func Present() {}\n", UCIParseArtifactComplete)

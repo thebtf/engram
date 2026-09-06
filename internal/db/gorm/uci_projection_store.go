@@ -3289,6 +3289,38 @@ func (publisher *uciPublisher) Finalize(ctx context.Context, caller ucidomain.In
 		if !activeUCIPublicationLease(*job, checkout, caller, input.Build, now) {
 			return errUCIPublicationLeaseStale
 		}
+		if current != nil && canReuseUCIPublishedView(ctx, tx, *job, *current, input, candidate) {
+			sealedManifest, err := json.Marshal(input.Manifest)
+			if err != nil {
+				return err
+			}
+			resultViewID := current.ViewID
+			if err := tx.WithContext(ctx).Model(&UCIJob{}).Where("job_id = ?", job.JobID).Updates(map[string]any{
+				"state":                   UCIJobSucceeded,
+				"result_view_id":          resultViewID,
+				"sealed_manifest":         string(sealedManifest),
+				"finalize_binding_digest": finalizeDigest,
+				"updated_at":              now,
+			}).Error; err != nil {
+				return fmt.Errorf("uci publication store no-op result: %w", err)
+			}
+			if err := tx.WithContext(ctx).Model(&UCICheckout{}).Where("checkout_id = ?", checkout.CheckoutID).Updates(map[string]any{
+				"owner_instance":   nil,
+				"lease_expires_at": nil,
+				"updated_at":       now,
+			}).Error; err != nil {
+				return fmt.Errorf("uci publication release checkout lease: %w", err)
+			}
+			published = ucidomain.IndexPublishedView{
+				BuildID:        job.JobID,
+				Context:        uciContextRefFromView(*current),
+				ManifestDigest: ucidomain.IndexDigest(current.ManifestDigest),
+				AcceptedFSSeq:  current.ObservedFSSeq,
+				PublishedAt:    current.PublishedAt.UTC(),
+			}
+			return nil
+		}
+
 		nextGeneration := int64(1)
 		if current != nil {
 			nextGeneration = current.Generation + 1
@@ -3396,6 +3428,126 @@ type uciPublicationCandidate struct {
 	CurrentEdges       map[string][]UCIResolvedEdge
 	EdgeReplacements   map[string]ucidomain.IndexEdgeReplacement
 	DeletedPaths       map[string]struct{}
+}
+
+// canReuseUCIPublishedView accepts only a fully proven semantic no-op. Any missing,
+// malformed, or divergent prior publication deliberately falls through to normal
+// publication rather than converting uncertainty into a successful reuse.
+func canReuseUCIPublishedView(ctx context.Context, tx *gorm.DB, job UCIJob, current UCIView, input ucidomain.IndexFinalizeInput, candidate *uciPublicationCandidate) bool {
+	if candidate == nil || job.ProfileID == nil || current.ProfileID != *job.ProfileID ||
+		!matchesUCIPublicationParent(input.ExpectedParent, &current, input.Build.Scope, *job.ProfileID) ||
+		!sameUCIPublicationProjection(candidate.CurrentMemberships, candidate.Memberships, candidate.CurrentEdges, candidate.EdgeReplacements) {
+		return false
+	}
+
+	priorJob, priorManifest, found := loadUCIPublishedManifestForView(ctx, tx, current)
+	if !found || !matchesUCIPublishedViewManifest(current, priorJob, priorManifest) {
+		return false
+	}
+	return sameUCIPublicationSemanticManifest(priorManifest, input.Manifest)
+}
+
+// loadUCIPublishedManifestForView finds the successful job written with the View.
+// Normal publication stamps its result record and View with the same database clock.
+func loadUCIPublishedManifestForView(ctx context.Context, tx *gorm.DB, view UCIView) (UCIJob, ucidomain.IndexManifestCompletion, bool) {
+	if view.PublishedAt == nil {
+		return UCIJob{}, ucidomain.IndexManifestCompletion{}, false
+	}
+	var job UCIJob
+	if err := tx.WithContext(ctx).Where(
+		"result_view_id = ? AND state = ? AND updated_at = ?", view.ViewID, UCIJobSucceeded, *view.PublishedAt,
+	).Order("job_id ASC").First(&job).Error; err != nil || job.SealedManifest == nil {
+		return UCIJob{}, ucidomain.IndexManifestCompletion{}, false
+	}
+	var manifest ucidomain.IndexManifestCompletion
+	if err := json.Unmarshal([]byte(*job.SealedManifest), &manifest); err != nil || !validUCIPublicationManifest(manifest) {
+		return UCIJob{}, ucidomain.IndexManifestCompletion{}, false
+	}
+	return job, manifest, true
+}
+
+// matchesUCIPublishedViewManifest verifies that the sealed manifest is provenance
+// for this exact current View. Unlike semantic comparison, its scan timestamps must
+// match because they identify the View that the persisted job originally created.
+func matchesUCIPublishedViewManifest(view UCIView, job UCIJob, manifest ucidomain.IndexManifestCompletion) bool {
+	if !sameUCIPublicationStoredCoverage(view.CoverageJSON, manifest.Coverage) {
+		return false
+	}
+	return view.State == UCIViewPublished && view.PublishedAt != nil && job.State == UCIJobSucceeded &&
+		job.ResultViewID != nil && *job.ResultViewID == view.ViewID && job.SourceID == view.SourceID &&
+		job.CheckoutID != nil && *job.CheckoutID == view.CheckoutID && job.IncarnationID != nil && *job.IncarnationID == view.IncarnationID &&
+		job.ProfileID != nil && *job.ProfileID == view.ProfileID && view.ManifestDigest == string(manifest.ManifestDigest) &&
+		view.ObservedFSSeq == manifest.Observation.ObservedFSSeq && view.Dirty == manifest.Observation.Dirty &&
+		sameUCIOptionalString(view.HeadOID, manifest.Observation.HeadOID) &&
+		sameUCIOptionalString(view.ObjectFormat, manifest.Observation.ObjectFormat) &&
+		sameUCIOptionalString(view.RefLabel, manifest.Observation.RefLabel) &&
+		view.ScanStart.Equal(manifest.Observation.ScanStart) && view.ScanEnd.Equal(manifest.Observation.ScanEnd)
+}
+
+// sameUCIPublicationSemanticManifest excludes only the volatile scan window and
+// build-scoped staging identity. DigestIndexParts and its frame count intentionally
+// bind staging to a BuildID; prepareUCIPublicationCandidate authenticated that binding
+// for each job before this logical final-state comparison.
+func sameUCIPublicationSemanticManifest(left, right ucidomain.IndexManifestCompletion) bool {
+	return left.EntryCount == right.EntryCount && left.ManifestDigest == right.ManifestDigest &&
+		left.EdgeCount == right.EdgeCount && left.EdgesDigest == right.EdgesDigest &&
+		left.ScanOutcome == right.ScanOutcome && left.CensusComplete == right.CensusComplete &&
+		sameUCIPublicationObservation(left.Observation, right.Observation) &&
+		sameUCIPublicationCoverage(left.Coverage, right.Coverage)
+}
+
+func sameUCIPublicationObservation(left, right ucidomain.IndexObservation) bool {
+	return sameUCIOptionalString(left.HeadOID, right.HeadOID) &&
+		sameUCIOptionalString(left.ObjectFormat, right.ObjectFormat) &&
+		sameUCIOptionalString(left.RefLabel, right.RefLabel) &&
+		left.Dirty == right.Dirty && left.ObservedFSSeq == right.ObservedFSSeq
+}
+
+func sameUCIPublicationCoverage(left, right ucidomain.IndexCoverage) bool {
+	return left.Structural == right.Structural && left.Lexical == right.Lexical && left.Vector == right.Vector &&
+		left.ExcludedFiles == right.ExcludedFiles && left.UnreadableFiles == right.UnreadableFiles &&
+		left.UnresolvedReferences == right.UnresolvedReferences
+}
+
+func sameUCIPublicationStoredCoverage(encoded string, expected ucidomain.IndexCoverage) bool {
+	var actual struct {
+		Structural           *string `json:"structural"`
+		Lexical              *string `json:"lexical"`
+		Vector               *string `json:"vector"`
+		ExcludedFiles        *uint64 `json:"excluded_files"`
+		UnreadableFiles      *uint64 `json:"unreadable_files"`
+		UnresolvedReferences *uint64 `json:"unresolved_references"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &actual); err != nil || actual.Structural == nil || actual.Lexical == nil ||
+		actual.Vector == nil || actual.ExcludedFiles == nil || actual.UnreadableFiles == nil || actual.UnresolvedReferences == nil {
+		return false
+	}
+	return *actual.Structural == string(expected.Structural) && *actual.Lexical == string(expected.Lexical) &&
+		*actual.Vector == string(expected.Vector) && *actual.ExcludedFiles == expected.ExcludedFiles &&
+		*actual.UnreadableFiles == expected.UnreadableFiles && *actual.UnresolvedReferences == expected.UnresolvedReferences
+}
+
+func sameUCIPublicationProjection(currentMemberships map[string]UCIMembership, memberships map[string]ucidomain.IndexMembership, currentEdges map[string][]UCIResolvedEdge, replacements map[string]ucidomain.IndexEdgeReplacement) bool {
+	if len(currentMemberships) != len(memberships) {
+		return false
+	}
+	for path, membership := range memberships {
+		current, found := currentMemberships[path]
+		if !found || !sameUCIPublicationMembership(current, membership) {
+			return false
+		}
+	}
+	for sourcePath, replacement := range replacements {
+		if !sameUCIPublicationEdgeReplacement(currentEdges[sourcePath], replacement) {
+			return false
+		}
+	}
+	for sourcePath := range currentEdges {
+		if _, found := replacements[sourcePath]; !found {
+			return false
+		}
+	}
+	return true
 }
 
 func validUCIPublicationManifest(manifest ucidomain.IndexManifestCompletion) bool {
