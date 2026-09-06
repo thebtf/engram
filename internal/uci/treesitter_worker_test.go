@@ -672,6 +672,7 @@ func TestUCITreeSitterWorkerReportsPartialAndUnsupportedCoverage(t *testing.T) {
 	uciRequireTreeSitterDiagnostic(t, malformed.Diagnostics, "PARSE_ERROR")
 	uciRequireTreeSitterDefinition(t, malformed.Definitions, uciTreeSitterExpectedDefinition{
 		kind:       "const",
+		name:       "stable",
 		symbolKey:  "typescript:const:stable",
 		localKey:   "const:stable",
 		fragment:   "export const stable = 1;",

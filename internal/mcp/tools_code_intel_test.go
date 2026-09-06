@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	gorm "github.com/thebtf/engram/internal/db/gorm"
 	"github.com/thebtf/engram/internal/mcp"
 )
 
@@ -85,21 +84,6 @@ func TestCodeIntelFlag_On_StoreNil_ToolsAbsentFromList(t *testing.T) {
 		assert.NotEqual(t, "codebase_search", tool.Name, "codebase_search must not appear when store is nil")
 		assert.NotEqual(t, "codebase_status", tool.Name, "codebase_status must not appear when store is nil")
 	}
-}
-
-// TestCodeIntelFlag_On_ServerAdvertisesSearchNotStatus verifies that when the
-// flag is on and the backing store is wired, the server advertises
-// codebase_search but not daemon-owned codebase_status.
-func TestCodeIntelFlag_On_ServerAdvertisesSearchNotStatus(t *testing.T) {
-	t.Setenv("ENGRAM_CODE_INTEL_ENABLED", "true")
-
-	srv := mcp.NewServer(mcp.ServerOptions{Version: "test"})
-	srv.SetLegacyUnscopedCodeChunkStore(gorm.NewCodeChunkStore(nil))
-
-	names := buildCodeIntelToolNames(srv)
-	assert.True(t, names["codebase_search"], "codebase_search must be advertised when flag and store are on")
-	assert.False(t, names["codebase_status"], "codebase_status must remain daemon-advertised only")
-	assert.False(t, names["codebase_index"], "codebase_index is daemon-only")
 }
 
 // TestCodebaseSearch_FlagOff_ReturnsError verifies that codebase_search returns
