@@ -192,11 +192,12 @@ description: "Dependency-ordered implementation tasks for Unified Code Intellige
 
 ---
 
-## Phase 9: Deferred — Memory R1 Reconciliation and UCI-2 Re-entry Only After UCI-1
+## Phase 9: Next Product Transition — Book Context, Then Preserved Memory R1
 
-**Purpose**: Retain the deferred UCI-2 scope without starting it early. These are re-entry/planning gates, not UCI-1 implementation work and not authorization to build Code UI.
+**Purpose**: Preserve UCI-1 as the current completion boundary, then hand off one separately admitted Book Context feature before returning to preserved Memory R1. Optional UCI-2/UCI-3 work remains downstream and is not a UCI-1 prerequisite.
 
-- [ ] T087 Reconcile and return Working Agent Memory R1 against the accepted Space/Source/Checkout/View contract in `specs/009-working-agent-memory-r1/` and `.specify/memory/constitution.md` before optional UCI expansion; Req: SC-08; Depends: T086; Owner boundary: separately accepted Memory R1 feature and its preserved project/Space/receipt semantics; Proof: a Memory R1 revalidation/return outcome names its own evidence and does not claim UCI-1 completed Memory R1; Commit: one atomic Memory R1 re-entry evidence commit if that feature changes.
+- [ ] T097 Admit Book Context as the next separate SpecKit feature from `.agent/intake/engram-graph-book-audit-2026-09-06-r3/02-BOOK-CONTEXT-BRIEF.md` and primary sources in `03-SOURCES.md`; run constitution preflight, specify/clarify, independent spec/plan review, checklist, tasks, and analyze before implementation; preserve exact source/edition/revision, coverage, concept support, agent application, and explicit non-goals against plain PDF RAG or per-book instruction injection; Req: SC-08; Depends: T086; Owner boundary: new Book Context feature package, not UCI implementation; Proof: one accepted Book Context SpecKit package with its own execution graph and no claim that UCI or Memory R1 implemented it; Commit: one atomic Book Context planning admission commit.
+- [ ] T087 After T097 and the separately accepted Book Context feature reaches its own terminal product result, reconcile and return Working Agent Memory R1 against the accepted Space/Source/Checkout/View and book-source addressing contracts in `specs/009-working-agent-memory-r1/` and `.specify/memory/constitution.md`; Req: SC-08; Depends: T097 + accepted Book Context completion receipt; Owner boundary: separately accepted Memory R1 feature and its preserved project/Space/receipt semantics; Proof: a Memory R1 revalidation/return outcome names Book Context and UCI addressing evidence and does not claim either feature completed Memory R1; Commit: one atomic Memory R1 re-entry evidence commit if that feature changes.
 - [ ] T088 Re-admit the deferred UCI-2 scope from `spec.md`, `supporting-contracts/retrieval-and-graph.md`, and `acceptance/scenarios.json` U26–U31/U41 as a separate accepted Spec Kit feature, preserving UCI-1 selectors/ACL/View semantics and no new service; Req: SC-08; Depends: T087; Owner boundary: future UCI-2 specification/plan, not `internal/uci` UCI-1 scope; Proof: independently accepted UCI-2 spec/plan/checklist explicitly names broader languages/material, cross-source behavior, analytics, and retained limitations; Commit: one atomic UCI-2 planning commit.
 - [ ] T089 Retain UCI-2 broader languages, contextual-material navigation, bounded multi-source graph behavior, and optional enrichment only in the separately accepted UCI-2 task graph rooted in `supporting-contracts/retrieval-and-graph.md` and `acceptance/scenarios.json`; Req: SC-08; Depends: T088; Owner boundary: future extractor/graph/analytics package scope; Proof: the UCI-2 task graph demonstrates no UCI-1 regression and treats semantic/enrichment edges as evidence-labeled projections; Commit: one atomic UCI-2 slice commit per independently proven future slice.
 - [ ] T090 Retain the read-only Code UI only as separately accepted UCI-2 surface work in `ui/`, `apps/operator-console/`, and `supporting-contracts/api-contracts.md`; Req: FR-12, SC-08; Depends: T088; Owner boundary: future working-surface feature, not UCI-1 core; Proof: a distinct accepted surface package defines selectors, stale/partial states, citations, and browser verification before any UI implementation; Commit: one atomic UCI-2 surface-scope commit.
@@ -233,9 +234,11 @@ T001 existing-seam two-worktree behavioral RED
                 -> T065–T074 US4 source-read/graph/auth/installed proof GREEN
                   -> T075–T079 US5 product-value/SLO proof
                     -> T080–T086 UCI-1 rollback/security/installed acceptance/build/Sonar/release gate
-                      -> T087 Memory R1 reconciliation/return
-                        -> T088–T090 deferred UCI-2 re-entry only
-                      -> T091–T094 deferred UCI-3 re-entry only
+                      -> T097 Book Context SpecKit admission
+                        -> [accepted Book Context terminal product result]
+                          -> T087 Memory R1 reconciliation/return
+                            -> T088–T090 deferred UCI-2 re-entry only
+                            -> T091–T094 deferred UCI-3 re-entry only
 ```
 
 ### Story Dependencies
@@ -278,7 +281,7 @@ T001 existing-seam two-worktree behavioral RED
 | SC-05 | T010–T011, T051–T064, T077–T079, T082–T083 |
 | SC-06 | T014–T017, T047, T071–T074, T083–T086 |
 | SC-07 | T075–T079, T083, T086 |
-| SC-08 | T002, T007, T080–T086, T087–T094 |
+| SC-08 | T002, T007, T080–T086, T097, T087–T094 |
 
 Every FR-01–FR-12 and SC-01–SC-08 has one or more mapped implementation or acceptance tasks. The deferred mappings preserve SC-08 scope truth; they do not delay UCI-1.
 
@@ -311,4 +314,4 @@ Every FR-01–FR-12 and SC-01–SC-08 has one or more mapped implementation or a
 1. **UCI-1A first vertical**: T001–T028 prove that the same public tool names can distinguish two real dirty worktrees and preserve per-client context.
 2. **UCI-1B capability**: T029–T064 make retrieval, parser coverage, and recovery useful without crossing a typed View boundary.
 3. **Installed and measured outcome**: T065–T086 prove native installation, security, developer value, release quality, rollback, and final scope truth together.
-4. **Deferred expansion**: T087–T094 are intentionally downstream re-entry gates. They cannot be cut into UCI-1 work and do not authorize Code UI or broad product-domain migration before their own accepted feature packages.
+4. **Ordered next products**: T097 admits Book Context only after UCI-1 acceptance; T087 returns to preserved Memory R1 only after the Book Context feature's accepted terminal result. T088–T094 remain optional downstream re-entry gates and cannot be cut into UCI-1 or Book Context work.
