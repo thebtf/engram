@@ -549,7 +549,11 @@ func uciRuntimeCanonicalPath(raw string) (string, error) {
 			return "", errors.New("path contains control characters")
 		}
 	}
-	return filepath.Clean(raw), nil
+	physical, err := filepath.EvalSymlinks(filepath.Clean(raw))
+	if err != nil {
+		return "", fmt.Errorf("resolve physical path: %w", err)
+	}
+	return filepath.Clean(physical), nil
 }
 
 func uciRuntimeSamePath(left, right string) bool {
