@@ -589,17 +589,16 @@ func unwrapServerStatusTextBlock(payload map[string]json.RawMessage) (json.RawMe
 }
 
 func unwrapServerStatusContentEnvelope(payload map[string]json.RawMessage) (json.RawMessage, error) {
-	if len(payload) != 2 {
-		return nil, errInvalidServerStatusPayload
-	}
 	rawContent, hasContent := payload["content"]
 	rawIsError, hasIsError := payload["isError"]
-	if !hasContent || !hasIsError {
+	if !hasContent || len(payload) < 1 || len(payload) > 2 {
 		return nil, errInvalidServerStatusPayload
 	}
-	var isError *bool
-	if err := json.Unmarshal(rawIsError, &isError); err != nil || isError == nil || *isError {
-		return nil, errInvalidServerStatusPayload
+	if hasIsError {
+		var isError *bool
+		if err := json.Unmarshal(rawIsError, &isError); err != nil || isError == nil || *isError {
+			return nil, errInvalidServerStatusPayload
+		}
 	}
 	var content []json.RawMessage
 	if err := json.Unmarshal(rawContent, &content); err != nil || len(content) != 1 {

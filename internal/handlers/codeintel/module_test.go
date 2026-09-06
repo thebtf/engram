@@ -232,7 +232,8 @@ func testStatusContentEnvelope(t *testing.T, content []json.RawMessage, isError 
 func testNestedStatusProxyPayload(t *testing.T, status json.RawMessage) json.RawMessage {
 	t.Helper()
 	inner := testStatusTextBlock(t, status)
-	envelope := testStatusContentEnvelope(t, []json.RawMessage{inner}, false)
+	envelope, err := json.Marshal(map[string]any{"content": []json.RawMessage{inner}})
+	require.NoError(t, err)
 	return testStatusTextBlock(t, envelope)
 }
 
