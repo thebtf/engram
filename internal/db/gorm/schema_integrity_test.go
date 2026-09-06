@@ -78,7 +78,8 @@ func TestSchemaIntegrity_EntityIDColumnsRequireForeignKeysOrWhitelist(t *testing
 			if _, ok := whitelist[key]; ok {
 				continue
 			}
-			if columnHasInlineReference(column.Definition) ||
+			if columnIsPrimaryKey(column.Definition, table.CreateSQL, column.Name) ||
+				columnHasInlineReference(column.Definition) ||
 				createTableHasForeignKey(table.CreateSQL, column.Name) ||
 				laterStatementsHaveForeignKey(schema, table.Name, column.Name, table.CreatingMigrationNumericID) {
 				continue
@@ -168,5 +169,20 @@ func laterStatementsHaveForeignKey(schema *migrationmeta.Schema, table, column s
 }
 
 func foreignKeyColumnPattern(column string) *regexp.Regexp {
-	return regexp.MustCompile(fmt.Sprintf(`(?is)\bFOREIGN\s+KEY\s*\(\s*"?%s"?\s*\)`, regexp.QuoteMeta(column)))
+	return tableConstraintColumnPattern("FOREIGN\\s+KEY", column)
+}
+
+func columnIsPrimaryKey(definition, createSQL, column string) bool {
+	return strings.Contains(strings.ToLower(definition), "primary key") || tableConstraintColumnPattern("PRIMARY\\s+KEY", column).MatchString(createSQL)
+}
+
+func tableConstraintColumnPattern(kind, column string) *regexp.Regexp {
+	identifier := `(?:"[^"]+"|[a-zA-Z_][a-zA-Z0-9_$]*)`
+	return regexp.MustCompile(fmt.Sprintf(
+		`(?is)\b%s\s*\(\s*(?:%s\s*,\s*)*"?%s"?(?:\s*,\s*%s)*\s*\)`,
+		kind,
+		identifier,
+		regexp.QuoteMeta(column),
+		identifier,
+	))
 }
