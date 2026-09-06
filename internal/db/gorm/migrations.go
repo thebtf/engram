@@ -6214,6 +6214,9 @@ WHERE utility_propagated_at IS NOT NULL`).Error
 					`CREATE UNIQUE INDEX IF NOT EXISTS idx_ci_jobs_publication_key
 						ON ci_jobs (source_id, checkout_id, publication_key)
 						WHERE publication_key IS NOT NULL`,
+					`CREATE INDEX IF NOT EXISTS idx_ci_jobs_result_view_updated_at
+						ON ci_jobs (result_view_id, updated_at)
+						WHERE result_view_id IS NOT NULL AND state = 'succeeded'`,
 					`CREATE TABLE IF NOT EXISTS ci_index_build_parts (
 						build_id UUID NOT NULL,
 						sequence INTEGER NOT NULL,

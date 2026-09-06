@@ -1306,6 +1306,7 @@ func assertUCIPublicationMigration173(t *testing.T, db *gormlib.DB) {
 	assertUCIProjectionRequiredColumns(t, db, "ci_parse_artifacts", "facts_digest", "sealed_at")
 	assertUCIProjectionIndex(t, db, "ci_index_build_parts", "build_id", "sequence")
 	assertUCIProjectionIndex(t, db, "ci_jobs", "unique", "publication_key")
+	assertUCIProjectionIndex(t, db, "ci_jobs", "result_view_id", "updated_at", "where", "state = 'succeeded'")
 	assertUCIProjectionIndex(t, db, "ci_resolved_edges", "unique", "checkout_id", "edge_key", "where", "valid_to_generation is null")
 }
 
