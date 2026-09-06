@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -104,18 +105,18 @@ func TestUCIRecordProductTaskResult(t *testing.T) {
 	firstAuthorized := fixture.authorize(t, fixture.resolver, first.view.Context)
 	fixture.ensureEmbeddings(t, firstAuthorized, []string{"src/vector_current.go"})
 
-	current := fixture.publish(t, fixture.primaryCheckout, &first.view.Context, "primary-v2", uciProductMeasurementSources("semantic-route:vector-current", "worktree-dirty-body-a", "restart-generation-two-current"))
+	currentSources := uciProductMeasurementSources("semantic-route:vector-current", "worktree-dirty-body-a", "restart-generation-two-current")
+	current := fixture.publish(t, fixture.primaryCheckout, &first.view.Context, "primary-v2", currentSources)
 	secondary := fixture.publish(t, fixture.secondaryCheckout, nil, "secondary-v1", uciProductMeasurementSources("semantic-route:vector-current", "worktree-dirty-body-b", "restart-generation-one"))
 
 	fixture.recompose(t)
 	currentAuthorized := fixture.authorize(t, fixture.resolver, current.view.Context)
 	secondaryAuthorized := fixture.authorize(t, fixture.resolver, secondary.view.Context)
-	fixture.ensureEmbeddings(t, currentAuthorized, []string{
-		"src/dirty_view.go",
-		"src/flows.go",
-		"src/vector_current.go",
-		"src/recovery.go",
-	})
+	currentPaths := make([]string, 0, len(currentSources))
+	for _, file := range currentSources {
+		currentPaths = append(currentPaths, file.path)
+	}
+	fixture.ensureEmbeddings(t, currentAuthorized, currentPaths)
 
 	results := fixture.productResults(t, corpus, current, secondary, currentAuthorized, secondaryAuthorized)
 	input := UCIProductTaskResultInput{
@@ -647,7 +648,7 @@ func (fixture *uciProductMeasurementFixture) query(t *testing.T, observation *uc
 	if err != nil {
 		t.Fatalf("query product measurement corpus: %v", err)
 	}
-	uciProductMeasurementRequireResponse(t, result.Response, authorized.Ref())
+	uciProductMeasurementRequireResponse(t, fmt.Sprintf("query %s %q", mode, text), result.Response, authorized.Ref())
 	return result.Response
 }
 
@@ -658,7 +659,7 @@ func (fixture *uciProductMeasurementFixture) semantic(t *testing.T, observation 
 	if err != nil {
 		t.Fatalf("semantic product measurement query: %v", err)
 	}
-	uciProductMeasurementRequireResponse(t, response, authorized.Ref())
+	uciProductMeasurementRequireResponse(t, "semantic query "+strconv.Quote(text), response, authorized.Ref())
 	return response
 }
 
@@ -674,7 +675,7 @@ func (fixture *uciProductMeasurementFixture) graph(t *testing.T, observation *uc
 	if err != nil {
 		t.Fatalf("graph product measurement corpus: %v", err)
 	}
-	uciProductMeasurementRequireResponse(t, response, authorized.Ref())
+	uciProductMeasurementRequireResponse(t, "graph neighbors "+entityKey, response, authorized.Ref())
 	return response
 }
 
@@ -691,7 +692,7 @@ func (fixture *uciProductMeasurementFixture) graphPath(t *testing.T, observation
 	if err != nil {
 		t.Fatalf("multi-hop product measurement graph: %v", err)
 	}
-	uciProductMeasurementRequireResponse(t, response, authorized.Ref())
+	uciProductMeasurementRequireResponse(t, "graph path "+sourceEntity+" -> "+destinationEntity, response, authorized.Ref())
 	return response
 }
 
@@ -705,21 +706,21 @@ func (fixture *uciProductMeasurementFixture) read(t *testing.T, observation *uci
 	if err != nil {
 		t.Fatalf("read exact product measurement source: %v", err)
 	}
-	uciProductMeasurementRequireResponse(t, response, authorized.Ref())
+	uciProductMeasurementRequireResponse(t, "versioned read "+item.Path, response, authorized.Ref())
 	return response
 }
 
-func uciProductMeasurementRequireResponse(t *testing.T, response uci.QueryResponse, ref uci.ContextRef) {
+func uciProductMeasurementRequireResponse(t *testing.T, operation string, response uci.QueryResponse, ref uci.ContextRef) {
 	t.Helper()
 	if err := response.ValidatePreExposure(); err != nil {
-		t.Fatalf("product measurement response is invalid before exposure: %v", err)
+		t.Fatalf("product measurement %s response is invalid before exposure: %v", operation, err)
 	}
 	if response.Status != uci.QueryStatusOK || response.Contexts == nil || len(*response.Contexts) != 1 {
-		t.Fatal("product measurement operation did not return one available view-bound response")
+		t.Fatalf("product measurement %s did not return one available view-bound response: status=%q contexts=%#v retrieval=%#v error=%#v", operation, response.Status, response.Contexts, response.Retrieval, response.Error)
 	}
 	contextRef := (*response.Contexts)[0]
 	if contextRef.SourceID != ref.SourceID || contextRef.CheckoutID != ref.CheckoutID || contextRef.ViewID != ref.ViewID || contextRef.ProfileID != ref.AnalysisProfileID || contextRef.Generation != ref.Generation {
-		t.Fatal("product measurement response escaped its immutable selected context")
+		t.Fatalf("product measurement %s response escaped its immutable selected context", operation)
 	}
 	if response.Items != nil {
 		for _, item := range *response.Items {
@@ -746,7 +747,7 @@ func uciProductMeasurementItem(t *testing.T, response uci.QueryResponse, path, c
 			}
 		}
 	}
-	t.Fatalf("observed product operation did not return required item at %q", path)
+	t.Fatalf("observed product operation did not return required item at %q containing %q: status=%q items=%#v", path, contains, response.Status, response.Items)
 	return uci.QueryItem{}
 }
 
@@ -787,13 +788,14 @@ func (fixture *uciProductMeasurementFixture) productResults(t *testing.T, corpus
 		observed := uciProductMeasurementObservation{}
 		response := fixture.semantic(t, &observed, currentAuthorized, uciProductMeasurementSemanticQueries[1])
 		item := uciProductMeasurementItem(t, response, "src/flows.go", "semantic-route:search")
-		graph := fixture.graph(t, &observed, currentAuthorized, item.Ref.EntityKey)
+		graphItem := fixture.exactDefinition(t, &observed, current, currentAuthorized, "src/flows.go", "func:SearchToExplain")
+		graph := fixture.graph(t, &observed, currentAuthorized, graphItem.Ref.EntityKey)
 		edge := uciProductMeasurementGraphEdge(t, graph)
 		read := fixture.read(t, &observed, currentAuthorized, item)
 		readItem := uciProductMeasurementItem(t, read, item.Path, "ExplainDependencies")
 		semantic := fixture.semanticEvidence(t, uciProductMeasurementSemanticQueries[1])
 		citation := uciProductMeasurementCitation("fixture://uci-product-corpus/search-to-explain", current.view.Context, item, 1)
-		passed := uciProductMeasurementHasVector(item) && edge.From.EntityKey == item.Ref.EntityKey && strings.Contains(readItem.Excerpt, "ExplainDependencies") && semantic.VectorDigest != ""
+		passed := uciProductMeasurementHasVector(item) && edge.From.EntityKey == graphItem.Ref.EntityKey && strings.Contains(readItem.Excerpt, "ExplainDependencies") && semantic.VectorDigest != ""
 		result = append(result, uciProductMeasurementResult(tasks["UCI-P02"], observed, []string{"semantic_search", "graph", "bounded_read"}, false,
 			[]UCIProductSourceCitation{citation}, []UCIProductRelationEvidence{uciProductMeasurementRelation("fixture://uci-product-corpus/search-to-explain", citation, edge)}, &semantic, passed, baseline("UCI-P02", "src/flows.go", "baseline-p02")))
 	}
@@ -912,6 +914,7 @@ func (fixture *uciProductMeasurementFixture) productResults(t *testing.T, corpus
 	{
 		observed := uciProductMeasurementObservation{}
 		item := fixture.exactDefinition(t, &observed, current, currentAuthorized, "src/restart.go", "func:RestartRecoveryFlow")
+		target := fixture.exactDefinition(t, &observed, current, currentAuthorized, "src/restart.go", "func:CurrentRecoveredView")
 		graph := fixture.graph(t, &observed, currentAuthorized, item.Ref.EntityKey)
 		edge := uciProductMeasurementGraphEdge(t, graph)
 		observed.tools++
@@ -922,10 +925,10 @@ func (fixture *uciProductMeasurementFixture) productResults(t *testing.T, corpus
 		if err := status.Validate(); err != nil {
 			t.Fatalf("validate post-recomposition current-view status: %v", err)
 		}
-		read := fixture.read(t, &observed, currentAuthorized, item)
-		readItem := uciProductMeasurementItem(t, read, item.Path, "restart-generation-two-current")
+		read := fixture.read(t, &observed, currentAuthorized, target)
+		readItem := uciProductMeasurementItem(t, read, target.Path, "restart-generation-two-current")
 		citation := uciProductMeasurementCitation("fixture://uci-product-corpus/increment-restart-current-view", current.view.Context, item, 1)
-		passed := current.view.Context.Generation > 1 && status.Context == current.view.Context && edge.From.EntityKey == item.Ref.EntityKey && strings.Contains(readItem.Excerpt, "restart-generation-two-current")
+		passed := current.view.Context.Generation > 1 && status.Context == current.view.Context && edge.From.EntityKey == item.Ref.EntityKey && edge.To.EntityKey == target.Ref.EntityKey && strings.Contains(readItem.Excerpt, "restart-generation-two-current")
 		result = append(result, uciProductMeasurementResult(tasks["UCI-P12"], observed, []string{"graph", "bounded_read"}, false,
 			[]UCIProductSourceCitation{citation}, []UCIProductRelationEvidence{uciProductMeasurementRelation("fixture://uci-product-corpus/increment-restart-current-view", citation, edge)}, nil, passed, baseline("UCI-P12", "src/restart.go", "baseline-p12")))
 	}
@@ -1200,16 +1203,23 @@ func uciProductMeasurementRepositoryRoot(t *testing.T) string {
 
 func uciProductMeasurementCandidate(t *testing.T, repositoryRoot string) uciProductMeasurementCandidateIdentity {
 	t.Helper()
-	command := exec.Command("git", "-C", repositoryRoot, "rev-parse", "--abbrev-ref", "HEAD", "HEAD^{commit}", "HEAD^{tree}")
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("derive candidate branch, commit, and tree through git arguments: %v", err)
+	readGit := func(args ...string) string {
+		command := exec.Command("git", append([]string{"-C", repositoryRoot}, args...)...)
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("derive candidate Git identity through %q: %v", strings.Join(args, " "), err)
+		}
+		return strings.TrimSpace(string(output))
 	}
-	values := strings.Fields(string(output))
-	if len(values) != 3 || values[0] == "" || !validUCIProductGitRevision(values[1]) || !validUCIProductGitRevision(values[2]) {
+	identity := uciProductMeasurementCandidateIdentity{
+		branch: readGit("branch", "--show-current"),
+		commit: readGit("rev-parse", "HEAD"),
+		tree:   readGit("rev-parse", "HEAD^{tree}"),
+	}
+	if identity.branch == "" || !validUCIProductGitRevision(identity.commit) || !validUCIProductGitRevision(identity.tree) {
 		t.Fatal("candidate git identity is incomplete")
 	}
-	return uciProductMeasurementCandidateIdentity{branch: values[0], commit: values[1], tree: values[2]}
+	return identity
 }
 
 func uciProductMeasurementBuildCandidateArtifacts(t *testing.T, repositoryRoot string) []UCIProductArtifactDigest {
