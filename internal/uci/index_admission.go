@@ -58,6 +58,16 @@ const (
 	IndexAdmissionLanguageTypeScript IndexAdmissionLanguage = "typescript"
 	// IndexAdmissionLanguageTSX is backed by the installed Tree-sitter worker.
 	IndexAdmissionLanguageTSX IndexAdmissionLanguage = "tsx"
+	// IndexAdmissionLanguageMarkdown is backed by ExtractMarkdown.
+	IndexAdmissionLanguageMarkdown IndexAdmissionLanguage = "markdown"
+	// IndexAdmissionLanguageJSON is backed by ExtractJSONYAML with JSON selected by the caller.
+	IndexAdmissionLanguageJSON IndexAdmissionLanguage = "json"
+	// IndexAdmissionLanguageYAML is backed by ExtractJSONYAML with YAML selected by the caller.
+	IndexAdmissionLanguageYAML IndexAdmissionLanguage = "yaml"
+	// IndexAdmissionLanguageSQL is backed by ExtractSQL.
+	IndexAdmissionLanguageSQL IndexAdmissionLanguage = "sql"
+	// IndexAdmissionLanguageOpenAPI is backed by ExtractOpenAPI.
+	IndexAdmissionLanguageOpenAPI IndexAdmissionLanguage = "openapi"
 )
 
 // IndexAdmissionArtifactStatus records the closed extraction outcome for an
@@ -620,6 +630,140 @@ func DigestIndexAdmissionArtifactFacts(artifact IndexAdmissionArtifact) (IndexDi
 	return indexAdmissionArtifactFactsDigest(canonical)
 }
 
+// MarkdownIndexAdmissionArtifactProfile derives the fixed admission profile for one Markdown extraction policy.
+func MarkdownIndexAdmissionArtifactProfile(profile MarkdownExtractionProfile) (IndexAdmissionArtifactProfile, error) {
+	if !markdownExtractionProfileValid(profile) {
+		return IndexAdmissionArtifactProfile{}, fmt.Errorf("uci index admission: invalid Markdown extraction profile")
+	}
+	profileBytes, err := json.Marshal(struct {
+		Version    string `json:"version"`
+		ProfileKey string `json:"profile_key"`
+		ParserKey  string `json:"parser_key"`
+	}{
+		Version:    "uci-markdown-admission-profile/v1",
+		ProfileKey: profile.ProfileKey,
+		ParserKey:  profile.ParserKey,
+	})
+	if err != nil {
+		return IndexAdmissionArtifactProfile{}, fmt.Errorf("uci index admission: encode Markdown extraction profile: %w", err)
+	}
+	result := IndexAdmissionArtifactProfile{
+		Language:                IndexAdmissionLanguageMarkdown,
+		ParserRevision:          markdownExtractionParserRevision,
+		GrammarDigest:           indexAdmissionDigestBytes([]byte("uci-markdown-grammar/v1\x00" + markdownExtractionParserRevision)),
+		ExtractionProfileDigest: indexAdmissionDigestBytes(profileBytes),
+	}
+	if err := indexAdmissionValidateArtifactProfile(result); err != nil {
+		return IndexAdmissionArtifactProfile{}, err
+	}
+	return result, nil
+}
+
+// JSONYAMLIndexAdmissionArtifactProfile derives the fixed admission profile for one caller-selected JSON or YAML extraction policy.
+func JSONYAMLIndexAdmissionArtifactProfile(profile JSONYAMLExtractionProfile) (IndexAdmissionArtifactProfile, error) {
+	if !jsonYAMLExtractionProfileValid(profile) {
+		return IndexAdmissionArtifactProfile{}, fmt.Errorf("uci index admission: invalid JSON/YAML extraction profile")
+	}
+	language := IndexAdmissionLanguageJSON
+	if profile.Format == JSONYAMLFormatYAML {
+		language = IndexAdmissionLanguageYAML
+	}
+	profileBytes, err := json.Marshal(struct {
+		Version    string         `json:"version"`
+		ProfileKey string         `json:"profile_key"`
+		ParserKey  string         `json:"parser_key"`
+		Format     JSONYAMLFormat `json:"format"`
+	}{
+		Version:    "uci-json-yaml-admission-profile/v1",
+		ProfileKey: profile.ProfileKey,
+		ParserKey:  profile.ParserKey,
+		Format:     profile.Format,
+	})
+	if err != nil {
+		return IndexAdmissionArtifactProfile{}, fmt.Errorf("uci index admission: encode JSON/YAML extraction profile: %w", err)
+	}
+	result := IndexAdmissionArtifactProfile{
+		Language:                language,
+		ParserRevision:          jsonYAMLExtractionParserRevision,
+		GrammarDigest:           indexAdmissionDigestBytes([]byte("uci-json-yaml-grammar/v1\x00" + jsonYAMLExtractionParserRevision + "\x00" + string(profile.Format))),
+		ExtractionProfileDigest: indexAdmissionDigestBytes(profileBytes),
+	}
+	if err := indexAdmissionValidateArtifactProfile(result); err != nil {
+		return IndexAdmissionArtifactProfile{}, err
+	}
+	return result, nil
+}
+
+// SQLIndexAdmissionArtifactProfile derives the fixed admission profile for one SQL extraction policy.
+func SQLIndexAdmissionArtifactProfile(profile SQLExtractionProfile) (IndexAdmissionArtifactProfile, error) {
+	if !sqlExtractionProfileValid(profile) {
+		return IndexAdmissionArtifactProfile{}, fmt.Errorf("uci index admission: invalid SQL extraction profile")
+	}
+	profileBytes, err := json.Marshal(struct {
+		Version    string `json:"version"`
+		ProfileKey string `json:"profile_key"`
+		ParserKey  string `json:"parser_key"`
+	}{
+		Version:    "uci-sql-admission-profile/v1",
+		ProfileKey: profile.ProfileKey,
+		ParserKey:  profile.ParserKey,
+	})
+	if err != nil {
+		return IndexAdmissionArtifactProfile{}, fmt.Errorf("uci index admission: encode SQL extraction profile: %w", err)
+	}
+	result := IndexAdmissionArtifactProfile{
+		Language:                IndexAdmissionLanguageSQL,
+		ParserRevision:          sqlExtractionParserRevision,
+		GrammarDigest:           indexAdmissionDigestBytes([]byte("uci-sql-grammar/v1\x00" + sqlExtractionParserRevision)),
+		ExtractionProfileDigest: indexAdmissionDigestBytes(profileBytes),
+	}
+	if err := indexAdmissionValidateArtifactProfile(result); err != nil {
+		return IndexAdmissionArtifactProfile{}, err
+	}
+	return result, nil
+}
+
+// OpenAPIIndexAdmissionArtifactProfile derives the fixed admission profile for one caller-selected OpenAPI extraction policy.
+func OpenAPIIndexAdmissionArtifactProfile(profile OpenAPIExtractionProfile) (IndexAdmissionArtifactProfile, error) {
+	if !openAPIExtractionProfileValid(profile) {
+		return IndexAdmissionArtifactProfile{}, fmt.Errorf("uci index admission: invalid OpenAPI extraction profile")
+	}
+	profileBytes, err := json.Marshal(struct {
+		Version    string        `json:"version"`
+		ProfileKey string        `json:"profile_key"`
+		ParserKey  string        `json:"parser_key"`
+		Format     OpenAPIFormat `json:"format"`
+	}{
+		Version:    "uci-openapi-admission-profile/v1",
+		ProfileKey: profile.ProfileKey,
+		ParserKey:  profile.ParserKey,
+		Format:     profile.Format,
+	})
+	if err != nil {
+		return IndexAdmissionArtifactProfile{}, fmt.Errorf("uci index admission: encode OpenAPI extraction profile: %w", err)
+	}
+	result := IndexAdmissionArtifactProfile{
+		Language:                IndexAdmissionLanguageOpenAPI,
+		ParserRevision:          openAPIExtractionParserRevision,
+		GrammarDigest:           indexAdmissionDigestBytes([]byte("uci-openapi-grammar/v1\x00" + openAPIExtractionParserRevision + "\x00" + string(profile.Format))),
+		ExtractionProfileDigest: indexAdmissionDigestBytes(profileBytes),
+	}
+	if err := indexAdmissionValidateArtifactProfile(result); err != nil {
+		return IndexAdmissionArtifactProfile{}, err
+	}
+	return result, nil
+}
+
+// indexAdmissionStructuredProfileMatches keeps extractor identity in the
+// parser revision and grammar digest while allowing the runtime-selected
+// analysis bundle digest to fence publication and cache reuse.
+func indexAdmissionStructuredProfileMatches(actual, derived IndexAdmissionArtifactProfile) bool {
+	return actual.Language == derived.Language &&
+		actual.ParserRevision == derived.ParserRevision &&
+		actual.GrammarDigest == derived.GrammarDigest &&
+		isIndexDigest(actual.ExtractionProfileDigest)
+}
+
 // GoIndexAdmissionArtifactProfile derives the fixed parser metadata for an
 // ExtractGo result from its caller-selected extraction profile.
 func GoIndexAdmissionArtifactProfile(profile GoExtractionProfile) (IndexAdmissionArtifactProfile, error) {
@@ -926,6 +1070,709 @@ func NewIndexAdmissionArtifactFromTreeSitter(sourceID string, profile IndexAdmis
 		})
 	}
 
+	canonical, err := indexAdmissionCanonicalizeArtifact(artifact)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	factsDigest, err := indexAdmissionArtifactFactsDigest(canonical)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	canonical.FactsDigest = factsDigest
+	return canonical, nil
+}
+
+// NewIndexAdmissionArtifactFromMarkdown converts verified Markdown extraction evidence into one source-scoped generic admission artifact.
+func NewIndexAdmissionArtifactFromMarkdown(sourceID string, admissionProfile IndexAdmissionArtifactProfile, extractionProfile MarkdownExtractionProfile, source []byte, extracted MarkdownArtifact) (IndexAdmissionArtifact, error) {
+	if len(source) > IndexAdmissionMaxArtifactBodyBytes {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceArtifactBodyBytes,
+			uint64(len(source)),
+			uint64(IndexAdmissionMaxArtifactBodyBytes),
+		)
+	}
+	if len(extracted.Headings) > indexAdmissionMaxDefinitionsPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceDefinitions,
+			uint64(len(extracted.Headings)),
+			uint64(indexAdmissionMaxDefinitionsPerArtifact),
+		)
+	}
+	if len(extracted.References) > indexAdmissionMaxReferencesPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceReferences,
+			uint64(len(extracted.References)),
+			uint64(indexAdmissionMaxReferencesPerArtifact),
+		)
+	}
+	if len(extracted.Chunks) > indexAdmissionMaxChunksPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceChunks,
+			uint64(len(extracted.Chunks)),
+			uint64(indexAdmissionMaxChunksPerArtifact),
+		)
+	}
+	if len(extracted.Diagnostics) > indexAdmissionMaxDiagnosticsPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceDiagnostics,
+			uint64(len(extracted.Diagnostics)),
+			uint64(indexAdmissionMaxDiagnosticsPerArtifact),
+		)
+	}
+	expectedProfile, err := MarkdownIndexAdmissionArtifactProfile(extractionProfile)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	if !indexAdmissionStructuredProfileMatches(admissionProfile, expectedProfile) {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown artifact profile does not match extraction policy")
+	}
+	if extracted.Text != string(source) {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown artifact text does not match source bytes")
+	}
+	contentDigest := indexAdmissionDigestBytes(source)
+	if extracted.Proof.ContentDigest != contentDigest {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown artifact source digest mismatch")
+	}
+	if extracted.Proof.DefinitionCount != uint64(len(extracted.Headings)) ||
+		extracted.Proof.ReferenceSiteCount != uint64(len(extracted.References)) ||
+		extracted.Proof.ChunkCount != uint64(len(extracted.Chunks)) {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown artifact proof counts are invalid")
+	}
+	status := IndexAdmissionArtifactPartial
+	switch extracted.Coverage {
+	case IndexCoverageComplete:
+		if len(extracted.Diagnostics) != 0 {
+			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: complete Markdown artifact has diagnostics")
+		}
+		status = IndexAdmissionArtifactComplete
+	case IndexCoveragePartial:
+	default:
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown extraction has unsupported coverage")
+	}
+	verified := markdownFinalizeArtifact(source, extractionProfile, MarkdownArtifact{
+		Coverage:    extracted.Coverage,
+		Text:        extracted.Text,
+		Headings:    append([]MarkdownHeading(nil), extracted.Headings...),
+		References:  append([]MarkdownReferenceSite(nil), extracted.References...),
+		Chunks:      append([]MarkdownChunk(nil), extracted.Chunks...),
+		Diagnostics: append([]MarkdownDiagnostic(nil), extracted.Diagnostics...),
+	})
+	if verified.Proof != extracted.Proof {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown artifact proof is invalid")
+	}
+	artifactID, err := DeriveIndexAdmissionArtifactID(sourceID, contentDigest, admissionProfile)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	artifact := IndexAdmissionArtifact{
+		ArtifactID:    artifactID,
+		ContentDigest: contentDigest,
+		Profile:       admissionProfile,
+		Status:        status,
+		Body:          indexAdmissionCloneBytes(source),
+		Definitions:   make([]IndexAdmissionDefinition, 0, len(extracted.Headings)),
+		References:    make([]IndexAdmissionReference, 0, len(extracted.References)),
+		Chunks:        make([]IndexAdmissionChunk, 0, len(extracted.Chunks)),
+		Diagnostics:   make([]IndexAdmissionDiagnostic, 0, len(extracted.Diagnostics)+1),
+	}
+	for _, heading := range extracted.Headings {
+		artifact.Definitions = append(artifact.Definitions, IndexAdmissionDefinition{
+			LocalSymbolKey: heading.LocalKey,
+			Kind:           "heading",
+			SymbolKey:      heading.SymbolKey,
+			Span:           heading.Span,
+		})
+	}
+	definitionKeys := indexAdmissionDefinitionSet(artifact.Definitions)
+	for _, reference := range extracted.References {
+		rawTarget, err := indexAdmissionTextAtSpan(source, reference.Span)
+		if err != nil {
+			return IndexAdmissionArtifact{}, err
+		}
+		var ownerSymbolKey *string
+		if reference.OwnerLocalKey != "" && reference.OwnerLocalKey != "preamble" {
+			if _, found := definitionKeys[reference.OwnerLocalKey]; !found {
+				return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown reference owner is not defined by artifact")
+			}
+			ownerSymbolKey = indexAdmissionStringPointer(reference.OwnerLocalKey)
+		}
+		siteKey := fmt.Sprintf("reference:%s:%d:%d", reference.Kind, reference.Span.ByteStart, reference.Span.ByteEnd)
+		artifact.References = append(artifact.References, IndexAdmissionReference{
+			SiteKey:        siteKey,
+			Kind:           reference.Kind,
+			SymbolKey:      "markdown:" + siteKey,
+			OwnerSymbolKey: ownerSymbolKey,
+			RawTarget:      rawTarget,
+			Relation:       IndexRelation("references"),
+			Span:           reference.Span,
+		})
+	}
+	for index, chunk := range extracted.Chunks {
+		text, err := indexAdmissionTextAtSpan(source, chunk.Span)
+		if err != nil {
+			return IndexAdmissionArtifact{}, err
+		}
+		if chunk.Text != text || chunk.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
+			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: Markdown source chunk does not match source bytes")
+		}
+		artifact.Chunks = append(artifact.Chunks, IndexAdmissionChunk{
+			Ordinal:       index,
+			Kind:          "source",
+			Span:          chunk.Span,
+			ContentDigest: chunk.ContentDigest,
+			Text:          chunk.Text,
+		})
+	}
+	for _, diagnostic := range extracted.Diagnostics {
+		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
+			Code:    diagnostic.Code,
+			Span:    diagnostic.Span,
+			Message: diagnostic.Message,
+		})
+	}
+	if status == IndexAdmissionArtifactPartial {
+		if len(artifact.Diagnostics) == indexAdmissionMaxDiagnosticsPerArtifact {
+			return IndexAdmissionArtifact{}, newIndexCapacityError(
+				IndexCapacityScopeArtifact,
+				IndexCapacityResourceDiagnostics,
+				uint64(len(artifact.Diagnostics)+1),
+				uint64(indexAdmissionMaxDiagnosticsPerArtifact),
+			)
+		}
+		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
+			Code:    "MARKDOWN_PARTIAL_COVERAGE",
+			Message: "Markdown extraction coverage is partial",
+		})
+	}
+	canonical, err := indexAdmissionCanonicalizeArtifact(artifact)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	factsDigest, err := indexAdmissionArtifactFactsDigest(canonical)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	canonical.FactsDigest = factsDigest
+	return canonical, nil
+}
+
+// NewIndexAdmissionArtifactFromJSONYAML converts verified JSON or YAML extraction evidence into one source-scoped generic admission artifact.
+func NewIndexAdmissionArtifactFromJSONYAML(sourceID string, admissionProfile IndexAdmissionArtifactProfile, extractionProfile JSONYAMLExtractionProfile, source []byte, extracted JSONYAMLArtifact) (IndexAdmissionArtifact, error) {
+	if len(source) > IndexAdmissionMaxArtifactBodyBytes {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceArtifactBodyBytes,
+			uint64(len(source)),
+			uint64(IndexAdmissionMaxArtifactBodyBytes),
+		)
+	}
+	if len(extracted.Definitions) > indexAdmissionMaxDefinitionsPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceDefinitions,
+			uint64(len(extracted.Definitions)),
+			uint64(indexAdmissionMaxDefinitionsPerArtifact),
+		)
+	}
+	if len(extracted.References) > indexAdmissionMaxReferencesPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceReferences,
+			uint64(len(extracted.References)),
+			uint64(indexAdmissionMaxReferencesPerArtifact),
+		)
+	}
+	if len(extracted.Chunks) > indexAdmissionMaxChunksPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceChunks,
+			uint64(len(extracted.Chunks)),
+			uint64(indexAdmissionMaxChunksPerArtifact),
+		)
+	}
+	if len(extracted.Diagnostics) > indexAdmissionMaxDiagnosticsPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceDiagnostics,
+			uint64(len(extracted.Diagnostics)),
+			uint64(indexAdmissionMaxDiagnosticsPerArtifact),
+		)
+	}
+	expectedProfile, err := JSONYAMLIndexAdmissionArtifactProfile(extractionProfile)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	if !indexAdmissionStructuredProfileMatches(admissionProfile, expectedProfile) {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML artifact profile does not match extraction policy")
+	}
+	if extracted.Format != extractionProfile.Format {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML artifact format does not match extraction policy")
+	}
+	if extracted.Text != string(source) {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML artifact text does not match source bytes")
+	}
+	contentDigest := indexAdmissionDigestBytes(source)
+	if extracted.Proof.ContentDigest != contentDigest {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML artifact source digest mismatch")
+	}
+	if extracted.Proof.DefinitionCount != uint64(len(extracted.Definitions)) ||
+		extracted.Proof.ReferenceSiteCount != uint64(len(extracted.References)) ||
+		extracted.Proof.ChunkCount != uint64(len(extracted.Chunks)) {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML artifact proof counts are invalid")
+	}
+	status := IndexAdmissionArtifactPartial
+	switch extracted.Coverage {
+	case IndexCoverageComplete:
+		if len(extracted.Diagnostics) != 0 {
+			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: complete JSON/YAML artifact has diagnostics")
+		}
+		status = IndexAdmissionArtifactComplete
+	case IndexCoveragePartial:
+	default:
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML extraction has unsupported coverage")
+	}
+	verified := jsonYAMLFinalizeArtifact(source, extractionProfile, JSONYAMLArtifact{
+		Coverage:    extracted.Coverage,
+		Format:      extracted.Format,
+		Text:        extracted.Text,
+		Definitions: append([]JSONYAMLDefinition(nil), extracted.Definitions...),
+		References:  append([]JSONYAMLReferenceSite(nil), extracted.References...),
+		Chunks:      append([]JSONYAMLChunk(nil), extracted.Chunks...),
+		Diagnostics: append([]JSONYAMLDiagnostic(nil), extracted.Diagnostics...),
+	})
+	if verified.Proof != extracted.Proof {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML artifact proof is invalid")
+	}
+	artifactID, err := DeriveIndexAdmissionArtifactID(sourceID, contentDigest, admissionProfile)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	artifact := IndexAdmissionArtifact{
+		ArtifactID:    artifactID,
+		ContentDigest: contentDigest,
+		Profile:       admissionProfile,
+		Status:        status,
+		Body:          indexAdmissionCloneBytes(source),
+		Definitions:   make([]IndexAdmissionDefinition, 0, len(extracted.Definitions)),
+		References:    make([]IndexAdmissionReference, 0, len(extracted.References)),
+		Chunks:        make([]IndexAdmissionChunk, 0, len(extracted.Chunks)),
+		Diagnostics:   make([]IndexAdmissionDiagnostic, 0, len(extracted.Diagnostics)+1),
+	}
+	for _, definition := range extracted.Definitions {
+		artifact.Definitions = append(artifact.Definitions, IndexAdmissionDefinition{
+			LocalSymbolKey: definition.SymbolKey,
+			Kind:           definition.Kind,
+			SymbolKey:      definition.SymbolKey,
+			Span:           definition.Span,
+		})
+	}
+	for _, reference := range extracted.References {
+		rawTarget, err := indexAdmissionTextAtSpan(source, reference.Span)
+		if err != nil {
+			return IndexAdmissionArtifact{}, err
+		}
+		artifact.References = append(artifact.References, IndexAdmissionReference{
+			SiteKey:   reference.SymbolKey,
+			Kind:      reference.Kind,
+			SymbolKey: reference.SymbolKey,
+			RawTarget: rawTarget,
+			Relation:  IndexRelation("references"),
+			Span:      reference.Span,
+		})
+	}
+	for index, chunk := range extracted.Chunks {
+		text, err := indexAdmissionTextAtSpan(source, chunk.Span)
+		if err != nil {
+			return IndexAdmissionArtifact{}, err
+		}
+		if chunk.Text != text || chunk.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
+			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: JSON/YAML source chunk does not match source bytes")
+		}
+		artifact.Chunks = append(artifact.Chunks, IndexAdmissionChunk{
+			Ordinal:       index,
+			Kind:          "source",
+			Span:          chunk.Span,
+			ContentDigest: chunk.ContentDigest,
+			Text:          chunk.Text,
+		})
+	}
+	for _, diagnostic := range extracted.Diagnostics {
+		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
+			Code:    diagnostic.Code,
+			Span:    diagnostic.Span,
+			Message: diagnostic.Message,
+		})
+	}
+	if status == IndexAdmissionArtifactPartial {
+		if len(artifact.Diagnostics) == indexAdmissionMaxDiagnosticsPerArtifact {
+			return IndexAdmissionArtifact{}, newIndexCapacityError(
+				IndexCapacityScopeArtifact,
+				IndexCapacityResourceDiagnostics,
+				uint64(len(artifact.Diagnostics)+1),
+				uint64(indexAdmissionMaxDiagnosticsPerArtifact),
+			)
+		}
+		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
+			Code:    "JSON_YAML_PARTIAL_COVERAGE",
+			Message: "JSON/YAML extraction coverage is partial",
+		})
+	}
+	canonical, err := indexAdmissionCanonicalizeArtifact(artifact)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	factsDigest, err := indexAdmissionArtifactFactsDigest(canonical)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	canonical.FactsDigest = factsDigest
+	return canonical, nil
+}
+
+// NewIndexAdmissionArtifactFromSQL converts verified SQL extraction evidence into one source-scoped generic admission artifact.
+func NewIndexAdmissionArtifactFromSQL(sourceID string, admissionProfile IndexAdmissionArtifactProfile, extractionProfile SQLExtractionProfile, source []byte, extracted SQLArtifact) (IndexAdmissionArtifact, error) {
+	if len(source) > IndexAdmissionMaxArtifactBodyBytes {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceArtifactBodyBytes,
+			uint64(len(source)),
+			uint64(IndexAdmissionMaxArtifactBodyBytes),
+		)
+	}
+	if len(extracted.Definitions) > indexAdmissionMaxDefinitionsPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceDefinitions,
+			uint64(len(extracted.Definitions)),
+			uint64(indexAdmissionMaxDefinitionsPerArtifact),
+		)
+	}
+	if len(extracted.References) > indexAdmissionMaxReferencesPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceReferences,
+			uint64(len(extracted.References)),
+			uint64(indexAdmissionMaxReferencesPerArtifact),
+		)
+	}
+	if len(extracted.Chunks) > indexAdmissionMaxChunksPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceChunks,
+			uint64(len(extracted.Chunks)),
+			uint64(indexAdmissionMaxChunksPerArtifact),
+		)
+	}
+	if len(extracted.Diagnostics) > indexAdmissionMaxDiagnosticsPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceDiagnostics,
+			uint64(len(extracted.Diagnostics)),
+			uint64(indexAdmissionMaxDiagnosticsPerArtifact),
+		)
+	}
+	expectedProfile, err := SQLIndexAdmissionArtifactProfile(extractionProfile)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	if !indexAdmissionStructuredProfileMatches(admissionProfile, expectedProfile) {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: SQL artifact profile does not match extraction policy")
+	}
+	if extracted.Text != string(source) {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: SQL artifact text does not match source bytes")
+	}
+	contentDigest := indexAdmissionDigestBytes(source)
+	if extracted.Proof.ContentDigest != contentDigest {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: SQL artifact source digest mismatch")
+	}
+	if extracted.Proof.DefinitionCount != uint64(len(extracted.Definitions)) ||
+		extracted.Proof.ReferenceSiteCount != uint64(len(extracted.References)) ||
+		extracted.Proof.ChunkCount != uint64(len(extracted.Chunks)) {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: SQL artifact proof counts are invalid")
+	}
+	status := IndexAdmissionArtifactPartial
+	switch extracted.Coverage {
+	case IndexCoverageComplete:
+		if len(extracted.Diagnostics) != 0 {
+			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: complete SQL artifact has diagnostics")
+		}
+		status = IndexAdmissionArtifactComplete
+	case IndexCoveragePartial:
+	default:
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: SQL extraction has unsupported coverage")
+	}
+	verified := sqlFinalizeArtifact(source, extractionProfile, SQLArtifact{
+		Coverage:    extracted.Coverage,
+		Text:        extracted.Text,
+		Definitions: append([]SQLDefinition(nil), extracted.Definitions...),
+		References:  append([]SQLReferenceSite(nil), extracted.References...),
+		Chunks:      append([]SQLChunk(nil), extracted.Chunks...),
+		Diagnostics: append([]SQLDiagnostic(nil), extracted.Diagnostics...),
+	})
+	if verified.Proof != extracted.Proof {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: SQL artifact proof is invalid")
+	}
+	artifactID, err := DeriveIndexAdmissionArtifactID(sourceID, contentDigest, admissionProfile)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	artifact := IndexAdmissionArtifact{
+		ArtifactID:    artifactID,
+		ContentDigest: contentDigest,
+		Profile:       admissionProfile,
+		Status:        status,
+		Body:          indexAdmissionCloneBytes(source),
+		Definitions:   make([]IndexAdmissionDefinition, 0, len(extracted.Definitions)),
+		References:    make([]IndexAdmissionReference, 0, len(extracted.References)),
+		Chunks:        make([]IndexAdmissionChunk, 0, len(extracted.Chunks)),
+		Diagnostics:   make([]IndexAdmissionDiagnostic, 0, len(extracted.Diagnostics)+1),
+	}
+	for _, definition := range extracted.Definitions {
+		artifact.Definitions = append(artifact.Definitions, IndexAdmissionDefinition{
+			LocalSymbolKey: definition.LocalKey,
+			Kind:           definition.Kind,
+			SymbolKey:      definition.SymbolKey,
+			Span:           definition.Span,
+		})
+	}
+	definitionKeys := indexAdmissionDefinitionSet(artifact.Definitions)
+	for _, reference := range extracted.References {
+		rawTarget, err := indexAdmissionTextAtSpan(source, reference.Span)
+		if err != nil {
+			return IndexAdmissionArtifact{}, err
+		}
+		var ownerSymbolKey *string
+		if reference.OwnerLocalKey != "" {
+			if _, found := definitionKeys[reference.OwnerLocalKey]; !found {
+				return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: SQL reference owner is not defined by artifact")
+			}
+			ownerSymbolKey = indexAdmissionStringPointer(reference.OwnerLocalKey)
+		}
+		artifact.References = append(artifact.References, IndexAdmissionReference{
+			SiteKey:        reference.LocalKey,
+			Kind:           reference.Kind,
+			SymbolKey:      reference.SymbolKey,
+			OwnerSymbolKey: ownerSymbolKey,
+			RawTarget:      rawTarget,
+			Relation:       IndexRelation("references"),
+			Span:           reference.Span,
+		})
+	}
+	for index, chunk := range extracted.Chunks {
+		text, err := indexAdmissionTextAtSpan(source, chunk.Span)
+		if err != nil {
+			return IndexAdmissionArtifact{}, err
+		}
+		if chunk.Text != text || chunk.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
+			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: SQL source chunk does not match source bytes")
+		}
+		artifact.Chunks = append(artifact.Chunks, IndexAdmissionChunk{
+			Ordinal:       index,
+			Kind:          "source",
+			Span:          chunk.Span,
+			ContentDigest: chunk.ContentDigest,
+			Text:          chunk.Text,
+		})
+	}
+	for _, diagnostic := range extracted.Diagnostics {
+		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
+			Code:    diagnostic.Code,
+			Span:    diagnostic.Span,
+			Message: diagnostic.Message,
+		})
+	}
+	if status == IndexAdmissionArtifactPartial {
+		if len(artifact.Diagnostics) == indexAdmissionMaxDiagnosticsPerArtifact {
+			return IndexAdmissionArtifact{}, newIndexCapacityError(
+				IndexCapacityScopeArtifact,
+				IndexCapacityResourceDiagnostics,
+				uint64(len(artifact.Diagnostics)+1),
+				uint64(indexAdmissionMaxDiagnosticsPerArtifact),
+			)
+		}
+		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
+			Code:    "SQL_PARTIAL_COVERAGE",
+			Message: "SQL extraction coverage is partial",
+		})
+	}
+	canonical, err := indexAdmissionCanonicalizeArtifact(artifact)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	factsDigest, err := indexAdmissionArtifactFactsDigest(canonical)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	canonical.FactsDigest = factsDigest
+	return canonical, nil
+}
+
+// NewIndexAdmissionArtifactFromOpenAPI converts verified OpenAPI extraction evidence into one source-scoped generic admission artifact.
+func NewIndexAdmissionArtifactFromOpenAPI(sourceID string, admissionProfile IndexAdmissionArtifactProfile, extractionProfile OpenAPIExtractionProfile, source []byte, extracted OpenAPIArtifact) (IndexAdmissionArtifact, error) {
+	if len(source) > IndexAdmissionMaxArtifactBodyBytes {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceArtifactBodyBytes,
+			uint64(len(source)),
+			uint64(IndexAdmissionMaxArtifactBodyBytes),
+		)
+	}
+	if len(extracted.Definitions) > indexAdmissionMaxDefinitionsPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceDefinitions,
+			uint64(len(extracted.Definitions)),
+			uint64(indexAdmissionMaxDefinitionsPerArtifact),
+		)
+	}
+	if len(extracted.References) > indexAdmissionMaxReferencesPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceReferences,
+			uint64(len(extracted.References)),
+			uint64(indexAdmissionMaxReferencesPerArtifact),
+		)
+	}
+	if len(extracted.Chunks) > indexAdmissionMaxChunksPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceChunks,
+			uint64(len(extracted.Chunks)),
+			uint64(indexAdmissionMaxChunksPerArtifact),
+		)
+	}
+	if len(extracted.Diagnostics) > indexAdmissionMaxDiagnosticsPerArtifact {
+		return IndexAdmissionArtifact{}, newIndexCapacityError(
+			IndexCapacityScopeArtifact,
+			IndexCapacityResourceDiagnostics,
+			uint64(len(extracted.Diagnostics)),
+			uint64(indexAdmissionMaxDiagnosticsPerArtifact),
+		)
+	}
+	expectedProfile, err := OpenAPIIndexAdmissionArtifactProfile(extractionProfile)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	if !indexAdmissionStructuredProfileMatches(admissionProfile, expectedProfile) {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI artifact profile does not match extraction policy")
+	}
+	if extracted.Format != extractionProfile.Format {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI artifact format does not match extraction policy")
+	}
+	if extracted.Text != string(source) {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI artifact text does not match source bytes")
+	}
+	contentDigest := indexAdmissionDigestBytes(source)
+	if extracted.Proof.ContentDigest != contentDigest {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI artifact source digest mismatch")
+	}
+	if extracted.Proof.DefinitionCount != uint64(len(extracted.Definitions)) ||
+		extracted.Proof.ReferenceSiteCount != uint64(len(extracted.References)) ||
+		extracted.Proof.ChunkCount != uint64(len(extracted.Chunks)) {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI artifact proof counts are invalid")
+	}
+	status := IndexAdmissionArtifactPartial
+	switch extracted.Coverage {
+	case IndexCoverageComplete:
+		if len(extracted.Diagnostics) != 0 {
+			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: complete OpenAPI artifact has diagnostics")
+		}
+		status = IndexAdmissionArtifactComplete
+	case IndexCoveragePartial:
+	default:
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI extraction has unsupported coverage")
+	}
+	verified := openAPIFinalizeArtifact(source, extractionProfile, OpenAPIArtifact{
+		Coverage:    extracted.Coverage,
+		Format:      extracted.Format,
+		Text:        extracted.Text,
+		Definitions: append([]OpenAPIDefinition(nil), extracted.Definitions...),
+		References:  append([]OpenAPIReferenceSite(nil), extracted.References...),
+		Chunks:      append([]OpenAPIChunk(nil), extracted.Chunks...),
+		Diagnostics: append([]OpenAPIDiagnostic(nil), extracted.Diagnostics...),
+	})
+	if verified.Proof != extracted.Proof {
+		return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI artifact proof is invalid")
+	}
+	artifactID, err := DeriveIndexAdmissionArtifactID(sourceID, contentDigest, admissionProfile)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	artifact := IndexAdmissionArtifact{
+		ArtifactID:    artifactID,
+		ContentDigest: contentDigest,
+		Profile:       admissionProfile,
+		Status:        status,
+		Body:          indexAdmissionCloneBytes(source),
+		Definitions:   make([]IndexAdmissionDefinition, 0, len(extracted.Definitions)),
+		References:    make([]IndexAdmissionReference, 0, len(extracted.References)),
+		Chunks:        make([]IndexAdmissionChunk, 0, len(extracted.Chunks)),
+		Diagnostics:   make([]IndexAdmissionDiagnostic, 0, len(extracted.Diagnostics)+1),
+	}
+	for _, definition := range extracted.Definitions {
+		artifact.Definitions = append(artifact.Definitions, IndexAdmissionDefinition{
+			LocalSymbolKey: definition.LocalKey,
+			Kind:           definition.Kind,
+			SymbolKey:      definition.SymbolKey,
+			Span:           definition.Span,
+		})
+	}
+	for _, reference := range extracted.References {
+		rawTarget, err := indexAdmissionTextAtSpan(source, reference.Span)
+		if err != nil {
+			return IndexAdmissionArtifact{}, err
+		}
+		artifact.References = append(artifact.References, IndexAdmissionReference{
+			SiteKey:   reference.LocalKey,
+			Kind:      reference.Kind,
+			SymbolKey: reference.SymbolKey,
+			RawTarget: rawTarget,
+			Relation:  IndexRelation("references"),
+			Span:      reference.Span,
+		})
+	}
+	for index, chunk := range extracted.Chunks {
+		text, err := indexAdmissionTextAtSpan(source, chunk.Span)
+		if err != nil {
+			return IndexAdmissionArtifact{}, err
+		}
+		if chunk.Text != text || chunk.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
+			return IndexAdmissionArtifact{}, fmt.Errorf("uci index admission: OpenAPI source chunk does not match source bytes")
+		}
+		artifact.Chunks = append(artifact.Chunks, IndexAdmissionChunk{
+			Ordinal:       index,
+			Kind:          "source",
+			Span:          chunk.Span,
+			ContentDigest: chunk.ContentDigest,
+			Text:          chunk.Text,
+		})
+	}
+	for _, diagnostic := range extracted.Diagnostics {
+		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
+			Code:    diagnostic.Code,
+			Span:    diagnostic.Span,
+			Message: diagnostic.Message,
+		})
+	}
+	if status == IndexAdmissionArtifactPartial {
+		if len(artifact.Diagnostics) == indexAdmissionMaxDiagnosticsPerArtifact {
+			return IndexAdmissionArtifact{}, newIndexCapacityError(
+				IndexCapacityScopeArtifact,
+				IndexCapacityResourceDiagnostics,
+				uint64(len(artifact.Diagnostics)+1),
+				uint64(indexAdmissionMaxDiagnosticsPerArtifact),
+			)
+		}
+		artifact.Diagnostics = append(artifact.Diagnostics, IndexAdmissionDiagnostic{
+			Code:    "OPENAPI_PARTIAL_COVERAGE",
+			Message: "OpenAPI extraction coverage is partial",
+		})
+	}
 	canonical, err := indexAdmissionCanonicalizeArtifact(artifact)
 	if err != nil {
 		return IndexAdmissionArtifact{}, err
@@ -1252,7 +2099,15 @@ func indexAdmissionCanonicalizeArtifact(artifact IndexAdmissionArtifact) (IndexA
 
 func indexAdmissionValidateArtifactProfile(profile IndexAdmissionArtifactProfile) error {
 	switch profile.Language {
-	case IndexAdmissionLanguageGo, IndexAdmissionLanguageJavaScript, IndexAdmissionLanguageTypeScript, IndexAdmissionLanguageTSX:
+	case IndexAdmissionLanguageGo,
+		IndexAdmissionLanguageJavaScript,
+		IndexAdmissionLanguageTypeScript,
+		IndexAdmissionLanguageTSX,
+		IndexAdmissionLanguageMarkdown,
+		IndexAdmissionLanguageJSON,
+		IndexAdmissionLanguageYAML,
+		IndexAdmissionLanguageSQL,
+		IndexAdmissionLanguageOpenAPI:
 	default:
 		return fmt.Errorf("uci index admission: invalid artifact profile")
 	}

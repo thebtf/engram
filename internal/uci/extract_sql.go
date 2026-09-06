@@ -38,6 +38,14 @@ type SQLExtractionProfile struct {
 	ParserKey  string
 }
 
+// DefaultSQLExtractionProfile returns the current caller-selected SQL DDL policy.
+func DefaultSQLExtractionProfile(profileKey string) SQLExtractionProfile {
+	return SQLExtractionProfile{
+		ProfileKey: profileKey,
+		ParserKey:  "sql-ddl-lexer-v1",
+	}
+}
+
 // SQLArtifact is immutable evidence derived only from one caller-owned SQL buffer.
 type SQLArtifact struct {
 	Proof       IndexArtifactProof

@@ -135,8 +135,19 @@ func (client *preparedIndexClient) Stage(_ context.Context, frames []*pb.StageCo
 	}
 	for _, frame := range decodedFrames {
 		for _, artifact := range frame.Artifacts {
-			if artifact.Profile.ExtractionProfileDigest != uci.IndexDigest(preparedParserBundleDigest) {
-				return nil, errors.New("artifact profile does not match selected parser bundle")
+			switch artifact.Profile.Language {
+			case uci.IndexAdmissionLanguageGo,
+				uci.IndexAdmissionLanguageJavaScript,
+				uci.IndexAdmissionLanguageTypeScript,
+				uci.IndexAdmissionLanguageTSX,
+				uci.IndexAdmissionLanguageMarkdown,
+				uci.IndexAdmissionLanguageJSON,
+				uci.IndexAdmissionLanguageYAML,
+				uci.IndexAdmissionLanguageSQL,
+				uci.IndexAdmissionLanguageOpenAPI:
+				if artifact.Profile.ExtractionProfileDigest != uci.IndexDigest(preparedParserBundleDigest) {
+					return nil, errors.New("artifact profile does not match selected parser bundle")
+				}
 			}
 		}
 	}
@@ -1302,6 +1313,368 @@ func TestUCIPreparedIndexRejectsMissingTreeSitterBeforePublishingAnyFacts(t *tes
 	require.Empty(t, fixture.client.beginRequests)
 	require.Zero(t, fixture.client.stageCalls)
 	require.Zero(t, fixture.client.finalizeCalls)
+}
+
+func TestUCIPreparedIndexPublishesMixedCaseCapabilityCorpus(t *testing.T) {
+	parser := &preparedTreeSitterParser{responses: map[uci.TreeSitterLanguage]preparedTreeSitterResponse{
+		uci.TreeSitterLanguageJavaScript: {},
+		uci.TreeSitterLanguageTypeScript: {},
+		uci.TreeSitterLanguageTSX:        {},
+	}}
+	fixture := newPreparedIndexFixtureWithTreeSitter(t, parser)
+
+	goSource := []byte("package sample\nfunc Main() {}\n")
+	javascriptSource := []byte("export const client = true;\n")
+	typescriptSource := []byte("export const answer: number = 42;\n")
+	tsxSource := []byte("export const View = () => <main />;\n")
+	legacy := []struct {
+		path     string
+		body     []byte
+		language uci.IndexAdmissionLanguage
+	}{
+		{path: "code.GO", body: goSource, language: uci.IndexAdmissionLanguageGo},
+		{path: "client.JS", body: javascriptSource, language: uci.IndexAdmissionLanguageJavaScript},
+		{path: "typed.TS", body: typescriptSource, language: uci.IndexAdmissionLanguageTypeScript},
+		{path: "view.TSX", body: tsxSource, language: uci.IndexAdmissionLanguageTSX},
+	}
+	type structuredCase struct {
+		path          string
+		body          []byte
+		capability    string
+		language      uci.IndexAdmissionLanguage
+		buildExpected func(*testing.T, string, []byte) uci.IndexAdmissionArtifact
+	}
+	structured := []structuredCase{
+		{
+			path:          "README.MD",
+			body:          []byte("# Intro\n\n[Docs](docs/guide.md)\n"),
+			capability:    "markdown",
+			language:      uci.IndexAdmissionLanguageMarkdown,
+			buildExpected: preparedMarkdownAdmissionArtifact,
+		},
+		{
+			path:          "guide.MARKDOWN",
+			body:          []byte("Overview\n========\n\nSee [API](api.md).\n"),
+			capability:    "markdown",
+			language:      uci.IndexAdmissionLanguageMarkdown,
+			buildExpected: preparedMarkdownAdmissionArtifact,
+		},
+		{
+			path:          "contracts.JSON",
+			body:          preparedOpenAPIJSONSource("Ordinary JSON"),
+			capability:    "json",
+			language:      uci.IndexAdmissionLanguageJSON,
+			buildExpected: preparedJSONYAMLAdmissionArtifact,
+		},
+		{
+			path:          "settings.YAML",
+			body:          []byte("service: engram\nfeatures:\n  enabled: true\n"),
+			capability:    "yaml",
+			language:      uci.IndexAdmissionLanguageYAML,
+			buildExpected: preparedJSONYAMLAdmissionArtifact,
+		},
+		{
+			path:          "values.YML",
+			body:          []byte("items:\n  - name: first\n"),
+			capability:    "yaml",
+			language:      uci.IndexAdmissionLanguageYAML,
+			buildExpected: preparedJSONYAMLAdmissionArtifact,
+		},
+		{
+			path:          "schema.SQL",
+			body:          []byte("CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT);\n"),
+			capability:    "sql",
+			language:      uci.IndexAdmissionLanguageSQL,
+			buildExpected: preparedSQLAdmissionArtifact,
+		},
+		{
+			path:          "openapi.JSON",
+			body:          preparedOpenAPIJSONSource("Exact JSON"),
+			capability:    "openapi-json",
+			language:      uci.IndexAdmissionLanguageOpenAPI,
+			buildExpected: preparedOpenAPIAdmissionArtifact,
+		},
+		{
+			path:          "service.openapi.JSON",
+			body:          preparedOpenAPIJSONSource("Suffix JSON"),
+			capability:    "openapi-json",
+			language:      uci.IndexAdmissionLanguageOpenAPI,
+			buildExpected: preparedOpenAPIAdmissionArtifact,
+		},
+		{
+			path:          "OPENAPI.YAML",
+			body:          preparedOpenAPIYAMLSource("Exact YAML"),
+			capability:    "openapi-yaml",
+			language:      uci.IndexAdmissionLanguageOpenAPI,
+			buildExpected: preparedOpenAPIAdmissionArtifact,
+		},
+		{
+			path:          "service.openapi.YAML",
+			body:          preparedOpenAPIYAMLSource("Suffix YAML"),
+			capability:    "openapi-yaml",
+			language:      uci.IndexAdmissionLanguageOpenAPI,
+			buildExpected: preparedOpenAPIAdmissionArtifact,
+		},
+		{
+			path:          "OpenAPI.YML",
+			body:          preparedOpenAPIYAMLSource("Exact YML"),
+			capability:    "openapi-yaml",
+			language:      uci.IndexAdmissionLanguageOpenAPI,
+			buildExpected: preparedOpenAPIAdmissionArtifact,
+		},
+		{
+			path:          "service.openapi.YML",
+			body:          preparedOpenAPIYAMLSource("Suffix YML"),
+			capability:    "openapi-yaml",
+			language:      uci.IndexAdmissionLanguageOpenAPI,
+			buildExpected: preparedOpenAPIAdmissionArtifact,
+		},
+	}
+	files := make([]uci.ScannerFile, 0, len(legacy)+len(structured)+1)
+	for _, source := range legacy {
+		files = append(files, uci.ScannerFile{Path: source.path, State: uci.IndexFilePresent, Body: source.body})
+	}
+	for _, source := range structured {
+		files = append(files, uci.ScannerFile{Path: source.path, State: uci.IndexFilePresent, Body: source.body})
+	}
+	files = append(files, uci.ScannerFile{Path: "ignored.IPYNB", State: uci.IndexFilePresent, Body: []byte("{}")})
+	fixture.scanner.result.Files = files
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	require.Equal(t, fixture.published, result.Context)
+	require.Equal(t, len(legacy)+len(structured), result.Uploaded)
+	require.Equal(t, []string{"ignored.IPYNB: source language is unsupported"}, result.Errors)
+	require.Len(t, fixture.client.beginRequests, 1)
+	require.Len(t, fixture.client.stagePayloadSets, 1)
+	require.Len(t, fixture.client.finalRequests, 1)
+
+	frames := preparedFrames(t, fixture.client.stagePayloadSets[0])
+	require.NoError(t, uci.ValidateIndexAdmissionFramesForBinding(frames, fixture.target.Binding))
+	for _, source := range legacy {
+		frame := frames[preparedFrameIndex(t, frames, source.path)]
+		preparedRequireMembership(t, frame, source.path, uci.IndexAdmissionMembershipPresent, true)
+		artifact := preparedArtifactForPath(t, frames, source.path)
+		require.Equal(t, source.language, artifact.Profile.Language)
+		require.Equal(t, source.body, artifact.Body)
+	}
+	for _, source := range structured {
+		frame := frames[preparedFrameIndex(t, frames, source.path)]
+		preparedRequireMembership(t, frame, source.path, uci.IndexAdmissionMembershipPresent, true)
+		artifact := preparedArtifactForPath(t, frames, source.path)
+		require.Equal(t, source.language, artifact.Profile.Language)
+		preparedRequireExactAdmissionArtifact(t, artifact, source.buildExpected(t, preparedStructuredProfileKey(source.capability), source.body))
+		preparedRequireSourceGroundedStructuredFacts(t, artifact)
+	}
+	require.NotEmpty(t, preparedArtifactForPath(t, frames, "README.MD").References)
+	unsupportedFrame := frames[preparedFrameIndex(t, frames, "ignored.IPYNB")]
+	preparedRequireMembership(t, unsupportedFrame, "ignored.IPYNB", uci.IndexAdmissionMembershipUnsupported, false)
+
+	require.Len(t, parser.requests, 3)
+	requestedSources := map[uci.TreeSitterLanguage][]byte{
+		uci.TreeSitterLanguageJavaScript: javascriptSource,
+		uci.TreeSitterLanguageTypeScript: typescriptSource,
+		uci.TreeSitterLanguageTSX:        tsxSource,
+	}
+	for _, request := range parser.requests {
+		require.Equal(t, requestedSources[request.Language], request.Source)
+		delete(requestedSources, request.Language)
+	}
+	require.Empty(t, requestedSources)
+	coverage := preparedCoverage(t, fixture.client.finalRequests[0])
+	require.Equal(t, uci.IndexCoveragePartial, coverage.Lexical)
+	require.Equal(t, uint64(1), coverage.ExcludedFiles)
+}
+
+func TestUCIPreparedIndexPublishesPartialStructuredFactsWithPathReason(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	source := []byte("{\"kept\":{\"name\":\"value\"},\"broken\":[1,}")
+	fixture.scanner.result.Files = []uci.ScannerFile{{
+		Path:  "broken.JSON",
+		State: uci.IndexFilePresent,
+		Body:  source,
+	}}
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Uploaded)
+	require.Equal(t, []string{"broken.JSON: JSON extraction is partial"}, result.Errors)
+	require.Len(t, fixture.client.beginRequests, 1)
+	require.Len(t, fixture.client.finalRequests, 1)
+
+	frames := preparedFrames(t, fixture.client.stagePayloadSets[0])
+	frame := frames[preparedFrameIndex(t, frames, "broken.JSON")]
+	preparedRequireMembership(t, frame, "broken.JSON", uci.IndexAdmissionMembershipPresent, true)
+	artifact := preparedArtifactForPath(t, frames, "broken.JSON")
+	require.Equal(t, uci.IndexAdmissionLanguageJSON, artifact.Profile.Language)
+	require.Equal(t, uci.IndexAdmissionArtifactPartial, artifact.Status)
+	preparedRequireExactAdmissionArtifact(t, artifact, preparedJSONYAMLAdmissionArtifact(t, preparedStructuredProfileKey("json"), source))
+	require.NotEmpty(t, artifact.Definitions)
+	require.NotEmpty(t, artifact.Chunks)
+	require.True(t, preparedArtifactHasDiagnostic(artifact, "PARSE_ERROR"))
+	preparedRequireSourceGroundedStructuredFacts(t, artifact)
+	coverage := preparedCoverage(t, fixture.client.finalRequests[0])
+	require.Equal(t, uci.IndexCoveragePartial, coverage.Lexical)
+	require.Zero(t, coverage.ExcludedFiles)
+}
+
+func TestUCIPreparedIndexPublishesPartialOpenAPIFactsWithPathReason(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	source := []byte("{\"openapi\":\"3.0.3\",\"info\":{\"title\":\"Café\",\"version\":\"1\"},\"paths\":{\"/pets\":{\"get\":{\"responses\":{\"200\":{\"description\":\"OK\"}}}}},\"components\":")
+	fixture.scanner.result.Files = []uci.ScannerFile{{
+		Path:  "openapi.JSON",
+		State: uci.IndexFilePresent,
+		Body:  source,
+	}}
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Uploaded)
+	require.Equal(t, []string{"openapi.JSON: OpenAPI extraction is partial"}, result.Errors)
+	require.Len(t, fixture.client.beginRequests, 1)
+	require.Len(t, fixture.client.finalRequests, 1)
+
+	frames := preparedFrames(t, fixture.client.stagePayloadSets[0])
+	frame := frames[preparedFrameIndex(t, frames, "openapi.JSON")]
+	preparedRequireMembership(t, frame, "openapi.JSON", uci.IndexAdmissionMembershipPresent, true)
+	artifact := preparedArtifactForPath(t, frames, "openapi.JSON")
+	require.Equal(t, uci.IndexAdmissionLanguageOpenAPI, artifact.Profile.Language)
+	require.Equal(t, uci.IndexAdmissionArtifactPartial, artifact.Status)
+	preparedRequireExactAdmissionArtifact(t, artifact, preparedOpenAPIAdmissionArtifact(t, preparedStructuredProfileKey("openapi-json"), source))
+	require.NotEmpty(t, artifact.Definitions)
+	require.NotEmpty(t, artifact.Chunks)
+	require.True(t, preparedArtifactHasDiagnostic(artifact, "PARSE_ERROR"))
+	preparedRequireSourceGroundedStructuredFacts(t, artifact)
+	coverage := preparedCoverage(t, fixture.client.finalRequests[0])
+	require.Equal(t, uci.IndexCoveragePartial, coverage.Lexical)
+	require.Zero(t, coverage.ExcludedFiles)
+}
+
+func TestUCIPreparedIndexRejectsUnavailableOpenAPIBeforeBegin(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	fixture.scanner.result.Files = []uci.ScannerFile{{
+		Path:  "openapi.JSON",
+		State: uci.IndexFilePresent,
+		Body:  []byte("{\"openapi\":\"2.0\",\"info\":{\"title\":\"Legacy\",\"version\":\"1\"},\"paths\":{}}"),
+	}}
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "OpenAPI extraction is unavailable")
+	require.Equal(t, 1, fixture.scanner.calls)
+	require.Empty(t, fixture.client.beginRequests)
+	require.Zero(t, fixture.client.stageCalls)
+	require.Zero(t, fixture.client.finalizeCalls)
+}
+
+func TestUCIPreparedIndexRefusesStructuredArtifactCapacityBeforeBegin(t *testing.T) {
+	fixture := newPreparedIndexFixture(t)
+	fixture.scanner.result.Files = []uci.ScannerFile{{
+		Path:  "too-large.MD",
+		State: uci.IndexFilePresent,
+		Body:  []byte(strings.Repeat("x", uci.IndexAdmissionMaxArtifactBodyBytes+1)),
+	}}
+
+	result, err := fixture.collaborator.IndexPreparedCodebase(context.Background(), fixture.target, fixture.root, fixture.client)
+	preparedRequireCapacityFailureBeforeBegin(t, fixture, result, err, uci.IndexCapacityScopeArtifact, uci.IndexCapacityResourceArtifactBodyBytes)
+}
+
+func preparedStructuredProfileKey(capability string) string {
+	return "uci-prepared-structured/v1:" + preparedProfileID + ":" + capability + ":v1"
+}
+
+func preparedMarkdownAdmissionArtifact(t *testing.T, profileKey string, source []byte) uci.IndexAdmissionArtifact {
+	t.Helper()
+	profile := uci.DefaultMarkdownExtractionProfile(profileKey)
+	admissionProfile, err := uci.MarkdownIndexAdmissionArtifactProfile(profile)
+	require.NoError(t, err)
+	admissionProfile.ExtractionProfileDigest = uci.IndexDigest(preparedParserBundleDigest)
+	artifact, err := uci.NewIndexAdmissionArtifactFromMarkdown(preparedSourceID, admissionProfile, profile, source, uci.ExtractMarkdown(source, profile))
+	require.NoError(t, err)
+	return artifact
+}
+
+func preparedJSONYAMLAdmissionArtifact(t *testing.T, profileKey string, source []byte) uci.IndexAdmissionArtifact {
+	t.Helper()
+	format := uci.JSONYAMLFormatJSON
+	if strings.Contains(profileKey, ":yaml:") {
+		format = uci.JSONYAMLFormatYAML
+	}
+	profile := uci.DefaultJSONYAMLExtractionProfile(profileKey, format)
+	admissionProfile, err := uci.JSONYAMLIndexAdmissionArtifactProfile(profile)
+	require.NoError(t, err)
+	admissionProfile.ExtractionProfileDigest = uci.IndexDigest(preparedParserBundleDigest)
+	artifact, err := uci.NewIndexAdmissionArtifactFromJSONYAML(preparedSourceID, admissionProfile, profile, source, uci.ExtractJSONYAML(source, profile))
+	require.NoError(t, err)
+	return artifact
+}
+
+func preparedSQLAdmissionArtifact(t *testing.T, profileKey string, source []byte) uci.IndexAdmissionArtifact {
+	t.Helper()
+	profile := uci.DefaultSQLExtractionProfile(profileKey)
+	admissionProfile, err := uci.SQLIndexAdmissionArtifactProfile(profile)
+	require.NoError(t, err)
+	admissionProfile.ExtractionProfileDigest = uci.IndexDigest(preparedParserBundleDigest)
+	artifact, err := uci.NewIndexAdmissionArtifactFromSQL(preparedSourceID, admissionProfile, profile, source, uci.ExtractSQL(source, profile))
+	require.NoError(t, err)
+	return artifact
+}
+
+func preparedOpenAPIAdmissionArtifact(t *testing.T, profileKey string, source []byte) uci.IndexAdmissionArtifact {
+	t.Helper()
+	format := uci.OpenAPIFormatJSON
+	if strings.Contains(profileKey, ":openapi-yaml:") {
+		format = uci.OpenAPIFormatYAML
+	}
+	profile := uci.DefaultOpenAPIExtractionProfile(profileKey, format)
+	admissionProfile, err := uci.OpenAPIIndexAdmissionArtifactProfile(profile)
+	require.NoError(t, err)
+	admissionProfile.ExtractionProfileDigest = uci.IndexDigest(preparedParserBundleDigest)
+	artifact, err := uci.NewIndexAdmissionArtifactFromOpenAPI(preparedSourceID, admissionProfile, profile, source, uci.ExtractOpenAPI(source, profile))
+	require.NoError(t, err)
+	return artifact
+}
+
+func preparedRequireExactAdmissionArtifact(t *testing.T, got, want uci.IndexAdmissionArtifact) {
+	t.Helper()
+	require.Equal(t, want.ArtifactID, got.ArtifactID)
+	require.Equal(t, want.ContentDigest, got.ContentDigest)
+	require.Equal(t, want.FactsDigest, got.FactsDigest)
+	require.Equal(t, want.Profile, got.Profile)
+	require.Equal(t, want.Status, got.Status)
+	require.Equal(t, want.Body, got.Body)
+	require.Equal(t, want.Definitions, got.Definitions)
+	require.Equal(t, want.References, got.References)
+	require.Equal(t, want.Chunks, got.Chunks)
+	require.Equal(t, want.Diagnostics, got.Diagnostics)
+}
+
+func preparedRequireSourceGroundedStructuredFacts(t *testing.T, artifact uci.IndexAdmissionArtifact) {
+	t.Helper()
+	require.NotEmpty(t, artifact.Chunks)
+	for _, chunk := range artifact.Chunks {
+		preparedRequireExactBodySpan(t, artifact.Body, chunk.Span.ByteStart, chunk.Span.ByteEnd, chunk.Text)
+	}
+	for _, reference := range artifact.References {
+		require.Equal(t, uci.IndexRelation("references"), reference.Relation)
+		preparedRequireExactBodySpan(t, artifact.Body, reference.Span.ByteStart, reference.Span.ByteEnd, reference.RawTarget)
+	}
+}
+
+func preparedRequireExactBodySpan(t *testing.T, body []byte, start, end int64, want string) {
+	t.Helper()
+	require.GreaterOrEqual(t, start, int64(0))
+	require.GreaterOrEqual(t, end, start)
+	require.LessOrEqual(t, end, int64(len(body)))
+	require.Equal(t, want, string(body[start:end]))
+}
+
+func preparedOpenAPIJSONSource(title string) []byte {
+	return []byte(fmt.Sprintf(`{"openapi":"3.0.3","info":{"title":%q,"version":"1.0.0"},"paths":{"/health":{"get":{"responses":{"200":{"description":"ok"}}}}}}`, title))
+}
+
+func preparedOpenAPIYAMLSource(title string) []byte {
+	return []byte(fmt.Sprintf("openapi: 3.0.3\ninfo:\n  title: %s\n  version: 1.0.0\npaths:\n  /health:\n    get:\n      responses:\n        '200':\n          description: ok\n", title))
 }
 
 type preparedTreeSitterResponse struct {

@@ -912,3 +912,603 @@ func indexAdmissionTestArtifactHasDiagnostic(artifact IndexAdmissionArtifact, co
 	}
 	return false
 }
+
+func TestDefaultStructuredExtractionProfiles(t *testing.T) {
+	markdown := DefaultMarkdownExtractionProfile("analysis-v1")
+	if markdown != (MarkdownExtractionProfile{ProfileKey: "analysis-v1", ParserKey: "markdown-parser-v1"}) {
+		t.Fatalf("DefaultMarkdownExtractionProfile() = %#v", markdown)
+	}
+	jsonProfile := DefaultJSONYAMLExtractionProfile("analysis-v1", JSONYAMLFormatJSON)
+	if jsonProfile != (JSONYAMLExtractionProfile{ProfileKey: "analysis-v1", ParserKey: "jsonyaml-parser-v1", Format: JSONYAMLFormatJSON}) {
+		t.Fatalf("DefaultJSONYAMLExtractionProfile() = %#v", jsonProfile)
+	}
+	sqlProfile := DefaultSQLExtractionProfile("analysis-v1")
+	if sqlProfile != (SQLExtractionProfile{ProfileKey: "analysis-v1", ParserKey: "sql-ddl-lexer-v1"}) {
+		t.Fatalf("DefaultSQLExtractionProfile() = %#v", sqlProfile)
+	}
+	openAPIProfile := DefaultOpenAPIExtractionProfile("analysis-v1", OpenAPIFormatYAML)
+	if openAPIProfile != (OpenAPIExtractionProfile{ProfileKey: "analysis-v1", ParserKey: "openapi-parser-v1", Format: OpenAPIFormatYAML}) {
+		t.Fatalf("DefaultOpenAPIExtractionProfile() = %#v", openAPIProfile)
+	}
+	if _, err := JSONYAMLIndexAdmissionArtifactProfile(DefaultJSONYAMLExtractionProfile("analysis-v1", JSONYAMLFormat("toml"))); err == nil {
+		t.Fatal("JSONYAMLIndexAdmissionArtifactProfile() accepted an unsupported format")
+	}
+	if _, err := OpenAPIIndexAdmissionArtifactProfile(DefaultOpenAPIExtractionProfile("analysis-v1", OpenAPIFormat("toml"))); err == nil {
+		t.Fatal("OpenAPIIndexAdmissionArtifactProfile() accepted an unsupported format")
+	}
+}
+
+func TestIndexAdmissionStructuredExtractionConversions(t *testing.T) {
+	markdownSource := []byte(uciMarkdownExtractionFixture)
+	jsonSource := []byte(uciJSONYAMLJSONFixture)
+	yamlSource := []byte(uciJSONYAMLYAMLFixture)
+	sqlSource := []byte(uciSQLDDLFixture)
+	openAPISource := []byte(uciOpenAPIJSONFixture)
+
+	fixtures := []struct {
+		name              string
+		language          IndexAdmissionLanguage
+		source            []byte
+		partialDiagnostic string
+		sourceDiagnostic  string
+		convert           func(string, []byte) (IndexAdmissionArtifact, error)
+		sourceMismatch    func() error
+		profileMismatch   func() error
+		proofMismatch     func() error
+		partial           func() (IndexAdmissionArtifact, error)
+	}{
+		{
+			name:              "markdown",
+			language:          IndexAdmissionLanguageMarkdown,
+			source:            markdownSource,
+			partialDiagnostic: "MARKDOWN_PARTIAL_COVERAGE",
+			sourceDiagnostic:  "MARKDOWN_LINK_UNTERMINATED",
+			convert: func(sourceID string, source []byte) (IndexAdmissionArtifact, error) {
+				profile := DefaultMarkdownExtractionProfile("structured-admission-v1")
+				admission, err := MarkdownIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return IndexAdmissionArtifact{}, err
+				}
+				return NewIndexAdmissionArtifactFromMarkdown(sourceID, admission, profile, source, ExtractMarkdown(source, profile))
+			},
+			sourceMismatch: func() error {
+				profile := DefaultMarkdownExtractionProfile("structured-admission-v1")
+				admission, err := MarkdownIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return err
+				}
+				extracted := ExtractMarkdown(markdownSource, profile)
+				_, err = NewIndexAdmissionArtifactFromMarkdown(indexAdmissionTestSourceA, admission, profile, append(append([]byte(nil), markdownSource...), '\n'), extracted)
+				return err
+			},
+			profileMismatch: func() error {
+				profile := DefaultMarkdownExtractionProfile("structured-admission-v1")
+				wrongProfile := profile
+				wrongProfile.ParserKey = "markdown-parser-other"
+				admission, err := MarkdownIndexAdmissionArtifactProfile(wrongProfile)
+				if err != nil {
+					return err
+				}
+				_, err = NewIndexAdmissionArtifactFromMarkdown(indexAdmissionTestSourceA, admission, wrongProfile, markdownSource, ExtractMarkdown(markdownSource, profile))
+				return err
+			},
+			proofMismatch: func() error {
+				profile := DefaultMarkdownExtractionProfile("structured-admission-v1")
+				admission, err := MarkdownIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return err
+				}
+				extracted := ExtractMarkdown(markdownSource, profile)
+				extracted.Proof.FactsDigest = indexAdmissionDigestBytes([]byte("tampered-markdown-proof"))
+				_, err = NewIndexAdmissionArtifactFromMarkdown(indexAdmissionTestSourceA, admission, profile, markdownSource, extracted)
+				return err
+			},
+			partial: func() (IndexAdmissionArtifact, error) {
+				source := []byte("# Partial\n\n[unfinished](docs/guide.md\n")
+				return indexAdmissionTestMarkdownStructuredArtifact(indexAdmissionTestSourceA, source)
+			},
+		},
+		{
+			name:              "json",
+			language:          IndexAdmissionLanguageJSON,
+			source:            jsonSource,
+			partialDiagnostic: "JSON_YAML_PARTIAL_COVERAGE",
+			sourceDiagnostic:  "EXTERNAL_REFERENCE",
+			convert: func(sourceID string, source []byte) (IndexAdmissionArtifact, error) {
+				profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatJSON)
+				admission, err := JSONYAMLIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return IndexAdmissionArtifact{}, err
+				}
+				return NewIndexAdmissionArtifactFromJSONYAML(sourceID, admission, profile, source, ExtractJSONYAML(source, profile))
+			},
+			sourceMismatch: func() error {
+				profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatJSON)
+				admission, err := JSONYAMLIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return err
+				}
+				extracted := ExtractJSONYAML(jsonSource, profile)
+				_, err = NewIndexAdmissionArtifactFromJSONYAML(indexAdmissionTestSourceA, admission, profile, append(append([]byte(nil), jsonSource...), '\n'), extracted)
+				return err
+			},
+			profileMismatch: func() error {
+				profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatJSON)
+				wrongProfile := profile
+				wrongProfile.ParserKey = "jsonyaml-parser-other"
+				admission, err := JSONYAMLIndexAdmissionArtifactProfile(wrongProfile)
+				if err != nil {
+					return err
+				}
+				_, err = NewIndexAdmissionArtifactFromJSONYAML(indexAdmissionTestSourceA, admission, wrongProfile, jsonSource, ExtractJSONYAML(jsonSource, profile))
+				return err
+			},
+			proofMismatch: func() error {
+				profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatJSON)
+				admission, err := JSONYAMLIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return err
+				}
+				extracted := ExtractJSONYAML(jsonSource, profile)
+				extracted.Proof.FactsDigest = indexAdmissionDigestBytes([]byte("tampered-json-proof"))
+				_, err = NewIndexAdmissionArtifactFromJSONYAML(indexAdmissionTestSourceA, admission, profile, jsonSource, extracted)
+				return err
+			},
+			partial: func() (IndexAdmissionArtifact, error) {
+				source := []byte("{\"remote\":{\"$ref\":\"https://example.invalid/schema.json#/Thing\"}}")
+				return indexAdmissionTestJSONYAMLStructuredArtifact(indexAdmissionTestSourceA, source, JSONYAMLFormatJSON)
+			},
+		},
+		{
+			name:              "yaml",
+			language:          IndexAdmissionLanguageYAML,
+			source:            yamlSource,
+			partialDiagnostic: "JSON_YAML_PARTIAL_COVERAGE",
+			sourceDiagnostic:  "EXTERNAL_REFERENCE",
+			convert: func(sourceID string, source []byte) (IndexAdmissionArtifact, error) {
+				profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatYAML)
+				admission, err := JSONYAMLIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return IndexAdmissionArtifact{}, err
+				}
+				return NewIndexAdmissionArtifactFromJSONYAML(sourceID, admission, profile, source, ExtractJSONYAML(source, profile))
+			},
+			sourceMismatch: func() error {
+				profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatYAML)
+				admission, err := JSONYAMLIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return err
+				}
+				extracted := ExtractJSONYAML(yamlSource, profile)
+				_, err = NewIndexAdmissionArtifactFromJSONYAML(indexAdmissionTestSourceA, admission, profile, append(append([]byte(nil), yamlSource...), '\n'), extracted)
+				return err
+			},
+			profileMismatch: func() error {
+				profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatYAML)
+				wrongProfile := profile
+				wrongProfile.ParserKey = "jsonyaml-parser-other"
+				admission, err := JSONYAMLIndexAdmissionArtifactProfile(wrongProfile)
+				if err != nil {
+					return err
+				}
+				_, err = NewIndexAdmissionArtifactFromJSONYAML(indexAdmissionTestSourceA, admission, wrongProfile, yamlSource, ExtractJSONYAML(yamlSource, profile))
+				return err
+			},
+			proofMismatch: func() error {
+				profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatYAML)
+				admission, err := JSONYAMLIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return err
+				}
+				extracted := ExtractJSONYAML(yamlSource, profile)
+				extracted.Proof.FactsDigest = indexAdmissionDigestBytes([]byte("tampered-yaml-proof"))
+				_, err = NewIndexAdmissionArtifactFromJSONYAML(indexAdmissionTestSourceA, admission, profile, yamlSource, extracted)
+				return err
+			},
+			partial: func() (IndexAdmissionArtifact, error) {
+				source := []byte("remote:\n  $ref: https://example.invalid/schema.yaml#/Thing\n")
+				return indexAdmissionTestJSONYAMLStructuredArtifact(indexAdmissionTestSourceA, source, JSONYAMLFormatYAML)
+			},
+		},
+		{
+			name:              "sql",
+			language:          IndexAdmissionLanguageSQL,
+			source:            sqlSource,
+			partialDiagnostic: "SQL_PARTIAL_COVERAGE",
+			sourceDiagnostic:  "UNSUPPORTED_STATEMENT",
+			convert: func(sourceID string, source []byte) (IndexAdmissionArtifact, error) {
+				profile := DefaultSQLExtractionProfile("structured-admission-v1")
+				admission, err := SQLIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return IndexAdmissionArtifact{}, err
+				}
+				return NewIndexAdmissionArtifactFromSQL(sourceID, admission, profile, source, ExtractSQL(source, profile))
+			},
+			sourceMismatch: func() error {
+				profile := DefaultSQLExtractionProfile("structured-admission-v1")
+				admission, err := SQLIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return err
+				}
+				extracted := ExtractSQL(sqlSource, profile)
+				_, err = NewIndexAdmissionArtifactFromSQL(indexAdmissionTestSourceA, admission, profile, append(append([]byte(nil), sqlSource...), '\n'), extracted)
+				return err
+			},
+			profileMismatch: func() error {
+				profile := DefaultSQLExtractionProfile("structured-admission-v1")
+				wrongProfile := profile
+				wrongProfile.ParserKey = "sql-ddl-lexer-other"
+				admission, err := SQLIndexAdmissionArtifactProfile(wrongProfile)
+				if err != nil {
+					return err
+				}
+				_, err = NewIndexAdmissionArtifactFromSQL(indexAdmissionTestSourceA, admission, wrongProfile, sqlSource, ExtractSQL(sqlSource, profile))
+				return err
+			},
+			proofMismatch: func() error {
+				profile := DefaultSQLExtractionProfile("structured-admission-v1")
+				admission, err := SQLIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return err
+				}
+				extracted := ExtractSQL(sqlSource, profile)
+				extracted.Proof.FactsDigest = indexAdmissionDigestBytes([]byte("tampered-sql-proof"))
+				_, err = NewIndexAdmissionArtifactFromSQL(indexAdmissionTestSourceA, admission, profile, sqlSource, extracted)
+				return err
+			},
+			partial: func() (IndexAdmissionArtifact, error) {
+				source := []byte("CREATE TABLE public.kept (id BIGINT);\nINSERT INTO public.kept (id) VALUES (1);\n")
+				return indexAdmissionTestSQLStructuredArtifact(indexAdmissionTestSourceA, source)
+			},
+		},
+		{
+			name:              "openapi",
+			language:          IndexAdmissionLanguageOpenAPI,
+			source:            openAPISource,
+			partialDiagnostic: "OPENAPI_PARTIAL_COVERAGE",
+			sourceDiagnostic:  "EXTERNAL_REFERENCE",
+			convert: func(sourceID string, source []byte) (IndexAdmissionArtifact, error) {
+				profile := DefaultOpenAPIExtractionProfile("structured-admission-v1", OpenAPIFormatJSON)
+				admission, err := OpenAPIIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return IndexAdmissionArtifact{}, err
+				}
+				return NewIndexAdmissionArtifactFromOpenAPI(sourceID, admission, profile, source, ExtractOpenAPI(source, profile))
+			},
+			sourceMismatch: func() error {
+				profile := DefaultOpenAPIExtractionProfile("structured-admission-v1", OpenAPIFormatJSON)
+				admission, err := OpenAPIIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return err
+				}
+				extracted := ExtractOpenAPI(openAPISource, profile)
+				_, err = NewIndexAdmissionArtifactFromOpenAPI(indexAdmissionTestSourceA, admission, profile, append(append([]byte(nil), openAPISource...), '\n'), extracted)
+				return err
+			},
+			profileMismatch: func() error {
+				profile := DefaultOpenAPIExtractionProfile("structured-admission-v1", OpenAPIFormatJSON)
+				wrongProfile := profile
+				wrongProfile.ParserKey = "openapi-parser-other"
+				admission, err := OpenAPIIndexAdmissionArtifactProfile(wrongProfile)
+				if err != nil {
+					return err
+				}
+				_, err = NewIndexAdmissionArtifactFromOpenAPI(indexAdmissionTestSourceA, admission, wrongProfile, openAPISource, ExtractOpenAPI(openAPISource, profile))
+				return err
+			},
+			proofMismatch: func() error {
+				profile := DefaultOpenAPIExtractionProfile("structured-admission-v1", OpenAPIFormatJSON)
+				admission, err := OpenAPIIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return err
+				}
+				extracted := ExtractOpenAPI(openAPISource, profile)
+				extracted.Proof.FactsDigest = indexAdmissionDigestBytes([]byte("tampered-openapi-proof"))
+				_, err = NewIndexAdmissionArtifactFromOpenAPI(indexAdmissionTestSourceA, admission, profile, openAPISource, extracted)
+				return err
+			},
+			partial: func() (IndexAdmissionArtifact, error) {
+				source := []byte("{\"openapi\":\"3.0.3\",\"info\":{\"title\":\"x\",\"version\":\"1\"},\"paths\":{\"/pets\":{\"get\":{\"responses\":{\"200\":{\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"https://example.invalid/Pet.yaml#/Pet\"}}}}}}}}}")
+				return indexAdmissionTestOpenAPIStructuredArtifact(indexAdmissionTestSourceA, source)
+			},
+		},
+	}
+
+	for _, fixture := range fixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			first, err := fixture.convert(indexAdmissionTestSourceA, fixture.source)
+			if err != nil {
+				t.Fatalf("convert() error = %v", err)
+			}
+			same, err := fixture.convert(indexAdmissionTestSourceA, append([]byte(nil), fixture.source...))
+			if err != nil {
+				t.Fatalf("same-source convert() error = %v", err)
+			}
+			other, err := fixture.convert(indexAdmissionTestSourceB, fixture.source)
+			if err != nil {
+				t.Fatalf("other-source convert() error = %v", err)
+			}
+			if first.ArtifactID != same.ArtifactID || first.FactsDigest != same.FactsDigest {
+				t.Fatalf("same source facts are not stable: first=%#v same=%#v", first, same)
+			}
+			if first.ArtifactID == other.ArtifactID {
+				t.Fatalf("different Sources reused structured artifact ID %q", first.ArtifactID)
+			}
+			if first.Profile.Language != fixture.language || first.ContentDigest != indexAdmissionDigestBytes(fixture.source) || !bytes.Equal(first.Body, fixture.source) {
+				t.Fatalf("artifact lost language or exact source evidence: %#v", first)
+			}
+			factsDigest, err := DigestIndexAdmissionArtifactFacts(first)
+			if err != nil || factsDigest != first.FactsDigest {
+				t.Fatalf("generic facts digest = %q, %v; want %q", factsDigest, err, first.FactsDigest)
+			}
+			if len(first.Definitions) == 0 || len(first.References) == 0 || len(first.Chunks) == 0 {
+				t.Fatalf("structured extraction lost definitions, observed references, or source chunks: %#v", first)
+			}
+			definitionKeys := indexAdmissionDefinitionSet(first.Definitions)
+			ownedReferences := 0
+			sites := make(map[string]struct{}, len(first.References))
+			for _, reference := range first.References {
+				if reference.Relation != IndexRelation("references") {
+					t.Fatalf("structured reference relation = %q, want references", reference.Relation)
+				}
+				if _, exists := sites[reference.SiteKey]; exists {
+					t.Fatalf("duplicate structured reference site key %q", reference.SiteKey)
+				}
+				sites[reference.SiteKey] = struct{}{}
+				rawTarget, err := indexAdmissionTextAtSpan(fixture.source, reference.Span)
+				if err != nil || reference.RawTarget != rawTarget {
+					t.Fatalf("reference raw target/span mismatch: reference=%#v text=%q err=%v", reference, rawTarget, err)
+				}
+				if reference.OwnerSymbolKey != nil {
+					ownedReferences++
+					if _, found := definitionKeys[*reference.OwnerSymbolKey]; !found {
+						t.Fatalf("reference owner %q is not an admitted definition", *reference.OwnerSymbolKey)
+					}
+				}
+			}
+			if (fixture.language == IndexAdmissionLanguageMarkdown || fixture.language == IndexAdmissionLanguageSQL) && ownedReferences == 0 {
+				t.Fatal("structured extractor owner-local keys were not preserved")
+			}
+			for _, chunk := range first.Chunks {
+				text, err := indexAdmissionTextAtSpan(fixture.source, chunk.Span)
+				if err != nil || chunk.Text != text || chunk.ContentDigest != indexAdmissionDigestBytes([]byte(text)) {
+					t.Fatalf("chunk/source digest mismatch: chunk=%#v text=%q err=%v", chunk, text, err)
+				}
+			}
+			if fixture.language == IndexAdmissionLanguageJSON || fixture.language == IndexAdmissionLanguageYAML {
+				for _, definition := range first.Definitions {
+					if definition.LocalSymbolKey != definition.SymbolKey {
+						t.Fatalf("JSON/YAML definition lost document-qualified local identity: %#v", definition)
+					}
+				}
+				for _, reference := range first.References {
+					if reference.SiteKey != reference.SymbolKey {
+						t.Fatalf("JSON/YAML reference lost document-qualified site identity: %#v", reference)
+					}
+				}
+			}
+			if err := fixture.sourceMismatch(); err == nil {
+				t.Fatal("converter accepted mismatched source bytes")
+			}
+			if err := fixture.profileMismatch(); err == nil {
+				t.Fatal("converter accepted mismatched extraction profile")
+			}
+			if err := fixture.proofMismatch(); err == nil {
+				t.Fatal("converter accepted tampered extractor proof")
+			}
+			partial, err := fixture.partial()
+			if err != nil {
+				t.Fatalf("partial conversion error = %v", err)
+			}
+			if partial.Status != IndexAdmissionArtifactPartial ||
+				!indexAdmissionTestArtifactHasDiagnostic(partial, fixture.partialDiagnostic) ||
+				!indexAdmissionTestArtifactHasDiagnostic(partial, fixture.sourceDiagnostic) {
+				t.Fatalf("partial conversion lost diagnostics %q or %q: %#v", fixture.partialDiagnostic, fixture.sourceDiagnostic, partial)
+			}
+		})
+	}
+}
+
+func indexAdmissionTestMarkdownStructuredArtifact(sourceID string, source []byte) (IndexAdmissionArtifact, error) {
+	profile := DefaultMarkdownExtractionProfile("structured-admission-v1")
+	admission, err := MarkdownIndexAdmissionArtifactProfile(profile)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	return NewIndexAdmissionArtifactFromMarkdown(sourceID, admission, profile, source, ExtractMarkdown(source, profile))
+}
+
+func indexAdmissionTestJSONYAMLStructuredArtifact(sourceID string, source []byte, format JSONYAMLFormat) (IndexAdmissionArtifact, error) {
+	profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", format)
+	admission, err := JSONYAMLIndexAdmissionArtifactProfile(profile)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	return NewIndexAdmissionArtifactFromJSONYAML(sourceID, admission, profile, source, ExtractJSONYAML(source, profile))
+}
+
+func indexAdmissionTestSQLStructuredArtifact(sourceID string, source []byte) (IndexAdmissionArtifact, error) {
+	profile := DefaultSQLExtractionProfile("structured-admission-v1")
+	admission, err := SQLIndexAdmissionArtifactProfile(profile)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	return NewIndexAdmissionArtifactFromSQL(sourceID, admission, profile, source, ExtractSQL(source, profile))
+}
+
+func indexAdmissionTestOpenAPIStructuredArtifact(sourceID string, source []byte) (IndexAdmissionArtifact, error) {
+	profile := DefaultOpenAPIExtractionProfile("structured-admission-v1", OpenAPIFormatJSON)
+	admission, err := OpenAPIIndexAdmissionArtifactProfile(profile)
+	if err != nil {
+		return IndexAdmissionArtifact{}, err
+	}
+	return NewIndexAdmissionArtifactFromOpenAPI(sourceID, admission, profile, source, ExtractOpenAPI(source, profile))
+}
+
+func TestIndexAdmissionStructuredConversionsRejectTamperedChunkEvidence(t *testing.T) {
+	t.Run("markdown", func(t *testing.T) {
+		source := []byte(uciMarkdownExtractionFixture)
+		profile := DefaultMarkdownExtractionProfile("structured-admission-v1")
+		admission, err := MarkdownIndexAdmissionArtifactProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		extracted := ExtractMarkdown(source, profile)
+		extracted.Chunks[0].ContentDigest = indexAdmissionDigestBytes([]byte("tampered-markdown-chunk"))
+		extracted = markdownFinalizeArtifact(source, profile, extracted)
+		if _, err := NewIndexAdmissionArtifactFromMarkdown(indexAdmissionTestSourceA, admission, profile, source, extracted); err == nil {
+			t.Fatal("Markdown converter accepted a re-proven tampered chunk digest")
+		}
+	})
+	t.Run("json", func(t *testing.T) {
+		source := []byte(uciJSONYAMLJSONFixture)
+		profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatJSON)
+		admission, err := JSONYAMLIndexAdmissionArtifactProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		extracted := ExtractJSONYAML(source, profile)
+		extracted.Chunks[0].ContentDigest = indexAdmissionDigestBytes([]byte("tampered-json-chunk"))
+		extracted = jsonYAMLFinalizeArtifact(source, profile, extracted)
+		if _, err := NewIndexAdmissionArtifactFromJSONYAML(indexAdmissionTestSourceA, admission, profile, source, extracted); err == nil {
+			t.Fatal("JSON converter accepted a re-proven tampered chunk digest")
+		}
+	})
+	t.Run("yaml", func(t *testing.T) {
+		source := []byte(uciJSONYAMLYAMLFixture)
+		profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatYAML)
+		admission, err := JSONYAMLIndexAdmissionArtifactProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		extracted := ExtractJSONYAML(source, profile)
+		extracted.Chunks[0].ContentDigest = indexAdmissionDigestBytes([]byte("tampered-yaml-chunk"))
+		extracted = jsonYAMLFinalizeArtifact(source, profile, extracted)
+		if _, err := NewIndexAdmissionArtifactFromJSONYAML(indexAdmissionTestSourceA, admission, profile, source, extracted); err == nil {
+			t.Fatal("YAML converter accepted a re-proven tampered chunk digest")
+		}
+	})
+	t.Run("sql", func(t *testing.T) {
+		source := []byte(uciSQLDDLFixture)
+		profile := DefaultSQLExtractionProfile("structured-admission-v1")
+		admission, err := SQLIndexAdmissionArtifactProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		extracted := ExtractSQL(source, profile)
+		extracted.Chunks[0].ContentDigest = indexAdmissionDigestBytes([]byte("tampered-sql-chunk"))
+		extracted = sqlFinalizeArtifact(source, profile, extracted)
+		if _, err := NewIndexAdmissionArtifactFromSQL(indexAdmissionTestSourceA, admission, profile, source, extracted); err == nil {
+			t.Fatal("SQL converter accepted a re-proven tampered chunk digest")
+		}
+	})
+	t.Run("openapi", func(t *testing.T) {
+		source := []byte(uciOpenAPIJSONFixture)
+		profile := DefaultOpenAPIExtractionProfile("structured-admission-v1", OpenAPIFormatJSON)
+		admission, err := OpenAPIIndexAdmissionArtifactProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		extracted := ExtractOpenAPI(source, profile)
+		extracted.Chunks[0].ContentDigest = indexAdmissionDigestBytes([]byte("tampered-openapi-chunk"))
+		extracted = openAPIFinalizeArtifact(source, profile, extracted)
+		if _, err := NewIndexAdmissionArtifactFromOpenAPI(indexAdmissionTestSourceA, admission, profile, source, extracted); err == nil {
+			t.Fatal("OpenAPI converter accepted a re-proven tampered chunk digest")
+		}
+	})
+}
+
+func TestIndexAdmissionStructuredConversionsRejectFormatMismatch(t *testing.T) {
+	t.Run("json yaml", func(t *testing.T) {
+		source := []byte(uciJSONYAMLJSONFixture)
+		profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatJSON)
+		admission, err := JSONYAMLIndexAdmissionArtifactProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		extracted := ExtractJSONYAML(source, profile)
+		extracted.Format = JSONYAMLFormatYAML
+		extracted = jsonYAMLFinalizeArtifact(source, profile, extracted)
+		if _, err := NewIndexAdmissionArtifactFromJSONYAML(indexAdmissionTestSourceA, admission, profile, source, extracted); err == nil {
+			t.Fatal("JSON/YAML converter accepted a mismatched artifact format")
+		}
+	})
+	t.Run("openapi", func(t *testing.T) {
+		source := []byte(uciOpenAPIJSONFixture)
+		profile := DefaultOpenAPIExtractionProfile("structured-admission-v1", OpenAPIFormatJSON)
+		admission, err := OpenAPIIndexAdmissionArtifactProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		extracted := ExtractOpenAPI(source, profile)
+		extracted.Format = OpenAPIFormatYAML
+		extracted = openAPIFinalizeArtifact(source, profile, extracted)
+		if _, err := NewIndexAdmissionArtifactFromOpenAPI(indexAdmissionTestSourceA, admission, profile, source, extracted); err == nil {
+			t.Fatal("OpenAPI converter accepted a mismatched artifact format")
+		}
+	})
+}
+
+func TestIndexAdmissionStructuredConversionsRejectOverCapacityBeforeProof(t *testing.T) {
+	source := make([]byte, IndexAdmissionMaxArtifactBodyBytes+1)
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "markdown",
+			call: func() error {
+				profile := DefaultMarkdownExtractionProfile("structured-admission-v1")
+				admission, err := MarkdownIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return err
+				}
+				_, err = NewIndexAdmissionArtifactFromMarkdown(indexAdmissionTestSourceA, admission, profile, source, MarkdownArtifact{})
+				return err
+			},
+		},
+		{
+			name: "json yaml",
+			call: func() error {
+				profile := DefaultJSONYAMLExtractionProfile("structured-admission-v1", JSONYAMLFormatJSON)
+				admission, err := JSONYAMLIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return err
+				}
+				_, err = NewIndexAdmissionArtifactFromJSONYAML(indexAdmissionTestSourceA, admission, profile, source, JSONYAMLArtifact{})
+				return err
+			},
+		},
+		{
+			name: "sql",
+			call: func() error {
+				profile := DefaultSQLExtractionProfile("structured-admission-v1")
+				admission, err := SQLIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return err
+				}
+				_, err = NewIndexAdmissionArtifactFromSQL(indexAdmissionTestSourceA, admission, profile, source, SQLArtifact{})
+				return err
+			},
+		},
+		{
+			name: "openapi",
+			call: func() error {
+				profile := DefaultOpenAPIExtractionProfile("structured-admission-v1", OpenAPIFormatJSON)
+				admission, err := OpenAPIIndexAdmissionArtifactProfile(profile)
+				if err != nil {
+					return err
+				}
+				_, err = NewIndexAdmissionArtifactFromOpenAPI(indexAdmissionTestSourceA, admission, profile, source, OpenAPIArtifact{})
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.call(); !IsIndexCapacityError(err) {
+				t.Fatalf("over-capacity conversion error = %v, want typed capacity error", err)
+			}
+		})
+	}
+}

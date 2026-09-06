@@ -41,6 +41,15 @@ type OpenAPIExtractionProfile struct {
 	Format     OpenAPIFormat
 }
 
+// DefaultOpenAPIExtractionProfile returns the current caller-selected OpenAPI policy.
+func DefaultOpenAPIExtractionProfile(profileKey string, format OpenAPIFormat) OpenAPIExtractionProfile {
+	return OpenAPIExtractionProfile{
+		ProfileKey: profileKey,
+		ParserKey:  "openapi-parser-v1",
+		Format:     format,
+	}
+}
+
 // OpenAPIArtifact is immutable evidence derived only from caller-owned OpenAPI source bytes.
 type OpenAPIArtifact struct {
 	Proof       IndexArtifactProof

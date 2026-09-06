@@ -31,6 +31,14 @@ type MarkdownExtractionProfile struct {
 	ParserKey  string
 }
 
+// DefaultMarkdownExtractionProfile returns the current caller-selected Markdown policy.
+func DefaultMarkdownExtractionProfile(profileKey string) MarkdownExtractionProfile {
+	return MarkdownExtractionProfile{
+		ProfileKey: profileKey,
+		ParserKey:  "markdown-parser-v1",
+	}
+}
+
 // MarkdownArtifact is immutable extraction evidence derived solely from Markdown source bytes and a profile.
 type MarkdownArtifact struct {
 	Proof       IndexArtifactProof

@@ -235,6 +235,45 @@ func TestUCIIndexAdmissionDefinitionNameIsLanguageAwareAndClosed(t *testing.T) {
 		_, err := uciIndexAdmissionDefinitionName(ucidomain.IndexAdmissionLanguageTypeScript, definition)
 		require.Error(t, err)
 	}
+	structuredTests := []struct {
+		name       string
+		language   ucidomain.IndexAdmissionLanguage
+		definition ucidomain.IndexAdmissionDefinition
+		want       string
+		valid      bool
+	}{
+		{name: "markdown heading", language: ucidomain.IndexAdmissionLanguageMarkdown, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "heading:introduction-2", SymbolKey: "markdown:heading:introduction-2", Kind: "heading"}, want: "introduction-2", valid: true},
+		{name: "markdown symbol prefix mismatch", language: ucidomain.IndexAdmissionLanguageMarkdown, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "heading:introduction", SymbolKey: "json:heading:introduction", Kind: "heading"}},
+		{name: "json document", language: ucidomain.IndexAdmissionLanguageJSON, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "json:document:0", SymbolKey: "json:document:0", Kind: "document"}, want: "document 0", valid: true},
+		{name: "json decoded pointer tail", language: ucidomain.IndexAdmissionLanguageJSON, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "json:document:0#/items/~1primary", SymbolKey: "json:document:0#/items/~1primary", Kind: "key"}, want: "/primary", valid: true},
+		{name: "json malformed pointer escape", language: ucidomain.IndexAdmissionLanguageJSON, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "json:document:0#/items/~2primary", SymbolKey: "json:document:0#/items/~2primary", Kind: "key"}},
+		{name: "yaml anchor", language: ucidomain.IndexAdmissionLanguageYAML, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "yaml:document:1#anchor:shared~1values", SymbolKey: "yaml:document:1#anchor:shared~1values", Kind: "anchor"}, want: "shared/values", valid: true},
+		{name: "yaml wrong language prefix", language: ucidomain.IndexAdmissionLanguageYAML, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "json:document:1#/service", SymbolKey: "json:document:1#/service", Kind: "key"}},
+		{name: "sql table", language: ucidomain.IndexAdmissionLanguageSQL, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "table:public.users", SymbolKey: "sql:table:public.users", Kind: "table"}, want: "public.users", valid: true},
+		{name: "sql column", language: ucidomain.IndexAdmissionLanguageSQL, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "column:public.users.email", SymbolKey: "sql:column:public.users.email", Kind: "column"}, want: "public.users.email", valid: true},
+		{name: "sql constraint", language: ucidomain.IndexAdmissionLanguageSQL, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "constraint:public.users:primary_key:1", SymbolKey: "sql:constraint:public.users:primary_key:1", Kind: "primary_key"}, want: "public.users primary_key #1", valid: true},
+		{name: "sql malformed constraint ordinal", language: ucidomain.IndexAdmissionLanguageSQL, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "constraint:public.users:unique:0", SymbolKey: "sql:constraint:public.users:unique:0", Kind: "unique"}},
+		{name: "openapi version", language: ucidomain.IndexAdmissionLanguageOpenAPI, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "version:3.0.3", SymbolKey: "openapi:version:3.0.3", Kind: "version"}, want: "3.0.3", valid: true},
+		{name: "openapi info", language: ucidomain.IndexAdmissionLanguageOpenAPI, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "info", SymbolKey: "openapi:info", Kind: "info"}, want: "info", valid: true},
+		{name: "openapi path", language: ucidomain.IndexAdmissionLanguageOpenAPI, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "path:/pets", SymbolKey: "openapi:path:/pets", Kind: "path"}, want: "/pets", valid: true},
+		{name: "openapi operation", language: ucidomain.IndexAdmissionLanguageOpenAPI, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "operation:get:/pets", SymbolKey: "openapi:operation:get:/pets", Kind: "operation"}, want: "get /pets", valid: true},
+		{name: "openapi parameter", language: ucidomain.IndexAdmissionLanguageOpenAPI, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "parameter:#/paths/~1pets/get/parameters/0", SymbolKey: "openapi:parameter:#/paths/~1pets/get/parameters/0", Kind: "parameter"}, want: "#/paths/~1pets/get/parameters/0", valid: true},
+		{name: "openapi schema", language: ucidomain.IndexAdmissionLanguageOpenAPI, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "schema:Pet", SymbolKey: "openapi:schema:Pet", Kind: "schema"}, want: "Pet", valid: true},
+		{name: "openapi wrong operation method", language: ucidomain.IndexAdmissionLanguageOpenAPI, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "operation:fetch:/pets", SymbolKey: "openapi:operation:fetch:/pets", Kind: "operation"}},
+		{name: "openapi NUL key", language: ucidomain.IndexAdmissionLanguageOpenAPI, definition: ucidomain.IndexAdmissionDefinition{LocalSymbolKey: "schema:Pet\x00", SymbolKey: "openapi:schema:Pet\x00", Kind: "schema"}},
+	}
+	for _, test := range structuredTests {
+		t.Run(test.name, func(t *testing.T) {
+			name, err := uciIndexAdmissionDefinitionName(test.language, test.definition)
+			if !test.valid {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, name)
+		})
+	}
+
 	_, err := uciIndexAdmissionDefinitionName(ucidomain.IndexAdmissionLanguage("unsupported"), ucidomain.IndexAdmissionDefinition{
 		LocalSymbolKey: "function:InstalledParserCanary",
 		Kind:           "function",
@@ -303,6 +342,20 @@ func TestUCIIndexAdmissionStoresPinnedTypeScriptDefinitionAndRejectsCrossLanguag
 		require.NoError(t, fixture.db.Model(&UCIParseArtifact{}).Where("artifact_id = ?", artifact.ArtifactID).Count(&artifacts).Error)
 		require.Zero(t, artifacts)
 	})
+}
+
+func TestUCIIndexAdmissionStoresStructuredMarkdownDefinition(t *testing.T) {
+	fixture := openUCIPublicationFixture(t)
+	frame := uciIndexAdmissionMarkdownFixtureFrame(t, fixture)
+	artifact := frame.Artifacts[0]
+
+	_, err := fixture.projection.AdmitIndexFrame(context.Background(), fixture.source.SourceID, fixture.profile.ProfileID, frame)
+	require.NoError(t, err)
+
+	var definition UCIDefinition
+	require.NoError(t, fixture.db.Where("artifact_id = ? AND local_symbol_key = ?", artifact.ArtifactID, "heading:install-guide").First(&definition).Error)
+	require.Equal(t, "install-guide", definition.Name)
+	require.Equal(t, "markdown:heading:install-guide", definition.QualifiedLocalName)
 }
 
 func TestUCIIndexAdmissionPackedCrossFrameSealsAndReplays(t *testing.T) {
@@ -612,6 +665,36 @@ func uciIndexAdmissionTypeScriptFixtureFrame(t *testing.T, fixture *uciPublicati
 		Memberships: []ucidomain.IndexAdmissionMembership{{
 			PathKey:     "installed-parser-canary.ts",
 			DisplayPath: "installed-parser-canary.ts",
+			Mode:        "100644",
+			State:       ucidomain.IndexAdmissionMembershipPresent,
+			ArtifactID:  &artifactID,
+		}},
+	}
+}
+
+func uciIndexAdmissionMarkdownFixtureFrame(t *testing.T, fixture *uciPublicationFixture) ucidomain.IndexAdmissionFrame {
+	t.Helper()
+	body := []byte("# Install Guide\n")
+	extractionProfile := ucidomain.DefaultMarkdownExtractionProfile("uci-admission-markdown")
+	profile, err := ucidomain.MarkdownIndexAdmissionArtifactProfile(extractionProfile)
+	require.NoError(t, err)
+	profile.ExtractionProfileDigest = ucidomain.IndexDigest(fixture.profile.ParserBundleDigest)
+	artifact, err := ucidomain.NewIndexAdmissionArtifactFromMarkdown(
+		fixture.source.SourceID,
+		profile,
+		extractionProfile,
+		body,
+		ucidomain.ExtractMarkdown(body, extractionProfile),
+	)
+	require.NoError(t, err)
+	artifactID := artifact.ArtifactID
+	return ucidomain.IndexAdmissionFrame{
+		Version:   ucidomain.IndexAdmissionFrameVersion,
+		Profile:   ucidomain.IndexAdmissionProfile{ID: fixture.profile.ProfileID},
+		Artifacts: []ucidomain.IndexAdmissionArtifact{artifact},
+		Memberships: []ucidomain.IndexAdmissionMembership{{
+			PathKey:     "install-guide.md",
+			DisplayPath: "install-guide.md",
 			Mode:        "100644",
 			State:       ucidomain.IndexAdmissionMembershipPresent,
 			ArtifactID:  &artifactID,

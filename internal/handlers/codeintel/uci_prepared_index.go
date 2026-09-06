@@ -172,11 +172,14 @@ const (
 	uciPreparedGoResolverRevision              = "uci-prepared-go-call/v1"
 	uciPreparedGoResolverRule                  = "go-direct-call/v1"
 	uciPreparedGoResolverExplanation           = "unique same-package Go function declaration"
+	uciPreparedGoPartialMessage                = "Go extraction is partial"
 	uciPreparedTreeSitterProfileKeyVersion     = "uci-prepared-tree-sitter/v1"
+	uciPreparedStructuredProfileKeyVersion     = "uci-prepared-structured/v1"
 	uciPreparedTreeSitterUnavailableMessage    = "Tree-sitter parser is unavailable"
 	uciPreparedTreeSitterProtocolMessage       = "Tree-sitter parser protocol failure"
 	uciPreparedTreeSitterBundleMismatchMessage = "Tree-sitter parser bundle mismatch"
 	uciPreparedTreeSitterPartialMessage        = "Tree-sitter parser coverage is partial"
+	uciPreparedOpenAPIUnavailableMessage       = "OpenAPI extraction is unavailable"
 )
 
 type uciPreparedAdmissionFile struct {
@@ -185,6 +188,115 @@ type uciPreparedAdmissionFile struct {
 	artifact   *uci.IndexAdmissionArtifact
 	edges      []uci.IndexAdmissionEdge
 	errors     []string
+}
+
+// uciPreparedSourceCapability is one explicit, path-selected input contract.
+// Its order is part of selection: OpenAPI entries precede their JSON/YAML
+// fallbacks so ordinary structured files are never content-promoted.
+type uciPreparedSourceCapability struct {
+	key                string
+	version            string
+	extension          string
+	alternateExtension string
+	jsonYAMLFormat     uci.JSONYAMLFormat
+	openAPIFormat      uci.OpenAPIFormat
+	treeSitterLanguage uci.TreeSitterLanguage
+	partialMessage     string
+	prepare            uciPreparedSourcePreparer
+}
+
+type uciPreparedSourcePreparer func(
+	*UCIPreparedIndexCollaborator,
+	context.Context,
+	string,
+	string,
+	uci.IndexAdmissionArtifactProfile,
+	uci.ScannerFile,
+	uciPreparedAdmissionFile,
+	*uciPreparedSourceCapability,
+) (uciPreparedAdmissionFile, error)
+
+var uciPreparedSourceCapabilities = [...]uciPreparedSourceCapability{
+	{
+		key:            "openapi-json",
+		version:        "v1",
+		extension:      ".json",
+		openAPIFormat:  uci.OpenAPIFormatJSON,
+		partialMessage: "OpenAPI extraction is partial",
+		prepare:        uciPreparedPrepareOpenAPIAdmissionFile,
+	},
+	{
+		key:                "openapi-yaml",
+		version:            "v1",
+		extension:          ".yaml",
+		alternateExtension: ".yml",
+		openAPIFormat:      uci.OpenAPIFormatYAML,
+		partialMessage:     "OpenAPI extraction is partial",
+		prepare:            uciPreparedPrepareOpenAPIAdmissionFile,
+	},
+	{
+		key:            "go",
+		version:        "v1",
+		extension:      ".go",
+		partialMessage: uciPreparedGoPartialMessage,
+		prepare:        uciPreparedPrepareGoAdmissionFile,
+	},
+	{
+		key:                "javascript",
+		version:            "v1",
+		extension:          ".js",
+		treeSitterLanguage: uci.TreeSitterLanguageJavaScript,
+		partialMessage:     uciPreparedTreeSitterPartialMessage,
+		prepare:            uciPreparedPrepareTreeSitterAdmissionFile,
+	},
+	{
+		key:                "typescript",
+		version:            "v1",
+		extension:          ".ts",
+		treeSitterLanguage: uci.TreeSitterLanguageTypeScript,
+		partialMessage:     uciPreparedTreeSitterPartialMessage,
+		prepare:            uciPreparedPrepareTreeSitterAdmissionFile,
+	},
+	{
+		key:                "tsx",
+		version:            "v1",
+		extension:          ".tsx",
+		treeSitterLanguage: uci.TreeSitterLanguageTSX,
+		partialMessage:     uciPreparedTreeSitterPartialMessage,
+		prepare:            uciPreparedPrepareTreeSitterAdmissionFile,
+	},
+	{
+		key:                "markdown",
+		version:            "v1",
+		extension:          ".md",
+		alternateExtension: ".markdown",
+		partialMessage:     "Markdown extraction is partial",
+		prepare:            uciPreparedPrepareMarkdownAdmissionFile,
+	},
+	{
+		key:            "json",
+		version:        "v1",
+		extension:      ".json",
+		jsonYAMLFormat: uci.JSONYAMLFormatJSON,
+		partialMessage: "JSON extraction is partial",
+		prepare:        uciPreparedPrepareJSONYAMLAdmissionFile,
+	},
+	{
+		key:                "yaml",
+		version:            "v1",
+		extension:          ".yaml",
+		alternateExtension: ".yml",
+		jsonYAMLFormat:     uci.JSONYAMLFormatYAML,
+		partialMessage:     "YAML extraction is partial",
+		prepare:            uciPreparedPrepareJSONYAMLAdmissionFile,
+	},
+	{
+		key:            "sql",
+		version:        "v1",
+		extension:      ".sql",
+		partialMessage: "SQL extraction is partial",
+		prepare:        uciPreparedPrepareSQLAdmissionFile,
+	},
 }
 
 type uciPreparedAdmissionPlan struct {
@@ -303,38 +415,154 @@ func (collaborator *UCIPreparedIndexCollaborator) prepareAdmissionFile(ctx conte
 		prepared.errors = append(prepared.errors, file.Path+": source is unreadable")
 		return prepared, nil
 	case uci.IndexFilePresent:
-		switch path.Ext(file.Path) {
-		case ".go":
-			extracted := uci.ExtractGo(file.Body, collaborator.goProfile)
-			artifact, err := uci.NewIndexAdmissionArtifactFromGo(sourceID, goProfile, file.Body, extracted)
-			if err != nil {
-				if uci.IsIndexCapacityError(err) {
-					return uciPreparedAdmissionFile{}, err
-				}
-				return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize Go source %q: %w", file.Path, err)
-			}
-			artifactID := artifact.ArtifactID
-			prepared.membership.State = uci.IndexAdmissionMembershipPresent
-			prepared.membership.ArtifactID = &artifactID
-			prepared.artifact = &artifact
-			if artifact.Status == uci.IndexAdmissionArtifactPartial {
-				prepared.errors = append(prepared.errors, file.Path+": Go extraction is partial")
-			}
-			return prepared, nil
-		case ".js":
-			return collaborator.prepareTreeSitterAdmissionFile(ctx, sourceID, analysisProfileID, file, prepared, uci.TreeSitterLanguageJavaScript)
-		case ".ts":
-			return collaborator.prepareTreeSitterAdmissionFile(ctx, sourceID, analysisProfileID, file, prepared, uci.TreeSitterLanguageTypeScript)
-		case ".tsx":
-			return collaborator.prepareTreeSitterAdmissionFile(ctx, sourceID, analysisProfileID, file, prepared, uci.TreeSitterLanguageTSX)
-		default:
+		capability, found := uciPreparedSourceCapabilityForPath(file.Path)
+		if !found {
 			prepared.membership.State = uci.IndexAdmissionMembershipUnsupported
 			prepared.errors = append(prepared.errors, file.Path+": source language is unsupported")
 			return prepared, nil
 		}
+		if capability.prepare == nil {
+			return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: source capability %q has no preparer", capability.key)
+		}
+		return capability.prepare(collaborator, ctx, sourceID, analysisProfileID, goProfile, file, prepared, capability)
 	default:
 		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: scanner returned unsupported state %q for %q", file.State, file.Path)
 	}
+}
+
+func uciPreparedSourceCapabilityForPath(filePath string) (*uciPreparedSourceCapability, bool) {
+	for index := range uciPreparedSourceCapabilities {
+		capability := &uciPreparedSourceCapabilities[index]
+		if capability.matches(filePath) {
+			return capability, true
+		}
+	}
+	return nil, false
+}
+
+func (capability *uciPreparedSourceCapability) matches(filePath string) bool {
+	if capability.openAPIFormat != "" {
+		base := path.Base(filePath)
+		return uciPreparedOpenAPIPathMatches(base, capability.extension) ||
+			(capability.alternateExtension != "" && uciPreparedOpenAPIPathMatches(base, capability.alternateExtension))
+	}
+	extension := path.Ext(filePath)
+	return strings.EqualFold(extension, capability.extension) ||
+		(capability.alternateExtension != "" && strings.EqualFold(extension, capability.alternateExtension))
+}
+
+func uciPreparedOpenAPIPathMatches(base, extension string) bool {
+	want := "openapi" + extension
+	if strings.EqualFold(base, want) {
+		return true
+	}
+	want = "." + want
+	return len(base) >= len(want) && strings.EqualFold(base[len(base)-len(want):], want)
+}
+
+func uciPreparedStructuredProfileKey(analysisProfileID string, capability *uciPreparedSourceCapability) string {
+	return uciPreparedStructuredProfileKeyVersion + ":" + analysisProfileID + ":" + capability.key + ":" + capability.version
+}
+
+func uciPreparedPrepareGoAdmissionFile(collaborator *UCIPreparedIndexCollaborator, _ context.Context, sourceID, _ string, goProfile uci.IndexAdmissionArtifactProfile, file uci.ScannerFile, prepared uciPreparedAdmissionFile, capability *uciPreparedSourceCapability) (uciPreparedAdmissionFile, error) {
+	extracted := uci.ExtractGo(file.Body, collaborator.goProfile)
+	artifact, err := uci.NewIndexAdmissionArtifactFromGo(sourceID, goProfile, file.Body, extracted)
+	if err != nil {
+		if uci.IsIndexCapacityError(err) {
+			return uciPreparedAdmissionFile{}, err
+		}
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize Go source %q: %w", file.Path, err)
+	}
+	return uciPreparedAttachAdmissionArtifact(prepared, artifact, capability.partialMessage), nil
+}
+
+func uciPreparedPrepareTreeSitterAdmissionFile(collaborator *UCIPreparedIndexCollaborator, ctx context.Context, sourceID, analysisProfileID string, _ uci.IndexAdmissionArtifactProfile, file uci.ScannerFile, prepared uciPreparedAdmissionFile, capability *uciPreparedSourceCapability) (uciPreparedAdmissionFile, error) {
+	return collaborator.prepareTreeSitterAdmissionFile(ctx, sourceID, analysisProfileID, file, prepared, capability.treeSitterLanguage)
+}
+
+func uciPreparedPrepareMarkdownAdmissionFile(collaborator *UCIPreparedIndexCollaborator, _ context.Context, sourceID, analysisProfileID string, _ uci.IndexAdmissionArtifactProfile, file uci.ScannerFile, prepared uciPreparedAdmissionFile, capability *uciPreparedSourceCapability) (uciPreparedAdmissionFile, error) {
+	profile := uci.DefaultMarkdownExtractionProfile(uciPreparedStructuredProfileKey(analysisProfileID, capability))
+	admissionProfile, err := uci.MarkdownIndexAdmissionArtifactProfile(profile)
+	if err != nil {
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: configure Markdown admission profile: %w", err)
+	}
+	admissionProfile.ExtractionProfileDigest = collaborator.parserBundleDigest
+	artifact, err := uci.NewIndexAdmissionArtifactFromMarkdown(sourceID, admissionProfile, profile, file.Body, uci.ExtractMarkdown(file.Body, profile))
+	if err != nil {
+		if uci.IsIndexCapacityError(err) {
+			return uciPreparedAdmissionFile{}, err
+		}
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize Markdown source %q: %w", file.Path, err)
+	}
+	return uciPreparedAttachAdmissionArtifact(prepared, artifact, capability.partialMessage), nil
+}
+
+func uciPreparedPrepareJSONYAMLAdmissionFile(collaborator *UCIPreparedIndexCollaborator, _ context.Context, sourceID, analysisProfileID string, _ uci.IndexAdmissionArtifactProfile, file uci.ScannerFile, prepared uciPreparedAdmissionFile, capability *uciPreparedSourceCapability) (uciPreparedAdmissionFile, error) {
+	profile := uci.DefaultJSONYAMLExtractionProfile(uciPreparedStructuredProfileKey(analysisProfileID, capability), capability.jsonYAMLFormat)
+	admissionProfile, err := uci.JSONYAMLIndexAdmissionArtifactProfile(profile)
+	if err != nil {
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: configure %s admission profile: %w", capability.key, err)
+	}
+	admissionProfile.ExtractionProfileDigest = collaborator.parserBundleDigest
+	artifact, err := uci.NewIndexAdmissionArtifactFromJSONYAML(sourceID, admissionProfile, profile, file.Body, uci.ExtractJSONYAML(file.Body, profile))
+	if err != nil {
+		if uci.IsIndexCapacityError(err) {
+			return uciPreparedAdmissionFile{}, err
+		}
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize %s source %q: %w", capability.key, file.Path, err)
+	}
+	return uciPreparedAttachAdmissionArtifact(prepared, artifact, capability.partialMessage), nil
+}
+
+func uciPreparedPrepareSQLAdmissionFile(collaborator *UCIPreparedIndexCollaborator, _ context.Context, sourceID, analysisProfileID string, _ uci.IndexAdmissionArtifactProfile, file uci.ScannerFile, prepared uciPreparedAdmissionFile, capability *uciPreparedSourceCapability) (uciPreparedAdmissionFile, error) {
+	profile := uci.DefaultSQLExtractionProfile(uciPreparedStructuredProfileKey(analysisProfileID, capability))
+	admissionProfile, err := uci.SQLIndexAdmissionArtifactProfile(profile)
+	if err != nil {
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: configure SQL admission profile: %w", err)
+	}
+	admissionProfile.ExtractionProfileDigest = collaborator.parserBundleDigest
+	artifact, err := uci.NewIndexAdmissionArtifactFromSQL(sourceID, admissionProfile, profile, file.Body, uci.ExtractSQL(file.Body, profile))
+	if err != nil {
+		if uci.IsIndexCapacityError(err) {
+			return uciPreparedAdmissionFile{}, err
+		}
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize SQL source %q: %w", file.Path, err)
+	}
+	return uciPreparedAttachAdmissionArtifact(prepared, artifact, capability.partialMessage), nil
+}
+
+func uciPreparedPrepareOpenAPIAdmissionFile(collaborator *UCIPreparedIndexCollaborator, _ context.Context, sourceID, analysisProfileID string, _ uci.IndexAdmissionArtifactProfile, file uci.ScannerFile, prepared uciPreparedAdmissionFile, capability *uciPreparedSourceCapability) (uciPreparedAdmissionFile, error) {
+	profile := uci.DefaultOpenAPIExtractionProfile(uciPreparedStructuredProfileKey(analysisProfileID, capability), capability.openAPIFormat)
+	admissionProfile, err := uci.OpenAPIIndexAdmissionArtifactProfile(profile)
+	if err != nil {
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: configure OpenAPI admission profile: %w", err)
+	}
+	admissionProfile.ExtractionProfileDigest = collaborator.parserBundleDigest
+	extracted := uci.ExtractOpenAPI(file.Body, profile)
+	// A path-selected OpenAPI document with unavailable semantic coverage must
+	// not be recast as generic JSON/YAML or published as partial facts.
+	if extracted.Coverage == uci.IndexCoverageUnavailable {
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: %s for %q", uciPreparedOpenAPIUnavailableMessage, file.Path)
+	}
+	artifact, err := uci.NewIndexAdmissionArtifactFromOpenAPI(sourceID, admissionProfile, profile, file.Body, extracted)
+	if err != nil {
+		if uci.IsIndexCapacityError(err) {
+			return uciPreparedAdmissionFile{}, err
+		}
+		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: normalize OpenAPI source %q: %w", file.Path, err)
+	}
+	return uciPreparedAttachAdmissionArtifact(prepared, artifact, capability.partialMessage), nil
+}
+
+func uciPreparedAttachAdmissionArtifact(prepared uciPreparedAdmissionFile, artifact uci.IndexAdmissionArtifact, partialMessage string) uciPreparedAdmissionFile {
+	artifactID := artifact.ArtifactID
+	prepared.membership.State = uci.IndexAdmissionMembershipPresent
+	prepared.membership.ArtifactID = &artifactID
+	prepared.artifact = &artifact
+	if artifact.Status == uci.IndexAdmissionArtifactPartial {
+		prepared.errors = append(prepared.errors, prepared.path+": "+partialMessage)
+	}
+	return prepared
 }
 
 // prepareTreeSitterAdmissionFile treats the selected parser as part of the
@@ -372,14 +600,7 @@ func (collaborator *UCIPreparedIndexCollaborator) prepareTreeSitterAdmissionFile
 		}
 		return uciPreparedAdmissionFile{}, fmt.Errorf("uci prepared index: %s for %q: %w", uciPreparedTreeSitterProtocolMessage, file.Path, err)
 	}
-	artifactID := artifact.ArtifactID
-	prepared.membership.State = uci.IndexAdmissionMembershipPresent
-	prepared.membership.ArtifactID = &artifactID
-	prepared.artifact = &artifact
-	if artifact.Status == uci.IndexAdmissionArtifactPartial {
-		prepared.errors = append(prepared.errors, file.Path+": "+uciPreparedTreeSitterPartialMessage)
-	}
-	return prepared, nil
+	return uciPreparedAttachAdmissionArtifact(prepared, artifact, uciPreparedTreeSitterPartialMessage), nil
 }
 
 func uciPreparedTreeSitterProfileKey(analysisProfileID string, language uci.TreeSitterLanguage, bundleDigest uci.IndexDigest) string {

@@ -11,6 +11,7 @@ import (
 	"go/token"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -780,8 +781,218 @@ func uciIndexAdmissionDefinitionName(language ucidomain.IndexAdmissionLanguage, 
 		return uciIndexAdmissionGoDefinitionName(definition)
 	case ucidomain.IndexAdmissionLanguageJavaScript, ucidomain.IndexAdmissionLanguageTypeScript, ucidomain.IndexAdmissionLanguageTSX:
 		return uciIndexAdmissionTreeSitterDefinitionName(definition)
+	case ucidomain.IndexAdmissionLanguageMarkdown:
+		return uciIndexAdmissionMarkdownDefinitionName(definition)
+	case ucidomain.IndexAdmissionLanguageJSON, ucidomain.IndexAdmissionLanguageYAML:
+		return uciIndexAdmissionJSONYAMLDefinitionName(language, definition)
+	case ucidomain.IndexAdmissionLanguageSQL:
+		return uciIndexAdmissionSQLDefinitionName(definition)
+	case ucidomain.IndexAdmissionLanguageOpenAPI:
+		return uciIndexAdmissionOpenAPIDefinitionName(definition)
 	default:
 		return "", fmt.Errorf("uci index admission: unsupported artifact language %q", language)
+	}
+}
+
+func uciIndexAdmissionMarkdownDefinitionName(definition ucidomain.IndexAdmissionDefinition) (string, error) {
+	const prefix = "heading:"
+	if definition.Kind != "heading" || !strings.HasPrefix(definition.LocalSymbolKey, prefix) ||
+		definition.SymbolKey != "markdown:"+definition.LocalSymbolKey {
+		return "", fmt.Errorf("uci index admission: unparseable Markdown definition key %q", definition.LocalSymbolKey)
+	}
+	slug := strings.TrimPrefix(definition.LocalSymbolKey, prefix)
+	if !uciIndexAdmissionStructuredLabel(slug) || !uciIndexAdmissionMarkdownSlug(slug) {
+		return "", fmt.Errorf("uci index admission: unparseable Markdown definition key %q", definition.LocalSymbolKey)
+	}
+	return slug, nil
+}
+
+func uciIndexAdmissionJSONYAMLDefinitionName(language ucidomain.IndexAdmissionLanguage, definition ucidomain.IndexAdmissionDefinition) (string, error) {
+	prefix := string(language) + ":document:"
+	if !strings.HasPrefix(definition.LocalSymbolKey, prefix) || definition.SymbolKey != definition.LocalSymbolKey {
+		return "", fmt.Errorf("uci index admission: unparseable %s definition key %q", language, definition.LocalSymbolKey)
+	}
+	remainder := strings.TrimPrefix(definition.LocalSymbolKey, prefix)
+	document, suffix, hasSuffix := strings.Cut(remainder, "#")
+	if !uciIndexAdmissionDocumentNumber(document) {
+		return "", fmt.Errorf("uci index admission: unparseable %s definition key %q", language, definition.LocalSymbolKey)
+	}
+	if !hasSuffix {
+		if definition.Kind != "document" {
+			return "", fmt.Errorf("uci index admission: unparseable %s definition key %q", language, definition.LocalSymbolKey)
+		}
+		return "document " + document, nil
+	}
+	if suffix == "" {
+		return "", fmt.Errorf("uci index admission: unparseable %s definition key %q", language, definition.LocalSymbolKey)
+	}
+	if strings.HasPrefix(suffix, "anchor:") {
+		anchor, valid := uciIndexAdmissionPointerSegment(strings.TrimPrefix(suffix, "anchor:"))
+		if language != ucidomain.IndexAdmissionLanguageYAML || definition.Kind != "anchor" || !valid {
+			return "", fmt.Errorf("uci index admission: unparseable %s definition key %q", language, definition.LocalSymbolKey)
+		}
+		return anchor, nil
+	}
+	if definition.Kind != "key" && definition.Kind != "index" {
+		return "", fmt.Errorf("uci index admission: unparseable %s definition key %q", language, definition.LocalSymbolKey)
+	}
+	name, valid := uciIndexAdmissionPointerTail(suffix)
+	if !valid {
+		return "", fmt.Errorf("uci index admission: unparseable %s definition key %q", language, definition.LocalSymbolKey)
+	}
+	return name, nil
+}
+
+func uciIndexAdmissionSQLDefinitionName(definition ucidomain.IndexAdmissionDefinition) (string, error) {
+	if definition.SymbolKey != "sql:"+definition.LocalSymbolKey {
+		return "", fmt.Errorf("uci index admission: unparseable SQL definition key %q", definition.LocalSymbolKey)
+	}
+	switch definition.Kind {
+	case "table":
+		return uciIndexAdmissionSQLQualifiedName(definition.LocalSymbolKey, "table:")
+	case "column":
+		return uciIndexAdmissionSQLQualifiedName(definition.LocalSymbolKey, "column:")
+	case "primary_key", "unique":
+		prefix := "constraint:"
+		if !strings.HasPrefix(definition.LocalSymbolKey, prefix) {
+			break
+		}
+		value := strings.TrimPrefix(definition.LocalSymbolKey, prefix)
+		ordinalAt := strings.LastIndex(value, ":")
+		if ordinalAt <= 0 || !uciIndexAdmissionPositiveDecimal(value[ordinalAt+1:]) {
+			break
+		}
+		qualifiedAndKind := value[:ordinalAt]
+		kindAt := strings.LastIndex(qualifiedAndKind, ":")
+		if kindAt <= 0 || qualifiedAndKind[kindAt+1:] != definition.Kind || !uciIndexAdmissionStructuredLabel(qualifiedAndKind[:kindAt]) {
+			break
+		}
+		return qualifiedAndKind[:kindAt] + " " + definition.Kind + " #" + value[ordinalAt+1:], nil
+	}
+	return "", fmt.Errorf("uci index admission: unparseable SQL definition key %q", definition.LocalSymbolKey)
+}
+
+func uciIndexAdmissionSQLQualifiedName(localKey, prefix string) (string, error) {
+	if !strings.HasPrefix(localKey, prefix) {
+		return "", fmt.Errorf("uci index admission: unparseable SQL definition key %q", localKey)
+	}
+	name := strings.TrimPrefix(localKey, prefix)
+	if !uciIndexAdmissionStructuredLabel(name) {
+		return "", fmt.Errorf("uci index admission: unparseable SQL definition key %q", localKey)
+	}
+	return name, nil
+}
+
+func uciIndexAdmissionOpenAPIDefinitionName(definition ucidomain.IndexAdmissionDefinition) (string, error) {
+	if definition.SymbolKey != "openapi:"+definition.LocalSymbolKey {
+		return "", fmt.Errorf("uci index admission: unparseable OpenAPI definition key %q", definition.LocalSymbolKey)
+	}
+	switch definition.Kind {
+	case "version":
+		value := strings.TrimPrefix(definition.LocalSymbolKey, "version:")
+		if strings.HasPrefix(definition.LocalSymbolKey, "version:") && uciIndexAdmissionStructuredLabel(value) {
+			return value, nil
+		}
+	case "info":
+		if definition.LocalSymbolKey == "info" {
+			return "info", nil
+		}
+	case "path":
+		value, err := uciIndexAdmissionPrefixedLabel(definition.LocalSymbolKey, "path:")
+		if err == nil && strings.HasPrefix(value, "/") {
+			return value, nil
+		}
+	case "operation":
+		value := strings.TrimPrefix(definition.LocalSymbolKey, "operation:")
+		method, path, found := strings.Cut(value, ":")
+		if strings.HasPrefix(definition.LocalSymbolKey, "operation:") && found && uciIndexAdmissionOpenAPIHTTPMethod(method) && strings.HasPrefix(path, "/") && uciIndexAdmissionStructuredLabel(path) {
+			return method + " " + path, nil
+		}
+	case "parameter":
+		return uciIndexAdmissionPrefixedLabel(definition.LocalSymbolKey, "parameter:")
+	case "schema":
+		return uciIndexAdmissionPrefixedLabel(definition.LocalSymbolKey, "schema:")
+	}
+	return "", fmt.Errorf("uci index admission: unparseable OpenAPI definition key %q", definition.LocalSymbolKey)
+}
+
+func uciIndexAdmissionPrefixedLabel(localKey, prefix string) (string, error) {
+	if !strings.HasPrefix(localKey, prefix) {
+		return "", fmt.Errorf("uci index admission: unparseable structured definition key %q", localKey)
+	}
+	value := strings.TrimPrefix(localKey, prefix)
+	if !uciIndexAdmissionStructuredLabel(value) {
+		return "", fmt.Errorf("uci index admission: unparseable structured definition key %q", localKey)
+	}
+	return value, nil
+}
+
+func uciIndexAdmissionStructuredLabel(value string) bool {
+	return value != "" && len(value) <= 4<<10 && utf8.ValidString(value) && strings.TrimSpace(value) == value && strings.IndexFunc(value, unicode.IsControl) < 0
+}
+
+func uciIndexAdmissionMarkdownSlug(value string) bool {
+	if strings.HasPrefix(value, "-") || strings.HasSuffix(value, "-") || strings.Contains(value, "--") {
+		return false
+	}
+	for _, character := range value {
+		if character != '-' && !unicode.IsLetter(character) && !unicode.IsNumber(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func uciIndexAdmissionDocumentNumber(value string) bool {
+	if value == "" || (len(value) > 1 && value[0] == '0') {
+		return false
+	}
+	_, err := strconv.ParseUint(value, 10, 32)
+	return err == nil
+}
+
+func uciIndexAdmissionPositiveDecimal(value string) bool {
+	return uciIndexAdmissionDocumentNumber(value) && value != "0"
+}
+
+func uciIndexAdmissionPointerTail(pointer string) (string, bool) {
+	if !strings.HasPrefix(pointer, "/") {
+		return "", false
+	}
+	parts := strings.Split(pointer[1:], "/")
+	return uciIndexAdmissionPointerSegment(parts[len(parts)-1])
+}
+
+func uciIndexAdmissionPointerSegment(value string) (string, bool) {
+	var builder strings.Builder
+	for index := 0; index < len(value); index++ {
+		if value[index] != '~' {
+			builder.WriteByte(value[index])
+			continue
+		}
+		if index+1 == len(value) {
+			return "", false
+		}
+		index++
+		switch value[index] {
+		case '0':
+			builder.WriteByte('~')
+		case '1':
+			builder.WriteByte('/')
+		default:
+			return "", false
+		}
+	}
+	name := builder.String()
+	return name, uciIndexAdmissionStructuredLabel(name)
+}
+
+func uciIndexAdmissionOpenAPIHTTPMethod(value string) bool {
+	switch value {
+	case "delete", "get", "head", "options", "patch", "post", "put", "trace":
+		return true
+	default:
+		return false
 	}
 }
 

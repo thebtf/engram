@@ -51,6 +51,15 @@ type JSONYAMLExtractionProfile struct {
 	Format     JSONYAMLFormat
 }
 
+// DefaultJSONYAMLExtractionProfile returns the current caller-selected JSON or YAML policy.
+func DefaultJSONYAMLExtractionProfile(profileKey string, format JSONYAMLFormat) JSONYAMLExtractionProfile {
+	return JSONYAMLExtractionProfile{
+		ProfileKey: profileKey,
+		ParserKey:  "jsonyaml-parser-v1",
+		Format:     format,
+	}
+}
+
 // JSONYAMLArtifact is immutable evidence derived only from caller-owned bytes.
 type JSONYAMLArtifact struct {
 	Proof       IndexArtifactProof
